@@ -130,3 +130,56 @@ def test_job_evidence_requires_exact_unambiguous_declared_output(tmp_path):
     assert dt.job_evidence(tmp_path) == {"/out/x.jsonl": job}
     (tmp_path / "two.json").write_text(json.dumps(job))
     assert dt.job_evidence(tmp_path) == {"/out/x.jsonl": {}}
+
+
+def test_copy_without_off_arm_still_checks_digest_parity(tmp_path):
+    stem = str(tmp_path / "s")
+    _arm(tmp_path / "s-w8-r0.jsonl", 8, 70, sha="base")
+    _arm(tmp_path / "s-w16-r0.jsonl", 16, 80, sha="changed")
+    lines, rejected = dt.copy_table([stem])
+    assert not rejected
+    assert "16: 80.0 (1) DIGEST DIFFERS" in lines[1]
+
+
+def test_missing_copy_digest_is_never_certified(tmp_path):
+    stem = str(tmp_path / "s")
+    _arm(tmp_path / "s-w8-r0.jsonl", 8, 70, sha=None)
+    lines, rejected = dt.copy_table([stem])
+    assert len(lines) == len(rejected) == 1
+    assert "missing token digest" in rejected[0]
+
+
+def test_different_source_snapshots_are_not_pooled(tmp_path):
+    paths = []
+    for sha, rate in [("old", 50), ("new", 70)]:
+        path = tmp_path / (sha + ".jsonl")
+        path.write_text(
+            "\n".join(
+                json.dumps(r)
+                for r in [
+                    dict(part="snapshot", python_sha256=sha),
+                    dict(
+                        context=1024, task="code", mode="dflash", tps=rate, parity=True
+                    ),
+                    dict(complete=True, parity=True),
+                ]
+            )
+        )
+        paths.append(str(path))
+    lines, rejected = dt.draft_table(paths)
+    assert not rejected
+    assert len(lines) == 3
+    assert "50.0 (1)" in "\n".join(lines)
+    assert "70.0 (1)" in "\n".join(lines)
+
+
+def test_conflicting_engaged_modes_are_rejected():
+    assert dt.verdict(
+        [
+            dict(
+                complete=True,
+                mode=["Speculative decoding: mtp", "Speculative decoding: dflash"],
+            )
+        ],
+        "mtp",
+    )

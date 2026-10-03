@@ -74,7 +74,7 @@ def verdict(recs: list[dict], mode: str | None, job: dict | None = None) -> str 
     engaged = done[-1].get("mode")
     if mode:
         if isinstance(engaged, list):
-            matches = any(
+            matches = bool(engaged) and all(
                 re.search(rf"Speculative decoding:\s*{re.escape(mode)}\b", line, re.I)
                 for line in engaged
             )
@@ -114,21 +114,42 @@ def copy_table(
             if why:
                 rejected.append(f"{path}: {why}")
                 continue
+            source_sha = next(
+                (r.get("python_sha256") for r in recs if r.get("part") == "session"),
+                None,
+            )
+            measured = [
+                r
+                for r in recs
+                if r.get("part") in ("decode", "agent") and "dec_tps" in r
+            ]
+            if any(not r.get("sha") for r in measured):
+                rejected.append(f"{path}: missing token digest")
+                continue
             for r in recs:
                 if r.get("part") in ("decode", "agent") and "dec_tps" in r:
-                    k = (r.get("ctx"), r.get("kind"), r.get("phase"), r.get("part"))
+                    k = (
+                        r.get("ctx"),
+                        r.get("kind"),
+                        r.get("phase"),
+                        r.get("part"),
+                        source_sha,
+                    )
                     cells[k][arm].append(r["dec_tps"])
                     shas[k][arm].add(r.get("sha"))
-    lines = ["ctx kind phase | rows: median tok/s (n) | digest == copy-off"]
+    lines = [
+        "ctx kind phase part source | rows: median tok/s (n) | digest == baseline (copy-off when present)"
+    ]
     for k in sorted(cells, key=str):
         parts = []
-        base = shas[k].get((0, False))
+        baseline = (0, False) if (0, False) in shas[k] else min(shas[k])
+        base = shas[k][baseline]
         for arm in sorted(cells[k]):
             rows, cost = arm
             xs = cells[k][arm]
             same = (
                 ""
-                if rows == 0 or not base
+                if arm == baseline
                 else (" same" if shas[k][arm] == base else " DIGEST DIFFERS")
             )
             name = f"{rows}-cost" if cost else str(rows)
@@ -149,6 +170,10 @@ def draft_table(
         if why:
             rejected.append(f"{path}: {why}")
             continue
+        source_sha = next(
+            (r.get("python_sha256") for r in recs if r.get("part") == "snapshot"),
+            None,
+        )
         for r in recs:
             if r.get("mode") in ("plain", "dflash") and "tps" in r:
                 k = (
@@ -159,12 +184,13 @@ def draft_table(
                     r.get("context_fused"),
                     r.get("selector"),
                     r.get("compiled_conv", False),
+                    source_sha,
                 )
                 rows[k].append(r["tps"])
                 if "parity" in r:
                     parity[k] = parity.get(k, True) and r["parity"]
     lines = [
-        "context task mode bits fused selector compiled_conv | median tok/s (n) | parity"
+        "context task mode bits fused selector compiled_conv source | median tok/s (n) | parity"
     ]
     for k in sorted(rows, key=str):
         lines.append(
