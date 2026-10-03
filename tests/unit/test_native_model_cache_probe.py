@@ -153,3 +153,26 @@ def test_failed_forward_keeps_callers_original_snapshot():
     assert kv._idx == 32
     assert mx.all(kv.keys[..., :32, :] == 1).item()
     assert mx.all(rec.cache[0] == 1).item()
+
+
+def test_row_keeps_legacy_dtype_promotion_without_a_reference_cycle():
+    import weakref
+
+    source = BatchKVCache([0])
+    source.update_and_fetch(
+        mx.ones((1, 1, 5, 4), mx.float16), mx.ones((1, 1, 5, 4), mx.float16)
+    )
+    source.left_padding = mx.array([0])
+    row = probe.extract_rows([source])[0]
+    expected = _extract_row_cache(source, 0)
+    keys = mx.full((1, 1, 1, 4), 1.0001, dtype=mx.float32)
+    values = keys * 3
+    actual_state = row.update_and_fetch(keys, values)
+    expected_state = expected.update_and_fetch(keys, values)
+    mx.eval(actual_state, expected_state)
+    assert row.keys.dtype == expected.keys.dtype == mx.float32
+    assert mx.array_equal(actual_state[0], expected_state[0]).item()
+    assert mx.array_equal(actual_state[1], expected_state[1]).item()
+    reference = weakref.ref(row)
+    del row
+    assert reference() is None

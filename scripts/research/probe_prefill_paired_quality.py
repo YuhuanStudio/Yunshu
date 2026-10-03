@@ -58,7 +58,8 @@ def main():
     piece, maximum = lane_linear.PIECE, lane_qmm.MAX_ROWS
     tokenizer = getattr(runner.processor, "tokenizer", runner.processor)
     a.out.parent.mkdir(parents=True, exist_ok=True)
-    correct = dict(baseline=0, wide=0)
+    candidate = a.variant
+    correct = {"baseline": 0, candidate: 0}
     different = 0
     try:
         with a.out.open("w") as out:
@@ -74,20 +75,17 @@ def main():
                 ).result()
                 results = {}
                 for mode in (
-                    ("baseline", "wide") if index % 2 == 0 else ("wide", "baseline")
+                    ("baseline", candidate)
+                    if index % 2 == 0
+                    else (candidate, "baseline")
                 ):
                     Qwen3_5Model.__call__ = (
-                        native_forward
-                        if mode == "wide" and a.variant == "native"
-                        else model_forward
+                        native_forward if mode == "native" else model_forward
                     )
-                    lane_linear.PIECE = (
-                        512 if mode == "wide" and a.variant == "wide" else piece
-                    )
-                    lane_qmm.MAX_ROWS = (
-                        512 if mode == "wide" and a.variant == "wide" else maximum
-                    )
+                    lane_linear.PIECE = 512 if mode == "wide" else piece
+                    lane_qmm.MAX_ROWS = 512 if mode == "wide" else maximum
                     runner.apc_manager.clear()
+                    native_before = native_forward.native_calls
                     stats, tokens, lps = RunStats(), [], []
                     for token in runner.iter_tokens(
                         ids,
@@ -103,6 +101,9 @@ def main():
                     engine._executor.submit(lambda: None).result()
                     if not tokens or not stats.finish_reason or stats.cached_tokens:
                         raise RuntimeError("incomplete / non-cold paired item")
+                    native_calls = native_forward.native_calls - native_before
+                    if mode == "native" and not native_calls:
+                        raise RuntimeError("native singleton path did not engage")
                     text = tokenizer.decode(tokens, skip_special_tokens=True).strip()
                     match = re.fullmatch(r"\s*(-?\d+)\s*", text)
                     scored = bool(match and int(match[1]) == answer)
@@ -111,8 +112,8 @@ def main():
                         tokens=tokens, lps=lps, text=text, correct=scored
                     )
                 equal = (
-                    results["baseline"]["tokens"] == results["wide"]["tokens"]
-                    and results["baseline"]["lps"] == results["wide"]["lps"]
+                    results["baseline"]["tokens"] == results[candidate]["tokens"]
+                    and results["baseline"]["lps"] == results[candidate]["lps"]
                 )
                 different += not equal
                 row = dict(
@@ -129,13 +130,16 @@ def main():
                     json.dumps({k: v for k, v in row.items() if k != "arms"}),
                     flush=True,
                 )
-            success = different == 0 and abs(correct["baseline"] - correct["wide"]) <= 1
+            success = (
+                different == 0 and abs(correct["baseline"] - correct[candidate]) <= 1
+            )
             out.write(
                 json.dumps(
                     dict(
                         phase="complete",
                         success=success,
                         items=a.items,
+                        variant=candidate,
                         correct=correct,
                         different=different,
                     )

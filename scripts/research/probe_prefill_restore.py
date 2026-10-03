@@ -106,6 +106,7 @@ def main():
     flush = _Coordinator.flush_deferred_checkpoints
     merge = _Coordinator.merge_rows
     events, original = [], []
+    phase_stack = []
     for modname, symbol in [
         ("mlx_vlm.apc", "APCManager.lookup_exact_cache"),
         ("mlx_vlm.apc", "_clone_prompt_cache_for_apc"),
@@ -138,6 +139,7 @@ def main():
                     mx.reset_peak_memory()
                 details["source_bytes"] = _cache_nbytes(args[0])
                 details["min_capacity_tokens"] = kwargs.get("min_capacity_tokens")
+            phase_stack.append(_name)
             try:
                 result = _fn(*args, **kwargs)
                 if _name == "_clone_prompt_cache_for_apc" and result:
@@ -154,6 +156,7 @@ def main():
                     ]
                 return result
             finally:
+                phase_stack.pop()
                 if a.profile:
                     mx.synchronize()
                     if _name == "_clone_prompt_cache_for_apc":
@@ -179,6 +182,12 @@ def main():
         forward = model_class.__call__
 
         def profiled_forward(self, *args, **kwargs):
+            phase = phase_stack[-1] if phase_stack else None
+            if phase not in (
+                "PromptProcessingBatch.prompt_step",
+                "PromptProcessingBatch.generate",
+            ):
+                return forward(self, *args, **kwargs)
             mx.synchronize()
             begin = time.perf_counter()
             output = forward(self, *args, **kwargs)
@@ -192,6 +201,7 @@ def main():
             events.append(
                 dict(
                     name="target_forward",
+                    phase=phase,
                     begin=begin,
                     end=time.perf_counter(),
                     ms=1000 * (time.perf_counter() - begin),
@@ -262,6 +272,7 @@ def main():
 
             def run(tokens, label, mode, rep, n=16):
                 events.clear()
+                native_before = native_model_forward.native_calls
                 stats = RunStats()
                 start = time.perf_counter()
                 first, generated = None, []
@@ -313,6 +324,8 @@ def main():
                     spec_mode=stats.spec_mode,
                     events=list(events),
                     profiled=a.profile,
+                    native_forward_calls=native_model_forward.native_calls
+                    - native_before,
                     runner_first_ms=stats.first_token_s * 1000,
                     first_at=first_at,
                 )

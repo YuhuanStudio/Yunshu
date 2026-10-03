@@ -6,6 +6,9 @@ quantized, padded, multi-row, and speculative state on upstream's path.
 
 
 def extract_rows(caches):
+    import weakref
+
+    import mlx.core as mx
     from mlx_vlm.models.cache import ArraysCache, BatchKVCache, KVCache
 
     rows = []
@@ -25,9 +28,33 @@ def extract_rows(caches):
                     for a in (source.keys, source.values)
                 ):
                     return None
+                if (
+                    source.keys.dtype != source.values.dtype
+                    or source.keys.dtype not in (mx.float16, mx.bfloat16, mx.float32)
+                ):
+                    return None
                 row.keys = source.keys.view(source.keys.dtype)
                 row.values = source.values.view(source.values.dtype)
                 row.offset = source._idx
+            reference = weakref.ref(row)
+
+            def update(keys, values, _reference=reference):
+                current = _reference()
+                if current is None:
+                    raise RuntimeError("singleton row cache was released")
+                # The legacy extract forced growth, hence dtype promotion. Keep
+                # that behavior if an embedding/projection changes dtype.
+                if current.keys is not None and (
+                    current.keys.dtype != keys.dtype
+                    or current.values.dtype != values.dtype
+                ):
+                    current.keys = mx.contiguous(current.keys[..., : current.offset, :])
+                    current.values = mx.contiguous(
+                        current.values[..., : current.offset, :]
+                    )
+                return KVCache.update_and_fetch(current, keys, values)
+
+            row.update_and_fetch = update
         elif type(source) is ArraysCache:
             if getattr(source, "_speculation", None) is not None or any(
                 a is not None and (not a.ndim or a.shape[0] != 1) for a in source.cache
@@ -56,7 +83,7 @@ def merge_rows(rows):
             batch = BatchKVCache([0])
             if row.offset:
                 batch.keys = row.keys.view(row.keys.dtype)
-                batch.values = row.values.view(row.values.dtype)
+                batch.values = row.values.astype(row.keys.dtype).view(row.keys.dtype)
                 batch._idx = row.offset
                 batch.offset += row.offset
             merged.append(batch)
@@ -110,6 +137,8 @@ def wrap(original):
         )
         replacements = merge_rows(rows)
         cache[:] = replacements
+        forward.native_calls += 1
         return result
 
+    forward.native_calls = 0
     return forward

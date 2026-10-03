@@ -59,7 +59,7 @@ def restore_experiment_launcher(mode):
             "    return direct_clone(c, clone=_clone, **kwargs)\n"
             "apc_adapters.clone_cache_entry = _direct\n"
         )
-    if mode == "keep":
+    if mode in ("keep", "pool", "nativepool", "combo"):
         patch += (
             "import mlx.core as mx\n"
             "from yunshu_engine.kernels import buffer_cache\n"
@@ -71,12 +71,20 @@ def restore_experiment_launcher(mode):
             "buffer_cache.install = _bounded_pool\n"
             "buffer_cache.clear_if_over = lambda: None\n"
         )
-    if mode == "wide":
+    if mode in ("wide", "combo"):
         patch += (
             "from yunshu_engine.kernels import lane_linear\n"
             "from yunshu_engine.kernels.tensorfold import lane_qmm\n"
             "lane_linear.PIECE = 512\n"
             "lane_qmm.MAX_ROWS = 512\n"
+        )
+    if mode in ("native", "nativepool", "combo"):
+        patch += (
+            "import sys\n"
+            f"sys.path.insert(0, {str(Path(__file__).resolve().parent)!r})\n"
+            "from native_model_cache import wrap\n"
+            "from mlx_vlm.models.qwen3_5.language import Qwen3_5Model\n"
+            "Qwen3_5Model.__call__ = wrap(Qwen3_5Model.__call__)\n"
         )
     return patch
 
@@ -94,6 +102,10 @@ def main():
             "direct",
             "keep",
             "wide",
+            "pool",
+            "native",
+            "nativepool",
+            "combo",
         ),
         required=True,
     )
