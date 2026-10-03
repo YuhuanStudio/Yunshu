@@ -579,6 +579,16 @@ def submit(
         raise ValueError("mem_gb must be finite and nonnegative")
     if device != "m5" and mem_gb > 28:
         raise ValueError("M3 admission: maximum 28 GB (36 GB minus 8 GB user reserve)")
+    if device != "m5" and _daemon_running():
+        caps = _read(ROOT / "daemon-capabilities.json")
+        try:
+            lock_pid = (ROOT / "daemon.lock").read_text().strip()
+        except OSError:
+            lock_pid = ""
+        if "m3" not in caps.get("devices", []) or str(caps.get("pid")) != lock_pid:
+            raise ValueError(
+                "running daemon does not support M3 lanes; use an upgraded isolated GPUQ_DIR (do not restart the live daemon)"
+            )
     cfg = contention_config({"contention_config": cpu_config or {}})
     JOBS.mkdir(parents=True, exist_ok=True)
     LOGS.mkdir(parents=True, exist_ok=True)
@@ -1023,6 +1033,13 @@ def daemon() -> None:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
         return
+    lock.seek(0)
+    lock.truncate()
+    lock.write(str(os.getpid()))
+    lock.flush()
+    _write(
+        ROOT / "daemon-capabilities.json", {"pid": os.getpid(), "devices": ["m5", "m3"]}
+    )
     idle_since = _now()
     gate = ServingGate()
     gate.cpu = QuietGate()

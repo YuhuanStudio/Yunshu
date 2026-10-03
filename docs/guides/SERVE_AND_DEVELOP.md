@@ -221,7 +221,10 @@ scripts/dev/gpuq status
 local M5 slot and a remote M3 slot concurrently. `any` is explicit: a job is
 reserved once by whichever slot admits it first. Local serving, quiet admission
 and priority preemption apply to the M5 slot. `--quiet` is rejected with `m3`
-and `any`: timing measurements belong on the M5.
+and `any`: timing measurements belong on the M5. A running legacy daemon
+without M3 capability is refused for `m3`/`any` submission; use an upgraded
+isolated queue until the queue owner schedules deployment. Do not restart a
+live timing daemon to activate this lane.
 
 Configure `M3_HOST`, `M3_KEY` and `M3_REPO` as for `scripts/dev/m3run`; the remote
 repository must already have its working `.venv`. The M3 is a personal laptop:

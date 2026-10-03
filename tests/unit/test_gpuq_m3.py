@@ -408,3 +408,25 @@ def test_paired_accuracy_report_refuses_mixed_devices(monkeypatch):
     args = SimpleNamespace(bench="gsm8k", ref="ref", cand="cand", field="correct")
     with pytest.raises(ValueError, match="mixed-device"):
         paired_eval.cmd_report(args)
+
+
+@pytest.mark.parametrize("device", ["m3", "any"])
+def test_legacy_daemon_cannot_misroute_remote_jobs(queue, monkeypatch, device):
+    monkeypatch.setattr(queue, "_daemon_running", lambda: True)
+    (queue.ROOT / "daemon.lock").write_text("123")
+    # A stale receipt from a different daemon must not authorize the lane either.
+    queue._write(
+        queue.ROOT / "daemon-capabilities.json", {"pid": 456, "devices": ["m5", "m3"]}
+    )
+    with pytest.raises(ValueError, match="running daemon does not support M3"):
+        queue.submit(["true"], "remote", 1, 0, device=device)
+    assert not list(queue.JOBS.glob("*.json"))
+    queue._write(
+        queue.ROOT / "daemon-capabilities.json", {"pid": 123, "devices": ["m5", "m3"]}
+    )
+    assert queue.submit(["true"], "remote", 1, 0, device=device)
+
+
+def test_default_m5_still_submits_to_legacy_daemon(queue, monkeypatch):
+    monkeypatch.setattr(queue, "_daemon_running", lambda: True)
+    assert queue.submit(["true"], "local", 1, 0)
