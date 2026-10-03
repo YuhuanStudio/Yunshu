@@ -99,6 +99,16 @@ def workloads():
         },
     )
     yield (
+        "tool-lp",
+        "Write src/squares.py containing a Python function squares(n) that returns the first n squares. Use write_file now.",
+        {
+            "tools": tools,
+            "tool_choice": "required",
+            "logprobs": True,
+            "top_logprobs": 20,
+        },
+    )
+    yield (
         "json-lp",
         "Return six fruit inventory records with id, label, status.",
         {
@@ -120,12 +130,49 @@ def read_trace(path, count, timeout=30.0):
     """
     deadline = time.monotonic() + timeout
     while True:
-        lines = path.read_text().splitlines() if path.exists() else []
+        data = path.read_text() if path.exists() else ""
+        lines = data.splitlines()
+        if data and not data.endswith("\n"):
+            lines = lines[:-1]
         if len(lines) >= count:
-            return [json.loads(line) for line in lines]
+            return [json.loads(line) for line in lines[:count]]
         if time.monotonic() > deadline:
             raise RuntimeError(f"trace {path} has {len(lines)} < {count} records")
         time.sleep(0.1)
+
+
+class TraceCursor:
+    """Consume one receipt per request, across every workload and phase."""
+
+    def __init__(self, path):
+        self.path = path
+        self.count = 0
+
+    def next(self):
+        self.count += 1
+        return read_trace(self.path, self.count)[-1]
+
+
+def run_agent(srv, out, args):
+    """Fix auxiliary title sampling for reproducible background-request parity."""
+    original = tfbench.send
+
+    def deterministic_title(url, body, *a, **kw):
+        if not body.get("tools"):
+            body = dict(body, temperature=0)
+        return original(url, body, *a, **kw)
+
+    tfbench.send = deterministic_title
+    try:
+        return tfbench.part_agent(srv, out, args)
+    finally:
+        tfbench.send = original
+
+
+def require_cache_reuse(result, phase):
+    """A parity test must actually exercise APC on its warm/follow-up arm."""
+    if phase in ("warm", "turn2") and not (result.get("xy") or {}).get("cached_tokens"):
+        raise RuntimeError(f"{phase} did not reuse the cache")
 
 
 def second_turn(prompt, result, extra):
@@ -299,6 +346,7 @@ def main():
             source_hash=hashlib.sha256(
                 b"".join(p.read_bytes() for p in sources)
             ).hexdigest(),
+            harness_hash=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
             git_head=subprocess.check_output(
                 ["git", "rev-parse", "HEAD"], cwd=root, text=True
             ).strip(),
@@ -340,6 +388,8 @@ def main():
                     if a.agent:
                         env["CSPEC_DISABLE_PLAIN"] = "1"
                     srv = tfbench.Srv("yunshu", env, f"{mode}-r{rep}")
+                    token_cursor = TraceCursor(trace)
+                    state_cursor = TraceCursor(Path(str(trace) + ".states"))
                     for case, prompt, extra in [] if a.agent else workloads():
                         if a.only_case and case not in a.only_case:
                             continue
@@ -354,7 +404,7 @@ def main():
                         if a.turn2:
                             phases.append("turn2")
                         first_result = None
-                        for sent, phase in enumerate(phases, 1):
+                        for phase in phases:
                             if phase == "turn2":
                                 result = send(
                                     srv,
@@ -364,14 +414,20 @@ def main():
                                 )
                             else:
                                 result = send(srv, prompt, extra, a.max_tokens)
+                            require_cache_reuse(result, phase)
+                            if extra.get("logprobs") and not result["logprobs"]:
+                                raise RuntimeError(
+                                    "requested logprobs receipt is empty"
+                                )
                             if first_result is None:
                                 first_result = result
-                            raw = read_trace(trace, sent)[-1]
+                            raw = token_cursor.next()
                             result["raw_token_digest"] = raw["token_digest"]
                             result["raw_token_ids"] = raw["token_ids"]
                             if a.cache_state_check:
-                                states = read_trace(Path(str(trace) + ".states"), sent)
-                                result["cache_state_digest"] = states[-1]["digest"]
+                                state = state_cursor.next()
+                                result["cache_state_digest"] = state["digest"]
+                                result["cache_state_details"] = state["details"]
                             receipts[(rep, mode, case + ":" + phase)] = result
                             tfbench.emit(
                                 out,
@@ -392,7 +448,7 @@ def main():
                     if a.agent:
                         agent_out = tfbench.OUT / f"agent-{mode}-r{rep}.jsonl"
                         with agent_out.open("w") as agent_file:
-                            tfbench.part_agent(srv, agent_file, a)
+                            run_agent(srv, agent_file, a)
                             tfbench.emit(
                                 agent_file, complete=True, part="agent_complete"
                             )
@@ -483,6 +539,7 @@ def main():
             )
             if (
                 a.cache_state_check
+                and not a.agent
                 and result["cache_state_digest"] != baseline["cache_state_digest"]
             ):
                 # Diagnostic only: raw cross-path state bits may differ while every

@@ -432,7 +432,10 @@ def test_serial_verify_routing_restored_on_error(monkeypatch):
 
 
 @pytest.mark.parametrize("feature", ["guide", "logprobs", "plain"])
-def test_serial_requests_preserve_ar_attention_and_projections(monkeypatch, feature):
+@pytest.mark.parametrize("spec", [False, True])
+def test_serial_requests_preserve_ar_attention_and_projections(
+    monkeypatch, feature, spec
+):
     from yunshu_engine import vlm_batch_runner as vbr
     from yunshu_engine.kernels import batch_invariant, ragged_kv
 
@@ -442,13 +445,14 @@ def test_serial_requests_preserve_ar_attention_and_projections(monkeypatch, feat
     monkeypatch.setitem(ragged_kv._STATE, "format", None)
     runner = VLMBatchRunner(SimpleNamespace(language_model=object()), None)
     runner.ragged_kv = "bf16"
+    runner.prefix_invariant = True
     job = SimpleNamespace(
         abandoned=False,
         cancel_event=None,
         guide=object() if feature == "guide" else None,
         logprobs=feature == "logprobs",
     )
-    group = vbr._Group(gen=None, spec=True, jobs={1: job})
+    group = vbr._Group(gen=None, spec=spec, jobs={1: job})
     seen = []
     monkeypatch.setattr(
         runner,
@@ -579,3 +583,26 @@ def test_constructor_canonicalizes_before_immediate_prefill():
     assert isinstance(prompt.prompt_cache[0], KVCache)
     assert prompt.prompt_cache[1].left_padding is None
     assert prompt.prompt_cache[1].lengths is None
+
+
+def test_plain_and_exact_ar_requests_do_not_share_arithmetic_group(monkeypatch):
+    runner = VLMBatchRunner(SimpleNamespace(language_model=object()), None)
+    jobs = []
+    saved = []
+    gen = SimpleNamespace(insert=lambda *a, **kw: [0])
+
+    def submit(job):
+        jobs.append(job)
+        job.out.put(_DONE)
+
+    monkeypatch.setattr(runner, "_submit", submit)
+    monkeypatch.setattr(runner, "_new_generator", lambda **kw: saved.append(kw) or gen)
+    for guide in (None, object()):
+        list(
+            runner.iter_tokens(
+                [1, 2], max_tokens=3, prompt_kwargs={}, guide=guide, allow_draft=False
+            )
+        )
+        runner._admit(jobs[-1], alone=True)
+    assert len(runner._batches) == 2
+    assert len(saved) == 2

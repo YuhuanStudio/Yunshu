@@ -242,7 +242,11 @@ def test_ragged_format_set_only_while_runner_steps():
             return [], []
 
     group = vbr._Group(gen=Gen(), spec=False)
-    group.jobs = {1: SimpleNamespace(cancel_event=None, abandoned=False)}
+    group.jobs = {
+        1: SimpleNamespace(
+            cancel_event=None, abandoned=False, guide=None, logprobs=False
+        )
+    }
     runner._step_group(group)
     assert seen == ["int8"]
     assert ragged_kv._STATE["format"] is None
@@ -304,3 +308,15 @@ def test_round_driver_drops_cancelled_rows():
     assert list(it) == []
     assert stats.finish_reason == "cancel"
     assert len(runner.driver.removed) == 1
+
+
+def test_prefix_sharing_uses_invariant_kernels_in_shared_batch(runner, monkeypatch):
+    from yunshu_engine.kernels import batch_invariant
+
+    active = []
+    monkeypatch.setattr(batch_invariant, "is_installed", lambda: True)
+    monkeypatch.setattr(batch_invariant, "set_active", active.append)
+    runner.prefix_invariant = True
+    assert _collect(runner, 2) == [1, 2]
+    assert True in active
+    assert active[-1] is False

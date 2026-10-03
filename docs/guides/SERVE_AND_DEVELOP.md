@@ -108,15 +108,22 @@ run-history variance profiling are implemented; no online arm selection is enabl
 
 Every started job records `cpu_samples` at start, every 30 seconds and end: `load_1m`, `load_5m`,
 `foreign_cpu_pct` and `top_cpu` (PID, name, `cpu_pct`, eight largest). The sum includes **all** non-job
-processes, excluding the job's descendant tree and process group. One busy core is 100%. After the initial
+processes, excluding the job's descendant tree, process group, and background processes with **nice >= 10**
+(read via `ps -o nice`). One busy core is 100%. After the initial
 `ps` estimate, CPU percentages use CPU-time deltas over the sampling interval. The monitor polls every two
 seconds, stores `foreign_cpu_max_pct` / `foreign_cpu_mean_pct` across those polls, and latches `contended`
 when the threshold is reached or sampling fails. An observation gap over five seconds resets the quiet
-window; time waiting behind other GPU jobs does not count toward the CPU admission timeout. It writes a single CPU summary to the log at completion;
+window, but never resets a reserved slot's deadline; time waiting behind other GPU jobs does not count
+toward the CPU admission timeout. It writes a single CPU summary to the log at completion;
 monitoring never adds log heartbeats that could mask a stalled command.
 
-Jobs with priority >= 0, and jobs explicitly submitted with `--quiet`, must have foreign CPU below 150% for
-20 continuous seconds before starting. After a 300-second maximum CPU wait they may start with
+Only jobs explicitly submitted with `--quiet` must have foreign CPU below 150% for
+20 continuous seconds before starting. Selection first applies priority, aging and owner fairness,
+ignoring CPU admission (serving and memory admission still apply). A selected quiet job reserves the
+GPU while waiting; other pending jobs cannot bypass it just because they omit `--quiet`.
+The hold is bounded by `min(job max_wait_s, GPUQ_QUIET_HOLD_MAX_S)`, default 300 seconds;
+the latter is configured in the **daemon environment**, including for already-submitted jobs with larger
+max waits. On expiry the selected job starts with
 `quiet_timeout` / `contended` set. Serving and memory admission still apply; `--serving-ok` does not bypass
 the CPU gate. Configure per submission (values are saved with the job and exported to its harness):
 
@@ -127,10 +134,28 @@ scripts/dev/gpuq submit --quiet --priority -1 --cpu-threshold 150 --quiet-window
 
 Environment defaults: `GPUQ_CPU_THRESHOLD`, `GPUQ_QUIET_WINDOW_S`, `GPUQ_QUIET_MAX_WAIT_S` and
 `GPUQ_CPU_SAMPLE_S` (stored periodic sample interval, default 30). These are queue settings, not engine
-experiment flags. `gpuq status` shows `wait-cpu`; finished `done` jobs with contamination display as
+experiment flags. `gpuq status` shows `wait-cpu` and each quiet job's `held=elapsed/limit` seconds,
+plus the foreign CPU/threshold, sampling failure or quiet-window progress that explains its hold.
+Quiet jobs awaiting selection show their slot/serving/memory blocker; any previous hold duration is frozen.
+Higher-priority arrivals can take the reservation; a new reservation starts a new admission window.
+Finished `done` jobs with contamination display as
 `contended`. `wait` returns **3** for otherwise successful contended perf/quiet jobs; unfinished peers still
 return 2, real command/output failures return 1. Contended negative-priority audits are shown but remain
 successful. Digest flags contended perf/quiet jobs as untrustworthy, with a distinct family state.
+
+Agents must run CPU-only test suites and builds directly with background QoS and low priority:
+
+```bash
+PYTHONPATH=python nice -n 15 taskpolicy -b \
+  /Users/yuhuan/Documents/YuhuanStudio/Yunshu/.venv/bin/python \
+  -m pytest tests/unit -q -p no:cacheprovider
+nice -n 15 taskpolicy -b uv run --no-sync ruff check python tests
+nice -n 15 taskpolicy -b npm run build
+```
+
+On macOS, `taskpolicy -b` requests background QoS (favoring efficiency cores) and `nice -n 15`
+also makes the process and inheriting children invisible to foreign-CPU admission/monitoring.
+Load averages remain recorded without filtering; they can still include background work.
 
 `GPUQ_CONTENTION_FILE` names the atomic JSON flag file. Harnesses can use
 `scripts/dev/gpuq_contention.py:was_contended()` for the latched job flag, or

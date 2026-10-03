@@ -14,6 +14,13 @@ DEV = REPO / "scripts/dev"
 sys.path.insert(0, str(DEV))
 
 
+@pytest.fixture(autouse=True)
+def _fixed_threshold(monkeypatch):
+    # The default scales with the machine's core count; these tests pin 150%.
+    monkeypatch.setenv("GPUQ_CPU_THRESHOLD", "150")
+    monkeypatch.setitem(helper().DEFAULTS, "threshold_pct", 150.0)
+
+
 def load(name, path):
     spec = importlib.util.spec_from_file_location(name, path)
     module = importlib.util.module_from_spec(spec)
@@ -48,10 +55,10 @@ def test_cpu_sampler_excludes_descendants_and_orphaned_group_members(monkeypatch
     h = helper()
     outputs = iter(
         [
-            "10 1 10 90 0:01.00 /bin/job\n11 10 10 80 0:02.00 /bin/child\n"
-            "12 1 10 70 0:03.00 /bin/orphan\n20 1 20 25 0:01.00 /app/next dev\n",
-            "10 1 10 90 0:02.00 /bin/job\n11 10 10 80 0:03.00 /bin/child\n"
-            "12 1 10 70 0:04.00 /bin/orphan\n20 1 20 25 0:05.00 /app/next dev\n",
+            "10 1 10 0 90 0:01.00 /bin/job\n11 10 10 0 80 0:02.00 /bin/child\n"
+            "12 1 10 0 70 0:03.00 /bin/orphan\n20 1 20 0 25 0:01.00 /app/next dev\n",
+            "10 1 10 0 90 0:02.00 /bin/job\n11 10 10 0 80 0:03.00 /bin/child\n"
+            "12 1 10 0 70 0:04.00 /bin/orphan\n20 1 20 0 25 0:05.00 /app/next dev\n",
         ]
     )
     monkeypatch.setattr(h, "process_snapshot", lambda: next(outputs))
@@ -392,9 +399,9 @@ def test_sampler_does_not_hide_foreign_reuse_of_an_exited_child_pid(monkeypatch)
     h = helper()
     outputs = iter(
         [
-            "10 1 10 0 0:00.00 /bin/job\n11 10 10 80 0:01.00 /bin/child\n",
-            "10 1 10 0 0:00.00 /bin/job\n",
-            "10 1 10 0 0:00.00 /bin/job\n11 1 11 80 0:01.00 /bin/next\n",
+            "10 1 10 0 0 0:00.00 /bin/job\n11 10 10 0 80 0:01.00 /bin/child\n",
+            "10 1 10 0 0 0:00.00 /bin/job\n",
+            "10 1 10 0 0 0:00.00 /bin/job\n11 1 11 0 80 0:01.00 /bin/next\n",
         ]
     )
     monkeypatch.setattr(h, "process_snapshot", lambda: next(outputs))
@@ -445,7 +452,9 @@ def test_top_cpu_truncation_does_not_truncate_foreign_cpu_sum(monkeypatch):
     monkeypatch.setattr(
         h,
         "process_snapshot",
-        lambda: "\n".join(f"{p} 1 {p} 20 0:01.00 /bin/process" for p in range(10, 22)),
+        lambda: "\n".join(
+            f"{p} 1 {p} 0 20 0:01.00 /bin/process" for p in range(10, 22)
+        ),
     )
     row = h.CpuSampler().sample(now=100)
     assert row["foreign_cpu_pct"] == 240
@@ -576,3 +585,187 @@ def test_only_timing_jobs_wait_for_a_quiet_cpu():
     assert not requires_quiet(dict(priority=0))
     assert requires_quiet(dict(priority=0, quiet=True))
     assert requires_quiet(dict(priority=-1, quiet=True))
+
+
+@pytest.mark.parametrize(
+    "cpu,window,max_wait,cap,expected,timeout",
+    [
+        (20, 4, 60, 300, 4, False),
+        (500, 20, 6, 300, 6, True),
+        (500, 20, 1800, 8, 8, True),
+        (None, 20, 1800, 8, 8, True),
+        (500, 20, 1800, 300, 300, True),
+    ],
+)
+def test_daemon_reserves_quiet_winner_instead_of_starting_nonquiet_work(
+    q, monkeypatch, cpu, window, max_wait, cap, expected, timeout
+):
+    ticks = [100.0]
+    monkeypatch.setattr(q, "_now", lambda: ticks[0])
+    monkeypatch.setattr(q.time, "time", lambda: ticks[0])
+    monkeypatch.setenv("GPUQ_QUIET_HOLD_MAX_S", str(cap))
+    quiet = q.submit(
+        ["true"],
+        "quiet-winner",
+        1,
+        0,
+        quiet=True,
+        cpu_config=dict(window_s=window, max_wait_s=max_wait),
+    )
+    ticks[0] += 1
+    regular = q.submit(["true"], "regular", 1, 0)
+    ticks[0] = 100
+    monkeypatch.setattr(
+        helper().QuietGate, "sample", lambda self, now: sample(cpu, now)
+    )
+    monkeypatch.setattr(
+        q.time, "sleep", lambda seconds: ticks.__setitem__(0, ticks[0] + seconds)
+    )
+
+    class Finished(BaseException):
+        pass
+
+    def execute(job, path, gate):
+        assert job["id"] == quiet
+        assert ticks[0] == 100 + expected
+        assert job.get("quiet_timeout", False) is timeout
+        assert q._read(q.JOBS / (regular + ".json"))["state"] == "pending"
+        # Even a timeout at an instantaneously quiet start must remain contended.
+        monkeypatch.setattr(
+            helper().CpuSampler, "sample", lambda *a, **kw: sample(20, ticks[0])
+        )
+        q._run_one(job, path, gate)
+        assert job["contended"] is timeout
+        raise Finished
+
+    monkeypatch.setattr(q, "_execute", execute)
+    with pytest.raises(Finished):
+        q.daemon()
+
+
+def test_reserved_quiet_deadline_survives_poll_gap():
+    gate = helper().QuietGate()
+    job = dict(quiet=True, env={}, quiet_hold_started=100, quiet_hold_limit_s=8)
+    assert gate.blocked(job, sample(500, 100), 100)
+    assert not gate.blocked(job, sample(500, 110), 110)
+    assert job["quiet_timeout"] is True
+
+
+def test_cpu_sampler_excludes_nice_ten_and_background_builds(monkeypatch):
+    outputs = iter(
+        [
+            "20 1 20 9 25 0:01.00 /bin/foreground\n"
+            "21 1 21 10 300 0:01.00 /bin/build\n"
+            "22 1 22 15 400 0:01.00 /bin/pytest\n",
+            "20 1 20 9 25 0:03.00 /bin/foreground\n"
+            "21 1 21 10 300 0:07.00 /bin/build\n"
+            "22 1 22 15 400 0:09.00 /bin/pytest\n",
+        ]
+    )
+    monkeypatch.setattr(helper(), "process_snapshot", lambda: next(outputs))
+    sampler = helper().CpuSampler()
+    assert sampler.sample(now=100)["foreign_cpu_pct"] == 25
+    row = sampler.sample(now=102)
+    assert row["foreign_cpu_pct"] == 100
+    assert [p["pid"] for p in row["top_cpu"]] == [20]
+
+
+def test_status_reports_quiet_hold_duration_limit_and_reason(q, monkeypatch, capsys):
+    jid = q.submit(["true"], "held", 1, 0, quiet=True)
+    q._patch_job(
+        q.JOBS / (jid + ".json"),
+        waiting="cpu",
+        quiet_hold_started=100,
+        quiet_hold_limit_s=300,
+        quiet_hold_reason="foreign CPU 500.0% >= 150.0%",
+    )
+    monkeypatch.setattr(q, "_now", lambda: 142)
+    monkeypatch.setattr(q, "_daemon_running", lambda: True)
+    q.status()
+    text = capsys.readouterr().out
+    assert "held=42/300s" in text
+    assert "foreign CPU 500.0% >= 150.0%" in text
+
+
+def test_priority_pause_reserves_quiet_winner(q, monkeypatch):
+    ticks = [100.0]
+    monkeypatch.setattr(q, "_now", lambda: ticks[0])
+    monkeypatch.setattr(q.time, "time", lambda: ticks[0])
+    monkeypatch.setattr(q, "free_memory_gb", lambda: 100)
+    monkeypatch.setattr(q.os, "killpg", lambda *a: None)
+    low = q.submit(["true"], "low", 1, -1)
+    lp = q.JOBS / (low + ".json")
+    q._patch_job(lp, state="running", pid=4242, started=90)
+    quiet = q.submit(["true"], "quiet", 1, 0, quiet=True, cpu_config=dict(max_wait_s=6))
+    q.submit(["true"], "regular", 1, 0)
+    gate = q.ServingGate()
+    gate.cpu = helper().QuietGate()
+    monkeypatch.setattr(gate.cpu, "sample", lambda now: sample(500, now))
+    executed = []
+    monkeypatch.setattr(q, "_execute", lambda job, *a: executed.append(job))
+    pauser = q.Pauser(q._read(lp), lp)
+    for now in (100, 102, 104):
+        ticks[0] = now
+        assert q._priority_step(pauser, gate, now)
+        assert pauser.paused and not executed
+    ticks[0] = 106
+    assert q._priority_step(pauser, gate, 106)
+    assert [j["id"] for j in executed] == [quiet]
+    assert executed[0]["quiet_timeout"]
+
+
+def test_quiet_reservation_follows_owner_fairness_and_releases_for_higher_priority(
+    q, monkeypatch
+):
+    ticks = [100.0]
+    monkeypatch.setattr(q, "_now", lambda: ticks[0])
+    monkeypatch.setattr(q.time, "time", lambda: ticks[0])
+    quiet = q.submit(["true"], "quiet", 1, 0, quiet=True)
+    regular = q.submit(["true"], "regular", 1, 0)
+    q._patch_job(
+        q.JOBS / (quiet + ".json"), cwd="/tmp", env=dict(GPUQ_OWNER="quiet-owner")
+    )
+    q._patch_job(
+        q.JOBS / (regular + ".json"),
+        cwd="/tmp",
+        env=dict(GPUQ_OWNER="recent-owner"),
+        submitted=99,
+    )
+    q._write(
+        q.JOBS / "history.json",
+        dict(
+            id="history",
+            state="done",
+            submitted=1,
+            started=98,
+            cwd="/tmp",
+            env=dict(GPUQ_OWNER="recent-owner"),
+        ),
+    )
+    gate = q.ServingGate()
+    gate.cpu = helper().QuietGate()
+    monkeypatch.setattr(gate.cpu, "sample", lambda now: sample(500, now))
+    assert q._admit(q._jobs(), gate) is None
+    path = q.JOBS / (quiet + ".json")
+    assert q._read(path)["quiet_hold_started"] == 100
+    ticks[0] = 102
+    urgent = q.submit(["true"], "urgent", 1, 1)
+    assert q._admit(q._jobs(), gate)["id"] == urgent
+    held = q._read(path)
+    assert held["quiet_hold_started"] is None
+    assert held["quiet_hold_elapsed_s"] == 2
+    assert held["waiting"] == "slot"
+
+
+def test_default_threshold_scales_with_cores(monkeypatch):
+    import importlib
+
+    h = helper()
+    monkeypatch.setattr(h.os, "cpu_count", lambda: 18)
+    monkeypatch.delenv("GPUQ_CPU_THRESHOLD", raising=False)
+    fresh = importlib.reload(h)
+    try:
+        assert fresh.DEFAULTS["threshold_pct"] == 450.0
+    finally:
+        monkeypatch.undo()
+        importlib.reload(fresh)
