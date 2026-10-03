@@ -151,3 +151,47 @@ def test_added_files_and_check_watch_work_for_any_repo(tmp_path, capsys, monkeyp
     out = capsys.readouterr().out
     assert "1 commits on watched paths" in out
     assert "new files not vendored (1): pkg/b.py" in out
+
+
+@pytest.mark.parametrize("kind", ["vendored", "derived"])
+def test_review_does_not_rewrite_provenance_or_hide_future_changes(
+    tmp_path, monkeypatch, kind
+):
+    repo = tmp_path / "reference/review"
+    repo.mkdir(parents=True)
+    _git(repo, "init", "-q", "-b", "main")
+    _git(repo, "config", "user.email", "t@t")
+    _git(repo, "config", "user.name", "t")
+    source = repo / "source.py"
+    source.write_text("x = 1\n")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-qm", "copied")
+    base = cu.git(repo, "rev-parse", "HEAD")
+    source.write_text("x = 2\n")
+    _git(repo, "commit", "-qam", "reviewed but deliberately retained")
+    reviewed = cu.git(repo, "rev-parse", "HEAD")
+    local = tmp_path / "local.py"
+    local.write_text("x = 1\n")
+    entry = dict(
+        path="local.py",
+        repo="https://example.com/review",
+        clone="reference/review",
+        commit=base,
+        reviewed_commit=reviewed,
+        review_reason="Keep the original arithmetic until a same-checkpoint gate.",
+        upstream_path="source.py",
+        upstream_paths=["source.py"],
+        license="MIT",
+    )
+    monkeypatch.setattr(cu, "ROOT", tmp_path)
+
+    def check():
+        if kind == "vendored":
+            return cu.check_vendored([entry], set())
+        return cu.check_history([entry])
+
+    assert check() == 0
+    assert entry["commit"] == base
+    source.write_text("x = 3\n")
+    _git(repo, "commit", "-qam", "future change must be reported")
+    assert check() == 1

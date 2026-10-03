@@ -1,5 +1,5 @@
 {
-  "_doc": "Everything Yunshu took from another project. kind: vendored = copied file; derived = rewritten from specific upstream files; inspired = same algorithm, independent code; patches = we monkeypatch an upstream symbol (source_sha256 pins the code we depend on). scripts/vendor/check_upstream.py reports upstream changes since 'commit'. 'local_changes' lists deliberate edits to keep on a sync. watch = every reference clone we follow for ideas or fixes (commit = reviewed up to). watch_excluded = every other clone with the reason it is not followed; scripts/vendor/check_upstream.py fails when a clone is in neither list. packages = extra pins on top of everything declared in pyproject.toml, which is read automatically.",
+  "_doc": "Everything Yunshu took from another project. kind: vendored = copied file; derived = rewritten from specific upstream files; inspired = same algorithm, independent code; patches = we monkeypatch an upstream symbol (source_sha256 pins the code we depend on). scripts/vendor/check_upstream.py reports upstream changes since 'commit'. 'local_changes' lists deliberate edits to keep on a sync. watch = every reference clone we follow for ideas or fixes (commit = reviewed up to). watch_excluded = every other clone with the reason it is not followed; scripts/vendor/check_upstream.py fails when a clone is in neither list. packages = extra pins on top of everything declared in pyproject.toml, which is read automatically. reviewed_commit/reviewed_date/review_reason record a deliberate retention after upstream review without rewriting the copied commit provenance.",
   "vendored": [
     {
       "path": "python/yunshu_engine/kernels/omlx/qwen35_verify_qmm.py",
@@ -23,7 +23,10 @@
       "local_changes": [
         "imports point at yunshu_engine.kernels.omlx"
       ],
-      "kind": "vendored"
+      "kind": "vendored",
+      "reviewed_commit": "68c8c09f6f6a54fe36181f9aabba9525797d1b58",
+      "reviewed_date": "2026-10-04",
+      "review_reason": "Retain stock mlx-vlm 0.7.4 q/k normalization and the qualified local prework. Upstream 5f70e462 changes epsilon arithmetic and prefix namespace; 107e271a adds deferred state/tiles. Neither is a transparent dependency sync; candidate gates belong to the spec owner."
     },
     {
       "path": "python/yunshu_engine/kernels/omlx/qwen35_gdn_verify_fused.py",
@@ -36,7 +39,10 @@
         "imports point at yunshu_engine.kernels.omlx",
         "ported upstream omlx e37e07f5: _sigmoid_exp() probes metal::exp vs metal::precise::exp against mlx-vlm _precise_swiglu, norm-gate source uses the winner, fused_eligible declines when neither is bit-equal"
       ],
-      "kind": "vendored"
+      "kind": "vendored",
+      "reviewed_commit": "68c8c09f6f6a54fe36181f9aabba9525797d1b58",
+      "reviewed_date": "2026-10-04",
+      "review_reason": "The e37e07f5 precise-exp admission is already ported locally. Keep it and the qualified rollback contract; upstream deferred GDN states need a separate lossless owner A/B."
     },
     {
       "path": "python/yunshu_engine/kernels/omlx/qwen35_verify_sdpa_split.py",
@@ -86,7 +92,10 @@
         "ported upstream omlx 26375259 (kernel part): qmv_fast_layout(k, n, bits) replaces the K % 512 rule (K % 256 for 6/8-bit)"
       ],
       "why": "row-exact verify projections (one-row qmv arithmetic per row)",
-      "kind": "vendored"
+      "kind": "vendored",
+      "reviewed_commit": "68c8c09f6f6a54fe36181f9aabba9525797d1b58",
+      "reviewed_date": "2026-10-04",
+      "review_reason": "26375259 bit-width layout is already ported. Retain qualified local geometry; new unrolled tile admission/group plans in 107e271a are performance candidates, requiring a separate kernel parity and end-to-end A/B."
     },
     {
       "path": "python/yunshu_engine/kernels/omlx/module_cache.py",
@@ -110,7 +119,10 @@
         "ported upstream omlx 26375259 (kernel part): qmv_fast_layout(k, n, bits) replaces the K % 512 rule (K % 256 for 6/8-bit)"
       ],
       "why": "qmv traversal header used by row_exact_qmv",
-      "kind": "vendored"
+      "kind": "vendored",
+      "reviewed_commit": "68c8c09f6f6a54fe36181f9aabba9525797d1b58",
+      "reviewed_date": "2026-10-04",
+      "review_reason": "26375259 qmv_fast_layout is already present locally. Remaining upstream eligibility/call routing follows oMLX plans; retain the local qualified row-exact path."
     },
     {
       "path": "python/yunshu_engine/kernels/tensorfold/lane_qmm.py",
@@ -125,7 +137,10 @@
         "hardware selected once: original M5 fragment source on g17/g18, portable get_multidimensional_index elsewhere; numerical admission only for unknown generations"
       ],
       "why": "integer-code tensor-unit matmul (5/6/8-bit via uint8 widening), used by kernels/int_code_linear.py",
-      "kind": "vendored"
+      "kind": "vendored",
+      "reviewed_commit": "609ca419abecebdc5a059498a613680bd3aa847f",
+      "reviewed_date": "2026-10-04",
+      "review_reason": "Upstream extends non-4-bit group32 widening; local qualification is group64 plus the existing 4-bit group32 path. Retain M1-M4 portable coordinates and M5 source selection; do not broaden numerical admission without same-checkpoint evidence."
     },
     {
       "path": "python/yunshu_engine/kernels/tensorfold/lane_widen.py",
@@ -134,8 +149,13 @@
       "upstream_path": "src/tensorfold/kernels/qwen/dense/v1/lane_widen.py",
       "commit": "34bae79a",
       "license": "MIT",
-      "local_changes": ["cooperative tensor element coordinates queried through MPP for M1-M4 portability; original M5 strings selected on g17/g18"],
-      "kind": "vendored"
+      "local_changes": [
+        "cooperative tensor element coordinates queried through MPP for M1-M4 portability; original M5 strings selected on g17/g18"
+      ],
+      "kind": "vendored",
+      "reviewed_commit": "609ca419abecebdc5a059498a613680bd3aa847f",
+      "reviewed_date": "2026-10-04",
+      "review_reason": "Upstream adds grouped widening variants. Keep qualified group64 source and local M1-M4 coordinate handling; group32 non-4-bit support remains a separately gated candidate."
     },
     {
       "path": "python/yunshu_engine/kernels/tensorfold/lane_m5.py",
@@ -144,8 +164,13 @@
       "upstream_path": "src/tensorfold/kernels/qwen/dense/v1/lane_qmm.py",
       "commit": "34bae79a",
       "license": "MIT",
-      "local_changes": ["main 38ac21ed M5 fragment source strings preserved byte-for-byte"],
-      "kind": "vendored"
+      "local_changes": [
+        "main 38ac21ed M5 fragment source strings preserved byte-for-byte"
+      ],
+      "kind": "vendored",
+      "reviewed_commit": "609ca419abecebdc5a059498a613680bd3aa847f",
+      "reviewed_date": "2026-10-04",
+      "review_reason": "Preserve the byte-for-byte qualified M5 fragment source snapshot; upstream group32 API additions do not supersede the generation-specific arithmetic."
     },
     {
       "path": "python/yunshu_engine/kernels/tensorfold/lane_widen_m5.py",
@@ -154,8 +179,13 @@
       "upstream_path": "src/tensorfold/kernels/qwen/dense/v1/lane_widen.py",
       "commit": "34bae79a",
       "license": "MIT",
-      "local_changes": ["main 38ac21ed M5 widening source strings preserved byte-for-byte"],
-      "kind": "vendored"
+      "local_changes": [
+        "main 38ac21ed M5 widening source strings preserved byte-for-byte"
+      ],
+      "kind": "vendored",
+      "reviewed_commit": "609ca419abecebdc5a059498a613680bd3aa847f",
+      "reviewed_date": "2026-10-04",
+      "review_reason": "Preserve the qualified M5 widening source snapshot; grouped variants require separate kernel admission and do not replace this source."
     },
     {
       "path": "python/yunshu_engine/kernels/tensorfold/inputs.py",
@@ -179,7 +209,10 @@
       ],
       "commit": "34bae79a",
       "license": "MIT",
-      "why": "prompt-copy / lookup drafting (SuffixLookupProposer: n-gram index, longest backward match, silence after misses), rewritten with a full-prompt index, a windowed benefit estimate and a verify-window parameter; Rapid-MLX's copy drafts inform the idea"
+      "why": "prompt-copy / lookup drafting (SuffixLookupProposer: n-gram index, longest backward match, silence after misses), rewritten with a full-prompt index, a windowed benefit estimate and a verify-window parameter; Rapid-MLX's copy drafts inform the idea",
+      "reviewed_commit": "609ca419abecebdc5a059498a613680bd3aa847f",
+      "reviewed_date": "2026-10-04",
+      "review_reason": "Independent full-prompt n-gram index and benefit/window policy retained. Upstream bulk lookup and context bookkeeping are candidates for the active drafter owner, not replacements for our qualified proposal policy."
     },
     {
       "kind": "derived",
@@ -191,7 +224,10 @@
       ],
       "commit": "34bae79a",
       "license": "MIT",
-      "why": "row-invariant quantized projections on the tensor units"
+      "why": "row-invariant quantized projections on the tensor units",
+      "reviewed_commit": "609ca419abecebdc5a059498a613680bd3aa847f",
+      "reviewed_date": "2026-10-04",
+      "review_reason": "Retain local arithmetic namespace, row geometry and group eligibility. Upstream group32 extension is optional capability work and not a same-checkpoint numerics fix."
     },
     {
       "kind": "derived",
@@ -204,7 +240,10 @@
       ],
       "commit": "34bae79a",
       "license": "MIT",
-      "why": "5/6/8-bit integer-code matmul wrapper"
+      "why": "5/6/8-bit integer-code matmul wrapper",
+      "reviewed_commit": "609ca419abecebdc5a059498a613680bd3aa847f",
+      "reviewed_date": "2026-10-04",
+      "review_reason": "Keep the locally qualified 5/6/8-bit group64 wrapper and portability policy; upstream grouped kernel additions have not been qualified for our wider row blocks."
     },
     {
       "kind": "derived",
@@ -252,7 +291,10 @@
       ],
       "commit": "deb9f00a",
       "license": "Apache-2.0",
-      "why": "deprecated port of the oMLX MTP patch (PR 990)"
+      "why": "deprecated port of the oMLX MTP patch (PR 990)",
+      "reviewed_commit": "68c8c09f6f6a54fe36181f9aabba9525797d1b58",
+      "reviewed_date": "2026-10-04",
+      "review_reason": "Deprecated compatibility port is not the mlx-vlm 27B serving path. Upstream Lightning multi-row/coarse-head/cap policies differ from the shared runner contract; retain the supported compatibility behavior, no speculative default change."
     },
     {
       "kind": "derived",
@@ -266,7 +308,10 @@
       ],
       "commit": "v0.7.3",
       "license": "MIT",
-      "why": "mirrors DFlash internals: row capture, drafter window, greedy verify head"
+      "why": "mirrors DFlash internals: row capture, drafter window, greedy verify head",
+      "reviewed_commit": "6ecadd767ca1c7c54763289c750dd180d7945037",
+      "reviewed_date": "2026-10-04",
+      "review_reason": "Upstream left-padding fix is already supplied by installed mlx-vlm 0.7.4. This module derives row capture and draft windows, not a copy of padding metadata helpers; keep request-local capture."
     },
     {
       "kind": "derived",
@@ -302,7 +347,10 @@
       ],
       "commit": "deb9f00a",
       "license": "Apache-2.0",
-      "why": "process memory limit enforcer, simplified to one asyncio loop"
+      "why": "process memory limit enforcer, simplified to one asyncio loop",
+      "reviewed_commit": "68c8c09f6f6a54fe36181f9aabba9525797d1b58",
+      "reviewed_date": "2026-10-04",
+      "review_reason": "Local simplified single-node asyncio enforcer does not use upstream tier/rank/prefill accounting. Retain local settings and bounded process policy; memory accounting improvements are separate model-owner work."
     },
     {
       "kind": "derived",
@@ -328,7 +376,10 @@
         "mlx_vlm/generate/ar.py",
         "mlx_vlm/models/qwen3_5/speculative_verifier.py"
       ],
-      "why": "single-row constrained DFlash transactions and accepted target-row probabilities"
+      "why": "single-row constrained DFlash transactions and accepted target-row probabilities",
+      "reviewed_commit": "6ecadd767ca1c7c54763289c750dd180d7945037",
+      "reviewed_date": "2026-10-04",
+      "review_reason": "Installed mlx-vlm 0.7.4 already includes left-padding and low-temperature/top-p fixes; main adds stop_gradient on MoE routing. Keep serial projection arithmetic and request-local grammar transactions; upstream does not supply this exact constraint contract."
     },
     {
       "kind": "derived",
@@ -355,7 +406,10 @@
       ],
       "commit": "34bae79a",
       "license": "MIT",
-      "why": "position-keyed Gumbel-max sampling, so a drafted token is accepted exactly when serial sampling would draw it"
+      "why": "position-keyed Gumbel-max sampling, so a drafted token is accepted exactly when serial sampling would draw it",
+      "reviewed_commit": "609ca419abecebdc5a059498a613680bd3aa847f",
+      "reviewed_date": "2026-10-04",
+      "review_reason": "Independent explicit request seed and keyed min_p contract already cover the useful sampler behavior. Do not adopt process-wide prompt seed salt, which would change API seed semantics."
     },
     {
       "kind": "inspired",
@@ -367,7 +421,10 @@
       ],
       "commit": "34bae79a",
       "license": "MIT",
-      "why": "restricted draft vocabulary (draft_vocab); ours adds a per-request learned extension"
+      "why": "restricted draft vocabulary (draft_vocab); ours adds a per-request learned extension",
+      "reviewed_commit": "609ca419abecebdc5a059498a613680bd3aa847f",
+      "reviewed_date": "2026-10-04",
+      "review_reason": "Local independent reduced-head path retains group metadata and per-request learned vocabulary. Upstream group-size validation/rotated-head support is a candidate guard; no unmeasured kernel path is adopted."
     },
     {
       "kind": "inspired",
@@ -404,7 +461,10 @@
       ],
       "commit": "34bae79a",
       "license": "MIT",
-      "why": "lane round driver structure"
+      "why": "lane round driver structure",
+      "reviewed_commit": "609ca419abecebdc5a059498a613680bd3aa847f",
+      "reviewed_date": "2026-10-04",
+      "review_reason": "Keep independent per-row scheduler/grammar/cache ownership. Upstream FamilyRounds and Nemotron/CUDA APIs are not drop-in; draft cost and failure handling ideas are assigned as backlog candidates."
     },
     {
       "kind": "inspired",
@@ -417,7 +477,10 @@
       ],
       "commit": "34bae79a",
       "license": "MIT",
-      "why": "packed segment forward over rows"
+      "why": "packed segment forward over rows",
+      "reviewed_commit": "609ca419abecebdc5a059498a613680bd3aa847f",
+      "reviewed_date": "2026-10-04",
+      "review_reason": "Independent packed segment forward retained. Upstream CUDA/prompt ingestion and family metadata updates do not replace this local row-invariant kernel contract."
     },
     {
       "kind": "inspired",
@@ -453,7 +516,10 @@
       ],
       "commit": "c64a578f",
       "license": "Apache-2.0",
-      "why": "lossless spec: batch-invariant kernels so spec on == spec off"
+      "why": "lossless spec: batch-invariant kernels so spec on == spec off",
+      "reviewed_commit": "5d9950c64a5d8b20cd5a886e0e470543d013cb39",
+      "reviewed_date": "2026-10-04",
+      "review_reason": "Inspired algorithm only, no Splash ABI/code port. Upstream paged KV extent/INT8 variants use a different storage and precision contract; local lossless arithmetic remains required."
     },
     {
       "kind": "inspired",
@@ -465,7 +531,10 @@
       ],
       "commit": "v0.7.3",
       "license": "MIT",
-      "why": "tool-call format detection; dispatches to upstream parsers"
+      "why": "tool-call format detection; dispatches to upstream parsers",
+      "reviewed_commit": "6ecadd767ca1c7c54763289c750dd180d7945037",
+      "reviewed_date": "2026-10-04",
+      "review_reason": "Installed mlx-vlm 0.7.4/mlx-lm 0.32.0 parsers already contain the relevant released tool/harmony fixes. Local dispatch and request schemas remain independent; main typed-argument fix is tracked as a regression candidate."
     },
     {
       "kind": "inspired",
@@ -477,7 +546,10 @@
       ],
       "commit": "v0.31.3",
       "license": "MIT",
-      "why": "upstream parsers backing each format"
+      "why": "upstream parsers backing each format",
+      "reviewed_commit": "5cfec4cb39deba54210b3ff4d86f2337c7bc10b5",
+      "reviewed_date": "2026-10-04",
+      "review_reason": "Installed mlx-vlm 0.7.4/mlx-lm 0.32.0 parsers already contain the relevant released tool/harmony fixes. Local dispatch and request schemas remain independent; main typed-argument fix is tracked as a regression candidate."
     },
     {
       "kind": "inspired",
@@ -489,7 +561,10 @@
       ],
       "commit": "deb9f00a",
       "license": "Apache-2.0",
-      "why": "attention-based sparse prefill"
+      "why": "attention-based sparse prefill",
+      "reviewed_commit": "68c8c09f6f6a54fe36181f9aabba9525797d1b58",
+      "reviewed_date": "2026-10-04",
+      "review_reason": "Keep lossy sparse prefill opt-in and local recovery policy; upstream draft attention positions and scheduler cleanup are separate correctness candidates, not justification to enable this by default."
     },
     {
       "kind": "inspired",
@@ -561,7 +636,10 @@
       ],
       "commit": "924707f1",
       "license": "Apache-2.0",
-      "why": "block pool adapted for UMA"
+      "why": "block pool adapted for UMA",
+      "reviewed_commit": "84bcbc62644356270aaaa5e2d0237d03adc9bb3a",
+      "reviewed_date": "2026-10-04",
+      "review_reason": "Independent local KV block lifecycle retained. Upstream change formats extra keys for distributed cache events, which this single-node block type does not emit."
     },
     {
       "kind": "inspired",
@@ -597,7 +675,10 @@
       ],
       "commit": "deb9f00a",
       "license": "Apache-2.0",
-      "why": "per-model runtime settings loaded from the model directory"
+      "why": "per-model runtime settings loaded from the model directory",
+      "reviewed_commit": "68c8c09f6f6a54fe36181f9aabba9525797d1b58",
+      "reviewed_date": "2026-10-04",
+      "review_reason": "Independent local model options go through Yunshu settings and do not use oMLX offload/profile tiers. Upstream adaptive MTP depth is a separately measured candidate."
     },
     {
       "kind": "inspired",
@@ -609,7 +690,10 @@
       ],
       "commit": "deb9f00a",
       "license": "Apache-2.0",
-      "why": "mRoPE delta capture and batch decode positions"
+      "why": "mRoPE delta capture and batch decode positions",
+      "reviewed_commit": "68c8c09f6f6a54fe36181f9aabba9525797d1b58",
+      "reviewed_date": "2026-10-04",
+      "review_reason": "Only mRoPE algorithm is inspired by upstream scheduler. Upstream changes are scheduler/memory/offload/prefill-tail contracts, not replacements for local request-local rotary positions."
     },
     {
       "kind": "inspired",
@@ -633,7 +717,10 @@
       ],
       "commit": "deb9f00a",
       "license": "Apache-2.0",
-      "why": "one MLX thread with a thread-local stream"
+      "why": "one MLX thread with a thread-local stream",
+      "reviewed_commit": "68c8c09f6f6a54fe36181f9aabba9525797d1b58",
+      "reviewed_date": "2026-10-04",
+      "review_reason": "Single MLX thread lifecycle retained. Upstream EngineCore memory and shutdown policy differs; stock MLX stream cleanup fixes are tracked for future released wheels."
     },
     {
       "kind": "inspired",
@@ -669,7 +756,10 @@
       ],
       "commit": "e5dd6100",
       "license": "MIT",
-      "why": "speculative verification that re-includes the last token (speculative_generate_step)"
+      "why": "speculative verification that re-includes the last token (speculative_generate_step)",
+      "reviewed_commit": "5cfec4cb39deba54210b3ff4d86f2337c7bc10b5",
+      "reviewed_date": "2026-10-04",
+      "review_reason": "Legacy generic verifier inspiration retained. Installed mlx-lm provides relevant stop-sequence/cache/sampler fixes; 27B uses the mlx-vlm lane and request-local state machine."
     },
     {
       "kind": "inspired",
@@ -693,7 +783,10 @@
       ],
       "commit": "a0ba1968",
       "license": "Apache-2.0",
-      "why": "radix-tree prefix matching"
+      "why": "radix-tree prefix matching",
+      "reviewed_commit": "3dc7f4b816707781716f30446433467c66c4c0ed",
+      "reviewed_date": "2026-10-04",
+      "review_reason": "Independent radix/cache optimizations retained. SGLang checkpoint/supports_prefix_sharing API changes are architecture ideas, not a code dependency or an upstream fix to transplant."
     },
     {
       "kind": "inspired",
@@ -705,7 +798,10 @@
       ],
       "commit": "2b931cfe",
       "license": "Apache-2.0",
-      "why": "warm prompt preloading into the prefix cache"
+      "why": "warm prompt preloading into the prefix cache",
+      "reviewed_commit": "80e7fdec7e8641c8f81b01ece2d7cc256348b76f",
+      "reviewed_date": "2026-10-04",
+      "review_reason": "History contains 9a75b07 but the prompt_warmup.py blob at the copied base and current origin/main is identical. No source delta to port; retain local independent prompt warmup and admission behavior."
     },
     {
       "kind": "inspired",
@@ -717,7 +813,10 @@
       ],
       "commit": "e5dd6100",
       "license": "MIT",
-      "why": "sampler order top_p, min_p, XTC, top_k and penalty semantics"
+      "why": "sampler order top_p, min_p, XTC, top_k and penalty semantics",
+      "reviewed_commit": "5cfec4cb39deba54210b3ff4d86f2337c7bc10b5",
+      "reviewed_date": "2026-10-04",
+      "review_reason": "Installed mlx-lm 0.32.0 supplies sampler fixes; local batched engine is legacy opt-in and its request-local sampler remains authoritative. No new batching default."
     },
     {
       "kind": "inspired",
@@ -730,7 +829,10 @@
       ],
       "commit": "dc9879cf",
       "license": "MIT",
-      "why": "common_speculative_state: one proposer interface for n-gram, draft model and MTP"
+      "why": "common_speculative_state: one proposer interface for n-gram, draft model and MTP",
+      "reviewed_commit": "836d57176dc699a726c55418e4f96b8ca628e1bf",
+      "reviewed_date": "2026-10-04",
+      "review_reason": "Independent local n-gram proposal retained. Upstream probabilistic MTP/simple-draft acceptance is a different sampling contract and requires explicit paired quality before adoption."
     }
   ],
   "patches": [
@@ -1392,10 +1494,11 @@
       "package": "mlx-vlm",
       "module": "mlx_vlm.generate.ar",
       "symbol": "_sample_with_positions",
-      "signature": "(sampler: 'Callable[[mx.array], mx.array]', logprobs: 'mx.array', *, row_ids: 'Optional[List[int]]' = None, positions: 'Optional[List[int]]' = None) -> 'mx.array'",
-      "source_sha256": "c65d02b3a62030d4fbe62dee5f402d541e5bcb210584e78a9927292a8c2c58fb",
+      "signature": "(sampler: Callable[[mx.array], mx.array], logprobs: mx.array, *, row_ids: Optional[List[int]]=None, positions: Optional[List[int]]=None)",
+      "source_sha256": "1a3af4756e9a1e5da9ebeb9469bc10a72422f1ff67772be75425ae43c0620a90",
       "installed_version": "0.7.4",
-      "why": "retain sampled prefill distribution / serial arithmetic of floating target projections"
+      "why": "retain sampled prefill distribution / serial arithmetic of floating target projections",
+      "review_reason": "2026-10-04: installed old/new mlx-vlm 0.7.4 source files are identical. Previous entry used stale runtime-style annotations rather than the current source AST; record the unmodified source AST like the other entries for this symbol. Request-local serial prefill and constrained transactions are still required."
     },
     {
       "path": "python/yunshu_engine/constrained_spec.py",
@@ -1407,10 +1510,11 @@
       "package": "mlx-vlm",
       "module": "mlx_vlm.models.qwen3_5.speculative_verifier",
       "symbol": "Qwen3_5BatchInvariantForward._linear",
-      "signature": "(self, linear, x: mlx.core.array) -> mlx.core.array",
-      "source_sha256": "668b9a7064f30c63348028fb72f22119b73e2897e2d246024c80fbe54e0404dd",
+      "signature": "(self, linear, x: mx.array)",
+      "source_sha256": "6e38296bd3f89d5a5e2a225d7b8c30cd275906a064415de0c462aa68c778e25e",
       "installed_version": "0.7.4",
-      "why": "retain sampled prefill distribution / serial arithmetic of floating target projections"
+      "why": "retain sampled prefill distribution / serial arithmetic of floating target projections",
+      "review_reason": "2026-10-04: installed old/new mlx-vlm 0.7.4 source files are identical. Previous entry used stale runtime-style annotations rather than the current source AST; record the unmodified source AST like the other entries for this symbol. Request-local serial prefill and constrained transactions are still required."
     },
     {
       "path": "python/yunshu_engine/constrained_spec.py",
@@ -1422,10 +1526,11 @@
       "package": "mlx-vlm",
       "module": "mlx_vlm.models.qwen3_5.speculative_verifier",
       "symbol": "Qwen3_5BatchInvariantForward._linears",
-      "signature": "(self, linears, x: mlx.core.array)",
-      "source_sha256": "5cdaf151d00f3ab314f4722b475eec88a5228060be36c321c1363314ab249e0a",
+      "signature": "(self, linears, x: mx.array)",
+      "source_sha256": "1f44efb5714938afee3c700508cafd98770f1e6ab1a84718ef59fdf444ca782b",
       "installed_version": "0.7.4",
-      "why": "retain sampled prefill distribution / serial arithmetic of floating target projections"
+      "why": "retain sampled prefill distribution / serial arithmetic of floating target projections",
+      "review_reason": "2026-10-04: installed old/new mlx-vlm 0.7.4 source files are identical. Previous entry used stale runtime-style annotations rather than the current source AST; record the unmodified source AST like the other entries for this symbol. Request-local serial prefill and constrained transactions are still required."
     },
     {
       "kind": "patches",
@@ -1451,12 +1556,13 @@
       "package": "mlx-vlm",
       "module": "mlx_vlm.generate.ar",
       "symbol": "PromptProcessingBatch.__init__",
-      "signature": "(self, model: 'nn.Module', uids: 'List[int]', input_ids: 'List[List[int]]', max_tokens: 'List[int]', inputs_embeds: 'mx.array', prompt_kwargs: 'dict', logits_processors: 'Optional[List[Optional[List[Callable[[mx.array, mx.array], mx.array]]]]]' = None, thinking_budget_criteria: 'Optional[List[Any]]' = None, prefill_step_size: 'Optional[int]' = 2048, kv_bits=None, kv_key_bits=None, kv_value_bits=None, kv_key_scheme=None, kv_value_scheme=None, kv_group_size: 'int' = 64, kv_quant_scheme: 'str' = 'uniform', quantized_kv_start: 'int' = 0, warm_cache: 'Optional[List[Any]]' = None, apc_meta: 'Optional[List[dict]]' = None, apc_manager: \"Optional['_apc.APCManager']\" = None, apc_coordinator: \"Optional['_apc.APCCoordinator']\" = None, right_pad_per_row: 'Optional[List[int]]' = None, suffix_lens: 'Optional[List[int]]' = None, apc_mode: 'Optional[str]' = None, draft_model: 'Optional[nn.Module]' = None, draft_kind: 'Optional[str]' = None, draft_block_size: 'Optional[int]' = None, greedy_sampling: 'bool' = False)",
+      "signature": "(self, model: nn.Module, uids: List[int], input_ids: List[List[int]], max_tokens: List[int], inputs_embeds: mx.array, prompt_kwargs: dict, logits_processors: Optional[List[Optional[List[Callable[[mx.array, mx.array], mx.array]]]]]=None, thinking_budget_criteria: Optional[List[Any]]=None, prefill_step_size: Optional[int]=DEFAULT_PREFILL_STEP_SIZE, kv_bits=None, kv_key_bits=None, kv_value_bits=None, kv_key_scheme=None, kv_value_scheme=None, kv_group_size: int=DEFAULT_KV_GROUP_SIZE, kv_quant_scheme: str=DEFAULT_KV_QUANT_SCHEME, quantized_kv_start: int=0, warm_cache: Optional[List[Any]]=None, apc_meta: Optional[List[dict]]=None, apc_manager: Optional['_apc.APCManager']=None, apc_coordinator: Optional['_apc.APCCoordinator']=None, right_pad_per_row: Optional[List[int]]=None, suffix_lens: Optional[List[int]]=None, apc_mode: Optional[str]=None, draft_model: Optional[nn.Module]=None, draft_kind: Optional[str]=None, draft_block_size: Optional[int]=None, greedy_sampling: bool=False)",
       "license": "MIT",
       "commit": "v0.7.3",
       "why": "canonical singleton stock prefill before the first immediate prompt step",
-      "source_sha256": "463151a660348eb1b33871c7e8ec88c14327655067f6ef34fb0bd1b99ab278f1",
-      "installed_version": "0.7.4"
+      "source_sha256": "1b8c550c53c7eb3a399be087e9d5fe9db0c7b5bff87d211543fb7aa4abc662eb",
+      "installed_version": "0.7.4",
+      "review_reason": "2026-10-04: installed old/new mlx-vlm 0.7.4 source files are identical. Previous entry used stale runtime-style annotations rather than the current source AST; record the unmodified source AST like the other entries for this symbol. Request-local serial prefill and constrained transactions are still required."
     },
     {
       "kind": "patches",
@@ -1466,12 +1572,13 @@
       "package": "mlx-vlm",
       "module": "mlx_vlm.speculative.drafters.qwen3_dflash.dflash",
       "symbol": "DFlashDraftModel._project_context_kv",
-      "signature": "(self, hidden: mlx.core.array)",
+      "signature": "(self, hidden: mx.array)",
       "license": "MIT",
       "commit": "v0.7.4",
       "installed_version": "0.7.4",
-      "source_sha256": "e1961cbdf5902336ae9ca4e7a4b755943b69af942401cf9c38fc3fcf752c0058",
-      "why": "instance-only prototype: affine quantized context KV fusion"
+      "source_sha256": "acacc9b3df1ea280e61c2c2f49af7a7786ce172cc0f805d7d4e7e8dc4ccaef99",
+      "why": "instance-only prototype: affine quantized context KV fusion",
+      "review_reason": "2026-10-04: installed old/new mlx-vlm 0.7.4 source files are identical. Previous entry used stale runtime-style annotations rather than the current source AST; record the unmodified source AST like the other entries for this symbol. Request-local serial prefill and constrained transactions are still required."
     },
     {
       "kind": "patches",
@@ -1481,12 +1588,13 @@
       "package": "mlx-vlm",
       "module": "mlx_vlm.speculative.drafters.qwen3_dflash.dflash",
       "symbol": "DFlashDraftModel.draft_block_greedy",
-      "signature": "(self, last_bonus, hidden: mlx.core.array, cache: List[mlx_vlm.models.cache.KVCache], block_size: int, sampler, token_dtype: mlx.core.Dtype = mlx.core.int32) -> mlx.core.array",
+      "signature": "(self, last_bonus, hidden: mx.array, cache: List[KVCache], block_size: int, sampler, token_dtype: mx.Dtype=mx.int32)",
       "license": "MIT",
       "commit": "v0.7.4",
       "installed_version": "0.7.4",
-      "source_sha256": "c367cf45513db12de61a0c5201d2943d1fbda5d024d03e7fe9cca1e794cccbc1",
-      "why": "instance-only prototype: preserve DFlash2 subclass candidate selector on greedy proposals"
+      "source_sha256": "9fa756e28c331aff33eb160404110b08b1685c74567ee33d3afa2e85cb61c029",
+      "why": "instance-only prototype: preserve DFlash2 subclass candidate selector on greedy proposals",
+      "review_reason": "2026-10-04: installed old/new mlx-vlm 0.7.4 source files are identical. Previous entry used stale runtime-style annotations rather than the current source AST; record the unmodified source AST like the other entries for this symbol. Request-local serial prefill and constrained transactions are still required."
     },
     {
       "kind": "patches",
@@ -1496,12 +1604,13 @@
       "package": "mlx-vlm",
       "module": "mlx_vlm.generate.ar",
       "symbol": "PromptProcessingBatch.prompt_step",
-      "signature": "(self) -> 'int'",
+      "signature": "(self)",
       "license": "MIT",
       "commit": "v0.7.4",
       "why": "absolute rendered cache seams, same spans on hit and miss",
-      "source_sha256": "e75522874dbf69303e414234a2a51ea22531e038824a115477b4fff36b1aba1d",
-      "installed_version": "0.7.4"
+      "source_sha256": "94591dbb4d1c3f1c7eb63d2c677d24ceffc2b073671343a183ddac76d539897c",
+      "installed_version": "0.7.4",
+      "review_reason": "2026-10-04: installed old/new mlx-vlm 0.7.4 source files are identical. Previous entry used stale runtime-style annotations rather than the current source AST; record the unmodified source AST like the other entries for this symbol. Request-local serial prefill and constrained transactions are still required."
     },
     {
       "kind": "patches",
@@ -1511,12 +1620,13 @@
       "package": "mlx-vlm",
       "module": "mlx_vlm.generate.ar",
       "symbol": "PromptProcessingBatch.generate",
-      "signature": "(self, sampler, stop_criteria, compute_logprobs=True, top_logprobs_k=0) -> 'GenerationBatch'",
+      "signature": "(self, sampler, stop_criteria, compute_logprobs=True, top_logprobs_k=0)",
       "license": "MIT",
       "commit": "v0.7.4",
       "why": "release per-request cache intent only after prefill publication",
-      "source_sha256": "c95fc2769ea5bb7d7875d1b1ef865694a054dd0cd34a7f60c1130f99f3233d27",
-      "installed_version": "0.7.4"
+      "source_sha256": "19431a686e73fbca71c41af6d3662b7b4c4a84c07880cd69ab2e0febf16fd136",
+      "installed_version": "0.7.4",
+      "review_reason": "2026-10-04: installed old/new mlx-vlm 0.7.4 source files are identical. Previous entry used stale runtime-style annotations rather than the current source AST; record the unmodified source AST like the other entries for this symbol. Request-local serial prefill and constrained transactions are still required."
     },
     {
       "kind": "patches",
@@ -1526,12 +1636,13 @@
       "package": "mlx-vlm",
       "module": "mlx_vlm.models.qwen3_5.language",
       "symbol": "Qwen3_5GatedDeltaNet.__call__",
-      "signature": "(self, inputs: mlx.core.array, mask: Optional[mlx.core.array] = None, cache: Optional[Any] = None) -> mlx.core.array",
+      "signature": "(self, inputs: mx.array, mask: Optional[mx.array]=None, cache: Optional[Any]=None)",
       "license": "MIT",
       "commit": "v0.7.4",
       "why": "reuse existing singleton fused prework for shared decode; no new kernel",
-      "source_sha256": "e399b508bdd048f9704ee4f665c9a26ec16cbcad5cceca08216ca8b6129cfee7",
-      "installed_version": "0.7.4"
+      "source_sha256": "f8deff65c803d4dab0611c00d51d08d1f88326361125334436622982fa10ca5d",
+      "installed_version": "0.7.4",
+      "review_reason": "2026-10-04: installed old/new mlx-vlm 0.7.4 source files are identical. Previous entry used stale runtime-style annotations rather than the current source AST; record the unmodified source AST like the other entries for this symbol. Request-local serial prefill and constrained transactions are still required."
     },
     {
       "kind": "patches",
@@ -1616,12 +1727,13 @@
       "package": "mlx-vlm",
       "module": "mlx_vlm.speculative.drafters.dflash2.dflash2",
       "symbol": "GroupedDynamicCausalConv.prepare",
-      "signature": "(self, hidden: mlx.core.array) -> tuple[mlx.core.array, mlx.core.array]",
+      "signature": "(self, hidden: mx.array)",
       "license": "MIT",
       "commit": "v0.7.4",
       "installed_version": "0.7.4",
-      "source_sha256": "2bb0b2e8a6061f0d8bfa6d72a36a789c17c0953d93e47bbdc194df53b26b0173",
-      "why": "private-instance one-dispatch causal convolution; target/shared readout unchanged"
+      "source_sha256": "ac69137fe6f7067353f58beff0ef376a8512b71efe44c4a3dd5100972b45d89b",
+      "why": "private-instance one-dispatch causal convolution; target/shared readout unchanged",
+      "review_reason": "2026-10-04: installed old/new mlx-vlm 0.7.4 source files are identical. Previous entry used stale runtime-style annotations rather than the current source AST; record the unmodified source AST like the other entries for this symbol. Request-local serial prefill and constrained transactions are still required."
     },
     {
       "kind": "patches",
@@ -1631,12 +1743,13 @@
       "package": "mlx-vlm",
       "module": "mlx_vlm.speculative.drafters.dflash2.dflash2",
       "symbol": "GroupedDynamicCausalConv.finish",
-      "signature": "(self, hidden: mlx.core.array, dynamic: mlx.core.array) -> mlx.core.array",
+      "signature": "(self, hidden: mx.array, dynamic: mx.array)",
       "license": "MIT",
       "commit": "v0.7.4",
       "installed_version": "0.7.4",
-      "source_sha256": "291dfd879656be3f56db7c58691bf3c8336046b88b5533cde263c24de99ae430",
-      "why": "private-instance one-dispatch causal convolution; target/shared readout unchanged"
+      "source_sha256": "9c486c6f81e51dcbc5c0c02809b559e431802c7270206b50aac8efd23502e797",
+      "why": "private-instance one-dispatch causal convolution; target/shared readout unchanged",
+      "review_reason": "2026-10-04: installed old/new mlx-vlm 0.7.4 source files are identical. Previous entry used stale runtime-style annotations rather than the current source AST; record the unmodified source AST like the other entries for this symbol. Request-local serial prefill and constrained transactions are still required."
     },
     {
       "kind": "patches",
@@ -1693,7 +1806,8 @@
         "omlx/patches/mlx_vlm_mtp/*.py"
       ],
       "why": "new or changed Qwen3.5-family kernels we may want",
-      "commit": "87460f4d"
+      "commit": "68c8c09f6f6a54fe36181f9aabba9525797d1b58",
+      "reviewed_date": "2026-10-04"
     },
     {
       "repo": "https://github.com/Blaizzy/mlx-vlm",
@@ -1705,7 +1819,9 @@
         "mlx_vlm/models/qwen3_5/*.py"
       ],
       "why": "runner, APC, speculative decode we build on",
-      "pin_package": "mlx-vlm"
+      "pin_package": "mlx-vlm",
+      "commit": "6ecadd767ca1c7c54763289c750dd180d7945037",
+      "reviewed_date": "2026-10-04"
     },
     {
       "repo": "https://github.com/ml-explore/mlx-lm",
@@ -1716,7 +1832,9 @@
         "mlx_lm/sample_utils.py"
       ],
       "why": "text path, caches, samplers",
-      "pin_package": "mlx-lm"
+      "pin_package": "mlx-lm",
+      "commit": "5cfec4cb39deba54210b3ff4d86f2337c7bc10b5",
+      "reviewed_date": "2026-10-04"
     },
     {
       "repo": "https://github.com/ml-explore/mlx",
@@ -1727,7 +1845,9 @@
         "python/mlx/nn/layers/quantized.py"
       ],
       "why": "quantized matmul / NAX kernels",
-      "pin_package": "mlx"
+      "pin_package": "mlx",
+      "commit": "0e3ff3643b1c3719f78814b98e0d222afbad867c",
+      "reviewed_date": "2026-10-04"
     },
     {
       "repo": "https://github.com/ashhart/TensorFold",
@@ -1735,7 +1855,9 @@
       "globs": [
         "src/tensorfold/**"
       ],
-      "why": "exact speculative decoding, lane engine, multi-bit tensor-unit kernels for Qwen3.8"
+      "why": "exact speculative decoding, lane engine, multi-bit tensor-unit kernels for Qwen3.8",
+      "commit": "609ca419abecebdc5a059498a613680bd3aa847f",
+      "reviewed_date": "2026-10-04"
     },
     {
       "repo": "https://github.com/basecompute/baseRT",
@@ -1755,7 +1877,8 @@
         "python/sglang/srt/constrained/**/*.py"
       ],
       "why": "radix prefix cache, speculative decoding, structured output",
-      "commit": "5423a4d8"
+      "commit": "3dc7f4b816707781716f30446433467c66c4c0ed",
+      "reviewed_date": "2026-10-04"
     },
     {
       "repo": "https://github.com/vllm-project/vllm",
@@ -1768,7 +1891,8 @@
         "vllm/model_executor/models/gemma4_mtp.py"
       ],
       "why": "n-gram / suffix / MTP proposers, block pool, mRoPE",
-      "commit": "e35082e7"
+      "commit": "84bcbc62644356270aaaa5e2d0237d03adc9bb3a",
+      "reviewed_date": "2026-10-04"
     },
     {
       "repo": "https://github.com/ggml-org/llama.cpp",
@@ -1781,7 +1905,8 @@
         "common/chat.*"
       ],
       "why": "n-gram speculation, samplers, grammar and chat templates",
-      "commit": "a868c3e3"
+      "commit": "836d57176dc699a726c55418e4f96b8ca628e1bf",
+      "reviewed_date": "2026-10-04"
     },
     {
       "repo": "https://github.com/incoai/splash",
@@ -1791,7 +1916,8 @@
         "runtime/metal/abi/**"
       ],
       "why": "batch-invariant Metal kernels (decode, prefill, paged attention)",
-      "commit": "a1056620"
+      "commit": "5d9950c64a5d8b20cd5a886e0e470543d013cb39",
+      "reviewed_date": "2026-10-04"
     },
     {
       "repo": "https://github.com/bstnxbt/dflash-mlx",
@@ -1818,7 +1944,8 @@
         "rapid_mlx/**/*.py"
       ],
       "why": "MLX serving engine: tools, caching, agent runtime",
-      "commit": "d6a2e4ec"
+      "commit": "73ce1521746ca587ba6784c6374590da31eca733",
+      "reviewed_date": "2026-10-04"
     },
     {
       "repo": "https://github.com/waybarrios/vllm-mlx",
