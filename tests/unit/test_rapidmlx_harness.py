@@ -195,3 +195,58 @@ def test_resume_does_not_reuse_failed_eval_receipts():
     assert not matrix.completed_arms(
         [dict(r, rc=1) if r["case"] == "census_replay" else r for r in rows], True
     )
+
+
+summary = load("summarize")
+
+
+def measurements():
+    return [
+        dict(
+            profile="yunshu-default",
+            size=1024,
+            case="cold",
+            rep=rep,
+            device="m5",
+            done=True,
+            ttft_s=0.2,
+            decode_tps=80.0,
+            usage={"completion_tokens": 256},
+        )
+        for rep in range(3)
+    ]
+
+
+def test_summary_requires_three_unique_repetitions():
+    rows = measurements()
+    assert summary.build_summary(rows)["cells"][0]["medians"]["decode_tps"] == 80
+    assert not summary.build_summary(rows[:2])["cells"][0]["medians"]
+    with pytest.raises(ValueError, match="duplicate"):
+        summary.build_summary([rows[0]] * 3)
+
+
+def test_summary_refuses_mixed_devices_and_m3_timing():
+    rows = measurements()
+    with pytest.raises(ValueError, match="mixed-device"):
+        summary.build_summary(
+            [dict(r, device="m3") if r["rep"] == 1 else r for r in rows]
+        )
+    with pytest.raises(ValueError, match="performance verdict refused"):
+        summary.build_summary([dict(r, device="m3") for r in rows])
+
+
+def test_summary_does_not_promote_incomplete_or_short_streams():
+    rows = measurements()
+    changed = [dict(r, done=False) if r["rep"] == 0 else r for r in rows]
+    assert not summary.build_summary(changed)["cells"][0]["medians"]
+    changed = [
+        dict(r, usage={"completion_tokens": 32}) if r["rep"] == 0 else r for r in rows
+    ]
+    assert "decode_tps" not in summary.build_summary(changed)["cells"][0]["medians"]
+    assert not summary.build_summary(rows + [{"complete": True, "failures": 1}])[
+        "complete"
+    ]
+    assert summary.build_summary(rows + [{"complete": True, "failures": 0}])["complete"]
+    assert not summary.build_summary(
+        rows + [{"complete": True}, {"error": "interrupted"}]
+    )["complete"]
