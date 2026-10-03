@@ -25,7 +25,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from process_memory import apc_resident_gib, process_tree_memory  # noqa: E402
+from process_memory import process_tree_memory, retained_gib  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 DATASET = ROOT / "reference/omlx/omlx/eval/data/mmlu_pro_test.jsonl"
@@ -128,7 +128,7 @@ def main():
             stop.wait(10)
 
     start_mem = mem()
-    start_apc = apc_resident_gib(a.url)
+    start_apc = retained_gib(a.url)
     emit(
         {
             "kind": "meta",
@@ -252,7 +252,7 @@ def main():
     elapsed = time.time() - t_start
     time.sleep(a.final_idle_s)
     stop.set()
-    end_mem, end_apc = mem(), apc_resident_gib(a.url)
+    end_mem, end_apc = mem(), retained_gib(a.url)
     mems = [
         json.loads(line)["footprint_gib"]
         for line in a.output.read_text().split("\n")

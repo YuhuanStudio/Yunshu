@@ -27,7 +27,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from process_memory import apc_resident_gib, process_tree_memory  # noqa: E402
+from process_memory import process_tree_memory, retained_gib  # noqa: E402
 
 CODES = [
     "AMBER",
@@ -244,7 +244,7 @@ def main():
         + ["long"] * 8
     )
     start_mem = mem()
-    start_apc = apc_resident_gib(a.url)
+    start_apc = retained_gib(a.url)
 
     def ex_apc(total, apc):
         return None if total is None or apc is None else round(total - apc, 3)
@@ -462,7 +462,7 @@ def main():
             break
     time.sleep(a.final_idle_s)
     stop.set()
-    end_mem, end_apc = mem(), apc_resident_gib(a.url)
+    end_mem, end_apc = mem(), retained_gib(a.url)
     rows = [
         json.loads(line) for line in a.output.read_text().splitlines() if line.strip()
     ]

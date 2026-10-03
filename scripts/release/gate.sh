@@ -53,7 +53,7 @@ jget(){ $PY -c "import json,sys; d=[json.loads(l) for l in open(sys.argv[1]) if 
 mem_returns(){  # $1 check name, $2 start, $3 end, $4 start ex-APC, $5 end ex-APC, $6 start APC, $7 end APC
   local a=$2 b=$3 detail
   if [[ $4 != None && $5 != None && -n $4 && -n $5 ]]; then a=$4 b=$5
-    detail="start $2, end $3 GiB; prefix cache holds $6 -> $7 GiB, so $4 -> $5 GiB without it"
+    detail="start $2, end $3 GiB; prefix cache + allocator pool hold $6 -> $7 GiB, so $4 -> $5 GiB without them"
   else detail="start $2, end $3 GiB after idle (no prefix-cache figure)"; fi
   $PY -c "import sys; sys.exit(0 if float('$b') - float('$a') < 4 else 1)" \
     && rec $1 PASS "$detail" || rec $1 FAIL "$detail"
