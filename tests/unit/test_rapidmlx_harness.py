@@ -60,9 +60,10 @@ def response(name, arguments):
 def test_agent_grade_checks_exact_schema(name):
     good = {"command": "printf rapidmlx", "timeout": 1000}
     assert shapes.grade(name, response(name, good))[0]
+    # JSON Schema integer includes integral JSON numbers such as 1000.0.
+    assert shapes.grade(name, response(name, dict(good, timeout=1000.0)))[0]
     for malformed in [
         dict(good, timeout="1000"),
-        dict(good, timeout=1000.0),
         dict(good, timeout=True),
         dict(good, extra="unexpected"),
         dict(good, command="rm -rf something"),

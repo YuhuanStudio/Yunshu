@@ -154,7 +154,10 @@ def grade(name, response):
         return False, "missing or unexpected arguments"
     if (
         arguments["command"] != "printf rapidmlx"
-        or type(arguments["timeout"]) is not int
+        or (
+            not isinstance(arguments["timeout"], (int, float))
+            or isinstance(arguments["timeout"], bool)
+        )
         or arguments["timeout"] != 1000
     ):
         return False, "wrong command or integer timeout"

@@ -87,6 +87,8 @@ def run_arm(args, engine, rep, size, write):
         if key.startswith("YUNSHU_") or key.startswith("RAPID_MLX_"):
             del env[key]
     env.update(
+        PYTHONDONTWRITEBYTECODE="1",
+        PYTHONUNBUFFERED="1",
         RAPID_MLX_TELEMETRY="0",
         DO_NOT_TRACK="1",
         RAPIDMLX_NO_UPDATE_CHECK="1",
@@ -338,6 +340,40 @@ def run_arm(args, engine, rep, size, write):
                     raise RuntimeError("Rapid tool evaluation did not complete")
                 from agent_shapes import run as run_agent_shapes
 
+                replay_dir = arm / "census-replay"
+                replay = subprocess.run(
+                    [
+                        PYTHONS["yunshu"],
+                        str(ROOT / "scripts/research/agent_compat/replay.py"),
+                        "--url",
+                        url,
+                        "--model",
+                        args.model,
+                        "--sessions",
+                        "cc_plain,cc_bash_edit,cx_plain,cx_shell",
+                        "--max-tokens",
+                        "256",
+                        "--out",
+                        str(replay_dir),
+                    ],
+                    env=env,
+                    stdout=out,
+                    stderr=subprocess.STDOUT,
+                    timeout=1800,
+                )
+                write(
+                    dict(
+                        engine=engine,
+                        rep=rep,
+                        size=size,
+                        case="census_replay",
+                        rc=replay.returncode,
+                        result=str(replay_dir / "replay.json"),
+                        exists=(replay_dir / "replay.json").is_file(),
+                    )
+                )
+                if replay.returncode or not (replay_dir / "replay.json").is_file():
+                    raise RuntimeError("Yunshu census replay did not complete")
                 shape_result = run_agent_shapes(url, model_id)
                 (arm / "agent-shapes.json").write_text(
                     json.dumps(shape_result, indent=2)
