@@ -13,6 +13,12 @@ from yunshu_engine.serving.work_scheduler import AGING_S, Work
 from yunshu_gateway import admission
 
 
+class DecodeRows(dict):
+    @property
+    def uids(self):
+        return list(self)
+
+
 class AtomGen(FakeGen):
     """Model the upstream decode-first next()/one-atom prefill interface."""
 
@@ -22,7 +28,7 @@ class AtomGen(FakeGen):
         super().__init__(*args, **kwargs)
         self._prompt_batch = None
         self._unprocessed_sequences = []
-        self._generation_batch = {}
+        self._generation_batch = DecodeRows()
         self.completion_batch_size = 32
         self.atoms = []
 
@@ -286,3 +292,49 @@ def test_decode_slice_does_not_complete_suspended_prefill(atoms):
     r._drive_slice(False)
     assert cold.stats.prefill_done == 2048
     assert r._work(cold).uncached_tokens == 6144
+
+
+def test_last_atom_and_first_token_precede_decode_repayment(atoms):
+    r, _ = atoms
+    dec = job(0)
+    dec.max_tokens = 100
+    r._submit(dec)
+    r._drive_slice(False)
+    r._drive_slice(False)
+    suffix = job(0)
+    suffix.ids = list(range(128))
+    suffix.max_tokens = 100
+    r._submit(suffix)
+    r._decode_debt = 0.1
+    r._drive_slice(False)
+    g = r._groups()[0]
+    assert g.gen.atoms[-1] == (suffix.uid, 0, 128)
+    assert not suffix.stats.t_first
+    long = job(0)
+    long.ids = list(range(8192))
+    r._submit(long)
+    r._drive_slice(False)
+    assert suffix.stats.t_first
+    assert not any(uid == long.uid for uid, _, _ in g.gen.atoms)
+    # First-token delivery does not silently erase the fairness obligation.
+    assert r._decode_debt == 0.1
+    for _ in range(4):
+        r._drive_slice(False)
+    assert any(uid == long.uid for uid, _, _ in g.gen.atoms)
+
+
+def test_last_cold_atom_keeps_numeric_spans_and_bypasses_debt(atoms):
+    r, _ = atoms
+    cold = job(0)
+    cold.ids = list(range(4096))
+    r._submit(cold)
+    r._drive_slice(False)
+    dec = job(0)
+    dec.max_tokens = 100
+    r._submit(dec)
+    r._drive_slice(False)
+    r._drive_slice(False)  # Deliver the overtaking request's first token.
+    r._decode_debt = 0.1
+    r._drive_slice(False)
+    g = r._groups()[0]
+    assert [a[1:] for a in g.gen.atoms if a[0] == cold.uid] == [(0, 2048), (2048, 2048)]

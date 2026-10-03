@@ -1312,7 +1312,28 @@ class VLMBatchRunner:
             )
             for g in groups
         )
-        if self._decode_debt > 0 and decoding:
+        # Once the selected primary reaches its last canonical atom, carry it
+        # through generate() and first-token delivery before repaying decode.
+        # Upstream still owns every checkpoint cut and all sampling state.
+        finishing = next(((g, j) for g, j in candidates if j.finishing_prefill), None)
+        if finishing is not None:
+            chosen = finishing
+        delivering_first = any(
+            j.finishing_prefill
+            and not j.stats.t_first
+            and j.uid in getattr(g.gen._generation_batch, "uids", [])
+            for g in groups
+            for j in g.jobs.values()
+        )
+        final_atom = (
+            chosen is not None
+            and chosen[1].priority >= 0
+            and (
+                chosen[1].finishing_prefill
+                or self._work(chosen[1]).uncached_tokens <= PREFILL_STEP
+            )
+        )
+        if delivering_first or (self._decode_debt > 0 and decoding and not final_atom):
             chosen = None
         for group in groups:
             self._prune_group(group)
@@ -1336,9 +1357,14 @@ class VLMBatchRunner:
             if not selected and not has_decode:
                 continue
             if selected_job is not None:
+                if final_atom:
+                    selected_job.finishing_prefill = True
                 uid = selected_job.uid
                 group.gen._prompt_batch = group.prefills.pop(uid, None)
                 group.gen._unprocessed_sequences.sort(key=lambda seq: seq[0] != uid)
+            first_pending = any(
+                j.finishing_prefill and not j.stats.t_first for j in allowed
+            )
             before = time.perf_counter()
             self._step_group(group, decode_only=not selected)
             elapsed = time.perf_counter() - before
@@ -1360,7 +1386,7 @@ class VLMBatchRunner:
                     group.prefills[uid] = batch
                     group.gen._prompt_batch = None
                 self._decode_debt = DECODE_QUANTUM_S
-            else:
+            elif not first_pending:
                 self._decode_debt = max(0.0, self._decode_debt - elapsed)
 
     def _drive_slice_body(self, resubmit: bool) -> None:
@@ -1709,6 +1735,7 @@ class _Job:
     queued: float = 0.0
     last_service: float = 0.0
     prefill_skips: int = 0
+    finishing_prefill: bool = False
     driver: Any = None
     cache_plan: dict | None = None
     apc_salt: int | None = None
