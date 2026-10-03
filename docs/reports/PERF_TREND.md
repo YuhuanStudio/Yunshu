@@ -531,3 +531,36 @@ be34c0f3 修正共同 VLM streaming 的空文字／tool-parser／reasoning／fin
 | tool warm | 23.0（22.8–23.3） | 77.7（76.5–77.8） | 3.38× |
 
 Artifact `/Volumes/P5Plus/yunshu-build/codex/cspec/complete-json-tool-quiet-r3-1254.jsonl`；6個server logs全確認DF/AR engaged，`complete-quiet-summary.json`保留三輪數字。交付前 full unit nice15：8220 passed／20 skipped；ruff check/format、mypy gate無新增錯誤。沒有新微小效能量測；不以功能修復冒充1–3%增益。
+
+
+## 2026-10-03 — prompt-copy maximum 8 → 16 rows (codex-wide3)
+
+Qwen3.8-27B-oQ4e-mtp, M5 Max; same Python source/checkpoint, 3 interleaved
+8/16-row server arms, MTP mode and actual copy caps confirmed. Job
+`1003-110949-00-wide3-copy-cap-bindfix-1111`: rc0, final complete success,
+CPU clean (foreign max 265.5%, threshold 1620%). All workload/phase output
+digests match. Earlier `1003-101336-00-wide3-copy-cap-ab-1020` failed its first
+arm on a port bind race; it is not the decision run.
+
+Median decode tok/s (8 → 16):
+
+| Context | Workload | cold | warm | turn2 |
+|---|---|---:|---:|---:|
+| 8K | code | 67.4 → 69.3 | 67.4 → 68.7 | 106.1 → 129.2 |
+| 32K | code | 68.2 → 70.9 | 70.4 → 73.0 | 70.7 → 73.1 |
+| 8K | prose | 52.5 → 52.3 | 52.6 → 52.4 | 55.2 → 55.1 |
+| 32K | prose | 48.1 → 48.0 | 48.1 → 47.9 | 50.6 → 50.1 |
+
+Decision: default maximum 16; retain the per-model certified width (8 on narrow
+backends), explicit 8-row override and 0=off. The existing short-match first
+window, confidence gate and miss backoff remain unchanged. Although 32K
+attention makes 12+ rows dearer, long code copies still pay: no context-only hard
+8-row cap. This is a code/repetition benefit with a measured small prose
+tradeoff (-0.2% to -1.0%), not a universal speedup or TTFT claim. Small but real:
+8K warm code +1.9%, 32K code +3.4–4.0%; 8K code turn2 +21.8% on this corpus.
+
+The separate cost-aware policy was rejected and moved to a research-only
+wrapper (`1003-102815-00-wide3-copy-cost-ab-1030`, rc0, complete, clean, same
+digests): fixed16 → cost16 at 32K prose cold/warm 48.2 → 46.8/46.9, all three
+pairs negative. It missed useful copy islands (4 rounds/12 tokens → 1/1).
+The public YUNSHU_SPEC_COPY_COST option and serving switch were removed.

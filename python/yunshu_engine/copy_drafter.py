@@ -30,6 +30,10 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .copy_cost import CopyCosts
 
 
 @dataclass
@@ -48,8 +52,15 @@ class CopyConfig:
 class CopyDrafter:
     name = "copy"
 
-    def __init__(self, config: CopyConfig | None = None, *, max_draft: int = 7) -> None:
+    def __init__(
+        self,
+        config: CopyConfig | None = None,
+        *,
+        max_draft: int = 7,
+        costs: CopyCosts | None = None,
+    ) -> None:
         self.cfg = config or CopyConfig()
+        self.costs = costs
         if self.cfg.min_match < self.cfg.ngram:
             raise ValueError("min_match must be at least ngram")
         self.max_draft = max(1, int(max_draft))
@@ -123,18 +134,35 @@ class CopyDrafter:
         if len(prop) < 2 or self.last_match < cfg.min_match:
             return []
         confident = self.last_match >= cfg.confident_match
-        if not confident and self._copy_gain < self._model_tpr * cfg.benefit_ratio:
+        if (
+            self.costs is None
+            and not confident
+            and self._copy_gain < self._model_tpr * cfg.benefit_ratio
+        ):
             return []
         if not (confident or self._wide):
             prop = prop[: cfg.first_width]
+        if self.costs is not None:
+            prop = prop[
+                : self.costs.choose(len(prop), self._model_tpr, confident=confident)
+            ]
         return prop
 
-    def observe_copy(self, proposed: int, accepted: int) -> None:
+    def observe_copy(
+        self, proposed: int, accepted: int, elapsed_ms: float | None = None
+    ) -> None:
         cfg = self.cfg
         self.rounds += 1
         self.proposed += proposed
         self.accepted += accepted
         self.committed += accepted + 1
+        if self.costs is not None and elapsed_ms is not None:
+            self.costs.observe_copy(
+                proposed,
+                accepted,
+                elapsed_ms,
+                confident=self.last_match >= cfg.confident_match,
+            )
         self._copy_gain += cfg.ema * ((accepted + 1) - self._copy_gain)
         self._wide = accepted >= proposed  # a fully verified copy earns width
         if accepted == 0:
@@ -143,8 +171,10 @@ class CopyDrafter:
         elif accepted >= 2:
             self._misses = 0
 
-    def observe_model(self, committed: int) -> None:
+    def observe_model(self, committed: int, elapsed_ms: float | None = None) -> None:
         self._model_tpr += self.cfg.ema * (committed - self._model_tpr)
+        if self.costs is not None and elapsed_ms is not None:
+            self.costs.observe_model(committed, elapsed_ms)
 
     def telemetry(self) -> dict:
         return {
