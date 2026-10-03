@@ -91,12 +91,12 @@ def test_long_context_prices_extra_width_out_of_a_mediocre_copy():
         assert costs.choose(15, model_tpr=3) == expect
 
 
-def test_copy_cost_setting_and_lane_state():
+def test_rejected_cost_policy_has_no_public_setting_or_serving_switch():
     from yunshu_engine import mtp_lane, settings
 
-    assert settings.get("YUNSHU_SPEC_COPY_COST") is False
-    assert mtp_lane.set_copy_cost(True) is True
-    assert mtp_lane.set_copy_cost(False) is False
+    assert "YUNSHU_SPEC_COPY_COST" not in settings.REGISTRY
+    assert "copy_cost" not in mtp_lane._STATE
+    assert not hasattr(mtp_lane, "set_copy_cost")
 
 
 def test_mtp_cost_prior_does_not_charge_the_dflash_drafter():
@@ -106,24 +106,14 @@ def test_mtp_cost_prior_does_not_charge_the_dflash_drafter():
     assert costs.model_ms == pytest.approx(costs.row_ms[6] + 2.7)
 
 
-@pytest.mark.parametrize("requested", [0, 2, 3, 8, 12, 16, 32])
-def test_cost_policy_never_raises_the_requested_copy_width(monkeypatch, requested):
-    from yunshu_engine import mtp_lane
+@pytest.mark.parametrize("requested", [1, 2, 7, 11, 15, 31])
+def test_research_policy_does_not_raise_requested_width(requested):
+    from scripts.research.copy_cost_server import make_drafter_class
 
-    monkeypatch.setitem(mtp_lane._STATE, "copy_rows", requested)
-    monkeypatch.setitem(mtp_lane._STATE, "copy_cost", True)
-    # Unknown backend additionally enforces its conservative eight-row cap.
-    assert mtp_lane.copy_rows_for_request(object()) == min(requested, 8)
-
-
-def test_cost_policy_caps_a_wide_backend_without_overriding_the_request(monkeypatch):
-    from yunshu_engine import mtp_lane
-
-    monkeypatch.setitem(mtp_lane._STATE, "copy_cost", True)
-    monkeypatch.setattr(mtp_lane, "copy_rows_for_model", lambda model: 32)
-    assert mtp_lane.copy_rows_for_request(object()) == 16
-    monkeypatch.setattr(mtp_lane, "copy_rows_for_model", lambda model: 12)
-    assert mtp_lane.copy_rows_for_request(object()) == 12
+    draft = make_drafter_class()(max_draft=requested)
+    draft.extend(list(range(100)))
+    assert draft.max_draft == min(requested, 15)
+    assert draft.costs is not None
 
 
 def test_consumer_stalls_cannot_teach_a_slow_model_or_copy_price():

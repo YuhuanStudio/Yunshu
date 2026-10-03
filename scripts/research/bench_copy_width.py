@@ -72,13 +72,15 @@ def main():
     ap.add_argument("--cost-curve", type=Path)
     ap.add_argument("--compare-policy", action="store_true")
     ap.add_argument(
+        "--builtin-costs",
         "--cost-setting",
+        dest="builtin_costs",
         action="store_true",
-        help="compare the built-in request-local cost setting with fixed widths",
+        help="research wrapper for the rejected built-in cost table (no engine setting)",
     )
     a = ap.parse_args()
-    if a.cost_setting and a.cost_curve is not None:
-        ap.error("--cost-setting and --cost-curve are separate experiments")
+    if a.builtin_costs and a.cost_curve is not None:
+        ap.error("--builtin-costs and --cost-curve are separate experiments")
     if a.compare_policy and a.cost_curve is None:
         ap.error("--compare-policy needs --cost-curve")
     if refuse_contended(a.output):
@@ -88,7 +90,7 @@ def main():
     bench.YUNSHU_SRC = str(source)
     bench.OUT = a.output.parent / "servers"
     policy = {"enabled": False}
-    if a.cost_curve is not None:
+    if a.cost_curve is not None or a.builtin_costs:
         popen = bench.subprocess.Popen
 
         def policy_server(cmd, **kwargs):
@@ -96,8 +98,11 @@ def main():
                 cmd = [
                     sys.executable,
                     str(Path(__file__).with_name("copy_cost_server.py")),
-                    "--cost-curve",
-                    str(a.cost_curve),
+                    *(
+                        ["--builtin-costs"]
+                        if a.builtin_costs
+                        else ["--cost-curve", str(a.cost_curve)]
+                    ),
                     "--source-dir",
                     str(source),
                     *cmd[1:],
@@ -111,7 +116,7 @@ def main():
         for rows in a.rows
         for enabled in (
             [False, True]
-            if a.compare_policy or a.cost_setting
+            if a.compare_policy or a.builtin_costs
             else [a.cost_curve is not None]
         )
     ]
@@ -137,8 +142,8 @@ def main():
                     cost_curve=str(a.cost_curve)
                     if policy_on and a.cost_curve
                     else None,
-                    cost_policy="setting"
-                    if policy_on and a.cost_setting
+                    cost_policy="builtin"
+                    if policy_on and a.builtin_costs
                     else "curve"
                     if policy_on
                     else "fixed",
@@ -151,8 +156,6 @@ def main():
                             "YUNSHU_SPEC_COPY_ROWS": str(rows),
                             "YUNSHU_VLM_DRAFT": "mtp",
                         }
-                        if a.cost_setting:
-                            env["YUNSHU_SPEC_COPY_COST"] = "1" if policy_on else "0"
                         srv = start_server("yunshu", env, result.stem)
                         bench.emit(
                             out,
@@ -181,20 +184,10 @@ def main():
                         ]
                         if not mode or not any("mtp" in line.lower() for line in mode):
                             raise RuntimeError(f"MTP mode not proved: {mode}")
-                        if (
-                            policy_on
-                            and a.cost_setting
-                            and "'copy_cost': True" not in srv.log.read_text()
-                        ):
+                        if policy_on and "Copy cost policy:" not in srv.log.read_text():
                             raise RuntimeError(
-                                "built-in copy cost policy did not engage"
+                                "research copy cost policy did not engage"
                             )
-                        if (
-                            policy_on
-                            and a.cost_curve is not None
-                            and "Copy cost policy:" not in srv.log.read_text()
-                        ):
-                            raise RuntimeError("copy cost policy did not engage")
                         bench.emit(out, complete=True, mode=mode, load=os.getloadavg())
                     rc = 0
                 except Exception:

@@ -82,34 +82,31 @@ def test_policy_comparison_records_separate_fixed_and_cost_arms(tmp_path, monkey
     assert all(row["rc"] == 0 for row in arms)
 
 
-def test_builtin_cost_setting_is_proved_and_records_separate_arms(
+def test_builtin_policy_is_research_only_and_its_marker_is_required(
     tmp_path, monkeypatch
 ):
     module, _, output = fake_bench(tmp_path, monkeypatch)
-    seen = []
     server = module.bench.Srv
 
-    def setting_server(engine, env, tag):
-        seen.append(env["YUNSHU_SPEC_COPY_COST"])
+    def research_server(engine, env, tag):
+        assert "YUNSHU_SPEC_COPY_COST" not in env
         obj = server(engine, env, tag)
         obj.log.write_text(
-            "Speculative decoding: mtp\nverify_kernels={'copy_cost': "
-            + ("True" if env["YUNSHU_SPEC_COPY_COST"] == "1" else "False")
-            + "}\n"
+            "Speculative decoding: mtp\nCopy cost policy: builtin research table\n"
         )
         return obj
 
-    monkeypatch.setattr(module.bench, "Srv", setting_server)
+    monkeypatch.setattr(module.bench, "Srv", research_server)
     monkeypatch.setattr(module.bench, "part_decode", lambda *args: None)
-    module.sys.argv += ["--cost-setting"]
+    monkeypatch.setattr(module.bench.subprocess, "Popen", module.bench.subprocess.Popen)
+    module.sys.argv += ["--builtin-costs"]
     assert module.main() == 0
-    assert seen == ["0", "1", "0", "1"]
     records = [json.loads(line) for line in output.read_text().splitlines()]
     assert [r["cost_policy"] for r in records if "rc" in r] == [
         "fixed",
-        "setting",
+        "builtin",
         "fixed",
-        "setting",
+        "builtin",
     ]
 
 

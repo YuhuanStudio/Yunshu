@@ -41,7 +41,7 @@ from typing import Any
 
 import mlx.core as mx
 
-from .copy_cost import MAX_PRICED_ROWS, RoundCostClock, costs_for_context
+from .copy_cost import RoundCostClock
 from .copy_drafter import CopyDrafter
 from .keyed_sampling import KeyedSampler
 
@@ -54,7 +54,6 @@ _STATE: dict = {
     "profile": None,
     "guide": None,
     "context": None,  # the request's FULL prompt ids (not the tail after a prefix hit)
-    "copy_cost": False,  # price copy rounds from the measured width table
     "copy_rows": 8,  # verify rows a copy round may use (0: copy rounds off)
 }
 
@@ -106,18 +105,6 @@ def set_copy_rows(rows: int, limit: int | None = None) -> int:
         rows = min(rows, max(0, int(limit)))
     _STATE["copy_rows"] = rows
     return rows
-
-
-def set_copy_cost(on: bool) -> bool:
-    """Cost-aware copy rounds (width / copy-or-model chosen from measured prices)."""
-    _STATE["copy_cost"] = bool(on)
-    return bool(on)
-
-
-def copy_rows_for_request(language_model: Any) -> int:
-    """Price only widths within the caller's requested and certified cap."""
-    rows = copy_rows_for_model(language_model)
-    return min(rows, MAX_PRICED_ROWS) if _STATE["copy_cost"] else rows
 
 
 def copy_rows_for_model(language_model: Any, rows: int | None = None) -> int:
@@ -250,10 +237,9 @@ def rounds(
     b = int(first_bonus)
     copy = None
     context = _STATE["context"]
-    copy_rows = copy_rows_for_request(lm)
+    copy_rows = copy_rows_for_model(lm)
     if copy_rows >= 3 and context is not None:
-        costs = costs_for_context(len(context)) if _STATE["copy_cost"] else None
-        copy = CopyDrafter(max_draft=copy_rows - 1, costs=costs)
+        copy = CopyDrafter(max_draft=copy_rows - 1)
         copy.extend(context)
         copy.extend([b])
 
