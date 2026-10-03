@@ -32,6 +32,42 @@ PROFILES = {
 }
 
 
+def completed_arms(rows, tool_eval=False):
+    """Only whole successful arms can be reused after an interrupted sweep."""
+    required = {
+        "startup",
+        "cold",
+        "warm",
+        "turn2",
+        "concurrent8",
+        "physical_memory",
+        "engaged_mode",
+        "memory",
+    }
+    if tool_eval:
+        required |= {"rapid_tool_eval", "census_replay", "agent_shapes"}
+    grouped = {}
+    for row in rows:
+        if all(key in row for key in ("profile", "rep", "size")):
+            grouped.setdefault((row["profile"], row["rep"], row["size"]), []).append(
+                row
+            )
+    return {
+        key: arm
+        for key, arm in grouped.items()
+        if required <= {r.get("case") for r in arm}
+        and not any("error" in r or r.get("rc", 0) != 0 for r in arm)
+        and all(
+            r.get("done") for r in arm if r.get("case") in {"cold", "warm", "turn2"}
+        )
+        and all(
+            r.get("exists")
+            for r in arm
+            if r.get("case") in {"rapid_tool_eval", "census_replay"}
+        )
+    }
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
@@ -44,7 +80,24 @@ def main():
     )
     parser.add_argument("--tool-eval", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--resume-from",
+        type=Path,
+        help="Reuse complete arms from this identical model/profile/protocol sweep; write a new output.",
+    )
     args = parser.parse_args()
+    if args.output.exists():
+        parser.error("output already exists; choose a unique result path")
+    retained = {}
+    if args.resume_from:
+        retained = completed_arms(
+            [
+                json.loads(line)
+                for line in args.resume_from.read_text().splitlines()
+                if line.strip()
+            ],
+            args.tool_eval,
+        )
     args.output.parent.mkdir(parents=True, exist_ok=True)
 
     def write(row):
@@ -83,6 +136,11 @@ def main():
         )
         for size in args.sizes:
             for profile in order:
+                key = (profile, rep, size)
+                if key in retained:
+                    for old in retained[key]:
+                        write(dict(old, reused_from=str(args.resume_from.resolve())))
+                    continue
                 engine, flags = PROFILES[profile]
                 arm_dir = args.output.parent / profile
                 arm_dir.mkdir(exist_ok=True)
@@ -93,7 +151,7 @@ def main():
                     tokens=args.tokens,
                     rapid_flags=flags,
                     tool_eval=args.tool_eval,
-                    prompt_identity=str(args.output.resolve()),
+                    prompt_identity=str((args.resume_from or args.output).resolve()),
                 )
 
                 def arm_write(row):

@@ -136,3 +136,62 @@ def test_different_result_files_never_overwrite_raw_arm_artifacts(tmp_path):
     assert first != second
     assert first == tmp_path / "tiny" / "rapid-r0-n128"
     assert second == tmp_path / "27b-smoke" / "rapid-r0-n128"
+
+
+matrix = load("matrix")
+
+
+def test_resume_reuses_only_whole_successful_arms():
+    cases = [
+        "startup",
+        "cold",
+        "warm",
+        "turn2",
+        "concurrent8",
+        "physical_memory",
+        "engaged_mode",
+        "memory",
+    ]
+    rows = [
+        dict(profile="rapid-default", rep=0, size=1024, case=c, done=True)
+        for c in cases
+    ]
+    assert len(matrix.completed_arms(rows)) == 1
+    assert not matrix.completed_arms(rows[:-1])
+    assert not matrix.completed_arms(rows, tool_eval=True)
+    assert not matrix.completed_arms(rows + [dict(rows[0], error="interrupted")])
+    assert not matrix.completed_arms(
+        [dict(r, done=False) if r["case"] == "cold" else r for r in rows]
+    )
+
+
+def test_resume_does_not_reuse_failed_eval_receipts():
+    cases = [
+        "startup",
+        "cold",
+        "warm",
+        "turn2",
+        "concurrent8",
+        "physical_memory",
+        "engaged_mode",
+        "memory",
+        "rapid_tool_eval",
+        "census_replay",
+        "agent_shapes",
+    ]
+    rows = [
+        dict(
+            profile="yunshu-default",
+            rep=0,
+            size=1024,
+            case=c,
+            done=True,
+            exists=True,
+            rc=0,
+        )
+        for c in cases
+    ]
+    assert len(matrix.completed_arms(rows, True)) == 1
+    assert not matrix.completed_arms(
+        [dict(r, rc=1) if r["case"] == "census_replay" else r for r in rows], True
+    )
