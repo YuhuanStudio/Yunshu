@@ -1603,6 +1603,36 @@
       "installed_version": "0.7.4",
       "source_sha256": "291dfd879656be3f56db7c58691bf3c8336046b88b5533cde263c24de99ae430",
       "why": "private-instance one-dispatch causal convolution; target/shared readout unchanged"
+    },
+    {
+      "kind": "patches",
+      "path": "python/yunshu_engine/dflash_copy.py",
+      "repo": "https://github.com/Blaizzy/mlx-vlm",
+      "clone": "reference/mlx-vlm",
+      "package": "mlx-vlm",
+      "module": "mlx_vlm.speculative.dflash",
+      "symbol": "_dflash_rounds",
+      "signature": "(model: nn.Module, draft_model: nn.Module, prompt_cache: List[Any], hidden: mx.array, *, first_bonus: int, max_tokens: int, sampler: Callable[[mx.array], mx.array], draft_block_size: Optional[int]=None, token_dtype: mx.Dtype=mx.int32, use_model_initial_block_size: bool=True, greedy_sampling: bool=True)",
+      "license": "MIT",
+      "commit": "v0.7.4",
+      "installed_version": "0.7.4",
+      "source_sha256": "4c118d1ddc2f65fd1c82a6038224c6f44dba30fd0359c6b69955220f54ad4b35",
+      "why": "request-local copy proposal proxy; original target verifier/cache transaction retained"
+    },
+    {
+      "kind": "patches",
+      "path": "python/yunshu_engine/dflash_copy.py",
+      "repo": "https://github.com/Blaizzy/mlx-vlm",
+      "clone": "reference/mlx-vlm",
+      "package": "mlx-vlm",
+      "module": "mlx_vlm.speculative.dflash",
+      "symbol": "_dflash_next_block_size",
+      "signature": "(draft_model: nn.Module, requested_block_total: int, remaining_budget: int, initial_block_size: Optional[int]=None)",
+      "license": "MIT",
+      "commit": "v0.7.4",
+      "installed_version": "0.7.4",
+      "source_sha256": "54ea4889f15ee8908f8282e626948723429081ee1c1974da7c1c40fdc8fa8712",
+      "why": "request-local copy proposal proxy; original target verifier/cache transaction retained"
     }
   ],
   "watch": [
