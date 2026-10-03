@@ -211,22 +211,55 @@ def test_stateful_external_generation_matches_serial_target(draft_bias, monkeypa
             assert decoder.acceptance_rate == 1.0
 
 
-def test_greedy_acceptance_uses_raw_logits_before_bf16_normalization():
+def test_bf16_verification_matches_upstream_sampler_distribution():
+    from mlx_lm.sample_utils import make_sampler
+
     with mx.stream(mx.cpu):
         logits = mx.zeros((1, 2, 8192), dtype=mx.bfloat16)
         logits[:, :, 0] = 0.1
         logits[:, :, 1] = 0.101
-        normalized = logits - mx.logsumexp(logits, axis=-1, keepdims=True)
-        assert int(mx.argmax(logits[0, 0]).item()) == 1
-        assert int(mx.argmax(normalized[0, 0]).item()) == 0
+        lp = logits[0, :1, :] - mx.logsumexp(logits[0, :1, :], keepdims=True)
+        expected = int(make_sampler(temp=0.0)(lp).item())
+        assert expected == 0 and int(mx.argmax(logits[0, 0]).item()) == 1
         decoder = SpeculativeDecoder(
             lambda ids, cache=None: logits, object(), SimpleNamespace(eos_token_id=99)
         )
         result = decoder.verify_draft(
-            DraftResult([0], [0.0]),
+            DraftResult([expected], [0.0]),
             mx.array([[3]]),
             [],
             cache_contains_last_token=False,
         )
-        assert result.accepted_ids == []
-        assert result.bonus_token_id == 1
+        assert result.accepted_ids == [expected]
+        assert result.bonus_token_id == expected
+
+
+def test_bf16_external_stream_matches_upstream_sampler_on_normalization_ties(
+    monkeypatch,
+):
+    from mlx_lm.sample_utils import make_sampler
+
+    from yunshu_engine.speculative_decoder import SpecDecodingConfig
+
+    monkeypatch.setattr("mlx_lm.models.cache.make_prompt_cache", lambda _: [])
+    with mx.stream(mx.cpu):
+        scores = mx.zeros((1, 1, 8192), dtype=mx.bfloat16)
+        scores[:, :, 0] = 0.1
+        scores[:, :, 1] = 0.101
+
+        def model(ids, cache=None):
+            return mx.broadcast_to(scores, (1, ids.shape[1], 8192))
+
+        lp = scores[:, 0, :] - mx.logsumexp(scores[:, 0, :], keepdims=True)
+        expected = int(make_sampler(temp=0.0)(lp).item())
+        decoder = SpeculativeDecoder(
+            model,
+            model,
+            SimpleNamespace(eos_token_id=99),
+            SpecDecodingConfig(draft_length=3, draft_temperature=0.0),
+        )
+        assert (
+            decoder.generate(mx.array([[3, 4]]), max_tokens=8, temperature=0.0)
+            == [expected] * 8
+        )
+        assert decoder.acceptance_rate == 1.0

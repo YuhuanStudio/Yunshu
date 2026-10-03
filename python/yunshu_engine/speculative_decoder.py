@@ -583,7 +583,7 @@ class SpeculativeDecoder:
             # Greedy target distribution is a point mass. A probability-ratio
             # test can accept non-argmax drafts or reject the correct argmax.
             accepted_mask = mx.argmax(
-                logits[0, :K, :], axis=-1
+                target_logprobs, axis=-1
             ) == draft_ids_arr.squeeze(-1)
         else:
             accepted_mask = uniforms < ratios
@@ -665,12 +665,11 @@ class SpeculativeDecoder:
             except Exception:
                 pass
 
-        if rejected_at >= 0:
-            # Rejected at bonus_pos: use logits at that position for resample
-            bonus_token = sampler(logits[0, bonus_pos : bonus_pos + 1, :])
-        else:
-            # All accepted: bonus from position K (prediction after all drafts)
-            bonus_token = sampler(logits[0, K : K + 1, :])
+        # Sample from the same normalized distribution as plain generate_step,
+        # including any bonus-token grammar mask applied above.
+        bonus_logits = logits[0, bonus_pos : bonus_pos + 1, :]
+        bonus_logprobs = bonus_logits - mx.logsumexp(bonus_logits, keepdims=True)
+        bonus_token = sampler(bonus_logprobs)
         bonus_id = bonus_token.item()
 
         return VerifyResult(
@@ -1030,10 +1029,14 @@ class SpeculativeDecoder:
         t_logits = (
             t_out.logits[:, -1, :] if hasattr(t_out, "logits") else t_out[:, -1, :]
         )
+        # mlx-lm generate_step passes normalized logprobs to its sampler.
+        # In bf16 normalization can create ties, so every external draw must
+        # use that same distribution rather than mixing raw/normalized argmax.
+        t_logprobs = t_logits - mx.logsumexp(t_logits, keepdims=True)
         if target_sampler:
-            first_token = int(target_sampler(t_logits).item())
+            first_token = int(target_sampler(t_logprobs).item())
         else:
-            first_token = int(t_logits.argmax(axis=-1).item())
+            first_token = int(t_logprobs.argmax(axis=-1).item())
 
         self.draft(input_ids, cache=draft_cache)
 
@@ -1097,7 +1100,7 @@ class SpeculativeDecoder:
                     except Exception:
                         pass
                 d_logprobs = d_logits - mx.logsumexp(d_logits, axis=-1, keepdims=True)
-                next_tok = draft_sampler(d_logits)
+                next_tok = draft_sampler(d_logprobs)
                 tok_id = int(next_tok.item())
                 draft_tokens.append(tok_id)
                 draft_probs.append(float(d_logprobs[0, tok_id].item()))
