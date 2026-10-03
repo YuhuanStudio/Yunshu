@@ -22,7 +22,7 @@ def test_consecutive_leading_system_messages_are_merged():
     assert out[0]["content"] == "instructions\n\ndeveloper: permissions"
 
 
-def test_later_system_messages_stay_in_place():
+def test_later_system_messages_are_hoisted():
     out = QwenMessageAdapter().adapt(
         [
             {"role": "system", "content": "a"},
@@ -31,8 +31,8 @@ def test_later_system_messages_stay_in_place():
             {"role": "user", "content": "u2"},
         ]
     )
-    # the first is already leading (no hoist); a later one stays where it is
-    assert roles(out)[0] == "system"
+    assert roles(out) == ["system", "user", "user"]
+    assert out[0]["content"] == "a\n\nb"
     out = QwenMessageAdapter().adapt(
         [
             {"role": "user", "content": "u"},
@@ -40,8 +40,8 @@ def test_later_system_messages_stay_in_place():
             {"role": "system", "content": "b"},
         ]
     )
-    # not hoisted (that would rewrite the prompt start and defeat prefix reuse)
-    assert roles(out) == ["user", "user", "user"]
+    assert roles(out) == ["system", "user"]
+    assert out[0]["content"] == "a\n\nb"
 
 
 def test_list_content_and_single_system_untouched():

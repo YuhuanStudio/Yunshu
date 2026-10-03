@@ -91,7 +91,7 @@ Status: running. GSM8K is final; MMLU-Pro, IFEval, BFCL and needle are still bei
 (see the results table). The plan below is the target; the first subsection records what
 the harness (`scripts/research/accuracy/paired_eval.py`) actually does and found.
 
-### Results (Qwen3.8-27B oQ4e-mtp, M5 Max, 2026-10-02)
+### Results (Qwen3.8-27B oQ4e-mtp, M5 Max, updated 2026-10-03)
 
 Recorded in `2815311c`; the public table does not pin each candidate run SHA. Later
 unreleased main prefill/wide-verify changes are not re-evaluated by these scores.
@@ -109,15 +109,15 @@ failed attempts are counted below, not hidden. Report command:
 | bench | status | n paired | ref | Yunshu | delta (pts) | CI95 (pts) | b / c | McNemar p |
 |---|---|---:|---:|---:|---:|---|---|---:|
 | GSM8K | final | 1319 / 1319 | 97.12% | 97.65% | +0.53 | [+0.04, +1.02] | 2 / 9 | 0.065 |
-| MMLU-Pro | partial (917 of 2000) | 917 | 83.97% | 83.53% | -0.44 | [-1.44, +0.57] | 13 / 9 | 0.523 |
+| MMLU-Pro | partial (1802 of 2000) | 1802 | 84.02% | 83.80% | -0.22 | [-0.98, +0.53] | 26 / 22 | 0.665 |
 | IFEval | partial (179 of 541) | 179 | 90.50% | 88.27% | -2.23 | [-6.01, +1.54] | 8 / 4 | 0.388 |
 | BFCL | pending | - | - | - | - | - | - | - |
 | needle | pending | - | - | - | - | - | - | - |
 
 b = reference right and Yunshu wrong, c = the reverse. No bench shows a significant loss
-(p(candidate worse): GSM8K 0.994, MMLU-Pro 0.262, IFEval 0.194). The GSM8K gain is at the
+(p(candidate worse): GSM8K 0.994, MMLU-Pro 0.333, IFEval 0.194). The GSM8K gain is at the
 edge of significance and is read as noise around equal accuracy, not as an improvement.
-The partial rows are not final: their intervals still contain a loss of 1.4 (MMLU-Pro)
+The partial rows are not final: their intervals still contain a loss of 0.98 (MMLU-Pro)
 and 6 (IFEval) points, and the reference subset is the items it finished first, so do not
 quote them as the benchmark scores.
 
@@ -127,18 +127,25 @@ Failed attempts (requests that returned an error, usually a timeout, in the arm'
 |---|---|---:|---:|---:|---:|
 | GSM8K | ref | 2638 | 1319 | 1319 | 0 |
 | GSM8K | Yunshu | 1319 | 0 | 1319 | 0 |
-| MMLU-Pro | ref | 1085 | 168 | 923 | 6 |
+| MMLU-Pro | ref | 1985 | 183 | 1803 | 1 |
 | MMLU-Pro | Yunshu | 2016 | 16 | 2000 | 0 |
 | IFEval | ref | 185 | 6 | 182 | 3 |
 | IFEval | Yunshu | 349 | 1 | 348 | 0 |
 
-Truncation (finish = length) among paired items: GSM8K ref 1 / Yunshu 0; MMLU-Pro 0 / 2;
-IFEval 1 / 0. Mean completion tokens: GSM8K 351 / 348; MMLU-Pro 770 / 811; IFEval 1334 /
+Truncation (finish = length) among paired items: GSM8K ref 1 / Yunshu 0; MMLU-Pro 8 / 8;
+IFEval 1 / 0. Mean completion tokens: GSM8K 351 / 348; MMLU-Pro 844 / 892; IFEval 1334 /
 1284.
 
-Still queued (priority -1): 36 reference rounds for MMLU-Pro (about 30 completed items per
-round at concurrency 2, so about 1080 missing items), 6 reference and 2 Yunshu IFEval
-rounds, 6 BFCL and 8 needle rounds per arm. When they finish, re-run the report command per
+MMLU-Pro harvest at 2026-10-03 10:45: reference rounds r6–r22 have
+finished with rc 0; r23 is running, r24–r35 and replacement rounds r0–r5
+(`-re`) remain queued. There are 198 questions without a successful reference
+result, including one attempted but unresolved item. Repeated jobs share the
+resumable arm file; rc 0 denotes a completed time-budget round, not a complete
+benchmark. The raw report is retained in
+`/Volumes/P5Plus/yunshu-build/audit/harvest-1003/mmlu-report-resume.txt`.
+CPU contention flags do not invalidate accuracy scores; no timing comparison
+is derived from these accuracy jobs. The existing IFEval/BFCL/needle rows retain
+their earlier status; this harvest updates MMLU-Pro only. When they finish, re-run the report command per
 bench and replace the partial rows. IFEval answers are stored unscored; `report` scores
 them in memory (it re-executes under the lm_eval venv), so no separate `score` step is
 needed.

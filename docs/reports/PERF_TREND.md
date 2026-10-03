@@ -450,6 +450,16 @@ Agent 重放（opencode 錄製請求，warm 第 2 次起）：TF 0.6.1 105-159 t
 Small but real：這個 captured replay 的 mean main TTFT 改善2.36%，三對都同方向（2.1208→2.0735、2.1218→2.0718、2.1222→2.0690 s），保留 opt-in 實作。Cold first-main TTFT 8.671/8.664/8.670→7.780/7.787/7.752 s；pooled p90改善10.45%，main總完成時間改善20.73%（aux不再占用主請求的單列MTP機會）。同時 median退步6.98%、warm p90退步38.1%，title更晚；不能宣稱全面TTFT win，更不是 isolated model decode/kernel 加速。兩個預設仍關閉。CPU 2048-atom mixed simulation也尚未勝FIFO p90（10.675 vs12.624 s），需真正長cold + warm suffix混合GPU驗證後才決定default。
 
 Independent non-quiet correctness job `1003-110707-00-i8-token-parity-1107` rc0 + final complete：actual runner emitted token-ID digest 7/7 on/off相同；兩arm第一main cold cached0 vs hit cached7335（prompt7336）均63 tokens、digest526abd8e8275f19c001e5753d7030987996ce3be962a929d665ebaeb5fe071c3。它加了重送request，timing不入上表。前任0.8B smoke `1003-102420-00-i8-tiny-smoke-1027` stalled rc-2、無complete，不作parity或timing結論。完整結果：`docs/research/runs/2026-10-03-i8e/summary.json`，`scripts/research/agentic/i8_summarize.py ROOT --first-run 5`。
+
+2026-10-02 C7 — bounded generic grammar artifacts + async CPU preparation (codex-audit; CPU-only, no tok/s or TTFT claim). Real tool parameter schemas from `2026-09-30-agent-census` (Claude Code/Codex/opencode); Qwen3.8-27B tokenizer only, no model load. 18 schemas × 10 alternating fresh/repeated pairs; tokenizer vocabulary construction excluded. Fresh = schema validation + normalization + grammar + tokenizer-bound parser; repeated = same operations with cached artifacts and a fresh deep-copied matcher. Schema property order, compact whitespace, tokenizer identity/vocabulary and CFG source remain in cache keys. Regex request traversal/predicate caches remain private.
+
+| Client | Captured schema occurrences / unique | Fresh compile median | Repeated compile median | Initial masks equal |
+|---|---:|---:|---:|---:|
+| claude | 382 / 21 | 0.2321 ms | 0.0234 ms | 6/6 |
+| codex | 66 / 10 | 0.2421 ms | 0.0187 ms | 6/6 |
+| opencode | 27 / 9 | 0.2040 ms | 0.0192 ms | 6/6 |
+
+Receipt: `/Volumes/P5Plus/yunshu-build/codex/audit-grammar-final.json`; harness `scripts/research/bench_grammar_compile.py`. Start/end 1-minute load 2.75 (<3); measurements rerun after contention. CPU regression checks compare every token mask on cold/cached CFG/JSON/compact JSON, plus independent reset/checkpoint/rollback, worker cancellation/error admission and schema ordering. Full unit: 8047 passed, 20 skipped; ruff + mypy gate pass (no new baseline debt). Small but real: repeated construction saves roughly 0.2 ms/schema; async preparation itself is excluded from these numbers, and hot preparation bypasses a worker round trip. Native parser memory is opaque: cache bounds 128 entries and 4 MiB of key/source bytes, not a claimed native-memory bound. Gateway request validation retains its synchronous 400 contract; engine-side cold preparation runs on two CPU workers (up to 32 admitted jobs per event loop) and VLM prompt/media preparation overlaps it before token admission.
 2026-10-02 Prefill / TTFT（27B Qwen3.8 oQ4e-mtp，M5 Max，tfbench decode part，每格 3 次 session 的平均，prose 與 code 相同；之前 = `YUNSHU_PREFILL_MATMUL=lane YUNSHU_PREFILL_GDN=step`，即改動前的行為；TF 為先前同機量測）：
 
 | TTFT（秒） | 之前 | 之後 | TF 0.6.1 |
@@ -503,3 +513,131 @@ Yunshu 實際 MTP；TF 日誌明確 DFlash2。每個 ctx/kind/phase 跨三輪和
 - captured pooled main p50 .7515→.7570 s（退0.73%）、p90 8.5990→7.6239 s、warm p50 .622→.611 s、warm p90 1.7496→1.7268 s、mean TTFT2.1425→1.9226 s、mean六turn completion sum40.226→33.504 s（改善16.71%）。on三session sums30.426/30.773/39.312 s，完整保留outlier。全指標default gate未過，不升預設。
 - long mix：prime11068／cold26468 tokens，suffix prompts11120/11600/13392、實際cached11067/52/10240（中間近cold）。pooled main p50 23.098→8.6795 s、p90 31.3856→30.4925 s、suffix p90 31.414→12.9238 s、main wall mean58.6095→52.7925 s。synthetic main max48與captured自然output limits分开，不宣稱所有模型／流量贏。
 - small but real：warm p50 -1.77%、warm p90 -1.30%，保留opt-in；不拿它們抵銷main median gate失敗。後續需singleton warm3的host/GPU/restore/writer與consumer-lease timeline。tiny0.8B仍有digest差，不能當lossless證據。資料：private `docs/research/runs/2026-10-03-i8-next8`，外部 `i8-phase8-metrics.json`、`i8-final-harvest.json`。
+
+## 2026-10-03 constrained speculation 與 accepted-target logprobs（codex-cspec）
+
+Qwen3.8-27B oQ4e-mtp／DFlash2，同一 checkpoint，單請求 lane；保留一般 JSON-schema／CFG／regex／choice 的 grammar transactions、singleton-token forced windows，MTP／DFlash／copy 草稿只接受與 AR 相同的 target token。LP 取 accepted target rows，首 token 保留實際 sampler distribution；qualified constrained／LP requests 共用 stock-serial arithmetic 與 cache namespace。沒有新增實驗旗標；保留這些合格請求的預設 speculative routing，其他未合格 processor 仍沿既有 AR 路徑。
+
+合併後快照 be34c0f3，source_hash `0abdba7726f1d5d2256cc43d0577b99ce37e526b95bc9629a00b32c248634b24`。priority 0、`gpuq --quiet`、3 次交錯 on/off、job JSON contended=false（1620% foreign CPU 門檻），raw IDs／內容 parity 通過。以下皆為各自三輪中位數，不與其他快照混算：
+
+| 工作（cold） | AR tok/s（range） | DFlash tok/s（range） | 倍率 |
+|---|---:|---:|---:|
+| JSON，192-token 長度上限 | 28.3（28.2–28.3） | 113.1（112.8–113.5） | 4.00× |
+| required write_file tool call | 28.0（27.9–28.0） | 100.7（100.5–100.9） | 3.60× |
+
+Job：`1003-104311-00-cspec-json-tool-merged-r3-1003-1018-resume90-104311`，rc0、expected JSONL 最後 complete=true／parity=true；artifact `/Volumes/P5Plus/yunshu-build/codex/cspec/json-tool-merged-r3-1018.jsonl`。JSON 這一格皆 finish=length，只證明固定長度的速率與逐 token parity，不拿它宣稱完整 schema；tool 格全為完整 tool_calls 且參數 schema_valid。server logs 均證實 DFlash engaged。
+
+正確性另用不帶 --quiet 的 jobs；其 tok/s 不作效能結論：
+- `1003-104311-00-cspec-tool-lp-turn2-mtp-df-1003-1022-resume90-104311`：12 個 MTP／DFlash on/off cold／warm／turn2，raw IDs、全部 LP、cache bits 相同；turn2 cached307，185 tokens／185 LP，完整 tool call。
+- `1003-104958-00-cspec-complete-jsonlp-turn2-1050`：384-token 上限，12 個完整 schema_valid JSON＋LP；turn2 cached23，214 tokens／214 LP，raw IDs、LP、cache bits 相同。
+- `1003-112609-00-cspec-original185-lp-delivery-retry-1123`：原始 tool-grammar-off 185-token 注入模板，24 個請求，MTP／DFlash on/off cold／warm／turn2 全部 raw IDs、LP（所請求者）、cache bits 相同；turn2 cached184，259 tokens／259 LP，完整 tool call。原始 cache digest 問題不再重現。
+三個 job 均 rc0、expected output 最後 complete=true；補充 CPU proof 確認所有 36 個 LP 請求的 LP count == raw ID count，chosen／top LP 全為有限值，warm／turn2 確有 cache hit。Artifacts 與 `final-receipt-proof.json` 在 `/Volumes/P5Plus/yunshu-build/codex/cspec/`。
+
+be34c0f3 修正共同 VLM streaming 的空文字／tool-parser／reasoning／final LP 遺失，並在 streaming／non-streaming JSON 中略過不可能的非有限 top candidates，所有有限 target LP 值保持不變。原始185首次重驗 rc1 是兩邊都丟 tool LP，不能當成功證據；修正後以上 retry 通過。舊 flagged timing 依 job JSON 的 reclassification 解讀，沒有僅因舊 contention 標記重跑已完成的測量。三輪 agent replay 證據另行追加。
+
+
+同日 agent replay：`1003-121147-00-cspec-agent-final-progress-r3-1212`，rc0、complete=true、parity=true、contended=false；priority0／--quiet，3 次交錯 AR／DFlash sessions，原始四個 opencode 請求體，輔助 title 固定貪婪、主要 bodies 保留原設定並固定 seed1234。每輪每 body 的兩次 warm 先取中位數，再取三輪中位數（非六次獨立 run）；表中的 wall 僅為該重放請求，不是實際代理任務完成時間：
+
+| body | AR warm tok/s | DFlash warm tok/s | AR／DFlash warm wall s |
+|---|---:|---:|---:|
+| fix-cart 0002 | 21.00 | 74.90 | 2.345／0.730 |
+| fix-cart 0004 | 19.95 | 68.25 | 11.841／3.526 |
+| fix-cart 0006 | 19.95 | 54.80 | 10.705／3.950 |
+| polyglot 0003 | 19.60 | 63.30 | 3.849／1.269 |
+
+六個 server logs 全部證實預期 engaged mode；全部 primary＋title raw tokens on/off 相同，每個重複 prompt 的 cold／warm token digest 亦相同。Artifact `/Volumes/P5Plus/yunshu-build/codex/cspec/agent-final-progress-r3-1212.jsonl`，逐 body／rep 摘要 `agent-final-summary.json`。舊 `1003-005714-00-cspec-guided-agent-final-r3-20261003-0058` rc1 的差異只在 sampled title；重排 `1003-104311-00-cspec-agent-merged-r3-1003-1018-resume90-104311` 因漏保留 stall 設定而在600s stalled，兩者 timing 不採用。dad4641c 增加每RPC的job-log進度，最終 job 另保留15分鐘stall，14m02s成功完成。
+
+上述 cache bits 指診斷在首個 generation batch 捕捉的 prompt／prefill state；不宣稱所有未使用的 verify buffer 或 decode-tail storage 相同。第二輪 cache-hit 與完整 raw IDs／LP parity 才是重用後的可觀察正確性證據。
+
+
+完整輸出 quiet 補測（dad4641c，--max-tokens384／--require-structured-complete）：`1003-125849-00-cspec-complete-json-tool-quiet-r3-1254`，rc0、complete=true、parity=true、contended=false，3 次交錯 sessions。24 個請求全部 schema_valid、cold/warm raw IDs 與 on/off 相同，warm 確有 APC hit；JSON 各197 tokens、tool各122 tokens。作完整輸出的效能結論採這一組，192-token表保留為截斷測量：
+
+| 完整輸出 | AR tok/s（range） | DFlash tok/s（range） | 倍率 |
+|---|---:|---:|---:|
+| JSON cold | 28.1（27.9–28.3） | 112.1（110.5–112.2） | 3.99× |
+| JSON warm | 23.4（23.2–23.5） | 111.4（109.7–112.5） | 4.76× |
+| tool cold | 27.8（27.8–27.9） | 100.6（99.1–100.8） | 3.62× |
+| tool warm | 23.0（22.8–23.3） | 77.7（76.5–77.8） | 3.38× |
+
+Artifact `/Volumes/P5Plus/yunshu-build/codex/cspec/complete-json-tool-quiet-r3-1254.jsonl`；6個server logs全確認DF/AR engaged，`complete-quiet-summary.json`保留三輪數字。交付前 full unit nice15：8220 passed／20 skipped；ruff check/format、mypy gate無新增錯誤。沒有新微小效能量測；不以功能修復冒充1–3%增益。
+
+
+## 2026-10-03 — prompt-copy maximum 8 → 16 rows (codex-wide3)
+
+Qwen3.8-27B-oQ4e-mtp, M5 Max; same Python source/checkpoint, 3 interleaved
+8/16-row server arms, MTP mode and actual copy caps confirmed. Job
+`1003-110949-00-wide3-copy-cap-bindfix-1111`: rc0, final complete success,
+CPU clean (foreign max 265.5%, threshold 1620%). All workload/phase output
+digests match. Earlier `1003-101336-00-wide3-copy-cap-ab-1020` failed its first
+arm on a port bind race; it is not the decision run.
+
+Median decode tok/s (8 → 16):
+
+| Context | Workload | cold | warm | turn2 |
+|---|---|---:|---:|---:|
+| 8K | code | 67.4 → 69.3 | 67.4 → 68.7 | 106.1 → 129.2 |
+| 32K | code | 68.2 → 70.9 | 70.4 → 73.0 | 70.7 → 73.1 |
+| 8K | prose | 52.5 → 52.3 | 52.6 → 52.4 | 55.2 → 55.1 |
+| 32K | prose | 48.1 → 48.0 | 48.1 → 47.9 | 50.6 → 50.1 |
+
+Decision: default maximum 16; retain the per-model certified width (8 on narrow
+backends), explicit 8-row override and 0=off. The existing short-match first
+window, confidence gate and miss backoff remain unchanged. Although 32K
+attention makes 12+ rows dearer, long code copies still pay: no context-only hard
+8-row cap. This is a code/repetition benefit with a measured small prose
+tradeoff (-0.2% to -1.0%), not a universal speedup or TTFT claim. Small but real:
+8K warm code +1.9%, 32K code +3.4–4.0%; 8K code turn2 +21.8% on this corpus.
+
+The separate cost-aware policy was rejected and moved to a research-only
+wrapper (`1003-102815-00-wide3-copy-cost-ab-1030`, rc0, complete, clean, same
+digests): fixed16 → cost16 at 32K prose cold/warm 48.2 → 46.8/46.9, all three
+pairs negative. It missed useful copy islands (4 rounds/12 tokens → 1/1).
+The public YUNSHU_SPEC_COPY_COST option and serving switch were removed.
+
+
+2026-10-03 DFlash2 greedy prompt-copy islands（codex-wide4；Qwen3.8-27B oQ4e-mtp / same DFlash2 checkpoint，single-request invariant lane）。基線是 f104150e 的 adaptive chain；candidate固定模型的訓練block8，再以既有SPEC_COPY_ROWS=16驗證copied runs，跳過copy island裡的drafter，恢復時一次吸收bounded pending taps。Target verifier／cache transaction不變，sampled、guide/LP與unsupported/exact/narrow保留既有fallback。沒有新增設定；0仍關閉copy。
+
+Job `1003-161523-00-wide4-timing-bundle-1615` rc0，quiet clean（foreign max330%<1620），native-matrix三次交錯、54個spec arms全部raw-ID digest等於AR；同checkpoint與單一source/harness fingerprint。表為256-token cold decode的三輪中位數，不是TTFT、warm或TF最新版本的速度claim。`chain8`控制臂分開固定block與copy的貢獻。
+
+| Context/task | adaptive main tok/s | fixed chain8 | chain8 + copy16 | gain vs main |
+|---|---:|---:|---:|---:|
+| 1K code | 97.74 | 100.33 | 109.48 | +12.01% |
+| 1K prose | 52.32 | 53.46 | 52.29 | -0.05% |
+| 8K code | 74.50 | 76.87 | 82.19 | +10.32% |
+| 8K prose | 51.46 | 51.84 | 51.83 | +0.72% |
+| 32K code | 72.74 | 73.90 | 82.56 | +13.51% |
+| 32K prose | 44.85 | 46.79 | 46.75 | +4.23% |
+
+小但真實：8K prose +0.72%，1K prose -0.05%如實記錄；code三格+10.32–13.51%。固定block也有貢獻，不能把全部增益歸因copy。1K code commits/round約4.72→5.20；仍未追上TF歷史7.1/49ms，不宣稱gap已全關。
+
+Correctness `1003-161523-00-wide4-correctness-bundle-1615` rc0/complete：200 paired code/sentence echo items，AR與candidate各200/200 correct，raw-ID digest全同、net correct差0。`1003-172719-00-wide4-http-default-smoke-1731` rc0/complete：actual serving DFlash、copy16/0、APC warm cached1033、repeat、newline stop內容digest都等於AR；copy16實際7rounds/97published tokens、copy0無copy。此HTTP是nonquiet correctness smoke，不採其tok/s/TTFT作效能claim。
+
+### 2026-10-03 -- native singleton KV capacity, bounded allocator pool, wider invariant prefill dispatch
+
+Same checkpoint Jundot/Qwen3.8-27B-oQ4e-mtp; Yunshu MTP, TensorFold 0.6.1 DFlash2. Three interleaved clean HTTP repetitions per context, prose/code, fixed second-turn reply and matching request hashes. All baseline/candidate 256-token response digests match; all 18 server logs prove the engaged mode. Candidate uses native singleton extract/merge views retaining KV capacity, MLX allocator cache limit (auto6GiB on128GiB), and one invariant lane dispatch up to512rows with the same32-row threadgroup arithmetic. Other direct lane callers keep128-row guard. No lossy precision change or new experimental setting.
+
+| Median HTTP TTFT ms | baseline | candidate | TF DFlash2 |
+|---|---:|---:|---:|
+|8K prose cold|8394|8325|8403|
+|8K code cold|8404|8365|8406|
+|8K prose warm|119|85|74|
+|8K code warm|124|92|76|
+|8K prose turn2|562|509|508|
+|8K code turn2|569|512|505|
+|32K prose cold|38099|36644|39077|
+|32K code cold|37735|36671|39074|
+|32K prose warm|230|145|108|
+|32K code warm|245|158|123|
+|32K prose turn2|825|705|649|
+|32K code turn2|900|721|670|
+
+32K turn2 paired savings prose118/117/120ms; code207/182/166ms. 8K prose53/53/47ms; code39/58/60ms. The8K turn2 gap is1/7ms;32K remains56/51ms. Do not claim a complete32K win. Cold paired gains are nonuniform (prose1285/278/1464ms, code1094/290/411ms); report the median, not a per-arm decomposition. Prior to shipping, native-only32K+282 paired savings112/93/110ms. Small but real: wide-only32K+282 savings8/14/22ms (median14ms ~1.8%), same digest.
+
+Correctness: native and wide200-item paired sets each200/200 in both arms, every token and per-token LP bit-equal; native full APC hits prove engagement. Native8K/32K prose/code chat partial/full hit equals cold bit-exact LP, maxabs0. CPU actual Qwen tests verify capacity retention, metadata reset, mutation/exception isolation, dtype promotion, and no cache reference cycle. The capacity regression fails the old method (cap5 vs256).
+
+Jobs:1003-145700-00-prefill4-http-combo8k-1456 / http-combo32k-1456 rc0+complete+clean (foreign CPU max298/598%, threshold1620). Supporting: native32k-ab-1425, restore-mtp32k-1230, native-identity-1427, quality200-1247, native-warm-quality200-1456. Full IDs/verdicts and log tails: /Volumes/P5Plus/yunshu-build/codex/prefill4-own-harvest.json. Timing jobs used --quiet; correctness jobs did not.
+
+Roofline/profile: actual restore source2.302GB, capacity2.335GB; minimum read+write4.64GB at prior measured530GB/s ~8.8ms. Synchronized32K+282 profile: clone including allocator44.3ms, lookup-other1.3, merge0.4, suffix prompt-step657.3(target637.0), first generate84.9(target84.6), admission3.3, residual14.8. HTTP extras0.8..1.8ms in inherited receipts. Profile barriers are attribution only, not serving TTFT claims. Stock planes eligible1.416GiB, but stock_calls_before_first=0 on282-token lane suffix. Larger64/128-row tiles are bit-equal but checkpoint microbench2-12x slower; rejected. General direct/pad clone does not show consistent turn2 benefit; not selected.
+
+
+2026-10-03 I8 qualified scheduler default decision（codex-i8e；lead decision）：採用既有 clean quiet 三對 job `1003-182813-00-i8-next8-admit-all-1830`、相同27B checkpoint與digests。captured p50 .7515→.7570 s（+0.73%，5.5ms；phase5反方向-0.87%，lead判為run-to-run noise），p90 8.5990→7.6239 s（約-11%）、warm p90 1.7496→1.7268 s（-1.3%）、六turn completion40.226→33.504 s（約-17%）；long-mix TTFT p50 23.098→8.6795 s。只在實際engage qualified batch-invariant kernels的backend升預設；非invariant（0.8B）保留FIFO，兩個stable opt-out／explicit opt-in設定保留。這是scheduler traffic證據，不是所有模型的普遍加速；歷史default-off條目不改寫。

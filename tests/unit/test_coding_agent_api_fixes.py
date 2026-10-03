@@ -41,10 +41,9 @@ def test_thinking_flag():
     assert sw(None) == (None, None)
 
 
-def test_qwen_mid_conversation_system_messages_stay_in_place():
+def test_qwen_mid_conversation_system_messages_keep_instruction_priority():
     # Codex sends `developer` items and Claude Code sends per-turn notes after the first
-    # user turn; the Qwen template rejects them as system messages. They must not be
-    # hoisted (that rewrites the prompt start every turn and kills prefix caching).
+    # user turn; hoist them without lowering their instruction priority.
     msgs = [
         {"role": "system", "content": "base"},
         {"role": "user", "content": "hi"},
@@ -53,17 +52,17 @@ def test_qwen_mid_conversation_system_messages_stay_in_place():
         {"role": "system", "content": "env"},
     ]
     out = QwenMessageAdapter().adapt(msgs)
-    assert [m["role"] for m in out] == ["system", "user", "user", "assistant", "user"]
-    assert [m["content"] for m in out] == ["base", "hi", "permissions", "ok", "env"]
+    assert [m["role"] for m in out] == ["system", "user", "assistant"]
+    assert [m["content"] for m in out] == ["base\n\npermissions\n\nenv", "hi", "ok"]
 
 
-def test_qwen_system_after_user_first_message_not_hoisted():
+def test_qwen_system_after_user_first_message_is_hoisted():
     msgs = [
         {"role": "user", "content": "u"},
         {"role": "system", "content": "note"},
     ]
     out = QwenMessageAdapter().adapt(msgs)
-    assert [m["role"] for m in out] == ["user", "user"]
+    assert [m["role"] for m in out] == ["system", "user"]
 
 
 def test_qwen_leading_system_messages_merge():

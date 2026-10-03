@@ -1,12 +1,11 @@
 """Tests for BatchedEngine speculative decoding paths.
 
-Covers the MTP, N-gram, and cross-model spec decode paths that currently
-have zero test coverage. All tests mock engine internals so no real models
-or MLX runtime are needed.
+Covers text spec fallback, N-gram verification, and request cleanup.
+All tests mock engine internals so no real models are needed.
 """
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -228,148 +227,18 @@ async def test_stream_generate_speculative_fallback_when_no_decoder():
 
 
 # ---------------------------------------------------------------------------
-# Test 3: _generate_mtp with stop tokens
+# Retired text MTP adapters are covered by test_spec_stream_unreachable.
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_generate_mtp_with_stop_tokens():
-    """MTP generation truncates at stop_token_ids and sets finish_reason='stop'."""
-    engine = _make_batched_engine()
-
-    eos_id = 42
-    # Mock MTP decoder: returns tokens [10, 20, 42(eos), 30]
-    mock_mtp = MagicMock()
-    mock_mtp.generate = MagicMock(return_value=[10, 20, eos_id, 30])
-    engine._mtp_decoder = mock_mtp
-    engine._tokenizer.eos_token_id = 99  # default EOS, different from stop
-
-    # Patch the executor to run inline (avoid real MLX executor)
-    mock_executor = MagicMock()
-    # Make run_in_executor call the function immediately
-    loop = asyncio.get_running_loop()
-    with patch(
-        "yunshu_engine.mlx_executor.get_mlx_executor", return_value=mock_executor
-    ):
-        # Make run_in_executor run the function synchronously
-        def _run_inline(executor, fn):
-            result = fn()
-            fut = loop.create_future()
-            fut.set_result(result)
-            return fut
-
-        with patch.object(loop, "run_in_executor", side_effect=_run_inline):
-            result = await engine._generate_mtp(
-                prompt="test prompt",
-                max_tokens=100,
-                stop_token_ids=[eos_id],
-            )
-
-    assert result.finish_reason == "stop"
-    # Should only include tokens before the stop token (stop token excluded)
-    assert result.completion_tokens == 2  # [10, 20] — 42 is stop, excluded
-
-
 # ---------------------------------------------------------------------------
-# Test 4: _stream_generate_mtp cancel_event stops cleanly
+
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_stream_generate_mtp_cancel_event():
-    """When cancel_event is set, _stream_generate_mtp stops cleanly and
-    yields outputs received before cancellation."""
-    engine = _make_batched_engine()
-
-    cancel_event = asyncio.Event()
-
-    # We cannot easily run the real _stream_generate_mtp because it needs
-    # real MLX. Instead, test the cancel_event consumer-side logic by
-    # simulating what the queue-based consumer does.
-    # We'll patch the method to test the cancel path directly.
-    mock_mtp = MagicMock()
-    engine._mtp_decoder = mock_mtp
-
-    from yunshu_engine.batched_engine import GenerationOutput
-
-    # Simulate: the method yields some outputs, then cancel fires
-    call_count = 0
-
-    async def _mock_stream_mtp(**kwargs):
-        nonlocal call_count
-        for i in range(3):
-            call_count += 1
-            yield GenerationOutput(
-                text=f"chunk{i}",
-                new_text=f"chunk{i}",
-                prompt_tokens=1,
-                completion_tokens=i + 1,
-                finished=False,
-            )
-        # Now set cancel
-        cancel_event.set()
-        yield GenerationOutput(
-            text="chunk3",
-            new_text="chunk3",
-            prompt_tokens=1,
-            completion_tokens=4,
-            finished=True,
-            finish_reason="stop",
-        )
-
-    engine._stream_generate_mtp = _mock_stream_mtp
-
-    outputs = []
-    async for out in _mock_stream_mtp(
-        prompt="test",
-        cancel_event=cancel_event,
-    ):
-        outputs.append(out)
-        if cancel_event.is_set():
-            break
-
-    assert len(outputs) >= 1
-    # The cancel event should be set
-    assert cancel_event.is_set()
-
-
-# ---------------------------------------------------------------------------
-# Test 5: _stream_generate_mtp inflight prefix cleanup
 # ---------------------------------------------------------------------------
 
-
-@pytest.mark.asyncio
-async def test_stream_generate_mtp_inflight_prefix_cleanup():
-    """After _stream_generate_mtp completes, inflight prefix tracker entry
-    is unregistered."""
-    _make_batched_engine()
-
-    mock_tracker = MagicMock()
-    mock_tracker.register = MagicMock()
-    mock_tracker.unregister = MagicMock()
-
-    with patch(
-        "yunshu_engine.inflight_prefix_sharing.get_inflight_tracker",
-        return_value=mock_tracker,
-    ):
-        # The inflight prefix cleanup happens in the finally block of
-        # _stream_generate_mtp. We test the unregister call by simulating
-        # the cleanup logic directly.
-
-        # Simulate what _stream_generate_mtp does in its finally block
-        _inflight_req_id = "mtp-s-test-123"
-
-        # Register
-        mock_tracker.register(
-            _inflight_req_id,
-            token_ids=[1, 2, 3],
-            kv_cache_ref=None,
-        )
-
-        # Simulate completion (the finally block unregisters)
-        mock_tracker.unregister(_inflight_req_id)
-
-    mock_tracker.unregister.assert_called_once_with(_inflight_req_id)
+# ---------------------------------------------------------------------------
 
 
 # ---------------------------------------------------------------------------

@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 import random
+import re
 import shutil
 import signal
 import socket
@@ -51,9 +52,33 @@ def free_port():
     raise RuntimeError("no port")
 
 
+def spec_request(engine, extra_env):
+    """Make the comparison independent of drafter discovery under isolated HOME."""
+    if engine != "yunshu":
+        return "dflash", dict(extra_env)
+    env = dict(extra_env)
+    override = env.setdefault("YUNSHU_VLM_DRAFT", D)
+    mode = {"mtp": "mtp", "force-mtp": "mtp", "off": "off", "none": "off"}.get(
+        override.lower(), "dflash"
+    )
+    return mode, env
+
+
+def engaged_spec_mode(engine, log):
+    """Read the initialized runner, not the earlier selection/fallback message."""
+    if engine == "yunshu":
+        modes = re.findall(r"VLM batch runner: [^\n]*?draft=(dflash|mtp|off)\b", log)
+        return modes[-1] if modes else None
+    if re.search(r"\[tensorfold\] drafter [^\n]*DFlash[^\n]*block=", log):
+        return "dflash"
+    return None
+
+
 class Srv:
-    def __init__(self, engine, extra_env, tag):
+    def __init__(self, engine, extra_env, tag, model=None):
         self.engine, self.port = engine, free_port()
+        self.requested_spec_mode, extra_env = spec_request(engine, extra_env)
+        self.extra_env = extra_env
         self.home = OUT / "home" / tag
         shutil.rmtree(self.home, ignore_errors=True)
         self.home.mkdir(parents=True)
@@ -70,7 +95,7 @@ class Srv:
         if engine == "yunshu":
             if YUNSHU_SRC:
                 env["PYTHONPATH"] = YUNSHU_SRC
-            cmd = [YUNSHU_BIN, "serve", "-m", M, "--port", str(self.port)]
+            cmd = [YUNSHU_BIN, "serve", "-m", model or M, "--port", str(self.port)]
         else:
             cmd = [
                 TF[engine],
@@ -85,27 +110,48 @@ class Srv:
                 "--no-update-check",
             ]
         self.cmd = cmd
-        self.proc = subprocess.Popen(
-            cmd,
-            stdout=open(self.log, "ab"),
-            stderr=subprocess.STDOUT,
-            env=env,
-            start_new_session=True,
-        )
+        with open(self.log, "wb") as server_log:
+            self.proc = subprocess.Popen(
+                cmd,
+                stdout=server_log,
+                stderr=subprocess.STDOUT,
+                env=env,
+                start_new_session=True,
+            )
         self.url = f"http://127.0.0.1:{self.port}"
         t0 = time.time()
         while time.time() - t0 < 900:
             if self.proc.poll() is not None:
+                self.kill()
                 raise RuntimeError("server exited early")
+            if "FATAL:" in self.log.read_text(errors="replace"):
+                self.kill()
+                raise RuntimeError(f"server startup failed; see {self.log}")
             try:
                 with urllib.request.urlopen(self.url + "/v1/models", timeout=3) as r:
                     self.model = json.load(r)["data"][0]["id"]
                     self.ready_s = time.time() - t0
-                    return
+                    break
             except Exception:
                 time.sleep(2)
-        self.kill()
-        raise RuntimeError("not ready")
+        else:
+            self.kill()
+            raise RuntimeError("not ready")
+        try:
+            self.verify_spec_mode()
+        except Exception:
+            self.kill()
+            raise
+
+    def verify_spec_mode(self):
+        self.engaged_spec_mode = engaged_spec_mode(
+            self.engine, self.log.read_text(errors="replace")
+        )
+        if self.engaged_spec_mode != self.requested_spec_mode:
+            raise RuntimeError(
+                f"requested spec={self.requested_spec_mode}, "
+                f"engaged={self.engaged_spec_mode}; see {self.log}"
+            )
 
     def kill(self):
         if self.proc.poll() is None:
@@ -273,14 +319,17 @@ def emit(out, **kw):
 
 
 def part_decode(s, out, a):
-    ctxs = a.only_ctx or [1024, 8192, 32768]
+    ctxs = [512] if a.smoke else a.only_ctx or [1024, 8192, 32768]
     for ctx in ctxs:
         for kind in a.only_kind or ("prose", "code"):
-            salt = ctx // 1024 + (3 if kind == "code" else 0)
-            text = load_prompt(f"{kind}-{ctx}")
+            text = (
+                "Write a short example and explain it."
+                if a.smoke
+                else load_prompt(f"{kind}-{ctx}")
+            )
             reply = ""
             for phase in ("cold", "warm", "turn2"):
-                b = req(s.model, text, 256)
+                b = req(s.model, text, 16 if a.smoke else 256)
                 if phase == "turn2":
                     b["messages"] += [
                         {"role": "assistant", "content": reply},
@@ -301,15 +350,24 @@ def part_decode(s, out, a):
 
 
 def part_conc(s, out, a):
-    for n in (2, 4, 8):
-        for trial in range(2):
+    for n in (2,) if a.smoke else (2, 4, 8):
+        for trial in range(1 if a.smoke else 2):
             texts = [
-                load_prompt(f"conc-{'prose' if (i + trial) % 2 == 0 else 'code'}-{i}")
+                "Say hello."
+                if a.smoke
+                else load_prompt(
+                    f"conc-{'prose' if (i + trial) % 2 == 0 else 'code'}-{i}"
+                )
                 for i in range(n)
             ]
             t0 = time.perf_counter()
             with cf.ThreadPoolExecutor(n) as ex:
-                rs = list(ex.map(lambda t: send(s.url, req(s.model, t, 256)), texts))
+                rs = list(
+                    ex.map(
+                        lambda t: send(s.url, req(s.model, t, 16 if a.smoke else 256)),
+                        texts,
+                    )
+                )
             for r in rs:
                 r.pop("_text")
             wall = time.perf_counter() - t0
@@ -336,11 +394,14 @@ def part_agent(s, out, a):
         BODIES2 / "0003-req.json",
     ]
     title = json.loads((BODIES / "0001-req.json").read_text())
-    for f in files:
+    for f in files[:1] if a.smoke else files:
         body = json.loads(f.read_text())
         body["model"] = s.model
         body["seed"] = 1234
-        for i in range(3):
+        if a.smoke:
+            body["max_tokens"] = 16
+            title["max_tokens"] = 16
+        for i in range(1 if a.smoke else 3):
             th = fut = None
             if i == 0:
                 th = cf.ThreadPoolExecutor(1)
@@ -360,7 +421,7 @@ def part_agent(s, out, a):
             )
 
 
-def main():
+def parse_args(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--engine", required=True)
     ap.add_argument("--part", required=True)
@@ -370,9 +431,49 @@ def main():
     ap.add_argument("--only-kind", action="append", choices=["prose", "code"])
     ap.add_argument("--env", action="append", default=[])
     ap.add_argument("--tag", default="")
-    a = ap.parse_args()
+    ap.add_argument("--model", default=M)
+    ap.add_argument("--smoke", action="store_true")
+    ap.add_argument("--dry-run", action="store_true")
+    args = list(sys.argv[1:] if argv is None else argv)
+    # Tags are filename suffixes and often begin with '-'. Keep registered
+    # options as options, but bind a tag value before argparse classifies it.
+    i = 0
+    while i + 1 < len(args):
+        if args[i] == "--tag" and args[i + 1] not in ap._option_string_actions:
+            args[i : i + 2] = ["--tag=" + args[i + 1]]
+        i += 1
+    return ap.parse_args(args)
+
+
+def main():
+    a = parse_args()
     extra_env = dict(kv.split("=", 1) for kv in a.env)
-    s = Srv(a.engine, extra_env, f"{a.engine}-{a.part}-{a.rep}{a.tag}")
+    if a.part not in ("decode", "conc", "agent", "ca"):
+        raise ValueError("supported parts: decode, conc, agent, ca")
+    if a.dry_run:
+        if a.part == "decode" and not a.smoke:
+            for ctx in a.only_ctx or [1024, 8192, 32768]:
+                for kind in a.only_kind or ("prose", "code"):
+                    load_prompt(f"{kind}-{ctx}")
+        elif a.part in ("conc", "agent", "ca"):
+            for directory in (BODIES, BODIES2):
+                if not list(directory.glob("*-req.json")):
+                    raise FileNotFoundError(directory)
+        if not (Path(a.model) / "config.json").is_file():
+            raise FileNotFoundError(a.model)
+        mode, selected = spec_request(a.engine, extra_env)
+        print(
+            json.dumps(
+                {
+                    "complete": "dry-run",
+                    "requested_spec_mode": mode,
+                    "env": selected,
+                    "model": a.model,
+                }
+            )
+        )
+        return
+    s = Srv(a.engine, extra_env, f"{a.engine}-{a.part}-{a.rep}{a.tag}", model=a.model)
     try:
         with open(a.out, "a") as out:
             emit(
@@ -382,7 +483,9 @@ def main():
                 rep=a.rep,
                 ready_s=round(s.ready_s, 1),
                 cmd=s.cmd,
-                env=extra_env,
+                env=s.extra_env,
+                requested_spec_mode=s.requested_spec_mode,
+                engaged_spec_mode=s.engaged_spec_mode,
                 tag=a.tag,
             )
             for _ in range(2):
@@ -391,8 +494,18 @@ def main():
                 part_conc(s, out, a)
                 part_agent(s, out, a)
             else:
-                {"decode": part_decode}[a.part](s, out, a)
-            emit(out, part="part_done", engine=a.engine, which=a.part, rep=a.rep)
+                {"decode": part_decode, "conc": part_conc, "agent": part_agent}[a.part](
+                    s, out, a
+                )
+            s.verify_spec_mode()
+            emit(
+                out,
+                part="part_done",
+                engine=a.engine,
+                which=a.part,
+                rep=a.rep,
+                complete=True,
+            )
     finally:
         s.kill()
 

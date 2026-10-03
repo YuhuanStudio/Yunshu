@@ -79,7 +79,7 @@ experimental round driver retains strict auxiliary priority and does not use thi
 work-ordering policy; endless primary driver traffic can still defer auxiliary
 service. Existing queue limits, errors and deadlines remain in force.
 
-`YUNSHU_AUXILIARY_SCHEDULING` is a stable deployment option. The default remains off; 0 restores ordinary admission / APC behavior.
+`YUNSHU_AUXILIARY_SCHEDULING` is a stable deployment override. The default is enabled only for loaded backends with qualified batch-invariant kernels; other backends retain ordinary admission / APC behavior. Explicit 0 opts out, and explicit 1 opts an unqualified backend in. See the current decision below.
 
 ## Validation
 
@@ -306,3 +306,21 @@ The 0.8B probe's original silent stall was continued generation, observed throug
 19949 tokens before its diagnostic deadline. Both merged-version title streams
 complete, but their digests differ. Small-model probes establish transport and
 liveness only; they are not lossless/default evidence for that model.
+
+
+## Qualified default decision (2026-10-03, codex-i8e)
+
+The policy now defaults on only when the loaded backend actually engages qualified
+batch-invariant kernels (`prefix_invariant`), including the tuned 27B Qwen3.5 family.
+Unqualified backends, including the bf16 0.8B probe, retain FIFO and ordinary APC
+admission by default. Explicit `YUNSHU_AUXILIARY_SCHEDULING=1` and
+`YUNSHU_UNCACHED_SCHEDULING=1` opt them in; either setting at 0 disables its component.
+These are stable overrides; neither was still experimental in the inherited registry,
+so no settled experimental entry remains to remove. FIFO remains required for
+unqualified backends and explicit opt-out.
+
+The lead accepted captured p50 +0.73% (5.5 ms) as run-to-run noise: phase5 had the
+opposite sign (-0.87%). The existing three-pair digest-identical 27B evidence shows
+p90 -11%, warm p90 -1.3%, six-turn completion -17%, and long-mix TTFT p50
+23.1 -> 8.7 s. This decision supersedes the historical default-off gate above;
+those entries record earlier decisions, not the current deployment default.

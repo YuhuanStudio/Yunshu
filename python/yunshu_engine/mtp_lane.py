@@ -41,6 +41,7 @@ from typing import Any
 
 import mlx.core as mx
 
+from .copy_cost import RoundCostClock
 from .copy_drafter import CopyDrafter
 from .keyed_sampling import KeyedSampler
 
@@ -53,7 +54,7 @@ _STATE: dict = {
     "profile": None,
     "guide": None,
     "context": None,  # the request's FULL prompt ids (not the tail after a prefix hit)
-    "copy_rows": 8,  # verify rows a copy round may use (0: copy rounds off)
+    "copy_rows": 16,  # verify rows a copy round may use (0: copy rounds off)
 }
 
 
@@ -69,10 +70,61 @@ def set_context(ids: Any) -> None:
     _STATE["context"] = ids
 
 
-def set_copy_rows(rows: int) -> None:
-    """Verify rows a copy round may use (drafts <= rows - 1); 0 turns copy rounds off.
-    The batch-invariant verify kernels are exact up to 8 rows today."""
-    _STATE["copy_rows"] = max(0, int(rows))
+def verify_max_rows(lane_projections: bool, language_model: Any = None) -> int:
+    """Widest verify window whose rows equal plain decode: with the lane
+    projections and the tile attention kernel the fused GDN, tile attention and
+    lane matmul are row-invariant to 32 rows; otherwise (sg8 / packed
+    projections) 8."""
+    from .kernels import ragged_attention as ra
+
+    if not lane_projections or not ra.tile_ready():
+        return 8
+    if language_model is not None:
+        for layer in language_model.model.layers:
+            # Expert projections are not converted to LaneLinear; their
+            # wider-row arithmetic has not been certified by this lane.
+            if hasattr(getattr(layer, "mlp", None), "switch_mlp"):
+                return 8
+            if layer.is_linear:
+                continue
+            attention = layer.self_attn
+            if (
+                attention.head_dim != 256
+                or attention.num_attention_heads // attention.num_key_value_heads > 8
+            ):
+                return 8
+    return ra.MAX_WINDOW
+
+
+def set_copy_rows(rows: int, limit: int | None = None) -> int:
+    """Verify rows a copy round may use (drafts <= rows - 1); 0 turns copy rounds
+    off. ``limit`` is the verify's real maximum width (``verify_max_rows``); the
+    rows are capped to it. Returns the rows in effect."""
+    rows = max(0, int(rows))
+    if limit is not None:
+        rows = min(rows, max(0, int(limit)))
+    _STATE["copy_rows"] = rows
+    return rows
+
+
+def copy_rows_for_model(language_model: Any, rows: int | None = None) -> int:
+    """Recheck the current target, even if another loaded engine set the lane's
+    process-global copy preference after this engine was constructed."""
+    rows = int(_STATE["copy_rows"] if rows is None else rows)
+    if rows < 3:
+        return rows
+    layers = getattr(getattr(language_model, "model", None), "layers", None)
+    if not layers:  # unknown projection geometry keeps the conservative bound
+        return min(rows, 8)
+    from .kernels.lane_linear import LaneLinear
+
+    layer = layers[0]
+    projection = (
+        layer.linear_attn.in_proj_qkv if layer.is_linear else layer.self_attn.q_proj
+    )
+    return min(
+        rows, verify_max_rows(isinstance(projection, LaneLinear), language_model)
+    )
 
 
 def can_guide(draft_model: Any) -> bool:
@@ -132,6 +184,14 @@ def rounds(
     )
 
     lm = model.language_model if hasattr(model, "language_model") else model
+    from .constrained_spec import (
+        current_request,
+        exact_verify,
+        forced_tokens,
+        target_rows,
+    )
+
+    request = current_request()
     block_total = _dflash_block_total(draft_model, draft_block_size)
     draft_model.reset(model)
     window = int(_STATE["window"])
@@ -185,8 +245,9 @@ def rounds(
     b = int(first_bonus)
     copy = None
     context = _STATE["context"]
-    if _STATE["copy_rows"] >= 3 and context is not None:
-        copy = CopyDrafter(max_draft=_STATE["copy_rows"] - 1)
+    copy_rows = copy_rows_for_model(lm)
+    if copy_rows >= 3 and context is not None:
+        copy = CopyDrafter(max_draft=copy_rows - 1)
         copy.extend(context)
         copy.extend([b])
 
@@ -205,6 +266,9 @@ def rounds(
 
     prof = _STATE["profile"]
     clock = time.perf_counter
+    cost_clock = (
+        RoundCostClock() if copy is not None and copy.costs is not None else None
+    )
 
     def mark(name, since):
         now = clock()
@@ -213,16 +277,27 @@ def rounds(
         return now
 
     while emitted < max_tokens and not finished:
+        forced = forced_tokens(guide, min(block_total - 1, max_tokens - emitted))
+        if len(forced) < 2:
+            forced = []
         is_copy = bool(next_copy)
         bs = (
-            len(next_copy) + 1
+            len(forced) + 1
+            if forced
+            else len(next_copy) + 1
             if is_copy
             else min(block_total, max_tokens - emitted + 1)
         )
         if bs <= 1:
             break
         t = clock()
-        if is_copy:
+        if forced:
+            draft_tokens, chained = mx.array([forced], dtype=token_dtype), 0
+            next_copy = []
+            is_copy = False
+            if queued is not None:
+                chained = queued[1]
+        elif is_copy:
             # A copied run is verified like any draft; the head's chain is not built.
             draft_tokens, chained = mx.array([next_copy], dtype=token_dtype), 0
             next_copy = []
@@ -246,35 +321,38 @@ def rounds(
                 # chain back first (only inside a tool call, a short stretch).
                 masks = guide.plan(draft_tokens.reshape(-1).tolist(), bs)
                 guide.lane_rounds += masks is not None
-            if keyed is None and masks is None:
-                verify = mtp._mtp_verify_target(
-                    lm, verify_input, prompt_cache, sampler, sample_target_tokens=True
-                )
+            logprobs = None
+            if (
+                keyed is None
+                and masks is None
+                and guide is None
+                and not (request and request.logprobs)
+            ):
+                with exact_verify(request, guide):
+                    verify = mtp._mtp_verify_target(
+                        lm,
+                        verify_input,
+                        prompt_cache,
+                        sampler,
+                        sample_target_tokens=True,
+                    )
                 target = verify.target_tokens.reshape(1, -1).astype(token_dtype)
             else:
                 # Masked and/or sampled request. A sampled row r draws generation index
                 # ``emitted + r`` with the keyed sampler, so a draft is accepted exactly
                 # when serial sampling would have produced it (see keyed_sampling); a
                 # tool-call mask is applied to the logits first, as serial decoding does.
-                verify = mtp._mtp_verify_target(
-                    lm, verify_input, prompt_cache, sampler, sample_target_tokens=False
-                )
-                logits = lm.speculative_logits_from_hidden(verify.hidden)
-                if masks is not None:
-                    from .tool_call_grammar import apply_bitmask
-
-                    logits = apply_bitmask(logits, masks)
-                if keyed is None:
-                    target = (
-                        mx.argmax(logits, axis=-1).reshape(1, -1).astype(token_dtype)
+                with exact_verify(request, guide):
+                    verify = mtp._mtp_verify_target(
+                        lm,
+                        verify_input,
+                        prompt_cache,
+                        sampler,
+                        sample_target_tokens=False,
                     )
-                else:
-                    logits = logits[0]
-                    logprobs = logits - mx.logsumexp(logits, axis=-1, keepdims=True)
-                    target = keyed.sample_positions(
-                        logprobs, list(range(emitted, emitted + bs))
-                    ).reshape(1, -1)
-                    target = target.astype(token_dtype)
+                    logits = lm.speculative_logits_from_hidden(verify.hidden)
+                target, logprobs = target_rows(logits, masks, emitted, keyed, request)
+                target = target.astype(token_dtype)
             # Early absorb: every row through the head with the true tokens.
             # The chain's own entries (built from the head's hidden) go first.
             if chained:
@@ -289,6 +367,7 @@ def rounds(
             t = mark("submit", t)
             values = flat.reshape(-1).tolist()
             t = mark("gpu_wait", t)
+            round_ms = cost_clock.readback(t) if cost_clock is not None else None
             drafted = values[: bs - 1]
             tgt = values[bs - 1 : 2 * bs - 1]
             next_seed = values[2 * bs - 1 :]
@@ -307,6 +386,9 @@ def rounds(
             # per-round drafted / accepted counts (drafter lifetime counters; the runner
             # diffs them per request for x_yunshu.speculative)
             _record_speculative_round(draft_model, accepted, bs - 1)
+            reports = (
+                request.reports(logprobs, new_tokens) if request is not None else []
+            )
             # Rows 0..accepted stay in the head's cache; later rows go.
             rejected = bs - (accepted + 1)
             if rejected:
@@ -321,7 +403,7 @@ def rounds(
             # The next chain is queued before the rollback is built.
             if copy is not None:
                 if is_copy:
-                    copy.observe_copy(bs - 1, accepted)
+                    copy.observe_copy(bs - 1, accepted, round_ms)
                     draft_model.copy_total_rounds = (
                         getattr(draft_model, "copy_total_rounds", 0) + 1
                     )
@@ -329,11 +411,16 @@ def rounds(
                         draft_model, "copy_total_tokens", 0
                     ) + len(new_tokens)
                 else:
-                    copy.observe_model(len(new_tokens))
+                    copy.observe_model(len(new_tokens), round_ms)
                 copy.extend(new_tokens)
                 next_copy = plan_copy(emitted + len(new_tokens))
             nb = min(block_total, max_tokens - (emitted + len(new_tokens)) + 1)
-            if nb > 1 and len(new_tokens) == accepted + 1 and not next_copy:
+            if (
+                nb > 1
+                and len(new_tokens) == accepted + 1
+                and not next_copy
+                and not (guide is not None and guide.constrained)
+            ):
                 queued = (*chain(seed_tok, seed_h, nb), nb)
             t = mark("next_chain_build", t)
             verify.commit(lm, prompt_cache, accepted, bs)
@@ -352,13 +439,18 @@ def rounds(
         n = len(new_tokens)
         for pos, tok in enumerate(new_tokens):
             emitted += 1
+            if reports:
+                request.pending.append(reports[pos])
             if emitted >= max_tokens:
                 finished = True
             if eos_token_ids is not None and tok in eos_token_ids:
                 finished = True
             if stop_check is not None and stop_check(0, tok):
                 finished = True
+            publication = clock() if cost_clock is not None else None
             yield [tok], {"round_pos": pos, "round_len": n}
+            if cost_clock is not None and publication is not None:
+                cost_clock.published((clock() - publication) * 1e3)
             if finished:
                 break
         b = new_tokens[-1] if new_tokens else b
@@ -374,12 +466,22 @@ def install() -> bool:
     from mlx_vlm.generate import ar
     from mlx_vlm.speculative import utils as spec_utils
 
+    from . import settings
+
     original = ar.run_speculative_server_rounds
 
     def run(model, draft_model, prompt_cache, hidden, **kw):
         first = kw.get("first_bonus")
         if (
             _STATE["enabled"]
+            # Tree owns the upstream MTP hook; the chain lane must not
+            # intercept its eligible requests before that hook is reached.
+            and not (
+                settings.get("YUNSHU_SPEC_TREE") == "tree"
+                and kw.get("greedy_sampling")
+                and _STATE["guide"] is None
+                and not isinstance(kw.get("sampler"), KeyedSampler)
+            )
             and kw.get("draft_kind") == "mtp"
             and (
                 kw.get("greedy_sampling") or isinstance(kw.get("sampler"), KeyedSampler)

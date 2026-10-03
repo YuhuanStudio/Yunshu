@@ -619,3 +619,21 @@ def test_handoff_defers_auxiliary_admission_as_well_as_steps(atoms):
     r._drive_slice(False)
     assert aux not in r._pending
     assert r._groups() and aux.stats.prefill_done
+
+
+@pytest.mark.parametrize(
+    "name", ["YUNSHU_UNCACHED_SCHEDULING", "YUNSHU_AUXILIARY_SCHEDULING"]
+)
+def test_qualified_scheduler_default_and_overrides(monkeypatch, tmp_path, name):
+    from yunshu_engine import settings
+
+    config = tmp_path / "config.toml"
+    config.write_text("")
+    monkeypatch.setenv("YUNSHU_CONFIG", str(config))
+    monkeypatch.delenv(name, raising=False)
+    assert settings.scheduling_enabled(name, qualified=True)
+    assert not settings.scheduling_enabled(name, qualified=False)
+    monkeypatch.setenv(name, "0")
+    assert not settings.scheduling_enabled(name, qualified=True)
+    monkeypatch.setenv(name, "1")
+    assert settings.scheduling_enabled(name, qualified=False)

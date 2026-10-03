@@ -418,3 +418,26 @@ def test_auxiliary_generator_receives_numerical_policy_not_primary_cache(runner)
     manager = runner._groups()[0].gen.kwargs["apc_manager"]
     assert isinstance(manager, AuxiliaryPrefillPolicy)
     assert not aux.stats.used_apc
+
+
+@pytest.mark.parametrize("qualified", [False, True])
+def test_auxiliary_default_uses_loaded_backend(title, monkeypatch, qualified):
+    from yunshu_engine.request_tracker import current_request_info
+    from yunshu_gateway import engine
+    from yunshu_gateway.x_yunshu import RequestInfo
+
+    monkeypatch.delenv("YUNSHU_AUXILIARY_SCHEDULING", raising=False)
+    monkeypatch.setattr("yunshu_engine.settings._file", lambda: {})
+    monkeypatch.setattr(engine, "get_model_manager", lambda: None)
+    monkeypatch.setattr(
+        engine,
+        "get_engine",
+        lambda: SimpleNamespace(_prefix_invariant_dispatch=qualified),
+    )
+    info = RequestInfo("i8", "POST", "/v1/chat/completions")
+    token = current_request_info.set(info)
+    try:
+        admission.classify_request(title)
+        assert info.scheduling_priority == (-1 if qualified else 0)
+    finally:
+        current_request_info.reset(token)

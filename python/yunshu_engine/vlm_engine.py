@@ -860,8 +860,18 @@ class VLMEngine:
                 # Only a client-set timeout applies: a fixed default would also
                 # count time spent waiting for a batch slot.
                 _timeout_seconds = kwargs.get("timeout_seconds") or None
+                from .grammar_compile import prepare_constraint
+
+                async def _prepare_call():
+                    # gather waits for validation before the consumer can admit any token.
+                    call, _ = await asyncio.gather(
+                        loop.run_in_executor(self._executor, _prepare),
+                        prepare_constraint(kwargs.get("json_schema")),
+                    )
+                    return call
+
                 call = await asyncio.wait_for(
-                    loop.run_in_executor(self._executor, _prepare),
+                    _prepare_call(),
                     timeout=_timeout_seconds,
                 )
                 (
@@ -1090,7 +1100,12 @@ class VLMEngine:
             try:
                 # Templating + media encoding on the MLX thread; tokens are then
                 # consumed off it (the runner's driver needs that thread).
-                call = await loop.run_in_executor(self._executor, _prepare)
+                from .grammar_compile import prepare_constraint
+
+                call, _ = await asyncio.gather(
+                    loop.run_in_executor(self._executor, _prepare),
+                    prepare_constraint(kwargs.get("json_schema")),
+                )
             except Exception as e:
                 logger.error(f"VLM stream error: {e}", exc_info=True)
                 _safe_queue.put_nowait(
@@ -1565,8 +1580,11 @@ class VLMEngine:
         drafter = None
         draft_kind = "mtp"
         from . import spec_select
-        from .mlxvlm_mtp import is_mtp_capable
+        from .mlxvlm_mtp import is_mtp_capable, unindexed_mtp_warning
 
+        warning = unindexed_mtp_warning(model_path)
+        if warning:
+            logger.warning(warning)
         choice = spec_select.choose(
             self._config,
             spec_family=spec_family,
@@ -1686,7 +1704,10 @@ class VLMEngine:
                 from .kernels import lane_layers
 
                 kernels["mtp_lane"] = mtp_lane.install()
-                mtp_lane.set_copy_rows(settings.get("YUNSHU_SPEC_COPY_ROWS"))
+                kernels["copy_rows"] = mtp_lane.set_copy_rows(
+                    settings.get("YUNSHU_SPEC_COPY_ROWS"),
+                    mtp_lane.verify_max_rows(bool(kernels.get("lane_linear")), lm),
+                )
                 kernels["lane_layers"] = lane_layers.install()
                 found = install_draft_vocab(
                     drafter, self._model.language_model, DRAFT_VOCAB
@@ -1713,6 +1734,10 @@ class VLMEngine:
         )
         from .kernels import buffer_cache
 
+        if spec_family and not use_driver:
+            from .kernels import singleton_cache
+
+            singleton_cache.install()
         cache_gib = settings.get("YUNSHU_PREFILL_BUFFER_CACHE_GB")
         if cache_gib is None:
             from .apc_manager import total_memory_bytes
@@ -1774,11 +1799,20 @@ class VLMEngine:
                     processor=self._processor,
                 )
         if drafter is not None and draft_kind == "dflash":
-            # Cost-aware chain depth from measured cycle costs (27B server:
-            # 57/48/46 vs upstream adaptive 46/38/38 tok/s at 1K/8K/32K).
+            # Keep adaptive depth for the fallback. Qualified greedy requests
+            # use the trained DFlash2 block and verified prompt-copy islands.
             from .spec_schedule import install_chain_budget
 
             install_chain_budget()
+            if kernels is not None:
+                from .dflash_copy import configure as configure_dflash_copy
+
+                kernels["copy_rows"], kernels["dflash_copy"] = configure_dflash_copy(
+                    lm,
+                    settings.get("YUNSHU_SPEC_COPY_ROWS"),
+                    invariant=bool(kernels.get("invariant")),
+                    lane_projections=bool(kernels.get("lane_linear")),
+                )
         if drafter is not None:
             # Tree drafts through the tree verify (single greedy row,
             # batch-invariant kernels only; every other round keeps the loop).
@@ -1989,8 +2023,19 @@ class VLMEngine:
                 TokenMaskProcessor(eos_ids=list(self._get_eos_ids()), **mask_kw)
             )
         constraint = self._build_text_constraint(json_schema)
+        constraint_guide = None
         if constraint is not None:
-            processors.append(ConstraintProcessor(constraint, self._tokenizer))
+            from .constrained_spec import ConstraintGuide
+
+            assert self._tokenizer is not None
+            constraint_guide = ConstraintGuide(
+                ConstraintProcessor(constraint, self._tokenizer),
+                int(
+                    (self._config.get("text_config") or {}).get("vocab_size")
+                    or self._config.get("vocab_size")
+                    or len(getattr(self._tokenizer, "_tokenizer", self._tokenizer))
+                ),
+            )
 
         stop_ids = set() if ignore_eos else set(self._get_eos_ids())
         stop_ids.update(stop_token_ids or [])
@@ -2015,6 +2060,12 @@ class VLMEngine:
         thinking_tokens = 0
         count = 0
         guide = self._tool_guide(tool_spec, in_think)
+        if constraint_guide is not None:
+            from .constrained_spec import CombinedGuide
+
+            guide = (
+                CombinedGuide(constraint_guide, guide) if guide else constraint_guide
+            )
         for token in self._batch_runner.iter_tokens(
             input_ids,
             max_tokens=max_tokens,
@@ -2401,7 +2452,7 @@ class VLMEngine:
                 input_ids, stats=stats, **params
             ):
                 reason = {"budget": "stop"}.get(finish, finish)
-                if not (text or reason):
+                if not (text or reason or lp is not None):
                     continue
                 first = stats.generated == 1 and token is not None
                 ok = deliver(

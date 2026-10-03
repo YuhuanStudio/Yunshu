@@ -17,6 +17,7 @@ import contextlib
 import copy
 import json
 import logging
+import math
 import time
 import uuid
 from collections.abc import AsyncIterator
@@ -1312,6 +1313,10 @@ def _format_logprobs(
                 decoded_top = []
                 for tlp in raw_top:
                     if isinstance(tlp, dict):
+                        # Grammar masks can leave fewer than k possible tokens.
+                        # Impossible candidates are not JSON numeric values.
+                        if not math.isfinite(tlp.get("logprob", 0.0)):
+                            continue
                         tlp_token = tlp.get("token", "")
                         if not tlp_token and tokenizer and "token_id" in tlp:
                             with contextlib.suppress(Exception):
@@ -2961,8 +2966,31 @@ async def _stream_vlm_response(
                 _is_reasoning = getattr(output, "current_state", None) == "reasoning"
                 _vlm_token_text = output.token_text or ""
                 _vlm_is_final = output.finish_reason is not None
+                _chunk_lp = (
+                    _format_chat_logprobs(
+                        output.logprobs,
+                        tokenizer=getattr(vlm_engine, "_tokenizer", None),
+                        top_logprobs=req.top_logprobs,
+                    )
+                    if req.logprobs and getattr(output, "logprobs", None)
+                    else None
+                )
+                if tool_streamer is not None and _chunk_lp:
+                    # The parser can buffer a token or emit several tool deltas.
+                    # Send its target report once, independently of those deltas.
+                    yield format_openai_chunk(
+                        completion_id=completion_id,
+                        model=req.model,
+                        delta_content="",
+                        include_role=first_chunk,
+                        logprobs=_chunk_lp,
+                    )
+                    first_chunk = False
+                    _chunk_lp = None
+                    if not _vlm_token_text:
+                        continue
                 if _is_reasoning:
-                    if _vlm_token_text or not _vlm_is_final:
+                    if _vlm_token_text or not _vlm_is_final or _chunk_lp:
                         yield format_openai_chunk(
                             completion_id=completion_id,
                             model=req.model,
@@ -2970,6 +2998,7 @@ async def _stream_vlm_response(
                             thinking_content=_vlm_token_text,
                             finish_reason=None,
                             include_role=first_chunk,
+                            logprobs=_chunk_lp,
                         )
                         first_chunk = False
                 elif tool_streamer is not None and _vlm_token_text:
@@ -2978,22 +3007,14 @@ async def _stream_vlm_response(
                     ):
                         yield chunk
                 else:
-                    if _vlm_token_text or not _vlm_is_final:
+                    if _vlm_token_text or not _vlm_is_final or _chunk_lp:
                         yield format_openai_chunk(
                             completion_id=completion_id,
                             model=req.model,
                             delta_content=_vlm_token_text,
                             finish_reason=None,  # intermediate: always None
                             include_role=first_chunk,
-                            logprobs=(
-                                _format_chat_logprobs(
-                                    output.logprobs,
-                                    tokenizer=getattr(vlm_engine, "_tokenizer", None),
-                                    top_logprobs=req.top_logprobs,
-                                )
-                                if req.logprobs and getattr(output, "logprobs", None)
-                                else None
-                            ),
+                            logprobs=_chunk_lp,
                         )
                         first_chunk = False
 
@@ -3940,6 +3961,8 @@ def _format_chat_logprobs(
             raw_top = raw_top[:top_logprobs]
         decoded_top = []
         for tlp in raw_top:
+            if not math.isfinite(tlp.get("logprob", 0.0)):
+                continue
             tlp_token = tlp.get("token", "")
             if not tlp_token and tokenizer and "token_id" in tlp:
                 try:

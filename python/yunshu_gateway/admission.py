@@ -198,11 +198,18 @@ def classify_request(body: dict[str, Any]) -> None:
     """Attach scheduling metadata to the request record, never to the model input."""
     from yunshu_engine.request_tracker import current_request_info
 
+    from .engine import get_engine, get_model_manager
     from .x_yunshu import RequestInfo, queue_snapshot
 
+    engine = get_engine()
+    manager = get_model_manager()
+    if manager is not None:
+        entry = manager.get_entry(body.get("model", ""))
+        engine = entry.engine if entry is not None else None
+    qualified = bool(getattr(engine, "_prefix_invariant_dispatch", False))
     info = current_request_info.get()
-    if isinstance(info, RequestInfo) and settings.get_bool(
-        "YUNSHU_AUXILIARY_SCHEDULING"
+    if isinstance(info, RequestInfo) and settings.scheduling_enabled(
+        "YUNSHU_AUXILIARY_SCHEDULING", qualified=qualified
     ):
         kind = auxiliary_kind(body)
         info.scheduling_priority = -1 if kind else 0

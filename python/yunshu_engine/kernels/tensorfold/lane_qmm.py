@@ -265,7 +265,7 @@ def supports(weight: mx.array, scales: mx.array, x: mx.array, bits: int, group_s
 
 
 def lane_matmul(x: mx.array, weight: mx.array, sbt: mx.array, *, tiled: bool = False,
-                sk: int | None = None, nt: int = NT, group: int = 64, row_block: int | None = None) -> mx.array:
+                sk: int | None = None, nt: int = NT, group: int = 64, row_block: int | None = None, row_limit: int = MAX_ROWS) -> mx.array:
     """x (..., K) bf16 times the packed ``weight`` (N, K*bits/32) transposed, rows <= MAX_ROWS, tiled or not."""
 
     K = int(x.shape[-1])
@@ -273,8 +273,10 @@ def lane_matmul(x: mx.array, weight: mx.array, sbt: mx.array, *, tiled: bool = F
     lead = x.shape[:-1]
     x2 = x.reshape(-1, K)
     M = int(x2.shape[0])
-    if M > MAX_ROWS:
-        raise ValueError(f"lane_matmul takes at most {MAX_ROWS} rows, got {M}")
+    if not 1 <= row_limit <= 512:
+        raise ValueError("lane_matmul row_limit must be in 1..512")
+    if M > row_limit:
+        raise ValueError(f"lane_matmul takes at most {row_limit} rows, got {M}")
     bits = weight_bits(weight, K)
     if not readable(bits, group):
         raise ValueError(f"lane_matmul takes {'/'.join(map(str, BITS))}-bit weights in groups of 64 (4-bit also 32), "
