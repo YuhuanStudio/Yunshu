@@ -178,12 +178,13 @@ def serve(
     """Start Yunshu inference server."""
     import uvicorn
 
+    from ._output import fail
+
     if model_ref and model and model_ref != model:
-        console.print(
-            "[red]Error:[/] The positional model and --model disagree. "
-            "Use one model reference."
+        fail(
+            "The positional model and --model disagree. Use one model reference.",
+            code=2,
         )
-        raise typer.Exit(2)
     model = model_ref or model
 
     # Flags and --set become highest-precedence settings. They are also
@@ -216,8 +217,7 @@ def serve(
         if not sep or name not in settings.REGISTRY:
             close = settings.close_matches(name)
             hint = f" (did you mean {', '.join(close)}?)" if close else ""
-            console.print(f"[red]Error:[/] --set {item!r}: unknown setting{hint}")
-            raise typer.Exit(2)
+            fail(f"--set {item!r}: unknown setting{hint}", code=2)
         overrides[name] = value
     for key, value in overrides.items():
         settings.set_override(key, value)
@@ -225,8 +225,7 @@ def serve(
         for warning in settings.validate(warn=False):
             console.print(f"[yellow]Warning:[/] {warning}")
     except settings.SettingError as exc:
-        console.print(f"[red]Error:[/] {exc}")
-        raise typer.Exit(2) from None
+        fail(str(exc), code=2)
 
     # Fail before importing/loading a checkpoint when the chosen TCP endpoint
     # cannot bind. Uvicorn remains the authority at startup (another process
@@ -235,12 +234,12 @@ def serve(
         try:
             _check_bind_address(host, port)
         except OSError as exc:
-            console.print(
-                f"[red]Error:[/] Cannot listen on {host}:{port}: {exc}. "
+            fail(
+                f"Cannot listen on {host}:{port}: {exc}. "
                 "Choose another --port (for example --port 8001), "
-                "or stop the server already using this address."
+                "or stop the server already using this address.",
+                code=2,
             )
-            raise typer.Exit(2) from None
 
     env = os.environ.copy()
     env.update({k: settings._to_text(v) for k, v in overrides.items()})
