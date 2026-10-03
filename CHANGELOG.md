@@ -123,6 +123,10 @@ October 3 results use three interleaved clean repetitions. Sources and limitatio
   accept empty tool arguments, keep tool-call argument types from the tool schema in
   history, and end GLM tool-result turns correctly.
 
+- macOS virtual machines (Apple Paravirtual GPU, e.g. hosted CI runners): the server uses the stock
+  runner there, without the prefix cache or speculative decoding, because that virtual GPU's
+  arithmetic differs by prefill span; physical Apple GPUs are unaffected.
+
 ### Security
 
 - No separate security-policy change in this range. Model leases and cache-reader

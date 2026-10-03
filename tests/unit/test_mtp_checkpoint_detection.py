@@ -111,6 +111,10 @@ def test_unindexed_head_warns_in_doctor_and_startup(caplog, monkeypatch, tmp_pat
     engine = object.__new__(VLMEngine)
     engine._config = json.loads((tmp_path / "config.json").read_text())
     engine._model = SimpleNamespace(language_model=object())
+    # This test exercises speculative startup selection, not VM admission.
+    monkeypatch.setattr(
+        "yunshu_engine.utils.hardware.is_paravirtual_metal", lambda: False
+    )
     monkeypatch.setattr(VLMEngine, "_round_driver_wanted", lambda *_: False)
     monkeypatch.setattr(spec_select, "choose", stop_at_selection)
     with pytest.raises(SelectionReachedError):
