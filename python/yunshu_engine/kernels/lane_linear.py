@@ -2,7 +2,7 @@
 """Row-invariant quantized projections for the round driver (any row count).
 
 TensorFold's lane matmul (``kernels.tensorfold.lane_qmm``, MIT) multiplies bf16
-rows by MLX affine-quantized weights (2..8 bits) with GPU-provided cooperative tensor coordinates and a
+rows by MLX affine-quantized weights (2..8 bits) with hardware-selected cooperative tensor fragment layouts and a
 per-group fma order fixed by the weight shape: a row's result has the same bits
 whether it is alone or one of up to 128 rows in the call. ``LaneLinear`` holds
 a projection in the kernel's layout (weight tiled 32 columns wide, group-major

@@ -122,7 +122,7 @@
       "local_changes": [
         "imports point at yunshu_engine.kernels.tensorfold (inputs, lane_widen)",
         "lane_matmul takes row_block (rows per threadgroup; bit-identical to the default block, faster at 17-48 rows on wide projections)",
-        "cooperative tensor coordinates come from get_multidimensional_index, not an M5-specific fragment layout; one-time numerical admission"
+        "hardware selected once: original M5 fragment source on g17/g18, portable get_multidimensional_index elsewhere; numerical admission only for unknown generations"
       ],
       "why": "integer-code tensor-unit matmul (5/6/8-bit via uint8 widening), used by kernels/int_code_linear.py",
       "kind": "vendored"
@@ -134,7 +134,27 @@
       "upstream_path": "src/tensorfold/kernels/qwen/dense/v1/lane_widen.py",
       "commit": "34bae79a",
       "license": "MIT",
-      "local_changes": ["cooperative tensor element coordinates queried through MPP for M1-M5 portability"],
+      "local_changes": ["cooperative tensor element coordinates queried through MPP for M1-M4 portability; original M5 strings selected on g17/g18"],
+      "kind": "vendored"
+    },
+    {
+      "path": "python/yunshu_engine/kernels/tensorfold/lane_m5.py",
+      "repo": "https://github.com/ashhart/TensorFold",
+      "clone": "reference/TensorFold",
+      "upstream_path": "src/tensorfold/kernels/qwen/dense/v1/lane_qmm.py",
+      "commit": "34bae79a",
+      "license": "MIT",
+      "local_changes": ["main 38ac21ed M5 fragment source strings preserved byte-for-byte"],
+      "kind": "vendored"
+    },
+    {
+      "path": "python/yunshu_engine/kernels/tensorfold/lane_widen_m5.py",
+      "repo": "https://github.com/ashhart/TensorFold",
+      "clone": "reference/TensorFold",
+      "upstream_path": "src/tensorfold/kernels/qwen/dense/v1/lane_widen.py",
+      "commit": "34bae79a",
+      "license": "MIT",
+      "local_changes": ["main 38ac21ed M5 widening source strings preserved byte-for-byte"],
       "kind": "vendored"
     },
     {
