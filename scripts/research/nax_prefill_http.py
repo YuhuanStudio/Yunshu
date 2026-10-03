@@ -16,6 +16,14 @@ import sys
 from pathlib import Path
 
 
+def dispatch_receipt(log):
+    """A live dispatch receipt survives server shutdown without atexit hooks."""
+    for line in log.splitlines():
+        if "NAX_DISPATCH_ENGAGED " in line:
+            return json.loads(line.split("NAX_DISPATCH_ENGAGED ", 1)[1])
+    return None
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument(
@@ -169,15 +177,10 @@ atexit.register(lambda: print('NAX_DISPATCH_RECEIPT ' + json.dumps(dict(arm={a.a
             launcher.unlink()
     receipt = None
     if custom:
-        receipts = [
-            line.split("NAX_DISPATCH_RECEIPT ", 1)[1]
-            for line in server.log.read_text().splitlines()
-            if "NAX_DISPATCH_RECEIPT " in line
-        ]
-        if not receipts:
+        receipt = dispatch_receipt(server.log.read_text())
+        if not receipt and not a.model:
             raise RuntimeError("dispatch receipt missing")
-        receipt = json.loads(receipts[-1])
-        if not a.model and not receipt["calls"]:
+        if not a.model and (receipt["arm"] != a.arm or not receipt["calls"]):
             raise RuntimeError("candidate prefill dispatch did not engage")
     row = dict(
         phase="complete",

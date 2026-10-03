@@ -1,7 +1,7 @@
 """Paired 200-question cold arithmetic gate with raw IDs and all token LPs.
 
-The actual prompt is exactly 2049 tokens, so its first 2048-row prefill must
-exercise the candidate. Run via gpuq without --quiet (correctness job).
+The canonical prefill plan separates the three-token assistant header, so an
+actual 2051-token prompt exercises 2048 candidate rows. Run without --quiet.
 """
 
 from __future__ import annotations
@@ -15,6 +15,16 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "python"))
+
+HEADER_TOKENS = 3
+PREFILL_ROWS = 2048
+DEFAULT_PROMPT_TOKENS = PREFILL_ROWS + HEADER_TOKENS
+
+
+def clipped_prompt(ids, total_tokens=DEFAULT_PROMPT_TOKENS):
+    if total_tokens < 129 or len(ids) < total_tokens:
+        raise ValueError("insufficient neutral padding / invalid total tokens")
+    return list(ids[: total_tokens - 128]) + list(ids[-128:])
 
 
 def question(index):
@@ -39,6 +49,7 @@ def main():
         required=True,
     )
     p.add_argument("--items", type=int, default=200)
+    p.add_argument("--prompt-tokens", type=int, default=DEFAULT_PROMPT_TOKENS)
     p.add_argument(
         "--model", default="/Volumes/P5Plus/models/Jundot/Qwen3.8-27B-oQ4e-mtp"
     )
@@ -47,6 +58,8 @@ def main():
     a = p.parse_args()
     if a.items < 1:
         p.error("--items must be positive")
+    if a.prompt_tokens < 129:
+        p.error("--prompt-tokens must preserve the 128-token question tail")
     if a.dry_run:
         print(json.dumps(vars(a), default=str))
         return
@@ -82,11 +95,11 @@ def main():
                     False,
                     {"enable_thinking": False},
                 ).result()
-                if len(ids) < 2049:
+                if len(ids) < a.prompt_tokens:
                     raise RuntimeError("insufficient neutral padding")
                 # Remove only the middle of the neutral padding; preserve all
                 # question/template tokens in the final 128-token tail.
-                ids = list(ids[:1921]) + list(ids[-128:])
+                ids = clipped_prompt(ids, a.prompt_tokens)
                 results = {}
                 for arm in ("base", a.arm) if index % 2 == 0 else (a.arm, "base"):
                     engine._executor.submit(dispatch.install, arm).result()
@@ -110,7 +123,7 @@ def main():
                     count = sum(dispatch.calls.values())
                     if arm != "base" and "27B" in a.model and not count:
                         raise RuntimeError(
-                            "candidate did not engage on the long prompt"
+                            f"candidate did not engage; observed rows={dict(dispatch.observed_rows)}"
                         )
                     text = tok.decode(tokens, skip_special_tokens=True).strip()
                     match = re.fullmatch(r"\s*(-?\d+)\s*", text)

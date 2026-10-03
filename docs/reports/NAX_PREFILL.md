@@ -164,3 +164,76 @@ cold requests must include the first construction cost.
 GPU jobs, completed results and decisions are recorded in the worker report
 and harvest JSON. Only a shipped, measured serving improvement belongs in
 `PERF_TREND.md`.
+
+## Fine operation breakdown and the measured candidate
+
+`1003-171419-00-nax-phase2-quiet-1715` finished rc0 with all four arm outputs
+complete and `contended=false` (foreign CPU max 238.7%, threshold 1620%). Its
+2048-row classified forward took 2.476 s with per-op fences. Resolving lazy
+inputs and splitting nested timers gives:
+
+| Class | Seconds per 2048-row forward | Projection TFLOP/s |
+|---|---:|---:|
+| MLP gate/up | 0.834 | 56.02 |
+| MLP down | 0.465 | 50.23 |
+| GDN input projections (including narrow gates) | 0.350 | 47.46 |
+| GDN output projection | 0.126 | 49.00 |
+| Attention QKV | 0.097 | 49.56 |
+| Attention output | 0.041 | 50.59 |
+| All stock layout restoration | 0.228 | — |
+| Native chunked GDN core | 0.066 | — |
+| Layer norms + GDN QK/gated norms | 0.056 | — |
+| SDPA | 0.025 | — |
+| GDN convolution | 0.016 | — |
+| GDN gates/cache preparation | 0.010 | — |
+
+The remaining time is unclassified producers and host/fence overhead. These
+times explain classes, not HTTP TTFT; their synchronization schedule differs
+from the plain forward. In particular, the earlier coarse GDN timer included
+lazy convolution/normalization producers and must not be called pure core time.
+
+The candidate reads the existing lane layout directly, including the paired
+group-major scales/biases, and reuses MLX's native dequantizer, NAX tile MAC,
+K loop, float32 accumulation and output conversion. It uses BM128/BN64/BK64,
+with BM64 retained for M>4096 and K>8192. The complementary narrow gate arm
+uses the existing lane kernel with its original 32-row arithmetic block and
+one full aligned prefill span instead of 128-row pieces. No extra resident
+weight layout is needed.
+
+Three interleaved plain forwards (same job, 2048-row spans):
+
+| Median forward seconds | Stock | Tile128, stock layout | Direct loader | Narrow only | Combined |
+|---|---:|---:|---:|---:|---:|
+| 8K | 8.317 | 8.242 | 7.694 | 8.550 | 7.657 |
+| 32K | 38.035 | 36.187 | 34.747 | 37.104 | 34.591 |
+
+All candidate hidden outputs and complete native cache arrays are bit-equal to
+stock, with explicit engaged-call counters (400 wide /96 narrow projections
+per complete span). Baseline runs show some variance despite clean CPU
+admission; final adoption depends on HTTP pairs and correctness gates.
+
+`1003-180051-00-nax-http-paired-1800` finished rc0 + complete, quiet, foreign
+CPU max 158.1%, threshold 1620%. Three balanced independent server sessions per
+context/arm, greedy 256 output tokens, MTP explicitly engaged, cold cached=0:
+
+| Cold HTTP TTFT median ms | Main baseline | Combined candidate | Historical TensorFold |
+|---|---:|---:|---:|
+| 8K prose | 8451 | 7793 | 8396 |
+| 8K code | 8453 | 7784 | 8399 |
+| 32K prose | 36934 | 34334 | 39035 |
+| 32K code | 36959 | 34359 | 39098 |
+
+Every paired request hash and complete response digest is identical. Server
+logs show real candidate dispatch and MTP. TF values are the earlier
+`PERF_TREND.md` measurements, with DFlash2, not a new simultaneous TF run.
+The first 8K prose candidate session was 8546 ms versus stock 8451 ms; later
+pairs saved 7.65/8.97%. Thus its first cold shader-compilation cost is visible
+and must not be hidden by the median. All three 8K code pairs save 7.86–8.82%;
+32K prose pairs save 6.96–7.80%, code 7.03–9.18%. The prepared serving module
+can compile its tiny tile variants during model setup to move that one-time
+cost before readiness; this setup cost remains part of model loading.
+
+Raw summaries: `nax-phase2-model-summary.json`, `nax-http-paired-summary.json`
+under `/Volumes/P5Plus/yunshu-build/codex`. The production module is prepared
+with fail-closed version/device/shape checks and a source-hashed arithmetic ID;
+it is not yet connected to serving pending paired accuracy and APC identity.

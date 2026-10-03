@@ -38,3 +38,27 @@ def test_header_keeps_buffer_address_spaces_and_omits_builtin_utils():
     assert re.search(r"const int [KNM]\s*\[\[buffer", header) is None
     assert "const constant int& K [[buffer" in header
     assert "const int K," in header
+
+
+def test_http_accepts_live_dispatch_marker_without_atexit():
+    path = ROOT / "scripts/research/nax_prefill_http.py"
+    spec = importlib.util.spec_from_file_location("nax_http_probe", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    receipt = module.dispatch_receipt(
+        'startup\nNAX_DISPATCH_ENGAGED {"arm":"tile128","calls":1,"rows":2048}\nshutdown\n'
+    )
+    assert receipt == {"arm": "tile128", "calls": 1, "rows": 2048}
+    assert module.dispatch_receipt("startup\nshutdown\n") is None
+
+
+def test_quality_prompt_includes_the_separate_assistant_header():
+    path = ROOT / "scripts/research/nax_prefill_quality.py"
+    spec = importlib.util.spec_from_file_location("nax_quality_probe", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    ids = list(range(5000))
+    result = module.clipped_prompt(ids)
+    assert len(result) - module.HEADER_TOKENS == 2048
+    assert result[-128:] == ids[-128:]
+    assert result[:100] == ids[:100]

@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import json
 from collections import Counter
 
 _original = None
 _maximum = None
 calls = Counter()
+observed_rows = Counter()
 
 
 def install(arm):
@@ -23,6 +25,7 @@ def install(arm):
     lane_linear.LaneLinear.__call__ = _original
     lane_qmm.MAX_ROWS = _maximum
     calls.clear()
+    observed_rows.clear()
     if arm == "base":
         return
     if arm not in ("tile128", "lane64", "lane128", "narrow", "combo"):
@@ -35,6 +38,8 @@ def install(arm):
         m = 1
         for size in lead:
             m *= size
+        if m > 512:
+            observed_rows[m] += 1
         common = (
             lane_linear.STOCK_ROWS
             and m > lane_linear.STOCK_ROWS
@@ -79,6 +84,21 @@ def install(arm):
                     sbt=self.sbt,
                 )
             y = fn()
+        if not calls:
+            print(
+                "NAX_DISPATCH_ENGAGED "
+                + json.dumps(
+                    dict(
+                        arm=arm,
+                        calls=1,
+                        rows=m,
+                        k=self.input_dims,
+                        n=self.output_dims,
+                        bits=self.bits,
+                    )
+                ),
+                flush=True,
+            )
         calls[(arm, self.bits, m, self.input_dims, self.output_dims)] += 1
         if "bias" in self:
             y = y + self["bias"]
