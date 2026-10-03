@@ -379,3 +379,34 @@ def test_rejected_deferred_admission_does_not_publish_policy(monkeypatch):
     assert policy["written"] == 0
     assert manager._retention == {}
     assert manager._span_plans == {}
+
+
+def test_one_token_completion_waits_for_deferred_publication():
+    events = []
+    policy = {"written": 0}
+
+    def flush():
+        policy["written"] = 113
+        events.append("flush")
+
+    coordinator = SimpleNamespace(
+        defer_checkpoint_stores=False, flush_deferred_checkpoints=flush
+    )
+    response = SimpleNamespace(uid=1, token=42, finish_reason="length")
+    runner = vbr.VLMBatchRunner(SimpleNamespace(language_model=object()), None)
+    runner._emit = lambda *args: events.append("emit")
+    runner._note_cache = lambda *args: None
+    runner._note_prefill = lambda *args: None
+
+    def finish(*args):
+        assert policy["written"] == 113
+        events.append("done")
+
+    runner._finish = finish
+    job = SimpleNamespace(stats=vbr.RunStats(), start=0.0, logprobs=False)
+    group = vbr._Group(
+        SimpleNamespace(next=lambda: ([], [response]), apc=coordinator), spec=False
+    )
+    group.jobs[1] = job
+    runner._step_generator(group)
+    assert events == ["emit", "flush", "done"]

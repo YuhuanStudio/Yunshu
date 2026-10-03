@@ -971,6 +971,7 @@ class VLMBatchRunner:
             if job is not None:
                 job.stats.cached_tokens = int(getattr(progress, "cached_tokens", 0))
                 self._note_cache(job)
+        finished = []
         for response in responses:
             job = group.jobs.get(response.uid)
             if job is None:
@@ -983,7 +984,7 @@ class VLMBatchRunner:
                 stats.t_first = now
                 stats.prefill_done = stats.prefill_total
             if response.token is None:
-                self._finish(group, response.uid, response.finish_reason or "stop")
+                finished.append((response.uid, response.finish_reason or "stop"))
                 continue
             stats.generated += 1
             lp = None
@@ -998,11 +999,15 @@ class VLMBatchRunner:
                 }
             self._emit(job, (int(response.token), lp))
             if response.finish_reason is not None:
-                self._finish(group, response.uid, response.finish_reason)
+                finished.append((response.uid, response.finish_reason))
         # The consumer can detokenize/send the first token while checkpoint
         # copies and admission run on this same serialized MLX thread.
         if responses and flush is not None:
             flush()
+        # Completion/usage must observe publication even for a one-token reply.
+        # The first token was already emitted, so this keeps stores off TTFT.
+        for uid, reason in finished:
+            self._finish(group, uid, reason)
 
     def _observe_prefill(self, job: _Job) -> None:
         """Tell the storage tiers how fast prefill really is (their cost model compares a
