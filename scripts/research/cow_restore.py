@@ -7,46 +7,26 @@ from the stored prefix without an intermediate full-prefix clone.
 
 
 def install():
-    import mlx.core as mx
     from mlx_vlm import apc_adapters
-    from mlx_vlm.models.cache import ArraysCache, KVCache
+    from yunshu_engine.kernels.cache_restore import clone_native_restore
 
     original = apc_adapters.clone_cache_entry
     counts = {"enabled": True, "view_restores": 0}
 
-    def own(tree):
-        if isinstance(tree, mx.array):
-            return mx.contiguous(tree.view(tree.dtype))
-        if isinstance(tree, list):
-            return [own(value) for value in tree]
-        if isinstance(tree, tuple):
-            return tuple(own(value) for value in tree)
-        if isinstance(tree, dict):
-            return {key: own(value) for key, value in tree.items()}
-        return tree
-
     def clone(c, *, min_capacity_tokens, eval_targets):
-        if (
-            not counts["enabled"]
-            or min_capacity_tokens is None
-            or type(c) not in (KVCache, ArraysCache)
-        ):
-            return original(
+        restored = (
+            clone_native_restore(
                 c, min_capacity_tokens=min_capacity_tokens, eval_targets=eval_targets
             )
-        if type(c) is KVCache:
-            out = KVCache.from_state(own(c.state), c.meta_state)
-        else:
-            out = ArraysCache(len(c.cache))
-            out.prefix_cache_restore(own(c.prefix_cache_snapshot()))
-        apc_adapters._eval_tree(out.state, eval_targets)
-        apc_adapters.reserve_checkpoint_capacity(
-            out,
-            min_capacity_tokens=min_capacity_tokens,
-            eval_targets=eval_targets,
+            if counts["enabled"]
+            else None
         )
-        counts["view_restores"] += 1
-        return out
+        if restored is not None:
+            counts["view_restores"] += 1
+            return restored
+        return original(
+            c, min_capacity_tokens=min_capacity_tokens, eval_targets=eval_targets
+        )
 
     apc_adapters.clone_cache_entry = clone
 

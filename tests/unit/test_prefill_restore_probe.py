@@ -106,9 +106,27 @@ def test_async_restore_keeps_store_synchronous_and_native_restore_isolated():
     assert apc._clone_prompt_cache_for_apc is original
 
 
-def test_final_barrier_transform_preserves_publication_and_restores_sources():
+def select_m5_sources(monkeypatch):
+    from yunshu_engine.kernels.tensorfold import (
+        lane_m5,
+        lane_qmm,
+        lane_widen,
+        lane_widen_m5,
+    )
+
+    monkeypatch.setattr(lane_qmm, "_resolve_variant", lambda: "m5")
+    monkeypatch.setattr(lane_qmm, "_MAIN", lane_m5._MAIN)
+    monkeypatch.setattr(lane_qmm, "_MAIN_TILED", lane_m5._MAIN)
+    monkeypatch.setattr(lane_widen, "NIBBLES", lane_widen_m5.NIBBLES)
+    monkeypatch.setattr(lane_widen, "BYTES", lane_widen_m5.BYTES)
+
+
+def test_final_barrier_transform_preserves_publication_and_restores_sources(
+    monkeypatch,
+):
     from yunshu_engine.kernels.tensorfold import lane_qmm, lane_widen
 
+    select_m5_sources(monkeypatch)
     module_spec = importlib.util.spec_from_file_location(
         "lane_final_barrier",
         Path(__file__).resolve().parents[2] / "scripts/research/lane_final_barrier.py",
@@ -141,6 +159,7 @@ def test_paired32_keeps_decode_non4bit_and_coop_on_shipped_schedule(monkeypatch)
 
     from yunshu_engine.kernels.tensorfold import lane_qmm
 
+    select_m5_sources(monkeypatch)
     module_spec = importlib.util.spec_from_file_location(
         "lane_paired32",
         Path(__file__).resolve().parents[2] / "scripts/research/lane_paired32.py",

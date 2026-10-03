@@ -31,6 +31,9 @@ def transform(source):
 def install():
     from yunshu_engine.kernels.tensorfold import lane_qmm
 
+    if lane_qmm._resolve_variant() != "m5":
+        raise RuntimeError("this scheduling experiment requires the M5 tensor sources")
+
     original_main = lane_qmm._MAIN
     original_tiled = lane_qmm._MAIN_TILED
     original_matmul = lane_qmm.lane_matmul

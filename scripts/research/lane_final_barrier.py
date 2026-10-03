@@ -9,6 +9,9 @@ partial publication order are unchanged.
 def install():
     from yunshu_engine.kernels.tensorfold import lane_qmm, lane_widen
 
+    if lane_qmm._resolve_variant() != "m5":
+        raise RuntimeError("this scheduling experiment requires the M5 tensor sources")
+
     targets = [
         (lane_qmm, "_MAIN"),
         (lane_qmm, "_MAIN_TILED"),
