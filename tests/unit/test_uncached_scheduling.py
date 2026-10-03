@@ -359,3 +359,29 @@ def test_cancel_final_window_before_first_token_clears_priority(atoms):
     assert not suffix.stats.generated
     assert next_job.stats.generated == 2
     assert not r.busy()
+
+
+def test_executed_atom_latches_its_remaining_final_window(atoms):
+    r, _ = atoms
+    cold = job(0)
+    cold.ids = list(range(8192))
+    r._submit(cold)
+    r._drive_slice(False)
+    suffix = job(0)
+    suffix.ids = list(range(3000))
+    suffix.max_tokens = 100
+    r._submit(suffix)
+    r._drive_slice(False)
+    assert cold.prefill_skips == 1
+    assert suffix.stats.prefill_done == 2048
+    r._drive_slice(False)
+    assert suffix.stats.prefill_done == 3000
+    assert cold.stats.prefill_done == 2048
+    r._drive_slice(False)
+    assert suffix.stats.t_first
+    assert cold.stats.prefill_done == 2048
+    g = r._groups()[0]
+    assert [a[1:] for a in g.gen.atoms if a[0] == suffix.uid] == [
+        (0, 2048),
+        (2048, 952),
+    ]

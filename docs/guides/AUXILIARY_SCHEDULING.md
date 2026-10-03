@@ -240,3 +240,21 @@ The predecessor 0.8B smoke (`1003-102420-00-i8-tiny-smoke-1027`) stalled with
 rc -2 while waiting for arm 1's title; only arm 0 completed. It had the captured
 32000-token title output limit and no final complete record. It is not a parity
 pass and establishes no timing claim for 0.8B. Its servers were cleaned up.
+
+
+## Next-iteration final-window dispatch (awaiting quiet measurements)
+
+The opt-in work policy carries an interactive request through its remaining
+2048-token window and first-token delivery before repaying decode debt. This
+continuation is latched after an executed atom enters that window, including a
+partially cached suffix that needs more than one atom. Every canonical checkpoint
+and token span stays with the generator. A long waiter keeps FIFO protection
+after one overtaking atom; the already-selected request can finish its bounded
+window before that protection resumes. New arrivals cannot repeat the bypass.
+Cancellation removes both the saved prefill and deferred checkpoint captures.
+
+The tiny-model probe's original stall was silent continued generation, rather
+than a scheduler with no progress: instrumented output reached 19,949 tokens
+before the diagnostic's deadline. On the merged version both 0.8B arms complete
+their title streams, but title digests differ. It is a transport/liveness probe,
+not lossless evidence for the small model. Both deployment options remain off.

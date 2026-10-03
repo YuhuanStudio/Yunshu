@@ -1405,6 +1405,15 @@ class VLMBatchRunner:
                 if job.stats.t_first or (selected and job is selected_job):
                     job.last_service = time.perf_counter()
             if selected_job is not None:
+                if (
+                    selected_job.priority >= 0
+                    and not selected_job.stats.t_first
+                    and self._work(selected_job).uncached_tokens <= PREFILL_STEP
+                ):
+                    # This executed atom may have entered the final window.
+                    # Finish the same overtaking episode before FIFO protection
+                    # returns to the other waiter, preserving every span.
+                    selected_job.finishing_prefill = True
                 # Bound overtaking in executed atoms, independent of arrival
                 # rate and the latency of the competing short requests.
                 for _, waiter in candidates:

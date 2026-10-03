@@ -141,6 +141,7 @@ def main():
             try:
                 server.start(ready_timeout=86400)
                 record("prime", _send(server.url, warm))
+                mixed_start = time.perf_counter()
                 with ThreadPoolExecutor(max_workers=2) as pool:
                     aux = pool.submit(_send, server.url, title)
                     time.sleep(0.3)
@@ -149,6 +150,7 @@ def main():
                     for i, body in enumerate(suffixes):
                         record(f"suffix-{i}", _send(server.url, body))
                     record("cold", long.result())
+                    main_wall_s = time.perf_counter() - mixed_start
                     record("title", aux.result())
                 if not args.tiny and "Speculative decoding: mtp" not in log.read_text():
                     raise AssertionError("missing checkpoint MTP engagement")
@@ -161,7 +163,9 @@ def main():
                 record(
                     "complete",
                     dict(
-                        source_sha256=source, engaged_mode="off" if args.tiny else "mtp"
+                        source_sha256=source,
+                        main_wall_s=main_wall_s,
+                        engaged_mode="off" if args.tiny else "mtp",
                     ),
                 )
             finally:

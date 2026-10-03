@@ -2,7 +2,9 @@
 
 Estimates affect dispatch only. Cache lookup, token spans and sampling stay with
 those requests' existing generators. After one overtaking atom, an interactive
-waiter retains FIFO protection until its prefill completes; a stream of small arrivals cannot starve it.
+waiter retains FIFO protection until its prefill completes. A selected atom that
+enters its final 2048-token window finishes that episode through first-token
+delivery before FIFO protection resumes; new arrivals cannot repeat the bypass.
 """
 
 from __future__ import annotations
