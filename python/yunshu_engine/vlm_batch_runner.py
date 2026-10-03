@@ -1389,12 +1389,16 @@ class VLMBatchRunner:
                     self._decode_debt = DECODE_QUANTUM_S
                 elif not first_pending:
                     self._decode_debt = max(0.0, self._decode_debt - elapsed)
-                batch = getattr(group.gen, "_prompt_batch", None)
-                if batch is not None:
-                    (uid,) = batch.uids
-                    group.prefills[uid] = batch
-                    group.gen._prompt_batch = None
                 return
+
+        # A singleton keeps the ordinary live prompt batch. Park it only
+        # when a peer appears, before selecting another canonical atom.
+        for group in groups:
+            batch = getattr(group.gen, "_prompt_batch", None)
+            if batch is not None:
+                (uid,) = batch.uids
+                group.prefills[uid] = batch
+                group.gen._prompt_batch = None
 
         candidates = [
             (g, j)

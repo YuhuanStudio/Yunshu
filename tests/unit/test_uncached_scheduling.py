@@ -40,6 +40,8 @@ class AtomGen(FakeGen):
     def remove(self, uid):
         super().remove(uid)
         self._generation_batch.pop(uid, None)
+        if self._prompt_batch is not None and uid in self._prompt_batch.uids:
+            self._prompt_batch = None
         self._unprocessed_sequences = [
             s for s in self._unprocessed_sequences if s[0] != uid
         ]
@@ -134,7 +136,7 @@ def test_short_arrival_bypasses_suspended_cold_atom_and_resumes_state(atoms):
     r._submit(cold)
     r._drive_slice(False)
     g = r._groups()[0]
-    saved = g.prefills[cold.uid]
+    saved = g.gen._prompt_batch
     short = job(0)
     r._submit(short)
     r._drive_slice(False)
@@ -181,7 +183,7 @@ def test_cancel_suspended_prefill_releases_state(atoms):
     r._submit(cold)
     r._drive_slice(False)
     g = r._groups()[0]
-    assert cold.uid in g.prefills
+    assert g.gen._prompt_batch is not None
     cold.cancel_event.set()
     r._drive_slice(False)
     assert not g.prefills and not r.busy()
@@ -586,3 +588,19 @@ def test_two_40ms_decode_steps_release_a_canonical_atom(atoms, monkeypatch):
     r._drive_slice(False)
     assert cold.stats.prefill_done == 2048
     assert dec.stats.generated >= 3
+
+
+def test_singleton_keeps_live_batch_until_a_peer_needs_dispatch(atoms):
+    r, _ = atoms
+    first = job(0)
+    first.ids = list(range(8192))
+    r._submit(first)
+    r._drive_slice(False)
+    group = r._groups()[0]
+    live = group.gen._prompt_batch
+    assert live is not None and not group.prefills
+    second = job(0)
+    r._submit(second)
+    r._drive_slice(False)
+    assert group.prefills[first.uid] is live
+    assert second.finishing_prefill

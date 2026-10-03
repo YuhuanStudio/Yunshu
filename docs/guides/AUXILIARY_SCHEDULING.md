@@ -282,3 +282,9 @@ foreground group/request, dispatch uses its ordinary generator step, preserving
 saved prompt state and debt accounting without repeatedly scoring cache metadata.
 Competing candidates share one estimate snapshot per slice; actual progress is
 still revalidated after the selected step.
+
+The singleton path now keeps its prompt batch live in the generator between
+atoms, as ordinary stepping does. When a peer becomes eligible, that same batch
+is parked before work selection and restored unchanged when selected again.
+Cancellation clears both live and parked states. The decode quantum is now
+75 ms, independent of the 100 ms handoff reservation.
