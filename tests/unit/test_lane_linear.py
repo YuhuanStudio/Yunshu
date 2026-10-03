@@ -7,14 +7,18 @@ mx = pytest.importorskip("mlx.core")
 nn = pytest.importorskip("mlx.nn")
 
 from yunshu_engine.kernels import lane_linear  # noqa: E402
-from yunshu_engine.kernels.ragged_attention import tile_ready  # noqa: E402
+from yunshu_engine.kernels.tensorfold.lane_qmm import ready  # noqa: E402
 
 pytestmark = pytest.mark.skipif(
-    not tile_ready(), reason="lane matmul needs M5-class tensor ops"
+    not ready(),
+    reason="lane tensor-op arithmetic self-test failed on this GPU / Metal compiler",
 )
 
 
-@pytest.mark.parametrize("bits,n", [(4, 3072), (5, 3072), (8, 1024), (4, 48), (5, 16)])
+@pytest.mark.parametrize(
+    "bits,n",
+    [(4, 3072), (5, 3072), (8, 1024), (4, 48), (5, 16), (2, 48), (3, 16), (6, 48)],
+)
 def test_rows_invariant_to_row_count(bits, n):
     mx.random.seed(1)
     lin = nn.Linear(512, n, bias=False)
