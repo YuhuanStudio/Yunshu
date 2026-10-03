@@ -45,11 +45,56 @@ def assert_no_full_unit_suites(processes=None):
     return active
 
 
+def restore_experiment_launcher(mode):
+    """Process-local research patches; no serving flag or APC arithmetic change."""
+    patch = ""
+    if mode in ("direct", "keep"):
+        patch += (
+            "import sys\n"
+            f"sys.path.insert(0, {str(Path(__file__).resolve().parent)!r})\n"
+            "from probe_prefill_restore import direct_clone\n"
+            "from mlx_vlm import apc_adapters\n"
+            "_clone = apc_adapters.clone_cache_entry\n"
+            "def _direct(c, **kwargs):\n"
+            "    return direct_clone(c, clone=_clone, **kwargs)\n"
+            "apc_adapters.clone_cache_entry = _direct\n"
+        )
+    if mode == "keep":
+        patch += (
+            "import mlx.core as mx\n"
+            "from yunshu_engine.kernels import buffer_cache\n"
+            "_install = buffer_cache.install\n"
+            "def _bounded_pool(limit_gib):\n"
+            "    result = _install(limit_gib)\n"
+            "    mx.set_cache_limit(buffer_cache._STATE['limit'])\n"
+            "    return result\n"
+            "buffer_cache.install = _bounded_pool\n"
+            "buffer_cache.clear_if_over = lambda: None\n"
+        )
+    if mode == "wide":
+        patch += (
+            "from yunshu_engine.kernels import lane_linear\n"
+            "from yunshu_engine.kernels.tensorfold import lane_qmm\n"
+            "lane_linear.PIECE = 512\n"
+            "lane_qmm.MAX_ROWS = 512\n"
+        )
+    return patch
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument(
         "--mode",
-        choices=("sync", "deferred", "reserved", "legacy", "tf"),
+        choices=(
+            "sync",
+            "deferred",
+            "reserved",
+            "legacy",
+            "tf",
+            "direct",
+            "keep",
+            "wide",
+        ),
         required=True,
     )
     ap.add_argument("--ctx", type=int, default=32768)
@@ -79,6 +124,7 @@ def main():
             if a.mode == "legacy"
             else ""
         )
+        + restore_experiment_launcher(a.mode)
         + "from yunshu_cli import main\nmain()\n"
     )
     launcher.chmod(0o700)

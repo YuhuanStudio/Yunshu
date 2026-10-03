@@ -1,0 +1,131 @@
+"""Modest paired arithmetic gate for the research-only wide lane dispatch.
+
+Score both arms on the same 200 questions. Equivalent token/logprob outputs
+score identically; a correctness difference above one item fails closed.
+"""
+
+import argparse
+import asyncio
+import hashlib
+import json
+import re
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "python"))
+
+
+def question(index):
+    left, right = 100 + (index * 7919) % 900, 10 + (index * 97) % 90
+    operation = "+" if index % 2 else "-"
+    answer = left + right if operation == "+" else left - right
+    # Exercise different suffix sizes and final dispatch tails (129..512).
+    padding = "This is background context; the final arithmetic question is the task. "
+    prompt = padding * (10 + index % 25)
+    prompt += f"\nCompute {left} {operation} {right}. Reply with only the integer."
+    return prompt, answer
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--out", type=Path, required=True)
+    ap.add_argument("--items", type=int, default=200)
+    ap.add_argument(
+        "--model", default="/Volumes/P5Plus/models/Jundot/Qwen3.8-27B-oQ4e-mtp"
+    )
+    a = ap.parse_args()
+    from yunshu_engine.kernels import lane_linear
+    from yunshu_engine.kernels.tensorfold import lane_qmm
+    from yunshu_engine.vlm_batch_runner import RunStats
+    from yunshu_engine.vlm_engine import VLMEngine
+
+    engine = VLMEngine(a.model)
+    asyncio.run(engine.start())
+    runner = engine._batch_runner
+    piece, maximum = lane_linear.PIECE, lane_qmm.MAX_ROWS
+    tokenizer = getattr(runner.processor, "tokenizer", runner.processor)
+    a.out.parent.mkdir(parents=True, exist_ok=True)
+    correct = dict(baseline=0, wide=0)
+    different = 0
+    try:
+        with a.out.open("w") as out:
+            for index in range(a.items):
+                prompt, answer = question(index)
+                ids, _, salt = engine._executor.submit(
+                    engine._runner_input,
+                    [{"role": "user", "content": prompt}],
+                    [],
+                    [],
+                    False,
+                    {"enable_thinking": False},
+                ).result()
+                results = {}
+                for mode in (
+                    ("baseline", "wide") if index % 2 == 0 else ("wide", "baseline")
+                ):
+                    lane_linear.PIECE = 512 if mode == "wide" else piece
+                    lane_qmm.MAX_ROWS = 512 if mode == "wide" else maximum
+                    runner.apc_manager.clear()
+                    stats, tokens, lps = RunStats(), [], []
+                    for token in runner.iter_tokens(
+                        ids,
+                        max_tokens=16,
+                        temperature=0,
+                        seed=1234,
+                        apc_semantic_hash=salt,
+                        stats=stats,
+                        logprobs=True,
+                    ):
+                        tokens.append(token)
+                        lps.append(stats.last_logprob["logprob"])
+                    engine._executor.submit(lambda: None).result()
+                    if not tokens or not stats.finish_reason or stats.cached_tokens:
+                        raise RuntimeError("incomplete / non-cold paired item")
+                    text = tokenizer.decode(tokens).strip()
+                    match = re.fullmatch(r"\s*(-?\d+)\s*", text)
+                    scored = bool(match and int(match[1]) == answer)
+                    correct[mode] += scored
+                    results[mode] = dict(
+                        tokens=tokens, lps=lps, text=text, correct=scored
+                    )
+                equal = (
+                    results["baseline"]["tokens"] == results["wide"]["tokens"]
+                    and results["baseline"]["lps"] == results["wide"]["lps"]
+                )
+                different += not equal
+                row = dict(
+                    index=index,
+                    prompt_tokens=len(ids),
+                    answer=answer,
+                    equal=equal,
+                    prompt_sha256=hashlib.sha256(prompt.encode()).hexdigest(),
+                    arms=results,
+                )
+                out.write(json.dumps(row) + "\n")
+                out.flush()
+                print(
+                    json.dumps({k: v for k, v in row.items() if k != "arms"}),
+                    flush=True,
+                )
+            success = different == 0 and abs(correct["baseline"] - correct["wide"]) <= 1
+            out.write(
+                json.dumps(
+                    dict(
+                        phase="complete",
+                        success=success,
+                        items=a.items,
+                        correct=correct,
+                        different=different,
+                    )
+                )
+                + "\n"
+            )
+            if not success:
+                raise RuntimeError("paired output / accuracy gate failed")
+    finally:
+        lane_linear.PIECE, lane_qmm.MAX_ROWS = piece, maximum
+        asyncio.run(engine.stop())
+
+
+if __name__ == "__main__":
+    main()
