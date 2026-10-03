@@ -1777,11 +1777,20 @@ class VLMEngine:
                     processor=self._processor,
                 )
         if drafter is not None and draft_kind == "dflash":
-            # Cost-aware chain depth from measured cycle costs (27B server:
-            # 57/48/46 vs upstream adaptive 46/38/38 tok/s at 1K/8K/32K).
+            # Keep adaptive depth for the fallback. Qualified greedy requests
+            # use the trained DFlash2 block and verified prompt-copy islands.
             from .spec_schedule import install_chain_budget
 
             install_chain_budget()
+            if kernels is not None:
+                from .dflash_copy import configure as configure_dflash_copy
+
+                kernels["copy_rows"], kernels["dflash_copy"] = configure_dflash_copy(
+                    lm,
+                    settings.get("YUNSHU_SPEC_COPY_ROWS"),
+                    invariant=bool(kernels.get("invariant")),
+                    lane_projections=bool(kernels.get("lane_linear")),
+                )
         if drafter is not None:
             # Tree drafts through the tree verify (single greedy row,
             # batch-invariant kernels only; every other round keeps the loop).

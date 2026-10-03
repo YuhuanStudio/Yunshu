@@ -564,3 +564,21 @@ wrapper (`1003-102815-00-wide3-copy-cost-ab-1030`, rc0, complete, clean, same
 digests): fixed16 → cost16 at 32K prose cold/warm 48.2 → 46.8/46.9, all three
 pairs negative. It missed useful copy islands (4 rounds/12 tokens → 1/1).
 The public YUNSHU_SPEC_COPY_COST option and serving switch were removed.
+
+
+2026-10-03 DFlash2 greedy prompt-copy islands（codex-wide4；Qwen3.8-27B oQ4e-mtp / same DFlash2 checkpoint，single-request invariant lane）。基線是 f104150e 的 adaptive chain；candidate固定模型的訓練block8，再以既有SPEC_COPY_ROWS=16驗證copied runs，跳過copy island裡的drafter，恢復時一次吸收bounded pending taps。Target verifier／cache transaction不變，sampled、guide/LP與unsupported/exact/narrow保留既有fallback。沒有新增設定；0仍關閉copy。
+
+Job `1003-161523-00-wide4-timing-bundle-1615` rc0，quiet clean（foreign max330%<1620），native-matrix三次交錯、54個spec arms全部raw-ID digest等於AR；同checkpoint與單一source/harness fingerprint。表為256-token cold decode的三輪中位數，不是TTFT、warm或TF最新版本的速度claim。`chain8`控制臂分開固定block與copy的貢獻。
+
+| Context/task | adaptive main tok/s | fixed chain8 | chain8 + copy16 | gain vs main |
+|---|---:|---:|---:|---:|
+| 1K code | 97.74 | 100.33 | 109.48 | +12.01% |
+| 1K prose | 52.32 | 53.46 | 52.29 | -0.05% |
+| 8K code | 74.50 | 76.87 | 82.19 | +10.32% |
+| 8K prose | 51.46 | 51.84 | 51.83 | +0.72% |
+| 32K code | 72.74 | 73.90 | 82.56 | +13.51% |
+| 32K prose | 44.85 | 46.79 | 46.75 | +4.23% |
+
+小但真實：8K prose +0.72%，1K prose -0.05%如實記錄；code三格+10.32–13.51%。固定block也有貢獻，不能把全部增益歸因copy。1K code commits/round約4.72→5.20；仍未追上TF歷史7.1/49ms，不宣稱gap已全關。
+
+Correctness `1003-161523-00-wide4-correctness-bundle-1615` rc0/complete：200 paired code/sentence echo items，AR與candidate各200/200 correct，raw-ID digest全同、net correct差0。`1003-172719-00-wide4-http-default-smoke-1731` rc0/complete：actual serving DFlash、copy16/0、APC warm cached1033、repeat、newline stop內容digest都等於AR；copy16實際7rounds/97published tokens、copy0無copy。此HTTP是nonquiet correctness smoke，不採其tok/s/TTFT作效能claim。
