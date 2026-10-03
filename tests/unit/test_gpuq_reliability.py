@@ -260,3 +260,20 @@ def test_aged_running_backlog_job_is_not_preempted(q, monkeypatch):
     monkeypatch.setattr(pauser, "_signal", lambda sig: None)
     assert q._priority_step(pauser, q.ServingGate(), now) is False
     assert not pauser.paused
+
+
+def test_priority_caps_demote_secondary_labels(q):
+    (q.ROOT / "priority_caps.json").write_text('{"bigmoe-": -2, "mm-": -9}')
+    job(q, "a", label="bigmoe-quality", state="pending", priority=0, submitted=1)
+    job(q, "b", label="wide4-timing", state="pending", priority=0, submitted=2)
+    job(q, "c", label="mm-smoke", state="pending", priority=-9, submitted=3)
+    jobs = {j["id"]: j for j in q._jobs()}
+    assert jobs["a"]["priority"] == -2 and jobs["a"]["priority_requested"] == 0
+    assert jobs["b"]["priority"] == 0 and "priority_requested" not in jobs["b"]
+    assert jobs["c"]["priority"] == -9 and "priority_requested" not in jobs["c"]
+    assert q._pick(q._jobs())["id"] == "b"
+
+
+def test_missing_priority_caps_change_nothing(q):
+    job(q, "a", label="bigmoe-quality", state="pending", priority=0)
+    assert q._jobs()[0]["priority"] == 0

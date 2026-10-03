@@ -448,9 +448,27 @@ def _eff_priority(job: dict, now: float | None = None) -> int:
     return min(0, p + 1) if waited >= AGE_S else p
 
 
+def _priority_caps() -> dict[str, int]:
+    """Lead policy: $GPUQ_DIR/priority_caps.json maps a label prefix to the highest priority its jobs
+    may take ({"bigmoe-": -2}); re-read every loop, so secondary work lines can be demoted without
+    restarting workers or resubmitting their jobs."""
+    caps = _read(ROOT / "priority_caps.json")
+    return {str(k): int(v) for k, v in caps.items() if isinstance(v, (int, float))}
+
+
+def _cap_priority(job: dict, caps: dict[str, int]) -> dict:
+    label = job.get("label") or ""
+    capped = [v for k, v in caps.items() if label.startswith(k)]
+    if capped and job.get("priority", 0) > min(capped):
+        job["priority_requested"] = job.get("priority", 0)
+        job["priority"] = min(capped)
+    return job
+
+
 def _jobs() -> list[dict]:
+    caps = _priority_caps()
     return sorted(
-        (j for p in JOBS.glob("*.json") if (j := _read(p))),
+        (_cap_priority(j, caps) for p in JOBS.glob("*.json") if (j := _read(p))),
         key=lambda j: (-j.get("priority", 0), j["submitted"], j["id"]),
     )
 
