@@ -169,3 +169,24 @@ def test_required_tool_receipt_checks_arguments_and_missing_calls():
     )["structured_complete"]
     with pytest.raises(ValueError, match="required tool"):
         bench.structured_receipt(["", "", [], "stop"], extra)
+
+
+def test_agent_trace_waits_for_primary_and_auxiliary_receipts(tmp_path):
+    bench = _load()
+    trace = tmp_path / "agent.jsonl"
+    rows = [{"part": "agent", "i": i} for _body in range(2) for i in range(3)]
+    trace.write_text("".join(json.dumps({"n": n}) + "\n" for n in range(7)))
+
+    def writer():
+        time.sleep(0.3)
+        with trace.open("a") as out:
+            out.write('{"n": 7}\n')
+
+    thread = threading.Thread(target=writer)
+    thread.start()
+    try:
+        assert bench.read_agent_trace(trace, rows) == [{"n": n} for n in range(8)]
+    finally:
+        thread.join()
+    with pytest.raises(RuntimeError, match="no primary"):
+        bench.read_agent_trace(trace, [{"complete": True}])

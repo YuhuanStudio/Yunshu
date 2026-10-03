@@ -153,6 +153,16 @@ class TraceCursor:
         return read_trace(self.path, self.count)[-1]
 
 
+def read_agent_trace(path, agent_records):
+    """Wait for every primary and auxiliary request's generator-close receipt."""
+    primary = [r for r in agent_records if r.get("part") == "agent"]
+    if not primary:
+        raise RuntimeError("agent replay has no primary requests")
+    # tfbench starts one concurrent title alongside i=0 for each body.
+    count = len(primary) + sum(r["i"] == 0 for r in primary)
+    return read_trace(path, count)
+
+
 def run_agent(srv, out, args):
     """Fix auxiliary title sampling for reproducible background-request parity."""
     original = tfbench.send
@@ -514,9 +524,13 @@ def main():
                             tfbench.emit(
                                 agent_file, complete=True, part="agent_complete"
                             )
-                        records = [
-                            json.loads(line) for line in trace.read_text().splitlines()
-                        ]
+                        records = read_agent_trace(
+                            trace,
+                            [
+                                json.loads(line)
+                                for line in agent_out.read_text().splitlines()
+                            ],
+                        )
                         grouped = {}
                         for record in records:
                             grouped.setdefault(record["prompt_digest"], []).append(
