@@ -126,6 +126,7 @@ def run_arm(args, engine, rep, size, write):
         ]
     log = arm / "server.log"
     with log.open("w") as out:
+        startup_started = time.perf_counter()
         process = subprocess.Popen(
             cmd,
             cwd=ROOT,
@@ -174,6 +175,15 @@ def run_arm(args, engine, rep, size, write):
                 time.sleep(1)
             else:
                 raise TimeoutError(f"server not ready: {log}")
+            write(
+                dict(
+                    engine=engine,
+                    rep=rep,
+                    size=size,
+                    case="startup",
+                    ready_s=time.perf_counter() - startup_started,
+                )
+            )
             model_id = models["data"][0]["id"]
             # Tokenize locally, never load model weights on this client.
             from transformers import AutoTokenizer
@@ -187,7 +197,7 @@ def run_arm(args, engine, rep, size, write):
             # A unique shared prefix per repetition prevents persisted Yunshu
             # APC from turning a nominal fresh-process cold request into a hit.
             nonce = hashlib.sha256(
-                f"{args.output.resolve()}:{rep}:{size}".encode()
+                f"{getattr(args, 'prompt_identity', args.output.resolve())}:{rep}:{size}".encode()
             ).hexdigest()[:16]
             prefix = f"Run identity {nonce}.\n" + prefix
             base = {
