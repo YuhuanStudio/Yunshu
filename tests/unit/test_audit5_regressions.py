@@ -118,7 +118,7 @@ def test_tree_setting_reaches_upstream_hook_instead_of_chain_lane(monkeypatch, c
 
 
 @pytest.mark.parametrize("accepted", [False, True])
-def test_generate_marks_only_first_alignment_token_uncached(monkeypatch, accepted):
+def test_generate_leaves_each_alignment_token_uncached(monkeypatch, accepted):
     from yunshu_engine.speculative_decoder import SpecDecodingConfig, VerifyResult
 
     monkeypatch.setattr("mlx_lm.models.cache.make_prompt_cache", lambda _: [])
@@ -146,4 +146,66 @@ def test_generate_marks_only_first_alignment_token_uncached(monkeypatch, accepte
             decoder.generate(mx.array([[0]]), max_tokens=5, temperature=0.0) == [1] * 5
         )
         assert seen[0] is False
-        assert len(seen) >= 2 and all(seen[1:])
+        assert len(seen) >= 2 and not any(seen)
+
+
+@pytest.mark.parametrize("draft_bias", [0, 3, 8])
+def test_stateful_external_generation_matches_serial_target(draft_bias, monkeypatch):
+    from yunshu_engine.speculative_decoder import SpecDecodingConfig
+
+    class HistoryCache:
+        def __init__(self):
+            self.history = []
+
+        @property
+        def offset(self):
+            return len(self.history)
+
+        @offset.setter
+        def offset(self, value):
+            self.history = self.history[:value]
+
+        def is_trimmable(self):
+            return True
+
+        def trim(self, n):
+            used = min(n, len(self.history))
+            self.history = self.history[: len(self.history) - used]
+            return used
+
+    def model(bias):
+        def forward(ids, cache):
+            rows = []
+            for token in ids[0].tolist():
+                cache[0].history.append(token)
+                wanted = (sum(cache[0].history[-3:]) + 7 + bias) % 31
+                rows.append([20.0 if i == wanted else 0.0 for i in range(31)])
+            return mx.array([rows])
+
+        return forward
+
+    monkeypatch.setattr(
+        "mlx_lm.models.cache.make_prompt_cache", lambda _: [HistoryCache()]
+    )
+    history = [1, 4, 9, 2]
+    expected = []
+    for _ in range(32):
+        token = (sum(history[-3:]) + 7) % 31
+        expected.append(token)
+        history.append(token)
+    with mx.stream(mx.cpu):
+        decoder = SpeculativeDecoder(
+            model(0),
+            model(draft_bias),
+            SimpleNamespace(eos_token_id=99),
+            SpecDecodingConfig(draft_length=3, draft_temperature=0.0),
+        )
+        assert (
+            decoder.generate(mx.array([[1, 4, 9, 2]]), max_tokens=32, temperature=0.0)
+            == expected
+        )
+
+        if draft_bias == 0:
+            # An identical deterministic model must propose the target's entire
+            # stream. Parity alone hides a broken, perpetually rejected proposer.
+            assert decoder.acceptance_rate == 1.0

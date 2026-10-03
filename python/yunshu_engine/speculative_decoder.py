@@ -1041,9 +1041,6 @@ class SpeculativeDecoder:
         K = self.config.draft_length
         draft_sampler = make_sampler(temp=self.config.draft_temperature)
 
-        # Prefill has not processed its newly sampled first token. Subsequent
-        # iterations explicitly cache the correction/bonus below.
-        cache_contains_last_token = False
         while len(generated_tokens) < max_tokens:
             # Cooperative cancellation check (thread-safe for asyncio.Event)
             if cancel_event is not None and (
@@ -1134,7 +1131,7 @@ class SpeculativeDecoder:
                 last_tok_arr,
                 target_cache,
                 temperature=temperature,
-                cache_contains_last_token=cache_contains_last_token,
+                cache_contains_last_token=False,
             )
 
             # SP-PEN: Apply penalty/bias to bonus token.
@@ -1260,10 +1257,9 @@ class SpeculativeDecoder:
                                 self.constraint.advance(
                                     self.tokenizer.decode([correction])
                                 )
-                # verify_draft rolled back 1 then fed [last_tok, d0..dK-1] (K+1 entries).
-                # After rollback, cache had N-1 entries. After forward K+1: N+K.
-                # Only accepted+1 are valid (last_tok + accepted drafts).
-                # Trim the rejected ones: (N+K) - (N-1+accepted+1) = K - accepted.
+                # Target cache excludes last_tok at entry. Verification appends
+                # last_tok and all drafts; retain last_tok + accepted drafts,
+                # leaving correction uncached for the next aligned verification.
                 trim_count = len(draft_tokens) - accepted
                 try:
                     from mlx_lm.models.cache import trim_prompt_cache
@@ -1275,17 +1271,18 @@ class SpeculativeDecoder:
                             c.trim(trim_count)
 
                 self._restore_cache(draft_cache, draft_snap)
-                # Re-feed accepted + correction tokens to draft cache.
-                refeed = generated_tokens[-(accepted + 1) :]
+                # The snapshot excludes last_tok. Rebuild the committed prefix
+                # through accepted drafts, leaving correction for the next draft
+                # call. Feeding correction here would duplicate it next round.
+                refeed = [last_tok, *verify_result.accepted_ids]
                 for tok in refeed:
                     self.draft(mx.array([[tok]]), cache=draft_cache)
 
-                # Feed correction token to target cache so it becomes the last
-                # entry.  This ensures the next verify_draft's rollback will
-                # correctly remove the correction (not the last accepted draft).
-                correction = generated_tokens[-1]
-                self.target(mx.array([[correction]]), cache=target_cache)
             else:
+                # The draft loop processed last_tok and drafts[:-1]. Cache its
+                # final accepted token before the next call processes the bonus.
+                if len(generated_tokens) < max_tokens:
+                    self.draft(mx.array([[draft_tokens[-1]]]), cache=draft_cache)
                 # All accepted: advance grammar constraint for all accepted + bonus.
                 # Pop the stale checkpoint without restoring (all-accept path
                 # never calls rollback, so without this the checkpoint stack
@@ -1301,12 +1298,6 @@ class SpeculativeDecoder:
                     if bonus_id >= 0 and bonus_id not in eos_ids:
                         with contextlib.suppress(Exception):
                             self.constraint.advance(self.tokenizer.decode([bonus_id]))
-                # feed bonus token to target cache for the same
-                # reason — the bonus must be in cache before next verify_draft.
-                if bonus_id >= 0 and len(generated_tokens) < max_tokens:
-                    self.target(mx.array([[bonus_id]]), cache=target_cache)
-
-            cache_contains_last_token = True
             if any(t in eos_ids for t in generated_tokens):
                 return generated_tokens
 
