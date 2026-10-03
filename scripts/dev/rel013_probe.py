@@ -35,3 +35,34 @@ for device in (mx.gpu, mx.cpu):
               "tokens", mx.argmax(full, -1).item(), mx.argmax(split, -1).item(), flush=True)
         del lm, cache, full, split
     mx.clear_cache()
+
+import tempfile
+from pathlib import Path
+from yunshu_engine.vlm_batch_runner import RowParams
+from yunshu_engine.keyed_sampling import KeyedSampler
+
+mx.set_default_device(mx.gpu)
+for n in (8, 200, 600):
+    row = np.full((1, 248320), -np.inf, dtype=np.float32)
+    row[0, :5] = 0
+    lp = mx.broadcast_to(mx.array(row), (n, 248320))
+    draw = KeyedSampler(RowParams(temperature=1), 0).sample_positions(lp, range(n))
+    print("DRAW", n, np.unique(np.array(draw)).tolist(), flush=True)
+    mx.clear_cache()
+
+namespace = runpy.run_path("tests/unit/test_apc_manager_e2e.py")
+original = namespace["_run"]
+def traced(runner, ids):
+    out, stats = original(runner, ids)
+    print("APC", len(ids), stats.cache_tier, stats.cached_tokens, out, flush=True)
+    return out, stats
+namespace["test_ssd_reload_gives_the_same_tokens_as_ram_and_cold"].__globals__["_run"] = traced
+for dtype in (mx.bfloat16, mx.float16, mx.float32):
+    m = model.__wrapped__()
+    m.language_model.set_dtype(dtype)
+    with tempfile.TemporaryDirectory() as tmp:
+        try:
+            namespace["test_ssd_reload_gives_the_same_tokens_as_ram_and_cold"](m, Path(tmp))
+            print("APC_RESULT", dtype, "pass", flush=True)
+        except AssertionError:
+            print("APC_RESULT", dtype, "fail", flush=True)
