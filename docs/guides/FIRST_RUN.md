@@ -26,7 +26,7 @@ yunshu doctor -m mlx-community/Qwen3.5-0.8B-MLX-bf16
 yunshu serve -m mlx-community/Qwen3.5-0.8B-MLX-bf16
 ```
 
-`pull` resumes an interrupted download and reuses complete models in Yunshu's model directory or the Hugging Face cache. You can also pass a local directory to `serve -m`. For external model storage, set the directory **before** downloading:
+`pull` resumes an interrupted download and reuses complete models in Yunshu's model directory or the Hugging Face cache. You can also pass a local directory to `serve -m`, or use `yunshu serve /path/to/model`. Options such as `--port` work before or after the positional model; `--model` remains supported. For external model storage, set the directory **before** downloading:
 
 ```bash
 yunshu config set models_dir /Volumes/MyModels/models

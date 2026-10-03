@@ -16,7 +16,11 @@ from yunshu_engine import settings
 
 console = Console()
 
-serve_app = typer.Typer(help="Start inference server.", no_args_is_help=True)
+serve_app = typer.Typer(
+    help="Start inference server.",
+    no_args_is_help=True,
+    context_settings={"allow_interspersed_args": True},
+)
 
 
 def _is_omni_model(model: str | None) -> bool:
@@ -45,6 +49,9 @@ def _is_omni_model(model: str | None) -> bool:
 
 @serve_app.callback(invoke_without_command=True)
 def serve(
+    model_ref: str | None = typer.Argument(
+        None, help="Model path or Hugging Face ID (also accepted through --model/-m)."
+    ),
     model: str | None = typer.Option(
         None,
         "--model",
@@ -170,6 +177,14 @@ def serve(
 ):
     """Start Yunshu inference server."""
     import uvicorn
+
+    if model_ref and model and model_ref != model:
+        console.print(
+            "[red]Error:[/] The positional model and --model disagree. "
+            "Use one model reference."
+        )
+        raise typer.Exit(2)
+    model = model_ref or model
 
     # Flags and --set become highest-precedence settings. They are also
     # exported so worker/reload subprocesses see them.
