@@ -37,3 +37,31 @@ public-facing multi-tenant service. Its defaults reflect that:
 
 Treat an internet-exposed instance without auth as fully open to anyone who can
 reach the port.
+
+
+## Report scope and disclosure
+
+Authentication bypass, unintended file/network access, unsafe model or cache
+loading, secret leakage and denial of service through requests are useful report
+categories. Include exploit prerequisites (local access, exposed server, trusted
+model code), affected version/commit, minimal reproduction and expected impact.
+Do not attach real prompts, credentials or private model data. A sanitized
+`yunshu diagnose` bundle can help; review it before sharing.
+
+Maintainers assess the affected defaults and supported releases, coordinate a fix
+privately, and agree on disclosure and reporter credit. There is no guaranteed
+response SLA. A public advisory should identify affected/fixed versions and any
+mitigation; do not publish exploit details before coordination.
+
+## Privacy and outbound connections
+
+Yunshu has no usage telemetry or automatic diagnostics upload. Inference runs
+locally. Model downloads, remote media URLs, enabled web search/fetch, and configured
+MCP servers can make outbound connections; their operators receive the associated
+request data. Local inference does not imply every optional tool works offline.
+
+`yunshu diagnose` writes a local redacted bundle without prompts. Optional
+`YUNSHU_SERVE_LOG` records numeric serving measurements locally without prompt,
+output or token IDs. Prompt caches contain conversation-derived state on disk:
+protect the cache directory and diagnostics as local user data. See
+[configuration](docs/CONFIGURATION.md) and [API extensions](docs/guides/API_EXTENSIONS.md).

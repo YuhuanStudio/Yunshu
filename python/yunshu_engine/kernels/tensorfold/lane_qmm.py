@@ -1,4 +1,4 @@
-"""Row-exact 2- to 8-bit lane matmul using portable MPP tensor coordinates: a group's fma order follows the weight shape, not M."""
+"""Row-exact 2- to 8-bit lane matmul with hardware-selected MPP fragment layouts: a group's fma order follows the weight shape, not M."""
 
 from __future__ import annotations
 
@@ -176,8 +176,41 @@ class _Baked:
         return run(**kwargs)
 
 
+_VARIANT: str | None = None
+
+
+def _generation(architecture: str) -> int | None:
+    import re
+
+    match = re.fullmatch(r"applegpu_g(\d+)[a-z]+", architecture)
+    return int(match[1]) if match else None
+
+
+def _resolve_variant() -> str:
+    """Choose once; no hardware lookup or variant branch on the matmul hot path."""
+    global _VARIANT, _MAIN, _MAIN_TILED, _COOP
+    if _VARIANT is None:
+        generation = _generation(str(mx.device_info().get("architecture", "")))
+        _VARIANT = "m5" if generation in (17, 18) else "portable"
+        if _VARIANT == "m5":
+            from . import lane_m5, lane_widen, lane_widen_m5
+
+            _MAIN, _COOP = lane_m5._MAIN, lane_m5._COOP
+            _MAIN_TILED = _MAIN.replace(
+                "    auto b = tB.slice(g * GS, n0);\n",
+                "    tensor<device uint4b_format, dextents<int32_t, 2>, tensor_inline> b(\n"
+                "        (device uchar*)Wq + (int64_t)(threadgroup_position_in_grid.x * KG + g) * (NT * GS / 2), dextents<int32_t, 2>(GS, NT));\n",
+            )
+            lane_widen.NIBBLES, lane_widen.BYTES = (
+                lane_widen_m5.NIBBLES,
+                lane_widen_m5.BYTES,
+            )
+    return _VARIANT
+
+
 def _kernel(name: str) -> Any:
     if name not in _kernels:
+        _resolve_variant()
         if name == "xsum":
             _kernels[name] = _Baked("lane_qmm_xsum", _XSUM, ["X", "mdims"], ["XS"])
         else:
@@ -329,14 +362,20 @@ _READY: list[bool] = []
 
 
 def ready() -> bool:
-    """Certify tensor-op arithmetic once on this GPU / Metal compiler.
+    """Admit known hardware and certify unknown GPU / Metal compiler layouts once.
 
-    Compilation alone does not certify the cooperative fragment layout. Use
+    Known M1-M4 use portable coordinates; known M5 uses its proven fragments.
+    Compilation alone does not certify an unknown fragment layout. Use
     nonzero, asymmetric data, narrow tails, widened codes and both row blocks;
     compare every row bitwise with a singleton and numerically with stock QMM.
     Failure leaves the engine on its existing sg8 / exact-row path.
     """
+    _resolve_variant()
     if not _READY:
+        generation = _generation(str(mx.device_info().get("architecture", "")))
+        if generation is not None and 13 <= generation <= 18:
+            _READY.append(True)
+            return True
         try:
             k = 512
             x = ((mx.arange(33 * k).reshape(33, k) % 29 - 14) / 16).astype(mx.bfloat16)
@@ -409,6 +448,7 @@ def install(model: Any = None, *, rows: int = MAX_ROWS, tile: bool = True, wide:
     """Route the QuantizedLinear calls the lane matmul takes through it; with ``model``, pack scales and tile."""
 
     global _ORIG, enabled, max_rows
+    _resolve_variant()
     import mlx.nn as nn
 
     if _ORIG is None:

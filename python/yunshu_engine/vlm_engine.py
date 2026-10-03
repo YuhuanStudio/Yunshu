@@ -1940,15 +1940,30 @@ class VLMEngine:
     def _runner_events(self, input_ids, **kw):
         """``_runner_events_impl`` plus the optional generated-vs-delivered capture
         (``YUNSHU_DEBUG_STREAM_CAPTURE``)."""
+        tools = kw.pop("tool_recovery_tools", None)
+        events = self._runner_events_impl(input_ids, **kw)
+        if tools:
+            from .tool_format import formats_for_tokenizer
+            from .tool_thinking import recover_tool_events
+
+            formats = formats_for_tokenizer(self._tokenizer)
+            if any(fmt.name == "glm47" for fmt in formats):
+                ids = self._tokenizer.encode(
+                    "<|observation|>", add_special_tokens=False
+                )
+                if len(ids) == 1 and ids[0] not in (kw.get("stop_token_ids") or []):
+                    events = recover_tool_events(
+                        events, observation_id=ids[0], formats=formats, tools=tools
+                    )
         path = settings.get_str("YUNSHU_DEBUG_STREAM_CAPTURE")
         if not path:
-            yield from self._runner_events_impl(input_ids, **kw)
+            yield from events
             return
         ids: list[int] = []
         pieces: list[str] = []
         finish = None
         try:
-            for event in self._runner_events_impl(input_ids, **kw):
+            for event in events:
                 text, token, _state, finish_reason = event[:4]
                 if token is not None:
                     ids.append(int(token))
@@ -2369,6 +2384,7 @@ class VLMEngine:
             xtc_probability=float(kwargs.get("xtc_probability") or 0.0),
             xtc_threshold=float(kwargs.get("xtc_threshold") or 0.0),
             tool_spec=kwargs.get("_tool_spec"),
+            tool_recovery_tools=kwargs.get("_tool_recovery_tools"),
         )
 
     def _tool_guide(self, spec: dict | None, thinking_open: bool):
@@ -2611,15 +2627,21 @@ class VLMEngine:
                 patched.append(tc)
                 continue
             func = tc.get("function")
-            if isinstance(func, dict) and isinstance(func.get("arguments"), str):
+            if isinstance(func, dict) and (
+                func.get("arguments") is None or isinstance(func.get("arguments"), str)
+            ):
                 try:
-                    parsed = _json.loads(func["arguments"])
+                    parsed = _json.loads((func.get("arguments") or "").strip() or "{}")
                 except Exception:
                     parsed = {"value": func["arguments"]}
                 tc = dict(tc)
                 tc["function"] = dict(func)
                 tc["function"]["arguments"] = (
-                    parsed if isinstance(parsed, dict) else {"value": parsed}
+                    parsed
+                    if isinstance(parsed, dict)
+                    else {}
+                    if parsed is None
+                    else {"value": parsed}
                 )
             patched.append(tc)
         return patched
@@ -2657,6 +2679,7 @@ class VLMEngine:
         parallel = kwargs.pop("parallel_tool_calls", True)
         if tools:
             extra["tools"] = tools
+            kwargs["_tool_recovery_tools"] = tools
             if settings.get_bool("YUNSHU_TOOL_GRAMMAR"):
                 from .tool_call_grammar import normalize_tool_choice
 

@@ -246,6 +246,7 @@ def test_aged_running_backlog_job_is_not_preempted(q, monkeypatch):
         state="running",
         priority=-1,
         submitted=now - q.AGE_S - 1,
+        started=now - 60,
         pid=1,
         env={},
     )
@@ -277,3 +278,98 @@ def test_priority_caps_demote_secondary_labels(q):
 def test_missing_priority_caps_change_nothing(q):
     job(q, "a", label="bigmoe-quality", state="pending", priority=0)
     assert q._jobs()[0]["priority"] == 0
+
+
+def test_aged_running_backlog_job_yields_after_its_slice(q, monkeypatch):
+    monkeypatch.setattr(q, "free_memory_gb", lambda: 128.0)
+    now = 100_000.0
+    monkeypatch.setattr(q.time, "time", lambda: now)
+    aged = dict(
+        id="aged",
+        state="running",
+        priority=-1,
+        submitted=now - q.AGE_S - 1,
+        started=now - q.AGED_SLICE_S - 1,
+        pid=1,
+        env={},
+    )
+    q._write(q.JOBS / "aged.json", aged)
+    q.submit(["true"], "interactive", 1, 0)
+    pauser = q.Pauser(aged, q.JOBS / "aged.json")
+    monkeypatch.setattr(pauser, "_signal", lambda sig: None)
+    monkeypatch.setattr(q, "_execute", lambda *a, **k: None)
+    q._priority_step(pauser, q.ServingGate(), now)
+    assert pauser.paused
+    # A resume restarts the slice.
+    aged2 = dict(aged, id="aged2", pauses=[[now - 600, now - 60]])
+    q._write(q.JOBS / "aged2.json", aged2)
+    pauser2 = q.Pauser(aged2, q.JOBS / "aged2.json")
+    monkeypatch.setattr(pauser2, "_signal", lambda sig: None)
+    assert q._priority_step(pauser2, q.ServingGate(), now) is False
+    assert not pauser2.paused
+
+
+def test_short_checks_run_first_within_a_priority(q):
+    import time
+
+    now = time.time()
+    big = dict(
+        id="big",
+        label="wide5-matrix-r3",
+        state="pending",
+        priority=0,
+        submitted=now - 9,
+        env={},
+    )
+    tiny = dict(
+        id="tiny",
+        label="prefill5-identity-tiny-1933",
+        state="pending",
+        priority=0,
+        submitted=now,
+        env={},
+    )
+    low = dict(
+        id="low",
+        label="audit-smoke-x",
+        state="pending",
+        priority=-1,
+        submitted=now - 10,
+        env={},
+    )
+    assert q._pick([big, tiny, low])["id"] == "tiny"
+    assert q._pick([big, low])["id"] == "big"
+    assert not q._is_short(dict(label="tinyllama-bench")) and q._is_short(
+        dict(label="x-smoke")
+    )
+
+
+def test_running_p0_job_is_never_paused_for_priority(q, monkeypatch):
+    now = 100_000.0
+    monkeypatch.setattr(q.time, "time", lambda: now)
+    job = dict(
+        id="p0",
+        state="running",
+        priority=0,
+        submitted=now - 3 * q.AGE_S,
+        started=now - 3 * q.AGED_SLICE_S,
+        pid=1,
+        env={},
+    )
+    q._write(q.JOBS / "p0.json", job)
+    q.submit(["true"], "x-smoke", 1, 0)
+    pauser = q.Pauser(job, q.JOBS / "p0.json")
+    monkeypatch.setattr(pauser, "_signal", lambda sig: None)
+    monkeypatch.setattr(q, "_execute", lambda *a, **k: None)
+    assert q._priority_step(pauser, q.ServingGate(), now) is False
+    assert not pauser.paused
+
+
+def test_exited_jobs_are_adopted_before_live_ones(q, monkeypatch):
+    monkeypatch.setattr(q, "_alive", lambda pid: pid == 1)
+    jobs = [
+        dict(id="live", state="running", pid=1),
+        dict(id="gone", state="running", pid=2),
+        dict(id="queued", state="pending"),
+    ]
+    assert [j["id"] for j in q._adoption_order(jobs)] == ["gone", "live"]
