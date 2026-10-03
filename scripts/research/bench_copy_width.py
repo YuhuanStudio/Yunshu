@@ -9,11 +9,53 @@ import json
 import os
 import signal
 import sys
+import time
 import traceback
 from pathlib import Path
 
 import tfbench as bench
 from spec_bench_snapshot import freeze, refuse_contended
+
+
+def start_server(engine, env, tag, attempts=3):
+    """Retry bind races, cleaning only the process created by this attempt.
+
+    Srv's constructor can see another listener's health before its own bind.
+    Uvicorn's own post-bind log certifies endpoint ownership before requests.
+    """
+    for attempt in range(attempts):
+        server = None
+        try:
+            factory = bench.Srv
+            name = tag if attempt == 0 else f"{tag}-startup{attempt}"
+            if isinstance(factory, type):
+                server = factory.__new__(factory)
+                factory.__init__(server, engine, env, name)
+            else:
+                server = factory(engine, env, name)
+            proc = getattr(server, "proc", None)
+            if proc is not None:
+                deadline = time.monotonic() + 10
+                marker = f"Uvicorn running on http://127.0.0.1:{server.port}"
+                while marker not in server.log.read_text():
+                    if proc.poll() is not None or time.monotonic() >= deadline:
+                        raise RuntimeError("own server did not bind")
+                    time.sleep(0.05)
+            server.startup_retries = attempt
+            return server
+        except BaseException as error:
+            log = getattr(server, "log", None)
+            text = log.read_text() if log is not None and log.exists() else ""
+            if server is not None and getattr(server, "proc", None) is not None:
+                server.kill()
+            bind_race = "address already in use" in text
+            if (
+                not isinstance(error, Exception)
+                or not bind_race
+                or attempt + 1 >= attempts
+            ):
+                raise
+    raise AssertionError("unreachable startup retry")
 
 
 def main():
@@ -111,11 +153,12 @@ def main():
                         }
                         if a.cost_setting:
                             env["YUNSHU_SPEC_COPY_COST"] = "1" if policy_on else "0"
-                        srv = bench.Srv("yunshu", env, result.stem)
+                        srv = start_server("yunshu", env, result.stem)
                         bench.emit(
                             out,
                             part="session",
                             env=env,
+                            startup_retries=srv.startup_retries,
                             load=os.getloadavg(),
                             **fingerprint,
                         )

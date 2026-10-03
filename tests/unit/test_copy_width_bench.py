@@ -111,3 +111,76 @@ def test_builtin_cost_setting_is_proved_and_records_separate_arms(
         "fixed",
         "setting",
     ]
+
+
+def test_bind_race_retry_owns_cleanup_and_requires_own_post_bind_log(
+    tmp_path, monkeypatch
+):
+    module, _, _ = fake_bench(tmp_path, monkeypatch)
+    killed, tags = [], []
+
+    class Process:
+        def poll(self):
+            return None
+
+    class Server:
+        def __init__(self, engine, env, tag):
+            tags.append(tag)
+            self.tag, self.proc, self.port = tag, Process(), 18992
+            self.log = tmp_path / (tag + ".log")
+            if len(tags) == 1:
+                self.log.write_text("address already in use")
+                raise RuntimeError("server exited early")
+            self.log.write_text("Uvicorn running on http://127.0.0.1:18992")
+
+        def kill(self):
+            killed.append(self.tag)
+
+    monkeypatch.setattr(module.bench, "Srv", Server)
+    server = module.start_server("yunshu", {}, "arm")
+    assert server.startup_retries == 1
+    assert tags == ["arm", "arm-startup1"]
+    assert killed == ["arm"]
+
+
+def test_unrelated_startup_failure_is_cleaned_and_not_retried(tmp_path, monkeypatch):
+    module, _, _ = fake_bench(tmp_path, monkeypatch)
+    killed = []
+
+    class Server:
+        def __init__(self, *args):
+            self.proc = object()
+            self.log = tmp_path / "failed.log"
+            self.log.write_text("bad model")
+            raise RuntimeError("bad model")
+
+        def kill(self):
+            killed.append(self.proc)
+
+    monkeypatch.setattr(module.bench, "Srv", Server)
+    with pytest.raises(RuntimeError, match="bad model"):
+        module.start_server("yunshu", {}, "arm")
+    assert len(killed) == 1
+
+
+def test_foreign_health_cannot_certify_own_listener(tmp_path, monkeypatch):
+    module, _, _ = fake_bench(tmp_path, monkeypatch)
+    killed = []
+
+    class Process:
+        def poll(self):
+            return 1
+
+    class Server:
+        def __init__(self, *args):
+            self.proc, self.port = Process(), 18992
+            self.log = tmp_path / "foreign.log"
+            self.log.write_text("Application startup complete.")
+
+        def kill(self):
+            killed.append(self)
+
+    monkeypatch.setattr(module.bench, "Srv", Server)
+    with pytest.raises(RuntimeError, match="own server did not bind"):
+        module.start_server("yunshu", {}, "arm")
+    assert len(killed) == 1
