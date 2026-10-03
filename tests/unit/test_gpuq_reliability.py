@@ -213,8 +213,12 @@ def test_label_reuse_preserves_all_previous_job_artifacts(q):
 def test_starved_backlog_job_ages_one_step(q, monkeypatch):
     now = 100_000.0
     monkeypatch.setattr(q.time, "time", lambda: now)
-    old = dict(id="old", state="pending", priority=-1, submitted=now - q.AGE_S - 1, env={})
-    deep = dict(id="deep", state="pending", priority=-3, submitted=now - 10 * q.AGE_S, env={})
+    old = dict(
+        id="old", state="pending", priority=-1, submitted=now - q.AGE_S - 1, env={}
+    )
+    deep = dict(
+        id="deep", state="pending", priority=-3, submitted=now - 10 * q.AGE_S, env={}
+    )
     fresh = dict(id="fresh", state="pending", priority=0, submitted=now - 5, env={})
     # p-1 that waited AGE_S competes with p0 (older first); deep backlog only rises one step.
     assert q._eff_priority(old, now) == 0
@@ -226,7 +230,9 @@ def test_starved_backlog_job_ages_one_step(q, monkeypatch):
 
 def test_aged_backlog_job_does_not_preempt_running_backlog(q):
     now = 100_000.0
-    aged = dict(id="aged", state="pending", priority=-1, submitted=now - q.AGE_S - 1, env={})
+    aged = dict(
+        id="aged", state="pending", priority=-1, submitted=now - q.AGE_S - 1, env={}
+    )
     interactive = dict(id="p0", state="pending", priority=0, submitted=now, env={})
     assert q._eff_priority(aged, now) == 0
     assert [j["id"] for j in q._preempting([aged, interactive])] == ["p0"]
@@ -235,8 +241,17 @@ def test_aged_backlog_job_does_not_preempt_running_backlog(q):
 def test_aged_running_backlog_job_is_not_preempted(q, monkeypatch):
     now = 100_000.0
     monkeypatch.setattr(q.time, "time", lambda: now)
-    aged = dict(id="aged", state="running", priority=-1, submitted=now - q.AGE_S - 1, pid=1, env={})
-    fresh = dict(id="fresh", state="running", priority=-1, submitted=now - 60, pid=2, env={})
+    aged = dict(
+        id="aged",
+        state="running",
+        priority=-1,
+        submitted=now - q.AGE_S - 1,
+        pid=1,
+        env={},
+    )
+    fresh = dict(
+        id="fresh", state="running", priority=-1, submitted=now - 60, pid=2, env={}
+    )
     assert q._eff_priority(aged, now) == 0
     assert q._eff_priority(fresh, now) == -1
     q._write(q.JOBS / "aged.json", aged)

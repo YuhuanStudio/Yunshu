@@ -847,6 +847,8 @@ class VLMBatchRunner:
     def _step_group(self, group: _Group) -> None:
         from .kernels import batch_invariant
 
+        apc = getattr(group.gen, "apc", None)
+        discard = getattr(apc, "discard_deferred_checkpoints", None)
         if not getattr(self, "_kernel_configuration_logged", False):
             self._kernel_configuration_logged = True
             logger.info(
@@ -859,21 +861,26 @@ class VLMBatchRunner:
         for uid, job in list(group.jobs.items()):
             cancelled = job.cancel_event is not None and job.cancel_event.is_set()
             if job.abandoned or cancelled:
+                # A second request may have joined after the first captured a
+                # checkpoint. Cancellation must drop those unpublished captures
+                # even if the group still has another live row.
+                if discard is not None:
+                    discard()
                 with contextlib.suppress(Exception):
                     group.gen.remove(uid)
                 self._finish(group, uid, "cancel" if cancelled else None)
         if not group.jobs:
+            if discard is not None:
+                discard()
             return
         # Prefix consumers and producers must use the same per-row arithmetic
         # regardless of batch arrival order. The same existing kernels already
         # make the speculative lane invariant.
-        invariant = (
-            group.spec or self.prefix_invariant
-        ) and batch_invariant.is_installed()
+        invariant = batch_invariant.is_installed()
         # With ragged KV on, the speculative lane's decode and verify
         # attention run the ragged kernel over its one-row cache, so both
         # share per-row arithmetic (and the shared batch's).
-        dense_lane = (group.spec or self.prefix_invariant) and bool(self.ragged_kv)
+        dense_lane = bool(self.ragged_kv)
         from . import cache_decode
 
         cache_decode.set_active(invariant and self.prefix_invariant)
@@ -919,9 +926,23 @@ class VLMBatchRunner:
 
             mtp_lane.set_guide(job.guide)
             mtp_lane.set_context(job.ids)
+        apc = getattr(group.gen, "apc", None)
+        flush = getattr(apc, "flush_deferred_checkpoints", None)
+        if flush is not None and apc is not None:
+            # One prefilling request owns these captures. A shared group can
+            # decode one row while admitting another, whose first token has not
+            # been delivered yet; that admission keeps synchronous stores.
+            apc.defer_checkpoint_stores = len(group.jobs) == 1
         try:
             prompt_progress, responses = group.gen.next()
+        except BaseException:
+            discard = getattr(apc, "discard_deferred_checkpoints", None)
+            if discard is not None:
+                discard()
+            raise
         finally:
+            if flush is not None and apc is not None:
+                apc.defer_checkpoint_stores = False
             if group.spec:
                 mtp_lane.set_guide(None)
                 mtp_lane.set_context(None)
@@ -950,6 +971,7 @@ class VLMBatchRunner:
             if job is not None:
                 job.stats.cached_tokens = int(getattr(progress, "cached_tokens", 0))
                 self._note_cache(job)
+        finished = []
         for response in responses:
             job = group.jobs.get(response.uid)
             if job is None:
@@ -962,7 +984,7 @@ class VLMBatchRunner:
                 stats.t_first = now
                 stats.prefill_done = stats.prefill_total
             if response.token is None:
-                self._finish(group, response.uid, response.finish_reason or "stop")
+                finished.append((response.uid, response.finish_reason or "stop"))
                 continue
             stats.generated += 1
             lp = None
@@ -977,7 +999,15 @@ class VLMBatchRunner:
                 }
             self._emit(job, (int(response.token), lp))
             if response.finish_reason is not None:
-                self._finish(group, response.uid, response.finish_reason)
+                finished.append((response.uid, response.finish_reason))
+        # The consumer can detokenize/send the first token while checkpoint
+        # copies and admission run on this same serialized MLX thread.
+        if responses and flush is not None:
+            flush()
+        # Completion/usage must observe publication even for a one-token reply.
+        # The first token was already emitted, so this keeps stores off TTFT.
+        for uid, reason in finished:
+            self._finish(group, uid, reason)
 
     def _observe_prefill(self, job: _Job) -> None:
         """Tell the storage tiers how fast prefill really is (their cost model compares a
@@ -1225,10 +1255,14 @@ class VLMBatchRunner:
             self._schedule()
         elif self.clear_on_idle:
             # Large models: release the buffer pool once everything drains
-            # (clearing under active batches would only force reallocation).
+            # (clearing under active batches would only force reallocation). Up to
+            # YUNSHU_PREFILL_BUFFER_CACHE_GB stays: the next request's cache restore
+            # reuses it (a cleared pool costs ~45 ms per 32K-token cache copy).
             with contextlib.suppress(Exception):
+                from .kernels import buffer_cache
+
                 mx.synchronize()
-                mx.clear_cache()
+                buffer_cache.clear_if_over()
 
 
 def _spec_counters(drafter: Any) -> tuple | None:

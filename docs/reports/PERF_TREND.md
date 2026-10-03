@@ -436,3 +436,50 @@ Agent 重放（opencode 錄製請求，warm 第 2 次起）：TF 0.6.1 105-159 t
 - Prefill 各類別剖析（prefill_profile，27B，8192 token，chunk 2048，2026-10-02）：stock 牆鐘 9.42 s、Yunshu 12.02 s（慢 28%）；佔比 mlp.gate_up 37.7% / 37.0%、mlp.down 21.2% / 20.5%、gdn.in_proj 15.3% / 16.1%；各 matmul 類 stock 41-53 TFLOPS，Yunshu 33-42 TFLOPS。prefill 慢的位置是量化 matmul，不是 attention 或 norm（另一個 agent 持續在做）。
 - Prefill 公平性（cf6105c8，2026-09-28，4 條背景 decode + 1 條長 prefill）：chunk 0 / 256 / 512，16K：長請求 TTFT 17.8 / 21.6 / 19.5 s，prefill 期間背景 decode 0.7 / 2.9 / 1.7 tok/s（原本 23.6）；32K：37.7 / 47.0 / 42.3 s、0.6 / 2.7 / 1.6 tok/s。小 chunk 換來背景速率，付出長請求 TTFT；實驗旗標，沒有成為預設。
 - Fused prefill（2026-09-29，同一 4+1 負載）：fused 64 / 128：16K TTFT 35.9 / 27.5 s（baseline 17.7），背景 decode 7.2 / 4.8 tok/s；32K 78.1 / 60.0 s（baseline 37.7）。背景速度提高，長請求 TTFT 約變兩倍；已被 round driver 的 mixed 負載結果取代（上方 mixed16 背景 3.8 tok/s、TTFT 不退步的方向），不再追。
+
+2026-10-02 Prefill / TTFT（27B Qwen3.8 oQ4e-mtp，M5 Max，tfbench decode part，每格 3 次 session 的平均，prose 與 code 相同；之前 = `YUNSHU_PREFILL_MATMUL=lane YUNSHU_PREFILL_GDN=step`，即改動前的行為；TF 為先前同機量測）：
+
+| TTFT（秒） | 之前 | 之後 | TF 0.6.1 |
+|---|---:|---:|---:|
+| 8K 冷 | 11.02 | 8.43 | 8.45 |
+| 32K 冷 | 47.56 | 37.06 | 39.4 |
+| 8K warm（全前綴命中） | 0.127 | 0.114 | 0.07 |
+| 32K warm | 0.27 | 0.24 | 0.11-0.13 |
+| 8K turn2 | 0.66 | 0.61 | 0.50 |
+| 32K turn2 | 1.11 | 1.04 | 0.65-0.68 |
+
+- 根因：冷 prefill 慢在 matmul，不在 GDN、不在 runner。同一個 chunk-2048 forward（in-process，8K）stock mlx_lm 7.95 s、Yunshu 10.59 s；`mx.clear_cache` 每 chunk 對此無影響（10.61 s）。Yunshu 把所有 projection 換成 LaneLinear，lane kernel 每 128 列重讀一次權重（2048 列的 chunk 讀 16 次），matmul 只有 34-42 TFLOPS，stock 為 46-53（實測 bf16 峰值 52-60，q4 51-56）。
+- 修法 1（`YUNSHU_PREFILL_MATMUL=stock`，預設）：> 512 列的呼叫走 MLX 的 quantized matmul（權重每次呼叫 untile），decode / verify（≤128 列）仍是列不變的 lane kernel，所以 spec on == off 不變；forward 10.59 → 8.59 s。這使 prefill bits 隨 chunk 列數而變（同 stock mlx-lm）。round driver 不受影響（預設 0，只有非 driver 的 spec 路徑開）。
+- 修法 2（`YUNSHU_PREFILL_GDN=chunked`，預設）：prefill chunk（≥64 token）的 GDN core 用 `mx.fast.gated_delta_update`（單層 T=4096 6.5 → 2.4 ms；輸出差 ≤ 1 個 bf16 ulp，state 約 0.2%）。登記為 vendor.json patch。
+- APC key / SSD namespace 含 prefill kernel id（`stock-qmm-gt512+gdn-chunked-ge64`），舊 checkpoint 不會混用。驗證：`apc_restore_identity.py`（冷參考 vs 部分前綴還原 vs 完整還原，貪婪 64 token，逐 token logprob）8K 與 32K、prose 與 code：tokens 相同、logprob 位元相等（max_abs_dlp 0.0）；`sweep_round_driver.py --phase parity`（27B，alone / batch / stagger / AR）全部相同。
+- Roofline：8K prompt ≈ 2 × 26.4e9 × 8192 = 433 TFLOP，在實測 ~55 TFLOPS 下 7.9 s（stock forward 7.95 s = 峰值的 ~100%；8.43 s 含 head 吸入與 runner 開銷）。32K 另加 attention。Yunshu 現在 8K 約 94%、32K 比 TF 快 6%。
+- turn2 / warm 剩餘缺口（32K，engine 內時間線 `turn2_timeline.py`）：turn2 1.04 s ≈ 還原 clone 90 ms + 281 token chunk 0.54 s + 兩次 checkpoint 存檔各約 105 ms（在第一個 token 之前同步做）+ 尾端 1 token 步 0.1 s。checkpoint 位置不是問題（cached 32777 / 33059 已涵蓋整個前一輪 prompt）。複製 32K cache 在 buffer cache 暖時 9 ms、冷時 54 ms；上游每個 prompt chunk 後與 runner idle 時 `mx.clear_cache()`，現在改為保留 6 GiB（`YUNSHU_PREFILL_BUFFER_CACHE_GB`），同大小重複請求的還原 95 → 17 ms，但大小不同的請求（turn2）仍要新配置。
+
+2026-10-02 Prefill handoff 的正確性補查（27B、同一 runner，1K prose，greedy、seed 1234、64 token）：`allow_draft=False` 與 `True` 的完整 token-id digest 不同，首個差異在第 26 個 generated token（0-based）。把 checkpoint 延後候選覆寫回原同步 `APCCoordinator.store_checkpoint` 重跑，兩邊各自的 digest 都與候選相同，所以這個差異不是延後 snapshot 引入的；兩個 probe 均以 rc=1 拒絕 parity，不能當成成功。候選的冷請求與完整 APC 命中 digest 相同，且 capture 計數證明 single-row BatchKVCache 的候選路徑有執行。`_step_group` 目前只在 `group.spec` 時啟用 batch-invariant 與 dense-lane kernels，關 draft 的請求走 shared AR；這是待核對的原因，還不是修復結果。先前 `sweep_round_driver --phase parity` 只證明 driver 自己的 alone/batch/stagger/AR 模式一致，不能替代 serving runner 的 on/off 檢查。128-row 舊門檻的補查仍在 gpuq；尚不能宣稱 512-row 門檻已完成 production spec on/off 驗證。
+
+I7 checkpoint deferral 候選的 roofline：已量到的 32K turn2 1.037 s 中，首 token 前兩筆 checkpoint store 108 + 107 ms，因此理想 TTFT 上限為少 215 ms（20.7%），不是 decode 加速預測。native single-row cache 在 token emission 前只捕捉 lazy detached snapshot，之後由同一 MLX thread evaluate/admit；batch/custom cache 與 pending snapshot 超出 APC RAM budget 時維持同步路徑，取消會丟棄 pending capture。新回歸測試證明原程式失敗、候選通過（包含對同一 mx.array 的原位修改、KV append、metadata offset 保留與 emit-before-flush）。三組 HTTP A/B 尚未完成，不記錄效能勝負；量測 harness 若發現另一套直接執行的完整 unit suite 同時運行，會失敗而不採用數字。
+128-row 舊門檻補查已完成：同步 baseline 同樣在 generated token 26 分歧，off digest `f7d979e5d0be…`、on `ac026b6e2a96…` 與 512-row / 延後候選完全一致。因此這個 production AR/spec 分歧在原門檻就存在，不能歸因於 512-row 或 I7。第一個 HTTP A/B job 因完整 unit suite 同時運行被污染檢查立即拒絕（rc=1、0 s），沒有採用任何效能數字。
+
+2026-10-03 Prefill checkpoint deferral / restore reservation（Qwen3.8-27B oQ4e-mtp，M5 Max，HTTP greedy 256 output tokens，三輪交錯獨立 server sessions，中位數）：
+
+2026-10-03 11:00 contention 規則更新為 foreign CPU >= 1620%。以下六 jobs 的 JSON 均為 `contended=false`（含 reclassified），不因 result rows 的舊 contended 標記重跑。job wrapper rc=1 是舊 load/quiet 判定；逐 arm 檢查全部 rc=0、six measurement rows、success complete、server engaged proof。資料 `prefill2-http-final-0055/*-0132-{legacy,reserved,tf}.jsonl`，重新收割 `prefill3-reclassified-harvest.json` / `prefill3-reclassified-summary.json`。jobs：`1003-013230-00-prefill2-v2-http-{8192,32768}-{r0,r1,r2}-0132`。
+
+| ctx / kind | cold legacy / reserved / TF (ms) | turn2 legacy / reserved / TF (ms) | warm legacy / reserved / TF (ms) |
+|---|---:|---:|---:|
+| 8K prose | 8463 / 8402 / 8396 | 637 / 564 / 495 | 118 / 112 / 68 |
+| 8K code | 8469 / 8424 / 8399 | 633 / 559 / 495 | 117 / 116 / 70 |
+| 32K prose | 37004 / 36903 / 39035 | 965 / 819 / 653 | 228 / 217 / 104 |
+| 32K code | 37053 / 36899 / 39098 | 986 / 875 / 669 | 240 / 240 / 128 |
+
+Yunshu 實際 MTP；TF 日誌明確 DFlash2。每個 ctx/kind/phase 跨三輪和 arms 的 request hash 相同，turn2 assistant reply 固定。legacy 關掉 buffer cache、使用 stock threshold128、同步 checkpoint、upstream merge；reserved 為 threshold512、保留 buffer cache、deferred checkpoint、single-row KV reservation。因此此表是整組 behavior A/B，不能把全部差值歸因於 deferral，也不能宣稱 legacy/reserved token 位元相等（prefill arithmetic 不同）。32K cold 比 TF 快約 5.5%，turn2 / warm 仍落後 TF。
+
+同 arithmetic 的固定成本 probe `1003-005349-00-prefill2-v2-fixed-0053`（rc0+complete，JSON clean/reclassified，三輪交錯）：32K prefix 加 66 fresh tokens，sync / deferred / reserved TTFT median 576.48 / 472.82 / 467.09 ms；sync/deferred 都使用 upstream merge，故 deferred 少 103.66 ms（18.0%）。三種模式 generated token digests 相同。後續一 token revisit 約 111–113 ms，首個 allocator-cold revisit 約 205–215 ms，不能用 deferral 解釋一 token 固定 overhead。reservation 的 suffix 差值只有 5.73 ms（1.2%），保留數字、不單獨作穩定收益聲明。
+
+正確性：`1003-005349-00-prefill2-v2-identity-0053` rc0+complete，8K/32K prose/code 的 suffix/chat cold/partial/full APC token 與逐 token logprob 相同（max_abs_dlp=0）；`1003-005349-00-prefill2-v2-parity-0053`、合併後 `1003-101326-00-prefill3-merged-parity-1022` rc0+complete，1K prose/code serving spec off/on token digests 相同。先前第26 token AR/spec 分歧已以共同 target kernel context 修正。合併 main cache TTL/span policy 時 metadata 隨 detached snapshot 捕捉，只在成功 admission 後發布；max_tokens=1 的 first token 先 emit、再 flush、最後 DONE，避免 written usage race（30577356 / 6a6ec759）。
+
+2026-10-03 small but real：單列 native GDN restore 的 suffix-prefill view（`1003-102110-00-prefill3-fixed-view-1021`，rc0 + success complete；quiet，foreign CPU max217.6%，低於1620%；MTP engaged，32K，三輪交錯 sync/reserved/view）：
+
+- 66-token suffix 的 reserved/view 三輪配對少 2.96 / 4.49 / 5.93 ms（0.63 / 0.95 / 1.26%）；配對中位改善4.49ms。各 arm 自己的 TTFT 中位數 sync/reserved/view = 564.58 / 470.77 / 467.81 ms。cold/hit 與各 mode generated token digest 均相同；本 probe 每次16個generated tokens，逐token logprob的完整8K/32K identity證據是前一個 merged-identity job，不把兩個probe混成同一驗證。
+- view 用獨立 array handles 接續已 detached 的單列 ArraysCache，省 upstream merge 的 zeros+整 row copy；重置 lengths/left_padding，CPU逐 state 與 upstream merge相同，雙向mutation隔離通過。多列/custom/non-native狀態沿用 upstream。
+- 一 token revisit 的 view 沒有穩定收益：第二個 warm revisit 各輪配對 +2.41 / -7.57 / -6.12 ms（正=省時）；第三個 +1.90 / -2.74 / +0.52 ms。因此 serving 只在已知單列 memory plan、fresh suffix >=64 時使用 view；短 suffix / 未知 plan保留原 merge。64是保守的使用範圍限制，量測點為66，不宣稱找到了最佳 crossover。
+- 這是 suffix TTFT 約1%的小改善，不是 cold prefill或decode速度聲明；沒有新增設定或實驗旗標。原型與解析檔 `prefill3-fixed-view.py`、`prefill3-fixed-view-summary.json`，完整log在gpuq。

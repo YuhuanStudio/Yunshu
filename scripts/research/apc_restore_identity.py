@@ -19,10 +19,19 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import tfbench as t  # noqa: E402
 
 
+def assert_identity(out):
+    for mode in ("partial", "full"):
+        result = out[mode]
+        if not result["cached"] or not (
+            result["tokens_equal"] and result["logprobs_equal"]
+        ):
+            raise RuntimeError(f"APC {mode} restore is not bit-equal: {result}")
+
+
 def ask(url, model, text, n=64):
     body = dict(
         model=model,
-        messages=[{"role": "user", "content": text}],
+        messages=[{"role": "user", "content": text}] if isinstance(text, str) else text,
         max_tokens=n,
         temperature=0,
         logprobs=True,
@@ -72,6 +81,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--ctx", type=int, default=8192)
     ap.add_argument("--kind", default="prose")
+    ap.add_argument("--turn2", action="store_true")
     ap.add_argument("--env", action="append", default=[])
     ap.add_argument("--out", required=True)
     a = ap.parse_args()
@@ -81,6 +91,21 @@ def main():
         P
         + "\n\nAdditionally, answer in exactly one short paragraph and begin with the word Overall."
     )
+    if a.turn2:
+        Q = [
+            {"role": "user", "content": P},
+            {
+                "role": "assistant",
+                "content": (
+                    "The reference describes events, names, places, and their explanations. "
+                    * 24
+                ),
+            },
+            {
+                "role": "user",
+                "content": "Continue with the next part, at the same length.",
+            },
+        ]
     res = {}
     s = t.Srv("yunshu", env, f"apcid-A-{a.ctx}")
     try:
@@ -97,7 +122,7 @@ def main():
     finally:
         s.kill()
     ref = res["cold"]
-    out = dict(ctx=a.ctx, env=env)
+    out = dict(ctx=a.ctx, kind=a.kind, turn2=a.turn2, env=env)
     for k in ("partial", "full"):
         r = res[k]
         out[k] = dict(
@@ -116,6 +141,8 @@ def main():
     print(json.dumps(out))
     with open(a.out, "a") as f:
         f.write(json.dumps(out) + "\n")
+        assert_identity(out)
+        f.write(json.dumps(dict(phase="complete", success=True)) + "\n")
 
 
 if __name__ == "__main__":
