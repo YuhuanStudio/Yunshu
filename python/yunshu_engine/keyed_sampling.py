@@ -146,7 +146,8 @@ class KeyedSampler:
         from .utils.hardware import is_paravirtual_metal
 
         if is_paravirtual_metal():
-            self.sample_positions = self._sample_positions_virtual
+            # Bind once: physical GPUs retain the original per-draw method.
+            self.sample_positions = self._sample_positions_virtual  # type: ignore[method-assign]
 
     def _sample_positions_virtual(self, logprobs, positions):
         """Bound each VM command buffer; the 600 x 248320 graph can GPU-hang."""
