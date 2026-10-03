@@ -299,3 +299,38 @@ GDN and attention already select native NAX: no additional GDN/attention/norm
 change is shipped. A future norm-to-loader fusion must preserve each original
 bf16 rounding boundary; its cheapest decisive test is a single-layer paired
 output/state comparison before whole-model timing. It remains unimplemented.
+
+## Final main integration gates
+
+Main 2830fff1 was merged once in this resumed run (5b542a24), retaining M1–M4
+portable invariant kernels and the M5 fragments. The only shared lane_qmm
+extension is the bounded long-narrow prefill entry (6 additions/2 deletions);
+VLM setup has 18 cold-compute integration lines. Restore/APC implementation
+is untouched.
+
+`1004-005400-00-nax-merged-identity-0059`: explicitly device=m5, rc0, successful
+complete, clean, foreign CPU max 183.1%; all eight cases retain genuine
+partial/full APC hits and bit-equal token IDs/logprobs (max_abs_dlp=0).
+All 16 logs confirm NAX and MTP engagement. M5 full unit suite: 8679 passed,
+20 skipped, 12 warnings in 324.84s; focused 26 passed; ruff check/format pass;
+mypy no new errors (897 baseline). No worktree venv was created.
+
+The additional post-merge quiet HTTP repeat
+`1004-005443-00-nax-merged-http-0101` was cancelled before it started after
+waiting for a queue slot; there is no output or new timing claim. CPU source
+comparison confirms that main 2830fff1 selects the exact same M5 `_MAIN`,
+`_COOP`, `NIBBLES` and `BYTES` shader strings as the measured 1bddf9a2 baseline.
+The runner, scheduler and GDN prefill files also have no intervening changes.
+This source comparison is not substituted for a timing measurement: the table
+above remains the measured pre-merge three-repetition A/B, and post-merge
+correctness is established by the explicit M5 identity job.
+
+All 34 inherited/resumed jobs were harvested (20 done rc0, 7 failed rc1, 7
+cancelled; no pending/running). Full job IDs, rc, output complete records and
+log tails: `/Volumes/P5Plus/yunshu-build/codex/naxprefill2-harvest.json`; wrapper
+children: `naxprefill2-child-harvest.json`. Known failed initial arms were
+kept as failures: Metal buffer-address rewrite, reused capture path, HTTP
+shutdown receipt, misaligned quality prompt, and tiny partial/spec assumptions.
+Their corrected replacements passed; no failed wrapper is called successful.
+Inspected Metal traces were deleted. Final document/private-research checks:
+19 passed, and git diff --check passed.
