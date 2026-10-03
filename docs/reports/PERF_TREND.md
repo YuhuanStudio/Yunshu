@@ -628,3 +628,60 @@ User-requested **single quiet restoration gate**, not a new speedup claim: same 
 DFlash paired decode deltas: -0.36% to +3.00%; MTP: -0.41% to +1.01%. MTP code-1K 98.6 -> 98.2 tok/s; DFlash code-1K 109.6 -> 110.3 tok/s. No paired regression exceeds 0.42%, within the previously observed main spans. Positive single-pass deltas are noise, not shipped acceleration claims. The prior span reference has an unmonitored-before-adoption flag; this run has complete clean monitoring.
 
 Job 1003-224254-00-m3compat-timing-dispatch-20261003-c: done rc=0, complete=true, contended=false, 898s, no pauses; foreign CPU max255.2% / mean77.8%, threshold1620%. Tiny rehearsal 1003-223011-00-m3compat-tiny-dispatch-20261003-b: done rc=0, complete=true. M5 unit8628 passed; M3 via scripts/dev/m3run unit8539 passed and 0.8B HTTP on/off97 IDs identical. Temporary M3/model scratch removed. Evidence and every paired value: /Volumes/P5Plus/yunshu-build/codex/m3compat3/{validation.json,timing-verdict.json,timing-table.md,source-equality.json,baked-source-equality.json,http-m3.json,timing-job-receipt.json,gpuq-digest.json}.
+
+
+### 2026-10-04 — M5 native NAX cold-prefill loader (codex-naxprefill2)
+
+Shipped on branch codex-naxprefill in 5b542a24 (not merged into main by this
+worker). Same checkpoint Jundot/Qwen3.8-27B-oQ4e-mtp, MLX0.32.3, M5 Max.
+Directly load lane-tiled weights and paired scales/biases into MLX native NAX
+QMM arithmetic; use BM128/BN64/BK64, retaining BM64 for M>4096/K>8192. Narrow
+prefill uses its original32-row arithmetic over one aligned span. Generic
+lane callers retain the512-row bound. Startup warms tiny shader variants
+before readiness; that compilation cost belongs to model loading. No second
+resident weight layout, new setting or lossy precision change. Version/device/
+generation/model/shape guards retain stock on unsupported paths; M1–M4 retain
+main portable kernels. Existing APC arithmetic ID includes the native source
+hash; restore/APC implementation is untouched.
+
+M5 job1003-212558-00-nax-final-http-2125: rc0 + successful complete, --quiet,
+foreign CPU max210.21% below1620%; three balanced independent server sessions
+per arm/context, greedy256 output tokens, cached=0. Baseline disables only
+this integration in the same serving tree based on main1bddf9a2. All paired
+request hashes and complete response digests match. All12 server logs show
+MTP; all6 candidate logs show real NAX prefill engagement. Reductions below
+are ratios of TTFT medians, not medians of per-pair reductions.
+
+| Cold HTTP TTFT median ms (M5) | Main stock baseline | Native loader | Reduction | Historical TensorFold |
+|---|---:|---:|---:|---:|
+|8K prose|8547|7765|9.15%|8396|
+|8K code|8432|7788|7.64%|8399|
+|32K prose|36806|34105|7.34%|39035|
+|32K code|36651|34134|6.87%|39098|
+
+TF is the earlier PERF_TREND DFlash2 measurement, not a new TF run; Yunshu
+is MTP. The earlier prototype first cold8K prose regressed8546 vs8451ms
+before startup shader warmup was integrated; that negative result is retained
+in the private NAX_PREFILL notes. The standalone tile-only8K plain-forward gain was about
+0.9% (small but real), kept within the combined change; narrow-only timings
+were mixed, so there is no separate narrow HTTP gain claim.
+
+M5 gates:1003-192610-00-nax-quality200-aligned-1925 rc0+complete,200/200 both
+arms,0 different raw token IDs/all-token logprobs (long-padding arithmetic
+questions, not a broad accuracy benchmark). 1003-213959-00-nax-production-identity-2140
+and post-merge1004-005400-00-nax-merged-identity-0059 both rc0+complete:8K/32K
+prose/code suffix/chat, genuine partial/full APC hits versus cold, tokens and
+logprobs bit-equal (max_abs_dlp0); each has16 NAX+MTP server logs. Classified
+profile and native hidden/full-cache bit parity:1003-171419-00-nax-phase2-quiet-1715.
+Stock QMM/GDN/attention already engage NAX; this improvement removes layout
+work and tunes tiles, not first enabling Neural Accelerators.
+
+Main2830fff1 was merged once. Its selected M5 lane/widen shader strings equal
+the measured baseline byte-for-byte; runner/scheduler/GDN prefill unchanged.
+Post-merge M5 full suite8679 passed/20 skipped, ruff pass, mypy no new errors.
+Additional timing job1004-005443-00-nax-merged-http-0101 was cancelled before
+start after waiting for a slot; no post-merge TTFT measurement is claimed.
+All34 inherited/resumed jobs finished or cancelled, receipts in
+/Volumes/P5Plus/yunshu-build/codex/naxprefill2-harvest.json. Full roofline,
+per-op breakdown, exact engagement/dispatch, exclusions and own ideas:
+the private research notes (NAX_PREFILL.md).

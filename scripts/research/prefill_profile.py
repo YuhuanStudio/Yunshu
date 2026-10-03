@@ -85,8 +85,10 @@ def run_chunks(inner, owner, ids, chunk, *, clear):
     t_all = time.perf_counter()
     for s in range(0, len(ids), chunk):
         t0 = time.perf_counter()
-        inner(x[:, s : s + chunk], cache=cache)
-        mx.eval([c.state for c in cache])
+        out = inner(x[:, s : s + chunk], cache=cache)
+        # Cache alone does not depend on the final block's MLP/norm. MLX is
+        # lazy: materialize hidden outputs too, so this profiles a full forward.
+        mx.eval(out, [c.state for c in cache])
         times.append(time.perf_counter() - t0)
         if clear:
             mx.clear_cache()
@@ -114,6 +116,19 @@ class Timers:
         self.flops = collections.defaultdict(float)
         self.rows = 0
 
+    def exclusive(self):
+        """Split nested layout/GDN timers without counting their time twice."""
+        times = dict(self.t)
+        for key in list(times):
+            if key.endswith(".layout"):
+                parent = key.removesuffix(".layout")
+                times[parent] -= times[key]
+        if "gdn.native_core" in times:
+            parent = times.pop("gdn.prepare+core")
+            times["gdn.prepare"] = parent - times["gdn.native_core"]
+            self.n["gdn.prepare"] = self.n["gdn.prepare+core"]
+        return times
+
     def sync_cost(self):
         x = mx.ones((8,))
         mx.eval(x)
@@ -135,6 +150,7 @@ def instrument(inner, T):
 
     def timed(key, fn, flops=None):
         def run(*a, **k):
+            mx.eval(a, k)  # resolve lazy input producers outside this op's timer
             mx.synchronize()
             t0 = time.perf_counter()
             out = fn(*a, **k)
@@ -152,7 +168,11 @@ def instrument(inner, T):
         d = dims(mod)
         base_call = cls.__call__
 
+        if hasattr(mod, "stock"):
+            mod.stock = timed(key + ".layout", mod.stock)
+
         def call(self, x, *a, **k):
+            mx.eval(x)
             mx.synchronize()
             t0 = time.perf_counter()
             out = base_call(self, x, *a, **k)
@@ -177,6 +197,9 @@ def instrument(inner, T):
                 wrap_module(getattr(la, name), "gdn.in_proj")
             wrap_module(la.out_proj, "gdn.out_proj")
             wrap_module(la.norm, "gdn.gated_norm")
+            wrap_module(la.conv1d, "gdn.conv")
+            if hasattr(la, "_normalize_qk"):
+                la._normalize_qk = timed("gdn.qk_norm", la._normalize_qk)
         else:
             at = layer.self_attn
             for name in ("q_proj", "k_proj", "v_proj"):
@@ -186,7 +209,11 @@ def instrument(inner, T):
         wrap_module(ml.gate_proj, "mlp.gate_up")
         wrap_module(ml.up_proj, "mlp.gate_up")
         wrap_module(ml.down_proj, "mlp.down")
-    mod.gated_delta_update = timed("gdn.core(conv-excluded)", mod.gated_delta_update)
+    mod.gated_delta_update = timed("gdn.prepare+core", mod.gated_delta_update)
+    if hasattr(mx.fast, "gated_delta_update"):
+        mx.fast.gated_delta_update = timed(
+            "gdn.native_core", mx.fast.gated_delta_update
+        )
     sdpa = mx.fast.scaled_dot_product_attention
     mx.fast.scaled_dot_product_attention = timed("attn.sdpa", sdpa)
     return mod
@@ -199,15 +226,16 @@ def classes(inner, owner, ids, chunk, clear):
     instrument(inner, T)
     T.t.clear(), T.n.clear(), T.flops.clear()
     times, wall = run_chunks(inner, owner, ids, chunk, clear=clear)
-    tot = sum(T.t.values())
+    measured = T.exclusive()
+    tot = sum(measured.values())
     layer_wall = wall
     out = {}
-    for k in sorted(T.t, key=lambda k: -T.t[k]):
+    for k in sorted(measured, key=lambda k: -measured[k]):
         out[k] = dict(
-            s=round(T.t[k], 3),
+            s=round(measured[k], 3),
             n=T.n[k],
-            tflops=round(T.flops[k] / T.t[k] / 1e12, 1) if T.flops[k] else None,
-            pct_wall=round(100 * T.t[k] / layer_wall, 1),
+            tflops=round(T.flops[k] / measured[k] / 1e12, 1) if T.flops[k] else None,
+            pct_wall=round(100 * measured[k] / layer_wall, 1),
         )
     out["_other(rope/conv/cache/residual/host)"] = dict(
         s=round(layer_wall - tot, 3),
