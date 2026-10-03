@@ -128,3 +128,11 @@ def test_all_agent_shapes_include_automatic_and_forced_choice():
         "/v1/responses",
     }
     assert all(body["model"] == "model" for _, _, body in cases)
+
+
+def test_different_result_files_never_overwrite_raw_arm_artifacts(tmp_path):
+    first = harness.arm_directory(tmp_path / "tiny.jsonl", "rapid", 0, 128)
+    second = harness.arm_directory(tmp_path / "27b-smoke.jsonl", "rapid", 0, 128)
+    assert first != second
+    assert first == tmp_path / "tiny" / "rapid-r0-n128"
+    assert second == tmp_path / "27b-smoke" / "rapid-r0-n128"

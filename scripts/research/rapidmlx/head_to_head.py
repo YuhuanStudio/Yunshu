@@ -79,8 +79,13 @@ def request(url, body, raw_path=None):
     }
 
 
+def arm_directory(output, engine, rep, size):
+    """Namespace all raw artifacts by the unique result file, not just its parent."""
+    return output.parent / output.stem / f"{engine}-r{rep}-n{size}"
+
+
 def run_arm(args, engine, rep, size, write):
-    arm = args.output.parent / f"{engine}-r{rep}-n{size}"
+    arm = arm_directory(args.output, engine, rep, size)
     arm.mkdir(parents=True, exist_ok=True)
     env = os.environ.copy()
     for key in list(env):
