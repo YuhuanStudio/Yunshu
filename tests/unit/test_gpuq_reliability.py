@@ -341,3 +341,24 @@ def test_short_checks_run_first_within_a_priority(q):
     assert not q._is_short(dict(label="tinyllama-bench")) and q._is_short(
         dict(label="x-smoke")
     )
+
+
+def test_running_p0_job_is_never_paused_for_priority(q, monkeypatch):
+    now = 100_000.0
+    monkeypatch.setattr(q.time, "time", lambda: now)
+    job = dict(
+        id="p0",
+        state="running",
+        priority=0,
+        submitted=now - 3 * q.AGE_S,
+        started=now - 3 * q.AGED_SLICE_S,
+        pid=1,
+        env={},
+    )
+    q._write(q.JOBS / "p0.json", job)
+    q.submit(["true"], "x-smoke", 1, 0)
+    pauser = q.Pauser(job, q.JOBS / "p0.json")
+    monkeypatch.setattr(pauser, "_signal", lambda sig: None)
+    monkeypatch.setattr(q, "_execute", lambda *a, **k: None)
+    assert q._priority_step(pauser, q.ServingGate(), now) is False
+    assert not pauser.paused

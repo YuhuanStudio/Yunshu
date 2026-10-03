@@ -657,6 +657,8 @@ def _priority_step(pauser: Pauser, gate: ServingGate, now: float) -> bool:
     # guaranteed AGED_SLICE_S of running since it last started or resumed, so it
     # makes progress; after that it yields to p0 work like any backlog job (a long
     # aged job must not hold the GPU for hours while interactive work queues).
+    if pauser.job.get("priority", 0) >= 0:
+        return False  # only backlog (raw p<=-1) work is ever paused for priority
     if (
         _eff_priority(pauser.job, now) >= 0
         and not pauser.paused
