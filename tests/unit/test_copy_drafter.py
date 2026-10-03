@@ -237,3 +237,13 @@ def test_round_rechecks_target_after_another_engine_sets_global_copy_width(monke
 def test_unknown_target_geometry_keeps_a_conservative_copy_cap(monkeypatch):
     monkeypatch.setitem(mtp_lane._STATE, "copy_rows", 32)
     assert mtp_lane.copy_rows_for_model(object()) == 8
+
+
+def test_default_copy_cap_is_wide_but_unknown_backend_stays_narrow(monkeypatch):
+    from yunshu_engine import mtp_lane, settings
+
+    monkeypatch.delenv("YUNSHU_SPEC_COPY_ROWS", raising=False)
+    assert settings.REGISTRY["YUNSHU_SPEC_COPY_ROWS"].default == 16
+    monkeypatch.setitem(mtp_lane._STATE, "copy_rows", 16)
+    assert mtp_lane.copy_rows_for_model(object()) == 8
+    assert mtp_lane.copy_rows_for_model(object(), rows=0) == 0

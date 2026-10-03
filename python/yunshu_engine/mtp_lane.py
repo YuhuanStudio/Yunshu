@@ -54,7 +54,7 @@ _STATE: dict = {
     "profile": None,
     "guide": None,
     "context": None,  # the request's FULL prompt ids (not the tail after a prefix hit)
-    "copy_rows": 8,  # verify rows a copy round may use (0: copy rounds off)
+    "copy_rows": 16,  # verify rows a copy round may use (0: copy rounds off)
 }
 
 

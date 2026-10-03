@@ -436,3 +436,36 @@ Agent 重放（opencode 錄製請求，warm 第 2 次起）：TF 0.6.1 105-159 t
 - Prefill 各類別剖析（prefill_profile，27B，8192 token，chunk 2048，2026-10-02）：stock 牆鐘 9.42 s、Yunshu 12.02 s（慢 28%）；佔比 mlp.gate_up 37.7% / 37.0%、mlp.down 21.2% / 20.5%、gdn.in_proj 15.3% / 16.1%；各 matmul 類 stock 41-53 TFLOPS，Yunshu 33-42 TFLOPS。prefill 慢的位置是量化 matmul，不是 attention 或 norm（另一個 agent 持續在做）。
 - Prefill 公平性（cf6105c8，2026-09-28，4 條背景 decode + 1 條長 prefill）：chunk 0 / 256 / 512，16K：長請求 TTFT 17.8 / 21.6 / 19.5 s，prefill 期間背景 decode 0.7 / 2.9 / 1.7 tok/s（原本 23.6）；32K：37.7 / 47.0 / 42.3 s、0.6 / 2.7 / 1.6 tok/s。小 chunk 換來背景速率，付出長請求 TTFT；實驗旗標，沒有成為預設。
 - Fused prefill（2026-09-29，同一 4+1 負載）：fused 64 / 128：16K TTFT 35.9 / 27.5 s（baseline 17.7），背景 decode 7.2 / 4.8 tok/s；32K 78.1 / 60.0 s（baseline 37.7）。背景速度提高，長請求 TTFT 約變兩倍；已被 round driver 的 mixed 負載結果取代（上方 mixed16 背景 3.8 tok/s、TTFT 不退步的方向），不再追。
+
+
+## 2026-10-03 — prompt-copy maximum 8 → 16 rows (codex-wide3)
+
+Qwen3.8-27B-oQ4e-mtp, M5 Max; same Python source/checkpoint, 3 interleaved
+8/16-row server arms, MTP mode and actual copy caps confirmed. Job
+`1003-110949-00-wide3-copy-cap-bindfix-1111`: rc0, final complete success,
+CPU clean (foreign max 265.5%, threshold 1620%). All workload/phase output
+digests match. Earlier `1003-101336-00-wide3-copy-cap-ab-1020` failed its first
+arm on a port bind race; it is not the decision run.
+
+Median decode tok/s (8 → 16):
+
+| Context | Workload | cold | warm | turn2 |
+|---|---|---:|---:|---:|
+| 8K | code | 67.4 → 69.3 | 67.4 → 68.7 | 106.1 → 129.2 |
+| 32K | code | 68.2 → 70.9 | 70.4 → 73.0 | 70.7 → 73.1 |
+| 8K | prose | 52.5 → 52.3 | 52.6 → 52.4 | 55.2 → 55.1 |
+| 32K | prose | 48.1 → 48.0 | 48.1 → 47.9 | 50.6 → 50.1 |
+
+Decision: default maximum 16; retain the per-model certified width (8 on narrow
+backends), explicit 8-row override and 0=off. The existing short-match first
+window, confidence gate and miss backoff remain unchanged. Although 32K
+attention makes 12+ rows dearer, long code copies still pay: no context-only hard
+8-row cap. This is a code/repetition benefit with a measured small prose
+tradeoff (-0.2% to -1.0%), not a universal speedup or TTFT claim. Small but real:
+8K warm code +1.9%, 32K code +3.4–4.0%; 8K code turn2 +21.8% on this corpus.
+
+The separate cost-aware policy was rejected and moved to a research-only
+wrapper (`1003-102815-00-wide3-copy-cost-ab-1030`, rc0, complete, clean, same
+digests): fixed16 → cost16 at 32K prose cold/warm 48.2 → 46.8/46.9, all three
+pairs negative. It missed useful copy islands (4 rounds/12 tokens → 1/1).
+The public YUNSHU_SPEC_COPY_COST option and serving switch were removed.
