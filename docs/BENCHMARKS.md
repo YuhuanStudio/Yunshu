@@ -170,3 +170,31 @@ interleaved runs for a new speed claim. Require rc 0, expected outputs, and the
 harness's terminal record (`part_done` for tfbench); interrupted parts are not results.
 Compare complete digests for lossless A/Bs and record failures, timeout and truncation
 counts alongside accuracy. No benchmark or server was started for this docs update.
+
+
+## 0.1.3 draft measurements (2026-10-03)
+
+M5 Max, Jundot/Qwen3.8-27B-oQ4e-mtp; each comparison uses the same checkpoint.
+These experiments use distinct source snapshots and workloads. Do not multiply
+improvements or compare their rates across rows. The append-only
+[PERF_TREND](reports/PERF_TREND.md) retains full runs, engaged modes, output checks
+and rejected experiments.
+
+| Change / metric | Before → after | Source in PERF_TREND / receipt |
+|---|---|---|
+| Complete JSON warm decode, AR → DFlash | 23.4 → 111.4 tok/s | Oct 3 constrained speculation; `1003-125849-00-cspec-complete-json-tool-quiet-r3-1254` |
+| Complete tool-call warm decode, AR → DFlash | 23.0 → 77.7 tok/s | Same receipt; complete schema-valid output, tokens equal |
+| Follow-up TTFT, 8K code / 32K code, MTP | 569 → 512 ms / 900 → 721 ms | Oct 3 native singleton KV capacity; `1003-145700-00-prefill4-http-combo8k-1456` / `http-combo32k-1456` |
+| DFlash cold code decode, 8K / 32K | 74.50 → 82.19 / 72.74 → 82.56 tok/s | Oct 3 DFlash2 greedy prompt-copy islands; `1003-161523-00-wide4-timing-bundle-1615` |
+| MTP copy cap 8 → 16, 8K code turn 2 | 106.1 → 129.2 tok/s | Oct 3 prompt-copy maximum; `1003-110949-00-wide3-copy-cap-bindfix-1111` |
+
+All above are medians of three interleaved clean repetitions, with matching token
+digests. JSON/tool runs also verify complete schema-valid outputs and warm cache
+hits. Prompt copying has workload-dependent tradeoffs: cap 16 lowered measured
+prose rates by 0.2–1.0%; DFlash copy-island prose changes ranged −0.05% to +4.23%.
+The follow-up experiment leaves 32K prose/code TTFT 56/51 ms behind TensorFold;
+8K gaps are 1/7 ms. No claim of universal superiority follows from these rows.
+
+Prompt-cache single-flight is also landed, but its performance summary in merge
+`85f6ae01` is not yet recorded in PERF_TREND. Its numerical claim is withheld here
+until the underlying measurement is added to the canonical log.

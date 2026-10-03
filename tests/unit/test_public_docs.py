@@ -82,3 +82,23 @@ def test_translated_performance_numbers_match_english():
     assert reference
     for path in READMES[1:]:
         assert numbers(path) == reference, f"{path.name}: measurement drift"
+
+
+def test_unreleased_changelog_has_release_notes_structure():
+    text = (ROOT / "CHANGELOG.md").read_text()
+    section = text.split("## [Unreleased]\n", 1)[1].split("\n## [", 1)[0]
+    required = [
+        "Highlights",
+        "Upgrade notes / breaking changes",
+        "Performance",
+        "Added",
+        "Changed",
+        "Fixed",
+        "Security",
+    ]
+    headings = re.findall(r"^### (.+)$", section, re.MULTILINE)
+    assert headings == required
+    highlights = section.split("### Highlights\n", 1)[1].split("\n### ", 1)[0]
+    assert 3 <= len(re.findall(r"^- ", highlights, re.MULTILINE)) <= 6
+    assert "| Machine | Model / mode | Metric / workload | Before → after |" in section
+    assert "https://github.com/YuhuanStudio/Yunshu/compare/" in section
