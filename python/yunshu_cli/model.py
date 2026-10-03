@@ -228,7 +228,10 @@ def pull(
         None, "--dir", "-d", help="Download under this directory (default: models dir)."
     ),
     revision: str | None = typer.Option(
-        None, "--revision", "-r", help="Branch, tag or commit."
+        None,
+        "--revision",
+        "-r",
+        help="Branch, tag or commit; resolve it even when the model is already cached.",
     ),
     force: bool = typer.Option(
         False,
@@ -248,7 +251,9 @@ def pull(
     base = Path(models_dir).expanduser() if models_dir else _get_models_dir()
     target = base / parts[0] / parts[1]
 
-    if not force:
+    # A complete directory/cache proves availability, not the requested revision.
+    # Let the Hub resolve explicit revisions; unchanged blobs are still reused.
+    if not force and revision is None:
         for candidate in (target, base / parts[1]):
             if weights_complete(candidate)[0]:
                 emit(
@@ -292,6 +297,7 @@ def pull(
     emit(
         {
             "status": "downloaded",
+            "revision": revision,
             "path": str(target),
             "repo_id": repo_id,
             "type": model_type,
