@@ -10,6 +10,30 @@ from collections.abc import Mapping
 from math import isfinite
 
 
+class RoundCostClock:
+    """Readback intervals suitable for learning service cost.
+
+    A suspended generator lets the consumer delay the next readback while GPU
+    work may still run. Subtracting that time would undercharge overlapping GPU
+    work; discard intervals with >1 ms of publication suspension instead.
+    """
+
+    def __init__(self) -> None:
+        self.last_readback: float | None = None
+        self.publication_ms = 0.0
+
+    def published(self, elapsed_ms: float) -> None:
+        self.publication_ms += max(0.0, elapsed_ms)
+
+    def readback(self, now: float) -> float | None:
+        previous = self.last_readback
+        elapsed = (now - previous) * 1000 if previous is not None else None
+        eligible = self.publication_ms <= 1.0
+        self.last_readback = now
+        self.publication_ms = 0.0
+        return elapsed if eligible else None
+
+
 class CopyCosts:
     def __init__(self, row_ms: Mapping[int, float], model_ms: float):
         if not row_ms or any(
@@ -101,9 +125,10 @@ VERIFY_MS_BY_CONTEXT: dict[int, dict[int, float]] = {
     8192: {6: 43.07, 8: 43.61, 12: 46.14, 16: 46.92},
     32768: {6: 47.53, 8: 47.89, 12: 55.9, 16: 55.77},
 }
-# Drafter + selection overhead of a model round on top of its verify (DFlash2
-# draft ~8.5 ms, quiet), and the block the model round verifies.
-MODEL_DRAFT_MS = 8.5
+# MTP lane head/selection prior above verify (research wrapper uses 2.7 ms).
+# This policy is wired into MTP rounds, not the ~8.5 ms DFlash2 drafter. Complete
+# request-local model observations replace this prior after three rounds.
+MODEL_DRAFT_MS = 2.7
 MODEL_BLOCK_ROWS = 6
 MAX_PRICED_ROWS = 16
 

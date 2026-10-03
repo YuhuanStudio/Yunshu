@@ -2,10 +2,11 @@
 
 Times the drafter's own matmul shapes at the row counts a draft step uses
 (M = 4..12) for bf16 / q8 / q4, one eval per matmul (launch + execution) and a
-chain of 40 back-to-back matmuls under one eval (execution only, no per-call
-sync), so the gap between the two is the launch/sync cost and the chain figure
-against bytes/bandwidth shows whether M-row quantized matmuls reach the memory
-roofline. Output: one JSON line per case, final ``complete`` record.
+batch of 40 matmuls with distinct, pre-evaluated inputs under one eval.
+This amortizes host submission/synchronization, but does not isolate kernel
+execution: weights can be cache-hot and graph encoding is still included.
+Identical inputs would allow common-subexpression elimination to collapse the
+batch, invalidating the per-matmul time. Output: one JSON line per case, final ``complete`` record.
 """
 
 import argparse
@@ -64,8 +65,11 @@ def main() -> int:
                     mx.eval(x)
                     single = timed(lambda: mx.eval(mm(x)))
 
+                    xs = [mx.random.normal(x.shape).astype(x.dtype) for _ in range(40)]
+                    mx.eval(xs)
+
                     def chain():
-                        ys = [mm(x) for _ in range(40)]
+                        ys = [mm(value) for value in xs]
                         mx.eval(ys)
 
                     chained = timed(chain, 5) / 40

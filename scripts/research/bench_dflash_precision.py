@@ -27,12 +27,23 @@ def chat_ids(tok, text):
     return list(out)
 
 
+def run_with_conv(fn, module, raw, compiled, *, enabled):
+    """Scope a draft-only dispatch experiment, including failed/aborted arms."""
+    previous = module._grouped_dynamic_convolve
+    module._grouped_dynamic_convolve = compiled if enabled else raw
+    try:
+        return fn()
+    finally:
+        module._grouped_dynamic_convolve = previous
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("model")
     ap.add_argument("drafter")
     ap.add_argument("--bits", type=int, nargs="+", default=[8, 4])
     ap.add_argument("--fusion", type=int, choices=[0, 1], nargs="+", default=[0, 1])
+    ap.add_argument("--compile-conv", type=int, choices=[0, 1], nargs="+", default=[0])
     ap.add_argument("--contexts", type=int, nargs="+", default=[1024, 8192, 32768])
     ap.add_argument("--reps", type=int, default=3)
     ap.add_argument("--tokens", type=int, default=256)
@@ -44,6 +55,7 @@ def main():
     source, fingerprint = freeze(a.output)
     sys.path.insert(0, str(source))
     import mlx.core as mx
+    import mlx_vlm.speculative.drafters.dflash2.dflash2 as d2
     from mlx_vlm import load
     from mlx_vlm.generate.ar import BatchGenerator
     from mlx_vlm.speculative.drafters import load_drafter
@@ -58,6 +70,33 @@ def main():
     from yunshu_engine.kernels.batch_invariant import install, set_active
     from yunshu_engine.mrope import clear_rope_state
     from yunshu_engine.spec_schedule import install_chain_budget
+
+    raw_conv = d2._grouped_dynamic_convolve
+    compiled_conv = mx.compile(raw_conv) if 1 in a.compile_conv else raw_conv
+    # Tiny operator preflight before loading the 27B target. Draft arithmetic
+    # may differ, but shape/finite checks catch compilation failures cheaply.
+    if 1 in a.compile_conv:
+        for length in (1, 4, 8):
+            h = mx.random.normal((1, length, 64)).astype(mx.bfloat16)
+            dynamic = mx.random.normal((1, length, 2, 4))
+            base = mx.random.normal((2, 64))
+            plain_conv = raw_conv(h, dynamic, base, 16)
+            fused_conv = compiled_conv(h, dynamic, base, 16)
+            mx.eval(plain_conv, fused_conv)
+            if fused_conv.shape != plain_conv.shape or not bool(
+                mx.all(mx.isfinite(fused_conv))
+            ):
+                raise RuntimeError("tiny compiled convolution preflight failed")
+            print(
+                json.dumps(
+                    dict(
+                        part="conv_preflight",
+                        length=length,
+                        max_diff=float(mx.max(mx.abs(plain_conv - fused_conv))),
+                    )
+                ),
+                flush=True,
+            )
 
     omlx.apply(row_exact=False)
     model, processor = load(a.model)
@@ -84,7 +123,8 @@ def main():
                 if selector and not install_selector_readout(drafter):
                     raise RuntimeError("DFlash2 selector readout did not engage")
                 assert lm.lm_head is target_head and target_head.weight is target_weight
-                arms[bits, bool(fused), selector] = drafter
+                for compiled in a.compile_conv:
+                    arms[bits, bool(fused), selector, bool(compiled)] = drafter
                 print(
                     f"Speculative decoding: {kind}; private draft q{bits}, {converted} layers, context_fused={bool(fused)}, selector={selector}",
                     flush=True,
@@ -158,13 +198,23 @@ def main():
             "round_ms": (end - first) * 1000 / rounds,
         }
 
+    def run_arm(ids, draft, tokens, seed=None, compiled=False):
+        # Only private draft convolution changes; restore upstream even on abort.
+        return run_with_conv(
+            lambda: run(ids, draft, tokens, seed),
+            d2,
+            raw_conv,
+            compiled_conv,
+            enabled=compiled,
+        )
+
     reference = {}
     parity = True
     a.output.parent.mkdir(parents=True, exist_ok=True)
     with a.output.open("x") as out:
         out.write(json.dumps(dict(part="snapshot", **fingerprint)) + "\n")
-        for draft in arms.values():
-            run(tok.encode("Hello."), draft, 24)
+        for (_, _, _, compiled), draft in arms.items():
+            run_arm(tok.encode("Hello."), draft, 24, compiled=compiled)
         for rep in range(a.reps):
             for ctx in a.contexts:
                 for task, ask in tasks.items():
@@ -180,8 +230,13 @@ def main():
                         out.write(json.dumps(plain) + "\n")
                         out.flush()
                     order = list(arms) if rep % 2 == 0 else list(arms)[::-1]
-                    for bits, fused, selector in order:
-                        row = run(ids, arms[bits, fused, selector], a.tokens)
+                    for bits, fused, selector, compiled in order:
+                        row = run_arm(
+                            ids,
+                            arms[bits, fused, selector, compiled],
+                            a.tokens,
+                            compiled=compiled,
+                        )
                         expected = reference[key]
                         row["parity"] = row.pop("ids") == expected
                         parity &= row["parity"]
@@ -193,6 +248,7 @@ def main():
                             mode="dflash",
                             context_fused=fused,
                             selector=selector,
+                            compiled_conv=compiled,
                         )
                         out.write(json.dumps(row) + "\n")
                         out.flush()
@@ -216,11 +272,11 @@ def main():
             for task, ask in tasks.items():
                 ids = chat_ids(tok, tok.decode(filler[:1024]) + "\n\n" + ask)
                 expected = None
-                for (bits, fused, selector), draft in [
-                    ((0, False, False), None),
+                for (bits, fused, selector, compiled), draft in [
+                    ((0, False, False, False), None),
                     *arms.items(),
                 ]:
-                    row = run(ids, draft, 96, seed=seed)
+                    row = run_arm(ids, draft, 96, seed=seed, compiled=compiled)
                     expected = row["ids"] if expected is None else expected
                     row["parity"] = row.pop("ids") == expected
                     parity &= row["parity"]
@@ -232,6 +288,7 @@ def main():
                         mode="sampled-check",
                         context_fused=fused,
                         selector=selector,
+                        compiled_conv=compiled,
                     )
                     out.write(json.dumps(row) + "\n")
                     out.flush()

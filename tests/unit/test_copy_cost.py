@@ -97,3 +97,54 @@ def test_copy_cost_setting_and_lane_state():
     assert settings.get("YUNSHU_SPEC_COPY_COST") is False
     assert mtp_lane.set_copy_cost(True) is True
     assert mtp_lane.set_copy_cost(False) is False
+
+
+def test_mtp_cost_prior_does_not_charge_the_dflash_drafter():
+    from yunshu_engine.copy_cost import costs_for_context
+
+    costs = costs_for_context(1024)
+    assert costs.model_ms == pytest.approx(costs.row_ms[6] + 2.7)
+
+
+@pytest.mark.parametrize("requested", [0, 2, 3, 8, 12, 16, 32])
+def test_cost_policy_never_raises_the_requested_copy_width(monkeypatch, requested):
+    from yunshu_engine import mtp_lane
+
+    monkeypatch.setitem(mtp_lane._STATE, "copy_rows", requested)
+    monkeypatch.setitem(mtp_lane._STATE, "copy_cost", True)
+    # Unknown backend additionally enforces its conservative eight-row cap.
+    assert mtp_lane.copy_rows_for_request(object()) == min(requested, 8)
+
+
+def test_cost_policy_caps_a_wide_backend_without_overriding_the_request(monkeypatch):
+    from yunshu_engine import mtp_lane
+
+    monkeypatch.setitem(mtp_lane._STATE, "copy_cost", True)
+    monkeypatch.setattr(mtp_lane, "copy_rows_for_model", lambda model: 32)
+    assert mtp_lane.copy_rows_for_request(object()) == 16
+    monkeypatch.setattr(mtp_lane, "copy_rows_for_model", lambda model: 12)
+    assert mtp_lane.copy_rows_for_request(object()) == 12
+
+
+def test_consumer_stalls_cannot_teach_a_slow_model_or_copy_price():
+    from yunshu_engine.copy_cost import RoundCostClock
+
+    clock = RoundCostClock()
+    assert clock.readback(1.0) is None
+    clock.published(0.1)
+    assert clock.readback(1.05) == pytest.approx(50.0)
+    clock.published(5000.0)
+    # Do not subtract the stall: speculative GPU work ran during it.
+    assert clock.readback(6.06) is None
+    clock.published(0.1)
+    assert clock.readback(6.11) == pytest.approx(50.0)
+
+
+def test_publication_stalls_accumulate_across_the_whole_token_window():
+    from yunshu_engine.copy_cost import RoundCostClock
+
+    clock = RoundCostClock()
+    clock.readback(0.0)
+    for _ in range(6):
+        clock.published(0.2)
+    assert clock.readback(0.05) is None

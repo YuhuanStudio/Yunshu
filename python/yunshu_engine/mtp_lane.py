@@ -41,7 +41,7 @@ from typing import Any
 
 import mlx.core as mx
 
-from .copy_cost import MAX_PRICED_ROWS, costs_for_context
+from .copy_cost import MAX_PRICED_ROWS, RoundCostClock, costs_for_context
 from .copy_drafter import CopyDrafter
 from .keyed_sampling import KeyedSampler
 
@@ -112,6 +112,12 @@ def set_copy_cost(on: bool) -> bool:
     """Cost-aware copy rounds (width / copy-or-model chosen from measured prices)."""
     _STATE["copy_cost"] = bool(on)
     return bool(on)
+
+
+def copy_rows_for_request(language_model: Any) -> int:
+    """Price only widths within the caller's requested and certified cap."""
+    rows = copy_rows_for_model(language_model)
+    return min(rows, MAX_PRICED_ROWS) if _STATE["copy_cost"] else rows
 
 
 def copy_rows_for_model(language_model: Any, rows: int | None = None) -> int:
@@ -244,11 +250,7 @@ def rounds(
     b = int(first_bonus)
     copy = None
     context = _STATE["context"]
-    copy_rows = copy_rows_for_model(lm)
-    if _STATE["copy_cost"] and copy_rows >= 3 and context is not None:
-        # cost-aware: the verify-width price table (context dependent) decides each
-        # copy round's width up to MAX_PRICED_ROWS, or hands the round to the model
-        copy_rows = copy_rows_for_model(lm, MAX_PRICED_ROWS)
+    copy_rows = copy_rows_for_request(lm)
     if copy_rows >= 3 and context is not None:
         costs = costs_for_context(len(context)) if _STATE["copy_cost"] else None
         copy = CopyDrafter(max_draft=copy_rows - 1, costs=costs)
@@ -270,7 +272,9 @@ def rounds(
 
     prof = _STATE["profile"]
     clock = time.perf_counter
-    last_readback: float | None = None
+    cost_clock = (
+        RoundCostClock() if copy is not None and copy.costs is not None else None
+    )
 
     def mark(name, since):
         now = clock()
@@ -355,8 +359,7 @@ def rounds(
             t = mark("submit", t)
             values = flat.reshape(-1).tolist()
             t = mark("gpu_wait", t)
-            round_ms = (t - last_readback) * 1e3 if last_readback is not None else None
-            last_readback = t
+            round_ms = cost_clock.readback(t) if cost_clock is not None else None
             drafted = values[: bs - 1]
             tgt = values[bs - 1 : 2 * bs - 1]
             next_seed = values[2 * bs - 1 :]
@@ -426,7 +429,10 @@ def rounds(
                 finished = True
             if stop_check is not None and stop_check(0, tok):
                 finished = True
+            publication = clock() if cost_clock is not None else None
             yield [tok], {"round_pos": pos, "round_len": n}
+            if cost_clock is not None and publication is not None:
+                cost_clock.published((clock() - publication) * 1e3)
             if finished:
                 break
         b = new_tokens[-1] if new_tokens else b
