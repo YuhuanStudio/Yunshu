@@ -441,3 +441,30 @@ def test_auxiliary_default_uses_loaded_backend(title, monkeypatch, qualified):
         assert info.scheduling_priority == (-1 if qualified else 0)
     finally:
         current_request_info.reset(token)
+
+
+@pytest.mark.parametrize("qualified", [False, True])
+def test_auxiliary_default_resolves_loaded_model_alias(title, monkeypatch, qualified):
+    from yunshu_engine.request_tracker import current_request_info
+    from yunshu_gateway import engine
+    from yunshu_gateway.x_yunshu import RequestInfo
+
+    monkeypatch.delenv("YUNSHU_AUXILIARY_SCHEDULING", raising=False)
+    monkeypatch.setattr("yunshu_engine.settings._file", lambda: {})
+    canonical = "Jundot/" + title["model"]
+    loaded = SimpleNamespace(
+        engine=SimpleNamespace(_prefix_invariant_dispatch=qualified)
+    )
+    manager = SimpleNamespace(
+        resolve_model_id=lambda name: canonical if name == title["model"] else None,
+        get_entry=lambda name: loaded if name == canonical else None,
+    )
+    monkeypatch.setattr(engine, "get_engine", lambda: None)
+    monkeypatch.setattr(engine, "get_model_manager", lambda: manager)
+    info = RequestInfo("i8", "POST", "/v1/chat/completions")
+    token = current_request_info.set(info)
+    try:
+        admission.classify_request(title)
+        assert info.scheduling_priority == (-1 if qualified else 0)
+    finally:
+        current_request_info.reset(token)

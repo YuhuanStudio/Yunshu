@@ -204,7 +204,8 @@ def classify_request(body: dict[str, Any]) -> None:
     engine = get_engine()
     manager = get_model_manager()
     if manager is not None:
-        entry = manager.get_entry(body.get("model", ""))
+        model_id = body.get("model", "")
+        entry = manager.get_entry(manager.resolve_model_id(model_id) or model_id)
         engine = entry.engine if entry is not None else None
     qualified = bool(getattr(engine, "_prefix_invariant_dispatch", False))
     info = current_request_info.get()

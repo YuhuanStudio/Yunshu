@@ -45,7 +45,9 @@ prompt / ~3 s replay TTFT is a prompt measurement, not a requested output limit.
 `admission.py` classifies the validated gateway Chat Completions body. It attaches
 priority -1 to the request record; `RequestTracker` transfers that to the cancellation
 event carried across executor threads. Unknown requests retain priority 0. This
-metadata never enters the prompt or sampling parameters.
+metadata never enters the prompt or sampling parameters. In multi-model serving, backend
+qualification resolves the requested model alias to its registered entry; the exact
+captured-body fingerprint remains unchanged.
 
 A recognized auxiliary request waits 500 ms at the gateway to let the companion agent
 turn arrive (the existing captured replay sends it after 300 ms), then waits for
