@@ -62,7 +62,7 @@ def main():
     ap.add_argument(
         "--modes",
         nargs="+",
-        choices=("baseline", "direct", "keep", "wide"),
+        choices=("baseline", "direct", "keep", "wide", "native", "pool"),
         default=["baseline", "direct", "keep"],
     )
     a = ap.parse_args()
@@ -71,6 +71,13 @@ def main():
     from yunshu_engine.vlm_batch_runner import RunStats
     from yunshu_engine.vlm_engine import VLMEngine
 
+    if "27B" in a.model:
+        from yunshu_engine import settings
+
+        if settings.get_str("YUNSHU_VLM_DRAFT") != "mtp" or settings.get_bool(
+            "YUNSHU_VLM_APC_DISK"
+        ):
+            raise RuntimeError("27B probe requires explicit MTP and RAM-only APC")
     engine = VLMEngine(a.model)
     asyncio.run(engine.start())
     runner = engine._batch_runner
@@ -80,9 +87,14 @@ def main():
     from yunshu_engine.kernels import buffer_cache
 
     clone = apc_adapters.clone_cache_entry
+    from mlx_vlm.models.qwen3_5.language import Qwen3_5Model
+    from native_model_cache import wrap as native_wrap
+
     from yunshu_engine.kernels import lane_linear
     from yunshu_engine.kernels.tensorfold import lane_qmm
 
+    original_model_forward = Qwen3_5Model.__call__
+    native_model_forward = native_wrap(original_model_forward)
     clear = buffer_cache.clear_if_over
     piece, max_rows = lane_linear.PIECE, lane_qmm.MAX_ROWS
     original_pool_limit = mx.set_cache_limit(buffer_cache._STATE["limit"])
@@ -122,6 +134,8 @@ def main():
             if _name == "_clone_prompt_cache_for_apc":
                 from mlx_vlm.apc import _cache_nbytes
 
+                if a.profile:
+                    mx.reset_peak_memory()
                 details["source_bytes"] = _cache_nbytes(args[0])
                 details["min_capacity_tokens"] = kwargs.get("min_capacity_tokens")
             try:
@@ -142,6 +156,8 @@ def main():
             finally:
                 if a.profile:
                     mx.synchronize()
+                    if _name == "_clone_prompt_cache_for_apc":
+                        details["peak_active_bytes"] = mx.get_peak_memory()
                 events.append(
                     dict(
                         name=_name,
@@ -166,12 +182,18 @@ def main():
             mx.synchronize()
             begin = time.perf_counter()
             output = forward(self, *args, **kwargs)
-            logits = output.logits if hasattr(output, "logits") else output
-            mx.eval(logits, [c.state for c in kwargs.get("cache", [])])
+            targets = [c.state for c in kwargs.get("cache", [])]
+            # prompt_step discards logits; forcing them executes an otherwise
+            # unused full-span LM head and corrupts the prefill attribution.
+            if "n_to_process" not in kwargs:
+                targets.append(output.logits if hasattr(output, "logits") else output)
+            mx.eval(targets)
             mx.synchronize()
             events.append(
                 dict(
                     name="target_forward",
+                    begin=begin,
+                    end=time.perf_counter(),
                     ms=1000 * (time.perf_counter() - begin),
                     rows=int(args[0].shape[-1]),
                 )
@@ -220,6 +242,23 @@ def main():
                 {"enable_thinking": False},
             ).result()
         with a.out.open("w") as out:
+            out.write(
+                json.dumps(
+                    dict(
+                        phase="metadata",
+                        model=a.model,
+                        profiled=a.profile,
+                        source_sha256=hashlib.sha256(
+                            Path(__file__).read_bytes()
+                        ).hexdigest(),
+                        direct_source_sha256=hashlib.sha256(
+                            Path(direct_clone.__code__.co_filename).read_bytes()
+                        ).hexdigest(),
+                    )
+                )
+                + "\n"
+            )
+            out.flush()
 
             def run(tokens, label, mode, rep, n=16):
                 events.clear()
@@ -240,7 +279,22 @@ def main():
                     generated.append(tok)
                 if not generated or not stats.finish_reason:
                     raise RuntimeError("incomplete fixed-cost request")
-                if "27B" in a.model and not stats.used_draft:
+                if label == "prime" and stats.cached_tokens:
+                    raise RuntimeError("prime unexpectedly restored a checkpoint")
+                if (
+                    label.startswith("revisit-")
+                    and stats.cached_tokens != len(tokens) - 1
+                ):
+                    raise RuntimeError(
+                        "revisit did not restore the expected full prefix"
+                    )
+                if label == "chat-turn2" and stats.cached_tokens != len(ids) - 1:
+                    raise RuntimeError(
+                        "chat did not restore the original prompt checkpoint"
+                    )
+                if "27B" in a.model and (
+                    not stats.used_draft or stats.spec_mode != "mtp"
+                ):
                     raise RuntimeError("fixed-cost probe did not engage the drafter")
                 # DONE can reach the consumer before its executor slice finishes.
                 # Settle deferred publication / cleanup before changing APC or
@@ -269,6 +323,11 @@ def main():
             run(ids[:16], "compile", "deferred", -1)
             for rep in range(a.reps):
                 for mode in a.modes if rep % 2 == 0 else list(reversed(a.modes)):
+                    Qwen3_5Model.__call__ = (
+                        native_model_forward
+                        if mode == "native"
+                        else original_model_forward
+                    )
                     apc_adapters.clone_cache_entry = (
                         direct if mode in ("direct", "keep") else clone
                     )
@@ -276,11 +335,11 @@ def main():
                     lane_linear.PIECE = 512 if mode == "wide" else piece
                     mx.set_cache_limit(
                         buffer_cache._STATE["limit"]
-                        if mode == "keep"
+                        if mode in ("keep", "pool")
                         else original_pool_limit
                     )
                     buffer_cache.clear_if_over = (
-                        (lambda: None) if mode == "keep" else clear
+                        (lambda: None) if mode in ("keep", "pool") else clear
                     )
                     runner.apc_manager.clear()
                     run(ids, "prime", mode, rep)
@@ -288,10 +347,13 @@ def main():
                         run(ids, f"revisit-{revisit}", mode, rep)
                     if chat_ids is not None:
                         run(chat_ids, "chat-turn2", mode, rep)
-                    # Same cached prefix, two checkpoint captures close to its end.
-                    run(ids[:-1] + ids[-65:] + ids[-1:], "suffix-65", mode, rep)
+                    else:
+                        # A chat or this synthetic suffix supersedes the original
+                        # hybrid checkpoint. Measure only one branch per prime.
+                        run(ids[:-1] + ids[-65:] + ids[-1:], "suffix-65", mode, rep)
             out.write(json.dumps(dict(phase="complete", success=True)) + "\n")
     finally:
+        Qwen3_5Model.__call__ = original_model_forward
         apc_adapters.clone_cache_entry = clone
         buffer_cache.clear_if_over = clear
         lane_linear.PIECE, lane_qmm.MAX_ROWS = piece, max_rows

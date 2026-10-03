@@ -30,6 +30,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--out", type=Path, required=True)
     ap.add_argument("--items", type=int, default=200)
+    ap.add_argument("--variant", choices=("wide", "native"), default="wide")
     ap.add_argument(
         "--model", default="/Volumes/P5Plus/models/Jundot/Qwen3.8-27B-oQ4e-mtp"
     )
@@ -39,9 +40,21 @@ def main():
     from yunshu_engine.vlm_batch_runner import RunStats
     from yunshu_engine.vlm_engine import VLMEngine
 
+    if "27B" in a.model:
+        from yunshu_engine import settings
+
+        if settings.get_str("YUNSHU_VLM_DRAFT") != "mtp" or settings.get_bool(
+            "YUNSHU_VLM_APC_DISK"
+        ):
+            raise RuntimeError("27B gate requires explicit MTP and RAM-only APC")
     engine = VLMEngine(a.model)
     asyncio.run(engine.start())
     runner = engine._batch_runner
+    from mlx_vlm.models.qwen3_5.language import Qwen3_5Model
+    from native_model_cache import wrap as native_wrap
+
+    model_forward = Qwen3_5Model.__call__
+    native_forward = native_wrap(model_forward)
     piece, maximum = lane_linear.PIECE, lane_qmm.MAX_ROWS
     tokenizer = getattr(runner.processor, "tokenizer", runner.processor)
     a.out.parent.mkdir(parents=True, exist_ok=True)
@@ -63,8 +76,17 @@ def main():
                 for mode in (
                     ("baseline", "wide") if index % 2 == 0 else ("wide", "baseline")
                 ):
-                    lane_linear.PIECE = 512 if mode == "wide" else piece
-                    lane_qmm.MAX_ROWS = 512 if mode == "wide" else maximum
+                    Qwen3_5Model.__call__ = (
+                        native_forward
+                        if mode == "wide" and a.variant == "native"
+                        else model_forward
+                    )
+                    lane_linear.PIECE = (
+                        512 if mode == "wide" and a.variant == "wide" else piece
+                    )
+                    lane_qmm.MAX_ROWS = (
+                        512 if mode == "wide" and a.variant == "wide" else maximum
+                    )
                     runner.apc_manager.clear()
                     stats, tokens, lps = RunStats(), [], []
                     for token in runner.iter_tokens(
@@ -81,7 +103,7 @@ def main():
                     engine._executor.submit(lambda: None).result()
                     if not tokens or not stats.finish_reason or stats.cached_tokens:
                         raise RuntimeError("incomplete / non-cold paired item")
-                    text = tokenizer.decode(tokens).strip()
+                    text = tokenizer.decode(tokens, skip_special_tokens=True).strip()
                     match = re.fullmatch(r"\s*(-?\d+)\s*", text)
                     scored = bool(match and int(match[1]) == answer)
                     correct[mode] += scored
@@ -123,6 +145,7 @@ def main():
             if not success:
                 raise RuntimeError("paired output / accuracy gate failed")
     finally:
+        Qwen3_5Model.__call__ = model_forward
         lane_linear.PIECE, lane_qmm.MAX_ROWS = piece, maximum
         asyncio.run(engine.stop())
 
