@@ -58,11 +58,19 @@ def main():
     )
     ap.add_argument("--reps", type=int, default=3)
     ap.add_argument("--profile", action="store_true")
+    ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--chat", action="store_true")
     ap.add_argument(
         "--modes",
         nargs="+",
         choices=(
+            "shipped",
+            "async",
+            "spans",
+            "cow",
+            "cowasync",
+            "barrier",
+            "paired32",
             "baseline",
             "direct",
             "keep",
@@ -75,18 +83,26 @@ def main():
         default=["baseline", "direct", "keep"],
     )
     a = ap.parse_args()
+    modern = {"shipped", "async", "cow", "cowasync", "spans", "barrier", "paired32"}
+    if set(a.modes) & modern and set(a.modes) - modern:
+        ap.error("shipped modes must not be mixed with legacy experiment modes")
+    if a.dry_run:
+        print(
+            json.dumps(
+                dict(phase="complete", success=True, dry_run=True, modes=a.modes)
+            )
+        )
+        return
 
+    from yunshu_engine import settings
     from yunshu_engine.apc_manager import _Coordinator
     from yunshu_engine.vlm_batch_runner import RunStats
     from yunshu_engine.vlm_engine import VLMEngine
 
-    if "27B" in a.model:
-        from yunshu_engine import settings
-
-        if settings.get_str("YUNSHU_VLM_DRAFT") != "mtp" or settings.get_bool(
-            "YUNSHU_VLM_APC_DISK"
-        ):
-            raise RuntimeError("27B probe requires explicit MTP and RAM-only APC")
+    if settings.get_bool("YUNSHU_VLM_APC_DISK"):
+        raise RuntimeError("restore A/B requires explicit RAM-only APC for every model")
+    if "27B" in a.model and settings.get_str("YUNSHU_VLM_DRAFT") != "mtp":
+        raise RuntimeError("27B probe requires explicit MTP")
     engine = VLMEngine(a.model)
     asyncio.run(engine.start())
     runner = engine._batch_runner
@@ -95,6 +111,35 @@ def main():
 
     from yunshu_engine.kernels import buffer_cache
 
+    span_counts = {}
+
+    def uninstall_spans():
+        pass
+
+    if "spans" in a.modes:
+        from span_forward import install as install_spans
+
+        span_counts, uninstall_spans = install_spans()
+    cow_counts = {}
+
+    def uninstall_cow():
+        pass
+
+    if set(a.modes) & {"cow", "cowasync"}:
+        from cow_restore import install as install_cow
+
+        cow_counts, uninstall_cow = install_cow()
+    if set(a.modes) & {"async", "cowasync"}:
+        from async_restore import install
+
+        async_counts, uninstall_async = install()
+    else:
+        async_counts = {}
+
+        def uninstall_async():
+            pass
+
+    kernel_uninstall = None
     clone = apc_adapters.clone_cache_entry
     from mlx_vlm.models.qwen3_5.language import Qwen3_5Model
     from native_model_cache import wrap as native_wrap
@@ -103,6 +148,9 @@ def main():
     from yunshu_engine.kernels.tensorfold import lane_qmm
 
     original_model_forward = Qwen3_5Model.__call__
+    shipped_native_trace = original_model_forward
+    while hasattr(shipped_native_trace, "_span_forward_original"):
+        shipped_native_trace = shipped_native_trace._span_forward_original
     native_model_forward = native_wrap(original_model_forward)
     clear = buffer_cache.clear_if_over
     piece, max_rows = lane_linear.PIECE, lane_qmm.MAX_ROWS
@@ -221,6 +269,38 @@ def main():
 
         original.append((model_class, "__call__", forward))
         model_class.__call__ = profiled_forward
+    if a.profile:
+        from mlx_vlm.models.qwen3_5.language import Qwen3_5DecoderLayer
+
+        layer_forward = Qwen3_5DecoderLayer.__call__
+
+        def profiled_layer(self, x, *args, **kwargs):
+            phase = phase_stack[-1] if phase_stack else None
+            if phase not in (
+                "PromptProcessingBatch.prompt_step",
+                "PromptProcessingBatch.generate",
+            ):
+                return layer_forward(self, x, *args, **kwargs)
+            mx.synchronize()
+            begin = time.perf_counter()
+            result = layer_forward(self, x, *args, **kwargs)
+            mx.eval(result)
+            mx.synchronize()
+            events.append(
+                dict(
+                    name="decoder_layer",
+                    begin=begin,
+                    end=time.perf_counter(),
+                    phase=phase,
+                    kind="gdn" if self.is_linear else "fa",
+                    rows=int(x.shape[-2]),
+                    ms=1000 * (time.perf_counter() - begin),
+                )
+            )
+            return result
+
+        original.append((Qwen3_5DecoderLayer, "__call__", layer_forward))
+        Qwen3_5DecoderLayer.__call__ = profiled_layer
     a.out.parent.mkdir(parents=True, exist_ok=True)
     try:
         text = (
@@ -282,6 +362,9 @@ def main():
             def run(tokens, label, mode, rep, n=16):
                 events.clear()
                 native_before = native_model_forward.native_calls
+                shipped_native_before = getattr(
+                    original_model_forward, "native_calls", 0
+                )
                 stats = RunStats()
                 start = time.perf_counter()
                 first, generated = None, []
@@ -333,6 +416,18 @@ def main():
                     spec_mode=stats.spec_mode,
                     events=list(events),
                     profiled=a.profile,
+                    async_restore_counts=dict(async_counts),
+                    cow_restore_counts=dict(cow_counts),
+                    span_forward_counts=dict(span_counts),
+                    shipped_native_forward_calls=getattr(
+                        original_model_forward, "native_calls", 0
+                    )
+                    - shipped_native_before,
+                    shipped_native_installed=bool(
+                        getattr(
+                            shipped_native_trace, "_yunshu_singleton_capacity", False
+                        )
+                    ),
                     native_forward_calls=native_model_forward.native_calls
                     - native_before,
                     runner_first_ms=stats.first_token_s * 1000,
@@ -345,26 +440,54 @@ def main():
             run(ids[:16], "compile", "deferred", -1)
             for rep in range(a.reps):
                 for mode in a.modes if rep % 2 == 0 else list(reversed(a.modes)):
-                    Qwen3_5Model.__call__ = (
-                        native_model_forward
-                        if mode in ("native", "nativepool", "combo")
-                        else original_model_forward
-                    )
-                    apc_adapters.clone_cache_entry = (
-                        direct if mode in ("direct", "keep") else clone
-                    )
-                    lane_qmm.MAX_ROWS = 512 if mode in ("wide", "combo") else max_rows
-                    lane_linear.PIECE = 512 if mode in ("wide", "combo") else piece
-                    mx.set_cache_limit(
-                        buffer_cache._STATE["limit"]
-                        if mode in ("keep", "pool", "nativepool", "combo")
-                        else original_pool_limit
-                    )
-                    buffer_cache.clear_if_over = (
-                        (lambda: None)
-                        if mode in ("keep", "pool", "nativepool", "combo")
-                        else clear
-                    )
+                    if span_counts:
+                        span_counts["enabled"] = mode == "spans"
+                    if cow_counts:
+                        cow_counts["enabled"] = mode in ("cow", "cowasync")
+                    if kernel_uninstall:
+                        kernel_uninstall()
+                        kernel_uninstall = None
+                    if mode == "barrier":
+                        from lane_final_barrier import install as install_kernel
+
+                        kernel_uninstall = install_kernel()
+                    elif mode == "paired32":
+                        from lane_paired32 import install as install_kernel
+
+                        kernel_uninstall = install_kernel()
+                    if async_counts:
+                        async_counts["enabled"] = mode in ("async", "cowasync")
+                    if mode not in (
+                        "shipped",
+                        "async",
+                        "cow",
+                        "cowasync",
+                        "spans",
+                        "barrier",
+                        "paired32",
+                    ):
+                        Qwen3_5Model.__call__ = (
+                            native_model_forward
+                            if mode in ("native", "nativepool", "combo")
+                            else original_model_forward
+                        )
+                        apc_adapters.clone_cache_entry = (
+                            direct if mode in ("direct", "keep") else clone
+                        )
+                        lane_qmm.MAX_ROWS = (
+                            512 if mode in ("wide", "combo") else max_rows
+                        )
+                        lane_linear.PIECE = 512 if mode in ("wide", "combo") else piece
+                        mx.set_cache_limit(
+                            buffer_cache._STATE["limit"]
+                            if mode in ("keep", "pool", "nativepool", "combo")
+                            else original_pool_limit
+                        )
+                        buffer_cache.clear_if_over = (
+                            (lambda: None)
+                            if mode in ("keep", "pool", "nativepool", "combo")
+                            else clear
+                        )
                     runner.apc_manager.clear()
                     run(ids, "prime", mode, rep)
                     for revisit in range(3):
@@ -386,6 +509,11 @@ def main():
         _Coordinator.merge_rows = merge
         for obj, name, fn in original:
             setattr(obj, name, fn)
+        if kernel_uninstall:
+            kernel_uninstall()
+        uninstall_async()
+        uninstall_cow()
+        uninstall_spans()
         asyncio.run(engine.stop())
 
 
