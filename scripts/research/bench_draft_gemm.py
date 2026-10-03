@@ -24,6 +24,13 @@ SHAPES = {  # name: (out, in) of the drafter's Linear layers
 }
 
 
+def batch_inputs(x, count=40):
+    """Materialize independent inputs so graph CSE cannot reduce the batch."""
+    xs = [x] + [mx.random.normal(x.shape).astype(x.dtype) for _ in range(count - 1)]
+    mx.eval(xs)
+    return xs
+
+
 def timed(fn, reps=20):
     for _ in range(3):
         fn()
@@ -65,8 +72,7 @@ def main() -> int:
                     mx.eval(x)
                     single = timed(lambda: mx.eval(mm(x)))
 
-                    xs = [mx.random.normal(x.shape).astype(x.dtype) for _ in range(40)]
-                    mx.eval(xs)
+                    xs = batch_inputs(x)
 
                     def chain():
                         ys = [mm(value) for value in xs]

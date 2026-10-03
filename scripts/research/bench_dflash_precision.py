@@ -46,6 +46,7 @@ def main():
     ap.add_argument("--compile-conv", type=int, choices=[0, 1], nargs="+", default=[0])
     ap.add_argument("--contexts", type=int, nargs="+", default=[1024, 8192, 32768])
     ap.add_argument("--reps", type=int, default=3)
+    ap.add_argument("--warmup-per-cell", type=int, choices=[0, 1], default=1)
     ap.add_argument("--tokens", type=int, default=256)
     ap.add_argument("--output", type=Path, required=True)
     a = ap.parse_args()
@@ -222,6 +223,26 @@ def main():
                     ids = chat_ids(tok, text)
                     key = (ctx, task)
                     if rep == 0:
+                        if a.warmup_per_cell:
+                            for (
+                                bits,
+                                fused,
+                                selector,
+                                compiled,
+                            ), draft in arms.items():
+                                warm = run_arm(ids, draft, a.tokens, compiled=compiled)
+                                warm.pop("ids")
+                                warm.update(
+                                    part="warmup",
+                                    context=ctx,
+                                    task=task,
+                                    bits=bits,
+                                    context_fused=fused,
+                                    selector=selector,
+                                    compiled_conv=compiled,
+                                )
+                                out.write(json.dumps(warm) + "\n")
+                                out.flush()
                         plain = run(ids, None, a.tokens)
                         reference[key] = plain.pop("ids")
                         plain.update(

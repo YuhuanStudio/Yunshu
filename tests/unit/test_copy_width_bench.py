@@ -80,3 +80,34 @@ def test_policy_comparison_records_separate_fixed_and_cost_arms(tmp_path, monkey
     arms = [row for row in records if "rc" in row]
     assert [bool(row["cost_curve"]) for row in arms] == [False, True, False, True]
     assert all(row["rc"] == 0 for row in arms)
+
+
+def test_builtin_cost_setting_is_proved_and_records_separate_arms(
+    tmp_path, monkeypatch
+):
+    module, _, output = fake_bench(tmp_path, monkeypatch)
+    seen = []
+    server = module.bench.Srv
+
+    def setting_server(engine, env, tag):
+        seen.append(env["YUNSHU_SPEC_COPY_COST"])
+        obj = server(engine, env, tag)
+        obj.log.write_text(
+            "Speculative decoding: mtp\nverify_kernels={'copy_cost': "
+            + ("True" if env["YUNSHU_SPEC_COPY_COST"] == "1" else "False")
+            + "}\n"
+        )
+        return obj
+
+    monkeypatch.setattr(module.bench, "Srv", setting_server)
+    monkeypatch.setattr(module.bench, "part_decode", lambda *args: None)
+    module.sys.argv += ["--cost-setting"]
+    assert module.main() == 0
+    assert seen == ["0", "1", "0", "1"]
+    records = [json.loads(line) for line in output.read_text().splitlines()]
+    assert [r["cost_policy"] for r in records if "rc" in r] == [
+        "fixed",
+        "setting",
+        "fixed",
+        "setting",
+    ]

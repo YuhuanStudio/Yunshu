@@ -29,7 +29,14 @@ def main():
     ap.add_argument("--agent", action="store_true")
     ap.add_argument("--cost-curve", type=Path)
     ap.add_argument("--compare-policy", action="store_true")
+    ap.add_argument(
+        "--cost-setting",
+        action="store_true",
+        help="compare the built-in request-local cost setting with fixed widths",
+    )
     a = ap.parse_args()
+    if a.cost_setting and a.cost_curve is not None:
+        ap.error("--cost-setting and --cost-curve are separate experiments")
     if a.compare_policy and a.cost_curve is None:
         ap.error("--compare-policy needs --cost-curve")
     if refuse_contended(a.output):
@@ -61,7 +68,9 @@ def main():
         (rows, enabled)
         for rows in a.rows
         for enabled in (
-            [False, True] if a.compare_policy else [a.cost_curve is not None]
+            [False, True]
+            if a.compare_policy or a.cost_setting
+            else [a.cost_curve is not None]
         )
     ]
     with a.output.open("x") as summary:
@@ -83,7 +92,14 @@ def main():
                     rows=rows,
                     rep=rep,
                     output=str(result),
-                    cost_curve=str(a.cost_curve) if policy_on else None,
+                    cost_curve=str(a.cost_curve)
+                    if policy_on and a.cost_curve
+                    else None,
+                    cost_policy="setting"
+                    if policy_on and a.cost_setting
+                    else "curve"
+                    if policy_on
+                    else "fixed",
                 )
                 try:
                     with result.open("x") as out:
@@ -93,6 +109,8 @@ def main():
                             "YUNSHU_SPEC_COPY_ROWS": str(rows),
                             "YUNSHU_VLM_DRAFT": "mtp",
                         }
+                        if a.cost_setting:
+                            env["YUNSHU_SPEC_COPY_COST"] = "1" if policy_on else "0"
                         srv = bench.Srv("yunshu", env, result.stem)
                         bench.emit(
                             out,
@@ -120,7 +138,19 @@ def main():
                         ]
                         if not mode or not any("mtp" in line.lower() for line in mode):
                             raise RuntimeError(f"MTP mode not proved: {mode}")
-                        if policy_on and "Copy cost policy:" not in srv.log.read_text():
+                        if (
+                            policy_on
+                            and a.cost_setting
+                            and "'copy_cost': True" not in srv.log.read_text()
+                        ):
+                            raise RuntimeError(
+                                "built-in copy cost policy did not engage"
+                            )
+                        if (
+                            policy_on
+                            and a.cost_curve is not None
+                            and "Copy cost policy:" not in srv.log.read_text()
+                        ):
                             raise RuntimeError("copy cost policy did not engage")
                         bench.emit(out, complete=True, mode=mode, load=os.getloadavg())
                     rc = 0

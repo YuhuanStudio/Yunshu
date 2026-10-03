@@ -42,10 +42,15 @@ def freeze(output: Path) -> tuple[Path, dict]:
     for path in sorted(p for p in source.rglob("*") if p.is_file()):
         digest.update(str(path.relative_to(source)).encode())
         digest.update(path.read_bytes())
+    harness = Path(sys.argv[0])
     return source, {
         "head": subprocess.check_output(
             ["git", "-C", str(root), "rev-parse", "HEAD"], text=True
         ).strip(),
         "python_sha256": digest.hexdigest(),
+        "harness_sha256": hashlib.sha256(harness.read_bytes()).hexdigest()
+        if harness.is_file()
+        else None,
+        "argv": sys.argv[1:],
         "source": str(source),
     }

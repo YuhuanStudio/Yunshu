@@ -12,12 +12,14 @@ must equal it.
 
 from __future__ import annotations
 
+import argparse
 import glob
 import json
 import re
 import statistics
 import sys
 from collections import defaultdict
+from pathlib import Path
 
 
 def records(path: str) -> list[dict]:
@@ -33,62 +35,117 @@ def records(path: str) -> list[dict]:
     return out
 
 
-def verdict(recs: list[dict], mode: str | None) -> str | None:
+def job_evidence(directory: Path) -> dict[str, dict]:
+    """Map exact declared outputs to queue evidence; ambiguous paths fail closed."""
+    evidence: dict[str, dict] = {}
+    for path in directory.glob("*.json"):
+        job = json.loads(path.read_text())
+        for output in job.get("outputs", []):
+            evidence[output] = job if output not in evidence else {}
+    return evidence
+
+
+def verdict(recs: list[dict], mode: str | None, job: dict | None = None) -> str | None:
     """None when the file is trustworthy, else the reason it is not."""
     done = [r for r in recs if r.get("complete")]
-    if not done:
-        return "no complete record"
+    if not done or not recs[-1].get("complete"):
+        return "no final complete record"
     if any(r.get("corrupt") for r in recs):
         return "corrupt line"
-    if any(r.get("contended") or r.get("success") is False for r in recs):
-        return "contended / failed"
-    if mode and done[-1].get("mode") not in (mode, None):
-        return f"engaged mode {done[-1].get('mode')} != {mode}"
+    if job is not None and (job.get("state") != "done" or job.get("rc") != 0):
+        return "queue job did not succeed"
+    reclassified = bool(
+        job and job.get("reclassified") and job.get("contended") is False
+    )
+    if job and job.get("contended"):
+        return "queue job contended"
+    for row in recs:
+        if row.get("error") or ("rc" in row and row["rc"] != 0):
+            return "failed arm"
+        if row.get("contended") and not reclassified:
+            return "contended / failed"
+        if row.get("success") is False:
+            # Older harnesses latched the old CPU threshold into completion.
+            # Queue reclassification cannot excuse a skipped/failed arm.
+            if not (reclassified and row.get("contended") and not row.get("reason")):
+                return "contended / failed"
+    if any(r.get("parity") is False for r in recs):
+        return "token parity failed"
+    engaged = done[-1].get("mode")
+    if mode:
+        if isinstance(engaged, list):
+            matches = any(
+                re.search(rf"Speculative decoding:\s*{re.escape(mode)}\b", line, re.I)
+                for line in engaged
+            )
+        else:
+            matches = engaged == mode
+        if not matches:
+            return f"engaged mode {engaged} != {mode}"
     return None
 
 
-def copy_table(stems: list[str]) -> tuple[list[str], list[str]]:
-    cells: dict[tuple, dict[int, list[float]]] = defaultdict(lambda: defaultdict(list))
-    shas: dict[tuple, dict[int, set]] = defaultdict(lambda: defaultdict(set))
+def copy_table(
+    stems: list[str], evidence: dict[str, dict] | None = None
+) -> tuple[list[str], list[str]]:
+    cells: dict[tuple, dict[tuple[int, bool], list[float]]] = defaultdict(
+        lambda: defaultdict(list)
+    )
+    shas: dict[tuple, dict[tuple[int, bool], set]] = defaultdict(
+        lambda: defaultdict(set)
+    )
     rejected = []
+    evidence = evidence or {}
     for stem in stems:
+        summary = Path(stem + ".jsonl")
+        if summary.exists():
+            why = verdict(records(str(summary)), None, evidence.get(str(summary)))
+            if why:
+                rejected.append(f"{summary}: {why}")
+                continue
         for path in sorted(glob.glob(f"{stem}-w*-r*.jsonl")):
             m = re.search(r"-w(\d+)-r(\d+)", path)
             if not m:
                 continue
             rows = int(m.group(1))
+            arm = (rows, Path(path).stem.endswith("-cost"))
             recs = records(path)
-            why = verdict(recs, "mtp")
+            why = verdict(recs, "mtp", evidence.get(path, evidence.get(str(summary))))
             if why:
                 rejected.append(f"{path}: {why}")
                 continue
             for r in recs:
                 if r.get("part") in ("decode", "agent") and "dec_tps" in r:
                     k = (r.get("ctx"), r.get("kind"), r.get("phase"), r.get("part"))
-                    cells[k][rows].append(r["dec_tps"])
-                    shas[k][rows].add(r.get("sha"))
+                    cells[k][arm].append(r["dec_tps"])
+                    shas[k][arm].add(r.get("sha"))
     lines = ["ctx kind phase | rows: median tok/s (n) | digest == copy-off"]
     for k in sorted(cells, key=str):
         parts = []
-        base = shas[k].get(0)
-        for rows in sorted(cells[k]):
-            xs = cells[k][rows]
+        base = shas[k].get((0, False))
+        for arm in sorted(cells[k]):
+            rows, cost = arm
+            xs = cells[k][arm]
             same = (
                 ""
                 if rows == 0 or not base
-                else (" same" if shas[k][rows] == base else " DIGEST DIFFERS")
+                else (" same" if shas[k][arm] == base else " DIGEST DIFFERS")
             )
-            parts.append(f"{rows}: {statistics.median(xs):.1f} ({len(xs)}){same}")
+            name = f"{rows}-cost" if cost else str(rows)
+            parts.append(f"{name}: {statistics.median(xs):.1f} ({len(xs)}){same}")
         lines.append(" ".join(str(x) for x in k) + " | " + " | ".join(parts))
     return lines, rejected
 
 
-def draft_table(paths: list[str]) -> tuple[list[str], list[str]]:
+def draft_table(
+    paths: list[str], evidence: dict[str, dict] | None = None
+) -> tuple[list[str], list[str]]:
     rows: dict[tuple, list[float]] = defaultdict(list)
     parity, rejected = {}, []
+    evidence = evidence or {}
     for path in paths:
         recs = records(path)
-        why = verdict(recs, None)
+        why = verdict(recs, None, evidence.get(path))
         if why:
             rejected.append(f"{path}: {why}")
             continue
@@ -101,11 +158,14 @@ def draft_table(paths: list[str]) -> tuple[list[str], list[str]]:
                     r.get("bits"),
                     r.get("context_fused"),
                     r.get("selector"),
+                    r.get("compiled_conv", False),
                 )
                 rows[k].append(r["tps"])
                 if "parity" in r:
                     parity[k] = parity.get(k, True) and r["parity"]
-    lines = ["context task mode bits fused selector | median tok/s (n) | parity"]
+    lines = [
+        "context task mode bits fused selector compiled_conv | median tok/s (n) | parity"
+    ]
     for k in sorted(rows, key=str):
         lines.append(
             " ".join(map(str, k))
@@ -116,10 +176,15 @@ def draft_table(paths: list[str]) -> tuple[list[str], list[str]]:
 
 
 def main(argv: list[str]) -> int:
-    if len(argv) < 3 or argv[1] not in ("copy", "draft"):
-        print(__doc__)
-        return 2
-    lines, rejected = (copy_table if argv[1] == "copy" else draft_table)(argv[2:])
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("kind", choices=["copy", "draft"])
+    parser.add_argument("paths", nargs="+")
+    parser.add_argument("--gpuq-jobs", type=Path)
+    args = parser.parse_args(argv[1:])
+    evidence = job_evidence(args.gpuq_jobs) if args.gpuq_jobs else None
+    lines, rejected = (copy_table if args.kind == "copy" else draft_table)(
+        args.paths, evidence
+    )
     print("\n".join(lines))
     if rejected:
         print("REJECTED:\n  " + "\n  ".join(rejected))
