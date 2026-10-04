@@ -1281,6 +1281,17 @@ def daemon() -> None:
                 target = _adopt_remote if lane == "m3" else _adopt
                 for row in rows:
                     target(row, JOBS / f"{row['id']}.json", gate)
+                    state = _read(JOBS / f"{row['id']}.json").get("state")
+                    print(
+                        f"{time.strftime('%H:%M:%S')} end {row['id']} {state} (adopted)",
+                        flush=True,
+                    )
+                    row["state"] = state
+                    for sib in _cancel_siblings(row):
+                        print(
+                            f"{time.strftime('%H:%M:%S')} cancel {sib} (sibling failed)",
+                            flush=True,
+                        )
 
             for lane, rows in by_lane.items():
                 worker = threading.Thread(
