@@ -1,5 +1,6 @@
 """200 paired questions through the actual default auto serving round hook."""
 
+_PREV = None
 import argparse, hashlib, json, sys
 from pathlib import Path
 
@@ -235,6 +236,35 @@ with a.output.open("x") as out:
                         ][:6],
                     )
             gc.garbage.clear()
+            growth = {}
+            if "_PREV" in globals() and _PREV is not None:
+                growth = {
+                    k: v - _PREV.get(k, 0)
+                    for k, v in after.items()
+                    if v - _PREV.get(k, 0) > 20
+                }
+            _PREV = after
+            chain = []
+            if item - a.start >= a.track * 2:
+                live = [o for o in gc.get_objects() if isinstance(o, mx.array)]
+                node = live[-1] if live else None
+                seen = {id(live), id(node)}
+                for _ in range(8):
+                    if node is None:
+                        break
+                    refs = [
+                        r
+                        for r in gc.get_referrers(node)
+                        if id(r) not in seen and not isinstance(r, type(gc.get_objects))
+                    ]
+                    refs = [r for r in refs if type(r).__name__ != "frame"]
+                    if not refs:
+                        break
+                    node = refs[0]
+                    seen.add(id(node))
+                    d = list(node)[:5] if isinstance(node, dict) else ""
+                    chain.append(f"{type(node).__module__}.{type(node).__name__}{d}")
+                del live
             after = census()
             garbage = {
                 k: v - after.get(k, 0)
@@ -251,6 +281,8 @@ with a.output.open("x") as out:
                     cache_gb=mx.get_cache_memory() / 1e9,
                     arrays=arrays,
                     cycle_referrers=cyc,
+                    growth=dict(sorted(growth.items(), key=lambda kv: -kv[1])[:10]),
+                    chain=chain,
                     arrays_before_gc=arrays_before,
                     collected=collected,
                     garbage_types=dict(
