@@ -1,0 +1,56 @@
+"""CPU checks of the memory A/B harness (no server, no GPU)."""
+
+import importlib.util
+import pathlib
+import sys
+
+ROOT = pathlib.Path(__file__).resolve().parents[2]
+
+
+def _load():
+    path = ROOT / "scripts" / "research" / "memory_ab.py"
+    sys.path.insert(0, str(path.parent))
+    spec = importlib.util.spec_from_file_location("memory_ab_under_test", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_code_doc_is_deterministic_and_sized():
+    m = _load()
+    a, b = m.code_doc(7, 2000), m.code_doc(7, 2000)
+    assert a == b and a != m.code_doc(8, 2000)
+    assert len(a) > 2000
+
+
+def test_arm_env_is_per_arm(monkeypatch, tmp_path):
+    m = _load()
+    seen = {}
+
+    def fake_run(name, tree, model, port, rep, emit):
+        seen[name] = dict(m.ARM_ENV.get(name, {}))
+
+    monkeypatch.setattr(m, "run_arm", fake_run)
+    monkeypatch.setattr(m, "ARM_ENV", {})
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "memory_ab.py",
+            "--arm",
+            "a=/x",
+            "--arm",
+            "b=/y",
+            "--arm-env",
+            "b:YUNSHU_VLM_APC_MEMORY_GB=0",
+            "--model",
+            "/m",
+            "--reps",
+            "1",
+            "--out",
+            str(tmp_path / "o.jsonl"),
+        ],
+    )
+    m.main()
+    assert seen == {"a": {}, "b": {"YUNSHU_VLM_APC_MEMORY_GB": "0"}}
+    assert '"complete": true' in (tmp_path / "o.jsonl").read_text()
