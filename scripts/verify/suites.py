@@ -10,7 +10,9 @@ SUITES = {
     "decode": {
         "stages": ["preflight", "smoke", "identity", "apc", "speed"],
         "ctx": [1024, 8192],
-        "spec_off": True,
+        # spec on == off is opt-in (--spec-off): on main the server-level 'off' path differs
+        # from MTP and DFlash in every 27B 1K cell (docs/research/notes/BACKLOG.md)
+        "spec_off": False,
         "reps": 3,
     },
     # prefill / prefix-cache change: long contexts, TTFT, cache hit == miss, quality
@@ -37,7 +39,7 @@ SUITES = {
     "full": {
         "stages": list(STAGES),
         "ctx": [1024, 8192, 32768],
-        "spec_off": True,
+        "spec_off": False,
         "reps": 3,
         "mmlu_n": 200,
     },

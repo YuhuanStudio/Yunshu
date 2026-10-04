@@ -33,7 +33,7 @@ did. `--env K=V` applies to both arms, `--cand-env` to the candidate only, `--ba
 |---|---|---|
 | `preflight` | CPU only. Both trees import. `git diff base..cand` is mapped to related unit tests (changed tests, `test_<module>*`, tests that import or name the module) and run under `nice -n 15`. | imports ok, tests pass |
 | `smoke` | Both arms serve and answer (`tfbench.py --smoke`). `--engaged SPEC` proves the candidate path ran: `log:REGEX` (candidate server log), `field:KEY=REGEX` (`x_yunshu` response field), `spec:MODE` (engaged spec mode). | answers, spec mode engaged as requested, every `--engaged` matched |
-| `identity` | Greedy decode digests base == cand over code and prose at each suite context (cold, warm, follow-up turn); with `--spec-off` (decode / full suites) also cand with `YUNSHU_VLM_DRAFT=off` == cand (spec on == off). The digest is over text, reasoning, tool calls and finish reason plus the token count (`tfbench.py` `sha`). | every cell equal |
+| `identity` | Greedy decode digests base == cand over code and prose at each suite context (cold, warm, follow-up turn); with `--spec-off` also cand with `YUNSHU_VLM_DRAFT=off` == cand (spec on == off). The digest is over text, reasoning, tool calls and finish reason plus the token count (`tfbench.py` `sha`). | every cell equal |
 | `apc` | From the candidate's identity cells: the warm request (served from the prefix cache) must equal the cold request, and report `cached_tokens > 0` (a request that never hit the cache fails: APC not engaged). `--no-apc-hit-required` for paths without APC. | hit == miss |
 | `quality` | 200-item paired MMLU-Pro through `paired_eval.py` (resumable rounds of 14 min per arm, base and cand interleaved). | all items scored in both arms, net difference in correct answers within +-1 |
 | `speed` | `tfbench.py` decode cells (cold decode tok/s, cold TTFT, follow-up TTFT) in N quiet reps (default 3), interleaved base, cand, base, cand. Medians, per-rep paired deltas and a noise estimate (half range of the paired deltas) are reported. | no median worsening beyond `max(2%, noise)` (`--speed-tol`); a contended rep is rerun once, then the stage fails |
@@ -47,7 +47,7 @@ context, harness hash, device): the next candidate against the same base reruns 
 
 ## Suites
 
-`decode` (preflight, smoke, identity incl. spec on == off at 1K / 8K, apc, speed), `prefill`
+`decode` (preflight, smoke, identity at 1K / 8K, apc, speed; `--spec-off` adds spec on == off (fails on main today, see BACKLOG)), `prefill`
 (identity up to 32K, apc, quality, speed), `scheduler`, `memory`, `full` (everything, 1K / 8K / 32K),
 `tiny` (everything on a small model, for dry runs of the tool). `--suite smoke,identity,speed`
 builds an ad-hoc ladder (stages keep their canonical order). Overrides: `--ctx 1024,8192`,
