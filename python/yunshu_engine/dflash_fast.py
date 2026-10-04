@@ -14,6 +14,39 @@ from .dflash_plan import live_bound
 
 _KERNELS: dict[str, Any] = {}
 
+# Same-checkpoint sweeps (27B oQ4e + DFlash2, M5): fast tree beat chain+copy
+# at 512..10240 for code and prose; prose lost at 12288 (-6.7%), so 10240.
+# 256 is excluded: prose with 512+ new tokens measured -4.5% there (3 reps).
+CONTEXT_MIN = 512
+CONTEXT_LIMIT = 10240
+# The fast tree's edge is in the first tokens of a reply (+10-20% at <=256 new
+# tokens); over a long reply the chain's copy drafter catches up and the tree's
+# slower round (62 vs 51 ms at 8K) loses (yv: +0.2% at 1K, -2.5% prose at 8K).
+GENERATED_LIMIT = 256
+
+
+def live_eligible(context, generated=0):
+    return CONTEXT_MIN <= context + generated < CONTEXT_LIMIT
+
+
+def context_length(lm, cache):
+    """Committed positions in the live target KV, including restored APC state."""
+    from .kernels import ragged_kv
+
+    index = getattr(getattr(lm, "model", None), "fa_idx", None)
+    if index is None or not 0 <= index < len(cache):
+        return None
+    return ragged_kv._lane_length(cache[index])
+
+
+def round_room(current, remaining, emitted=0):
+    """Finish at the certificate boundary without publishing a fast-tree overrun."""
+    return min(
+        remaining,
+        max(0, CONTEXT_LIMIT - current),
+        max(0, GENERATED_LIMIT - emitted),
+    )
+
 
 def _name(base, source):
     return (
@@ -246,7 +279,8 @@ def rounds(
     max_tokens,
     sampler,
     token_dtype=mx.int32,
-    **_,
+    _chain=None,
+    **options,
 ):
     """Measured deep15 proposal recipe, keeping the target's cache transaction."""
     import time
@@ -280,11 +314,39 @@ def rounds(
     emitted = 1
     try:
         while emitted < max_tokens:
+            current = context_length(lm, cache) + 1 if _chain is not None else 0
+            if _chain is not None and (
+                not live_eligible(current) or emitted >= GENERATED_LIMIT
+            ):
+                from .dflash_copy import resume_chain
+
+                for entry in draft_cache:
+                    entry.offset += skipped
+                private.bind(False)
+                yield from resume_chain(
+                    _chain,
+                    model,
+                    draft,
+                    cache,
+                    hidden,
+                    copy=copy,
+                    draft_cache=draft_cache,
+                    first_bonus=bonus,
+                    max_tokens=max_tokens - emitted + 1,
+                    sampler=sampler,
+                    token_dtype=token_dtype,
+                    **options,
+                )
+                return
             previous_sums = lane_linear.sum_reuse_enabled()
             lane_linear.set_sum_reuse(True)
             try:
                 started = time.perf_counter()
-                room = max_tokens - emitted
+                room = (
+                    round_room(current, max_tokens - emitted, emitted)
+                    if _chain is not None
+                    else max_tokens - emitted
+                )
                 n = budget.choose(max(0, room - 1))
                 copied = (
                     copy.draft(min(copy.max_draft, room - 1))
@@ -414,7 +476,7 @@ def supported(lm, draft):
         or not tv.lane_projections(lm)
     ):
         return False
-    layers = lm.model.layers
+    layers = getattr(getattr(lm, "model", None), "layers", ())
     if len(layers) != 64 or layers[0].input_layernorm.weight.size != 5120:
         return False
     projections = [
@@ -430,22 +492,20 @@ def supported(lm, draft):
 
 
 def eligible(lm, draft, cache, kwargs):
-    """Conservative 1K-class policy; long requests keep trained chain+copy."""
+    """Admit by live context; request output budgets do not predict cost."""
     from . import mtp_lane
     from .keyed_sampling import KeyedSampler
 
     context = mtp_lane._STATE["context"]
-    maximum = int(kwargs.get("max_tokens", 0))
     return bool(
         kwargs.get("greedy_sampling", True)
         and not isinstance(kwargs.get("sampler"), KeyedSampler)
         and mtp_lane._STATE["guide"] is None
         and context is not None
-        and len(context) >= 512
-        and 64 <= maximum <= 256
-        and len(context) + maximum <= 1536
         and kwargs.get("draft_block_size") in (None, 8)
         and mtp_lane.copy_rows_for_model(lm) == 16
-        and supported(lm, draft)
         and tv.lane_ready(lm, cache)
+        and (length := context_length(lm, cache)) is not None
+        and live_eligible(length + 1)
+        and supported(lm, draft)
     )

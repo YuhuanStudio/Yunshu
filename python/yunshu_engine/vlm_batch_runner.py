@@ -972,6 +972,10 @@ class VLMBatchRunner:
             and hasattr(coordinator, "release_request")
         ):
             coordinator.release_request(job.ids, job.cache_plan)
+        if not group.jobs and getattr(group, "spec", False):
+            from .spec_release import release_rounds
+
+            release_rounds(group.gen)
         self._emit(job, _DONE)
 
     @staticmethod

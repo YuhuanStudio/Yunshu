@@ -755,7 +755,7 @@ def _rope_delta(lm) -> int:
     return int(delta.reshape(-1)[0].item())
 
 
-def tree_forward(
+def _tree_forward(
     lm,
     tokens: mx.array,
     shape: TreeShape,
@@ -835,6 +835,17 @@ def tree_forward(
                 raise
     res.hidden = model.norm(h)
     return res
+
+
+def tree_forward(*args, **kwargs) -> TreeResult:
+    """Run one window; the group-sum table registered by the layers is
+    per-forward state, so drop it afterwards. Without this a thread-local table
+    kept every round's hidden arrays (and their Metal events) alive for the
+    life of the server."""
+    try:
+        return _tree_forward(*args, **kwargs)
+    finally:
+        vq.clear_group_sums()
 
 
 def tree_commit(lm, cache: list, res: TreeResult, path: list[int]) -> None:

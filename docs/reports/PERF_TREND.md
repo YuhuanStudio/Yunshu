@@ -907,3 +907,38 @@ candidate 12 cells 0 mismatches; APC cold/warm 4 pairs hit. Spec-on speed unchan
 119.7 -> 119.8 tok/s, prose@1K 62.6 -> 62.6, code@8K 65.8 -> 66.1, prose@8K 51.9 -> 52.3; TTFT equal. Not measured:
 spec-off decode tok/s before/after (`yv` speed only times the default spec-on mode). The pre-fix failure on main is
 taken from the infra1 runs, not re-run here.
+
+
+### 2026-10-04 Fast DFlash tree engages on live state, not on max_tokens (sonnet-wide8, M5, 27B oQ4e-mtp + DFlash2)
+
+Before: the fast tree (`YUNSHU_SPEC_TREE=auto`) only engaged for 64 <= max_tokens <= 256 and context + max_tokens <= 1536, so
+requests without max_tokens (agents, chat) never used it. Now `dflash_fast.eligible()` reads only live state: greedy,
+unguided, 512 <= live KV length < 10240 (crossover sweep: tree ahead through 10240, prose -6.7% at 12288). The same request
+is handed to chain+copy mid-stream (draft cache, hidden and copy history carried over) once KV length reaches 10240 or 256
+tokens were generated (over long replies the tree gained nothing: `yv` +0.2% at 1K, prose -2.5% at 8K before the 256 cap).
+Also fixed a leak that crashed a candidate server after ~100 short requests ("Failed to create Metal shared event"):
+(1) `tree_forward` never cleared the thread-local group-sum table (every round's hidden arrays kept alive, ~180 arrays and
+~15 MB per request), (2) mlx-vlm's rounds generator sat in a reference cycle after each request until a GC pass; it is now
+closed in `_finish`. Live arrays over 120 requests: 2057 -> 2070 flat (was +2.4 k per 20 requests); active memory flat 20.74 GB.
+
+API (HTTP, `x_yunshu` decode tok/s of the cold request, median of 3 interleaved reps, main b6a36e3e vs candidate, no max_tokens
+= server default 512, and 4096; prompts are synthetic padding + a code or prose ask). Paired per-rep deltas in the log.
+| context | code unset / 4096 | prose unset / 4096 |
+|---|---|---|
+| 512 | +24.2% / +25.1% | +7.3% / +2.4% |
+| 640 | +24.3% / +27.5% | +3.0% / +1.3% (noise) |
+| 1024 | +3.2% / +0.4% | +7.7% / +2.2% |
+| 2048 | +29.3% / +29.5% | +6.5% / +2.8% |
+| 4096 | +29.8% / +30.1% | +5.1% / +3.0% (one rep -2.2%) |
+| 8192 | +2.0% / +0.1% | -0.5% / -0.6% (noise) |
+At 256 context code was +28% but prose with 512+ tokens -4.5% (3 reps), so the floor stays 512; 400 context is not engaged
+(-1%, outlier reps). Lossless: 280 HTTP requests main vs candidate vs plain decode, raw token-ID digests identical; 84 of the
+candidate runs crossed the generated-token handoff; APC miss and hit digests equal (cached 0 vs >0 asserted). The 10240
+KV-length handoff: 20 prompts at 10230 tokens, off vs auto raw-ID digests identical, 20/20 hand-offs at total 10240, 20/20 correct.
+Accuracy: 200-item paired run (context 1034, 128 new tokens) off 200/200, auto 200/200, digests equal; `yv` MMLU-Pro 200 items
+base 107 / cand 107 (net 0). `yv ab --suite preflight,smoke,identity,apc,quality,speed --spec-modes dflash` run `wide8-final`
+(base main f4b60d4a53c4, cand 57c9607dd5ea): PASS. Identity 12 cells 0 mismatches, APC 4 pairs hit. Speed at 1K/8K with long replies
+is neutral: code@1K +0.2%, prose@1K +0.3%, code@8K +1.8%, prose@8K +4.4% (rep noise +-3.7%); 8K follow-up TTFT +1.3% code
+(limit 2%). Not measured: 12 K..32 K and sampled or guided requests (they keep the original path by construction).
+An earlier candidate showed +2.3% follow-up TTFT at 8K: that came from a stale merge base missing main's tokenizer prefix reuse,
+not from the fast-tree gate.

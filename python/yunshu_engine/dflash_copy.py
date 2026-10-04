@@ -108,6 +108,36 @@ class CopyDraft:
         self._pending_skipped = 0
 
 
+class ResumedCopyDraft(CopyDraft):
+    """Continue a committed fast-tree transaction without resetting draft KV."""
+
+    def __init__(self, draft, copy, cache):
+        # The full history and copy benefit controller already belong to this
+        # request. Re-indexing a truncated context would discard copy islands.
+        super().__init__(draft, [], 0, copy.max_draft + 1)
+        self._copy = copy
+        self._resume_cache = cache
+        self._seen_rounds = len(draft.accept_lens)
+
+    def reset(self, model):
+        return self._resume_cache
+
+
+def resume_chain(original, model, draft, cache, hidden, *, copy, draft_cache, **kw):
+    """Transfer ownership after tree_commit; the bonus is already published."""
+    proxy = ResumedCopyDraft(draft, copy, draft_cache)
+    iterator = original(model, proxy, cache, hidden, **kw)
+    try:
+        for token, state in iterator:
+            proxy.emitted(int(token))
+            yield token, state
+    finally:
+        try:
+            iterator.close()
+        finally:
+            proxy.close()
+
+
 def install() -> bool:
     """Install once; unsupported and sampled requests retain their original loop."""
     from mlx_vlm.speculative import dflash, utils
@@ -162,7 +192,9 @@ def install() -> bool:
         if settings.get("YUNSHU_SPEC_TREE") == "auto" and dflash_fast.eligible(
             lm, draft, cache, kw
         ):
-            yield from dflash_fast.rounds(model, draft, cache, hidden, **kw)
+            yield from dflash_fast.rounds(
+                model, draft, cache, hidden, _chain=current, **kw
+            )
             return
         proxy = CopyDraft(draft, context, int(kw["first_bonus"]), rows)
         iterator = current(model, proxy, cache, hidden, **kw)

@@ -15,6 +15,9 @@ from yunshu_engine import tree_verify as tv
 def admission(monkeypatch):
     monkeypatch.setattr(fast, "supported", lambda *_: True)
     monkeypatch.setattr(tv, "lane_ready", lambda *_: True)
+    monkeypatch.setattr(
+        fast, "context_length", lambda *_: len(mtp_lane._STATE["context"])
+    )
     monkeypatch.setattr(mtp_lane, "copy_rows_for_model", lambda *_: 16)
     monkeypatch.setitem(mtp_lane._STATE, "guide", None)
     monkeypatch.setitem(mtp_lane._STATE, "context", list(range(1034)))
@@ -29,7 +32,6 @@ def test_measured_short_request_is_admitted(admission):
     "damage",
     [
         "long",
-        "budget",
         "short",
         "guide",
         "copy_off",
@@ -42,9 +44,7 @@ def test_measured_short_request_is_admitted(admission):
 )
 def test_other_requests_keep_the_original_rounds(monkeypatch, admission, damage):
     if damage == "long":
-        monkeypatch.setitem(mtp_lane._STATE, "context", list(range(8203)))
-    elif damage == "budget":
-        admission["max_tokens"] = 512
+        monkeypatch.setitem(mtp_lane._STATE, "context", list(range(20000)))
     elif damage == "short":
         monkeypatch.setitem(mtp_lane._STATE, "context", [1] * 40)
     elif damage == "guide":
@@ -64,11 +64,67 @@ def test_other_requests_keep_the_original_rounds(monkeypatch, admission, damage)
     assert not fast.eligible(None, None, [], admission)
 
 
-def test_total_context_bound_covers_the_entire_request(monkeypatch, admission):
-    monkeypatch.setitem(mtp_lane._STATE, "context", [1] * 1280)
+@pytest.mark.parametrize("maximum", [None, 1, 32, 256, 4096, 32768])
+def test_admission_does_not_depend_on_request_budget(admission, maximum):
+    if maximum is None:
+        admission.pop("max_tokens")
+    else:
+        admission["max_tokens"] = maximum
     assert fast.eligible(None, None, [], admission)
-    monkeypatch.setitem(mtp_lane._STATE, "context", [1] * 1281)
+
+
+def test_live_context_bound(monkeypatch, admission):
+    monkeypatch.setitem(mtp_lane._STATE, "context", [1] * (fast.CONTEXT_LIMIT - 2))
+    assert fast.eligible(None, None, [], admission)
+    monkeypatch.setitem(mtp_lane._STATE, "context", [1] * (fast.CONTEXT_LIMIT - 1))
     assert not fast.eligible(None, None, [], admission)
+    assert fast.live_eligible(
+        fast.CONTEXT_MIN, fast.CONTEXT_LIMIT - fast.CONTEXT_MIN - 1
+    )
+    assert not fast.live_eligible(
+        fast.CONTEXT_MIN, fast.CONTEXT_LIMIT - fast.CONTEXT_MIN
+    )
+
+
+def test_chain_handoff_preserves_cache_copy_history_and_bonus():
+    from yunshu_engine.copy_drafter import CopyDrafter
+    from yunshu_engine.dflash_copy import resume_chain
+
+    draft = SimpleNamespace(accept_lens=[3, 4], config=SimpleNamespace())
+    copy = CopyDrafter(max_draft=15)
+    copy.extend([1, 2, 3, 4])
+    draft_cache = [object()]
+    target_cache = [object()]
+    hidden = object()
+    seen = []
+
+    def original(model, proxy, cache, taps, **kw):
+        assert proxy.reset(model) is draft_cache
+        assert proxy._copy is copy
+        assert cache is target_cache and taps is hidden
+        assert proxy._seen_rounds == 2
+        assert kw == dict(first_bonus=4, max_tokens=17, sampler=None)
+        try:
+            yield 5, None
+            yield 6, None
+        finally:
+            seen.append("closed")
+
+    iterator = resume_chain(
+        original,
+        None,
+        draft,
+        target_cache,
+        hidden,
+        copy=copy,
+        draft_cache=draft_cache,
+        first_bonus=4,
+        max_tokens=17,
+        sampler=None,
+    )
+    assert next(iterator) == (5, None)
+    iterator.close()
+    assert seen == ["closed"]
 
 
 def test_verifier_delegates_feed_forward_without_global_mutation(monkeypatch):
@@ -267,3 +323,125 @@ def test_single_remaining_token_and_failure_restore_the_sum_scope(
     assert not lane_linear.sum_reuse_enabled()
     assert bindings[-1] is False
     assert True not in bindings  # no drafter when only one token remains
+
+
+def test_live_boundary_hands_off_without_rebuilding_draft_kv(monkeypatch):
+    from mlx_vlm.models.qwen3_5 import language as q35
+
+    events = []
+    private = SimpleNamespace(bind=lambda enabled: events.append(enabled))
+    draft_cache = [SimpleNamespace(offset=7)]
+    hidden = object()
+    draft = SimpleNamespace(
+        config=SimpleNamespace(target_layer_ids=[]),
+        accept_lens=[],
+        reset=lambda model: draft_cache,
+    )
+    monkeypatch.setattr(fast, "prepare", lambda _: private)
+    monkeypatch.setattr(fast, "context_length", lambda *_: fast.CONTEXT_LIMIT - 1)
+    monkeypatch.setattr(mtp_lane, "copy_rows_for_model", lambda _: 16)
+    monkeypatch.setitem(mtp_lane._STATE, "context", [1] * (fast.CONTEXT_LIMIT - 1))
+    monkeypatch.setattr(q35, "_EXACT_SPECULATIVE_VERIFIER", object(), raising=False)
+
+    def chain(model, proxy, cache, taps, **kw):
+        assert proxy.reset(model) is draft_cache
+        assert draft_cache[0].offset == 7
+        assert taps is hidden
+        assert proxy._copy.ctx[-1] == 9
+        assert len(proxy._copy.ctx) == fast.CONTEXT_LIMIT
+        assert kw["first_bonus"] == 9 and kw["max_tokens"] == 4096
+        assert kw["draft_block_size"] == 8
+        yield 10, None
+
+    assert list(
+        fast.rounds(
+            None,
+            draft,
+            [],
+            hidden,
+            first_bonus=9,
+            max_tokens=4096,
+            sampler=None,
+            draft_block_size=8,
+            _chain=chain,
+        )
+    ) == [(10, None)]
+    assert events == [False, False]
+
+
+@pytest.mark.parametrize("remaining", [1, 2, 8, 16])
+def test_fast_round_cannot_publish_past_live_crossover(remaining):
+    current = fast.CONTEXT_LIMIT - remaining
+    assert fast.round_room(current, 4096) == remaining
+    assert fast.round_room(current, 1) == 1
+    assert fast.round_room(fast.CONTEXT_LIMIT, 4096) == 0
+
+
+def test_admission_reads_live_kv_instead_of_copy_history(monkeypatch, admission):
+    monkeypatch.setattr(fast, "context_length", lambda *_: fast.CONTEXT_LIMIT)
+    assert not fast.eligible(None, None, [], admission)
+    monkeypatch.setitem(mtp_lane._STATE, "context", [1] * (fast.CONTEXT_LIMIT + 100))
+    monkeypatch.setattr(fast, "context_length", lambda *_: 1024)
+    assert fast.eligible(None, None, [], admission)
+
+
+def test_supported_rejects_a_missing_decoder(monkeypatch):
+    from yunshu_engine.kernels.tensorfold import lane_qmm
+
+    monkeypatch.setattr(lane_qmm, "_resolve_variant", lambda: "m5")
+    monkeypatch.setattr(tv, "supported", lambda *_: True)
+    monkeypatch.setattr(tv, "lane_projections", lambda *_: True)
+    draft = SimpleNamespace(
+        candidate_selector=object(),
+        config=SimpleNamespace(
+            block_size=8, layer_types=["sliding_attention"], sliding_window=16
+        ),
+    )
+    assert not fast.supported(None, draft)
+
+
+def test_round_room_stops_at_generated_limit():
+    assert fast.round_room(1000, 4096, 0) == fast.GENERATED_LIMIT
+    assert fast.round_room(1000, 4096, fast.GENERATED_LIMIT - 3) == 3
+    assert fast.round_room(1000, 4096, fast.GENERATED_LIMIT) == 0
+    assert fast.round_room(1000, 2, 0) == 2
+
+
+def test_generated_limit_hands_the_same_request_to_chain(monkeypatch):
+    from mlx_vlm.models.qwen3_5 import language as q35
+
+    private = SimpleNamespace(bind=lambda enabled: None)
+    draft_cache = [SimpleNamespace(offset=3)]
+    draft = SimpleNamespace(
+        config=SimpleNamespace(target_layer_ids=[]),
+        accept_lens=[],
+        reset=lambda model: draft_cache,
+    )
+    monkeypatch.setattr(fast, "prepare", lambda _: private)
+    monkeypatch.setattr(fast, "context_length", lambda *_: 1000)
+    monkeypatch.setattr(fast, "GENERATED_LIMIT", 1)
+    monkeypatch.setattr(mtp_lane, "copy_rows_for_model", lambda _: 16)
+    monkeypatch.setitem(mtp_lane._STATE, "context", [1] * 1000)
+    monkeypatch.setattr(q35, "_EXACT_SPECULATIVE_VERIFIER", object(), raising=False)
+    seen = {}
+
+    def chain(model, proxy, cache, taps, **kw):
+        seen.update(kw)
+        yield 5, None
+
+    out = list(
+        fast.rounds(
+            None,
+            draft,
+            [],
+            object(),
+            first_bonus=9,
+            max_tokens=4096,
+            sampler=None,
+            draft_block_size=8,
+            _chain=chain,
+        )
+    )
+    assert (
+        out == [(5, None)] and seen["first_bonus"] == 9 and seen["max_tokens"] == 4096
+    )
