@@ -465,46 +465,6 @@ _MERGE2 = """
 """
 
 
-_MERGE_SPLIT = (
-    _MERGE2.replace(
-        "    for (int c = 0; c < nc; c++) {",
-        """    const bool g1 = node >= (uint)TG;
-    for (int c = 0; c < nc; c++) {""",
-    )
-    .replace("PMA[row]", "(g1 ? PMA1[row] : PMA[row])")
-    .replace("PLA[row]", "(g1 ? PLA1[row] : PLA[row])")
-    .replace(
-        "POA[row * D + lane * DPL + i]",
-        "(g1 ? POA1[row * D + lane * DPL + i] : POA[row * D + lane * DPL + i])",
-    )
-)
-
-
-def _merge_split_kernel():
-    kernel = _KERNELS.get("merge_split")
-    if kernel is None:
-        kernel = _KERNELS["merge_split"] = mx.fast.metal_kernel(
-            name="yunshu_tree_attn_merge_split",
-            input_names=[
-                "POA",
-                "PMA",
-                "PLA",
-                "POA1",
-                "PMA1",
-                "PLA1",
-                "POB",
-                "PMB",
-                "PLB",
-                "startsA",
-                "startsB",
-                "lengths",
-            ],
-            output_names=["out"],
-            source=_MERGE_SPLIT,
-        )
-    return kernel
-
-
 def _merge_kernel():
     kernel = _KERNELS.get("merge")
     if kernel is None:
@@ -633,8 +593,6 @@ class RoundContext:
                 bases.append(plan[1] + base)
                 base += plan[2]
             self.starts_a = bases[0] if len(bases) == 1 else mx.concatenate(bases)
-            rel = [group[4][1] for group in self.groups_a]
-            self.starts_a_rel = rel[0] if len(rel) == 1 else mx.concatenate(rel)
         self.meta = mx.array([n0, self.tail_start, self.m], dtype=mx.int32)
         self.pos = None
 
@@ -767,6 +725,53 @@ def tree_attention(
     return out
 
 
+_SHARED: dict = {}
+
+
+def shared_plan_lists(tail_start: int, groups: int):
+    """Work list of the one shared-prefix launch that serves both 8-token groups.
+
+    Each group is a batch row of the tile kernel and both read key row 0, so the
+    prefix K/V is streamed once per layer instead of once per group. A group's
+    ``length`` is its last token's key count plus its pad to 8 tokens, which
+    keeps every real token's causal limit (``length - (7 - t)``) unchanged.
+    Items run chunk-major, group-minor: the two groups' threadgroups for one
+    chunk are launched back to back and share its cache lines."""
+    lengths = [tail_start + 7 + 8 * g for g in range(groups)]
+    nc = tail_start // CK  # the merge reads only the shared chunks (c < cstar)
+    items, starts, total, cmax = [], [], 0, []
+    for n in lengths:
+        counts = [min(nc, max(0, -(-(n - (7 - t)) // CK))) for t in range(8)]
+        for count in counts:
+            starts.append(total)
+            total += count
+        cmax.append(max(counts))
+    for c in range(max(cmax)):
+        items += [b * nc + c for b in range(groups) if c < cmax[b]]
+    return lengths, nc, items or [0], starts, max(total, 1)
+
+
+def _shared_plan(tail_start: int, groups: int):
+    key = (tail_start, groups, CK)
+    hit = _SHARED.get(key)
+    if hit is None:
+        lengths, nc, items, starts, total = shared_plan_lists(tail_start, groups)
+        hit = (
+            mx.array(lengths, dtype=mx.int32),
+            mx.zeros((groups,), dtype=mx.int32),
+            (
+                mx.array(items, dtype=mx.int32),
+                mx.array(starts, dtype=mx.int32),
+                total,
+            ),
+            nc,
+        )
+        if len(_SHARED) > 8:
+            _SHARED.clear()
+        _SHARED[key] = hit
+    return hit
+
+
 def _add_rms(shape, h, r, norm):
     """Residual add + RMSNorm. The fast tree's lane projections take their
     input group sums from the norm kernel, which saves one launch per norm."""
@@ -786,14 +791,15 @@ def _add_rms(shape, h, r, norm):
 def _tree_attention_fused(queries, keys, values, shape, rc, scale_arr, dims):
     """``tree_attention`` for windows of at most two 8-token groups with the
     query layouts, the per-row key/value tails and the partial tables built by
-    one kernel each instead of a chain of copies. Same values, same partials,
-    same merge order."""
+    one kernel each instead of a chain of copies, and the shared prefix read
+    once for both token groups. Same values, same partials, same merge order."""
     from . import tree_glue
 
     h, hkv, d = dims
     w = shape.width
     cstar, ntail, m = rc.cstar, rc.ntail, rc.m
-    qa0, qa1, q_b = tree_glue.fuse_queries(queries, hkv, 2 if w > ra.TILE_TOKENS else 1)
+    groups = 2 if w > ra.TILE_TOKENS else 1
+    q_a, q_b = tree_glue.fuse_queries(queries, hkv, groups)
     cap2 = _tree_tail_capacity(m + shape.max_depth + 1)
     tail_k, tail_v = tree_glue.tail_copy(
         keys,
@@ -804,21 +810,20 @@ def _tree_attention_fused(queries, keys, values, shape, rc, scale_arr, dims):
         depth_rows=shape.max_depth + 1,
         cap2=cap2,
     )
-    if cstar:
-        parts = []
-        for (_lo, tg, len_arr, nc, plan), q_a in zip(
-            rc.groups_a, (qa0, qa1)[: len(rc.groups_a)], strict=True
-        ):
-            parts.append(
-                _tile_partials(
-                    q_a, keys, values, len_arr, rc.slot0, scale_arr, plan, tg, nc
-                )[:3]
-            )
-        po_a, pm_a, pl_a = parts[0]
-        po_a1, pm_a1, pl_a1 = parts[-1]
-        starts_a = rc.starts_a_rel
+    if cstar and groups == 2:
+        lengths, slots, plan, nc = _shared_plan(rc.tail_start, 2)
+        po_a, pm_a, pl_a, _ = _tile_partials(
+            q_a, keys, values, lengths, slots, scale_arr, plan, 8, nc
+        )
+        starts_a = plan[1]
+    elif cstar:
+        _lo, tg, len_arr, nc, plan = rc.groups_a[0]
+        po_a, pm_a, pl_a, _ = _tile_partials(
+            q_a, keys, values, len_arr, rc.slot0, scale_arr, plan, tg, nc
+        )
+        starts_a = plan[1]
     else:
-        po_a = pm_a = pl_a = po_a1 = pm_a1 = pl_a1 = _zeros((1,), mx.float32)
+        po_a = pm_a = pl_a = _zeros((1,), mx.float32)
         starts_a = _zeros((w,), mx.int32)
     po_b, pm_b, pl_b, starts_b = _tile_partials(
         q_b,
@@ -831,21 +836,8 @@ def _tree_attention_fused(queries, keys, values, shape, rc, scale_arr, dims):
         1,
         ntail,
     )
-    (out,) = _merge_split_kernel()(
-        inputs=[
-            po_a,
-            pm_a,
-            pl_a,
-            po_a1,
-            pm_a1,
-            pl_a1,
-            po_b,
-            pm_b,
-            pl_b,
-            starts_a,
-            starts_b,
-            rc.abs_lengths,
-        ],
+    (out,) = _merge_kernel()(
+        inputs=[po_a, pm_a, pl_a, po_b, pm_b, pl_b, starts_a, starts_b, rc.abs_lengths],
         template=[
             ("D", d),
             ("H", h),
@@ -853,7 +845,6 @@ def _tree_attention_fused(queries, keys, values, shape, rc, scale_arr, dims):
             ("NC", rc.nc_total),
             ("CK", CK),
             ("CS", cstar),
-            ("TG", ra.TILE_TOKENS),
         ],
         grid=(32, w * h, 1),
         threadgroup=(32, 1, 1),

@@ -56,11 +56,7 @@ _QUERIES = """
         uint h = rest / F;
         uint t = f / G, gh = f % G;
         uint token = gi * 8 + t;
-        T v = (gi < NG && token < W) ? queries[((h * G + gh) * W + token) * D + dd] : T(0);
-        if (gi == 0)
-            qa0[idx] = v;
-        else
-            qa1[idx] = v;
+        qa[gi * NA + idx] = token < W ? queries[((h * G + gh) * W + token) * D + dd] : T(0);
     }
 """
 
@@ -95,18 +91,19 @@ def tail_copy(keys, values, win_idx, meta, *, width, depth_rows, cap2):
 
 def fuse_queries(queries, hkv, groups):
     """The tile kernel's fused-token query layouts of [1, H, W, D] queries:
-    two 8-token groups [1, HKV, 8G, D] (row = token * G + head) and the per-row
-    single-token layout [W, HKV, 8G, D]; padding rows are zero."""
+    ``groups`` 8-token groups as batch rows [groups, HKV, 8G, D] (row = token * G
+    + head) and the per-row single-token layout [W, HKV, 8G, D]; padding rows are
+    zero."""
     if "queries" not in _KERNELS:
         _KERNELS["queries"] = mx.fast.metal_kernel(
             name="yunshu_tree_fuse_queries",
             input_names=["queries"],
-            output_names=["qa0", "qa1", "qb"],
+            output_names=["qa", "qb"],
             source=_QUERIES,
         )
     _, h, w, d = (int(s) for s in queries.shape)
     g = h // hkv
-    total = w * hkv * 8 * g * d + 2 * hkv * 8 * g * d
+    total = (w + groups) * hkv * 8 * g * d
     return _KERNELS["queries"](
         inputs=[queries],
         template=[
@@ -120,8 +117,8 @@ def fuse_queries(queries, hkv, groups):
         ],
         grid=(total, 1, 1),
         threadgroup=(256, 1, 1),
-        output_shapes=[(1, hkv, 8 * g, d)] * 2 + [(w, hkv, 8 * g, d)],
-        output_dtypes=[queries.dtype] * 3,
+        output_shapes=[(groups, hkv, 8 * g, d), (w, hkv, 8 * g, d)],
+        output_dtypes=[queries.dtype] * 2,
     )
 
 

@@ -38,25 +38,22 @@ def test_tree_shape_rejects_bad_parents():
         tv.TreeShape([-1, 1])
 
 
-def test_split_merge_reads_each_group_from_its_own_partials():
+def test_shared_plan_serves_both_groups_in_one_launch():
     from yunshu_engine import tree_verify as tv
 
-    old, new = tv._MERGE2, tv._MERGE_SPLIT
-    for name in ("PMA", "PLA", "POA"):
-        assert new.count(name + "1[") == 1
-        assert old.count(name + "[") == new.count(name + "[") == 1
-    assert "node >= (uint)TG" in new
-    # the accumulate order is the original's: nothing else changed
-    stripped = (
-        new.replace("const bool g1 = node >= (uint)TG;\n", "")
-        .replace("(g1 ? PMA1[row] : PMA[row])", "PMA[row]")
-        .replace("(g1 ? PLA1[row] : PLA[row])", "PLA[row]")
-        .replace(
-            "(g1 ? POA1[row * D + lane * DPL + i] : POA[row * D + lane * DPL + i])",
-            "POA[row * D + lane * DPL + i]",
-        )
-    )
-    assert stripped.split() == old.split()
+    ck = tv.CK
+    lengths, nc, items, starts, total = tv.shared_plan_lists(2 * ck, 2)
+    # each group's length keeps its real tokens' causal limit (length - (7 - t))
+    assert lengths == [2 * ck + 7, 2 * ck + 15]
+    assert nc == 2  # shared chunks only; the merge never reads the partial third
+    # chunk-major, group-minor: both groups of a chunk are adjacent items
+    assert items == [0, 2, 1, 3]
+    # slot starts per (group, token): contiguous, node index = group * 8 + token
+    assert len(starts) == 16 and starts == [2 * i for i in range(16)]
+    assert total == 32
+    # one group: nothing from the second
+    lengths1, _, items1, starts1, _ = tv.shared_plan_lists(2 * ck, 1)
+    assert lengths1 == [2 * ck + 7] and len(starts1) == 8 and items1 == [0, 1]
 
 
 def test_only_the_fast_shape_takes_the_fused_glue():
