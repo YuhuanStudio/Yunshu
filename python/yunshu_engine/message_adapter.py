@@ -282,12 +282,29 @@ def _merge_leading_system(messages: list[dict]) -> list[dict]:
     return [{"role": "system", "content": merged}, *messages[n:]]
 
 
+_TOKEN_COUNTER = re.compile(r"\s*<total_tokens>[^<]*</total_tokens>\s*")
+
+
+def is_token_counter_message(message: dict) -> bool:
+    """Claude Code appends a lone ``<total_tokens>N tokens left</total_tokens>`` system
+    message whose number changes every turn. It carries no instruction; keeping it
+    anywhere in the prompt invalidates the cached prefix on every turn."""
+    if message.get("role") not in ("system", "developer"):
+        return False
+    content = message.get("content")
+    if isinstance(content, list):
+        if len(content) != 1 or not isinstance(content[0], dict):
+            return False
+        content = content[0].get("text")
+    return isinstance(content, str) and _TOKEN_COUNTER.fullmatch(content) is not None
+
+
 def _hoist_system(messages: list[dict]) -> list[dict]:
     """Canonical instruction block for templates that only accept it first."""
     systems = [
         dict(m, role="system")
         for m in messages
-        if m.get("role") in ("system", "developer")
+        if m.get("role") in ("system", "developer") and not is_token_counter_message(m)
     ]
     turns = [dict(m) for m in messages if m.get("role") not in ("system", "developer")]
     return _merge_leading_system(systems) + turns

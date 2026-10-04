@@ -315,8 +315,13 @@ class BatchSampler:
             )
 
             # Keep tokens with cumulative prob above (1 - top_p)
+            # The most likely token always survives: for a tiny top_p float
+            # rounding can leave every cumulative value <= 1 - top_p.
+            keep = (cumulative_probs > 1 - top_p) | (
+                row >= mx.max(row, axis=-1, keepdims=True)
+            )
             result[i : i + 1] = mx.where(
-                cumulative_probs > 1 - top_p,
+                keep,
                 row,
                 mx.array(-float("inf"), row.dtype),
             )
