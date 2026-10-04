@@ -10,6 +10,7 @@ MLX allocator pool and MLX active / peak memory. Arms alternate (A B A B ...).
 """
 
 import argparse
+import contextlib
 import json
 import os
 import random
@@ -24,6 +25,7 @@ from process_memory import process_tree_memory  # noqa: E402
 
 GIB = 2**30
 OUT = "memory_ab.jsonl"
+SIZES = (8192, 32768, 98304)
 WORDS = [
     "alpha",
     "beta",
@@ -73,10 +75,8 @@ def metrics(url):
             continue
         key, val = line.rsplit(" ", 1)
         if key.startswith("yunshu_gpu_memory_bytes") or "apc_resident_bytes" in key:
-            try:
+            with contextlib.suppress(ValueError):
                 out[key] = round(float(val) / GIB, 3)
-            except ValueError:
-                pass
     return out
 
 
@@ -131,9 +131,11 @@ def run_arm(name, tree, model, port, rep, emit):
             try:
                 urllib.request.urlopen(url + "/v1/models", timeout=2)
                 break
-            except Exception:  # noqa: BLE001
+            except Exception as exc:  # noqa: BLE001
                 if proc.poll() is not None:
-                    raise RuntimeError(f"{name}: server exited rc={proc.returncode}")
+                    raise RuntimeError(
+                        f"{name}: server exited rc={proc.returncode}"
+                    ) from exc
                 time.sleep(1)
         else:
             raise RuntimeError(f"{name}: server not ready")
@@ -168,7 +170,7 @@ def run_arm(name, tree, model, port, rep, emit):
                 256,
             )
             record(f"short{i}", u, s)
-        for size in (8192, 32768, 98304):
+        for size in SIZES:
             doc = code_doc(size, size - 200)
             msgs = [
                 {
@@ -186,6 +188,15 @@ def run_arm(name, tree, model, port, rep, emit):
             record(f"{size // 1024}k-turn2", u, s)
         time.sleep(20)
         record("idle20s")
+        # Does memory held after the long turn return once a short request runs?
+        _, u, s = chat(
+            url,
+            [{"role": "user", "content": code_doc(999, 900) + "\nSummarize this."}],
+            64,
+        )
+        record("short-after", u, s)
+        time.sleep(20)
+        record("idle-after")
     finally:
         stop.set()
         try:
@@ -202,10 +213,11 @@ def main():
     ap.add_argument("--model", required=True)
     ap.add_argument("--port", type=int, default=18997)
     ap.add_argument("--reps", type=int, default=2)
+    ap.add_argument("--sizes", type=int, nargs="+", default=[8192, 32768, 98304])
     ap.add_argument("--out", required=True)
     a = ap.parse_args()
-    global OUT
-    OUT = a.out
+    global OUT, SIZES
+    OUT, SIZES = a.out, tuple(a.sizes)
     arms = [x.split("=", 1) for x in a.arm]
     complete = 0
     with open(a.out, "a") as f:
