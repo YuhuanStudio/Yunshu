@@ -1817,7 +1817,7 @@ def close_generator(gen: Any) -> None:
     try:
         batch = getattr(gen, "_generation_batch", None)
         rounds = getattr(batch, "_rounds_iter", None)
-        if rounds is not None:
+        if batch is not None and rounds is not None:
             batch._rounds_iter = None
             rounds.close()
     except Exception:  # noqa: BLE001
