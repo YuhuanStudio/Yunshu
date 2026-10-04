@@ -222,7 +222,7 @@ def test_lone_ar_uses_speculative_target_arithmetic(monkeypatch):
     monkeypatch.setitem(batch_invariant._STATE, "installed", True)
     monkeypatch.setitem(batch_invariant._STATE, "active", False)
     seen = []
-    runner._step_generator = lambda group: seen.append(
+    runner._step_generator = lambda group, **kwargs: seen.append(
         (batch_invariant._STATE["active"], ragged_kv._STATE["dense_lane"])
     )
     group = vbr._Group(SimpleNamespace(), spec=False)
@@ -285,7 +285,7 @@ def test_cancel_discards_capture_even_after_another_row_joins(monkeypatch):
     events = []
     runner = vbr.VLMBatchRunner(SimpleNamespace(language_model=object()), None)
     runner._finish = lambda group, uid, reason: group.jobs.pop(uid)
-    runner._step_generator = lambda group: events.append("step")
+    runner._step_generator = lambda group, **kwargs: events.append("step")
     group = vbr._Group(
         SimpleNamespace(
             remove=lambda uid: None,

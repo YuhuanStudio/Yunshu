@@ -119,6 +119,8 @@ _add("YUNSHU_WARM_PROMPTS", "str", None, "Prompts prefilled at startup to warm t
 # ── server ─────────────────────────────────────────────────────────────
 _add("YUNSHU_CONFIG", "path", None, "TOML config file with YUNSHU_* settings (lower precedence than the environment).", "server")
 _add("YUNSHU_MAX_CONCURRENT", "int", None, "Cap on concurrently admitted requests. Unset: adaptive (starts at 8).", "server", minimum=1)
+_add("YUNSHU_UNCACHED_SCHEDULING", "bool", True, "Order VLM canonical prefill atoms by estimated uncached RAM-prefix work and wait time, protect interactive prefills after one overtaking atom, age waiters after 10 seconds, and reserve up to 75 ms of measured decode time between prefill atoms; finish an interactive request's last 2048-token window and deliver its first token before repaying decode debt. No token spans change; SSD-only hits are conservatively estimated cold. Defaults on only with engaged qualified batch-invariant kernels; other backends keep FIFO unless explicitly enabled. Disable to restore upstream ordering.", "server")
+_add("YUNSHU_AUXILIARY_SCHEDULING", "bool", True, "Deprioritize captured opencode title requests: interactive VLM jobs run first; auxiliary rows pause between GPU slices and never read or write APC. Unknown fingerprints keep normal scheduling. Defaults on only with engaged qualified batch-invariant kernels; other backends require explicit opt-in. Disable to restore ordinary scheduling. In-flight GPU operations cannot be interrupted.", "server")
 _add("YUNSHU_QUEUE_LIMIT", "int", 64, "Generation requests (chat, completions, messages, responses) in flight at once, running and waiting together. The next one is refused at once with 429, `Retry-After` and the queue depth in `error.x_yunshu` instead of waiting without bound. 0 = no limit.", "server", minimum=0)
 _add("YUNSHU_MEMORY_PRESSURE_REJECT", "float", 0.95, "Share of the Metal working set (MLX active memory / recommended working set) above which, while other requests are running, a new generation request is refused with 503 and `Retry-After` (it would OOM the process). An idle server never refuses. 0 = off.", "server", minimum=0.0)
 _add("YUNSHU_COMPLETION_BATCH_SIZE", "int", 32, "Text engine: maximum sequences decoded together.", "server", minimum=1)
@@ -556,3 +558,11 @@ def effective(include: tuple[str, ...] = ("stable",)) -> list[dict[str, Any]]:
             }
         )
     return rows
+
+
+def scheduling_enabled(name: str, *, qualified: bool = False) -> bool:
+    """Resolve a stable scheduler override against the loaded backend's qualification."""
+    if name not in ("YUNSHU_UNCACHED_SCHEDULING", "YUNSHU_AUXILIARY_SCHEDULING"):
+        raise KeyError(name)
+    _, source = raw(name)
+    return qualified if source == "default" else get_bool(name)

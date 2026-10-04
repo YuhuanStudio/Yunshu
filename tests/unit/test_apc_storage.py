@@ -546,7 +546,7 @@ def test_prefill_speed_is_observed_from_the_tokens_really_computed():
     st.t_admit, st.t_first, st.cache_reload_ms = 10.0, 15.0, 500.0
     st.cached_tokens = 25000
     st.prefill_total = 28000  # counts the cached tokens while the prompt is processed
-    job = SimpleNamespace(stats=st, ids=list(range(28000)))
+    job = SimpleNamespace(stats=st, ids=list(range(28000)), priority=0)
     VLMBatchRunner._observe_prefill(runner, job)
     assert seen == [(3000, pytest.approx(4.5))]
 

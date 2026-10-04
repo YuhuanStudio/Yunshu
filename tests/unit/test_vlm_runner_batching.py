@@ -89,11 +89,23 @@ def test_inline_single_request(runner):
     assert not runner.busy()
 
 
-def test_concurrent_requests_share_one_generator(runner):
+def test_concurrent_requests_share_one_generator(runner, monkeypatch):
     ex = ThreadPoolExecutor(max_workers=1)
     runner._executor = ex
     start = threading.Barrier(4)
     results = {}
+    gate = threading.Event()
+    queued = threading.Event()
+    ex.submit(gate.wait)
+    submit = runner._submit
+
+    def submit_together(job):
+        submit(job)
+        with runner._lock:
+            if len(runner._pending) == 4:
+                queued.set()
+
+    monkeypatch.setattr(runner, "_submit", submit_together)
 
     def consume(i):
         start.wait()
@@ -102,9 +114,14 @@ def test_concurrent_requests_share_one_generator(runner):
     threads = [threading.Thread(target=consume, args=(i,)) for i in range(4)]
     for t in threads:
         t.start()
-    for t in threads:
-        t.join(10)
-    ex.shutdown(wait=True)
+    try:
+        assert queued.wait(10), "all four requests must reach admission"
+    finally:
+        gate.set()
+        for t in threads:
+            t.join(10)
+        ex.shutdown(wait=True)
+    assert len(results) == 4
     assert all(len(v) == 5 for v in results.values())
     gens = FakeGen.instances
     # Same greedy settings -> one shared generator that ran rows together.

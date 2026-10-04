@@ -86,6 +86,8 @@ class RequestTracker:
         info = current_request_info.get()
         if info is not None:
             try:
+                gen.priority = getattr(info, "scheduling_priority", 0)
+                gen.cancel_event.scheduling_priority = gen.priority  # type: ignore[attr-defined]
                 info.gen = gen  # type: ignore[attr-defined]
                 info.engine_request_id = request_id  # type: ignore[attr-defined]
                 if getattr(info, "cancel_requested", False):

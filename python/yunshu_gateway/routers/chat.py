@@ -1695,8 +1695,12 @@ def _enforce_capability_contract(req: ChatCompletionRequest) -> None:
 
 @router.post("/chat/completions", response_model=None)
 async def create_chat_completion(req: ChatCompletionRequest, request: Request):
+    from yunshu_gateway.admission import classify_request, defer_auxiliary
+
+    classify_request(req.model_dump())
     _check_permission(request, "can_infer")
     _enforce_capability_contract(req)
+    await defer_auxiliary()
     apply_keep_alive(req.model, req.keep_alive)
     _validate_sampling_params(req.temperature, req.effective_max_tokens(), req.top_p)
 
@@ -2446,6 +2450,13 @@ async def _handle_vlm_chat(
             _vlm_est = count_message_tokens(
                 messages,
                 _vtok,
+                text_counter=(
+                    getattr(
+                        getattr(vlm_engine, "_guard_token_counts", None), "count", None
+                    )
+                    if getattr(vlm_engine, "_prefix_invariant_dispatch", False)
+                    else None
+                ),
                 media_counter=make_media_token_counter(
                     getattr(vlm_engine, "_processor", None),
                     getattr(vlm_engine, "_config", None),

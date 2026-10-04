@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 import math
+import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -161,3 +162,89 @@ def deadline_stream_event(
         }
     }
     return f"data: {json.dumps(body)}\n\ndata: [DONE]\n\n".encode()
+
+
+# SHA-256 of the complete system message in captured opencode 1.18.33
+# title requests. Do not broaden this to a keyword / model-size heuristic.
+_OPENCODE_TITLE_SHA256 = (
+    "e7a6848eba328f28c7e870874cf0591e4edbaf90d7602ad8fdfe90601c6e656f"
+)
+
+
+def auxiliary_kind(body: dict[str, Any]) -> str | None:
+    """Recognize only captured auxiliary traffic; unknown requests stay interactive."""
+    import hashlib
+
+    messages = body.get("messages")
+    if (
+        body.get("tools")
+        or body.get("functions")
+        or body.get("model") != "Qwen3.8-27B-oQ4e-mtp"
+        or body.get("max_tokens") != 32000
+        or not isinstance(messages, list)
+        or len(messages) != 3
+        or [m.get("role") for m in messages if isinstance(m, dict)]
+        != ["system", "user", "user"]
+        or any(not isinstance(m.get("content"), str) for m in messages)
+    ):
+        return None
+    system = messages[0]["content"]
+    if hashlib.sha256(system.encode()).hexdigest() == _OPENCODE_TITLE_SHA256:
+        return "opencode_title"
+    return None
+
+
+def classify_request(body: dict[str, Any]) -> None:
+    """Attach scheduling metadata to the request record, never to the model input."""
+    from yunshu_engine.request_tracker import current_request_info
+
+    from .engine import get_engine, get_model_manager
+    from .x_yunshu import RequestInfo, queue_snapshot
+
+    engine = get_engine()
+    manager = get_model_manager()
+    if manager is not None:
+        model_id = body.get("model", "")
+        entry = manager.get_entry(manager.resolve_model_id(model_id) or model_id)
+        engine = entry.engine if entry is not None else None
+    qualified = bool(getattr(engine, "_prefix_invariant_dispatch", False))
+    info = current_request_info.get()
+    if isinstance(info, RequestInfo) and settings.scheduling_enabled(
+        "YUNSHU_AUXILIARY_SCHEDULING", qualified=qualified
+    ):
+        kind = auxiliary_kind(body)
+        info.scheduling_priority = -1 if kind else 0
+        info.auxiliary_kind = kind
+        info.queue_position, info.queue_est_wait_ms = queue_snapshot(info)
+
+
+async def defer_auxiliary() -> None:
+    """Give companion turns time to arrive, then admit only during interactive idle.
+
+    The captured client launches the title before the agent turn. A 500 ms grace
+    keeps that race out of the non-preemptible first prefill. Active VLM rows can
+    subsequently pause at slice boundaries without recomputing any state.
+    """
+    import asyncio
+
+    from yunshu_engine.request_tracker import current_request_info
+
+    from .x_yunshu import RequestInfo, registry
+
+    info = current_request_info.get()
+    if not isinstance(info, RequestInfo) or info.scheduling_priority >= 0:
+        return
+    from yunshu_engine.serving.work_scheduler import AGING_S
+
+    await asyncio.sleep(0.5)
+    while any(
+        other is not info and other.scheduling_priority >= 0
+        for other in registry.active()
+    ):
+        if (
+            info.cancel_requested
+            or info.deadline_exceeded
+            or time.perf_counter() - info.arrived >= AGING_S
+        ):
+            return
+        await asyncio.sleep(0.01)

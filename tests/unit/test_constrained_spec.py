@@ -457,7 +457,7 @@ def test_serial_requests_preserve_ar_attention_and_projections(
     monkeypatch.setattr(
         runner,
         "_step_generator",
-        lambda group: seen.append(
+        lambda group, **_kwargs: seen.append(
             (batch_invariant._STATE["active"], ragged_kv._STATE["dense_lane"])
         ),
     )

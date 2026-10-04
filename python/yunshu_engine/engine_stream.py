@@ -473,6 +473,7 @@ class EngineStreamMixin:
         # Also bypass for seeded sampling (reproducibility needs a fresh cache).
         _stream_bypass_cache = (
             (seed is not None and temperature > 0)
+            or getattr(cancel_event, "scheduling_priority", 0) < 0
             or not self._cache_supports_trim(self._model)
             # bypass when a LoRA adapter is active — the prefix cache is not
             # adapter-keyed, so reusing KV computed under a different adapter (or base)

@@ -793,6 +793,7 @@ class EngineFastMixin:
             # the cost of TTFT on repeat prompts (acceptable for a seeded
             # request).
             _bypass_cache_for_seed = seed is not None and temperature > 0
+            _auxiliary = getattr(cancel_event, "scheduling_priority", 0) < 0
 
             # Hybrid-model guard: prompt/prefix KV reuse both rely on trimming
             # the cached KV (snapshot trim at store, trim=1 + re-feed at lookup,
@@ -812,12 +813,15 @@ class EngineFastMixin:
             _hybrid_mode = (
                 (not _cache_trimmable)
                 and not _bypass_cache_for_seed
+                and not _auxiliary
                 and self._kv_prefix_cache is not None
             )
             if _hybrid_mode:
                 self._kv_prefix_cache._no_trim_mode = True
-            _bypass_cache = _bypass_cache_for_seed or (
-                (not _cache_trimmable) and not _hybrid_mode
+            _bypass_cache = (
+                _auxiliary
+                or _bypass_cache_for_seed
+                or ((not _cache_trimmable) and not _hybrid_mode)
             )
             # The KV prefix cache AND the exact-match prompt cache are
             # keyed on token ids (+ model name) but NOT on the active LoRA adapter. The

@@ -437,6 +437,20 @@ Agent 重放（opencode 錄製請求，warm 第 2 次起）：TF 0.6.1 105-159 t
 - Prefill 公平性（cf6105c8，2026-09-28，4 條背景 decode + 1 條長 prefill）：chunk 0 / 256 / 512，16K：長請求 TTFT 17.8 / 21.6 / 19.5 s，prefill 期間背景 decode 0.7 / 2.9 / 1.7 tok/s（原本 23.6）；32K：37.7 / 47.0 / 42.3 s、0.6 / 2.7 / 1.6 tok/s。小 chunk 換來背景速率，付出長請求 TTFT；實驗旗標，沒有成為預設。
 - Fused prefill（2026-09-29，同一 4+1 負載）：fused 64 / 128：16K TTFT 35.9 / 27.5 s（baseline 17.7），背景 decode 7.2 / 4.8 tok/s；32K 78.1 / 60.0 s（baseline 37.7）。背景速度提高，長請求 TTFT 約變兩倍；已被 round driver 的 mixed 負載結果取代（上方 mixed16 背景 3.8 tok/s、TTFT 不退步的方向），不再追。
 
+2026-10-03 I8 opt-in scheduling repair（codex-i8，same Qwen3.8-27B-oQ4e-mtp checkpoint；兩個 flags 保持 default off）：修 paused auxiliary speculative lane 被算成可償還 decode debt 的 ~20 s main-prefill stall；保留 auxiliary canonical checkpoint cuts 但不 lookup/store cache；bounded overtaking 保護長 cold prefill。一次 quiet job `1003-112620-00-i8-fix-three-ab-1127` 跑三個 interleaved fresh-server pairs（runs5/6/7，arm order1/0/1），seed42、原始七個 captured opencode bodies、六個 empty APC roots。rc0、六份 final complete、0 pauses、contended=false；foreign CPU max170.5% < 新門檻1620%。六份 source receipts 相同（runner586184da / work3b8792f8 / aux4db4ea25），mode=mtp；18/18 main與3/3 title完整輸出digests相同。
+
+| 指標 | stock ordering | auxiliary + uncached scheduling on |
+|---|---:|---:|
+| pooled main TTFT p50/p90 | 0.745 / 8.666 s | 0.797 / 7.760 s |
+| mean main TTFT | 2.122 s | 2.071 s |
+| warm main TTFT p50/p90 | 0.628 / 1.755 s | 0.696 / 2.423 s |
+| mean sum of six main completion times | 40.829 s | 32.366 s |
+| mean title TTFT / completion | 3.040 / 17.807 s | 28.778 / 37.268 s |
+
+Small but real：這個 captured replay 的 mean main TTFT 改善2.36%，三對都同方向（2.1208→2.0735、2.1218→2.0718、2.1222→2.0690 s），保留 opt-in 實作。Cold first-main TTFT 8.671/8.664/8.670→7.780/7.787/7.752 s；pooled p90改善10.45%，main總完成時間改善20.73%（aux不再占用主請求的單列MTP機會）。同時 median退步6.98%、warm p90退步38.1%，title更晚；不能宣稱全面TTFT win，更不是 isolated model decode/kernel 加速。兩個預設仍關閉。CPU 2048-atom mixed simulation也尚未勝FIFO p90（10.675 vs12.624 s），需真正長cold + warm suffix混合GPU驗證後才決定default。
+
+Independent non-quiet correctness job `1003-110707-00-i8-token-parity-1107` rc0 + final complete：actual runner emitted token-ID digest 7/7 on/off相同；兩arm第一main cold cached0 vs hit cached7335（prompt7336）均63 tokens、digest526abd8e8275f19c001e5753d7030987996ce3be962a929d665ebaeb5fe071c3。它加了重送request，timing不入上表。前任0.8B smoke `1003-102420-00-i8-tiny-smoke-1027` stalled rc-2、無complete，不作parity或timing結論。完整結果：`docs/research/runs/2026-10-03-i8e/summary.json`，`scripts/research/agentic/i8_summarize.py ROOT --first-run 5`。
+
 2026-10-02 C7 — bounded generic grammar artifacts + async CPU preparation (codex-audit; CPU-only, no tok/s or TTFT claim). Real tool parameter schemas from `2026-09-30-agent-census` (Claude Code/Codex/opencode); Qwen3.8-27B tokenizer only, no model load. 18 schemas × 10 alternating fresh/repeated pairs; tokenizer vocabulary construction excluded. Fresh = schema validation + normalization + grammar + tokenizer-bound parser; repeated = same operations with cached artifacts and a fresh deep-copied matcher. Schema property order, compact whitespace, tokenizer identity/vocabulary and CFG source remain in cache keys. Regex request traversal/predicate caches remain private.
 
 | Client | Captured schema occurrences / unique | Fresh compile median | Repeated compile median | Initial masks equal |
@@ -493,6 +507,12 @@ Yunshu 實際 MTP；TF 日誌明確 DFlash2。每個 ctx/kind/phase 跨三輪和
 - 一 token revisit 的 view 沒有穩定收益：第二個 warm revisit 各輪配對 +2.41 / -7.57 / -6.12 ms（正=省時）；第三個 +1.90 / -2.74 / +0.52 ms。因此 serving 只在已知單列 memory plan、fresh suffix >=64 時使用 view；短 suffix / 未知 plan保留原 merge。64是保守的使用範圍限制，量測點為66，不宣稱找到了最佳 crossover。
 - 這是 suffix TTFT 約1%的小改善，不是 cold prefill或decode速度聲明；沒有新增設定或實驗旗標。原型與解析檔 `prefill3-fixed-view.py`、`prefill3-fixed-view-summary.json`，完整log在gpuq。
 
+
+2026-10-03 I8 final-window／handoff opt-in（7189c262；defaults仍off）：同Qwen3.8-27B-oQ4e-mtp、seed42，job `1003-182813-00-i8-next8-admit-all-1830`，三captured switchback pairs＋三long-mix pairs，rc0、complete、0 pauses、contended=false（foreign CPU max253.7% <1620%），22 runtime/kernel/dependency/model-config hashes前後相同。21/21 raw prompt pairs、6/6 post-timing cold/full-hit pairs、18/18 mixed完整輸出digest相同。改動只dispatch／handoff，不改canonical cuts或sampler。
+
+- captured pooled main p50 .7515→.7570 s（退0.73%）、p90 8.5990→7.6239 s、warm p50 .622→.611 s、warm p90 1.7496→1.7268 s、mean TTFT2.1425→1.9226 s、mean六turn completion sum40.226→33.504 s（改善16.71%）。on三session sums30.426/30.773/39.312 s，完整保留outlier。全指標default gate未過，不升預設。
+- long mix：prime11068／cold26468 tokens，suffix prompts11120/11600/13392、實際cached11067/52/10240（中間近cold）。pooled main p50 23.098→8.6795 s、p90 31.3856→30.4925 s、suffix p90 31.414→12.9238 s、main wall mean58.6095→52.7925 s。synthetic main max48與captured自然output limits分开，不宣稱所有模型／流量贏。
+- small but real：warm p50 -1.77%、warm p90 -1.30%，保留opt-in；不拿它們抵銷main median gate失敗。後續需singleton warm3的host/GPU/restore/writer與consumer-lease timeline。tiny0.8B仍有digest差，不能當lossless證據。資料：private `docs/research/runs/2026-10-03-i8-next8`，外部 `i8-phase8-metrics.json`、`i8-final-harvest.json`。
 
 ## 2026-10-03 constrained speculation 與 accepted-target logprobs（codex-cspec）
 
@@ -779,3 +799,19 @@ raw generate107.44→102.27ms under per-layer barriers. The remaining
 allocator/copy gap and exact long-output first-visible-token path need
 further work; do not extrapolate these max16-token diagnostic timings to
 HTTP max256-token TTFT.
+
+
+2026-10-03 I8 qualified scheduler default decision（codex-i8e；lead decision）：採用既有 clean quiet 三對 job `1003-182813-00-i8-next8-admit-all-1830`、相同27B checkpoint與digests。captured p50 .7515→.7570 s（+0.73%，5.5ms；phase5反方向-0.87%，lead判為run-to-run noise），p90 8.5990→7.6239 s（約-11%）、warm p90 1.7496→1.7268 s（-1.3%）、六turn completion40.226→33.504 s（約-17%）；long-mix TTFT p50 23.098→8.6795 s。只在實際engage qualified batch-invariant kernels的backend升預設；非invariant（0.8B）保留FIFO，兩個stable opt-out／explicit opt-in設定保留。這是scheduler traffic證據，不是所有模型的普遍加速；歷史default-off條目不改寫。
+
+
+2026-10-04 I8 engine-owned exact context-guard counts（codex-i8f；small but real **host work only**）：qualified VLM backend 使用 bounded text-count LRU（128 entries / 2MiB conservative text payload），tokenizer identity＋clear epoch隔離、stop清除、只cache成功encode；media/tool overhead與context/token budget仍逐次依原規則計算。非qualified保持原count path；沒有新增experimental flag。M5 actual DFlash quiet三個interleaved fresh-server pairs `1004-074925-00-i8-f-count-final-27b-0750` rc0/final complete/0 pauses，contended=false（foreign max249.43% <1620%）；source receipts前後一致，12/12 raw output pairs與cold/full-hit digests全同。8K純文字、max16、seed42、temp0，每server三個warm repeats。
+
+- M5 warm guard count mean **5.558→0.013ms**（約省5.54ms CPU工作）；240條text與240個包含tool/media的message計數cold/cache完全相同，這不是generation quality benchmark。
+- HTTP warm TTFT median **78→72ms**，mean **81.889→82.333ms**（+0.44ms）；三對mean差為candidate -5.33/-5.67/+12.33ms。保留第三對127/95ms TTFT，不宣稱平均TTFT全面加速。
+- completion mean **383.889→402.222ms**；candidate第三對first-warm560ms、下一turn427ms保留。早期原型同樣有665ms完成時間離群；追加三對trace未重現該665ms值，全部inflight=1，沒有lease誤判證據。此改動只減少重複host encode，不改GPU arithmetic、APC restore或scheduler。
+- `1004-074240-00-i8-f-count-production-27b-0746` 的12對parity PASS，但與nice15 MLX unit suite重疊，**整批timing排除**（CPU monitor clean並不足以排除GPU工作重疊）。正式重新量測為上面final job。
+- 合併後scheduler required確認 `1003-233802-00-i8-f-merged-confirm-2340` M5 actualDFlash、quiet rc0/complete/clean，captured raw7、cold/fullhit2、longmix6全同；tiny default/FIFO smoke保持qualified=False、uncached=False、auxiliary=False。既有lead accepted default數字沿用前項，不將一對確認當成新的三對效能claim。
+
+M5 full nice15 unit gate：8673 passed /20 skipped；M3與M5 focused38 PASS（M3不作timing決策）。Ruff check/format與mypy gate（897 baseline、no new）PASS。Idle-sync removal候選在M5三對TTFT兩臂都80ms，已移出交付，外部patch保留；host-ID roundtrip候選尚無27B measurement，不宣稱勝負。外部資料：P5Plus `i8-f-count-final/analysis.json`、`source.json`、`i8-f-trace-analysis.json`、`i8-f-unit-guard.log`。
+
+追加正式程式trace `1004-075423-00-i8-f-final-trace-27b-0755`：M5 quiet rc0/complete、0 pauses、CPU clean（foreign max137.91%）；12 raw pairs＋cold/fullhit全同。兩臂都出現MLX group step 100–300ms的慢段，末對回復正常，不能把CPU clean等同於所有device runtime平穩。全部warm inflight=1、runner input約0.26–0.37ms；guard→input baseline約5.7–7.8ms、cache約0.5–0.8ms。這定位了被移除的host encode與仍存在的group-runtime變異，不把變異歸因於lease，也不宣稱解決全部10–30ms。資料 `i8-f-final-trace-analysis.json`。
