@@ -42,7 +42,10 @@ if cmd == "submit":
                 "state": "done" if rc == 0 else "failed",
                 "rc": rc,
                 "contended": cont,
-                "cmd": argv, "opts": opts, "started": t0, "ended": time.time() + 60,
+                "cmd": argv,
+                "opts": opts,
+                "started": t0,
+                "ended": time.time() + 60,
             }
         )
     )
