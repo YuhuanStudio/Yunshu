@@ -601,7 +601,7 @@ class VLMBatchRunner:
             for job in group.jobs.values():
                 self._emit(job, exc)
             with contextlib.suppress(Exception):
-                group.gen.close()
+                close_generator(group.gen)
         self._batches.clear()
         self._spec = None
         self._aux_spec = None
@@ -1728,15 +1728,15 @@ class VLMBatchRunner:
                 self._step_driver(primary)
             if self._spec is not None and not self._spec.jobs:
                 if not self._spec.gen.has_work:
-                    self._spec.gen.close()
+                    close_generator(self._spec.gen)
                     self._spec = None
             if self._aux_spec is not None and not self._aux_spec.jobs:
                 if not self._aux_spec.gen.has_work:
-                    self._aux_spec.gen.close()
+                    close_generator(self._aux_spec.gen)
                     self._aux_spec = None
             for key, group in list(self._batches.items()):
                 if not group.jobs and not group.gen.has_work:
-                    group.gen.close()
+                    close_generator(group.gen)
                     del self._batches[key]
         except Exception as exc:
             logger.exception("VLM runner step failed; failing active requests")
@@ -1744,7 +1744,7 @@ class VLMBatchRunner:
                 for job in group.jobs.values():
                     self._emit(job, exc)
                 with contextlib.suppress(Exception):
-                    group.gen.close()
+                    close_generator(group.gen)
             self._batches.clear()
             self._spec = None
             self._aux_spec = None
@@ -1802,6 +1802,27 @@ class VLMBatchRunner:
 
                 mx.synchronize()
                 buffer_cache.clear_if_over()
+
+
+def close_generator(gen: Any) -> None:
+    """Close a batch generator and break the reference cycle its speculative round holds.
+
+    ``SpeculativeGenerationBatch`` keeps its rounds generator in ``_rounds_iter``, and that
+    generator's frame holds a closure over the batch (``stop_check``), the cache-position
+    transaction and the prompt cache. Dropping the generator therefore frees nothing until
+    Python's cyclic collector runs, which pinned a finished request's whole KV for seconds
+    to minutes. Closing the rounds generator frees its frame, so the caches go with the
+    last reference.
+    """
+    try:
+        batch = getattr(gen, "_generation_batch", None)
+        rounds = getattr(batch, "_rounds_iter", None)
+        if rounds is not None:
+            batch._rounds_iter = None
+            rounds.close()
+    except Exception:  # noqa: BLE001
+        logger.debug("closing the speculative rounds failed", exc_info=True)
+    gen.close()
 
 
 def _spec_counters(drafter: Any) -> tuple | None:
