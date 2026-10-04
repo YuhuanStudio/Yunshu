@@ -75,6 +75,7 @@ DEFAULT_RESERVE_GB = 16.0
 CLAIM_LOCK = threading.Lock()
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import gpuq_preflight  # noqa: E402
 from gpuq_contention import (  # noqa: E402
     ENV,
     MAX_POLL_GAP_S,
@@ -594,6 +595,15 @@ def submit(
                 "running daemon does not support M3 lanes; use an upgraded isolated GPUQ_DIR (do not restart the live daemon)"
             )
     cfg = contention_config({"contention_config": cpu_config or {}})
+    # A job that cannot succeed (syntax error, missing script / model, module not on
+    # its PYTHONPATH) is refused now instead of failing after its queue wait.
+    if os.environ.get("GPUQ_NO_PREFLIGHT") != "1":
+        problems = gpuq_preflight.preflight(cmd, os.getcwd(), dict(os.environ))
+        if problems:
+            raise ValueError(
+                "preflight failed (GPUQ_NO_PREFLIGHT=1 skips it):\n  - "
+                + "\n  - ".join(problems)
+            )
     JOBS.mkdir(parents=True, exist_ok=True)
     LOGS.mkdir(parents=True, exist_ok=True)
     # Serialize label admission and id allocation across all submitters.
@@ -607,6 +617,11 @@ def submit(
         jid = _new_id(label)
         if mem_gb is None:
             mem_gb = 0.0 if serving_ok else DEFAULT_MEM_GB
+        timeout_s, timeout_note = gpuq_preflight.learned_timeout(
+            label, timeout_min * 60, _jobs()
+        )
+        if timeout_note:
+            print(f"gpuq: timeout {timeout_note}", file=sys.stderr)
         _write(
             JOBS / f"{jid}.json",
             {
@@ -620,7 +635,8 @@ def submit(
                 "cmd": cmd,
                 "cwd": os.getcwd(),
                 "env": dict(os.environ),
-                "timeout_s": timeout_min * 60,
+                "timeout_s": timeout_s,
+                "timeout_note": timeout_note,
                 "stall_s": stall_min * 60,
                 "priority": priority,
                 "serving_ok": serving_ok,
@@ -974,6 +990,10 @@ def _run_one(job: dict, path: Path, gate: ServingGate | None = None) -> None:
         pauser.pauses[-1][1] = ended
         pauser.job["pauses"], pauser.job["paused"] = pauser.pauses, False
     job.update(state=state, rc=rc, ended=ended, paused=False, pause_reason=None)
+    reaped = gpuq_preflight.reap(str(rc_file))
+    if reaped:
+        job["reaped_pids"] = reaped
+        log.write(f"\ngpuq: reaped {len(reaped)} leftover process(es): {reaped}")
     log.write(
         f"\ngpuq: {state} rc={rc} after {ended - job['started']:.0f}s "
         f"({len(pauser.pauses)} pauses, {pauser.total(ended):.0f}s paused)\n"
@@ -1118,6 +1138,9 @@ def _adopt(job: dict, path: Path, gate: ServingGate | None = None) -> None:
         state = why or ("done" if rc == 0 else "failed")
     if pauser.paused:
         pauser.pauses[-1][1] = _now()
+    reaped = gpuq_preflight.reap(str(rc_file))
+    if reaped:
+        job["reaped_pids"] = reaped
     job.update(
         state=state,
         rc=rc,
@@ -1166,6 +1189,47 @@ def _execute(job: dict, path: Path, gate: ServingGate) -> None:
             _write(LOGS / f"{job['id']}.pauses.json", {"pauses": pauser.pauses})
             _write(path, job)
     print(f"{time.strftime('%H:%M:%S')} end {job['id']} {job['state']}", flush=True)
+    for sib in _cancel_siblings(job):
+        print(f"{time.strftime('%H:%M:%S')} cancel {sib} (sibling failed)", flush=True)
+
+
+_COUNTER = re.compile(r"-(r?\d+)$")  # not "27b", "32k": sizes, not counters
+
+
+def _stem(label: str) -> str:
+    """'wide8-api-small-r1' -> 'wide8-api-small': the label without its run counters."""
+    while True:
+        cut = _COUNTER.sub("", label)
+        if cut == label:
+            return label
+        label = cut
+
+
+def _cancel_siblings(job: dict) -> list[str]:
+    """A failed rep usually fails the same way in its siblings (same label stem,
+    submitted within an hour of it): cancel those still pending instead of letting
+    each one load the model and fail. The owner resubmits after fixing the cause."""
+    if job.get("state") not in ("failed", "stalled"):
+        return []
+    stem = _stem(job.get("label") or "")
+    if not stem or stem == job.get("label"):
+        return []
+    cancelled = []
+    for j in _jobs():
+        if (
+            j["state"] == "pending"
+            and not j.get("cancel")
+            and j["id"] != job["id"]
+            and _stem(j.get("label") or "") == stem
+            and abs(j.get("submitted", 0) - job.get("submitted", 0)) < 3600
+        ):
+            _patch_job(
+                JOBS / f"{j['id']}.json",
+                cancel=True,
+                cancel_reason=f"sibling {job['id']} {job['state']} rc={job.get('rc')}",
+            )
+            cancelled.append(j["id"])
+    return cancelled
 
 
 def _adoption_order(jobs: list[dict]) -> list[dict]:

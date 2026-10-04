@@ -542,3 +542,26 @@ def test_running_unlabelled_backlog_job_keeps_running_when_p0_does_not_fit(
     q.submit(["true"], "big-128k", 1, 0, mem_gb=80.0)
     assert q._priority_step(pauser, q.ServingGate(), now) is False
     assert not pauser.paused and not q._read(q.JOBS / "low.json").get("cancel")
+
+
+def test_failed_rep_cancels_its_pending_siblings(q):
+    job(q, "r1", label="wide8-api-small-r1", state="pending", submitted=100)
+    job(q, "r2", label="wide8-api-small-r2", state="pending", submitted=101)
+    job(q, "big", label="wide8-api-big-r1", state="pending", submitted=101)
+    job(q, "late", label="wide8-api-small-r9", state="pending", submitted=100 + 7200)
+    failed = dict(
+        id="r0", label="wide8-api-small-r0", state="failed", rc=1, submitted=99
+    )
+    assert sorted(q._cancel_siblings(failed)) == ["r1", "r2"]
+    assert q._read(q.JOBS / "r1.json")["cancel"] is True
+    assert "r0 failed" in q._read(q.JOBS / "r2.json")["cancel_reason"]
+    assert not q._read(q.JOBS / "big.json").get("cancel")
+    assert not q._read(q.JOBS / "late.json").get("cancel")
+    assert q._cancel_siblings(dict(failed, state="timeout")) == []
+    assert q._cancel_siblings(dict(failed, label="solo")) == []
+    assert q._stem("prefill6-readme-http32k-r3-0800") == "prefill6-readme-http32k"
+
+
+def test_stem_keeps_sizes(q):
+    assert q._stem("memab-27b-r2") == "memab-27b"
+    assert q._stem("wide7-api-core-pilot-10b") == "wide7-api-core-pilot-10b"
