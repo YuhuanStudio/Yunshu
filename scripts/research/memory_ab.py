@@ -99,6 +99,7 @@ def run_arm(name, tree, model, port, rep, emit, extra_env=None):
         PYTHONPATH=os.path.join(tree, "python"),
         YUNSHU_AUTH_DISABLED="1",
         YUNSHU_DEBUG_ROUTES="1",
+        YUNSHU_VLM_APC_DISK="0",
     )
     env.update(extra_env or {})
     log = open(f"{os.path.splitext(OUT)[0]}_{name}_{rep}.log", "w")  # noqa: SIM115
@@ -122,12 +123,26 @@ def run_arm(name, tree, model, port, rep, emit, extra_env=None):
     url = f"http://127.0.0.1:{port}"
     peak = [0]
     stop = threading.Event()
+    timeline = []
 
     def sampler():
+        t0, last = time.time(), 0.0
         while not stop.is_set():
             try:
                 fp = process_tree_memory(proc.pid)["physical_footprint_sum_bytes"]
                 peak[0] = max(peak[0], fp)
+                if time.time() - last >= 3.0:
+                    last = time.time()
+                    m = metrics(url)
+                    timeline.append(
+                        dict(
+                            t=round(last - t0, 1),
+                            footprint_gib=round(fp / GIB, 2),
+                            active=m.get('yunshu_gpu_memory_bytes{type="active"}'),
+                            cache=m.get('yunshu_gpu_memory_bytes{type="cache"}'),
+                            apc=m.get('yunshu_apc_resident_bytes{model_id="default"}'),
+                        )
+                    )
             except Exception:  # noqa: BLE001
                 pass
             time.sleep(0.2)
@@ -149,6 +164,13 @@ def run_arm(name, tree, model, port, rep, emit, extra_env=None):
 
         def census(url, step):
             try:
+                kv = json.loads(
+                    urllib.request.urlopen(url + "/debug/kv-cache", timeout=60).read()
+                )
+                emit(dict(arm=name, rep=rep, step=step, kv_cache=kv))
+            except Exception as exc:  # noqa: BLE001
+                emit(dict(arm=name, rep=rep, step=step, kv_cache_error=str(exc)))
+            try:
                 text = urllib.request.urlopen(
                     url + "/debug/memory-census?min_mib=64", timeout=300
                 ).read()
@@ -159,6 +181,9 @@ def run_arm(name, tree, model, port, rep, emit, extra_env=None):
 
         def record(step, usage=None, secs=None):
             fp = process_tree_memory(proc.pid)["physical_footprint_sum_bytes"]
+            tl = timeline[:] if "turn" in step else None
+            if tl is not None:
+                timeline.clear()
             emit(
                 dict(
                     arm=name,
@@ -168,6 +193,7 @@ def run_arm(name, tree, model, port, rep, emit, extra_env=None):
                     peak_footprint_gib=round(peak[0] / GIB, 3),
                     usage=usage,
                     secs=None if secs is None else round(secs, 3),
+                    timeline=tl,
                     **metrics(url),
                 )
             )
@@ -204,7 +230,9 @@ def run_arm(name, tree, model, port, rep, emit, extra_env=None):
             record(f"{size // 1024}k-turn2", u, s)
         time.sleep(20)
         record("idle20s")
-        census(url, "idle20s")
+        time.sleep(15)
+        record("idle35s")
+        census(url, "idle35s")
         # Does memory held after the long turn return once a short request runs?
         _, u, s = chat(
             url,
@@ -234,7 +262,10 @@ def main():
     ap.add_argument("--sizes", type=int, nargs="+", default=[8192, 32768, 98304])
     ap.add_argument("--out", required=True)
     ap.add_argument(
-        "--arm-env", action="append", default=[], help="name:K=V (server env of that arm)"
+        "--arm-env",
+        action="append",
+        default=[],
+        help="name:K=V (server env of that arm)",
     )
     ap.add_argument(
         "--rep-offset", type=int, default=0, help="first rep index (one rep per job)"

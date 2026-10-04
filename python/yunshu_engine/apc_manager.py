@@ -37,6 +37,7 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
+import mlx_vlm.apc as _upstream_apc
 from mlx_vlm.apc import APCManager, DiskBlockStore, _sequence_hash
 from mlx_vlm.apc_coordinator import APCCoordinator
 
@@ -47,6 +48,99 @@ _CANONICAL_LOOKUP: contextvars.ContextVar[
 ] = contextvars.ContextVar("yunshu_canonical_apc_lookup", default=None)
 
 GIB = 1 << 30
+
+# ``APCManager``'s clone of a prompt cache (restoring a checkpoint, storing one) differs
+# from upstream in two ways, both pure scheduling of the same copies:
+# - ``store_exact_cache`` clones the cache it is given, so a checkpoint that is already a
+#   private snapshot (the runner's deferred captures) was copied twice and both copies were
+#   live until the call returned. While ``_OWNED_SNAPSHOT`` is set the snapshot itself is
+#   handed over;
+# - the copies of all layers were evaluated at once, so a restore held the source, the
+#   copy and the capacity-padded copy of every layer together (3x the cache at its peak).
+#   They are evaluated a few layers at a time, so only a few layers' intermediates exist.
+_OWNED_SNAPSHOT: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "yunshu_apc_owned_snapshot", default=False
+)
+CLONE_EVAL_BYTES = 512 << 20
+
+
+def _restore_kv(c, min_capacity_tokens, targets):
+    """Copy a stored K/V checkpoint into a fresh cache with room for ``min_capacity_tokens``.
+
+    Upstream copies the rows into a fresh buffer and then pads that copy (concatenate with
+    zeros) into a second one; when the request needs more capacity than the checkpoint
+    holds (always, for a follow-up turn) the prefix is written twice. Here the rows are
+    read once and written once into the padded buffer: same values, same zero padding,
+    same capacity (rounded up to ``step`` from the larger of rows and the request).
+    """
+    import mlx.core as mx
+    from mlx_vlm.models.cache import KVCache
+
+    rows = int(c.offset)
+    out = KVCache()
+    capacity = max(rows, int(min_capacity_tokens))
+    if out.step > 0:
+        capacity = ((capacity + out.step - 1) // out.step) * out.step
+    pad = capacity - rows
+
+    def build(a):
+        part = a[..., :rows, :]
+        if pad <= 0:
+            return mx.contiguous(mx.array(part, dtype=part.dtype))
+        zeros = mx.zeros((*part.shape[:2], pad, part.shape[3]), dtype=part.dtype)
+        return mx.concatenate([part, zeros], axis=2)
+
+    out.keys, out.values = build(c.keys), build(c.values)
+    out.offset = rows
+    targets += [out.keys, out.values]
+    return out
+
+
+def _install_owned_snapshot_clone() -> None:
+    current = _upstream_apc._clone_prompt_cache_for_apc
+    if getattr(current, "_yunshu_owned_snapshot", False):
+        return
+    clone_entry = getattr(_upstream_apc, "_clone_cache_entry_for_apc", None)
+
+    def clone(prompt_cache, *, min_capacity_tokens=None):
+        if _OWNED_SNAPSHOT.get():
+            return list(prompt_cache)
+        if clone_entry is None:
+            return current(prompt_cache, min_capacity_tokens=min_capacity_tokens)
+        import mlx.core as mx
+        from mlx_vlm.models.cache import KVCache
+
+        out, targets = [], []
+        for c in prompt_cache:
+            if (
+                min_capacity_tokens is not None
+                and type(c) is KVCache
+                and c.keys is not None
+                and c.values is not None
+                and c.keys.shape[-2] >= c.offset > 0
+                and c.values.shape[-2] >= c.offset
+            ):
+                copied = _restore_kv(c, min_capacity_tokens, targets)
+            else:
+                copied = clone_entry(
+                    c, min_capacity_tokens=min_capacity_tokens, eval_targets=targets
+                )
+            if copied is None:
+                return None
+            out.append(copied)
+            if sum(t.nbytes for t in targets) >= CLONE_EVAL_BYTES:
+                mx.eval(targets)
+                targets.clear()
+        if targets:
+            mx.eval(targets)
+        return out
+
+    clone._yunshu_owned_snapshot = True  # type: ignore[attr-defined]
+    clone._upstream = current  # type: ignore[attr-defined]
+    _upstream_apc._clone_prompt_cache_for_apc = clone
+
+
+_install_owned_snapshot_clone()
 
 # Request-generation bookkeeping (_born) is trimmed past this many entries, keeping the newest.
 _BORN_MAX = 20000
@@ -451,6 +545,87 @@ def _single_native_arrays_row(source):
     return row
 
 
+MATERIALIZE_BYTES = 512 << 20
+
+
+def materialize(target_lists, limit_bytes: int = MATERIALIZE_BYTES) -> None:
+    """Evaluate the arrays of several checkpoints in groups of about ``limit_bytes``.
+
+    Targets are in layer order and the checkpoints of one request share their layers, so
+    position i of every list is the same layer: evaluating a few layers at a time lets the
+    live buffers each copy pinned go before the next layer's copy is made. Groups are sized
+    by bytes so a small cache is one evaluation (each one is a GPU synchronization).
+    """
+    import mlx.core as mx
+
+    width = max((len(t) for t in target_lists), default=0)
+    batch, size = [], 0
+    for i in range(width):
+        for t in target_lists:
+            if i < len(t):
+                batch.append(t[i])
+                size += t[i].nbytes
+        if size >= limit_bytes:
+            mx.eval(batch)
+            batch, size = [], 0
+    if batch:
+        mx.eval(batch)
+
+
+SHARE_MAX_TAIL = 4096
+
+
+def share_prefix_rows(pending, max_tail: int = SHARE_MAX_TAIL) -> list:
+    """Make a shorter checkpoint's K/V rows views of a longer one's of the same request.
+
+    A later checkpoint holds the earlier one's rows unchanged (K/V rows are written once, in
+    order), so its first ``m`` rows ARE the earlier checkpoint's: the earlier one is stored
+    as views of them and its own copy is never made. Same bits, one physical buffer. The
+    longer checkpoint's buffer stays alive while a view of it does, so only checkpoints at
+    most ``max_tail`` tokens apart share (that bounds what a surviving view can pin beyond
+    its own size). Recurrent state differs per position and is never shared. Returns the
+    views to evaluate once the longer checkpoint's arrays exist.
+    """
+    from mlx_vlm.models.cache import KVCache
+
+    views: list = []
+    for short in pending:
+        tokens, snapshot, extra_hash, targets, generation = short[:5]
+        n = len(tokens)
+        donors = [
+            p
+            for p in pending
+            if p is not short
+            and p[2] == extra_hash
+            and p[4] == generation
+            and 0 < len(p[0]) - n <= max_tail
+            and p[0][:n] == tokens
+        ]
+        if not donors:
+            continue
+        donor = max(donors, key=lambda p: len(p[0]))
+        for mine, theirs in zip(snapshot, donor[1], strict=False):
+            if type(mine) is not KVCache or type(theirs) is not KVCache:
+                continue
+            if mine.keys is None or theirs.keys is None or mine.values is None:
+                continue
+            rows = mine.keys.shape[-2]
+            if (
+                mine.values.shape[-2] != rows
+                or theirs.keys.shape[-2] < rows
+                or theirs.values.shape[-2] < rows
+                or mine.keys.shape[:-2] != theirs.keys.shape[:-2]
+                or mine.keys.dtype != theirs.keys.dtype
+            ):
+                continue
+            own = {id(mine.keys), id(mine.values)}
+            targets[:] = [t for t in targets if id(t) not in own]
+            mine.keys = theirs.keys[..., :rows, :]
+            mine.values = theirs.values[..., :rows, :]
+            views += [mine.keys, mine.values]
+    return views
+
+
 class _Coordinator(APCCoordinator):
     """Checkpoint positions: the prompt end, one interval boundary, the end of the system turn."""
 
@@ -708,21 +883,35 @@ class _Coordinator(APCCoordinator):
         return True
 
     def flush_deferred_checkpoints(self) -> None:
-        import mlx.core as mx
-
         pending = self.__dict__.pop("_deferred_checkpoints", [])
         self._deferred_bytes = 0
+        if not pending:
+            return
+        # The copies below are lazy until evaluated, so each still pins the live
+        # cache's buffers as they were at capture. Free what these checkpoints supersede
+        # first (the same drops ``store_exact_cache`` makes), then copy a few arrays at a
+        # time across all checkpoints so the pinned buffers go as the copies appear.
+        # Same operations and bits as evaluating everything at once; only the peak differs.
+        release = getattr(self.manager, "release_superseded", None)
+        for tokens, _, extra_hash, _, generation, _, _ in pending:
+            if release is not None:
+                release(tokens, extra_hash, _generation=generation)
+        views = share_prefix_rows(pending)
+        materialize([entry[3] for entry in pending])
+        if views:
+            import mlx.core as mx
+
+            mx.eval(views)
         for (
             tokens,
             snapshot,
             extra_hash,
-            targets,
+            _targets,
             generation,
             policy,
             signature,
         ) in pending:
-            mx.eval(targets)
-            kwargs = {"extra_hash": extra_hash}
+            kwargs = {"extra_hash": extra_hash, "_owned": True}
             if generation is not None:
                 kwargs["_generation"] = generation
             if self.manager.store_exact_cache(tokens, snapshot, **kwargs):
@@ -1129,7 +1318,13 @@ class YunshuAPCManager(APCManager):
             self._head_lengths.add(len(head_tokens))
 
     def store_exact_cache(
-        self, token_ids, prompt_cache, *, extra_hash=0, _generation=None
+        self,
+        token_ids,
+        prompt_cache,
+        *,
+        extra_hash=0,
+        _generation=None,
+        _owned=False,
     ) -> bool:
         n = len(token_ids)
         with self._plock:
@@ -1148,13 +1343,27 @@ class YunshuAPCManager(APCManager):
             self._born[key] = gen
             if is_head:
                 self._head_keys.add(key)
-        ok = super().store_exact_cache(token_ids, prompt_cache, extra_hash=extra_hash)
+        token = _OWNED_SNAPSHOT.set(bool(_owned))
+        try:
+            ok = super().store_exact_cache(
+                token_ids, prompt_cache, extra_hash=extra_hash
+            )
+        finally:
+            _OWNED_SNAPSHOT.reset(token)
         if not ok and not had:
             with self._plock:
                 self._born.pop(key, None)
                 if is_head:
                     self._head_keys.discard(key)
         return ok
+
+    def release_superseded(
+        self, token_ids, extra_hash: int = 0, *, _generation=None
+    ) -> None:
+        """Drop the RAM checkpoints ``token_ids`` supersedes before its copy exists."""
+        with self._plock:
+            gen = self._generation if _generation is None else _generation
+        self._supersede(token_ids, extra_hash, gen)
 
     def _supersede(self, token_ids, extra_hash: int, gen: int) -> None:
         """Drop RAM checkpoints of earlier requests that are prefixes of this one."""

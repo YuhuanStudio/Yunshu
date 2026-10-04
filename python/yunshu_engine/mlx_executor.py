@@ -144,16 +144,25 @@ def sync_and_clear_cache() -> None:
 
     Studied from oMLX scheduler.py:_sync_and_clear_cache().
     """
-    try:
-        gen_mod = sys.modules.get("mlx_lm.generate")
-        if gen_mod is not None and hasattr(gen_mod, "generation_stream"):
+    synchronize_streams()
+    mx.clear_cache()
+
+
+def synchronize_streams() -> None:
+    """Wait for the generation stream, then the default stream (no cache clear)."""
+    for name in (
+        "mlx_lm.generate",
+        "mlx_vlm.generate.common",
+        "mlx_vlm.speculative.common",
+    ):
+        try:
+            gen_mod = sys.modules.get(name)
             stream = getattr(gen_mod, "generation_stream", None)
             if stream is not None:
                 mx.synchronize(stream)
-    except RuntimeError:
-        logger.debug(
-            "generation_stream synchronize failed, falling back to global sync",
-            exc_info=True,
-        )
+        except RuntimeError:
+            logger.debug(
+                "generation_stream synchronize failed, falling back to global sync",
+                exc_info=True,
+            )
     mx.synchronize()
-    mx.clear_cache()
