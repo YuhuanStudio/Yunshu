@@ -556,7 +556,10 @@ class RoundDriver:
                 blocked = True
         if not items:
             return []
-        hidden = forward(self.lm, [it.seg for it in items])
+        from ..kernels import gdn_prefill
+
+        with gdn_prefill.step_kernel():
+            hidden = forward(self.lm, [it.seg for it in items])
         draws = self._draw(items, hidden)
         # Evaluate every cache the step advanced, not only what feeds a token:
         # a prompt chunk that emits nothing would otherwise stay a lazy graph

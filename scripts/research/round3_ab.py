@@ -21,6 +21,8 @@ import time
 import urllib.request
 from pathlib import Path
 
+# the oMLX checkout the worktree has no copy of
+CORPORA = "/Users/yuhuan/Documents/YuhuanStudio/Yunshu/reference/omlx/omlx/admin/bench_corpora"
 MODEL = "/Volumes/P5Plus/models/Jundot/Qwen3.8-27B-oQ4e-mtp"
 
 
@@ -90,7 +92,7 @@ def main() -> int:
         rc = subprocess.call(
             [sys.executable, str(root / "scripts/research/bench_context_batch.py"),
              "--url", url, "--model", "Qwen3.8-27B", "--tokenizer", MODEL,
-             "--pid", str(srv.pid), "--tg", "256", "--note", f"{a.arm}/{a.cell}/r{a.rep}",
+             "--pid", str(srv.pid), "--tg", "256", "--corpora-dir", CORPORA, "--note", f"{a.arm}/{a.cell}/r{a.rep}",
              "--output", str(a.out), *bench_args(a.cell)],
             env=env, cwd=root,
         )  # fmt: skip
@@ -120,7 +122,10 @@ def main() -> int:
         except Exception as exc:
             print("metrics unavailable", exc, flush=True)
         print("driver busy seconds:", busy, flush=True)
-        if (busy > 0) != (a.arm != "off"):
+        # the 32k cell: prompts above DRIVER_MAX_UNCACHED_TOKENS keep the upstream
+        # path by design, so the driver stays idle in both arms
+        expect_driver = a.arm != "off" and a.cell == "1k"
+        if (busy > 0) != expect_driver:
             print("driver usage does not match arm", flush=True)
             return 1
         print("complete", flush=True)
