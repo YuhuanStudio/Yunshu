@@ -52,6 +52,8 @@ def apply_overrides(cfg: dict, a) -> dict:
         cfg["speed_tol_pct"] = a.speed_tol
     if getattr(a, "spec_off", None) is not None:
         cfg["spec_off"] = a.spec_off
+    if getattr(a, "spec_modes", None):
+        cfg["spec_modes"] = [x for x in a.spec_modes.split(",") if x]
     if getattr(a, "no_apc_hit_required", False):
         cfg["apc_require_hit"] = False
     return cfg

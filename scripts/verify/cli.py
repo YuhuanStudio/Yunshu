@@ -90,6 +90,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="also check spec on == off",
     )
+    ab.add_argument(
+        "--spec-modes",
+        dest="spec_modes",
+        help="identity under each speculative method: default,mtp,dflash (comma list)",
+    )
     ab.add_argument("--no-apc-hit-required", action="store_true")
     ab.add_argument(
         "--mem-gb",

@@ -39,6 +39,12 @@ did. `--env K=V` applies to both arms, `--cand-env` to the candidate only, `--ba
 | `speed` | `tfbench.py` decode cells (cold decode tok/s, cold TTFT, follow-up TTFT) in N quiet reps (default 3), interleaved base, cand, base, cand. Medians, per-rep paired deltas and a noise estimate (half range of the paired deltas) are reported. | no median worsening beyond `max(2%, noise)` (`--speed-tol`); a contended rep is rerun once, then the stage fails |
 | `memory` | `memory_ab.py`, one job per arm and rep (default 2 reps, alternating order): peak footprint, footprint after idle, footprint held after a short follow-up. | no metric above base by more than 3% + 0.25 GiB |
 
+`--spec-modes default,mtp,dflash` repeats identity (and spec on == off) once per speculative
+method (`mtp` / `dflash` set `YUNSHU_VLM_DRAFT`; `dflash` needs the drafter path, `D` in
+`local.env` or `YV_DRAFTER`). The base arm's identity cells are deterministic, so they are shared
+across runs through `/Volumes/P5Plus/yunshu-build/verify/cellcache/` (key: base commit, env, model,
+context, harness hash, device): the next candidate against the same base reruns only its own arm.
+
 ## Suites
 
 `decode` (preflight, smoke, identity incl. spec on == off at 1K / 8K, apc, speed), `prefill`

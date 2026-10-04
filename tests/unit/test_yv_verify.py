@@ -286,7 +286,7 @@ def test_base_identity_is_shared_across_runs_but_candidate_cells_are_not(world):
     assert go(world, suite="identity", label="r2", cand_env=["FAKE_X=1"]) == 0
     new = jobs(world)[n1:]
     assert new and all(
-        "-cand-" in j for j in new
+        "-cand." in j for j in new
     )  # base cell came from the cache, cand reran
     rd2 = next(world.runs.glob("r2-*"))
     base_done = [
@@ -298,7 +298,7 @@ def test_base_identity_is_shared_across_runs_but_candidate_cells_are_not(world):
     # a different base env is a different key: not served from the cache
     n2 = len(jobs(world))
     assert go(world, suite="identity", label="r3", base_env=["FAKE_DIVERGE=1"]) == 1
-    assert any("-base-" in j for j in jobs(world)[n2:])
+    assert any("-base." in j for j in jobs(world)[n2:])
 
 
 # ── executor ─────────────────────────────────────────────────────────────
@@ -439,6 +439,24 @@ def test_spec_on_off_identity(world):
         if v["stages"][0]["name"] == "identity"
         else True
     )
+
+
+def test_identity_per_spec_mode(world, monkeypatch):
+    monkeypatch.setenv("YV_DRAFTER", str(world.tmp / "drafter"))
+    assert (
+        go(world, suite="identity", spec_modes="default,mtp,dflash", spec_off=True) == 0
+    )
+    v, rd = verdict_of(world)
+    n = v["stages"][0]["numbers"]
+    assert {"base_vs_cand", "[mtp] base_vs_cand", "[dflash] base_vs_cand"} <= set(n)
+    assert "[mtp] spec_on_vs_off" in n
+    keys = {
+        r["cell"]
+        for r in core.read_jsonl(rd / "identity.jsonl")
+        if r.get("ev") == "cell_submitted"
+    }
+    assert "cand.mtp.1024" in keys and "candoff.dflash.1024" in keys
+    assert go(world, suite="identity", spec_modes="bogus", label="b") == 2
 
 
 def test_apc_hit_must_equal_miss(world):

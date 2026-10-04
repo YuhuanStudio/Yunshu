@@ -304,40 +304,69 @@ def stage_smoke(ctx: Ctx) -> StageResult:
 
 
 # ── c. identity ──────────────────────────────────────────────────────────
+def _drafter_path() -> str:
+    from .gate import local_env
+
+    return os.environ.get("YV_DRAFTER") or local_env().get("D", "")
+
+
+def mode_env(mode: str) -> dict:
+    """Server env that selects a speculative-decoding method for an identity cell."""
+    if mode == "default":
+        return {}
+    if mode in ("mtp", "off"):
+        return {"YUNSHU_VLM_DRAFT": mode}
+    if mode == "dflash":
+        d = _drafter_path()
+        if not d:
+            raise InfraError(
+                "--spec-modes dflash needs the drafter path (D in local.env)"
+            )
+        return {"YUNSHU_VLM_DRAFT": d}
+    raise InfraError(f"unknown spec mode {mode!r} (default, mtp, dflash)")
+
+
+def identity_cell_key(arm: str, mode: str, c: int) -> str:
+    return f"{arm}.{mode}.{c}"  # arm: base | cand | candoff
+
+
 def _identity_cells(ctx: Ctx) -> list:
     cfg = ctx.suite
-    arms = [("base", {}), ("cand", {})]
-    off = ctx.arm_env("cand").get("YUNSHU_VLM_DRAFT", "").lower() in ("off", "none")
-    if cfg["spec_off"] and not off:
-        arms.append(("cand-off", {"YUNSHU_VLM_DRAFT": "off"}))
+    modes = cfg.get("spec_modes") or ["default"]
     cells = []
-    for c in cfg["ctx"]:
-        for arm, extra in arms:
-            base_arm = "cand" if arm.startswith("cand") else "base"
-            cells.append(
-                Cell(
-                    "identity",
-                    f"{arm}-{c}",
-                    _tfbench_argv(
-                        ctx,
-                        base_arm,
+    for mode in modes:
+        menv = mode_env(mode)
+        variants = [("base", "base", menv), ("cand", "cand", menv)]
+        eff = ctx.arm_env("cand", menv).get("YUNSHU_VLM_DRAFT", "").lower()
+        if cfg["spec_off"] and eff not in ("off", "none"):
+            variants.append(("candoff", "cand", dict(menv, YUNSHU_VLM_DRAFT="off")))
+        for c in cfg["ctx"]:
+            for name, tree_arm, extra in variants:
+                key = identity_cell_key(name, mode, c)
+                cells.append(
+                    Cell(
                         "identity",
-                        f"{arm}-{c}",
-                        ["--part", "decode", "--rep", "0", "--only-ctx", str(c)],
-                        env=ctx.arm_env(base_arm, extra),
-                    ),
-                    mem_gb=ctx.mem_gb,
-                    timeout_min=_decode_est_min(ctx, [c], len(cfg["kinds"])),
-                    stall_min=12 if ctx.big else 4,
-                    share_key=_share_key(ctx, base_arm, arm, extra, c)
-                    if arm == "base"
-                    else "",
+                        key,
+                        _tfbench_argv(
+                            ctx,
+                            tree_arm,
+                            "identity",
+                            key,
+                            ["--part", "decode", "--rep", "0", "--only-ctx", str(c)],
+                            env=ctx.arm_env(tree_arm, extra),
+                        ),
+                        mem_gb=ctx.mem_gb,
+                        timeout_min=_decode_est_min(ctx, [c], len(cfg["kinds"])),
+                        stall_min=12 if ctx.big else 4,
+                        share_key=_share_key(ctx, tree_arm, extra, c)
+                        if name == "base"
+                        else "",
+                    )
                 )
-            )
     return cells
 
 
-def _share_key(ctx: Ctx, arm: str, name: str, extra: dict, c: int) -> str:
+def _share_key(ctx: Ctx, arm: str, extra: dict, c: int) -> str:
     """Greedy digests of the base arm are deterministic: reuse them across runs. The key holds
     everything that could change them (code, env, model, harness, device) and no run path."""
     from .core import sha as _sha
@@ -355,10 +384,14 @@ def _share_key(ctx: Ctx, arm: str, name: str, extra: dict, c: int) -> str:
     )
 
 
-def _rows_for(res: dict, prefix: str) -> list:
+def _rows_for(res: dict, arm: str, mode: str) -> list:
     out = []
     for k, r in sorted(res.items()):
-        if re.fullmatch(re.escape(prefix) + r"-\d+", k) and r.ok and r.evidence:
+        if (
+            re.fullmatch(re.escape(f"{arm}.{mode}.") + r"\d+", k)
+            and r.ok
+            and r.evidence
+        ):
             out += read_jsonl(r.evidence)
     return out
 
@@ -369,27 +402,29 @@ def stage_identity(ctx: Ctx) -> StageResult:
     reasons = _failed_cells(res)
     numbers: dict = {}
     if not reasons:
-        base, cand = _rows_for(res, "base"), _rows_for(res, "cand")
-        cmp_ = analyze.compare_identity(base, cand, "base", "cand")
-        numbers["base_vs_cand"] = {
-            "compared": cmp_["compared"],
-            "mismatches": len(cmp_["mismatches"]),
-        }
-        if not cmp_["ok"]:
-            reasons.append(f"base != cand: {cmp_['mismatches'][:3]}")
-        offrows = _rows_for(res, "cand-off")
-        if offrows:
-            c2 = analyze.compare_identity(offrows, cand, "spec_off", "cand")
-            numbers["spec_on_vs_off"] = {
-                "compared": c2["compared"],
-                "mismatches": len(c2["mismatches"]),
+        for mode in ctx.suite.get("spec_modes") or ["default"]:
+            tag = "" if mode == "default" else f"[{mode}] "
+            base, cand = _rows_for(res, "base", mode), _rows_for(res, "cand", mode)
+            cmp_ = analyze.compare_identity(base, cand, "base", "cand")
+            numbers[f"{tag}base_vs_cand".strip()] = {
+                "compared": cmp_["compared"],
+                "mismatches": len(cmp_["mismatches"]),
             }
-            if not c2["ok"]:
-                reasons.append(f"spec on != spec off: {c2['mismatches'][:3]}")
-        numbers["engaged_spec_mode"] = {
-            "base": analyze.session_info(base).get("engaged_spec_mode"),
-            "cand": analyze.session_info(cand).get("engaged_spec_mode"),
-        }
+            if not cmp_["ok"]:
+                reasons.append(f"{tag}base != cand: {cmp_['mismatches'][:3]}")
+            offrows = _rows_for(res, "candoff", mode)
+            if offrows:
+                c2 = analyze.compare_identity(offrows, cand, "spec_off", "cand")
+                numbers[f"{tag}spec_on_vs_off".strip()] = {
+                    "compared": c2["compared"],
+                    "mismatches": len(c2["mismatches"]),
+                }
+                if not c2["ok"]:
+                    reasons.append(f"{tag}spec on != spec off: {c2['mismatches'][:3]}")
+            numbers[f"{tag}engaged_spec_mode".strip()] = {
+                "base": analyze.session_info(base).get("engaged_spec_mode"),
+                "cand": analyze.session_info(cand).get("engaged_spec_mode"),
+            }
     return _finish(ctx, StageResult("identity", not reasons, reasons, numbers))
 
 
@@ -397,8 +432,10 @@ def stage_identity(ctx: Ctx) -> StageResult:
 def stage_apc(ctx: Ctx) -> StageResult:
     rows = []
     for c in ctx.suite["ctx"]:
-        p = ctx.run.cell_path("identity", f"cand-{c}")
-        rows += read_jsonl(p)
+        for mode in ctx.suite.get("spec_modes") or ["default"]:
+            rows += read_jsonl(
+                ctx.run.cell_path("identity", identity_cell_key("cand", mode, c))
+            )
     if not rows:
         return _finish(
             ctx,
