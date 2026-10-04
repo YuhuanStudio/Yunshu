@@ -857,3 +857,23 @@ Correctness: `1004-072442-00-wide6-production-quality200-20` actual default hook
 Attribution limits: the inherited synchronized per-op profiles destroy overlap and cannot be summed into a production round. The same14.30GB decoder projection bytes and715MB full head imply an optimistic24.46ms read lower bound under an explicitly assumed614GB/s ceiling, not measured bandwidth. The prior paired unchanged-arithmetic submission/tail change recovered7.482ms at1K. TF keeps original input identities at lane_matmul and groups more projections; lost reshape identity explains redundant xsum dispatches (M5 four projections4->1, exact bits). Python bookkeeping erased short/mid gains, so that path and physical-stack candidate remain research only. Last-use ordering gives about+1.37%1K code against the same fast-tree family in `1004-024800-00-wide6-matrix-r3-11`; its long-context controller behavior is not promoted. Historical TF ~49ms/round and ~140tok/s are not a fresh three-run comparison: the remaining ~6-7ms round gap is not claimed closed.
 
 The wide5 combo's native control acquired noncontiguous scale views after a grouped arm; its+18.66/+34.80% ratios cannot decide a default. New controls restore contiguous scale tables, and the selected virtual layout never changes parameters. `1004-002233-00-wide6-attribution-r3-01` failed in8s from a prompt-variable shadow (fixed harness, no valid timing); inherited wide5-final-matrix16 was cancelled before start for the control-layout issue. Full per-job rc/completion/log-tail/device receipts and all cells: `/Volumes/P5Plus/yunshu-build/codex/wide6/harvest.json`, `final-matrix-summary.json`, `http-timing-summary.json`. No failed or merely-done job authorizes a performance claim.
+
+### 2026-10-04 — server memory, v0.1.3 vs main (no growth)
+
+M5 Max 128 GiB, Jundot/Qwen3.8-27B-oQ4e-mtp, default settings (RAM APC auto), `scripts/research/memory_ab.py`,
+two fresh servers per arm alternated (v0.1.3 tag vs main b6a36e3e), job `1004-095951-00-memab-27b-r2` (rc 0,
+complete). Process-tree physical footprint after each request (GiB):
+
+| step | v0.1.3 (2 reps) | main (2 reps) |
+|---|---|---|
+| ready | 16.98 / 17.04 | 16.94 / 17.04 |
+| 3 short 1K requests | 24.45 / 23.94 | 23.95 / 18.77 |
+| 8K turn 2 | 26.02 / 26.26 | 26.32 / 27.25 |
+| 32K turn 2 | 32.52 / 32.77 | 32.83 / 37.82 (APC 10.9 vs 4.2 GiB held) |
+| 96K peak during prefill | 59.29 / 67.50 | 55.35 / 58.82 |
+| idle 20 s after 96K | 38.47 / 50.83 | 38.83 / 39.18 |
+
+Where both arms hold the same prefix cache they agree within 0.4 GiB; the spread between reps comes from what the
+prefix cache keeps (APC GiB differs per rep), not from the code version. Main's 96K peak is lower. Open in both
+versions: after the 96K turn the APC reports 0 GiB yet MLX active memory stays ~32 GiB (weights ~16 GiB), so ~16 GiB
+is held by something other than weights and prefix cache.
