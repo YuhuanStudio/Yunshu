@@ -1412,6 +1412,10 @@ class BatchedEngine(
             thinking_budget = _REASONING_EFFORT_MAP.get(reasoning_effort, 8192)
             if enable_thinking is None:
                 enable_thinking = True
+        if json_schema is not None:
+            # Bare structured output is constrained from its first token: a thinking
+            # budget would force a close tag into the mask (all logits -inf).
+            thinking_budget = None
 
         # Gemma-4 default: its chat template enables thinking by default but
         # emits inline `thought` tokens that don't auto-stop, producing output
@@ -1861,6 +1865,10 @@ class BatchedEngine(
             thinking_budget = _REASONING_EFFORT_MAP.get(reasoning_effort, 8192)
             if enable_thinking is None:
                 enable_thinking = True
+        if json_schema is not None:
+            # Bare structured output is constrained from its first token: a thinking
+            # budget would force a close tag into the mask (all logits -inf).
+            thinking_budget = None
 
         # Gemma-4 default: its chat template enables thinking by default but
         # emits inline `thought` tokens that don't auto-stop, producing output

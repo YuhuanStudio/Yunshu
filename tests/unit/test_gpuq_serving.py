@@ -69,7 +69,15 @@ def q(tmp_path, monkeypatch):
     for k in list(os.environ):
         if k.startswith("GPUQ_") and k != "GPUQ_DIR":
             monkeypatch.delenv(k)
+    # Jobs get SIGINT on timeout / cancel. A suite started from a background shell
+    # job runs with SIGINT ignored, which the jobs would inherit (each such test
+    # then waited 30 s for the SIGKILL fallback); the daemon resets it the same way.
+    restore = signal.getsignal(signal.SIGINT)
+    if restore is signal.SIG_IGN:
+        signal.signal(signal.SIGINT, signal.SIG_DFL)
     yield m
+    if restore is signal.SIG_IGN:
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
     # A failed assertion can leave a job stopped (SIGSTOP) with no runner left to
     # resume or cancel it; reap every job process group the test started.
     for f in (tmp_path / "jobs").glob("*.json"):
@@ -247,12 +255,14 @@ def test_preempt_pause_resume_and_intervals(q, prod):
     time.sleep(0.1)
     assert _state(pid).startswith("T")  # still inside the idle-resume window
     assert _wait_for(lambda: _state(pid)[:1] in "SR", 3.0)
+    # The process resumes (SIGCONT) just before the record is written.
+    assert _wait_for(lambda: q._read(path)["paused"] is False, 3.0)
     d = q._read(path)
-    assert d["paused"] is False and len(d["pauses"]) == 1
+    assert len(d["pauses"]) == 1
     t0, t1 = d["pauses"][0]
     assert t0 >= t_busy - 0.1 and t1 - t0 >= 0.25
     q._patch_job(path, cancel=True)
-    t.join(10)
+    t.join(60)  # generous: the full suite runs beside GPU jobs
     assert q._read(path)["state"] == "cancelled"
 
 
@@ -273,7 +283,7 @@ def test_paused_time_excluded_from_timeout_and_stall(q, prod):
     assert _wait_for(lambda: q._read(path).get("paused"), 2)
     time.sleep(1.8)
     prod.active = 0
-    t.join(15)
+    t.join(60)  # generous: the full suite runs beside GPU jobs
     d = q._read(path)
     assert d["state"] == "done", d
     assert sum(b - a for a, b in d["pauses"]) > 1.5
@@ -284,7 +294,7 @@ def test_timeout_still_fires_on_active_time(q, prod):
     job, path = _job(q, ["sleep", "30"], timeout_s=0.5, stall_s=60)
     g.poll()
     t = _run_bg(q, job, path, g)
-    t.join(15)
+    t.join(60)  # generous: the full suite runs beside GPU jobs
     assert q._read(path)["state"] == "timeout"
 
 

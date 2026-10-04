@@ -307,6 +307,8 @@ class ToolCallFunction(BaseModel):
     @field_validator("arguments", mode="before")
     @classmethod
     def normalize_empty_arguments(cls, value):
+        if isinstance(value, (dict, list)):  # already typed: encode, never decode
+            return json.dumps(value, ensure_ascii=False)
         return "{}" if value is None or value == "" else value
 
 

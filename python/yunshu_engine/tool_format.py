@@ -570,7 +570,10 @@ def parse_block(
             if unreadable is None:
                 unreadable = (body, span[1])
             continue
-        return calls, span[1], False
+        declared_calls = _only_declared(calls, tools)
+        if calls and not declared_calls:
+            return [], span[1], True  # markup of an undeclared tool: dropped
+        return declared_calls, span[1], False
     if open_span:
         return None
     if unreadable is not None and _CALL_LOOK.match(unreadable[0]):
@@ -582,6 +585,21 @@ def parse_block(
         return [], unreadable[1], True
     # Not a call (prose): skip past the marker, keeping the text visible.
     return [], marker_at + len(group[0].start), False
+
+
+def _only_declared(calls: list[Call], tools: Any) -> list[Call]:
+    """Drop calls to tools the request did not declare (a client cannot run them);
+    with no declared tools nothing is filtered."""
+    declared = _known_tools(openai_tools(tools))
+    if not declared:
+        return calls
+    kept = [c for c in calls if c["name"] in declared]
+    if len(kept) != len(calls):
+        logger.warning(
+            "dropped call(s) to undeclared tool(s): %s",
+            sorted({c["name"] for c in calls} - declared),
+        )
+    return kept
 
 
 def _whole_calls(text: str, formats: Sequence[ToolFormat], tools: Any):
@@ -610,6 +628,8 @@ def parse_tool_output(
         return [], text or ""
     tools = openai_tools(tools)
     whole = _whole_calls(text, formats, tools)
+    if whole:
+        whole = _only_declared(whole, tools)
     if whole:
         return coerce_tool_calls(whole, tools) or [], ""
     calls: list[Call] = []

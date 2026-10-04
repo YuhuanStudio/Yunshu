@@ -1729,6 +1729,10 @@ def main() -> int:
             j["cancel"] = True
             _write(path, j)
     elif a.op == "_daemon":
+        # A daemon started from a background shell job inherits SIGINT ignored,
+        # and so would every job: timeouts and cancels (SIGINT first) would then
+        # wait 30 s for the SIGKILL fallback. Jobs inherit the default instead.
+        signal.signal(signal.SIGINT, signal.SIG_DFL)
         daemon()
     return 0
 

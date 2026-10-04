@@ -1675,7 +1675,9 @@ class VLMEngine:
                 validate_drafter_compatibility(self._model, drafter, "mtp")
         block = settings.get("YUNSHU_MTP_BLOCK_SIZE")
         kernels = None
-        if drafter is not None:
+        # Spec off on a spec family still runs the lane's plain-decode arithmetic
+        # (invariant kernels), so spec on == spec off token-for-token.
+        if drafter is not None or (spec_family and not use_driver):
             from .kernels.omlx import apply as apply_verify_kernels
 
             # Experimental alternative (YUNSHU_MTP_ROW_EXACT): upstream oMLX
@@ -1746,7 +1748,7 @@ class VLMEngine:
                 from .kernels.verify_select import install as install_streamed5
 
                 kernels["streamed5"] = install_streamed5()
-            if draft_kind == "mtp" and invariant:
+            if draft_kind == "mtp" and invariant and drafter is not None:
                 # The lane's own MTP rounds (one host read per cycle, the head
                 # run over every verify row inside the verify's graph), fused
                 # residual+norm layers and a reduced draft vocabulary. Same
@@ -1774,7 +1776,7 @@ class VLMEngine:
             # ~108 ms. A DFlash drafter proposes a whole block in one forward
             # and upstream adapts the depth to acceptance under this ceiling,
             # so the ceiling is the block it was trained on.
-            if block is None:
+            if block is None and drafter is not None:
                 if draft_kind == "dflash":
                     block = int(getattr(drafter.config, "block_size", 0)) or None
                 else:
@@ -2171,7 +2173,10 @@ class VLMEngine:
             top_logprobs=int(top_logprobs or 0),
             thinking_budget=(
                 thinking_budget
-                if enable_thinking is not False and think_start is not None
+                if enable_thinking is not False
+                and think_start is not None
+                and constraint_guide
+                is None  # bare structured output: no thinking phase
                 else None
             ),
             prompt_preopens_thinking=in_think,

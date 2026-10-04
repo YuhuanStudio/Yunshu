@@ -1175,6 +1175,9 @@ async def create_message(req: AnthropicMessagesRequest, request: Request):
     _filtered_messages: list[dict] = []
     _in_place = _keeps_mid_system(req.model)
     _lead = True
+    from yunshu_engine.message_adapter import is_token_counter_message
+
+    messages = [m for m in messages if not is_token_counter_message(m)]
     for msg in messages:
         if msg.get("role") == "system" and (_lead or not _in_place):
             _c = msg.get("content", "")
