@@ -26,9 +26,12 @@ def test_join_only_short_nonstored_boundaries_within_lane_limit():
     assert probe.joined_boundaries([100, 370, 381], 100, {381})[1] == []
 
 
+@pytest.mark.parametrize("preserve_descriptors", [False, True])
 @pytest.mark.parametrize("dtype", [mx.float32, mx.bfloat16])
 @pytest.mark.parametrize("prefix,tail", [(15, 2), (66, 2)])
-def test_real_qwen_keeps_hidden_and_native_cache_bits(prefix, tail, dtype):
+def test_real_qwen_keeps_hidden_and_native_cache_bits(
+    prefix, tail, dtype, preserve_descriptors
+):
     previous = mx.default_device()
     mx.set_default_device(mx.cpu)
     uninstall = None
@@ -44,7 +47,7 @@ def test_real_qwen_keeps_hidden_and_native_cache_bits(prefix, tail, dtype):
         first = model(suffix[:, :prefix], cache=baseline)
         last = model(suffix[:, prefix:], cache=baseline)
         mx.eval(first, last, [c.state for c in baseline])
-        counts, uninstall = probe.install()
+        counts, uninstall = probe.install(preserve_descriptors=preserve_descriptors)
         token = probe._PLAN.set((8 + prefix,))
         actual = model(suffix, cache=candidate)
         mx.eval(actual, [c.state for c in candidate])
@@ -134,3 +137,56 @@ def test_span_installer_is_idempotent():
         assert Qwen3_5Model.__call__ is installed
     finally:
         uninstall()
+
+
+def test_descriptor_interleave_uses_each_original_projection_shape(monkeypatch):
+    import mlx.nn as nn
+    from mlx_vlm.models.qwen3_5 import language as q
+
+    from yunshu_engine.kernels import lane_linear
+
+    calls = []
+
+    class FakeLane(nn.Module):
+        def __init__(self, name, width):
+            super().__init__()
+            self.name = name
+            self.width = width
+
+        def __call__(self, x):
+            calls.append((self.name, int(x.shape[1])))
+            return mx.ones((*x.shape[:-1], self.width), dtype=x.dtype)
+
+    monkeypatch.setattr(lane_linear, "LaneLinear", FakeLane)
+    previous = mx.default_device()
+    mx.set_default_device(mx.cpu)
+    undo = None
+    span_token = None
+    try:
+        mlp = q.Qwen3_5MLP(16, 32)
+        mlp.gate_proj, mlp.up_proj, mlp.down_proj = (
+            FakeLane("gate", 32),
+            FakeLane("up", 32),
+            FakeLane("down", 16),
+        )
+        counts, undo = probe.install(preserve_descriptors=True)
+        span_token = probe._SPANS.set(((0, 279), (279, 281)))
+        x = mx.ones((1, 281, 16), dtype=mx.bfloat16)
+        result = mlp(x)
+        mx.eval(result)
+        assert result.shape == x.shape
+        assert counts["preserve_descriptors"]
+        assert calls == [
+            ("gate", 279),
+            ("gate", 2),
+            ("up", 279),
+            ("up", 2),
+            ("down", 279),
+            ("down", 2),
+        ]
+    finally:
+        if span_token is not None:
+            probe._SPANS.reset(span_token)
+        if undo:
+            undo()
+        mx.set_default_device(previous)

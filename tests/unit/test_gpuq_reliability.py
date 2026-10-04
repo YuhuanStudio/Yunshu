@@ -400,8 +400,15 @@ def test_memory_starved_p0_job_stops_preemption(q, monkeypatch):
     monkeypatch.setattr(q, "free_memory_gb", lambda: 50.0)
     now = 100_000.0
     monkeypatch.setattr(q.time, "time", lambda: now)
-    low = dict(id="low", state="running", priority=-1, submitted=now - 60,
-               started=now - 60, pid=1, env={})
+    low = dict(
+        id="low",
+        state="running",
+        priority=-1,
+        submitted=now - 60,
+        started=now - 60,
+        pid=1,
+        env={},
+    )
     q._write(q.JOBS / "low.json", low)
     q.submit(["true"], "big-128k", 1, 0, mem_gb=80.0)
     q.submit(["true"], "small", 1, 0, mem_gb=10.0)

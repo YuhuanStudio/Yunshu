@@ -104,7 +104,7 @@ def test_native_paired_gate_primes_both_arms_and_reports_hit_engagement(
     assert rows[0]["arms"]["native"]["native_calls"] > 0
 
 
-@pytest.mark.parametrize("variant", ["async", "spans"])
+@pytest.mark.parametrize("variant", ["async", "spans", "interleave"])
 def test_async_paired_gate_uses_real_canonical_chat_and_requires_restore(
     monkeypatch, tmp_path, variant
 ):
@@ -122,7 +122,8 @@ def test_async_paired_gate_uses_real_canonical_chat_and_requires_restore(
     def installed(*args, **kwargs):
         pass
 
-    def install_span():
+    def install_span(*, preserve_descriptors=False):
+        assert preserve_descriptors == (variant == "interleave")
         monkeypatch.setattr(Qwen3_5Model, "__call__", installed)
         return counts, lambda: None
 
@@ -157,7 +158,7 @@ def test_async_paired_gate_uses_real_canonical_chat_and_requires_restore(
             requests.append((list(ids), max_tokens, counts["enabled"]))
             stats.cached_tokens = self.cached
             if self.cached and counts["enabled"]:
-                if variant == "spans":
+                if variant in ("spans", "interleave"):
                     assert Qwen3_5Model.__call__ is installed
                 counts[counter] += 1
             stats.last_logprob = {"logprob": -0.25}
