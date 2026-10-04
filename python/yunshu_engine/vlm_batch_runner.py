@@ -701,6 +701,15 @@ class VLMBatchRunner:
             gen.apc = bind(gen.model)
         return gen
 
+    def _driver_takes(self, job: _Job, alone: bool) -> bool:
+        """Text request goes to the round driver: always with
+        ``YUNSHU_ROUND_DRIVER_MIN_CONCURRENCY=1``; with 2 (default) only when
+        another request is in flight, so a lone request keeps the single-row
+        speculative lane (the driver's packed rows cost a lone row ~6%)."""
+        if self.driver is None or job.prompt_kwargs is not None:
+            return False
+        return not (alone and settings.get("YUNSHU_ROUND_DRIVER_MIN_CONCURRENCY") >= 2)
+
     def _admit(self, job: _Job, alone: bool) -> None:
         from .mrope import clear_rope_state
 
@@ -712,7 +721,7 @@ class VLMBatchRunner:
                 job.use_draft
                 and alone
                 and self._spec is None
-                and not (self.driver is not None and job.prompt_kwargs is None)
+                and not self._driver_takes(job, alone)
             )
             if not lane:
                 job.use_draft = job.allow_draft = False
@@ -731,11 +740,7 @@ class VLMBatchRunner:
                 use_apc = bool(self._apc_admit(mx.array(job.ids)))
             except Exception:
                 logger.debug("APC admission check failed; using APC", exc_info=True)
-        if (
-            self.driver is not None
-            and job.prompt_kwargs is None
-            and job.cache_plan is None
-        ):
+        if self._driver_takes(job, alone) and job.cache_plan is None:
             self._admit_driver(job, use_apc)
             return
         job.stats.used_apc = use_apc
