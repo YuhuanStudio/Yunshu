@@ -893,3 +893,5 @@ Where both arms hold the same prefix cache they agree within 0.4 GiB; the spread
 prefix cache keeps (APC GiB differs per rep), not from the code version. Main's 96K peak is lower. Open in both
 versions: after the 96K turn the APC reports 0 GiB yet MLX active memory stays ~32 GiB (weights ~16 GiB), so ~16 GiB
 is held by something other than weights and prefix cache.
+
+`yv ab` verdict for the tokenizer prefix reuse (`prefill7-tokprefix`, base main 4298f69943e1, suite prefill, M5): PASS. Identity 18 cells 0 mismatches; APC hit == miss on 6 cold/warm pairs (cached 1033/8202/32778/32777); quality n=200 base 107 / cand 107 (net 0); speed 3 interleaved quiet reps: follow-up TTFT 32K code 0.816 -> 0.796 s (-2.5%), 32K prose 0.800 -> 0.783 s (-2.1%), 8K -0.8/-0.9%, 1K unchanged within noise; decode tok/s and cold TTFT unchanged (|delta| <= 0.4%).
