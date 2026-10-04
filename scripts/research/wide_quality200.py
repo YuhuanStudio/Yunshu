@@ -211,6 +211,8 @@ with a.output.open("x") as out:
             import gc
             import resource
 
+            gen = kwargs = uid = None
+            mx.clear_cache()
             collected = gc.collect()
             objs = gc.get_objects()
             census = collections.Counter(type(o).__name__ for o in objs)
@@ -238,7 +240,7 @@ with a.output.open("x") as out:
                 keys = list(node)[:5] if isinstance(node, dict) else ""
                 chain.append(f"{type(node).__module__}.{type(node).__name__}{keys}")
             ids = {id(o) for o in live}
-            survivors = [o for o in live if id(o) in _NEW]
+            survivors = live[-40::8]
             _NEW.clear()
             if _IDS:
                 _NEW.update(ids - _IDS)
