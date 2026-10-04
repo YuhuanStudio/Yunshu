@@ -235,7 +235,42 @@ with a.output.open("x") as out:
                 seen.add(id(node))
                 keys = list(node)[:5] if isinstance(node, dict) else ""
                 chain.append(f"{type(node).__module__}.{type(node).__name__}{keys}")
-            del objs, live, node
+            big = []
+            for o in objs:
+                if isinstance(o, list) and len(o) >= 50:
+                    sample = o[0] if o else None
+                    if isinstance(sample, (mx.array, list, tuple)):
+                        big.append(o)
+            big.sort(key=len, reverse=True)
+
+            def owner(o, depth=0):
+                out = []
+                for r in gc.get_referrers(o):
+                    if r is objs or r is big or type(r).__name__ == "frame":
+                        continue
+                    if isinstance(r, dict):
+                        key = next((k for k, v in r.items() if v is o), "?")
+                        holders = [
+                            h
+                            for h in gc.get_referrers(r)
+                            if type(h).__name__ not in ("frame", "list")
+                            and h is not objs
+                        ]
+                        out.append(
+                            f"dict[{key}]<-"
+                            + ",".join(
+                                type(h).__module__ + "." + type(h).__name__
+                                for h in holders[:2]
+                            )
+                        )
+                    elif isinstance(r, list) and depth < 3:
+                        out.append("list<-" + "|".join(owner(r, depth + 1)[:1]))
+                    else:
+                        out.append(type(r).__module__ + "." + type(r).__name__)
+                return out[:3]
+
+            big_report = [(len(b), owner(b)) for b in big[:5]]
+            del objs, live, node, big
             sizes = {}
             for name, mod in list(sys.modules.items()):
                 for attr, v in list(getattr(mod, "__dict__", {}).items()):
@@ -258,6 +293,7 @@ with a.output.open("x") as out:
                     arrays=arrays,
                     growth=dict(sorted(growth.items(), key=lambda kv: -kv[1])[:10]),
                     chain=chain,
+                    big_lists=big_report,
                     module_growth=dict(
                         sorted(module_growth.items(), key=lambda kv: -kv[1])[:10]
                     ),
