@@ -27,11 +27,8 @@ MODEL = "/Volumes/P5Plus/models/Jundot/Qwen3.8-27B-oQ4e-mtp"
 def arm_env(arm: str) -> dict[str, str]:
     if arm == "off":
         return {"YUNSHU_ROUND_DRIVER": "0"}
-    if arm in ("always", "routed"):
-        return {
-            "YUNSHU_ROUND_DRIVER": "1",
-            "YUNSHU_ROUND_DRIVER_MIN_CONCURRENCY": "1" if arm == "always" else "2",
-        }
+    if arm == "routed":
+        return {"YUNSHU_ROUND_DRIVER": "1"}
     raise ValueError(arm)
 
 
@@ -45,7 +42,7 @@ def bench_args(cell: str) -> list[str]:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--arm", required=True, choices=["off", "always", "routed"])
+    ap.add_argument("--arm", required=True, choices=["off", "routed"])
     ap.add_argument("--cell", required=True, choices=["1k", "32k"])
     ap.add_argument("--rep", type=int, default=0)
     ap.add_argument("--port", type=int, default=18991)

@@ -50,6 +50,8 @@ logger = logging.getLogger(__name__)
 # Upstream prefill default; APC checkpoints land on these chunk boundaries and
 # cancellation is honoured between chunks (~2 s at 2K tokens on a 27B model).
 PREFILL_STEP = 2048
+# A text request enters the round driver only when this many requests are in flight.
+DRIVER_MIN_CONCURRENCY = 2
 
 
 @dataclass
@@ -702,13 +704,12 @@ class VLMBatchRunner:
         return gen
 
     def _driver_takes(self, job: _Job, alone: bool) -> bool:
-        """Text request goes to the round driver: always with
-        ``YUNSHU_ROUND_DRIVER_MIN_CONCURRENCY=1``; with 2 (default) only when
-        another request is in flight, so a lone request keeps the single-row
-        speculative lane (the driver's packed rows cost a lone row ~6%)."""
+        """Text request goes to the round driver
+        when at least ``DRIVER_MIN_CONCURRENCY`` requests are in flight; a
+        lone request keeps the single-row speculative lane."""
         if self.driver is None or job.prompt_kwargs is not None:
             return False
-        return not (alone and settings.get("YUNSHU_ROUND_DRIVER_MIN_CONCURRENCY") >= 2)
+        return not (alone and DRIVER_MIN_CONCURRENCY >= 2)
 
     def _admit(self, job: _Job, alone: bool) -> None:
         from .mrope import clear_rope_state
