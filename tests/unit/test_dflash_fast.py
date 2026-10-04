@@ -436,7 +436,7 @@ def test_generated_limit_hands_the_same_request_to_chain(monkeypatch):
             [],
             object(),
             first_bonus=9,
-            max_tokens=None or 4096,
+            max_tokens=4096,
             sampler=None,
             draft_block_size=8,
             _chain=chain,
