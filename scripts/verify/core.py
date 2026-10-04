@@ -268,6 +268,7 @@ class Gpuq:
         out: Path | None = None,
         expect_complete: bool = False,
         cwd: Path | None = None,
+        device: str = "",
     ) -> str:
         cmd = [
             self.bin,
@@ -285,6 +286,8 @@ class Gpuq:
         ]
         if quiet:
             cmd.append("--quiet")
+        if device:
+            cmd += ["--device", device]
         if out is not None:
             cmd += ["--out", str(out)]
             if expect_complete:

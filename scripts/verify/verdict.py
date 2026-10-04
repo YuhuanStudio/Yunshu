@@ -146,6 +146,9 @@ def render_md(v: dict) -> str:
         lines.append(f"- 失敗階段：{v['failed_stage']}（之後的階段未執行）")
     if v["infra_error"]:
         lines.append(f"- 基礎設施錯誤：{v['infra_error']}")
+    gm = v.get("gpu_minutes")
+    if gm:
+        lines.append(f"- GPU 分鐘：{gm}")
     lines += ["", "## 各階段", ""] + [_stage_line_zh(s) for s in v["stages"]]
     lines += ["", "## PERF_TREND block", "", "```"]
     lines.append(

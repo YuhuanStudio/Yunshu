@@ -24,6 +24,7 @@ from .core import (
     read_jsonl,
     related_tests,
 )
+from .core import sha as _sha
 from .execute import Cell, Executor
 
 TFBENCH = REPO / "scripts/research/tfbench.py"
@@ -282,6 +283,7 @@ def stage_smoke(ctx: Ctx) -> StageResult:
                 timeout_min=12 if ctx.big else 5,
                 stall_min=6 if ctx.big else 2,
                 validate=_smoke_valid,
+                device="" if ctx.big else "any",
             )
         )
     res = ctx.exe.run_cells(cells)
@@ -326,13 +328,16 @@ def mode_env(mode: str) -> dict:
     raise InfraError(f"unknown spec mode {mode!r} (default, mtp, dflash)")
 
 
-def identity_cell_key(arm: str, mode: str, c: int) -> str:
-    return f"{arm}.{mode}.{c}"  # arm: base | cand | candoff
+def identity_cell_key(arm: str, mode: str) -> str:
+    return (
+        f"{arm}.{mode}"  # arm: base | cand | candoff; one server covers every context
+    )
 
 
 def _identity_cells(ctx: Ctx) -> list:
     cfg = ctx.suite
     modes = cfg.get("spec_modes") or ["default"]
+    ctxs = list(cfg["ctx"])
     cells = []
     for mode in modes:
         menv = mode_env(mode)
@@ -340,33 +345,37 @@ def _identity_cells(ctx: Ctx) -> list:
         eff = ctx.arm_env("cand", menv).get("YUNSHU_VLM_DRAFT", "").lower()
         if cfg["spec_off"] and eff not in ("off", "none"):
             variants.append(("candoff", "cand", dict(menv, YUNSHU_VLM_DRAFT="off")))
-        for c in cfg["ctx"]:
-            for name, tree_arm, extra in variants:
-                key = identity_cell_key(name, mode, c)
-                cells.append(
-                    Cell(
+        for name, tree_arm, extra in variants:
+            key = identity_cell_key(name, mode)
+            cells.append(
+                Cell(
+                    "identity",
+                    key,
+                    _tfbench_argv(
+                        ctx,
+                        tree_arm,
                         "identity",
                         key,
-                        _tfbench_argv(
-                            ctx,
-                            tree_arm,
-                            "identity",
-                            key,
-                            ["--part", "decode", "--rep", "0", "--only-ctx", str(c)],
-                            env=ctx.arm_env(tree_arm, extra),
-                        ),
-                        mem_gb=ctx.mem_gb,
-                        timeout_min=_decode_est_min(ctx, [c], len(cfg["kinds"])),
-                        stall_min=12 if ctx.big else 4,
-                        share_key=_share_key(ctx, tree_arm, extra, c)
-                        if name == "base"
-                        else "",
-                    )
+                        ["--part", "decode", "--rep", "0"]
+                        + [x for c in ctxs for x in ("--only-ctx", str(c))],
+                        env=ctx.arm_env(tree_arm, extra),
+                    ),
+                    mem_gb=ctx.mem_gb,
+                    timeout_min=_decode_est_min(ctx, ctxs, len(cfg["kinds"])),
+                    stall_min=12 if ctx.big else 4,
+                    share_key=_share_key(ctx, tree_arm, extra, ctxs)
+                    if name == "base"
+                    else "",
                 )
+            )
     return cells
 
 
-def _share_key(ctx: Ctx, arm: str, extra: dict, c: int) -> str:
+def _harness_hash() -> str:
+    return hashlib.sha256(TFBENCH.read_bytes()).hexdigest() if TFBENCH.exists() else ""
+
+
+def _share_key(ctx: Ctx, arm: str, extra: dict, c) -> str:
     """Greedy digests of the base arm are deterministic: reuse them across runs. The key holds
     everything that could change them (code, env, model, harness, device) and no run path."""
     from .core import sha as _sha
@@ -387,11 +396,7 @@ def _share_key(ctx: Ctx, arm: str, extra: dict, c: int) -> str:
 def _rows_for(res: dict, arm: str, mode: str) -> list:
     out = []
     for k, r in sorted(res.items()):
-        if (
-            re.fullmatch(re.escape(f"{arm}.{mode}.") + r"\d+", k)
-            and r.ok
-            and r.evidence
-        ):
+        if k == f"{arm}.{mode}" and r.ok and r.evidence:
             out += read_jsonl(r.evidence)
     return out
 
@@ -431,11 +436,10 @@ def stage_identity(ctx: Ctx) -> StageResult:
 # ── d. apc (analysis of the candidate's cold/warm pairs from the identity cells) ──
 def stage_apc(ctx: Ctx) -> StageResult:
     rows = []
-    for c in ctx.suite["ctx"]:
-        for mode in ctx.suite.get("spec_modes") or ["default"]:
-            rows += read_jsonl(
-                ctx.run.cell_path("identity", identity_cell_key("cand", mode, c))
-            )
+    for mode in ctx.suite.get("spec_modes") or ["default"]:
+        rows += read_jsonl(
+            ctx.run.cell_path("identity", identity_cell_key("cand", mode))
+        )
     if not rows:
         return _finish(
             ctx,
@@ -474,10 +478,32 @@ def _quality_counts(ctx: Ctx, n: int) -> dict:
     return out
 
 
+def _quality_cache(ctx: Ctx, n: int) -> Path:
+    key = _sha(
+        "quality",
+        ctx.base.key,
+        ctx.arm_env("base"),
+        ctx.model,
+        n,
+        ctx.suite.get("quality_max_tokens", 2048),
+        hashlib.sha256(PAIRED.read_bytes()).hexdigest() if PAIRED.exists() else "",
+        n=24,
+    )
+    return ctx.exe.cache_dir / f"quality-{key}.jsonl"
+
+
 def stage_quality(ctx: Ctx, max_rounds: int = 6) -> StageResult:
     n = int(ctx.suite["mmlu_n"])
     budget = 14
     reasons: list = []
+    cache = _quality_cache(ctx, n)
+    base_file = _quality_arm_file(ctx, "base")
+    if cache.exists() and _quality_counts(ctx, n)["base"] < n:
+        base_file.parent.mkdir(parents=True, exist_ok=True)
+        base_file.write_bytes(
+            cache.read_bytes()
+        )  # base answers from an earlier verdict
+        ctx.run.append("quality", {"ev": "base_cached", "file": cache.name})
     for _ in range(max_rounds):
         counts = _quality_counts(ctx, n)
         todo = [a for a in ("base", "cand") if counts[a] < n]
@@ -494,6 +520,8 @@ def stage_quality(ctx: Ctx, max_rounds: int = 6) -> StageResult:
                         f"PAIRED_TREE={ctx.tree(arm).path}",
                         f"PAIRED_OUT={ctx.run.path / 'quality'}",
                         f"PAIRED_PORT_LAST={PORT_LAST}",
+                        f"PAIRED_MAX_TOKENS={ctx.suite.get('quality_max_tokens', 2048)}",
+                        f"PAIRED_THINKING={1 if ctx.suite.get('quality_thinking') else 0}",
                         os.environ.get(
                             "PAIRED_PY",
                             "/Volumes/P5Plus/yunshu-test-envs/paired-eval/bin/python",
@@ -529,6 +557,9 @@ def stage_quality(ctx: Ctx, max_rounds: int = 6) -> StageResult:
         if reasons:
             break
     counts = _quality_counts(ctx, n)
+    if counts["base"] >= n and not cache.exists():
+        ctx.exe.cache_dir.mkdir(parents=True, exist_ok=True)
+        cache.write_bytes(base_file.read_bytes())
     q = analyze.quality_compare(
         read_jsonl(_quality_arm_file(ctx, "base")),
         read_jsonl(_quality_arm_file(ctx, "cand")),
@@ -588,6 +619,17 @@ def stage_speed(ctx: Ctx) -> StageResult:
                     timeout_min=_decode_est_min(ctx, cfg["ctx"], len(cfg["kinds"])),
                     stall_min=12 if ctx.big else 4,
                     quiet=True,
+                    share_key=_sha(
+                        "speed",
+                        ctx.base.key,
+                        ctx.arm_env("base"),
+                        ctx.model,
+                        cfg["ctx"],
+                        rep,
+                        _harness_hash(),
+                    )
+                    if arm == "base" and cfg.get("reuse_base_speed")
+                    else "",
                 )
             )
     res = ctx.exe.run_cells(cells)
@@ -654,6 +696,9 @@ def stage_memory(ctx: Ctx) -> StageResult:
                     stall_min=12 if ctx.big else 4,
                     validate=_memory_valid,
                     quiet=False,
+                    share_key=_sha("memory", ctx.base.key, e, ctx.model, sizes, rep)
+                    if arm == "base"
+                    else "",
                 )
             )
     res = ctx.exe.run_cells(cells)

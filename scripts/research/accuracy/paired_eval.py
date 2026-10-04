@@ -703,6 +703,11 @@ def result_path(bench: str, arm: str) -> Path:
 
 def cmd_run(a) -> int:
     bench = BENCHES[a.bench]
+    # scripts/verify: normal answer lengths instead of the thinking-mode 16K budget
+    if os.environ.get("PAIRED_MAX_TOKENS"):
+        bench.max_tokens = int(os.environ["PAIRED_MAX_TOKENS"])
+    if os.environ.get("PAIRED_THINKING") == "0":
+        bench.thinking = False
     items = bench.items(a)
     path = result_path(a.bench, a.arm)
     path.parent.mkdir(parents=True, exist_ok=True)

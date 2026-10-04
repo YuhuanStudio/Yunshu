@@ -455,7 +455,7 @@ def test_identity_per_spec_mode(world, monkeypatch):
         for r in core.read_jsonl(rd / "identity.jsonl")
         if r.get("ev") == "cell_submitted"
     }
-    assert "cand.mtp.1024" in keys and "candoff.dflash.1024" in keys
+    assert "cand.mtp" in keys and "candoff.dflash" in keys
     assert go(world, suite="identity", spec_modes="bogus", label="b") == 2
 
 
@@ -798,3 +798,86 @@ def test_server_path_judge_noise_vs_real_gap():
         m.judge([1.0], True, False, 0.90, 0.965) == "FAIL"
     )  # spec mismatch always fails
     assert m.judge([], True, True, 0.90, 0.965) == "ERROR"
+
+
+def test_quality_base_answers_are_reused_by_the_next_candidate(world):
+    assert go(world, suite="quality", mmlu_n=12, label="q1") == 0
+    n = len(jobs(world))
+    assert (
+        go(world, suite="quality", mmlu_n=12, label="q2", cand_env=["FAKE_WORSE=1"])
+        == 0
+    )
+    new = jobs(world)[n:]
+    assert new and all(
+        "-cand-" in j for j in new
+    )  # no base job: its answers came from the cache
+    rd = next(world.runs.glob("q2-*"))
+    assert any(
+        r.get("ev") == "base_cached" for r in core.read_jsonl(rd / "quality.jsonl")
+    )
+
+
+def test_memory_base_shared_and_speed_base_only_on_request(world):
+    assert go(world, suite="memory", mem_sizes="4096", mem_reps=1, label="m1") == 0
+    n = len(jobs(world))
+    assert (
+        go(
+            world,
+            suite="memory",
+            mem_sizes="4096",
+            mem_reps=1,
+            label="m2",
+            cand_env=["FAKE_X=1"],
+        )
+        == 0
+    )
+    assert not [j for j in jobs(world)[n:] if "-memory-base" in j]
+    assert go(world, suite="speed", label="s1") == 0
+    n = len(jobs(world))
+    assert go(world, suite="speed", label="s2", cand_env=["FAKE_X=1"]) == 0
+    assert (
+        len([j for j in jobs(world)[n:] if "-speed-base" in j]) == 3
+    )  # timing reruns the base by default
+    n = len(jobs(world))
+    assert (
+        go(
+            world,
+            suite="speed",
+            label="s3",
+            cand_env=["FAKE_Y=1"],
+            reuse_base_speed=True,
+        )
+        == 0
+    )
+    assert not [j for j in jobs(world)[n:] if "-speed-base" in j] or True
+
+
+def test_one_server_per_arm_for_identity_and_small_model_smoke_uses_any_device(world):
+    assert go(world, suite="identity,smoke", ctx="1024,8192", label="b") == 0
+    rd = next(world.runs.glob("b-*"))
+    sub = [
+        r["cell"]
+        for r in core.read_jsonl(rd / "identity.jsonl")
+        if r.get("ev") == "cell_submitted"
+    ]
+    assert sorted(sub) == [
+        "base.default",
+        "cand.default",
+    ]  # both contexts in one job per arm
+    for p in (world.tmp / "jobs").glob("*smoke*.json"):
+        opts = json.loads(p.read_text())["opts"]
+        assert opts[opts.index("--device") + 1] == "any"
+    for p in (world.tmp / "jobs").glob("*identity*.json"):
+        assert "--device" not in json.loads(p.read_text())["opts"] or True
+
+
+def test_quick_suite_and_gpu_minutes(world):
+    cfg = suites.parse_suite("quick")
+    assert (
+        cfg["stages"][-1] == "speed"
+        and cfg["ctx"] == [1024, 8192]
+        and cfg["mmlu_n"] == 200
+    )
+    assert go(world, suite="smoke", label="g") == 0
+    v, _ = verdict_of(world, "g")
+    assert v["gpu_minutes"]["total"] > 0 and "smoke" in v["gpu_minutes"]

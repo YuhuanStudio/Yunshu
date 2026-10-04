@@ -46,8 +46,19 @@ def build_parser() -> argparse.ArgumentParser:
         help="server env, base only",
     )
     ab.add_argument(
+        "--quick",
+        action="store_true",
+        help="suite quick: identity + speed on 1K/8K, quality 200; base arm cached",
+    )
+    ab.add_argument(
+        "--reuse-base-speed",
+        dest="reuse_base_speed",
+        action="store_true",
+        help="reuse cached base speed reps (noisier A/B)",
+    )
+    ab.add_argument(
         "--suite",
-        required=True,
+        default=None,
         help=f"{sorted(SUITES)} or comma list of {list(STAGES)}",
     )
     ab.add_argument(
@@ -149,6 +160,10 @@ def main(argv: list | None = None) -> int:
                 log=lambda m: print(f"[yv] {m}", flush=True),
             )
         if a.cmd == "ab":
+            a.suite = a.suite or ("quick" if a.quick else None)
+            if not a.suite:
+                print("yv: --suite or --quick is required")
+                return 2
             if not a.model or not Path(a.model).is_dir():
                 print(f"yv: --model {a.model!r} is not a directory")
                 return 2

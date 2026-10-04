@@ -41,6 +41,14 @@ SUITES = {
         "reps": 3,
         "mmlu_n": 200,
     },
+    # iteration: fast, base cached across candidates; run `full` before merge
+    "quick": {
+        "stages": ["preflight", "smoke", "identity", "apc", "quality", "speed"],
+        "ctx": [1024, 8192],
+        "spec_off": False,
+        "reps": 3,
+        "mmlu_n": 200,
+    },
     # small-model dry runs of the tool itself (and any CPU-light change): minutes, not hours
     "tiny": {
         "stages": list(STAGES),
@@ -59,6 +67,9 @@ DEFAULTS = {
     "spec_off": False,
     "reps": 3,
     "mmlu_n": 200,
+    "quality_max_tokens": 2048,
+    "quality_thinking": False,
+    "reuse_base_speed": False,
     "mem_sizes": [8192, 32768, 98304],
     "mem_reps": 2,
     "speed_tol_pct": 2.0,

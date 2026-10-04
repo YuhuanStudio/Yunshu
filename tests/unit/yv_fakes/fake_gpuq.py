@@ -6,6 +6,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 jobs = Path(os.environ["FAKE_GPUQ_DIR"])
@@ -24,6 +25,7 @@ if cmd == "submit":
     if pat and re.search(pat, label):
         print("preflight failed: doomed", file=sys.stderr)
         sys.exit(1)
+    t0 = time.time()
     with log.open("w") as f:
         rc = subprocess.run(argv, stdout=f, stderr=subprocess.STDOUT).returncode
     cont = bool(
@@ -40,7 +42,7 @@ if cmd == "submit":
                 "state": "done" if rc == 0 else "failed",
                 "rc": rc,
                 "contended": cont,
-                "cmd": argv,
+                "cmd": argv, "opts": opts, "started": t0, "ended": time.time() + 60,
             }
         )
     )

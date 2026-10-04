@@ -52,6 +52,8 @@ def apply_overrides(cfg: dict, a) -> dict:
         cfg["speed_tol_pct"] = a.speed_tol
     if getattr(a, "spec_off", None) is not None:
         cfg["spec_off"] = a.spec_off
+    if getattr(a, "reuse_base_speed", False):
+        cfg["reuse_base_speed"] = True
     if getattr(a, "spec_modes", None):
         cfg["spec_modes"] = [x for x in a.spec_modes.split(",") if x]
     if getattr(a, "no_apc_hit_required", False):
@@ -177,6 +179,7 @@ def run_ab(
         started=started,
         run_dir=str(rd.path),
     )
+    v["gpu_minutes"] = gpu_minutes(gq, v["jobs"])
     write_json_atomic(rd.path / "verdict.json", v)
     (rd.path / "verdict.md").write_text(render_md(v))
     state.update(
@@ -185,6 +188,25 @@ def run_ab(
     rd.save_state(state)
     log(f"verdict {v['overall']} (exit {v['exit_code']}): {rd.path / 'verdict.md'}")
     return v["exit_code"]
+
+
+def gpu_minutes(gq, jobs: list) -> dict:
+    """Wall minutes the verdict's own (not reused) jobs held the GPU, per stage."""
+    out: dict = {}
+    for j in jobs:
+        if j.get("reused") or str(j["job"]).startswith("cache:"):
+            continue
+        try:
+            d = gq.job(j["job"]).d
+        except Exception:  # noqa: BLE001
+            continue
+        if d.get("started") and d.get("ended"):
+            out[j["stage"]] = (
+                out.get(j["stage"], 0.0) + (d["ended"] - d["started"]) / 60
+            )
+    out = {k: round(x, 2) for k, x in out.items()}
+    out["total"] = round(sum(out.values()), 2)
+    return out
 
 
 def load_run(spec: str, runs: Path | None = None) -> RunDir:
