@@ -857,3 +857,20 @@ Correctness: `1004-072442-00-wide6-production-quality200-20` actual default hook
 Attribution limits: the inherited synchronized per-op profiles destroy overlap and cannot be summed into a production round. The same14.30GB decoder projection bytes and715MB full head imply an optimistic24.46ms read lower bound under an explicitly assumed614GB/s ceiling, not measured bandwidth. The prior paired unchanged-arithmetic submission/tail change recovered7.482ms at1K. TF keeps original input identities at lane_matmul and groups more projections; lost reshape identity explains redundant xsum dispatches (M5 four projections4->1, exact bits). Python bookkeeping erased short/mid gains, so that path and physical-stack candidate remain research only. Last-use ordering gives about+1.37%1K code against the same fast-tree family in `1004-024800-00-wide6-matrix-r3-11`; its long-context controller behavior is not promoted. Historical TF ~49ms/round and ~140tok/s are not a fresh three-run comparison: the remaining ~6-7ms round gap is not claimed closed.
 
 The wide5 combo's native control acquired noncontiguous scale views after a grouped arm; its+18.66/+34.80% ratios cannot decide a default. New controls restore contiguous scale tables, and the selected virtual layout never changes parameters. `1004-002233-00-wide6-attribution-r3-01` failed in8s from a prompt-variable shadow (fixed harness, no valid timing); inherited wide5-final-matrix16 was cancelled before start for the control-layout issue. Full per-job rc/completion/log-tail/device receipts and all cells: `/Volumes/P5Plus/yunshu-build/codex/wide6/harvest.json`, `final-matrix-summary.json`, `http-timing-summary.json`. No failed or merely-done job authorizes a performance claim.
+
+## Oct 4: exact tokenizer prefix reuse for follow-up turns (prefill7)
+
+`TokenizerPrefixCache` is now wired into `_VLMTextPromptCache` (VLM text tokenization). A follow-up prompt that extends an earlier prompt past a non-normalized `<|im_end|>` encodes only the new suffix; unqualified tokenizers fall back to full encoding. The HTTP first-visible profile showed the turn-2 `_tokenize_with_cache` at 17-25 ms (full 32K re-encode); with reuse it is 2-3 ms (`1004-105114-00-prefill7-profile32k-classwrap`).
+
+Lossless evidence: CPU exact-token equality on 1135 multi-turn Qwen chat renderings (Qwen3.5-0.8B and Qwen3.8-27B tokenizers, unicode / literal fence / CRLF cases) plus unit tests; `1004-103455-00-prefill7-quality200b` (27B MTP, M5, rc0/complete): 200 paired items, input IDs, raw tokens and logprobs identical on every item, correct 200/200 vs 200/200, reuse engaged 200/200. APC hit == miss unchanged (the cache only produces the same ids).
+
+HTTP follow-up TTFT, 3 reversed-order quiet reps, same harness as the README row, same-server arms differ only by the reuse switch (digests, request hashes, finish, counts identical across arms; cached tokens equal):
+
+| ctx, kind | reuse off | reuse on | change |
+|---|---:|---:|---:|
+| 8K code turn-2 | 498 ms | 492 ms | -6 |
+| 8K prose turn-2 | 505 ms | 499 ms | -6 |
+| 32K code turn-2 | 703 ms | 681 ms | -22 |
+| 32K prose turn-2 | 689 ms | 674 ms | -15 |
+
+Jobs: `1004-111105-00-prefill7-tokprefix2-http32768` (rc0, 614 s), `-http8192` (rc0, 298 s). Reference TensorFold from codex-prefill6 (`1004-081813-00-prefill6-readme-http32k-fixed-r3-0819`, same harness, same day): 32K code 671 ms, prose 656 ms. The 32K gap is therefore 10 ms (code) / 18 ms (prose), not closed; 8K code is now 492 vs 505 ms README TensorFold. README rows are not updated because 32K is not at parity.

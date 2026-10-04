@@ -9,6 +9,7 @@ Sequential benchmark requests only; overlapping requests fail closed.
 import functools
 import importlib
 import json
+import os
 import threading
 import time
 from pathlib import Path
@@ -149,6 +150,29 @@ def install(output, sync_layers=False):
             ("mlx_vlm.generate.ar", "PromptProcessingBatch", "prompt_step"),
             ("mlx_vlm.generate.ar", "PromptProcessingBatch", "generate"),
         ]
+        prof_dir = os.environ.get("YUNSHU_TRACE_LOOKUP_PROF")
+        if prof_dir:
+            import cProfile
+            import io
+            import pstats
+
+            from yunshu_engine.apc_manager import _Coordinator
+
+            inner = _Coordinator.lookup
+            counter = iter(range(10**6))
+
+            def profiled(self, *args, **kwargs):
+                prof = cProfile.Profile()
+                try:
+                    return prof.runcall(inner, self, *args, **kwargs)
+                finally:
+                    buf = io.StringIO()
+                    pstats.Stats(prof, stream=buf).sort_stats("tottime").print_stats(18)
+                    Path(prof_dir).mkdir(parents=True, exist_ok=True)
+                    name = f"lookup-{next(counter)}.txt"
+                    (Path(prof_dir) / name).write_text(buf.getvalue())
+
+            _Coordinator.lookup = profiled
         for module, cls, method in targets:
             trace.wrap(
                 getattr(importlib.import_module(module), cls),
