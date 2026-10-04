@@ -95,3 +95,46 @@ def test_reap_kills_only_this_jobs_leftovers(tmp_path):
         for p in (mine, theirs):
             p.kill()
             p.wait()
+
+
+def test_timeout_is_not_learned_from_unrelated_jobs():
+    now = 1_000_000.0
+    hist = [
+        dict(
+            id="g",
+            label="gate-012-final",
+            state="done",
+            started=now - 9500,
+            ended=now - 100,
+        )
+    ]
+    assert pf.kind("memory1-final-identity-cand.default-a1-814b") == {
+        "identity",
+        "cand.default",
+    }
+    assert pf.learned_timeout(
+        "memory1-final-identity-cand.default-a1-814b", 900, hist, now
+    ) == (900, None)
+
+
+def test_finished_runs_outrank_timed_out_ones():
+    now = 1_000_000.0
+    hist = [
+        dict(
+            id="slow",
+            label="wide8-quality200-2",
+            state="timeout",
+            started=now - 2800,
+            ended=now - 100,
+        ),
+        dict(
+            id="ok",
+            label="prefill7-quality200",
+            state="done",
+            started=now - 460,
+            ended=now - 100,
+        ),
+    ]
+    t, note = pf.learned_timeout("wide8-quality200-3", 300, hist, now)
+    assert t == 10 * 60 and "ok ran 6.0 min" in note
+    assert pf.learned_timeout("wide8-quality200-3", 300, hist[:1], now)[0] > 60 * 60

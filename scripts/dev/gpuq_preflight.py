@@ -143,7 +143,12 @@ def preflight(cmd: list[str], cwd: str, env: dict[str, str]) -> list[str]:
 
 # ---------------------------------------------------------------- timeouts
 
-_NOISE = re.compile(r"^(r?\d+[a-z]?|\d{3,}[a-z0-9]*|[a-z])$")
+_NOISE = re.compile(r"^(r?\d+[a-z]?|\d{3,}[a-z0-9]*|[a-z]|[a-z]\d+|[0-9a-f]{4,})$")
+# Words that say how a run went, not what it measures.
+_GENERIC = frozenset(
+    ["final", "pilot", "fixed", "main", "base", "cand", "new", "old", "test", "run"]
+    + ["quick", "full", "retry", "again"]
+)
 
 
 def kind(label: str) -> frozenset[str]:
@@ -151,7 +156,7 @@ def kind(label: str) -> frozenset[str]:
     'wide8-quality200-1' -> {'quality200'}; 'prefill6-readme-http32k-r3-0800' ->
     {'readme', 'http32k'}."""
     toks = (label or "").lower().split("-")[1:]
-    return frozenset(t for t in toks if t and not _NOISE.match(t))
+    return frozenset(t for t in toks if t and not _NOISE.match(t) and t not in _GENERIC)
 
 
 def active_seconds(job: dict) -> float | None:
@@ -172,21 +177,26 @@ def learned_timeout(
     if not want:
         return requested_s, None
     now = now or time.time()
-    longest, source = 0.0, None
+    # A finished run says how long the kind takes; a timed-out one only bounds it
+    # from below and is used when no run finished (a badly sized timed-out job
+    # must not inflate every later timeout of its kind).
+    best: dict[str, tuple[float, str | None]] = {
+        "done": (0.0, None),
+        "timeout": (0.0, None),
+    }
     for j in history:
-        if (
-            j.get("state") not in ("done", "timeout")
-            or now - (j.get("ended") or 0) > 7 * 86400
-        ):
+        state = j.get("state")
+        if state not in best or now - (j.get("ended") or 0) > 7 * 86400:
             continue
         have = kind(j.get("label") or "")
         if not have or not (want <= have or have <= want):
             continue
         secs = active_seconds(j)
-        if secs and j.get("state") == "timeout":
+        if secs and state == "timeout":
             secs *= 1.5  # it needed more than it got
-        if secs and secs > longest:
-            longest, source = secs, j.get("id")
+        if secs and secs > best[state][0]:
+            best[state] = (secs, j.get("id"))
+    longest, source = best["done"] if best["done"][0] else best["timeout"]
     if longest and requested_s < 1.3 * longest:
         new = float(int(1.5 * longest / 60 + 1) * 60)
         return (
