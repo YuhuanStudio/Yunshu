@@ -92,15 +92,35 @@ class IdleMemory:
         self._arm(stage + 1)
 
 
+def _gib() -> tuple[float, float]:
+    import mlx.core as mx
+
+    return mx.get_active_memory() / 2**30, mx.get_cache_memory() / 2**30
+
+
 def _collect() -> None:
     from .mlx_executor import synchronize_streams
 
     synchronize_streams()
+    before = _gib()
     gc.collect()
+    after = _gib()
+    logger.info(
+        "idle memory: collected cycle garbage, active %.2f -> %.2f GiB",
+        before[0],
+        after[0],
+    )
 
 
 def _trim() -> None:
     from .mlx_executor import sync_and_clear_cache
 
     gc.collect()
+    before = _gib()
     sync_and_clear_cache()
+    after = _gib()
+    logger.info(
+        "idle memory: released the allocator pool, cache %.2f -> %.2f GiB",
+        before[1],
+        after[1],
+    )
