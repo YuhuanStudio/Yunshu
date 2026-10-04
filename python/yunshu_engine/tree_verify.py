@@ -452,6 +452,46 @@ _MERGE2 = """
 """
 
 
+_MERGE_SPLIT = (
+    _MERGE2.replace(
+        "    for (int c = 0; c < nc; c++) {",
+        """    const bool g1 = node >= (uint)TG;
+    for (int c = 0; c < nc; c++) {""",
+    )
+    .replace("PMA[row]", "(g1 ? PMA1[row] : PMA[row])")
+    .replace("PLA[row]", "(g1 ? PLA1[row] : PLA[row])")
+    .replace(
+        "POA[row * D + lane * DPL + i]",
+        "(g1 ? POA1[row * D + lane * DPL + i] : POA[row * D + lane * DPL + i])",
+    )
+)
+
+
+def _merge_split_kernel():
+    kernel = _KERNELS.get("merge_split")
+    if kernel is None:
+        kernel = _KERNELS["merge_split"] = mx.fast.metal_kernel(
+            name="yunshu_tree_attn_merge_split",
+            input_names=[
+                "POA",
+                "PMA",
+                "PLA",
+                "POA1",
+                "PMA1",
+                "PLA1",
+                "POB",
+                "PMB",
+                "PLB",
+                "startsA",
+                "startsB",
+                "lengths",
+            ],
+            output_names=["out"],
+            source=_MERGE_SPLIT,
+        )
+    return kernel
+
+
 def _merge_kernel():
     kernel = _KERNELS.get("merge")
     if kernel is None:
@@ -580,6 +620,9 @@ class RoundContext:
                 bases.append(plan[1] + base)
                 base += plan[2]
             self.starts_a = bases[0] if len(bases) == 1 else mx.concatenate(bases)
+            rel = [group[4][1] for group in self.groups_a]
+            self.starts_a_rel = rel[0] if len(rel) == 1 else mx.concatenate(rel)
+        self.meta = mx.array([n0, self.tail_start, self.m], dtype=mx.int32)
         self.pos = None
 
 
@@ -611,6 +654,10 @@ def tree_attention(
     g = h // hkv
     cstar, tail_start, ntail, m = rc.cstar, rc.tail_start, rc.ntail, rc.m
     scale_arr = _scale_array(scale)
+    if getattr(shape, "fast_glue", False) and w <= 2 * ra.TILE_TOKENS:
+        return _tree_attention_fused(
+            queries, keys, values, shape, rc, scale_arr, (h, hkv, d)
+        )
 
     # shared chunks 0 .. cstar - 1: every row sees them whole
     if cstar:
@@ -698,6 +745,102 @@ def tree_attention(
             ("NC", rc.nc_total),
             ("CK", CK),
             ("CS", cstar),
+        ],
+        grid=(32, w * h, 1),
+        threadgroup=(32, 1, 1),
+        output_shapes=[(1, h, w, d)],
+        output_dtypes=[mx.bfloat16],
+    )
+    return out
+
+
+def _add_rms(shape, h, r, norm):
+    """Residual add + RMSNorm. The fast tree's lane projections take their
+    input group sums from the norm kernel, which saves one launch per norm."""
+    from . import tree_glue
+    from .kernels import lane_linear
+
+    if (
+        getattr(shape, "fast_glue", False)
+        and lane_linear.sum_reuse_enabled()
+        and h.dtype == mx.bfloat16
+        and h.shape[-1] <= 8192
+    ):
+        return tree_glue.add_rms_lane(h, r, norm)
+    return vq.add_rms_norm(h, r, norm)
+
+
+def _tree_attention_fused(queries, keys, values, shape, rc, scale_arr, dims):
+    """``tree_attention`` for windows of at most two 8-token groups with the
+    query layouts, the per-row key/value tails and the partial tables built by
+    one kernel each instead of a chain of copies. Same values, same partials,
+    same merge order."""
+    from . import tree_glue
+
+    h, hkv, d = dims
+    w = shape.width
+    cstar, ntail, m = rc.cstar, rc.ntail, rc.m
+    qa0, qa1, q_b = tree_glue.fuse_queries(queries, hkv, 2 if w > ra.TILE_TOKENS else 1)
+    cap2 = _tree_tail_capacity(m + shape.max_depth + 1)
+    tail_k, tail_v = tree_glue.tail_copy(
+        keys,
+        values,
+        rc.win_idx,
+        rc.meta,
+        width=w,
+        depth_rows=shape.max_depth + 1,
+        cap2=cap2,
+    )
+    if cstar:
+        parts = []
+        for (_lo, tg, len_arr, nc, plan), q_a in zip(
+            rc.groups_a, (qa0, qa1)[: len(rc.groups_a)], strict=True
+        ):
+            parts.append(
+                _tile_partials(
+                    q_a, keys, values, len_arr, rc.slot0, scale_arr, plan, tg, nc
+                )[:3]
+            )
+        po_a, pm_a, pl_a = parts[0]
+        po_a1, pm_a1, pl_a1 = parts[-1]
+        starts_a = rc.starts_a_rel
+    else:
+        po_a = pm_a = pl_a = po_a1 = pm_a1 = pl_a1 = _zeros((1,), mx.float32)
+        starts_a = _zeros((w,), mx.int32)
+    po_b, pm_b, pl_b, starts_b = _tile_partials(
+        q_b,
+        tail_k,
+        tail_v,
+        rc.local_arr,
+        rc.slots_b,
+        scale_arr,
+        rc.plan_b,
+        1,
+        ntail,
+    )
+    (out,) = _merge_split_kernel()(
+        inputs=[
+            po_a,
+            pm_a,
+            pl_a,
+            po_a1,
+            pm_a1,
+            pl_a1,
+            po_b,
+            pm_b,
+            pl_b,
+            starts_a,
+            starts_b,
+            rc.abs_lengths,
+        ],
+        template=[
+            ("D", d),
+            ("H", h),
+            ("W", w),
+            ("NC", rc.nc_total),
+            ("CK", CK),
+            ("CS", cstar),
+            ("TG", ra.TILE_TOKENS),
         ],
         grid=(32, w * h, 1),
         threadgroup=(32, 1, 1),
@@ -813,14 +956,14 @@ def _tree_forward(
         # fused residual add + RMSNorm (bit-exact to the separate ops)
         post = layer.post_attention_layernorm
         if vq._add_rms_eligible(h, r, post):
-            h, normed, _ = vq.add_rms_norm(h, r, post)
+            h, normed, _ = _add_rms(shape, h, r, post)
         else:
             h = h + r
             normed = post(h)
         ff = verifier._feed_forward(layer.mlp, normed)
         nxt = nxt_norm.get(i)
         if nxt is not None and vq._add_rms_eligible(h, ff, nxt):
-            h, normed, _ = vq.add_rms_norm(h, ff, nxt)
+            h, normed, _ = _add_rms(shape, h, ff, nxt)
         else:
             h = h + ff
             if nxt is not None:

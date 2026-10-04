@@ -36,3 +36,37 @@ def test_tree_shape_rejects_bad_parents():
         tv.TreeShape([0, 0])
     with pytest.raises(ValueError):
         tv.TreeShape([-1, 1])
+
+
+def test_split_merge_reads_each_group_from_its_own_partials():
+    from yunshu_engine import tree_verify as tv
+
+    old, new = tv._MERGE2, tv._MERGE_SPLIT
+    for name in ("PMA", "PLA", "POA"):
+        assert new.count(name + "1[") == 1
+        assert old.count(name + "[") == new.count(name + "[") == 1
+    assert "node >= (uint)TG" in new
+    # the accumulate order is the original's: nothing else changed
+    stripped = (
+        new.replace("const bool g1 = node >= (uint)TG;\n", "")
+        .replace("(g1 ? PMA1[row] : PMA[row])", "PMA[row]")
+        .replace("(g1 ? PLA1[row] : PLA[row])", "PLA[row]")
+        .replace(
+            "(g1 ? POA1[row * D + lane * DPL + i] : POA[row * D + lane * DPL + i])",
+            "POA[row * D + lane * DPL + i]",
+        )
+    )
+    assert stripped.split() == old.split()
+
+
+def test_only_the_fast_shape_takes_the_fused_glue():
+    from yunshu_engine.dflash_plan import FastShape
+
+    assert FastShape.fast_glue is True
+    assert not getattr(tv_shape_classes(), "fast_glue", False)
+
+
+def tv_shape_classes():
+    from yunshu_engine import tree_verify as tv
+
+    return tv.DynamicShape

@@ -86,6 +86,7 @@ _PATH_KERNEL = None
 class FastShape:
     dynamic = True
     is_chain = False
+    fast_glue = True
 
     def __init__(self, parents, max_depth, *, original_ranks=None, is_chain=False):
         self.original_ranks = original_ranks
