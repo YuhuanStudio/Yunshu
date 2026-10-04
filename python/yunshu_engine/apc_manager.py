@@ -451,6 +451,27 @@ def _single_native_arrays_row(source):
     return row
 
 
+MATERIALIZE_GROUP = 4
+
+
+def materialize(target_lists, group: int = MATERIALIZE_GROUP) -> None:
+    """Evaluate the arrays of several checkpoints ``group`` positions at a time.
+
+    Targets are in layer order and the checkpoints of one request share their layers, so
+    position i of every list is the same layer: evaluating a few positions at a time lets
+    the live buffers each copy pinned go before the next layer's copy is made.
+    """
+    import mlx.core as mx
+
+    width = max((len(t) for t in target_lists), default=0)
+    for start in range(0, width, max(1, group)):
+        batch = [
+            t[i] for t in target_lists for i in range(start, min(start + group, len(t)))
+        ]
+        if batch:
+            mx.eval(batch)
+
+
 class _Coordinator(APCCoordinator):
     """Checkpoint positions: the prompt end, one interval boundary, the end of the system turn."""
 
@@ -708,20 +729,29 @@ class _Coordinator(APCCoordinator):
         return True
 
     def flush_deferred_checkpoints(self) -> None:
-        import mlx.core as mx
-
         pending = self.__dict__.pop("_deferred_checkpoints", [])
         self._deferred_bytes = 0
+        if not pending:
+            return
+        # The copies below are lazy until evaluated, so each still pins the live
+        # cache's buffers as they were at capture. Free what these checkpoints supersede
+        # first (the same drops ``store_exact_cache`` makes), then copy a few arrays at a
+        # time across all checkpoints so the pinned buffers go as the copies appear.
+        # Same operations and bits as evaluating everything at once; only the peak differs.
+        release = getattr(self.manager, "release_superseded", None)
+        for tokens, _, extra_hash, _, generation, _, _ in pending:
+            if release is not None:
+                release(tokens, extra_hash, _generation=generation)
+        materialize([entry[3] for entry in pending])
         for (
             tokens,
             snapshot,
             extra_hash,
-            targets,
+            _targets,
             generation,
             policy,
             signature,
         ) in pending:
-            mx.eval(targets)
             kwargs = {"extra_hash": extra_hash}
             if generation is not None:
                 kwargs["_generation"] = generation
@@ -1155,6 +1185,14 @@ class YunshuAPCManager(APCManager):
                 if is_head:
                     self._head_keys.discard(key)
         return ok
+
+    def release_superseded(
+        self, token_ids, extra_hash: int = 0, *, _generation=None
+    ) -> None:
+        """Drop the RAM checkpoints ``token_ids`` supersedes before its copy exists."""
+        with self._plock:
+            gen = self._generation if _generation is None else _generation
+        self._supersede(token_ids, extra_hash, gen)
 
     def _supersede(self, token_ids, extra_hash: int, gen: int) -> None:
         """Drop RAM checkpoints of earlier requests that are prefixes of this one."""

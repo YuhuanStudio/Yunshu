@@ -67,3 +67,14 @@ def test_trim_ttft_summary_is_a_per_phase_median():
         {"phase": "hit_after_idle", "secs": 1.3},
     ]
     assert trim_ttft.summarize(rows) == {"hit_now": 1.0, "hit_after_idle": 1.3}
+
+
+def test_apc_clone_probe_parses_arguments():
+    import pytest
+
+    sys.path.insert(0, str(ROOT / "scripts" / "research"))
+    import apc_clone_probe
+
+    with pytest.raises(SystemExit) as exc:
+        apc_clone_probe.main(["--help"])
+    assert exc.value.code == 0

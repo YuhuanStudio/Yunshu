@@ -485,3 +485,83 @@ def test_arrays_restore_view_only_for_known_suffix_prefill(monkeypatch, fresh):
     assert prefix == 32
     assert restored[0][0].tolist() == source[0].tolist()
     assert restored[0][0] is not source[0]
+
+
+def test_flush_frees_superseded_checkpoints_before_copying_the_new_ones(monkeypatch):
+    from yunshu_engine import apc_manager
+
+    manager = _mgr()
+    coordinator = _coordinator(manager)
+    coordinator.defer_checkpoint_stores = True
+    kv = KVCache()
+    kv.update_and_fetch(mx.ones((1, 1, 32, 4)), mx.ones((1, 1, 32, 4)))
+    log = []
+    real_release = manager.release_superseded
+    monkeypatch.setattr(
+        manager,
+        "release_superseded",
+        lambda *a, **kw: (log.append("release"), real_release(*a, **kw))[1],
+    )
+    monkeypatch.setattr(
+        apc_manager, "materialize", lambda lists, *a, **kw: log.append("copy")
+    )
+    monkeypatch.setattr(
+        manager, "store_exact_cache", lambda *a, **kw: log.append("store") or True
+    )
+    assert coordinator.store_checkpoint(list(range(32)), [kv])
+    coordinator.flush_deferred_checkpoints()
+    assert log == ["release", "copy", "store"]
+
+
+def test_superseded_checkpoint_is_gone_before_the_copy_is_made():
+    manager = _mgr()
+    coordinator = _coordinator(manager)
+    coordinator.defer_checkpoint_stores = True
+    old = KVCache()
+    old.update_and_fetch(mx.ones((1, 1, 32, 4)), mx.ones((1, 1, 32, 4)))
+    manager.begin_request()
+    assert manager.store_exact_cache(list(range(32)), [old])
+    assert len(manager._exact_cache) == 1
+    manager.begin_request()
+    live = KVCache()
+    live.update_and_fetch(mx.ones((1, 1, 48, 4)), mx.ones((1, 1, 48, 4)))
+    seen = []
+    from yunshu_engine import apc_manager
+
+    real = apc_manager.materialize
+    apc_manager.materialize = lambda lists, *a, **kw: (
+        seen.append(len(manager._exact_cache)),
+        real(lists, *a, **kw),
+    )[1]
+    try:
+        assert coordinator.store_checkpoint(list(range(48)), [live])
+        coordinator.flush_deferred_checkpoints()
+    finally:
+        apc_manager.materialize = real
+    assert seen == [0]  # the 32-token checkpoint was released before the copy
+    assert [len(e.token_ids) for e in manager._exact_cache.values()] == [48]
+
+
+def test_materialize_copies_a_few_positions_at_a_time_with_identical_values(
+    monkeypatch,
+):
+    from yunshu_engine.apc_manager import materialize
+
+    lists = [[mx.ones((2, 2)) * (10 * j + i) + 0 for i in range(10)] for j in range(2)]
+    calls = []
+    real = mx.eval
+    monkeypatch.setattr(mx, "eval", lambda xs: (calls.append(len(xs)), real(xs))[1])
+    materialize(lists, group=4)
+    assert calls == [8, 8, 4]  # positions 0-3, 4-7, 8-9 of both checkpoints
+    assert [x.tolist()[0][0] for x in lists[1]] == [10.0 + i for i in range(10)]
+    # unequal lengths still evaluate everything
+    ragged = [[mx.ones(3) + 1 for _ in range(5)], [mx.ones(3) + 2 for _ in range(2)]]
+    materialize(ragged, group=2)
+    assert ragged[1][1].tolist() == [3.0, 3.0, 3.0]
+
+
+def test_materialize_of_nothing_is_a_noop():
+    from yunshu_engine.apc_manager import materialize
+
+    materialize([])
+    materialize([[]])
