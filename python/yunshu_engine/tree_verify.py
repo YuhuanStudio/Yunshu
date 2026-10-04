@@ -406,15 +406,28 @@ def _gdn_layer(verifier, layer, x, cache, shape: TreeShape):
         )
         rows = (k, v, a, b)
     z = z.reshape(1, w, hv, dv)
-    out, sums = gv._norm_gate_kernel(layer.norm.eps)(
-        inputs=[y, z, layer.norm.weight],
-        template=[("InT", dtype)],
-        grid=(32, w * hv, 1),
-        threadgroup=(32, 8, 1),
-        output_shapes=[(1, w, hv * dv), (w, hv * dv // 64)],
-        output_dtypes=[dtype, mx.float32],
-    )
-    vq.register_group_sums(out, sums)
+    from .kernels import lane_linear
+
+    if (
+        getattr(shape, "fast_glue", False)
+        and lane_linear.sum_reuse_enabled()
+        and dtype == mx.bfloat16
+        and dv == 128
+    ):
+        # the out projection's group sums come out of the same kernel
+        from . import tree_glue
+
+        out = tree_glue.norm_gate_lane(y, z, layer.norm, hv)
+    else:
+        out, sums = gv._norm_gate_kernel(layer.norm.eps)(
+            inputs=[y, z, layer.norm.weight],
+            template=[("InT", dtype)],
+            grid=(32, w * hv, 1),
+            threadgroup=(32, 8, 1),
+            output_shapes=[(1, w, hv * dv), (w, hv * dv // 64)],
+            output_dtypes=[dtype, mx.float32],
+        )
+        vq.register_group_sums(out, sums)
     record = ("gdn", layer, state, conv_prev, mixed, rows)
     return verifier._linear(layer.out_proj, out), record
 

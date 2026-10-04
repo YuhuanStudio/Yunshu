@@ -211,3 +211,83 @@ def add_rms_lane(a, b, norm):
     while len(q._xs_cache) > 4:
         q._xs_cache.pop(next(iter(q._xs_cache)))
     return s_out, n_out, xs
+
+
+_NG_OLD_TAIL = """    // Per-64 sums of the output feed the out projection.
+    for (int off = 1; off < 16; off <<= 1)
+        part += simd_shuffle_xor(part, ushort(off));
+    if ((lane & 15) == 0)
+        xs[row * 2 + lane / 16] = part;
+"""
+_NG_NEW_TAIL = """    // The lane out projection's group sums: the 128 outputs of this row are two
+    // 64-wide groups, each added in order from 0.0f in one float exactly as the
+    // lane xsum kernel does. XS is (K / 64, MP) with K = Hv * 128.
+    simdgroup_barrier(mem_flags::mem_threadgroup);
+    if (lane < 2) {
+        float seq = 0.0f;
+        for (int i = 0; i < 64; ++i)
+            seq += float(tile[slot * 128 + lane * 64 + i]);
+        xs[((row % Hv) * 2 + lane) * MP + row / Hv] = seq;
+    }
+"""
+
+
+def norm_gate_lane_source(eps):
+    """omlx's GDN norm-gate kernel writing the lane out projection's group sums."""
+    from .kernels.omlx import qwen35_gdn_verify_fused as gv
+
+    source = gv._NORM_GATE
+    head = "    uint row = thread_position_in_grid.y;\n"
+    if source.count(_NG_OLD_TAIL) != 1 or source.count(head) != 1:
+        raise RuntimeError("norm-gate source changed")
+    source = source.replace(
+        head,
+        head
+        + "    if (row / Hv >= M) {\n"
+        + "        if (lane < 2) xs[((row % Hv) * 2 + lane) * MP + row / Hv] = 0.0f;\n"
+        + "        return;\n"
+        + "    }\n"
+        + "    threadgroup InT tile[8 * 128];\n"
+        + "    const uint slot = thread_position_in_threadgroup.y;\n",
+    )
+    keep = "        part += float(o);\n"
+    if source.count(keep) != 1:
+        raise RuntimeError("norm-gate source changed")
+    source = source.replace(
+        keep, keep + "        tile[slot * 128 + lane * 4 + i] = o;\n"
+    )
+    source = source.replace(_NG_OLD_TAIL, _NG_NEW_TAIL)
+    return source.replace("EPS", f"{float(eps)!r}f").replace(
+        "SIGMOID_EXP", gv._sigmoid_exp()
+    )
+
+
+def norm_gate_lane(y, z, norm, hv):
+    """The GDN output norm and gate; returns the out-projection input, whose lane
+    group sums are registered for the projection that reads it."""
+    from .kernels.tensorfold import lane_qmm as q
+
+    eps = float(norm.eps)
+    key = ("norm_gate", eps)
+    if key not in _KERNELS:
+        _KERNELS[key] = mx.fast.metal_kernel(
+            name="yunshu_tree_norm_gate_sums_" + f"{eps:.0e}".replace("-", "m"),
+            input_names=["y", "z", "norm_w"],
+            output_names=["out", "xs"],
+            source=norm_gate_lane_source(eps),
+        )
+    w = int(y.shape[1])
+    mp = 16 * ((w + 15) // 16)
+    width = hv * 128
+    out, xs = _KERNELS[key](
+        inputs=[y, z, norm.weight],
+        template=[("InT", y.dtype), ("Hv", hv), ("M", w), ("MP", mp)],
+        grid=(32, mp * hv, 1),
+        threadgroup=(32, 8, 1),
+        output_shapes=[(1, w, width), (width // 64, mp)],
+        output_dtypes=[y.dtype, mx.float32],
+    )
+    q._xs_cache[id(out)] = (out, xs)
+    while len(q._xs_cache) > 4:
+        q._xs_cache.pop(next(iter(q._xs_cache)))
+    return out
