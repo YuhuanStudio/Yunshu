@@ -36,7 +36,11 @@ WEATHER = {
         },
     },
 }
-TOOLS = [WEATHER]
+TIME = {
+    **WEATHER,
+    "function": {**WEATHER["function"], "name": "get_time"},
+}
+TOOLS = [WEATHER, TIME]
 
 
 def _tok(template):

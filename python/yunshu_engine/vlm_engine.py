@@ -2173,7 +2173,10 @@ class VLMEngine:
             top_logprobs=int(top_logprobs or 0),
             thinking_budget=(
                 thinking_budget
-                if enable_thinking is not False and think_start is not None
+                if enable_thinking is not False
+                and think_start is not None
+                and constraint_guide
+                is None  # bare structured output: no thinking phase
                 else None
             ),
             prompt_preopens_thinking=in_think,
