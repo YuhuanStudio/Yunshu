@@ -208,70 +208,33 @@ with a.output.open("x") as out:
             import gc
             import resource
 
-            def census():
-                return collections.Counter(type(o).__name__ for o in gc.get_objects())
-
-            before = census()
-            arrays_before = sum(1 for o in gc.get_objects() if isinstance(o, mx.array))
-            gc.set_debug(gc.DEBUG_SAVEALL)
             collected = gc.collect()
-            gc.set_debug(0)
-            cyc = {}
-            ids = {id(o) for o in gc.garbage}
-            for o in gc.garbage:
-                n = type(o).__name__
-                if n in ("ArraysCache", "GateRows", "generator", "BatchKVCache"):
-                    refs = [r for r in gc.get_referrers(o) if id(r) in ids]
-                    cyc.setdefault(
-                        n,
-                        [
-                            type(r).__name__
-                            + ":"
-                            + (
-                                ",".join(list(r)[:6])
-                                if isinstance(r, dict)
-                                else getattr(getattr(r, "gi_code", None), "co_name", "")
-                            )
-                            for r in refs
-                        ][:6],
-                    )
-            gc.garbage.clear()
-            growth = {}
-            if "_PREV" in globals() and _PREV is not None:
-                growth = {
-                    k: v - _PREV.get(k, 0)
-                    for k, v in after.items()
-                    if v - _PREV.get(k, 0) > 20
-                }
-            _PREV = after
-            chain = []
-            if item - a.start >= a.track * 2:
-                live = [o for o in gc.get_objects() if isinstance(o, mx.array)]
-                node = live[-1] if live else None
-                seen = {id(live), id(node)}
-                for _ in range(8):
-                    if node is None:
-                        break
-                    refs = [
-                        r
-                        for r in gc.get_referrers(node)
-                        if id(r) not in seen and not isinstance(r, type(gc.get_objects))
-                    ]
-                    refs = [r for r in refs if type(r).__name__ != "frame"]
-                    if not refs:
-                        break
-                    node = refs[0]
-                    seen.add(id(node))
-                    d = list(node)[:5] if isinstance(node, dict) else ""
-                    chain.append(f"{type(node).__module__}.{type(node).__name__}{d}")
-                del live
-            after = census()
-            garbage = {
-                k: v - after.get(k, 0)
-                for k, v in before.items()
-                if v - after.get(k, 0) > 20
+            objs = gc.get_objects()
+            census = collections.Counter(type(o).__name__ for o in objs)
+            live = [o for o in objs if isinstance(o, mx.array)]
+            arrays = len(live)
+            growth = {
+                k: v - _PREV.get(k, 0)
+                for k, v in census.items()
+                if _PREV and v - _PREV.get(k, 0) > 20
             }
-            arrays = sum(1 for o in gc.get_objects() if isinstance(o, mx.array))
+            _PREV = census
+            chain = []
+            node = live[-1] if live else None
+            seen = {id(objs), id(live), id(node)}
+            for _ in range(8 if _PREV and growth else 0):
+                refs = [
+                    r
+                    for r in gc.get_referrers(node)
+                    if id(r) not in seen and type(r).__name__ != "frame"
+                ]
+                if not refs:
+                    break
+                node = refs[0]
+                seen.add(id(node))
+                keys = list(node)[:5] if isinstance(node, dict) else ""
+                chain.append(f"{type(node).__module__}.{type(node).__name__}{keys}")
+            del objs, live, node
             mx.clear_cache()
             emit(
                 dict(
@@ -280,14 +243,9 @@ with a.output.open("x") as out:
                     active_gb=mx.get_active_memory() / 1e9,
                     cache_gb=mx.get_cache_memory() / 1e9,
                     arrays=arrays,
-                    cycle_referrers=cyc,
                     growth=dict(sorted(growth.items(), key=lambda kv: -kv[1])[:10]),
                     chain=chain,
-                    arrays_before_gc=arrays_before,
                     collected=collected,
-                    garbage_types=dict(
-                        sorted(garbage.items(), key=lambda kv: -kv[1])[:10]
-                    ),
                     rss_gb=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1e9,
                 )
             )
