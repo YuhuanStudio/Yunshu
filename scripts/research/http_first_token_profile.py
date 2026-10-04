@@ -135,8 +135,10 @@ def install(output, sync_layers=False):
     def load(self):
         original_load(self)
         tokenizer = getattr(self._tokenizer, "_tokenizer", self._tokenizer)
-        for name in ("encode", "apply_chat_template"):
-            trace.wrap(tokenizer, name, "tokenizer." + name)
+        # Wrap encode on the class: an instance attribute would disqualify the
+        # production tokenizer prefix cache and change the measured path.
+        trace.wrap(type(tokenizer), "encode", "tokenizer.encode")
+        trace.wrap(tokenizer, "apply_chat_template", "tokenizer.apply_chat_template")
         detok = self._tokenizer.detokenizer
         trace.wrap(type(detok), "add_token", "detokenizer.add_token")
         targets = [
