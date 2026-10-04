@@ -209,7 +209,29 @@ with a.output.open("x") as out:
 
             before = census()
             arrays_before = sum(1 for o in gc.get_objects() if isinstance(o, mx.array))
+            gc.set_debug(gc.DEBUG_SAVEALL)
             collected = gc.collect()
+            gc.set_debug(0)
+            cyc = {}
+            ids = {id(o) for o in gc.garbage}
+            for o in gc.garbage:
+                n = type(o).__name__
+                if n in ("ArraysCache", "GateRows", "generator", "BatchKVCache"):
+                    refs = [r for r in gc.get_referrers(o) if id(r) in ids]
+                    cyc.setdefault(
+                        n,
+                        [
+                            type(r).__name__
+                            + ":"
+                            + (
+                                ",".join(list(r)[:6])
+                                if isinstance(r, dict)
+                                else getattr(getattr(r, "gi_code", None), "co_name", "")
+                            )
+                            for r in refs
+                        ][:6],
+                    )
+            gc.garbage.clear()
             after = census()
             garbage = {
                 k: v - after.get(k, 0)
@@ -225,6 +247,7 @@ with a.output.open("x") as out:
                     active_gb=mx.get_active_memory() / 1e9,
                     cache_gb=mx.get_cache_memory() / 1e9,
                     arrays=arrays,
+                    cycle_referrers=cyc,
                     arrays_before_gc=arrays_before,
                     collected=collected,
                     garbage_types=dict(
