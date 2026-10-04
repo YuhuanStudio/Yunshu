@@ -131,6 +131,7 @@ class _Row:
     hit: int = 0  # prompt tokens restored from the APC prefix cache
     ckpts: list = field(default_factory=list)  # APC checkpoint lengths ahead
     salt: int = 0  # APC key of this row's cache layout
+    apc: Any = None  # this row's APC coordinator (its checkpoint plan is per request)
     head_state: Any = None  # MTP head state of a just-joined row: its first draft
 
 
@@ -182,12 +183,12 @@ class RoundDriver:
         # head's KV for rows that draft) and stores checkpoints at chunk
         # boundaries while it prefills.
         self.apc = None
+        self._apc_manager = None
         if apc is not None:
-            from mlx_vlm.apc_coordinator import APCCoordinator
-
-            coordinator = APCCoordinator(apc, self.lm)
+            coordinator = self._new_coordinator(apc)
             if coordinator.enabled and coordinator.is_checkpoint:
                 self.apc = coordinator
+                self._apc_manager = apc
         self.rows: list[_Row] = []
         self.cost = CostCurve()
         self.steps = 0
@@ -261,12 +262,24 @@ class RoundDriver:
         return row.hit
 
     # ── APC prefix cache ─────────────────────────────────────────────────
+    def _new_coordinator(self, manager: Any):
+        """The manager's own coordinator (Yunshu's stores only the planned
+        checkpoints, not every span cut) or upstream's for a stock manager."""
+        bind = getattr(manager, "coordinator", None)
+        if callable(bind):
+            return bind(self.lm)
+        from mlx_vlm.apc_coordinator import APCCoordinator
+
+        return APCCoordinator(manager, self.lm)
+
     def _restore(self, row: _Row) -> None:
         """Start ``row`` from the longest stored checkpoint of its prompt and
         plan the checkpoints it stores on the way."""
         if self.apc is None or not row.req.use_apc:
             return
         ids = row.req.ids
+        # one coordinator per row: its checkpoint plan is request state
+        row.apc = self._new_coordinator(self._apc_manager)
         # Entries carry the head's KV only for rows that draft, and come from
         # this driver's numerics: keep them apart from other users of the
         # manager (the upstream runner's entries) and between layouts.
@@ -276,7 +289,7 @@ class RoundDriver:
             >> 1
         )
         try:
-            hit = self.apc.lookup(
+            hit = row.apc.lookup(
                 ids,
                 extra_hash=row.salt,
                 safe_lookup_min=0,
@@ -292,15 +305,15 @@ class RoundDriver:
                 if row.mtp_cache is not None:
                     row.mtp_cache = list(warm[n:])
                 row.done = row.hit = prefix
-                with self.apc.manager.lock:
-                    self.apc.manager.stats.restored_tokens += prefix
-            self.apc.prepare_prefill(
+                with row.apc.manager.lock:
+                    row.apc.manager.stats.restored_tokens += prefix
+            row.apc.prepare_prefill(
                 [len(ids)], prefill_step_size=self.chunk, prefix_lengths=[row.hit]
             )
-            floor = self.apc.manager.exact_cache_min_tokens
+            floor = row.apc.manager.exact_cache_min_tokens
             row.ckpts = [
                 c
-                for c in self.apc.checkpoint_lengths(ids, set())
+                for c in row.apc.checkpoint_lengths(ids, set())
                 if row.hit < c < len(ids) and c >= floor
             ]
         except Exception:
@@ -354,7 +367,7 @@ class RoundDriver:
         if row.mtp_cache is not None:
             caches += row.mtp_cache
         try:
-            self.apc.store_checkpoint(row.req.ids[:end], caches, extra_hash=row.salt)
+            row.apc.store_checkpoint(row.req.ids[:end], caches, extra_hash=row.salt)
         except Exception:
             logger.warning("APC checkpoint store failed", exc_info=True)
 

@@ -147,7 +147,9 @@ def test_spec_lanes_retain_both_caches_and_restore_readout(runner):  # noqa: F81
     assert not runner.busy()
 
 
-def test_round_driver_auxiliary_never_joins_primary_driver(runner):  # noqa: F811
+def test_round_driver_auxiliary_never_joins_primary_driver(runner, monkeypatch):  # noqa: F811
+    monkeypatch.setattr(vbr, "DRIVER_MIN_CONCURRENCY", 1)  # a lone request drives
+
     class Driver:
         head = None
         chunk = 2048

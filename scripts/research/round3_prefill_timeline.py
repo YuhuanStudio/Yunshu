@@ -36,16 +36,19 @@ def main():
     ap.add_argument("--n", type=int, default=2)
     ap.add_argument("--ctx", type=int, default=32768)
     ap.add_argument("--tokens", type=int, default=64)
+    ap.add_argument(
+        "--frac", type=float, default=1.0, help="use this fraction of the prompt file"
+    )
     ap.add_argument("--off", action="store_true", help="expect no driver (arm off)")
     ap.add_argument("--min-conc", type=int, default=2, help="driver routing threshold")
     ap.add_argument("--out", type=Path, required=True)
     a = ap.parse_args()
+    from yunshu_engine import vlm_batch_runner
     from yunshu_engine.vlm_batch_runner import RunStats
     from yunshu_engine.vlm_engine import VLMEngine
 
-    from yunshu_engine import vlm_batch_runner
-
     vlm_batch_runner.DRIVER_MIN_CONCURRENCY = a.min_conc
+    vlm_batch_runner.DRIVER_MAX_UNCACHED_TOKENS = 10**9  # measure the driver itself
     engine = VLMEngine(MODEL)
     asyncio.run(engine.start())
     runner = engine._batch_runner
@@ -88,18 +91,19 @@ def main():
     import pstats
 
     prof = cProfile.Profile()
-    body = runner._drive_slice_body
+    slice_body = runner._drive_slice_body
 
     def profiled(*args, **kw):
         prof.enable()
         try:
-            return body(*args, **kw)
+            return slice_body(*args, **kw)
         finally:
             prof.disable()
 
     runner._drive_slice_body = profiled
-    body = (PROMPTS / f"code-{a.ctx}.txt").read_text()
-    texts = [f"UNIQUE-{i}-{time.time_ns()}\n{body}" for i in range(a.n)]
+    prompt_text = (PROMPTS / f"code-{a.ctx}.txt").read_text()
+    prompt_text = prompt_text[: int(len(prompt_text) * a.frac)]
+    texts = [f"UNIQUE-{i}-{time.time_ns()}\n{prompt_text}" for i in range(a.n)]
 
     def ids_for(text):
         return engine._executor.submit(
@@ -122,6 +126,7 @@ def main():
             ):  # fmt: skip
                 if ttft[i] is None:
                     ttft[i] = time.perf_counter() - t0[0]
+                    print(f"first token {i}: {ttft[i]:.1f}s", flush=True)
         except Exception as e:
             errs.append(repr(e))
 
@@ -134,6 +139,7 @@ def main():
 
     mx.reset_peak_memory()
     gib = 2**30
+    print("warm-up done", flush=True)
     steps.clear()
     t0[0] = time.perf_counter()
     th = [threading.Thread(target=go, args=(i,)) for i in range(a.n)]
@@ -147,6 +153,22 @@ def main():
         active_gib=round(mx.get_active_memory() / gib, 2),
         cache_gib=round(mx.get_cache_memory() / gib, 2),
     )
+    import gc
+
+    gc.collect()
+    mx.clear_cache()
+    mem["active_after_gc_gib"] = round(mx.get_active_memory() / gib, 2)
+    mgr = runner.apc_manager
+    entries = getattr(mgr, "_exact_cache", None)
+    if isinstance(entries, dict):
+        mem["apc_entries"] = sorted(len(e.token_ids) for e in entries.values())
+    for name in ("clear", "clear_all", "reset"):
+        if mgr is not None and hasattr(mgr, name):
+            getattr(mgr, name)()
+            gc.collect()
+            mx.clear_cache()
+            mem["active_after_apc_clear_gib"] = round(mx.get_active_memory() / gib, 2)
+            break
     asyncio.run(engine.stop())
     rec = dict(mem=mem, n=a.n, ctx=a.ctx, prompt_tokens=[len(r[0]) for r in reqs],
                ttft=ttft, errors=errs, summary=summarize(steps), steps=steps)  # fmt: skip
