@@ -53,6 +53,11 @@ NARROW_ROWS = (
 CK = ra.CHUNK
 
 
+def _tree_tail_capacity(live_keys: int) -> int:
+    """Physical tail rows covering every live 64-key tile."""
+    return ((live_keys + 63) // 64) * 64
+
+
 class TreeShape:
     """Parent structure of a window (host side) with its cached index tables."""
 
@@ -365,31 +370,36 @@ def _gdn_layer(verifier, layer, x, cache, shape: TreeShape):
     v = v.reshape(1, w, hv, dv)
     a = a.reshape(1, w, hv)
     b = b.reshape(1, w, hv)
-    (y,) = _gdn_kernel()(
-        inputs=[
-            state,
-            layer.A_log,
-            layer.dt_bias,
-            q,
-            k,
-            v,
-            a,
-            b,
-            shape.parents_array(),
-        ],
-        template=[
-            ("InT", dtype),
-            ("Hk", hk),
-            ("Hv", hv),
-            ("Dk", dk),
-            ("Dv", dv),
-            ("T", w),
-        ],
-        grid=(32, dv, hv),
-        threadgroup=(32, 4, 1),
-        output_shapes=[(1, w, hv, dv)],
-        output_dtypes=[dtype],
-    )
+    fast_forward = getattr(shape, "gdn_forward", None)
+    if fast_forward is not None:
+        y, rows = fast_forward(layer, state, q, k, v, a, b)
+    else:
+        (y,) = _gdn_kernel()(
+            inputs=[
+                state,
+                layer.A_log,
+                layer.dt_bias,
+                q,
+                k,
+                v,
+                a,
+                b,
+                shape.parents_array(),
+            ],
+            template=[
+                ("InT", dtype),
+                ("Hk", hk),
+                ("Hv", hv),
+                ("Dk", dk),
+                ("Dv", dv),
+                ("T", w),
+            ],
+            grid=(32, dv, hv),
+            threadgroup=(32, 4, 1),
+            output_shapes=[(1, w, hv, dv)],
+            output_dtypes=[dtype],
+        )
+        rows = (k, v, a, b)
     z = z.reshape(1, w, hv, dv)
     out, sums = gv._norm_gate_kernel(layer.norm.eps)(
         inputs=[y, z, layer.norm.weight],
@@ -400,7 +410,7 @@ def _gdn_layer(verifier, layer, x, cache, shape: TreeShape):
         output_dtypes=[dtype, mx.float32],
     )
     vq.register_group_sums(out, sums)
-    record = ("gdn", layer, state, conv_prev, mixed, (k, v, a, b))
+    record = ("gdn", layer, state, conv_prev, mixed, rows)
     return verifier._linear(layer.out_proj, out), record
 
 
@@ -625,7 +635,10 @@ def tree_attention(
         starts_a = _zeros((w,), mx.int32)
 
     # window chunk(s): one row per node over a gathered copy of the tail
-    cap2 = ntail * CK
+    # Keep CK-sized partials and their reduction order, but only materialize
+    # complete 64-key tiles containing live keys. The tile kernel's last load
+    # still begins at the same address; masked CK padding needs no backing rows.
+    cap2 = _tree_tail_capacity(m + shape.max_depth + 1)
     hkv_keys = keys[0]  # [HKV, CAP, D]
     hkv_vals = values[0]
     win_k = (
@@ -743,12 +756,18 @@ def _rope_delta(lm) -> int:
 
 
 def tree_forward(
-    lm, tokens: mx.array, shape: TreeShape, cache: list, capture_ids=()
+    lm,
+    tokens: mx.array,
+    shape: TreeShape,
+    cache: list,
+    capture_ids=(),
+    *,
+    verifier=None,
 ) -> TreeResult:
     """Run the window through the decoder. ``tokens`` [1, W]."""
     from mlx_vlm.models.qwen3_5 import language as q35
 
-    verifier = q35._EXACT_SPECULATIVE_VERIFIER
+    verifier = q35._EXACT_SPECULATIVE_VERIFIER if verifier is None else verifier
     model = lm.model
     w = shape.width
     if w > MAX_ROWS:
@@ -803,6 +822,17 @@ def tree_forward(
                 normed = nxt(h)
         if i in capture:
             res.captured.append(h)
+        # Submit the unchanged graph while later layers are being built. The
+        # first layer starts the drafter/verify dependency promptly; four-layer
+        # chunks avoid a separate submission for every decoder layer.
+        if (i == 0 or (i + 1) % 4 == 0) and i + 1 < len(layers):
+            try:
+                mx.async_eval(h, normed)
+            except BaseException:
+                # Early evaluation can fail before the round loop receives
+                # TreeResult. Restore appended KV lengths here in that case.
+                tree_abort(cache, res)
+                raise
     res.hidden = model.norm(h)
     return res
 
@@ -827,8 +857,13 @@ def tree_commit(lm, cache: list, res: TreeResult, path: list[int]) -> None:
                 c.values[..., n0 + 1 : n0 + m, :] = mx.take(c.values, src, axis=2)
             c.trim(w - m)
         else:
-            _, layer, state, conv_prev, mixed, (k, v, a, b) = rec
-            c[1] = replay_path(layer, state, (k, v, a, b), path_arr, count_arr)
+            _, layer, state, conv_prev, mixed, rows = rec
+            replay = getattr(rows, "replay", None)
+            c[1] = (
+                replay(layer, state, path_arr, count_arr)
+                if replay is not None
+                else replay_path(layer, state, rows, path_arr, count_arr)
+            )
             c._omlx_gdn_pending = None
             seq = mx.concatenate([conv_prev, mixed], axis=1)[0]
             c[0] = mx.take(seq, conv_idx, axis=0)[None]

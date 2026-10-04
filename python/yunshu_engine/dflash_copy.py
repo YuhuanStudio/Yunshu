@@ -119,7 +119,12 @@ def install() -> bool:
     if getattr(current, "_yunshu_copy", False):
         return True
     if getattr(current, "_yunshu_tree", False):
-        return False  # The explicitly selected tree loop owns its proposals.
+        from . import settings
+
+        return bool(
+            settings.get("YUNSHU_SPEC_TREE") != "tree"
+            and getattr(current, "_yunshu_copy_underneath", False)
+        )  # A prior force-tree wrapper delegates after an engine reload.
     choose = dflash._dflash_next_block_size
 
     def next_block(draft, block, remaining, initial=None):
@@ -151,6 +156,13 @@ def install() -> bool:
             > mtp_lane.verify_max_rows(tree_verify.lane_projections(lm), lm)
         ):
             yield from current(model, draft, cache, hidden, **kw)
+            return
+        from . import dflash_fast, settings
+
+        if settings.get("YUNSHU_SPEC_TREE") == "auto" and dflash_fast.eligible(
+            lm, draft, cache, kw
+        ):
+            yield from dflash_fast.rounds(model, draft, cache, hidden, **kw)
             return
         proxy = CopyDraft(draft, context, int(kw["first_bonus"]), rows)
         iterator = current(model, proxy, cache, hidden, **kw)

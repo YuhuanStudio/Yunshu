@@ -68,6 +68,9 @@ def set_context(ids: Any) -> None:
     copy drafter indexes all of them, however much of the prompt a prefix-cache
     hit skipped."""
     _STATE["context"] = ids
+    from .kernels import lane_linear
+
+    lane_linear.set_sum_context(ids)
 
 
 def verify_max_rows(lane_projections: bool, language_model: Any = None) -> int:

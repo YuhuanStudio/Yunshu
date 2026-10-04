@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Any
+from typing import Any, cast
 
 import mlx.core as mx
 
@@ -215,9 +215,13 @@ def dflash_tree_rounds(
     """Drop-in for upstream ``_dflash_rounds`` (single row): tree drafts."""
     from mlx_vlm.speculative.common import _record_speculative_round
 
+    from . import mtp_lane
+
     lm = model.language_model if hasattr(model, "language_model") else model
     if (
         not greedy_sampling
+        or mtp_lane._STATE["guide"] is not None
+        or callable(getattr(draft_model, "prepare_target_hidden", None))
         or not supported(model, draft_model)
         or not tv.lane_ready(lm, prompt_cache)
     ):
@@ -301,9 +305,18 @@ def install() -> bool:
     original = current
 
     def rounds(*args, **kwargs):
-        return dflash_tree_rounds(*args, _original=original, **kwargs)
+        from . import settings
+
+        if settings.get("YUNSHU_SPEC_TREE") != "tree":
+            yield from original(*args, **kwargs)
+            return
+        yield from dflash_tree_rounds(*args, _original=original, **kwargs)
 
     rounds._yunshu_tree = True
+    cast(Any, rounds)._yunshu_copy_underneath = bool(
+        getattr(original, "_yunshu_copy", False)
+        or getattr(original, "_yunshu_copy_underneath", False)
+    )
     spec_utils._dflash_rounds = rounds
     return True
 

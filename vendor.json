@@ -216,6 +216,19 @@
     },
     {
       "kind": "derived",
+      "path": "python/yunshu_engine/kernels/lane_virtual.py",
+      "repo": "https://github.com/ashhart/TensorFold",
+      "clone": "reference/TensorFold",
+      "upstream_paths": ["src/tensorfold/kernels/qwen/dense/v1/lane_qmm.py"],
+      "commit": "34bae79a",
+      "license": "MIT",
+      "local_changes": [
+        "reuse the registered hardware-selected lane body with original split-K",
+        "Yunshu virtual column pointers and separate contiguous outputs; no projection parameter mutation"
+      ]
+    },
+    {
+      "kind": "derived",
       "path": "python/yunshu_engine/kernels/lane_linear.py",
       "repo": "https://github.com/ashhart/TensorFold",
       "clone": "reference/TensorFold",
@@ -396,6 +409,19 @@
     }
   ],
   "inspired": [
+    {
+      "kind": "inspired",
+      "path": "python/yunshu_engine/dflash_plan.py",
+      "repo": "https://github.com/ashhart/TensorFold",
+      "clone": "reference/TensorFold",
+      "upstream_paths": ["src/tensorfold/drafters/dflash_tree.py"],
+      "commit": "34bae79a",
+      "license": "MIT",
+      "local_changes": [
+        "bounded one-dispatch best-first GPU proposal search and integer ancestry plan",
+        "original last-use row order and state-slot liveness; preserve original proposal-rank statistics"
+      ]
+    },
     {
       "kind": "inspired",
       "path": "python/yunshu_engine/keyed_sampling.py",

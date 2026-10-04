@@ -11,7 +11,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 
-def summarize(records, receipt):
+def summarize(records, receipt, *, baseline="main"):
     from device_evidence import require_same_device
 
     require_same_device(records + [receipt], performance=True)
@@ -70,9 +70,9 @@ def summarize(records, receipt):
         raise ValueError("incomplete or unexpected matrix")
     result = []
     for (ctx, task, arm), rows in sorted(groups.items()):
-        base = groups.get((ctx, task, "main"))
+        base = groups.get((ctx, task, baseline))
         if not base:
-            raise ValueError("main baseline required")
+            raise ValueError(f"{baseline} baseline required")
         tps = statistics.median(r["tps"] for r in rows)
         base_tps = statistics.median(r["tps"] for r in base)
         result.append(
@@ -97,12 +97,14 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("results", type=Path)
     p.add_argument("receipt", type=Path)
+    p.add_argument("--baseline", default="main")
     a = p.parse_args()
     print(
         json.dumps(
             summarize(
                 [json.loads(s) for s in a.results.read_text().splitlines()],
                 json.loads(a.receipt.read_text()),
+                baseline=a.baseline,
             ),
             indent=2,
         )
