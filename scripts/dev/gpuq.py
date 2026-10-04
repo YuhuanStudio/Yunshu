@@ -1506,7 +1506,7 @@ def stats(hours: float = 24.0) -> None:
             continue
         paused = sum((b or en) - a for a, b in j.get("pauses") or [])
         mins = max(0.0, en - st - paused) / 60
-        bad = j["state"] in ("failed", "timeout", "stalled", "lost") or (
+        bad = j["state"] in ("failed", "timeout", "stalled", "lost") or bool(
             j["state"] == "done" and j.get("contended") and requires_quiet(j)
         )
         row = lines.setdefault((j.get("label") or "?").split("-")[0], [0, 0, 0.0, 0.0])
