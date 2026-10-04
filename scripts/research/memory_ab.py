@@ -95,7 +95,10 @@ def chat(url, messages, max_tokens):
 
 def run_arm(name, tree, model, port, rep, emit):
     env = dict(
-        os.environ, PYTHONPATH=os.path.join(tree, "python"), YUNSHU_AUTH_DISABLED="1"
+        os.environ,
+        PYTHONPATH=os.path.join(tree, "python"),
+        YUNSHU_AUTH_DISABLED="1",
+        YUNSHU_DEBUG_ROUTES="1",
     )
     log = open(f"{os.path.splitext(OUT)[0]}_{name}_{rep}.log", "w")  # noqa: SIM115
     proc = subprocess.Popen(
