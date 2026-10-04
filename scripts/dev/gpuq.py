@@ -474,10 +474,43 @@ def _cap_priority(job: dict, caps: dict[str, int]) -> dict:
     return job
 
 
+# Parsed job files keyed by (mtime_ns, size). Every job write is a rename into JOBS,
+# so an unchanged directory mtime means no file changed: the daemon polls every 2 s
+# and re-reading ~2000 files each time cost it half a core (counted as foreign CPU
+# by quiet timing jobs). A full rescan still happens every JOBS_RESCAN_S.
+_JOBS_CACHE: dict = {"dir": None, "key": None, "t": 0.0, "files": {}}
+JOBS_RESCAN_S = 30.0
+
+
+def _job_files() -> list[dict]:
+    try:
+        key = JOBS.stat().st_mtime_ns
+    except OSError:
+        return []
+    c = _JOBS_CACHE
+    now = time.monotonic()
+    if c["dir"] != str(JOBS) or c["key"] != key or now - c["t"] > JOBS_RESCAN_S:
+        files = {} if c["dir"] != str(JOBS) else c["files"]
+        fresh = {}
+        for p in JOBS.glob("*.json"):
+            try:
+                st = p.stat()
+            except OSError:
+                continue
+            sig = (st.st_mtime_ns, st.st_size)
+            old = files.get(p.name)
+            if old is not None and old[0] == sig:
+                fresh[p.name] = old
+            elif data := _read(p):
+                fresh[p.name] = (sig, json.dumps(data))
+        c.update(dir=str(JOBS), key=key, t=now, files=fresh)
+    return [json.loads(raw) for _, raw in c["files"].values()]
+
+
 def _jobs() -> list[dict]:
     caps = _priority_caps()
     return sorted(
-        (_cap_priority(j, caps) for p in JOBS.glob("*.json") if (j := _read(p))),
+        (_cap_priority(j, caps) for j in _job_files()),
         key=lambda j: (-j.get("priority", 0), j["submitted"], j["id"]),
     )
 
