@@ -1078,3 +1078,13 @@ Harness notes: `tfbench` records `part_done` even when a server request fails mi
 the server log looked complete), so every ms/round row here was checked for `ct == 256` and `finish == length`. Jobs
 `1004-215938-00-dflash9-base-r0..r2` (baseline), `1005-005328-00-dflash9-cand-q8ctl-r0..r2` (head), `1005-011739-00-dflash9-bits4-1k8k-r0..r2`,
 `1005-010425-00-dflash9-bits{8,4}-32k-r0..r2`, ablations `1005-001731-00-dflash9-ablate-r5`, micro-benches `dflash9-prework/attnbench/addrms/normgate/swiglu`.
+
+### apc2 branch retention (2026-10-05, Qwen3.8-27B oQ4e-mtp, M5 Max)
+apc_branch_ab, 3 reps, arm order rotated (cached tokens / TTFT s, base -> cand):
+- a linear follow-up (49.7K): 49732 -> 49732 cached; 0.33-0.60 -> 0.34 s (same)
+- b branch at midpoint of a ~50K conversation (ideal 24893): 62 -> 24892..24913 cached; 26.4-26.8 -> 0.31 s
+- c sub-agents, 20K shared in system: 25309 -> 25309; 0.23 -> 0.24 s (same, already hit)
+- c sub-agents, 20K shared in first user turn: 24576 -> 24576; 1.22 -> 1.22 s (same; the ideal 25304 is not reached by either arm)
+Memory (apc_branch_ab, after all scenarios): APC resident 15.08 -> 21.86 GiB (+6.8), idle footprint 28.9 -> 29.6 GiB (+0.7), peak footprint 36.1-37.0 -> 36.9-39.0 GiB.
+yv ab full (base 140e9529 vs cand 5511302f): preflight/smoke/identity (18 cells, 0 mismatches, spec on==off)/apc/quality (107 vs 107 of 200)/speed (all within noise) PASS; memory FAIL: peak 47.1 -> 50.4 GiB (+3.3, limit 1.66), idle 35.0 -> 35.4 GiB (+0.4).
+Verdict FAIL on memory only; the retained anchors are not yet bounded tightly enough.
