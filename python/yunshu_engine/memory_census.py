@@ -64,10 +64,66 @@ def _holder(container: Any, array: Any) -> str:
     return _label(container)
 
 
-def census(min_mib: float = 64.0, top: int = 40) -> dict[str, Any]:
+def cyclic_garbage(top: int = 15) -> dict[str, Any]:
+    """Collect unreachable cycles and report what they held.
+
+    ``mx.array`` buffers are freed by reference counting, but an array reachable only from
+    a reference cycle (a generator, a closure and its group, ...) stays until Python's
+    cyclic collector runs. Reports the active-memory drop of one collection and the types
+    of the garbage (and the arrays among it).
+    """
     import mlx.core as mx
 
+    raw = mx.get_active_memory()
+    mx.synchronize()
+    before = mx.get_active_memory()
+    flags = gc.get_debug()
+    gc.set_debug(gc.DEBUG_SAVEALL)
+    try:
+        gc.collect()
+        garbage = list(gc.garbage)
+        types: dict[str, int] = {}
+        holds: dict[str, int] = {}
+        for obj in garbage:
+            name = _label(obj)
+            types[name] = types.get(name, 0) + 1
+            for ref in gc.get_referents(obj):
+                if isinstance(ref, mx.array) and ref.nbytes >= _MIB:
+                    owner = name
+                    if isinstance(obj, dict):
+                        who = next(
+                            (g for g in garbage if getattr(g, "__dict__", None) is obj),
+                            None,
+                        )
+                        if who is not None:
+                            owner = f"{_label(who)}.__dict__"
+                    holds[owner] = holds.get(owner, 0) + ref.nbytes
+        del garbage[:]
+        gc.garbage.clear()
+    finally:
+        gc.set_debug(flags)
     gc.collect()
+    mx.synchronize()
+    after = mx.get_active_memory()
+    return {
+        "active_raw_mib": round(raw / _MIB, 1),
+        "active_before_mib": round(before / _MIB, 1),
+        "active_after_mib": round(after / _MIB, 1),
+        "freed_mib": round((before - after) / _MIB, 1),
+        "garbage_types": dict(sorted(types.items(), key=lambda kv: -kv[1])[:top]),
+        "garbage_holders_mib": {
+            k: round(v / _MIB, 1)
+            for k, v in sorted(holds.items(), key=lambda kv: -kv[1])
+        },
+    }
+
+
+def census(
+    min_mib: float = 64.0, top: int = 40, collect_first: bool = True
+) -> dict[str, Any]:
+    import mlx.core as mx
+
+    garbage = cyclic_garbage() if collect_first else None
     floor = int(min_mib * _MIB)
     seen: dict[int, tuple[Any, int]] = {}
     for obj in gc.get_objects():
@@ -101,6 +157,7 @@ def census(min_mib: float = 64.0, top: int = 40) -> dict[str, Any]:
     for g in rows:
         g["mib"] = round(g["mib"], 1)
     return {
+        "cyclic_garbage": garbage,
         "active_mib": round(mx.get_active_memory() / _MIB, 1),
         "cache_mib": round(mx.get_cache_memory() / _MIB, 1),
         "counted_mib": round(sum(n for _, n in seen.values()) / _MIB, 1),

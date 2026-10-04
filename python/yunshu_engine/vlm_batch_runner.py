@@ -36,6 +36,7 @@ import mlx.core as mx
 import numpy as np
 
 from . import keyed_sampling, settings
+from .idle_memory import IdleMemory
 from .keyed_sampling import top_k_filter, top_p_filter
 from .serving.busy_time import BusyMeter
 from .serving.work_scheduler import (
@@ -309,6 +310,7 @@ class VLMBatchRunner:
         self._primary_handoff_at: float | None = None
         self._handoff_timer: threading.Timer | None = None
         self.clear_on_idle = False
+        self._idle_memory: IdleMemory | None = None
         # Requests the engine has accepted, including ones still being
         # prepared (templating, image encoding) — the runner alone cannot see
         # those, and a request is only "alone" if the engine has no others.
@@ -629,6 +631,8 @@ class VLMBatchRunner:
             )
 
     def _submit(self, job: _Job) -> None:
+        if self._idle_memory is not None:
+            self._idle_memory.activity()
         with self._lock:
             job.queued = job.last_service = time.perf_counter()
             self._pending.append(job)
@@ -1780,7 +1784,15 @@ class VLMBatchRunner:
                     timer.start()
             else:
                 self._schedule()
-        elif self.clear_on_idle:
+        else:
+            self._drained()
+
+    def _drained(self) -> None:
+        if self._executor is not None:
+            if self._idle_memory is None:
+                self._idle_memory = IdleMemory(self._executor.submit, self.busy)
+            self._idle_memory.drained()
+        if self.clear_on_idle:
             # Large models: release the buffer pool once everything drains
             # (clearing under active batches would only force reallocation). Up to
             # YUNSHU_PREFILL_BUFFER_CACHE_GB stays: the next request's cache restore

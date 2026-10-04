@@ -25,6 +25,7 @@ from process_memory import process_tree_memory  # noqa: E402
 
 GIB = 2**30
 OUT = "memory_ab.jsonl"
+ARM_ENV: dict[str, dict[str, str]] = {}
 SIZES = (8192, 32768, 98304)
 WORDS = [
     "alpha",
@@ -99,6 +100,7 @@ def run_arm(name, tree, model, port, rep, emit):
         PYTHONPATH=os.path.join(tree, "python"),
         YUNSHU_AUTH_DISABLED="1",
         YUNSHU_DEBUG_ROUTES="1",
+        **ARM_ENV.get(name, {}),
     )
     log = open(f"{os.path.splitext(OUT)[0]}_{name}_{rep}.log", "w")  # noqa: SIM115
     proc = subprocess.Popen(
@@ -147,6 +149,13 @@ def run_arm(name, tree, model, port, rep, emit):
         threading.Thread(target=sampler, daemon=True).start()
 
         def census(url, step):
+            try:
+                kv = json.loads(
+                    urllib.request.urlopen(url + "/debug/kv-cache", timeout=60).read()
+                )
+                emit(dict(arm=name, rep=rep, step=step, kv_cache=kv))
+            except Exception as exc:  # noqa: BLE001
+                emit(dict(arm=name, rep=rep, step=step, kv_cache_error=str(exc)))
             try:
                 text = urllib.request.urlopen(
                     url + "/debug/memory-census?min_mib=64", timeout=300
@@ -203,7 +212,9 @@ def run_arm(name, tree, model, port, rep, emit):
             record(f"{size // 1024}k-turn2", u, s)
         time.sleep(20)
         record("idle20s")
-        census(url, "idle20s")
+        time.sleep(15)
+        record("idle35s")
+        census(url, "idle35s")
         # Does memory held after the long turn return once a short request runs?
         _, u, s = chat(
             url,
@@ -232,7 +243,17 @@ def main():
     ap.add_argument("--reps", type=int, default=2)
     ap.add_argument("--sizes", type=int, nargs="+", default=[8192, 32768, 98304])
     ap.add_argument("--out", required=True)
+    ap.add_argument(
+        "--arm-env",
+        action="append",
+        default=[],
+        help="name:KEY=VALUE, an environment variable for one arm",
+    )
     a = ap.parse_args()
+    for item in a.arm_env:
+        who, kv = item.split(":", 1)
+        key, val = kv.split("=", 1)
+        ARM_ENV.setdefault(who, {})[key] = val
     global OUT, SIZES
     OUT, SIZES = a.out, tuple(a.sizes)
     arms = [x.split("=", 1) for x in a.arm]
