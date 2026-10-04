@@ -61,7 +61,7 @@ GIB = 1 << 30
 _OWNED_SNAPSHOT: contextvars.ContextVar[bool] = contextvars.ContextVar(
     "yunshu_apc_owned_snapshot", default=False
 )
-CLONE_EVAL_ARRAYS = 8
+CLONE_EVAL_BYTES = 512 << 20
 
 
 def _restore_kv(c, min_capacity_tokens, targets):
@@ -128,7 +128,7 @@ def _install_owned_snapshot_clone() -> None:
             if copied is None:
                 return None
             out.append(copied)
-            if len(targets) >= CLONE_EVAL_ARRAYS:
+            if sum(t.nbytes for t in targets) >= CLONE_EVAL_BYTES:
                 mx.eval(targets)
                 targets.clear()
         if targets:
@@ -545,25 +545,31 @@ def _single_native_arrays_row(source):
     return row
 
 
-MATERIALIZE_GROUP = 4
+MATERIALIZE_BYTES = 512 << 20
 
 
-def materialize(target_lists, group: int = MATERIALIZE_GROUP) -> None:
-    """Evaluate the arrays of several checkpoints ``group`` positions at a time.
+def materialize(target_lists, limit_bytes: int = MATERIALIZE_BYTES) -> None:
+    """Evaluate the arrays of several checkpoints in groups of about ``limit_bytes``.
 
     Targets are in layer order and the checkpoints of one request share their layers, so
-    position i of every list is the same layer: evaluating a few positions at a time lets
-    the live buffers each copy pinned go before the next layer's copy is made.
+    position i of every list is the same layer: evaluating a few layers at a time lets the
+    live buffers each copy pinned go before the next layer's copy is made. Groups are sized
+    by bytes so a small cache is one evaluation (each one is a GPU synchronization).
     """
     import mlx.core as mx
 
     width = max((len(t) for t in target_lists), default=0)
-    for start in range(0, width, max(1, group)):
-        batch = [
-            t[i] for t in target_lists for i in range(start, min(start + group, len(t)))
-        ]
-        if batch:
+    batch, size = [], 0
+    for i in range(width):
+        for t in target_lists:
+            if i < len(t):
+                batch.append(t[i])
+                size += t[i].nbytes
+        if size >= limit_bytes:
             mx.eval(batch)
+            batch, size = [], 0
+    if batch:
+        mx.eval(batch)
 
 
 SHARE_MAX_TAIL = 4096

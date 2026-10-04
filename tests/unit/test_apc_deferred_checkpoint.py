@@ -542,7 +542,7 @@ def test_superseded_checkpoint_is_gone_before_the_copy_is_made():
     assert [len(e.token_ids) for e in manager._exact_cache.values()] == [48]
 
 
-def test_materialize_copies_a_few_positions_at_a_time_with_identical_values(
+def test_materialize_groups_by_bytes_with_identical_values(
     monkeypatch,
 ):
     from yunshu_engine.apc_manager import materialize
@@ -551,12 +551,17 @@ def test_materialize_copies_a_few_positions_at_a_time_with_identical_values(
     calls = []
     real = mx.eval
     monkeypatch.setattr(mx, "eval", lambda xs: (calls.append(len(xs)), real(xs))[1])
-    materialize(lists, group=4)
-    assert calls == [8, 8, 4]  # positions 0-3, 4-7, 8-9 of both checkpoints
+    materialize(lists, limit_bytes=64)  # each array is 16 bytes: 2 positions per eval
+    assert calls == [4, 4, 4, 4, 4]
+    calls.clear()
+    materialize(
+        lists
+    )  # a small cache is one evaluation (each one is a synchronization)
+    assert calls == [20]
     assert [x.tolist()[0][0] for x in lists[1]] == [10.0 + i for i in range(10)]
     # unequal lengths still evaluate everything
     ragged = [[mx.ones(3) + 1 for _ in range(5)], [mx.ones(3) + 2 for _ in range(2)]]
-    materialize(ragged, group=2)
+    materialize(ragged, limit_bytes=24)
     assert ragged[1][1].tolist() == [3.0, 3.0, 3.0]
 
 
