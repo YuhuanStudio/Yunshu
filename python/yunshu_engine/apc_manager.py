@@ -548,6 +548,10 @@ def _single_native_arrays_row(source):
 MATERIALIZE_BYTES = 512 << 20
 ANCHOR_MIN_GAP = 8192
 _BORN_KEEP = 4096
+# Retained anchors may hold at most this share of the APC byte budget, and never more than
+# this many bytes, counting only memory they own (rows viewed from a newer checkpoint are free).
+ANCHOR_BUDGET_FRACTION = 0.15
+ANCHOR_BUDGET_MAX_BYTES = 4 << 30
 
 
 def thin_chain(chain: dict, end: int) -> list:
@@ -1062,6 +1066,10 @@ class YunshuAPCManager(APCManager):
         self._head_keys: set[int] = set()
         self._last_hit: tuple[tuple, int] | None = None
         self._anchors: dict[int, int] = {}  # retained superseded checkpoint -> length
+        # entry key -> (root buffer owner key, K/V bytes it views instead of owning), and the
+        # K/V bytes of each root buffer: lets resident_bytes count a shared buffer once.
+        self._kv_share: dict[int, tuple[int, int]] = {}
+        self._roots: dict[int, int] = {}
         self._head_lengths: set[int] = set()
         self._plock = threading.Lock()
         self.warm = None
@@ -1470,7 +1478,101 @@ class YunshuAPCManager(APCManager):
         if dropped:
             logger.debug("APC: superseded %d earlier checkpoint(s)", dropped)
 
+    def _resident_bytes_locked(self) -> int:
+        """Resident bytes with a K/V buffer shared by several checkpoints counted once."""
+        logical = super()._resident_bytes_locked()
+        saved, pinned = self._share_accounting()
+        return max(0, logical - saved + pinned)
+
+    def _share_accounting(self) -> tuple[int, int]:
+        """(bytes viewed rather than owned, bytes of root buffers held only through views)."""
+        cache = self._exact_cache
+        for key in [k for k in self._kv_share if k not in cache]:
+            del self._kv_share[key]
+        saved = sum(v for _, v in self._kv_share.values())
+        used = {root for root, _ in self._kv_share.values()}
+        for root in [r for r in self._roots if r not in used]:
+            del self._roots[root]
+        # a root whose owner is still a normal entry is already in the logical total
+        pinned = sum(
+            self._roots.get(root, 0)
+            for root in used
+            if root not in cache or root in self._kv_share
+        )
+        return saved, pinned
+
+    def anchor_bytes(self) -> int:
+        """Bytes the retained anchors own: their state plus K/V rows no newer checkpoint holds."""
+        from mlx_vlm.apc import _cache_nbytes
+
+        with self.lock:
+            _, pinned = self._share_accounting()
+            own = 0
+            for key in self._anchors:
+                entry = self._exact_cache.get(key)
+                if entry is not None:
+                    own += _cache_nbytes(entry.prompt_cache)
+                    own -= self._kv_share.get(key, (0, 0))[1]
+            return max(0, own + pinned)
+
+    def anchor_budget_bytes(self) -> int:
+        return min(
+            ANCHOR_BUDGET_MAX_BYTES, int(ANCHOR_BUDGET_FRACTION * self.memory_max_bytes)
+        )
+
+    def _drop_anchor(self) -> bool:
+        """Evict the shortest retained anchor (the least useful branch point)."""
+        with self.lock:
+            live = [
+                (n, k)
+                for k, n in self._anchors.items()
+                if k in self._exact_cache and k not in self._head_keys
+            ]
+            if not live:
+                return False
+            _, key = min(live)
+            self._exact_cache.pop(key, None)
+        with self._plock:
+            self._anchors.pop(key, None)
+        return True
+
+    def enforce_anchor_budget(self) -> int:
+        dropped = 0
+        budget = self.anchor_budget_bytes()
+        while self.anchor_bytes() > budget and self._drop_anchor():
+            dropped += 1
+        return dropped
+
+    def _make_room(self, allocation_bytes: int = 0, *, retain_bytes: int = 0) -> bool:
+        """Evict anchors before anything else, so they never raise the peak of a big request."""
+        if self._anchors:
+            required = self.memory_reserve_bytes + (
+                self._prefill_reserve_bytes + allocation_bytes
+                if retain_bytes
+                else max(self._prefill_reserve_bytes, allocation_bytes)
+            )
+            while True:
+                with self.lock:
+                    resident = self._resident_bytes_locked()
+                    target = max(
+                        0,
+                        min(
+                            self.memory_max_bytes - retain_bytes,
+                            resident + self._memory_headroom() - required,
+                        ),
+                    )
+                if resident <= target or not self._drop_anchor():
+                    break
+        return super()._make_room(allocation_bytes, retain_bytes=retain_bytes)
+
     def share_anchor_rows(self, donor_tokens, extra_hash: int = 0) -> int:
+        """Share rows with the checkpoint just stored, then bring anchors under their budget."""
+        try:
+            return self._share_anchor_rows(donor_tokens, extra_hash)
+        finally:
+            self.enforce_anchor_budget()
+
+    def _share_anchor_rows(self, donor_tokens, extra_hash: int = 0) -> int:
         """Re-point the K/V rows of retained anchors at the checkpoint just stored.
 
         A request that restored a checkpoint at ``h`` holds, for every position up to ``h``,
@@ -1489,11 +1591,19 @@ class YunshuAPCManager(APCManager):
         views: list = []
         shared = 0
         with self.lock:
-            donor = self._exact_cache.get(
-                _sequence_hash(donor_tokens, extra_hash, self.block_size)
-            )
+            donor_key = _sequence_hash(donor_tokens, extra_hash, self.block_size)
+            donor = self._exact_cache.get(donor_key)
             if donor is None or donor.token_ids != donor_tokens:
                 return 0
+            root = self._kv_share.get(donor_key, (donor_key, 0))[0]
+            if root == donor_key:
+                self._roots[root] = sum(
+                    c.keys.nbytes + c.values.nbytes
+                    for c in donor.prompt_cache
+                    if type(c) is KVCache
+                    and c.keys is not None
+                    and c.values is not None
+                )
             with self._plock:
                 keys = list(self._anchors)
             for key in keys:
@@ -1508,6 +1618,7 @@ class YunshuAPCManager(APCManager):
                     or donor_tokens[:n] != entry.token_ids
                 ):
                     continue
+                viewed = 0
                 for mine, theirs in zip(
                     entry.prompt_cache, donor.prompt_cache, strict=False
                 ):
@@ -1527,6 +1638,9 @@ class YunshuAPCManager(APCManager):
                     mine.keys = theirs.keys[..., :rows, :]
                     mine.values = theirs.values[..., :rows, :]
                     views += [mine.keys, mine.values]
+                    viewed += mine.keys.nbytes + mine.values.nbytes
+                if viewed:
+                    self._kv_share[key] = (root, viewed)
                 shared += 1
         if views:
             import mlx.core as mx

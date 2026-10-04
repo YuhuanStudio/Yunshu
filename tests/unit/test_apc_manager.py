@@ -515,3 +515,68 @@ def test_anchor_rows_become_views_of_the_newest_checkpoint():
     # a request that did not restore anything shares nothing
     m._last_hit = None
     assert m.share_anchor_rows(prompts[-1][:-1], 0) == 0
+
+
+def _shared_conversation(m, turns=6, step=5000):
+    prompts = _conversation(turns=turns, step=step)
+    for i, p in enumerate(prompts):
+        if i:
+            m.lookup_exact_cache(p)
+        _turn(m, p)
+        m.share_anchor_rows(p[: len(p) - 1], 0)
+    return prompts
+
+
+def _logical(m):
+    from mlx_vlm.apc import _cache_nbytes
+
+    return sum(_cache_nbytes(e.prompt_cache) for e in m._exact_cache.values())
+
+
+def test_resident_bytes_count_a_shared_kv_buffer_once():
+    m = _mgr()
+    _shared_conversation(m)
+    assert m._kv_share
+    saved = sum(v for _, v in m._kv_share.values())
+    assert saved > 0
+    assert m.resident_bytes() == _logical(m) - saved
+
+
+def test_resident_bytes_count_a_buffer_pinned_by_views_after_its_owner_left():
+    from mlx_vlm.apc import _cache_nbytes
+
+    m = _mgr()
+    _shared_conversation(m)
+    root = next(iter({r for r, _ in m._kv_share.values()}))
+    owner_kv = m._roots[root]
+    owner_total = _cache_nbytes(m._exact_cache[root].prompt_cache)
+    before = m.resident_bytes()
+    m._exact_cache.pop(root)  # the owner is evicted; the anchors still pin its buffer
+    assert m.resident_bytes() == before - owner_total + owner_kv
+
+
+def test_anchor_bytes_are_capped_by_a_budget():
+    m = _mgr()
+    prompts = _conversation(turns=12, step=3500)
+    for p in prompts:  # no restore, so nothing is shared: anchors own their rows
+        _turn(m, p)
+        m.share_anchor_rows(p[: len(p) - 1], 0)
+    assert m._anchors
+    m.memory_max_bytes = 20 << 20
+    m.enforce_anchor_budget()
+    assert m.anchor_bytes() <= m.anchor_budget_bytes() == int(0.15 * (20 << 20))
+    newest = max(len(e.token_ids) for e in m._exact_cache.values())
+    assert newest == len(prompts[-1]) - 1  # the newest checkpoint is never an anchor
+
+
+def test_memory_pressure_evicts_anchors_before_a_big_allocation():
+    m = _mgr()
+    prompts = _conversation(turns=12, step=3500)
+    for p in prompts:
+        _turn(m, p)
+    anchors = len(m._anchors)
+    assert anchors
+    m._memory_headroom = lambda: 0  # no free memory at all
+    m._make_room(1 << 30)
+    assert not m._anchors
+    assert len(m._exact_cache) < anchors + 3
