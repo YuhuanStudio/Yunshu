@@ -27,16 +27,20 @@ def test_http_arms_use_one_canonical_second_turn(monkeypatch, tmp_path):
 
     sent = []
     log = tmp_path / "server.log"
-    log.write_text("Speculative decoding: mtp")
+    log.write_text("VLM batch runner: draft=mtp")
     for kind in ("prose", "code"):
         (tmp_path / f"turn2-reply-{kind}-1024.json").write_text(
             json.dumps(dict(reply="fixed reference answer"))
         )
     server = SimpleNamespace(
-        url="http://unused", model="model", log=log, kill=lambda: None
+        url="http://unused",
+        model="model",
+        log=log,
+        kill=lambda: None,
+        engaged_spec_mode="mtp",
     )
     monkeypatch.setattr(probe, "assert_no_full_unit_suites", lambda: None)
-    monkeypatch.setattr(probe.t, "Srv", lambda *a: server)
+    monkeypatch.setattr(probe.t, "Srv", lambda *a, **kw: server)
     monkeypatch.setattr(probe.t, "load_prompt", lambda name: "prompt")
     monkeypatch.setattr(probe.t, "was_contended", lambda: False)
     monkeypatch.setattr(probe.t, "YUNSHU_BIN", probe.t.YUNSHU_BIN)
@@ -104,3 +108,17 @@ def test_focused_cpu_test_is_not_a_full_suite():
             )
         ]
     )
+
+
+def test_http_main_uses_unmodified_production_restore(monkeypatch):
+    from scripts.research.probe_checkpoint_http import restore_experiment_launcher
+
+    from yunshu_engine.kernels import cache_restore
+
+    calls = []
+    monkeypatch.setattr(cache_restore, "install", lambda: calls.append("production"))
+    source = restore_experiment_launcher("main")
+    assert source == ""
+    exec(compile(source, "research-main", "exec"), {})
+    cache_restore.install()
+    assert calls == ["production"]
