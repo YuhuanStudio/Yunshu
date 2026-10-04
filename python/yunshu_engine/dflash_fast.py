@@ -15,8 +15,9 @@ from .dflash_plan import live_bound
 _KERNELS: dict[str, Any] = {}
 
 # Same-checkpoint sweeps (27B oQ4e + DFlash2, M5): fast tree beat chain+copy
-# at 256..10240 for code and prose; prose lost at 12288 (-6.7%), so 10240.
-CONTEXT_MIN = 256
+# at 512..10240 for code and prose; prose lost at 12288 (-6.7%), so 10240.
+# 256 is excluded: prose with 512+ new tokens measured -4.5% there (3 reps).
+CONTEXT_MIN = 512
 CONTEXT_LIMIT = 10240
 # The fast tree's edge is in the first tokens of a reply (+10-20% at <=256 new
 # tokens); over a long reply the chain's copy drafter catches up and the tree's
