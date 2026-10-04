@@ -1,6 +1,7 @@
 """200 paired questions through the actual default auto serving round hook."""
 
 _PREV = None
+_SIZES = {}
 import argparse, hashlib, json, sys
 from pathlib import Path
 
@@ -235,6 +236,18 @@ with a.output.open("x") as out:
                 keys = list(node)[:5] if isinstance(node, dict) else ""
                 chain.append(f"{type(node).__module__}.{type(node).__name__}{keys}")
             del objs, live, node
+            sizes = {}
+            for name, mod in list(sys.modules.items()):
+                for attr, v in list(getattr(mod, "__dict__", {}).items()):
+                    if isinstance(v, (list, dict, set)) and len(v) > 8:
+                        sizes[f"{name}.{attr}"] = len(v)
+            module_growth = {
+                k: v - _SIZES.get(k, 0)
+                for k, v in sizes.items()
+                if _SIZES and v - _SIZES.get(k, 0) > 0
+            }
+            _SIZES.clear()
+            _SIZES.update(sizes)
             mx.clear_cache()
             emit(
                 dict(
@@ -245,6 +258,9 @@ with a.output.open("x") as out:
                     arrays=arrays,
                     growth=dict(sorted(growth.items(), key=lambda kv: -kv[1])[:10]),
                     chain=chain,
+                    module_growth=dict(
+                        sorted(module_growth.items(), key=lambda kv: -kv[1])[:10]
+                    ),
                     collected=collected,
                     rss_gb=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1e9,
                 )
