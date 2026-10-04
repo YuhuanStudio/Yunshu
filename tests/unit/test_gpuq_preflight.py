@@ -138,3 +138,25 @@ def test_finished_runs_outrank_timed_out_ones():
     t, note = pf.learned_timeout("wide8-quality200-3", 300, hist, now)
     assert t == 10 * 60 and "ok ran 6.0 min" in note
     assert pf.learned_timeout("wide8-quality200-3", 300, hist[:1], now)[0] > 60 * 60
+
+
+def test_ensure_out_dirs_creates_missing_parent(tmp_path):
+    cmd = [
+        "python",
+        "x.py",
+        "--out",
+        "runs/a/b.jsonl",
+        "--output=c/d.json",
+        "--out-dir",
+        "e",
+    ]
+    made = pf.ensure_out_dirs(cmd, str(tmp_path))
+    assert (tmp_path / "runs/a").is_dir() and (tmp_path / "c").is_dir()
+    assert (tmp_path / "e").is_dir() and len(made) == 3
+    assert (
+        pf.ensure_out_dirs(cmd, str(tmp_path)) == []
+    )  # nothing left to make
+
+
+def test_ensure_out_dirs_skips_shell_variables(tmp_path):
+    assert pf.ensure_out_dirs(["x", "--out", "$D/f"], str(tmp_path)) == []

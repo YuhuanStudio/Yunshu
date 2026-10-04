@@ -642,6 +642,8 @@ def submit(
                 "preflight failed (GPUQ_NO_PREFLIGHT=1 skips it):\n  - "
                 + "\n  - ".join(problems)
             )
+        for d in gpuq_preflight.ensure_out_dirs(cmd, os.getcwd()):
+            print(f"gpuq: created output directory {d}", file=sys.stderr)
     JOBS.mkdir(parents=True, exist_ok=True)
     LOGS.mkdir(parents=True, exist_ok=True)
     # Serialize label admission and id allocation across all submitters.

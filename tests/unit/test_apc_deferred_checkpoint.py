@@ -47,7 +47,7 @@ def test_checkpoint_is_deferred_and_its_lazy_arrays_survive_live_mutation(monkey
     assert len(calls) == 1
     ids, frozen, kwargs = calls[0]
     assert ids == tuple(range(32))
-    assert kwargs == {"extra_hash": 91, "_generation": 0}
+    assert kwargs == {"extra_hash": 91, "_generation": 0, "_owned": True}
     assert frozen[1].offset == 32
     assert frozen[0].cache[0].tolist() == [[[1.0] * 3] * 2]
     assert frozen[0].cache[1].tolist() == [[[7.0] * 3] * 2]
@@ -485,3 +485,190 @@ def test_arrays_restore_view_only_for_known_suffix_prefill(monkeypatch, fresh):
     assert prefix == 32
     assert restored[0][0].tolist() == source[0].tolist()
     assert restored[0][0] is not source[0]
+
+
+def test_flush_frees_superseded_checkpoints_before_copying_the_new_ones(monkeypatch):
+    from yunshu_engine import apc_manager
+
+    manager = _mgr()
+    coordinator = _coordinator(manager)
+    coordinator.defer_checkpoint_stores = True
+    kv = KVCache()
+    kv.update_and_fetch(mx.ones((1, 1, 32, 4)), mx.ones((1, 1, 32, 4)))
+    log = []
+    real_release = manager.release_superseded
+    monkeypatch.setattr(
+        manager,
+        "release_superseded",
+        lambda *a, **kw: (log.append("release"), real_release(*a, **kw))[1],
+    )
+    monkeypatch.setattr(
+        apc_manager, "materialize", lambda lists, *a, **kw: log.append("copy")
+    )
+    monkeypatch.setattr(
+        manager, "store_exact_cache", lambda *a, **kw: log.append("store") or True
+    )
+    assert coordinator.store_checkpoint(list(range(32)), [kv])
+    coordinator.flush_deferred_checkpoints()
+    assert log == ["release", "copy", "store"]
+
+
+def test_superseded_checkpoint_is_gone_before_the_copy_is_made():
+    manager = _mgr()
+    coordinator = _coordinator(manager)
+    coordinator.defer_checkpoint_stores = True
+    old = KVCache()
+    old.update_and_fetch(mx.ones((1, 1, 32, 4)), mx.ones((1, 1, 32, 4)))
+    manager.begin_request()
+    assert manager.store_exact_cache(list(range(32)), [old])
+    assert len(manager._exact_cache) == 1
+    manager.begin_request()
+    live = KVCache()
+    live.update_and_fetch(mx.ones((1, 1, 48, 4)), mx.ones((1, 1, 48, 4)))
+    seen = []
+    from yunshu_engine import apc_manager
+
+    real = apc_manager.materialize
+    apc_manager.materialize = lambda lists, *a, **kw: (
+        seen.append(len(manager._exact_cache)),
+        real(lists, *a, **kw),
+    )[1]
+    try:
+        assert coordinator.store_checkpoint(list(range(48)), [live])
+        coordinator.flush_deferred_checkpoints()
+    finally:
+        apc_manager.materialize = real
+    assert seen == [0]  # the 32-token checkpoint was released before the copy
+    assert [len(e.token_ids) for e in manager._exact_cache.values()] == [48]
+
+
+def test_materialize_groups_by_bytes_with_identical_values(
+    monkeypatch,
+):
+    from yunshu_engine.apc_manager import materialize
+
+    lists = [[mx.ones((2, 2)) * (10 * j + i) + 0 for i in range(10)] for j in range(2)]
+    calls = []
+    real = mx.eval
+    monkeypatch.setattr(mx, "eval", lambda xs: (calls.append(len(xs)), real(xs))[1])
+    materialize(lists, limit_bytes=64)  # each array is 16 bytes: 2 positions per eval
+    assert calls == [4, 4, 4, 4, 4]
+    calls.clear()
+    materialize(
+        lists
+    )  # a small cache is one evaluation (each one is a synchronization)
+    assert calls == [20]
+    assert [x.tolist()[0][0] for x in lists[1]] == [10.0 + i for i in range(10)]
+    # unequal lengths still evaluate everything
+    ragged = [[mx.ones(3) + 1 for _ in range(5)], [mx.ones(3) + 2 for _ in range(2)]]
+    materialize(ragged, limit_bytes=24)
+    assert ragged[1][1].tolist() == [3.0, 3.0, 3.0]
+
+
+def test_materialize_of_nothing_is_a_noop():
+    from yunshu_engine.apc_manager import materialize
+
+    materialize([])
+    materialize([[]])
+
+
+def _pending(n, kv_rows, extra_hash=0, generation=1, with_state=True):
+    kv = KVCache()
+    kv.keys = mx.arange(kv_rows * 4, dtype=mx.float32).reshape(1, 1, kv_rows, 4)
+    kv.values = kv.keys + 1000
+    kv.offset = kv_rows
+    rec = ArraysCache(1)
+    rec.cache = [mx.ones((1, 2)) * n]
+    targets = [rec.cache[0], kv.keys, kv.values]
+    return (tuple(range(n)), [rec, kv], extra_hash, targets, generation, None, ())
+
+
+def test_shorter_checkpoint_becomes_views_of_the_longer_one_with_equal_bits():
+    from yunshu_engine.apc_manager import share_prefix_rows
+
+    short, long_ = _pending(32, 32), _pending(48, 48)
+    own_keys = short[1][1].keys
+    expected = own_keys.tolist()
+    views = share_prefix_rows([short, long_])
+    mx.eval(views)
+    kv_s = short[1][1]
+    assert kv_s.keys is not own_keys  # its own copy is dropped, never evaluated
+    assert kv_s.keys.shape == (1, 1, 32, 4)
+    assert kv_s.keys.tolist() == expected  # identical rows
+    assert kv_s.values.tolist() == (own_keys + 1000).tolist()
+    assert len(short[3]) == 1  # only the recurrent state is still copied on its own
+    assert len(long_[3]) == 3
+    assert short[1][0].cache[0].tolist() == [[32.0, 32.0]]  # recurrent state untouched
+
+
+def test_prefix_rows_are_not_shared_beyond_the_tail_across_requests_or_keys():
+    from yunshu_engine.apc_manager import share_prefix_rows
+
+    far = (_pending(32, 32), _pending(32 + 5000, 8))  # > max_tail apart
+    assert share_prefix_rows(list(far)) == []
+    other_key = (_pending(32, 32), _pending(48, 48, extra_hash=7))
+    assert share_prefix_rows(list(other_key)) == []
+    other_gen = (_pending(32, 32), _pending(48, 48, generation=2))
+    assert share_prefix_rows(list(other_gen)) == []
+    divergent = _pending(48, 48)
+    divergent = (tuple(range(1, 49)), *divergent[1:])
+    assert share_prefix_rows([_pending(32, 32), divergent]) == []
+
+
+def test_flush_stores_the_shared_checkpoint_without_copying_its_rows(monkeypatch):
+    manager = _mgr()
+    coordinator = _coordinator(manager)
+    coordinator.defer_checkpoint_stores = True
+    live = KVCache()
+    live.update_and_fetch(mx.ones((1, 1, 48, 4)), mx.ones((1, 1, 48, 4)) * 3)
+    short = KVCache()
+    short.update_and_fetch(mx.ones((1, 1, 32, 4)), mx.ones((1, 1, 32, 4)) * 3)
+    coordinator.store_checkpoint(list(range(32)), [short])
+    coordinator.store_checkpoint(list(range(48)), [live])
+    coordinator.flush_deferred_checkpoints()
+    entries = {len(e.token_ids): e for e in manager._exact_cache.values()}
+    assert set(entries) == {32, 48}
+    s, big = entries[32].prompt_cache[0], entries[48].prompt_cache[0]
+    assert s.keys.tolist() == big.keys[..., :32, :].tolist()
+    assert s.offset == 32 and big.offset == 48
+
+
+def test_restore_with_growth_equals_upstream_clone_bit_for_bit_in_one_copy():
+    import mlx_vlm.apc as upstream
+
+    from yunshu_engine import apc_manager  # noqa: F401  (installs the clone)
+
+    clone = upstream._clone_prompt_cache_for_apc
+    original = clone._upstream
+    for rows, capacity in ((40, 300), (40, 40), (300, 100), (257, 600)):
+        kv = KVCache()
+        kv.keys = mx.arange(rows * 4, dtype=mx.float32).reshape(1, 1, rows, 4)
+        kv.values = kv.keys * 3 + 1
+        kv.offset = rows
+        rec = ArraysCache(1)
+        rec.cache = [mx.ones((1, 2))]
+        a = clone([rec, kv], min_capacity_tokens=capacity)
+        b = original([rec, kv], min_capacity_tokens=capacity)
+        assert a[1].keys.shape == b[1].keys.shape
+        assert a[1].offset == b[1].offset == rows
+        assert a[1].keys.tolist() == b[1].keys.tolist()
+        assert a[1].values.tolist() == b[1].values.tolist()
+        assert a[0].cache[0].tolist() == b[0].cache[0].tolist()
+        assert a[1].keys is not kv.keys  # a private copy
+
+
+def test_restore_of_a_strided_view_checkpoint_matches_upstream():
+    import mlx_vlm.apc as upstream
+
+    from yunshu_engine import apc_manager  # noqa: F401
+
+    clone = upstream._clone_prompt_cache_for_apc
+    donor = mx.arange(64 * 4, dtype=mx.float32).reshape(1, 1, 64, 4)
+    view = KVCache()
+    view.keys = donor[..., :48, :]
+    view.values = donor[..., :48, :] + 5
+    view.offset = 48
+    a = clone([view], min_capacity_tokens=70)
+    b = clone._upstream([view], min_capacity_tokens=70)
+    assert a[0].keys.tolist() == b[0].keys.tolist()
+    assert a[0].values.tolist() == b[0].values.tolist()

@@ -141,6 +141,35 @@ def preflight(cmd: list[str], cwd: str, env: dict[str, str]) -> list[str]:
     return problems
 
 
+_OUT_FLAGS = ("--out", "--output", "--out-dir", "--outdir", "--log")
+
+
+def ensure_out_dirs(cmd: list[str], cwd: str) -> list[str]:
+    """Create the missing parent directory of every output path the job names
+    (``--out F`` / ``--out=F``); a job must not fail after its queue wait because
+    its results directory was never made. Returns the directories created."""
+    made: list[str] = []
+    for i, a in enumerate(cmd):
+        path = None
+        if a in _OUT_FLAGS and i + 1 < len(cmd):
+            path = cmd[i + 1]
+        elif a.startswith(tuple(f + "=" for f in _OUT_FLAGS)):
+            path = a.split("=", 1)[1]
+        if not path or path.startswith("-") or "$" in path:
+            continue
+        full = path if os.path.isabs(path) else os.path.join(cwd, path)
+        parent = (
+            full
+            if a.startswith("--out-dir") or a.startswith("--outdir")
+            else os.path.dirname(full)
+        )
+        if parent and not os.path.isdir(parent):
+            with contextlib.suppress(OSError):
+                os.makedirs(parent, exist_ok=True)
+                made.append(parent)
+    return made
+
+
 # ---------------------------------------------------------------- timeouts
 
 _NOISE = re.compile(r"^(r?\d+[a-z]?|\d{3,}[a-z0-9]*|[a-z]|[a-z]\d+|[0-9a-f]{4,})$")
