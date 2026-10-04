@@ -42,7 +42,7 @@ OUT = Path(os.environ.get("TFB_OUT", str(WORK)))
 
 
 def free_port():
-    for p in range(18990, 19000):
+    for p in range(18990, int(os.environ.get("TFB_PORT_LAST", "18999")) + 1):
         with socket.socket() as s:
             try:
                 s.bind(("127.0.0.1", p))

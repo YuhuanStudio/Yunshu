@@ -874,3 +874,22 @@ HTTP follow-up TTFT, 3 reversed-order quiet reps, same harness as the README row
 | 32K prose turn-2 | 689 ms | 674 ms | -15 |
 
 Jobs: `1004-111105-00-prefill7-tokprefix2-http32768` (rc0, 614 s), `-http8192` (rc0, 298 s). Reference TensorFold from codex-prefill6 (`1004-081813-00-prefill6-readme-http32k-fixed-r3-0819`, same harness, same day): 32K code 671 ms, prose 656 ms. The 32K gap is therefore 10 ms (code) / 18 ms (prose), not closed; 8K code is now 492 vs 505 ms README TensorFold. README rows are not updated because 32K is not at parity.
+### 2026-10-04 — server memory, v0.1.3 vs main (no growth)
+
+M5 Max 128 GiB, Jundot/Qwen3.8-27B-oQ4e-mtp, default settings (RAM APC auto), `scripts/research/memory_ab.py`,
+two fresh servers per arm alternated (v0.1.3 tag vs main b6a36e3e), job `1004-095951-00-memab-27b-r2` (rc 0,
+complete). Process-tree physical footprint after each request (GiB):
+
+| step | v0.1.3 (2 reps) | main (2 reps) |
+|---|---|---|
+| ready | 16.98 / 17.04 | 16.94 / 17.04 |
+| 3 short 1K requests | 24.45 / 23.94 | 23.95 / 18.77 |
+| 8K turn 2 | 26.02 / 26.26 | 26.32 / 27.25 |
+| 32K turn 2 | 32.52 / 32.77 | 32.83 / 37.82 (APC 10.9 vs 4.2 GiB held) |
+| 96K peak during prefill | 59.29 / 67.50 | 55.35 / 58.82 |
+| idle 20 s after 96K | 38.47 / 50.83 | 38.83 / 39.18 |
+
+Where both arms hold the same prefix cache they agree within 0.4 GiB; the spread between reps comes from what the
+prefix cache keeps (APC GiB differs per rep), not from the code version. Main's 96K peak is lower. Open in both
+versions: after the 96K turn the APC reports 0 GiB yet MLX active memory stays ~32 GiB (weights ~16 GiB), so ~16 GiB
+is held by something other than weights and prefix cache.

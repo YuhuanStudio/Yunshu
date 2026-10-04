@@ -542,3 +542,115 @@ def test_running_unlabelled_backlog_job_keeps_running_when_p0_does_not_fit(
     q.submit(["true"], "big-128k", 1, 0, mem_gb=80.0)
     assert q._priority_step(pauser, q.ServingGate(), now) is False
     assert not pauser.paused and not q._read(q.JOBS / "low.json").get("cancel")
+
+
+def test_failed_rep_cancels_its_pending_siblings(q):
+    job(q, "r1", label="wide8-api-small-r1", state="pending", submitted=100)
+    job(q, "r2", label="wide8-api-small-r2", state="pending", submitted=101)
+    job(q, "big", label="wide8-api-big-r1", state="pending", submitted=101)
+    job(q, "late", label="wide8-api-small-r9", state="pending", submitted=100 + 7200)
+    failed = dict(
+        id="r0", label="wide8-api-small-r0", state="failed", rc=1, submitted=99
+    )
+    assert sorted(q._cancel_siblings(failed)) == ["r1", "r2"]
+    assert q._read(q.JOBS / "r1.json")["cancel"] is True
+    assert "r0 failed" in q._read(q.JOBS / "r2.json")["cancel_reason"]
+    assert not q._read(q.JOBS / "big.json").get("cancel")
+    assert not q._read(q.JOBS / "late.json").get("cancel")
+    assert q._cancel_siblings(dict(failed, state="timeout")) == []
+    assert q._cancel_siblings(dict(failed, label="solo")) == []
+    assert q._stem("prefill6-readme-http32k-r3-0800") == "prefill6-readme-http32k"
+
+
+def test_stem_keeps_sizes(q):
+    assert q._stem("memab-27b-r2") == "memab-27b"
+    assert q._stem("wide7-api-core-pilot-10b") == "wide7-api-core-pilot-10b"
+
+
+def test_external_worktrees_take_turns(q):
+    import time
+
+    now = time.time()
+    w = "/Volumes/P5Plus/yunshu-build/codex/worktrees"
+    assert q._owner(dict(cwd=f"{w}/wide-lead/x", env={})) == "wide-lead"
+    assert q._owner(dict(cwd="/repo/.claude/worktrees/a/b", env={})) == "a"
+    assert q._owner(dict(cwd="/repo", env={})) == "main"
+    jobs = [
+        dict(
+            id="ran",
+            label="wide8-a",
+            state="done",
+            priority=0,
+            submitted=now - 99,
+            started=now - 60,
+            cwd=f"{w}/wide-lead",
+            env={},
+        ),
+        dict(
+            id="w2",
+            label="wide8-b",
+            state="pending",
+            priority=0,
+            submitted=now - 50,
+            cwd=f"{w}/wide-lead",
+            env={},
+        ),
+        dict(
+            id="p1",
+            label="prefill7-c",
+            state="pending",
+            priority=0,
+            submitted=now - 10,
+            cwd=f"{w}/prefill-lead",
+            env={},
+        ),
+    ]
+    # wide-lead just ran: the other line goes next even though it submitted later.
+    assert q._pick(jobs)["id"] == "p1"
+
+
+def test_drain_flag_needs_a_live_restarter(q):
+    import os
+
+    assert not q._draining()
+    (q.ROOT / "drain").write_text(f"{os.getpid()} 1")
+    assert q._draining()
+    (q.ROOT / "drain").write_text("999999 1")  # restarter gone: queue keeps going
+    assert not q._draining()
+
+
+def test_draining_daemon_starts_no_priority_work(q, monkeypatch):
+    import os
+
+    now = 100_000.0
+    monkeypatch.setattr(q.time, "time", lambda: now)
+    low = dict(
+        id="low",
+        state="running",
+        priority=-1,
+        submitted=now - 60,
+        started=now - 60,
+        pid=1,
+        env={},
+    )
+    q._write(q.JOBS / "low.json", low)
+    q.submit(["true"], "x-smoke", 1, 0)
+    ran = []
+    monkeypatch.setattr(q, "_execute", lambda job, *a, **k: ran.append(job["id"]))
+    pauser = q.Pauser(low, q.JOBS / "low.json")
+    monkeypatch.setattr(pauser, "_signal", lambda sig: None)
+    (q.ROOT / "drain").write_text(f"{os.getpid()} 1")
+    assert q._priority_step(pauser, q.ServingGate(), now) is False
+    assert ran == [] and not pauser.paused
+
+
+def test_stats_counts_wasted_minutes(q, capsys, monkeypatch):
+    now = 100_000.0
+    monkeypatch.setattr(q.time, "time", lambda: now)
+    job(q, "a", label="wide8-x", state="done", started=now - 600, ended=now - 300)
+    job(q, "b", label="wide8-y", state="timeout", started=now - 1500, ended=now - 900)
+    job(q, "c", label="prefill7-z", state="failed", started=now - 120, ended=now - 60)
+    q.stats(24)
+    out = capsys.readouterr().out
+    assert "3 jobs, 16 GPU min, 11 min wasted" in out
+    assert "wide8" in out and "wasted=  10.0 min" in out

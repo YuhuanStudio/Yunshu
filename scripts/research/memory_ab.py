@@ -10,6 +10,7 @@ MLX allocator pool and MLX active / peak memory. Arms alternate (A B A B ...).
 """
 
 import argparse
+import contextlib
 import json
 import os
 import random
@@ -24,6 +25,7 @@ from process_memory import process_tree_memory  # noqa: E402
 
 GIB = 2**30
 OUT = "memory_ab.jsonl"
+SIZES = (8192, 32768, 98304)
 WORDS = [
     "alpha",
     "beta",
@@ -73,10 +75,8 @@ def metrics(url):
             continue
         key, val = line.rsplit(" ", 1)
         if key.startswith("yunshu_gpu_memory_bytes") or "apc_resident_bytes" in key:
-            try:
+            with contextlib.suppress(ValueError):
                 out[key] = round(float(val) / GIB, 3)
-            except ValueError:
-                pass
     return out
 
 
@@ -93,8 +93,14 @@ def chat(url, messages, max_tokens):
     return msg.get("content") or "", data.get("usage", {}), time.time() - t
 
 
-def run_arm(name, tree, model, port, rep, emit):
-    env = dict(os.environ, PYTHONPATH=os.path.join(tree, "python"))
+def run_arm(name, tree, model, port, rep, emit, extra_env=None):
+    env = dict(
+        os.environ,
+        PYTHONPATH=os.path.join(tree, "python"),
+        YUNSHU_AUTH_DISABLED="1",
+        YUNSHU_DEBUG_ROUTES="1",
+    )
+    env.update(extra_env or {})
     log = open(f"{os.path.splitext(OUT)[0]}_{name}_{rep}.log", "w")  # noqa: SIM115
     proc = subprocess.Popen(
         [
@@ -131,13 +137,25 @@ def run_arm(name, tree, model, port, rep, emit):
             try:
                 urllib.request.urlopen(url + "/v1/models", timeout=2)
                 break
-            except Exception:  # noqa: BLE001
+            except Exception as exc:  # noqa: BLE001
                 if proc.poll() is not None:
-                    raise RuntimeError(f"{name}: server exited rc={proc.returncode}")
+                    raise RuntimeError(
+                        f"{name}: server exited rc={proc.returncode}"
+                    ) from exc
                 time.sleep(1)
         else:
             raise RuntimeError(f"{name}: server not ready")
         threading.Thread(target=sampler, daemon=True).start()
+
+        def census(url, step):
+            try:
+                text = urllib.request.urlopen(
+                    url + "/debug/memory-census?min_mib=64", timeout=300
+                ).read()
+            except Exception as exc:  # noqa: BLE001
+                emit(dict(arm=name, rep=rep, step=step, census_error=str(exc)))
+                return
+            emit(dict(arm=name, rep=rep, step=step, census=json.loads(text)))
 
         def record(step, usage=None, secs=None):
             fp = process_tree_memory(proc.pid)["physical_footprint_sum_bytes"]
@@ -168,7 +186,7 @@ def run_arm(name, tree, model, port, rep, emit):
                 256,
             )
             record(f"short{i}", u, s)
-        for size in (8192, 32768, 98304):
+        for size in SIZES:
             doc = code_doc(size, size - 200)
             msgs = [
                 {
@@ -186,6 +204,17 @@ def run_arm(name, tree, model, port, rep, emit):
             record(f"{size // 1024}k-turn2", u, s)
         time.sleep(20)
         record("idle20s")
+        census(url, "idle20s")
+        # Does memory held after the long turn return once a short request runs?
+        _, u, s = chat(
+            url,
+            [{"role": "user", "content": code_doc(999, 900) + "\nSummarize this."}],
+            64,
+        )
+        record("short-after", u, s)
+        time.sleep(20)
+        record("idle-after")
+        census(url, "idle-after")
     finally:
         stop.set()
         try:
@@ -202,10 +231,17 @@ def main():
     ap.add_argument("--model", required=True)
     ap.add_argument("--port", type=int, default=18997)
     ap.add_argument("--reps", type=int, default=2)
+    ap.add_argument("--sizes", type=int, nargs="+", default=[8192, 32768, 98304])
     ap.add_argument("--out", required=True)
+    ap.add_argument(
+        "--arm-env", action="append", default=[], help="name:K=V (server env of that arm)"
+    )
+    ap.add_argument(
+        "--rep-offset", type=int, default=0, help="first rep index (one rep per job)"
+    )
     a = ap.parse_args()
-    global OUT
-    OUT = a.out
+    global OUT, SIZES
+    OUT, SIZES = a.out, tuple(a.sizes)
     arms = [x.split("=", 1) for x in a.arm]
     complete = 0
     with open(a.out, "a") as f:
@@ -215,10 +251,16 @@ def main():
             f.flush()
             print(json.dumps(row), flush=True)
 
-        for rep in range(a.reps):
+        arm_env = {}
+        for item in a.arm_env:
+            who, kv = item.split(":", 1)
+            k, v = kv.split("=", 1)
+            arm_env.setdefault(who, {})[k] = v
+        for i in range(a.reps):
+            rep = a.rep_offset + i
             order = arms if rep % 2 == 0 else arms[::-1]
             for name, tree in order:
-                run_arm(name, tree, a.model, a.port, rep, emit)
+                run_arm(name, tree, a.model, a.port, rep, emit, arm_env.get(name))
                 complete += 1
         emit(dict(complete=complete == a.reps * len(arms)))
 
