@@ -868,12 +868,12 @@ HTTP follow-up TTFT, 3 reversed-order quiet reps, same harness as the README row
 
 | ctx, kind | reuse off | reuse on | change |
 |---|---:|---:|---:|
-| 8K code turn-2 | 498 ms | 492 ms | -6 |
-| 8K prose turn-2 | 505 ms | 499 ms | -6 |
+| 8K code turn-2 | 500 ms | 494 ms | -6 |
+| 8K prose turn-2 | 508 ms | 504 ms | -4 |
 | 32K code turn-2 | 703 ms | 681 ms | -22 |
 | 32K prose turn-2 | 689 ms | 674 ms | -15 |
 
-Jobs: `1004-111105-00-prefill7-tokprefix2-http32768` (rc0, 614 s), `-http8192` (rc0, 298 s). Reference TensorFold from codex-prefill6 (`1004-081813-00-prefill6-readme-http32k-fixed-r3-0819`, same harness, same day): 32K code 671 ms, prose 656 ms. The 32K gap is therefore 10 ms (code) / 18 ms (prose), not closed; 8K code is now 492 vs 505 ms README TensorFold. README rows are not updated because 32K is not at parity.
+Jobs: `1004-111105-00-prefill7-tokprefix2-http32768` (rc0, 614 s), `-http8192` was marked contended by a gpuq daemon restart and re-measured as `1004-133111-00-prefill7-tokprefix3-http8192` (quiet, rc0; the 8K rows above are the re-measurement; digests identical across arms). Reference TensorFold from codex-prefill6 (`1004-081813-00-prefill6-readme-http32k-fixed-r3-0819`, same harness, same day): 32K code 671 ms, prose 656 ms. The 32K gap is therefore 10 ms (code) / 18 ms (prose), not closed; 8K code is now 494 vs 505 ms README TensorFold. README rows are not updated because 32K is not at parity.
 ### 2026-10-04 — server memory, v0.1.3 vs main (no growth)
 
 M5 Max 128 GiB, Jundot/Qwen3.8-27B-oQ4e-mtp, default settings (RAM APC auto), `scripts/research/memory_ab.py`,
