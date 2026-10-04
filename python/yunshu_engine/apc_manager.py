@@ -49,24 +49,48 @@ _CANONICAL_LOOKUP: contextvars.ContextVar[
 
 GIB = 1 << 30
 
-# ``APCManager.store_exact_cache`` clones the cache it is given, so a checkpoint that is
-# already a private snapshot (the runner's deferred captures) was copied twice, and the
-# second copy was live next to the first until the call returned. While this is set the
-# clone hands the snapshot itself over; the arrays are the same bits.
+# ``APCManager``'s clone of a prompt cache (restoring a checkpoint, storing one) differs
+# from upstream in two ways, both pure scheduling of the same copies:
+# - ``store_exact_cache`` clones the cache it is given, so a checkpoint that is already a
+#   private snapshot (the runner's deferred captures) was copied twice and both copies were
+#   live until the call returned. While ``_OWNED_SNAPSHOT`` is set the snapshot itself is
+#   handed over;
+# - the copies of all layers were evaluated at once, so a restore held the source, the
+#   copy and the capacity-padded copy of every layer together (3x the cache at its peak).
+#   They are evaluated a few layers at a time, so only a few layers' intermediates exist.
 _OWNED_SNAPSHOT: contextvars.ContextVar[bool] = contextvars.ContextVar(
     "yunshu_apc_owned_snapshot", default=False
 )
+CLONE_EVAL_ARRAYS = 8
 
 
 def _install_owned_snapshot_clone() -> None:
     current = _upstream_apc._clone_prompt_cache_for_apc
     if getattr(current, "_yunshu_owned_snapshot", False):
         return
+    clone_entry = getattr(_upstream_apc, "_clone_cache_entry_for_apc", None)
 
     def clone(prompt_cache, *, min_capacity_tokens=None):
         if _OWNED_SNAPSHOT.get():
             return list(prompt_cache)
-        return current(prompt_cache, min_capacity_tokens=min_capacity_tokens)
+        if clone_entry is None:
+            return current(prompt_cache, min_capacity_tokens=min_capacity_tokens)
+        import mlx.core as mx
+
+        out, targets = [], []
+        for c in prompt_cache:
+            copied = clone_entry(
+                c, min_capacity_tokens=min_capacity_tokens, eval_targets=targets
+            )
+            if copied is None:
+                return None
+            out.append(copied)
+            if len(targets) >= CLONE_EVAL_ARRAYS:
+                mx.eval(targets)
+                targets.clear()
+        if targets:
+            mx.eval(targets)
+        return out
 
     clone._yunshu_owned_snapshot = True  # type: ignore[attr-defined]
     _upstream_apc._clone_prompt_cache_for_apc = clone
@@ -498,6 +522,60 @@ def materialize(target_lists, group: int = MATERIALIZE_GROUP) -> None:
             mx.eval(batch)
 
 
+SHARE_MAX_TAIL = 4096
+
+
+def share_prefix_rows(pending, max_tail: int = SHARE_MAX_TAIL) -> list:
+    """Make a shorter checkpoint's K/V rows views of a longer one's of the same request.
+
+    A later checkpoint holds the earlier one's rows unchanged (K/V rows are written once, in
+    order), so its first ``m`` rows ARE the earlier checkpoint's: the earlier one is stored
+    as views of them and its own copy is never made. Same bits, one physical buffer. The
+    longer checkpoint's buffer stays alive while a view of it does, so only checkpoints at
+    most ``max_tail`` tokens apart share (that bounds what a surviving view can pin beyond
+    its own size). Recurrent state differs per position and is never shared. Returns the
+    views to evaluate once the longer checkpoint's arrays exist.
+    """
+    from mlx_vlm.models.cache import KVCache
+
+    views: list = []
+    for short in pending:
+        tokens, snapshot, extra_hash, targets, generation = short[:5]
+        n = len(tokens)
+        donors = [
+            p
+            for p in pending
+            if p is not short
+            and p[2] == extra_hash
+            and p[4] == generation
+            and 0 < len(p[0]) - n <= max_tail
+            and p[0][:n] == tokens
+        ]
+        if not donors:
+            continue
+        donor = max(donors, key=lambda p: len(p[0]))
+        for mine, theirs in zip(snapshot, donor[1], strict=False):
+            if type(mine) is not KVCache or type(theirs) is not KVCache:
+                continue
+            if mine.keys is None or theirs.keys is None or mine.values is None:
+                continue
+            rows = mine.keys.shape[-2]
+            if (
+                mine.values.shape[-2] != rows
+                or theirs.keys.shape[-2] < rows
+                or theirs.values.shape[-2] < rows
+                or mine.keys.shape[:-2] != theirs.keys.shape[:-2]
+                or mine.keys.dtype != theirs.keys.dtype
+            ):
+                continue
+            own = {id(mine.keys), id(mine.values)}
+            targets[:] = [t for t in targets if id(t) not in own]
+            mine.keys = theirs.keys[..., :rows, :]
+            mine.values = theirs.values[..., :rows, :]
+            views += [mine.keys, mine.values]
+    return views
+
+
 class _Coordinator(APCCoordinator):
     """Checkpoint positions: the prompt end, one interval boundary, the end of the system turn."""
 
@@ -768,7 +846,12 @@ class _Coordinator(APCCoordinator):
         for tokens, _, extra_hash, _, generation, _, _ in pending:
             if release is not None:
                 release(tokens, extra_hash, _generation=generation)
+        views = share_prefix_rows(pending)
         materialize([entry[3] for entry in pending])
+        if views:
+            import mlx.core as mx
+
+            mx.eval(views)
         for (
             tokens,
             snapshot,

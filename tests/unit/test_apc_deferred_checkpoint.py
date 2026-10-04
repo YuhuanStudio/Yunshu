@@ -565,3 +565,64 @@ def test_materialize_of_nothing_is_a_noop():
 
     materialize([])
     materialize([[]])
+
+
+def _pending(n, kv_rows, extra_hash=0, generation=1, with_state=True):
+    kv = KVCache()
+    kv.keys = mx.arange(kv_rows * 4, dtype=mx.float32).reshape(1, 1, kv_rows, 4)
+    kv.values = kv.keys + 1000
+    kv.offset = kv_rows
+    rec = ArraysCache(1)
+    rec.cache = [mx.ones((1, 2)) * n]
+    targets = [rec.cache[0], kv.keys, kv.values]
+    return (tuple(range(n)), [rec, kv], extra_hash, targets, generation, None, ())
+
+
+def test_shorter_checkpoint_becomes_views_of_the_longer_one_with_equal_bits():
+    from yunshu_engine.apc_manager import share_prefix_rows
+
+    short, long_ = _pending(32, 32), _pending(48, 48)
+    own_keys = short[1][1].keys
+    expected = own_keys.tolist()
+    views = share_prefix_rows([short, long_])
+    mx.eval(views)
+    kv_s = short[1][1]
+    assert kv_s.keys is not own_keys  # its own copy is dropped, never evaluated
+    assert kv_s.keys.shape == (1, 1, 32, 4)
+    assert kv_s.keys.tolist() == expected  # identical rows
+    assert kv_s.values.tolist() == (own_keys + 1000).tolist()
+    assert len(short[3]) == 1  # only the recurrent state is still copied on its own
+    assert len(long_[3]) == 3
+    assert short[1][0].cache[0].tolist() == [[32.0, 32.0]]  # recurrent state untouched
+
+
+def test_prefix_rows_are_not_shared_beyond_the_tail_across_requests_or_keys():
+    from yunshu_engine.apc_manager import share_prefix_rows
+
+    far = (_pending(32, 32), _pending(32 + 5000, 8))  # > max_tail apart
+    assert share_prefix_rows(list(far)) == []
+    other_key = (_pending(32, 32), _pending(48, 48, extra_hash=7))
+    assert share_prefix_rows(list(other_key)) == []
+    other_gen = (_pending(32, 32), _pending(48, 48, generation=2))
+    assert share_prefix_rows(list(other_gen)) == []
+    divergent = _pending(48, 48)
+    divergent = (tuple(range(1, 49)), *divergent[1:])
+    assert share_prefix_rows([_pending(32, 32), divergent]) == []
+
+
+def test_flush_stores_the_shared_checkpoint_without_copying_its_rows(monkeypatch):
+    manager = _mgr()
+    coordinator = _coordinator(manager)
+    coordinator.defer_checkpoint_stores = True
+    live = KVCache()
+    live.update_and_fetch(mx.ones((1, 1, 48, 4)), mx.ones((1, 1, 48, 4)) * 3)
+    short = KVCache()
+    short.update_and_fetch(mx.ones((1, 1, 32, 4)), mx.ones((1, 1, 32, 4)) * 3)
+    coordinator.store_checkpoint(list(range(32)), [short])
+    coordinator.store_checkpoint(list(range(48)), [live])
+    coordinator.flush_deferred_checkpoints()
+    entries = {len(e.token_ids): e for e in manager._exact_cache.values()}
+    assert set(entries) == {32, 48}
+    s, big = entries[32].prompt_cache[0], entries[48].prompt_cache[0]
+    assert s.keys.tolist() == big.keys[..., :32, :].tolist()
+    assert s.offset == 32 and big.offset == 48
