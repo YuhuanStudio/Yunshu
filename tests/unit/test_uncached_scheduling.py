@@ -637,3 +637,15 @@ def test_qualified_scheduler_default_and_overrides(monkeypatch, tmp_path, name):
     assert not settings.scheduling_enabled(name, qualified=True)
     monkeypatch.setenv(name, "1")
     assert settings.scheduling_enabled(name, qualified=False)
+
+
+def test_idle_round_driver_keeps_the_upstream_handoff(atoms):
+    """A built driver with no driver rows (every request on the upstream path)
+    must not switch the upstream scheduler off."""
+    r, clock = atoms
+    r.driver = object()
+    r._primary_handoff_at = clock[0]
+    assert r._handoff_delay() == 0.002
+    r._driver_jobs[1] = object()
+    assert r._handoff_delay() == 0
+    r._driver_jobs.clear()

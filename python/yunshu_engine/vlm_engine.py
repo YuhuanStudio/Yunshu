@@ -1604,6 +1604,7 @@ class VLMEngine:
         spec_family = self._config.get("model_type") in self._SPEC_MODEL_TYPES
         lm = self._model.language_model
         use_driver = self._round_driver_wanted(lm)
+        driver_lanes = 0
         if use_driver:
             # Row-invariant lane projections everywhere (before any verify
             # kernel install repacks them): the round driver's rows, and the
@@ -1611,6 +1612,7 @@ class VLMEngine:
             from .kernels import lane_linear
 
             lanes = lane_linear.convert(lm)
+            driver_lanes = lanes["converted"]
             if lm.args.tie_word_embeddings:
                 lm._yunshu_lane_head = lane_linear.lane_head(lm.model.embed_tokens)
             logger.info(
@@ -1711,9 +1713,11 @@ class VLMEngine:
                 if ready():
                     from .kernels import lane_linear
 
-                    kernels["lane_linear"] = lane_linear.convert(
-                        self._model.language_model
-                    )["converted"]
+                    # (a second convert finds the driver's lanes already in place)
+                    kernels["lane_linear"] = (
+                        lane_linear.convert(self._model.language_model)["converted"]
+                        or driver_lanes
+                    )
                     # The round driver's own prefill calls LaneLinear.prefill and
                     # never reaches the row-count dependent dispatch of __call__,
                     # so the upstream path (lone and long cold prompts) keeps it.

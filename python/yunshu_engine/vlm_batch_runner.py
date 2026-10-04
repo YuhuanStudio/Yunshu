@@ -1624,7 +1624,7 @@ class VLMBatchRunner:
             not settings.scheduling_enabled(
                 "YUNSHU_UNCACHED_SCHEDULING", qualified=self.prefix_invariant
             )
-            or self.driver is not None
+            or self._driver_jobs
         ):
             return 0.0
         at = self._primary_handoff_at
@@ -1661,7 +1661,7 @@ class VLMBatchRunner:
                     settings.scheduling_enabled(
                         "YUNSHU_UNCACHED_SCHEDULING", qualified=self.prefix_invariant
                     )
-                    and self.driver is None
+                    and not self._driver_jobs
                     and self._primary_handoff_at is not None
                     and now - self._primary_handoff_at < PRIMARY_HANDOFF_S
                 )
@@ -1679,7 +1679,7 @@ class VLMBatchRunner:
                     settings.scheduling_enabled(
                         "YUNSHU_UNCACHED_SCHEDULING", qualified=self.prefix_invariant
                     )
-                    and self.driver is None
+                    and not self._driver_jobs
                 )
                 auxiliary = sum(
                     j.priority < 0 for j in [*active, *self._pending, *pending]
