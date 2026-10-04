@@ -199,7 +199,8 @@ def _tool_calls_out(tcs: list[dict] | None) -> list[dict]:
     for tc in tcs or []:
         fn = tc.get("function", {})
         try:
-            args = json.loads(fn.get("arguments") or "{}")
+            raw = fn.get("arguments")
+            args = raw if isinstance(raw, dict) else json.loads(raw or "{}")
         except Exception:
             args = {}
         res.append({"function": {"name": fn.get("name"), "arguments": args}})
