@@ -140,6 +140,11 @@ class FastShape:
 
         return gdn_forward(self, layer, state, q, k, v, a, b)
 
+    def gdn_prework(self, mixed, conv_prev, layer):
+        from .dflash_fast import prework_gather
+
+        return prework_gather(mixed, conv_prev, self.conv_index(), layer)
+
     def parents_array(self):
         return self._parents
 

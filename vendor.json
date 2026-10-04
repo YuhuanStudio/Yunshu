@@ -201,6 +201,19 @@
   "derived": [
     {
       "kind": "derived",
+      "path": "python/yunshu_engine/dflash_fast.py",
+      "repo": "https://github.com/jundot/omlx",
+      "clone": "reference/omlx",
+      "upstream_paths": ["omlx/patches/qwen35_gdn_prework.py"],
+      "commit": "a98d8c8c",
+      "license": "Apache-2.0",
+      "local_changes": [
+        "prework_source(): the conv window is gathered inside the kernel from the cached conv tail and the window rows (conv_idx), and the unused conv-state output writes are dropped; every tap, product and sum is the upstream kernel's own line"
+      ],
+      "why": "fast-tree GDN prework without the per-layer concatenate + gather"
+    },
+    {
+      "kind": "derived",
       "path": "python/yunshu_engine/copy_drafter.py",
       "repo": "https://github.com/ashhart/TensorFold",
       "clone": "reference/TensorFold",

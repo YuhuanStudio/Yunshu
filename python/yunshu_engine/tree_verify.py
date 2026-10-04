@@ -350,21 +350,26 @@ def _gdn_layer(verifier, layer, x, cache, shape: TreeShape):
     state = cache[1]
     if state is None:
         state = mx.zeros((1, hv, dv, dk), dtype=mx.float32)
-    seq = mx.concatenate([conv_prev, mixed], axis=1)[0]  # [3 + W, C]
-    c_dim = seq.shape[-1]
-    windows = mx.take(seq, shape.conv_index(), axis=0).reshape(w, 3, c_dim)
-    inv = dk**-0.5
-    q, k, v, _ = gp.gdn_prework_fused(
-        mixed.reshape(w, 1, c_dim),
-        windows,
-        layer.conv1d.weight,
-        mx.array(inv * inv, dtype=dtype),
-        mx.array(inv, dtype=dtype),
-        hk,
-        hv,
-        dk,
-        dv,
-    )
+    c_dim = mixed.shape[-1]
+    prework = getattr(shape, "gdn_prework", None)
+    if prework is not None:
+        # fast tree: the conv window is gathered inside the prework kernel
+        q, k, v = prework(mixed, conv_prev, layer)
+    else:
+        seq = mx.concatenate([conv_prev, mixed], axis=1)[0]  # [3 + W, C]
+        windows = mx.take(seq, shape.conv_index(), axis=0).reshape(w, 3, c_dim)
+        inv = dk**-0.5
+        q, k, v, _ = gp.gdn_prework_fused(
+            mixed.reshape(w, 1, c_dim),
+            windows,
+            layer.conv1d.weight,
+            mx.array(inv * inv, dtype=dtype),
+            mx.array(inv, dtype=dtype),
+            hk,
+            hv,
+            dk,
+            dv,
+        )
     q = q.reshape(1, w, hk, dk)
     k = k.reshape(1, w, hk, dk)
     v = v.reshape(1, w, hv, dv)
