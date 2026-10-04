@@ -27,11 +27,10 @@ def test_arm_env_is_per_arm(monkeypatch, tmp_path):
     m = _load()
     seen = {}
 
-    def fake_run(name, tree, model, port, rep, emit):
-        seen[name] = dict(m.ARM_ENV.get(name, {}))
+    def fake_run(name, tree, model, port, rep, emit, extra_env=None):
+        seen[name] = dict(extra_env or {})
 
     monkeypatch.setattr(m, "run_arm", fake_run)
-    monkeypatch.setattr(m, "ARM_ENV", {})
     monkeypatch.setattr(
         sys,
         "argv",

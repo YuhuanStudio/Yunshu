@@ -25,7 +25,6 @@ from process_memory import process_tree_memory  # noqa: E402
 
 GIB = 2**30
 OUT = "memory_ab.jsonl"
-ARM_ENV: dict[str, dict[str, str]] = {}
 SIZES = (8192, 32768, 98304)
 WORDS = [
     "alpha",
@@ -94,15 +93,15 @@ def chat(url, messages, max_tokens):
     return msg.get("content") or "", data.get("usage", {}), time.time() - t
 
 
-def run_arm(name, tree, model, port, rep, emit):
+def run_arm(name, tree, model, port, rep, emit, extra_env=None):
     env = dict(
         os.environ,
         PYTHONPATH=os.path.join(tree, "python"),
         YUNSHU_AUTH_DISABLED="1",
         YUNSHU_DEBUG_ROUTES="1",
         YUNSHU_VLM_APC_DISK="0",
-        **ARM_ENV.get(name, {}),
     )
+    env.update(extra_env or {})
     log = open(f"{os.path.splitext(OUT)[0]}_{name}_{rep}.log", "w")  # noqa: SIM115
     proc = subprocess.Popen(
         [
@@ -266,13 +265,12 @@ def main():
         "--arm-env",
         action="append",
         default=[],
-        help="name:KEY=VALUE, an environment variable for one arm",
+        help="name:K=V (server env of that arm)",
+    )
+    ap.add_argument(
+        "--rep-offset", type=int, default=0, help="first rep index (one rep per job)"
     )
     a = ap.parse_args()
-    for item in a.arm_env:
-        who, kv = item.split(":", 1)
-        key, val = kv.split("=", 1)
-        ARM_ENV.setdefault(who, {})[key] = val
     global OUT, SIZES
     OUT, SIZES = a.out, tuple(a.sizes)
     arms = [x.split("=", 1) for x in a.arm]
@@ -284,10 +282,16 @@ def main():
             f.flush()
             print(json.dumps(row), flush=True)
 
-        for rep in range(a.reps):
+        arm_env = {}
+        for item in a.arm_env:
+            who, kv = item.split(":", 1)
+            k, v = kv.split("=", 1)
+            arm_env.setdefault(who, {})[k] = v
+        for i in range(a.reps):
+            rep = a.rep_offset + i
             order = arms if rep % 2 == 0 else arms[::-1]
             for name, tree in order:
-                run_arm(name, tree, a.model, a.port, rep, emit)
+                run_arm(name, tree, a.model, a.port, rep, emit, arm_env.get(name))
                 complete += 1
         emit(dict(complete=complete == a.reps * len(arms)))
 

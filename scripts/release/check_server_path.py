@@ -10,8 +10,14 @@ directly against a running server's streaming ``/v1/chat/completions``:
 - decode tok/s = tokens after the first / time after the first (the server's
   token count comes from ``usage``); one untimed warm-up run per case, then
   the median of ``--repeats``;
-- ratio = server / in-process per case; FAIL when the worst case is below
-  ``--min-ratio`` (default 0.95).
+- ratio = server / in-process per case, the two sides alternating which goes first;
+  FAIL when the geometric mean over cases is below ``--min-geomean`` (default 0.965) or
+  any single case is below ``--min-ratio`` (default 0.90, a gross-regression floor).
+  Thresholds come from 24 gate runs (96 case ratios, 2026-09-30..10-03): mean 0.997,
+  per-case sd 0.031 (the in-process side is the noisy one), per-run geomean sd 0.011.
+  A per-case floor of 0.95 on 4 cases failed ~1 run in 5 on noise alone while the mean
+  ratio was 1.0, so no server gap exists; a systematic 5% serving overhead puts the
+  geomean at 0.95 and still fails.
 
 Run it while the server is idle (the two share the GPU):
 
@@ -29,6 +35,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import math
 import os
 import statistics
 import sys
@@ -87,6 +94,27 @@ def _inprocess_spec_kind(engine) -> str:
     return choice.kind
 
 
+def geometric_mean(ratios: list[float]) -> float | None:
+    if not ratios or any(r <= 0 for r in ratios):
+        return None
+    return math.exp(sum(math.log(r) for r in ratios) / len(ratios))
+
+
+def judge(
+    ratios: list[float],
+    same_text: bool,
+    spec_ok: bool,
+    min_case: float,
+    min_geomean: float,
+) -> str:
+    """PASS / FAIL / ERROR from per-case server/in-process ratios (pure; unit-tested)."""
+    g = geometric_mean(ratios)
+    if g is None:
+        return "ERROR"
+    ok = same_text and spec_ok and min(ratios) >= min_case and g >= min_geomean
+    return "PASS" if ok else "FAIL"
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -99,8 +127,9 @@ def main() -> int:
     ap.add_argument("--tasks", nargs="+", default=["code", "prose"])
     ap.add_argument("--contexts", type=int, nargs="+", default=[0, 8192])
     ap.add_argument("--max-tokens", type=int, default=256)
-    ap.add_argument("--repeats", type=int, default=3)
-    ap.add_argument("--min-ratio", type=float, default=0.95)
+    ap.add_argument("--repeats", type=int, default=5)
+    ap.add_argument("--min-ratio", type=float, default=0.90)
+    ap.add_argument("--min-geomean", type=float, default=0.965)
     ap.add_argument("--output", type=Path)
     ap.add_argument(
         "--server-log",
@@ -153,10 +182,15 @@ def measure(a):
                 inproc_text = inprocess_run(engine, msgs, a.max_tokens)[1]  # warm-up
                 run_http(a.url, a.served_name, msgs, a.max_tokens)  # warm-up
                 ip, sv, same, diffs = [], [], True, []
-                for _ in range(a.repeats):
-                    rate, text = inprocess_run(engine, msgs, a.max_tokens)
+                for rep in range(a.repeats):
+                    # alternate which side goes first so drift (thermal, cache) hits both
+                    if rep % 2 == 0:
+                        rate, text = inprocess_run(engine, msgs, a.max_tokens)
+                        r = run_http(a.url, a.served_name, msgs, a.max_tokens)
+                    else:
+                        r = run_http(a.url, a.served_name, msgs, a.max_tokens)
+                        rate, text = inprocess_run(engine, msgs, a.max_tokens)
                     ip.append(rate or 0.0)
-                    r = run_http(a.url, a.served_name, msgs, a.max_tokens)
                     sv.append(r["decode_tps"] or 0.0)
                     for who, t in (("inprocess", text), ("server", r["text"])):
                         if t != inproc_text:
@@ -194,14 +228,9 @@ def measure(a):
         loop.run_until_complete(engine.stop())
     ratios = [c["ratio"] for c in cases if c["ratio"] is not None]
     worst = min(ratios) if ratios else None
+    geomean = geometric_mean(ratios)
     all_same = all(c["same_text"] for c in cases)
-    status = (
-        "PASS"
-        if worst is not None and worst >= a.min_ratio and all_same and spec_ok
-        else "FAIL"
-    )
-    if worst is None:
-        status = "ERROR"
+    status = judge(ratios, all_same, spec_ok, a.min_ratio, a.min_geomean)
     summary = {
         "status": status,
         "contended": was_contended(started, time.time()),
@@ -209,6 +238,8 @@ def measure(a):
         "ended": time.time(),
         "worst_ratio": worst,
         "min_ratio": a.min_ratio,
+        "geomean_ratio": None if geomean is None else round(geomean, 4),
+        "min_geomean": a.min_geomean,
         "same_text": all_same,
         "spec": spec,
         "spec_match": spec_ok,
