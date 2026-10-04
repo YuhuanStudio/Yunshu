@@ -135,3 +135,30 @@ def test_wide_prefill_does_not_expand_other_lane_callers_guard():
         lane_qmm.lane_matmul(x, weight, sbt, row_limit=1024)
     actual = lane_qmm.lane_matmul(x, weight, sbt, row_limit=512)
     assert actual.shape == (129, 32)
+
+
+def test_prefill_narrow_projection_never_takes_the_row_count_dispatch(monkeypatch):
+    """The engine turns stock / NAX prefill on for the upstream path; the round
+    driver's narrow projections (GDN a / b) must stay on the lane kernel for
+    any run length, or a prompt's bits would follow how its atoms were merged."""
+    from yunshu_engine.kernels import nax_prefill
+
+    mx.random.seed(5)
+    lin = nn.Linear(512, 48, bias=False)
+    lin.set_dtype(mx.bfloat16)
+    q = nn.QuantizedLinear.from_linear(lin, group_size=64, bits=4)
+    lane = lane_linear.LaneLinear.from_quantized(q)
+    x = mx.random.normal((1024, 512)).astype(mx.bfloat16)
+    ref = lane.prefill([x])[0]
+    monkeypatch.setattr(nax_prefill, "narrow_eligible", lambda *a: True)
+
+    def boom(*a):
+        raise AssertionError("narrow prefill took the NAX dispatch")
+
+    monkeypatch.setattr(nax_prefill, "record_dispatch", boom)
+    lane_linear.set_stock_rows(128)
+    try:
+        assert mx.array_equal(lane.prefill([x])[0], ref).item()
+        assert mx.array_equal(lane.prefill([x[:512]])[0], ref[:512]).item()
+    finally:
+        lane_linear.set_stock_rows(0)
