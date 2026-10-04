@@ -200,16 +200,36 @@ with a.output.open("x") as out:
             )
         parity &= len(set(refs)) == 1
         if a.track and (item - a.start) % a.track == 0:
+            import collections
             import gc
             import resource
 
+            def census():
+                return collections.Counter(type(o).__name__ for o in gc.get_objects())
+
+            before = census()
+            arrays_before = sum(1 for o in gc.get_objects() if isinstance(o, mx.array))
+            collected = gc.collect()
+            after = census()
+            garbage = {
+                k: v - after.get(k, 0)
+                for k, v in before.items()
+                if v - after.get(k, 0) > 20
+            }
+            arrays = sum(1 for o in gc.get_objects() if isinstance(o, mx.array))
+            mx.clear_cache()
             emit(
                 dict(
                     part="track",
                     item=item,
                     active_gb=mx.get_active_memory() / 1e9,
                     cache_gb=mx.get_cache_memory() / 1e9,
-                    arrays=sum(1 for o in gc.get_objects() if isinstance(o, mx.array)),
+                    arrays=arrays,
+                    arrays_before_gc=arrays_before,
+                    collected=collected,
+                    garbage_types=dict(
+                        sorted(garbage.items(), key=lambda kv: -kv[1])[:10]
+                    ),
                     rss_gb=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1e9,
                 )
             )
