@@ -187,7 +187,14 @@ def run_arm(name, tree, model, port, rep, emit, extra_env, args):
                 raise RuntimeError(f"{name}/{step}: response carries no prompt_tokens")
 
         record("ready")
-        scenarios(chat, record, 11 + rep, args.turns, args.per_turn, args.sub_tokens)
+        scenarios(
+            lambda msgs, n: chat(url, msgs, n),
+            record,
+            11 + rep,
+            args.turns,
+            args.per_turn,
+            args.sub_tokens,
+        )
         time.sleep(20)
         record("idle20s")
         time.sleep(15)

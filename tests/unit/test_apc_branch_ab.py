@@ -64,3 +64,49 @@ def test_scenarios_record_every_step_in_order():
         "c-system-second",
     ]
     assert m.cached_of(rows[0][1]) == 5
+
+
+def test_scenarios_drive_the_real_chat_against_a_stub_server():
+    import json
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    m = _load()
+
+    class H(BaseHTTPRequestHandler):
+        def do_POST(self):
+            body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            n = sum(len(x["content"]) for x in body["messages"])
+            out = json.dumps(
+                {
+                    "choices": [{"message": {"content": "ok"}}],
+                    "usage": {
+                        "prompt_tokens": n,
+                        "prompt_tokens_details": {"cached_tokens": 1},
+                    },
+                }
+            ).encode()
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(out)))
+            self.end_headers()
+            self.wfile.write(out)
+
+        def log_message(self, *a):
+            pass
+
+    srv = HTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    url = f"http://127.0.0.1:{srv.server_port}"
+    rows = []
+    try:
+        m.scenarios(
+            lambda msgs, n: m.chat(url, msgs, n),
+            lambda s, u, secs, ideal: rows.append(s),
+            1,
+            4,
+            50,
+            100,
+        )
+    finally:
+        srv.shutdown()
+    assert len(rows) == 10
