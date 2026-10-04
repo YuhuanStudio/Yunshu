@@ -79,6 +79,35 @@ def restore_experiment_launcher(mode):
         )
     if mode in ("cow", "cowasync"):
         patch += "from cow_restore import install as _install_cow\n_cow_counts, _cow_uninstall = _install_cow()\n"
+    if mode == "notokprefix":
+        # Reference arm: production tokenizer prefix reuse disabled.
+        patch += (
+            "from yunshu_engine.tokenizer_prefix import TokenizerPrefixCache as _T\n"
+            "_T.encode = lambda self, tok, text, add_special_tokens=True: "
+            "_T._full_encode(tok, text, add_special_tokens)\n"
+        )
+    if mode == "fence":
+        patch += (
+            "import sys\n"
+            f"sys.path.insert(0, {str(Path(__file__).resolve().parent)!r})\n"
+            "from tokenizer_fence_cache import install as _fence\n"
+            "_fence_counts, _fence_uninstall = _fence()\n"
+        )
+    if mode == "bucket512":
+        patch += (
+            "import sys\n"
+            f"sys.path.insert(0, {str(Path(__file__).resolve().parent)!r})\n"
+            "from yunshu_engine.kernels import cache_restore\ncache_restore.install()\n"
+            "from capacity_bucket import install as _bucket\n"
+            "_bucket_counts, _bucket_uninstall = _bucket()\n"
+        )
+    if mode == "interleave":
+        patch += (
+            "import sys\n"
+            f"sys.path.insert(0, {str(Path(__file__).resolve().parent)!r})\n"
+            "from span_forward import install as _interleave\n"
+            "_interleave_counts, _interleave_uninstall = _interleave(preserve_descriptors=True)\n"
+        )
     if mode == "spans":
         patch += "from span_forward import install as _install_spans\n_span_counts, _span_uninstall = _install_spans()\n"
     if mode == "paired32":
@@ -138,6 +167,11 @@ def main():
     ap.add_argument(
         "--mode",
         choices=(
+            "main",
+            "interleave",
+            "bucket512",
+            "fence",
+            "notokprefix",
             "async",
             "cow",
             "cowasync",
@@ -159,6 +193,10 @@ def main():
             "combo",
         ),
         required=True,
+    )
+    ap.add_argument("--draft", choices=("mtp", "off"), default="mtp")
+    ap.add_argument(
+        "--model", help="Optional small checkpoint for harness smoke checks"
     )
     ap.add_argument("--ctx", type=int, default=32768)
     ap.add_argument("--rep", type=int, default=0)
@@ -193,7 +231,7 @@ def main():
     launcher.chmod(0o700)
     t.YUNSHU_BIN = str(launcher)
     t.YUNSHU_SRC = str(Path(__file__).resolve().parents[2] / "python")
-    env = {"YUNSHU_VLM_DRAFT": "mtp", "YUNSHU_VLM_APC_DISK": "0"}
+    env = {"YUNSHU_VLM_DRAFT": a.draft, "YUNSHU_VLM_APC_DISK": "0"}
     if a.mode == "legacy":
         env["YUNSHU_PREFILL_BUFFER_CACHE_GB"] = "0"
     server = None
@@ -212,7 +250,9 @@ def main():
     t.subprocess.Popen = tracked_popen
     try:
         engine = "tf-new" if a.mode == "tf" else "yunshu"
-        server = t.Srv(engine, env, f"checkpoint-{a.mode}-{a.ctx}-{a.rep}")
+        server = t.Srv(
+            engine, env, f"checkpoint-{a.mode}-{a.ctx}-{a.rep}", model=a.model
+        )
         t.send(server.url, t.req(server.model, "Say hi.", 24, seed=1234))
         with a.out.open("a") as out:
             for kind in ("prose", "code"):
@@ -266,10 +306,23 @@ def main():
             proof = (
                 "drafter /Volumes/P5Plus/models/incoai/Qwen3.8-27B-DFlash2"
                 if a.mode == "tf"
-                else "Speculative decoding: mtp"
+                else f"draft={a.draft}"
             )
             if proof not in log:
                 raise RuntimeError(f"engaged mode absent from {server.log}: {proof}")
+            experiment_proof = {
+                "interleave": "Original-descriptor projection interleave engaged:",
+                "bucket512": "Native restore capacity bucket engaged: 512 tokens",
+                "fence": "Exact tokenizer fence reuse engaged",
+            }.get(a.mode)
+            if (
+                experiment_proof
+                and "27B" in (a.model or t.M)
+                and experiment_proof not in log
+            ):
+                raise RuntimeError(
+                    f"candidate not engaged: {experiment_proof}; see {server.log}"
+                )
             out.write(
                 json.dumps(
                     dict(
@@ -278,7 +331,10 @@ def main():
                         rep=a.rep,
                         phase="complete",
                         success=True,
-                        engaged_mode="dflash2" if a.mode == "tf" else "mtp",
+                        engaged_mode=server.engaged_spec_mode,
+                        experiment_engaged=bool(
+                            experiment_proof and experiment_proof in log
+                        ),
                         server_log=str(server.log),
                         contended=t.was_contended(),
                     )

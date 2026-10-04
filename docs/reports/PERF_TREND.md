@@ -858,6 +858,22 @@ Attribution limits: the inherited synchronized per-op profiles destroy overlap a
 
 The wide5 combo's native control acquired noncontiguous scale views after a grouped arm; its+18.66/+34.80% ratios cannot decide a default. New controls restore contiguous scale tables, and the selected virtual layout never changes parameters. `1004-002233-00-wide6-attribution-r3-01` failed in8s from a prompt-variable shadow (fixed harness, no valid timing); inherited wide5-final-matrix16 was cancelled before start for the control-layout issue. Full per-job rc/completion/log-tail/device receipts and all cells: `/Volumes/P5Plus/yunshu-build/codex/wide6/harvest.json`, `final-matrix-summary.json`, `http-timing-summary.json`. No failed or merely-done job authorizes a performance claim.
 
+## Oct 4: exact tokenizer prefix reuse for follow-up turns (prefill7)
+
+`TokenizerPrefixCache` is now wired into `_VLMTextPromptCache` (VLM text tokenization). A follow-up prompt that extends an earlier prompt past a non-normalized `<|im_end|>` encodes only the new suffix; unqualified tokenizers fall back to full encoding. The HTTP first-visible profile showed the turn-2 `_tokenize_with_cache` at 17-25 ms (full 32K re-encode); with reuse it is 2-3 ms (`1004-105114-00-prefill7-profile32k-classwrap`).
+
+Lossless evidence: CPU exact-token equality on 1135 multi-turn Qwen chat renderings (Qwen3.5-0.8B and Qwen3.8-27B tokenizers, unicode / literal fence / CRLF cases) plus unit tests; `1004-103455-00-prefill7-quality200b` (27B MTP, M5, rc0/complete): 200 paired items, input IDs, raw tokens and logprobs identical on every item, correct 200/200 vs 200/200, reuse engaged 200/200. APC hit == miss unchanged (the cache only produces the same ids).
+
+HTTP follow-up TTFT, 3 reversed-order quiet reps, same harness as the README row, same-server arms differ only by the reuse switch (digests, request hashes, finish, counts identical across arms; cached tokens equal):
+
+| ctx, kind | reuse off | reuse on | change |
+|---|---:|---:|---:|
+| 8K code turn-2 | 500 ms | 494 ms | -6 |
+| 8K prose turn-2 | 508 ms | 504 ms | -4 |
+| 32K code turn-2 | 703 ms | 681 ms | -22 |
+| 32K prose turn-2 | 689 ms | 674 ms | -15 |
+
+Jobs: `1004-111105-00-prefill7-tokprefix2-http32768` (rc0, 614 s), `-http8192` was marked contended by a gpuq daemon restart and re-measured as `1004-133111-00-prefill7-tokprefix3-http8192` (quiet, rc0; the 8K rows above are the re-measurement; digests identical across arms). Reference TensorFold from codex-prefill6 (`1004-081813-00-prefill6-readme-http32k-fixed-r3-0819`, same harness, same day): 32K code 671 ms, prose 656 ms. The 32K gap is therefore 10 ms (code) / 18 ms (prose), not closed; 8K code is now 494 vs 505 ms README TensorFold. README rows are not updated because 32K is not at parity.
 ### 2026-10-04 — server memory, v0.1.3 vs main (no growth)
 
 M5 Max 128 GiB, Jundot/Qwen3.8-27B-oQ4e-mtp, default settings (RAM APC auto), `scripts/research/memory_ab.py`,
@@ -877,3 +893,5 @@ Where both arms hold the same prefix cache they agree within 0.4 GiB; the spread
 prefix cache keeps (APC GiB differs per rep), not from the code version. Main's 96K peak is lower. Open in both
 versions: after the 96K turn the APC reports 0 GiB yet MLX active memory stays ~32 GiB (weights ~16 GiB), so ~16 GiB
 is held by something other than weights and prefix cache.
+
+`yv ab` verdict for the tokenizer prefix reuse (`prefill7-tokprefix`, base main 4298f69943e1, suite prefill, M5): PASS. Identity 18 cells 0 mismatches; APC hit == miss on 6 cold/warm pairs (cached 1033/8202/32778/32777); quality n=200 base 107 / cand 107 (net 0); speed 3 interleaved quiet reps: follow-up TTFT 32K code 0.816 -> 0.796 s (-2.5%), 32K prose 0.800 -> 0.783 s (-2.1%), 8K -0.8/-0.9%, 1K unchanged within noise; decode tok/s and cold TTFT unchanged (|delta| <= 0.4%).

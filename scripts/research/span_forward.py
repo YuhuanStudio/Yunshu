@@ -3,6 +3,8 @@
 REJECTED as lossless: three 32K HTTP pairs diverged on 256-token outputs.
 Short hidden/cache and 200-item gates passed but did not detect that failure.
 Never install this experiment in serving; retained for failure diagnosis.
+The preserve_descriptors variant also failed the 256-token HTTP digest gate
+(prose turn-2 and code cold/warm), despite a 64-layer hidden/cache bit gate.
 
 The scheduler joins a short non-stored boundary, but FA and GDN still execute
 exactly the old spans. Quantized lane projections and MLPs share their dispatch;
@@ -10,6 +12,7 @@ the final one-token generate remains untouched.
 """
 
 import contextvars
+import logging
 
 _INSTALLATION = None
 
@@ -37,10 +40,12 @@ def joined_boundaries(points, prefix, protected, *, limit=512, tail=8):
     return kept, removed
 
 
-def install():
+def install(*, preserve_descriptors=False):
     global _INSTALLATION
 
     if _INSTALLATION is not None:
+        if _INSTALLATION[0]["preserve_descriptors"] != preserve_descriptors:
+            raise RuntimeError("uninstall the previous span experiment first")
         return _INSTALLATION
     import mlx.core as mx
     import mlx.nn as nn
@@ -50,7 +55,13 @@ def install():
 
     from yunshu_engine.kernels.lane_linear import LaneLinear
 
-    counts = {"enabled": True, "joins": 0, "forwards": 0, "projections": 0}
+    counts = {
+        "enabled": True,
+        "joins": 0,
+        "forwards": 0,
+        "projections": 0,
+        "preserve_descriptors": preserve_descriptors,
+    }
     originals = []
 
     def patch(cls, name, fn):
@@ -126,6 +137,11 @@ def install():
         token = _SPANS.set(spans)
         try:
             if spans:
+                if preserve_descriptors and counts["forwards"] == 0:
+                    logging.getLogger("yunshu_engine.research.span_forward").info(
+                        "Original-descriptor projection interleave engaged: spans=%s",
+                        spans,
+                    )
                 counts["forwards"] += 1
             return model_forward(self, inputs, *args, **kwargs)
         finally:
@@ -164,6 +180,17 @@ def install():
         ):
             return {}
         counts["projections"] += len(modules)
+        if preserve_descriptors:
+            values = {}
+            for module in modules:
+                pieces = [
+                    linear(module, inputs[:, begin:end]) for begin, end in _SPANS.get()
+                ]
+                # Publish both original-shaped calls together before moving to
+                # the next weight; lazy graph traversal alone can reorder them.
+                mx.async_eval(pieces)
+                values[id(module)] = mx.concatenate(pieces, axis=1)
+            return values
         return {id(module): linear(module, inputs) for module in modules}
 
     delta = q.Qwen3_5GatedDeltaNet.__call__
@@ -237,6 +264,24 @@ def install():
 
     def feed_forward(self, x):
         spans = _SPANS.get()
+        if (
+            spans
+            and preserve_descriptors
+            and x.dtype == mx.bfloat16
+            and all(
+                type(m) is LaneLinear
+                for m in (self.gate_proj, self.up_proj, self.down_proj)
+            )
+        ):
+            pieces = [x[:, begin:end] for begin, end in spans]
+            gates = [linear(self.gate_proj, piece) for piece in pieces]
+            mx.async_eval(gates)
+            ups = [linear(self.up_proj, piece) for piece in pieces]
+            mx.async_eval(ups)
+            hidden = [q.swiglu(gate, up) for gate, up in zip(gates, ups, strict=True)]
+            outputs = [linear(self.down_proj, value) for value in hidden]
+            mx.async_eval(outputs)
+            return mx.concatenate(outputs, axis=1)
         if spans and (
             x.dtype != mx.bfloat16
             or not all(
