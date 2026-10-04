@@ -15,8 +15,8 @@ from types import SimpleNamespace
 
 import mlx.core as mx
 import mlx.nn as nn
+from lane_group_physical import grouped_linears
 
-from yunshu_engine.kernels.lane_group import grouped_linears
 from yunshu_engine.kernels.lane_linear import LaneLinear
 from yunshu_engine.kernels.tensorfold import lane_qmm
 
@@ -45,7 +45,9 @@ for bits in (4, 8):
                 got = v._linears(layers, x)
                 assert got is not None
                 mx.eval(got)
-                assert all(bool(mx.array_equal(r, g)) for r, g in zip(ref, got, strict=True)), (
+                assert all(
+                    bool(mx.array_equal(r, g)) for r, g in zip(ref, got, strict=True)
+                ), (
                     bits,
                     gs,
                     n,

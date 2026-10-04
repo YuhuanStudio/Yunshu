@@ -9,7 +9,15 @@ import pytest
 
 pytest.importorskip("mlx.core")
 
-from yunshu_engine.kernels import lane_group as lg  # noqa: E402
+import importlib.util
+from pathlib import Path
+
+_spec = importlib.util.spec_from_file_location(
+    "lane_group_physical",
+    Path(__file__).parents[2] / "scripts/research/lane_group_physical.py",
+)
+lg = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(lg)
 
 
 class Projection:

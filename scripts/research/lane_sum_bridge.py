@@ -5,7 +5,9 @@ from types import FunctionType
 
 
 def install():
-    from yunshu_engine.kernels import lane_linear, lane_sums
+    import lane_sums_bookkeeping as lane_sums
+
+    from yunshu_engine.kernels import lane_linear
 
     original = lane_linear.LaneLinear.__call__
     source = inspect.getsource(original)

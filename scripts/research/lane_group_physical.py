@@ -12,8 +12,8 @@ import weakref
 
 import mlx.core as mx
 
-from . import lane_linear
-from .tensorfold import lane_qmm
+from yunshu_engine.kernels import lane_linear
+from yunshu_engine.kernels.tensorfold import lane_qmm
 
 
 class _Group:

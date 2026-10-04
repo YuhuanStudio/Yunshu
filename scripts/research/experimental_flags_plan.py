@@ -10,16 +10,6 @@ from pathlib import Path
 from yunshu_engine import settings
 
 EVIDENCE = {
-    "YUNSHU_SPEC_TREE": (
-        "tree",
-        "partial",
-        [
-            "docs/reports/PERF_TREND.md:2026-10-02 tree/chain cells",
-            "docs/research/runs/2026-09-29-spec-efficiency/",
-            "audit-tfgap-* pending snapshot 4e1338c4",
-        ],
-        "Short-context tree is slower in historical receipts; novel_en + 131K and quiet three-run current-source comparison missing.",
-    ),
     "YUNSHU_TOOL_GRAMMAR": (
         "tools",
         "claim_and_partial",

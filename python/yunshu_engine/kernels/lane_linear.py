@@ -39,6 +39,29 @@ NARROW = 256  # outputs below this run the lane matmul in prefill too
 STOCK_ROWS = 0
 STOCK_MIN_ROWS = 512  # what the runner turns it on at (untiling the weight costs ~0.16 s a call; lane costs ~0.3 ms/token more)
 
+_SUM_POLICY = False
+_SUM_REUSE = False
+
+
+def configure_sum_policy(qualified: bool) -> None:
+    global _SUM_POLICY, _SUM_REUSE
+    _SUM_POLICY = bool(qualified)
+    _SUM_REUSE = False
+
+
+def set_sum_context(ids) -> None:
+    global _SUM_REUSE
+    _SUM_REUSE = bool(_SUM_POLICY and ids is not None and len(ids) >= 32768)
+
+
+def sum_reuse_enabled() -> bool:
+    return _SUM_REUSE
+
+
+def set_sum_reuse(enabled: bool) -> None:
+    global _SUM_REUSE
+    _SUM_REUSE = bool(enabled)
+
 
 def set_stock_rows(rows: int) -> None:
     global STOCK_ROWS
@@ -125,7 +148,9 @@ class LaneLinear(nn.Module):
             f"bits={self.bits}, group_size={self.group_size}, lane"
         )
 
-    def _rows(self, x2: mx.array, *, prefill_narrow: bool = False) -> mx.array:
+    def _rows(
+        self, x2: mx.array, *, prefill_narrow: bool = False, cache_input=None
+    ) -> mx.array:
         # 17..48 rows: 16-row threadgroup blocks (same bits per row as the
         # default 32-row block, 10-35% faster on projections up to ~20K wide;
         # the 248K-wide LM head is slower that way)
@@ -136,7 +161,7 @@ class LaneLinear(nn.Module):
             else (16 if 16 < m <= 48 and self.output_dims < 100_000 else None)
         )
         return lane_qmm.lane_matmul(
-            x2,
+            cache_input if cache_input is not None else x2,
             self.weight,
             self.sbt,
             tiled=self.tiled,
@@ -240,7 +265,12 @@ class LaneLinear(nn.Module):
                 bits=self.bits,
             )
         elif m <= PIECE:
-            y = self._rows(x2)
+            y = self._rows(
+                x2,
+                cache_input=x
+                if _SUM_REUSE and dtype == mx.bfloat16 and m <= 128
+                else None,
+            )
         else:
             y = mx.concatenate(
                 [self._rows(x2[i : i + PIECE]) for i in range(0, m, PIECE)], axis=0

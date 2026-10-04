@@ -9,6 +9,8 @@ def install():
 
     original_rows = module.LaneLinear._rows
     original_call = module.LaneLinear.__call__
+    if "_SUM_REUSE" in inspect.getsource(original_call):
+        return module.set_sum_reuse
     source = inspect.getsource(original_rows)
     source = source.replace(
         "def _rows(self, x2: mx.array)",

@@ -5,7 +5,7 @@ norm helpers use a different summation order and are deliberately not read.
 All entries share the lane kernel's existing four-entry bounded cache.
 """
 
-from .tensorfold import lane_qmm as q
+from yunshu_engine.kernels.tensorfold import lane_qmm as q
 
 
 def _projection_key(view, group):

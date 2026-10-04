@@ -1569,6 +1569,9 @@ class VLMEngine:
         from .vlm_batch_runner import VLMBatchRunner
 
         nax_prefill.disable()
+        from .kernels import lane_linear as lane_sum_policy
+
+        lane_sum_policy.configure_sum_policy(False)
 
         spec_family = self._config.get("model_type") in self._SPEC_MODEL_TYPES
         lm = self._model.language_model
@@ -1838,6 +1841,21 @@ class VLMEngine:
                     invariant=bool(kernels.get("invariant")),
                     lane_projections=bool(kernels.get("lane_linear")),
                 )
+                if kernels["dflash_copy"] and kernels["copy_rows"] == 16:
+                    from . import dflash_fast
+
+                    if dflash_fast.supported(lm, drafter):
+                        lane_sum_policy.configure_sum_policy(True)
+                        kernels["lane_sum_identity"] = "long-context"
+                if (
+                    settings.get("YUNSHU_SPEC_TREE") == "auto"
+                    and kernels["dflash_copy"]
+                ):
+                    from . import dflash_fast
+
+                    if dflash_fast.supported(lm, drafter):
+                        dflash_fast.prepare(drafter)
+                        kernels["dflash_fast"] = "short-context"
         if drafter is not None:
             # Tree drafts through the tree verify (single greedy row,
             # batch-invariant kernels only; every other round keeps the loop).

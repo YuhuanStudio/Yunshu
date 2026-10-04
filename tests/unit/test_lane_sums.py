@@ -5,7 +5,15 @@ from types import SimpleNamespace
 import pytest
 
 pytest.importorskip("mlx.core")
-from yunshu_engine.kernels import lane_sums as sums  # noqa: E402
+import importlib.util
+from pathlib import Path
+
+_spec = importlib.util.spec_from_file_location(
+    "lane_sums_bookkeeping",
+    Path(__file__).parents[2] / "scripts/research/lane_sums_bookkeeping.py",
+)
+sums = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(sums)
 
 
 def array(shape):
