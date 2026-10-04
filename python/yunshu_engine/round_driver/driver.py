@@ -510,8 +510,15 @@ class RoundDriver:
         items: list[_Item] = []
         budget = self.chunk if decoding else self.idle_budget
         at = 0
+        blocked = False
         for r in waiting:
             ids = r.req.ids
+            if blocked and len(ids) - r.done > budget:
+                # Oldest prompt first: a long prompt that cannot finish in
+                # this step is not interleaved with younger long prompts
+                # (that would delay every first token to the last one's);
+                # prompts that fit in what is left of the budget still ride along.
+                continue
             while budget > 0 and r.done < len(ids):
                 start = r.done
                 end = self._run_end(r, start, budget)
@@ -532,6 +539,8 @@ class RoundDriver:
                 budget -= end - start
                 if end in r.ckpts:
                     break  # the checkpoint is stored after this span
+            if r.done < len(ids):
+                blocked = True
         if not items:
             return []
         hidden = forward(self.lm, [it.seg for it in items])

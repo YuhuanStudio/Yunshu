@@ -401,3 +401,28 @@ def test_head_readout_uses_the_reduced_vocabulary_for_one_row_only(tiny):
     assert not calls
     d.head.readout(h, single=True)
     assert calls
+
+
+def test_prefill_serves_the_oldest_long_prompt_first(tiny, monkeypatch):
+    """Two long prompts are not interleaved: the first one's prefill finishes
+    before the second one's starts (its first token is not delayed by the
+    other's prompt), even when a checkpoint ends A's span with budget left."""
+    from yunshu_engine.round_driver import driver as drv
+
+    lm, _ = tiny
+    d = drv.RoundDriver(lm, stop_tokens=set(), chunk=64)
+    d.idle_budget = 256
+    long_a = [(5 * i + 1) % 500 for i in range(1000)]
+    long_b = [(7 * i + 3) % 500 for i in range(1000)]
+    short = [(11 * i + 2) % 500 for i in range(40)]
+    d.add(drv.Request(long_a, 1, handle="a", use_apc=False))
+    d.add(drv.Request(long_b, 1, handle="b", use_apc=False))
+    d.add(drv.Request(short, 1, handle="c", use_apc=False))
+    rows = {r.req.handle: r for r in d.rows}
+    rows["a"].ckpts = [128, 512]  # a checkpoint cuts A's span with budget left
+    d.step()
+    assert rows["a"].done == 128
+    assert rows["b"].done == 0  # long B waits behind long A
+    while rows["a"].pending is None:
+        assert rows["b"].done == 0
+        d.step()

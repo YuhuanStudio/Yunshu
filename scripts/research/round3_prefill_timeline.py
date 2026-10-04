@@ -36,18 +36,27 @@ def main():
     ap.add_argument("--n", type=int, default=2)
     ap.add_argument("--ctx", type=int, default=32768)
     ap.add_argument("--tokens", type=int, default=64)
+    ap.add_argument("--off", action="store_true", help="expect no driver (arm off)")
+    ap.add_argument("--min-conc", type=int, default=2, help="driver routing threshold")
     ap.add_argument("--out", type=Path, required=True)
     a = ap.parse_args()
     from yunshu_engine.vlm_batch_runner import RunStats
     from yunshu_engine.vlm_engine import VLMEngine
 
+    from yunshu_engine import vlm_batch_runner
+
+    vlm_batch_runner.DRIVER_MIN_CONCURRENCY = a.min_conc
     engine = VLMEngine(MODEL)
     asyncio.run(engine.start())
     runner = engine._batch_runner
     drv = runner.driver
-    if drv is None:
-        print("no driver", flush=True)
+    if (drv is None) != a.off:
+        print(f"driver present={drv is not None} does not match --off={a.off}")
         return 1
+    if drv is None:  # off arm: the upstream path, no step hooks
+        from types import SimpleNamespace
+
+        drv = SimpleNamespace(_prefill_step=None, _decode_step=None)
     steps = []
     t0 = [0.0]
     orig_p, orig_d = drv._prefill_step, drv._decode_step
@@ -74,8 +83,23 @@ def main():
         return r
 
     drv._prefill_step, drv._decode_step = wrap_p, wrap_d
-    texts = [(PROMPTS / f"{k}-{a.ctx}.txt").read_text() for k in ("prose", "code")]
-    texts += [(PROMPTS / f"conc-code-{i}.txt").read_text() for i in range(4)]
+    import cProfile
+    import io
+    import pstats
+
+    prof = cProfile.Profile()
+    body = runner._drive_slice_body
+
+    def profiled(*args, **kw):
+        prof.enable()
+        try:
+            return body(*args, **kw)
+        finally:
+            prof.disable()
+
+    runner._drive_slice_body = profiled
+    body = (PROMPTS / f"code-{a.ctx}.txt").read_text()
+    texts = [f"UNIQUE-{i}-{time.time_ns()}\n{body}" for i in range(a.n)]
 
     def ids_for(text):
         return engine._executor.submit(
@@ -106,13 +130,25 @@ def main():
     list(runner.iter_tokens(w[0], max_tokens=8, temperature=0.0, seed=1,
                             allow_draft=True, prompt_kwargs=w[1],
                             apc_semantic_hash=w[2], stats=RunStats()))  # fmt: skip
+    import mlx.core as mx
+
+    mx.reset_peak_memory()
+    gib = 2**30
     steps.clear()
     t0[0] = time.perf_counter()
     th = [threading.Thread(target=go, args=(i,)) for i in range(a.n)]
     [t.start() for t in th]
     [t.join() for t in th]
+    buf = io.StringIO()
+    pstats.Stats(prof, stream=buf).sort_stats("cumulative").print_stats(28)
+    print(buf.getvalue(), flush=True)
+    mem = dict(
+        peak_gib=round(mx.get_peak_memory() / gib, 2),
+        active_gib=round(mx.get_active_memory() / gib, 2),
+        cache_gib=round(mx.get_cache_memory() / gib, 2),
+    )
     asyncio.run(engine.stop())
-    rec = dict(n=a.n, ctx=a.ctx, prompt_tokens=[len(r[0]) for r in reqs],
+    rec = dict(mem=mem, n=a.n, ctx=a.ctx, prompt_tokens=[len(r[0]) for r in reqs],
                ttft=ttft, errors=errs, summary=summarize(steps), steps=steps)  # fmt: skip
     a.out.write_text(json.dumps(rec))
     print(json.dumps({k: v for k, v in rec.items() if k != "steps"}), flush=True)
