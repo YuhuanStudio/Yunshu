@@ -1101,6 +1101,15 @@ async def memory_guard_stats(request: Request) -> dict[str, Any]:
     return {"active": True, "models": results}
 
 
+@router.get("/memory-census")
+async def memory_census(request: Request, min_mib: float = 64.0) -> dict[str, Any]:
+    """Live MLX arrays of at least ``min_mib`` grouped by the object holding them."""
+    _check_permission(request)
+    from yunshu_engine.memory_census import census
+
+    return census(min_mib=min_mib)
+
+
 @router.get("/ssd-cache")
 async def ssd_cache_stats(request: Request) -> dict[str, Any]:
     """SSD KV cache statistics across all loaded engines."""

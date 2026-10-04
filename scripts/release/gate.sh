@@ -5,7 +5,8 @@
 #   STAGE=install,serve-27b zsh scripts/release/gate.sh # any subset, comma-separated
 #   STAGE=service GATE_SERVICE=1 zsh scripts/release/gate.sh   # loads a real launchd agent
 #
-# Stages: install serve-27b families soak service. Model paths come from the environment
+# Stages: install serve-27b families soak service (soak = soak-mmlu + soak-realistic, selectable
+# separately: yv gate runs and records each stage on its own so a rerun skips what passed). Model paths come from the environment
 # or scripts/research/local.env (gitignored; names in scripts/release/local.env.example).
 # Everything the gate installs or writes lives under $GATE_ROOT (HOME, uv tool dirs,
 # caches), never in your real ~/.yunshu or ~/.local. Every check prints PASS/FAIL/SKIP
@@ -145,7 +146,7 @@ if has serve-27b; then
       # (same greedy tokens); a per-token serving overhead fails the gate.
       sp=$(${YENV[@]} $GATE_ROOT/tool-vision/yunshu/bin/python scripts/release/check_server_path.py --url $URL \
         --retry-contended --model $M --server-log $OUT/27b-server.log --output $OUT/27b-server-path.json 2> $OUT/27b-server-path.log | tail -1)
-      spd=$($PY -c "import json,sys; d=json.loads(sys.argv[1]); print(f\"server/in-process worst {d['worst_ratio']} (min {d['min_ratio']}), same text {d['same_text']}, spec {d['spec']}: \" + ', '.join(f\"{c['task']}@{c['context']} {c['server_tps']}/{c['inprocess_tps']}\" for c in d['cases']))" "$sp" 2>/dev/null)
+      spd=$($PY -c "import json,sys; d=json.loads(sys.argv[1]); print(f\"server/in-process geomean {d['geomean_ratio']} (min {d['min_geomean']}), worst {d['worst_ratio']} (floor {d['min_ratio']}), same text {d['same_text']}, spec {d['spec']}: \" + ', '.join(f\"{c['task']}@{c['context']} {c['server_tps']}/{c['inprocess_tps']}\" for c in d['cases']))" "$sp" 2>/dev/null)
       # The checker preserves both attempts, retries contamination once, and
       # reports CONTENDED when no quiet timing result was obtained (gate rc 3).
       sps=$($PY -c 'import json,sys; print(json.loads(sys.argv[1])["status"])' "$sp" 2>/dev/null)
@@ -196,9 +197,12 @@ if has families; then
 fi
 
 # ── 4. soak: MMLU-Pro 300 b8 accuracy + a mixed realistic soak, memory returns ───────
-if has soak; then
+if has soak || has soak-mmlu || has soak-realistic; then
   log "stage soak"
-  MMLU_DATA=$ROOT/reference/omlx/omlx/eval/data/mmlu_pro_test.jsonl  # soak_mmlu_pro.py inputs
+  SOAK_MMLU=0; SOAK_REAL=0
+  { has soak || has soak-mmlu; } && SOAK_MMLU=1
+  { has soak || has soak-realistic; } && SOAK_REAL=1
+  MMLU_DATA=${MMLU_DATA:-$ROOT/reference/omlx/omlx/eval/data/mmlu_pro_test.jsonl}  # inputs of the MMLU-Pro soak
   MMLU_IDS=${MMLU_IDS:-$HOME/Downloads/Qwen3.8-27B-oQ4e-mtp_mmlu_pro.json}
   if [ -z "${M:-}" ] || [ ! -d "$M" ]; then rec soak.model FAIL "M (Qwen3.8-27B) not set or missing"
   elif [ ! -f $MMLU_DATA ] || [ ! -f $MMLU_IDS ]; then
@@ -206,6 +210,7 @@ if has soak; then
   elif need_bin $BV soak.boot; then
     if serve $BV $M $OUT/soak-server.log; then
       rm -f $OUT/soak-mmlu.jsonl $OUT/soak-realistic.jsonl
+      if [ $SOAK_MMLU = 1 ]; then
       log "soak mmlu"
       $PY scripts/research/soak_mmlu_pro.py --url $URL --model Qwen3.8-27B --pid $YP \
         --ids $MMLU_IDS --note "release gate" --output $OUT/soak-mmlu.jsonl > $OUT/soak-mmlu.log 2>&1
@@ -219,6 +224,8 @@ if has soak; then
           && rec soak.mmlu PASS "$detail" || rec soak.mmlu FAIL "$detail (baseline $MMLU_BASELINE, allowed drop $MMLU_TOLERANCE)"
         mem_returns soak.mmlu_memory_returns $m0 $m1 $x0 $x1 $q0 $q1
       fi
+      fi
+      if [ $SOAK_REAL = 1 ]; then
       log "soak realistic $SOAK_MINUTES min"
       $PY scripts/research/soak_realistic.py --url $URL --model Qwen3.8-27B --pid $YP \
         --minutes $SOAK_MINUTES --note "release gate" --output $OUT/soak-realistic.jsonl 2>&1 | tee $OUT/soak-realistic.log
@@ -230,6 +237,7 @@ if has soak; then
         [ $errs = 0 ] && [ $(( okn * 100 )) -ge $(( reqs * 95 )) ] \
           && rec soak.realistic PASS "$detail" || rec soak.realistic FAIL "$detail (need 0 errors, >=95% ok)"
         mem_returns soak.realistic_memory_returns $m0 $m1 $x0 $x1 $q0 $q1
+      fi
       fi
     else rec soak.boot FAIL "server did not become ready (soak-server.log)"; fi
     stop $YP

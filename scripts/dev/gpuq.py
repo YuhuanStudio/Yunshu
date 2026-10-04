@@ -75,6 +75,7 @@ DEFAULT_RESERVE_GB = 16.0
 CLAIM_LOCK = threading.Lock()
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import gpuq_preflight  # noqa: E402
 from gpuq_contention import (  # noqa: E402
     ENV,
     MAX_POLL_GAP_S,
@@ -473,10 +474,43 @@ def _cap_priority(job: dict, caps: dict[str, int]) -> dict:
     return job
 
 
+# Parsed job files keyed by (mtime_ns, size). Every job write is a rename into JOBS,
+# so an unchanged directory mtime means no file changed: the daemon polls every 2 s
+# and re-reading ~2000 files each time cost it half a core (counted as foreign CPU
+# by quiet timing jobs). A full rescan still happens every JOBS_RESCAN_S.
+_JOBS_CACHE: dict = {"dir": None, "key": None, "t": 0.0, "files": {}}
+JOBS_RESCAN_S = 30.0
+
+
+def _job_files() -> list[dict]:
+    try:
+        key = JOBS.stat().st_mtime_ns
+    except OSError:
+        return []
+    c = _JOBS_CACHE
+    now = time.monotonic()
+    if c["dir"] != str(JOBS) or c["key"] != key or now - c["t"] > JOBS_RESCAN_S:
+        files = {} if c["dir"] != str(JOBS) else c["files"]
+        fresh = {}
+        for p in JOBS.glob("*.json"):
+            try:
+                st = p.stat()
+            except OSError:
+                continue
+            sig = (st.st_mtime_ns, st.st_size)
+            old = files.get(p.name)
+            if old is not None and old[0] == sig:
+                fresh[p.name] = old
+            elif data := _read(p):
+                fresh[p.name] = (sig, json.dumps(data))
+        c.update(dir=str(JOBS), key=key, t=now, files=fresh)
+    return [json.loads(raw) for _, raw in c["files"].values()]
+
+
 def _jobs() -> list[dict]:
     caps = _priority_caps()
     return sorted(
-        (_cap_priority(j, caps) for p in JOBS.glob("*.json") if (j := _read(p))),
+        (_cap_priority(j, caps) for j in _job_files()),
         key=lambda j: (-j.get("priority", 0), j["submitted"], j["id"]),
     )
 
@@ -484,10 +518,15 @@ def _jobs() -> list[dict]:
 def _owner(job: dict) -> str:
     """Fair-share key: the agent worktree (or checkout) the job came from."""
     cwd = job.get("cwd", "")
-    marker = "/.claude/worktrees/"
-    if marker in cwd:
-        return cwd.split(marker, 1)[1].split("/", 1)[0]
-    return job.get("env", {}).get("GPUQ_OWNER", "main")
+    owner = job.get("env", {}).get("GPUQ_OWNER")
+    if owner:
+        return owner
+    # Any worktree directory names its line (.claude/worktrees/x, codex/worktrees/x);
+    # otherwise every line in an external worktree shared one fairness slot.
+    for marker in ("/.claude/worktrees/", "/worktrees/"):
+        if marker in cwd:
+            return cwd.split(marker, 1)[1].split("/", 1)[0]
+    return "main"
 
 
 def _pick(jobs: list[dict], eligible=None) -> dict | None:
@@ -594,6 +633,15 @@ def submit(
                 "running daemon does not support M3 lanes; use an upgraded isolated GPUQ_DIR (do not restart the live daemon)"
             )
     cfg = contention_config({"contention_config": cpu_config or {}})
+    # A job that cannot succeed (syntax error, missing script / model, module not on
+    # its PYTHONPATH) is refused now instead of failing after its queue wait.
+    if os.environ.get("GPUQ_NO_PREFLIGHT") != "1":
+        problems = gpuq_preflight.preflight(cmd, os.getcwd(), dict(os.environ))
+        if problems:
+            raise ValueError(
+                "preflight failed (GPUQ_NO_PREFLIGHT=1 skips it):\n  - "
+                + "\n  - ".join(problems)
+            )
     JOBS.mkdir(parents=True, exist_ok=True)
     LOGS.mkdir(parents=True, exist_ok=True)
     # Serialize label admission and id allocation across all submitters.
@@ -607,6 +655,11 @@ def submit(
         jid = _new_id(label)
         if mem_gb is None:
             mem_gb = 0.0 if serving_ok else DEFAULT_MEM_GB
+        timeout_s, timeout_note = gpuq_preflight.learned_timeout(
+            label, timeout_min * 60, _jobs()
+        )
+        if timeout_note:
+            print(f"gpuq: timeout {timeout_note}", file=sys.stderr)
         _write(
             JOBS / f"{jid}.json",
             {
@@ -620,7 +673,8 @@ def submit(
                 "cmd": cmd,
                 "cwd": os.getcwd(),
                 "env": dict(os.environ),
-                "timeout_s": timeout_min * 60,
+                "timeout_s": timeout_s,
+                "timeout_note": timeout_note,
                 "stall_s": stall_min * 60,
                 "priority": priority,
                 "serving_ok": serving_ok,
@@ -830,6 +884,8 @@ def _priority_step(pauser: Pauser, gate: ServingGate, now: float) -> bool:
         return False  # only backlog (raw p<=-1) work is ever paused for priority
     if pauser.job.get("requeued_as"):
         return False  # being stopped for a requeue: the cancel path finishes it
+    if _draining():
+        return False  # a restart is waiting: start nothing new
     if (
         _eff_priority(pauser.job, now) >= 0
         and not pauser.paused
@@ -974,6 +1030,10 @@ def _run_one(job: dict, path: Path, gate: ServingGate | None = None) -> None:
         pauser.pauses[-1][1] = ended
         pauser.job["pauses"], pauser.job["paused"] = pauser.pauses, False
     job.update(state=state, rc=rc, ended=ended, paused=False, pause_reason=None)
+    reaped = gpuq_preflight.reap(str(rc_file))
+    if reaped:
+        job["reaped_pids"] = reaped
+        log.write(f"\ngpuq: reaped {len(reaped)} leftover process(es): {reaped}")
     log.write(
         f"\ngpuq: {state} rc={rc} after {ended - job['started']:.0f}s "
         f"({len(pauser.pauses)} pauses, {pauser.total(ended):.0f}s paused)\n"
@@ -1118,6 +1178,9 @@ def _adopt(job: dict, path: Path, gate: ServingGate | None = None) -> None:
         state = why or ("done" if rc == 0 else "failed")
     if pauser.paused:
         pauser.pauses[-1][1] = _now()
+    reaped = gpuq_preflight.reap(str(rc_file))
+    if reaped:
+        job["reaped_pids"] = reaped
     job.update(
         state=state,
         rc=rc,
@@ -1166,6 +1229,91 @@ def _execute(job: dict, path: Path, gate: ServingGate) -> None:
             _write(LOGS / f"{job['id']}.pauses.json", {"pauses": pauser.pauses})
             _write(path, job)
     print(f"{time.strftime('%H:%M:%S')} end {job['id']} {job['state']}", flush=True)
+    for sib in _cancel_siblings(job):
+        print(f"{time.strftime('%H:%M:%S')} cancel {sib} (sibling failed)", flush=True)
+
+
+_COUNTER = re.compile(r"-(r?\d+)$")  # not "27b", "32k": sizes, not counters
+
+
+def _stem(label: str) -> str:
+    """'wide8-api-small-r1' -> 'wide8-api-small': the label without its run counters."""
+    while True:
+        cut = _COUNTER.sub("", label)
+        if cut == label:
+            return label
+        label = cut
+
+
+def _cancel_siblings(job: dict) -> list[str]:
+    """A failed rep usually fails the same way in its siblings (same label stem,
+    submitted within an hour of it): cancel those still pending instead of letting
+    each one load the model and fail. The owner resubmits after fixing the cause."""
+    if job.get("state") not in ("failed", "stalled"):
+        return []
+    stem = _stem(job.get("label") or "")
+    if not stem or stem == job.get("label"):
+        return []
+    cancelled = []
+    for j in _jobs():
+        if (
+            j["state"] == "pending"
+            and not j.get("cancel")
+            and j["id"] != job["id"]
+            and _stem(j.get("label") or "") == stem
+            and abs(j.get("submitted", 0) - job.get("submitted", 0)) < 3600
+        ):
+            _patch_job(
+                JOBS / f"{j['id']}.json",
+                cancel=True,
+                cancel_reason=f"sibling {job['id']} {job['state']} rc={job.get('rc')}",
+            )
+            cancelled.append(j["id"])
+    return cancelled
+
+
+def _draining() -> bool:
+    """`gpuq restart` asked the daemon to start no new job until it restarts. The
+    flag holds the restarting CLI's pid: a killed CLI must not stop the queue."""
+    try:
+        pid = int((ROOT / "drain").read_text().split()[0])
+    except (OSError, ValueError, IndexError):
+        return False
+    return _alive(pid)
+
+
+def restart(max_wait_s: float = 4 * 3600) -> int:
+    """Restart the daemon without touching a timing measurement: stop dispatching,
+    wait until no unpaused job is running, then replace the daemon. Restarting under
+    a quiet job adds CPU noise to it; a paused backlog job is simply adopted."""
+    (ROOT / "drain").write_text(f"{os.getpid()} {_now()}")
+    try:
+        end = time.monotonic() + max_wait_s
+        while True:
+            busy = [
+                j["id"]
+                for j in _jobs()
+                if j["state"] == "running" and not j.get("paused")
+            ]
+            if not busy:
+                break
+            if time.monotonic() > end:
+                print(f"gpuq: still running after {max_wait_s:.0f}s: {busy}")
+                return 1
+            time.sleep(POLL_S)
+        try:
+            pid = int((ROOT / "daemon.lock").read_text().strip())
+        except (OSError, ValueError):
+            pid = 0
+        if pid and _alive(pid):
+            os.kill(pid, signal.SIGTERM)
+            while _alive(pid):
+                time.sleep(0.1)
+    finally:
+        (ROOT / "drain").unlink(missing_ok=True)
+    _ensure_daemon()
+    print("gpuq: daemon restarted")
+    return 0
 
 
 def _adoption_order(jobs: list[dict]) -> list[dict]:
@@ -1217,6 +1365,17 @@ def daemon() -> None:
                 target = _adopt_remote if lane == "m3" else _adopt
                 for row in rows:
                     target(row, JOBS / f"{row['id']}.json", gate)
+                    state = _read(JOBS / f"{row['id']}.json").get("state")
+                    print(
+                        f"{time.strftime('%H:%M:%S')} end {row['id']} {state} (adopted)",
+                        flush=True,
+                    )
+                    row["state"] = state
+                    for sib in _cancel_siblings(row):
+                        print(
+                            f"{time.strftime('%H:%M:%S')} cancel {sib} (sibling failed)",
+                            flush=True,
+                        )
 
             for lane, rows in by_lane.items():
                 worker = threading.Thread(
@@ -1238,6 +1397,7 @@ def daemon() -> None:
                 lane in workers
                 or lane == "m3"
                 and (ROOT / "m3-quarantine.json").exists()
+                or _draining()
             ):
                 continue
             jobs = _jobs()
@@ -1334,6 +1494,37 @@ def display_state(j: dict) -> str:
     return j["state"]
 
 
+def stats(hours: float = 24.0) -> None:
+    """GPU use per line over the last ``hours``: active minutes, how many jobs ended
+    without a usable result (failed / timeout / stalled / lost / contended timing)
+    and the minutes they burned. The number to drive down."""
+    now = _now()
+    lines: dict[str, list[float]] = {}
+    for j in _jobs():
+        st, en = j.get("started"), j.get("ended")
+        if not st or not en or now - en > hours * 3600:
+            continue
+        paused = sum((b or en) - a for a, b in j.get("pauses") or [])
+        mins = max(0.0, en - st - paused) / 60
+        bad = j["state"] in ("failed", "timeout", "stalled", "lost") or bool(
+            j["state"] == "done" and j.get("contended") and requires_quiet(j)
+        )
+        row = lines.setdefault((j.get("label") or "?").split("-")[0], [0, 0, 0.0, 0.0])
+        row[0] += 1
+        row[1] += bad
+        row[2] += mins
+        row[3] += mins if bad else 0.0
+    total = [sum(r[i] for r in lines.values()) for i in range(4)]
+    print(
+        f"last {hours:g} h: {total[0]:.0f} jobs, {total[2]:.0f} GPU min, "
+        f"{total[3]:.0f} min wasted ({100 * total[3] / max(total[2], 1):.1f}%)"
+    )
+    for name, (n, b, m, w) in sorted(lines.items(), key=lambda kv: -kv[1][3]):
+        print(
+            f"  {name:14} jobs={n:3.0f} bad={b:3.0f} gpu={m:6.1f} min wasted={w:6.1f} min"
+        )
+
+
 def status() -> None:
     now = _now()
     rows = _jobs()
@@ -1343,6 +1534,8 @@ def status() -> None:
     ]
     daemon_up = _daemon_running()
     print(f"daemon: {'up' if daemon_up else 'down'}")
+    if _draining():
+        print("draining: a restart waits for the running job; nothing new starts")
     cfg = load_serving_config()
     if cfg.get("urls"):
         print(f"serving gate: {', '.join(cfg['urls'])}")
@@ -1473,6 +1666,8 @@ def main() -> int:
     )
     wp.add_argument("ids", nargs="+")
     sub.add_parser("status")
+    sub.add_parser("restart")
+    sub.add_parser("stats").add_argument("--hours", type=float, default=24.0)
     sub.add_parser("log").add_argument("id")
     sub.add_parser("cancel").add_argument("id")
     sub.add_parser("_daemon")
@@ -1523,6 +1718,10 @@ def main() -> int:
         status()
     elif a.op == "log":
         sys.stdout.write((LOGS / f"{a.id}.log").read_text())
+    elif a.op == "stats":
+        stats(a.hours)
+    elif a.op == "restart":
+        sys.exit(restart())
     elif a.op == "cancel":
         path = JOBS / f"{a.id}.json"
         j = _read(path)
