@@ -150,7 +150,11 @@ def install(output, sync_layers=False):
             ("mlx_vlm.generate.ar", "PromptProcessingBatch", "prompt_step"),
             ("mlx_vlm.generate.ar", "PromptProcessingBatch", "generate"),
         ]
-        prof_dir = os.environ.get("YUNSHU_TRACE_LOOKUP_PROF")
+        prof_dir = os.environ.get("YUNSHU_TRACE_LOOKUP_PROF") or (
+            str(trace.output.with_name("lookup-prof"))
+            if trace.output.with_name("lookup-prof.enable").exists()
+            else None
+        )
         if prof_dir:
             import cProfile
             import io
