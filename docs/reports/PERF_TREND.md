@@ -999,3 +999,81 @@ pool, but it is still faster than main).
 Found, not changed: on main an exact-prefix checkpoint of an older turn is superseded as soon as a newer request extends it, so a
 follow-up whose question diverges after a shared document finds only the head checkpoint (cached 42 of 40,960 tokens after one
 diverging follow-up; `trim_ttft` job `1004-132819-00-memory1-trim-ttft-b`). That is APC reuse policy, not memory.
+
+### 2026-10-05 dflash9: fast DFlash tree round time vs TensorFold, fewer dispatches per round (M5, 27B oQ4e-mtp + DFlash2)
+
+Fresh comparison first (same checkpoint and prompts, greedy, 256 tokens, `tfbench` decode part, one server session per cell and
+rep, three reps with the engine order rotated, gpuq quiet; TF 0.6.1 serving DFlash2 with `--drafter`, Yunshu main `191e92e6`
+with `YUNSHU_VLM_DRAFT` set; both logs prove DFlash; every rep of an engine has one response digest). ms/round is
+decode ms / rounds from the response (`x_yunshu`) and from TF's own request log (`rounds=`, `ms/round=`).
+
+| cell | TF tok/s | TF commits/round | TF ms/round | Yunshu main tok/s | commits/round | ms/round |
+|---|---:|---:|---:|---:|---:|---:|
+| 1K code | 141.4 | 7.11 | 48.9 | 119.7 | 6.56 | 54.5 |
+| 1K prose | 71.9 | 3.51 | 47.9 | 62.4 | 3.52 | 56.5 |
+| 8K code | 80.8 | 4.20 | 50.6 | 67.0 | 4.20 | 62.3 |
+| 8K prose | 66.8 | 3.46 | 50.7 | 53.6 | 3.27 | 60.5 |
+
+The gap is real: 10-12% of tok/s at 1K, 17-20% at 8K. 1K code is 8% fewer commits per round (drafting quality, not time) plus 11%
+longer rounds; the other cells are all round time (+9 to +12 ms at 8K). The "6-7 ms" in the wide6 note was about right at 1K
+and too small at 8K.
+
+Where the round goes (main, 1K code, 55 ms): host work is not the limit. Building the verify graph takes ~44 ms of CPU but the
+GPU is still ~8-11 ms behind when it ends (`target.tolist()` wait), so the round is GPU-time bound; the post-readback commit is
+0.45 ms, drafter + search 0.85 ms. A forward evaluated on its own takes ~49 ms (6.5 construct, ~43 submit, ~5.5 tail); the same
+forward with the tree-GDN and attention branches removed takes 37.1 ms, i.e. the 16-row matmul floor (15.0 GB of projections
++ head, ~405 GB/s; the 24.5 ms read bound at an assumed 614 GB/s is not reachable on this graph). TF's own start-up table puts its
+16-row forward at 39.0 ms, so the 10 ms excess is in the non-matmul work: 1234 custom-kernel nodes and ~5000 graph nodes per
+forward on main (TF code study: ~750 launches). Non-synchronizing method: ablation inside the real serving loop (one extra
+probe forward per request, variants alternated 4x, medians of 24): launch removals `noxsum` -2.3..-2.7 ms (256 xsum launches),
+tree-GDN branch -7.4 ms, attention branch -5.0 ms at 1K and -6.5 ms at 8K (the last two overstate: they also let MLX drop the
+now unused qkv/a/b/q projections); a second copy of the kernel in the dependent chain costs +0.7 ms (GDN recurrence), +1.7 ms
+(attention, 1K) and +4.2 ms (attention, 8K). Attribution: dispatch count in the dependent chain (each removed dependent launch
+is worth roughly 8-20 us), not a single slow kernel and not CPU bookkeeping.
+
+What changed (all lossless; micro-benches below compare bits, never tolerances):
+
+| commit | change | per-round launches | bit identity |
+|---|---|---:|---|
+| 46dfc998 | GDN prework gathers the conv window in-kernel (no concatenate + gather per layer) | -96 | 20 random trees, q/k/v equal; 48 layers 1.7-2.1 -> 0.79 ms |
+| 0fe3876f | attention glue as `tree_glue` kernels (per-row key/value tail copy, token-fused query layouts, no partial concatenation); fast tree's add+RMSNorm also writes the lane group sums (sequential bf16 adds from 0.0f) so the following projections skip xsum | about -300 glue ops, -128 xsum | 45 (width, n0) attention cases and 7 row counts, outputs and sums equal |
+| 442a66f1 | GDN norm-gate writes the out projection's sums | -48 xsum | 7 row counts equal |
+| b742ecfe | both 8-token groups read the shared prefix in one launch (batch rows with one key row, chunk-major work list); one merge kernel again | -16 | 40 cases up to 32800 keys equal |
+| 2e9b7f51 | `YUNSHU_DRAFT_BITS` (default 8, was hard-coded) | 0 | token digests equal for 4 and 8 |
+
+Result, same harness, head vs main (3 quiet reps; ms/round in brackets):
+
+| cell | TF | Yunshu main | Yunshu head | head vs main | head vs TF |
+|---|---:|---:|---:|---:|---:|
+| 1K code | 141.4 | 119.7 (54.5) | 128.7 (50.7) | +7.5% | -9.0% |
+| 1K prose | 71.9 | 62.4 (56.5) | 67.0 (52.8) | +7.4% | -6.8% |
+| 8K code | 80.8 | 67.0 (62.3) | 74.5 (56.0) | +11.2% | -7.8% |
+| 8K prose | 66.8 | 53.6 (60.5) | 60.5 (55.4) | +12.9% | -9.4% |
+
+`yv ab` (base main b4c2dd55 vs cand 2e9b7f51, run `dflash9-ab2`): PASS. Identity 12 cells (dflash) and spec-off equal, APC 4 pairs
+hit (1033, 8202), MMLU-Pro 200 items base 107 / cand 107 (net 0), speed code@1K +7.1%, prose@1K +6.0%, code@8K +9.9%, prose@8K
++14.9% (noise +-2.3), follow-up TTFT -3.3% at 1K, cold TTFT +1.3% at 1K code (not caused by decode kernels; prefill is
+untouched). The earlier run on 442a66f1 (`dflash9-ab1`) also passed: +6.3/+7.3/+8.8/+10.2%. HTTP response digests of
+head, head with `YUNSHU_DRAFT_BITS=4` and main are equal in all 12 (context, task, phase) cells.
+
+`YUNSHU_DRAFT_BITS=4` (a stable option, not the default): 1K code 133.9, 1K prose 72.0, 8K code 76.6 (+4.0/+7.5/+2.8% over 8 bit,
+~49 ms/round) but 32K code 76.5 vs 82.3 (-7%; commits/round 4.20 vs 4.57) and 32K prose +1.6%. Acceptance falls at long contexts
+for code, so a mixed result stays an option; TF ships 4-bit.
+
+Tried, bit-equal, no end-to-end effect (not shipped; patch kept privately): GDN gates folded into the prework launch (-48
+launches), silu(gate)*up fused with the down projection's sums (exhaustive over all bf16 gate encodings, -64 launches): 128.0 /
+66.6 / 74.0 / 58.6 tok/s vs 128.7 / 67.0 / 74.5 / 60.5. Threadgroup-staged q/k and register-resident states for the tree-GDN
+kernel: <= 0.1 ms per forward in a dependent-chain micro-bench. Forcing 15 draft nodes every round: commits/round unchanged at
+1K (the budget already picks full trees). Single shared-prefix launch: bit-equal and up to 2x faster than the old op chain in
+isolation, but no change over the two-launch fused version end to end (8K code 73.8 vs 73.6).
+
+Remaining gap: 1K code commits/round 6.56 vs 7.11 (drafting, not time); ~2 ms/round at 1K and ~5 ms/round at 8K. Candidates: one
+kernel for RoPE/q-k norm/cache write in attention layers, grouped in-projections (qkv|z, b|a; mixed 4/5-bit), one pass over the
+shared prefix for both token groups inside the tile kernel (~1 ms at 8K), chunk size of the ragged attention (changes AR and
+spec arithmetic together). The fast tree only runs at 512..10240 live context and the first 256 generated tokens, so long
+replies and 32K contexts run on chain + copy (`mtp_lane` verify), which still reads the prefix once per 8-token group.
+
+Harness notes: `tfbench` records `part_done` even when a server request fails mid-stream (a run with `ct=24` and a traceback in
+the server log looked complete), so every ms/round row here was checked for `ct == 256` and `finish == length`. Jobs
+`1004-215938-00-dflash9-base-r0..r2` (baseline), `1005-005328-00-dflash9-cand-q8ctl-r0..r2` (head), `1005-011739-00-dflash9-bits4-1k8k-r0..r2`,
+`1005-010425-00-dflash9-bits{8,4}-32k-r0..r2`, ablations `1005-001731-00-dflash9-ablate-r5`, micro-benches `dflash9-prework/attnbench/addrms/normgate/swiglu`.
