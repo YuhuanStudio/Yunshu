@@ -10,6 +10,7 @@ p.add_argument("--contexts", nargs="+", type=int, default=[256, 1024, 2048, 4096
 p.add_argument("--budgets", nargs="+", default=["unset", "4096"])
 p.add_argument("--rep-offset", type=int, default=0)
 p.add_argument("--tiny", action="store_true")
+p.add_argument("--no-plain", action="store_true")
 p.add_argument("--dry-run", action="store_true")
 a = p.parse_args()
 if a.dry_run:
@@ -160,7 +161,9 @@ with a.output.open("x") as out:
                             if budget == "unset":
                                 body.pop("max_tokens")
                             # Spec miss/hit first, then the same initialized target with drafting disabled.
-                            for phase in ["miss", "hit", "plain"]:
+                            for phase in ["miss", "hit"] + (
+                                [] if a.no_plain else ["plain"]
+                            ):
                                 req = dict(body)
                                 if phase == "plain":
                                     (boot / "plain-next").touch()
