@@ -350,21 +350,26 @@ def _gdn_layer(verifier, layer, x, cache, shape: TreeShape):
     state = cache[1]
     if state is None:
         state = mx.zeros((1, hv, dv, dk), dtype=mx.float32)
-    seq = mx.concatenate([conv_prev, mixed], axis=1)[0]  # [3 + W, C]
-    c_dim = seq.shape[-1]
-    windows = mx.take(seq, shape.conv_index(), axis=0).reshape(w, 3, c_dim)
-    inv = dk**-0.5
-    q, k, v, _ = gp.gdn_prework_fused(
-        mixed.reshape(w, 1, c_dim),
-        windows,
-        layer.conv1d.weight,
-        mx.array(inv * inv, dtype=dtype),
-        mx.array(inv, dtype=dtype),
-        hk,
-        hv,
-        dk,
-        dv,
-    )
+    c_dim = mixed.shape[-1]
+    prework = getattr(shape, "gdn_prework", None)
+    if prework is not None:
+        # fast tree: the conv window is gathered inside the prework kernel
+        q, k, v = prework(mixed, conv_prev, layer)
+    else:
+        seq = mx.concatenate([conv_prev, mixed], axis=1)[0]  # [3 + W, C]
+        windows = mx.take(seq, shape.conv_index(), axis=0).reshape(w, 3, c_dim)
+        inv = dk**-0.5
+        q, k, v, _ = gp.gdn_prework_fused(
+            mixed.reshape(w, 1, c_dim),
+            windows,
+            layer.conv1d.weight,
+            mx.array(inv * inv, dtype=dtype),
+            mx.array(inv, dtype=dtype),
+            hk,
+            hv,
+            dk,
+            dv,
+        )
     q = q.reshape(1, w, hk, dk)
     k = k.reshape(1, w, hk, dk)
     v = v.reshape(1, w, hv, dv)
@@ -401,15 +406,28 @@ def _gdn_layer(verifier, layer, x, cache, shape: TreeShape):
         )
         rows = (k, v, a, b)
     z = z.reshape(1, w, hv, dv)
-    out, sums = gv._norm_gate_kernel(layer.norm.eps)(
-        inputs=[y, z, layer.norm.weight],
-        template=[("InT", dtype)],
-        grid=(32, w * hv, 1),
-        threadgroup=(32, 8, 1),
-        output_shapes=[(1, w, hv * dv), (w, hv * dv // 64)],
-        output_dtypes=[dtype, mx.float32],
-    )
-    vq.register_group_sums(out, sums)
+    from .kernels import lane_linear
+
+    if (
+        getattr(shape, "fast_glue", False)
+        and lane_linear.sum_reuse_enabled()
+        and dtype == mx.bfloat16
+        and dv == 128
+    ):
+        # the out projection's group sums come out of the same kernel
+        from . import tree_glue
+
+        out = tree_glue.norm_gate_lane(y, z, layer.norm, hv)
+    else:
+        out, sums = gv._norm_gate_kernel(layer.norm.eps)(
+            inputs=[y, z, layer.norm.weight],
+            template=[("InT", dtype)],
+            grid=(32, w * hv, 1),
+            threadgroup=(32, 8, 1),
+            output_shapes=[(1, w, hv * dv), (w, hv * dv // 64)],
+            output_dtypes=[dtype, mx.float32],
+        )
+        vq.register_group_sums(out, sums)
     record = ("gdn", layer, state, conv_prev, mixed, rows)
     return verifier._linear(layer.out_proj, out), record
 
@@ -575,6 +593,7 @@ class RoundContext:
                 bases.append(plan[1] + base)
                 base += plan[2]
             self.starts_a = bases[0] if len(bases) == 1 else mx.concatenate(bases)
+        self.meta = mx.array([n0, self.tail_start, self.m], dtype=mx.int32)
         self.pos = None
 
 
@@ -606,6 +625,10 @@ def tree_attention(
     g = h // hkv
     cstar, tail_start, ntail, m = rc.cstar, rc.tail_start, rc.ntail, rc.m
     scale_arr = _scale_array(scale)
+    if getattr(shape, "fast_glue", False) and w <= 2 * ra.TILE_TOKENS:
+        return _tree_attention_fused(
+            queries, keys, values, shape, rc, scale_arr, (h, hkv, d)
+        )
 
     # shared chunks 0 .. cstar - 1: every row sees them whole
     if cstar:
@@ -702,6 +725,135 @@ def tree_attention(
     return out
 
 
+_SHARED: dict = {}
+
+
+def shared_plan_lists(tail_start: int, groups: int):
+    """Work list of the one shared-prefix launch that serves both 8-token groups.
+
+    Each group is a batch row of the tile kernel and both read key row 0, so the
+    prefix K/V is streamed once per layer instead of once per group. A group's
+    ``length`` is its last token's key count plus its pad to 8 tokens, which
+    keeps every real token's causal limit (``length - (7 - t)``) unchanged.
+    Items run chunk-major, group-minor: the two groups' threadgroups for one
+    chunk are launched back to back and share its cache lines."""
+    lengths = [tail_start + 7 + 8 * g for g in range(groups)]
+    nc = tail_start // CK  # the merge reads only the shared chunks (c < cstar)
+    items, starts, total, cmax = [], [], 0, []
+    for n in lengths:
+        counts = [min(nc, max(0, -(-(n - (7 - t)) // CK))) for t in range(8)]
+        for count in counts:
+            starts.append(total)
+            total += count
+        cmax.append(max(counts))
+    for c in range(max(cmax)):
+        items += [b * nc + c for b in range(groups) if c < cmax[b]]
+    return lengths, nc, items or [0], starts, max(total, 1)
+
+
+def _shared_plan(tail_start: int, groups: int):
+    key = (tail_start, groups, CK)
+    hit = _SHARED.get(key)
+    if hit is None:
+        lengths, nc, items, starts, total = shared_plan_lists(tail_start, groups)
+        hit = (
+            mx.array(lengths, dtype=mx.int32),
+            mx.zeros((groups,), dtype=mx.int32),
+            (
+                mx.array(items, dtype=mx.int32),
+                mx.array(starts, dtype=mx.int32),
+                total,
+            ),
+            nc,
+        )
+        if len(_SHARED) > 8:
+            _SHARED.clear()
+        _SHARED[key] = hit
+    return hit
+
+
+def _add_rms(shape, h, r, norm):
+    """Residual add + RMSNorm. The fast tree's lane projections take their
+    input group sums from the norm kernel, which saves one launch per norm."""
+    from . import tree_glue
+    from .kernels import lane_linear
+
+    if (
+        getattr(shape, "fast_glue", False)
+        and lane_linear.sum_reuse_enabled()
+        and h.dtype == mx.bfloat16
+        and h.shape[-1] <= 8192
+    ):
+        return tree_glue.add_rms_lane(h, r, norm)
+    return vq.add_rms_norm(h, r, norm)
+
+
+def _tree_attention_fused(queries, keys, values, shape, rc, scale_arr, dims):
+    """``tree_attention`` for windows of at most two 8-token groups with the
+    query layouts, the per-row key/value tails and the partial tables built by
+    one kernel each instead of a chain of copies, and the shared prefix read
+    once for both token groups. Same values, same partials, same merge order."""
+    from . import tree_glue
+
+    h, hkv, d = dims
+    w = shape.width
+    cstar, ntail, m = rc.cstar, rc.ntail, rc.m
+    groups = 2 if w > ra.TILE_TOKENS else 1
+    q_a, q_b = tree_glue.fuse_queries(queries, hkv, groups)
+    cap2 = _tree_tail_capacity(m + shape.max_depth + 1)
+    tail_k, tail_v = tree_glue.tail_copy(
+        keys,
+        values,
+        rc.win_idx,
+        rc.meta,
+        width=w,
+        depth_rows=shape.max_depth + 1,
+        cap2=cap2,
+    )
+    if cstar and groups == 2:
+        lengths, slots, plan, nc = _shared_plan(rc.tail_start, 2)
+        po_a, pm_a, pl_a, _ = _tile_partials(
+            q_a, keys, values, lengths, slots, scale_arr, plan, 8, nc
+        )
+        starts_a = plan[1]
+    elif cstar:
+        _lo, tg, len_arr, nc, plan = rc.groups_a[0]
+        po_a, pm_a, pl_a, _ = _tile_partials(
+            q_a, keys, values, len_arr, rc.slot0, scale_arr, plan, tg, nc
+        )
+        starts_a = plan[1]
+    else:
+        po_a = pm_a = pl_a = _zeros((1,), mx.float32)
+        starts_a = _zeros((w,), mx.int32)
+    po_b, pm_b, pl_b, starts_b = _tile_partials(
+        q_b,
+        tail_k,
+        tail_v,
+        rc.local_arr,
+        rc.slots_b,
+        scale_arr,
+        rc.plan_b,
+        1,
+        ntail,
+    )
+    (out,) = _merge_kernel()(
+        inputs=[po_a, pm_a, pl_a, po_b, pm_b, pl_b, starts_a, starts_b, rc.abs_lengths],
+        template=[
+            ("D", d),
+            ("H", h),
+            ("W", w),
+            ("NC", rc.nc_total),
+            ("CK", CK),
+            ("CS", cstar),
+        ],
+        grid=(32, w * h, 1),
+        threadgroup=(32, 1, 1),
+        output_shapes=[(1, h, w, d)],
+        output_dtypes=[mx.bfloat16],
+    )
+    return out
+
+
 def supported(language_model: Any) -> bool:
     """Tile kernel present, dense Qwen3.5 layers the fused GDN kernels take."""
     if not ra.tile_ready():
@@ -755,7 +907,7 @@ def _rope_delta(lm) -> int:
     return int(delta.reshape(-1)[0].item())
 
 
-def tree_forward(
+def _tree_forward(
     lm,
     tokens: mx.array,
     shape: TreeShape,
@@ -808,14 +960,14 @@ def tree_forward(
         # fused residual add + RMSNorm (bit-exact to the separate ops)
         post = layer.post_attention_layernorm
         if vq._add_rms_eligible(h, r, post):
-            h, normed, _ = vq.add_rms_norm(h, r, post)
+            h, normed, _ = _add_rms(shape, h, r, post)
         else:
             h = h + r
             normed = post(h)
         ff = verifier._feed_forward(layer.mlp, normed)
         nxt = nxt_norm.get(i)
         if nxt is not None and vq._add_rms_eligible(h, ff, nxt):
-            h, normed, _ = vq.add_rms_norm(h, ff, nxt)
+            h, normed, _ = _add_rms(shape, h, ff, nxt)
         else:
             h = h + ff
             if nxt is not None:
@@ -835,6 +987,17 @@ def tree_forward(
                 raise
     res.hidden = model.norm(h)
     return res
+
+
+def tree_forward(*args, **kwargs) -> TreeResult:
+    """Run one window; the group-sum table registered by the layers is
+    per-forward state, so drop it afterwards. Without this a thread-local table
+    kept every round's hidden arrays (and their Metal events) alive for the
+    life of the server."""
+    try:
+        return _tree_forward(*args, **kwargs)
+    finally:
+        vq.clear_group_sums()
 
 
 def tree_commit(lm, cache: list, res: TreeResult, path: list[int]) -> None:

@@ -36,3 +36,34 @@ def test_tree_shape_rejects_bad_parents():
         tv.TreeShape([0, 0])
     with pytest.raises(ValueError):
         tv.TreeShape([-1, 1])
+
+
+def test_shared_plan_serves_both_groups_in_one_launch():
+    from yunshu_engine import tree_verify as tv
+
+    ck = tv.CK
+    lengths, nc, items, starts, total = tv.shared_plan_lists(2 * ck, 2)
+    # each group's length keeps its real tokens' causal limit (length - (7 - t))
+    assert lengths == [2 * ck + 7, 2 * ck + 15]
+    assert nc == 2  # shared chunks only; the merge never reads the partial third
+    # chunk-major, group-minor: both groups of a chunk are adjacent items
+    assert items == [0, 2, 1, 3]
+    # slot starts per (group, token): contiguous, node index = group * 8 + token
+    assert len(starts) == 16 and starts == [2 * i for i in range(16)]
+    assert total == 32
+    # one group: nothing from the second
+    lengths1, _, items1, starts1, _ = tv.shared_plan_lists(2 * ck, 1)
+    assert lengths1 == [2 * ck + 7] and len(starts1) == 8 and items1 == [0, 1]
+
+
+def test_only_the_fast_shape_takes_the_fused_glue():
+    from yunshu_engine.dflash_plan import FastShape
+
+    assert FastShape.fast_glue is True
+    assert not getattr(tv_shape_classes(), "fast_glue", False)
+
+
+def tv_shape_classes():
+    from yunshu_engine import tree_verify as tv
+
+    return tv.DynamicShape

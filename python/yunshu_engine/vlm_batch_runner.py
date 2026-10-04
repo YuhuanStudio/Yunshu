@@ -36,6 +36,7 @@ import mlx.core as mx
 import numpy as np
 
 from . import keyed_sampling, settings
+from .idle_memory import IdleMemory
 from .keyed_sampling import top_k_filter, top_p_filter
 from .serving.busy_time import BusyMeter
 from .serving.work_scheduler import (
@@ -311,6 +312,7 @@ class VLMBatchRunner:
         self._primary_handoff_at: float | None = None
         self._handoff_timer: threading.Timer | None = None
         self.clear_on_idle = False
+        self._idle_memory: IdleMemory | None = None
         # Requests the engine has accepted, including ones still being
         # prepared (templating, image encoding) — the runner alone cannot see
         # those, and a request is only "alone" if the engine has no others.
@@ -601,7 +603,7 @@ class VLMBatchRunner:
             for job in group.jobs.values():
                 self._emit(job, exc)
             with contextlib.suppress(Exception):
-                group.gen.close()
+                close_generator(group.gen)
         self._batches.clear()
         self._spec = None
         self._aux_spec = None
@@ -631,6 +633,8 @@ class VLMBatchRunner:
             )
 
     def _submit(self, job: _Job) -> None:
+        if self._idle_memory is not None:
+            self._idle_memory.activity()
         with self._lock:
             job.queued = job.last_service = time.perf_counter()
             self._pending.append(job)
@@ -978,6 +982,10 @@ class VLMBatchRunner:
             and hasattr(coordinator, "release_request")
         ):
             coordinator.release_request(job.ids, job.cache_plan)
+        if not group.jobs and getattr(group, "spec", False):
+            from .spec_release import release_rounds
+
+            release_rounds(group.gen)
         self._emit(job, _DONE)
 
     @staticmethod
@@ -1730,15 +1738,15 @@ class VLMBatchRunner:
                 self._step_driver(primary)
             if self._spec is not None and not self._spec.jobs:
                 if not self._spec.gen.has_work:
-                    self._spec.gen.close()
+                    close_generator(self._spec.gen)
                     self._spec = None
             if self._aux_spec is not None and not self._aux_spec.jobs:
                 if not self._aux_spec.gen.has_work:
-                    self._aux_spec.gen.close()
+                    close_generator(self._aux_spec.gen)
                     self._aux_spec = None
             for key, group in list(self._batches.items()):
                 if not group.jobs and not group.gen.has_work:
-                    group.gen.close()
+                    close_generator(group.gen)
                     del self._batches[key]
         except Exception as exc:
             logger.exception("VLM runner step failed; failing active requests")
@@ -1746,7 +1754,7 @@ class VLMBatchRunner:
                 for job in group.jobs.values():
                     self._emit(job, exc)
                 with contextlib.suppress(Exception):
-                    group.gen.close()
+                    close_generator(group.gen)
             self._batches.clear()
             self._spec = None
             self._aux_spec = None
@@ -1786,7 +1794,15 @@ class VLMBatchRunner:
                     timer.start()
             else:
                 self._schedule()
-        elif self.clear_on_idle:
+        else:
+            self._drained()
+
+    def _drained(self) -> None:
+        if self._executor is not None:
+            if self._idle_memory is None:
+                self._idle_memory = IdleMemory(self._executor.submit, self.busy)
+            self._idle_memory.drained()
+        if self.clear_on_idle:
             # Large models: release the buffer pool once everything drains
             # (clearing under active batches would only force reallocation). Up to
             # YUNSHU_PREFILL_BUFFER_CACHE_GB stays: the next request's cache restore
@@ -1796,6 +1812,25 @@ class VLMBatchRunner:
 
                 mx.synchronize()
                 buffer_cache.clear_if_over()
+
+
+def close_generator(gen: Any) -> None:
+    """Close a batch generator and break the reference cycle its speculative round holds.
+
+    ``SpeculativeGenerationBatch`` keeps its rounds generator in ``_rounds_iter``, and that
+    generator's frame holds a closure over the batch (``stop_check``), the cache-position
+    transaction and the prompt cache. Dropping the generator therefore frees nothing until
+    Python's cyclic collector runs, which pinned a finished request's whole KV for seconds
+    to minutes. Closing the rounds generator frees its frame, so the caches go with the
+    last reference.
+    """
+    from .spec_release import release_rounds
+
+    try:
+        release_rounds(gen)
+    except Exception:  # noqa: BLE001
+        logger.debug("closing the speculative rounds failed", exc_info=True)
+    gen.close()
 
 
 def _spec_counters(drafter: Any) -> tuple | None:

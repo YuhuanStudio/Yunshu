@@ -201,6 +201,19 @@
   "derived": [
     {
       "kind": "derived",
+      "path": "python/yunshu_engine/dflash_fast.py",
+      "repo": "https://github.com/jundot/omlx",
+      "clone": "reference/omlx",
+      "upstream_paths": ["omlx/patches/qwen35_gdn_prework.py"],
+      "commit": "a98d8c8c",
+      "license": "Apache-2.0",
+      "local_changes": [
+        "prework_source(): the conv window is gathered inside the kernel from the cached conv tail and the window rows (conv_idx), and the unused conv-state output writes are dropped; every tap, product and sum is the upstream kernel's own line"
+      ],
+      "why": "fast-tree GDN prework without the per-layer concatenate + gather"
+    },
+    {
+      "kind": "derived",
       "path": "python/yunshu_engine/copy_drafter.py",
       "repo": "https://github.com/ashhart/TensorFold",
       "clone": "reference/TensorFold",
@@ -1298,6 +1311,21 @@
       "commit": "v0.7.3",
       "why": "checkpoints of a newer request supersede earlier prefixes of the same conversation",
       "source_sha256": "29d20214c78d223a1609e7c919bccd4ec7743b3382ffddf6e0bef0dc6b413e12",
+      "installed_version": "0.7.4"
+    },
+    {
+      "kind": "patches",
+      "path": "python/yunshu_engine/apc_manager.py",
+      "repo": "https://github.com/Blaizzy/mlx-vlm",
+      "clone": "reference/mlx-vlm",
+      "package": "mlx-vlm",
+      "module": "mlx_vlm.apc",
+      "symbol": "_clone_prompt_cache_for_apc",
+      "signature": "(prompt_cache: Sequence[Any], *, min_capacity_tokens: Optional[int]=None)",
+      "license": "MIT",
+      "commit": "v0.7.3",
+      "why": "a checkpoint that is already a private snapshot (the runner's deferred captures) is stored without the second full copy store_exact_cache made",
+      "source_sha256": "9d747242605e2872c76133b1c173ed3945b825f6a504c51903b64045dc84f8ec",
       "installed_version": "0.7.4"
     },
     {
