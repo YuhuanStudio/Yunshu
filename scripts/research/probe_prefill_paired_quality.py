@@ -41,6 +41,8 @@ def main():
             "cow",
             "cowasync",
             "spans",
+            "interleave",
+            "bucket512",
         ),
         default="wide",
     )
@@ -75,10 +77,18 @@ def main():
     uninstall_async = None
     span_counts = {}
     uninstall_spans = None
-    if a.variant == "spans":
+    if a.variant in ("spans", "interleave"):
         from span_forward import install as install_spans
 
-        span_counts, uninstall_spans = install_spans()
+        span_counts, uninstall_spans = install_spans(
+            preserve_descriptors=a.variant == "interleave"
+        )
+    bucket_counts = {}
+    uninstall_bucket = None
+    if a.variant == "bucket512":
+        from capacity_bucket import install as install_bucket
+
+        bucket_counts, uninstall_bucket = install_bucket()
     cow_counts = {}
     uninstall_cow = None
     if a.variant in ("cow", "cowasync"):
@@ -118,6 +128,8 @@ def main():
                     "cow",
                     "cowasync",
                     "spans",
+                    "interleave",
+                    "bucket512",
                 ):
                     if not runner.apc_manager.prefill_stride:
                         prime_ids = ids[:-65]
@@ -152,7 +164,9 @@ def main():
                     else (candidate, "baseline")
                 ):
                     if span_counts:
-                        span_counts["enabled"] = mode == "spans"
+                        span_counts["enabled"] = mode in ("spans", "interleave")
+                    if bucket_counts:
+                        bucket_counts["enabled"] = mode == "bucket512"
                     if cow_counts:
                         cow_counts["enabled"] = mode in ("cow", "cowasync")
                     if kernel_uninstall:
@@ -177,6 +191,8 @@ def main():
                         "cow",
                         "cowasync",
                         "spans",
+                        "interleave",
+                        "bucket512",
                     ):
                         prime_stats = RunStats()
                         primed = list(
@@ -219,7 +235,16 @@ def main():
                     expected_cached = (
                         len(prime_ids) - 1
                         if candidate
-                        in ("async", "barrier", "paired32", "cow", "cowasync", "spans")
+                        in (
+                            "async",
+                            "barrier",
+                            "paired32",
+                            "cow",
+                            "cowasync",
+                            "spans",
+                            "interleave",
+                            "bucket512",
+                        )
                         else len(ids) - 1
                         if candidate == "native"
                         else 0
@@ -239,7 +264,10 @@ def main():
                     native_calls = native_forward.native_calls - native_before
                     if mode == "native" and not native_calls:
                         raise RuntimeError("native singleton path did not engage")
-                    if mode == "spans" and span_counts["forwards"] <= span_before:
+                    if (
+                        mode in ("spans", "interleave")
+                        and span_counts["forwards"] <= span_before
+                    ):
                         raise RuntimeError("joint span forward did not engage")
                     if (
                         mode in ("cow", "cowasync")
@@ -307,6 +335,8 @@ def main():
         lane_linear.PIECE, lane_qmm.MAX_ROWS = piece, maximum
         if kernel_uninstall:
             kernel_uninstall()
+        if uninstall_bucket:
+            uninstall_bucket()
         if uninstall_spans:
             uninstall_spans()
         if uninstall_cow:

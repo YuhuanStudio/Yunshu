@@ -122,7 +122,9 @@ def run_ab(
     exe = Executor(
         rd,
         gq,
-        f"infra-{a.label}"[:40],
+        # The run label names the line (wide8-..., prefill7-...): gpuq stats, the
+        # watchdog and sibling cancels attribute the jobs to it.
+        a.label[:40],
         log,
         priority=a.priority,
         cache_dir=(runs or RUNS).parent / "cellcache",
