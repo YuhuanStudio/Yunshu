@@ -607,3 +607,38 @@ def test_external_worktrees_take_turns(q):
     ]
     # wide-lead just ran: the other line goes next even though it submitted later.
     assert q._pick(jobs)["id"] == "p1"
+
+
+def test_drain_flag_needs_a_live_restarter(q):
+    import os
+
+    assert not q._draining()
+    (q.ROOT / "drain").write_text(f"{os.getpid()} 1")
+    assert q._draining()
+    (q.ROOT / "drain").write_text("999999 1")  # restarter gone: queue keeps going
+    assert not q._draining()
+
+
+def test_draining_daemon_starts_no_priority_work(q, monkeypatch):
+    import os
+
+    now = 100_000.0
+    monkeypatch.setattr(q.time, "time", lambda: now)
+    low = dict(
+        id="low",
+        state="running",
+        priority=-1,
+        submitted=now - 60,
+        started=now - 60,
+        pid=1,
+        env={},
+    )
+    q._write(q.JOBS / "low.json", low)
+    q.submit(["true"], "x-smoke", 1, 0)
+    ran = []
+    monkeypatch.setattr(q, "_execute", lambda job, *a, **k: ran.append(job["id"]))
+    pauser = q.Pauser(low, q.JOBS / "low.json")
+    monkeypatch.setattr(pauser, "_signal", lambda sig: None)
+    (q.ROOT / "drain").write_text(f"{os.getpid()} 1")
+    assert q._priority_step(pauser, q.ServingGate(), now) is False
+    assert ran == [] and not pauser.paused

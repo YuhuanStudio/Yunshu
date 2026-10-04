@@ -884,6 +884,8 @@ def _priority_step(pauser: Pauser, gate: ServingGate, now: float) -> bool:
         return False  # only backlog (raw p<=-1) work is ever paused for priority
     if pauser.job.get("requeued_as"):
         return False  # being stopped for a requeue: the cancel path finishes it
+    if _draining():
+        return False  # a restart is waiting: start nothing new
     if (
         _eff_priority(pauser.job, now) >= 0
         and not pauser.paused
@@ -1270,6 +1272,50 @@ def _cancel_siblings(job: dict) -> list[str]:
     return cancelled
 
 
+def _draining() -> bool:
+    """`gpuq restart` asked the daemon to start no new job until it restarts. The
+    flag holds the restarting CLI's pid: a killed CLI must not stop the queue."""
+    try:
+        pid = int((ROOT / "drain").read_text().split()[0])
+    except (OSError, ValueError, IndexError):
+        return False
+    return _alive(pid)
+
+
+def restart(max_wait_s: float = 4 * 3600) -> int:
+    """Restart the daemon without touching a timing measurement: stop dispatching,
+    wait until no unpaused job is running, then replace the daemon. Restarting under
+    a quiet job adds CPU noise to it; a paused backlog job is simply adopted."""
+    (ROOT / "drain").write_text(f"{os.getpid()} {_now()}")
+    try:
+        end = time.monotonic() + max_wait_s
+        while True:
+            busy = [
+                j["id"]
+                for j in _jobs()
+                if j["state"] == "running" and not j.get("paused")
+            ]
+            if not busy:
+                break
+            if time.monotonic() > end:
+                print(f"gpuq: still running after {max_wait_s:.0f}s: {busy}")
+                return 1
+            time.sleep(POLL_S)
+        try:
+            pid = int((ROOT / "daemon.lock").read_text().strip())
+        except (OSError, ValueError):
+            pid = 0
+        if pid and _alive(pid):
+            os.kill(pid, signal.SIGTERM)
+            while _alive(pid):
+                time.sleep(0.1)
+    finally:
+        (ROOT / "drain").unlink(missing_ok=True)
+    _ensure_daemon()
+    print("gpuq: daemon restarted")
+    return 0
+
+
 def _adoption_order(jobs: list[dict]) -> list[dict]:
     """Running jobs left by a previous daemon, already-exited ones first: adopting a
     live job blocks until it ends, and a finished job must not look running meanwhile."""
@@ -1351,6 +1397,7 @@ def daemon() -> None:
                 lane in workers
                 or lane == "m3"
                 and (ROOT / "m3-quarantine.json").exists()
+                or _draining()
             ):
                 continue
             jobs = _jobs()
@@ -1456,6 +1503,8 @@ def status() -> None:
     ]
     daemon_up = _daemon_running()
     print(f"daemon: {'up' if daemon_up else 'down'}")
+    if _draining():
+        print("draining: a restart waits for the running job; nothing new starts")
     cfg = load_serving_config()
     if cfg.get("urls"):
         print(f"serving gate: {', '.join(cfg['urls'])}")
@@ -1586,6 +1635,7 @@ def main() -> int:
     )
     wp.add_argument("ids", nargs="+")
     sub.add_parser("status")
+    sub.add_parser("restart")
     sub.add_parser("log").add_argument("id")
     sub.add_parser("cancel").add_argument("id")
     sub.add_parser("_daemon")
@@ -1636,6 +1686,8 @@ def main() -> int:
         status()
     elif a.op == "log":
         sys.stdout.write((LOGS / f"{a.id}.log").read_text())
+    elif a.op == "restart":
+        sys.exit(restart())
     elif a.op == "cancel":
         path = JOBS / f"{a.id}.json"
         j = _read(path)
