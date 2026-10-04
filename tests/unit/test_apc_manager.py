@@ -435,3 +435,83 @@ def test_identical_prompt_policies_remain_fifo_until_prefill_finishes():
     assert c.request(ids) is second
     c.release_request(ids, second)
     assert c.request(ids) is None
+
+
+def _turn(m, ids, stride=2048):
+    """One request of a growing conversation: its interval checkpoint and its final."""
+    m.begin_request()
+    final = len(ids) - 1
+    interval = (final - 1) // stride * stride
+    m.store_exact_cache(ids[:interval], _cache(interval))
+    m.store_exact_cache(ids[:final], _cache(final))
+
+
+def _conversation(turns=12, step=3500, start=2000):
+    ids = [3] * 40
+    ids += [IM_START, USER]
+    out = []
+    n = start
+    for t in range(turns):
+        ids = ids + [10000 + t] * (n - len(ids))
+        out.append(list(ids) + [5])
+        n += step
+    return out
+
+
+def test_branch_inside_a_grown_conversation_hits_a_retained_turn_boundary():
+    m = _mgr()
+    prompts = _conversation()
+    for p in prompts:
+        _turn(m, p)
+    full = prompts[-1]
+    mid = len(full) // 2
+    branch = full[:mid] + [777] * 500
+    _, n = m.lookup_exact_cache(branch)
+    # a radix cache would hit ~mid; superseding everything leaves only the head
+    assert n >= mid - 12000, (n, mid)
+    assert n % 16 == 0 or n
+
+
+def test_retained_anchors_are_thinned_and_bounded():
+    m = _mgr()
+    prompts = _conversation(turns=40, step=1000)
+    for p in prompts:
+        _turn(m, p)
+    lengths = sorted(len(e.token_ids) for e in m._exact_cache.values())
+    # geometric spacing: a handful of anchors, not one per turn
+    assert len(lengths) <= 14, lengths
+    # linear follow-up still finds the newest checkpoint
+    _, n = m.lookup_exact_cache(prompts[-1] + [9, 9])
+    assert n == len(prompts[-1]) - 1
+
+
+def test_anchor_rows_become_views_of_the_newest_checkpoint():
+    m = _mgr()
+    prompts = _conversation(turns=6, step=5000)
+    rebound = 0
+    for i, p in enumerate(prompts):
+        if i:
+            m.lookup_exact_cache(p)  # the request restores its predecessor's final
+        _turn(m, p)
+        rebound += m.share_anchor_rows(p[: len(p) - 1], 0)
+    assert rebound > 0
+    donor = max(m._exact_cache.values(), key=lambda e: len(e.token_ids))
+    anchors = [
+        e
+        for e in m._exact_cache.values()
+        if e is not donor and len(e.token_ids) in set(m._anchors.values())
+    ]
+    assert anchors
+    shared = sum(
+        1 for e in anchors if e.prompt_cache[1].keys.shape[-2] == len(e.token_ids)
+    )
+    assert shared == len(anchors)
+    # same bits as before: every row of an anchor equals the donor's row
+    for e in anchors:
+        n = len(e.token_ids)
+        assert bool(
+            mx.all(e.prompt_cache[1].keys == donor.prompt_cache[1].keys[..., :n, :])
+        )
+    # a request that did not restore anything shares nothing
+    m._last_hit = None
+    assert m.share_anchor_rows(prompts[-1][:-1], 0) == 0
