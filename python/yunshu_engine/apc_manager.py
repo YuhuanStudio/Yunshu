@@ -64,6 +64,38 @@ _OWNED_SNAPSHOT: contextvars.ContextVar[bool] = contextvars.ContextVar(
 CLONE_EVAL_ARRAYS = 8
 
 
+def _restore_kv(c, min_capacity_tokens, targets):
+    """Copy a stored K/V checkpoint into a fresh cache with room for ``min_capacity_tokens``.
+
+    Upstream copies the rows into a fresh buffer and then pads that copy (concatenate with
+    zeros) into a second one; when the request needs more capacity than the checkpoint
+    holds (always, for a follow-up turn) the prefix is written twice. Here the rows are
+    read once and written once into the padded buffer: same values, same zero padding,
+    same capacity (rounded up to ``step`` from the larger of rows and the request).
+    """
+    import mlx.core as mx
+    from mlx_vlm.models.cache import KVCache
+
+    rows = int(c.offset)
+    out = KVCache()
+    capacity = max(rows, int(min_capacity_tokens))
+    if out.step > 0:
+        capacity = ((capacity + out.step - 1) // out.step) * out.step
+    pad = capacity - rows
+
+    def build(a):
+        part = a[..., :rows, :]
+        if pad <= 0:
+            return mx.contiguous(mx.array(part, dtype=part.dtype))
+        zeros = mx.zeros((*part.shape[:2], pad, part.shape[3]), dtype=part.dtype)
+        return mx.concatenate([part, zeros], axis=2)
+
+    out.keys, out.values = build(c.keys), build(c.values)
+    out.offset = rows
+    targets += [out.keys, out.values]
+    return out
+
+
 def _install_owned_snapshot_clone() -> None:
     current = _upstream_apc._clone_prompt_cache_for_apc
     if getattr(current, "_yunshu_owned_snapshot", False):
@@ -76,12 +108,23 @@ def _install_owned_snapshot_clone() -> None:
         if clone_entry is None:
             return current(prompt_cache, min_capacity_tokens=min_capacity_tokens)
         import mlx.core as mx
+        from mlx_vlm.models.cache import KVCache
 
         out, targets = [], []
         for c in prompt_cache:
-            copied = clone_entry(
-                c, min_capacity_tokens=min_capacity_tokens, eval_targets=targets
-            )
+            if (
+                min_capacity_tokens is not None
+                and type(c) is KVCache
+                and c.keys is not None
+                and c.values is not None
+                and c.keys.shape[-2] >= c.offset > 0
+                and c.values.shape[-2] >= c.offset
+            ):
+                copied = _restore_kv(c, min_capacity_tokens, targets)
+            else:
+                copied = clone_entry(
+                    c, min_capacity_tokens=min_capacity_tokens, eval_targets=targets
+                )
             if copied is None:
                 return None
             out.append(copied)
@@ -93,6 +136,7 @@ def _install_owned_snapshot_clone() -> None:
         return out
 
     clone._yunshu_owned_snapshot = True  # type: ignore[attr-defined]
+    clone._upstream = current  # type: ignore[attr-defined]
     _upstream_apc._clone_prompt_cache_for_apc = clone
 
 

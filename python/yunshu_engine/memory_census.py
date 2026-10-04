@@ -64,6 +64,55 @@ def _holder(container: Any, array: Any) -> str:
     return _label(container)
 
 
+def _array_holders(floor: int) -> dict[int, tuple[str, int]]:
+    """id -> (type, bytes) of every tracked object that directly references a big array."""
+    import mlx.core as mx
+
+    out: dict[int, tuple[str, int]] = {}
+    for obj in gc.get_objects():
+        try:
+            refs = gc.get_referents(obj)
+        except Exception:  # noqa: BLE001
+            continue
+        total = sum(
+            r.nbytes for r in refs if isinstance(r, mx.array) and r.nbytes >= floor
+        )
+        if total:
+            name = _label(obj)
+            if isinstance(obj, dict):
+                owner = _owner_of_dict(obj)
+                if owner is not None:
+                    name = f"{_label(owner)}.__dict__"
+            out[id(obj)] = (name, total)
+    return out
+
+
+def _referrer_chain(obj: Any, skip: set[int], depth: int = 4) -> list[list[str]]:
+    """Types of what references ``obj``, then what references those, ``depth`` levels."""
+    levels: list[list[str]] = []
+    frontier = [obj]
+    seen = {id(obj)} | skip
+    for _ in range(depth):
+        nxt, names = [], []
+        for o in frontier:
+            for r in gc.get_referrers(o):
+                if id(r) in seen:
+                    continue
+                seen.add(id(r))
+                nxt.append(r)
+                label = _label(r)
+                if isinstance(r, dict):
+                    owner = _owner_of_dict(r)
+                    if owner is not None:
+                        label = f"{_label(owner)}.__dict__"
+                elif hasattr(r, "__qualname__") and not isinstance(r, type):
+                    label = f"{label}:{getattr(r, '__qualname__', '')}"
+                names.append(label)
+        levels.append(sorted(set(names))[:12])
+        frontier = nxt[:200]
+    return levels
+
+
 def cyclic_garbage(top: int = 15) -> dict[str, Any]:
     """Collect unreachable cycles and report what they held.
 
@@ -77,6 +126,10 @@ def cyclic_garbage(top: int = 15) -> dict[str, Any]:
     raw = mx.get_active_memory()
     mx.synchronize()
     before = mx.get_active_memory()
+    held_before = _array_holders(8 * _MIB)
+    first = next((o for o in gc.get_objects() if _label(o) == "BatchKVCache"), None)
+    chain = _referrer_chain(first, {id(held_before)}) if first is not None else None
+    del first
     flags = gc.get_debug()
     gc.set_debug(gc.DEBUG_SAVEALL)
     try:
@@ -98,6 +151,18 @@ def cyclic_garbage(top: int = 15) -> dict[str, Any]:
                         if who is not None:
                             owner = f"{_label(who)}.__dict__"
                     holds[owner] = holds.get(owner, 0) + ref.nbytes
+        probe = []
+        for g in garbage:
+            if _label(g) == "frame":
+                code = g.f_code
+                held = sorted(
+                    k
+                    for k, v in g.f_locals.items()
+                    if _label(v) in ("BatchGenerator", "list", "VLMBatchRunner", "_Job")
+                )
+                probe.append(
+                    f"{code.co_filename.rsplit('/', 1)[-1]}:{code.co_qualname} {held}"
+                )
         del garbage[:]
         gc.garbage.clear()
     finally:
@@ -105,7 +170,20 @@ def cyclic_garbage(top: int = 15) -> dict[str, Any]:
     gc.collect()
     mx.synchronize()
     after = mx.get_active_memory()
+    held_after = _array_holders(8 * _MIB)
+    gone: dict[str, list[float]] = {}
+    for key, (name, nbytes) in held_before.items():
+        if key not in held_after:
+            row = gone.setdefault(name, [0, 0.0])
+            row[0] += 1
+            row[1] += nbytes / _MIB
     return {
+        "garbage_frames": sorted(set(probe)),
+        "batch_kv_referrers": chain,
+        "holders_gone_in_collection": {
+            k: {"objects": int(v[0]), "mib": round(v[1], 1)}
+            for k, v in sorted(gone.items(), key=lambda kv: -kv[1][1])
+        },
         "active_raw_mib": round(raw / _MIB, 1),
         "active_before_mib": round(before / _MIB, 1),
         "active_after_mib": round(after / _MIB, 1),

@@ -626,3 +626,44 @@ def test_flush_stores_the_shared_checkpoint_without_copying_its_rows(monkeypatch
     s, big = entries[32].prompt_cache[0], entries[48].prompt_cache[0]
     assert s.keys.tolist() == big.keys[..., :32, :].tolist()
     assert s.offset == 32 and big.offset == 48
+
+
+def test_restore_with_growth_equals_upstream_clone_bit_for_bit_in_one_copy():
+    import mlx_vlm.apc as upstream
+
+    from yunshu_engine import apc_manager  # noqa: F401  (installs the clone)
+
+    clone = upstream._clone_prompt_cache_for_apc
+    original = clone._upstream
+    for rows, capacity in ((40, 300), (40, 40), (300, 100), (257, 600)):
+        kv = KVCache()
+        kv.keys = mx.arange(rows * 4, dtype=mx.float32).reshape(1, 1, rows, 4)
+        kv.values = kv.keys * 3 + 1
+        kv.offset = rows
+        rec = ArraysCache(1)
+        rec.cache = [mx.ones((1, 2))]
+        a = clone([rec, kv], min_capacity_tokens=capacity)
+        b = original([rec, kv], min_capacity_tokens=capacity)
+        assert a[1].keys.shape == b[1].keys.shape
+        assert a[1].offset == b[1].offset == rows
+        assert a[1].keys.tolist() == b[1].keys.tolist()
+        assert a[1].values.tolist() == b[1].values.tolist()
+        assert a[0].cache[0].tolist() == b[0].cache[0].tolist()
+        assert a[1].keys is not kv.keys  # a private copy
+
+
+def test_restore_of_a_strided_view_checkpoint_matches_upstream():
+    import mlx_vlm.apc as upstream
+
+    from yunshu_engine import apc_manager  # noqa: F401
+
+    clone = upstream._clone_prompt_cache_for_apc
+    donor = mx.arange(64 * 4, dtype=mx.float32).reshape(1, 1, 64, 4)
+    view = KVCache()
+    view.keys = donor[..., :48, :]
+    view.values = donor[..., :48, :] + 5
+    view.offset = 48
+    a = clone([view], min_capacity_tokens=70)
+    b = clone._upstream([view], min_capacity_tokens=70)
+    assert a[0].keys.tolist() == b[0].keys.tolist()
+    assert a[0].values.tolist() == b[0].values.tolist()
