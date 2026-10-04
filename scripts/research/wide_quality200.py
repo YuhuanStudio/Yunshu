@@ -9,6 +9,13 @@ p.add_argument("--dry-run", action="store_true")
 p.add_argument("--items", type=int, default=200)
 p.add_argument("--start", type=int, default=0)
 p.add_argument("--context", type=int, default=0, help="0 = CONTEXT_LIMIT-10")
+p.add_argument("--arms", default="off,auto")
+p.add_argument(
+    "--track", type=int, default=0, help="emit memory/array counts every N items"
+)
+p.add_argument(
+    "--contexts", default="", help="comma list cycled by item (overrides --context)"
+)
 p.add_argument("--max-tokens", type=int, default=4096)
 a = p.parse_args()
 if a.dry_run:
@@ -98,6 +105,7 @@ padding = tok.encode(
 filler = "Background only; ignore these notes when answering.\n" + "".join(
     f"Sensor {i}: pressure {i * 37 % 1000}.\n" for i in range(80)
 )
+arms = a.arms.split(",")
 correct = {"off": 0, "auto": 0}
 parity = True
 with a.output.open("x") as out:
@@ -132,11 +140,16 @@ with a.output.open("x") as out:
             enable_thinking=False,
         )
         ids = list(ids["input_ids"] if hasattr(ids, "keys") else ids)
-        desired = a.context or dflash_fast.CONTEXT_LIMIT - 10
+        cycle = [int(c) for c in a.contexts.split(",") if c]
+        desired = (
+            cycle[item % len(cycle)]
+            if cycle
+            else a.context or dflash_fast.CONTEXT_LIMIT - 10
+        )
         ids = ids[:3] + padding[: desired - len(ids)] + ids[3:]
         assert len(ids) == desired, len(ids)
         refs = []
-        for arm in ["off", "auto"] if item % 2 == 0 else ["auto", "off"]:
+        for arm in arms if item % 2 == 0 else arms[::-1]:
             mtp_lane.set_context(ids)
             before = actual[0]
             gen = BatchGenerator(
@@ -185,10 +198,24 @@ with a.output.open("x") as out:
                     prompt_tokens=len(ids),
                 )
             )
-        parity &= refs[0] == refs[1]
+        parity &= len(set(refs)) == 1
+        if a.track and (item - a.start) % a.track == 0:
+            import gc
+            import resource
+
+            emit(
+                dict(
+                    part="track",
+                    item=item,
+                    active_gb=mx.get_active_memory() / 1e9,
+                    cache_gb=mx.get_cache_memory() / 1e9,
+                    arrays=sum(1 for o in gc.get_objects() if isinstance(o, mx.array)),
+                    rss_gb=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1e9,
+                )
+            )
         mx.clear_cache()
     switch = not a.context or a.context + a.max_tokens > dflash_fast.CONTEXT_LIMIT
-    delta = abs(correct["off"] - correct["auto"])
+    delta = abs(correct["off"] - correct["auto"]) if len(arms) == 2 else 0
     success = (
         parity
         and delta <= 1
