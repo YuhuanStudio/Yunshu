@@ -15,6 +15,8 @@ def test_direct_gpu_work_is_blocked():
         ".venv/bin/python -m yunshu_cli serve --model m --port 18990",
         "uv run python scripts/research/memory_ab.py --arm a=b",
         "/x/rapid-mlx/.venv/bin/python -m rapid_mlx.cli serve m",
+        "git status; uv run python scripts/research/memory_ab.py --arm a=b",
+        "cd x && python3 - <<'EOF'\nimport mlx.core as mx\nEOF",
     ):
         assert guard.verdict(cmd), cmd
 
@@ -27,5 +29,6 @@ def test_gpuq_tests_and_reads_pass():
         'grep -rn "import mlx" python/',
         "sed -n 1,40p scripts/research/process_memory.py",
         "git log --oneline -3",
+        "/usr/bin/python3 tools/watchdog.py check; git diff main -- scripts/research/tfbench.py",
     ):
         assert guard.verdict(cmd) is None, cmd

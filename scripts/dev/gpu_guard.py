@@ -36,11 +36,21 @@ ALLOWED = re.compile(
 )
 
 
+SPLIT = re.compile(r"&&|\|\||[;|\n]")
+
+
+def _segment_blocked(segment: str) -> bool:
+    return bool(
+        GPU.search(segment) and EXEC.search(segment) and not ALLOWED.search(segment)
+    )
+
+
 def verdict(command: str) -> str | None:
-    """Reason to block ``command``, or None when it may run."""
-    if not GPU.search(command) or not EXEC.search(command):
-        return None
-    if ALLOWED.search(command):
+    """Reason to block ``command``, or None when it may run. Each shell segment is
+    judged on its own (a `git diff x.py; python3 tool.py` is not GPU work); with a
+    heredoc the whole command is one segment, since its body is the program."""
+    segments = [command] if "<<" in command else SPLIT.split(command)
+    if not any(_segment_blocked(s) for s in segments):
         return None
     return (
         "GPU work must go through gpuq (scripts/dev/gpuq submit/run ...): a direct "
