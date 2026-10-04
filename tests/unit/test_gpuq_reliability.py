@@ -400,6 +400,7 @@ def test_memory_starved_p0_job_stops_preemption(q, monkeypatch):
     monkeypatch.setattr(q, "free_memory_gb", lambda: 50.0)
     now = 100_000.0
     monkeypatch.setattr(q.time, "time", lambda: now)
+    # Requeues exhausted: the reservation is the fallback.
     low = dict(
         id="low",
         state="running",
@@ -408,6 +409,7 @@ def test_memory_starved_p0_job_stops_preemption(q, monkeypatch):
         started=now - 60,
         pid=1,
         env={},
+        requeues=q.MAX_REQUEUES,
     )
     q._write(q.JOBS / "low.json", low)
     q.submit(["true"], "big-128k", 1, 0, mem_gb=80.0)
@@ -427,3 +429,116 @@ def test_memory_starved_p0_job_stops_preemption(q, monkeypatch):
     q.submit(["true"], "small2", 1, 0, mem_gb=10.0)
     assert q._priority_step(pauser, q.ServingGate(), later) is False
     assert ran == ["small"]
+
+
+def test_research_job_is_requeued_when_p0_work_does_not_fit(q, monkeypatch):
+    (q.ROOT / "priority_caps.json").write_text('{"rapidmlx-": -1}')
+    monkeypatch.setattr(q, "free_memory_gb", lambda: 50.0)
+    now = 100_000.0
+    monkeypatch.setattr(q.time, "time", lambda: now)
+    low = dict(
+        id="low",
+        label="rapidmlx-matrix",
+        state="running",
+        priority=-1,
+        submitted=now - 600,
+        started=now - 500,
+        pid=1,
+        env={},
+        cmd=["true"],
+        cwd=str(q.ROOT),
+        mem_gb=24.0,
+    )
+    q._write(q.JOBS / "low.json", low)
+    q.submit(["true"], "big-128k", 1, 0, mem_gb=80.0)
+    q.submit(["true"], "small", 1, 0, mem_gb=10.0)
+    ran = []
+    monkeypatch.setattr(q, "_execute", lambda job, *a, **k: ran.append(job["label"]))
+    pauser = q.Pauser(low, q.JOBS / "low.json")
+    monkeypatch.setattr(pauser, "_signal", lambda sig: None)
+    assert q._priority_step(pauser, q.ServingGate(), now) is False
+    assert ran == []
+    stopped = q._read(q.JOBS / "low.json")
+    assert stopped["cancel"] is True and low["requeued_as"] == stopped["requeued_as"]
+    clone = q._read(q.JOBS / f"{stopped['requeued_as']}.json")
+    assert clone["state"] == "pending" and clone["label"] == "rapidmlx-matrix"
+    assert clone["cmd"] == ["true"] and clone["priority"] == -1
+    assert clone["submitted"] == now - 600 and clone["requeues"] == 1
+    # Only once per run: the next poll goes through the cancel path, not here.
+    assert q._priority_step(pauser, q.ServingGate(), now) is False
+    assert len([j for j in q._jobs() if j.get("label") == "rapidmlx-matrix"]) == 2
+
+
+def test_memory_need_learns_from_recent_peaks_of_the_same_family(q, monkeypatch):
+    now = 500_000.0
+    monkeypatch.setattr(q.time, "time", lambda: now)
+    job(q, "a", label="wide7-probe-1", ended=now - 3600, peak_gb=49.0)
+    job(q, "b", label="wide7-old-2", ended=now - q.LEARN_WINDOW_S - 1, peak_gb=90.0)
+    job(q, "c", label="prefill6-x", ended=now - 60, peak_gb=70.0)
+    assert q._need_gb(dict(label="wide7-api-3", mem_gb=24.0)) == 49.0
+    assert q._need_gb(dict(label="wide7-api-3", mem_gb=60.0)) == 60.0
+    assert q._need_gb(dict(label="lab-tiny", mem_gb=24.0)) == 24.0
+    assert q._need_gb(dict(label="wide7-cpu", mem_gb=0.0)) == 0.0
+
+
+def test_peak_footprint_is_recorded(q, monkeypatch):
+    j = job(q, "r", state="running")
+    path = q.JOBS / "r.json"
+    readings = iter([12.0, 30.0, 20.0])
+    monkeypatch.setattr(q, "_footprint_gb", lambda pid: next(readings))
+    for t in (0.0, q.PEAK_SAMPLE_S, 2 * q.PEAK_SAMPLE_S):
+        q._sample_peak(j, path, 123, 1000.0 + t)
+    assert q._read(path)["peak_gb"] == 30.0
+    q._sample_peak(j, path, 123, 1000.0 + 2 * q.PEAK_SAMPLE_S + 1)  # rate-limited
+    assert q._read(path)["peak_gb"] == 30.0
+
+
+def test_stopped_backlog_job_is_requeued_when_p0_work_does_not_fit(q, monkeypatch):
+    monkeypatch.setattr(q, "free_memory_gb", lambda: 50.0)
+    now = 100_000.0
+    monkeypatch.setattr(q.time, "time", lambda: now)
+    low = dict(
+        id="low",
+        label="soak-x",
+        state="running",
+        priority=-1,
+        submitted=now - 600,
+        started=now - 500,
+        pid=1,
+        env={},
+        cmd=["true"],
+        cwd=str(q.ROOT),
+    )
+    q._write(q.JOBS / "low.json", low)
+    pauser = q.Pauser(low, q.JOBS / "low.json")
+    monkeypatch.setattr(pauser, "_signal", lambda sig: None)
+    pauser.pause(now - 60, reason="priority")
+    q.submit(["true"], "big-128k", 1, 0, mem_gb=80.0)
+    assert q._priority_step(pauser, q.ServingGate(), now) is False
+    assert q._read(q.JOBS / "low.json")["cancel"] is True
+
+
+def test_running_unlabelled_backlog_job_keeps_running_when_p0_does_not_fit(
+    q, monkeypatch
+):
+    monkeypatch.setattr(q, "free_memory_gb", lambda: 50.0)
+    now = 100_000.0
+    monkeypatch.setattr(q.time, "time", lambda: now)
+    low = dict(
+        id="low",
+        label="soak-x",
+        state="running",
+        priority=-1,
+        submitted=now - 600,
+        started=now - 500,
+        pid=1,
+        env={},
+        cmd=["true"],
+        cwd=str(q.ROOT),
+    )
+    q._write(q.JOBS / "low.json", low)
+    pauser = q.Pauser(low, q.JOBS / "low.json")
+    monkeypatch.setattr(pauser, "_signal", lambda sig: None)
+    q.submit(["true"], "big-128k", 1, 0, mem_gb=80.0)
+    assert q._priority_step(pauser, q.ServingGate(), now) is False
+    assert not pauser.paused and not q._read(q.JOBS / "low.json").get("cancel")

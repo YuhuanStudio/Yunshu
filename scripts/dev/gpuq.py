@@ -669,7 +669,7 @@ def _preempt_blocker(job: dict, gate: ServingGate, cpu=True) -> str | None:
     Available memory already excludes resident allocations. Unlike ordinary
     serial admission, preemption always checks memory and fails closed if unknown.
     """
-    need = float(job.get("mem_gb", DEFAULT_MEM_GB))
+    need = _need_gb(job)
     if need > 0:
         available = free_memory_gb()
         if available is None or available - need < gate.reserve_gb:
@@ -692,6 +692,123 @@ def _preempting(jobs: list[dict]) -> list[dict]:
 
 AGED_SLICE_S = float(os.environ.get("GPUQ_AGED_SLICE_S", 20 * 60))
 MEM_RESERVE_S = float(os.environ.get("GPUQ_MEM_RESERVE_S", 30 * 60))
+MAX_REQUEUES = int(os.environ.get("GPUQ_MAX_REQUEUES", 3))
+PEAK_SAMPLE_S = 5.0
+LEARN_WINDOW_S = 48 * 3600
+
+
+def _footprint_gb(root_pid: int) -> float | None:
+    """Physical footprint (GB) of a job's process tree; Metal allocations count here
+    but not in RSS. None when it cannot be read."""
+    import ctypes
+
+    try:
+        rows = [
+            tuple(map(int, line.split()))
+            for line in subprocess.check_output(
+                ["ps", "-axo", "pid=,ppid="], text=True, timeout=5
+            ).splitlines()
+        ]
+        tree = {root_pid}
+        while True:
+            grown = tree | {pid for pid, ppid in rows if ppid in tree}
+            if grown == tree:
+                break
+            tree = grown
+        lib = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
+        buf = (ctypes.c_uint64 * 32)()  # rusage_info_v2: phys_footprint is field 9
+        total = 0
+        for pid in tree:
+            if lib.proc_pid_rusage(pid, 2, ctypes.byref(buf)) == 0:
+                total += buf[9]
+        return total / 1e9
+    except Exception:  # noqa: BLE001
+        return None
+
+
+_PEAK_T: dict[str, float] = {}
+_LEARNED: dict = {"t": -1e18, "peaks": {}}
+
+
+def _sample_peak(job: dict, path: Path, pid: int | None, now: float) -> None:
+    """Record the job's peak process-tree footprint (``peak_gb``) every PEAK_SAMPLE_S."""
+    if not pid or now - _PEAK_T.get(job["id"], 0.0) < PEAK_SAMPLE_S:
+        return
+    _PEAK_T[job["id"]] = now
+    gb = _footprint_gb(pid)
+    if gb is not None and gb > job.get("peak_gb", 0.0) + 0.5:
+        job["peak_gb"] = round(gb, 1)
+        _patch_job(path, peak_gb=job["peak_gb"])
+
+
+def _family(job: dict) -> str:
+    return (job.get("label") or "").split("-", 1)[0]
+
+
+def _family_peaks(now: float) -> dict[str, float]:
+    """Largest peak footprint per label family over LEARN_WINDOW_S (cached 30 s)."""
+    if now - _LEARNED["t"] > 30:
+        peaks: dict[str, float] = {}
+        for j in _jobs():
+            fam, gb = _family(j), float(j.get("peak_gb") or 0.0)
+            if (
+                fam
+                and gb
+                and now - j.get("ended", j.get("started", 0.0)) < LEARN_WINDOW_S
+            ):
+                peaks[fam] = max(peaks.get(fam, 0.0), gb)
+        _LEARNED.update(t=now, peaks=peaks)
+    return _LEARNED["peaks"]
+
+
+def _need_gb(job: dict) -> float:
+    """Memory a job needs: its declaration, raised to the largest peak footprint a
+    recent job from the same label family (the worker prefix) actually reached.
+    Declarations are often stale (a 27B probe declared 24 GB and used 49)."""
+    need = float(job.get("mem_gb", DEFAULT_MEM_GB))
+    if need <= 0:
+        return need
+    return max(need, _family_peaks(_now()).get(_family(job), 0.0))
+
+
+def _requeue(job: dict, path: Path) -> str:
+    """Stop a backlog job (through the cancel path) and queue a fresh copy of it."""
+    raw = _read(path)
+    keep = [
+        "device",
+        "requested_device",
+        "label",
+        "cmd",
+        "cwd",
+        "env",
+        "timeout_s",
+        "stall_s",
+        "priority",
+        "serving_ok",
+        "mem_gb",
+        "outputs",
+        "expect_complete",
+        "quiet",
+        "contention_config",
+    ]
+    clone = {k: raw[k] for k in keep if k in raw}
+    jid = _new_id(raw.get("label") or "requeued")
+    clone.update(
+        id=jid,
+        remote_host=None,
+        rc=None,
+        pid=None,
+        contended=False,
+        submitted=raw.get("submitted", _now()),
+        state="pending",
+        requeue_of=raw["id"],
+        requeues=raw.get("requeues", 0) + 1,
+    )
+    _write(JOBS / f"{jid}.json", clone)
+    note = dict(requeued_as=jid, cancel_reason="memory for p>=0 work")
+    job.update(note)
+    _patch_job(path, cancel=True, **note)
+    return jid
 
 
 def _last_run_start(pauser: Pauser) -> float:
@@ -700,7 +817,7 @@ def _last_run_start(pauser: Pauser) -> float:
 
 
 def _priority_step(pauser: Pauser, gate: ServingGate, now: float) -> bool:
-    """Run admitted p>=0 work inside a p<=-1 pause; never kill to reclaim memory.
+    """Run admitted p>=0 work inside a p<=-1 pause; reclaim memory only by requeueing.
 
     Returns True while priority work still owns the pause. The nested runner
     cannot preempt again (its priority is >=0), so at most two jobs are resident.
@@ -711,6 +828,8 @@ def _priority_step(pauser: Pauser, gate: ServingGate, now: float) -> bool:
     # aged job must not hold the GPU for hours while interactive work queues).
     if pauser.job.get("priority", 0) >= 0:
         return False  # only backlog (raw p<=-1) work is ever paused for priority
+    if pauser.job.get("requeued_as"):
+        return False  # being stopped for a requeue: the cancel path finishes it
     if (
         _eff_priority(pauser.job, now) >= 0
         and not pauser.paused
@@ -720,6 +839,19 @@ def _priority_step(pauser: Pauser, gate: ServingGate, now: float) -> bool:
     jobs = [j for j in _jobs() if j.get("device", "m5") in {"m5", "any"}]
     pending = _preempting(jobs)
     high = _admit(jobs, gate, preempt=True)
+    # A p>=0 job does not fit in memory. A stopped backlog job is resident but makes
+    # no progress, and research labels (capped in priority_caps.json) never hold
+    # core work back: stop the backlog job and queue a fresh copy of it (at most
+    # MAX_REQUEUES times; after that the reservation below lets it finish). Other
+    # running backlog work keeps running and the p>=0 job waits for it.
+    research = "priority_cap" in _cap_priority(dict(pauser.job), _priority_caps())
+    if (
+        any(j.get("waiting") == "mem" for j in pending)
+        and (pauser.paused or research)
+        and pauser.job.get("requeues", 0) < MAX_REQUEUES
+    ):
+        _requeue(pauser.job, pauser.path)
+        return False
     # Head-of-line memory reservation. Preemption keeps the paused job resident,
     # so a large p>=0 job is memory-blocked for as long as smaller jobs keep
     # preempting in its place. Once it has waited MEM_RESERVE_S, stop preempting:
@@ -808,6 +940,7 @@ def _run_one(job: dict, path: Path, gate: ServingGate | None = None) -> None:
                 pauser.step(gate, serving_ok, now)
             now = _now()
             monitor.poll(now)
+            _sample_peak(job, path, proc.pid, now)
             if pauser.paused:
                 continue  # timeouts and stall detection only count active time
             deadline = job["started"] + job["timeout_s"] + pauser.total(now)
@@ -963,6 +1096,7 @@ def _adopt(job: dict, path: Path, gate: ServingGate | None = None) -> None:
             pauser.step(gate, serving_ok, now)
         now = _now()
         monitor.poll(now)
+        _sample_peak(job, path, pid, now)
         deadline = (
             job.get("started", now) + job.get("timeout_s", 1200) + pauser.total(now)
         )
@@ -1244,6 +1378,8 @@ def status() -> None:
         age = (j.get("ended") or now) - t0
         np = len(j.get("pauses", []))
         extra = f"  pauses={np}" if np else ""
+        if j.get("peak_gb"):
+            extra += f"  peak={j['peak_gb']:g}G/{float(j.get('mem_gb') or 0):g}G"
         if requires_quiet(j):
             start = j.get("quiet_hold_started")
             held = (
