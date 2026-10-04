@@ -2,6 +2,8 @@
 
 _PREV = None
 _SIZES = {}
+_IDS = set()
+_NEW = set()
 import argparse, hashlib, json, sys
 from pathlib import Path
 
@@ -235,42 +237,64 @@ with a.output.open("x") as out:
                 seen.add(id(node))
                 keys = list(node)[:5] if isinstance(node, dict) else ""
                 chain.append(f"{type(node).__module__}.{type(node).__name__}{keys}")
-            big = []
-            for o in objs:
-                if isinstance(o, list) and len(o) >= 50:
-                    sample = o[0] if o else None
-                    if isinstance(sample, (mx.array, list, tuple)):
-                        big.append(o)
-            big.sort(key=len, reverse=True)
+            ids = {id(o) for o in live}
+            survivors = [o for o in live if id(o) in _NEW]
+            _NEW.clear()
+            if _IDS:
+                _NEW.update(ids - _IDS)
+            _IDS.clear()
+            _IDS.update(ids)
+            module_dicts = {
+                id(m.__dict__)
+                for m in list(sys.modules.values())
+                if hasattr(m, "__dict__")
+            }
 
-            def owner(o, depth=0):
-                out = []
-                for r in gc.get_referrers(o):
-                    if r is objs or r is big or type(r).__name__ == "frame":
+            def describe(o, r):
+                if isinstance(r, dict):
+                    key = next((k for k, v in r.items() if v is o), "?")
+                    return f"dict[{key}]"
+                if isinstance(r, (tuple, list)):
+                    idx = next((i for i, v in enumerate(r) if v is o), "?")
+                    return f"{type(r).__name__}[{idx}]/{len(r)}"
+                return type(r).__module__ + "." + type(r).__name__
+
+            def path_to_root(start):
+                skip = {id(objs), id(live), id(survivors)}
+                queue = [(start, [])]
+                seen_ids = {id(start)}
+                while queue:
+                    cur, trail = queue.pop(0)
+                    if len(trail) > 14:
                         continue
-                    if isinstance(r, dict):
-                        key = next((k for k, v in r.items() if v is o), "?")
-                        holders = [
-                            h
-                            for h in gc.get_referrers(r)
-                            if type(h).__name__ not in ("frame", "list")
-                            and h is not objs
-                        ]
-                        out.append(
-                            f"dict[{key}]<-"
-                            + ",".join(
-                                type(h).__module__ + "." + type(h).__name__
-                                for h in holders[:2]
-                            )
-                        )
-                    elif isinstance(r, list) and depth < 3:
-                        out.append("list<-" + "|".join(owner(r, depth + 1)[:1]))
-                    else:
-                        out.append(type(r).__module__ + "." + type(r).__name__)
-                return out[:3]
+                    for r in gc.get_referrers(cur):
+                        if (
+                            id(r) in seen_ids
+                            or id(r) in skip
+                            or type(r).__name__ == "frame"
+                        ):
+                            continue
+                        seen_ids.add(id(r))
+                        step = trail + [describe(cur, r)]
+                        if id(r) in module_dicts or type(r).__name__ in (
+                            "module",
+                            "type",
+                            "cell",
+                        ):
+                            return step + [
+                                type(r).__name__
+                                + ":"
+                                + str(
+                                    r.get("__name__", "")
+                                    if isinstance(r, dict)
+                                    else getattr(r, "__name__", "")
+                                )
+                            ]
+                        queue.append((r, step))
+                return trail
 
-            big_report = [(len(b), owner(b)) for b in big[:5]]
-            del objs, live, node, big
+            big_report = [path_to_root(o) for o in survivors[-3:]] if survivors else []
+            del objs, live, node, survivors
             sizes = {}
             for name, mod in list(sys.modules.items()):
                 for attr, v in list(getattr(mod, "__dict__", {}).items()):
