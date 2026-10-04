@@ -7,6 +7,7 @@ p = argparse.ArgumentParser()
 p.add_argument("--output", type=Path, required=True)
 p.add_argument("--dry-run", action="store_true")
 p.add_argument("--items", type=int, default=200)
+p.add_argument("--start", type=int, default=0)
 a = p.parse_args()
 if a.dry_run:
     print(
@@ -112,7 +113,7 @@ with a.output.open("x") as out:
             **fingerprint,
         )
     )
-    for item in range(a.items):
+    for item in range(a.start, a.start + a.items):
         expected = (
             f"def bump_{item}(value):\n    return value + {item}"
             if item % 2
