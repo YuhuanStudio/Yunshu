@@ -458,7 +458,10 @@ def test_priority_pause_drains_all_high_jobs_before_resuming(q, monkeypatch):
 
 
 def test_priority_pause_waits_for_pending_then_resumes_on_cancel(q, monkeypatch):
-    low, path = _job(q, ["true"], priority=-1, pid=4242, state="running")
+    # Requeues exhausted: a stopped backlog job keeps its pause while p0 waits.
+    low, path = _job(
+        q, ["true"], priority=-1, pid=4242, state="running", requeues=q.MAX_REQUEUES
+    )
     _, hp = _job(q, ["true"], priority=0, mem_gb=24)
     monkeypatch.setattr(q.os, "killpg", lambda *_: None)
     monkeypatch.setattr(q, "free_memory_gb", lambda: 1.0)
