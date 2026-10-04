@@ -45,6 +45,9 @@ import urllib.parse
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
+# Source tree the Yunshu arms import (PYTHONPATH); scripts/verify runs base and candidate
+# trees through this one harness.
+TREE = Path(os.environ.get("PAIRED_TREE", str(ROOT)))
 sys.path.insert(0, str(ROOT / "scripts/research"))
 DATASETS = Path(os.environ.get("DATASETS", "/Volumes/P5Plus/datasets"))
 OUT = Path(
@@ -553,7 +556,8 @@ class Server:
     def __init__(self, arm: str, model: str, port: int, env: dict[str, str], log: Path):
         # A busy port (e.g. a server left behind by an interrupted job) moves this run to the
         # next free one in the 10-port test range instead of failing every queued round.
-        for cand in range(port, port + 10):
+        last = int(os.environ.get("PAIRED_PORT_LAST", port + 9))
+        for cand in range(port, last + 1):
             with socket.socket() as probe:
                 if probe.connect_ex(("127.0.0.1", cand)) != 0:
                     break
@@ -593,7 +597,7 @@ class Server:
             e.update(
                 YUNSHU_MODEL=model,
                 YUNSHU_AUTH_DISABLED="1",
-                PYTHONPATH=str(ROOT / "python"),
+                PYTHONPATH=str(TREE / "python"),
             )
             e.update(env)
             cmd = [

@@ -1,0 +1,6 @@
+#!/bin/sh
+# Yunshu verification CLI; see scripts/verify/ and docs/guides/VERIFY.md.
+#   yv ab --base main --cand <ref|dir> --suite decode --label <worker-topic>
+# Runs on the system interpreter like gpuq; GPU work goes through gpuq jobs the tool submits itself.
+_yv_here="$(cd "$(dirname "$0")" && pwd)"
+PYTHONPATH="$_yv_here/..${PYTHONPATH:+:$PYTHONPATH}" exec /usr/bin/env python3 -m verify "$@"
