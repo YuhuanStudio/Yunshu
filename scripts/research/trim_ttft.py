@@ -3,7 +3,7 @@
 The idle schedule releases MLX's freed-buffer pool 30 s after the last request; this
 measures what the next cache hit pays for it. Each arm starts a fresh server from its
 tree; per rep it primes one long document, then times ``max_tokens=1`` requests that hit
-the cached document with a new question: immediately (pool warm), after ``--idle``
+the cached prompt again: immediately (pool warm), after ``--idle``
 seconds (pool released on the idle arm) and immediately again.
 
     python scripts/research/trim_ttft.py --arm main=/tree --arm idle=/tree2 \
@@ -75,7 +75,7 @@ def run(name, tree, model, port, rep, size, idle, emit):
         ask("List three functions that use 'cache'.")  # prime (cold)
         for phase, wait in (("hit_now", 0), ("hit_after_idle", idle), ("hit_again", 0)):
             time.sleep(wait)
-            secs, cached = ask(f"Question {phase} {rep}: name one function.")
+            secs, cached = ask("List three functions that use 'cache'.")
             if cached < size // 2:
                 raise RuntimeError(f"{name}/{phase}: not a cache hit ({cached})")
             emit(
