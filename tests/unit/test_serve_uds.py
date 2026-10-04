@@ -40,9 +40,13 @@ def test_serve_default_is_tcp(monkeypatch):
     monkeypatch.setenv("YUNSHU_UDS", "")  # restored on teardown (serve exports env)
     seen = {}
     monkeypatch.setattr(uvicorn, "run", lambda *a, **kw: seen.update(kw))
+    # A free port: worker servers own the fixed 18990-18999 range during runs.
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
     try:
-        r = CliRunner().invoke(app, ["serve", "--port", "18991"])
+        r = CliRunner().invoke(app, ["serve", "--port", str(port)])
         assert r.exit_code == 0, r.output
-        assert seen["port"] == 18991 and "uds" not in seen
+        assert seen["port"] == port and "uds" not in seen
     finally:
         settings.clear_overrides()
