@@ -45,6 +45,12 @@ class Trace:
             if not active:
                 return original(*args, **kwargs)
             extra = details(*args, **kwargs) if details else {}
+            if label == "tokenizer.encode":
+                import traceback
+
+                extra["caller"] = [
+                    f"{f.name}:{f.lineno}" for f in traceback.extract_stack()[-7:-1]
+                ]
             begin = time.perf_counter()
             if sync:
                 import mlx.core as mx

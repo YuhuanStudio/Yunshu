@@ -79,6 +79,13 @@ def restore_experiment_launcher(mode):
         )
     if mode in ("cow", "cowasync"):
         patch += "from cow_restore import install as _install_cow\n_cow_counts, _cow_uninstall = _install_cow()\n"
+    if mode == "notokprefix":
+        # Reference arm: production tokenizer prefix reuse disabled.
+        patch += (
+            "from yunshu_engine.tokenizer_prefix import TokenizerPrefixCache as _T\n"
+            "_T.encode = lambda self, tok, text, add_special_tokens=True: "
+            "_T._full_encode(tok, text, add_special_tokens)\n"
+        )
     if mode == "fence":
         patch += (
             "import sys\n"
@@ -164,6 +171,7 @@ def main():
             "interleave",
             "bucket512",
             "fence",
+            "notokprefix",
             "async",
             "cow",
             "cowasync",
