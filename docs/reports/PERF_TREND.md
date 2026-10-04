@@ -1014,7 +1014,7 @@ decode ms / rounds from the response (`x_yunshu`) and from TF's own request log 
 | 8K code | 80.8 | 4.20 | 50.6 | 67.0 | 4.20 | 62.3 |
 | 8K prose | 66.8 | 3.46 | 50.7 | 53.6 | 3.27 | 60.5 |
 
-The gap is real: 10-12% of tok/s at 1K, 17-20% at 8K. 1K code is 8% fewer commits per round (drafting quality, not time) plus 11%
+The gap is real: 13-15% of tok/s at 1K, 17-20% at 8K. 1K code is 8% fewer commits per round (drafting quality, not time) plus 11%
 longer rounds; the other cells are all round time (+9 to +12 ms at 8K). The "6-7 ms" in the wide6 note was about right at 1K
 and too small at 8K.
 
@@ -1052,8 +1052,8 @@ Result, same harness, head vs main (3 quiet reps; ms/round in brackets):
 
 `yv ab` (base main b4c2dd55 vs cand 2e9b7f51, run `dflash9-ab2`): PASS. Identity 12 cells (dflash) and spec-off equal, APC 4 pairs
 hit (1033, 8202), MMLU-Pro 200 items base 107 / cand 107 (net 0), speed code@1K +7.1%, prose@1K +6.0%, code@8K +9.9%, prose@8K
-+14.9% (noise +-2.3), follow-up TTFT -3.3% at 1K, cold TTFT +1.3% at 1K code (not caused by decode kernels; prefill is
-untouched). The earlier run on 442a66f1 (`dflash9-ab1`) also passed: +6.3/+7.3/+8.8/+10.2%. HTTP response digests of
++14.9% (noise +-2.3), follow-up TTFT -3.3% at 1K, cold TTFT +1.3% at 1K code (prefill is untouched; the cold request is the
+first to compile the new kernels). The earlier run on 442a66f1 (`dflash9-ab1`) also passed: +6.3/+7.3/+8.8/+10.2%. HTTP response digests of
 head, head with `YUNSHU_DRAFT_BITS=4` and main are equal in all 12 (context, task, phase) cells.
 
 `YUNSHU_DRAFT_BITS=4` (a stable option, not the default): 1K code 133.9, 1K prose 72.0, 8K code 76.6 (+4.0/+7.5/+2.8% over 8 bit,
