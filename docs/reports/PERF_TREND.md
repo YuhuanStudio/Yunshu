@@ -877,3 +877,15 @@ Where both arms hold the same prefix cache they agree within 0.4 GiB; the spread
 prefix cache keeps (APC GiB differs per rep), not from the code version. Main's 96K peak is lower. Open in both
 versions: after the 96K turn the APC reports 0 GiB yet MLX active memory stays ~32 GiB (weights ~16 GiB), so ~16 GiB
 is held by something other than weights and prefix cache.
+
+### 2026-10-04 spec off now runs the lane's invariant decode arithmetic (codex-specoff)
+
+Defect: on Qwen3.5-family VLMs the batch-invariant kernels, verify patches and APC invariant dispatch were installed
+only when a drafter existed, so `YUNSHU_VLM_DRAFT=off` ran stock MLX arithmetic and its greedy digests differed from
+MTP/DFlash in all 12 identity cells (infra1 runs dry-27b, dry-27b-mtp). Fix: install them for spec families (not with the
+round driver) regardless of the drafter. `yv ab --base main --cand codex-specoff --suite decode --spec-off` on 27B
+(oQ4e-mtp), run `verify/runs/specoff1-3d1616c89115`: PASS. base == cand 12 cells 0 mismatches; spec on == off on the
+candidate 12 cells 0 mismatches; APC cold/warm 4 pairs hit. Spec-on speed unchanged within noise: code@1K decode
+119.7 -> 119.8 tok/s, prose@1K 62.6 -> 62.6, code@8K 65.8 -> 66.1, prose@8K 51.9 -> 52.3; TTFT equal. Not measured:
+spec-off decode tok/s before/after (`yv` speed only times the default spec-on mode). The pre-fix failure on main is
+taken from the infra1 runs, not re-run here.
