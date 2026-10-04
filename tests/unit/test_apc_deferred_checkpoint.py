@@ -47,7 +47,7 @@ def test_checkpoint_is_deferred_and_its_lazy_arrays_survive_live_mutation(monkey
     assert len(calls) == 1
     ids, frozen, kwargs = calls[0]
     assert ids == tuple(range(32))
-    assert kwargs == {"extra_hash": 91, "_generation": 0}
+    assert kwargs == {"extra_hash": 91, "_generation": 0, "_owned": True}
     assert frozen[1].offset == 32
     assert frozen[0].cache[0].tolist() == [[[1.0] * 3] * 2]
     assert frozen[0].cache[1].tolist() == [[[7.0] * 3] * 2]

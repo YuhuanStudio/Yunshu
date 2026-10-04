@@ -37,6 +37,7 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
+import mlx_vlm.apc as _upstream_apc
 from mlx_vlm.apc import APCManager, DiskBlockStore, _sequence_hash
 from mlx_vlm.apc_coordinator import APCCoordinator
 
@@ -47,6 +48,31 @@ _CANONICAL_LOOKUP: contextvars.ContextVar[
 ] = contextvars.ContextVar("yunshu_canonical_apc_lookup", default=None)
 
 GIB = 1 << 30
+
+# ``APCManager.store_exact_cache`` clones the cache it is given, so a checkpoint that is
+# already a private snapshot (the runner's deferred captures) was copied twice, and the
+# second copy was live next to the first until the call returned. While this is set the
+# clone hands the snapshot itself over; the arrays are the same bits.
+_OWNED_SNAPSHOT: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "yunshu_apc_owned_snapshot", default=False
+)
+
+
+def _install_owned_snapshot_clone() -> None:
+    current = _upstream_apc._clone_prompt_cache_for_apc
+    if getattr(current, "_yunshu_owned_snapshot", False):
+        return
+
+    def clone(prompt_cache, *, min_capacity_tokens=None):
+        if _OWNED_SNAPSHOT.get():
+            return list(prompt_cache)
+        return current(prompt_cache, min_capacity_tokens=min_capacity_tokens)
+
+    clone._yunshu_owned_snapshot = True  # type: ignore[attr-defined]
+    _upstream_apc._clone_prompt_cache_for_apc = clone
+
+
+_install_owned_snapshot_clone()
 
 # Request-generation bookkeeping (_born) is trimmed past this many entries, keeping the newest.
 _BORN_MAX = 20000
@@ -752,7 +778,7 @@ class _Coordinator(APCCoordinator):
             policy,
             signature,
         ) in pending:
-            kwargs = {"extra_hash": extra_hash}
+            kwargs = {"extra_hash": extra_hash, "_owned": True}
             if generation is not None:
                 kwargs["_generation"] = generation
             if self.manager.store_exact_cache(tokens, snapshot, **kwargs):
@@ -1159,7 +1185,13 @@ class YunshuAPCManager(APCManager):
             self._head_lengths.add(len(head_tokens))
 
     def store_exact_cache(
-        self, token_ids, prompt_cache, *, extra_hash=0, _generation=None
+        self,
+        token_ids,
+        prompt_cache,
+        *,
+        extra_hash=0,
+        _generation=None,
+        _owned=False,
     ) -> bool:
         n = len(token_ids)
         with self._plock:
@@ -1178,7 +1210,13 @@ class YunshuAPCManager(APCManager):
             self._born[key] = gen
             if is_head:
                 self._head_keys.add(key)
-        ok = super().store_exact_cache(token_ids, prompt_cache, extra_hash=extra_hash)
+        token = _OWNED_SNAPSHOT.set(bool(_owned))
+        try:
+            ok = super().store_exact_cache(
+                token_ids, prompt_cache, extra_hash=extra_hash
+            )
+        finally:
+            _OWNED_SNAPSHOT.reset(token)
         if not ok and not had:
             with self._plock:
                 self._born.pop(key, None)
