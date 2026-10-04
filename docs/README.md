@@ -41,7 +41,7 @@ docs/
     perf_history/       ← time-named KPI snapshots (perf_<UTC>.json)
     img/                ← trend charts
   guides/               # hand-written guides and reference notes
-    CLIENTS.md, SERVICE.md, TROUBLESHOOTING.md, RELEASE_READINESS.md, RELEASE_GATE.md
+    CLIENTS.md, SERVICE.md, TROUBLESHOOTING.md, RELEASE_READINESS.md, RELEASE_GATE.md, VERIFY.md
     KV_CACHE_MATRIX.md, PROMPT_CACHING_APIS.md, ROUND_DRIVER.md
   results/              # raw bench JSON artifacts (historical; framework_comparison etc.)
   archive/
