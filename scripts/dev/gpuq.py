@@ -1494,6 +1494,37 @@ def display_state(j: dict) -> str:
     return j["state"]
 
 
+def stats(hours: float = 24.0) -> None:
+    """GPU use per line over the last ``hours``: active minutes, how many jobs ended
+    without a usable result (failed / timeout / stalled / lost / contended timing)
+    and the minutes they burned. The number to drive down."""
+    now = _now()
+    lines: dict[str, list[float]] = {}
+    for j in _jobs():
+        st, en = j.get("started"), j.get("ended")
+        if not st or not en or now - en > hours * 3600:
+            continue
+        paused = sum((b or en) - a for a, b in j.get("pauses") or [])
+        mins = max(0.0, en - st - paused) / 60
+        bad = j["state"] in ("failed", "timeout", "stalled", "lost") or (
+            j["state"] == "done" and j.get("contended") and requires_quiet(j)
+        )
+        row = lines.setdefault((j.get("label") or "?").split("-")[0], [0, 0, 0.0, 0.0])
+        row[0] += 1
+        row[1] += bad
+        row[2] += mins
+        row[3] += mins if bad else 0.0
+    total = [sum(r[i] for r in lines.values()) for i in range(4)]
+    print(
+        f"last {hours:g} h: {total[0]:.0f} jobs, {total[2]:.0f} GPU min, "
+        f"{total[3]:.0f} min wasted ({100 * total[3] / max(total[2], 1):.1f}%)"
+    )
+    for name, (n, b, m, w) in sorted(lines.items(), key=lambda kv: -kv[1][3]):
+        print(
+            f"  {name:14} jobs={n:3.0f} bad={b:3.0f} gpu={m:6.1f} min wasted={w:6.1f} min"
+        )
+
+
 def status() -> None:
     now = _now()
     rows = _jobs()
@@ -1636,6 +1667,7 @@ def main() -> int:
     wp.add_argument("ids", nargs="+")
     sub.add_parser("status")
     sub.add_parser("restart")
+    sub.add_parser("stats").add_argument("--hours", type=float, default=24.0)
     sub.add_parser("log").add_argument("id")
     sub.add_parser("cancel").add_argument("id")
     sub.add_parser("_daemon")
@@ -1686,6 +1718,8 @@ def main() -> int:
         status()
     elif a.op == "log":
         sys.stdout.write((LOGS / f"{a.id}.log").read_text())
+    elif a.op == "stats":
+        stats(a.hours)
     elif a.op == "restart":
         sys.exit(restart())
     elif a.op == "cancel":

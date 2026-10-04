@@ -642,3 +642,15 @@ def test_draining_daemon_starts_no_priority_work(q, monkeypatch):
     (q.ROOT / "drain").write_text(f"{os.getpid()} 1")
     assert q._priority_step(pauser, q.ServingGate(), now) is False
     assert ran == [] and not pauser.paused
+
+
+def test_stats_counts_wasted_minutes(q, capsys, monkeypatch):
+    now = 100_000.0
+    monkeypatch.setattr(q.time, "time", lambda: now)
+    job(q, "a", label="wide8-x", state="done", started=now - 600, ended=now - 300)
+    job(q, "b", label="wide8-y", state="timeout", started=now - 1500, ended=now - 900)
+    job(q, "c", label="prefill7-z", state="failed", started=now - 120, ended=now - 60)
+    q.stats(24)
+    out = capsys.readouterr().out
+    assert "3 jobs, 16 GPU min, 11 min wasted" in out
+    assert "wide8" in out and "wasted=  10.0 min" in out
