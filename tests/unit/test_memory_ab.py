@@ -54,3 +54,16 @@ def test_arm_env_is_per_arm(monkeypatch, tmp_path):
     m.main()
     assert seen == {"a": {}, "b": {"YUNSHU_VLM_APC_MEMORY_GB": "0"}}
     assert '"complete": true' in (tmp_path / "o.jsonl").read_text()
+
+
+def test_trim_ttft_summary_is_a_per_phase_median():
+    sys.path.insert(0, str(ROOT / "scripts" / "research"))
+    import trim_ttft
+
+    rows = [
+        {"phase": "hit_now", "secs": 0.9},
+        {"phase": "hit_now", "secs": 1.1},
+        {"phase": "hit_now", "secs": 1.0},
+        {"phase": "hit_after_idle", "secs": 1.3},
+    ]
+    assert trim_ttft.summarize(rows) == {"hit_now": 1.0, "hit_after_idle": 1.3}
