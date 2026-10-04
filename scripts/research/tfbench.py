@@ -340,6 +340,13 @@ def part_decode(s, out, a):
                         },
                     ]
                 r = send(s.url, b)
+                if not a.smoke and (r.get("finish") != "length" or r.get("ct") != 256):
+                    # A decode cell measures 256 tokens; a short reply is an error
+                    # (a request that died mid-stream must not count as a result).
+                    raise RuntimeError(
+                        f"decode {kind}-{ctx} {phase}: "
+                        f"finish={r.get('finish')} ct={r.get('ct')}"
+                    )
                 if phase == "cold":
                     reply = r["_text"]
                 r["text"] = r.pop("_text")
