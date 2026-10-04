@@ -398,3 +398,50 @@ def test_supported_rejects_a_missing_decoder(monkeypatch):
         ),
     )
     assert not fast.supported(None, draft)
+
+
+def test_round_room_stops_at_generated_limit():
+    assert fast.round_room(1000, 4096, 0) == fast.GENERATED_LIMIT
+    assert fast.round_room(1000, 4096, fast.GENERATED_LIMIT - 3) == 3
+    assert fast.round_room(1000, 4096, fast.GENERATED_LIMIT) == 0
+    assert fast.round_room(1000, 2, 0) == 2
+
+
+def test_generated_limit_hands_the_same_request_to_chain(monkeypatch):
+    from mlx_vlm.models.qwen3_5 import language as q35
+
+    private = SimpleNamespace(bind=lambda enabled: None)
+    draft_cache = [SimpleNamespace(offset=3)]
+    draft = SimpleNamespace(
+        config=SimpleNamespace(target_layer_ids=[]),
+        accept_lens=[],
+        reset=lambda model: draft_cache,
+    )
+    monkeypatch.setattr(fast, "prepare", lambda _: private)
+    monkeypatch.setattr(fast, "context_length", lambda *_: 1000)
+    monkeypatch.setattr(fast, "GENERATED_LIMIT", 1)
+    monkeypatch.setattr(mtp_lane, "copy_rows_for_model", lambda _: 16)
+    monkeypatch.setitem(mtp_lane._STATE, "context", [1] * 1000)
+    monkeypatch.setattr(q35, "_EXACT_SPECULATIVE_VERIFIER", object(), raising=False)
+    seen = {}
+
+    def chain(model, proxy, cache, taps, **kw):
+        seen.update(kw)
+        yield 5, None
+
+    out = list(
+        fast.rounds(
+            None,
+            draft,
+            [],
+            object(),
+            first_bonus=9,
+            max_tokens=None or 4096,
+            sampler=None,
+            draft_block_size=8,
+            _chain=chain,
+        )
+    )
+    assert (
+        out == [(5, None)] and seen["first_bonus"] == 9 and seen["max_tokens"] == 4096
+    )

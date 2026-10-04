@@ -18,6 +18,10 @@ _KERNELS: dict[str, Any] = {}
 # at 256..10240 for code and prose; prose lost at 12288 (-6.7%), so 10240.
 CONTEXT_MIN = 256
 CONTEXT_LIMIT = 10240
+# The fast tree's edge is in the first tokens of a reply (+10-20% at <=256 new
+# tokens); over a long reply the chain's copy drafter catches up and the tree's
+# slower round (62 vs 51 ms at 8K) loses (yv: +0.2% at 1K, -2.5% prose at 8K).
+GENERATED_LIMIT = 256
 
 
 def live_eligible(context, generated=0):
@@ -34,9 +38,13 @@ def context_length(lm, cache):
     return ragged_kv._lane_length(cache[index])
 
 
-def round_room(current, remaining):
+def round_room(current, remaining, emitted=0):
     """Finish at the certificate boundary without publishing a fast-tree overrun."""
-    return min(remaining, max(0, CONTEXT_LIMIT - current))
+    return min(
+        remaining,
+        max(0, CONTEXT_LIMIT - current),
+        max(0, GENERATED_LIMIT - emitted),
+    )
 
 
 def _name(base, source):
@@ -306,7 +314,9 @@ def rounds(
     try:
         while emitted < max_tokens:
             current = context_length(lm, cache) + 1 if _chain is not None else 0
-            if _chain is not None and not live_eligible(current):
+            if _chain is not None and (
+                not live_eligible(current) or emitted >= GENERATED_LIMIT
+            ):
                 from .dflash_copy import resume_chain
 
                 for entry in draft_cache:
@@ -332,7 +342,7 @@ def rounds(
             try:
                 started = time.perf_counter()
                 room = (
-                    round_room(current, max_tokens - emitted)
+                    round_room(current, max_tokens - emitted, emitted)
                     if _chain is not None
                     else max_tokens - emitted
                 )
