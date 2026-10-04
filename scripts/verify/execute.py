@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import os
+import shutil
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .core import Gpuq, InfraError, RunDir, sha
+from .core import VERIFY_ROOT, Gpuq, InfraError, RunDir, sha
 
 Validator = Callable[[Path], "tuple[bool, str]"]
 
@@ -28,6 +29,9 @@ class Cell:
     retries: int = 1  # extra attempts for a contended timing cell
     priority: int = 0
     meta: dict = field(default_factory=dict)
+    # Deterministic evidence (greedy digests of a base arm) that any run with the same inputs may
+    # reuse: a content key (commit, env, model, harness hash, cell parameters), never run paths.
+    share_key: str = ""
 
     @property
     def sig(self) -> str:
@@ -65,7 +69,11 @@ class Executor:
         label: str,
         log: Callable[[str], None] = print,
         priority: int = 0,
+        cache_dir: Path | None = None,
     ):
+        self.cache_dir = (
+            cache_dir if cache_dir is not None else VERIFY_ROOT / "cellcache"
+        )
         self.run, self.gq, self.label, self.log, self.priority = (
             run,
             gq,
@@ -89,6 +97,37 @@ class Executor:
                     cell.key, True, "", done.get("job", ""), ev, False, True
                 )
         return None
+
+    def _shared(self, cell: Cell) -> CellResult | None:
+        """Evidence another run already produced for the same inputs (see Cell.share_key)."""
+        if not cell.share_key or not cell.needs_out:
+            return None
+        src = self.cache_dir / f"{cell.share_key}.jsonl"
+        ok, _ = (
+            (cell.validate or default_validate)(src) if src.exists() else (False, "")
+        )
+        if not ok:
+            return None
+        final = self.run.cell_path(cell.stage, cell.key)
+        shutil.copyfile(src, final)
+        self.run.append(
+            cell.stage,
+            {
+                "ev": "cell_done",
+                "cell": cell.key,
+                "job": f"cache:{cell.share_key}",
+                "sig": cell.sig,
+                "ok": True,
+                "rc": 0,
+                "state": "cached",
+                "contended": False,
+                "reason": "",
+            },
+        )
+        self.jobs.append((cell.stage, cell.key, f"cache:{cell.share_key}", True))
+        return CellResult(
+            cell.key, True, "", f"cache:{cell.share_key}", final, False, True
+        )
 
     def _attempts(self, cell: Cell) -> int:
         return sum(
@@ -164,6 +203,11 @@ class Executor:
         final = self.run.cell_path(cell.stage, cell.key)
         if ok and cell.needs_out:
             os.replace(out, final)
+            if cell.share_key:
+                self.cache_dir.mkdir(parents=True, exist_ok=True)
+                tmp = self.cache_dir / f".{cell.share_key}.tmp"
+                shutil.copyfile(final, tmp)
+                os.replace(tmp, self.cache_dir / f"{cell.share_key}.jsonl")
         self.run.append(
             cell.stage,
             {
@@ -197,7 +241,7 @@ class Executor:
         results: dict = {}
         todo: list = []
         for c in cells:
-            hit = self._cached(c)
+            hit = self._cached(c) or self._shared(c)
             if hit:
                 results[c.key] = hit
                 self.log(f"{c.stage}/{c.key}: reused (job {hit.job})")

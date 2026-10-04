@@ -6,6 +6,7 @@ A stage writes its final `stage_complete` record only when its analysis finished
 
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import subprocess
@@ -328,9 +329,30 @@ def _identity_cells(ctx: Ctx) -> list:
                     mem_gb=ctx.mem_gb,
                     timeout_min=_decode_est_min(ctx, [c], len(cfg["kinds"])),
                     stall_min=12 if ctx.big else 4,
+                    share_key=_share_key(ctx, base_arm, arm, extra, c)
+                    if arm == "base"
+                    else "",
                 )
             )
     return cells
+
+
+def _share_key(ctx: Ctx, arm: str, name: str, extra: dict, c: int) -> str:
+    """Greedy digests of the base arm are deterministic: reuse them across runs. The key holds
+    everything that could change them (code, env, model, harness, device) and no run path."""
+    from .core import sha as _sha
+
+    return _sha(
+        "identity",
+        ctx.tree(arm).key,
+        ctx.arm_env(arm, extra),
+        ctx.model,
+        c,
+        ctx.suite["kinds"],
+        hashlib.sha256(TFBENCH.read_bytes()).hexdigest() if TFBENCH.exists() else "",
+        os.environ.get("GPUQ_DEVICE", "m5"),
+        n=24,
+    )
 
 
 def _rows_for(res: dict, prefix: str) -> list:

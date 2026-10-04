@@ -280,10 +280,31 @@ def test_quality_plus_minus_one():
     assert not analyze.quality_compare(b, mk([True] * 8), 12)["ok"]  # incomplete
 
 
+def test_base_identity_is_shared_across_runs_but_candidate_cells_are_not(world):
+    assert go(world, suite="identity", label="r1") == 0
+    n1 = len(jobs(world))
+    assert go(world, suite="identity", label="r2", cand_env=["FAKE_X=1"]) == 0
+    new = jobs(world)[n1:]
+    assert new and all(
+        "-cand-" in j for j in new
+    )  # base cell came from the cache, cand reran
+    rd2 = next(world.runs.glob("r2-*"))
+    base_done = [
+        r
+        for r in core.read_jsonl(rd2 / "identity.jsonl")
+        if r.get("ev") == "cell_done" and r["cell"].startswith("base")
+    ]
+    assert base_done and base_done[0]["state"] == "cached"
+    # a different base env is a different key: not served from the cache
+    n2 = len(jobs(world))
+    assert go(world, suite="identity", label="r3", base_env=["FAKE_DIVERGE=1"]) == 1
+    assert any("-base-" in j for j in jobs(world)[n2:])
+
+
 # ── executor ─────────────────────────────────────────────────────────────
 def mkexec(w, label="x"):
     rd = core.RunDir(w.runs / label)
-    return rd, Executor(rd, w.gq, label, lambda m: None)
+    return rd, Executor(rd, w.gq, label, lambda m: None, cache_dir=w.tmp / "cellcache")
 
 
 def cell(key, body, **kw):

@@ -115,7 +115,14 @@ def run_ab(
     state.pop("verdict", None)
     rd.save_state(state)
     (rd.path / "verdict.json").unlink(missing_ok=True)
-    exe = Executor(rd, gq, f"infra-{a.label}"[:40], log, priority=a.priority)
+    exe = Executor(
+        rd,
+        gq,
+        f"infra-{a.label}"[:40],
+        log,
+        priority=a.priority,
+        cache_dir=(runs or RUNS).parent / "cellcache",
+    )
     ctx = st.Ctx(
         run=rd,
         exe=exe,
