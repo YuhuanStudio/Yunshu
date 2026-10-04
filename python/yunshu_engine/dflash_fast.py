@@ -14,12 +14,14 @@ from .dflash_plan import live_bound
 
 _KERNELS: dict[str, Any] = {}
 
-# Crossover is qualified with the same-checkpoint context sweep.
-CONTEXT_LIMIT = 1536
+# Same-checkpoint sweeps (27B oQ4e + DFlash2, M5): fast tree beat chain+copy
+# at 256..10240 for code and prose; prose lost at 12288 (-6.7%), so 10240.
+CONTEXT_MIN = 256
+CONTEXT_LIMIT = 10240
 
 
 def live_eligible(context, generated=0):
-    return 512 <= context + generated < CONTEXT_LIMIT
+    return CONTEXT_MIN <= context + generated < CONTEXT_LIMIT
 
 
 def context_length(lm, cache):

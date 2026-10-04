@@ -44,7 +44,7 @@ def test_measured_short_request_is_admitted(admission):
 )
 def test_other_requests_keep_the_original_rounds(monkeypatch, admission, damage):
     if damage == "long":
-        monkeypatch.setitem(mtp_lane._STATE, "context", list(range(8203)))
+        monkeypatch.setitem(mtp_lane._STATE, "context", list(range(20000)))
     elif damage == "short":
         monkeypatch.setitem(mtp_lane._STATE, "context", [1] * 40)
     elif damage == "guide":
@@ -78,8 +78,12 @@ def test_live_context_bound(monkeypatch, admission):
     assert fast.eligible(None, None, [], admission)
     monkeypatch.setitem(mtp_lane._STATE, "context", [1] * (fast.CONTEXT_LIMIT - 1))
     assert not fast.eligible(None, None, [], admission)
-    assert fast.live_eligible(512, fast.CONTEXT_LIMIT - 513)
-    assert not fast.live_eligible(512, fast.CONTEXT_LIMIT - 512)
+    assert fast.live_eligible(
+        fast.CONTEXT_MIN, fast.CONTEXT_LIMIT - fast.CONTEXT_MIN - 1
+    )
+    assert not fast.live_eligible(
+        fast.CONTEXT_MIN, fast.CONTEXT_LIMIT - fast.CONTEXT_MIN
+    )
 
 
 def test_chain_handoff_preserves_cache_copy_history_and_bonus():
