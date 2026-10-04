@@ -907,3 +907,60 @@ candidate 12 cells 0 mismatches; APC cold/warm 4 pairs hit. Spec-on speed unchan
 119.7 -> 119.8 tok/s, prose@1K 62.6 -> 62.6, code@8K 65.8 -> 66.1, prose@8K 51.9 -> 52.3; TTFT equal. Not measured:
 spec-off decode tok/s before/after (`yv` speed only times the default spec-on mode). The pre-fix failure on main is
 taken from the infra1 runs, not re-run here.
+
+### 2026-10-04 — server memory: peak and idle hold (codex-memory vs main f4b60d4a)
+
+M5 Max 128 GiB, Jundot/Qwen3.8-27B-oQ4e-mtp, default settings (RAM APC auto, APC SSD tier off in the harness so cold means
+cold). `yv ab` verdict `memory1-final3` (PASS, base main f4b60d4a53c4 vs cand 194535739999; identity 18 cells 0 mismatches, APC
+hit == miss on 6 pairs, MMLU-Pro 200 paired net +0, speed 5 quiet reps, memory 2 reps alternating). The "96K" prompt is
+125,641 tokens (`memory_ab.py` sizes are approximate): 16 attention layers x 64 KiB/token = 7.7 GiB of KV per copy.
+
+Root causes (census, timelines, probes; data in P5Plus `codex/memory1/`):
+
+- The `mx.fast.scaled_dot_product_attention` allocation that D=256 shows without a mask is **not** what serving hits: the runner
+  always passes a bool array mask or "causal", and neither allocates (job `1004-103536-00-memory1-sdpa-probe-a`: ~0 GiB at D=256 up
+  to 98K keys; no-mask 8.6 GiB). No attention change was made.
+- The peak was whole-cache copies alive at once: the restore clone evaluated every layer's copy and its capacity-padded copy together
+  (3x the cache: probe peak 22.9 GiB for a 7.6 GiB cache), `store_exact_cache` cloned an already-private snapshot (a second full copy
+  while the first was live), the deferred checkpoint copies pinned the live buffers until all were evaluated, and the superseded
+  checkpoints were freed only after the new ones existed (`apc_restore_probe.py`, `apc_clone_probe.py`).
+- The idle hold had two parts. (1) A finished request's KV (`BatchKVCache` x16: 3.0 GiB at 32K, ~16 GiB at 125K) sat in a reference
+  cycle: `SpeculativeGenerationBatch._rounds_iter`'s generator frame holds a closure over the batch, the transaction and the prompt
+  cache, so nothing freed it until Python's cyclic collector ran (census `holders_gone_in_collection`; with the fix `gc.collect` frees
+  0 MiB after a request). (2) MLX's freed-buffer pool (up to 6 GiB by design) was never released when idle.
+
+Changes (all lossless: same operations, same bits): `close_generator` closes the speculative rounds generator when a group closes;
+`IdleMemory` collects 2 s after the runner drains (backstop) and releases the allocator pool after 30 s idle; restore writes the
+prefix once into the padded buffer (was twice) and evaluates in ~512 MiB groups; deferred checkpoint copies are evaluated in groups
+and superseded checkpoints are released first; a stored snapshot is not cloned again; a shorter checkpoint of the same request (<= 4096
+tokens apart) is stored as views of the longer one's K/V rows (K/V rows are written once, in order) instead of a second copy. The new
+mlx-vlm patch (`_clone_prompt_cache_for_apc`) is registered in vendor.json.
+
+Process footprint after each step, GiB (two reps each; base main | cand):
+
+| step | base | cand |
+|---|---|---|
+| 8K turn 2 peak | 27.7 / 27.7 | 27.4 / 27.6 |
+| 32K turn 2 peak | 34.0 / 34.6 | 30.8 / 31.0 |
+| 125K turn 1 peak | 59.5 / 63.3 | 45.1 / 48.1 |
+| 125K turn 2 (cache hit) peak | 63.8 / 66.8 | 47.7 / 48.1 |
+| idle 20 s after 125K | 50.8 / 50.8 | 35.0 / 35.0 |
+| idle 35 s after 125K | 50.8 / 50.8 | 29.0 / 29.0 |
+| after a 1K request + 20 s | 35.4 / 35.4 | 32.3 / 32.3 |
+
+Idle 35 s: footprint 29.0 = weights 16.0 + APC 12.0 (what the APC reports) + ~1 GiB process; the pool is 0 (main: 5.8 GiB pool and
+~16 GiB of the dead request's KV). The APC's own retention is unchanged policy (byte budget, up to 32 GiB); it is the only large
+holder left and is reported by `yunshu_apc_resident_bytes`.
+
+TTFT (same verdict, medians of 5 interleaved quiet reps): cold 1K/8K/32K unchanged (-0.1/-0.0/+0.1% code; prose the same);
+follow-up TTFT code 1K -1.6% (noise 15.7%), prose 1K +0.2%, code 8K **+1.7%** (0.528 -> 0.537 s, reps +0.75..+2.65%), prose 8K +0.8%,
+code 32K -0.9%, prose 32K -0.8%; decode tok/s +0.3..+3.0% (32K +3.0% code, +1.4% prose). The 8K code follow-up cost is real (9 ms),
+not explained: removing the generator close or the shared-row views changed it by -0.4% (variants `memory1-var-*`), and the restore
+alone is faster at 8K (`apc_restore_time.py`: 5.3 -> 3.7 ms; 32K 17.2 -> 10.1 ms). A cache hit that must grow capacity, with 41K
+tokens cached and one new token (`trim_ttft.py`, 3 reps, quiet): hit right after the prime 0.441 -> 0.243 s, second hit 0.167 -> 0.117 s;
+the first hit after the 30 s idle release 0.344 -> 0.322 s (the released pool costs ~80 ms on the next big restore compared with a warm
+pool, but it is still faster than main).
+
+Found, not changed: on main an exact-prefix checkpoint of an older turn is superseded as soon as a newer request extends it, so a
+follow-up whose question diverges after a shared document finds only the head checkpoint (cached 42 of 40,960 tokens after one
+diverging follow-up; `trim_ttft` job `1004-132819-00-memory1-trim-ttft-b`). That is APC reuse policy, not memory.
