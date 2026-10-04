@@ -565,3 +565,45 @@ def test_failed_rep_cancels_its_pending_siblings(q):
 def test_stem_keeps_sizes(q):
     assert q._stem("memab-27b-r2") == "memab-27b"
     assert q._stem("wide7-api-core-pilot-10b") == "wide7-api-core-pilot-10b"
+
+
+def test_external_worktrees_take_turns(q):
+    import time
+
+    now = time.time()
+    w = "/Volumes/P5Plus/yunshu-build/codex/worktrees"
+    assert q._owner(dict(cwd=f"{w}/wide-lead/x", env={})) == "wide-lead"
+    assert q._owner(dict(cwd="/repo/.claude/worktrees/a/b", env={})) == "a"
+    assert q._owner(dict(cwd="/repo", env={})) == "main"
+    jobs = [
+        dict(
+            id="ran",
+            label="wide8-a",
+            state="done",
+            priority=0,
+            submitted=now - 99,
+            started=now - 60,
+            cwd=f"{w}/wide-lead",
+            env={},
+        ),
+        dict(
+            id="w2",
+            label="wide8-b",
+            state="pending",
+            priority=0,
+            submitted=now - 50,
+            cwd=f"{w}/wide-lead",
+            env={},
+        ),
+        dict(
+            id="p1",
+            label="prefill7-c",
+            state="pending",
+            priority=0,
+            submitted=now - 10,
+            cwd=f"{w}/prefill-lead",
+            env={},
+        ),
+    ]
+    # wide-lead just ran: the other line goes next even though it submitted later.
+    assert q._pick(jobs)["id"] == "p1"

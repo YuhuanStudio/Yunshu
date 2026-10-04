@@ -518,10 +518,15 @@ def _jobs() -> list[dict]:
 def _owner(job: dict) -> str:
     """Fair-share key: the agent worktree (or checkout) the job came from."""
     cwd = job.get("cwd", "")
-    marker = "/.claude/worktrees/"
-    if marker in cwd:
-        return cwd.split(marker, 1)[1].split("/", 1)[0]
-    return job.get("env", {}).get("GPUQ_OWNER", "main")
+    owner = job.get("env", {}).get("GPUQ_OWNER")
+    if owner:
+        return owner
+    # Any worktree directory names its line (.claude/worktrees/x, codex/worktrees/x);
+    # otherwise every line in an external worktree shared one fairness slot.
+    for marker in ("/.claude/worktrees/", "/worktrees/"):
+        if marker in cwd:
+            return cwd.split(marker, 1)[1].split("/", 1)[0]
+    return "main"
 
 
 def _pick(jobs: list[dict], eligible=None) -> dict | None:
