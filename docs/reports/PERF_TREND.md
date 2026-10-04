@@ -907,3 +907,16 @@ candidate 12 cells 0 mismatches; APC cold/warm 4 pairs hit. Spec-on speed unchan
 119.7 -> 119.8 tok/s, prose@1K 62.6 -> 62.6, code@8K 65.8 -> 66.1, prose@8K 51.9 -> 52.3; TTFT equal. Not measured:
 spec-off decode tok/s before/after (`yv` speed only times the default spec-on mode). The pre-fix failure on main is
 taken from the infra1 runs, not re-run here.
+
+2026-10-04 Round driver routing (branch round3; Qwen3.8-27B oQ4e-mtp, M5 Max, server per arm, 128->256 new tokens, 5 reps, arm order rotated in reps 4-5, medians). Parity: serving-runner allow_draft off/on digests now equal at 1K (prose f7d979e5d0be..., code 1a14b82871...; fixed by specoff1), driver alone/batch/stagger/AR identical. Routing: `YUNSHU_ROUND_DRIVER_MIN_CONCURRENCY=2` sends text requests to the driver only when another request is in flight. Roofline: 27B floor ~29 ms/step, so c=8 AR ceiling ~275 tok/s, MTP ~2x on top; c=2 ceiling ~2x single-row MTP (~170 tok/s).
+
+| cell | off tok/s (sum decode) | routed | always | mean TTFT off/routed (s) | footprint GiB off/routed |
+|---|---:|---:|---:|---:|---:|
+| 1K c=1 | 76.2 | 78.1 | 80.5 | 1.2/1.4 | 21.5/20.9 |
+| 1K c=2 | 50.4 | 185.4 | 185.0 | 1.9/2.5 | 22.4/23.6 |
+| 1K c=4 | 85.2 | 236.4 | 215.2 | 3.4/4.9 | 24.6/24.7 |
+| 1K c=8 | 136.8 | 347.2 | 312.8 | 6.2/9.6 | 26.5/26.8 |
+| 32K cold c=2 | 26.4 | 152.0 | - | 53.5/89.2 | 31.5/55.2 |
+| 32K cold c=4 | 29.2 | 130.4 | - | 89.9/153.1 | 51.8/49.6 |
+
+32K b2/b4 cold TTFT is still worse with the driver (+67%/+70%): driver prefill uses lane-qmm atoms of 512 rows, which never reach the stock-matmul threshold. Data docs/research/runs/2026-10-04-round3/ab-{1k,32k}.jsonl.

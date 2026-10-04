@@ -93,7 +93,7 @@ def main() -> int:
         rc = subprocess.call(
             [sys.executable, str(root / "scripts/research/bench_context_batch.py"),
              "--url", url, "--model", "Qwen3.8-27B", "--tokenizer", MODEL,
-             "--pid", str(srv.pid), "--note", f"{a.arm}/{a.cell}/r{a.rep}",
+             "--pid", str(srv.pid), "--tg", "256", "--note", f"{a.arm}/{a.cell}/r{a.rep}",
              "--output", str(a.out), *bench_args(a.cell)],
             env=env, cwd=root,
         )  # fmt: skip
@@ -110,13 +110,22 @@ def main() -> int:
         ):
             print(f"incomplete: rc={rc} batches={len(batches)}", flush=True)
             return 1
+        busy = 0.0
         try:
-            status = json.loads(
-                urllib.request.urlopen(url + "/v1/yunshu/status", timeout=5).read()
-            )
-            print("driver meter:", status.get("round_driver"), flush=True)
+            for line in (
+                urllib.request.urlopen(url + "/metrics", timeout=5)
+                .read()
+                .decode()
+                .splitlines()
+            ):
+                if "round_driver_busy_seconds" in line and not line.startswith("#"):
+                    busy = float(line.split()[-1])
         except Exception as exc:
-            print("status unavailable", exc, flush=True)
+            print("metrics unavailable", exc, flush=True)
+        print("driver busy seconds:", busy, flush=True)
+        if (busy > 0) != (a.arm != "off"):
+            print("driver usage does not match arm", flush=True)
+            return 1
         print("complete", flush=True)
         return 0
     finally:
