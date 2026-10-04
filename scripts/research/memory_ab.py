@@ -100,6 +100,7 @@ def run_arm(name, tree, model, port, rep, emit):
         PYTHONPATH=os.path.join(tree, "python"),
         YUNSHU_AUTH_DISABLED="1",
         YUNSHU_DEBUG_ROUTES="1",
+        YUNSHU_VLM_APC_DISK="0",
         **ARM_ENV.get(name, {}),
     )
     log = open(f"{os.path.splitext(OUT)[0]}_{name}_{rep}.log", "w")  # noqa: SIM115

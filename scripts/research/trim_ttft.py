@@ -36,7 +36,10 @@ def summarize(rows):
 
 def run(name, tree, model, port, rep, size, idle, emit):
     env = dict(
-        os.environ, PYTHONPATH=os.path.join(tree, "python"), YUNSHU_AUTH_DISABLED="1"
+        os.environ,
+        PYTHONPATH=os.path.join(tree, "python"),
+        YUNSHU_AUTH_DISABLED="1",
+        YUNSHU_VLM_APC_DISK="0",
     )
     log = open(f"{os.path.splitext(emit.path)[0]}_{name}_{rep}.log", "w")  # noqa: SIM115
     proc = subprocess.Popen(
