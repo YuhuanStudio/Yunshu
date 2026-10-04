@@ -459,3 +459,14 @@ def test_gathered_prework_reads_the_window_in_kernel():
         "const T act = conv * ((conv < T(0)) ? sy : T(1) - sy);",
     ):
         assert line in gp._SOURCE and line in source
+
+
+def test_drafter_bits_setting_defaults_to_the_measured_eight_bits(monkeypatch):
+    from yunshu_engine import settings
+
+    monkeypatch.delenv("YUNSHU_DRAFT_BITS", raising=False)
+    assert settings.get("YUNSHU_DRAFT_BITS") == 8
+    monkeypatch.setenv("YUNSHU_DRAFT_BITS", "4")
+    assert settings.get("YUNSHU_DRAFT_BITS") == 4
+    monkeypatch.setenv("YUNSHU_DRAFT_BITS", "0")
+    assert settings.get("YUNSHU_DRAFT_BITS") == 0

@@ -1654,12 +1654,15 @@ class VLMEngine:
                 )
                 drafter, draft_kind = None, "mtp"
             if draft_kind == "dflash":
-                # 8-bit drafter: drafts are verified, so this only trades a
-                # little acceptance for half the drafter bytes per cycle
-                # (27B server: faster than the shipped weights at 1K-32K).
+                # Quantized drafter (YUNSHU_DRAFT_BITS, default 8): drafts are
+                # verified, so this only trades acceptance for drafter bytes per
+                # cycle (27B server, 8-bit: faster than the shipped weights at
+                # 1K-32K; 4-bit: +3-8% at 1K-8K, -7% on 32K code).
                 from .dflash_tree import quantize_drafter
 
-                quantize_drafter(drafter, 8)
+                draft_bits = int(settings.get("YUNSHU_DRAFT_BITS"))
+                if draft_bits:
+                    quantize_drafter(drafter, draft_bits)
                 # Project only the context window the drafter attends to.
                 from .dflash_context import install as install_dflash_context
 
