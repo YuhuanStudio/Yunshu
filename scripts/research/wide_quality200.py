@@ -8,6 +8,8 @@ p.add_argument("--output", type=Path, required=True)
 p.add_argument("--dry-run", action="store_true")
 p.add_argument("--items", type=int, default=200)
 p.add_argument("--start", type=int, default=0)
+p.add_argument("--context", type=int, default=0, help="0 = CONTEXT_LIMIT-10")
+p.add_argument("--max-tokens", type=int, default=4096)
 a = p.parse_args()
 if a.dry_run:
     print(
@@ -74,7 +76,7 @@ raw_resume = dflash_copy.resume_chain
 def resumed(*args, **kw):
     handoffs[0] += 1
     context = len(mtp_lane._STATE["context"])
-    generated = 4096 - kw["max_tokens"] + 1
+    generated = a.max_tokens - kw["max_tokens"] + 1
     points.append(dict(context=context, generated=generated, total=context + generated))
     yield from raw_resume(*args, **kw)
 
@@ -130,7 +132,7 @@ with a.output.open("x") as out:
             enable_thinking=False,
         )
         ids = list(ids["input_ids"] if hasattr(ids, "keys") else ids)
-        desired = dflash_fast.CONTEXT_LIMIT - 10
+        desired = a.context or dflash_fast.CONTEXT_LIMIT - 10
         ids = ids[:3] + padding[: desired - len(ids)] + ids[3:]
         assert len(ids) == desired, len(ids)
         refs = []
@@ -140,7 +142,7 @@ with a.output.open("x") as out:
             gen = BatchGenerator(
                 lm,
                 processor,
-                max_tokens=4096,
+                max_tokens=a.max_tokens,
                 draft_model=draft if arm == "auto" else None,
                 draft_kind="dflash" if arm == "auto" else None,
                 draft_block_size=8,
@@ -151,7 +153,7 @@ with a.output.open("x") as out:
             kwargs = model.get_input_embeddings(
                 mx.array(ids)[None], None, mask=None
             ).to_dict()
-            uid = gen.insert([ids], max_tokens=4096, prompt_kwargs=[kwargs])[0]
+            uid = gen.insert([ids], max_tokens=a.max_tokens, prompt_kwargs=[kwargs])[0]
             tokens = []
             done = False
             try:
@@ -185,12 +187,18 @@ with a.output.open("x") as out:
             )
         parity &= refs[0] == refs[1]
         mx.clear_cache()
+    switch = not a.context or a.context + a.max_tokens > dflash_fast.CONTEXT_LIMIT
     delta = abs(correct["off"] - correct["auto"])
     success = (
         parity
         and delta <= 1
-        and handoffs[0] > 0
-        and all(point["total"] == dflash_fast.CONTEXT_LIMIT for point in points)
+        and (
+            not switch
+            or (
+                handoffs[0] > 0
+                and all(point["total"] == dflash_fast.CONTEXT_LIMIT for point in points)
+            )
+        )
     )
     emit(
         dict(
