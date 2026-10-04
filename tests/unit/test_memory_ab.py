@@ -88,3 +88,14 @@ def test_apc_restore_probe_parses_arguments():
     with pytest.raises(SystemExit) as exc:
         apc_restore_probe.main(["--help"])
     assert exc.value.code == 0
+
+
+def test_apc_restore_time_parses_arguments():
+    import pytest
+
+    sys.path.insert(0, str(ROOT / "scripts" / "research"))
+    import apc_restore_time
+
+    with pytest.raises(SystemExit) as exc:
+        apc_restore_time.main(["--help"])
+    assert exc.value.code == 0
