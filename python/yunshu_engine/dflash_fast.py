@@ -1,3 +1,4 @@
+# Upstream (derived): jundot/omlx (Apache-2.0) omlx/patches/qwen35_gdn_prework.py @ a98d8c8c (prework_source)
 """Transaction-local GDN helpers for the certified DFlash fast tree.
 
 The gate calculations and replay retain tree_verify's exact arithmetic. Gate
@@ -51,6 +52,89 @@ def round_room(current, remaining, emitted=0):
 def _name(base, source):
     return (
         base + "_" + hashlib.sha256((tv.gv._HELPERS + source).encode()).hexdigest()[:16]
+    )
+
+
+_GATHER_OLD = """            const T xv = input_row < uint(NKEEP)
+                ? conv_state[(batch_idx * uint(NKEEP) + input_row) * uint(C) + channel]
+                : qkv[(batch_idx * uint(S) + input_row - uint(NKEEP)) * uint(C) + channel];
+"""
+_GATHER_NEW = """            T xv;
+            if (input_row < uint(NKEEP)) {
+                const uint sidx = uint(conv_idx[batch_idx * uint(NKEEP) + input_row]);
+                xv = sidx < uint(NKEEP)
+                    ? conv_prev[sidx * uint(C) + channel]
+                    : qkv[(sidx - uint(NKEEP)) * uint(C) + channel];
+            } else {
+                xv = qkv[(batch_idx * uint(S) + input_row - uint(NKEEP)) * uint(C) + channel];
+            }
+"""
+_STATE_TAIL = "    if (S < NKEEP && row == 0) {"
+
+
+def prework_source():
+    """The GDN prework with the conv window gathered inside the kernel.
+
+    The fast tree built each row's three conv inputs with a concatenate and a
+    gather (two dispatches and a copy per GDN layer). Reading the same bf16
+    values straight from the cached conv tail and the window rows leaves every
+    product and sum untouched. The conv-state output is unused here, so its
+    writes are dropped. Derived from omlx's qwen35_gdn_prework (Apache-2.0)."""
+    from .kernels.omlx import qwen35_gdn_prework as gp
+
+    source = gp._SOURCE
+    if source.count(_GATHER_OLD) != 1 or source.count(_STATE_TAIL) != 1:
+        raise RuntimeError("prework source changed")
+    source = source.replace(_GATHER_OLD, _GATHER_NEW)
+    return source[: source.index(_STATE_TAIL)]
+
+
+def prework_gather(mixed, conv_prev, conv_idx, layer):
+    """q, k, v of every window row, the conv window read through ``conv_idx``."""
+    if "prework" not in _KERNELS:
+        source = prework_source()
+        _KERNELS["prework"] = mx.fast.metal_kernel(
+            name=_name("yunshu_tree_prework", source),
+            input_names=[
+                "qkv",
+                "conv_prev",
+                "conv_idx",
+                "conv_w",
+                "q_scale",
+                "k_scale",
+            ],
+            output_names=["q_out", "k_out", "v_out"],
+            source=source,
+        )
+    w, c_dim = int(mixed.shape[1]), int(mixed.shape[2])
+    hk, hv = layer.num_k_heads, layer.num_v_heads
+    dk, dv = layer.head_k_dim, layer.head_v_dim
+    dtype = mixed.dtype
+    inv = dk**-0.5
+    return _KERNELS["prework"](
+        inputs=[
+            mixed.reshape(w, 1, c_dim),
+            conv_prev,
+            conv_idx,
+            layer.conv1d.weight,
+            mx.array(inv * inv, dtype=dtype),
+            mx.array(inv, dtype=dtype),
+        ],
+        template=[
+            ("T", dtype),
+            ("HK", hk),
+            ("HV", hv),
+            ("DK", dk),
+            ("DV", dv),
+            ("NKEEP", 3),
+            ("C", c_dim),
+            ("S", 1),
+            ("L2", 0),
+        ],
+        grid=(32, w, 2 * hk + hv),
+        threadgroup=(32, 1, 1),
+        output_shapes=[(w, 1, hk, dk), (w, 1, hk, dk), (w, 1, hv, dv)],
+        output_dtypes=[dtype] * 3,
     )
 
 

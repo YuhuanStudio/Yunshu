@@ -86,6 +86,7 @@ _PATH_KERNEL = None
 class FastShape:
     dynamic = True
     is_chain = False
+    fast_glue = True
 
     def __init__(self, parents, max_depth, *, original_ranks=None, is_chain=False):
         self.original_ranks = original_ranks
@@ -139,6 +140,11 @@ class FastShape:
         from .dflash_fast import gdn_forward
 
         return gdn_forward(self, layer, state, q, k, v, a, b)
+
+    def gdn_prework(self, mixed, conv_prev, layer):
+        from .dflash_fast import prework_gather
+
+        return prework_gather(mixed, conv_prev, self.conv_index(), layer)
 
     def parents_array(self):
         return self._parents

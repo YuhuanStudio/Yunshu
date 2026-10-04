@@ -445,3 +445,28 @@ def test_generated_limit_hands_the_same_request_to_chain(monkeypatch):
     assert (
         out == [(5, None)] and seen["first_bonus"] == 9 and seen["max_tokens"] == 4096
     )
+
+
+def test_gathered_prework_reads_the_window_in_kernel():
+    source = fast.prework_source()
+    assert "conv_idx[" in source and "conv_prev[" in source
+    assert "conv_state" not in source and "conv_out" not in source
+    # the conv taps, sums and activation lines are the omlx kernel's own
+    from yunshu_engine.kernels.omlx import qwen35_gdn_prework as gp
+
+    for line in (
+        "acc += float(xv) * float(conv_w[channel * 4 + tap]);",
+        "const T act = conv * ((conv < T(0)) ? sy : T(1) - sy);",
+    ):
+        assert line in gp._SOURCE and line in source
+
+
+def test_drafter_bits_setting_defaults_to_the_measured_eight_bits(monkeypatch):
+    from yunshu_engine import settings
+
+    monkeypatch.delenv("YUNSHU_DRAFT_BITS", raising=False)
+    assert settings.get("YUNSHU_DRAFT_BITS") == 8
+    monkeypatch.setenv("YUNSHU_DRAFT_BITS", "4")
+    assert settings.get("YUNSHU_DRAFT_BITS") == 4
+    monkeypatch.setenv("YUNSHU_DRAFT_BITS", "0")
+    assert settings.get("YUNSHU_DRAFT_BITS") == 0

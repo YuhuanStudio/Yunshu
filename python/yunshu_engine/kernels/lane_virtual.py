@@ -71,14 +71,18 @@ def grouped_linears(members, x):
     x2 = x.reshape(rows, a.input_dims).astype(mx.bfloat16)
     mp = 16 * ((rows + 15) // 16)
     mdims = q._mdims(rows, mp)
-    xs = q._kernel("xsum")(
-        inputs=[x2, mdims],
-        template=[("K", a.input_dims), ("GS", a.group_size)],
-        grid=(a.input_dims // a.group_size, mp, 1),
-        threadgroup=(min(a.input_dims // a.group_size, 256), 1, 1),
-        output_shapes=[(a.input_dims // a.group_size, mp)],
-        output_dtypes=[mx.float32],
-    )[0]
+    hit = q._xs_cache.get(id(x)) if a.group_size == 64 else None
+    if hit is not None and hit[0] is x and hit[1].shape == (a.input_dims // 64, mp):
+        xs = hit[1]  # a producer kernel already wrote the lane group sums
+    else:
+        xs = q._kernel("xsum")(
+            inputs=[x2, mdims],
+            template=[("K", a.input_dims), ("GS", a.group_size)],
+            grid=(a.input_dims // a.group_size, mp, 1),
+            threadgroup=(min(a.input_dims // a.group_size, 256), 1, 1),
+            output_shapes=[(a.input_dims // a.group_size, mp)],
+            output_dtypes=[mx.float32],
+        )[0]
     block = blocks.pop() or min(mp, q.ROW_BLOCK)
     n = a.output_dims + b.output_dims
     outputs = _KERNEL(

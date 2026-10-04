@@ -153,9 +153,7 @@ def test_ensure_out_dirs_creates_missing_parent(tmp_path):
     made = pf.ensure_out_dirs(cmd, str(tmp_path))
     assert (tmp_path / "runs/a").is_dir() and (tmp_path / "c").is_dir()
     assert (tmp_path / "e").is_dir() and len(made) == 3
-    assert (
-        pf.ensure_out_dirs(cmd, str(tmp_path)) == []
-    )  # nothing left to make
+    assert pf.ensure_out_dirs(cmd, str(tmp_path)) == []  # nothing left to make
 
 
 def test_ensure_out_dirs_skips_shell_variables(tmp_path):
