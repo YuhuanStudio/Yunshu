@@ -1058,7 +1058,8 @@ head, head with `YUNSHU_DRAFT_BITS=4` and main are equal in all 12 (context, tas
 
 `YUNSHU_DRAFT_BITS=4` (a stable option, not the default): 1K code 133.9, 1K prose 72.0, 8K code 76.6 (+4.0/+7.5/+2.8% over 8 bit,
 ~49 ms/round) but 32K code 76.5 vs 82.3 (-7%; commits/round 4.20 vs 4.57) and 32K prose +1.6%. Acceptance falls at long contexts
-for code, so a mixed result stays an option; TF ships 4-bit.
+for code, so a mixed result stays an option; TF ships 4-bit. yv ab dflash9-ab3-q4 (same commit, candidate
+YUNSHU_DRAFT_BITS=4): identity PASS (outputs equal to the 8-bit run), decode +3.8/+7.3/+2.8/+6.0% (code/prose at 1K, code/prose at 8K; noise +-2..4%).
 
 Tried, bit-equal, no end-to-end effect (not shipped; patch kept privately): GDN gates folded into the prework launch (-48
 launches), silu(gate)*up fused with the down projection's sums (exhaustive over all bf16 gate encodings, -64 launches): 128.0 /
