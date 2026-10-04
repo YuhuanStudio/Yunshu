@@ -94,7 +94,9 @@ def chat(url, messages, max_tokens):
 
 
 def run_arm(name, tree, model, port, rep, emit):
-    env = dict(os.environ, PYTHONPATH=os.path.join(tree, "python"))
+    env = dict(
+        os.environ, PYTHONPATH=os.path.join(tree, "python"), YUNSHU_AUTH_DISABLED="1"
+    )
     log = open(f"{os.path.splitext(OUT)[0]}_{name}_{rep}.log", "w")  # noqa: SIM115
     proc = subprocess.Popen(
         [
@@ -140,6 +142,16 @@ def run_arm(name, tree, model, port, rep, emit):
         else:
             raise RuntimeError(f"{name}: server not ready")
         threading.Thread(target=sampler, daemon=True).start()
+
+        def census(url, step):
+            try:
+                text = urllib.request.urlopen(
+                    url + "/debug/memory-census?min_mib=64", timeout=300
+                ).read()
+            except Exception as exc:  # noqa: BLE001
+                emit(dict(arm=name, rep=rep, step=step, census_error=str(exc)))
+                return
+            emit(dict(arm=name, rep=rep, step=step, census=json.loads(text)))
 
         def record(step, usage=None, secs=None):
             fp = process_tree_memory(proc.pid)["physical_footprint_sum_bytes"]
@@ -188,6 +200,7 @@ def run_arm(name, tree, model, port, rep, emit):
             record(f"{size // 1024}k-turn2", u, s)
         time.sleep(20)
         record("idle20s")
+        census(url, "idle20s")
         # Does memory held after the long turn return once a short request runs?
         _, u, s = chat(
             url,
@@ -197,6 +210,7 @@ def run_arm(name, tree, model, port, rep, emit):
         record("short-after", u, s)
         time.sleep(20)
         record("idle-after")
+        census(url, "idle-after")
     finally:
         stop.set()
         try:
