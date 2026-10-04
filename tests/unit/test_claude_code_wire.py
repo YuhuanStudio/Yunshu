@@ -2,10 +2,18 @@
 
 import json
 
-from tests.unit.test_anthropic_mid_system import (
-    _captured_messages,
-)  # noqa: F401
+import pytest
+
+from tests.unit import test_anthropic_mid_system as _mid
 from yunshu_engine.tool_arguments import coerce_tool_arguments, tool_schemas
+
+_captured_messages = _mid._captured_messages
+
+
+@pytest.fixture
+def _engine():
+    yield from _mid._engine.__wrapped__()
+
 
 COUNTER = "<total_tokens>14982239 tokens left</total_tokens>"
 
