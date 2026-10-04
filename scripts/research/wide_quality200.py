@@ -177,6 +177,9 @@ with a.output.open("x") as out:
                             tokens.append(int(response.token))
                             done |= response.finish_reason is not None
             finally:
+                from yunshu_engine.spec_release import release_rounds
+
+                release_rounds(gen)
                 gen.close()
                 mtp_lane.set_context(None)
             if arm == "auto":
@@ -259,7 +262,7 @@ with a.output.open("x") as out:
         mx.clear_cache()
     switch = not a.context or a.context + a.max_tokens > dflash_fast.CONTEXT_LIMIT
     delta = abs(correct["off"] - correct["auto"]) if len(arms) == 2 else 0
-    success = (
+    success = len(arms) < 2 or (
         parity
         and delta <= 1
         and (
