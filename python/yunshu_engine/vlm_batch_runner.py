@@ -53,11 +53,11 @@ logger = logging.getLogger(__name__)
 PREFILL_STEP = 2048
 # A text request enters the round driver only when this many requests are in flight.
 DRIVER_MIN_CONCURRENCY = 2
-# ...and its prompt has at most this many uncached tokens: the driver's 512-token
-# attention grid, step GDN kernel and per-row prefill make a cold prompt ~15-30%
-# slower than upstream's prefill (8K and 32K, 27B), which costs more first-token
-# time than drafting wins back. Longer cold prompts keep the upstream path.
-DRIVER_MAX_UNCACHED_TOKENS = 4096
+# ...and its prompt has at most this many uncached tokens: the driver's cold prefill
+# is ~6% slower per token than upstream's at 4-8K (27B; 512-token attention grid),
+# which makes 32K c=2/4 mean TTFT +9% (8K c=2 equal, c=4 +8%). Longer cold prompts
+# keep the upstream path.
+DRIVER_MAX_UNCACHED_TOKENS = 8192
 
 
 @dataclass
