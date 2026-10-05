@@ -104,7 +104,7 @@ Changelog = "https://github.com/YuhuanStudio/Yunshu/blob/main/CHANGELOG.md"
 vision = [
     # >=0.7.3: APC (semantic_extra_hash / resident_bytes) and speculative MTP,
     # both used by the Qwen3.5/3.8 VLM path.
-    "mlx-vlm>=0.7.4",
+    "mlx-vlm>=0.7.6",
     "Pillow>=10.0.0",
 ]
 # Audio: speech-to-text (ASR) + text-to-speech (TTS) via mlx-audio.
@@ -121,7 +121,7 @@ audio = [
 # to keep turn 2+ correct for text and speech input (2026-09-28), so the fork's
 # position_ids patch is gone.
 omni = [
-    "mlx-vlm>=0.7.4",
+    "mlx-vlm>=0.7.6",
     "torch>=2.1.0",
     "torchvision>=0.16.0",
     "Pillow>=10.0.0",

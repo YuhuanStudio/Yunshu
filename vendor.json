@@ -900,7 +900,7 @@
       "commit": "v0.7.3",
       "why": "ragged attention routing",
       "source_sha256": "f90d80c414d62ac133195825e32266e20635d87ac7caa4e1267f59d995db0293",
-      "installed_version": "0.7.4"
+      "installed_version": "0.7.6"
     },
     {
       "kind": "patches",
@@ -915,7 +915,7 @@
       "commit": "v0.7.3",
       "why": "ragged attention in the spec verifier",
       "source_sha256": "0c8e3b361ee34362c2f2b0291024fec9a0061894558f9b37bc2e2aaa993e50c8",
-      "installed_version": "0.7.4"
+      "installed_version": "0.7.6"
     },
     {
       "kind": "patches",
@@ -930,7 +930,7 @@
       "commit": "v0.7.3",
       "why": "generation-batch merge builds ragged caches",
       "source_sha256": "a81722233487c0d63b34d3d389704af5de8172a61700316aaa85d2fc090b6746",
-      "installed_version": "0.7.4"
+      "installed_version": "0.7.6"
     },
     {
       "kind": "patches",
@@ -945,7 +945,7 @@
       "commit": "v0.7.3",
       "why": "fused add+norm wrapper",
       "source_sha256": "142df8a42c27c4f78b367e9b118b55c1bdddd26bac0dd8ceb01f009610fb18f7",
-      "installed_version": "0.7.4"
+      "installed_version": "0.7.6"
     },
     {
       "kind": "patches",
@@ -960,7 +960,7 @@
       "commit": "v0.7.3",
       "why": "fused add+norm layer body; calls self._gated_delta/_attention/_feed_forward",
       "source_sha256": "f3f59ff9d0b68a50ad505bff837ed9f7dcba1fbd01646c4fbbd902af00f4fd60",
-      "installed_version": "0.7.4"
+      "installed_version": "0.7.6"
     },
     {
       "kind": "patches",
@@ -975,7 +975,7 @@
       "commit": "v0.7.3",
       "why": "batch-invariant projections",
       "source_sha256": "6e38296bd3f89d5a5e2a225d7b8c30cd275906a064415de0c462aa68c778e25e",
-      "installed_version": "0.7.4"
+      "installed_version": "0.7.6"
     },
     {
       "kind": "patches",
@@ -990,7 +990,7 @@
       "commit": "v0.7.3",
       "why": "batch-invariant projections",
       "source_sha256": "1f44efb5714938afee3c700508cafd98770f1e6ab1a84718ef59fdf444ca782b",
-      "installed_version": "0.7.4"
+      "installed_version": "0.7.6"
     },
     {
       "kind": "patches",
@@ -1005,7 +1005,7 @@
       "commit": "v0.7.3",
       "why": "batch-invariant projections",
       "source_sha256": "18c3380506f39d86f0d1e93166e91c9eff77902dfd34a657028a8868eae89487",
-      "installed_version": "0.7.4"
+      "installed_version": "0.7.6"
     },
     {
       "kind": "patches",
@@ -1020,7 +1020,7 @@
       "commit": "v0.7.3",
       "why": "batch-invariant greedy head",
       "source_sha256": "54d9a28b49104ea6fe9e1219e779aed6314aa78ba52211a23688fd44952c1c8f",
-      "installed_version": "0.7.4"
+      "installed_version": "0.7.6"
     },
     {
       "kind": "patches",
@@ -1035,7 +1035,7 @@
       "commit": "v0.7.3",
       "why": "module-level verify projection hook",
       "source_sha256": "190517e318ba4d7b78e1c4b14c40917a76ce72803bdb6aca1563e86c396d6701",
-      "installed_version": "0.7.4"
+      "installed_version": "0.7.6"
     },
     {
       "kind": "patches",
@@ -1050,7 +1050,7 @@
       "commit": "v0.7.3",
       "why": "module-level verify projection hook",
       "source_sha256": "2d4c9adbc50be66e97bb64250c496b240660e805d6426b489caff26d51a503cc",
-      "installed_version": "0.7.4"
+      "installed_version": "0.7.6"
     },
     {
       "kind": "patches",
@@ -1065,7 +1065,7 @@
       "commit": "v0.7.3",
       "why": "module-level verify projection hook",
       "source_sha256": "539dce1a6026f87e7cc6310d615e5d00782128489cd4f270a4edd6a14f990209",
-      "installed_version": "0.7.4"
+      "installed_version": "0.7.6"
     },
     {
       "kind": "patches",
@@ -1095,7 +1095,7 @@
       "commit": "v0.7.3",
       "why": "one-row capture keeps the hidden sink",
       "source_sha256": "70aaa49ac3c48311e46c18f2486c733f469d5013d029fa59d94a05c0f4af0234",
-      "installed_version": "0.7.4"
+      "installed_version": "0.7.6"
     },
     {
       "kind": "patches",
@@ -1110,7 +1110,7 @@
       "commit": "v0.7.3",
       "why": "drafter context window",
       "source_sha256": "f4a3723d47494a59341fef6b52672c582b7e3c85bbdce95e80efcb01a0af9298",
-      "installed_version": "0.7.4"
+      "installed_version": "0.7.6"
     },
     {
       "kind": "patches",
@@ -1125,7 +1125,7 @@
       "commit": "v0.7.3",
       "why": "drafter context window",
       "source_sha256": "8f2f017bc46bdf0e18734023dd978eb00f99e8f9c4253b184362f46523dddaed",
-      "installed_version": "0.7.4"
+      "installed_version": "0.7.6"
     },
     {
       "kind": "patches",
@@ -1140,7 +1140,7 @@
       "commit": "v0.7.3",
       "why": "drafter context window; reads self.chunks",
       "source_sha256": "100db78da92c99113e5185f29e181bbf71b29c2e0d8d93bc6639dffa0f0edfaf",
-      "installed_version": "0.7.4"
+      "installed_version": "0.7.6"
     },
     {
       "kind": "patches",
@@ -1156,7 +1156,7 @@
       "why": "DFlash tree rounds replace the single-row loop",
       "source_sha256": "4c118d1ddc2f65fd1c82a6038224c6f44dba30fd0359c6b69955220f54ad4b35",
       "binding": "rebound in mlx_vlm.speculative.utils",
-      "installed_version": "0.7.4"
+      "installed_version": "0.7.6"
     },
     {
       "kind": "patches",
@@ -1172,7 +1172,7 @@
       "why": "MTP tree rounds replace the server loop",
       "source_sha256": "b3d90cbca4403f6b285c0d4161665bdf889799ebcb73433e960dadcd9de06021",
       "binding": "rebound in mlx_vlm.speculative.utils",
-      "installed_version": "0.7.4"
+      "installed_version": "0.7.6"
     },
     {
       "kind": "patches",
@@ -1188,7 +1188,7 @@
       "why": "own MTP lane for one greedy row",
       "source_sha256": "f8daeca6474acf220603d35cd1918807b7ea4932a0daf0ab376f954b9fee6811",
       "binding": "rebound in mlx_vlm.generate.ar and mlx_vlm.speculative.utils",
-      "installed_version": "0.7.4"
+      "installed_version": "0.7.6"
     },
     {
       "kind": "patches",
@@ -1203,7 +1203,7 @@
       "commit": "v0.7.3",
       "why": "reads self.uids for per-row sampling",
       "source_sha256": "f4aa6a2b6644c0875f1bbb240ad1676e873bdd12c2396c3388caf5e50b8d180d",
-      "installed_version": "0.7.4"
+      "installed_version": "0.7.6"
     },
     {
       "kind": "patches",
@@ -1218,7 +1218,7 @@
       "commit": "v0.7.3",
       "why": "reads self.uids for per-row sampling",
       "source_sha256": "19431a686e73fbca71c41af6d3662b7b4c4a84c07880cd69ab2e0febf16fd136",
-      "installed_version": "0.7.4"
+      "installed_version": "0.7.6"
     },
     {
       "kind": "patches",
@@ -1278,7 +1278,7 @@
       "commit": "v0.7.3",
       "why": "lookup provenance: tier and reload time per request",
       "source_sha256": "a80d4181ce8ca81e9c468eed84a1102a65f11d36eebf623dae34995a8c87ef95",
-      "installed_version": "0.7.4"
+      "installed_version": "0.7.6"
     },
     {
       "kind": "patches",
@@ -1293,7 +1293,7 @@
       "commit": "v0.7.3",
       "why": "lookup provenance (block-mode families)",
       "source_sha256": "3ccc02dee1717033c6fb1e302d8a1366f30a7bc00070bb8563c18550373df177",
-      "installed_version": "0.7.4"
+      "installed_version": "0.7.6"
     },
     {
       "kind": "patches",
@@ -1307,8 +1307,8 @@
       "license": "MIT",
       "commit": "v0.7.3",
       "why": "lookup provenance (SSD, block-mode families)",
-      "source_sha256": "8ba170f4cb5595fdadc6280510c00579b12216578f940998bdd457082f5e4e71",
-      "installed_version": "0.7.4"
+      "source_sha256": "2969eb3af494017bc23c7ea5bd652761ab7c0ccfa6a513a0dee4966009c2ff92",
+      "installed_version": "0.7.6"
     },
     {
       "kind": "patches",
@@ -1323,7 +1323,7 @@
       "commit": "v0.7.3",
       "why": "checkpoints of a newer request supersede earlier prefixes of the same conversation",
       "source_sha256": "29d20214c78d223a1609e7c919bccd4ec7743b3382ffddf6e0bef0dc6b413e12",
-      "installed_version": "0.7.4"
+      "installed_version": "0.7.6"
     },
     {
       "kind": "patches",
@@ -1338,7 +1338,7 @@
       "commit": "v0.7.3",
       "why": "a checkpoint that is already a private snapshot (the runner's deferred captures) is stored without the second full copy store_exact_cache made",
       "source_sha256": "9d747242605e2872c76133b1c173ed3945b825f6a504c51903b64045dc84f8ec",
-      "installed_version": "0.7.4"
+      "installed_version": "0.7.6"
     },
     {
       "kind": "patches",
@@ -1353,7 +1353,7 @@
       "commit": "v0.7.3",
       "why": "binds the coordinator that places the head checkpoint",
       "source_sha256": "95acb456c38f4a8bdb9dc64b913e0c11d5f8f4ec052a0a2d65f64e9e874dd000",
-      "installed_version": "0.7.4"
+      "installed_version": "0.7.6"
     },
     {
       "kind": "patches",
@@ -1368,7 +1368,7 @@
       "commit": "v0.7.3",
       "why": "final + one interval + end-of-system-turn checkpoint instead of entries-2 intervals",
       "source_sha256": "395394a349b10bc6bed11623a04945f4c4381f0707b1657fe2b5162488c0c57c",
-      "installed_version": "0.7.4"
+      "installed_version": "0.7.6"
     },
     {
       "kind": "patches",
@@ -1383,7 +1383,7 @@
       "commit": "v0.7.3",
       "why": "SSD tier written on RAM eviction / restart, not write-through (SSD wear)",
       "source_sha256": "54f007803e99edce650a8502625be5549618751d9745b2f00d7b671bcae30bb2",
-      "installed_version": "0.7.4"
+      "installed_version": "0.7.6"
     },
     {
       "kind": "patches",
@@ -1398,7 +1398,7 @@
       "commit": "v0.7.3",
       "why": "guarded: an index failure goes cold instead of failing the request",
       "source_sha256": "75449f56415667956aafb3002878b5d98b462a9943f9982a4f5f9c47e0188914",
-      "installed_version": "0.7.4"
+      "installed_version": "0.7.6"
     },
     {
       "kind": "patches",
@@ -1413,7 +1413,7 @@
       "commit": "v0.7.3",
       "why": "guarded + validated: exceptions, torn files and states that do not fit the model are deleted and the lookup prefills cold",
       "source_sha256": "150679b39fc8972adbd2c2f0b041e9782564fd51c89f813abadd007bc0ab0b84",
-      "installed_version": "0.7.4"
+      "installed_version": "0.7.6"
     },
     {
       "kind": "patches",
@@ -1428,7 +1428,7 @@
       "commit": "v0.7.3",
       "why": "guarded: a failed block restore goes cold",
       "source_sha256": "7821c1f8b1502f5a055b802cd7312a6d52dde7a45984ae39c6590c425b79c03b",
-      "installed_version": "0.7.4"
+      "installed_version": "0.7.6"
     },
     {
       "kind": "patches",
@@ -1443,7 +1443,7 @@
       "commit": "v0.7.3",
       "why": "depended on (not patched): header + payload-completeness check of a persisted file",
       "source_sha256": "528b81a4fdfc116f4cb70cb9c874231c8820da57af4d0c2c8b9829a69a609b5c",
-      "installed_version": "0.7.4"
+      "installed_version": "0.7.6"
     },
     {
       "kind": "patches",
@@ -1458,7 +1458,7 @@
       "commit": "v0.7.3",
       "why": "depended on (not patched): forget an invalidated file",
       "source_sha256": "bd807a6e029355ab1165cba870fcf968ce7d8732740ab6353dcbaaa5e5ea3b1c",
-      "installed_version": "0.7.4"
+      "installed_version": "0.7.6"
     },
     {
       "kind": "patches",
@@ -1473,7 +1473,7 @@
       "commit": "v0.7.3",
       "why": "prefill chunks of 64+ tokens run mx.fast.gated_delta_update (MLX core) instead of the per-token step kernel",
       "source_sha256": "84cd89879cc0526439b5b2b9f4b4ff5d93f144fa424b2b8268552f18b130b90c",
-      "installed_version": "0.7.4"
+      "installed_version": "0.7.6"
     },
     {
       "kind": "patches",
@@ -1488,7 +1488,7 @@
       "commit": "v0.7.3",
       "why": "lower storage tiers restore a checkpoint file from any path through the upstream exact-cache loader",
       "source_sha256": "bdeabe368f076a095b8a03b4a4954dd24cbfe51425e4f9413052d75984596029",
-      "installed_version": "0.7.4"
+      "installed_version": "0.7.6"
     },
     {
       "kind": "patches",
@@ -1503,7 +1503,7 @@
       "commit": "v0.7.3",
       "why": "lower storage tiers name their files like the primary store, so a checkpoint keeps its name when it moves",
       "source_sha256": "e1f58ad728feacfe4d5527ed6f7b85f4a45b6ee1de59eab71053ac41e3d12599",
-      "installed_version": "0.7.4"
+      "installed_version": "0.7.6"
     },
     {
       "kind": "patches",
@@ -1518,7 +1518,7 @@
       "commit": "v0.7.3",
       "why": "lower storage tiers validate and index checkpoint files by their safetensors header",
       "source_sha256": "4e23de9e392048413bc3736c3bd8ca1b753fab977dff43bc41dd991347cb7c4d",
-      "installed_version": "0.7.4"
+      "installed_version": "0.7.6"
     },
     {
       "kind": "patches",
@@ -1533,7 +1533,7 @@
       "commit": "v0.7.3",
       "why": "lower storage tiers index checkpoint files by their metadata (tokens, extra hash, layout)",
       "source_sha256": "20c2ecf3489bcc87407a4d50a99d2fa41011ce62108009a4374d5f17c62cb192",
-      "installed_version": "0.7.4"
+      "installed_version": "0.7.6"
     },
     {
       "kind": "patches",
@@ -1548,7 +1548,7 @@
       "commit": "v0.7.3",
       "why": "a WARM hit is decoded into the RAM tier through the upstream byte-budget admission",
       "source_sha256": "094ed706a1cb3ed3fabaea9ce24c10cbdfdedd60e2cc0d56973a190a7bb10447",
-      "installed_version": "0.7.4"
+      "installed_version": "0.7.6"
     },
     {
       "path": "python/yunshu_engine/constrained_spec.py",
@@ -1562,7 +1562,7 @@
       "symbol": "_sample_with_positions",
       "signature": "(sampler: Callable[[mx.array], mx.array], logprobs: mx.array, *, row_ids: Optional[List[int]]=None, positions: Optional[List[int]]=None)",
       "source_sha256": "1a3af4756e9a1e5da9ebeb9469bc10a72422f1ff67772be75425ae43c0620a90",
-      "installed_version": "0.7.4",
+      "installed_version": "0.7.6",
       "why": "retain sampled prefill distribution / serial arithmetic of floating target projections",
       "review_reason": "2026-10-04: installed old/new mlx-vlm 0.7.4 source files are identical. Previous entry used stale runtime-style annotations rather than the current source AST; record the unmodified source AST like the other entries for this symbol. Request-local serial prefill and constrained transactions are still required."
     },
@@ -1578,7 +1578,7 @@
       "symbol": "Qwen3_5BatchInvariantForward._linear",
       "signature": "(self, linear, x: mx.array)",
       "source_sha256": "6e38296bd3f89d5a5e2a225d7b8c30cd275906a064415de0c462aa68c778e25e",
-      "installed_version": "0.7.4",
+      "installed_version": "0.7.6",
       "why": "retain sampled prefill distribution / serial arithmetic of floating target projections",
       "review_reason": "2026-10-04: installed old/new mlx-vlm 0.7.4 source files are identical. Previous entry used stale runtime-style annotations rather than the current source AST; record the unmodified source AST like the other entries for this symbol. Request-local serial prefill and constrained transactions are still required."
     },
@@ -1594,7 +1594,7 @@
       "symbol": "Qwen3_5BatchInvariantForward._linears",
       "signature": "(self, linears, x: mx.array)",
       "source_sha256": "1f44efb5714938afee3c700508cafd98770f1e6ab1a84718ef59fdf444ca782b",
-      "installed_version": "0.7.4",
+      "installed_version": "0.7.6",
       "why": "retain sampled prefill distribution / serial arithmetic of floating target projections",
       "review_reason": "2026-10-04: installed old/new mlx-vlm 0.7.4 source files are identical. Previous entry used stale runtime-style annotations rather than the current source AST; record the unmodified source AST like the other entries for this symbol. Request-local serial prefill and constrained transactions are still required."
     },
@@ -1612,7 +1612,7 @@
       "why": "constrained DFlash rounds with target-row logprobs",
       "source_sha256": "f8daeca6474acf220603d35cd1918807b7ea4932a0daf0ab376f954b9fee6811",
       "binding": "rebound in mlx_vlm.generate.ar and mlx_vlm.speculative.utils",
-      "installed_version": "0.7.4"
+      "installed_version": "0.7.6"
     },
     {
       "kind": "patches",
@@ -1627,7 +1627,7 @@
       "commit": "v0.7.3",
       "why": "canonical singleton stock prefill before the first immediate prompt step",
       "source_sha256": "1b8c550c53c7eb3a399be087e9d5fe9db0c7b5bff87d211543fb7aa4abc662eb",
-      "installed_version": "0.7.4",
+      "installed_version": "0.7.6",
       "review_reason": "2026-10-04: installed old/new mlx-vlm 0.7.4 source files are identical. Previous entry used stale runtime-style annotations rather than the current source AST; record the unmodified source AST like the other entries for this symbol. Request-local serial prefill and constrained transactions are still required."
     },
     {
@@ -1641,7 +1641,7 @@
       "signature": "(self, hidden: mx.array)",
       "license": "MIT",
       "commit": "v0.7.4",
-      "installed_version": "0.7.4",
+      "installed_version": "0.7.6",
       "source_sha256": "acacc9b3df1ea280e61c2c2f49af7a7786ce172cc0f805d7d4e7e8dc4ccaef99",
       "why": "instance-only prototype: affine quantized context KV fusion",
       "review_reason": "2026-10-04: installed old/new mlx-vlm 0.7.4 source files are identical. Previous entry used stale runtime-style annotations rather than the current source AST; record the unmodified source AST like the other entries for this symbol. Request-local serial prefill and constrained transactions are still required."
@@ -1657,7 +1657,7 @@
       "signature": "(self, last_bonus, hidden: mx.array, cache: List[KVCache], block_size: int, sampler, token_dtype: mx.Dtype=mx.int32)",
       "license": "MIT",
       "commit": "v0.7.4",
-      "installed_version": "0.7.4",
+      "installed_version": "0.7.6",
       "source_sha256": "9fa756e28c331aff33eb160404110b08b1685c74567ee33d3afa2e85cb61c029",
       "why": "instance-only prototype: preserve DFlash2 subclass candidate selector on greedy proposals",
       "review_reason": "2026-10-04: installed old/new mlx-vlm 0.7.4 source files are identical. Previous entry used stale runtime-style annotations rather than the current source AST; record the unmodified source AST like the other entries for this symbol. Request-local serial prefill and constrained transactions are still required."
@@ -1675,7 +1675,7 @@
       "commit": "v0.7.4",
       "why": "absolute rendered cache seams, same spans on hit and miss",
       "source_sha256": "94591dbb4d1c3f1c7eb63d2c677d24ceffc2b073671343a183ddac76d539897c",
-      "installed_version": "0.7.4",
+      "installed_version": "0.7.6",
       "review_reason": "2026-10-04: installed old/new mlx-vlm 0.7.4 source files are identical. Previous entry used stale runtime-style annotations rather than the current source AST; record the unmodified source AST like the other entries for this symbol. Request-local serial prefill and constrained transactions are still required."
     },
     {
@@ -1691,7 +1691,7 @@
       "commit": "v0.7.4",
       "why": "release per-request cache intent only after prefill publication",
       "source_sha256": "19431a686e73fbca71c41af6d3662b7b4c4a84c07880cd69ab2e0febf16fd136",
-      "installed_version": "0.7.4",
+      "installed_version": "0.7.6",
       "review_reason": "2026-10-04: installed old/new mlx-vlm 0.7.4 source files are identical. Previous entry used stale runtime-style annotations rather than the current source AST; record the unmodified source AST like the other entries for this symbol. Request-local serial prefill and constrained transactions are still required."
     },
     {
@@ -1707,7 +1707,7 @@
       "commit": "v0.7.4",
       "why": "reuse existing singleton fused prework for shared decode; no new kernel",
       "source_sha256": "f8deff65c803d4dab0611c00d51d08d1f88326361125334436622982fa10ca5d",
-      "installed_version": "0.7.4",
+      "installed_version": "0.7.6",
       "review_reason": "2026-10-04: installed old/new mlx-vlm 0.7.4 source files are identical. Previous entry used stale runtime-style annotations rather than the current source AST; record the unmodified source AST like the other entries for this symbol. Request-local serial prefill and constrained transactions are still required."
     },
     {
@@ -1723,7 +1723,7 @@
       "commit": "v0.7.3",
       "why": "its mx.clear_cache() after every prompt chunk is bounded (buffer cache kept across prefill steps)",
       "source_sha256": "94591dbb4d1c3f1c7eb63d2c677d24ceffc2b073671343a183ddac76d539897c",
-      "installed_version": "0.7.4"
+      "installed_version": "0.7.6"
     },
     {
       "kind": "patches",
@@ -1738,7 +1738,7 @@
       "commit": "v0.7.4",
       "why": "capture a detached lazy single-row checkpoint before mutation; admission after first token",
       "source_sha256": "95775801836580e7fa5eed8df85541f4df866077bcda4f464cedc085c091b333",
-      "installed_version": "0.7.4"
+      "installed_version": "0.7.6"
     },
     {
       "kind": "patches",
@@ -1753,7 +1753,7 @@
       "commit": "v0.7.4",
       "why": "depended on (not patched): native cache snapshot metadata and lazy detached arrays",
       "source_sha256": "2f92c734175d88d663e5c687a47fd71c9ea2c741bb0fb94f9231145603f9e4d8",
-      "installed_version": "0.7.4"
+      "installed_version": "0.7.6"
     },
     {
       "kind": "patches",
@@ -1768,7 +1768,7 @@
       "commit": "v0.7.4",
       "why": "choose prefixes at reproducible cold-prefill boundaries",
       "source_sha256": "ee583b7140ea5db41b4a451e788793d45ed9394bbcc1252fd6ce27dd0689d355",
-      "installed_version": "0.7.4"
+      "installed_version": "0.7.6"
     },
     {
       "kind": "patches",
@@ -1783,7 +1783,7 @@
       "commit": "v0.7.4",
       "why": "preserve a private single-row restored KV reservation without recopying",
       "source_sha256": "07ba60a8680462137dda5220c33358bd4c2dee70aaa4dd9a6a184e5671634d48",
-      "installed_version": "0.7.4"
+      "installed_version": "0.7.6"
     },
     {
       "kind": "patches",
@@ -1796,7 +1796,7 @@
       "signature": "(self, hidden: mx.array)",
       "license": "MIT",
       "commit": "v0.7.4",
-      "installed_version": "0.7.4",
+      "installed_version": "0.7.6",
       "source_sha256": "ac69137fe6f7067353f58beff0ef376a8512b71efe44c4a3dd5100972b45d89b",
       "why": "private-instance one-dispatch causal convolution; target/shared readout unchanged",
       "review_reason": "2026-10-04: installed old/new mlx-vlm 0.7.4 source files are identical. Previous entry used stale runtime-style annotations rather than the current source AST; record the unmodified source AST like the other entries for this symbol. Request-local serial prefill and constrained transactions are still required."
@@ -1812,7 +1812,7 @@
       "signature": "(self, hidden: mx.array, dynamic: mx.array)",
       "license": "MIT",
       "commit": "v0.7.4",
-      "installed_version": "0.7.4",
+      "installed_version": "0.7.6",
       "source_sha256": "9c486c6f81e51dcbc5c0c02809b559e431802c7270206b50aac8efd23502e797",
       "why": "private-instance one-dispatch causal convolution; target/shared readout unchanged",
       "review_reason": "2026-10-04: installed old/new mlx-vlm 0.7.4 source files are identical. Previous entry used stale runtime-style annotations rather than the current source AST; record the unmodified source AST like the other entries for this symbol. Request-local serial prefill and constrained transactions are still required."
@@ -1828,7 +1828,7 @@
       "signature": "(model: nn.Module, draft_model: nn.Module, prompt_cache: List[Any], hidden: mx.array, *, first_bonus: int, max_tokens: int, sampler: Callable[[mx.array], mx.array], draft_block_size: Optional[int]=None, token_dtype: mx.Dtype=mx.int32, use_model_initial_block_size: bool=True, greedy_sampling: bool=True)",
       "license": "MIT",
       "commit": "v0.7.4",
-      "installed_version": "0.7.4",
+      "installed_version": "0.7.6",
       "source_sha256": "4c118d1ddc2f65fd1c82a6038224c6f44dba30fd0359c6b69955220f54ad4b35",
       "why": "request-local copy proposal proxy; original target verifier/cache transaction retained"
     },
@@ -1843,7 +1843,7 @@
       "signature": "(draft_model: nn.Module, requested_block_total: int, remaining_budget: int, initial_block_size: Optional[int]=None)",
       "license": "MIT",
       "commit": "v0.7.4",
-      "installed_version": "0.7.4",
+      "installed_version": "0.7.6",
       "source_sha256": "54ea4889f15ee8908f8282e626948723429081ee1c1974da7c1c40fdc8fa8712",
       "why": "request-local copy proposal proxy; original target verifier/cache transaction retained"
     },
@@ -1860,7 +1860,7 @@
       "commit": "v0.7.3",
       "why": "native unpadded singleton extract/merge views retain KV capacity and upstream metadata; custom, quantized, padded, multi-row and speculative caches stay upstream",
       "source_sha256": "70aaa49ac3c48311e46c18f2486c733f469d5013d029fa59d94a05c0f4af0234",
-      "installed_version": "0.7.4"
+      "installed_version": "0.7.6"
     },
     {
       "kind": "patches",
@@ -1875,7 +1875,7 @@
       "commit": "v0.7.4",
       "why": "native APC restore uses independent copy-on-write handles before direct capacity reservation; stores and custom caches keep upstream detached snapshots",
       "source_sha256": "2f92c734175d88d663e5c687a47fd71c9ea2c741bb0fb94f9231145603f9e4d8",
-      "installed_version": "0.7.4"
+      "installed_version": "0.7.6"
     }
   ],
   "watch": [
@@ -1901,7 +1901,7 @@
       ],
       "why": "runner, APC, speculative decode we build on",
       "pin_package": "mlx-vlm",
-      "commit": "6ecadd767ca1c7c54763289c750dd180d7945037",
+      "commit": "1dcc142dbe2c579d1de7638aaac263f7e4e11734",
       "reviewed_date": "2026-10-04"
     },
     {
