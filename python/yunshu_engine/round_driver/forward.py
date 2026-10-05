@@ -23,6 +23,21 @@ import mlx.nn as nn
 ATTN_BLOCK = 512  # default prefill attention query block (absolute grid)
 LANE_TAIL = 256  # partial atoms up to this many tokens use lane projections
 EVAL_EVERY = 4  # layers between evaluations of a prefill forward
+PROFILE: dict[str, float] | None = None  # research: stage name -> synchronized seconds
+_T = [0.0]
+
+
+def _tick(name: str, *arrays) -> None:
+    """With PROFILE set, evaluate ``arrays`` and charge the wall time since the
+    last tick to ``name`` (adds a sync per stage; timing probes only)."""
+    if PROFILE is None:
+        return
+    import time
+
+    mx.eval(*arrays)
+    now = time.perf_counter()
+    PROFILE[name] = PROFILE.get(name, 0.0) + now - _T[0]
+    _T[0] = now
 
 
 @dataclass
@@ -187,6 +202,11 @@ def forward(language_model: Any, segments: list[Segment]) -> mx.array:
     lane = [seg.lane for seg in segments]
     tokens = mx.concatenate([s.tokens for s in segments]).astype(mx.int32)
     x = model.embed_tokens(tokens)[None]
+    if PROFILE is not None:
+        import time
+
+        mx.eval(x)
+        _T[0] = time.perf_counter()
     for i, layer in enumerate(model.layers):
         xn = layer.input_layernorm(x)
         if layer.is_linear:
@@ -199,11 +219,14 @@ def forward(language_model: Any, segments: list[Segment]) -> mx.array:
                 _project(g.in_proj_b, xn, spans, lane),
                 _project(g.in_proj_a, xn, spans, lane),
             )
+            _tick("gdn_proj", qkv, z, b, a)
             parts = [
                 _gdn_mix(g, qkv[:, s:e], z[:, s:e], b[:, s:e], a[:, s:e], seg.cache[i])
                 for seg, (s, e) in zip(segments, spans, strict=True)
             ]
+            _tick("gdn_mix", *parts)
             r = _project(g.out_proj, _cat(parts), spans, lane)
+            _tick("gdn_out", r)
         else:
             at = layer.self_attn
             q = _project(at.q_proj, xn, spans, lane)
@@ -211,13 +234,17 @@ def forward(language_model: Any, segments: list[Segment]) -> mx.array:
                 _project(at.k_proj, xn, spans, lane),
                 _project(at.v_proj, xn, spans, lane),
             )
+            _tick("attn_proj", q, k, v)
             parts = [
                 _attention_mix(at, q[:, s:e], k[:, s:e], v[:, s:e], seg, seg.cache[i])
                 for seg, (s, e) in zip(segments, spans, strict=True)
             ]
+            _tick("attn_mix", *parts)
             r = _project(at.o_proj, _cat(parts), spans, lane)
+            _tick("attn_out", r)
         h = x + r
         x = h + _mlp(layer.mlp, layer.post_attention_layernorm(h), spans, lane)
+        _tick("mlp", x)
         # transient stock weights are freed every few layers (the graph would
         # otherwise hold every layer's)
         if i % EVAL_EVERY == EVAL_EVERY - 1:

@@ -46,7 +46,7 @@ def main():
     )
     ap.add_argument(
         "--ablate",
-        choices=["attn", "nodraft", "eval8"],
+        choices=["attn", "nodraft", "eval8", "profile", "budget2k", "budget1k"],
         help="timing ablation (bits change)",
     )
     ap.add_argument("--off", action="store_true", help="expect no driver (arm off)")
@@ -88,6 +88,10 @@ def main():
                 return out.transpose(0, 2, 1, 3).reshape(1, T, -1) * mx.sigmoid(gate)
 
             rd_forward._attention_mix = local_attention
+        elif a.ablate in ("budget2k", "budget1k"):
+            runner.driver.idle_budget = 2048 if a.ablate == "budget2k" else 1024
+        elif a.ablate == "profile":
+            rd_forward.PROFILE = {}
         elif a.ablate == "eval8":
             rd_forward.EVAL_EVERY = 8
     drv = runner.driver
@@ -189,6 +193,12 @@ def main():
     buf = io.StringIO()
     pstats.Stats(prof, stream=buf).sort_stats("cumulative").print_stats(28)
     print(buf.getvalue(), flush=True)
+    if a.ablate == "profile":
+        print(
+            "PROFILE",
+            json.dumps({k: round(v, 2) for k, v in rd_forward.PROFILE.items()}),
+            flush=True,
+        )
     mem = dict(
         peak_gib=round(mx.get_peak_memory() / gib, 2),
         active_gib=round(mx.get_active_memory() / gib, 2),
