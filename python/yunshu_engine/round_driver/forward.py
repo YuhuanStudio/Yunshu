@@ -47,6 +47,8 @@ class Segment:
     cache: list
     tokens: mx.array  # [T] int32
     block: int = ATTN_BLOCK  # prefill attention query block (the driver's chunk)
+    long_from: int = 1 << 60  # positions from here on use the coarser grid
+    long_block: int = ATTN_BLOCK
 
     @property
     def length(self) -> int:
@@ -96,7 +98,8 @@ def _attention_mix(attn, q, k, v, seg: Segment, cache) -> mx.array:
         parts = []
         b0 = start
         while b0 < n:
-            b1 = min((b0 // seg.block + 1) * seg.block, n)
+            blk = seg.long_block if b0 >= seg.long_from else seg.block
+            b1 = min((b0 // blk + 1) * blk, n)
             parts.append(
                 mx.fast.scaled_dot_product_attention(
                     queries[:, :, b0 - start : b1 - start],

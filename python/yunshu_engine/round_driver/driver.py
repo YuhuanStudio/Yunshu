@@ -59,6 +59,8 @@ MAX_DECODE_TOKENS = MAX_WINDOW  # pending token + up to 7 drafts
 FINISH_STEPS = (
     4  # extra prefill steps a step may run for rows within a chunk of their end
 )
+LONG_FROM = 16384  # positions from here on prefill in LONG_CHUNK atoms
+LONG_CHUNK = 2048
 CHUNK = 512  # default prefill chunk: fixed spans from the prompt start
 IDLE_BUDGET = 1024  # prefill tokens per prefill step when no row decodes
 ACCEPT_PRIOR = 0.7  # per-depth draft acceptance before a row has history
@@ -168,6 +170,12 @@ class RoundDriver:
         # decoding row waits behind a prompt.
         self.chunk = int(chunk or CHUNK)
         self.idle_budget = max(IDLE_BUDGET, self.chunk)
+        # Atom size by absolute position (so it depends on the prompt alone, and a
+        # session extended from a stored checkpoint continues on the same grid):
+        # the attention re-reads the whole KV per query block, so 512-token blocks
+        # cost +7 s of a 38 s 32K prefill; beyond LONG_FROM blocks are LONG_CHUNK.
+        self.long_from = LONG_FROM if self.chunk == CHUNK else 1 << 60
+        self.long_chunk = LONG_CHUNK
 
         self.model = model
         self.lm = model.language_model if hasattr(model, "language_model") else model
@@ -352,13 +360,18 @@ class RoundDriver:
                     row.mtp_cache = self.head.make_cache()
             row.ckpts = []
 
+    def atom(self, pos: int) -> int:
+        """Atom size of the prompt span that starts at ``pos``."""
+        return self.long_chunk if pos >= self.long_from else self.chunk
+
     def _span_end(self, row: _Row, start: int) -> int:
         """End of the prompt span that starts at ``start``: the next multiple
         of ``chunk``, cut at the row's next APC checkpoint and at the prompt's
         end. The plan depends on the prompt alone (grid plus its
         checkpoints), so a row restored at a checkpoint on the grid continues
         with the spans a cold prefill would have run."""
-        end = min((start // self.chunk + 1) * self.chunk, len(row.req.ids))
+        a = self.atom(start)
+        end = min((start // a + 1) * a, len(row.req.ids))
         for c in row.ckpts:
             if start < c < end:
                 end = c
@@ -378,14 +391,15 @@ class RoundDriver:
         lane kernel), so the segment size never changes a prompt's output."""
         end = self._span_end(row, start)
         n = len(row.req.ids)
+        a = self.atom(start)
         while (
-            end - start >= self.chunk
-            and (end - start) % self.chunk == 0
+            end - start >= a
+            and (end - start) % a == 0
             and end not in row.ckpts
             and end < n
         ):
             nxt = self._span_end(row, end)
-            if nxt - end != self.chunk or nxt - start > budget:
+            if self.atom(end) != a or nxt - end != a or nxt - start > budget:
                 break
             end = nxt
         return end
@@ -549,7 +563,7 @@ class RoundDriver:
                 for r in self.rows
                 if r.pending is None
                 and r.done > 0
-                and 0 < len(r.req.ids) - r.done <= self.chunk
+                and 0 < len(r.req.ids) - r.done <= self.atom(r.done)
             ]
             if not near:
                 break
@@ -584,7 +598,9 @@ class RoundDriver:
                     _Item(
                         "p",
                         r,
-                        Segment(r.cache, chunk, self.chunk),
+                        Segment(
+                            r.cache, chunk, self.chunk, self.long_from, self.long_chunk
+                        ),
                         start,
                         end,
                         at,

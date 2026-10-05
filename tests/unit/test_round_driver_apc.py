@@ -163,3 +163,34 @@ def test_row_near_its_end_finishes_prefill_in_one_step(tiny):
     while d.busy():
         out += [e.token for e in d.step()]
     assert out == ref
+
+
+@pytest.mark.parametrize("draft", [True, False])
+def test_long_atoms_keep_hit_equal_to_miss(tiny, draft):
+    """With a coarser atom grid beyond ``long_from`` a restored session continues
+    on the grid a cold prefill would have used."""
+    from yunshu_engine.round_driver import driver as drv
+
+    lm, drafter = tiny
+    dr = drafter if draft else None
+    short = DOC[:513]
+    long = DOC + [(3 * i + 1) % 500 for i in range(200)]
+
+    def run(prompts, apc):
+        d = drv.RoundDriver(lm, drafter=dr, stop_tokens=set(), chunk=128, apc=apc)
+        d.long_from, d.long_chunk = 256, 256
+        outs, hits = [], []
+        for i, p in enumerate(prompts):
+            hits.append(d.add(drv.Request(p, N, handle=i)))
+            out = []
+            while d.busy():
+                out += [e.token for e in d.step()]
+            outs.append(out)
+        return outs, hits
+
+    ref = run([long], _manager())[0][0]
+    apc = _manager()
+    run([short], apc)
+    got, hits = run([long], apc)
+    assert hits[0] in (256, 512)
+    assert got[0] == ref

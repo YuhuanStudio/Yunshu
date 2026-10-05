@@ -289,6 +289,7 @@ def test_prefill_atoms_merge_only_when_full():
 
     d = drv.RoundDriver.__new__(drv.RoundDriver)
     d.chunk = 512
+    d.long_from, d.long_chunk = 1 << 60, 2048
     ids = list(range(512 * 6 + 40))
     row = SimpleNamespace(req=SimpleNamespace(ids=ids), ckpts=[])
     assert d._run_end(row, 0, 512) == 512  # budget of one atom
@@ -453,3 +454,25 @@ def test_idle_prefill_step_is_short_enough_for_a_new_arrival_to_join(tiny):
     d.add(drv.Request(ids, 1, handle="a", use_apc=False))
     d.step()
     assert d.rows[0].done <= 1024 + 64
+
+
+def test_atoms_grow_with_the_absolute_position():
+    """Beyond ``long_from`` atoms are ``long_chunk`` tokens (fewer attention
+    passes over a long KV); the plan is a function of the position alone."""
+    from types import SimpleNamespace
+
+    from yunshu_engine.round_driver import driver as drv
+
+    d = drv.RoundDriver.__new__(drv.RoundDriver)
+    d.chunk = 512
+    d.long_from, d.long_chunk = 2048, 1024
+    ids = list(range(2048 + 1024 * 3 + 40))
+    row = SimpleNamespace(req=SimpleNamespace(ids=ids), ckpts=[])
+    assert [d.atom(p) for p in (0, 1536, 2048, 5000)] == [512, 512, 1024, 1024]
+    assert d._span_end(row, 0) == 512
+    assert d._span_end(row, 1536) == 2048
+    assert d._span_end(row, 2048) == 3072
+    assert d._span_end(row, 2500) == 3072  # restored off the grid: alone
+    assert d._run_end(row, 0, 8192) == 2048  # 512-atoms merge up to the switch
+    assert d._run_end(row, 2048, 8192) == 2048 + 1024 * 3
+    assert d._run_end(row, 2048, 1024) == 3072
