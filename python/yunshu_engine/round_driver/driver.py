@@ -56,6 +56,7 @@ from .forward import Segment, forward, logits
 logger = logging.getLogger(__name__)
 
 MAX_DECODE_TOKENS = MAX_WINDOW  # pending token + up to 7 drafts
+AGING_S = 20.0  # a prompt waiting this long goes before shorter ones
 FINISH_STEPS = (
     4  # extra prefill steps a step may run for rows within a chunk of their end
 )
@@ -134,6 +135,7 @@ class _Row:
     hit: int = 0  # prompt tokens restored from the APC prefix cache
     ckpts: list = field(default_factory=list)  # APC checkpoint lengths ahead
     salt: int = 0  # APC key of this row's cache layout
+    t_add: float = 0.0  # when the row was added (aging)
     apc: Any = None  # this row's APC coordinator (its checkpoint plan is per request)
     head_state: Any = None  # MTP head state of a just-joined row: its first draft
 
@@ -261,6 +263,7 @@ class RoundDriver:
                 vocab.add_context(req.ids)
             else:
                 vocab.set_context(req.ids)
+        row.t_add = time.perf_counter()
         self.rows.append(row)
         return row.hit
 
@@ -550,6 +553,17 @@ class RoundDriver:
         budget = self.chunk if decoding else self.idle_budget
         at = 0
         blocked = False
+        # Shortest remaining prompt first (what the upstream scheduler does): the
+        # mean first-token time of a mixed-length queue is lowest that way; a
+        # prompt that waited AGING_S goes first so long prompts are not starved.
+        now = time.perf_counter()
+        waiting = sorted(
+            waiting,
+            key=lambda r: (
+                now - r.t_add < AGING_S,
+                len(r.req.ids) - r.done if now - r.t_add < AGING_S else r.t_add,
+            ),
+        )
         for r in waiting:
             ids = r.req.ids
             if blocked and len(ids) - r.done > budget:

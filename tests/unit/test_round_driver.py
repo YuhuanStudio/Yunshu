@@ -440,3 +440,21 @@ def test_single_segment_projection_is_not_copied():
     got = fw._project(lin, mx.zeros((1, 4, 2)), [(0, 4)], [True])
     assert got is out
     assert fw._cat([out]) is out
+
+
+def test_short_prompt_prefills_before_a_longer_earlier_one(tiny):
+    """Shortest remaining prompt first: a short prompt that arrives behind a
+    long one gets its first token first (mean TTFT of a mixed queue)."""
+    from yunshu_engine.round_driver import driver as drv
+
+    lm, _ = tiny
+    d = drv.RoundDriver(lm, stop_tokens=set(), chunk=64)
+    d.idle_budget = 256
+    long_a = [(5 * i + 1) % 500 for i in range(1000)]
+    short = [(11 * i + 2) % 500 for i in range(40)]
+    d.add(drv.Request(long_a, 1, handle="a", use_apc=False))
+    d.add(drv.Request(short, 1, handle="c", use_apc=False))
+    first = []
+    while d.busy() and not first:
+        first = [e.handle for e in d.step()]
+    assert first[0] == "c"

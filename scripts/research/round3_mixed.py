@@ -33,6 +33,8 @@ STAGGER_S = 1.5
 CONCURRENCY = [2, 4, 8]
 SERVE = (
     "import sys, uvicorn;"
+    "import yunshu_engine.vlm_batch_runner as v;"
+    "v.DRIVER_MAX_UNCACHED_TOKENS = int(sys.argv[2]) or v.DRIVER_MAX_UNCACHED_TOKENS;"
     "uvicorn.run('yunshu_gateway.main:app', host='127.0.0.1', port=int(sys.argv[1]))"
 )
 
@@ -73,6 +75,7 @@ def summarize(rows: list[dict], wall: float) -> dict:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--arm", required=True, choices=["off", "routed"])
+    ap.add_argument("--max-uncached", type=int, default=0)
     ap.add_argument("--rep", type=int, default=0)
     ap.add_argument("--port", type=int, default=18992)
     ap.add_argument("--tg", type=int, default=128)
@@ -92,7 +95,7 @@ def main() -> int:
     url = f"http://127.0.0.1:{a.port}"
     with log.open("w") as lf:
         srv = subprocess.Popen(
-            [sys.executable, "-c", SERVE, str(a.port)],
+            [sys.executable, "-c", SERVE, str(a.port), str(a.max_uncached)],
             env=env, stdout=lf, stderr=subprocess.STDOUT, cwd=root,
         )  # fmt: skip
     try:
@@ -141,7 +144,7 @@ def main() -> int:
                 print(f"c={c}: failed requests {bad[:2]}", flush=True)
                 return 1
             rec = {
-                "arm": a.arm, "rep": a.rep, "c": c, "workload": reqs,
+                "arm": a.arm, "rep": a.rep, "max_uncached": a.max_uncached, "c": c, "workload": reqs,
                 **summarize(rows, wall),
                 "ttft_each": [r["ttft_s"] for r in rows],
             }  # fmt: skip
