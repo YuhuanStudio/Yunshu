@@ -56,6 +56,9 @@ from .forward import Segment, forward, logits
 logger = logging.getLogger(__name__)
 
 MAX_DECODE_TOKENS = MAX_WINDOW  # pending token + up to 7 drafts
+FINISH_STEPS = (
+    4  # extra prefill steps a step may run for rows within a chunk of their end
+)
 CHUNK = 512  # default prefill chunk: fixed spans from the prompt start
 IDLE_BUDGET = 4096  # prefill tokens per prefill step when no row decodes
 ACCEPT_PRIOR = 0.7  # per-depth draft acceptance before a row has history
@@ -283,7 +286,14 @@ class RoundDriver:
         # Entries carry the head's KV only for rows that draft, and come from
         # this driver's numerics: keep them apart from other users of the
         # manager (the upstream runner's entries) and between layouts.
-        mix = f"{int(row.req.extra_hash)}:round-driver:{int(row.mtp_cache is not None)}"
+        from ..kernels import gdn_prefill, nax_prefill
+
+        # the prefill arithmetic is part of the key: a checkpoint written with the
+        # NAX / chunked-GDN kernels is not read back by a run without them
+        arith = gdn_prefill.kernel_id() + (
+            nax_prefill.arithmetic_id() if nax_prefill.enabled() else "lane"
+        )
+        mix = f"{int(row.req.extra_hash)}:round-driver:{int(row.mtp_cache is not None)}:{arith}"
         row.salt = (
             int.from_bytes(hashlib.blake2b(mix.encode(), digest_size=8).digest(), "big")
             >> 1
@@ -508,9 +518,25 @@ class RoundDriver:
             return out
         self._t_end = 0.0
         self._prefilled_last = True
-        return self._prefill_step(
-            [r for r in self.rows if r.pending is None], bool(self.batch.rows)
-        )
+        decoding = bool(self.batch.rows)
+        out = self._prefill_step([r for r in self.rows if r.pending is None], decoding)
+        # A checkpoint ends a row's span for the step (the snapshot is taken from
+        # the cache after it), so a prompt's last atoms arrive one step apart and
+        # its first token waited a whole multi-row step per atom (8 x 1K: 8.3 s for
+        # a prefill that ended at 4.7 s). Rows within a chunk of their end run
+        # those atoms now: the same spans, so the same bits.
+        for _ in range(FINISH_STEPS):
+            near = [
+                r
+                for r in self.rows
+                if r.pending is None
+                and r.done > 0
+                and 0 < len(r.req.ids) - r.done <= self.chunk
+            ]
+            if not near:
+                break
+            out += self._prefill_step(near, decoding)
+        return out
 
     def _will_decode(self) -> bool:
         """Whether the next step is a decode step: rows decode and either no
@@ -556,10 +582,7 @@ class RoundDriver:
                 blocked = True
         if not items:
             return []
-        from ..kernels import gdn_prefill
-
-        with gdn_prefill.step_kernel():
-            hidden = forward(self.lm, [it.seg for it in items])
+        hidden = forward(self.lm, [it.seg for it in items])
         draws = self._draw(items, hidden)
         # Evaluate every cache the step advanced, not only what feeds a token:
         # a prompt chunk that emits nothing would otherwise stay a lazy graph

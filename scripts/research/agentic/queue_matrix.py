@@ -60,7 +60,9 @@ def main():
                 if a.dry_run:
                     print(" ".join(cmd))
                     continue
-                jid = subprocess.run(cmd, capture_output=True, text=True, check=True).stdout.strip()
+                jid = subprocess.run(
+                    cmd, capture_output=True, text=True, check=True
+                ).stdout.strip()
                 ids.append(jid)
     print("\n".join(ids))
     print(f"{len(ids)} jobs", file=sys.stderr)

@@ -225,7 +225,12 @@ def resp_search(stream):
         n = 0
     types = [o.type for o in r.output]
     assert "web_search_call" in types, types
-    assert a.search_fact.lower() in r.output_text.lower(), (types, r.output_text, r.status, r.incomplete_details)
+    assert a.search_fact.lower() in r.output_text.lower(), (
+        types,
+        r.output_text,
+        r.status,
+        r.incomplete_details,
+    )
     return {"types": types, "events": n, "text": r.output_text[:200]}
 
 

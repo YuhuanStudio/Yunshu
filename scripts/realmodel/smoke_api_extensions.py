@@ -266,7 +266,11 @@ def run_checks() -> None:
         if rr.status_code == 200 and rr.json().get("phase") == "decode":
             seen = rr.json()
             break
-    check("GET /v1/requests/{id} sees the live request", seen is not None, str(seen or last_poll))
+    check(
+        "GET /v1/requests/{id} sees the live request",
+        seen is not None,
+        str(seen or last_poll),
+    )
     listing = httpx.get(f"{BASE}/v1/requests").json()
     check(
         "GET /v1/requests lists it",

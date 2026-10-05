@@ -26,6 +26,14 @@ CORPORA = "/Users/yuhuan/Documents/YuhuanStudio/Yunshu/reference/omlx/omlx/admin
 MODEL = "/Volumes/P5Plus/models/Jundot/Qwen3.8-27B-oQ4e-mtp"
 
 
+SERVE = (
+    "import sys, uvicorn;"
+    "import yunshu_engine.vlm_batch_runner as v;"
+    "v.DRIVER_MAX_UNCACHED_TOKENS = int(sys.argv[2]) or v.DRIVER_MAX_UNCACHED_TOKENS;"
+    "uvicorn.run('yunshu_gateway.main:app', host='127.0.0.1', port=int(sys.argv[1]))"
+)
+
+
 def arm_env(arm: str) -> dict[str, str]:
     if arm == "off":
         return {"YUNSHU_ROUND_DRIVER": "0"}
@@ -37,6 +45,8 @@ def arm_env(arm: str) -> dict[str, str]:
 def bench_args(cell: str) -> list[str]:
     if cell == "1k":
         return ["--lengths", "1024", "--batches", "2", "4", "8", "--batch-pp", "1024"]
+    if cell == "8k":
+        return ["--lengths", "--batches", "2", "4", "--batch-pp", "8192"]
     if cell == "32k":
         return ["--lengths", "--batches", "2", "4", "--batch-pp", "32768"]
     raise ValueError(cell)
@@ -45,7 +55,10 @@ def bench_args(cell: str) -> list[str]:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--arm", required=True, choices=["off", "routed"])
-    ap.add_argument("--cell", required=True, choices=["1k", "32k"])
+    ap.add_argument("--cell", required=True, choices=["1k", "8k", "32k"])
+    ap.add_argument(
+        "--max-uncached", type=int, help="override DRIVER_MAX_UNCACHED_TOKENS"
+    )
     ap.add_argument("--rep", type=int, default=0)
     ap.add_argument("--port", type=int, default=18991)
     ap.add_argument("--out", type=Path, required=True)
@@ -64,8 +77,7 @@ def main() -> int:
     url = f"http://127.0.0.1:{a.port}"
     with log.open("w") as lf:
         srv = subprocess.Popen(
-            [sys.executable, "-m", "uvicorn", "yunshu_gateway.main:app",
-             "--host", "127.0.0.1", "--port", str(a.port)],
+            [sys.executable, "-c", SERVE, str(a.port), str(a.max_uncached or 0)],
             env=env, stdout=lf, stderr=subprocess.STDOUT, cwd=root,
         )  # fmt: skip
     try:
@@ -124,7 +136,7 @@ def main() -> int:
         print("driver busy seconds:", busy, flush=True)
         # the 32k cell: prompts above DRIVER_MAX_UNCACHED_TOKENS keep the upstream
         # path by design, so the driver stays idle in both arms
-        expect_driver = a.arm != "off" and a.cell == "1k"
+        expect_driver = a.arm != "off" and (a.cell == "1k" or bool(a.max_uncached))
         if (busy > 0) != expect_driver:
             print("driver usage does not match arm", flush=True)
             return 1

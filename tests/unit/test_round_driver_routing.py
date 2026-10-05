@@ -12,8 +12,8 @@ from yunshu_engine.vlm_batch_runner import VLMBatchRunner
     [
         (True, None, True, 100, False),  # lone text request: lane
         (False, None, True, 100, True),  # concurrent text: driver
-        (False, None, True, 4096, True),  # at the limit
-        (False, None, True, 4097, False),  # long cold prompt: upstream prefill
+        (False, None, True, 8192, True),  # at the limit
+        (False, None, True, 8193, False),  # long cold prompt: upstream prefill
         (False, {"pixel_values": 1}, True, 100, False),  # image prompt: upstream
         (False, None, False, 100, False),  # no driver built
     ],
