@@ -458,3 +458,16 @@ def test_short_prompt_prefills_before_a_longer_earlier_one(tiny):
     while d.busy() and not first:
         first = [e.handle for e in d.step()]
     assert first[0] == "c"
+
+
+def test_idle_prefill_step_is_short_enough_for_a_new_arrival_to_join(tiny):
+    """A request arriving mid-step waits for the step to end: with 4096 tokens
+    per step that was ~3.4 s on the 27B (c=2 mixed-length mean TTFT +21%)."""
+    from yunshu_engine.round_driver import driver as drv
+
+    lm, _ = tiny
+    d = drv.RoundDriver(lm, stop_tokens=set(), chunk=64)
+    ids = [(5 * i + 1) % 500 for i in range(3000)]
+    d.add(drv.Request(ids, 1, handle="a", use_apc=False))
+    d.step()
+    assert d.rows[0].done <= 1024 + 64

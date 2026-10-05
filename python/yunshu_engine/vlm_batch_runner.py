@@ -57,7 +57,7 @@ DRIVER_MIN_CONCURRENCY = 2
 # is ~6% slower per token than upstream's at 4-8K (27B; 512-token attention grid),
 # which makes 32K c=2/4 mean TTFT +9% (8K c=2 equal, c=4 +8%). Longer cold prompts
 # keep the upstream path.
-DRIVER_MAX_UNCACHED_TOKENS = 8192
+DRIVER_MAX_UNCACHED_TOKENS = 12288
 
 
 @dataclass

@@ -61,7 +61,7 @@ FINISH_STEPS = (
     4  # extra prefill steps a step may run for rows within a chunk of their end
 )
 CHUNK = 512  # default prefill chunk: fixed spans from the prompt start
-IDLE_BUDGET = 4096  # prefill tokens per prefill step when no row decodes
+IDLE_BUDGET = 1024  # prefill tokens per prefill step when no row decodes
 ACCEPT_PRIOR = 0.7  # per-depth draft acceptance before a row has history
 ACCEPT_EMA = 0.15
 LANE_ROWS = 128  # rows one lane-matmul call keeps row-invariant
