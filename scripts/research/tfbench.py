@@ -471,23 +471,37 @@ def part_needle(s, out, a):
 
 
 def part_conc32(s, out, a):
-    """Two sub-agents at once: each has a warm cached prefix (32K) and sends a ~2K new turn,
-    asking for a 1K reply. Reports TTFT and per-request decode."""
-    ctx, n_new = (512, 16) if a.smoke else (32768, int(a.decode_tokens or 1024))
+    """Two sub-agents at once, each a growing agentic conversation: a warm 32K prefix, then three
+    rounds that each append ~2K of new text after the previous reply (the usual agent pattern)
+    and ask for a 1K reply. Reports TTFT, cached tokens and per-request decode per round."""
+    ctx, n_new = (512, 16) if a.smoke else (32768, 1024)
     kinds = ("prose", "code")
     prefixes = {
         k: ("Hello. " * 80 if a.smoke else load_prompt(f"{k}-{ctx}")) for k in kinds
     }
     for k in kinds:  # warm each prefix
         send(s.url, req(s.model, prefixes[k], 8))
-    for trial in range(1 if a.smoke else 2):
+    msgs = {k: [{"role": "user", "content": prefixes[k]}] for k in kinds}
+    for rnd in range(1 if a.smoke else 3):
 
-        def turn(k):
+        def turn(k, rnd=rnd):
             other = "code" if k == "prose" else "prose"
             src = "Extra." * 20 if a.smoke else load_prompt(f"{other}-8192")
-            piece = src[trial * 1500 : trial * 1500 + 6500]
-            txt = prefixes[k] + "\n\nNew material:\n" + piece + "\nContinue at length."
-            return send(s.url, req(s.model, txt, n_new))
+            piece = src[rnd * 6500 : rnd * 6500 + 6500]
+            if rnd == 0:
+                msgs[k][0]["content"] += "\n\nNew material:\n" + piece + "\nContinue."
+            else:
+                msgs[k].append(
+                    {
+                        "role": "user",
+                        "content": "More material:\n" + piece + "\nContinue.",
+                    }
+                )
+            b = req(s.model, "", n_new)
+            b["messages"] = list(msgs[k])
+            r = send(s.url, b)
+            msgs[k].append({"role": "assistant", "content": r["_text"]})
+            return r
 
         t0 = time.perf_counter()
         with cf.ThreadPoolExecutor(2) as ex:
@@ -495,12 +509,12 @@ def part_conc32(s, out, a):
         wall = time.perf_counter() - t0
         for r in rs:
             if not a.smoke:
-                check_decode_len(r, n_new, f"conc32 trial {trial}")
+                check_decode_len(r, n_new, f"conc32 round {rnd}")
             r.pop("_text")
         emit(
             out,
             part="conc32",
-            trial=trial,
+            trial=rnd,
             wall_s=round(wall, 2),
             ttfts=[r["ttft_s"] for r in rs],
             per_req_dec=[r["dec_tps"] for r in rs],
