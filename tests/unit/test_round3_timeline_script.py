@@ -47,3 +47,12 @@ def test_onoff_wrapper_routes_a_lone_request_to_the_driver(monkeypatch):
     finally:
         sys.path.remove("scripts/research")
     assert vlm_batch_runner.DRIVER_MIN_CONCURRENCY == 1
+
+
+def test_probe_reports_concurrency_to_the_runner():
+    """Without ``runner.inflight`` every request looks alone and the first of a
+    c=2 pair took the upstream path."""
+    from pathlib import Path
+
+    src = Path("scripts/research/round3_prefill_timeline.py").read_text()
+    assert "runner.inflight = lambda: a.n" in src

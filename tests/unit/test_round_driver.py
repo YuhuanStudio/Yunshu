@@ -426,3 +426,17 @@ def test_prefill_serves_the_oldest_long_prompt_first(tiny, monkeypatch):
     while rows["a"].pending is None:
         assert rows["b"].done == 0
         d.step()
+
+
+def test_single_segment_projection_is_not_copied():
+    from yunshu_engine.round_driver import forward as fw
+
+    mx = pytest.importorskip("mlx.core")
+    out = mx.ones((1, 4, 3))
+
+    def lin(x):
+        return out
+
+    got = fw._project(lin, mx.zeros((1, 4, 2)), [(0, 4)], [True])
+    assert got is out
+    assert fw._cat([out]) is out

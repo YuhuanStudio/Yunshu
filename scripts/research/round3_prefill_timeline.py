@@ -44,6 +44,11 @@ def main():
         action="store_true",
         help="ablation: chunked GDN in driver prefill",
     )
+    ap.add_argument(
+        "--ablate",
+        choices=["attn", "nodraft", "eval8"],
+        help="timing ablation (bits change)",
+    )
     ap.add_argument("--off", action="store_true", help="expect no driver (arm off)")
     ap.add_argument("--min-conc", type=int, default=2, help="driver routing threshold")
     ap.add_argument("--out", type=Path, required=True)
@@ -63,6 +68,28 @@ def main():
     engine = VLMEngine(MODEL)
     asyncio.run(engine.start())
     runner = engine._batch_runner
+    # the gateway counts accepted requests; without it every request looks alone
+    runner.inflight = lambda: a.n
+    if a.ablate:
+        import mlx.core as mx
+
+        from yunshu_engine.round_driver import forward as rd_forward
+
+        if a.ablate == "attn":
+
+            def local_attention(attn, q, k, v, seg, cache):
+                T = seg.length
+                qs, ks, vs, gate, _ = attn._prepare_projected_qkv(
+                    q, k, v, cache, None, None, None
+                )
+                out = mx.fast.scaled_dot_product_attention(
+                    qs, ks[:, :, -T:], vs[:, :, -T:], scale=attn.scale, mask="causal"
+                )
+                return out.transpose(0, 2, 1, 3).reshape(1, T, -1) * mx.sigmoid(gate)
+
+            rd_forward._attention_mix = local_attention
+        elif a.ablate == "eval8":
+            rd_forward.EVAL_EVERY = 8
     drv = runner.driver
     if (drv is None) != a.off:
         print(f"driver present={drv is not None} does not match --off={a.off}")
@@ -135,7 +162,7 @@ def main():
         try:
             for _ in runner.iter_tokens(
                 ids, max_tokens=a.tokens, temperature=0.0, seed=1,
-                allow_draft=True, prompt_kwargs=kw, apc_semantic_hash=salt,
+                allow_draft=a.ablate != "nodraft", prompt_kwargs=kw, apc_semantic_hash=salt,
                 stats=RunStats(),
             ):  # fmt: skip
                 if ttft[i] is None:
@@ -147,7 +174,7 @@ def main():
     # warm-up (compile), not timed
     w = ids_for("Say hi.")
     list(runner.iter_tokens(w[0], max_tokens=8, temperature=0.0, seed=1,
-                            allow_draft=True, prompt_kwargs=w[1],
+                            allow_draft=a.ablate != "nodraft", prompt_kwargs=w[1],
                             apc_semantic_hash=w[2], stats=RunStats()))  # fmt: skip
     import mlx.core as mx
 

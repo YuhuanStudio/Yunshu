@@ -130,6 +130,12 @@ def _gdn_mix(layer, qkv, z, b, a, cache) -> mx.array:
     return layer.norm(out, z).reshape(1, S, -1)
 
 
+def _cat(parts: list) -> mx.array:
+    """Token-axis concatenation; one part is returned as is (a copy of every
+    projection output of a 4096-row step costs ~0.2 s per 8K prompt)."""
+    return parts[0] if len(parts) == 1 else mx.concatenate(parts, axis=1)
+
+
 def _slices(segments: list[Segment]) -> list[tuple[int, int]]:
     out, at = [], 0
     for s in segments:
@@ -147,7 +153,7 @@ def _project(
     (``LaneLinear.prefill``); anything else is called per segment."""
     parts = [x[:, s:e] for s, e in spans]
     if not hasattr(lin, "prefill"):
-        return mx.concatenate([lin(p) for p in parts], axis=1)
+        return _cat([lin(p) for p in parts])
     outs: list = [None] * len(parts)
     stock = [i for i, short in enumerate(lane) if not short]
     if stock:
@@ -156,7 +162,7 @@ def _project(
     for i, short in enumerate(lane):
         if short:
             outs[i] = lin(parts[i])
-    return mx.concatenate(outs, axis=1)
+    return _cat(outs)
 
 
 def _mlp(mlp, x: mx.array, spans: list[tuple[int, int]], lane: list[bool]) -> mx.array:
@@ -197,7 +203,7 @@ def forward(language_model: Any, segments: list[Segment]) -> mx.array:
                 _gdn_mix(g, qkv[:, s:e], z[:, s:e], b[:, s:e], a[:, s:e], seg.cache[i])
                 for seg, (s, e) in zip(segments, spans, strict=True)
             ]
-            r = _project(g.out_proj, mx.concatenate(parts, axis=1), spans, lane)
+            r = _project(g.out_proj, _cat(parts), spans, lane)
         else:
             at = layer.self_attn
             q = _project(at.q_proj, xn, spans, lane)
@@ -209,7 +215,7 @@ def forward(language_model: Any, segments: list[Segment]) -> mx.array:
                 _attention_mix(at, q[:, s:e], k[:, s:e], v[:, s:e], seg, seg.cache[i])
                 for seg, (s, e) in zip(segments, spans, strict=True)
             ]
-            r = _project(at.o_proj, mx.concatenate(parts, axis=1), spans, lane)
+            r = _project(at.o_proj, _cat(parts), spans, lane)
         h = x + r
         x = h + _mlp(layer.mlp, layer.post_attention_layernorm(h), spans, lane)
         # transient stock weights are freed every few layers (the graph would
