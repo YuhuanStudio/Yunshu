@@ -1564,31 +1564,45 @@ class YunshuAPCManager(APCManager):
             dropped += 1
         return dropped
 
+    def _memory_headroom(self) -> int:
+        memo = getattr(self, "_headroom_memo", None)
+        return super()._memory_headroom() if memo is None else memo
+
     def _make_room(self, allocation_bytes: int = 0, *, retain_bytes: int = 0) -> bool:
-        """Evict anchors before anything else, so they never raise the peak of a big request."""
-        dropped = 0
-        if self._anchors:
-            required = self.memory_reserve_bytes + (
-                self._prefill_reserve_bytes + allocation_bytes
-                if retain_bytes
-                else max(self._prefill_reserve_bytes, allocation_bytes)
-            )
-            while True:
-                with self.lock:
-                    resident = self._resident_bytes_locked()
-                    target = max(
-                        0,
-                        min(
-                            self.memory_max_bytes - retain_bytes,
-                            resident + self._memory_headroom() - required,
-                        ),
-                    )
-                if resident <= target or not self._drop_anchor():
-                    break
-                dropped += 1
-            if dropped:
-                release_freed_buffers(1 << 40)
-        return super()._make_room(allocation_bytes, retain_bytes=retain_bytes)
+        """Evict anchors before anything else, so they never raise the peak of a big request.
+
+        The free-memory reading (a system query) is taken once per call and shared with the
+        upstream pass: dropping anchors moves resident and headroom by the same bytes, so the
+        eviction target is unchanged.
+        """
+        self._headroom_memo = None
+        try:
+            if self._anchors:
+                self._headroom_memo = self._memory_headroom()
+                required = self.memory_reserve_bytes + (
+                    self._prefill_reserve_bytes + allocation_bytes
+                    if retain_bytes
+                    else max(self._prefill_reserve_bytes, allocation_bytes)
+                )
+                dropped = 0
+                while True:
+                    with self.lock:
+                        resident = self._resident_bytes_locked()
+                        target = max(
+                            0,
+                            min(
+                                self.memory_max_bytes - retain_bytes,
+                                resident + self._headroom_memo - required,
+                            ),
+                        )
+                    if resident <= target or not self._drop_anchor():
+                        break
+                    dropped += 1
+                if dropped:
+                    release_freed_buffers(1 << 40)
+            return super()._make_room(allocation_bytes, retain_bytes=retain_bytes)
+        finally:
+            self._headroom_memo = None
 
     def share_anchor_rows(self, donor_tokens, extra_hash: int = 0) -> int:
         """Share rows with the checkpoint just stored, then bring anchors under their budget."""

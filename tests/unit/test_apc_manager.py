@@ -627,3 +627,21 @@ def test_anchors_are_re_pointed_before_the_new_copy_is_evaluated():
         e = m._exact_cache[k]
         n = len(e.token_ids)
         assert bool(mx.all(e.prompt_cache[1].keys == snapshot[1].keys[..., :n, :]))
+
+
+def test_make_room_reads_free_memory_once(monkeypatch):
+    from mlx_vlm.apc import APCManager
+
+    m = _mgr()
+    for p in _conversation(turns=8, step=3500):
+        _turn(m, p)
+    assert m._anchors
+    reads = []
+
+    def headroom(self):
+        reads.append(1)
+        return 1 << 40
+
+    monkeypatch.setattr(APCManager, "_memory_headroom", headroom)
+    m._make_room(1 << 20)
+    assert len(reads) == 1
