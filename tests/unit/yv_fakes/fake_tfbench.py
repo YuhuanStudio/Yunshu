@@ -19,6 +19,7 @@ ap.add_argument("--smoke", action="store_true")
 ap.add_argument("--decode-tokens", type=int, default=256)
 ap.add_argument("--turn2-tokens", type=int, default=0)
 ap.add_argument("--long-ask", action="store_true")
+ap.add_argument("--items", default="")
 a = ap.parse_args()
 env = dict(kv.split("=", 1) for kv in a.env)
 if env.get("FAKE_CRASH") == "1":
@@ -52,7 +53,8 @@ with open(a.out, "a") as out:
     )
     if a.part == "needle":
         for ctx in ctxs:
-            for i in range(10):
+            lo, hi = (int(x) for x in (a.items or "0:10").split(":"))
+            for i in range(lo, hi):
                 bad = env.get("FAKE_NEEDLE_BAD") and i < int(env["FAKE_NEEDLE_BAD"])
                 emit(part="needle", ctx=ctx, item=i, correct=not bad)
         ctxs = []

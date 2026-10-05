@@ -784,37 +784,67 @@ def stage_memory(ctx: Ctx) -> StageResult:
 
 
 # ── h. longqa: long-context retrieval (needle) answers, base vs candidate ──
+NEEDLE_COLD_S = {
+    32768: 36.0,
+    65536: 87.0,
+    131072: 216.0,
+}  # measured cold prefill per request
+
+
+def needle_slices(ctxs: list) -> list:
+    """[(ctx, lo, hi, timeout_min)]: every needle item may be a cold prefill (the prefix cache
+    keeps few hybrid checkpoints), so a job takes only as many items as fit well inside the
+    20 minute queue limit: start 150 s + items x cold prefill, times 1.5."""
+    out = []
+    for c in ctxs:
+        cold = NEEDLE_COLD_S.get(c, 216.0 * c / 131072)
+        per = max(1, min(10, int((20 * 60 / 1.5 - 150) // cold)))
+        for lo in range(0, 10, per):
+            hi = min(10, lo + per)
+            out.append((c, lo, hi, min(20.0, (150 + (hi - lo) * cold) * 1.5 / 60)))
+    return out
+
+
 def stage_longqa(ctx: Ctx) -> StageResult:
     cfg = ctx.suite
     ctxs = list(cfg.get("needle_ctx") or [32768, 65536, 131072])
     _check_prompts(ctxs, ["prose"])
-    cells = [
-        Cell(
-            "longqa",
-            arm,
-            _tfbench_argv(
-                ctx,
-                arm,
-                "longqa",
-                arm,
-                ["--part", "needle", "--rep", "0"]
-                + [x for c in ctxs for x in ("--only-ctx", str(c))],
-            ),
-            mem_gb=ctx.mem_gb,
-            timeout_min=20 if ctx.big else 6,
-            stall_min=12 if ctx.big else 4,
-            quiet=True,
-        )
-        for arm in ("base", "cand")
-    ]
+    cells = []
+    for arm in ("base", "cand"):
+        for c, lo, hi, tmo in needle_slices(ctxs):
+            key = f"{arm}@c{c}i{lo}-{hi}"
+            cells.append(
+                Cell(
+                    "longqa",
+                    key,
+                    _tfbench_argv(
+                        ctx,
+                        arm,
+                        "longqa",
+                        key,
+                        ["--part", "needle", "--rep", "0", "--only-ctx", str(c)]
+                        + ["--items", f"{lo}:{hi}"],
+                    ),
+                    mem_gb=ctx.mem_gb,
+                    timeout_min=tmo if ctx.big else 6,
+                    stall_min=12 if ctx.big else 4,
+                    quiet=True,
+                )
+            )
     res = ctx.exe.run_cells(cells)
     reasons = _failed_cells(res)
     numbers: dict = {}
     if not reasons:
+
+        def arm_rows(arm: str) -> list:
+            rows: list = []
+            for k, r in res.items():
+                if k.startswith(f"{arm}@"):
+                    rows += read_jsonl(r.evidence)
+            return rows
+
         cmp_ = analyze.needle_compare(
-            read_jsonl(res["base"].evidence),
-            read_jsonl(res["cand"].evidence),
-            int(cfg.get("quality_allowed", 1)),
+            arm_rows("base"), arm_rows("cand"), int(cfg.get("quality_allowed", 1))
         )
         numbers = {
             k: cmp_[k]

@@ -451,7 +451,10 @@ def part_needle(s, out, a):
             base = full[: full.rfind("\n\n---\n")]
             items = needle_items(ctx)
         hay = needle_haystack(base, ctx, items)
+        lo, hi = (int(x) for x in (a.items or f"0:{len(items)}").split(":"))
         for i, (nm, code) in enumerate(items):
+            if not lo <= i < hi:
+                continue
             r = send(s.url, req(s.model, hay + needle_question(nm), 16))
             ans = r.pop("_text")
             emit(
@@ -592,6 +595,9 @@ def parse_args(argv=None):
     ap.add_argument("--tag", default="")
     ap.add_argument("--model", default=M)
     ap.add_argument("--smoke", action="store_true")
+    ap.add_argument(
+        "--items", default="", help="needle item range a:b (one job per slice)"
+    )
     ap.add_argument(
         "--long-ask",
         action="store_true",

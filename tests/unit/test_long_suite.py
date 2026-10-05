@@ -216,3 +216,12 @@ def test_send_prints_progress_and_reads_with_a_timeout(tfb, monkeypatch, capsys)
     out = capsys.readouterr().out
     assert "streamed 256 chunks" in out and "streamed 512 chunks" in out
     assert seen["timeout"] <= 600  # a silent stream fails within minutes, with evidence
+
+
+def test_needle_slices_fit_the_queue_limit():
+    sl = stages.needle_slices([32768, 65536, 131072])
+    assert all(t <= 20 for *_x, t in sl)
+    for c in (32768, 65536, 131072):
+        items = [i for cc, lo, hi, _t in sl if cc == c for i in range(lo, hi)]
+        assert items == list(range(10))  # every item covered exactly once
+    assert len([s for s in sl if s[0] == 131072]) >= 4  # 216 s cold prefill each
