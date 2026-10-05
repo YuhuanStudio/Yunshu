@@ -213,6 +213,22 @@ def main():
     entries = getattr(mgr, "_exact_cache", None)
     if isinstance(entries, dict):
         mem["apc_entries"] = sorted(len(e.token_ids) for e in entries.values())
+        mem["apc_entry_gib"] = sorted(
+            round(float(getattr(e, "nbytes", getattr(e, "size_bytes", 0))) / 2**30, 2)
+            for e in entries.values()
+        )
+        mem["apc_budget_gib"] = round(
+            float(getattr(mgr, "memory_max_bytes", 0)) / 2**30, 1
+        )
+        mem["apc_bytes_attr"] = (
+            [
+                k
+                for k in vars(next(iter(entries.values())))
+                if "byte" in k or "size" in k
+            ][:4]
+            if entries
+            else []
+        )
     for name in ("clear", "clear_all", "reset"):
         if mgr is not None and hasattr(mgr, name):
             getattr(mgr, name)()
