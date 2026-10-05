@@ -147,6 +147,10 @@ class Srv:
         self.engaged_spec_mode = engaged_spec_mode(
             self.engine, self.log.read_text(errors="replace")
         )
+        if os.environ.get("TFB_SKIP_ENGAGED") == "1":
+            # old releases (v0.1.0) have no speculative decoding and no engagement marker
+            self.engaged_spec_mode = self.engaged_spec_mode or "unchecked"
+            return
         if self.engaged_spec_mode != self.requested_spec_mode:
             raise RuntimeError(
                 f"requested spec={self.requested_spec_mode}, "

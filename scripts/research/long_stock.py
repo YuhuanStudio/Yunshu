@@ -35,6 +35,11 @@ def run_one(gen, model, proc, prompt, max_tokens, **kw):
         if item.text and first is None:
             first = time.perf_counter() - t0
         chunks.append(item.text)
+        if len(chunks) % 256 == 0:  # life sign for gpuq's no-output stall check
+            print(
+                f"  decoded {len(chunks)} chunks, {time.perf_counter() - t0:.0f}s",
+                flush=True,
+            )
     if last is None:
         raise RuntimeError("no output")
     return dict(
@@ -69,11 +74,16 @@ def main(argv=None):
     ap.add_argument("--decode-tokens", type=int, default=2048)
     ap.add_argument("--kinds", default="prose,code")
     ap.add_argument("--long-ask", action="store_true", help="same LONG_ASK as tfbench")
+    ap.add_argument("--apc-entries", type=int, default=8)
     ap.add_argument(
         "--apc", action="store_true", help="mlx-vlm's own prefix cache for needle"
     )
     ap.add_argument("--out", required=True)
     ap.add_argument("--max-items", type=int, default=0)
+    ap.add_argument(
+        "--items", default="", help="needle item range a:b (one job per slice)"
+    )
+    ap.add_argument("--prefill-step", type=int, default=2048)
     a = ap.parse_args(argv)
     parts = a.parts.split(",")
 
@@ -89,6 +99,9 @@ def main(argv=None):
     def emit(**kw):
         out.write(json.dumps(kw) + "\n")
         out.flush()
+        print(
+            json.dumps({k: v for k, v in kw.items() if k != "text"})[:300], flush=True
+        )
 
     emit(part="session", engine="stock", mlx_vlm=getattr(mlx_vlm, "__version__", "?"))
 
@@ -113,7 +126,12 @@ def main(argv=None):
                 kw["apc_manager"] = APCManager(
                     num_blocks=ctx // 256 + 64, block_size=256
                 )
-            for i, (nm, code) in enumerate(items[: a.max_items or None]):
+            lo, hi = (
+                int(x) for x in (a.items or f"0:{a.max_items or len(items)}").split(":")
+            )
+            for i, (nm, code) in enumerate(items):
+                if not lo <= i < hi:
+                    continue
                 mx.reset_peak_memory()
                 r = run_one(
                     stream_generate,
@@ -122,6 +140,7 @@ def main(argv=None):
                     chat(hay + t.needle_question(nm)),
                     16,
                     sampler=sampler,
+                    prefill_step_size=a.prefill_step,
                     **kw,
                 )
                 emit(
@@ -148,6 +167,7 @@ def main(argv=None):
                     chat(text),
                     a.decode_tokens,
                     sampler=sampler,
+                    prefill_step_size=a.prefill_step,
                 )
                 t.check_decode_len(r, a.decode_tokens, f"stock decode {kind}-{ctx}")
                 r["peak_gib"] = round(mx.get_peak_memory() / 2**30, 2)
