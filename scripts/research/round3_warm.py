@@ -82,6 +82,7 @@ def main() -> int:
         "YUNSHU_MODEL": MODEL,
         "YUNSHU_AUTH_DISABLED": "1",
         "HF_HUB_OFFLINE": "1",
+        "YUNSHU_DEBUG_ROUTES": "1",
         "YUNSHU_ROUND_DRIVER": "0" if a.arm == "off" else "1",
     }
     log = a.out.with_suffix(f".{a.arm}.{a.prime}.{a.ctx}.c{a.c}.r{a.rep}.server.log")
@@ -203,6 +204,14 @@ def main() -> int:
             "ttft_each": [r["ttft_s"] for r in rows],
             "decode_each": [r.get("decode_tps") for r in rows],
         }  # fmt: skip
+        try:
+            rec["census"] = json.loads(
+                urllib.request.urlopen(
+                    url + "/debug/memory-census?min_mib=128", timeout=120
+                ).read()
+            )
+        except Exception as exc:
+            rec["census"] = {"error": repr(exc)}
         with a.out.open("a") as f:
             f.write(json.dumps(rec) + "\n")
         print(json.dumps(rec), flush=True)
