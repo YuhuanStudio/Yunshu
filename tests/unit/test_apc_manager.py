@@ -597,3 +597,33 @@ def test_freed_anchor_buffers_are_returned_to_the_allocator(monkeypatch):
     m._memory_headroom = lambda: 0
     m._make_room(1 << 30)
     assert calls
+
+
+def test_anchors_are_re_pointed_before_the_new_copy_is_evaluated():
+    m = _mgr()
+    prompts = _conversation(turns=5, step=5000)
+    for i, p in enumerate(prompts[:-1]):
+        if i:
+            m.lookup_exact_cache(p)
+        _turn(m, p)
+        m.share_anchor_rows(p[: len(p) - 1], 0)
+    last = prompts[-1]
+    m.lookup_exact_cache(last)  # the request restores its predecessor
+    final = last[: len(last) - 1]
+    m.begin_request()
+    m._supersede(final, 0, m._generation)  # what release_superseded does first
+    snapshot = _cache(len(final))  # the copy, not stored yet
+    held = {k: e.prompt_cache[1].keys for k, e in m._exact_cache.items()}
+    views = m.share_anchor_rows_lazy(final, snapshot, 0)
+    assert views, "anchors at or below the restore point must be re-pointed"
+    changed = [
+        k for k, e in m._exact_cache.items() if e.prompt_cache[1].keys is not held[k]
+    ]
+    assert changed
+    assert all(k in m._kv_share for k in changed)
+    mx.eval(views)
+    m.finish_anchor_sharing()
+    for k in changed:
+        e = m._exact_cache[k]
+        n = len(e.token_ids)
+        assert bool(mx.all(e.prompt_cache[1].keys == snapshot[1].keys[..., :n, :]))

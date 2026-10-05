@@ -35,6 +35,7 @@ import logging
 import threading
 import time
 from dataclasses import dataclass
+from types import SimpleNamespace
 from typing import Any
 
 import mlx_vlm.apc as _upstream_apc
@@ -941,6 +942,11 @@ class _Coordinator(APCCoordinator):
             if release is not None:
                 release(tokens, extra_hash, _generation=generation)
         views = share_prefix_rows(pending)
+        longest = max(pending, key=lambda p: len(p[0]))
+        share_lazy = getattr(self.manager, "share_anchor_rows_lazy", None)
+        if share_lazy is not None:
+            # retained anchors give up their own rows before the new copy is made
+            views = views + share_lazy(longest[0], longest[1], longest[2])
         materialize([entry[3] for entry in pending])
         if views:
             import mlx.core as mx
@@ -960,10 +966,9 @@ class _Coordinator(APCCoordinator):
                 kwargs["_generation"] = generation
             if self.manager.store_exact_cache(tokens, snapshot, **kwargs):
                 self._publish_checkpoint_policy(tokens, extra_hash, policy, signature)
-        share = getattr(self.manager, "share_anchor_rows", None)
-        if share is not None:
-            longest = max(pending, key=lambda p: len(p[0]))
-            share(longest[0], longest[2])
+        finish = getattr(self.manager, "finish_anchor_sharing", None)
+        if finish is not None:
+            finish()
 
     def discard_deferred_checkpoints(self) -> None:
         self.__dict__.pop("_deferred_checkpoints", None)
@@ -1582,11 +1587,36 @@ class YunshuAPCManager(APCManager):
     def share_anchor_rows(self, donor_tokens, extra_hash: int = 0) -> int:
         """Share rows with the checkpoint just stored, then bring anchors under their budget."""
         try:
-            return self._share_anchor_rows(donor_tokens, extra_hash)
+            shared, views, freed = self._share_anchor_rows(donor_tokens, extra_hash)
+            if views:
+                import mlx.core as mx
+
+                mx.eval(views)
+                release_freed_buffers(freed)
+            return shared
         finally:
             self.enforce_anchor_budget()
 
-    def _share_anchor_rows(self, donor_tokens, extra_hash: int = 0) -> int:
+    def share_anchor_rows_lazy(self, donor_tokens, donor_cache, extra_hash: int = 0):
+        """Re-point anchors at a checkpoint that is still being copied (not yet stored).
+
+        Done before the copy is evaluated, an anchor's own buffer is released at once, the
+        way ``release_superseded`` releases what a checkpoint replaces, so the old and the new
+        copy never coexist. Returns the views to evaluate with the copy; call
+        ``finish_anchor_sharing`` afterwards.
+        """
+        _, views, freed = self._share_anchor_rows(
+            donor_tokens, extra_hash, donor_cache=donor_cache
+        )
+        self._lazy_freed = getattr(self, "_lazy_freed", 0) + freed
+        return views
+
+    def finish_anchor_sharing(self) -> None:
+        freed, self._lazy_freed = getattr(self, "_lazy_freed", 0), 0
+        release_freed_buffers(freed)
+        self.enforce_anchor_budget()
+
+    def _share_anchor_rows(self, donor_tokens, extra_hash: int = 0, donor_cache=None):
         """Re-point the K/V rows of retained anchors at the checkpoint just stored.
 
         A request that restored a checkpoint at ``h`` holds, for every position up to ``h``,
@@ -1600,16 +1630,21 @@ class YunshuAPCManager(APCManager):
         donor_tokens = tuple(int(t) for t in donor_tokens)
         hit = self._last_hit
         if hit is None or hit[1] != extra_hash or donor_tokens[: len(hit[0])] != hit[0]:
-            return 0
+            return 0, [], 0
         limit = len(hit[0])
         views: list = []
         shared = 0
         freed = 0
         with self.lock:
             donor_key = _sequence_hash(donor_tokens, extra_hash, self.block_size)
-            donor = self._exact_cache.get(donor_key)
+            if donor_cache is not None:
+                donor = SimpleNamespace(
+                    prompt_cache=donor_cache, token_ids=donor_tokens
+                )
+            else:
+                donor = self._exact_cache.get(donor_key)
             if donor is None or donor.token_ids != donor_tokens:
-                return 0
+                return 0, [], 0
             root = self._kv_share.get(donor_key, (donor_key, 0))[0]
             if root == donor_key:
                 self._roots[root] = sum(
@@ -1658,12 +1693,7 @@ class YunshuAPCManager(APCManager):
                     self._kv_share[key] = (root, viewed)
                     freed += viewed
                 shared += 1
-        if views:
-            import mlx.core as mx
-
-            mx.eval(views)
-            release_freed_buffers(freed)
-        return shared
+        return shared, views, freed
 
     # ── provenance ─────────────────────────────────────────────────────
     def semantic_boundaries(self, token_ids):
