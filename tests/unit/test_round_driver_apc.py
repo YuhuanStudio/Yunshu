@@ -128,3 +128,20 @@ def test_batch_of_hit_and_cold_rows_matches(tiny):
             out[e.handle].append(e.token)
     assert hits[0] > 0 and hits[1] == 0
     assert [out[0], out[1]] == ref
+
+
+def test_driver_stores_only_planned_checkpoints_with_an_interval(tiny):
+    """The checkpoint interval cuts spans at every multiple; only the last is a
+    snapshot (with the final one). The driver used upstream's coordinator, which
+    stored every one (22 vs 8.6 GiB at 2 x 32K)."""
+    from yunshu_engine.apc_manager import YunshuAPCManager
+
+    lm, drafter = tiny
+    apc = YunshuAPCManager(
+        num_blocks=64,
+        block_size=16,
+        overrides={"memory_max_gb": 1, "checkpoint_interval_tokens": 128},
+    )
+    _run(lm, drafter, [DOC], apc)
+    stored = sorted(len(e.token_ids) for e in apc._exact_cache.values())
+    assert 0 < len(stored) <= 2, stored

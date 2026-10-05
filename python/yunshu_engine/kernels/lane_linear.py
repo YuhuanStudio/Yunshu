@@ -201,7 +201,7 @@ class LaneLinear(nn.Module):
         follows the row count), and cost nothing: they take the lane path, so
         a prompt's bits do not depend on how it was cut into spans."""
         if self.output_dims < NARROW:
-            return [self(x) for x in xs]
+            return [self.lane_only(x) for x in xs]
         weight, scales, biases = self.stock()
         out = []
         for x in xs:
@@ -223,6 +223,23 @@ class LaneLinear(nn.Module):
                 y = y + self["bias"]
             out.append(y.reshape(*lead, self.output_dims).astype(dtype))
         return out
+
+    def lane_only(self, x: mx.array) -> mx.array:
+        """The lane kernel for any row count, in PIECE-row pieces, never the
+        stock / NAX prefill dispatch of ``__call__`` (whose bits follow the
+        call's row count, and which the engine turns on for the upstream path)."""
+        lead = x.shape[:-1]
+        x2 = x.reshape(-1, self.input_dims)
+        dtype = x2.dtype
+        if dtype != mx.bfloat16:
+            x2 = x2.astype(mx.bfloat16)
+        y = mx.concatenate(
+            [self._rows(x2[i : i + PIECE]) for i in range(0, int(x2.shape[0]), PIECE)],
+            axis=0,
+        )
+        if "bias" in self:
+            y = y + self["bias"]
+        return y.reshape(*lead, self.output_dims).astype(dtype)
 
     def __call__(self, x: mx.array) -> mx.array:
         lead = x.shape[:-1]

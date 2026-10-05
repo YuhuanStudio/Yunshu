@@ -1604,6 +1604,7 @@ class VLMEngine:
         spec_family = self._config.get("model_type") in self._SPEC_MODEL_TYPES
         lm = self._model.language_model
         use_driver = self._round_driver_wanted(lm)
+        driver_lanes = 0
         if use_driver:
             # Row-invariant lane projections everywhere (before any verify
             # kernel install repacks them): the round driver's rows, and the
@@ -1611,6 +1612,7 @@ class VLMEngine:
             from .kernels import lane_linear
 
             lanes = lane_linear.convert(lm)
+            driver_lanes = lanes["converted"]
             if lm.args.tie_word_embeddings:
                 lm._yunshu_lane_head = lane_linear.lane_head(lm.model.embed_tokens)
             logger.info(
@@ -1711,15 +1713,15 @@ class VLMEngine:
                 if ready():
                     from .kernels import lane_linear
 
-                    kernels["lane_linear"] = lane_linear.convert(
-                        self._model.language_model
-                    )["converted"]
-                    # Never with the round driver: its prefill relies on span-invariant
-                    # lane arithmetic (its own stock calls go through LaneLinear.prefill).
-                    if (
-                        settings.get("YUNSHU_PREFILL_MATMUL") == "stock"
-                        and not use_driver
-                    ):
+                    # (a second convert finds the driver's lanes already in place)
+                    kernels["lane_linear"] = (
+                        lane_linear.convert(self._model.language_model)["converted"]
+                        or driver_lanes
+                    )
+                    # The round driver's own prefill calls LaneLinear.prefill and
+                    # never reaches the row-count dependent dispatch of __call__,
+                    # so the upstream path (lone and long cold prompts) keeps it.
+                    if settings.get("YUNSHU_PREFILL_MATMUL") == "stock":
                         lane_linear.set_stock_rows(lane_linear.STOCK_MIN_ROWS)
                         text_cfg = self._config.get("text_config", self._config)
                         if (
@@ -1737,7 +1739,7 @@ class VLMEngine:
                             )
                             kernels["nax_prefill"] = nax_prefill.arithmetic_id()
                     kernels["prefill_matmul"] = lane_linear.prefill_kernel_id()
-                if settings.get("YUNSHU_PREFILL_GDN") == "chunked" and not use_driver:
+                if settings.get("YUNSHU_PREFILL_GDN") == "chunked":
                     from .kernels import gdn_prefill
 
                     gdn_prefill.install()
@@ -1789,13 +1791,11 @@ class VLMEngine:
         from .vlm_batch_runner import PREFILL_STEP
 
         self._apc_prefill_stride = (
-            PREFILL_STEP
-            if spec_family and not use_driver and (kernels or {}).get("invariant")
-            else 0
+            PREFILL_STEP if spec_family and (kernels or {}).get("invariant") else 0
         )
         from .kernels import buffer_cache
 
-        if spec_family and not use_driver:
+        if spec_family:
             from .kernels import cache_restore, singleton_cache
 
             singleton_cache.install()

@@ -908,6 +908,18 @@ candidate 12 cells 0 mismatches; APC cold/warm 4 pairs hit. Spec-on speed unchan
 spec-off decode tok/s before/after (`yv` speed only times the default spec-on mode). The pre-fix failure on main is
 taken from the infra1 runs, not re-run here.
 
+2026-10-04 Round driver routing (branch round3; Qwen3.8-27B oQ4e-mtp, M5 Max, server per arm, 128->256 new tokens, 5 reps, arm order rotated in reps 4-5, medians). Parity: serving-runner allow_draft off/on digests now equal at 1K (prose f7d979e5d0be..., code 1a14b82871...; fixed by specoff1), driver alone/batch/stagger/AR identical. Routing: `YUNSHU_ROUND_DRIVER_MIN_CONCURRENCY=2` sends text requests to the driver only when another request is in flight. Roofline: 27B floor ~29 ms/step, so c=8 AR ceiling ~275 tok/s, MTP ~2x on top; c=2 ceiling ~2x single-row MTP (~170 tok/s).
+
+| cell | off tok/s (sum decode) | routed | always | mean TTFT off/routed (s) | footprint GiB off/routed |
+|---|---:|---:|---:|---:|---:|
+| 1K c=1 | 76.2 | 78.1 | 80.5 | 1.2/1.4 | 21.5/20.9 |
+| 1K c=2 | 50.4 | 185.4 | 185.0 | 1.9/2.5 | 22.4/23.6 |
+| 1K c=4 | 85.2 | 236.4 | 215.2 | 3.4/4.9 | 24.6/24.7 |
+| 1K c=8 | 136.8 | 347.2 | 312.8 | 6.2/9.6 | 26.5/26.8 |
+| 32K cold c=2 | 26.4 | 152.0 | - | 53.5/89.2 | 31.5/55.2 |
+| 32K cold c=4 | 29.2 | 130.4 | - | 89.9/153.1 | 51.8/49.6 |
+
+32K b2/b4 cold TTFT is still worse with the driver (+67%/+70%): driver prefill uses lane-qmm atoms of 512 rows, which never reach the stock-matmul threshold. Data docs/research/runs/2026-10-04-round3/ab-{1k,32k}.jsonl.
 
 ### 2026-10-04 Fast DFlash tree engages on live state, not on max_tokens (sonnet-wide8, M5, 27B oQ4e-mtp + DFlash2)
 
@@ -1078,3 +1090,19 @@ Harness notes: `tfbench` records `part_done` even when a server request fails mi
 the server log looked complete), so every ms/round row here was checked for `ct == 256` and `finish == length`. Jobs
 `1004-215938-00-dflash9-base-r0..r2` (baseline), `1005-005328-00-dflash9-cand-q8ctl-r0..r2` (head), `1005-011739-00-dflash9-bits4-1k8k-r0..r2`,
 `1005-010425-00-dflash9-bits{8,4}-32k-r0..r2`, ablations `1005-001731-00-dflash9-ablate-r5`, micro-benches `dflash9-prework/attnbench/addrms/normgate/swiglu`.
+
+2026-10-05 Round driver, 32K cold TTFT and memory (branch round3, Qwen3.8-27B oQ4e-mtp, M5 Max; server per arm, 3 reps, arm order rotated, `scripts/research/round3_ab.py`). The earlier note above blamed the 512-row lane atoms; that was wrong: the driver already runs `LaneLinear.prefill` (stock matmul on the transient untiled weight) for every non-tail span. The 32K gap had four other causes:
+- With `YUNSHU_ROUND_DRIVER=1` the engine skipped stock/NAX prefill matmul, chunked GDN, the restore patches and APC stride for every request, so even a request on the upstream path prefilled ~25% slower; a second `lane_linear.convert` then returned 0 and switched the NAX gate off (+7%). The engine now keeps them; the driver's own prefill runs the step GDN kernel (`gdn_prefill.step_kernel`) and its narrow projections the lane kernel in 512-row pieces (`LaneLinear.lane_only`), so its arithmetic is unchanged.
+- The driver used upstream's APC coordinator, which snapshots every checkpoint-interval cut (2 x 32K: 22.4 GiB of APC vs 8.6 on the upstream path). It now uses the manager's own coordinator, one per row. After a run, active memory is identical with and without `gc.collect()` and returns to the 15.98 GiB of weights once the APC is cleared in both arms: no finished request keeps KV alive.
+- The driver's cold prefill is still 15-30% slower per token than upstream's (8K c=2: 19.7 vs 12.9 s mean TTFT; 4K: 8.0 vs 6.3 s; 1K: 2.5 vs 1.9 s, all driver-forced). Prompts with more than `DRIVER_MAX_UNCACHED_TOKENS = 4096` uncached tokens therefore stay on the upstream path (module constant, no flag).
+- The upstream scheduler (work order, primary handoff) was off whenever a driver existed; it is now off only while rows are on the driver.
+
+32K cold, 128 -> 256 new tokens, mean / max TTFT in s (3 reps, spread <= 0.15 s):
+
+| arm | c=2 | c=4 | gpuq peak GB (job incl. c=2 and c=4) |
+|---|---|---|---|
+| off | 53.4 / 70.7 | 89.8 / 144.1 | 60.3-62.6 |
+| driver always for c>=2 (before) | 89.2-94.9 / 89.5-95.4 | 150.9-157.6 / 215.8-222.4 | footprint c=2 55.2 vs 31.5 GiB |
+| routed, this branch | 53.4 / 70.6 | 89.8 / 144.1 | 60.5-62.5 |
+
+1K cold (b2/b4/b8, 3 reps, means): aggregate tok/s off 42.0 / 65.8 / 92.8 vs routed 81.2 / 108.4 / 116.0; decode tok/s per request 25.1 / 21.5 / 17.2 vs 76.1 / 70.2 / 38.9; mean TTFT 1.9 / 3.3 / 6.2 s vs 2.6 / 4.9 / 9.8 s (worse: first tokens of rows that finish prefill in an early multi-row step arrive only after later steps, e.g. 8 x 1K: 8.3 s for the first row though its prefill ended at 4.7 s; not yet explained); peak 31.5-31.7 vs 31.7-32.3 GB. Parity (jobs `round3-parity-sweep3`, `round3-onoff3`): driver alone/batch/stagger/AR identical; serving allow_draft on == off and cold == warm for code and prose at 1K. Digests differ from the previous branch commit because the engine now keeps the checkpoint stride (span plan), not because of numerics drift between on and off. Data docs/research/runs/2026-10-05-round3b/.

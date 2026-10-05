@@ -11,6 +11,7 @@ key (``kernel_id``). Decode, speculative verify and the round driver never take 
 
 from __future__ import annotations
 
+import contextlib
 import logging
 
 import mlx.core as mx
@@ -18,7 +19,19 @@ import mlx.core as mx
 logger = logging.getLogger(__name__)
 
 MIN_TOKENS = 64
-_STATE = {"installed": False, "enabled": False}
+_STATE = {"installed": False, "enabled": False, "bypass": 0}
+
+
+@contextlib.contextmanager
+def step_kernel():
+    """Run ``gated_delta_kernel`` calls inside the block on the per-token step
+    kernel (the round driver's prefill: a token's bits must not depend on how
+    the prompt was cut into spans)."""
+    _STATE["bypass"] += 1
+    try:
+        yield
+    finally:
+        _STATE["bypass"] -= 1
 
 
 def kernel_id() -> str:
@@ -37,6 +50,7 @@ def install() -> bool:
         def gated_delta_kernel(q, k, v, g, beta, state, mask=None):
             if (
                 _STATE["enabled"]
+                and not _STATE["bypass"]
                 and q.shape[1] >= MIN_TOKENS
                 and g.ndim == 3
                 and state is not None

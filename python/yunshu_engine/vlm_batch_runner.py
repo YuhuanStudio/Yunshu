@@ -51,6 +51,13 @@ logger = logging.getLogger(__name__)
 # Upstream prefill default; APC checkpoints land on these chunk boundaries and
 # cancellation is honoured between chunks (~2 s at 2K tokens on a 27B model).
 PREFILL_STEP = 2048
+# A text request enters the round driver only when this many requests are in flight.
+DRIVER_MIN_CONCURRENCY = 2
+# ...and its prompt has at most this many uncached tokens: the driver's 512-token
+# attention grid, step GDN kernel and per-row prefill make a cold prompt ~15-30%
+# slower than upstream's prefill (8K and 32K, 27B), which costs more first-token
+# time than drafting wins back. Longer cold prompts keep the upstream path.
+DRIVER_MAX_UNCACHED_TOKENS = 4096
 
 
 @dataclass
@@ -705,6 +712,17 @@ class VLMBatchRunner:
             gen.apc = bind(gen.model)
         return gen
 
+    def _driver_takes(self, job: _Job, alone: bool) -> bool:
+        """Text request goes to the round driver
+        when at least ``DRIVER_MIN_CONCURRENCY`` requests are in flight and
+        its uncached prompt is short; a lone request keeps the single-row
+        speculative lane, a long cold prompt the upstream prefill."""
+        if self.driver is None or job.prompt_kwargs is not None:
+            return False
+        if alone and DRIVER_MIN_CONCURRENCY >= 2:
+            return False
+        return self._work(job).uncached_tokens <= DRIVER_MAX_UNCACHED_TOKENS
+
     def _admit(self, job: _Job, alone: bool) -> None:
         from .mrope import clear_rope_state
 
@@ -716,7 +734,7 @@ class VLMBatchRunner:
                 job.use_draft
                 and alone
                 and self._spec is None
-                and not (self.driver is not None and job.prompt_kwargs is None)
+                and not self._driver_takes(job, alone)
             )
             if not lane:
                 job.use_draft = job.allow_draft = False
@@ -735,11 +753,7 @@ class VLMBatchRunner:
                 use_apc = bool(self._apc_admit(mx.array(job.ids)))
             except Exception:
                 logger.debug("APC admission check failed; using APC", exc_info=True)
-        if (
-            self.driver is not None
-            and job.prompt_kwargs is None
-            and job.cache_plan is None
-        ):
+        if self._driver_takes(job, alone) and job.cache_plan is None:
             self._admit_driver(job, use_apc)
             return
         job.stats.used_apc = use_apc
@@ -1610,7 +1624,7 @@ class VLMBatchRunner:
             not settings.scheduling_enabled(
                 "YUNSHU_UNCACHED_SCHEDULING", qualified=self.prefix_invariant
             )
-            or self.driver is not None
+            or self._driver_jobs
         ):
             return 0.0
         at = self._primary_handoff_at
@@ -1647,7 +1661,7 @@ class VLMBatchRunner:
                     settings.scheduling_enabled(
                         "YUNSHU_UNCACHED_SCHEDULING", qualified=self.prefix_invariant
                     )
-                    and self.driver is None
+                    and not self._driver_jobs
                     and self._primary_handoff_at is not None
                     and now - self._primary_handoff_at < PRIMARY_HANDOFF_S
                 )
@@ -1665,7 +1679,7 @@ class VLMBatchRunner:
                     settings.scheduling_enabled(
                         "YUNSHU_UNCACHED_SCHEDULING", qualified=self.prefix_invariant
                     )
-                    and self.driver is None
+                    and not self._driver_jobs
                 )
                 auxiliary = sum(
                     j.priority < 0 for j in [*active, *self._pending, *pending]

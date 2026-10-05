@@ -139,13 +139,16 @@ def main():
         choices=sorted(INSTRUCTIONS),
         help="prompt body (oMLX bench corpora) and the request after it",
     )
+    ap.add_argument(
+        "--corpora-dir", type=Path, default=CORPORA, help="oMLX bench_corpora directory"
+    )
     ap.add_argument("--note", default="")
     ap.add_argument("--output", type=Path, required=True)
     a = ap.parse_args()
     from transformers import AutoTokenizer
 
     tok = AutoTokenizer.from_pretrained(a.tokenizer)
-    corpus = (CORPORA / f"{a.corpus}.txt").read_text()
+    corpus = (a.corpora_dir / f"{a.corpus}.txt").read_text()
     instruction = INSTRUCTIONS[a.corpus]
     a.output.parent.mkdir(parents=True, exist_ok=True)
     out = a.output.open("a")
