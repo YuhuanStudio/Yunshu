@@ -713,7 +713,7 @@ def test_long_reply_decode_share_is_capped_while_another_request_prefills(atoms)
             break
     assert cold.stats.t_first
     prefill_s = 4 * 2048 * 0.00121
-    assert clock[0] - t0 < prefill_s * 1.2
+    assert clock[0] - t0 < prefill_s * 1.1
 
 
 def test_early_rows_keep_the_generous_decode_share(atoms):
