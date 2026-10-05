@@ -2023,7 +2023,7 @@ class VLMEngine:
         """``_runner_events_impl`` plus the optional generated-vs-delivered capture
         (``YUNSHU_DEBUG_STREAM_CAPTURE``)."""
         tools = kw.pop("tool_recovery_tools", None)
-        events = self._runner_events_impl(input_ids, **kw)
+        events = self._runner_events_impl(input_ids, tools_declared=bool(tools), **kw)
         if tools:
             from .tool_format import formats_for_tokenizer
             from .tool_thinking import recover_tool_events
@@ -2097,6 +2097,7 @@ class VLMEngine:
         xtc_probability: float = 0.0,
         xtc_threshold: float = 0.0,
         tool_spec: dict | None = None,
+        tools_declared: bool = False,
     ):
         """Yield ``(text, token_id, state, finish_reason, thinking_tokens, logprob)``.
 
@@ -2163,7 +2164,9 @@ class VLMEngine:
                 in_think = think_end is None or think_end not in tail[last_open + 1 :]
         thinking_tokens = 0
         count = 0
-        tool_marker = self._tool_call_marker_id() if tool_spec else None
+        tool_marker = (
+            self._tool_call_marker_id() if (tool_spec or tools_declared) else None
+        )
         guide = self._tool_guide(tool_spec, in_think)
         if constraint_guide is not None:
             from .constrained_spec import CombinedGuide

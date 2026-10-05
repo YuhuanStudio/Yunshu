@@ -29,7 +29,7 @@ class _Detok:
         self.last_segment = ""
 
 
-def _events(tokens, *, tool_spec, prompt_opens_think=True):
+def _events(tokens, *, tool_spec=None, tools_declared=False, prompt_opens_think=True):
     def iter_tokens(ids, **kw):
         return iter(tokens)
 
@@ -66,6 +66,7 @@ def _events(tokens, *, tool_spec, prompt_opens_think=True):
             cancel_event=None,
             stats=MagicMock(),
             tool_spec=tool_spec,
+            tools_declared=tools_declared,
         )
     )
 
@@ -94,3 +95,11 @@ def test_closed_reasoning_is_unchanged():
 def test_without_declared_tools_reasoning_keeps_the_marker():
     reasoning, content = _split(_events([10, TOOL, 11, 12, EOS], tool_spec=None))
     assert "<tool_call>" in reasoning and content == ""
+
+
+def test_tools_declared_without_grammar_spec_also_ends_reasoning():
+    # YUNSHU_TOOL_GRAMMAR off (or tool_choice none handled elsewhere): no _tool_spec,
+    # but the request still declares tools and its calls are parsed from normal text.
+    reasoning, content = _split(_events([10, TOOL, 11, 12, EOS], tools_declared=True))
+    assert reasoning == "I will read it. "
+    assert content == "<tool_call>Read{}</tool_call>"
