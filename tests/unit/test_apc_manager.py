@@ -645,3 +645,10 @@ def test_make_room_reads_free_memory_once(monkeypatch):
     monkeypatch.setattr(APCManager, "_memory_headroom", headroom)
     m._make_room(1 << 20)
     assert len(reads) == 1
+
+
+def test_anchor_budget_on_a_big_machine_is_one_gib():
+    m = _mgr()
+    m.memory_max_bytes = 32 << 30  # the 128 GB machine's APC budget
+    # each anchor owns a ~0.2 GiB recurrent state that cannot be shared: ~5 anchors at most
+    assert m.anchor_budget_bytes() == 1 << 30

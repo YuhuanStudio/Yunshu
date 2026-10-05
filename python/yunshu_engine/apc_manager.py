@@ -552,7 +552,7 @@ _BORN_KEEP = 4096
 # Retained anchors may hold at most this share of the APC byte budget, and never more than
 # this many bytes, counting only memory they own (rows viewed from a newer checkpoint are free).
 ANCHOR_BUDGET_FRACTION = 0.15
-ANCHOR_BUDGET_MAX_BYTES = 4 << 30
+ANCHOR_BUDGET_MAX_BYTES = 1 << 30
 # Freed anchor buffers would sit in MLX's allocator pool and count in the process footprint
 # until idle; give them back at once when this much was freed.
 RELEASE_FREED_BYTES = 256 << 20
