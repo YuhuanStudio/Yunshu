@@ -56,3 +56,11 @@ def test_sidecar_samples_fast_and_windows_by_time():
     fp, _ = side.take(t0, t1)
     assert len(fp) >= 10
     assert all(b == 7 * GIB for _, b in fp)
+
+
+def test_session_mode_is_wired_to_the_branch_scenarios():
+    m = _load()
+    assert "session" in m.run_arm.__code__.co_varnames
+    import apc_branch_ab
+
+    assert "long_session" in apc_branch_ab.scenarios.__code__.co_varnames

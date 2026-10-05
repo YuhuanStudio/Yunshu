@@ -153,7 +153,7 @@ def chat(url, messages, max_tokens):
     return msg.get("content") or "", data.get("usage", {})
 
 
-def run_arm(name, tree, model, port, rep, emit, sizes, out_path):
+def run_arm(name, tree, model, port, rep, emit, sizes, out_path, session=None):
     env = dict(
         os.environ,
         PYTHONPATH=os.path.join(tree, "python"),
@@ -225,6 +225,36 @@ def run_arm(name, tree, model, port, rep, emit, sizes, out_path):
             step_no[0] += 1
             return out
 
+        if session:
+            import apc_branch_ab
+
+            last = {}
+
+            def chat_fn(msgs, n):
+                t0 = time.time()
+                out, usage = chat(url, msgs, n)
+                t1 = time.time()
+                time.sleep(1.5)
+                fp, gauges = side.take(t0, t1 + 1.5)
+                last["summary"] = summarize(fp, gauges, t1)
+                return out, usage, t1 - t0
+
+            def record(step, usage=None, secs=None, ideal=None):
+                emit(
+                    dict(
+                        arm=name,
+                        rep=rep,
+                        step=step,
+                        secs=None if secs is None else round(secs, 3),
+                        cached=apc_branch_ab.cached_of(usage) if usage else None,
+                        prompt=(usage or {}).get("prompt_tokens"),
+                        ideal=ideal,
+                        summary=last.get("summary"),
+                    )
+                )
+
+            apc_branch_ab.scenarios(chat_fn, record, 11 + rep, *session, True)
+            return
         for i in range(3):
             measured(
                 f"short{i}",
@@ -265,6 +295,13 @@ def main():
     ap.add_argument("--rep-offset", type=int, default=0)
     ap.add_argument("--sizes", type=int, nargs="+", default=list(DEFAULT_SIZES))
     ap.add_argument("--out", required=True)
+    ap.add_argument(
+        "--session",
+        nargs=3,
+        type=int,
+        metavar=("TURNS", "PER_TURN", "SUB_TOKENS"),
+        help="run the apc_branch_ab long session (two branches) instead of the size ladder",
+    )
     a = ap.parse_args()
     arms = [x.split("=", 1) for x in a.arm]
     with open(a.out, "a") as f:
@@ -279,7 +316,17 @@ def main():
             rep = a.rep_offset + i
             order = arms if rep % 2 == 0 else arms[::-1]
             for name, tree in order:
-                run_arm(name, tree, a.model, a.port, rep, emit, tuple(a.sizes), a.out)
+                run_arm(
+                    name,
+                    tree,
+                    a.model,
+                    a.port,
+                    rep,
+                    emit,
+                    tuple(a.sizes),
+                    a.out,
+                    a.session,
+                )
         emit(dict(complete=True))
 
 
