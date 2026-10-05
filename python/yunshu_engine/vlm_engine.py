@@ -1,3 +1,5 @@
+# Upstream (inspired): vllm-project/vllm (Apache-2.0) vllm/reasoning/qwen3_reasoning_parser.py @ 22a58640b
+#   (a <tool_call> token ends unclosed reasoning; see vendor.json)
 from __future__ import annotations
 
 """Yunshu VLM Engine — Vision-Language Model inference.
