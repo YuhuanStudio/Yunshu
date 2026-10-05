@@ -58,3 +58,37 @@ def test_nax_prefill_rows_do_not_depend_on_the_run_length():
         assert nax_prefill._dispatches >= 2  # whole run and atoms ran NAX
     finally:
         nax_prefill.disable()
+
+
+@pytest.mark.parametrize("n_keys", [4096, 9000])
+def test_sdpa_bits_for_query_blocks(n_keys):
+    """Does a causal SDPA over 2048 queries equal four 512-query blocks? (research:
+    decides whether the driver's attention grid can be coarser)"""
+    mx.random.seed(7)
+    H, Hk, D = 24, 4, 256
+    start = n_keys - 2048
+    q = mx.random.normal((1, H, 2048, D)).astype(mx.bfloat16)
+    k = mx.random.normal((1, Hk, n_keys, D)).astype(mx.bfloat16)
+    v = mx.random.normal((1, Hk, n_keys, D)).astype(mx.bfloat16)
+    scale = D**-0.5
+    whole = mx.fast.scaled_dot_product_attention(
+        q, k[:, :, :n_keys], v[:, :, :n_keys], scale=scale, mask="causal"
+    )
+    parts = []
+    for b in range(0, 2048, 512):
+        e = start + b + 512
+        parts.append(
+            mx.fast.scaled_dot_product_attention(
+                q[:, :, b : b + 512],
+                k[:, :, :e],
+                v[:, :, :e],
+                scale=scale,
+                mask="causal",
+            )
+        )
+    got = mx.concatenate(parts, axis=2)
+    mx.eval(whole, got)
+    print("SDPA block equality", n_keys, mx.array_equal(whole, got).item())
+    assert mx.allclose(
+        whole.astype(mx.float32), got.astype(mx.float32), atol=0.05
+    ).item()

@@ -136,7 +136,9 @@ def main() -> int:
         print("driver busy seconds:", busy, flush=True)
         # the 32k cell: prompts above DRIVER_MAX_UNCACHED_TOKENS keep the upstream
         # path by design, so the driver stays idle in both arms
-        expect_driver = a.arm != "off" and (a.cell == "1k" or bool(a.max_uncached))
+        expect_driver = a.arm != "off" and (
+            a.cell in ("1k", "8k") or bool(a.max_uncached)
+        )
         if (busy > 0) != expect_driver:
             print("driver usage does not match arm", flush=True)
             return 1
