@@ -134,6 +134,8 @@ def _units(ctx: Ctx) -> list:
 
 def _dec_args(ctx: Ctx) -> list:
     out = ["--decode-tokens", str(int(ctx.suite.get("decode_tokens", 256)))]
+    if ctx.suite.get("long_ask"):
+        out.append("--long-ask")
     if ctx.suite.get("turn2_tokens"):
         out += ["--turn2-tokens", str(int(ctx.suite["turn2_tokens"]))]
     return out

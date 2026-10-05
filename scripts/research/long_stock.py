@@ -136,7 +136,9 @@ def main(argv=None):
                 )
         if "decode" in parts:
             for kind in a.kinds.split(","):
-                text = t.load_prompt(f"{kind}-{ctx}")
+                text = t.load_prompt(f"{kind}-{ctx}") + (
+                    t.LONG_ASK if a.long_ask else ""
+                )
                 mx.reset_peak_memory()
                 r = run_one(
                     stream_generate,

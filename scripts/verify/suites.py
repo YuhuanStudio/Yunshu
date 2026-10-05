@@ -76,6 +76,7 @@ SUITES = {
         "decode_tokens": 2048,
         "turn2_tokens": 256,  # the follow-up measures TTFT; keeps 131K cells under 20 min
         "split_cells": True,
+        "long_ask": True,
         "keep_going": True,  # a regression in one stage must not hide the others
         "mem_sizes": [32768, 131072],
         "mem_reps": 2,
@@ -91,6 +92,7 @@ SUITES = {
         "decode_tokens": 2048,
         "turn2_tokens": 256,
         "split_cells": True,
+        "long_ask": True,
         "keep_going": True,
         "mem_sizes": [131072],
         "mem_reps": 1,
@@ -121,6 +123,7 @@ DEFAULTS = {
     "turn2_tokens": 0,
     "conc_tol_pct": 10.0,
     "split_cells": False,
+    "long_ask": False,
     "mem_sizes": [8192, 32768, 98304],
     "mem_reps": 2,
     "speed_tol_pct": 2.0,

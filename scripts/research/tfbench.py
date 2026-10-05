@@ -319,6 +319,14 @@ def emit(out, **kw):
     out.flush()
 
 
+# Appended to long decode prompts: a plain "keep writing at length" ask ends by itself around
+# 1.5K tokens on Qwen3.8-27B, and a decode cell needs a reply that reaches its token budget.
+LONG_ASK = (
+    "\n\nRequirement: the answer must be extremely long, at least 5000 words. "
+    "Do not conclude, summarize or stop early; keep going section after section."
+)
+
+
 def check_decode_len(r, n, what):
     """A decode cell measures exactly n tokens; a short reply is an error (a request that died
     mid-stream must not count as a result)."""
@@ -345,7 +353,7 @@ def part_decode(s, out, a):
             text = (
                 "Write a short example and explain it."
                 if a.smoke
-                else load_prompt(f"{kind}-{ctx}")
+                else load_prompt(f"{kind}-{ctx}") + (LONG_ASK if a.long_ask else "")
             )
             reply = ""
             for phase in ("cold", "warm", "turn2"):
@@ -566,6 +574,11 @@ def parse_args(argv=None):
     ap.add_argument("--tag", default="")
     ap.add_argument("--model", default=M)
     ap.add_argument("--smoke", action="store_true")
+    ap.add_argument(
+        "--long-ask",
+        action="store_true",
+        help="append LONG_ASK to decode prompts so replies reach --decode-tokens",
+    )
     ap.add_argument(
         "--turn2-tokens",
         type=int,
