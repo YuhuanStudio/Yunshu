@@ -672,3 +672,21 @@ def test_short_request_decodes_through_long_prefill_without_one_token_per_atom(a
     atoms_run = sum(len(g.gen.atoms) for g in r._groups() if g.spec)
     assert atoms_run <= 2  # the long prefill resumes after one atom, not one per token
     assert clock[0] - t0 < 8
+
+
+def test_request_between_templating_and_submit_is_awaited_before_the_next_atom(atoms):
+    """Measured on 27B: the short call's hop from the executor to _submit lost the
+    race to the next slice, so it waited a second 2 s atom (3.75 s TTFT)."""
+    r, _ = atoms
+    cold = job(0)
+    cold.ids = list(range(32768))
+    r._submit(cold)
+    r._drive_slice(False)
+    r.inflight = lambda: 2  # the cold request plus one call still preparing
+    waits = [r._handoff_delay() for _ in range(20)]
+    assert waits[0] > 0 and 0 in waits
+    assert sum(1 for w in waits if w) * waits[0] < 0.06
+    r.inflight = lambda: 1
+    assert r._handoff_delay() == 0
+    r.inflight = lambda: 2
+    assert r._handoff_delay() > 0  # a new episode waits again

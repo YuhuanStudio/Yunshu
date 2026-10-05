@@ -42,6 +42,8 @@ from .serving.busy_time import BusyMeter
 from .serving.work_scheduler import (
     AGING_S,
     DECODE_FIRST_BURST_S,
+    PREPARE_WAIT_MAX,
+    PREPARE_WAIT_S,
     PRIMARY_HANDOFF_S,
     Work,
     decode_quantum,
@@ -315,6 +317,7 @@ class VLMBatchRunner:
         self._vocab_owner: Any = None
         self._driving = False
         self._decode_debt = 0.0
+        self._prepare_waits = 0
         self._primary_handoff_at: float | None = None
         self._handoff_timer: threading.Timer | None = None
         self.clear_on_idle = False
@@ -1667,6 +1670,17 @@ class VLMBatchRunner:
             or self._driver_jobs
         ):
             return 0.0
+        # A call that has finished templating on the executor but has not yet
+        # reached _submit would lose the race against the next slice and wait
+        # a whole prefill atom (~2 s) for it: let the hop land first.
+        with self._lock:
+            admitted = len(self._pending) + sum(len(g.jobs) for g in self._groups())
+        if self.inflight() > admitted:
+            if self._prepare_waits < PREPARE_WAIT_MAX:
+                self._prepare_waits += 1
+                return PREPARE_WAIT_S
+        else:
+            self._prepare_waits = 0
         at = self._primary_handoff_at
         if at is None:
             return 0.0

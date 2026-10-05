@@ -27,6 +27,11 @@ DECODE_QUANTUM_MAX_S = 4.0
 # single window instead of waiting for a second long atom (~2-3 s each).
 DECODE_FIRST_BURST_S = 1.0
 PRIMARY_HANDOFF_S = 0.10
+# After a slice, a request still between templating and submit gets this long
+# (at most PREPARE_WAIT_MAX times per episode, 48 ms in all) to reach the queue
+# before the next prefill atom starts.
+PREPARE_WAIT_S = 0.004
+PREPARE_WAIT_MAX = 12
 PREFILL_TOKEN_S = 0.00121
 FIXED_S = 0.236
 
