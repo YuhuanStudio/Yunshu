@@ -2007,6 +2007,18 @@ class VLMEngine:
             self._reasoning_markers_cache = cached
         return cached
 
+    def _tool_call_marker_id(self) -> int | None:
+        """Token id of ``<tool_call>`` when the tokenizer has it as one token, else None."""
+        cached = self.__dict__.get("_tool_call_marker_cache", False)
+        if cached is False:
+            try:
+                ids = self._tokenizer.encode("<tool_call>", add_special_tokens=False)
+            except Exception:
+                ids = []
+            cached = int(ids[0]) if len(ids) == 1 else None
+            self._tool_call_marker_cache = cached
+        return cached
+
     def _runner_events(self, input_ids, **kw):
         """``_runner_events_impl`` plus the optional generated-vs-delivered capture
         (``YUNSHU_DEBUG_STREAM_CAPTURE``)."""
@@ -2151,6 +2163,7 @@ class VLMEngine:
                 in_think = think_end is None or think_end not in tail[last_open + 1 :]
         thinking_tokens = 0
         count = 0
+        tool_marker = self._tool_call_marker_id() if tool_spec else None
         guide = self._tool_guide(tool_spec, in_think)
         if constraint_guide is not None:
             from .constrained_spec import CombinedGuide
@@ -2208,6 +2221,12 @@ class VLMEngine:
                     yield tail, token, state, "length", thinking_tokens, lp
                     return
                 continue
+            if in_think and tool_marker is not None and token == tool_marker:
+                # Qwen3.5-family models sometimes open a tool call inside the reasoning
+                # block without closing it. The call marker ends reasoning implicitly
+                # (vLLM Qwen3ReasoningParser, SGLang Qwen3 detector), else the call is
+                # delivered as reasoning text and the client never sees it.
+                in_think = False
             if in_think:
                 thinking_tokens += 1
             state = "reasoning" if in_think else "normal"
