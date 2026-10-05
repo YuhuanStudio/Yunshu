@@ -286,7 +286,14 @@ class RoundDriver:
         # Entries carry the head's KV only for rows that draft, and come from
         # this driver's numerics: keep them apart from other users of the
         # manager (the upstream runner's entries) and between layouts.
-        mix = f"{int(row.req.extra_hash)}:round-driver:{int(row.mtp_cache is not None)}"
+        from ..kernels import gdn_prefill, nax_prefill
+
+        # the prefill arithmetic is part of the key: a checkpoint written with the
+        # NAX / chunked-GDN kernels is not read back by a run without them
+        arith = gdn_prefill.kernel_id() + (
+            nax_prefill.arithmetic_id() if nax_prefill.enabled() else "lane"
+        )
+        mix = f"{int(row.req.extra_hash)}:round-driver:{int(row.mtp_cache is not None)}:{arith}"
         row.salt = (
             int.from_bytes(hashlib.blake2b(mix.encode(), digest_size=8).digest(), "big")
             >> 1
@@ -575,10 +582,7 @@ class RoundDriver:
                 blocked = True
         if not items:
             return []
-        from ..kernels import gdn_prefill
-
-        with gdn_prefill.step_kernel():
-            hidden = forward(self.lm, [it.seg for it in items])
+        hidden = forward(self.lm, [it.seg for it in items])
         draws = self._draw(items, hidden)
         # Evaluate every cache the step advanced, not only what feeds a token:
         # a prompt chunk that emits nothing would otherwise stay a lazy graph

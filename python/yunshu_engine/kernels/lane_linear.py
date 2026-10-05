@@ -202,7 +202,7 @@ class LaneLinear(nn.Module):
         a prompt's bits do not depend on how it was cut into spans."""
         if self.output_dims < NARROW:
             return [self.lane_only(x) for x in xs]
-        weight, scales, biases = self.stock()
+        stock = None
         out = []
         for x in xs:
             lead = x.shape[:-1]
@@ -210,6 +210,30 @@ class LaneLinear(nn.Module):
             dtype = x2.dtype
             if dtype != mx.bfloat16:
                 x2 = x2.astype(mx.bfloat16)
+            m = int(x2.shape[0])
+            if (
+                m % 512 == 0
+                and m <= 4096
+                and nax_prefill.eligible(
+                    max(m, 640),  # the row bound is the engine's; atoms start at 512
+                    self.input_dims,
+                    self.output_dims,
+                    self.bits,
+                    self.group_size,
+                    self.tiled,
+                )
+            ):
+                # a run of full 512-row atoms: the NAX tile kernel computes each
+                # row from its own row and the weight (one 128-row tile config
+                # up to 4096 rows), so an atom's bits equal its run's
+                y = nax_prefill.matmul(x2, self.weight, self.sbt, bits=self.bits)
+                if "bias" in self:
+                    y = y + self["bias"]
+                out.append(y.reshape(*lead, self.output_dims).astype(dtype))
+                continue
+            if stock is None:
+                stock = self.stock()
+            weight, scales, biases = stock
             y = mx.quantized_matmul(
                 x2,
                 weight,
