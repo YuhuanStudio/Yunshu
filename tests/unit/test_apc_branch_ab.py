@@ -110,3 +110,22 @@ def test_scenarios_drive_the_real_chat_against_a_stub_server():
     finally:
         srv.shutdown()
     assert len(rows) == 10
+
+
+def test_long_session_runs_two_branches_and_no_subagents():
+    m = _load()
+    rows = []
+
+    def chat(msgs, n):
+        return (
+            "ok",
+            {"prompt_tokens": 100, "prompt_tokens_details": {"cached_tokens": 1}},
+            0.1,
+        )
+
+    m.scenarios(
+        chat, lambda s, u, secs, ideal: rows.append((s, ideal)), 1, 8, 50, 100, True
+    )
+    steps = [s for s, _ in rows]
+    assert steps[-2:] == ["b-branch-mid", "b2-branch-early"]
+    assert not any(s.startswith("c-") for s in steps)

@@ -89,7 +89,15 @@ def chat(url, messages, max_tokens):
     return msg.get("content") or "", data.get("usage", {}), time.time() - t
 
 
-def scenarios(chat_fn, record, seed: int, turns: int, per_turn: int, sub_tokens: int):
+def scenarios(
+    chat_fn,
+    record,
+    seed: int,
+    turns: int,
+    per_turn: int,
+    sub_tokens: int,
+    long_session: bool = False,
+):
     """Run the scenarios through ``chat_fn``; ``record(step, usage, secs, ideal)`` per step."""
     users = build_turns(seed, turns, per_turn)
     history = [{"role": "system", "content": SYSTEM}]
@@ -106,6 +114,12 @@ def scenarios(chat_fn, record, seed: int, turns: int, per_turn: int, sub_tokens:
     keep = max(1, turns // 2)
     _, usage, secs = chat_fn(branch_messages(history, keep, seed), 1)
     record("b-branch-mid", usage, secs, prompt_at[keep])
+    if long_session:
+        # a second branch of the same conversation, earlier than the first; no sub-agents
+        early = max(1, turns // 4)
+        _, usage, secs = chat_fn(branch_messages(history, early, seed + 1), 1)
+        record("b2-branch-early", usage, secs, prompt_at[early])
+        return
     for where in ("user", "system"):
         first, second = subagent_requests(seed + 7, sub_tokens, where)
         _, u1, s1 = chat_fn(first, 1)
@@ -194,6 +208,7 @@ def run_arm(name, tree, model, port, rep, emit, extra_env, args):
             args.turns,
             args.per_turn,
             args.sub_tokens,
+            args.long_session,
         )
         time.sleep(20)
         record("idle20s")
@@ -219,6 +234,9 @@ def main():
     ap.add_argument("--turns", type=int, default=TURNS)
     ap.add_argument("--per-turn", type=int, default=TURN_TOKENS)
     ap.add_argument("--sub-tokens", type=int, default=20000)
+    ap.add_argument(
+        "--long-session", action="store_true", help="two branches, no sub-agents"
+    )
     ap.add_argument("--arm-env", action="append", default=[], help="name:K=V")
     ap.add_argument("--out", required=True)
     a = ap.parse_args()
