@@ -138,6 +138,20 @@ def main() -> int:
                 process_tree_memory(srv.pid)["physical_footprint_sum_bytes"] / 2**30, 2
             )
 
+        def apc_metrics():
+            out = {}
+            try:
+                text = (
+                    urllib.request.urlopen(url + "/metrics", timeout=5).read().decode()
+                )
+            except Exception:
+                return out
+            for line in text.splitlines():
+                if "apc_" in line and not line.startswith("#"):
+                    name, _, val = line.rpartition(" ")
+                    out[name.split("{")[0]] = float(val)
+            return out
+
         def run(prompts, tg):
             t0 = time.perf_counter()
             with concurrent.futures.ThreadPoolExecutor(len(prompts)) as pool:
@@ -161,6 +175,7 @@ def main() -> int:
                 return 1
         prime_s = time.perf_counter() - t_prime
         mem_primed = mem()
+        apc_primed = apc_metrics()
         rows, wall = run(turns, a.tg)
         bad = [r for r in rows if r.get("error") or not r.get("ttft_s")]
         if bad:
@@ -181,6 +196,7 @@ def main() -> int:
         rec = {
             "arm": a.arm, "prime": a.prime, "ctx": a.ctx, "turn": a.turn, "c": a.c,
             "tg": a.tg, "rep": a.rep, "max_uncached": a.max_uncached,
+            "apc_primed": apc_primed, "apc_end": apc_metrics(),
             "prime_s": round(prime_s, 1), "footprint_primed_gib": mem_primed,
             "footprint_end_gib": mem(), "driver_busy_s": busy,
             **summarize(rows, wall),
