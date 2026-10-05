@@ -41,9 +41,9 @@ from .keyed_sampling import top_k_filter, top_p_filter
 from .serving.busy_time import BusyMeter
 from .serving.work_scheduler import (
     AGING_S,
-    DECODE_QUANTUM_S,
     PRIMARY_HANDOFF_S,
     Work,
+    decode_quantum,
 )
 
 logger = logging.getLogger(__name__)
@@ -1511,7 +1511,7 @@ class VLMBatchRunner:
                         not job.stats.t_first
                         and self._work(job).uncached_tokens <= PREFILL_STEP
                     )
-                    self._decode_debt = DECODE_QUANTUM_S
+                    self._decode_debt = decode_quantum(elapsed)
                 elif not first_pending:
                     self._decode_debt = max(0.0, self._decode_debt - elapsed)
                 return
@@ -1644,7 +1644,7 @@ class VLMBatchRunner:
                     (uid,) = batch.uids  # prefill_batch_size is always one
                     group.prefills[uid] = batch
                     group.gen._prompt_batch = None
-                self._decode_debt = DECODE_QUANTUM_S
+                self._decode_debt = decode_quantum(elapsed)
             elif not first_pending:
                 self._decode_debt = max(0.0, self._decode_debt - elapsed)
 

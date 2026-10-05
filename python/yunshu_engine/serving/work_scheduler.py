@@ -14,9 +14,22 @@ from dataclasses import dataclass
 AGING_S = 10.0
 MAX_PREFILL_SKIPS = 1
 DECODE_QUANTUM_S = 0.075
+# Decode-first (vLLM chunked prefill, SGLang mixed batches): every running row
+# advances alongside each prefill chunk. Separate generators cannot share a
+# forward pass here, so a prefill atom of t seconds earns decode time
+# DECODE_SHARE * t (parity), capped. The work is conserved: a short request
+# that finishes inside the window costs the long prefill only its own decode
+# time, but its tokens no longer trickle out one per 2048-token atom.
+DECODE_SHARE = 1.0
+DECODE_QUANTUM_MAX_S = 4.0
 PRIMARY_HANDOFF_S = 0.10
 PREFILL_TOKEN_S = 0.00121
 FIXED_S = 0.236
+
+
+def decode_quantum(atom_s: float) -> float:
+    """Decode time owed to running rows after a prefill atom that took ``atom_s``."""
+    return min(DECODE_QUANTUM_MAX_S, max(DECODE_QUANTUM_S, DECODE_SHARE * atom_s))
 
 
 @dataclass(frozen=True)

@@ -319,8 +319,8 @@ def test_last_atom_and_first_token_precede_decode_repayment(atoms):
     assert suffix.stats.t_first
     assert not any(uid == long.uid for uid, _, _ in g.gen.atoms)
     # First-token delivery does not silently erase the fairness obligation.
-    assert r._decode_debt == DECODE_QUANTUM_S
-    for _ in range(4):
+    assert r._decode_debt >= DECODE_QUANTUM_S
+    for _ in range(12):
         r._drive_slice(False)
     assert any(uid == long.uid for uid, _, _ in g.gen.atoms)
 
@@ -649,3 +649,26 @@ def test_idle_round_driver_keeps_the_upstream_handoff(atoms):
     r._driver_jobs[1] = object()
     assert r._handoff_delay() == 0
     r._driver_jobs.clear()
+
+
+def test_short_request_decodes_through_long_prefill_without_one_token_per_atom(atoms):
+    """Measured on 27B: a 20-token tool call took 27 s because it got one decode
+    step per 2048-token atom of the long prefill (52K cold tokens)."""
+    r, clock = atoms
+    cold = job(0)
+    cold.ids = list(range(32768))
+    cold.use_draft = True
+    r._submit(cold)
+    r._drive_slice(False)
+    short = job(0)
+    short.max_tokens = 20
+    r._submit(short)
+    t0 = clock[0]
+    for _ in range(400):
+        r._drive_slice(False)
+        if short.stats.generated >= 20:
+            break
+    assert short.stats.generated >= 20
+    atoms_run = sum(len(g.gen.atoms) for g in r._groups() if g.spec)
+    assert atoms_run <= 3  # the long prefill resumes after at most a couple of atoms
+    assert clock[0] - t0 < 8
