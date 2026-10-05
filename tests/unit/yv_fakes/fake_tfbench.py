@@ -16,6 +16,8 @@ ap.add_argument("--env", action="append", default=[])
 ap.add_argument("--tag", default="")
 ap.add_argument("--model")
 ap.add_argument("--smoke", action="store_true")
+ap.add_argument("--decode-tokens", type=int, default=256)
+ap.add_argument("--turn2-tokens", type=int, default=0)
 a = ap.parse_args()
 env = dict(kv.split("=", 1) for kv in a.env)
 if env.get("FAKE_CRASH") == "1":
@@ -47,6 +49,26 @@ with open(a.out, "a") as out:
         engaged_spec_mode=spec,
         src=os.environ.get("TFB_YUNSHU_SRC"),
     )
+    if a.part == "needle":
+        for ctx in ctxs:
+            for i in range(10):
+                bad = env.get("FAKE_NEEDLE_BAD") and i < int(env["FAKE_NEEDLE_BAD"])
+                emit(part="needle", ctx=ctx, item=i, correct=not bad)
+        ctxs = []
+    if a.part == "conc32":
+        slow = 2.0 if env.get("FAKE_SLOW") == "1" else 1.0
+        for t in range(2):
+            emit(
+                part="conc32",
+                trial=t,
+                ttfts=[3.0 * slow, 3.1 * slow],
+                per_req_dec=[40.0 / slow, 41.0 / slow],
+                cached=[32768, 32768],
+                pts=[34000, 34000],
+                cts=[1024, 1024],
+                shas=["a", "b"],
+            )
+        ctxs = []
     for ctx in ctxs:
         for kind in a.only_kind or ("prose", "code"):
             for phase in ("cold", "warm", "turn2"):
@@ -62,7 +84,7 @@ with open(a.out, "a") as out:
                     ctx=ctx,
                     kind=kind,
                     phase=phase,
-                    ct=16,
+                    ct=a.decode_tokens,
                     pt=ctx,
                     ttft_s=1.0 + ctx / 10000.0,
                     dec_tps=dec,

@@ -98,6 +98,7 @@ METRICS = {
     "decode_tps": ("cold", "dec_tps", True),
     "cold_ttft_s": ("cold", "ttft_s", False),
     "followup_ttft_s": ("turn2", "ttft_s", False),
+    "warm_ttft_s": ("warm", "ttft_s", False),
 }
 
 
@@ -225,6 +226,45 @@ def memory_compare(
         "regressions": regress,
         "missing": missing,
         "reps": [b["reps"], c["reps"]],
+    }
+
+
+# ── long-context retrieval (needle) ───────────────────────────────────────
+def needle_scores(rows) -> dict:
+    """{ctx: {item: bool}} from needle records (the last record of an item wins)."""
+    out: dict = {}
+    for r in rows:
+        if r.get("part") == "needle":
+            out.setdefault(r["ctx"], {})[r["item"]] = bool(r.get("correct"))
+    return out
+
+
+def needle_compare(base_rows, cand_rows, allowed: int = 1) -> dict:
+    """Retrieval answers: net difference in correct items <= `allowed`; an item missing in
+    either arm is a failure. `per_ctx` lists [base, cand, items] per context."""
+    b, c = needle_scores(base_rows), needle_scores(cand_rows)
+    per_ctx, missing, bt, ct, items = {}, [], 0, 0, 0
+    for ctx in sorted(set(b) | set(c)):
+        bi, ci = b.get(ctx, {}), c.get(ctx, {})
+        ids = sorted(set(bi) | set(ci))
+        miss = [i for i in ids if i not in bi or i not in ci]
+        if miss or not ids:
+            missing.append(f"ctx {ctx}: items {miss or 'none'}")
+        both = [i for i in ids if i in bi and i in ci]
+        per_ctx[ctx] = [sum(bi[i] for i in both), sum(ci[i] for i in both), len(both)]
+        bt += per_ctx[ctx][0]
+        ct += per_ctx[ctx][1]
+        items += len(both)
+    net = ct - bt
+    return {
+        "items": items,
+        "base_correct": bt,
+        "cand_correct": ct,
+        "net": net,
+        "per_ctx": per_ctx,
+        "missing": missing,
+        "ok": items > 0 and not missing and abs(net) <= allowed,
+        "allowed": allowed,
     }
 
 

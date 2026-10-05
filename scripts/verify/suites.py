@@ -2,7 +2,21 @@
 
 from __future__ import annotations
 
-STAGES = ("preflight", "smoke", "identity", "apc", "quality", "speed", "memory")
+STAGES = (
+    "preflight",
+    "smoke",
+    "identity",
+    "apc",
+    "quality",
+    "speed",
+    "memory",
+    "longqa",
+    "conc",
+)
+
+# `full` and `tiny` climb the original seven; the long stages (needle retrieval, concurrent
+# sub-agents) need the 32K-128K prompt files and belong to the `long` suite.
+LADDER = tuple(s for s in STAGES if s not in ("longqa", "conc"))
 
 # Every key is a default; the CLI can override ctx / reps / mmlu_n / mem_sizes.
 SUITES = {
@@ -37,7 +51,7 @@ SUITES = {
         "reps": 2,
     },
     "full": {
-        "stages": list(STAGES),
+        "stages": list(LADDER),
         "ctx": [1024, 8192, 32768],
         "spec_off": False,
         "reps": 3,
@@ -51,9 +65,25 @@ SUITES = {
         "reps": 3,
         "mmlu_n": 200,
     },
+    # long requests (agentic 32K-128K sessions): identity incl. spec on == off over 2048-token
+    # replies, cold/warm/follow-up TTFT + 2048-token decode, 32K/128K memory, needle retrieval,
+    # 2 concurrent sub-agents. One server cell per (ctx, kind) so each job stays under 20 min.
+    "long": {
+        "stages": ["preflight", "identity", "apc", "speed", "memory", "longqa", "conc"],
+        "ctx": [32768, 65536, 131072],
+        "spec_off": True,
+        "reps": 2,
+        "decode_tokens": 2048,
+        "turn2_tokens": 256,  # the follow-up measures TTFT; keeps 131K cells under 20 min
+        "split_cells": True,
+        "keep_going": True,  # a regression in one stage must not hide the others
+        "mem_sizes": [32768, 131072],
+        "mem_reps": 2,
+        "speed_tol_pct": 3.0,
+    },
     # small-model dry runs of the tool itself (and any CPU-light change): minutes, not hours
     "tiny": {
-        "stages": list(STAGES),
+        "stages": list(LADDER),
         "ctx": [1024],
         "spec_off": False,
         "reps": 3,
@@ -72,6 +102,10 @@ DEFAULTS = {
     "quality_max_tokens": 2048,
     "quality_thinking": False,
     "reuse_base_speed": False,
+    "decode_tokens": 256,
+    "turn2_tokens": 0,
+    "conc_tol_pct": 10.0,
+    "split_cells": False,
     "mem_sizes": [8192, 32768, 98304],
     "mem_reps": 2,
     "speed_tol_pct": 2.0,
