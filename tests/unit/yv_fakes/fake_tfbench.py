@@ -18,6 +18,7 @@ ap.add_argument("--model")
 ap.add_argument("--smoke", action="store_true")
 ap.add_argument("--decode-tokens", type=int, default=256)
 ap.add_argument("--turn2-tokens", type=int, default=0)
+ap.add_argument("--long-ask", action="store_true")
 a = ap.parse_args()
 env = dict(kv.split("=", 1) for kv in a.env)
 if env.get("FAKE_CRASH") == "1":
