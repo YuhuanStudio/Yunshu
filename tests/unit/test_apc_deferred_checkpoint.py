@@ -672,3 +672,22 @@ def test_restore_of_a_strided_view_checkpoint_matches_upstream():
     b = clone._upstream([view], min_capacity_tokens=70)
     assert a[0].keys.tolist() == b[0].keys.tolist()
     assert a[0].values.tolist() == b[0].values.tolist()
+
+
+def test_flush_returns_the_allocator_pool_before_copying(monkeypatch):
+    import yunshu_engine.apc_manager as am
+
+    manager = _mgr()
+    coordinator = _coordinator(manager)
+    coordinator.defer_checkpoint_stores = True
+    events = []
+    monkeypatch.setattr(mx, "clear_cache", lambda: events.append("clear"))
+    monkeypatch.setattr(am, "RELEASE_FREED_BYTES", 1)
+    monkeypatch.setattr(
+        manager, "store_exact_cache", lambda *a, **k: events.append("store") or True
+    )
+    kv = KVCache()
+    kv.update_and_fetch(mx.ones((1, 1, 32, 4)), mx.ones((1, 1, 32, 4)))
+    assert coordinator.store_checkpoint(list(range(32)), [kv], extra_hash=0)
+    coordinator.flush_deferred_checkpoints()
+    assert events[0] == "clear" and "store" in events

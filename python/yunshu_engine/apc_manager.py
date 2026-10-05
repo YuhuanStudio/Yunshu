@@ -929,9 +929,15 @@ class _Coordinator(APCCoordinator):
 
     def flush_deferred_checkpoints(self) -> None:
         pending = self.__dict__.pop("_deferred_checkpoints", [])
+        copy_bytes = getattr(self, "_deferred_bytes", 0)
         self._deferred_bytes = 0
         if not pending:
             return
+        # The prefill's freed buffers sit in MLX's allocator pool (several GiB after a long
+        # prefill) and the copies below are allocated on top of live memory: give the pool
+        # back first so the process footprint at this point is active memory, not active
+        # plus pool.
+        release_freed_buffers(copy_bytes)
         # The copies below are lazy until evaluated, so each still pins the live
         # cache's buffers as they were at capture. Free what these checkpoints supersede
         # first (the same drops ``store_exact_cache`` makes), then copy a few arrays at a
