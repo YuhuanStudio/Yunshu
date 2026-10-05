@@ -332,10 +332,29 @@ def free_port() -> int:
     raise RuntimeError("no free port in 18990-18996")
 
 
+def load_timeout(model: str) -> float:
+    """Readiness budget: 90 s + 6 s per GiB of weight files (a 58 GiB mmap model: ~440 s)."""
+    try:
+        gib = sum(f.stat().st_size for f in Path(model).glob("*.safetensors")) / 2**30
+    except OSError:
+        gib = 0.0
+    return 90 + 6 * gib
+
+
+def load_failure(log_tail: str) -> str | None:
+    """The first line of a server log that says the model did not load (pure; unit-tested)."""
+    for ln in log_tail.splitlines():
+        if "FATAL" in ln or "load failed" in ln or ln.startswith("Traceback"):
+            return ln[:300]
+    return None
+
+
 class Srv:
     def __init__(self, model: str, src: str | None, home: Path, log: Path, sets=()):
         self.port = free_port()
         self.url = f"http://127.0.0.1:{self.port}"
+        self.log = log
+        self.model_path = model
         env = {
             k: v
             for k, v in os.environ.items()
@@ -365,18 +384,55 @@ class Srv:
                 start_new_session=True,
             )
 
-    def wait_ready(self, timeout=600):
+    def log_tail(self, n: int = 50) -> str:
+        try:
+            return "".join(self.log.read_text(errors="replace").splitlines(True)[-n:])
+        except OSError:
+            return "(no server log)"
+
+    def wait_ready(self, timeout: float | None = None):
+        """Block until the model is loaded and served. Fails at once, with the server's last 50
+        log lines, when the process exits or logs a load failure; the timeout defaults to
+        90 s + 6 s per GiB of weights; progress lines are printed every 30 s."""
+        timeout = timeout or load_timeout(self.model_path)
         t0 = time.monotonic()
+        last = 0.0
         while time.monotonic() - t0 < timeout:
             if self.proc.poll() is not None:
-                raise RuntimeError(f"server exited rc={self.proc.returncode}")
+                raise RuntimeError(
+                    f"server exited rc={self.proc.returncode}; log tail:\n{self.log_tail()}"
+                )
+            fatal = load_failure(self.log_tail(200))
+            if fatal:
+                raise RuntimeError(
+                    f"server failed to load the model: {fatal}\n{self.log_tail()}"
+                )
             try:
+                with urllib.request.urlopen(self.url + "/health/ready", timeout=3) as r:
+                    ready = bool(json.load(r).get("ready"))
                 with urllib.request.urlopen(self.url + "/v1/models", timeout=3) as r:
-                    self.model_id = json.load(r)["data"][0]["id"]
+                    data = json.load(r)["data"]
+                if ready and data:
+                    self.model_id = data[0]["id"]
+                    print(
+                        f"server ready after {time.monotonic() - t0:.0f}s", flush=True
+                    )
                     return
             except Exception:
-                time.sleep(2)
-        raise RuntimeError("server not ready")
+                pass
+            if time.monotonic() - last >= 30:
+                last = time.monotonic()
+                tail = [x for x in self.log_tail(5).splitlines() if "GET /" not in x][
+                    -1:
+                ]
+                print(
+                    f"waiting for the model {last - t0:.0f}s / {timeout:.0f}s: {tail}",
+                    flush=True,
+                )
+            time.sleep(2)
+        raise RuntimeError(
+            f"server not ready after {timeout:.0f}s; log tail:\n{self.log_tail()}"
+        )
 
     def kill(self):
         if self.proc.poll() is None:

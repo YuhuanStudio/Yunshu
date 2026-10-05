@@ -270,3 +270,23 @@ def test_hol_judge_and_stream_fold():
     assert len(h.judge({"a": [bad]})) == 2
     assert h.judge({"a": [dict(rep, long=dict(rep["long"], text="x"))]})
     assert h.judge({"a": []}) == ["a: no reps"]
+
+
+def test_server_failure_detection_and_timeout(tmp_path):
+    line = "2026 ERROR yunshu_gateway.main: FATAL: model 'x' load failed: [Errno 2] ple-store.json"
+    assert "load failed" in cs.load_failure("INFO ok\n" + line + "\nINFO next")
+    assert cs.load_failure("INFO ok\nGET /v1/models 200") is None
+    assert cs.load_timeout(str(tmp_path / "missing")) == 90
+    (tmp_path / "a.safetensors").write_bytes(b"x" * 1024)
+    assert cs.load_timeout(str(tmp_path)) > 90
+
+
+def test_arms_expect():
+    m = _load("covaudit_arms")
+    want = m.parse_expect("base=FAIL,fix=PASS")
+    assert m.check_expect({"base": "FAIL", "fix": "PASS"}, want) == (True, [])
+    ok, why = m.check_expect({"base": "FAIL", "fix": "FAIL"}, want)
+    assert not ok and "fix: got FAIL" in why[0]
+    assert not m.check_expect({"base": "ERROR(2)", "fix": "PASS"}, want)[0]
+    assert not m.check_expect({"base": "FAIL"}, want)[0]
+    assert not m.check_expect({"base": "FAIL", "fix": "PASS", "x": "PASS"}, want)[0]
