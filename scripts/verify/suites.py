@@ -81,6 +81,21 @@ SUITES = {
         "mem_reps": 2,
         "speed_tol_pct": 3.0,
     },
+    # release trend: one rep of the headline long cells, no noise estimate (compare tags pairwise)
+    "longtrend": {
+        "stages": ["preflight", "identity", "apc", "memory", "longqa"],
+        "ctx": [32768, 131072],
+        "kinds": ["prose"],
+        "spec_off": True,
+        "reps": 1,
+        "decode_tokens": 2048,
+        "turn2_tokens": 256,
+        "split_cells": True,
+        "keep_going": True,
+        "mem_sizes": [131072],
+        "mem_reps": 1,
+        "apc_require_hit": False,
+    },
     # small-model dry runs of the tool itself (and any CPU-light change): minutes, not hours
     "tiny": {
         "stages": list(LADDER),
