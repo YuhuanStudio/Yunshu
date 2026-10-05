@@ -56,7 +56,8 @@ async def main() -> int:
             # ── non-streaming envelope ───────────────────────────────────────
             body = {
                 "model": MODEL,
-                "max_tokens": 40,
+                "max_tokens": 80,
+                "thinking": {"type": "disabled"},
                 "system": "You are a concise assistant. Answer in one short sentence.",
                 "messages": [
                     {"role": "user", "content": "What color is a clear daytime sky?"}

@@ -8,7 +8,7 @@ fully deterministic, instant, and runs even when the model drive is absent.
   - malformed/invalid bodies are rejected with 4xx (not 200, not 500):
     missing messages, empty messages, missing model, bad role, negative
     max_tokens, n=0
-  - a well-formed request to an unknown model (no engine) returns 404
+  - a well-formed request to an unknown model (no engine) returns 404 or 503
   - every error body is JSON carrying an "error" object (not an HTML 500 page)
 
 Run: PYTHONPATH=. uv run python scripts/verify_error_contract.py
@@ -73,7 +73,8 @@ async def main() -> int:
                 "max_tokens": 4,
             },
         )
-        checks["unknown model (no engine) → 404"] = r.status_code == 404
+        # no engine loaded: 503 (service unavailable) is the right answer; 404 if a registry answers
+        checks["unknown model (no engine) → 404 or 503"] = r.status_code in (404, 503)
         detail.append(f"unknown-model: {r.status_code}")
 
     for k, v in checks.items():

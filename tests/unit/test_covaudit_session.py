@@ -247,3 +247,26 @@ def test_wire_renderings_and_parsers():
     assert r["usage"]["cache_read_input_tokens"] == 40
     # an incomplete chat stream (no [DONE] / finish) is not "ended"
     assert not w.parse_chat_sse(chat_sse[:1])["ended"]
+
+
+def test_hol_judge_and_stream_fold():
+    h = _load("covaudit_hol")
+    ok_call = [{"name": "get_weather", "args": '{"city": "Taipei", "days": 3}'}]
+    short = {"ttft_s": 1.0, "total_s": 2.0, "text": "", "calls": ok_call, "done": True}
+    rep = {
+        "doc": 40,
+        "solo": short,
+        "short": short,
+        "long": {
+            "text": cs.needle(40),
+            "done": True,
+            "ttft_s": 1,
+            "total_s": 5,
+            "calls": [],
+        },
+    }
+    assert h.judge({"a": [rep]}) == []
+    bad = dict(rep, short=dict(short, calls=[], ttft_s=None))
+    assert len(h.judge({"a": [bad]})) == 2
+    assert h.judge({"a": [dict(rep, long=dict(rep["long"], text="x"))]})
+    assert h.judge({"a": []}) == ["a: no reps"]

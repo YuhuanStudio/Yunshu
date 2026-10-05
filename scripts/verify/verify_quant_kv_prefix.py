@@ -114,7 +114,11 @@ async def check(model, kv_quant=None):
 
 
 async def main():
-    model = sys.argv[1] if len(sys.argv) > 1 else "models/Qwen2.5-3B-Instruct-4bit"
+    model = (
+        sys.argv[1]
+        if len(sys.argv) > 1
+        else os.environ.get("YUNSHU_BENCH_MODEL", "models/Qwen2.5-3B-Instruct-4bit")
+    )
     print(f"model: {model}")
     a = await check(model, kv_quant=None)  # A: 4-bit weights, standard KV
     b = await check(model, kv_quant=8)  # B: 4-bit weights + int8 KV-cache quant

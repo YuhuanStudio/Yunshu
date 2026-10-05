@@ -269,9 +269,9 @@ if has agent-sessions; then
       else rec agent.$name SKIP "$var not set or missing"; fi
     }
     if [ -n "${M:-}" ] && [ -d "$M" ]; then
-      agent_check tool_session covaudit_session.py run --model $M --out $OUT/agent-session.jsonl --turns 6 --file-tokens 8000
+      agent_check tool_session covaudit_session.py run --model $M --out $OUT/agent-session.jsonl --turns ${AGENT_TURNS:-6} --file-tokens ${AGENT_FILE_TOKENS:-8000}
       agent_check concurrent_long covaudit_conc.py run --model $M --out $OUT/agent-conc.json
-      agent_check restart_idle covaudit_session.py restart --model $M --out $OUT/agent-restart.json --turns 3 --file-tokens 8000
+      agent_check restart_idle covaudit_session.py restart --model $M --out $OUT/agent-restart.json --turns ${AGENT_RESTART_TURNS:-3} --file-tokens ${AGENT_FILE_TOKENS:-8000}
     else rec agent.model FAIL "M (Qwen3.8-27B) not set or missing"; fi
     agent_optional stock_text_lm M_TEXT_LM covaudit_stock.py --kind lm --out $OUT/agent-stock-lm.json
     agent_optional stock_qwen35_9b M_QWEN35_9B covaudit_stock.py --kind vlm --out $OUT/agent-stock-q35.json
