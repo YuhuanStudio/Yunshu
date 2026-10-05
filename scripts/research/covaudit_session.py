@@ -299,6 +299,11 @@ def judge_rows(rows: list, turns: int, require_cache: bool = True) -> list:
     return bad
 
 
+def _calls(r: dict) -> list:
+    """Tool calls without the random ids (and anything else a tool stamps on the row)."""
+    return [(c["name"], c.get("raw")) for c in r["tool_calls"]]
+
+
 def compare_rows(a: list, b: list) -> list:
     """Mismatches between two arms' outputs on the requests both have."""
     ia = {r["req"]: r for r in a if r.get("kind") == "req"}
@@ -307,7 +312,7 @@ def compare_rows(a: list, b: list) -> list:
     out = []
     for k in keys:
         x, y = ia[k], ib[k]
-        if (x["text"], x["tool_calls"]) != (y["text"], y["tool_calls"]):
+        if (x["text"], _calls(x)) != (y["text"], _calls(y)):
             out.append(
                 f"req{k}: {x['text'][:60]!r}/{x['tool_calls'][:1]} vs {y['text'][:60]!r}/{y['tool_calls'][:1]}"
             )
