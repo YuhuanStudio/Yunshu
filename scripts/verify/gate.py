@@ -33,8 +33,16 @@ GATE_STAGES = {
     "families": ("families.", 45, 40, 20),
     "soak-mmlu": ("soak.mmlu", 90, 65, 20),
     "soak-realistic": ("soak.realistic", 60, 65, 20),
+    "agent-sessions": ("agent.", 90, 65, 20),
 }
-DEFAULT_STAGES = ["install", "serve-27b", "families", "soak-mmlu", "soak-realistic"]
+DEFAULT_STAGES = [
+    "install",
+    "serve-27b",
+    "families",
+    "soak-mmlu",
+    "soak-realistic",
+    "agent-sessions",
+]
 GATE_PORT = "18993"
 
 

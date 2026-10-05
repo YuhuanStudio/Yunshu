@@ -329,6 +329,16 @@ def _derive_vlm_quantization(config: dict) -> dict | None:
     return None
 
 
+def resolve_external_ple_manifest(config: dict, model_path) -> None:
+    """Make a relative ``text_config.ple_storage.manifest`` (qwen4_exp external PLE checkpoints)
+    absolute against the model directory, as ``mlx_vlm.utils.load_model`` does; without it the
+    model opens ``ple-store.json`` relative to the server's working directory and fails to load."""
+    ple = (config.get("text_config") or {}).get("ple_storage")
+    manifest = ple.get("manifest") if isinstance(ple, dict) else None
+    if manifest and not Path(manifest).is_absolute():
+        ple["manifest"] = str(Path(model_path) / manifest)
+
+
 class VLMEngine:
     """Multimodal (mlx-vlm) model engine.
 
@@ -543,10 +553,13 @@ class VLMEngine:
         config.setdefault("text_config", config.pop("llm_config", {}))
         config.setdefault("vision_config", {})
         config.setdefault("audio_config", {})
+        resolve_external_ple_manifest(config, model_path)
 
         model_config = model_class.ModelConfig.from_dict(config)
         modules = ["text", "vision", "perceiver", "projector", "audio"]
         model_config = update_module_configs(model_config, model_class, config, modules)
+        if hasattr(model_config, "model_path"):
+            model_config.model_path = str(model_path)
 
         model = model_class.Model(model_config)
 
@@ -2007,11 +2020,23 @@ class VLMEngine:
             self._reasoning_markers_cache = cached
         return cached
 
+    def _tool_call_marker_id(self) -> int | None:
+        """Token id of ``<tool_call>`` when the tokenizer has it as one token, else None."""
+        cached = self.__dict__.get("_tool_call_marker_cache", False)
+        if cached is False:
+            try:
+                ids = self._tokenizer.encode("<tool_call>", add_special_tokens=False)
+            except Exception:
+                ids = []
+            cached = int(ids[0]) if len(ids) == 1 else None
+            self._tool_call_marker_cache = cached
+        return cached
+
     def _runner_events(self, input_ids, **kw):
         """``_runner_events_impl`` plus the optional generated-vs-delivered capture
         (``YUNSHU_DEBUG_STREAM_CAPTURE``)."""
         tools = kw.pop("tool_recovery_tools", None)
-        events = self._runner_events_impl(input_ids, **kw)
+        events = self._runner_events_impl(input_ids, tools_declared=bool(tools), **kw)
         if tools:
             from .tool_format import formats_for_tokenizer
             from .tool_thinking import recover_tool_events
@@ -2085,6 +2110,7 @@ class VLMEngine:
         xtc_probability: float = 0.0,
         xtc_threshold: float = 0.0,
         tool_spec: dict | None = None,
+        tools_declared: bool = False,
     ):
         """Yield ``(text, token_id, state, finish_reason, thinking_tokens, logprob)``.
 
@@ -2151,6 +2177,9 @@ class VLMEngine:
                 in_think = think_end is None or think_end not in tail[last_open + 1 :]
         thinking_tokens = 0
         count = 0
+        tool_marker = (
+            self._tool_call_marker_id() if (tool_spec or tools_declared) else None
+        )
         guide = self._tool_guide(tool_spec, in_think)
         if constraint_guide is not None:
             from .constrained_spec import CombinedGuide
@@ -2208,6 +2237,12 @@ class VLMEngine:
                     yield tail, token, state, "length", thinking_tokens, lp
                     return
                 continue
+            if in_think and tool_marker is not None and token == tool_marker:
+                # Qwen3.5-family models sometimes open a tool call inside the reasoning
+                # block without closing it. The call marker ends reasoning implicitly
+                # (vLLM Qwen3ReasoningParser, SGLang Qwen3 detector), else the call is
+                # delivered as reasoning text and the client never sees it.
+                in_think = False
             if in_think:
                 thinking_tokens += 1
             state = "reasoning" if in_think else "normal"

@@ -68,7 +68,8 @@ async def main() -> int:
                 "model": MODEL,
                 "instructions": "You are concise. Answer in one short sentence.",
                 "input": "What is the largest planet in our solar system?",
-                "max_output_tokens": 40,
+                "max_output_tokens": 80,
+                "enable_thinking": False,
                 "temperature": 0.0,
             }
             # ── non-streaming envelope ───────────────────────────────────────

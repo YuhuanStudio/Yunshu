@@ -424,6 +424,18 @@
   "inspired": [
     {
       "kind": "inspired",
+      "path": "python/yunshu_engine/vlm_engine.py",
+      "repo": "https://github.com/vllm-project/vllm",
+      "clone": "reference/vllm",
+      "upstream_paths": ["vllm/reasoning/qwen3_reasoning_parser.py"],
+      "commit": "22a58640b",
+      "license": "Apache-2.0",
+      "local_changes": [
+        "a <tool_call> token inside unclosed reasoning ends reasoning (implicit end), applied in the token loop of _runner_events_impl instead of a parser; SGLang's Qwen3 detector (python/sglang/srt/parser/reasoning_parser.py) does the same"
+      ]
+    },
+    {
+      "kind": "inspired",
       "path": "python/yunshu_engine/dflash_plan.py",
       "repo": "https://github.com/ashhart/TensorFold",
       "clone": "reference/TensorFold",
