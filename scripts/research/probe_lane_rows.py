@@ -47,9 +47,7 @@ def main():
         w = mx.random.normal((n, k)).astype(mx.bfloat16)
         wq, sc, bi = mx.quantize(w, group_size=64, bits=a.bits)
         tiled = n % lane_qmm.NT == 0
-        wt = (
-            lane_qmm.tile_weight(wq, lane_qmm.NT, 64, bits=a.bits) if tiled else wq
-        )
+        wt = lane_qmm.tile_weight(wq, lane_qmm.NT, 64, bits=a.bits) if tiled else wq
         sbt = lane_qmm.pack_scales(sc, bi)
         mx.eval(wt, sbt, wq, sc, bi)
         row = {"shape": name, "K": k, "N": n}

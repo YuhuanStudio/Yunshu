@@ -87,7 +87,9 @@ def main():
         if name == "cold":
             base = r["text"]
         r["run"] = name
-        r["same_text_as_cold"] = (r["text"] == base) if name.startswith("repeat") else None
+        r["same_text_as_cold"] = (
+            (r["text"] == base) if name.startswith("repeat") else None
+        )
         r["text"] = r["text"][:60]
         rows.append(r)
         print(json.dumps(r), flush=True)

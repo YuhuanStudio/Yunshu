@@ -145,3 +145,21 @@ def test_driver_stores_only_planned_checkpoints_with_an_interval(tiny):
     _run(lm, drafter, [DOC], apc)
     stored = sorted(len(e.token_ids) for e in apc._exact_cache.values())
     assert 0 < len(stored) <= 2, stored
+
+
+def test_row_near_its_end_finishes_prefill_in_one_step(tiny):
+    """Checkpoint cuts end a row's span for the step; the atoms after them used
+    to take one multi-row step each, delaying the first token."""
+    from yunshu_engine.round_driver.driver import Request, RoundDriver
+
+    lm, drafter = tiny
+    prompt = DOC[:530]
+    ref = _run(lm, drafter, [prompt], _manager(), chunk=512)[0][0]
+    d = RoundDriver(lm, drafter=drafter, stop_tokens=set(), chunk=512, apc=_manager())
+    d.add(Request(prompt, N, handle=0))
+    first = d.step()
+    assert [e.token for e in first][:1] == ref[:1]
+    out = [e.token for e in first]
+    while d.busy():
+        out += [e.token for e in d.step()]
+    assert out == ref

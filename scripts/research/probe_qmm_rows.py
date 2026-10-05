@@ -27,9 +27,7 @@ BIG = (512, 1024, 2048, 4096)
 
 
 def run(x, w, s, b, bits):
-    return mx.quantized_matmul(
-        x, w, s, b, transpose=True, group_size=64, bits=bits
-    )
+    return mx.quantized_matmul(x, w, s, b, transpose=True, group_size=64, bits=bits)
 
 
 def main():

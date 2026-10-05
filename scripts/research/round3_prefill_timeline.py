@@ -39,6 +39,11 @@ def main():
     ap.add_argument(
         "--frac", type=float, default=1.0, help="use this fraction of the prompt file"
     )
+    ap.add_argument(
+        "--gdn-chunked",
+        action="store_true",
+        help="ablation: chunked GDN in driver prefill",
+    )
     ap.add_argument("--off", action="store_true", help="expect no driver (arm off)")
     ap.add_argument("--min-conc", type=int, default=2, help="driver routing threshold")
     ap.add_argument("--out", type=Path, required=True)
@@ -49,6 +54,12 @@ def main():
 
     vlm_batch_runner.DRIVER_MIN_CONCURRENCY = a.min_conc
     vlm_batch_runner.DRIVER_MAX_UNCACHED_TOKENS = 10**9  # measure the driver itself
+    if a.gdn_chunked:
+        import contextlib
+
+        from yunshu_engine.kernels import gdn_prefill
+
+        gdn_prefill.step_kernel = contextlib.nullcontext
     engine = VLMEngine(MODEL)
     asyncio.run(engine.start())
     runner = engine._batch_runner
@@ -73,6 +84,9 @@ def main():
                 t=round(s - t0[0], 3),
                 dur=time.perf_counter() - s,
                 tokens=sum(x.done for x in waiting),
+                rows=[(x.done, len(x.req.ids), x.pending is not None) for x in waiting],
+                events=[round(time.perf_counter() - t0[0], 3) for _ in r[:1]],
+                n_events=len(r),
             )  # fmt: skip
         )
         return r
