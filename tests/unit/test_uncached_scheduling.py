@@ -690,3 +690,35 @@ def test_request_between_templating_and_submit_is_awaited_before_the_next_atom(a
     assert r._handoff_delay() == 0
     r.inflight = lambda: 2
     assert r._handoff_delay() > 0  # a new episode waits again
+
+
+def test_long_reply_decode_share_is_capped_while_another_request_prefills(atoms):
+    """A row past its first tokens must not take half the GPU from a cold prefill."""
+    r, clock = atoms
+    a = job(0)
+    a.max_tokens = 2000
+    r._submit(a)
+    for _ in range(400):
+        r._drive_slice(False)
+        if a.stats.generated >= 200:
+            break
+    assert a.stats.generated >= 200
+    cold = job(0)
+    cold.ids = list(range(8192))
+    r._submit(cold)
+    t0 = clock[0]
+    for _ in range(2000):
+        r._drive_slice(False)
+        if cold.stats.t_first:
+            break
+    assert cold.stats.t_first
+    prefill_s = 4 * 2048 * 0.00121
+    assert clock[0] - t0 < prefill_s * 1.2
+
+
+def test_early_rows_keep_the_generous_decode_share(atoms):
+    r, _ = atoms
+    from yunshu_engine.serving.work_scheduler import decode_quantum
+
+    assert decode_quantum(2.0, early=True) == 2.0
+    assert decode_quantum(2.0, early=False) < 0.3

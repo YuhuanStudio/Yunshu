@@ -21,6 +21,12 @@ DECODE_QUANTUM_S = 0.075
 # that finishes inside the window costs the long prefill only its own decode
 # time, but its tokens no longer trickle out one per 2048-token atom.
 DECODE_SHARE = 1.0
+# Only rows within their first DECODE_EARLY_TOKENS tokens (a tool call, a JSON
+# answer, the start of a reply) get the generous share. Once every decoding row
+# is past that, a long reply earns DECODE_TAIL_SHARE, which bounds how much a
+# long cold prefill is slowed by someone else's long generation.
+DECODE_EARLY_TOKENS = 128
+DECODE_TAIL_SHARE = 0.1
 DECODE_QUANTUM_MAX_S = 4.0
 # A row that has just received its first token gets one burst of decode before
 # the next prefill atom, so a short tool call or answer completes inside a
@@ -36,9 +42,10 @@ PREFILL_TOKEN_S = 0.00121
 FIXED_S = 0.236
 
 
-def decode_quantum(atom_s: float) -> float:
+def decode_quantum(atom_s: float, early: bool = True) -> float:
     """Decode time owed to running rows after a prefill atom that took ``atom_s``."""
-    return min(DECODE_QUANTUM_MAX_S, max(DECODE_QUANTUM_S, DECODE_SHARE * atom_s))
+    share = DECODE_SHARE if early else DECODE_TAIL_SHARE
+    return min(DECODE_QUANTUM_MAX_S, max(DECODE_QUANTUM_S, share * atom_s))
 
 
 @dataclass(frozen=True)

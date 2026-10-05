@@ -41,6 +41,7 @@ from .keyed_sampling import top_k_filter, top_p_filter
 from .serving.busy_time import BusyMeter
 from .serving.work_scheduler import (
     AGING_S,
+    DECODE_EARLY_TOKENS,
     DECODE_FIRST_BURST_S,
     PREPARE_WAIT_MAX,
     PREPARE_WAIT_S,
@@ -1515,7 +1516,7 @@ class VLMBatchRunner:
                         not job.stats.t_first
                         and self._work(job).uncached_tokens <= PREFILL_STEP
                     )
-                    self._decode_debt = decode_quantum(elapsed)
+                    self._decode_debt = decode_quantum(elapsed, self._early_decode())
                 elif not first_pending:
                     self._decode_debt = max(0.0, self._decode_debt - elapsed)
                 return
@@ -1648,11 +1649,21 @@ class VLMBatchRunner:
                     (uid,) = batch.uids  # prefill_batch_size is always one
                     group.prefills[uid] = batch
                     group.gen._prompt_batch = None
-                self._decode_debt = decode_quantum(elapsed)
+                self._decode_debt = decode_quantum(elapsed, self._early_decode())
                 if final_atom:
                     self._decode_debt = max(self._decode_debt, DECODE_FIRST_BURST_S)
             elif not first_pending:
                 self._decode_debt = max(0.0, self._decode_debt - elapsed)
+
+    def _early_decode(self) -> bool:
+        """True while some decoding primary row is still within its first tokens."""
+        return any(
+            j.priority >= 0
+            and j.stats.t_first
+            and j.stats.generated < DECODE_EARLY_TOKENS
+            for g in self._groups()
+            for j in g.jobs.values()
+        )
 
     def _wake_handoff(self, timer: threading.Thread | None = None) -> None:
         current = threading.current_thread() if timer is None else timer
