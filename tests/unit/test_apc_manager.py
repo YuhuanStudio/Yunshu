@@ -652,3 +652,35 @@ def test_anchor_budget_on_a_big_machine_is_one_gib():
     m.memory_max_bytes = 32 << 30  # the 128 GB machine's APC budget
     # each anchor owns a ~0.2 GiB recurrent state that cannot be shared: ~5 anchors at most
     assert m.anchor_budget_bytes() == 1 << 30
+
+
+def test_immediate_checkpoint_store_re_points_anchors_at_once(monkeypatch):
+    """A store that cannot be deferred (APC budget) has no flush after it: the anchors must
+    not keep, and pin, their own K/V buffers until some later flush."""
+    from mlx_vlm.apc_coordinator import APCCoordinator
+
+    m = _mgr()
+    prompts = _conversation(turns=6, step=5000)
+    for i, p in enumerate(prompts[:-1]):
+        if i:
+            m.lookup_exact_cache(p)
+        _turn(m, p)
+        m.share_anchor_rows(p[: len(p) - 1], 0)
+    last = prompts[-1]
+    m.lookup_exact_cache(last)
+    final = last[: len(last) - 1]
+
+    def upstream_store(self, token_ids, prompt_cache, **kw):
+        return self.manager.store_exact_cache(tuple(token_ids), prompt_cache)
+
+    monkeypatch.setattr(APCCoordinator, "store_checkpoint", upstream_store)
+    c = _coordinator(m)
+    c.defer_checkpoint_stores = False
+    m.begin_request()
+    assert c.store_checkpoint(final, _cache(len(final)))
+    anchors = [e for k, e in m._exact_cache.items() if k in m._anchors]
+    assert anchors
+    # every anchor at or below the restore point already views the new checkpoint's buffer
+    assert all(k in m._kv_share for k in m._anchors if k in m._exact_cache)
+    state_only = sum(sum(x.nbytes for x in e.prompt_cache[0].cache) for e in anchors)
+    assert m.anchor_bytes() <= state_only + 4096

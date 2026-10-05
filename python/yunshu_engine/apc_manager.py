@@ -888,6 +888,11 @@ class _Coordinator(APCCoordinator):
             )
             if ok:
                 self._publish_checkpoint_policy(tokens, extra_hash, policy, signature)
+                # an immediate store superseded the earlier checkpoints without a flush to
+                # follow: anchors would otherwise keep (and pin) their own buffers
+                share = getattr(self.manager, "share_anchor_rows", None)
+                if share is not None:
+                    share(tokens, extra_hash)
             return ok
         targets: list[Any] = []
         snapshot = [
@@ -902,6 +907,11 @@ class _Coordinator(APCCoordinator):
             )
             if ok:
                 self._publish_checkpoint_policy(tokens, extra_hash, policy, signature)
+                # an immediate store superseded the earlier checkpoints without a flush to
+                # follow: anchors would otherwise keep (and pin) their own buffers
+                share = getattr(self.manager, "share_anchor_rows", None)
+                if share is not None:
+                    share(tokens, extra_hash)
             return ok
         pending = self.__dict__.setdefault("_deferred_checkpoints", [])
         pending.append(

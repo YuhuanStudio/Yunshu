@@ -160,6 +160,10 @@ def run_arm(name, tree, model, port, rep, emit, sizes, out_path, session=None):
         YUNSHU_AUTH_DISABLED="1",
         YUNSHU_VLM_APC_DISK="0",
     )
+    if os.environ.get("APC_PROBE_DIR"):
+        env["APC_PROBE_LOG"] = os.path.join(
+            os.environ["APC_PROBE_DIR"], f"{name}_{rep}.jsonl"
+        )
     log = open(f"{os.path.splitext(out_path)[0]}_{name}_{rep}.log", "w")  # noqa: SIM115
     proc = subprocess.Popen(
         [
