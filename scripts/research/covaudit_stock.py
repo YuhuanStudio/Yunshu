@@ -37,8 +37,8 @@ def png_b64() -> str:
 
 def question(doc_tokens: int, image: bool) -> str:
     q = f"<file>\n{file_text(5, doc_tokens)}\n</file>\n"
-    q += "State the SECRET_CODE of the file above"
-    q += ", then describe the image in one sentence." if image else "."
+    q += "State the SECRET_CODE of the file above, then list the names of the first 12 functions in it, one per line"
+    q += ", then describe the image in two sentences." if image else "."
     return q
 
 
@@ -64,6 +64,10 @@ def judge(server: str, stock: str, min_agree: int, image: bool) -> list:
         if needle(5) not in t:
             bad.append(f"{tag} did not recall {needle(5)}: {t[:80]!r}")
     n = agree(server, stock)
+    if min(len(server), len(stock)) < min_agree and server == stock:
+        bad.append(
+            f"reply of {len(server)} chars is too short to compare (< {min_agree})"
+        )
     if server != stock and n < min_agree:
         bad.append(
             f"diverge at char {n} (< {min_agree}): {server[n : n + 40]!r} vs {stock[n : n + 40]!r}"
@@ -112,7 +116,7 @@ def main(argv=None) -> int:
     ap.add_argument("--src")
     ap.add_argument("--out", required=True)
     ap.add_argument("--doc-tokens", type=int, default=4000)
-    ap.add_argument("--tokens", type=int, default=120)
+    ap.add_argument("--tokens", type=int, default=200)
     ap.add_argument("--min-agree", type=int, default=150)
     a = ap.parse_args(argv)
     out = Path(a.out)

@@ -169,6 +169,7 @@ def test_stock_judge():
     m = _load("covaudit_stock")
     t = f"The code is {m.needle(5)} and more words follow here."
     assert m.judge(t, t, 10, False) == []
+    assert m.judge(t, t, 500, False)  # identical but too short to mean anything
     assert m.judge(t, t[:-3] + "xyz", 30, False) == []
     assert m.judge(t, "The code is " + m.needle(5) + " other", 60, False)
     assert m.judge("", t, 10, False)
@@ -182,3 +183,67 @@ def test_orphans_summarize():
     assert all(
         (m.ROOT / "scripts/verify" / f"verify_{n}.py").exists() for n in m.DEFAULT
     )
+
+
+def test_gate_runs_agent_sessions():
+    import sys
+
+    sys.path.insert(0, str(ROOT / "scripts"))
+    from verify import gate
+
+    assert "agent-sessions" in gate.GATE_STAGES
+    assert "agent-sessions" in gate.DEFAULT_STAGES
+    sh = (ROOT / "scripts/release/gate.sh").read_text()
+    assert "has agent-sessions" in sh
+    for script in (
+        "covaudit_session.py",
+        "covaudit_conc.py",
+        "covaudit_stock.py",
+    ):
+        assert script in sh and (ROOT / "scripts/research" / script).exists()
+
+
+def test_wire_renderings_and_parsers():
+    w = _load("covaudit_wire")
+    b1 = cs.first_body(2, "m")
+    reply = cs.parse_sse(SSE.splitlines())
+    b2 = cs.next_body(b1, reply, 1, 50)
+    chat = w.to_chat(b2)
+    roles = [m["role"] for m in chat["messages"]]
+    assert roles == ["system", "user", "assistant", "tool"]
+    assert chat["messages"][2]["tool_calls"][0]["id"] == "t1"
+    assert chat["messages"][3]["tool_call_id"] == "t1"
+    rsp = w.to_responses(b2)
+    assert [i["type"] for i in rsp["input"]] == [
+        "message",
+        "function_call",
+        "function_call_output",
+    ]
+    assert rsp["input"][2]["call_id"] == "t1"
+
+    chat_sse = [
+        'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"Read","arguments":"{\\"file_path\\": "}}]}}]}',
+        'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\\"src/pkg/mod_1.py\\"}"}}]},"finish_reason":"tool_calls"}]}',
+        'data: {"choices":[],"usage":{"prompt_tokens":100,"completion_tokens":5,"prompt_tokens_details":{"cached_tokens":90}}}',
+        "data: [DONE]",
+    ]
+    r = w.parse_chat_sse([x.encode() for x in chat_sse])
+    assert r["ended"] and r["stop_reason"] == "tool_use"
+    assert r["tool_calls"][0]["input"] == {"file_path": "src/pkg/mod_1.py"}
+    assert (
+        r["usage"]["cache_read_input_tokens"] == 90 and r["usage"]["input_tokens"] == 10
+    )
+
+    resp_sse = [
+        'data: {"type":"response.output_item.added","item":{"type":"function_call","id":"i1","call_id":"c9","name":"Read","arguments":""}}',
+        'data: {"type":"response.function_call_arguments.delta","item_id":"i1","delta":"{\\"file_path\\": \\"src/pkg/mod_2.py\\"}"}',
+        'data: {"type":"response.completed","response":{"output":[{"type":"function_call"}],"usage":{"input_tokens":50,"output_tokens":4,"input_tokens_details":{"cached_tokens":40}}}}',
+    ]
+    r = w.parse_responses_sse(resp_sse)
+    assert r["ended"] and r["stop_reason"] == "tool_use"
+    assert r["tool_calls"][0]["id"] == "c9" and r["tool_calls"][0]["input"][
+        "file_path"
+    ].endswith("mod_2.py")
+    assert r["usage"]["cache_read_input_tokens"] == 40
+    # an incomplete chat stream (no [DONE] / finish) is not "ended"
+    assert not w.parse_chat_sse(chat_sse[:1])["ended"]

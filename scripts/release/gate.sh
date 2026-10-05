@@ -5,7 +5,7 @@
 #   STAGE=install,serve-27b zsh scripts/release/gate.sh # any subset, comma-separated
 #   STAGE=service GATE_SERVICE=1 zsh scripts/release/gate.sh   # loads a real launchd agent
 #
-# Stages: install serve-27b families soak service (soak = soak-mmlu + soak-realistic, selectable
+# Stages: install serve-27b families soak agent-sessions service (soak = soak-mmlu + soak-realistic, selectable
 # separately: yv gate runs and records each stage on its own so a rerun skips what passed). Model paths come from the environment
 # or scripts/research/local.env (gitignored; names in scripts/release/local.env.example).
 # Everything the gate installs or writes lives under $GATE_ROOT (HOME, uv tool dirs,
@@ -19,7 +19,7 @@ ROOT=$PWD
 
 GATE_ROOT=${GATE_ROOT:-$HOME/.cache/yunshu/gate}
 OUT=${OUT:-docs/research/runs/$(date +%Y-%m-%d)-release-gate}
-STAGE=${STAGE:-install,serve-27b,families,soak}
+STAGE=${STAGE:-install,serve-27b,families,soak,agent-sessions}
 PORT=${PORT:-18764}
 URL=http://127.0.0.1:$PORT
 PY=${PY:-$ROOT/.venv/bin/python}           # harness interpreter (the repo venv)
@@ -242,6 +242,40 @@ if has soak || has soak-mmlu || has soak-realistic; then
     else rec soak.boot FAIL "server did not become ready (soak-server.log)"; fi
     stop $YP
     log_clean soak.log_clean $OUT/soak-server.log
+  fi
+fi
+
+# ── 4b. agent-sessions: what long agent traffic does (docs/guides/RELEASE_GATE.md) ───
+# Each check starts its own server (isolated HOME, cold cache) on the installed binary and
+# ends with a RESULT PASS/FAIL line. The first three need the 27B; the stock-parity ones use small models.
+if has agent-sessions; then
+  log "stage agent-sessions"
+  if need_bin $BV agent.binary; then
+    export COVAUDIT_BIN=$BV
+    agent_check(){  # $1 check name, rest: script under scripts/research and its arguments
+      local name=$1; shift
+      $PY $ROOT/scripts/research/"$@" > $OUT/agent-$name.log 2>&1
+      local last=$(grep -E '^RESULT' $OUT/agent-$name.log | tail -1)
+      if [[ $last == "RESULT PASS" ]]; then
+        rec agent.$name PASS "$(grep -E '^req|^after|^solo|^agree' $OUT/agent-$name.log | tail -1 | cut -c1-200)"
+      else
+        rec agent.$name FAIL "${last:-no RESULT line} $(grep -E 'JUDGE FAIL|FAIL:' $OUT/agent-$name.log | head -2 | cut -c1-200 | tr '\n' ' ')"
+      fi
+    }
+    agent_optional(){  # $1 check name, $2 model var, rest: script + args (model path appended by --model)
+      local name=$1 var=$2; shift 2
+      local mp=${(P)var:-}
+      if [ -n "$mp" ] && [ -e "$mp" ]; then agent_check $name "$1" run --model $mp "${@:2}"
+      else rec agent.$name SKIP "$var not set or missing"; fi
+    }
+    if [ -n "${M:-}" ] && [ -d "$M" ]; then
+      agent_check tool_session covaudit_session.py run --model $M --out $OUT/agent-session.jsonl --turns 6 --file-tokens 8000
+      agent_check concurrent_long covaudit_conc.py run --model $M --out $OUT/agent-conc.json
+      agent_check restart_idle covaudit_session.py restart --model $M --out $OUT/agent-restart.json --turns 3 --file-tokens 8000
+    else rec agent.model FAIL "M (Qwen3.8-27B) not set or missing"; fi
+    agent_optional stock_text_lm M_TEXT_LM covaudit_stock.py --kind lm --out $OUT/agent-stock-lm.json
+    agent_optional stock_qwen35_9b M_QWEN35_9B covaudit_stock.py --kind vlm --out $OUT/agent-stock-q35.json
+    agent_optional stock_gemma_image M_GEMMA covaudit_stock.py --kind vlm --image --out $OUT/agent-stock-gemma.json
   fi
 fi
 

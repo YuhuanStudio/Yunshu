@@ -76,7 +76,7 @@ changes.
 ## `yv gate`
 
 Runs `scripts/release/gate.sh` one stage per gpuq job (`install`, `serve-27b`, `families`,
-`soak-mmlu`, `soak-realistic`; port 18993) and records each in `runs/gate-<commit>/`. A stage
+`soak-mmlu`, `soak-realistic`, `agent-sessions`; port 18993) and records each in `runs/gate-<commit>/`. A stage
 passes when its check rows have no FAIL or CONTENDED, at least one PASS, and the job exited 0.
 A rerun on the same commit skips passed stages (`--fresh` reruns all); `install` reruns if
 `$GATE_ROOT` holds another commit's install.

@@ -36,7 +36,34 @@ from pathlib import Path
 MAIN = Path(
     os.environ.get("YUNSHU_MAIN", "/Users/yuhuan/Documents/YuhuanStudio/Yunshu")
 )
-WORDS = ["amber", "birch", "cedar", "delta", "ember", "frost", "glint", "hazel", "ivory", "jade", "kelp", "lotus", "maple", "nectar", "onyx", "pearl", "quartz", "raven", "sage", "tulip", "umber", "violet", "willow", "xenon", "yarrow", "zephyr"]
+WORDS = [
+    "amber",
+    "birch",
+    "cedar",
+    "delta",
+    "ember",
+    "frost",
+    "glint",
+    "hazel",
+    "ivory",
+    "jade",
+    "kelp",
+    "lotus",
+    "maple",
+    "nectar",
+    "onyx",
+    "pearl",
+    "quartz",
+    "raven",
+    "sage",
+    "tulip",
+    "umber",
+    "violet",
+    "willow",
+    "xenon",
+    "yarrow",
+    "zephyr",
+]
 
 TOOLS = [
     {
@@ -102,13 +129,15 @@ def path_of(i: int) -> str:
     return f"src/pkg/mod_{i}.py"
 
 
-def first_body(n_files: int, model: str, max_tokens: int = 200) -> dict:
+def first_body(
+    n_files: int, model: str, max_tokens: int = 200, thinking: bool = False
+) -> dict:
     ask = (
         f"Read the files {path_of(1)} through {path_of(n_files)} with the Read tool, one call per turn "
         "and nothing else. After the last file reply with one line `CODES: ` followed by the "
         "SECRET_CODE of each file in order, separated by spaces."
     )
-    return {
+    body = {
         "model": model,
         "max_tokens": max_tokens,
         "temperature": 0,
@@ -116,8 +145,12 @@ def first_body(n_files: int, model: str, max_tokens: int = 200) -> dict:
         "system": SYSTEM,
         "tools": TOOLS,
         "messages": [{"role": "user", "content": ask}],
-        "thinking": {"type": "disabled"},
     }
+    if (
+        not thinking
+    ):  # a client that leaves thinking on (Codex, Claude Code default) omits the key
+        body["thinking"] = {"type": "disabled"}
+    return body
 
 
 def next_body(prev: dict, reply: dict, k: int, file_tokens: int) -> dict:
@@ -308,7 +341,7 @@ class Srv:
         if src:
             env["PYTHONPATH"] = src + os.pathsep + env.get("PYTHONPATH", "")
         cmd = [
-            str(MAIN / ".venv/bin/yunshu"),
+            os.environ.get("COVAUDIT_BIN") or str(MAIN / ".venv/bin/yunshu"),
             "serve",
             "-m",
             model,
@@ -359,7 +392,15 @@ class Srv:
         return True
 
 
+API = "messages"  # set from --api: messages (Claude Code) | chat (opencode) | responses (Codex)
+
+
 def send(url: str, body: dict, timeout=900) -> dict:
+    if API != "messages":
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from covaudit_wire import send_api
+
+        return send_api(url, body, API, timeout)
     req = urllib.request.Request(
         url + "/v1/messages",
         data=json.dumps(body).encode(),
@@ -409,7 +450,7 @@ def cmd_run(a) -> int:
                     print("FAIL: stream ended without message_stop", file=sys.stderr)
                     return 2
         else:
-            body = first_body(a.turns, srv.model_id)
+            body = first_body(a.turns, srv.model_id, a.max_tokens, a.thinking)
             for k in range(1, a.turns + 2):
                 with bodies_path.open("a") as f:
                     f.write(json.dumps(body) + "\n")
@@ -470,7 +511,7 @@ def cmd_restart(a) -> int:
     try:
         srv = Srv(a.model, a.src, home, out.with_suffix(".server1.log"), a.set)
         srv.wait_ready()
-        body = first_body(a.turns, srv.model_id)
+        body = first_body(a.turns, srv.model_id, a.max_tokens, a.thinking)
         for k in range(1, a.turns + 2):
             res = send(srv.url, body)
             print(
@@ -519,6 +560,11 @@ def main(argv=None) -> int:
             "--file-tokens", type=int, default=8000 if name == "run" else 6000
         )
         r.add_argument("--set", action="append", default=[])
+        r.add_argument("--max-tokens", type=int, default=200)
+        r.add_argument("--thinking", action="store_true")
+        r.add_argument(
+            "--api", choices=["messages", "chat", "responses"], default="messages"
+        )
         if name == "run":
             r.add_argument("--replay")
             r.add_argument("--only-last", action="store_true")
@@ -531,6 +577,8 @@ def main(argv=None) -> int:
     j.add_argument("a")
     j.add_argument("--turns", type=int, default=6)
     a = ap.parse_args(argv)
+    global API
+    API = getattr(a, "api", "messages")
 
     def rd(p):
         return [json.loads(x) for x in Path(p).read_text().splitlines()]
