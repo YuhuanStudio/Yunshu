@@ -68,6 +68,7 @@ def main(argv=None):
     ap.add_argument("--parts", default="needle,decode")
     ap.add_argument("--decode-tokens", type=int, default=2048)
     ap.add_argument("--kinds", default="prose,code")
+    ap.add_argument("--long-ask", action="store_true", help="same LONG_ASK as tfbench")
     ap.add_argument(
         "--apc", action="store_true", help="mlx-vlm's own prefix cache for needle"
     )
