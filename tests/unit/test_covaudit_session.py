@@ -267,7 +267,11 @@ def test_hol_judge_and_stream_fold():
     }
     assert h.judge({"a": [rep]}) == []
     bad = dict(rep, short=dict(short, calls=[], ttft_s=None))
-    assert len(h.judge({"a": [bad]})) == 2
+    assert len(h.judge({"a": [bad]})) == 3
+    assert h.judge({"a": [dict(rep, short=dict(short, text="x"))]})
+    other = dict(rep["long"], text=cs.needle(40) + "!")
+    assert h.judge({"a": [dict(rep, solo_long=other)]})
+    assert h.judge({"a": [dict(rep, solo_long=rep["long"])]}) == []
     assert h.judge({"a": [dict(rep, long=dict(rep["long"], text="x"))]})
     assert h.judge({"a": []}) == ["a: no reps"]
 
