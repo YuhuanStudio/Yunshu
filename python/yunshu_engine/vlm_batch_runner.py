@@ -41,6 +41,7 @@ from .keyed_sampling import top_k_filter, top_p_filter
 from .serving.busy_time import BusyMeter
 from .serving.work_scheduler import (
     AGING_S,
+    DECODE_FIRST_BURST_S,
     PRIMARY_HANDOFF_S,
     Work,
     decode_quantum,
@@ -1645,6 +1646,8 @@ class VLMBatchRunner:
                     group.prefills[uid] = batch
                     group.gen._prompt_batch = None
                 self._decode_debt = decode_quantum(elapsed)
+                if final_atom:
+                    self._decode_debt = max(self._decode_debt, DECODE_FIRST_BURST_S)
             elif not first_pending:
                 self._decode_debt = max(0.0, self._decode_debt - elapsed)
 

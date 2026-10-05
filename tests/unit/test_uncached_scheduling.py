@@ -320,7 +320,7 @@ def test_last_atom_and_first_token_precede_decode_repayment(atoms):
     assert not any(uid == long.uid for uid, _, _ in g.gen.atoms)
     # First-token delivery does not silently erase the fairness obligation.
     assert r._decode_debt >= DECODE_QUANTUM_S
-    for _ in range(12):
+    for _ in range(30):
         r._drive_slice(False)
     assert any(uid == long.uid for uid, _, _ in g.gen.atoms)
 
@@ -670,5 +670,5 @@ def test_short_request_decodes_through_long_prefill_without_one_token_per_atom(a
             break
     assert short.stats.generated >= 20
     atoms_run = sum(len(g.gen.atoms) for g in r._groups() if g.spec)
-    assert atoms_run <= 3  # the long prefill resumes after at most a couple of atoms
+    assert atoms_run <= 2  # the long prefill resumes after one atom, not one per token
     assert clock[0] - t0 < 8

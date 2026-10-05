@@ -22,6 +22,10 @@ DECODE_QUANTUM_S = 0.075
 # time, but its tokens no longer trickle out one per 2048-token atom.
 DECODE_SHARE = 1.0
 DECODE_QUANTUM_MAX_S = 4.0
+# A row that has just received its first token gets one burst of decode before
+# the next prefill atom, so a short tool call or answer completes inside a
+# single window instead of waiting for a second long atom (~2-3 s each).
+DECODE_FIRST_BURST_S = 1.0
 PRIMARY_HANDOFF_S = 0.10
 PREFILL_TOKEN_S = 0.00121
 FIXED_S = 0.236
