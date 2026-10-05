@@ -721,7 +721,44 @@ class VLMBatchRunner:
             return False
         if alone and DRIVER_MIN_CONCURRENCY >= 2:
             return False
-        return self._work(job).uncached_tokens <= DRIVER_MAX_UNCACHED_TOKENS
+        return self._driver_uncached(job) <= DRIVER_MAX_UNCACHED_TOKENS
+
+    def _driver_uncached(self, job: _Job) -> int:
+        """Prompt tokens the round driver would prefill: the driver reads its own
+        APC namespace (its prefill arithmetic and head KV differ from the upstream
+        path's), so a prefix cached by the upstream path is cold for it."""
+        n = len(job.ids)
+        drv, mgr = self.driver, self.apc_manager
+        entries = getattr(mgr, "_exact_cache", None)
+        lock = getattr(mgr, "lock", None)
+        if (
+            drv is None
+            or getattr(drv, "apc", None) is None
+            or lock is None
+            or not isinstance(entries, dict)
+            or job.priority < 0
+        ):
+            return n
+        drafting = drv.will_draft(
+            sampling=job.sampling,
+            processors=job.processors,
+            logprobs=job.logprobs,
+            draft=job.allow_draft,
+        )
+        salt = drv.apc_salt(self.apc_semantic_hash or 0, drafting)
+        tokens = tuple(job.ids)
+        with lock:
+            hit = max(
+                (
+                    len(e.token_ids)
+                    for e in entries.values()
+                    if e.extra_hash == salt
+                    and 0 < len(e.token_ids) < n
+                    and tokens[: len(e.token_ids)] == e.token_ids
+                ),
+                default=0,
+            )
+        return n - hit
 
     def _admit(self, job: _Job, alone: bool) -> None:
         from .mrope import clear_rope_state

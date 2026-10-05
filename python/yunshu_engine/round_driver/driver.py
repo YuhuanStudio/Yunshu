@@ -275,6 +275,38 @@ class RoundDriver:
 
         return APCCoordinator(manager, self.lm)
 
+    def will_draft(self, *, sampling, processors, logprobs, draft: bool) -> bool:
+        """Whether a request with these fields gets an MTP head row (as ``add``)."""
+        return bool(
+            draft
+            and self.head is not None
+            and (
+                sampling is None
+                or (
+                    not processors
+                    and not logprobs
+                    and keyed_sampling.supports(sampling)
+                )
+            )
+        )
+
+    def apc_salt(self, extra_hash: int, drafting: bool) -> int:
+        """APC key of this driver's cache layout. Entries carry the head's KV only
+        for rows that draft and come from this driver's numerics, so they are kept
+        apart from the upstream runner's entries; the prefill arithmetic (NAX /
+        chunked GDN) is part of the key, a checkpoint is not read back by a run
+        without those kernels."""
+        from ..kernels import gdn_prefill, nax_prefill
+
+        arith = gdn_prefill.kernel_id() + (
+            nax_prefill.arithmetic_id() if nax_prefill.enabled() else "lane"
+        )
+        mix = f"{extra_hash}:round-driver:{int(drafting)}:{arith}"
+        return (
+            int.from_bytes(hashlib.blake2b(mix.encode(), digest_size=8).digest(), "big")
+            >> 1
+        )
+
     def _restore(self, row: _Row) -> None:
         """Start ``row`` from the longest stored checkpoint of its prompt and
         plan the checkpoints it stores on the way."""
@@ -283,21 +315,7 @@ class RoundDriver:
         ids = row.req.ids
         # one coordinator per row: its checkpoint plan is request state
         row.apc = self._new_coordinator(self._apc_manager)
-        # Entries carry the head's KV only for rows that draft, and come from
-        # this driver's numerics: keep them apart from other users of the
-        # manager (the upstream runner's entries) and between layouts.
-        from ..kernels import gdn_prefill, nax_prefill
-
-        # the prefill arithmetic is part of the key: a checkpoint written with the
-        # NAX / chunked-GDN kernels is not read back by a run without them
-        arith = gdn_prefill.kernel_id() + (
-            nax_prefill.arithmetic_id() if nax_prefill.enabled() else "lane"
-        )
-        mix = f"{int(row.req.extra_hash)}:round-driver:{int(row.mtp_cache is not None)}:{arith}"
-        row.salt = (
-            int.from_bytes(hashlib.blake2b(mix.encode(), digest_size=8).digest(), "big")
-            >> 1
-        )
+        row.salt = self.apc_salt(int(row.req.extra_hash), row.mtp_cache is not None)
         try:
             hit = row.apc.lookup(
                 ids,
