@@ -1113,3 +1113,25 @@ Prefill speed, single prompt, driver-forced vs off (TTFT s): 1K 1.33 vs 1.22, 4K
 1K cold, routed vs off, mean TTFT s (3 reps, arm order rotated): c=2 1.77 vs 1.93, c=4 3.65 vs 3.33 (+9.6%), c=8 5.76 vs 6.17; aggregate tok/s 87 / 113 / 120 vs 42 / 66 / 93; per-request decode tok/s 71.6 / 55.6 / 27.5 vs 25.1 / 21.6 / 17.2.
 Longer prompts with the driver forced (mean / max TTFT s, 2 reps): 8K c=2 12.84 / 17.4 vs off 12.84 / 16.05; 8K c=4 22.4 / 36.8 vs 20.8 / 32.9 (+8%); 32K c=2 58.4 / 78.8 vs 53.4 / 70.7 (+9%); 32K c=4 99.3 / 160.4 vs 89.8 / 144.1 (+10%). `DRIVER_MAX_UNCACHED_TOKENS` raised 4096 -> 8192 (8K c=2 equal; the driver gains decode speed there). Remaining per-token gap ~6% (suspect: the 512-row attention grid, not yet profiled separately).
 Parity after these changes: driver alone / batch / stagger / AR identical; serving allow_draft on == off, cold == warm for code and prose at 1K.
+
+2026-10-05 Round driver on long requests (branch round3; Qwen3.8-27B oQ4e-mtp, M5 Max; data docs/research/runs/2026-10-05-round3e/). The user-relevant cells are warm long contexts (cached prefix + 2K new turn, 2000-token reply); 1K cells are secondary.
+Warm cells, driver forced (`DRIVER_MAX_UNCACHED_TOKENS` raised so every prompt, primes included, runs on the driver) vs off; c prefixes primed concurrently, then c turns of prefix + 2048 new tokens (8K cells: 1024), max_tokens 2000, one rep. TTFT s per request, per-request decode tok/s over the whole reply (a reply that ends early on EOS is short: tokens in brackets), job-end footprint GiB:
+
+| cell | arm | TTFT | decode tok/s (tokens) | wall s | footprint end |
+|---|---|---|---|---|---|
+| 8K c=2 | off | 2.9 1.4 | 25.4 24.9 (524, 1805) | 73.8 | 25.0 |
+| 8K c=2 | driver | 2.8 1.4 | 71.7 101.0 (624, 2000) | 21.2 | 25.8 |
+| 8K c=4 | off | 4.4 2.9 1.4 5.9 | 21-23 | 91.3 | 28.4 |
+| 8K c=4 | driver | 2.9 1.5 4.4 5.9 | 32.9 65.4 49.7 63.4 | 37.5 | 29.7 |
+| 32K c=2 | off | 6.3 2.9 | 22.5 27.1 (2000, 283) | 95.0 | 32.5 |
+| 32K c=2 | driver | 7.6 3.6 | 65.5 26.5 (2000, 258) | 38.1 | 40.6 |
+| 32K c=4 | off | 3.1 6.4 13.1 9.8 | 17.6 12.3 19.1 17.6 | 117.7 | 48.8 |
+| 32K c=4 | driver | 11.9 7.6 3.9 16.3 | 47.4 15.4 42.5 53.6 | 54.1 | 60.5 |
+| 64K c=2 | off | 8.2 3.8 | 17.4 18.0 | 115.0 | 48.3 |
+| 64K c=2 | driver | 10.7 5.2 | 39.0 46.5 | 61.9 | 58.8 |
+
+Decode at long KV holds up: 2.3-3.2x per request at 8K-64K and wall time 2-3.5x shorter, but the new turn's TTFT is 18-30% worse at 32K-64K (the driver prefills the 2K turn in 512-token atoms: each atom re-reads the whole KV in attention) and the job-end footprint is +8-12 GiB (decode slots and head state at long context; not yet cut).
+Found by this run: (1) Routing used the upstream APC namespace to estimate cached tokens, but the driver reads its own (different prefill arithmetic and head KV), so a 32K prefix cached by the upstream path routed to the driver and prefilled 34K tokens cold (TTFT 64 s vs 5.2 s, cached_tokens 0). The estimate now reads the driver's namespace (`_driver_uncached`); a prefix cached upstream stays on the upstream path. Consequence: a session's first turn decides its path, and cold prompts above `DRIVER_MAX_UNCACHED_TOKENS` (12288) start on the upstream path, so for the agentic workload the driver only engages once cold prefill is as fast as upstream's. (2) At 98K the driver-forced warm cell got cached_tokens 0 (TTFT 204/320 s vs off 4.7/10.1): cause under investigation (in-process 2 x 98K prefills store the same four entries as off: 98304, 98645 per prompt).
+Cold prefill gap, single 32K prompt (TTFT s): off 34.2; driver 38.1 (+11%); driver with 2048-token atoms 35.9 (+5%); attention over history ablated (bits change) 30.7, so 7.4 s of the 38 s were attention re-reading the KV per 512-query block; synchronized stage profile at 32K: mlp 20.4 s, attention mix 9.0, GDN projections 5.9, GDN mix 2.4, GDN out 2.2, attn projections 1.7. SDPA over 2048 queries is not bit-equal to four 512-query blocks, so the grid cannot be coarsened inside a run: atoms are 2048 tokens from position 16384 on (position-keyed, so a session extended from a checkpoint stays on the same grid; test fails before). After: 36.3 (+6.2%); the rest (~5% at 4K-32K) is not attention: ablations of MTP head, eval granularity, step budget and the concatenate copy changed nothing.
+Shortest-remaining-first prefill (tried for mixed lengths) made 8K rows wait +12% (c=4) and +30% (c=8) against off and was reverted.
+Parity after atoms and routing changes: driver alone/batch/stagger/AR identical; serving allow_draft on == off, cold == warm, code and prose at 1K.
