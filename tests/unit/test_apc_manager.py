@@ -580,3 +580,20 @@ def test_memory_pressure_evicts_anchors_before_a_big_allocation():
     m._make_room(1 << 30)
     assert not m._anchors
     assert len(m._exact_cache) < anchors + 3
+
+
+def test_freed_anchor_buffers_are_returned_to_the_allocator(monkeypatch):
+    import yunshu_engine.apc_manager as am
+
+    calls = []
+    monkeypatch.setattr(mx, "clear_cache", lambda: calls.append(1))
+    monkeypatch.setattr(am, "RELEASE_FREED_BYTES", 1)
+    m = _mgr()
+    _shared_conversation(m, turns=4, step=5000)
+    assert calls, (
+        "re-pointing anchors frees their buffers; they must not linger in the pool"
+    )
+    calls.clear()
+    m._memory_headroom = lambda: 0
+    m._make_room(1 << 30)
+    assert calls

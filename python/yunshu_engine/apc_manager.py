@@ -552,6 +552,16 @@ _BORN_KEEP = 4096
 # this many bytes, counting only memory they own (rows viewed from a newer checkpoint are free).
 ANCHOR_BUDGET_FRACTION = 0.15
 ANCHOR_BUDGET_MAX_BYTES = 4 << 30
+# Freed anchor buffers would sit in MLX's allocator pool and count in the process footprint
+# until idle; give them back at once when this much was freed.
+RELEASE_FREED_BYTES = 256 << 20
+
+
+def release_freed_buffers(freed_bytes: int) -> None:
+    if freed_bytes >= RELEASE_FREED_BYTES:
+        import mlx.core as mx
+
+        mx.clear_cache()
 
 
 def thin_chain(chain: dict, end: int) -> list:
@@ -1545,6 +1555,7 @@ class YunshuAPCManager(APCManager):
 
     def _make_room(self, allocation_bytes: int = 0, *, retain_bytes: int = 0) -> bool:
         """Evict anchors before anything else, so they never raise the peak of a big request."""
+        dropped = 0
         if self._anchors:
             required = self.memory_reserve_bytes + (
                 self._prefill_reserve_bytes + allocation_bytes
@@ -1563,6 +1574,9 @@ class YunshuAPCManager(APCManager):
                     )
                 if resident <= target or not self._drop_anchor():
                     break
+                dropped += 1
+            if dropped:
+                release_freed_buffers(1 << 40)
         return super()._make_room(allocation_bytes, retain_bytes=retain_bytes)
 
     def share_anchor_rows(self, donor_tokens, extra_hash: int = 0) -> int:
@@ -1590,6 +1604,7 @@ class YunshuAPCManager(APCManager):
         limit = len(hit[0])
         views: list = []
         shared = 0
+        freed = 0
         with self.lock:
             donor_key = _sequence_hash(donor_tokens, extra_hash, self.block_size)
             donor = self._exact_cache.get(donor_key)
@@ -1641,11 +1656,13 @@ class YunshuAPCManager(APCManager):
                     viewed += mine.keys.nbytes + mine.values.nbytes
                 if viewed:
                     self._kv_share[key] = (root, viewed)
+                    freed += viewed
                 shared += 1
         if views:
             import mlx.core as mx
 
             mx.eval(views)
+            release_freed_buffers(freed)
         return shared
 
     # ── provenance ─────────────────────────────────────────────────────
