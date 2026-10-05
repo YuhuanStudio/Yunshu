@@ -165,7 +165,7 @@ class Srv:
                 self.proc.wait(30)
 
 
-def send(url, body, timeout=900):
+def send(url, body, timeout=600):
     body = dict(body, stream=True, stream_options={"include_usage": True})
     req = urllib.request.Request(
         url + "/v1/chat/completions",
@@ -177,6 +177,7 @@ def send(url, body, timeout=900):
     content, reasoning, tools = [], [], {}
     usage = finish = xy = None
     done = False
+    nchunks = 0
     with urllib.request.urlopen(req, timeout=timeout) as r:
         for line in r:
             line = line.strip()
@@ -210,6 +211,13 @@ def send(url, body, timeout=900):
                     c["name"] += fn.get("name") or ""
                     c["arguments"] += fn.get("arguments") or ""
                     got = True
+                if got:
+                    nchunks += 1
+                    if nchunks % 256 == 0:  # life sign for gpuq's no-output stall check
+                        print(
+                            f"  streamed {nchunks} chunks, {time.perf_counter() - t0:.0f}s",
+                            flush=True,
+                        )
                 if got and tf is None:
                     tf = time.perf_counter()
                 finish = ch.get("finish_reason") or finish
@@ -317,6 +325,12 @@ def req(model, text, mt, seed=None, extra=None, temp=0):
 
 
 def emit(out, **kw):
+    print(
+        json.dumps({k: v for k, v in kw.items() if k not in ("text", "cmd", "env")})[
+            :300
+        ],
+        flush=True,
+    )
     kw["device"] = os.environ.get("GPUQ_DEVICE", "m5")
     kw["contended"] = was_contended()
     out.write(json.dumps(kw) + "\n")

@@ -183,3 +183,36 @@ def test_long_suite_keeps_going_and_flags_retrieval_loss(long_world, monkeypatch
         by["longqa"]["status"] == "FAIL" and "retrieval" in by["longqa"]["reasons"][0]
     )
     assert by["conc"]["status"] == "FAIL"
+
+
+def test_send_prints_progress_and_reads_with_a_timeout(tfb, monkeypatch, capsys):
+    import json
+
+    def chunk(**d):
+        return b"data: " + json.dumps(d).encode() + b"\n"
+
+    lines = [chunk(choices=[{"delta": {"content": "w "}}]) for _ in range(600)]
+    lines += [
+        chunk(choices=[{"delta": {}, "finish_reason": "length"}]),
+        chunk(usage={"completion_tokens": 600, "prompt_tokens": 5}),
+        b"data: [DONE]\n",
+    ]
+    seen = {}
+
+    class Resp:
+        def __enter__(self):
+            return iter(lines)
+
+        def __exit__(self, *a):
+            return False
+
+    def fake_urlopen(req, timeout=None):
+        seen["timeout"] = timeout
+        return Resp()
+
+    monkeypatch.setattr(tfb.urllib.request, "urlopen", fake_urlopen)
+    r = tfb.send("http://x", {"messages": []})
+    assert r["ct"] == 600 and r["finish"] == "length"
+    out = capsys.readouterr().out
+    assert "streamed 256 chunks" in out and "streamed 512 chunks" in out
+    assert seen["timeout"] <= 600  # a silent stream fails within minutes, with evidence
