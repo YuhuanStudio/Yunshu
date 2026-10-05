@@ -103,3 +103,17 @@ def test_tools_declared_without_grammar_spec_also_ends_reasoning():
     reasoning, content = _split(_events([10, TOOL, 11, 12, EOS], tools_declared=True))
     assert reasoning == "I will read it. "
     assert content == "<tool_call>Read{}</tool_call>"
+
+
+def test_external_ple_manifest_resolved_against_model_dir(tmp_path):
+    from yunshu_engine.vlm_engine import resolve_external_ple_manifest
+
+    cfg = {"text_config": {"ple_storage": {"manifest": "ple-store.json"}}}
+    resolve_external_ple_manifest(cfg, tmp_path)
+    assert cfg["text_config"]["ple_storage"]["manifest"] == str(
+        tmp_path / "ple-store.json"
+    )
+    absolute = {"text_config": {"ple_storage": {"manifest": "/x/ple.json"}}}
+    resolve_external_ple_manifest(absolute, tmp_path)
+    assert absolute["text_config"]["ple_storage"]["manifest"] == "/x/ple.json"
+    resolve_external_ple_manifest({"text_config": {}}, tmp_path)  # no PLE: untouched

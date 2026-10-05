@@ -329,6 +329,16 @@ def _derive_vlm_quantization(config: dict) -> dict | None:
     return None
 
 
+def resolve_external_ple_manifest(config: dict, model_path) -> None:
+    """Make a relative ``text_config.ple_storage.manifest`` (qwen4_exp external PLE checkpoints)
+    absolute against the model directory, as ``mlx_vlm.utils.load_model`` does; without it the
+    model opens ``ple-store.json`` relative to the server's working directory and fails to load."""
+    ple = (config.get("text_config") or {}).get("ple_storage")
+    manifest = ple.get("manifest") if isinstance(ple, dict) else None
+    if manifest and not Path(manifest).is_absolute():
+        ple["manifest"] = str(Path(model_path) / manifest)
+
+
 class VLMEngine:
     """Multimodal (mlx-vlm) model engine.
 
@@ -543,10 +553,13 @@ class VLMEngine:
         config.setdefault("text_config", config.pop("llm_config", {}))
         config.setdefault("vision_config", {})
         config.setdefault("audio_config", {})
+        resolve_external_ple_manifest(config, model_path)
 
         model_config = model_class.ModelConfig.from_dict(config)
         modules = ["text", "vision", "perceiver", "projector", "audio"]
         model_config = update_module_configs(model_config, model_class, config, modules)
+        if hasattr(model_config, "model_path"):
+            model_config.model_path = str(model_path)
 
         model = model_class.Model(model_config)
 
