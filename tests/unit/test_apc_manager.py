@@ -781,3 +781,16 @@ def test_anchors_survive_the_pre_copy_re_point_of_a_store(monkeypatch):
     assert (
         len(m._anchors) >= before - 1
     )  # thinning may retire one, the budget may not wipe all
+
+
+def test_budget_sheds_the_anchor_that_owns_its_rows_not_the_whole_chain():
+    m = _mgr()
+    _shared_conversation(m, turns=6, step=5000)
+    anchors = [k for k in m._anchors if k in m._exact_cache and k in m._kv_share]
+    assert len(anchors) >= 3
+    owner = max(anchors, key=lambda k: len(m._exact_cache[k].token_ids))
+    del m._kv_share[owner]  # this one owns its rows (as after an un-re-pointed store)
+    m.memory_max_bytes = int(m.anchor_bytes() / 0.15 * 0.5)
+    m.enforce_anchor_budget()
+    assert owner not in m._exact_cache
+    assert all(k in m._exact_cache for k in anchors if k != owner)

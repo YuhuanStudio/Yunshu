@@ -1583,16 +1583,27 @@ class YunshuAPCManager(APCManager):
                 self._anchors.pop(key, None)
 
     def _drop_anchor(self) -> bool:
-        """Evict the shortest retained anchor (the least useful branch point)."""
+        """Evict the retained anchor that owns the most bytes (ties: the shortest).
+
+        Anchors whose K/V rows are views of a newer checkpoint cost only their recurrent
+        state; one that still owns its rows is the expensive one, so shedding by owned bytes
+        keeps the cheap branch points instead of wiping the chain shortest-first.
+        """
+        from mlx_vlm.apc import _cache_nbytes
+
         with self.lock:
-            live = [
-                (n, k)
-                for k, n in self._anchors.items()
-                if k in self._exact_cache and k not in self._head_keys
-            ]
+            live = []
+            for k, n in self._anchors.items():
+                entry = self._exact_cache.get(k)
+                if entry is None or k in self._head_keys:
+                    continue
+                own = (
+                    _cache_nbytes(entry.prompt_cache) - self._kv_share.get(k, (0, 0))[1]
+                )
+                live.append((-own, n, k))
             if not live:
                 return False
-            _, key = min(live)
+            _, _, key = min(live)
             self._exact_cache.pop(key, None)
         with self._plock:
             self._anchors.pop(key, None)
