@@ -32,6 +32,20 @@ TF = {
 }
 YUNSHU_BIN = "/Users/yuhuan/Documents/YuhuanStudio/Yunshu/.venv/bin/yunshu"
 YUNSHU_SRC = os.environ.get("TFB_YUNSHU_SRC", "")
+
+
+def own_venv_bin(src: str, name: str) -> str | None:
+    """A worktree that carries its own .venv (marker file `.yv-own-venv`, for A/Bs of a
+    dependency upgrade) is served from that venv; every other tree uses the shared one."""
+    if not src:
+        return None
+    tree = os.path.dirname(src.rstrip("/"))
+    if not os.path.exists(os.path.join(tree, ".yv-own-venv")):
+        return None
+    path = os.path.join(tree, ".venv", "bin", name)
+    return path if os.path.exists(path) else None
+
+
 ROOT = Path("/Users/yuhuan/Documents/YuhuanStudio/Yunshu")
 RUNS = ROOT / "docs/research/runs/2026-09-30-agtraffic/artifacts"
 BODIES = RUNS / "cap-opencode-fix-cart-discount-r1/bodies"
@@ -95,7 +109,14 @@ class Srv:
         if engine == "yunshu":
             if YUNSHU_SRC:
                 env["PYTHONPATH"] = YUNSHU_SRC
-            cmd = [YUNSHU_BIN, "serve", "-m", model or M, "--port", str(self.port)]
+            cmd = [
+                own_venv_bin(YUNSHU_SRC, "yunshu") or YUNSHU_BIN,
+                "serve",
+                "-m",
+                model or M,
+                "--port",
+                str(self.port),
+            ]
         else:
             cmd = [
                 TF[engine],
