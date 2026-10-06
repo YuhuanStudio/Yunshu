@@ -35,6 +35,19 @@ async def extract_text_from_image(
     if len(content) > 10 * 1024 * 1024:  # 10 MB
         raise HTTPException(status_code=413, detail="Image file too large (max 10MB)")
 
+    try:  # an upload that is not an image is the caller's error, not a 500 from the engine
+        import io as _io
+
+        from PIL import Image as _PILImage
+
+        with _PILImage.open(_io.BytesIO(content)) as _probe:
+            _probe.verify()
+    except Exception:
+        raise HTTPException(
+            status_code=400,
+            detail="The uploaded file is not an image the server can read (png, jpg, webp, tiff, bmp).",
+        ) from None
+
     _IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".tiff", ".tif", ".bmp"}
     raw_suffix = os.path.splitext(file.filename or "image.png")[1].lower()
     suffix = raw_suffix if raw_suffix in _IMAGE_EXTENSIONS else ".png"

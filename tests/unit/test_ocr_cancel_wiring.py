@@ -80,7 +80,15 @@ def test_ocr_registers_and_unregisters_with_tracker(_client):
     resp = _client.post(
         "/v1/ocr",
         data={"model": "ocr-A", "task": "text"},
-        files={"file": ("x.png", b"\x89PNG\r\n\x1a\n" + b"0" * 32, "image/png")},
+        files={
+            "file": (
+                "x.png",
+                __import__("base64").b64decode(
+                    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+                ),
+                "image/png",
+            )
+        },
     )
     assert resp.status_code == 200, resp.text
     assert resp.json()["text"] == "hello"
