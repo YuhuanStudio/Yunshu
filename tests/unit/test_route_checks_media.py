@@ -255,7 +255,7 @@ def good_server(request: httpx.Request) -> httpx.Response:
             {
                 "model": "m",
                 "results": [
-                    {"label": "finance", "score": 0.8, "index": 0},
+                    {"label": m.FIN, "score": 0.8, "index": 0},
                     {"label": "sports", "score": 0.15, "index": 1},
                     {"label": "cooking", "score": 0.05, "index": 2},
                 ],

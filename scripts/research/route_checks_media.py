@@ -385,6 +385,7 @@ def _image(c: Ctx):
 
 CAT = "A cat sat on the warm windowsill."
 KITTEN = "A small kitten rests on the sunny window ledge."
+FIN = "financial news about interest rates and markets"
 STOCK = "Quarterly earnings beat expectations as the stock market rallied."
 
 
@@ -480,14 +481,14 @@ def _embed(c: Ctx):
         "/v1/classify",
         json={
             "model": c.model,
-            "input": "The central bank raised interest rates.",
-            "labels": ["finance", "sports", "cooking"],
+            "input": "The central bank raised interest rates and bond yields climbed.",
+            "labels": [FIN, "a football match report", "a cooking recipe"],
         },
     )
     expect(k.status_code == 200, f"classify {k.status_code} {k.text[:150]}")
     kr = k.json()["results"]
     expect(
-        kr[0]["label"] == "finance" and abs(sum(x["score"] for x in kr) - 1) < 1e-3,
+        kr[0]["label"] == FIN and abs(sum(x["score"] for x in kr) - 1) < 1e-3,
         f"classify {kr}",
     )
     # Ollama
