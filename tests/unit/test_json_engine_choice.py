@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 
 from yunshu_engine import settings
@@ -14,7 +12,9 @@ from yunshu_engine.grammar_constraint import (
 )
 from yunshu_engine.json_schema import JsonSchemaConstraint
 
-TOKENIZER = Path("/Volumes/P5Plus/models/Qwen2.5-3B-Instruct-4bit")
+from .model_paths import model_dir  # noqa: E402
+
+TOKENIZER = model_dir("Qwen2.5-3B-Instruct-4bit")
 
 
 @pytest.fixture(scope="module")

@@ -207,11 +207,12 @@ def main(argv=None) -> int:
     ap.add_argument("--out", required=True)
     ap.add_argument("--long-tokens", type=int, default=16000)
     ap.add_argument("--mid-tokens", type=int, default=4000)
+    ap.add_argument("--home")
     ap.add_argument("--set", action="append", default=[])
     a = ap.parse_args(argv)
     out = Path(a.out)
     out.parent.mkdir(parents=True, exist_ok=True)
-    home = Path(f"/Volumes/P5Plus/yunshu-build/covaudit/home-{out.stem}")
+    home = Path(a.home or f"/Volumes/P5Plus/yunshu-build/covaudit/home-{out.stem}")
     sets = ["YUNSHU_VLM_APC_MEMORY_GB=0", "YUNSHU_VLM_APC_DISK=0", *a.set]
     srv = Srv(a.model, a.src, home, out.with_suffix(".server.log"), sets)
     rc = 2
