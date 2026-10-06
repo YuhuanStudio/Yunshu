@@ -23,7 +23,17 @@ MAIN = Path(__file__).resolve().parents[2]
 GPUQ = str(Path(__file__).resolve().with_name("gpuq"))
 BUILD = Path("/Volumes/P5Plus/yunshu-build/m3sweep")
 MODELS = Path("/Volumes/P5Plus/models")
-PY = str(MAIN / ".venv/bin/python")
+PY = next(
+    (
+        str(c)
+        for c in (
+            MAIN / ".venv/bin/python",
+            Path("/Users/yuhuan/Documents/YuhuanStudio/Yunshu/.venv/bin/python"),
+        )
+        if c.exists()
+    ),
+    str(MAIN / ".venv/bin/python"),
+)
 JOBS_PY = "scripts/research/m3sweep_jobs.py"
 
 # name -> (kind, models, declared GB, timeout min)
