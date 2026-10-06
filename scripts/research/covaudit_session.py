@@ -325,13 +325,22 @@ def free_port() -> int:
     """First free port of 18990-18996 (COVAUDIT_PORT_LO raises the lower end, so a worker limited
     to 18994-18996 stays inside its range)."""
     for p in range(int(os.environ.get("COVAUDIT_PORT_LO", "18990")), 18997):
-        with socket.socket() as s:
-            try:
-                s.bind(("127.0.0.1", p))
-            except OSError:
-                continue
-        return p
+        if port_bindable(p):
+            return p
     raise RuntimeError("no free port in 18990-18996")
+
+
+def port_bindable(port: int) -> bool:
+    """Whether a server can listen on 127.0.0.1:port. SO_REUSEADDR as uvicorn sets it: a port a
+    just-killed server left in TIME_WAIT is free for the next one, a live listener is not (the
+    M3 omni job, 2026-10-07, found all three ports 'taken' 2 s after the previous job's servers)."""
+    with socket.socket() as s:
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            s.bind(("127.0.0.1", port))
+        except OSError:
+            return False
+    return True
 
 
 def load_timeout(model: str) -> float:

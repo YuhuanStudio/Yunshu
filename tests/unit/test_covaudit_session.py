@@ -294,3 +294,42 @@ def test_arms_expect():
     assert not m.check_expect({"base": "ERROR(2)", "fix": "PASS"}, want)[0]
     assert not m.check_expect({"base": "FAIL"}, want)[0]
     assert not m.check_expect({"base": "FAIL", "fix": "PASS", "x": "PASS"}, want)[0]
+
+
+def _time_wait_port():
+    """A 127.0.0.1 port left in TIME_WAIT: the server side closes the connection first."""
+    import socket
+
+    lsn = socket.socket()
+    lsn.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    lsn.bind(("127.0.0.1", 0))
+    lsn.listen(1)
+    port = lsn.getsockname()[1]
+    cli = socket.create_connection(("127.0.0.1", port))
+    conn, _ = lsn.accept()
+    conn.close()  # server closes first -> TIME_WAIT on the server's port
+    cli.recv(1)
+    cli.close()
+    lsn.close()
+    return port
+
+
+def test_port_bindable_accepts_time_wait_rejects_listener():
+    import socket
+
+    port = _time_wait_port()
+    # the old probe (no SO_REUSEADDR) called this port taken
+    with socket.socket() as plain:
+        try:
+            plain.bind(("127.0.0.1", port))
+            old_ok = True
+        except OSError:
+            old_ok = False
+    assert not old_ok
+    assert cs.port_bindable(port)
+
+    with socket.socket() as live:
+        live.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        live.bind(("127.0.0.1", 0))
+        live.listen(1)
+        assert not cs.port_bindable(live.getsockname()[1])
