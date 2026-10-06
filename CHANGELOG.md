@@ -13,6 +13,16 @@ Changes on main after 0.1.3; not part of a published package yet.
 
 ### Upgrade notes / breaking changes
 
+- Prometheus counters follow the `_total` convention (vLLM / Prometheus naming): `yunshu_request_count` →
+  `yunshu_http_requests_total`, `yunshu_inference_count` → `yunshu_inferences_total`, `yunshu_error_count` →
+  `yunshu_errors_total`, `yunshu_mtp_total_cycles` → `yunshu_mtp_cycles_total`. Update dashboards and alerts.
+- `--drain-timeout 0` now stops in-flight requests at once on shutdown (it used to wait forever).
+- Requests that omit `max_tokens` now get up to `YUNSHU_DEFAULT_MAX_TOKENS` (default 32768, clamped by the
+  context budget) instead of being cut at 512 tokens (2048 on Responses).
+- Stricter validation (400 instead of a silent fallback): `tool_choice` naming an undeclared tool,
+  `response_format: json_schema` without a schema, `stream_options` without `stream`, negative
+  `prompt_logprobs`, conflicting or invalid `structured_outputs`.
+
 ### Performance
 
 | Machine | Model / mode | Metric / workload | Before → after | Recorded source |
