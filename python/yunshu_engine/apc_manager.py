@@ -1096,6 +1096,7 @@ class YunshuAPCManager(APCManager):
         self._born: dict[int, int] = {}
         self._head_keys: set[int] = set()
         self._last_hit: tuple[tuple, int] | None = None
+        self._last_shared_keys: list[int] = []
         self._anchors: dict[int, int] = {}  # retained superseded checkpoint -> length
         # entry key -> (root buffer owner key, K/V bytes it views instead of owning), and the
         # K/V bytes of each root buffer: lets resident_bytes count a shared buffer once.
@@ -1408,6 +1409,18 @@ class YunshuAPCManager(APCManager):
             gen = self._generation if _generation is None else _generation
             is_head = n in self._head_lengths
         self._supersede(token_ids, extra_hash, gen)
+        # Retained anchors give up their own rows before the copy below is made, the way
+        # the superseded checkpoints they replace were freed before it: re-point them at the
+        # incoming cache (a view, no copy) and again at the stored copy once it exists.
+        rebound: list[int] = []
+        if not _owned:
+            views = self.share_anchor_rows_lazy(token_ids, prompt_cache, extra_hash)
+            rebound = list(self._last_shared_keys)
+            if views:
+                import mlx.core as mx
+
+                mx.eval(views)
+                self.finish_anchor_sharing()
         key = _sequence_hash(
             tuple(int(t) for t in token_ids), extra_hash, self.block_size
         )
@@ -1430,6 +1443,12 @@ class YunshuAPCManager(APCManager):
                 self._born.pop(key, None)
                 if is_head:
                     self._head_keys.discard(key)
+        if rebound:
+            if ok:
+                # the anchors view the incoming (live) cache: move them onto the stored copy
+                self.share_anchor_rows(token_ids, extra_hash)
+            else:
+                self._drop_anchor_keys(rebound)  # never pin a buffer that is not stored
         return ok
 
     def release_superseded(
@@ -1551,6 +1570,14 @@ class YunshuAPCManager(APCManager):
             ANCHOR_BUDGET_MAX_BYTES, int(ANCHOR_BUDGET_FRACTION * self.memory_max_bytes)
         )
 
+    def _drop_anchor_keys(self, keys) -> None:
+        with self.lock:
+            for key in keys:
+                self._exact_cache.pop(key, None)
+        with self._plock:
+            for key in keys:
+                self._anchors.pop(key, None)
+
     def _drop_anchor(self) -> bool:
         """Evict the shortest retained anchor (the least useful branch point)."""
         with self.lock:
@@ -1657,6 +1684,7 @@ class YunshuAPCManager(APCManager):
         """
         from mlx_vlm.models.cache import KVCache
 
+        self._last_shared_keys = []
         donor_tokens = tuple(int(t) for t in donor_tokens)
         hit = self._last_hit
         if hit is None or hit[1] != extra_hash or donor_tokens[: len(hit[0])] != hit[0]:
@@ -1722,6 +1750,7 @@ class YunshuAPCManager(APCManager):
                 if viewed:
                     self._kv_share[key] = (root, viewed)
                     freed += viewed
+                    self._last_shared_keys.append(key)
                 shared += 1
         return shared, views, freed
 

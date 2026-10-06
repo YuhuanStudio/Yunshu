@@ -87,3 +87,54 @@ def _probe_lookup(self, token_ids, *args, **kwargs):
 
 
 YunshuAPCManager.lookup_exact_cache = _probe_lookup  # noqa: F821
+
+
+# --- event-level probe: every store / supersede / share logs the MLX gauges and the peak since
+# the previous event (the peak is reset after each log), so a peak is attributed to one step.
+def _probe_event(manager, event):
+    import mlx.core as mx
+
+    path = _os.environ.get("APC_PROBE_LOG")
+    if not path:
+        return
+    row = dict(
+        t=round(_time.time(), 3),
+        event=event,
+        active_gib=round(mx.get_active_memory() / 2**30, 3),
+        peak_since_gib=round(mx.get_peak_memory() / 2**30, 3),
+        cache_gib=round(mx.get_cache_memory() / 2**30, 3),
+        entries=[len(e.token_ids) for e in manager._exact_cache.values()],
+        anchors=len(getattr(manager, "_anchors", {})),
+    )
+    with open(path, "a") as f:
+        f.write(_json.dumps(row) + "\n")
+    mx.reset_peak_memory()
+
+
+def _wrap_event(cls, name):
+    orig = getattr(cls, name, None)
+    if orig is None:
+        return
+
+    def wrapper(self, *args, **kwargs):
+        first = args[0] if args else None
+        n = len(first) if hasattr(first, "__len__") else ""
+        _probe_event(self, f"{name}_enter_{n}")
+        try:
+            return orig(self, *args, **kwargs)
+        finally:
+            _probe_event(self, f"{name}_exit_{n}")
+
+    setattr(cls, name, wrapper)
+
+
+for _name in (
+    "store_exact_cache",
+    "_supersede",
+    "share_anchor_rows",
+    "share_anchor_rows_lazy",
+    "release_superseded",
+    "finish_anchor_sharing",
+    "enforce_anchor_budget",
+):
+    _wrap_event(YunshuAPCManager, _name)  # noqa: F821

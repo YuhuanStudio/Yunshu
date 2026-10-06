@@ -684,3 +684,48 @@ def test_immediate_checkpoint_store_re_points_anchors_at_once(monkeypatch):
     assert all(k in m._kv_share for k in m._anchors if k in m._exact_cache)
     state_only = sum(sum(x.nbytes for x in e.prompt_cache[0].cache) for e in anchors)
     assert m.anchor_bytes() <= state_only + 4096
+
+
+def test_store_re_points_anchors_before_it_copies_the_cache(monkeypatch):
+    """The copy a store makes must not coexist with the anchors' own K/V rows (the peak)."""
+    m = _mgr()
+    prompts = _conversation(turns=6, step=5000)
+    for i, p in enumerate(prompts[:-1]):
+        if i:
+            m.lookup_exact_cache(p)
+        _turn(m, p)
+        m.share_anchor_rows(p[: len(p) - 1], 0)
+    last = prompts[-1]
+    m.lookup_exact_cache(last)
+    final = last[: len(last) - 1]
+    from mlx_vlm.apc import APCManager
+
+    seen = {}
+    original = APCManager.store_exact_cache
+
+    def spy(self, token_ids, prompt_cache, **kw):
+        # the copy happens inside this call: by now no anchor may own K/V rows of its own
+        seen["own_kv"] = [
+            e.prompt_cache[1].keys is not None and k not in self._kv_share
+            for k, e in self._exact_cache.items()
+            if k in self._anchors
+        ]
+        return original(self, token_ids, prompt_cache, **kw)
+
+    monkeypatch.setattr(APCManager, "store_exact_cache", spy)
+    m.begin_request()
+    assert m.store_exact_cache(final, _cache(len(final)))
+    assert seen["own_kv"] and not any(seen["own_kv"])
+    # and afterwards they view the stored copy, not the live cache that was passed in
+    stored = m._exact_cache[
+        next(k for k, e in m._exact_cache.items() if len(e.token_ids) == len(final))
+    ]
+    for k in m._anchors:
+        if k in m._exact_cache:
+            n = len(m._exact_cache[k].token_ids)
+            assert bool(
+                mx.all(
+                    m._exact_cache[k].prompt_cache[1].keys
+                    == stored.prompt_cache[1].keys[..., :n, :]
+                )
+            )
