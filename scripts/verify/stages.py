@@ -681,7 +681,7 @@ def stage_memory(ctx: Ctx) -> StageResult:
                         "--model",
                         ctx.model,
                         "--port",
-                        "18995",
+                        "18993",
                         "--reps",
                         "1",
                         "--rep-offset",

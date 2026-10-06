@@ -257,7 +257,8 @@ def run_arm(name, tree, model, port, rep, emit, extra_env=None):
             os.killpg(proc.pid, 2)
             proc.wait(60)
         except Exception:  # noqa: BLE001
-            os.killpg(proc.pid, 9)
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(proc.pid, 9)
         log.close()
 
 
