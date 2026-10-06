@@ -211,6 +211,13 @@ def test_stop_sequence_is_stop_and_no_excused_failures():
     )
 
 
+def _m3_models():
+    sys.path.insert(0, str(ROOT / "scripts/dev"))
+    import gpuq_remote
+
+    return gpuq_remote.M3_MODELS
+
+
 def test_routes_job_in_plan_with_two_models_and_a_multi_server(tmp_path):
     d = _driver()
     plan = {j["name"]: j for j in d.plan("abc1234", tmp_path)}
@@ -228,7 +235,7 @@ def test_routes_job_in_plan_with_two_models_and_a_multi_server(tmp_path):
         "routes-embed",
     ]
     # one server per modality, every checkpoint on the M3 allowlist, declared memory under the cap
-    allowed = d.MODELS and __import__("gpuq_remote").M3_MODELS
+    allowed = d.MODELS and _m3_models()
     for j in d.plan("abc1234", tmp_path):
         if j["name"].startswith("routes-"):
             mem = int(j["submit"][j["submit"].index("--mem-gb") + 1])
@@ -246,15 +253,19 @@ def test_route_coverage_verdict_fails_closed(tmp_path):
     routes_jobs = [
         j for j in d.plan("abc1234", tmp_path, {"routes"}) if j["name"] == "routes"
     ]
-    every = sorted(rc.checked_routes())
+    every = sorted(rc.served_routes())
 
     def out(verified, ok=True):
         routes_jobs[0]["out"].write_text(
-            json.dumps({"complete": True, "pass": ok, "verified_routes": verified})
+            json.dumps(
+                {"complete": True, "pass": ok, "verified_served_routes": verified}
+            )
         )
 
     out(every[:-1])
-    assert d.route_coverage(routes_jobs) == [f"route never verified: {every[-1]}"]
+    assert d.route_coverage(routes_jobs) == [
+        f"route has no passing SERVED check: {every[-1]}"
+    ]
     v = d.verdict(routes_jobs, 0)
     assert v["verdict"] == "FAIL" and "route-coverage" in v["jobs"]
     out(every)

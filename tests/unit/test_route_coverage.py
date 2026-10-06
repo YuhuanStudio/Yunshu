@@ -56,10 +56,11 @@ def test_enumeration_sees_http_and_websocket_routes(app_routes):
 
 
 def test_every_route_has_a_real_check_or_an_exemption(app_routes):
-    known = rc.checked_routes() | set(rc.EXEMPT)
+    known = rc.served_routes() | set(rc.EXEMPT)
     missing = sorted(app_routes - known)
     assert not missing, (
-        "routes without a real-server check (add a @check in scripts/research/route_checks.py, "
+        "routes without a SERVED real-server check (a model with the capability, a successful, validated answer; "
+        "an absent-capability or error-path check does not count). Add a served @check in scripts/research/route_checks*.py, "
         f"or an EXEMPT entry with a reason): {missing}"
     )
 
@@ -69,10 +70,12 @@ def test_registry_has_no_stale_route(app_routes):
     assert not stale, f"registry names routes the app does not register: {stale}"
 
 
-def test_exemptions_are_reasoned_and_not_also_checked():
+def test_exemptions_are_reasoned_and_not_also_served():
     for route, why in rc.EXEMPT.items():
         assert len(why.split()) >= 4, f"exemption {route} needs a real reason"
-        assert route not in rc.checked_routes(), f"{route} is both checked and exempt"
+        assert route not in rc.served_routes(), (
+            f"{route} has a served check and is exempt"
+        )
 
 
 def test_checks_are_well_formed():
@@ -85,3 +88,16 @@ def test_checks_are_well_formed():
             method, _, path = r.partition(" ")
             assert method in ("GET", "POST", "DELETE", "PUT", "PATCH", "WS"), r
             assert path.startswith("/"), r
+
+
+def test_exemption_list_stays_tiny():
+    """Every exemption is reviewed by the lead; a long list means the gate is being talked around."""
+    assert len(rc.EXEMPT) <= 8, sorted(rc.EXEMPT)
+
+
+def test_every_check_declares_served_and_unserved_ones_are_error_paths():
+    for name, chk in rc.REGISTRY.items():
+        assert isinstance(chk.served, bool), name
+    unserved = {n for n, c in rc.REGISTRY.items() if not c.served}
+    assert {"audio_absent", "images_absent", "omni_absent", "embeddings"} <= unserved
+    assert rc.REGISTRY["tts_served"].served and rc.REGISTRY["files"].served

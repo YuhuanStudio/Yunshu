@@ -690,6 +690,9 @@ def run_route_checks(ctx, needs, only, res, srv, tag=""):
         except BaseException as e:  # noqa: BLE001  fail closed, keep going
             row.update(status="fail", detail=f"{type(e).__name__}: {str(e)[:2000]}")
             row["trace"] = traceback.format_exc()[-1200:]
+        row["served"] = bool(chk.served and not getattr(ctx, "downgraded", False))
+        if hasattr(ctx, "downgraded"):
+            ctx.downgraded = False
         row["seconds"] = round(time.monotonic() - t0, 1)
         res["checks"][key] = row
         if row["status"] == "fail":
@@ -809,6 +812,23 @@ def cmd_routes(a):
                     "YUNSHU_VLM_APC_DISK=0",
                     f"YUNSHU_SEARXNG_URL={fake.url}",
                     "YUNSHU_WEB_SEARCH_PROVIDER=searxng",
+                    # the MCP client connects to scripts/research/agent_compat/tiny_mcp.py (stdio)
+                    "YUNSHU_MCP_SERVERS="
+                    + json.dumps(
+                        [
+                            {
+                                "id": "tiny",
+                                "transport": "stdio",
+                                "command": sys.executable,
+                                "args": [
+                                    str(
+                                        ROOT
+                                        / "scripts/research/agent_compat/tiny_mcp.py"
+                                    )
+                                ],
+                            }
+                        ]
+                    ),
                 ],
                 models_dir=str(mdir),
                 token=token,
@@ -839,6 +859,14 @@ def cmd_routes(a):
             r
             for row in res["checks"].values()
             if row["status"] == "pass"
+            for r in row["routes"]
+        }
+    )
+    res["verified_served_routes"] = sorted(
+        {
+            r
+            for row in res["checks"].values()
+            if row["status"] == "pass" and row.get("served")
             for r in row["routes"]
         }
     )

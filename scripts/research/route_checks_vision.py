@@ -19,6 +19,7 @@ def _b64(png: bytes) -> str:
     "POST /v1/messages",
     "POST /v1/responses",
     "POST /api/chat",
+    served=True,
 )
 def _vision_input(c: Ctx):
     png = _png(224)
@@ -35,6 +36,7 @@ def _vision_input(c: Ctx):
         }
     ]
     if c.kind != "vlm":
+        c.unserved()  # a text-only model refusing the image is the error path
         # a text-only model refuses in every dialect with the reason, in the dialect's shape
         r = c.req(
             "POST",

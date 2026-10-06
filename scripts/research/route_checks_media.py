@@ -125,6 +125,7 @@ def _speech_body(c: Ctx, **kw):
     "POST /v1/audio/speech/stream",
     "GET /v1/audio/voices",
     needs="tts",
+    served=True,
 )
 def _tts(c: Ctx):
     v = c.req("GET", "/v1/audio/voices")
@@ -222,8 +223,8 @@ def _tts(c: Ctx):
 @check(
     "asr_served",
     "POST /v1/audio/transcriptions",
-    "POST /v1/audio/translations",
     needs="asr",
+    served=True,
 )
 def _asr(c: Ctx):
     wav = c.shared.get("tts_wav")
@@ -264,28 +265,12 @@ def _asr(c: Ctx):
     )
     err_ok(bad, "openai")
     expect(bad.status_code in (400, 415, 422), f"garbage audio -> {bad.status_code}")
-    tr = c.req(
-        "POST",
-        "/v1/audio/translations",
-        data={"model": c.model},
-        files={"file": ("s.wav", wav, "audio/wav")},
-        timeout=600,
-    )
-    if tr.status_code == 200:
-        expect(tr.json().get("text"), "translation without text")
-        c.notes["asr_translations"] = "served"
-    else:
-        err_ok(tr, "openai")
-        expect(
-            tr.status_code == 501, f"translations -> {tr.status_code} {tr.text[:100]}"
-        )  # non-Whisper: documented 501
-        c.notes["asr_translations"] = f"501: {tr.text[:100]}"
 
 
 # ── OCR ──────────────────────────────────────────────────────────────────────────────────
 
 
-@check("ocr_served", "POST /v1/ocr", needs="ocr")
+@check("ocr_served", "POST /v1/ocr", needs="ocr", served=True)
 def _ocr(c: Ctx):
     text = "Yunshu reads 42 words"
     png = render_text_png(text)
@@ -331,6 +316,7 @@ FAST = {"num_inference_steps": 2, "seed": 7}
     "POST /v1/images/variations",
     "POST /v1/images/edits",
     needs="image",
+    served=True,
 )
 def _image(c: Ctx):
     g = c.oa.images.generate(
@@ -412,6 +398,7 @@ STOCK = "Quarterly earnings beat expectations as the stock market rallied."
     "POST /api/embed",
     "POST /api/embeddings",
     needs="embed",
+    served=True,
 )
 def _embed(c: Ctx):
     one = [
@@ -519,3 +506,28 @@ def _embed(c: Ctx):
         ol.status_code == 200 and cosine(ol.json()["embedding"], one[0]) > 0.999,
         f"/api/embeddings {ol.status_code}",
     )
+
+
+@check(
+    "asr_translations_error", "POST /v1/audio/translations", needs="asr", served=False
+)
+def _asr_translations(c: Ctx):
+    """Error path: only Whisper-family models translate, Qwen3-ASR answers a documented 501."""
+    wav = c.shared.get("tts_wav")
+    expect(wav, "needs the TTS output")
+    tr = c.req(
+        "POST",
+        "/v1/audio/translations",
+        data={"model": c.model},
+        files={"file": ("s.wav", wav, "audio/wav")},
+        timeout=600,
+    )
+    if tr.status_code == 200:
+        expect(tr.json().get("text"), "translation without text")
+        c.notes["asr_translations"] = "served"
+    else:
+        err_ok(tr, "openai")
+        expect(
+            tr.status_code == 501, f"translations -> {tr.status_code} {tr.text[:100]}"
+        )  # non-Whisper: documented 501
+        c.notes["asr_translations"] = f"501: {tr.text[:100]}"

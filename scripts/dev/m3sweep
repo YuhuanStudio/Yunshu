@@ -183,15 +183,15 @@ def route_coverage(jobs):
     for j in outs:
         try:
             verified |= set(
-                json.loads(Path(j["out"]).read_text()).get("verified_routes", [])
+                json.loads(Path(j["out"]).read_text()).get("verified_served_routes", [])
             )
         except (OSError, ValueError):
             pass
     sys.path.insert(0, str(MAIN / "scripts/research"))
     import route_checks as rc
 
-    want = rc.checked_routes()
-    return [f"route never verified: {r}" for r in sorted(want - verified)]
+    want = rc.served_routes()
+    return [f"route has no passing SERVED check: {r}" for r in sorted(want - verified)]
 
 
 def verdict(jobs, wait_rc):
