@@ -1162,12 +1162,13 @@ def create_app() -> FastAPI:
 
         # Check if at least one model is loaded
         has_loaded_model = False
+        registered = 0
         try:
             if manager is not None:
                 for entry in manager.list_entries():
+                    registered += 1
                     if getattr(entry, "is_loaded", False):
                         has_loaded_model = True
-                        break
             elif engine and getattr(engine, "is_loaded", False):
                 has_loaded_model = True
         except Exception:
@@ -1175,7 +1176,14 @@ def create_app() -> FastAPI:
             has_loaded_model = False
 
         checks["model_loaded"] = has_loaded_model
-        if not has_loaded_model:
+        # Multi-model mode loads on demand (chat, responses, messages, ... load the model a request
+        # names): a server with registered models and nothing loaded yet is ready to serve. It
+        # answered 503 until the first request, so a service manager waiting for readiness never
+        # saw it come up.
+        on_demand = manager is not None and registered > 0
+        if on_demand:
+            checks["models_registered"] = registered
+        if not has_loaded_model and not on_demand:
             ready = False
 
         # Check GPU memory available (uses cached UMA size)
