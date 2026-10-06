@@ -136,6 +136,14 @@ def judge(res: dict) -> list:
                 bad.append(
                     f"{arm} rep{k}: long reply wrong: {r['long']['text'][:50]!r}"
                 )
+            if r["short"]["done"] and (
+                r["short"]["calls"] != r["solo"]["calls"]
+                or r["short"]["text"] != r["solo"]["text"]
+            ):
+                bad.append(f"{arm} rep{k}: short output differs from the solo run")
+            sl = r.get("solo_long")
+            if sl is not None and sl["text"] != r["long"]["text"]:
+                bad.append(f"{arm} rep{k}: long output differs from the solo run")
             if r["short"]["ttft_s"] is None:
                 bad.append(f"{arm} rep{k}: short request produced no token")
     return bad
@@ -154,7 +162,7 @@ def run_arm(name: str, src: str, model: str, a) -> list:
     try:
         srv.wait_ready()
         for k in range(a.reps):
-            doc = 40 + k
+            doc = a.doc_base + k
             solo = stream(srv.url, short_body(srv.model_id))
             box: dict = {}
             t = threading.Thread(
@@ -166,7 +174,14 @@ def run_arm(name: str, src: str, model: str, a) -> list:
             time.sleep(a.delay)
             short = stream(srv.url, short_body(srv.model_id))
             t.join()
-            reps.append({"doc": doc, "solo": solo, "short": short, "long": box["long"]})
+            rep = {"doc": doc, "solo": solo, "short": short, "long": box["long"]}
+            if a.solo_long:
+                # Identity reference: the same document with nothing else running
+                # (served from the prefix cache the cold run left).
+                rep["solo_long"] = stream(
+                    srv.url, long_body(srv.model_id, a.long_tokens, doc)
+                )
+            reps.append(rep)
             print(
                 f"{name} rep{k}: solo ttft {solo['ttft_s']}s | short ttft {short['ttft_s']}s total {short['total_s']}s "
                 f"| long total {box['long']['total_s']}s",
@@ -185,6 +200,8 @@ def main(argv=None) -> int:
     ap.add_argument("--long-tokens", type=int, default=32000)
     ap.add_argument("--delay", type=float, default=1.0)
     ap.add_argument("--reps", type=int, default=3)
+    ap.add_argument("--solo-long", action="store_true")
+    ap.add_argument("--doc-base", type=int, default=40)
     a = ap.parse_args(argv)
     res = {}
     try:

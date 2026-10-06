@@ -319,8 +319,8 @@ def test_last_atom_and_first_token_precede_decode_repayment(atoms):
     assert suffix.stats.t_first
     assert not any(uid == long.uid for uid, _, _ in g.gen.atoms)
     # First-token delivery does not silently erase the fairness obligation.
-    assert r._decode_debt == DECODE_QUANTUM_S
-    for _ in range(4):
+    assert r._decode_debt >= DECODE_QUANTUM_S
+    for _ in range(30):
         r._drive_slice(False)
     assert any(uid == long.uid for uid, _, _ in g.gen.atoms)
 
@@ -649,3 +649,76 @@ def test_idle_round_driver_keeps_the_upstream_handoff(atoms):
     r._driver_jobs[1] = object()
     assert r._handoff_delay() == 0
     r._driver_jobs.clear()
+
+
+def test_short_request_decodes_through_long_prefill_without_one_token_per_atom(atoms):
+    """Measured on 27B: a 20-token tool call took 27 s because it got one decode
+    step per 2048-token atom of the long prefill (52K cold tokens)."""
+    r, clock = atoms
+    cold = job(0)
+    cold.ids = list(range(32768))
+    cold.use_draft = True
+    r._submit(cold)
+    r._drive_slice(False)
+    short = job(0)
+    short.max_tokens = 20
+    r._submit(short)
+    t0 = clock[0]
+    for _ in range(400):
+        r._drive_slice(False)
+        if short.stats.generated >= 20:
+            break
+    assert short.stats.generated >= 20
+    atoms_run = sum(len(g.gen.atoms) for g in r._groups() if g.spec)
+    assert atoms_run <= 2  # the long prefill resumes after one atom, not one per token
+    assert clock[0] - t0 < 8
+
+
+def test_request_between_templating_and_submit_is_awaited_before_the_next_atom(atoms):
+    """Measured on 27B: the short call's hop from the executor to _submit lost the
+    race to the next slice, so it waited a second 2 s atom (3.75 s TTFT)."""
+    r, _ = atoms
+    cold = job(0)
+    cold.ids = list(range(32768))
+    r._submit(cold)
+    r._drive_slice(False)
+    r.inflight = lambda: 2  # the cold request plus one call still preparing
+    waits = [r._handoff_delay() for _ in range(20)]
+    assert waits[0] > 0 and 0 in waits
+    assert sum(1 for w in waits if w) * waits[0] < 0.06
+    r.inflight = lambda: 1
+    assert r._handoff_delay() == 0
+    r.inflight = lambda: 2
+    assert r._handoff_delay() > 0  # a new episode waits again
+
+
+def test_long_reply_decode_share_is_capped_while_another_request_prefills(atoms):
+    """A row past its first tokens must not take half the GPU from a cold prefill."""
+    r, clock = atoms
+    a = job(0)
+    a.max_tokens = 2000
+    r._submit(a)
+    for _ in range(400):
+        r._drive_slice(False)
+        if a.stats.generated >= 200:
+            break
+    assert a.stats.generated >= 200
+    cold = job(0)
+    cold.ids = list(range(8192))
+    r._submit(cold)
+    t0 = clock[0]
+    for _ in range(2000):
+        r._drive_slice(False)
+        if cold.stats.t_first:
+            break
+    assert cold.stats.t_first
+    prefill_s = 4 * 2048 * 0.00121
+    assert clock[0] - t0 < prefill_s * 1.1
+
+
+def test_early_rows_keep_the_generous_decode_share(atoms):
+    r, _ = atoms
+    from yunshu_engine.serving.work_scheduler import decode_quantum
+
+    assert decode_quantum(2.0, early=True) == 2.0
+    assert decode_quantum(2.0, early=False) < 0.3
