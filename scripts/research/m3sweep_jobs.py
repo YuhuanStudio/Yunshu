@@ -659,7 +659,7 @@ def cmd_units(a):
     return 0 if res["pass"] else 1
 
 
-def main(argv=None):
+def build_parser():
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="cmd", required=True)
     for n in ("wire", "agent", "units", "env"):
@@ -671,10 +671,14 @@ def main(argv=None):
         p.add_argument("--out", required=True)
         p.add_argument(
             "--model",
-            required=(n != "units"),
+            required=(n in ("wire", "agent")),
             action="append" if n == "units" else "store",
         )
-    a = ap.parse_args(argv)
+    return ap
+
+
+def main(argv=None):
+    a = build_parser().parse_args(argv)
     return {"wire": cmd_wire, "agent": cmd_agent, "units": cmd_units, "env": cmd_env}[
         a.cmd
     ](a)

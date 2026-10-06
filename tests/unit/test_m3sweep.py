@@ -161,3 +161,18 @@ def test_lenient_conc_and_lock():
     assert jobs.lock_mismatches(locked, {"open-ai": "2.0", "x": "1", "y": "9"}) == {
         "open-ai": ("3.0", "2.0")
     }
+
+
+def test_every_job_argv_parses(tmp_path):
+    d = _driver()
+    for j in d.plan("abc1234", tmp_path, None, True):
+        argv = j["cmd"]
+        assert argv[1] == d.JOBS_PY
+        ns = jobs.build_parser().parse_args(argv[2:])
+        assert ns.cmd in ("env", "wire", "agent", "units") and ns.out == str(j["out"])
+        assert (tmp_path / "x").parent == tmp_path  # plan is pure: nothing created
+        assert all(
+            Path(m).is_absolute()
+            for m in (ns.model if isinstance(ns.model, list) else [ns.model])
+            if m
+        )
