@@ -3,6 +3,8 @@
     wire   --model M --out F     real server + the SDK wire-contract matrix (tests/unit/wire_clients.py)
     agent  --model M --out F     covaudit session (tool loop, cache growth) + concurrent identity vs solo
     units  --model M... --out F  unit tests that skip on a machine without the small checkpoints
+    routes --model M [--multi M2 --multi M3] --out F
+                                 every gateway route against real servers (route_checks.py)
 
 Every subcommand writes one JSON file (rewritten as it goes) that ends with `"complete": true`
 and `"pass": bool`; any exception, missing piece or mismatch is a failure (exit 1). The servers
@@ -16,6 +18,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 import traceback
 from pathlib import Path
 
@@ -664,11 +667,167 @@ def cmd_units(a):
     return 0 if res["pass"] else 1
 
 
+def run_route_checks(ctx, needs, only, res, srv):
+    """Run every registered check with this `needs` (one server); results land in `res`."""
+    import route_checks as rc
+
+    for name, chk in rc.REGISTRY.items():
+        if chk.needs != needs or (only and name not in only):
+            continue
+        t0 = time.monotonic()
+        row = {"needs": needs, "routes": list(chk.routes)}
+        try:
+            if srv.proc.poll() is not None:
+                raise RuntimeError(
+                    f"server died rc={srv.proc.returncode} before {name}"
+                )
+            chk.fn(ctx)
+            row["status"] = "pass"
+        except rc.Skip as e:
+            row.update(status="skip", detail=str(e))
+        except BaseException as e:  # noqa: BLE001  fail closed, keep going
+            row.update(status="fail", detail=f"{type(e).__name__}: {str(e)[:400]}")
+            row["trace"] = traceback.format_exc()[-1200:]
+        row["seconds"] = round(time.monotonic() - t0, 1)
+        res["checks"][name] = row
+        if row["status"] == "fail":
+            res["failures"].append(f"{name}: {row['detail']}")
+        print(
+            f"check {name}: {row['status']} {row.get('detail', '')[:200]}", flush=True
+        )
+        write(res["_out"], res)
+
+
+def routes_make_ctx(srv, token, kind, model_id=None):
+    import anthropic
+    import httpx
+    import openai
+    import route_checks as rc
+
+    http = httpx.Client(base_url=srv.url, timeout=300)
+    return rc.Ctx(
+        url=srv.url,
+        token=token or "",
+        model=model_id or srv.model_id,
+        kind=kind,
+        http=http,
+        oa=openai.OpenAI(
+            base_url=srv.url + "/v1", api_key=token or "x", max_retries=0, timeout=300
+        ),
+        an=anthropic.Anthropic(
+            base_url=srv.url, api_key=token or "x", max_retries=0, timeout=300
+        ),
+    )
+
+
+def cmd_routes(a):
+    """Every registered route against real servers (scripts/research/route_checks.py): the main
+    model in the default configuration, and, with --multi, a token-protected multi-model server."""
+    import httpx
+
+    only = set(a.only.split(",")) if a.only else None
+    res = {
+        "kind": "routes",
+        "model": a.model,
+        "multi": a.multi,
+        "checks": {},
+        "failures": [],
+        "complete": False,
+        "_out": a.out,
+    }
+    srv = None
+    try:
+        srv = start_server(a.model, "routes", ["YUNSHU_VLM_APC_DISK=0"])
+        kind = "vlm" if "Qwen3.5" in a.model else "text"
+        ctx = routes_make_ctx(srv, "", kind)
+        res["model_id"] = srv.model_id
+        run_route_checks(ctx, "main", only, res, srv)
+        res["notes"] = ctx.notes
+        if srv.proc.poll() is not None:
+            res["failures"].append(f"server died rc={srv.proc.returncode}")
+        elif httpx.get(srv.url + "/health/ready", timeout=10).status_code != 200:
+            res["failures"].append("server not ready after the checks")
+    except BaseException as e:  # noqa: BLE001
+        res["failures"].append(f"{type(e).__name__}: {e}")
+        traceback.print_exc()
+    finally:
+        if srv:
+            res["server_log_tail"] = srv.log_tail(30)
+            srv.kill()
+    if a.multi and not res["failures"]:
+        srv = None
+        try:
+            token = "routes-token-xyz"
+            home = Path(os.environ.get("HOME", "/tmp")) / "m3sweep-routes-multi"
+            mdir = home / "models"
+            mdir.mkdir(parents=True, exist_ok=True)
+            for m in a.multi:
+                link = mdir / Path(m).name
+                if link.is_symlink() or link.exists():
+                    link.unlink()
+                link.symlink_to(m)
+            from covaudit_session import Srv
+
+            cand = Path(sys.executable).parent / "yunshu"
+            if "COVAUDIT_BIN" not in os.environ and cand.exists():
+                os.environ["COVAUDIT_BIN"] = str(cand)
+            srv = Srv(
+                a.multi[0],
+                str(ROOT / "python"),
+                home,
+                home / "server.log",
+                [f"YUNSHU_AUTH_TOKEN={token}", "YUNSHU_VLM_APC_DISK=0"],
+                models_dir=str(mdir),
+                token=token,
+            )
+            srv.wait_ready()
+            ctx = routes_make_ctx(srv, token, "multi")
+            ids = [
+                m["id"]
+                for m in ctx.http.get("/v1/models", headers=ctx.auth()).json()["data"]
+            ]
+            ctx.mm_models = sorted(ids)
+            ctx.model = Path(a.multi[0]).name
+            run_route_checks(ctx, "multi", only, res, srv)
+        except BaseException as e:  # noqa: BLE001
+            res["failures"].append(f"multi server: {type(e).__name__}: {e}")
+            traceback.print_exc()
+        finally:
+            if srv:
+                res["multi_log_tail"] = srv.log_tail(30)
+                srv.kill()
+    res.pop("_out")
+    res["verified_routes"] = sorted(
+        {
+            r
+            for row in res["checks"].values()
+            if row["status"] == "pass"
+            for r in row["routes"]
+        }
+    )
+    res["complete"] = True
+    res["pass"] = not res["failures"] and bool(res["checks"])
+    write(a.out, res)
+    print(
+        "RESULT",
+        "PASS" if res["pass"] else "FAIL",
+        len(res["failures"]),
+        "failures",
+        flush=True,
+    )
+    for f in res["failures"]:
+        print("FAIL:", f, flush=True)
+    return 0 if res["pass"] else 1
+
+
 def build_parser():
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="cmd", required=True)
-    for n in ("wire", "agent", "units", "env"):
+    for n in ("wire", "agent", "units", "env", "routes"):
         p = sub.add_parser(n)
+        if n == "routes":
+            p.add_argument("--multi", action="append", default=[])
+            p.add_argument("--only")
         if n == "agent":
             p.add_argument("--strict", action="store_true")
         if n == "wire":
@@ -678,7 +837,7 @@ def build_parser():
         p.add_argument("--out", required=True)
         p.add_argument(
             "--model",
-            required=(n in ("wire", "agent")),
+            required=(n in ("wire", "agent", "routes")),
             action="append" if n == "units" else "store",
         )
     return ap
@@ -686,9 +845,13 @@ def build_parser():
 
 def main(argv=None):
     a = build_parser().parse_args(argv)
-    return {"wire": cmd_wire, "agent": cmd_agent, "units": cmd_units, "env": cmd_env}[
-        a.cmd
-    ](a)
+    return {
+        "wire": cmd_wire,
+        "agent": cmd_agent,
+        "units": cmd_units,
+        "env": cmd_env,
+        "routes": cmd_routes,
+    }[a.cmd](a)
 
 
 if __name__ == "__main__":

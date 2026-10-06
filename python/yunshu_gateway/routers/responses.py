@@ -3243,6 +3243,136 @@ async def get_response(response_id: str, request: Request):
     return JSONResponse(_public_stored(payload))
 
 
+def _input_item_of(response_id: str, index: int, msg: dict) -> list[dict]:
+    """The stored chat-format messages of a response as Responses input items (ids are stable:
+    ``<response id>:<index>``). A tool-calling assistant turn becomes one ``function_call`` item per
+    call, a ``tool`` message a ``function_call_output``; text becomes ``input_text`` parts."""
+    role = msg.get("role", "user")
+    if role == "tool":
+        out = msg.get("content", "")
+        return [
+            {
+                "id": f"fco_{response_id}_{index}",
+                "type": "function_call_output",
+                "call_id": msg.get("tool_call_id", "") or "",
+                "output": out if isinstance(out, str) else json.dumps(out),
+                "status": "completed",
+            }
+        ]
+    items: list[dict] = []
+    content = msg.get("content")
+    parts = []
+    if isinstance(content, str) and content:
+        parts = [{"type": "input_text", "text": content}]
+    elif isinstance(content, list):
+        for p in content:
+            if isinstance(p, dict) and p.get("type") in ("text", "input_text"):
+                parts.append({"type": "input_text", "text": p.get("text", "")})
+            elif isinstance(p, dict) and p.get("type") in ("image_url", "input_image"):
+                url = p.get("image_url")
+                url = url.get("url") if isinstance(url, dict) else url
+                parts.append(
+                    {"type": "input_image", "image_url": url, "detail": "auto"}
+                )
+    if parts or not msg.get("tool_calls"):
+        items.append(
+            {
+                "id": f"msg_{response_id}_{index}",
+                "type": "message",
+                "role": role,
+                "content": parts,
+                "status": "completed",
+            }
+        )
+    for k, tc in enumerate(msg.get("tool_calls") or []):
+        fn = tc.get("function", {})
+        items.append(
+            {
+                "id": f"fc_{response_id}_{index}_{k}",
+                "type": "function_call",
+                "call_id": tc.get("id", "") or "",
+                "name": fn.get("name", ""),
+                "arguments": fn.get("arguments", "") or "{}",
+                "status": "completed",
+            }
+        )
+    return items
+
+
+@router.get("/responses/{response_id}/input_items", response_model=None)
+async def list_response_input_items(
+    response_id: str,
+    request: Request,
+    limit: int = 20,
+    order: str = "desc",
+    after: str | None = None,
+    before: str | None = None,
+):
+    """The input items of a stored response (OpenAI ``GET /v1/responses/{id}/input_items``).
+
+    This hop's own input only (``instructions`` and system / developer messages are not listed,
+    like the hosted API); ``previous_response_id`` history belongs to the earlier responses.
+    Cursor pagination with ``limit`` (1-100), ``order`` (``desc`` default) and ``after`` /
+    ``before`` item ids."""
+    _check_permission(request, "can_infer")
+    payload = _get_stored_response(response_id)
+    if payload is None or not _owns_stored(request, payload):
+        return JSONResponse(
+            status_code=404,
+            content={
+                "error": {
+                    "message": f"Response with id '{response_id}' not found",
+                    "type": "invalid_request_error",
+                    "code": "response_not_found",
+                }
+            },
+        )
+    if not 1 <= limit <= 100 or order not in ("asc", "desc"):
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": {
+                    "message": "limit must be 1-100 and order 'asc' or 'desc'",
+                    "type": "invalid_request_error",
+                    "param": "limit" if not 1 <= limit <= 100 else "order",
+                    "code": "invalid_value",
+                }
+            },
+        )
+    items: list[dict] = []
+    for i, m in enumerate(payload.get("_input_messages") or []):
+        items.extend(_input_item_of(response_id, i, m))
+    if order == "desc":
+        items.reverse()
+    ids = [it["id"] for it in items]
+    for cursor, name in ((after, "after"), (before, "before")):
+        if cursor is not None and cursor not in ids:
+            return JSONResponse(
+                status_code=404,
+                content={
+                    "error": {
+                        "message": f"Item '{cursor}' not found",
+                        "type": "invalid_request_error",
+                        "param": name,
+                        "code": "item_not_found",
+                    }
+                },
+            )
+    lo = ids.index(after) + 1 if after is not None else 0
+    hi = ids.index(before) if before is not None else len(items)
+    items = items[lo:hi]
+    page = items[:limit]
+    return JSONResponse(
+        {
+            "object": "list",
+            "data": page,
+            "first_id": page[0]["id"] if page else None,
+            "last_id": page[-1]["id"] if page else None,
+            "has_more": len(items) > limit,
+        }
+    )
+
+
 @router.delete("/responses/{response_id}", response_model=None)
 async def delete_response(response_id: str, request: Request):
     """Delete a stored response (OpenAI-compatible DELETE /v1/responses/{id}).

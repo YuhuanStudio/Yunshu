@@ -179,7 +179,9 @@ def test_every_job_argv_parses(tmp_path):
         argv = j["cmd"]
         assert argv[1] == d.JOBS_PY
         ns = jobs.build_parser().parse_args(argv[2:])
-        assert ns.cmd in ("env", "wire", "agent", "units") and ns.out == str(j["out"])
+        assert ns.cmd in ("env", "wire", "agent", "units", "routes") and ns.out == str(
+            j["out"]
+        )
         assert (tmp_path / "x").parent == tmp_path  # plan is pure: nothing created
         assert all(
             Path(m).is_absolute()
@@ -207,3 +209,127 @@ def test_stop_sequence_is_stop_and_no_excused_failures():
     assert (
         jobs.classify("tool_named/chat/json: forced tool call missing", False) is None
     )
+
+
+def test_routes_jobs_in_plan_and_multi_server(tmp_path):
+    d = _driver()
+    plan = {j["name"]: j for j in d.plan("abc1234", tmp_path)}
+    assert "routes-q35-08b" in plan and "routes-q25-3b" in plan
+    cmd = plan["routes-q35-08b"]["cmd"]
+    assert (
+        cmd.count("--multi") == 2
+    )  # the load / unload routes need a multi-model server
+    assert "--multi" not in plan["routes-q25-3b"]["cmd"]
+    assert [
+        j["name"] for j in d.plan("abc1234", tmp_path, {"routes"}) if j["name"] != "env"
+    ] == [
+        "routes-q35-08b",
+        "routes-q25-3b",
+    ]
+
+
+def test_route_coverage_verdict_fails_closed(tmp_path):
+    import route_checks as rc
+
+    d = _driver()
+    jobs_ = d.plan("abc1234", tmp_path, {"routes"})
+    routes_jobs = [j for j in jobs_ if j["name"].startswith("routes-")]
+    every = sorted(rc.checked_routes())
+
+    def out(j, verified, ok=True):
+        j["out"].write_text(
+            json.dumps({"complete": True, "pass": ok, "verified_routes": verified})
+        )
+
+    out(routes_jobs[0], every[:-1])
+    out(routes_jobs[1], [])
+    cov = d.route_coverage(routes_jobs)
+    assert cov == [f"route never verified: {every[-1]}"]
+    out(routes_jobs[1], [every[-1]])  # union of the jobs counts
+    assert d.route_coverage(routes_jobs) == []
+    v = d.verdict([j for j in routes_jobs if j["name"] != "env"], 0)
+    assert v["verdict"] == "PASS"
+    out(routes_jobs[1], [])
+    v = d.verdict(routes_jobs, 0)
+    assert v["verdict"] == "FAIL" and "route-coverage" in v["jobs"]
+    assert d.route_coverage([]) == []
+
+
+def test_run_route_checks_records_pass_fail_skip(monkeypatch, tmp_path):
+    import types
+
+    import route_checks as rc
+
+    def ok(c):
+        pass
+
+    def bad(c):
+        rc.expect(False, "boom")
+
+    def sk(c):
+        rc.skip("no vision")
+
+    monkeypatch.setattr(
+        rc,
+        "REGISTRY",
+        {
+            "a": rc.Check("a", ok, ("GET /a",)),
+            "b": rc.Check("b", bad, ("GET /b",)),
+            "c": rc.Check("c", sk, ("GET /c",)),
+            "m": rc.Check("m", ok, ("GET /m",), "multi"),
+        },
+    )
+    srv = types.SimpleNamespace(
+        proc=types.SimpleNamespace(poll=lambda: None, returncode=None)
+    )
+    res = {"checks": {}, "failures": [], "_out": str(tmp_path / "o.json")}
+    jobs.run_route_checks(object(), "main", None, res, srv)
+    assert {k: v["status"] for k, v in res["checks"].items()} == {
+        "a": "pass",
+        "b": "fail",
+        "c": "skip",
+    }
+    assert res["failures"] and "boom" in res["failures"][0]
+    dead = types.SimpleNamespace(
+        proc=types.SimpleNamespace(poll=lambda: 1, returncode=1)
+    )
+    res2 = {"checks": {}, "failures": [], "_out": str(tmp_path / "o2.json")}
+    jobs.run_route_checks(object(), "main", None, res2, dead)
+    assert all(v["status"] == "fail" for v in res2["checks"].values())  # fail closed
+
+
+def test_error_shape_helpers():
+    import route_checks as rc
+
+    class R:
+        def __init__(self, status, body):
+            self.status_code, self._b = status, body
+            self.text = json.dumps(body)
+
+        def json(self):
+            return self._b
+
+    rc.err_ok(R(404, {"error": {"message": "m", "type": "t"}}), "openai")
+    rc.err_ok(
+        R(
+            400,
+            {
+                "type": "error",
+                "error": {"type": "invalid_request_error", "message": "m"},
+            },
+        ),
+        "anthropic",
+    )
+    rc.err_ok(R(400, {"error": "msg"}), "ollama")
+    for fam, r in [
+        ("openai", R(404, {"detail": "x"})),
+        ("openai", R(200, {"error": {"message": "m", "type": "t"}})),
+        ("anthropic", R(400, {"error": {"message": "m", "type": "t"}})),
+        ("ollama", R(400, {"error": {"message": "m"}})),
+        ("openai", R(500, {"error": {"message": "", "type": "t"}})),
+    ]:
+        try:
+            rc.err_ok(r, fam)
+        except rc.Fail:
+            continue
+        raise AssertionError(f"accepted {fam} {r.text}")
