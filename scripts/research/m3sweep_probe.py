@@ -189,7 +189,7 @@ def main():
                         "tool_choice": {"type": "tool", "name": "get_weather"},
                     },
                 )
-                for i in range(6)
+                for i in range(30)
             },
             "count": (
                 "/v1/messages/count_tokens",
@@ -212,7 +212,14 @@ def main():
             if body.get("stream"):
                 txt = summarize_sse(txt)
             res["rows"][k] = {"status": st, "body": txt[:6000]}
-            print(k, st, txt[:300].replace("\n", " "), flush=True)
+            bad = k.startswith("msg_named") and '"args": ""' in txt
+            print(
+                k,
+                st,
+                "BAD" if bad else "ok",
+                txt[:200].replace("\n", " ") if bad else "",
+                flush=True,
+            )
     finally:
         res["server_log_tail"] = srv.log_tail(60)
         srv.kill()
