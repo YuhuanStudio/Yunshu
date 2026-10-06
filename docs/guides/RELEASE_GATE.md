@@ -1,6 +1,7 @@
 # Release gate
 
-A version ships only when `scripts/release/gate.sh` passes on the commit being released. The gate
+A version ships only when `scripts/release/gate.sh` passes on the commit being released **and** the
+`long` stage (32K-128K against the previous release, run by `scripts/dev/yv gate`) passes. The gate
 tests Yunshu the way a user gets it: built into a wheel, installed with `uv tool install` into a
 clean environment, and driven over HTTP with the official OpenAI and Anthropic SDKs. Every check
 prints `PASS`, `FAIL` or `SKIP`. The run ends with a table and exits 1 if anything failed.
