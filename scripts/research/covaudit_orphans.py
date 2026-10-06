@@ -16,7 +16,23 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-DEFAULT = ["context_overflow", "kv_quant", "quant_kv_prefix", "streaming_tool_calls", "grammar_constraints", "structured_output", "anthropic_tools", "anthropic_messages", "multiturn", "usage_accounting", "concurrent", "error_contract", "responses_api", "reasoning_parser", "json_mode"]
+DEFAULT = [
+    "context_overflow",
+    "kv_quant",
+    "quant_kv_prefix",
+    "streaming_tool_calls",
+    "grammar_constraints",
+    "structured_output",
+    "anthropic_tools",
+    "anthropic_messages",
+    "multiturn",
+    "usage_accounting",
+    "concurrent",
+    "error_contract",
+    "responses_api",
+    "reasoning_parser",
+    "json_mode",
+]
 
 
 def summarize(rc: int | None, out: str) -> str:

@@ -217,6 +217,7 @@ def start_server(model, label, sets=()):
     if "COVAUDIT_BIN" not in os.environ and cand.exists():
         os.environ["COVAUDIT_BIN"] = str(cand)
     log = home / "server.log"
+    log.unlink(missing_ok=True)  # a stale log's load failures must not fail this server
     srv = Srv(model, str(ROOT / "python"), home, log, list(sets))
     srv.wait_ready()
     return srv
@@ -774,6 +775,7 @@ def cmd_routes(a):
             cand = Path(sys.executable).parent / "yunshu"
             if "COVAUDIT_BIN" not in os.environ and cand.exists():
                 os.environ["COVAUDIT_BIN"] = str(cand)
+            (home / "server.log").unlink(missing_ok=True)
             srv = Srv(
                 a.multi[0],
                 str(ROOT / "python"),
