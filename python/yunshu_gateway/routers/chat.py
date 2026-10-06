@@ -1036,9 +1036,7 @@ def _inject_tool_system_prompt(
             _template_supports_tools,
         )
 
-        forced_by_grammar = tool_choice not in (None, "auto", "none") and (
-            settings.get_bool("YUNSHU_TOOL_GRAMMAR")
-        )
+        forced_by_grammar = tool_choice not in (None, "auto", "none")
         if (
             (tool_choice in (None, "auto") or forced_by_grammar)
             and isinstance(engine, BatchedEngine)
@@ -1181,7 +1179,9 @@ def _tool_choice_prefill(tool_choice: str | ToolChoiceFunction | None) -> str:
     return ""
 
 
-def _append_tool_prefill(messages: list[dict], prefill: str) -> list[dict]:
+def _append_tool_prefill(
+    messages: list[dict], prefill: str, engine: Any = None
+) -> list[dict]:
     """Append the tool-call PREFILL onto a trailing assistant turn so the engine's
     chat template keeps the assistant turn OPEN (continue_final_message) and the model
     generates a continuation of the tool-call markup. No-op when prefill is empty.
@@ -1191,6 +1191,10 @@ def _append_tool_prefill(messages: list[dict], prefill: str) -> list[dict]:
     Returns a new list — the input is not mutated."""
     if not prefill:
         return messages
+    if engine is not None:
+        from ..usage_shapes import note_prefill
+
+        note_prefill(getattr(engine, "_tokenizer", None), prefill)
     messages = list(messages)
     last = messages[-1] if messages else None
     if (
@@ -1224,13 +1228,11 @@ def _vlm_tool_plan(req, engine, messages: list[dict]):
 
     Native (definitions passed to the engine's chat template, messages
     untouched) when the template renders tools and tool_choice is auto/None, or
-    a forced choice that tool-call grammar enforces (YUNSHU_TOOL_GRAMMAR);
+    a forced choice (the tool-call grammar always enforces it);
     otherwise the generic injected tool system prompt, as before."""
     if not req.tools:
         return messages, None
-    forced_by_grammar = req.tool_choice not in (None, "auto", "none") and (
-        settings.get_bool("YUNSHU_TOOL_GRAMMAR")
-    )
+    forced_by_grammar = req.tool_choice not in (None, "auto", "none")
     if (req.tool_choice in (None, "auto") or forced_by_grammar) and _vlm_renders_tools(
         engine
     ):
@@ -2013,7 +2015,7 @@ async def create_chat_completion(req: ChatCompletionRequest, request: Request):
     if req.tools and is_batched and not _native_tools_active():
         _tool_prefill = _tool_choice_prefill(req.tool_choice)
         if _tool_prefill:
-            messages = _append_tool_prefill(messages, _tool_prefill)
+            messages = _append_tool_prefill(messages, _tool_prefill, engine)
 
     completion_id = f"chatcmpl-{uuid.uuid4().hex[:24]}"
 
