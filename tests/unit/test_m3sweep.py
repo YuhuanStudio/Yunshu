@@ -108,7 +108,9 @@ def test_plan_and_verdict(tmp_path):
         assert j["submit"][:2] == ["--device", "m3"]
         assert j["label"].startswith("m3lane-")
         assert float(j["submit"][3]) <= 28
-    assert all(j["name"].startswith("wire") for j in d.plan("a", tmp_path, {"wire"}))
+    assert all(
+        j["name"].startswith(("wire", "env")) for j in d.plan("a", tmp_path, {"wire"})
+    )
     assert "wire-27b" in {j["name"] for j in d.plan("a", tmp_path, None, True)}
     # fail closed: nothing written -> FAIL; complete+pass -> PASS; failed/incomplete/m5 -> FAIL
     one = [js[0]]
@@ -139,7 +141,7 @@ def test_structural_session_judge():
             "usage": {"input_tokens": inp, "cache_read_input_tokens": cached},
         }
 
-    good = [row(1), row(2, cached=1000), row(3, cached=1000), row(4, cached=1000)]
+    good = [row(1), row(2, cached=1000), row(3, cached=2000), row(4, cached=3000)]
     assert jobs.structural_session_problems(good, 3) == []
     assert jobs.structural_session_problems(good[:2], 3)
     assert jobs.structural_session_problems([*good[:3], row(4, text="<tool_call>")], 3)
