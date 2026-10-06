@@ -1,3 +1,4 @@
+# Upstream (inspired): vllm-project/vllm (Apache-2.0) tests/entrypoints/openai/responses/test_streaming_events.py @ 68088ed
 """Yunshu Production Streaming — SSE keepalive, disconnect guard, thinking parser.
 
 Production-grade streaming implementation:
@@ -900,7 +901,7 @@ def format_responses_created(
     """response.created — initial event with empty response object."""
     data = {
         "type": "response.created",
-        "response": _responses_base_response(response_id, model, status="created"),
+        "response": _responses_base_response(response_id, model, status="in_progress"),
         "sequence_number": seq,
     }
     return f"event: response.created\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
@@ -962,6 +963,8 @@ def format_responses_output_item_added(
             "id": item_id,
             "status": "in_progress",
         }
+        if item_type == "reasoning":
+            item["summary"] = []  # required by the SDK's ResponseReasoningItem
     data = {
         "type": "response.output_item.added",
         "output_index": output_index,

@@ -244,7 +244,7 @@ class TestPrometheusMetrics:
         assert resp.status_code == 200
         text = resp.text
         assert "yunshu_uptime_seconds" in text
-        assert "yunshu_request_count" in text
+        assert "yunshu_http_requests_total" in text
         assert "yunshu_tokens_total" in text
 
     def test_metrics_after_requests(self):
@@ -285,7 +285,7 @@ class TestPrometheusMetrics:
         metrics.record_inference()
 
         text = metrics.to_prometheus()
-        assert "yunshu_inference_count 2" in text
+        assert "yunshu_inferences_total 2" in text
 
     def test_metrics_gpu_memory(self):
         from yunshu_gateway.middleware.metrics import get_metrics

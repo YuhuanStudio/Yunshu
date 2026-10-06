@@ -6,10 +6,10 @@ Tracks request counts, latencies, token throughput, and error rates.
 Exposes /metrics endpoint for Prometheus scraping.
 
 Metrics:
-  - yunshu_request_count{method,endpoint,status}
+  - yunshu_http_requests_total{method,endpoint,status}
   - yunshu_request_latency_seconds{endpoint}
   - yunshu_tokens_total{type}  (prompt/completion)
-  - yunshu_inference_count
+  - yunshu_inferences_total
 """
 
 
@@ -169,13 +169,13 @@ class _Metrics:
         lines.append(f"yunshu_uptime_seconds {uptime:.1f}")
 
         lines.append("")
-        lines.append("# HELP yunshu_request_count Total requests")
-        lines.append("# TYPE yunshu_request_count counter")
+        lines.append("# HELP yunshu_http_requests_total Total requests")
+        lines.append("# TYPE yunshu_http_requests_total counter")
         for key, count in sorted(req_counts.items()):
             parts = key.split(":", 2)
             if len(parts) == 3:
                 lines.append(
-                    f'yunshu_request_count{{method="{_esc_prom(parts[0])}",endpoint="{_esc_prom(parts[1])}",status="{_esc_prom(parts[2])}"}} {count}'
+                    f'yunshu_http_requests_total{{method="{_esc_prom(parts[0])}",endpoint="{_esc_prom(parts[1])}",status="{_esc_prom(parts[2])}"}} {count}'
                 )
 
         lines.append("")
@@ -217,14 +217,14 @@ class _Metrics:
         lines.append(f'yunshu_tokens_total{{type="completion"}} {completion_tok}')
 
         lines.append("")
-        lines.append("# HELP yunshu_inference_count Total inference operations")
-        lines.append("# TYPE yunshu_inference_count counter")
-        lines.append(f"yunshu_inference_count {inf_count}")
+        lines.append("# HELP yunshu_inferences_total Total inference operations")
+        lines.append("# TYPE yunshu_inferences_total counter")
+        lines.append(f"yunshu_inferences_total {inf_count}")
 
         lines.append("")
-        lines.append("# HELP yunshu_error_count Total errors")
-        lines.append("# TYPE yunshu_error_count counter")
-        lines.append(f"yunshu_error_count {err_count}")
+        lines.append("# HELP yunshu_errors_total Total errors")
+        lines.append("# TYPE yunshu_errors_total counter")
+        lines.append(f"yunshu_errors_total {err_count}")
 
         # GPU memory gauges
         try:

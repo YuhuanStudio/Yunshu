@@ -968,6 +968,34 @@
       "local_changes": [
         "Gemma 4 <|channel>thought / <channel|> text form in GemmaReasoningParser"
       ]
+    },
+    {
+      "kind": "inspired",
+      "path": "python/yunshu_gateway/streaming.py",
+      "repo": "https://github.com/vllm-project/vllm",
+      "clone": "reference/vllm",
+      "upstream_paths": [
+        "tests/entrypoints/openai/responses/test_streaming_events.py"
+      ],
+      "commit": "68088ed",
+      "license": "Apache-2.0",
+      "local_changes": [
+        "response.created carries status in_progress; reasoning item on output_item.added carries summary: []"
+      ]
+    },
+    {
+      "kind": "inspired",
+      "path": "python/yunshu_cli/serve.py",
+      "repo": "https://github.com/vllm-project/vllm",
+      "clone": "reference/vllm",
+      "upstream_paths": [
+        "vllm/entrypoints/launchers/launcher.py"
+      ],
+      "commit": "68088ed",
+      "license": "Apache-2.0",
+      "local_changes": [
+        "drain timeout 0 aborts in-flight requests (vLLM shutdown_timeout semantics)"
+      ]
     }
   ],
   "patches": [
