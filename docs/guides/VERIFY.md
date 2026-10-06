@@ -106,7 +106,7 @@ Qwen3.5-0.8B and Qwen3.5-9B-4bit (VLM runner); `agent` runs the covaudit tool se
 concurrent-vs-solo identity on Qwen3.5-2B and Qwen2.5-3B; `units` runs the unit files that skip
 without small checkpoints (tests find them through `tests/unit/model_paths.py`, which honours
 `M3_MODELS`). Fail closed: a missing or incomplete output, a failed job, a wrong device or any
-mismatch is FAIL. Only the four allowlisted small checkpoints (Qwen3.5 0.8B / 2B / 9B-4bit, Qwen2.5-3B-4bit) ever reach the laptop. Known gaps (forced tool_choice without `YUNSHU_TOOL_GRAMMAR`, non-stream prefill tokens in prompt usage) are listed in every verdict, not hidden. The M3 is portability / correctness evidence only: no timing, no tok/s.
+mismatch is FAIL. Only the four allowlisted small checkpoints (Qwen3.5 0.8B / 2B / 9B-4bit, Qwen2.5-3B-4bit) ever reach the laptop. No failure is excused: a forced tool_choice is always grammar-constrained and usage excludes server prefill. The M3 is portability / correctness evidence only: no timing, no tok/s.
 
 ## Adding a new kind of measurement
 
