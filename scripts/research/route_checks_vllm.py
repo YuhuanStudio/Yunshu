@@ -115,20 +115,25 @@ def _sweep(c: Ctx, path: str, probes, base: dict, family="openai", tolerate=()):
     return bad
 
 
-@check("vllm_chat_validation", "POST /v1/chat/completions")
+@check("vllm_chat_validation", "POST /v1/chat/completions", served=False)
 def _chat_validation(c: Ctx):
     bad = _sweep(c, "/v1/chat/completions", _bad_chat_probes(), {})
     c.notes["vllm_chat_validation"] = f"{len(bad)} gaps"
     expect(not bad, "accepted or mis-shaped: " + " | ".join(bad))
 
 
-@check("vllm_completion_validation", "POST /v1/completions")
+@check("vllm_completion_validation", "POST /v1/completions", served=False)
 def _completion_validation(c: Ctx):
     bad = _sweep(c, "/v1/completions", _bad_completion_probes(), {})
     expect(not bad, "accepted or mis-shaped: " + " | ".join(bad))
 
 
-@check("vllm_non_object_body", "POST /v1/chat/completions", "POST /v1/completions")
+@check(
+    "vllm_non_object_body",
+    "POST /v1/chat/completions",
+    "POST /v1/completions",
+    served=False,
+)
 def _non_object(c: Ctx):
     bad = []
     for path in ("/v1/chat/completions", "/v1/completions", "/v1/responses"):
@@ -146,7 +151,12 @@ def _non_object(c: Ctx):
     expect(not bad, " | ".join(bad))
 
 
-@check("vllm_stream_usage", "POST /v1/chat/completions", "POST /v1/completions")
+@check(
+    "vllm_stream_usage",
+    "POST /v1/chat/completions",
+    "POST /v1/completions",
+    served=True,
+)
 def _stream_usage(c: Ctx):
     """vLLM test_chat.py::test_stream_options: no usage without include_usage; with it every chunk
     has usage null and one final chunk has choices == [] and usage that adds up."""
