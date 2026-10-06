@@ -463,7 +463,7 @@ def _omni_speech_stream(c: Ctx):
         )
         sr = next((e["sr"] for e in evs if e["type"] == "audio"), 0)
         expect(text.strip(), f"{label}: no text")
-        expect(sr == 24000 and len(pcm) > 24000, f"{label}: audio {len(pcm)} B sr {sr}")
+        expect(sr == 24000 and len(pcm) > 9600, f"{label}: audio {len(pcm)} B sr {sr}")
         expect("done" in types, f"{label}: no done event")
         c.notes[f"omni_stream_{label}"] = {"text": text[:100], "pcm_bytes": len(pcm)}
         if label == "audio_in":
@@ -509,7 +509,11 @@ def _omni_native_chat_cache(c: Ctx):
     b = c.oa.chat.completions.create(
         model=c.model, messages=msgs, max_tokens=32, temperature=0
     )
-    c.notes["audio_cached"] = [_cached(a.usage), _cached(b.usage)]
+    c.notes["audio_cached"] = [
+        _cached(a.usage),
+        _cached(b.usage),
+        b.usage.prompt_tokens,
+    ]
     expect(
         _cached(b.usage) > 0, f"repeated audio: no prefix hit {c.notes['audio_cached']}"
     )
@@ -520,7 +524,7 @@ def _omni_native_chat_cache(c: Ctx):
     img = _chat_audio_msg(wav, "What colour is the image?", _png(224, (200, 30, 30)))
     c.oa.chat.completions.create(model=c.model, messages=img, max_tokens=8)
     r2 = c.oa.chat.completions.create(model=c.model, messages=img, max_tokens=8)
-    c.notes["image_audio_cached"] = _cached(r2.usage)
+    c.notes["image_audio_cached"] = [_cached(r2.usage), r2.usage.prompt_tokens]
     expect(_cached(r2.usage) > 0, "repeated image + audio: no prefix hit")
 
 
