@@ -147,6 +147,10 @@ class Srv:
         self.engaged_spec_mode = engaged_spec_mode(
             self.engine, self.log.read_text(errors="replace")
         )
+        if os.environ.get("TFB_SKIP_ENGAGED") == "1":
+            # old releases (v0.1.0) have no speculative decoding and no engagement marker
+            self.engaged_spec_mode = self.engaged_spec_mode or "unchecked"
+            return
         if self.engaged_spec_mode != self.requested_spec_mode:
             raise RuntimeError(
                 f"requested spec={self.requested_spec_mode}, "
@@ -161,7 +165,7 @@ class Srv:
                 self.proc.wait(30)
 
 
-def send(url, body, timeout=900):
+def send(url, body, timeout=600):
     body = dict(body, stream=True, stream_options={"include_usage": True})
     req = urllib.request.Request(
         url + "/v1/chat/completions",
@@ -173,6 +177,7 @@ def send(url, body, timeout=900):
     content, reasoning, tools = [], [], {}
     usage = finish = xy = None
     done = False
+    nchunks = 0
     with urllib.request.urlopen(req, timeout=timeout) as r:
         for line in r:
             line = line.strip()
@@ -206,6 +211,13 @@ def send(url, body, timeout=900):
                     c["name"] += fn.get("name") or ""
                     c["arguments"] += fn.get("arguments") or ""
                     got = True
+                if got:
+                    nchunks += 1
+                    if nchunks % 256 == 0:  # life sign for gpuq's no-output stall check
+                        print(
+                            f"  streamed {nchunks} chunks, {time.perf_counter() - t0:.0f}s",
+                            flush=True,
+                        )
                 if got and tf is None:
                     tf = time.perf_counter()
                 finish = ch.get("finish_reason") or finish
@@ -313,24 +325,58 @@ def req(model, text, mt, seed=None, extra=None, temp=0):
 
 
 def emit(out, **kw):
+    print(
+        json.dumps({k: v for k, v in kw.items() if k not in ("text", "cmd", "env")})[
+            :300
+        ],
+        flush=True,
+    )
     kw["device"] = os.environ.get("GPUQ_DEVICE", "m5")
     kw["contended"] = was_contended()
     out.write(json.dumps(kw) + "\n")
     out.flush()
 
 
+# Appended to long decode prompts: a plain "keep writing at length" ask ends by itself around
+# 1.5K tokens on Qwen3.8-27B, and a decode cell needs a reply that reaches its token budget.
+LONG_ASK = (
+    "\n\nRequirement: the answer must be extremely long, at least 5000 words. "
+    "Do not conclude, summarize or stop early; keep going section after section."
+)
+
+
+def check_decode_len(r, n, what):
+    """A decode cell measures exactly n tokens; a short reply is an error (a request that died
+    mid-stream must not count as a result)."""
+    if r.get("finish") != "length" or r.get("ct") != n:
+        raise RuntimeError(
+            f"{what}: finish={r.get('finish')} ct={r.get('ct')} (want length/{n})"
+        )
+
+
+def ngram_repeat(text, n=4):
+    """Share of word n-grams that repeat an earlier n-gram (0 = none, ->1 = a loop)."""
+    w = text.split()
+    if len(w) <= n:
+        return 0.0
+    grams = [tuple(w[i : i + n]) for i in range(len(w) - n + 1)]
+    return round(1 - len(set(grams)) / len(grams), 4)
+
+
 def part_decode(s, out, a):
+    n_dec = int(a.decode_tokens)
     ctxs = [512] if a.smoke else a.only_ctx or [1024, 8192, 32768]
     for ctx in ctxs:
         for kind in a.only_kind or ("prose", "code"):
             text = (
                 "Write a short example and explain it."
                 if a.smoke
-                else load_prompt(f"{kind}-{ctx}")
+                else load_prompt(f"{kind}-{ctx}") + (LONG_ASK if a.long_ask else "")
             )
             reply = ""
             for phase in ("cold", "warm", "turn2"):
-                b = req(s.model, text, 16 if a.smoke else 256)
+                want = (a.turn2_tokens or n_dec) if phase == "turn2" else n_dec
+                b = req(s.model, text, 16 if a.smoke else want)
                 if phase == "turn2":
                     b["messages"] += [
                         {"role": "assistant", "content": reply},
@@ -340,21 +386,143 @@ def part_decode(s, out, a):
                         },
                     ]
                 r = send(s.url, b)
-                if not a.smoke and (r.get("finish") != "length" or r.get("ct") != 256):
-                    # A decode cell measures 256 tokens; a short reply is an error
-                    # (a request that died mid-stream must not count as a result).
-                    raise RuntimeError(
-                        f"decode {kind}-{ctx} {phase}: "
-                        f"finish={r.get('finish')} ct={r.get('ct')}"
-                    )
+                if not a.smoke:
+                    check_decode_len(r, want, f"decode {kind}-{ctx} {phase}")
                 if phase == "cold":
                     reply = r["_text"]
                 r["text"] = r.pop("_text")
+                r["rep4"] = ngram_repeat(r["text"])
                 emit(out, part="decode", ctx=ctx, kind=kind, phase=phase, **r)
             if a.engine != "yunshu" and ctx == 1024:
-                r = send(s.url, req(s.model, text, 256, extra={"draft": False}))
+                r = send(s.url, req(s.model, text, n_dec, extra={"draft": False}))
                 r["text"] = r.pop("_text")
                 emit(out, part="decode", ctx=ctx, kind=kind, phase="specoff", **r)
+
+
+NEEDLE_NAMES = [
+    "Aldrin", "Borealis", "Calypso", "Dunmore", "Elmstead", "Fairhaven", "Glenrock",
+    "Highmarsh", "Ironwood", "Juniper", "Kestrel", "Larkspur", "Mirefield", "Northgate",
+    "Oakhollow", "Pinecrest", "Quillon", "Redwater", "Stonebridge", "Thornfield",
+]  # fmt: skip
+NEEDLES_PER_CTX = 10
+
+
+def needle_items(ctx, n=NEEDLES_PER_CTX):
+    """Deterministic key-value items for one context: (station name, 6-digit code)."""
+    rnd = random.Random(7000 + ctx)
+    names = rnd.sample(NEEDLE_NAMES, n)
+    return [(nm, f"{rnd.randint(100000, 999999)}") for nm in names]
+
+
+def needle_haystack(base, ctx, items):
+    """Splice one needle sentence per item into `base` (the corpus without its final ask) at
+    evenly spread depths (line boundaries), then trim the tail so the length stays the same."""
+    sents = [
+        f"\nRecord note: the passcode for station {nm} is {code}.\n"
+        for nm, code in items
+    ]
+    out, last = [], 0
+    for i, snt in enumerate(sents):
+        pos = int(len(base) * (i + 0.5) / len(sents))
+        nl = base.find("\n", pos)
+        pos = len(base) if nl < 0 else nl
+        out.append(base[last:pos])
+        out.append(snt)
+        last = pos
+    out.append(base[last:])
+    text = "".join(out)
+    return text[: len(base) - 400]  # the question + template need headroom
+
+
+def needle_question(name):
+    return (
+        f"\n\n---\nIn the text above, what is the passcode for station {name}? "
+        "Answer with the six-digit number only."
+    )
+
+
+def part_needle(s, out, a):
+    ctxs = [512] if a.smoke else a.only_ctx or [32768, 65536, 131072]
+    for ctx in ctxs:
+        if a.smoke:
+            base, items = "Some filler text.\n" * 40, needle_items(ctx, 2)
+        else:
+            full = load_prompt(f"prose-{ctx}")
+            base = full[: full.rfind("\n\n---\n")]
+            items = needle_items(ctx)
+        hay = needle_haystack(base, ctx, items)
+        lo, hi = (int(x) for x in (a.items or f"0:{len(items)}").split(":"))
+        for i, (nm, code) in enumerate(items):
+            if not lo <= i < hi:
+                continue
+            r = send(s.url, req(s.model, hay + needle_question(nm), 16))
+            ans = r.pop("_text")
+            emit(
+                out,
+                part="needle",
+                ctx=ctx,
+                item=i,
+                name=nm,
+                expect=code,
+                answer=ans[:80],
+                correct=code in ans,
+                **{k: r[k] for k in ("ttft_s", "pt", "cached", "finish", "ct")},
+            )
+
+
+def part_conc32(s, out, a):
+    """Two sub-agents at once, each a growing agentic conversation: a warm 32K prefix, then three
+    rounds that each append ~2K of new text after the previous reply (the usual agent pattern)
+    and ask for a 1K reply. Reports TTFT, cached tokens and per-request decode per round."""
+    ctx, n_new = (512, 16) if a.smoke else (32768, 1024)
+    kinds = ("prose", "code")
+    prefixes = {
+        k: ("Hello. " * 80 if a.smoke else load_prompt(f"{k}-{ctx}")) for k in kinds
+    }
+    for k in kinds:  # warm each prefix
+        send(s.url, req(s.model, prefixes[k], 8))
+    msgs = {k: [{"role": "user", "content": prefixes[k]}] for k in kinds}
+    for rnd in range(1 if a.smoke else 3):
+
+        def turn(k, rnd=rnd):
+            other = "code" if k == "prose" else "prose"
+            src = "Extra." * 20 if a.smoke else load_prompt(f"{other}-8192")
+            piece = src[rnd * 6500 : rnd * 6500 + 6500]
+            if rnd == 0:
+                msgs[k][0]["content"] += "\n\nNew material:\n" + piece + "\nContinue."
+            else:
+                msgs[k].append(
+                    {
+                        "role": "user",
+                        "content": "More material:\n" + piece + "\nContinue.",
+                    }
+                )
+            b = req(s.model, "", n_new)
+            b["messages"] = list(msgs[k])
+            r = send(s.url, b)
+            msgs[k].append({"role": "assistant", "content": r["_text"]})
+            return r
+
+        t0 = time.perf_counter()
+        with cf.ThreadPoolExecutor(2) as ex:
+            rs = list(ex.map(turn, kinds))
+        wall = time.perf_counter() - t0
+        for r in rs:
+            if not a.smoke:
+                check_decode_len(r, n_new, f"conc32 round {rnd}")
+            r.pop("_text")
+        emit(
+            out,
+            part="conc32",
+            trial=rnd,
+            wall_s=round(wall, 2),
+            ttfts=[r["ttft_s"] for r in rs],
+            per_req_dec=[r["dec_tps"] for r in rs],
+            cached=[r["cached"] for r in rs],
+            pts=[r["pt"] for r in rs],
+            cts=[r["ct"] for r in rs],
+            shas=[r["sha"] for r in rs],
+        )
 
 
 def part_conc(s, out, a):
@@ -441,6 +609,26 @@ def parse_args(argv=None):
     ap.add_argument("--tag", default="")
     ap.add_argument("--model", default=M)
     ap.add_argument("--smoke", action="store_true")
+    ap.add_argument(
+        "--items", default="", help="needle item range a:b (one job per slice)"
+    )
+    ap.add_argument(
+        "--long-ask",
+        action="store_true",
+        help="append LONG_ASK to decode prompts so replies reach --decode-tokens",
+    )
+    ap.add_argument(
+        "--turn2-tokens",
+        type=int,
+        default=0,
+        help="reply length of the follow-up (turn2) request; 0 = --decode-tokens",
+    )
+    ap.add_argument(
+        "--decode-tokens",
+        type=int,
+        default=256,
+        help="reply length of decode cells; a cell that does not end finish=length at exactly N is an error",
+    )
     ap.add_argument("--dry-run", action="store_true")
     args = list(sys.argv[1:] if argv is None else argv)
     # Tags are filename suffixes and often begin with '-'. Keep registered
@@ -456,8 +644,8 @@ def parse_args(argv=None):
 def main():
     a = parse_args()
     extra_env = dict(kv.split("=", 1) for kv in a.env)
-    if a.part not in ("decode", "conc", "agent", "ca"):
-        raise ValueError("supported parts: decode, conc, agent, ca")
+    if a.part not in ("decode", "conc", "agent", "ca", "needle", "conc32"):
+        raise ValueError("supported parts: decode, conc, agent, ca, needle, conc32")
     if a.dry_run:
         if a.part == "decode" and not a.smoke:
             for ctx in a.only_ctx or [1024, 8192, 32768]:
@@ -502,9 +690,13 @@ def main():
                 part_conc(s, out, a)
                 part_agent(s, out, a)
             else:
-                {"decode": part_decode, "conc": part_conc, "agent": part_agent}[a.part](
-                    s, out, a
-                )
+                {
+                    "decode": part_decode,
+                    "conc": part_conc,
+                    "agent": part_agent,
+                    "needle": part_needle,
+                    "conc32": part_conc32,
+                }[a.part](s, out, a)
             s.verify_spec_mode()
             emit(
                 out,
