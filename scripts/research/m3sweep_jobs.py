@@ -333,10 +333,60 @@ def run_sub(cmd, label):
     return {"step": label, "rc": p.returncode, "tail": tail}
 
 
+def structural_session_problems(rows, turns):
+    """Model-quality-independent checks of a session run: every stream ended, no tool markup in
+    text, every tool call is a parsed object with a file_path, the cache grows request over
+    request. (The strict judge also demands the right file per turn and the needles.)"""
+    by = {r["req"]: r for r in rows if r.get("kind") == "req"}
+    if len(by) < turns + 1:
+        return [f"only {len(by)} of {turns + 1} requests ran"]
+    bad = []
+    for k, r in sorted(by.items()):
+        if not r.get("ended"):
+            bad.append(f"req{k}: stream did not end")
+        if "<tool_call>" in r["text"] or "<function=" in r["text"]:
+            bad.append(f"req{k}: tool markup leaked into text")
+        for c in r["tool_calls"]:
+            if not isinstance(c["input"], dict) or "file_path" not in c["input"]:
+                bad.append(
+                    f"req{k}: malformed tool call {c['name']} {str(c['input'])[:40]}"
+                )
+    for k in range(2, max(by) + 1):
+        if k in by and k - 1 in by:
+            u = by[k - 1]["usage"]
+            tot = (
+                (u.get("input_tokens") or 0)
+                + (u.get("cache_read_input_tokens") or 0)
+                + (u.get("cache_creation_input_tokens") or 0)
+            )
+            got = int(by[k]["usage"].get("cache_read_input_tokens") or 0)
+            if got < int(0.85 * tot):
+                bad.append(
+                    f"req{k}: cached {got} < 85% of request {k - 1}'s prompt {tot}"
+                )
+    return bad
+
+
+def lenient_conc_problems(stdout, rc):
+    """Failures of a concurrent run that do not depend on the model answering correctly:
+    errors, crashes and any concurrent output that differs from its solo output."""
+    keep = ("differs from solo", "error", "no solo", "Error")
+    judged = [
+        ln[len("JUDGE FAIL:") :].strip()
+        for ln in stdout.splitlines()
+        if ln.startswith("JUDGE FAIL:")
+    ]
+    bad = [j for j in judged if any(k in j for k in keep)]
+    if rc != 0 and not judged:
+        bad.append(f"conc run rc={rc} without a verdict")
+    return bad
+
+
 def cmd_agent(a):
     res = {
         "kind": "agent",
         "model": a.model,
+        "strict": a.strict,
         "steps": [],
         "failures": [],
         "complete": False,
@@ -349,58 +399,191 @@ def cmd_agent(a):
     if "COVAUDIT_BIN" not in os.environ and cand.exists():
         os.environ["COVAUDIT_BIN"] = str(cand)
     home = os.environ.get("HOME", str(d))
-    steps = [
-        (
-            "session-messages",
-            [
-                py,
-                str(HERE / "covaudit_session.py"),
-                "run",
-                "--model",
-                a.model,
-                "--src",
-                src,
-                "--out",
-                str(d / "session.jsonl"),
-                "--home",
-                f"{home}/m3sweep-sess",
-                "--turns",
-                "3",
-                "--file-tokens",
-                "1200",
-                "--max-tokens",
-                "160",
-            ],
-        ),
-        (
-            "conc-identity",
-            [
-                py,
-                str(HERE / "covaudit_conc.py"),
-                "run",
-                "--model",
-                a.model,
-                "--src",
-                src,
-                "--out",
-                str(d / "conc.jsonl"),
-                "--long-tokens",
-                "2500",
-                "--mid-tokens",
-                "800",
-            ],
-        ),
-    ]
-    for label, cmd in steps:
-        s = run_sub(cmd, label)
-        res["steps"].append(s)
+    turns = 3
+    s = run_sub(
+        [
+            py,
+            str(HERE / "covaudit_session.py"),
+            "run",
+            "--model",
+            a.model,
+            "--src",
+            src,
+            "--out",
+            str(d / "session.jsonl"),
+            "--home",
+            f"{home}/m3sweep-sess",
+            "--turns",
+            str(turns),
+            "--file-tokens",
+            "1200",
+            "--max-tokens",
+            "160",
+        ],
+        "session-messages",
+    )
+    res["steps"].append(s)
+    if a.strict:
         if s["rc"] != 0:
-            res["failures"].append(f"{label} rc={s['rc']}")
-        write(a.out, res)
+            res["failures"].append(f"session-messages rc={s['rc']}")
+    else:
+        try:
+            rows = [
+                json.loads(x) for x in (d / "session.jsonl").read_text().splitlines()
+            ]
+            res["failures"] += [
+                f"session: {b}" for b in structural_session_problems(rows, turns)
+            ]
+        except Exception as e:  # noqa: BLE001
+            res["failures"].append(f"session rows unreadable: {e}")
+    write(a.out, res)
+    s = run_sub(
+        [
+            py,
+            str(HERE / "covaudit_conc.py"),
+            "run",
+            "--model",
+            a.model,
+            "--src",
+            src,
+            "--out",
+            str(d / "conc.jsonl"),
+            "--home",
+            f"{home}/m3sweep-conc",
+            "--long-tokens",
+            "2500",
+            "--mid-tokens",
+            "800",
+        ],
+        "conc-identity",
+    )
+    res["steps"].append(s)
+    if a.strict:
+        if s["rc"] != 0:
+            res["failures"].append(f"conc-identity rc={s['rc']}")
+    else:
+        res["failures"] += [
+            f"conc: {b}" for b in lenient_conc_problems(s["tail"], s["rc"])
+        ]
     res["complete"] = True
     res["pass"] = not res["failures"]
     write(a.out, res)
     print("RESULT", "PASS" if res["pass"] else "FAIL", flush=True)
+    return 0 if res["pass"] else 1
+
+
+KEY_PACKAGES = (
+    "openai",
+    "anthropic",
+    "httpx",
+    "httpx2",
+    "fastapi",
+    "starlette",
+    "uvicorn",
+    "pydantic",
+    "mlx",
+    "mlx-lm",
+    "mlx-vlm",
+    "transformers",
+    "tokenizers",
+    "llguidance",
+    "numpy",
+)
+
+
+def norm(n):
+    return n.lower().replace("_", "-").replace(".", "-")
+
+
+def locked_versions(lock_text):
+    import tomllib
+
+    return {
+        norm(p["name"]): p["version"]
+        for p in tomllib.loads(lock_text).get("package", [])
+    }
+
+
+def lock_mismatches(locked, installed):
+    """Packages the lock pins that are installed at another version (absent ones are extras)."""
+    return {
+        n: (v, installed[n])
+        for n, v in locked.items()
+        if n in installed and installed[n] != v
+    }
+
+
+def installed_versions():
+    from importlib import metadata
+
+    return {
+        norm(d.metadata["Name"]): d.version
+        for d in metadata.distributions()
+        if d.metadata["Name"]
+    }
+
+
+def uv_binary():
+    import pwd
+    import shutil
+
+    for c in (
+        shutil.which("uv"),
+        os.path.join(pwd.getpwuid(os.getuid()).pw_dir, ".local/bin/uv"),
+    ):
+        if c and os.path.exists(c):
+            return c
+    return None
+
+
+def cmd_env(a):
+    """Make the venv match this commit's uv.lock (as m3run does) and record the SDK versions."""
+    res = {"kind": "env", "failures": [], "complete": False}
+    lock = ROOT / "uv.lock"
+    locked = locked_versions(lock.read_text())
+    mism = lock_mismatches(locked, installed_versions())
+    res["mismatch_before"] = mism
+    print("lock mismatches before:", mism, flush=True)
+    if mism and a.sync:
+        uv = uv_binary()
+        if not uv:
+            res["failures"].append("venv differs from uv.lock and uv is not available")
+        else:
+            cmd = [
+                uv,
+                "sync",
+                "-q",
+                "--frozen",
+                "--all-extras",
+                "--dev",
+                "--project",
+                str(ROOT),
+            ]
+            print("$", " ".join(cmd), flush=True)
+            p = subprocess.run(cmd, capture_output=True, text=True)
+            print((p.stdout + p.stderr)[-1500:], flush=True)
+            if p.returncode:
+                res["failures"].append(f"uv sync rc={p.returncode}")
+            blob = subprocess.run(
+                ["git", "-C", str(ROOT), "rev-parse", "HEAD:uv.lock"],
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            if blob and not p.returncode:
+                (Path(sys.prefix) / ".m5-lock-sha").write_text(blob + "\n")
+    inst = installed_versions()
+    mism = lock_mismatches(locked, inst)
+    res["mismatch_after"] = mism
+    res["versions"] = {n: inst.get(n) for n in KEY_PACKAGES}
+    res["locked"] = {n: locked.get(n) for n in KEY_PACKAGES}
+    if mism:
+        res["failures"].append(
+            f"venv still differs from uv.lock: {dict(list(mism.items())[:8])}"
+        )
+    res["complete"] = True
+    res["pass"] = not res["failures"]
+    write(a.out, res)
+    print("RESULT", "PASS" if res["pass"] else "FAIL", res["versions"], flush=True)
     return 0 if res["pass"] else 1
 
 
@@ -479,8 +662,12 @@ def cmd_units(a):
 def main(argv=None):
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="cmd", required=True)
-    for n in ("wire", "agent", "units"):
+    for n in ("wire", "agent", "units", "env"):
         p = sub.add_parser(n)
+        if n == "agent":
+            p.add_argument("--strict", action="store_true")
+        if n == "env":
+            p.add_argument("--sync", action="store_true")
         p.add_argument("--out", required=True)
         p.add_argument(
             "--model",
@@ -488,7 +675,9 @@ def main(argv=None):
             action="append" if n == "units" else "store",
         )
     a = ap.parse_args(argv)
-    return {"wire": cmd_wire, "agent": cmd_agent, "units": cmd_units}[a.cmd](a)
+    return {"wire": cmd_wire, "agent": cmd_agent, "units": cmd_units, "env": cmd_env}[
+        a.cmd
+    ](a)
 
 
 if __name__ == "__main__":

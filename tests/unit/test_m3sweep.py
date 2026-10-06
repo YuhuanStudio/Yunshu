@@ -126,3 +126,36 @@ def test_plan_and_verdict(tmp_path):
     v = d.verdict(one, 0)
     assert v["verdict"] == "FAIL" and "x" in v["jobs"][one[0]["name"]]["problems"]
     assert d.verdict([], 0)["verdict"] == "FAIL"
+
+
+def test_structural_session_judge():
+    def row(k, cached=0, calls=(), text="", ended=True, inp=1000):
+        return {
+            "kind": "req",
+            "req": k,
+            "ended": ended,
+            "text": text,
+            "tool_calls": list(calls),
+            "usage": {"input_tokens": inp, "cache_read_input_tokens": cached},
+        }
+
+    good = [row(1), row(2, cached=1000), row(3, cached=1000), row(4, cached=1000)]
+    assert jobs.structural_session_problems(good, 3) == []
+    assert jobs.structural_session_problems(good[:2], 3)
+    assert jobs.structural_session_problems([*good[:3], row(4, text="<tool_call>")], 3)
+    assert jobs.structural_session_problems([*good[:3], row(4, cached=10)], 3)
+    bad_call = {"name": "Read", "input": "oops"}
+    assert jobs.structural_session_problems([*good[:3], row(4, calls=[bad_call])], 3)
+
+
+def test_lenient_conc_and_lock():
+    out = "JUDGE FAIL: long/solo: wrong answer\nJUDGE FAIL: c2/short: differs from solo: a vs b\n"
+    assert jobs.lenient_conc_problems(out, 1) == ["c2/short: differs from solo: a vs b"]
+    assert jobs.lenient_conc_problems("RESULT PASS", 0) == []
+    assert jobs.lenient_conc_problems("crash", 2)
+    lock = '[[package]]\nname = "Open_AI"\nversion = "3.0"\n[[package]]\nname = "x"\nversion = "1"\n'
+    locked = jobs.locked_versions(lock)
+    assert locked == {"open-ai": "3.0", "x": "1"}
+    assert jobs.lock_mismatches(locked, {"open-ai": "2.0", "x": "1", "y": "9"}) == {
+        "open-ai": ("3.0", "2.0")
+    }

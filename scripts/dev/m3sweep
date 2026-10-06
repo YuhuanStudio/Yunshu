@@ -38,6 +38,7 @@ JOBS_PY = "scripts/research/m3sweep_jobs.py"
 
 # name -> (kind, models, declared GB, timeout min)
 PLAN = {
+    "env": ("env", [], 1, 20),
     "wire-q25-3b": ("wire", ["Qwen2.5-3B-Instruct-4bit"], 6, 30),
     "wire-q35-08b": ("wire", ["Qwen3.5-0.8B-MLX-bf16"], 5, 25),
     "wire-q35-9b": ("wire", ["Qwen3.5-9B-MLX-4bit"], 12, 40),
@@ -53,8 +54,15 @@ PLAN = {
 PLAN_27B = {"wire-27b": ("wire", ["Jundot/Qwen3.8-27B-oQ4e-mtp"], 24, 60)}
 
 
-def job_cmd(kind, models, out):
+STRICT = {"agent-q35-2b"}  # models that must follow the one-Read-per-turn protocol exactly
+
+
+def job_cmd(kind, models, out, name=""):
     cmd = [PY, JOBS_PY, kind, "--out", str(out)]
+    if kind == "env":
+        cmd.append("--sync")
+    if kind == "agent" and name in STRICT:
+        cmd.append("--strict")
     for m in models:
         cmd += ["--model", str(MODELS / m)]
     return cmd
@@ -65,7 +73,7 @@ def plan(sha, outdir, only=None, with_27b=False):
     table = dict(PLAN, **(PLAN_27B if with_27b else {}))
     jobs = []
     for name, (kind, models, gb, tmo) in table.items():
-        if only and kind not in only:
+        if only and kind not in only and kind != "env":
             continue
         out = outdir / f"{name}.json"
         jobs.append(
@@ -86,7 +94,7 @@ def plan(sha, outdir, only=None, with_27b=False):
                     str(out),
                     "--expect-complete",
                 ],
-                "cmd": job_cmd(kind, models, out),
+                "cmd": job_cmd(kind, models, out, name),
             }
         )
     return jobs
@@ -110,6 +118,17 @@ def judge_output(path):
     if dev not in (None, "m3"):
         bad.append(f"ran on {dev!r}, not the M3")
     return bad
+
+
+def env_versions(jobs):
+    """SDK / MLX versions the M3 venv had (from the env job's output), for the verdict."""
+    for j in jobs:
+        if j["name"] == "env":
+            try:
+                return json.loads(Path(j["out"]).read_text()).get("versions")
+            except (OSError, ValueError):
+                return None
+    return None
 
 
 def verdict(jobs, wait_rc):
