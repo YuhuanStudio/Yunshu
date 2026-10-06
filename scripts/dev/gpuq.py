@@ -531,7 +531,10 @@ def _owner(job: dict) -> str:
     m = re.search(r"/[^/]+-wt-([^/]+)", cwd)
     if m:
         return m.group(1)
-    return "main"
+    # yv runs from the main checkout or its verify trees for every line: the label's
+    # line prefix keeps hol-long and longgap-tree from sharing one turn (2026-10-06).
+    line = (job.get("label") or "").split("-", 1)[0]
+    return f"main:{line}" if line else "main"
 
 
 def _lane(job: dict) -> str:

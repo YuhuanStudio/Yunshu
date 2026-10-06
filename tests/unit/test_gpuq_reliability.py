@@ -575,6 +575,8 @@ def test_external_worktrees_take_turns(q):
     assert q._owner(dict(cwd=f"{w}/wide-lead/x", env={})) == "wide-lead"
     assert q._owner(dict(cwd="/repo/.claude/worktrees/a/b", env={})) == "a"
     assert q._owner(dict(cwd="/repo", env={})) == "main"
+    assert q._owner(dict(cwd="/repo", label="hol-long-x", env={})) == "main:hol"
+    assert q._owner(dict(cwd="/repo", label="longgap-tree-y", env={})) == "main:longgap"
     assert q._owner(dict(cwd="/x/Yunshu-wt-hol/scripts", env={})) == "hol"
     assert q._owner(dict(cwd="/x/Yunshu-wt-longgap", env={})) == "longgap"
     jobs = [
