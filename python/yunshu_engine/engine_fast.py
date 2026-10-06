@@ -189,15 +189,17 @@ class EngineFastMixin:
     def _tool_call_processor(self: _engine.BatchedEngine, input_ids: list[int]):  # type: ignore[misc]
         """Structural-tag logits processor for the request's native tools (free until
         the tool-call marker, then the call body is masked to this request's tool
-        grammar), or None: no native tools, ``YUNSHU_TOOL_GRAMMAR`` off, or a model /
+        grammar), or None: no native tools, ``YUNSHU_TOOL_GRAMMAR`` off for auto (a forced choice is always constrained), or a model /
         tool set the grammar cannot cover."""
         tools = _engine._REQUEST_TOOLS.get()
-        if not tools or not settings.get_bool("YUNSHU_TOOL_GRAMMAR"):
+        if not tools:
             return None
         from . import tool_call_grammar as tcg
 
         use = _engine._REQUEST_TOOL_USE.get() or {}
         choice = tcg.normalize_tool_choice(use.get("tool_choice"))
+        if not (tcg.is_forced(choice) or settings.get_bool("YUNSHU_TOOL_GRAMMAR")):
+            return None
         if choice == "none":
             return None
         parallel = use.get("parallel", True) is not False
@@ -579,6 +581,8 @@ class EngineFastMixin:
         _tool_processor = (
             self._tool_call_processor(input_ids) if json_schema is None else None
         )
+        # read here (request task): the contextvar does not reach the MLX executor thread
+        _tools_declared = bool(_engine._REQUEST_TOOLS.get())
         if repetition_penalty != 1.0:
 
             def _rep_penalty(tokens, logits, rp=repetition_penalty, ctx=20):
@@ -1658,8 +1662,19 @@ class EngineFastMixin:
             _reasoning_tok = len(_thinking_tokens)
             if output_text:
                 try:
-                    from .reasoning_parser import get_reasoning_parser
+                    from .reasoning_parser import (
+                        close_reasoning_at_tool_call,
+                        get_reasoning_parser,
+                    )
 
+                    if _tools_declared:
+                        # a tool call opened inside unclosed reasoning ends the reasoning
+                        from .thinking_budget import detect_needs_think_prefix
+
+                        output_text = close_reasoning_at_tool_call(
+                            output_text,
+                            detect_needs_think_prefix(list(input_ids), tokenizer),
+                        )
                     rp = get_reasoning_parser(self.model_name)
                     rp_out = rp.parse(output_text)
                     if rp_out.reasoning:

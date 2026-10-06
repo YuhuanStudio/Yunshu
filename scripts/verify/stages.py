@@ -123,12 +123,43 @@ def _tfb_log(ctx: Ctx, stage: str, key: str, rep: int = 0) -> Path:
     )
 
 
-def _decode_est_min(ctx: Ctx, ctxs: list, kinds: int) -> float:
+def _units(ctx: Ctx) -> list:
+    """Server cells of the decode-style stages: [(tag, ctxs, kinds)]. A long suite splits per
+    (ctx, kind) so every job stays under the 20 minute queue limit."""
+    cfg = ctx.suite
+    if not cfg.get("split_cells"):
+        return [("", list(cfg["ctx"]), list(cfg["kinds"]))]
+    return [(f"c{c}{k}", [c], [k]) for c in cfg["ctx"] for k in cfg["kinds"]]
+
+
+def _dec_args(ctx: Ctx) -> list:
+    out = ["--decode-tokens", str(int(ctx.suite.get("decode_tokens", 256)))]
+    if ctx.suite.get("long_ask"):
+        out.append("--long-ask")
+    if ctx.suite.get("turn2_tokens"):
+        out += ["--turn2-tokens", str(int(ctx.suite["turn2_tokens"]))]
+    return out
+
+
+def _unit_args(ctxs: list, rep: int = 0) -> list:
+    return ["--part", "decode", "--rep", str(rep)] + [
+        x for c in ctxs for x in ("--only-ctx", str(c))
+    ]
+
+
+def _kind_args(kinds: list, all_kinds: list) -> list:
+    return [x for k in kinds for x in ("--only-kind", k)] if kinds != all_kinds else []
+
+
+def _decode_est_min(
+    ctx: Ctx, ctxs: list, kinds: int, n_dec: int = 256, n_t2: int = 0
+) -> float:
     start = 2.5 if ctx.big else 0.7
     secs = 0.0
     for c in ctxs:
         per = (3 + c / 1000 * (1.4 if ctx.big else 0.15)) * 3  # cold, warm, follow-up
         secs += per * kinds
+        secs += kinds * (2 * n_dec + (n_t2 or n_dec)) / (15.0 if ctx.big else 60.0)
     return min(20.0, max(5.0, (start * 60 + secs) * 1.6 / 60))
 
 
@@ -328,16 +359,14 @@ def mode_env(mode: str) -> dict:
     raise InfraError(f"unknown spec mode {mode!r} (default, mtp, dflash)")
 
 
-def identity_cell_key(arm: str, mode: str) -> str:
-    return (
-        f"{arm}.{mode}"  # arm: base | cand | candoff; one server covers every context
-    )
+def identity_cell_key(arm: str, mode: str, tag: str = "") -> str:
+    # arm: base | cand | candoff; one server covers every context unless the suite splits cells
+    return f"{arm}.{mode}" + (f"@{tag}" if tag else "")
 
 
 def _identity_cells(ctx: Ctx) -> list:
     cfg = ctx.suite
     modes = cfg.get("spec_modes") or ["default"]
-    ctxs = list(cfg["ctx"])
     cells = []
     for mode in modes:
         menv = mode_env(mode)
@@ -345,29 +374,37 @@ def _identity_cells(ctx: Ctx) -> list:
         eff = ctx.arm_env("cand", menv).get("YUNSHU_VLM_DRAFT", "").lower()
         if cfg["spec_off"] and eff not in ("off", "none"):
             variants.append(("candoff", "cand", dict(menv, YUNSHU_VLM_DRAFT="off")))
-        for name, tree_arm, extra in variants:
-            key = identity_cell_key(name, mode)
-            cells.append(
-                Cell(
-                    "identity",
-                    key,
-                    _tfbench_argv(
-                        ctx,
-                        tree_arm,
+        for tag, ctxs, kinds in _units(ctx):
+            for name, tree_arm, extra in variants:
+                key = identity_cell_key(name, mode, tag)
+                cells.append(
+                    Cell(
                         "identity",
                         key,
-                        ["--part", "decode", "--rep", "0"]
-                        + [x for c in ctxs for x in ("--only-ctx", str(c))],
-                        env=ctx.arm_env(tree_arm, extra),
-                    ),
-                    mem_gb=ctx.mem_gb,
-                    timeout_min=_decode_est_min(ctx, ctxs, len(cfg["kinds"])),
-                    stall_min=12 if ctx.big else 4,
-                    share_key=_share_key(ctx, tree_arm, extra, ctxs)
-                    if name == "base"
-                    else "",
+                        _tfbench_argv(
+                            ctx,
+                            tree_arm,
+                            "identity",
+                            key,
+                            _unit_args(ctxs)
+                            + _kind_args(kinds, cfg["kinds"])
+                            + _dec_args(ctx),
+                            env=ctx.arm_env(tree_arm, extra),
+                        ),
+                        mem_gb=ctx.mem_gb,
+                        timeout_min=_decode_est_min(
+                            ctx,
+                            ctxs,
+                            len(kinds),
+                            int(cfg.get("decode_tokens", 256)),
+                            int(cfg.get("turn2_tokens", 0)),
+                        ),
+                        stall_min=12 if ctx.big else 4,
+                        share_key=_share_key(ctx, tree_arm, extra, ctxs, tag)
+                        if name == "base"
+                        else "",
+                    )
                 )
-            )
     return cells
 
 
@@ -375,7 +412,7 @@ def _harness_hash() -> str:
     return hashlib.sha256(TFBENCH.read_bytes()).hexdigest() if TFBENCH.exists() else ""
 
 
-def _share_key(ctx: Ctx, arm: str, extra: dict, c) -> str:
+def _share_key(ctx: Ctx, arm: str, extra: dict, c, tag: str = "") -> str:
     """Greedy digests of the base arm are deterministic: reuse them across runs. The key holds
     everything that could change them (code, env, model, harness, device) and no run path."""
     from .core import sha as _sha
@@ -387,6 +424,8 @@ def _share_key(ctx: Ctx, arm: str, extra: dict, c) -> str:
         ctx.model,
         c,
         ctx.suite["kinds"],
+        tag,
+        _dec_args(ctx),
         hashlib.sha256(TFBENCH.read_bytes()).hexdigest() if TFBENCH.exists() else "",
         os.environ.get("GPUQ_DEVICE", "m5"),
         n=24,
@@ -396,7 +435,11 @@ def _share_key(ctx: Ctx, arm: str, extra: dict, c) -> str:
 def _rows_for(res: dict, arm: str, mode: str) -> list:
     out = []
     for k, r in sorted(res.items()):
-        if k == f"{arm}.{mode}" and r.ok and r.evidence:
+        if (
+            (k == f"{arm}.{mode}" or k.startswith(f"{arm}.{mode}@"))
+            and r.ok
+            and r.evidence
+        ):
             out += read_jsonl(r.evidence)
     return out
 
@@ -437,9 +480,10 @@ def stage_identity(ctx: Ctx) -> StageResult:
 def stage_apc(ctx: Ctx) -> StageResult:
     rows = []
     for mode in ctx.suite.get("spec_modes") or ["default"]:
-        rows += read_jsonl(
-            ctx.run.cell_path("identity", identity_cell_key("cand", mode))
-        )
+        for tag, _c, _k in _units(ctx):
+            rows += read_jsonl(
+                ctx.run.cell_path("identity", identity_cell_key("cand", mode, tag))
+            )
     if not rows:
         return _finish(
             ctx,
@@ -601,44 +645,64 @@ def stage_speed(ctx: Ctx) -> StageResult:
     cfg = ctx.suite
     _check_prompts(cfg["ctx"], cfg["kinds"])
     cells = []
+    units = _units(ctx)
     for rep in range(int(cfg["reps"])):
         for arm in ("base", "cand"):  # A B A B ...
-            cells.append(
-                Cell(
-                    "speed",
-                    f"{arm}-r{rep}",
-                    _tfbench_argv(
-                        ctx,
-                        arm,
+            for tag, ctxs, kinds in units:
+                key = f"{arm}-r{rep}" + (f"@{tag}" if tag else "")
+                cells.append(
+                    Cell(
                         "speed",
-                        f"{arm}-r{rep}",
-                        ["--part", "decode", "--rep", str(rep)]
-                        + [x for c in cfg["ctx"] for x in ("--only-ctx", str(c))],
-                    ),
-                    mem_gb=ctx.mem_gb,
-                    timeout_min=_decode_est_min(ctx, cfg["ctx"], len(cfg["kinds"])),
-                    stall_min=12 if ctx.big else 4,
-                    quiet=True,
-                    share_key=_sha(
-                        "speed",
-                        ctx.base.key,
-                        ctx.arm_env("base"),
-                        ctx.model,
-                        cfg["ctx"],
-                        rep,
-                        _harness_hash(),
+                        key,
+                        _tfbench_argv(
+                            ctx,
+                            arm,
+                            "speed",
+                            key,
+                            _unit_args(ctxs, rep)
+                            + _kind_args(kinds, cfg["kinds"])
+                            + _dec_args(ctx),
+                        ),
+                        mem_gb=ctx.mem_gb,
+                        timeout_min=_decode_est_min(
+                            ctx,
+                            ctxs,
+                            len(kinds),
+                            int(cfg.get("decode_tokens", 256)),
+                            int(cfg.get("turn2_tokens", 0)),
+                        ),
+                        stall_min=12 if ctx.big else 4,
+                        quiet=True,
+                        share_key=_sha(
+                            "speed",
+                            ctx.base.key,
+                            ctx.arm_env("base"),
+                            ctx.model,
+                            ctxs,
+                            kinds,
+                            _dec_args(ctx),
+                            rep,
+                            _harness_hash(),
+                        )
+                        if arm == "base" and cfg.get("reuse_base_speed")
+                        else "",
                     )
-                    if arm == "base" and cfg.get("reuse_base_speed")
-                    else "",
                 )
-            )
     res = ctx.exe.run_cells(cells)
     reasons = _failed_cells(res)
     numbers: dict = {}
     if not reasons:
         reps = int(cfg["reps"])
-        base = [read_jsonl(res[f"base-r{i}"].evidence) for i in range(reps)]
-        cand = [read_jsonl(res[f"cand-r{i}"].evidence) for i in range(reps)]
+
+        def arm_rep(arm: str, i: int) -> list:
+            rows: list = []
+            for k, r in res.items():
+                if k == f"{arm}-r{i}" or k.startswith(f"{arm}-r{i}@"):
+                    rows += read_jsonl(r.evidence)
+            return rows
+
+        base = [arm_rep("base", i) for i in range(reps)]
+        cand = [arm_rep("cand", i) for i in range(reps)]
         sp = analyze.speed_compare(base, cand, float(cfg["speed_tol_pct"]))
         numbers = {k: sp[k] for k in ("cells", "reps", "tol_pct")}
         for r in sp["regressions"]:
@@ -656,16 +720,17 @@ def stage_speed(ctx: Ctx) -> StageResult:
 def stage_memory(ctx: Ctx) -> StageResult:
     cfg = ctx.suite
     reps = int(cfg.get("mem_reps", 2))
-    sizes = [str(s) for s in cfg["mem_sizes"]]
+    all_sizes = [str(s) for s in cfg["mem_sizes"]]
+    groups = [[x] for x in all_sizes] if cfg.get("split_cells") else [all_sizes]
     cells = []
-    for rep in range(reps):
+    for rep, sizes in [(r, g) for r in range(reps) for g in groups]:
         order = ("base", "cand") if rep % 2 == 0 else ("cand", "base")
         for arm in order:
             e = ctx.arm_env(arm)
             cells.append(
                 Cell(
                     "memory",
-                    f"{arm}-r{rep}",
+                    f"{arm}-r{rep}" + (f"@{sizes[0]}" if len(groups) > 1 else ""),
                     [
                         ctx.py,
                         str(MEMORY_AB),
@@ -718,6 +783,143 @@ def stage_memory(ctx: Ctx) -> StageResult:
     return _finish(ctx, StageResult("memory", not reasons, reasons, numbers))
 
 
+# ── h. longqa: long-context retrieval (needle) answers, base vs candidate ──
+NEEDLE_COLD_S = {
+    32768: 36.0,
+    65536: 87.0,
+    131072: 216.0,
+}  # measured cold prefill per request
+
+
+def needle_slices(ctxs: list) -> list:
+    """[(ctx, lo, hi, timeout_min)]: every needle item may be a cold prefill (the prefix cache
+    keeps few hybrid checkpoints), so a job takes only as many items as fit well inside the
+    20 minute queue limit: start 150 s + items x cold prefill, times 1.5."""
+    out = []
+    for c in ctxs:
+        cold = NEEDLE_COLD_S.get(c, 216.0 * c / 131072)
+        per = max(1, min(10, int((20 * 60 / 1.5 - 150) // cold)))
+        for lo in range(0, 10, per):
+            hi = min(10, lo + per)
+            out.append((c, lo, hi, min(20.0, (150 + (hi - lo) * cold) * 1.5 / 60)))
+    return out
+
+
+def stage_longqa(ctx: Ctx) -> StageResult:
+    cfg = ctx.suite
+    ctxs = list(cfg.get("needle_ctx") or [32768, 65536, 131072])
+    _check_prompts(ctxs, ["prose"])
+    cells = []
+    for arm in ("base", "cand"):
+        for c, lo, hi, tmo in needle_slices(ctxs):
+            key = f"{arm}@c{c}i{lo}-{hi}"
+            cells.append(
+                Cell(
+                    "longqa",
+                    key,
+                    _tfbench_argv(
+                        ctx,
+                        arm,
+                        "longqa",
+                        key,
+                        ["--part", "needle", "--rep", "0", "--only-ctx", str(c)]
+                        + ["--items", f"{lo}:{hi}"],
+                    ),
+                    mem_gb=ctx.mem_gb,
+                    timeout_min=tmo if ctx.big else 6,
+                    stall_min=12 if ctx.big else 4,
+                    quiet=True,
+                )
+            )
+    res = ctx.exe.run_cells(cells)
+    reasons = _failed_cells(res)
+    numbers: dict = {}
+    if not reasons:
+
+        def arm_rows(arm: str) -> list:
+            rows: list = []
+            for k, r in res.items():
+                if k.startswith(f"{arm}@"):
+                    rows += read_jsonl(r.evidence)
+            return rows
+
+        cmp_ = analyze.needle_compare(
+            arm_rows("base"), arm_rows("cand"), int(cfg.get("quality_allowed", 1))
+        )
+        numbers = {
+            k: cmp_[k]
+            for k in ("items", "base_correct", "cand_correct", "net", "per_ctx")
+        }
+        if cmp_["missing"]:
+            reasons += [f"missing {m}" for m in cmp_["missing"]]
+        elif not cmp_["ok"]:
+            reasons.append(
+                f"retrieval base {cmp_['base_correct']} vs cand {cmp_['cand_correct']} "
+                f"of {cmp_['items']} (allowed +-{cmp_['allowed']})"
+            )
+    return _finish(ctx, StageResult("longqa", not reasons, reasons, numbers))
+
+
+# ── i. conc: two concurrent sub-agents, each with a warm 32K prefix + a ~2K new turn ──
+def _median(xs: list) -> float:
+    xs = sorted(x for x in xs if x is not None)
+    return (
+        xs[len(xs) // 2]
+        if len(xs) % 2
+        else (xs[len(xs) // 2 - 1] + xs[len(xs) // 2]) / 2
+    )
+
+
+def conc_summary(rows: list) -> dict:
+    trials = [r for r in rows if r.get("part") == "conc32"]
+    return {
+        "trials": trials,
+        "ttft_med": _median([t for r in trials for t in r["ttfts"]])
+        if trials
+        else None,
+        "dec_med": _median([t for r in trials for t in r["per_req_dec"]])
+        if trials
+        else None,
+    }
+
+
+def stage_conc(ctx: Ctx) -> StageResult:
+    _check_prompts([32768], ["prose", "code"])
+    _check_prompts([8192], ["prose", "code"])
+    cells = [
+        Cell(
+            "conc",
+            arm,
+            _tfbench_argv(ctx, arm, "conc", arm, ["--part", "conc32", "--rep", "0"]),
+            mem_gb=ctx.mem_gb,
+            timeout_min=20 if ctx.big else 6,
+            stall_min=12 if ctx.big else 4,
+            quiet=True,
+        )
+        for arm in ("base", "cand")
+    ]
+    res = ctx.exe.run_cells(cells)
+    reasons = _failed_cells(res)
+    numbers: dict = {}
+    if not reasons:
+        sb = conc_summary(read_jsonl(res["base"].evidence))
+        sc = conc_summary(read_jsonl(res["cand"].evidence))
+        numbers = {
+            "trials": {"base": sb["trials"], "cand": sc["trials"]},
+            "ttft_med": [sb["ttft_med"], sc["ttft_med"]],
+            "dec_med": [sb["dec_med"], sc["dec_med"]],
+        }
+        tol = float(ctx.suite.get("conc_tol_pct", 10.0))
+        if not sb["trials"] or not sc["trials"]:
+            reasons.append("no conc32 records")
+        else:
+            if sc["ttft_med"] > sb["ttft_med"] * (1 + tol / 100):
+                reasons.append(f"ttft {sb['ttft_med']} -> {sc['ttft_med']} s")
+            if sc["dec_med"] < sb["dec_med"] * (1 - tol / 100):
+                reasons.append(f"decode {sb['dec_med']} -> {sc['dec_med']} tok/s")
+    return _finish(ctx, StageResult("conc", not reasons, reasons, numbers))
+
+
 def _memory_valid(path: Path):
     rows = read_jsonl(path)
     if not any(r.get("complete") is True for r in rows):
@@ -735,4 +937,6 @@ STAGE_FUNCS = {
     "quality": stage_quality,
     "speed": stage_speed,
     "memory": stage_memory,
+    "longqa": stage_longqa,
+    "conc": stage_conc,
 }

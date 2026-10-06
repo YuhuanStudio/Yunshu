@@ -5,7 +5,17 @@ from __future__ import annotations
 import time
 
 SCHEMA = 1
-STAGE_ORDER = ["preflight", "smoke", "identity", "apc", "quality", "speed", "memory"]
+STAGE_ORDER = [
+    "preflight",
+    "smoke",
+    "identity",
+    "apc",
+    "quality",
+    "speed",
+    "memory",
+    "longqa",
+    "conc",
+]
 
 
 def build_verdict(
@@ -118,6 +128,17 @@ def _numbers_en(s: dict) -> str:
     if nm == "apc" and "compared" in n:
         return f"{n['compared']} cold/warm pairs, hits " + ",".join(
             str(h["cached"]) for h in n.get("hits", [])
+        )
+    if nm == "longqa" and "base_correct" in n:
+        return (
+            f"base {n['base_correct']}/{n['items']} cand {n['cand_correct']}/{n['items']} "
+            f"per ctx {n.get('per_ctx')}"
+        )
+    if nm == "conc" and n.get("trials"):
+        return "; ".join(
+            f"{a} ttft {t['ttfts']} dec {t['per_req_dec']}"
+            for a in ("base", "cand")
+            for t in n["trials"].get(a, [])
         )
     if nm == "preflight":
         return f"{n.get('changed_files', 0)} changed files, {n.get('related_tests', 0)} related test files, pytest rc {n.get('pytest_rc')}"

@@ -190,4 +190,4 @@ def test_prefill_gated_on_batched_engine_and_forced_choice():
     # (native tools skip it: tool-call grammar enforces a forced choice instead)
     assert "if req.tools and is_batched and not _native_tools_active():" in src
     assert "_tool_choice_prefill(req.tool_choice)" in src
-    assert "_append_tool_prefill(messages, _tool_prefill)" in src
+    assert "_append_tool_prefill(messages, _tool_prefill, engine)" in src

@@ -1,5 +1,6 @@
 """Second-lane transport contracts without contacting the user's laptop."""
 
+import contextlib
 import importlib
 import sys
 import threading
@@ -60,6 +61,32 @@ def test_mapping(monkeypatch):
     assert mapped(job["cmd"][1], pairs) == "--model=/remote/.m3-home/models/Q27/a"
     assert mapped(job["cmd"][2], pairs) == "/remote/.m3-home/out/one.json"
     assert len(models) == 2
+
+
+def test_catalogue_models_mapped_not_synced(monkeypatch):
+    """local.env's checkpoint catalogue rides in every job's env; syncing it all
+    stalled every M3 job (2026-10-06). Only named checkpoints are synced."""
+    import gpuq_remote
+    from gpuq_remote import mapped, paths
+
+    monkeypatch.setattr("subprocess.check_output", lambda *a, **k: "/src/wt\n")
+    monkeypatch.setattr(gpuq_remote, "_catalogue_keys", lambda: {"M", "M_OMNI"})
+    job = dict(
+        id="smoke",
+        cwd="/src/wt",
+        cmd=["python", "--model", "/Volumes/P5Plus/models/Q08"],
+        env={
+            "M": "/Volumes/P5Plus/models/Q27",
+            "M_OMNI": "/Volumes/P5Plus/models/Omni30",
+            "YUNSHU_VLM_DRAFT": "/Volumes/P5Plus/models/Draft",
+        },
+    )
+    _, _, pairs, models = paths(job, "/remote")
+    assert sorted(Path(m).name for m in models) == ["Draft", "Q08"]
+    assert mapped(job["env"]["M"], pairs) == "/remote/.m3-home/models/Q27"
+    job["env"]["GPUQ_M3_SYNC"] = "M"
+    _, _, _, models = paths(job, "/remote")
+    assert sorted(Path(m).name for m in models) == ["Draft", "Q08", "Q27"]
 
 
 def test_lanes_concurrent_any_once(queue, monkeypatch):
@@ -430,3 +457,86 @@ def test_legacy_daemon_cannot_misroute_remote_jobs(queue, monkeypatch, device):
 def test_default_m5_still_submits_to_legacy_daemon(queue, monkeypatch):
     monkeypatch.setattr(queue, "_daemon_running", lambda: True)
     assert queue.submit(["true"], "local", 1, 0)
+
+
+def test_only_allowlisted_checkpoints_reach_the_laptop(monkeypatch, tmp_path):
+    """A job naming a checkpoint outside M3_MODELS fails before any ssh/rsync."""
+    import types
+
+    import gpuq_remote
+
+    monkeypatch.setattr("subprocess.check_output", lambda *a, **k: "/src/wt\n")
+    calls = []
+    job = dict(
+        id="big",
+        cwd="/src/wt",
+        cmd=["python", "--model", "/Volumes/P5Plus/models/Qwen3.8-27B-oQ4e-mtp"],
+        env={},
+        timeout_s=60,
+        outputs=[],
+    )
+    api = types.SimpleNamespace(
+        ROOT=tmp_path, _write=lambda *a: None, _read=lambda p: {}
+    )
+    import pytest
+
+    with open(tmp_path / "log", "w") as log:
+        r = gpuq_remote.Remote(job, tmp_path / "j.json", api, log)
+        monkeypatch.setattr(r, "call", lambda *a, **k: calls.append(a))
+        monkeypatch.setattr(r, "sync", lambda *a, **k: calls.append(("sync",) + a))
+        with pytest.raises(ValueError, match="not allowed on the laptop"):
+            r.run()
+    assert calls == []  # refused before any ssh, push or rsync
+
+
+def test_remote_worker_kills_tagged_child_in_own_session(tmp_path):
+    """A server started with start_new_session escapes the job group; the job tag
+    still reaches it (2026-10-06: a 3B server outlived its sweep job by 1.5 h)."""
+    import json
+    import os
+    import subprocess
+    import uuid
+
+    beat = tmp_path / "heartbeat"
+    ready = tmp_path / "ready"
+    child = f"import time\nf=open({str(beat)!r}, 'a')\nwhile True:\n f.write('x'); f.flush(); time.sleep(.02)\n"
+    command = (
+        "import subprocess,time; from pathlib import Path; "
+        f"subprocess.Popen([{sys.executable!r},'-c',{child!r}], start_new_session=True); "
+        f"Path({str(ready)!r}).touch(); time.sleep(0.5)"
+    )
+    tag = "test-" + uuid.uuid4().hex
+    payload = dict(
+        env={**os.environ, "TMPDIR": str(tmp_path), "GPUQ_JOB_ID": tag},
+        timeout=10,
+        cwd=str(tmp_path),
+        pid=str(tmp_path / "pid"),
+        rc=str(tmp_path / "rc"),
+        lock=str(tmp_path / "lock"),
+        cmd=[sys.executable, "-c", command],
+    )
+    proc = subprocess.run(
+        [sys.executable, str(DEV / "gpuq_remote_worker.py"), json.dumps(payload)],
+        timeout=10,
+    )
+    try:
+        assert proc.returncode == 0 and ready.exists()
+        time.sleep(0.2)
+        size = beat.stat().st_size
+        time.sleep(0.2)
+        assert beat.stat().st_size == size, "escaped child still running"
+    finally:
+        out = subprocess.run(
+            ["ps", "eww", "-ax", "-o", "pid=,command="], capture_output=True, text=True
+        ).stdout
+        for line in out.splitlines():
+            if "GPUQ_JOB_ID=" + tag in line:
+                with contextlib.suppress(Exception):
+                    os.kill(int(line.split()[0]), 9)
+
+
+def test_cleanup_script_kills_by_tag():
+    from gpuq_remote import kill_tagged_script
+
+    script = kill_tagged_script("1006-x")
+    assert "GPUQ_JOB_ID=1006-x" in script and "kill -9" in script

@@ -179,7 +179,7 @@ def test_vlm_tool_plan_native_for_auto(choice):
 
 @pytest.mark.parametrize(
     "choice",
-    ["none", "required", {"type": "function", "function": {"name": "get_weather"}}],
+    ["none"],
 )
 def test_vlm_tool_plan_injects_for_forced_choice_without_grammar(choice, monkeypatch):
     from yunshu_gateway.routers.chat import _vlm_tool_plan

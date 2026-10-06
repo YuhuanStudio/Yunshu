@@ -2441,17 +2441,26 @@ class VLMEngine:
                 template_extra=template_extra,
             )
             rendered_ids = self._tokenizer.encode(prompt, add_special_tokens=False)
-        points = rendered_boundaries(
-            prompt,
-            shadow,
-            plan["markers"],
-            self._tokenizer,
-            rendered_ids,
-            tools=(template_extra or {}).get("tools"),
-            tool_controls=plan["tools"],
-            marker_ends=plan.get("marker_ends"),
-            selection=plan,
-        )
+        try:
+            points = rendered_boundaries(
+                prompt,
+                shadow,
+                plan["markers"],
+                self._tokenizer,
+                rendered_ids,
+                tools=(template_extra or {}).get("tools"),
+                tool_controls=plan["tools"],
+                marker_ends=plan.get("marker_ends"),
+                selection=plan,
+            )
+        except ValueError as exc:
+            # cache_control / prompt_cache_breakpoint is a hint (Anthropic never fails a request over it): a chat
+            # template that drops or repeats a marker (Qwen removes the reasoning of earlier turns, so a marker on a
+            # thinking block vanishes) means no explicit checkpoint, not a failed turn.
+            logger.warning(
+                "explicit cache breakpoints ignored, serving without them: %s", exc
+            )
+            return None
         if prompt_kwargs is not None:
             from mlx_vlm.apc import multimodal_token_ids_from_config
 
@@ -2790,9 +2799,9 @@ class VLMEngine:
         if tools:
             extra["tools"] = tools
             kwargs["_tool_recovery_tools"] = tools
-            if settings.get_bool("YUNSHU_TOOL_GRAMMAR"):
-                from .tool_call_grammar import normalize_tool_choice
+            from .tool_call_grammar import is_forced, normalize_tool_choice
 
+            if is_forced(choice) or settings.get_bool("YUNSHU_TOOL_GRAMMAR"):
                 choice = normalize_tool_choice(choice)
                 if choice != "none":
                     kwargs["_tool_spec"] = {

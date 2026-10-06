@@ -62,10 +62,25 @@ def _cache_kw(req, engine) -> dict:
     }
 
 
+def _forced_by_grammar(req) -> bool:
+    """A forced tool_choice (required / one function) that the tool-call grammar enforces."""
+    forced = req.tool_choice == "required" or (
+        isinstance(req.tool_choice, dict) and bool(req.tool_choice.get("name"))
+    )
+    return forced
+
+
 def _native_kw(req) -> dict:
-    """``tools=`` for an engine whose chat template renders tool definitions itself."""
+    """``tools=`` for an engine whose chat template renders tool definitions itself; the
+    forced tool_choice / parallel flag ride along so the tool-call grammar can enforce them."""
     tools = getattr(req, "_native_tools", None)
-    return {"tools": tools} if tools else {}
+    if not tools:
+        return {}
+    kw = {"tools": tools}
+    if _forced_by_grammar(req):
+        kw["tool_choice"] = req.tool_choice
+        kw["parallel_tool_calls"] = req.parallel_tool_calls
+    return kw
 
 
 def _seal_extra(req, text: str | None) -> dict:
@@ -343,7 +358,7 @@ async def _vlm_to_responses(req, messages, request, logit_bias, own_input_messag
             "output_tokens": ct,
             "total_tokens": pt + ct,
             "output_tokens_details": {"reasoning_tokens": rt},
-            "input_tokens_details": {"cached_tokens": cached},
+            "input_tokens_details": {"cached_tokens": cached, "cache_write_tokens": 0},
         },
     }
     if req.store:
@@ -590,11 +605,15 @@ class ResponsesRequest(BaseModel):
     conversation: str | dict | None = None
     # [{"type": "compaction", "compact_threshold": N}]: compact the input first when it exceeds N tokens.
     context_management: list[dict] | None = None
-    max_output_tokens: int = Field(default=2048, ge=1, le=131072)
+    max_output_tokens: int = Field(
+        default_factory=lambda: int(settings.get("YUNSHU_DEFAULT_MAX_TOKENS")),
+        ge=1,
+        le=1048576,
+    )
     # OpenAI Chat Completions legacy alias — accept silently and alias to
     # max_output_tokens so old client code doesn't run unbounded against
     # /v1/responses. Caught by validate_request hook below.
-    max_completion_tokens: int | None = Field(default=None, ge=1, le=131072)
+    max_completion_tokens: int | None = Field(default=None, ge=1, le=1048576)
     temperature: float = Field(default=1.0, ge=0.0, le=2.0)
     top_p: float = Field(default=1.0, ge=0.0, le=1.0)
     top_k: int = Field(default=0, ge=0)
@@ -692,6 +711,13 @@ class ResponsesRequest(BaseModel):
     timeout: float | None = Field(
         default=None, ge=1.0, le=600.0
     )  # Request timeout in seconds
+
+    @model_validator(mode="before")
+    @classmethod
+    def _null_means_unset(cls, data):
+        from ..schemas.nulls import clean_request, fold_allowed_tools
+
+        return fold_allowed_tools(clean_request(cls, data))
 
     @model_validator(mode="before")
     @classmethod
@@ -1105,7 +1131,7 @@ async def _prewarm_response(req: ResponsesRequest, request: Request):
         "input_tokens": 0,
         "output_tokens": 0,
         "total_tokens": 0,
-        "input_tokens_details": {"cached_tokens": 0},
+        "input_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0},
         "output_tokens_details": {"reasoning_tokens": 0},
     }
     usage = dict(usage)
@@ -1526,20 +1552,32 @@ async def create_response(req: ResponsesRequest, request: Request):
         ]
         from .chat import _vlm_renders_tools
 
-        if req.tool_choice in (None, "auto") and _vlm_renders_tools(engine):
+        if (
+            req.tool_choice in (None, "auto") or _forced_by_grammar(req)
+        ) and _vlm_renders_tools(engine):
             # The chat template renders the tools itself (Qwen3.x): the model's own tool-call
             # format, not an injected JSON prompt it may half-follow.
             req._native_tools = [t.model_dump() for t in tools]
         else:
             messages = _inject_tool_system_prompt(
-                messages, tools, tool_choice=req.tool_choice, engine=engine
+                messages,
+                tools,
+                tool_choice=req.tool_choice,
+                parallel_tool_calls=req.parallel_tool_calls,
+                engine=engine,
             )
         # Structurally FORCE a required/named tool_choice via an assistant prefill — the
         # advisory injection alone lets the model emit plain text (so "required"/named
         # couldn't be honored). Non-stream only: the streaming path uses
         # ToolCallStreamer(forced_tool_name), and a shared prefill would leave its parser
         # without the opening marker. The prefill is prepended back before extraction.
-        if not req.stream:
+        from .chat import _native_tools_active
+
+        if (
+            not req.stream
+            and not getattr(req, "_native_tools", None)
+            and not _native_tools_active()
+        ):
             _tc = req.tool_choice
             if _tc == "required":
                 _resp_tool_prefill = "<tool_call>\n"
@@ -1552,7 +1590,7 @@ async def create_response(req: ResponsesRequest, request: Request):
             if _resp_tool_prefill:
                 from .chat import _append_tool_prefill
 
-                messages = _append_tool_prefill(messages, _resp_tool_prefill)
+                messages = _append_tool_prefill(messages, _resp_tool_prefill, engine)
 
     # Background mode pre-allocates the id (so the queued response returned to the
     # client and the polled/cancellable generation share one id). Consume it once.

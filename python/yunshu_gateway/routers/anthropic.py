@@ -222,7 +222,7 @@ class AnthropicMessagesRequest(BaseModel):
     # behavior is harmless in practice. Keep an explicit default rather
     # than `...` (required) to preserve compatibility with internal tests
     # and lazy clients.
-    max_tokens: int = Field(default=1024, ge=1, le=131072)
+    max_tokens: int = Field(default=1024, ge=1, le=1048576)
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
     top_p: float = Field(default=1.0, ge=0.0, le=1.0)
     top_k: int = Field(default=0, ge=0)
@@ -275,6 +275,13 @@ class AnthropicMessagesRequest(BaseModel):
     )  # Request timeout in seconds
     grammar: dict | None = None  # Grammar constraint (regex, choice, CFG)
     stream_options: dict | None = None  # Anthropic stream_options (include_usage)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _null_means_unset(cls, data):
+        from ..schemas.nulls import clean_request
+
+        return clean_request(cls, data)
 
     @model_validator(mode="after")
     def validate_request(self):
@@ -875,7 +882,9 @@ def _anthropic_cache_usage(
     breakpoints) now bounds cache_creation so the remainder stays input_tokens.
     Returns (input_tokens, cache_creation_input_tokens, cache_read_input_tokens).
     """
-    prompt = max(0, int(prompt_tokens or 0))
+    from ..usage_shapes import client_prompt_tokens
+
+    prompt = client_prompt_tokens(prompt_tokens)
     cache_read = max(0, min(int(cached_tokens or 0), prompt))
     uncached = prompt - cache_read
     writable = max(0, int(cacheable_prefix_tokens or 0) - cache_read)
@@ -981,6 +990,11 @@ def _try_parse_tool_call_delta(text: str) -> list[dict] | None:
     return calls or None
 
 
+def _forced_by_grammar(tc) -> bool:
+    """tool_choice any / tool that the tool-call grammar enforces (YUNSHU_TOOL_GRAMMAR)."""
+    return isinstance(tc, dict) and tc.get("type") in ("any", "tool")
+
+
 def _tool_choice_is_auto(tc) -> bool:
     return tc in (None, "auto") or (isinstance(tc, dict) and tc.get("type") == "auto")
 
@@ -1018,6 +1032,7 @@ def _apply_native_tools(req, engine) -> bool:
     try:
         if callable(check) and check():
             req._native_tools = tools
+            req._native_active = True
             return True
     except Exception:
         logger.debug("native tool support check failed", exc_info=True)
@@ -1032,13 +1047,14 @@ def _apply_native_tools(req, engine) -> bool:
         if isinstance(engine, BatchedEngine):
             if _template_supports_tools(getattr(engine, "_tokenizer", None)):
                 _REQUEST_TOOLS.set(tools)
-                use = _native_kw(req)
+                choice = req.tool_choice if isinstance(req.tool_choice, dict) else {}
                 _REQUEST_TOOL_USE.set(
                     {
-                        "tool_choice": use["tool_choice"],
-                        "parallel": use["parallel_tool_calls"],
+                        "tool_choice": req.tool_choice,
+                        "parallel": not choice.get("disable_parallel_tool_use"),
                     }
                 )
+                req._native_active = True
                 return True
             _REQUEST_TOOLS.set(None)
             _REQUEST_TOOL_USE.set(None)
@@ -1362,7 +1378,9 @@ async def create_message(req: AnthropicMessagesRequest, request: Request):
             req._forced_tool_grammar = _forced_tool_grammar
 
         if tool_prompt:
-            if _tool_choice_is_auto(req.tool_choice):
+            if _tool_choice_is_auto(req.tool_choice) or _forced_by_grammar(
+                req.tool_choice
+            ):
                 # Decided after the engine is known: a chat template that renders `tools` itself
                 # (Qwen3.x) gets the definitions natively, in the model's own tool-call format;
                 # otherwise this generic prompt is injected.
@@ -1500,7 +1518,14 @@ async def create_message(req: AnthropicMessagesRequest, request: Request):
     # commits the assistant turn to a tool call (continue_final_message); it's prepended
     # back before parsing in the non-stream handlers.
     req._tool_prefill = ""
-    if not getattr(req, "_suppress_tools", False) and req.tools:
+    if (
+        not getattr(req, "_suppress_tools", False)
+        and req.tools
+        and not (
+            getattr(req, "_native_active", False)
+            and _forced_by_grammar(req.tool_choice)
+        )
+    ):
         _tc = req.tool_choice
         _tc_type = _tc.get("type") if isinstance(_tc, dict) else _tc
         # Force only the OPENING marker — the model then emits a complete, parseable
@@ -1512,7 +1537,7 @@ async def create_message(req: AnthropicMessagesRequest, request: Request):
         if req._tool_prefill:
             from .chat import _append_tool_prefill
 
-            messages = _append_tool_prefill(messages, req._tool_prefill)
+            messages = _append_tool_prefill(messages, req._tool_prefill, engine)
             # Diagnostic rendering must include the same assistant continuation.
             # Keep the marked source intact so cache boundaries still map exactly.
             _plan["messages"] = _append_tool_prefill(

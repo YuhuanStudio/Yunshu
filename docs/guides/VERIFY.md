@@ -38,6 +38,8 @@ did. `--env K=V` applies to both arms, `--cand-env` to the candidate only, `--ba
 | `quality` | 200-item paired MMLU-Pro through `paired_eval.py` (resumable rounds of 14 min per arm, base and cand interleaved). | all items scored in both arms, net difference in correct answers within +-1 |
 | `speed` | `tfbench.py` decode cells (cold decode tok/s, cold TTFT, follow-up TTFT) in N quiet reps (default 3), interleaved base, cand, base, cand. Medians, per-rep paired deltas and a noise estimate (half range of the paired deltas) are reported. | no median worsening beyond `max(2%, noise)` (`--speed-tol`); a contended rep is rerun once, then the stage fails |
 | `memory` | `memory_ab.py`, one job per arm and rep (default 2 reps, alternating order): peak footprint, footprint after idle, footprint held after a short follow-up. | no metric above base by more than 3% + 0.25 GiB |
+| `longqa` | `tfbench.py --part needle`: 10 deterministic key-value needles spliced into the 32K / 64K / 128K prose prompts, one greedy question each (the prefix is cached after the first). Long suites only. | every item scored in both arms, correct count within +-1 |
+| `conc` | `tfbench.py --part conc32`: two requests at once, each a warm 32K prefix + ~2K new text, 1024-token reply; TTFT and per-request decode. Long suites only. | TTFT / decode within 10% of base |
 
 `--spec-modes default,mtp,dflash` repeats identity (and spec on == off) once per speculative
 method (`mtp` / `dflash` set `YUNSHU_VLM_DRAFT`; `dflash` needs the drafter path, `D` in
@@ -49,7 +51,7 @@ context, harness hash, device): the next candidate against the same base reruns 
 
 `decode` (preflight, smoke, identity at 1K / 8K, apc, speed; `--spec-off` adds spec on == off (fails on main today, see BACKLOG)), `prefill`
 (identity up to 32K, apc, quality, speed), `scheduler`, `memory`, `full` (everything, 1K / 8K / 32K),
-`tiny` (everything on a small model, for dry runs of the tool). `--suite smoke,identity,speed`
+`long` (32K / 64K / 128K split cells of 2048-token replies via `tfbench --decode-tokens`: identity incl. spec on == off, apc, speed, memory at 32K / 128K, longqa, conc; every stage runs even after a failure), `longtrend` (one rep, 32K / 128K prose, for tag-to-tag comparisons), `tiny` (everything on a small model, for dry runs of the tool). `--suite smoke,identity,speed`
 builds an ad-hoc ladder (stages keep their canonical order). Overrides: `--ctx 1024,8192`,
 `--reps`, `--mmlu-n`, `--mem-sizes`, `--mem-reps`, `--speed-tol`, `--spec-off`.
 
@@ -76,7 +78,7 @@ changes.
 ## `yv gate`
 
 Runs `scripts/release/gate.sh` one stage per gpuq job (`install`, `serve-27b`, `families`,
-`soak-mmlu`, `soak-realistic`, `agent-sessions`; port 18993) and records each in `runs/gate-<commit>/`. A stage
+`soak-mmlu`, `soak-realistic`, `agent-sessions`; port 18993) plus the `long` stage (`yv ab --suite long`, cand = HEAD, base = last `v*` tag; verdict judged fail-closed) and records each in `runs/gate-<commit>/`. A stage
 passes when its check rows have no FAIL or CONTENDED, at least one PASS, and the job exited 0.
 A rerun on the same commit skips passed stages (`--fresh` reruns all); `install` reruns if
 `$GATE_ROOT` holds another commit's install.
@@ -87,6 +89,24 @@ gate runs (96 case ratios) the mean ratio is 0.997 and the per-case sd 0.031, sp
 and below 1.0 (the in-process side is the noisy one), so there is no server gap. The check now
 alternates which side goes first, takes the median of 5, and fails on a geometric mean below
 0.965 or a single case below 0.90; a systematic 5% serving overhead still fails.
+
+## `m3sweep` (correctness on the M3 lane)
+
+```bash
+scripts/dev/m3sweep [REF] [--only wire,agent,units] [--dry-run] [--no-wait]
+scripts/dev/m3sweep --collect DIR      # judge a --no-wait run later
+```
+
+Submits `m3lane-sweep-*` jobs to the gpuq M3 lane for HEAD (or REF) and writes one
+`/Volumes/P5Plus/yunshu-build/m3sweep/<sha>-<time>/verdict.json` (PASS/FAIL, exit code). Jobs:
+`wire` runs the SDK wire-contract matrix (OpenAI chat / completions / responses, Anthropic
+messages, Ollama; stream and non-stream; tools, tool_choice, parallel off, JSON schema, stop,
+truncation, usage invariants, error shapes) against a real server on Qwen2.5-3B (text path),
+Qwen3.5-0.8B and Qwen3.5-9B-4bit (VLM runner); `agent` runs the covaudit tool session and
+concurrent-vs-solo identity on Qwen3.5-2B and Qwen2.5-3B; `units` runs the unit files that skip
+without small checkpoints (tests find them through `tests/unit/model_paths.py`, which honours
+`M3_MODELS`). Fail closed: a missing or incomplete output, a failed job, a wrong device or any
+mismatch is FAIL. Only the four allowlisted small checkpoints (Qwen3.5 0.8B / 2B / 9B-4bit, Qwen2.5-3B-4bit) ever reach the laptop. No failure is excused: a forced tool_choice is always grammar-constrained and usage excludes server prefill. The M3 is portability / correctness evidence only: no timing, no tok/s.
 
 ## Adding a new kind of measurement
 

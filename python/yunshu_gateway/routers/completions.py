@@ -159,8 +159,8 @@ class CompletionRequest(BaseModel):
     # or list[list[int]] (batched token-id prompts). Each list element becomes
     # its own choice in the response.
     prompt: str | list[str] | list[int] | list[list[int]]
-    max_tokens: int = Field(default=128, ge=0, le=131072)
-    max_completion_tokens: int | None = Field(default=None, ge=0, le=131072)
+    max_tokens: int = Field(default=128, ge=0, le=1048576)
+    max_completion_tokens: int | None = Field(default=None, ge=0, le=1048576)
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
     top_p: float = Field(default=1.0, ge=0.0, le=1.0)
     top_k: int = Field(default=0, ge=0)
@@ -234,6 +234,13 @@ class CompletionRequest(BaseModel):
         if isinstance(v, str):
             return [v]
         return v
+
+    @model_validator(mode="before")
+    @classmethod
+    def _null_means_unset(cls, data):
+        from ..schemas.nulls import clean_request
+
+        return clean_request(cls, data)
 
     @model_validator(mode="after")
     def validate_request(self):
@@ -317,6 +324,16 @@ class CompletionRequest(BaseModel):
         if self.seed is not None and (self.seed < -(2**63) or self.seed >= 2**63):
             raise ValueError("seed: must be within the 64-bit signed integer range")
         return self
+
+
+def _untag_reasoning(text: str, reasoning_tokens: int) -> str:
+    """The VLM engine's non-stream text wraps reasoning in <think>..</think> for routers that
+    split it (chat); /v1/completions has no reasoning field, and its stream delivers the same
+    reasoning text with the tags never shown. Drop the tags so both agree."""
+    if reasoning_tokens and text.startswith("<think>"):
+        head, sep, tail = text[len("<think>") :].partition("</think>")
+        return head + tail if sep else head
+    return text
 
 
 @router.post("/completions", response_model=None)
@@ -689,6 +706,7 @@ async def create_completion(req: CompletionRequest, request: Request):
                     ct = state.get("completion_tokens", 0)
                     fr = _normalize_finish_reason(state.get("finish_reason", "stop"))
                     rt = state.get("reasoning_tokens", 0)
+                    text = _untag_reasoning(text, rt)
                 else:
                     # CRITICAL: GenerationOutput uses text/
                     # prompt_tokens/completion_tokens (batched_engine.py:84-87).

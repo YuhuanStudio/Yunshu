@@ -379,6 +379,14 @@ def _token_id(tokenizer: Any, token: str) -> int | None:
     return int(tid)
 
 
+def is_forced(choice: Any) -> bool:
+    """True when ``tool_choice`` forces a call (required / any / a named function). A forced
+    choice is a guarantee in both the OpenAI and the Anthropic API, so it is always
+    constrained by the tool grammar; ``YUNSHU_TOOL_GRAMMAR`` governs only auto."""
+    c = normalize_tool_choice(choice)
+    return c == "required" or isinstance(c, dict)
+
+
 def normalize_tool_choice(choice: Any) -> Any:
     """OpenAI / Anthropic ``tool_choice`` as None (auto), "none", "required" or
     ``{"name": X}`` (that tool)."""

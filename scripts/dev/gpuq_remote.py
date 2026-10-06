@@ -13,6 +13,29 @@ from pathlib import Path
 
 BUILD = "/Volumes/P5Plus/yunshu-build"
 MODEL_ROOTS = ("/Volumes/P5Plus/models", "/Volumes/Micron/models")
+# The M3 is the user's laptop: only these small correctness checkpoints may be copied
+# there (user 2026-10-06: "不要傳一堆模型 也不要污染我的筆電與空間"). Anything else fails
+# the job before any transfer; extend this list deliberately, never per job.
+M3_MODELS = frozenset(
+    {
+        "Qwen3.5-0.8B-MLX-bf16",
+        "Qwen3.5-2B-MLX-bf16",
+        "Qwen3.5-9B-MLX-4bit",
+        "Qwen2.5-3B-Instruct-4bit",
+    }
+)
+
+
+def kill_tagged_script(job_id):
+    """Shell that SIGKILLs every process carrying GPUQ_JOB_ID=<id> in its environment.
+    A job that starts a server in its own session escapes the job's process group:
+    2026-10-06 a 3B server ran 1.5 h on the laptop after its sweep job ended."""
+    tag = shlex.quote("GPUQ_JOB_ID=" + job_id)
+    return (
+        "ps eww -ax -o pid=,command= | grep -F -- "
+        + tag
+        + " | grep -v grep | awk '{print $1}' | xargs kill -9 2>/dev/null; true"
+    )
 
 
 def config(env):
@@ -34,8 +57,16 @@ def paths(job, repo):
         for match in re.finditer(r"/[^\s:'\";]+/\.venv/bin/[^\s:'\";]+", str(value)):
             source = match.group().split("/.venv/bin/")[0] + "/.venv/bin"
             pairs.append((source, repo + "/.venv/bin"))
-    models = {}
-    for value in [*job["cmd"], *job["env"].values()]:
+    models, synced = {}, set()
+    # local.env exports a catalogue of a dozen checkpoints (27B, 30B Omni, ...) into every
+    # job's env. Syncing all of them stalled every M3 job (2026-10-06): only checkpoints
+    # named in the command, in a non-catalogue env var, or in GPUQ_M3_SYNC (comma-separated
+    # env keys) are synced; catalogue paths are still mapped.
+    catalogue = _catalogue_keys() - set(
+        filter(None, job["env"].get("GPUQ_M3_SYNC", "").split(","))
+    )
+    values = [(None, v) for v in job["cmd"]] + list(job["env"].items())
+    for key, value in values:
         for root in MODEL_ROOTS:
             for match in re.finditer(re.escape(root) + r"/([^\s:'\";]+)", str(value)):
                 source = root + "/" + match[1].split("/")[0]
@@ -51,9 +82,25 @@ def paths(job, repo):
                         "model basename collision; use distinct checkpoint names"
                     )
                 models[source] = dest
+                if key is None or key not in catalogue:
+                    synced.add(source)
     pairs.extend(models.items())
     pairs.sort(key=lambda p: len(p[0]), reverse=True)
-    return top, wt, pairs, models
+    return top, wt, pairs, {k: v for k, v in models.items() if k in synced}
+
+
+def _catalogue_keys():
+    env = Path(__file__).resolve().parents[1] / "research" / "local.env"
+    try:
+        lines = env.read_text().splitlines()
+    except OSError:
+        return set()
+    keys = set()
+    for line in lines:
+        m = re.match(r"\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=", line)
+        if m:
+            keys.add(m[1])
+    return keys
 
 
 def mapped(value, pairs):
@@ -133,7 +180,7 @@ class Remote:
         cmd = [
             "rsync",
             "-a",
-            "--checksum",
+            "-v",  # one line per transferred file: a multi-GB copy is not a stall
             "-e",
             shlex.join(self.ssh[:-1]),
             source,
@@ -167,7 +214,10 @@ class Remote:
             return
         q = shlex.quote
         wt = self.repo + "/.m3-wt/gpuq-" + self.job["id"]
-        script = f"cd {q(self.repo)} && git worktree remove --force {q(wt)} 2>/dev/null; git -C {q(self.repo)} update-ref -d {q('refs/m5/gpuq-' + self.job['id'])}"
+        script = (
+            kill_tagged_script(self.job["id"])
+            + f"; cd {q(self.repo)} && git worktree remove --force {q(wt)} 2>/dev/null; git -C {q(self.repo)} update-ref -d {q('refs/m5/gpuq-' + self.job['id'])}"
+        )
         subprocess.run(
             self.ssh_cmd(script), stdout=self.log, stderr=subprocess.STDOUT, timeout=20
         )
@@ -209,6 +259,11 @@ class Remote:
 
     def run(self):
         top, wt, pairs, models = paths(self.job, self.repo)
+        refused = sorted(Path(m).name for m in models if Path(m).name not in M3_MODELS)
+        if refused:
+            raise ValueError(
+                f"M3: checkpoints {refused} are not allowed on the laptop; allowed: {sorted(M3_MODELS)}"
+            )
         from gpuq_digest import output_paths
 
         outputs = [(str(p), mapped(p, pairs)) for p in output_paths(self.job)]
@@ -290,6 +345,9 @@ class Remote:
             PATH=self.repo + "/.venv/bin:/usr/bin:/bin:/usr/sbin:/sbin",
             PYTHONPATH=wt + "/python",
             GPUQ_DEVICE="m3",
+            GPUQ_JOB_ID=self.job[
+                "id"
+            ],  # tags every process of the job, see _KILL_TAGGED
             GPUQ_REMOTE_HOST=self.host,
             M3_MODELS=self.repo + "/.m3-home/models",
             XDG_CACHE_HOME=self.repo + "/.m3-home/cache",
