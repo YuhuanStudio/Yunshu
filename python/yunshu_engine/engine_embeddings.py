@@ -102,6 +102,9 @@ class EngineEmbeddingsMixin:
             else:
                 pooled = mx.mean(hidden, axis=1).squeeze(0)
 
+            # bf16 hidden states: pool and normalise in float32, or the vector's norm is off
+            # by ~1e-2 and cosines carry bf16 rounding.
+            pooled = pooled.astype(mx.float32)
             if normalize:
                 norm = mx.sqrt(mx.sum(pooled * pooled) + 1e-12)
                 pooled = pooled / norm
