@@ -160,7 +160,7 @@ def run_ab(
             log(
                 f"stage {name}: {'PASS' if res.passed else 'FAIL'} {'; '.join(map(str, res.reasons[:2]))[:300]}"
             )
-            if not res.passed:
+            if not res.passed and not suite.get("keep_going"):
                 break  # fail-fast
     except InfraError as e:
         infra = str(e)

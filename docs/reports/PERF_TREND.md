@@ -1141,3 +1141,48 @@ Parity after atoms and routing changes: driver alone/batch/stagger/AR identical;
 - Warm 98K c=2 distinct prefixes: after the change one turn hit its prefix (TTFT 7.7 s vs off 4.7) and the other missed (167 s, cached 0): `apc_memory_evictions_total` went 0 -> 3 during the turns (4 entries of ~7 GiB resident in the 32 GiB budget; the first turn's restore and stores evicted the second prefix before its lookup). Off kept both. Open: the driver's restore/store path needs the same budget handling as upstream's (a held entry, or reserve before lookup).
 - Cold 32K single prompt, driver vs off: 36.3 vs 34.2 s (+6.2%); 98K x2 cold (in process, before the atom change): 143 / 289 s vs 136 / 272 s (+5%).
 - Mixed 1K-8K workload (staggered, code and prose, 3 reps), 8K rows only, driver (oldest-first) vs off: c=4 mean 21.7 vs 19.2 s (+12.6%), max 36.1 vs 32.5 s; c=8 mean 32.5 vs 27.2 s (+19.5%), max 46.6 vs 41.9 s. Whole-queue mean TTFT c=2/4/8: 2.36/12.3/17.4 s vs 1.96/10.9/17.1 s; p90 2.65/20.7/38.6 s vs 2.40/18.8/35.0 s; aggregate tok/s 36.0/23.8/24.1 vs 25.9/21.6/24.5; decode per request 34.0/22.1/10.8 vs 23.3/11.5/7.7.
+
+### 2026-10-06 — long requests: origin/main (2f1e2540) vs main (146f1d3a), `yv --suite long`
+
+Model Qwen3.8-27B oQ4e-mtp, M5 Max 128 GB, greedy, default config. Decode cells ask for exactly 2048 tokens
+(finish=length, fail-closed); prompts carry a "keep going" ask because the plain ask ends near 1.5K tokens.
+Runs: `longreg-main-vs-pushed2` (identity, apc, speed, memory, conc), `longreg-main-longqa`, `longreg-main-conc`.
+
+| ctx | kind | cold TTFT s base -> cand | warm TTFT s | decode tok/s (2048 tok) | follow-up TTFT s |
+|---|---|---|---|---|---|
+| 32K | prose | 36.9 -> 34.4 | 0.237 -> 0.175 | 59.1 -> 59.9 | 3.20 -> 3.13 |
+| 32K | code | 36.9 -> 34.4 | 0.241 -> 0.178 | 90.1 -> 90.7 | 3.23 -> 3.14 |
+| 64K | prose | 84.0 -> 79.0 | 0.50 -> 0.38 | 48.2 -> 48.6 | 4.17 -> 4.04 |
+| 64K | code | 84.0 -> 78.9 | 0.50 -> 0.38 | 104.7 -> 105.7 | 4.19 -> 4.04 |
+| 128K | prose | 209.6 -> 199.4 | 0.79 -> 0.60 | 40.5 -> 40.9 | 6.46 -> 6.13 |
+| 128K | code | 209.6 -> 199.3 | 0.83 -> 0.59 | 68.3 -> 69.2 | 6.43 -> 6.12 |
+
+Per-cell noise (half range of paired reps) was 0.0-2.5%; no cell regressed (decode +0.7..+1.4%, cold TTFT -5..-7%).
+Peak/idle memory, 2 reps (footprint GiB, base -> cand): 128K peak 74.0 -> 55.4, idle after 55.2 -> 34.3, held after short
+follow-up 45.2 -> 31.3 (32K cells also pass). Identity: base == cand on all 18 cells (3 ctx x 2 kinds x cold/warm/follow-up),
+spec on == spec off on all 18 cells (2048-token replies at 32K/64K/128K), APC warm == cold with hits of 32.8K/65.6K/131.1K tokens.
+Retrieval (10 key-value needles per ctx, greedy): 30/30 on base and 30/30 on cand; stock mlx-vlm 0.7.4 (chunked prefill
+2048, same prompts): 30/30. Stock 2048-token replies: 32K 27.8 tok/s, 64K 24.8, 128K 20.5 (decode), cold TTFT 37/85/212 s,
+peak 20.5/22.9/27.8 GiB; Yunshu cand decode is 2-4x stock because of MTP/DFlash, cold TTFT is 8% faster. 4-gram repeat share
+of 2048-token replies (cand, prose/code): 0.012/0.027 (32K), 0.012/0.228 (64K, code quotes source), 0.026/0.095 (128K); stock
+0.109/0.109 (32K), 0.006/0.125 (64K), 0.020/0.061 (128K); no loops, early garbage or topic switch in the replies read.
+Concurrent 2 sub-agents (warm 32K prefix each, three appended ~2K turns, 1K replies), median over rounds:
+base TTFT 6.9 s / decode 19.5 tok/s, cand TTFT 5.2 s / decode 20.0 tok/s (round 1: 5.2 s and 2.5-5.2 s TTFT, 20-21 tok/s,
+prefix cache hit 32768/32768 tokens, later rounds reuse the grown conversation).
+
+Release trend (`longtrend`, one rep; base column = v0.1.3 in every run), prose, spec on unless noted:
+
+| tag | 32K cold / warm TTFT s | 128K cold / warm TTFT s | 32K / 128K decode tok/s | 128K peak GiB | spec on == off |
+|---|---|---|---|---|---|
+| v0.1.0 | cannot serve Qwen3.8-27B (first request: internal error) | - | - | - | - |
+| v0.1.1 | 36.8 / 0.22 | 208.6 / **208.6 (no prefix reuse at 128K)** | 60.3 / 36.0 | 44.3 | off 27.9 vs on 60.3: digests differ |
+| v0.1.2 | 46.6 / 0.24 | 248.1 / 0.73 | 62.8 / 39.1 | 96.0 | digests differ (off cell 27.9 / 20.5 tok/s) |
+| v0.1.3 | 36.9 / 0.24 | 209.6 / 0.82 | 59.3 / 40.5 | 75.8 | not run in this trend |
+| main | 34.4 / 0.18 | 199.4 / 0.60 | 59.9 / 40.9 | 55.4 | identical (18/18) |
+
+v0.1.2 spec-off warm decode is 17.1 tok/s at 32K and 7.8 tok/s at 128K versus 27.8 / 20.5 cold (a prefix hit slows spec-off
+decode; main shows no such gap: 24.0 / 23.9). The 128K identity cells of v0.1.1 / v0.1.2 hit the 20 min cell limit: a diagnostic
+job (v0.1.2, spec off, 128K prose, progress prints) was healthy, 621 s end to end (cold 211 s TTFT + 100 s decode, warm 264 s
+at 7.8 tok/s, follow-up 40 s); the earlier "stalled" cells were slow cells with no output for 10 minutes, not hangs.
+Retrieval for old tags (`longreg-trend2-v011/v012` longqa) was still queued at p-1 when this was written.
+No regression found between origin/main and main on long requests.
