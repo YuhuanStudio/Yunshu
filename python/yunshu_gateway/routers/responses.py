@@ -1042,6 +1042,9 @@ async def _start_background_response(req: ResponsesRequest, request: Request):
     _store_response(response_id, queued_payload)
 
     def _mark_failed():
+        cur = _get_stored_response(response_id)
+        if cur is not None and cur.get("status") == "cancelled":
+            return  # a cancel already ended it; the engine's cancel exception is not a failure
         _store_response(
             response_id,
             {

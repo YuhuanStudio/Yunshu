@@ -76,3 +76,27 @@ def test_cancel_unknown_is_404(monkeypatch):
     monkeypatch.setattr(rt, "get_request_tracker", lambda: Tracker(False))
     code, body = _cancel("resp-nope")
     assert code == 404 and body["error"]["code"] == "response_not_found"
+
+
+def test_background_failure_path_does_not_overwrite_a_cancel(monkeypatch):
+    """The engine raising on cancel made the runner mark the response failed (seen on the real
+    server: a poll after the cancel said failed)."""
+    import yunshu_gateway.routers.responses as mod
+
+    async def boom(req, request):
+        rid = request.state._forced_response_id
+        mod._store_response(rid, {"id": rid, "status": "cancelled", "output": []})
+        raise RuntimeError("generation cancelled")
+
+    monkeypatch.setattr(mod, "create_response", boom)
+    req = mod.ResponsesRequest(model="m", input="hi", background=True)
+
+    async def go():
+        import asyncio
+
+        r = await mod._start_background_response(req, _req())
+        await asyncio.sleep(0.3)
+        return json.loads(bytes(r.body).decode())["id"]
+
+    rid = asyncio.run(go())
+    assert mod._get_stored_response(rid)["status"] == "cancelled"
