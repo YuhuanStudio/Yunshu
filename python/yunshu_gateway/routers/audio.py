@@ -58,6 +58,20 @@ _FFMPEG_FMT = {
 }
 
 
+def _looks_like_audio(data: bytes) -> bool:
+    """True when the bytes start like a container the ASR loaders read (WAV, MP3, Ogg, FLAC, M4A /
+    MP4, WebM / Matroska, ADTS AAC, AIFF, AMR). A failure to decode anything else is the caller's
+    file, not a server fault."""
+    h = data[:16]
+    return (
+        h[:4] in (b"RIFF", b"OggS", b"fLaC", b"FORM", b"\x1aE\xdf\xa3")
+        or h[:3] == b"ID3"
+        or h[4:8] == b"ftyp"
+        or h[:2] in (b"\xff\xfb", b"\xff\xf3", b"\xff\xf2", b"\xff\xf1", b"\xff\xf9")
+        or h[:5] == b"#!AMR"
+    )
+
+
 def _strip_leading_wav_header(data: bytes) -> bytes:
     """Return raw PCM, stripping a leading RIFF/WAVE header if present.
 
@@ -898,6 +912,14 @@ async def create_transcription(
         # Caller-supplied validation failures (bad language code, prompt, etc.)
         raise HTTPException(status_code=400, detail=str(e)) from None
     except Exception as e:
+        if not _looks_like_audio(content):
+            # undecodable upload (not an audio container at all): a client error, not a 500
+            logger.warning("ASR upload is not audio: %s", e)
+            raise HTTPException(
+                status_code=400,
+                detail="The uploaded file is not audio the server can decode "
+                "(supported: wav, mp3, ogg, flac, m4a, webm, aac).",
+            ) from None
         logger.error(f"ASR transcription error: {e}", exc_info=True)
         raise HTTPException(
             status_code=500, detail="Audio transcription failed"

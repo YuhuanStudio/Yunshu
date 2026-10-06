@@ -159,11 +159,20 @@ def _tts(c: Ctx):
     )
     if m.status_code == 200:
         head = m.content[:3]
-        expect(
-            head == b"ID3" or m.content[:2] in (b"\xff\xfb", b"\xff\xf3", b"\xff\xf2"),
-            f"mp3 request returned {m.content[:12]!r}",
-        )
-        c.notes["tts_mp3"] = "mp3"
+        if head == b"ID3" or m.content[:2] in (b"\xff\xfb", b"\xff\xf3", b"\xff\xf2"):
+            expect(
+                "mpeg" in m.headers.get("content-type", ""), "mp3 bytes labelled other"
+            )
+            c.notes["tts_mp3"] = "mp3"
+        else:
+            # no ffmpeg on the machine: honest WAV, labelled as WAV and flagged as a fallback
+            wav_info(m.content)
+            expect(
+                "wav" in m.headers.get("content-type", "")
+                and m.headers.get("x-yunshu-audio-format-fallback") == "wav",
+                f"WAV bytes for an mp3 request, headers {dict(m.headers)}",
+            )
+            c.notes["tts_mp3"] = "wav fallback (no ffmpeg), labelled"
     else:
         err_ok(m, "openai")
         c.notes["tts_mp3"] = f"{m.status_code}: {m.text[:100]}"
