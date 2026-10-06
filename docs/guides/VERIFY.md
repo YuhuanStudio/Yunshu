@@ -108,6 +108,8 @@ without small checkpoints (tests find them through `tests/unit/model_paths.py`, 
 `M3_MODELS`). Fail closed: a missing or incomplete output, a failed job, a wrong device or any
 mismatch is FAIL. Only the four allowlisted small checkpoints (Qwen3.5 0.8B / 2B / 9B-4bit, Qwen2.5-3B-4bit) ever reach the laptop. No failure is excused: a forced tool_choice is always grammar-constrained and usage excludes server prefill. The M3 is portability / correctness evidence only: no timing, no tok/s.
 
+`omni-gemma` (needs `gemma-4-e2b-it-4bit` on the allowlist) makes a spoken fixture with Qwen3-TTS, then runs the `omni` checks (audio / image / video in) on Gemma 4 E2B and the `cascade` check (Realtime voice with Qwen3-ASR + Qwen3-TTS). The `native` checks (Qwen3-Omni, 20 GB: `/v1/omni/speech/stream`, native Realtime speech) run as an M5 job: `m3sweep_jobs.py omni --mode native` through `gpuq --device m5`; the M3 route gate leaves them out.
+
 ### `routes`: every route has a real check
 
 `scripts/research/route_checks.py` holds one `@check(name, "METHOD /path", ...)` per group of routes (97 routes, websockets included).
