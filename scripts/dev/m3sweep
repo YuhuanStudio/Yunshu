@@ -41,6 +41,8 @@ PLAN = {
     "env": ("env", [], 1, 20),
     "wire-q25-3b": ("wire", ["Qwen2.5-3B-Instruct-4bit"], 6, 30),
     "wire-q35-08b": ("wire", ["Qwen3.5-0.8B-MLX-bf16"], 5, 25),
+    "wire-q25-3b-grammar": ("wire", ["Qwen2.5-3B-Instruct-4bit"], 6, 30),
+    "wire-q35-08b-grammar": ("wire", ["Qwen3.5-0.8B-MLX-bf16"], 5, 30),
     "wire-q35-9b": ("wire", ["Qwen3.5-9B-MLX-4bit"], 12, 40),
     "agent-q35-2b": ("agent", ["Qwen3.5-2B-MLX-bf16"], 8, 35),
     "agent-q25-3b": ("agent", ["Qwen2.5-3B-Instruct-4bit"], 6, 35),
@@ -54,13 +56,17 @@ PLAN = {
 PLAN_27B = {"wire-27b": ("wire", ["Jundot/Qwen3.8-27B-oQ4e-mtp"], 24, 60)}
 
 
-STRICT = {"agent-q35-2b"}  # models that must follow the one-Read-per-turn protocol exactly
+STRICT = {
+    "agent-q35-2b"
+}  # models that must follow the one-Read-per-turn protocol exactly
 
 
 def job_cmd(kind, models, out, name=""):
     cmd = [PY, JOBS_PY, kind, "--out", str(out)]
     if kind == "env":
         cmd.append("--sync")
+    if kind == "wire" and name.endswith("-grammar"):
+        cmd.append("--grammar")
     if kind == "agent" and name in STRICT:
         cmd.append("--strict")
     for m in models:
@@ -129,6 +135,21 @@ def env_versions(jobs):
             except (OSError, ValueError):
                 return None
     return None
+
+
+def known_gaps(jobs):
+    """Open known gaps seen by the jobs (reported with every verdict, never silently dropped)."""
+    seen = {}
+    for j in jobs:
+        try:
+            d = json.loads(Path(j["out"]).read_text())
+        except (OSError, ValueError):
+            continue
+        for g, v in (d.get("known_gaps") or {}).items():
+            seen.setdefault(g, {"what": v["what"], "jobs": {}})["jobs"][j["name"]] = v[
+                "count"
+            ]
+    return seen
 
 
 def verdict(jobs, wait_rc):
@@ -239,6 +260,8 @@ def finish(outdir, sha, jobs, _unused, max_seconds, wait_ids):
     v["sha"] = sha
     (outdir / "verdict.json").write_text(json.dumps(v, indent=1))
     print(f"m3sweep {sha[:7]}: {v['verdict']}  ({outdir / 'verdict.json'})")
+    for g, info in v.get("known_gaps", {}).items():
+        print(f"  known gap {g}: {info['what']} {info['jobs']}")
     for n, info in v["jobs"].items():
         for p in info["problems"]:
             print(f"  {n}: {p}")

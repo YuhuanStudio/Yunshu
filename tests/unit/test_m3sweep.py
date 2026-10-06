@@ -176,3 +176,24 @@ def test_every_job_argv_parses(tmp_path):
             for m in (ns.model if isinstance(ns.model, list) else [ns.model])
             if m
         )
+
+
+def test_stop_sequence_is_stop_and_gap_classification():
+    assert (
+        jobs.check_case(
+            "stop", {}, "messages", False, _out(finish="stop_sequence", text="hi")
+        )
+        == []
+    )
+    use = "tool_required/messages: prompt tokens stream 166 != non-stream 168"
+    assert jobs.classify(use, False) == jobs.classify(use, True) == "prefill-usage"
+    miss = "tool_named/chat/json: forced tool call missing"
+    assert jobs.classify(miss, False) == "forced-advisory"
+    assert (
+        jobs.classify(miss, True) is None
+    )  # the grammar leg never excuses a forced miss
+    assert jobs.classify("basic/chat/json: empty answer", False) is None
+    assert (
+        jobs.classify("basic/messages: prompt tokens stream 1 != non-stream 2", False)
+        is None
+    )
