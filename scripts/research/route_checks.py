@@ -1284,6 +1284,16 @@ def _images(c: Ctx):
             "cannot generate or edit images" in c.notes.get(key, ""),
             f"{key}: {c.notes.get(key)!r}",
         )
+    if c.kind == "vlm":  # a vision model reads the image through the OCR fallback
+        expect(
+            st["ocr"] == 200, f"OCR on a vision model: {c.notes.get('POST /v1/ocr')}"
+        )
+    else:
+        expect(
+            st["ocr"] == 503
+            and "cannot read text from images" in c.notes.get("POST /v1/ocr", ""),
+            f"OCR on a text model: {c.notes.get('POST /v1/ocr')}",
+        )
     # every request above is valid: a 400 means the route rejected a well-formed request
     for k, v in st.items():
         expect(v != 400, f"{k}: a well-formed request answered 400 ({c.notes})")

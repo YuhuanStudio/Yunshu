@@ -7,6 +7,8 @@ import tempfile
 
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 
+from ..model_guards import wrong_modality_detail
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["ocr"])
@@ -109,7 +111,7 @@ async def extract_text_from_image(
 
         if ocr_engine is None:
             # Try loading by model name
-            if model:
+            if model and manager is not None:
                 try:
                     engine = await manager.get_engine(model)
                     if isinstance(engine, OCREngine):
@@ -166,9 +168,18 @@ async def extract_text_from_image(
 
         vlm_engine = None
         vlm_model_id = None
-        if model:
+        # single-model mode has no manager: the served engine answers when it is a VLM
+        _fallback_entries = manager.list_entries() if manager is not None else ()
+        if manager is None:
+            from ..engine import get_engine as _get_engine
+
+            _served = _get_engine()
+            if isinstance(_served, VLMEngine):
+                vlm_engine = _served
+                vlm_model_id = model or getattr(_served, "model_name", "") or "vlm"
+        if model and vlm_engine is None:
             # Prefer the explicitly requested model when it is a loaded VLM.
-            for entry in manager.list_entries():
+            for entry in _fallback_entries:
                 if (
                     entry.model_id == model
                     and entry.is_loaded
@@ -180,7 +191,7 @@ async def extract_text_from_image(
                     break
         if vlm_engine is None:
             # Any loaded VLM model can serve as an OCR fallback.
-            for entry in manager.list_entries():
+            for entry in _fallback_entries:
                 if (
                     entry.is_loaded
                     and entry.model_type == ModelType.VLM
@@ -197,7 +208,8 @@ async def extract_text_from_image(
             # itself is missing.
             raise HTTPException(
                 status_code=503,
-                detail="No OCR engine available — load a VLM model (e.g. GLM-OCR-bf16) first",
+                detail=wrong_modality_detail("ocr", model)
+                or "No OCR engine available — load a VLM model (e.g. GLM-OCR-bf16) first",
             )
 
         # SECURITY: re-check the RESOLVED fallback VLM against the key's scope

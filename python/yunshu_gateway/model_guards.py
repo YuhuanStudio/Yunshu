@@ -83,6 +83,10 @@ _MODALITY = {
     "tts": ("synthesize speech", "a text-to-speech model such as Qwen3-TTS"),
     "asr": ("transcribe audio", "a speech-to-text model such as whisper or Qwen3-ASR"),
     "image": ("generate or edit images", "an image model such as Z-Image-Turbo"),
+    "ocr": (
+        "read text from images",
+        "a vision or OCR model such as Qwen3.5 or GLM-OCR",
+    ),
 }
 
 
