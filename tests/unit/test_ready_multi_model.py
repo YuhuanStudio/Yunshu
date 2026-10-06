@@ -16,7 +16,9 @@ def _client(monkeypatch, entries):
     mgr = types.SimpleNamespace(list_entries=lambda: entries)
     monkeypatch.setattr(gm, "get_model_manager", lambda: mgr)
     monkeypatch.setattr(gm, "get_engine", lambda: None)
-    return TestClient(gm.create_app())
+    app = gm.create_app()
+    app.state.server_state = gm.ServerState.RUNNING  # other tests leave the module state draining
+    return TestClient(app)
 
 
 def entry(loaded):
