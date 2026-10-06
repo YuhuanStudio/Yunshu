@@ -103,3 +103,9 @@ def test_body_checks_use_sdk_models():
     assert sc.check_body("/v1/chat/completions", {"id": "x"})
     ok = {"id": "c", "object": "chat.completion", "created": 1, "model": "m", "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "a"}}]}
     assert sc.check_body("/v1/chat/completions", ok) == []
+
+
+def test_responses_trailing_done_is_tolerated():
+    resp = {"id": "r", "object": "response", "status": "completed", "model": "m", "output": [], "usage": {}}
+    ev = [_r("response.created", 0, response=resp), _r("response.completed", 1, response=resp), (None, "[DONE]")]
+    assert sc.check_responses_stream(ev) == []

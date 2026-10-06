@@ -279,6 +279,8 @@ def rendered_boundaries(
         if at < 0 or marked_prompt.count(marker) != 1:
             raise ValueError(
                 "cache breakpoint was removed or duplicated by rendered template"
+                f" (marker {list(markers).index(marker) + 1} of {len(markers)}, "
+                f"found {marked_prompt.count(marker)} times)"
             )
         end = at
         if (marker_ends or {}).get(marker) == "tool_use":

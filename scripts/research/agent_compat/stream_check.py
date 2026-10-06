@@ -199,6 +199,8 @@ def check_responses_stream(events) -> list[str]:
         return ["empty stream"]
     seq = -1
     names = []
+    if events and events[-1][1] == "[DONE]":  # Yunshu ends Responses streams like chat; every SDK stops on it
+        events = events[:-1]
     for n, d in events:
         if not isinstance(d, dict):
             return p + [f"non-JSON data for {n!r}"]

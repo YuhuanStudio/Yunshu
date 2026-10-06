@@ -136,6 +136,11 @@ def main():
                                 body[k] = min(body[k], a.max_tokens)
                     t0 = time.time()
                     rec = dict(session=n, i=i, method=r["method"], path=r["path"])
+                    upgrade = str(r["headers"].get("Upgrade") or r["headers"].get("upgrade") or "")
+                    if r["method"] == "GET" and upgrade.lower() == "websocket":
+                        rec.update(status=0, skipped="websocket upgrade (ws_probe.py covers it)")
+                        res.append(rec)
+                        continue
                     try:
                         req = c.build_request(
                             r["method"],
