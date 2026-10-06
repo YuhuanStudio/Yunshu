@@ -111,7 +111,17 @@ def test_plan_and_verdict(tmp_path):
     assert all(
         j["name"].startswith(("wire", "env")) for j in d.plan("a", tmp_path, {"wire"})
     )
-    assert "wire-27b" in {j["name"] for j in d.plan("a", tmp_path, None, True)}
+    allowed = {
+        "Qwen3.5-0.8B-MLX-bf16",
+        "Qwen3.5-2B-MLX-bf16",
+        "Qwen3.5-9B-MLX-4bit",
+        "Qwen2.5-3B-Instruct-4bit",
+    }
+    for j in d.plan("a", tmp_path):
+        used = {
+            Path(c).name for c in j["cmd"] if c.startswith("/Volumes/P5Plus/models/")
+        }
+        assert used <= allowed, used
     # fail closed: nothing written -> FAIL; complete+pass -> PASS; failed/incomplete/m5 -> FAIL
     one = [js[0]]
     assert d.verdict(one, 0)["verdict"] == "FAIL"
@@ -165,7 +175,7 @@ def test_lenient_conc_and_lock():
 
 def test_every_job_argv_parses(tmp_path):
     d = _driver()
-    for j in d.plan("abc1234", tmp_path, None, True):
+    for j in d.plan("abc1234", tmp_path):
         argv = j["cmd"]
         assert argv[1] == d.JOBS_PY
         ns = jobs.build_parser().parse_args(argv[2:])

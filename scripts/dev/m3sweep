@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """One correctness sweep of a commit on the M3 lane; one PASS/FAIL verdict file (docs/guides/VERIFY.md).
 
-    m3sweep [REF] [--only wire,agent,units] [--with-27b] [--dry-run] [--no-wait]
+    m3sweep [REF] [--only wire,agent,units] [--dry-run] [--no-wait]
     m3sweep --collect DIR            # judge the outputs of an earlier (--no-wait) run
 
 REF defaults to HEAD of the current checkout (tracked edits included, as the lane snapshots them);
@@ -48,12 +48,11 @@ PLAN = {
     "agent-q25-3b": ("agent", ["Qwen2.5-3B-Instruct-4bit"], 6, 35),
     "units": (
         "units",
-        ["Qwen2.5-3B-Instruct-4bit", "Qwen3.5-0.8B-MLX-bf16", "GLM-OCR-bf16"],
+        ["Qwen2.5-3B-Instruct-4bit", "Qwen3.5-0.8B-MLX-bf16"],
         3,
         20,
     ),
 }
-PLAN_27B = {"wire-27b": ("wire", ["Jundot/Qwen3.8-27B-oQ4e-mtp"], 24, 60)}
 
 
 STRICT = {
@@ -74,9 +73,9 @@ def job_cmd(kind, models, out, name=""):
     return cmd
 
 
-def plan(sha, outdir, only=None, with_27b=False):
+def plan(sha, outdir, only=None):
     """The list of jobs (pure): label, gpuq submit args, the output file each must produce."""
-    table = dict(PLAN, **(PLAN_27B if with_27b else {}))
+    table = dict(PLAN)
     jobs = []
     for name, (kind, models, gb, tmo) in table.items():
         if only and kind not in only and kind != "env":
@@ -175,7 +174,6 @@ def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("ref", nargs="?")
     ap.add_argument("--only", help="comma list of wire,agent,units")
-    ap.add_argument("--with-27b", action="store_true")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--no-wait", action="store_true")
     ap.add_argument("--collect")
@@ -197,7 +195,7 @@ def main(argv=None):
     if not sha:
         sys.exit(f"unknown ref {a.ref}")
     outdir = BUILD / f"{sha[:7]}-{time.strftime('%m%d-%H%M%S')}"
-    jobs = plan(sha, outdir, only, a.with_27b)
+    jobs = plan(sha, outdir, only)
     if a.dry_run:
         print(json.dumps([{**j, "out": str(j["out"])} for j in jobs], indent=1))
         return 0
