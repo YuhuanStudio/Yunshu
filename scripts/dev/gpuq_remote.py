@@ -22,6 +22,13 @@ M3_MODELS = frozenset(
         "Qwen3.5-2B-MLX-bf16",
         "Qwen3.5-9B-MLX-4bit",
         "Qwen2.5-3B-Instruct-4bit",
+        # one smallest checkpoint per modality, so speech / ASR / OCR / image generation /
+        # embeddings are verified on a real server (user 2026-10-06), ~17 GB together
+        "Qwen3-TTS-12Hz-1.7B-VoiceDesign-bf16",
+        "Qwen3-ASR-1.7B-bf16",
+        "GLM-OCR-bf16",
+        "Z-Image-Turbo-MLX-4bit",
+        "Qwen3-Embedding-0.6B",
     }
 )
 
