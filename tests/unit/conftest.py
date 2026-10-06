@@ -39,6 +39,12 @@ def _no_user_config(tmp_path, monkeypatch):
     )
 
 
+@pytest.fixture(autouse=True)
+def _no_m3_idle_probe(monkeypatch):
+    """gpuq daemon-loop tests never ssh to the laptop for its idle time."""
+    monkeypatch.setenv("GPUQ_M3_IDLE_S", "0")
+
+
 @pytest.fixture(autouse=True, scope="session")
 def _fast_drain():
     """Zero drain timeout for all tests — avoids 30s wait on app teardown."""

@@ -51,6 +51,40 @@ def kill_tagged_script(job_id):
     )
 
 
+IDLE_SCRIPT = (
+    "ioreg -c IOHIDSystem | awk '/HIDIdleTime/ {print int($NF/1000000000); exit}'"
+)
+
+
+def user_idle_s(env, run=subprocess.run):
+    """Seconds since the laptop's owner last touched keyboard or mouse; None when unknown.
+    The laptop is borrowed: M3 work must not compete with its owner, so the lane waits until
+    the owner has been away a while."""
+    host, key, _ = config(env)
+    try:
+        out = run(
+            [
+                "ssh",
+                "-i",
+                key,
+                "-o",
+                "IdentitiesOnly=yes",
+                "-o",
+                "BatchMode=yes",
+                "-o",
+                "ConnectTimeout=8",
+                host,
+                IDLE_SCRIPT,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+        return int(out.stdout.strip()) if out.returncode == 0 else None
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+
+
 def config(env):
     return (
         env.get("M3_HOST", "yuhuan@192.168.50.55"),

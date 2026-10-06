@@ -540,3 +540,68 @@ def test_cleanup_script_kills_by_tag():
 
     script = kill_tagged_script("1006-x")
     assert "GPUQ_JOB_ID=1006-x" in script and "kill -9" in script
+
+
+def test_m3_waits_for_idle_laptop(queue, monkeypatch):
+    """The laptop is borrowed: the M3 lane waits until its owner has been away a while."""
+    monkeypatch.setenv("GPUQ_M3_IDLE_S", "300")
+    monkeypatch.setattr(queue, "_m3_idle_cache", {"at": -1e9, "ok": False})
+    queue.submit(["true"], "m3", 1, 0, device="m3")
+    probes = []
+
+    def probe(idle):
+        def run(env):
+            probes.append(idle)
+            return idle
+
+        return run
+
+    assert queue._m3_owner_idle(now=0.0, probe=probe(12)) is False
+    # cached for a minute: no second ssh
+    assert queue._m3_owner_idle(now=30.0, probe=probe(999)) is False
+    assert probes == [12]
+    assert queue._m3_owner_idle(now=61.0, probe=probe(None)) is False  # unknown = busy
+    assert queue._m3_owner_idle(now=122.0, probe=probe(301)) is True
+    assert queue._read(queue.ROOT / "m3-idle.json")["dispatch"] is True
+
+
+def test_m3_idle_probe_only_when_m3_work_waits(queue, monkeypatch):
+    monkeypatch.setenv("GPUQ_M3_IDLE_S", "300")
+    monkeypatch.setattr(queue, "_m3_idle_cache", {"at": -1e9, "ok": False})
+    queue.submit(["true"], "m5 only", 1, 0)
+
+    def boom(env):
+        raise AssertionError("probed with no M3 work pending")
+
+    assert queue._m3_owner_idle(now=0.0, probe=boom) is False
+
+
+def test_m3_lane_not_dispatched_while_owner_active(queue, monkeypatch):
+    monkeypatch.setenv("GPUQ_M3_IDLE_S", "300")
+    monkeypatch.setattr(queue, "_m3_idle_cache", {"at": -1e9, "ok": False})
+    import gpuq_remote
+
+    monkeypatch.setattr(gpuq_remote, "user_idle_s", lambda env: 5)
+    ran = []
+    monkeypatch.setattr(
+        queue, "_execute", lambda job, path, gate: ran.append(job["id"])
+    )
+    monkeypatch.setattr(queue, "POLL_S", 0.01)
+    monkeypatch.setattr(queue, "IDLE_EXIT_S", 0.03)
+    jid = queue.submit(["true"], "m3", 1, 0, device="m3")
+    t = threading.Thread(target=queue.daemon, daemon=True)
+    t.start()
+    t.join(timeout=1.0)
+    assert ran == []
+    assert queue._read(queue.JOBS / (jid + ".json"))["state"] == "pending"
+
+
+def test_user_idle_probe_parses_and_fails_closed():
+    from types import SimpleNamespace
+
+    from gpuq_remote import user_idle_s
+
+    ok = lambda *a, **k: SimpleNamespace(returncode=0, stdout="412\n")  # noqa: E731
+    down = lambda *a, **k: SimpleNamespace(returncode=255, stdout="")  # noqa: E731
+    assert user_idle_s({}, run=ok) == 412
+    assert user_idle_s({}, run=down) is None

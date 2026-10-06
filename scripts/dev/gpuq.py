@@ -1304,6 +1304,42 @@ def _draining() -> bool:
     return _alive(pid)
 
 
+M3_IDLE_PROBE_S = 60.0
+_m3_idle_cache: dict = {"at": -1e9, "ok": False}
+
+
+def _m3_owner_idle(now: float | None = None, probe=None) -> bool:
+    """The M3 lane dispatches only while the laptop's owner has been away a while. Probed
+    at most once a minute and only when an M3 job is pending; an unknown answer (laptop
+    asleep or off the network) counts as busy. The answer is in m3-idle.json for status.
+    GPUQ_M3_IDLE_S (default 300) sets the idle time; 0 turns the check off."""
+    need = float(os.environ.get("GPUQ_M3_IDLE_S", 300))
+    if need <= 0:
+        return True
+    now = time.monotonic() if now is None else now
+    if now - _m3_idle_cache["at"] < M3_IDLE_PROBE_S:
+        return bool(_m3_idle_cache["ok"])
+    if not any(
+        j["state"] == "pending"
+        and j.get("device") in ("m3", "any")
+        and not j.get("cancel")
+        for j in _jobs()
+    ):
+        return bool(_m3_idle_cache["ok"])
+    if probe is None:
+        import gpuq_remote
+
+        probe = gpuq_remote.user_idle_s
+    idle = probe(os.environ)
+    ok = idle is not None and idle >= need
+    _m3_idle_cache.update(at=now, ok=ok)
+    _write(
+        ROOT / "m3-idle.json",
+        {"idle_s": idle, "need_s": need, "dispatch": ok, "checked": _now()},
+    )
+    return ok
+
+
 def restart(max_wait_s: float = 4 * 3600) -> int:
     """Restart the daemon without touching a timing measurement: stop dispatching,
     wait until no unpaused job is running, then replace the daemon. Restarting under
@@ -1421,6 +1457,8 @@ def daemon() -> None:
                 and (ROOT / "m3-quarantine.json").exists()
                 or _draining()
             ):
+                continue
+            if lane == "m3" and not _m3_owner_idle():
                 continue
             jobs = _jobs()
             eligible = [j for j in jobs if j.get("device", "m5") in {lane, "any"}]
@@ -1558,6 +1596,16 @@ def status() -> None:
     print(f"daemon: {'up' if daemon_up else 'down'}")
     if _draining():
         print("draining: a restart waits for the running job; nothing new starts")
+    idle = _read(ROOT / "m3-idle.json") if (ROOT / "m3-idle.json").exists() else {}
+    if (
+        idle
+        and not idle.get("dispatch")
+        and any(j.get("device") == "m3" for j in active)
+    ):
+        print(
+            f"m3: waiting for the laptop to be idle {idle.get('need_s', 0):.0f}s "
+            f"(idle {idle.get('idle_s')}s at the last probe)"
+        )
     cfg = load_serving_config()
     if cfg.get("urls"):
         print(f"serving gate: {', '.join(cfg['urls'])}")
