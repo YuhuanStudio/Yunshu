@@ -674,7 +674,7 @@ def test_restore_of_a_strided_view_checkpoint_matches_upstream():
     assert a[0].values.tolist() == b[0].values.tolist()
 
 
-def test_flush_returns_the_allocator_pool_before_copying(monkeypatch):
+def test_flush_does_not_clear_the_allocator_pool(monkeypatch):
     import yunshu_engine.apc_manager as am
 
     manager = _mgr()
@@ -690,4 +690,4 @@ def test_flush_returns_the_allocator_pool_before_copying(monkeypatch):
     kv.update_and_fetch(mx.ones((1, 1, 32, 4)), mx.ones((1, 1, 32, 4)))
     assert coordinator.store_checkpoint(list(range(32)), [kv], extra_hash=0)
     coordinator.flush_deferred_checkpoints()
-    assert events[0] == "clear" and "store" in events
+    assert "store" in events and "clear" not in events

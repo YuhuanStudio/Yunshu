@@ -582,7 +582,8 @@ def test_memory_pressure_evicts_anchors_before_a_big_allocation():
     assert len(m._exact_cache) < anchors + 3
 
 
-def test_freed_anchor_buffers_are_returned_to_the_allocator(monkeypatch):
+def test_request_path_never_clears_the_allocator_pool_but_pressure_does(monkeypatch):
+    """Clearing the pool walks every pooled buffer (4-13 ms): it is the follow-up's TTFT."""
     import yunshu_engine.apc_manager as am
 
     calls = []
@@ -590,10 +591,7 @@ def test_freed_anchor_buffers_are_returned_to_the_allocator(monkeypatch):
     monkeypatch.setattr(am, "RELEASE_FREED_BYTES", 1)
     m = _mgr()
     _shared_conversation(m, turns=4, step=5000)
-    assert calls, (
-        "re-pointing anchors frees their buffers; they must not linger in the pool"
-    )
-    calls.clear()
+    assert not calls
     m._memory_headroom = lambda: 0
     m._make_room(1 << 30)
     assert calls
