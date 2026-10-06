@@ -837,6 +837,173 @@ def cmd_routes(a):
     return 0 if res["pass"] else 1
 
 
+def make_speech_fixture(tts_model, res):
+    """The spoken phrase of the omni checks, made by a real Qwen3-TTS server (WAV, validated).
+    Returns the WAV bytes; raises on anything short of a 0.5+ s 16-bit WAV."""
+    import io
+    import wave
+
+    import httpx
+    from route_checks_omni import PHRASE
+
+    srv = start_server(tts_model, "omni-tts", ["YUNSHU_VLM_APC_DISK=0"])
+    try:
+        r = httpx.post(
+            srv.url + "/v1/audio/speech",
+            json={
+                "model": srv.model_id,
+                "input": PHRASE,
+                "voice": "ethan",
+                "response_format": "wav",
+            },
+            timeout=600,
+        )
+        if r.status_code != 200:
+            raise RuntimeError(f"TTS fixture: {r.status_code} {r.text[:200]}")
+        with wave.open(io.BytesIO(r.content)) as w:
+            secs = w.getnframes() / w.getframerate()
+            if secs < 0.5 or w.getsampwidth() != 2:
+                raise RuntimeError(
+                    f"TTS fixture too short / not 16-bit: {secs:.2f}s {w.getsampwidth()}B"
+                )
+        res["notes"]["speech_fixture_seconds"] = round(secs, 2)
+        return r.content
+    finally:
+        srv.kill()
+
+
+def cmd_omni(a):
+    """Omni checks on real servers. small: Gemma 4 E2B alone (audio / image / video in) and then
+    with ASR + TTS in a multi-model server (Realtime voice cascade). native: Qwen3-Omni
+    (Thinker + Talker) with native Realtime speech (M5, not the laptop). Needs --tts for the
+    spoken fixture, made first by the TTS server (one server at a time)."""
+    import route_checks as rc
+
+    only = set(a.only.split(",")) if a.only else None
+    os.environ.setdefault("COVAUDIT_PORT_LO", "18994")
+    target = a.model
+    res = {
+        "kind": "omni",
+        "mode": a.mode,
+        "models": [target, a.tts, *a.asr],
+        "checks": {},
+        "failures": [],
+        "notes": {},
+        "complete": False,
+        "_out": a.out,
+    }
+    try:
+        wav = make_speech_fixture(a.tts, res)
+    except BaseException as e:  # noqa: BLE001  no fixture, no omni verdict: stop at once
+        res["failures"].append(f"speech fixture: {type(e).__name__}: {e}")
+        res.pop("_out")
+        write(a.out, res)
+        print("FAIL: speech fixture:", e, flush=True)
+        return 1
+    fixtures = {"speech_wav": wav}
+    needs = "omni" if a.mode == "small" else "native"
+    srv = None
+    name = Path(target).name
+    try:
+        sets = ["YUNSHU_VLM_APC_DISK=0"]
+        if a.mode == "native":
+            sets.append("YUNSHU_REALTIME_OMNI=on")
+        srv = start_server(target, "omni", sets)
+        ctx = routes_make_ctx(srv, "", "vlm")
+        ctx.fixtures = fixtures
+        run_route_checks(ctx, needs, only, res, srv, name)
+        res["notes"][name] = ctx.notes
+        if srv.proc.poll() is not None:
+            res["failures"].append(f"{name}: server died rc={srv.proc.returncode}")
+    except BaseException as e:  # noqa: BLE001
+        res["failures"].append(f"{name}: {type(e).__name__}: {e}")
+        traceback.print_exc()
+    finally:
+        if srv:
+            res.setdefault("server_log_tail", {})[name] = srv.log_tail(30)
+            srv.kill()
+    if a.mode == "small" and a.asr:
+        srv = None
+        try:
+            home = Path(os.environ.get("HOME", "/tmp")) / "m3sweep-omni-cascade"
+            mdir = home / "models"
+            mdir.mkdir(parents=True, exist_ok=True)
+            for m in (target, *a.asr, a.tts):
+                link = mdir / Path(m).name
+                if link.is_symlink() or link.exists():
+                    link.unlink()
+                link.symlink_to(m)
+            from covaudit_session import Srv
+
+            (home / "server.log").unlink(missing_ok=True)
+            srv = Srv(
+                target,
+                str(ROOT / "python"),
+                home,
+                home / "server.log",
+                ["YUNSHU_VLM_APC_DISK=0"],
+                models_dir=str(mdir),
+            )
+            srv.wait_ready()
+            ctx = routes_make_ctx(srv, "", "multi", model_id=name)
+            ctx.fixtures = fixtures
+            for m in (*a.asr, a.tts):
+                r = ctx.http.post(
+                    "/v1/models/load", json={"model": Path(m).name}, timeout=600
+                )
+                if r.status_code != 200:
+                    raise RuntimeError(
+                        f"load {Path(m).name}: {r.status_code} {r.text[:200]}"
+                    )
+            run_route_checks(ctx, "cascade", only, res, srv, "cascade")
+            res["notes"]["cascade"] = ctx.notes
+        except BaseException as e:  # noqa: BLE001
+            res["failures"].append(f"cascade server: {type(e).__name__}: {e}")
+            traceback.print_exc()
+        finally:
+            if srv:
+                res["cascade_log_tail"] = srv.log_tail(30)
+                srv.kill()
+    res.pop("_out")
+    want = {n for n, c in rc.REGISTRY.items() if c.needs in (needs, "cascade")}
+    if a.mode == "native":
+        want.discard("realtime_voice_cascade")
+    if only:
+        want &= only
+    res["missing_checks"] = sorted(
+        w for w in want if not any(k.startswith(w) for k in res["checks"])
+    )
+    res["failures"] += [f"check never ran: {m}" for m in res["missing_checks"]]
+    # fail closed: a skipped omni check is no evidence (only the video check may skip: it needs
+    # ffmpeg, which the laptop may not have; the skip is then reported, not hidden)
+    res["failures"] += [
+        f"{k}: skipped ({row.get('detail')})"
+        for k, row in res["checks"].items()
+        if row["status"] == "skip" and not k.startswith("omni_video_in")
+    ]
+    res["verified_routes"] = sorted(
+        {
+            r
+            for row in res["checks"].values()
+            if row["status"] == "pass"
+            for r in row["routes"]
+        }
+    )
+    res["complete"] = True
+    res["pass"] = not res["failures"] and bool(res["checks"])
+    write(a.out, res)
+    print(
+        "RESULT",
+        "PASS" if res["pass"] else "FAIL",
+        len(res["failures"]),
+        "failures",
+        flush=True,
+    )
+    for f in res["failures"]:
+        print("FAIL:", f, flush=True)
+    return 0 if res["pass"] else 1
+
+
 def build_parser():
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -857,6 +1024,13 @@ def build_parser():
             required=(n in ("wire", "agent", "routes")),
             action="append" if n in ("units", "routes") else "store",
         )
+    p = sub.add_parser("omni")
+    p.add_argument("--mode", choices=("small", "native"), required=True)
+    p.add_argument("--model", required=True)
+    p.add_argument("--tts", required=True)
+    p.add_argument("--asr", action="append", default=[])
+    p.add_argument("--only")
+    p.add_argument("--out", required=True)
     return ap
 
 
@@ -868,6 +1042,7 @@ def main(argv=None):
         "units": cmd_units,
         "env": cmd_env,
         "routes": cmd_routes,
+        "omni": cmd_omni,
     }[a.cmd](a)
 
 

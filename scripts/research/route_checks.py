@@ -46,12 +46,15 @@ class Check:
     fn: Callable[[Ctx], Any]
     routes: tuple[str, ...]
     needs: str = "main"
+    served: bool = (
+        False  # exercises the route's served path, not only the absent answer
+    )
 
 
-def check(name: str, *routes: str, needs: str = "main"):
+def check(name: str, *routes: str, needs: str = "main", served: bool = False):
     def deco(fn):
         expect(name not in REGISTRY, f"duplicate check {name}")
-        REGISTRY[name] = Check(name, fn, routes, needs)
+        REGISTRY[name] = Check(name, fn, routes, needs, served)
         return fn
 
     return deco
@@ -82,6 +85,9 @@ class Ctx:
     mm_models: list = field(default_factory=list)  # multi-model server: model ids
     log_tail: Any = None  # callable(n) -> the server log's last n lines
     fake: Any = None  # FakeBackend (search / MCP / page on loopback), multi server only
+    fixtures: dict = field(
+        default_factory=dict
+    )  # omni jobs: "speech_wav" bytes, "phrase"
 
     def auth(self, extra=None):
         h = {"Authorization": f"Bearer {self.token}"} if self.token else {}
@@ -1980,6 +1986,9 @@ def _web_search_unconfigured(c: Ctx):
     c.notes["web_search_responses"] = [o.type for o in r.output]
 
 
+from route_checks_omni import (
+    _omni_audio_in,  # noqa: E402,F401  registers the omni input / speech-out checks
+)
 from route_checks_tools import (
     FakeBackend,  # noqa: E402,F401  registers the server-tool checks
 )

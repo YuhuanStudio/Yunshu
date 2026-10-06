@@ -44,6 +44,18 @@ PLAN = {
     "wire-q35-9b": ("wire", ["Qwen3.5-9B-MLX-4bit"], 12, 40),
     # one job, servers one after the other (the lane has three ports for them: 18994-18996)
     "routes": ("routes", ["Qwen3.5-0.8B-MLX-bf16", "Qwen2.5-3B-Instruct-4bit"], 14, 45),
+    # input omni on a real server: Gemma 4 E2B (audio / image / video in), then Gemma + ASR + TTS
+    # for the Realtime voice cascade; the spoken fixture comes from the TTS (servers one at a time)
+    "omni-gemma": (
+        "omni",
+        [
+            "gemma-4-e2b-it-4bit",
+            "Qwen3-TTS-12Hz-1.7B-VoiceDesign-bf16",
+            "Qwen3-ASR-1.7B-bf16",
+        ],
+        14,
+        40,
+    ),
     "agent-q35-2b": ("agent", ["Qwen3.5-2B-MLX-bf16"], 8, 35),
     "agent-q25-3b": ("agent", ["Qwen2.5-3B-Instruct-4bit"], 6, 35),
     "units": (
@@ -66,6 +78,12 @@ def job_cmd(kind, models, out, name=""):
     cmd = [PY, JOBS_PY, kind, "--out", str(out)]
     if kind == "env":
         cmd.append("--sync")
+    if kind == "omni":
+        return [
+            PY, JOBS_PY, "omni", "--mode", "small", "--out", str(out),
+            "--model", str(MODELS / models[0]), "--tts", str(MODELS / models[1]),
+            "--asr", str(MODELS / models[2]),
+        ]  # fmt: skip
     if kind == "wire" and name.endswith("-grammar"):
         cmd.append("--grammar")
     if kind == "agent" and name in STRICT:
@@ -173,7 +191,12 @@ def route_coverage(jobs):
     sys.path.insert(0, str(MAIN / "scripts/research"))
     import route_checks as rc
 
-    want = rc.checked_routes()
+    want = {
+        r
+        for c in rc.REGISTRY.values()
+        if c.needs in ("main", "multi")
+        for r in c.routes
+    }
     return [f"route never verified: {r}" for r in sorted(want - verified)]
 
 
