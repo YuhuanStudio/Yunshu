@@ -4,7 +4,6 @@ plus the wire formats built from it."""
 from __future__ import annotations
 
 import json
-import os
 import struct
 from pathlib import Path
 
@@ -19,11 +18,11 @@ from yunshu_engine.model_card import (
 )
 from yunshu_gateway.model_card_formats import ollama_show, openai_model
 
-MODELS = Path(os.environ.get("YUNSHU_TEST_MODELS", "~/.yunshu/models")).expanduser()
+from .model_paths import model_dir
 
 
 def _card(name: str, **kw):
-    path = MODELS / name
+    path = model_dir(name)
     if not path.exists():
         pytest.skip(f"{path} not available")
     return build_model_card(path, **kw)
@@ -314,3 +313,23 @@ def test_ollama_show_capabilities():
         == show
     )
     assert ollama_show(_card("GLM-OCR-bf16"))["capabilities"] == ["ocr"]
+
+
+def test_ollama_show_ignores_loopback_server_tools():
+    wire = {
+        "id": "m",
+        "kind": "llm",
+        "family": "qwen2",
+        "architecture": "Qwen2ForCausalLM",
+        "parameters": 1,
+        "context": {"length": 1024},
+        "reasoning": {"supported": False},
+        "tools": {"supported": True},
+        "input_modalities": ["text"],
+        "output_modalities": ["text"],
+    }
+    with_tools = {**wire, "server_tools": {"web_fetch": {"available": True}}}
+    assert (
+        ollama_show(with_tools)["model_info"]["yunshu.card"]
+        == ollama_show(wire)["model_info"]["yunshu.card"]
+    )

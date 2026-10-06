@@ -1,0 +1,220 @@
+#!/usr/bin/env python3
+"""One correctness sweep of a commit on the M3 lane; one PASS/FAIL verdict file (docs/guides/VERIFY.md).
+
+    m3sweep [REF] [--only wire,agent,units] [--with-27b] [--dry-run] [--no-wait]
+    m3sweep --collect DIR            # judge the outputs of an earlier (--no-wait) run
+
+REF defaults to HEAD of the current checkout (tracked edits included, as the lane snapshots them);
+any other ref is checked out detached under /Volumes/P5Plus/yunshu-build/m3sweep/. The M3 is
+portability / correctness evidence only: no tok/s, no timing verdict. Fail closed: a missing
+output, an incomplete output, a failed job or any mismatch is FAIL. Verdict: DIR/verdict.json.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+MAIN = Path(__file__).resolve().parents[2]
+GPUQ = str(Path(__file__).resolve().with_name("gpuq"))
+BUILD = Path("/Volumes/P5Plus/yunshu-build/m3sweep")
+MODELS = Path("/Volumes/P5Plus/models")
+PY = str(MAIN / ".venv/bin/python")
+JOBS_PY = "scripts/research/m3sweep_jobs.py"
+
+# name -> (kind, models, declared GB, timeout min)
+PLAN = {
+    "wire-q25-3b": ("wire", ["Qwen2.5-3B-Instruct-4bit"], 6, 30),
+    "wire-q35-08b": ("wire", ["Qwen3.5-0.8B-MLX-bf16"], 5, 25),
+    "wire-q35-9b": ("wire", ["Qwen3.5-9B-MLX-4bit"], 12, 40),
+    "agent-q35-2b": ("agent", ["Qwen3.5-2B-MLX-bf16"], 8, 35),
+    "agent-q25-3b": ("agent", ["Qwen2.5-3B-Instruct-4bit"], 6, 35),
+    "units": (
+        "units",
+        ["Qwen2.5-3B-Instruct-4bit", "Qwen3.5-0.8B-MLX-bf16", "GLM-OCR-bf16"],
+        3,
+        20,
+    ),
+}
+PLAN_27B = {"wire-27b": ("wire", ["Jundot/Qwen3.8-27B-oQ4e-mtp"], 24, 60)}
+
+
+def job_cmd(kind, models, out):
+    cmd = [PY, JOBS_PY, kind, "--out", str(out)]
+    for m in models:
+        cmd += ["--model", str(MODELS / m)]
+    return cmd
+
+
+def plan(sha, outdir, only=None, with_27b=False):
+    """The list of jobs (pure): label, gpuq submit args, the output file each must produce."""
+    table = dict(PLAN, **(PLAN_27B if with_27b else {}))
+    jobs = []
+    for name, (kind, models, gb, tmo) in table.items():
+        if only and kind not in only:
+            continue
+        out = outdir / f"{name}.json"
+        jobs.append(
+            {
+                "name": name,
+                "label": f"m3lane-sweep-{sha[:7]}-{name}",
+                "out": out,
+                "submit": [
+                    "--device",
+                    "m3",
+                    "--mem-gb",
+                    str(gb),
+                    "--timeout",
+                    str(tmo),
+                    "--stall",
+                    "15",
+                    "--out",
+                    str(out),
+                    "--expect-complete",
+                ],
+                "cmd": job_cmd(kind, models, out),
+            }
+        )
+    return jobs
+
+
+def judge_output(path):
+    """Problems with one job output (pure; unit-tested). Empty list = this job passed."""
+    p = Path(path)
+    if not p.exists():
+        return ["output missing"]
+    try:
+        d = json.loads(p.read_text())
+    except ValueError as e:
+        return [f"output not JSON: {e}"]
+    bad = []
+    if d.get("complete") is not True:
+        bad.append("output not complete")
+    if d.get("pass") is not True:
+        bad += [str(f)[:300] for f in d.get("failures", [])] or ["pass is not true"]
+    dev = d.get("device") or d.get("execution_device")
+    if dev not in (None, "m3"):
+        bad.append(f"ran on {dev!r}, not the M3")
+    return bad
+
+
+def verdict(jobs, wait_rc):
+    per = {j["name"]: judge_output(j["out"]) for j in jobs}
+    failed = {k: v for k, v in per.items() if v}
+    if not jobs:
+        failed["plan"] = ["no jobs"]
+    return {
+        "verdict": "FAIL" if failed or wait_rc not in (0, None) else "PASS",
+        "wait_rc": wait_rc,
+        "jobs": {
+            j["name"]: {"label": j["label"], "problems": per[j["name"]]} for j in jobs
+        },
+        "note": "M3 portability/correctness evidence only; no timing verdict",
+    }
+
+
+def sh(cmd, **kw):
+    return subprocess.run(cmd, capture_output=True, text=True, **kw)
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser()
+    ap.add_argument("ref", nargs="?")
+    ap.add_argument("--only", help="comma list of wire,agent,units")
+    ap.add_argument("--with-27b", action="store_true")
+    ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--no-wait", action="store_true")
+    ap.add_argument("--collect")
+    ap.add_argument("--max-seconds", type=int, default=3600)
+    a = ap.parse_args(argv)
+    only = set(a.only.split(",")) if a.only else None
+
+    if a.collect:
+        outdir = Path(a.collect)
+        meta = json.loads((outdir / "plan.json").read_text())
+        jobs = [dict(j, out=Path(j["out"])) for j in meta["jobs"]]
+        return finish(outdir, meta["sha"], jobs, None, a.max_seconds, wait_ids=[])
+
+    cwd, created = Path.cwd(), None
+    top = sh(["git", "-C", str(cwd), "rev-parse", "--show-toplevel"]).stdout.strip()
+    if not top:
+        sys.exit("run inside a Yunshu checkout")
+    sha = sh(["git", "-C", top, "rev-parse", a.ref or "HEAD"]).stdout.strip()
+    if not sha:
+        sys.exit(f"unknown ref {a.ref}")
+    outdir = BUILD / f"{sha[:7]}-{time.strftime('%m%d-%H%M%S')}"
+    jobs = plan(sha, outdir, only, a.with_27b)
+    if a.dry_run:
+        print(json.dumps([{**j, "out": str(j["out"])} for j in jobs], indent=1))
+        return 0
+    outdir.mkdir(parents=True)
+    run_cwd = top
+    if a.ref and sha != sh(["git", "-C", top, "rev-parse", "HEAD"]).stdout.strip():
+        created = outdir / "src"
+        r = sh(
+            ["git", "-C", top, "worktree", "add", "-q", "--detach", str(created), sha]
+        )
+        if r.returncode:
+            sys.exit(r.stderr)
+        run_cwd = str(created)
+    ids = []
+    try:
+        for j in jobs:
+            r = sh(
+                [GPUQ, "submit", "--label", j["label"], *j["submit"], "--", *j["cmd"]],
+                cwd=run_cwd,
+            )
+            if r.returncode or not r.stdout.strip():
+                print(f"submit {j['name']} failed: {r.stderr.strip()}", file=sys.stderr)
+                for i in ids:
+                    sh([GPUQ, "cancel", i])
+                (outdir / "verdict.json").write_text(
+                    json.dumps(
+                        {
+                            "verdict": "FAIL",
+                            "problem": f"submit {j['name']}: {r.stderr.strip()[:300]}",
+                        }
+                    )
+                )
+                print("FAIL (submit refused)")
+                return 1
+            j["id"] = r.stdout.split()[-1]
+            ids.append(j["id"])
+            print(f"submitted {j['name']} -> {j['id']}", flush=True)
+        (outdir / "plan.json").write_text(
+            json.dumps(
+                {"sha": sha, "jobs": [{**j, "out": str(j["out"])} for j in jobs]},
+                indent=1,
+            )
+        )
+        if a.no_wait:
+            print(f"collect later: m3sweep --collect {outdir}")
+            return 0
+        return finish(outdir, sha, jobs, None, a.max_seconds, wait_ids=ids)
+    finally:
+        if created and not a.no_wait:
+            sh(["git", "-C", top, "worktree", "remove", "--force", str(created)])
+
+
+def finish(outdir, sha, jobs, _unused, max_seconds, wait_ids):
+    wait_rc = None
+    if wait_ids:
+        wait_rc = subprocess.run(
+            [GPUQ, "wait", "--max-seconds", str(max_seconds), *wait_ids]
+        ).returncode
+    v = verdict(jobs, wait_rc)
+    v["sha"] = sha
+    (outdir / "verdict.json").write_text(json.dumps(v, indent=1))
+    print(f"m3sweep {sha[:7]}: {v['verdict']}  ({outdir / 'verdict.json'})")
+    for n, info in v["jobs"].items():
+        for p in info["problems"]:
+            print(f"  {n}: {p}")
+    return 0 if v["verdict"] == "PASS" else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
