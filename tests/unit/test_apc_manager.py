@@ -729,3 +729,32 @@ def test_store_re_points_anchors_before_it_copies_the_cache(monkeypatch):
                     == stored.prompt_cache[1].keys[..., :n, :]
                 )
             )
+
+
+def test_enforcing_the_anchor_budget_does_not_re_walk_unchanged_anchors(monkeypatch):
+    import mlx_vlm.apc as upstream
+
+    m = _mgr()
+    for p in _conversation(turns=8, step=3500):
+        _turn(m, p)
+    assert m._anchors
+    m.anchor_bytes()  # warm
+    calls = []
+    real = upstream._cache_nbytes
+    monkeypatch.setattr(
+        upstream, "_cache_nbytes", lambda c, *a: calls.append(1) or real(c, *a)
+    )
+    for _ in range(5):
+        m.enforce_anchor_budget()
+    assert not calls
+
+
+def test_small_releases_do_not_clear_the_allocator_pool(monkeypatch):
+    import yunshu_engine.apc_manager as am
+
+    calls = []
+    monkeypatch.setattr(mx, "clear_cache", lambda: calls.append(1))
+    am.release_freed_buffers(900 << 20)
+    assert not calls
+    am.release_freed_buffers(2 << 30)
+    assert calls

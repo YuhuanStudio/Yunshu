@@ -554,8 +554,9 @@ _BORN_KEEP = 4096
 ANCHOR_BUDGET_FRACTION = 0.15
 ANCHOR_BUDGET_MAX_BYTES = 1 << 30
 # Freed anchor buffers would sit in MLX's allocator pool and count in the process footprint
-# until idle; give them back at once when this much was freed.
-RELEASE_FREED_BYTES = 256 << 20
+# until idle; give them back at once when at least this much was freed (a release walks
+# every pooled buffer, which costs milliseconds on the follow-up's path).
+RELEASE_FREED_BYTES = 1 << 30
 
 
 def release_freed_buffers(freed_bytes: int) -> None:
@@ -1097,6 +1098,7 @@ class YunshuAPCManager(APCManager):
         self._head_keys: set[int] = set()
         self._last_hit: tuple[tuple, int] | None = None
         self._last_shared_keys: list[int] = []
+        self._nbytes_memo: dict[int, tuple[Any, int]] = {}
         self._anchors: dict[int, int] = {}  # retained superseded checkpoint -> length
         # entry key -> (root buffer owner key, K/V bytes it views instead of owning), and the
         # K/V bytes of each root buffer: lets resident_bytes count a shared buffer once.
@@ -1558,11 +1560,17 @@ class YunshuAPCManager(APCManager):
         with self.lock:
             _, pinned = self._share_accounting()
             own = 0
+            memo = self._nbytes_memo
             for key in self._anchors:
                 entry = self._exact_cache.get(key)
                 if entry is not None:
-                    own += _cache_nbytes(entry.prompt_cache)
-                    own -= self._kv_share.get(key, (0, 0))[1]
+                    cached = memo.get(key)
+                    if cached is None or cached[0] is not entry:
+                        cached = (entry, _cache_nbytes(entry.prompt_cache))
+                        memo[key] = cached
+                    own += cached[1] - self._kv_share.get(key, (0, 0))[1]
+            for key in [k for k in memo if k not in self._anchors]:
+                del memo[key]
             return max(0, own + pinned)
 
     def anchor_budget_bytes(self) -> int:
