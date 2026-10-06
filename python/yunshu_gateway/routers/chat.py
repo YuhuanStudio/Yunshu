@@ -1,3 +1,4 @@
+# Upstream (inspired): vllm-project/vllm (Apache-2.0) tests/entrypoints/openai/chat_completion/test_chat.py (request validation) @ 68088ed
 from __future__ import annotations
 
 """OpenAI Chat Completions compatible router.

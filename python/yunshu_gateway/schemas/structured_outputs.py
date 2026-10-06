@@ -1,3 +1,4 @@
+# Upstream (inspired): vllm-project/vllm (Apache-2.0) vllm/sampling_params.py StructuredOutputsParams @ 68088ed
 """vLLM's ``structured_outputs`` request field, folded into Yunshu's native constraint fields.
 
 Upstream: vllm-project/vllm ``StructuredOutputsParams`` (vllm/sampling_params.py) and the chat/completion

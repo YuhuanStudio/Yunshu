@@ -105,6 +105,7 @@ class TestStreamOptionsChatRequest:
         req = ChatCompletionRequest(
             model="test",
             messages=[{"role": "user", "content": "hi"}],
+            stream=True,
             stream_options={"include_usage": True},
         )
         assert req.stream_options is not None
@@ -116,6 +117,7 @@ class TestStreamOptionsChatRequest:
         req = ChatCompletionRequest(
             model="test",
             messages=[{"role": "user", "content": "hi"}],
+            stream=True,
             stream_options={"include_usage": False},
         )
         assert req.stream_options is not None
@@ -137,6 +139,7 @@ class TestStreamOptionsCompletionRequest:
         req = CompletionRequest(
             model="test",
             prompt="hello",
+            stream=True,
             stream_options={"include_usage": True},
         )
         assert req.stream_options is not None

@@ -239,6 +239,7 @@ class TestChatCompletionRequestToolChoice:
         req = ChatCompletionRequest(
             model="test",
             messages=[{"role": "user", "content": "hi"}],
+            tools=[{"type": "function", "function": {"name": "get_weather"}}],
             tool_choice=ToolChoiceFunction(
                 function=ToolFunction(name="get_weather"),
             ),

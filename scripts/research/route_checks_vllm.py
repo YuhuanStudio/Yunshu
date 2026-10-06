@@ -1,10 +1,9 @@
+# Upstream (inspired): vllm-project/vllm (Apache-2.0) tests/entrypoints/openai/chat_completion/test_chat.py @ 68088ed
 """Request-validation and error-shape checks ported from vLLM's entrypoint tests (tests/entrypoints/
 openai: test_chat.py, test_chat_completion.py, test_chat_logit_bias_validation.py,
 test_non_object_body_validation.py, completion/test_completion.py, test_prompt_validation.py).
 Each probe is a request a strict OpenAI server must refuse with a 4xx in the OpenAI error shape
 (never a 500, a hang or a silent 200). Imported at the bottom of route_checks.py."""
-
-# Upstream: vllm-project/vllm tests/entrypoints/openai (Apache-2.0); see vendor.json.
 
 from __future__ import annotations
 
