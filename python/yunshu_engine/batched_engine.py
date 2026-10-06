@@ -221,10 +221,10 @@ def _reload_dropped_weights(model, mp) -> None:
 
     weights: dict = {}
     for f in sorted(_glob.glob(str(mp / "*.safetensors"))):
-        weights.update(mx.load(f))
+        weights.update(mx.load(f))  # type: ignore[arg-type]
     if hasattr(model, "sanitize"):
         weights = model.sanitize(weights)
-    ren = key_rename(weights, (k for k, _ in tree_flatten(model.parameters())))
+    ren = key_rename(weights, [kv[0] for kv in tree_flatten(model.parameters())])
     if ren:
         logger.warning(
             "Checkpoint tensor names lack the model prefix; renaming %d tensors",

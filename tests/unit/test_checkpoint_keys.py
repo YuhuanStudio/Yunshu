@@ -2,7 +2,11 @@ import pytest
 
 from yunshu_engine.checkpoint_keys import key_rename
 
-MODEL = {"model.embed_tokens.weight", "model.norm.weight", "model.layers.0.mlp.up.weight"}
+MODEL = {
+    "model.embed_tokens.weight",
+    "model.norm.weight",
+    "model.layers.0.mlp.up.weight",
+}
 
 
 def test_unprefixed_backbone_checkpoint_is_renamed():
