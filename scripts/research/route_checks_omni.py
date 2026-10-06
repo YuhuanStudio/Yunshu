@@ -274,8 +274,12 @@ def _omni_media_cache(c: Ctx):
     cannot be checkpointed, so a hit is required only where `cached_tokens` is advertised)."""
     wav = _speech(c)
     msgs = _chat_audio_msg(wav, ASK_WORD)
-    a = c.oa.chat.completions.create(model=c.model, messages=msgs, max_tokens=24)
-    b = c.oa.chat.completions.create(model=c.model, messages=msgs, max_tokens=24)
+    a = c.oa.chat.completions.create(
+        model=c.model, messages=msgs, max_tokens=24, temperature=0
+    )
+    b = c.oa.chat.completions.create(
+        model=c.model, messages=msgs, max_tokens=24, temperature=0
+    )
     c.notes["audio_repeat_cached"] = [_cached(a.usage), _cached(b.usage)]
     expect(
         a.choices[0].message.content == b.choices[0].message.content,
@@ -301,13 +305,18 @@ def _voice_turn(c: Ctx, path: str, pcm: bytes, modalities=("audio",)):
         expect(
             first.get("type") == "session.created", f"first event {first.get('type')}"
         )
+        # GA schema on /v1/realtime, flat beta schema on the legacy /realtime path
+        sess = (
+            {"modalities": ["text", "audio"]}
+            if path == "/realtime"
+            else {"type": "realtime", "output_modalities": list(modalities)}
+        )
         ws.send(
             json.dumps(
                 {
                     "type": "session.update",
                     "session": {
-                        "type": "realtime",
-                        "output_modalities": list(modalities),
+                        **sess,
                         "instructions": "Reply in one short sentence.",
                         "turn_detection": None,
                     },
@@ -360,7 +369,10 @@ def _realtime_voice(c: Ctx, require_transcript_word: bool):
         expect("input_audio_buffer.committed" in types, f"{path}: no committed {types}")
         expect(types[-1] == "response.done", f"{path}: {types[-6:]}")
         nb = _audio_bytes(evs)
-        expect(nb > 24000, f"{path}: only {nb} bytes of speech out (<0.5 s)")
+        expect(
+            nb > 24000,
+            f"{path}: only {nb} bytes of speech out (<0.5 s); events {sorted(set(types))}",
+        )
         heard = " ".join(
             (e.get("transcript") or "")
             for e in evs
@@ -490,16 +502,20 @@ def _realtime_voice_native(c: Ctx):
 def _omni_native_chat_cache(c: Ctx):
     wav = _speech(c)
     msgs = _chat_audio_msg(wav, ASK_WORD)
-    a = c.oa.chat.completions.create(model=c.model, messages=msgs, max_tokens=32)
+    a = c.oa.chat.completions.create(
+        model=c.model, messages=msgs, max_tokens=32, temperature=0
+    )
     expect(_word_in(a.choices[0].message.content or ""), "audio answer")
-    b = c.oa.chat.completions.create(model=c.model, messages=msgs, max_tokens=32)
+    b = c.oa.chat.completions.create(
+        model=c.model, messages=msgs, max_tokens=32, temperature=0
+    )
     c.notes["audio_cached"] = [_cached(a.usage), _cached(b.usage)]
     expect(
         _cached(b.usage) > 0, f"repeated audio: no prefix hit {c.notes['audio_cached']}"
     )
     expect(
         a.choices[0].message.content == b.choices[0].message.content,
-        "cached answer differs",
+        f"cached answer differs: {a.choices[0].message.content!r} vs {b.choices[0].message.content!r}",
     )
     img = _chat_audio_msg(wav, "What colour is the image?", _png(224, (200, 30, 30)))
     c.oa.chat.completions.create(model=c.model, messages=img, max_tokens=8)
