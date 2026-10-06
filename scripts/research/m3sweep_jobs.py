@@ -717,6 +717,7 @@ def routes_make_ctx(srv, token, kind, model_id=None):
         an=anthropic.Anthropic(
             base_url=srv.url, api_key=token or "x", max_retries=0, timeout=300
         ),
+        log_tail=srv.log_tail,
     )
 
 

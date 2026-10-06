@@ -80,6 +80,7 @@ class Ctx:
     an: Any = None
     notes: dict = field(default_factory=dict)
     mm_models: list = field(default_factory=list)  # multi-model server: model ids
+    log_tail: Any = None  # callable(n) -> the server log's last n lines
     fake: Any = None  # FakeBackend (search / MCP / page on loopback), multi server only
 
     def auth(self, extra=None):
@@ -153,7 +154,16 @@ def ok_or_absent(ctx: Ctx, method, path, family="openai", **kw):
         ctx.notes[f"{method} {path}"] = f"{r.status_code} served"
         return r.status_code, jbody(r)
     b = err_ok(r, family)
-    expect(r.status_code != 500, f"{method} {path}: bare 500 {str(b)[:100]}")
+    if r.status_code == 500 and ctx.log_tail:
+        why = [
+            ln
+            for ln in ctx.log_tail(200).splitlines()
+            if "ERROR" in ln or "Error" in ln or "Traceback" in ln
+        ][-6:]
+        expect(
+            False,
+            f"{method} {path}: bare 500 {str(b)[:100]} | server log: {' // '.join(why)[:900]}",
+        )
     e = b.get("error")
     msg = e.get("message") if isinstance(e, dict) else e
     ctx.notes[f"{method} {path}"] = f"{r.status_code}: {str(msg)[:110]}"
@@ -947,6 +957,30 @@ def _input_tokens(c: Ctx):
         f"with tools {n2.input_tokens} != usage {r2.usage.input_tokens}",
     )
     expect(n2.input_tokens > n.input_tokens, "tools did not add input tokens")
+    # a previous_response_id chain and a conversation count what the next call really uses
+    r1 = c.oa.responses.create(
+        model=c.model, input="Remember the number 7.", store=True, max_output_tokens=16
+    )
+    kw3 = dict(model=c.model, input="Which number?", previous_response_id=r1.id)
+    n3 = c.oa.responses.input_tokens.count(**kw3)
+    r3 = c.oa.responses.create(max_output_tokens=8, **kw3)
+    expect(
+        n3.input_tokens == r3.usage.input_tokens,
+        f"previous_response_id: {n3.input_tokens} != usage {r3.usage.input_tokens}",
+    )
+    cv = c.oa.conversations.create(
+        items=[{"type": "message", "role": "user", "content": "My name is Ada."}]
+    )
+    kw4 = dict(model=c.model, input="What is my name?", conversation=cv.id)
+    n4 = c.oa.responses.input_tokens.count(**kw4)
+    r4 = c.oa.responses.create(max_output_tokens=8, **kw4)
+    expect(
+        n4.input_tokens == r4.usage.input_tokens,
+        f"conversation: {n4.input_tokens} != usage {r4.usage.input_tokens}",
+    )
+    for rid in (r1.id, r3.id):
+        c.oa.responses.delete(rid)
+    c.oa.conversations.delete(cv.id)
 
 
 @check("responses_compact", "POST /v1/responses/compact")
@@ -1506,9 +1540,12 @@ def _ollama_native(c: Ctx):
         ("DELETE", "/api/delete", {"model": "no-such-model-xyz"}),
     ):
         r = c.req(method, path, json=body, timeout=120)
-        expect(r.status_code != 500, f"{method} {path} bare 500: {r.text[:100]}")
-        if r.status_code >= 400:
-            err_ok(r, "ollama")
+        # documented: models are managed with `yunshu pull` / `yunshu model`, not over this API
+        expect(
+            r.status_code == 501 and "yunshu" in r.text,
+            f"{method} {path}: {r.status_code} {r.text[:100]}",
+        )
+        err_ok(r, "ollama")
 
 
 # ── websockets ───────────────────────────────────────────────────────────────────────────
