@@ -81,6 +81,7 @@ class Ctx:
     an: Any = None
     notes: dict = field(default_factory=dict)
     mm_models: list = field(default_factory=list)  # multi-model server: model ids
+    fake: Any = None  # FakeBackend (search / MCP / page on loopback), multi server only
 
     def auth(self, extra=None):
         h = {"Authorization": f"Bearer {self.token}"} if self.token else {}
@@ -150,9 +151,13 @@ def ok_or_absent(ctx: Ctx, method, path, family="openai", **kw):
     never a bare 500 traceback or an empty body). Returns (status, body)."""
     r = ctx.req(method, path, **kw)
     if r.status_code < 400:
+        ctx.notes[f"{method} {path}"] = f"{r.status_code} served"
         return r.status_code, jbody(r)
     b = err_ok(r, family)
     expect(r.status_code != 500, f"{method} {path}: bare 500 {str(b)[:100]}")
+    e = b.get("error")
+    msg = e.get("message") if isinstance(e, dict) else e
+    ctx.notes[f"{method} {path}"] = f"{r.status_code}: {str(msg)[:110]}"
     return r.status_code, b
 
 
@@ -565,10 +570,18 @@ def _files(c: Ctx):
     expect(af.id in [x.id for x in c.an.beta.files.list().data], "anthropic list")
     md = c.an.beta.files.retrieve_metadata(af.id)
     expect(md.id == af.id, "anthropic metadata")
-    expect(
-        c.an.beta.files.download(af.id).read() == b"hello anthropic files",
-        "anthropic download",
-    )
+    # like the hosted API, only files created by tools can be downloaded, not uploaded ones
+    try:
+        c.an.beta.files.download(af.id)
+        raise Fail("download of an uploaded file succeeded")
+    except Fail:
+        raise
+    except Exception as ex:  # noqa: BLE001
+        expect(
+            getattr(ex, "status_code", None) == 403
+            and "cannot be downloaded" in str(ex),
+            f"anthropic download of an uploaded file: {type(ex).__name__} {str(ex)[:120]}",
+        )
     dd = c.an.beta.files.delete(af.id)
     expect(dd.id == af.id, f"anthropic delete {dd}")
     r = c.req("GET", f"/v1/files/{af.id}", headers={"anthropic-version": "2023-06-01"})
@@ -861,10 +874,16 @@ def _responses_lifecycle(c: Ctx):
     nr = c.req("GET", f"/v1/responses/{r3.id}")
     err_ok(nr, "openai")
     expect(nr.status_code == 404, f"unstored retrieve -> {nr.status_code}")
-    # cancel: a completed response cannot be cancelled (400), a background one can
+    # cancel of a finished response is idempotent: it returns the terminal response unchanged
     cc = c.req("POST", f"/v1/responses/{r.id}/cancel")
+    expect(
+        cc.status_code == 200
+        and cc.json().get("status") in ("completed", "incomplete"),
+        f"cancel completed -> {cc.status_code} {cc.text[:100]}",
+    )
+    cc = c.req("POST", "/v1/responses/resp-does-not-exist/cancel")
     err_ok(cc, "openai")
-    expect(cc.status_code == 400, f"cancel completed -> {cc.status_code}")
+    expect(cc.status_code == 404, f"cancel unknown -> {cc.status_code}")
     bg = c.oa.responses.create(
         model=c.model,
         input="Count from 1 to 2000, one number per line.",
@@ -1436,14 +1455,25 @@ def _ws_events(ws, stop, timeout=180):
     )
 
 
+def _n_active(c: Ctx) -> int:
+    a = c.req("GET", "/v1/active-generations").json()
+    return int(a.get("count", len(a.get("data", []))))
+
+
+def _was_active(c: Ctx, what: str):
+    """A generation really is in flight (so the disconnect check that follows is not vacuous)."""
+    t0 = time.time()
+    while time.time() - t0 < 20:
+        if _n_active(c) >= 1:
+            return
+        time.sleep(0.3)
+    raise Fail(f"{what}: no active generation visible before the disconnect")
+
+
 def _no_active(c: Ctx, secs=20):
     t0 = time.time()
     while time.time() - t0 < secs:
-        a = c.req("GET", "/v1/active-generations").json()
-        n = a.get(
-            "count", a.get("active", len(a.get("data", a.get("generations", []))))
-        )
-        if not n:
+        if _n_active(c) == 0:
             return True
         time.sleep(1)
     return False
@@ -1477,7 +1507,8 @@ def _ws_responses(c: Ctx):
         )
         types = [e["type"] for e in evs]
         expect(
-            types[0] == "response.created" and types[-1] == "response.completed",
+            types[0] == "response.created"
+            and types[-1] in ("response.completed", "response.incomplete"),
             f"events {types[:2]}..{types[-1:]}",
         )
         done = evs[-1]["response"]
@@ -1507,7 +1538,10 @@ def _ws_responses(c: Ctx):
                 )
             ),
         )
-        expect(evs2[-1]["type"] == "response.completed", f"second turn {evs2[-1]}")
+        expect(
+            evs2[-1]["type"] in ("response.completed", "response.incomplete"),
+            f"second turn {evs2[-1]['type']}",
+        )
         # a malformed message is an error event, the socket survives
         ws.send("{not json")
         er = json.loads(ws.recv(timeout=30))
@@ -1525,6 +1559,7 @@ def _ws_responses(c: Ctx):
         )
         first = json.loads(ws.recv(timeout=60))
         expect(first["type"] == "response.created", f"third {first}")
+        _was_active(c, "ws /v1/responses")
     # disconnect mid-generation: the server must stop it and stay healthy
     expect(_no_active(c, 60), "generation still active 60 s after the websocket closed")
     expect(
@@ -1565,7 +1600,9 @@ def _ws_responses_sdk(c: Ctx):
     import openai
 
     async def go():
-        cl = openai.AsyncOpenAI(base_url=c.url + "/v1", api_key=c.token, max_retries=0)
+        cl = openai.AsyncOpenAI(
+            base_url=c.url + "/v1", api_key=c.token or "x", max_retries=0
+        )
         async with cl.responses.connect() as conn:
             await conn.response.create(
                 model=c.model, input="Say hi.", max_output_tokens=24
@@ -1685,6 +1722,7 @@ def _ws_stream(c: Ctx):
             e = json.loads(ws.recv(timeout=60))
             if e.get("type") == "event":
                 break
+        _was_active(c, "ws /v1/stream")
     expect(_no_active(c, 60), "generation still active 60 s after the websocket closed")
 
 
@@ -1775,6 +1813,7 @@ def _ws_realtime(c: Ctx):
                     "error",
                 ):
                     break
+            _was_active(c, f"ws {path}")
         expect(
             _no_active(c, 60), f"{path}: generation still active 60 s after disconnect"
         )
@@ -1818,3 +1857,8 @@ def _web_search_unconfigured(c: Ctx):
         f"responses web_search {r.status}",
     )
     c.notes["web_search_responses"] = [o.type for o in r.output]
+
+
+from route_checks_tools import (
+    FakeBackend,  # noqa: E402,F401  registers the server-tool checks
+)

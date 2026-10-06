@@ -322,7 +322,9 @@ def compare_rows(a: list, b: list) -> list:
 
 
 def free_port() -> int:
-    for p in range(18990, 18997):
+    """First free port of 18990-18996 (COVAUDIT_PORT_LO raises the lower end, so a worker limited
+    to 18994-18996 stays inside its range)."""
+    for p in range(int(os.environ.get("COVAUDIT_PORT_LO", "18990")), 18997):
         with socket.socket() as s:
             try:
                 s.bind(("127.0.0.1", p))

@@ -1202,6 +1202,93 @@ def _enforce_tool_choice(req: ResponsesRequest, calls: list[dict]) -> list[dict]
     return calls
 
 
+def _apply_previous_response_chain(req, messages: list[dict], request) -> list[dict]:
+    """Replay the stored ``previous_response_id`` chain (oldest first) into ``messages``: after a leading
+    system message, before the new input. Shared by generation and ``/input_tokens``."""
+    if not req.previous_response_id:
+        return messages
+    chain: list[dict] = []
+    # Walk the chain back-to-front. Limit to 16 hops AND track visited ids to
+    # prevent loops. : the 16-cap alone only bounded a cycle — a repeated
+    # previous_response_id (e.g. a self-referential or A↔B pair) would still
+    # prepend the same turn up to 16 times, duplicating context. The `_seen` set
+    # stops the walk at the first repeat (completes the comment's stated intent).
+    _prev_id = req.previous_response_id
+    _seen: set[str] = set()
+    for _ in range(16):
+        if not _prev_id or _prev_id in _seen:
+            break
+        _seen.add(_prev_id)
+        _prev = _get_stored_response(_prev_id)
+        if not _prev:
+            break
+        # SECURITY: ownership-gate the chain parent. Without this a
+        # tenant could chain off another tenant's stored response id to
+        # replay (and then exfiltrate) its private input/output. Mirrors the
+        # GET /responses/{id} ownership guard.
+        if not _owns_stored(request, _prev):
+            break
+        # Build this hop's turn as a UNIT in natural
+        # order (user input(s) then the assistant reply) and prepend the whole unit.
+        # The old code prepended user input but APPENDED assistant output, so a
+        # 2-hop chain produced [u1, u2, a2, a1] instead of [u1, a1, u2, a2] —
+        # every prior assistant turn clustered at the tail in reverse. Single-hop
+        # happened to be correct, which hid it. We walk newest→oldest, so prepending
+        # each older turn-block ahead of newer ones yields chronological order.
+        _turn: list[dict] = []
+        _stored_input = _prev.get("_input_messages")
+        if _stored_input:
+            _turn.extend(_stored_input)
+        _rs_pending: list[str] = []
+        for out in _prev.get("output") or []:
+            if out.get("type") == "reasoning":
+                _rt = reasoning_text_of(out)
+                if _rt:
+                    _rs_pending.append(_rt)
+                continue
+            if out.get("role") == "assistant":
+                for c in out.get("content") or []:
+                    if c.get("type") == "output_text":
+                        _amsg = {"role": "assistant", "content": c.get("text", "")}
+                        if _rs_pending:
+                            _amsg["reasoning_content"] = "\n".join(_rs_pending)
+                            _rs_pending = []
+                        _turn.append(_amsg)
+            elif out.get("type") in ("web_search_call", "mcp_call"):
+                _turn.extend(
+                    input_item_to_messages(out, _prev.get("_server_tool_texts"))
+                )
+            elif out.get("type") == "function_call":
+                # Replay the prior tool call (stored as a top-level item with no
+                # "role") so a chained agent loop remembers it requested the
+                # tool — previously dropped, breaking multi-turn tool use.
+                _turn.append(
+                    {
+                        "role": "assistant",
+                        "content": "",
+                        "tool_calls": [
+                            {
+                                "id": out.get("call_id", "") or out.get("id", "") or "",
+                                "type": "function",
+                                "function": {
+                                    "name": out.get("name", "") or "",
+                                    "arguments": out.get("arguments", "") or "{}",
+                                },
+                            }
+                        ],
+                    }
+                )
+        chain[0:0] = _turn
+        _prev_id = _prev.get("previous_response_id")
+    if chain:
+        # Inject chain after any system message but before the new user input
+        if messages and messages[0].get("role") == "system":
+            messages = [messages[0]] + chain + messages[1:]
+        else:
+            messages = chain + messages
+    return messages
+
+
 @router.post("/responses", response_model=None)
 async def create_response(req: ResponsesRequest, request: Request):
     """OpenAI Responses API endpoint."""
@@ -1281,88 +1368,7 @@ async def create_response(req: ResponsesRequest, request: Request):
     # the predecessor. The Responses API contract says the chain provides
     # implicit conversation memory; without this the model sees only the
     # new turn and can't recall prior context.
-    if req.previous_response_id:
-        chain: list[dict] = []
-        # Walk the chain back-to-front. Limit to 16 hops AND track visited ids to
-        # prevent loops. : the 16-cap alone only bounded a cycle — a repeated
-        # previous_response_id (e.g. a self-referential or A↔B pair) would still
-        # prepend the same turn up to 16 times, duplicating context. The `_seen` set
-        # stops the walk at the first repeat (completes the comment's stated intent).
-        _prev_id = req.previous_response_id
-        _seen: set[str] = set()
-        for _ in range(16):
-            if not _prev_id or _prev_id in _seen:
-                break
-            _seen.add(_prev_id)
-            _prev = _get_stored_response(_prev_id)
-            if not _prev:
-                break
-            # SECURITY: ownership-gate the chain parent. Without this a
-            # tenant could chain off another tenant's stored response id to
-            # replay (and then exfiltrate) its private input/output. Mirrors the
-            # GET /responses/{id} ownership guard.
-            if not _owns_stored(request, _prev):
-                break
-            # Build this hop's turn as a UNIT in natural
-            # order (user input(s) then the assistant reply) and prepend the whole unit.
-            # The old code prepended user input but APPENDED assistant output, so a
-            # 2-hop chain produced [u1, u2, a2, a1] instead of [u1, a1, u2, a2] —
-            # every prior assistant turn clustered at the tail in reverse. Single-hop
-            # happened to be correct, which hid it. We walk newest→oldest, so prepending
-            # each older turn-block ahead of newer ones yields chronological order.
-            _turn: list[dict] = []
-            _stored_input = _prev.get("_input_messages")
-            if _stored_input:
-                _turn.extend(_stored_input)
-            _rs_pending: list[str] = []
-            for out in _prev.get("output") or []:
-                if out.get("type") == "reasoning":
-                    _rt = reasoning_text_of(out)
-                    if _rt:
-                        _rs_pending.append(_rt)
-                    continue
-                if out.get("role") == "assistant":
-                    for c in out.get("content") or []:
-                        if c.get("type") == "output_text":
-                            _amsg = {"role": "assistant", "content": c.get("text", "")}
-                            if _rs_pending:
-                                _amsg["reasoning_content"] = "\n".join(_rs_pending)
-                                _rs_pending = []
-                            _turn.append(_amsg)
-                elif out.get("type") in ("web_search_call", "mcp_call"):
-                    _turn.extend(
-                        input_item_to_messages(out, _prev.get("_server_tool_texts"))
-                    )
-                elif out.get("type") == "function_call":
-                    # Replay the prior tool call (stored as a top-level item with no
-                    # "role") so a chained agent loop remembers it requested the
-                    # tool — previously dropped, breaking multi-turn tool use.
-                    _turn.append(
-                        {
-                            "role": "assistant",
-                            "content": "",
-                            "tool_calls": [
-                                {
-                                    "id": out.get("call_id", "")
-                                    or out.get("id", "")
-                                    or "",
-                                    "type": "function",
-                                    "function": {
-                                        "name": out.get("name", "") or "",
-                                        "arguments": out.get("arguments", "") or "{}",
-                                    },
-                                }
-                            ],
-                        }
-                    )
-            chain[0:0] = _turn
-            _prev_id = _prev.get("previous_response_id")
-        if chain:
-            # Inject chain after any system message but before the new user input
-            if messages and messages[0].get("role") == "system":
-                messages = [messages[0]] + chain + messages[1:]
-            else:
-                messages = chain + messages
+    messages = _apply_previous_response_chain(req, messages, request)
 
     json_schema = _parse_response_format(req.response_format, req.grammar)
 
@@ -3489,42 +3495,123 @@ async def cancel_response(response_id: str, request: Request):
     )
 
 
-def _input_text(inp) -> str:
-    if inp is None:
-        return ""
-    if isinstance(inp, str):
-        return inp
-    parts: list[str] = []
-    for item in inp if isinstance(inp, list) else [inp]:
-        if isinstance(item, str):
-            parts.append(item)
-        elif isinstance(item, dict):
-            c = item.get("content")
-            if isinstance(c, str):
-                parts.append(c)
-            elif isinstance(c, list):
-                parts += [
-                    p.get("text", "")
-                    for p in c
-                    if isinstance(p, dict) and p.get("text")
-                ]
-            for k in ("arguments", "output", "text"):
-                if isinstance(item.get(k), str):
-                    parts.append(item[k])
-    return "\n".join(parts)
+def _count_prompt_tokens(tok, messages: list[dict], tools=None) -> int:
+    """Tokens of the prompt the chat template renders for ``messages`` (+ native ``tools``), the way
+    the engines render it: template, generation prompt, no double BOS; images at the engine's
+    conservative per-image estimate."""
+    from yunshu_control.token_counter import IMAGE_TOKEN_ESTIMATE
+
+    kw = {"tools": tools} if tools else {}
+    try:
+        prompt = tok.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True, **kw
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400, detail=f"chat template failed: {exc}"
+        ) from None
+    bos = getattr(tok, "bos_token", None)
+    add = not (isinstance(bos, str) and bos and prompt.startswith(bos))
+    try:
+        n = len(tok.encode(prompt, add_special_tokens=add))
+    except TypeError:
+        n = len(tok.encode(prompt))
+    images = sum(
+        1
+        for m in messages
+        if isinstance(m.get("content"), list)
+        for p in m["content"]
+        if isinstance(p, dict)
+        and p.get("type") in ("image_url", "input_image", "image")
+    )
+    return n + images * IMAGE_TOKEN_ESTIMATE
 
 
 @router.post("/responses/input_tokens", response_model=None)
 async def count_input_tokens(request: Request):
-    """Count the input tokens a `/v1/responses` request would use (OpenAI input_tokens API)."""
+    """Count the input tokens a `/v1/responses` request would use (OpenAI input_tokens API).
+
+    Builds the prompt the way ``create_response`` does (instructions, input items, conversation,
+    compaction items, ``previous_response_id`` chain, function tools rendered natively when the
+    template does it, injected otherwise) and counts the rendered template, so the number equals
+    the ``usage.input_tokens`` of the same request (a real-server check compares them). Not
+    counted: server-side tools (web_search / mcp definitions), the assistant prefill of a forced
+    tool_choice on an engine without native tools, and the compaction a ``context_management``
+    threshold would trigger."""
+    from pydantic import ValidationError
+
+    from ..conversations_store import ConversationError
+    from ..responses_context import (
+        ContextError,
+        count_state_items,
+        error_json,
+        needs_state,
+    )
     from .tokenize import _resolve_tokenizer
 
+    _check_permission(request, "can_infer")
     try:
         body = await request.json()
     except Exception:
         raise HTTPException(status_code=400, detail="invalid JSON body") from None
-    tok = _resolve_tokenizer(str(body.get("model") or ""))
-    text = "\n".join(
-        t for t in (body.get("instructions"), _input_text(body.get("input"))) if t
-    )
-    return {"object": "response.input_tokens", "input_tokens": len(tok.encode(text))}
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="body must be a JSON object")
+    body.setdefault("model", "")
+    try:
+        req = ResponsesRequest.model_validate(body)
+    except ValidationError as exc:
+        e = exc.errors()[0]
+        loc = ".".join(str(x) for x in e.get("loc", ()))
+        raise HTTPException(status_code=400, detail=f"{loc}: {e.get('msg')}") from None
+    tok = _resolve_tokenizer(str(req.model or ""))
+    if needs_state(req):
+        try:
+            items, prev_id = count_state_items(req, request)
+        except (ContextError, ConversationError) as exc:
+            return error_json(exc)
+        req = req.model_copy(
+            update={
+                "input": [ResponseInputText(**i) for i in items],
+                "conversation": None,
+                "context_management": None,
+                "previous_response_id": prev_id,
+            }
+        )
+    fn_tools = function_tools(req.tools)
+    if fn_tools != req.tools:
+        req = req.model_copy(update={"tools": fn_tools})
+    messages = _apply_previous_response_chain(req, _convert_to_messages(req), request)
+    native = None
+    if req.tools:
+        from .chat import ToolDefinition, ToolFunction, _vlm_renders_tools
+
+        defs = [
+            ToolDefinition(
+                function=ToolFunction(
+                    name=t.name, description=t.description, parameters=t.parameters
+                )
+            )
+            for t in req.tools
+        ]
+        engine = get_engine()
+        if (
+            req.tool_choice in (None, "auto") or _forced_by_grammar(req)
+        ) and _vlm_renders_tools(engine):
+            native = [t.model_dump() for t in defs]
+        else:
+            from .chat import _inject_tool_system_prompt
+
+            messages = _inject_tool_system_prompt(
+                messages,
+                defs,
+                tool_choice=req.tool_choice,
+                parallel_tool_calls=req.parallel_tool_calls,
+                engine=engine,
+            )
+            from yunshu_engine.batched_engine import _REQUEST_TOOLS
+
+            native = _REQUEST_TOOLS.get()
+    return {
+        "object": "response.input_tokens",
+        "input_tokens": _count_prompt_tokens(tok, messages, native),
+    }

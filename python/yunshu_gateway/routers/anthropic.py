@@ -3084,6 +3084,7 @@ async def count_tokens(req: AnthropicMessagesRequest, request: Request) -> dict:
     # Apply chat template for accurate token counting (plain-text join undercounts
     # by missing role markers, special tokens, and generation prompt).
     messages = []
+    _native_tools = None
     # mirror create_message's system-lift. Generation
     # LIFTS any role="system" entries out of messages[] and MERGES them with the top-level
     # `system` into ONE canonical system block. count_tokens previously counted only the
@@ -3167,6 +3168,20 @@ async def count_tokens(req: AnthropicMessagesRequest, request: Request) -> dict:
                 )
             elif req.tool_choice == "none":
                 tool_prompt = ""
+        if tool_prompt and (
+            _tool_choice_is_auto(req.tool_choice) or _forced_by_grammar(req.tool_choice)
+        ):
+            # Same decision as create_message: a template that renders tools itself gets the
+            # definitions natively (no injected prompt), so count what the engine will render.
+            if _apply_native_tools(req, engine):
+                _native_tools = (
+                    req._native_tools if hasattr(req, "_native_tools") else None
+                )
+                if _native_tools is None:
+                    from yunshu_engine.batched_engine import _REQUEST_TOOLS
+
+                    _native_tools = _REQUEST_TOOLS.get()
+                tool_prompt = ""
         if tool_prompt:
             if messages and messages[0].get("role") == "system":
                 messages[0]["content"] += tool_prompt
@@ -3220,6 +3235,7 @@ async def count_tokens(req: AnthropicMessagesRequest, request: Request) -> dict:
                 messages,
                 tokenize=False,
                 add_generation_prompt=True,
+                **({"tools": _native_tools} if _native_tools else {}),
             )
         except Exception:
             # Fallback: if chat template fails (e.g. missing template), use plain join.

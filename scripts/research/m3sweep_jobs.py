@@ -726,6 +726,7 @@ def cmd_routes(a):
     import httpx
 
     only = set(a.only.split(",")) if a.only else None
+    os.environ.setdefault("COVAUDIT_PORT_LO", "18994")  # servers on 18994-18996 only
     res = {
         "kind": "routes",
         "model": a.model,
@@ -755,7 +756,7 @@ def cmd_routes(a):
             res["server_log_tail"] = srv.log_tail(30)
             srv.kill()
     if a.multi and not res["failures"]:
-        srv = None
+        srv = fake = None
         try:
             token = "routes-token-xyz"
             home = Path(os.environ.get("HOME", "/tmp")) / "m3sweep-routes-multi"
@@ -767,7 +768,9 @@ def cmd_routes(a):
                     link.unlink()
                 link.symlink_to(m)
             from covaudit_session import Srv
+            from route_checks_tools import FakeBackend
 
+            fake = FakeBackend(18996)
             cand = Path(sys.executable).parent / "yunshu"
             if "COVAUDIT_BIN" not in os.environ and cand.exists():
                 os.environ["COVAUDIT_BIN"] = str(cand)
@@ -776,7 +779,12 @@ def cmd_routes(a):
                 str(ROOT / "python"),
                 home,
                 home / "server.log",
-                [f"YUNSHU_AUTH_TOKEN={token}", "YUNSHU_VLM_APC_DISK=0"],
+                [
+                    f"YUNSHU_AUTH_TOKEN={token}",
+                    "YUNSHU_VLM_APC_DISK=0",
+                    f"YUNSHU_SEARXNG_URL={fake.url}",
+                    "YUNSHU_WEB_SEARCH_PROVIDER=searxng",
+                ],
                 models_dir=str(mdir),
                 token=token,
             )
@@ -788,11 +796,14 @@ def cmd_routes(a):
             ]
             ctx.mm_models = sorted(ids)
             ctx.model = Path(a.multi[0]).name
+            ctx.fake = fake
             run_route_checks(ctx, "multi", only, res, srv)
         except BaseException as e:  # noqa: BLE001
             res["failures"].append(f"multi server: {type(e).__name__}: {e}")
             traceback.print_exc()
         finally:
+            if fake:
+                fake.close()
             if srv:
                 res["multi_log_tail"] = srv.log_tail(30)
                 srv.kill()
