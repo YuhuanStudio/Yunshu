@@ -112,12 +112,12 @@ def check_case(name, kw, dialect, stream, out):
             if out.completion != 3:
                 bad.append(f"completion {out.completion} != 3")
     # Stop strings apply to the answer, not inside reasoning (vlm_engine: `not in_think`), so a
-    # Qwen3.5 reply that is all reasoning (or raw "<think>" in /v1/completions) is not checked.
+    # Qwen3.5 reply that reasoned (usage.reasoning_tokens > 0) is not checked.
     if (
         name == "stop"
         and out.finish == "stop"
         and not out.thinking
-        and "<think>" not in out.text
+        and not out.reasoning
     ):
         hit = [s for s in STOP_CHARS if s in out.text]
         if hit:
@@ -193,30 +193,11 @@ def check_error(label, status, body, shape):
     return []
 
 
-KNOWN_GAPS = {
-    "prefill-usage": "non-stream forced tool_choice counts the server-added '<tool_call>' prefill "
-    "in prompt tokens (messages / responses); the stream path does not (anthropic.py _tool_prefill, "
-    "responses.py _resp_tool_prefill)",
-    "forced-advisory": "forced tool_choice is advisory / prefill-based unless YUNSHU_TOOL_GRAMMAR=1; "
-    "a small model can answer with prose or an argument-less call",
-}
+KNOWN_GAPS: dict[str, str] = {}  # none open: every wire problem fails the sweep
 
 
 def classify(failure, grammar):
-    """Known-gap id of a wire failure line, or None (pure). `grammar`: the leg ran with
-    YUNSHU_TOOL_GRAMMAR=1, where forced tool calls are expected and never excused."""
-    f = failure
-    if "prompt tokens stream" in f and any(
-        c in f for c in ("tool_required", "tool_named", "tool_serial")
-    ):
-        return "prefill-usage"
-    forced = any(c in f for c in ("tool_required", "tool_named", "tool_serial"))
-    if (
-        forced
-        and not grammar
-        and ("forced tool call missing" in f or "bad tool call" in f or "finished" in f)
-    ):
-        return "forced-advisory"
+    """Known-gap id of a wire failure line, or None (pure); nothing is excused today."""
     return None
 
 

@@ -67,7 +67,7 @@ def _forced_by_grammar(req) -> bool:
     forced = req.tool_choice == "required" or (
         isinstance(req.tool_choice, dict) and bool(req.tool_choice.get("name"))
     )
-    return forced and settings.get_bool("YUNSHU_TOOL_GRAMMAR")
+    return forced
 
 
 def _native_kw(req) -> dict:
@@ -1569,7 +1569,7 @@ async def create_response(req: ResponsesRequest, request: Request):
             if _resp_tool_prefill:
                 from .chat import _append_tool_prefill
 
-                messages = _append_tool_prefill(messages, _resp_tool_prefill)
+                messages = _append_tool_prefill(messages, _resp_tool_prefill, engine)
 
     # Background mode pre-allocates the id (so the queued response returned to the
     # client and the polled/cancellable generation share one id). Consume it once.

@@ -319,6 +319,16 @@ class CompletionRequest(BaseModel):
         return self
 
 
+def _untag_reasoning(text: str, reasoning_tokens: int) -> str:
+    """The VLM engine's non-stream text wraps reasoning in <think>..</think> for routers that
+    split it (chat); /v1/completions has no reasoning field, and its stream delivers the same
+    reasoning text with the tags never shown. Drop the tags so both agree."""
+    if reasoning_tokens and text.startswith("<think>"):
+        head, sep, tail = text[len("<think>") :].partition("</think>")
+        return head + tail if sep else head
+    return text
+
+
 @router.post("/completions", response_model=None)
 async def create_completion(req: CompletionRequest, request: Request):
     """OpenAI-compatible text completion endpoint."""
@@ -689,6 +699,7 @@ async def create_completion(req: CompletionRequest, request: Request):
                     ct = state.get("completion_tokens", 0)
                     fr = _normalize_finish_reason(state.get("finish_reason", "stop"))
                     rt = state.get("reasoning_tokens", 0)
+                    text = _untag_reasoning(text, rt)
                 else:
                     # CRITICAL: GenerationOutput uses text/
                     # prompt_tokens/completion_tokens (batched_engine.py:84-87).

@@ -2790,9 +2790,9 @@ class VLMEngine:
         if tools:
             extra["tools"] = tools
             kwargs["_tool_recovery_tools"] = tools
-            if settings.get_bool("YUNSHU_TOOL_GRAMMAR"):
-                from .tool_call_grammar import normalize_tool_choice
+            from .tool_call_grammar import is_forced, normalize_tool_choice
 
+            if is_forced(choice) or settings.get_bool("YUNSHU_TOOL_GRAMMAR"):
                 choice = normalize_tool_choice(choice)
                 if choice != "none":
                     kwargs["_tool_spec"] = {
