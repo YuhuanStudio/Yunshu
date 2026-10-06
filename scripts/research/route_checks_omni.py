@@ -492,7 +492,7 @@ def _realtime_voice_native(c: Ctx):
 )
 def _omni_native_chat_cache(c: Ctx):
     wav = _speech(c)
-    msgs = _chat_audio_msg(wav, ASK_WORD)
+    msgs = _chat_audio_msg(wav, "Listen carefully. " * 20 + ASK_WORD)
     a = c.oa.chat.completions.create(
         model=c.model, messages=msgs, max_tokens=32, temperature=0
     )

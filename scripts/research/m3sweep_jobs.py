@@ -997,7 +997,11 @@ def cmd_omni(a):
             srv.wait_ready()
             ctx = routes_make_ctx(srv, token, "multi", model_id=name)
             ctx.fixtures = fixtures
-            for m in (*a.asr, a.tts):
+            for m in (
+                target,
+                *a.asr,
+                a.tts,
+            ):  # the chat model too: the socket does not load it
                 r = ctx.http.post(
                     "/v1/models/load",
                     json={"model": Path(m).name},
