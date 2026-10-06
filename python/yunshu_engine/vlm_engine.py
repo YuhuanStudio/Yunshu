@@ -3085,10 +3085,21 @@ class VLMEngine:
         tpl_kwargs.update(extra)
 
         try:
-            template_text = self._processor.apply_chat_template(
-                vlm_messages,
-                **tpl_kwargs,
-            )
+            try:
+                template_text = self._processor.apply_chat_template(
+                    vlm_messages,
+                    **tpl_kwargs,
+                )
+            except TypeError as e:
+                # Gemma4Processor counts the audio parts and passes num_audios itself: a second
+                # num_audios is a TypeError (every audio request was a 500). Retry without ours.
+                if "num_audios" not in str(e) or "num_audios" not in tpl_kwargs:
+                    raise
+                tpl_kwargs.pop("num_audios")
+                template_text = self._processor.apply_chat_template(
+                    vlm_messages,
+                    **tpl_kwargs,
+                )
         except (ValueError, AttributeError) as e:
             # Some omni processors (e.g. NVIDIA Nemotron-Omni) ship no chat
             # template on the PROCESSOR — it lives on the tokenizer instead. The
