@@ -29,7 +29,9 @@ def make_client(monkeypatch):
     return make
 
 
-PNG = b"\x89PNG\r\n\x1a\n" + b"0" * 40
+PNG = __import__("base64").b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+)
 
 
 def test_text_model_gets_a_503_that_names_the_fix(make_client):
@@ -69,3 +71,11 @@ def test_vision_model_serves_the_ocr_fallback(make_client, monkeypatch, tmp_path
     urls = [p["image_url"]["url"] for p in parts if p.get("type") == "image_url"]
     # the VLM refuses local files outside YUNSHU_MEDIA_DIR: the upload must be staged there
     assert urls and urls[0].startswith("file://" + str(tmp_path / "media")), urls
+
+
+def test_upload_that_is_not_an_image_is_400(make_client):
+    chat = types.SimpleNamespace(model_name="/m/x", is_loaded=True)
+    r = make_client(chat).post(
+        "/v1/ocr", files={"file": ("a.png", b"not an image", "image/png")}
+    )
+    assert r.status_code == 400 and "not an image" in r.json()["error"]["message"]

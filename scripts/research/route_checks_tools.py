@@ -148,7 +148,13 @@ SEARCH_TOOL = {"type": "web_search_20250305", "name": "web_search"}
 FORCE_SEARCH = {"type": "tool", "name": "web_search"}
 
 
-@check("web_search_provider", "POST /v1/messages", "POST /v1/responses", needs="multi")
+@check(
+    "web_search_provider",
+    "POST /v1/messages",
+    "POST /v1/responses",
+    needs="multi",
+    served=True,
+)
 def _web_search_provider(c: Ctx):
     """web_search with a configured provider (a fake SearXNG): the server runs the search inside the
     generation loop and the typed SDK objects carry the results."""
@@ -220,7 +226,7 @@ def _web_search_provider(c: Ctx):
     c.notes["web_search_responses_blocks"] = [o.type for o in r.output]
 
 
-@check("web_fetch_ssrf", "POST /v1/messages", needs="multi")
+@check("web_fetch_ssrf", "POST /v1/messages", needs="multi", served=True)
 def _web_fetch_ssrf(c: Ctx):
     """web_fetch refuses a loopback page (SSRF guard) with the API's error block, and the page is
     never requested."""
@@ -247,7 +253,13 @@ def _web_fetch_ssrf(c: Ctx):
     c.notes["web_fetch_error_code"] = first.error_code
 
 
-@check("mcp_connector", "POST /v1/messages", "POST /v1/responses", needs="multi")
+@check(
+    "mcp_connector",
+    "POST /v1/messages",
+    "POST /v1/responses",
+    needs="multi",
+    served=True,
+)
 def _mcp_connector(c: Ctx):
     """The MCP connector: the server connects to a (fake) MCP server, lists its tools and calls them
     on the model's behalf, in both dialects."""
@@ -314,3 +326,26 @@ def _mcp_connector(c: Ctx):
     if any(b.type == "mcp_tool_use" for b in m.content):
         res = [b for b in m.content if b.type == "mcp_tool_result"]
         expect(res and not res[0].is_error, f"mcp_tool_result {res[:1]}")
+
+
+@check(
+    "mcp_client",
+    "GET /v1/mcp/client/status",
+    "GET /v1/mcp/client/tools",
+    needs="multi",
+    served=True,
+)
+def _mcp_client(c: Ctx):
+    """The MCP client: the server was started with scripts/research/agent_compat/tiny_mcp.py (stdio)
+    configured; it connects and lists that server's tools."""
+    st = c.req("GET", "/v1/mcp/client/status").json()
+    expect(st.get("enabled") is True, f"client status {st}")
+    expect(
+        st.get("connected_servers", st.get("servers", 0)) not in (0, None),
+        f"no server connected: {st}",
+    )
+    tl = c.req("GET", "/v1/mcp/client/tools")
+    expect(tl.status_code == 200, f"tools {tl.status_code}")
+    names = json.dumps(tl.json())
+    expect("echo" in names and "add" in names, f"tiny_mcp tools missing: {names[:300]}")
+    c.notes["mcp_client"] = st

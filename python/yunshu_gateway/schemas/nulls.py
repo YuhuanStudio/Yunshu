@@ -28,6 +28,10 @@ def clean_request(model_cls: type, data: Any) -> Any:
     ``top_k`` (the vLLM / llama.cpp spelling of "disabled", sent by LiteLLM and Cline) becomes 0."""
     if not isinstance(data, dict):
         return data
+    if "structured_outputs" in data and "grammar" in model_cls.model_fields:
+        from .structured_outputs import fold_structured_outputs
+
+        data = fold_structured_outputs(data)
     if isinstance(data.get("top_k"), int) and data["top_k"] < 0:
         data = {**data, "top_k": 0}
     if None not in data.values():

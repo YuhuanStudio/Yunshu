@@ -109,6 +109,7 @@ def test_check_has_no_harness_bug(name, monkeypatch):
                     "route_checks_tools.py",
                     "route_checks_vision.py",
                     "route_checks_omni.py",
+                    "route_checks_vllm.py",
                 )
             )
         ]
@@ -175,3 +176,16 @@ def test_omni_job_argv_parses_and_plan_has_the_job(tmp_path):
         "--mem-gb" in j["submit"]
         and j["submit"][j["submit"].index("--mem-gb") + 1] == "14"
     )
+
+
+def test_translation_check_judges_language_loosely():
+    import route_checks_media as rm
+
+    assert rm.cjk_ratio("The weather is nice today.") == 0.0
+    assert rm.cjk_ratio("今天天气很好") == 1.0
+    assert rm.cjk_ratio("") == 0.0
+    assert rc.REGISTRY["whisper_translations"].needs == "translate"
+    assert rc.REGISTRY["whisper_translations"].served
+    assert "POST /v1/audio/translations" in rc.served_routes()
+    assert "POST /v1/omni/speech/stream" not in rc.served_routes(("native",))
+    assert "POST /v1/omni/speech/stream" in rc.served_routes()

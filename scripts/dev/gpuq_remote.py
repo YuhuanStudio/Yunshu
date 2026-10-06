@@ -34,6 +34,7 @@ M3_MODELS = frozenset(
         # (with the ASR + TTS above) run on a real server (user 2026-10-06). No speech-out
         # omni checkpoint is small enough: Qwen3-Omni is 20 GB and stays on the M5.
         "gemma-4-e2b-it-4bit",
+        "whisper-large-v3-mlx",  # /v1/audio/translations: only Whisper translates (2.9 GB)
     }
 )
 

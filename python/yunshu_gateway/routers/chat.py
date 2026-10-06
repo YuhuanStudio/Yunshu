@@ -1,3 +1,4 @@
+# Upstream (inspired): vllm-project/vllm (Apache-2.0) tests/entrypoints/openai/chat_completion/test_chat.py (request validation) @ 68088ed
 from __future__ import annotations
 
 """OpenAI Chat Completions compatible router.
@@ -568,6 +569,13 @@ class ChatCompletionRequest(BaseModel):
                 if isinstance(self.response_format, dict)
                 else None
             )
+            if rf_type == "json_schema" and not isinstance(
+                self.response_format.get("json_schema"), dict
+            ):
+                # vLLM test_chat_error.py::test_json_schema_response_format_missing_schema
+                raise ValueError(
+                    "response_format.json_schema: must be provided when type is 'json_schema'"
+                )
             if rf_type not in ("json_object", "json_schema", "text", None):
                 raise ValueError(
                     f"response_format.type: must be 'json_object', 'json_schema', or 'text', got '{rf_type}'"
@@ -592,6 +600,30 @@ class ChatCompletionRequest(BaseModel):
             and self.top_logprobs > 0
         ):
             raise ValueError("top_logprobs requires logprobs=true")
+        # vLLM / OpenAI: stream_options is only allowed with stream=true (vllm
+        # tests/entrypoints/openai test_chat.py::test_stream_options).
+        if self.stream_options is not None and not self.stream:
+            raise ValueError("stream_options: only allowed when stream is true")
+        if self.tool_choice not in (
+            None,
+            "auto",
+            "none",
+            "required",
+        ) and not isinstance(self.tool_choice, ToolChoiceFunction):
+            raise ValueError("tool_choice: must be auto, none, required or a function")
+        if self.tool_choice in ("required",) or isinstance(
+            self.tool_choice, ToolChoiceFunction
+        ):
+            if not self.tools:
+                raise ValueError("tool_choice: requires a non-empty tools list")
+        if isinstance(self.tool_choice, ToolChoiceFunction) and self.tools:
+            _names = {t.function.name for t in self.tools}
+            if self.tool_choice.function.name not in _names:
+                raise ValueError(
+                    f"tool_choice: function {self.tool_choice.function.name!r} is not in tools"
+                )
+        if self.prompt_logprobs is not None and self.prompt_logprobs < 0:
+            raise ValueError("prompt_logprobs: must be >= 0")
         # n > 1 with streaming is not supported (OpenAI returns error for this)
         if self.stream and self.n > 1:
             raise ValueError(

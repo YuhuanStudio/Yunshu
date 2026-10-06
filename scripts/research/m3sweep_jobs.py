@@ -690,6 +690,9 @@ def run_route_checks(ctx, needs, only, res, srv, tag=""):
         except BaseException as e:  # noqa: BLE001  fail closed, keep going
             row.update(status="fail", detail=f"{type(e).__name__}: {str(e)[:2000]}")
             row["trace"] = traceback.format_exc()[-1200:]
+        row["served"] = bool(chk.served and not getattr(ctx, "downgraded", False))
+        if hasattr(ctx, "downgraded"):
+            ctx.downgraded = False
         row["seconds"] = round(time.monotonic() - t0, 1)
         res["checks"][key] = row
         if row["status"] == "fail":
@@ -739,7 +742,7 @@ def cmd_routes(a):
         "complete": False,
         "_out": a.out,
     }
-    for model in a.model:
+    for model in a.model or []:
         name = Path(model).name
         srv = None
         try:
@@ -752,6 +755,26 @@ def cmd_routes(a):
                 res["failures"].append(f"{name}: server died rc={srv.proc.returncode}")
             elif httpx.get(srv.url + "/health/ready", timeout=10).status_code != 200:
                 res["failures"].append(f"{name}: server not ready after the checks")
+        except BaseException as e:  # noqa: BLE001
+            res["failures"].append(f"{name}: {type(e).__name__}: {e}")
+            traceback.print_exc()
+        finally:
+            if srv:
+                res.setdefault("server_log_tail", {})[name] = srv.log_tail(30)
+                srv.kill()
+    shared: dict = {}
+    for spec in a.media:
+        needs, _, model = spec.partition("=")
+        name = f"{needs}:{Path(model).name}"
+        srv = None
+        try:
+            srv = start_server(model, f"routes-{needs}", [])
+            ctx = routes_make_ctx(srv, "", needs)
+            ctx.shared = shared
+            run_route_checks(ctx, needs, only, res, srv, name)
+            res["notes"][name] = ctx.notes
+            if srv.proc.poll() is not None:
+                res["failures"].append(f"{name}: server died rc={srv.proc.returncode}")
         except BaseException as e:  # noqa: BLE001
             res["failures"].append(f"{name}: {type(e).__name__}: {e}")
             traceback.print_exc()
@@ -789,6 +812,23 @@ def cmd_routes(a):
                     "YUNSHU_VLM_APC_DISK=0",
                     f"YUNSHU_SEARXNG_URL={fake.url}",
                     "YUNSHU_WEB_SEARCH_PROVIDER=searxng",
+                    # the MCP client connects to scripts/research/agent_compat/tiny_mcp.py (stdio)
+                    "YUNSHU_MCP_SERVERS="
+                    + json.dumps(
+                        [
+                            {
+                                "id": "tiny",
+                                "transport": "stdio",
+                                "command": sys.executable,
+                                "args": [
+                                    str(
+                                        ROOT
+                                        / "scripts/research/agent_compat/tiny_mcp.py"
+                                    )
+                                ],
+                            }
+                        ]
+                    ),
                 ],
                 models_dir=str(mdir),
                 token=token,
@@ -819,6 +859,14 @@ def cmd_routes(a):
             r
             for row in res["checks"].values()
             if row["status"] == "pass"
+            for r in row["routes"]
+        }
+    )
+    res["verified_served_routes"] = sorted(
+        {
+            r
+            for row in res["checks"].values()
+            if row["status"] == "pass" and row.get("served")
             for r in row["routes"]
         }
     )
@@ -1011,6 +1059,12 @@ def build_parser():
         p = sub.add_parser(n)
         if n == "routes":
             p.add_argument("--multi", action="append", default=[])
+            p.add_argument(
+                "--media",
+                action="append",
+                default=[],
+                help="NEEDS=MODEL: tts asr ocr image embed",
+            )
             p.add_argument("--only")
         if n == "agent":
             p.add_argument("--strict", action="store_true")
@@ -1021,7 +1075,7 @@ def build_parser():
         p.add_argument("--out", required=True)
         p.add_argument(
             "--model",
-            required=(n in ("wire", "agent", "routes")),
+            required=(n in ("wire", "agent")),
             action="append" if n in ("units", "routes") else "store",
         )
     p = sub.add_parser("omni")

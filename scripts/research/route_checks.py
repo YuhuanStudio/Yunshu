@@ -46,12 +46,10 @@ class Check:
     fn: Callable[[Ctx], Any]
     routes: tuple[str, ...]
     needs: str = "main"
-    served: bool = (
-        False  # exercises the route's served path, not only the absent answer
-    )
+    served: bool = True
 
 
-def check(name: str, *routes: str, needs: str = "main", served: bool = False):
+def check(name: str, *routes: str, served: bool, needs: str = "main"):
     def deco(fn):
         expect(name not in REGISTRY, f"duplicate check {name}")
         REGISTRY[name] = Check(name, fn, routes, needs, served)
@@ -62,11 +60,29 @@ def check(name: str, *routes: str, needs: str = "main", served: bool = False):
 
 # Routes that have no real-server check, each with the reason. Keep this list short: a route
 # belongs here only when no server run (with the four small checkpoints) can exercise it.
-EXEMPT: dict[str, str] = {}
+EXEMPT: dict[str, str] = {
+    "POST /api/pull": "documented 501 by design: models are managed with `yunshu pull`",
+    "POST /api/push": "documented 501 by design: nothing to push to",
+    "POST /api/create": "documented 501 by design",
+    "POST /api/copy": "documented 501 by design",
+    "DELETE /api/delete": "documented 501 by design: remove model files from the models directory",
+}
 
 
 def checked_routes() -> set[str]:
+    """Routes any check touches (served or not)."""
     return {r for c in REGISTRY.values() for r in c.routes}
+
+
+def served_routes(exclude_needs: tuple[str, ...] = ()) -> set[str]:
+    """Routes with at least one SERVED check: a model that has the capability, a successful
+    response, validated content. An absent-capability / error-path check never counts."""
+    return {
+        r
+        for c in REGISTRY.values()
+        if c.served and c.needs not in exclude_needs
+        for r in c.routes
+    }
 
 
 # ── context ──────────────────────────────────────────────────────────────────────────────
@@ -84,10 +100,22 @@ class Ctx:
     notes: dict = field(default_factory=dict)
     mm_models: list = field(default_factory=list)  # multi-model server: model ids
     log_tail: Any = None  # callable(n) -> the server log's last n lines
+    shared: dict = field(
+        default_factory=dict
+    )  # kept across the servers of one job (TTS -> ASR)
     fake: Any = None  # FakeBackend (search / MCP / page on loopback), multi server only
     fixtures: dict = field(
         default_factory=dict
     )  # omni jobs: "speech_wav" bytes, "phrase"
+
+    downgraded: bool = (
+        False  # a served check that ran down an error path on this server
+    )
+
+    def unserved(self):
+        """Call when this run of a served check could not exercise the served path (a text-only
+        model refusing an image): the run then does not count as coverage."""
+        self.downgraded = True
 
     def auth(self, extra=None):
         h = {"Authorization": f"Bearer {self.token}"} if self.token else {}
@@ -185,6 +213,7 @@ def ok_or_absent(ctx: Ctx, method, path, family="openai", **kw):
     "GET /docs",
     "GET /docs/oauth2-redirect",
     "GET /redoc",
+    served=True,
 )
 def _docs(c: Ctx):
     o = c.http.get("/openapi.json")
@@ -199,7 +228,14 @@ def _docs(c: Ctx):
         )
 
 
-@check("health", "GET /health", "GET /health/ready", "GET /health/live", "GET /version")
+@check(
+    "health",
+    "GET /health",
+    "GET /health/ready",
+    "GET /health/live",
+    "GET /version",
+    served=True,
+)
 def _health(c: Ctx):
     for p in ("/health", "/health/ready", "/health/live", "/version"):
         r = c.http.get(p)  # unauthenticated on purpose: health is exempt from the token
@@ -209,14 +245,14 @@ def _health(c: Ctx):
     expect(c.http.get("/version").json().get("version"), "version empty")
 
 
-@check("metrics", "GET /metrics")
+@check("metrics", "GET /metrics", served=True)
 def _metrics(c: Ctx):
     r = c.req("GET", "/metrics")
     expect(r.status_code == 200, f"{r.status_code} {r.text[:80]}")
     expect(re.search(r"^# (HELP|TYPE) ", r.text, re.M), "no prometheus HELP/TYPE lines")
 
 
-@check("auth", "GET /v1/models", needs="multi")
+@check("auth", "GET /v1/models", needs="multi", served=False)
 def _auth(c: Ctx):
     expect(c.token, "auth check needs the token server")
     r = c.http.get("/v1/models")
@@ -235,6 +271,7 @@ def _auth(c: Ctx):
     "DELETE /v1/requests/{request_id}",
     "POST /v1/cancel",
     "POST /v1/yunshu/warmup",
+    served=True,
 )
 def _operations(c: Ctx):
     s = c.req("GET", "/v1/yunshu/status")
@@ -271,6 +308,7 @@ def _operations(c: Ctx):
     "POST /v1/cancel",
     "DELETE /v1/requests/{request_id}",
     "GET /v1/requests/{request_id}",
+    served=True,
 )
 def _cancel_live(c: Ctx):
     """Cancel a real in-flight stream by its X-Request-Id, both routes; the stream ends early and
@@ -336,7 +374,7 @@ def _cancel_live(c: Ctx):
 # ── generation routes (SDK, typed models) ────────────────────────────────────────────────
 
 
-@check("chat", "POST /v1/chat/completions")
+@check("chat", "POST /v1/chat/completions", served=True)
 def _chat(c: Ctx):
     r = c.oa.chat.completions.create(
         model=c.model, messages=[{"role": "user", "content": "Say hi."}], max_tokens=16
@@ -355,7 +393,7 @@ def _chat(c: Ctx):
     expect(last is not None and last.usage is not None, "stream usage chunk missing")
 
 
-@check("completions", "POST /v1/completions")
+@check("completions", "POST /v1/completions", served=True)
 def _completions(c: Ctx):
     r = c.oa.completions.create(
         model=c.model, prompt="The capital of France is", max_tokens=8
@@ -363,7 +401,7 @@ def _completions(c: Ctx):
     expect(r.choices and r.usage and r.usage.prompt_tokens > 0, "completions shape")
 
 
-@check("messages", "POST /v1/messages", "POST /messages")
+@check("messages", "POST /v1/messages", "POST /messages", served=True)
 def _messages(c: Ctx):
     r = c.an.messages.create(
         model=c.model, max_tokens=16, messages=[{"role": "user", "content": "Say hi."}]
@@ -389,7 +427,7 @@ def _messages(c: Ctx):
     )
 
 
-@check("responses_basic", "POST /v1/responses")
+@check("responses_basic", "POST /v1/responses", served=True)
 def _responses_basic(c: Ctx):
     r = c.oa.responses.create(model=c.model, input="Say hi.", max_output_tokens=32)
     expect(
@@ -407,7 +445,7 @@ def _responses_basic(c: Ctx):
     )
 
 
-@check("ollama_generate", "POST /api/chat", "POST /api/generate")
+@check("ollama_generate", "POST /api/chat", "POST /api/generate", served=True)
 def _ollama_gen(c: Ctx):
     r = c.req(
         "POST",
@@ -458,7 +496,7 @@ def _ollama_gen(c: Ctx):
 # ── models ───────────────────────────────────────────────────────────────────────────────
 
 
-@check("models", "GET /v1/models", "GET /v1/models/{model_id:path}")
+@check("models", "GET /v1/models", "GET /v1/models/{model_id:path}", served=True)
 def _models(c: Ctx):
     ml = c.oa.models.list()
     expect(ml.data and ml.data[0].id, "openai models.list empty")
@@ -479,6 +517,7 @@ def _models(c: Ctx):
     "POST /v1/models/load",
     "POST /v1/models/unload/{model_id:path}",
     needs="multi",
+    served=True,
 )
 def _models_multi(c: Ctx):
     expect(len(c.mm_models) >= 2, f"multi-model server lists {c.mm_models}")
@@ -513,7 +552,7 @@ def _models_multi(c: Ctx):
     expect(ch.choices, "chat after unload (auto reload)")
 
 
-@check("models_admin_denied", "POST /v1/models/load")
+@check("models_admin_denied", "POST /v1/models/load", served=False)
 def _models_denied(c: Ctx):
     r = c.http.post("/v1/models/load", json={"model": c.model})  # no token
     err_ok(r, "openai")
@@ -552,6 +591,7 @@ def _batch_lines(c: Ctx, n=2, endpoint="/v1/chat/completions"):
     "GET /v1/files/{file_id}",
     "DELETE /v1/files/{file_id}",
     "GET /v1/files/{file_id}/content",
+    served=True,
 )
 def _files(c: Ctx):
     data = b'{"a": 1}\n{"a": 2}\n'
@@ -638,6 +678,7 @@ def _files(c: Ctx):
     "GET /v1/batches",
     "GET /v1/batches/{batch_id}",
     "POST /v1/batches/{batch_id}/cancel",
+    served=True,
 )
 def _batches(c: Ctx):
     inp = c.oa.files.create(file=("batch.jsonl", _batch_lines(c, 2)), purpose="batch")
@@ -715,6 +756,7 @@ def _batches(c: Ctx):
     "GET /v1/messages/batches/{batch_id}/results",
     "POST /v1/messages/batches/{batch_id}/cancel",
     "DELETE /v1/messages/batches/{batch_id}",
+    served=True,
 )
 def _messages_batches(c: Ctx):
     def reqs(n):
@@ -794,6 +836,7 @@ def _messages_batches(c: Ctx):
     "GET /v1/conversations/{conversation_id}/items",
     "GET /v1/conversations/{conversation_id}/items/{item_id}",
     "DELETE /v1/conversations/{conversation_id}/items/{item_id}",
+    served=True,
 )
 def _conversations(c: Ctx):
     cv = c.oa.conversations.create(
@@ -856,6 +899,7 @@ def _conversations(c: Ctx):
     "DELETE /v1/responses/{response_id}",
     "POST /v1/responses/{response_id}/cancel",
     "GET /v1/responses/{response_id}/input_items",
+    served=True,
 )
 def _responses_lifecycle(c: Ctx):
     r = c.oa.responses.create(
@@ -930,7 +974,7 @@ def _responses_lifecycle(c: Ctx):
     expect(gone.status_code == 404, f"input_items after delete -> {gone.status_code}")
 
 
-@check("responses_input_tokens", "POST /v1/responses/input_tokens")
+@check("responses_input_tokens", "POST /v1/responses/input_tokens", served=True)
 def _input_tokens(c: Ctx):
     kw = dict(
         model=c.model,
@@ -989,7 +1033,7 @@ def _input_tokens(c: Ctx):
     c.oa.conversations.delete(cv.id)
 
 
-@check("responses_compact", "POST /v1/responses/compact")
+@check("responses_compact", "POST /v1/responses/compact", served=True)
 def _compact(c: Ctx):
     long = " ".join(
         f"Fact number {i}: the item {i} costs {i * 3} coins." for i in range(40)
@@ -1021,7 +1065,12 @@ def _compact(c: Ctx):
 # ── token counting ───────────────────────────────────────────────────────────────────────
 
 
-@check("count_tokens", "POST /v1/messages/count_tokens", "POST /messages/count_tokens")
+@check(
+    "count_tokens",
+    "POST /v1/messages/count_tokens",
+    "POST /messages/count_tokens",
+    served=True,
+)
 def _count_tokens(c: Ctx):
     msgs = [{"role": "user", "content": "Tell me about the moon in one line."}]
     n = c.an.messages.count_tokens(
@@ -1085,6 +1134,7 @@ def _count_tokens(c: Ctx):
     "POST /v1/detokenize",
     "POST /tokenize",
     "POST /detokenize",
+    served=True,
 )
 def _tokenize(c: Ctx):
     text = "Hello, world! 你好"
@@ -1124,6 +1174,7 @@ def _tokenize(c: Ctx):
     "POST /v1/score",
     "POST /v1/rerank",
     "POST /v1/classify",
+    served=False,
 )
 def _embeddings(c: Ctx):
     # the SDK types the success shape; an error must be the OpenAI error shape with a message
@@ -1216,6 +1267,7 @@ def _png(size: int = 224, rgb=(200, 30, 30)) -> bytes:
     "POST /v1/audio/transcriptions",
     "POST /v1/audio/translations",
     "GET /v1/audio/voices",
+    served=False,
 )
 def _audio(c: Ctx):
     st = {}
@@ -1277,6 +1329,7 @@ def _audio(c: Ctx):
     "POST /v1/images/variations",
     "POST /v1/images/edits",
     "POST /v1/ocr",
+    served=False,
 )
 def _images(c: Ctx):
     st = {}
@@ -1369,7 +1422,7 @@ def _images(c: Ctx):
             c.notes[name] = f"404: {str(ex.message)[:100]}"
 
 
-@check("omni_absent", "POST /v1/omni/speech/stream")
+@check("omni_absent", "POST /v1/omni/speech/stream", served=False)
 def _omni(c: Ctx):
     st, _ = ok_or_absent(
         c,
@@ -1390,8 +1443,7 @@ def _omni(c: Ctx):
     "POST /v1/mcp",
     "GET /v1/mcp/tools",
     "GET /v1/mcp/sse",
-    "GET /v1/mcp/client/status",
-    "GET /v1/mcp/client/tools",
+    served=True,
 )
 def _mcp(c: Ctx):
     def rpc(method, params=None, id=1):
@@ -1493,13 +1545,7 @@ def _mcp(c: Ctx):
     "GET /api/ps",
     "POST /api/show",
     "GET /api/version",
-    "POST /api/embed",
-    "POST /api/embeddings",
-    "POST /api/pull",
-    "POST /api/push",
-    "POST /api/create",
-    "POST /api/copy",
-    "DELETE /api/delete",
+    served=True,
 )
 def _ollama_native(c: Ctx):
     t = c.req("GET", "/api/tags").json()
@@ -1529,29 +1575,6 @@ def _ollama_native(c: Ctx):
         ("/api/embeddings", {"model": c.model, "prompt": "hello"}),
     ):
         ok_or_absent(c, "POST", path, family="ollama", json=body, timeout=120)
-    # model management verbs: an Ollama-shaped answer or a clear refusal, never a hang or a 500
-    for method, path, body in (
-        ("POST", "/api/pull", {"model": "no/such-model-xyz", "stream": False}),
-        ("POST", "/api/push", {"model": "no/such-model-xyz", "stream": False}),
-        (
-            "POST",
-            "/api/create",
-            {"model": "routes-x", "from": "no-such-base", "stream": False},
-        ),
-        (
-            "POST",
-            "/api/copy",
-            {"source": "no-such-model-xyz", "destination": "routes-copy"},
-        ),
-        ("DELETE", "/api/delete", {"model": "no-such-model-xyz"}),
-    ):
-        r = c.req(method, path, json=body, timeout=120)
-        # documented: models are managed with `yunshu pull` / `yunshu model`, not over this API
-        expect(
-            r.status_code == 501 and "not supported" in r.text,
-            f"{method} {path}: {r.status_code} {r.text[:100]}",
-        )
-        err_ok(r, "ollama")
 
 
 # ── websockets ───────────────────────────────────────────────────────────────────────────
@@ -1595,7 +1618,7 @@ def _no_active(c: Ctx, secs=20):
     return False
 
 
-@check("ws_responses", "WS /v1/responses")
+@check("ws_responses", "WS /v1/responses", served=True)
 def _ws_responses(c: Ctx):
     with c.ws("/v1/responses") as ws:
         ws.send(
@@ -1684,7 +1707,7 @@ def _ws_responses(c: Ctx):
     )
 
 
-@check("ws_auth", "WS /v1/responses", "WS /v1/stream", needs="multi")
+@check("ws_auth", "WS /v1/responses", "WS /v1/stream", needs="multi", served=False)
 def _ws_auth(c: Ctx):
     """With a token configured an unauthenticated upgrade is refused, an authenticated one works."""
     from websockets.sync.client import connect
@@ -1709,7 +1732,7 @@ def _ws_auth(c: Ctx):
         )
 
 
-@check("ws_responses_sdk", "WS /v1/responses")
+@check("ws_responses_sdk", "WS /v1/responses", served=True)
 def _ws_responses_sdk(c: Ctx):
     import asyncio
 
@@ -1743,7 +1766,7 @@ def _ws_responses_sdk(c: Ctx):
     )
 
 
-@check("ws_stream", "WS /v1/stream")
+@check("ws_stream", "WS /v1/stream", served=True)
 def _ws_stream(c: Ctx):
     with c.ws("/v1/stream") as ws:
         first = json.loads(ws.recv(timeout=30))
@@ -1877,7 +1900,7 @@ def _realtime_text_turn(ws):
     return first, evs
 
 
-@check("ws_realtime", "WS /v1/realtime", "WS /realtime")
+@check("ws_realtime", "WS /v1/realtime", "WS /realtime", served=True)
 def _ws_realtime(c: Ctx):
     for path in ("/v1/realtime", "/realtime"):
         with c.ws(path + f"?model={c.model}") as ws:
@@ -1953,7 +1976,9 @@ def _ws_realtime(c: Ctx):
 # ── server-side tools (web search against a local fake provider) ─────────────────────────
 
 
-@check("web_search_unconfigured", "POST /v1/messages", "POST /v1/responses")
+@check(
+    "web_search_unconfigured", "POST /v1/messages", "POST /v1/responses", served=False
+)
 def _web_search_unconfigured(c: Ctx):
     """With no search provider configured the server tool answers in the API's own error shape."""
     m = c.an.messages.create(
@@ -1986,6 +2011,9 @@ def _web_search_unconfigured(c: Ctx):
     c.notes["web_search_responses"] = [o.type for o in r.output]
 
 
+from route_checks_media import (
+    wav_info,  # noqa: E402,F401  registers the modality checks
+)
 from route_checks_omni import (
     _omni_audio_in,  # noqa: E402,F401  registers the omni input / speech-out checks
 )
@@ -1994,4 +2022,53 @@ from route_checks_tools import (
 )
 from route_checks_vision import (
     _vision_input,  # noqa: E402,F401  registers the image-input check
+)
+
+
+@check(
+    "ollama_unsupported",
+    "POST /api/embed",
+    "POST /api/embeddings",
+    "POST /api/pull",
+    "POST /api/push",
+    "POST /api/create",
+    "POST /api/copy",
+    "DELETE /api/delete",
+    served=False,
+)
+def _ollama_unsupported(c: Ctx):
+    """Error paths only: embed on a chat model (served on the embedding model by embed_served) and
+    the model-management verbs, which answer a documented 501."""
+    for path, body in (
+        ("/api/embed", {"model": c.model, "input": "hello"}),
+        ("/api/embeddings", {"model": c.model, "prompt": "hello"}),
+    ):
+        ok_or_absent(c, "POST", path, family="ollama", json=body, timeout=120)
+    # model management verbs: an Ollama-shaped answer or a clear refusal, never a hang or a 500
+    for method, path, body in (
+        ("POST", "/api/pull", {"model": "no/such-model-xyz", "stream": False}),
+        ("POST", "/api/push", {"model": "no/such-model-xyz", "stream": False}),
+        (
+            "POST",
+            "/api/create",
+            {"model": "routes-x", "from": "no-such-base", "stream": False},
+        ),
+        (
+            "POST",
+            "/api/copy",
+            {"source": "no-such-model-xyz", "destination": "routes-copy"},
+        ),
+        ("DELETE", "/api/delete", {"model": "no-such-model-xyz"}),
+    ):
+        r = c.req(method, path, json=body, timeout=120)
+        # documented: models are managed with `yunshu pull` / `yunshu model`, not over this API
+        expect(
+            r.status_code == 501 and "not supported" in r.text,
+            f"{method} {path}: {r.status_code} {r.text[:100]}",
+        )
+        err_ok(r, "ollama")
+
+
+from route_checks_vllm import (
+    _chat_validation,  # noqa: E402,F401  registers the vLLM-derived validation checks
 )

@@ -56,6 +56,11 @@ PLAN = {
         14,
         40,
     ),
+    # one server per modality (served-path checks); TTS and ASR share a job: the speech is transcribed
+    "routes-speech": ("routes", [], 14, 20),
+    "routes-ocr": ("routes", [], 8, 20),
+    "routes-image": ("routes", [], 14, 20),
+    "routes-embed": ("routes", [], 6, 20),
     "agent-q35-2b": ("agent", ["Qwen3.5-2B-MLX-bf16"], 8, 35),
     "agent-q25-3b": ("agent", ["Qwen2.5-3B-Instruct-4bit"], 6, 35),
     "units": (
@@ -68,6 +73,16 @@ PLAN = {
 
 
 # the multi-model server (model load / unload routes) of a routes job: models it serves
+MEDIA = {
+    "routes-speech": [
+        "tts=Qwen3-TTS-12Hz-1.7B-VoiceDesign-bf16",
+        "asr=Qwen3-ASR-1.7B-bf16",
+        "translate=whisper-large-v3-mlx",
+    ],
+    "routes-ocr": ["ocr=GLM-OCR-bf16"],
+    "routes-image": ["image=Z-Image-Turbo-MLX-4bit"],
+    "routes-embed": ["embed=Qwen3-Embedding-0.6B"],
+}
 MULTI = {"routes": ["Qwen3.5-0.8B-MLX-bf16", "Qwen2.5-3B-Instruct-4bit"]}
 STRICT = {
     "agent-q35-2b"
@@ -90,6 +105,9 @@ def job_cmd(kind, models, out, name=""):
         cmd.append("--strict")
     for m in models:
         cmd += ["--model", str(MODELS / m)]
+    for m in MEDIA.get(name, []) if kind == "routes" else []:
+        needs, _, mod = m.partition("=")
+        cmd += ["--media", f"{needs}={MODELS / mod}"]
     for m in MULTI.get(name, []) if kind == "routes" else []:
         cmd += ["--multi", str(MODELS / m)]
     return cmd
@@ -177,27 +195,23 @@ def route_coverage(jobs):
     """Problems with route coverage over the `routes` jobs (pure over their outputs): every route
     of the registry must be verified (check passed) by at least one routes job. Empty when no routes
     job is in the plan (an `--only` run that left them out)."""
-    outs = [j for j in jobs if j["name"] == "routes"]
+    outs = [j for j in jobs if j["name"].startswith("routes")]
     if not outs:
         return []
     verified = set()
     for j in outs:
         try:
             verified |= set(
-                json.loads(Path(j["out"]).read_text()).get("verified_routes", [])
+                json.loads(Path(j["out"]).read_text()).get("verified_served_routes", [])
             )
         except (OSError, ValueError):
             pass
     sys.path.insert(0, str(MAIN / "scripts/research"))
     import route_checks as rc
 
-    want = {
-        r
-        for c in rc.REGISTRY.values()
-        if c.needs in ("main", "multi")
-        for r in c.routes
-    }
-    return [f"route never verified: {r}" for r in sorted(want - verified)]
+    # "native" checks (Qwen3-Omni, 20 GB) run as an M5 job, never on the laptop
+    want = rc.served_routes(exclude_needs=("native",))
+    return [f"route has no passing SERVED check: {r}" for r in sorted(want - verified)]
 
 
 def verdict(jobs, wait_rc):

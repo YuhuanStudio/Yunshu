@@ -264,6 +264,20 @@ class CompletionRequest(BaseModel):
             raise ValueError("prompt: cannot be empty or whitespace-only")
         if isinstance(self.prompt, list) and not self.prompt:
             raise ValueError("prompt: cannot be an empty list")
+        # vLLM / OpenAI: stream_options is only allowed with stream=true (vllm
+        # tests/entrypoints/openai test_chat.py::test_stream_options).
+        if self.stream_options is not None and not self.stream:
+            raise ValueError("stream_options: only allowed when stream is true")
+        if isinstance(self.prompt, list):
+            _flat = [
+                t for p in self.prompt for t in (p if isinstance(p, list) else [p])
+            ]
+            if any(
+                isinstance(t, int) and not isinstance(t, bool) and t < 0 for t in _flat
+            ):
+                raise ValueError("prompt: token ids must be non-negative")
+        if self.prompt_logprobs is not None and self.prompt_logprobs < 0:
+            raise ValueError("prompt_logprobs: must be >= 0")
         if self.top_logprobs is not None and self.logprobs <= 0:
             raise ValueError("top_logprobs: can only be set when logprobs > 0")
         if self.stop and len(self.stop) > 16:
@@ -277,6 +291,13 @@ class CompletionRequest(BaseModel):
                 if isinstance(self.response_format, dict)
                 else None
             )
+            if rf_type == "json_schema" and not isinstance(
+                self.response_format.get("json_schema"), dict
+            ):
+                # vLLM test_chat_error.py::test_json_schema_response_format_missing_schema
+                raise ValueError(
+                    "response_format.json_schema: must be provided when type is 'json_schema'"
+                )
             if rf_type not in ("json_object", "json_schema", "text", None):
                 raise ValueError(
                     f"response_format.type: must be 'json_object', 'json_schema', or 'text', got '{rf_type}'"
