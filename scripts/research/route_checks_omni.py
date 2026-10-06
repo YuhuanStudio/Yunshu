@@ -15,8 +15,6 @@ from __future__ import annotations
 import base64
 import io
 import json
-import shutil
-import subprocess
 import tempfile
 import wave
 from pathlib import Path
@@ -219,29 +217,22 @@ def _omni_image_audio_in(c: Ctx):
     expect("blue" in txt, f"messages image answer: {txt!r}")
 
 
-def _mp4(seconds=2, rgb="red") -> bytes:
-    ff = shutil.which("ffmpeg")
-    if not ff:
-        skip("no ffmpeg on this machine (video frames are extracted with it)")
+def _mp4(seconds=2, bgr=(0, 0, 200)) -> bytes:
+    """A solid-colour mp4 (default red), written with OpenCV (a locked dependency)."""
+    try:
+        import cv2
+        import numpy as np
+    except ImportError:
+        skip("no OpenCV on this machine: cannot write the video fixture")
     with tempfile.TemporaryDirectory() as d:
         out = Path(d) / "v.mp4"
-        subprocess.run(
-            [
-                ff,
-                "-v",
-                "error",
-                "-f",
-                "lavfi",
-                "-i",
-                f"color=c={rgb}:s=224x224:d={seconds}:r=4",
-                "-pix_fmt",
-                "yuv420p",
-                str(out),
-            ],
-            check=True,
-            timeout=60,
-        )
-        return out.read_bytes()
+        w = cv2.VideoWriter(str(out), cv2.VideoWriter_fourcc(*"mp4v"), 4.0, (224, 224))
+        for _ in range(int(seconds * 4)):
+            w.write(np.full((224, 224, 3), bgr, dtype=np.uint8))
+        w.release()
+        data = out.read_bytes()
+    expect(len(data) > 500, f"video fixture is {len(data)} bytes")
+    return data
 
 
 @check("omni_video_in", "POST /v1/chat/completions", needs="omni", served=True)

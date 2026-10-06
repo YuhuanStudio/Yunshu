@@ -77,3 +77,51 @@ def test_subtypeless_data_video_url_is_clean_valueerror_not_indexerror():
 def test_commaless_data_video_url_fails_loud_valueerror():
     with pytest.raises(ValueError, match="payload separator"):
         _run([{"type": "video_url", "video_url": {"url": "data:video/mp4;base64"}}])
+
+
+def _engine():
+    eng = VLMEngine.__new__(VLMEngine)
+    eng._register_temp_file = lambda p: None
+    return eng
+
+
+def _write_mp4(path, n=8):
+    cv2 = pytest.importorskip("cv2")
+    import numpy as np
+
+    w = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"mp4v"), 4.0, (64, 64))
+    for _ in range(n):
+        w.write(np.full((64, 64, 3), (0, 0, 200), dtype=np.uint8))  # BGR red
+    w.release()
+
+
+def test_video_frames_without_ffmpeg_come_from_opencv(tmp_path, monkeypatch):
+    """Neither the M5 nor the M3 has ffmpeg: video_url used to log a warning and return no frames,
+    so the model answered about a video it never saw. OpenCV (a locked dependency) decodes it."""
+    import subprocess
+
+    def no_ffmpeg(*a, **k):
+        raise FileNotFoundError("ffmpeg")
+
+    monkeypatch.setattr(subprocess, "run", no_ffmpeg)
+    mp4 = tmp_path / "v.mp4"
+    _write_mp4(mp4)
+    frames = asyncio.run(
+        _engine()._extract_frames_from_file(str(mp4), fps=1.0, max_frames=4)
+    )
+    assert 1 <= len(frames) <= 4 and all(f.endswith(".jpg") for f in frames)
+
+
+def test_undecodable_video_fails_loud_not_silent(tmp_path, monkeypatch):
+    import subprocess
+
+    def no_ffmpeg(*a, **k):
+        raise FileNotFoundError("ffmpeg")
+
+    monkeypatch.setattr(subprocess, "run", no_ffmpeg)
+    bad = tmp_path / "bad.mp4"
+    bad.write_bytes(b"not a video")
+    with pytest.raises(ValueError, match="frames"):
+        asyncio.run(
+            _engine()._extract_frames_from_file(str(bad), fps=1.0, max_frames=4)
+        )

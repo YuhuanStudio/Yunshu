@@ -3602,6 +3602,7 @@ class VLMEngine:
         ]
 
         loop = asyncio.get_running_loop()
+        why = ""
         try:
             await loop.run_in_executor(
                 None,
@@ -3610,40 +3611,66 @@ class VLMEngine:
                 ),
             )
         except FileNotFoundError:
-            logger.warning("ffmpeg not available — cannot extract video frames")
-            import shutil
-
-            shutil.rmtree(tmpdir, ignore_errors=True)
-            return []
+            why = "ffmpeg is not installed"
         except subprocess.TimeoutExpired:
-            logger.warning("ffmpeg timed out extracting video frames")
-            import shutil
-
-            shutil.rmtree(tmpdir, ignore_errors=True)
-            return []
+            why = "ffmpeg timed out"
         except subprocess.CalledProcessError as e:
-            logger.warning(
-                f"ffmpeg failed: {e.stderr.decode()[:200] if e.stderr else 'unknown'}"
-            )
-            import shutil
-
-            shutil.rmtree(tmpdir, ignore_errors=True)
-            return []
+            why = f"ffmpeg failed: {e.stderr.decode()[:200] if e.stderr else 'unknown'}"
         except Exception as e:
-            logger.warning(f"Video frame extraction failed: {e}")
+            why = f"ffmpeg failed: {e}"
+
+        def _frames() -> list[str]:
+            return sorted(
+                os.path.join(tmpdir, f)
+                for f in os.listdir(tmpdir)
+                if f.startswith("frame_") and f.endswith(".jpg")
+            )
+
+        frames = _frames()
+        if not frames:
+            # OpenCV is a locked dependency: decode without ffmpeg (neither dev machine has it)
+            logger.warning("video frames: %s; trying OpenCV", why or "no frames")
+            await loop.run_in_executor(
+                None, self._opencv_frames, video_path, tmpdir, fps, max_frames
+            )
+            frames = _frames()
+        if not frames:
             import shutil
 
             shutil.rmtree(tmpdir, ignore_errors=True)
-            return []
-
-        frames = sorted(
-            os.path.join(tmpdir, f)
-            for f in os.listdir(tmpdir)
-            if f.startswith("frame_") and f.endswith(".jpg")
-        )
+            # fail loud like every media input: a video the model never saw must not be answered
+            raise ValueError(
+                f"could not read any frames from the video ({why or 'empty output'}; "
+                "install ffmpeg or check the file)"
+            )
         # tmpdir was already eagerly registered above; don't append it a
         # second time (was a double entry in _temp_files).
         return frames
+
+    @staticmethod
+    def _opencv_frames(
+        video_path: str, tmpdir: str, fps: float, max_frames: int
+    ) -> None:
+        """Write up to `max_frames` JPEG frames, about `fps` per second, with OpenCV."""
+        try:
+            import cv2
+        except ImportError:
+            return
+        cap = cv2.VideoCapture(video_path)
+        try:
+            src_fps = cap.get(cv2.CAP_PROP_FPS) or 0.0
+            step = max(1, round(src_fps / fps)) if src_fps > 0 and fps > 0 else 1
+            i = written = 0
+            while written < max_frames:
+                ok, frame = cap.read()
+                if not ok:
+                    break
+                if i % step == 0:
+                    written += 1
+                    cv2.imwrite(os.path.join(tmpdir, f"frame_{written:04d}.jpg"), frame)
+                i += 1
+        finally:
+            cap.release()
 
     async def _save_base64_file(self, data: str, ext: str = "mp4") -> str:
         """Save base64-encoded data to a temp file."""
