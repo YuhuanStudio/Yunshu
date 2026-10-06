@@ -13,6 +13,17 @@ from pathlib import Path
 
 BUILD = "/Volumes/P5Plus/yunshu-build"
 MODEL_ROOTS = ("/Volumes/P5Plus/models", "/Volumes/Micron/models")
+# The M3 is the user's laptop: only these small correctness checkpoints may be copied
+# there (user 2026-10-06: "不要傳一堆模型 也不要污染我的筆電與空間"). Anything else fails
+# the job before any transfer; extend this list deliberately, never per job.
+M3_MODELS = frozenset(
+    {
+        "Qwen3.5-0.8B-MLX-bf16",
+        "Qwen3.5-2B-MLX-bf16",
+        "Qwen3.5-9B-MLX-4bit",
+        "Qwen2.5-3B-Instruct-4bit",
+    }
+)
 
 
 def config(env):
@@ -233,6 +244,11 @@ class Remote:
 
     def run(self):
         top, wt, pairs, models = paths(self.job, self.repo)
+        refused = sorted(Path(m).name for m in models if Path(m).name not in M3_MODELS)
+        if refused:
+            raise ValueError(
+                f"M3: checkpoints {refused} are not allowed on the laptop; allowed: {sorted(M3_MODELS)}"
+            )
         from gpuq_digest import output_paths
 
         outputs = [(str(p), mapped(p, pairs)) for p in output_paths(self.job)]

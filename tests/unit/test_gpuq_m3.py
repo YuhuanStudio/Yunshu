@@ -456,3 +456,33 @@ def test_legacy_daemon_cannot_misroute_remote_jobs(queue, monkeypatch, device):
 def test_default_m5_still_submits_to_legacy_daemon(queue, monkeypatch):
     monkeypatch.setattr(queue, "_daemon_running", lambda: True)
     assert queue.submit(["true"], "local", 1, 0)
+
+
+def test_only_allowlisted_checkpoints_reach_the_laptop(monkeypatch, tmp_path):
+    """A job naming a checkpoint outside M3_MODELS fails before any ssh/rsync."""
+    import types
+
+    import gpuq_remote
+
+    monkeypatch.setattr("subprocess.check_output", lambda *a, **k: "/src/wt\n")
+    calls = []
+    job = dict(
+        id="big",
+        cwd="/src/wt",
+        cmd=["python", "--model", "/Volumes/P5Plus/models/Qwen3.8-27B-oQ4e-mtp"],
+        env={},
+        timeout_s=60,
+        outputs=[],
+    )
+    api = types.SimpleNamespace(
+        ROOT=tmp_path, _write=lambda *a: None, _read=lambda p: {}
+    )
+    import pytest
+
+    with open(tmp_path / "log", "w") as log:
+        r = gpuq_remote.Remote(job, tmp_path / "j.json", api, log)
+        monkeypatch.setattr(r, "call", lambda *a, **k: calls.append(a))
+        monkeypatch.setattr(r, "sync", lambda *a, **k: calls.append(("sync",) + a))
+        with pytest.raises(ValueError, match="not allowed on the laptop"):
+            r.run()
+    assert calls == []  # refused before any ssh, push or rsync
