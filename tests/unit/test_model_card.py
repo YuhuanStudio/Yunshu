@@ -334,3 +334,29 @@ def test_ollama_show_ignores_loopback_server_tools():
         ollama_show(with_tools)["model_info"]["yunshu.card"]
         == ollama_show(wire)["model_info"]["yunshu.card"]
     )
+
+
+def test_vlm_with_an_audio_tower_accepts_audio(tmp_path):
+    """Gemma 4 E2B / E4B are served by the VLM runner with an audio tower: the card (and so the
+    request gate) must say audio goes in (2026-10-06 the contract answered 400 for input_audio)."""
+    cfg = {
+        "model_type": "gemma4",
+        "architectures": ["Gemma4ForConditionalGeneration"],
+        "audio_config": {"model_type": "gemma4_audio"},
+        "audio_token_id": 258881,
+        "video_token_id": 258884,
+        "image_token_id": 258880,
+        "text_config": {
+            "model_type": "gemma4_text",
+            "hidden_size": 8,
+            "num_hidden_layers": 1,
+        },
+        "vision_config": {"model_type": "gemma4_vision"},
+    }
+    (tmp_path / "config.json").write_text(json.dumps(cfg))
+    c = build_model_card(tmp_path)
+    assert "audio" in c.input_modalities, (c.kind, c.input_modalities)
+    assert c.output_modalities == ["text"]
+    cfg.pop("audio_config")
+    (tmp_path / "config.json").write_text(json.dumps(cfg))
+    assert "audio" not in build_model_card(tmp_path).input_modalities

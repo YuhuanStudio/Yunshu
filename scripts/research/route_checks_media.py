@@ -16,6 +16,18 @@ import wave
 from route_checks import Ctx, Fail, check, err_ok, expect
 
 SPEECH_TEXT = "Hello world. This is a test of the speech system."
+ZH_TEXT = "今天天气很好，我们一起去公园散步吧。"
+ZH_WORDS = (
+    "weather",
+    "park",
+    "walk",
+    "today",
+    "nice",
+    "good",
+    "beautiful",
+    "sunny",
+    "stroll",
+)
 
 # ── pure helpers ─────────────────────────────────────────────────────────────────────────
 
@@ -141,6 +153,16 @@ def _tts(c: Ctx):
     expect(1.0 <= secs <= 20.0, f"duration {secs:.1f}s for a 9-word sentence")
     expect(peak > 1000, f"audio is silent (peak {peak})")
     c.shared["tts_wav"] = r.content
+    zh = c.req(
+        "POST",
+        "/v1/audio/speech",
+        json={**_speech_body(c), "input": ZH_TEXT, "response_format": "wav"},
+        timeout=600,
+    )
+    expect(zh.status_code == 200, f"chinese speech {zh.status_code} {zh.text[:200]}")
+    _, zsecs, zpeak = wav_info(zh.content)
+    expect(zsecs >= 1.0 and zpeak > 1000, f"chinese speech {zsecs:.1f}s peak {zpeak}")
+    c.shared["tts_wav_zh"] = zh.content
     c.notes["tts"] = f"{secs:.1f}s @ {rate} Hz, peak {peak}"
     # the OpenAI SDK path (typed client, binary body)
     s = c.oa.audio.speech.create(
@@ -532,3 +554,54 @@ def _asr_translations(c: Ctx):
             tr.status_code == 501, f"translations -> {tr.status_code} {tr.text[:100]}"
         )  # non-Whisper: documented 501
         c.notes["asr_translations"] = f"501: {tr.text[:100]}"
+
+
+def cjk_ratio(text: str) -> float:
+    """Share of CJK / kana / hangul characters among the letters of `text` (0 for no letters)."""
+    letters = [ch for ch in text if ch.isalpha()]
+    if not letters:
+        return 0.0
+    return sum(1 for ch in letters if ord(ch) > 0x2E80) / len(letters)
+
+
+@check(
+    "whisper_translations",
+    "POST /v1/audio/translations",
+    needs="translate",
+    served=True,
+)
+def _whisper_translations(c: Ctx):
+    """Chinese speech (made by Qwen3-TTS) in, English text out, judged loosely: non-empty, mostly
+    Latin letters, and at least one word of what was said (weather / park / walk ...)."""
+    wav = c.shared.get("tts_wav_zh")
+    expect(wav, "needs the Chinese TTS output of the tts check")
+    r = c.req(
+        "POST",
+        "/v1/audio/translations",
+        data={"model": c.model},
+        files={"file": ("zh.wav", wav, "audio/wav")},
+        timeout=900,
+    )
+    expect(r.status_code == 200, f"translations {r.status_code} {r.text[:200]}")
+    text = (r.json().get("text") or "").strip()
+    c.notes["translation_json"] = text[:160]
+    expect(text, "translation without text")
+    expect(cjk_ratio(text) < 0.2, f"not English: {text!r}")
+    expect(
+        any(w in text.lower() for w in ZH_WORDS),
+        f"translation misses the content: {text!r}",
+    )
+    # the SDK's typed client, and the text response format
+    t = c.oa.audio.translations.create(model=c.model, file=("zh.wav", wav, "audio/wav"))
+    expect(t.text.strip() and cjk_ratio(t.text) < 0.2, f"sdk translation {t.text!r}")
+    p = c.req(
+        "POST",
+        "/v1/audio/translations",
+        data={"model": c.model, "response_format": "text"},
+        files={"file": ("zh.wav", wav, "audio/wav")},
+        timeout=900,
+    )
+    expect(
+        p.status_code == 200 and p.text.strip(),
+        f"text format {p.status_code} {p.text[:100]}",
+    )

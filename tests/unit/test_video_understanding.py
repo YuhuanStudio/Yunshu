@@ -152,9 +152,9 @@ class TestVideoFrameExtraction:
                 ],
             }
         ]
-        # This will fail to extract frames (not a real video) but should not crash
-        frames = await engine._extract_video_frames(messages)
-        assert isinstance(frames, list)
+        # not a real video: loud ValueError (the model must not answer about a video it never saw)
+        with pytest.raises(ValueError, match="frames"):
+            await engine._extract_video_frames(messages)
 
     @pytest.mark.asyncio
     async def test_extract_nonexistent_file(self):
@@ -247,8 +247,8 @@ class TestFFmpegExtraction:
     @pytest.mark.asyncio
     async def test_extract_from_nonexistent_video(self):
         engine = _make_engine()
-        frames = await engine._extract_frames_from_file("/nonexistent/file.mp4")
-        assert frames == []
+        with pytest.raises(ValueError, match="frames"):
+            await engine._extract_frames_from_file("/nonexistent/file.mp4")
 
     @pytest.mark.asyncio
     async def test_extract_from_empty_file(self):
@@ -257,9 +257,8 @@ class TestFFmpegExtraction:
         tmp.write(b"not a real video")
         tmp.close()
         try:
-            frames = await engine._extract_frames_from_file(tmp.name)
-            # ffmpeg will fail on invalid data, should return empty
-            assert isinstance(frames, list)
+            with pytest.raises(ValueError, match="frames"):
+                await engine._extract_frames_from_file(tmp.name)
         finally:
             os.unlink(tmp.name)
 

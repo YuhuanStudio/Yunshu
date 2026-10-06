@@ -668,3 +668,42 @@ class TestFinishVLMLoad:
                 engine._finish_vlm_load("/models/qwen3-omni")
                 # Should survive — _processor stays None
                 assert engine._processor is None
+
+
+class TestProcessorThatCountsAudiosItself:
+    def test_gemma4_style_processor_gets_no_duplicate_num_audios(self):
+        """Gemma4Processor.apply_chat_template counts the audio parts and passes num_audios to
+        the shared helper itself; Yunshu also passed it, so every audio request was a 500
+        ("got multiple values for keyword argument 'num_audios'") on a real Gemma 4 E2B server."""
+        engine = VLMEngine("/models/gemma-4-e2b-it-4bit")
+
+        def helper(messages, add_generation_prompt=True, num_audios=0, **kw):
+            return f"tpl audios={num_audios}"
+
+        class Proc:
+            def apply_chat_template(self, messages, **kwargs):
+                n = sum(
+                    1
+                    for m in messages
+                    for p in (m["content"] if isinstance(m["content"], list) else [])
+                    if p.get("type") == "audio"
+                )
+                return helper(messages, num_audios=n, **kwargs)
+
+        engine._processor = Proc()
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "what?"},
+                    {
+                        "type": "input_audio",
+                        "input_audio": {"data": "AAAA", "format": "wav"},
+                    },
+                ],
+            }
+        ]
+        assert (
+            engine._apply_vlm_template_with_cache(messages, num_audios=1)
+            == "tpl audios=1"
+        )

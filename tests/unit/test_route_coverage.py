@@ -82,7 +82,19 @@ def test_checks_are_well_formed():
     assert rc.REGISTRY
     for name, chk in rc.REGISTRY.items():
         assert chk.name == name and callable(chk.fn)
-        assert chk.needs in ("main", "multi", "tts", "asr", "ocr", "image", "embed")
+        assert chk.needs in (
+            "main",
+            "multi",
+            "tts",
+            "asr",
+            "ocr",
+            "image",
+            "embed",
+            "translate",
+            "omni",
+            "cascade",
+            "native",
+        )
         assert chk.routes, f"{name} covers no route"
         for r in chk.routes:
             method, _, path = r.partition(" ")

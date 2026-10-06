@@ -3337,6 +3337,14 @@ class RealtimeSession:
                                     item=item.to_dict(),
                                 )
                             )
+                            await self.send_event(
+                                _event(
+                                    RealtimeEvent.CONVERSATION_ITEM_INPUT_AUDIO_TRANSCRIPTION_COMPLETED,
+                                    item_id=item.item_id,
+                                    content_index=0,
+                                    transcript=text,
+                                )
+                            )
                         break
             if not asr_found and not _omni_realtime_active():
                 # No transcribe-capable engine loaded — emit an error event so
@@ -3572,10 +3580,16 @@ class RealtimeSession:
                     if entry.is_loaded and entry.engine is not None:
                         if getattr(entry, "model_id", None) == self.session.model:
                             return entry.engine
-            # Fall back to first loaded engine
+            # Fall back to the first loaded CHAT engine: an ASR / TTS model loaded beside it (the
+            # voice cascade) has no generate_stream and must never answer the conversation
             for entry in manager.list_entries():
-                if entry.is_loaded and entry.engine is not None:
-                    return entry.engine
+                eng = entry.engine
+                if (
+                    entry.is_loaded
+                    and eng is not None
+                    and (hasattr(eng, "generate_stream") or hasattr(eng, "stream_chat"))
+                ):
+                    return eng
 
         # Single engine
         engine = get_engine()

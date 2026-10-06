@@ -471,7 +471,17 @@ def _modalities(
     if kind == "chat":
         return ["text"], ["text"]
     if kind == "vlm":
-        return (["text", "image"] + (["video"] if has_video else []), ["text"])
+        # Gemma 4 E2B / E4B: a VLM with an audio tower (audio_config + audio_token_id)
+        has_audio = (
+            isinstance(config.get("audio_config"), dict)
+            and config.get("audio_token_id") is not None
+        )
+        return (
+            ["text", "image"]
+            + (["audio"] if has_audio else [])
+            + (["video"] if has_video else []),
+            ["text"],
+        )
     if kind == "omni":
         outs = ["text"] + (["audio"] if "talker_config" in config else [])
         ins = ["text", "image", "audio"] + (["video"] if has_video else [])

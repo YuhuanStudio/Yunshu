@@ -435,3 +435,32 @@ async def test_response_input_reaches_the_prompt_and_is_out_of_band():
     await s._active_response
     assert "PINEAPPLE" in str(engine.prompt) and "BANANA" not in str(engine.prompt)
     assert len(s.conversation.items) == 1  # out of band: nothing appended
+
+
+def test_commit_reports_the_input_transcript_event():
+    """The cascade transcribed the committed audio into a user item but never sent
+    conversation.item.input_audio_transcription.completed, so a client could not show what it
+    heard (the voice-cascade check on a real Gemma 4 + Qwen3-ASR server saw no transcript)."""
+    from unittest.mock import patch
+
+    class Asr:
+        async def transcribe(self, path):
+            return {"text": "the secret word is pineapple"}
+
+    entry = SimpleNamespace(is_loaded=True, engine=Asr(), model_id="asr")
+    mgr = SimpleNamespace(list_entries=lambda: [entry])
+    s, sent = _session("beta")
+    s._audio_buffer = bytearray(b"\x01\x00" * 4800)
+    with patch("yunshu_gateway.engine.get_model_manager", return_value=mgr):
+        assert asyncio.run(s._handle_input_audio_buffer_commit({})) is True
+    types = _types(sent)
+    assert "conversation.item.input_audio_transcription.completed" in types, types
+    done = next(
+        e
+        for e in sent
+        if e["type"] == "conversation.item.input_audio_transcription.completed"
+    )
+    created = next(e for e in sent if e["type"] == "conversation.item.created")
+    assert done["transcript"] == "the secret word is pineapple"
+    assert done["item_id"] == created["item"]["id"]
+    assert done["content_index"] == 0

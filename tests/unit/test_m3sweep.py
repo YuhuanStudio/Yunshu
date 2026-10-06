@@ -116,6 +116,9 @@ def test_plan_and_verdict(tmp_path):
         "Qwen3.5-2B-MLX-bf16",
         "Qwen3.5-9B-MLX-4bit",
         "Qwen2.5-3B-Instruct-4bit",
+        "gemma-4-e2b-it-4bit",
+        "Qwen3-TTS-12Hz-1.7B-VoiceDesign-bf16",
+        "Qwen3-ASR-1.7B-bf16",
     }
     for j in d.plan("a", tmp_path):
         used = {
@@ -179,9 +182,14 @@ def test_every_job_argv_parses(tmp_path):
         argv = j["cmd"]
         assert argv[1] == d.JOBS_PY
         ns = jobs.build_parser().parse_args(argv[2:])
-        assert ns.cmd in ("env", "wire", "agent", "units", "routes") and ns.out == str(
-            j["out"]
-        )
+        assert ns.cmd in (
+            "env",
+            "wire",
+            "agent",
+            "units",
+            "routes",
+            "omni",
+        ) and ns.out == str(j["out"])
         assert (tmp_path / "x").parent == tmp_path  # plan is pure: nothing created
         assert all(
             Path(m).is_absolute()

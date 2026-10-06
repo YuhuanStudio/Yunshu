@@ -61,8 +61,6 @@ def check(name: str, *routes: str, served: bool, needs: str = "main"):
 # Routes that have no real-server check, each with the reason. Keep this list short: a route
 # belongs here only when no server run (with the four small checkpoints) can exercise it.
 EXEMPT: dict[str, str] = {
-    "POST /v1/omni/speech/stream": "needs a Qwen3-Omni checkpoint (30B); owned by the omnismall line",
-    "POST /v1/audio/translations": "only a Whisper-family model translates; whisper-large-v3 is not on the M3 allowlist (Qwen3-ASR answers 501, checked as an error path)",
     "POST /api/pull": "documented 501 by design: models are managed with `yunshu pull`",
     "POST /api/push": "documented 501 by design: nothing to push to",
     "POST /api/create": "documented 501 by design",
@@ -76,10 +74,15 @@ def checked_routes() -> set[str]:
     return {r for c in REGISTRY.values() for r in c.routes}
 
 
-def served_routes() -> set[str]:
+def served_routes(exclude_needs: tuple[str, ...] = ()) -> set[str]:
     """Routes with at least one SERVED check: a model that has the capability, a successful
     response, validated content. An absent-capability / error-path check never counts."""
-    return {r for c in REGISTRY.values() if c.served for r in c.routes}
+    return {
+        r
+        for c in REGISTRY.values()
+        if c.served and c.needs not in exclude_needs
+        for r in c.routes
+    }
 
 
 # ── context ──────────────────────────────────────────────────────────────────────────────
@@ -101,6 +104,9 @@ class Ctx:
         default_factory=dict
     )  # kept across the servers of one job (TTS -> ASR)
     fake: Any = None  # FakeBackend (search / MCP / page on loopback), multi server only
+    fixtures: dict = field(
+        default_factory=dict
+    )  # omni jobs: "speech_wav" bytes, "phrase"
 
     downgraded: bool = (
         False  # a served check that ran down an error path on this server
@@ -2007,6 +2013,9 @@ def _web_search_unconfigured(c: Ctx):
 
 from route_checks_media import (
     wav_info,  # noqa: E402,F401  registers the modality checks
+)
+from route_checks_omni import (
+    _omni_audio_in,  # noqa: E402,F401  registers the omni input / speech-out checks
 )
 from route_checks_tools import (
     FakeBackend,  # noqa: E402,F401  registers the server-tool checks
