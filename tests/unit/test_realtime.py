@@ -220,6 +220,36 @@ class TestRealtimeSession:
         ):
             assert session._resolve_engine() is None
 
+    def test_resolve_engine_never_picks_an_asr_or_tts_engine_for_chat(self):
+        """With a chat model, an ASR and a TTS loaded side by side (the voice cascade), the
+        socket answered "'ASREngine' object has no attribute 'generate_stream'": the fallback
+        took the first loaded engine whatever it was."""
+        from types import SimpleNamespace
+        from unittest.mock import patch
+
+        class Asr:
+            async def transcribe(self, path):
+                return ""
+
+        class Chat:
+            async def generate_stream(self, **kw):
+                yield None
+
+        asr, chat = Asr(), Chat()
+        entries = [
+            SimpleNamespace(is_loaded=True, engine=asr, model_id="asr"),
+            SimpleNamespace(is_loaded=True, engine=chat, model_id="gemma"),
+        ]
+        mgr = SimpleNamespace(list_entries=lambda: entries)
+        for name in ("default", "no-such-model", "gemma"):
+            session = RealtimeSession.__new__(RealtimeSession)
+            session.session = SimpleNamespace(model=name)
+            with (
+                patch("yunshu_gateway.engine.get_model_manager", return_value=mgr),
+                patch("yunshu_gateway.engine.get_engine", return_value=None),
+            ):
+                assert session._resolve_engine() is chat, name
+
     def test_item_truncate_trims_assistant_audio_transcript(self):
         """conversation.item.truncate must actually trim what the model
         re-sees after a barge-in. The assistant audio reply is stored as an audio

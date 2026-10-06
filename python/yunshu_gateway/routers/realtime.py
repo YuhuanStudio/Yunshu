@@ -3572,10 +3572,16 @@ class RealtimeSession:
                     if entry.is_loaded and entry.engine is not None:
                         if getattr(entry, "model_id", None) == self.session.model:
                             return entry.engine
-            # Fall back to first loaded engine
+            # Fall back to the first loaded CHAT engine: an ASR / TTS model loaded beside it (the
+            # voice cascade) has no generate_stream and must never answer the conversation
             for entry in manager.list_entries():
-                if entry.is_loaded and entry.engine is not None:
-                    return entry.engine
+                eng = entry.engine
+                if (
+                    entry.is_loaded
+                    and eng is not None
+                    and (hasattr(eng, "generate_stream") or hasattr(eng, "stream_chat"))
+                ):
+                    return eng
 
         # Single engine
         engine = get_engine()
