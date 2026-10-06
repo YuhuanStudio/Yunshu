@@ -283,6 +283,8 @@ class EngineStreamMixin:
         _tool_processor = (
             self._tool_call_processor(input_ids) if json_schema is None else None
         )
+        # read here (request task): the contextvar does not reach the MLX executor thread
+        _tools_declared = bool(_engine._REQUEST_TOOLS.get())
         if repetition_penalty != 1.0:
 
             def _repetition_penalty(tokens, logits, rp=repetition_penalty, ctx=20):
@@ -557,6 +559,11 @@ class EngineStreamMixin:
             # unaffected.
             # resolve via the bracketed-form helper (the bare "</think" encoded to
             # 2 tokens for Qwen3/DeepSeek-R1 → guard failed → CoT leaked into content).
+            _tool_marker = None
+            if _tools_declared:
+                from .reasoning_parser import tool_call_marker_id
+
+                _tool_marker = tool_call_marker_id(tokenizer)
             think_start_token, think_end_token = _engine._resolve_think_token_ids(
                 tokenizer
             )
@@ -876,6 +883,16 @@ class EngineStreamMixin:
                                 self._lookahead_reasoning.check_thinking_state_text(
                                     "</think"
                                 )
+                    # A tool call opened inside unclosed reasoning ends the reasoning
+                    # (vLLM Qwen3ReasoningParser / SGLang Qwen3 detector); else the call
+                    # is delivered as reasoning text and the client never sees it.
+                    if (
+                        _in_thinking
+                        and _tool_marker is not None
+                        and token == _tool_marker
+                        and not (stop_hit or suffix_hit)
+                    ):
+                        _in_thinking = False
                     # Thinking budget enforcement in streaming.
                     # Only force-append think_end_token + add to detokenizer
                     # if the current token is NOT already the natural closing tag.

@@ -22,9 +22,9 @@ from .core import (
     InfraError,
     RunDir,
     git,
-    resolve_arm,
     now,
     read_jsonl,
+    resolve_arm,
     write_json_atomic,
 )
 
@@ -85,7 +85,9 @@ def long_base(repo: Path) -> str:
     being tagged means the release under test, so the tag before it), else origin/main."""
     for rev in ("HEAD", "HEAD^"):
         try:
-            tag = git("describe", "--tags", "--abbrev=0", "--match", "v*", rev, cwd=repo)
+            tag = git(
+                "describe", "--tags", "--abbrev=0", "--match", "v*", rev, cwd=repo
+            )
         except Exception:  # noqa: BLE001 - no tag reachable
             continue
         if tag and git("rev-parse", tag + "^{commit}", cwd=repo) != git(
@@ -104,7 +106,11 @@ def judge_long(verdict: dict | None, planned: list) -> tuple[bool, list]:
     if verdict.get("overall") != "PASS" or verdict.get("exit_code") != 0:
         bad.append(
             f"yv verdict {verdict.get('overall')} exit {verdict.get('exit_code')}"
-            + (f": {verdict['infra_error'][:120]}" if verdict.get("infra_error") else "")
+            + (
+                f": {verdict['infra_error'][:120]}"
+                if verdict.get("infra_error")
+                else ""
+            )
         )
     got = {s.get("name"): s for s in verdict.get("stages", [])}
     for name in planned:
@@ -203,7 +209,9 @@ def run_gate(
         if name == "long":
             model = env.get("M", "")
             base = env.get("GATE_LONG_BASE") or long_base(repo)
-            log(f"gate long: yv --suite {LONG_SUITE} base {base} cand HEAD {commit[:12]}")
+            log(
+                f"gate long: yv --suite {LONG_SUITE} base {base} cand HEAD {commit[:12]}"
+            )
             if not model or not Path(model).is_dir():
                 ok, reasons, where = (
                     False,
@@ -214,9 +222,22 @@ def run_gate(
                 ok, reasons, where = run_long_stage(
                     {"base": base, "model": model}, gq, log, runs, repo, priority
                 )
-            rd.append(name, {"ev": "stage_complete", "passed": ok, "reasons": reasons, "job": where})
+            rd.append(
+                name,
+                {
+                    "ev": "stage_complete",
+                    "passed": ok,
+                    "reasons": reasons,
+                    "job": where,
+                },
+            )
             results.append(
-                {"name": name, "status": "PASS" if ok else "FAIL", "reasons": reasons, "job": where}
+                {
+                    "name": name,
+                    "status": "PASS" if ok else "FAIL",
+                    "reasons": reasons,
+                    "job": where,
+                }
             )
             log(f"gate long: {'PASS' if ok else 'FAIL'} {'; '.join(reasons)[:300]}")
             if not ok:

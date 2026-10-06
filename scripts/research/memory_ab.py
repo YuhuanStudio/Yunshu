@@ -74,10 +74,20 @@ def metrics(url):
         if line.startswith("#") or " " not in line:
             continue
         key, val = line.rsplit(" ", 1)
-        if key.startswith("yunshu_gpu_memory_bytes") or "apc_resident_bytes" in key:
+        if (
+            key.startswith("yunshu_gpu_memory_bytes")
+            or "apc_resident_bytes" in key
+            or key.startswith("yunshu_process_footprint_bytes")
+        ):
             with contextlib.suppress(ValueError):
                 out[key] = round(float(val) / GIB, 3)
     return out
+
+
+def server_peak_gib(m):
+    """Peak footprint from the server's own 20 ms sampler (None when it is not exported)."""
+    v = m.get('yunshu_process_footprint_bytes{type="peak"}')
+    return None if v is None else v  # metrics() already reports GiB
 
 
 def chat(url, messages, max_tokens):
@@ -100,6 +110,7 @@ def run_arm(name, tree, model, port, rep, emit, extra_env=None):
         YUNSHU_AUTH_DISABLED="1",
         YUNSHU_DEBUG_ROUTES="1",
         YUNSHU_VLM_APC_DISK="0",
+        YUNSHU_FOOTPRINT_SAMPLE_MS="20",
     )
     env.update(extra_env or {})
     log = open(f"{os.path.splitext(OUT)[0]}_{name}_{rep}.log", "w")  # noqa: SIM115
@@ -184,17 +195,22 @@ def run_arm(name, tree, model, port, rep, emit, extra_env=None):
             tl = timeline[:] if "turn" in step else None
             if tl is not None:
                 timeline.clear()
+            mm = metrics(url)
+            sp = server_peak_gib(mm)
             emit(
                 dict(
                     arm=name,
                     rep=rep,
                     step=step,
                     footprint_gib=round(fp / GIB, 3),
-                    peak_footprint_gib=round(peak[0] / GIB, 3),
+                    # old field: the larger of the 0.2 s external sampler and the 20 ms in-server one
+                    peak_footprint_gib=round(max(peak[0] / GIB, sp or 0.0), 3),
+                    peak_external_gib=round(peak[0] / GIB, 3),
+                    peak_server_gib=sp,
                     usage=usage,
                     secs=None if secs is None else round(secs, 3),
                     timeline=tl,
-                    **metrics(url),
+                    **mm,
                 )
             )
 

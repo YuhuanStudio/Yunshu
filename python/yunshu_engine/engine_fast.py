@@ -579,6 +579,8 @@ class EngineFastMixin:
         _tool_processor = (
             self._tool_call_processor(input_ids) if json_schema is None else None
         )
+        # read here (request task): the contextvar does not reach the MLX executor thread
+        _tools_declared = bool(_engine._REQUEST_TOOLS.get())
         if repetition_penalty != 1.0:
 
             def _rep_penalty(tokens, logits, rp=repetition_penalty, ctx=20):
@@ -1658,8 +1660,19 @@ class EngineFastMixin:
             _reasoning_tok = len(_thinking_tokens)
             if output_text:
                 try:
-                    from .reasoning_parser import get_reasoning_parser
+                    from .reasoning_parser import (
+                        close_reasoning_at_tool_call,
+                        get_reasoning_parser,
+                    )
 
+                    if _tools_declared:
+                        # a tool call opened inside unclosed reasoning ends the reasoning
+                        from .thinking_budget import detect_needs_think_prefix
+
+                        output_text = close_reasoning_at_tool_call(
+                            output_text,
+                            detect_needs_think_prefix(list(input_ids), tokenizer),
+                        )
                     rp = get_reasoning_parser(self.model_name)
                     rp_out = rp.parse(output_text)
                     if rp_out.reasoning:

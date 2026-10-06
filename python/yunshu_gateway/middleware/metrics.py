@@ -242,6 +242,13 @@ class _Metrics:
         except Exception:
             logger.debug("GPU memory stats unavailable", exc_info=True)
 
+        try:
+            from yunshu_engine import footprint_sampler
+
+            lines.extend(footprint_sampler.metric_lines())
+        except Exception:
+            logger.debug("footprint sampler metrics unavailable", exc_info=True)
+
         # Engine stats (if available)
         try:
             from yunshu_gateway.engine import get_engine, get_model_manager

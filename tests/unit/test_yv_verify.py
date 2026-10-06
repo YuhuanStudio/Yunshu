@@ -896,7 +896,9 @@ def test_judge_long_fails_closed():
     assert not gate.judge_long(None, stg)[0]
     missing = dict(good, stages=good["stages"][:1])
     assert not gate.judge_long(missing, stg)[0]
-    notrun = dict(good, stages=[good["stages"][0], {"name": "longqa", "status": "NOT_RUN"}])
+    notrun = dict(
+        good, stages=[good["stages"][0], {"name": "longqa", "status": "NOT_RUN"}]
+    )
     assert not gate.judge_long(notrun, stg)[0]
     assert not gate.judge_long(dict(good, overall="INCOMPLETE", exit_code=2), stg)[0]
     assert not gate.judge_long(dict(good, exit_code=1), stg)[0]

@@ -114,6 +114,7 @@ internal ones, `--json` prints JSON, `--config FILE` includes a config file.
 
 | Setting | Type | Default | Description |
 |---|---|---|---|
+| `YUNSHU_FOOTPRINT_SAMPLE_MS` | int | 0 | Sample this process's phys_footprint every N ms on a background thread and export the peak as yunshu_process_footprint_bytes on /metrics (the memory benchmarks set 20). 0 (default) = off. |
 | `YUNSHU_MAX_MEMORY_GB` | gb | unset | Multi-model mode memory ceiling in GiB, e.g. '48' or '48GB'; 'disabled' turns the enforcer off. Unset: 80% of unified memory. |
 | `YUNSHU_PREFILL_STEP_SIZE` | int | 2048 | Text engine: prompt tokens per prefill forward pass; lower it to cap the prefill activation peak on small-memory machines. |
 | `YUNSHU_MEM_PRESSURE_THRESHOLD` | float | 85.0 | Text engine: evict prefix-cache entries above this memory use (percent, or a fraction <= 1). |
