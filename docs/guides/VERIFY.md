@@ -90,6 +90,24 @@ and below 1.0 (the in-process side is the noisy one), so there is no server gap.
 alternates which side goes first, takes the median of 5, and fails on a geometric mean below
 0.965 or a single case below 0.90; a systematic 5% serving overhead still fails.
 
+## `m3sweep` (correctness on the M3 lane)
+
+```bash
+scripts/dev/m3sweep [REF] [--only wire,agent,units] [--with-27b] [--dry-run] [--no-wait]
+scripts/dev/m3sweep --collect DIR      # judge a --no-wait run later
+```
+
+Submits `m3lane-sweep-*` jobs to the gpuq M3 lane for HEAD (or REF) and writes one
+`/Volumes/P5Plus/yunshu-build/m3sweep/<sha>-<time>/verdict.json` (PASS/FAIL, exit code). Jobs:
+`wire` runs the SDK wire-contract matrix (OpenAI chat / completions / responses, Anthropic
+messages, Ollama; stream and non-stream; tools, tool_choice, parallel off, JSON schema, stop,
+truncation, usage invariants, error shapes) against a real server on Qwen2.5-3B (text path),
+Qwen3.5-0.8B and Qwen3.5-9B-4bit (VLM runner); `agent` runs the covaudit tool session and
+concurrent-vs-solo identity on Qwen3.5-2B and Qwen2.5-3B; `units` runs the unit files that skip
+without small checkpoints (tests find them through `tests/unit/model_paths.py`, which honours
+`M3_MODELS`). Fail closed: a missing or incomplete output, a failed job, a wrong device or any
+mismatch is FAIL. The M3 is portability / correctness evidence only: no timing, no tok/s.
+
 ## Adding a new kind of measurement
 
 Ad-hoc scripts are for measurements `yv` does not cover. Put them in `scripts/research/` with a CPU
