@@ -914,8 +914,13 @@ def test_gate_long_stage_runs_suite_and_fails_closed(gate_world, monkeypatch):
     )
     assert "long" in gate.DEFAULT_STAGES
     assert run_gate(w, stages=["long"]) == 0
-    v = json.loads(next(w.runs.glob("gate-*")).joinpath("verdict.json").read_text())
-    assert v["stages"][0]["name"] == "long" and v["stages"][0]["status"] == "PASS"
+    # gate_world is shared across tests: pick this run's verdict, not another gate's
+    verdicts = [
+        json.loads(d.joinpath("verdict.json").read_text())
+        for d in w.runs.glob("gate-*")
+    ]
+    v = next(v for v in verdicts if [s["name"] for s in v["stages"]] == ["long"])
+    assert v["stages"][0]["status"] == "PASS"
     # a stage that never produced a verdict (no model) fails the gate
     monkeypatch.setattr(gate, "local_env", lambda: {"GATE_ROOT": str(w.tmp / "g2")})
     assert run_gate(w, stages=["long"], resume=False) == 1
