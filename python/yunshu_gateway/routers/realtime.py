@@ -3337,6 +3337,14 @@ class RealtimeSession:
                                     item=item.to_dict(),
                                 )
                             )
+                            await self.send_event(
+                                _event(
+                                    RealtimeEvent.CONVERSATION_ITEM_INPUT_AUDIO_TRANSCRIPTION_COMPLETED,
+                                    item_id=item.item_id,
+                                    content_index=0,
+                                    transcript=text,
+                                )
+                            )
                         break
             if not asr_found and not _omni_realtime_active():
                 # No transcribe-capable engine loaded — emit an error event so
