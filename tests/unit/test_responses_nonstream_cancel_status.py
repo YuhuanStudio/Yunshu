@@ -28,7 +28,7 @@ def test_nonstream_status_checks_cancel_event_first():
     # and on a set cancel event it resolves to incomplete (mirrors the streaming fix)
     assert "if _ns_cancel_event is not None and _ns_cancel_event.is_set():" in src
     j = src.index("if _ns_cancel_event is not None and _ns_cancel_event.is_set():")
-    assert '"incomplete"' in src[j : j + 120]
+    assert '"cancelled"' in src[j : j + 140]
 
 
 def test_streaming_path_still_has_cancel_first_check_parity():

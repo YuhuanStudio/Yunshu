@@ -25,6 +25,7 @@ from yunshu_engine import settings
 from yunshu_engine.audio_engine import list_voices as _list_tts_voices
 
 from ..engine import get_model_manager
+from ..model_guards import wrong_modality_detail
 
 logger = logging.getLogger(__name__)
 
@@ -549,7 +550,8 @@ async def create_speech(request: Request) -> Response:
         if not isinstance(tts_engine, TTSEngine):
             raise HTTPException(
                 status_code=404,
-                detail=f"No TTS engine available for '{req.model}'",
+                detail=wrong_modality_detail("tts", req.model)
+                or f"No TTS engine available for '{req.model}'",
             )
 
     # OpenAI default response_format is `mp3`. Prior code
@@ -644,9 +646,12 @@ async def stream_speech(req: TTSRequest, request: Request):
     if tts_engine is None:
         raise HTTPException(
             status_code=404,
-            detail=f"TTS model '{req.model}' not found."
-            if req.model
-            else "No TTS engine available",
+            detail=wrong_modality_detail("tts", req.model)
+            or (
+                f"TTS model '{req.model}' not found."
+                if req.model
+                else "No TTS engine available"
+            ),
         )
 
     # advertise the model's REAL output rate (was hardcoded 24000
@@ -836,7 +841,7 @@ async def create_transcription(
 
     asr_engine = _select_audio_engine(manager, model, ASREngine)
 
-    if asr_engine is None:
+    if asr_engine is None and manager is not None:
         try:
             asr_engine = await manager.get_engine(model)
         except (KeyError, Exception) as e:
@@ -847,7 +852,11 @@ async def create_transcription(
             ) from None
 
     if not isinstance(asr_engine, ASREngine):
-        raise HTTPException(status_code=404, detail=f"No ASR engine for '{model}'")
+        raise HTTPException(
+            status_code=404,
+            detail=wrong_modality_detail("asr", model)
+            or f"No ASR engine for '{model}'",
+        )
 
     # Save uploaded file to temp location
     content = await file.read()
@@ -977,7 +986,11 @@ async def create_translation(
         with contextlib.suppress(Exception):
             asr_engine = await manager.get_engine(model)
     if not isinstance(asr_engine, ASREngine):
-        raise HTTPException(status_code=404, detail=f"ASR model '{model}' not found.")
+        raise HTTPException(
+            status_code=404,
+            detail=wrong_modality_detail("asr", model)
+            or f"ASR model '{model}' not found.",
+        )
 
     # Gate on a translate-capable (Whisper-family) model — task="translate" is a Whisper
     # feature. Detect via the loaded model path / requested id.

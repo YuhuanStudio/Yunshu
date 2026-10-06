@@ -474,6 +474,30 @@ def _patch_event(
     return "\n".join(lines).encode("utf-8")
 
 
+def count_state_items(req, request: Request) -> tuple[list[dict], str | None]:
+    """The input items a stateful request would send (conversation items first, compaction items
+    expanded) and its remaining ``previous_response_id``, without generating or writing anything:
+    what ``POST /v1/responses/input_tokens`` counts. Raises ``ContextError`` / ``ConversationError``
+    like generation."""
+    conv_id = _conversation_id(req)
+    if conv_id and req.previous_response_id:
+        raise ContextError(
+            400,
+            "conversation cannot be combined with previous_response_id",
+            "invalid_request",
+            "conversation",
+        )
+    conv_items: list[dict] = []
+    if conv_id:
+        try:
+            conv_items = _window(get_store().all_items(conv_id))
+        except ConversationError as exc:
+            exc.param = "conversation"
+            raise
+    items = expand_compaction_items(conv_items + request_items(req))
+    return items, req.previous_response_id
+
+
 async def run_stateful_response(req, request: Request, inner):
     """Wrapper called from ``create_response``; ``inner`` is ``create_response`` itself."""
     from .routers.models import _check_permission

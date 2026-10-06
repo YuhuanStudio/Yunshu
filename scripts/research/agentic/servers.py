@@ -16,7 +16,11 @@ import time
 import urllib.request
 from pathlib import Path
 
-PORT_RANGE = range(18990, 19000)
+# 18990-18999 unless AGENTIC_PORT_LO / AGENTIC_PORT_HI narrow it (a worker limited to a few ports)
+PORT_RANGE = range(
+    int(os.environ.get("AGENTIC_PORT_LO", "18990")),
+    int(os.environ.get("AGENTIC_PORT_HI", "18999")) + 1,
+)
 YUNSHU_MAIN = Path(
     os.environ.get("YUNSHU_MAIN", "/Users/yuhuan/Documents/YuhuanStudio/Yunshu")
 )

@@ -13,6 +13,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field, model_validator
 
 from ..engine import get_model_manager
+from ..model_guards import wrong_modality_detail
 from ..streaming import run_with_disconnect_guard  # non-streaming cancel
 
 logger = logging.getLogger(__name__)
@@ -187,7 +188,8 @@ async def create_image(req: ImageGenerateRequest, request: Request) -> JSONRespo
     if img_engine is None:
         raise HTTPException(
             status_code=404,
-            detail=f"Image generation model '{req.model}' not found",
+            detail=wrong_modality_detail("image", req.model)
+            or f"Image generation model '{req.model}' not found",
         )
 
     # Parse size — reject malformed values rather than silently fall back so
@@ -334,7 +336,9 @@ async def stream_image_generation(req: ImageGenerateRequest, request: Request):
 
     if img_engine is None:
         raise HTTPException(
-            status_code=404, detail="No image generation engine available"
+            status_code=404,
+            detail=wrong_modality_detail("image", req.model)
+            or "No image generation engine available",
         )
 
     # Parse and validate size — reject malformed values rather than silently
@@ -465,18 +469,60 @@ class ImageVariationsRequest(BaseModel):
         return self
 
 
+async def _image_request(request: Request, cls):
+    """Body of an image edit / variation: multipart/form-data like the OpenAI API and its SDKs send
+    (`image` file, `prompt`, `n`, `size`, ...), or JSON with a base64 `image` (Yunshu's original
+    shape). The mask and other files are ignored."""
+    import base64
+
+    from fastapi.exceptions import RequestValidationError
+    from pydantic import ValidationError
+
+    ctype = request.headers.get("content-type", "").lower()
+    if ctype.startswith(("multipart/form-data", "application/x-www-form-urlencoded")):
+        data: dict = {}
+        for key, val in (await request.form()).multi_items():
+            if hasattr(val, "read"):
+                if key in ("image", "image[]") and "image" not in data:
+                    raw = await val.read()
+                    if len(raw) > MAX_IMAGE_UPLOAD_BYTES:
+                        raise HTTPException(
+                            status_code=413,
+                            detail=f"Image too large ({len(raw)} bytes)",
+                        )
+                    data["image"] = base64.b64encode(raw).decode("ascii")
+            else:
+                data.setdefault(key, val)
+    else:
+        try:
+            data = await request.json()
+        except ValueError:
+            raise HTTPException(status_code=400, detail="invalid JSON body") from None
+        if not isinstance(data, dict):
+            raise HTTPException(status_code=400, detail="body must be a JSON object")
+    try:
+        return cls.model_validate(data)
+    except ValidationError as exc:
+        raise RequestValidationError(
+            [
+                {**e, "loc": ("body", *e["loc"])}
+                for e in exc.errors(include_url=False, include_context=False)
+            ]
+        ) from None
+
+
 @router.post("/images/variations")
-async def create_image_variation(
-    req: ImageVariationsRequest, request: Request
-) -> JSONResponse:
+async def create_image_variation(request: Request) -> JSONResponse:
     """Generate variations of an input image (OpenAI /v1/images/variations compatible).
 
     Uses the input image as a conditioning signal for the diffusion model.
-    The image is decoded and used as a starting point for the generation.
+    The image is decoded and used as a starting point for the generation. Multipart (the OpenAI
+    SDK) or JSON with a base64 image.
     """
     from .models import _check_permission
 
     _check_permission(request, "can_infer")
+    req = await _image_request(request, ImageVariationsRequest)
     import base64
 
     try:
@@ -501,7 +547,9 @@ async def create_image_variation(
 
     if img_engine is None:
         raise HTTPException(
-            status_code=404, detail="No image generation model available"
+            status_code=404,
+            detail=wrong_modality_detail("image", req.model)
+            or "No image generation model available",
         )
 
     try:
@@ -618,14 +666,16 @@ class ImageEditsRequest(BaseModel):
 
 
 @router.post("/images/edits")
-async def create_image_edit(req: ImageEditsRequest, request: Request) -> JSONResponse:
+async def create_image_edit(request: Request) -> JSONResponse:
     """Edit an image based on a text prompt (OpenAI /v1/images/edits compatible).
 
-    Combines the input image with a text prompt to generate an edited version.
+    Combines the input image with a text prompt to generate an edited version. Multipart (the
+    OpenAI SDK) or JSON with a base64 image.
     """
     from .models import _check_permission
 
     _check_permission(request, "can_infer")
+    req = await _image_request(request, ImageEditsRequest)
     import base64
 
     try:
@@ -650,7 +700,9 @@ async def create_image_edit(req: ImageEditsRequest, request: Request) -> JSONRes
 
     if img_engine is None:
         raise HTTPException(
-            status_code=404, detail="No image generation model available"
+            status_code=404,
+            detail=wrong_modality_detail("image", req.model)
+            or "No image generation model available",
         )
 
     try:

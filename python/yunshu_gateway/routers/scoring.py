@@ -605,6 +605,10 @@ async def classify_input(req: ClassifyRequest, request: Request):
     except MemoryError:
         logger.error("Classify OOM", exc_info=True)
         raise HTTPException(status_code=507, detail="Out of GPU memory") from None
+    except ValueError as e:
+        # e.g. a chat model that cannot be a text embedder: the caller's model choice, a 400
+        logger.warning(f"Classify validation: {e}")
+        raise HTTPException(status_code=400, detail=str(e)) from None
     except Exception as e:
         logger.error(f"Classify error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Classification failed") from None
@@ -883,11 +887,11 @@ async def _fallback_embeddings(
 
     try:
         return await loop.run_in_executor(get_mlx_executor(), _compute_all)
-    except (AttributeError, TypeError) as e:
+    except (AttributeError, TypeError):
         # e.g. hybrid / linear-attention backbones that need a decode cache to run.
         raise ValueError(
             "This model architecture cannot be used as a text embedder; load a dedicated "
-            f"embedding model ({type(e).__name__})"
+            "embedding model"
         ) from None
 
 

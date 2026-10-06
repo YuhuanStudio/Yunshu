@@ -77,3 +77,38 @@ def reject_images_for_text_model(engine, has_images: bool) -> None:
             "model); remove the image blocks or load a VLM."
         ),
     )
+
+
+_MODALITY = {
+    "tts": ("synthesize speech", "a text-to-speech model such as Qwen3-TTS"),
+    "asr": ("transcribe audio", "a speech-to-text model such as whisper or Qwen3-ASR"),
+    "image": ("generate or edit images", "an image model such as Z-Image-Turbo"),
+    "ocr": (
+        "read text from images",
+        "a vision or OCR model such as Qwen3.5 or GLM-OCR",
+    ),
+}
+
+
+def wrong_modality_detail(kind: str, requested: str | None = None) -> str | None:
+    """Why a single-model server cannot serve an audio / image route, or None.
+
+    `yunshu serve -m M` answers every request with M whatever the `model` field says, so a
+    "model not found" for a speech or image request is false: the model is there, it is a chat
+    model. Name what is served and what to start instead. None in multi-model mode (an unknown
+    model really is not found there)."""
+    from .engine import get_engine, get_model_manager
+
+    if kind not in _MODALITY or get_model_manager() is not None:
+        return None
+    engine = get_engine()
+    if engine is None:
+        return None
+    served = (
+        os.path.basename(str(getattr(engine, "model_name", "") or "")) or "(unnamed)"
+    )
+    action, example = _MODALITY[kind]
+    return (
+        f"The model this server is serving ('{served}') cannot {action}. Start a server "
+        f"with {example} (yunshu serve -m <model>), or serve several with --models-dir."
+    )

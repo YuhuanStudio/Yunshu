@@ -322,7 +322,9 @@ def compare_rows(a: list, b: list) -> list:
 
 
 def free_port() -> int:
-    for p in range(18990, 18997):
+    """First free port of 18990-18996 (COVAUDIT_PORT_LO raises the lower end, so a worker limited
+    to 18994-18996 stays inside its range)."""
+    for p in range(int(os.environ.get("COVAUDIT_PORT_LO", "18990")), 18997):
         with socket.socket() as s:
             try:
                 s.bind(("127.0.0.1", p))
@@ -350,7 +352,19 @@ def load_failure(log_tail: str) -> str | None:
 
 
 class Srv:
-    def __init__(self, model: str, src: str | None, home: Path, log: Path, sets=()):
+    def __init__(
+        self,
+        model: str,
+        src: str | None,
+        home: Path,
+        log: Path,
+        sets=(),
+        models_dir: str | None = None,
+        token: str | None = None,
+    ):
+        """`models_dir` serves in multi-model mode (`--models-dir`; `model` then only sizes the
+        load-time budget); `token` is the bearer token the readiness probe presents."""
+        self.token = token
         self.port = free_port()
         self.url = f"http://127.0.0.1:{self.port}"
         self.log = log
@@ -367,8 +381,7 @@ class Srv:
         cmd = [
             os.environ.get("COVAUDIT_BIN") or str(MAIN / ".venv/bin/yunshu"),
             "serve",
-            "-m",
-            model,
+            *(["--models-dir", models_dir] if models_dir else ["-m", model]),
             "--port",
             str(self.port),
         ]
@@ -410,7 +423,10 @@ class Srv:
             try:
                 with urllib.request.urlopen(self.url + "/health/ready", timeout=3) as r:
                     ready = bool(json.load(r).get("ready"))
-                with urllib.request.urlopen(self.url + "/v1/models", timeout=3) as r:
+                mreq = urllib.request.Request(self.url + "/v1/models")
+                if self.token:
+                    mreq.add_header("Authorization", f"Bearer {self.token}")
+                with urllib.request.urlopen(mreq, timeout=3) as r:
                     data = json.load(r)["data"]
                 if ready and data:
                     self.model_id = data[0]["id"]

@@ -93,7 +93,7 @@ alternates which side goes first, takes the median of 5, and fails on a geometri
 ## `m3sweep` (correctness on the M3 lane)
 
 ```bash
-scripts/dev/m3sweep [REF] [--only wire,agent,units] [--dry-run] [--no-wait]
+scripts/dev/m3sweep [REF] [--only wire,agent,units,routes] [--dry-run] [--no-wait]
 scripts/dev/m3sweep --collect DIR      # judge a --no-wait run later
 ```
 
@@ -103,10 +103,45 @@ Submits `m3lane-sweep-*` jobs to the gpuq M3 lane for HEAD (or REF) and writes o
 messages, Ollama; stream and non-stream; tools, tool_choice, parallel off, JSON schema, stop,
 truncation, usage invariants, error shapes) against a real server on Qwen2.5-3B (text path),
 Qwen3.5-0.8B and Qwen3.5-9B-4bit (VLM runner); `agent` runs the covaudit tool session and
-concurrent-vs-solo identity on Qwen3.5-2B and Qwen2.5-3B; `units` runs the unit files that skip
+concurrent-vs-solo identity on Qwen3.5-2B and Qwen2.5-3B; `routes` runs every route the gateway registers against real servers (below); `units` runs the unit files that skip
 without small checkpoints (tests find them through `tests/unit/model_paths.py`, which honours
 `M3_MODELS`). Fail closed: a missing or incomplete output, a failed job, a wrong device or any
 mismatch is FAIL. Only the four allowlisted small checkpoints (Qwen3.5 0.8B / 2B / 9B-4bit, Qwen2.5-3B-4bit) ever reach the laptop. No failure is excused: a forced tool_choice is always grammar-constrained and usage excludes server prefill. The M3 is portability / correctness evidence only: no timing, no tok/s.
+
+### `routes`: every route has a real check
+
+`scripts/research/route_checks.py` holds one `@check(name, "METHOD /path", ...)` per group of routes (97 routes, websockets included).
+The job starts, one after the other, a default-configuration server on Qwen3.5-0.8B (VLM runner) and on Qwen2.5-3B-Instruct-4bit (mlx-lm path)
+and runs the checks that need no token, then a token-protected `--models-dir` server (0.8B + 3B, a fake SearXNG / MCP / page backend on
+loopback) for model load / unload, auth, web search, web fetch and the MCP connector. Ports 18994-18996 only. Checks use the official
+`openai` / `anthropic` SDKs and their typed models wherever they cover the route (files, batches, conversations, the Responses lifecycle,
+Messages batches, `count_tokens`, `input_tokens`, `client.responses.connect()`), raw HTTP / `websockets` elsewhere, and cover the full
+lifecycles (file -> batch -> poll -> results -> cancel; conversation create -> items -> delete; response create -> retrieve ->
+input_items -> cancel -> delete; token counts equal to the real call's usage; websocket happy path and a disconnect that must stop the
+generation). Modalities the four checkpoints cannot serve are checked for the absent-capability answer (error shape, status, a message that
+names what is served). A 500 fails the check and carries the server's error log lines.
+
+Two gates keep it honest. `tests/unit/test_route_coverage.py` (CPU, in CI) fails when the app registers a route no check or `EXEMPT`
+entry names, or a check names a route the app no longer has. The `m3sweep` verdict fails when a registered route was not verified by a
+passing check in the same run. Adding a route: add the route's check to `route_checks.py` (or a reasoned `EXEMPT`), run
+`scripts/dev/m3sweep --only routes`. [API_SURFACE.md](API_SURFACE.md) says per row what was verified where.
+
+## `agentbench`: real coding agents on the 27B
+
+```bash
+scripts/dev/agentbench                       # Claude Code, Codex, opencode x 20 tasks on main, 60 jobs at priority -1
+scripts/dev/agentbench --agents claude --tasks polyglot-bowling,cli-add-flag --repeat 2
+scripts/dev/agentbench --no-wait ; scripts/dev/agentbench --collect DIR
+```
+
+One gpuq job per (agent, task, repeat) (queue timeout 28 min: one agent run is capped at 20 minutes), a fresh server with Yunshu's default
+configuration on a pinned tree of `--ref` (default `main`), the pinned agent CLIs in the sandbox of `scripts/research/agentic`, ports
+18994-18996. The verdict (`/Volumes/P5Plus/yunshu-build/agentbench/runs/<sha>-<time>/verdict.json`) is fail closed: a missing run, any API
+error, malformed tool call or tool-call markup leak is FAIL; the pass rate per agent is compared with the 2026-09-30 baseline (Wilson 95%
+interval) and a drop below its lower bound is REGRESSION. Reported per agent: pass rate, API errors, malformed tool calls, markup leaks,
+cache-hit ratio, largest prompt, median wall time, peak memory. Where it runs: **nightly at priority -1** (idle GPU time only; one full
+matrix is about 6 to 8 hours of 27B time), and **before a release** by running it on the release commit and attaching its verdict next to
+`yv gate`'s (not a `gate` stage yet: the full matrix is longer than the rest of the gate together).
 
 ## Adding a new kind of measurement
 

@@ -1,0 +1,366 @@
+#!/usr/bin/env python3
+"""Real coding agents (Claude Code, Codex, opencode) against the default 27B server: one verdict.
+
+    agentbench [--ref main] [--agents claude,codex,opencode] [--tasks all] [--repeat 1]
+               [--priority -1] [--label-prefix agentbench] [--baseline GLOB|none] [--dry-run] [--no-wait]
+    agentbench --collect DIR           # judge the outputs of an earlier (--no-wait) run
+
+One gpuq job per (agent, task, repeat) so each stays inside its queue timeout and a failed
+run costs one cell; every job starts a fresh server with Yunshu's default configuration on a
+pinned tree of REF, runs the agent in the sandbox of scripts/research/agentic and writes one JSONL
+file. Jobs run at low priority (default -1: idle time). Verdict (DIR/verdict.json), fail closed:
+FAIL on a missing or incomplete run, any API error, malformed tool call or tool-call markup leak;
+the pass rate per agent is compared with a baseline run (Wilson interval) and a drop below the
+baseline's lower bound is a REGRESSION. See docs/guides/AGENTIC_BENCH.md.
+"""
+
+from __future__ import annotations
+
+import argparse
+import glob
+import json
+import math
+import os
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+MAIN = Path(__file__).resolve().parents[2]
+HERE = Path(__file__).resolve().parent
+GPUQ = str(HERE / "gpuq")
+AGENTIC = MAIN / "scripts/research/agentic"
+BUILD = Path("/Volumes/P5Plus/yunshu-build/agentbench")
+CHECKPOINT = "/Volumes/P5Plus/models/Jundot/Qwen3.8-27B-oQ4e-mtp"
+PY = next(
+    (
+        str(c)
+        for c in (
+            MAIN / ".venv/bin/python",
+            Path("/Users/yuhuan/Documents/YuhuanStudio/Yunshu/.venv/bin/python"),
+        )
+        if c.exists()
+    ),
+    sys.executable,
+)
+AGENTS = ("claude", "codex", "opencode")
+# the last full run (2026-09-30, 27B oQ4e-mtp, default config); the main checkout keeps the data
+BASELINE_GLOBS = [
+    "/Users/yuhuan/Documents/YuhuanStudio/Yunshu/docs/research/runs/2026-09-30-agentic/prod*/yunshu-default-*.jsonl"
+]
+RUN_TIMEOUT_MIN = 20  # per agent run, as in the baseline
+JOB_TIMEOUT_MIN = 28  # server start + one run (<= RUN_TIMEOUT_MIN) + grading
+
+
+def wilson(k, n, z=1.96):
+    if n == 0:
+        return (0.0, 0.0)
+    p = k / n
+    d = 1 + z * z / n
+    c = (p + z * z / (2 * n)) / d
+    h = z * math.sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / d
+    return max(0.0, c - h), min(1.0, c + h)
+
+
+def plan(
+    agents, task_ids, repeat, outdir, tree_src, prefix, priority, checkpoint=CHECKPOINT
+):
+    """The jobs (pure): label, gpuq submit args, argv, env, output file."""
+    jobs = []
+    for agent in agents:
+        for task in task_ids:
+            for rep in range(1, repeat + 1):
+                name = f"{agent}-{task}-r{rep}"
+                out = outdir / f"{name}.jsonl"
+                jobs.append(
+                    {
+                        "name": name,
+                        "agent": agent,
+                        "task": task,
+                        "repeat": rep,
+                        "label": f"{prefix}-{agent}-{task}-r{rep}",
+                        "out": out,
+                        "submit": [
+                            "--device",
+                            "m5",
+                            "--timeout",
+                            str(JOB_TIMEOUT_MIN),
+                            "--stall",
+                            "15",
+                            f"--priority={priority}",
+                            "--mem-gb",
+                            "50",
+                            "--out",
+                            str(out),
+                        ],
+                        "env": {
+                            "AGENTIC_YUNSHU_SRC": str(tree_src),
+                            "AGENTIC_PORT_LO": "18994",
+                            "AGENTIC_PORT_HI": "18996",
+                        },
+                        "cmd": [
+                            PY,
+                            str(AGENTIC / "run_agentic.py"),
+                            "run",
+                            "--serve",
+                            "yunshu",
+                            "--checkpoint",
+                            checkpoint,
+                            "--engine-label",
+                            "yunshu-default",
+                            "--agent",
+                            agent,
+                            "--tasks",
+                            task,
+                            "--repeat",
+                            "1",
+                            "--timeout-min",
+                            str(RUN_TIMEOUT_MIN),
+                            "--budget-min",
+                            "1",
+                            "--output",
+                            str(out),
+                        ],
+                    }
+                )
+    return jobs
+
+
+def load_rows(paths):
+    rows, metas = [], []
+    for pat in paths:
+        for f in sorted(glob.glob(pat)):
+            for line in Path(f).read_text().splitlines():
+                try:
+                    r = json.loads(line)
+                except ValueError:
+                    continue
+                if r.get("type") == "run":
+                    rows.append(r)
+                elif r.get("type") == "meta":
+                    metas.append(r)
+    return rows, metas
+
+
+def stats(rows):
+    """Per-agent aggregate over run rows (pure)."""
+    out = {}
+    for agent in sorted({r["agent"] for r in rows}):
+        rs = [r for r in rows if r["agent"] == agent]
+        n, k = len(rs), sum(1 for r in rs if r["passed"])
+        pt = sum(r["prompt_tokens"] for r in rs)
+        cached = sum(r["cached_tokens"] for r in rs)
+        lo, hi = wilson(k, n)
+        out[agent] = {
+            "runs": n,
+            "passed": k,
+            "rate": k / n if n else 0.0,
+            "wilson": [round(lo, 3), round(hi, 3)],
+            "api_errors": sum(r["api_errors"] for r in rs),
+            "other_http_errors": sum(r.get("other_http_errors", 0) for r in rs),
+            "malformed_tool_calls": sum(r["malformed_tool_calls"] for r in rs),
+            "leaked_tool_markup": sum(r["leaked_tool_markup"] for r in rs),
+            "timed_out": sum(1 for r in rs if r.get("timed_out")),
+            "agent_exit_nonzero": sum(
+                1 for r in rs if r.get("agent_exit") not in (0, None)
+            ),
+            "requests": sum(r["requests"] for r in rs),
+            "cache_hit": round(cached / pt, 4) if pt else None,
+            "max_prompt_tokens": max((r["max_prompt_tokens"] for r in rs), default=0),
+            "wall_median_s": sorted(r["wall_s"] for r in rs)[len(rs) // 2]
+            if rs
+            else None,
+            "peak_gib": max((r["server_peak_gib"] for r in rs), default=0),
+            "failed_tasks": sorted(r["task"] for r in rs if not r["passed"]),
+        }
+    return out
+
+
+def judge(planned, rows, baseline_rows):
+    """Verdict (pure; unit-tested): problems (FAIL), regressions, and the numbers."""
+    have = {(r["agent"], r["task"], r["repeat"]) for r in rows}
+    problems = [
+        f"missing run {a}/{t}/r{p}"
+        for a, t, p in sorted(
+            {(j["agent"], j["task"], j["repeat"]) for j in planned} - have
+        )
+    ]
+    cur = stats(rows)
+    for agent, s in cur.items():
+        if s["api_errors"]:
+            problems.append(f"{agent}: {s['api_errors']} API errors")
+        if s["malformed_tool_calls"]:
+            problems.append(
+                f"{agent}: {s['malformed_tool_calls']} malformed tool calls"
+            )
+        if s["leaked_tool_markup"]:
+            problems.append(f"{agent}: {s['leaked_tool_markup']} tool-markup leaks")
+    base = stats(baseline_rows) if baseline_rows else {}
+    regressions = []
+    for agent, s in cur.items():
+        b = base.get(agent)
+        if b and b["runs"] >= 5 and s["rate"] < b["wilson"][0]:
+            regressions.append(
+                f"{agent}: pass rate {s['passed']}/{s['runs']} = {s['rate']:.0%} is below the baseline's "
+                f"lower bound {b['wilson'][0]:.0%} ({b['passed']}/{b['runs']})"
+            )
+    if problems:
+        verdict = "FAIL"
+    elif regressions:
+        verdict = "REGRESSION"
+    else:
+        verdict = "PASS"
+    return {
+        "verdict": verdict,
+        "problems": problems,
+        "regressions": regressions,
+        "current": cur,
+        "baseline": base,
+    }
+
+
+def sh(cmd, **kw):
+    return subprocess.run(cmd, capture_output=True, text=True, **kw)
+
+
+def pin_tree(ref):
+    sha = sh(["git", "-C", str(MAIN), "rev-parse", ref]).stdout.strip()
+    if not sha:
+        sys.exit(f"unknown ref {ref}")
+    tree = BUILD / "trees" / sha[:12]
+    if not (tree / "python").exists():
+        tree.parent.mkdir(parents=True, exist_ok=True)
+        r = sh(
+            [
+                "git",
+                "-C",
+                str(MAIN),
+                "worktree",
+                "add",
+                "-q",
+                "--detach",
+                str(tree),
+                sha,
+            ]
+        )
+        if r.returncode:
+            sys.exit(r.stderr)
+    return sha, tree / "python"
+
+
+def task_ids(spec):
+    sys.path.insert(0, str(AGENTIC))
+    sys.path.insert(0, str(AGENTIC.parent))
+    import agents
+    import tasks as tasklib
+
+    cache = agents.BUILD / "tasks-cache"
+    cache.mkdir(parents=True, exist_ok=True)
+    return [t.id for t in tasklib.select(spec, tasklib.all_tasks(cache))]
+
+
+def finish(outdir, wait_ids, max_seconds, baseline):
+    meta = json.loads((outdir / "plan.json").read_text())
+    planned = [dict(j, out=Path(j["out"])) for j in meta["jobs"]]
+    wait_rc = None
+    if wait_ids:
+        wait_rc = subprocess.run(
+            [GPUQ, "wait", "--max-seconds", str(max_seconds), *wait_ids]
+        ).returncode
+    rows, _ = load_rows([str(j["out"]) for j in planned])
+    base_rows, _ = load_rows(baseline) if baseline else ([], [])
+    v = judge(planned, rows, base_rows)
+    v.update(
+        sha=meta["sha"],
+        ref=meta["ref"],
+        wait_rc=wait_rc,
+        finished=time.strftime("%FT%T"),
+    )
+    (outdir / "verdict.json").write_text(json.dumps(v, indent=1))
+    print(f"agentbench {meta['sha'][:7]}: {v['verdict']}  ({outdir / 'verdict.json'})")
+    for agent, s in v["current"].items():
+        b = v["baseline"].get(agent)
+        print(
+            f"  {agent}: {s['passed']}/{s['runs']} passed  api_err={s['api_errors']} "
+            f"malformed={s['malformed_tool_calls']} leaked={s['leaked_tool_markup']} "
+            f"cache={s['cache_hit']} max_prompt={s['max_prompt_tokens']}"
+            + (f"  baseline {b['passed']}/{b['runs']}" if b else "")
+        )
+    for p in v["problems"] + v["regressions"]:
+        print("  ", p)
+    return 0 if v["verdict"] == "PASS" else 1
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--ref", default="main")
+    ap.add_argument("--agents", default=",".join(AGENTS))
+    ap.add_argument("--tasks", default="all")
+    ap.add_argument("--repeat", type=int, default=1)
+    ap.add_argument("--priority", type=int, default=-1)
+    ap.add_argument("--label-prefix", default="agentbench")
+    ap.add_argument(
+        "--baseline", default="auto", help="glob of baseline JSONL, auto or none"
+    )
+    ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--no-wait", action="store_true")
+    ap.add_argument("--collect")
+    ap.add_argument("--max-seconds", type=int, default=3600)
+    a = ap.parse_args(argv)
+    baseline = (
+        []
+        if a.baseline == "none"
+        else BASELINE_GLOBS
+        if a.baseline == "auto"
+        else [a.baseline]
+    )
+    if a.collect:
+        return finish(Path(a.collect), [], a.max_seconds, baseline)
+    agents = [x for x in a.agents.split(",") if x]
+    bad = [x for x in agents if x not in AGENTS]
+    if bad:
+        sys.exit(f"unknown agents {bad}; have {AGENTS}")
+    ids = task_ids(a.tasks)
+    sha, src = pin_tree(a.ref) if not a.dry_run else ("dry", Path("<tree>/python"))
+    outdir = BUILD / "runs" / f"{sha[:7]}-{time.strftime('%m%d-%H%M%S')}"
+    jobs = plan(agents, ids, a.repeat, outdir, src, a.label_prefix, a.priority)
+    if a.dry_run:
+        print(json.dumps([{**j, "out": str(j["out"])} for j in jobs], indent=1))
+        print(f"{len(jobs)} jobs", file=sys.stderr)
+        return 0
+    outdir.mkdir(parents=True)
+    ids_ = []
+    for j in jobs:
+        r = sh(
+            [GPUQ, "submit", "--label", j["label"], *j["submit"], "--", *j["cmd"]],
+            env={**os.environ, **j["env"]},
+        )
+        if r.returncode or not r.stdout.strip():
+            print(f"submit {j['name']} failed: {r.stderr.strip()}", file=sys.stderr)
+            for i in ids_:
+                sh([GPUQ, "cancel", i])
+            return 1
+        j["id"] = r.stdout.split()[-1]
+        ids_.append(j["id"])
+    (outdir / "plan.json").write_text(
+        json.dumps(
+            {
+                "sha": sha,
+                "ref": a.ref,
+                "jobs": [{**j, "out": str(j["out"])} for j in jobs],
+            },
+            indent=1,
+        )
+    )
+    print(
+        f"submitted {len(jobs)} jobs ({a.label_prefix}-*), outputs in {outdir}",
+        flush=True,
+    )
+    if a.no_wait:
+        print(f"collect later: agentbench --collect {outdir}")
+        return 0
+    return finish(outdir, ids_, a.max_seconds, baseline)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

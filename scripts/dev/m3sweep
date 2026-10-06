@@ -42,6 +42,8 @@ PLAN = {
     "wire-q25-3b": ("wire", ["Qwen2.5-3B-Instruct-4bit"], 6, 30),
     "wire-q35-08b": ("wire", ["Qwen3.5-0.8B-MLX-bf16"], 5, 25),
     "wire-q35-9b": ("wire", ["Qwen3.5-9B-MLX-4bit"], 12, 40),
+    # one job, servers one after the other (the lane has three ports for them: 18994-18996)
+    "routes": ("routes", ["Qwen3.5-0.8B-MLX-bf16", "Qwen2.5-3B-Instruct-4bit"], 14, 45),
     "agent-q35-2b": ("agent", ["Qwen3.5-2B-MLX-bf16"], 8, 35),
     "agent-q25-3b": ("agent", ["Qwen2.5-3B-Instruct-4bit"], 6, 35),
     "units": (
@@ -53,6 +55,8 @@ PLAN = {
 }
 
 
+# the multi-model server (model load / unload routes) of a routes job: models it serves
+MULTI = {"routes": ["Qwen3.5-0.8B-MLX-bf16", "Qwen2.5-3B-Instruct-4bit"]}
 STRICT = {
     "agent-q35-2b"
 }  # models that must follow the one-Read-per-turn protocol exactly
@@ -68,6 +72,8 @@ def job_cmd(kind, models, out, name=""):
         cmd.append("--strict")
     for m in models:
         cmd += ["--model", str(MODELS / m)]
+    for m in MULTI.get(name, []) if kind == "routes" else []:
+        cmd += ["--multi", str(MODELS / m)]
     return cmd
 
 
@@ -149,8 +155,34 @@ def known_gaps(jobs):
     return seen
 
 
+def route_coverage(jobs):
+    """Problems with route coverage over the `routes` jobs (pure over their outputs): every route
+    of the registry must be verified (check passed) by at least one routes job. Empty when no routes
+    job is in the plan (an `--only` run that left them out)."""
+    outs = [j for j in jobs if j["name"] == "routes"]
+    if not outs:
+        return []
+    verified = set()
+    for j in outs:
+        try:
+            verified |= set(
+                json.loads(Path(j["out"]).read_text()).get("verified_routes", [])
+            )
+        except (OSError, ValueError):
+            pass
+    sys.path.insert(0, str(MAIN / "scripts/research"))
+    import route_checks as rc
+
+    want = rc.checked_routes()
+    return [f"route never verified: {r}" for r in sorted(want - verified)]
+
+
 def verdict(jobs, wait_rc):
     per = {j["name"]: judge_output(j["out"]) for j in jobs}
+    cov = route_coverage(jobs)
+    if cov:
+        per["route-coverage"] = cov
+        jobs = [*jobs, {"name": "route-coverage", "label": "-", "out": "-"}]
     failed = {k: v for k, v in per.items() if v}
     if not jobs:
         failed["plan"] = ["no jobs"]
@@ -171,7 +203,7 @@ def sh(cmd, **kw):
 def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("ref", nargs="?")
-    ap.add_argument("--only", help="comma list of wire,agent,units")
+    ap.add_argument("--only", help="comma list of wire,agent,units,routes")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--no-wait", action="store_true")
     ap.add_argument("--collect")

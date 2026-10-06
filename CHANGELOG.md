@@ -20,11 +20,23 @@ Changes on main after 0.1.3; not part of a published package yet.
 
 ### Added
 
+- Every route the gateway registers has a real-server check: `scripts/dev/m3sweep` job `routes` (`scripts/research/route_checks.py`) drives files, batches, conversations, the Responses lifecycle, Messages batches, token counting, websockets, MCP, server tools and model load / unload on the M3 lane, and `tests/unit/test_route_coverage.py` fails when a route has none. `docs/guides/API_SURFACE.md` says per row how it is verified.
+- `GET /v1/responses/{id}/input_items` (the route was missing).
+- `scripts/dev/agentbench`: the real-agent benchmark (Claude Code, Codex, opencode on the 27B) as one repeatable command with a fail-closed verdict and a baseline comparison.
+
 ### Changed
 
 - Refresh the dependency lock and record reviewed upstream code without losing its original provenance. The MLX stack versions remain unchanged. [Validation](docs/reports/PERF_TREND.md#2026-10-04--014-cycle-dependency-sync-m5-max).
 
 ### Fixed
+
+- `POST /v1/responses/input_tokens` and `POST /v1/messages/count_tokens` now equal the `usage` of the real call (they counted raw text without the chat template, and an injected tool prompt generation no longer uses).
+- Cancelling a running background response answers `status: "cancelled"` (it answered `in_progress`).
+- `POST /v1/images/edits` and `/v1/images/variations` accept the multipart/form-data the OpenAI SDK sends (they accepted only JSON).
+- `POST /v1/ocr` on a single-model server: a vision model reads the image through its OCR fallback (the upload was refused as a local file outside `YUNSHU_MEDIA_DIR`, then a missing model manager made every request a 500) and a text model gets a 503 that names the fix.
+- `POST /v1/classify` on a model that cannot embed is a 400 like `/v1/pooling`, `/v1/score` and `/v1/rerank` (it was a 500).
+- Speech, transcription and image routes on a chat model say what is served and what to start instead of "model not found".
+- A `--models-dir` server with models registered and none loaded yet is ready (`/health/ready` answered 503 until the first request).
 
 ### Security
 

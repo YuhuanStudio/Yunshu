@@ -46,6 +46,13 @@ GPU runs go through `scripts/dev/gpuq`. Runs are resumable (a task x repeat alre
 `--shard-i/--shard-n` splits the run list, and `--budget-min` stops starting new runs so a job ends inside its
 queue timeout. Output files begin with a `meta` row (engine, checkpoint, git SHA, agent version, flags).
 
+## Repeatable run: `scripts/dev/agentbench`
+
+The commands above run one agent against one server. `scripts/dev/agentbench` is the whole matrix as one command (Claude Code, Codex and
+opencode on all 20 tasks against the default 27B server on `main`): one low-priority gpuq job per cell, a verdict that fails closed on API
+errors, malformed tool calls, markup leaks and missing runs, and the comparison with the 2026-09-30 run. See
+[VERIFY.md](VERIFY.md#agentbench-real-coding-agents-on-the-27b). Run it nightly at priority -1 and on every release commit.
+
 ## Add a task
 
 Create `scripts/research/agentic/tasks/<id>/` with `task.json` (`id`, `title`, `prompt`, `test` argv, optional
