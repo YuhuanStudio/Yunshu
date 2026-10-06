@@ -47,7 +47,7 @@ def test_every_row_has_a_verified_cell():
 
 
 def test_real_claims_are_dated_and_name_the_check():
-    for section, cells in rows():
+    for _section, cells in rows():
         v = cells[-1]
         if v.startswith("real"):
             assert re.match(r"real \d{4}-\d{2}-\d{2}: ", v), v[:60]
