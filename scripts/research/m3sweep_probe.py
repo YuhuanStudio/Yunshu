@@ -1,6 +1,7 @@
 """Raw request/response dump for wire findings (run through the M3 lane; correctness only)."""
 
 import argparse
+import contextlib
 import json
 import sys
 import urllib.request
@@ -43,12 +44,50 @@ def post(url, path, body, headers=None):
         return e.code, e.read().decode()
 
 
+def summarize_sse(txt):
+    """Event types in order (run-length) plus the concatenated text / thinking / tool json deltas."""
+    ev, text = [], {"text": "", "think": "", "args": ""}
+    for blk in txt.split("\n\n"):
+        lines = {
+            x.split(": ", 1)[0]: x.split(": ", 1)[1]
+            for x in blk.splitlines()
+            if ": " in x
+        }
+        t = lines.get("event")
+        data = {}
+        with contextlib.suppress(ValueError):
+            data = json.loads(lines.get("data", "{}"))
+        t = t or ("chunk" if data else "")
+        if not ev or ev[-1][0] != t:
+            ev.append([t, 0])
+        ev[-1][1] += 1
+        d = data.get("delta")
+        if isinstance(d, dict):
+            text["text"] += d.get("text") or ""
+            text["think"] += d.get("thinking") or ""
+            text["args"] += d.get("partial_json") or ""
+        elif isinstance(d, str):
+            text["text"] += d
+        for c in data.get("choices") or []:
+            dd = c.get("delta") or {}
+            text["text"] += dd.get("content") or ""
+            text["think"] += dd.get("reasoning_content") or ""
+            for tc in dd.get("tool_calls") or []:
+                text["args"] += (tc.get("function") or {}).get("arguments") or ""
+    return json.dumps({"events": ev, **text, "tail": txt[-1200:]})
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", required=True)
     ap.add_argument("--out", required=True)
+    ap.add_argument("--grammar", action="store_true")
     a = ap.parse_args()
-    srv = mj.start_server(a.model, "probe", ["YUNSHU_VLM_APC_DISK=0"])
+    srv = mj.start_server(
+        a.model,
+        "probe",
+        ["YUNSHU_VLM_APC_DISK=0"] + (["YUNSHU_TOOL_GRAMMAR=1"] if a.grammar else []),
+    )
     res = {"complete": False, "pass": True, "rows": {}}
     try:
         m = srv.model_id
@@ -64,7 +103,7 @@ def main():
                         "type": "function",
                         "function": {"name": "get_weather"},
                     },
-                    "max_tokens": 400,
+                    "max_tokens": 1500,
                 },
             ),
             "chat_named_s": (
@@ -74,7 +113,7 @@ def main():
                     "messages": msgs,
                     "tools": [CW],
                     "tool_choice": "required",
-                    "max_tokens": 400,
+                    "max_tokens": 1500,
                     "stream": True,
                 },
             ),
@@ -85,7 +124,7 @@ def main():
                     "input": "hi",
                     "tools": [W],
                     "tool_choice": "required",
-                    "max_output_tokens": 400,
+                    "max_output_tokens": 1500,
                 },
             ),
             "resp_req_s": (
@@ -95,7 +134,7 @@ def main():
                     "input": "hi",
                     "tools": [W],
                     "tool_choice": "required",
-                    "max_output_tokens": 400,
+                    "max_output_tokens": 1500,
                     "stream": True,
                 },
             ),
@@ -103,7 +142,7 @@ def main():
                 "/v1/messages",
                 {
                     "model": m,
-                    "max_tokens": 400,
+                    "max_tokens": 1500,
                     "messages": msgs,
                     "tools": [
                         {
@@ -119,7 +158,7 @@ def main():
                 "/v1/messages",
                 {
                     "model": m,
-                    "max_tokens": 400,
+                    "max_tokens": 1500,
                     "stream": True,
                     "messages": msgs,
                     "tools": [
@@ -150,6 +189,8 @@ def main():
         }
         for k, (path, body) in cases.items():
             st, txt = post(srv.url, path, body)
+            if body.get("stream"):
+                txt = summarize_sse(txt)
             res["rows"][k] = {"status": st, "body": txt[:6000]}
             print(k, st, txt[:300].replace("\n", " "), flush=True)
     finally:

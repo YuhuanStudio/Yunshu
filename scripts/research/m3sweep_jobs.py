@@ -111,7 +111,14 @@ def check_case(name, kw, dialect, stream, out):
         if out.completion not in (None, 3) and isinstance(out.completion, int):
             if out.completion != 3:
                 bad.append(f"completion {out.completion} != 3")
-    if name == "stop" and out.finish == "stop":
+    # Stop strings apply to the answer, not inside reasoning (vlm_engine: `not in_think`), so a
+    # Qwen3.5 reply that is all reasoning (or raw "<think>" in /v1/completions) is not checked.
+    if (
+        name == "stop"
+        and out.finish == "stop"
+        and not out.thinking
+        and "<think>" not in out.text
+    ):
         hit = [s for s in STOP_CHARS if s in out.text]
         if hit:
             bad.append(f"stop sequence leaked into text: {hit} {out.text[:40]!r}")
