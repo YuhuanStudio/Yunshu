@@ -526,6 +526,11 @@ def _owner(job: dict) -> str:
     for marker in ("/.claude/worktrees/", "/worktrees/"):
         if marker in cwd:
             return cwd.split(marker, 1)[1].split("/", 1)[0]
+    # Sibling worktrees (../Yunshu-wt-hol): 2026-10-06 they all fell back to "main",
+    # so one line's 18 queued jobs ran back to back while the others waited 2 h.
+    m = re.search(r"/[^/]+-wt-([^/]+)", cwd)
+    if m:
+        return m.group(1)
     return "main"
 
 

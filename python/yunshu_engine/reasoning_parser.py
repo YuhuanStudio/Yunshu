@@ -144,6 +144,37 @@ _COHERE_OPEN = re.compile(r"<\|START_THINKING\|>", re.DOTALL)
 _COHERE_CLOSE = re.compile(r"<\|END_THINKING\|>", re.DOTALL)
 
 
+TOOL_CALL_MARKER = "<tool_call>"
+
+
+def close_reasoning_at_tool_call(text: str, prompt_opens_think: bool) -> str:
+    """Qwen3.5-family models sometimes write ``<tool_call>`` before closing ``</think>``.
+    The call marker is the implicit end of reasoning (vLLM Qwen3ReasoningParser, SGLang
+    Qwen3 detector): insert the missing ``</think>`` so the parser delivers the call as
+    content instead of reasoning text. Only call this when the request declared tools."""
+    idx = text.find(TOOL_CALL_MARKER)
+    if idx < 0:
+        return text
+    head = text[:idx]
+    depth = (
+        int(prompt_opens_think)
+        + len(_THINK_OPEN.findall(head))
+        - len(_THINK_CLOSE.findall(head))
+    )
+    if depth <= 0:
+        return text
+    return head + "</think>" + text[idx:]
+
+
+def tool_call_marker_id(tokenizer) -> int | None:
+    """Token id of ``<tool_call>`` when the tokenizer has it as one token, else None."""
+    try:
+        ids = tokenizer.encode(TOOL_CALL_MARKER, add_special_tokens=False)
+    except Exception:
+        return None
+    return int(ids[0]) if len(ids) == 1 else None
+
+
 # ── Parser subclasses ────────────────────────────────────────────────────────
 
 

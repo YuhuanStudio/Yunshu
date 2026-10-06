@@ -38,6 +38,8 @@ did. `--env K=V` applies to both arms, `--cand-env` to the candidate only, `--ba
 | `quality` | 200-item paired MMLU-Pro through `paired_eval.py` (resumable rounds of 14 min per arm, base and cand interleaved). | all items scored in both arms, net difference in correct answers within +-1 |
 | `speed` | `tfbench.py` decode cells (cold decode tok/s, cold TTFT, follow-up TTFT) in N quiet reps (default 3), interleaved base, cand, base, cand. Medians, per-rep paired deltas and a noise estimate (half range of the paired deltas) are reported. | no median worsening beyond `max(2%, noise)` (`--speed-tol`); a contended rep is rerun once, then the stage fails |
 | `memory` | `memory_ab.py`, one job per arm and rep (default 2 reps, alternating order): peak footprint, footprint after idle, footprint held after a short follow-up. | no metric above base by more than 3% + 0.25 GiB |
+| `longqa` | `tfbench.py --part needle`: 10 deterministic key-value needles spliced into the 32K / 64K / 128K prose prompts, one greedy question each (the prefix is cached after the first). Long suites only. | every item scored in both arms, correct count within +-1 |
+| `conc` | `tfbench.py --part conc32`: two requests at once, each a warm 32K prefix + ~2K new text, 1024-token reply; TTFT and per-request decode. Long suites only. | TTFT / decode within 10% of base |
 
 `--spec-modes default,mtp,dflash` repeats identity (and spec on == off) once per speculative
 method (`mtp` / `dflash` set `YUNSHU_VLM_DRAFT`; `dflash` needs the drafter path, `D` in
@@ -49,7 +51,7 @@ context, harness hash, device): the next candidate against the same base reruns 
 
 `decode` (preflight, smoke, identity at 1K / 8K, apc, speed; `--spec-off` adds spec on == off (fails on main today, see BACKLOG)), `prefill`
 (identity up to 32K, apc, quality, speed), `scheduler`, `memory`, `full` (everything, 1K / 8K / 32K),
-`tiny` (everything on a small model, for dry runs of the tool). `--suite smoke,identity,speed`
+`long` (32K / 64K / 128K split cells of 2048-token replies via `tfbench --decode-tokens`: identity incl. spec on == off, apc, speed, memory at 32K / 128K, longqa, conc; every stage runs even after a failure), `longtrend` (one rep, 32K / 128K prose, for tag-to-tag comparisons), `tiny` (everything on a small model, for dry runs of the tool). `--suite smoke,identity,speed`
 builds an ad-hoc ladder (stages keep their canonical order). Overrides: `--ctx 1024,8192`,
 `--reps`, `--mmlu-n`, `--mem-sizes`, `--mem-reps`, `--speed-tol`, `--spec-off`.
 
@@ -76,7 +78,7 @@ changes.
 ## `yv gate`
 
 Runs `scripts/release/gate.sh` one stage per gpuq job (`install`, `serve-27b`, `families`,
-`soak-mmlu`, `soak-realistic`, `agent-sessions`; port 18993) and records each in `runs/gate-<commit>/`. A stage
+`soak-mmlu`, `soak-realistic`, `agent-sessions`; port 18993) plus the `long` stage (`yv ab --suite long`, cand = HEAD, base = last `v*` tag; verdict judged fail-closed) and records each in `runs/gate-<commit>/`. A stage
 passes when its check rows have no FAIL or CONTENDED, at least one PASS, and the job exited 0.
 A rerun on the same commit skips passed stages (`--fresh` reruns all); `install` reruns if
 `$GATE_ROOT` holds another commit's install.
