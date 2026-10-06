@@ -688,7 +688,7 @@ def run_route_checks(ctx, needs, only, res, srv, tag=""):
         except rc.Skip as e:
             row.update(status="skip", detail=str(e))
         except BaseException as e:  # noqa: BLE001  fail closed, keep going
-            row.update(status="fail", detail=f"{type(e).__name__}: {str(e)[:400]}")
+            row.update(status="fail", detail=f"{type(e).__name__}: {str(e)[:2000]}")
             row["trace"] = traceback.format_exc()[-1200:]
         row["seconds"] = round(time.monotonic() - t0, 1)
         res["checks"][key] = row

@@ -3,7 +3,6 @@
 import contextlib
 import logging
 import os
-import tempfile
 
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 
@@ -62,9 +61,14 @@ async def extract_text_from_image(
     except Exception:
         _ocr_tracker = None
 
-    fd, tmp_path = tempfile.mkstemp(suffix=suffix)
+    # staged under YUNSHU_MEDIA_DIR: the VLM fallback refuses local files outside it
+    # ("Local file access blocked"), which made every VLM-served OCR request a 500
+    from yunshu_engine.paths import stage_media_file
+
+    staged = stage_media_file(suffix)
+    tmp_path = staged.name
     try:
-        with os.fdopen(fd, "wb") as f:
+        with staged as f:
             f.write(content)
 
         # Find OCR engine

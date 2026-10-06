@@ -42,7 +42,8 @@ def test_text_model_gets_a_503_that_names_the_fix(make_client):
     assert "Qwen2.5-3B-Instruct-4bit" in msg and "cannot read text from images" in msg
 
 
-def test_vision_model_serves_the_ocr_fallback(make_client, monkeypatch):
+def test_vision_model_serves_the_ocr_fallback(make_client, monkeypatch, tmp_path):
+    monkeypatch.setenv("YUNSHU_MEDIA_DIR", str(tmp_path / "media"))
     from yunshu_engine.vlm_engine import VLMEngine
 
     calls = []
@@ -65,4 +66,6 @@ def test_vision_model_serves_the_ocr_fallback(make_client, monkeypatch):
     body = r.json()
     assert body["text"] == "HELLO" and body["usage"]["completion_tokens"] == 2
     parts = calls[0][0]["content"]
-    assert any(p.get("type") == "image_url" for p in parts)
+    urls = [p["image_url"]["url"] for p in parts if p.get("type") == "image_url"]
+    # the VLM refuses local files outside YUNSHU_MEDIA_DIR: the upload must be staged there
+    assert urls and urls[0].startswith("file://" + str(tmp_path / "media")), urls

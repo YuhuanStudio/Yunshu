@@ -1542,7 +1542,7 @@ def _ollama_native(c: Ctx):
         r = c.req(method, path, json=body, timeout=120)
         # documented: models are managed with `yunshu pull` / `yunshu model`, not over this API
         expect(
-            r.status_code == 501 and "yunshu" in r.text,
+            r.status_code == 501 and "not supported" in r.text,
             f"{method} {path}: {r.status_code} {r.text[:100]}",
         )
         err_ok(r, "ollama")
