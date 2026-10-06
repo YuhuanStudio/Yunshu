@@ -282,11 +282,9 @@ def test_every_media_check_passes_against_a_good_server(needs):
     shared = {}
     if needs == "asr":
         shared["tts_wav"] = make_wav(3.2)
-    for name, chk in rc.REGISTRY.items():
+    for chk in rc.REGISTRY.values():
         if chk.needs == needs:
             chk.fn(ctx_for(needs, shared=shared))
-    if needs == "tts":
-        assert shared == {} or True
 
 
 def test_tts_output_is_kept_for_asr():
