@@ -217,9 +217,26 @@ def test_routes_job_in_plan_with_two_models_and_a_multi_server(tmp_path):
     cmd = plan["routes"]["cmd"]
     # both small models one after the other (three ports in the lane), then the multi server
     assert cmd.count("--model") == 2 and cmd.count("--multi") == 2
-    assert [
+    names = [
         j["name"] for j in d.plan("abc1234", tmp_path, {"routes"}) if j["name"] != "env"
-    ] == ["routes"]
+    ]
+    assert names == [
+        "routes",
+        "routes-speech",
+        "routes-ocr",
+        "routes-image",
+        "routes-embed",
+    ]
+    # one server per modality, every checkpoint on the M3 allowlist, declared memory under the cap
+    allowed = d.MODELS and __import__("gpuq_remote").M3_MODELS
+    for j in d.plan("abc1234", tmp_path):
+        if j["name"].startswith("routes-"):
+            mem = int(j["submit"][j["submit"].index("--mem-gb") + 1])
+            tmo = int(j["submit"][j["submit"].index("--timeout") + 1])
+            assert mem <= 28 and tmo <= 20, j["name"]
+            for a in j["cmd"]:
+                if "=/Volumes/" in a:
+                    assert a.rsplit("/", 1)[1] in allowed, a
 
 
 def test_route_coverage_verdict_fails_closed(tmp_path):

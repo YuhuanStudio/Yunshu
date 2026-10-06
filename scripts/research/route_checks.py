@@ -81,6 +81,9 @@ class Ctx:
     notes: dict = field(default_factory=dict)
     mm_models: list = field(default_factory=list)  # multi-model server: model ids
     log_tail: Any = None  # callable(n) -> the server log's last n lines
+    shared: dict = field(
+        default_factory=dict
+    )  # kept across the servers of one job (TTS -> ASR)
     fake: Any = None  # FakeBackend (search / MCP / page on loopback), multi server only
 
     def auth(self, extra=None):
@@ -1980,6 +1983,9 @@ def _web_search_unconfigured(c: Ctx):
     c.notes["web_search_responses"] = [o.type for o in r.output]
 
 
+from route_checks_media import (
+    wav_info,  # noqa: E402,F401  registers the modality checks
+)
 from route_checks_tools import (
     FakeBackend,  # noqa: E402,F401  registers the server-tool checks
 )

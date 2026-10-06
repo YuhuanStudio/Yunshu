@@ -17,7 +17,9 @@ def _client(monkeypatch, entries):
     monkeypatch.setattr(gm, "get_model_manager", lambda: mgr)
     monkeypatch.setattr(gm, "get_engine", lambda: None)
     app = gm.create_app()
-    app.state.server_state = gm.ServerState.RUNNING  # other tests leave the module state draining
+    app.state.server_state = (
+        gm.ServerState.RUNNING
+    )  # other tests leave the module state draining
     return TestClient(app)
 
 

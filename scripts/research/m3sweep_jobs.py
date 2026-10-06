@@ -739,7 +739,7 @@ def cmd_routes(a):
         "complete": False,
         "_out": a.out,
     }
-    for model in a.model:
+    for model in a.model or []:
         name = Path(model).name
         srv = None
         try:
@@ -752,6 +752,26 @@ def cmd_routes(a):
                 res["failures"].append(f"{name}: server died rc={srv.proc.returncode}")
             elif httpx.get(srv.url + "/health/ready", timeout=10).status_code != 200:
                 res["failures"].append(f"{name}: server not ready after the checks")
+        except BaseException as e:  # noqa: BLE001
+            res["failures"].append(f"{name}: {type(e).__name__}: {e}")
+            traceback.print_exc()
+        finally:
+            if srv:
+                res.setdefault("server_log_tail", {})[name] = srv.log_tail(30)
+                srv.kill()
+    shared: dict = {}
+    for spec in a.media:
+        needs, _, model = spec.partition("=")
+        name = f"{needs}:{Path(model).name}"
+        srv = None
+        try:
+            srv = start_server(model, f"routes-{needs}", [])
+            ctx = routes_make_ctx(srv, "", needs)
+            ctx.shared = shared
+            run_route_checks(ctx, needs, only, res, srv, name)
+            res["notes"][name] = ctx.notes
+            if srv.proc.poll() is not None:
+                res["failures"].append(f"{name}: server died rc={srv.proc.returncode}")
         except BaseException as e:  # noqa: BLE001
             res["failures"].append(f"{name}: {type(e).__name__}: {e}")
             traceback.print_exc()
@@ -844,6 +864,12 @@ def build_parser():
         p = sub.add_parser(n)
         if n == "routes":
             p.add_argument("--multi", action="append", default=[])
+            p.add_argument(
+                "--media",
+                action="append",
+                default=[],
+                help="NEEDS=MODEL: tts asr ocr image embed",
+            )
             p.add_argument("--only")
         if n == "agent":
             p.add_argument("--strict", action="store_true")
@@ -854,7 +880,7 @@ def build_parser():
         p.add_argument("--out", required=True)
         p.add_argument(
             "--model",
-            required=(n in ("wire", "agent", "routes")),
+            required=(n in ("wire", "agent")),
             action="append" if n in ("units", "routes") else "store",
         )
     return ap
