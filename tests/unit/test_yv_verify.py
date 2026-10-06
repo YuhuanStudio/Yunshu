@@ -882,3 +882,40 @@ def test_quick_suite_and_gpu_minutes(world):
     assert go(world, suite="smoke", label="g") == 0
     v, _ = verdict_of(world, "g")
     assert v["gpu_minutes"]["total"] > 0 and "smoke" in v["gpu_minutes"]
+
+
+# ── long gate stage ──────────────────────────────────────────────────────
+def test_judge_long_fails_closed():
+    stg = ["identity", "longqa"]
+    good = {
+        "overall": "PASS",
+        "exit_code": 0,
+        "stages": [{"name": n, "status": "PASS"} for n in stg],
+    }
+    assert gate.judge_long(good, stg)[0]
+    assert not gate.judge_long(None, stg)[0]
+    missing = dict(good, stages=good["stages"][:1])
+    assert not gate.judge_long(missing, stg)[0]
+    notrun = dict(
+        good, stages=[good["stages"][0], {"name": "longqa", "status": "NOT_RUN"}]
+    )
+    assert not gate.judge_long(notrun, stg)[0]
+    assert not gate.judge_long(dict(good, overall="INCOMPLETE", exit_code=2), stg)[0]
+    assert not gate.judge_long(dict(good, exit_code=1), stg)[0]
+
+
+def test_gate_long_stage_runs_suite_and_fails_closed(gate_world, monkeypatch):
+    w = gate_world
+    git(w.repo, "tag", "v0.0.1", "base")
+    assert gate.long_base(w.repo) == "v0.0.1"
+    monkeypatch.setattr(gate, "LONG_SUITE", "tiny")
+    monkeypatch.setattr(
+        gate, "local_env", lambda: {"GATE_ROOT": str(w.tmp / "gateroot"), "M": w.model}
+    )
+    assert "long" in gate.DEFAULT_STAGES
+    assert run_gate(w, stages=["long"]) == 0
+    v = json.loads(next(w.runs.glob("gate-*")).joinpath("verdict.json").read_text())
+    assert v["stages"][0]["name"] == "long" and v["stages"][0]["status"] == "PASS"
+    # a stage that never produced a verdict (no model) fails the gate
+    monkeypatch.setattr(gate, "local_env", lambda: {"GATE_ROOT": str(w.tmp / "g2")})
+    assert run_gate(w, stages=["long"], resume=False) == 1

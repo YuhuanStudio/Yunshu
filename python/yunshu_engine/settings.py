@@ -160,6 +160,7 @@ _add("YUNSHU_RATE_LIMIT_RPM", "int", 0, "Per-client request rate limit in reques
 _add("YUNSHU_TRUSTED_PROXIES", "list", (), "Comma-separated proxy IPs whose X-Forwarded-For header is trusted.", "auth")
 
 # ── memory ─────────────────────────────────────────────────────────────
+_add("YUNSHU_FOOTPRINT_SAMPLE_MS", "int", 0, "Sample this process's phys_footprint every N ms on a background thread and export the peak as yunshu_process_footprint_bytes on /metrics (the memory benchmarks set 20). 0 (default) = off.", "memory", minimum=0)
 _add("YUNSHU_MAX_MEMORY_GB", "gb", None, "Multi-model mode memory ceiling in GiB, e.g. '48' or '48GB'; 'disabled' turns the enforcer off. Unset: 80% of unified memory.", "memory")
 _add("YUNSHU_PREFILL_STEP_SIZE", "int", 2048, "Text engine: prompt tokens per prefill forward pass; lower it to cap the prefill activation peak on small-memory machines.", "memory", minimum=1)
 _add("YUNSHU_MEM_PRESSURE_THRESHOLD", "float", 85.0, "Text engine: evict prefix-cache entries above this memory use (percent, or a fraction <= 1).", "memory", minimum=0.0)

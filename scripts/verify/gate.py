@@ -7,6 +7,7 @@ have no FAIL / CONTENDED, at least one PASS, and the job exited 0.
 
 from __future__ import annotations
 
+import json
 import os
 import time
 from collections.abc import Callable
@@ -23,6 +24,7 @@ from .core import (
     git,
     now,
     read_jsonl,
+    resolve_arm,
     write_json_atomic,
 )
 
@@ -34,6 +36,8 @@ GATE_STAGES = {
     "soak-mmlu": ("soak.mmlu", 90, 65, 20),
     "soak-realistic": ("soak.realistic", 60, 65, 20),
     "agent-sessions": ("agent.", 90, 65, 20),
+    # not a gate.sh stage: `yv ab --suite long` (its own gpuq jobs), judged from its verdict
+    "long": ("long.", 0, 0, 0),
 }
 DEFAULT_STAGES = [
     "install",
@@ -42,7 +46,9 @@ DEFAULT_STAGES = [
     "soak-mmlu",
     "soak-realistic",
     "agent-sessions",
+    "long",
 ]
+LONG_SUITE = "long"
 GATE_PORT = "18993"
 
 
@@ -72,6 +78,78 @@ def judge_rows(rows: list, prefix: str) -> tuple[bool, list]:
     if not any(r.get("status") == "PASS" for r in mine):
         bad.append("no PASS rows")
     return not bad, bad
+
+
+def long_base(repo: Path) -> str:
+    """The release reference for the long suite: the newest v* tag before HEAD (HEAD itself
+    being tagged means the release under test, so the tag before it), else origin/main."""
+    for rev in ("HEAD", "HEAD^"):
+        try:
+            tag = git(
+                "describe", "--tags", "--abbrev=0", "--match", "v*", rev, cwd=repo
+            )
+        except Exception:  # noqa: BLE001 - no tag reachable
+            continue
+        if tag and git("rev-parse", tag + "^{commit}", cwd=repo) != git(
+            "rev-parse", "HEAD", cwd=repo
+        ):
+            return tag
+    return "origin/main"
+
+
+def judge_long(verdict: dict | None, planned: list) -> tuple[bool, list]:
+    """Fail closed: the long verdict must exist, be PASS / exit 0, and every planned stage PASS
+    (a missing, NOT_RUN or skipped cell is a failure, never a pass). Pure; unit-tested."""
+    if not verdict:
+        return False, ["no verdict.json from yv ab --suite long"]
+    bad = []
+    if verdict.get("overall") != "PASS" or verdict.get("exit_code") != 0:
+        bad.append(
+            f"yv verdict {verdict.get('overall')} exit {verdict.get('exit_code')}"
+            + (
+                f": {verdict['infra_error'][:120]}"
+                if verdict.get("infra_error")
+                else ""
+            )
+        )
+    got = {s.get("name"): s for s in verdict.get("stages", [])}
+    for name in planned:
+        s = got.get(name)
+        if s is None:
+            bad.append(f"{name}: missing from verdict")
+        elif s.get("status") != "PASS":
+            bad.append(
+                f"{name}: {s.get('status')} {'; '.join(map(str, s.get('reasons', [])[:2]))[:160]}"
+            )
+    return not bad, bad
+
+
+def run_long_stage(a, gq, log, runs, repo, priority) -> tuple[bool, list, str]:
+    """Run the long suite (candidate = the commit under test, base = long_base) and judge it."""
+    import argparse
+
+    from . import runner
+    from .suites import parse_suite
+
+    commit = git("rev-parse", "HEAD", cwd=repo)
+    ns = argparse.Namespace(
+        base=a["base"], cand=str(repo), env=[], cand_env=[], base_env=[],
+        suite=LONG_SUITE, label=f"gate-long-{commit[:8]}", model=a["model"],
+        model_name="", engaged=[], ctx=None, reps=None, mmlu_n=None, mem_sizes=None,
+        mem_reps=None, speed_tol=None, spec_off=None, no_apc_hit_required=False,
+        mem_gb=0, priority=priority,
+    )  # fmt: skip
+    rc = runner.run_ab(ns, gq=gq, log=log, runs=runs)
+    cand = resolve_arm("cand", str(repo))
+    vp = runner.run_dir_for(ns.label, cand, runs) / "verdict.json"
+    try:
+        v = json.loads(vp.read_text())
+    except (OSError, ValueError):
+        v = None
+    ok, why = judge_long(v, parse_suite(LONG_SUITE)["stages"])
+    if rc != 0 and ok:
+        ok, why = False, [f"yv exit {rc}"]
+    return ok, why, str(vp.parent)
 
 
 def read_stage_rows(out_dir: Path) -> list:
@@ -127,6 +205,44 @@ def run_gate(
                     "job": prior[-1].get("job"),
                 }
             )
+            continue
+        if name == "long":
+            model = env.get("M", "")
+            base = env.get("GATE_LONG_BASE") or long_base(repo)
+            log(
+                f"gate long: yv --suite {LONG_SUITE} base {base} cand HEAD {commit[:12]}"
+            )
+            if not model or not Path(model).is_dir():
+                ok, reasons, where = (
+                    False,
+                    [f"M (Qwen3.8-27B) not set or missing: {model!r}"],
+                    "-",
+                )
+            else:
+                ok, reasons, where = run_long_stage(
+                    {"base": base, "model": model}, gq, log, runs, repo, priority
+                )
+            rd.append(
+                name,
+                {
+                    "ev": "stage_complete",
+                    "passed": ok,
+                    "reasons": reasons,
+                    "job": where,
+                },
+            )
+            results.append(
+                {
+                    "name": name,
+                    "status": "PASS" if ok else "FAIL",
+                    "reasons": reasons,
+                    "job": where,
+                }
+            )
+            log(f"gate long: {'PASS' if ok else 'FAIL'} {'; '.join(reasons)[:300]}")
+            if not ok:
+                failed = name
+                break
             continue
         out_dir = rd.path / f"gate-{name}"
         out_dir.mkdir(exist_ok=True)

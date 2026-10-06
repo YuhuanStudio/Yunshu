@@ -160,6 +160,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.server_state = ServerState.RUNNING
     app.state.load_error = None
 
+    from yunshu_engine import footprint_sampler
+
+    footprint_sampler.start_from_settings()
+
     # ── Startup validation ──
     env_warnings = _validate_settings()
     for w in env_warnings:
