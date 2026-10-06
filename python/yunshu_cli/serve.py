@@ -1,3 +1,4 @@
+# Upstream (inspired): vllm-project/vllm (Apache-2.0) vllm/entrypoints/launchers/launcher.py shutdown modes @ 68088ed
 """Yunshu CLI — serve subcommand.
 
 Starts the inference server in single-model or multi-model mode.
@@ -341,11 +342,21 @@ def serve(
         # Ctrl-C / SIGTERM: in-flight requests get this long to finish, then
         # their connections are cancelled (which stops their GPU work) and the
         # server exits. Without it uvicorn waits for open streams forever.
-        timeout_graceful_shutdown=int(settings.get("YUNSHU_DRAIN_TIMEOUT")) or None,
+        timeout_graceful_shutdown=graceful_shutdown_timeout(
+            settings.get("YUNSHU_DRAIN_TIMEOUT")
+        ),
         # NB: uvicorn.run has no request-size limit kwarg; the limit is enforced
         # by the gateway middleware via YUNSHU_MAX_REQUEST_SIZE (set above).
         server_header="Yunshu" if server_header else None,
     )
+
+
+def graceful_shutdown_timeout(drain_timeout: float) -> int:
+    """uvicorn's per-connection grace: 0 aborts in-flight requests at once (vLLM ``shutdown_timeout=0``
+    is "abort", N is "drain N s"), never "wait forever" (``int(x) or None`` turned 0 and 0.5 into that)."""
+    import math
+
+    return max(0, math.ceil(float(drain_timeout)))
 
 
 def _check_bind_address(host: str, port: int) -> None:

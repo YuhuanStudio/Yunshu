@@ -19,7 +19,7 @@ class TestMetricsMiddleware:
             assert resp.status_code == 200
             text = resp.text
             assert "yunshu_uptime_seconds" in text
-            assert "yunshu_request_count" in text
+            assert "yunshu_http_requests_total" in text
             assert "yunshu_tokens_total" in text
 
     def test_metrics_record_requests(self):
@@ -31,7 +31,7 @@ class TestMetricsMiddleware:
             client.get("/v1/models")
             resp = client.get("/metrics")
             text = resp.text
-            assert "yunshu_request_count" in text
+            assert "yunshu_http_requests_total" in text
 
 
 class TestRateLimitMiddleware:

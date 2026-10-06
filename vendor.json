@@ -939,6 +939,63 @@
       "local_changes": [
         "request validation: stream_options needs stream, tool_choice must name a listed tool, prompt_logprobs >= 0 (also completions.py)"
       ]
+    },
+    {
+      "kind": "inspired",
+      "path": "python/yunshu_engine/tool_format.py",
+      "repo": "https://github.com/vllm-project/vllm",
+      "clone": "reference/vllm",
+      "upstream_paths": [
+        "tests/tool_parsers/test_qwen3coder_tool_parser.py",
+        "tests/tool_parsers/test_gemma4_tool_parser.py"
+      ],
+      "commit": "68088ed",
+      "license": "Apache-2.0",
+      "local_changes": [
+        "dropped </parameter> repair, Gemma 4 delimited-key stripping, found by porting vLLM's tool parser tests"
+      ]
+    },
+    {
+      "kind": "inspired",
+      "path": "python/yunshu_engine/reasoning_parser.py",
+      "repo": "https://github.com/vllm-project/vllm",
+      "clone": "reference/vllm",
+      "upstream_paths": [
+        "tests/reasoning/test_gemma4_reasoning_parser.py"
+      ],
+      "commit": "68088ed",
+      "license": "Apache-2.0",
+      "local_changes": [
+        "Gemma 4 <|channel>thought / <channel|> text form in GemmaReasoningParser"
+      ]
+    },
+    {
+      "kind": "inspired",
+      "path": "python/yunshu_gateway/streaming.py",
+      "repo": "https://github.com/vllm-project/vllm",
+      "clone": "reference/vllm",
+      "upstream_paths": [
+        "tests/entrypoints/openai/responses/test_streaming_events.py"
+      ],
+      "commit": "68088ed",
+      "license": "Apache-2.0",
+      "local_changes": [
+        "response.created carries status in_progress; reasoning item on output_item.added carries summary: []"
+      ]
+    },
+    {
+      "kind": "inspired",
+      "path": "python/yunshu_cli/serve.py",
+      "repo": "https://github.com/vllm-project/vllm",
+      "clone": "reference/vllm",
+      "upstream_paths": [
+        "vllm/entrypoints/launchers/launcher.py"
+      ],
+      "commit": "68088ed",
+      "license": "Apache-2.0",
+      "local_changes": [
+        "drain timeout 0 aborts in-flight requests (vLLM shutdown_timeout semantics)"
+      ]
     }
   ],
   "patches": [

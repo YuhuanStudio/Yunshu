@@ -474,7 +474,7 @@ class PrometheusMetrics:
             "MTP acceptance rate (alternate gauge set from batched_engine)",
         )
         self._counters["mtp_total_cycles"] = _Counter(
-            "yunshu_mtp_total_cycles",
+            "yunshu_mtp_cycles_total",
             "MTP total speculative decoding cycles",
         )
 

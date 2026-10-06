@@ -201,3 +201,43 @@ def _stream_usage(c: Ctx):
             and u.total_tokens == u.prompt_tokens + u.completion_tokens,
             f"{kind}: usage {u}",
         )
+
+
+@check("vllm_responses_stream_sequence", "POST /v1/responses", served=True)
+def _responses_stream_sequence(c: Ctx):
+    """vLLM tests/entrypoints/openai/responses/test_streaming_events.py: every event parses with the
+    SDK's ResponseStreamEvent models, sequence numbers strictly increase, the lifecycle is ordered,
+    and the done text equals the deltas and the final output."""
+    import json
+
+    from openai.types.responses import ResponseStreamEvent
+    from pydantic import TypeAdapter
+
+    ad = TypeAdapter(ResponseStreamEvent)
+    body = {
+        "model": c.model,
+        "input": "Say hello.",
+        "stream": True,
+        "max_output_tokens": 48,
+    }
+    evs = []
+    with c.http.stream("POST", "/v1/responses", headers=c.auth(), json=body) as r:
+        expect(r.status_code == 200, f"status {r.status_code}")
+        for line in r.iter_lines():
+            if line.startswith("data:") and line[5:].strip() != "[DONE]":
+                evs.append(json.loads(line[5:]))
+    expect(evs, "no events")
+    for e in evs:
+        ad.validate_python(e)
+    seq = [e["sequence_number"] for e in evs]
+    expect(seq == sorted(set(seq)), f"sequence numbers {seq[:12]}")
+    types = [e["type"] for e in evs]
+    expect(types[0] == "response.created", f"first {types[0]}")
+    expect(
+        types[-1] in ("response.completed", "response.incomplete"), f"last {types[-1]}"
+    )
+    deltas = "".join(
+        e["delta"] for e in evs if e["type"] == "response.output_text.delta"
+    )
+    done = [e for e in evs if e["type"] == "response.output_text.done"]
+    expect(done and done[-1]["text"] == deltas, "output_text.done != joined deltas")

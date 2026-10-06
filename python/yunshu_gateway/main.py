@@ -726,7 +726,7 @@ def create_app() -> FastAPI:
     # OUTERMOST middleware. add_middleware prepends, so the last-added wraps everything —
     # registering it here (first) made it the INNERMOST, so it only saw requests that passed
     # auth/rate-limit/body-size and EVERY gateway-level rejection (401/429/413/503) was
-    # invisible to yunshu_request_count / error_count / the duration histogram / the
+    # invisible to yunshu_http_requests_total / error_count / the duration histogram / the
     # aggregator's error-rate. Its own comments + the cardinality cap already assume it
     # runs before auth on attacker-controlled paths; this makes the registration match. Its
     # recording reads only path/method/status/latency (no pre-call auth state), so it is safe
