@@ -262,7 +262,9 @@ class RemoteServer:
     def start(self):
         import httpx
 
-        self.model_id = httpx.get(self.url + "/v1/models", timeout=30).json()["data"][0]["id"]
+        self.model_id = httpx.get(self.url + "/v1/models", timeout=30).json()["data"][
+            0
+        ]["id"]
 
     def kill(self):
         pass
@@ -271,7 +273,11 @@ class RemoteServer:
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", default="")
-    ap.add_argument("--url", default="", help="use a running server (e.g. an ssh-forwarded M3) instead of starting one")
+    ap.add_argument(
+        "--url",
+        default="",
+        help="use a running server (e.g. an ssh-forwarded M3) instead of starting one",
+    )
     ap.add_argument("--scenarios", default=",".join(SCENARIOS))
     ap.add_argument("--timeout", type=int, default=420)
     ap.add_argument(
@@ -473,7 +479,10 @@ def main():
             (dst / "stderr.txt").write_text(se)
         (out / "results.json").write_text(json.dumps(results, indent=1))
         failed = [n for n, r in results.items() if not r.get("ok")]
-        print(f"e2e_agents: {len(results) - len(failed)}/{len(results)} passed, failed: {failed}", flush=True)
+        print(
+            f"e2e_agents: {len(results) - len(failed)}/{len(results)} passed, failed: {failed}",
+            flush=True,
+        )
         if not results or failed:
             sys.exit(1)
     finally:

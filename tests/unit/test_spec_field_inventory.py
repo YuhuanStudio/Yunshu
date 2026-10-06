@@ -11,11 +11,21 @@ import pytest
 pytest.importorskip("openai")
 pytest.importorskip("anthropic")
 
-from anthropic.types.beta.message_create_params import MessageCreateParamsBase as BetaMessages  # noqa: E402
-from anthropic.types.message_create_params import MessageCreateParamsBase as Messages  # noqa: E402
-from openai.types.chat.completion_create_params import CompletionCreateParamsBase as Chat  # noqa: E402
-from openai.types.completion_create_params import CompletionCreateParamsBase as Completions  # noqa: E402
-from openai.types.responses.response_create_params import ResponseCreateParamsBase as Responses  # noqa: E402
+from anthropic.types.beta.message_create_params import (
+    MessageCreateParamsBase as BetaMessages,
+)  # noqa: E402
+from anthropic.types.message_create_params import (
+    MessageCreateParamsBase as Messages,  # noqa: E402
+)
+from openai.types.chat.completion_create_params import (
+    CompletionCreateParamsBase as Chat,
+)  # noqa: E402
+from openai.types.completion_create_params import (
+    CompletionCreateParamsBase as Completions,
+)  # noqa: E402
+from openai.types.responses.response_create_params import (
+    ResponseCreateParamsBase as Responses,
+)  # noqa: E402
 
 from yunshu_gateway.routers.anthropic import AnthropicMessagesRequest  # noqa: E402
 from yunshu_gateway.routers.chat import ChatCompletionRequest  # noqa: E402
@@ -76,6 +86,10 @@ def test_every_sdk_parameter_is_triaged(name):
     sdk, model = SURFACES[name]
     params = set(typing.get_type_hints(sdk))
     untriaged = params - set(model.model_fields) - set(ACCEPTED_IGNORED[name])
-    assert not untriaged, f"{name}: new SDK parameters neither modelled nor triaged: {sorted(untriaged)}"
+    assert not untriaged, (
+        f"{name}: new SDK parameters neither modelled nor triaged: {sorted(untriaged)}"
+    )
     stale = set(ACCEPTED_IGNORED[name]) & set(model.model_fields)
-    assert not stale, f"{name}: listed as ignored but now modelled, drop from the list: {sorted(stale)}"
+    assert not stale, (
+        f"{name}: listed as ignored but now modelled, drop from the list: {sorted(stale)}"
+    )

@@ -2457,7 +2457,9 @@ class VLMEngine:
             # cache_control / prompt_cache_breakpoint is a hint (Anthropic never fails a request over it): a chat
             # template that drops or repeats a marker (Qwen removes the reasoning of earlier turns, so a marker on a
             # thinking block vanishes) means no explicit checkpoint, not a failed turn.
-            logger.warning("explicit cache breakpoints ignored, serving without them: %s", exc)
+            logger.warning(
+                "explicit cache breakpoints ignored, serving without them: %s", exc
+            )
             return None
         if prompt_kwargs is not None:
             from mlx_vlm.apc import multimodal_token_ids_from_config

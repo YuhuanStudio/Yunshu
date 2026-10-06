@@ -48,17 +48,25 @@ def fold_allowed_tools(data: Any) -> Any:
     tc = data.get("tool_choice")
     if not (isinstance(tc, dict) and tc.get("type") == "allowed_tools"):
         return data
-    spec = tc.get("allowed_tools") or tc  # chat nests it; Responses puts mode / tools beside type
+    spec = (
+        tc.get("allowed_tools") or tc
+    )  # chat nests it; Responses puts mode / tools beside type
     names = {
         (t.get("function") or {}).get("name") or t.get("name")
         for t in spec.get("tools") or []
         if isinstance(t, dict)
     }
-    out = {**data, "tool_choice": spec.get("mode") if spec.get("mode") in ("auto", "required") else "auto"}
+    out = {
+        **data,
+        "tool_choice": spec.get("mode")
+        if spec.get("mode") in ("auto", "required")
+        else "auto",
+    }
     if names and isinstance(data.get("tools"), list):
         out["tools"] = [
             t
             for t in data["tools"]
-            if isinstance(t, dict) and ((t.get("function") or {}).get("name") or t.get("name")) in names
+            if isinstance(t, dict)
+            and ((t.get("function") or {}).get("name") or t.get("name")) in names
         ]
     return out

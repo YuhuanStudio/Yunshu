@@ -52,6 +52,7 @@ def responses_usage(
             "reasoning_tokens": clamp_detail(reasoning_tokens, output_tokens)
         },
         "input_tokens_details": {
-            "cached_tokens": clamp_detail(cached_tokens, input_tokens)
+            "cached_tokens": clamp_detail(cached_tokens, input_tokens),
+            "cache_write_tokens": 0,  # required by the current openai Response type; writes are in x_yunshu
         },
     }

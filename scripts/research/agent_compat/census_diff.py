@@ -68,13 +68,17 @@ def signature(root: Path) -> dict[str, set[str]]:
             if isinstance(body, dict):
                 out: dict[str, set[str]] = {"fields": set(), "types": set()}
                 _walk(body, "", out)
-                sig["fields"].update(f"{ep} {x}" for x in out["fields"] if not _is_volatile(x))
+                sig["fields"].update(
+                    f"{ep} {x}" for x in out["fields"] if not _is_volatile(x)
+                )
                 sig["types"].update(f"{ep} {x}" for x in out["types"])
     return sig
 
 
 def diff(old: dict, new: dict) -> dict[str, list[str]]:
-    return {k: sorted(new[k] - old.get(k, set())) for k in new if new[k] - old.get(k, set())}
+    return {
+        k: sorted(new[k] - old.get(k, set())) for k in new if new[k] - old.get(k, set())
+    }
 
 
 def main(argv=None) -> int:

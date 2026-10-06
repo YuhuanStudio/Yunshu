@@ -14,7 +14,14 @@ from __future__ import annotations
 
 import json
 
-ANTH_STOP = {"end_turn", "max_tokens", "stop_sequence", "tool_use", "pause_turn", "refusal"}
+ANTH_STOP = {
+    "end_turn",
+    "max_tokens",
+    "stop_sequence",
+    "tool_use",
+    "pause_turn",
+    "refusal",
+}
 ANTH_DELTAS = {
     "text": {"text_delta", "citations_delta"},
     "thinking": {"thinking_delta", "signature_delta"},
@@ -35,8 +42,16 @@ def check_anthropic_stream(events) -> list[str]:
     p: list[str] = []
     if not events:
         return ["empty stream"]
-    evs = [(n, d) for n, d in events if n != "ping" and not (isinstance(d, dict) and d.get("type") == "ping")]
-    if evs and evs[-1][0] == "error" or (evs and isinstance(evs[-1][1], dict) and evs[-1][1].get("type") == "error"):
+    evs = [
+        (n, d)
+        for n, d in events
+        if n != "ping" and not (isinstance(d, dict) and d.get("type") == "ping")
+    ]
+    if (
+        evs
+        and evs[-1][0] == "error"
+        or (evs and isinstance(evs[-1][1], dict) and evs[-1][1].get("type") == "error")
+    ):
         return ["stream ended with an error event: " + json.dumps(evs[-1][1])[:200]]
     for n, d in evs:
         if not isinstance(d, dict):
@@ -85,7 +100,9 @@ def check_anthropic_stream(events) -> list[str]:
         elif t == "content_block_delta":
             b = open_blocks.get(d.get("index"))
             if b is None:
-                p.append(f"content_block_delta for closed/unknown block {d.get('index')}")
+                p.append(
+                    f"content_block_delta for closed/unknown block {d.get('index')}"
+                )
                 continue
             dt = (d.get("delta") or {}).get("type")
             allowed = ANTH_DELTAS.get(b["type"])
@@ -97,7 +114,9 @@ def check_anthropic_stream(events) -> list[str]:
             b = open_blocks.pop(d.get("index"), None)
             if b is None:
                 p.append(f"content_block_stop for unknown block {d.get('index')}")
-            elif b["type"] in ("tool_use", "server_tool_use") and not _is_json_obj(b["json"]):
+            elif b["type"] in ("tool_use", "server_tool_use") and not _is_json_obj(
+                b["json"]
+            ):
                 p.append(f"tool_use input is not a JSON object: {b['json'][:80]!r}")
         elif t == "message_delta":
             if open_blocks:
@@ -180,11 +199,15 @@ def check_chat_stream(events, expect_usage: bool = False) -> list[str]:
         if not _is_json_obj(a):
             p.append(f"tool_call arguments not a JSON object: {a[:80]!r}")
     if tool_seen != any(f == "tool_calls" for f in finish.values()):
-        p.append(f"finish_reason {sorted(finish.values())} disagrees with tool_calls={tool_seen}")
+        p.append(
+            f"finish_reason {sorted(finish.values())} disagrees with tool_calls={tool_seen}"
+        )
     usage = [c for c in chunks if c.get("usage") and not c.get("choices")]
     if expect_usage:
         if not usage:
-            p.append("stream_options.include_usage but no usage chunk with empty choices")
+            p.append(
+                "stream_options.include_usage but no usage chunk with empty choices"
+            )
         else:
             u = usage[-1]["usage"]
             for k in ("prompt_tokens", "completion_tokens", "total_tokens"):
@@ -199,7 +222,9 @@ def check_responses_stream(events) -> list[str]:
         return ["empty stream"]
     seq = -1
     names = []
-    if events and events[-1][1] == "[DONE]":  # Yunshu ends Responses streams like chat; every SDK stops on it
+    if (
+        events and events[-1][1] == "[DONE]"
+    ):  # Yunshu ends Responses streams like chat; every SDK stops on it
         events = events[:-1]
     for n, d in events:
         if not isinstance(d, dict):
@@ -215,7 +240,12 @@ def check_responses_stream(events) -> list[str]:
             seq = d["sequence_number"]
     if names[0] != "response.created":
         p.append(f"first event {names[0]!r}, expected response.created")
-    terminal = [n for n in names if n in ("response.completed", "response.incomplete", "response.failed", "error")]
+    terminal = [
+        n
+        for n in names
+        if n
+        in ("response.completed", "response.incomplete", "response.failed", "error")
+    ]
     if len(terminal) != 1 or names[-1] != terminal[0]:
         p.append(f"expected one terminal event at the end, got {terminal}")
     if terminal and terminal[0] in ("response.failed", "error"):
@@ -241,11 +271,15 @@ def check_responses_stream(events) -> list[str]:
         if final.get("object") != "response":
             p.append("final response.object != response")
         if len(final.get("output") or []) != len(done):
-            p.append(f"final output has {len(final.get('output') or [])} items, stream produced {len(done)}")
+            p.append(
+                f"final output has {len(final.get('output') or [])} items, stream produced {len(done)}"
+            )
         if "usage" not in final:
             p.append("final response lacks usage")
     for item in done.values():
-        if item.get("type") == "function_call" and not _is_json_obj(item.get("arguments", "")):
+        if item.get("type") == "function_call" and not _is_json_obj(
+            item.get("arguments", "")
+        ):
             p.append("function_call arguments not a JSON object")
     return p
 

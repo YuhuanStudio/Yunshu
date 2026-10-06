@@ -89,13 +89,20 @@ def verdict_body(path: str, text: str) -> list[str]:
     try:
         return stream_check.check_body(path, json.loads(text))
     except ValueError:
-        return [] if path.split("?")[0] not in ("/v1/messages", "/v1/responses", "/v1/chat/completions") else ["body is not JSON"]
+        return (
+            []
+            if path.split("?")[0]
+            not in ("/v1/messages", "/v1/responses", "/v1/chat/completions")
+            else ["body is not JSON"]
+        )
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", default="")
-    ap.add_argument("--census", default="", help="a census run dir (default: newest *-agent-census)")
+    ap.add_argument(
+        "--census", default="", help="a census run dir (default: newest *-agent-census)"
+    )
     ap.add_argument("--sessions", default="")
     ap.add_argument("--out", default="")
     ap.add_argument(
@@ -104,9 +111,17 @@ def main():
         help="use an already running server instead of starting one",
     )
     ap.add_argument("--max-tokens", type=int, default=48)
-    ap.add_argument("--per-session", type=int, default=0, help="replay only the first N-1 and the last request of each session (0: all)")
+    ap.add_argument(
+        "--per-session",
+        type=int,
+        default=0,
+        help="replay only the first N-1 and the last request of each session (0: all)",
+    )
     a = ap.parse_args()
-    root = a.census or sorted(glob.glob(str(census.OUT_ROOT.parent / "*-agent-census")))[-1]
+    root = (
+        a.census
+        or sorted(glob.glob(str(census.OUT_ROOT.parent / "*-agent-census")))[-1]
+    )
     if not a.url and not a.model:
         ap.error("--model or --url")
     out = Path(a.out or f"{root}/_replay_{time.strftime('%H%M%S')}")
@@ -135,7 +150,11 @@ def main():
         res = []
         with httpx.Client(timeout=300) as c:
             for n in [*names, *([] if a.sessions else ["synthetic"])]:
-                for i, r in enumerate(thin(load_requests(root, n), 0 if n == "synthetic" else a.per_session)):
+                for i, r in enumerate(
+                    thin(
+                        load_requests(root, n), 0 if n == "synthetic" else a.per_session
+                    )
+                ):
                     body = r["body"]
                     hdr = {
                         k: v for k, v in r["headers"].items() if k.lower() not in DROP
@@ -150,9 +169,14 @@ def main():
                                 body[k] = min(body[k], a.max_tokens)
                     t0 = time.time()
                     rec = dict(session=n, i=i, method=r["method"], path=r["path"])
-                    upgrade = str(r["headers"].get("Upgrade") or r["headers"].get("upgrade") or "")
+                    upgrade = str(
+                        r["headers"].get("Upgrade") or r["headers"].get("upgrade") or ""
+                    )
                     if r["method"] == "GET" and upgrade.lower() == "websocket":
-                        rec.update(status=0, skipped="websocket upgrade (ws_probe.py covers it)")
+                        rec.update(
+                            status=0,
+                            skipped="websocket upgrade (ws_probe.py covers it)",
+                        )
                         res.append(rec)
                         continue
                     try:
@@ -219,7 +243,14 @@ def main():
         (out / "replay.json").write_text(json.dumps(res, indent=1))
         bad = [r for r in res if r.get("status") == -1 or r.get("problems")]
         for r in bad:
-            print("PROBLEM", r["session"], r["i"], r["path"], r.get("error") or r["problems"], flush=True)
+            print(
+                "PROBLEM",
+                r["session"],
+                r["i"],
+                r["path"],
+                r.get("error") or r["problems"],
+                flush=True,
+            )
         print(f"replay: {len(res)} requests, {len(bad)} with problems", flush=True)
         if not res or bad:
             sys.exit(1)

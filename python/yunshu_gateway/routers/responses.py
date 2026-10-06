@@ -358,7 +358,7 @@ async def _vlm_to_responses(req, messages, request, logit_bias, own_input_messag
             "output_tokens": ct,
             "total_tokens": pt + ct,
             "output_tokens_details": {"reasoning_tokens": rt},
-            "input_tokens_details": {"cached_tokens": cached},
+            "input_tokens_details": {"cached_tokens": cached, "cache_write_tokens": 0},
         },
     }
     if req.store:
@@ -606,7 +606,9 @@ class ResponsesRequest(BaseModel):
     # [{"type": "compaction", "compact_threshold": N}]: compact the input first when it exceeds N tokens.
     context_management: list[dict] | None = None
     max_output_tokens: int = Field(
-        default_factory=lambda: int(settings.get("YUNSHU_DEFAULT_MAX_TOKENS")), ge=1, le=1048576
+        default_factory=lambda: int(settings.get("YUNSHU_DEFAULT_MAX_TOKENS")),
+        ge=1,
+        le=1048576,
     )
     # OpenAI Chat Completions legacy alias — accept silently and alias to
     # max_output_tokens so old client code doesn't run unbounded against
@@ -1129,7 +1131,7 @@ async def _prewarm_response(req: ResponsesRequest, request: Request):
         "input_tokens": 0,
         "output_tokens": 0,
         "total_tokens": 0,
-        "input_tokens_details": {"cached_tokens": 0},
+        "input_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0},
         "output_tokens_details": {"reasoning_tokens": 0},
     }
     usage = dict(usage)

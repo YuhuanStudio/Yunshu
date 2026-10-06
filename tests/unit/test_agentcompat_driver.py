@@ -3,7 +3,9 @@
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts/research/agent_compat"))
+sys.path.insert(
+    0, str(Path(__file__).resolve().parents[2] / "scripts/research/agent_compat")
+)
 import agentcompat as ac  # noqa: E402
 import census_diff as cd  # noqa: E402
 
@@ -27,7 +29,15 @@ def test_census_signature_diff(tmp_path):
         d.mkdir(parents=True)
         body = {"model": "m", "thinking": {"type": "adaptive", **extra}}
         (d / "requests.jsonl").write_text(
-            __import__("json").dumps({"method": "POST", "path": "/v1/messages?beta=true", "headers": {"anthropic-beta": beta, "Host": "x"}, "body": body}) + "\n"
+            __import__("json").dumps(
+                {
+                    "method": "POST",
+                    "path": "/v1/messages?beta=true",
+                    "headers": {"anthropic-beta": beta, "Host": "x"},
+                    "body": body,
+                }
+            )
+            + "\n"
         )
         return tmp_path / name
 

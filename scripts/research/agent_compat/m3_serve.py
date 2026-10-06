@@ -26,7 +26,13 @@ import urllib.request
 from pathlib import Path
 
 
-def wait_stop(control: socket.socket, deadline: float, alive, beat=lambda: None, every: float = 30.0) -> str:
+def wait_stop(
+    control: socket.socket,
+    deadline: float,
+    alive,
+    beat=lambda: None,
+    every: float = 30.0,
+) -> str:
     """Block until a client sends `stop` (-> "stop"), the deadline passes (-> "deadline") or alive() is False
     (-> "server-died")."""
     control.settimeout(1.0)
@@ -74,7 +80,19 @@ def main(argv=None) -> int:
     control.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     control.bind(("127.0.0.1", a.control_port))
     control.listen(4)
-    cmd = [sys.executable, "-m", "yunshu_cli", "serve", "-m", a.model, "--host", "127.0.0.1", "--port", str(a.port), *a.extra]
+    cmd = [
+        sys.executable,
+        "-m",
+        "yunshu_cli",
+        "serve",
+        "-m",
+        a.model,
+        "--host",
+        "127.0.0.1",
+        "--port",
+        str(a.port),
+        *a.extra,
+    ]
     env = {**os.environ, "HF_HUB_OFFLINE": "1", "NO_PROXY": "127.0.0.1"}
     proc = subprocess.Popen(cmd, env=env, start_new_session=True)
     reason, ready_s, model_id = "start-failed", None, None
@@ -84,7 +102,9 @@ def main(argv=None) -> int:
                 reason = "server-exited-early"
                 break
             try:
-                with urllib.request.urlopen(f"http://127.0.0.1:{a.port}/v1/models", timeout=3) as r:
+                with urllib.request.urlopen(
+                    f"http://127.0.0.1:{a.port}/v1/models", timeout=3
+                ) as r:
                     model_id = json.load(r)["data"][0]["id"]
                     ready_s = round(time.monotonic() - t_start, 1)
                     break
@@ -96,7 +116,9 @@ def main(argv=None) -> int:
                 control,
                 time.monotonic() + a.minutes * 60,
                 lambda: proc.poll() is None,
-                beat=lambda: print(f"HEARTBEAT {time.monotonic() - t_start:.0f}s", flush=True),
+                beat=lambda: print(
+                    f"HEARTBEAT {time.monotonic() - t_start:.0f}s", flush=True
+                ),
             )
     finally:
         with contextlib.suppress(ProcessLookupError, PermissionError):

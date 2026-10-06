@@ -407,7 +407,9 @@ class ChatCompletionRequest(BaseModel):
     presence_penalty: float = Field(default=0.0, ge=-2.0, le=2.0)
     logit_bias: dict[int, float] | None = None
     max_tokens: int = Field(
-        default_factory=lambda: int(settings.get("YUNSHU_DEFAULT_MAX_TOKENS")), ge=0, le=1048576
+        default_factory=lambda: int(settings.get("YUNSHU_DEFAULT_MAX_TOKENS")),
+        ge=0,
+        le=1048576,
     )
     max_completion_tokens: int | None = Field(default=None, ge=0, le=1048576)
     stream: bool = False
