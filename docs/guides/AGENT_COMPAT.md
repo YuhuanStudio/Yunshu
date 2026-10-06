@@ -68,7 +68,7 @@ Codex 0.160.1, opencode 1.18.34.
 | New item | Seen in | Yunshu |
 |---|---|---|
 | `anthropic-beta: thinking-display-updates-2026-08-18` | Claude Code 2.1.291, every turn | accepted; betas are never rejected |
-| `thinking: {type: "adaptive", display: "updates"}` | Claude Code 2.1.291 | accepted (the `thinking` object is read for `type` / `budget_tokens`); `display` has no local meaning and is ignored |
+| `thinking.display` (`thinking: {type: "adaptive", display: "updates"}`) | Claude Code 2.1.291 | accepted (the `thinking` object is read for `type` / `budget_tokens`); `display` has no local meaning and is ignored |
 | header `x-opencode-session-id` | opencode 1.18.34 | ignored (`x-session-id` already feeds the session affinity) |
 
 ## Verifying the claims: `scripts/dev/agentcompat`

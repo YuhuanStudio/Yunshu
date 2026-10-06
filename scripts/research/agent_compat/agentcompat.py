@@ -88,16 +88,19 @@ def stage_census(out: Path) -> dict:
     p = run([PY, str(HERE / "census.py"), "run", "all"], env=env, cwd=HERE, capture_output=True, timeout=1800)
     (cdir / "run.log").write_text((p.stdout or "")[-20000:])
     sessions = sorted(d for d in cdir.iterdir() if (d / "meta.json").is_file())
+    pinned = PINNED_CENSUS or _newest_pinned()
     bad = []
     for d in sessions:
         meta = json.loads((d / "meta.json").read_text())
         n = sum(1 for _ in (d / "requests.jsonl").open()) if (d / "requests.jsonl").is_file() else 0
-        if meta.get("rc") != 0 or n == 0:
+        # a session that made no request in the pinned census (a slash command) may make none now
+        pf = Path(pinned) / d.name / "requests.jsonl" if pinned else None
+        needs_requests = pf is None or (pf.is_file() and pf.stat().st_size > 0)
+        if meta.get("rc") != 0 or (n == 0 and needs_requests):
             bad.append(f"{d.name}: rc={meta.get('rc')} requests={n}")
     if not sessions:
         return dict(ok=False, why="no census session ran")
     res: dict = dict(sessions=len(sessions), failed_sessions=bad)
-    pinned = PINNED_CENSUS or _newest_pinned()
     if not pinned or not Path(pinned).is_dir():
         return dict(ok=False, why=f"no pinned census to diff against ({pinned!r})", **res)
     sys.path.insert(0, str(HERE))

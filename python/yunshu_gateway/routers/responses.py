@@ -590,11 +590,13 @@ class ResponsesRequest(BaseModel):
     conversation: str | dict | None = None
     # [{"type": "compaction", "compact_threshold": N}]: compact the input first when it exceeds N tokens.
     context_management: list[dict] | None = None
-    max_output_tokens: int = Field(default=2048, ge=1, le=131072)
+    max_output_tokens: int = Field(
+        default_factory=lambda: int(settings.get("YUNSHU_DEFAULT_MAX_TOKENS")), ge=1, le=1048576
+    )
     # OpenAI Chat Completions legacy alias — accept silently and alias to
     # max_output_tokens so old client code doesn't run unbounded against
     # /v1/responses. Caught by validate_request hook below.
-    max_completion_tokens: int | None = Field(default=None, ge=1, le=131072)
+    max_completion_tokens: int | None = Field(default=None, ge=1, le=1048576)
     temperature: float = Field(default=1.0, ge=0.0, le=2.0)
     top_p: float = Field(default=1.0, ge=0.0, le=1.0)
     top_k: int = Field(default=0, ge=0)
@@ -692,6 +694,13 @@ class ResponsesRequest(BaseModel):
     timeout: float | None = Field(
         default=None, ge=1.0, le=600.0
     )  # Request timeout in seconds
+
+    @model_validator(mode="before")
+    @classmethod
+    def _null_means_unset(cls, data):
+        from ..schemas.nulls import clean_request, fold_allowed_tools
+
+        return fold_allowed_tools(clean_request(cls, data))
 
     @model_validator(mode="before")
     @classmethod

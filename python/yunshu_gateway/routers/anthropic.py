@@ -222,7 +222,7 @@ class AnthropicMessagesRequest(BaseModel):
     # behavior is harmless in practice. Keep an explicit default rather
     # than `...` (required) to preserve compatibility with internal tests
     # and lazy clients.
-    max_tokens: int = Field(default=1024, ge=1, le=131072)
+    max_tokens: int = Field(default=1024, ge=1, le=1048576)
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
     top_p: float = Field(default=1.0, ge=0.0, le=1.0)
     top_k: int = Field(default=0, ge=0)
@@ -275,6 +275,13 @@ class AnthropicMessagesRequest(BaseModel):
     )  # Request timeout in seconds
     grammar: dict | None = None  # Grammar constraint (regex, choice, CFG)
     stream_options: dict | None = None  # Anthropic stream_options (include_usage)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _null_means_unset(cls, data):
+        from ..schemas.nulls import clean_request
+
+        return clean_request(cls, data)
 
     @model_validator(mode="after")
     def validate_request(self):

@@ -74,7 +74,7 @@ internal ones, `--json` prints JSON, `--config FILE` includes a config file.
 | `YUNSHU_QUEUE_LIMIT` | int | 64 | Generation requests (chat, completions, messages, responses) in flight at once, running and waiting together. The next one is refused at once with 429, `Retry-After` and the queue depth in `error.x_yunshu` instead of waiting without bound. 0 = no limit. |
 | `YUNSHU_MEMORY_PRESSURE_REJECT` | float | 0.95 | Share of the Metal working set (MLX active memory / recommended working set) above which, while other requests are running, a new generation request is refused with 503 and `Retry-After` (it would OOM the process). An idle server never refuses. 0 = off. |
 | `YUNSHU_COMPLETION_BATCH_SIZE` | int | 32 | Text engine: maximum sequences decoded together. |
-| `YUNSHU_DEFAULT_MAX_TOKENS` | int | 512 | Completion length when a request omits max_tokens. |
+| `YUNSHU_DEFAULT_MAX_TOKENS` | int | 32768 | Completion length when a chat / responses request omits max_tokens (OpenAI: up to the context window); the context budget still clamps it. |
 | `YUNSHU_MAX_PREFILL_TOKENS` | int | 0 | Reject prompts longer than this many tokens (0: no limit beyond the model context). |
 | `YUNSHU_STARTUP_TIMEOUT` | float | 300.0 | Seconds to wait for the model to load before startup fails. |
 | `YUNSHU_DRAIN_TIMEOUT` | float | 30.0 | Seconds to wait for in-flight requests on shutdown. |

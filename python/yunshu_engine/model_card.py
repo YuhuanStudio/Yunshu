@@ -27,7 +27,7 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 # Largest max_tokens / max_completion_tokens the chat routes accept (ChatRequest le=...).
-API_MAX_OUTPUT_TOKENS = 131072
+API_MAX_OUTPUT_TOKENS = 1048576
 # max_tokens applied when a request omits it.
 API_DEFAULT_MAX_TOKENS = 512
 
