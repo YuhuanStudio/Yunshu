@@ -668,7 +668,7 @@ def cmd_units(a):
     return 0 if res["pass"] else 1
 
 
-def run_route_checks(ctx, needs, only, res, srv):
+def run_route_checks(ctx, needs, only, res, srv, tag=""):
     """Run every registered check with this `needs` (one server); results land in `res`."""
     import route_checks as rc
 
@@ -677,6 +677,7 @@ def run_route_checks(ctx, needs, only, res, srv):
             continue
         t0 = time.monotonic()
         row = {"needs": needs, "routes": list(chk.routes)}
+        key = f"{name}@{tag}" if tag else name
         try:
             if srv.proc.poll() is not None:
                 raise RuntimeError(
@@ -690,12 +691,10 @@ def run_route_checks(ctx, needs, only, res, srv):
             row.update(status="fail", detail=f"{type(e).__name__}: {str(e)[:400]}")
             row["trace"] = traceback.format_exc()[-1200:]
         row["seconds"] = round(time.monotonic() - t0, 1)
-        res["checks"][name] = row
+        res["checks"][key] = row
         if row["status"] == "fail":
-            res["failures"].append(f"{name}: {row['detail']}")
-        print(
-            f"check {name}: {row['status']} {row.get('detail', '')[:200]}", flush=True
-        )
+            res["failures"].append(f"{key}: {row['detail']}")
+        print(f"check {key}: {row['status']} {row.get('detail', '')[:200]}", flush=True)
         write(res["_out"], res)
 
 
@@ -722,40 +721,43 @@ def routes_make_ctx(srv, token, kind, model_id=None):
 
 
 def cmd_routes(a):
-    """Every registered route against real servers (scripts/research/route_checks.py): the main
-    model in the default configuration, and, with --multi, a token-protected multi-model server."""
+    """Every registered route against real servers (scripts/research/route_checks.py): each --model
+    in the default configuration (one server after the other: the ports are few), and, with
+    --multi, a token-protected multi-model server with a fake SearXNG / MCP backend."""
     import httpx
 
     only = set(a.only.split(",")) if a.only else None
     os.environ.setdefault("COVAUDIT_PORT_LO", "18994")  # servers on 18994-18996 only
     res = {
         "kind": "routes",
-        "model": a.model,
+        "models": a.model,
         "multi": a.multi,
         "checks": {},
         "failures": [],
+        "notes": {},
         "complete": False,
         "_out": a.out,
     }
-    srv = None
-    try:
-        srv = start_server(a.model, "routes", ["YUNSHU_VLM_APC_DISK=0"])
-        kind = "vlm" if "Qwen3.5" in a.model else "text"
-        ctx = routes_make_ctx(srv, "", kind)
-        res["model_id"] = srv.model_id
-        run_route_checks(ctx, "main", only, res, srv)
-        res["notes"] = ctx.notes
-        if srv.proc.poll() is not None:
-            res["failures"].append(f"server died rc={srv.proc.returncode}")
-        elif httpx.get(srv.url + "/health/ready", timeout=10).status_code != 200:
-            res["failures"].append("server not ready after the checks")
-    except BaseException as e:  # noqa: BLE001
-        res["failures"].append(f"{type(e).__name__}: {e}")
-        traceback.print_exc()
-    finally:
-        if srv:
-            res["server_log_tail"] = srv.log_tail(30)
-            srv.kill()
+    for model in a.model:
+        name = Path(model).name
+        srv = None
+        try:
+            srv = start_server(model, "routes", ["YUNSHU_VLM_APC_DISK=0"])
+            kind = "vlm" if "Qwen3.5" in model else "text"
+            ctx = routes_make_ctx(srv, "", kind)
+            run_route_checks(ctx, "main", only, res, srv, name)
+            res["notes"][name] = ctx.notes
+            if srv.proc.poll() is not None:
+                res["failures"].append(f"{name}: server died rc={srv.proc.returncode}")
+            elif httpx.get(srv.url + "/health/ready", timeout=10).status_code != 200:
+                res["failures"].append(f"{name}: server not ready after the checks")
+        except BaseException as e:  # noqa: BLE001
+            res["failures"].append(f"{name}: {type(e).__name__}: {e}")
+            traceback.print_exc()
+        finally:
+            if srv:
+                res.setdefault("server_log_tail", {})[name] = srv.log_tail(30)
+                srv.kill()
     if a.multi:
         srv = fake = None
         try:
@@ -768,10 +770,10 @@ def cmd_routes(a):
                 if link.is_symlink() or link.exists():
                     link.unlink()
                 link.symlink_to(m)
-            from covaudit_session import Srv
+            from covaudit_session import Srv, free_port
             from route_checks_tools import FakeBackend
 
-            fake = FakeBackend(18996)
+            fake = FakeBackend(free_port())
             cand = Path(sys.executable).parent / "yunshu"
             if "COVAUDIT_BIN" not in os.environ and cand.exists():
                 os.environ["COVAUDIT_BIN"] = str(cand)
@@ -799,7 +801,8 @@ def cmd_routes(a):
             ctx.mm_models = sorted(ids)
             ctx.model = Path(a.multi[0]).name
             ctx.fake = fake
-            run_route_checks(ctx, "multi", only, res, srv)
+            run_route_checks(ctx, "multi", only, res, srv, "multi")
+            res["notes"]["multi"] = ctx.notes
         except BaseException as e:  # noqa: BLE001
             res["failures"].append(f"multi server: {type(e).__name__}: {e}")
             traceback.print_exc()
@@ -851,7 +854,7 @@ def build_parser():
         p.add_argument(
             "--model",
             required=(n in ("wire", "agent", "routes")),
-            action="append" if n == "units" else "store",
+            action="append" if n in ("units", "routes") else "store",
         )
     return ap
 

@@ -13,7 +13,6 @@ exception) on a problem and may call `skip(reason)` when the loaded model cannot
 
 from __future__ import annotations
 
-import base64
 import json
 import re
 import time
@@ -1148,9 +1147,25 @@ def _wav(seconds=0.5, rate=16000) -> bytes:
     return buf.getvalue()
 
 
-def _png() -> bytes:
-    return base64.b64decode(
-        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+def _png(size: int = 224, rgb=(200, 30, 30)) -> bytes:
+    """A solid-colour RGB PNG of size x size (no imaging library needed)."""
+    import struct
+    import zlib
+
+    def chunk(tag: bytes, data: bytes) -> bytes:
+        body = tag + data
+        return (
+            struct.pack(">I", len(data))
+            + body
+            + struct.pack(">I", zlib.crc32(body) & 0xFFFFFFFF)
+        )
+
+    row = b"\x00" + bytes(rgb) * size
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", struct.pack(">IIBBBBB", size, size, 8, 2, 0, 0, 0))
+        + chunk(b"IDAT", zlib.compress(row * size))
+        + chunk(b"IEND", b"")
     )
 
 
@@ -1920,4 +1935,7 @@ def _web_search_unconfigured(c: Ctx):
 
 from route_checks_tools import (
     FakeBackend,  # noqa: E402,F401  registers the server-tool checks
+)
+from route_checks_vision import (
+    _vision_input,  # noqa: E402,F401  registers the image-input check
 )

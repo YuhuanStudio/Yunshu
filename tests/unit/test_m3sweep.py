@@ -211,48 +211,39 @@ def test_stop_sequence_is_stop_and_no_excused_failures():
     )
 
 
-def test_routes_jobs_in_plan_and_multi_server(tmp_path):
+def test_routes_job_in_plan_with_two_models_and_a_multi_server(tmp_path):
     d = _driver()
     plan = {j["name"]: j for j in d.plan("abc1234", tmp_path)}
-    assert "routes-q35-08b" in plan and "routes-q25-3b" in plan
-    cmd = plan["routes-q35-08b"]["cmd"]
-    assert (
-        cmd.count("--multi") == 2
-    )  # the load / unload routes need a multi-model server
-    assert "--multi" not in plan["routes-q25-3b"]["cmd"]
+    cmd = plan["routes"]["cmd"]
+    # both small models one after the other (three ports in the lane), then the multi server
+    assert cmd.count("--model") == 2 and cmd.count("--multi") == 2
     assert [
         j["name"] for j in d.plan("abc1234", tmp_path, {"routes"}) if j["name"] != "env"
-    ] == [
-        "routes-q35-08b",
-        "routes-q25-3b",
-    ]
+    ] == ["routes"]
 
 
 def test_route_coverage_verdict_fails_closed(tmp_path):
     import route_checks as rc
 
     d = _driver()
-    jobs_ = d.plan("abc1234", tmp_path, {"routes"})
-    routes_jobs = [j for j in jobs_ if j["name"].startswith("routes-")]
+    routes_jobs = [
+        j for j in d.plan("abc1234", tmp_path, {"routes"}) if j["name"] == "routes"
+    ]
     every = sorted(rc.checked_routes())
 
-    def out(j, verified, ok=True):
-        j["out"].write_text(
+    def out(verified, ok=True):
+        routes_jobs[0]["out"].write_text(
             json.dumps({"complete": True, "pass": ok, "verified_routes": verified})
         )
 
-    out(routes_jobs[0], every[:-1])
-    out(routes_jobs[1], [])
-    cov = d.route_coverage(routes_jobs)
-    assert cov == [f"route never verified: {every[-1]}"]
-    out(routes_jobs[1], [every[-1]])  # union of the jobs counts
-    assert d.route_coverage(routes_jobs) == []
-    v = d.verdict([j for j in routes_jobs if j["name"] != "env"], 0)
-    assert v["verdict"] == "PASS"
-    out(routes_jobs[1], [])
+    out(every[:-1])
+    assert d.route_coverage(routes_jobs) == [f"route never verified: {every[-1]}"]
     v = d.verdict(routes_jobs, 0)
     assert v["verdict"] == "FAIL" and "route-coverage" in v["jobs"]
-    assert d.route_coverage([]) == []
+    out(every)
+    assert d.route_coverage(routes_jobs) == []
+    assert d.verdict(routes_jobs, 0)["verdict"] == "PASS"
+    assert d.route_coverage([]) == []  # a sweep without the routes job says nothing
 
 
 def test_run_route_checks_records_pass_fail_skip(monkeypatch, tmp_path):
