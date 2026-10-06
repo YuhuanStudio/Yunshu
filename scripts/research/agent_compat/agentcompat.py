@@ -21,9 +21,11 @@ import contextlib
 import json
 import os
 import re
+import signal
 import socket
 import subprocess
 import sys
+import threading
 import time
 import urllib.request
 from pathlib import Path
@@ -130,19 +132,37 @@ def port_free(p: int) -> bool:
             return False
 
 
-def stage_m3(out: Path, model: str, minutes: float, scenarios: str) -> dict:
-    mdir = out / "m3"
-    mdir.mkdir(parents=True, exist_ok=True)
+def run_watched(cmd, tunnel, timeout, **kw):
+    """Run a client command; kill it and fail if the ssh tunnel dies (a dropped tunnel must not hang the run)."""
+    p = subprocess.Popen(cmd, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True, **kw)
+    out: list[str] = []
+    t = threading.Thread(target=lambda: out.append(p.communicate()[0] or ""), daemon=True)
+    t.start()
+    t0 = time.time()
+    dropped = False
+    while t.is_alive():
+        t.join(2)
+        if tunnel.poll() is not None:
+            dropped = True
+        if dropped or time.time() - t0 > timeout:
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(p.pid, signal.SIGKILL)
+            t.join(10)
+            return 124 if not dropped else 125, "".join(out) + ("\nTUNNEL DROPPED" if dropped else "\nTIMEOUT")
+    return p.returncode, "".join(out)
+
+
+def with_m3_server(out: Path, tag: str, model: str, minutes: float, work) -> dict:
+    """One bounded M3 serve job (<= ~20 min) behind an ssh -L forward; `work(url, tunnel)` runs the M5-side clients."""
     sha = run(["git", "-C", str(REPO), "rev-parse", "--short", "HEAD"], capture_output=True).stdout.strip()
-    dirty = run(["git", "-C", str(REPO), "status", "--porcelain", "--untracked-files=no"], capture_output=True).stdout.strip()
     for p in (SERVER_PORT, CONTROL_PORT, MCP_PORT):
         if not port_free(p):
             return dict(ok=False, why=f"local port {p} is busy")
-    receipt = out / "m3_serve.jsonl"
+    receipt = out / f"m3_serve_{tag}.jsonl"
     receipt.unlink(missing_ok=True)
     sub = run(
-        [str(GPUQ), "submit", "--device", "m3", "--label", f"agentcompat-serve-{sha}-{int(time.time()) % 100000}", "--mem-gb", "9",
-         "--timeout", str(int(minutes) + 15), "--stall", "5", "--out", str(receipt), "--expect-complete", "--",
+        [str(GPUQ), "submit", "--device", "m3", "--label", f"agentcompat-{tag}-{sha}-{int(time.time()) % 100000}", "--mem-gb", "9",
+         "--timeout", str(int(minutes) + 8), "--stall", "5", "--out", str(receipt), "--expect-complete", "--",
          "python", "scripts/research/agent_compat/m3_serve.py", "--model", f"{M3_MODELS_DIR}/{model}", "--port", str(SERVER_PORT),
          "--control-port", str(CONTROL_PORT), "--minutes", str(minutes), "--out", str(receipt)],
         capture_output=True,
@@ -150,43 +170,31 @@ def stage_m3(out: Path, model: str, minutes: float, scenarios: str) -> dict:
     job = (sub.stdout or "").strip().split()[-1] if sub.returncode == 0 and sub.stdout.strip() else ""
     if not job:
         return dict(ok=False, why="gpuq submit failed: " + ((sub.stdout or "") + (sub.stderr or ""))[-300:])
-    print(f"m3 job {job} (commit {sha}{' + tracked edits' if dirty else ''})", flush=True)
+    print(f"m3 job {job} ({tag}, commit {sha})", flush=True)
     tunnel = subprocess.Popen(
-        [*SSH, "-N", "-L", f"{SERVER_PORT}:127.0.0.1:{SERVER_PORT}", "-L", f"{CONTROL_PORT}:127.0.0.1:{CONTROL_PORT}", M3_HOST],
+        [*SSH, "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3", "-N",
+         "-L", f"{SERVER_PORT}:127.0.0.1:{SERVER_PORT}", "-L", f"{CONTROL_PORT}:127.0.0.1:{CONTROL_PORT}", M3_HOST],
         stdin=subprocess.DEVNULL,
     )
-    res: dict = dict(job=job, commit=sha, dirty=bool(dirty))
+    res: dict = dict(job=job, commit=sha, tag=tag)
     try:
         url = f"http://127.0.0.1:{SERVER_PORT}"
         t0 = time.time()
         ready = False
-        while time.time() - t0 < 45 * 60:
+        while time.time() - t0 < 30 * 60:
             if tunnel.poll() is not None:
-                return dict(ok=False, why="ssh tunnel exited", **res)
+                return dict(ok=False, why="ssh tunnel exited before ready", **res)
             if run([str(GPUQ), "wait", "--max-seconds", "1", job], capture_output=True).returncode != 2:
-                return dict(ok=False, why="M3 job finished before the server was ready: " + run([str(GPUQ), "log", job], capture_output=True).stdout[-400:], **res)
+                return dict(ok=False, why="M3 job finished before ready: " + run([str(GPUQ), "log", job], capture_output=True).stdout[-400:], **res)
             with contextlib.suppress(Exception):
                 if urllib.request.urlopen(url + "/v1/models", timeout=3).status == 200:
                     ready = True
                     break
             time.sleep(5)
         if not ready:
-            return dict(ok=False, why="M3 server not ready in 45 min", **res)
+            return dict(ok=False, why="M3 server not ready in 30 min", **res)
         print(f"server ready after {time.time() - t0:.0f}s", flush=True)
-        census_dir = out / "census"
-        steps = {}
-        steps["replay"] = run([PY, str(HERE / "replay.py"), "--url", url, "--census", str(census_dir), "--out", str(mdir / "replay")],
-                              cwd=HERE, capture_output=True, timeout=3600)
-        (mdir / "replay.log").write_text((steps["replay"].stdout or "")[-60000:] + (steps["replay"].stderr or "")[-4000:])
-        env = {**os.environ, "AGENTIC_CLIS": str(CLIS_LATEST), "AGENTCOMPAT_MCP_PORT": str(MCP_PORT), "CENSUS_OUT": str(mdir / "census-scratch")}
-        steps["agents"] = run([PY, str(HERE / "e2e_agents.py"), "--url", url, "--scenarios", scenarios, "--out", str(mdir / "e2e"), "--timeout", "600"],
-                              cwd=HERE, env=env, capture_output=True, timeout=3 * 3600)
-        (mdir / "agents.log").write_text((steps["agents"].stdout or "")[-60000:] + (steps["agents"].stderr or "")[-4000:])
-        res["replay_rc"], res["agents_rc"] = steps["replay"].returncode, steps["agents"].returncode
-        res["replay_tail"] = [ln for ln in (steps["replay"].stdout or "").splitlines() if ln.startswith(("PROBLEM", "replay:"))][-40:]
-        res["agents_tail"] = [ln for ln in (steps["agents"].stdout or "").splitlines() if "PASS" in ln or "FAIL" in ln or ln.startswith("e2e_agents:")][-20:]
-        res["ok"] = res["replay_rc"] == 0 and res["agents_rc"] == 0
-        res["why"] = "" if res["ok"] else f"replay rc={res['replay_rc']}, agents rc={res['agents_rc']}"
+        res.update(work(url, tunnel))
     finally:
         with contextlib.suppress(Exception):
             with socket.create_connection(("127.0.0.1", CONTROL_PORT), timeout=5) as c:
@@ -202,15 +210,42 @@ def stage_m3(out: Path, model: str, minutes: float, scenarios: str) -> dict:
             run([str(GPUQ), "cancel", job], capture_output=True)
     if res.get("job_rc") != 0:
         res["ok"] = False
-        res["why"] = (res.get("why", "") + f"; M3 job did not finish cleanly (rc={res.get('job_rc')})").strip("; ")
+        res["why"] = (res.get("why", "") + f"; M3 job did not finish cleanly (rc={res.get('job_rc')}); check the laptop before using the lane again").strip("; ")
     return res
+
+
+def stage_m3(out: Path, model: str, minutes: float, scenarios: str) -> dict:
+    """Two bounded serve jobs: spec replay (+ synthetic SDK shapes), then the scripted agent tasks."""
+    mdir = out / "m3"
+    mdir.mkdir(parents=True, exist_ok=True)
+    census_dir = out / "census"
+
+    def replay(url, tunnel):
+        rc, text = run_watched([PY, str(HERE / "replay.py"), "--url", url, "--census", str(census_dir), "--out", str(mdir / "replay"), "--per-session", "2"],
+                               tunnel, minutes * 60 - 60, cwd=HERE)
+        (mdir / "replay.log").write_text(text[-80000:])
+        tail = [ln for ln in text.splitlines() if ln.startswith(("PROBLEM", "replay:"))][-40:]
+        return dict(ok=rc == 0, rc=rc, tail=tail, why="" if rc == 0 else f"replay rc={rc}")
+
+    def agents(url, tunnel):
+        env = {**os.environ, "AGENTIC_CLIS": str(CLIS_LATEST), "AGENTCOMPAT_MCP_PORT": str(MCP_PORT), "CENSUS_OUT": str(mdir / "census-scratch")}
+        rc, text = run_watched([PY, str(HERE / "e2e_agents.py"), "--url", url, "--scenarios", scenarios, "--out", str(mdir / "e2e"), "--timeout", "300"],
+                               tunnel, minutes * 60 - 60, cwd=HERE, env=env)
+        (mdir / "agents.log").write_text(text[-80000:])
+        tail = [ln for ln in text.splitlines() if "PASS" in ln or "FAIL" in ln or ln.startswith("e2e_agents:")][-20:]
+        return dict(ok=rc == 0, rc=rc, tail=tail, why="" if rc == 0 else f"agents rc={rc}")
+
+    a = with_m3_server(out, "replay", model, minutes, replay)
+    b = with_m3_server(out, "agents", model, minutes, agents)
+    return dict(ok=a.get("ok") is True and b.get("ok") is True, replay=a, agents=b,
+                why="; ".join(x for x in (a.get("why", ""), b.get("why", "")) if x))
 
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--stages", default="census,m3")
     ap.add_argument("--model", default="Qwen3.5-9B-MLX-4bit")
-    ap.add_argument("--minutes", type=float, default=60)
+    ap.add_argument("--minutes", type=float, default=20, help="length of each serve job (replay, agents)")
     ap.add_argument("--scenarios", default=E2E_SCENARIOS)
     ap.add_argument("--out", default="")
     a = ap.parse_args(argv)

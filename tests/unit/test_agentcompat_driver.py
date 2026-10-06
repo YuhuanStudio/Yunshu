@@ -36,3 +36,29 @@ def test_census_signature_diff(tmp_path):
     assert d["header_values"] == ["anthropic-beta=c"]
     assert d["fields"] == ["/v1/messages thinking.display"]
     assert cd.diff(cd.signature(new), cd.signature(old)) == {}
+
+
+def test_run_watched_kills_client_when_tunnel_drops():
+    import subprocess
+
+    tunnel = subprocess.Popen(["sleep", "1"])
+    rc, text = ac.run_watched(["sleep", "60"], tunnel, 60)
+    assert rc == 125 and "TUNNEL DROPPED" in text
+
+
+def test_run_watched_times_out():
+    import subprocess
+
+    tunnel = subprocess.Popen(["sleep", "30"])
+    try:
+        rc, text = ac.run_watched(["sleep", "60"], tunnel, 1)
+    finally:
+        tunnel.kill()
+    assert rc == 124 and "TIMEOUT" in text
+
+
+def test_replay_thin_keeps_last_request():
+    import replay
+
+    assert replay.thin(list(range(6)), 2) == [0, 5]
+    assert replay.thin(list(range(6)), 0) == list(range(6))

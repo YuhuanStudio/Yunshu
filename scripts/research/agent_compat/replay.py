@@ -56,6 +56,23 @@ def sse_events(text: str):
     return ev
 
 
+def load_requests(root, name: str) -> list[dict]:
+    if name == "synthetic":
+        import synthetic_requests
+
+        return [
+            dict(method="POST", path=c["path"], headers={}, body=c["body"], status=200)
+            for c in synthetic_requests.cases()
+        ]
+    f = Path(root) / name / "requests.jsonl"
+    return [json.loads(x) for x in f.read_text().splitlines()] if f.exists() else []
+
+
+def thin(reqs: list[dict], n: int) -> list[dict]:
+    """First n-1 plus the last request (the long, cache-warm end of a session)."""
+    return reqs if n <= 0 or len(reqs) <= n else [*reqs[: n - 1], reqs[-1]]
+
+
 def verdict_stream(path: str, body, ev) -> list[str]:
     p = path.split("?")[0]
     if p == "/v1/messages":
@@ -87,6 +104,7 @@ def main():
         help="use an already running server instead of starting one",
     )
     ap.add_argument("--max-tokens", type=int, default=48)
+    ap.add_argument("--per-session", type=int, default=0, help="replay only the first N-1 and the last request of each session (0: all)")
     a = ap.parse_args()
     root = a.census or sorted(glob.glob(str(census.OUT_ROOT.parent / "*-agent-census")))[-1]
     if not a.url and not a.model:
@@ -116,23 +134,19 @@ def main():
         )
         res = []
         with httpx.Client(timeout=300) as c:
-            for n in names:
-                f = Path(root) / n / "requests.jsonl"
-                if not f.exists():
-                    continue
-                for i, line in enumerate(f.read_text().splitlines()):
-                    r = json.loads(line)
+            for n in [*names, *([] if a.sessions else ["synthetic"])]:
+                for i, r in enumerate(thin(load_requests(root, n), 0 if n == "synthetic" else a.per_session)):
                     body = r["body"]
                     hdr = {
                         k: v for k, v in r["headers"].items() if k.lower() not in DROP
                     }
                     hdr["authorization"] = "Bearer sk-yunshu-bench-dummy"
                     hdr["x-api-key"] = "sk-yunshu-bench-dummy"
-                    if isinstance(body, dict) and "model" in body:
+                    if isinstance(body, dict) and ("model" in body or n == "synthetic"):
                         body = {**body, "model": model_id}
                         # keep replay fast: cap generation, the census checks protocol acceptance
                         for k in ("max_tokens", "max_output_tokens"):
-                            if k in body:
+                            if k in body and n != "synthetic":
                                 body[k] = min(body[k], a.max_tokens)
                     t0 = time.time()
                     rec = dict(session=n, i=i, method=r["method"], path=r["path"])
