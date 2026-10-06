@@ -26,6 +26,18 @@ M3_MODELS = frozenset(
 )
 
 
+def kill_tagged_script(job_id):
+    """Shell that SIGKILLs every process carrying GPUQ_JOB_ID=<id> in its environment.
+    A job that starts a server in its own session escapes the job's process group:
+    2026-10-06 a 3B server ran 1.5 h on the laptop after its sweep job ended."""
+    tag = shlex.quote("GPUQ_JOB_ID=" + job_id)
+    return (
+        "ps eww -ax -o pid=,command= | grep -F -- "
+        + tag
+        + " | grep -v grep | awk '{print $1}' | xargs kill -9 2>/dev/null; true"
+    )
+
+
 def config(env):
     return (
         env.get("M3_HOST", "yuhuan@192.168.50.55"),
@@ -202,7 +214,10 @@ class Remote:
             return
         q = shlex.quote
         wt = self.repo + "/.m3-wt/gpuq-" + self.job["id"]
-        script = f"cd {q(self.repo)} && git worktree remove --force {q(wt)} 2>/dev/null; git -C {q(self.repo)} update-ref -d {q('refs/m5/gpuq-' + self.job['id'])}"
+        script = (
+            kill_tagged_script(self.job["id"])
+            + f"; cd {q(self.repo)} && git worktree remove --force {q(wt)} 2>/dev/null; git -C {q(self.repo)} update-ref -d {q('refs/m5/gpuq-' + self.job['id'])}"
+        )
         subprocess.run(
             self.ssh_cmd(script), stdout=self.log, stderr=subprocess.STDOUT, timeout=20
         )
@@ -330,6 +345,9 @@ class Remote:
             PATH=self.repo + "/.venv/bin:/usr/bin:/bin:/usr/sbin:/sbin",
             PYTHONPATH=wt + "/python",
             GPUQ_DEVICE="m3",
+            GPUQ_JOB_ID=self.job[
+                "id"
+            ],  # tags every process of the job, see _KILL_TAGGED
             GPUQ_REMOTE_HOST=self.host,
             M3_MODELS=self.repo + "/.m3-home/models",
             XDG_CACHE_HOME=self.repo + "/.m3-home/cache",

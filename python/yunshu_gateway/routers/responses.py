@@ -62,10 +62,25 @@ def _cache_kw(req, engine) -> dict:
     }
 
 
+def _forced_by_grammar(req) -> bool:
+    """A forced tool_choice (required / one function) that the tool-call grammar enforces."""
+    forced = req.tool_choice == "required" or (
+        isinstance(req.tool_choice, dict) and bool(req.tool_choice.get("name"))
+    )
+    return forced and settings.get_bool("YUNSHU_TOOL_GRAMMAR")
+
+
 def _native_kw(req) -> dict:
-    """``tools=`` for an engine whose chat template renders tool definitions itself."""
+    """``tools=`` for an engine whose chat template renders tool definitions itself; the
+    forced tool_choice / parallel flag ride along so the tool-call grammar can enforce them."""
     tools = getattr(req, "_native_tools", None)
-    return {"tools": tools} if tools else {}
+    if not tools:
+        return {}
+    kw = {"tools": tools}
+    if _forced_by_grammar(req):
+        kw["tool_choice"] = req.tool_choice
+        kw["parallel_tool_calls"] = req.parallel_tool_calls
+    return kw
 
 
 def _seal_extra(req, text: str | None) -> dict:
@@ -1535,7 +1550,9 @@ async def create_response(req: ResponsesRequest, request: Request):
         ]
         from .chat import _vlm_renders_tools
 
-        if req.tool_choice in (None, "auto") and _vlm_renders_tools(engine):
+        if (
+            req.tool_choice in (None, "auto") or _forced_by_grammar(req)
+        ) and _vlm_renders_tools(engine):
             # The chat template renders the tools itself (Qwen3.x): the model's own tool-call
             # format, not an injected JSON prompt it may half-follow.
             req._native_tools = [t.model_dump() for t in tools]
@@ -1548,7 +1565,7 @@ async def create_response(req: ResponsesRequest, request: Request):
         # couldn't be honored). Non-stream only: the streaming path uses
         # ToolCallStreamer(forced_tool_name), and a shared prefill would leave its parser
         # without the opening marker. The prefill is prepended back before extraction.
-        if not req.stream:
+        if not req.stream and not getattr(req, "_native_tools", None):
             _tc = req.tool_choice
             if _tc == "required":
                 _resp_tool_prefill = "<tool_call>\n"

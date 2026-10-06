@@ -218,7 +218,8 @@ def ollama_show(card: ModelCard | dict) -> dict[str, Any]:
     q = d.get("quantization") or {}
     if q.get("bits"):
         info["general.quantization_version"] = 2
-    info["yunshu.card"] = d
+    # The loopback wire dict also carries server-tool status; the card itself does not.
+    info["yunshu.card"] = {k: v for k, v in d.items() if k != "server_tools"}
     gen = d.get("generation_defaults") or {}
     return {
         "modelfile": f"FROM {d.get('id')}\n",

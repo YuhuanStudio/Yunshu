@@ -9,8 +9,6 @@ they are not on disk.
 from __future__ import annotations
 
 import json
-import os
-from pathlib import Path
 
 import numpy as np
 import pytest
@@ -20,9 +18,10 @@ pytest.importorskip("transformers")
 
 from yunshu_engine import tool_call_grammar as tcg  # noqa: E402
 
-MODELS = Path(os.environ.get("YUNSHU_TEST_MODELS", "/Volumes/P5Plus/models"))
-XML_TOKENIZER = MODELS / "Qwen3.5-0.8B-MLX-bf16"
-JSON_TOKENIZER = MODELS / "Qwen2.5-3B-Instruct-4bit"
+from .model_paths import model_dir  # noqa: E402
+
+XML_TOKENIZER = model_dir("Qwen3.5-0.8B-MLX-bf16")
+JSON_TOKENIZER = model_dir("Qwen2.5-3B-Instruct-4bit")
 
 TOOLS = [
     {

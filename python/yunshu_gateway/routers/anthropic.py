@@ -31,6 +31,7 @@ import os
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from yunshu_engine import settings
 from yunshu_engine.paths import stage_media_file
 from yunshu_engine.tool_arguments import coerce_tool_calls
 from yunshu_engine.tool_call_streamer import ToolCallStreamer
@@ -988,6 +989,15 @@ def _try_parse_tool_call_delta(text: str) -> list[dict] | None:
     return calls or None
 
 
+def _forced_by_grammar(tc) -> bool:
+    """tool_choice any / tool that the tool-call grammar enforces (YUNSHU_TOOL_GRAMMAR)."""
+    return (
+        isinstance(tc, dict)
+        and tc.get("type") in ("any", "tool")
+        and settings.get_bool("YUNSHU_TOOL_GRAMMAR")
+    )
+
+
 def _tool_choice_is_auto(tc) -> bool:
     return tc in (None, "auto") or (isinstance(tc, dict) and tc.get("type") == "auto")
 
@@ -1025,6 +1035,7 @@ def _apply_native_tools(req, engine) -> bool:
     try:
         if callable(check) and check():
             req._native_tools = tools
+            req._native_active = True
             return True
     except Exception:
         logger.debug("native tool support check failed", exc_info=True)
@@ -1046,6 +1057,7 @@ def _apply_native_tools(req, engine) -> bool:
                         "parallel": use["parallel_tool_calls"],
                     }
                 )
+                req._native_active = True
                 return True
             _REQUEST_TOOLS.set(None)
             _REQUEST_TOOL_USE.set(None)
@@ -1369,7 +1381,9 @@ async def create_message(req: AnthropicMessagesRequest, request: Request):
             req._forced_tool_grammar = _forced_tool_grammar
 
         if tool_prompt:
-            if _tool_choice_is_auto(req.tool_choice):
+            if _tool_choice_is_auto(req.tool_choice) or _forced_by_grammar(
+                req.tool_choice
+            ):
                 # Decided after the engine is known: a chat template that renders `tools` itself
                 # (Qwen3.x) gets the definitions natively, in the model's own tool-call format;
                 # otherwise this generic prompt is injected.
@@ -1507,7 +1521,14 @@ async def create_message(req: AnthropicMessagesRequest, request: Request):
     # commits the assistant turn to a tool call (continue_final_message); it's prepended
     # back before parsing in the non-stream handlers.
     req._tool_prefill = ""
-    if not getattr(req, "_suppress_tools", False) and req.tools:
+    if (
+        not getattr(req, "_suppress_tools", False)
+        and req.tools
+        and not (
+            getattr(req, "_native_active", False)
+            and _forced_by_grammar(req.tool_choice)
+        )
+    ):
         _tc = req.tool_choice
         _tc_type = _tc.get("type") if isinstance(_tc, dict) else _tc
         # Force only the OPENING marker — the model then emits a complete, parseable

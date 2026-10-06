@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 import pytest
 
@@ -19,7 +18,9 @@ from yunshu_engine.json_schema import (  # noqa: E402
     UnsupportedSchemaError,
 )
 
-TOKENIZER = Path("/Volumes/P5Plus/models/Qwen2.5-3B-Instruct-4bit")
+from .model_paths import model_dir  # noqa: E402
+
+TOKENIZER = model_dir("Qwen2.5-3B-Instruct-4bit")
 EOS = (151645, 151643)
 
 

@@ -1,5 +1,6 @@
 """Second-lane transport contracts without contacting the user's laptop."""
 
+import contextlib
 import importlib
 import sys
 import threading
@@ -486,3 +487,56 @@ def test_only_allowlisted_checkpoints_reach_the_laptop(monkeypatch, tmp_path):
         with pytest.raises(ValueError, match="not allowed on the laptop"):
             r.run()
     assert calls == []  # refused before any ssh, push or rsync
+
+
+def test_remote_worker_kills_tagged_child_in_own_session(tmp_path):
+    """A server started with start_new_session escapes the job group; the job tag
+    still reaches it (2026-10-06: a 3B server outlived its sweep job by 1.5 h)."""
+    import json
+    import os
+    import subprocess
+    import uuid
+
+    beat = tmp_path / "heartbeat"
+    ready = tmp_path / "ready"
+    child = f"import time\nf=open({str(beat)!r}, 'a')\nwhile True:\n f.write('x'); f.flush(); time.sleep(.02)\n"
+    command = (
+        "import subprocess,time; from pathlib import Path; "
+        f"subprocess.Popen([{sys.executable!r},'-c',{child!r}], start_new_session=True); "
+        f"Path({str(ready)!r}).touch(); time.sleep(0.5)"
+    )
+    tag = "test-" + uuid.uuid4().hex
+    payload = dict(
+        env={**os.environ, "TMPDIR": str(tmp_path), "GPUQ_JOB_ID": tag},
+        timeout=10,
+        cwd=str(tmp_path),
+        pid=str(tmp_path / "pid"),
+        rc=str(tmp_path / "rc"),
+        lock=str(tmp_path / "lock"),
+        cmd=[sys.executable, "-c", command],
+    )
+    proc = subprocess.run(
+        [sys.executable, str(DEV / "gpuq_remote_worker.py"), json.dumps(payload)],
+        timeout=10,
+    )
+    try:
+        assert proc.returncode == 0 and ready.exists()
+        time.sleep(0.2)
+        size = beat.stat().st_size
+        time.sleep(0.2)
+        assert beat.stat().st_size == size, "escaped child still running"
+    finally:
+        out = subprocess.run(
+            ["ps", "eww", "-ax", "-o", "pid=,command="], capture_output=True, text=True
+        ).stdout
+        for line in out.splitlines():
+            if "GPUQ_JOB_ID=" + tag in line:
+                with contextlib.suppress(Exception):
+                    os.kill(int(line.split()[0]), 9)
+
+
+def test_cleanup_script_kills_by_tag():
+    from gpuq_remote import kill_tagged_script
+
+    script = kill_tagged_script("1006-x")
+    assert "GPUQ_JOB_ID=1006-x" in script and "kill -9" in script

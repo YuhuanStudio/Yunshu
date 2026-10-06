@@ -58,5 +58,22 @@ with open(p["lock"], "a") as lock:
             with contextlib.suppress(ProcessLookupError):
                 os.killpg(proc.pid, signal.SIGKILL)
             proc.wait()
+        # Descendants that left the group (own session, e.g. a test server) carry the tag.
+        tag = p["env"].get("GPUQ_JOB_ID")
+        if tag:
+            out = subprocess.run(
+                ["ps", "eww", "-ax", "-o", "pid=,command="],
+                capture_output=True,
+                text=True,
+            ).stdout
+            for line in out.splitlines():
+                pid = line.split(None, 1)[0] if line.strip() else ""
+                if (
+                    "GPUQ_JOB_ID=" + tag in line
+                    and pid.isdigit()
+                    and int(pid) != os.getpid()
+                ):
+                    with contextlib.suppress(ProcessLookupError, PermissionError):
+                        os.kill(int(pid), signal.SIGKILL)
         Path(p["rc"]).write_text(str(rc))
         os.unlink(p["pid"])

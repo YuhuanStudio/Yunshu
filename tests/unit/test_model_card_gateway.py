@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-import os
-from pathlib import Path
-
 import httpx
 import pytest
 from fastapi.testclient import TestClient
@@ -15,18 +12,18 @@ from yunshu_gateway.main import create_app
 from yunshu_gateway.routers import models as models_router
 from yunshu_gateway.routers import ollama
 
-MODELS = Path(os.environ.get("YUNSHU_TEST_MODELS", "~/.yunshu/models")).expanduser()
+from .model_paths import model_dir
 
 
 @pytest.fixture
 def served(monkeypatch):
     for name in ("Qwen2.5-3B-Instruct-4bit", "GLM-OCR-bf16"):
-        if not (MODELS / name).exists():
+        if not (model_dir(name)).exists():
             pytest.skip(f"{name} not available")
     monkeypatch.delenv("YUNSHU_AUTH_TOKEN", raising=False)
     mgr = ModelManager(max_memory_bytes=None)
-    mgr.register_model("qwen25-3b", str(MODELS / "Qwen2.5-3B-Instruct-4bit"))
-    mgr.register_model("glm-ocr", str(MODELS / "GLM-OCR-bf16"))
+    mgr.register_model("qwen25-3b", str(model_dir("Qwen2.5-3B-Instruct-4bit")))
+    mgr.register_model("glm-ocr", str(model_dir("GLM-OCR-bf16")))
     monkeypatch.setattr(models_router, "get_model_manager", lambda: mgr)
     monkeypatch.setattr(model_cards, "get_model_manager", lambda: mgr)
     app = create_app()
