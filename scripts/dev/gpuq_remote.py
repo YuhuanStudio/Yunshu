@@ -29,6 +29,7 @@ M3_MODELS = frozenset(
         "GLM-OCR-bf16",
         "Z-Image-Turbo-MLX-4bit",
         "Qwen3-Embedding-0.6B",
+        "whisper-large-v3-mlx",  # /v1/audio/translations: only Whisper translates (2.9 GB)
     }
 )
 
