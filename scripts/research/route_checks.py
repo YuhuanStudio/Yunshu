@@ -1986,3 +1986,6 @@ from route_checks_tools import (
 from route_checks_vision import (
     _vision_input,  # noqa: E402,F401  registers the image-input check
 )
+from route_checks_vllm import (
+    _chat_validation,  # noqa: E402,F401  registers the vLLM-derived validation checks
+)

@@ -166,6 +166,30 @@ _FUNCTION_SPAN = re.compile(
 )
 
 
+_PARAM_TOKEN = re.compile(r"<parameter=|</parameter>")
+
+
+def _close_parameters(text: str) -> str:
+    """Insert the ``</parameter>`` a model dropped before the next ``<parameter=`` / ``</function>``
+    (vLLM tests/tool_parsers/test_qwen3coder_tool_parser.py::test_extract_tool_calls_missing_closing_parameter_tag:
+    ``<parameter=city>Dallas<parameter=state>TX</parameter>`` reads as two parameters, not one value)."""
+    out: list[str] = []
+    pos = 0
+    opened = False
+    for m in re.finditer(r"<parameter=|</parameter>|</function>", text):
+        tok = m.group()
+        if tok == "</parameter>":
+            opened = False
+        elif opened:
+            out.append(text[pos : m.start()].rstrip() + "\n</parameter>\n")
+            pos = m.start()
+            opened = tok == "<parameter="
+        else:
+            opened = tok == "<parameter="
+    out.append(text[pos:])
+    return "".join(out)
+
+
 def _parse_function_xml(module: Any, body: str, tools: Any) -> list[Call]:
     """Read ``<function=name><parameter=k>v</parameter></function>`` calls.
 
@@ -177,7 +201,7 @@ def _parse_function_xml(module: Any, body: str, tools: Any) -> list[Call]:
     request-schema coercion downstream still types what it can)."""
     calls: list[Call] = []
     for span in _FUNCTION_SPAN.findall(body):
-        text = span.rstrip()
+        text = _close_parameters(span.rstrip())
         if not text.endswith("</function>"):
             text += "\n</function>"
         try:
