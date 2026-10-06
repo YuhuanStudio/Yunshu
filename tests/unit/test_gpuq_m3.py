@@ -62,6 +62,32 @@ def test_mapping(monkeypatch):
     assert len(models) == 2
 
 
+def test_catalogue_models_mapped_not_synced(monkeypatch):
+    """local.env's checkpoint catalogue rides in every job's env; syncing it all
+    stalled every M3 job (2026-10-06). Only named checkpoints are synced."""
+    import gpuq_remote
+    from gpuq_remote import mapped, paths
+
+    monkeypatch.setattr("subprocess.check_output", lambda *a, **k: "/src/wt\n")
+    monkeypatch.setattr(gpuq_remote, "_catalogue_keys", lambda: {"M", "M_OMNI"})
+    job = dict(
+        id="smoke",
+        cwd="/src/wt",
+        cmd=["python", "--model", "/Volumes/P5Plus/models/Q08"],
+        env={
+            "M": "/Volumes/P5Plus/models/Q27",
+            "M_OMNI": "/Volumes/P5Plus/models/Omni30",
+            "YUNSHU_VLM_DRAFT": "/Volumes/P5Plus/models/Draft",
+        },
+    )
+    _, _, pairs, models = paths(job, "/remote")
+    assert sorted(Path(m).name for m in models) == ["Draft", "Q08"]
+    assert mapped(job["env"]["M"], pairs) == "/remote/.m3-home/models/Q27"
+    job["env"]["GPUQ_M3_SYNC"] = "M"
+    _, _, _, models = paths(job, "/remote")
+    assert sorted(Path(m).name for m in models) == ["Draft", "Q08", "Q27"]
+
+
 def test_lanes_concurrent_any_once(queue, monkeypatch):
     events = []
     barrier = threading.Barrier(2)

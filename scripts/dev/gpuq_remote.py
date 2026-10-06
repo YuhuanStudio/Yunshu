@@ -34,8 +34,16 @@ def paths(job, repo):
         for match in re.finditer(r"/[^\s:'\";]+/\.venv/bin/[^\s:'\";]+", str(value)):
             source = match.group().split("/.venv/bin/")[0] + "/.venv/bin"
             pairs.append((source, repo + "/.venv/bin"))
-    models = {}
-    for value in [*job["cmd"], *job["env"].values()]:
+    models, synced = {}, set()
+    # local.env exports a catalogue of a dozen checkpoints (27B, 30B Omni, ...) into every
+    # job's env. Syncing all of them stalled every M3 job (2026-10-06): only checkpoints
+    # named in the command, in a non-catalogue env var, or in GPUQ_M3_SYNC (comma-separated
+    # env keys) are synced; catalogue paths are still mapped.
+    catalogue = _catalogue_keys() - set(
+        filter(None, job["env"].get("GPUQ_M3_SYNC", "").split(","))
+    )
+    values = [(None, v) for v in job["cmd"]] + list(job["env"].items())
+    for key, value in values:
         for root in MODEL_ROOTS:
             for match in re.finditer(re.escape(root) + r"/([^\s:'\";]+)", str(value)):
                 source = root + "/" + match[1].split("/")[0]
@@ -51,9 +59,25 @@ def paths(job, repo):
                         "model basename collision; use distinct checkpoint names"
                     )
                 models[source] = dest
+                if key is None or key not in catalogue:
+                    synced.add(source)
     pairs.extend(models.items())
     pairs.sort(key=lambda p: len(p[0]), reverse=True)
-    return top, wt, pairs, models
+    return top, wt, pairs, {k: v for k, v in models.items() if k in synced}
+
+
+def _catalogue_keys():
+    env = Path(__file__).resolve().parents[1] / "research" / "local.env"
+    try:
+        lines = env.read_text().splitlines()
+    except OSError:
+        return set()
+    keys = set()
+    for line in lines:
+        m = re.match(r"\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=", line)
+        if m:
+            keys.add(m[1])
+    return keys
 
 
 def mapped(value, pairs):
@@ -133,7 +157,7 @@ class Remote:
         cmd = [
             "rsync",
             "-a",
-            "--checksum",
+            "-v",  # one line per transferred file: a multi-GB copy is not a stall
             "-e",
             shlex.join(self.ssh[:-1]),
             source,
