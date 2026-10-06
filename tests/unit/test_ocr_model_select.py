@@ -62,7 +62,15 @@ def test_ocr_serves_requested_model_not_first(_client):
     resp = _client.post(
         "/v1/ocr",
         data={"model": "ocr-B", "task": "text"},
-        files={"file": ("x.png", b"\x89PNG\r\n\x1a\n" + b"0" * 32, "image/png")},
+        files={
+            "file": (
+                "x.png",
+                __import__("base64").b64decode(
+                    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+                ),
+                "image/png",
+            )
+        },
     )
     assert resp.status_code == 200, resp.text
     assert resp.json()["text"] == "from-modelB"  # NOT from-modelA (the first entry)
@@ -72,7 +80,15 @@ def test_ocr_empty_model_falls_back_to_first(_client):
     resp = _client.post(
         "/v1/ocr",
         data={"task": "text"},
-        files={"file": ("x.png", b"\x89PNG\r\n\x1a\n" + b"0" * 32, "image/png")},
+        files={
+            "file": (
+                "x.png",
+                __import__("base64").b64decode(
+                    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+                ),
+                "image/png",
+            )
+        },
     )
     assert resp.status_code == 200, resp.text
     assert resp.json()["text"] == "from-modelA"  # first-of-type when no model named
