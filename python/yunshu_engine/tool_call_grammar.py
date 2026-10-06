@@ -232,8 +232,8 @@ def _inline_refs(schema: Any, _depth: int = 0) -> dict | None:
 
     def walk(node: Any, seen: tuple) -> Any:
         if isinstance(node, list):
-            out = [walk(n, seen) for n in node]
-            return None if any(o is None for o in out) else out
+            items = [walk(n, seen) for n in node]
+            return None if any(o is None for o in items) else items
         if not isinstance(node, dict):
             return node
         ref = node.get("$ref")
@@ -255,15 +255,15 @@ def _inline_refs(schema: Any, _depth: int = 0) -> dict | None:
                 return target
             merged = {**target, **walk(rest, seen)} if rest else target
             return merged
-        out = {}
+        copy: dict = {}
         for k, v in node.items():
             if k in ("$defs", "definitions"):
                 continue
             w = walk(v, seen)
             if w is None and v is not None:
                 return None
-            out[k] = w
-        return out
+            copy[k] = w
+        return copy
 
     res = walk(schema, ())
     return res if isinstance(res, dict) else None
