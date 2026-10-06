@@ -93,6 +93,28 @@ def chat(url, messages, max_tokens):
     return msg.get("content") or "", data.get("usage", {}), time.time() - t
 
 
+def log_tail(path, lines=15):
+    """Last lines of a server log, for the error of a server that died at startup."""
+    try:
+        with open(path, errors="replace") as f:
+            return " | ".join(f.read().strip().splitlines()[-lines:])
+    except OSError as exc:
+        return f"(no log: {exc})"
+
+
+def stop_server(proc):
+    """SIGINT, then SIGKILL; a server that already exited is not an error."""
+    for sig, wait in ((2, 60), (9, 5)):
+        try:
+            os.killpg(proc.pid, sig)
+            proc.wait(wait)
+            return
+        except ProcessLookupError:
+            return
+        except Exception:  # noqa: BLE001
+            continue
+
+
 def run_arm(name, tree, model, port, rep, emit, extra_env=None):
     env = dict(
         os.environ,
@@ -155,7 +177,8 @@ def run_arm(name, tree, model, port, rep, emit, extra_env=None):
             except Exception as exc:  # noqa: BLE001
                 if proc.poll() is not None:
                     raise RuntimeError(
-                        f"{name}: server exited rc={proc.returncode}"
+                        f"{name}: server exited rc={proc.returncode}: "
+                        + log_tail(log.name)
                     ) from exc
                 time.sleep(1)
         else:
@@ -245,11 +268,7 @@ def run_arm(name, tree, model, port, rep, emit, extra_env=None):
         census(url, "idle-after")
     finally:
         stop.set()
-        try:
-            os.killpg(proc.pid, 2)
-            proc.wait(60)
-        except Exception:  # noqa: BLE001
-            os.killpg(proc.pid, 9)
+        stop_server(proc)
         log.close()
 
 
