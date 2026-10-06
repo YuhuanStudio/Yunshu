@@ -208,6 +208,35 @@ from .engine_text import (
 )
 
 
+def _reload_dropped_weights(model, mp) -> None:
+    """After a strict=False load, load the checkpoint tensors the lenient load dropped because
+    of a naming difference (bare-backbone embedders lack the ``model.`` prefix), and fail if any
+    model parameter would stay randomly initialised."""
+    import glob as _glob
+
+    import mlx.core as mx
+    from mlx.utils import tree_flatten
+
+    from .checkpoint_keys import key_rename
+
+    weights: dict = {}
+    for f in sorted(_glob.glob(str(mp / "*.safetensors"))):
+        weights.update(mx.load(f))  # type: ignore[arg-type]
+    if hasattr(model, "sanitize"):
+        weights = model.sanitize(weights)
+    ren = key_rename(weights, [kv[0] for kv in tree_flatten(model.parameters())])
+    if ren:
+        logger.warning(
+            "Checkpoint tensor names lack the model prefix; renaming %d tensors",
+            len(ren),
+        )
+        weights = {ren.get(k, k): v for k, v in weights.items()}
+        if hasattr(model, "sanitize"):
+            weights = model.sanitize(weights)
+        model.load_weights(list(weights.items()), strict=False)
+        mx.eval(model.parameters())
+
+
 class BatchedEngine(
     EngineTemplatesMixin,
     EngineEmbeddingsMixin,
@@ -538,6 +567,7 @@ class BatchedEngine(
                     mp = hf_repo_to_path(self.model_name)
                 ret = _load_strict_false(mp, strict=False)
                 model = ret[0] if isinstance(ret, tuple) else ret
+                _reload_dropped_weights(model, mp)
                 return model, _load_tok(mp)
 
         self._model, self._tokenizer = await loop.run_in_executor(executor, _load)

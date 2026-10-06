@@ -83,6 +83,11 @@ TEXT_VEC = {
     m.CAT: vec(1),
     m.KITTEN: _unit([0.9 * a + 0.1 * b for a, b in zip(vec(1), vec(2), strict=True)]),
     m.STOCK: vec(5),
+    **{
+        t: vec(7 + i)
+        for i, t in enumerate(m.MIXED)
+        if t not in (m.CAT, m.KITTEN, m.STOCK)
+    },
 }
 
 
@@ -251,13 +256,14 @@ def good_server(request: httpx.Request) -> httpx.Response:
             }
         )
     if p == "/v1/classify":
+        want = next(w for t, _, w in m.CLASSIFY_CASES if t == j["input"])
+        order = [want] + [x for x in j["labels"] if x != want]
         return js(
             {
                 "model": "m",
                 "results": [
-                    {"label": m.FIN, "score": 0.8, "index": 0},
-                    {"label": "sports", "score": 0.15, "index": 1},
-                    {"label": "cooking", "score": 0.05, "index": 2},
+                    {"label": x, "score": sc, "index": j["labels"].index(x)}
+                    for x, sc in zip(order, (0.8, 0.15, 0.05), strict=False)
                 ],
             }
         )
@@ -268,12 +274,13 @@ def good_server(request: httpx.Request) -> httpx.Response:
     return err(404, f"no route {p}")
 
 
-def ctx_for(needs, handler=good_server, shared=None):
+def ctx_for(needs, handler=good_server, shared=None, ref=True):
     http = httpx.Client(transport=httpx.MockTransport(handler), base_url="http://srv")
     return rc.Ctx(
         url="http://srv", token="", model="m", kind=needs, http=http,
         oa=openai.OpenAI(base_url="http://srv/v1", api_key="x", http_client=http, max_retries=0),
         an=None, shared=shared if shared is not None else {},
+        fixtures={"embed_reference": lambda ts: [TEXT_VEC[t] for t in ts]} if ref else {},
     )  # fmt: skip
 
 
@@ -349,3 +356,50 @@ def test_bad_answers_fail_the_checks():
 
     with pytest.raises(rc.Fail, match="transcript"):
         rc.REGISTRY["asr_served"].fn(ctx_for("asr", bad_asr, {"tts_wav": make_wav()}))
+
+
+def _enc(v, j):
+    if j.get("encoding_format") == "base64":
+        return base64.b64encode(struct.pack(f"<{len(v)}f", *v)).decode()
+    return v
+
+
+def test_embed_check_fails_when_served_vectors_disagree_with_the_reference():
+    """The broken-weights case: plausible unit vectors, wrong space. Similarity order alone passed it."""
+
+    def scrambled(req):
+        r = good_server(req)
+        if req.url.path == "/v1/embeddings" and req.content != b"":
+            j = json.loads(req.content)
+            if j["input"] != "" and not j.get("dimensions"):
+                items = j["input"] if isinstance(j["input"], list) else [j["input"]]
+                data = [
+                    {
+                        "object": "embedding",
+                        "index": i,
+                        "embedding": _enc(
+                            vec(50 + len(t)) if t in (m.LONG, "Hi") else TEXT_VEC[t], j
+                        ),
+                    }
+                    for i, t in enumerate(items)
+                ]
+                return httpx.Response(
+                    200,
+                    json={"object": "list", "data": data, "model": "m",
+                          "usage": {"prompt_tokens": 5, "total_tokens": 5}},
+                )  # fmt: skip
+        return r
+
+    with pytest.raises(rc.Fail, match="differ from the reference"):
+        rc.REGISTRY["embed_served"].fn(ctx_for("embed", scrambled))
+
+
+def test_embed_check_needs_a_reference():
+    with pytest.raises(rc.Fail, match="no reference"):
+        rc.REGISTRY["embed_served"].fn(ctx_for("embed", ref=False))
+
+
+def test_classify_cases_are_clear_and_each_label_set_has_the_answer():
+    assert len(m.CLASSIFY_CASES) >= 3
+    for _, labels, want in m.CLASSIFY_CASES:
+        assert want in labels and len(set(labels)) == len(labels)
