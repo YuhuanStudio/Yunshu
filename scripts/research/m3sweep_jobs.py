@@ -251,10 +251,10 @@ def cmd_wire(a):
         cl = wc.Clients.__new__(wc.Clients)
         cl.http = http
         cl.oa = openai.OpenAI(
-            base_url=srv.url + "/v1", api_key="x", http_client=http, max_retries=0
+            base_url=srv.url + "/v1", api_key="x", max_retries=0, timeout=300
         )
         cl.an = anthropic.Anthropic(
-            base_url=srv.url, api_key="x", http_client=http, max_retries=0
+            base_url=srv.url, api_key="x", max_retries=0, timeout=300
         )
         for name, kw, dialects in cases():
             for dialect in dialects:
