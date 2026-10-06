@@ -134,3 +134,33 @@ def test_completions_untag_reasoning():
     assert f("<think>cut off", 3) == "cut off"
     assert f("<think>literal</think>x", 0) == "<think>literal</think>x"
     assert f("plain", 3) == "plain"
+
+
+def test_messages_native_tools_on_batched_engine():
+    """/v1/messages on a text engine (BatchedEngine) hands tools + tool_choice to the template
+    and the tool grammar. Before: _native_kw() is {} there (tools ride a contextvar), the
+    KeyError was swallowed and every request silently fell back to the injected prompt, so a
+    streamed forced call was prose about 1 time in 3."""
+    from yunshu_engine import batched_engine as be
+
+    class Tok:
+        chat_template = "{% for t in tools %}{{ t }}{% endfor %}"
+
+    eng = be.BatchedEngine.__new__(be.BatchedEngine)
+    eng._tokenizer = Tok()
+    tool = SimpleNamespace(
+        name="get_weather", description="w", input_schema={"type": "object"}
+    )
+    req = SimpleNamespace(
+        tools=[tool],
+        tool_choice={
+            "type": "tool",
+            "name": "get_weather",
+            "disable_parallel_tool_use": True,
+        },
+    )
+    assert anthropic._apply_native_tools(req, eng) is True
+    assert be._REQUEST_TOOLS.get()[0]["function"]["name"] == "get_weather"
+    use = be._REQUEST_TOOL_USE.get()
+    assert use["tool_choice"]["name"] == "get_weather" and use["parallel"] is False
+    assert req._native_active is True

@@ -1549,14 +1549,24 @@ async def create_response(req: ResponsesRequest, request: Request):
             req._native_tools = [t.model_dump() for t in tools]
         else:
             messages = _inject_tool_system_prompt(
-                messages, tools, tool_choice=req.tool_choice, engine=engine
+                messages,
+                tools,
+                tool_choice=req.tool_choice,
+                parallel_tool_calls=req.parallel_tool_calls,
+                engine=engine,
             )
         # Structurally FORCE a required/named tool_choice via an assistant prefill — the
         # advisory injection alone lets the model emit plain text (so "required"/named
         # couldn't be honored). Non-stream only: the streaming path uses
         # ToolCallStreamer(forced_tool_name), and a shared prefill would leave its parser
         # without the opening marker. The prefill is prepended back before extraction.
-        if not req.stream and not getattr(req, "_native_tools", None):
+        from .chat import _native_tools_active
+
+        if (
+            not req.stream
+            and not getattr(req, "_native_tools", None)
+            and not _native_tools_active()
+        ):
             _tc = req.tool_choice
             if _tc == "required":
                 _resp_tool_prefill = "<tool_call>\n"

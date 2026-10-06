@@ -1040,11 +1040,11 @@ def _apply_native_tools(req, engine) -> bool:
         if isinstance(engine, BatchedEngine):
             if _template_supports_tools(getattr(engine, "_tokenizer", None)):
                 _REQUEST_TOOLS.set(tools)
-                use = _native_kw(req)
+                choice = req.tool_choice if isinstance(req.tool_choice, dict) else {}
                 _REQUEST_TOOL_USE.set(
                     {
-                        "tool_choice": use["tool_choice"],
-                        "parallel": use["parallel_tool_calls"],
+                        "tool_choice": req.tool_choice,
+                        "parallel": not choice.get("disable_parallel_tool_use"),
                     }
                 )
                 req._native_active = True

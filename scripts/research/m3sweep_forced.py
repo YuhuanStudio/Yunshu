@@ -71,6 +71,19 @@ def variants(m):
                 "tool_choice": {"type": "any"},
             },
         )
+        out[f"responses-required-{'s' if stream else 'j'}"] = (
+            "responses",
+            stream,
+            "/v1/responses",
+            {
+                "model": m,
+                "max_output_tokens": 1500,
+                "stream": stream,
+                "input": "hi",
+                "tools": [{"type": "function", **CTOOL["function"]}],
+                "tool_choice": "required",
+            },
+        )
         out[f"chat-named-{'s' if stream else 'j'}"] = (
             "chat",
             stream,
@@ -102,7 +115,7 @@ def main():
     try:
         for name, (kind, stream, path, body) in variants(srv.model_id).items():
             bad = []
-            for i in range(a.reps):
+            for _i in range(a.reps):
                 st, raw = mp.post(srv.url, path, body)
                 if st != 200 or not has_call(kind, stream, raw):
                     bad.append(raw[:700] if stream else raw[:500])
