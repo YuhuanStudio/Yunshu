@@ -54,6 +54,11 @@ _TEXT_SPECIAL_TOKENS = (
 
 _JSON_TYPES = {"array", "object"}
 
+# Whitespace a forced reply may put before, between and after calls: at most two characters. The
+# mask removes EOS until a call has closed, so an unbounded whitespace rule let one sampled "\n"
+# snowball into 1500 tokens of blanks and no call (M3 sweep, Qwen2.5-3B, chat stream).
+_WS_RULE = "WS: /[ \\n]{1,2}/"
+
 
 # ── grammar text ────────────────────────────────────────────────────────────
 
@@ -208,11 +213,60 @@ def build_xml_grammar(
         head = [
             f"start: WS? tcall{' (WS? tcall)*' if parallel else ''} WS?",
             f"tcall: {one}",
-            "WS: /[ \\n]+/",
+            _WS_RULE,
         ]
     else:
         head = ['start: "\\n"? call']
     return "\n".join([*head, f"call: {call_alt}", *lines, *text_rules]) + "\n"
+
+
+def _inline_refs(schema: Any, _depth: int = 0) -> dict | None:
+    """``schema`` with its local ``$ref``s (``#/$defs/X``, ``#/definitions/X``) replaced by the
+    definitions they name, so a tool whose parameters use shared definitions still compiles.
+    None when a reference is not local or recurses (a call grammar cannot be unbounded)."""
+    defs: dict = {}
+    if isinstance(schema, dict):
+        for key in ("$defs", "definitions"):
+            if isinstance(schema.get(key), dict):
+                defs.update(schema[key])
+
+    def walk(node: Any, seen: tuple) -> Any:
+        if isinstance(node, list):
+            out = [walk(n, seen) for n in node]
+            return None if any(o is None for o in out) else out
+        if not isinstance(node, dict):
+            return node
+        ref = node.get("$ref")
+        if ref is not None:
+            name = ref.rsplit("/", 1)[-1] if isinstance(ref, str) else None
+            if (
+                not isinstance(ref, str)
+                or not ref.startswith(("#/$defs/", "#/definitions/"))
+                or name not in defs
+                or name in seen
+                or len(seen) > 8
+            ):
+                return None
+            rest = {k: v for k, v in node.items() if k != "$ref"}
+            target = walk(defs[name], (*seen, name))
+            if target is None:
+                return None
+            if not isinstance(target, dict):
+                return target
+            merged = {**target, **walk(rest, seen)} if rest else target
+            return merged
+        out = {}
+        for k, v in node.items():
+            if k in ("$defs", "definitions"):
+                continue
+            w = walk(v, seen)
+            if w is None and v is not None:
+                return None
+            out[k] = w
+        return out
+
+    res = walk(schema, ())
+    return res if isinstance(res, dict) else None
 
 
 def build_json_grammar(
@@ -230,8 +284,8 @@ def build_json_grammar(
     for tool in tools:
         if only is not None and tool.name != only:
             continue
-        params = tool.parameters or {"type": "object"}
-        if "$ref" in json.dumps(params) or "$defs" in params:
+        params = _inline_refs(tool.parameters or {"type": "object"})
+        if params is None:
             return None
         branches.append(
             {
@@ -254,7 +308,7 @@ def build_json_grammar(
                 f"start: WS? tcall{' (WS? tcall)*' if parallel else ''} WS?",
                 f"tcall: <[{start_id}]> call",
                 f"call: {call}",
-                "WS: /[ \\n]+/",
+                _WS_RULE,
             ]
         )
     return f"start: call\ncall: {call}\n"
