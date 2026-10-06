@@ -360,13 +360,12 @@ class TTSEngine(ActiveRequestMixin):
                 "mlx-audio is required for TTS. Install with: pip install mlx-audio"
             ) from e
 
-        try:
+        # Extra checkpoint tensors may be ignored; a model parameter without one fails the load
+        # (a blanket strict=False retry would serve it randomly initialised).
+        from .checkpoint_keys import lenient_extras_load
+
+        with lenient_extras_load():
             self._model = load_model(self._model_path, strict=True)
-        except ValueError:
-            logger.warning(
-                f"Strict loading failed for {self._model_path}, retrying with strict=False"
-            )
-            self._model = load_model(self._model_path, strict=False)
 
         logger.info(f"TTS engine loaded: {self._model_path}")
 

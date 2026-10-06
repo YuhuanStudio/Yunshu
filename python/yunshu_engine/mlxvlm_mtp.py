@@ -92,22 +92,11 @@ def unindexed_mtp_warning(model_path: str) -> str | None:
 def _tolerant_target_load():
     """Scoped: let the TARGET ignore the embedded mtp.* keys it doesn't use
     (they belong to the drafter). Restored immediately after — the drafter and
-    everything else still load strictly."""
-    import mlx.nn as nn
+    everything else still load strictly. A target parameter without a tensor still fails."""
+    from .checkpoint_keys import lenient_extras_load
 
-    orig = nn.Module.load_weights
-
-    def _lw(self, weights, strict=True):
-        try:
-            return orig(self, weights, strict=strict)
-        except ValueError:
-            return orig(self, weights, strict=False)
-
-    nn.Module.load_weights = _lw
-    try:
+    with lenient_extras_load():
         yield
-    finally:
-        nn.Module.load_weights = orig
 
 
 def _load_mtp_head_tensors(model_path: str) -> dict:
