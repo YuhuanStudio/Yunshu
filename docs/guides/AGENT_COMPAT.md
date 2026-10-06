@@ -59,6 +59,34 @@ window; the cost line is Claude Code's own arithmetic and cannot be corrected fr
 | `POST /v1/chat/completions`, `stream_options: {include_usage: true}`, `max_tokens: 32000` | every turn; 9 function tools; title generation runs a first request with `reasoning_effort: "low"`; headers `x-session-id`, `x-session-affinity` | served |
 | `/models` | not fetched (`OPENCODE_DISABLE_MODELS_FETCH`); limits come from `provider.*.models.*.limit` | `yunshu launch opencode` writes them |
 
+## Drift against the latest CLIs
+
+The tables above describe the pinned census CLIs. `scripts/dev/agentcompat` (below) reruns the census with
+the newest releases and fails when anything new is not written down here. Last run: Claude Code 2.1.291,
+Codex 0.160.1, opencode 1.18.34.
+
+| New item | Seen in | Yunshu |
+|---|---|---|
+| `anthropic-beta: thinking-display-updates-2026-08-18` | Claude Code 2.1.291, every turn | accepted; betas are never rejected |
+| `thinking: {type: "adaptive", display: "updates"}` | Claude Code 2.1.291 | accepted (the `thinking` object is read for `type` / `budget_tokens`); `display` has no local meaning and is ignored |
+| header `x-opencode-session-id` | opencode 1.18.34 | ignored (`x-session-id` already feeds the session affinity) |
+
+## Verifying the claims: `scripts/dev/agentcompat`
+
+Documents drift, so the claims above are re-earned by one command with one verdict
+(`docs/research/runs/<date>-agentcompat-<commit>/verdict.json`, exit 0 only on positive evidence):
+
+| Stage | What it proves |
+|---|---|
+| `install` | installs the newest Claude Code / Codex / opencode under `/Volumes/P5Plus/yunshu-build/agentic-clis-latest` (never global; `install_agents.sh` with `*_V=latest`) |
+| `census` | the scripted sessions with those CLIs against the recording mock; diff against the pinned census (paths, query keys, headers, beta values, body fields, tool / block types); every new item must be named in this file |
+| `m3` | a gpuq M3 job (`m3_serve.py`, Qwen3.5-9B-4bit, loopback only) behind an `ssh -L` forward; every recorded census request is replayed (status 2xx, SSE event order and fields, body validated by the official `anthropic` / `openai` models), then the scripted agent tasks run with the latest CLIs; the job is stopped over a loopback control port and the tunnel killed |
+
+`python/` spec drift is covered by a unit test (`test_spec_field_inventory.py`): every parameter of the installed
+`openai` / `anthropic` SDK request types is either a field of our request model or listed with a reason, so a new
+SDK release that adds a field fails CI instead of being silently dropped. Run as an extra stage of `m3sweep` with
+`scripts/dev/agentcompat --stages m3`.
+
 ## Feature matrix
 
 Status: **works** (verified, evidence named), **partial**, **missing**, **n/a** (the agent never asks for it).

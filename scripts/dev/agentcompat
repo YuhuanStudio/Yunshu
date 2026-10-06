@@ -1,0 +1,3 @@
+#!/bin/sh
+# One fail-closed verdict for the latest agent CLIs + SDK shapes against this commit (docs/guides/AGENT_COMPAT.md).
+exec "${AGENTCOMPAT_PYTHON:-/Users/yuhuan/Documents/YuhuanStudio/Yunshu/.venv/bin/python}" "$(dirname "$0")/../research/agent_compat/agentcompat.py" "$@"
