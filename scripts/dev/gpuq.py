@@ -534,6 +534,12 @@ def _owner(job: dict) -> str:
     return "main"
 
 
+def _lane(job: dict) -> str:
+    """The slot a job ran (or would run) on; an `any` job counts as M5."""
+    dev = job.get("execution_device") or job.get("device") or "m5"
+    return "m3" if dev == "m3" else "m5"
+
+
 def _pick(jobs: list[dict], eligible=None) -> dict | None:
     """Highest priority first; within it, the owner that last ran longest ago
     (round-robin across agents), then that owner's oldest job. `eligible` filters
@@ -546,17 +552,23 @@ def _pick(jobs: list[dict], eligible=None) -> dict | None:
     now = time.time()
     top = max(_eff_priority(j, now) for j in pending)
     pending = [j for j in pending if _eff_priority(j, now) == top]
-    last: dict[str, float] = {}
+    # Turns are per device: an owner's M3 correctness jobs must not push its M5 jobs
+    # back (2026-10-06: main's M3 sweeps starved main's yv long run for an hour).
+    last: dict[tuple[str, str], float] = {}
     for j in jobs:
         if "started" in j:
-            o = _owner(j)
-            last[o] = max(last.get(o, 0.0), j["started"])
+            k = (_owner(j), _lane(j))
+            last[k] = max(last.get(k, 0.0), j["started"])
     # Short correctness checks (tiny / smoke / dry-run labels) go first within a
     # priority: they take a minute and unblock a worker's next step, while a
     # 27B timing job behind them barely moves.
     return min(
         pending,
-        key=lambda j: (not _is_short(j), last.get(_owner(j), 0.0), j["submitted"]),
+        key=lambda j: (
+            not _is_short(j),
+            last.get((_owner(j), _lane(j)), 0.0),
+            j["submitted"],
+        ),
     )
 
 

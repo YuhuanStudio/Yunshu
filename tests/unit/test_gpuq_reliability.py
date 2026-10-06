@@ -656,3 +656,52 @@ def test_stats_counts_wasted_minutes(q, capsys, monkeypatch):
     out = capsys.readouterr().out
     assert "3 jobs, 16 GPU min, 11 min wasted" in out
     assert "wide8" in out and "wasted=  10.0 min" in out
+
+
+def test_m3_jobs_do_not_cost_an_owner_its_m5_turn(q):
+    """main's M3 sweep must not push main's M5 job behind other owners (2026-10-06)."""
+    import time
+
+    now = time.time()
+    jobs = [
+        dict(
+            id="m3",
+            label="sweep",
+            state="done",
+            priority=0,
+            submitted=now - 90,
+            started=now - 10,
+            device="m3",
+            cwd="/repo",
+            env={},
+        ),
+        dict(
+            id="o",
+            label="other-x",
+            state="done",
+            priority=0,
+            submitted=now - 90,
+            started=now - 50,
+            cwd="/x/Yunshu-wt-other",
+            env={},
+        ),
+        dict(
+            id="mine",
+            label="yv-long",
+            state="pending",
+            priority=0,
+            submitted=now - 40,
+            cwd="/repo",
+            env={},
+        ),
+        dict(
+            id="theirs",
+            label="other-y",
+            state="pending",
+            priority=0,
+            submitted=now - 30,
+            cwd="/x/Yunshu-wt-other",
+            env={},
+        ),
+    ]
+    assert q._pick(jobs)["id"] == "mine"
