@@ -204,7 +204,9 @@
       "path": "python/yunshu_engine/dflash_fast.py",
       "repo": "https://github.com/jundot/omlx",
       "clone": "reference/omlx",
-      "upstream_paths": ["omlx/patches/qwen35_gdn_prework.py"],
+      "upstream_paths": [
+        "omlx/patches/qwen35_gdn_prework.py"
+      ],
       "commit": "a98d8c8c",
       "license": "Apache-2.0",
       "local_changes": [
@@ -232,7 +234,9 @@
       "path": "python/yunshu_engine/kernels/lane_virtual.py",
       "repo": "https://github.com/ashhart/TensorFold",
       "clone": "reference/TensorFold",
-      "upstream_paths": ["src/tensorfold/kernels/qwen/dense/v1/lane_qmm.py"],
+      "upstream_paths": [
+        "src/tensorfold/kernels/qwen/dense/v1/lane_qmm.py"
+      ],
       "commit": "34bae79a",
       "license": "MIT",
       "local_changes": [
@@ -427,7 +431,9 @@
       "path": "python/yunshu_engine/vlm_engine.py",
       "repo": "https://github.com/vllm-project/vllm",
       "clone": "reference/vllm",
-      "upstream_paths": ["vllm/reasoning/qwen3_reasoning_parser.py"],
+      "upstream_paths": [
+        "vllm/reasoning/qwen3_reasoning_parser.py"
+      ],
       "commit": "22a58640b",
       "license": "Apache-2.0",
       "local_changes": [
@@ -439,7 +445,9 @@
       "path": "python/yunshu_engine/dflash_plan.py",
       "repo": "https://github.com/ashhart/TensorFold",
       "clone": "reference/TensorFold",
-      "upstream_paths": ["src/tensorfold/drafters/dflash_tree.py"],
+      "upstream_paths": [
+        "src/tensorfold/drafters/dflash_tree.py"
+      ],
       "commit": "34bae79a",
       "license": "MIT",
       "local_changes": [
@@ -884,6 +892,53 @@
       "reviewed_commit": "836d57176dc699a726c55418e4f96b8ca628e1bf",
       "reviewed_date": "2026-10-04",
       "review_reason": "Independent local n-gram proposal retained. Upstream probabilistic MTP/simple-draft acceptance is a different sampling contract and requires explicit paired quality before adoption."
+    },
+    {
+      "kind": "inspired",
+      "path": "python/yunshu_gateway/schemas/structured_outputs.py",
+      "repo": "https://github.com/vllm-project/vllm",
+      "clone": "reference/vllm",
+      "upstream_paths": [
+        "vllm/sampling_params.py",
+        "vllm/entrypoints/openai/chat_completion/protocol.py"
+      ],
+      "commit": "68088ed",
+      "license": "Apache-2.0",
+      "local_changes": [
+        "structured_outputs request field folded into Yunshu's grammar/response_format"
+      ]
+    },
+    {
+      "kind": "inspired",
+      "path": "scripts/research/route_checks_vllm.py",
+      "repo": "https://github.com/vllm-project/vllm",
+      "clone": "reference/vllm",
+      "upstream_paths": [
+        "tests/entrypoints/openai/chat_completion/test_chat.py",
+        "tests/entrypoints/openai/chat_completion/test_chat_completion.py",
+        "tests/entrypoints/openai/chat_completion/test_chat_logit_bias_validation.py",
+        "tests/entrypoints/openai/chat_completion/test_non_object_body_validation.py",
+        "tests/entrypoints/openai/completion/test_completion.py"
+      ],
+      "commit": "68088ed",
+      "license": "Apache-2.0",
+      "local_changes": [
+        "test cases rewritten as real-server route checks"
+      ]
+    },
+    {
+      "kind": "inspired",
+      "path": "python/yunshu_gateway/routers/chat.py",
+      "repo": "https://github.com/vllm-project/vllm",
+      "clone": "reference/vllm",
+      "upstream_paths": [
+        "tests/entrypoints/openai/chat_completion/test_chat.py"
+      ],
+      "commit": "68088ed",
+      "license": "Apache-2.0",
+      "local_changes": [
+        "request validation: stream_options needs stream, tool_choice must name a listed tool, prompt_logprobs >= 0 (also completions.py)"
+      ]
     }
   ],
   "patches": [

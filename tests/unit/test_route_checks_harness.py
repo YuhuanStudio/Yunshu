@@ -97,7 +97,12 @@ def test_check_has_no_harness_bug(name, monkeypatch):
             f
             for f in tb
             if f.filename.endswith(
-                ("route_checks.py", "route_checks_tools.py", "route_checks_vision.py")
+                (
+                    "route_checks.py",
+                    "route_checks_tools.py",
+                    "route_checks_vision.py",
+                    "route_checks_vllm.py",
+                )
             )
         ]
         if mine and not any("site-packages" in f.filename for f in tb[-1:]):

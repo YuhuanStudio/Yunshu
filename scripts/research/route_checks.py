@@ -2058,3 +2058,8 @@ def _ollama_unsupported(c: Ctx):
             f"{method} {path}: {r.status_code} {r.text[:100]}",
         )
         err_ok(r, "ollama")
+
+
+from route_checks_vllm import (
+    _chat_validation,  # noqa: E402,F401  registers the vLLM-derived validation checks
+)

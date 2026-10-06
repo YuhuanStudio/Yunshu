@@ -206,6 +206,7 @@ def test_error_before_any_output_is_a_5xx_in_the_dialect_envelope(
         if "generate" in path
         else {"model": "m", "messages": USER}
     )
+    body = {k: v for k, v in body.items() if k != "stream_options"}
     r = c.post(path, json={**body, "stream": False})
     assert r.status_code == 500
     j = r.json()
