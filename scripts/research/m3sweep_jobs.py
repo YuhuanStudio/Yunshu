@@ -724,6 +724,18 @@ def routes_make_ctx(srv, token, kind, model_id=None):
     )
 
 
+def _embed_reference_fn(model):
+    """Official-recipe vectors (scripts/research/embed_reference.py), computed once per text set
+    in this job's own process, independent of the served engine."""
+
+    def fn(texts):
+        from embed_reference import reference_embed
+
+        return reference_embed(model, list(texts))
+
+    return fn
+
+
 def cmd_routes(a):
     """Every registered route against real servers (scripts/research/route_checks.py): each --model
     in the default configuration (one server after the other: the ports are few), and, with
@@ -771,6 +783,8 @@ def cmd_routes(a):
             srv = start_server(model, f"routes-{needs}", [])
             ctx = routes_make_ctx(srv, "", needs)
             ctx.shared = shared
+            if needs == "embed":
+                ctx.fixtures["embed_reference"] = _embed_reference_fn(model)
             run_route_checks(ctx, needs, only, res, srv, name)
             res["notes"][name] = ctx.notes
             if srv.proc.poll() is not None:
