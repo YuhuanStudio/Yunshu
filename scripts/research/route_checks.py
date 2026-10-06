@@ -1116,7 +1116,10 @@ def _embeddings(c: Ctx):
             "/v1/rerank",
             {"model": c.model, "query": "cat", "documents": ["a feline", "a car"]},
         ),
-        ("/v1/classify", {"model": c.model, "input": "hello"}),
+        (
+            "/v1/classify",
+            {"model": c.model, "input": "hello", "labels": ["greeting", "farewell"]},
+        ),
     ):
         st, b = ok_or_absent(c, "POST", path, json=body, timeout=120)
         c.notes[path] = st
@@ -1248,13 +1251,44 @@ def _images(c: Ctx):
         c,
         "POST",
         "/v1/ocr",
-        json={
-            "model": c.model,
-            "image": "data:image/png;base64," + base64.b64encode(_png()).decode(),
-        },
+        data={"model": c.model},
+        files={"file": ("a.png", _png(), "image/png")},
         timeout=120,
     )[0]
     c.notes["images"] = st
+    # every request above is valid: a 400 means the route rejected a well-formed request
+    for k, v in st.items():
+        expect(v != 400, f"{k}: a well-formed request answered 400 ({c.notes})")
+    # the official SDK sends multipart for edits and variations
+    import openai
+
+    for name, fn in (
+        (
+            "sdk_edit",
+            lambda: c.oa.images.edit(
+                model=c.model, image=("a.png", _png()), prompt="make it blue"
+            ),
+        ),
+        (
+            "sdk_variation",
+            lambda: c.oa.images.create_variation(
+                model=c.model, image=("a.png", _png())
+            ),
+        ),
+        (
+            "sdk_generate",
+            lambda: c.oa.images.generate(model=c.model, prompt="a red square"),
+        ),
+    ):
+        try:
+            fn()
+            c.notes[name] = "served"
+        except openai.APIStatusError as ex:
+            expect(
+                ex.status_code == 404 and str(ex.message).strip(),
+                f"{name}: {ex.status_code} {str(ex.message)[:120]}",
+            )
+            c.notes[name] = f"404: {str(ex.message)[:100]}"
 
 
 @check("omni_absent", "POST /v1/omni/speech/stream")
@@ -1263,9 +1297,10 @@ def _omni(c: Ctx):
         c,
         "POST",
         "/v1/omni/speech/stream",
-        json={"model": c.model, "messages": [{"role": "user", "content": "Hi"}]},
+        json={"text": "Hello"},
         timeout=120,
     )
+    expect(st != 400, "a well-formed omni request answered 400")
     c.notes["omni"] = st
 
 
