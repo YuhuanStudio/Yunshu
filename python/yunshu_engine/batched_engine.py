@@ -208,7 +208,6 @@ from .engine_text import (
 )
 
 
-
 def _reload_dropped_weights(model, mp) -> None:
     """After a strict=False load, load the checkpoint tensors the lenient load dropped because
     of a naming difference (bare-backbone embedders lack the ``model.`` prefix), and fail if any
@@ -228,7 +227,8 @@ def _reload_dropped_weights(model, mp) -> None:
     ren = key_rename(weights, (k for k, _ in tree_flatten(model.parameters())))
     if ren:
         logger.warning(
-            "Checkpoint tensor names lack the model prefix; renaming %d tensors", len(ren)
+            "Checkpoint tensor names lack the model prefix; renaming %d tensors",
+            len(ren),
         )
         weights = {ren.get(k, k): v for k, v in weights.items()}
         if hasattr(model, "sanitize"):

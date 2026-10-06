@@ -83,7 +83,11 @@ TEXT_VEC = {
     m.CAT: vec(1),
     m.KITTEN: _unit([0.9 * a + 0.1 * b for a, b in zip(vec(1), vec(2), strict=True)]),
     m.STOCK: vec(5),
-    **{t: vec(7 + i) for i, t in enumerate(m.MIXED) if t not in (m.CAT, m.KITTEN, m.STOCK)},
+    **{
+        t: vec(7 + i)
+        for i, t in enumerate(m.MIXED)
+        if t not in (m.CAT, m.KITTEN, m.STOCK)
+    },
 }
 
 
@@ -354,6 +358,12 @@ def test_bad_answers_fail_the_checks():
         rc.REGISTRY["asr_served"].fn(ctx_for("asr", bad_asr, {"tts_wav": make_wav()}))
 
 
+def _enc(v, j):
+    if j.get("encoding_format") == "base64":
+        return base64.b64encode(struct.pack(f"<{len(v)}f", *v)).decode()
+    return v
+
+
 def test_embed_check_fails_when_served_vectors_disagree_with_the_reference():
     """The broken-weights case: plausible unit vectors, wrong space. Similarity order alone passed it."""
 
@@ -361,10 +371,16 @@ def test_embed_check_fails_when_served_vectors_disagree_with_the_reference():
         r = good_server(req)
         if req.url.path == "/v1/embeddings" and req.content != b"":
             j = json.loads(req.content)
-            if j["input"] != "" and j.get("encoding_format") != "base64" and not j.get("dimensions"):
+            if j["input"] != "" and not j.get("dimensions"):
                 items = j["input"] if isinstance(j["input"], list) else [j["input"]]
                 data = [
-                    {"object": "embedding", "index": i, "embedding": vec(50 + len(t))}
+                    {
+                        "object": "embedding",
+                        "index": i,
+                        "embedding": _enc(
+                            vec(50 + len(t)) if t in (m.LONG, "Hi") else TEXT_VEC[t], j
+                        ),
+                    }
                     for i, t in enumerate(items)
                 ]
                 return httpx.Response(

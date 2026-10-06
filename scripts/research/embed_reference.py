@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import math
 
-DEFAULT_TASK = "Given a web search query, retrieve relevant passages that answer the query"
+DEFAULT_TASK = (
+    "Given a web search query, retrieve relevant passages that answer the query"
+)
 
 
 def format_query(task: str, query: str) -> str:
@@ -32,9 +34,28 @@ def reference_embed(
     model_dir: str, texts: list[str], pooling: str = "last", add_eos: bool = True
 ) -> list[list[float]]:
     import mlx.core as mx
-    from mlx_lm import load
+    from pathlib import Path
 
-    model, tok = load(model_dir)
+    from mlx.utils import tree_flatten
+    from mlx_lm.utils import load_model, load_tokenizer
+
+    mp = Path(model_dir)
+    model = load_model(mp, strict=False)
+    model = model[0] if isinstance(model, tuple) else model
+    w = {}
+    import glob
+
+    for f in sorted(glob.glob(str(mp / "*.safetensors"))):
+        w.update(mx.load(f))
+    names = {k for k, _ in tree_flatten(model.parameters())}
+    # the official checkpoint names the bare backbone: add the wrapper's "model." prefix
+    w = {(k if k in names else "model." + k): v for k, v in w.items()}
+    missing = names - set(w)
+    if missing:
+        raise RuntimeError(f"reference load: {len(missing)} parameters without tensors")
+    model.load_weights(list(w.items()), strict=False)
+    mx.eval(model.parameters())
+    tok = load_tokenizer(mp)
     hf = getattr(tok, "_tokenizer", tok)
     eos = hf.convert_tokens_to_ids("<|endoftext|>")
     out = []
