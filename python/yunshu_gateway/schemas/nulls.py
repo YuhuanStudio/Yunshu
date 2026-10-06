@@ -23,7 +23,7 @@ def _allows_none(annotation: Any) -> bool:
     return False
 
 
-def clean_request(model_cls: type, data: Any) -> Any:
+def clean_request(model_cls: Any, data: Any) -> Any:
     """Return `data` without keys that are None where `model_cls` does not accept None; a negative
     ``top_k`` (the vLLM / llama.cpp spelling of "disabled", sent by LiteLLM and Cline) becomes 0."""
     if not isinstance(data, dict):

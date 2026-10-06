@@ -34,7 +34,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, cast
 
 import mlx.core as mx
 
@@ -722,7 +722,7 @@ def tree_attention(
         output_shapes=[(1, h, w, d)],
         output_dtypes=[mx.bfloat16],
     )
-    return out
+    return cast(mx.array, out)
 
 
 _SHARED: dict = {}

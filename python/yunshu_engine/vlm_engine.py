@@ -337,7 +337,7 @@ def resolve_external_ple_manifest(config: dict, model_path) -> None:
     model opens ``ple-store.json`` relative to the server's working directory and fails to load."""
     ple = (config.get("text_config") or {}).get("ple_storage")
     manifest = ple.get("manifest") if isinstance(ple, dict) else None
-    if manifest and not Path(manifest).is_absolute():
+    if isinstance(ple, dict) and manifest and not Path(manifest).is_absolute():
         ple["manifest"] = str(Path(model_path) / manifest)
 
 
@@ -2032,7 +2032,7 @@ class VLMEngine:
                 ids = []
             cached = int(ids[0]) if len(ids) == 1 else None
             self._tool_call_marker_cache = cached
-        return cached
+        return None if cached is None else int(cached)
 
     def _runner_events(self, input_ids, **kw):
         """``_runner_events_impl`` plus the optional generated-vs-delivered capture
@@ -3096,7 +3096,8 @@ class VLMEngine:
                 if "num_audios" not in str(e) or "num_audios" not in tpl_kwargs:
                     raise
                 tpl_kwargs.pop("num_audios")
-                template_text = self._processor.apply_chat_template(
+                processor: Any = self._processor
+                template_text = processor.apply_chat_template(
                     vlm_messages,
                     **tpl_kwargs,
                 )

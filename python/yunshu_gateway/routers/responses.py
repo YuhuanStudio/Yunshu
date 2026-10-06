@@ -70,6 +70,20 @@ def _forced_by_grammar(req) -> bool:
     return forced
 
 
+def _chat_tool_choice(tool_choice: Any) -> Any:
+    """Responses names a forced function flat (``{"type": "function", "name": ...}``); the chat
+    tool prompt expects the chat shape, so a named choice becomes a ``ToolChoiceFunction``.
+    An ``allowed_tools`` choice keeps only its ``mode``."""
+    from .chat import ToolChoiceFunction, ToolFunction
+
+    if not isinstance(tool_choice, dict):
+        return tool_choice
+    if tool_choice.get("name"):
+        return ToolChoiceFunction(function=ToolFunction(name=tool_choice["name"]))
+    mode = tool_choice.get("mode")
+    return mode if isinstance(mode, str) else None
+
+
 def _native_kw(req) -> dict:
     """``tools=`` for an engine whose chat template renders tool definitions itself; the
     forced tool_choice / parallel flag ride along so the tool-call grammar can enforce them."""
@@ -1571,7 +1585,7 @@ async def create_response(req: ResponsesRequest, request: Request):
             messages = _inject_tool_system_prompt(
                 messages,
                 tools,
-                tool_choice=req.tool_choice,
+                tool_choice=_chat_tool_choice(req.tool_choice),
                 parallel_tool_calls=req.parallel_tool_calls,
                 engine=engine,
             )
@@ -3272,7 +3286,7 @@ def _input_item_of(response_id: str, index: int, msg: dict) -> list[dict]:
         ]
     items: list[dict] = []
     content = msg.get("content")
-    parts = []
+    parts: list[dict[str, Any]] = []
     if isinstance(content, str) and content:
         parts = [{"type": "input_text", "text": content}]
     elif isinstance(content, list):
@@ -3612,7 +3626,7 @@ async def count_input_tokens(request: Request):
             messages = _inject_tool_system_prompt(
                 messages,
                 defs,
-                tool_choice=req.tool_choice,
+                tool_choice=_chat_tool_choice(req.tool_choice),
                 parallel_tool_calls=req.parallel_tool_calls,
                 engine=engine,
             )

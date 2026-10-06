@@ -17,7 +17,7 @@ from typing import Any
 
 def release_rounds(gen: Any) -> bool:
     """Close and detach the rounds generator; True when one was released."""
-    batch = getattr(gen, "_generation_batch", None)
+    batch: Any = getattr(gen, "_generation_batch", None)
     rounds = getattr(batch, "_rounds_iter", None)
     if rounds is None:
         return False
