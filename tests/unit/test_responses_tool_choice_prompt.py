@@ -1,14 +1,20 @@
 """A Responses forced function choice is flat ({"type": "function", "name": ...}); the injected
 tool prompt must still tell the model to call that function."""
 
-from yunshu_gateway.routers.chat import ToolDefinition, ToolFunction, _inject_tool_system_prompt
+from yunshu_gateway.routers.chat import (
+    ToolDefinition,
+    ToolFunction,
+    _inject_tool_system_prompt,
+)
 from yunshu_gateway.routers.responses import _chat_tool_choice
 
 
 def _prompt(tool_choice):
     tools = [ToolDefinition(type="function", function=ToolFunction(name="get_weather"))]
     msgs = _inject_tool_system_prompt(
-        [{"role": "user", "content": "hi"}], tools, tool_choice=_chat_tool_choice(tool_choice)
+        [{"role": "user", "content": "hi"}],
+        tools,
+        tool_choice=_chat_tool_choice(tool_choice),
     )
     return "\n".join(str(m.get("content")) for m in msgs)
 
