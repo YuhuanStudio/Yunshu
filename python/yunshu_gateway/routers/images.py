@@ -13,6 +13,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field, model_validator
 
 from ..engine import get_model_manager
+from ..model_guards import wrong_modality_detail
 from ..streaming import run_with_disconnect_guard  # non-streaming cancel
 
 logger = logging.getLogger(__name__)
@@ -187,7 +188,8 @@ async def create_image(req: ImageGenerateRequest, request: Request) -> JSONRespo
     if img_engine is None:
         raise HTTPException(
             status_code=404,
-            detail=f"Image generation model '{req.model}' not found",
+            detail=wrong_modality_detail("image", req.model)
+            or f"Image generation model '{req.model}' not found",
         )
 
     # Parse size — reject malformed values rather than silently fall back so
@@ -334,7 +336,9 @@ async def stream_image_generation(req: ImageGenerateRequest, request: Request):
 
     if img_engine is None:
         raise HTTPException(
-            status_code=404, detail="No image generation engine available"
+            status_code=404,
+            detail=wrong_modality_detail("image", req.model)
+            or "No image generation engine available",
         )
 
     # Parse and validate size — reject malformed values rather than silently
@@ -543,7 +547,9 @@ async def create_image_variation(request: Request) -> JSONResponse:
 
     if img_engine is None:
         raise HTTPException(
-            status_code=404, detail="No image generation model available"
+            status_code=404,
+            detail=wrong_modality_detail("image", req.model)
+            or "No image generation model available",
         )
 
     try:
@@ -694,7 +700,9 @@ async def create_image_edit(request: Request) -> JSONResponse:
 
     if img_engine is None:
         raise HTTPException(
-            status_code=404, detail="No image generation model available"
+            status_code=404,
+            detail=wrong_modality_detail("image", req.model)
+            or "No image generation model available",
         )
 
     try:

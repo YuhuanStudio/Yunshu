@@ -1196,6 +1196,14 @@ def _audio(c: Ctx):
         timeout=120,
     )[0]
     c.notes["audio"] = st
+    # the answer names what is served and what cannot be done, not "model not found"
+    for key, word in (
+        ("POST /v1/audio/speech", "cannot synthesize speech"),
+        ("POST /v1/audio/speech/stream", "cannot synthesize speech"),
+        ("POST /v1/audio/transcriptions", "cannot transcribe audio"),
+        ("POST /v1/audio/translations", "cannot transcribe audio"),
+    ):
+        expect(word in c.notes.get(key, ""), f"{key}: {c.notes.get(key)!r}")
     # a chat model must not "succeed" at speech with an empty body
     r = c.req(
         "POST",
@@ -1256,6 +1264,11 @@ def _images(c: Ctx):
         timeout=120,
     )[0]
     c.notes["images"] = st
+    for key in ("POST /v1/images/generations", "POST /v1/images/generations/stream"):
+        expect(
+            "cannot generate or edit images" in c.notes.get(key, ""),
+            f"{key}: {c.notes.get(key)!r}",
+        )
     # every request above is valid: a 400 means the route rejected a well-formed request
     for k, v in st.items():
         expect(v != 400, f"{k}: a well-formed request answered 400 ({c.notes})")
