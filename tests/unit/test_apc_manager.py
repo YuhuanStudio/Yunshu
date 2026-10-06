@@ -756,3 +756,28 @@ def test_small_releases_do_not_clear_the_allocator_pool(monkeypatch):
     assert not calls
     am.release_freed_buffers(2 << 30)
     assert calls
+
+
+def test_anchors_survive_the_pre_copy_re_point_of_a_store(monkeypatch):
+    """The incoming cache is pinned by the anchors only until its copy is stored: charging
+    those bytes to the anchors' budget at that moment dropped every anchor (>150K contexts)."""
+    m = _mgr()
+    prompts = _conversation(turns=6, step=5000)
+    for i, p in enumerate(prompts[:-1]):
+        if i:
+            m.lookup_exact_cache(p)
+        _turn(m, p)
+        m.share_anchor_rows(p[: len(p) - 1], 0)
+    last = prompts[-1]
+    m.lookup_exact_cache(last)
+    final = last[: len(last) - 1]
+    before = len(m._anchors)
+    assert before >= 3
+    m.memory_max_bytes = (
+        4 << 20
+    )  # anchor budget ~600 KB, smaller than the incoming cache
+    m.begin_request()
+    assert m.store_exact_cache(final, _cache(len(final)))
+    assert (
+        len(m._anchors) >= before - 1
+    )  # thinning may retire one, the budget may not wipe all

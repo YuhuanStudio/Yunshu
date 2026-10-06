@@ -1416,7 +1416,9 @@ class YunshuAPCManager(APCManager):
                 import mlx.core as mx
 
                 mx.eval(views)
-                self.finish_anchor_sharing()
+                # not yet: the anchors view a cache that is about to be copied and stored,
+                # and its bytes are not theirs; the budget is enforced once the copy exists
+                self.finish_anchor_sharing(enforce=False)
         key = _sequence_hash(
             tuple(int(t) for t in token_ids), extra_hash, self.block_size
         )
@@ -1669,9 +1671,10 @@ class YunshuAPCManager(APCManager):
         self._lazy_freed = getattr(self, "_lazy_freed", 0) + freed
         return views
 
-    def finish_anchor_sharing(self) -> None:
+    def finish_anchor_sharing(self, enforce: bool = True) -> None:
         self._lazy_freed = 0
-        self.enforce_anchor_budget()
+        if enforce:
+            self.enforce_anchor_budget()
 
     def _share_anchor_rows(self, donor_tokens, extra_hash: int = 0, donor_cache=None):
         """Re-point the K/V rows of retained anchors at the checkpoint just stored.
