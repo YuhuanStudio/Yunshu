@@ -1,3 +1,4 @@
+# Upstream (inspired): vllm-project/vllm (Apache-2.0) tests/reasoning/test_gemma4_reasoning_parser.py @ 68088ed
 from __future__ import annotations
 
 """Reasoning output parser factory.
@@ -221,8 +222,10 @@ class HarmonyReasoningParser(ReasoningParser):
 class GemmaReasoningParser(ReasoningParser):
     """Gemma4: <start_think/>...</end_think/> tags."""
 
-    _OPEN_RE = _START_THINK_OPEN
-    _CLOSE_RE = _END_THINK_CLOSE
+    # Gemma 4 text form: <|channel>thought\n ... <channel|> (vLLM tests/reasoning/
+    # test_gemma4_reasoning_parser.py); the older <start_think> form stays accepted.
+    _OPEN_RE = re.compile(r"<start_think\s*/?\s*>|<\|channel>(?:thought\n)?")
+    _CLOSE_RE = re.compile(r"</end_think\s*/?\s*>|<channel\|>")
 
     def family_name(self) -> str:
         return "gemma"

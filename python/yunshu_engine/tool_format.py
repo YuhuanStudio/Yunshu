@@ -1,4 +1,5 @@
 # Upstream (inspired): Blaizzy/mlx-vlm (MIT) mlx_vlm/tools/registry.py @ v0.7.3
+# Upstream (inspired): vllm-project/vllm (Apache-2.0) tests/tool_parsers/test_qwen3coder_tool_parser.py, test_gemma4_tool_parser.py @ 68088ed
 # Upstream (inspired): ml-explore/mlx-lm (MIT) mlx_lm/tool_parsers @ v0.31.3
 """Tool-call formats: which one a model speaks, and how to read it.
 
@@ -64,6 +65,24 @@ class ToolFormat:
     whole: bool = False
 
 
+_GEMMA_Q = '<|"|>'
+
+
+def _strip_key_delimiters(value: Any) -> Any:
+    """Gemma 4 may wrap an argument key in its string delimiter (``<|"|>name<|"|>:...``); vLLM
+    tests/tool_parsers/test_gemma4_tool_parser.py::test_delimited_keys_stripped. Strip it, recursively."""
+    if isinstance(value, dict):
+        return {
+            (
+                k.replace(_GEMMA_Q, "") if isinstance(k, str) else k
+            ): _strip_key_delimiters(v)
+            for k, v in value.items()
+        }
+    if isinstance(value, list):
+        return [_strip_key_delimiters(v) for v in value]
+    return value
+
+
 def _call(name: Any, arguments: Any) -> Call:
     if not isinstance(name, str) or not name.strip():
         raise ValueError("tool call without a name")
@@ -74,12 +93,14 @@ def _call(name: Any, arguments: Any) -> Call:
         parsed = json.loads(stripped)  # raises on non-JSON strings
         if not isinstance(parsed, dict):
             raise ValueError("tool arguments are not an object")
+        if "<|" in stripped:
+            stripped = json.dumps(_strip_key_delimiters(parsed), ensure_ascii=False)
         return {"name": name.strip(), "arguments": stripped}
     if not isinstance(arguments, dict):
         raise ValueError("tool arguments are not an object")
     return {
         "name": name.strip(),
-        "arguments": json.dumps(arguments, ensure_ascii=False),
+        "arguments": json.dumps(_strip_key_delimiters(arguments), ensure_ascii=False),
     }
 
 
