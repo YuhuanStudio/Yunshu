@@ -29,6 +29,11 @@ M3_MODELS = frozenset(
         "GLM-OCR-bf16",
         "Z-Image-Turbo-MLX-4bit",
         "Qwen3-Embedding-0.6B",
+        # input-omni (audio + image + video in): the smallest Gemma 4 with an audio tower,
+        # 3.3 GB 4-bit, so audio / image / video input and the Realtime voice cascade
+        # (with the ASR + TTS above) run on a real server (user 2026-10-06). No speech-out
+        # omni checkpoint is small enough: Qwen3-Omni is 20 GB and stays on the M5.
+        "gemma-4-e2b-it-4bit",
     }
 )
 
