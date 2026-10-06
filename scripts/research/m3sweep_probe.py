@@ -171,6 +171,26 @@ def main():
                     "tool_choice": {"type": "any"},
                 },
             ),
+            **{
+                f"msg_named_s{i}": (
+                    "/v1/messages",
+                    {
+                        "model": m,
+                        "max_tokens": 1500,
+                        "stream": True,
+                        "messages": msgs,
+                        "tools": [
+                            {
+                                "name": "get_weather",
+                                "description": "weather",
+                                "input_schema": W["parameters"],
+                            }
+                        ],
+                        "tool_choice": {"type": "tool", "name": "get_weather"},
+                    },
+                )
+                for i in range(6)
+            },
             "count": (
                 "/v1/messages/count_tokens",
                 {
