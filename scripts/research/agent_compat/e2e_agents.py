@@ -253,9 +253,31 @@ def final_text(agent: str, stdout: str) -> str:
     return stdout[-2000:]
 
 
+class RemoteServer:
+    """A server somebody else runs (the M3 job behind an ssh port-forward): never started or killed here."""
+
+    def __init__(self, url: str):
+        self.url, self.ready_s = url.rstrip("/"), 0.0
+
+    def start(self):
+        import httpx
+
+        self.model_id = httpx.get(self.url + "/v1/models", timeout=30).json()["data"][
+            0
+        ]["id"]
+
+    def kill(self):
+        pass
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--model", required=True)
+    ap.add_argument("--model", default="")
+    ap.add_argument(
+        "--url",
+        default="",
+        help="use a running server (e.g. an ssh-forwarded M3) instead of starting one",
+    )
     ap.add_argument("--scenarios", default=",".join(SCENARIOS))
     ap.add_argument("--timeout", type=int, default=420)
     ap.add_argument(
@@ -278,17 +300,25 @@ def main():
     sx = fake_searxng.make_server(0)
     threading.Thread(target=sx.serve_forever, daemon=True).start()
     sx_url = f"http://127.0.0.1:{sx.server_address[1]}"
-    mcp_port = servers.free_ports(3)[2]
+    mcp_port = int(os.environ.get("AGENTCOMPAT_MCP_PORT") or servers.free_ports(3)[2])
     threading.Thread(target=tiny_mcp.serve_http, args=(mcp_port,), daemon=True).start()
     os.environ.update(YUNSHU_SEARXNG_URL=sx_url, YUNSHU_WEB_FETCH_ALLOW_PRIVATE="1")
-    port = servers.free_ports(1)[0]
-    srv = servers.Server("yunshu", a.model, port, out / "server.log", extra=a.extra)
+    if not a.url and not a.model:
+        ap.error("--model or --url")
+    import httpx
+
+    if a.url:
+        srv = RemoteServer(a.url)
+        srv.start()
+    else:
+        port = servers.free_ports(1)[0]
+        srv = servers.Server("yunshu", a.model, port, out / "server.log", extra=a.extra)
     results = {}
     try:
-        srv.start()
+        if not a.url:
+            srv.start()
         model_id = srv.model_id
         print("server ready", srv.url, model_id, f"{srv.ready_s:.0f}s", flush=True)
-        import httpx
 
         sys.path.insert(0, str(HERE.parents[2] / "python"))
         from yunshu_cli.integrations.agent_config import ModelInfo
@@ -448,6 +478,13 @@ def main():
             (dst / "stdout.txt").write_text(so)
             (dst / "stderr.txt").write_text(se)
         (out / "results.json").write_text(json.dumps(results, indent=1))
+        failed = [n for n, r in results.items() if not r.get("ok")]
+        print(
+            f"e2e_agents: {len(results) - len(failed)}/{len(results)} passed, failed: {failed}",
+            flush=True,
+        )
+        if not results or failed:
+            sys.exit(1)
     finally:
         srv.kill()
         sx.shutdown()

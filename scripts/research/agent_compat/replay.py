@@ -24,6 +24,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import census  # noqa: E402  (sets sys.path for the agentic harness)
 import servers  # noqa: E402
+import stream_check  # noqa: E402
 
 DROP = {
     "host",
@@ -55,9 +56,53 @@ def sse_events(text: str):
     return ev
 
 
+def load_requests(root, name: str) -> list[dict]:
+    if name == "synthetic":
+        import synthetic_requests
+
+        return [
+            dict(method="POST", path=c["path"], headers={}, body=c["body"], status=200)
+            for c in synthetic_requests.cases()
+        ]
+    f = Path(root) / name / "requests.jsonl"
+    return [json.loads(x) for x in f.read_text().splitlines()] if f.exists() else []
+
+
+def thin(reqs: list[dict], n: int) -> list[dict]:
+    """First n-1 plus the last request (the long, cache-warm end of a session)."""
+    return reqs if n <= 0 or len(reqs) <= n else [*reqs[: n - 1], reqs[-1]]
+
+
+def verdict_stream(path: str, body, ev) -> list[str]:
+    p = path.split("?")[0]
+    if p == "/v1/messages":
+        return stream_check.check_anthropic_stream(ev)
+    if p == "/v1/chat/completions":
+        usage = bool((body or {}).get("stream_options", {}).get("include_usage"))
+        return stream_check.check_chat_stream(ev, expect_usage=usage)
+    if p == "/v1/responses":
+        return stream_check.check_responses_stream(ev)
+    return []
+
+
+def verdict_body(path: str, text: str) -> list[str]:
+    try:
+        return stream_check.check_body(path, json.loads(text))
+    except ValueError:
+        return (
+            []
+            if path.split("?")[0]
+            not in ("/v1/messages", "/v1/responses", "/v1/chat/completions")
+            else ["body is not JSON"]
+        )
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--model", required=True)
+    ap.add_argument("--model", default="")
+    ap.add_argument(
+        "--census", default="", help="a census run dir (default: newest *-agent-census)"
+    )
     ap.add_argument("--sessions", default="")
     ap.add_argument("--out", default="")
     ap.add_argument(
@@ -66,8 +111,19 @@ def main():
         help="use an already running server instead of starting one",
     )
     ap.add_argument("--max-tokens", type=int, default=48)
+    ap.add_argument(
+        "--per-session",
+        type=int,
+        default=0,
+        help="replay only the first N-1 and the last request of each session (0: all)",
+    )
     a = ap.parse_args()
-    root = sorted(glob.glob(str(census.OUT_ROOT.parent / "*-agent-census")))[-1]
+    root = (
+        a.census
+        or sorted(glob.glob(str(census.OUT_ROOT.parent / "*-agent-census")))[-1]
+    )
+    if not a.url and not a.model:
+        ap.error("--model or --url")
     out = Path(a.out or f"{root}/_replay_{time.strftime('%H%M%S')}")
     out.mkdir(parents=True, exist_ok=True)
     srv = None
@@ -93,26 +149,36 @@ def main():
         )
         res = []
         with httpx.Client(timeout=300) as c:
-            for n in names:
-                f = Path(root) / n / "requests.jsonl"
-                if not f.exists():
-                    continue
-                for i, line in enumerate(f.read_text().splitlines()):
-                    r = json.loads(line)
+            for n in [*names, *([] if a.sessions else ["synthetic"])]:
+                for i, r in enumerate(
+                    thin(
+                        load_requests(root, n), 0 if n == "synthetic" else a.per_session
+                    )
+                ):
                     body = r["body"]
                     hdr = {
                         k: v for k, v in r["headers"].items() if k.lower() not in DROP
                     }
                     hdr["authorization"] = "Bearer sk-yunshu-bench-dummy"
                     hdr["x-api-key"] = "sk-yunshu-bench-dummy"
-                    if isinstance(body, dict) and "model" in body:
+                    if isinstance(body, dict) and ("model" in body or n == "synthetic"):
                         body = {**body, "model": model_id}
                         # keep replay fast: cap generation, the census checks protocol acceptance
                         for k in ("max_tokens", "max_output_tokens"):
-                            if k in body:
+                            if k in body and n != "synthetic":
                                 body[k] = min(body[k], a.max_tokens)
                     t0 = time.time()
                     rec = dict(session=n, i=i, method=r["method"], path=r["path"])
+                    upgrade = str(
+                        r["headers"].get("Upgrade") or r["headers"].get("upgrade") or ""
+                    )
+                    if r["method"] == "GET" and upgrade.lower() == "websocket":
+                        rec.update(
+                            status=0,
+                            skipped="websocket upgrade (ws_probe.py covers it)",
+                        )
+                        res.append(rec)
+                        continue
                     try:
                         req = c.build_request(
                             r["method"],
@@ -158,8 +224,15 @@ def main():
                             rec["last_event"] = (
                                 json.dumps(ev[-1][1])[:600] if ev else None
                             )
+                            rec["problems"] = verdict_stream(r["path"], body, ev)
                         else:
                             rec["body"] = text[:1500]
+                            rec["problems"] = verdict_body(r["path"], text)
+                        want = r.get("status")
+                        if want == 200 and not 200 <= resp.status_code < 300:
+                            rec["problems"] = [
+                                f"status {resp.status_code}, recorded client got {want}"
+                            ] + rec.get("problems", [])
                     except Exception as e:
                         rec.update(status=-1, error=repr(e)[:300])
                     res.append(rec)
@@ -168,6 +241,19 @@ def main():
                         flush=True,
                     )
         (out / "replay.json").write_text(json.dumps(res, indent=1))
+        bad = [r for r in res if r.get("status") == -1 or r.get("problems")]
+        for r in bad:
+            print(
+                "PROBLEM",
+                r["session"],
+                r["i"],
+                r["path"],
+                r.get("error") or r["problems"],
+                flush=True,
+            )
+        print(f"replay: {len(res)} requests, {len(bad)} with problems", flush=True)
+        if not res or bad:
+            sys.exit(1)
     finally:
         if srv:
             srv.kill()

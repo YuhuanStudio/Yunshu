@@ -241,9 +241,10 @@ def test_supported_parameters_are_real_chat_request_fields():
 
     fields = set(ChatCompletionRequest.model_fields)
     assert set(TEXT_PARAMETERS) <= fields, set(TEXT_PARAMETERS) - fields
+    # the request cap is above what the card advertises (the context budget clamps a larger ask)
     assert (
         ChatCompletionRequest.model_fields["max_tokens"].metadata[-1].le
-        == API_MAX_OUTPUT_TOKENS
+        >= API_MAX_OUTPUT_TOKENS
     )
 
 

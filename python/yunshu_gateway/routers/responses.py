@@ -358,7 +358,7 @@ async def _vlm_to_responses(req, messages, request, logit_bias, own_input_messag
             "output_tokens": ct,
             "total_tokens": pt + ct,
             "output_tokens_details": {"reasoning_tokens": rt},
-            "input_tokens_details": {"cached_tokens": cached},
+            "input_tokens_details": {"cached_tokens": cached, "cache_write_tokens": 0},
         },
     }
     if req.store:
@@ -605,11 +605,15 @@ class ResponsesRequest(BaseModel):
     conversation: str | dict | None = None
     # [{"type": "compaction", "compact_threshold": N}]: compact the input first when it exceeds N tokens.
     context_management: list[dict] | None = None
-    max_output_tokens: int = Field(default=2048, ge=1, le=131072)
+    max_output_tokens: int = Field(
+        default_factory=lambda: int(settings.get("YUNSHU_DEFAULT_MAX_TOKENS")),
+        ge=1,
+        le=1048576,
+    )
     # OpenAI Chat Completions legacy alias — accept silently and alias to
     # max_output_tokens so old client code doesn't run unbounded against
     # /v1/responses. Caught by validate_request hook below.
-    max_completion_tokens: int | None = Field(default=None, ge=1, le=131072)
+    max_completion_tokens: int | None = Field(default=None, ge=1, le=1048576)
     temperature: float = Field(default=1.0, ge=0.0, le=2.0)
     top_p: float = Field(default=1.0, ge=0.0, le=1.0)
     top_k: int = Field(default=0, ge=0)
@@ -707,6 +711,13 @@ class ResponsesRequest(BaseModel):
     timeout: float | None = Field(
         default=None, ge=1.0, le=600.0
     )  # Request timeout in seconds
+
+    @model_validator(mode="before")
+    @classmethod
+    def _null_means_unset(cls, data):
+        from ..schemas.nulls import clean_request, fold_allowed_tools
+
+        return fold_allowed_tools(clean_request(cls, data))
 
     @model_validator(mode="before")
     @classmethod
@@ -1120,7 +1131,7 @@ async def _prewarm_response(req: ResponsesRequest, request: Request):
         "input_tokens": 0,
         "output_tokens": 0,
         "total_tokens": 0,
-        "input_tokens_details": {"cached_tokens": 0},
+        "input_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0},
         "output_tokens_details": {"reasoning_tokens": 0},
     }
     usage = dict(usage)

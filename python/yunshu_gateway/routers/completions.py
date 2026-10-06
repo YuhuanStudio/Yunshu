@@ -159,8 +159,8 @@ class CompletionRequest(BaseModel):
     # or list[list[int]] (batched token-id prompts). Each list element becomes
     # its own choice in the response.
     prompt: str | list[str] | list[int] | list[list[int]]
-    max_tokens: int = Field(default=128, ge=0, le=131072)
-    max_completion_tokens: int | None = Field(default=None, ge=0, le=131072)
+    max_tokens: int = Field(default=128, ge=0, le=1048576)
+    max_completion_tokens: int | None = Field(default=None, ge=0, le=1048576)
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
     top_p: float = Field(default=1.0, ge=0.0, le=1.0)
     top_k: int = Field(default=0, ge=0)
@@ -234,6 +234,13 @@ class CompletionRequest(BaseModel):
         if isinstance(v, str):
             return [v]
         return v
+
+    @model_validator(mode="before")
+    @classmethod
+    def _null_means_unset(cls, data):
+        from ..schemas.nulls import clean_request
+
+        return clean_request(cls, data)
 
     @model_validator(mode="after")
     def validate_request(self):

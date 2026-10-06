@@ -83,7 +83,7 @@ def test_enum_rejects_unknown(monkeypatch):
 def test_empty_env_is_unset_except_persona(monkeypatch):
     monkeypatch.setenv("YUNSHU_DEFAULT_MAX_TOKENS", "")
     monkeypatch.setenv("YUNSHU_OMNI_PERSONA", "")
-    assert settings.get("YUNSHU_DEFAULT_MAX_TOKENS") == 512
+    assert settings.get("YUNSHU_DEFAULT_MAX_TOKENS") == 32768
     assert settings.get("YUNSHU_OMNI_PERSONA") == ""
 
 

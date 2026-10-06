@@ -91,10 +91,10 @@ def _validate_sampling_params(
             status_code=422,
             detail=f"temperature must be in [0, 2], got {temperature}",
         )
-    if max_tokens < 0 or max_tokens > 131072:
+    if max_tokens < 0 or max_tokens > 1048576:
         raise HTTPException(
             status_code=422,
-            detail=f"max_tokens must be in [0, 131072], got {max_tokens}",
+            detail=f"max_tokens must be in [0, 1048576], got {max_tokens}",
         )
     # Pydantic Field declares `ge=0.0, le=1.0` (both inclusive)
     # — was inconsistent with this check which rejected 0.0. Accept the full
@@ -406,8 +406,12 @@ class ChatCompletionRequest(BaseModel):
     frequency_penalty: float = Field(default=0.0, ge=-2.0, le=2.0)
     presence_penalty: float = Field(default=0.0, ge=-2.0, le=2.0)
     logit_bias: dict[int, float] | None = None
-    max_tokens: int = Field(default=512, ge=0, le=131072)
-    max_completion_tokens: int | None = Field(default=None, ge=0, le=131072)
+    max_tokens: int = Field(
+        default_factory=lambda: int(settings.get("YUNSHU_DEFAULT_MAX_TOKENS")),
+        ge=0,
+        le=1048576,
+    )
+    max_completion_tokens: int | None = Field(default=None, ge=0, le=1048576)
     stream: bool = False
     stream_options: StreamOptions | None = None
     stop: list[str] | None = None
@@ -470,6 +474,13 @@ class ChatCompletionRequest(BaseModel):
     # {"enable_thinking": false} here (vLLM convention) — accept it and fold a
     # recognized key into the top-level field so it isn't silently ignored.
     chat_template_kwargs: dict | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _null_means_unset(cls, data):
+        from ..schemas.nulls import clean_request, fold_allowed_tools
+
+        return fold_allowed_tools(clean_request(cls, data))
 
     @model_validator(mode="after")
     def validate_request(self):
