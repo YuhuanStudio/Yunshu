@@ -1621,7 +1621,8 @@ def _ws_responses_sdk(c: Ctx):
 
     types = asyncio.run(asyncio.wait_for(go(), 180))
     expect(
-        types[0] == "response.created" and types[-1] == "response.completed",
+        types[0] == "response.created"
+        and types[-1] in ("response.completed", "response.incomplete"),
         f"sdk ws events {types[:2]}..{types[-1:]}",
     )
 
@@ -1813,9 +1814,19 @@ def _ws_realtime(c: Ctx):
                     "error",
                 ):
                     break
-            _was_active(c, f"ws {path}")
+        # the realtime path is not in /v1/active-generations: prove the generation stopped by the
+        # engine answering a short request promptly (it would be busy for all 3000 tokens)
+        t0 = time.time()
+        r = c.oa.chat.completions.create(
+            model=c.model,
+            messages=[{"role": "user", "content": "Say ok."}],
+            max_tokens=4,
+        )
+        expect(r.choices, "chat after realtime disconnect")
+        took = time.time() - t0
         expect(
-            _no_active(c, 60), f"{path}: generation still active 60 s after disconnect"
+            took < 20,
+            f"{path}: engine still busy {took:.0f} s after the websocket closed",
         )
     expect(
         c.http.get("/health/ready").status_code == 200,

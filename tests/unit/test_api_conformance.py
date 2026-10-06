@@ -70,7 +70,18 @@ def test_responses_input_tokens(client, monkeypatch):
     import yunshu_gateway.routers.tokenize as tok
 
     class T:
-        def encode(self, text):
+        # the count is of the rendered chat template (test_input_tokens_exact.py checks the
+        # template, tools and chain); this one renders only the message texts
+        def apply_chat_template(self, messages, tokenize=False, **kw):
+            return " ".join(
+                p if isinstance(p, str) else p.get("text", "")
+                for m in messages
+                for p in (
+                    m["content"] if isinstance(m["content"], list) else [m["content"]]
+                )
+            )
+
+        def encode(self, text, add_special_tokens=True):
             return text.split()
 
     monkeypatch.setattr(tok, "_resolve_tokenizer", lambda model: T())

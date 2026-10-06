@@ -2052,7 +2052,9 @@ async def create_response(req: ResponsesRequest, request: Request):
         # streaming-path fix to the non-stream/background path (the cancel_response
         # docstring promises cancelled→incomplete; the non-stream path never delivered it).
         if _ns_cancel_event is not None and _ns_cancel_event.is_set():
-            _response_status = "incomplete"
+            _response_status = (
+                "cancelled"  # the Response status the spec names for a cancel
+            )
         else:
             _response_status = (
                 "incomplete"
@@ -3471,7 +3473,10 @@ async def cancel_response(response_id: str, request: Request):
         # nothing (cancelled=False) and previously the request ran to completion, losing the
         # cancel. Persist a cancel marker; _runner re-reads the stored status and bails
         # before generating. (An already-terminal stored status is surfaced unchanged.)
-        if not cancelled and stored.get("status") in ("queued", "in_progress"):
+        # (also when the tracker was signalled: the reply is the cancelled response, as the
+        # hosted API returns, not the in_progress snapshot; the generation finishing later sees
+        # this marker and leaves it alone)
+        if stored.get("status") in ("queued", "in_progress"):
             _cancel_payload = dict(stored)
             _cancel_payload["status"] = "cancelled"
             _cancel_payload["completed_at"] = int(time.time())

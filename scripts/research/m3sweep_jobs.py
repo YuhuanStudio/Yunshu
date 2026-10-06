@@ -756,7 +756,7 @@ def cmd_routes(a):
         if srv:
             res["server_log_tail"] = srv.log_tail(30)
             srv.kill()
-    if a.multi and not res["failures"]:
+    if a.multi:
         srv = fake = None
         try:
             token = "routes-token-xyz"
