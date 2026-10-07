@@ -166,3 +166,10 @@ export function useMinWidth(px: number) {
   }, [query]);
   return matches;
 }
+
+/** Model size in GB; the engine may not report it (null or 0), which is shown as unknown, never "0 GB". */
+export function sizeGb(size: number | null | undefined): string {
+  return size != null && Number.isFinite(size) && size > 0
+    ? `${number(size)} GB`
+    : "—";
+}

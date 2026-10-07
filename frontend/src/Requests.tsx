@@ -352,7 +352,7 @@ export function Requests({
   ) : null;
   return (
     <section
-      className="mx-auto w-full max-w-6xl space-y-5 xl:max-w-7xl"
+      className="mx-auto w-full max-w-7xl space-y-5"
       data-testid="requests"
     >
       <PageHeader
@@ -418,16 +418,19 @@ export function Requests({
               />
             </div>
             <Card className="overflow-hidden">
-              <Table scrollLabel="引擎請求清單" className="min-w-[860px]">
+              <Table
+                scrollLabel="引擎請求清單"
+                className="min-w-[700px] table-fixed"
+              >
                 <Thead>
                   <Tr>
                     <Th>請求</Th>
-                    <Th>輸入 / 快取</Th>
-                    <Th>輸出</Th>
-                    <Th>tok/s</Th>
-                    <Th>進度 / 時間</Th>
-                    <Th>推測解碼</Th>
-                    <Th>操作</Th>
+                    <Th className="w-28">輸入 / 快取</Th>
+                    <Th className="w-16">輸出</Th>
+                    <Th className="w-16">tok/s</Th>
+                    <Th className="w-32">進度 / 時間</Th>
+                    <Th className="hidden w-24 2xl:table-cell">推測解碼</Th>
+                    <Th className="w-28">操作</Th>
                   </Tr>
                 </Thead>
                 <Tbody>
@@ -446,7 +449,7 @@ export function Requests({
                         }
                       >
                         <Td>
-                          <div className="flex items-center gap-2">
+                          <div className="flex min-w-0 items-center gap-2">
                             <StatusIndicator
                               status={phaseDot(row.phase)}
                               pulse={isLive(row.phase)}
@@ -454,11 +457,14 @@ export function Requests({
                             <span className="text-xs font-medium">
                               {labels[row.phase] ?? row.phase}
                             </span>
-                            <span className="max-w-40 truncate font-mono text-xs text-muted-foreground">
+                            <span
+                              title={row.id}
+                              className="min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground"
+                            >
                               {row.id}
                             </span>
                           </div>
-                          <p className="mt-1 max-w-72 truncate pl-4 text-[11px] text-muted-foreground">
+                          <p className="mt-1 truncate pl-4 text-[11px] text-muted-foreground">
                             {row.model
                               ? modelLabel(row.model)
                               : row.t
@@ -492,13 +498,13 @@ export function Requests({
                             elapsed(row.elapsed_s)
                           )}
                         </Td>
-                        <Td className="text-xs">
+                        <Td className="hidden text-xs 2xl:table-cell">
                           {speculativeText(row) ?? (
                             <span className="text-muted-foreground">—</span>
                           )}
                         </Td>
                         <Td>
-                          <div className="flex gap-1">
+                          <div className="flex gap-1 whitespace-nowrap">
                             <Button
                               variant="ghost"
                               size="sm"

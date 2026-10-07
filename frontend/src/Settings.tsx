@@ -60,8 +60,11 @@ export function Settings({
     ["Esc", "關閉對話框與選單"],
   ];
   return (
-    <section className="w-full max-w-5xl" data-testid="settings">
+    <section className="mx-auto w-full max-w-5xl" data-testid="settings">
       <SettingsShell
+        className="h-auto"
+        sidebarClassName="border-r-0 bg-transparent"
+        contentClassName="overflow-visible"
         header={
           <PageHeader
             title="設定"

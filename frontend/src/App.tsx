@@ -21,6 +21,8 @@ import {
   Pause,
   Play,
   Search,
+  PanelLeftClose,
+  PanelLeftOpen,
   Settings as SettingsIcon,
   Stethoscope,
   Sun,
@@ -28,7 +30,7 @@ import {
 } from "lucide-react";
 import { useEngine } from "./useEngine";
 import type { Connection, EngineLastRequest } from "./api";
-import { ConnectionState, clock, modelLabel, number } from "./ui";
+import { ConnectionState, clock, modelLabel, number, sizeGb } from "./ui";
 import { Dashboard } from "./Dashboard";
 import { Models } from "./Models";
 import { Requests } from "./Requests";
@@ -92,6 +94,13 @@ const adapters = {
 export default function App() {
   const [page, setPage] = useState(route),
     [menu, setMenu] = useState(false),
+    [collapsed, setCollapsed] = useState(() => {
+      try {
+        return localStorage.getItem("yunshu.console.sidebar") === "collapsed";
+      } catch {
+        return false;
+      }
+    }),
     [dark, setDark] = useState(
       () =>
         stored(
@@ -118,6 +127,16 @@ export default function App() {
     engine.status?.throughput.live_decode_tps ??
     (engine.status?.requests.active ? null : undefined);
   useEffect(() => {
+    try {
+      localStorage.setItem(
+        "yunshu.console.sidebar",
+        collapsed ? "collapsed" : "open",
+      );
+    } catch {
+      /* storage may be unavailable */
+    }
+  }, [collapsed]);
+  useEffect(() => {
     const active = engine.status?.requests.active ?? 0;
     document.title =
       active > 0 && liveTps
@@ -134,7 +153,7 @@ export default function App() {
     ...(engine.status?.models ?? []).map((m) => ({
       id: "model:" + m.id,
       title: modelLabel(m.id),
-      description: `${m.type} · ${number(m.size_gb)} GB · ${m.loaded ? "已載入" : "未載入"}`,
+      description: `${m.type} · ${sizeGb(m.size_gb)} · ${m.loaded ? "已載入" : "未載入"}`,
       group: "模型",
       onSelect: () => navigate("models"),
     })),
@@ -228,55 +247,33 @@ export default function App() {
           onClose={() => setMenu(false)}
           closeLabel="關閉導覽"
           onNavigate={(href) => navigate(href.replace(/^\//, ""))}
+          homeHref="/overview"
+          collapsed={collapsed}
+          onToggleCollapse={() => setCollapsed((v) => !v)}
+          loading={engine.phase === "connecting" && !engine.status}
           header={
-            <div className="space-y-4 px-4 pb-3 pt-5">
-              <div className="flex items-center gap-2.5 px-2">
+            <div className="flex items-center gap-2.5 px-4 pb-4 pt-5">
+              <div className="flex min-w-0 flex-1 items-center gap-2.5 px-2">
                 <CloudMark />
-                <span className="flex-1 text-[15px] font-semibold tracking-tight">
+                <span className="flex-1 truncate text-[15px] font-semibold tracking-tight">
                   Yunshu
                   <span className="ml-1.5 text-xs font-normal text-muted-foreground">
                     雲樞
                   </span>
                 </span>
-                <IconButton
-                  className="lg:hidden"
-                  icon={<X size={17} />}
-                  label="關閉導覽"
-                  onClick={() => setMenu(false)}
-                />
               </div>
-              <Button
-                variant="secondary"
-                className="h-auto w-full flex-col items-start gap-0 px-3 py-2.5 text-left"
-                onClick={() => navigate("models")}
-              >
-                <span className="flex items-center gap-2 text-xs text-muted-foreground">
-                  <StatusIndicator
-                    status={
-                      engine.phase !== "online"
-                        ? "offline"
-                        : loadedModel
-                          ? "online"
-                          : "neutral"
-                    }
-                    pulse={(engine.status?.requests.active ?? 0) > 0}
-                  />
-                  {engine.phase !== "online"
-                    ? "引擎未連線"
-                    : loadedModel
-                      ? "已載入"
-                      : "沒有已載入模型"}
-                </span>
-                <span className="mt-1 block truncate text-sm font-medium">
-                  {loadedModel ? modelLabel(loadedModel.id) : "選擇模型"}
-                </span>
-                {engine.status?.memory.active_gb != null && (
-                  <span className="mt-0.5 block text-[11px] tabular-nums text-muted-foreground">
-                    {number(engine.status.memory.active_gb)} /{" "}
-                    {number(engine.status.memory.total_gb)} GB
-                  </span>
-                )}
-              </Button>
+              <IconButton
+                className="hidden lg:inline-flex"
+                icon={<PanelLeftClose size={17} />}
+                label="收合導覽"
+                onClick={() => setCollapsed(true)}
+              />
+              <IconButton
+                className="lg:hidden"
+                icon={<X size={17} />}
+                label="關閉導覽"
+                onClick={() => setMenu(false)}
+              />
             </div>
           }
           sections={[
@@ -301,24 +298,74 @@ export default function App() {
             },
           ]}
           footer={
-            <div className="space-y-3 p-4">
+            <>
               <Button
-                variant={page === "settings" ? "secondary" : "ghost"}
-                className="w-full justify-start"
+                variant="outline"
+                className="mb-3 h-auto rounded-[20px] bg-(--bg-card) w-full flex-col items-start gap-0 px-3 py-2.5 text-left font-normal hover:bg-(--bg-elevated)"
+                aria-label="模型庫"
+                onClick={() => navigate("models")}
+              >
+                <span className="mb-1 flex items-center gap-2 text-xs text-muted-foreground">
+                  <StatusIndicator
+                    status={
+                      engine.phase !== "online"
+                        ? "offline"
+                        : loadedModel
+                          ? "online"
+                          : "neutral"
+                    }
+                    pulse={(engine.status?.requests.active ?? 0) > 0}
+                  />
+                  {engine.phase !== "online"
+                    ? "引擎未連線"
+                    : loadedModel
+                      ? "已載入"
+                      : "沒有已載入模型"}
+                </span>
+                <span className="block truncate text-base font-semibold">
+                  {loadedModel ? modelLabel(loadedModel.id) : "選擇模型"}
+                </span>
+                {engine.status?.memory.active_gb != null && (
+                  <span className="mt-0.5 block text-xs tabular-nums text-muted-foreground">
+                    {number(engine.status.memory.active_gb)} /{" "}
+                    {number(engine.status.memory.total_gb)} GB
+                  </span>
+                )}
+              </Button>
+              <Button
+                variant="outline"
+                className={`h-auto rounded-[20px] bg-(--bg-card) w-full justify-start gap-3 px-3 py-2.5 text-left font-normal hover:bg-(--bg-elevated) ${page === "settings" ? "bg-(--bg-elevated)" : ""}`}
+                aria-label="設定"
+                aria-current={page === "settings" ? "page" : undefined}
                 onClick={() => navigate("settings")}
               >
-                <SettingsIcon size={16} />
-                設定
+                <SettingsIcon
+                  size={16}
+                  className="shrink-0 text-muted-foreground"
+                />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-sm font-medium">
+                    {(() => {
+                      try {
+                        return new URL(connection.baseUrl, location.href).host;
+                      } catch {
+                        return connection.baseUrl;
+                      }
+                    })()}
+                  </span>
+                  <span className="block truncate font-mono text-[11px] text-muted-foreground">
+                    {engine.status?.version
+                      ? `yunshu ${engine.status.version}`
+                      : "本機優先"}
+                  </span>
+                </span>
               </Button>
-              <p className="border-t border-border/60 px-2 pt-3 font-mono text-[10px] text-muted-foreground">
-                {engine.status?.version
-                  ? `yunshu ${engine.status.version}`
-                  : "本機優先 · 真實引擎連線"}
-              </p>
-            </div>
+            </>
           }
         />
-        <main className="flex h-dvh min-w-0 flex-col lg:pl-64">
+        <main
+          className={`flex h-dvh min-w-0 flex-col ${collapsed ? "" : "lg:pl-64"}`}
+        >
           <header className="flex min-h-14 shrink-0 items-center justify-between gap-2 border-b border-border/60 px-4 lg:px-6">
             <div className="flex items-center gap-2">
               <IconButton
@@ -327,6 +374,14 @@ export default function App() {
                 label="開啟導覽"
                 onClick={() => setMenu(true)}
               />
+              {collapsed && (
+                <IconButton
+                  className="hidden lg:inline-flex"
+                  icon={<PanelLeftOpen size={18} />}
+                  label="展開導覽"
+                  onClick={() => setCollapsed(false)}
+                />
+              )}
               <span className="text-sm font-medium">{titles[page]}</span>
             </div>
             <div className="flex items-center gap-3">

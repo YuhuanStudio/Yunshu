@@ -44,6 +44,7 @@ import {
   number,
   phaseDot,
   Readout,
+  sizeGb,
   supportsChat,
   type Engine,
 } from "./ui";
@@ -53,24 +54,36 @@ const chartLabels = {
   missingValueLabel: "未回報",
   hiddenLabel: "序列已隱藏，可點選圖例重新顯示",
   legendLabel: "顯示或隱藏序列",
+  minSamples: 5,
+  collectingLabel: (have: number, need: number) =>
+    `收集採樣中 ${have} / ${need}`,
   keyboardHint: "使用左右方向鍵、Home 或 End 查看採樣",
 };
 const memorySeries = [
   { key: "active", label: "活躍配置", tone: "accent" as const },
-  { key: "cache", label: "配置器快取", tone: "warning" as const, dashed: true },
+  { key: "cache", label: "配置器快取", tone: "neutral" as const, dashed: true },
 ];
 const requestSeries = [
   { key: "requests", label: "全部", tone: "accent" as const },
-  { key: "queued", label: "排隊", tone: "warning" as const, dashed: true },
-  { key: "prefillRequests", label: "Prefill", tone: "info" as const },
-  { key: "decodeRequests", label: "Decode", tone: "success" as const },
+  { key: "queued", label: "排隊", tone: "neutral" as const, dashed: true },
+  { key: "prefillRequests", label: "Prefill", tone: "neutral" as const },
+  {
+    key: "decodeRequests",
+    label: "Decode",
+    tone: "accent" as const,
+    dashed: true,
+  },
 ];
 const rateSeries = {
-  decode: [{ key: "decode", label: "Decode 平均", tone: "accent" as const }],
-  prefill: [{ key: "prefill", label: "Prefill 平均", tone: "info" as const }],
+  decode: [
+    { key: "decode", label: "Decode 單請求平均", tone: "accent" as const },
+  ],
+  prefill: [
+    { key: "prefill", label: "Prefill 單請求平均", tone: "neutral" as const },
+  ],
   both: [
-    { key: "decode", label: "Decode 平均", tone: "success" as const },
-    { key: "prefill", label: "Prefill 平均", tone: "info" as const },
+    { key: "decode", label: "Decode 單請求平均", tone: "accent" as const },
+    { key: "prefill", label: "Prefill 單請求平均", tone: "neutral" as const },
   ],
 };
 const formatNumber = (value: number) => number(value);
@@ -209,7 +222,7 @@ export function Dashboard({
   if (!status && engine.phase !== "connecting")
     return (
       <section
-        className="mx-auto w-full max-w-6xl space-y-6"
+        className="mx-auto w-full max-w-7xl space-y-6"
         data-testid="overview"
       >
         <PageHeader
@@ -248,7 +261,7 @@ export function Dashboard({
     );
   return (
     <section
-      className="mx-auto w-full max-w-6xl space-y-5"
+      className="mx-auto w-full max-w-7xl space-y-5"
       data-testid="overview"
     >
       <PageHeader
@@ -347,7 +360,7 @@ export function Dashboard({
             <div>
               <p className="text-xs text-muted-foreground">
                 {status?.throughput.live_decode_tps != null
-                  ? "目前 Decode 總速率"
+                  ? `目前 Decode 總速率（${status?.requests.active ?? 0} 個請求合計）`
                   : "Decode · 近 5 分鐘平均（閒置）"}
               </p>
               <p
@@ -384,7 +397,7 @@ export function Dashboard({
           )}
           <div className="grid grid-cols-3 gap-4 border-t border-border/60 pt-4">
             <Readout
-              label="Prefill 平均"
+              label="Prefill 單請求平均"
               value={number(status?.throughput.mean_prefill_tps, 0)}
               unit="tok/s"
             />
@@ -541,7 +554,7 @@ export function Dashboard({
               },
               {
                 value: memory?.cache_gb ?? 0,
-                tone: "warning",
+                tone: "neutral",
                 label: "配置器快取",
               },
             ]}
@@ -562,7 +575,16 @@ export function Dashboard({
               label="已載入權重"
               value={
                 loaded.length
-                  ? `${number(loaded.reduce((s, m) => s + (m.size_gb ?? 0), 0))} GB · ${loaded.length} 個`
+                  ? [
+                      loaded.reduce((s, m) => s + (m.size_gb ?? 0), 0) > 0
+                        ? sizeGb(
+                            loaded.reduce((s, m) => s + (m.size_gb ?? 0), 0),
+                          )
+                        : null,
+                      `${loaded.length} 個`,
+                    ]
+                      .filter(Boolean)
+                      .join(" · ")
                   : "—"
               }
             />
@@ -682,7 +704,7 @@ export function Dashboard({
                   {model.type}
                 </span>
                 <span className="w-20 text-right text-xs tabular-nums text-muted-foreground">
-                  {number(model.size_gb)} GB
+                  {sizeGb(model.size_gb)}
                 </span>
                 <span className="w-24 text-right text-xs text-muted-foreground">
                   {model.loading

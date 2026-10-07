@@ -50,6 +50,7 @@ export function PhasePanel({
         <Badge variant="outline">即時</Badge>
       </div>
       <DonutChart
+        monochrome
         data={data}
         size={154}
         ariaLabel="目前請求階段"
@@ -167,7 +168,7 @@ export function LatencyPanel({
         </div>
       </div>
       <BarChart
-        data={bins.map((bin) => ({ ...bin, tone: "info" as const }))}
+        data={bins.map((bin) => ({ ...bin, tone: "neutral" as const }))}
         height={185}
         ariaLabel="已觀測首 Token 延遲分布"
         emptyLabel="尚未觀測到帶有延遲資料的請求"
@@ -286,7 +287,7 @@ export function ActivityPanel({
         ariaLabel="請求階段活動熱圖"
         unavailableLabel="—"
         emptyLabel="沒有採樣"
-        tone="info"
+        tone="neutral"
         formatValue={(v) => String(v)}
         onSelect={select}
       />

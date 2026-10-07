@@ -114,14 +114,14 @@ export function Models({
           {items.length}
         </span>
       </h2>
-      <Table scrollLabel={title} className="min-w-[640px]">
+      <Table scrollLabel={title} className="min-w-[640px] table-fixed">
         <Thead>
           <Tr>
             <Th>模型</Th>
             <Th className="w-40">狀態</Th>
             <Th className="hidden w-24 md:table-cell">大小</Th>
             <Th className="hidden w-32 xl:table-cell">保留</Th>
-            <Th>操作</Th>
+            <Th className="w-64">操作</Th>
           </Tr>
         </Thead>
         <Tbody>
@@ -195,8 +195,10 @@ export function Models({
                 </div>
               </Td>
               <Td className="hidden text-sm tabular-nums md:table-cell">
-                {number(model.size_gb)}
-                <span className="ml-1 text-xs text-muted-foreground">GB</span>
+                {model.size_gb ? number(model.size_gb) : "—"}
+                {model.size_gb ? (
+                  <span className="ml-1 text-xs text-muted-foreground">GB</span>
+                ) : null}
               </Td>
               <Td className="hidden text-xs tabular-nums text-muted-foreground xl:table-cell">
                 {model.loaded
@@ -283,7 +285,10 @@ export function Models({
     </Card>
   );
   return (
-    <section className="w-full max-w-7xl space-y-6" data-testid="models">
+    <section
+      className="mx-auto w-full max-w-7xl space-y-6"
+      data-testid="models"
+    >
       <PageHeader
         title="模型庫"
         description="管理此服務註冊的模型，查看載入狀態、記憶體與保留時間。"

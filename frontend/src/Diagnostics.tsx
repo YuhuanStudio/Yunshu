@@ -301,7 +301,10 @@ export function Diagnostics({
   const unavailable =
     results.length > 0 && results.every((row) => row.status === 404);
   return (
-    <section className="w-full max-w-5xl space-y-6" data-testid="diagnostics">
+    <section
+      className="mx-auto w-full max-w-7xl space-y-6"
+      data-testid="diagnostics"
+    >
       <PageHeader
         title="引擎診斷"
         description="直接讀取服務的資源、請求、快取與解碼狀態。"

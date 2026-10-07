@@ -196,11 +196,11 @@ test.describe("analytics dashboard contracts", () => {
       name: "吞吐速度時序圖，單位 tok/s 顯示或隱藏序列",
     });
     const decode = seriesGroup.getByRole("button", {
-      name: "Decode 平均",
+      name: "Decode 單請求平均",
       exact: true,
     });
     const prefill = seriesGroup.getByRole("button", {
-      name: "Prefill 平均",
+      name: "Prefill 單請求平均",
       exact: true,
     });
     await expect(decode).toHaveAttribute("aria-pressed", "true");

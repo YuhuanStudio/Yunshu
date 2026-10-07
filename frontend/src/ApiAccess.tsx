@@ -42,7 +42,7 @@ export function ApiView({
     [root, model],
   );
   return (
-    <section className="w-full max-w-5xl space-y-6" data-testid="api">
+    <section className="mx-auto w-full max-w-7xl space-y-6" data-testid="api">
       <PageHeader
         title="API 接入"
         description="使用熟悉的 SDK 或程式代理，讓你的應用連接本機模型。"
