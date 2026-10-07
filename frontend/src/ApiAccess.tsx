@@ -23,7 +23,12 @@ import {
 import type { Connection } from "./api";
 import { ApiCatalog } from "./ApiCatalog";
 import { t, useLocale } from "./i18n/index.ts";
-import { buildIntegrations, serviceRoot } from "./integrations";
+import {
+  LAUNCH_COMMAND,
+  TOKEN_ENV,
+  buildIntegrations,
+  serviceRoot,
+} from "./integrations";
 import { CopyField, SectionCard, modelLabel, type Engine } from "./ui";
 
 const integrationIcon: Record<string, LucideIcon> = {
@@ -116,6 +121,14 @@ export function ApiView({
             className="min-w-0"
             data-testid={`integration-${item.id}`}
           >
+            {LAUNCH_COMMAND[item.id] && (
+              <div className="mb-3" data-testid={`launch-${item.id}`}>
+                <p className="mb-1.5 text-xs text-muted-foreground">
+                  {t("api.launch.label")}
+                </p>
+                <CodeBlock language="bash">{LAUNCH_COMMAND[item.id]}</CodeBlock>
+              </div>
+            )}
             <CodeBlock language={item.language} filename={item.filename}>
               {item.code}
             </CodeBlock>
@@ -123,10 +136,11 @@ export function ApiView({
         ))}
       </div>
       <p className="text-xs text-muted-foreground">
-        {t("api.clients.note", {
-          env: "YUNSHU_AUTH_TOKEN",
-          fallback: "local",
-        })}
+        {t("api.clients.note", { env: TOKEN_ENV, fallback: "local" })}{" "}
+        {t("api.clients.tokenWhere", { env: TOKEN_ENV })}{" "}
+        <a className="underline underline-offset-2" href="#/keys">
+          {t("api.clients.keysLink")}
+        </a>
       </p>
       <ApiCatalog connection={connection} />
     </DashboardPage>

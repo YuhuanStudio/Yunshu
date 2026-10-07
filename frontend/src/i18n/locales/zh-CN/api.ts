@@ -33,13 +33,17 @@ const api: Shape<typeof zh> = {
   "integration.anthropic.description":
     "base_url 不含 /v1，SDK 会自行添加路径。",
   "integration.claudeCode.description":
-    "使用 Anthropic Messages 接口；所有模型别名都指向当前的模型。也可运行 yunshu launch claude 自动配置。",
+    "使用 Anthropic Messages 接口；所有模型别名都指向当前的模型。",
   "integration.codex.description":
-    "加入 ~/.codex/config.toml，使用 Responses 接口，并设置环境变量 YUNSHU_API_KEY。也可运行 yunshu launch codex。",
+    "加入 ~/.codex/config.toml，使用 Responses 接口，并从环境变量 YUNSHU_AUTH_TOKEN 读取令牌。",
   "integration.curl.description": "直接调用 chat completions。",
   "integration.openai.description": "标准 OpenAI 接口，只需替换 base_url。",
   "integration.opencode.description":
-    "加入 opencode.json；limit 请按模型实际的上下文长度调整。也可运行 yunshu launch opencode。",
+    "加入 opencode.json；limit 请按模型实际的上下文长度调整。",
+  "clients.tokenWhere":
+    "服务需要验证时，把 {env} 设为服务的令牌，或使用在“API 密钥”页创建的密钥。",
+  "clients.keysLink": "API 密钥",
+  "launch.label": "一行命令（自动配置）",
   "page.description": "使用熟悉的 SDK 或编程代理，让你的应用连接本机模型。",
   "page.title": "API 接入",
 };

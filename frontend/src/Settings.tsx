@@ -4,7 +4,6 @@ import {
   Banner,
   DashboardPage,
   PageHeader,
-  SettingRow,
   SettingsShell,
 } from "@yuhuanowo/yunui/patterns";
 import {
@@ -12,12 +11,21 @@ import {
   Link2,
   MemoryStick,
   Palette,
+  Server,
+  Globe,
   ShieldCheck,
   SlidersHorizontal,
 } from "lucide-react";
+import { StackRow } from "./stack-row";
 import { t, useLocale } from "./i18n/index.ts";
 import { LanguageSwitch } from "./LanguageSwitch";
 import { ConfigView } from "./ConfigView";
+import { CorsSection, NetworkSection, ServiceSection } from "./Service";
+import {
+  forgetRememberedToken,
+  isTokenRemembered,
+  setRememberedToken,
+} from "./token-store";
 import { ModelLeaseSettings } from "./ModelLeaseSettings";
 import { SectionCard, type Engine } from "./ui";
 import type { Perform } from "./Models";
@@ -42,7 +50,12 @@ export function Settings({
   useLocale();
   const [url, setUrl] = useState(connection.baseUrl),
     [token, setToken] = useState(connection.token),
-    [error, setError] = useState("");
+    [error, setError] = useState(""),
+    [remember, setRemember] = useState(isTokenRemembered);
+  function applyRemember(on: boolean) {
+    setRemember(on);
+    if (!on) forgetRememberedToken();
+  }
   function submit() {
     try {
       const parsed = new URL(url.trim());
@@ -54,7 +67,14 @@ export function Settings({
         parsed.hash
       )
         throw Error(t("settings.connection.invalid"));
-      save({ baseUrl: url.trim().replace(/\/+$/, ""), token: token.trim() });
+      const baseUrl = url.trim().replace(/\/+$/, "");
+      save({ baseUrl, token: token.trim() });
+      if (remember && token.trim()) {
+        if (!setRememberedToken(baseUrl, token.trim())) {
+          setError(t("settings.connection.rememberFailed"));
+          return;
+        }
+      } else if (!remember) forgetRememberedToken();
       setError("");
     } catch (e) {
       setError(
@@ -114,6 +134,16 @@ export function Settings({
                 icon: SlidersHorizontal,
               },
               {
+                key: "service",
+                label: t("settings.nav.service"),
+                icon: Server,
+              },
+              {
+                key: "network",
+                label: t("settings.nav.network"),
+                icon: Globe,
+              },
+              {
                 key: "shortcuts",
                 label: t("settings.nav.shortcuts"),
                 icon: Keyboard,
@@ -131,7 +161,7 @@ export function Settings({
             className="scroll-mt-4"
             bodyClassName="px-5 pb-5"
           >
-            <SettingRow
+            <StackRow
               title={
                 <label htmlFor="base-url">{t("settings.connection.url")}</label>
               }
@@ -149,7 +179,7 @@ export function Settings({
                 />
               }
             />
-            <SettingRow
+            <StackRow
               title={
                 <label htmlFor="access-token">
                   {t("settings.connection.token")}
@@ -171,6 +201,17 @@ export function Settings({
                 />
               }
             />
+            <StackRow
+              title={t("settings.connection.remember")}
+              description={t("settings.connection.rememberHelp")}
+              control={
+                <Switch
+                  label={t("settings.connection.remember")}
+                  checked={remember}
+                  onCheckedChange={applyRemember}
+                />
+              }
+            />
             {error && (
               <p role="alert" className="pt-2 text-sm text-error">
                 {error}
@@ -189,7 +230,7 @@ export function Settings({
             className="scroll-mt-4"
             bodyClassName="px-5"
           >
-            <SettingRow
+            <StackRow
               title={t("settings.appearance.dark")}
               description={t("settings.appearance.darkHelp")}
               control={
@@ -200,7 +241,7 @@ export function Settings({
                 />
               }
             />
-            <SettingRow
+            <StackRow
               title={t("settings.appearance.language")}
               description={t("settings.appearance.languageHelp")}
               control={<LanguageSwitch variant="pill" />}
@@ -221,7 +262,17 @@ export function Settings({
             />
           </div>
           <div id="settings-config" className="scroll-mt-4">
-            <ConfigView connection={connection} />
+            <ConfigView
+              connection={connection}
+              loadedModels={(engine.status?.models ?? [])
+                .filter((m) => m.loaded)
+                .map((m) => m.id)}
+            />
+          </div>
+          <ServiceSection connection={connection} />
+          <div id="settings-network" className="scroll-mt-4 space-y-6">
+            <NetworkSection connection={connection} />
+            <CorsSection connection={connection} />
           </div>
           <SectionCard
             id="settings-shortcuts"
@@ -231,7 +282,7 @@ export function Settings({
             bodyClassName="px-5 pb-2"
           >
             {shortcuts.map(([keys, text]) => (
-              <SettingRow
+              <StackRow
                 key={keys}
                 title={text}
                 control={

@@ -14,7 +14,7 @@ const diagnostics: Shape<typeof zh> = {
   "config.badShape": "The engine returned data in an unexpected format.",
   "config.changedOnly": "Changed only",
   "config.description":
-    "{count, plural, one {# setting} other {# settings}} in effect, {changed} changed from the default. Read-only; change them with yunshu config or environment variables and restart.",
+    "{count, plural, one {# setting} other {# settings}} in effect, {changed} changed from the default. Edit them here.",
   "config.descriptionShort": "Settings in effect and where they come from.",
   "config.empty": "No matching settings",
   "config.error": "Could not load effective settings.",

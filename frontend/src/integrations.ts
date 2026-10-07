@@ -14,6 +14,16 @@ export interface Integration {
   code: string;
 }
 
+/** The one token variable every snippet reads. */
+export const TOKEN_ENV = "YUNSHU_AUTH_TOKEN";
+
+/** `yunshu launch <client>` sets a client up in one command. */
+export const LAUNCH_COMMAND: Record<string, string> = {
+  "claude-code": "yunshu launch claude",
+  codex: "yunshu launch codex",
+  opencode: "yunshu launch opencode",
+};
+
 export const serviceRoot = (baseUrl: string) =>
   baseUrl.replace(/\/+$/, "").replace(/\/v1$/, "");
 
@@ -54,7 +64,7 @@ export function buildIntegrations(
         "[model_providers.yunshu]",
         'name = "Yunshu"',
         `base_url = "${v1}"`,
-        'env_key = "YUNSHU_API_KEY"',
+        'env_key = "YUNSHU_AUTH_TOKEN"',
         'wire_api = "responses"',
       ].join("\n"),
     },

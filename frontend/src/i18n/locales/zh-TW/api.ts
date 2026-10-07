@@ -30,13 +30,17 @@ const api = {
   "integration.anthropic.description":
     "base_url 不含 /v1，SDK 會自行加上路徑。",
   "integration.claudeCode.description":
-    "走 Anthropic Messages 介面；所有模型別名都指向目前的模型。也可執行 yunshu launch claude 自動設定。",
+    "走 Anthropic Messages 介面；所有模型別名都指向目前的模型。",
   "integration.codex.description":
-    "加入 ~/.codex/config.toml，使用 Responses 介面，並設定環境變數 YUNSHU_API_KEY。也可執行 yunshu launch codex。",
+    "加入 ~/.codex/config.toml，使用 Responses 介面，並從環境變數 YUNSHU_AUTH_TOKEN 讀取權杖。",
   "integration.curl.description": "直接呼叫 chat completions。",
   "integration.openai.description": "標準 OpenAI 介面，只需換掉 base_url。",
   "integration.opencode.description":
-    "加入 opencode.json；limit 請依模型實際的上下文長度調整。也可執行 yunshu launch opencode。",
+    "加入 opencode.json；limit 請依模型實際的上下文長度調整。",
+  "clients.tokenWhere":
+    "服務需要驗證時，把 {env} 設為服務的權杖，或使用在「API 金鑰」頁建立的金鑰。",
+  "clients.keysLink": "API 金鑰",
+  "launch.label": "一行指令（自動設定）",
   "page.description": "使用熟悉的 SDK 或程式代理，讓你的應用連接本機模型。",
   "page.title": "API 接入",
 };

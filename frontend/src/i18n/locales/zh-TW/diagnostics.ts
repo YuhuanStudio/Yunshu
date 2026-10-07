@@ -11,7 +11,7 @@ const diagnostics = {
   "config.badShape": "引擎回傳的資料格式不符合預期。",
   "config.changedOnly": "只看與預設不同",
   "config.description":
-    "引擎實際生效的設定，共 {count} 項，{changed} 項與預設不同。唯讀；修改請用 yunshu config 或環境變數並重新啟動。",
+    "引擎實際生效的設定，共 {count} 項，{changed} 項與預設不同。可直接在此修改。",
   "config.descriptionShort": "引擎實際生效的設定與來源。",
   "config.empty": "沒有符合的設定",
   "config.error": "無法取得有效設定。",

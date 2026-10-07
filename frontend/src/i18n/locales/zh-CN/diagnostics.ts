@@ -14,7 +14,7 @@ const diagnostics: Shape<typeof zh> = {
   "config.badShape": "引擎返回的数据格式不符合预期。",
   "config.changedOnly": "只看与默认值不同",
   "config.description":
-    "引擎实际生效的设置，共 {count} 项，{changed} 项与默认值不同。只读；修改请使用 yunshu config 或环境变量并重新启动。",
+    "引擎实际生效的设置，共 {count} 项，{changed} 项与默认值不同。可直接在此修改。",
   "config.descriptionShort": "引擎实际生效的设置与来源。",
   "config.empty": "没有匹配的设置",
   "config.error": "无法获取有效设置。",

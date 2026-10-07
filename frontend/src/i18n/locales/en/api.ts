@@ -35,14 +35,18 @@ const api: Shape<typeof zh> = {
   "integration.anthropic.description":
     "base_url excludes /v1; the SDK adds the path itself.",
   "integration.claudeCode.description":
-    "Uses the Anthropic Messages API; every model alias points to the current model. You can also run yunshu launch claude to set it up.",
+    "Uses the Anthropic Messages API; every model alias points to the current model.",
   "integration.codex.description":
-    "Add to ~/.codex/config.toml. Uses the Responses API and the YUNSHU_API_KEY environment variable. You can also run yunshu launch codex.",
+    "Add to ~/.codex/config.toml. Uses the Responses API and reads the token from the YUNSHU_AUTH_TOKEN environment variable.",
   "integration.curl.description": "Call chat completions directly.",
   "integration.openai.description":
     "The standard OpenAI API; just change base_url.",
   "integration.opencode.description":
-    "Add to opencode.json. Adjust limit to the model's actual context length. You can also run yunshu launch opencode.",
+    "Add to opencode.json. Adjust limit to the model's actual context length.",
+  "clients.tokenWhere":
+    "When the server requires authentication, set {env} to the server's token, or to a key created on the API keys page.",
+  "clients.keysLink": "API keys",
+  "launch.label": "One-line setup",
   "page.description":
     "Connect your app to local models with the SDKs and coding agents you already use.",
   "page.title": "API access",
