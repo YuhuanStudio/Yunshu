@@ -224,7 +224,7 @@ async def test_politeness_robots_and_retry_after(monkeypatch):
     async def fake(url, **kwargs):
         calls.append(url)
         return FetchResult(
-            url, "", "User-agent: YunshuFetch\nDisallow: /private", "text/plain", ""
+            url, "", "User-agent: Yunshu\nDisallow: /private", "text/plain", ""
         )
 
     monkeypatch.setattr(mod, "_fetch_url", fake)
@@ -658,3 +658,60 @@ async def test_https_downgrade_cannot_reuse_https_robots_policy(monkeypatch):
     monkeypatch.setattr(fetcher, "_fetch_url", fake)
     with pytest.raises(FetchError, match="Cross-origin"):
         await fetcher.page("https://example.org/page", automated=False)
+
+
+async def test_robots_fetch_does_not_delay_the_first_page_request(monkeypatch):
+    from types import SimpleNamespace
+
+    from yunshu_gateway.server_tools.research import politeness as pol
+
+    async def robots(url, **kwargs):
+        return SimpleNamespace(truncated=False, text="User-agent: *\nAllow: /")
+
+    monkeypatch.setattr(pol, "_fetch_url", robots)
+    now = [100.0]
+    p = pol.Politeness(clock=lambda: now[0])
+    state = p.host("https://example.test/a")
+    assert await p.allowed("https://example.test/a", state)
+    assert state.next_request <= now[0]
+
+
+async def test_robots_group_for_another_bot_named_fetch_does_not_apply(monkeypatch):
+    # Wikipedia disallows a bot called "Fetch"; Python's robotparser matches agent
+    # names as substrings, so a token containing "fetch" was blocked everywhere.
+    from yunshu_gateway.server_tools.research import politeness as mod
+
+    async def fake(url, **kwargs):
+        return FetchResult(
+            url,
+            "",
+            "User-agent: Fetch\nDisallow: /\n\nUser-agent: *\nDisallow: /w/",
+            "text/plain",
+            "",
+        )
+
+    monkeypatch.setattr(mod, "_fetch_url", fake)
+    gate = Politeness(clock=lambda: 10.0)
+    state = gate.host("https://example.org/")
+    assert await gate.allowed("https://example.org/wiki/ACID", state)
+
+
+async def test_automated_page_shares_one_client_with_its_robots_request(monkeypatch):
+    from yunshu_gateway.server_tools.research import fetcher as fmod
+    from yunshu_gateway.server_tools.research import politeness as pmod
+
+    seen = []
+
+    async def fake(url, **kwargs):
+        seen.append((url, kwargs.get("client")))
+        text = "User-agent: *\nAllow: /" if url.endswith("robots.txt") else "hello"
+        return FetchResult(url, "", text, "text/plain", "")
+
+    monkeypatch.setattr(pmod, "_fetch_url", fake)
+    monkeypatch.setattr(fmod, "_fetch_url", fake)
+    result = await fmod.page(
+        "https://shared-client.example/p", cache_namespace="t-shared"
+    )
+    assert result.text == "hello"
+    robots, page = seen
+    assert robots[1] is not None and robots[1] is page[1]

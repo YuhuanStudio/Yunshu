@@ -160,6 +160,7 @@ class TavilyService:
         self, generator=None, fetcher=None, searcher=None, image_describer=None
     ):
         self.generator = generator
+        self._warming: set = set()
         self.image_describer = image_describer
         self.image_cache: OrderedDict[str, tuple[float, str]] = OrderedDict()
         self.fetcher = fetcher or page
@@ -195,6 +196,11 @@ class TavilyService:
             }
         )
         # Keyless/local accounting is informational, never enforces fictional cloud limits.
+
+    def _warming_done(self, task):
+        self._warming.discard(task)
+        if not task.cancelled():
+            task.exception()
 
     async def fetched(self, url, *, automated, timeout):
         return await self.fetcher(
@@ -286,7 +292,10 @@ class TavilyService:
             or None,
             "start_date": str(lower) if lower else None,
             "end_date": str(upper) if upper else None,
-            "provider_timeout": min(1.0, budget),
+            "provider_timeout": max(2.5, budget),
+            "serp_grace": {"ultra-fast": 0.15, "fast": 0.25, "basic": 0.4}.get(
+                req.search_depth, 0.8
+            ),
         }
         allowed = (
             req.include_domains if req.include_domains_mode == "restrict" else None
@@ -335,12 +344,16 @@ class TavilyService:
             fetch_limit = len(rows)
         t0 = time.perf_counter()
 
+        landed = {}
+
         async def fetch_one(index, row):
             with contextlib.suppress(FetchError, TimeoutError):
-                ready[index] = await self.fetched(
+                landed[index] = await self.fetched(
                     row.url,
                     automated=True,
-                    timeout=min(req.fetch_timeout or budget, budget),
+                    timeout=min(
+                        req.fetch_timeout or max(budget, 2.0), max(budget, 2.0)
+                    ),
                 )
 
         if needs_pages:
@@ -350,14 +363,24 @@ class TavilyService:
             ]
             try:
                 if tasks:
+                    # A slow SERP must not starve page fetches: each depth keeps a
+                    # minimum fetch window after the SERP returns.
+                    window = {"fast": 0.5, "basic": 0.8, "advanced": 2.0}.get(
+                        req.search_depth, 0.8
+                    )
                     await asyncio.wait(
-                        tasks, timeout=max(0, budget - (time.perf_counter() - start))
+                        tasks,
+                        timeout=max(window, budget - (time.perf_counter() - start)),
                     )
             finally:
+                # Late pages are not cancelled: they finish under their own per-page
+                # timeout and warm the page cache for the next query (the response
+                # does not wait for them and never uses them).
                 for task in tasks:
                     if not task.done():
-                        task.cancel()
-                await asyncio.gather(*tasks, return_exceptions=True)
+                        self._warming.add(task)
+                        task.add_done_callback(self._warming_done)
+        ready = dict(landed)  # late pages must not mutate what IR is reading
         timings["fetch"] = time.perf_counter() - t0
         t0 = time.perf_counter()
         candidates, top_images = [], []

@@ -73,13 +73,16 @@ class Politeness:
                         self.failed(state, exc)
                         return False  # unknown robots: skip enrichment, keep snippets
                 state.robots, state.robots_expires = parser, self.clock() + 86400
+                # The robots.txt request is the admission for this burst: the page that
+                # follows is not delayed by the per-origin interval (saves ~1 s cold).
+                state.next_request = self.clock()
             if state.robots:
-                delay = state.robots.crawl_delay("YunshuFetch") or 1
-                rate = state.robots.request_rate("YunshuFetch")
+                delay = state.robots.crawl_delay("Yunshu") or 1
+                rate = state.robots.request_rate("Yunshu")
                 state.interval = max(
                     1, float(delay), rate.seconds / rate.requests if rate else 1
                 )
-            return bool(state.robots and state.robots.can_fetch("YunshuFetch", url))
+            return bool(state.robots and state.robots.can_fetch("Yunshu", url))
 
 
 politeness = Politeness()

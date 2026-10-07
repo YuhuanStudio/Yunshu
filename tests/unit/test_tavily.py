@@ -622,3 +622,30 @@ def test_country_provider_codes_match_tavily_names(country, code):
     from yunshu_gateway.tavily.service import country_code
 
     assert country_code(country) == code
+
+
+async def test_late_page_fetch_warms_cache_instead_of_being_cancelled():
+    import asyncio
+
+    from yunshu_gateway.server_tools.search import SearchResult
+    from yunshu_gateway.server_tools.webfetch import FetchResult
+    from yunshu_gateway.tavily.models import SearchRequest
+    from yunshu_gateway.tavily.service import TavilyService
+
+    finished = []
+
+    async def search(query, **kwargs):
+        return "fake", [SearchResult("t", "https://slow.example/", "snippet text")]
+
+    async def fetch(url, **kwargs):
+        await asyncio.sleep(1.2)
+        finished.append(url)
+        return FetchResult(url, "t", "page text", "text/html", None)
+
+    service = TavilyService(searcher=search, fetcher=fetch)
+    result = await service.search(SearchRequest(query="q", search_depth="fast"))
+    assert result["results"][0]["content"] == "snippet text"
+    assert finished == []
+    await asyncio.sleep(1.4)
+    assert finished == ["https://slow.example/"]
+    assert not service._warming

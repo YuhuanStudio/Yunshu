@@ -29,7 +29,7 @@ from yunshu_engine.netguard import (
 MAX_URL_LEN = 250
 MAX_REDIRECTS = 5
 USER_AGENT = (
-    "Mozilla/5.0 (compatible; YunshuFetch/1.0; +https://github.com/yuhuanowo/yunshu)"
+    "Mozilla/5.0 (compatible; Yunshu/1.0; +https://github.com/yuhuanowo/yunshu)"
 )
 _TEXT_TYPES = (
     "text/",

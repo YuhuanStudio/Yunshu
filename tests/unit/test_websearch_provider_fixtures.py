@@ -144,3 +144,41 @@ def test_mwmbl_is_explicit_opt_in(monkeypatch):
     monkeypatch.setenv("YUNSHU_WEB_MWMBL", "0")
     monkeypatch.setenv("YUNSHU_WEB_SEARCH_PROVIDER", "mwmbl")
     assert search.get_provider().name == "mwmbl"
+
+
+async def test_metasearch_returns_after_first_rows_plus_grace(tmp_path, monkeypatch):
+    import asyncio
+    import time
+
+    import httpx
+
+    from yunshu_gateway.server_tools import metasearch as ms
+    from yunshu_gateway.server_tools.search import SearchProvider, SearchResult
+
+    monkeypatch.setenv("YUNSHU_WEB_SEARCH_HEALTH_FILE", str(tmp_path / "h.json"))
+    ms._health.clear()
+
+    class Fast(SearchProvider):
+        name = "fast_fake"
+
+        async def search(self, query, *, limit, client, **kw):
+            await asyncio.sleep(0.01)
+            return [SearchResult("a", "https://a.example/", "alpha")]
+
+    class Slow(SearchProvider):
+        name = "slow_fake"
+
+        async def search(self, query, *, limit, client, **kw):
+            await asyncio.sleep(5)
+            return [SearchResult("b", "https://b.example/", "beta")]
+
+    chain = ms.Metasearch([Fast(), Slow()])
+    async with httpx.AsyncClient() as client:
+        t0 = time.perf_counter()
+        rows = await chain.search(
+            "q", limit=5, client=client, options={"serp_grace": 0.05}
+        )
+    assert time.perf_counter() - t0 < 1.0
+    assert [r.url for r in rows] == ["https://a.example/"]
+    slow = [h for k, h in ms._health.items() if k.startswith("slow_fake")][0]
+    assert slow.consecutive_failures == 0 and not slow.probing

@@ -3,6 +3,8 @@
 import asyncio
 from urllib.parse import urlsplit
 
+import httpx
+
 from yunshu_engine.netguard import UrlNotAllowedError, domain_matches, parse_url
 
 from ..webfetch import FetchError, _fetch_url
@@ -22,6 +24,20 @@ async def page(
     cache_namespace: str = "",
     **kwargs,
 ):
+    if automated and kwargs.get("client") is None:
+        # One connection pool per page: the robots.txt request and the page share the
+        # TCP+TLS setup (~0.6 s on a far origin). Automated fetches never follow a
+        # cross-origin redirect, so the pool only ever talks to this origin.
+        async with httpx.AsyncClient(follow_redirects=False, trust_env=False) as shared:
+            return await page(
+                url,
+                automated=automated,
+                timeout=timeout,
+                extractor=extractor,
+                cache_namespace=cache_namespace,
+                client=shared,
+                **kwargs,
+            )
     try:
         host = parse_url(url).hostname or ""
     except UrlNotAllowedError as exc:

@@ -72,7 +72,7 @@ base64 txt/md/json with an 80000-word combined cap. Bibliographies support numbe
 The native stateless MCP endpoint is `/tavily/mcp`, exposing underscore and hyphen Tavily tool aliases.
 **Upstream `tavily-mcp` 0.2.22 hard-codes api.tavily.com and has no base URL setting**
 ([source](https://github.com/tavily-ai/tavily-mcp/blob/main/src/index.ts)). REST compatibility cannot remove that
-client limitation. Use native MCP; do not claim unchanged upstream stdio parity. Image metadata comes from
+client limitation. Use native MCP for real traffic. The unmodified upstream stdio server is also driven by the official MCP client against the offline fixture through a test-only axios adapter preload (`scripts/research/tavily_mcp_upstream.mjs`): all five tools answer. Image metadata comes from
 fetched pages; requested image descriptions use a resident local VLM (at most three images, cached for 15 minutes); no second model is loaded. Provider-wide image search remains pending.
 
 ## Reproducible client checks
@@ -90,3 +90,8 @@ Fixture mode uses the real router/service and official packages with transport i
 or live network. A blocked upstream stdio MCP client is recorded separately. Real-server probes and any MLX,
 Core ML or neural measurements run through `gpuq`/`yv` at the worker's assigned priority. No model-backed
 search default is approved by fixture compatibility alone.
+
+Per-stage latency (`Server-Timing`: serp / fetch / ir / generate) is measured by
+`scripts/research/tavily_stage_latency.py` (`--live` uses the real built-in providers and pages; CPU only).
+A cold origin costs one TCP+TLS setup: the robots.txt request and the page share one connection pool.
+Pages that miss the depth's fetch window are not cancelled; they finish under their own timeout and warm the page cache.

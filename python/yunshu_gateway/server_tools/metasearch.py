@@ -120,6 +120,33 @@ def save_health():
         logger.debug("Could not write provider health", exc_info=True)
 
 
+async def _first_then_grace(tasks, grace):
+    """Return as soon as one provider has rows, giving the rest `grace` more seconds.
+
+    Slow providers are cancelled (their circuit is not charged); with no rows yet we
+    keep waiting, so the per-provider timeout stays the only hard deadline.
+    """
+    pending = set(tasks)
+    done_batches = []
+    deadline = None
+    while pending:
+        timeout = None if deadline is None else max(0, deadline - time.monotonic())
+        done, pending = await asyncio.wait(
+            pending, timeout=timeout, return_when=asyncio.FIRST_COMPLETED
+        )
+        if not done:
+            break
+        for task in done:
+            done_batches.append(task.result())
+            if deadline is None and task.result()[1]:
+                deadline = time.monotonic() + grace
+    for task in pending:
+        task.cancel()
+    if pending:
+        await asyncio.gather(*pending, return_exceptions=True)
+    return done_batches
+
+
 class Metasearch(FallbackChain):
     """Same provider interface as the older chain; all independent sources run together."""
 
@@ -198,7 +225,13 @@ class Metasearch(FallbackChain):
                 state.probing = False
             return provider.name, rows, error
 
-        batches = await asyncio.gather(*(one(p) for p in self.providers))
+        grace = (kwargs.get("options") or {}).get("serp_grace")
+        if grace is None:
+            batches = await asyncio.gather(*(one(p) for p in self.providers))
+        else:
+            batches = await _first_then_grace(
+                [asyncio.ensure_future(one(p)) for p in self.providers], grace
+            )
         await asyncio.to_thread(save_health)
         scores, results, contributors = {}, {}, []
         errors = []
