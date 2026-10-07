@@ -2276,6 +2276,17 @@
       ],
       "why": "grammar / JSON-schema engine we depend on",
       "commit": "e7c69004"
+    },
+    {
+      "repo": "https://huggingface.co/Cloudflare/clef",
+      "clone": "reference/clef",
+      "globs": [
+        "joint_schema_model.py",
+        "joint_head_config.json"
+      ],
+      "why": "Clef decision model reference implementation and head layout we serve (decision_engine.py); a changed head or encoding changes every probability",
+      "commit": "2f3de3dd85f379784083b0814d997ab627200f0c",
+      "reviewed_date": "2026-10-07"
     }
   ],
   "packages": [
