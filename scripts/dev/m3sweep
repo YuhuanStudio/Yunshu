@@ -116,7 +116,7 @@ def job_cmd(kind, models, out, name=""):
     return cmd
 
 
-def plan(sha, outdir, only=None):
+def plan(sha, outdir, only=None, priority=None, prefix="m3lane-sweep"):
     """The list of jobs (pure): label, gpuq submit args, the output file each must produce."""
     table = dict(PLAN)
     jobs = []
@@ -127,7 +127,7 @@ def plan(sha, outdir, only=None):
         jobs.append(
             {
                 "name": name,
-                "label": f"m3lane-sweep-{sha[:7]}-{name}",
+                "label": f"{prefix}-{sha[:7]}-{name}",
                 "out": out,
                 "submit": [
                     "--device",
@@ -141,6 +141,7 @@ def plan(sha, outdir, only=None):
                     "--out",
                     str(out),
                     "--expect-complete",
+                    *(["--priority", str(priority)] if priority is not None else []),
                 ],
                 "cmd": job_cmd(kind, models, out, name),
             }
@@ -248,6 +249,10 @@ def main(argv=None):
     ap.add_argument("--no-wait", action="store_true")
     ap.add_argument("--collect")
     ap.add_argument("--max-seconds", type=int, default=3600)
+    ap.add_argument(
+        "--priority", type=int, help="gpuq priority (default: queue default)"
+    )
+    ap.add_argument("--label-prefix", default="m3lane-sweep")
     a = ap.parse_args(argv)
     only = set(a.only.split(",")) if a.only else None
 
@@ -265,7 +270,7 @@ def main(argv=None):
     if not sha:
         sys.exit(f"unknown ref {a.ref}")
     outdir = BUILD / f"{sha[:7]}-{time.strftime('%m%d-%H%M%S')}"
-    jobs = plan(sha, outdir, only)
+    jobs = plan(sha, outdir, only, a.priority, a.label_prefix)
     if a.dry_run:
         print(json.dumps([{**j, "out": str(j["out"])} for j in jobs], indent=1))
         return 0

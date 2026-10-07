@@ -189,3 +189,20 @@ def test_translation_check_judges_language_loosely():
     assert "POST /v1/audio/translations" in rc.served_routes()
     assert "POST /v1/omni/speech/stream" not in rc.served_routes(("native",))
     assert "POST /v1/omni/speech/stream" in rc.served_routes()
+
+
+def test_m3sweep_plan_priority_and_label_prefix(tmp_path):
+    import importlib.machinery
+    import importlib.util
+
+    loader = importlib.machinery.SourceFileLoader(
+        "m3sweep_mod2", str(ROOT / "scripts/dev/m3sweep")
+    )
+    spec = importlib.util.spec_from_loader("m3sweep_mod2", loader)
+    m3 = importlib.util.module_from_spec(spec)
+    loader.exec_module(m3)
+    jobs = m3.plan("abcdef0", tmp_path, None, -1, "toolparse-m3")
+    assert all(j["label"].startswith("toolparse-m3-abcdef0-") for j in jobs)
+    assert all(j["submit"][j["submit"].index("--priority") + 1] == "-1" for j in jobs)
+    default = m3.plan("abcdef0", tmp_path)
+    assert all("--priority" not in j["submit"] for j in default)
