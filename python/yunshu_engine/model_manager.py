@@ -411,6 +411,8 @@ async def instantiate_engine(
         return engine
     if model_type in (ModelType.EMBEDDING, ModelType.RERANKER):
         engine = _embedding_engine_class(model_path)(model_path, config)
+        if hasattr(engine, "is_reranker"):
+            engine.is_reranker = model_type == ModelType.RERANKER
         await engine.start()
         return engine
     if model_type in (ModelType.STS, ModelType.VIDEO):

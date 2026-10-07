@@ -46,8 +46,18 @@ def manager_for(request, permission):
     return manager
 
 
+def registered_entry(manager, name):
+    # Inference wildcard aliases are not model names and must not authorize
+    # deleting an unrelated checkpoint or make an unpulled repository look present.
+    for wanted in (name, name.removesuffix(":latest")):
+        for entry in manager.list_entries():
+            if entry.model_id.lower() == wanted.lower():
+                return entry
+    return None
+
+
 def entry_for(manager, name):
-    entry = manager.get_entry(name) or manager.get_entry(name.removesuffix(":latest"))
+    entry = registered_entry(manager, name)
     if entry is None:
         raise HTTPException(404, f"model '{name}' not found")
     return entry
@@ -59,7 +69,7 @@ async def copy_model(request, source: str, destination: str):
     async with _LOCK:
         entry = entry_for(manager, source)
         if (
-            manager.get_entry(destination) is not None
+            registered_entry(manager, destination) is not None
             or target.exists()
             or target.is_symlink()
         ):
@@ -119,7 +129,7 @@ async def pull_model(request, name: str):
     manager = manager_for(request, "can_load_models")
     target = model_link(name)
     async with _LOCK:
-        if manager.get_entry(name) or manager.get_entry(name.removesuffix(":latest")):
+        if registered_entry(manager, name):
             return
         if len(name.split("/")) != 2 or ":" in name:
             raise HTTPException(

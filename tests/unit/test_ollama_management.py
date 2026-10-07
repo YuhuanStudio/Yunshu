@@ -183,3 +183,39 @@ def test_alias_discovery_preserves_reranker_role(managed):
     scanner.register_model = lambda model_id, **kw: found.update({model_id: kw})
     scanner.discover_models(str(root))
     assert found["generic-copy"]["model_type"] is ModelType.RERANKER
+
+
+def test_wildcard_inference_alias_does_not_delete_or_block_copy(managed):
+    client, entries, manager = managed
+    manager.get_entry = lambda name: entries.get(name) or entries["base"]
+    r = client.request(
+        "DELETE", "/api/delete", json={"model": "not-a-registered-model"}
+    )
+    assert (
+        r.status_code == 404
+        and (om.paths.models_dir() / "base/model.safetensors").exists()
+    )
+    assert (
+        client.post(
+            "/api/copy", json={"source": "base", "destination": "new-copy"}
+        ).status_code
+        == 200
+    )
+
+
+@pytest.mark.asyncio
+async def test_registered_role_controls_engine_under_generic_alias(monkeypatch):
+    from yunshu_engine import model_manager as mm
+
+    class Retrieval:
+        is_reranker = False
+
+        def __init__(self, path, config):
+            pass
+
+        async def start(self):
+            self.started_as_reranker = self.is_reranker
+
+    monkeypatch.setattr(mm, "_embedding_engine_class", lambda path: Retrieval)
+    engine = await mm.instantiate_engine(mm.ModelType.RERANKER, "generic-copy")
+    assert engine.is_reranker and engine.started_as_reranker

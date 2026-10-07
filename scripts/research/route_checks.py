@@ -2213,6 +2213,13 @@ def _ollama_management(c: Ctx):
                 r.status_code == 200 and not r.content,
                 f"delete {name}: {r.status_code} {r.text}",
             )
+    unknown = c.req(
+        "DELETE", "/api/delete", json={"model": "not-a-registered-model-xyz"}
+    )
+    expect(
+        unknown.status_code == 404,
+        f"delete unknown: {unknown.status_code} {unknown.text}",
+    )
     ids = [m["name"] for m in c.req("GET", "/api/tags").json()["models"]]
     expect(
         copy not in ids and created not in ids and source in ids, f"delete names: {ids}"

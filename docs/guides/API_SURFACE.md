@@ -291,7 +291,8 @@ Responses freeform custom tools preserve plain-text `input` outward and in chain
 with SDK-typed custom delta/done events. The model sees one internal string parameter;
 that transport detail is not exposed in the public tool definition. Custom CFG formats
 and custom + server-side tool combinations are refused with 400 rather than silently dropped.
-Verification: unit + `responses_custom_tool` real-server check (new run pending).
+Verification: real 2026-10-07 M3 `responses_custom_tool` on 0.8B and 3B,
+stream / non-stream + chained tool output (`d26ebaaf`, `agentapi-smoke-custom-routes-1007b`).
 
 Forced tools are checked before streaming headers. A tool grammar that cannot compile
 (unsupported marker tokenization or recursive references) returns 400 with
