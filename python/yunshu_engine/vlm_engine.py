@@ -1830,7 +1830,10 @@ class VLMEngine:
 
             from .apc_manager import YunshuAPCManager
 
-            if model_apc_plan(lm).restorable:
+            if model_apc_plan(lm).restorable and (
+                self._config.get("model_type") == "gemma4"
+                or not self.backend_capabilities(lm).cache.has_sliding_window
+            ):
                 warm_mode = str(settings.get("YUNSHU_VLM_APC_WARM"))
                 share = float(settings.get("YUNSHU_VLM_APC_WARM_SHARE"))
                 warm_gb = budget * share if warm_mode != "off" else 0.0

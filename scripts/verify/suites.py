@@ -21,6 +21,11 @@ LADDER = tuple(s for s in STAGES if s not in ("longqa", "conc", "multimodal"))
 
 # Every key is a default; the CLI can override ctx / reps / mmlu_n / mem_sizes.
 SUITES = {
+    "multimodal": {
+        "stages": ["preflight", "multimodal"],
+        "ctx": [1, 32768],
+        "reps": 3,
+    },
     # decode-path change (kernels, spec decode, sampler): identity incl. spec on == off, speed
     "decode": {
         "stages": ["preflight", "smoke", "identity", "apc", "speed"],

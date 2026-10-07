@@ -17,7 +17,17 @@ from pathlib import Path
 from omni_apc_probe import png
 
 
-def messages(size: int, rgb=(200, 30, 30)) -> list:
+def messages(size: int, rgb=(200, 30, 30), tokenizer=None) -> list:
+    question = "Describe its colour in one word."
+    text = "The image is part of this conversation. " * size + question
+    if tokenizer is not None:
+        tail = tokenizer.encode(question, add_special_tokens=False)
+        unit = tokenizer.encode(
+            "The image is part of this conversation. ", add_special_tokens=False
+        )
+        n = max(0, size - len(tail))
+        tokens = (unit * ((n + len(unit) - 1) // len(unit)))[:n]
+        text = tokenizer.decode(tokens + tail)
     return [
         {
             "role": "user",
@@ -31,8 +41,7 @@ def messages(size: int, rgb=(200, 30, 30)) -> list:
                 },
                 {
                     "type": "text",
-                    "text": "The image is part of this conversation. " * size
-                    + "Describe its colour in one word.",
+                    "text": text,
                 },
             ],
         }
@@ -196,7 +205,7 @@ async def run(a):
                 }
             )
             for size in a.sizes:
-                msg = messages(size)
+                msg = messages(size, tokenizer=engine._tokenizer)
                 cold = await probe(engine, msg, cold=True)
                 warm = await probe(engine, msg)
                 emit({"event": "request", "kind": "cold", "size": size, **cold})
@@ -215,7 +224,9 @@ async def run(a):
                 emit({"event": "request", "kind": "turn2-miss", "size": size, **miss})
                 validate_pair(miss, hit, a.require_hit)
                 # Same placeholder IDs, different pixels must never reuse the image state.
-                other = await probe(engine, messages(size, (30, 30, 200)))
+                other = await probe(
+                    engine, messages(size, (30, 30, 200), tokenizer=engine._tokenizer)
+                )
                 if other["cached"]:
                     raise ValueError("foreign image reused pixel state")
                 emit({"event": "request", "kind": "other-image", "size": size, **other})
@@ -263,7 +274,7 @@ def parser():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--model", required=True)
     p.add_argument("--out", required=True)
-    p.add_argument("--sizes", type=int, nargs="+", default=[1, 4096])
+    p.add_argument("--sizes", type=int, nargs="+", default=[1, 32768])
     p.add_argument("--require-hit", action="store_true")
     return p
 
