@@ -2466,18 +2466,41 @@ class VLMEngine:
             )
             return None
         if prompt_kwargs is not None:
+            from .prompt_caching import image_token_wrappers
             from .vlm_batch_runner import media_token_ids
 
-            media = media_token_ids(self._model)
-            lookup = expanded_boundaries(
-                rendered_ids, ids, [(n, 0) for n in points["lookup_points"]], media
-            )
-            points = {
-                k: expanded_boundaries(rendered_ids, ids, value, media)
-                for k, value in points.items()
-                if k != "lookup_points"
-            }
-            points["lookup_points"] = [n for n, _ in lookup]
+            try:
+                media = media_token_ids(self._model)
+                wrappers = image_token_wrappers(getattr(self, "_processor", None))
+                lookup = expanded_boundaries(
+                    rendered_ids,
+                    ids,
+                    [(n, 0) for n in points["lookup_points"]],
+                    media,
+                    wrappers,
+                )
+                points = {
+                    k: expanded_boundaries(rendered_ids, ids, value, media, wrappers)
+                    for k, value in points.items()
+                    if k != "lookup_points"
+                }
+                points["lookup_points"] = [n for n, _ in lookup]
+                from mlx_vlm.apc import media_safe_prefix_min
+
+                minimum = media_safe_prefix_min(ids, media)
+                # Earlier system/text endpoints may precede a later image.
+                # The upstream restore contract requires a text-only suffix;
+                # keep safe endpoints instead of failing an otherwise valid turn.
+                for key in ("points", "writes"):
+                    points[key] = [
+                        (n, ttl) for n, ttl in points[key] if minimum <= n < len(ids)
+                    ]
+                points["lookup_points"] = [
+                    n for n in points["lookup_points"] if minimum <= n < len(ids)
+                ]
+            except ValueError as exc:
+                logger.warning("explicit media cache breakpoints ignored: %s", exc)
+                return None
         plan.update(points)
         plan["resolved"] = True
         logger.info("Prompt cache rendered token boundaries: %s", plan["points"])

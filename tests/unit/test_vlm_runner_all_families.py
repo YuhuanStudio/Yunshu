@@ -269,3 +269,58 @@ def test_image_cache_control_maps_wrapper_media_expansion(monkeypatch):
         plan, messages, [1, 900, 900, 2, 3], {"inputs_embeds": object()}, False, {}
     )
     assert resolved["points"] == [(3, 300)] and resolved["lookup_points"] == [3]
+
+
+def test_image_cache_control_maps_processor_wrappers_and_skips_unsafe_head(monkeypatch):
+    eng = VLMEngine.__new__(VLMEngine)
+    eng._model = SimpleNamespace(
+        config=SimpleNamespace(image_token_id=900),
+        language_model=SimpleNamespace(config=SimpleNamespace()),
+    )
+    eng._tokenizer = SimpleNamespace(encode=lambda *a, **k: [1, 900, 2, 3])
+    eng._processor = SimpleNamespace(
+        image_token_id=900,
+        boi_token="BEGIN",
+        eoi_token="END",
+        tokenizer=SimpleNamespace(
+            encode=lambda text, **k: [901] if text == "BEGIN" else [902]
+        ),
+    )
+    eng._apply_vlm_template_with_cache = lambda *a, **k: "prompt"
+    monkeypatch.setattr(
+        "yunshu_engine.prompt_caching.rendered_boundaries",
+        lambda *a, **k: {
+            "points": [(1, 300), (2, 300), (3, 300)],
+            "writes": [(2, 300)],
+            "lookup_points": [1, 2],
+        },
+    )
+    messages = [
+        {
+            "role": "user",
+            "content": [{"type": "image_url", "image_url": {"url": "file://fixture"}}],
+        }
+    ]
+    plan = dict(markers={"MARK": 300}, tools={}, messages=messages)
+    result = eng._resolve_prompt_cache_plan(
+        plan,
+        messages,
+        [1, 901, 900, 900, 902, 2, 3],
+        {"inputs_embeds": object()},
+        False,
+        {},
+    )
+    assert result["points"] == [(5, 300), (6, 300)]
+    assert result["writes"] == [(5, 300)] and result["lookup_points"] == [5]
+    # Unknown processor transformations never cause an inference 500 over a hint.
+    assert (
+        eng._resolve_prompt_cache_plan(
+            plan,
+            messages,
+            [1, 999, 900, 902, 2, 3],
+            {"inputs_embeds": object()},
+            False,
+            {},
+        )
+        is None
+    )

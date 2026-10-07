@@ -105,3 +105,33 @@ def test_image_conditioned_paired_set_has_known_answers():
         len({p.arithmetic_item(i)[0][0]["content"][1]["text"] for i in range(200)})
         == 200
     )
+
+
+@pytest.mark.asyncio
+async def test_paused_followup_restores_its_producer_before_retry(monkeypatch):
+    monkeypatch.setenv("GPUQ_DEVICE", "m5")
+    pauses = iter([True, False])
+    monkeypatch.setattr(p, "was_paused", lambda *a: next(pauses))
+    calls = []
+
+    async def sample():
+        calls.append("followup")
+        return dict(ttft_s=len(calls))
+
+    async def restore():
+        calls.append("producer")
+
+    result = await p.measured(sample, restore)
+    assert calls == ["followup", "producer", "followup"]
+    assert result["timing_valid"] and result["paused_retries"] == 1
+
+
+@pytest.mark.asyncio
+async def test_m3_has_no_valid_timing(monkeypatch):
+    monkeypatch.setenv("GPUQ_DEVICE", "m3")
+    monkeypatch.setattr(p, "was_paused", lambda *a: True)
+
+    async def sample():
+        return dict(ttft_s=1)
+
+    assert not (await p.measured(sample))["timing_valid"]

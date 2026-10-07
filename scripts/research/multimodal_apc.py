@@ -9,26 +9,39 @@ from __future__ import annotations
 import argparse
 import asyncio
 import base64
+import copy
 import hashlib
 import json
+import os
+import sys
 import time
 from importlib.metadata import version
 from pathlib import Path
 
-from omni_apc_probe import png
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "dev"))
+from gpuq_pause import was_paused  # noqa: E402
+from omni_apc_probe import png  # noqa: E402
 
 
 def messages(size: int, rgb=(200, 30, 30), tokenizer=None) -> list:
     question = "Describe its colour in one word."
     text = "The image is part of this conversation. " * size + question
     if tokenizer is not None:
-        tail = tokenizer.encode(question, add_special_tokens=False)
-        unit = tokenizer.encode(
-            "The image is part of this conversation. ", add_special_tokens=False
+        tail = "\n\n" + question
+        tail_n = len(tokenizer.encode(tail, add_special_tokens=False))
+        tokens = tokenizer.encode(
+            "The image is part of this conversation. " * max(1, size // 4 + 2),
+            add_special_tokens=False,
         )
-        n = max(0, size - len(tail))
-        tokens = (unit * ((n + len(unit) - 1) // len(unit)))[:n]
-        text = tokenizer.decode(tokens + tail)
+        n = max(0, size - tail_n)
+        for _ in range(4):
+            text = tokenizer.decode(tokens[:n]) + tail
+            actual = len(tokenizer.encode(text, add_special_tokens=False))
+            if actual >= size:
+                break
+            n += size - actual
+        else:
+            raise ValueError("cannot construct requested text token budget")
     return [
         {
             "role": "user",
@@ -96,6 +109,23 @@ async def probe(engine, msg: list, *, cold=False):
         ttft_s=(first or time.perf_counter()) - start,
         text="".join(text),
     )
+
+
+async def measured(call, restore=None):
+    """Discard paused timing samples, preserving the original prefix on retry."""
+    if os.getenv("GPUQ_DEVICE") == "m3":
+        result = await call()
+        result["timing_valid"] = False  # portability evidence, never a timing decision
+        return result
+    for attempt in range(5):
+        if attempt and restore is not None:
+            await restore()
+        start = time.time()
+        result = await call()
+        if not was_paused(start, time.time()):
+            result.update(timing_valid=True, paused_retries=attempt)
+            return result
+    raise RuntimeError("TTFT repeatedly overlapped gpuq pauses")
 
 
 async def anthropic_probe(engine, client, body, *, cold=False):
@@ -187,6 +217,7 @@ def arithmetic_item(i):
 async def run(a):
     import httpx
 
+    from yunshu_engine import settings
     from yunshu_engine.vlm_engine import VLMEngine
     from yunshu_gateway.engine import set_engine
     from yunshu_gateway.main import create_app
@@ -215,6 +246,14 @@ async def run(a):
                     "event": "engaged",
                     "runner": type(engine._batch_runner).__name__,
                     "model": a.model,
+                    "settings": {
+                        k: settings.get(k)
+                        for k in (
+                            "YUNSHU_KV_PRECISION",
+                            "YUNSHU_VLM_APC_WARM",
+                            "YUNSHU_VLM_DRAFT",
+                        )
+                    },
                     "versions": {
                         k: version(k)
                         for k in ("mlx", "mlx-lm", "mlx-vlm", "transformers")
@@ -223,8 +262,11 @@ async def run(a):
             )
             for size in a.sizes:
                 msg = messages(size, tokenizer=engine._tokenizer)
-                cold = await probe(engine, msg, cold=True)
-                warm = await probe(engine, msg)
+                cold = await measured(lambda: probe(engine, msg, cold=True))
+                warm = await measured(
+                    lambda: probe(engine, msg),
+                    restore=lambda: probe(engine, msg, cold=True),
+                )
                 emit({"event": "request", "kind": "cold", "size": size, **cold})
                 emit({"event": "request", "kind": "warm", "size": size, **warm})
                 validate_pair(cold, warm, a.require_hit)
@@ -235,14 +277,21 @@ async def run(a):
                         "content": "What colour did you see? Answer with one word.",
                     },
                 ]
-                hit = await probe(engine, follow)
-                miss = await probe(engine, follow, cold=True)
+                hit = await measured(
+                    lambda: probe(engine, follow),
+                    restore=lambda: probe(engine, msg, cold=True),
+                )
+                miss = await measured(lambda: probe(engine, follow, cold=True))
                 emit({"event": "request", "kind": "turn2-hit", "size": size, **hit})
                 emit({"event": "request", "kind": "turn2-miss", "size": size, **miss})
                 validate_pair(miss, hit, a.require_hit)
                 # Same placeholder IDs, different pixels must never reuse the image state.
-                other = await probe(
-                    engine, messages(size, (30, 30, 200), tokenizer=engine._tokenizer)
+                other = await measured(
+                    lambda: probe(
+                        engine,
+                        messages(size, (30, 30, 200), tokenizer=engine._tokenizer),
+                    ),
+                    restore=lambda: probe(engine, follow, cold=True),
                 )
                 if other["cached"]:
                     raise ValueError("foreign image reused pixel state")
@@ -256,8 +305,15 @@ async def run(a):
                     transport=httpx.ASGITransport(app=app), base_url="http://yunshu"
                 ) as client:
                     body = anthropic_body(engine.model_name)
-                    cold = await anthropic_probe(engine, client, body, cold=True)
-                    warm = await anthropic_probe(engine, client, body)
+                    cold = await measured(
+                        lambda: anthropic_probe(engine, client, body, cold=True)
+                    )
+                    warm = await measured(
+                        lambda: anthropic_probe(engine, client, body),
+                        restore=lambda: anthropic_probe(
+                            engine, client, body, cold=True
+                        ),
+                    )
                     emit(
                         {
                             "event": "request",
@@ -279,6 +335,7 @@ async def run(a):
                         raise ValueError(
                             "image cache_control did not create a checkpoint"
                         )
+                    prime_body = copy.deepcopy(body)
                     body["messages"] += [
                         {"role": "assistant", "content": cold["text"]},
                         {
@@ -286,8 +343,15 @@ async def run(a):
                             "content": "What colour was the image? One word.",
                         },
                     ]
-                    hit = await anthropic_probe(engine, client, body)
-                    miss = await anthropic_probe(engine, client, body, cold=True)
+                    hit = await measured(
+                        lambda: anthropic_probe(engine, client, body),
+                        restore=lambda: anthropic_probe(
+                            engine, client, prime_body, cold=True
+                        ),
+                    )
+                    miss = await measured(
+                        lambda: anthropic_probe(engine, client, body, cold=True)
+                    )
                     emit(
                         {
                             "event": "request",

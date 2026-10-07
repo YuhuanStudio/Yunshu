@@ -1071,13 +1071,20 @@ def stage_multimodal(ctx: Ctx) -> StageResult:
             arm,
             {
                 "YUNSHU_VLM_APC_DISK": "0",
+                "YUNSHU_VLM_APC_WARM": "off",
+                "YUNSHU_KV_PRECISION": "bf16",
+                "YUNSHU_VLM_DRAFT": "off",
                 "YUNSHU_MEDIA_DIR": str(scratch),
                 "HF_HUB_OFFLINE": "1",
             },
         )
         argv = ["env", f"PYTHONPATH={ctx.tree(arm).path / 'python'}"]
         argv += [f"{k}={v}" for k, v in env.items()]
-        remote = "gemma-4-e2b" in ctx.model and int(ctx.suite.get("reps", 3)) == 1
+        remote = (
+            "gemma-4-e2b" in ctx.model
+            and int(ctx.suite.get("reps", 3)) == 1
+            and ctx.env.get("GPUQ_DEVICE") != "m5"
+        )
         script = ctx.cand.path / "scripts/research/multimodal_apc.py"
         if remote:
             # gpuq snapshots cwd, not arbitrary external pinned trees. Run
@@ -1088,7 +1095,7 @@ def stage_multimodal(ctx: Ctx) -> StageResult:
             entry = [
                 ctx.py,
                 "-c",
-                "import sys; sys.path.insert(0, 'scripts/research'); "
+                "import sys; __file__='scripts/research/multimodal_apc.py'; sys.path.insert(0, 'scripts/research'); "
                 + f"exec(compile({source!r}, 'multimodal_apc.py', 'exec'))",
             ]
         else:
