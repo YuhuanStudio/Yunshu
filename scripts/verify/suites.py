@@ -127,6 +127,7 @@ DEFAULTS = {
     "mem_sizes": [8192, 32768, 98304],
     "mem_reps": 2,
     "speed_tol_pct": 2.0,
+    "speed_confirm_reps": 2,
     "mem_tol_pct": 3.0,
     "quality_allowed": 1,
 }

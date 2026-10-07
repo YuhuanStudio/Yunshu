@@ -641,53 +641,69 @@ def _round_key(ctx: Ctx, arm: str) -> str:
 
 
 # ── f. speed ─────────────────────────────────────────────────────────────
+def _speed_cells(ctx: Ctx, rep: int, units: list, only: set | None = None) -> list:
+    """The cells of one rep, arms interleaved (A B). `only` limits a confirmation rep to the
+    regressing (ctx, kind) cells; its keys always carry the cell tag."""
+    cfg = ctx.suite
+    cells = []
+    for arm in ("base", "cand"):
+        for tag, ctxs, kinds in units:
+            key = f"{arm}-r{rep}" + (f"@{tag}" if tag else "")
+            cells.append(
+                Cell(
+                    "speed",
+                    key,
+                    _tfbench_argv(
+                        ctx,
+                        arm,
+                        "speed",
+                        key,
+                        _unit_args(ctxs, rep)
+                        + _kind_args(kinds, cfg["kinds"])
+                        + _dec_args(ctx),
+                    ),
+                    mem_gb=ctx.mem_gb,
+                    timeout_min=_decode_est_min(
+                        ctx,
+                        ctxs,
+                        len(kinds),
+                        int(cfg.get("decode_tokens", 256)),
+                        int(cfg.get("turn2_tokens", 0)),
+                    ),
+                    stall_min=12 if ctx.big else 4,
+                    quiet=True,
+                    share_key=_sha(
+                        "speed",
+                        ctx.base.key,
+                        ctx.arm_env("base"),
+                        ctx.model,
+                        ctxs,
+                        kinds,
+                        _dec_args(ctx),
+                        rep,
+                        _harness_hash(),
+                    )
+                    if arm == "base" and cfg.get("reuse_base_speed") and only is None
+                    else "",
+                )
+            )
+    return cells
+
+
+def _speed_reason(r: dict) -> str:
+    return (
+        f"{r['kind']}@{r['ctx']} {r['metric']}: {r['base_median']} -> {r['cand_median']} "
+        f"({r['delta_pct']:+.1f}%, limit {r['limit_pct']:.1f}%)"
+    )
+
+
 def stage_speed(ctx: Ctx) -> StageResult:
     cfg = ctx.suite
     _check_prompts(cfg["ctx"], cfg["kinds"])
     cells = []
     units = _units(ctx)
     for rep in range(int(cfg["reps"])):
-        for arm in ("base", "cand"):  # A B A B ...
-            for tag, ctxs, kinds in units:
-                key = f"{arm}-r{rep}" + (f"@{tag}" if tag else "")
-                cells.append(
-                    Cell(
-                        "speed",
-                        key,
-                        _tfbench_argv(
-                            ctx,
-                            arm,
-                            "speed",
-                            key,
-                            _unit_args(ctxs, rep)
-                            + _kind_args(kinds, cfg["kinds"])
-                            + _dec_args(ctx),
-                        ),
-                        mem_gb=ctx.mem_gb,
-                        timeout_min=_decode_est_min(
-                            ctx,
-                            ctxs,
-                            len(kinds),
-                            int(cfg.get("decode_tokens", 256)),
-                            int(cfg.get("turn2_tokens", 0)),
-                        ),
-                        stall_min=12 if ctx.big else 4,
-                        quiet=True,
-                        share_key=_sha(
-                            "speed",
-                            ctx.base.key,
-                            ctx.arm_env("base"),
-                            ctx.model,
-                            ctxs,
-                            kinds,
-                            _dec_args(ctx),
-                            rep,
-                            _harness_hash(),
-                        )
-                        if arm == "base" and cfg.get("reuse_base_speed")
-                        else "",
-                    )
-                )
+        cells += _speed_cells(ctx, rep, units)
     res = ctx.exe.run_cells(cells)
     reasons = _failed_cells(res)
     numbers: dict = {}
@@ -701,15 +717,51 @@ def stage_speed(ctx: Ctx) -> StageResult:
                     rows += read_jsonl(r.evidence)
             return rows
 
+        tol = float(cfg["speed_tol_pct"])
         base = [arm_rep("base", i) for i in range(reps)]
         cand = [arm_rep("cand", i) for i in range(reps)]
-        sp = analyze.speed_compare(base, cand, float(cfg["speed_tol_pct"]))
+        sp = analyze.speed_compare(base, cand, tol)
         numbers = {k: sp[k] for k in ("cells", "reps", "tol_pct")}
+        k_extra = int(cfg.get("speed_confirm_reps", 2))
+        if sp["regressions"] and not sp["missing"] and k_extra > 0:
+            # A stalled GPU request can spike both cand reps and look like a regression: rerun
+            # only the regressing cells for K more paired reps, judge on all with robust stats.
+            sus = sorted({(r["ctx"], r["kind"]) for r in sp["regressions"]})
+            cunits = [(f"c{c}{k}", [c], [k]) for c, k in sus]
+            ccells = []
+            for rep in range(reps, reps + k_extra):
+                ccells += _speed_cells(ctx, rep, cunits, set(sus))
+            cres = ctx.exe.run_cells(ccells)
+            reasons = _failed_cells(cres)
+            if not reasons:
+                allres = {**res, **cres}
+                res = allres
+                base = [arm_rep("base", i) for i in range(reps + k_extra)]
+                cand = [arm_rep("cand", i) for i in range(reps + k_extra)]
+                cf = analyze.speed_compare(base, cand, tol, robust=True, only=sus)
+                keep = [c for c in sp["cells"] if (c["ctx"], c["kind"]) not in set(sus)]
+                numbers = {
+                    "cells": keep + cf["cells"],
+                    "reps": reps,
+                    "tol_pct": tol,
+                    "confirmation": {
+                        "extra_reps": k_extra,
+                        "cells": [list(x) for x in sus],
+                        "initial_verdict": "regression",
+                        "initial_regressions": sp["regressions"],
+                        "confirmed_verdict": "regression"
+                        if cf["regressions"]
+                        else "neutral",
+                        "confirmed_cells": cf["cells"],
+                    },
+                }
+                sp = {
+                    "regressions": cf["regressions"],
+                    "missing": cf["missing"],
+                    "cells": numbers["cells"],
+                }
         for r in sp["regressions"]:
-            reasons.append(
-                f"{r['kind']}@{r['ctx']} {r['metric']}: {r['base_median']} -> {r['cand_median']} "
-                f"({r['delta_pct']:+.1f}%, limit {r['limit_pct']:.1f}%)"
-            )
+            reasons.append(_speed_reason(r))
         reasons += [f"missing {m}" for m in sp["missing"]]
         if not sp["cells"]:
             reasons.append("no comparable speed cells")

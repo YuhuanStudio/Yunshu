@@ -82,6 +82,15 @@ with open(a.out, "a") as out:
                 dec = (
                     100.0 + a.rep * 0.2 - (25.0 if env.get("FAKE_SLOW") == "1" else 0.0)
                 )
+                ttft = 1.0 + ctx / 10000.0
+                if phase == "warm":
+                    spiked = [
+                        int(x) for x in env.get("FAKE_SPIKE_REPS", "").split(",") if x
+                    ]
+                    if kind == env.get("FAKE_SPIKE_KIND", kind) and a.rep in spiked:
+                        ttft *= 1.4  # an intermittent stall in this rep only
+                    if env.get("FAKE_TTFT_MULT"):
+                        ttft *= float(env["FAKE_TTFT_MULT"])
                 emit(
                     part="decode",
                     ctx=ctx,
@@ -89,7 +98,7 @@ with open(a.out, "a") as out:
                     phase=phase,
                     ct=a.decode_tokens,
                     pt=ctx,
-                    ttft_s=1.0 + ctx / 10000.0,
+                    ttft_s=ttft,
                     dec_tps=dec,
                     finish="length",
                     cached=0 if phase == "cold" else ctx,

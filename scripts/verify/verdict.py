@@ -110,6 +110,14 @@ def _numbers_en(s: dict) -> str:
                 f"{c['kind']}@{c['ctx']} {c['metric']} {c['base_median']}->{c['cand_median']} "
                 f"({c['delta_pct']:+.1f}%, noise +-{c['noise_pct']:.1f}%, reps {c['rep_deltas_pct']})"
             )
+        cf = n.get("confirmation")
+        if cf:
+            parts.append(
+                f"initial: regression in {len(cf['initial_regressions'])} metric(s) "
+                f"({', '.join(f'{r["kind"]}@{r["ctx"]} {r["metric"]} {r["delta_pct"]:+.1f}%' for r in cf['initial_regressions'])}); "
+                f"{cf['extra_reps']} confirmation reps (median of paired deltas, MAD noise); "
+                f"confirmed: {cf['confirmed_verdict']}"
+            )
         return "; ".join(parts)
     if nm == "memory" and n.get("cells"):
         return "; ".join(
