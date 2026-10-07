@@ -111,3 +111,93 @@ async def test_capture_dry_run_never_opens_network(tmp_path, monkeypatch):
     )
     assert await m.run(args) == 0
     assert json.loads(out.read_text())["mode"] == "capture-dry"
+
+
+async def test_all_ten_authored_adversarial_pages_preserve_gold():
+    m = module()
+    path = (
+        Path(__file__).resolve().parents[2]
+        / "scripts/research/data/websearch_adversarial.jsonl"
+    )
+    rows = m.load_snapshot(path)
+    assert len(rows) == 10
+    for row in rows:
+        prepared, extracted = await m.prepare(row)
+        text = extracted[row["known_good_urls"][0]]
+        assert row["expected_answers"][0] in prepared[0]["snippet"]
+        assert all(
+            p["text"] == text[p["start"] : p["end"]] for p in prepared[0]["passages"]
+        )
+        if row["hidden_injection"]:
+            assert row["injection_marker"] not in text
+
+
+async def test_frozen_replay_with_fake_server_body_auth_and_citations(
+    tmp_path, monkeypatch
+):
+    import httpx
+
+    from yunshu_gateway.server_tools.runtime import decode_result
+
+    m = module()
+    snapshot, output, token = (
+        tmp_path / "snapshot.jsonl",
+        tmp_path / "out.jsonl",
+        tmp_path / "token",
+    )
+    row = fixture()
+    snapshot.write_text(json.dumps(row))
+    token.write_text("fixture-token")
+    seen = []
+
+    def fake(req):
+        body = json.loads(req.content)
+        seen.append(body)
+        assert req.headers["authorization"] == "Bearer fixture-token"
+        assert body["tool_choice"] == {"type": "none"}
+        content = [{"type": "text", "text": "Unknown"}]
+        if len(body["messages"]) > 1:
+            blocks = body["messages"][1]["content"]
+            assert blocks[0]["type"] == "server_tool_use"
+            assert blocks[1]["type"] == "web_search_tool_result"
+            result = decode_result(blocks[1]["content"][0]["encrypted_content"])
+            if result["passages"]:
+                content = [
+                    {
+                        "type": "text",
+                        "text": "FOURTWO [1].",
+                        "citations": [
+                            {
+                                "url": result["url"],
+                                "cited_text": result["passages"][0]["text"][:150],
+                            }
+                        ],
+                    }
+                ]
+        return httpx.Response(
+            200, json={"content": content, "usage": {"output_tokens": 4}}
+        )
+
+    original = httpx.Client
+    monkeypatch.setattr(
+        httpx,
+        "Client",
+        lambda **kwargs: original(transport=httpx.MockTransport(fake), **kwargs),
+    )
+    args = m.parser().parse_args(
+        [
+            "--snapshot",
+            str(snapshot),
+            "--out",
+            str(output),
+            "--url",
+            "http://fixture",
+            "--model",
+            "fake",
+            "--token-file",
+            str(token),
+        ]
+    )
+    assert await m.run(args) == 0 and len(seen) == 3
+    result = json.loads(output.read_text().splitlines()[0])
+    assert result["research"]["correct"] and result["research"]["valid_citations"] == 1

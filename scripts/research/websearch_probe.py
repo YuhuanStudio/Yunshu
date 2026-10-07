@@ -19,6 +19,7 @@ def parser():
     p.add_argument("--out", type=Path, required=True)
     p.add_argument("--baseline", action="store_true")
     p.add_argument("--embedding-model", type=Path)
+    p.add_argument("--eval-snapshot", type=Path)
     return p
 
 
@@ -31,11 +32,21 @@ def validate(rows):
     return True, ""
 
 
-def main(argv=None):
-    a = parser().parse_args(argv)
+def load_dependencies():
+    # route_checks registers tool checks at its footer; importing tools first is a cycle.
+    import route_checks  # noqa: F401
     from covaudit_session import Srv, free_port
     from m3sweep_jobs import routes_make_ctx
     from route_checks_tools import FakeBackend, _web_search_provider
+
+    return Srv, free_port, routes_make_ctx, FakeBackend, _web_search_provider
+
+
+def main(argv=None):
+    a = parser().parse_args(argv)
+    Srv, free_port, routes_make_ctx, FakeBackend, _web_search_provider = (
+        load_dependencies()
+    )
 
     a.out.parent.mkdir(parents=True, exist_ok=True)
     rows = []
@@ -184,6 +195,62 @@ def main(argv=None):
                         "device": "M5",
                     }
                 )
+        if a.eval_snapshot:
+            import asyncio
+
+            import websearch_eval
+
+            eval_out = a.out.with_suffix(".eval.jsonl")
+            argv = [
+                "--snapshot",
+                str(a.eval_snapshot),
+                "--out",
+                str(eval_out),
+                "--url",
+                srv.url,
+                "--model",
+                ctx.model,
+            ]
+            token_file = home / "eval.token"
+            if models_dir:
+                token_file.write_text(token)
+                token_file.chmod(0o600)
+                argv += ["--token-file", str(token_file)]
+            try:
+                rc = asyncio.run(
+                    websearch_eval.run(websearch_eval.parser().parse_args(argv))
+                )
+            finally:
+                token_file.unlink(missing_ok=True)
+            evidence = [
+                json.loads(line)
+                for line in eval_out.read_text().splitlines()
+                if line.strip()
+            ]
+            if rc or not evidence or not evidence[-1].get("complete"):
+                raise AssertionError("frozen replay did not finish")
+            pairs = evidence[:-1]
+            record(
+                {
+                    "check": "frozen_adversarial_replay",
+                    "pass": True,
+                    "device": "M5",
+                    "queries": len(pairs),
+                    "research_correct": sum(p["research"]["correct"] for p in pairs),
+                    "snippets_correct": sum(p["snippets"]["correct"] for p in pairs),
+                    "research_valid_citations": sum(
+                        p["research"]["valid_citations"] for p in pairs
+                    ),
+                    "research_citations": sum(
+                        p["research"]["citations"] for p in pairs
+                    ),
+                    "research_marker_echoes": sum(
+                        p["research"]["injection_success"] for p in pairs
+                    ),
+                    "quality_gate": evidence[-1]["quality_gate"],
+                    "snapshot_sha256": evidence[-1]["snapshot_sha256"],
+                }
+            )
         record({"complete": True, "pass": True, "device": "M5"})
         return 0
     except Exception as exc:

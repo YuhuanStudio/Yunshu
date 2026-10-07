@@ -257,7 +257,7 @@ _add("YUNSHU_PERPLEXITY_API_KEY", "str", None, "Perplexity Search API key (raw r
 _add("YUNSHU_WEB_RESEARCH", "bool", False, "Enrich search snippets with origin pages, untrusted excerpts and local ranking. Stable opt-in pending quality evaluation; fetched URLs leave the machine.", "server-tools")
 _add("YUNSHU_WEB_RESEARCH_BUDGET", "float", 4.0, "Overall enrichment deadline in seconds (maximum 4).", "server-tools", minimum=0.1)
 _add("YUNSHU_WEB_RESEARCH_PAGES", "int", 6, "Maximum origin pages per enrichment (capped at 6).", "server-tools", minimum=1)
-_add("YUNSHU_WEB_RESEARCH_MODEL", "str", None, "Already-loaded local embedding/rerank model ID. Never loads a model; absent/unavailable uses BM25 only. Qwen3-Embedding-0.6B is recommended.", "server-tools")
+_add("YUNSHU_WEB_RESEARCH_MODEL", "str", None, "Already-loaded local embedding model ID. Never loads a model; absent/unavailable uses BM25 only. Qwen3-Embedding-0.6B is recommended.", "server-tools")
 _add("YUNSHU_SEARXNG_URL", "str", None, "Base URL of a self-hosted SearXNG instance (JSON output enabled), e.g. http://127.0.0.1:8080. The privacy-friendly default recommendation.", "server-tools")
 _add("YUNSHU_BRAVE_API_KEY", "str", None, "Brave Search API key.", "server-tools", secret=True)
 _add("YUNSHU_TAVILY_API_KEY", "str", None, "Tavily API key.", "server-tools", secret=True)

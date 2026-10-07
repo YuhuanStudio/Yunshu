@@ -18,3 +18,10 @@ quality. Dense ranking in a separate eval process needs a resident in-process
 engine; the dedicated yv websearch smoke proves the actual server fusion path.
 Semantic citation support and rubric grading require reviewed references and a
 separate judge; mechanical substring validation does not prove claim support.
+
+`websearch_adversarial.jsonl` contains 10 **authored fixtures**, not scraped web
+news or a representative quality corpus. It covers visible instructions, inline
+hiding, aria-hidden, hidden, CSS class/id, comments, script, zero-width and ANSI.
+The tiny-model yv smoke replays these on the Anthropic route. Marker echoes are
+a diagnostic proxy (quoting a marker can be a false positive); the 10 pairs cannot
+approve the 200-pair quality gate or change the research default.

@@ -9,6 +9,7 @@ Error codes follow Anthropic's ``web_search_tool_result_error``: ``too_many_requ
 
 from __future__ import annotations
 
+import contextvars
 import html
 import logging
 import re
@@ -22,6 +23,28 @@ import httpx
 
 from yunshu_engine import settings
 from yunshu_engine.netguard import domain_matches
+
+_query_log_context = contextvars.ContextVar("yunshu_search_query_log", default=False)
+
+
+class _QueryLogFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        # HTTPX logs full GET URLs at INFO. Keep query text out of ordinary logs,
+        # scoped to the current async search task so other HTTP traffic is untouched.
+        if (
+            _query_log_context.get()
+            and record.levelno >= logging.INFO
+            and isinstance(record.args, tuple)
+        ):
+            record.args = tuple(
+                arg.copy_with(query=b"") if isinstance(arg, httpx.URL) else arg
+                for arg in record.args
+            )
+        return True
+
+
+logging.getLogger("httpx").addFilter(_QueryLogFilter())
+
 
 MAX_QUERY_LEN = 400
 PROVIDER_ORDER = (
@@ -569,10 +592,12 @@ async def run_search(
         return name, out
     own = client is None
     client = client or httpx.AsyncClient(
+        headers={"Cookie": ""},
         trust_env=False,
         follow_redirects=False,
         timeout=float(settings.get("YUNSHU_WEB_FETCH_TIMEOUT")),
     )
+    log_token = _query_log_context.set(True)
     try:
         try:
             rows = await prov.search(
@@ -588,6 +613,7 @@ async def run_search(
         except httpx.HTTPError as e:
             raise SearchError("unavailable", f"{prov.name}: {type(e).__name__}") from e
     finally:
+        _query_log_context.reset(log_token)
         if own:
             await client.aclose()
     rows = _filter(rows, allowed_domains, blocked_domains)

@@ -23,10 +23,22 @@ def excerpt(p: Passage, query: str, cap: int) -> Passage:
     hits = [
         m
         for term in set(tokens(query))
-        for m in re.finditer(re.escape(term), p.text, re.I)
+        for m in re.finditer(
+            (r"(?<!\w)" + re.escape(term) + r"(?!\w)")
+            if term.isascii()
+            else re.escape(term),
+            p.text,
+            re.I,
+        )
     ]
     starts = [0] + [max(0, m.start() - cap // 3) for m in hits]
-    start = max(starts, key=lambda s: (sum(s <= m.start() < s + cap for m in hits), -s))
+    start = max(
+        starts,
+        key=lambda s: (
+            len({m.group().casefold() for m in hits if s <= m.start() < s + cap}),
+            -s,
+        ),
+    )
     text = p.text[start : start + cap]
     return replace(p, text=text, start=p.start + start, end=p.start + start + len(text))
 
@@ -54,7 +66,7 @@ def result_from_page(
 ) -> SearchResult:
     return replace(
         result,
-        title=fetched.title or result.title,
+        title=(fetched.title or result.title)[:300],
         snippet="\n\n".join(p.text for p in selected),
         passages=selected,
         content_hash=hashlib.sha256(fetched.text.encode()).hexdigest(),
@@ -104,25 +116,34 @@ async def enrich(
                 task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
     flat, owners = [], []
-    for index in sorted(ready):
-        for passage in ready[index][1]:
+    for index, result in enumerate(out):
+        spans = (
+            ready[index][1]
+            if index in ready
+            else (
+                [Passage(result.snippet, heading=result.title)]
+                if result.snippet
+                else []
+            )
+        )
+        for passage in spans:
             flat.append(passage)
             owners.append(index)
-    if flat and deadline > loop.time():
+    if ready and flat and deadline > loop.time():
         try:
             async with asyncio.timeout(deadline - loop.time()):
                 order = await rank(query, flat)
-            first_rank = {}
+            first_rank = {
+                index: min(pos for pos, i in enumerate(order) if owners[i] == index)
+                for index in set(owners)
+            }
             for index, (fetched, _) in ready.items():
                 indices = [i for i in order if owners[i] == index]
                 selected = select(query, flat, indices, cap)
                 out[index] = result_from_page(results[index], fetched, selected)
-                first_rank[index] = next(
-                    pos for pos, i in enumerate(order) if owners[i] == index
-                )
             # Dense/BM25 fusion curates source order as well as passages.
             return [out[i] for i in sorted(first_rank, key=lambda i: first_rank[i])] + [
-                r for i, r in enumerate(out) if i not in ready
+                r for i, r in enumerate(out) if i not in first_rank
             ]
         except Exception:
             logger.debug("Global ranking kept ready BM25 passages", exc_info=True)

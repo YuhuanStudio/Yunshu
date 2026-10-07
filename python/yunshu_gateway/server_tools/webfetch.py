@@ -269,6 +269,9 @@ async def _fetch_url(
     hops: list[str] = []
     own = client is None
     client = client or httpx.AsyncClient(follow_redirects=False, trust_env=False)
+    from .search import _query_log_context
+
+    log_token = _query_log_context.set(True)
     try:
         for _ in range(MAX_REDIRECTS + 1):
             try:
@@ -286,6 +289,7 @@ async def _fetch_url(
             headers = {
                 **(request_headers or {}),
                 **pin_headers,
+                "Cookie": "",  # no ambient cookies, including a shared client jar
                 "User-Agent": USER_AGENT,
                 "Accept": "text/html,text/plain,*/*;q=0.5",
             }
@@ -393,5 +397,6 @@ async def _fetch_url(
             )
         raise FetchError("url_not_accessible", "too many redirects")
     finally:
+        _query_log_context.reset(log_token)
         if own:
             await client.aclose()

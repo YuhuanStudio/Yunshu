@@ -229,7 +229,7 @@ internal ones, `--json` prints JSON, `--config FILE` includes a config file.
 | `YUNSHU_WEB_RESEARCH` | bool | off | Enrich search snippets with origin pages, untrusted excerpts and local ranking. Stable opt-in pending quality evaluation; fetched URLs leave the machine. |
 | `YUNSHU_WEB_RESEARCH_BUDGET` | float | 4.0 | Overall enrichment deadline in seconds (maximum 4). |
 | `YUNSHU_WEB_RESEARCH_PAGES` | int | 6 | Maximum origin pages per enrichment (capped at 6). |
-| `YUNSHU_WEB_RESEARCH_MODEL` | str | unset | Already-loaded local embedding/rerank model ID. Never loads a model; absent/unavailable uses BM25 only. Qwen3-Embedding-0.6B is recommended. |
+| `YUNSHU_WEB_RESEARCH_MODEL` | str | unset | Already-loaded local embedding model ID. Never loads a model; absent/unavailable uses BM25 only. Qwen3-Embedding-0.6B is recommended. |
 | `YUNSHU_SEARXNG_URL` | str | unset | Base URL of a self-hosted SearXNG instance (JSON output enabled), e.g. http://127.0.0.1:8080. The privacy-friendly default recommendation. |
 | `YUNSHU_BRAVE_API_KEY` | str | unset | Brave Search API key. |
 | `YUNSHU_TAVILY_API_KEY` | str | unset | Tavily API key. |

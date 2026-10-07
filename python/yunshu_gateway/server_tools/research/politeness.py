@@ -63,6 +63,8 @@ class Politeness:
                 parser = RobotFileParser()
                 try:
                     result = await _fetch_url(robot_url, **kwargs)
+                    if result.truncated:
+                        return False  # missing rules must not accidentally authorize a fetch
                     parser.parse(result.text.splitlines())
                 except FetchError as exc:
                     if exc.status_code in (404, 410):

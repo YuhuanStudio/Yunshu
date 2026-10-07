@@ -106,7 +106,7 @@ def extract(body: str, url: str) -> tuple[str, str]:
     title, text = _INVISIBLE.sub("", title), clean_text(text)
     if _INSTRUCTION.search(text):
         _instruction_pages.inc()  # diagnostic only: never discard visible instructions
-    return title, text
+    return title[:300], text
 
 
 def clean_text(text: str) -> str:
@@ -126,7 +126,8 @@ def extract_with_metadata(body: str, url: str) -> tuple[str, str, str | None]:
             (
                 v
                 for v in values
-                if re.fullmatch(r"\d{4}-\d{2}-\d{2}(?:T[0-9:.+Z-]+)?", v)
+                if len(v) <= 40
+                and re.fullmatch(r"\d{4}-\d{2}-\d{2}(?:T[0-9:.+Z-]+)?", v)
             ),
             None,
         )

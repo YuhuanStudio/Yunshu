@@ -36,12 +36,18 @@ class PageCache:
 
     def put(self, url: str, value: FetchResult, ttl: float = 900) -> None:
         key = normalized_url(url)
-        size = (
-            len(value.text.encode())
-            + len(key.encode())
-            + len(value.title.encode())
-            + 512
-        )
+        fields = [
+            value.text,
+            value.title,
+            value.url,
+            value.media_type,
+            value.retrieved_at,
+            value.etag or "",
+            value.last_modified or "",
+            value.published_at or "",
+            *value.redirects,
+        ]
+        size = len(key.encode()) + sum(len(v.encode()) for v in fields) + 512
         if old := self.rows.pop(key, None):
             self.bytes -= old.size
         if size > self.max_bytes:

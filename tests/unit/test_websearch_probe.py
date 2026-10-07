@@ -66,3 +66,15 @@ def test_yv_stage_fake_executor_handles_dict_results(tmp_path, monkeypatch):
     verdict = stages.stage_websearch(ctx)
     assert verdict.passed and verdict.numbers == {"base": [], "cand": []}
     assert records[-1]["ev"] == "stage_complete"
+
+
+def test_probe_dependency_import_order_in_fresh_cpu_process():
+    import subprocess
+    import sys
+
+    script = ROOT / "scripts/research/websearch_probe.py"
+    code = "import sys; sys.path.insert(0, sys.argv[1]); import websearch_probe; deps = websearch_probe.load_dependencies(); assert len(deps) == 5"
+    result = subprocess.run(
+        [sys.executable, "-c", code, str(script.parent)], capture_output=True, text=True
+    )
+    assert result.returncode == 0, result.stderr

@@ -503,3 +503,134 @@ async def test_search_cache_avoids_duplicate_keyless_requests():
         one = await search.run_search("unique cache query", client=c)
         two = await search.run_search("unique cache query", client=c)
     assert one == two and len(requests) == 1
+
+
+async def test_query_not_logged_at_info_and_context_resets(caplog):
+    import logging
+
+    caplog.set_level(logging.INFO, logger="httpx")
+    query = "private conversation fragment 84719"
+
+    def fake(req):
+        assert req.url.params["q"] == query
+        return httpx.Response(
+            200, text='<a class="result__a" href="https://a.org">A</a>'
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(fake)) as c:
+        await search.run_search(query, client=c)
+    assert query not in caplog.text and "84719" not in caplog.text
+    assert not search._query_log_context.get()
+
+
+def test_excerpt_matches_words_not_pineapple_prefixes():
+    from yunshu_gateway.server_tools.research.pipeline import select
+
+    text = "pineapple " * 70 + "The apple answer is CODE_42."
+    p = search.Passage(text, start=0, end=len(text))
+    selected = select("apple", [p], [0])
+    assert "apple answer is CODE_42" in selected[0].text
+    assert selected[0].text == text[selected[0].start : selected[0].end]
+
+
+async def test_strong_plain_snippet_is_not_demoted_because_robots_block(monkeypatch):
+    from yunshu_gateway.server_tools.research import pipeline
+
+    async def fake(url, **kwargs):
+        if url.endswith("plain"):
+            raise FetchError("url_not_allowed", "robots")
+        return FetchResult(url, "A" * 5000, "Ocean fish.", "text/plain", "")
+
+    monkeypatch.setattr(pipeline, "page", fake)
+    out = await pipeline.enrich(
+        "apple",
+        [
+            search.SearchResult("Fetched", "https://a.org/fetched"),
+            search.SearchResult("Plain", "https://a.org/plain", "Apple answer."),
+        ],
+    )
+    assert out[0].title == "Plain" and not out[0].fetched
+    assert len(out[1].title) == 300
+
+
+async def test_guarded_fetch_never_sends_ambient_cookies(monkeypatch):
+    from yunshu_gateway.server_tools import webfetch
+
+    from .test_network_policy import fake_dns
+
+    fake_dns(monkeypatch, "93.184.216.34")
+    monkeypatch.setenv("YUNSHU_WEB_FETCH", "1")
+    requests = []
+
+    def fake(req):
+        requests.append(req)
+        assert not req.headers.get("cookie")
+        return httpx.Response(200, headers={"content-type": "text/plain"}, text="Page")
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(fake), cookies={"ambient": "secret"}
+    ) as c:
+        await webfetch.fetch_url("https://example.org/page", client=c)
+    assert len(requests) == 1
+
+
+def test_response_action_schema_requires_appropriate_fields():
+    from jsonschema import ValidationError, validate
+
+    from yunshu_gateway.server_tools.runtime import RESPONSES_WEB_SCHEMA
+
+    for args in (
+        {"query": "q"},
+        {"action": "open_page", "url": "https://a.org"},
+        {"action": "find_in_page", "url": "https://a.org", "pattern": "needle"},
+    ):
+        validate(args, RESPONSES_WEB_SCHEMA)
+    for args in (
+        {},
+        {"action": "open_page"},
+        {"action": "find_in_page", "url": "https://a.org"},
+    ):
+        with pytest.raises(ValidationError):
+            validate(args, RESPONSES_WEB_SCHEMA)
+
+
+async def test_find_rejects_huge_pattern_before_fetch(monkeypatch):
+    from yunshu_gateway.server_tools.research import pipeline
+
+    async def no_fetch(*args, **kwargs):
+        pytest.fail("oversized pattern reached fetch")
+
+    monkeypatch.setattr(pipeline, "open_page", no_fetch)
+    rt = ServerToolRuntime(
+        [ServerToolDef("web_search", "web_search", "", {}, spec={"page_actions": True})]
+    )
+    try:
+        result = await rt.execute(
+            "web_search",
+            {"action": "find_in_page", "url": "https://a.org", "pattern": "x" * 401},
+        )
+        assert result.is_error and result.error_code == "query_too_long"
+    finally:
+        await rt.aclose()
+
+
+def test_cache_includes_large_http_metadata_in_budget():
+    cache = PageCache(max_bytes=1024)
+    value = FetchResult("https://a.org", "", "tiny", "text/plain", "", etag="x" * 5000)
+    cache.put(value.url, value)
+    assert cache.get(value.url) is None and cache.bytes == 0
+
+
+async def test_truncated_robots_are_not_treated_as_allow(monkeypatch):
+    from yunshu_gateway.server_tools.research import politeness as module
+
+    gate = Politeness()
+    state = gate.host("https://a.org/page")
+
+    async def fake(url, **kwargs):
+        return FetchResult(
+            url, "", "User-agent: *\nAllow: /", "text/plain", "", truncated=True
+        )
+
+    monkeypatch.setattr(module, "_fetch_url", fake)
+    assert not await gate.allowed("https://a.org/page", state)

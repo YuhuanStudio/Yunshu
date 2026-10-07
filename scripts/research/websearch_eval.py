@@ -21,6 +21,11 @@ def parser():
     p.add_argument("--out", required=True, type=Path)
     p.add_argument("--url", help="Existing gpuq-owned server URL")
     p.add_argument("--model", help="Served model ID")
+    p.add_argument(
+        "--token-file",
+        type=Path,
+        help="Bearer token file for a protected local eval server",
+    )
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--require-design-set", action="store_true")
     p.add_argument(
@@ -229,7 +234,10 @@ async def run(a):
 
     pairs = []
     a.out.parent.mkdir(parents=True, exist_ok=True)
-    with a.out.open("w") as out, httpx.Client(timeout=120) as client:
+    headers = {}
+    if a.token_file:
+        headers["Authorization"] = "Bearer " + a.token_file.read_text().strip()
+    with a.out.open("w") as out, httpx.Client(timeout=120, headers=headers) as client:
         for row in rows:
             prepared, extracted = await prepare(row)
             pair = {"id": row["id"], "category": row.get("category")}
@@ -312,6 +320,7 @@ async def run(a):
                         "model": a.model,
                         "max_tokens": 512,
                         "temperature": 0,
+                        "thinking": {"type": "disabled"},
                         "messages": messages,
                         "tools": [
                             {"type": "web_search_20250305", "name": "web_search"}

@@ -1020,6 +1020,11 @@ def stage_websearch(ctx: Ctx) -> StageResult:
                         else [
                             "--embedding-model",
                             "/Volumes/P5Plus/models/Qwen3-Embedding-0.6B",
+                            "--eval-snapshot",
+                            str(
+                                ctx.cand.path
+                                / "scripts/research/data/websearch_adversarial.jsonl"
+                            ),
                         ]
                     ),
                 ],
