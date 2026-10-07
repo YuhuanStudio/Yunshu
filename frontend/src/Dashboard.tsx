@@ -54,12 +54,10 @@ import {
   LatencyPanel,
   PhasePanel,
 } from "./AnalyticsPanels";
-import {
-  observationCsv,
-  observedRequests,
-  timeSeries,
-  trendDelta,
-} from "./analytics";
+import { observationCsv } from "./analytics";
+import { chartRows, windowPoints } from "./series";
+import { decodeHeadline, totalsFrom, windowLabel } from "./engineView";
+import { SpeedPair, StateStrip, TotalsLine } from "./OverviewParts";
 import type { RequestRow } from "./api";
 import { buildIntegrations, serviceRoot } from "./integrations";
 import {
@@ -69,7 +67,6 @@ import {
   modelLabel,
   number,
   phaseDot,
-  Readout,
   Slot,
   sizeGb,
   supportsChat,
@@ -88,38 +85,41 @@ const chartLabels = {
 };
 const memorySeries = [
   { key: "active", label: "活躍配置", tone: "accent" as const },
-  { key: "cache", label: "配置器快取", tone: "neutral" as const, dashed: true },
+  {
+    key: "cache",
+    label: "記憶體保留池",
+    tone: "neutral" as const,
+    dashed: true,
+  },
 ];
 const requestSeries = [
   { key: "requests", label: "全部", tone: "accent" as const },
   { key: "queued", label: "排隊", tone: "neutral" as const, dashed: true },
-  { key: "prefillRequests", label: "Prefill", tone: "neutral" as const },
+  { key: "prefillRequests", label: "預填", tone: "neutral" as const },
   {
     key: "decodeRequests",
-    label: "Decode",
+    label: "解碼",
     tone: "accent" as const,
     dashed: true,
   },
 ];
 const rateSeries = {
-  decode: [
-    { key: "decode", label: "Decode 單請求平均", tone: "accent" as const },
-  ],
+  decode: [{ key: "decode", label: "解碼 即時合計", tone: "accent" as const }],
   prefill: [
-    { key: "prefill", label: "Prefill 單請求平均", tone: "neutral" as const },
+    { key: "prefill", label: "預填 即時合計", tone: "neutral" as const },
   ],
   both: [
-    { key: "decode", label: "Decode 單請求平均", tone: "accent" as const },
-    { key: "prefill", label: "Prefill 單請求平均", tone: "neutral" as const },
+    { key: "decode", label: "解碼 即時合計", tone: "accent" as const },
+    { key: "prefill", label: "預填 即時合計", tone: "neutral" as const },
   ],
 };
 const formatNumber = (value: number) => number(value);
 const formatCount = (value: number) => number(value, 0);
 const phaseText: Record<string, string> = {
   queued: "排隊",
-  starting: "啟動",
-  prefill: "Prefill",
-  decode: "Decode",
+  starting: "準備中",
+  prefill: "預填",
+  decode: "解碼",
   running: "執行",
 };
 function RequestLane({ row }: { row: RequestRow }) {
@@ -177,7 +177,7 @@ function RequestLane({ row }: { row: RequestRow }) {
           <Progress
             className="h-1 w-full"
             value={Math.max(0, Math.min(100, progress))}
-            label={`Prefill ${number(progress, 0)}%`}
+            label={`預填 ${number(progress, 0)}%`}
           />
         ) : phase !== "prefill" && cached > 0 && prompt > 0 ? (
           <p className="truncate text-xs text-muted-foreground">
@@ -243,12 +243,17 @@ export function Dashboard({
     online = engine.phase === "online";
   const end = engine.updatedAt ?? Date.now(),
     start = end - (range === "5m" ? 300 : range === "15m" ? 900 : 3600) * 1000;
+  // Charts read the slim series (engine history first, then live polls). The
+  // window is a binary-search slice and the chart gets at most 300 rows.
   const points = useMemo(
-    () =>
-      engine.history.filter((sample) => sample.at >= start && sample.at <= end),
-    [engine.history, start, end],
+    () => windowPoints(engine.series, start, end),
+    [engine.series, start, end],
   );
-  const data = useMemo(() => timeSeries(points), [points]);
+  const data = useMemo(() => chartRows(points), [points]);
+  const heroPoints = useMemo(
+    () => windowPoints(engine.series, end - 300_000, end),
+    [engine.series, end],
+  );
   const throughputSeries = rateSeries[metric as keyof typeof rateSeries];
   useEffect(() => {
     if (activeX !== null && !points.some((point) => point.at === activeX))
@@ -256,29 +261,18 @@ export function Dashboard({
   }, [points, activeX]);
   const last = status?.last;
   const activePoint =
-    activeX == null ? null : points.find((sample) => sample.at === activeX);
+    activeX == null
+      ? null
+      : (points.find((sample) => sample.at === activeX) ?? null);
   const items = status?.requests.items ?? [];
-  const decodeTrend = points.flatMap((p) =>
-    p.status.throughput.mean_decode_tps == null
-      ? []
-      : [p.status.throughput.mean_decode_tps],
-  );
-  const liveDecode =
-    status?.throughput.live_decode_tps ?? status?.throughput.mean_decode_tps;
   const memory = status?.memory;
-  const prefilling = items.find(
-    (r) => r.phase === "prefill" || r.phase === "starting",
-  );
-  const prefillPct = prefilling
-    ? (prefilling.percent ??
-      ((prefilling.prompt_tokens ?? 0) > 0 &&
-      prefilling.processed_tokens != null
-        ? (prefilling.processed_tokens / (prefilling.prompt_tokens ?? 1)) * 100
-        : null))
-    : null;
   const loaded = (status?.models ?? []).filter((m) => m.loaded);
   // Trends compare the later half of this window's samples with the earlier half.
-  const observed = useMemo(() => observedRequests(points), [points]);
+  const observed = useMemo(
+    () => engine.finished.filter((r) => r.firstObservedAt >= start),
+    [engine.finished, start],
+  );
+  const totals = useMemo(() => totalsFrom(engine.finished), [engine.finished]);
   // Prefix reuse is weighted over the observed finished requests (cached /
   // prompt tokens); the latest request is a secondary line, as on Requests.
   const promptSum = observed.reduce((n, r) => n + r.prompt_tokens, 0),
@@ -288,10 +282,7 @@ export function Dashboard({
     last && last.prompt_tokens > 0
       ? (last.cached_tokens / last.prompt_tokens) * 100
       : null;
-  const heroData = useMemo(
-    () => timeSeries(points.filter((p) => p.at >= end - 300_000)),
-    [points, end],
-  );
+  const heroData = useMemo(() => chartRows(heroPoints), [heroPoints]);
   const baseUrl = serviceRoot(savedBaseUrl());
   const quickModel = (loaded.find(supportsChat) ?? loaded[0])?.id ?? "";
   const curl =
@@ -311,8 +302,9 @@ export function Dashboard({
     setActiveX(null);
   };
   function exportData() {
+    const rows = engine.history.filter((s) => s.at >= start && s.at <= end);
     const url = URL.createObjectURL(
-        new Blob([observationCsv(points)], { type: "text/csv;charset=utf-8" }),
+        new Blob([observationCsv(rows)], { type: "text/csv;charset=utf-8" }),
       ),
       a = document.createElement("a");
     a.href = url;
@@ -435,6 +427,8 @@ export function Dashboard({
         )}
       </p>
 
+      <StateStrip status={status ?? null} />
+
       {!status ? (
         <StatGrid>
           {[0, 1, 2, 3].map((i) => (
@@ -442,25 +436,16 @@ export function Dashboard({
           ))}
         </StatGrid>
       ) : (
-        <StatGrid data-testid="overview-stats">
-          <StatCard
-            compact
-            valueFirst
-            icon={Zap}
-            label="Decode 速度"
-            value={liveDecode == null ? "—" : `${number(liveDecode)} tok/s`}
-            subtext={
-              status.throughput.live_decode_tps != null
-                ? `${status.requests.active} 個請求合計`
-                : "近 5 分鐘平均（閒置）"
-            }
-            trend={trendDelta(decodeTrend) ?? undefined}
-          />
+        <div
+          className="grid gap-3 sm:grid-cols-2 xl:grid-cols-[minmax(0,2fr)_repeat(3,minmax(0,1fr))]"
+          data-testid="overview-stats"
+        >
+          <SpeedPair status={status} points={heroPoints} />
           <StatCard
             compact
             valueFirst
             icon={Timer}
-            label="首 Token 延遲"
+            label="首 token 延遲 (TTFT)"
             value={
               last?.ttft_ms == null ? "—" : `${number(last.ttft_ms, 0)} ms`
             }
@@ -472,12 +457,12 @@ export function Dashboard({
             compact
             valueFirst
             icon={Gauge}
-            label="前綴重用率"
+            label="前綴命中率"
             value={cache == null ? "—" : `${number(cache, 0)}%`}
             subtext={
               cache == null
                 ? "尚無完成請求"
-                : `近 ${number(observed.length, 0)} 筆加權${lastHit == null ? "" : ` · 最近一筆 ${number(lastHit, 0)}%`}`
+                : `本頁觀測 ${number(observed.length, 0)} 筆加權${lastHit == null ? "" : ` · 最近一筆 ${number(lastHit, 0)}%`}`
             }
           />
           <StatCard
@@ -488,7 +473,7 @@ export function Dashboard({
             value={`${number(memory?.active_gb)} GB`}
             subtext={`實體 ${number(memory?.total_gb)} GB · 峰值 ${number(memory?.peak_gb)} GB`}
           />
-        </StatGrid>
+        </div>
       )}
 
       {/* Live: what the engine is doing right now. */}
@@ -499,7 +484,7 @@ export function Dashboard({
         <div className="flex min-w-0 flex-col justify-between gap-5 border-b border-border/60 p-5 sm:p-6 lg:border-b-0 lg:border-r">
           <div className="min-w-0">
             <p className="text-xs text-muted-foreground">
-              即時吞吐 · 近 5 分鐘 · tok/s
+              即時合計速度 · 近 5 分鐘走勢 · tok/s
             </p>
             <TimeSeriesChart
               {...chartLabels}
@@ -507,50 +492,10 @@ export function Dashboard({
               data={heroData}
               series={rateSeries.both}
               height={150}
-              ariaLabel="近 5 分鐘 Decode 與 Prefill 速度，單位 tok/s"
+              ariaLabel="近 5 分鐘解碼與預填的即時合計速度，單位 tok/s"
               formatX={clock}
               formatY={formatNumber}
               maxGap={12000}
-            />
-          </div>
-          {/* A fixed-height slot: prefill progress when a prompt is being processed,
-              otherwise a quiet line. The chart above never gives way to it. */}
-          <div className="h-12 min-w-0" data-testid="prefill-slot">
-            {prefilling ? (
-              <>
-                <div className="flex items-baseline justify-between gap-3 text-xs text-muted-foreground">
-                  <span className="min-w-0 truncate">
-                    正在處理提示詞 · {prefilling.request_id}
-                  </span>
-                  <Slot ch={5} align="right" className="text-foreground">
-                    {number(prefillPct, 0)}%
-                  </Slot>
-                </div>
-                <Progress
-                  className="mt-2 h-1.5"
-                  value={prefillPct ?? 0}
-                  label={`Prefill ${number(prefillPct, 0)}%`}
-                />
-                <p className="mt-1 truncate text-xs tabular-nums text-muted-foreground">
-                  {number(prefilling.processed_tokens, 0)} /{" "}
-                  {number(prefilling.prompt_tokens, 0)} tokens
-                  {prefilling.tokens_per_second != null &&
-                    ` · ${number(prefilling.tokens_per_second, 0)} tok/s`}
-                  {prefilling.eta_s != null &&
-                    ` · 約 ${elapsed(prefilling.eta_s)} 後開始輸出`}
-                </p>
-              </>
-            ) : (
-              <p className="text-xs text-muted-foreground">
-                目前沒有提示詞在預填。
-              </p>
-            )}
-          </div>
-          <div className="border-t border-border/60 pt-4">
-            <Readout
-              label="Prefill 單請求平均"
-              value={number(status?.throughput.mean_prefill_tps, 0)}
-              unit="tok/s"
             />
           </div>
         </div>
@@ -590,11 +535,12 @@ export function Dashboard({
               title="目前閒置"
               description={`沒有正在處理的請求。${
                 memory?.cache_gb
-                  ? ` 配置器快取 ${number(memory.cache_gb)} GB 會在閒置後歸還系統。`
+                  ? ` 記憶體保留池 ${number(memory.cache_gb)} GB 會在閒置後歸還系統。`
                   : ""
               }`}
             />
           )}
+          <TotalsLine totals={totals} />
         </div>
       </Card>
 
@@ -660,21 +606,24 @@ export function Dashboard({
         }
       />
       <p className="-mt-3 text-xs text-muted-foreground">
-        本頁開啟後採樣 · {points.length} 筆 · 中斷期間不補資料
+        {engine.historyFrom != null
+          ? `含引擎端歷史（自 ${clock(engine.historyFrom)}）`
+          : "本頁開啟後採樣（此引擎沒有提供歷史）"}{" "}
+        · {points.length} 筆 · 中斷期間不補資料
       </p>
       <div className="grid gap-5 xl:grid-cols-[minmax(0,7fr)_minmax(0,5fr)]">
         <ChartCard
           data-testid="throughput-panel"
           title="吞吐觀測"
-          description="近 5 分鐘平均速度的時間變化 · tok/s"
+          description="解碼與預填的即時合計速度 · 沒有請求時留白 · tok/s"
           action={
             <SegmentedSelect
               aria-label="吞吐指標"
               value={metric}
               onChange={setMetric}
               options={[
-                { value: "decode", label: "Decode" },
-                { value: "prefill", label: "Prefill" },
+                { value: "decode", label: "解碼" },
+                { value: "prefill", label: "預填" },
                 { value: "both", label: "比較" },
               ]}
             />
@@ -707,18 +656,18 @@ export function Dashboard({
                 <Thead>
                   <Tr>
                     <Th>時間</Th>
-                    <Th>Decode</Th>
-                    <Th>Prefill</Th>
+                    <Th>解碼</Th>
+                    <Th>預填</Th>
                     <Th>Metal GB</Th>
                   </Tr>
                 </Thead>
                 <Tbody>
-                  {points.map((p) => (
+                  {points.slice(-200).map((p) => (
                     <Tr key={p.at}>
                       <Td>{clock(p.at)}</Td>
-                      <Td>{number(p.status.throughput.mean_decode_tps)}</Td>
-                      <Td>{number(p.status.throughput.mean_prefill_tps)}</Td>
-                      <Td>{number(p.status.memory.active_gb)}</Td>
+                      <Td>{number(p.decode)}</Td>
+                      <Td>{number(p.prefill)}</Td>
+                      <Td>{number(p.memActive)}</Td>
                     </Tr>
                   ))}
                 </Tbody>
@@ -733,7 +682,7 @@ export function Dashboard({
             <Badge variant="outline">實體 {number(memory?.total_gb)} GB</Badge>
           }
         >
-          <p className="text-3xl font-semibold tabular-nums">
+          <p className="text-2xl font-semibold tabular-nums">
             <Slot ch={5}>{fixed(memory?.active_gb)}</Slot>
             <span className="ml-1.5 text-sm font-normal text-muted-foreground">
               / {fixed(memory?.total_gb)} GB 活躍配置
@@ -753,7 +702,7 @@ export function Dashboard({
               {
                 value: memory?.cache_gb ?? 0,
                 tone: "neutral",
-                label: "配置器快取",
+                label: "記憶體保留池",
               },
             ]}
             marks={
@@ -809,8 +758,8 @@ export function Dashboard({
           role="status"
         >
           <span>
-            選取 {clock(activePoint.at)} · {activePoint.status.requests.active}{" "}
-            個活動請求 · {number(activePoint.status.memory.active_gb)} GB
+            選取 {clock(activePoint.at)} · {number(activePoint.active, 0)}{" "}
+            個活動請求 · {number(activePoint.memActive)} GB
           </span>
           <Button size="sm" variant="ghost" onClick={() => setActiveX(null)}>
             清除選取
@@ -818,7 +767,7 @@ export function Dashboard({
         </div>
       )}
       <div className="grid min-w-0 gap-5 xl:grid-cols-2">
-        <LatencyPanel history={points} />
+        <LatencyPanel records={observed} />
         <PhasePanel engine={engine} navigate={navigate} />
       </div>
       <ActivityPanel

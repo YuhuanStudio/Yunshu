@@ -1,12 +1,9 @@
 import { Button, Card, Input } from "@yuhuanowo/yunui";
 import { Banner } from "@yuhuanowo/yunui/patterns";
-import {
-  ModelIcon,
-  getDeveloperIconPath,
-  getModelDeveloperId,
-} from "@yuhuanowo/yunui/ai";
 import { Check, Copy, RefreshCw, type LucideIcon } from "lucide-react";
 import {
+  Suspense,
+  lazy,
   useEffect,
   useState,
   type HTMLAttributes,
@@ -16,18 +13,28 @@ import type { EngineStatus } from "./api";
 import type { useEngine } from "./useEngine";
 export type Engine = ReturnType<typeof useEngine>;
 export type Model = EngineStatus["models"][number];
+// Intl formatters are expensive to build and a poll formats hundreds of
+// values (every chart tick), so each distinct format is built once.
+const numberFormats = new Map<string, Intl.NumberFormat>();
+function numberFormat(min: number, max: number) {
+  const key = min + ":" + max;
+  let f = numberFormats.get(key);
+  if (!f) {
+    f = new Intl.NumberFormat("zh-TW", {
+      minimumFractionDigits: min,
+      maximumFractionDigits: max,
+    });
+    numberFormats.set(key, f);
+  }
+  return f;
+}
 export const number = (v: number | null | undefined, digits = 1) =>
-  v == null || !Number.isFinite(v)
-    ? "—"
-    : v.toLocaleString("zh-TW", { maximumFractionDigits: digits });
+  v == null || !Number.isFinite(v) ? "—" : numberFormat(0, digits).format(v);
 /** Fixed decimals, so a polled value keeps the same number of characters. */
 export const fixed = (v: number | null | undefined, digits = 1) =>
   v == null || !Number.isFinite(v)
     ? "—"
-    : v.toLocaleString("zh-TW", {
-        minimumFractionDigits: digits,
-        maximumFractionDigits: digits,
-      });
+    : numberFormat(digits, digits).format(v);
 /**
  * A numeric slot that keeps its width: tabular figures plus a reserved minimum
  * width in `ch`, so a value that changes length (or is briefly "—") never moves
@@ -53,13 +60,13 @@ export function Slot({
     </span>
   );
 }
-export const clock = (t: number) =>
-  new Date(t).toLocaleTimeString("zh-TW", {
-    hour12: false,
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  });
+const clockFormat = new Intl.DateTimeFormat("zh-TW", {
+  hourCycle: "h23",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+});
+export const clock = (t: number) => clockFormat.format(t);
 export const elapsed = (seconds: number | null | undefined) =>
   seconds == null
     ? "—"
@@ -162,18 +169,9 @@ export function SectionCard({
 }
 export const supportsChat = (model: Model | undefined) =>
   !!model && /llm|vlm|batched|omni/i.test(model.type);
-// YunUI's ModelIcon defaults to jsDelivr; the console is local-first, so
-// resolve the icon files that ship in the package to bundled asset URLs.
-const bundledIcons = import.meta.glob(
-  "../node_modules/@yuhuanowo/yunui/icons/models/*.{webp,png,jpeg}",
-  { eager: true, query: "?url", import: "default" },
-) as Record<string, string>;
-const iconByFile = new Map(
-  Object.entries(bundledIcons).map(([path, url]) => [
-    path.split("/").at(-1) ?? path,
-    url,
-  ]),
-);
+// YunUI's ModelIcon and its developer table are loaded only when a page shows
+// a model icon, so the shell does not ship them.
+const LazyModelIcon = lazy(() => import("./LocalModelIcon"));
 export function LocalModelIcon({
   id,
   size = 28,
@@ -181,18 +179,19 @@ export function LocalModelIcon({
   id: string;
   size?: number;
 }) {
-  const developer = getModelDeveloperId(id);
-  const file = getDeveloperIconPath(developer)?.split("/").at(-1);
-  const url = file ? iconByFile.get(file) : undefined;
-  return url ? (
-    <ModelIcon
-      iconUrl={url}
-      developer={developer}
-      provider={developer}
-      size={size}
-      rounded
-    />
-  ) : null;
+  return (
+    <Suspense
+      fallback={
+        <span
+          aria-hidden="true"
+          className="inline-block shrink-0"
+          style={{ width: size, height: size }}
+        />
+      }
+    >
+      <LazyModelIcon id={id} size={size} />
+    </Suspense>
+  );
 }
 
 /** One mapping for request phases to status dots. Red is reserved for errors. */

@@ -7,7 +7,6 @@ import {
   observationCsv,
   observedRequests,
   percentile,
-  timeSeries,
   rollingMedian,
   trendDelta,
 } from "../src/analytics.ts";
@@ -71,20 +70,35 @@ test("latency percentiles exclude missing/invalid observations", () => {
   );
 });
 test("heatmap distinguishes observed zero, missing intervals, and bucket peaks", () => {
-  const history = [snapshot(10), snapshot(60), snapshot(65)];
-  history[1].status.requests.active = 2;
-  history[2].status.requests.active = 4;
-  const heat = activityHeatmap(history, 0, 100, 4);
+  const pt = (at: number, active: number | null) => ({
+    at,
+    decode: null,
+    prefill: null,
+    active,
+    queued: 0,
+    prefillRequests: null,
+    decodeRequests: null,
+    memActive: null,
+    memCache: null,
+  });
+  const heat = activityHeatmap([pt(10, 0), pt(60, 2), pt(65, 4)], 0, 100, 4);
   assert.deepEqual(heat.data[0], [0, null, 4, null]);
   assert.deepEqual(heat.coverage, [1, 0, 2, 0]);
+  assert.equal(
+    heat.data[2][0],
+    null,
+    "unreported per-phase counts stay unknown",
+  );
 });
-test("time series and CSV preserve unavailable values rather than fabricate zero", () => {
+test("CSV names the engine window and never says 300s", () => {
   const rows = [snapshot(1000)];
-  assert.equal(timeSeries(rows)[0].values.decode, null);
-  assert.equal(timeSeries(rows)[0].values.cache, null);
   const csv = observationCsv(rows);
-  assert.ok(csv.includes("mean_decode_tps_300s"));
-  assert.ok(csv.includes('"1970-01-01T00:00:01.000Z","","700","0","10",""'));
+  assert.ok(csv.includes("mean_decode_tps_window"));
+  assert.ok(csv.includes("window_s"));
+  assert.ok(!csv.includes("300s"));
+  assert.ok(
+    csv.includes('"1970-01-01T00:00:01.000Z","","","700","60","0","10",""'),
+  );
   assert.ok(!csv.includes("NaN"));
 });
 

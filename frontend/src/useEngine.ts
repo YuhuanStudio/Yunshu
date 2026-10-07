@@ -5,6 +5,9 @@ import {
   type Connection,
   type EngineStatus,
 } from "./api";
+import type { ObservedRequest } from "./analytics";
+import { fetchServerHistory } from "./history-api";
+import { mergeSeries, pointFromStatus, type SeriesPoint } from "./series";
 
 export type EngineConnectionPhase =
   "connecting" | "online" | "offline" | "unauthorized";
@@ -19,6 +22,12 @@ export interface UseEngineResult {
   error: string | null;
   updatedAt: number | null;
   history: readonly EngineHistoryPoint[];
+  /** Slim chart samples: the engine's own history first, then live polls. */
+  series: readonly SeriesPoint[];
+  /** Finished requests seen since the page opened, oldest first, no repeats. */
+  finished: readonly ObservedRequest[];
+  /** Epoch ms of the oldest engine-side history row, or null when there is none. */
+  historyFrom: number | null;
   refresh: () => Promise<void>;
   polling: boolean;
   setPolling: (enabled: boolean) => void;
@@ -28,6 +37,8 @@ const POLL_INTERVAL_MS = 3_000;
 /** Offline is shown only after this many consecutive failed polls. */
 const OFFLINE_AFTER_FAILURES = 3;
 const MAX_HISTORY_POINTS = 1_200;
+const MAX_SERIES_POINTS = 2_400;
+const MAX_FINISHED = 1_000;
 
 interface EngineViewState {
   connectionKey: symbol;
@@ -36,6 +47,9 @@ interface EngineViewState {
   error: string | null;
   updatedAt: number | null;
   history: EngineHistoryPoint[];
+  series: SeriesPoint[];
+  finished: ObservedRequest[];
+  historyFrom: number | null;
 }
 
 function initialState(connectionKey: symbol): EngineViewState {
@@ -46,6 +60,9 @@ function initialState(connectionKey: symbol): EngineViewState {
     error: null,
     updatedAt: null,
     history: [],
+    series: [],
+    finished: [],
+    historyFrom: null,
   };
 }
 
@@ -74,6 +91,8 @@ export function useEngine(connection: Connection): UseEngineResult {
   const [polling, setPolling] = useState(true);
   const generationRef = useRef(0);
   const failuresRef = useRef(0);
+  /** The connection whose engine-side history was already requested. */
+  const historyAskedRef = useRef<symbol | null>(null);
   const activeControllerRef = useRef<AbortController | null>(null);
   const inFlightRef = useRef<{
     connectionKey: symbol;
@@ -126,7 +145,15 @@ export function useEngine(connection: Connection): UseEngineResult {
           const restarted =
             previous.status !== null &&
             status.uptime_s < previous.status.uptime_s;
+          if (restarted) historyAskedRef.current = null;
           const samples = restarted ? [] : previous.history;
+          const series = restarted ? [] : previous.series;
+          const known = restarted ? [] : previous.finished;
+          const last = status.last;
+          // The engine reports only its latest finished request; keep each once.
+          const isNew =
+            last != null &&
+            !known.some((r) => r.request_id === last.request_id);
           return {
             connectionKey,
             status,
@@ -134,8 +161,44 @@ export function useEngine(connection: Connection): UseEngineResult {
             error: null,
             updatedAt: at,
             history: [...samples, { at, status }].slice(-MAX_HISTORY_POINTS),
+            series: [...series, pointFromStatus(at, status)].slice(
+              -MAX_SERIES_POINTS,
+            ),
+            finished: isNew
+              ? [...known, { ...last, firstObservedAt: at }].slice(
+                  -MAX_FINISHED,
+                )
+              : known,
+            historyFrom: restarted ? null : previous.historyFrom,
           };
         });
+        // Backfill the charts from the engine's own history, once per
+        // connection (and again after an engine restart). A server without
+        // the route just means the charts start from live polls.
+        if (historyAskedRef.current !== connectionKey) {
+          historyAskedRef.current = connectionKey;
+          void fetchServerHistory(apiConnection, {
+            signal: controller.signal,
+          }).then(
+            (loaded) => {
+              if (!loaded || generation !== generationRef.current) return;
+              setState((current) =>
+                current.connectionKey !== connectionKey
+                  ? current
+                  : {
+                      ...current,
+                      series: mergeSeries(
+                        loaded.points,
+                        current.series.filter((p) => !p.backfilled),
+                        Date.now(),
+                      ),
+                      historyFrom: loaded.points[0].at,
+                    },
+              );
+            },
+            () => undefined,
+          );
+        }
       } catch (error) {
         if (
           controller.signal.aborted ||
@@ -219,6 +282,9 @@ export function useEngine(connection: Connection): UseEngineResult {
     error: stateForConnection.error,
     updatedAt: stateForConnection.updatedAt,
     history: stateForConnection.history,
+    series: stateForConnection.series,
+    finished: stateForConnection.finished,
+    historyFrom: stateForConnection.historyFrom,
     refresh,
     polling,
     setPolling,

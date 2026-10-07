@@ -364,6 +364,12 @@ async function installDiagnostics(
   page.on("console", (message) => {
     if (message.type() !== "error") return;
     if (/status of 401|status of 409/.test(message.text())) return;
+    // The engine history route is optional; an older server answers 404.
+    if (
+      /status of 404/.test(message.text()) &&
+      message.location().url.includes("/v1/yunshu/history")
+    )
+      return;
     unexpectedConsole.push(message.text());
   });
   page.on("requestfailed", (request) => {
@@ -384,6 +390,7 @@ async function installDiagnostics(
   });
   page.on("response", (response) => {
     if (response.status() < 400) return;
+    if (new URL(response.url()).pathname === "/v1/yunshu/history") return;
     const index = expected.findIndex(
       (item) =>
         item.status === response.status() &&

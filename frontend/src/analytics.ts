@@ -1,4 +1,5 @@
 import type { EngineHistoryPoint } from "./useEngine";
+import type { SeriesPoint } from "./series";
 import type { EngineLastRequest, EngineStatus } from "./api";
 
 export interface ObservedRequest extends EngineLastRequest {
@@ -14,8 +15,8 @@ export interface LatencyBucket {
 export const phaseNames: Record<string, string> = {
   queued: "排隊",
   starting: "準備中",
-  prefill: "Prefill",
-  decode: "Decode",
+  prefill: "預填",
+  decode: "解碼",
 };
 export const phaseTones = {
   queued: "warning",
@@ -77,6 +78,20 @@ export function percentile(
   ];
 }
 
+/** Percentiles from fewer samples than this are noise; show the single value instead. */
+export const MIN_PERCENTILE_SAMPLES = 20;
+
+/** `percentile`, or null while there are fewer than `MIN_PERCENTILE_SAMPLES` samples. */
+export function percentileWhenEnough(
+  values: readonly (number | null | undefined)[],
+  p: number,
+): number | null {
+  const n = values.filter(
+    (v) => typeof v === "number" && Number.isFinite(v) && v >= 0,
+  ).length;
+  return n >= MIN_PERCENTILE_SAMPLES ? percentile(values, p) : null;
+}
+
 export function phaseDistribution(status: EngineStatus | null) {
   if (!status) return [];
   const counts = new Map<string, number>();
@@ -92,26 +107,9 @@ export function phaseDistribution(status: EngineStatus | null) {
   }));
 }
 
-/** Compare means only with means. Null samples and collection gaps remain explicit. */
-export function timeSeries(history: readonly EngineHistoryPoint[]) {
-  return history.map(({ at, status }) => ({
-    x: at,
-    values: {
-      decode: status.throughput.mean_decode_tps,
-      prefill: status.throughput.mean_prefill_tps,
-      active: status.memory.active_gb ?? null,
-      cache: status.memory.cache_gb ?? null,
-      requests: status.requests.active,
-      queued: status.requests.queued,
-      prefillRequests: status.requests.prefill,
-      decodeRequests: status.requests.decode,
-    },
-  }));
-}
-
 /** Per-bucket peak of actual samples, not requests-per-period or interpolated traffic. */
 export function activityHeatmap(
-  history: readonly EngineHistoryPoint[],
+  history: readonly SeriesPoint[],
   start: number,
   end: number,
   columns = 12,
@@ -119,22 +117,23 @@ export function activityHeatmap(
   const count = Math.max(1, Math.floor(columns)),
     span = Math.max(1, end - start),
     step = span / count;
-  const rows = ["活動請求", "排隊", "Prefill", "Decode"];
+  const rows = ["活動請求", "排隊", "預填", "解碼"];
   const data: (number | null)[][] = rows.map(() =>
     Array.from({ length: count }, () => null),
   );
   const coverage = Array.from({ length: count }, () => 0);
-  for (const { at, status } of history) {
+  for (const point of history) {
+    const at = point.at;
     if (at < start || at > end) continue;
     const index = Math.min(count - 1, Math.floor((at - start) / step));
     coverage[index]++;
     [
-      status.requests.active,
-      status.requests.queued,
-      status.requests.prefill,
-      status.requests.decode,
+      point.active,
+      point.queued,
+      point.prefillRequests,
+      point.decodeRequests,
     ].forEach((value, row) => {
-      if (Number.isFinite(value) && value >= 0)
+      if (value != null && Number.isFinite(value) && value >= 0)
         data[row][index] =
           data[row][index] === null
             ? value
@@ -153,16 +152,20 @@ export function activityHeatmap(
 export function observationCsv(history: readonly EngineHistoryPoint[]): string {
   const header = [
     "observed_at",
-    "mean_decode_tps_300s",
-    "mean_prefill_tps_300s",
+    "live_decode_tps",
+    "mean_decode_tps_window",
+    "mean_prefill_tps_window",
+    "window_s",
     "active_requests",
     "metal_active_gb",
     "metal_cache_gb",
   ];
   const rows = history.map(({ at, status: s }) => [
     new Date(at).toISOString(),
+    s.throughput.live_decode_tps,
     s.throughput.mean_decode_tps,
     s.throughput.mean_prefill_tps,
+    s.throughput.window_s,
     s.requests.active,
     s.memory.active_gb,
     s.memory.cache_gb,

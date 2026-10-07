@@ -358,6 +358,11 @@ async function installDiagnostics(
   page.on("console", (message) => {
     if (message.type() !== "error") return;
     if (/status of 401|status of 409/.test(message.text())) return;
+    if (
+      /status of 404/.test(message.text()) &&
+      message.location().url.includes("/v1/yunshu/history")
+    )
+      return;
     unexpectedConsole.push(message.text());
   });
   page.on("requestfailed", (request) => {
@@ -378,6 +383,7 @@ async function installDiagnostics(
   });
   page.on("response", (response) => {
     if (response.status() < 400) return;
+    if (new URL(response.url()).pathname === "/v1/yunshu/history") return;
     const index = expected.findIndex(
       (item) =>
         item.status === response.status() &&
@@ -425,18 +431,18 @@ test("auth, model lifecycle, warmup and request cancellation use the real /v1 AP
   await expect(page.getByTestId("overview")).toBeVisible();
   await expect(page.getByText("需要有效的存取權杖")).toBeVisible();
 
-  await page.getByRole("button", { name: "設定", exact: true }).click();
+  await page.getByRole("button", { name: /^開啟設定/ }).click();
   const tokenInput = page.getByLabel("存取權杖");
   await tokenInput.fill("wrong-playwright-token");
   await page.getByRole("button", { name: "儲存並連線", exact: true }).click();
   await page.getByRole("link", { name: "引擎總覽", exact: true }).click();
   await expect(page.getByText("需要有效的存取權杖")).toBeVisible();
 
-  await page.getByRole("button", { name: "設定", exact: true }).click();
+  await page.getByRole("button", { name: /^開啟設定/ }).click();
   await tokenInput.fill(api.token);
   await page.getByRole("button", { name: "儲存並連線", exact: true }).click();
   await page.getByRole("link", { name: "引擎總覽", exact: true }).click();
-  await expect(page.getByText("已連線", { exact: true })).toBeVisible();
+  await expect(page.getByTestId("live-phase")).toBeVisible();
   const storage = await page.evaluate(() =>
     JSON.stringify({
       local: Object.values(localStorage),
@@ -455,7 +461,7 @@ test("auth, model lifecycle, warmup and request cancellation use the real /v1 AP
     )
     .toBeGreaterThanOrEqual(2);
   await expect(page.getByTestId("overview")).toContainText(
-    /本頁開啟後採樣 · [2-9]\d* 筆/,
+    /本頁開啟後採樣（此引擎沒有提供歷史） · [2-9]\d* 筆/,
   );
 
   await page.getByRole("link", { name: "模型庫", exact: true }).click();
@@ -532,7 +538,7 @@ test("stream send/stop and changing service URL resets sampled history", async (
     "stream integration",
   );
   await page.goto("/console/");
-  await page.getByRole("button", { name: "設定", exact: true }).click();
+  await page.getByRole("button", { name: /^開啟設定/ }).click();
   await page.getByLabel("存取權杖").fill(api.token);
   await page.getByRole("button", { name: "儲存並連線", exact: true }).click();
   await page.getByRole("link", { name: "推理測試", exact: true }).click();
@@ -569,7 +575,7 @@ test("stream send/stop and changing service URL resets sampled history", async (
     )
     .toBe(1);
 
-  await page.getByRole("button", { name: "設定", exact: true }).click();
+  await page.getByRole("button", { name: /^開啟設定/ }).click();
   await page
     .getByLabel("服務位址")
     .fill(
@@ -588,7 +594,7 @@ test("stream send/stop and changing service URL resets sampled history", async (
     .toBeGreaterThanOrEqual(1);
   await page.getByRole("link", { name: "引擎總覽", exact: true }).click();
   await expect(page.getByTestId("overview")).toContainText(
-    "本頁開啟後採樣 · 1 筆 · 中斷期間不補資料",
+    "本頁開啟後採樣（此引擎沒有提供歷史） · 1 筆 · 中斷期間不補資料",
   );
   await verifyClean();
 });

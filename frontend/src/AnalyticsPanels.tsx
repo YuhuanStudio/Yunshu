@@ -17,15 +17,16 @@ import {
 } from "@yuhuanowo/yunui";
 import { ArrowRight } from "lucide-react";
 import {
+  MIN_PERCENTILE_SAMPLES,
   activityHeatmap,
   latencyDistribution,
-  observedRequests,
-  percentile,
+  percentileWhenEnough,
   phaseDistribution,
   type LatencyBucket,
+  type ObservedRequest,
 } from "./analytics";
+import type { SeriesPoint } from "./series";
 import { clock, elapsed, number, Slot, type Engine } from "./ui";
-import type { EngineHistoryPoint } from "./useEngine";
 
 /** The one header every chart card shares: title and caption left, one control right. */
 export function ChartCard({
@@ -147,17 +148,22 @@ export function PhasePanel({
 }
 
 export function LatencyPanel({
-  history,
+  records,
 }: {
-  history: readonly EngineHistoryPoint[];
+  records: readonly ObservedRequest[];
 }) {
-  const records = useMemo(() => observedRequests(history), [history]);
   const bins = useMemo(() => latencyDistribution(records), [records]);
   const [selection, setSelection] = useState<LatencyBucket | null>(null);
   const valid = records.filter(
     (row) =>
       row.ttft_ms != null && Number.isFinite(row.ttft_ms) && row.ttft_ms >= 0,
   );
+  const ttfts = valid.map((row) => row.ttft_ms);
+  // Percentiles from a handful of samples are noise: below the minimum, only
+  // the latest request is shown, labelled as such.
+  const p50 = percentileWhenEnough(ttfts, 0.5);
+  const p95 = percentileWhenEnough(ttfts, 0.95);
+  const latest = valid.length ? valid[valid.length - 1].ttft_ms : null;
   const selected = selection
     ? valid.filter(
         (row) => row.ttft_ms! >= selection.min && row.ttft_ms! < selection.max,
@@ -170,34 +176,27 @@ export function LatencyPanel({
       description="點選長條查看請求 · 單位 ms"
       action={<Badge variant="outline">{valid.length} 筆已觀測</Badge>}
     >
-      <div className="mb-4 flex gap-6">
-        <div>
-          <p className="text-xs text-muted-foreground">P50</p>
-          <p className="mt-1 font-mono text-2xl font-semibold tabular-nums">
-            {number(
-              percentile(
-                valid.map((row) => row.ttft_ms),
-                0.5,
-              ),
-              0,
-            )}{" "}
-            <span className="text-xs">ms</span>
-          </p>
-        </div>
-        <div>
-          <p className="text-xs text-muted-foreground">P95</p>
-          <p className="mt-1 font-mono text-2xl font-semibold tabular-nums">
-            {number(
-              percentile(
-                valid.map((row) => row.ttft_ms),
-                0.95,
-              ),
-              0,
-            )}{" "}
-            <span className="text-xs">ms</span>
-          </p>
-        </div>
+      <div className="mb-4 flex gap-6" data-testid="latency-figures">
+        {[
+          ["最近一筆", latest, "latency-last"],
+          ["P50", p50, "latency-p50"],
+          ["P95", p95, "latency-p95"],
+        ].map(([label, value, id]) => (
+          <div key={id as string} data-testid={id as string}>
+            <p className="text-xs text-muted-foreground">{label}</p>
+            <p className="mt-1 text-2xl font-semibold tabular-nums">
+              {number(value as number | null, 0)}{" "}
+              <span className="text-xs font-normal">ms</span>
+            </p>
+          </div>
+        ))}
       </div>
+      {valid.length < MIN_PERCENTILE_SAMPLES && (
+        <p className="-mt-2 mb-3 text-xs text-muted-foreground">
+          已觀測 {valid.length} 筆，滿 {MIN_PERCENTILE_SAMPLES} 筆才顯示 P50 /
+          P95。
+        </p>
+      )}
       <BarChart
         data={bins.map((bin) => ({ ...bin, tone: "neutral" as const }))}
         height={185}
@@ -263,7 +262,7 @@ export function ActivityPanel({
   end,
   onSelectTime,
 }: {
-  history: readonly EngineHistoryPoint[];
+  history: readonly SeriesPoint[];
   start: number;
   end: number;
   onSelectTime: (at: number | null) => void;
@@ -287,14 +286,14 @@ export function ActivityPanel({
             ? heat.ends[column]
             : heat.ends[column] - 1),
     );
-    const value = (sample: EngineHistoryPoint) =>
+    const value = (sample: SeriesPoint) =>
       [
-        sample.status.requests.active,
-        sample.status.requests.queued,
-        sample.status.requests.prefill,
-        sample.status.requests.decode,
-      ][row];
-    const peak = candidates.reduce<EngineHistoryPoint | null>(
+        sample.active,
+        sample.queued,
+        sample.prefillRequests,
+        sample.decodeRequests,
+      ][row] ?? -1;
+    const peak = candidates.reduce<SeriesPoint | null>(
       (best, next) => (!best || value(next) > value(best) ? next : best),
       null,
     );

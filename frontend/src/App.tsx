@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { Suspense, lazy, useEffect, useRef, useState } from "react";
 import {
   Breadcrumb,
   BreadcrumbItem,
@@ -41,23 +41,39 @@ import {
   X,
 } from "lucide-react";
 import { useEngine } from "./useEngine";
+import { LivePill } from "./LivePill";
+import { tabTitle } from "./engineView";
 import type { Connection, EngineLastRequest } from "./api";
 import {
   ConnectionState,
-  Slot,
   clock,
   fixed,
   modelLabel,
   number,
   sizeGb,
 } from "./ui";
-import { Dashboard } from "./Dashboard";
-import { Models } from "./Models";
-import { Requests } from "./Requests";
-import { Settings, ApiView } from "./Settings";
+const Dashboard = lazy(() =>
+  import("./Dashboard").then((m) => ({ default: m.Dashboard })),
+);
+const Models = lazy(() =>
+  import("./Models").then((m) => ({ default: m.Models })),
+);
+const Requests = lazy(() =>
+  import("./Requests").then((m) => ({ default: m.Requests })),
+);
+const Settings = lazy(() =>
+  import("./Settings").then((m) => ({ default: m.Settings })),
+);
+const ApiView = lazy(() =>
+  import("./ApiAccess").then((m) => ({ default: m.ApiView })),
+);
 import { operationResult } from "./operation-result";
-import { Diagnostics } from "./Diagnostics";
-import { Playground } from "./Playground";
+const Diagnostics = lazy(() =>
+  import("./Diagnostics").then((m) => ({ default: m.Diagnostics })),
+);
+const Playground = lazy(() =>
+  import("./Playground").then((m) => ({ default: m.Playground })),
+);
 const titles: Record<string, string> = {
   overview: "引擎總覽",
   diagnostics: "引擎診斷",
@@ -113,7 +129,10 @@ const adapters = {
       "codeBlock.showLess": "收合",
       "codeBlock.tabGroup": "程式碼格式",
       "codeBlock.scrollHorizontally": "左右捲動",
+      clickToCopy: "點擊複製",
+      "message.prompt": "訊息內容",
     };
+    if (key === "clickToCopy") return `點擊複製 ${values?.text ?? ""}`.trim();
     if (key === "codeBlock.lineCount") return `${values?.count ?? 0} 行`;
     if (key === "codeBlock.showAll") return `顯示全部 ${values?.count ?? 0} 行`;
     if (key === "codeBlock.scrollRegion")
@@ -152,10 +171,28 @@ export default function App() {
   const loadedModel = engine.status?.models.find((m) => m.loaded);
   const [palette, setPalette] = useState(false),
     [query, setQuery] = useState("");
-  useCommandPaletteShortcut(() => setPalette(true));
-  const liveTps =
-    engine.status?.throughput.live_decode_tps ??
-    (engine.status?.requests.active ? null : undefined);
+  // Focus goes back to whatever opened the palette (button or shortcut).
+  const paletteOpener = useRef<HTMLElement | null>(null);
+  const openPalette = () => {
+    paletteOpener.current =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
+    setPalette(true);
+  };
+  const closePalette = () => {
+    setPalette(false);
+    setQuery("");
+    const opener = paletteOpener.current;
+    paletteOpener.current = null;
+    if (opener?.isConnected) setTimeout(() => opener.focus(), 0);
+    else setTimeout(() => document.getElementById("main-content")?.focus(), 0);
+  };
+  useCommandPaletteShortcut(openPalette);
+  const skipToMain = (event: { preventDefault: () => void }) => {
+    event.preventDefault();
+    document.getElementById("main-content")?.focus();
+  };
   useEffect(() => {
     try {
       localStorage.setItem(
@@ -167,12 +204,8 @@ export default function App() {
     }
   }, [collapsed]);
   useEffect(() => {
-    const active = engine.status?.requests.active ?? 0;
-    document.title =
-      active > 0 && liveTps
-        ? `▶ ${number(liveTps)} tok/s · 雲樞`
-        : `${titles[page]} · 雲樞 Yunshu`;
-  }, [engine.status, liveTps, page]);
+    document.title = tabTitle(engine.status, titles[page]);
+  }, [engine.status, page]);
   const commands: CommandPaletteItem[] = [
     ...Object.entries(titles).map(([key, title]) => ({
       id: "go:" + key,
@@ -269,6 +302,9 @@ export default function App() {
   return (
     <YunUIProvider adapters={adapters}>
       <div className="relative h-dvh overflow-hidden bg-(--bg-window)">
+        <a href="#main-content" className="skip-link" onClick={skipToMain}>
+          跳到主要內容
+        </a>
         <Sidebar
           appName="Yunshu"
           ariaLabel="控制台導覽"
@@ -332,9 +368,9 @@ export default function App() {
               <Button
                 variant="outline"
                 className="mb-3 h-auto rounded-[20px] bg-(--bg-card) w-full flex-col items-start gap-0 px-3 py-2.5 text-left font-normal hover:bg-(--bg-elevated)"
-                aria-label="模型庫"
                 onClick={() => navigate("models")}
               >
+                <span className="sr-only">開啟模型庫，</span>
                 <span className="mb-1 flex items-center gap-2 text-xs text-muted-foreground">
                   <StatusIndicator
                     status={
@@ -368,7 +404,6 @@ export default function App() {
               <Button
                 variant="outline"
                 className={`h-auto rounded-[20px] bg-(--bg-card) w-full justify-start gap-3 px-3 py-2.5 text-left font-normal hover:bg-(--bg-elevated) ${page === "settings" ? "bg-(--bg-elevated)" : ""}`}
-                aria-label="設定"
                 aria-current={page === "settings" ? "page" : undefined}
                 onClick={() => navigate("settings")}
               >
@@ -377,6 +412,7 @@ export default function App() {
                   className="shrink-0 text-muted-foreground"
                 />
                 <span className="min-w-0 flex-1">
+                  <span className="sr-only">開啟設定，</span>
                   <span className="block truncate text-sm font-medium">
                     {(() => {
                       try {
@@ -396,7 +432,7 @@ export default function App() {
             </>
           }
         />
-        <main
+        <div
           className={`flex h-dvh min-w-0 flex-col transition-[padding] duration-150 ease-in-out ${collapsed ? "lg:pl-0" : "lg:pl-64"}`}
         >
           <header className="sticky top-0 z-30 flex shrink-0 items-center gap-4 px-4 pt-4 lg:px-6">
@@ -451,51 +487,17 @@ export default function App() {
               </BreadcrumbList>
             </Breadcrumb>
             <div className="ml-auto flex shrink-0 items-center gap-1.5">
-              {engine.phase === "online" && engine.status && (
-                <span className="card hidden items-center gap-3 rounded-full px-3 py-1.5 text-xs text-muted-foreground md:flex">
-                  <span>
-                    <Slot ch={3} align="right" className="text-foreground">
-                      {number(engine.status.requests.active, 0)}
-                    </Slot>{" "}
-                    req
-                  </span>
-                  <span>
-                    <Slot ch={6} align="right" className="text-foreground">
-                      {fixed(
-                        engine.status.throughput.live_decode_tps ??
-                          engine.status.throughput.mean_decode_tps,
-                      )}
-                    </Slot>{" "}
-                    tok/s
-                  </span>
-                </span>
-              )}
+              <LivePill phase={engine.phase} status={engine.status} />
               <Button
                 variant="ghost"
                 type="button"
-                onClick={() => setPalette(true)}
+                onClick={openPalette}
                 className="card hidden items-center gap-1.5 rounded-full px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground sm:inline-flex"
               >
                 <Search size={13} />
                 搜尋
                 <Kbd>⌘K</Kbd>
               </Button>
-              <StatusIndicator
-                className="card hidden rounded-full px-3 py-1.5 text-xs text-muted-foreground sm:inline-flex"
-                status={
-                  engine.phase === "online"
-                    ? "online"
-                    : engine.phase === "connecting"
-                      ? "away"
-                      : "offline"
-                }
-              >
-                {engine.phase === "online"
-                  ? "已連線"
-                  : engine.phase === "connecting"
-                    ? "連線中"
-                    : "未連線"}
-              </StatusIndicator>
               {/* YunUI ThemeToggle is next-themes backed; the console owns its
                   theme state (Settings shares it), so keep a pill IconButton. */}
               <IconButton
@@ -506,218 +508,225 @@ export default function App() {
               />
             </div>
           </header>
-          {(busy || notice) && (
-            <div className="mx-auto w-full max-w-7xl shrink-0 space-y-2 px-4 pt-4 lg:px-6">
-              {busy && (
-                <div role="status">
-                  <Banner
-                    tone="neutral"
-                    icon={<Spinner size="sm" />}
-                    title={`${
-                      busy.startsWith("load:")
-                        ? "正在載入模型"
-                        : busy.startsWith("unload:")
-                          ? "正在卸載模型"
-                          : busy.startsWith("warmup:")
-                            ? "正在預熱模型"
-                            : busy.startsWith("pull:")
-                              ? "正在下載模型（後端尚未提供進度）"
-                              : busy.startsWith("copy:")
-                                ? "正在建立模型別名"
-                                : busy.startsWith("delete:")
-                                  ? "正在刪除模型"
-                                  : "正在取消請求"
-                    }… 等待服務回應。`}
-                  />
-                </div>
-              )}
-              {notice && (
-                <div role={notice.error ? "alert" : "status"}>
-                  <Banner
-                    tone={notice.error ? "critical" : "info"}
-                    title={notice.text}
-                    dismissible
-                    dismissLabel="關閉操作訊息"
-                    onDismiss={() => setNotice(null)}
-                  />
-                </div>
-              )}
-            </div>
-          )}
-          <div key={revision} className="flex min-h-0 flex-1 flex-col">
-            {
-              <div
-                className={
-                  engine.phase === "online"
-                    ? "hidden"
-                    : "mx-auto w-full max-w-7xl shrink-0 px-4 pt-4 lg:px-6"
-                }
-              >
-                <ConnectionState
-                  engine={engine}
-                  configure={() => navigate("settings")}
-                />
-              </div>
-            }
-            {page === "playground" ? (
-              <Playground
-                connection={connection}
-                engine={engine}
-                initialModel={testModel}
-              />
-            ) : (
-              <div className="relative min-h-0 flex-1 overflow-y-auto p-4 pb-6 lg:p-6">
-                <div className="mx-auto w-full max-w-7xl">
-                  {page === "diagnostics" && (
-                    <Diagnostics connection={connection} engine={engine} />
-                  )}
-                  {page === "overview" && (
-                    <Dashboard engine={engine} navigate={navigate} />
-                  )}
-                  {page === "models" && (
-                    <Models
-                      engine={engine}
-                      connection={connection}
-                      perform={perform}
-                      busy={busy}
-                      selected={sub}
-                      open={(id) => navigate("models", id)}
-                      test={(id) => {
-                        setTestModel(id);
-                        navigate("playground");
-                      }}
-                    />
-                  )}
-                  {page === "requests" && (
-                    <Requests
-                      engine={engine}
-                      connection={connection}
-                      perform={perform}
-                      busy={busy}
-                    />
-                  )}
-                  {page === "settings" && (
-                    <Settings
-                      connection={connection}
-                      save={save}
-                      dark={dark}
-                      setDark={setDark}
-                      disabled={!!busy}
-                      engine={engine}
-                      perform={perform}
-                    />
-                  )}
-                  {page === "api" && (
-                    <ApiView connection={connection} engine={engine} />
-                  )}
-                </div>
-              </div>
-            )}
-          </div>
-          <StatusPillBar
-            ariaLabel="最近一筆請求"
-            className="shrink-0 px-4 lg:px-6"
+          <main
+            id="main-content"
+            tabIndex={-1}
+            className="flex min-h-0 flex-1 flex-col outline-none"
           >
-            <StatusPill
-              label={connectionText[engine.phase]}
-              tone={connectionTone[engine.phase]}
-              help={
-                engine.phase === "online" && engine.status?.version
-                  ? `引擎連線正常 · yunshu ${engine.status.version}`
-                  : connectionHelp[engine.phase]
-              }
-            />
-            {/* Every pill is always present with a reserved value slot, so a new
-                request changes digits, never the number or width of the pills. */}
-            {engine.phase === "online" && (
-              <>
-                <StatusPill
-                  label="TTFT"
-                  value={
-                    last?.ttft_ms != null
-                      ? `${number(last.ttft_ms, 0)} ms`
-                      : "—"
-                  }
-                  valueMinCh={9}
-                  help={last ? lastHelp(last, "首 token 延遲") : noRequestHelp}
-                  dot={false}
-                />
-                <StatusPill
-                  label="Decode"
-                  value={
-                    last?.decode_tps != null
-                      ? `${fixed(last.decode_tps)} tok/s`
-                      : "—"
-                  }
-                  valueMinCh={13}
-                  help={last ? lastHelp(last, "解碼速度") : noRequestHelp}
-                  dot={false}
-                />
-                <StatusPill
-                  label="Prefill"
-                  value={
-                    last?.prefill_tps != null
-                      ? `${number(last.prefill_tps, 0)} tok/s`
-                      : "—"
-                  }
-                  valueMinCh={13}
-                  help={last ? lastHelp(last, "預填速度") : noRequestHelp}
-                  dot={false}
-                />
-                <StatusPill
-                  label="快取"
-                  value={
-                    last && last.prompt_tokens > 0
-                      ? `${number(last.cached_tokens, 0)} / ${number(last.prompt_tokens, 0)}`
-                      : "—"
-                  }
-                  valueMinCh={17}
-                  help={
-                    last
-                      ? lastHelp(
-                          last,
-                          "命中前綴快取的 token 數 / 輸入 token 數",
-                        )
-                      : noRequestHelp
-                  }
-                  dot={false}
-                />
-                <StatusPill
-                  label="推測"
-                  value={
-                    last?.speculative?.mode
-                      ? `${String(last.speculative.mode).toUpperCase()}${
-                          last.speculative.acceptance_rate != null
-                            ? ` 接受 ${number(last.speculative.acceptance_rate * 100, 0)}%`
-                            : ""
-                        }`
-                      : "—"
-                  }
-                  valueMinCh={14}
-                  tone={last?.speculative?.mode ? "info" : "neutral"}
-                  help={
-                    last?.speculative?.mode
-                      ? lastHelp(
-                          last,
-                          `推測解碼${
-                            last.speculative.rounds && last.completion_tokens
-                              ? ` · 每輪 ${number(last.completion_tokens / last.speculative.rounds, 2)} tok`
-                              : ""
-                          }`,
-                        )
-                      : "最近一筆請求沒有使用推測解碼。"
-                  }
-                />
-              </>
+            {(busy || notice) && (
+              <div className="mx-auto w-full max-w-7xl shrink-0 space-y-2 px-4 pt-4 lg:px-6">
+                {busy && (
+                  <div role="status">
+                    <Banner
+                      tone="neutral"
+                      icon={<Spinner size="sm" />}
+                      title={`${
+                        busy.startsWith("load:")
+                          ? "正在載入模型"
+                          : busy.startsWith("unload:")
+                            ? "正在卸載模型"
+                            : busy.startsWith("warmup:")
+                              ? "正在預熱模型"
+                              : busy.startsWith("pull:")
+                                ? "正在下載模型（後端尚未提供進度）"
+                                : busy.startsWith("copy:")
+                                  ? "正在建立模型別名"
+                                  : busy.startsWith("delete:")
+                                    ? "正在刪除模型"
+                                    : "正在取消請求"
+                      }… 等待服務回應。`}
+                    />
+                  </div>
+                )}
+                {notice && (
+                  <div role={notice.error ? "alert" : "status"}>
+                    <Banner
+                      tone={notice.error ? "critical" : "info"}
+                      title={notice.text}
+                      dismissible
+                      dismissLabel="關閉操作訊息"
+                      onDismiss={() => setNotice(null)}
+                    />
+                  </div>
+                )}
+              </div>
             )}
-          </StatusPillBar>
-        </main>
+            <div key={revision} className="flex min-h-0 flex-1 flex-col">
+              {
+                <div
+                  className={
+                    engine.phase === "online"
+                      ? "hidden"
+                      : "mx-auto w-full max-w-7xl shrink-0 px-4 pt-4 lg:px-6"
+                  }
+                >
+                  <ConnectionState
+                    engine={engine}
+                    configure={() => navigate("settings")}
+                  />
+                </div>
+              }
+              <Suspense fallback={<PageFallback />}>
+                {page === "playground" ? (
+                  <Playground
+                    connection={connection}
+                    engine={engine}
+                    initialModel={testModel}
+                  />
+                ) : (
+                  <div className="relative min-h-0 flex-1 overflow-y-auto p-4 pb-6 lg:p-6">
+                    <div className="mx-auto w-full max-w-7xl">
+                      {page === "diagnostics" && (
+                        <Diagnostics connection={connection} engine={engine} />
+                      )}
+                      {page === "overview" && (
+                        <Dashboard engine={engine} navigate={navigate} />
+                      )}
+                      {page === "models" && (
+                        <Models
+                          engine={engine}
+                          connection={connection}
+                          perform={perform}
+                          busy={busy}
+                          selected={sub}
+                          open={(id) => navigate("models", id)}
+                          test={(id) => {
+                            setTestModel(id);
+                            navigate("playground");
+                          }}
+                        />
+                      )}
+                      {page === "requests" && (
+                        <Requests
+                          engine={engine}
+                          connection={connection}
+                          perform={perform}
+                          busy={busy}
+                        />
+                      )}
+                      {page === "settings" && (
+                        <Settings
+                          connection={connection}
+                          save={save}
+                          dark={dark}
+                          setDark={setDark}
+                          disabled={!!busy}
+                          engine={engine}
+                          perform={perform}
+                        />
+                      )}
+                      {page === "api" && (
+                        <ApiView connection={connection} engine={engine} />
+                      )}
+                    </div>
+                  </div>
+                )}
+              </Suspense>
+            </div>
+          </main>
+          <footer>
+            <StatusPillBar
+              ariaLabel="最近一筆請求"
+              className="shrink-0 px-4 lg:px-6"
+            >
+              <StatusPill
+                label={connectionText[engine.phase]}
+                tone={connectionTone[engine.phase]}
+                help={
+                  engine.phase === "online" && engine.status?.version
+                    ? `引擎連線正常 · yunshu ${engine.status.version}`
+                    : connectionHelp[engine.phase]
+                }
+              />
+              <li className="text-xs text-muted-foreground">最近一筆</li>
+              {/* Every pill is always present with a reserved value slot, so a new
+                request changes digits, never the number or width of the pills. */}
+              {engine.phase === "online" && (
+                <>
+                  <StatusPill
+                    label="TTFT"
+                    value={
+                      last?.ttft_ms != null
+                        ? `${number(last.ttft_ms, 0)} ms`
+                        : "—"
+                    }
+                    valueMinCh={9}
+                    help={
+                      last ? lastHelp(last, "首 token 延遲") : noRequestHelp
+                    }
+                    dot={false}
+                  />
+                  <StatusPill
+                    label="解碼"
+                    value={
+                      last?.decode_tps != null
+                        ? `${fixed(last.decode_tps)} tok/s`
+                        : "—"
+                    }
+                    valueMinCh={13}
+                    help={last ? lastHelp(last, "解碼速度") : noRequestHelp}
+                    dot={false}
+                  />
+                  <StatusPill
+                    label="預填"
+                    value={
+                      last?.prefill_tps != null
+                        ? `${number(last.prefill_tps, 0)} tok/s`
+                        : "—"
+                    }
+                    valueMinCh={13}
+                    help={last ? lastHelp(last, "預填速度") : noRequestHelp}
+                    dot={false}
+                  />
+                  <StatusPill
+                    label="前綴命中"
+                    value={
+                      last && last.prompt_tokens > 0
+                        ? `${number(last.cached_tokens, 0)} / ${number(last.prompt_tokens, 0)}`
+                        : "—"
+                    }
+                    valueMinCh={17}
+                    help={
+                      last
+                        ? lastHelp(last, "命中前綴的 token 數 / 輸入 token 數")
+                        : noRequestHelp
+                    }
+                    dot={false}
+                  />
+                  <StatusPill
+                    label="推測解碼"
+                    value={
+                      last?.speculative?.mode
+                        ? `${String(last.speculative.mode).toUpperCase()}${
+                            last.speculative.acceptance_rate != null
+                              ? ` 接受 ${number(last.speculative.acceptance_rate * 100, 0)}%`
+                              : ""
+                          }`
+                        : "—"
+                    }
+                    valueMinCh={14}
+                    tone={last?.speculative?.mode ? "info" : "neutral"}
+                    help={
+                      last?.speculative?.mode
+                        ? lastHelp(
+                            last,
+                            `推測解碼${
+                              last.speculative.rounds && last.completion_tokens
+                                ? ` · 每輪 ${number(last.completion_tokens / last.speculative.rounds, 2)} tok`
+                                : ""
+                            }`,
+                          )
+                        : "最近一筆請求沒有使用推測解碼。"
+                    }
+                  />
+                </>
+              )}
+            </StatusPillBar>
+          </footer>
+        </div>
         <CommandPalette
           open={palette}
-          onClose={() => {
-            setPalette(false);
-            setQuery("");
-          }}
+          onClose={closePalette}
           query={query}
           onQueryChange={setQuery}
           items={shown}
@@ -727,6 +736,17 @@ export default function App() {
         />
       </div>
     </YunUIProvider>
+  );
+}
+
+/** Holds the page area while a route chunk loads; same box as a page, no spinner. */
+function PageFallback() {
+  return (
+    <div
+      className="min-h-0 flex-1"
+      aria-busy="true"
+      data-testid="page-loading"
+    />
   );
 }
 

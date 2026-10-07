@@ -44,9 +44,56 @@ output {
   font-variant-numeric: tabular-nums;
 }
 
-/* Monospace is always medium weight (YunDesign), unless a utility says otherwise. */
-@layer base {
-  .font-mono {
-    font-weight: 500;
-  }
+/*
+ * Type scale (YunDesign): the whole console uses eight styles.
+ *   12/400  caption          13/400  body            13/500  label, button
+ *   14/600  section heading  22/600  page title/stat 12/400 mono  code, ids
+ * Wrapper classes (text-sm, font-medium, text-3xl ...) cannot add a ninth.
+ */
+:where(.font-mono, code, kbd, samp, pre, pre *) {
+  font-size: 12px;
+  font-weight: 400;
+}
+[data-yunui-density="compact"] .nav-section,
+.text-xs.font-medium {
+  font-weight: 400;
+}
+.nav-item,
+.btn,
+.nav-tab {
+  font-size: 13px;
+  font-weight: 500;
+}
+[data-yunui-density="compact"] .heading-xl,
+.text-3xl {
+  font-size: 22px;
+}
+.text-base.font-semibold,
+.text-lg.font-semibold {
+  font-size: 14px;
+}
+
+/* Skip link: first in the tab order, visible only while focused. */
+.skip-link {
+  position: fixed;
+  left: 12px;
+  top: 12px;
+  z-index: 100;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: var(--bg-card);
+  color: var(--text-primary);
+  border: 1px solid var(--border-hairline);
+  font-size: 13px;
+  font-weight: 500;
+  transform: translateY(-200%);
+}
+.skip-link:focus-visible {
+  transform: none;
+}
+
+/* A visible keyboard ring that wrapper classes (pill buttons, cards) cannot remove. */
+:where(a, button, input, textarea, select, summary, [role="button"], [tabindex]):focus-visible {
+  outline: 2px solid var(--text-primary);
+  outline-offset: 2px;
 }
