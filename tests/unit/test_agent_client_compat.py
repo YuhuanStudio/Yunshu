@@ -1283,3 +1283,59 @@ def test_invalid_client_tool_arguments_end_in_response_failed(kind, args):
     assert ev[-1]["response"]["error"]["code"] == "server_error"
     assert r._get_stored_response(ev[-1]["response"]["id"])["status"] == "failed"
     TypeAdapter(ResponseStreamEvent).validate_python(ev[-1])
+
+
+@pytest.mark.parametrize("as_bytes", [False, True])
+def test_continuous_usage_survives_keepalive_child_tasks(as_bytes):
+    from yunshu_gateway.continuous_usage import update_usage, with_continuous_usage
+    from yunshu_gateway.routers.chat import ChatCompletionRequest
+    from yunshu_gateway.streaming import format_openai_chunk
+
+    async def next_chunk(q, count):
+        update_usage(q, 7, count)
+        value = format_openai_chunk("id", "local", "x")
+        return value.encode() if as_bytes else value
+
+    @with_continuous_usage
+    async def stream(req):
+        for count in (1, 2):
+            yield await asyncio.create_task(next_chunk(req, count))
+
+    async def run():
+        q = ChatCompletionRequest(
+            model="local",
+            messages=[{"role": "user", "content": "Hi"}],
+            stream=True,
+            stream_options={"include_usage": True, "continuous_usage_stats": True},
+        )
+        chunks = [chunk async for chunk in stream(q)]
+        return "".join(c.decode() if isinstance(c, bytes) else c for c in chunks)
+
+    ev = events(asyncio.run(run()))
+    assert [e["usage"]["completion_tokens"] for e in ev] == [1, 2]
+
+
+def test_vlm_download_input_error_returns_400(monkeypatch):
+    from yunshu_engine.vlm_engine import VLMEngine
+    from yunshu_gateway.routers import chat
+
+    engine = VLMEngine.__new__(VLMEngine)
+    engine._tokenizer = None
+    engine._processor = None
+    engine._config = {"max_position_embeddings": 4096}
+
+    async def generate(**kwargs):
+        raise ValueError("SSRF blocked: private video URL")
+
+    monkeypatch.setattr(engine, "generate", generate)
+    monkeypatch.setattr(chat, "get_engine", lambda: engine)
+    monkeypatch.setattr(chat, "get_model_manager", lambda: None)
+    monkeypatch.setattr(chat, "_apply_token_budget", lambda *a: None)
+    q = chat.ChatCompletionRequest(
+        model="local", messages=[{"role": "user", "content": "video"}]
+    )
+    response = asyncio.run(
+        chat._handle_vlm_chat(q, [{"role": "user", "content": "video"}], None)
+    )
+    assert response.status_code == 400
+    assert json.loads(response.body)["error"]["type"] == "invalid_request_error"

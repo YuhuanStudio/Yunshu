@@ -2742,8 +2742,15 @@ async def _handle_vlm_chat(
             )
         if err is not None:
             return JSONResponse(
-                status_code=500,
-                content={"error": {"message": err, "type": "inference_error"}},
+                status_code=400 if err.startswith("input_error:") else 500,
+                content={
+                    "error": {
+                        "message": err,
+                        "type": "invalid_request_error"
+                        if err.startswith("input_error:")
+                        else "inference_error",
+                    }
+                },
             )
 
     if json_schema is not None:

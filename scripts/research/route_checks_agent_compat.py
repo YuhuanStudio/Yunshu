@@ -304,7 +304,7 @@ def documents(c: Ctx):
             body = {
                 "model": c.model,
                 "max_tokens": 128,
-                "enable_thinking": False,
+                "thinking": {"type": "disabled"},
                 "temperature": 0,
                 "messages": [
                     {
@@ -428,7 +428,7 @@ def anthropic_tools(c: Ctx):
             json={
                 "model": c.model,
                 "max_tokens": 64,
-                "enable_thinking": False,
+                "thinking": {"type": "disabled"},
                 "messages": [
                     {"role": "user", "content": instruction},
                     {"role": "assistant", "content": body["content"]},
