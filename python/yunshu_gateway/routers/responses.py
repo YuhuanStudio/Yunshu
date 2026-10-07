@@ -1483,6 +1483,9 @@ async def create_response(req: ResponsesRequest, request: Request):
     from ..model_guards import reject_embedding_only
 
     reject_embedding_only(engine, req.model)
+    from ..model_guards import validate_forced_tools
+
+    validate_forced_tools(engine, req.tools, req.tool_choice, req.parallel_tool_calls)
 
     # Reject prompts over the context window (400) or too large to prefill (413),
     # before generation (see chat.py).

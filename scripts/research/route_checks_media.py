@@ -537,6 +537,21 @@ def _embed(c: Ctx):
     expect(s.status_code == 200, f"score {s.status_code} {s.text[:150]}")
     sc = [x["score"] for x in s.json()["data"]]
     expect(sc[0] > sc[1], f"score {sc}")
+    alias = c.req(
+        "POST",
+        "/v1/score",
+        json={
+            "model": c.model,
+            "queries": "a cat",
+            "documents": ["a feline", "a car"],
+            "instruction": "ignored for bi-encoder",
+        },
+    )
+    expect(
+        alias.status_code == 200 and len(alias.json().get("data", [])) == 2,
+        f"score aliases: {alias.status_code} {alias.text[:160]}",
+    )
+
     # rerank: the relevant document first
     docs = [STOCK, KITTEN, "Rain is expected tomorrow."]
     r = c.req(

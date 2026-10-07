@@ -1,0 +1,156 @@
+"""Ollama native-model lifecycle, with no network or model execution."""
+
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+
+import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+from yunshu_gateway import ollama_models as om
+from yunshu_gateway.routers import ollama
+
+
+@pytest.fixture
+def managed(monkeypatch, tmp_path):
+    source = tmp_path / "base"
+    source.mkdir()
+    (source / "config.json").write_text("{}")
+    (source / "model.safetensors").write_bytes(b"fixture")
+    entries = {
+        "base": SimpleNamespace(
+            model_id="base",
+            model_path=str(source),
+            estimated_bytes=7,
+            model_type="llm",
+            is_loaded=False,
+        )
+    }
+
+    def register(name, path, **kw):
+        entries[name] = SimpleNamespace(
+            model_id=name,
+            model_path=path,
+            estimated_bytes=kw.get("estimated_bytes", 7),
+            model_type=kw.get("model_type", "llm"),
+            is_loaded=False,
+        )
+
+    manager = SimpleNamespace(
+        get_entry=entries.get,
+        register_model=register,
+        list_entries=lambda: list(entries.values()),
+        unregister_model=lambda name: entries.pop(name, None),
+        unload_model=AsyncMock(return_value=False),
+    )
+    monkeypatch.setattr(om, "get_model_manager", lambda: manager)
+    monkeypatch.setattr(om.paths, "models_dir", lambda: tmp_path)
+    monkeypatch.setattr(
+        "yunshu_gateway.routers.models._check_permission", lambda *a: None
+    )
+    app = FastAPI()
+    app.include_router(ollama.router)
+    return TestClient(app), entries, manager
+
+
+def test_copy_create_pull_delete_shapes(managed):
+    client, entries, _ = managed
+    r = client.post(
+        "/api/copy", json={"source": "base", "destination": "user/copy:latest"}
+    )
+    assert r.status_code == 200 and r.content == b""
+    assert om.model_link("user/copy:latest").is_symlink()
+    assert client.post(
+        "/api/pull", json={"model": "user/copy:latest", "stream": False}
+    ).json() == {"status": "success"}
+    r = client.post("/api/create", json={"model": "second", "from": "base"})
+    assert r.status_code == 200 and r.json() == {"status": "success"}
+    assert r.headers["content-type"].startswith("application/x-ndjson")
+    assert (
+        client.request(
+            "DELETE", "/api/delete", json={"model": "user/copy:latest"}
+        ).status_code
+        == 200
+    )
+    assert "user/copy:latest" not in entries
+    assert (om.paths.models_dir() / "base/model.safetensors").exists()
+
+
+def test_delete_checkpoint_refuses_dangling_copy(managed):
+    client, _, _ = managed
+    client.post("/api/copy", json={"source": "base", "destination": "copy"})
+    assert (
+        client.request("DELETE", "/api/delete", json={"model": "base"}).status_code
+        == 409
+    )
+    client.request("DELETE", "/api/delete", json={"model": "copy"})
+    assert (
+        client.request("DELETE", "/api/delete", json={"model": "base"}).status_code
+        == 200
+    )
+    assert not (om.paths.models_dir() / "base").exists()
+
+
+def test_busy_copy_cannot_be_deleted(managed):
+    client, entries, manager = managed
+    client.post("/api/copy", json={"source": "base", "destination": "copy"})
+    entries["copy"].is_loaded = True
+    r = client.request("DELETE", "/api/delete", json={"model": "copy"})
+    assert r.status_code == 409
+    assert "copy" in entries and om.model_link("copy").exists()
+    manager.unload_model.assert_awaited_once_with("copy")
+
+
+def test_pull_native_repository(managed, monkeypatch):
+    client, entries, _ = managed
+    monkeypatch.setattr(
+        "huggingface_hub.snapshot_download", lambda **kw: om.paths.models_dir() / "base"
+    )
+    r = client.post("/api/pull", json={"model": "org/native", "stream": False})
+    assert r.status_code == 200 and r.json() == {"status": "success"}
+    assert entries["org/native"].model_path == str(om.model_link("org/native"))
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"model": "new", "from": "base", "system": "ignored"},
+        {"model": "new", "files": {"x": "sha256:x"}},
+    ],
+)
+def test_create_unsupported_not_silently_ignored(managed, body):
+    client, entries, _ = managed
+    assert client.post("/api/create", json=body).status_code == 400
+    assert "new" not in entries
+
+
+def test_errors_are_ollama_shape(managed):
+    client, _, _ = managed
+    for path, body in [
+        ("/api/pull", {"model": "gguf:latest"}),
+        ("/api/copy", {"source": "base", "destination": "../escape"}),
+        ("/api/copy", {"source": "missing", "destination": "new"}),
+    ]:
+        r = client.post(path, json=body)
+        assert r.status_code in (400, 404) and isinstance(r.json()["error"], str)
+
+
+def test_persistent_namespace_names_are_discovered(managed):
+    from yunshu_engine.model_manager import ModelManager
+
+    client, entries, _ = managed
+    client.post("/api/copy", json={"source": "base", "destination": "user/copy:latest"})
+    found = {}
+    manager = object.__new__(ModelManager)
+    manager._entries = {}
+
+    def register(model_id, **kw):
+        found[model_id] = kw
+
+    manager.register_model = register
+    manager.discover_models(str(om.paths.models_dir()))
+    assert "user/copy:latest" in found
+    assert (
+        found["user/copy:latest"]["model_path"]
+        == entries["user/copy:latest"].model_path
+    )

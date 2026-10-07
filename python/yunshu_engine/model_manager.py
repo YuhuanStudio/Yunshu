@@ -1342,6 +1342,10 @@ class ModelManager:
                 continue
 
             model_id = subdir.name
+            if model_id.startswith(".ollama--") and subdir.is_symlink():
+                from urllib.parse import unquote
+
+                model_id = unquote(model_id.removeprefix(".ollama--"))
 
             # Skip if already registered and loaded/loading.
             # Loading entries must not be overwritten — would orphan loading events.

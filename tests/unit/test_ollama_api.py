@@ -283,5 +283,5 @@ def test_errors_use_ollama_shape(client):
     assert r.status_code == 400 and r.json()["error"] == "bad request here"
     assert client.post("/api/chat", content=b"{").status_code == 400
     assert client.post("/api/chat", json={"messages": []}).status_code == 400
-    assert client.post("/api/pull", json={"name": "x"}).status_code == 501
-    assert client.delete("/api/delete").status_code == 501
+    assert client.post("/api/pull", json={"name": "x"}).status_code == 400
+    assert client.delete("/api/delete").status_code == 400

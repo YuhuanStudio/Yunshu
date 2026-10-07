@@ -61,11 +61,7 @@ def check(name: str, *routes: str, served: bool, needs: str = "main"):
 # Routes that have no real-server check, each with the reason. Keep this list short: a route
 # belongs here only when no server run (with the four small checkpoints) can exercise it.
 EXEMPT: dict[str, str] = {
-    "POST /api/pull": "documented 501 by design: models are managed with `yunshu pull`",
     "POST /api/push": "documented 501 by design: nothing to push to",
-    "POST /api/create": "documented 501 by design",
-    "POST /api/copy": "documented 501 by design",
-    "DELETE /api/delete": "documented 501 by design: remove model files from the models directory",
 }
 
 
@@ -2138,7 +2134,7 @@ def _ollama_unsupported(c: Ctx):
         ok_or_absent(c, "POST", path, family="ollama", json=body, timeout=120)
     # model management verbs: an Ollama-shaped answer or a clear refusal, never a hang or a 500
     for method, path, body in (
-        ("POST", "/api/pull", {"model": "no/such-model-xyz", "stream": False}),
+        ("POST", "/api/pull", {"model": "unsupported-gguf:latest", "stream": False}),
         ("POST", "/api/push", {"model": "no/such-model-xyz", "stream": False}),
         (
             "POST",
@@ -2153,9 +2149,8 @@ def _ollama_unsupported(c: Ctx):
         ("DELETE", "/api/delete", {"model": "no-such-model-xyz"}),
     ):
         r = c.req(method, path, json=body, timeout=120)
-        # documented: models are managed with `yunshu pull` / `yunshu model`, not over this API
         expect(
-            r.status_code == 501 and "not supported" in r.text,
+            r.status_code in (400, 401, 403, 404, 501),
             f"{method} {path}: {r.status_code} {r.text[:100]}",
         )
         err_ok(r, "ollama")
@@ -2164,3 +2159,135 @@ def _ollama_unsupported(c: Ctx):
 from route_checks_vllm import (
     _chat_validation,  # noqa: E402,F401  registers the vLLM-derived validation checks
 )
+
+
+@check(
+    "ollama_management",
+    "POST /api/pull",
+    "POST /api/copy",
+    "POST /api/create",
+    "DELETE /api/delete",
+    needs="multi",
+    served=True,
+)
+def _ollama_management(c: Ctx):
+    source = c.mm_models[0]
+    copy, created = "routes-copy-native", "routes-created-native"
+    try:
+        r = c.req("POST", "/api/pull", json={"model": source, "stream": False})
+        expect(
+            r.status_code == 200 and r.json() == {"status": "success"},
+            f"pull existing: {r.text}",
+        )
+        r = c.req("POST", "/api/copy", json={"source": source, "destination": copy})
+        expect(r.status_code == 200 and not r.content, f"copy: {r.text}")
+        r = c.req("POST", "/api/show", json={"model": copy})
+        expect(r.status_code == 200 and r.json().get("details"), f"show copy: {r.text}")
+        r = c.req("POST", "/api/create", json={"model": created, "from": source})
+        expect(
+            r.status_code == 200 and r.json() == {"status": "success"},
+            f"create: {r.text}",
+        )
+        response = c.oa.chat.completions.create(
+            model=copy, messages=[{"role": "user", "content": "Hi"}], max_tokens=4
+        )
+        expect(response.choices, "copied model cannot serve")
+    finally:
+        for name in (copy, created):
+            r = c.req("DELETE", "/api/delete", json={"model": name}, timeout=300)
+            expect(
+                r.status_code == 200 and not r.content,
+                f"delete {name}: {r.status_code} {r.text}",
+            )
+    ids = [m["name"] for m in c.req("GET", "/api/tags").json()["models"]]
+    expect(
+        copy not in ids and created not in ids and source in ids, f"delete names: {ids}"
+    )
+
+
+@check(
+    "realtime_lazy_load", "WS /v1/realtime", "WS /realtime", needs="multi", served=True
+)
+def _realtime_lazy_load(c: Ctx):
+    model = c.mm_models[0]
+    for path in ("/v1/realtime", "/realtime"):
+        # Load then unload so every socket proves lazy loading from an unloaded state.
+        r = c.req("POST", "/v1/models/load", json={"model": model}, timeout=300)
+        expect(r.status_code == 200, f"load before unload: {r.text}")
+        r = c.req("POST", "/v1/models/unload/" + model, timeout=300)
+        expect(r.status_code == 200, f"unload before realtime: {r.text}")
+        expect(
+            model not in [m["name"] for m in c.req("GET", "/api/ps").json()["models"]],
+            "ps lists unloaded model",
+        )
+        with c.ws(path + f"?model={model}") as ws:
+            _, events = _realtime_text_turn(ws)
+            expect(
+                not any(e["type"] == "error" for e in events),
+                f"lazy realtime: {events[-1]}",
+            )
+            expect(
+                events[-1]["type"] == "response.done", "lazy realtime did not finish"
+            )
+        expect(
+            model in [m["name"] for m in c.req("GET", "/api/ps").json()["models"]],
+            "ps omits realtime-loaded model",
+        )
+
+
+@check(
+    "forced_tool_uncompilable",
+    "POST /v1/chat/completions",
+    "POST /v1/messages",
+    "POST /v1/responses",
+    served=False,
+)
+def _forced_tool_uncompilable(c: Ctx):
+    if c.kind != "text":
+        return
+    schema = {
+        "type": "object",
+        "$defs": {
+            "node": {"type": "object", "properties": {"next": {"$ref": "#/$defs/node"}}}
+        },
+        "properties": {"root": {"$ref": "#/$defs/node"}},
+    }
+    tools = [
+        {"type": "function", "function": {"name": "recursive", "parameters": schema}}
+    ]
+    for stream in (False, True):
+        for path, body in (
+            (
+                "/v1/chat/completions",
+                {
+                    "messages": [{"role": "user", "content": "Call recursive"}],
+                    "tools": tools,
+                    "tool_choice": "required",
+                },
+            ),
+            (
+                "/v1/messages",
+                {
+                    "messages": [{"role": "user", "content": "Call recursive"}],
+                    "max_tokens": 8,
+                    "tools": [{"name": "recursive", "input_schema": schema}],
+                    "tool_choice": {"type": "any"},
+                },
+            ),
+            (
+                "/v1/responses",
+                {
+                    "input": "Call recursive",
+                    "tools": [
+                        {"type": "function", "name": "recursive", "parameters": schema}
+                    ],
+                    "tool_choice": "required",
+                },
+            ),
+        ):
+            r = c.req("POST", path, json={"model": c.model, "stream": stream, **body})
+            expect(
+                r.status_code == 400
+                and "Cannot guarantee forced tool_choice" in r.text,
+                f"forced compilation {path}: {r.status_code} {r.text[:160]}",
+            )

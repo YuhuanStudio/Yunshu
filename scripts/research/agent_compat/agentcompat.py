@@ -28,6 +28,7 @@ import sys
 import threading
 import time
 import urllib.request
+import uuid
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -222,6 +223,16 @@ def run_watched(cmd, tunnel, timeout, **kw):
     return p.returncode, "".join(out)
 
 
+def server_identity_ready(identity: str) -> bool:
+    """The control socket must belong to this queued job, not another lane server."""
+    try:
+        with socket.create_connection(("127.0.0.1", CONTROL_PORT), timeout=2) as c:
+            c.sendall(f"ready {identity}\n".encode())
+            return c.recv(256).decode().strip() == f"ready {identity}"
+    except OSError:
+        return False
+
+
 def with_m3_server(out: Path, tag: str, model: str, minutes: float, work) -> dict:
     """One bounded M3 serve job (<= ~20 min) behind an ssh -L forward; `work(url, tunnel)` runs the M5-side clients."""
     sha = run(
@@ -230,6 +241,7 @@ def with_m3_server(out: Path, tag: str, model: str, minutes: float, work) -> dic
     for p in (SERVER_PORT, CONTROL_PORT, MCP_PORT):
         if not port_free(p):
             return dict(ok=False, why=f"local port {p} is busy")
+    identity = uuid.uuid4().hex
     receipt = out / f"m3_serve_{tag}.jsonl"
     receipt.unlink(missing_ok=True)
     sub = run(
@@ -252,6 +264,8 @@ def with_m3_server(out: Path, tag: str, model: str, minutes: float, work) -> dic
             "--",
             "python",
             "scripts/research/agent_compat/m3_serve.py",
+            "--identity",
+            identity,
             "--model",
             f"{M3_MODELS_DIR}/{model}",
             "--port",
@@ -314,7 +328,11 @@ def with_m3_server(out: Path, tag: str, model: str, minutes: float, work) -> dic
                     **res,
                 )
             with contextlib.suppress(Exception):
-                if urllib.request.urlopen(url + "/v1/models", timeout=3).status == 200:
+                if (
+                    server_identity_ready(identity)
+                    and urllib.request.urlopen(url + "/v1/models", timeout=3).status
+                    == 200
+                ):
                     ready = True
                     break
             time.sleep(5)
@@ -323,9 +341,12 @@ def with_m3_server(out: Path, tag: str, model: str, minutes: float, work) -> dic
         print(f"server ready after {time.time() - t0:.0f}s", flush=True)
         res.update(work(url, tunnel))
     finally:
-        with contextlib.suppress(Exception):
-            with socket.create_connection(("127.0.0.1", CONTROL_PORT), timeout=5) as c:
-                c.sendall(b"stop\n")
+        if ready:
+            with contextlib.suppress(Exception):
+                with socket.create_connection(
+                    ("127.0.0.1", CONTROL_PORT), timeout=5
+                ) as c:
+                    c.sendall(f"stop {identity}\n".encode())
         done = run(
             [str(GPUQ), "wait", "--max-seconds", "300", job], capture_output=True
         ).returncode

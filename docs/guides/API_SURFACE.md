@@ -10,10 +10,10 @@ API). **The Verified column of each row is the evidence, and a row claims no mor
 | `unit` | A test in `tests/unit` with a scripted engine, a fake or `TestClient`: **mock only**, no model ran. |
 | `audit` | A real-model smoke run during the earlier audit (Qwen3-Embedding-0.6B, Qwen3-ASR-1.7B, whisper-large-v3-mlx, Qwen3-TTS, Z-Image-Turbo, GLM-OCR, Qwen3-Omni). No automated job repeats it: it carries no date and is not evidence for today's code. |
 
-The served path of every modality is verified on its own checkpoint (Qwen3-TTS, Qwen3-ASR, GLM-OCR, Z-Image-Turbo, Qwen3-Embedding; allowlisted on the M3). A check that only sees an absent-capability or error answer (a chat model asked for speech) is an error-path check and never counts as coverage: `route_checks.py` declares `served=True/False` per check and the gate needs one served check per route. Exempt (reviewed list): `POST /v1/omni/speech/stream` (Qwen3-Omni, omnismall line), `POST /v1/audio/translations` (Whisper-only), and the five Ollama model-management verbs (documented 501). Realtime is served here by a text turn on a chat model; voice in / out belongs to the omnismall line.
+The served path of every modality is verified on its own checkpoint (Qwen3-TTS, Qwen3-ASR, GLM-OCR, Z-Image-Turbo, Qwen3-Embedding; allowlisted on the M3). A check that only sees an absent-capability or error answer (a chat model asked for speech) is an error-path check and never counts as coverage: `route_checks.py` declares `served=True/False` per check and the gate needs one served check per route. Exempt (reviewed list): `POST /v1/omni/speech/stream` (Qwen3-Omni, omnismall line), `POST /v1/audio/translations` (Whisper-only), and Ollama registry uploads (`/api/push`, documented 501). Realtime is served here by a text turn on a chat model; voice in / out belongs to the omnismall line.
 
 **Route coverage gate.** `tests/unit/test_route_coverage.py` lists every route the gateway registers (websockets included) and fails when one
-has no SERVED check in `scripts/research/route_checks.py` (or a reasoned entry in its `EXEMPT` table: seven today, reviewed by the lead; the gate counts only checks that declare `served=True`). `scripts/dev/m3sweep` (jobs
+has no SERVED check in `scripts/research/route_checks.py` (or a reasoned entry in its `EXEMPT` table: reviewed by the lead; the gate counts only checks that declare `served=True`). `scripts/dev/m3sweep` (jobs
 `routes`, `wire`, `agent`, `units`) fails when a registered route was not verified by a passing check in the same run. Add a route, add a check.
 
 `model` is advisory in single-model mode (`yunshu serve -m`): the loaded model answers under any name
@@ -270,6 +270,38 @@ Z-Image ControlNet through `control_image`, is unchanged.
 | `complete`, `embed`, `tokenize`, `detokenize`, `rerank`, `score`, `classify`, `transcribe`, `speak`, `ocr`, `image`, `image-edit`, `image-variations`, `voices`, `cancel` | kept | Talk to a running server. |
 | `bench roofline`, `latency`, `throughput`, `memory`, `inference`, `eval` | kept | |
 | `image-inpaint`, `image-controlnet`, `image-depth`, `video`, `audio-enhance`, `audio-separate`, `audio-transform`, `voice-pipeline` | removed | Their routes are gone. |
+
+### Native model management and retrieval contracts
+
+Ollama `pull`, `copy`, `create` and `delete` use the Ollama body and response shapes in
+multi-model mode. `pull` accepts Hugging Face native safetensors repositories (or an
+already registered model), with a final `status: success` in JSON or NDJSON. `copy`
+and `create {model, from}` persist a symlink name without duplicating weights. `delete`
+unlinks that name, or removes checkpoint data inside the configured models directory;
+external checkpoint paths are refused. Delete copies before deleting their source.
+`create` rejects custom templates, system/messages, parameters, adapters, blobs and
+quantization; GGUF conversion and Ollama registry downloads/uploads are unsupported.
+These operations use the same administrative authorization as `/v1/models/load`.
+`ps` lists only loaded models even when `/v1/models` omits private state fields.
+Verification: unit regressions and the `ollama_management` real-server check; a real
+run is required before claiming a dated result.
+
+Forced tools are checked before streaming headers. A tool grammar that cannot compile
+(unsupported marker tokenization or recursive references) returns 400 with
+`Cannot guarantee forced tool_choice`; auto retains its existing fallback.
+Realtime `?model=` uses the HTTP lazy loader, including aliases, and emits an error
+and closes on an unknown model or load failure. It never silently selects a different
+model. Verification: unit + `forced_tool_uncompilable` / `realtime_lazy_load` checks.
+
+`score` accepts vLLM's `queries/documents`, `queries/items`, `data_1/data_2` and the
+legacy `text_1/text_2` names. A cross-encoder scores each pair jointly and receives
+`instruction`; `chat_template_kwargs.instruction` takes precedence. A bi-encoder
+ignores scoring instructions, matching [vLLM's score-template contract](https://docs.vllm.ai/en/latest/models/pooling_models/scoring/).
+Other score template kwargs are rejected explicitly. `classify` remains Yunshu's
+label-similarity extension (`input`, `labels`, temperature), rather than vLLM's
+trained classification-head API (`input` or `messages`, no candidate labels,
+`data[].probs/num_classes`). No trained classification head is implemented here;
+clients must not treat its zero-shot scores as those probabilities.
 
 ## Known gaps
 

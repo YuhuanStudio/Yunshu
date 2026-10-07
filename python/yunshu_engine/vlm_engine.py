@@ -2506,6 +2506,11 @@ class VLMEngine:
             tool_recovery_tools=kwargs.get("_tool_recovery_tools"),
         )
 
+    def validate_forced_tools(self, tools, choice, parallel=True):
+        from .tool_call_grammar import validate_forced_tools
+
+        validate_forced_tools(self, tools, choice, parallel)
+
     def _tool_guide(self, spec: dict | None, thinking_open: bool):
         """A ``ToolCallGuide`` for this request's tools (structural-tag constrained
         decoding), or None: no tools, ``YUNSHU_TOOL_GRAMMAR`` off, or a model / tool
@@ -2532,7 +2537,7 @@ class VLMEngine:
                 tool_choice=spec["tool_choice"],
                 parallel=spec["parallel"],
             )
-        grammar = cache[key]
+        grammar = tcg.require_tool_grammar(cache[key], spec["tool_choice"])
         return grammar.guide(thinking_open=thinking_open) if grammar else None
 
     def _generate_vlm_runner_text(
