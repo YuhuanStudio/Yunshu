@@ -21,7 +21,7 @@ from pathlib import Path
 
 import httpx
 
-PORT = 18997
+PORT = 18991  # 18997-18999 are the M3 forwards (agentcompat)
 BASE = f"http://127.0.0.1:{PORT}"
 MODELS = Path(os.environ.get("YUNSHU_TEST_MODELS", "~/.yunshu/models")).expanduser()
 LLM = os.environ.get("YUNSHU_SMOKE_LLM", "Qwen2.5-3B-Instruct-4bit")

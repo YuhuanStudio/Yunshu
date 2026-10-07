@@ -758,7 +758,7 @@ def _thinking_switches(req) -> tuple[bool | None, int | None]:
     th = req.thinking if isinstance(req.thinking, dict) else None
     tc = getattr(req, "tool_choice", None)
     tc = tc if isinstance(tc, dict) else None
-    forced = bool(tc) and tc.get("type") in ("any", "tool")
+    forced = tc is not None and tc.get("type") in ("any", "tool")
     if not th or th.get("type") == "adaptive":
         return (False, None) if forced else (None, None)
     kind = th.get("type")
