@@ -320,13 +320,24 @@ def test_provider_selection(monkeypatch):
         "YUNSHU_BRAVE_API_KEY",
         "YUNSHU_TAVILY_API_KEY",
         "YUNSHU_EXA_API_KEY",
+        "YUNSHU_SERPER_API_KEY",
+        "YUNSHU_PERPLEXITY_API_KEY",
     ):
         monkeypatch.delenv(k, raising=False)
-    assert search.get_provider().name == "ddg_html"
+    assert search.get_provider().name == "metasearch"
+    assert {p.name for p in search.get_provider().providers} == {
+        "ddg_html",
+        "wikipedia",
+        "mwmbl",
+    }
     monkeypatch.setenv("YUNSHU_EXA_API_KEY", "e")
-    assert search.get_provider().name == "exa"
+    assert search.get_provider().name == "metasearch"
+    assert "exa" in {p.name for p in search.get_provider().providers}
     monkeypatch.setenv("YUNSHU_SEARXNG_URL", "http://sx")
-    assert search.get_provider().name == "searxng"  # auto prefers the private option
+    assert search.get_provider().name == "metasearch"
+    assert "searxng" in {
+        p.name for p in search.get_provider().providers
+    }  # configured optional source
     monkeypatch.setenv("YUNSHU_WEB_SEARCH_PROVIDER", "exa")
     assert search.get_provider().name == "exa"
     monkeypatch.setenv("YUNSHU_WEB_SEARCH_PROVIDER", "none")

@@ -111,3 +111,21 @@ async def test_pushdown_and_cache_partition(monkeypatch, tmp_path):
         )
     finally:
         settings.clear_overrides()
+
+
+async def test_ddg_legitimate_empty_is_distinct_from_parser_failure():
+    search.DuckDuckGo._blocked_until = search.DuckDuckGo._next = 0
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda req: httpx.Response(200, text="<p>No results found.</p>")
+        )
+    ) as client:
+        assert await search.DuckDuckGo().search("q", limit=5, client=client) == []
+    search.DuckDuckGo._next = 0
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda req: httpx.Response(200, text="<html>Changed layout</html>")
+        )
+    ) as client:
+        with pytest.raises(search.SearchError, match="layout"):
+            await search.DuckDuckGo().search("q", limit=5, client=client)

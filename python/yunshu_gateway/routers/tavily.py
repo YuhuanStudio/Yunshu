@@ -12,6 +12,7 @@ from pydantic import ValidationError
 
 from yunshu_engine import settings
 from yunshu_gateway.tavily.models import (
+    CompatRequest,
     CrawlRequest,
     ExtractRequest,
     FeedbackRequest,
@@ -24,7 +25,7 @@ from yunshu_gateway.tavily.service import TavilyError, TavilyService
 router = APIRouter(prefix="/tavily", tags=["tavily"])
 TAVILY_COMPAT_DATE = "2026-10-07"
 logger = logging.getLogger(__name__)
-MODELS = {
+MODELS: dict[str, type[CompatRequest]] = {
     "search": SearchRequest,
     "extract": ExtractRequest,
     "crawl": CrawlRequest,
@@ -201,6 +202,8 @@ async def execute(endpoint, body, request):
         model = MODELS[endpoint].model_validate(body)
     except ValidationError as exc:
         # Cross-field/domain errors are 400 in Tavily. Basic type/range validation is 422.
+        if endpoint == "extract" and body.get("urls") in (None, [], ""):
+            raise TavilyError(400, "All URLs failed validation") from exc
         errors = exc.errors(include_context=False)
         if endpoint == "feedback" or any(
             row["type"] == "value_error" for row in errors

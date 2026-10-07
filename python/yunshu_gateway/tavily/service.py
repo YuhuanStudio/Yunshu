@@ -58,6 +58,24 @@ def stamp(start, credits=0, request_id=None):
 def published_date(value):
     if not value:
         return None
+    relative = re.fullmatch(
+        r"(\d+)\s+(second|minute|hour|day|week|month|year)s?\s+ago", value.strip(), re.I
+    )
+    if relative:
+        units = {
+            "second": 1,
+            "minute": 60,
+            "hour": 3600,
+            "day": 86400,
+            "week": 604800,
+            "month": 2592000,
+            "year": 31536000,
+        }
+        return datetime.now(UTC) - timedelta(
+            seconds=int(relative[1]) * units[relative[2].lower()]
+        )
+    if value.lower() in ("today", "yesterday"):
+        return datetime.now(UTC) - timedelta(days=value.lower() == "yesterday")
     try:
         parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     except (ValueError, TypeError):
@@ -240,8 +258,10 @@ class TavilyService:
         timings = {}
         if req.auto_parameters:
             changes = {}
-            if "topic" not in req.model_fields_set and re.search(
-                r"\b(news|latest|today)\b|新聞|最新", req.query, re.I
+            if (
+                not req.country
+                and "topic" not in req.model_fields_set
+                and re.search(r"\b(news|latest|today)\b|新聞|最新", req.query, re.I)
             ):
                 changes["topic"] = "news"
             if "search_depth" not in req.model_fields_set and len(req.query) > 120:
@@ -257,8 +277,9 @@ class TavilyService:
             "safe_search": req.safe_search
             and req.search_depth not in ("fast", "ultra-fast"),
             "time_range": {"d": "day", "w": "week", "m": "month", "y": "year"}.get(
-                req.time_range, req.time_range
-            ),
+                req.time_range or "", req.time_range or ""
+            )
+            or None,
             "start_date": str(lower) if lower else None,
             "end_date": str(upper) if upper else None,
             "provider_timeout": min(1.0, budget),

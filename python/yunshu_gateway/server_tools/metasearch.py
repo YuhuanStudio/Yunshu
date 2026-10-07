@@ -165,10 +165,6 @@ class Metasearch(FallbackChain):
                     rows = await provider.search(
                         provider_query, limit=limit, client=client, **kwargs
                     )
-                if provider.name == "ddg_html" and not rows:
-                    raise SearchError(
-                        "unavailable", "DuckDuckGo returned no parsed results"
-                    )
                 state.successes += 1
                 state.consecutive_failures = 0
                 state.disabled_until = 0
@@ -185,7 +181,9 @@ class Metasearch(FallbackChain):
                 TypeError,
             ) as exc:
                 state.consecutive_failures += 1
-                state.last_error = type(exc).__name__
+                state.last_error = (
+                    exc.code if isinstance(exc, SearchError) else type(exc).__name__
+                )
                 if (
                     state.consecutive_failures >= 3
                     or isinstance(exc, SearchError)

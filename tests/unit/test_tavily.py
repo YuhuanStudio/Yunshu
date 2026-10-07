@@ -541,3 +541,67 @@ async def test_pro_has_serial_subtopic_tool_traces(srv):
     frames = "".join([frame async for frame in srv.stream(created["request_id"])])
     assert "ResearchSubtopic" in frames and "parent_tool_call_id" in frames
     assert srv.research(created["request_id"])["usage"]["credits"] >= 15
+
+
+def test_external_output_schema_refs_are_rejected_before_generation(client, srv):
+    before = len(srv.calls)
+    result = client.post(
+        "/tavily/research",
+        json={
+            "input": "q",
+            "output_schema": {
+                "properties": {"answer": {"$ref": "http://127.0.0.1/private"}}
+            },
+        },
+    )
+    assert result.status_code == 400
+    assert len(srv.calls) == before
+
+
+async def test_cached_explicit_extract_cannot_bypass_automated_robots(monkeypatch):
+    from yunshu_gateway.server_tools.research import fetcher
+    from yunshu_gateway.server_tools.research.cache import PageCache
+
+    cache = PageCache()
+    url = "https://example.org/private"
+    cache.put("tavily::" + url, FetchResult(url, "Private", "cached", "text/html", ""))
+    monkeypatch.setattr(fetcher, "pages", cache)
+
+    async def deny(*args, **kwargs):
+        return False
+
+    monkeypatch.setattr(fetcher.politeness, "allowed", deny)
+    assert (
+        await fetcher.page(url, automated=False, cache_namespace="tavily")
+    ).text == "cached"
+    with pytest.raises(FetchError, match="robots.txt"):
+        await fetcher.page(url, automated=True, cache_namespace="tavily")
+
+
+async def test_extract_timeout_bounds_admission_wait(monkeypatch):
+    from yunshu_gateway.server_tools.research import fetcher
+    from yunshu_gateway.server_tools.research.cache import PageCache
+
+    monkeypatch.setattr(fetcher, "pages", PageCache())
+    blocked = asyncio.Semaphore(0)
+    monkeypatch.setattr(fetcher, "_global", blocked)
+    with pytest.raises(TimeoutError):
+        await fetcher.page("https://example.org/blocked", automated=False, timeout=0.01)
+
+
+def test_relative_published_date_and_empty_extract(client):
+    from datetime import UTC, datetime
+
+    from yunshu_gateway.tavily.service import published_date
+
+    delta = datetime.now(UTC) - published_date("2 days ago")
+    assert 1.99 < delta.total_seconds() / 86400 < 2.01
+    assert published_date("today").date() == datetime.now(UTC).date()
+    assert client.post("/tavily/extract", json={"urls": []}).status_code == 400
+
+
+async def test_auto_topic_respects_explicit_country(srv):
+    result = await srv.search(
+        SearchRequest(query="latest news today", country="taiwan", auto_parameters=True)
+    )
+    assert result["auto_parameters"]["topic"] == "general"

@@ -403,6 +403,12 @@ class DuckDuckGo(SearchProvider):
         _raise_http(r, "DuckDuckGo")
         parser = _DDGParser()
         parser.feed(r.text)
+        if not parser.rows and not re.search(
+            r"no results|no more results|no web results", r.text, re.I
+        ):
+            raise SearchError(
+                "unavailable", "DuckDuckGo layout yielded no parsed results"
+            )
         for row in parser.rows:
             row.title, row.snippet = _clean(row.title, 300), _clean(row.snippet)
         return parser.rows

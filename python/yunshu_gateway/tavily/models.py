@@ -192,6 +192,24 @@ class ResearchRequest(CompatRequest):
             if not isinstance(value.get("properties"), dict):
                 raise ValueError("output_schema requires properties")
             value = {"type": "object", **value}
+
+            def local_refs(node):
+                if isinstance(node, dict):
+                    for key, item in node.items():
+                        if (
+                            key in ("$ref", "$dynamicRef")
+                            and isinstance(item, str)
+                            and not item.startswith("#")
+                        ):
+                            raise ValueError(
+                                "External schema references are not supported"
+                            )
+                        local_refs(item)
+                elif isinstance(node, list):
+                    for item in node:
+                        local_refs(item)
+
+            local_refs(value)
             try:
                 Draft202012Validator.check_schema(value)
             except SchemaError as exc:

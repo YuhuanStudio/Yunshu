@@ -32,6 +32,7 @@ async def page(
     ):
         raise FetchError("url_not_allowed", "Domain filter rejected page")
     cache_key = (cache_namespace + "::" + url) if cache_namespace else url
+    state = politeness.host(url)
     if cached := pages.get(cache_key):
         # Recheck final redirect domain for each request's filters.
         final = parse_url(cached.url).hostname or ""
@@ -41,9 +42,23 @@ async def page(
             raise FetchError(
                 "url_not_allowed", "Domain filter rejected cached redirect"
             )
+        if automated:
+            source, destination = urlsplit(url), urlsplit(cached.url)
+            if (source.scheme.lower(), source.netloc.lower()) != (
+                destination.scheme.lower(),
+                destination.netloc.lower(),
+            ):
+                raise FetchError(
+                    "url_not_allowed", "Cross-origin cached research redirect"
+                )
+            async with asyncio.timeout(timeout):
+                if not await politeness.allowed(cached.url, state, **kwargs):
+                    raise FetchError(
+                        "url_not_allowed", "robots.txt disallows cached page"
+                    )
         return cached
-    state = politeness.host(url)
-    async with _global, state.slots, asyncio.timeout(timeout):
+    # Deadline includes admission/semaphore waiting, not just the network transfer.
+    async with asyncio.timeout(timeout), _global, state.slots:
         if automated and not await politeness.allowed(url, state, **kwargs):
             raise FetchError(
                 "url_not_allowed", "robots.txt disallows or is unavailable"
