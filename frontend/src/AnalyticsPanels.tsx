@@ -24,7 +24,7 @@ import {
   phaseDistribution,
   type LatencyBucket,
 } from "./analytics";
-import { clock, elapsed, number, type Engine } from "./ui";
+import { clock, elapsed, number, Slot, type Engine } from "./ui";
 import type { EngineHistoryPoint } from "./useEngine";
 
 /** The one header every chart card shares: title and caption left, one control right. */
@@ -89,10 +89,10 @@ export function PhasePanel({
         unavailableLabel="未回報"
         center={
           <div>
-            <strong className="block text-2xl">
+            <strong className="block text-2xl font-semibold tabular-nums">
               {number(engine.status?.requests.active, 0)}
             </strong>
-            <span className="text-[10px] text-muted-foreground">活動請求</span>
+            <span className="text-xs text-muted-foreground">活動請求</span>
           </div>
         }
         onSelect={(datum) =>
@@ -109,16 +109,20 @@ export function PhasePanel({
           清除階段篩選
         </Button>
       )}
-      <div className="mt-4 divide-y divide-border/60 border-t border-border/60">
+      <div className="mt-4 min-h-[7.5rem] divide-y divide-border/60 border-t border-border/60">
         {selected.slice(0, 3).map((row) => (
           <div
             key={row.request_id}
             className="flex justify-between gap-3 py-2.5 text-xs"
           >
             <span className="min-w-0 truncate font-mono">{row.request_id}</span>
-            <span className="shrink-0 text-muted-foreground">
+            <Slot
+              ch={7}
+              align="right"
+              className="shrink-0 text-muted-foreground"
+            >
               {elapsed(row.elapsed_s)}
-            </span>
+            </Slot>
           </div>
         ))}
         {!selected.length && (
@@ -168,8 +172,8 @@ export function LatencyPanel({
     >
       <div className="mb-4 flex gap-6">
         <div>
-          <p className="text-[10px] text-muted-foreground">P50</p>
-          <p className="mt-1 font-mono text-lg">
+          <p className="text-xs text-muted-foreground">P50</p>
+          <p className="mt-1 font-mono text-2xl font-semibold tabular-nums">
             {number(
               percentile(
                 valid.map((row) => row.ttft_ms),
@@ -181,8 +185,8 @@ export function LatencyPanel({
           </p>
         </div>
         <div>
-          <p className="text-[10px] text-muted-foreground">P95</p>
-          <p className="mt-1 font-mono text-lg">
+          <p className="text-xs text-muted-foreground">P95</p>
+          <p className="mt-1 font-mono text-2xl font-semibold tabular-nums">
             {number(
               percentile(
                 valid.map((row) => row.ttft_ms),
@@ -205,7 +209,7 @@ export function LatencyPanel({
           setSelection(bins.find((bin) => bin.id === datum.id) ?? null)
         }
       />
-      <p className="mt-4 text-[11px] leading-5 text-muted-foreground">
+      <p className="mt-4 text-xs leading-5 text-muted-foreground">
         採樣只能取得服務最新一筆結束記錄；已按 request ID
         去重，這不是完整流量的延遲統計。
       </p>
@@ -231,7 +235,7 @@ export function LatencyPanel({
               {selected.map((row) => (
                 <Tr key={row.request_id}>
                   <Td>
-                    <span className="block max-w-36 truncate font-mono text-[11px]">
+                    <span className="block max-w-36 truncate font-mono text-xs">
                       {row.request_id}
                     </span>
                   </Td>
@@ -301,7 +305,14 @@ export function ActivityPanel({
       data-testid="activity-panel"
       title="請求活動熱圖"
       description="每個區間的已採樣峰值 · 點選格子，聯動時序圖游標"
-      action={<Badge variant="outline">{history.length} 次採樣</Badge>}
+      action={
+        <Badge variant="outline">
+          <Slot ch={4} align="right">
+            {history.length}
+          </Slot>{" "}
+          次採樣
+        </Badge>
+      }
     >
       <Heatmap
         rows={heat.rows}

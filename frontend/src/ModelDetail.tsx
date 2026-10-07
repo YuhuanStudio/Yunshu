@@ -242,7 +242,7 @@ export function ModelDetail({
               label="狀態"
               mono={false}
               value={
-                <StatusIndicator status={state.status} pulse={model.loading}>
+                <StatusIndicator status={state.status}>
                   {state.text}
                 </StatusIndicator>
               }

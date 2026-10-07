@@ -291,10 +291,7 @@ export function Requests({
     <div className="space-y-6">
       <div className="space-y-2">
         <div className="flex items-center gap-2">
-          <StatusIndicator
-            status={phaseDot(detail.phase)}
-            pulse={isLive(detail.phase)}
-          >
+          <StatusIndicator status={phaseDot(detail.phase)}>
             <span className="text-sm font-medium">
               {labels[detail.phase] ?? detail.phase}
             </span>
@@ -405,7 +402,7 @@ export function Requests({
           </Button>
         }
       />
-      <StatGrid>
+      <StatGrid data-testid="request-stats">
         {tiles.map((tile) => (
           <StatCard
             key={tile.label}
@@ -422,18 +419,18 @@ export function Requests({
             subtext={
               <span className="block min-w-0 space-y-2">
                 <span className="block truncate">{tile.hint}</span>
-                {tile.data.length > 1 ? (
-                  <Sparkline
-                    data={tile.data.slice(-60)}
-                    tone={tile.tone}
-                    area
-                    height={28}
-                    className="h-7 w-full"
-                    label={tile.name}
-                  />
-                ) : (
-                  <span className="block h-7" />
-                )}
+                <span className="block h-7">
+                  {tile.data.length > 1 && (
+                    <Sparkline
+                      data={tile.data.slice(-60)}
+                      tone={tile.tone}
+                      area
+                      height={28}
+                      className="h-7 w-full"
+                      label={tile.name}
+                    />
+                  )}
+                </span>
               </span>
             }
           />
@@ -463,170 +460,176 @@ export function Requests({
               />
             </div>
             <Card className="overflow-hidden">
-              <TooltipProvider delayDuration={200}>
-                <Table scrollLabel="引擎請求清單" className="table-fixed">
-                  <Thead>
-                    <Tr>
-                      <Th>請求</Th>
-                      <Th className="hidden w-48 2xl:table-cell">模型</Th>
-                      <Th className="w-28">用量</Th>
-                      <Th className="w-16">tok/s</Th>
-                      <Th className="hidden w-32 md:table-cell">進度 / 時間</Th>
-                      <Th className="hidden w-24 min-[1800px]:table-cell">
-                        推測解碼
-                      </Th>
-                      <Th className="hidden w-24 2xl:table-cell">時間</Th>
-                      <Th className="w-36">操作</Th>
-                    </Tr>
-                  </Thead>
-                  <Tbody>
-                    {shown.map((row) => {
-                      const percent =
-                          row.phase === "prefill" ? prefillPercent(row) : null,
-                        speed =
-                          row.phase === "complete"
-                            ? row.decode_tps
-                            : row.tokens_per_second;
-                      const when = row.t ? row.t * 1000 : null,
-                        now = engine.updatedAt ?? Date.now();
-                      return (
-                        <Tr
-                          key={row.id}
-                          className={
-                            detail?.id === row.id
-                              ? "bg-accent-subtle"
-                              : undefined
-                          }
-                        >
-                          <Td>
-                            <div className="flex min-w-0 items-center gap-2">
-                              <Badge
-                                variant={phaseBadge(row.phase)}
-                                className="shrink-0 whitespace-nowrap"
+              <div className="min-h-[17rem]">
+                <TooltipProvider delayDuration={200}>
+                  <Table scrollLabel="引擎請求清單" className="table-fixed">
+                    <Thead>
+                      <Tr>
+                        <Th>請求</Th>
+                        <Th className="hidden w-48 2xl:table-cell">模型</Th>
+                        <Th className="w-28">用量</Th>
+                        <Th className="w-16">tok/s</Th>
+                        <Th className="hidden w-32 md:table-cell">
+                          進度 / 時間
+                        </Th>
+                        <Th className="hidden w-24 min-[1800px]:table-cell">
+                          推測解碼
+                        </Th>
+                        <Th className="hidden w-24 2xl:table-cell">時間</Th>
+                        <Th className="w-36">操作</Th>
+                      </Tr>
+                    </Thead>
+                    <Tbody>
+                      {shown.map((row) => {
+                        const percent =
+                            row.phase === "prefill"
+                              ? prefillPercent(row)
+                              : null,
+                          speed =
+                            row.phase === "complete"
+                              ? row.decode_tps
+                              : row.tokens_per_second;
+                        const when = row.t ? row.t * 1000 : null,
+                          now = engine.updatedAt ?? Date.now();
+                        return (
+                          <Tr
+                            key={row.id}
+                            className={
+                              detail?.id === row.id
+                                ? "bg-accent-subtle"
+                                : undefined
+                            }
+                          >
+                            <Td>
+                              <div className="flex min-w-0 items-center gap-2">
+                                <Badge
+                                  variant={phaseBadge(row.phase)}
+                                  className="shrink-0 whitespace-nowrap"
+                                >
+                                  {labels[row.phase] ?? row.phase}
+                                </Badge>
+                                <span
+                                  title={row.id}
+                                  className="min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground"
+                                >
+                                  {row.id}
+                                </span>
+                              </div>
+                              <p
+                                title={row.model ?? undefined}
+                                className="mt-1 truncate font-mono text-xs text-muted-foreground 2xl:hidden"
                               >
-                                {labels[row.phase] ?? row.phase}
-                              </Badge>
+                                {row.model
+                                  ? modelLabel(row.model)
+                                  : "模型未回報"}
+                              </p>
+                            </Td>
+                            <Td className="hidden 2xl:table-cell">
                               <span
-                                title={row.id}
-                                className="min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground"
+                                title={row.model ?? undefined}
+                                className="block truncate font-mono text-xs"
                               >
-                                {row.id}
-                              </span>
-                            </div>
-                            <p
-                              title={row.model ?? undefined}
-                              className="mt-1 truncate font-mono text-[11px] text-muted-foreground 2xl:hidden"
-                            >
-                              {row.model ? modelLabel(row.model) : "模型未回報"}
-                            </p>
-                          </Td>
-                          <Td className="hidden 2xl:table-cell">
-                            <span
-                              title={row.model ?? undefined}
-                              className="block truncate font-mono text-xs"
-                            >
-                              {row.model ? (
-                                modelLabel(row.model)
-                              ) : (
-                                <span className="text-muted-foreground">
-                                  未回報
-                                </span>
-                              )}
-                            </span>
-                          </Td>
-                          <Td className="text-xs tabular-nums">
-                            <span className="block whitespace-nowrap">
-                              {number(row.prompt_tokens, 0)} /{" "}
-                              {number(row.completion_tokens, 0)}
-                            </span>
-                            <span className="block whitespace-nowrap text-[11px] text-muted-foreground">
-                              cached {number(row.cached_tokens, 0)}/
-                              {number(row.prompt_tokens, 0)}
-                            </span>
-                          </Td>
-                          <Td className="text-xs tabular-nums">
-                            {number(speed)}
-                          </Td>
-                          <Td className="hidden text-xs tabular-nums md:table-cell">
-                            {percent != null ? (
-                              <span>
-                                Prefill {number(percent, 0)}%
-                                <span className="ml-2 text-muted-foreground">
-                                  {elapsed(row.elapsed_s)}
-                                </span>
-                              </span>
-                            ) : row.phase === "complete" ? (
-                              `${number(row.ttft_ms, 0)} ms TTFT`
-                            ) : (
-                              elapsed(row.elapsed_s)
-                            )}
-                          </Td>
-                          <Td className="hidden text-xs min-[1800px]:table-cell">
-                            {speculativeText(row) ?? (
-                              <span className="text-muted-foreground">—</span>
-                            )}
-                          </Td>
-                          <Td className="hidden whitespace-nowrap text-xs text-muted-foreground 2xl:table-cell">
-                            {when == null ? (
-                              "—"
-                            ) : (
-                              <Tooltip>
-                                <TooltipTrigger asChild>
-                                  <span tabIndex={0}>
-                                    {relativeTime(when, now)}
+                                {row.model ? (
+                                  modelLabel(row.model)
+                                ) : (
+                                  <span className="text-muted-foreground">
+                                    未回報
                                   </span>
-                                </TooltipTrigger>
-                                <TooltipContent>
-                                  {new Date(when).toLocaleString()}
-                                </TooltipContent>
-                              </Tooltip>
-                            )}
-                          </Td>
-                          <Td>
-                            <div className="flex gap-1 whitespace-nowrap">
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                onClick={(e) => {
-                                  e.currentTarget.focus();
-                                  detailOpener.current = e.currentTarget;
-                                  setDetail(row);
-                                }}
-                              >
-                                詳情
-                              </Button>
-                              {row.phase !== "complete" && (
+                                )}
+                              </span>
+                            </Td>
+                            <Td className="tabular-nums">
+                              <span className="block whitespace-nowrap">
+                                {number(row.prompt_tokens, 0)} /{" "}
+                                {number(row.completion_tokens, 0)}
+                              </span>
+                              <span className="block whitespace-nowrap text-xs text-muted-foreground">
+                                cached {number(row.cached_tokens, 0)}/
+                                {number(row.prompt_tokens, 0)}
+                              </span>
+                            </Td>
+                            <Td className="tabular-nums">{number(speed)}</Td>
+                            <Td className="hidden tabular-nums md:table-cell">
+                              {percent != null ? (
+                                <span>
+                                  Prefill {number(percent, 0)}%
+                                  <span className="ml-2 text-muted-foreground">
+                                    {elapsed(row.elapsed_s)}
+                                  </span>
+                                </span>
+                              ) : row.phase === "complete" ? (
+                                `${number(row.ttft_ms, 0)} ms TTFT`
+                              ) : (
+                                elapsed(row.elapsed_s)
+                              )}
+                            </Td>
+                            <Td className="hidden min-[1800px]:table-cell">
+                              {speculativeText(row) ?? (
+                                <span className="text-muted-foreground">—</span>
+                              )}
+                            </Td>
+                            <Td className="hidden whitespace-nowrap text-muted-foreground 2xl:table-cell">
+                              {when == null ? (
+                                "—"
+                              ) : (
+                                <Tooltip>
+                                  <TooltipTrigger asChild>
+                                    <span tabIndex={0}>
+                                      {relativeTime(when, now)}
+                                    </span>
+                                  </TooltipTrigger>
+                                  <TooltipContent>
+                                    {new Date(when).toLocaleString()}
+                                  </TooltipContent>
+                                </Tooltip>
+                              )}
+                            </Td>
+                            <Td>
+                              <div className="flex gap-1 whitespace-nowrap">
                                 <Button
                                   variant="ghost"
                                   size="sm"
-                                  disabled={!isOnline(engine) || !!busy}
                                   onClick={(e) => {
-                                    opener.current = e.currentTarget;
-                                    setCancel(row);
+                                    e.currentTarget.focus();
+                                    detailOpener.current = e.currentTarget;
+                                    setDetail(row);
                                   }}
                                 >
-                                  取消
+                                  詳情
                                 </Button>
-                              )}
-                            </div>
-                          </Td>
-                        </Tr>
-                      );
-                    })}
-                  </Tbody>
-                </Table>
-              </TooltipProvider>
-              {!shown.length && (
-                <TableState loading={!engine.status}>
-                  {engine.status
-                    ? query
-                      ? "沒有符合搜尋的請求"
-                      : filter === "active"
-                        ? "目前沒有進行中的請求"
-                        : "目前沒有符合條件的請求；完成記錄只包含開啟本頁後採樣到的最近請求"
-                    : "等待請求資料"}
-                </TableState>
-              )}
+                                {row.phase !== "complete" && (
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    disabled={!isOnline(engine) || !!busy}
+                                    onClick={(e) => {
+                                      opener.current = e.currentTarget;
+                                      setCancel(row);
+                                    }}
+                                  >
+                                    取消
+                                  </Button>
+                                )}
+                              </div>
+                            </Td>
+                          </Tr>
+                        );
+                      })}
+                    </Tbody>
+                  </Table>
+                </TooltipProvider>
+                {!shown.length && (
+                  <TableState loading={!engine.status}>
+                    {engine.status
+                      ? query
+                        ? "沒有符合搜尋的請求"
+                        : filter === "active"
+                          ? "目前沒有進行中的請求"
+                          : "目前沒有符合條件的請求；完成記錄只包含開啟本頁後採樣到的最近請求"
+                      : "等待請求資料"}
+                  </TableState>
+                )}
+              </div>
               <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-1 border-t border-border/60 bg-muted/30 px-4 py-2.5 text-xs text-muted-foreground">
                 <span className="tabular-nums">
                   顯示 {shown.length} / 共 {rows.length} 筆觀測

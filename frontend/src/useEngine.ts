@@ -25,6 +25,8 @@ export interface UseEngineResult {
 }
 
 const POLL_INTERVAL_MS = 3_000;
+/** Offline is shown only after this many consecutive failed polls. */
+const OFFLINE_AFTER_FAILURES = 3;
 const MAX_HISTORY_POINTS = 1_200;
 
 interface EngineViewState {
@@ -71,6 +73,7 @@ export function useEngine(connection: Connection): UseEngineResult {
     state.connectionKey === connectionKey ? state : initialState(connectionKey);
   const [polling, setPolling] = useState(true);
   const generationRef = useRef(0);
+  const failuresRef = useRef(0);
   const activeControllerRef = useRef<AbortController | null>(null);
   const inFlightRef = useRef<{
     connectionKey: symbol;
@@ -114,6 +117,7 @@ export function useEngine(connection: Connection): UseEngineResult {
         )
           return;
         const at = Date.now();
+        failuresRef.current = 0;
         setState((current) => {
           const previous =
             current.connectionKey === connectionKey
@@ -140,8 +144,11 @@ export function useEngine(connection: Connection): UseEngineResult {
         )
           return;
         const apiError = error instanceof ApiError ? error : null;
-        if (apiError?.status === 401 || apiError?.status === 403)
-          setPolling(false);
+        const refused = apiError?.status === 401 || apiError?.status === 403;
+        if (refused) setPolling(false);
+        failuresRef.current += 1;
+        // A restart or one slow poll must not flash the offline banner.
+        if (!refused && failuresRef.current < OFFLINE_AFTER_FAILURES) return;
         setState((current) => {
           const previous =
             current.connectionKey === connectionKey

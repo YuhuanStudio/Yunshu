@@ -20,6 +20,39 @@ export const number = (v: number | null | undefined, digits = 1) =>
   v == null || !Number.isFinite(v)
     ? "—"
     : v.toLocaleString("zh-TW", { maximumFractionDigits: digits });
+/** Fixed decimals, so a polled value keeps the same number of characters. */
+export const fixed = (v: number | null | undefined, digits = 1) =>
+  v == null || !Number.isFinite(v)
+    ? "—"
+    : v.toLocaleString("zh-TW", {
+        minimumFractionDigits: digits,
+        maximumFractionDigits: digits,
+      });
+/**
+ * A numeric slot that keeps its width: tabular figures plus a reserved minimum
+ * width in `ch`, so a value that changes length (or is briefly "—") never moves
+ * what sits beside it. Use for every polled number that is not in a table cell.
+ */
+export function Slot({
+  ch,
+  align = "left",
+  className = "",
+  children,
+}: {
+  ch: number;
+  align?: "left" | "right";
+  className?: string;
+  children: ReactNode;
+}) {
+  return (
+    <span
+      className={`inline-block whitespace-nowrap tabular-nums ${align === "right" ? "text-right" : "text-left"} ${className}`}
+      style={{ minWidth: `${ch}ch` }}
+    >
+      {children}
+    </span>
+  );
+}
 export const clock = (t: number) =>
   new Date(t).toLocaleTimeString("zh-TW", {
     hour12: false,
@@ -58,6 +91,8 @@ export function ConnectionState({
         tone={engine.phase === "connecting" ? "neutral" : "warning"}
         title={title}
         description={`${engine.error ?? "正在取得服務狀態…"}${
+          engine.phase === "offline" ? " · 每 3 秒自動重試" : ""
+        }${
           engine.updatedAt
             ? ` · 最後成功：${clock(engine.updatedAt)}，下方保留上次資料。`
             : ""
@@ -110,7 +145,9 @@ export function SectionCard({
           <Icon size={17} strokeWidth={1.75} />
         </span>
         <div className="min-w-0 flex-1">
-          <h2 className="truncate text-sm font-semibold">{title}</h2>
+          <h2 className="yunui-section-title truncate text-base font-semibold">
+            {title}
+          </h2>
           {description && (
             <p className="mt-0.5 text-xs text-muted-foreground">
               {description}
@@ -180,8 +217,8 @@ export function Readout({
 }) {
   return (
     <div className="min-w-0">
-      <p className="text-[11px] tracking-wide text-muted-foreground">{label}</p>
-      <p className="mt-1 truncate text-lg font-semibold tabular-nums">
+      <p className="text-xs text-muted-foreground">{label}</p>
+      <p className="mt-1 truncate text-base font-semibold tabular-nums">
         {value}
         {unit && (
           <span className="ml-1 text-xs font-normal text-muted-foreground">
@@ -189,11 +226,9 @@ export function Readout({
           </span>
         )}
       </p>
-      {hint && (
-        <p className="mt-0.5 truncate text-[11px] text-muted-foreground">
-          {hint}
-        </p>
-      )}
+      <p className="mt-0.5 min-h-[1.125rem] truncate text-xs text-muted-foreground">
+        {hint}
+      </p>
     </div>
   );
 }

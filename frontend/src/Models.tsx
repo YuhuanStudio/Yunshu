@@ -32,11 +32,13 @@ import { Box, LayoutGrid, RefreshCw, Table2 } from "lucide-react";
 import { getModel, unloadModel, type Connection } from "./api";
 import {
   elapsed,
+  fixed,
   LocalModelIcon,
   isOnline,
   modelLabel,
   number,
   sizeGb,
+  Slot,
   useStoredChoice,
   type Engine,
   type Model,
@@ -152,10 +154,7 @@ export function Models({
                 }
                 description={
                   <span className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs tabular-nums">
-                    <StatusIndicator
-                      status={state.status}
-                      pulse={model.loading}
-                    >
+                    <StatusIndicator status={state.status}>
                       {state.text}
                     </StatusIndicator>
                     <span>{model.type}</span>
@@ -189,7 +188,7 @@ export function Models({
                 <Th className="w-40">狀態</Th>
                 <Th className="hidden w-24 md:table-cell">大小</Th>
                 <Th className="hidden w-32 xl:table-cell">保留</Th>
-                <Th className="w-64">操作</Th>
+                <Th className="w-72">操作</Th>
               </Tr>
             </Thead>
             <Tbody>
@@ -215,7 +214,7 @@ export function Models({
                             )}
                           {fitHint(model, memFree) && (
                             <span
-                              className={`text-[11px] tabular-nums ${fitHint(model, memFree)?.ok ? "text-muted-foreground" : "text-error"}`}
+                              className={`text-xs tabular-nums ${fitHint(model, memFree)?.ok ? "text-muted-foreground" : "text-error"}`}
                             >
                               {fitHint(model, memFree)?.text}
                             </span>
@@ -241,7 +240,6 @@ export function Models({
                                 ? "online"
                                 : "neutral"
                         }
-                        pulse={model.loading}
                       >
                         <span className="whitespace-nowrap text-foreground">
                           {model.loading
@@ -253,16 +251,18 @@ export function Models({
                                 : "未載入"}
                         </span>
                       </StatusIndicator>
-                      {model.loading && (
-                        <Progress
-                          indeterminate
-                          className="mt-2 h-1"
-                          label={`${modelLabel(model.id)} 載入中`}
-                        />
-                      )}
+                      <div className="mt-2 h-1">
+                        {model.loading && (
+                          <Progress
+                            indeterminate
+                            className="h-1"
+                            label={`${modelLabel(model.id)} 載入中`}
+                          />
+                        )}
+                      </div>
                     </div>
                   </Td>
-                  <Td className="hidden text-sm tabular-nums md:table-cell">
+                  <Td className="hidden tabular-nums md:table-cell">
                     {model.size_gb ? number(model.size_gb) : "—"}
                     {model.size_gb ? (
                       <span className="ml-1 text-xs text-muted-foreground">
@@ -270,7 +270,7 @@ export function Models({
                       </span>
                     ) : null}
                   </Td>
-                  <Td className="hidden text-xs tabular-nums text-muted-foreground xl:table-cell">
+                  <Td className="hidden tabular-nums text-muted-foreground xl:table-cell">
                     {model.loaded
                       ? model.pinned
                         ? "固定保留"
@@ -319,6 +319,13 @@ export function Models({
                 <ModelManagement
                   connection={connection}
                   disabled={!online || !!busy}
+                  disabledReason={
+                    !online
+                      ? "引擎未連線，連線後才能匯入模型"
+                      : busy
+                        ? "另一項操作進行中"
+                        : undefined
+                  }
                   perform={perform}
                 />
                 <Button
@@ -371,11 +378,11 @@ export function Models({
           {memTotal != null && memTotal > 0 && (
             <Card className="flex flex-wrap items-center gap-x-6 gap-y-3 px-5 py-4">
               <div className="min-w-0">
-                <p className="text-[11px] tracking-wide text-muted-foreground">
-                  統一記憶體使用
-                </p>
-                <p className="mt-1 text-lg font-semibold tabular-nums">
-                  {number(memActive)}
+                <p className="text-xs text-muted-foreground">統一記憶體使用</p>
+                <p className="mt-1 text-2xl font-semibold tabular-nums">
+                  <Slot ch={5} align="right">
+                    {fixed(memActive)}
+                  </Slot>
                   <span className="ml-1 text-xs font-normal text-muted-foreground">
                     / {number(memTotal, 0)} GB
                   </span>
@@ -389,15 +396,20 @@ export function Models({
                 )}
                 label="統一記憶體使用"
               />
-              <p className="text-xs tabular-nums text-muted-foreground">
-                已載入 {loadedRows.length} · 可用 {number(memFree)} GB
-              </p>
+              <Slot
+                ch={22}
+                align="right"
+                className="text-xs text-muted-foreground"
+              >
+                已載入 {loadedRows.length} · 可用 {fixed(memFree)} GB
+              </Slot>
             </Card>
           )}
           {!rows.length ? (
-            <Card>
+            <Card className="p-2">
               <EmptyState
-                icon={<Box size={25} />}
+                size="inline"
+                icon={<Box size={22} />}
                 title={engine.status ? "沒有符合條件的模型" : "等待模型清單"}
                 description={
                   engine.status

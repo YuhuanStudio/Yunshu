@@ -388,7 +388,7 @@ export function Diagnostics({
           icon={Database}
           label="MLX 活躍配置"
           value={`${number(status?.memory.active_gb ?? gb(at(system, "gpu", "active_bytes")))} GB`}
-          subtext={`峰值 ${number(status?.memory.peak_gb)} GB · 程序配置量，不是 GPU 使用率`}
+          subtext={`峰值 ${number(status?.memory.peak_gb)} GB · 非 GPU 使用率`}
         />
         <StatCard
           compact
@@ -518,8 +518,8 @@ export function Diagnostics({
           <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
             {["p50", "p90", "p95", "p99"].map((key) => (
               <div key={key}>
-                <p className="text-xs uppercase text-muted-foreground">{key}</p>
-                <p className="mt-2 text-xl tabular-nums">
+                <p className="text-xs text-muted-foreground">{key}</p>
+                <p className="mt-2 text-2xl font-semibold tabular-nums">
                   {number(metric(at(request, "latency_percentiles", key)))}{" "}
                   <span className="text-xs">ms</span>
                 </p>

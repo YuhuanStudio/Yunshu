@@ -11,6 +11,10 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
 } from "@yuhuanowo/yunui";
 import { MoreHorizontal, Copy, Trash2 } from "lucide-react";
 import type { Connection } from "./api";
@@ -23,11 +27,14 @@ export function ModelManagement({
   connection,
   modelId,
   disabled,
+  disabledReason,
   perform,
 }: {
   connection: Connection;
   modelId?: string;
   disabled: boolean;
+  /** Why the controls are disabled; shown as a tooltip on the import button. */
+  disabledReason?: string;
   perform: Perform;
 }) {
   const [operation, setOperation] = useState<Operation>(null);
@@ -130,18 +137,29 @@ export function ModelManagement({
           </DropdownMenuContent>
         </DropdownMenu>
       ) : (
-        <Button
-          variant="secondary"
-          size="sm"
-          disabled={busy}
-          onClick={(event) => {
-            opener.current = event.currentTarget;
-            setRepository("");
-            setOperation("pull");
-          }}
-        >
-          匯入模型
-        </Button>
+        <TooltipProvider delayDuration={200}>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span tabIndex={busy && disabledReason ? 0 : undefined}>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  disabled={busy}
+                  onClick={(event) => {
+                    opener.current = event.currentTarget;
+                    setRepository("");
+                    setOperation("pull");
+                  }}
+                >
+                  匯入模型
+                </Button>
+              </span>
+            </TooltipTrigger>
+            {busy && disabledReason && (
+              <TooltipContent>{disabledReason}</TooltipContent>
+            )}
+          </Tooltip>
+        </TooltipProvider>
       )}
 
       <Dialog

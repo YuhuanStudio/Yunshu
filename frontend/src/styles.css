@@ -35,3 +35,18 @@ body {
 ::selection {
   background: var(--accent-muted);
 }
+
+/* Numbers in tables and definition lists never change width as values update. */
+td,
+th,
+dd,
+output {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Monospace is always medium weight (YunDesign), unless a utility says otherwise. */
+@layer base {
+  .font-mono {
+    font-weight: 500;
+  }
+}

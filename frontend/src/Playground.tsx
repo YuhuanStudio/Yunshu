@@ -838,7 +838,7 @@ export function Playground({
             </div>
           }
         />
-        <p className="mt-2 text-center text-[10px] text-muted-foreground">
+        <p className="mt-2 text-center text-xs text-muted-foreground">
           內容只保留於此頁。離開測試頁會停止生成。
         </p>
       </div>

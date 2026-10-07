@@ -130,7 +130,6 @@ export function StageRail({ phase }: { phase: string }) {
                     ? phaseDot(phase)
                     : "neutral"
               }
-              pulse={state === "current" && isLive(phase)}
             >
               <span
                 className={
@@ -181,7 +180,7 @@ export function TokenTrace({ row }: { row: Row }) {
           { value: output, tone: "success", label: "已輸出" },
         ]}
       />
-      <p className="text-[11px] text-muted-foreground">
+      <p className="text-xs text-muted-foreground">
         寬度依 token 數比例，不代表耗時；服務未提供各階段時間。
       </p>
     </div>

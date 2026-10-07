@@ -65,10 +65,12 @@ import { buildIntegrations, serviceRoot } from "./integrations";
 import {
   clock,
   elapsed,
+  fixed,
   modelLabel,
   number,
   phaseDot,
   Readout,
+  Slot,
   sizeGb,
   supportsChat,
   type Engine,
@@ -132,16 +134,12 @@ function RequestLane({ row }: { row: RequestRow }) {
           : null))
       : null;
   return (
-    <li className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-2 py-3">
+    <li className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-1 py-3">
       <div className="flex min-w-0 items-center gap-2.5">
-        <StatusIndicator
-          className="shrink-0"
-          status={phaseDot(phase)}
-          pulse={phase === "decode" || phase === "prefill"}
-        />
-        <span className="shrink-0 whitespace-nowrap text-sm font-medium">
+        <StatusIndicator className="shrink-0" status={phaseDot(phase)} />
+        <Slot ch={7} className="shrink-0 text-sm font-medium">
           {phaseText[phase] ?? phase}
-        </span>
+        </Slot>
         <span
           title={row.request_id}
           className="min-w-0 max-w-[9rem] shrink truncate font-mono text-xs text-muted-foreground"
@@ -158,30 +156,35 @@ function RequestLane({ row }: { row: RequestRow }) {
         )}
       </div>
       <div className="flex shrink-0 items-center gap-4 text-xs tabular-nums text-muted-foreground">
-        <span>
+        <Slot ch={9} align="right">
           {phase === "decode"
             ? `${number(row.completion_tokens, 0)} tok`
             : `${number(prompt, 0)} tok`}
-        </span>
-        <span className="w-20 text-right text-foreground">
+        </Slot>
+        <Slot ch={12} align="right" className="text-foreground">
           {row.tokens_per_second == null
             ? "—"
-            : `${number(row.tokens_per_second)} tok/s`}
-        </span>
-        <span className="w-12 text-right">{elapsed(row.elapsed_s)}</span>
+            : `${fixed(row.tokens_per_second)} tok/s`}
+        </Slot>
+        <Slot ch={7} align="right">
+          {elapsed(row.elapsed_s)}
+        </Slot>
       </div>
-      {progress != null && (
-        <Progress
-          className="col-span-2 h-1"
-          value={Math.max(0, Math.min(100, progress))}
-          label={`Prefill ${number(progress, 0)}%`}
-        />
-      )}
-      {phase !== "prefill" && cached > 0 && prompt > 0 && (
-        <p className="col-span-2 -mt-1 text-[11px] text-muted-foreground">
-          前綴命中 {number(cached, 0)} / {number(prompt, 0)} tokens
-        </p>
-      )}
+      {/* One fixed-height line for either the prefill bar or the cache hint, so a
+          phase change never adds or removes a row. */}
+      <div className="col-span-2 flex h-4 items-center">
+        {progress != null ? (
+          <Progress
+            className="h-1 w-full"
+            value={Math.max(0, Math.min(100, progress))}
+            label={`Prefill ${number(progress, 0)}%`}
+          />
+        ) : phase !== "prefill" && cached > 0 && prompt > 0 ? (
+          <p className="truncate text-xs text-muted-foreground">
+            前綴命中 {number(cached, 0)} / {number(prompt, 0)} tokens
+          </p>
+        ) : null}
+      </div>
     </li>
   );
 }
@@ -317,16 +320,30 @@ export function Dashboard({
     a.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
-  if (!status && engine.phase !== "connecting")
+  // First-run onboarding only when nothing was ever configured or the token is
+  // refused. A restart (502, refused, timeout) keeps the skeleton and the banner.
+  const neverConfigured = (() => {
+    try {
+      return localStorage.getItem("yunshu.console.url") === null;
+    } catch {
+      return true;
+    }
+  })();
+  if (
+    !status &&
+    (engine.phase === "unauthorized" ||
+      (engine.phase === "offline" && neverConfigured))
+  )
     return (
       <DashboardPage width="7xl" data-testid="overview">
         <PageHeader
           title="引擎總覽"
           description="模型、請求與效能，都從你的本機引擎開始。"
         />
-        <Card className="p-6 sm:p-10">
+        <Card className="p-4">
           <EmptyState
-            icon={<Server size={30} strokeWidth={1.5} />}
+            size="inline"
+            icon={<Server size={22} strokeWidth={1.5} />}
             title="連接本機推理引擎"
             description="填入 Yunshu 服務位址與存取權杖，取得真實模型、資源和請求狀態。"
             action={
@@ -336,7 +353,7 @@ export function Dashboard({
               </Button>
             }
           />
-          <ol className="mt-8 grid gap-6 border-t border-border/60 pt-6 sm:grid-cols-3">
+          <ol className="mt-3 grid gap-4 border-t border-border/60 pt-4 sm:grid-cols-3">
             {[
               ["01", "連接服務", "使用現有的 Yunshu HTTP 服務"],
               ["02", "載入模型", "管理權重與閒置保留時間"],
@@ -346,7 +363,9 @@ export function Dashboard({
                 <span className="font-mono text-xs text-muted-foreground">
                   {step}
                 </span>
-                <h2 className="mt-2 text-sm font-medium">{title}</h2>
+                <h2 className="yunui-section-title mt-2 text-base font-semibold">
+                  {title}
+                </h2>
                 <p className="mt-1 text-caption">{description}</p>
               </li>
             ))}
@@ -393,10 +412,7 @@ export function Dashboard({
         }
       />
       <p className="-mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
-        <StatusIndicator
-          status={online ? "online" : "offline"}
-          pulse={online && items.length > 0}
-        >
+        <StatusIndicator status={online ? "online" : "offline"}>
           <span className="text-foreground">
             {online
               ? status?.state === "running"
@@ -406,14 +422,14 @@ export function Dashboard({
           </span>
         </StatusIndicator>
         <span>Yunshu {status?.version ?? "—"}</span>
-        <span>· 運行 {elapsed(status?.uptime_s)}</span>
-        <span>
+        <Slot ch={13}>· 運行 {elapsed(status?.uptime_s)}</Slot>
+        <Slot ch={16}>
           ·{" "}
           {engine.updatedAt
             ? `更新於 ${clock(engine.updatedAt)}`
             : "等待服務回應"}
-          {!engine.polling ? "（已暫停）" : ""}
-        </span>
+        </Slot>
+        <Slot ch={6}>{!engine.polling ? "（已暫停）" : ""}</Slot>
         {status?.load_error && (
           <span className="text-error">{status.load_error}</span>
         )}
@@ -481,49 +497,55 @@ export function Dashboard({
         data-testid="live-panel"
       >
         <div className="flex min-w-0 flex-col justify-between gap-5 border-b border-border/60 p-5 sm:p-6 lg:border-b-0 lg:border-r">
-          {prefilling ? (
-            <div>
+          <div className="min-w-0">
+            <p className="text-xs text-muted-foreground">
+              即時吞吐 · 近 5 分鐘 · tok/s
+            </p>
+            <TimeSeriesChart
+              {...chartLabels}
+              className="mt-3"
+              data={heroData}
+              series={rateSeries.both}
+              height={150}
+              ariaLabel="近 5 分鐘 Decode 與 Prefill 速度，單位 tok/s"
+              formatX={clock}
+              formatY={formatNumber}
+              maxGap={12000}
+            />
+          </div>
+          {/* A fixed-height slot: prefill progress when a prompt is being processed,
+              otherwise a quiet line. The chart above never gives way to it. */}
+          <div className="h-12 min-w-0" data-testid="prefill-slot">
+            {prefilling ? (
+              <>
+                <div className="flex items-baseline justify-between gap-3 text-xs text-muted-foreground">
+                  <span className="min-w-0 truncate">
+                    正在處理提示詞 · {prefilling.request_id}
+                  </span>
+                  <Slot ch={5} align="right" className="text-foreground">
+                    {number(prefillPct, 0)}%
+                  </Slot>
+                </div>
+                <Progress
+                  className="mt-2 h-1.5"
+                  value={prefillPct ?? 0}
+                  label={`Prefill ${number(prefillPct, 0)}%`}
+                />
+                <p className="mt-1 truncate text-xs tabular-nums text-muted-foreground">
+                  {number(prefilling.processed_tokens, 0)} /{" "}
+                  {number(prefilling.prompt_tokens, 0)} tokens
+                  {prefilling.tokens_per_second != null &&
+                    ` · ${number(prefilling.tokens_per_second, 0)} tok/s`}
+                  {prefilling.eta_s != null &&
+                    ` · 約 ${elapsed(prefilling.eta_s)} 後開始輸出`}
+                </p>
+              </>
+            ) : (
               <p className="text-xs text-muted-foreground">
-                正在處理提示詞 · {prefilling.request_id}
+                目前沒有提示詞在預填。
               </p>
-              <p className="mt-2 text-5xl font-semibold tracking-tight tabular-nums">
-                {number(prefillPct, 0)}
-                <span className="ml-1 text-2xl font-normal text-muted-foreground">
-                  %
-                </span>
-              </p>
-              <Progress
-                className="mt-3 h-1.5"
-                value={prefillPct ?? 0}
-                label={`Prefill ${number(prefillPct, 0)}%`}
-              />
-              <p className="mt-2 text-xs tabular-nums text-muted-foreground">
-                {number(prefilling.processed_tokens, 0)} /{" "}
-                {number(prefilling.prompt_tokens, 0)} tokens
-                {prefilling.tokens_per_second != null &&
-                  ` · ${number(prefilling.tokens_per_second, 0)} tok/s`}
-                {prefilling.eta_s != null &&
-                  ` · 約 ${elapsed(prefilling.eta_s)} 後開始輸出`}
-              </p>
-            </div>
-          ) : (
-            <div className="min-w-0">
-              <p className="text-xs text-muted-foreground">
-                即時吞吐 · 近 5 分鐘 · tok/s
-              </p>
-              <TimeSeriesChart
-                {...chartLabels}
-                className="mt-3"
-                data={heroData}
-                series={rateSeries.both}
-                height={150}
-                ariaLabel="近 5 分鐘 Decode 與 Prefill 速度，單位 tok/s"
-                formatX={clock}
-                formatY={formatNumber}
-                maxGap={12000}
-              />
-            </div>
-          )}
+            )}
+          </div>
           <div className="border-t border-border/60 pt-4">
             <Readout
               label="Prefill 單請求平均"
@@ -534,17 +556,17 @@ export function Dashboard({
         </div>
         <div className="flex min-w-0 flex-col p-5 sm:p-6">
           <div className="flex items-center justify-between gap-3">
-            <h2 className="text-sm font-medium">
+            <h2 className="yunui-section-title text-base font-semibold">
               進行中請求
               <span className="ml-2 text-muted-foreground tabular-nums">
                 {number(status?.requests.active, 0)}
               </span>
             </h2>
             <div className="flex items-center gap-3 text-xs text-muted-foreground">
-              <span>
+              <Slot ch={14} align="right">
                 近 {number(status?.throughput.window_s ?? 60, 0)} 秒結束{" "}
                 {number(status?.throughput.requests, 0)} 筆
-              </span>
+              </Slot>
               <Button
                 size="sm"
                 variant="ghost"
@@ -711,10 +733,10 @@ export function Dashboard({
             <Badge variant="outline">實體 {number(memory?.total_gb)} GB</Badge>
           }
         >
-          <p className="text-3xl font-semibold tracking-tight tabular-nums">
-            {number(memory?.active_gb)}
+          <p className="text-3xl font-semibold tabular-nums">
+            <Slot ch={5}>{fixed(memory?.active_gb)}</Slot>
             <span className="ml-1.5 text-sm font-normal text-muted-foreground">
-              / {number(memory?.total_gb)} GB 活躍配置
+              / {fixed(memory?.total_gb)} GB 活躍配置
             </span>
           </p>
           <SegmentedBar
@@ -844,7 +866,6 @@ export function Dashboard({
                   status={
                     model.loading ? "away" : model.loaded ? "online" : "neutral"
                   }
-                  pulse={model.loading}
                 />
                 <span className="min-w-0 flex-1 truncate text-sm font-medium">
                   {modelLabel(model.id)}

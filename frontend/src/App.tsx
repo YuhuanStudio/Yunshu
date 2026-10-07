@@ -42,7 +42,15 @@ import {
 } from "lucide-react";
 import { useEngine } from "./useEngine";
 import type { Connection, EngineLastRequest } from "./api";
-import { ConnectionState, clock, modelLabel, number, sizeGb } from "./ui";
+import {
+  ConnectionState,
+  Slot,
+  clock,
+  fixed,
+  modelLabel,
+  number,
+  sizeGb,
+} from "./ui";
 import { Dashboard } from "./Dashboard";
 import { Models } from "./Models";
 import { Requests } from "./Requests";
@@ -277,7 +285,7 @@ export default function App() {
             <div className="flex items-center gap-2.5 px-4 pb-4 pt-5">
               <div className="flex min-w-0 flex-1 items-center gap-2.5 px-2">
                 <CloudMark />
-                <span className="flex-1 truncate text-[15px] font-semibold tracking-tight">
+                <span className="flex-1 truncate text-base font-semibold tracking-tight">
                   Yunshu
                   <span className="ml-1.5 text-xs font-normal text-muted-foreground">
                     雲樞
@@ -336,7 +344,6 @@ export default function App() {
                           ? "online"
                           : "neutral"
                     }
-                    pulse={(engine.status?.requests.active ?? 0) > 0}
                   />
                   {engine.phase !== "online"
                     ? "引擎未連線"
@@ -344,15 +351,19 @@ export default function App() {
                       ? "已載入"
                       : "沒有已載入模型"}
                 </span>
-                <span className="block truncate text-base font-semibold">
-                  {loadedModel ? modelLabel(loadedModel.id) : "選擇模型"}
+                <span
+                  className={`block w-full truncate text-base font-semibold ${engine.phase === "online" ? "" : "text-muted-foreground"}`}
+                >
+                  {loadedModel
+                    ? modelLabel(loadedModel.id)
+                    : engine.phase === "online"
+                      ? "選擇模型"
+                      : "等待引擎"}
                 </span>
-                {engine.status?.memory.active_gb != null && (
-                  <span className="mt-0.5 block text-xs tabular-nums text-muted-foreground">
-                    {number(engine.status.memory.active_gb)} /{" "}
-                    {number(engine.status.memory.total_gb)} GB
-                  </span>
-                )}
+                <span className="mt-0.5 block w-full truncate text-xs tabular-nums text-muted-foreground">
+                  {fixed(engine.status?.memory.active_gb)} /{" "}
+                  {fixed(engine.status?.memory.total_gb)} GB
+                </span>
               </Button>
               <Button
                 variant="outline"
@@ -375,7 +386,7 @@ export default function App() {
                       }
                     })()}
                   </span>
-                  <span className="block truncate font-mono text-[11px] text-muted-foreground">
+                  <span className="block truncate font-mono text-xs text-muted-foreground">
                     {engine.status?.version
                       ? `yunshu ${engine.status.version}`
                       : "本機優先"}
@@ -386,7 +397,7 @@ export default function App() {
           }
         />
         <main
-          className={`flex h-dvh min-w-0 flex-col transition-[padding] duration-200 ease-in-out ${collapsed ? "lg:pl-0" : "lg:pl-64"}`}
+          className={`flex h-dvh min-w-0 flex-col transition-[padding] duration-150 ease-in-out ${collapsed ? "lg:pl-0" : "lg:pl-64"}`}
         >
           <header className="sticky top-0 z-30 flex shrink-0 items-center gap-4 px-4 pt-4 lg:px-6">
             <IconButton
@@ -441,20 +452,20 @@ export default function App() {
             </Breadcrumb>
             <div className="ml-auto flex shrink-0 items-center gap-1.5">
               {engine.phase === "online" && engine.status && (
-                <span className="card hidden items-center gap-3 rounded-full px-3 py-1.5 text-xs tabular-nums text-muted-foreground md:flex">
+                <span className="card hidden items-center gap-3 rounded-full px-3 py-1.5 text-xs text-muted-foreground md:flex">
                   <span>
-                    <span className="text-foreground">
+                    <Slot ch={3} align="right" className="text-foreground">
                       {number(engine.status.requests.active, 0)}
-                    </span>{" "}
+                    </Slot>{" "}
                     req
                   </span>
                   <span>
-                    <span className="text-foreground">
-                      {number(
+                    <Slot ch={6} align="right" className="text-foreground">
+                      {fixed(
                         engine.status.throughput.live_decode_tps ??
                           engine.status.throughput.mean_decode_tps,
                       )}
-                    </span>{" "}
+                    </Slot>{" "}
                     tok/s
                   </span>
                 </span>
@@ -616,62 +627,87 @@ export default function App() {
                   : connectionHelp[engine.phase]
               }
             />
-            {engine.phase === "online" && last && (
+            {/* Every pill is always present with a reserved value slot, so a new
+                request changes digits, never the number or width of the pills. */}
+            {engine.phase === "online" && (
               <>
-                {last.ttft_ms != null && (
-                  <StatusPill
-                    label="TTFT"
-                    value={`${number(last.ttft_ms, 0)} ms`}
-                    help={lastHelp(last, "首 token 延遲")}
-                    dot={false}
-                  />
-                )}
-                {last.decode_tps != null && (
-                  <StatusPill
-                    label="Decode"
-                    value={`${number(last.decode_tps)} tok/s`}
-                    help={lastHelp(last, "解碼速度")}
-                    dot={false}
-                  />
-                )}
-                {last.prefill_tps != null && (
-                  <StatusPill
-                    label="Prefill"
-                    value={`${number(last.prefill_tps, 0)} tok/s`}
-                    help={lastHelp(last, "預填速度")}
-                    dot={false}
-                  />
-                )}
-                {last.prompt_tokens > 0 && (
-                  <StatusPill
-                    label="快取"
-                    value={`${number(last.cached_tokens, 0)} / ${number(last.prompt_tokens, 0)}`}
-                    help={lastHelp(
-                      last,
-                      "命中前綴快取的 token 數 / 輸入 token 數",
-                    )}
-                    dot={false}
-                  />
-                )}
-                {last.speculative?.mode && (
-                  <StatusPill
-                    label={String(last.speculative.mode).toUpperCase()}
-                    value={
-                      last.speculative.acceptance_rate != null
-                        ? `接受 ${number(last.speculative.acceptance_rate * 100, 0)}%`
-                        : undefined
-                    }
-                    tone="info"
-                    help={lastHelp(
-                      last,
-                      `推測解碼${
-                        last.speculative.rounds && last.completion_tokens
-                          ? ` · 每輪 ${number(last.completion_tokens / last.speculative.rounds, 2)} tok`
-                          : ""
-                      }`,
-                    )}
-                  />
-                )}
+                <StatusPill
+                  label="TTFT"
+                  value={
+                    last?.ttft_ms != null
+                      ? `${number(last.ttft_ms, 0)} ms`
+                      : "—"
+                  }
+                  valueMinCh={9}
+                  help={last ? lastHelp(last, "首 token 延遲") : noRequestHelp}
+                  dot={false}
+                />
+                <StatusPill
+                  label="Decode"
+                  value={
+                    last?.decode_tps != null
+                      ? `${fixed(last.decode_tps)} tok/s`
+                      : "—"
+                  }
+                  valueMinCh={13}
+                  help={last ? lastHelp(last, "解碼速度") : noRequestHelp}
+                  dot={false}
+                />
+                <StatusPill
+                  label="Prefill"
+                  value={
+                    last?.prefill_tps != null
+                      ? `${number(last.prefill_tps, 0)} tok/s`
+                      : "—"
+                  }
+                  valueMinCh={13}
+                  help={last ? lastHelp(last, "預填速度") : noRequestHelp}
+                  dot={false}
+                />
+                <StatusPill
+                  label="快取"
+                  value={
+                    last && last.prompt_tokens > 0
+                      ? `${number(last.cached_tokens, 0)} / ${number(last.prompt_tokens, 0)}`
+                      : "—"
+                  }
+                  valueMinCh={17}
+                  help={
+                    last
+                      ? lastHelp(
+                          last,
+                          "命中前綴快取的 token 數 / 輸入 token 數",
+                        )
+                      : noRequestHelp
+                  }
+                  dot={false}
+                />
+                <StatusPill
+                  label="推測"
+                  value={
+                    last?.speculative?.mode
+                      ? `${String(last.speculative.mode).toUpperCase()}${
+                          last.speculative.acceptance_rate != null
+                            ? ` 接受 ${number(last.speculative.acceptance_rate * 100, 0)}%`
+                            : ""
+                        }`
+                      : "—"
+                  }
+                  valueMinCh={14}
+                  tone={last?.speculative?.mode ? "info" : "neutral"}
+                  help={
+                    last?.speculative?.mode
+                      ? lastHelp(
+                          last,
+                          `推測解碼${
+                            last.speculative.rounds && last.completion_tokens
+                              ? ` · 每輪 ${number(last.completion_tokens / last.speculative.rounds, 2)} tok`
+                              : ""
+                          }`,
+                        )
+                      : "最近一筆請求沒有使用推測解碼。"
+                  }
+                />
               </>
             )}
           </StatusPillBar>
@@ -712,6 +748,8 @@ const connectionHelp = {
   offline: "無法連線到引擎，請確認 Yunshu 服務正在執行。",
   unauthorized: "引擎拒絕了這組存取金鑰，請到設定更新。",
 } as const;
+
+const noRequestHelp = "尚無完成的請求。";
 
 /** The sentence behind a last-request pill: which request, when, how many tokens. */
 function lastHelp(last: EngineLastRequest, what: string): string {
