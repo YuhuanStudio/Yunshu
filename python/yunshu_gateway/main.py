@@ -164,6 +164,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     footprint_sampler.start_from_settings()
 
+    from . import history as _history
+
+    _history.start_from_settings()
+
     # ── Startup validation ──
     env_warnings = _validate_settings()
     for w in env_warnings:
@@ -377,6 +381,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         except Exception:
             logger.debug("Memory enforcer stop failed", exc_info=True)
         _memory_enforcer = None
+
+    await _history.stop()
 
     # Cancel any remaining background tasks
     for task in _background_tasks:

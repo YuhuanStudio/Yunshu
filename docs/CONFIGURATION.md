@@ -255,6 +255,8 @@ internal ones, `--json` prints JSON, `--config FILE` includes a config file.
 | `YUNSHU_SERVE_LOG_DIR` | path | unset | Directory of the serve log. Unset: ~/.yunshu/logs. |
 | `YUNSHU_SERVE_LOG_MAX_MB` | float | 4.0 | Serve log: rotate at this size in MiB; with YUNSHU_SERVE_LOG_KEEP the directory is capped at max * (keep + 1). |
 | `YUNSHU_SERVE_LOG_KEEP` | int | 4 | Serve log: rotated files kept. |
+| `YUNSHU_HISTORY_INTERVAL_S` | float | 5.0 | Console history: seconds between samples of the in-memory ring behind GET /v1/yunshu/history (throughput, request counts, memory, TTFT percentiles); 0 turns the sampler off. The ring is fixed-size and never grows: 12 columns, 4 bytes each (timestamp 8), per slot. |
+| `YUNSHU_HISTORY_HOURS` | float | 12.0 | Console history: hours the history ring keeps (capacity = hours * 3600 / YUNSHU_HISTORY_INTERVAL_S slots, preallocated; 12 h at 5 s is 8,640 slots, about 0.4 MiB). |
 | `YUNSHU_ARM` | str | unset | Label recorded in the serve log for the configuration arm this server runs (for offline A/B analysis); it changes no behaviour. |
 
 ### cli

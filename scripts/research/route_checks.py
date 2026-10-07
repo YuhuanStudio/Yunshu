@@ -300,6 +300,51 @@ def _operations(c: Ctx):
 
 
 @check(
+    "console_data",
+    "GET /v1/yunshu/requests/recent",
+    "GET /v1/yunshu/history",
+    "GET /v1/yunshu/memory",
+    "GET /v1/yunshu/config",
+    served=True,
+)
+def _console_data(c: Ctx):
+    """The console's data routes, after the warmup above has produced a finished request:
+    phase timestamps are ordered, the ledger names a weights owner, the config masks secrets."""
+    r = c.req("GET", "/v1/yunshu/requests/recent?limit=5")
+    expect(r.status_code == 200, f"recent {r.status_code} {r.text[:100]}")
+    rows = r.json().get("data") or []
+    expect(rows, "recent: no finished request after the warmup generation")
+    off = rows[0].get("offsets_ms") or {}
+    marks = [
+        off.get(k) for k in ("arrive", "admit", "first_token", "last_token", "done")
+    ]
+    seen = [m for m in marks if m is not None]
+    expect(len(seen) >= 3 and seen == sorted(seen), f"offsets_ms not ordered: {off}")
+    h = c.req("GET", "/v1/yunshu/history")
+    expect(h.status_code == 200, f"history {h.status_code}")
+    hj = h.json()
+    expect("series" in hj and "t" in hj["series"], f"history shape {list(hj)}")
+    m = c.req("GET", "/v1/yunshu/memory")
+    expect(m.status_code == 200, f"memory {m.status_code}")
+    owners = m.json().get("owners") or []
+    expect(
+        any(o["kind"] == "weights" and o["bytes"] for o in owners),
+        f"memory: no weights owner with bytes: {owners}",
+    )
+    cf = c.req("GET", "/v1/yunshu/config")
+    expect(cf.status_code == 200, f"config {cf.status_code}")
+    rows = cf.json().get("settings") or []
+    expect(rows and all("source" in r for r in rows), "config rows without a source")
+    expect(
+        not any(
+            r["name"] == "YUNSHU_AUTH_TOKEN" and r["value"] not in (None, "***")
+            for r in rows
+        ),
+        "config leaked the auth token",
+    )
+
+
+@check(
     "cancel_live",
     "POST /v1/cancel",
     "DELETE /v1/requests/{request_id}",

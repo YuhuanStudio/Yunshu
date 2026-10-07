@@ -214,6 +214,24 @@ class _Registry:
         with self._lock:
             return dict(self._recent[-1]) if self._recent else None
 
+    def recent_entries(
+        self, limit: int = 100, model: str | None = None, since: float | None = None
+    ) -> list[dict]:
+        """Newest-first copies of the finished-request ring, at most ``limit``, optionally
+        for one model and finished after the epoch ``since``."""
+        with self._lock:
+            rows = list(self._recent)
+        out: list[dict] = []
+        for e in reversed(rows):
+            if since is not None and e["t"] <= since:
+                break  # the ring is in finish order
+            if model is not None and e.get("model") != model:
+                continue
+            out.append(dict(e))
+            if len(out) >= limit:
+                break
+        return out
+
     def clear(self) -> None:
         with self._lock:
             self._active.clear()
@@ -290,6 +308,8 @@ def progress_payload(info: RequestInfo) -> dict:
             out["queue_est_wait_ms"] = wait_ms
         return out
     out["phase"] = st.phase
+    out["t0_wall"] = round(info.arrived_wall, 3)
+    out["offsets_ms"] = phase_offsets_ms(info)
     out["prompt_tokens"] = st.prompt_tokens or (st.prefill_total + st.cached_tokens)
     out["cached_tokens"] = st.cached_tokens
     if st.cache_tier:
@@ -345,6 +365,31 @@ def progress_comment(info: RequestInfo) -> bytes:
 
 def _ms(seconds: float | None) -> float | None:
     return None if seconds is None else round(seconds * 1000.0, 1)
+
+
+def phase_offsets_ms(info: RequestInfo, t_first: float | None = None) -> dict:
+    """Phase timestamps as milliseconds after the request arrived (``arrive`` is 0 by
+    definition): left the queue and started prefill (``admit``), first and latest generated
+    token, done. A phase not reached yet is None. One monotonic clock, so the lanes of a
+    timeline line up exactly; ``t0_wall`` (epoch seconds) anchors them to the wall clock."""
+    st = info.stats
+    t0 = info.arrived
+
+    def off(t: float | None) -> float | None:
+        if not t or t < t0:
+            return None
+        return round((t - t0) * 1000.0, 1)
+
+    st_first = getattr(st, "t_first", 0.0) or 0.0
+    if t_first is None:
+        t_first = st_first or info.t_first_chunk
+    return {
+        "arrive": 0.0,
+        "admit": off(getattr(st, "t_admit", None)),
+        "first_token": off(t_first),
+        "last_token": off(getattr(st, "t_last", None) if st_first else None),
+        "done": off(info.t_done),
+    }
 
 
 def build_stats(info: RequestInfo, usage: dict | None = None) -> dict:
@@ -441,6 +486,13 @@ def build_stats(info: RequestInfo, usage: dict | None = None) -> dict:
         "decode_ms": _ms(decode_s),
         "decode_tps": decode_tps,
         "total_ms": _ms(end - info.arrived),
+        "t0_wall": round(info.arrived_wall, 3),
+        "offsets_ms": {
+            **phase_offsets_ms(info, t_first),
+            # build_stats runs before t_done is stamped on some paths: ``end`` is the same
+            # instant ``total_ms`` measures.
+            "done": _ms(end - info.arrived),
+        },
         "speculative": spec,
         # llama.cpp `timings` field names, for tools that already read them.
         "timings": {
@@ -519,6 +571,19 @@ def record_done(info: RequestInfo, stats: dict) -> None:
             "ttft_ms": stats.get("ttft_ms"),
             "speculative": stats.get("speculative"),
             "model": getattr(info.gen, "model", None),
+            # Console finished-request ring (GET /v1/yunshu/requests/recent): numbers and
+            # enums only, never prompt text.
+            "path": info.path,
+            "status": info.status or None,
+            "finish_reason": getattr(
+                getattr(info.gen, "stats", None), "finish_reason", None
+            ),
+            "stream": info.stream,
+            "t0_wall": stats.get("t0_wall"),
+            "offsets_ms": stats.get("offsets_ms"),
+            "queue_wait_ms": stats.get("queue_wait_ms"),
+            "cache": stats.get("cache"),
+            "cancelled": bool(stats.get("cancelled")),
         }
     )
     with contextlib.suppress(Exception):
