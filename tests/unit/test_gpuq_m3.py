@@ -605,3 +605,33 @@ def test_user_idle_probe_parses_and_fails_closed():
     down = lambda *a, **k: SimpleNamespace(returncode=255, stdout="")  # noqa: E731
     assert user_idle_s({}, run=ok) == 412
     assert user_idle_s({}, run=down) is None
+
+
+def test_remote_rc_read_retries_ssh_connection_failures_only():
+    import subprocess
+
+    from gpuq_remote import read_remote_rc
+
+    calls, slept = [], []
+
+    def flaky(cmd, **kw):
+        calls.append(cmd)
+        if len(calls) < 3:
+            raise subprocess.CalledProcessError(255, cmd)  # banner timeout
+        return "0\n"
+
+    assert read_remote_rc(["ssh"], run=flaky, sleep=slept.append) == 0
+    assert len(calls) == 3 and slept == [5, 15]
+
+    def missing(cmd, **kw):
+        raise subprocess.CalledProcessError(1, cmd)  # no rc file: the job really failed
+
+    with pytest.raises(subprocess.CalledProcessError):
+        read_remote_rc(["ssh"], run=missing, sleep=slept.append)
+    assert slept == [5, 15]
+
+    def down(cmd, **kw):
+        raise subprocess.TimeoutExpired(cmd, 20)
+
+    with pytest.raises(subprocess.TimeoutExpired):
+        read_remote_rc(["ssh"], run=down, sleep=lambda s: None)

@@ -59,6 +59,25 @@ IDLE_SCRIPT = (
 )
 
 
+def read_remote_rc(cmd, run=None, sleep=time.sleep, waits=(5, 15, 30)):
+    """The job's exit code from the laptop. ssh connection failures (exit 255, timeouts) are
+    retried: on 2026-10-07 three M3 jobs whose checks had passed and whose outputs were collected
+    failed on a banner timeout while reading this one file. A missing rc file is not retried."""
+    for wait in (*waits, None):
+        try:
+            return int(
+                (run or subprocess.check_output)(cmd, text=True, timeout=20).strip()
+            )
+        except subprocess.CalledProcessError as exc:
+            if exc.returncode != 255 or wait is None:
+                raise
+        except subprocess.TimeoutExpired:
+            if wait is None:
+                raise
+        sleep(wait)
+    raise AssertionError("unreachable")
+
+
 def user_idle_s(env, run=subprocess.run):
     """Seconds since the laptop's owner last touched keyboard or mouse; None when unknown.
     The laptop is borrowed: M3 work must not compete with its owner, so the lane waits until
@@ -438,10 +457,7 @@ class Remote:
         try:
             launched = True
             self.call(self.ssh_cmd(script))
-            rc = subprocess.check_output(
-                self.ssh_cmd("cat " + q(rcpath)), text=True, timeout=20
-            )
-            self.job["rc"] = int(rc.strip())
+            self.job["rc"] = read_remote_rc(self.ssh_cmd("cat " + q(rcpath)))
         except Exception as exc:
             error = exc
         finally:
