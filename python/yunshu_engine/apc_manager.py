@@ -304,13 +304,13 @@ class SpillDiskStore(DiskBlockStore):
     def _maybe_evict(self) -> int:
         budget = self.budget
         if budget is None:
-            return super()._maybe_evict()
+            return int(super()._maybe_evict())
         before = self.evictions
         try:
             budget.enforce(keep={self._budget_ns})
         except Exception:
             logger.warning("APC disk: budget enforcement failed", exc_info=True)
-        return self.evictions - before
+        return int(self.evictions - before)
 
     # Called on the writer thread after a checkpoint file landed: ``(cache_hash, token_ids,
     # extra_hash)``. The manager uses it to drop the files that checkpoint supersedes.
@@ -379,7 +379,7 @@ class SpillDiskStore(DiskBlockStore):
     def _write_payload_impl(self, shard_id, block_hashes, payload) -> bool:
         budget = self.budget
         if budget is None:
-            return super()._write_payload(shard_id, block_hashes, payload)
+            return bool(super()._write_payload(shard_id, block_hashes, payload))
         from mlx_vlm.apc import _cache_nbytes
 
         path = self._shard_path(shard_id)
@@ -503,8 +503,10 @@ class SpillDiskStore(DiskBlockStore):
     def write_now(
         self, cache_hash, token_ids, extra_hash, prompt_cache, synchronous=False
     ) -> bool:
-        return super().save_exact_cache(
-            cache_hash, token_ids, extra_hash, prompt_cache, synchronous=synchronous
+        return bool(
+            super().save_exact_cache(
+                cache_hash, token_ids, extra_hash, prompt_cache, synchronous=synchronous
+            )
         )
 
 
@@ -1484,7 +1486,7 @@ class YunshuAPCManager(APCManager):
                 self.share_anchor_rows(token_ids, extra_hash)
             else:
                 self._drop_anchor_keys(rebound)  # never pin a buffer that is not stored
-        return ok
+        return bool(ok)
 
     def release_superseded(
         self, token_ids, extra_hash: int = 0, *, _generation=None
@@ -1567,7 +1569,7 @@ class YunshuAPCManager(APCManager):
         """Resident bytes with a K/V buffer shared by several checkpoints counted once."""
         logical = super()._resident_bytes_locked()
         saved, pinned = self._share_accounting()
-        return max(0, logical - saved + pinned)
+        return int(max(0, logical - saved + pinned))
 
     def _share_accounting(self) -> tuple[int, int]:
         """(bytes viewed rather than owned, bytes of root buffers held only through views)."""
@@ -1655,7 +1657,7 @@ class YunshuAPCManager(APCManager):
 
     def _memory_headroom(self) -> int:
         memo = getattr(self, "_headroom_memo", None)
-        return super()._memory_headroom() if memo is None else memo
+        return int(super()._memory_headroom() if memo is None else memo)
 
     def _make_room(self, allocation_bytes: int = 0, *, retain_bytes: int = 0) -> bool:
         """Evict anchors before anything else, so they never raise the peak of a big request.
@@ -1747,7 +1749,7 @@ class YunshuAPCManager(APCManager):
         with self.lock:
             donor_key = _sequence_hash(donor_tokens, extra_hash, self.block_size)
             if donor_cache is not None:
-                donor = SimpleNamespace(
+                donor: Any = SimpleNamespace(
                     prompt_cache=donor_cache, token_ids=donor_tokens
                 )
             else:
