@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import {
   Button,
-  Card,
   Select,
   SelectContent,
   SelectItem,
@@ -10,7 +9,8 @@ import {
 } from "@yuhuanowo/yunui";
 import { SettingRow } from "@yuhuanowo/yunui/patterns";
 import { warmupModel, type Connection } from "./api";
-import { modelLabel, type Engine } from "./ui";
+import { MemoryStick } from "lucide-react";
+import { SectionCard, modelLabel, type Engine } from "./ui";
 import type { Perform } from "./Models";
 export function ModelLeaseSettings({
   connection,
@@ -33,8 +33,12 @@ export function ModelLeaseSettings({
       setModel(eligible[0]?.id ?? "");
   }, [engine.status?.models, model]);
   return (
-    <Card className="px-5 pb-5">
-      <h2 className="pt-5 text-sm font-semibold">模型保留時間</h2>
+    <SectionCard
+      icon={MemoryStick}
+      title="模型保留時間"
+      description="控制閒置模型多久後釋放統一記憶體。"
+      bodyClassName="px-5 pb-5"
+    >
       <SettingRow
         title="模型"
         description="固定保留的單模型不適用。"
@@ -100,6 +104,6 @@ export function ModelLeaseSettings({
           目前沒有可調整的模型。需由多模型服務註冊非固定模型。
         </p>
       )}
-    </Card>
+    </SectionCard>
   );
 }

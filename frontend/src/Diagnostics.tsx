@@ -5,6 +5,7 @@ import {
   Card,
   EmptyState,
   NavTabs,
+  SegmentedBar,
   StatusIndicator,
   Table,
   Tbody,
@@ -15,11 +16,13 @@ import {
 } from "@yuhuanowo/yunui";
 import { CodeBlock } from "@yuhuanowo/yunui/content";
 import {
+  DashboardPage,
   DetailList,
   DetailRow,
-  GroupLabel,
   PageHeader,
+  SectionRow,
   StatCard,
+  StatGrid,
 } from "@yuhuanowo/yunui/patterns";
 import {
   Activity,
@@ -27,12 +30,17 @@ import {
   Copy,
   Cpu,
   Database,
+  HeartPulse,
+  Layers,
+  MemoryStick,
   RefreshCw,
   Server,
+  Timer,
+  type LucideIcon,
 } from "lucide-react";
 import { ApiError, type Connection, type EngineStatus } from "./api";
 import { requestServerJson } from "./management-api";
-import { clock, elapsed, number, type Engine } from "./ui";
+import { SectionCard, clock, elapsed, number, type Engine } from "./ui";
 const groups = {
   system: [
     { key: "system", title: "主機資源", path: "/debug/system" },
@@ -82,6 +90,19 @@ type Health = {
   status: "online" | "offline" | "away" | "neutral";
   value: string;
   hint: string;
+  /** Real proportion behind the row (loaded / registered, active / total, CPU %), when there is one. */
+  bar?: {
+    value: number;
+    total: number;
+    tone: "success" | "warning" | "neutral";
+  };
+};
+const groupIcon: Record<Group, LucideIcon> = {
+  system: Server,
+  requests: Timer,
+  cache: Layers,
+  decode: Cpu,
+  memory: MemoryStick,
 };
 /** Health checks derived only from /yunshu/status and the /debug/system reply. */
 export function healthChecks(
@@ -115,6 +136,9 @@ export function healthChecks(
       name: "模型載入",
       status: loaded > 0 ? "online" : "neutral",
       value: `${loaded} / ${status.models.length}`,
+      bar: status.models.length
+        ? { value: loaded, total: status.models.length, tone: "success" }
+        : undefined,
       hint:
         loaded > 0
           ? "已載入的模型可直接推論。"
@@ -127,6 +151,14 @@ export function healthChecks(
       key: "memory",
       name: "MLX 記憶體",
       status: ratio == null ? "neutral" : ratio > 0.9 ? "away" : "online",
+      bar:
+        ratio == null || !total
+          ? undefined
+          : {
+              value: active ?? 0,
+              total,
+              tone: ratio > 0.9 ? "warning" : "success",
+            },
       value:
         active != null && total
           ? `${number(active)} / ${number(total)} GB`
@@ -187,6 +219,7 @@ export function healthChecks(
       name: "主機 CPU",
       status: cpu > 90 ? "away" : "online",
       value: `${number(cpu)}%`,
+      bar: { value: cpu, total: 100, tone: cpu > 90 ? "warning" : "success" },
       hint: `${number(metric(at(system, "cpu", "logical_cores")), 0)} 個邏輯核心。`,
     });
   return rows;
@@ -301,10 +334,7 @@ export function Diagnostics({
   const unavailable =
     results.length > 0 && results.every((row) => row.status === 404);
   return (
-    <section
-      className="mx-auto w-full max-w-7xl space-y-6"
-      data-testid="diagnostics"
-    >
+    <DashboardPage data-testid="diagnostics">
       <PageHeader
         title="引擎診斷"
         description="直接讀取服務的資源、請求、快取與解碼狀態。"
@@ -338,10 +368,7 @@ export function Diagnostics({
           </div>
         }
       />
-      <div
-        className="grid grid-cols-2 gap-3 xl:grid-cols-4"
-        data-testid="resource-readouts"
-      >
+      <StatGrid data-testid="resource-readouts">
         <StatCard
           compact
           icon={Cpu}
@@ -370,16 +397,17 @@ export function Diagnostics({
           value={number(metric(at(engineCounters, "requests_processed")), 0)}
           subtext="服務計數器"
         />
-      </div>
-      <div>
-        <GroupLabel as="h2" title="健康檢查" />
-        <Card className="px-5 py-2" data-testid="health-checks">
-          <ul className="divide-y divide-border">
-            {checks.map((check) => (
-              <li
-                key={check.key}
-                className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-1 py-3"
-              >
+      </StatGrid>
+      <SectionCard
+        icon={HeartPulse}
+        title="健康檢查"
+        description="只用 /v1/yunshu/status 與 /debug/system 的實際回報判斷。"
+        data-testid="health-checks"
+      >
+        <ul className="-my-2 divide-y divide-border">
+          {checks.map((check) => (
+            <li key={check.key} className="py-3">
+              <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-1">
                 <div className="min-w-0">
                   <StatusIndicator status={check.status}>
                     <span className="text-sm font-medium text-foreground">
@@ -391,12 +419,29 @@ export function Diagnostics({
                   </p>
                 </div>
                 <span className="text-sm tabular-nums">{check.value}</span>
-              </li>
-            ))}
-          </ul>
-        </Card>
-      </div>
-      <div className="flex flex-wrap items-center justify-between gap-3">
+              </div>
+              {check.bar && (
+                <SegmentedBar
+                  className="mt-2 pl-4"
+                  height={6}
+                  total={check.bar.total}
+                  segments={[{ value: check.bar.value, tone: check.bar.tone }]}
+                  label={`${check.name}：${check.value}`}
+                />
+              )}
+            </li>
+          ))}
+        </ul>
+      </SectionCard>
+      <SectionRow
+        title="逐項診斷"
+        action={
+          <p className="text-xs text-muted-foreground">
+            {updated ? `讀取於 ${clock(updated)}` : "尚未取得資料"} · 手動更新
+          </p>
+        }
+      />
+      <div>
         <NavTabs
           ariaLabel="診斷類別"
           activeKey={group}
@@ -449,10 +494,6 @@ export function Diagnostics({
             },
           ]}
         />
-
-        <p className="text-xs text-muted-foreground">
-          {updated ? `讀取於 ${clock(updated)}` : "尚未取得資料"} · 手動更新
-        </p>
       </div>
       {loading && (
         <Card className="p-6 text-sm text-muted-foreground" role="status">
@@ -469,8 +510,11 @@ export function Diagnostics({
         </Card>
       )}
       {group === "requests" && request !== undefined && (
-        <Card className="p-5">
-          <h2 className="mb-4 text-sm font-semibold">服務延遲百分位數</h2>
+        <SectionCard
+          icon={Timer}
+          title="服務延遲百分位數"
+          description="後端近 60 秒 HTTP 請求耗時統計，與首頁的已觀測 TTFT 分布不同。"
+        >
           <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
             {["p50", "p90", "p95", "p99"].map((key) => (
               <div key={key}>
@@ -482,20 +526,16 @@ export function Diagnostics({
               </div>
             ))}
           </div>
-          <p className="mt-4 text-xs text-muted-foreground">
-            後端近 60 秒 HTTP 請求耗時統計，與首頁的已觀測 TTFT 分布不同。
-          </p>
-        </Card>
+        </SectionCard>
       )}
       {results.map((row) => (
-        <Card key={row.key} className="min-w-0 space-y-4 p-5">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div>
-              <h2 className="text-sm font-semibold">{row.title}</h2>
-              <p className="mt-1 font-mono text-[10px] text-muted-foreground">
-                {row.path}
-              </p>
-            </div>
+        <SectionCard
+          key={row.key}
+          icon={groupIcon[group]}
+          title={row.title}
+          description={<span className="font-mono">{row.path}</span>}
+          className="min-w-0"
+          action={
             <Badge variant={row.error ? "warning" : "success"}>
               {row.error
                 ? row.status === 404
@@ -505,13 +545,14 @@ export function Diagnostics({
                     : "讀取失敗"
                 : "已讀取"}
             </Badge>
-          </div>
+          }
+        >
           {row.error ? (
             <p role="status" className="text-sm text-muted-foreground">
               {row.error}
             </p>
           ) : (
-            <>
+            <div className="space-y-4">
               <DetailList className="grid gap-x-8 gap-y-2 sm:grid-cols-2">
                 {Object.entries(
                   row.data && typeof row.data === "object" ? row.data : {},
@@ -604,10 +645,10 @@ export function Diagnostics({
                   {JSON.stringify(row.data, null, 2) ?? "null"}
                 </CodeBlock>
               )}
-            </>
+            </div>
           )}
-        </Card>
+        </SectionCard>
       ))}
-    </section>
+    </DashboardPage>
   );
 }

@@ -1,14 +1,26 @@
 import { useEffect, useState } from "react";
 import {
+  Breadcrumb,
+  BreadcrumbItem,
+  BreadcrumbLink,
+  BreadcrumbList,
+  BreadcrumbPage,
+  BreadcrumbSeparator,
   Button,
   CommandPalette,
   IconButton,
   Kbd,
+  Spinner,
   StatusIndicator,
   useCommandPaletteShortcut,
   type CommandPaletteItem,
 } from "@yuhuanowo/yunui";
-import { Sidebar, StatusPill, StatusPillBar } from "@yuhuanowo/yunui/patterns";
+import {
+  Banner,
+  Sidebar,
+  StatusPill,
+  StatusPillBar,
+} from "@yuhuanowo/yunui/patterns";
 import { YunUIProvider } from "@yuhuanowo/yunui/adapters";
 import {
   Activity,
@@ -47,9 +59,28 @@ const titles: Record<string, string> = {
   settings: "設定",
   playground: "推理測試",
 };
+/** Sidebar groups; the topbar breadcrumb reads the same table. */
+const groupOf: Record<string, string> = {
+  overview: "監控",
+  requests: "監控",
+  diagnostics: "監控",
+  models: "模型",
+  playground: "開發",
+  api: "開發",
+};
 function route() {
-  const p = location.hash.replace(/^#\/?/, "");
-  return Object.hasOwn(titles, p) ? p : "overview";
+  const [p = "", ...rest] = location.hash.replace(/^#\/?/, "").split("/");
+  const page = Object.hasOwn(titles, p) ? p : "overview";
+  let sub: string | null = null;
+  try {
+    sub =
+      page === "models" && rest.length
+        ? decodeURIComponent(rest.join("/"))
+        : null;
+  } catch {
+    sub = null;
+  }
+  return { page, sub };
 }
 function stored(key: string, fallback: string) {
   try {
@@ -92,7 +123,7 @@ const adapters = {
   },
 };
 export default function App() {
-  const [page, setPage] = useState(route),
+  const [{ page, sub }, setRoute] = useState(route),
     [menu, setMenu] = useState(false),
     [collapsed, setCollapsed] = useState(() => {
       try {
@@ -181,7 +212,7 @@ export default function App() {
   const last = engine.status?.last;
   useEffect(() => {
     const fn = () => {
-      setPage(route());
+      setRoute(route());
       setMenu(false);
     };
     addEventListener("hashchange", fn);
@@ -193,9 +224,9 @@ export default function App() {
       localStorage.setItem("yunshu.console.theme", dark ? "dark" : "light");
     } catch {}
   }, [dark]);
-  function navigate(p: string) {
-    location.hash = "/" + p;
-    setPage(p);
+  function navigate(p: string, id: string | null = null) {
+    location.hash = "/" + p + (id ? "/" + encodeURIComponent(id) : "");
+    setRoute({ page: p, sub: id });
     setMenu(false);
     setNotice(null);
   }
@@ -382,7 +413,41 @@ export default function App() {
                   onClick={() => setCollapsed(false)}
                 />
               )}
-              <span className="text-sm font-medium">{titles[page]}</span>
+              <Breadcrumb aria-label="目前位置" className="min-w-0">
+                <BreadcrumbList className="flex-nowrap">
+                  <BreadcrumbItem className="hidden sm:inline-flex">
+                    <BreadcrumbLink href="#/overview">Yunshu</BreadcrumbLink>
+                  </BreadcrumbItem>
+                  {groupOf[page] && (
+                    <>
+                      <BreadcrumbSeparator className="hidden sm:inline-flex" />
+                      <BreadcrumbItem className="hidden sm:inline-flex">
+                        {groupOf[page]}
+                      </BreadcrumbItem>
+                    </>
+                  )}
+                  <BreadcrumbSeparator className="hidden sm:inline-flex" />
+                  <BreadcrumbItem>
+                    {sub ? (
+                      <BreadcrumbLink href="#/models">
+                        {titles[page]}
+                      </BreadcrumbLink>
+                    ) : (
+                      <BreadcrumbPage>{titles[page]}</BreadcrumbPage>
+                    )}
+                  </BreadcrumbItem>
+                  {sub && (
+                    <>
+                      <BreadcrumbSeparator />
+                      <BreadcrumbItem className="min-w-0">
+                        <BreadcrumbPage className="truncate">
+                          {modelLabel(sub)}
+                        </BreadcrumbPage>
+                      </BreadcrumbItem>
+                    </>
+                  )}
+                </BreadcrumbList>
+              </Breadcrumb>
             </div>
             <div className="flex items-center gap-3">
               {engine.phase === "online" && engine.status && (
@@ -437,45 +502,42 @@ export default function App() {
               />
             </div>
           </header>
-          {busy && (
-            <div
-              role="status"
-              className="shrink-0 border-b border-border/60 px-5 py-2 text-xs text-muted-foreground"
-            >
-              {busy.startsWith("load:")
-                ? "正在載入模型"
-                : busy.startsWith("unload:")
-                  ? "正在卸載模型"
-                  : busy.startsWith("warmup:")
-                    ? "正在預熱模型"
-                    : busy.startsWith("pull:")
-                      ? "正在下載模型（後端尚未提供進度）"
-                      : busy.startsWith("copy:")
-                        ? "正在建立模型別名"
-                        : busy.startsWith("delete:")
-                          ? "正在刪除模型"
-                          : "正在取消請求"}
-              … 等待服務回應。
-            </div>
-          )}
-          {notice && (
-            <div
-              role={notice.error ? "alert" : "status"}
-              className="flex shrink-0 items-center justify-between gap-3 border-b border-border/60 px-5 py-3"
-            >
-              <p
-                className={
-                  "text-xs " +
-                  (notice.error ? "text-error" : "text-muted-foreground")
-                }
-              >
-                {notice.text}
-              </p>
-              <IconButton
-                icon={<X size={13} />}
-                label="關閉操作訊息"
-                onClick={() => setNotice(null)}
-              />
+          {(busy || notice) && (
+            <div className="shrink-0 space-y-2 px-4 pt-4 lg:px-6">
+              {busy && (
+                <div role="status">
+                  <Banner
+                    tone="neutral"
+                    icon={<Spinner size="sm" />}
+                    title={`${
+                      busy.startsWith("load:")
+                        ? "正在載入模型"
+                        : busy.startsWith("unload:")
+                          ? "正在卸載模型"
+                          : busy.startsWith("warmup:")
+                            ? "正在預熱模型"
+                            : busy.startsWith("pull:")
+                              ? "正在下載模型（後端尚未提供進度）"
+                              : busy.startsWith("copy:")
+                                ? "正在建立模型別名"
+                                : busy.startsWith("delete:")
+                                  ? "正在刪除模型"
+                                  : "正在取消請求"
+                    }… 等待服務回應。`}
+                  />
+                </div>
+              )}
+              {notice && (
+                <div role={notice.error ? "alert" : "status"}>
+                  <Banner
+                    tone={notice.error ? "critical" : "info"}
+                    title={notice.text}
+                    dismissible
+                    dismissLabel="關閉操作訊息"
+                    onDismiss={() => setNotice(null)}
+                  />
+                </div>
+              )}
             </div>
           )}
           <div key={revision} className="flex min-h-0 flex-1 flex-col">
@@ -513,6 +575,8 @@ export default function App() {
                     connection={connection}
                     perform={perform}
                     busy={busy}
+                    selected={sub}
+                    open={(id) => navigate("models", id)}
                     test={(id) => {
                       setTestModel(id);
                       navigate("playground");

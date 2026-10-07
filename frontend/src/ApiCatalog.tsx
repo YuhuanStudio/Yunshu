@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState } from "react";
 import {
   Badge,
   Button,
-  Card,
   EmptyState,
   ScrollFade,
   Input,
@@ -18,9 +17,10 @@ import {
   Thead,
   Tr,
 } from "@yuhuanowo/yunui";
-import { ExternalLink, Search } from "lucide-react";
+import { ExternalLink, ListTree, Search } from "lucide-react";
 import type { Connection } from "./api";
 import { requestServerJson } from "./management-api";
+import { SectionCard } from "./ui";
 type Operation = {
   method: string;
   path: string;
@@ -92,26 +92,27 @@ export function ApiCatalog({ connection }: { connection: Connection }) {
   );
   const root = connection.baseUrl.replace(/\/+$/, "").replace(/\/v1$/, "");
   return (
-    <Card className="min-w-0 overflow-hidden" data-testid="api-catalog">
-      <div className="space-y-4 p-5">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h2 className="text-sm font-semibold">此服務的完整 API</h2>
-            <p className="mt-1 text-xs text-muted-foreground">
-              從目前引擎的 OpenAPI 定義讀取，共 {operations.length} 個操作。
-            </p>
-          </div>
-          <Button
-            size="sm"
-            variant="secondary"
-            onClick={() =>
-              window.open(root + "/docs", "_blank", "noopener,noreferrer")
-            }
-          >
-            <ExternalLink size={13} />
-            API 文件
-          </Button>
-        </div>
+    <SectionCard
+      icon={ListTree}
+      title="此服務的完整 API"
+      description={`從目前引擎的 OpenAPI 定義讀取，共 ${operations.length} 個操作。`}
+      className="min-w-0 overflow-hidden"
+      bodyClassName="p-0"
+      data-testid="api-catalog"
+      action={
+        <Button
+          size="sm"
+          variant="secondary"
+          onClick={() =>
+            window.open(root + "/docs", "_blank", "noopener,noreferrer")
+          }
+        >
+          <ExternalLink size={13} />
+          API 文件
+        </Button>
+      }
+    >
+      <div className="space-y-4 px-5 pb-5">
         <div className="flex flex-wrap gap-3">
           <Input
             className="sm:max-w-sm"
@@ -199,6 +200,6 @@ export function ApiCatalog({ connection }: { connection: Connection }) {
           description="此目錄反映服務實際提供的路由，不會推測未提供的功能。"
         />
       )}
-    </Card>
+    </SectionCard>
   );
 }

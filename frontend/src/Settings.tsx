@@ -1,13 +1,21 @@
 import { useState } from "react";
-import { Button, Card, Input, Kbd, Switch } from "@yuhuanowo/yunui";
+import { Button, Input, Kbd, PasswordInput, Switch } from "@yuhuanowo/yunui";
 import {
+  Banner,
+  DashboardPage,
   PageHeader,
   SettingRow,
   SettingsShell,
 } from "@yuhuanowo/yunui/patterns";
-import { Keyboard, Link2, MemoryStick, Palette } from "lucide-react";
+import {
+  Keyboard,
+  Link2,
+  MemoryStick,
+  Palette,
+  ShieldCheck,
+} from "lucide-react";
 import { ModelLeaseSettings } from "./ModelLeaseSettings";
-import type { Engine } from "./ui";
+import { SectionCard, type Engine } from "./ui";
 import type { Perform } from "./Models";
 import type { Connection } from "./api";
 export function Settings({
@@ -60,10 +68,10 @@ export function Settings({
     ["Esc", "關閉對話框與選單"],
   ];
   return (
-    <section className="mx-auto w-full max-w-5xl" data-testid="settings">
+    <DashboardPage data-testid="settings">
       <SettingsShell
         className="h-auto"
-        sidebarClassName="border-r-0 bg-transparent"
+        sidebarClassName="border-r-0 bg-transparent [&_.nav-item.active]:bg-(--bg-card) [&_.nav-item.active]:shadow-sm [&_.nav-item.active]:ring-1 [&_.nav-item.active]:ring-border"
         contentClassName="overflow-visible"
         header={
           <PageHeader
@@ -86,9 +94,15 @@ export function Settings({
           },
         ]}
       >
-        <div className="space-y-6">
-          <Card id="settings-connection" className="scroll-mt-4 px-5 pb-5">
-            <h2 className="pt-5 text-sm font-semibold">引擎連線</h2>
+        <div className="min-w-0 space-y-6 sm:pl-6">
+          <SectionCard
+            id="settings-connection"
+            icon={Link2}
+            title="引擎連線"
+            description="控制台要連到哪一個 Yunshu 服務。"
+            className="scroll-mt-4"
+            bodyClassName="px-5 pb-5"
+          >
             <SettingRow
               title={<label htmlFor="base-url">服務位址</label>}
               description="預設使用同一個服務來源。開發模式由 Vite 轉送至本機 8000 埠。"
@@ -109,14 +123,14 @@ export function Settings({
               title={<label htmlFor="access-token">存取權杖</label>}
               description="只保留在此頁記憶體；重新整理後需要再輸入。更改服務位址會清除權杖。"
               control={
-                <Input
+                <PasswordInput
                   id="access-token"
                   className="w-full sm:w-72"
-                  type="password"
                   autoComplete="off"
                   value={token}
                   onChange={(e) => setToken(e.target.value)}
                   placeholder="服務沒有啟用驗證時可留空"
+                  labels={{ show: "顯示權杖", hide: "隱藏權杖" }}
                 />
               }
             />
@@ -130,8 +144,14 @@ export function Settings({
                 儲存並連線
               </Button>
             </div>
-          </Card>
-          <Card id="settings-appearance" className="scroll-mt-4 px-5">
+          </SectionCard>
+          <SectionCard
+            id="settings-appearance"
+            icon={Palette}
+            title="外觀"
+            className="scroll-mt-4"
+            bodyClassName="px-5"
+          >
             <SettingRow
               title="深色介面"
               description="儲存於此瀏覽器。"
@@ -143,7 +163,7 @@ export function Settings({
                 />
               }
             />
-          </Card>
+          </SectionCard>
           <div id="settings-models" className="scroll-mt-4 space-y-6">
             <ModelLeaseSettings
               connection={connection}
@@ -151,16 +171,20 @@ export function Settings({
               perform={perform}
               busy={disabled}
             />
-            <Card className="space-y-2 p-5">
-              <h2 className="text-sm font-semibold">模型操作權限</h2>
-              <p className="text-xs leading-6 text-muted-foreground">
-                模型載入與卸載需要服務允許的權限。若出現 401，請使用服務設定的
-                YUNSHU_AUTH_TOKEN。此頁不會修改引擎啟動參數或關閉驗證。
-              </p>
-            </Card>
+            <Banner
+              tone="neutral"
+              icon={<ShieldCheck size={16} />}
+              title="模型操作權限"
+              description="載入與卸載需要服務允許的權限；若出現 401，請使用服務設定的 YUNSHU_AUTH_TOKEN。此頁不會修改引擎啟動參數或關閉驗證。"
+            />
           </div>
-          <Card id="settings-shortcuts" className="scroll-mt-4 px-5 pb-2">
-            <h2 className="pt-5 text-sm font-semibold">鍵盤快速鍵</h2>
+          <SectionCard
+            id="settings-shortcuts"
+            icon={Keyboard}
+            title="鍵盤快速鍵"
+            className="scroll-mt-4"
+            bodyClassName="px-5 pb-2"
+          >
             {shortcuts.map(([keys, text]) => (
               <SettingRow
                 key={keys}
@@ -180,10 +204,10 @@ export function Settings({
                 }
               />
             ))}
-          </Card>
+          </SectionCard>
         </div>
       </SettingsShell>
-    </section>
+    </DashboardPage>
   );
 }
 

@@ -15,7 +15,7 @@ import {
 import { MoreHorizontal, Copy, Trash2 } from "lucide-react";
 import type { Connection } from "./api";
 import { copyModel, deleteModel, pullModel } from "./management-api";
-import type { Perform } from "./Models";
+import type { Perform } from "./ModelActions";
 
 type Operation = "pull" | "copy" | "delete" | null;
 

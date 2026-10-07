@@ -1,11 +1,17 @@
-import { Button, Card } from "@yuhuanowo/yunui";
+import { Button, Card, Input } from "@yuhuanowo/yunui";
+import { Banner } from "@yuhuanowo/yunui/patterns";
 import {
   ModelIcon,
   getDeveloperIconPath,
   getModelDeveloperId,
 } from "@yuhuanowo/yunui/ai";
-import { RefreshCw } from "lucide-react";
-import { useEffect, useState } from "react";
+import { Check, Copy, RefreshCw, type LucideIcon } from "lucide-react";
+import {
+  useEffect,
+  useState,
+  type HTMLAttributes,
+  type ReactNode,
+} from "react";
 import type { EngineStatus } from "./api";
 import type { useEngine } from "./useEngine";
 export type Engine = ReturnType<typeof useEngine>;
@@ -40,39 +46,80 @@ export function ConnectionState({
   configure: () => void;
 }) {
   if (engine.phase === "online") return null;
+  const title =
+    engine.phase === "connecting"
+      ? "正在連接引擎"
+      : engine.phase === "unauthorized"
+        ? "需要有效的存取權杖"
+        : "無法連接引擎";
   return (
-    <Card
-      className="flex flex-wrap items-center justify-between gap-3 border-warning-soft bg-warning-soft px-4 py-3"
-      role="status"
-    >
-      <div>
-        <p className="text-sm font-medium">
-          {engine.phase === "connecting"
-            ? "正在連接引擎"
-            : engine.phase === "unauthorized"
-              ? "需要有效的存取權杖"
-              : "無法連接引擎"}
-        </p>
-        <p className="mt-1 text-xs text-muted-foreground">
-          {engine.error ?? "正在取得服務狀態…"}
-          {engine.updatedAt
+    <div role="status">
+      <Banner
+        tone={engine.phase === "connecting" ? "neutral" : "warning"}
+        title={title}
+        description={`${engine.error ?? "正在取得服務狀態…"}${
+          engine.updatedAt
             ? ` · 最後成功：${clock(engine.updatedAt)}，下方保留上次資料。`
-            : ""}
-        </p>
-      </div>
-      <div className="flex gap-2">
-        <Button
-          size="sm"
-          variant="secondary"
-          onClick={() => void engine.refresh()}
+            : ""
+        }`}
+        actions={
+          <>
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => void engine.refresh()}
+            >
+              <RefreshCw size={13} />
+              重試
+            </Button>
+            <Button size="sm" variant="ghost" onClick={configure}>
+              連線設定
+            </Button>
+          </>
+        }
+      />
+    </div>
+  );
+}
+/** A card with a Yunxin-style header: icon chip, title, description and a trailing action. */
+export function SectionCard({
+  icon: Icon,
+  title,
+  description,
+  action,
+  children,
+  className,
+  bodyClassName = "p-5",
+  ...props
+}: {
+  icon: LucideIcon;
+  bodyClassName?: string;
+  title: ReactNode;
+  description?: ReactNode;
+  action?: ReactNode;
+  children?: ReactNode;
+  className?: string;
+} & Omit<HTMLAttributes<HTMLDivElement>, "title">) {
+  return (
+    <Card className={className} {...props}>
+      <div className="flex flex-wrap items-center gap-3 px-5 pt-5">
+        <span
+          aria-hidden="true"
+          className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-(--bg-elevated) text-muted-foreground"
         >
-          <RefreshCw size={13} />
-          重試
-        </Button>
-        <Button size="sm" variant="ghost" onClick={configure}>
-          連線設定
-        </Button>
+          <Icon size={17} strokeWidth={1.75} />
+        </span>
+        <div className="min-w-0 flex-1">
+          <h2 className="truncate text-sm font-semibold">{title}</h2>
+          {description && (
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              {description}
+            </p>
+          )}
+        </div>
+        {action}
       </div>
+      <div className={bodyClassName}>{children}</div>
     </Card>
   );
 }
@@ -172,4 +219,80 @@ export function sizeGb(size: number | null | undefined): string {
   return size != null && Number.isFinite(size) && size > 0
     ? `${number(size)} GB`
     : "—";
+}
+
+/** A string kept in localStorage; storage failures fall back to the default. */
+export function useStoredChoice<T extends string>(
+  key: string,
+  allowed: readonly T[],
+  fallback: T,
+) {
+  const [value, setValue] = useState<T>(() => {
+    try {
+      const raw = localStorage.getItem(key);
+      return allowed.includes(raw as T) ? (raw as T) : fallback;
+    } catch {
+      return fallback;
+    }
+  });
+  const set = (next: T) => {
+    setValue(next);
+    try {
+      localStorage.setItem(key, next);
+    } catch {
+      /* storage may be unavailable */
+    }
+  };
+  return [value, set] as const;
+}
+
+/** A read-only mono field with a copy button; the copy outcome is announced, never assumed. */
+export function CopyField({
+  label,
+  value,
+  className,
+}: {
+  label: string;
+  value: string;
+  className?: string;
+}) {
+  const [state, setState] = useState<"idle" | "done" | "failed">("idle");
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(value);
+      setState("done");
+    } catch {
+      setState("failed");
+    }
+    setTimeout(() => setState("idle"), 2000);
+  }
+  return (
+    <div className={className}>
+      <label className="text-xs text-muted-foreground">
+        {label}
+        <div className="mt-1.5 flex items-center gap-2">
+          <Input
+            readOnly
+            className="min-w-0 flex-1 font-mono text-sm"
+            value={value}
+            onFocus={(e) => e.currentTarget.select()}
+          />
+          <Button
+            size="sm"
+            variant="secondary"
+            type="button"
+            aria-label={`複製${label}`}
+            onClick={() => void copy()}
+          >
+            {state === "done" ? <Check size={13} /> : <Copy size={13} />}
+            {state === "done"
+              ? "已複製"
+              : state === "failed"
+                ? "無法寫入剪貼簿"
+                : "複製"}
+          </Button>
+        </div>
+      </label>
+    </div>
+  );
 }

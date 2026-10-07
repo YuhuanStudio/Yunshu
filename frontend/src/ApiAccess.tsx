@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
 import {
-  Card,
   Select,
   SelectContent,
   SelectItem,
@@ -8,11 +7,32 @@ import {
   SelectValue,
 } from "@yuhuanowo/yunui";
 import { CodeBlock } from "@yuhuanowo/yunui/content";
-import { PageHeader } from "@yuhuanowo/yunui/patterns";
+import {
+  DashboardPage,
+  PageHeader,
+  SectionRow,
+} from "@yuhuanowo/yunui/patterns";
+import {
+  Bot,
+  Code2,
+  Globe,
+  KeyRound,
+  Terminal,
+  type LucideIcon,
+} from "lucide-react";
 import type { Connection } from "./api";
 import { ApiCatalog } from "./ApiCatalog";
 import { buildIntegrations, serviceRoot } from "./integrations";
-import { modelLabel, type Engine } from "./ui";
+import { CopyField, SectionCard, modelLabel, type Engine } from "./ui";
+
+const integrationIcon: Record<string, LucideIcon> = {
+  "claude-code": Bot,
+  codex: Bot,
+  opencode: Bot,
+  openai: Code2,
+  anthropic: Code2,
+  curl: Terminal,
+};
 
 export function ApiView({
   connection,
@@ -42,62 +62,60 @@ export function ApiView({
     [root, model],
   );
   return (
-    <section className="mx-auto w-full max-w-7xl space-y-6" data-testid="api">
+    <DashboardPage data-testid="api">
       <PageHeader
         title="API 接入"
         description="使用熟悉的 SDK 或程式代理，讓你的應用連接本機模型。"
       />
-      <Card className="grid gap-5 p-5 sm:grid-cols-[1fr_1fr_auto] sm:items-end">
-        <div className="min-w-0">
-          <p className="text-xs text-muted-foreground">OpenAI API Base URL</p>
-          <p className="mt-1.5 break-all font-mono text-sm">{root}/v1</p>
-        </div>
-        <div className="min-w-0">
-          <p className="text-xs text-muted-foreground">Anthropic Base URL</p>
-          <p className="mt-1.5 break-all font-mono text-sm">{root}</p>
-        </div>
-        <div className="min-w-0">
-          <p className="mb-1.5 text-xs text-muted-foreground">
-            命令中使用的模型
-          </p>
-          <Select
-            value={model || undefined}
-            onValueChange={setModel}
-            disabled={!models.length}
-          >
-            <SelectTrigger
-              aria-label="接入使用的模型"
-              className="w-full sm:w-56"
+      <SectionCard
+        icon={Globe}
+        title="服務位址"
+        description="貼進 SDK 或程式代理的 Base URL；範例命令使用下方選定的模型。"
+      >
+        <div className="grid gap-5 lg:grid-cols-[1fr_1fr_auto] lg:items-end">
+          <CopyField label="OpenAI API Base URL" value={`${root}/v1`} />
+          <CopyField label="Anthropic Base URL" value={root} />
+          <div className="min-w-0">
+            <p className="mb-1.5 text-xs text-muted-foreground">
+              命令中使用的模型
+            </p>
+            <Select
+              value={model || undefined}
+              onValueChange={setModel}
+              disabled={!models.length}
             >
-              <SelectValue placeholder="local" />
-            </SelectTrigger>
-            <SelectContent>
-              {models.map((id) => (
-                <SelectItem key={id} value={id}>
-                  {modelLabel(id)}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+              <SelectTrigger
+                aria-label="接入使用的模型"
+                className="w-full lg:w-56"
+              >
+                <SelectValue placeholder="local" />
+              </SelectTrigger>
+              <SelectContent>
+                {models.map((id) => (
+                  <SelectItem key={id} value={id}>
+                    {modelLabel(id)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
         </div>
-      </Card>
+      </SectionCard>
+      <SectionRow title="用戶端設定" />
       <div className="grid gap-4 lg:grid-cols-2" data-testid="integrations">
         {integrations.map((item) => (
-          <Card
+          <SectionCard
             key={item.id}
-            className="min-w-0 space-y-3 p-5"
+            icon={integrationIcon[item.id] ?? KeyRound}
+            title={item.title}
+            description={item.description}
+            className="min-w-0"
             data-testid={`integration-${item.id}`}
           >
-            <div>
-              <h2 className="text-sm font-semibold">{item.title}</h2>
-              <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                {item.description}
-              </p>
-            </div>
             <CodeBlock language={item.language} filename={item.filename}>
               {item.code}
             </CodeBlock>
-          </Card>
+          </SectionCard>
         ))}
       </div>
       <p className="text-xs text-muted-foreground">
@@ -105,6 +123,6 @@ export function ApiView({
         local），不會寫入真實權杖。
       </p>
       <ApiCatalog connection={connection} />
-    </section>
+    </DashboardPage>
   );
 }
