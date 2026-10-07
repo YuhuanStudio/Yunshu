@@ -521,24 +521,27 @@ export function Dashboard({
               </Button>
             </div>
           </div>
-          {items.length ? (
-            <ul className="mt-2 divide-y divide-border/60">
-              {items.slice(0, 5).map((row) => (
-                <RequestLane key={row.request_id} row={row} />
-              ))}
-            </ul>
-          ) : (
-            <EmptyState
-              size="inline"
-              className="flex-1"
-              title="目前閒置"
-              description={`沒有正在處理的請求。${
-                memory?.cache_gb
-                  ? ` 記憶體保留池 ${number(memory.cache_gb)} GB 會在閒置後歸還系統。`
-                  : ""
-              }`}
-            />
-          )}
+          {/* The list (or the idle note) owns the free height, so the totals line sits at the card bottom in both states. */}
+          <div className="flex min-h-0 flex-1 flex-col">
+            {items.length ? (
+              <ul className="mt-2 divide-y divide-border/60">
+                {items.slice(0, 5).map((row) => (
+                  <RequestLane key={row.request_id} row={row} />
+                ))}
+              </ul>
+            ) : (
+              <EmptyState
+                size="inline"
+                className="flex-1"
+                title="目前閒置"
+                description={`沒有正在處理的請求。${
+                  memory?.cache_gb
+                    ? ` 記憶體保留池 ${number(memory.cache_gb)} GB 會在閒置後歸還系統。`
+                    : ""
+                }`}
+              />
+            )}
+          </div>
           <TotalsLine totals={totals} />
         </div>
       </Card>
