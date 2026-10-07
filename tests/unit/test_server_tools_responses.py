@@ -575,8 +575,13 @@ def test_tool_types_validate():
         "namespace",
         "custom",
     ]
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException, match="cannot be guaranteed"):
+        function_tools(r.tools)
+    r.tools[-1].format = {"type": "text"}
     fn = function_tools(r.tools)
-    assert [t.name for t in fn] == ["f"]
+    assert [t.name for t in fn] == ["f", "apply_patch"]
 
 
 @pytest.mark.skipif(

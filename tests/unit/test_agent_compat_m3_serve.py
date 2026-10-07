@@ -63,3 +63,27 @@ def test_port_outside_range_refused(tmp_path):
         )
         == 2
     )
+
+
+def test_control_identity_prevents_foreign_stop():
+    s, port = _listener()
+    replies = []
+
+    def client():
+        for message in (b"stop\n", b"ready other\n"):
+            with socket.create_connection(("127.0.0.1", port)) as c:
+                c.sendall(message)
+        with socket.create_connection(("127.0.0.1", port)) as c:
+            c.sendall(b"ready mine\n")
+            replies.append(c.recv(256))
+        with socket.create_connection(("127.0.0.1", port)) as c:
+            c.sendall(b"stop mine\n")
+
+    t = threading.Thread(target=client)
+    t.start()
+    assert (
+        m3_serve.wait_stop(s, time.monotonic() + 10, lambda: True, identity="mine")
+        == "stop"
+    )
+    t.join()
+    assert replies == [b"ready mine\n"]

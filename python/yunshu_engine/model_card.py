@@ -43,6 +43,7 @@ _KIND_FOR_TYPE = {
     "VIDEO": "video",
     "EMBEDDING": "embedding",
     "RERANKER": "reranker",
+    "CLASSIFIER": "classifier",
 }
 
 # Sampling / control parameters accepted by the chat routes (names are ChatRequest fields;
@@ -97,6 +98,7 @@ _ENDPOINTS: dict[str, list[str]] = {
     ],
     "embedding": ["/v1/embeddings", "/pooling"],
     "reranker": ["/rerank", "/score"],
+    "classifier": ["/v1/classify"],
     "asr": ["/v1/audio/transcriptions"],
     "tts": ["/v1/audio/speech", "/v1/audio/speech/stream", "/v1/audio/voices"],
     "image": ["/v1/images/generations"],
@@ -416,7 +418,11 @@ class ModelCard:
         if self.kind == "embedding":
             caps += ["embedding"]
         if self.kind == "reranker":
-            caps += ["rerank"]
+            caps += ["rerank", "score"]
+            if (self.architecture or "").endswith("ForSequenceClassification"):
+                caps += ["classify"]
+        if self.kind == "classifier":
+            caps += ["classify"]
         if self.kind == "asr":
             caps += ["transcription"]
         if self.kind == "tts":
@@ -437,6 +443,11 @@ def _kind_for(model_path: Path, config: dict, model_type_name: str | None) -> st
         except Exception:
             model_type_name = "LLM"
     kind = _KIND_FOR_TYPE.get(model_type_name, "chat")
+    if (
+        kind == "classifier"
+        and config.get("num_labels", len(config.get("id2label", {})) or 2) == 1
+    ):
+        kind = "reranker"
     # Text retrieval models (Qwen3-Embedding / -Reranker) load through the LLM engine and
     # serve pooled vectors / scores; the engine's detector already keys the VL variants off
     # the name, so the card does the same for the text ones.
@@ -489,6 +500,8 @@ def _modalities(
     if kind in ("embedding", "reranker"):
         ins = ["text"] + (["image"] if "vision_config" in config else [])
         return ins, ["embedding"] if kind == "embedding" else ["score"]
+    if kind == "classifier":
+        return ["text"], ["classification"]
     if kind == "asr":
         return ["audio"], ["text"]
     if kind == "tts":
@@ -511,7 +524,15 @@ def _context(kind: str, config: dict, text_cfg: dict) -> dict:
             "native": config["n_text_ctx"],
             "source": "n_text_ctx",
         }
-    if kind not in ("chat", "vlm", "omni", "embedding", "reranker", "ocr"):
+    if kind not in (
+        "chat",
+        "vlm",
+        "omni",
+        "embedding",
+        "reranker",
+        "classifier",
+        "ocr",
+    ):
         return {}
     length = None
     source = None
@@ -786,6 +807,14 @@ def _derive(p: Path, mid: str, model_type_name: str | None) -> ModelCard:
     )
     family = text_cfg.get("model_type") or config.get("model_type")
     ctx = _context(kind, config, text_cfg)
+    from .scoring_engine import scoring_kind, scoring_max_length
+
+    if ctx and scoring_kind(config, str(p)):
+        tokenizer_config = _read_json(p / "tokenizer_config.json") or {}
+        cap = scoring_max_length(config, tokenizer_config.get("model_max_length"))
+        ctx["length"] = ctx["effective"] = min(ctx["length"], cap)
+        ctx["serving_cap"] = cap
+
     max_out = None
     if text_like:
         max_out = (
@@ -864,6 +893,10 @@ def _derive(p: Path, mid: str, model_type_name: str | None) -> ModelCard:
     if kind != "embedding" and not text_like:
         card.embeddings = None
     endpoints = list(_ENDPOINTS.get(kind, []))
+    if kind == "reranker" and any(
+        a.endswith("ForSequenceClassification") for a in archs
+    ):
+        endpoints.append("/v1/classify")
     if kind == "asr" and config.get("model_type") == "whisper":
         endpoints.append("/v1/audio/translations")
     card.api = {

@@ -1,0 +1,37 @@
+@import "tailwindcss";
+/* yunui:styles:start */
+@import "../.yunui/setup.css";
+/* yunui:styles:end */
+
+@source "./**/*.{ts,tsx}";
+@font-face {
+  font-family: Geist;
+  src: url("/console/fonts/caa3a2e1cccd8315-s.p.0wgildi0cnwt9.woff2")
+    format("woff2");
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+}
+@font-face {
+  font-family: "JetBrains Mono";
+  src: url("/console/fonts/JetBrainsMono-Regular.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+}
+@theme {
+  --font-sans: Geist, ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+}
+body {
+  margin: 0;
+  background: var(--bg-base);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+}
+* {
+  box-sizing: border-box;
+}
+::selection {
+  background: var(--accent-muted);
+}

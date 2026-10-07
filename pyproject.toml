@@ -4,12 +4,18 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["python/yunshu_gateway", "python/yunshu_control", "python/yunshu_engine", "python/yunshu_kv", "python/yunshu_cli", "python/yunshu_client"]
+# The frontend build writes this ignored/generated directory immediately before
+# packaging. Include it in the wheel when present without requiring inference.
+artifacts = ["python/yunshu_gateway/console_static/**"]
 
 # The sdist carries what is needed to build and test the package, not the
 # local benchmark data.
 [tool.hatch.build.targets.sdist]
+artifacts = ["python/yunshu_gateway/console_static/**"]
 include = [
     "python/",
+    "frontend/",
+    "docs/CONSOLE.md",
     "tests/",
     "examples/",
     "README*.md",
@@ -18,6 +24,19 @@ include = [
     "THIRD_PARTY_NOTICES.md",
     "pyproject.toml",
     "uv.lock",
+]
+exclude = [
+    "frontend/node_modules/",
+    "frontend/node_modules/**",
+    "frontend/dist/",
+    "frontend/dist/**",
+    "frontend/test-results/",
+    "frontend/test-results/**",
+    "frontend/playwright-report/",
+    "frontend/playwright-report/**",
+    "frontend/evidence/",
+    "frontend/evidence/**",
+    "frontend/*.tsbuildinfo",
 ]
 
 [project]

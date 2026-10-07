@@ -156,3 +156,32 @@ cell in `scripts/verify/stages.py` so the next worker does not need the script.
 `yv ab --base BASE_SHA --cand CAND_SHA --suite preflight,websearch --label websearch-smoke --model /Volumes/P5Plus/models/Qwen3.5-0.8B-MLX-bf16 --priority -1` exercises the existing `route_checks_tools` search contract against a loopback SearXNG/page fixture, then candidate Responses `open_page`/`find_in_page` and resident Qwen3-Embedding-0.6B fusion, plus ten frozen adversarial fixture replays. The fixture pilot cannot approve the 200-pair quality gate. This optional stage is excluded from the core full/decode ladder. Use the main checkout gpuq (`YV_GPUQ`) and `GPUQ_OWNER=websearch`. CPU probe/validator tests run before queue submission; every result ends with `complete: true`. It is correctness smoke, never a performance or answer-quality verdict.
 
 The frozen eval entry point is `scripts/research/websearch_eval.py`; the dated 130-query seed set is `scripts/research/data/websearch_queries.jsonl`. Capture writes pending gold, never invented answers. Curate references before replay; `--dry-run` makes no answer-quality claim. Raw page snapshots remain private.
+
+### Reranker / classifier oracle
+
+`--suite rerank` runs CPU preflight and the dedicated capability stage: candidate
+HTTP responses on Qwen3-Reranker-0.6B, BGE-reranker-base, MiniLM-L-6-v2 and a tiny
+SST2 classifier against independent Transformers float32 CPU inference on the
+same M5 host. Five text pairs include a long document that exceeds encoder windows;
+three classifier inputs exercise the head probabilities. All scores must be within
+0.003 and preserve ranking. The registered embed-route checks, scalar/list
+broadcasting and raw/activated score consistency run on those same real engines.
+The stage records the detected model type and selected engine class. This is a
+capability oracle, rather than a comparison with the old bi-encoder implementation.
+
+Use full commit SHAs and the main checkout's gpuq explicitly:
+
+```sh
+PATH=/Users/yuhuan/Documents/YuhuanStudio/Yunshu/.venv/bin:$PATH \
+YV_GPUQ=/Users/yuhuan/Documents/YuhuanStudio/Yunshu/scripts/dev/gpuq \
+GPUQ_OWNER=rerank GPUQ_DIR=/Volumes/P5Plus/yunshu-gpuq \
+scripts/dev/yv ab --base BASE_SHA --cand CAND_SHA --suite rerank \
+  --label rerank-TOPIC --priority -1 --detach
+```
+
+The scoring models live in `/Volumes/P5Plus/models` by default; `--env
+RERANK_MODEL_ROOT=PATH` overrides the model root. Encoder head serving needs the
+`embeddings` extra; Torch is used only by the CPU reference. `yv` atomically
+promotes a copy of successful evidence and keeps the original gpuq-declared output
+so digest and watchdog checks can still verify it. A finished job without an
+explicit return code of zero fails verification.

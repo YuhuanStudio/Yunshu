@@ -79,7 +79,7 @@ def has_server_tools_responses(req) -> bool:
 
 def function_tools(tools):
     """The tools the engine's chat template can use: plain named functions. Codex ``namespace``
-    tools are flattened to their child functions; other kinds (custom / freeform ...) are dropped.
+    tools are flattened to their children; freeform custom tools use an internal input function.
     Returns the input object itself when nothing needed changing."""
     if not tools:
         return tools
@@ -92,12 +92,17 @@ def function_tools(tools):
         ty = d.get("type") or "function"
         if ty == "function" and d.get("name"):
             out.append(t)
+        elif ty == "custom":
+            from ..custom_tools import custom_function
+
+            changed = True
+            out.append(ResponseTool(**custom_function(d)))
         elif ty == "namespace":
             changed = True
-            for c in d.get("tools") or []:
-                if isinstance(c, dict) and (c.get("type") or "function") == "function":
-                    if c.get("name"):
-                        out.append(ResponseTool(**c))
+            children = [
+                ResponseTool(**c) for c in d.get("tools") or [] if isinstance(c, dict)
+            ]
+            out.extend(function_tools(children) or [])
         else:
             changed = True
     if not changed:
