@@ -89,8 +89,20 @@ export function parseUsage(
   return Object.keys(out).length ? out : undefined;
 }
 
-/** Normalize a server URL or API base URL to the OpenAI chat completions endpoint. */
-export function chatCompletionsUrl(baseUrl: string): string {
+/** The three wire formats the engine serves. */
+export type Dialect = "chat" | "responses" | "messages";
+
+export const DIALECT_PATH: Record<Dialect, string> = {
+  chat: "/chat/completions",
+  responses: "/responses",
+  messages: "/messages",
+};
+
+/** Normalize a server URL or API base URL to the endpoint of one dialect. */
+export function endpointUrl(
+  baseUrl: string,
+  dialect: Dialect = "chat",
+): string {
   let url: URL;
   try {
     url = new URL(baseUrl.trim());
@@ -110,14 +122,228 @@ export function chatCompletionsUrl(baseUrl: string): string {
     );
   }
 
-  const path = url.pathname.replace(/\/+$/, "");
-  if (path.endsWith("/chat/completions")) {
-    url.pathname = path;
-  } else {
-    const apiPath = path.endsWith("/v1") ? path : `${path}/v1`;
-    url.pathname = `${apiPath}/chat/completions`;
+  let path = url.pathname.replace(/\/+$/, "");
+  for (const suffix of Object.values(DIALECT_PATH)) {
+    if (path.endsWith(suffix)) {
+      path = path.slice(0, -suffix.length);
+      break;
+    }
   }
+  const apiPath = path.endsWith("/v1") ? path : `${path}/v1`;
+  url.pathname = `${apiPath}${DIALECT_PATH[dialect]}`;
   return url.toString();
+}
+
+/** Normalize a server URL or API base URL to the OpenAI chat completions endpoint. */
+export function chatCompletionsUrl(baseUrl: string): string {
+  return endpointUrl(baseUrl, "chat");
+}
+
+const IMAGE_DATA_URL = /^data:([^;,]+);base64,(.*)$/s;
+
+/** The JSON body one dialect expects for a chat-shaped request. */
+export function buildPayload(
+  dialect: Dialect,
+  body: CompletionBody,
+): Record<string, unknown> {
+  if (dialect === "chat") return { ...body, stream: true };
+  const system = body.messages
+    .filter((m) => m.role === "system")
+    .map((m) => (typeof m.content === "string" ? m.content : ""))
+    .filter(Boolean)
+    .join("\n\n");
+  const turns = body.messages.filter((m) => m.role !== "system");
+  if (dialect === "responses") {
+    return {
+      model: body.model,
+      ...(system ? { instructions: system } : {}),
+      input: turns.map((m) => ({
+        role: m.role,
+        content:
+          typeof m.content === "string"
+            ? m.content
+            : m.content.map((part) =>
+                part.type === "text"
+                  ? {
+                      type:
+                        m.role === "assistant" ? "output_text" : "input_text",
+                      text: part.text,
+                    }
+                  : { type: "input_image", image_url: part.image_url.url },
+              ),
+      })),
+      temperature: body.temperature,
+      max_output_tokens: body.max_tokens,
+      stream: true,
+      ...(body.enable_thinking !== undefined
+        ? { enable_thinking: body.enable_thinking }
+        : {}),
+      ...(body.response_format
+        ? { text: { format: { type: "json_object" } } }
+        : {}),
+    };
+  }
+  return {
+    model: body.model,
+    ...(system ? { system } : {}),
+    messages: turns.map((m) => ({
+      role: m.role,
+      content:
+        typeof m.content === "string"
+          ? m.content
+          : m.content.map((part) => {
+              if (part.type === "text")
+                return { type: "text", text: part.text };
+              const match = IMAGE_DATA_URL.exec(part.image_url.url);
+              return match
+                ? {
+                    type: "image",
+                    source: {
+                      type: "base64",
+                      media_type: match[1],
+                      data: match[2],
+                    },
+                  }
+                : {
+                    type: "image",
+                    source: { type: "url", url: part.image_url.url },
+                  };
+            }),
+    })),
+    max_tokens: body.max_tokens,
+    temperature: body.temperature,
+    stream: true,
+    // Messages has no JSON mode: response_format is not sent.
+    ...(body.enable_thinking === undefined
+      ? {}
+      : body.enable_thinking
+        ? {
+            thinking: {
+              type: "enabled",
+              budget_tokens: Math.max(1, Math.floor(body.max_tokens / 2)),
+            },
+          }
+        : { thinking: { type: "disabled" } }),
+  };
+}
+
+const num = (v: unknown) => finiteNumber(v);
+const obj = (v: unknown): Record<string, unknown> | undefined =>
+  v && typeof v === "object" ? (v as Record<string, unknown>) : undefined;
+
+function errorMessage(error: unknown, fallback: string): string {
+  const e = obj(error);
+  if (typeof e?.message === "string") return e.message;
+  if (typeof error === "string") return error;
+  return fallback;
+}
+
+/**
+ * Read one Responses API event. Returns true on the terminal event.
+ * Usage (and x_yunshu, which the engine nests inside usage) arrives with it.
+ */
+function handleResponsesEvent(
+  type: string,
+  record: Record<string, unknown>,
+  onDelta: (delta: CompletionDelta) => void,
+): boolean {
+  if (type === "error" || type === "response.failed") {
+    const response = obj(record.response);
+    throw new Error(
+      `OpenAI stream error: ${errorMessage(record.error ?? response?.error ?? record.message, JSON.stringify(record))}`,
+    );
+  }
+  if (type === "response.output_text.delta" && typeof record.delta === "string")
+    onDelta({ content: record.delta });
+  else if (
+    (type === "response.reasoning_summary_text.delta" ||
+      type === "response.reasoning_text.delta") &&
+    typeof record.delta === "string"
+  )
+    onDelta({ reasoning: record.delta });
+  if (type !== "response.completed" && type !== "response.incomplete")
+    return false;
+  const response = obj(record.response) ?? {};
+  const usage = obj(response.usage);
+  if (usage) {
+    const details = obj(usage.input_tokens_details);
+    const parsed = parseUsage({
+      usage: {
+        prompt_tokens: usage.input_tokens,
+        completion_tokens: usage.output_tokens,
+        prompt_tokens_details: details,
+      },
+      x_yunshu: usage.x_yunshu ?? response.x_yunshu,
+    });
+    if (parsed) onDelta({ usage: parsed });
+  }
+  const reason = obj(response.incomplete_details)?.reason;
+  onDelta({
+    finishReason:
+      type === "response.incomplete"
+        ? reason === "max_output_tokens"
+          ? "length"
+          : typeof reason === "string"
+            ? reason
+            : "incomplete"
+        : "stop",
+  });
+  return true;
+}
+
+/** Read one Anthropic Messages stream event. Returns true on `message_stop`. */
+function handleMessagesEvent(
+  type: string,
+  record: Record<string, unknown>,
+  state: { input: number; cached: number },
+  onDelta: (delta: CompletionDelta) => void,
+): boolean {
+  if (type === "error")
+    throw new Error(
+      `OpenAI stream error: ${errorMessage(record.error, JSON.stringify(record))}`,
+    );
+  if (type === "message_start") {
+    const usage = obj(obj(record.message)?.usage);
+    const cached = num(usage?.cache_read_input_tokens) ?? 0;
+    // Anthropic's input_tokens excludes cache reads and writes; the prompt is the sum.
+    state.input =
+      (num(usage?.input_tokens) ?? 0) +
+      cached +
+      (num(usage?.cache_creation_input_tokens) ?? 0);
+    state.cached = cached;
+    return false;
+  }
+  if (type === "content_block_delta") {
+    const delta = obj(record.delta);
+    if (delta?.type === "text_delta" && typeof delta.text === "string")
+      onDelta({ content: delta.text });
+    else if (
+      delta?.type === "thinking_delta" &&
+      typeof delta.thinking === "string"
+    )
+      onDelta({ reasoning: delta.thinking });
+    return false;
+  }
+  if (type === "message_delta") {
+    const usage = obj(record.usage);
+    const stop = obj(record.delta)?.stop_reason;
+    const out = num(usage?.output_tokens);
+    const parsed = parseUsage({
+      usage: {
+        prompt_tokens: state.input || undefined,
+        completion_tokens: out,
+        prompt_tokens_details: state.cached
+          ? { cached_tokens: state.cached }
+          : undefined,
+      },
+      x_yunshu: usage?.x_yunshu ?? record.x_yunshu,
+    });
+    if (parsed) onDelta({ usage: parsed });
+    if (typeof stop === "string")
+      onDelta({ finishReason: stop === "max_tokens" ? "length" : "stop" });
+    return false;
+  }
+  return type === "message_stop";
 }
 
 function abortReason(signal: AbortSignal): Error {
@@ -172,6 +398,7 @@ export async function streamCompletion(
   body: CompletionBody,
   onDelta: (delta: CompletionDelta) => void,
   signal: AbortSignal,
+  dialect: Dialect = "chat",
 ): Promise<void> {
   throwIfAborted(signal);
 
@@ -184,10 +411,10 @@ export async function streamCompletion(
   const requestId = globalThis.crypto?.randomUUID?.();
   if (requestId) headers.set("X-Request-ID", requestId);
 
-  const response = await fetch(chatCompletionsUrl(connection.baseUrl), {
+  const response = await fetch(endpointUrl(connection.baseUrl, dialect), {
     method: "POST",
     headers,
-    body: JSON.stringify({ ...body, stream: true }),
+    body: JSON.stringify(buildPayload(dialect, body)),
     signal,
   });
   throwIfAborted(signal);
@@ -201,6 +428,7 @@ export async function streamCompletion(
   let dataLines: string[] = [];
   let eventType = "";
   let receivedDone = false;
+  const messagesState = { input: 0, cached: 0 };
 
   const dispatchEvent = () => {
     const data = dataLines.join("\n");
@@ -243,6 +471,15 @@ export async function streamCompletion(
 
     if (!payload || typeof payload !== "object") return;
     const record = payload as Record<string, unknown>;
+    if (dialect !== "chat") {
+      const kind = typeof record.type === "string" ? record.type : type;
+      const finished =
+        dialect === "responses"
+          ? handleResponsesEvent(kind, record, onDelta)
+          : handleMessagesEvent(kind, record, messagesState, onDelta);
+      if (finished) receivedDone = true;
+      return;
+    }
     if (record.error != null) {
       const error = record.error;
       const message =
@@ -333,7 +570,13 @@ export async function streamCompletion(
     if (!receivedDone) dispatchEvent();
     throwIfAborted(signal);
     if (!receivedDone)
-      throw new Error("OpenAI stream ended before the [DONE] event.");
+      throw new Error(
+        dialect === "chat"
+          ? "OpenAI stream ended before the [DONE] event."
+          : dialect === "responses"
+            ? "OpenAI stream ended before the response.completed event."
+            : "OpenAI stream ended before the message_stop event.",
+      );
   } finally {
     signal.removeEventListener("abort", cancelOnAbort);
     await reader.cancel().catch(() => {});

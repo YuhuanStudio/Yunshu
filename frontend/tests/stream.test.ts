@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { chatCompletionsUrl, streamCompletion } from "../src/stream.ts";
+import {
+  chatCompletionsUrl,
+  streamCompletion,
+  type CompletionDelta,
+} from "../src/stream.ts";
 
 const connection = { baseUrl: "http://127.0.0.1:8000/", token: "local-token" };
 const body = {
@@ -274,4 +278,190 @@ test("preserves VLM image parts and thinking/output options, and exposes length 
     image,
   );
   assert.deepEqual(deltas, [{ finishReason: "length" }]);
+});
+
+function sse(events: Array<[string | null, unknown]>) {
+  const text = events
+    .map(
+      ([name, data]) =>
+        `${name ? `event: ${name}\n` : ""}data: ${JSON.stringify(data)}\n\n`,
+    )
+    .join("");
+  return new Response(text, {
+    status: 200,
+    headers: { "Content-Type": "text/event-stream" },
+  });
+}
+
+test("responses dialect posts /v1/responses and reads deltas, usage and x_yunshu", async (t) => {
+  let seen: { url: string; body: Record<string, unknown> } | undefined;
+  t.mock.method(globalThis, "fetch", async (url: string, init: RequestInit) => {
+    seen = { url, body: JSON.parse(String(init.body)) };
+    return sse([
+      [
+        "response.reasoning_summary_text.delta",
+        { type: "response.reasoning_summary_text.delta", delta: "hm" },
+      ],
+      [
+        "response.output_text.delta",
+        { type: "response.output_text.delta", delta: "Hel" },
+      ],
+      [
+        "response.output_text.delta",
+        { type: "response.output_text.delta", delta: "lo" },
+      ],
+      [
+        "response.completed",
+        {
+          type: "response.completed",
+          response: {
+            usage: {
+              input_tokens: 10,
+              output_tokens: 4,
+              input_tokens_details: { cached_tokens: 6 },
+              x_yunshu: { ttft_ms: 33 },
+            },
+          },
+        },
+      ],
+    ]);
+  });
+  const deltas: CompletionDelta[] = [];
+  await streamCompletion(
+    { baseUrl: "http://h:1", token: "" },
+    {
+      model: "m",
+      messages: [
+        { role: "system", content: "S" },
+        { role: "user", content: "U" },
+      ],
+      temperature: 0.2,
+      max_tokens: 9,
+      response_format: { type: "json_object" },
+    },
+    (d) => deltas.push(d),
+    new AbortController().signal,
+    "responses",
+  );
+  assert.equal(seen?.url, "http://h:1/v1/responses");
+  assert.equal(seen?.body.instructions, "S");
+  assert.equal(seen?.body.max_output_tokens, 9);
+  assert.deepEqual(seen?.body.text, { format: { type: "json_object" } });
+  assert.equal(
+    deltas
+      .filter((d) => d.content)
+      .map((d) => d.content)
+      .join(""),
+    "Hello",
+  );
+  assert.equal(deltas.find((d) => d.reasoning)?.reasoning, "hm");
+  const usage = deltas.find((d) => d.usage)?.usage;
+  assert.equal(usage?.promptTokens, 10);
+  assert.equal(usage?.completionTokens, 4);
+  assert.equal(usage?.cachedTokens, 6);
+  assert.equal(usage?.ttftMs, 33);
+});
+
+test("messages dialect posts /v1/messages and reads text, thinking and usage", async (t) => {
+  let seen: { url: string; body: Record<string, any> } | undefined;
+  t.mock.method(globalThis, "fetch", async (url: string, init: RequestInit) => {
+    seen = { url, body: JSON.parse(String(init.body)) };
+    return sse([
+      [
+        "message_start",
+        {
+          type: "message_start",
+          message: {
+            usage: {
+              input_tokens: 4,
+              cache_read_input_tokens: 6,
+              output_tokens: 1,
+            },
+          },
+        },
+      ],
+      [
+        "content_block_delta",
+        {
+          type: "content_block_delta",
+          index: 0,
+          delta: { type: "thinking_delta", thinking: "t" },
+        },
+      ],
+      [
+        "content_block_delta",
+        {
+          type: "content_block_delta",
+          index: 1,
+          delta: { type: "text_delta", text: "ok" },
+        },
+      ],
+      [
+        "message_delta",
+        {
+          type: "message_delta",
+          delta: { stop_reason: "max_tokens" },
+          usage: { output_tokens: 7 },
+        },
+      ],
+      ["message_stop", { type: "message_stop" }],
+    ]);
+  });
+  const deltas: CompletionDelta[] = [];
+  await streamCompletion(
+    { baseUrl: "http://h:1/v1", token: "tok" },
+    {
+      model: "m",
+      messages: [
+        { role: "system", content: "S" },
+        { role: "user", content: "U" },
+      ],
+      temperature: 0.2,
+      max_tokens: 40,
+      enable_thinking: true,
+    },
+    (d) => deltas.push(d),
+    new AbortController().signal,
+    "messages",
+  );
+  assert.equal(seen?.url, "http://h:1/v1/messages");
+  assert.equal(seen?.body.system, "S");
+  assert.equal(seen?.body.messages.length, 1);
+  assert.equal(seen?.body.thinking.type, "enabled");
+  assert.equal(deltas.find((d) => d.content)?.content, "ok");
+  assert.equal(deltas.find((d) => d.reasoning)?.reasoning, "t");
+  const usage = deltas.find((d) => d.usage)?.usage;
+  assert.equal(usage?.promptTokens, 10);
+  assert.equal(usage?.cachedTokens, 6);
+  assert.equal(usage?.completionTokens, 7);
+  assert.equal(deltas.find((d) => d.finishReason)?.finishReason, "length");
+});
+
+test("non-chat streams fail closed without a terminal event or on error events", async (t) => {
+  t.mock.method(globalThis, "fetch", async () =>
+    sse([["message_start", { type: "message_start", message: {} }]]),
+  );
+  await assert.rejects(
+    streamCompletion(
+      { baseUrl: "http://h:1", token: "" },
+      { model: "m", messages: [], temperature: 0, max_tokens: 1 },
+      () => {},
+      new AbortController().signal,
+      "messages",
+    ),
+    /message_stop/,
+  );
+  t.mock.method(globalThis, "fetch", async () =>
+    sse([["error", { type: "error", error: { message: "boom" } }]]),
+  );
+  await assert.rejects(
+    streamCompletion(
+      { baseUrl: "http://h:1", token: "" },
+      { model: "m", messages: [], temperature: 0, max_tokens: 1 },
+      () => {},
+      new AbortController().signal,
+      "responses",
+    ),
+    /boom/,
+  );
 });

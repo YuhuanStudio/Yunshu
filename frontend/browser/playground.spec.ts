@@ -522,3 +522,238 @@ test("compare mode with sampling does not claim determinism", async ({
   await expect(delta).not.toContainText("輸出完全一致");
   await verifyClean();
 });
+
+type Captured = { url: string; headers: Record<string, string>; body: any };
+
+/** Mock one dialect's endpoint with a real-shaped SSE stream; returns what the page sent. */
+async function mockDialect(
+  page: Page,
+  path: "/v1/responses" | "/v1/messages",
+): Promise<Captured[]> {
+  const captured: Captured[] = [];
+  const sse = (events: Array<[string, unknown]>) =>
+    events
+      .map(
+        ([name, data]) => `event: ${name}\ndata: ${JSON.stringify(data)}\n\n`,
+      )
+      .join("");
+  const body =
+    path === "/v1/responses"
+      ? sse([
+          [
+            "response.reasoning_summary_text.delta",
+            {
+              type: "response.reasoning_summary_text.delta",
+              delta: "thinking it over",
+            },
+          ],
+          [
+            "response.output_text.delta",
+            { type: "response.output_text.delta", delta: "Responses says " },
+          ],
+          [
+            "response.output_text.delta",
+            { type: "response.output_text.delta", delta: "hello." },
+          ],
+          [
+            "response.completed",
+            {
+              type: "response.completed",
+              response: {
+                usage: {
+                  input_tokens: 1024,
+                  output_tokens: 20,
+                  input_tokens_details: { cached_tokens: 512 },
+                  x_yunshu: { ttft_ms: 80 },
+                },
+              },
+            },
+          ],
+        ])
+      : sse([
+          [
+            "message_start",
+            {
+              type: "message_start",
+              message: {
+                usage: {
+                  input_tokens: 512,
+                  cache_read_input_tokens: 512,
+                  output_tokens: 1,
+                },
+              },
+            },
+          ],
+          [
+            "content_block_delta",
+            {
+              type: "content_block_delta",
+              index: 0,
+              delta: { type: "thinking_delta", thinking: "thinking it over" },
+            },
+          ],
+          [
+            "content_block_delta",
+            {
+              type: "content_block_delta",
+              index: 1,
+              delta: { type: "text_delta", text: "Messages says " },
+            },
+          ],
+          [
+            "content_block_delta",
+            {
+              type: "content_block_delta",
+              index: 1,
+              delta: { type: "text_delta", text: "hello." },
+            },
+          ],
+          [
+            "message_delta",
+            {
+              type: "message_delta",
+              delta: { stop_reason: "end_turn" },
+              usage: { output_tokens: 20, x_yunshu: { ttft_ms: 80 } },
+            },
+          ],
+          ["message_stop", { type: "message_stop" }],
+        ]);
+  await page.route(`**${path}`, async (route) => {
+    const request = route.request();
+    captured.push({
+      url: request.url(),
+      headers: request.headers(),
+      body: JSON.parse(request.postData() ?? "{}"),
+    });
+    await route.fulfill({
+      status: 200,
+      headers: { "Content-Type": "text/event-stream" },
+      body,
+    });
+  });
+  return captured;
+}
+
+for (const [dialect, label, path, text] of [
+  ["responses", "Responses", "/v1/responses", "Responses says hello."],
+  ["messages", "Anthropic Messages", "/v1/messages", "Messages says hello."],
+] as const) {
+  test(`${dialect} dialect streams from its own endpoint with stats`, async ({
+    page,
+  }) => {
+    const api = createApiFixture();
+    await api.attach(page);
+    const verifyClean = await installDiagnostics(
+      page,
+      api.expectedResponses,
+      dialect,
+    );
+    const playground = await openPlayground(page, api);
+    const captured = await mockDialect(page, path);
+    await playground.getByRole("button", { name: label, exact: true }).click();
+    await playground.locator("textarea").first().fill("dialect check");
+    await page.getByRole("button", { name: "傳送測試", exact: true }).click();
+    await expect(playground).toContainText(text);
+    await expect(playground).toContainText("thinking it over");
+    const stats = playground.getByTestId("reply-stats");
+    await expect(stats).toContainText("tok/s");
+    await expect(stats).toContainText("512");
+    await expect(stats).toContainText("TTFT 80");
+    expect(captured).toHaveLength(1);
+    expect(captured[0].url.endsWith(path)).toBe(true);
+    expect(captured[0].headers["authorization"]).toBe(`Bearer ${api.token}`);
+    expect(captured[0].body.model).toBe("Qwen3.8-27B");
+    expect(captured[0].body.stream).toBe(true);
+    if (dialect === "responses") {
+      expect(captured[0].body.max_output_tokens).toBe(512);
+      expect(JSON.stringify(captured[0].body.input)).toContain("dialect check");
+      expect(captured[0].body.messages).toBeUndefined();
+    } else {
+      expect(captured[0].body.max_tokens).toBe(512);
+      expect(captured[0].body.messages[0]).toEqual({
+        role: "user",
+        content: "dialect check",
+      });
+      expect(captured[0].body.input).toBeUndefined();
+    }
+    await verifyClean();
+  });
+}
+
+test("view code reproduces the current request in curl, Python and JavaScript", async ({
+  page,
+}) => {
+  const api = createApiFixture();
+  await api.attach(page);
+  const verifyClean = await installDiagnostics(
+    page,
+    api.expectedResponses,
+    "code",
+  );
+  const playground = await openPlayground(page, api);
+  await playground
+    .getByRole("button", { name: "Responses", exact: true })
+    .click();
+  await playground.locator("textarea").first().fill("show me the code");
+  await playground.getByRole("button", { name: "檢視程式碼" }).click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toContainText("Responses");
+  const curl = dialog.getByTestId("code-curl");
+  await expect(curl).toContainText("/v1/responses");
+  await expect(curl).toContainText("Qwen3.8-27B");
+  await expect(curl).toContainText("show me the code");
+  await expect(curl).toContainText("max_output_tokens");
+  await expect(curl).not.toContainText(api.token);
+  // CodeBlock must keep one line per source line (it flattened in the patterns build).
+  await expect
+    .poll(
+      async () =>
+        (await curl.locator("code, pre").first().innerText()).split("\n")
+          .length,
+    )
+    .toBeGreaterThan(5);
+  await dialog.getByRole("tab", { name: "Python" }).click();
+  // Long snippets are collapsed by CodeBlock; expand to read the whole request.
+  await dialog.getByRole("button", { name: /顯示全部/ }).click();
+  await expect(dialog.getByTestId("code-python")).toContainText(
+    "requests.post",
+  );
+  await expect(dialog.getByTestId("code-python")).toContainText(
+    "/v1/responses",
+  );
+  await dialog.getByRole("tab", { name: "JavaScript" }).click();
+  await expect(dialog.getByTestId("code-javascript")).toContainText(
+    "await fetch",
+  );
+  await page.keyboard.press("Escape");
+  await expect(dialog).toBeHidden();
+  await playground
+    .getByRole("button", { name: "Anthropic Messages", exact: true })
+    .click();
+  await playground.getByRole("button", { name: "檢視程式碼" }).click();
+  await expect(
+    page.getByRole("dialog").getByTestId("code-javascript"),
+  ).toContainText("/v1/messages");
+  await verifyClean();
+});
+
+test("model picker lists models with a vision filter and selects by id", async ({
+  page,
+}) => {
+  const api = createApiFixture();
+  await api.attach(page);
+  const verifyClean = await installDiagnostics(
+    page,
+    api.expectedResponses,
+    "picker",
+  );
+  const playground = await openPlayground(page, api);
+  await playground
+    .getByRole("group", { name: "測試模型" })
+    .getByRole("button")
+    .first()
+    .click();
+  await expect(page.getByText("Qwen3.5-9B").first()).toBeVisible();
+  await page.keyboard.press("Escape");
+  await verifyClean();
+});

@@ -8,13 +8,17 @@ import {
   Input,
   FileDropzone,
   SegmentedSelect,
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
   Sheet,
   Slider,
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
   Textarea,
 } from "@yuhuanowo/yunui";
 import {
@@ -24,12 +28,43 @@ import {
   ChatMessageList,
   GenerationStats,
 } from "@yuhuanowo/yunui/chat";
-import { ThinkingBlock } from "@yuhuanowo/yunui/ai";
-import { SlidersHorizontal, Plus, Sparkles, ImagePlus, X } from "lucide-react";
-import { streamCompletion } from "./stream";
+import {
+  CapabilityIcon,
+  getModelDeveloperId,
+  getProviderName,
+  ModelSelect,
+  ThinkingBlock,
+  type ModelSelectOption,
+} from "@yuhuanowo/yunui/ai";
+import {
+  SlidersHorizontal,
+  Plus,
+  Sparkles,
+  ImagePlus,
+  X,
+  Code2,
+  MessageSquare,
+  Reply,
+  Bot,
+} from "lucide-react";
+import { streamCompletion, type CompletionBody, type Dialect } from "./stream";
+import {
+  buildSnippets,
+  DIALECT_LABEL,
+  type CodeLanguage,
+} from "./playground-code";
 import type { Connection } from "./api";
-import { modelLabel, number, supportsChat, type Engine } from "./ui";
+import {
+  LocalModelIcon,
+  modelLabel,
+  number,
+  supportsChat,
+  type Engine,
+} from "./ui";
 import { compareOutputs, runStats, type RunTiming } from "./playground-metrics";
+const CodeBlock = lazy(() =>
+  import("@yuhuanowo/yunui/content").then((m) => ({ default: m.CodeBlock })),
+);
 const Markdown = lazy(() =>
   import("@yuhuanowo/yunui/content").then((m) => ({
     default: m.MarkdownRenderer,
@@ -50,6 +85,20 @@ type Message = Run & {
   image?: { name: string; url: string };
 };
 type Mode = "chat" | "compare";
+const dialectOptions = [
+  { value: "chat" as Dialect, label: DIALECT_LABEL.chat, icon: MessageSquare },
+  {
+    value: "responses" as Dialect,
+    label: DIALECT_LABEL.responses,
+    icon: Reply,
+  },
+  { value: "messages" as Dialect, label: DIALECT_LABEL.messages, icon: Bot },
+];
+const codeTabs: { value: CodeLanguage; label: string; language: string }[] = [
+  { value: "curl", label: "curl", language: "bash" },
+  { value: "python", label: "Python", language: "python" },
+  { value: "javascript", label: "JavaScript", language: "javascript" },
+];
 type Pair = readonly [Run | null, Run | null];
 const statLabels = {
   tokens: "tokens",
@@ -165,6 +214,9 @@ export function Playground({
 }) {
   const [model, setModel] = useState(initialModel),
     [mode, setMode] = useState<Mode>("chat"),
+    [dialect, setDialect] = useState<Dialect>("chat"),
+    [codeOpen, setCodeOpen] = useState(false),
+    [codeTab, setCodeTab] = useState<CodeLanguage>("curl"),
     [modelB, setModelB] = useState(""),
     [tempMode, setTempMode] = useState<readonly [string, string]>([
       "shared",
@@ -255,6 +307,37 @@ export function Playground({
     supportsImage = compare ? isVlm(chosen) && isVlm(chosenB) : isVlm(chosen),
     hasImage = !!image || messages.some((message) => !!message.image),
     columnTemp = (i: 0 | 1) => (tempMode[i] === "greedy" ? 0 : temperature);
+  /** The chat-shaped request for one reply; each dialect maps it to its wire format. */
+  function requestBody(
+    cfg: { model: string; temperature: number },
+    history: Message[],
+  ): CompletionBody {
+    return {
+      model: cfg.model,
+      messages: [
+        ...(system ? [{ role: "system", content: system }] : []),
+        ...history.map((m) => ({
+          role: m.role,
+          content: m.image
+            ? [
+                { type: "text" as const, text: m.content },
+                {
+                  type: "image_url" as const,
+                  image_url: { url: m.image.url },
+                },
+              ]
+            : m.content,
+        })),
+      ],
+      temperature: cfg.temperature,
+      max_tokens: maxTokens,
+      stream_options: { include_usage: true },
+      ...(thinking !== "auto" ? { enable_thinking: thinking === "on" } : {}),
+      ...(jsonMode === "json"
+        ? { response_format: { type: "json_object" as const } }
+        : {}),
+    };
+  }
   /** Stream one reply; `patch` updates the owning Run state. Never throws on abort. */
   async function execute(
     c: AbortController,
@@ -267,33 +350,7 @@ export function Playground({
     try {
       await streamCompletion(
         connection,
-        {
-          model: cfg.model,
-          messages: [
-            ...(system ? [{ role: "system", content: system }] : []),
-            ...history.map((m) => ({
-              role: m.role,
-              content: m.image
-                ? [
-                    { type: "text" as const, text: m.content },
-                    {
-                      type: "image_url" as const,
-                      image_url: { url: m.image.url },
-                    },
-                  ]
-                : m.content,
-            })),
-          ],
-          temperature: cfg.temperature,
-          max_tokens: maxTokens,
-          stream_options: { include_usage: true },
-          ...(thinking !== "auto"
-            ? { enable_thinking: thinking === "on" }
-            : {}),
-          ...(jsonMode === "json"
-            ? { response_format: { type: "json_object" as const } }
-            : {}),
-        },
+        requestBody(cfg, history),
         (delta) => {
           if (!mounted.current) return;
           const t = performance.now();
@@ -311,6 +368,7 @@ export function Playground({
           }));
         },
         c.signal,
+        dialect,
       );
       timing.endAt = performance.now();
       if (mounted.current) patch((m) => ({ ...m, timing: { ...timing } }));
@@ -425,34 +483,78 @@ export function Playground({
           : undefined,
     };
   })();
+  const modelOptions: ModelSelectOption[] = models.map((x) => {
+    const developer = getModelDeveloperId(x.id),
+      chat = supportsChat(x),
+      reason = !chat ? "非文字聊天模型" : !x.loaded ? "未載入" : undefined;
+    return {
+      id: x.id,
+      label: modelLabel(x.id),
+      group: developer,
+      groupLabel: getProviderName(developer),
+      searchText: `${x.id} ${x.type}`,
+      icon: <LocalModelIcon id={x.id} size={20} />,
+      badges: isVlm(x) ? (
+        <CapabilityIcon capability="vision" size={13} />
+      ) : undefined,
+      detail: reason ?? `${x.type} · 已載入`,
+      meta: <span className="tabular-nums">{number(x.size_gb, 1)} GB</span>,
+      disabled: !!reason,
+    };
+  });
+  const modelFilters = [
+    {
+      key: "vision",
+      node: (
+        <span className="inline-flex items-center gap-1">
+          <CapabilityIcon capability="vision" size={12} />
+          視覺
+        </span>
+      ),
+      title: "可接受圖片輸入的模型",
+      match: (o: ModelSelectOption) => isVlm(models.find((m) => m.id === o.id)),
+    },
+  ];
   const modelSelect = (
     value: string,
     onChange: (v: string) => void,
     label: string,
-    m: typeof chosen,
   ) => (
-    <div className="flex items-center gap-2">
-      <Select
-        value={value || undefined}
-        onValueChange={onChange}
-        disabled={loading}
-      >
-        <SelectTrigger aria-label={label} className="w-52">
-          <SelectValue placeholder="選擇模型" />
-        </SelectTrigger>
-        <SelectContent>
-          {models.map((x) => (
-            <SelectItem key={x.id} value={x.id}>
-              {modelLabel(x.id)}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-      <Badge variant={m?.loaded ? "success" : "secondary"}>
-        {m?.loaded ? "已載入" : "未載入"}
-      </Badge>
+    <div
+      className={loading ? "pointer-events-none opacity-60" : undefined}
+      role="group"
+      aria-label={label}
+    >
+      <ModelSelect
+        className="w-60"
+        options={modelOptions}
+        value={value}
+        onChange={onChange}
+        filters={modelFilters}
+        labels={{ placeholder: "選擇模型", search: "搜尋模型" }}
+      />
     </div>
   );
+  const codeRequest = (() => {
+    const text = draft.trim() || "Hello";
+    const past = messages.filter((m) => !m.incomplete);
+    const pending: Message = {
+      id: "code",
+      role: "user",
+      content: text,
+      model,
+      temperature,
+      ...(image && supportsImage ? { image } : {}),
+    };
+    return {
+      dialect,
+      baseUrl: connection.baseUrl,
+      body: requestBody(
+        { model, temperature: compare ? columnTemp(0) : temperature },
+        compare ? [pending] : [...past, pending],
+      ),
+    };
+  })();
   const empty = (
     <EmptyState
       icon={<Sparkles size={25} />}
@@ -470,36 +572,51 @@ export function Playground({
         className="flex-wrap gap-3 border-b border-border/60 p-4"
         left={
           <div className="flex flex-wrap items-center gap-2">
-            {modelSelect(model, setModel, "測試模型", chosen)}
-            {compare && modelSelect(modelB, setModelB, "比較模型", chosenB)}
+            {modelSelect(model, setModel, "測試模型")}
+            {compare && modelSelect(modelB, setModelB, "比較模型")}
           </div>
         }
         status={
-          <SegmentedSelect
-            aria-label="測試模式"
-            value={mode}
-            onChange={(v) => !loading && setMode(v as Mode)}
-            options={[
-              { value: "chat", label: "對話" },
-              { value: "compare", label: "比較" },
-            ]}
-          />
+          <div className="flex flex-wrap items-center gap-2">
+            <SegmentedSelect
+              aria-label="API 格式"
+              value={dialect}
+              onChange={(v) => !loading && setDialect(v)}
+              options={dialectOptions}
+              wrap
+            />
+            <SegmentedSelect
+              aria-label="測試模式"
+              value={mode}
+              onChange={(v) => !loading && setMode(v as Mode)}
+              options={[
+                { value: "chat", label: "對話" },
+                { value: "compare", label: "比較" },
+              ]}
+            />
+          </div>
         }
         actions={
-          <Button
-            size="sm"
-            variant="ghost"
-            disabled={loading}
-            onClick={() => {
-              setMessages([]);
-              setPair([null, null]);
-              setPairPrompt(null);
-              setError("");
-            }}
-          >
-            <Plus size={13} />
-            新測試
-          </Button>
+          <>
+            <Button size="sm" variant="ghost" onClick={() => setCodeOpen(true)}>
+              <Code2 size={13} />
+              檢視程式碼
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={loading}
+              onClick={() => {
+                setMessages([]);
+                setPair([null, null]);
+                setPairPrompt(null);
+                setError("");
+              }}
+            >
+              <Plus size={13} />
+              新測試
+            </Button>
+          </>
         }
       />
       <ChatMessageList
@@ -757,7 +874,9 @@ export function Playground({
               ]}
             />
             <p className="mt-2 text-xs text-muted-foreground">
-              JSON 模式會傳送 response_format，由引擎約束輸出格式。
+              {dialect === "messages"
+                ? "Anthropic Messages 沒有 JSON 模式，此設定不會送出。"
+                : "JSON 模式會傳送 response_format，由引擎約束輸出格式。"}
             </p>
           </div>
           <div>
@@ -803,6 +922,59 @@ export function Playground({
           </div>
         </div>
       </Sheet>
+      <Dialog open={codeOpen} onOpenChange={setCodeOpen}>
+        <DialogContent closeLabel="關閉程式碼" className="max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>檢視程式碼</DialogTitle>
+            <DialogDescription>
+              {DIALECT_LABEL[dialect]} · 與目前設定送出的請求相同。
+              {compare && "比較模式顯示 A 組請求。"}
+            </DialogDescription>
+          </DialogHeader>
+          {codeOpen &&
+            (() => {
+              const code = buildSnippets(codeRequest);
+              return (
+                <Tabs
+                  value={codeTab}
+                  onValueChange={(v) => setCodeTab(v as CodeLanguage)}
+                >
+                  <TabsList>
+                    {codeTabs.map((t) => (
+                      <TabsTrigger key={t.value} value={t.value}>
+                        {t.label}
+                      </TabsTrigger>
+                    ))}
+                  </TabsList>
+                  {codeTabs.map((t) => (
+                    <TabsContent key={t.value} value={t.value}>
+                      <div data-testid={`code-${t.value}`}>
+                        <Suspense
+                          fallback={
+                            <pre className="overflow-auto text-xs">
+                              {code.snippets[t.value]}
+                            </pre>
+                          }
+                        >
+                          <CodeBlock language={t.language}>
+                            {code.snippets[t.value]}
+                          </CodeBlock>
+                        </Suspense>
+                      </div>
+                    </TabsContent>
+                  ))}
+                  <p className="mt-3 text-xs text-muted-foreground">
+                    以環境變數 YUNSHU_API_KEY 帶入權杖，不會寫入範例。
+                    {code.shortened && "圖片內容已縮短顯示，請換成實際檔案。"}
+                    {dialect === "messages" &&
+                      jsonMode === "json" &&
+                      "Messages 沒有 JSON 模式，未送出。"}
+                  </p>
+                </Tabs>
+              );
+            })()}
+        </DialogContent>
+      </Dialog>
       <Sheet
         open={attachmentOpen}
         onClose={() => setAttachmentOpen(false)}
