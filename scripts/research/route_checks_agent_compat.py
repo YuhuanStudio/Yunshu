@@ -318,7 +318,7 @@ def documents(c: Ctx):
                             },
                             {
                                 "type": "text",
-                                "text": "Return exactly BLUE.[[cite:0:0:4]] to cite the first four characters of document 0. No other text.",
+                                "text": "Copy these characters exactly and output nothing else: BLUE[[cite:0:0:4]]",
                             },
                         ],
                     }
