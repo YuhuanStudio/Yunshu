@@ -211,3 +211,23 @@ def test_fatal_startup_does_not_spend_queue_time_polling(monkeypatch, tmp_path):
     with pytest.raises(RuntimeError, match="startup failed"):
         tfbench.Srv("yunshu", {}, "fatal")
     assert len(killed) == 1
+
+
+def test_kill_drops_the_servers_prefix_cache_keeps_logs(tmp_path):
+    srv = tfbench.Srv.__new__(tfbench.Srv)
+    srv.home = tmp_path / "home" / "t"
+    apc = srv.home / ".yunshu" / "cache" / "apc" / "x"
+    apc.mkdir(parents=True)
+    (apc / "exact.safetensors").write_bytes(b"0" * 1024)
+    (srv.home / "server.log").write_text("log")
+
+    class Done:
+        pid = 0
+
+        def poll(self):
+            return 0
+
+    srv.proc = Done()
+    srv.kill()
+    assert not (srv.home / ".yunshu" / "cache").exists()
+    assert (srv.home / "server.log").read_text() == "log"

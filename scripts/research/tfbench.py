@@ -163,6 +163,11 @@ class Srv:
                 os.killpg(self.proc.pid, signal.SIGKILL)
             with contextlib.suppress(Exception):
                 self.proc.wait(30)
+        # The server's SSD prefix cache (up to ~8 GB per 128K cell) is dead once the server is:
+        # the next server of this tag starts from an emptied home anyway. Left behind, finished
+        # yv runs held 362 GB of it on P5Plus (2026-10-07).
+        if self.proc.poll() is not None:
+            shutil.rmtree(self.home / ".yunshu" / "cache", ignore_errors=True)
 
 
 def send(url, body, timeout=600):
