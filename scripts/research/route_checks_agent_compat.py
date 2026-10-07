@@ -313,7 +313,7 @@ def documents(c: Ctx):
                             {
                                 "type": "document",
                                 "source": source,
-                                "title": "Secret",
+                                "title": "Reference",
                                 "citations": {"enabled": True},
                             },
                             {
@@ -364,7 +364,7 @@ def documents(c: Ctx):
                                 }
                             ],
                         },
-                        {"role": "user", "content": "Repeat the secret word only."},
+                        {"role": "user", "content": "What is the single word in the document? Answer with that word only."},
                     ],
                 },
                 timeout=240,
