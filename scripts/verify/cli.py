@@ -139,6 +139,33 @@ def build_parser() -> argparse.ArgumentParser:
     return ap
 
 
+def pinned_spec(arm) -> str:
+    """What this caller resolved: the checkout directory as an absolute path, else the commit."""
+    p = Path(arm.spec)
+    if p.is_dir() and (p / ".git").exists():
+        return str(arm.path)
+    return arm.commit
+
+
+def pin_arms(argv: list, base, cand) -> list:
+    """`--detach` re-runs yv in REPO, so a relative spec (HEAD, a branch checked out elsewhere,
+    ".") would resolve against the main checkout: on 2026-10-06 a longgap run named for its
+    candidate (`--cand HEAD` from the worktree) verified main against itself for 18 h. Hand the
+    child the commit / absolute directory this caller resolved."""
+    out, pins = [], {"--base": pinned_spec(base), "--cand": pinned_spec(cand)}
+    i = 0
+    while i < len(argv):
+        x = argv[i]
+        flag = x.split("=", 1)[0]
+        if flag in pins:
+            out.append(f"{flag}={pins[flag]}")
+            i += 1 if "=" in x else 2
+            continue
+        out.append(x)
+        i += 1
+    return out
+
+
 def main(argv: list | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     a = build_parser().parse_args(argv)
@@ -169,9 +196,10 @@ def main(argv: list | None = None) -> int:
                 return 2
             if a.detach:
                 cand = resolve_arm("cand", a.cand)
+                base = resolve_arm("base", a.base)
                 rd = runner.run_dir_for(a.label, cand)
                 rd.mkdir(parents=True, exist_ok=True)
-                args = [x for x in argv if x != "--detach"]
+                args = pin_arms([x for x in argv if x != "--detach"], base, cand)
                 log = open(rd / "yv.log", "a")  # noqa: SIM115
                 p = subprocess.Popen(
                     [sys.executable, "-m", "verify", *args],

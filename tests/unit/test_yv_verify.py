@@ -924,3 +924,26 @@ def test_gate_long_stage_runs_suite_and_fails_closed(gate_world, monkeypatch):
     # a stage that never produced a verdict (no model) fails the gate
     monkeypatch.setattr(gate, "local_env", lambda: {"GATE_ROOT": str(w.tmp / "g2")})
     assert run_gate(w, stages=["long"], resume=False) == 1
+
+
+def test_detach_pins_arms_resolved_by_the_caller(tmp_path):
+    """A detached run re-resolves nothing: the child gets the caller's commit / absolute dir."""
+    from verify import cli
+
+    wt = tmp_path / "wt"
+    (wt / ".git").mkdir(parents=True)
+    cand = core.Arm("cand", "HEAD", "c" * 40, wt, "")
+    base = core.Arm("base", "main", "b" * 40, tmp_path / "trees" / "b", "")
+    argv = ["ab", "--base", "main", "--cand=HEAD", "--suite", "long", "--label", "x"]
+    out = cli.pin_arms(argv, base, cand)
+    assert out == [
+        "ab",
+        "--base=" + "b" * 40,
+        "--cand=" + "c" * 40,
+        "--suite",
+        "long",
+        "--label",
+        "x",
+    ]
+    dir_arm = core.Arm("cand", str(wt), "c" * 40, wt.resolve(), "")
+    assert cli.pinned_spec(dir_arm) == str(wt.resolve())
