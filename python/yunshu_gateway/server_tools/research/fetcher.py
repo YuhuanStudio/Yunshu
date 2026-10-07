@@ -51,7 +51,11 @@ async def page(url: str, *, automated: bool = True, **kwargs):
         async def before_redirect(target):
             # Automated cross-origin redirects require a new admission/robots budget.
             # Conservatively keep the provider snippet instead of bypassing that policy.
-            if urlsplit(target).netloc.lower() != urlsplit(url).netloc.lower():
+            source, destination = urlsplit(url), urlsplit(target)
+            if (destination.scheme.lower(), destination.netloc.lower()) != (
+                source.scheme.lower(),
+                source.netloc.lower(),
+            ):
                 raise FetchError("url_not_allowed", "Cross-origin research redirect")
             if automated and not await politeness.allowed(target, state, **kwargs):
                 raise FetchError("url_not_allowed", "Redirect disallowed by robots.txt")

@@ -634,3 +634,18 @@ async def test_truncated_robots_are_not_treated_as_allow(monkeypatch):
 
     monkeypatch.setattr(module, "_fetch_url", fake)
     assert not await gate.allowed("https://a.org/page", state)
+
+
+async def test_https_downgrade_cannot_reuse_https_robots_policy(monkeypatch):
+    from yunshu_gateway.server_tools.research import fetcher
+
+    monkeypatch.setattr(fetcher, "pages", PageCache())
+    monkeypatch.setattr(fetcher, "politeness", Politeness())
+
+    async def fake(url, **kwargs):
+        await kwargs["before_redirect"]("http://example.org/page")
+        pytest.fail("downgrade redirect was followed")
+
+    monkeypatch.setattr(fetcher, "_fetch_url", fake)
+    with pytest.raises(FetchError, match="Cross-origin"):
+        await fetcher.page("https://example.org/page", automated=False)
