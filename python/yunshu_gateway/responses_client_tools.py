@@ -176,6 +176,39 @@ async def create_client_tools(req, request, inner):
     for item in req.input if isinstance(req.input, list) else []:
         if item.type in ("tool_search_output", "additional_tools"):
             defs.update(declarations(getattr(item, "tools", [])))
+    loaded = {}
+    previous = req.previous_response_id
+    visited = set()
+    while previous and previous not in visited:
+        visited.add(previous)
+        stored = r._get_stored_response(previous)
+        if stored is None or not r._owns_stored(request, stored):
+            break
+        for name, declaration in (stored.get("_loaded_tools") or {}).items():
+            loaded.setdefault(name, declaration)
+        previous = stored.get("previous_response_id")
+    for item in req.input if isinstance(req.input, list) else []:
+        if item.type in ("tool_search_output", "additional_tools"):
+            loaded.update(declarations(getattr(item, "tools", [])))
+    for name, declaration in loaded.items():
+        defs.setdefault(name, declaration)
+    deferred = {
+        name: d
+        for name, d in defs.items()
+        if d.get("defer_loading") and name not in loaded
+    }
+    defs = {name: d for name, d in defs.items() if name not in deferred}
+    if deferred:
+        catalog = "\nDeferred tools (search to load their schemas):\n" + "\n".join(
+            f"{name}: {d.get('description') or ''}" for name, d in deferred.items()
+        )
+        defs = {
+            name: {**d, "description": (d.get("description") or "") + catalog}
+            if d.get("type") == "tool_search"
+            else d
+            for name, d in defs.items()
+        }
+    req._loaded_client_tools = loaded
     formats = {
         name: constraint(d) for name, d in defs.items() if d.get("type") == "custom"
     }
@@ -188,7 +221,7 @@ async def create_client_tools(req, request, inner):
     if req.tool_choice == "required" and len(defs) == 1:
         forced = next(iter(defs))
 
-    async def raw_input(name, budget=None, response_id=None):
+    async def raw_input(name, budget=None, response_id=None, stream=False):
         d = defs[name]
         guidance = f"Produce only the raw input for the {name} tool. {d.get('description') or ''}"
         fmt = d.get("format") or {}
@@ -198,7 +231,7 @@ async def create_client_tools(req, request, inner):
             update={
                 "tools": None,
                 "tool_choice": "none",
-                "stream": False,
+                "stream": stream,
                 "store": False,
                 "background": False,
                 "grammar": formats[name],
@@ -233,7 +266,7 @@ async def create_client_tools(req, request, inner):
                 request.state._forced_response_id = previous_id
             _REQUEST_TOOLS.reset(tools_token)
             _REQUEST_TOOL_USE.reset(use_token)
-        if response.status_code != 200:
+        if response.status_code != 200 or isinstance(response, StreamingResponse):
             return response, None
         body = json.loads(response.body)
         text = "".join(
@@ -244,8 +277,14 @@ async def create_client_tools(req, request, inner):
         )
         return body, text
 
+    if forced and forced in deferred:
+        raise HTTPException(
+            400, f"Tool {forced} is deferred; load it through tool_search first"
+        )
     if forced in formats and req.n == 1:
-        body, text = await raw_input(forced)
+        body, text = await raw_input(forced, stream=req.stream)
+        if isinstance(body, StreamingResponse):
+            return stream_custom_input(body, req, request, defs[forced])
         if text is None:
             return body
         body["output"] = [
@@ -277,7 +316,9 @@ async def create_client_tools(req, request, inner):
                 i.model_copy(
                     update={
                         "type": "function_call_output",
-                        "output": getattr(i, "tools", []),
+                        "output": json.dumps(
+                            getattr(i, "tools", []), ensure_ascii=False
+                        ),
                     }
                 )
                 if i.type == "tool_search_output"
@@ -288,7 +329,7 @@ async def create_client_tools(req, request, inner):
         adapted = req.model_copy(
             update={
                 "tools": tools,
-                "stream": False,
+                "stream": req.stream,
                 "store": False,
                 "tool_choice": choice,
                 "input": adapted_input,
@@ -297,20 +338,28 @@ async def create_client_tools(req, request, inner):
         response = await inner(adapted, request)
         if response.status_code != 200:
             return response
+        if isinstance(response, StreamingResponse):
+            return stream_client_calls(response, req, request, defs, formats, raw_input)
         body = json.loads(response.body)
         for idx, item in enumerate(body.get("output", [])):
             if item.get("type") != "function_call" or item.get("name") not in defs:
                 continue
             d = defs[item["name"]]
-            converted = call_item(item, d)
+            converted = call_item(
+                {**item, "arguments": json.dumps({"input": ""})}
+                if formats.get(item["name"]) is not None
+                else item,
+                d,
+            )
             if formats.get(item["name"]) is not None:
                 budget = req.max_output_tokens - body["usage"]["output_tokens"]
                 if budget <= 0 or body["status"] != "completed":
                     converted.update(input="", status="incomplete")
-                    body.update(
-                        status="incomplete",
-                        incomplete_details={"reason": "max_output_tokens"},
-                    )
+                    if budget <= 0:
+                        body.update(
+                            status="incomplete",
+                            incomplete_details={"reason": "max_output_tokens"},
+                        )
                     body["output"][idx] = converted
                     continue
                 raw, text = await raw_input(item["name"], budget, body["id"])
@@ -324,6 +373,20 @@ async def create_client_tools(req, request, inner):
                 for key in ("input_tokens", "output_tokens", "total_tokens"):
                     body["usage"][key] += raw["usage"][key]
             body["output"][idx] = converted
+    public = finish_body(body, req, request)
+    if not req.stream:
+        return JSONResponse(public)
+    return StreamingResponse(
+        replay(public),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+def finish_body(body, req, request):
+    from .routers import responses as r
+
+    body["_loaded_tools"] = getattr(req, "_loaded_client_tools", {})
     body["_input_messages"] = [
         m for m in r._convert_to_messages(req) if m.get("role") != "system"
     ]
@@ -340,7 +403,8 @@ async def create_client_tools(req, request, inner):
                     raw_items.extend(r._input_item_of(body["id"], idx, message))
             else:
                 raw = item.model_dump(exclude_none=True)
-                raw.pop("role", None)
+                if item.type != "additional_tools":
+                    raw.pop("role", None)
                 raw.setdefault("id", f"{body['id']}:input:{idx}")
                 raw_items.append(raw)
         body["_client_input_items"] = raw_items
@@ -350,14 +414,7 @@ async def create_client_tools(req, request, inner):
         r._store_response(
             body["id"], {**stored, **body, "_owner": r._resolve_owner(request)}
         )
-    public = r._public_stored(body)
-    if not req.stream:
-        return JSONResponse(public)
-    return StreamingResponse(
-        replay(public),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
+    return r._public_stored(body)
 
 
 async def replay(body):
@@ -454,3 +511,429 @@ async def replay(body):
                 )
         yield event("response.output_item.done", output_index=idx, item=item)
     yield event("response." + body["status"], response=body)
+
+
+def stream_failure(body, req, request, exc):
+    from .routers.responses import _config_echo
+
+    failed = {
+        "id": body.get("id") or "resp_" + uuid.uuid4().hex[:24],
+        "object": "response",
+        "created_at": body.get("created_at", int(time.time())),
+        "model": req.model,
+        **body,
+        **_config_echo(req),
+        "status": "failed",
+        "completed_at": int(time.time()),
+        "output": [],
+        "error": {
+            "code": "server_error",
+            "message": str(
+                getattr(exc, "detail", None) or "Client tool stream conversion failed"
+            ),
+        },
+    }
+    return finish_body(failed, req, request)
+
+
+def stream_custom_input(response, req, request, declaration):
+    """Translate a forced raw generation as it arrives, preserving cancellation.
+
+    Tool execution sees item.done only after the engine's terminal status is known,
+    so a token-limited patch cannot be mistaken for a completed tool input.
+    """
+    from .server_tools.responses_loop import _parse_sse
+
+    call = {
+        "type": "custom_tool_call",
+        "id": "ctc_" + uuid.uuid4().hex[:24],
+        "call_id": "call_" + uuid.uuid4().hex[:24],
+        "name": declaration["name"],
+        "input": "",
+        "status": "in_progress",
+    }
+    if declaration.get("namespace"):
+        call["namespace"] = declaration["namespace"]
+
+    async def generate():
+        from yunshu_engine.batched_engine import _REQUEST_TOOL_USE, _REQUEST_TOOLS
+
+        from .routers.responses import _config_echo
+
+        tools_token, use_token = _REQUEST_TOOLS.set(None), _REQUEST_TOOL_USE.set(None)
+        seq, pending_done = 0, None
+
+        def event(data):
+            nonlocal seq
+            data = {**data, "sequence_number": seq}
+            seq += 1
+            return f"event: {data['type']}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+        latest_response = {}
+        try:
+            async for kind, data in _parse_sse(response.body_iterator):
+                if kind == "__comment__":
+                    yield data + "\n\n"
+                    continue
+                if isinstance(data.get("response"), dict):
+                    latest_response = data["response"]
+                if kind in (
+                    "response.content_part.added",
+                    "response.content_part.done",
+                    "response.output_text.annotation.added",
+                ):
+                    continue
+                if (
+                    kind == "response.output_item.added"
+                    and data["item"].get("type") == "message"
+                ):
+                    data = {**data, "item": dict(call)}
+                elif kind == "response.output_text.delta":
+                    call["input"] += data["delta"]
+                    data = {
+                        "type": "response.custom_tool_call_input.delta",
+                        "item_id": call["id"],
+                        "output_index": data["output_index"],
+                        "delta": data["delta"],
+                    }
+                elif kind == "response.output_text.done":
+                    call["input"] = data["text"]
+                    data = {
+                        "type": "response.custom_tool_call_input.done",
+                        "item_id": call["id"],
+                        "output_index": data["output_index"],
+                        "input": data["text"],
+                    }
+                elif (
+                    kind == "response.output_item.done"
+                    and data["item"].get("type") == "message"
+                ):
+                    pending_done = data
+                    continue
+                elif kind in (
+                    "response.completed",
+                    "response.incomplete",
+                    "response.failed",
+                ):
+                    body = data["response"]
+                    call["status"] = (
+                        "completed"
+                        if body.get("status") == "completed"
+                        else "incomplete"
+                    )
+                    for idx, item in enumerate(body.get("output", [])):
+                        if item.get("type") == "message":
+                            call["input"] = "".join(
+                                p.get("text", "") for p in item.get("content", [])
+                            )
+                            body["output"][idx] = dict(call)
+                    if pending_done:
+                        yield event({**pending_done, "item": dict(call)})
+                    data = {**data, "response": finish_body(body, req, request)}
+                if "response" in data and kind not in (
+                    "response.completed",
+                    "response.incomplete",
+                    "response.failed",
+                ):
+                    data = {
+                        **data,
+                        "response": {**data["response"], **_config_echo(req)},
+                    }
+                yield event(data)
+        except Exception as exc:
+            yield event(
+                {
+                    "type": "response.failed",
+                    "response": stream_failure(latest_response, req, request, exc),
+                }
+            )
+        finally:
+            close = getattr(response.body_iterator, "aclose", None)
+            if close:
+                await close()
+            _REQUEST_TOOLS.reset(tools_token)
+            _REQUEST_TOOL_USE.reset(use_token)
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+def stream_client_calls(response, req, request, defs, formats, raw_input):
+    """Keep ordinary text streaming; adapt client calls without leaking their JSON envelopes."""
+    from .server_tools.responses_loop import _parse_sse
+
+    async def generate():
+        from .routers.responses import _config_echo
+
+        seq, pending, blocked = 0, {}, set()
+
+        def event(data):
+            nonlocal seq
+            data = {**data, "sequence_number": seq}
+            seq += 1
+            return f"event: {data['type']}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+        def prototype(item, declaration):
+            args = (
+                {"input": ""}
+                if declaration["type"] == "custom"
+                else {"command": []}
+                if declaration["type"] == "local_shell"
+                else {}
+            )
+            return call_item(
+                {**item, "arguments": json.dumps(args), "status": "in_progress"},
+                declaration,
+            )
+
+        def full_input_events(item, idx, declaration):
+            proto = prototype(item, declaration)
+            return [
+                {
+                    "type": "response.output_item.added",
+                    "output_index": idx,
+                    "item": proto,
+                },
+                {
+                    "type": "response.custom_tool_call_input.delta",
+                    "output_index": idx,
+                    "item_id": item["id"],
+                    "delta": item["input"],
+                },
+                {
+                    "type": "response.custom_tool_call_input.done",
+                    "output_index": idx,
+                    "item_id": item["id"],
+                    "input": item["input"],
+                },
+                {
+                    "type": "response.output_item.done",
+                    "output_index": idx,
+                    "item": item,
+                },
+            ]
+
+        def add_usage(body, raw):
+            for key in ("input_tokens", "output_tokens", "total_tokens"):
+                body["usage"][key] += raw["usage"][key]
+            for detail in ("input_tokens_details", "output_tokens_details"):
+                target = body["usage"].setdefault(detail, {})
+                for key, value in raw["usage"].get(detail, {}).items():
+                    if isinstance(value, int):
+                        target[key] = target.get(key, 0) + value
+            if raw.get("status") != "completed":
+                body["status"] = raw["status"]
+                for key in ("error", "incomplete_details"):
+                    if raw.get(key):
+                        body[key] = raw[key]
+
+        latest_response = {}
+        try:
+            async for kind, data in _parse_sse(response.body_iterator):
+                if kind == "__comment__":
+                    yield data + "\n\n"
+                    continue
+                if isinstance(data.get("response"), dict):
+                    latest_response = data["response"]
+                idx = data.get("output_index")
+                if (
+                    kind == "response.output_item.added"
+                    and data["item"].get("type") == "function_call"
+                ):
+                    item = data["item"]
+                    declaration = defs.get(item.get("name"))
+                    if declaration and declaration["type"] != "function":
+                        pending[idx] = (item, declaration)
+                        if formats.get(item["name"]):
+                            blocked.add(idx)
+                            continue
+                        data = {**data, "item": prototype(item, declaration)}
+                    elif declaration:
+                        data = {**data, "item": call_item(item, declaration)}
+                elif (
+                    kind.startswith("response.function_call_arguments.")
+                    and idx in pending
+                ):
+                    item, declaration = pending[idx]
+                    if idx in blocked or declaration["type"] != "custom":
+                        continue
+                    if kind.endswith(".delta"):
+                        continue  # JSON string escaping is decoded once arguments are complete.
+                    converted = call_item(
+                        {**item, "arguments": data["arguments"]}, declaration
+                    )
+                    coords = {"output_index": idx, "item_id": item["id"]}
+                    yield event(
+                        {
+                            "type": "response.custom_tool_call_input.delta",
+                            **coords,
+                            "delta": converted["input"],
+                        }
+                    )
+                    data = {
+                        "type": "response.custom_tool_call_input.done",
+                        **coords,
+                        "input": converted["input"],
+                    }
+                elif (
+                    kind == "response.output_item.done"
+                    and data["item"].get("type") == "function_call"
+                ):
+                    if idx in blocked:
+                        continue
+                    declaration = defs.get(data["item"].get("name"))
+                    if declaration:
+                        data = {**data, "item": call_item(data["item"], declaration)}
+                elif kind in (
+                    "response.completed",
+                    "response.incomplete",
+                    "response.failed",
+                ):
+                    body = data["response"]
+                    for index, item in enumerate(body.get("output", [])):
+                        if (
+                            item.get("type") != "function_call"
+                            or item.get("name") not in defs
+                        ):
+                            continue
+                        declaration = defs[item["name"]]
+                        converted = call_item(
+                            {**item, "arguments": json.dumps({"input": ""})}
+                            if formats.get(item["name"])
+                            else item,
+                            declaration,
+                        )
+                        if formats.get(item["name"]):
+                            budget = (
+                                req.max_output_tokens - body["usage"]["output_tokens"]
+                            )
+                            if budget <= 0 or body["status"] != "completed":
+                                converted.update(input="", status="incomplete")
+                                if budget <= 0:
+                                    body.update(
+                                        status="incomplete",
+                                        incomplete_details={
+                                            "reason": "max_output_tokens"
+                                        },
+                                    )
+                                for ev in full_input_events(
+                                    converted, index, declaration
+                                ):
+                                    yield event(ev)
+                            else:
+                                raw, text = await raw_input(
+                                    item["name"], budget, body["id"], stream=True
+                                )
+                                if isinstance(raw, StreamingResponse):
+                                    translated = stream_custom_input(
+                                        raw,
+                                        req.model_copy(update={"store": False}),
+                                        request,
+                                        declaration,
+                                    )
+                                    async for raw_kind, ev in _parse_sse(
+                                        translated.body_iterator
+                                    ):
+                                        if raw_kind == "__comment__":
+                                            yield ev + "\n\n"
+                                            continue
+                                        if raw_kind in (
+                                            "response.created",
+                                            "response.in_progress",
+                                        ):
+                                            continue
+                                        if raw_kind in (
+                                            "response.completed",
+                                            "response.incomplete",
+                                            "response.failed",
+                                        ):
+                                            raw_body = ev["response"]
+                                            raw_call = next(
+                                                (
+                                                    o
+                                                    for o in raw_body.get("output", [])
+                                                    if o.get("type")
+                                                    == "custom_tool_call"
+                                                ),
+                                                None,
+                                            )
+                                            if raw_call:
+                                                converted = {
+                                                    **raw_call,
+                                                    "id": item["id"],
+                                                    "call_id": item["call_id"],
+                                                }
+                                            else:
+                                                converted.update(
+                                                    input="", status="incomplete"
+                                                )
+                                            add_usage(body, raw_body)
+                                            continue
+                                        if "item" in ev:
+                                            ev["item"] = {
+                                                **ev["item"],
+                                                "id": item["id"],
+                                                "call_id": item["call_id"],
+                                            }
+                                        if "item_id" in ev:
+                                            ev["item_id"] = item["id"]
+                                        ev["output_index"] = index
+                                        yield event(ev)
+                                elif text is not None:
+                                    converted.update(
+                                        input=text,
+                                        status="completed"
+                                        if raw["status"] == "completed"
+                                        else "incomplete",
+                                    )
+                                    add_usage(body, raw)
+                                    for ev in full_input_events(
+                                        converted, index, declaration
+                                    ):
+                                        yield event(ev)
+                                else:
+                                    body.update(
+                                        status="failed",
+                                        error={
+                                            "message": "Custom tool input generation failed",
+                                            "type": "server_error",
+                                            "code": "server_error",
+                                        },
+                                    )
+                                    converted.update(input="", status="incomplete")
+                        body["output"][index] = converted
+                    data = {
+                        **data,
+                        "type": "response." + body["status"],
+                        "response": finish_body(body, req, request),
+                    }
+                if "response" in data and kind not in (
+                    "response.completed",
+                    "response.incomplete",
+                    "response.failed",
+                ):
+                    data = {
+                        **data,
+                        "response": {**data["response"], **_config_echo(req)},
+                    }
+                yield event(data)
+        except Exception as exc:
+            yield event(
+                {
+                    "type": "response.failed",
+                    "response": stream_failure(latest_response, req, request, exc),
+                }
+            )
+        finally:
+            close = getattr(response.body_iterator, "aclose", None)
+            if close:
+                await close()
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )

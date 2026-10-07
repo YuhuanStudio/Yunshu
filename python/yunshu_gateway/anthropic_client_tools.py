@@ -160,10 +160,6 @@ def schema_for(tool_type: str | None) -> dict | None:
                 result["input_schema"]["properties"]["command"]["enum"].remove(
                     "undo_edit"
                 )
-                result["input_schema"]["properties"]["max_characters"] = {
-                    "type": "integer",
-                    "minimum": 1,
-                }
             if tool_type == "computer_20241022":
                 result["input_schema"]["properties"]["action"]["enum"] = [
                     "key",
@@ -205,6 +201,19 @@ def fill_client_tool_schemas(tools: list | None) -> bool:
                 t.description = (
                     (t.description or spec["description"])
                     + f" Display: {getattr(t, 'display_width_px', '?')} x {getattr(t, 'display_height_px', '?')} pixels, display {getattr(t, 'display_number', 1)}."
+                )
+            if (
+                str(getattr(t, "type", "")).startswith("computer_")
+                and "zoom" in t.input_schema["properties"]["action"]["enum"]
+                and not getattr(t, "enable_zoom", False)
+            ):
+                t.input_schema["properties"]["action"]["enum"].remove("zoom")
+            if str(getattr(t, "type", "")).startswith("text_editor_") and getattr(
+                t, "max_characters", None
+            ):
+                t.description = (
+                    (t.description or spec["description"])
+                    + f" View results are limited to {t.max_characters} characters by the client."
                 )
             if not getattr(t, "description", None):
                 t.description = spec["description"]

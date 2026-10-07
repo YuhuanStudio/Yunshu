@@ -105,7 +105,7 @@ def custom_tools(c: Ctx):
                     {
                         "type": "custom_tool_call_output",
                         "call_id": item["call_id"],
-                        "output": "Tool finished. Secret confirmation: BLUE.",
+                        "output": "Tool finished. Secret confirmation: MAGENTA.",
                     },
                     {
                         "role": "user",
@@ -118,7 +118,7 @@ def custom_tools(c: Ctx):
             timeout=240,
         )
         expect(
-            follow.status_code == 200 and "BLUE" in str(follow.json()["output"]),
+            follow.status_code == 200 and "MAGENTA" in str(follow.json()["output"]),
             f"custom call_id followup failed: {follow.text[:500]}",
         )
 
@@ -152,6 +152,7 @@ def shell_search(c: Ctx):
                 "enable_thinking": False,
                 "max_output_tokens": 192,
                 "stream": True,
+                "store": True,
                 "temperature": 0,
             },
         )
@@ -171,6 +172,32 @@ def shell_search(c: Ctx):
                 and isinstance(item["action"]["command"], list)
                 and isinstance(item["action"]["env"], dict),
                 str(item),
+            )
+            follow = c.req(
+                "POST",
+                "/v1/responses",
+                json={
+                    "model": c.model,
+                    "previous_response_id": events[-1]["response"]["id"],
+                    "input": [
+                        {
+                            "type": "local_shell_call_output",
+                            "id": item["call_id"],
+                            "output": "Secret confirmation: COBALT.",
+                        },
+                        {
+                            "role": "user",
+                            "content": "Repeat the secret confirmation word only.",
+                        },
+                    ],
+                    "max_output_tokens": 64,
+                    "enable_thinking": False,
+                },
+                timeout=240,
+            )
+            expect(
+                follow.status_code == 200 and "COBALT" in str(follow.json()["output"]),
+                follow.text[:500],
             )
         else:
             expect(
@@ -257,78 +284,99 @@ def _pdf():
     served=True,
 )
 def documents(c: Ctx):
-    for source in [
+    upload = c.req(
+        "POST",
+        "/v1/files",
+        files={"file": ("compat.txt", b"BLUE", "text/plain")},
+        data={"purpose": "assistants"},
+        timeout=120,
+    )
+    expect(upload.status_code == 200, upload.text[:500])
+    file_id = upload.json()["id"]
+    sources = [
         {"type": "text", "media_type": "text/plain", "data": "BLUE"},
         {"type": "base64", "media_type": "application/pdf", "data": _pdf()},
         {"type": "content", "content": [{"type": "text", "text": "BLUE"}]},
-    ]:
-        body = {
-            "model": c.model,
-            "max_tokens": 128,
-            "enable_thinking": False,
-            "temperature": 0,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "document",
-                            "source": source,
-                            "title": "Secret",
-                            "citations": {"enabled": True},
-                        },
-                        {
-                            "type": "text",
-                            "text": "Return exactly BLUE.[[cite:0:0:4]] to cite the first four characters of document 0. No other text.",
-                        },
-                    ],
-                }
-            ],
-        }
-        counted = c.req("POST", "/v1/messages/count_tokens", json=body, timeout=120)
-        expect(
-            counted.status_code == 200 and counted.json()["input_tokens"] > 0,
-            counted.text[:500],
-        )
-        events = _events(c, "/v1/messages", {**body, "stream": True})
-        citations = [
-            e["delta"]["citation"]
-            for e in events
-            if e.get("delta", {}).get("type") == "citations_delta"
-        ]
-        expect(
-            citations and citations[0]["cited_text"] == "BLUE",
-            f"Missing checked citation: {events}",
-        )
-        want = {
-            "text": "char_location",
-            "base64": "page_location",
-            "content": "content_block_location",
-        }[source["type"]]
-        expect(citations[0]["type"] == want, str(citations))
-        # Feed the public citation block back to the client conversation.
-        follow = c.req(
-            "POST",
-            "/v1/messages",
-            json={
-                **body,
-                "messages": body["messages"]
-                + [
+        {"type": "file", "file_id": file_id},
+    ]
+    try:
+        for source in sources:
+            body = {
+                "model": c.model,
+                "max_tokens": 128,
+                "enable_thinking": False,
+                "temperature": 0,
+                "messages": [
                     {
-                        "role": "assistant",
+                        "role": "user",
                         "content": [
-                            {"type": "text", "text": "BLUE.", "citations": citations}
+                            {
+                                "type": "document",
+                                "source": source,
+                                "title": "Secret",
+                                "citations": {"enabled": True},
+                            },
+                            {
+                                "type": "text",
+                                "text": "Return exactly BLUE.[[cite:0:0:4]] to cite the first four characters of document 0. No other text.",
+                            },
                         ],
-                    },
-                    {"role": "user", "content": "Repeat the secret word only."},
+                    }
                 ],
-            },
-            timeout=240,
-        )
-        expect(
-            follow.status_code == 200 and "BLUE" in str(follow.json()["content"]),
-            follow.text[:500],
-        )
+            }
+            counted = c.req("POST", "/v1/messages/count_tokens", json=body, timeout=120)
+            expect(
+                counted.status_code == 200 and counted.json()["input_tokens"] > 0,
+                counted.text[:500],
+            )
+            events = _events(c, "/v1/messages", {**body, "stream": True})
+            citations = [
+                e["delta"]["citation"]
+                for e in events
+                if e.get("delta", {}).get("type") == "citations_delta"
+            ]
+            expect(
+                citations and citations[0]["cited_text"] == "BLUE",
+                f"Missing checked citation: {events}",
+            )
+            want = {
+                "text": "char_location",
+                "base64": "page_location",
+                "content": "content_block_location",
+                "file": "char_location",
+            }[source["type"]]
+            expect(citations[0]["type"] == want, str(citations))
+            # Feed the public citation block back to the client conversation.
+            follow = c.req(
+                "POST",
+                "/v1/messages",
+                json={
+                    **body,
+                    "messages": body["messages"]
+                    + [
+                        {
+                            "role": "assistant",
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": "BLUE.",
+                                    "citations": citations,
+                                }
+                            ],
+                        },
+                        {"role": "user", "content": "Repeat the secret word only."},
+                    ],
+                },
+                timeout=240,
+            )
+            expect(
+                follow.status_code == 200 and "BLUE" in str(follow.json()["content"]),
+                follow.text[:500],
+            )
+
+    finally:
+        removed = c.req("DELETE", "/v1/files/" + file_id)
+        expect(removed.status_code == 200, removed.text[:500])
 
 
 @check("agent-anthropic-client-tools", "POST /v1/messages", served=True)

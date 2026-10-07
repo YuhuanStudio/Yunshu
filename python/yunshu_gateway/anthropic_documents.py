@@ -218,7 +218,14 @@ def attach_citations(content, documents):
             citation = documents[index].citation(start, end)
             span = text[cursor : match.start()]
             if span:
-                out.append({"type": "text", "text": span, "citations": [citation]})
+                out.append(
+                    {
+                        **block,
+                        "type": "text",
+                        "text": span,
+                        "citations": [*(block.get("citations") or []), citation],
+                    }
+                )
             elif out and out[-1].get("type") == "text":
                 out[-1].setdefault("citations", []).append(citation)
             else:
@@ -263,13 +270,15 @@ async def prepare_documents(req, render_pdf_images=False):
             except Exception as exc:
                 raise HTTPException(400, f"Cannot load document: {exc}") from exc
             docs.append(doc)
-            text = f"[Document {doc.index}, title={json.dumps(doc.title)}, context={json.dumps(block.get('context'))}]\n{doc.text}\n[End document {doc.index}]"
+            text = f"[Document {doc.index}, title={json.dumps(doc.title)}, context={json.dumps(block.get('context'))}]\n{doc.text}"
             if doc.enabled and doc.text:
                 text += f"\nTo cite this source, append [[cite:{doc.index}:START:END]] to the relevant statement. START and END are exact zero-based character offsets in the document text, end exclusive."
+            out.append({"type": "text", "text": text})
+            out.extend(doc.images)
             out.append(
                 {
                     "type": "text",
-                    "text": text,
+                    "text": f"[End document {doc.index}]",
                     **(
                         {"cache_control": block["cache_control"]}
                         if "cache_control" in block
@@ -277,7 +286,6 @@ async def prepare_documents(req, render_pdf_images=False):
                     ),
                 }
             )
-            out.extend(doc.images)
         return out
 
     messages = [

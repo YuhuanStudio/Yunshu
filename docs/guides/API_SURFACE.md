@@ -336,3 +336,40 @@ Explicit endpoints have a separate numerical cache identity. Their suffixes
 finish the same absolute prefill spans as a cold request; restores from a
 different earlier breakpoint plan are rejected. These endpoints are retained
 within this process's bounded APC policy; a restart may require a new write.
+
+
+### Agent-client additions (2026-10-07)
+
+Responses client tools `custom`, legacy `local_shell`, and client-executed `tool_search`
+are adapted to the model's function template and returned as `custom_tool_call`,
+`local_shell_call`, and `tool_search_call`. `call_id` survives manual history and
+`previous_response_id`; legacy shell outputs may identify the call with `id`.
+Custom input supports text, regex, and Lark formats. Forced custom input streams
+incrementally through the constrained decoder. Auto mode preserves text streaming;
+a selected grammar-bearing custom call adds a constrained generation, sharing the
+request's output-token budget. Deferred schemas remain hidden until loaded by a
+client `tool_search_output`. Hosted tool search and duplicate names across namespaces
+are rejected explicitly.
+
+Anthropic documents accept text, custom content, stored-file references, and bounded
+PDF base64/HTTPS sources. Vision models receive PDF page images and the text layer;
+image-only PDFs require a vision model. Citations use checked character, page, or
+content-block ranges and round-trip as `citations_delta` events. Document responses
+currently buffer generation before replaying their Messages stream. Client tool
+schemas cover versioned bash, text editor, and legacy computer tools; computer zoom
+is opt-in, and text-editor `max_characters` is tool configuration. The newer
+`computer_toolset_20260801` member protocol is not implemented.
+
+Chat supports `stream_options.continuous_usage_stats` together with `include_usage`.
+HTTP(S) video fetches use DNS-pinned redirects, TLS verification, and
+`YUNSHU_VLM_MAX_VIDEO_BYTES` (100 MiB by default). `POST /apply-template` renders the
+loaded tokenizer's template; `GET /props` exposes minimal loaded-model properties.
+Both have `/v1` aliases.
+
+CPU regression evidence: `test_agent_client_compat.py`. Served probes are registered
+as `agent-custom-tools`, `agent-shell-search`, `agent-documents-citations`,
+`agent-anthropic-client-tools`, `agent-continuous-usage`, `agent-template-props`,
+and `agent-http-video` in `route_checks_agent_compat.py`. `yv --suite client_compat`
+uses the M3 lane; `client_compat_m5` uses the M5. Both run the 0.8B pilot before the
+3B text model, validate the commit-pinned source tree, and fail closed on missing
+or unsuccessful checks. Real-server evidence is pending for this addition.

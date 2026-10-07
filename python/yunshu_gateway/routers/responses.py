@@ -955,7 +955,7 @@ def _extract_input_text(content) -> str | list:
 
 def _convert_to_messages(req: ResponsesRequest) -> list[dict]:
     """Convert Responses API input to OpenAI chat messages."""
-    messages = []
+    messages: list[dict[str, Any]] = []
     pending_reasoning: list[str] = []
 
     def _take_reasoning(msg: dict) -> dict:
@@ -1005,6 +1005,19 @@ def _convert_to_messages(req: ResponsesRequest) -> list[dict]:
                         "tool_call_id": _get("call_id", "") or "",
                         "content": _out
                         if isinstance(_out, str)
+                        else _extract_input_text(_out)
+                        if isinstance(_out, list)
+                        and any(
+                            isinstance(p, dict)
+                            and p.get("type")
+                            in (
+                                "input_text",
+                                "input_image",
+                                "input_file",
+                                "input_audio",
+                            )
+                            for p in _out
+                        )
                         else json.dumps(_out, ensure_ascii=False),
                     }
                 )
@@ -1418,13 +1431,27 @@ async def create_response(req: ResponsesRequest, request: Request):
         for item in req.input:
             if item.type in ("tool_search_output", "additional_tools"):
                 _client_defs.update(declarations(getattr(item, "tools", [])))
-    if any(
-        d.get("type") in ("custom", "local_shell", "tool_search")
-        for d in _client_defs.values()
-    ) or (
-        isinstance(req.input, list)
-        and any(i.type in ("tool_search_output", "additional_tools") for i in req.input)
-        and bool(_client_defs)
+    _loaded_previous = False
+    if req.previous_response_id:
+        previous = _get_stored_response(req.previous_response_id)
+        _loaded_previous = bool(
+            previous
+            and _owns_stored(request, previous)
+            and previous.get("_loaded_tools")
+        )
+    if (
+        any(
+            d.get("type") in ("custom", "local_shell", "tool_search")
+            for d in _client_defs.values()
+        )
+        or _loaded_previous
+        or (
+            isinstance(req.input, list)
+            and any(
+                i.type in ("tool_search_output", "additional_tools") for i in req.input
+            )
+            and bool(_client_defs)
+        )
     ):
         return await create_client_tools(req, request, create_response)
     _fn_tools = function_tools(req.tools)

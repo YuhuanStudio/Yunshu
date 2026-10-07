@@ -927,3 +927,359 @@ def test_client_route_probe_cpu_parser_and_verdict(monkeypatch, capsys):
     assert probe.judge(good)[0]
     good["checks"]["agent-custom-tools"]["status"] = "fail"
     assert not probe.judge(good)[0]
+
+
+@pytest.mark.parametrize("status", ["completed", "incomplete"])
+def test_forced_custom_stream_is_incremental_and_marks_truncation(status):
+    from fastapi.responses import StreamingResponse
+    from openai.types.responses import ResponseStreamEvent
+    from pydantic import TypeAdapter
+
+    state = {"finished": False}
+
+    def event(kind, **data):
+        return (
+            "event: "
+            + kind
+            + "\ndata: "
+            + json.dumps({"type": kind, "sequence_number": 0, **data})
+            + "\n\n"
+        )
+
+    async def source():
+        body = fake_body([])
+        body.update(id="resp_stream_" + status, status=status)
+        if status == "incomplete":
+            body["incomplete_details"] = {"reason": "max_output_tokens"}
+        initial = {**body, "output": [], "status": "in_progress", "usage": None}
+        yield event("response.created", response=initial)
+        yield event(
+            "response.output_item.added",
+            output_index=0,
+            item={
+                "type": "message",
+                "id": "msg_raw",
+                "role": "assistant",
+                "content": [],
+                "status": "in_progress",
+            },
+        )
+        for text in ("PA", "TCH\n"):
+            yield event(
+                "response.output_text.delta",
+                item_id="msg_raw",
+                output_index=0,
+                content_index=0,
+                delta=text,
+                logprobs=[],
+            )
+        yield event(
+            "response.output_text.done",
+            item_id="msg_raw",
+            output_index=0,
+            content_index=0,
+            text="PATCH\n",
+            logprobs=[],
+        )
+        item = {
+            "type": "message",
+            "id": "msg_raw",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "PATCH\n", "annotations": []}],
+            "status": "completed",
+        }
+        yield event("response.output_item.done", output_index=0, item=item)
+        body["output"] = [item]
+        state["finished"] = True
+        yield event("response." + status, response=body)
+
+    async def inner(q, request):
+        assert q.stream and q._custom_raw_input and not q.store
+        return StreamingResponse(source(), media_type="text/event-stream")
+
+    q = req(
+        tools=[
+            {
+                "type": "custom",
+                "name": "patch",
+                "format": {
+                    "type": "grammar",
+                    "syntax": "regex",
+                    "definition": "PATCH\\n",
+                },
+            }
+        ],
+        tool_choice={"type": "custom", "name": "patch"},
+        stream=True,
+        store=True,
+    )
+
+    async def run():
+        response = await create_client_tools(
+            q, SimpleNamespace(state=SimpleNamespace()), inner
+        )
+        collected = []
+        async for chunk in response.body_iterator:
+            ev = events(chunk)[0]
+            if ev["type"] == "response.custom_tool_call_input.delta":
+                assert not state["finished"]
+            if ev["type"] == "response.output_item.done":
+                assert state["finished"]
+                assert ev["item"]["status"] == status
+            TypeAdapter(ResponseStreamEvent).validate_python(ev)
+            collected.append(ev)
+        return collected
+
+    ev = asyncio.run(run())
+    assert [e["sequence_number"] for e in ev] == list(range(len(ev)))
+    assert (
+        "".join(
+            e["delta"]
+            for e in ev
+            if e["type"] == "response.custom_tool_call_input.delta"
+        )
+        == "PATCH\n"
+    )
+    final = ev[-1]["response"]
+    assert final["output"][0]["type"] == "custom_tool_call"
+    assert r._get_stored_response(final["id"])["output"] == final["output"]
+
+
+@pytest.mark.parametrize("grammar", [False, True])
+def test_auto_stream_preserves_text_and_custom_call_id(grammar):
+    from fastapi.responses import StreamingResponse
+    from openai.types.responses import ResponseStreamEvent
+    from pydantic import TypeAdapter
+
+    state, seen = {"selected": False}, []
+    text_item = {
+        "type": "message",
+        "id": "msg_text",
+        "role": "assistant",
+        "content": [{"type": "output_text", "text": "hello", "annotations": []}],
+        "status": "completed",
+    }
+    function_item = {
+        "type": "function_call",
+        "id": "fc_orig",
+        "call_id": "call_orig",
+        "name": "patch",
+        "arguments": json.dumps({"input": "RAW"}),
+        "status": "completed",
+    }
+
+    async def selection():
+        async for chunk in replay(fake_body([text_item, function_item])):
+            if "event: response.completed" in chunk:
+                state["selected"] = True
+            yield chunk
+
+    async def inner(q, request):
+        seen.append(q)
+        if len(seen) == 1:
+            assert q.stream
+            return StreamingResponse(selection(), media_type="text/event-stream")
+        assert q.grammar == {"type": "regex", "pattern": "PATCH\\n"} and q.stream
+        body = fake_body(
+            [
+                {
+                    **text_item,
+                    "id": "msg_raw",
+                    "content": [
+                        {"type": "output_text", "text": "PATCH\n", "annotations": []}
+                    ],
+                }
+            ]
+        )
+        return StreamingResponse(replay(body), media_type="text/event-stream")
+
+    tool = {"type": "custom", "name": "patch"}
+    if grammar:
+        tool["format"] = {
+            "type": "grammar",
+            "syntax": "regex",
+            "definition": "PATCH\\n",
+        }
+    q = req(tools=[tool, {"type": "function", "name": "noop"}], stream=True)
+
+    async def run():
+        response = await create_client_tools(
+            q, SimpleNamespace(state=SimpleNamespace()), inner
+        )
+        evs = []
+        async for chunk in response.body_iterator:
+            ev = events(chunk)[0]
+            if ev["type"] == "response.output_text.delta":
+                assert not state["selected"]
+            TypeAdapter(ResponseStreamEvent).validate_python(ev)
+            evs.append(ev)
+        return evs
+
+    ev = asyncio.run(run())
+    added = [
+        e["item"]
+        for e in ev
+        if e["type"] == "response.output_item.added"
+        and e["item"]["type"] == "custom_tool_call"
+    ]
+    assert len(added) == 1 and added[0]["call_id"] == "call_orig"
+    final = ev[-1]["response"]["output"][-1]
+    assert final["call_id"] == "call_orig" and final["id"] == "fc_orig"
+    assert final["input"] == ("PATCH\n" if grammar else "RAW")
+    assert [e["sequence_number"] for e in ev] == list(range(len(ev)))
+    assert len(seen) == (2 if grammar else 1)
+
+
+def test_deferred_tool_schema_is_hidden_until_search_output_loads_it():
+    seen = []
+
+    async def inner(q, request):
+        seen.append(q)
+        return JSONResponse(fake_body([]))
+
+    tool = {
+        "type": "function",
+        "name": "read",
+        "description": "Read a file.",
+        "defer_loading": True,
+        "parameters": {"type": "object", "properties": {"path": {"type": "string"}}},
+    }
+    q = req(tools=[tool, {"type": "tool_search", "execution": "client"}], store=True)
+    request = SimpleNamespace(state=SimpleNamespace())
+    asyncio.run(create_client_tools(q, request, inner))
+    assert [t.name for t in seen[-1].tools] == ["tool_search"]
+    assert "read: Read a file." in seen[-1].tools[0].description
+    q = q.model_copy(
+        update={
+            "input": [
+                r.ResponseInputText(
+                    type="tool_search_output", call_id="call_s", tools=[tool]
+                )
+            ],
+            "previous_response_id": None,
+        }
+    )
+    asyncio.run(create_client_tools(q, request, inner))
+    assert "read" in [t.name for t in seen[-1].tools]
+    following = req(
+        previous_response_id="resp_test",
+        tools=[{"type": "tool_search", "execution": "client"}],
+    )
+    asyncio.run(create_client_tools(following, request, inner))
+    assert "read" in [t.name for t in seen[-1].tools]
+
+
+def test_document_cache_breakpoint_follows_page_images():
+    from yunshu_gateway.anthropic_documents import prepare_documents
+    from yunshu_gateway.routers.anthropic import AnthropicMessagesRequest
+
+    q = AnthropicMessagesRequest(
+        model="local",
+        max_tokens=8,
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "document",
+                        "source": {
+                            "type": "content",
+                            "content": [
+                                {"type": "text", "text": "BLUE"},
+                                {
+                                    "type": "image",
+                                    "source": {
+                                        "type": "base64",
+                                        "media_type": "image/png",
+                                        "data": "abc",
+                                    },
+                                },
+                            ],
+                        },
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
+            }
+        ],
+    )
+    adapted, docs = asyncio.run(prepare_documents(q))
+    blocks = adapted.messages[0].content
+    assert blocks[-1]["cache_control"] == {"type": "ephemeral"}
+    assert blocks[-2]["type"] == "image" and "cache_control" not in blocks[0]
+    assert docs[0].citation(0, 4)["end_block_index"] == 1
+
+
+def test_editor_view_limit_is_tool_configuration_and_zoom_is_opt_in():
+    from yunshu_gateway.anthropic_client_tools import fill_client_tool_schemas
+    from yunshu_gateway.routers.anthropic import AnthropicTool
+
+    editor = AnthropicTool(
+        type="text_editor_20250728", name="editor", max_characters=10000
+    )
+    computer = AnthropicTool(type="computer_20251124", name="computer")
+    fill_client_tool_schemas([editor, computer])
+    assert "10000" in editor.description
+    assert "max_characters" not in editor.input_schema["properties"]
+    assert "zoom" not in computer.input_schema["properties"]["action"]["enum"]
+
+
+def test_function_output_content_array_preserves_images():
+    q = r.ResponsesRequest(
+        model="local",
+        input=[
+            {
+                "type": "function_call_output",
+                "call_id": "call_image",
+                "output": [
+                    {"type": "input_text", "text": "A screenshot"},
+                    {
+                        "type": "input_image",
+                        "image_url": "data:image/png;base64,aGVsbG8=",
+                    },
+                ],
+            }
+        ],
+    )
+    message = r._convert_to_messages(q)[0]
+    assert message["content"][1]["type"] == "image_url"
+    assert message["tool_call_id"] == "call_image"
+
+
+@pytest.mark.parametrize(
+    "kind,args",
+    [("local_shell", {"command": "pwd"}), ("custom", {"bad": "missing input"})],
+)
+def test_invalid_client_tool_arguments_end_in_response_failed(kind, args):
+    from fastapi.responses import StreamingResponse
+    from openai.types.responses import ResponseStreamEvent
+    from pydantic import TypeAdapter
+
+    name = "patch" if kind == "custom" else "local_shell"
+    tool = {"type": kind, **({"name": name} if kind == "custom" else {})}
+    item = {
+        "type": "function_call",
+        "id": "fc_bad",
+        "call_id": "call_bad",
+        "name": name,
+        "arguments": json.dumps(args),
+        "status": "completed",
+    }
+
+    async def inner(q, request):
+        return StreamingResponse(
+            replay(fake_body([item])), media_type="text/event-stream"
+        )
+
+    q = req(tools=[tool], stream=True, store=True)
+
+    async def run():
+        response = await create_client_tools(
+            q, SimpleNamespace(state=SimpleNamespace()), inner
+        )
+        return "".join([chunk async for chunk in response.body_iterator])
+
+    ev = events(asyncio.run(run()))
+    assert ev[-1]["type"] == "response.failed"
+    assert ev[-1]["response"]["error"]["code"] == "server_error"
+    assert r._get_stored_response(ev[-1]["response"]["id"])["status"] == "failed"
+    TypeAdapter(ResponseStreamEvent).validate_python(ev[-1])
