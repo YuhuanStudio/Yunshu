@@ -1093,6 +1093,9 @@ def create_app() -> FastAPI:
     from .routers import yunshu as yunshu_mod
 
     app.include_router(yunshu_mod.router, prefix="/v1")  # status, requests, warmup
+    from .routers import admin_keys as admin_keys_mod
+
+    app.include_router(admin_keys_mod.router, prefix="/v1")  # API keys + usage
     app.include_router(ocr_mod.router)
     app.include_router(realtime.router)
     app.include_router(stream_ws.router)

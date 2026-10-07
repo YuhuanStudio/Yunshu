@@ -40,21 +40,34 @@ def _check_permission(request: Request, permission: str) -> None:
     # Static token auth — must verify the request actually provides it.
     # When a token IS configured it gates everything, inference included.
     auth_token = settings.get("YUNSHU_AUTH_TOKEN")
-    if auth_token is not None and auth_token:
-        from yunshu_gateway.token_compare import tokens_equal
+    from yunshu_gateway import api_keys
 
-        auth = request.headers.get("Authorization", "")
-        # Anthropic SDKs send the key as x-api-key instead of a bearer token.
-        presented = (
-            auth[7:] if auth.startswith("Bearer ") else request.headers.get("x-api-key")
-        )
-        if presented and tokens_equal(presented, auth_token):
-            return  # Valid static token
-        # Token is configured but request doesn't provide a valid one
+    store = api_keys.get_store()
+    if (auth_token is not None and auth_token) or store.has_keys():
+        principal = getattr(getattr(request, "state", None), "principal", None)
+        if principal is None:  # not through AuthMiddleware (direct call): resolve here
+            auth = request.headers.get("Authorization", "")
+            # Anthropic SDKs send the key as x-api-key instead of a bearer token.
+            presented = (
+                auth[7:]
+                if auth.startswith("Bearer ")
+                else request.headers.get("x-api-key")
+            )
+            principal = api_keys.principal_for(presented, auth_token)
+        if principal is None:
+            raise HTTPException(
+                status_code=401,
+                detail="Invalid or missing Authorization header",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        # An admin-scope key can do everything; an infer key only the inference routes.
+        if "admin" in principal.scopes or (
+            permission == "can_infer" and "infer" in principal.scopes
+        ):
+            return
         raise HTTPException(
-            status_code=401,
-            detail="Invalid or missing Authorization header",
-            headers={"WWW-Authenticate": "Bearer"},
+            status_code=403,
+            detail=f"This API key lacks the 'admin' scope required for {permission}",
         )
     # No auth configured and not explicitly disabled. Inference stays open
     # (matches the startup banner + the drop-in-local-server contract);

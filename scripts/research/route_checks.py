@@ -62,6 +62,11 @@ def check(name: str, *routes: str, served: bool, needs: str = "main"):
 # belongs here only when no server run (with the four small checkpoints) can exercise it.
 EXEMPT: dict[str, str] = {
     "POST /api/push": "documented 501 by design: nothing to push to",
+    "PATCH /v1/yunshu/config": "rewrites the operator's own config file; unit-tested against a temp file",
+    "GET /v1/yunshu/service": "reports the operator's launchd agent; unit-tested with launchctl mocked",
+    "POST /v1/yunshu/service/restart": "restarts the real service; unit-tested with launchctl mocked",
+    "GET /v1/yunshu/cors": "admin read of the CORS origins; unit-tested with the live middleware",
+    "PATCH /v1/yunshu/cors": "rewrites the operator's config file; unit-tested with the live middleware",
 }
 
 
@@ -256,6 +261,65 @@ def _auth(c: Ctx):
     expect(r.status_code == 401, f"no token -> {r.status_code}, want 401")
     r = c.http.get("/v1/models", headers={"x-api-key": c.token})
     expect(r.status_code == 200, f"x-api-key token -> {r.status_code}")
+
+
+@check(
+    "api_keys",
+    "GET /v1/yunshu/keys",
+    "POST /v1/yunshu/keys",
+    "PATCH /v1/yunshu/keys/{key_id}",
+    "DELETE /v1/yunshu/keys/{key_id}",
+    "POST /v1/yunshu/keys/{key_id}/rotate",
+    "GET /v1/yunshu/usage",
+    served=True,
+)
+def _api_keys(c: Ctx):
+    r = c.req(
+        "POST",
+        "/v1/yunshu/keys",
+        json={"name": "route-check", "quotas": {"requests_per_day": 1000}},
+    )
+    expect(
+        r.status_code == 201 and r.json().get("secret", "").startswith("ysk-"),
+        f"create {r.status_code} {r.text[:120]}",
+    )
+    kid, secret = r.json()["id"], r.json()["secret"]
+    try:
+        ls = c.req("GET", "/v1/yunshu/keys").json()
+        expect(
+            any(k["id"] == kid and "hash" not in k for k in ls["data"]),
+            "listed, no hash",
+        )
+        h = {"Authorization": f"Bearer {secret}"}
+        m = c.http.get("/v1/models", headers=h)
+        expect(m.status_code == 200, f"new key serves /v1/models -> {m.status_code}")
+        a = c.http.get("/v1/yunshu/keys", headers=h)
+        expect(a.status_code == 403, f"infer key on admin route -> {a.status_code}")
+        r = c.req("PATCH", f"/v1/yunshu/keys/{kid}", json={"enabled": False})
+        expect(
+            r.status_code == 200 and r.json()["enabled"] is False,
+            f"patch {r.text[:100]}",
+        )
+        expect(
+            c.http.get("/v1/models", headers=h).status_code == 401,
+            "disabled key -> 401",
+        )
+        c.req("PATCH", f"/v1/yunshu/keys/{kid}", json={"enabled": True})
+        r = c.req("POST", f"/v1/yunshu/keys/{kid}/rotate")
+        expect(
+            r.status_code == 200 and r.json()["secret"] != secret,
+            f"rotate {r.text[:100]}",
+        )
+        expect(
+            c.http.get("/v1/models", headers=h).status_code == 401, "old secret -> 401"
+        )
+        u = c.req("GET", f"/v1/yunshu/usage?key={kid}")
+        expect(u.status_code == 200 and u.json()["data"], f"usage {u.text[:120]}")
+    finally:
+        d = c.req("DELETE", f"/v1/yunshu/keys/{kid}")
+    expect(
+        d.status_code == 200 and d.json()["deleted"] is True, f"delete {d.status_code}"
+    )
 
 
 @check(

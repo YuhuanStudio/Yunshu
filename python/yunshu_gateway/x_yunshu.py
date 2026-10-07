@@ -165,6 +165,7 @@ class RequestInfo:
     # The token budget when the prompt left less room than max_tokens asked for
     # (``token_budget.TokenBudget.report``); None when the request fit.
     budget: dict | None = None
+    api_key_id: str | None = None  # the stored API key that made the request, if any
     _rate: tuple[float, int, float] | None = None  # (t, processed, ema tokens/s)
 
     @property
@@ -586,6 +587,16 @@ def record_done(info: RequestInfo, stats: dict) -> None:
             "cancelled": bool(stats.get("cancelled")),
         }
     )
+    if info.api_key_id:  # the one place tokens are counted per key
+        with contextlib.suppress(Exception):
+            from .api_keys import get_store
+
+            get_store().account(
+                info.api_key_id,
+                int(stats.get("prompt_tokens") or 0),
+                int(stats.get("completion_tokens") or 0),
+                int(stats.get("cached_tokens") or 0),
+            )
     with contextlib.suppress(Exception):
         from . import serve_log
 
@@ -646,6 +657,12 @@ class YunshuExtensionsMiddleware:
             await self._serve(scope, receive, send, info, tracked)
         finally:
             info.t_done = time.perf_counter()
+            info.api_key_id = (scope.get("state") or {}).get("api_key_id")
+            if info.api_key_id and info.status >= 400:
+                with contextlib.suppress(Exception):
+                    from .api_keys import get_store
+
+                    get_store().account(info.api_key_id, error=True)
             if tracked:
                 registry.remove(info)
                 if info.status == 200 and path in STATS_PATHS:

@@ -27,6 +27,8 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from yunshu_engine import settings
+from yunshu_gateway import api_keys
+from yunshu_gateway.error_envelope import format_error_response
 from yunshu_gateway.token_compare import tokens_equal
 
 logger = logging.getLogger(__name__)
@@ -105,6 +107,15 @@ class _ErrorFormatter:
         )
 
 
+async def _release_after(body, store, key_id):
+    """Yield the response body, then free the key's concurrency slot (stream end or abort)."""
+    try:
+        async for chunk in body:
+            yield chunk
+    finally:
+        store.release(key_id)
+
+
 def _owner_identity() -> str:
     """Single-consumer owner identity, overridable via YUNSHU_ACTOR_IDENTITY."""
     return settings.get("YUNSHU_ACTOR_IDENTITY") or "owner"
@@ -132,7 +143,13 @@ class AuthMiddleware(BaseHTTPMiddleware):
         if settings.get_bool("YUNSHU_AUTH_DISABLED"):
             return False
         _static = settings.get("YUNSHU_AUTH_TOKEN")
-        return bool(_static)
+        if _static:
+            return True
+        from yunshu_gateway import api_keys
+
+        return (
+            api_keys.get_store().has_keys()
+        )  # stored keys switch auth on, like a token
 
     async def dispatch(self, request: Request, call_next):
         # Public paths never need auth
@@ -180,6 +197,36 @@ class AuthMiddleware(BaseHTTPMiddleware):
         # Static token auth (constant-time comparison). The single consumer
         # authenticates with the one configured bearer token.
         if auth_token and tokens_equal(token, auth_token):
+            with contextlib.suppress(Exception):
+                request.state.principal = api_keys.ADMIN_TOKEN
             return await call_next(request)
+
+        # Stored API keys: enabled / expiry, then quotas (429 + Retry-After).
+        store = api_keys.get_store()
+        if store.has_keys():
+            try:
+                principal = store.authenticate(token)
+                store.admit(principal)
+            except api_keys.AuthFailureError as exc:
+                return _ErrorFormatter.auth_error(request, str(exc), exc.status)
+            except api_keys.QuotaExceededError as exc:
+                return format_error_response(
+                    request.url.path,
+                    str(exc),
+                    429,
+                    code=f"{exc.which}_exceeded",
+                    retry_after=exc.retry_after,
+                )
+            request.state.principal = principal
+            request.state.api_key_id = principal.key_id
+            try:
+                response = await call_next(request)
+            except BaseException:
+                store.release(principal.key_id)
+                raise
+            response.body_iterator = _release_after(
+                response.body_iterator, store, principal.key_id
+            )
+            return response
 
         return _ErrorFormatter.auth_error(request, "Invalid or missing API key")

@@ -3640,8 +3640,6 @@ async def realtime_endpoint(ws: WebSocket):
     the session model. Origin and bearer checks run *before* the upgrade, so a
     rejected client sees an HTTP 403 handshake failure like on api.openai.com.
     """
-    from yunshu_gateway.token_compare import tokens_equal
-
     origin = ws.headers.get("origin", "")
     if origin:
         cors_origins_str = settings.get("YUNSHU_CORS_ORIGINS")
@@ -3653,8 +3651,12 @@ async def realtime_endpoint(ws: WebSocket):
                 await ws.close(code=1008)
                 return
 
+    from yunshu_gateway import api_keys
+
     auth_token = settings.get("YUNSHU_AUTH_TOKEN")
-    if auth_token and not settings.get_bool("YUNSHU_AUTH_DISABLED"):
+    if (auth_token or api_keys.get_store().has_keys()) and not settings.get_bool(
+        "YUNSHU_AUTH_DISABLED"
+    ):
         token = ws.headers.get("authorization", "").removeprefix("Bearer ").strip()
         if not token:
             # Browsers cannot set headers: OpenAI accepts the key as a
@@ -3664,7 +3666,8 @@ async def realtime_endpoint(ws: WebSocket):
                     token = proto.removeprefix("openai-insecure-api-key.")
         if not token:
             token = ws.query_params.get("token") or ""
-        if not (token and tokens_equal(token, auth_token)):
+        principal = api_keys.principal_for(token, auth_token)
+        if principal is None or not ({"infer", "admin"} & principal.scopes):
             await ws.close(code=1008)
             return
 
