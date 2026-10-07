@@ -137,8 +137,8 @@ async def list_models(request: Request) -> dict:
     """
     from ..model_cards import all_cards, entry_card
 
-    # A static-token holder authenticates with role="admin".
-    _authenticated = getattr(request.state, "role", None) == "admin"
+    # Static-token authentication uses the single-owner role; retain legacy admin stubs.
+    _authenticated = getattr(request.state, "role", None) in ("owner", "admin")
     manager = get_model_manager()
     models = []
     if manager is not None:
@@ -179,7 +179,9 @@ async def get_model(model_id: str, request: Request) -> dict:
         if manager is not None
         else None
     )
-    item = _model_payload(card, entry, getattr(request.state, "role", None) == "admin")
+    item = _model_payload(
+        card, entry, getattr(request.state, "role", None) in ("owner", "admin")
+    )
     if entry is not None:
         item.pop("stats", None)  # detail view: the card is enough
     return item
