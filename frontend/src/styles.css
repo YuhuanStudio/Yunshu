@@ -127,3 +127,47 @@ output {
 .pill-sans .font-mono {
   font-family: var(--font-sans);
 }
+
+/* Safe areas (viewport-fit=cover): nothing sits under the Dynamic Island or the home indicator. */
+.safe-top-4 {
+  padding-top: max(1rem, env(safe-area-inset-top));
+}
+.safe-top-5 {
+  padding-top: max(1.25rem, env(safe-area-inset-top));
+}
+.safe-bottom {
+  padding-bottom: env(safe-area-inset-bottom);
+}
+.safe-x {
+  padding-left: max(1rem, env(safe-area-inset-left));
+  padding-right: max(1rem, env(safe-area-inset-right));
+}
+@media (min-width: 1024px) {
+  .safe-x {
+    padding-left: max(1.5rem, env(safe-area-inset-left));
+    padding-right: max(1.5rem, env(safe-area-inset-right));
+  }
+}
+/* A heading that receives focus after navigation is a landmark, not a control: no ring. */
+h1[tabindex="-1"]:focus,
+h1[tabindex="-1"]:focus-visible {
+  outline: none;
+}
+
+/* Phone: stat cards are compact 2-up tiles (icon, number, label); the sub-lines live in the strip and on Requests. */
+@media (max-width: 639px) {
+  [data-stat-grid] .card {
+    padding: 0.75rem;
+  }
+  [data-stat-grid] .yunui-stat-toprow {
+    margin-bottom: 0.5rem;
+  }
+  [data-stat-grid] .yunui-stat-icon {
+    width: 28px;
+    height: 28px;
+    border-radius: 8px;
+  }
+  [data-stat-grid] .yunui-stat-sub {
+    display: none;
+  }
+}

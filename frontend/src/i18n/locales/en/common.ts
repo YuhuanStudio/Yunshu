@@ -13,5 +13,11 @@ const common: Shape<typeof zh> = {
   copyLabel: "Copy {label}",
   "language.label": "Language",
   sentenceGap: " ",
+  offlineFor: "Offline for {t}.",
+  staleAt: "Data as of {time}",
+  "unlock.placeholder": "Paste the access token",
+  "unlock.label": "Unlock key",
+  "unlock.remember": "Remember on this device",
+  "unlock.submit": "Unlock",
 };
 export default common;

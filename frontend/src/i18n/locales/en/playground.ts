@@ -22,7 +22,6 @@ const playground: Shape<typeof zh> = {
   "error.imageRead": "Could not read the image",
   "error.stopped": "Generation stopped. The partial reply is kept below.",
   "model.notChat": "Not a text chat model",
-  "model.notLoaded": "Not loaded",
   "model.loadedDetail": "{type} · Loaded",
   "model.vision": "Vision",
   "model.visionTitle": "Models that accept image input",
@@ -61,7 +60,7 @@ const playground: Shape<typeof zh> = {
   "composer.offline": "Connect to the engine to start testing.",
   "composer.notChat":
     "This model is not for text chat tests. Use its matching API endpoint instead.",
-  "composer.notLoaded": "Load this model in Models first.",
+  "composer.notLoaded": "This model is not loaded yet.",
   "composer.pendingImage": "Image to send",
   "composer.removeImage": "Remove image",
   "composer.placeholder": "Enter a test prompt…",
@@ -89,7 +88,7 @@ const playground: Shape<typeof zh> = {
   "code.desc": "{dialect} · Same request as the current settings send.",
   "code.compareNote": "Compare mode shows the A request.",
   "code.keyNote":
-    "The token comes from the YUNSHU_API_KEY environment variable and is not written into the sample.",
+    "The token comes from the YUNSHU_AUTH_TOKEN environment variable and is not written into the sample.",
   "code.shortened":
     "The image data is shortened here. Replace it with a real file.",
   "code.noJson": "Messages has no JSON mode, so it is not sent.",
@@ -99,5 +98,11 @@ const playground: Shape<typeof zh> = {
   "image.pick": "Choose or drop an image",
   "image.hint":
     "PNG, JPEG or WebP, up to 8 MB. The image is sent with the prompt to the selected VLM.",
+  "model.loadHere": "Not loaded · load it below",
+  "model.loadAction": "Load {name} ({size})",
+  "model.loadingNow": "Loading {name}…",
+  "compare.specNote":
+    "The engine decides speculative decoding itself. There is no per-request switch today (the spec_decode field is ignored), so an on/off comparison is not offered here.",
+  "header.more": "More actions",
 };
 export default playground;

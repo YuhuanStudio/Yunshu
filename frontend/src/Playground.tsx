@@ -1,6 +1,10 @@
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import {
   CustomSelect,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
   toast,
   StatusIndicator,
   Button,
@@ -44,6 +48,7 @@ import {
   ImagePlus,
   X,
   Code2,
+  MoreHorizontal,
 } from "lucide-react";
 import {
   describeStreamError,
@@ -60,12 +65,13 @@ import {
   DIALECT_LABEL,
   type CodeLanguage,
 } from "./playground-code";
-import type { Connection } from "./api";
+import { loadModel, type Connection } from "./api";
 import {
   LocalModelIcon,
   modelLabel,
   fixed,
   number,
+  sizeGb,
   supportsChat,
   type Engine,
 } from "./ui";
@@ -272,6 +278,48 @@ export function Playground({
     };
   }, []);
   useEffect(() => () => toast.dismiss(UNDO_TOAST_ID), []);
+  // Esc stops a running generation (unless a dialog has the key); the composer
+  // takes focus on arrival where there is a keyboard.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (
+        e.key !== "Escape" ||
+        !controller.current ||
+        e.defaultPrevented ||
+        document.querySelector('[role="dialog"]')
+      )
+        return;
+      controller.current.abort();
+    };
+    addEventListener("keydown", onKey);
+    if (matchMedia("(pointer: fine)").matches)
+      document
+        .querySelector<HTMLTextAreaElement>(
+          '[data-testid="playground"] textarea',
+        )
+        ?.focus({ preventScroll: true });
+    return () => removeEventListener("keydown", onKey);
+  }, []);
+  const [loadingModels, setLoadingModels] = useState<ReadonlySet<string>>(
+    new Set(),
+  );
+  /** Load an unloaded model here, so a compare never needs a trip to Models. */
+  async function loadHere(id: string) {
+    setLoadingModels((s) => new Set(s).add(id));
+    try {
+      await loadModel(connection, id);
+    } catch (e) {
+      if (mounted.current) setErrorState(describeStreamError(e));
+    } finally {
+      await engine.refresh();
+      if (mounted.current)
+        setLoadingModels((s) => {
+          const next = new Set(s);
+          next.delete(id);
+          return next;
+        });
+    }
+  }
   useEffect(() => {
     if (!loading) return;
     const timer = window.setInterval(() => setNow(performance.now()), 100);
@@ -512,11 +560,7 @@ export function Playground({
   const modelOptions: ModelSelectOption[] = models.map((x) => {
     const developer = getModelDeveloperId(x.id),
       chat = supportsChat(x),
-      reason = !chat
-        ? t("playground.model.notChat")
-        : !x.loaded
-          ? t("playground.model.notLoaded")
-          : undefined;
+      reason = !chat ? t("playground.model.notChat") : undefined;
     return {
       id: x.id,
       label: modelLabel(x.id),
@@ -527,7 +571,11 @@ export function Playground({
       badges: isVlm(x) ? (
         <CapabilityIcon capability="vision" size={13} />
       ) : undefined,
-      detail: reason ?? t("playground.model.loadedDetail", { type: x.type }),
+      detail:
+        reason ??
+        (x.loaded
+          ? t("playground.model.loadedDetail", { type: x.type })
+          : t("playground.model.loadHere")),
       meta: <span className="tabular-nums">{number(x.size_gb, 1)} GB</span>,
       disabled: !!reason,
     };
@@ -551,12 +599,12 @@ export function Playground({
     label: string,
   ) => (
     <div
-      className={loading ? "pointer-events-none opacity-60" : undefined}
+      className={`max-sm:w-full ${loading ? "pointer-events-none opacity-60" : ""}`}
       role="group"
       aria-label={label}
     >
       <ModelSelect
-        className="w-60"
+        className="w-60 max-sm:w-full"
         options={modelOptions}
         value={value}
         onChange={onChange}
@@ -588,6 +636,25 @@ export function Playground({
       ),
     };
   })();
+  function newTest() {
+    if (messages.length || pairPrompt)
+      toast.info(t("playground.header.cleared"), undefined, {
+        id: UNDO_TOAST_ID,
+        duration: UNDO_WINDOW_MS,
+        action: {
+          label: t("playground.header.undo"),
+          onClick: () => {
+            setMessages(messages);
+            setPair(pair);
+            setPairPrompt(pairPrompt);
+          },
+        },
+      });
+    setMessages([]);
+    setPair([null, null]);
+    setPairPrompt(null);
+    setError("");
+  }
   const empty = (
     <EmptyState
       icon={<Sparkles size={25} />}
@@ -606,9 +673,9 @@ export function Playground({
   return (
     <section className="flex min-h-0 flex-1 flex-col" data-testid="playground">
       <ChatHeader
-        className="flex-wrap gap-3 border-b border-border/60 p-4"
+        className="flex-wrap gap-3 border-b border-border/60 p-4 max-sm:[&>*]:w-full"
         left={
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
             {modelSelect(model, setModel, t("playground.model.testModel"))}
             {compare &&
               modelSelect(
@@ -619,10 +686,14 @@ export function Playground({
           </div>
         }
         status={
-          <div className="flex flex-wrap items-center gap-2">
-            <div role="group" aria-label={t("playground.header.apiFormat")}>
+          <div className="flex flex-wrap items-center gap-2 max-sm:flex-nowrap">
+            <div
+              role="group"
+              aria-label={t("playground.header.apiFormat")}
+              className="max-sm:min-w-0 max-sm:flex-1"
+            >
               <CustomSelect
-                className="w-44 [&_button]:h-8 [&_button]:text-xs"
+                className="w-44 max-sm:w-full [&_button]:h-8 [&_button]:text-xs"
                 value={dialect}
                 disabled={loading}
                 onChange={(v) => setDialect(v as Dialect)}
@@ -642,37 +713,45 @@ export function Playground({
         }
         actions={
           <>
-            <Button size="sm" variant="ghost" onClick={() => setCodeOpen(true)}>
-              <Code2 size={13} />
-              {t("playground.header.viewCode")}
-            </Button>
-            <Button
-              size="sm"
-              variant="ghost"
-              disabled={loading}
-              onClick={() => {
-                if (messages.length || pairPrompt)
-                  toast.info(t("playground.header.cleared"), undefined, {
-                    id: UNDO_TOAST_ID,
-                    duration: UNDO_WINDOW_MS,
-                    action: {
-                      label: t("playground.header.undo"),
-                      onClick: () => {
-                        setMessages(messages);
-                        setPair(pair);
-                        setPairPrompt(pairPrompt);
-                      },
-                    },
-                  });
-                setMessages([]);
-                setPair([null, null]);
-                setPairPrompt(null);
-                setError("");
-              }}
-            >
-              <Plus size={13} />
-              {t("playground.header.newTest")}
-            </Button>
+            <div className="hidden items-center gap-1 sm:flex">
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => setCodeOpen(true)}
+              >
+                <Code2 size={13} />
+                {t("playground.header.viewCode")}
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={loading}
+                onClick={newTest}
+              >
+                <Plus size={13} />
+                {t("playground.header.newTest")}
+              </Button>
+            </div>
+            <div className="sm:hidden">
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <IconButton
+                    icon={<MoreHorizontal size={16} />}
+                    label={t("playground.header.more")}
+                  />
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem onSelect={() => setCodeOpen(true)}>
+                    <Code2 size={14} />
+                    {t("playground.header.viewCode")}
+                  </DropdownMenuItem>
+                  <DropdownMenuItem disabled={loading} onSelect={newTest}>
+                    <Plus size={14} />
+                    {t("playground.header.newTest")}
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
           </>
         }
       />
@@ -831,6 +910,14 @@ export function Playground({
           </p>
         )}
         {compare && (
+          <p
+            className="mb-3 text-xs text-muted-foreground"
+            data-testid="spec-note"
+          >
+            {t("playground.compare.specNote")}
+          </p>
+        )}
+        {compare && (
           <div className="mb-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-muted-foreground">
             {([0, 1] as const).map((i) => (
               <div key={i} className="flex items-center gap-2">
@@ -863,13 +950,40 @@ export function Playground({
           </div>
         )}
         {!canSend && (
-          <p className="mb-3 text-xs text-muted-foreground">
-            {engine.phase !== "online"
-              ? t("playground.composer.offline")
-              : !supportsChat(chosen) || (compare && !supportsChat(chosenB))
-                ? t("playground.composer.notChat")
-                : t("playground.composer.notLoaded")}
-          </p>
+          <div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-2 text-xs text-muted-foreground">
+            <p>
+              {engine.phase !== "online"
+                ? t("playground.composer.offline")
+                : !supportsChat(chosen) || (compare && !supportsChat(chosenB))
+                  ? t("playground.composer.notChat")
+                  : t("playground.composer.notLoaded")}
+            </p>
+            {engine.phase === "online" &&
+              [chosen, ...(compare ? [chosenB] : [])]
+                .filter(
+                  (m, i, all) =>
+                    m && !m.loaded && supportsChat(m) && all.indexOf(m) === i,
+                )
+                .map((m) => (
+                  <Button
+                    key={m!.id}
+                    size="sm"
+                    variant="secondary"
+                    disabled={loadingModels.has(m!.id) || m!.loading}
+                    data-testid="load-inline"
+                    onClick={() => void loadHere(m!.id)}
+                  >
+                    {loadingModels.has(m!.id) || m!.loading
+                      ? t("playground.model.loadingNow", {
+                          name: modelLabel(m!.id),
+                        })
+                      : t("playground.model.loadAction", {
+                          name: modelLabel(m!.id),
+                          size: sizeGb(m!.size_gb),
+                        })}
+                  </Button>
+                ))}
+          </div>
         )}
         <ChatComposer
           value={draft}

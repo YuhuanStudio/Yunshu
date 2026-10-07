@@ -22,7 +22,6 @@ const playground: Shape<typeof zh> = {
   "error.imageRead": "无法读取图片",
   "error.stopped": "已停止生成；部分回复保留在下方。",
   "model.notChat": "非文本聊天模型",
-  "model.notLoaded": "未加载",
   "model.loadedDetail": "{type} · 已加载",
   "model.vision": "视觉",
   "model.visionTitle": "可接受图片输入的模型",
@@ -57,7 +56,7 @@ const playground: Shape<typeof zh> = {
   "composer.needVision": "此测试包含图片，请选择视觉模型，或创建新测试。",
   "composer.offline": "连接引擎后即可开始测试。",
   "composer.notChat": "此模型不适用于文本聊天测试，请使用 API 接入对应端点。",
-  "composer.notLoaded": "请先在模型库加载此模型。",
+  "composer.notLoaded": "这个模型还没加载。",
   "composer.pendingImage": "待发送图片",
   "composer.removeImage": "移除图片",
   "composer.placeholder": "输入测试提示词…",
@@ -81,7 +80,7 @@ const playground: Shape<typeof zh> = {
   "code.title": "查看代码",
   "code.desc": "{dialect} · 与当前设置发送的请求相同。",
   "code.compareNote": "比较模式显示 A 组请求。",
-  "code.keyNote": "通过环境变量 YUNSHU_API_KEY 传入令牌，不会写入示例。",
+  "code.keyNote": "通过环境变量 YUNSHU_AUTH_TOKEN 传入令牌，不会写入示例。",
   "code.shortened": "图片内容已缩短显示，请换成实际文件。",
   "code.noJson": "Messages 没有 JSON 模式，未发送。",
   "image.title": "图片输入",
@@ -89,5 +88,11 @@ const playground: Shape<typeof zh> = {
   "image.reading": "读取中…",
   "image.pick": "选择或拖入图片",
   "image.hint": "PNG、JPEG、WebP，最大 8 MB。图片会随提示词发送给所选 VLM。",
+  "model.loadHere": "未加载 · 可在下方加载",
+  "model.loadAction": "加载 {name}（{size}）",
+  "model.loadingNow": "正在加载 {name}…",
+  "compare.specNote":
+    "推测解码由引擎自行决定，请求端目前没有逐次开关（spec_decode 字段会被忽略），因此这里不提供“推测开/关”对比。",
+  "header.more": "更多操作",
 };
 export default playground;

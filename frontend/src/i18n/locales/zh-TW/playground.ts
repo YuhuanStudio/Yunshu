@@ -19,7 +19,6 @@ const playground = {
   "error.imageRead": "無法讀取圖片",
   "error.stopped": "已停止生成；部分回覆保留於下方。",
   "model.notChat": "非文字聊天模型",
-  "model.notLoaded": "未載入",
   "model.loadedDetail": "{type} · 已載入",
   "model.vision": "視覺",
   "model.visionTitle": "可接受圖片輸入的模型",
@@ -54,7 +53,7 @@ const playground = {
   "composer.needVision": "此測試包含圖片，請選擇視覺模型，或建立新測試。",
   "composer.offline": "連接引擎後即可開始測試。",
   "composer.notChat": "此模型不適用文字聊天測試，請使用 API 接入對應端點。",
-  "composer.notLoaded": "請先在模型庫載入此模型。",
+  "composer.notLoaded": "這個模型還沒載入。",
   "composer.pendingImage": "待傳送圖片",
   "composer.removeImage": "移除圖片",
   "composer.placeholder": "輸入測試提示詞…",
@@ -78,7 +77,7 @@ const playground = {
   "code.title": "檢視程式碼",
   "code.desc": "{dialect} · 與目前設定送出的請求相同。",
   "code.compareNote": "比較模式顯示 A 組請求。",
-  "code.keyNote": "以環境變數 YUNSHU_API_KEY 帶入權杖，不會寫入範例。",
+  "code.keyNote": "以環境變數 YUNSHU_AUTH_TOKEN 帶入權杖，不會寫入範例。",
   "code.shortened": "圖片內容已縮短顯示，請換成實際檔案。",
   "code.noJson": "Messages 沒有 JSON 模式，未送出。",
   "image.title": "圖片輸入",
@@ -86,5 +85,11 @@ const playground = {
   "image.reading": "讀取中…",
   "image.pick": "選擇或拖入圖片",
   "image.hint": "PNG、JPEG、WebP，最多 8 MB。圖片會隨提示詞傳給所選 VLM。",
+  "model.loadHere": "未載入 · 可在下方載入",
+  "model.loadAction": "載入 {name}（{size}）",
+  "model.loadingNow": "正在載入 {name}…",
+  "compare.specNote":
+    "推測解碼由引擎自行決定，請求端目前沒有逐次開關（spec_decode 欄位會被忽略），因此這裡不提供「推測開／關」比較。",
+  "header.more": "更多動作",
 };
 export default playground;

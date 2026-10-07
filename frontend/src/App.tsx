@@ -22,12 +22,18 @@ import {
   Activity,
   Box,
   Code2,
+  Database,
+  Download,
   Gauge,
+  Keyboard,
+  KeyRound,
+  Languages,
   Menu,
   MessageSquare,
   Moon,
   Pause,
   Play,
+  ScrollText,
   Search,
   PanelLeftClose,
   PanelLeftOpen,
@@ -42,8 +48,29 @@ import { tabTitle } from "./engineView";
 import type { Connection } from "./api";
 import { FooterStatus } from "./FooterStatus";
 import { LanguageSwitch } from "./LanguageSwitch";
-import { has, t, tr, useLocale } from "./i18n/index.ts";
+import {
+  LOCALES,
+  LOCALE_NAMES,
+  has,
+  setLocale,
+  t,
+  tr,
+  useLocale,
+} from "./i18n/index.ts";
 import { ConnectionState, fixed, modelLabel, sizeGb } from "./ui";
+import { NotificationCenter } from "./NotificationCenter";
+import { ShortcutsSheet } from "./Shortcuts";
+import { SignalsProvider, useShellSignals } from "./signals";
+import { setRememberedToken, rememberedToken } from "./token-store";
+import {
+  CHORDS,
+  PAGES,
+  VERBS,
+  isTypingTarget,
+  parseRoute,
+  routeHref,
+  type Page,
+} from "./route";
 const Dashboard = lazy(() =>
   import("./Dashboard").then((m) => ({ default: m.Dashboard })),
 );
@@ -66,30 +93,16 @@ const Diagnostics = lazy(() =>
 const Playground = lazy(() =>
   import("./Playground").then((m) => ({ default: m.Playground })),
 );
-const PAGES = [
-  "overview",
-  "diagnostics",
-  "models",
-  "requests",
-  "api",
-  "settings",
-  "playground",
-] as const;
+const Downloads = lazy(() => import("./Downloads"));
+const Cache = lazy(() => import("./Cache"));
+const Keys = lazy(() => import("./Keys"));
+const Logs = lazy(() => import("./Logs"));
+// i18n-keys: shell.page.
 const pageTitle = (page: string) => tr(`shell.page.${page}`);
-function route() {
-  const [p = "", ...rest] = location.hash.replace(/^#\/?/, "").split("/");
-  const page = (PAGES as readonly string[]).includes(p) ? p : "overview";
-  let sub: string | null = null;
-  try {
-    sub =
-      page === "models" && rest.length
-        ? decodeURIComponent(rest.join("/"))
-        : null;
-  } catch {
-    sub = null;
-  }
+const route = () => {
+  const { page, sub } = parseRoute(location.hash);
   return { page, sub };
-}
+};
 function stored(key: string, fallback: string) {
   try {
     return localStorage.getItem(key) ?? fallback;
@@ -157,7 +170,8 @@ export default function App() {
     ),
     [connection, setConnection] = useState<Connection>(() => ({
       baseUrl: base(),
-      token: "",
+      // Opt-in: only a token the user chose to remember on this device.
+      token: rememberedToken(base()),
     })),
     [revision, setRevision] = useState(0),
     [busy, setBusy] = useState<string | null>(null),
@@ -166,6 +180,8 @@ export default function App() {
     ),
     [testModel, setTestModel] = useState("");
   const engine = useEngine(connection);
+  const signals = useShellSignals(engine, connection);
+  const [help, setHelp] = useState(false);
   const loadedModel = engine.status?.models.find((m) => m.loaded);
   const [palette, setPalette] = useState(false),
     [query, setQuery] = useState("");
@@ -202,8 +218,70 @@ export default function App() {
     }
   }, [collapsed]);
   useEffect(() => {
-    document.title = tabTitle(engine.status, pageTitle(page));
-  }, [engine.status, page, locale]);
+    document.title =
+      engine.phase === "offline"
+        ? t("shell.engine.tab.offline", {
+            page: pageTitle(page),
+            brand: t("shell.brand.name"),
+          })
+        : tabTitle(engine.status, pageTitle(page));
+  }, [engine.status, engine.phase, page, locale]);
+  // After a navigation, focus moves to the page heading so Tab continues into
+  // the content instead of restarting from the top of the document.
+  const lastRoute = useRef(`${page}/${sub}`);
+  useEffect(() => {
+    // Compared by value, not "first run", so React StrictMode's second effect pass cannot steal focus.
+    if (lastRoute.current === `${page}/${sub}`) return;
+    lastRoute.current = `${page}/${sub}`;
+    // The new page may still be loading (a lazy chunk): wait until the same
+    // heading is seen twice in a row with no loading placeholder, then focus it.
+    let tries = 0;
+    let seen: Element | null = null;
+    let timer: ReturnType<typeof setTimeout>;
+    const find = () => {
+      const h1 = document.querySelector<HTMLElement>("#main-content h1");
+      const loading = document.querySelector('[data-testid="page-loading"]');
+      if (h1 && !loading && h1 === seen) {
+        h1.setAttribute("tabindex", "-1");
+        h1.focus({ preventScroll: true });
+        return;
+      }
+      seen = loading ? null : h1;
+      if (++tries < 60) timer = setTimeout(find, 50);
+    };
+    timer = setTimeout(find, 50);
+    return () => clearTimeout(timer);
+  }, [page, sub]);
+  // `?` opens the shortcuts sheet; `g` then a letter goes to a page.
+  useEffect(() => {
+    let chord = 0;
+    const onKey = (e: KeyboardEvent) => {
+      if (
+        e.metaKey ||
+        e.ctrlKey ||
+        e.altKey ||
+        isTypingTarget(e.target as HTMLElement | null)
+      )
+        return;
+      if (e.key === "?") {
+        e.preventDefault();
+        setHelp(true);
+        return;
+      }
+      if (chord && Date.now() - chord < 1200) {
+        const target = CHORDS[e.key.toLowerCase()];
+        chord = 0;
+        if (target) {
+          e.preventDefault();
+          go(routeHref(target));
+        }
+        return;
+      }
+      chord = e.key === "g" ? Date.now() : 0;
+    };
+    addEventListener("keydown", onKey);
+    return () => removeEventListener("keydown", onKey);
+  }, []);
   const commands: CommandPaletteItem[] = [
     ...PAGES.map((key) => ({
       id: "go:" + key,
@@ -211,13 +289,40 @@ export default function App() {
       group: t("shell.cmd.go"),
       onSelect: () => navigate(key),
     })),
+    ...VERBS.map((v) => ({
+      id: "verb:" + v.id,
+      // i18n-keys: shell.cmd.verb.
+      title: tr(`shell.cmd.verb.${v.id}`),
+      group: t("shell.cmd.verbs"),
+      onSelect: () => go(v.href),
+    })),
     ...(engine.status?.models ?? []).map((m) => ({
       id: "model:" + m.id,
       title: modelLabel(m.id),
       description: `${m.type} · ${sizeGb(m.size_gb)} · ${m.loaded ? t("shell.cmd.loaded") : t("shell.cmd.notLoaded")}`,
       group: t("shell.cmd.models"),
-      onSelect: () => navigate("models"),
+      onSelect: () =>
+        go(
+          routeHref("models", {
+            action: m.loaded ? "unload" : "load",
+            model: m.id,
+          }),
+        ),
     })),
+    ...LOCALES.filter((l) => l !== locale).map((l) => ({
+      id: "lang:" + l,
+      title: t("shell.cmd.language", { name: LOCALE_NAMES[l] }),
+      icon: <Languages size={14} />,
+      group: t("shell.cmd.actions"),
+      onSelect: () => void setLocale(l),
+    })),
+    {
+      id: "help",
+      title: t("shell.cmd.shortcuts"),
+      icon: <Keyboard size={14} />,
+      group: t("shell.cmd.actions"),
+      onSelect: () => setHelp(true),
+    },
     {
       id: "polling",
       title: engine.polling ? t("shell.cmd.pause") : t("shell.cmd.resume"),
@@ -255,9 +360,21 @@ export default function App() {
   }, [dark]);
   function navigate(p: string, id: string | null = null) {
     location.hash = "/" + p + (id ? "/" + encodeURIComponent(id) : "");
-    setRoute({ page: p, sub: id });
+    setRoute({ page: p as Page, sub: id });
     setMenu(false);
     setNotice(null);
+  }
+  /** Follow a console link (`#/models?action=load`): the hashchange listener routes it. */
+  function go(href: string) {
+    if (location.hash === href)
+      dispatchEvent(new HashChangeEvent("hashchange"));
+    else location.hash = href;
+    setNotice(null);
+  }
+  /** The in-place token prompt: keep the page, take the token, optionally remember it. */
+  function unlock(token: string, remember: boolean) {
+    save({ baseUrl: connection.baseUrl, token });
+    if (remember) setRememberedToken(connection.baseUrl, token);
   }
   async function perform(key: string, action: () => Promise<unknown>) {
     if (busy) return;
@@ -298,364 +415,438 @@ export default function App() {
   }
   return (
     <YunUIProvider adapters={adapters}>
-      <Toaster position="bottom-center" offset={56} />
-      <div className="relative h-dvh overflow-hidden bg-(--bg-window)">
-        <a href="#main-content" className="skip-link" onClick={skipToMain}>
-          {t("shell.nav.skip")}
-        </a>
-        <Sidebar
-          appName="Yunshu"
-          ariaLabel={t("shell.nav.ariaLabel")}
-          currentPath={"/" + page}
-          isOpen={menu}
-          onClose={() => setMenu(false)}
-          closeLabel={t("shell.nav.close")}
-          onNavigate={(href) => navigate(href.replace(/^\//, ""))}
-          homeHref="/overview"
-          collapsed={collapsed}
-          onToggleCollapse={() => setCollapsed((v) => !v)}
-          loading={engine.phase === "connecting" && !engine.status}
-          header={
-            <div className="flex items-center gap-2.5 px-4 pb-4 pt-5">
-              <div className="flex min-w-0 flex-1 items-center gap-2.5 px-2">
-                <CloudMark />
-                <span className="flex-1 truncate text-base font-semibold tracking-tight">
-                  Yunshu
-                  {t("shell.brand.name") !== "Yunshu" && (
-                    <span className="ml-1.5 text-xs font-normal text-muted-foreground">
-                      {t("shell.brand.name")}
-                    </span>
-                  )}
-                </span>
-              </div>
-              <IconButton
-                className="hidden lg:inline-flex"
-                icon={<PanelLeftClose size={17} />}
-                label={t("shell.nav.collapse")}
-                onClick={() => setCollapsed(true)}
-              />
-              <IconButton
-                className="lg:hidden"
-                icon={<X size={17} />}
-                label={t("shell.nav.close")}
-                onClick={() => setMenu(false)}
-              />
-            </div>
-          }
-          sections={[
-            {
-              title: t("shell.nav.section.monitor"),
-              items: [
-                {
-                  label: t("shell.page.overview"),
-                  href: "/overview",
-                  icon: Gauge,
-                },
-                {
-                  label: t("shell.page.requests"),
-                  href: "/requests",
-                  icon: Activity,
-                },
-                {
-                  label: t("shell.page.diagnostics"),
-                  href: "/diagnostics",
-                  icon: Stethoscope,
-                },
-              ],
-            },
-            {
-              title: t("shell.nav.section.models"),
-              items: [
-                { label: t("shell.page.models"), href: "/models", icon: Box },
-              ],
-            },
-            {
-              title: t("shell.nav.section.develop"),
-              items: [
-                {
-                  label: t("shell.page.playground"),
-                  href: "/playground",
-                  icon: MessageSquare,
-                },
-                { label: t("shell.page.api"), href: "/api", icon: Code2 },
-              ],
-            },
-          ]}
-          footer={
-            <>
-              <Button
-                variant="outline"
-                className="mb-3 h-auto rounded-[20px] bg-(--bg-card) w-full flex-col items-start gap-0 px-3 py-2.5 text-left font-normal hover:bg-(--bg-elevated)"
-                onClick={() => navigate("models")}
-              >
-                <span className="sr-only">{t("shell.side.openModels")}</span>
-                <span className="mb-1 flex items-center gap-2 text-xs text-muted-foreground">
-                  <StatusIndicator
-                    status={
-                      engine.phase !== "online"
-                        ? "offline"
-                        : loadedModel
-                          ? "online"
-                          : "neutral"
-                    }
-                  />
-                  {engine.phase !== "online"
-                    ? t("shell.side.offline")
-                    : loadedModel
-                      ? t("shell.side.loaded")
-                      : t("shell.side.noModel")}
-                </span>
-                <span
-                  className={`block w-full truncate text-base font-semibold ${engine.phase === "online" ? "" : "text-muted-foreground"}`}
-                >
-                  {loadedModel
-                    ? modelLabel(loadedModel.id)
-                    : engine.phase === "online"
-                      ? t("shell.side.pick")
-                      : t("shell.side.waiting")}
-                </span>
-                <span className="mt-0.5 block w-full truncate text-xs tabular-nums text-muted-foreground">
-                  {t("shell.side.memory", {
-                    used: fixed(engine.status?.memory.active_gb),
-                    total: fixed(engine.status?.memory.total_gb),
-                  })}
-                </span>
-              </Button>
-              <Button
-                variant="outline"
-                className={`h-auto rounded-[20px] bg-(--bg-card) w-full justify-start gap-3 px-3 py-2.5 text-left font-normal hover:bg-(--bg-elevated) ${page === "settings" ? "bg-(--bg-elevated)" : ""}`}
-                aria-current={page === "settings" ? "page" : undefined}
-                onClick={() => navigate("settings")}
-              >
-                <SettingsIcon
-                  size={16}
-                  className="shrink-0 text-muted-foreground"
+      <SignalsProvider value={signals}>
+        <Toaster position="bottom-center" offset={56} />
+        <div className="relative h-dvh overflow-hidden bg-(--bg-window)">
+          <a href="#main-content" className="skip-link" onClick={skipToMain}>
+            {t("shell.nav.skip")}
+          </a>
+          <Sidebar
+            appName="Yunshu"
+            ariaLabel={t("shell.nav.ariaLabel")}
+            currentPath={"/" + page}
+            isOpen={menu}
+            onClose={() => setMenu(false)}
+            closeLabel={t("shell.nav.close")}
+            onNavigate={(href) => navigate(href.replace(/^\//, ""))}
+            homeHref="/overview"
+            collapsed={collapsed}
+            onToggleCollapse={() => setCollapsed((v) => !v)}
+            loading={engine.phase === "connecting" && !engine.status}
+            header={
+              <div className="safe-top-5 flex items-center gap-2.5 px-4 pb-4 pt-5">
+                <div className="flex min-w-0 flex-1 items-center gap-2.5 px-2">
+                  <CloudMark />
+                  <span className="flex-1 truncate text-base font-semibold tracking-tight">
+                    Yunshu
+                    {t("shell.brand.name") !== "Yunshu" && (
+                      <span className="ml-1.5 text-xs font-normal text-muted-foreground">
+                        {t("shell.brand.name")}
+                      </span>
+                    )}
+                  </span>
+                </div>
+                <IconButton
+                  className="hidden lg:inline-flex"
+                  icon={<PanelLeftClose size={17} />}
+                  label={t("shell.nav.collapse")}
+                  onClick={() => setCollapsed(true)}
                 />
-                <span className="min-w-0 flex-1">
-                  <span className="sr-only">
-                    {t("shell.side.openSettings")}
-                  </span>
-                  <span className="block truncate text-sm font-medium">
-                    {(() => {
-                      try {
-                        return new URL(connection.baseUrl, location.href).host;
-                      } catch {
-                        return connection.baseUrl;
+                <IconButton
+                  className="lg:hidden"
+                  icon={<X size={17} />}
+                  label={t("shell.nav.close")}
+                  onClick={() => setMenu(false)}
+                />
+              </div>
+            }
+            sections={[
+              {
+                title: t("shell.nav.section.monitor"),
+                items: [
+                  {
+                    label: t("shell.page.overview"),
+                    href: "/overview",
+                    icon: Gauge,
+                  },
+                  {
+                    label: t("shell.page.requests"),
+                    href: "/requests",
+                    icon: Activity,
+                  },
+                  {
+                    label: t("shell.page.logs"),
+                    href: "/logs",
+                    icon: ScrollText,
+                  },
+                  {
+                    label: t("shell.page.diagnostics"),
+                    href: "/diagnostics",
+                    icon: Stethoscope,
+                  },
+                ],
+              },
+              {
+                title: t("shell.nav.section.models"),
+                items: [
+                  { label: t("shell.page.models"), href: "/models", icon: Box },
+                  {
+                    label: t("shell.page.downloads"),
+                    href: "/downloads",
+                    icon: Download,
+                  },
+                  {
+                    label: t("shell.page.cache"),
+                    href: "/cache",
+                    icon: Database,
+                  },
+                ],
+              },
+              {
+                title: t("shell.nav.section.develop"),
+                items: [
+                  {
+                    label: t("shell.page.playground"),
+                    href: "/playground",
+                    icon: MessageSquare,
+                  },
+                  { label: t("shell.page.api"), href: "/api", icon: Code2 },
+                ],
+              },
+              {
+                title: t("shell.nav.section.manage"),
+                items: [
+                  {
+                    label: t("shell.page.keys"),
+                    href: "/keys",
+                    icon: KeyRound,
+                  },
+                  {
+                    label: t("shell.page.settings"),
+                    href: "/settings",
+                    icon: SettingsIcon,
+                  },
+                ],
+              },
+            ]}
+            footer={
+              <div className="safe-bottom">
+                <div className="mb-3 flex items-center justify-between gap-2 sm:hidden">
+                  <LanguageSwitch variant="pill" />
+                  <IconButton
+                    className="card size-8 rounded-full"
+                    icon={dark ? <Sun size={16} /> : <Moon size={16} />}
+                    label={
+                      dark
+                        ? t("shell.top.themeLight")
+                        : t("shell.top.themeDark")
+                    }
+                    onClick={() => setDark((v) => !v)}
+                  />
+                </div>
+                <Button
+                  variant="outline"
+                  className="mb-3 h-auto rounded-[20px] bg-(--bg-card) w-full flex-col items-start gap-0 px-3 py-2.5 text-left font-normal hover:bg-(--bg-elevated)"
+                  onClick={() => navigate("models")}
+                >
+                  <span className="sr-only">{t("shell.side.openModels")}</span>
+                  <span className="mb-1 flex items-center gap-2 text-xs text-muted-foreground">
+                    <StatusIndicator
+                      status={
+                        engine.phase !== "online"
+                          ? "offline"
+                          : loadedModel
+                            ? "online"
+                            : "neutral"
                       }
-                    })()}
+                    />
+                    {engine.phase !== "online"
+                      ? t("shell.side.offline")
+                      : loadedModel
+                        ? t("shell.side.loaded")
+                        : t("shell.side.noModel")}
                   </span>
-                  <span className="block truncate text-xs tabular-nums text-muted-foreground">
-                    {engine.status?.version
-                      ? `yunshu ${engine.status.version}`
-                      : t("shell.side.localFirst")}
+                  <span
+                    className={`block w-full truncate text-base font-semibold ${engine.phase === "online" ? "" : "text-muted-foreground"}`}
+                  >
+                    {loadedModel
+                      ? modelLabel(loadedModel.id)
+                      : engine.phase === "online"
+                        ? t("shell.side.pick")
+                        : t("shell.side.waiting")}
                   </span>
-                </span>
-              </Button>
-            </>
-          }
-        />
-        <div
-          className={`flex h-dvh min-w-0 flex-col transition-[padding] duration-150 ease-in-out ${collapsed ? "lg:pl-0" : "lg:pl-64"}`}
-        >
-          <header className="sticky top-0 z-30 flex shrink-0 items-center gap-4 px-4 pt-4 lg:px-6">
-            <IconButton
-              className="-ml-2 lg:hidden"
-              icon={<Menu size={20} />}
-              label={t("shell.nav.open")}
-              onClick={() => setMenu(true)}
-            />
-            {/* Reopen button: inert while the sidebar is open so the collapsed
+                  <span className="mt-0.5 block w-full truncate text-xs tabular-nums text-muted-foreground">
+                    {t("shell.side.memory", {
+                      used: fixed(engine.status?.memory.active_gb),
+                      total: fixed(engine.status?.memory.total_gb),
+                    })}
+                  </span>
+                </Button>
+                <Button
+                  variant="outline"
+                  className={`h-auto rounded-[20px] bg-(--bg-card) w-full justify-start gap-3 px-3 py-2.5 text-left font-normal hover:bg-(--bg-elevated) ${page === "settings" ? "bg-(--bg-elevated)" : ""}`}
+                  aria-current={page === "settings" ? "page" : undefined}
+                  onClick={() => navigate("settings")}
+                >
+                  <SettingsIcon
+                    size={16}
+                    className="shrink-0 text-muted-foreground"
+                  />
+                  <span className="min-w-0 flex-1">
+                    <span className="sr-only">
+                      {t("shell.side.openSettings")}
+                    </span>
+                    <span className="block truncate text-sm font-medium">
+                      {(() => {
+                        try {
+                          return new URL(connection.baseUrl, location.href)
+                            .host;
+                        } catch {
+                          return connection.baseUrl;
+                        }
+                      })()}
+                    </span>
+                    <span className="block truncate text-xs tabular-nums text-muted-foreground">
+                      {engine.status?.version
+                        ? `yunshu ${engine.status.version}`
+                        : t("shell.side.localFirst")}
+                    </span>
+                  </span>
+                </Button>
+              </div>
+            }
+          />
+          <div
+            className={`flex h-dvh min-w-0 flex-col transition-[padding] duration-150 ease-in-out ${collapsed ? "lg:pl-0" : "lg:pl-64"}`}
+          >
+            <header className="safe-top-4 safe-x sticky top-0 z-30 flex shrink-0 items-center gap-2 px-4 pt-4 sm:gap-4 lg:px-6">
+              <IconButton
+                className="-ml-2 lg:hidden"
+                icon={<Menu size={20} />}
+                label={t("shell.nav.open")}
+                onClick={() => setMenu(true)}
+              />
+              {/* Reopen button: inert while the sidebar is open so the collapsed
                 animation (max-w-0, opacity-0) cannot leave an invisible tab stop. */}
-            <Button
-              variant="ghost"
-              type="button"
-              inert={!collapsed || undefined}
-              onClick={() => setCollapsed(false)}
-              aria-label={t("shell.nav.expand")}
-              className={`hidden shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-all duration-200 ease-in-out hover:bg-muted hover:text-foreground lg:flex ${collapsed ? "-ml-2 max-w-12 p-2 opacity-100" : "pointer-events-none -ml-4 max-w-0 overflow-hidden p-0 opacity-0"}`}
-            >
-              <PanelLeftOpen size={18} className="shrink-0" />
-            </Button>
-            <Breadcrumb
-              aria-label={t("shell.nav.breadcrumb")}
-              className="card w-fit min-w-0 whitespace-nowrap px-3 py-2"
-            >
-              <BreadcrumbList className="flex-nowrap gap-2 overflow-hidden sm:gap-2">
-                <BreadcrumbItem className="shrink-0">
-                  <BreadcrumbLink href="#/overview">
-                    {t("shell.brand.name")}
-                  </BreadcrumbLink>
-                </BreadcrumbItem>
-                <BreadcrumbSeparator />
-                <BreadcrumbItem className="min-w-0">
-                  {sub ? (
-                    <BreadcrumbLink href="#/models">
-                      {pageTitle(page)}
-                    </BreadcrumbLink>
-                  ) : (
-                    <BreadcrumbPage className="truncate">
-                      {pageTitle(page)}
-                    </BreadcrumbPage>
-                  )}
-                </BreadcrumbItem>
-                {sub && (
-                  <>
-                    <BreadcrumbSeparator />
-                    <BreadcrumbItem className="min-w-0">
-                      <BreadcrumbPage className="truncate">
-                        {modelLabel(sub)}
-                      </BreadcrumbPage>
-                    </BreadcrumbItem>
-                  </>
-                )}
-              </BreadcrumbList>
-            </Breadcrumb>
-            <div className="ml-auto flex shrink-0 items-center gap-1.5">
-              <LivePill phase={engine.phase} status={engine.status} />
               <Button
                 variant="ghost"
                 type="button"
-                onClick={openPalette}
-                className="card hidden h-8 items-center gap-1.5 rounded-full px-3 py-0 text-xs text-muted-foreground transition-colors hover:text-foreground sm:inline-flex"
+                inert={!collapsed || undefined}
+                onClick={() => setCollapsed(false)}
+                aria-label={t("shell.nav.expand")}
+                className={`hidden shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-all duration-200 ease-in-out hover:bg-muted hover:text-foreground lg:flex ${collapsed ? "-ml-2 max-w-12 p-2 opacity-100" : "pointer-events-none -ml-4 max-w-0 overflow-hidden p-0 opacity-0"}`}
               >
-                <Search size={13} />
-                {t("shell.top.search")}
-                <Kbd>⌘K</Kbd>
+                <PanelLeftOpen size={18} className="shrink-0" />
               </Button>
-              {/* YunUI ThemeToggle is next-themes backed; the console owns its
-                  theme state (Settings shares it), so keep a pill IconButton. */}
-              <LanguageSwitch variant="pill" className="hidden sm:block" />
-              <IconButton
-                className="card size-8 rounded-full"
-                icon={dark ? <Sun size={16} /> : <Moon size={16} />}
-                label={
-                  dark ? t("shell.top.themeLight") : t("shell.top.themeDark")
-                }
-                onClick={() => setDark((v) => !v)}
-              />
-            </div>
-          </header>
-          <main
-            id="main-content"
-            tabIndex={-1}
-            className="flex min-h-0 flex-1 flex-col outline-none"
-          >
-            {(busy || notice) && (
-              <div className="mx-auto w-full max-w-7xl shrink-0 space-y-2 px-4 pt-4 lg:px-6">
-                {busy && (
-                  <div role="status">
-                    <Banner
-                      tone="neutral"
-                      icon={<Spinner size="sm" />}
-                      title={t("shell.busy.waiting", {
-                        action: busyAction(busy),
-                      })}
-                    />
-                  </div>
-                )}
-                {notice && (
-                  <div role={notice.error ? "alert" : "status"}>
-                    <Banner
-                      tone={notice.error ? "critical" : "info"}
-                      title={notice.text}
-                      dismissible
-                      dismissLabel={t("shell.busy.dismiss")}
-                      onDismiss={() => setNotice(null)}
-                    />
-                  </div>
-                )}
-              </div>
-            )}
-            <div key={revision} className="flex min-h-0 flex-1 flex-col">
-              {
-                <div
-                  className={
-                    engine.phase === "online"
-                      ? "hidden"
-                      : "mx-auto w-full max-w-7xl shrink-0 px-4 pt-4 lg:px-6"
-                  }
+              <Breadcrumb
+                aria-label={t("shell.nav.breadcrumb")}
+                className="card w-fit min-w-0 whitespace-nowrap px-3 py-2 max-sm:hidden"
+              >
+                <BreadcrumbList className="flex-nowrap gap-2 overflow-hidden sm:gap-2">
+                  <BreadcrumbItem className="shrink-0">
+                    <BreadcrumbLink href="#/overview">
+                      {t("shell.brand.name")}
+                    </BreadcrumbLink>
+                  </BreadcrumbItem>
+                  <BreadcrumbSeparator />
+                  <BreadcrumbItem className="min-w-0">
+                    {sub ? (
+                      <BreadcrumbLink href="#/models">
+                        {pageTitle(page)}
+                      </BreadcrumbLink>
+                    ) : (
+                      <BreadcrumbPage className="truncate">
+                        {pageTitle(page)}
+                      </BreadcrumbPage>
+                    )}
+                  </BreadcrumbItem>
+                  {sub && (
+                    <>
+                      <BreadcrumbSeparator />
+                      <BreadcrumbItem className="min-w-0">
+                        <BreadcrumbPage className="truncate">
+                          {modelLabel(sub)}
+                        </BreadcrumbPage>
+                      </BreadcrumbItem>
+                    </>
+                  )}
+                </BreadcrumbList>
+              </Breadcrumb>
+              <span
+                className="min-w-0 flex-1 truncate text-sm font-semibold sm:hidden"
+                data-testid="mobile-title"
+              >
+                {pageTitle(page)}
+              </span>
+              <div className="ml-auto flex shrink-0 items-center gap-1.5 max-sm:ml-0">
+                <LivePill phase={engine.phase} status={engine.status} />
+                <IconButton
+                  className="card size-8 rounded-full sm:hidden"
+                  icon={<Search size={15} />}
+                  label={t("shell.top.search")}
+                  onClick={openPalette}
+                />
+                <NotificationCenter />
+                <Button
+                  variant="ghost"
+                  type="button"
+                  onClick={openPalette}
+                  className="card hidden h-8 items-center gap-1.5 rounded-full px-3 py-0 text-xs text-muted-foreground transition-colors hover:text-foreground sm:inline-flex"
                 >
-                  <ConnectionState
-                    engine={engine}
-                    configure={() => navigate("settings")}
-                  />
+                  <Search size={13} />
+                  {t("shell.top.search")}
+                  <Kbd>⌘K</Kbd>
+                </Button>
+                {/* YunUI ThemeToggle is next-themes backed; the console owns its
+                  theme state (Settings shares it), so keep a pill IconButton. */}
+                <div className="hidden sm:block">
+                  <LanguageSwitch variant="pill" />
                 </div>
-              }
-              <Suspense fallback={<PageFallback />}>
-                {page === "playground" ? (
-                  <Playground
-                    connection={connection}
-                    engine={engine}
-                    initialModel={testModel}
-                  />
-                ) : (
-                  <div className="relative min-h-0 flex-1 overflow-y-auto p-4 pb-6 lg:p-6">
-                    <div className="mx-auto w-full max-w-7xl">
-                      {page === "diagnostics" && (
-                        <Diagnostics connection={connection} engine={engine} />
-                      )}
-                      {page === "overview" && (
-                        <Dashboard engine={engine} navigate={navigate} />
-                      )}
-                      {page === "models" && (
-                        <Models
-                          engine={engine}
-                          connection={connection}
-                          perform={perform}
-                          busy={busy}
-                          selected={sub}
-                          open={(id) => navigate("models", id)}
-                          test={(id) => {
-                            setTestModel(id);
-                            navigate("playground");
-                          }}
-                        />
-                      )}
-                      {page === "requests" && (
-                        <Requests
-                          engine={engine}
-                          connection={connection}
-                          perform={perform}
-                          busy={busy}
-                        />
-                      )}
-                      {page === "settings" && (
-                        <Settings
-                          connection={connection}
-                          save={save}
-                          dark={dark}
-                          setDark={setDark}
-                          disabled={!!busy}
-                          engine={engine}
-                          perform={perform}
-                        />
-                      )}
-                      {page === "api" && (
-                        <ApiView connection={connection} engine={engine} />
-                      )}
+                <IconButton
+                  className="card size-8 rounded-full max-sm:hidden"
+                  icon={dark ? <Sun size={16} /> : <Moon size={16} />}
+                  label={
+                    dark ? t("shell.top.themeLight") : t("shell.top.themeDark")
+                  }
+                  onClick={() => setDark((v) => !v)}
+                />
+              </div>
+            </header>
+            <main
+              id="main-content"
+              tabIndex={-1}
+              className="flex min-h-0 flex-1 flex-col outline-none"
+            >
+              {(busy || notice) && (
+                <div className="mx-auto w-full max-w-7xl shrink-0 space-y-2 px-4 pt-4 lg:px-6">
+                  {busy && (
+                    <div role="status">
+                      <Banner
+                        tone="neutral"
+                        icon={<Spinner size="sm" />}
+                        title={t("shell.busy.waiting", {
+                          action: busyAction(busy),
+                        })}
+                      />
                     </div>
+                  )}
+                  {notice && (
+                    <div role={notice.error ? "alert" : "status"}>
+                      <Banner
+                        tone={notice.error ? "critical" : "info"}
+                        title={notice.text}
+                        dismissible
+                        dismissLabel={t("shell.busy.dismiss")}
+                        onDismiss={() => setNotice(null)}
+                      />
+                    </div>
+                  )}
+                </div>
+              )}
+              <div key={revision} className="flex min-h-0 flex-1 flex-col">
+                {
+                  <div
+                    className={
+                      engine.phase === "online"
+                        ? "hidden"
+                        : "mx-auto w-full max-w-7xl shrink-0 px-4 pt-4 lg:px-6"
+                    }
+                  >
+                    <ConnectionState
+                      engine={engine}
+                      configure={() => navigate("settings")}
+                      onToken={unlock}
+                    />
                   </div>
-                )}
-              </Suspense>
-            </div>
-          </main>
-          <footer className="shrink-0 border-t border-border/60 bg-(--bg-window)">
-            <FooterStatus engine={engine} connection={connection} />
-          </footer>
+                }
+                <Suspense fallback={<PageFallback />}>
+                  {page === "playground" ? (
+                    <Playground
+                      connection={connection}
+                      engine={engine}
+                      initialModel={testModel}
+                    />
+                  ) : (
+                    <div className="relative min-h-0 flex-1 overflow-y-auto p-4 pb-6 lg:p-6">
+                      <div className="mx-auto w-full max-w-7xl">
+                        {page === "diagnostics" && (
+                          <Diagnostics
+                            connection={connection}
+                            engine={engine}
+                          />
+                        )}
+                        {page === "overview" && (
+                          <Dashboard engine={engine} navigate={navigate} />
+                        )}
+                        {page === "models" && (
+                          <Models
+                            engine={engine}
+                            connection={connection}
+                            perform={perform}
+                            busy={busy}
+                            selected={sub}
+                            open={(id) => navigate("models", id)}
+                            test={(id) => {
+                              setTestModel(id);
+                              navigate("playground");
+                            }}
+                          />
+                        )}
+                        {page === "requests" && (
+                          <Requests
+                            engine={engine}
+                            connection={connection}
+                            perform={perform}
+                            busy={busy}
+                          />
+                        )}
+                        {page === "settings" && (
+                          <Settings
+                            connection={connection}
+                            save={save}
+                            dark={dark}
+                            setDark={setDark}
+                            disabled={!!busy}
+                            engine={engine}
+                            perform={perform}
+                          />
+                        )}
+                        {page === "api" && (
+                          <ApiView connection={connection} engine={engine} />
+                        )}
+                        {page === "logs" && <Logs connection={connection} />}
+                        {page === "keys" && <Keys connection={connection} />}
+                        {page === "cache" && (
+                          <Cache connection={connection} engine={engine} />
+                        )}
+                        {page === "downloads" && (
+                          <Downloads connection={connection} engine={engine} />
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </Suspense>
+              </div>
+            </main>
+            <footer className="safe-bottom shrink-0 border-t border-border/60 bg-(--bg-window)">
+              <FooterStatus engine={engine} connection={connection} />
+            </footer>
+          </div>
+          <ShortcutsSheet open={help} onClose={() => setHelp(false)} />
+          <CommandPalette
+            open={palette}
+            onClose={closePalette}
+            query={query}
+            onQueryChange={setQuery}
+            items={shown}
+            empty={
+              <p className="p-4 text-sm text-muted-foreground">
+                {t("shell.cmd.empty")}
+              </p>
+            }
+          />
         </div>
-        <CommandPalette
-          open={palette}
-          onClose={closePalette}
-          query={query}
-          onQueryChange={setQuery}
-          items={shown}
-          empty={
-            <p className="p-4 text-sm text-muted-foreground">
-              {t("shell.cmd.empty")}
-            </p>
-          }
-        />
-      </div>
+      </SignalsProvider>
     </YunUIProvider>
   );
 }

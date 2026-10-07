@@ -10,5 +10,11 @@ const common = {
   copyLabel: "複製{label}",
   "language.label": "語言",
   sentenceGap: "",
+  offlineFor: "已離線 {t}。",
+  staleAt: "資料停在 {time}",
+  "unlock.placeholder": "貼上存取權杖",
+  "unlock.label": "解鎖金鑰",
+  "unlock.remember": "在此裝置記住",
+  "unlock.submit": "解鎖",
 };
 export default common;

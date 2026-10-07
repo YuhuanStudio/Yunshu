@@ -13,5 +13,11 @@ const common: Shape<typeof zh> = {
   copyLabel: "复制{label}",
   "language.label": "语言",
   sentenceGap: "",
+  offlineFor: "已离线 {t}。",
+  staleAt: "数据停在 {time}",
+  "unlock.placeholder": "粘贴访问令牌",
+  "unlock.label": "解锁密钥",
+  "unlock.remember": "在此设备记住",
+  "unlock.submit": "解锁",
 };
 export default common;

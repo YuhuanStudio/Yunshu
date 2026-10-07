@@ -1,6 +1,15 @@
-import { Card, Progress, StatusIndicator } from "@yuhuanowo/yunui";
+import {
+  Button,
+  Card,
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+  Progress,
+  StatusIndicator,
+} from "@yuhuanowo/yunui";
 import { StatCard } from "@yuhuanowo/yunui/patterns";
-import { BookOpenText, Zap } from "lucide-react";
+import { ArrowRight, BookOpenText, ChevronDown, Zap } from "lucide-react";
+import { useState, type ReactNode } from "react";
 import type { EngineStatus } from "./api";
 import {
   activity,
@@ -13,7 +22,8 @@ import {
 } from "./engineView";
 import { livePrefillTps } from "./series";
 import { t, tr, useLocale } from "./i18n/index.ts";
-import { clock, elapsed, fixed, number, Slot } from "./ui";
+import { clock, elapsed, fixed, number, Slot, useMinWidth } from "./ui";
+import { HEALTH_TARGET, type Verdict } from "./health";
 
 const order: ActivityPhase[] = ["idle", "queued", "prefill", "decode"];
 const dot = (phase: ActivityPhase, lit: boolean) =>
@@ -94,11 +104,11 @@ export function StateStrip({ status }: { status: EngineStatus | null }) {
   }
   return (
     <Card
-      className="relative flex flex-wrap items-center gap-x-4 gap-y-1 overflow-hidden px-4 py-2"
+      className="relative flex flex-wrap items-center gap-x-4 gap-y-1 overflow-hidden px-4 py-2 max-sm:pb-3"
       data-testid="state-strip"
     >
       <ul
-        className="flex shrink-0 items-center gap-0.5"
+        className="flex shrink-0 items-center gap-0.5 max-sm:w-full max-sm:justify-between"
         aria-label={t("overview.strip.aria")}
       >
         {order.map((id) => {
@@ -123,7 +133,7 @@ export function StateStrip({ status }: { status: EngineStatus | null }) {
         })}
       </ul>
       <p
-        className="h-6 min-w-0 flex-1 truncate text-sm leading-6 tabular-nums"
+        className="h-6 min-w-0 flex-1 truncate text-sm leading-6 tabular-nums max-sm:h-auto max-sm:basis-full max-sm:whitespace-normal"
         data-testid="state-strip-detail"
       >
         {left}
@@ -131,7 +141,7 @@ export function StateStrip({ status }: { status: EngineStatus | null }) {
       <Slot
         ch={22}
         align="right"
-        className="min-w-0 truncate text-xs text-muted-foreground"
+        className="min-w-0 truncate text-xs text-muted-foreground max-sm:hidden"
       >
         {right}
       </Slot>
@@ -252,5 +262,104 @@ export function TotalsLine({ totals }: { totals: Totals | null }) {
           })
         : t("overview.totals.none")}
     </p>
+  );
+}
+
+/**
+ * The overview verdict, one line: 健康 / 注意 / 異常 and the reasons, worst
+ * first (thresholds live in health.ts). A reason links to the page that fixes it.
+ */
+export function HealthLine({
+  verdict,
+  checking,
+  navigate,
+}: {
+  verdict: Verdict;
+  /** No status yet: say nothing about health rather than guess. */
+  checking: boolean;
+  navigate: (page: string) => void;
+}) {
+  useLocale();
+  const { level, reasons } = verdict;
+  const shown = reasons.slice(0, 3);
+  const more = reasons.length - shown.length;
+  const text = checking
+    ? t("overview.health.checking")
+    : level === "ok"
+      ? t("overview.health.okDetail")
+      : shown
+          // i18n-keys: overview.health.reason.
+          .map((r) => tr(`overview.health.reason.${r.code}`, r.vars))
+          .join(t("overview.health.sep")) +
+        (more > 0 ? t("overview.health.more", { n: more }) : "");
+  const target = reasons[0] ? HEALTH_TARGET[reasons[0].code] : null;
+  return (
+    <div
+      role="status"
+      data-testid="health-verdict"
+      data-level={checking ? "checking" : level}
+      className="flex min-h-9 flex-wrap items-center gap-x-3 gap-y-1 text-sm"
+    >
+      <StatusIndicator
+        status={
+          checking || level === "ok"
+            ? checking
+              ? "neutral"
+              : "online"
+            : level === "watch"
+              ? "away"
+              : "offline"
+        }
+      />
+      <span
+        className={`text-base font-semibold ${level === "bad" && !checking ? "text-error" : ""}`}
+      >
+        {/* i18n-keys: overview.health. */}
+        {checking ? "—" : tr(`overview.health.${level}`)}
+      </span>
+      <span className="min-w-0 flex-1 text-muted-foreground">{text}</span>
+      {!checking && level !== "ok" && target && (
+        <Button size="sm" variant="ghost" onClick={() => navigate(target)}>
+          {t("overview.health.open")}
+          <ArrowRight size={13} />
+        </Button>
+      )}
+    </div>
+  );
+}
+
+/**
+ * A group of overview sections. From 768 px up it is plain content; below, it
+ * folds behind one header row so the phone page is the verdict, the live state
+ * and the stat grid first, with the rest a tap away.
+ */
+export function FoldSection({
+  title,
+  children,
+}: {
+  title: string;
+  children: ReactNode;
+}) {
+  const wide = useMinWidth(768);
+  const [open, setOpen] = useState(false);
+  if (wide) return <>{children}</>;
+  return (
+    <Collapsible open={open} onOpenChange={setOpen}>
+      <CollapsibleTrigger asChild>
+        <Button
+          variant="outline"
+          className="h-11 w-full justify-between rounded-xl px-4"
+        >
+          {title}
+          <ChevronDown
+            size={15}
+            className={`text-muted-foreground transition-transform duration-150 ${open ? "rotate-180" : ""}`}
+          />
+        </Button>
+      </CollapsibleTrigger>
+      <CollapsibleContent>
+        <div className="space-y-5 pt-5">{children}</div>
+      </CollapsibleContent>
+    </Collapsible>
   );
 }

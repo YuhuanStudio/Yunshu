@@ -57,7 +57,14 @@ import { has, t, tr, useLocale } from "./i18n/index.ts";
 import { observationCsv } from "./analytics";
 import { chartRows, windowPoints } from "./series";
 import { totalsFrom } from "./engineView";
-import { SpeedPair, StateStrip, TotalsLine } from "./OverviewParts";
+import {
+  FoldSection,
+  HealthLine,
+  SpeedPair,
+  StateStrip,
+  TotalsLine,
+} from "./OverviewParts";
+import { useSignals } from "./signals";
 import type { RequestRow } from "./api";
 import { buildIntegrations, serviceRoot } from "./integrations";
 import {
@@ -69,6 +76,7 @@ import {
   phaseDot,
   Slot,
   sizeGb,
+  StaleStamp,
   supportsChat,
   type Engine,
 } from "./ui";
@@ -248,6 +256,10 @@ export function Dashboard({
     [copied, setCopied] = useState<string | null>(null);
   const status = engine.status,
     online = engine.phase === "online";
+  const { verdict } = useSignals();
+  // Offline with data on screen: the numbers stop moving, so they are dimmed and stamped.
+  const stale = engine.phase === "offline" && status != null;
+  const dim = stale ? "opacity-60" : "";
   const end = engine.updatedAt ?? Date.now(),
     start = end - (range === "5m" ? 300 : range === "15m" ? 900 : 3600) * 1000;
   // Charts read the slim series (engine history first, then live polls). The
@@ -323,6 +335,8 @@ export function Dashboard({
   }
   // First-run onboarding only when nothing was ever configured or the token is
   // refused. A restart (502, refused, timeout) keeps the skeleton and the banner.
+  // A refused token on a console that was configured keeps the page: the shell
+  // shows the banner with a token prompt in place (App.tsx).
   const neverConfigured = (() => {
     try {
       return localStorage.getItem("yunshu.console.url") === null;
@@ -332,8 +346,8 @@ export function Dashboard({
   })();
   if (
     !status &&
-    (engine.phase === "unauthorized" ||
-      (engine.phase === "offline" && neverConfigured))
+    neverConfigured &&
+    (engine.phase === "unauthorized" || engine.phase === "offline")
   )
     return (
       <DashboardPage width="7xl" data-testid="overview">
@@ -412,6 +426,11 @@ export function Dashboard({
           </div>
         }
       />
+      <HealthLine
+        verdict={verdict}
+        checking={!status && engine.phase === "connecting"}
+        navigate={navigate}
+      />
       <p className="-mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
         <StatusIndicator status={online ? "online" : "offline"}>
           <span className="text-foreground">
@@ -437,7 +456,10 @@ export function Dashboard({
         )}
       </p>
 
-      <StateStrip status={status ?? null} />
+      <StaleStamp engine={engine} />
+      <div className={dim} data-stale={stale ? "true" : undefined}>
+        <StateStrip status={status ?? null} />
+      </div>
 
       {!status ? (
         <StatGrid>
@@ -447,8 +469,9 @@ export function Dashboard({
         </StatGrid>
       ) : (
         <div
-          className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5"
+          className={`grid grid-cols-2 gap-2 sm:gap-3 xl:grid-cols-5 max-sm:[&>:last-child]:col-span-2 ${dim}`}
           data-testid="overview-stats"
+          data-stat-grid=""
         >
           <SpeedPair status={status} />
           <StatCard
@@ -500,10 +523,10 @@ export function Dashboard({
 
       {/* Live: what the engine is doing right now. */}
       <Card
-        className="grid min-w-0 overflow-hidden p-0 lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)]"
+        className={`grid min-w-0 overflow-hidden p-0 lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)] ${dim}`}
         data-testid="live-panel"
       >
-        <div className="flex min-w-0 flex-col justify-between gap-5 border-b border-border/60 p-5 sm:p-6 lg:border-b-0 lg:border-r">
+        <div className="flex min-w-0 flex-col justify-between gap-5 border-t border-border/60 p-5 max-lg:order-2 sm:p-6 lg:border-b-0 lg:border-t-0 lg:border-r">
           <div className="min-w-0">
             <div className="flex items-center justify-between gap-3">
               <p className="text-xs text-muted-foreground">
@@ -538,7 +561,7 @@ export function Dashboard({
             />
           </div>
         </div>
-        <div className="flex min-w-0 flex-col p-5 sm:p-6">
+        <div className="flex min-w-0 flex-col p-5 max-lg:order-1 sm:p-6">
           <div className="flex items-center justify-between gap-3">
             <h2 className="yunui-section-title text-base font-semibold">
               {t("overview.active.title")}
@@ -590,335 +613,365 @@ export function Dashboard({
         </div>
       </Card>
 
-      <SectionRow title={t("overview.quick.title")} />
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <QuickAction
-          icon={<Play size={18} strokeWidth={1.5} />}
-          title={t("overview.quick.prompt.title")}
-          caption={t("overview.quick.prompt.caption")}
-          onClick={() => navigate("playground")}
-        />
-        <QuickAction
-          icon={<HardDrive size={18} strokeWidth={1.5} />}
-          title={t("overview.quick.load.title")}
-          caption={t("overview.quick.load.caption")}
-          onClick={() => navigate("models")}
-        />
-        <QuickAction
-          icon={
-            copied === "url" ? (
-              <Check size={18} strokeWidth={1.5} />
-            ) : (
-              <Link2 size={18} strokeWidth={1.5} />
-            )
-          }
-          title={
-            copied === "url"
-              ? t("overview.quick.url.copied")
-              : t("overview.quick.url.title")
-          }
-          caption={`${baseUrl}/v1`}
-          onClick={() => copy("url", `${baseUrl}/v1`)}
-        />
-        <QuickAction
-          icon={<Stethoscope size={18} strokeWidth={1.5} />}
-          title={t("overview.quick.diag.title")}
-          caption={t("overview.quick.diag.caption")}
-          onClick={() => navigate("diagnostics")}
-        />
-      </div>
-      <CodeBlock code={curl} language="bash" filename="curl" />
+      <FoldSection title={t("overview.quick.title")}>
+        <SectionRow title={t("overview.quick.title")} />
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <QuickAction
+            icon={<Play size={18} strokeWidth={1.5} />}
+            title={t("overview.quick.prompt.title")}
+            caption={t("overview.quick.prompt.caption")}
+            onClick={() => navigate("playground")}
+          />
+          <QuickAction
+            icon={<HardDrive size={18} strokeWidth={1.5} />}
+            title={t("overview.quick.load.title")}
+            caption={t("overview.quick.load.caption")}
+            onClick={() => navigate("models")}
+          />
+          <QuickAction
+            icon={
+              copied === "url" ? (
+                <Check size={18} strokeWidth={1.5} />
+              ) : (
+                <Link2 size={18} strokeWidth={1.5} />
+              )
+            }
+            title={
+              copied === "url"
+                ? t("overview.quick.url.copied")
+                : t("overview.quick.url.title")
+            }
+            caption={`${baseUrl}/v1`}
+            onClick={() => copy("url", `${baseUrl}/v1`)}
+          />
+          <QuickAction
+            icon={<Stethoscope size={18} strokeWidth={1.5} />}
+            title={t("overview.quick.diag.title")}
+            caption={t("overview.quick.diag.caption")}
+            onClick={() => navigate("diagnostics")}
+          />
+        </div>
+        <CodeBlock code={curl} language="bash" filename="curl" />
+      </FoldSection>
 
-      <SectionRow
-        title={t("overview.perf.title")}
-        action={
-          <div className="flex flex-wrap items-center gap-2">
-            <SegmentedSelect
-              aria-label={t("overview.perf.range")}
-              value={range}
-              onChange={chooseRange}
-              options={[
-                { value: "5m", label: t("overview.perf.range5m") },
-                { value: "15m", label: t("overview.perf.range15m") },
-                { value: "1h", label: t("overview.perf.range1h") },
-              ]}
+      <FoldSection title={t("overview.perf.title")}>
+        <div className={`space-y-6 ${dim}`}>
+          <SectionRow
+            title={t("overview.perf.title")}
+            action={
+              <div className="flex flex-wrap items-center gap-2">
+                <SegmentedSelect
+                  aria-label={t("overview.perf.range")}
+                  value={range}
+                  onChange={chooseRange}
+                  options={[
+                    { value: "5m", label: t("overview.perf.range5m") },
+                    { value: "15m", label: t("overview.perf.range15m") },
+                    { value: "1h", label: t("overview.perf.range1h") },
+                  ]}
+                />
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  disabled={!points.length}
+                  onClick={exportData}
+                >
+                  <Download size={13} />
+                  {t("overview.perf.export")}
+                </Button>
+              </div>
+            }
+          />
+          <p className="-mt-3 text-xs text-muted-foreground">
+            {engine.historyFrom != null
+              ? t("overview.perf.noteEngine", {
+                  t: clock(engine.historyFrom),
+                  n: points.length,
+                })
+              : t("overview.perf.noteLocal", { n: points.length })}
+          </p>
+          <div className="grid gap-5 xl:grid-cols-[minmax(0,7fr)_minmax(0,5fr)]">
+            <ChartCard
+              data-testid="throughput-panel"
+              title={t("overview.throughput.title")}
+              description={t("overview.throughput.desc")}
+              action={
+                <SegmentedSelect
+                  aria-label={t("overview.throughput.metric")}
+                  value={metric}
+                  onChange={setMetric}
+                  options={[
+                    { value: "decode", label: t("overview.series.decode") },
+                    { value: "prefill", label: t("overview.series.prefill") },
+                    { value: "both", label: t("overview.throughput.compare") },
+                  ]}
+                />
+              }
+            >
+              <SeriesChart
+                busy={busy}
+                data={data}
+                series={throughputSeries}
+                height={220}
+                ariaLabel={t("overview.throughput.aria")}
+                formatX={clock}
+                formatY={formatNumber}
+                maxGap={12000}
+                activeX={activeX}
+                onActiveXChange={setActiveX}
+              />
+              <Button
+                className="mt-2"
+                size="sm"
+                variant="ghost"
+                aria-expanded={table}
+                onClick={() => setTable(!table)}
+              >
+                {table
+                  ? t("overview.throughput.hideTable")
+                  : t("overview.throughput.showTable")}
+              </Button>
+              {table && (
+                <ScrollFade className="mt-3 max-h-60 overflow-auto">
+                  <Table scrollLabel={t("overview.throughput.tableLabel")}>
+                    <Thead>
+                      <Tr>
+                        <Th>{t("overview.throughput.colTime")}</Th>
+                        <Th>{t("overview.series.decode")}</Th>
+                        <Th>{t("overview.series.prefill")}</Th>
+                        <Th>Metal GB</Th>
+                      </Tr>
+                    </Thead>
+                    <Tbody>
+                      {points.slice(-200).map((p) => (
+                        <Tr key={p.at}>
+                          <Td>{clock(p.at)}</Td>
+                          <Td>{number(p.decode)}</Td>
+                          <Td>{number(p.prefill)}</Td>
+                          <Td>{number(p.memActive)}</Td>
+                        </Tr>
+                      ))}
+                    </Tbody>
+                  </Table>
+                </ScrollFade>
+              )}
+            </ChartCard>
+            <ChartCard
+              data-testid="memory-panel"
+              title={t("overview.stats.metal")}
+              description={t("overview.memory.source")}
+              action={
+                <span className="text-xs tabular-nums text-muted-foreground">
+                  {t("overview.memory.physical", {
+                    gb: number(memory?.total_gb),
+                  })}
+                </span>
+              }
+            >
+              <p className="text-2xl font-semibold tabular-nums">
+                <Slot ch={5}>{fixed(memory?.active_gb)}</Slot>
+                <span className="ml-1.5 text-sm font-normal text-muted-foreground">
+                  {t("overview.memory.activeOf", {
+                    gb: fixed(memory?.total_gb),
+                  })}
+                </span>
+              </p>
+              <SegmentedBar
+                className="mt-4"
+                height={10}
+                total={memory?.total_gb ?? undefined}
+                label={t("overview.memory.barLabel", {
+                  active: number(memory?.active_gb),
+                  pool: number(memory?.cache_gb),
+                })}
+                segments={[
+                  {
+                    value: memory?.active_gb ?? 0,
+                    tone: "accent",
+                    label: t("overview.series.active"),
+                  },
+                  {
+                    value: memory?.cache_gb ?? 0,
+                    tone: "neutral",
+                    label: t("overview.series.pool"),
+                  },
+                ]}
+                marks={
+                  memory?.peak_gb
+                    ? [
+                        {
+                          value: memory.peak_gb,
+                          label: t("overview.memory.peakMark"),
+                        },
+                      ]
+                    : undefined
+                }
+                legend
+                formatValue={(v) => `${number(v)} GB`}
+              />
+              <DetailList className="mt-4 border-t border-border/60 pt-4">
+                <DetailRow
+                  label={t("overview.memory.peak")}
+                  value={`${number(memory?.peak_gb)} GB`}
+                />
+                <DetailRow
+                  label={t("overview.memory.weights")}
+                  value={
+                    loaded.length
+                      ? [
+                          loaded.reduce((s, m) => s + (m.size_gb ?? 0), 0) > 0
+                            ? sizeGb(
+                                loaded.reduce(
+                                  (s, m) => s + (m.size_gb ?? 0),
+                                  0,
+                                ),
+                              )
+                            : null,
+                          t("overview.memory.weightsCount", {
+                            n: loaded.length,
+                          }),
+                        ]
+                          .filter(Boolean)
+                          .join(" · ")
+                      : "—"
+                  }
+                />
+              </DetailList>
+              <SeriesChart
+                busy={busy}
+                className="mt-4"
+                data={data}
+                series={memorySeries()}
+                height={120}
+                ariaLabel={t("overview.memory.aria")}
+                formatX={clock}
+                formatY={formatNumber}
+                maxGap={12000}
+                activeX={activeX}
+                onActiveXChange={setActiveX}
+              />
+            </ChartCard>
+          </div>
+
+          {activePoint && (
+            <div
+              className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border/60 px-4 py-2 text-xs text-muted-foreground"
+              role="status"
+            >
+              <span>
+                {t("overview.selection.summary", {
+                  t: clock(activePoint.at),
+                  n: number(activePoint.active, 0),
+                  gb: number(activePoint.memActive),
+                })}
+              </span>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => setActiveX(null)}
+              >
+                {t("overview.selection.clear")}
+              </Button>
+            </div>
+          )}
+          <div className="grid min-w-0 gap-5 xl:grid-cols-2">
+            <LatencyPanel records={observed} />
+            <PhasePanel engine={engine} navigate={navigate} />
+          </div>
+          <ActivityPanel
+            history={points}
+            start={start}
+            end={end}
+            onSelectTime={setActiveX}
+          />
+          <ChartCard
+            title={t("overview.concurrency.title")}
+            description={t("overview.concurrency.desc")}
+          >
+            <SeriesChart
+              busy={busy}
+              data={data}
+              series={requestSeries()}
+              height={180}
+              ariaLabel={t("overview.concurrency.aria")}
+              formatX={clock}
+              formatY={formatCount}
+              maxGap={12000}
+              activeX={activeX}
+              onActiveXChange={setActiveX}
             />
+          </ChartCard>
+        </div>
+      </FoldSection>
+      <FoldSection title={t("overview.models.title")}>
+        <SectionRow
+          title={t("overview.models.title")}
+          action={
             <Button
               size="sm"
               variant="ghost"
-              disabled={!points.length}
-              onClick={exportData}
+              onClick={() => navigate("models")}
             >
-              <Download size={13} />
-              {t("overview.perf.export")}
+              {t("overview.models.library")}
+              <ArrowRight size={13} />
             </Button>
-          </div>
-        }
-      />
-      <p className="-mt-3 text-xs text-muted-foreground">
-        {engine.historyFrom != null
-          ? t("overview.perf.noteEngine", {
-              t: clock(engine.historyFrom),
-              n: points.length,
-            })
-          : t("overview.perf.noteLocal", { n: points.length })}
-      </p>
-      <div className="grid gap-5 xl:grid-cols-[minmax(0,7fr)_minmax(0,5fr)]">
-        <ChartCard
-          data-testid="throughput-panel"
-          title={t("overview.throughput.title")}
-          description={t("overview.throughput.desc")}
-          action={
-            <SegmentedSelect
-              aria-label={t("overview.throughput.metric")}
-              value={metric}
-              onChange={setMetric}
-              options={[
-                { value: "decode", label: t("overview.series.decode") },
-                { value: "prefill", label: t("overview.series.prefill") },
-                { value: "both", label: t("overview.throughput.compare") },
-              ]}
-            />
           }
-        >
-          <SeriesChart
-            busy={busy}
-            data={data}
-            series={throughputSeries}
-            height={220}
-            ariaLabel={t("overview.throughput.aria")}
-            formatX={clock}
-            formatY={formatNumber}
-            maxGap={12000}
-            activeX={activeX}
-            onActiveXChange={setActiveX}
-          />
-          <Button
-            className="mt-2"
-            size="sm"
-            variant="ghost"
-            aria-expanded={table}
-            onClick={() => setTable(!table)}
-          >
-            {table
-              ? t("overview.throughput.hideTable")
-              : t("overview.throughput.showTable")}
-          </Button>
-          {table && (
-            <ScrollFade className="mt-3 max-h-60 overflow-auto">
-              <Table scrollLabel={t("overview.throughput.tableLabel")}>
-                <Thead>
-                  <Tr>
-                    <Th>{t("overview.throughput.colTime")}</Th>
-                    <Th>{t("overview.series.decode")}</Th>
-                    <Th>{t("overview.series.prefill")}</Th>
-                    <Th>Metal GB</Th>
-                  </Tr>
-                </Thead>
-                <Tbody>
-                  {points.slice(-200).map((p) => (
-                    <Tr key={p.at}>
-                      <Td>{clock(p.at)}</Td>
-                      <Td>{number(p.decode)}</Td>
-                      <Td>{number(p.prefill)}</Td>
-                      <Td>{number(p.memActive)}</Td>
-                    </Tr>
-                  ))}
-                </Tbody>
-              </Table>
-            </ScrollFade>
-          )}
-        </ChartCard>
-        <ChartCard
-          data-testid="memory-panel"
-          title={t("overview.stats.metal")}
-          action={
-            <span className="text-xs tabular-nums text-muted-foreground">
-              {t("overview.memory.physical", { gb: number(memory?.total_gb) })}
-            </span>
-          }
-        >
-          <p className="text-2xl font-semibold tabular-nums">
-            <Slot ch={5}>{fixed(memory?.active_gb)}</Slot>
-            <span className="ml-1.5 text-sm font-normal text-muted-foreground">
-              {t("overview.memory.activeOf", { gb: fixed(memory?.total_gb) })}
-            </span>
-          </p>
-          <SegmentedBar
-            className="mt-4"
-            height={10}
-            total={memory?.total_gb ?? undefined}
-            label={t("overview.memory.barLabel", {
-              active: number(memory?.active_gb),
-              pool: number(memory?.cache_gb),
-            })}
-            segments={[
-              {
-                value: memory?.active_gb ?? 0,
-                tone: "accent",
-                label: t("overview.series.active"),
-              },
-              {
-                value: memory?.cache_gb ?? 0,
-                tone: "neutral",
-                label: t("overview.series.pool"),
-              },
-            ]}
-            marks={
-              memory?.peak_gb
-                ? [
-                    {
-                      value: memory.peak_gb,
-                      label: t("overview.memory.peakMark"),
-                    },
-                  ]
-                : undefined
-            }
-            legend
-            formatValue={(v) => `${number(v)} GB`}
-          />
-          <DetailList className="mt-4 border-t border-border/60 pt-4">
-            <DetailRow
-              label={t("overview.memory.peak")}
-              value={`${number(memory?.peak_gb)} GB`}
-            />
-            <DetailRow
-              label={t("overview.memory.weights")}
-              value={
-                loaded.length
-                  ? [
-                      loaded.reduce((s, m) => s + (m.size_gb ?? 0), 0) > 0
-                        ? sizeGb(
-                            loaded.reduce((s, m) => s + (m.size_gb ?? 0), 0),
-                          )
-                        : null,
-                      t("overview.memory.weightsCount", { n: loaded.length }),
-                    ]
-                      .filter(Boolean)
-                      .join(" · ")
-                  : "—"
-              }
-            />
-          </DetailList>
-          <SeriesChart
-            busy={busy}
-            className="mt-4"
-            data={data}
-            series={memorySeries()}
-            height={120}
-            ariaLabel={t("overview.memory.aria")}
-            formatX={clock}
-            formatY={formatNumber}
-            maxGap={12000}
-            activeX={activeX}
-            onActiveXChange={setActiveX}
-          />
-        </ChartCard>
-      </div>
-
-      {activePoint && (
-        <div
-          className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border/60 px-4 py-2 text-xs text-muted-foreground"
-          role="status"
-        >
-          <span>
-            {t("overview.selection.summary", {
-              t: clock(activePoint.at),
-              n: number(activePoint.active, 0),
-              gb: number(activePoint.memActive),
-            })}
-          </span>
-          <Button size="sm" variant="ghost" onClick={() => setActiveX(null)}>
-            {t("overview.selection.clear")}
-          </Button>
-        </div>
-      )}
-      <div className="grid min-w-0 gap-5 xl:grid-cols-2">
-        <LatencyPanel records={observed} />
-        <PhasePanel engine={engine} navigate={navigate} />
-      </div>
-      <ActivityPanel
-        history={points}
-        start={start}
-        end={end}
-        onSelectTime={setActiveX}
-      />
-      <ChartCard
-        title={t("overview.concurrency.title")}
-        description={t("overview.concurrency.desc")}
-      >
-        <SeriesChart
-          busy={busy}
-          data={data}
-          series={requestSeries()}
-          height={180}
-          ariaLabel={t("overview.concurrency.aria")}
-          formatX={clock}
-          formatY={formatCount}
-          maxGap={12000}
-          activeX={activeX}
-          onActiveXChange={setActiveX}
         />
-      </ChartCard>
-      <SectionRow
-        title={t("overview.models.title")}
-        action={
-          <Button size="sm" variant="ghost" onClick={() => navigate("models")}>
-            {t("overview.models.library")}
-            <ArrowRight size={13} />
-          </Button>
-        }
-      />
-      <Card className="min-w-0 p-0">
-        <ul className="divide-y divide-border/60 py-1">
-          {(status?.models ?? []).slice(0, 6).map((model) => (
-            <li key={model.id} className="px-3 py-0.5 sm:px-4">
-              <HoverRow
-                onClick={() => navigate("models")}
-                aria-label={t("overview.models.open", {
-                  name: modelLabel(model.id),
-                })}
-                className="flex items-center gap-3 px-2 py-2.5"
-              >
-                <StatusIndicator
-                  status={
-                    model.loading ? "away" : model.loaded ? "online" : "neutral"
-                  }
-                />
-                <span className="min-w-0 flex-1 truncate text-sm font-medium">
-                  {modelLabel(model.id)}
-                </span>
-                <span className="hidden text-xs text-muted-foreground sm:inline">
-                  {model.type}
-                </span>
-                <span className="w-20 text-right text-xs tabular-nums text-muted-foreground">
-                  {sizeGb(model.size_gb)}
-                </span>
-                <span className="w-24 text-right text-xs text-muted-foreground">
-                  {model.loading
-                    ? t("overview.models.loading")
-                    : model.loaded
-                      ? model.expires_in_s != null
-                        ? t("overview.models.unloadIn", {
-                            t: elapsed(model.expires_in_s),
-                          })
-                        : model.pinned
-                          ? t("overview.models.pinned")
-                          : t("overview.models.loaded")
-                      : t("overview.models.notLoaded")}
-                </span>
-              </HoverRow>
-            </li>
-          ))}
-          {!status?.models.length && (
-            <li className="px-5 py-5 text-sm text-muted-foreground sm:px-6">
-              {status
-                ? t("overview.models.none")
-                : t("overview.models.connectFirst")}
-            </li>
-          )}
-        </ul>
-      </Card>
+        <Card className="min-w-0 p-0">
+          <ul className="divide-y divide-border/60 py-1">
+            {(status?.models ?? []).slice(0, 6).map((model) => (
+              <li key={model.id} className="px-3 py-0.5 sm:px-4">
+                <HoverRow
+                  onClick={() => navigate("models")}
+                  aria-label={t("overview.models.open", {
+                    name: modelLabel(model.id),
+                  })}
+                  className="flex items-center gap-3 px-2 py-2.5"
+                >
+                  <StatusIndicator
+                    status={
+                      model.loading
+                        ? "away"
+                        : model.loaded
+                          ? "online"
+                          : "neutral"
+                    }
+                  />
+                  <span className="min-w-0 flex-1 truncate text-sm font-medium">
+                    {modelLabel(model.id)}
+                  </span>
+                  <span className="hidden text-xs text-muted-foreground sm:inline">
+                    {model.type}
+                  </span>
+                  <span className="w-20 text-right text-xs tabular-nums text-muted-foreground">
+                    {sizeGb(model.size_gb)}
+                  </span>
+                  <span className="w-24 text-right text-xs text-muted-foreground">
+                    {model.loading
+                      ? t("overview.models.loading")
+                      : model.loaded
+                        ? model.expires_in_s != null
+                          ? t("overview.models.unloadIn", {
+                              t: elapsed(model.expires_in_s),
+                            })
+                          : model.pinned
+                            ? t("overview.models.pinned")
+                            : t("overview.models.loaded")
+                        : t("overview.models.notLoaded")}
+                  </span>
+                </HoverRow>
+              </li>
+            ))}
+            {!status?.models.length && (
+              <li className="px-5 py-5 text-sm text-muted-foreground sm:px-6">
+                {status
+                  ? t("overview.models.none")
+                  : t("overview.models.connectFirst")}
+              </li>
+            )}
+          </ul>
+        </Card>
+      </FoldSection>
     </DashboardPage>
   );
 }
