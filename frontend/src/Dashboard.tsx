@@ -1,12 +1,16 @@
 import { useEffect, useMemo, useState } from "react";
 import {
+  AnimatedNumber,
   Badge,
   Button,
   Card,
   EmptyState,
-  Gauge,
+  IconButton,
+  Progress,
+  SegmentedBar,
   SegmentedSelect,
   Sparkline,
+  StatusIndicator,
   Table,
   Tbody,
   Td,
@@ -15,21 +19,18 @@ import {
   TimeSeriesChart,
   Tr,
 } from "@yuhuanowo/yunui";
-import { PageHeader, StatCard } from "@yuhuanowo/yunui/patterns";
 import {
-  Activity,
   ArrowRight,
-  Clock3,
-  Database,
   Download,
   Pause,
   Play,
   RefreshCw,
   Server,
-  Zap,
 } from "lucide-react";
+import { PageHeader } from "@yuhuanowo/yunui/patterns";
 import { ActivityPanel, LatencyPanel, PhasePanel } from "./AnalyticsPanels";
 import { observationCsv, timeSeries } from "./analytics";
+import type { RequestRow } from "./api";
 import {
   clock,
   elapsed,
@@ -66,6 +67,113 @@ const rateSeries = {
 };
 const formatNumber = (value: number) => number(value);
 const formatCount = (value: number) => number(value, 0);
+const phaseText: Record<string, string> = {
+  queued: "排隊",
+  starting: "啟動",
+  prefill: "Prefill",
+  decode: "Decode",
+  running: "執行",
+};
+const phaseDot = (phase: string) =>
+  phase === "decode"
+    ? "online"
+    : phase === "queued"
+      ? "away"
+      : phase === "prefill" || phase === "starting"
+        ? "busy"
+        : "neutral";
+
+/** A label + value pair with tabular numerals: the console's basic readout. */
+function Readout({
+  label,
+  value,
+  unit,
+  hint,
+}: {
+  label: string;
+  value: string;
+  unit?: string;
+  hint?: string;
+}) {
+  return (
+    <div className="min-w-0">
+      <p className="text-[11px] tracking-wide text-muted-foreground">{label}</p>
+      <p className="mt-1 truncate text-lg font-semibold tabular-nums">
+        {value}
+        {unit && (
+          <span className="ml-1 text-xs font-normal text-muted-foreground">
+            {unit}
+          </span>
+        )}
+      </p>
+      {hint && (
+        <p className="mt-0.5 truncate text-[11px] text-muted-foreground">
+          {hint}
+        </p>
+      )}
+    </div>
+  );
+}
+
+function RequestLane({ row }: { row: RequestRow }) {
+  const phase = String(row.phase);
+  const prompt = row.prompt_tokens ?? 0,
+    cached = row.cached_tokens ?? 0;
+  const progress =
+    phase === "prefill" || phase === "starting"
+      ? (row.percent ??
+        (prompt > 0 && row.processed_tokens != null
+          ? (row.processed_tokens / prompt) * 100
+          : null))
+      : null;
+  return (
+    <li className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-2 py-3">
+      <div className="flex min-w-0 items-center gap-2.5">
+        <StatusIndicator
+          status={phaseDot(phase)}
+          pulse={phase === "decode" || phase === "prefill"}
+        />
+        <span className="text-sm font-medium">
+          {phaseText[phase] ?? phase}
+        </span>
+        <span className="truncate font-mono text-xs text-muted-foreground">
+          {row.request_id}
+        </span>
+        {row.model && (
+          <span className="hidden truncate text-xs text-muted-foreground sm:inline">
+            · {modelLabel(row.model)}
+          </span>
+        )}
+      </div>
+      <div className="flex items-center gap-4 text-xs tabular-nums text-muted-foreground">
+        <span>
+          {phase === "decode"
+            ? `${number(row.completion_tokens, 0)} tok`
+            : `${number(prompt, 0)} tok`}
+        </span>
+        <span className="w-20 text-right text-foreground">
+          {row.tokens_per_second == null
+            ? "—"
+            : `${number(row.tokens_per_second)} tok/s`}
+        </span>
+        <span className="w-12 text-right">{elapsed(row.elapsed_s)}</span>
+      </div>
+      {progress != null && (
+        <Progress
+          className="col-span-2 h-1"
+          value={Math.max(0, Math.min(100, progress))}
+          label={`Prefill ${number(progress, 0)}%`}
+        />
+      )}
+      {phase !== "prefill" && cached > 0 && prompt > 0 && (
+        <p className="col-span-2 -mt-1 text-[11px] text-muted-foreground">
+          前綴命中 {number(cached, 0)} / {number(prompt, 0)} tokens
+        </p>
+      )}
+    </li>
+  );
+}
+
 export function Dashboard({
   engine,
   navigate,
@@ -99,6 +207,26 @@ export function Dashboard({
         : null;
   const activePoint =
     activeX == null ? null : points.find((sample) => sample.at === activeX);
+  const items = status?.requests.items ?? [];
+  const decodeTrend = points.flatMap((p) =>
+    p.status.throughput.mean_decode_tps == null
+      ? []
+      : [p.status.throughput.mean_decode_tps],
+  );
+  const liveDecode =
+    status?.throughput.live_decode_tps ?? status?.throughput.mean_decode_tps;
+  const memory = status?.memory;
+  const prefilling = items.find(
+    (r) => r.phase === "prefill" || r.phase === "starting",
+  );
+  const prefillPct = prefilling
+    ? (prefilling.percent ??
+      ((prefilling.prompt_tokens ?? 0) > 0 &&
+      prefilling.processed_tokens != null
+        ? (prefilling.processed_tokens / (prefilling.prompt_tokens ?? 1)) * 100
+        : null))
+    : null;
+  const loaded = (status?.models ?? []).filter((m) => m.loaded);
   const chooseRange = (next: string) => {
     setRange(next);
     setActiveX(null);
@@ -115,7 +243,7 @@ export function Dashboard({
   }
   if (!status && engine.phase !== "connecting")
     return (
-      <section className="w-full max-w-6xl space-y-6" data-testid="overview">
+      <section className="mx-auto w-full max-w-6xl space-y-6" data-testid="overview">
         <PageHeader
           title="引擎總覽"
           description="模型、請求與效能，都從你的本機引擎開始。"
@@ -132,31 +260,44 @@ export function Dashboard({
               </Button>
             }
           />
-          <div className="mt-8 grid gap-6 border-t border-border/60 pt-6 sm:grid-cols-3">
+          <ol className="mt-8 grid gap-6 border-t border-border/60 pt-6 sm:grid-cols-3">
             {[
               ["01", "連接服務", "使用現有的 Yunshu HTTP 服務"],
               ["02", "載入模型", "管理權重與閒置保留時間"],
               ["03", "觀察與驗證", "查看圖表、請求與推理結果"],
             ].map(([step, title, description]) => (
-              <div key={step}>
+              <li key={step}>
                 <span className="font-mono text-xs text-muted-foreground">
                   {step}
                 </span>
                 <h2 className="mt-2 text-sm font-medium">{title}</h2>
                 <p className="mt-1 text-caption">{description}</p>
-              </div>
+              </li>
             ))}
-          </div>
+          </ol>
         </Card>
       </section>
     );
   return (
-    <section className="w-full max-w-6xl space-y-6" data-testid="overview">
+    <section className="mx-auto w-full max-w-6xl space-y-5" data-testid="overview">
       <PageHeader
         title="引擎總覽"
         description="觀察這台 Mac 如何處理每一次推理。"
         actions={
-          <div className="flex flex-wrap gap-2">
+          <div className="flex items-center gap-1.5">
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => engine.setPolling(!engine.polling)}
+            >
+              {engine.polling ? <Pause size={13} /> : <Play size={13} />}
+              {engine.polling ? "暫停更新" : "恢復更新"}
+            </Button>
+            <IconButton
+              icon={<RefreshCw size={14} />}
+              label="更新"
+              onClick={() => void engine.refresh()}
+            />
             <Button
               size="sm"
               disabled={
@@ -170,171 +311,179 @@ export function Dashboard({
               <Play size={13} />
               開始測試
             </Button>
-            <Button
-              size="sm"
-              variant="secondary"
-              onClick={() => engine.setPolling(!engine.polling)}
-            >
-              {engine.polling ? <Pause size={13} /> : <Play size={13} />}
-              {engine.polling ? "暫停更新" : "恢復更新"}
-            </Button>
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={() => void engine.refresh()}
-            >
-              <RefreshCw size={13} />
-              更新
-            </Button>
           </div>
         }
       />
-      <Card className="flex flex-wrap items-center justify-between gap-3 bg-muted/20 px-4 py-3 text-xs text-muted-foreground shadow-none">
-        <div className="flex flex-wrap items-center gap-2">
-          <Badge variant={online ? "success" : "secondary"}>
+      <p className="-mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+        <StatusIndicator
+          status={online ? "online" : "offline"}
+          pulse={online && items.length > 0}
+        >
+          <span className="text-foreground">
             {online
               ? status?.state === "running"
                 ? "運行中"
                 : (status?.state ?? "已連線")
               : "未連線"}
-          </Badge>
-          <span>Yunshu {status?.version ?? "—"}</span>
-          <span>· 運行 {elapsed(status?.uptime_s)}</span>
-          {status?.load_error && (
-            <span className="text-error">{status.load_error}</span>
-          )}
-        </div>
+          </span>
+        </StatusIndicator>
+        <span>Yunshu {status?.version ?? "—"}</span>
+        <span>· 運行 {elapsed(status?.uptime_s)}</span>
         <span>
+          ·{" "}
           {engine.updatedAt
             ? `更新於 ${clock(engine.updatedAt)}`
             : "等待服務回應"}
-          {!engine.polling ? " · 已暫停" : ""}
+          {!engine.polling ? "（已暫停）" : ""}
         </span>
-      </Card>
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-        <StatCard
-          valueFirst
-          icon={Activity}
-          label="進行中請求"
-          value={number(status?.requests.active, 0)}
-          subtext={
-            <div className="flex flex-wrap items-end justify-between gap-2">
+        {status?.load_error && (
+          <span className="text-error">{status.load_error}</span>
+        )}
+      </p>
+
+      {/* Live: what the engine is doing right now. */}
+      <Card
+        className="grid min-w-0 overflow-hidden p-0 lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)]"
+        data-testid="live-panel"
+      >
+        <div className="flex min-w-0 flex-col justify-between gap-5 border-b border-border/60 p-5 sm:p-6 lg:border-b-0 lg:border-r">
+          {prefilling ? (
+            <div>
+              <p className="text-xs text-muted-foreground">
+                正在處理提示詞 · {prefilling.request_id}
+              </p>
+              <p className="mt-2 text-5xl font-semibold tracking-tight tabular-nums">
+                {number(prefillPct, 0)}
+                <span className="ml-1 text-2xl font-normal text-muted-foreground">
+                  %
+                </span>
+              </p>
+              <Progress
+                className="mt-3 h-1.5"
+                value={prefillPct ?? 0}
+                label={`Prefill ${number(prefillPct, 0)}%`}
+              />
+              <p className="mt-2 text-xs tabular-nums text-muted-foreground">
+                {number(prefilling.processed_tokens, 0)} /{" "}
+                {number(prefilling.prompt_tokens, 0)} tokens
+                {prefilling.tokens_per_second != null &&
+                  ` · ${number(prefilling.tokens_per_second, 0)} tok/s`}
+                {prefilling.eta_s != null &&
+                  ` · 約 ${elapsed(prefilling.eta_s)} 後開始輸出`}
+              </p>
+            </div>
+          ) : (
+            <div>
+              <p className="text-xs text-muted-foreground">
+                {status?.throughput.live_decode_tps != null
+                  ? "目前 Decode 總速率"
+                  : "Decode · 近 5 分鐘平均（閒置）"}
+              </p>
+              <p
+                className={
+                  "mt-2 text-5xl font-semibold tracking-tight tabular-nums" +
+                  (status?.throughput.live_decode_tps != null
+                    ? ""
+                    : " text-muted-foreground")
+                }
+              >
+                {liveDecode == null ? (
+                  "—"
+                ) : (
+                  <AnimatedNumber value={liveDecode} decimals={1} />
+                )}
+                <span className="ml-2 text-base font-normal text-muted-foreground">
+                  tok/s
+                </span>
+              </p>
+            </div>
+          )}
+          {decodeTrend.length > 1 ? (
+            <Sparkline
+              className="h-14 w-full"
+              data={decodeTrend}
+              tone="accent"
+              area
+              label="平均 Decode 速度趨勢"
+            />
+          ) : (
+            <div className="flex h-14 items-end">
+              <div className="h-px w-full bg-border" />
+            </div>
+          )}
+          <div className="grid grid-cols-3 gap-4 border-t border-border/60 pt-4">
+            <Readout
+              label="Prefill 平均"
+              value={number(status?.throughput.mean_prefill_tps, 0)}
+              unit="tok/s"
+            />
+            <Readout
+              label="首 Token 延遲"
+              value={number(last?.ttft_ms, 0)}
+              unit="ms"
+              hint={last ? `最近一筆 · ${clock(last.t * 1000)}` : "尚無完成請求"}
+            />
+            <Readout
+              label="前綴重用率"
+              value={cache == null ? "—" : `${number(cache)}%`}
+              hint={
+                last
+                  ? `${number(last.cached_tokens, 0)} / ${number(last.prompt_tokens, 0)} tokens`
+                  : undefined
+              }
+            />
+          </div>
+        </div>
+        <div className="flex min-w-0 flex-col p-5 sm:p-6">
+          <div className="flex items-center justify-between gap-3">
+            <h2 className="text-sm font-medium">
+              進行中請求
+              <span className="ml-2 text-muted-foreground tabular-nums">
+                {number(status?.requests.active, 0)}
+              </span>
+            </h2>
+            <div className="flex items-center gap-3 text-xs text-muted-foreground">
               <span>
                 近 {number(status?.throughput.window_s ?? 60, 0)} 秒結束{" "}
                 {number(status?.throughput.requests, 0)} 筆
               </span>
-              <Sparkline
-                className="w-20"
-                data={points.map((p) => p.status.requests.active)}
-                label="活動請求趨勢"
-              />
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => navigate("requests")}
+              >
+                全部
+                <ArrowRight size={13} />
+              </Button>
             </div>
-          }
-        />
-        <StatCard
-          valueFirst
-          icon={Zap}
-          label="Decode · 近 5 分鐘平均"
-          value={
-            <>
-              {number(status?.throughput.mean_decode_tps)}
-              <span className="ml-1 text-xs font-normal">tok/s</span>
-            </>
-          }
-          subtext={
-            <div className="flex flex-wrap items-end justify-between gap-2">
-              <span>
-                目前總速率 {number(status?.throughput.live_decode_tps)}
-              </span>
-              <Sparkline
-                className="w-20"
-                tone="success"
-                data={points.flatMap((p) =>
-                  p.status.throughput.mean_decode_tps == null
-                    ? []
-                    : [p.status.throughput.mean_decode_tps],
-                )}
-                label="平均 Decode 速度"
-              />
+          </div>
+          {items.length ? (
+            <ul className="mt-2 divide-y divide-border/60">
+              {items.slice(0, 5).map((row) => (
+                <RequestLane key={row.request_id} row={row} />
+              ))}
+            </ul>
+          ) : (
+            <div className="flex flex-1 flex-col items-start justify-center gap-1 py-8">
+              <p className="text-sm font-medium">目前閒置</p>
+              <p className="text-xs text-muted-foreground">
+                沒有正在處理的請求。
+                {memory?.cache_gb
+                  ? ` 配置器快取 ${number(memory.cache_gb)} GB 會在閒置後歸還系統。`
+                  : ""}
+              </p>
             </div>
-          }
-        />
-        <StatCard
-          valueFirst
-          icon={Clock3}
-          label="首 Token 延遲"
-          value={
-            <>
-              {number(last?.ttft_ms, 0)}
-              <span className="ml-1 text-xs font-normal">ms</span>
-            </>
-          }
-          subtext={
-            last ? `最近一筆 · ${clock(last.t * 1000)}` : "等待第一筆結束的請求"
-          }
-        />
-        <StatCard
-          valueFirst
-          icon={Database}
-          label="前綴重用率"
-          value={cache == null ? "—" : `${number(cache)}%`}
-          subtext={
-            last
-              ? `最近一筆 · ${number(last.cached_tokens, 0)} / ${number(last.prompt_tokens, 0)} tokens`
-              : "由真實請求的快取 token 計算"
-          }
-        />
-      </div>
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <p className="text-xs text-muted-foreground">
-            本頁開啟後採樣 · {points.length} 筆 · 中斷期間不補資料
-          </p>
-          <p className="mt-1 text-[10px] text-muted-foreground">
-            圖表間隔超過 12 秒會斷線；尚未採樣的時段保留空白。
-          </p>
+          )}
         </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <SegmentedSelect
-            aria-label="觀測時間範圍"
-            value={range}
-            onChange={chooseRange}
-            options={[
-              { value: "5m", label: "5 分鐘" },
-              { value: "15m", label: "15 分鐘" },
-              { value: "1h", label: "1 小時" },
-            ]}
-          />
-          <Button
-            size="sm"
-            variant="ghost"
-            disabled={!points.length}
-            onClick={exportData}
-          >
-            <Download size={13} />
-            匯出觀測
-          </Button>
-        </div>
-      </div>
-      <div className="grid gap-6 xl:grid-cols-[minmax(0,1.65fr)_minmax(300px,1fr)]">
+      </Card>
+
+      <div className="grid gap-5 xl:grid-cols-[minmax(0,7fr)_minmax(0,5fr)]">
         <Card className="min-w-0 p-5 sm:p-6" data-testid="throughput-panel">
-          <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
             <div>
-              <h2 className="heading-md">吞吐觀測</h2>
+              <h2 className="text-sm font-medium">吞吐觀測</h2>
               <p className="mt-1 text-xs text-muted-foreground">
                 近 5 分鐘平均速度的時間變化 · tok/s
-              </p>
-              <p className="mt-3 text-2xl font-semibold">
-                {metric === "both"
-                  ? `${number(status?.throughput.mean_decode_tps)} / ${number(status?.throughput.mean_prefill_tps)}`
-                  : number(
-                      metric === "decode"
-                        ? status?.throughput.mean_decode_tps
-                        : status?.throughput.mean_prefill_tps,
-                    )}{" "}
-                <span className="text-xs font-normal text-muted-foreground">
-                  {metric === "both" ? "Decode / Prefill" : "tok/s"}
-                </span>
               </p>
             </div>
             <SegmentedSelect
@@ -352,7 +501,7 @@ export function Dashboard({
             {...chartLabels}
             data={data}
             series={throughputSeries}
-            height={235}
+            height={220}
             ariaLabel="吞吐速度時序圖，單位 tok/s"
             formatX={clock}
             formatY={formatNumber}
@@ -361,7 +510,7 @@ export function Dashboard({
             onActiveXChange={setActiveX}
           />
           <Button
-            className="mt-3"
+            className="mt-2"
             size="sm"
             variant="ghost"
             aria-expanded={table}
@@ -396,36 +545,55 @@ export function Dashboard({
         </Card>
         <Card className="min-w-0 p-5 sm:p-6" data-testid="memory-panel">
           <div className="flex items-center justify-between">
-            <h2 className="heading-md">Metal 記憶體</h2>
+            <h2 className="text-sm font-medium">Metal 記憶體</h2>
             <Badge variant="outline">
-              實體 {number(status?.memory.total_gb)} GB
+              實體 {number(memory?.total_gb)} GB
             </Badge>
           </div>
-          <div className="flex items-center gap-4 py-5">
-            {status?.memory.active_gb != null && status.memory.total_gb ? (
-              <Gauge
-                value={(status.memory.active_gb / status.memory.total_gb) * 100}
-                size={70}
-                ariaLabel="Metal 活躍配置占實體記憶體比例"
-              />
-            ) : (
-              <span className="text-2xl text-muted-foreground">—</span>
-            )}
+          <p className="mt-4 text-3xl font-semibold tracking-tight tabular-nums">
+            {number(memory?.active_gb)}
+            <span className="ml-1.5 text-sm font-normal text-muted-foreground">
+              / {number(memory?.total_gb)} GB 活躍配置
+            </span>
+          </p>
+          <SegmentedBar
+            className="mt-4"
+            height={10}
+            total={memory?.total_gb ?? undefined}
+            label={`Metal 記憶體：活躍 ${number(memory?.active_gb)} GB，快取 ${number(memory?.cache_gb)} GB`}
+            segments={[
+              { value: memory?.active_gb ?? 0, tone: "accent", label: "活躍配置" },
+              {
+                value: memory?.cache_gb ?? 0,
+                tone: "warning",
+                label: "配置器快取",
+              },
+            ]}
+            legend
+            formatValue={(v) => `${number(v)} GB`}
+          />
+          <dl className="mt-4 grid grid-cols-2 gap-3 border-t border-border/60 pt-4 text-xs">
             <div>
-              <p className="text-2xl font-semibold">
-                {number(status?.memory.active_gb)}{" "}
-                <span className="text-sm font-normal">GB</span>
-              </p>
-              <p className="mt-1 text-xs text-muted-foreground">
-                活躍配置 · 峰值 {number(status?.memory.peak_gb)} GB
-              </p>
+              <dt className="text-muted-foreground">本次峰值</dt>
+              <dd className="mt-1 text-sm font-medium tabular-nums">
+                {number(memory?.peak_gb)} GB
+              </dd>
             </div>
-          </div>
+            <div>
+              <dt className="text-muted-foreground">已載入權重</dt>
+              <dd className="mt-1 text-sm font-medium tabular-nums">
+                {loaded.length
+                  ? `${number(loaded.reduce((s, m) => s + (m.size_gb ?? 0), 0))} GB · ${loaded.length} 個`
+                  : "—"}
+              </dd>
+            </div>
+          </dl>
           <TimeSeriesChart
             {...chartLabels}
+            className="mt-4"
             data={data}
             series={memorySeries}
-            height={190}
+            height={120}
             ariaLabel="Metal 記憶體時序圖，單位 GB"
             formatX={clock}
             formatY={formatNumber}
@@ -433,10 +601,34 @@ export function Dashboard({
             activeX={activeX}
             onActiveXChange={setActiveX}
           />
-          <p className="mt-3 text-[11px] text-muted-foreground">
-            MLX 配置器回報的程序記憶體。整機資源可至引擎診斷查看。
-          </p>
         </Card>
+      </div>
+
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <p className="text-xs text-muted-foreground">
+          本頁開啟後採樣 · {points.length} 筆 · 中斷期間不補資料
+        </p>
+        <div className="flex flex-wrap items-center gap-2">
+          <SegmentedSelect
+            aria-label="觀測時間範圍"
+            value={range}
+            onChange={chooseRange}
+            options={[
+              { value: "5m", label: "5 分鐘" },
+              { value: "15m", label: "15 分鐘" },
+              { value: "1h", label: "1 小時" },
+            ]}
+          />
+          <Button
+            size="sm"
+            variant="ghost"
+            disabled={!points.length}
+            onClick={exportData}
+          >
+            <Download size={13} />
+            匯出觀測
+          </Button>
+        </div>
       </div>
       {activePoint && (
         <div
@@ -452,7 +644,7 @@ export function Dashboard({
           </Button>
         </div>
       )}
-      <div className="grid min-w-0 gap-6 xl:grid-cols-2">
+      <div className="grid min-w-0 gap-5 xl:grid-cols-2">
         <LatencyPanel history={points} />
         <PhasePanel engine={engine} navigate={navigate} />
       </div>
@@ -463,27 +655,17 @@ export function Dashboard({
         onSelectTime={setActiveX}
       />
       <Card className="min-w-0 p-5 sm:p-6">
-        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h2 className="heading-md">請求並行趨勢</h2>
-            <p className="mt-1 text-xs text-muted-foreground">
-              不同處理階段，共用請求數刻度
-            </p>
-          </div>
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={() => navigate("requests")}
-          >
-            檢查請求
-            <ArrowRight size={13} />
-          </Button>
+        <div className="mb-4">
+          <h2 className="text-sm font-medium">請求並行趨勢</h2>
+          <p className="mt-1 text-xs text-muted-foreground">
+            不同處理階段，共用請求數刻度
+          </p>
         </div>
         <TimeSeriesChart
           {...chartLabels}
           data={data}
           series={requestSeries}
-          height={205}
+          height={180}
           ariaLabel="請求階段並行數時序圖"
           formatX={clock}
           formatY={formatCount}
@@ -492,42 +674,54 @@ export function Dashboard({
           onActiveXChange={setActiveX}
         />
       </Card>
-      <Card className="min-w-0 p-5 sm:p-6">
-        <div className="mb-3 flex items-center justify-between">
-          <h2 className="heading-md">模型工作區</h2>
+      <Card className="min-w-0 p-0">
+        <div className="flex items-center justify-between px-5 pb-2 pt-5 sm:px-6">
+          <h2 className="text-sm font-medium">模型</h2>
           <Button size="sm" variant="ghost" onClick={() => navigate("models")}>
-            管理模型
+            模型庫
             <ArrowRight size={13} />
           </Button>
         </div>
-        <div className="grid gap-x-6 divide-y divide-border/60 md:grid-cols-2">
-          {(status?.models ?? []).slice(0, 4).map((model) => (
-            <div
+        <ul className="divide-y divide-border/60">
+          {(status?.models ?? []).slice(0, 6).map((model) => (
+            <li
               key={model.id}
-              className="flex items-center justify-between gap-3 py-3"
+              className="flex items-center gap-3 px-5 py-3 sm:px-6"
             >
-              <div className="min-w-0">
-                <p className="truncate text-sm font-medium">
-                  {modelLabel(model.id)}
-                </p>
-                <p className="mt-1 text-xs text-muted-foreground">
-                  {model.type} · {number(model.size_gb)} GB
-                  {model.expires_in_s != null
-                    ? ` · ${elapsed(model.expires_in_s)} 後卸載`
-                    : ""}
-                </p>
-              </div>
-              <Badge variant={model.loaded ? "success" : "secondary"}>
-                {model.loading ? "載入中" : model.loaded ? "已載入" : "未載入"}
-              </Badge>
-            </div>
+              <StatusIndicator
+                status={
+                  model.loading ? "busy" : model.loaded ? "online" : "neutral"
+                }
+                pulse={model.loading}
+              />
+              <span className="min-w-0 flex-1 truncate text-sm font-medium">
+                {modelLabel(model.id)}
+              </span>
+              <span className="hidden text-xs text-muted-foreground sm:inline">
+                {model.type}
+              </span>
+              <span className="w-20 text-right text-xs tabular-nums text-muted-foreground">
+                {number(model.size_gb)} GB
+              </span>
+              <span className="w-24 text-right text-xs text-muted-foreground">
+                {model.loading
+                  ? "載入中"
+                  : model.loaded
+                    ? model.expires_in_s != null
+                      ? `${elapsed(model.expires_in_s)} 後卸載`
+                      : model.pinned
+                        ? "固定保留"
+                        : "已載入"
+                    : "未載入"}
+              </span>
+            </li>
           ))}
           {!status?.models.length && (
-            <p className="py-5 text-sm text-muted-foreground">
+            <li className="px-5 py-5 text-sm text-muted-foreground sm:px-6">
               {status ? "服務尚未註冊模型" : "連線後顯示可用模型"}
-            </p>
+            </li>
           )}
-        </div>
+        </ul>
       </Card>
     </section>
   );

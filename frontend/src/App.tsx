@@ -1,5 +1,14 @@
 import { useEffect, useState } from "react";
-import { Button, IconButton } from "@yuhuanowo/yunui";
+import {
+  Badge,
+  Button,
+  CommandPalette,
+  IconButton,
+  Kbd,
+  StatusIndicator,
+  useCommandPaletteShortcut,
+  type CommandPaletteItem,
+} from "@yuhuanowo/yunui";
 import { Sidebar } from "@yuhuanowo/yunui/patterns";
 import { YunUIProvider } from "@yuhuanowo/yunui/adapters";
 import {
@@ -7,17 +16,20 @@ import {
   Box,
   Code2,
   Gauge,
-  Layers,
   Menu,
   MessageSquare,
   Moon,
+  Pause,
+  Play,
+  Search,
   Settings as SettingsIcon,
+  Stethoscope,
   Sun,
   X,
 } from "lucide-react";
 import { useEngine } from "./useEngine";
 import type { Connection } from "./api";
-import { ConnectionState } from "./ui";
+import { ConnectionState, clock, modelLabel, number } from "./ui";
 import { Dashboard } from "./Dashboard";
 import { Models } from "./Models";
 import { Requests } from "./Requests";
@@ -99,6 +111,56 @@ export default function App() {
     ),
     [testModel, setTestModel] = useState("");
   const engine = useEngine(connection);
+  const loadedModel = engine.status?.models.find((m) => m.loaded);
+  const [palette, setPalette] = useState(false),
+    [query, setQuery] = useState("");
+  useCommandPaletteShortcut(() => setPalette(true));
+  const liveTps =
+    engine.status?.throughput.live_decode_tps ??
+    (engine.status?.requests.active ? null : undefined);
+  useEffect(() => {
+    const active = engine.status?.requests.active ?? 0;
+    document.title =
+      active > 0 && liveTps
+        ? `▶ ${number(liveTps)} tok/s · 雲樞`
+        : `${titles[page]} · 雲樞 Yunshu`;
+  }, [engine.status, liveTps, page]);
+  const commands: CommandPaletteItem[] = [
+    ...Object.entries(titles).map(([key, title]) => ({
+      id: "go:" + key,
+      title,
+      group: "前往",
+      onSelect: () => navigate(key),
+    })),
+    ...(engine.status?.models ?? []).map((m) => ({
+      id: "model:" + m.id,
+      title: modelLabel(m.id),
+      description: `${m.type} · ${number(m.size_gb)} GB · ${m.loaded ? "已載入" : "未載入"}`,
+      group: "模型",
+      onSelect: () => navigate("models"),
+    })),
+    {
+      id: "polling",
+      title: engine.polling ? "暫停狀態更新" : "恢復狀態更新",
+      icon: engine.polling ? <Pause size={14} /> : <Play size={14} />,
+      group: "操作",
+      onSelect: () => engine.setPolling(!engine.polling),
+    },
+    {
+      id: "theme",
+      title: dark ? "切換淺色" : "切換深色",
+      icon: dark ? <Sun size={14} /> : <Moon size={14} />,
+      group: "操作",
+      onSelect: () => setDark((v) => !v),
+    },
+  ];
+  const q = query.trim().toLowerCase();
+  const shown = q
+    ? commands.filter((c) =>
+        `${c.title} ${c.description ?? ""} ${c.id}`.toLowerCase().includes(q),
+      )
+    : commands;
+  const last = engine.status?.last;
   useEffect(() => {
     const fn = () => {
       setPage(route());
@@ -168,13 +230,13 @@ export default function App() {
           closeLabel="關閉導覽"
           onNavigate={(href) => navigate(href.replace(/^\//, ""))}
           header={
-            <div className="space-y-5 px-4 pb-2 pt-5">
+            <div className="space-y-4 px-4 pb-3 pt-5">
               <div className="flex items-center gap-2.5 px-2">
-                <Layers size={22} />
-                <span className="flex-1 text-lg font-semibold">
-                  Yunshu{" "}
-                  <span className="text-sm font-normal text-muted-foreground">
-                    雲舒
+                <CloudMark />
+                <span className="flex-1 text-[15px] font-semibold tracking-tight">
+                  Yunshu
+                  <span className="ml-1.5 text-xs font-normal text-muted-foreground">
+                    雲樞
                   </span>
                 </span>
                 <IconButton
@@ -186,29 +248,56 @@ export default function App() {
               </div>
               <Button
                 variant="secondary"
-                className="w-full justify-start"
+                className="h-auto w-full flex-col items-start gap-0 px-3 py-2.5 text-left"
                 onClick={() => navigate("models")}
               >
-                <Box size={16} />
-                管理模型
+                <span className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <StatusIndicator
+                    status={
+                      engine.phase !== "online"
+                        ? "offline"
+                        : loadedModel
+                          ? "online"
+                          : "neutral"
+                    }
+                    pulse={(engine.status?.requests.active ?? 0) > 0}
+                  />
+                  {engine.phase !== "online"
+                    ? "引擎未連線"
+                    : loadedModel
+                      ? "已載入"
+                      : "沒有已載入模型"}
+                </span>
+                <span className="mt-1 block truncate text-sm font-medium">
+                  {loadedModel ? modelLabel(loadedModel.id) : "選擇模型"}
+                </span>
+                {engine.status?.memory.active_gb != null && (
+                  <span className="mt-0.5 block text-[11px] tabular-nums text-muted-foreground">
+                    {number(engine.status.memory.active_gb)} /{" "}
+                    {number(engine.status.memory.total_gb)} GB
+                  </span>
+                )}
               </Button>
             </div>
           }
           sections={[
             {
-              title: "推理引擎",
+              title: "監控",
               items: [
                 { label: "引擎總覽", href: "/overview", icon: Gauge },
-                { label: "模型庫", href: "/models", icon: Box },
                 { label: "請求與效能", href: "/requests", icon: Activity },
-                { label: "API 接入", href: "/api", icon: Code2 },
-                { label: "引擎診斷", href: "/diagnostics", icon: Activity },
+                { label: "引擎診斷", href: "/diagnostics", icon: Stethoscope },
               ],
             },
             {
-              title: "工具",
+              title: "模型",
+              items: [{ label: "模型庫", href: "/models", icon: Box }],
+            },
+            {
+              title: "開發",
               items: [
                 { label: "推理測試", href: "/playground", icon: MessageSquare },
+                { label: "API 接入", href: "/api", icon: Code2 },
               ],
             },
           ]}
@@ -222,14 +311,16 @@ export default function App() {
                 <SettingsIcon size={16} />
                 設定
               </Button>
-              <p className="border-t border-border/60 px-2 pt-4 text-[10px] text-muted-foreground">
-                本機優先 · 真實引擎連線
+              <p className="border-t border-border/60 px-2 pt-3 font-mono text-[10px] text-muted-foreground">
+                {engine.status?.version
+                  ? `yunshu ${engine.status.version}`
+                  : "本機優先 · 真實引擎連線"}
               </p>
             </div>
           }
         />
         <main className="flex h-dvh min-w-0 flex-col lg:pl-64">
-          <header className="flex min-h-16 shrink-0 items-center justify-between gap-2 border-b border-border/60 px-4 lg:px-6">
+          <header className="flex min-h-14 shrink-0 items-center justify-between gap-2 border-b border-border/60 px-4 lg:px-6">
             <div className="flex items-center gap-2">
               <IconButton
                 className="lg:hidden"
@@ -239,14 +330,52 @@ export default function App() {
               />
               <span className="text-sm font-medium">{titles[page]}</span>
             </div>
-            <div className="flex items-center gap-2">
-              <span className="hidden text-xs text-muted-foreground sm:inline">
+            <div className="flex items-center gap-3">
+              {engine.phase === "online" && engine.status && (
+                <span className="hidden items-center gap-3 text-xs tabular-nums text-muted-foreground md:flex">
+                  <span>
+                    <span className="text-foreground">
+                      {number(engine.status.requests.active, 0)}
+                    </span>{" "}
+                    req
+                  </span>
+                  <span>
+                    <span className="text-foreground">
+                      {number(
+                        engine.status.throughput.live_decode_tps ??
+                          engine.status.throughput.mean_decode_tps,
+                      )}
+                    </span>{" "}
+                    tok/s
+                  </span>
+                </span>
+              )}
+              <Button
+                size="sm"
+                variant="ghost"
+                className="hidden text-muted-foreground sm:inline-flex"
+                onClick={() => setPalette(true)}
+              >
+                <Search size={13} />
+                搜尋
+                <Kbd>⌘K</Kbd>
+              </Button>
+              <StatusIndicator
+                className="hidden text-xs text-muted-foreground sm:inline-flex"
+                status={
+                  engine.phase === "online"
+                    ? "online"
+                    : engine.phase === "connecting"
+                      ? "away"
+                      : "offline"
+                }
+              >
                 {engine.phase === "online"
                   ? "已連線"
                   : engine.phase === "connecting"
                     ? "連線中"
                     : "未連線"}
-              </span>
+              </StatusIndicator>
               <IconButton
                 icon={dark ? <Sun size={16} /> : <Moon size={16} />}
                 label={dark ? "切換淺色" : "切換深色"}
@@ -359,8 +488,73 @@ export default function App() {
               </div>
             )}
           </div>
+          {engine.phase === "online" && last && (
+            <footer
+              aria-label="最近一筆請求"
+              className="hidden shrink-0 items-center gap-2 border-t border-border/60 px-4 py-2 text-xs text-muted-foreground md:flex lg:px-6"
+            >
+              <span>最近一筆 · {clock(last.t * 1000)}</span>
+              <Badge variant="outline">{number(last.prompt_tokens, 0)} 輸入</Badge>
+              <Badge variant="outline">
+                {number(last.completion_tokens, 0)} 輸出
+              </Badge>
+              <Badge variant="outline">TTFT {number(last.ttft_ms, 0)} ms</Badge>
+              <Badge variant="outline">
+                Prefill {number(last.prefill_tps, 0)} tok/s
+              </Badge>
+              <Badge variant="outline">
+                Decode {number(last.decode_tps)} tok/s
+              </Badge>
+              {last.prompt_tokens > 0 && (
+                <Badge variant="outline">
+                  快取 {number(last.cached_tokens, 0)} /{" "}
+                  {number(last.prompt_tokens, 0)}
+                </Badge>
+              )}
+            </footer>
+          )}
         </main>
+        <CommandPalette
+          open={palette}
+          onClose={() => {
+            setPalette(false);
+            setQuery("");
+          }}
+          query={query}
+          onQueryChange={setQuery}
+          items={shown}
+          empty={<p className="p-4 text-sm text-muted-foreground">沒有符合的項目</p>}
+        />
       </div>
     </YunUIProvider>
+  );
+}
+
+/** Brand mark: a pivot (樞) with cloud arcs turning around it. Host content. */
+function CloudMark() {
+  return (
+    <svg
+      width="22"
+      height="22"
+      viewBox="0 0 24 24"
+      fill="none"
+      aria-hidden="true"
+      className="text-foreground"
+    >
+      <path
+        d="M4.5 12a7.5 7.5 0 0 1 12.8-5.3"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+      />
+      <path
+        d="M19.5 12a7.5 7.5 0 0 1-12.8 5.3"
+        stroke="currentColor"
+        strokeOpacity=".5"
+        strokeWidth="2"
+        strokeLinecap="round"
+      />
+      <circle cx="12" cy="12" r="2.6" fill="currentColor" />
+    </svg>
   );
 }
