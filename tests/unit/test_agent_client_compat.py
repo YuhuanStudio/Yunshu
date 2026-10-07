@@ -1339,3 +1339,44 @@ def test_vlm_download_input_error_returns_400(monkeypatch):
     )
     assert response.status_code == 400
     assert json.loads(response.body)["error"]["type"] == "invalid_request_error"
+
+
+def test_text_completions_continuous_usage_on_real_stream_wrapper(monkeypatch):
+    from yunshu_engine.batched_engine import BatchedEngine, GenerationOutput
+    from yunshu_gateway.routers import completions
+
+    engine = BatchedEngine()
+
+    async def generate(**kwargs):
+        for index, text in enumerate(("one", " two"), 1):
+            yield GenerationOutput(
+                text=text,
+                new_text=text,
+                prompt_tokens=7,
+                completion_tokens=index,
+                finished=index == 2,
+                finish_reason="stop" if index == 2 else None,
+            )
+
+    monkeypatch.setattr(engine, "stream_generate", generate)
+    q = completions.CompletionRequest(
+        model="local",
+        prompt="Count.",
+        stream=True,
+        stream_options={"include_usage": True, "continuous_usage_stats": True},
+    )
+
+    async def run():
+        chunks = [
+            c
+            async for c in completions._stream_completion(
+                engine, q.prompt, q, "cmpl_test", None
+            )
+        ]
+        return "".join(c.decode() if isinstance(c, bytes) else c for c in chunks)
+
+    ev = events(asyncio.run(run()))
+    chunks = [e for e in ev if e.get("choices")]
+    assert chunks and all("usage" in e for e in chunks)
+    assert chunks[-1]["usage"]["completion_tokens"] == 2
+    assert ev[-1]["usage"]["completion_tokens"] == 2

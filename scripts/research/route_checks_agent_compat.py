@@ -456,7 +456,12 @@ def anthropic_tools(c: Ctx):
         )
 
 
-@check("agent-continuous-usage", "POST /v1/chat/completions", served=True)
+@check(
+    "agent-continuous-usage",
+    "POST /v1/chat/completions",
+    "POST /v1/completions",
+    served=True,
+)
 def continuous_usage(c: Ctx):
     events = _events(
         c,
@@ -481,6 +486,33 @@ def continuous_usage(c: Ctx):
     expect(
         events[-1]["usage"]["completion_tokens"] == counts[-1],
         "Final usage differs from latest continuous usage",
+    )
+
+    completion = _events(
+        c,
+        "/v1/completions",
+        {
+            "model": c.model,
+            "prompt": "Count from one to five:",
+            "stream": True,
+            "stream_options": {"include_usage": True, "continuous_usage_stats": True},
+            "max_tokens": 32,
+            "enable_thinking": False,
+        },
+    )
+    chunks = [e for e in completion if e.get("choices")]
+    expect(
+        chunks and all("usage" in e for e in chunks),
+        "A completion chunk omitted continuous usage",
+    )
+    counts = [e["usage"]["completion_tokens"] for e in chunks]
+    expect(
+        counts == sorted(counts) and counts[-1] > 0,
+        f"Noncumulative completion counts: {counts}",
+    )
+    expect(
+        completion[-1]["usage"]["completion_tokens"] == counts[-1],
+        "Final completion usage differs",
     )
 
 

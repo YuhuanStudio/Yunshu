@@ -360,7 +360,7 @@ schemas cover versioned bash, text editor, and legacy computer tools; computer z
 is opt-in, and text-editor `max_characters` is tool configuration. The newer
 `computer_toolset_20260801` member protocol is not implemented.
 
-Chat supports `stream_options.continuous_usage_stats` together with `include_usage`.
+Chat and text completions support `stream_options.continuous_usage_stats` together with `include_usage`.
 HTTP(S) video fetches use DNS-pinned redirects, TLS verification, and
 `YUNSHU_VLM_MAX_VIDEO_BYTES` (100 MiB by default). `POST /apply-template` renders the
 loaded tokenizer's template; `GET /props` exposes minimal loaded-model properties.
