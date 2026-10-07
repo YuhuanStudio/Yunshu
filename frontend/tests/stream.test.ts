@@ -234,3 +234,44 @@ test("cancels a pending stream reader when the caller aborts", async (t) => {
   );
   assert.equal(readerCancelled, true);
 });
+
+test("preserves VLM image parts and thinking/output options, and exposes length termination", async (t) => {
+  let sent: Record<string, unknown> | undefined;
+  installFetch(t, (async (_input, init) => {
+    sent = JSON.parse(String(init?.body));
+    return responseWithChunks([
+      new TextEncoder().encode(
+        'data: {"choices":[{"delta":{},"finish_reason":"length"}]}\n\ndata: [DONE]\n\n',
+      ),
+    ]);
+  }) as typeof fetch);
+  const deltas: unknown[] = [];
+  const image = "data:image/png;base64,dGVzdA==";
+  await streamCompletion(
+    connection,
+    {
+      ...body,
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "Describe this." },
+            { type: "image_url", image_url: { url: image } },
+          ],
+        },
+      ],
+      enable_thinking: false,
+      response_format: { type: "json_object" },
+    },
+    (delta) => deltas.push(delta),
+    new AbortController().signal,
+  );
+  assert.equal(sent?.enable_thinking, false);
+  assert.deepEqual(sent?.response_format, { type: "json_object" });
+  assert.equal(
+    (sent?.messages as { content: { image_url?: { url: string } }[] }[])[0]
+      .content[1].image_url?.url,
+    image,
+  );
+  assert.deepEqual(deltas, [{ finishReason: "length" }]);
+});

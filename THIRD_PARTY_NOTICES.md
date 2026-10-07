@@ -94,7 +94,7 @@ No source is vendored. Earlier versions before 1.8 are not used.
 ## Yunshu Console
 
 The console imports the pinned YunUI package in
-`frontend/vendor/yuhuanowo-yunui-0.2.18.tgz` (Apache-2.0); its source commit and SHA-256
+`frontend/vendor/yuhuanowo-yunui-0.2.18-analytics.tgz` (Apache-2.0); its source commit and SHA-256
 are recorded in `frontend/vendor/README.md`, and other frontend dependencies are
 locked by `frontend/pnpm-lock.yaml`. No oMLX dashboard source was copied into this
 frontend. YunUI includes MIT-licensed Beautiful UI adaptations.
