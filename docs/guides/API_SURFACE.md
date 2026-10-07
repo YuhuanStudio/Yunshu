@@ -318,6 +318,17 @@ trained classification-head API (`input` or `messages`, no candidate labels,
 `data[].probs/num_classes`). No trained classification head is implemented here;
 clients must not treat its zero-shot scores as those probabilities.
 
+## SDK coverage walk
+
+`scripts/dev/api_coverage.py` reads the resource modules of the installed `openai` and `anthropic` SDKs (AST only) and lists every
+endpoint they can request (575 on openai 3.26.0 / anthropic 1.11.0, websockets included). `tests/unit/test_api_coverage.py` fails when
+one is neither served by the gateway nor declared in `scripts/dev/api_coverage_na.json` as `not_applicable` or `planned`, each with a
+reason, and when a declaration matches nothing or sits over an implemented route. This replaces building the matrix from the routes
+we already had (which is how `POST /v1/decisions` was missed). Current state: 53 implemented, 46 planned (OpenAI and Anthropic skills,
+evals, stored chat completions, Realtime client secrets / sessions / calls, custom voices), the rest not applicable (organization and
+admin APIs, fine-tuning, Assistants/Threads, vector stores, hosted agent platforms, video, containers, webhooks, ChatKit, Live).
+Upgrading an SDK is the trigger: a new endpoint fails the test until someone decides.
+
 ## Known gaps
 
 | Item | State |
