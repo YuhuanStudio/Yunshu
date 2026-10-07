@@ -87,6 +87,13 @@ class SearchRequest(CompatRequest):
             out.append(parsed.hostname.lower().removeprefix("www."))
         return out
 
+    @field_validator("country")
+    @classmethod
+    def full_country_name(cls, value):
+        if value is not None and len(value.strip()) < 4:
+            raise ValueError("country must be a full country name")
+        return value.lower().strip() if value else value
+
     @model_validator(mode="after")
     def relationships(self):
         if "include_domains_mode" in self.model_fields_set and not self.include_domains:

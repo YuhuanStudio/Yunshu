@@ -48,6 +48,30 @@ def check_response(response, endpoint):
         assert isinstance(response["failed_results"], list)
 
 
+def fixture_session(client):
+    import requests
+
+    class Session(requests.Session):
+        def request(self, method, url, **kwargs):
+            kwargs.pop("stream", None)
+            kwargs.pop("timeout", None)
+            if "allow_redirects" in kwargs:
+                kwargs["follow_redirects"] = kwargs.pop("allow_redirects")
+            kwargs["headers"] = {**self.headers, **(kwargs.get("headers") or {})}
+            if "data" in kwargs:
+                kwargs["content"] = kwargs.pop("data")
+            response = client.request(method, url, **kwargs)
+            result = requests.Response()
+            result.status_code = response.status_code
+            result.headers.update(response.headers)
+            result._content = response.content
+            result._content_consumed = True
+            result.url = str(response.url)
+            return result
+
+    return Session()
+
+
 def main(argv=None):
     args = parser().parse_args(argv)
     import httpx
@@ -73,9 +97,8 @@ def main(argv=None):
         rows.append({"check": name, "pass": True, "request_id": value["request_id"]})
 
     # SDK's actual session injection; the client package and request serialization are unchanged.
-    client = TavilyClient(
-        api_key=args.api_key, api_base_url=base, session=fixture_client
-    )
+    session = fixture_session(fixture_client) if fixture_client else None
+    client = TavilyClient(api_key=args.api_key, api_base_url=base, session=session)
     try:
         record(
             "python.sync.search",
@@ -161,6 +184,24 @@ def main(argv=None):
                 rows.append({"check": "python.async.research.sse", "pass": True})
 
         asyncio.run(async_checks())
+        created = client.research("Paris weather", model="mini")
+        record("python.sync.research.create", "research", created)
+        import time
+
+        for _ in range(200):
+            completed = client.get_research(created["request_id"], include_usage=True)
+            if completed["status"] in ("completed", "failed"):
+                break
+            time.sleep(0.01)
+        assert completed["status"] == "completed", completed
+        record("python.sync.research.poll", "research", completed)
+        raw = b"".join(client.research("Paris weather", stream=True))
+        assert b"event: done" in raw
+        rows.append({"check": "python.sync.research.sse", "pass": True})
+        assert client.feedback(request_id=created["request_id"], human_score=1)[
+            "success"
+        ]
+        rows.append({"check": "python.sync.feedback", "pass": True})
 
         lc_options = {
             "search_depth": "basic",
@@ -184,13 +225,72 @@ def main(argv=None):
         if fixture_client:
             from unittest.mock import patch
 
-            with patch("requests.post", fixture_client.post):
+            with patch("requests.post", session.post):
                 result = wrapper.raw_results(
                     "Paris weather", max_results=2, **lc_options
                 )
         else:
             result = wrapper.raw_results("Paris weather", max_results=2, **lc_options)
         record("langchain.search", "search", result)
+        if fixture_client:
+            import inspect
+            from unittest.mock import patch
+
+            from langchain_tavily import _utilities as utilities
+
+            wrappers = [
+                (
+                    "extract",
+                    utilities.TavilyExtractAPIWrapper,
+                    {"urls": ["https://fixture.example/"]},
+                ),
+                (
+                    "map",
+                    utilities.TavilyMapAPIWrapper,
+                    {"url": "https://fixture.example/", "limit": 2},
+                ),
+                (
+                    "crawl",
+                    utilities.TavilyCrawlAPIWrapper,
+                    {"url": "https://fixture.example/", "limit": 2},
+                ),
+                (
+                    "research",
+                    utilities.TavilyResearchAPIWrapper,
+                    {"input": "Paris weather", "research_model": "mini"},
+                ),
+            ]
+            with (
+                patch("requests.post", session.post),
+                patch("requests.get", session.get),
+            ):
+                for endpoint, cls, given in wrappers:
+                    wrapper = cls(tavily_api_key=args.api_key, api_base_url=base)
+                    parameters = inspect.signature(wrapper.raw_results).parameters
+                    values = {
+                        name: None
+                        for name, parameter in parameters.items()
+                        if parameter.kind
+                        not in (
+                            inspect.Parameter.VAR_KEYWORD,
+                            inspect.Parameter.VAR_POSITIONAL,
+                        )
+                    }
+                    values.update(given)
+                    values["include_usage"] = True
+                    result = wrapper.raw_results(**values)
+                    record("langchain." + endpoint, endpoint, result)
+                    if endpoint == "research":
+                        streamed = wrapper.raw_results(
+                            input="Paris weather",
+                            research_model="mini",
+                            output_schema=None,
+                            stream=True,
+                            citation_format="numbered",
+                        )
+                        assert b"event: done" in b"".join(streamed)
+                        rows.append({"check": "langchain.research.sse", "pass": True})
+
         rows.append(
             {
                 "complete": True,

@@ -24,7 +24,7 @@ import regex
 
 from yunshu_engine.netguard import UrlNotAllowedError, domain_matches, parse_url
 from yunshu_gateway.server_tools.research.fetcher import page
-from yunshu_gateway.server_tools.research.rank import bm25
+from yunshu_gateway.server_tools.research.rank import bm25, tokens
 from yunshu_gateway.server_tools.search import Passage, SearchError, run_search
 from yunshu_gateway.server_tools.webfetch import FetchError
 
@@ -339,12 +339,22 @@ class TavilyService:
         phrases = re.findall(r'"([^"\n]+)"', req.query)
         for index, row in enumerate(rows):
             fetched = ready.get(index)
-            text = fetched.text if fetched else row.snippet
+            text = fetched.text if fetched and fetched.text.strip() else row.snippet
+            if fetched and row.snippet:
+                terms = set(tokens(req.query))
+                page_coverage = len(terms & set(tokens(text)))
+                snippet_coverage = len(terms & set(tokens(row.snippet)))
+                if snippet_coverage > page_coverage:
+                    text = (
+                        row.snippet
+                    )  # no quality loss from an irrelevant fetched page
+
             meta = fetched.metadata if fetched else {}
             if req.exact_match and (
                 not fetched
                 or any(
-                    plain_text(phrase).casefold() not in plain_text(text).casefold()
+                    plain_text(phrase).casefold()
+                    not in plain_text(fetched.text).casefold()
                     for phrase in phrases
                 )
             ):
@@ -378,7 +388,9 @@ class TavilyService:
                 "content": content,
                 "score": score,
                 "raw_content": (
-                    plain_text(text) if req.include_raw_content == "text" else text
+                    plain_text(fetched.text)
+                    if req.include_raw_content == "text"
+                    else fetched.text
                 )
                 if req.include_raw_content and fetched
                 else None,
@@ -505,11 +517,26 @@ class TavilyService:
     async def extract(self, req: ExtractRequest):
         start = time.perf_counter()
         results, failures = [], []
+        syntactic = []
+        for url in req.urls:
+            try:
+                parse_url(url)
+                if len(url) > 2048:
+                    raise UrlNotAllowedError("URL exceeds 2048 characters")
+                syntactic.append(url)
+            except UrlNotAllowedError:
+                failures.append(
+                    {"url": url, "error": "Validation Error: Invalid URL format"}
+                )
+        if not syntactic:
+            raise TavilyError(400, "All URLs failed validation")
         timeout = req.timeout or (30 if req.extract_depth == "advanced" else 10)
 
         async def one(url):
             try:
                 fetched = await self.fetched(url, automated=False, timeout=timeout)
+                if not fetched.text.strip():
+                    raise FetchError("url_not_accessible", "Failed to retrieve content")
                 return self.extracted_result(fetched, req, req.query), None
             except (FetchError, TimeoutError, UrlNotAllowedError) as exc:
                 return None, {
@@ -517,7 +544,7 @@ class TavilyService:
                     "error": str(exc) or "Failed to retrieve content",
                 }
 
-        for result, failed in await asyncio.gather(*(one(url) for url in req.urls)):
+        for result, failed in await asyncio.gather(*(one(url) for url in syntactic)):
             if result is not None:
                 results.append(result)
             if failed is not None:
@@ -872,6 +899,15 @@ class TavilyService:
             call_id = "fc_" + uuid.uuid4().hex
             tool("WebSearch", "tool_call", call_id, queries=queries)
             for query in queries:
+                subtopic_id = "fc_" + uuid.uuid4().hex
+                if row["model"] == "pro":
+                    tool(
+                        "ResearchSubtopic",
+                        "tool_call",
+                        subtopic_id,
+                        queries=[query],
+                        parent_tool_call_id=call_id,
+                    )
                 params = {
                     "query": query,
                     "search_depth": "advanced",
@@ -894,6 +930,21 @@ class TavilyService:
                     for page in extracted["results"]:
                         if page["url"] in by_url:
                             by_url[page["url"]]["content"] = page["raw_content"]
+                if row["model"] == "pro":
+                    tool(
+                        "ResearchSubtopic",
+                        "tool_response",
+                        subtopic_id,
+                        sources=[
+                            {
+                                "title": source["title"],
+                                "url": source["url"],
+                                "favicon": source.get("favicon"),
+                            }
+                            for source in result["results"]
+                        ],
+                        parent_tool_call_id=call_id,
+                    )
 
             sources = list({source["url"]: source for source in sources}.values())[:20]
             source_list = [

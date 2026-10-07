@@ -60,12 +60,12 @@ PROVIDER_ORDER = (
     "mwmbl",
 )
 logger = logging.getLogger(__name__)
-PRIVACY_NOTICE = "Web search sends query text off-device. Keyless mode uses DuckDuckGo (best effort) and Wikipedia; fetched pages contact their origins without cookies. Set YUNSHU_WEB_SEARCH_PROVIDER=none to disable."
+PRIVACY_NOTICE = "Web search sends query text off-device. Keyless mode uses DuckDuckGo (best effort), Wikipedia and Mwmbl; fetched pages contact their origins without cookies. Set YUNSHU_WEB_SEARCH_PROVIDER=none to disable."
 
 SETUP_HINT = (
     "Server-side web search is off. Enable built-in metasearch with "
     "YUNSHU_WEB_SEARCH_PROVIDER=auto, or provide a Brave, Serper or Exa key. "
-    "SearXNG is an optional explicit backend. `yunshu config` shows provider health."
+    "SearXNG is optional via YUNSHU_SEARXNG_URL. `yunshu config` shows provider health."
 )
 
 
@@ -412,8 +412,12 @@ class Wikipedia(SearchProvider):
     name = "wikipedia"
 
     async def search(self, query, *, limit, client, **kwargs):
+        language = (kwargs.get("options") or {}).get("language") or "en"
+        language = language.split("-", 1)[0]
+        if not re.fullmatch(r"[a-z]{2,3}", language):
+            language = "en"
         r = await client.get(
-            "https://en.wikipedia.org/w/api.php",
+            f"https://{language}.wikipedia.org/w/api.php",
             params={
                 "action": "query",
                 "list": "search",
@@ -430,7 +434,8 @@ class Wikipedia(SearchProvider):
         return [
             SearchResult(
                 x["title"],
-                "https://en.wikipedia.org/wiki/" + quote(x["title"].replace(" ", "_")),
+                f"https://{language}.wikipedia.org/wiki/"
+                + quote(x["title"].replace(" ", "_")),
                 _clean(html.unescape(x.get("snippet", ""))),
                 x.get("timestamp"),
             )

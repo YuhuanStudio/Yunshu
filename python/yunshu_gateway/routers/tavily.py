@@ -38,10 +38,10 @@ MODELS = {
 def context(request):
     return {
         "key": request.headers.get("authorization", "").removeprefix("Bearer "),
-        "project_id": request.headers.get("x-project-id"),
-        "session_id": request.headers.get("x-session-id"),
+        "project_id": (request.headers.get("x-project-id") or "")[:200],
+        "session_id": (request.headers.get("x-session-id") or "")[:200],
         "human_id": request.headers.get("x-human-id"),
-        "client_source": request.headers.get("x-client-source"),
+        "client_source": (request.headers.get("x-client-source") or "")[:200],
     }
 
 

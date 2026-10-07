@@ -455,3 +455,89 @@ def test_pdf_extract_uses_guarded_byte_cap(monkeypatch):
             )
 
     assert asyncio.run(run()).media_type == "application/pdf"
+
+
+def test_invalid_research_files_and_rate_limit(client, srv):
+    response = client.post(
+        "/tavily/research",
+        json={
+            "input": "q",
+            "files": [{"name": "notes.md", "data": "!!!", "type": "base64"}],
+        },
+    )
+    assert response.status_code == 400 and "detail" in response.json()
+    for i in range(4):
+        srv.tasks[str(i)] = {"status": "in_progress"}
+    response = client.post("/tavily/research", json={"input": "q"})
+    assert response.status_code == 429 and response.headers["retry-after"] == "10"
+
+
+def test_main_gateway_body_limit_and_errors(monkeypatch, srv):
+    from yunshu_gateway.main import create_app
+
+    settings.set_override("YUNSHU_MAX_REQUEST_SIZE", 1024)
+    try:
+        app = create_app()
+        app.state.tavily_service = srv
+        client = TestClient(app)
+        bad = client.post("/tavily/search", json={"query": "x" * 2000})
+        assert bad.status_code == 413 and bad.json() == {
+            "detail": {"error": "Request body too large"}
+        }
+        unknown = client.get("/tavily/unknown")
+        assert unknown.status_code == 404 and "error" in unknown.json()["detail"]
+    finally:
+        settings.clear_overrides()
+
+
+def test_extract_url_validation_and_partial_failure(client):
+    bad = client.post(
+        "/tavily/extract", json={"urls": ["file:///etc/passwd", "not-a-url"]}
+    )
+    assert (
+        bad.status_code == 400
+        and bad.json()["detail"]["error"] == "All URLs failed validation"
+    )
+    partial = client.post(
+        "/tavily/extract", json={"urls": ["https://example.org", "not-a-url"]}
+    ).json()
+    assert len(partial["results"]) == len(partial["failed_results"]) == 1
+
+
+async def test_irrelevant_page_does_not_demote_a_better_provider_excerpt(srv):
+    original = srv.fetcher
+
+    async def unrelated(url, **kwargs):
+        result = await original(url, **kwargs)
+        result.text = "Unrelated orange orchard content"
+        return result
+
+    srv.fetcher = unrelated
+    result = await srv.search(
+        SearchRequest(query="Paris sunny", include_raw_content=True)
+    )
+    assert result["results"][0]["content"] == "Paris is sunny."
+    assert result["results"][0]["raw_content"] == "Unrelated orange orchard content"
+
+
+async def test_exact_match_checks_the_page_not_the_provider_snippet(srv):
+    original = srv.fetcher
+
+    async def unrelated(url, **kwargs):
+        result = await original(url, **kwargs)
+        result.text = "Unrelated content"
+        return result
+
+    srv.fetcher = unrelated
+    result = await srv.search(SearchRequest(query='"Paris is sunny"', exact_match=True))
+    assert result["results"] == []
+
+
+async def test_pro_has_serial_subtopic_tool_traces(srv):
+    created = srv.start_research(
+        ResearchRequest(input="Paris weather and travel", model="pro"), {}
+    )
+    await srv.tasks[created["request_id"]]["_task"]
+    frames = "".join([frame async for frame in srv.stream(created["request_id"])])
+    assert "ResearchSubtopic" in frames and "parent_tool_call_id" in frames
+    assert srv.research(created["request_id"])["usage"]["credits"] >= 15

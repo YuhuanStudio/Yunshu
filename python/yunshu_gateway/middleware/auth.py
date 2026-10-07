@@ -61,13 +61,13 @@ class _ErrorFormatter:
         # MCP is JSON-RPC — a middleware-level auth/rate-limit denial on /v1/mcp
         # must return a JSON-RPC 2.0 error object, not the OpenAI envelope a JSON-RPC client
         # can't parse. id is null (no parsed body).
-        if path.startswith("/tavily/"):
+        if path.startswith("/tavily/") and path != "/tavily/mcp":
             return JSONResponse(
                 status_code=status_code,
                 content={"detail": {"error": message}},
                 headers=headers,
             )
-        if path == "/v1/mcp":
+        if path in ("/v1/mcp", "/tavily/mcp"):
             return JSONResponse(
                 status_code=status_code,
                 content={
