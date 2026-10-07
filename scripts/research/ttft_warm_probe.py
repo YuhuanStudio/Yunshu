@@ -142,14 +142,14 @@ def partition_spans(spans, duration_ms, thread):
     return {key: round(value, 3) for key, value in totals.items()}
 
 
-def validate_response(result, phase):
+def validate_response(result, phase, *, require_followup_hit=True):
     if result["ct"] < 1 or result["ttft_s"] <= 0:
         raise ValueError("missing generated token or TTFT")
     if phase == "cold" and result["cached"] != 0:
         raise ValueError("first request is not cold")
     if phase == "warm" and result["cached"] < result["pt"] - 8:
         raise ValueError("warm request is not a full hit")
-    if phase == "followup" and not result["cached"]:
+    if phase == "followup" and require_followup_hit and not result["cached"]:
         raise ValueError("followup request did not hit APC")
 
 
@@ -187,11 +187,21 @@ def main():
         help="cold reply length used in follow-up, matching yv long",
     )
     ap.add_argument("--out", type=Path, required=True)
+    ap.add_argument(
+        "--allow-followup-miss",
+        action="store_true",
+        help="tiny pilot only: cache policy may not retain a reusable historical-turn boundary",
+    )
     ap.add_argument("--draft", default="dflash", choices=("dflash", "mtp", "off"))
     ap.add_argument(
         "--calls",
         action="store_true",
         help="diagnostic Python/C spans (adds profiling overhead)",
+    )
+    ap.add_argument(
+        "--no-stacks",
+        action="store_true",
+        help="call/GC spans only, to test stack-sampler observer effects",
     )
     ap.add_argument("--thread", default="mlx", help="executor thread name substring")
     ap.add_argument(
@@ -201,6 +211,8 @@ def main():
     )
     ap.add_argument("--env", action="append", default=[], help="server environment K=V")
     a = ap.parse_args()
+    if a.no_stacks and not a.calls:
+        ap.error("--no-stacks requires --calls")
     os.environ["TFB_YUNSHU_SRC"] = a.src
     os.environ["TFB_OUT"] = str(a.out.parent / a.tag)
     os.environ["TFB_PORT_LAST"] = "18996"
@@ -219,6 +231,7 @@ def main():
         env["PYTHONPATH"] = f"{HERE / 'ttft_probe_site'}:{env.get('PYTHONPATH', '')}"
         env["TTFT_PROBE_OUT"] = prof
         env["TTFT_PROBE_CALLS"] = "1" if a.calls else "0"
+        env["TTFT_PROBE_STACKS"] = "0" if a.no_stacks else "1"
         kw["env"] = env
         return real_popen(cmd, **kw)
 
@@ -228,7 +241,7 @@ def main():
         if a.synthetic_prompt
         else tfbench.load_prompt(f"{a.kind}-{a.ctx}")
     )
-    extra_env = {"YUNSHU_VLM_DRAFT": a.draft}
+    extra_env = {"YUNSHU_VLM_DRAFT": tfbench.D if a.draft == "dflash" else a.draft}
     for assignment in a.env:
         key, sep, value = assignment.partition("=")
         if not key or not sep:
@@ -252,13 +265,16 @@ def main():
                     },
                 ]
             t0 = time.perf_counter()
-            r = tfbench.send(s.url, body, capture_timestamps=True)
+            trace_id = f"ttft-{os.getpid()}-{i}"
+            r = tfbench.send(s.url, body, capture_timestamps=True, trace_id=trace_id)
             sent_at = r.pop("_sent_at_s")
             first_at = r.pop("_first_at_s")
+            if first_at is None:
+                raise ValueError("stream had no visible first token")
             if phase == "cold":
                 reply = r["_text"]
             r.pop("_text", None)
-            validate_response(r, phase)
+            validate_response(r, phase, require_followup_hit=not a.allow_followup_miss)
             rows.append(
                 dict(
                     rep=i,
@@ -266,6 +282,7 @@ def main():
                     start=sent_at,
                     first=first_at,
                     client_prepare_ms=(sent_at - t0) * 1000,
+                    trace_id=trace_id,
                     **r,
                 )
             )
@@ -283,8 +300,8 @@ def main():
             if line
         ]
         runtime = [json.loads(p.read_text()) for p in out.glob("runtime.*.json")]
-        if not samples:
-            print("FAIL: no samples")
+        if not samples and not spans:
+            print("FAIL: no probe evidence")
             sys.exit(1)
         mode = tfbench.engaged_spec_mode("yunshu", s.log.read_text())
         if mode is None:
@@ -304,7 +321,12 @@ def main():
                         detail=detail,
                     )
                     for t, end, name, label, detail in spans
-                    if t < row["first"] and end > row["start"]
+                    if t < row["first"]
+                    and end > row["start"]
+                    and (
+                        label not in ("http_receive", "http_first_sse")
+                        or detail.endswith("request=" + row["trace_id"])
+                    )
                 ]
                 row["exclusive_call_stage_ms"] = partition_spans(
                     row["call_spans"], (row["first"] - row["start"]) * 1000, a.thread
@@ -336,6 +358,8 @@ def main():
                     engaged=mode,
                     timing_method="Python/C call spans + 2ms stack sampling; not GPU attribution",
                     diagnostic_only=True,
+                    followup_apc_required=not a.allow_followup_miss,
+                    stack_sampling=not a.no_stacks,
                     runtime=runtime,
                 )
                 f.write(json.dumps(row) + "\n")

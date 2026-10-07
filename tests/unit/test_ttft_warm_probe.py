@@ -127,7 +127,10 @@ def test_nested_call_spans_are_not_double_counted():
     assert sum(result.values()) == 100
 
 
-def test_main_with_fake_server_writes_complete_and_engaged_mode(tmp_path, monkeypatch):
+@pytest.mark.parametrize("mode", ["off", "dflash"])
+def test_main_with_fake_server_writes_complete_and_engaged_mode(
+    tmp_path, monkeypatch, mode
+):
     import sys
     from types import SimpleNamespace
 
@@ -142,10 +145,26 @@ def test_main_with_fake_server_writes_complete_and_engaged_mode(tmp_path, monkey
     )
     requests = []
 
-    def send(url, body, *, capture_timestamps=False):
-        assert capture_timestamps
+    def send(url, body, *, capture_timestamps=False, trace_id=None):
+        assert capture_timestamps and trace_id.startswith("ttft-")
         requests.append(body)
         phase = len(requests)
+        # All fake requests share the same clock interval. Only header correlation
+        # can keep an older request's final coroutine resume out of the next one.
+        with (tmp_path / "cpu" / "samples.spans.1").open("a") as f:
+            for stamp, label in ((1.01, "http_receive"), (1.08, "http_first_sse")):
+                f.write(
+                    json.dumps(
+                        [
+                            stamp,
+                            stamp,
+                            "MainThread",
+                            label,
+                            "uvicorn:send:request=" + trace_id,
+                        ]
+                    )
+                    + "\n"
+                )
         return dict(
             _text="reply",
             ct=32,
@@ -156,15 +175,22 @@ def test_main_with_fake_server_writes_complete_and_engaged_mode(tmp_path, monkey
             _first_at_s=1.1,
         )
 
+    def create_server(engine, env, tag, **kw):
+        assert env["YUNSHU_VLM_DRAFT"] == (
+            "/fixture/drafter" if mode == "dflash" else "off"
+        )
+        return server
+
     fake = SimpleNamespace(
         subprocess=SimpleNamespace(Popen=lambda *a, **k: None),
-        Srv=lambda *a, **k: server,
+        Srv=create_server,
+        D="/fixture/drafter",
         load_prompt=lambda name: "prompt",
         req=lambda model, prompt, count: dict(
             messages=[dict(role="user", content=prompt)]
         ),
         send=send,
-        engaged_spec_mode=lambda *a: "off",
+        engaged_spec_mode=lambda *a: mode,
     )
     monkeypatch.setitem(sys.modules, "tfbench", fake)
     monkeypatch.setattr(probe, "signal_dump", lambda pid: None)
@@ -187,15 +213,20 @@ def test_main_with_fake_server_writes_complete_and_engaged_mode(tmp_path, monkey
             "--warm",
             "1",
             "--draft",
-            "off",
+            mode,
         ],
     )
     probe.main()
     rows = [json.loads(line) for line in out.read_text().splitlines()]
     assert rows[-1] == dict(complete=True, requests=3, threads=["mlx"])
     assert [row["phase"] for row in rows[:-1]] == ["cold", "warm", "followup"]
-    assert all(row["engaged"] == "off" for row in rows[:-1])
+    assert all(row["engaged"] == mode for row in rows[:-1])
     assert requests[-1]["messages"][1] == dict(role="assistant", content="reply")
+    for row in rows[:-1]:
+        assert len(row["call_spans"]) == 2
+        assert row["http"]["ingress_ms"] == pytest.approx(10)
+        assert row["http"]["first_sse_submit_ms"] == pytest.approx(80)
+        assert row["http"]["sse_submit_to_client_ms"] == pytest.approx(20)
 
 
 def test_load_samples_does_not_mix_call_spans_with_stacks(tmp_path):
@@ -230,3 +261,40 @@ def test_http_trace_ignores_role_usage_and_done():
         )
         assert module.sse_has_token(body)
     assert not module.sse_has_token(b"data: [DONE]\n\n")
+
+
+def test_native_wrapper_preserves_arguments_return_and_records_wait(monkeypatch):
+    from types import SimpleNamespace
+
+    spec = importlib.util.spec_from_file_location(
+        "native_spans", _PATH.parent / "ttft_probe_site/spans.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    times = iter((1.0, 1.1, 2.0, 2.2))
+    monkeypatch.setattr(module.time, "perf_counter", lambda: next(times))
+    calls = []
+
+    def original(*args, **kw):
+        calls.append((args, kw))
+        return "result"
+
+    native = SimpleNamespace(eval=original)
+    spans = module.CallSpans()
+    spans.wrap_native(native)
+    inputs = ([1, 2],)
+    assert native.eval(*inputs, value=True) == "result"
+    assert calls == [(inputs, dict(value=True))]
+    assert spans.rows[0][3] == "gpu_wait"
+    spans.gc_event("start", dict(generation=2))
+    spans.gc_event("stop", dict(generation=2, collected=7))
+    assert spans.rows[1][:2] == (2.0, 2.2)
+    assert spans.rows[1][3] == "python_gc"
+    assert "collected=7" in spans.rows[1][4]
+
+
+def test_tiny_can_explicitly_allow_followup_miss_but_long_default_fails():
+    result = dict(ct=1, ttft_s=0.1, cached=0, pt=100)
+    with pytest.raises(ValueError, match="followup"):
+        probe.validate_response(result, "followup")
+    probe.validate_response(result, "followup", require_followup_hit=False)

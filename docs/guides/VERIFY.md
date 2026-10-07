@@ -165,3 +165,9 @@ preparation, Uvicorn ingress and first nonempty SSE submission, and runtime
 package versions. SSE role-only, usage and DONE records are excluded from first-token
 measurement. `--synthetic-prompt --draft off` is a self-contained tiny-model pilot,
 not the long timing corpus.
+
+Native MLX calls are wrapped because nanobind callables need not produce Python
+`c_call` profiler events. GC spans retain their triggering stack. Use
+`--calls --no-stacks` for an observer-effect control; stack-sampler allocations
+can themselves create GC pressure. Tiny pilots may explicitly pass
+`--allow-followup-miss`; the yv diagnostic suite and long gates require APC hits.

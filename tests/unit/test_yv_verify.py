@@ -1007,7 +1007,14 @@ def test_ttft_profile_is_opt_in_and_requires_complete_spans(tmp_path):
     assert "ttft_profile" not in suites.SUITES["long"]["stages"]
     path = tmp_path / "profile.jsonl"
     rows = [
-        dict(phase=phase, call_spans=[dict(stage="gpu_wait")], engaged="dflash")
+        dict(
+            phase=phase,
+            call_spans=[dict(stage="gpu_wait")],
+            engaged="dflash",
+            cached=1,
+            followup_apc_required=True,
+            http=dict(first_sse_submit_ms=10),
+        )
         for phase in ("cold", "warm", "warm", "warm", "followup")
     ]
     path.write_text("\n".join(json.dumps(r) for r in rows) + "\n")

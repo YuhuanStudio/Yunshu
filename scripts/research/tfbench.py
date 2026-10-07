@@ -191,12 +191,15 @@ class Srv:
             shutil.rmtree(self.home / ".yunshu" / "cache", ignore_errors=True)
 
 
-def send(url, body, timeout=600, *, capture_timestamps=False):
+def send(url, body, timeout=600, *, capture_timestamps=False, trace_id=None):
     body = dict(body, stream=True, stream_options={"include_usage": True})
+    headers = {"Content-Type": "application/json", "Authorization": "Bearer k"}
+    if trace_id is not None:
+        headers["X-TTFT-Probe-ID"] = trace_id
     req = urllib.request.Request(
         url + "/v1/chat/completions",
         json.dumps(body).encode(),
-        {"Content-Type": "application/json", "Authorization": "Bearer k"},
+        headers,
     )
     t0 = time.perf_counter()
     tf = None
@@ -285,7 +288,7 @@ def send(url, body, timeout=600, *, capture_timestamps=False):
     )
     if capture_timestamps:
         result["_sent_at_s"] = t0
-        result["_first_at_s"] = tf or t1
+        result["_first_at_s"] = tf
     return result
 
 

@@ -991,6 +991,13 @@ def _ttft_profile_valid(path: Path):
         return False, "unexpected diagnostic request phases"
     if any(not r.get("call_spans") or not r.get("engaged") for r in requests[1:]):
         return False, "missing diagnostic spans or engaged mode"
+    for row in requests[1:]:
+        if not any(r.get("stage") == "gpu_wait" for r in row["call_spans"]):
+            return False, "missing native evaluation spans"
+        if row.get("http", {}).get("first_sse_submit_ms") is None:
+            return False, "missing first nonempty SSE marker"
+        if not row.get("cached") or not row.get("followup_apc_required"):
+            return False, "diagnostic did not require and exercise APC"
     return True, ""
 
 

@@ -27,9 +27,14 @@ if _OUT:
         )
     _calls = None
     if os.environ.get("TTFT_PROBE_CALLS") == "1":
+        import gc
+
+        import mlx.core as mx
         from spans import CallSpans
 
         _calls = CallSpans()
+        _calls.wrap_native(mx)
+        gc.callbacks.append(_calls.gc_event)
         sys.setprofile(_calls.profile)
         threading.setprofile(_calls.profile)
 
@@ -71,4 +76,5 @@ if _OUT:
             _calls.rows.clear()
 
     signal.signal(signal.SIGUSR1, _dump)
-    threading.Thread(target=_loop, daemon=True, name="ttft-probe-sampler").start()
+    if os.environ.get("TTFT_PROBE_STACKS", "1") != "0":
+        threading.Thread(target=_loop, daemon=True, name="ttft-probe-sampler").start()

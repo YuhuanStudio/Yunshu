@@ -4,6 +4,7 @@ Profiling perturbs Python costs: use this to locate waits, never for A/B speed.
 """
 
 import json
+import sys
 import threading
 import time
 from collections import deque
@@ -19,6 +20,9 @@ NAMES = {
     "sample": "sampling",
     "_sample_with_positions": "sampling",
     "sample_target": "sampling",
+    "_sync_index": "copy_index",
+    "_dflash_rounds": "first_round",
+    "_speculative_walk": "first_round",
 }
 C_NAMES = {"eval", "async_eval", "clear_cache", "synchronize"}
 
@@ -29,6 +33,8 @@ class CallSpans:
         self.active = {}
         self.http_seen = set()
         self.sse_seen = set()
+        self.native_wrapped = False
+        self.gc_started = {}
 
     def profile(self, frame, event, arg):
         tid = threading.get_ident()
@@ -49,6 +55,8 @@ class CallSpans:
             label = NAMES[name]
             detail = f"{filename}:{name}:{frame.f_code.co_firstlineno}"
         elif event in ("c_call", "c_return", "c_exception"):
+            if self.native_wrapped:
+                return
             name = getattr(arg, "__name__", "")
             if name not in C_NAMES or not str(
                 getattr(arg, "__module__", "")
@@ -75,12 +83,77 @@ class CallSpans:
                     )
                 )
 
+    def wrap_native(self, module):
+        """Nanobind callables need not emit c_call; explicitly time unchanged calls."""
+
+        def wrap(original, name):
+            def invoke(*args, **kwargs):
+                caller = sys._getframe(1)
+                detail = f"{caller.f_code.co_filename}:{caller.f_code.co_name}:{caller.f_lineno}:{name}"
+                start = time.perf_counter()
+                try:
+                    return original(*args, **kwargs)
+                finally:
+                    self.rows.append(
+                        (
+                            start,
+                            time.perf_counter(),
+                            threading.current_thread().name,
+                            "gpu_wait",
+                            detail,
+                        )
+                    )
+
+            return invoke
+
+        for name in C_NAMES:
+            original = getattr(module, name, None)
+            if original is not None:
+                setattr(module, name, wrap(original, name))
+        self.native_wrapped = True
+
+    def gc_event(self, phase, info):
+        key = (threading.get_ident(), info["generation"])
+        if phase == "start":
+            start = time.perf_counter()
+            frame = sys._getframe(1)
+            stack = []
+            for _ in range(5):
+                if frame is None:
+                    break
+                stack.append(
+                    f"{frame.f_code.co_filename}:{frame.f_code.co_name}:{frame.f_lineno}"
+                )
+                frame = frame.f_back
+            self.gc_started[key] = (start, " < ".join(stack))
+        else:
+            start = self.gc_started.pop(key, None)
+            if start is not None:
+                start, stack = start
+                detail = f"stack={stack} generation={info['generation']} collected={info.get('collected', 0)} uncollectable={info.get('uncollectable', 0)}"
+                self.rows.append(
+                    (
+                        start,
+                        time.perf_counter(),
+                        threading.current_thread().name,
+                        "python_gc",
+                        detail,
+                    )
+                )
+
     def http_event(self, frame, name):
         cycle = frame.f_locals.get("self")
         scope = getattr(cycle, "scope", {})
         if scope.get("path") != "/v1/chat/completions":
             return
-        key = id(cycle)
+        trace_id = (
+            dict(scope.get("headers", []))
+            .get(b"x-ttft-probe-id", b"")
+            .decode("ascii", errors="replace")
+        )
+        if not trace_id:
+            return
+        key = (id(cycle), trace_id)
         label = None
         if name == "run_asgi" and key not in self.http_seen:
             self.http_seen.add(key)
@@ -102,7 +175,7 @@ class CallSpans:
                     now,
                     threading.current_thread().name,
                     label,
-                    f"{frame.f_code.co_filename}:{name}",
+                    f"{frame.f_code.co_filename}:{name}:request={trace_id}",
                 )
             )
 
