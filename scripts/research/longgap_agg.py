@@ -7,11 +7,11 @@ tok/s over reps. GAP rows: decode = arm tok/s / TF tok/s; TTFT = TF / arm (>100%
 
 import glob
 import json
-from pathlib import Path
 import re
 import statistics as st
 import sys
 from collections import defaultdict
+from pathlib import Path
 
 
 def label(path):
