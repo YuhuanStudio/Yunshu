@@ -33,6 +33,7 @@ class Cell:
     # reuse: a content key (commit, env, model, harness hash, cell parameters), never run paths.
     share_key: str = ""
     device: str = ""  # "any": small-model liveness cells may run on the M3 lane
+    cwd: Path | None = None  # remote snapshots must come from this pinned arm
 
     @property
     def sig(self) -> str:
@@ -174,6 +175,7 @@ class Executor:
             out=out if cell.needs_out else None,
             expect_complete=cell.needs_out,
             device=cell.device,
+            cwd=cell.cwd,
         )
         self.run.append(
             cell.stage,

@@ -981,6 +981,51 @@ def _memory_valid(path: Path):
     return True, ""
 
 
+def _multimodal_valid(path: Path, sizes: list, require_hit: bool):
+    rows = read_jsonl(path)
+    if not rows or not rows[-1].get("complete"):
+        return False, "incomplete multimodal evidence"
+    requests = {
+        (r.get("size"), r.get("kind")): r for r in rows if r.get("event") == "request"
+    }
+    expected = {
+        (n, k)
+        for n in sizes
+        for k in ("cold", "warm", "turn2-hit", "turn2-miss", "other-image")
+    }
+    expected.update(
+        (0, k)
+        for k in (
+            "anthropic-cold",
+            "anthropic-warm",
+            "anthropic-turn2-hit",
+            "anthropic-turn2-miss",
+        )
+    )
+    if set(requests) != expected:
+        return False, "missing multimodal requests"
+    for n, pairs in [
+        (n, [("cold", "warm"), ("turn2-miss", "turn2-hit")]) for n in sizes
+    ] + [
+        (
+            0,
+            [
+                ("anthropic-cold", "anthropic-warm"),
+                ("anthropic-turn2-miss", "anthropic-turn2-hit"),
+            ],
+        )
+    ]:
+        for miss, hit in pairs:
+            a, b = requests[n, miss], requests[n, hit]
+            if not a.get("ids") or a["ids"] != b.get("ids") or a.get("cached") != 0:
+                return False, "raw token hit/miss identity failed"
+            if require_hit and b.get("cached", 0) <= 0:
+                return False, "media APC not engaged"
+    if any(requests[n, "other-image"].get("cached") != 0 for n in sizes):
+        return False, "different image reused state"
+    return True, ""
+
+
 def stage_multimodal(ctx: Ctx) -> StageResult:
     """Pinned media sessions: raw IDs, pixel isolation, short + long TTFT."""
     cells = []
@@ -999,9 +1044,24 @@ def stage_multimodal(ctx: Ctx) -> StageResult:
             )
             argv = ["env", f"PYTHONPATH={ctx.tree(arm).path / 'python'}"]
             argv += [f"{k}={v}" for k, v in env.items()]
+            remote = "gemma-4-e2b" in ctx.model and int(ctx.suite.get("reps", 3)) == 1
+            script = ctx.cand.path / "scripts/research/multimodal_apc.py"
+            if remote:
+                # gpuq snapshots cwd, not arbitrary external pinned trees. Run
+                # the committed common harness in each arm's own snapshot; the
+                # old arm need not contain this new measurement script.
+                source = script.read_text()
+                compile(source, str(script), "exec")  # CPU preflight before submit
+                entry = [
+                    ctx.py,
+                    "-c",
+                    "import sys; sys.path.insert(0, 'scripts/research'); "
+                    + f"exec(compile({source!r}, 'multimodal_apc.py', 'exec'))",
+                ]
+            else:
+                entry = [ctx.py, str(script)]
             argv += [
-                ctx.py,
-                str(ctx.cand.path / "scripts/research/multimodal_apc.py"),
+                *entry,
                 "--model",
                 ctx.model,
                 "--out",
@@ -1019,9 +1079,11 @@ def stage_multimodal(ctx: Ctx) -> StageResult:
                     mem_gb=ctx.mem_gb,
                     quiet=int(ctx.suite.get("reps", 3)) >= 3,
                     timeout_min=20,
-                    device="any"
-                    if "gemma-4-e2b" in ctx.model and int(ctx.suite.get("reps", 3)) == 1
-                    else "m5",
+                    device="m3" if remote else "m5",
+                    cwd=ctx.tree(arm).path if remote else None,
+                    validate=lambda path, hit=arm == "cand": _multimodal_valid(
+                        path, ctx.suite["ctx"], hit
+                    ),
                 )
             )
     results = ctx.exe.run_cells(cells)
@@ -1042,6 +1104,11 @@ def stage_multimodal(ctx: Ctx) -> StageResult:
                 (r["kind"], r["size"], r["sha"]) for r in c
             ]:
                 reasons.append(f"raw token identity differs base/cand rep {rep}")
+            br = read_jsonl(results[f"base-r{rep}"].evidence)
+            cr = read_jsonl(results[f"cand-r{rep}"].evidence)
+            bd, cd = {r.get("device") for r in br}, {r.get("device") for r in cr}
+            if len(bd) != 1 or bd != cd or not bd <= {"m3", "m5"}:
+                reasons.append(f"mixed or missing devices rep {rep}: {bd} / {cd}")
     return _finish(ctx, StageResult("multimodal", not reasons, reasons, numbers))
 
 

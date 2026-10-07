@@ -195,3 +195,30 @@ def test_restorable_sliding_window_family_gets_checkpoint_apc(monkeypatch):
     assert coordinator.is_checkpoint and coordinator.enabled
     runner.apc_manager.close()
     eng._executor.shutdown()
+
+
+def test_media_salt_includes_geometry_and_audio_mask_but_not_text_length(monkeypatch):
+    utils = importlib.import_module("mlx_vlm.utils")
+    raw = {
+        "input_ids": mx.array([[1, 2, 3]]),
+        "pixel_values": mx.ones((16, 8)),
+        "image_grid_thw": mx.array([[1, 4, 4]]),
+        "input_features": mx.ones((1, 4, 8)),
+        "feature_attention_mask": mx.array([[1, 1, 1, 0]]),
+    }
+    monkeypatch.setattr(utils, "prepare_inputs", lambda *a, **k: dict(raw))
+    model = SimpleNamespace(
+        config=SimpleNamespace(image_token_index=None),
+        language_model=object(),
+        get_input_embeddings=lambda *a, **k: SimpleNamespace(to_dict=lambda: {}),
+    )
+    runner = VLMBatchRunner(model, processor=object(), apc_manager=object())
+    salt = runner.prepare_media("one turn")[2]
+    assert runner.prepare_media("same image with additional text")[2] == salt
+    raw["input_ids"] = mx.array([[1, 2, 3, 4]])
+    assert runner.prepare_media("longer turn")[2] == salt
+    raw["image_grid_thw"] = mx.array([[1, 2, 8]])
+    assert runner.prepare_media("different grid, identical patch pixels")[2] != salt
+    raw["image_grid_thw"] = mx.array([[1, 4, 4]])
+    raw["feature_attention_mask"] = mx.array([[1, 1, 0, 0]])
+    assert runner.prepare_media("different valid audio features")[2] != salt

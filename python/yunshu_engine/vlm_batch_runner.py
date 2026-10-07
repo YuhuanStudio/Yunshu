@@ -399,6 +399,23 @@ class VLMBatchRunner:
                 media={
                     "audio": raw.get("input_features"),
                     "video": raw.get("pixel_values_videos"),
+                    # Equal patch pixels can have different spatial grids;
+                    # audio masks/lengths also affect what the encoder sees.
+                    # Prompt-level masks/positions are excluded so a text-only
+                    # continuation keeps the same media namespace.
+                    **{
+                        k: raw.get(k)
+                        for k in (
+                            "image_grid_thw",
+                            "video_grid_thw",
+                            "image_sizes",
+                            "image_attention_mask",
+                            "feature_attention_mask",
+                            "audio_feature_lengths",
+                            "audio_lengths",
+                            "second_per_grid_ts",
+                        )
+                    },
                 },
                 model=self.model.language_model,
                 processor=self.processor,

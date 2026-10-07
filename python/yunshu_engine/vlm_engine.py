@@ -1822,15 +1822,13 @@ class VLMEngine:
         buffer_cache.install(float(cache_gib))
         budget = self._apc_memory_gb()
         if self._apc_backend is None and budget > 0:
-            from mlx_vlm.apc import semantic_extra_hash
-
-            from .apc_manager import YunshuAPCManager
-
             # A rotating cache cannot be assembled from dense KV blocks, but
             # its native snapshot includes the window, absolute offset and
             # ring index. Upstream's grouped plan checks that every component
             # has a restore contract before admitting exact checkpoints.
-            from mlx_vlm.apc import model_apc_plan
+            from mlx_vlm.apc import model_apc_plan, semantic_extra_hash
+
+            from .apc_manager import YunshuAPCManager
 
             if model_apc_plan(lm).restorable:
                 warm_mode = str(settings.get("YUNSHU_VLM_APC_WARM"))

@@ -53,3 +53,42 @@ async def test_fake_engine_captures_hidden_tokens_and_finishes():
     result = await p.probe(engine, p.messages(1))
     assert result["ids"] == [7, 8]
     assert result["cached"] == 107 and result["text"] == "red"
+
+
+@pytest.mark.asyncio
+async def test_anthropic_probe_on_fake_http_before_loading_a_model():
+    class Engine:
+        _apc_backend = None
+
+        def _runner_events(self):
+            yield ("red", 8, "normal", "stop", 0, None)
+
+    engine = Engine()
+
+    class Response:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return dict(
+                type="message",
+                stop_reason="end_turn",
+                content=[dict(type="text", text="red")],
+                usage=dict(
+                    input_tokens=8,
+                    cache_read_input_tokens=49,
+                    cache_creation_input_tokens=0,
+                ),
+            )
+
+    class Client:
+        async def post(self, path, json):
+            assert path == "/v1/messages"
+            assert json["messages"][0]["content"][0]["cache_control"] == {
+                "type": "ephemeral"
+            }
+            list(engine._runner_events())
+            return Response()
+
+    result = await p.anthropic_probe(engine, Client(), p.anthropic_body("omni"))
+    assert result["ids"] == [8] and result["cached"] == 49 and result["pt"] == 57

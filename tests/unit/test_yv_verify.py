@@ -1000,3 +1000,39 @@ def test_detach_pins_arms_resolved_by_the_caller(tmp_path):
     ]
     dir_arm = core.Arm("cand", str(wt), "c" * 40, wt.resolve(), "")
     assert cli.pinned_spec(dir_arm) == str(wt.resolve())
+
+
+def test_multimodal_evidence_is_fail_closed(tmp_path):
+    path = tmp_path / "mm.jsonl"
+    path.write_text('{"complete": true}\n')
+    assert not stages._multimodal_valid(path, [1], True)[0]
+    rows = []
+    for size, kinds in [
+        (1, ["cold", "warm", "turn2-hit", "turn2-miss", "other-image"]),
+        (
+            0,
+            [
+                "anthropic-cold",
+                "anthropic-warm",
+                "anthropic-turn2-hit",
+                "anthropic-turn2-miss",
+            ],
+        ),
+    ]:
+        for kind in kinds:
+            hit = kind.endswith("warm") or kind.endswith("hit")
+            rows.append(
+                dict(
+                    event="request",
+                    size=size,
+                    kind=kind,
+                    ids=[7],
+                    cached=42 if hit else 0,
+                )
+            )
+    rows.append(dict(complete=True))
+    path.write_text("".join(json.dumps(r) + "\n" for r in rows))
+    assert stages._multimodal_valid(path, [1], True)[0]
+    rows[1]["ids"] = [8]
+    path.write_text("".join(json.dumps(r) + "\n" for r in rows))
+    assert not stages._multimodal_valid(path, [1], True)[0]
