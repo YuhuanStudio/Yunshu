@@ -226,6 +226,9 @@ def good_server(request: httpx.Request) -> httpx.Response:
             }
         )
     if p == "/v1/score":
+        j = dict(j)
+        j.setdefault("text_1", j.get("queries"))
+        j.setdefault("text_2", j.get("documents"))
         return js(
             {
                 "object": "list",
