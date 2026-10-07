@@ -13,7 +13,9 @@ import {
   MemoryStick,
   Palette,
   ShieldCheck,
+  SlidersHorizontal,
 } from "lucide-react";
+import { ConfigView } from "./ConfigView";
 import { ModelLeaseSettings } from "./ModelLeaseSettings";
 import { SectionCard, type Engine } from "./ui";
 import type { Perform } from "./Models";
@@ -89,6 +91,7 @@ export function Settings({
               { key: "connection", label: "引擎連線", icon: Link2 },
               { key: "appearance", label: "外觀", icon: Palette },
               { key: "models", label: "模型保留", icon: MemoryStick },
+              { key: "config", label: "有效設定", icon: SlidersHorizontal },
               { key: "shortcuts", label: "鍵盤快速鍵", icon: Keyboard },
             ],
           },
@@ -177,6 +180,9 @@ export function Settings({
               title="模型操作權限"
               description="載入與卸載需要服務允許的權限；若出現 401，請使用服務設定的 YUNSHU_AUTH_TOKEN。此頁不會修改引擎啟動參數或關閉驗證。"
             />
+          </div>
+          <div id="settings-config" className="scroll-mt-4">
+            <ConfigView connection={connection} />
           </div>
           <SectionCard
             id="settings-shortcuts"

@@ -18,9 +18,10 @@ import {
   Tr,
 } from "@yuhuanowo/yunui";
 import { ExternalLink, ListTree, Search } from "lucide-react";
-import type { Connection } from "./api";
+import { ApiError, type Connection } from "./api";
 import { requestServerJson } from "./management-api";
 import { SectionCard } from "./ui";
+import { CopyIconButton, ErrorNote } from "./error-note";
 type Operation = {
   method: string;
   path: string;
@@ -30,14 +31,14 @@ type Operation = {
 };
 export function ApiCatalog({ connection }: { connection: Connection }) {
   const [operations, setOperations] = useState<Operation[]>([]),
-    [error, setError] = useState(""),
+    [error, setError] = useState<unknown>(null),
     [loading, setLoading] = useState(true),
     [query, setQuery] = useState(""),
     [tag, setTag] = useState("all");
   useEffect(() => {
     const controller = new AbortController();
     setLoading(true);
-    setError("");
+    setError(null);
     setOperations([]);
     void requestServerJson<{ paths?: Record<string, Record<string, unknown>> }>(
       connection,
@@ -71,8 +72,7 @@ export function ApiCatalog({ connection }: { connection: Connection }) {
         setOperations(next);
       })
       .catch((e) => {
-        if (!controller.signal.aborted)
-          setError(e instanceof Error ? e.message : "無法取得 API 定義");
+        if (!controller.signal.aborted) setError(e ?? new Error());
       })
       .finally(() => {
         if (!controller.signal.aborted) setLoading(false);
@@ -136,10 +136,16 @@ export function ApiCatalog({ connection }: { connection: Connection }) {
             </SelectContent>
           </Select>
         </div>
-        {error && (
-          <p role="status" className="text-xs text-warning">
-            {error}
-          </p>
+        {error != null && (
+          <ErrorNote
+            tone="warning"
+            message={
+              error instanceof ApiError
+                ? error.publicMessage
+                : "無法取得 API 定義"
+            }
+            error={error}
+          />
         )}
       </div>
       <ScrollFade className="max-h-[32rem] overflow-auto">
@@ -168,14 +174,20 @@ export function ApiCatalog({ connection }: { connection: Connection }) {
                   </Badge>
                 </Td>
                 <Td>
-                  <a
-                    className="break-all font-mono text-xs underline underline-offset-4"
-                    href={`${root}/docs#/${encodeURIComponent(item.tag)}/${encodeURIComponent(item.id)}`}
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    {item.path}
-                  </a>
+                  <span className="inline-flex items-center gap-1">
+                    <a
+                      className="break-all font-mono text-xs underline underline-offset-4"
+                      href={`${root}/docs#/${encodeURIComponent(item.tag)}/${encodeURIComponent(item.id)}`}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      {item.path}
+                    </a>
+                    <CopyIconButton
+                      value={root + item.path}
+                      label={`複製 ${item.method} ${item.path} 的完整網址`}
+                    />
+                  </span>
                 </Td>
                 <Td>
                   <span className="text-xs text-muted-foreground">

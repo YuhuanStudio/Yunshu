@@ -47,7 +47,14 @@ import {
   Reply,
   Bot,
 } from "lucide-react";
-import { streamCompletion, type CompletionBody, type Dialect } from "./stream";
+import {
+  describeStreamError,
+  streamCompletion,
+  type CompletionBody,
+  type Dialect,
+} from "./stream";
+import { ErrorNote } from "./error-note";
+import { UNDO_WINDOW_MS, thinkingOpen } from "./playground-ui-state";
 import {
   buildSnippets,
   DIALECT_LABEL,
@@ -104,9 +111,9 @@ const statLabels = {
   tokens: "tokens",
   speed: "tok/s",
   latency: "ms",
-  ttft: "TTFT",
-  cached: "快取",
-  prompt: "提示詞",
+  ttft: "首 token 延遲",
+  cached: "前綴命中",
+  prompt: "輸入",
 };
 const seconds = (ms: number) => `${number(ms / 1000, 2)} s`;
 const signed = (v: number, digits: number) =>
@@ -165,6 +172,7 @@ function ReplyStats({ run, now }: { run: Run; now: number }) {
 }
 
 function ReplyBody({ run, streaming }: { run: Run; streaming: boolean }) {
+  const [userOpen, setUserOpen] = useState<boolean | null>(null);
   return (
     <>
       {run.reasoning && (
@@ -177,6 +185,8 @@ function ReplyBody({ run, streaming }: { run: Run; streaming: boolean }) {
           }}
           content={run.reasoning}
           isStreaming={streaming}
+          open={thinkingOpen(streaming, !!run.content, userOpen)}
+          onOpenChange={setUserOpen}
         />
       )}
       <Suspense
@@ -228,7 +238,15 @@ export function Playground({
     [draft, setDraft] = useState(""),
     [messages, setMessages] = useState<Message[]>([]),
     [loading, setLoading] = useState(false),
-    [error, setError] = useState(""),
+    [error, setErrorState] = useState<{
+      message: string;
+      detail?: string;
+    } | null>(null),
+    [undo, setUndo] = useState<{
+      messages: Message[];
+      pair: Pair;
+      pairPrompt: Message | null;
+    } | null>(null),
     [settings, setSettings] = useState(false),
     [temperature, setTemperature] = useState(0.7),
     [system, setSystem] = useState(""),
@@ -238,6 +256,8 @@ export function Playground({
     [image, setImage] = useState<{ name: string; url: string } | null>(null),
     [attachmentOpen, setAttachmentOpen] = useState(false),
     [readingImage, setReadingImage] = useState(false);
+  const setError = (message: string) =>
+    setErrorState(message ? { message } : null);
   const controller = useRef<AbortController | null>(null),
     mounted = useRef(true);
   useEffect(() => {
@@ -247,6 +267,11 @@ export function Playground({
       controller.current?.abort();
     };
   }, []);
+  useEffect(() => {
+    if (!undo) return;
+    const timer = window.setTimeout(() => setUndo(null), UNDO_WINDOW_MS);
+    return () => window.clearTimeout(timer);
+  }, [undo]);
   useEffect(() => {
     if (!loading) return;
     const timer = window.setInterval(() => setNow(performance.now()), 100);
@@ -375,12 +400,10 @@ export function Playground({
     } catch (e) {
       timing.endAt = performance.now();
       if (mounted.current) {
-        setError(
+        setErrorState(
           c.signal.aborted
-            ? "已停止生成；部分回覆保留於下方。"
-            : e instanceof Error
-              ? e.message
-              : "生成失敗",
+            ? { message: "已停止生成；部分回覆保留於下方。" }
+            : describeStreamError(e),
         );
         patch((m) => ({ ...m, incomplete: true, timing: { ...timing } }));
       }
@@ -410,6 +433,7 @@ export function Playground({
     setImage(null);
     setLoading(true);
     setError("");
+    setUndo(null);
     try {
       if (compare) {
         const cfgs = [
@@ -607,6 +631,8 @@ export function Playground({
               variant="ghost"
               disabled={loading}
               onClick={() => {
+                if (messages.length || pairPrompt)
+                  setUndo({ messages, pair, pairPrompt });
                 setMessages([]);
                 setPair([null, null]);
                 setPairPrompt(null);
@@ -691,7 +717,7 @@ export function Playground({
                 )}
                 {deltas?.ttft !== undefined && (
                   <Badge variant="outline">
-                    Δ TTFT {signed(deltas.ttft, 0)} ms
+                    Δ 首 token 延遲 {signed(deltas.ttft, 0)} ms
                   </Badge>
                 )}
                 {verdict?.kind === "identical" &&
@@ -742,11 +768,33 @@ export function Playground({
           </div>
         )}
       </ChatMessageList>
+      {undo && (
+        <div
+          role="status"
+          className="mx-auto mb-2 flex w-full max-w-3xl items-center justify-between gap-3 rounded-lg border border-border bg-(--bg-card) px-3 py-2 text-xs shadow-sm"
+        >
+          <span>已清除這段測試。</span>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => {
+              setMessages(undo.messages);
+              setPair(undo.pair);
+              setPairPrompt(undo.pairPrompt);
+              setUndo(null);
+            }}
+          >
+            復原
+          </Button>
+        </div>
+      )}
       <div className="mx-auto w-full max-w-3xl shrink-0 px-4 pb-5 pt-3">
         {error && (
-          <p role="status" className="mb-3 text-xs text-error">
-            {error}
-          </p>
+          <ErrorNote
+            className="mb-3"
+            message={error.message}
+            detail={error.detail}
+          />
         )}
         {!supportsImage && hasImage && (
           <p className="mb-3 text-xs text-warning">

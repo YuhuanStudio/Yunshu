@@ -112,7 +112,10 @@ test("surfaces structured HTTP errors", async (t) => {
 
   await assert.rejects(
     streamCompletion(connection, body, () => {}, new AbortController().signal),
-    /401 Unauthorized.*invalid API token/,
+    (e: unknown) =>
+      e instanceof Error &&
+      /驗證失敗/.test(e.message) &&
+      /invalid API token/.test((e as { detail?: string }).detail ?? ""),
   );
 });
 

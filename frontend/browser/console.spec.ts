@@ -477,7 +477,7 @@ test("auth, model lifecycle, warmup and request cancellation use the real /v1 AP
   const qwenSmall = models.getByRole("row").filter({ hasText: "Qwen3.5-9B" });
   api.requireNextLoad401();
   await qwenSmall.getByRole("button", { name: "載入", exact: true }).click();
-  await expect(page.getByRole("alert")).toContainText("Authentication failed");
+  await expect(page.getByRole("alert")).toContainText("驗證失敗");
   await qwenSmall.getByRole("button", { name: "載入", exact: true }).click();
   await expect(qwenSmall.getByText("已載入", { exact: true })).toBeVisible();
   await qwenSmall.getByRole("button", { name: "預熱", exact: true }).click();

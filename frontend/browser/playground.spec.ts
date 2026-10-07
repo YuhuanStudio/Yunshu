@@ -343,7 +343,7 @@ async function openPlayground(
 ) {
   await installCompareSse(page);
   await page.goto("/console/");
-  await page.getByRole("button", { name: "設定", exact: true }).click();
+  await page.getByRole("button", { name: /^開啟設定/ }).click();
   await page.getByLabel("存取權杖").fill(api.token);
   await page.getByRole("button", { name: "儲存並連線", exact: true }).click();
   await page.getByRole("link", { name: "推理測試", exact: true }).click();
@@ -433,8 +433,8 @@ test("chat reply shows per-reply stats with TTFT and cache badge", async ({
   const stats = playground.getByTestId("reply-stats");
   await expect(stats).toContainText("20");
   await expect(stats).toContainText("tok/s");
-  await expect(stats).toContainText(/TTFT \d/);
-  await expect(stats).toContainText("512 / 1.02K 快取");
+  await expect(stats).toContainText(/首 token 延遲 \d/);
+  await expect(stats).toContainText("512 / 1.02K 前綴命中");
   await verifyClean();
 });
 
@@ -457,12 +457,12 @@ test("compare mode runs sequentially and reports identical greedy output", async
   const delta = playground.getByTestId("compare-delta");
   await expect(delta).toContainText("輸出完全一致");
   await expect(delta).toContainText("Δ tok/s");
-  await expect(delta).toContainText("Δ TTFT");
+  await expect(delta).toContainText("Δ 首 token 延遲");
   await expect(playground.getByTestId("compare-col-a")).toContainText(
     "is four.",
   );
   await expect(playground.getByTestId("compare-col-b")).toContainText(
-    "512 / 1.02K 快取",
+    "512 / 1.02K 前綴命中",
   );
   const cmp = await page.evaluate(
     () =>
@@ -658,7 +658,7 @@ for (const [dialect, label, path, text] of [
     const stats = playground.getByTestId("reply-stats");
     await expect(stats).toContainText("tok/s");
     await expect(stats).toContainText("512");
-    await expect(stats).toContainText("TTFT 80");
+    await expect(stats).toContainText("首 token 延遲 80");
     expect(captured).toHaveLength(1);
     expect(captured[0].url.endsWith(path)).toBe(true);
     expect(captured[0].headers["authorization"]).toBe(`Bearer ${api.token}`);

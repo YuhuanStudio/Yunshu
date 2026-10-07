@@ -393,33 +393,17 @@ test.describe("fixture-only API controls", () => {
   }) => {
     const { fixture, pageErrors } = await open(page, "diagnostics");
     const diagnostics = page.getByTestId("diagnostics");
+    await expect(diagnostics.getByTestId("debug-disabled")).toContainText(
+      "YUNSHU_DEBUG_ROUTES",
+    );
+    // One probe only: no per-group 404 cards and no placeholder tabs.
     await expect(
-      diagnostics.getByText("此服務未啟用診斷介面", { exact: true }),
-    ).toBeVisible();
-    await diagnostics
-      .getByRole("button", { name: "請求", exact: true })
-      .click();
-    await expect(
-      diagnostics.getByText("未啟用", { exact: true }).first(),
-    ).toBeVisible();
-    await diagnostics
-      .getByRole("button", { name: "快取", exact: true })
-      .click();
-    await expect(
-      diagnostics.getByText("此服務未啟用診斷介面", { exact: true }),
-    ).toBeVisible();
+      diagnostics.getByRole("button", { name: "快取", exact: true }),
+    ).toHaveCount(0);
     const debugPaths = fixture.requests
       .filter((request) => request.path.startsWith("/debug/"))
       .map((request) => request.path);
-    expect(debugPaths).toEqual(
-      expect.arrayContaining([
-        "/debug/system",
-        "/debug/engine",
-        "/debug/requests",
-        "/debug/kv-cache",
-        "/debug/ssd-cache",
-      ]),
-    );
+    expect(new Set(debugPaths)).toEqual(new Set(["/debug/system"]));
 
     await page.goto("/console/#/api", { waitUntil: "domcontentloaded" });
     const catalog = page.getByTestId("api-catalog");

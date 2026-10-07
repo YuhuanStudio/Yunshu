@@ -1,3 +1,5 @@
+import { failureMessage, statusMessage } from "./errors.ts";
+
 export interface StreamConnection {
   baseUrl: string;
   token: string;
@@ -355,6 +357,39 @@ function throwIfAborted(signal: AbortSignal): void {
   if (signal.aborted) throw abortReason(signal);
 }
 
+/** HTTP failure with zh-TW `message`; the backend's own text stays in `detail`. */
+export class StreamHttpError extends Error {
+  readonly status: number;
+  readonly detail: string;
+  constructor(status: number, statusText: string, detail: string) {
+    super(statusMessage(status));
+    this.name = "StreamHttpError";
+    this.status = status;
+    this.detail = [
+      `HTTP ${status}${statusText ? ` ${statusText}` : ""}`,
+      detail,
+    ]
+      .filter(Boolean)
+      .join("\n");
+  }
+}
+
+/** Short zh-TW text plus optional raw 詳細資訊 for any failure of a stream. */
+export function describeStreamError(error: unknown): {
+  message: string;
+  detail?: string;
+} {
+  if (error instanceof StreamHttpError)
+    return { message: error.message, detail: error.detail };
+  if (error instanceof TypeError)
+    return { message: failureMessage("network"), detail: error.message };
+  if (error instanceof DOMException && error.name === "TimeoutError")
+    return { message: failureMessage("timeout"), detail: error.message };
+  if (error instanceof Error)
+    return { message: "生成中斷，引擎回報了錯誤。", detail: error.message };
+  return { message: "生成失敗" };
+}
+
 async function httpError(response: Response): Promise<Error> {
   let detail = "";
   try {
@@ -383,10 +418,7 @@ async function httpError(response: Response): Promise<Error> {
     // The status and statusText still provide a useful error if the body is unreadable.
   }
 
-  const status = `${response.status}${response.statusText ? ` ${response.statusText}` : ""}`;
-  return new Error(
-    `OpenAI API request failed (${status})${detail ? `: ${detail}` : "."}`,
-  );
+  return new StreamHttpError(response.status, response.statusText, detail);
 }
 
 /**

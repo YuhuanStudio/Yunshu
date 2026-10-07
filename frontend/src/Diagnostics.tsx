@@ -40,6 +40,8 @@ import {
 } from "lucide-react";
 import { ApiError, type Connection, type EngineStatus } from "./api";
 import { requestServerJson } from "./management-api";
+import { detailText } from "./errors.ts";
+import { ErrorNote } from "./error-note";
 import { SectionCard, clock, elapsed, number, type Engine } from "./ui";
 const groups = {
   system: [
@@ -67,6 +69,7 @@ type Result = {
   path: string;
   data?: unknown;
   error?: string;
+  detail?: string;
   status?: number;
 };
 function at(value: unknown, ...keys: string[]): unknown {
@@ -97,6 +100,13 @@ type Health = {
     tone: "success" | "warning" | "neutral";
   };
 };
+const STATE_LABEL: Record<string, string> = {
+  running: "運作中",
+  ready: "就緒",
+  starting: "準備中",
+  loading: "載入中",
+  error: "錯誤",
+};
 const groupIcon: Record<Group, LucideIcon> = {
   system: Server,
   requests: Timer,
@@ -117,7 +127,7 @@ export function healthChecks(
       name: "引擎狀態",
       status: "offline",
       value: "無法讀取",
-      hint: "/v1/yunshu/status 沒有回應，請確認服務位址與存取權杖。",
+      hint: "/v1/yunshu/status 沒有回應，請確認引擎位址與存取權杖。",
     });
   } else {
     const running = ["running", "ready"].includes(status.state);
@@ -125,7 +135,7 @@ export function healthChecks(
       key: "engine",
       name: "引擎狀態",
       status: status.load_error ? "offline" : running ? "online" : "away",
-      value: status.state,
+      value: STATE_LABEL[status.state] ?? status.state,
       hint:
         status.load_error ??
         `版本 ${status.version}，已運行 ${elapsed(status.uptime_s)}`,
@@ -149,7 +159,7 @@ export function healthChecks(
     const ratio = active != null && total ? active / total : undefined;
     rows.push({
       key: "memory",
-      name: "MLX 記憶體",
+      name: "Metal 記憶體",
       status: ratio == null ? "neutral" : ratio > 0.9 ? "away" : "online",
       bar:
         ratio == null || !total
@@ -165,12 +175,12 @@ export function healthChecks(
           : "—",
       hint:
         ratio != null && ratio > 0.9
-          ? "活躍配置超過總量的 90%，可能觸發記憶體保護。"
-          : "活躍配置佔總量的比例正常。",
+          ? "Metal 活躍記憶體超過總量的 90%，可能觸發記憶體保護。"
+          : "Metal 活躍記憶體佔總量的比例正常。",
     });
     rows.push({
       key: "queue",
-      name: "請求佇列",
+      name: "請求排隊",
       status: status.requests.queued > 0 ? "away" : "online",
       value: `${number(status.requests.active, 0)} 進行 · ${number(status.requests.queued, 0)} 排隊`,
       hint:
@@ -207,7 +217,7 @@ export function healthChecks(
             : "讀取失敗",
     hint:
       systemState === "disabled"
-        ? "服務需以 YUNSHU_DEBUG_ROUTES 啟動才提供 /debug。"
+        ? "引擎需設定 YUNSHU_DEBUG_ROUTES=1 並重新啟動，才會提供 /debug。"
         : systemState === "error"
           ? "/debug/system 回應錯誤，可能需要有效的存取權杖。"
           : "/debug/system 可讀取。",
@@ -264,6 +274,12 @@ export function Diagnostics({
     return () => controller.abort();
   }, [connection.baseUrl, connection.token, refresh]);
   useEffect(() => {
+    if (systemState === "pending") return;
+    if (systemState === "disabled") {
+      setLoading(false);
+      setResults([]);
+      return;
+    }
     const controller = new AbortController();
     setLoading(true);
     setResults([]);
@@ -287,6 +303,7 @@ export function Diagnostics({
           return {
             ...endpoint,
             error: e instanceof Error ? e.message : "無法取得資料",
+            detail: detailText(e),
             status: e instanceof ApiError ? e.status : undefined,
           } as Result;
         }
@@ -299,7 +316,7 @@ export function Diagnostics({
       }
     });
     return () => controller.abort();
-  }, [connection.baseUrl, connection.token, group, refresh]);
+  }, [connection.baseUrl, connection.token, group, refresh, systemState]);
   const system = overviewSystem,
     engineCounters = results.find((r) => r.key === "engine")?.data,
     request = results.find((r) => r.key === "requests")?.data;
@@ -331,8 +348,8 @@ export function Diagnostics({
     }
     setTimeout(() => setCopied("idle"), 2500);
   }
-  const unavailable =
-    results.length > 0 && results.every((row) => row.status === 404);
+  const debugOff = systemState === "disabled";
+  const hasSystem = system !== undefined;
   return (
     <DashboardPage data-testid="diagnostics">
       <PageHeader
@@ -369,34 +386,40 @@ export function Diagnostics({
         }
       />
       <StatGrid data-testid="resource-readouts">
-        <StatCard
-          compact
-          icon={Cpu}
-          label="CPU"
-          value={`${number(metric(at(system, "cpu", "percent")))}%`}
-          subtext={`${number(metric(at(system, "cpu", "logical_cores")), 0)} 個邏輯核心`}
-        />
-        <StatCard
-          compact
-          icon={Activity}
-          label="系統記憶體"
-          value={`${number(metric(at(system, "memory", "percent")))}%`}
-          subtext={`${number(gb(at(system, "memory", "used_bytes")))} GB 已使用`}
-        />
+        {hasSystem && (
+          <StatCard
+            compact
+            icon={Cpu}
+            label="CPU"
+            value={`${number(metric(at(system, "cpu", "percent")))}%`}
+            subtext={`${number(metric(at(system, "cpu", "logical_cores")), 0)} 個邏輯核心`}
+          />
+        )}
+        {hasSystem && (
+          <StatCard
+            compact
+            icon={Activity}
+            label="統一記憶體"
+            value={`${number(metric(at(system, "memory", "percent")))}%`}
+            subtext={`${number(gb(at(system, "memory", "used_bytes")))} GB 已使用`}
+          />
+        )}
         <StatCard
           compact
           icon={Database}
-          label="MLX 活躍配置"
+          label="Metal 記憶體（活躍）"
           value={`${number(status?.memory.active_gb ?? gb(at(system, "gpu", "active_bytes")))} GB`}
-          subtext={`峰值 ${number(status?.memory.peak_gb)} GB · 非 GPU 使用率`}
+          subtext={`峰值 ${number(status?.memory.peak_gb)} GB`}
         />
-        <StatCard
-          compact
-          icon={Server}
-          label="已處理請求"
-          value={number(metric(at(engineCounters, "requests_processed")), 0)}
-          subtext="服務計數器"
-        />
+        {engineCounters !== undefined && (
+          <StatCard
+            compact
+            icon={Server}
+            label="已處理請求"
+            value={number(metric(at(engineCounters, "requests_processed")), 0)}
+            subtext="引擎計數器"
+          />
+        )}
       </StatGrid>
       <SectionCard
         icon={HeartPulse}
@@ -433,222 +456,241 @@ export function Diagnostics({
           ))}
         </ul>
       </SectionCard>
-      <SectionRow
-        title="逐項診斷"
-        action={
-          <p className="text-xs text-muted-foreground">
-            {updated ? `讀取於 ${clock(updated)}` : "尚未取得資料"} · 手動更新
+      {debugOff && (
+        <SectionCard
+          icon={Server}
+          title="/debug 診斷介面未啟用"
+          description="逐項診斷（主機、請求、快取、解碼、記憶體）需要它。"
+          data-testid="debug-disabled"
+        >
+          <p className="text-sm text-muted-foreground">
+            以 <code className="font-mono">YUNSHU_DEBUG_ROUTES=1</code>{" "}
+            啟動引擎後重新連線；另需存取權杖，或設定{" "}
+            <code className="font-mono">YUNSHU_AUTH_DISABLED</code>
+            。控制台不會自行變更引擎設定。
           </p>
-        }
-      />
-      <div>
-        <NavTabs
-          ariaLabel="診斷類別"
-          activeKey={group}
-          onChange={(value) => setGroup(value as Group)}
-          tabs={[
-            {
-              key: "system",
-              label: (
-                <>
-                  <Server size={14} />
-                  主機與引擎
-                </>
-              ),
-            },
-            {
-              key: "requests",
-              label: (
-                <>
-                  <Activity size={14} />
-                  請求
-                </>
-              ),
-            },
-            {
-              key: "cache",
-              label: (
-                <>
-                  <Database size={14} />
-                  快取
-                </>
-              ),
-            },
-            {
-              key: "decode",
-              label: (
-                <>
-                  <Cpu size={14} />
-                  解碼
-                </>
-              ),
-            },
-            {
-              key: "memory",
-              label: (
-                <>
-                  <Database size={14} />
-                  記憶體
-                </>
-              ),
-            },
-          ]}
-        />
-      </div>
-      {loading && (
-        <Card className="p-6 text-sm text-muted-foreground" role="status">
-          正在讀取 {groups[group].map((item) => item.title).join("、")}…
-        </Card>
+        </SectionCard>
       )}
-      {unavailable && (
-        <Card className="p-5">
-          <EmptyState
-            icon={<Server size={24} />}
-            title="此服務未啟用診斷介面"
-            description="需要在引擎啟動設定啟用 YUNSHU_DEBUG_ROUTES，並使用有效的存取權杖。控制台不會自行變更服務設定。"
+      {!debugOff && (
+        <>
+          <SectionRow
+            title="逐項診斷"
+            action={
+              <p className="text-xs text-muted-foreground">
+                {updated ? `讀取於 ${clock(updated)}` : "尚未取得資料"} ·
+                手動更新
+              </p>
+            }
           />
-        </Card>
-      )}
-      {group === "requests" && request !== undefined && (
-        <SectionCard
-          icon={Timer}
-          title="服務延遲百分位數"
-          description="後端近 60 秒 HTTP 請求耗時統計，與首頁的已觀測 TTFT 分布不同。"
-        >
-          <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-            {["p50", "p90", "p95", "p99"].map((key) => (
-              <div key={key}>
-                <p className="text-xs text-muted-foreground">{key}</p>
-                <p className="mt-2 text-2xl font-semibold tabular-nums">
-                  {number(metric(at(request, "latency_percentiles", key)))}{" "}
-                  <span className="text-xs">ms</span>
-                </p>
-              </div>
-            ))}
+          <div>
+            <NavTabs
+              ariaLabel="診斷類別"
+              activeKey={group}
+              onChange={(value) => setGroup(value as Group)}
+              tabs={[
+                {
+                  key: "system",
+                  label: (
+                    <>
+                      <Server size={14} />
+                      主機與引擎
+                    </>
+                  ),
+                },
+                {
+                  key: "requests",
+                  label: (
+                    <>
+                      <Activity size={14} />
+                      請求
+                    </>
+                  ),
+                },
+                {
+                  key: "cache",
+                  label: (
+                    <>
+                      <Database size={14} />
+                      快取
+                    </>
+                  ),
+                },
+                {
+                  key: "decode",
+                  label: (
+                    <>
+                      <Cpu size={14} />
+                      解碼
+                    </>
+                  ),
+                },
+                {
+                  key: "memory",
+                  label: (
+                    <>
+                      <Database size={14} />
+                      記憶體
+                    </>
+                  ),
+                },
+              ]}
+            />
           </div>
-        </SectionCard>
-      )}
-      {results.map((row) => (
-        <SectionCard
-          key={row.key}
-          icon={groupIcon[group]}
-          title={row.title}
-          description={<span className="font-mono">{row.path}</span>}
-          className="min-w-0"
-          action={
-            <Badge variant={row.error ? "warning" : "success"}>
-              {row.error
-                ? row.status === 404
-                  ? "未啟用"
-                  : row.status === 401 || row.status === 403
-                    ? "需要授權"
-                    : "讀取失敗"
-                : "已讀取"}
-            </Badge>
-          }
-        >
-          {row.error ? (
-            <p role="status" className="text-sm text-muted-foreground">
-              {row.error}
-            </p>
-          ) : (
-            <div className="space-y-4">
-              <DetailList className="grid gap-x-8 gap-y-2 sm:grid-cols-2">
-                {Object.entries(
-                  row.data && typeof row.data === "object" ? row.data : {},
-                )
-                  .filter(
-                    ([, value]) =>
-                      typeof value === "number" ||
-                      typeof value === "boolean" ||
-                      typeof value === "string",
-                  )
-                  .slice(0, 12)
-                  .map(([key, value]) => (
-                    <DetailRow
-                      key={key}
-                      label={key}
-                      value={
-                        typeof value === "number"
-                          ? number(value, 2)
-                          : String(value)
-                      }
-                    />
-                  ))}
-              </DetailList>
-              {Array.isArray(at(row.data, "caches")) && (
-                <Table scrollLabel="模型快取診斷">
-                  <Thead>
-                    <Tr>
-                      <Th>模型</Th>
-                      <Th>前綴命中</Th>
-                      <Th>Resident</Th>
-                      <Th>SSD</Th>
-                    </Tr>
-                  </Thead>
-                  <Tbody>
-                    {(at(row.data, "caches") as unknown[]).map(
-                      (cache, index) => (
-                        <Tr key={index}>
-                          <Td>
-                            <span className="block max-w-44 truncate text-xs">
-                              {String(at(cache, "model_id") ?? "—")}
-                            </span>
-                          </Td>
-                          <Td>
-                            {number(
-                              metric(at(cache, "apc", "token_hit_rate")) == null
-                                ? undefined
-                                : Number(at(cache, "apc", "token_hit_rate")) *
-                                    100,
-                            )}
-                            %
-                          </Td>
-                          <Td>
-                            {number(
-                              metric(at(cache, "apc", "resident_bytes")) == null
-                                ? undefined
-                                : Number(at(cache, "apc", "resident_bytes")) /
-                                    1e6,
-                            )}{" "}
-                            MB
-                          </Td>
-                          <Td>
-                            {number(
-                              metric(at(cache, "apc", "disk_bytes")) == null
-                                ? undefined
-                                : Number(at(cache, "apc", "disk_bytes")) / 1e6,
-                            )}{" "}
-                            MB
-                          </Td>
-                        </Tr>
-                      ),
-                    )}
-                  </Tbody>
-                </Table>
-              )}
-              <Button
-                size="sm"
-                variant="ghost"
-                aria-expanded={!!expanded[row.key]}
-                onClick={() =>
-                  setExpanded((current) => ({
-                    ...current,
-                    [row.key]: !current[row.key],
-                  }))
-                }
-              >
-                {expanded[row.key] ? "收合原始資料" : "查看完整診斷資料"}
-              </Button>
-              {expanded[row.key] && (
-                <CodeBlock language="json">
-                  {JSON.stringify(row.data, null, 2) ?? "null"}
-                </CodeBlock>
-              )}
-            </div>
+          {loading && (
+            <Card className="p-6 text-sm text-muted-foreground" role="status">
+              正在讀取 {groups[group].map((item) => item.title).join("、")}…
+            </Card>
           )}
-        </SectionCard>
-      ))}
+          {group === "requests" && request !== undefined && (
+            <SectionCard
+              icon={Timer}
+              title="服務延遲百分位數"
+              description="後端近 60 秒 HTTP 請求耗時統計，與首頁的已觀測首 token 延遲分布不同。"
+            >
+              <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+                {["p50", "p90", "p95", "p99"].map((key) => (
+                  <div key={key}>
+                    <p className="text-xs text-muted-foreground">{key}</p>
+                    <p className="mt-2 text-2xl font-semibold tabular-nums">
+                      {number(metric(at(request, "latency_percentiles", key)))}{" "}
+                      <span className="text-xs">ms</span>
+                    </p>
+                  </div>
+                ))}
+              </div>
+            </SectionCard>
+          )}
+          {results.map((row) => (
+            <SectionCard
+              key={row.key}
+              icon={groupIcon[group]}
+              title={row.title}
+              description={<span className="font-mono">{row.path}</span>}
+              className="min-w-0"
+              action={
+                <Badge variant={row.error ? "warning" : "success"}>
+                  {row.error
+                    ? row.status === 404
+                      ? "未啟用"
+                      : row.status === 401 || row.status === 403
+                        ? "需要授權"
+                        : "讀取失敗"
+                    : "已讀取"}
+                </Badge>
+              }
+            >
+              {row.error ? (
+                <ErrorNote
+                  tone="muted"
+                  message={row.error}
+                  detail={row.detail}
+                  className="text-sm"
+                />
+              ) : (
+                <div className="space-y-4">
+                  <DetailList className="grid gap-x-8 gap-y-2 sm:grid-cols-2">
+                    {Object.entries(
+                      row.data && typeof row.data === "object" ? row.data : {},
+                    )
+                      .filter(
+                        ([, value]) =>
+                          typeof value === "number" ||
+                          typeof value === "boolean" ||
+                          typeof value === "string",
+                      )
+                      .slice(0, 12)
+                      .map(([key, value]) => (
+                        <DetailRow
+                          key={key}
+                          label={key}
+                          value={
+                            typeof value === "number"
+                              ? number(value, 2)
+                              : String(value)
+                          }
+                        />
+                      ))}
+                  </DetailList>
+                  {Array.isArray(at(row.data, "caches")) && (
+                    <Table scrollLabel="模型快取診斷">
+                      <Thead>
+                        <Tr>
+                          <Th>模型</Th>
+                          <Th>前綴命中</Th>
+                          <Th>常駐</Th>
+                          <Th>SSD</Th>
+                        </Tr>
+                      </Thead>
+                      <Tbody>
+                        {(at(row.data, "caches") as unknown[]).map(
+                          (cache, index) => (
+                            <Tr key={index}>
+                              <Td>
+                                <span className="block max-w-44 truncate text-xs">
+                                  {String(at(cache, "model_id") ?? "—")}
+                                </span>
+                              </Td>
+                              <Td>
+                                {number(
+                                  metric(at(cache, "apc", "token_hit_rate")) ==
+                                    null
+                                    ? undefined
+                                    : Number(
+                                        at(cache, "apc", "token_hit_rate"),
+                                      ) * 100,
+                                )}
+                                %
+                              </Td>
+                              <Td>
+                                {number(
+                                  metric(at(cache, "apc", "resident_bytes")) ==
+                                    null
+                                    ? undefined
+                                    : Number(
+                                        at(cache, "apc", "resident_bytes"),
+                                      ) / 1e6,
+                                )}{" "}
+                                MB
+                              </Td>
+                              <Td>
+                                {number(
+                                  metric(at(cache, "apc", "disk_bytes")) == null
+                                    ? undefined
+                                    : Number(at(cache, "apc", "disk_bytes")) /
+                                        1e6,
+                                )}{" "}
+                                MB
+                              </Td>
+                            </Tr>
+                          ),
+                        )}
+                      </Tbody>
+                    </Table>
+                  )}
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    aria-expanded={!!expanded[row.key]}
+                    onClick={() =>
+                      setExpanded((current) => ({
+                        ...current,
+                        [row.key]: !current[row.key],
+                      }))
+                    }
+                  >
+                    {expanded[row.key] ? "收合原始資料" : "查看完整診斷資料"}
+                  </Button>
+                  {expanded[row.key] && (
+                    <CodeBlock language="json">
+                      {JSON.stringify(row.data, null, 2) ?? "null"}
+                    </CodeBlock>
+                  )}
+                </div>
+              )}
+            </SectionCard>
+          ))}
+        </>
+      )}
     </DashboardPage>
   );
 }
