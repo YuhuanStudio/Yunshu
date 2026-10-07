@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useRouteAction } from "./useRouteAction";
 import { t } from "./i18n/index.ts";
 import {
   Button,
@@ -216,6 +217,21 @@ export default function Downloads({
     [notice, setNotice] = useState(""),
     [error, setError] = useState<ApiError | Error | null>(null);
   const data = polled.data;
+  // Palette verb `#/downloads?action=new[&model=repo]`: prefill the repo and focus the field.
+  const [focusRepo, setFocusRepo] = useState(0);
+  useRouteAction("downloads", (action, q) => {
+    if (action !== "new") return;
+    const m = q.get("model");
+    if (m) setRepo(m);
+    setFocusRepo((n) => n + 1);
+  });
+  useEffect(() => {
+    if (focusRepo === 0) return;
+    const id = requestAnimationFrame(() =>
+      document.getElementById("dl-repo")?.focus(),
+    );
+    return () => cancelAnimationFrame(id);
+  }, [focusRepo, online]);
   const valid = REPO_RE.test(repo.trim());
 
   async function submit(body: DownloadRequest): Promise<boolean> {

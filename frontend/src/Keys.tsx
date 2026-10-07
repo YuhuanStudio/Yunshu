@@ -1,3 +1,4 @@
+import { useRouteAction } from "./useRouteAction";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   BarChart,
@@ -77,6 +78,17 @@ export default function Keys({ connection }: { connection: Connection }) {
     [notice, setNotice] = useState(""),
     [tick, setTick] = useState(0);
   const refresh = useCallback(() => setTick((n) => n + 1), []);
+  // Palette verb `#/keys?action=create`: open the create form once the list has loaded.
+  const [wantCreate, setWantCreate] = useState(false);
+  useRouteAction("keys", (action) => {
+    if (action === "create") setWantCreate(true);
+  });
+  useEffect(() => {
+    if (wantCreate && phase === "ok") {
+      setWantCreate(false);
+      setEditing("new");
+    }
+  }, [wantCreate, phase]);
 
   useEffect(() => {
     const controller = new AbortController();

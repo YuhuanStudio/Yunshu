@@ -10,6 +10,7 @@ import {
   Card,
   CustomSelect,
   EmptyState,
+  IconButton,
   Input,
 } from "@yuhuanowo/yunui";
 import { DashboardPage, PageHeader } from "@yuhuanowo/yunui/patterns";
@@ -404,16 +405,13 @@ export default function Logs({ connection }: { connection: Connection }) {
                 <span className="min-w-0 basis-full break-words font-mono md:basis-0 md:flex-1">
                   {r.msg}
                 </span>
-                <button
-                  type="button"
+                <IconButton
                   tabIndex={-1}
-                  aria-label={t("logs.action.copyLine")}
-                  title={t("logs.action.copyLine")}
+                  icon={<Copy size={12} />}
+                  label={t("logs.action.copyLine")}
                   onClick={() => copy(formatLine(r), t("logs.copiedLine"))}
-                  className="ml-auto text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100 [@media(hover:none)]:opacity-60"
-                >
-                  <Copy size={12} />
-                </button>
+                  className="ml-auto h-5 w-5 min-h-0 min-w-0 text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100 [@media(hover:none)]:opacity-60"
+                />
               </div>
             ))}
           </div>

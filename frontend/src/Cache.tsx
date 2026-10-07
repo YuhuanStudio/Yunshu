@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { t } from "./i18n/index.ts";
 import {
   Button,
@@ -37,6 +37,7 @@ import { bytesText } from "./byte-format";
 import { ByteValue } from "./ByteValue";
 import { Reasoned } from "./Reasoned";
 import { useMemoryLedger } from "./memory-api";
+import { useRouteAction } from "./useRouteAction";
 import { number, percent, relative } from "./i18n/format";
 import { SectionCard, modelLabel, type Engine } from "./ui";
 
@@ -289,6 +290,25 @@ export default function Cache({
     } | null>(null),
     [error, setError] = useState("");
   const data = polled.data;
+
+  // Palette verb `#/cache?action=clear[&model=id]`: open the confirm dialog for the first
+  // clearable tier once the cache list has loaded (the intent itself fires only once).
+  const [wantClear, setWantClear] = useState<string | null>(null);
+  useRouteAction("cache", (action, q) => {
+    if (action === "clear") setWantClear(q.get("model") ?? "");
+  });
+  useEffect(() => {
+    if (wantClear == null || !online || !data) return;
+    setWantClear(null);
+    const pick = data.caches.find(
+      (c) =>
+        !c.error &&
+        (wantClear === "" || c.model === wantClear) &&
+        c.tiers.some((x) => clearableTier(x.name)),
+    );
+    const tier = pick?.tiers.find((x) => clearableTier(x.name));
+    if (pick && tier) setTarget({ model: pick.model, tier });
+  }, [wantClear, online, data]);
 
   async function confirm() {
     const tg = target;

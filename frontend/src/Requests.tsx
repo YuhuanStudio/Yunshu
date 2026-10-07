@@ -154,10 +154,11 @@ function SortTh({
         on ? (sort.dir === "asc" ? "ascending" : "descending") : "none"
       }
     >
-      <button
-        type="button"
+      <Button
+        variant="ghost"
+        size="sm"
         title={t("requests.list.sortHint")}
-        className="inline-flex items-center gap-1 whitespace-nowrap rounded-sm hover:text-foreground focus-visible:outline-2"
+        className="h-auto gap-1 whitespace-nowrap p-0 font-[inherit] text-[length:inherit] hover:bg-transparent hover:text-foreground"
         onClick={() =>
           setSort({ key: k, dir: on && sort.dir === "desc" ? "asc" : "desc" })
         }
@@ -169,7 +170,7 @@ function SortTh({
           ) : (
             <ArrowDown size={12} />
           ))}
-      </button>
+      </Button>
     </Th>
   );
 }
