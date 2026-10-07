@@ -2037,17 +2037,18 @@ class YunshuAPCManager(APCManager):
             ram_bytes = self._resident_bytes_locked()
             n_ram = len(ram_items)
             newest = ram_items[-max_entries:] if max_entries else []
-            for i, e in enumerate(reversed(newest)):
-                entries.append(
-                    meta(
-                        e.token_ids,
-                        e.extra_hash,
-                        "ram",
-                        _cache_nbytes(e.prompt_cache),
-                        i,
-                    )
-                )
             cap_ram = int(self.memory_max_bytes or 0)
+        # per-entry work (token-tuple hash, shape-only byte count) runs outside the lock
+        for i, e in enumerate(reversed(newest)):
+            entries.append(
+                meta(
+                    e.token_ids,
+                    e.extra_hash,
+                    "ram",
+                    _cache_nbytes(e.prompt_cache),
+                    i,
+                )
+            )
         tiers = [
             {
                 "name": "ram",
