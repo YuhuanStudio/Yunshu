@@ -65,7 +65,13 @@ import {
 } from "./ui";
 import type { Perform } from "./Models";
 import { outcomeLabel, useRecentRequests } from "./recentRequests";
-import { RequestBreakdown, RequestTimeline, formatMs } from "./RequestTimeline";
+import {
+  RequestBreakdown,
+  RequestTimeline,
+  durationUnit,
+  durationValue,
+  formatMs,
+} from "./RequestTimeline";
 import {
   SLOW_TOTAL_MS,
   SLOW_TTFT_MS,
@@ -174,6 +180,8 @@ function SortTh({
     </Th>
   );
 }
+
+const hasTrend = (data: number[]) => data.length >= 5 && new Set(data).size > 1;
 
 export function Requests({
   engine,
@@ -325,6 +333,7 @@ export function Requests({
     return v == null ? [] : [v];
   });
   const ttfts = finished.flatMap((r) => (r.ttft_ms == null ? [] : [r.ttft_ms]));
+  const ttftMedian = ttfts.length ? median(ttfts) : null;
   const hits = finished.flatMap((r) =>
     (r.prompt_tokens ?? 0) > 0
       ? [((r.cached_tokens ?? 0) / (r.prompt_tokens ?? 1)) * 100]
@@ -358,8 +367,8 @@ export function Requests({
     },
     {
       label: t("requests.tile.ttftLabel"),
-      value: ttfts.length ? number(median(ttfts), 0) : "—",
-      unit: ttfts.length ? "ms" : undefined,
+      value: ttftMedian != null ? durationValue(ttftMedian) : "—",
+      unit: ttftMedian != null ? durationUnit(ttftMedian) : undefined,
       hint: ttfts.length
         ? t(
             recent.supported
@@ -367,7 +376,7 @@ export function Requests({
               : "requests.tile.ttftPage",
             {
               count: number(ttfts.length, 0),
-              last: number(ttfts.at(-1), 0),
+              last: formatMs(ttfts.at(-1) ?? 0),
             },
           )
         : t("requests.tile.noFinished"),
@@ -633,133 +642,134 @@ export function Requests({
           </Button>
         }
       />
-      <StatGrid data-testid="request-stats">
-        {tiles.map((tile) => (
-          <StatCard
-            key={tile.label}
-            compact
-            valueFirst
-            icon={tile.icon}
-            label={tile.label}
-            value={
-              tile.unit && tile.value !== "—"
-                ? `${tile.value} ${tile.unit}`
-                : tile.value
-            }
-            trend={tile.trend ?? undefined}
-            subtext={
-              <span className="block min-w-0 space-y-1 sm:space-y-2">
-                <span className="block whitespace-normal sm:truncate sm:whitespace-nowrap">
-                  {tile.hint}
-                </span>
-                <span className="hidden h-7 sm:block">
-                  {tile.data.length > 1 && (
-                    <Sparkline
-                      data={tile.data.slice(-60)}
-                      tone={tile.tone}
-                      area
-                      height={28}
-                      className="h-7 w-full"
-                      label={tile.name}
-                    />
+      <StatGrid data-stat-grid="" data-testid="request-stats">
+        {tiles.map((tile) => {
+          // A trend line needs a few samples that actually vary; a flat run of zeros is not data.
+          const spark = hasTrend(tile.data);
+          return (
+            <StatCard
+              key={tile.label}
+              compact
+              valueFirst
+              icon={tile.icon}
+              label={tile.label}
+              value={
+                tile.unit && tile.value !== "—"
+                  ? `${tile.value} ${tile.unit}`
+                  : tile.value
+              }
+              trend={tile.trend ?? undefined}
+              subtext={
+                <span className="block min-w-0 space-y-1 sm:space-y-2">
+                  <span className="block whitespace-normal">{tile.hint}</span>
+                  {spark && (
+                    <span className="hidden h-7 sm:block">
+                      <Sparkline
+                        data={tile.data.slice(-60)}
+                        tone={tile.tone}
+                        area
+                        height={28}
+                        className="h-7 w-full"
+                        label={tile.name}
+                      />
+                    </span>
                   )}
                 </span>
-              </span>
-            }
-          />
-        ))}
+              }
+            />
+          );
+        })}
       </StatGrid>
+      <div className="flex flex-wrap justify-between gap-3">
+        <div className="w-full sm:w-auto sm:max-w-xs">
+          <Input
+            className="w-full"
+            aria-label={t("requests.list.search")}
+            icon={<Search size={14} />}
+            placeholder={t("requests.list.searchPlaceholder")}
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+          />
+        </div>
+        <div className="grid w-full grid-cols-2 items-center gap-2 sm:flex sm:w-auto sm:flex-wrap">
+          <SegmentedTray
+            className="col-span-2 sm:col-auto"
+aria-label={t("requests.list.scope")}
+            value={filter}
+            onChange={(v) => {
+              setFilter(v);
+              if (v === "active") setOutcome("all");
+            }}
+            options={[
+              { value: "active", label: t("requests.list.scopeActive") },
+              {
+                value: "complete",
+                label: t("requests.list.scopeComplete"),
+              },
+              { value: "all", label: t("requests.list.scopeAll") },
+            ]}
+          />
+          <div className="col-span-2 min-w-0 sm:col-auto sm:flex-none">
+            <CustomSelect
+              className="w-full sm:w-40 [&_button]:h-8 [&_button]:text-xs"
+              aria-label={t("requests.list.sortBy")}
+              value={sort.key}
+              onChange={(v) => setSort({ key: v as SortKey, dir: "desc" })}
+              options={[
+                { value: "time", label: t("requests.list.sortTime") },
+                { value: "ttft", label: t("requests.list.sortTtft") },
+                { value: "total", label: t("requests.list.sortTotal") },
+                { value: "tps", label: t("requests.list.sortTps") },
+              ]}
+            />
+          </div>
+          {filter !== "active" && (
+            <>
+              <CustomSelect
+                className="w-36 [&_button]:h-8 [&_button]:text-xs"
+                value={outcome}
+                onChange={setOutcome}
+                options={[
+                  { value: "all", label: t("requests.list.outcomeAll") },
+                  {
+                    value: "completed",
+                    label: t("requests.list.outcomeCompleted"),
+                  },
+                  {
+                    value: "cancelled",
+                    label: t("requests.list.outcomeCancelled"),
+                  },
+                  {
+                    value: "error",
+                    label: t("requests.list.outcomeError"),
+                  },
+                ]}
+              />
+              <CustomSelect
+                className="w-44 [&_button]:h-8 [&_button]:text-xs"
+                aria-label={t("requests.list.speedAria")}
+                value={speed}
+                onChange={setSpeed}
+                options={[
+                  { value: "all", label: t("requests.list.speedAll") },
+                  { value: "slow", label: t("requests.list.speedSlow") },
+                  { value: "ttft", label: t("requests.list.speedTtft") },
+                  {
+                    value: "total",
+                    label: t("requests.list.speedTotal"),
+                  },
+                ]}
+              />
+            </>
+          )}
+        </div>
+      </div>
       <WorkspaceLayout
         detailLabel={t("requests.detail.title")}
         list={
           <div className="space-y-5">
-            <div className="flex flex-wrap justify-between gap-3">
-              <div className="w-full sm:w-auto sm:max-w-xs">
-                <Input
-                  className="w-full"
-                  aria-label={t("requests.list.search")}
-                  icon={<Search size={14} />}
-                  placeholder={t("requests.list.searchPlaceholder")}
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                />
-              </div>
-              <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
-                <SegmentedTray
-                  aria-label={t("requests.list.scope")}
-                  value={filter}
-                  onChange={(v) => {
-                    setFilter(v);
-                    if (v === "active") setOutcome("all");
-                  }}
-                  options={[
-                    { value: "active", label: t("requests.list.scopeActive") },
-                    {
-                      value: "complete",
-                      label: t("requests.list.scopeComplete"),
-                    },
-                    { value: "all", label: t("requests.list.scopeAll") },
-                  ]}
-                />
-                <div className="min-w-36 flex-1 sm:flex-none">
-                  <CustomSelect
-                    className="w-full sm:w-40 [&_button]:h-8 [&_button]:text-xs"
-                    aria-label={t("requests.list.sortBy")}
-                    value={sort.key}
-                    onChange={(v) =>
-                      setSort({ key: v as SortKey, dir: "desc" })
-                    }
-                    options={[
-                      { value: "time", label: t("requests.list.sortTime") },
-                      { value: "ttft", label: t("requests.list.sortTtft") },
-                      { value: "total", label: t("requests.list.sortTotal") },
-                      { value: "tps", label: t("requests.list.sortTps") },
-                    ]}
-                  />
-                </div>
-                {filter !== "active" && (
-                  <>
-                    <CustomSelect
-                      className="w-36 [&_button]:h-8 [&_button]:text-xs"
-                      value={outcome}
-                      onChange={setOutcome}
-                      options={[
-                        { value: "all", label: t("requests.list.outcomeAll") },
-                        {
-                          value: "completed",
-                          label: t("requests.list.outcomeCompleted"),
-                        },
-                        {
-                          value: "cancelled",
-                          label: t("requests.list.outcomeCancelled"),
-                        },
-                        {
-                          value: "error",
-                          label: t("requests.list.outcomeError"),
-                        },
-                      ]}
-                    />
-                    <CustomSelect
-                      className="w-44 [&_button]:h-8 [&_button]:text-xs"
-                      aria-label={t("requests.list.speedAria")}
-                      value={speed}
-                      onChange={setSpeed}
-                      options={[
-                        { value: "all", label: t("requests.list.speedAll") },
-                        { value: "slow", label: t("requests.list.speedSlow") },
-                        { value: "ttft", label: t("requests.list.speedTtft") },
-                        {
-                          value: "total",
-                          label: t("requests.list.speedTotal"),
-                        },
-                      ]}
-                    />
-                  </>
-                )}
-              </div>
-            </div>
             <Card className="overflow-hidden">
-              <div className="min-h-[17rem]">
+              <div className="min-h-24">
                 <TooltipProvider delayDuration={200}>
                   <Table scrollLabel={t("requests.list.tableLabel")}>
                     <Thead>

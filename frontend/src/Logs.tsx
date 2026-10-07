@@ -32,7 +32,7 @@ import {
 } from "./admin-logs-api";
 import { SegmentedTray } from "./SegmentedTray";
 import { has, t, tr } from "./i18n/index.ts";
-import { clock, dateTime, number } from "./ui";
+import { UnavailableNotice, clock, dateTime, number } from "./ui";
 
 const CLIENT_CAP = 4000;
 const RING_LIMIT = 2000;
@@ -280,6 +280,24 @@ export default function Logs({ connection }: { connection: Connection }) {
                 ? t("logs.live.paused")
                 : "";
 
+  if (load === "missing" || load === "denied" || load === "error") {
+    const kind = load === "missing" ? "missing" : load;
+    return (
+      <DashboardPage width="7xl" data-testid="logs">
+        <PageHeader
+          title={t("logs.page.title")}
+          description={t("logs.page.description")}
+        />
+        {/* i18n-keys: logs.state. */}
+        <UnavailableNotice
+          data-testid="logs-unavailable"
+          title={t(`logs.state.${kind}Title`)}
+          description={t(`logs.state.${kind}Body`)}
+        />
+      </DashboardPage>
+    );
+  }
+
   return (
     <DashboardPage width="7xl" data-testid="logs">
       <PageHeader
@@ -310,7 +328,7 @@ export default function Logs({ connection }: { connection: Connection }) {
           </div>
         }
       />
-      <div className="flex flex-wrap items-center justify-between gap-3">
+      <div className="flex flex-wrap items-center gap-2">
         <div className="flex flex-wrap items-center gap-2">
           <Input
             className="w-64 max-w-full"
@@ -359,7 +377,7 @@ export default function Logs({ connection }: { connection: Connection }) {
           <span
             role="status"
             data-testid="logs-live"
-            className="min-w-24 text-right text-xs text-muted-foreground"
+            className="order-last min-w-24 text-xs text-muted-foreground"
           >
             {liveText}
           </span>
@@ -421,24 +439,6 @@ export default function Logs({ connection }: { connection: Connection }) {
               <p className="px-4 text-center text-sm text-muted-foreground">
                 {t("logs.state.loading")}
               </p>
-            ) : load === "missing" ? (
-              <EmptyState
-                size="inline"
-                title={t("logs.state.missingTitle")}
-                description={t("logs.state.missingBody")}
-              />
-            ) : load === "denied" ? (
-              <EmptyState
-                size="inline"
-                title={t("logs.state.deniedTitle")}
-                description={t("logs.state.deniedBody")}
-              />
-            ) : load === "error" ? (
-              <EmptyState
-                size="inline"
-                title={t("logs.state.errorTitle")}
-                description={t("logs.state.errorBody")}
-              />
             ) : (
               <EmptyState
                 size="inline"
@@ -481,13 +481,13 @@ export default function Logs({ connection }: { connection: Connection }) {
           </span>
           <span role="status">{note ?? ""}</span>
         </div>
+        <p
+          className="border-t border-border/60 px-4 py-2 text-xs text-muted-foreground"
+          data-testid="logs-redaction"
+        >
+          {t("logs.note.redaction", { capacity: number(RING_LIMIT, 0) })}
+        </p>
       </Card>
-      <p
-        className="max-w-3xl text-xs text-muted-foreground"
-        data-testid="logs-redaction"
-      >
-        {t("logs.note.redaction", { capacity: number(RING_LIMIT, 0) })}
-      </p>
     </DashboardPage>
   );
 }

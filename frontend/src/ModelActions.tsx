@@ -71,88 +71,98 @@ export function ModelActions({
       : null;
   return (
     <div className="flex flex-wrap items-center gap-1">
-      {model.loaded ? (
-        <>
-          <Button
-            size="sm"
-            disabled={!online || !supportsChat(model)}
-            title={
-              supportsChat(model)
-                ? t("models.actions.testTitleChat")
-                : t("models.actions.testTitleApi")
-            }
-            onClick={() => test(model.id)}
-          >
-            {t("models.actions.test")}
-          </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            disabled={!online || !!busy}
-            onClick={() =>
-              void perform(`warmup:${model.id}`, () =>
-                warmupModel(connection, { model: model.id, max_tokens: 1 }),
-              )
-            }
-          >
-            <Zap size={12} />
-            {t("models.actions.warmup")}
-          </Button>
-        </>
-      ) : (
-        <Reasoned
-          reason={
-            !online
-              ? t("models.actions.offlineReason")
-              : model.loading
-                ? t("models.actions.loadingReason")
-                : busy
-                  ? t("models.actions.busyReason")
-                  : null
-          }
-        >
-          <Button
-            size="sm"
-            disabled={!online || !!busy || model.loading || checking}
-            title={fit?.text}
-            onClick={() => void startLoad()}
-          >
-            <Play size={12} />
-            {checking
-              ? t("models.fit.checking")
-              : busy?.endsWith(model.id)
-                ? t("models.actions.working")
-                : t("models.actions.load")}
-          </Button>
-        </Reasoned>
-      )}
-      {model.loaded && (
-        <Reasoned
-          reason={
-            model.pinned
-              ? t("models.actions.pinnedReason")
-              : model.loading
-                ? t("models.actions.loadingReason")
-                : !online
-                  ? t("models.actions.offlineReason")
+      <div className="flex flex-nowrap items-center gap-1 whitespace-nowrap">
+        {model.loaded ? (
+          <>
+            <Button
+              variant="secondary"
+              size="sm"
+              disabled={!online || !supportsChat(model)}
+              title={
+                supportsChat(model)
+                  ? t("models.actions.testTitleChat")
+                  : t("models.actions.testTitleApi")
+              }
+              onClick={() => test(model.id)}
+            >
+              {t("models.actions.test")}
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              disabled={!online || !!busy}
+              onClick={() =>
+                void perform(`warmup:${model.id}`, () =>
+                  warmupModel(connection, { model: model.id, max_tokens: 1 }),
+                )
+              }
+            >
+              <Zap size={12} />
+              {t("models.actions.warmup")}
+            </Button>
+          </>
+        ) : (
+          <Reasoned
+            reason={
+              !online
+                ? t("models.actions.offlineReason")
+                : model.loading
+                  ? t("models.actions.loadingReason")
                   : busy
                     ? t("models.actions.busyReason")
                     : null
-          }
-        >
-          <Button
-            variant="secondary"
-            size="sm"
-            disabled={!online || !!busy || model.loading || model.pinned}
-            onClick={(e) => requestUnload(model, e.currentTarget)}
+            }
           >
-            <Square size={12} />
-            {busy?.endsWith(model.id)
-              ? t("models.actions.working")
-              : t("models.actions.unload")}
-          </Button>
-        </Reasoned>
-      )}
+            <Button
+              variant="secondary"
+              size="sm"
+              disabled={!online || !!busy || model.loading || checking}
+              title={fit?.text}
+              onClick={() => void startLoad()}
+            >
+              <Play size={12} />
+              {checking
+                ? t("models.fit.checking")
+                : busy?.endsWith(model.id)
+                  ? t("models.actions.working")
+                  : t("models.actions.load")}
+            </Button>
+          </Reasoned>
+        )}
+        {model.loaded && (
+          <Reasoned
+            reason={
+              model.pinned
+                ? t("models.actions.pinnedReason")
+                : model.loading
+                  ? t("models.actions.loadingReason")
+                  : !online
+                    ? t("models.actions.offlineReason")
+                    : busy
+                      ? t("models.actions.busyReason")
+                      : null
+            }
+          >
+            <Button
+              variant="secondary"
+              size="sm"
+              disabled={!online || !!busy || model.loading || model.pinned}
+              onClick={(e) => requestUnload(model, e.currentTarget)}
+            >
+              <Square size={12} />
+              {busy?.endsWith(model.id)
+                ? t("models.actions.working")
+                : t("models.actions.unload")}
+            </Button>
+          </Reasoned>
+        )}
+        <ModelManagement
+          connection={connection}
+          modelId={model.id}
+          disabled={!online || !!busy || model.loading}
+          perform={perform}
+        />
+      </div>
       {fit && fit.verdict !== "unknown" && (
         <span
           data-testid="fit-hint"
@@ -162,12 +172,6 @@ export function ModelActions({
           {fit.text}
         </span>
       )}
-      <ModelManagement
-        connection={connection}
-        modelId={model.id}
-        disabled={!online || !!busy || model.loading}
-        perform={perform}
-      />
       <Dialog open={!!review} onOpenChange={(o) => !o && setReview(null)}>
         <DialogContent closeLabel={t("models.fit.close")}>
           <DialogTitle>

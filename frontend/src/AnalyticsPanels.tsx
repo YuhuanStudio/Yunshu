@@ -57,6 +57,29 @@ export function SeriesChart({
   | "height"
 > & { busy: boolean; height?: number }) {
   useLocale();
+  // No sample has a value yet: say so calmly, at a reduced height, instead of an empty plot with a readout row.
+  const hasValues = rest.data.some((p) =>
+    rest.series.some((d) => {
+      const v = p.values[d.key];
+      return typeof v === "number" && Number.isFinite(v) && v !== 0;
+    }),
+  );
+  if (!hasValues)
+    return (
+      <div
+        role="status"
+        aria-label={rest.ariaLabel}
+        className={className}
+        data-testid="series-idle"
+      >
+        <EmptyState
+          size="inline"
+          title={
+            busy ? t("overview.chart.collecting") : t("overview.chart.idle")
+          }
+        />
+      </div>
+    );
   return (
     <div
       className={`[&_div[role=status]]:h-(--series-h) [&_div[role=status]]:min-h-0 [&_div[role=status]]:rounded-none [&_div[role=status]]:border-0 [&_div[role=status]]:text-xs ${className ?? ""}`}

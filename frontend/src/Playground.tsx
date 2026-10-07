@@ -41,6 +41,7 @@ import {
   ThinkingBlock,
   type ModelSelectOption,
 } from "@yuhuanowo/yunui/ai";
+import { PageHeader } from "@yuhuanowo/yunui/patterns";
 import {
   SlidersHorizontal,
   Plus,
@@ -671,9 +672,16 @@ export function Playground({
     />
   );
   return (
-    <section className="flex min-h-0 flex-1 flex-col" data-testid="playground">
+    <section
+      className="mx-auto flex min-h-0 w-full max-w-7xl flex-1 flex-col px-4 pb-2 pt-4 lg:px-6 lg:pt-6"
+      data-testid="playground"
+    >
+      <PageHeader
+        title={t("shell.page.playground")}
+        description={t("playground.page.desc")}
+      />
       <ChatHeader
-        className="flex-wrap gap-3 border-b border-border/60 p-4 max-sm:[&>*]:w-full"
+        className="flex-wrap gap-3 border-0 bg-transparent px-0 py-3 sm:h-auto sm:px-0 sm:py-3 max-sm:[&>*]:w-full"
         left={
           <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
             {modelSelect(model, setModel, t("playground.model.testModel"))}

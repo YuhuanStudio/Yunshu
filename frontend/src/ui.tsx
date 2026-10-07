@@ -1,4 +1,11 @@
-import { Button, Card, Input, PasswordInput, Switch } from "@yuhuanowo/yunui";
+import {
+  Alert,
+  Button,
+  Card,
+  Input,
+  PasswordInput,
+  Switch,
+} from "@yuhuanowo/yunui";
 import { Banner } from "@yuhuanowo/yunui/patterns";
 import { Check, Copy, RefreshCw, type LucideIcon } from "lucide-react";
 import {
@@ -386,5 +393,30 @@ export function CopyField({
         </div>
       </label>
     </div>
+  );
+}
+
+/**
+ * A feature the connected engine does not offer (older version, no access): one compact notice
+ * at normal measure, never a giant empty container.
+ */
+export function UnavailableNotice({
+  title,
+  description,
+  "data-testid": testId,
+}: {
+  title: string;
+  description: string;
+  "data-testid"?: string;
+}) {
+  return (
+    <Alert
+      variant="info"
+      title={title}
+      data-testid={testId}
+      className="max-w-3xl"
+    >
+      {description}
+    </Alert>
   );
 }

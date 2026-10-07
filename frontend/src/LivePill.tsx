@@ -24,12 +24,14 @@ export function LivePill({
       data-phase={pill.phase}
     >
       <StatusIndicator status={pill.tone} />
-      <span className="inline-block h-4 w-[2.75rem] truncate leading-4 text-foreground">
+      <span className="inline-block h-4 min-w-[2.75rem] truncate leading-4 text-foreground">
         {pill.phase}
       </span>
-      <span className="hidden w-[6.75rem] truncate tabular-nums sm:inline-block h-4 leading-4">
-        {pill.detail}
-      </span>
+      {pill.detail && (
+        <span className="hidden h-4 w-[6.75rem] truncate leading-4 tabular-nums sm:inline-block">
+          {pill.detail}
+        </span>
+      )}
     </span>
   );
 }

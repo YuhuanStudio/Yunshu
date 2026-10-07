@@ -194,11 +194,11 @@ export function SpeedPair({ status }: { status: EngineStatus }) {
         }
         subtext={
           <>
-            <span className="block truncate" data-testid={testId + "-label"}>
+            <span className="block" data-testid={testId + "-label"}>
               <span className="text-foreground">{headline.label}</span>
               {headline.note ? ` · ${headline.note}` : ""}
             </span>
-            <span className="block truncate">
+            <span className="block">
               {windowText} {windowMean == null ? "—" : fixed(windowMean)} tok/s
             </span>
           </>
@@ -298,7 +298,7 @@ export function HealthLine({
       role="status"
       data-testid="health-verdict"
       data-level={checking ? "checking" : level}
-      className="flex min-h-9 flex-wrap items-center gap-x-3 gap-y-1 text-sm"
+      className="flex min-h-8 flex-wrap items-center gap-x-3 gap-y-1 text-sm"
     >
       <StatusIndicator
         status={
@@ -312,12 +312,12 @@ export function HealthLine({
         }
       />
       <span
-        className={`text-base font-semibold ${level === "bad" && !checking ? "text-error" : ""}`}
+        className={`text-sm font-semibold ${level === "bad" && !checking ? "text-error" : ""}`}
       >
         {/* i18n-keys: overview.health. */}
         {checking ? "—" : tr(`overview.health.${level}`)}
       </span>
-      <span className="min-w-0 flex-1 text-muted-foreground">{text}</span>
+      <span className="min-w-0 text-muted-foreground">{text}</span>
       {!checking && level !== "ok" && target && (
         <Button size="sm" variant="ghost" onClick={() => navigate(target)}>
           {t("overview.health.open")}

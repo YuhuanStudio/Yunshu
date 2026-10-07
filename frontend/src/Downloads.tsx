@@ -28,7 +28,13 @@ import { bytesText, rateText } from "./byte-format";
 import { detailText } from "./errors";
 import { ByteValue } from "./ByteValue";
 import { Reasoned } from "./Reasoned";
-import { elapsed, fixed, SectionCard, type Engine } from "./ui";
+import {
+  elapsed,
+  fixed,
+  SectionCard,
+  UnavailableNotice,
+  type Engine,
+} from "./ui";
 
 const jobStatus = (j: DownloadJob) =>
   j.state === "failed"
@@ -287,14 +293,11 @@ export default function Downloads({
           title={t("downloads.title")}
           description={t("downloads.description")}
         />
-        <Card className="p-2" data-testid="downloads-unsupported">
-          <EmptyState
-            size="inline"
-            icon={<Download size={22} />}
-            title={t("downloads.unsupportedTitle")}
-            description={t("downloads.unsupportedDescription")}
-          />
-        </Card>
+        <UnavailableNotice
+          data-testid="downloads-unsupported"
+          title={t("downloads.unsupportedTitle")}
+          description={t("downloads.unsupportedDescription")}
+        />
       </DashboardPage>
     );
   const free = data?.freeBytes ?? null;

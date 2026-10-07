@@ -7,13 +7,7 @@ import { useMinWidth, type Engine } from "./ui";
 import { footerPills, gpuBusyFraction, type FooterPill } from "./footer-status";
 import { t } from "./i18n/index.ts";
 import { useSignals } from "./signals";
-
-const toneDot = (pills: FooterPill[], online: boolean) =>
-  !online || pills.some((p) => p.tone === "danger")
-    ? "offline"
-    : pills.some((p) => p.tone === "warning")
-      ? "away"
-      : "online";
+import { livePill } from "./engineView";
 
 /**
  * The status band: engine, what it does now, the machine. Current state only.
@@ -52,12 +46,12 @@ export function FooterStatus({
   const bar = (
     <StatusPillBar
       ariaLabel={t("shell.footer.ariaLabel")}
-      className="shrink-0 px-4 lg:px-6"
+      className="shrink-0 gap-x-5 px-4 lg:px-6"
     >
       {pills.map((p) => (
         <StatusPill
           key={p.key}
-          className={p.key === "engine" ? "pill-sans" : undefined}
+          flat
           label={p.label}
           value={p.value}
           valueMinCh={p.minCh}
@@ -69,7 +63,8 @@ export function FooterStatus({
     </StatusPillBar>
   );
   if (wide) return bar;
-  const current = pills.find((p) => p.key === (online ? "now" : "engine"));
+  // The same state-to-colour map as the top-bar pill: idle is grey, decode green, work in between amber.
+  const live = livePill(engine.phase, engine.status);
   return (
     <>
       <Button
@@ -81,9 +76,9 @@ export function FooterStatus({
         onClick={() => setOpen(true)}
       >
         <span className="flex min-w-0 items-center gap-2 text-xs">
-          <StatusIndicator status={toneDot(pills, online)} />
+          <StatusIndicator status={live.tone} />
           <span className="truncate tabular-nums">
-            {[current?.label, current?.value].filter(Boolean).join(" ")}
+            {[live.phase, live.detail].filter(Boolean).join(" ")}
           </span>
         </span>
         <ChevronUp size={14} className="shrink-0 text-muted-foreground" />

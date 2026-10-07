@@ -39,7 +39,7 @@ import { Reasoned } from "./Reasoned";
 import { useMemoryLedger } from "./memory-api";
 import { useRouteAction } from "./useRouteAction";
 import { number, percent, relative } from "./i18n/format";
-import { SectionCard, modelLabel, type Engine } from "./ui";
+import { SectionCard, UnavailableNotice, modelLabel, type Engine } from "./ui";
 
 export function tierLabel(name: string): string {
   if (name === "ram") return t("cache.tier.ram");
@@ -354,14 +354,11 @@ export default function Cache({
     return (
       <DashboardPage data-testid="cache">
         {header}
-        <Card className="p-2" data-testid="cache-unsupported">
-          <EmptyState
-            size="inline"
-            icon={<Database size={22} />}
-            title={t("cache.unsupportedTitle")}
-            description={t("cache.unsupportedDescription")}
-          />
-        </Card>
+        <UnavailableNotice
+          data-testid="cache-unsupported"
+          title={t("cache.unsupportedTitle")}
+          description={t("cache.unsupportedDescription")}
+        />
       </DashboardPage>
     );
 
@@ -387,7 +384,7 @@ export default function Cache({
         </Card>
       ) : (
         <>
-          <StatGrid>
+          <StatGrid data-stat-grid="">
             <StatCard
               icon={Database}
               label={t("cache.stat.total")}

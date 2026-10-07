@@ -20,7 +20,6 @@ import {
   Td,
 } from "@yuhuanowo/yunui";
 import {
-  CapabilityBadge,
   DashboardPage,
   PageHeader,
   SectionRow,
@@ -28,12 +27,7 @@ import {
 import { CodeBlock } from "@yuhuanowo/yunui/content";
 import { IDBadge, ModelCard, isKnownCapability } from "@yuhuanowo/yunui/ai";
 import { Box, Download, LayoutGrid, RefreshCw, Table2 } from "lucide-react";
-import {
-  getModel,
-  loadModel,
-  unloadModel,
-  type Connection,
-} from "./api";
+import { getModel, loadModel, unloadModel, type Connection } from "./api";
 import { useRouteAction } from "./useRouteAction";
 import {
   elapsed,
@@ -149,9 +143,10 @@ export function Models({
   };
   // Palette verbs `#/models?action=load|unload[&model=id]`: with a model id they act on it
   // (load runs, unload asks to confirm); without one they narrow the list so the user picks.
-  const [intent, setIntent] = useState<{ action: string; model: string } | null>(
-    null,
-  );
+  const [intent, setIntent] = useState<{
+    action: string;
+    model: string;
+  } | null>(null);
   useRouteAction("models", (action, q) => {
     if (action === "load" || action === "unload")
       setIntent({ action, model: q.get("model") ?? "" });
@@ -163,7 +158,12 @@ export function Models({
     const target = intent.model
       ? statusModels.find((m) => m.id === intent.model)
       : undefined;
-    if (target && intent.action === "load" && !target.loaded && !target.loading) {
+    if (
+      target &&
+      intent.action === "load" &&
+      !target.loaded &&
+      !target.loading
+    ) {
       void perform(`load:${target.id}`, () => loadModel(connection, target.id));
     } else if (target && intent.action === "unload" && target.loaded) {
       setUnloading(target);
@@ -314,11 +314,9 @@ export function Models({
                         <div className="mt-1 flex flex-wrap items-center gap-1.5">
                           <span className="text-xs text-muted-foreground">
                             {model.type}
+                            {/vlm|omni/i.test(model.type) &&
+                              ` · ${t("models.local.cap.vision")}`}
                           </span>
-                          {/vlm|omni/i.test(model.type) &&
-                            isKnownCapability("vision") && (
-                              <CapabilityBadge capability="vision" short />
-                            )}
                         </div>
                         {model.error && (
                           <p className="mt-1 max-w-xs break-words text-xs text-error">
@@ -463,7 +461,7 @@ export function Models({
           <Card className="flex flex-wrap items-center gap-3 p-4">
             <SearchInput
               id="models-search"
-              className="w-full sm:max-w-xs"
+              className="w-full max-sm:min-w-full sm:max-w-xs"
               aria-label={t("models.list.searchAria")}
               value={query}
               onChange={setQuery}

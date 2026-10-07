@@ -1,3 +1,4 @@
+import { SegmentedTray } from "./SegmentedTray";
 import { useRouteAction } from "./useRouteAction";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
@@ -11,7 +12,6 @@ import {
   NumberInput,
   Progress,
   Select,
-  SegmentedSelect,
   SelectContent,
   SelectItem,
   SelectTrigger,
@@ -52,7 +52,14 @@ import {
   type UsageDay,
 } from "./admin-keys-api";
 import { t, useLocale } from "./i18n/index.ts";
-import { CopyField, SectionCard, dateTime, number, relative } from "./ui";
+import {
+  CopyField,
+  SectionCard,
+  UnavailableNotice,
+  dateTime,
+  number,
+  relative,
+} from "./ui";
 
 type Phase = "loading" | "ok" | "unsupported" | "denied" | "error";
 
@@ -149,7 +156,7 @@ export default function Keys({ connection }: { connection: Connection }) {
         </p>
       )}
       {(phase === "unsupported" || phase === "denied" || phase === "error") && (
-        <EmptyState
+        <UnavailableNotice
           title={t(`keys.unavailable.${phase}.title`)}
           description={t(`keys.unavailable.${phase}.description`)}
         />
@@ -587,7 +594,7 @@ function UsageChart({ keys, usage }: { keys: ApiKey[]; usage: UsageDay[] }) {
               ))}
             </SelectContent>
           </Select>
-          <SegmentedSelect
+          <SegmentedTray
             options={[
               { value: "7", label: t("keys.usage.days", { count: 7 }) },
               { value: "14", label: t("keys.usage.days", { count: 14 }) },

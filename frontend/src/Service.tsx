@@ -27,7 +27,7 @@ import {
 import { uptimeText } from "./footer-status";
 import { StackRow } from "./stack-row";
 import { t } from "./i18n/index.ts";
-import { CopyField, SectionCard } from "./ui";
+import { CopyField, SectionCard, UnavailableNotice } from "./ui";
 
 /** One-click restart (launchd only): confirm, then drain and kickstart. A 409 shows the manual command. */
 export function RestartControl({
@@ -142,8 +142,7 @@ function useAdminLoad<T>(
 
 function Unavailable({ kind }: { kind: "unsupported" | "denied" | "error" }) {
   return (
-    <EmptyState
-      size="inline"
+    <UnavailableNotice
       title={t(`service.unavailable.${kind}.title`)}
       description={t(`service.unavailable.${kind}.description`)}
     />

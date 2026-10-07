@@ -160,7 +160,7 @@ h1[tabindex="-1"]:focus-visible {
     padding: 0.75rem;
   }
   [data-stat-grid] .yunui-stat-toprow {
-    margin-bottom: 0.5rem;
+    display: none;
   }
   [data-stat-grid] .yunui-stat-icon {
     width: 28px;
@@ -170,4 +170,17 @@ h1[tabindex="-1"]:focus-visible {
   [data-stat-grid] .yunui-stat-sub {
     display: none;
   }
+}
+
+/* One stat value size app-wide (the YunDesign 22). */
+.yunui-stat-value {
+  font-size: 1.375rem;
+  line-height: 1.75rem;
+}
+
+/* Stat sub-lines wrap instead of ending in an ellipsis: the copy is short enough, and a clipped number is worse than a second line. */
+[data-yunui-density="compact"] [data-stat-grid] .yunui-stat-sub {
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
 }

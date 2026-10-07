@@ -33,6 +33,7 @@ const playground: Shape<typeof zh> = {
   "empty.compareBody":
     "同一提示词依次发送到两组设置（不会同时执行，以免干扰计时），并排比较输出与速度。",
   "empty.chatTitle": "验证模型响应",
+  "page.desc": "向已加载的模型发送提示词，查看流式输出与统计。",
   "empty.chatBody": "向已加载的模型发送提示词，查看真实流式输出。",
   "header.apiFormat": "API 格式",
   "header.mode": "测试模式",

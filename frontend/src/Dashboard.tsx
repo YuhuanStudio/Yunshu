@@ -1,3 +1,4 @@
+import { SegmentedTray } from "./SegmentedTray";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   AnimatedNumber,
@@ -8,7 +9,6 @@ import {
   Progress,
   ScrollFade,
   SegmentedBar,
-  SegmentedSelect,
   Skeleton,
   Sparkline,
   StatusIndicator,
@@ -80,6 +80,7 @@ import {
   supportsChat,
   type Engine,
 } from "./ui";
+import { formatMs } from "./RequestTimeline";
 const memorySeries = () => [
   {
     key: "active",
@@ -426,35 +427,38 @@ export function Dashboard({
           </div>
         }
       />
-      <HealthLine
-        verdict={verdict}
-        checking={!status && engine.phase === "connecting"}
-        navigate={navigate}
-      />
-      <p className="-mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
-        <StatusIndicator status={online ? "online" : "offline"}>
-          <span className="text-foreground">
-            {online
-              ? status?.state === "running"
-                ? t("overview.status.running")
-                : (status?.state ?? t("overview.status.connected"))
-              : t("overview.status.offline")}
+      {/* One header block: the health verdict, then where the engine is and when it was read. */}
+      <div className="flex flex-wrap items-center gap-x-5 gap-y-1">
+        <HealthLine
+          verdict={verdict}
+          checking={!status && engine.phase === "connecting"}
+          navigate={navigate}
+        />
+        <p className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs tabular-nums text-muted-foreground">
+          <StatusIndicator status={online ? "online" : "offline"}>
+            <span className="text-foreground">
+              {online
+                ? status?.state === "running"
+                  ? t("overview.status.running")
+                  : (status?.state ?? t("overview.status.connected"))
+                : t("overview.status.offline")}
+            </span>
+          </StatusIndicator>
+          <span>Yunshu {status?.version ?? "—"}</span>
+          <span>
+            {t("overview.status.uptime", { t: elapsed(status?.uptime_s) })}
           </span>
-        </StatusIndicator>
-        <span>Yunshu {status?.version ?? "—"}</span>
-        <Slot ch={13}>
-          {t("overview.status.uptime", { t: elapsed(status?.uptime_s) })}
-        </Slot>
-        <Slot ch={16}>
-          {engine.updatedAt
-            ? t("overview.status.updated", { t: clock(engine.updatedAt) })
-            : t("overview.status.waiting")}
-        </Slot>
-        <Slot ch={6}>{!engine.polling ? t("overview.status.paused") : ""}</Slot>
-        {status?.load_error && (
-          <span className="text-error">{status.load_error}</span>
-        )}
-      </p>
+          <span>
+            {engine.updatedAt
+              ? t("overview.status.updated", { t: clock(engine.updatedAt) })
+              : t("overview.status.waiting")}
+          </span>
+          {!engine.polling && <span>{t("overview.status.paused")}</span>}
+          {status?.load_error && (
+            <span className="text-error">{status.load_error}</span>
+          )}
+        </p>
+      </div>
 
       <StaleStamp engine={engine} />
       <div className={dim} data-stale={stale ? "true" : undefined}>
@@ -462,7 +466,7 @@ export function Dashboard({
       </div>
 
       {!status ? (
-        <StatGrid>
+        <StatGrid data-stat-grid="">
           {[0, 1, 2, 3].map((i) => (
             <Skeleton key={i} className="h-[104px] w-full rounded-lg" />
           ))}
@@ -479,9 +483,7 @@ export function Dashboard({
             valueFirst
             icon={Timer}
             label={t("overview.stats.ttft")}
-            value={
-              last?.ttft_ms == null ? "—" : `${number(last.ttft_ms, 0)} ms`
-            }
+            value={last?.ttft_ms == null ? "—" : formatMs(last.ttft_ms)}
             subtext={
               last
                 ? t("overview.stats.latestAt", { t: clock(last.t * 1000) })
@@ -526,7 +528,7 @@ export function Dashboard({
         className={`grid min-w-0 overflow-hidden p-0 lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)] ${dim}`}
         data-testid="live-panel"
       >
-        <div className="flex min-w-0 flex-col justify-between gap-5 border-t border-border/60 p-5 max-lg:order-2 sm:p-6 lg:border-b-0 lg:border-t-0 lg:border-r">
+        <div className="flex min-w-0 flex-col justify-between gap-5 p-5 max-lg:order-2 sm:p-6">
           <div className="min-w-0">
             <div className="flex items-center justify-between gap-3">
               <p className="text-xs text-muted-foreground">
@@ -534,7 +536,7 @@ export function Dashboard({
                   ? t("overview.hero.decode")
                   : t("overview.hero.prefill")}
               </p>
-              <SegmentedSelect
+              <SegmentedTray
                 aria-label={t("overview.hero.metric")}
                 value={heroMetric}
                 onChange={setHeroMetric}
@@ -660,7 +662,7 @@ export function Dashboard({
             title={t("overview.perf.title")}
             action={
               <div className="flex flex-wrap items-center gap-2">
-                <SegmentedSelect
+                <SegmentedTray
                   aria-label={t("overview.perf.range")}
                   value={range}
                   onChange={chooseRange}
@@ -696,7 +698,7 @@ export function Dashboard({
               title={t("overview.throughput.title")}
               description={t("overview.throughput.desc")}
               action={
-                <SegmentedSelect
+                <SegmentedTray
                   aria-label={t("overview.throughput.metric")}
                   value={metric}
                   onChange={setMetric}

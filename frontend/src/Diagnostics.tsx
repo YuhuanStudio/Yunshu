@@ -469,7 +469,7 @@ export function Diagnostics({
       )}
       {/* Without /debug there is one tile at most; that figure is already a health row. */}
       {hasSystem && (
-        <StatGrid data-testid="resource-readouts">
+        <StatGrid data-stat-grid="" data-testid="resource-readouts">
           {hasSystem && (
             <StatCard
               compact

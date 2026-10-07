@@ -30,6 +30,7 @@ const playground = {
   "empty.compareBody":
     "同一提示詞依序送往兩組設定（不會同時執行，以免干擾計時），並排比較輸出與速度。",
   "empty.chatTitle": "驗證模型回應",
+  "page.desc": "向已載入的模型傳送提示詞，查看串流輸出與統計。",
   "empty.chatBody": "向已載入的模型傳送提示詞，查看真實串流輸出。",
   "header.apiFormat": "API 格式",
   "header.mode": "測試模式",

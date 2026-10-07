@@ -6,12 +6,14 @@ import { number, Readout } from "./ui";
 const num = (v: unknown): number | null =>
   typeof v === "number" && Number.isFinite(v) ? v : null;
 
+/** The one duration formatter: 1 s and above in seconds with one decimal, below that in whole ms. */
 export const formatMs = (ms: number) =>
-  ms >= 10_000
+  ms >= 1000
     ? `${number(ms / 1000, 1)} s`
-    : ms >= 1000
-      ? `${number(ms / 1000, 2)} s`
-      : `${number(ms, ms < 100 ? 1 : 0)} ms`;
+    : `${number(ms, ms < 100 ? 1 : 0)} ms`;
+export const durationUnit = (ms: number) => (ms >= 1000 ? "s" : "ms");
+export const durationValue = (ms: number) =>
+  ms >= 1000 ? number(ms / 1000, 1) : number(ms, ms < 100 ? 1 : 0);
 
 /** Wall-clock pieces of one finished request, all measured by the server; null when unreported. */
 export function breakdown(row: Row) {

@@ -178,7 +178,7 @@ export function footerPills(input: FooterInput): FooterPill[] {
       value: `${n(active, 1)}/${n(total, 0)} GB`,
       tone,
       dot: true,
-      minCh: 12,
+      minCh: 10,
       help:
         t("shell.footer.memory.help", {
           active: n(active, 1),
@@ -241,7 +241,7 @@ export function footerPills(input: FooterInput): FooterPill[] {
       value: `${n(input.gpuBusy * 100)}%`,
       tone: "neutral",
       dot: false,
-      minCh: 4,
+      minCh: 3,
       help: t("shell.footer.gpu.help"),
     });
   if (a.counts.active > 0 || a.counts.queued > 0)
