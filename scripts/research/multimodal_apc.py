@@ -172,6 +172,18 @@ def anthropic_body(model):
     )
 
 
+def arithmetic_item(i):
+    """A deterministic image-conditioned paired set, with known answers."""
+    a, b = 100 + (i * 17) % 89, 1 + (i * 23) % 97
+    red = i % 2 == 0
+    msg = messages(1, (200, 30, 30) if red else (30, 30, 200))
+    msg[0]["content"][1]["text"] = (
+        f"If the image is red, compute {a} + {b}. If it is blue, compute {a} - {b}. "
+        "Reply with only the integer answer."
+    )
+    return msg, a + b if red else a - b
+
+
 async def run(a):
     import httpx
 
@@ -293,6 +305,30 @@ async def run(a):
                         }
                     )
                     validate_pair(miss, hit, a.require_hit)
+            scores = {"cold": 0, "hit": 0}
+            for i in range(a.parity_items):
+                msg, gold = arithmetic_item(i)
+                cold = await probe(engine, msg, cold=True)
+                hit = await probe(engine, msg)
+                emit(
+                    {
+                        "event": "parity_item",
+                        "i": i,
+                        "gold": gold,
+                        "cold_ids": cold["ids"],
+                        "hit_ids": hit["ids"],
+                        "cached": hit["cached"],
+                        "cold_correct": cold["text"].strip() == str(gold),
+                        "hit_correct": hit["text"].strip() == str(gold),
+                    }
+                )
+                validate_pair(cold, hit, True)
+                scores["cold"] += cold["text"].strip() == str(gold)
+                scores["hit"] += hit["text"].strip() == str(gold)
+            if a.parity_items:
+                if abs(scores["cold"] - scores["hit"]) > 1:
+                    raise ValueError("paired quality changed by more than one answer")
+                emit({"event": "quality", "n": a.parity_items, "scores": scores})
             emit({"complete": True})
     finally:
         set_engine(None)
@@ -304,6 +340,7 @@ def parser():
     p.add_argument("--model", required=True)
     p.add_argument("--out", required=True)
     p.add_argument("--sizes", type=int, nargs="+", default=[1, 32768])
+    p.add_argument("--parity-items", type=int, default=0)
     p.add_argument("--require-hit", action="store_true")
     p.add_argument(
         "--skip-anthropic",

@@ -1030,71 +1030,129 @@ def _multimodal_valid(
     return True, ""
 
 
+def _multimodal_quality_valid(path, sizes, n):
+    ok, reason = _multimodal_valid(path, sizes, True)
+    if not ok:
+        return ok, reason
+    rows = read_jsonl(path)
+    items = [r for r in rows if r.get("event") == "parity_item"]
+    if len(items) != n or {r.get("i") for r in items} != set(range(n)):
+        return False, "incomplete paired image set"
+    if any(
+        not r.get("cached")
+        or not r.get("cold_ids")
+        or r["cold_ids"] != r.get("hit_ids")
+        for r in items
+    ):
+        return False, "paired image raw-ID drift"
+    summary = next((r for r in rows if r.get("event") == "quality"), {})
+    scores = summary.get("scores", {})
+    counts = {
+        "cold": sum(bool(r.get("cold_correct")) for r in items),
+        "hit": sum(bool(r.get("hit_correct")) for r in items),
+    }
+    if (
+        summary.get("n") != n
+        or any(scores.get(k) != v for k, v in counts.items())
+        or abs(counts["cold"] - counts["hit"]) > 1
+    ):
+        return False, "invalid paired quality scores"
+    return True, ""
+
+
 def stage_multimodal(ctx: Ctx) -> StageResult:
     """Pinned media sessions: raw IDs, pixel isolation, short + long TTFT."""
-    cells = []
-    for rep in range(int(ctx.suite.get("reps", 3))):
-        for arm in ("base", "cand"):
-            key = f"{arm}-r{rep}"
-            scratch = ctx.run.path / "media" / key
-            scratch.mkdir(parents=True, exist_ok=True)
-            env = ctx.arm_env(
-                arm,
-                {
-                    "YUNSHU_VLM_APC_DISK": "0",
-                    "YUNSHU_MEDIA_DIR": str(scratch),
-                    "HF_HUB_OFFLINE": "1",
-                },
-            )
-            argv = ["env", f"PYTHONPATH={ctx.tree(arm).path / 'python'}"]
-            argv += [f"{k}={v}" for k, v in env.items()]
-            remote = "gemma-4-e2b" in ctx.model and int(ctx.suite.get("reps", 3)) == 1
-            script = ctx.cand.path / "scripts/research/multimodal_apc.py"
-            if remote:
-                # gpuq snapshots cwd, not arbitrary external pinned trees. Run
-                # the committed common harness in each arm's own snapshot; the
-                # old arm need not contain this new measurement script.
-                source = script.read_text()
-                compile(source, str(script), "exec")  # CPU preflight before submit
-                entry = [
-                    ctx.py,
-                    "-c",
-                    "import sys; sys.path.insert(0, 'scripts/research'); "
-                    + f"exec(compile({source!r}, 'multimodal_apc.py', 'exec'))",
-                ]
-            else:
-                entry = [ctx.py, str(script)]
-            argv += [
-                *entry,
-                "--model",
-                ctx.model,
-                "--out",
-                "{out}",
-                "--sizes",
+
+    def cell(arm, rep):
+        key = f"{arm}-r{rep}"
+        scratch = ctx.run.path / "media" / key
+        scratch.mkdir(parents=True, exist_ok=True)
+        env = ctx.arm_env(
+            arm,
+            {
+                "YUNSHU_VLM_APC_DISK": "0",
+                "YUNSHU_MEDIA_DIR": str(scratch),
+                "HF_HUB_OFFLINE": "1",
+            },
+        )
+        argv = ["env", f"PYTHONPATH={ctx.tree(arm).path / 'python'}"]
+        argv += [f"{k}={v}" for k, v in env.items()]
+        remote = "gemma-4-e2b" in ctx.model and int(ctx.suite.get("reps", 3)) == 1
+        script = ctx.cand.path / "scripts/research/multimodal_apc.py"
+        if remote:
+            # gpuq snapshots cwd, not arbitrary external pinned trees. Run
+            # the committed common harness in each arm's own snapshot; the
+            # old arm need not contain this new measurement script.
+            source = script.read_text()
+            compile(source, str(script), "exec")  # CPU preflight before submit
+            entry = [
+                ctx.py,
+                "-c",
+                "import sys; sys.path.insert(0, 'scripts/research'); "
+                + f"exec(compile({source!r}, 'multimodal_apc.py', 'exec'))",
             ]
-            argv += [str(n) for n in ctx.suite["ctx"]]
-            if arm == "cand":
-                argv += ["--require-hit"]
-            else:
-                argv += ["--skip-anthropic"]
-            cells.append(
-                Cell(
-                    "multimodal",
-                    key,
-                    argv,
-                    mem_gb=ctx.mem_gb,
-                    quiet=int(ctx.suite.get("reps", 3)) >= 3,
-                    timeout_min=20,
-                    device="m3" if remote else "m5",
-                    cwd=ctx.tree(arm).path if remote else None,
-                    validate=lambda path, hit=arm == "cand": _multimodal_valid(
-                        path, ctx.suite["ctx"], hit, require_anthropic=hit
-                    ),
-                )
+        else:
+            entry = [ctx.py, str(script)]
+        argv += [
+            *entry,
+            "--model",
+            ctx.model,
+            "--out",
+            "{out}",
+            "--sizes",
+        ]
+        argv += [str(n) for n in ctx.suite["ctx"]]
+        if arm == "cand":
+            argv += ["--require-hit"]
+        else:
+            argv += ["--skip-anthropic"]
+        cells = [
+            Cell(
+                "multimodal",
+                key,
+                argv,
+                mem_gb=ctx.mem_gb,
+                quiet=int(ctx.suite.get("reps", 3)) >= 3,
+                timeout_min=20,
+                device="m3" if remote else "m5",
+                cwd=ctx.tree(arm).path if remote else None,
+                validate=lambda path, hit=arm == "cand": _multimodal_valid(
+                    path, ctx.suite["ctx"], hit, require_anthropic=hit
+                ),
             )
+        ]
+        return cells[0]
+
+    parity_n = (
+        int(ctx.suite.get("mmlu_n", 200)) if ctx.suite.get("media_quality_items") else 0
+    )
+    quality_result = None
+    if parity_n:
+        quality_cell = cell("cand", "quality")
+        quality_cell.argv += ["--parity-items", str(parity_n)]
+        quality_cell.quiet = False
+        quality_cell.validate = lambda path: _multimodal_quality_valid(
+            path, ctx.suite["ctx"], parity_n
+        )
+        quality_result = ctx.exe.run_cells([quality_cell])[quality_cell.key]
+        if not quality_result.ok:
+            return _finish(
+                ctx, StageResult("multimodal", False, [quality_result.reason])
+            )
+    cells = [
+        cell(arm, rep)
+        for rep in range(int(ctx.suite.get("reps", 3)))
+        for arm in ("base", "cand")
+    ]
     results = ctx.exe.run_cells(cells)
     reasons = _failed_cells(results)
     numbers = {}
+    if quality_result is not None:
+        numbers["paired_quality"] = next(
+            r
+            for r in read_jsonl(quality_result.evidence)
+            if r.get("event") == "quality"
+        )
     if not reasons:
         for key, result in results.items():
             rows = [

@@ -163,8 +163,13 @@ report real cache reads, including the explicit Anthropic image checkpoint. The
 common committed probe is CPU-tested before loading a model; incomplete request
 matrices fail closed.
 
-The default uses three interleaved base/candidate M5 cells, with short and 32K text
-bodies (`--ctx 1,32768`; each receipt reports the actual media-expanded prompt length).
+Before timing, a non-quiet candidate cell checks 200 image-conditioned arithmetic
+items as cold/hit pairs: every raw-ID sequence must match and the net correct-answer
+difference must be within one. This is a small deterministic cache check, not a
+general vision benchmark. `--mmlu-n 1` is a one-item harness pilot.
+
+The default then uses three interleaved base/candidate M5 cells, with short and 32K text
+bodies (`--ctx 46,32768`; each receipt reports the actual media-expanded prompt length).
 Cells use quiet timing admission. `gemma-4-e2b-it-4bit --reps 1` uses the allowlisted
 M3 lane for correctness only; both arms use their own pinned checkout snapshots.
 M3 numbers never decide M5 performance. The verdict rejects mixed-device pairs and mismatched dependency versions.

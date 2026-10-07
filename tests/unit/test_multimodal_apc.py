@@ -92,3 +92,16 @@ async def test_anthropic_probe_on_fake_http_before_loading_a_model():
 
     result = await p.anthropic_probe(engine, Client(), p.anthropic_body("omni"))
     assert result["ids"] == [8] and result["cached"] == 49 and result["pt"] == 57
+
+
+def test_image_conditioned_paired_set_has_known_answers():
+    for i, expected in [(0, 101), (1, 93), (2, 181), (3, 81), (199, 82)]:
+        msg, gold = p.arithmetic_item(i)
+        assert gold == expected
+        assert msg[0]["content"][0]["image_url"]["url"].startswith(
+            "data:image/png;base64,"
+        )
+    assert (
+        len({p.arithmetic_item(i)[0][0]["content"][1]["text"] for i in range(200)})
+        == 200
+    )

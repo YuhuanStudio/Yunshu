@@ -1038,6 +1038,24 @@ def test_multimodal_evidence_is_fail_closed(tmp_path):
     base_path.write_text("".join(json.dumps(r) + "\n" for r in baseline))
     assert stages._multimodal_valid(base_path, [1], False, require_anthropic=False)[0]
     assert not stages._multimodal_valid(base_path, [1], True)[0]
+    paired = rows[:-1] + [
+        dict(
+            event="parity_item",
+            i=0,
+            cold_ids=[7],
+            hit_ids=[7],
+            cached=42,
+            cold_correct=True,
+            hit_correct=True,
+        ),
+        dict(event="quality", n=1, scores=dict(cold=1, hit=1)),
+        dict(complete=True),
+    ]
+    path.write_text("".join(json.dumps(r) + "\n" for r in paired))
+    assert stages._multimodal_quality_valid(path, [1], 1)[0]
+    paired[-3]["hit_ids"] = [8]
+    path.write_text("".join(json.dumps(r) + "\n" for r in paired))
+    assert not stages._multimodal_quality_valid(path, [1], 1)[0]
     rows[1]["ids"] = [8]
     path.write_text("".join(json.dumps(r) + "\n" for r in rows))
     assert not stages._multimodal_valid(path, [1], True)[0]

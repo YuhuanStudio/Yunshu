@@ -23,8 +23,9 @@ LADDER = tuple(s for s in STAGES if s not in ("longqa", "conc", "multimodal"))
 SUITES = {
     "multimodal": {
         "stages": ["preflight", "multimodal"],
-        "ctx": [1, 32768],
+        "ctx": [46, 32768],
         "reps": 3,
+        "media_quality_items": 200,
     },
     # decode-path change (kernels, spec decode, sampler): identity incl. spec on == off, speed
     "decode": {
