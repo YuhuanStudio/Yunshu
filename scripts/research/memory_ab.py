@@ -103,6 +103,14 @@ def chat(url, messages, max_tokens):
     return msg.get("content") or "", data.get("usage", {}), time.time() - t
 
 
+def _tree_python(tree):
+    """A tree with the marker `.yv-own-venv` is served from its own .venv (dependency A/B)."""
+    py = os.path.join(tree, ".venv", "bin", "python")
+    if os.path.exists(os.path.join(tree, ".yv-own-venv")) and os.path.exists(py):
+        return py
+    return sys.executable
+
+
 def run_arm(name, tree, model, port, rep, emit, extra_env=None):
     env = dict(
         os.environ,
@@ -116,7 +124,7 @@ def run_arm(name, tree, model, port, rep, emit, extra_env=None):
     log = open(f"{os.path.splitext(OUT)[0]}_{name}_{rep}.log", "w")  # noqa: SIM115
     proc = subprocess.Popen(
         [
-            sys.executable,
+            _tree_python(tree),
             "-m",
             "yunshu_cli",
             "serve",
@@ -265,7 +273,8 @@ def run_arm(name, tree, model, port, rep, emit, extra_env=None):
             os.killpg(proc.pid, 2)
             proc.wait(60)
         except Exception:  # noqa: BLE001
-            os.killpg(proc.pid, 9)
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(proc.pid, 9)
         log.close()
 
 
