@@ -129,7 +129,7 @@ def test_suite_named_and_adhoc():
 
 def test_full_suite_has_every_stage():
     assert suites.parse_suite("full")["stages"] == list(suites.LADDER)
-    assert set(suites.STAGES) - set(suites.LADDER) == {"longqa", "conc"}
+    assert set(suites.STAGES) - set(suites.LADDER) == {"longqa", "conc", "ttft_profile"}
 
 
 # ── diff -> tests ────────────────────────────────────────────────────────
@@ -1000,3 +1000,21 @@ def test_detach_pins_arms_resolved_by_the_caller(tmp_path):
     ]
     dir_arm = core.Arm("cand", str(wt), "c" * 40, wt.resolve(), "")
     assert cli.pinned_spec(dir_arm) == str(wt.resolve())
+
+
+def test_ttft_profile_is_opt_in_and_requires_complete_spans(tmp_path):
+    assert "ttft_profile" not in suites.LADDER
+    assert "ttft_profile" not in suites.SUITES["long"]["stages"]
+    path = tmp_path / "profile.jsonl"
+    rows = [
+        dict(phase=phase, call_spans=[dict(stage="gpu_wait")], engaged="dflash")
+        for phase in ("cold", "warm", "warm", "warm", "followup")
+    ]
+    path.write_text("\n".join(json.dumps(r) for r in rows) + "\n")
+    assert not stages._ttft_profile_valid(path)[0]
+    rows.append(dict(complete=True))
+    path.write_text("\n".join(json.dumps(r) for r in rows) + "\n")
+    assert stages._ttft_profile_valid(path)[0]
+    rows[1]["call_spans"] = []
+    path.write_text("\n".join(json.dumps(r) for r in rows) + "\n")
+    assert not stages._ttft_profile_valid(path)[0]

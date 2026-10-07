@@ -981,7 +981,75 @@ def _memory_valid(path: Path):
     return True, ""
 
 
+def _ttft_profile_valid(path: Path):
+    rows = read_jsonl(path)
+    if not rows or rows[-1].get("complete") is not True:
+        return False, "missing final complete record"
+    requests = rows[:-1]
+    phases = [r.get("phase") for r in requests]
+    if phases != ["cold", "warm", "warm", "warm", "followup"]:
+        return False, "unexpected diagnostic request phases"
+    if any(not r.get("call_spans") or not r.get("engaged") for r in requests[1:]):
+        return False, "missing diagnostic spans or engaged mode"
+    return True, ""
+
+
+def stage_ttft_profile(ctx: Ctx) -> StageResult:
+    """Locate TTFT work with a profiled server. Never infer a speed win here."""
+    cells = []
+    for size in ctx.suite["ctx"]:
+        for kind in ctx.suite["kinds"]:
+            for arm in ("base", "cand"):
+                key = f"{arm}-c{size}-{kind}"
+                cells.append(
+                    Cell(
+                        "ttft_profile",
+                        key,
+                        [
+                            ctx.py,
+                            str(REPO / "scripts/research/ttft_warm_probe.py"),
+                            "--model",
+                            ctx.model,
+                            "--src",
+                            str(ctx.tree(arm).path / "python"),
+                            "--ctx",
+                            str(size),
+                            "--kind",
+                            kind,
+                            "--warm",
+                            "3",
+                            "--calls",
+                            "--tag",
+                            f"{ctx.exe.label}-{key}",
+                            "--out",
+                            "{out}",
+                            *_env_flags(ctx.arm_env(arm)),
+                        ],
+                        mem_gb=ctx.mem_gb,
+                        timeout_min=30,
+                        stall_min=12,
+                        quiet=True,
+                        validate=_ttft_profile_valid,
+                    )
+                )
+    results = ctx.exe.run_cells(cells)
+    reasons = _failed_cells(results)
+    return _finish(
+        ctx,
+        StageResult(
+            "ttft_profile",
+            not reasons,
+            reasons,
+            {
+                "diagnostic_only": True,
+                "method": "profiled Python/C spans; run long for identity and speed",
+            },
+        ),
+    )
+
+
 STAGE_FUNCS = {
+    "ttft_profile": stage_ttft_profile,
     "preflight": stage_preflight,
     "smoke": stage_smoke,
     "identity": stage_identity,

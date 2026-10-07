@@ -150,3 +150,12 @@ matrix is about 6 to 8 hours of 27B time), and **before a release** by running i
 Ad-hoc scripts are for measurements `yv` does not cover. Put them in `scripts/research/` with a CPU
 unit test, make them write a final `complete: true` record, and then add them as a stage or a
 cell in `scripts/verify/stages.py` so the next worker does not need the script.
+
+
+`ttft_profile` is an opt-in diagnostic suite (32K / 128K code, both pinned arms).
+It records three full-hit requests and one genuine follow-up per fresh server,
+Python call spans and MLX evaluation waits without adding GPU synchronization.
+The profile perturbs Python costs: its PASS means complete diagnostic evidence,
+not a speed or identity verdict. Use `long --reps 3` for those verdicts.
+`http_sse_queue_other` includes transport, executor queue and uninstrumented work;
+it is not pure network overhead. Raw spans retain the exact evaluation callsite.

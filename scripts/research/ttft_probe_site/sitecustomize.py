@@ -15,6 +15,13 @@ from collections import deque
 _OUT = os.environ.get("TTFT_PROBE_OUT")
 if _OUT:
     _ring = deque(maxlen=400000)
+    _calls = None
+    if os.environ.get("TTFT_PROBE_CALLS") == "1":
+        from spans import CallSpans
+
+        _calls = CallSpans()
+        sys.setprofile(_calls.profile)
+        threading.setprofile(_calls.profile)
 
     def _stack(frame, depth=7):
         out = []
@@ -47,6 +54,11 @@ if _OUT:
             for r in list(_ring):
                 f.write(json.dumps(r) + "\n")
         _ring.clear()
+        if _calls is not None:
+            with open(f"{_OUT}.spans.{os.getpid()}", "w") as f:
+                for r in list(_calls.rows):
+                    f.write(json.dumps(r) + "\n")
+            _calls.rows.clear()
 
     signal.signal(signal.SIGUSR1, _dump)
     threading.Thread(target=_loop, daemon=True, name="ttft-probe-sampler").start()
