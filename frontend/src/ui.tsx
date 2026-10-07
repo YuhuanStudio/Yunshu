@@ -5,6 +5,7 @@ import {
   getModelDeveloperId,
 } from "@yuhuanowo/yunui/ai";
 import { RefreshCw } from "lucide-react";
+import { useEffect, useState } from "react";
 import type { EngineStatus } from "./api";
 import type { useEngine } from "./useEngine";
 export type Engine = ReturnType<typeof useEngine>;
@@ -108,4 +109,60 @@ export function LocalModelIcon({
       rounded
     />
   ) : null;
+}
+
+/** One mapping for request phases to status dots. Red is reserved for errors. */
+export const phaseDot = (phase: string): "online" | "away" | "neutral" =>
+  phase === "decode"
+    ? "online"
+    : phase === "prefill" || phase === "starting"
+      ? "away"
+      : "neutral";
+
+/** A label + value pair with tabular numerals: the console's basic readout. */
+export function Readout({
+  label,
+  value,
+  unit,
+  hint,
+}: {
+  label: string;
+  value: string;
+  unit?: string;
+  hint?: string;
+}) {
+  return (
+    <div className="min-w-0">
+      <p className="text-[11px] tracking-wide text-muted-foreground">{label}</p>
+      <p className="mt-1 truncate text-lg font-semibold tabular-nums">
+        {value}
+        {unit && (
+          <span className="ml-1 text-xs font-normal text-muted-foreground">
+            {unit}
+          </span>
+        )}
+      </p>
+      {hint && (
+        <p className="mt-0.5 truncate text-[11px] text-muted-foreground">
+          {hint}
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** Tracks a min-width media query (Tailwind `xl` is 1280px). */
+export function useMinWidth(px: number) {
+  const query = `(min-width: ${px}px)`;
+  const [matches, setMatches] = useState(
+    () => typeof matchMedia === "function" && matchMedia(query).matches,
+  );
+  useEffect(() => {
+    const list = matchMedia(query);
+    const update = () => setMatches(list.matches);
+    update();
+    list.addEventListener("change", update);
+    return () => list.removeEventListener("change", update);
+  }, [query]);
+  return matches;
 }

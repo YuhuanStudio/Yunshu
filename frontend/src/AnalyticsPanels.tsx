@@ -215,6 +215,7 @@ export function LatencyPanel({
           </Table>
         ) : (
           <EmptyState
+            size="inline"
             title="這個區間沒有觀測記錄"
             description="可關閉面板，選擇另一個延遲區間。"
           />

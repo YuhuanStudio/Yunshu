@@ -19,11 +19,8 @@ import {
   Th,
   Td,
 } from "@yuhuanowo/yunui";
-import {
-  PageHeader,
-  CodeBlock,
-  CapabilityBadge,
-} from "@yuhuanowo/yunui/patterns";
+import { PageHeader, CapabilityBadge } from "@yuhuanowo/yunui/patterns";
+import { CodeBlock } from "@yuhuanowo/yunui/content";
 import { isKnownCapability } from "@yuhuanowo/yunui/ai";
 import { Box, Play, RefreshCw, Square, Zap } from "lucide-react";
 import {
@@ -171,7 +168,7 @@ export function Models({
                       model.error
                         ? "offline"
                         : model.loading
-                          ? "busy"
+                          ? "away"
                           : model.loaded
                             ? "online"
                             : "neutral"
@@ -190,6 +187,7 @@ export function Models({
                   </StatusIndicator>
                   {model.loading && (
                     <Progress
+                      indeterminate
                       className="mt-2 h-1"
                       label={`${modelLabel(model.id)} 載入中`}
                     />
@@ -422,10 +420,9 @@ export function Models({
               {detailError}
             </p>
           ) : metadata ? (
-            <CodeBlock
-              code={JSON.stringify(metadata, null, 2)}
-              language="json"
-            />
+            <CodeBlock language="json">
+              {JSON.stringify(metadata, null, 2)}
+            </CodeBlock>
           ) : (
             <p role="status" className="text-sm text-muted-foreground">
               讀取模型資訊…

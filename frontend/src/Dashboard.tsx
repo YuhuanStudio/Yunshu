@@ -7,6 +7,7 @@ import {
   EmptyState,
   IconButton,
   Progress,
+  ScrollFade,
   SegmentedBar,
   SegmentedSelect,
   Sparkline,
@@ -27,7 +28,12 @@ import {
   RefreshCw,
   Server,
 } from "lucide-react";
-import { PageHeader } from "@yuhuanowo/yunui/patterns";
+import {
+  DetailList,
+  DetailRow,
+  HoverRow,
+  PageHeader,
+} from "@yuhuanowo/yunui/patterns";
 import { ActivityPanel, LatencyPanel, PhasePanel } from "./AnalyticsPanels";
 import { observationCsv, timeSeries } from "./analytics";
 import type { RequestRow } from "./api";
@@ -36,6 +42,8 @@ import {
   elapsed,
   modelLabel,
   number,
+  phaseDot,
+  Readout,
   supportsChat,
   type Engine,
 } from "./ui";
@@ -74,47 +82,6 @@ const phaseText: Record<string, string> = {
   decode: "Decode",
   running: "執行",
 };
-const phaseDot = (phase: string) =>
-  phase === "decode"
-    ? "online"
-    : phase === "queued"
-      ? "away"
-      : phase === "prefill" || phase === "starting"
-        ? "busy"
-        : "neutral";
-
-/** A label + value pair with tabular numerals: the console's basic readout. */
-function Readout({
-  label,
-  value,
-  unit,
-  hint,
-}: {
-  label: string;
-  value: string;
-  unit?: string;
-  hint?: string;
-}) {
-  return (
-    <div className="min-w-0">
-      <p className="text-[11px] tracking-wide text-muted-foreground">{label}</p>
-      <p className="mt-1 truncate text-lg font-semibold tabular-nums">
-        {value}
-        {unit && (
-          <span className="ml-1 text-xs font-normal text-muted-foreground">
-            {unit}
-          </span>
-        )}
-      </p>
-      {hint && (
-        <p className="mt-0.5 truncate text-[11px] text-muted-foreground">
-          {hint}
-        </p>
-      )}
-    </div>
-  );
-}
-
 function RequestLane({ row }: { row: RequestRow }) {
   const phase = String(row.phase);
   const prompt = row.prompt_tokens ?? 0,
@@ -133,9 +100,7 @@ function RequestLane({ row }: { row: RequestRow }) {
           status={phaseDot(phase)}
           pulse={phase === "decode" || phase === "prefill"}
         />
-        <span className="text-sm font-medium">
-          {phaseText[phase] ?? phase}
-        </span>
+        <span className="text-sm font-medium">{phaseText[phase] ?? phase}</span>
         <span className="truncate font-mono text-xs text-muted-foreground">
           {row.request_id}
         </span>
@@ -243,7 +208,10 @@ export function Dashboard({
   }
   if (!status && engine.phase !== "connecting")
     return (
-      <section className="mx-auto w-full max-w-6xl space-y-6" data-testid="overview">
+      <section
+        className="mx-auto w-full max-w-6xl space-y-6"
+        data-testid="overview"
+      >
         <PageHeader
           title="引擎總覽"
           description="模型、請求與效能，都從你的本機引擎開始。"
@@ -279,7 +247,10 @@ export function Dashboard({
       </section>
     );
   return (
-    <section className="mx-auto w-full max-w-6xl space-y-5" data-testid="overview">
+    <section
+      className="mx-auto w-full max-w-6xl space-y-5"
+      data-testid="overview"
+    >
       <PageHeader
         title="引擎總覽"
         description="觀察這台 Mac 如何處理每一次推理。"
@@ -421,7 +392,9 @@ export function Dashboard({
               label="首 Token 延遲"
               value={number(last?.ttft_ms, 0)}
               unit="ms"
-              hint={last ? `最近一筆 · ${clock(last.t * 1000)}` : "尚無完成請求"}
+              hint={
+                last ? `最近一筆 · ${clock(last.t * 1000)}` : "尚無完成請求"
+              }
             />
             <Readout
               label="前綴重用率"
@@ -464,15 +437,16 @@ export function Dashboard({
               ))}
             </ul>
           ) : (
-            <div className="flex flex-1 flex-col items-start justify-center gap-1 py-8">
-              <p className="text-sm font-medium">目前閒置</p>
-              <p className="text-xs text-muted-foreground">
-                沒有正在處理的請求。
-                {memory?.cache_gb
+            <EmptyState
+              size="inline"
+              className="flex-1"
+              title="目前閒置"
+              description={`沒有正在處理的請求。${
+                memory?.cache_gb
                   ? ` 配置器快取 ${number(memory.cache_gb)} GB 會在閒置後歸還系統。`
-                  : ""}
-              </p>
-            </div>
+                  : ""
+              }`}
+            />
           )}
         </div>
       </Card>
@@ -519,7 +493,7 @@ export function Dashboard({
             {table ? "收合數值" : "檢視採樣數值"}
           </Button>
           {table && (
-            <div className="mt-3 max-h-60 overflow-auto">
+            <ScrollFade className="mt-3 max-h-60 overflow-auto">
               <Table scrollLabel="吞吐採樣資料">
                 <Thead>
                   <Tr>
@@ -540,15 +514,13 @@ export function Dashboard({
                   ))}
                 </Tbody>
               </Table>
-            </div>
+            </ScrollFade>
           )}
         </Card>
         <Card className="min-w-0 p-5 sm:p-6" data-testid="memory-panel">
           <div className="flex items-center justify-between">
             <h2 className="text-sm font-medium">Metal 記憶體</h2>
-            <Badge variant="outline">
-              實體 {number(memory?.total_gb)} GB
-            </Badge>
+            <Badge variant="outline">實體 {number(memory?.total_gb)} GB</Badge>
           </div>
           <p className="mt-4 text-3xl font-semibold tracking-tight tabular-nums">
             {number(memory?.active_gb)}
@@ -562,32 +534,39 @@ export function Dashboard({
             total={memory?.total_gb ?? undefined}
             label={`Metal 記憶體：活躍 ${number(memory?.active_gb)} GB，快取 ${number(memory?.cache_gb)} GB`}
             segments={[
-              { value: memory?.active_gb ?? 0, tone: "accent", label: "活躍配置" },
+              {
+                value: memory?.active_gb ?? 0,
+                tone: "accent",
+                label: "活躍配置",
+              },
               {
                 value: memory?.cache_gb ?? 0,
                 tone: "warning",
                 label: "配置器快取",
               },
             ]}
+            marks={
+              memory?.peak_gb
+                ? [{ value: memory.peak_gb, label: "本次峰值" }]
+                : undefined
+            }
             legend
             formatValue={(v) => `${number(v)} GB`}
           />
-          <dl className="mt-4 grid grid-cols-2 gap-3 border-t border-border/60 pt-4 text-xs">
-            <div>
-              <dt className="text-muted-foreground">本次峰值</dt>
-              <dd className="mt-1 text-sm font-medium tabular-nums">
-                {number(memory?.peak_gb)} GB
-              </dd>
-            </div>
-            <div>
-              <dt className="text-muted-foreground">已載入權重</dt>
-              <dd className="mt-1 text-sm font-medium tabular-nums">
-                {loaded.length
+          <DetailList className="mt-4 border-t border-border/60 pt-4">
+            <DetailRow
+              label="本次峰值"
+              value={`${number(memory?.peak_gb)} GB`}
+            />
+            <DetailRow
+              label="已載入權重"
+              value={
+                loaded.length
                   ? `${number(loaded.reduce((s, m) => s + (m.size_gb ?? 0), 0))} GB · ${loaded.length} 個`
-                  : "—"}
-              </dd>
-            </div>
-          </dl>
+                  : "—"
+              }
+            />
+          </DetailList>
           <TimeSeriesChart
             {...chartLabels}
             className="mt-4"
@@ -684,36 +663,39 @@ export function Dashboard({
         </div>
         <ul className="divide-y divide-border/60">
           {(status?.models ?? []).slice(0, 6).map((model) => (
-            <li
-              key={model.id}
-              className="flex items-center gap-3 px-5 py-3 sm:px-6"
-            >
-              <StatusIndicator
-                status={
-                  model.loading ? "busy" : model.loaded ? "online" : "neutral"
-                }
-                pulse={model.loading}
-              />
-              <span className="min-w-0 flex-1 truncate text-sm font-medium">
-                {modelLabel(model.id)}
-              </span>
-              <span className="hidden text-xs text-muted-foreground sm:inline">
-                {model.type}
-              </span>
-              <span className="w-20 text-right text-xs tabular-nums text-muted-foreground">
-                {number(model.size_gb)} GB
-              </span>
-              <span className="w-24 text-right text-xs text-muted-foreground">
-                {model.loading
-                  ? "載入中"
-                  : model.loaded
-                    ? model.expires_in_s != null
-                      ? `${elapsed(model.expires_in_s)} 後卸載`
-                      : model.pinned
-                        ? "固定保留"
-                        : "已載入"
-                    : "未載入"}
-              </span>
+            <li key={model.id} className="px-3 py-0.5 sm:px-4">
+              <HoverRow
+                onClick={() => navigate("models")}
+                aria-label={`${modelLabel(model.id)}，開啟模型庫`}
+                className="flex items-center gap-3 px-2 py-2.5"
+              >
+                <StatusIndicator
+                  status={
+                    model.loading ? "away" : model.loaded ? "online" : "neutral"
+                  }
+                  pulse={model.loading}
+                />
+                <span className="min-w-0 flex-1 truncate text-sm font-medium">
+                  {modelLabel(model.id)}
+                </span>
+                <span className="hidden text-xs text-muted-foreground sm:inline">
+                  {model.type}
+                </span>
+                <span className="w-20 text-right text-xs tabular-nums text-muted-foreground">
+                  {number(model.size_gb)} GB
+                </span>
+                <span className="w-24 text-right text-xs text-muted-foreground">
+                  {model.loading
+                    ? "載入中"
+                    : model.loaded
+                      ? model.expires_in_s != null
+                        ? `${elapsed(model.expires_in_s)} 後卸載`
+                        : model.pinned
+                          ? "固定保留"
+                          : "已載入"
+                      : "未載入"}
+                </span>
+              </HoverRow>
             </li>
           ))}
           {!status?.models.length && (

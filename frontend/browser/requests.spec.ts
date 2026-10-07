@@ -177,7 +177,10 @@ test.describe("requests page trace", () => {
       .filter({ hasText: "qa-prefill-01" })
       .getByRole("button", { name: "詳情", exact: true })
       .click();
-    const dialog = page.getByRole("dialog", { name: "請求詳情" });
+    // Below xl the detail is a Sheet (dialog); from xl it is the inspector column (complementary).
+    const dialog = page
+      .getByRole("dialog", { name: "請求詳情" })
+      .or(page.getByRole("complementary", { name: "請求詳情" }));
     await expect(
       dialog.getByRole("img", {
         name: /Token 組成：快取命中 1000，本次預填 3000，輸出 0/,
@@ -205,7 +208,10 @@ test.describe("requests page trace", () => {
       .filter({ hasText: "qa-queue-01" })
       .getByRole("button", { name: "詳情", exact: true })
       .click();
-    const dialog = page.getByRole("dialog", { name: "請求詳情" });
+    // Below xl the detail is a Sheet (dialog); from xl it is the inspector column (complementary).
+    const dialog = page
+      .getByRole("dialog", { name: "請求詳情" })
+      .or(page.getByRole("complementary", { name: "請求詳情" }));
     await expect(dialog.getByText("佇列位置")).toBeVisible();
     await expect(dialog).toContainText("1,800ms");
     await expect(dialog.getByText(/尚未回報 prompt token 數/)).toBeVisible();
@@ -222,7 +228,10 @@ test.describe("requests page trace", () => {
       .filter({ hasText: "qa-done-3" })
       .getByRole("button", { name: "詳情", exact: true })
       .click();
-    const dialog = page.getByRole("dialog", { name: "請求詳情" });
+    // Below xl the detail is a Sheet (dialog); from xl it is the inspector column (complementary).
+    const dialog = page
+      .getByRole("dialog", { name: "請求詳情" })
+      .or(page.getByRole("complementary", { name: "請求詳情" }));
     await expect(dialog.getByText("mtp", { exact: true })).toBeVisible();
     await expect(dialog).toContainText("82%");
     await expect(dialog.getByText("回合")).toBeVisible();

@@ -4,6 +4,7 @@ import {
   Button,
   Card,
   EmptyState,
+  ScrollFade,
   Input,
   Select,
   SelectContent,
@@ -140,7 +141,7 @@ export function ApiCatalog({ connection }: { connection: Connection }) {
           </p>
         )}
       </div>
-      <div className="max-h-[32rem] overflow-auto">
+      <ScrollFade className="max-h-[32rem] overflow-auto">
         <Table scrollLabel="服務 API 目錄">
           <Thead>
             <Tr>
@@ -184,9 +185,10 @@ export function ApiCatalog({ connection }: { connection: Connection }) {
             ))}
           </Tbody>
         </Table>
-      </div>
+      </ScrollFade>
       {!rows.length && (
         <EmptyState
+          size="inline"
           title={
             loading
               ? "讀取 API 定義…"

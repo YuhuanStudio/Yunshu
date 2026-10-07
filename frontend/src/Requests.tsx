@@ -19,18 +19,20 @@ import {
   Thead,
   Tr,
 } from "@yuhuanowo/yunui";
-import { PageHeader } from "@yuhuanowo/yunui/patterns";
+import {
+  GroupLabel,
+  PageHeader,
+  WorkspaceLayout,
+} from "@yuhuanowo/yunui/patterns";
 import { Download, Search } from "lucide-react";
 import { ApiError, cancelRequest, requestJson, type Connection } from "./api";
 import {
   PrefillMeter,
-  Readout,
   StageRail,
   TokenTrace,
   finishedFromHistory,
   isLive,
   median,
-  phaseDot,
   phaseLabels as labels,
   prefillPercent,
   speculativeText,
@@ -42,6 +44,9 @@ import {
   isOnline,
   modelLabel,
   number,
+  phaseDot,
+  Readout,
+  useMinWidth,
   type Engine,
 } from "./ui";
 import type { Perform } from "./Models";
@@ -94,7 +99,8 @@ export function Requests({
     [query, setQuery] = useState(""),
     [detail, setDetail] = useState<Row | null>(null),
     [cancel, setCancel] = useState<Row | null>(null),
-    opener = useRef<HTMLButtonElement | null>(null);
+    opener = useRef<HTMLButtonElement | null>(null),
+    detailOpener = useRef<HTMLButtonElement | null>(null);
   const [detailError, setDetailError] = useState<string | null>(null),
     [detailUpdated, setDetailUpdated] = useState<number | null>(null);
   useEffect(() => {
@@ -205,7 +211,7 @@ export function Requests({
         ? `中位 ${number(median(ttfts), 0)} ms · ${number(ttfts.length, 0)} 筆`
         : "尚未觀測到已結束請求",
       data: ttfts,
-      tone: "info" as const,
+      tone: "accent" as const,
       name: "已結束請求 TTFT 趨勢",
     },
     {
@@ -214,7 +220,7 @@ export function Requests({
       unit: liveDecode == null ? undefined : "tok/s",
       hint: "引擎視窗平均",
       data: decodeSeries,
-      tone: "success" as const,
+      tone: "accent" as const,
       name: "Decode tok/s 趨勢",
     },
     {
@@ -230,9 +236,123 @@ export function Requests({
       name: "快取命中率趨勢",
     },
   ];
+  const xl = useMinWidth(1280);
+  // The inspector column is not a dialog, so it handles Escape itself and gives
+  // focus back to the button that opened it.
+  useEffect(() => {
+    if (!xl || !detail) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      setDetail(null);
+      detailOpener.current?.focus();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [xl, detail]);
+  const detailBody = detail ? (
+    <div className="space-y-6">
+      <div className="space-y-2">
+        <div className="flex items-center gap-2">
+          <StatusIndicator
+            status={phaseDot(detail.phase)}
+            pulse={isLive(detail.phase)}
+          >
+            <span className="text-sm font-medium">
+              {labels[detail.phase] ?? detail.phase}
+            </span>
+          </StatusIndicator>
+        </div>
+        <p className="break-all font-mono text-xs">{detail.id}</p>
+        {detailError && (
+          <p role="status" className="text-xs text-warning">
+            {detailError}
+          </p>
+        )}
+        {detailUpdated && (
+          <p className="text-xs text-muted-foreground">
+            即時更新 {clock(detailUpdated)}
+          </p>
+        )}
+      </div>
+      <section className="space-y-3" aria-label="階段與 token 組成">
+        <StageRail phase={detail.phase} />
+        {detail.phase === "queued" && (
+          <div className="grid grid-cols-2 gap-5">
+            <Readout
+              label="佇列位置"
+              value={number(detail.queue_position, 0)}
+            />
+            <Readout
+              label="預估等待（服務端估計）"
+              value={number(detail.queue_est_wait_ms, 0)}
+              unit="ms"
+            />
+          </div>
+        )}
+        <PrefillMeter row={detail} />
+        <TokenTrace row={detail} />
+      </section>
+      <div className="grid grid-cols-2 gap-5">
+        <Readout
+          label="模型"
+          value={detail.model ? modelLabel(detail.model) : "未回報"}
+        />
+        <Readout label="經過時間" value={elapsed(detail.elapsed_s)} />
+        <Readout
+          label="Prompt tokens"
+          value={number(detail.prompt_tokens, 0)}
+        />
+        <Readout
+          label="Cached tokens"
+          value={number(detail.cached_tokens, 0)}
+        />
+        <Readout
+          label="Output tokens"
+          value={number(detail.completion_tokens, 0)}
+        />
+        <Readout
+          label="首 Token 延遲"
+          value={number(detail.ttft_ms)}
+          unit="ms"
+        />
+        <Readout
+          label="Decode"
+          value={number(
+            detail.decode_tps ??
+              (detail.phase === "decode" ? detail.tokens_per_second : null),
+          )}
+          unit="tok/s"
+        />
+        <Readout
+          label="Prefill"
+          value={number(
+            detail.prefill_tps ??
+              (detail.phase === "prefill" ? detail.tokens_per_second : null),
+          )}
+          unit="tok/s"
+        />
+      </div>
+      {detail.speculative && (
+        <div className="grid grid-cols-3 gap-5 border-t border-border/60 pt-5">
+          <Readout label="推測解碼" value={detail.speculative.mode ?? "—"} />
+          <Readout
+            label="接受率"
+            value={number(
+              detail.speculative.acceptance_rate == null
+                ? null
+                : detail.speculative.acceptance_rate * 100,
+              0,
+            )}
+            unit="%"
+          />
+          <Readout label="回合" value={number(detail.speculative.rounds, 0)} />
+        </div>
+      )}
+    </div>
+  ) : null;
   return (
     <section
-      className="mx-auto w-full max-w-6xl space-y-5"
+      className="mx-auto w-full max-w-6xl space-y-5 xl:max-w-7xl"
       data-testid="requests"
     >
       <PageHeader
@@ -274,259 +394,199 @@ export function Requests({
           </div>
         ))}
       </Card>
-      <div className="flex flex-wrap justify-between gap-3">
-        <Input
-          className="sm:max-w-xs"
-          aria-label="搜尋請求"
-          icon={<Search size={14} />}
-          placeholder="Request ID 或模型"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-        />
-        <SegmentedSelect
-          value={filter}
-          onChange={setFilter}
-          options={[
-            { value: "active", label: "進行中" },
-            { value: "complete", label: "觀測到的已結束請求" },
-            { value: "all", label: "全部" },
-          ]}
-        />
-      </div>
-      <Card className="overflow-hidden">
-        <Table scrollLabel="引擎請求清單" className="min-w-[860px]">
-          <Thead>
-            <Tr>
-              <Th>請求</Th>
-              <Th>輸入 / 快取</Th>
-              <Th>輸出</Th>
-              <Th>tok/s</Th>
-              <Th>進度 / 時間</Th>
-              <Th>推測解碼</Th>
-              <Th>操作</Th>
-            </Tr>
-          </Thead>
-          <Tbody>
-            {shown.map((row) => {
-              const percent =
-                  row.phase === "prefill" ? prefillPercent(row) : null,
-                speed =
-                  row.phase === "complete"
-                    ? row.decode_tps
-                    : row.tokens_per_second;
-              return (
-                <Tr key={row.id}>
-                  <Td>
-                    <div className="flex items-center gap-2">
-                      <StatusIndicator
-                        status={phaseDot(row.phase)}
-                        pulse={isLive(row.phase)}
-                      />
-                      <span className="text-xs font-medium">
-                        {labels[row.phase] ?? row.phase}
-                      </span>
-                      <span className="max-w-40 truncate font-mono text-xs text-muted-foreground">
-                        {row.id}
-                      </span>
-                    </div>
-                    <p className="mt-1 max-w-72 truncate pl-4 text-[11px] text-muted-foreground">
-                      {row.model
-                        ? modelLabel(row.model)
-                        : row.t
-                          ? clock(row.t * 1000)
-                          : "模型尚未回報"}
-                    </p>
-                  </Td>
-                  <Td className="text-xs tabular-nums">
-                    {number(row.prompt_tokens, 0)} /{" "}
-                    <span className="text-muted-foreground">
-                      {number(row.cached_tokens, 0)}
-                    </span>
-                  </Td>
-                  <Td className="text-xs tabular-nums">
-                    {number(row.completion_tokens, 0)}
-                  </Td>
-                  <Td className="text-xs tabular-nums">{number(speed)}</Td>
-                  <Td className="text-xs tabular-nums">
-                    {percent != null ? (
-                      <span>
-                        Prefill {number(percent, 0)}%
-                        <span className="ml-2 text-muted-foreground">
-                          {elapsed(row.elapsed_s)}
-                        </span>
-                      </span>
-                    ) : row.phase === "complete" ? (
-                      `${number(row.ttft_ms, 0)} ms TTFT`
-                    ) : (
-                      elapsed(row.elapsed_s)
-                    )}
-                  </Td>
-                  <Td className="text-xs">
-                    {speculativeText(row) ?? (
-                      <span className="text-muted-foreground">—</span>
-                    )}
-                  </Td>
-                  <Td>
-                    <div className="flex gap-1">
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={(e) => {
-                          e.currentTarget.focus();
-                          setDetail(row);
-                        }}
+      <WorkspaceLayout
+        detailLabel="請求詳情"
+        list={
+          <div className="space-y-5">
+            <div className="flex flex-wrap justify-between gap-3">
+              <Input
+                className="sm:max-w-xs"
+                aria-label="搜尋請求"
+                icon={<Search size={14} />}
+                placeholder="Request ID 或模型"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+              />
+              <SegmentedSelect
+                value={filter}
+                onChange={setFilter}
+                options={[
+                  { value: "active", label: "進行中" },
+                  { value: "complete", label: "觀測到的已結束請求" },
+                  { value: "all", label: "全部" },
+                ]}
+              />
+            </div>
+            <Card className="overflow-hidden">
+              <Table scrollLabel="引擎請求清單" className="min-w-[860px]">
+                <Thead>
+                  <Tr>
+                    <Th>請求</Th>
+                    <Th>輸入 / 快取</Th>
+                    <Th>輸出</Th>
+                    <Th>tok/s</Th>
+                    <Th>進度 / 時間</Th>
+                    <Th>推測解碼</Th>
+                    <Th>操作</Th>
+                  </Tr>
+                </Thead>
+                <Tbody>
+                  {shown.map((row) => {
+                    const percent =
+                        row.phase === "prefill" ? prefillPercent(row) : null,
+                      speed =
+                        row.phase === "complete"
+                          ? row.decode_tps
+                          : row.tokens_per_second;
+                    return (
+                      <Tr
+                        key={row.id}
+                        className={
+                          detail?.id === row.id ? "bg-accent-subtle" : undefined
+                        }
                       >
-                        詳情
-                      </Button>
-                      {row.phase !== "complete" && (
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          disabled={!isOnline(engine) || !!busy}
-                          onClick={(e) => {
-                            opener.current = e.currentTarget;
-                            setCancel(row);
-                          }}
-                        >
-                          取消
-                        </Button>
-                      )}
-                    </div>
-                  </Td>
-                </Tr>
-              );
-            })}
-          </Tbody>
-        </Table>
-        {!shown.length && (
-          <EmptyState
-            title={engine.status ? "目前沒有符合條件的請求" : "等待請求資料"}
-            description="完成記錄只包含開啟本頁後採樣到的最近請求，並非完整歷史。"
-          />
-        )}
-      </Card>
-      <p className="text-xs text-muted-foreground">
-        「已結束」為本頁開啟後觀測到的已完成請求（依 Request ID
-        去重）。服務目前只提供最新一筆完成記錄，高頻請求之間可能有未觀測到的完成資料；此頁不把消失的活動請求推測成成功。
-      </p>
-      <Sheet
-        open={!!detail}
-        onClose={() => setDetail(null)}
-        title="請求詳情"
-        closeLabel="關閉請求詳情"
-      >
-        {detail && (
-          <div className="space-y-6">
-            <div className="space-y-2">
-              <div className="flex items-center gap-2">
-                <StatusIndicator
-                  status={phaseDot(detail.phase)}
-                  pulse={isLive(detail.phase)}
-                >
-                  <span className="text-sm font-medium">
-                    {labels[detail.phase] ?? detail.phase}
-                  </span>
-                </StatusIndicator>
-              </div>
-              <p className="break-all font-mono text-xs">{detail.id}</p>
-              {detailError && (
-                <p role="status" className="text-xs text-warning">
-                  {detailError}
-                </p>
-              )}
-              {detailUpdated && (
-                <p className="text-xs text-muted-foreground">
-                  即時更新 {clock(detailUpdated)}
-                </p>
-              )}
-            </div>
-            <section className="space-y-3" aria-label="階段與 token 組成">
-              <StageRail phase={detail.phase} />
-              {detail.phase === "queued" && (
-                <div className="grid grid-cols-2 gap-5">
-                  <Readout
-                    label="佇列位置"
-                    value={number(detail.queue_position, 0)}
-                  />
-                  <Readout
-                    label="預估等待（服務端估計）"
-                    value={number(detail.queue_est_wait_ms, 0)}
-                    unit="ms"
-                  />
-                </div>
-              )}
-              <PrefillMeter row={detail} />
-              <TokenTrace row={detail} />
-            </section>
-            <div className="grid grid-cols-2 gap-5">
-              <Readout
-                label="模型"
-                value={detail.model ? modelLabel(detail.model) : "未回報"}
-              />
-              <Readout label="經過時間" value={elapsed(detail.elapsed_s)} />
-              <Readout
-                label="Prompt tokens"
-                value={number(detail.prompt_tokens, 0)}
-              />
-              <Readout
-                label="Cached tokens"
-                value={number(detail.cached_tokens, 0)}
-              />
-              <Readout
-                label="Output tokens"
-                value={number(detail.completion_tokens, 0)}
-              />
-              <Readout
-                label="首 Token 延遲"
-                value={number(detail.ttft_ms)}
-                unit="ms"
-              />
-              <Readout
-                label="Decode"
-                value={number(
-                  detail.decode_tps ??
-                    (detail.phase === "decode"
-                      ? detail.tokens_per_second
-                      : null),
-                )}
-                unit="tok/s"
-              />
-              <Readout
-                label="Prefill"
-                value={number(
-                  detail.prefill_tps ??
-                    (detail.phase === "prefill"
-                      ? detail.tokens_per_second
-                      : null),
-                )}
-                unit="tok/s"
-              />
-            </div>
-            {detail.speculative && (
-              <div className="grid grid-cols-3 gap-5 border-t border-border/60 pt-5">
-                <Readout
-                  label="推測解碼"
-                  value={detail.speculative.mode ?? "—"}
+                        <Td>
+                          <div className="flex items-center gap-2">
+                            <StatusIndicator
+                              status={phaseDot(row.phase)}
+                              pulse={isLive(row.phase)}
+                            />
+                            <span className="text-xs font-medium">
+                              {labels[row.phase] ?? row.phase}
+                            </span>
+                            <span className="max-w-40 truncate font-mono text-xs text-muted-foreground">
+                              {row.id}
+                            </span>
+                          </div>
+                          <p className="mt-1 max-w-72 truncate pl-4 text-[11px] text-muted-foreground">
+                            {row.model
+                              ? modelLabel(row.model)
+                              : row.t
+                                ? clock(row.t * 1000)
+                                : "模型尚未回報"}
+                          </p>
+                        </Td>
+                        <Td className="text-xs tabular-nums">
+                          {number(row.prompt_tokens, 0)} /{" "}
+                          <span className="text-muted-foreground">
+                            {number(row.cached_tokens, 0)}
+                          </span>
+                        </Td>
+                        <Td className="text-xs tabular-nums">
+                          {number(row.completion_tokens, 0)}
+                        </Td>
+                        <Td className="text-xs tabular-nums">
+                          {number(speed)}
+                        </Td>
+                        <Td className="text-xs tabular-nums">
+                          {percent != null ? (
+                            <span>
+                              Prefill {number(percent, 0)}%
+                              <span className="ml-2 text-muted-foreground">
+                                {elapsed(row.elapsed_s)}
+                              </span>
+                            </span>
+                          ) : row.phase === "complete" ? (
+                            `${number(row.ttft_ms, 0)} ms TTFT`
+                          ) : (
+                            elapsed(row.elapsed_s)
+                          )}
+                        </Td>
+                        <Td className="text-xs">
+                          {speculativeText(row) ?? (
+                            <span className="text-muted-foreground">—</span>
+                          )}
+                        </Td>
+                        <Td>
+                          <div className="flex gap-1">
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={(e) => {
+                                e.currentTarget.focus();
+                                detailOpener.current = e.currentTarget;
+                                setDetail(row);
+                              }}
+                            >
+                              詳情
+                            </Button>
+                            {row.phase !== "complete" && (
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                disabled={!isOnline(engine) || !!busy}
+                                onClick={(e) => {
+                                  opener.current = e.currentTarget;
+                                  setCancel(row);
+                                }}
+                              >
+                                取消
+                              </Button>
+                            )}
+                          </div>
+                        </Td>
+                      </Tr>
+                    );
+                  })}
+                </Tbody>
+              </Table>
+              {!shown.length && (
+                <EmptyState
+                  title={
+                    engine.status ? "目前沒有符合條件的請求" : "等待請求資料"
+                  }
+                  description="完成記錄只包含開啟本頁後採樣到的最近請求，並非完整歷史。"
                 />
-                <Readout
-                  label="接受率"
-                  value={number(
-                    detail.speculative.acceptance_rate == null
-                      ? null
-                      : detail.speculative.acceptance_rate * 100,
-                    0,
-                  )}
-                  unit="%"
-                />
-                <Readout
-                  label="回合"
-                  value={number(detail.speculative.rounds, 0)}
-                />
-              </div>
-            )}
+              )}
+            </Card>
+            <p className="text-xs text-muted-foreground">
+              「已結束」為本頁開啟後觀測到的已完成請求（依 Request ID
+              去重）。服務目前只提供最新一筆完成記錄，高頻請求之間可能有未觀測到的完成資料；此頁不把消失的活動請求推測成成功。
+            </p>
           </div>
-        )}
-      </Sheet>
+        }
+        detail={
+          xl ? (
+            <Card className="sticky top-0 max-h-[calc(100dvh-8rem)] overflow-y-auto p-4">
+              <GroupLabel
+                className="px-0"
+                title="請求詳情"
+                action={
+                  detail ? (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => {
+                        setDetail(null);
+                        detailOpener.current?.focus();
+                      }}
+                    >
+                      關閉
+                    </Button>
+                  ) : undefined
+                }
+              />
+              {detailBody ?? (
+                <EmptyState
+                  size="inline"
+                  title="尚未選取請求"
+                  description="在清單中按「詳情」，階段與 token 組成會顯示在這裡。"
+                />
+              )}
+            </Card>
+          ) : null
+        }
+      />
+      {!xl && (
+        <Sheet
+          open={!!detail}
+          onClose={() => setDetail(null)}
+          title="請求詳情"
+          closeLabel="關閉請求詳情"
+        >
+          {detailBody}
+        </Sheet>
+      )}
       <Dialog
         open={!!cancel}
         onOpenChange={(open) => {

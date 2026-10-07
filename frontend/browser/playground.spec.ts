@@ -434,7 +434,7 @@ test("chat reply shows per-reply stats with TTFT and cache badge", async ({
   await expect(stats).toContainText("20");
   await expect(stats).toContainText("tok/s");
   await expect(stats).toContainText(/TTFT \d/);
-  await expect(stats).toContainText("快取 512/1,024");
+  await expect(stats).toContainText("512 / 1.02K 快取");
   await verifyClean();
 });
 
@@ -462,7 +462,7 @@ test("compare mode runs sequentially and reports identical greedy output", async
     "is four.",
   );
   await expect(playground.getByTestId("compare-col-b")).toContainText(
-    "快取 512/1,024",
+    "512 / 1.02K 快取",
   );
   const cmp = await page.evaluate(
     () =>

@@ -447,7 +447,7 @@ export default function App() {
             ) : (
               <div className="min-h-0 flex-1 overflow-y-auto p-4 lg:p-6">
                 {page === "diagnostics" && (
-                  <Diagnostics connection={connection} />
+                  <Diagnostics connection={connection} engine={engine} />
                 )}
                 {page === "overview" && (
                   <Dashboard engine={engine} navigate={navigate} />
@@ -483,11 +483,16 @@ export default function App() {
                     perform={perform}
                   />
                 )}
-                {page === "api" && <ApiView connection={connection} />}
+                {page === "api" && (
+                  <ApiView connection={connection} engine={engine} />
+                )}
               </div>
             )}
           </div>
-          <StatusPillBar ariaLabel="最近一筆請求" className="shrink-0 px-4 lg:px-6">
+          <StatusPillBar
+            ariaLabel="最近一筆請求"
+            className="shrink-0 px-4 lg:px-6"
+          >
             <StatusPill
               label={connectionText[engine.phase]}
               tone={connectionTone[engine.phase]}
@@ -527,7 +532,10 @@ export default function App() {
                   <StatusPill
                     label="快取"
                     value={`${number(last.cached_tokens, 0)} / ${number(last.prompt_tokens, 0)}`}
-                    help={lastHelp(last, "命中前綴快取的 token 數 / 輸入 token 數")}
+                    help={lastHelp(
+                      last,
+                      "命中前綴快取的 token 數 / 輸入 token 數",
+                    )}
                     dot={false}
                   />
                 )}
@@ -563,7 +571,9 @@ export default function App() {
           query={query}
           onQueryChange={setQuery}
           items={shown}
-          empty={<p className="p-4 text-sm text-muted-foreground">沒有符合的項目</p>}
+          empty={
+            <p className="p-4 text-sm text-muted-foreground">沒有符合的項目</p>
+          }
         />
       </div>
     </YunUIProvider>

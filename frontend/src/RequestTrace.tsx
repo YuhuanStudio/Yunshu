@@ -1,6 +1,6 @@
 import { Progress, SegmentedBar, StatusIndicator } from "@yuhuanowo/yunui";
 import type { EngineHistoryPoint } from "./useEngine";
-import { number } from "./ui";
+import { number, phaseDot, Readout } from "./ui";
 
 /** One request as the console sees it: a live item, a detail poll or a `last` record. */
 export type Row = {
@@ -36,14 +36,6 @@ export const phaseLabels: Record<string, string> = {
   decode: "Decode",
   complete: "已結束",
 };
-export const phaseDot = (phase: string) =>
-  phase === "decode"
-    ? "online"
-    : phase === "queued"
-      ? "away"
-      : phase === "prefill" || phase === "starting"
-        ? "busy"
-        : "neutral";
 export const isLive = (phase: string) =>
   phase === "decode" || phase === "prefill" || phase === "starting";
 
@@ -91,38 +83,6 @@ export const speculativeText = (row: Row) => {
     .filter(Boolean)
     .join(" · ");
 };
-
-/** A label + value pair with tabular numerals (same shape as the overview's readout). */
-export function Readout({
-  label,
-  value,
-  unit,
-  hint,
-}: {
-  label: string;
-  value: string;
-  unit?: string;
-  hint?: string;
-}) {
-  return (
-    <div className="min-w-0">
-      <p className="text-[11px] tracking-wide text-muted-foreground">{label}</p>
-      <p className="mt-1 truncate text-lg font-semibold tabular-nums">
-        {value}
-        {unit && (
-          <span className="ml-1 text-xs font-normal text-muted-foreground">
-            {unit}
-          </span>
-        )}
-      </p>
-      {hint && (
-        <p className="mt-0.5 truncate text-[11px] text-muted-foreground">
-          {hint}
-        </p>
-      )}
-    </div>
-  );
-}
 
 const stages = [
   { key: "queued", label: "排隊" },

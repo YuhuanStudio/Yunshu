@@ -14,7 +14,13 @@ import {
   Tr,
 } from "@yuhuanowo/yunui";
 import { CodeBlock } from "@yuhuanowo/yunui/content";
-import { PageHeader, StatCard } from "@yuhuanowo/yunui/patterns";
+import {
+  DetailList,
+  DetailRow,
+  GroupLabel,
+  PageHeader,
+  StatCard,
+} from "@yuhuanowo/yunui/patterns";
 import {
   Activity,
   Check,
@@ -24,14 +30,9 @@ import {
   RefreshCw,
   Server,
 } from "lucide-react";
-import {
-  ApiError,
-  fetchStatus,
-  type Connection,
-  type EngineStatus,
-} from "./api";
+import { ApiError, type Connection, type EngineStatus } from "./api";
 import { requestServerJson } from "./management-api";
-import { clock, elapsed, number } from "./ui";
+import { clock, elapsed, number, type Engine } from "./ui";
 const groups = {
   system: [
     { key: "system", title: "主機資源", path: "/debug/system" },
@@ -78,7 +79,7 @@ const gb = (value: unknown) => {
 type Health = {
   key: string;
   name: string;
-  status: "online" | "offline" | "busy" | "neutral";
+  status: "online" | "offline" | "away" | "neutral";
   value: string;
   hint: string;
 };
@@ -102,7 +103,7 @@ export function healthChecks(
     rows.push({
       key: "engine",
       name: "引擎狀態",
-      status: status.load_error ? "offline" : running ? "online" : "busy",
+      status: status.load_error ? "offline" : running ? "online" : "away",
       value: status.state,
       hint:
         status.load_error ??
@@ -125,7 +126,7 @@ export function healthChecks(
     rows.push({
       key: "memory",
       name: "MLX 記憶體",
-      status: ratio == null ? "neutral" : ratio > 0.9 ? "busy" : "online",
+      status: ratio == null ? "neutral" : ratio > 0.9 ? "away" : "online",
       value:
         active != null && total
           ? `${number(active)} / ${number(total)} GB`
@@ -138,7 +139,7 @@ export function healthChecks(
     rows.push({
       key: "queue",
       name: "請求佇列",
-      status: status.requests.queued > 0 ? "busy" : "online",
+      status: status.requests.queued > 0 ? "away" : "online",
       value: `${number(status.requests.active, 0)} 進行 · ${number(status.requests.queued, 0)} 排隊`,
       hint:
         status.requests.queued > 0
@@ -184,20 +185,26 @@ export function healthChecks(
     rows.push({
       key: "cpu",
       name: "主機 CPU",
-      status: cpu > 90 ? "busy" : "online",
+      status: cpu > 90 ? "away" : "online",
       value: `${number(cpu)}%`,
       hint: `${number(metric(at(system, "cpu", "logical_cores")), 0)} 個邏輯核心。`,
     });
   return rows;
 }
-export function Diagnostics({ connection }: { connection: Connection }) {
+export function Diagnostics({
+  connection,
+  engine,
+}: {
+  connection: Connection;
+  engine: Engine;
+}) {
+  const status = engine.status;
   const [group, setGroup] = useState<Group>("system"),
     [refresh, setRefresh] = useState(0),
     [results, setResults] = useState<Result[]>([]),
     [loading, setLoading] = useState(false),
     [updated, setUpdated] = useState<number | null>(null),
     [expanded, setExpanded] = useState<Record<string, boolean>>({}),
-    [status, setStatus] = useState<EngineStatus | null>(null),
     [overviewSystem, setOverviewSystem] = useState<unknown>(undefined),
     [systemState, setSystemState] = useState<
       "ok" | "disabled" | "error" | "pending"
@@ -206,9 +213,6 @@ export function Diagnostics({ connection }: { connection: Connection }) {
   useEffect(() => {
     const controller = new AbortController();
     setSystemState("pending");
-    void fetchStatus(connection, { signal: controller.signal })
-      .then((next) => !controller.signal.aborted && setStatus(next))
-      .catch(() => !controller.signal.aborted && setStatus(null));
     void requestServerJson(connection, "/debug/system", {
       signal: controller.signal,
     })
@@ -264,7 +268,7 @@ export function Diagnostics({ connection }: { connection: Connection }) {
     return () => controller.abort();
   }, [connection.baseUrl, connection.token, group, refresh]);
   const system = overviewSystem,
-    engine = results.find((r) => r.key === "engine")?.data,
+    engineCounters = results.find((r) => r.key === "engine")?.data,
     request = results.find((r) => r.key === "requests")?.data;
   const checks = healthChecks(status, system, systemState);
   async function copyBundle() {
@@ -320,7 +324,10 @@ export function Diagnostics({ connection }: { connection: Connection }) {
               size="sm"
               variant="secondary"
               disabled={loading}
-              onClick={() => setRefresh((n) => n + 1)}
+              onClick={() => {
+                void engine.refresh();
+                setRefresh((n) => n + 1);
+              }}
             >
               <RefreshCw size={13} />
               {loading ? "讀取中" : "重新讀取"}
@@ -357,33 +364,35 @@ export function Diagnostics({ connection }: { connection: Connection }) {
           compact
           icon={Server}
           label="已處理請求"
-          value={number(metric(at(engine, "requests_processed")), 0)}
+          value={number(metric(at(engineCounters, "requests_processed")), 0)}
           subtext="服務計數器"
         />
       </div>
-      <Card className="px-5 py-2" data-testid="health-checks">
-        <h2 className="pt-3 text-sm font-semibold">健康檢查</h2>
-        <ul className="divide-y divide-border">
-          {checks.map((check) => (
-            <li
-              key={check.key}
-              className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-1 py-3"
-            >
-              <div className="min-w-0">
-                <StatusIndicator status={check.status}>
-                  <span className="text-sm font-medium text-foreground">
-                    {check.name}
-                  </span>
-                </StatusIndicator>
-                <p className="mt-0.5 pl-4 text-xs text-muted-foreground">
-                  {check.hint}
-                </p>
-              </div>
-              <span className="text-sm tabular-nums">{check.value}</span>
-            </li>
-          ))}
-        </ul>
-      </Card>
+      <div>
+        <GroupLabel as="h2" title="健康檢查" />
+        <Card className="px-5 py-2" data-testid="health-checks">
+          <ul className="divide-y divide-border">
+            {checks.map((check) => (
+              <li
+                key={check.key}
+                className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-1 py-3"
+              >
+                <div className="min-w-0">
+                  <StatusIndicator status={check.status}>
+                    <span className="text-sm font-medium text-foreground">
+                      {check.name}
+                    </span>
+                  </StatusIndicator>
+                  <p className="mt-0.5 pl-4 text-xs text-muted-foreground">
+                    {check.hint}
+                  </p>
+                </div>
+                <span className="text-sm tabular-nums">{check.value}</span>
+              </li>
+            ))}
+          </ul>
+        </Card>
+      </div>
       <div className="flex flex-wrap items-center justify-between gap-3">
         <NavTabs
           ariaLabel="診斷類別"
@@ -500,7 +509,7 @@ export function Diagnostics({ connection }: { connection: Connection }) {
             </p>
           ) : (
             <>
-              <div className="flex flex-wrap gap-x-6 gap-y-2">
+              <DetailList className="grid gap-x-8 gap-y-2 sm:grid-cols-2">
                 {Object.entries(
                   row.data && typeof row.data === "object" ? row.data : {},
                 )
@@ -512,16 +521,17 @@ export function Diagnostics({ connection }: { connection: Connection }) {
                   )
                   .slice(0, 12)
                   .map(([key, value]) => (
-                    <div key={key} className="min-w-0 text-xs">
-                      <span className="text-muted-foreground">{key} </span>
-                      <span className="break-all font-mono">
-                        {typeof value === "number"
+                    <DetailRow
+                      key={key}
+                      label={key}
+                      value={
+                        typeof value === "number"
                           ? number(value, 2)
-                          : String(value)}
-                      </span>
-                    </div>
+                          : String(value)
+                      }
+                    />
                   ))}
-              </div>
+              </DetailList>
               {Array.isArray(at(row.data, "caches")) && (
                 <Table scrollLabel="模型快取診斷">
                   <Thead>

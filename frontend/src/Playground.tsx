@@ -51,7 +51,14 @@ type Message = Run & {
 };
 type Mode = "chat" | "compare";
 type Pair = readonly [Run | null, Run | null];
-const statLabels = { tokens: "tokens", speed: "tok/s", latency: "ms 耗時" };
+const statLabels = {
+  tokens: "tokens",
+  speed: "tok/s",
+  latency: "ms",
+  ttft: "TTFT",
+  cached: "快取",
+  prompt: "提示詞",
+};
 const seconds = (ms: number) => `${number(ms / 1000, 2)} s`;
 const signed = (v: number, digits: number) =>
   `${v > 0 ? "+" : v < 0 ? "−" : ""}${number(Math.abs(v), digits)}`;
@@ -64,7 +71,9 @@ function specLabel(
 ) {
   const mode = spec.mode.toUpperCase();
   const perRound =
-    spec.rounds && tokens ? ` · 每輪 ${number(tokens / spec.rounds, 2)} tok` : "";
+    spec.rounds && tokens
+      ? ` · 每輪 ${number(tokens / spec.rounds, 2)} tok`
+      : "";
   const rate =
     spec.acceptanceRate != null
       ? ` · 接受率 ${number(spec.acceptanceRate * 100, 0)}%`
@@ -86,19 +95,13 @@ function ReplyStats({ run, now }: { run: Run; now: number }) {
         tokens={s.tokens}
         tokensPerSecond={s.tokensPerSecond}
         latencyMs={Math.round(s.latencyMs)}
+        ttftMs={s.ttftMs}
+        cachedTokens={s.cachedTokens}
+        promptTokens={s.promptTokens}
         labels={statLabels}
       />
       {live && s.ttftMs === undefined && (
         <Badge variant="outline">等待首個 token</Badge>
-      )}
-      {s.ttftMs !== undefined && (
-        <Badge variant="outline">TTFT {number(s.ttftMs, 0)} ms</Badge>
-      )}
-      {s.cachedTokens !== undefined && (
-        <Badge variant="outline">
-          快取 {number(s.cachedTokens, 0)}
-          {s.promptTokens !== undefined ? `/${number(s.promptTokens, 0)}` : ""}
-        </Badge>
       )}
       {run.timing.usage?.spec && (
         <Badge variant="outline">

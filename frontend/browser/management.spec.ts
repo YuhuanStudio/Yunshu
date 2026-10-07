@@ -453,14 +453,17 @@ test.describe("fixture-only API controls", () => {
       exact: true,
     });
     await detailsButton.click();
-    const dialog = page.getByRole("dialog", { name: "請求詳情" });
+    // Below xl the detail is a Sheet (dialog); from xl it is the inspector column (complementary).
+    const dialog = page
+      .getByRole("dialog", { name: "請求詳情" })
+      .or(page.getByRole("complementary", { name: "請求詳情" }));
     await expect(dialog.getByText("777", { exact: true })).toBeVisible();
     await expect(dialog.getByText("333", { exact: true })).toBeVisible();
     await expect(dialog.getByText("55", { exact: true })).toBeVisible();
     expect(fixture.detailCalls()).toBe(1);
 
     await page.keyboard.press("Escape");
-    await expect(dialog).toHaveCount(0);
+    await expect(dialog.getByText("777", { exact: true })).toHaveCount(0);
     await expect(detailsButton).toBeFocused();
     await page.waitForTimeout(1_700);
     expect(fixture.detailCalls()).toBe(1); // Closing the Sheet cleared its poll timer.
@@ -487,7 +490,7 @@ test.describe("fixture-only API controls", () => {
     ]);
 
     await page.keyboard.press("Escape");
-    await expect(dialog).toHaveCount(0);
+    await expect(dialog.getByText("777", { exact: true })).toHaveCount(0);
     expect(fixture.unexpectedMutations).toEqual([]);
     expect(fixture.unexpected).toEqual([]);
     expect(pageErrors).toEqual([]);

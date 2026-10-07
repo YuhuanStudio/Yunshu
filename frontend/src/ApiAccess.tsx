@@ -9,33 +9,34 @@ import {
 } from "@yuhuanowo/yunui";
 import { CodeBlock } from "@yuhuanowo/yunui/content";
 import { PageHeader } from "@yuhuanowo/yunui/patterns";
-import { fetchStatus, type Connection } from "./api";
+import type { Connection } from "./api";
 import { ApiCatalog } from "./ApiCatalog";
 import { buildIntegrations, serviceRoot } from "./integrations";
-import { modelLabel } from "./ui";
+import { modelLabel, type Engine } from "./ui";
 
-export function ApiView({ connection }: { connection: Connection }) {
+export function ApiView({
+  connection,
+  engine,
+}: {
+  connection: Connection;
+  engine: Engine;
+}) {
   const root = serviceRoot(connection.baseUrl),
     [models, setModels] = useState<string[]>([]),
     [model, setModel] = useState("");
+  const status = engine.status;
   useEffect(() => {
-    const controller = new AbortController();
-    void fetchStatus(connection, { signal: controller.signal })
-      .then((status) => {
-        if (controller.signal.aborted) return;
-        const ids = status.models.map((item) => item.id);
-        setModels(ids);
-        setModel(
-          (current) =>
-            (ids.includes(current) ? current : undefined) ??
-            status.models.find((item) => item.loaded)?.id ??
-            ids[0] ??
-            "",
-        );
-      })
-      .catch(() => {});
-    return () => controller.abort();
-  }, [connection.baseUrl, connection.token]);
+    if (!status) return;
+    const ids = status.models.map((item) => item.id);
+    setModels(ids);
+    setModel(
+      (current) =>
+        (ids.includes(current) ? current : undefined) ??
+        status.models.find((item) => item.loaded)?.id ??
+        ids[0] ??
+        "",
+    );
+  }, [status]);
   const integrations = useMemo(
     () => buildIntegrations(root, model),
     [root, model],
