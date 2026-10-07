@@ -54,7 +54,7 @@ def test_structural_checks_pass_against_a_fake_engine(monkeypatch):
         http = SyncASGI(app, portal)
         oa = openai.OpenAI(api_key="k", base_url="http://t/v1", http_client=http)
         out = dv.run_checks(oa, http, "fake", semantic=False)
-    assert out["order_invariance"] and out["determinism"] == "identical"
+    assert out["order_invariance_max_prob_delta"] == 0 and out["repeat_max_prob_delta"] == 0
     assert out["bool_choice"]["choice"] in (True, False)
 
 
