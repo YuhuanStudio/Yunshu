@@ -750,11 +750,17 @@ def _thinking_switches(req) -> tuple[bool | None, int | None]:
     """Anthropic ``thinking`` -> (enable_thinking, thinking_budget).
 
     ``enabled`` forces thinking on with its budget, ``disabled`` forces it off, and
-    ``adaptive`` (Claude Code's default) or no field leaves the model's template default.
+    ``adaptive`` (Claude Code's default) or no field leaves the model's template default --
+    except under a forced ``tool_choice`` (``any`` / ``tool``), which Anthropic does not combine
+    with thinking: there it is off, so a reasoning model cannot spend ``max_tokens`` thinking
+    and return no call (M3 web_fetch check, 2026-10-07: 256 tokens of thinking, no tool use).
     """
     th = req.thinking if isinstance(req.thinking, dict) else None
-    if not th:
-        return None, None
+    tc = getattr(req, "tool_choice", None)
+    tc = tc if isinstance(tc, dict) else None
+    forced = bool(tc) and tc.get("type") in ("any", "tool")
+    if not th or th.get("type") == "adaptive":
+        return (False, None) if forced else (None, None)
     kind = th.get("type")
     if kind == "enabled":
         return True, th.get("budget_tokens")
