@@ -53,9 +53,9 @@ classifiers = [
 # install stays light on machines that only need text.
 dependencies = [
     # ── Apple ML Stack (text path only) ──
-    # Capped until our row-exact qmv copies (kernels/omlx/row_exact_qmv.py, moe_verify_gather.py,
-    # kernels/verify_select.py) are re-transcribed: mlx f8aaf49d (after 0.32.3) changes qmv's
-    # load_vector accumulation, so spec-on would drift from spec-off.
+    # qmv copies select version-matched arithmetic for mlx f8aaf49d (0.32.4).
+    # Keep the cap until an isolated source build passes M5 long-context
+    # spec-on/off identity and interleaved quiet decode speed through yv.
     "mlx>=0.32.3,<0.32.4",
     "mlx-lm>=0.32.0",
     # ── Model / Tokenizer ──
