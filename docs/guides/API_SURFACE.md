@@ -205,6 +205,13 @@ Streaming is NDJSON. Auth follows the app-wide token.
 |---|---|---|---|
 | `POST /v1/score`, `/v1/rerank`, `/v1/pooling`, `/v1/classify` | kept | On a model that cannot embed (hybrid architectures, Qwen3.5) all four answer a 400 that says so (`classify` answered a 500). | real 2026-10-06: `routes` served on Qwen3-Embedding-0.6B (embedding-similarity scoring, not a trained reranker): pooling width, score similar > unrelated, rerank puts the relevant document first, classify picks the right label and sums to 1. On chat models: Qwen2.5-3B answers 200, Qwen3.5-0.8B the 400 "cannot be used as a text embedder" (error path) |
 
+## Decisions (OpenAI Decisions API, TypeSafe System One)
+
+| Route | Status | Notes | Verified |
+|---|---|---|---|
+| `POST /v1/decisions` | added | OpenAI's Decisions API (public beta 2026-10-06), wire format from the `openai` 3.26 types (`Decision`, `DecisionCreateParams`). `input` is a string or user messages with `input_text` and inline `input_image` (base64 data URLs only; at most 128). `questions` are `predicate`, `choice` (typed `value`: a string `"true"` and a boolean `true` collide, so they are a 400) and `score` (`levels`); the response lists `answers` in question order with probabilities, a `refusal` for a question whose logits are not finite (never a made-up value), and `usage` (`output_tokens` 0, nothing is generated). Stateless, non-streaming. Served by a decision checkpoint (`ModelType.DECISION`): Cloudflare Clef / Clef-flash in MLX format (backbone through mlx-vlm plus the joint schema head, one forward pass). A chat model, or a checkpoint whose head is not the Clef joint schema head, is not served: a 400 / a load error, never a plain LLM that drops the head. Images need the checkpoint's vision tower, else 400. An input over 16384 tokens (state + images + schema) is a 400, not truncated. `safety_identifier` is accepted (64 characters) and ignored. | unit: fake engine, request validation, error shape, and the real `openai` 3.26 client (`client.decisions.create` -> typed `Decision`); the MLX head against a torch transcription of the reference. real: see the decisions-verify entry in PERF_TREND / the report |
+| `POST /v1/systemone` | added | TypeSafe Jev / System One wire on the same engine and one shared internal request: `{model, state (string, object or array), questions: {id: {type: noul / choice / score, instructions, criteria}}, images?}` returning `{model, answers: {id: ...}, usage: {input_tokens, output_tokens}}` with `noul`, `choice` + `confidence` + `probabilities` and `score` + `legend`, rounded to 4 places like the reference. Validation errors are 422 (as TypeSafe documents). | unit: as above |
+
 ## Other
 
 | Route | Status | Notes | Verified |

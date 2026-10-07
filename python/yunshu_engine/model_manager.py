@@ -93,6 +93,9 @@ class ModelType(Enum):
     EMBEDDING = auto()  # dedicated multimodal embedder (Qwen3-VL-Embedding)
     CLASSIFIER = auto()  # trained sequence-classification head
     RERANKER = auto()  # cross-encoder reranker (Qwen3-VL-Reranker)
+    DECISION = (
+        auto()
+    )  # backbone + trained decision head (Cloudflare Clef): /v1/decisions
 
 
 # mlx-lm's MODEL_REMAPPING (subset we need to replicate for probing)
@@ -120,6 +123,13 @@ def _detect_model_type(model_path: str) -> ModelType:
     5. Default: LLM
     """
     p = Path(model_path)
+
+    # Decision models: a trained head sits next to the backbone. Loaded as a plain LLM/VLM the
+    # head would be dropped silently, so the head's files decide, before any other signal.
+    from .decision_engine import is_decision_checkpoint
+
+    if is_decision_checkpoint(p):
+        return ModelType.DECISION
 
     # Image gen: diffusion pipeline models have model_index.json
     if (p / "model_index.json").exists():
@@ -416,6 +426,12 @@ async def instantiate_engine(
         from .vlm_engine import VLMEngine
 
         engine = VLMEngine(model_path, config)
+        await engine.start()
+        return engine
+    if model_type == ModelType.DECISION:
+        from .decision_engine import DecisionEngine
+
+        engine = DecisionEngine(model_path, config)
         await engine.start()
         return engine
     if model_type == ModelType.IMAGE_GEN:

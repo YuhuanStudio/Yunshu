@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 ModelType = Literal[
     "llm", "vlm", "audio_tts", "audio_stt", "image_gen", "ocr", "sts", "video"
 ]
-EngineType = Literal["batched", "vlm", "audio", "image"]
+EngineType = Literal["batched", "vlm", "audio", "image", "decision"]
 
 IMAGE_GEN_MODEL_TYPES = {"flux", "sd3", "sdxl", "z_image"}
 
@@ -89,6 +89,7 @@ def _engine_for_type(mt: ModelType) -> EngineType:
         "ocr": "vlm",
         "sts": "audio",
         "video": "vlm",
+        "decision": "decision",
     }.get(mt, "batched")
 
 
