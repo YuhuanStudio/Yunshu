@@ -27,7 +27,7 @@ import math
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 SYSTEM_PROMPT = (
     "Read the complete state and schema. Decide every field jointly. Each answer "
@@ -112,9 +112,10 @@ def model_options(question: Question) -> list[tuple[str, str | None]]:
         custom = {o.id: o.description for o in question.options}
         return [(k, custom.get(k) or _PREDICATE_CRITERIA[k]) for k in ("true", "false")]
     if question.kind == "choice":
-        return sorted(
-            ((o.id, o.description) for o in question.options), key=lambda t: t[0]
-        )
+        pairs: list[tuple[str, str | None]] = [
+            (o.id, o.description) for o in question.options
+        ]
+        return sorted(pairs, key=lambda t: t[0])
     return [(o.id, o.description) for o in question.options]
 
 
@@ -319,7 +320,7 @@ def load_head_weights(model_dir: Path, cfg: dict[str, int]) -> dict[str, Any]:
     path = model_dir / HEAD_FILE
     if not path.is_file():
         raise ValueError(f"{model_dir.name}: decision checkpoint without {HEAD_FILE}")
-    raw = mx.load(str(path))
+    raw = cast(dict[str, Any], mx.load(str(path)))
     expected = expected_head_shapes(cfg)
     missing = sorted(set(expected) - set(raw))
     extra = sorted(set(raw) - set(expected))
@@ -556,9 +557,11 @@ class DecisionEngine:
     def __init__(self, model_path: str, config: Any = None):
         self._model_path = model_path
         self._dir = Path(model_path)
-        self._model = self._processor = self._tokenizer = None
-        self._head: dict[str, Any] | None = None
-        self._head_cfg: dict[str, int] | None = None
+        self._model: Any = None
+        self._processor: Any = None
+        self._tokenizer: Any = None
+        self._head: Any = None
+        self._head_cfg: Any = None
         self._lm_head: Any = None
         self._loaded = False
         self._active = 0
@@ -692,7 +695,9 @@ class DecisionEngine:
     def _decide_sync(self, req: DecisionRequest) -> DecisionResult:
         import mlx.core as mx
 
-        media_ids, pixels, grid = ([], None, None)
+        media_ids: list[int] = []
+        pixels: Any = None
+        grid: Any = None
         if req.images:
             media_ids, pixels, grid = self._encode_images(req.images)
         record = encode_record(
@@ -723,4 +728,5 @@ class DecisionEngine:
             raise RuntimeError("decision model is not loaded")
         if len(req.images) > MAX_IMAGES:
             raise DecisionError(f"input: at most {MAX_IMAGES} images per request")
-        return await self._run(lambda: self._decide_sync(req))
+        result: DecisionResult = await self._run(lambda: self._decide_sync(req))
+        return result

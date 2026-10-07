@@ -158,10 +158,11 @@ def _level_text(level: ScoreLevel) -> str:
 
 
 def to_internal(body: DecisionCreate) -> DecisionRequest:
+    texts: list[str] = []
+    images: list[bytes] = []
     if isinstance(body.input, str):
-        texts, images = [body.input], []
+        texts.append(body.input)
     else:
-        texts, images = [], []
         for mi, msg in enumerate(body.input):
             parts = [msg.content] if isinstance(msg.content, str) else msg.content
             for pi, part in enumerate(parts):
@@ -182,6 +183,7 @@ def to_internal(body: DecisionCreate) -> DecisionRequest:
     questions: list[Question] = []
     for qi, q in enumerate(body.questions):
         where = f"questions[{qi}]"
+        opts: tuple[Option, ...]
         if isinstance(q, PredicateQ):
             opts = (Option("true", True), Option("false", False))
         elif isinstance(q, ChoiceQ):
@@ -298,7 +300,7 @@ class SystemOneRequest(BaseModel):
 
 
 def systemone_to_internal(body: SystemOneRequest) -> DecisionRequest:
-    images = []
+    images: list[bytes] = []
     for i, img in enumerate(body.images or []):
         url = img if img.startswith("data:") else f"data:image/png;base64,{img}"
         images.append(decode_image(url, f"images[{i}]"))
@@ -308,6 +310,7 @@ def systemone_to_internal(body: SystemOneRequest) -> DecisionRequest:
     for qid, q in body.questions.items():
         where = f"questions.{qid}"
         crit = q.criteria
+        opts: tuple[Option, ...]
         if q.type == "noul":
             if isinstance(crit, list):
                 raise ValueError(
@@ -330,7 +333,7 @@ def systemone_to_internal(body: SystemOneRequest) -> DecisionRequest:
             kind = "choice"
         else:
             if isinstance(crit, dict):
-                crit = list(crit.values())
+                crit = [c if c is not None else "" for c in crit.values()]
             if not crit or len(crit) < 2:
                 raise ValueError(
                     f"{where}.criteria: a score needs a list of at least 2 levels"

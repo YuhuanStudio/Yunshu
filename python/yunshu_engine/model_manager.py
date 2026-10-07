@@ -431,9 +431,9 @@ async def instantiate_engine(
     if model_type == ModelType.DECISION:
         from .decision_engine import DecisionEngine
 
-        engine = DecisionEngine(model_path, config)
-        await engine.start()
-        return engine
+        decision_engine = DecisionEngine(model_path, config)
+        await decision_engine.start()
+        return decision_engine
     if model_type == ModelType.IMAGE_GEN:
         from .image_engine import ImageGenEngine
 

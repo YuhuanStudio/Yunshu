@@ -80,7 +80,7 @@ def _is_model_dir(path: Path) -> bool:
 
 
 def _engine_for_type(mt: ModelType) -> EngineType:
-    return {
+    table: dict[str, EngineType] = {
         "llm": "batched",
         "vlm": "vlm",
         "audio_tts": "audio",
@@ -90,7 +90,8 @@ def _engine_for_type(mt: ModelType) -> EngineType:
         "sts": "audio",
         "video": "vlm",
         "decision": "decision",
-    }.get(mt, "batched")
+    }
+    return table.get(mt, "batched")
 
 
 def discover_models(model_dir: Path) -> dict[str, DiscoveredModel]:
