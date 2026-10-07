@@ -2,6 +2,7 @@ import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import {
   Badge,
   Button,
+  Card,
   EmptyState,
   IconButton,
   Input,
@@ -18,29 +19,117 @@ import {
 } from "@yuhuanowo/yunui";
 import {
   ChatComposer,
+  ChatHeader,
   ChatMessage,
   ChatMessageList,
+  GenerationStats,
 } from "@yuhuanowo/yunui/chat";
 import { ThinkingBlock } from "@yuhuanowo/yunui/ai";
 import { SlidersHorizontal, Plus, Sparkles, ImagePlus, X } from "lucide-react";
 import { streamCompletion } from "./stream";
 import type { Connection } from "./api";
-import { modelLabel, supportsChat, type Engine } from "./ui";
+import { modelLabel, number, supportsChat, type Engine } from "./ui";
+import { compareOutputs, runStats, type RunTiming } from "./playground-metrics";
 const Markdown = lazy(() =>
   import("@yuhuanowo/yunui/content").then((m) => ({
     default: m.MarkdownRenderer,
   })),
 );
-type Message = {
-  id: string;
-  role: "user" | "assistant";
+type Run = {
   content: string;
   reasoning?: string;
   model: string;
+  temperature: number;
   incomplete?: boolean;
-  image?: { name: string; url: string };
   finishReason?: string;
+  timing?: RunTiming;
 };
+type Message = Run & {
+  id: string;
+  role: "user" | "assistant";
+  image?: { name: string; url: string };
+};
+type Mode = "chat" | "compare";
+type Pair = readonly [Run | null, Run | null];
+const statLabels = { tokens: "tokens", speed: "tok/s", latency: "ms 耗時" };
+const seconds = (ms: number) => `${number(ms / 1000, 2)} s`;
+const signed = (v: number, digits: number) =>
+  `${v > 0 ? "+" : v < 0 ? "−" : ""}${number(Math.abs(v), digits)}`;
+
+/** Per-reply engine stats; live while `now` ticks, final once `endAt` is set. */
+function ReplyStats({ run, now }: { run: Run; now: number }) {
+  if (!run.timing) return null;
+  const s = runStats(run.timing, now),
+    live = run.timing.endAt === undefined;
+  return (
+    <div
+      className="flex flex-wrap items-center gap-1.5 tabular-nums"
+      data-testid="reply-stats"
+    >
+      <GenerationStats
+        tokens={s.tokens}
+        tokensPerSecond={s.tokensPerSecond}
+        latencyMs={Math.round(s.latencyMs)}
+        labels={statLabels}
+      />
+      {live && s.ttftMs === undefined && (
+        <Badge variant="outline">等待首個 token</Badge>
+      )}
+      {s.ttftMs !== undefined && (
+        <Badge variant="outline">TTFT {number(s.ttftMs, 0)} ms</Badge>
+      )}
+      {s.cachedTokens !== undefined && (
+        <Badge variant="outline">
+          快取 {number(s.cachedTokens, 0)}
+          {s.promptTokens !== undefined ? `/${number(s.promptTokens, 0)}` : ""}
+        </Badge>
+      )}
+      {s.estimated && !live && (
+        <Badge variant="secondary">token 數為串流片段估算</Badge>
+      )}
+    </div>
+  );
+}
+
+function ReplyBody({ run, streaming }: { run: Run; streaming: boolean }) {
+  return (
+    <>
+      {run.reasoning && (
+        <ThinkingBlock
+          labels={{
+            title: "思考過程",
+            active: "思考中",
+            completed: "已完成",
+            inProgress: "進行中",
+          }}
+          content={run.reasoning}
+          isStreaming={streaming}
+        />
+      )}
+      <Suspense
+        fallback={
+          <div className="whitespace-pre-wrap text-sm leading-7">
+            {run.content}
+          </div>
+        }
+      >
+        <Markdown
+          content={
+            run.content || (streaming ? "等待模型輸出…" : "未收到文字內容")
+          }
+        />
+      </Suspense>
+      {run.finishReason === "length" && (
+        <p className="mt-2 text-xs text-warning">
+          已達輸出上限，可調高最大輸出 tokens 或關閉思考模式再測試。
+        </p>
+      )}
+      {run.incomplete && (
+        <p className="mt-2 text-xs text-muted-foreground">未完成的回覆</p>
+      )}
+    </>
+  );
+}
 export function Playground({
   connection,
   engine,
@@ -51,6 +140,15 @@ export function Playground({
   initialModel: string;
 }) {
   const [model, setModel] = useState(initialModel),
+    [mode, setMode] = useState<Mode>("chat"),
+    [modelB, setModelB] = useState(""),
+    [tempMode, setTempMode] = useState<readonly [string, string]>([
+      "shared",
+      "shared",
+    ]),
+    [pair, setPair] = useState<Pair>([null, null]),
+    [pairPrompt, setPairPrompt] = useState<Message | null>(null),
+    [now, setNow] = useState(() => performance.now()),
     [draft, setDraft] = useState(""),
     [messages, setMessages] = useState<Message[]>([]),
     [loading, setLoading] = useState(false),
@@ -73,14 +171,28 @@ export function Playground({
       controller.current?.abort();
     };
   }, []);
+  useEffect(() => {
+    if (!loading) return;
+    const timer = window.setInterval(() => setNow(performance.now()), 100);
+    return () => window.clearInterval(timer);
+  }, [loading]);
   const models = engine.status?.models ?? [],
     chosen = models.find((m) => m.id === model),
-    canSend =
-      engine.phase === "online" && !!chosen?.loaded && supportsChat(chosen);
+    chosenB = models.find((m) => m.id === modelB),
+    compare = mode === "compare",
+    runnable = (m: typeof chosen) =>
+      engine.phase === "online" && !!m?.loaded && supportsChat(m),
+    canSend = compare
+      ? runnable(chosen) && runnable(chosenB)
+      : runnable(chosen);
   useEffect(() => {
     if (!model && models.length)
       setModel(models.find((m) => m.loaded)?.id ?? models[0].id);
   }, [model, models]);
+  useEffect(() => {
+    if (compare && !modelB && models.length)
+      setModelB(models.find((m) => m.loaded && m.id !== model)?.id ?? model);
+  }, [compare, modelB, model, models]);
   async function attach(files: File[]) {
     const file = files[0];
     if (!file) return;
@@ -114,42 +226,25 @@ export function Playground({
       if (mounted.current) setReadingImage(false);
     }
   }
-  const supportsImage = chosen?.type.toLowerCase().includes("vlm") ?? false;
-  async function send() {
-    if (
-      !canSend ||
-      !draft.trim() ||
-      controller.current ||
-      readingImage ||
-      ((image || messages.some((message) => !!message.image)) && !supportsImage)
-    )
-      return;
-    const content = draft.trim(),
-      id = crypto.randomUUID(),
-      user: Message = {
-        id: crypto.randomUUID(),
-        role: "user",
-        content,
-        model,
-        ...(image ? { image } : {}),
-      };
-    const history = [...messages.filter((m) => !m.incomplete), user];
-    const c = new AbortController();
-    controller.current = c;
-    setMessages([
-      ...messages,
-      user,
-      { id, role: "assistant", content: "", model },
-    ]);
-    setDraft("");
-    setImage(null);
-    setLoading(true);
-    setError("");
+  const isVlm = (m: typeof chosen) =>
+      m?.type.toLowerCase().includes("vlm") ?? false,
+    supportsImage = compare ? isVlm(chosen) && isVlm(chosenB) : isVlm(chosen),
+    hasImage = !!image || messages.some((message) => !!message.image),
+    columnTemp = (i: 0 | 1) => (tempMode[i] === "greedy" ? 0 : temperature);
+  /** Stream one reply; `patch` updates the owning Run state. Never throws on abort. */
+  async function execute(
+    c: AbortController,
+    cfg: { model: string; temperature: number },
+    history: Message[],
+    patch: (fn: (r: Run) => Run) => void,
+  ) {
+    const timing: RunTiming = { start: performance.now(), chunks: 0 };
+    patch((r) => ({ ...r, timing: { ...timing } }));
     try {
       await streamCompletion(
         connection,
         {
-          model,
+          model: cfg.model,
           messages: [
             ...(system ? [{ role: "system", content: system }] : []),
             ...history.map((m) => ({
@@ -165,8 +260,9 @@ export function Playground({
                 : m.content,
             })),
           ],
-          temperature,
+          temperature: cfg.temperature,
           max_tokens: maxTokens,
+          stream_options: { include_usage: true },
           ...(thinking !== "auto"
             ? { enable_thinking: thinking === "on" }
             : {}),
@@ -175,23 +271,27 @@ export function Playground({
             : {}),
         },
         (delta) => {
-          if (mounted.current)
-            setMessages((rows) =>
-              rows.map((m) =>
-                m.id === id
-                  ? {
-                      ...m,
-                      content: m.content + (delta.content ?? ""),
-                      reasoning: (m.reasoning ?? "") + (delta.reasoning ?? ""),
-                      finishReason: delta.finishReason ?? m.finishReason,
-                    }
-                  : m,
-              ),
-            );
+          if (!mounted.current) return;
+          const t = performance.now();
+          if (delta.content || delta.reasoning) {
+            timing.chunks += 1;
+            timing.firstAt ??= t;
+          }
+          if (delta.usage) timing.usage = { ...timing.usage, ...delta.usage };
+          patch((m) => ({
+            ...m,
+            content: m.content + (delta.content ?? ""),
+            reasoning: (m.reasoning ?? "") + (delta.reasoning ?? ""),
+            finishReason: delta.finishReason ?? m.finishReason,
+            timing: { ...timing },
+          }));
         },
         c.signal,
       );
+      timing.endAt = performance.now();
+      if (mounted.current) patch((m) => ({ ...m, timing: { ...timing } }));
     } catch (e) {
+      timing.endAt = performance.now();
       if (mounted.current) {
         setError(
           c.signal.aborted
@@ -200,8 +300,71 @@ export function Playground({
               ? e.message
               : "生成失敗",
         );
-        setMessages((rows) =>
-          rows.map((m) => (m.id === id ? { ...m, incomplete: true } : m)),
+        patch((m) => ({ ...m, incomplete: true, timing: { ...timing } }));
+      }
+    }
+  }
+  async function send() {
+    if (
+      !canSend ||
+      !draft.trim() ||
+      controller.current ||
+      readingImage ||
+      (hasImage && !supportsImage)
+    )
+      return;
+    const content = draft.trim(),
+      user: Message = {
+        id: crypto.randomUUID(),
+        role: "user",
+        content,
+        model,
+        temperature,
+        ...(image ? { image } : {}),
+      };
+    const c = new AbortController();
+    controller.current = c;
+    setDraft("");
+    setImage(null);
+    setLoading(true);
+    setError("");
+    try {
+      if (compare) {
+        const cfgs = [
+          { model, temperature: columnTemp(0) },
+          { model: modelB, temperature: columnTemp(1) },
+        ] as const;
+        const blank = (i: 0 | 1): Run => ({
+          content: "",
+          model: cfgs[i].model,
+          temperature: cfgs[i].temperature,
+        });
+        setPairPrompt(user);
+        setPair([blank(0), null]);
+        // Sequential on purpose: one GPU, and overlapping runs would skew timing.
+        for (const i of [0, 1] as const) {
+          if (c.signal.aborted) break;
+          setPair((p) => (i === 1 ? [p[0], blank(1)] : p));
+          await execute(c, cfgs[i], [user], (fn) =>
+            setPair((p) => {
+              const cur = p[i];
+              if (!cur) return p;
+              return i === 0 ? [fn(cur), p[1]] : [p[0], fn(cur)];
+            }),
+          );
+        }
+      } else {
+        const id = crypto.randomUUID(),
+          history = [...messages.filter((m) => !m.incomplete), user];
+        setMessages([
+          ...messages,
+          user,
+          { id, role: "assistant", content: "", model, temperature },
+        ]);
+        await execute(c, { model, temperature }, history, (fn) =>
+          setMessages((rows) =>
+            rows.map((m) => (m.id === id ? { ...m, ...fn(m) } : m)),
+          ),
         );
       }
     } finally {
@@ -212,118 +375,231 @@ export function Playground({
       void engine.refresh();
     }
   }
+  const lastId = messages.at(-1)?.id;
+  const verdict = (() => {
+    const [a, b] = pair;
+    if (loading || !a?.timing?.endAt || !b?.timing?.endAt) return null;
+    if (a.incomplete || b.incomplete || !a.content || !b.content) return null;
+    return compareOutputs(
+      { text: a.content, temperature: a.temperature },
+      { text: b.content, temperature: b.temperature },
+    );
+  })();
+  const deltas = (() => {
+    const [a, b] = pair;
+    if (loading || !a?.timing?.endAt || !b?.timing?.endAt) return null;
+    const sa = runStats(a.timing, now),
+      sb = runStats(b.timing, now);
+    return {
+      tps:
+        sa.tokensPerSecond !== undefined && sb.tokensPerSecond !== undefined
+          ? sb.tokensPerSecond - sa.tokensPerSecond
+          : undefined,
+      ttft:
+        sa.ttftMs !== undefined && sb.ttftMs !== undefined
+          ? sb.ttftMs - sa.ttftMs
+          : undefined,
+    };
+  })();
+  const modelSelect = (
+    value: string,
+    onChange: (v: string) => void,
+    label: string,
+    m: typeof chosen,
+  ) => (
+    <div className="flex items-center gap-2">
+      <Select
+        value={value || undefined}
+        onValueChange={onChange}
+        disabled={loading}
+      >
+        <SelectTrigger aria-label={label} className="w-52">
+          <SelectValue placeholder="選擇模型" />
+        </SelectTrigger>
+        <SelectContent>
+          {models.map((x) => (
+            <SelectItem key={x.id} value={x.id}>
+              {modelLabel(x.id)}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      <Badge variant={m?.loaded ? "success" : "secondary"}>
+        {m?.loaded ? "已載入" : "未載入"}
+      </Badge>
+    </div>
+  );
+  const empty = (
+    <EmptyState
+      icon={<Sparkles size={25} />}
+      title={compare ? "比較兩組設定" : "驗證模型回應"}
+      description={
+        compare
+          ? "同一提示詞依序送往兩組設定（不會同時執行，以免干擾計時），並排比較輸出與速度。"
+          : "向已載入的模型傳送提示詞，查看真實串流輸出。"
+      }
+    />
+  );
   return (
     <section className="flex min-h-0 flex-1 flex-col" data-testid="playground">
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border/60 p-4">
-        <div className="flex items-center gap-2">
-          <Select
-            value={model || undefined}
-            onValueChange={setModel}
-            disabled={loading}
-          >
-            <SelectTrigger aria-label="測試模型" className="w-52">
-              <SelectValue placeholder="選擇模型" />
-            </SelectTrigger>
-            <SelectContent>
-              {models.map((m) => (
-                <SelectItem key={m.id} value={m.id}>
-                  {modelLabel(m.id)}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <Badge variant={chosen?.loaded ? "success" : "secondary"}>
-            {chosen?.loaded ? "已載入" : "未載入"}
-          </Badge>
-        </div>
-        <Button
-          size="sm"
-          variant="ghost"
-          disabled={loading}
-          onClick={() => {
-            setMessages([]);
-            setError("");
-          }}
-        >
-          <Plus size={13} />
-          新測試
-        </Button>
-      </div>
-      <ChatMessageList
-        className="px-4 sm:px-7"
-        empty={
-          <div className="m-auto max-w-lg py-16">
-            <EmptyState
-              icon={<Sparkles size={25} />}
-              title="驗證模型回應"
-              description="向已載入的模型傳送提示詞，查看真實串流輸出。"
-            />
+      <ChatHeader
+        className="flex-wrap gap-3 border-b border-border/60 p-4"
+        left={
+          <div className="flex flex-wrap items-center gap-2">
+            {modelSelect(model, setModel, "測試模型", chosen)}
+            {compare && modelSelect(modelB, setModelB, "比較模型", chosenB)}
           </div>
         }
+        status={
+          <SegmentedSelect
+            aria-label="測試模式"
+            value={mode}
+            onChange={(v) => !loading && setMode(v as Mode)}
+            options={[
+              { value: "chat", label: "對話" },
+              { value: "compare", label: "比較" },
+            ]}
+          />
+        }
+        actions={
+          <Button
+            size="sm"
+            variant="ghost"
+            disabled={loading}
+            onClick={() => {
+              setMessages([]);
+              setPair([null, null]);
+              setPairPrompt(null);
+              setError("");
+            }}
+          >
+            <Plus size={13} />
+            新測試
+          </Button>
+        }
+      />
+      <ChatMessageList
+        className="px-4 sm:px-7"
+        empty={<div className="m-auto max-w-lg py-16">{empty}</div>}
       >
-        <div className="mx-auto max-w-3xl space-y-6 py-6">
-          {!messages.length && (
-            <EmptyState
-              icon={<Sparkles size={25} />}
-              title="驗證模型回應"
-              description="向已載入的模型傳送提示詞，查看真實串流輸出。"
-            />
-          )}
-          {messages.map((m) => (
-            <ChatMessage
-              key={m.id}
-              role={m.role}
-              density="compact"
-              name={m.role === "assistant" ? modelLabel(m.model) : undefined}
-            >
-              {m.image && (
-                <img
-                  src={m.image.url}
-                  alt={m.image.name}
-                  className="mb-3 max-h-56 max-w-full rounded-lg object-contain"
-                />
-              )}
-              {m.reasoning && (
-                <ThinkingBlock
-                  labels={{
-                    title: "思考過程",
-                    active: "思考中",
-                    completed: "已完成",
-                    inProgress: "進行中",
-                  }}
-                  content={m.reasoning}
-                  isStreaming={loading && messages.at(-1)?.id === m.id}
-                />
-              )}
-              <Suspense
-                fallback={
-                  <div className="whitespace-pre-wrap text-sm leading-7">
-                    {m.content}
-                  </div>
+        {compare ? (
+          <div
+            className="mx-auto w-full max-w-5xl space-y-4 py-6"
+            data-testid="compare"
+          >
+            {!pairPrompt && empty}
+            {pairPrompt && (
+              <ChatMessage role="user" density="compact">
+                {pairPrompt.image && (
+                  <img
+                    src={pairPrompt.image.url}
+                    alt={pairPrompt.image.name}
+                    className="mb-3 max-h-56 max-w-full rounded-lg object-contain"
+                  />
+                )}
+                {pairPrompt.content}
+              </ChatMessage>
+            )}
+            {pairPrompt && (
+              <div className="grid gap-4 md:grid-cols-2">
+                {([0, 1] as const).map((i) => {
+                  const run = pair[i];
+                  return (
+                    <Card
+                      key={i}
+                      className="min-w-0 space-y-3 p-4"
+                      data-testid={`compare-col-${i === 0 ? "a" : "b"}`}
+                    >
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Badge variant="secondary">{i === 0 ? "A" : "B"}</Badge>
+                        <span className="min-w-0 truncate text-sm font-medium">
+                          {modelLabel(i === 0 ? model : modelB)}
+                        </span>
+                        <Badge variant="outline" className="tabular-nums">
+                          T={number(run?.temperature ?? columnTemp(i), 1)}
+                        </Badge>
+                      </div>
+                      {run ? (
+                        <>
+                          <ReplyBody
+                            run={run}
+                            streaming={loading && !run.timing?.endAt}
+                          />
+                          <ReplyStats run={run} now={now} />
+                        </>
+                      ) : (
+                        <p className="text-xs text-muted-foreground">
+                          {loading ? "排隊中，等待 A 完成後執行。" : "未執行"}
+                        </p>
+                      )}
+                    </Card>
+                  );
+                })}
+              </div>
+            )}
+            {(deltas || verdict) && (
+              <Card
+                className="flex flex-wrap items-center gap-2 p-3 tabular-nums"
+                data-testid="compare-delta"
+              >
+                <span className="text-xs text-muted-foreground">B 相對 A</span>
+                {deltas?.tps !== undefined && (
+                  <Badge variant="outline">
+                    Δ tok/s {signed(deltas.tps, 1)}
+                  </Badge>
+                )}
+                {deltas?.ttft !== undefined && (
+                  <Badge variant="outline">
+                    Δ TTFT {signed(deltas.ttft, 0)} ms
+                  </Badge>
+                )}
+                {verdict?.kind === "identical" &&
+                  (verdict.greedy ? (
+                    <Badge variant="success">輸出完全一致</Badge>
+                  ) : (
+                    <Badge variant="secondary">
+                      文字相同（取樣非貪婪，不代表確定性）
+                    </Badge>
+                  ))}
+                {verdict?.kind === "diverged" && (
+                  <Badge variant="warning">
+                    首次分歧於字元偏移 {number(verdict.offset, 0)}（從 0 起算）
+                  </Badge>
+                )}
+              </Card>
+            )}
+          </div>
+        ) : (
+          <div className="mx-auto max-w-3xl space-y-6 py-6">
+            {!messages.length && empty}
+            {messages.map((m) => (
+              <ChatMessage
+                key={m.id}
+                role={m.role}
+                density="compact"
+                name={m.role === "assistant" ? modelLabel(m.model) : undefined}
+                footer={
+                  m.role === "assistant" ? (
+                    <ReplyStats run={m} now={now} />
+                  ) : undefined
                 }
               >
-                <Markdown
-                  content={
-                    m.content ||
-                    (loading && messages.at(-1)?.id === m.id
-                      ? "等待模型輸出…"
-                      : "未收到文字內容")
-                  }
-                />
-              </Suspense>
-              {m.finishReason === "length" && (
-                <p className="mt-2 text-xs text-warning">
-                  已達輸出上限，可調高最大輸出 tokens 或關閉思考模式再測試。
-                </p>
-              )}
-              {m.incomplete && (
-                <p className="mt-2 text-xs text-muted-foreground">
-                  未完成的回覆
-                </p>
-              )}
-            </ChatMessage>
-          ))}
-        </div>
+                {m.image && (
+                  <img
+                    src={m.image.url}
+                    alt={m.image.name}
+                    className="mb-3 max-h-56 max-w-full rounded-lg object-contain"
+                  />
+                )}
+                {m.role === "assistant" ? (
+                  <ReplyBody run={m} streaming={loading && lastId === m.id} />
+                ) : (
+                  m.content
+                )}
+              </ChatMessage>
+            ))}
+          </div>
+        )}
       </ChatMessageList>
       <div className="mx-auto w-full max-w-3xl shrink-0 px-4 pb-5 pt-3">
         {error && (
@@ -331,17 +607,40 @@ export function Playground({
             {error}
           </p>
         )}
-        {!supportsImage &&
-          (image || messages.some((message) => !!message.image)) && (
-            <p className="mb-3 text-xs text-warning">
-              此測試包含圖片，請選擇視覺模型，或建立新測試。
-            </p>
-          )}
+        {!supportsImage && hasImage && (
+          <p className="mb-3 text-xs text-warning">
+            此測試包含圖片，請選擇視覺模型，或建立新測試。
+          </p>
+        )}
+        {compare && (
+          <div className="mb-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-muted-foreground">
+            {([0, 1] as const).map((i) => (
+              <div key={i} className="flex items-center gap-2">
+                <span>{i === 0 ? "A" : "B"} 取樣</span>
+                <SegmentedSelect
+                  aria-label={`${i === 0 ? "A" : "B"} 取樣方式`}
+                  value={tempMode[i]}
+                  onChange={(v) =>
+                    !loading &&
+                    setTempMode(i === 0 ? [v, tempMode[1]] : [tempMode[0], v])
+                  }
+                  options={[
+                    {
+                      value: "shared",
+                      label: `沿用 T=${number(temperature, 1)}`,
+                    },
+                    { value: "greedy", label: "貪婪 T=0" },
+                  ]}
+                />
+              </div>
+            ))}
+          </div>
+        )}
         {!canSend && (
           <p className="mb-3 text-xs text-muted-foreground">
             {engine.phase !== "online"
               ? "連接引擎後即可開始測試。"
-              : !supportsChat(chosen)
+              : !supportsChat(chosen) || (compare && !supportsChat(chosenB))
                 ? "此模型不適用文字聊天測試，請使用 API 接入對應端點。"
                 : "請先在模型庫載入此模型。"}
           </p>
@@ -353,10 +652,7 @@ export function Playground({
           onStop={() => controller.current?.abort()}
           loading={loading}
           sendDisabled={
-            !canSend ||
-            readingImage ||
-            ((!!image || messages.some((message) => !!message.image)) &&
-              !supportsImage)
+            !canSend || readingImage || (hasImage && !supportsImage)
           }
           attachments={
             image ? (

@@ -21,12 +21,55 @@ export interface CompletionBody {
   stream?: boolean;
   enable_thinking?: boolean;
   response_format?: { type: "json_object" };
+  stream_options?: { include_usage: boolean };
+}
+
+export interface CompletionUsage {
+  promptTokens?: number;
+  completionTokens?: number;
+  cachedTokens?: number;
+  ttftMs?: number;
 }
 
 export interface CompletionDelta {
   content?: string;
   reasoning?: string;
   finishReason?: string;
+  usage?: CompletionUsage;
+}
+
+const finiteNumber = (value: unknown): number | undefined =>
+  typeof value === "number" && Number.isFinite(value) ? value : undefined;
+
+/** Read OpenAI `usage` (plus optional x_yunshu extras) from a stream chunk. */
+function parseUsage(
+  record: Record<string, unknown>,
+): CompletionUsage | undefined {
+  const usage =
+    record.usage && typeof record.usage === "object"
+      ? (record.usage as Record<string, unknown>)
+      : undefined;
+  const extra =
+    record.x_yunshu && typeof record.x_yunshu === "object"
+      ? (record.x_yunshu as Record<string, unknown>)
+      : undefined;
+  if (!usage && !extra) return undefined;
+  const details =
+    usage?.prompt_tokens_details &&
+    typeof usage.prompt_tokens_details === "object"
+      ? (usage.prompt_tokens_details as Record<string, unknown>)
+      : undefined;
+  const out: CompletionUsage = {};
+  const promptTokens = finiteNumber(usage?.prompt_tokens);
+  const completionTokens = finiteNumber(usage?.completion_tokens);
+  const cachedTokens =
+    finiteNumber(details?.cached_tokens) ?? finiteNumber(extra?.cached_tokens);
+  const ttftMs = finiteNumber(extra?.ttft_ms);
+  if (promptTokens !== undefined) out.promptTokens = promptTokens;
+  if (completionTokens !== undefined) out.completionTokens = completionTokens;
+  if (cachedTokens !== undefined) out.cachedTokens = cachedTokens;
+  if (ttftMs !== undefined) out.ttftMs = ttftMs;
+  return Object.keys(out).length ? out : undefined;
 }
 
 /** Normalize a server URL or API base URL to the OpenAI chat completions endpoint. */
@@ -195,6 +238,9 @@ export async function streamCompletion(
             : JSON.stringify(error);
       throw new Error(`OpenAI stream error: ${message}`);
     }
+
+    const usage = parseUsage(record);
+    if (usage) onDelta({ usage });
 
     const choices = record.choices;
     if (
