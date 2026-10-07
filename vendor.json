@@ -2003,6 +2003,51 @@
       "why": "native APC restore uses independent copy-on-write handles before direct capacity reservation; stores and custom caches keep upstream detached snapshots",
       "source_sha256": "2f92c734175d88d663e5c687a47fd71c9ea2c741bb0fb94f9231145603f9e4d8",
       "installed_version": "0.7.6"
+    },
+    {
+      "kind": "patches",
+      "path": "python/yunshu_engine/apc_manager.py",
+      "repo": "https://github.com/Blaizzy/mlx-vlm",
+      "clone": "reference/mlx-vlm",
+      "package": "mlx-vlm",
+      "module": "mlx_vlm.apc_coordinator",
+      "symbol": "APCCoordinator.strategy",
+      "signature": "(self)",
+      "license": "MIT",
+      "commit": "v0.7.3",
+      "why": "dense media generators use complete checkpoints instead of block prefixes that upstream rejects when they contain images",
+      "source_sha256": "a9522f362a43c532a63b1f26e5272e20c97b6e70ac94a9889e0419300f480a5c",
+      "installed_version": "0.7.6"
+    },
+    {
+      "kind": "patches",
+      "path": "python/yunshu_engine/apc_manager.py",
+      "repo": "https://github.com/Blaizzy/mlx-vlm",
+      "clone": "reference/mlx-vlm",
+      "package": "mlx-vlm",
+      "module": "mlx_vlm.apc_coordinator",
+      "symbol": "APCCoordinator.legacy_mode",
+      "signature": "(self)",
+      "license": "MIT",
+      "commit": "v0.7.3",
+      "why": "exposes exact compatibility mode for the media checkpoint strategy",
+      "source_sha256": "9d925f0da538a5c27e603a03828997e2a775c87345d2cb3705a80efc168d1b37",
+      "installed_version": "0.7.6"
+    },
+    {
+      "kind": "patches",
+      "path": "python/yunshu_engine/vlm_batch_runner.py",
+      "repo": "https://github.com/Blaizzy/mlx-vlm",
+      "clone": "reference/mlx-vlm",
+      "package": "mlx-vlm",
+      "module": "mlx_vlm.generate.ar",
+      "symbol": "BatchGenerator._apc_media_token_ids",
+      "signature": "(self)",
+      "license": "MIT",
+      "commit": "v0.7.3",
+      "why": "generator-local media IDs include the VLM wrapper config (Gemma 4) and native audio; backbone-only IDs miss expanded image spans",
+      "source_sha256": "6969242f53bbcbcf17cface5ab1689fad9ba2426e30e95c81d0255b6639b4dea",
+      "installed_version": "0.7.6"
     }
   ],
   "watch": [

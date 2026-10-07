@@ -64,6 +64,30 @@ DRIVER_MIN_CONCURRENCY = 2
 DRIVER_MAX_UNCACHED_TOKENS = 12288
 
 
+def media_token_ids(model) -> set[int]:
+    """Media IDs can live on the VLM wrapper, not its text-only backbone."""
+    from mlx_vlm.apc import multimodal_token_ids_from_config
+
+    configs = [
+        getattr(model, "config", None),
+        getattr(getattr(model, "language_model", None), "config", None),
+    ]
+    ids: set[int] = set()
+    for config in list(configs):
+        configs.extend(
+            getattr(config, key, None) for key in ("thinker_config", "text_config")
+        )
+    for config in configs:
+        if config is None:
+            continue
+        ids.update(multimodal_token_ids_from_config(config))
+        for key in ("audio_token_id", "audio_token_index"):
+            token = getattr(config, key, None)
+            if token is not None:
+                ids.add(int(token))
+    return ids
+
+
 @dataclass
 class RunStats:
     prompt_tokens: int = 0
@@ -397,6 +421,7 @@ class VLMBatchRunner:
                     else 0
                 ),
                 media={
+                    "yunshu_media_boundary_schema": "wrapper-media-v1",
                     "audio": raw.get("input_features"),
                     "video": raw.get("pixel_values_videos"),
                     # Equal patch pixels can have different spatial grids;
@@ -730,6 +755,10 @@ class VLMBatchRunner:
             prefill_step_size=PREFILL_STEP,
             prefill_batch_size=1,
         )
+        # The backbone's config may omit outer image/video/audio placeholders
+        # (Gemma 4). Every checkpoint/suffix boundary uses the wrapper's IDs.
+        media_ids = media_token_ids(self.model)
+        gen._apc_media_token_ids = lambda: set(media_ids)
         # Upstream binds a stock APCCoordinator; ours places the extra checkpoints
         # (end of the system turn) and numbers requests for superseding.
         bind = getattr(manager, "coordinator", None)

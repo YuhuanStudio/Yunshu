@@ -157,7 +157,8 @@ cell in `scripts/verify/stages.py` so the next worker does not need the script.
 --label <worker>-media --priority -1` verifies image-prefix reuse with the shared VLM
 runner. It compares the runner's raw emitted token IDs (including control/reasoning
 IDs) on cold, repeated-image and follow-up requests, rejects different-image reuse,
-and exercises image-block `cache_control` through `/v1/messages`. A candidate must
+and exercises candidate image-block `cache_control` through `/v1/messages` with
+its own cold/hit controls (historical baselines may fail that route). A candidate must
 report real cache reads, including the explicit Anthropic image checkpoint. The
 common committed probe is CPU-tested before loading a model; incomplete request
 matrices fail closed.
@@ -166,4 +167,4 @@ The default uses three interleaved base/candidate M5 cells, with short and 32K t
 bodies (`--ctx 1,32768`; each receipt reports the actual media-expanded prompt length).
 Cells use quiet timing admission. `gemma-4-e2b-it-4bit --reps 1` uses the allowlisted
 M3 lane for correctness only; both arms use their own pinned checkout snapshots.
-M3 numbers never decide M5 performance. The verdict rejects mixed-device pairs.
+M3 numbers never decide M5 performance. The verdict rejects mixed-device pairs and mismatched dependency versions.

@@ -222,3 +222,50 @@ def test_media_salt_includes_geometry_and_audio_mask_but_not_text_length(monkeyp
     raw["image_grid_thw"] = mx.array([[1, 4, 4]])
     raw["feature_attention_mask"] = mx.array([[1, 1, 0, 0]])
     assert runner.prepare_media("different valid audio features")[2] != salt
+
+
+def test_media_ids_include_wrapper_config_and_native_audio():
+    from yunshu_engine.vlm_batch_runner import media_token_ids
+
+    model = SimpleNamespace(
+        config=SimpleNamespace(
+            image_token_id=900, audio_token_id=901, video_token_id=902
+        ),
+        language_model=SimpleNamespace(config=SimpleNamespace()),
+    )
+    assert media_token_ids(model) == {900, 901, 902}
+    native = SimpleNamespace(
+        config=SimpleNamespace(
+            thinker_config=SimpleNamespace(image_token_index=903, audio_token_index=904)
+        )
+    )
+    assert media_token_ids(native) == {903, 904}
+
+
+def test_image_cache_control_maps_wrapper_media_expansion(monkeypatch):
+    eng = VLMEngine.__new__(VLMEngine)
+    eng._model = SimpleNamespace(
+        config=SimpleNamespace(image_token_id=900),
+        language_model=SimpleNamespace(config=SimpleNamespace()),
+    )
+    eng._tokenizer = SimpleNamespace(encode=lambda *a, **k: [1, 900, 2, 3])
+    eng._apply_vlm_template_with_cache = lambda *a, **k: "prompt"
+    monkeypatch.setattr(
+        "yunshu_engine.prompt_caching.rendered_boundaries",
+        lambda *a, **k: {
+            "points": [(2, 300)],
+            "writes": [(2, 300)],
+            "lookup_points": [2],
+        },
+    )
+    messages = [
+        {
+            "role": "user",
+            "content": [{"type": "image_url", "image_url": {"url": "file://fixture"}}],
+        }
+    ]
+    plan = dict(markers={"MARK": 300}, tools={}, messages=messages)
+    resolved = eng._resolve_prompt_cache_plan(
+        plan, messages, [1, 900, 900, 2, 3], {"inputs_embeds": object()}, False, {}
+    )
+    assert resolved["points"] == [(3, 300)] and resolved["lookup_points"] == [3]

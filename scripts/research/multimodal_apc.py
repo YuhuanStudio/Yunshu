@@ -12,6 +12,7 @@ import base64
 import hashlib
 import json
 import time
+from importlib.metadata import version
 from pathlib import Path
 
 from omni_apc_probe import png
@@ -202,6 +203,10 @@ async def run(a):
                     "event": "engaged",
                     "runner": type(engine._batch_runner).__name__,
                     "model": a.model,
+                    "versions": {
+                        k: version(k)
+                        for k in ("mlx", "mlx-lm", "mlx-vlm", "transformers")
+                    },
                 }
             )
             for size in a.sizes:
@@ -230,40 +235,64 @@ async def run(a):
                 if other["cached"]:
                     raise ValueError("foreign image reused pixel state")
                 emit({"event": "request", "kind": "other-image", "size": size, **other})
-            async with httpx.AsyncClient(
-                transport=httpx.ASGITransport(app=app), base_url="http://yunshu"
-            ) as client:
-                body = anthropic_body(engine.model_name)
-                cold = await anthropic_probe(engine, client, body, cold=True)
-                warm = await anthropic_probe(engine, client, body)
-                emit({"event": "request", "kind": "anthropic-cold", "size": 0, **cold})
-                emit({"event": "request", "kind": "anthropic-warm", "size": 0, **warm})
-                validate_pair(cold, warm, a.require_hit)
-                if a.require_hit and not cold["created"]:
-                    raise ValueError("image cache_control did not create a checkpoint")
-                body["messages"] += [
-                    {"role": "assistant", "content": cold["text"]},
-                    {"role": "user", "content": "What colour was the image? One word."},
-                ]
-                hit = await anthropic_probe(engine, client, body)
-                miss = await anthropic_probe(engine, client, body, cold=True)
+            if a.skip_anthropic:
                 emit(
-                    {
-                        "event": "request",
-                        "kind": "anthropic-turn2-hit",
-                        "size": 0,
-                        **hit,
-                    }
+                    {"event": "scope", "anthropic": "candidate-only cold/hit controls"}
                 )
-                emit(
-                    {
-                        "event": "request",
-                        "kind": "anthropic-turn2-miss",
-                        "size": 0,
-                        **miss,
-                    }
-                )
-                validate_pair(miss, hit, a.require_hit)
+            else:
+                async with httpx.AsyncClient(
+                    transport=httpx.ASGITransport(app=app), base_url="http://yunshu"
+                ) as client:
+                    body = anthropic_body(engine.model_name)
+                    cold = await anthropic_probe(engine, client, body, cold=True)
+                    warm = await anthropic_probe(engine, client, body)
+                    emit(
+                        {
+                            "event": "request",
+                            "kind": "anthropic-cold",
+                            "size": 0,
+                            **cold,
+                        }
+                    )
+                    emit(
+                        {
+                            "event": "request",
+                            "kind": "anthropic-warm",
+                            "size": 0,
+                            **warm,
+                        }
+                    )
+                    validate_pair(cold, warm, a.require_hit)
+                    if a.require_hit and not cold["created"]:
+                        raise ValueError(
+                            "image cache_control did not create a checkpoint"
+                        )
+                    body["messages"] += [
+                        {"role": "assistant", "content": cold["text"]},
+                        {
+                            "role": "user",
+                            "content": "What colour was the image? One word.",
+                        },
+                    ]
+                    hit = await anthropic_probe(engine, client, body)
+                    miss = await anthropic_probe(engine, client, body, cold=True)
+                    emit(
+                        {
+                            "event": "request",
+                            "kind": "anthropic-turn2-hit",
+                            "size": 0,
+                            **hit,
+                        }
+                    )
+                    emit(
+                        {
+                            "event": "request",
+                            "kind": "anthropic-turn2-miss",
+                            "size": 0,
+                            **miss,
+                        }
+                    )
+                    validate_pair(miss, hit, a.require_hit)
             emit({"complete": True})
     finally:
         set_engine(None)
@@ -276,8 +305,17 @@ def parser():
     p.add_argument("--out", required=True)
     p.add_argument("--sizes", type=int, nargs="+", default=[1, 32768])
     p.add_argument("--require-hit", action="store_true")
+    p.add_argument(
+        "--skip-anthropic",
+        action="store_true",
+        help="baseline arm: compare engine sessions; API cold/hit controls run on candidate",
+    )
     return p
 
 
 if __name__ == "__main__":
-    asyncio.run(run(parser().parse_args()))
+    ap = parser()
+    args = ap.parse_args()
+    if args.require_hit and args.skip_anthropic:
+        ap.error("candidate must exercise Anthropic cache_control")
+    asyncio.run(run(args))

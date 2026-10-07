@@ -981,7 +981,9 @@ def _memory_valid(path: Path):
     return True, ""
 
 
-def _multimodal_valid(path: Path, sizes: list, require_hit: bool):
+def _multimodal_valid(
+    path: Path, sizes: list, require_hit: bool, require_anthropic=True
+):
     rows = read_jsonl(path)
     if not rows or not rows[-1].get("complete"):
         return False, "incomplete multimodal evidence"
@@ -993,28 +995,30 @@ def _multimodal_valid(path: Path, sizes: list, require_hit: bool):
         for n in sizes
         for k in ("cold", "warm", "turn2-hit", "turn2-miss", "other-image")
     }
-    expected.update(
-        (0, k)
-        for k in (
-            "anthropic-cold",
-            "anthropic-warm",
-            "anthropic-turn2-hit",
-            "anthropic-turn2-miss",
+    if require_anthropic:
+        expected.update(
+            (0, k)
+            for k in (
+                "anthropic-cold",
+                "anthropic-warm",
+                "anthropic-turn2-hit",
+                "anthropic-turn2-miss",
+            )
         )
-    )
     if set(requests) != expected:
         return False, "missing multimodal requests"
-    for n, pairs in [
-        (n, [("cold", "warm"), ("turn2-miss", "turn2-hit")]) for n in sizes
-    ] + [
-        (
-            0,
-            [
-                ("anthropic-cold", "anthropic-warm"),
-                ("anthropic-turn2-miss", "anthropic-turn2-hit"),
-            ],
-        )
-    ]:
+    controls = [(n, [("cold", "warm"), ("turn2-miss", "turn2-hit")]) for n in sizes]
+    if require_anthropic:
+        controls += [
+            (
+                0,
+                [
+                    ("anthropic-cold", "anthropic-warm"),
+                    ("anthropic-turn2-miss", "anthropic-turn2-hit"),
+                ],
+            )
+        ]
+    for n, pairs in controls:
         for miss, hit in pairs:
             a, b = requests[n, miss], requests[n, hit]
             if not a.get("ids") or a["ids"] != b.get("ids") or a.get("cached") != 0:
@@ -1071,6 +1075,8 @@ def stage_multimodal(ctx: Ctx) -> StageResult:
             argv += [str(n) for n in ctx.suite["ctx"]]
             if arm == "cand":
                 argv += ["--require-hit"]
+            else:
+                argv += ["--skip-anthropic"]
             cells.append(
                 Cell(
                     "multimodal",
@@ -1082,7 +1088,7 @@ def stage_multimodal(ctx: Ctx) -> StageResult:
                     device="m3" if remote else "m5",
                     cwd=ctx.tree(arm).path if remote else None,
                     validate=lambda path, hit=arm == "cand": _multimodal_valid(
-                        path, ctx.suite["ctx"], hit
+                        path, ctx.suite["ctx"], hit, require_anthropic=hit
                     ),
                 )
             )
@@ -1100,12 +1106,23 @@ def stage_multimodal(ctx: Ctx) -> StageResult:
             ]
         for rep in range(int(ctx.suite.get("reps", 3))):
             b, c = numbers[f"base-r{rep}"], numbers[f"cand-r{rep}"]
+            c = [r for r in c if not r["kind"].startswith("anthropic-")]
             if [(r["kind"], r["size"], r["sha"]) for r in b] != [
                 (r["kind"], r["size"], r["sha"]) for r in c
             ]:
                 reasons.append(f"raw token identity differs base/cand rep {rep}")
             br = read_jsonl(results[f"base-r{rep}"].evidence)
             cr = read_jsonl(results[f"cand-r{rep}"].evidence)
+            bv = next(
+                (r.get("versions") for r in br if r.get("event") == "engaged"), None
+            )
+            cv = next(
+                (r.get("versions") for r in cr if r.get("event") == "engaged"), None
+            )
+            if not bv or bv != cv:
+                reasons.append(
+                    f"dependencies changed across paired arms rep {rep}: {bv} / {cv}"
+                )
             bd, cd = {r.get("device") for r in br}, {r.get("device") for r in cr}
             if len(bd) != 1 or bd != cd or not bd <= {"m3", "m5"}:
                 reasons.append(f"mixed or missing devices rep {rep}: {bd} / {cd}")

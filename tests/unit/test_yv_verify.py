@@ -1033,6 +1033,11 @@ def test_multimodal_evidence_is_fail_closed(tmp_path):
     rows.append(dict(complete=True))
     path.write_text("".join(json.dumps(r) + "\n" for r in rows))
     assert stages._multimodal_valid(path, [1], True)[0]
+    baseline = [r for r in rows if not r.get("kind", "").startswith("anthropic-")]
+    base_path = tmp_path / "base.jsonl"
+    base_path.write_text("".join(json.dumps(r) + "\n" for r in baseline))
+    assert stages._multimodal_valid(base_path, [1], False, require_anthropic=False)[0]
+    assert not stages._multimodal_valid(base_path, [1], True)[0]
     rows[1]["ids"] = [8]
     path.write_text("".join(json.dumps(r) + "\n" for r in rows))
     assert not stages._multimodal_valid(path, [1], True)[0]

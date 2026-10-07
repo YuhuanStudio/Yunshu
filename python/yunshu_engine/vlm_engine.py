@@ -2466,9 +2466,9 @@ class VLMEngine:
             )
             return None
         if prompt_kwargs is not None:
-            from mlx_vlm.apc import multimodal_token_ids_from_config
+            from .vlm_batch_runner import media_token_ids
 
-            media = multimodal_token_ids_from_config(self._model.language_model.config)
+            media = media_token_ids(self._model)
             lookup = expanded_boundaries(
                 rendered_ids, ids, [(n, 0) for n in points["lookup_points"]], media
             )
