@@ -91,6 +91,7 @@ class ModelType(Enum):
     STS = auto()
     VIDEO = auto()
     EMBEDDING = auto()  # dedicated multimodal embedder (Qwen3-VL-Embedding)
+    CLASSIFIER = auto()  # trained sequence-classification head
     RERANKER = auto()  # cross-encoder reranker (Qwen3-VL-Reranker)
 
 
@@ -155,6 +156,14 @@ def _detect_model_type(model_path: str) -> ModelType:
     model_type = config.get("model_type", "").lower().replace("-", "_")
     architectures = config.get("architectures", [])
     name_lower = p.name.lower()
+
+    from .scoring_engine import scoring_kind
+
+    _scoring = scoring_kind(config, str(model_path))
+    if _scoring == "head":
+        return ModelType.CLASSIFIER
+    if _scoring == "qwen3":
+        return ModelType.RERANKER
 
     # Qwen3-VL retrieval models (Qwen3-VL-Embedding / Qwen3-VL-Reranker): these
     # share model_type=qwen3_vl + Qwen3VLForConditionalGeneration with a normal
@@ -369,6 +378,12 @@ def _is_embedding_gemma2(model_path: str) -> bool:
 
 
 def _embedding_engine_class(model_path: str) -> Any:
+    with open(Path(model_path) / "config.json") as f:
+        config = json.load(f)
+    from .scoring_engine import TextScoringEngine, scoring_kind
+
+    if scoring_kind(config, model_path):
+        return TextScoringEngine
     if _is_embedding_gemma2(model_path):
         from .gemma_embedding_engine import GemmaEmbeddingEngine
 
@@ -409,7 +424,7 @@ async def instantiate_engine(
         engine = ImageGenEngine(model_path, config)
         await engine.start()
         return engine
-    if model_type in (ModelType.EMBEDDING, ModelType.RERANKER):
+    if model_type in (ModelType.EMBEDDING, ModelType.RERANKER, ModelType.CLASSIFIER):
         engine = _embedding_engine_class(model_path)(model_path, config)
         await engine.start()
         return engine

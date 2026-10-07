@@ -129,7 +129,7 @@ The `yunshu` block (the ModelCard):
 
 | Field | Meaning |
 |---|---|
-| `kind` | `chat`, `vlm`, `omni`, `embedding`, `reranker`, `asr`, `tts`, `sts`, `image`, `ocr`, `video` |
+| `kind` | `chat`, `vlm`, `omni`, `embedding`, `reranker`, `classifier`, `asr`, `tts`, `sts`, `image`, `ocr`, `video` |
 | `family`, `architecture`, `parameters` | config `model_type`, `architectures[0]`, parameter count from the safetensors headers (quantized words unpacked at each layer's own bit width, scales skipped) |
 | `quantization` | `bits`, `group_size`, `mode`, `layer_groups` (`{bits: layers}` for mixed-precision checkpoints), `skip_components` (diffusion) |
 | `input_modalities`, `output_modalities` | `text`, `image`, `video`, `audio`, `embedding`, `score` |
@@ -336,3 +336,56 @@ Explicit endpoints have a separate numerical cache identity. Their suffixes
 finish the same absolute prefill spans as a cold request; restores from a
 different earlier breakpoint plan are rejected. These endpoints are retained
 within this process's bounded APC policy; a restart may require a new write.
+
+### Text reranking and classification heads
+
+Text `Qwen3-Reranker` checkpoints use the model-card Transformers prompt and the
+last-position yes/no logits, with a sigmoid of the logit difference. Original
+`BertForSequenceClassification`, `RobertaForSequenceClassification` and
+`XLMRobertaForSequenceClassification` safetensors checkpoints use their trained
+heads. Other head architectures and quantized encoder heads return a load error.
+Encoder heads require the `embeddings` extra. Model cards report the effective
+serving window: Qwen3 scoring caps at 8192 tokens; RoBERTa position padding offsets
+and the tokenizer window constrain encoder inputs. Busy scoring work blocks
+non-forced model unload, including when its HTTP waiter has been cancelled.
+
+`POST /v1/rerank` retains `query`, `documents`, `instruction`, `top_n`, and
+`return_documents`, and the existing `results[{index,relevance_score,document?}]`
+shape. Text cross-encoders require string inputs; image objects require a VL reranker.
+
+`POST /v1/score` uses joint query/document scoring for single-label head models
+(sigmoid) and Qwen3 rerankers (yes/no probability), and cosine similarity for
+embedding models. vLLM's `queries` / `documents` names are accepted alongside the
+existing `text_1` / `text_2`. Scalar/list and length-one broadcasting preserve one
+result per pair. `use_activation: false` returns the trained raw logit (Qwen3:
+yes-minus-no logit), while omission or `null` uses probability scores. `instruction`
+is passed to the Qwen3 prompt. `dot` / `euclidean` remain embedding-only extensions.
+
+For trained heads, `POST /v1/classify` accepts `input` as a string or list and no
+`labels`. It returns `data[{object:"classification",index,probs}]` with checkpoint
+`labels` in head order: softmax for single-label multiclass, sigmoid for one logit
+or a checkpoint declaring `multi_label_classification`. A scalar input also returns
+the existing sorted `results[{label,score,index}]` convenience field. Providing
+candidate labels selects the existing embedding-based zero-shot mode and is rejected
+on trained heads. `temperature` applies only to the embedding-based mode.
+
+`yv ab --base BASE_SHA --cand CAND_SHA --suite rerank --label rerank-TOPIC --priority -1`
+checks candidate HTTP scores against independent float32 CPU Transformers recipes
+on four small original checkpoints (five pairs, including a long document, and
+three classification inputs). This capability stage uses the original
+checkpoint as its numerical oracle; the base commit is pinned and recorded, but
+has no trained-head endpoint to compare against. Scores must differ by at most
+0.003 and preserve every ranking. No speed claims are made by this stage.
+
+The recipes follow the [Qwen model card](https://huggingface.co/Qwen/Qwen3-Reranker-0.6B)
+and [vLLM scoring semantics](https://docs.vllm.ai/en/latest/models/pooling_models/scoring/).
+
+Verified 2026-10-07 on M5, code commit `08a91d28`, yv base `5269e9e5`:
+Qwen3-Reranker-0.6B, BGE-reranker-base, MiniLM-L-6-v2 (five pairs, including the
+5840-character document), and BERT-tiny SST2 (three inputs). The candidate used
+`TextScoringEngine` through `instantiate_engine`; all rankings matched independent
+CPU Transformers float32 inference. Maximum probability errors were respectively
+0.000208504, 0.000011891, 0.000037973 and 0.000001683 (limit 0.003). Raw score
+activation, broadcasting and the registered embed-route checks passed. Evidence:
+`/Volumes/P5Plus/yunshu-build/verify/runs/rerank-tiny-heads-handoff-1007-08a91d280b74/verdict.json`.
+This is numerical and API evidence, with no speed or retrieval-quality claim.
