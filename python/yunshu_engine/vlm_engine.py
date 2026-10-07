@@ -1032,6 +1032,13 @@ class VLMEngine:
         req_id = f"vlm-{uuid.uuid4().hex[:8]}"
 
         queue: asyncio.Queue[RequestOutput | None] = asyncio.Queue(maxsize=256)
+        # DFlash's copy-index setup can collect the Python heap after its first
+        # target token is ready. Let the async consumer deliver that token first.
+        first_delivery = (
+            threading.Event()
+            if getattr(self._batch_runner, "draft_kind", None) == "dflash"
+            else None
+        )
 
         # Capture event loop for thread-safe queue writes from executor thread.
         # asyncio.Queue.put_nowait() is NOT thread-safe — must schedule puts
@@ -1093,6 +1100,8 @@ class VLMEngine:
                 "xtc_threshold": xtc_threshold,
             },
         )
+
+        runner_params["first_delivery"] = first_delivery
 
         def _prepare():
             ids, pkw, salt = self._runner_input(
@@ -1227,7 +1236,14 @@ class VLMEngine:
                     except Exception:
                         pass
                 yield output
+                # The caller has resumed after handling this chunk. This also
+                # releases promptly when a parser needs another token before
+                # it can produce a visible fragment.
+                if first_delivery is not None and output.new_text:
+                    first_delivery.set()
         finally:
+            if first_delivery is not None:
+                first_delivery.set()
             # Record in ServerMetrics for VLM streaming
             try:
                 from .server_metrics import get_server_metrics
@@ -2113,6 +2129,7 @@ class VLMEngine:
         xtc_threshold: float = 0.0,
         tool_spec: dict | None = None,
         tools_declared: bool = False,
+        first_delivery: threading.Event | None = None,
     ):
         """Yield ``(text, token_id, state, finish_reason, thinking_tokens, logprob)``.
 
@@ -2220,6 +2237,7 @@ class VLMEngine:
             xtc_threshold=xtc_threshold,
             xtc_special_tokens=list(self._get_eos_ids()),
             guide=guide,
+            first_delivery=first_delivery,
         ):
             count += 1
             lp = stats.last_logprob if logprobs else None

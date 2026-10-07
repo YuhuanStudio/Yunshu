@@ -99,3 +99,86 @@ def test_r09_output_queue_is_bounded(runner, monkeypatch):  # noqa: F811
     while not job.out.empty():
         items.append(job.out.get())
     assert sum(isinstance(i, BaseException) for i in items) == 1
+
+
+def _handoff_job(ack):
+    job = vbr._Job(
+        ids=[1],
+        max_tokens=10,
+        greedy=True,
+        sampling=None,
+        use_draft=True,
+        logprobs=False,
+        top_logprobs=0,
+        processors=[],
+        prompt_kwargs={},
+        salt=None,
+        seed=None,
+        cancel_event=None,
+        stats=vbr.RunStats(),
+        first_delivery=ack,
+    )
+    job.allow_draft = True
+    job.stats.generated = 1
+    return job
+
+
+def test_first_delivery_handoff_publishes_before_wait_and_waits_only_once(runner):  # noqa: F811
+    from types import SimpleNamespace
+
+    calls = []
+    job = _handoff_job(
+        SimpleNamespace(
+            wait=lambda bound: calls.append((bound, job.out.get_nowait())) or False
+        )
+    )
+    runner._executor = object()
+    runner.draft_kind = "dflash"
+    runner._emit(job, (11, None))
+    assert calls == [(0.004, (11, None))]
+    assert job.first_delivery_waited
+    job.stats.generated = 2
+    runner._emit(job, (12, None))
+    runner._emit(job, vbr._DONE)
+    assert len(calls) == 1
+    assert job.out.get_nowait() == (12, None)
+    assert job.out.get_nowait() is vbr._DONE
+
+
+def test_non_draft_and_inline_consumers_never_wait_for_delivery(runner):  # noqa: F811
+    from types import SimpleNamespace
+
+    def unexpected_wait(bound):
+        raise AssertionError("handoff on a path with no competing copy setup")
+
+    for kind, executor, use_draft in (
+        ("off", object(), True),
+        ("dflash", None, True),
+        ("dflash", object(), False),
+    ):
+        runner.draft_kind = kind
+        runner._executor = executor
+        job = _handoff_job(SimpleNamespace(wait=unexpected_wait))
+        job.use_draft = use_draft
+        runner._emit(job, (11, None))
+        assert job.out.get_nowait() == (11, None)
+        assert not job.first_delivery_waited
+
+
+def test_failure_detaches_work_before_notifying_consumers(runner, monkeypatch):  # noqa: F811
+    from types import SimpleNamespace
+
+    job = _handoff_job(None)
+    group = SimpleNamespace(jobs={1: job}, gen=SimpleNamespace(close=lambda: None))
+    runner._batches["failed"] = group
+    runner._driving = True
+    emitted = []
+
+    def emit(j, error):
+        assert not runner.busy(), "terminal published while failed jobs remain active"
+        emitted.append((j, error))
+
+    monkeypatch.setattr(runner, "_emit", emit)
+    error = RuntimeError("executor failed")
+    runner._fail_all(error)
+    assert emitted == [(job, error)]

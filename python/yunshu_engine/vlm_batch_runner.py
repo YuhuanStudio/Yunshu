@@ -451,6 +451,7 @@ class VLMBatchRunner:
         xtc_special_tokens: list | None = None,
         guide: Any = None,
         prompt_cache_plan: dict | None = None,
+        first_delivery: threading.Event | None = None,
     ) -> Iterator[int]:
         """Yield generated token ids; ``stats`` is filled in as generation runs.
 
@@ -531,6 +532,7 @@ class VLMBatchRunner:
             priority=getattr(cancel_event, "scheduling_priority", 0),
             cache_plan=prompt_cache_plan,
             budget=budget,
+            first_delivery=first_delivery,
         )
         # The round driver drafts for any row without logits processors, logprobs
         # or a tool-call guide (a thinking budget is fine there); sampled rows draw
@@ -588,7 +590,8 @@ class VLMBatchRunner:
 
         Data past OUT_LIMIT (a consumer that stopped reading) ends the job with
         an error instead of growing without bound; the row is dropped at the
-        next slice. Never blocks the executor thread.
+        next slice. Only the first DFlash stream token can wait for a bounded
+        consumer handoff; ordinary data never blocks the executor thread.
         """
         if job.terminal:
             return
@@ -601,28 +604,54 @@ class VLMBatchRunner:
                 "request cancelled"
             )
         job.out.put(item)
+        # The first target token is already complete. Starting copy lookup now
+        # can run a full cyclic collection while the SSE consumer still needs
+        # the GIL. Give that consumer one bounded opportunity to deliver first.
+        # No tensor, sampler or proposal state changes, including on timeout.
+        if (
+            isinstance(item, tuple)
+            and job.stats.generated == 1
+            and job.first_delivery is not None
+            and not job.first_delivery_waited
+            and job.allow_draft
+            and job.use_draft
+            and self.draft_kind == "dflash"
+            and self._executor is not None
+            and job.max_tokens > 1
+        ):
+            job.first_delivery_waited = True
+            completed = job.first_delivery.wait(0.004)
+            if not getattr(self, "_first_delivery_logged", False):
+                self._first_delivery_logged = True
+                logger.info(
+                    "First-content handoff engaged (DFlash, 4ms bound, completed=%s)",
+                    completed,
+                )
 
     def _fail_all(self, exc: BaseException) -> None:
-        """Terminate every pending / active job with ``exc`` (executor gone)."""
+        """Detach failed work before waking consumers; their terminal means drained."""
         with self._lock:
             pending, self._pending = self._pending, []
+            groups = list(self._groups())
+            drivers, self._driver_jobs = self._driver_jobs, {}
+            self._batches.clear()
+            self._spec = None
+            self._aux_spec = None
             self._driving = False
-        for job in pending:
-            self._emit(job, exc)
-        for group in self._groups():
-            for job in group.jobs.values():
-                self._emit(job, exc)
+        for group in groups:
             with contextlib.suppress(Exception):
                 close_generator(group.gen)
-        self._batches.clear()
-        self._spec = None
-        self._aux_spec = None
-        for job in self._driver_jobs.values():
-            self._emit(job, exc)
+        for job in drivers.values():
             if self.driver is not None:
                 with contextlib.suppress(Exception):
                     (job.driver or self.driver).remove(job)
-        self._driver_jobs.clear()
+        for job in pending:
+            self._emit(job, exc)
+        for group in groups:
+            for job in group.jobs.values():
+                self._emit(job, exc)
+        for job in drivers.values():
+            self._emit(job, exc)
 
     def _schedule(self) -> None:
         try:
@@ -2134,6 +2163,8 @@ class _Job:
     spec_last: tuple | None = None
     terminal: bool = False
     overflowed: bool = False
+    first_delivery: threading.Event | None = None
+    first_delivery_waited: bool = False
 
 
 @dataclass
