@@ -1,4 +1,9 @@
 import { Button, Card } from "@yuhuanowo/yunui";
+import {
+  ModelIcon,
+  getDeveloperIconPath,
+  getModelDeveloperId,
+} from "@yuhuanowo/yunui/ai";
 import { RefreshCw } from "lucide-react";
 import type { EngineStatus } from "./api";
 import type { useEngine } from "./useEngine";
@@ -72,3 +77,35 @@ export function ConnectionState({
 }
 export const supportsChat = (model: Model | undefined) =>
   !!model && /llm|vlm|batched|omni/i.test(model.type);
+// YunUI's ModelIcon defaults to jsDelivr; the console is local-first, so
+// resolve the icon files that ship in the package to bundled asset URLs.
+const bundledIcons = import.meta.glob(
+  "../node_modules/@yuhuanowo/yunui/icons/models/*.{webp,png,jpeg}",
+  { eager: true, query: "?url", import: "default" },
+) as Record<string, string>;
+const iconByFile = new Map(
+  Object.entries(bundledIcons).map(([path, url]) => [
+    path.split("/").at(-1) ?? path,
+    url,
+  ]),
+);
+export function LocalModelIcon({
+  id,
+  size = 28,
+}: {
+  id: string;
+  size?: number;
+}) {
+  const developer = getModelDeveloperId(id);
+  const file = getDeveloperIconPath(developer)?.split("/").at(-1);
+  const url = file ? iconByFile.get(file) : undefined;
+  return url ? (
+    <ModelIcon
+      iconUrl={url}
+      developer={developer}
+      provider={developer}
+      size={size}
+      rounded
+    />
+  ) : null;
+}
