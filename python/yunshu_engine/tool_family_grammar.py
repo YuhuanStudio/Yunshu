@@ -40,12 +40,15 @@ def build_native_grammar(
     def js(schema: dict) -> str:
         return "%json " + json.dumps(schema, ensure_ascii=False)
 
-    text_rules = []
+    text_rules: list[str] = []
 
     def value(schema: dict, close: str, *, python: bool = False) -> str:
         kind = _schema_type(schema)
         if python and kind == "boolean":
-            return '("True" | "False")'
+            values = schema.get(
+                "enum", [schema["const"]] if "const" in schema else [True, False]
+            )
+            return "(" + " | ".join(_q("True" if v else "False") for v in values) + ")"
         if python and kind == "null":
             return '"None"'
         if kind == "enum" and not python:
@@ -80,7 +83,7 @@ def build_native_grammar(
         name, schema = spec.name, spec.parameters
         key = f"call_{i}"
         family = fmt.name
-        if family in ("hermes", "llama3_json"):
+        if family in ("hermes", "yunshu_json", "llama3_json"):
             call_schema = {
                 "type": "object",
                 "properties": {
@@ -97,7 +100,8 @@ def build_native_grammar(
                 + (" " + lit(fmt.end) if fmt.end else "")
             )
         elif family == "harmony":
-            envelope = f'{lit(fmt.start)} {_q(" to=" + name)} {lit("<|channel|>")} "commentary" {lit("<|message|>")} {js(schema)} {lit(fmt.end)}'
+            channel = '("commentary" | "analysis")'
+            envelope = f"({lit(fmt.start)})? ({_q(' to=' + name)} {lit('<|channel|>')} {channel} | {lit('<|channel|>')} {channel} {_q(' to=' + name)}) {lit('<|message|>')} {js(schema)} {lit(fmt.end)}"
         elif family == "mistral":
             call_schema = {
                 "type": "object",

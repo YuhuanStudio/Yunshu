@@ -21,7 +21,18 @@ def pythonic(body: str, tools: Any) -> list[dict[str, str]]:
             raise ValueError("not a literal function call")
         if node.args or any(k.arg is None for k in node.keywords):
             raise ValueError("positional arguments and expansions are unsupported")
-        args = {k.arg: ast.literal_eval(k.value) for k in node.keywords}
+
+        class JsonLiterals(ast.NodeTransformer):
+            def visit_Name(self, value):
+                literals = {"true": True, "false": False, "null": None}
+                if value.id not in literals:
+                    raise ValueError("non-literal Python argument")
+                return ast.copy_location(ast.Constant(literals[value.id]), value)
+
+        args = {
+            k.arg: ast.literal_eval(JsonLiterals().visit(k.value))
+            for k in node.keywords
+        }
         if len(args) != len(node.keywords):
             raise ValueError("duplicate keyword")
         calls.append(_call(node.func.id, args))
@@ -43,12 +54,17 @@ def glm(body: str, tools: Any) -> list[dict[str, str]]:
         return [_call(name, {})]
     if rest.startswith("{"):
         return [_call(name, rest)]
-    pairs = re.findall(
-        r"<arg_key>(.*?)</arg_key>\s*<arg_value>(.*?)</arg_value>", rest, re.S
+    pair_pattern = re.compile(
+        r"<arg_key>(.*?)</arg_key>\s*<arg_value>(.*?)</arg_value>", re.S
     )
+    pairs = pair_pattern.findall(rest)
+    if pair_pattern.sub("", rest).strip():
+        raise ValueError("malformed GLM parameter")
     if not pairs:
         raise ValueError("invalid GLM arguments")
     args = {key.strip(): value for key, value in pairs}
+    if len(args) != len(pairs):
+        raise ValueError("duplicate GLM argument")
     return coerce_tool_calls([_call(name, args)], tools, raw_text_values=True) or []
 
 
@@ -60,11 +76,13 @@ def dsml(body: str, tools: Any) -> list[dict[str, str]]:
         r'<｜DSML｜invoke name="([^"]+)">(.*?)</｜DSML｜invoke>', body, re.S
     ):
         args = {}
-        for param in re.finditer(
+        pattern = re.compile(
             r'<｜DSML｜parameter name="([^"]+)" string="(true|false)">(.*?)</｜DSML｜parameter>',
-            invoke[2],
             re.S,
-        ):
+        )
+        if pattern.sub("", invoke[2]).strip():
+            raise ValueError("malformed DSML parameter")
+        for param in pattern.finditer(invoke[2]):
             if param[1] in args:
                 raise ValueError("duplicate DSML parameter")
             args[param[1]] = param[3] if param[2] == "true" else json.loads(param[3])
@@ -96,6 +114,7 @@ def harmony(body: str, tools: Any) -> list[dict[str, str]]:
     match = re.search(r"(?:^|\s)to=([\w.-]+)", header)
     if not sep or match is None:
         raise ValueError("not a Harmony tool message")
+    args = re.split(r"<\|(?:ghissue|end|fim_suffix)\|>", args, maxsplit=1)[0]
     return [_call(match[1].removeprefix("functions."), args)]
 
 

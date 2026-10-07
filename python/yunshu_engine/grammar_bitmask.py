@@ -264,6 +264,7 @@ class GrammarBitmaskEngine:
         The constraint must have: advance(), get_allowed_tokens(), is_done, reset().
         """
         self._constraint = constraint
+        self._tokenizer: Any = None
         self._table_cache: dict[int, TokenStringTable] = {}
         self._checkpoint_stack: list = []
         self._constraint_rollback_needs_arg: bool | None = None
@@ -279,16 +280,18 @@ class GrammarBitmaskEngine:
     def advance(self, token_text: str) -> None:
         self._constraint.advance(token_text)
 
-    def advance_token(self, token: int, tokenizer: Any) -> None:
+    def advance_token(self, token: int, tokenizer: Any = None) -> None:
         if hasattr(self._constraint, "advance_token"):
             self._constraint.advance_token(token)
         else:
-            self._constraint.advance(tokenizer.decode([token]))
+            bound = tokenizer if tokenizer is not None else self._tokenizer
+            self._constraint.advance(bound.decode([token]))
 
     def get_allowed_tokens(
         self, tokenizer: Any, generated_token_ids: list[int]
     ) -> list[int]:
         """Compatibility method — delegates to wrapped constraint."""
+        self._tokenizer = tokenizer
         return self._constraint.get_allowed_tokens(tokenizer, generated_token_ids)
 
     def compute_bitmask(self, tokenizer: Any) -> Any:
@@ -300,6 +303,7 @@ class GrammarBitmaskEngine:
         """
         import mlx.core as mx
 
+        self._tokenizer = tokenizer
         table = TokenStringTable.get(tokenizer)
         vocab_size = table.vocab_size
 
@@ -422,6 +426,7 @@ class BitmaskConstrainedSampler:
             self._table = TokenStringTable.get(self._tokenizer)
             self._applicator = BitmaskApplicator(self._table.vocab_size)
 
+        assert self._table is not None
         if self._engine.is_done:
             # Force EOS — do NOT advance the constraint after this,
             # otherwise the EOS token text corrupts the buffer and

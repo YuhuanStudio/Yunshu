@@ -140,3 +140,142 @@ def test_native_grammar_compiles_and_accepts_own_wire(fmt):
     for byte in wires[fmt.name].encode():
         assert matcher.consume_token(byte), (fmt.name, matcher.get_error())
     assert matcher.is_accepting()
+
+
+def test_harmony_generation_header_suffix_all_boundaries():
+    tok = SimpleNamespace(chat_template="<|ghissue|>")
+    formats = tf.formats_for_tokenizer(tok)
+    for head in ("to=weather<|channel|>analysis", "<|channel|>commentary to=weather"):
+        text = head + '<|message|>{"city":"Taipei","days":3}<|ghissue|>'
+        for cut in range(len(text) + 1):
+            s = ToolCallStreamer(formats, tools=TOOLS)
+            out = s.process_token(text[:cut]) + s.process_token(text[cut:]) + s.flush()
+            assert not "".join(o.text for o in out)
+            calls = [o.tool_call for o in out if o.tool_call]
+            assert len(calls) == 1
+            assert json.loads(calls[0].arguments) == ARGS
+
+
+def test_fallback_bracket_prose_is_not_held_until_eos():
+    s = ToolCallStreamer()
+    out = s.process_token("[a normal note]")
+    assert "".join(o.text for o in out) == "[a normal note]"
+
+
+def test_whole_call_filters_undeclared_name():
+    s = ToolCallStreamer((tf.PYTHONIC,), tools=TOOLS)
+    out = s.process_token("[unregistered()]") + s.flush()
+    assert not any(o.tool_call for o in out)
+
+
+@pytest.mark.parametrize("fmt", [tf.DSML, tf.DSML_V4, tf.GLM])
+def test_native_raw_string_schema_bounds_and_enum(fmt):
+    from llguidance import LLMatcher, LLTokenizer, TokenizerWrapper
+
+    from .test_structural_tag import ByteTokenizer
+
+    tok = LLTokenizer(TokenizerWrapper(ByteTokenizer()))
+    schema = {
+        "type": "object",
+        "properties": {"city": {"type": "string", "enum": ["Taipei"]}},
+        "required": ["city"],
+    }
+    lark = build_native_grammar(
+        [ToolSpec("weather", schema)],
+        fmt,
+        SimpleNamespace(convert_tokens_to_ids=lambda _: None),
+        only="weather",
+        parallel=False,
+    )
+    grammar = LLMatcher.grammar_from_lark(lark)
+    if fmt is tf.GLM:
+        template = "<tool_call>weather<arg_key>city</arg_key><arg_value>{}</arg_value></tool_call>"
+    else:
+        template = (
+            fmt.start
+            + '<｜DSML｜invoke name="weather"><｜DSML｜parameter name="city" string="true">{}</｜DSML｜parameter></｜DSML｜invoke>'
+            + fmt.end
+        )
+    m = LLMatcher(tok, grammar)
+    assert all(m.consume_token(b) for b in template.format("Taipei").encode())
+    assert m.is_accepting()
+    m = LLMatcher(tok, grammar)
+    assert not all(m.consume_token(b) for b in template.format("Tokyo").encode())
+
+
+def test_pythonic_nested_json_literals_and_python_literals():
+    out = tf.PYTHONIC.parse(
+        '[weather(data={"ok":true,"nil":null}, enabled=False)]', None
+    )
+    assert json.loads(out[0]["arguments"]) == {
+        "data": {"ok": True, "nil": None},
+        "enabled": False,
+    }
+
+
+@pytest.mark.parametrize(
+    "fmt", [tf.DSML, tf.DSML_V4, tf.GLM, tf.KIMI, tf.MISTRAL, tf.HARMONY, tf.PYTHONIC]
+)
+def test_compile_forced_named_native_and_rollback(monkeypatch, fmt):
+    from llguidance import LLTokenizer, TokenizerWrapper
+
+    from yunshu_engine import tool_call_grammar as tcg
+
+    from .test_structural_tag import ByteTokenizer
+
+    tok = LLTokenizer(TokenizerWrapper(ByteTokenizer()))
+    monkeypatch.setattr(tcg, "llg_tokenizer", lambda *_: tok)
+    monkeypatch.setattr(tf, "native_format", lambda _: fmt)
+    hf = SimpleNamespace(chat_template=fmt.start, convert_tokens_to_ids=lambda _: None)
+    grammar = tcg.compile_tool_grammar(
+        TOOLS,
+        hf,
+        257,
+        tool_choice={"type": "function", "function": {"name": "weather"}},
+        parallel=False,
+    )
+    assert grammar is not None and grammar.forced
+    guide = grammar.guide()
+    cp = guide.checkpoint()
+    guide.feed(ord(" "))
+    guide.restore(cp)
+    assert guide.consumed == 0
+    # Forced native grammars have no single-token trigger assumption.
+    assert grammar.start_id == -1
+
+
+def test_malformed_dsml_parameters_are_not_silently_empty():
+    with pytest.raises(ValueError):
+        tf.DSML.parse(
+            '<｜DSML｜invoke name="weather"><｜DSML｜parameter name="city">lost</｜DSML｜parameter></｜DSML｜invoke>',
+            None,
+        )
+
+
+def test_multiline_mistral_json_and_trailing_prose():
+    body = json.dumps([{"name": "weather", "arguments": ARGS}], indent=2)
+    text = "[TOOL_CALLS]" + body + "done"
+    s = ToolCallStreamer((tf.MISTRAL,), tools=TOOLS)
+    out = []
+    for ch in text:
+        out.extend(s.process_token(ch))
+    out.extend(s.flush())
+    assert "".join(o.text for o in out) == "done"
+    calls = [o.tool_call for o in out if o.tool_call]
+    assert len(calls) == 1 and json.loads(calls[0].arguments) == ARGS
+
+
+def test_json_end_marker_inside_argument_is_data():
+    args = {"city": 'literal </tool_call> "quoted"', "days": 3}
+    text = (
+        "<tool_call>"
+        + json.dumps({"name": "weather", "arguments": args})
+        + "</tool_call>"
+    )
+    s = ToolCallStreamer((tf.HERMES,), tools=TOOLS)
+    out = []
+    for ch in text:
+        out.extend(s.process_token(ch))
+    out.extend(s.flush())
+    assert not "".join(o.text for o in out)
+    assert json.loads(next(o.tool_call.arguments for o in out if o.tool_call)) == args

@@ -63,6 +63,8 @@ class ToolFormat:
     end: str
     parse: Callable[[str, Any], list[Call]]
     whole: bool = False
+    whole_prefixes: tuple[str, ...] = ("{", "<|python_tag|>")
+    alternate_ends: tuple[str, ...] = ()
 
 
 _GEMMA_Q = '<|"|>'
@@ -431,7 +433,14 @@ from . import tool_family_parsers as _families
 
 HERMES = ToolFormat("hermes", "<tool_call>", "</tool_call>", _parse_yunshu_json)
 LLAMA_JSON = ToolFormat("llama3_json", "", "", _parse_json_message, whole=True)
-PYTHONIC = ToolFormat("llama3_pythonic", "", "", _families.pythonic, whole=True)
+PYTHONIC = ToolFormat(
+    "llama3_pythonic",
+    "",
+    "",
+    _families.pythonic,
+    whole=True,
+    whole_prefixes=("[", "<|python_tag|>"),
+)
 GLM = ToolFormat("glm47", "<tool_call>", "</tool_call>", _families.glm)
 MISTRAL = ToolFormat("mistral", "[TOOL_CALLS]", "", _families.mistral)
 KIMI = ToolFormat(
@@ -440,7 +449,21 @@ KIMI = ToolFormat(
     "<|tool_calls_section_end|>",
     _families.kimi,
 )
-HARMONY = ToolFormat("harmony", "<|start|>assistant", "<|ghissue|>", _families.harmony)
+HARMONY = ToolFormat(
+    "harmony",
+    "<|start|>assistant",
+    "<|ghissue|>",
+    _families.harmony,
+    alternate_ends=("<|end|>", "<|fim_suffix|>"),
+)
+HARMONY_SUFFIX = ToolFormat(
+    "harmony_suffix",
+    "",
+    "",
+    _families.harmony,
+    whole=True,
+    whole_prefixes=("to=", "<|channel|>"),
+)
 DSML = ToolFormat(
     "deepseek_v32",
     "<｜DSML｜function_calls>",
@@ -534,6 +557,8 @@ def formats_for_tokenizer(tokenizer: Any) -> tuple[ToolFormat, ...]:
     ``yunshu_json`` form the injected tool prompt asks for, and a bare JSON
     call message."""
     native = native_format(tokenizer) if tokenizer is not None else None
+    if native is HARMONY:
+        return (native, HARMONY_SUFFIX, *_FALLBACK)
     return (native, *_FALLBACK) if native is not None else _FALLBACK
 
 
@@ -600,8 +625,38 @@ def _span_end(text: str, fmt: ToolFormat, body_start: int) -> tuple[int, int] | 
     """(body_end, span_end) of a call whose body starts at ``body_start``, or
     None when its end marker has not arrived yet."""
     if fmt.end:
-        idx = text.find(fmt.end, body_start)
-        return None if idx < 0 else (idx, idx + len(fmt.end))
+        ends = []
+        for marker in (fmt.end, *fmt.alternate_ends):
+            idx = text.find(marker, body_start)
+            while idx >= 0:
+                quoted, escaped = False, False
+                if fmt.name in ("hermes", "yunshu_json", "harmony", "deepseek"):
+                    for ch in text[body_start:idx]:
+                        if escaped:
+                            escaped = False
+                        elif quoted and ch == "\\":
+                            escaped = True
+                        elif ch == '"':
+                            quoted = not quoted
+                if not quoted:
+                    ends.append((idx, marker))
+                    break
+                idx = text.find(marker, idx + len(marker))
+        if not ends:
+            return None
+        idx, marker = min(ends)
+        return idx, idx + len(marker)
+    if fmt.name == "mistral":
+        body = text[body_start:]
+        args_at = body.find("[ARGS]")
+        offset = args_at + len("[ARGS]") if args_at >= 0 else 0
+        leading = len(body[offset:]) - len(body[offset:].lstrip())
+        offset += leading
+        try:
+            _, size = json.JSONDecoder().raw_decode(body, offset)
+        except ValueError:
+            return None
+        return body_start + size, body_start + size
     idx = text.find("\n", body_start)
     return None if idx < 0 else (idx, idx + 1)
 

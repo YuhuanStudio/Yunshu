@@ -327,7 +327,10 @@ def detect_style(tokenizer: Any) -> str | None:
         return None
     if "<function=" in text:
         return "xml"
-    if "<arg_key>" in text:
+    if (
+        "<arg_key>" in text
+        or "glm" in str(getattr(tokenizer, "name_or_path", "")).lower()
+    ):
         return None
     if '"name"' in text or "'name'" in text:
         return "json"
@@ -501,15 +504,20 @@ def compile_tool_grammar(
     string (that call is forced). Returns None when this model / tool set cannot be
     constrained (unknown format, marker is not a single token, invalid schema); the
     caller then decodes unconstrained."""
+    tool_choice = normalize_tool_choice(tool_choice)
     specs = normalize_tools(tools)
     if not specs:
         return None
     style = detect_style(tokenizer)
-    if style is None:
+    start_id = _token_id(tokenizer, "<tool_call>")
+    end_id = _token_id(tokenizer, "</tool_call>")
+    if style is None or (style == "json" and (start_id is None or end_id is None)):
         from .tool_family_grammar import build_native_grammar
-        from .tool_format import native_format
+        from .tool_format import INJECTED_JSON, native_format
 
         fmt = native_format(tokenizer)
+        if fmt is None and style == "json":
+            fmt = INJECTED_JSON
         choice = normalize_tool_choice(tool_choice)
         if fmt is None or not is_forced(tool_choice):
             return None

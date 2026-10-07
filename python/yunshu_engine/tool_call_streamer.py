@@ -69,6 +69,9 @@ class ToolCallStreamer:
         self._formats = tuple(formats) if formats else fallback_formats()
         self._starts = tuple(f.start for f in self._formats if f.start and not f.whole)
         self._whole = any(f.whole for f in self._formats)
+        self._whole_prefixes = tuple(
+            dict.fromkeys(p for f in self._formats if f.whole for p in f.whole_prefixes)
+        )
         self._tools = openai_tools(tools)
         self._schemas = tool_schemas(tools)
         self._forced = forced_tool_name
@@ -104,11 +107,11 @@ class ToolCallStreamer:
         out: list[StreamOutput] = []
         if self._state is StreamState.WHOLE:
             head = self._buf.lstrip()
-            if not final and "<|python_tag|>".startswith(head):
+            if not final and any(p.startswith(head) for p in self._whole_prefixes):
                 return out  # nothing yet, or a partial python tag
-            if head.startswith(("{", "[", "<|python_tag|>")) and not final:
+            if head.startswith(self._whole_prefixes) and not final:
                 return out  # the message may be a JSON call: hold it
-            if head.startswith(("{", "[", "<|python_tag|>")):
+            if head.startswith(self._whole_prefixes):
                 for fmt in self._formats:
                     if not fmt.whole:
                         continue

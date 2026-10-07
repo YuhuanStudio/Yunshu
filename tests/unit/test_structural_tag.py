@@ -164,3 +164,45 @@ def test_special_trigger_and_schema_marker_const():
         c.advance_token(tid)
         assert not c._dead, c._matcher.get_error()
     assert c._matcher.is_accepting()
+
+
+def test_responses_structural_tag_maps_to_same_cfg():
+    from yunshu_gateway.routers.responses import (
+        ResponsesRequest,
+        _parse_response_format_unchecked,
+    )
+
+    req = ResponsesRequest(model="test", input="hi", response_format=SPEC)
+    assert _parse_response_format_unchecked(req.response_format)["type"] == "cfg"
+
+
+def test_empty_arguments_stream_is_valid_json_on_actual_chat_route(monkeypatch):
+    from .wire_harness import Script, install
+
+    http, _ = install(
+        monkeypatch,
+        Script(pieces=['<tool_call>{"name":"ping","arguments":{}}</tool_call>']),
+    )
+    reply = http.post(
+        "/v1/chat/completions",
+        json={
+            "model": "scripted",
+            "messages": [{"role": "user", "content": "ping"}],
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {"name": "ping", "parameters": {"type": "object"}},
+                }
+            ],
+            "stream": True,
+        },
+    )
+    assert reply.status_code == 200
+    fragments = []
+    for line in reply.text.splitlines():
+        if line.startswith("data: ") and line != "data: [DONE]":
+            row = json.loads(line[6:])
+            for choice in row.get("choices", []):
+                for call in choice.get("delta", {}).get("tool_calls", []):
+                    fragments.append(call.get("function", {}).get("arguments", ""))
+    assert json.loads("".join(fragments)) == {}
