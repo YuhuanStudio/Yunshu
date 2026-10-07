@@ -798,6 +798,12 @@ class ResponsesRequest(BaseModel):
                 )
 
                 structural_tag_grammar(self.response_format)
+                from yunshu_engine.tool_call_grammar import is_forced
+
+                if self.tools and is_forced(self.tool_choice):
+                    raise ValueError(
+                        "structural_tag cannot be combined with forced tool_choice"
+                    )
             if rf_type not in (
                 "json_object",
                 "json_schema",

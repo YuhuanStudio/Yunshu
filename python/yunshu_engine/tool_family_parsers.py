@@ -96,12 +96,30 @@ def kimi(body: str, tools: Any) -> list[dict[str, str]]:
     from .tool_format import _call
 
     calls = []
-    for match in re.finditer(
-        r"<\|tool_call_begin\|>functions\.(.*?):\d+\s*<\|tool_call_argument_begin\|>(.*?)<\|tool_call_end\|>",
-        body,
-        re.S,
-    ):
-        calls.append(_call(match[1], match[2]))
+    pos = 0
+    decoder = json.JSONDecoder()
+    while pos < len(body):
+        while pos < len(body) and body[pos].isspace():
+            pos += 1
+        if pos == len(body):
+            break
+        header = re.compile(
+            r"<\|tool_call_begin\|>functions\.(.*?):\d+\s*<\|tool_call_argument_begin\|>"
+        ).match(body, pos)
+        if header is None:
+            raise ValueError("invalid Kimi call header")
+        args_start = header.end()
+        while args_start < len(body) and body[args_start].isspace():
+            args_start += 1
+        _, args_end = decoder.raw_decode(body, args_start)
+        pos = args_end
+        while pos < len(body) and body[pos].isspace():
+            pos += 1
+        marker = "<|tool_call_end|>"
+        if not body.startswith(marker, pos):
+            raise ValueError("missing Kimi call end")
+        calls.append(_call(header[1], body[args_start:args_end]))
+        pos += len(marker)
     if not calls:
         raise ValueError("missing Kimi call")
     return calls
@@ -121,7 +139,7 @@ def harmony(body: str, tools: Any) -> list[dict[str, str]]:
 def mistral(body: str, tools: Any) -> list[dict[str, str]]:
     from .tool_format import _calls_from
 
-    if "[ARGS]" in body:
+    if not body.lstrip().startswith(("[", "{")) and "[ARGS]" in body:
         from .tool_format import _call
 
         name, args = body.split("[ARGS]", 1)

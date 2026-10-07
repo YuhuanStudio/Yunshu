@@ -981,9 +981,62 @@ def _memory_valid(path: Path):
     return True, ""
 
 
+def _toolparse_valid(path: Path):
+    records = read_jsonl(path)
+    if not records or records[-1].get("complete") is not True:
+        return False, "toolparse probe did not complete"
+    rows = records[-1].get("rows", [])
+    if {r.get("kind") for r in rows} != {
+        "forced",
+        "stream",
+        "structural",
+        "structural_tool",
+    } or not all(r.get("ok") is True for r in rows):
+        return False, "missing or failed tool/structural-tag checks"
+    return True, ""
+
+
+def stage_toolparse(ctx: Ctx) -> StageResult:
+    """Candidate-only capability checks; base need not implement the new API.
+
+    Exact candidate checkout is the job cwd, including on the M3 transport.
+    Parser-only families remain covered by preflight fixtures.
+    """
+    cell = Cell(
+        "toolparse",
+        "cand",
+        [
+            "env",
+            f"PYTHONPATH={ctx.cand.path / 'python'}",
+            f"YUNSHU_SSD_CACHE_DIR={ctx.run.path / 'toolparse-cache'}",
+            ctx.py,
+            str(ctx.cand.path / "scripts/research/toolparse_smoke.py"),
+            "--model",
+            ctx.model,
+            "--out",
+            "{out}",
+        ],
+        mem_gb=ctx.mem_gb,
+        timeout_min=12,
+        stall_min=6,
+        validate=_toolparse_valid,
+        device="" if ctx.big else "any",
+        cwd=ctx.cand.path,
+    )
+    results = ctx.exe.run_cells([cell])
+    reasons = _failed_cells(results)
+    numbers = {}
+    result = results.get("cand")
+    if result is not None and result.ok and result.evidence:
+        row = read_jsonl(result.evidence)[-1]
+        numbers["checks"] = row["rows"]
+    return _finish(ctx, StageResult("toolparse", not reasons, reasons, numbers))
+
+
 STAGE_FUNCS = {
     "preflight": stage_preflight,
     "smoke": stage_smoke,
+    "toolparse": stage_toolparse,
     "identity": stage_identity,
     "apc": stage_apc,
     "quality": stage_quality,

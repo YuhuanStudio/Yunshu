@@ -77,7 +77,7 @@ def test_probe_with_fake_server():
     thread.start()
     try:
         rows = probe.run(f"http://127.0.0.1:{server.server_port}", "fake")
-        assert len(rows) == 3 and all(r["ok"] for r in rows)
+        assert len(rows) == 4 and all(r["ok"] for r in rows)
     finally:
         server.shutdown()
         server.server_close()
@@ -91,3 +91,30 @@ def test_probe_fails_without_trigger_or_stream_arguments():
         probe.judge("stream", "data: [DONE]\n")
     args = probe.parser().parse_args(["--model", "fake", "--out", "out.json"])
     assert args.port == 18996
+
+
+def test_yv_probe_validator_and_optional_stage(tmp_path):
+    import sys
+
+    sys.path.insert(0, str(Path(__file__).parents[2] / "scripts"))
+    from verify.stages import _toolparse_valid
+    from verify.suites import LADDER, parse_suite
+
+    path = tmp_path / "evidence.jsonl"
+    path.write_text(
+        json.dumps(
+            {
+                "complete": True,
+                "rows": [
+                    {"kind": k, "ok": True}
+                    for k in ("forced", "stream", "structural", "structural_tool")
+                ],
+            }
+        )
+        + "\n"
+    )
+    assert _toolparse_valid(path) == (True, "")
+    path.write_text('{"complete": true, "rows": []}\n')
+    assert not _toolparse_valid(path)[0]
+    assert "toolparse" not in LADDER
+    assert parse_suite("preflight,toolparse")["stages"] == ["preflight", "toolparse"]

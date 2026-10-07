@@ -441,6 +441,9 @@ PYTHONIC = ToolFormat(
     whole=True,
     whole_prefixes=("[", "<|python_tag|>"),
 )
+PYTHONIC_TAGGED = ToolFormat(
+    "pythonic", "<|tool_call_start|>", "<|tool_call_end|>", _families.pythonic
+)
 GLM = ToolFormat("glm47", "<tool_call>", "</tool_call>", _families.glm)
 MISTRAL = ToolFormat("mistral", "[TOOL_CALLS]", "", _families.mistral)
 KIMI = ToolFormat(
@@ -477,6 +480,7 @@ DSML_V4 = ToolFormat(
 # Chat-template markers for the Yunshu-owned formats (upstream's registry
 # decides everything else).
 _OWN_TEMPLATE_MARKERS: tuple[tuple[str, ToolFormat], ...] = (
+    ("<|tool_call_start|>", PYTHONIC_TAGGED),
     ("<｜DSML｜tool_calls>", DSML_V4),
     ("<｜DSML｜function_calls>", DSML),
     ("<｜tool▁calls▁begin｜>", DEEPSEEK),
@@ -514,6 +518,16 @@ def native_format(tokenizer: Any) -> ToolFormat | None:
     text = _template_text(tokenizer)
     if not text:
         return None
+    # Llama's JSON and Python templates often have no call marker at all.
+    if "<|start_header_id|>" in text:
+        if "python list" in text.lower() or re.search(
+            r"tool_call\.name\s*\+\s*['\"]\(", text
+        ):
+            return PYTHONIC
+        if "parameters" in text and (
+            "function call" in text.lower() or "tool_call" in text
+        ):
+            return LLAMA_JSON
     model_hint = str(getattr(tokenizer, "name_or_path", "")).lower()
     if "glm" in model_hint and "<tool_call>" in text:
         return GLM
@@ -621,6 +635,29 @@ def openai_tools(tools: Any) -> list[dict] | None:
     return out or None
 
 
+def _inside_string(text: str, *, pythonic: bool = False) -> bool:
+    """Whether a potential closing marker is inside JSON/Python string data."""
+    quote = ""
+    i = 0
+    while i < len(text):
+        if quote:
+            if text[i] == "\\":
+                i += 2
+                continue
+            if text.startswith(quote, i):
+                i += len(quote)
+                quote = ""
+                continue
+        elif text[i] == '"' or pythonic and text[i] == "'":
+            quote = text[i]
+            if pythonic and text.startswith(quote * 3, i):
+                quote *= 3
+            i += len(quote)
+            continue
+        i += 1
+    return bool(quote)
+
+
 def _span_end(text: str, fmt: ToolFormat, body_start: int) -> tuple[int, int] | None:
     """(body_end, span_end) of a call whose body starts at ``body_start``, or
     None when its end marker has not arrived yet."""
@@ -629,15 +666,28 @@ def _span_end(text: str, fmt: ToolFormat, body_start: int) -> tuple[int, int] | 
         for marker in (fmt.end, *fmt.alternate_ends):
             idx = text.find(marker, body_start)
             while idx >= 0:
-                quoted, escaped = False, False
-                if fmt.name in ("hermes", "yunshu_json", "harmony", "deepseek"):
-                    for ch in text[body_start:idx]:
-                        if escaped:
-                            escaped = False
-                        elif quoted and ch == "\\":
-                            escaped = True
-                        elif ch == '"':
-                            quoted = not quoted
+                quoted = False
+                if fmt.name in (
+                    "hermes",
+                    "yunshu_json",
+                    "harmony",
+                    "deepseek",
+                    "kimi_k2",
+                    "pythonic",
+                ):
+                    quoted = _inside_string(
+                        text[body_start:idx], pythonic=fmt.name == "pythonic"
+                    )
+                raw_parameter = {
+                    "glm47": ("<arg_value>", "</arg_value>"),
+                    "deepseek_v32": ("<｜DSML｜parameter ", "</｜DSML｜parameter>"),
+                    "deepseek_v4": ("<｜DSML｜parameter ", "</｜DSML｜parameter>"),
+                }.get(fmt.name)
+                if raw_parameter is not None:
+                    prefix = text[body_start:idx]
+                    quoted = prefix.rfind(raw_parameter[0]) > prefix.rfind(
+                        raw_parameter[1]
+                    )
                 if not quoted:
                     ends.append((idx, marker))
                     break
@@ -648,7 +698,7 @@ def _span_end(text: str, fmt: ToolFormat, body_start: int) -> tuple[int, int] | 
         return idx, idx + len(marker)
     if fmt.name == "mistral":
         body = text[body_start:]
-        args_at = body.find("[ARGS]")
+        args_at = -1 if body.lstrip().startswith(("[", "{")) else body.find("[ARGS]")
         offset = args_at + len("[ARGS]") if args_at >= 0 else 0
         leading = len(body[offset:]) - len(body[offset:].lstrip())
         offset += leading

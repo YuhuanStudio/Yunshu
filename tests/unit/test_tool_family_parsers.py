@@ -279,3 +279,211 @@ def test_json_end_marker_inside_argument_is_data():
     out.extend(s.flush())
     assert not "".join(o.text for o in out)
     assert json.loads(next(o.tool_call.arguments for o in out if o.tool_call)) == args
+
+
+@pytest.mark.parametrize(
+    "template,expected",
+    [
+        (
+            "<|start_header_id|> To call functions, respond with a python list of the calls. tools",
+            tf.PYTHONIC,
+        ),
+        (
+            '<|start_header_id|> Respond with JSON for a function call: {"name": function name, "parameters": {}} tools',
+            tf.LLAMA_JSON,
+        ),
+        ("<|tool_call_start|><|tool_call_end|>", tf.PYTHONIC_TAGGED),
+    ],
+)
+def test_llama_template_shape_detection(template, expected):
+    assert tf.native_format(SimpleNamespace(chat_template=template)) is expected
+
+
+def test_forced_native_grammar_cannot_spend_budget_on_outer_whitespace():
+    from llguidance import LLMatcher, LLTokenizer, TokenizerWrapper
+
+    from .test_structural_tag import ByteTokenizer
+
+    tok = LLTokenizer(TokenizerWrapper(ByteTokenizer()))
+    lark = build_native_grammar(
+        [ToolSpec("weather", SCHEMA)],
+        tf.DSML,
+        SimpleNamespace(convert_tokens_to_ids=lambda _: None),
+        only="weather",
+        parallel=False,
+    )
+    m = LLMatcher(tok, LLMatcher.grammar_from_lark(lark))
+    assert not all(m.consume_token(ord(" ")) for _ in range(16))
+
+
+def test_python_forced_optional_kwargs_keep_commas_and_values():
+    from llguidance import LLMatcher, LLTokenizer, TokenizerWrapper
+
+    from .test_structural_tag import ByteTokenizer
+
+    schema = {
+        "type": "object",
+        "properties": {
+            "optional_first": {"type": "integer"},
+            "city": {"type": "string"},
+            "optional_last": {"type": "boolean"},
+        },
+        "required": ["city"],
+    }
+    source = build_native_grammar(
+        [ToolSpec("weather", schema)],
+        tf.PYTHONIC,
+        SimpleNamespace(convert_tokens_to_ids=lambda _: None),
+        only="weather",
+        parallel=False,
+    )
+    tok = LLTokenizer(TokenizerWrapper(ByteTokenizer()))
+    grammar = LLMatcher.grammar_from_lark(source)
+    for text in [
+        '[weather(city="Taipei")]',
+        '[weather(optional_first=1,city="Taipei")]',
+        '[weather(city="Taipei",optional_last=True)]',
+        '[weather(optional_first=1,city="Taipei",optional_last=False)]',
+    ]:
+        m = LLMatcher(tok, grammar)
+        assert all(m.consume_token(b) for b in text.encode()), m.get_error()
+        assert m.is_accepting()
+    for text in ["[weather()]", '[weather(city="Taipei",)]']:
+        m = LLMatcher(tok, grammar)
+        assert not all(m.consume_token(b) for b in text.encode())
+
+
+@pytest.mark.parametrize(
+    "literal",
+    ["'literal <|tool_call_end|> data'", '"""literal " <|tool_call_end|> data"""'],
+)
+def test_python_tagged_marker_inside_string_data(literal):
+    import ast
+
+    text = (
+        tf.PYTHONIC_TAGGED.start
+        + "[weather(city="
+        + literal
+        + ", days=3)]"
+        + tf.PYTHONIC_TAGGED.end
+    )
+    s = ToolCallStreamer((tf.PYTHONIC_TAGGED,), tools=TOOLS)
+    out = []
+    for ch in text:
+        out.extend(s.process_token(ch))
+    out.extend(s.flush())
+    assert not "".join(o.text for o in out)
+    assert json.loads(next(o.tool_call.arguments for o in out if o.tool_call))[
+        "city"
+    ] == ast.literal_eval(literal)
+
+
+def test_mistral_args_marker_inside_json_is_data():
+    args = {"city": "literal [ARGS] marker", "days": 3}
+    text = "[TOOL_CALLS]" + json.dumps([{"name": "weather", "arguments": args}])
+    calls, content = tf.parse_tool_output(text, (tf.MISTRAL,), TOOLS)
+    assert content == "" and json.loads(calls[0]["arguments"]) == args
+
+
+def test_kimi_end_markers_inside_json_are_data():
+    args = {"city": "literal <|tool_call_end|> <|tool_calls_section_end|>", "days": 3}
+    text = (
+        tf.KIMI.start
+        + "<|tool_call_begin|>functions.weather:0<|tool_call_argument_begin|>"
+        + json.dumps(args)
+        + "<|tool_call_end|>"
+        + tf.KIMI.end
+    )
+    s = ToolCallStreamer((tf.KIMI,), tools=TOOLS)
+    out = []
+    for ch in text:
+        out.extend(s.process_token(ch))
+    out.extend(s.flush())
+    assert not "".join(o.text for o in out)
+    assert json.loads(next(o.tool_call.arguments for o in out if o.tool_call)) == args
+
+
+def test_pythonic_bare_declared_call_streams_as_a_call():
+    s = ToolCallStreamer((tf.PYTHONIC,), tools=TOOLS)
+    out = []
+    for ch in 'weather(city="Taipei", days=3)':
+        out.extend(s.process_token(ch))
+    out.extend(s.flush())
+    assert not "".join(o.text for o in out)
+    assert json.loads(next(o.tool_call.arguments for o in out if o.tool_call)) == ARGS
+
+
+@pytest.mark.parametrize("fmt", [tf.GLM, tf.DSML, tf.DSML_V4])
+def test_raw_parameter_outer_marker_is_data(fmt):
+    value = "literal " + fmt.end
+    if fmt is tf.GLM:
+        body = "weather<arg_key>city</arg_key><arg_value>" + value + "</arg_value>"
+    else:
+        body = (
+            '<｜DSML｜invoke name="weather"><｜DSML｜parameter name="city" string="true">'
+            + value
+            + "</｜DSML｜parameter></｜DSML｜invoke>"
+        )
+    s = ToolCallStreamer((fmt,), tools=TOOLS)
+    out = []
+    for ch in fmt.start + body + fmt.end:
+        out.extend(s.process_token(ch))
+    out.extend(s.flush())
+    assert not "".join(o.text for o in out)
+    assert (
+        json.loads(next(o.tool_call.arguments for o in out if o.tool_call))["city"]
+        == value
+    )
+
+
+def test_native_raw_value_closes_with_actual_special_token():
+    from llguidance import LLMatcher, LLTokenizer, TokenizerWrapper
+
+    markers = [
+        "</arg_value>",
+        "<tool_call>",
+        "</tool_call>",
+        "<arg_key>",
+        "</arg_key>",
+        "<arg_value>",
+    ]
+    ids = {m: 256 + i for i, m in enumerate(markers)}
+
+    class SpecialBytes:
+        tokens = (
+            [bytes([i]) for i in range(256)]
+            + [m.encode() for m in markers]
+            + [b"<eos>"]
+        )
+        special_token_ids = list(range(256, 256 + len(markers)))
+        eos_token_id = 256 + len(markers)
+        bos_token_id = None
+
+        def __call__(self, text):
+            text = text.decode() if isinstance(text, bytes) else text
+            result = []
+            while text:
+                marker = next((m for m in markers if text.startswith(m)), None)
+                if marker:
+                    result.append(ids[marker])
+                    text = text[len(marker) :]
+                else:
+                    result.append(ord(text[0]))
+                    text = text[1:]
+            return result
+
+    hf = SimpleNamespace(
+        convert_tokens_to_ids=ids.get,
+        all_special_tokens=markers,
+        get_added_vocab=lambda: ids,
+    )
+    source = build_native_grammar(
+        [ToolSpec("weather", SCHEMA)], tf.GLM, hf, only="weather", parallel=False
+    )
+    tokenizer = SpecialBytes()
+    m = LLMatcher(
+        LLTokenizer(TokenizerWrapper(tokenizer)), LLMatcher.grammar_from_lark(source)
+    )
+    for token in tokenizer(CASES[8][1]):
+        assert m.consume_token(token), m.get_error()
+    assert m.is_accepting()

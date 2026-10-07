@@ -27,6 +27,23 @@ RF = {
     "triggers": ["<result>"],
 }
 
+RF_TOOL = {
+    "type": "structural_tag",
+    "structures": [
+        {
+            "begin": "<tool_call>",
+            "end": "</tool_call>",
+            "schema": {
+                "type": "object",
+                "properties": {"name": {"const": "weather"}, "arguments": SCHEMA},
+                "required": ["name", "arguments"],
+                "additionalProperties": False,
+            },
+        }
+    ],
+    "triggers": ["<tool_call>"],
+}
+
 
 def requests(model: str):
     base = {"model": model, "temperature": 0, "max_tokens": 384}
@@ -57,11 +74,30 @@ def requests(model: str):
             "messages": [
                 {
                     "role": "user",
-                    "content": 'Write a brief explanation, then output exactly <result>{"city":"Taipei"}</result>. Do not use markdown fences.',
+                    "content": 'Write a brief explanation, then output exactly <result>{"city":"Tokyo"}</result>. Do not use markdown fences.',
                 }
             ],
             "response_format": RF,
             "thinking_budget": 96,
+            "enable_thinking": True,
+        },
+    )
+
+    yield (
+        "structural_tool",
+        {
+            **base,
+            "tools": TOOLS,
+            "tool_choice": "auto",
+            "response_format": RF_TOOL,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": 'Call weather for Taipei using <tool_call>{"name":"weather","arguments":{"city":"Taipei"}}</tool_call>. You may reason briefly first.',
+                }
+            ],
+            "thinking_budget": 96,
+            "enable_thinking": True,
         },
     )
 
@@ -85,7 +121,7 @@ def judge(kind: str, response: dict | str) -> dict:
                     slot["arguments"] += fn.get("arguments", "")
                     slot["id"] += call.get("id", "")
         calls = list(slots.values())
-    elif kind == "forced":
+    elif kind in ("forced", "structural_tool"):
         calls = [
             dict(c["function"], id=c["id"])
             for c in response["choices"][0]["message"]["tool_calls"]
@@ -159,6 +195,10 @@ def main() -> int:
                     "127.0.0.1",
                     "--port",
                     str(args.port),
+                    "--auth-token",
+                    "",
+                    "--set",
+                    f"YUNSHU_SSD_CACHE_DIR={args.out.parent / 'toolparse-cache'}",
                 ],
                 stdout=log,
                 stderr=log,
@@ -175,7 +215,17 @@ def main() -> int:
                 raise RuntimeError("server health timed out")
         rows = run(url, args.model)
         args.out.write_text(
-            json.dumps({"complete": True, "rows": rows}, ensure_ascii=False) + "\n"
+            json.dumps(
+                {
+                    "complete": True,
+                    "rows": rows,
+                    "server_log_tail": args.out.with_suffix(".server.log")
+                    .read_text(errors="replace")
+                    .splitlines()[-80:],
+                },
+                ensure_ascii=False,
+            )
+            + "\n"
         )
         return 0
     except Exception as exc:

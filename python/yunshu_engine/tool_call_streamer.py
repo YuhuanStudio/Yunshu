@@ -73,6 +73,10 @@ class ToolCallStreamer:
             dict.fromkeys(p for f in self._formats if f.whole for p in f.whole_prefixes)
         )
         self._tools = openai_tools(tools)
+        if any(f.whole and f.name == "llama3_pythonic" for f in self._formats):
+            self._whole_prefixes += tuple(
+                t["function"]["name"] + "(" for t in self._tools or []
+            )
         self._schemas = tool_schemas(tools)
         self._forced = forced_tool_name
         self._allow_parallel = allow_parallel

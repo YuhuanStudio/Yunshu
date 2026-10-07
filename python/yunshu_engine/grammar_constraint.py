@@ -1142,6 +1142,7 @@ class CfgGrammarConstraint(_LlgConstraint):
             self._dead = True
             return
         self._consumed += 1
+        self._allowed_cache.clear()
         if self._matcher.is_stopped():
             self._done = True
 

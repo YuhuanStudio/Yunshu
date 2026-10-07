@@ -39,6 +39,7 @@ Performance characteristics (vs JsonSchemaConstraint allowlist approach):
     in the sampling hot path by using mx-level masking.
 """
 
+import contextlib
 import json
 import logging
 import weakref
@@ -218,9 +219,17 @@ class TokenStringTable:
         The vocab size is the maximum token ID + 1, not the number of
         entries in the vocab dict (which may have gaps or overlapping keys).
         """
-        # Prefer explicit vocab_size attribute
+        # HF vocab_size excludes added tokens (including reasoning and EOS).
         if hasattr(tokenizer, "vocab_size") and tokenizer.vocab_size:
-            return tokenizer.vocab_size
+            size = int(tokenizer.vocab_size)
+            with contextlib.suppress(TypeError):
+                size = max(size, len(tokenizer))
+            added_vocab = getattr(tokenizer, "get_added_vocab", None)
+            if added_vocab is not None:
+                added = added_vocab()
+                if isinstance(added, dict) and added:
+                    size = max(size, int(max(added.values())) + 1)
+            return size
 
         # Compute from max token ID in the vocab
         vocab = {}

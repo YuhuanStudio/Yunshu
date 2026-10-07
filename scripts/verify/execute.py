@@ -32,6 +32,7 @@ class Cell:
     # Deterministic evidence (greedy digests of a base arm) that any run with the same inputs may
     # reuse: a content key (commit, env, model, harness hash, cell parameters), never run paths.
     share_key: str = ""
+    cwd: Path | None = None
     device: str = ""  # "any": small-model liveness cells may run on the M3 lane
 
     @property
@@ -174,6 +175,7 @@ class Executor:
             out=out if cell.needs_out else None,
             expect_complete=cell.needs_out,
             device=cell.device,
+            **({"cwd": cell.cwd} if cell.cwd is not None else {}),
         )
         self.run.append(
             cell.stage,

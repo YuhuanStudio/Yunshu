@@ -71,7 +71,12 @@ def build_native_grammar(
                     + ("" if end else "(.|\\n)*")
                 )
                 bounded += " & /" + expression.replace("/", "\\/") + "/"
-            text_rules.append(f"{key}[suffix={_q(close)}]: {bounded}")
+            closing = lit(close)
+            if closing != _q(close):
+                # Special tokens are not UTF-8 text and cannot be regex suffixes.
+                text_rules.append(f"{key}: {bounded} {closing}")
+            else:
+                text_rules.append(f"{key}[suffix={_q(close)}]: {bounded}")
             return key
         return js(schema) + ("" if python else " " + lit(close))
 
@@ -114,7 +119,13 @@ def build_native_grammar(
             envelope = f"{lit('<|tool_call_begin|>')} {_q('functions.' + name + ':0')} {lit('<|tool_call_argument_begin|>')} {js(schema)} {lit('<|tool_call_end|>')}"
         elif family == "deepseek":
             envelope = f"{lit('<｜tool▁call▁begin｜>')} {_q(name)} {lit('<｜tool▁sep｜>')} {js(schema)} {lit('<｜tool▁call▁end｜>')}"
-        elif family in ("glm47", "deepseek_v32", "deepseek_v4", "llama3_pythonic"):
+        elif family in (
+            "glm47",
+            "deepseek_v32",
+            "deepseek_v4",
+            "llama3_pythonic",
+            "pythonic",
+        ):
             fields = []
             required = schema.get("required", [])
             props = schema.get("properties", {})
@@ -128,7 +139,7 @@ def build_native_grammar(
                     part = f"{lit(chr(60) + '｜DSML｜parameter name=' + json.dumps(k) + ' string=' + json.dumps(flag) + chr(62))} {value(prop, '</｜DSML｜parameter>')}"
                 else:
                     part = f"{_q(k + '=')} {value(prop, '', python=True)}"
-                if family == "llama3_pythonic":
+                if family in ("llama3_pythonic", "pythonic"):
                     # Fixed schema order, optional keys can be omitted without dangling commas.
                     fields.append(part)
                 else:
@@ -139,12 +150,24 @@ def build_native_grammar(
                     + " ".join(fields)
                     + f" {lit(fmt.end)}"
                 )
-            elif family == "llama3_pythonic":
-                # Required fields only; optional fields remain valid when omitted.
-                fields = [
-                    part for k, part in zip(props, fields, strict=True) if k in required
-                ]
-                envelope = _q(name + "(") + " " + ' "," '.join(fields) + ' ")"'
+            elif family in ("llama3_pythonic", "pythonic"):
+                # Linear grammar DAG: optional kwargs can appear or be omitted
+                # without a dangling comma or enumerating 2**N subsets.
+                n = len(fields)
+                rules.extend([f"args_{i}_{n}_first:", f"args_{i}_{n}_after:"])
+                for j, (param, part) in enumerate(zip(props, fields, strict=True)):
+                    if not param.isidentifier():
+                        raise ValueError("Python tool parameter is not an identifier")
+                    first = f"{part} args_{i}_{j + 1}_after"
+                    after = f'"," {part} args_{i}_{j + 1}_after'
+                    if param not in required:
+                        first += f" | args_{i}_{j + 1}_first"
+                        after += f" | args_{i}_{j + 1}_after"
+                    rules.extend(
+                        [f"args_{i}_{j}_first: {first}", f"args_{i}_{j}_after: {after}"]
+                    )
+                envelope = _q(name + "(") + f" args_{i}_0_first " + '")"'
+
             else:
                 envelope = (
                     lit('<｜DSML｜invoke name="' + name + '">')
@@ -162,9 +185,13 @@ def build_native_grammar(
     union = " | ".join(branches)
     repeat = ' ("," call)*' if parallel else ""
     family = fmt.name
-    if family in ("mistral", "llama3_pythonic"):
+    if family in ("mistral", "llama3_pythonic", "pythonic"):
         start = (
-            (lit(fmt.start) + " " if fmt.start else "") + '"[" call' + repeat + ' "]"'
+            (lit(fmt.start) + " " if fmt.start else "")
+            + '"[" call'
+            + repeat
+            + ' "]"'
+            + (" " + lit(fmt.end) if fmt.end else "")
         )
     elif family in ("kimi_k2", "deepseek", "deepseek_v32", "deepseek_v4"):
         start = (
@@ -182,7 +209,8 @@ def build_native_grammar(
         start = "call" + (" call*" if parallel else "")
     return "\n".join(
         [
-            "%ignore /[ \\t\\n\\r]+/",
+            '%llguidance {"ignore_once": true}',
+            "%ignore /[ \\t\\n\\r]{1,2}/",
             "start: " + start,
             "call: " + union,
             *rules,

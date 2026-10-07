@@ -582,6 +582,12 @@ class ChatCompletionRequest(BaseModel):
                 )
 
                 structural_tag_grammar(self.response_format)
+                from yunshu_engine.tool_call_grammar import is_forced
+
+                if self.tools and is_forced(self.tool_choice):
+                    raise ValueError(
+                        "structural_tag cannot be combined with forced tool_choice"
+                    )
             if rf_type not in (
                 "json_object",
                 "json_schema",
@@ -778,6 +784,14 @@ def _vlm_tool_schema_conflict(
     req: ChatCompletionRequest, json_schema: dict | str | None
 ) -> bool:
     """Whether VLM cannot preserve both the tool and output-format contracts."""
+    from yunshu_engine.structural_tag import is_lazy_constraint
+
+    if is_lazy_constraint(json_schema):
+        from yunshu_engine.tool_call_grammar import is_forced
+
+        # Lazy tags express free prose and tool payloads in the same grammar.
+        # Forced choices still need their independent native tool guarantee.
+        return bool(req.tools) and is_forced(req.tool_choice)
     return json_schema is not None and bool(req.tools) and req.tool_choice != "none"
 
 
