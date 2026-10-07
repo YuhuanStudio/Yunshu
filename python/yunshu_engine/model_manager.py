@@ -426,6 +426,12 @@ async def instantiate_engine(
         return engine
     if model_type in (ModelType.EMBEDDING, ModelType.RERANKER, ModelType.CLASSIFIER):
         engine = _embedding_engine_class(model_path)(model_path, config)
+        # TextScoringEngine derives is_reranker from its own head (num_labels/kind); only
+        # the class-level embedding engines (VL/Gemma) take it from the detected role.
+        from .scoring_engine import TextScoringEngine
+
+        if hasattr(engine, "is_reranker") and not isinstance(engine, TextScoringEngine):
+            engine.is_reranker = model_type == ModelType.RERANKER
         await engine.start()
         return engine
     if model_type in (ModelType.STS, ModelType.VIDEO):
@@ -1357,6 +1363,12 @@ class ModelManager:
                 continue
 
             model_id = subdir.name
+            alias_type = None
+            if model_id.startswith(".ollama--") and subdir.is_symlink():
+                from urllib.parse import unquote
+
+                model_id = unquote(model_id.removeprefix(".ollama--"))
+                alias_type = _detect_model_type(str(subdir.resolve()))
 
             # Skip if already registered and loaded/loading.
             # Loading entries must not be overwritten — would orphan loading events.
@@ -1383,6 +1395,7 @@ class ModelManager:
                 model_path=str(subdir),
                 estimated_bytes=estimated,
                 pinned=was_pinned,
+                **({"model_type": alias_type} if alias_type is not None else {}),
             )
             count += 1
 

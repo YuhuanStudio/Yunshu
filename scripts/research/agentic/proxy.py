@@ -70,6 +70,7 @@ class Tracker:
         self.tool_args: dict[str, str] = {}
         self.tool_done: dict[str, str] = {}
         self.leaked = False
+        self._leak_tail = ""
         self.text_parts: list[str] = []
         self.delta_events = 0
         self.x_yunshu = None
@@ -85,8 +86,10 @@ class Tracker:
     def _text(self, s: str):
         if s:
             self.text_parts.append(s)
-            if not self.leaked and any(m in s for m in LEAK_MARKERS):
+            window = self._leak_tail + s
+            if not self.leaked and any(m in window for m in LEAK_MARKERS):
                 self.leaked = True
+            self._leak_tail = window[-(max(map(len, LEAK_MARKERS)) - 1) :]
 
     def feed_event(self, ev: dict, t: float):
         if not isinstance(ev, dict):

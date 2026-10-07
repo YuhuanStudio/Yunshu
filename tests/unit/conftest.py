@@ -100,3 +100,15 @@ def client(set_engine):
 
     with TestClient(create_app(), raise_server_exceptions=False) as c:
         yield c
+
+
+@pytest.fixture(autouse=True)
+def _isolate_native_tool_context():
+    """Direct router helpers must not leave request context for the next unit test."""
+    from yunshu_engine.batched_engine import _REQUEST_TOOL_USE, _REQUEST_TOOLS
+
+    tools = _REQUEST_TOOLS.set(None)
+    choice = _REQUEST_TOOL_USE.set(None)
+    yield
+    _REQUEST_TOOLS.reset(tools)
+    _REQUEST_TOOL_USE.reset(choice)

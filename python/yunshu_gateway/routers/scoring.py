@@ -92,16 +92,45 @@ class ScoreRequest(BaseModel):
     scoring_type: str = "cosine"  # cosine, dot, euclidean
     use_activation: bool | None = None
     instruction: str | None = Field(default=None, max_length=_MAX_INPUT_TEXT_LENGTH)
+    chat_template_kwargs: dict[str, Any] | None = None
 
     @model_validator(mode="before")
     @classmethod
-    def accept_vllm_names(cls, data):
+    def accept_score_aliases(cls, data):
         if isinstance(data, dict):
             data = dict(data)
-            for canonical, alias in (("text_1", "queries"), ("text_2", "documents")):
-                if canonical not in data and alias in data:
-                    data[canonical] = data[alias]
+            for field, aliases in (
+                ("text_1", ("queries", "data_1")),
+                ("text_2", ("documents", "items", "data_2")),
+            ):
+                if field not in data:
+                    for alias in aliases:
+                        if alias in data:
+                            data[field] = data[alias]
+                            break
         return data
+
+    @property
+    def effective_instruction(self):
+        """The single instruction source: chat_template_kwargs.instruction wins."""
+        kwargs = self.chat_template_kwargs or {}
+        unsupported = set(kwargs) - {"instruction"}
+        if unsupported:
+            raise HTTPException(
+                400,
+                "Unsupported score chat_template_kwargs: "
+                + ", ".join(sorted(unsupported)),
+            )
+        instruction = kwargs.get("instruction", self.instruction)
+        if instruction is not None and (
+            not isinstance(instruction, str)
+            or len(instruction) > _MAX_INPUT_TEXT_LENGTH
+        ):
+            raise HTTPException(
+                400,
+                f"instruction must be a string of at most {_MAX_INPUT_TEXT_LENGTH} characters",
+            )
+        return instruction
 
     @model_validator(mode="after")
     def validate_request(self):
@@ -363,6 +392,7 @@ async def create_score(req: ScoreRequest, request: Request):
 
     from yunshu_engine.scoring_engine import TextScoringEngine
 
+    instruction = req.effective_instruction
     if isinstance(engine, TextScoringEngine):
         if req.scoring_type != "cosine":
             raise HTTPException(
@@ -371,7 +401,7 @@ async def create_score(req: ScoreRequest, request: Request):
         try:
             scores = await engine.score_pairs(
                 list(zip(texts_a, texts_b, strict=True)),
-                instruction=req.instruction,
+                instruction=instruction,
                 use_activation=req.use_activation is not False,
             )
         except ValueError as e:
@@ -390,26 +420,43 @@ async def create_score(req: ScoreRequest, request: Request):
                 ],
                 "usage": engine.token_usage(
                     pairs=list(zip(texts_a, texts_b, strict=True)),
-                    instruction=req.instruction,
+                    instruction=instruction,
                 ),
             }
         )
 
-    if req.use_activation is not None or req.instruction is not None:
-        raise HTTPException(
-            400, "use_activation and instruction require a text cross-encoder"
-        )
+    # Remaining engines: use_activation is a TextScoringEngine-only knob. Like vLLM, a
+    # bi-encoder ignores `instruction`; a VL cross-encoder reranker (is_reranker) uses it.
+    is_cross = getattr(engine, "is_reranker", False) is True
+    if req.use_activation is not None:
+        raise HTTPException(400, "use_activation requires a text cross-encoder")
 
     # dot/euclidean need RAW (un-normalized) vectors; cosine needs unit vectors.
     _norm_for_score = req.scoring_type == "cosine"
+    cross_scores = None
     try:
-        emb_a = await _get_embeddings(engine, texts_a, normalize=_norm_for_score)
-        emb_b = await _get_embeddings(engine, texts_b, normalize=_norm_for_score)
+        if is_cross:
+            if req.scoring_type != "cosine":
+                raise HTTPException(
+                    400, "Cross-encoder score does not support dot/euclidean"
+                )
+            cross_scores = []
+            for query, document in zip(texts_a, texts_b, strict=True):
+                scores = await engine.rerank(query, [document], instruction=instruction)
+                if len(scores) != 1:
+                    raise ValueError("Cross-encoder must return one score per pair")
+                cross_scores.append(float(scores[0]))
+            emb_a, emb_b = [], []
+        else:
+            # Like vLLM, bi-encoder scoring does not apply a score template or instruction.
+            emb_a = await _get_embeddings(engine, texts_a, normalize=_norm_for_score)
+            emb_b = await _get_embeddings(engine, texts_b, normalize=_norm_for_score)
+    except HTTPException:
+        raise
     except MemoryError:
         logger.error("Score OOM", exc_info=True)
         raise HTTPException(status_code=507, detail="Out of GPU memory") from None
     except ValueError as e:
-        # bad-input errors should be 400 not 500
         logger.warning(f"Score validation: {e}")
         raise HTTPException(status_code=400, detail=str(e)) from None
     except Exception as e:
@@ -420,9 +467,13 @@ async def create_score(req: ScoreRequest, request: Request):
     total_tokens = 0
     tok = getattr(engine, "_tokenizer", None)
     try:
-        for i, (a, b) in enumerate(zip(emb_a, emb_b, strict=False)):
-            score = _compute_similarity(a, b, req.scoring_type)
-            if not math.isfinite(score):  # avoid a bare NaN JSON literal (invalid)
+        for i in range(len(texts_a)):
+            score = (
+                cross_scores[i]
+                if cross_scores is not None
+                else _compute_similarity(emb_a[i], emb_b[i], req.scoring_type)
+            )
+            if not math.isfinite(score):
                 score = 0.0
             data.append({"object": "score", "index": i, "score": score})
             total_tokens += (
@@ -432,7 +483,6 @@ async def create_score(req: ScoreRequest, request: Request):
                 len(tok.encode(texts_b[i])) if tok else max(1, len(texts_b[i]) // 4)
             )
     except ValueError as e:
-        logger.error(f"Score computation error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e)) from None
 
     return JSONResponse(
