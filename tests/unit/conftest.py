@@ -1,5 +1,18 @@
 """Shared fixtures for unit tests."""
 
+import os as _os
+import sys as _sys
+import tempfile as _tempfile
+
+# The dev tools (yv, agentbench, the agentic runner) default to this machine's build volume and main
+# checkout venv. Unit tests must never write there, and CI has neither: point them at a throwaway root
+# and the running interpreter before any test module imports them.
+_DEV_ROOT = _tempfile.mkdtemp(prefix="yunshu-unit-devroot-")
+_os.environ["YV_PY"] = _sys.executable
+_os.environ["YV_ROOT"] = _os.path.join(_DEV_ROOT, "verify")
+_os.environ["AGENTIC_BUILD"] = _os.path.join(_DEV_ROOT, "agentic")
+_os.environ["AGENTBENCH_ROOT"] = _os.path.join(_DEV_ROOT, "agentbench")
+
 import os
 from unittest.mock import MagicMock
 
