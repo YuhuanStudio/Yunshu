@@ -62,6 +62,8 @@ def check(name: str, *routes: str, served: bool, needs: str = "main"):
 # belongs here only when no server run (with the four small checkpoints) can exercise it.
 EXEMPT: dict[str, str] = {
     "POST /api/push": "documented 501 by design: nothing to push to",
+    "POST /v1/decisions": "needs a decision checkpoint (Cloudflare Clef); verified by the decisions-* gpuq jobs (scripts/research/decisions_verify.py), unit-tested with a fake engine and the openai 3.26 client",
+    "POST /v1/systemone": "same engine and checkpoint as /v1/decisions (TypeSafe Jev wire); see decisions_verify.py",
 }
 
 
