@@ -1,6 +1,8 @@
 import type { EngineStatus } from "./api.ts";
 import { activity, phaseLabels } from "./engineView.ts";
 import { offlineCause } from "./errors.ts";
+import { has, t, tr } from "./i18n/index.ts";
+import { fixed } from "./i18n/format.ts";
 import type { EngineConnectionPhase } from "./useEngine.ts";
 import type { MemoryLedgerData } from "./memory-api.ts";
 
@@ -24,27 +26,31 @@ export interface FooterPill {
 const finite = (v: unknown): v is number =>
   typeof v === "number" && Number.isFinite(v);
 
-const n = (v: number, d = 0) => v.toFixed(d);
+const n = (v: number, d = 0) => fixed(v, d);
 
 export const MEMORY_WARN = 0.8;
 export const MEMORY_DANGER = 0.92;
 
-const pressureText: Record<string, string> = {
-  normal: "正常",
-  warn: "警告",
-  warning: "警告",
-  critical: "嚴重",
+const pressureKey: Record<string, string> = {
+  normal: "normal",
+  warn: "warn",
+  warning: "warn",
+  critical: "critical",
 };
+const pressureText = (level: string) =>
+  pressureKey[level]
+    ? tr(`shell.footer.pressure.${pressureKey[level]}`)
+    : level;
 
 export function uptimeText(seconds: number): string {
   const s = Math.max(0, Math.floor(seconds));
   const d = Math.floor(s / 86400);
   const h = Math.floor((s % 86400) / 3600);
   const m = Math.floor((s % 3600) / 60);
-  if (d > 0) return `${d} 天 ${h} 小時`;
-  if (h > 0) return `${h} 小時 ${m} 分`;
-  if (m > 0) return `${m} 分`;
-  return `${s} 秒`;
+  if (d > 0) return t("shell.footer.uptime.dh", { d, h });
+  if (h > 0) return t("shell.footer.uptime.hm", { h, m });
+  if (m > 0) return t("shell.footer.uptime.m", { m });
+  return t("shell.footer.uptime.s", { s });
 }
 
 type BusyMeter = { busy_seconds?: unknown; uptime_seconds?: unknown };
@@ -103,10 +109,10 @@ export function footerPills(input: FooterInput): FooterPill[] {
     const cause = offlineCause(phase, input.errorStatus);
     const text =
       phase === "connecting"
-        ? "連線中"
+        ? t("shell.footer.engine.connecting")
         : phase === "unauthorized"
-          ? "未授權"
-          : "離線";
+          ? t("shell.footer.engine.unauthorized")
+          : t("shell.footer.engine.offline");
     pills.push({
       key: "engine",
       label: text,
@@ -118,7 +124,7 @@ export function footerPills(input: FooterInput): FooterPill[] {
             ? "warning"
             : "danger",
       dot: true,
-      help: `引擎目前：${cause.short}。`,
+      help: t("shell.footer.engine.help", { state: cause.short }),
     });
     return pills;
   }
@@ -127,7 +133,7 @@ export function footerPills(input: FooterInput): FooterPill[] {
   const first = loaded[0]?.id.split("/").filter(Boolean).at(-1);
   pills.push({
     key: "engine",
-    label: "運作中",
+    label: t("shell.footer.engine.running"),
     value: first
       ? loaded.length > 1
         ? `${first} +${loaded.length - 1}`
@@ -135,11 +141,18 @@ export function footerPills(input: FooterInput): FooterPill[] {
       : undefined,
     tone: "neutral",
     dot: true,
-    help: `引擎連線正常 · yunshu ${status.version} · 已運作 ${uptimeText(status.uptime_s)}${
-      loaded.length
-        ? ` · 已載入 ${loaded.map((m) => m.id.split("/").filter(Boolean).at(-1)).join("、")}`
-        : " · 尚未載入模型"
-    }`,
+    help:
+      t("shell.footer.engine.okHelp", {
+        version: status.version,
+        uptime: uptimeText(status.uptime_s),
+      }) +
+      (loaded.length
+        ? t("shell.footer.engine.loadedList", {
+            models: loaded
+              .map((m) => m.id.split("/").filter(Boolean).at(-1))
+              .join(t("shell.footer.engine.listSep")),
+          })
+        : t("shell.footer.engine.noModel")),
   });
 
   const mem = status.memory;
@@ -154,17 +167,24 @@ export function footerPills(input: FooterInput): FooterPill[] {
         : level === "warn" || level === "warning" || usage > MEMORY_WARN
           ? "warning"
           : "neutral";
-    const levelText = level ? (pressureText[level] ?? level) : null;
+    const levelText = level ? pressureText(level) : null;
     pills.push({
       key: "memory",
-      label: "記憶體",
+      label: t("shell.footer.memory.label"),
       value: `${n(active, 1)}/${n(total, 0)} GB`,
       tone,
       dot: true,
       minCh: 12,
-      help: `MLX 使用 ${n(active, 1)} GB，統一記憶體共 ${n(total, 0)} GB（${n(usage * 100)}%）${
-        levelText ? `；系統記憶體壓力：${levelText}` : ""
-      }。`,
+      help:
+        t("shell.footer.memory.help", {
+          active: n(active, 1),
+          total: n(total, 0),
+          pct: n(usage * 100),
+        }) +
+        (levelText
+          ? t("shell.footer.memory.pressure", { level: levelText })
+          : "") +
+        t("shell.footer.sentenceEnd"),
     });
   }
   const a = activity(status);
@@ -173,7 +193,11 @@ export function footerPills(input: FooterInput): FooterPill[] {
     value = a.decodeNow != null ? `${n(a.decodeNow)} tok/s` : "—";
   else if (a.phase === "prefill")
     value =
-      a.progress != null ? `${n(a.progress)}%` : a.preparing ? "準備中" : "—";
+      a.progress != null
+        ? `${n(a.progress)}%`
+        : a.preparing
+          ? t("shell.engine.phase.starting")
+          : "—";
   pills.push({
     key: "now",
     label: phaseLabels[a.phase],
@@ -183,44 +207,50 @@ export function footerPills(input: FooterInput): FooterPill[] {
     minCh: a.phase === "decode" ? 9 : a.phase === "prefill" ? 4 : undefined,
     help:
       a.phase === "idle"
-        ? "引擎目前沒有進行中的請求。"
+        ? t("shell.footer.now.help.idle")
         : a.phase === "decode"
-          ? "目前所有解碼中請求的即時合計速度。"
+          ? t("shell.footer.now.help.decode")
           : a.phase === "prefill"
-            ? "正在讀取輸入（預填），百分比為首個預填請求的進度。"
-            : "請求正在排隊等候。",
+            ? t("shell.footer.now.help.prefill")
+            : t("shell.footer.now.help.queued"),
   });
   const swap = input.ledger?.host.swap_used_gb;
   if (finite(swap) && swap >= 0.05)
     pills.push({
       key: "swap",
-      label: "交換",
+      label: t("shell.footer.swap.label"),
       value: `${n(swap, 1)} GB`,
       tone: "warning",
       dot: true,
-      help: "系統正在使用磁碟交換空間；推論可能變慢。",
+      help: t("shell.footer.swap.help"),
     });
   if (input.gpuBusy != null)
     pills.push({
       key: "gpu",
-      label: "GPU 忙碌",
+      label: t("shell.footer.gpu.label"),
       value: `${n(input.gpuBusy * 100)}%`,
       tone: "neutral",
       dot: false,
       minCh: 4,
-      help: "最近幾次狀態更新之間，GPU 執行推論的時間占比。",
+      help: t("shell.footer.gpu.help"),
     });
   if (a.counts.active > 0 || a.counts.queued > 0)
     pills.push({
       key: "load",
-      label: "請求",
+      label: t("shell.footer.load.label"),
       value:
         a.counts.queued > 0
-          ? `${a.counts.active} 進行 ${a.counts.queued} 排隊`
-          : `${a.counts.active} 進行`,
+          ? t("shell.footer.load.both", {
+              active: a.counts.active,
+              queued: a.counts.queued,
+            })
+          : t("shell.footer.load.active", { active: a.counts.active }),
       tone: "neutral",
       dot: false,
-      help: `進行中 ${a.counts.active} 個，排隊 ${a.counts.queued} 個。`,
+      help: t("shell.footer.load.help", {
+        active: a.counts.active,
+        queued: a.counts.queued,
+      }),
     });
 
   return pills;

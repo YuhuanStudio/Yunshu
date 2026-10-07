@@ -64,12 +64,14 @@ import type { Connection } from "./api";
 import {
   LocalModelIcon,
   modelLabel,
+  fixed,
   number,
   supportsChat,
   type Engine,
 } from "./ui";
 import { compareOutputs, runStats, type RunTiming } from "./playground-metrics";
 import { SegmentedTray } from "./SegmentedTray";
+import { t, useLocale } from "./i18n/index.ts";
 const CodeBlock = lazy(() =>
   import("@yuhuanowo/yunui/content").then((m) => ({ default: m.CodeBlock })),
 );
@@ -102,14 +104,14 @@ const codeTabs: { value: CodeLanguage; label: string; language: string }[] = [
   { value: "javascript", label: "JavaScript", language: "javascript" },
 ];
 type Pair = readonly [Run | null, Run | null];
-const statLabels = {
+const statLabels = () => ({
   tokens: "tokens",
   speed: "tok/s",
   latency: "ms",
-  ttft: "首 token 延遲",
-  cached: "前綴命中",
-  prompt: "輸入",
-};
+  ttft: t("playground.stat.ttft"),
+  cached: t("playground.stat.cached"),
+  prompt: t("playground.stat.prompt"),
+});
 const seconds = (ms: number) => `${number(ms / 1000, 2)} s`;
 const signed = (v: number, digits: number) =>
   `${v > 0 ? "+" : v < 0 ? "−" : ""}${number(Math.abs(v), digits)}`;
@@ -123,11 +125,13 @@ function specLabel(
   const mode = spec.mode.toUpperCase();
   const perRound =
     spec.rounds && tokens
-      ? ` · 每輪 ${number(tokens / spec.rounds, 2)} tok`
+      ? t("playground.stat.perRound", { n: number(tokens / spec.rounds, 2) })
       : "";
   const rate =
     spec.acceptanceRate != null
-      ? ` · 接受率 ${number(spec.acceptanceRate * 100, 0)}%`
+      ? t("playground.stat.acceptance", {
+          n: number(spec.acceptanceRate * 100, 0),
+        })
       : "";
   return `${mode}${perRound}${rate}`;
 }
@@ -149,10 +153,12 @@ function ReplyStats({ run, now }: { run: Run; now: number }) {
         ttftMs={s.ttftMs}
         cachedTokens={s.cachedTokens}
         promptTokens={s.promptTokens}
-        labels={statLabels}
+        labels={statLabels()}
       />
       {live && s.ttftMs === undefined && (
-        <span className="text-xs text-muted-foreground">等待首個 token</span>
+        <span className="text-xs text-muted-foreground">
+          {t("playground.stat.waitingFirst")}
+        </span>
       )}
       {run.timing.usage?.spec && (
         <span className="text-xs text-muted-foreground">
@@ -161,7 +167,7 @@ function ReplyStats({ run, now }: { run: Run; now: number }) {
       )}
       {s.estimated && !live && (
         <span className="text-xs text-muted-foreground">
-          token 數為串流片段估算
+          {t("playground.stat.estimated")}
         </span>
       )}
     </div>
@@ -175,10 +181,10 @@ function ReplyBody({ run, streaming }: { run: Run; streaming: boolean }) {
       {run.reasoning && (
         <ThinkingBlock
           labels={{
-            title: "思考過程",
-            active: "思考中",
-            completed: "已完成",
-            inProgress: "進行中",
+            title: t("playground.reply.thinkTitle"),
+            active: t("playground.reply.thinkActive"),
+            completed: t("playground.reply.thinkDone"),
+            inProgress: t("playground.reply.thinkProgress"),
           }}
           content={run.reasoning}
           isStreaming={streaming}
@@ -195,17 +201,22 @@ function ReplyBody({ run, streaming }: { run: Run; streaming: boolean }) {
       >
         <Markdown
           content={
-            run.content || (streaming ? "等待模型輸出…" : "未收到文字內容")
+            run.content ||
+            (streaming
+              ? t("playground.reply.waiting")
+              : t("playground.reply.noText"))
           }
         />
       </Suspense>
       {run.finishReason === "length" && (
         <p className="mt-2 text-xs text-warning">
-          已達輸出上限，可調高最大輸出 tokens 或關閉思考模式再測試。
+          {t("playground.reply.lengthLimit")}
         </p>
       )}
       {run.incomplete && (
-        <p className="mt-2 text-xs text-muted-foreground">未完成的回覆</p>
+        <p className="mt-2 text-xs text-muted-foreground">
+          {t("playground.reply.incomplete")}
+        </p>
       )}
     </>
   );
@@ -219,6 +230,7 @@ export function Playground({
   engine: Engine;
   initialModel: string;
 }) {
+  useLocale();
   const [model, setModel] = useState(initialModel),
     [mode, setMode] = useState<Mode>("chat"),
     [dialect, setDialect] = useState<Dialect>("chat"),
@@ -289,7 +301,7 @@ export function Playground({
       !["image/png", "image/jpeg", "image/webp"].includes(file.type) ||
       file.size > 8 * 1024 * 1024
     ) {
-      setError("請選擇 8 MB 以下的 PNG、JPEG 或 WebP 圖片。");
+      setError(t("playground.error.imageType"));
       return;
     }
     setReadingImage(true);
@@ -300,8 +312,8 @@ export function Playground({
         reader.onload = () =>
           typeof reader.result === "string"
             ? resolve(reader.result)
-            : reject(Error("無法讀取圖片"));
-        reader.onerror = () => reject(Error("無法讀取圖片"));
+            : reject(Error(t("playground.error.imageRead")));
+        reader.onerror = () => reject(Error(t("playground.error.imageRead")));
         reader.readAsDataURL(file);
       });
       if (mounted.current) {
@@ -310,7 +322,9 @@ export function Playground({
       }
     } catch (e) {
       if (mounted.current)
-        setError(e instanceof Error ? e.message : "無法讀取圖片");
+        setError(
+          e instanceof Error ? e.message : t("playground.error.imageRead"),
+        );
     } finally {
       if (mounted.current) setReadingImage(false);
     }
@@ -390,7 +404,7 @@ export function Playground({
       if (mounted.current) {
         setErrorState(
           c.signal.aborted
-            ? { message: "已停止生成；部分回覆保留於下方。" }
+            ? { message: t("playground.error.stopped") }
             : describeStreamError(e),
         );
         patch((m) => ({ ...m, incomplete: true, timing: { ...timing } }));
@@ -498,7 +512,11 @@ export function Playground({
   const modelOptions: ModelSelectOption[] = models.map((x) => {
     const developer = getModelDeveloperId(x.id),
       chat = supportsChat(x),
-      reason = !chat ? "非文字聊天模型" : !x.loaded ? "未載入" : undefined;
+      reason = !chat
+        ? t("playground.model.notChat")
+        : !x.loaded
+          ? t("playground.model.notLoaded")
+          : undefined;
     return {
       id: x.id,
       label: modelLabel(x.id),
@@ -509,7 +527,7 @@ export function Playground({
       badges: isVlm(x) ? (
         <CapabilityIcon capability="vision" size={13} />
       ) : undefined,
-      detail: reason ?? `${x.type} · 已載入`,
+      detail: reason ?? t("playground.model.loadedDetail", { type: x.type }),
       meta: <span className="tabular-nums">{number(x.size_gb, 1)} GB</span>,
       disabled: !!reason,
     };
@@ -520,10 +538,10 @@ export function Playground({
       node: (
         <span className="inline-flex items-center gap-1">
           <CapabilityIcon capability="vision" size={12} />
-          視覺
+          {t("playground.model.vision")}
         </span>
       ),
-      title: "可接受圖片輸入的模型",
+      title: t("playground.model.visionTitle"),
       match: (o: ModelSelectOption) => isVlm(models.find((m) => m.id === o.id)),
     },
   ];
@@ -543,7 +561,10 @@ export function Playground({
         value={value}
         onChange={onChange}
         filters={modelFilters}
-        labels={{ placeholder: "選擇模型", search: "搜尋模型" }}
+        labels={{
+          placeholder: t("playground.model.placeholder"),
+          search: t("playground.model.search"),
+        }}
       />
     </div>
   );
@@ -570,11 +591,15 @@ export function Playground({
   const empty = (
     <EmptyState
       icon={<Sparkles size={25} />}
-      title={compare ? "比較兩組設定" : "驗證模型回應"}
+      title={
+        compare
+          ? t("playground.empty.compareTitle")
+          : t("playground.empty.chatTitle")
+      }
       description={
         compare
-          ? "同一提示詞依序送往兩組設定（不會同時執行，以免干擾計時），並排比較輸出與速度。"
-          : "向已載入的模型傳送提示詞，查看真實串流輸出。"
+          ? t("playground.empty.compareBody")
+          : t("playground.empty.chatBody")
       }
     />
   );
@@ -584,13 +609,18 @@ export function Playground({
         className="flex-wrap gap-3 border-b border-border/60 p-4"
         left={
           <div className="flex flex-wrap items-center gap-2">
-            {modelSelect(model, setModel, "測試模型")}
-            {compare && modelSelect(modelB, setModelB, "比較模型")}
+            {modelSelect(model, setModel, t("playground.model.testModel"))}
+            {compare &&
+              modelSelect(
+                modelB,
+                setModelB,
+                t("playground.model.compareModel"),
+              )}
           </div>
         }
         status={
           <div className="flex flex-wrap items-center gap-2">
-            <div role="group" aria-label="API 格式">
+            <div role="group" aria-label={t("playground.header.apiFormat")}>
               <CustomSelect
                 className="w-44 [&_button]:h-8 [&_button]:text-xs"
                 value={dialect}
@@ -600,12 +630,12 @@ export function Playground({
               />
             </div>
             <SegmentedTray
-              aria-label="測試模式"
+              aria-label={t("playground.header.mode")}
               value={mode}
               onChange={(v) => !loading && setMode(v as Mode)}
               options={[
-                { value: "chat", label: "對話" },
-                { value: "compare", label: "比較" },
+                { value: "chat", label: t("playground.header.modeChat") },
+                { value: "compare", label: t("playground.header.modeCompare") },
               ]}
             />
           </div>
@@ -614,7 +644,7 @@ export function Playground({
           <>
             <Button size="sm" variant="ghost" onClick={() => setCodeOpen(true)}>
               <Code2 size={13} />
-              檢視程式碼
+              {t("playground.header.viewCode")}
             </Button>
             <Button
               size="sm"
@@ -622,11 +652,11 @@ export function Playground({
               disabled={loading}
               onClick={() => {
                 if (messages.length || pairPrompt)
-                  toast.info("已清除這段測試。", undefined, {
+                  toast.info(t("playground.header.cleared"), undefined, {
                     id: UNDO_TOAST_ID,
                     duration: UNDO_WINDOW_MS,
                     action: {
-                      label: "復原",
+                      label: t("playground.header.undo"),
                       onClick: () => {
                         setMessages(messages);
                         setPair(pair);
@@ -641,7 +671,7 @@ export function Playground({
               }}
             >
               <Plus size={13} />
-              新測試
+              {t("playground.header.newTest")}
             </Button>
           </>
         }
@@ -699,7 +729,9 @@ export function Playground({
                         </>
                       ) : (
                         <p className="text-xs text-muted-foreground">
-                          {loading ? "排隊中，等待 A 完成後執行。" : "未執行"}
+                          {loading
+                            ? t("playground.compare.queued")
+                            : t("playground.compare.notRun")}
                         </p>
                       )}
                     </Card>
@@ -712,7 +744,9 @@ export function Playground({
                 className="flex flex-wrap items-center gap-2 p-3 tabular-nums"
                 data-testid="compare-delta"
               >
-                <span className="text-xs text-muted-foreground">B 相對 A</span>
+                <span className="text-xs text-muted-foreground">
+                  {t("playground.compare.bVsA")}
+                </span>
                 {deltas?.tps !== undefined && (
                   <span className="text-xs text-muted-foreground">
                     Δ tok/s {signed(deltas.tps, 1)}
@@ -720,7 +754,9 @@ export function Playground({
                 )}
                 {deltas?.ttft !== undefined && (
                   <span className="text-xs text-muted-foreground">
-                    Δ 首 token 延遲 {signed(deltas.ttft, 0)} ms
+                    {t("playground.compare.deltaTtft", {
+                      value: signed(deltas.ttft, 0),
+                    })}
                   </span>
                 )}
                 {verdict?.kind === "identical" &&
@@ -729,11 +765,11 @@ export function Playground({
                       status="online"
                       className="gap-1.5 text-xs text-muted-foreground"
                     >
-                      輸出完全一致
+                      {t("playground.compare.identical")}
                     </StatusIndicator>
                   ) : (
                     <span className="text-xs text-muted-foreground">
-                      文字相同（取樣非貪婪，不代表確定性）
+                      {t("playground.compare.sameText")}
                     </span>
                   ))}
                 {verdict?.kind === "diverged" && (
@@ -741,7 +777,9 @@ export function Playground({
                     status="away"
                     className="gap-1.5 text-xs text-muted-foreground"
                   >
-                    首次分歧於字元偏移 {number(verdict.offset, 0)}（從 0 起算）
+                    {t("playground.compare.diverged", {
+                      offset: number(verdict.offset, 0),
+                    })}
                   </StatusIndicator>
                 )}
               </Card>
@@ -789,16 +827,22 @@ export function Playground({
         )}
         {!supportsImage && hasImage && (
           <p className="mb-3 text-xs text-warning">
-            此測試包含圖片，請選擇視覺模型，或建立新測試。
+            {t("playground.composer.needVision")}
           </p>
         )}
         {compare && (
           <div className="mb-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-muted-foreground">
             {([0, 1] as const).map((i) => (
               <div key={i} className="flex items-center gap-2">
-                <span>{i === 0 ? "A" : "B"} 取樣</span>
+                <span>
+                  {t("playground.compare.sampling", {
+                    side: i === 0 ? "A" : "B",
+                  })}
+                </span>
                 <SegmentedTray
-                  aria-label={`${i === 0 ? "A" : "B"} 取樣方式`}
+                  aria-label={t("playground.compare.samplingLabel", {
+                    side: i === 0 ? "A" : "B",
+                  })}
                   value={tempMode[i]}
                   onChange={(v) =>
                     !loading &&
@@ -807,9 +851,11 @@ export function Playground({
                   options={[
                     {
                       value: "shared",
-                      label: `沿用 T=${number(temperature, 1)}`,
+                      label: t("playground.compare.shared", {
+                        t: number(temperature, 1),
+                      }),
                     },
-                    { value: "greedy", label: "貪婪 T=0" },
+                    { value: "greedy", label: t("playground.compare.greedy") },
                   ]}
                 />
               </div>
@@ -819,10 +865,10 @@ export function Playground({
         {!canSend && (
           <p className="mb-3 text-xs text-muted-foreground">
             {engine.phase !== "online"
-              ? "連接引擎後即可開始測試。"
+              ? t("playground.composer.offline")
               : !supportsChat(chosen) || (compare && !supportsChat(chosenB))
-                ? "此模型不適用文字聊天測試，請使用 API 接入對應端點。"
-                : "請先在模型庫載入此模型。"}
+                ? t("playground.composer.notChat")
+                : t("playground.composer.notLoaded")}
           </p>
         )}
         <ChatComposer
@@ -839,26 +885,29 @@ export function Playground({
               <div className="flex items-center gap-2 text-xs">
                 <img
                   src={image.url}
-                  alt="待傳送圖片"
+                  alt={t("playground.composer.pendingImage")}
                   className="size-10 rounded object-cover"
                 />
                 <span className="min-w-0 truncate">{image.name}</span>
                 <IconButton
                   icon={<X size={13} />}
-                  label="移除圖片"
+                  label={t("playground.composer.removeImage")}
                   disabled={loading}
                   onClick={() => setImage(null)}
                 />
               </div>
             ) : undefined
           }
-          placeholder="輸入測試提示詞…"
-          labels={{ send: "傳送測試", stop: "停止生成" }}
+          placeholder={t("playground.composer.placeholder")}
+          labels={{
+            send: t("playground.composer.send"),
+            stop: t("playground.composer.stop"),
+          }}
           toolbar={
             <div className="flex items-center gap-1">
               <IconButton
                 icon={<ImagePlus size={15} />}
-                label="加入圖片"
+                label={t("playground.composer.addImage")}
                 disabled={loading || !supportsImage}
                 onClick={(e) => {
                   e.currentTarget.focus();
@@ -867,7 +916,7 @@ export function Playground({
               />
               <IconButton
                 icon={<SlidersHorizontal size={15} />}
-                label="生成參數"
+                label={t("playground.composer.params")}
                 disabled={loading}
                 onClick={(e) => {
                   e.currentTarget.focus();
@@ -878,49 +927,49 @@ export function Playground({
           }
         />
         <p className="mt-2 text-center text-xs text-muted-foreground">
-          內容只保留於此頁。離開測試頁會停止生成。
+          {t("playground.composer.note")}
         </p>
       </div>
       <Sheet
         open={settings}
         onClose={() => setSettings(false)}
-        title="生成參數"
-        closeLabel="關閉生成參數"
+        title={t("playground.composer.params")}
+        closeLabel={t("playground.params.close")}
       >
         <div className="space-y-6">
           <div>
-            <p className="mb-3 text-sm">思考模式</p>
+            <p className="mb-3 text-sm">{t("playground.params.thinking")}</p>
             <SegmentedTray
-              aria-label="思考模式"
+              aria-label={t("playground.params.thinking")}
               value={thinking}
               onChange={setThinking}
               options={[
-                { value: "auto", label: "模型預設" },
-                { value: "on", label: "開啟" },
-                { value: "off", label: "關閉" },
+                { value: "auto", label: t("playground.params.thinkAuto") },
+                { value: "on", label: t("playground.params.thinkOn") },
+                { value: "off", label: t("playground.params.thinkOff") },
               ]}
             />
           </div>
           <div>
-            <p className="mb-3 text-sm">輸出格式</p>
+            <p className="mb-3 text-sm">{t("playground.params.format")}</p>
             <SegmentedTray
-              aria-label="輸出格式"
+              aria-label={t("playground.params.format")}
               value={jsonMode}
               onChange={setJsonMode}
               options={[
-                { value: "text", label: "文字" },
+                { value: "text", label: t("playground.params.formatText") },
                 { value: "json", label: "JSON" },
               ]}
             />
             <p className="mt-2 text-xs text-muted-foreground">
               {dialect === "messages"
-                ? "Anthropic Messages 沒有 JSON 模式，此設定不會送出。"
-                : "JSON 模式會傳送 response_format，由引擎約束輸出格式。"}
+                ? t("playground.params.noJson")
+                : t("playground.params.jsonNote")}
             </p>
           </div>
           <div>
             <p className="mb-4 text-sm">
-              Temperature · {temperature.toFixed(1)}
+              Temperature · {fixed(temperature, 1)}
             </p>
             <Slider
               label="Temperature"
@@ -933,7 +982,7 @@ export function Playground({
           </div>
           <div>
             <label htmlFor="max-tokens" className="text-sm">
-              最大輸出 tokens
+              {t("playground.params.maxTokens")}
             </label>
             <Input
               id="max-tokens"
@@ -950,7 +999,7 @@ export function Playground({
           </div>
           <div>
             <label htmlFor="system" className="text-sm">
-              系統提示詞
+              {t("playground.params.system")}
             </label>
             <Textarea
               id="system"
@@ -962,12 +1011,15 @@ export function Playground({
         </div>
       </Sheet>
       <Dialog open={codeOpen} onOpenChange={setCodeOpen}>
-        <DialogContent closeLabel="關閉程式碼" className="max-w-3xl">
+        <DialogContent
+          closeLabel={t("playground.code.close")}
+          className="max-w-3xl"
+        >
           <DialogHeader>
-            <DialogTitle>檢視程式碼</DialogTitle>
+            <DialogTitle>{t("playground.code.title")}</DialogTitle>
             <DialogDescription>
-              {DIALECT_LABEL[dialect]} · 與目前設定送出的請求相同。
-              {compare && "比較模式顯示 A 組請求。"}
+              {t("playground.code.desc", { dialect: DIALECT_LABEL[dialect] })}
+              {compare && t("playground.code.compareNote")}
             </DialogDescription>
           </DialogHeader>
           {codeOpen &&
@@ -1003,11 +1055,11 @@ export function Playground({
                     </TabsContent>
                   ))}
                   <p className="mt-3 text-xs text-muted-foreground">
-                    以環境變數 YUNSHU_API_KEY 帶入權杖，不會寫入範例。
-                    {code.shortened && "圖片內容已縮短顯示，請換成實際檔案。"}
+                    {t("playground.code.keyNote")}
+                    {code.shortened && t("playground.code.shortened")}
                     {dialect === "messages" &&
                       jsonMode === "json" &&
-                      "Messages 沒有 JSON 模式，未送出。"}
+                      t("playground.code.noJson")}
                   </p>
                 </Tabs>
               );
@@ -1017,14 +1069,18 @@ export function Playground({
       <Sheet
         open={attachmentOpen}
         onClose={() => setAttachmentOpen(false)}
-        title="圖片輸入"
-        closeLabel="關閉圖片輸入"
+        title={t("playground.image.title")}
+        closeLabel={t("playground.image.close")}
       >
         <FileDropzone
           accept="image/png,image/jpeg,image/webp"
           disabled={readingImage}
-          label={readingImage ? "讀取中…" : "選擇或拖入圖片"}
-          hint="PNG、JPEG、WebP，最多 8 MB。圖片會隨提示詞傳給所選 VLM。"
+          label={
+            readingImage
+              ? t("playground.image.reading")
+              : t("playground.image.pick")
+          }
+          hint={t("playground.image.hint")}
           onFiles={(files) => void attach(files)}
         />
       </Sheet>

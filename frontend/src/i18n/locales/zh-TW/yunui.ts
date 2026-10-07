@@ -81,11 +81,13 @@ const yunui = {
   "components.confirmModal.cancel": "取消",
   "components.confirmModal.confirm": "確認",
   "components.confirmModal.delete": "刪除",
-  "components.confirmModal.deleteMessage": "確定要刪除 \"{item}\" 嗎？此操作無法撤銷。",
+  "components.confirmModal.deleteMessage":
+    '確定要刪除 "{item}" 嗎？此操作無法撤銷。',
   "components.confirmModal.deleteQuestion": "刪除？",
   "components.confirmModal.processing": "處理中...",
   "components.confirmModal.regenerate": "重新生成",
-  "components.confirmModal.regenerateMessage": "確定要重新生成 \"{item}\" 嗎？舊值將立即失效。",
+  "components.confirmModal.regenerateMessage":
+    '確定要重新生成 "{item}" 嗎？舊值將立即失效。',
   "components.confirmModal.regenerateQuestion": "重新生成？",
   "components.mediaPageHeader.error": "錯誤",
   "components.mediaPageHeader.loading": "載入中...",

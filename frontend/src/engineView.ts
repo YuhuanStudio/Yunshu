@@ -1,4 +1,6 @@
 import type { EngineStatus, RequestRow } from "./api";
+import { t } from "./i18n/index.ts";
+import { fixed, number } from "./i18n/format.ts";
 
 /**
  * What the engine is doing right now, and which speed figure means what.
@@ -10,18 +12,32 @@ import type { EngineStatus, RequestRow } from "./api";
  */
 export type ActivityPhase = "idle" | "queued" | "prefill" | "decode";
 
+// Getters, not strings: the table is read at render time, so a language switch shows at once.
 export const phaseLabels: Record<ActivityPhase, string> = {
-  idle: "閒置",
-  queued: "排隊",
-  prefill: "預填",
-  decode: "解碼",
+  get idle() {
+    return t("shell.engine.phase.idle");
+  },
+  get queued() {
+    return t("shell.engine.phase.queued");
+  },
+  get prefill() {
+    return t("shell.engine.phase.prefill");
+  },
+  get decode() {
+    return t("shell.engine.phase.decode");
+  },
 };
 
 export const speedTerms = {
-  live: "即時合計",
-  last: "最近一筆",
-  window: (windowS: number) => `近 ${Math.round(windowS)} 秒均值`,
-} as const;
+  get live() {
+    return t("shell.engine.speed.live");
+  },
+  get last() {
+    return t("shell.engine.speed.last");
+  },
+  window: (windowS: number) =>
+    t("shell.engine.speed.window", { seconds: Math.round(windowS) }),
+};
 
 const finite = (v: unknown): v is number =>
   typeof v === "number" && Number.isFinite(v);
@@ -33,7 +49,9 @@ export const windowSeconds = (status: EngineStatus | null | undefined) =>
 
 /** "近 60 秒", from the engine's own `throughput.window_s`; never a guess. */
 export const windowLabel = (status: EngineStatus | null | undefined) =>
-  `近 ${Math.round(windowSeconds(status))} 秒`;
+  t("shell.engine.window.label", {
+    seconds: Math.round(windowSeconds(status)),
+  });
 
 const isPrefillRow = (row: RequestRow) =>
   row.phase === "prefill" || row.phase === "starting";
@@ -143,16 +161,16 @@ export function decodeHeadline(status: EngineStatus): Headline {
       kind: "live",
       value: f.live,
       label: speedTerms.live,
-      note: `${a.counts.decode} 個請求解碼中`,
+      note: t("shell.engine.headline.decoding", { count: a.counts.decode }),
     };
   if (a.counts.active > 0) {
     // Busy but not decoding: say which phase, never "閒置".
     const why =
       a.phase === "queued"
-        ? "排隊中，尚無解碼速度"
+        ? t("shell.engine.headline.whyQueued")
         : a.preparing
-          ? "準備中，尚無解碼速度"
-          : "預填中，尚無解碼速度";
+          ? t("shell.engine.headline.whyStarting")
+          : t("shell.engine.headline.whyPrefill");
     return f.last != null
       ? {
           kind: "last",
@@ -163,12 +181,17 @@ export function decodeHeadline(status: EngineStatus): Headline {
       : { kind: "none", value: null, label: speedTerms.live, note: why };
   }
   return f.last != null
-    ? { kind: "last", value: f.last, label: speedTerms.last, note: "閒置" }
+    ? {
+        kind: "last",
+        value: f.last,
+        label: speedTerms.last,
+        note: t("shell.engine.headline.idle"),
+      }
     : {
         kind: "none",
         value: null,
         label: speedTerms.last,
-        note: "尚無完成請求",
+        note: t("shell.engine.headline.none"),
       };
 }
 
@@ -183,7 +206,7 @@ export function prefillHeadline(
       kind: "live",
       value: liveTps,
       label: speedTerms.live,
-      note: `${a.counts.prefill} 個請求預填中`,
+      note: t("shell.engine.headline.prefilling", { count: a.counts.prefill }),
     };
   const last = finite(status.last?.prefill_tps)
     ? status.last!.prefill_tps
@@ -193,20 +216,20 @@ export function prefillHeadline(
       kind: last != null ? "last" : "none",
       value: last,
       label: last != null ? speedTerms.last : speedTerms.live,
-      note: "預填中，尚未回報速度",
+      note: t("shell.engine.headline.prefillNoSpeed"),
     };
   return last != null
     ? {
         kind: "last",
         value: last,
         label: speedTerms.last,
-        note: a.counts.active > 0 ? "" : "閒置",
+        note: a.counts.active > 0 ? "" : t("shell.engine.headline.idle"),
       }
     : {
         kind: "none",
         value: null,
         label: speedTerms.last,
-        note: "尚無完成請求",
+        note: t("shell.engine.headline.none"),
       };
 }
 
@@ -218,13 +241,8 @@ export interface LivePill {
   tone: "online" | "away" | "offline" | "neutral";
 }
 
-const fix1 = (v: number) =>
-  v.toLocaleString("zh-TW", {
-    minimumFractionDigits: 1,
-    maximumFractionDigits: 1,
-  });
-const fix0 = (v: number) =>
-  v.toLocaleString("zh-TW", { maximumFractionDigits: 0 });
+const fix1 = (v: number) => fixed(v, 1);
+const fix0 = (v: number) => number(v, 0);
 
 /**
  * The always-visible live pill. Idle says 閒置 (the last request lives in the
@@ -236,27 +254,42 @@ export function livePill(
   status: EngineStatus | null,
 ): LivePill {
   if (connection === "offline")
-    return { phase: "離線", detail: "", tone: "offline" };
+    return {
+      phase: t("shell.engine.live.offline"),
+      detail: "",
+      tone: "offline",
+    };
   if (connection === "unauthorized")
-    return { phase: "未授權", detail: "", tone: "offline" };
-  if (!status) return { phase: "連線中", detail: "", tone: "away" };
+    return {
+      phase: t("shell.engine.live.unauthorized"),
+      detail: "",
+      tone: "offline",
+    };
+  if (!status)
+    return {
+      phase: t("shell.engine.live.connecting"),
+      detail: "",
+      tone: "away",
+    };
   const a = activity(status);
   if (a.phase === "idle")
     return { phase: phaseLabels.idle, detail: "", tone: "neutral" };
   if (a.phase === "queued")
     return {
       phase: phaseLabels.queued,
-      detail: `${a.counts.queued} 個`,
+      detail: t("shell.engine.live.queued", { count: a.counts.queued }),
       tone: "away",
     };
   if (a.phase === "prefill") {
     const pct = a.progress != null ? `${fix0(a.progress)}%` : "";
     const decode =
       a.counts.decode > 0 && a.decodeNow != null
-        ? `解碼 ${fix1(a.decodeNow)} tok/s`
+        ? t("shell.engine.live.decode", { tps: fix1(a.decodeNow) })
         : "";
     return {
-      phase: a.preparing ? "準備中" : phaseLabels.prefill,
+      phase: a.preparing
+        ? t("shell.engine.phase.starting")
+        : phaseLabels.prefill,
       detail: [pct, decode].filter(Boolean).join(" · "),
       tone: "away",
     };
@@ -273,11 +306,19 @@ export function tabTitle(status: EngineStatus | null, page: string): string {
   if (status) {
     const a = activity(status);
     if (a.phase === "decode" && a.decodeNow != null)
-      return `解碼 ${fix1(a.decodeNow)} tok/s · 雲樞`;
+      return t("shell.engine.tab.decode", {
+        tps: fix1(a.decodeNow),
+        brand: t("shell.brand.name"),
+      });
     if (a.phase === "prefill")
-      return `預填${a.progress != null ? ` ${fix0(a.progress)}%` : ""} · 雲樞`;
+      return a.progress != null
+        ? t("shell.engine.tab.prefillPct", {
+            pct: fix0(a.progress),
+            brand: t("shell.brand.name"),
+          })
+        : t("shell.engine.tab.prefill", { brand: t("shell.brand.name") });
   }
-  return `${page} · 雲樞 Yunshu`;
+  return t("shell.engine.tab.page", { page, brand: t("shell.brand.name") });
 }
 
 export interface Totals {

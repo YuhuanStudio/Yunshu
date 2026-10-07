@@ -17,7 +17,6 @@ import {
   Td,
   Th,
   Thead,
-  TimeSeriesChart,
   Tr,
 } from "@yuhuanowo/yunui";
 import {
@@ -52,10 +51,12 @@ import {
   ChartCard,
   LatencyPanel,
   PhasePanel,
+  SeriesChart,
 } from "./AnalyticsPanels";
+import { has, t, tr, useLocale } from "./i18n/index.ts";
 import { observationCsv } from "./analytics";
 import { chartRows, windowPoints } from "./series";
-import { decodeHeadline, totalsFrom, windowLabel } from "./engineView";
+import { totalsFrom } from "./engineView";
 import { SpeedPair, StateStrip, TotalsLine } from "./OverviewParts";
 import type { RequestRow } from "./api";
 import { buildIntegrations, serviceRoot } from "./integrations";
@@ -71,57 +72,56 @@ import {
   supportsChat,
   type Engine,
 } from "./ui";
-const chartLabels = {
-  emptyLabel: "等待第一筆採樣",
-  unavailableLabel: "目前沒有可用的數值",
-  missingValueLabel: "未回報",
-  hiddenLabel: "序列已隱藏，可點選圖例重新顯示",
-  legendLabel: "顯示或隱藏序列",
-  minSamples: 5,
-  collectingLabel: (have: number, need: number) =>
-    `收集採樣中 ${have} / ${need}`,
-  keyboardHint: "使用左右方向鍵、Home 或 End 查看採樣",
-};
-const memorySeries = [
-  { key: "active", label: "活躍配置", tone: "accent" as const },
+const memorySeries = () => [
+  {
+    key: "active",
+    label: t("overview.series.active"),
+    tone: "accent" as const,
+  },
   {
     key: "cache",
-    label: "記憶體保留池",
+    label: t("overview.series.pool"),
     tone: "neutral" as const,
     dashed: true,
   },
 ];
-const requestSeries = [
-  { key: "requests", label: "全部", tone: "accent" as const },
-  { key: "queued", label: "排隊", tone: "neutral" as const, dashed: true },
-  { key: "prefillRequests", label: "預填", tone: "neutral" as const },
+const requestSeries = () => [
+  { key: "requests", label: t("overview.series.all"), tone: "accent" as const },
+  {
+    key: "queued",
+    label: t("overview.series.queued"),
+    tone: "neutral" as const,
+    dashed: true,
+  },
+  {
+    key: "prefillRequests",
+    label: t("overview.series.prefill"),
+    tone: "neutral" as const,
+  },
   {
     key: "decodeRequests",
-    label: "解碼",
+    label: t("overview.series.decode"),
     tone: "accent" as const,
     dashed: true,
   },
 ];
-const rateSeries = {
-  decode: [{ key: "decode", label: "解碼 即時合計", tone: "accent" as const }],
-  prefill: [
-    { key: "prefill", label: "預填 即時合計", tone: "neutral" as const },
-  ],
-  both: [
-    { key: "decode", label: "解碼 即時合計", tone: "accent" as const },
-    { key: "prefill", label: "預填 即時合計", tone: "neutral" as const },
-  ],
+const rateSeries = () => {
+  const decode = {
+    key: "decode",
+    label: t("overview.series.decodeLive"),
+    tone: "accent" as const,
+  };
+  const prefill = {
+    key: "prefill",
+    label: t("overview.series.prefillLive"),
+    tone: "neutral" as const,
+  };
+  return { decode: [decode], prefill: [prefill], both: [decode, prefill] };
 };
 const formatNumber = (value: number) => number(value);
 const formatCount = (value: number) => number(value, 0);
-const phaseText: Record<string, string> = {
-  queued: "排隊",
-  starting: "準備中",
-  prefill: "預填",
-  decode: "解碼",
-  running: "執行",
-};
 function RequestLane({ row }: { row: RequestRow }) {
+  useLocale();
   const phase = String(row.phase);
   const prompt = row.prompt_tokens ?? 0,
     cached = row.cached_tokens ?? 0;
@@ -137,7 +137,10 @@ function RequestLane({ row }: { row: RequestRow }) {
       <div className="flex min-w-0 items-center gap-2.5">
         <StatusIndicator className="shrink-0" status={phaseDot(phase)} />
         <Slot ch={7} className="shrink-0 text-sm font-medium">
-          {phaseText[phase] ?? phase}
+          {/* i18n-keys: overview.phase. */}
+          {has(`overview.phase.${phase}`)
+            ? tr(`overview.phase.${phase}`)
+            : phase}
         </Slot>
         <span
           title={row.request_id}
@@ -176,11 +179,14 @@ function RequestLane({ row }: { row: RequestRow }) {
           <Progress
             className="h-1 w-full"
             value={Math.max(0, Math.min(100, progress))}
-            label={`預填 ${number(progress, 0)}%`}
+            label={t("overview.lane.prefill", { pct: number(progress, 0) })}
           />
         ) : phase !== "prefill" && cached > 0 && prompt > 0 ? (
           <p className="truncate text-xs text-muted-foreground">
-            前綴命中 {number(cached, 0)} / {number(prompt, 0)} tokens
+            {t("overview.lane.prefixHit", {
+              cached: number(cached, 0),
+              prompt: number(prompt, 0),
+            })}
           </p>
         ) : null}
       </div>
@@ -233,6 +239,7 @@ export function Dashboard({
   engine: Engine;
   navigate: (page: string) => void;
 }) {
+  useLocale();
   const [range, setRange] = useState("15m"),
     [metric, setMetric] = useState("decode"),
     [heroMetric, setHeroMetric] = useState("decode"),
@@ -254,7 +261,9 @@ export function Dashboard({
     () => windowPoints(engine.series, end - 300_000, end),
     [engine.series, end],
   );
-  const throughputSeries = rateSeries[metric as keyof typeof rateSeries];
+  const rates = rateSeries();
+  const throughputSeries = rates[metric as keyof typeof rates];
+  const busy = (engine.status?.requests.active ?? 0) > 0;
   useEffect(() => {
     if (activeX !== null && !points.some((point) => point.at === activeX))
       setActiveX(null);
@@ -329,49 +338,47 @@ export function Dashboard({
     return (
       <DashboardPage width="7xl" data-testid="overview">
         <PageHeader
-          title="引擎總覽"
-          description="模型、請求與效能，都從你的本機引擎開始。"
+          title={t("overview.page.title")}
+          description={t("overview.page.descConnect")}
         />
         <Card className="p-4">
           <EmptyState
             size="inline"
             icon={<Server size={22} strokeWidth={1.5} />}
-            title="連接本機推理引擎"
-            description="填入 Yunshu 服務位址與存取權杖，取得真實模型、資源和請求狀態。"
+            title={t("overview.connect.title")}
+            description={t("overview.connect.desc")}
             action={
               <Button onClick={() => navigate("settings")}>
-                開啟連線設定
+                {t("overview.connect.action")}
                 <ArrowRight size={14} />
               </Button>
             }
           />
           <ol className="mt-3 grid gap-4 border-t border-border/60 pt-4 sm:grid-cols-3">
-            {[
-              ["01", "連接服務", "使用現有的 Yunshu HTTP 服務"],
-              ["02", "載入模型", "管理權重與閒置保留時間"],
-              ["03", "觀察與驗證", "查看圖表、請求與推理結果"],
-            ].map(([step, title, description]) => (
-              <li key={step}>
+            {(["1", "2", "3"] as const).map((n) => (
+              <li key={n}>
                 <span className="text-xs tabular-nums text-muted-foreground">
-                  {step}
+                  {`0${n}`}
                 </span>
                 <h2 className="yunui-section-title mt-2 text-base font-semibold">
-                  {title}
+                  {tr(`overview.connect.step${n}.title`)}
                 </h2>
-                <p className="mt-1 text-caption">{description}</p>
+                <p className="mt-1 text-caption">
+                  {tr(`overview.connect.step${n}.desc`)}
+                </p>
               </li>
             ))}
           </ol>
         </Card>
-        <SectionRow title="連線後可直接呼叫" />
+        <SectionRow title={t("overview.connect.curl")} />
         <CodeBlock code={curl} language="bash" filename={baseUrl} />
       </DashboardPage>
     );
   return (
     <DashboardPage width="7xl" data-testid="overview">
       <PageHeader
-        title="引擎總覽"
-        description="觀察這台 Mac 如何處理每一次推理。"
+        title={t("overview.page.title")}
+        description={t("overview.page.desc")}
         actions={
           <div className="flex items-center gap-1.5">
             <Button
@@ -380,11 +387,13 @@ export function Dashboard({
               onClick={() => engine.setPolling(!engine.polling)}
             >
               {engine.polling ? <Pause size={13} /> : <Play size={13} />}
-              {engine.polling ? "暫停更新" : "恢復更新"}
+              {engine.polling
+                ? t("overview.actions.pause")
+                : t("overview.actions.resume")}
             </Button>
             <IconButton
               icon={<RefreshCw size={14} />}
-              label="更新"
+              label={t("overview.actions.refresh")}
               onClick={() => void engine.refresh()}
             />
             <Button
@@ -398,7 +407,7 @@ export function Dashboard({
               onClick={() => navigate("playground")}
             >
               <Play size={13} />
-              開始測試
+              {t("overview.actions.test")}
             </Button>
           </div>
         }
@@ -408,20 +417,21 @@ export function Dashboard({
           <span className="text-foreground">
             {online
               ? status?.state === "running"
-                ? "運行中"
-                : (status?.state ?? "已連線")
-              : "未連線"}
+                ? t("overview.status.running")
+                : (status?.state ?? t("overview.status.connected"))
+              : t("overview.status.offline")}
           </span>
         </StatusIndicator>
         <span>Yunshu {status?.version ?? "—"}</span>
-        <Slot ch={13}>· 運行 {elapsed(status?.uptime_s)}</Slot>
-        <Slot ch={16}>
-          ·{" "}
-          {engine.updatedAt
-            ? `更新於 ${clock(engine.updatedAt)}`
-            : "等待服務回應"}
+        <Slot ch={13}>
+          {t("overview.status.uptime", { t: elapsed(status?.uptime_s) })}
         </Slot>
-        <Slot ch={6}>{!engine.polling ? "（已暫停）" : ""}</Slot>
+        <Slot ch={16}>
+          {engine.updatedAt
+            ? t("overview.status.updated", { t: clock(engine.updatedAt) })
+            : t("overview.status.waiting")}
+        </Slot>
+        <Slot ch={6}>{!engine.polling ? t("overview.status.paused") : ""}</Slot>
         {status?.load_error && (
           <span className="text-error">{status.load_error}</span>
         )}
@@ -445,33 +455,45 @@ export function Dashboard({
             compact
             valueFirst
             icon={Timer}
-            label="首 token 延遲 (TTFT)"
+            label={t("overview.stats.ttft")}
             value={
               last?.ttft_ms == null ? "—" : `${number(last.ttft_ms, 0)} ms`
             }
             subtext={
-              last ? `最近一筆 · ${clock(last.t * 1000)}` : "尚無完成請求"
+              last
+                ? t("overview.stats.latestAt", { t: clock(last.t * 1000) })
+                : t("overview.stats.noFinished")
             }
           />
           <StatCard
             compact
             valueFirst
             icon={Gauge}
-            label="前綴命中率"
+            label={t("overview.stats.prefixRate")}
             value={cache == null ? "—" : `${number(cache, 0)}%`}
             subtext={
               cache == null
-                ? "尚無完成請求"
-                : `本頁觀測 ${number(observed.length, 0)} 筆加權${lastHit == null ? "" : ` · 最近一筆 ${number(lastHit, 0)}%`}`
+                ? t("overview.stats.noFinished")
+                : lastHit == null
+                  ? t("overview.stats.observed", {
+                      n: number(observed.length, 0),
+                    })
+                  : t("overview.stats.observedLast", {
+                      n: number(observed.length, 0),
+                      pct: number(lastHit, 0),
+                    })
             }
           />
           <StatCard
             compact
             valueFirst
             icon={HardDrive}
-            label="Metal 記憶體"
+            label={t("overview.stats.metal")}
             value={`${number(memory?.active_gb)} GB`}
-            subtext={`實體 ${number(memory?.total_gb)} GB · 峰值 ${number(memory?.peak_gb)} GB`}
+            subtext={t("overview.stats.metalSub", {
+              total: number(memory?.total_gb),
+              peak: number(memory?.peak_gb),
+            })}
           />
         </div>
       )}
@@ -485,26 +507,31 @@ export function Dashboard({
           <div className="min-w-0">
             <div className="flex items-center justify-between gap-3">
               <p className="text-xs text-muted-foreground">
-                {heroMetric === "decode" ? "解碼" : "預填"}即時合計速度 · 近 5
-                分鐘走勢 · tok/s
+                {heroMetric === "decode"
+                  ? t("overview.hero.decode")
+                  : t("overview.hero.prefill")}
               </p>
               <SegmentedSelect
-                aria-label="走勢指標"
+                aria-label={t("overview.hero.metric")}
                 value={heroMetric}
                 onChange={setHeroMetric}
                 options={[
-                  { value: "decode", label: "解碼" },
-                  { value: "prefill", label: "預填" },
+                  { value: "decode", label: t("overview.series.decode") },
+                  { value: "prefill", label: t("overview.series.prefill") },
                 ]}
               />
             </div>
-            <TimeSeriesChart
-              {...chartLabels}
+            <SeriesChart
+              busy={busy}
               className="mt-3"
               data={heroData}
-              series={rateSeries[heroMetric as "decode" | "prefill"]}
+              series={rates[heroMetric as "decode" | "prefill"]}
               height={150}
-              ariaLabel={`近 5 分鐘${heroMetric === "decode" ? "解碼" : "預填"}的即時合計速度，單位 tok/s`}
+              ariaLabel={
+                heroMetric === "decode"
+                  ? t("overview.hero.ariaDecode")
+                  : t("overview.hero.ariaPrefill")
+              }
               formatX={clock}
               formatY={formatNumber}
               maxGap={12000}
@@ -514,22 +541,24 @@ export function Dashboard({
         <div className="flex min-w-0 flex-col p-5 sm:p-6">
           <div className="flex items-center justify-between gap-3">
             <h2 className="yunui-section-title text-base font-semibold">
-              進行中請求
+              {t("overview.active.title")}
               <span className="ml-2 text-muted-foreground tabular-nums">
                 {number(status?.requests.active, 0)}
               </span>
             </h2>
             <div className="flex items-center gap-3 text-xs text-muted-foreground">
               <Slot ch={14} align="right">
-                近 {number(status?.throughput.window_s ?? 60, 0)} 秒結束{" "}
-                {number(status?.throughput.requests, 0)} 筆
+                {t("overview.active.window", {
+                  s: number(status?.throughput.window_s ?? 60, 0),
+                  n: number(status?.throughput.requests, 0),
+                })}
               </Slot>
               <Button
                 size="sm"
                 variant="ghost"
                 onClick={() => navigate("requests")}
               >
-                全部
+                {t("overview.active.all")}
                 <ArrowRight size={13} />
               </Button>
             </div>
@@ -546,12 +575,14 @@ export function Dashboard({
               <EmptyState
                 size="inline"
                 className="flex-1"
-                title="目前閒置"
-                description={`沒有正在處理的請求。${
+                title={t("overview.active.idle")}
+                description={
                   memory?.cache_gb
-                    ? ` 記憶體保留池 ${number(memory.cache_gb)} GB 會在閒置後歸還系統。`
-                    : ""
-                }`}
+                    ? t("overview.active.idleDescPool", {
+                        gb: number(memory.cache_gb),
+                      })
+                    : t("overview.active.idleDesc")
+                }
               />
             )}
           </div>
@@ -559,18 +590,18 @@ export function Dashboard({
         </div>
       </Card>
 
-      <SectionRow title="快速開始" />
+      <SectionRow title={t("overview.quick.title")} />
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <QuickAction
           icon={<Play size={18} strokeWidth={1.5} />}
-          title="測試一段提示"
-          caption="在推理測試送出請求"
+          title={t("overview.quick.prompt.title")}
+          caption={t("overview.quick.prompt.caption")}
           onClick={() => navigate("playground")}
         />
         <QuickAction
           icon={<HardDrive size={18} strokeWidth={1.5} />}
-          title="載入模型"
-          caption="管理權重與保留時間"
+          title={t("overview.quick.load.title")}
+          caption={t("overview.quick.load.caption")}
           onClick={() => navigate("models")}
         />
         <QuickAction
@@ -581,31 +612,35 @@ export function Dashboard({
               <Link2 size={18} strokeWidth={1.5} />
             )
           }
-          title={copied === "url" ? "已複製" : "複製 API 網址"}
+          title={
+            copied === "url"
+              ? t("overview.quick.url.copied")
+              : t("overview.quick.url.title")
+          }
           caption={`${baseUrl}/v1`}
           onClick={() => copy("url", `${baseUrl}/v1`)}
         />
         <QuickAction
           icon={<Stethoscope size={18} strokeWidth={1.5} />}
-          title="開啟診斷"
-          caption="檢查服務與環境"
+          title={t("overview.quick.diag.title")}
+          caption={t("overview.quick.diag.caption")}
           onClick={() => navigate("diagnostics")}
         />
       </div>
       <CodeBlock code={curl} language="bash" filename="curl" />
 
       <SectionRow
-        title="效能觀測"
+        title={t("overview.perf.title")}
         action={
           <div className="flex flex-wrap items-center gap-2">
             <SegmentedSelect
-              aria-label="觀測時間範圍"
+              aria-label={t("overview.perf.range")}
               value={range}
               onChange={chooseRange}
               options={[
-                { value: "5m", label: "5 分鐘" },
-                { value: "15m", label: "15 分鐘" },
-                { value: "1h", label: "1 小時" },
+                { value: "5m", label: t("overview.perf.range5m") },
+                { value: "15m", label: t("overview.perf.range15m") },
+                { value: "1h", label: t("overview.perf.range1h") },
               ]}
             />
             <Button
@@ -615,41 +650,43 @@ export function Dashboard({
               onClick={exportData}
             >
               <Download size={13} />
-              匯出觀測
+              {t("overview.perf.export")}
             </Button>
           </div>
         }
       />
       <p className="-mt-3 text-xs text-muted-foreground">
         {engine.historyFrom != null
-          ? `含引擎端歷史（自 ${clock(engine.historyFrom)}）`
-          : "本頁開啟後採樣（此引擎沒有提供歷史）"}{" "}
-        · {points.length} 筆 · 中斷期間不補資料
+          ? t("overview.perf.noteEngine", {
+              t: clock(engine.historyFrom),
+              n: points.length,
+            })
+          : t("overview.perf.noteLocal", { n: points.length })}
       </p>
       <div className="grid gap-5 xl:grid-cols-[minmax(0,7fr)_minmax(0,5fr)]">
         <ChartCard
           data-testid="throughput-panel"
-          title="吞吐觀測"
-          description="解碼與預填的即時合計速度 · 沒有請求時留白 · tok/s"
+          title={t("overview.throughput.title")}
+          description={t("overview.throughput.desc")}
           action={
             <SegmentedSelect
-              aria-label="吞吐指標"
+              aria-label={t("overview.throughput.metric")}
               value={metric}
               onChange={setMetric}
               options={[
-                { value: "decode", label: "解碼" },
-                { value: "prefill", label: "預填" },
-                { value: "both", label: "比較" },
+                { value: "decode", label: t("overview.series.decode") },
+                { value: "prefill", label: t("overview.series.prefill") },
+                { value: "both", label: t("overview.throughput.compare") },
               ]}
             />
           }
         >
-          <TimeSeriesChart
-            {...chartLabels}
+          <SeriesChart
+            busy={busy}
             data={data}
             series={throughputSeries}
             height={220}
-            ariaLabel="吞吐速度時序圖，單位 tok/s"
+            ariaLabel={t("overview.throughput.aria")}
             formatX={clock}
             formatY={formatNumber}
             maxGap={12000}
@@ -663,16 +700,18 @@ export function Dashboard({
             aria-expanded={table}
             onClick={() => setTable(!table)}
           >
-            {table ? "收合數值" : "檢視採樣數值"}
+            {table
+              ? t("overview.throughput.hideTable")
+              : t("overview.throughput.showTable")}
           </Button>
           {table && (
             <ScrollFade className="mt-3 max-h-60 overflow-auto">
-              <Table scrollLabel="吞吐採樣資料">
+              <Table scrollLabel={t("overview.throughput.tableLabel")}>
                 <Thead>
                   <Tr>
-                    <Th>時間</Th>
-                    <Th>解碼</Th>
-                    <Th>預填</Th>
+                    <Th>{t("overview.throughput.colTime")}</Th>
+                    <Th>{t("overview.series.decode")}</Th>
+                    <Th>{t("overview.series.prefill")}</Th>
                     <Th>Metal GB</Th>
                   </Tr>
                 </Thead>
@@ -692,39 +731,47 @@ export function Dashboard({
         </ChartCard>
         <ChartCard
           data-testid="memory-panel"
-          title="Metal 記憶體"
+          title={t("overview.stats.metal")}
           action={
             <span className="text-xs tabular-nums text-muted-foreground">
-              實體 {number(memory?.total_gb)} GB
+              {t("overview.memory.physical", { gb: number(memory?.total_gb) })}
             </span>
           }
         >
           <p className="text-2xl font-semibold tabular-nums">
             <Slot ch={5}>{fixed(memory?.active_gb)}</Slot>
             <span className="ml-1.5 text-sm font-normal text-muted-foreground">
-              / {fixed(memory?.total_gb)} GB 活躍配置
+              {t("overview.memory.activeOf", { gb: fixed(memory?.total_gb) })}
             </span>
           </p>
           <SegmentedBar
             className="mt-4"
             height={10}
             total={memory?.total_gb ?? undefined}
-            label={`Metal 記憶體：活躍 ${number(memory?.active_gb)} GB，快取 ${number(memory?.cache_gb)} GB`}
+            label={t("overview.memory.barLabel", {
+              active: number(memory?.active_gb),
+              pool: number(memory?.cache_gb),
+            })}
             segments={[
               {
                 value: memory?.active_gb ?? 0,
                 tone: "accent",
-                label: "活躍配置",
+                label: t("overview.series.active"),
               },
               {
                 value: memory?.cache_gb ?? 0,
                 tone: "neutral",
-                label: "記憶體保留池",
+                label: t("overview.series.pool"),
               },
             ]}
             marks={
               memory?.peak_gb
-                ? [{ value: memory.peak_gb, label: "本次峰值" }]
+                ? [
+                    {
+                      value: memory.peak_gb,
+                      label: t("overview.memory.peakMark"),
+                    },
+                  ]
                 : undefined
             }
             legend
@@ -732,11 +779,11 @@ export function Dashboard({
           />
           <DetailList className="mt-4 border-t border-border/60 pt-4">
             <DetailRow
-              label="本次峰值"
+              label={t("overview.memory.peak")}
               value={`${number(memory?.peak_gb)} GB`}
             />
             <DetailRow
-              label="已載入權重"
+              label={t("overview.memory.weights")}
               value={
                 loaded.length
                   ? [
@@ -745,7 +792,7 @@ export function Dashboard({
                             loaded.reduce((s, m) => s + (m.size_gb ?? 0), 0),
                           )
                         : null,
-                      `${loaded.length} 個`,
+                      t("overview.memory.weightsCount", { n: loaded.length }),
                     ]
                       .filter(Boolean)
                       .join(" · ")
@@ -753,13 +800,13 @@ export function Dashboard({
               }
             />
           </DetailList>
-          <TimeSeriesChart
-            {...chartLabels}
+          <SeriesChart
+            busy={busy}
             className="mt-4"
             data={data}
-            series={memorySeries}
+            series={memorySeries()}
             height={120}
-            ariaLabel="Metal 記憶體時序圖，單位 GB"
+            ariaLabel={t("overview.memory.aria")}
             formatX={clock}
             formatY={formatNumber}
             maxGap={12000}
@@ -775,11 +822,14 @@ export function Dashboard({
           role="status"
         >
           <span>
-            選取 {clock(activePoint.at)} · {number(activePoint.active, 0)}{" "}
-            個活動請求 · {number(activePoint.memActive)} GB
+            {t("overview.selection.summary", {
+              t: clock(activePoint.at),
+              n: number(activePoint.active, 0),
+              gb: number(activePoint.memActive),
+            })}
           </span>
           <Button size="sm" variant="ghost" onClick={() => setActiveX(null)}>
-            清除選取
+            {t("overview.selection.clear")}
           </Button>
         </div>
       )}
@@ -794,15 +844,15 @@ export function Dashboard({
         onSelectTime={setActiveX}
       />
       <ChartCard
-        title="請求並行趨勢"
-        description="不同處理階段，共用請求數刻度"
+        title={t("overview.concurrency.title")}
+        description={t("overview.concurrency.desc")}
       >
-        <TimeSeriesChart
-          {...chartLabels}
+        <SeriesChart
+          busy={busy}
           data={data}
-          series={requestSeries}
+          series={requestSeries()}
           height={180}
-          ariaLabel="請求階段並行數時序圖"
+          ariaLabel={t("overview.concurrency.aria")}
           formatX={clock}
           formatY={formatCount}
           maxGap={12000}
@@ -811,10 +861,10 @@ export function Dashboard({
         />
       </ChartCard>
       <SectionRow
-        title="模型"
+        title={t("overview.models.title")}
         action={
           <Button size="sm" variant="ghost" onClick={() => navigate("models")}>
-            模型庫
+            {t("overview.models.library")}
             <ArrowRight size={13} />
           </Button>
         }
@@ -825,7 +875,9 @@ export function Dashboard({
             <li key={model.id} className="px-3 py-0.5 sm:px-4">
               <HoverRow
                 onClick={() => navigate("models")}
-                aria-label={`${modelLabel(model.id)}，開啟模型庫`}
+                aria-label={t("overview.models.open", {
+                  name: modelLabel(model.id),
+                })}
                 className="flex items-center gap-3 px-2 py-2.5"
               >
                 <StatusIndicator
@@ -844,21 +896,25 @@ export function Dashboard({
                 </span>
                 <span className="w-24 text-right text-xs text-muted-foreground">
                   {model.loading
-                    ? "載入中"
+                    ? t("overview.models.loading")
                     : model.loaded
                       ? model.expires_in_s != null
-                        ? `${elapsed(model.expires_in_s)} 後卸載`
+                        ? t("overview.models.unloadIn", {
+                            t: elapsed(model.expires_in_s),
+                          })
                         : model.pinned
-                          ? "固定保留"
-                          : "已載入"
-                      : "未載入"}
+                          ? t("overview.models.pinned")
+                          : t("overview.models.loaded")
+                      : t("overview.models.notLoaded")}
                 </span>
               </HoverRow>
             </li>
           ))}
           {!status?.models.length && (
             <li className="px-5 py-5 text-sm text-muted-foreground sm:px-6">
-              {status ? "服務尚未註冊模型" : "連線後顯示可用模型"}
+              {status
+                ? t("overview.models.none")
+                : t("overview.models.connectFirst")}
             </li>
           )}
         </ul>

@@ -1,3 +1,4 @@
+import { t } from "./i18n/index.ts";
 import { useEffect, useState } from "react";
 import {
   Button,
@@ -35,20 +36,20 @@ export function ModelLeaseSettings({
   return (
     <SectionCard
       icon={MemoryStick}
-      title="模型保留時間"
-      description="控制閒置模型多久後釋放統一記憶體。"
+      title={t("models.lease.title")}
+      description={t("models.lease.description")}
       bodyClassName="px-5 pb-5"
     >
       <SettingRow
-        title="模型"
-        description="固定保留的單模型不適用。"
+        title={t("models.lease.model")}
+        description={t("models.lease.modelHint")}
         control={
           <Select value={model || undefined} onValueChange={setModel}>
             <SelectTrigger
-              aria-label="保留時間的模型"
+              aria-label={t("models.lease.modelAria")}
               className="w-full sm:w-64"
             >
-              <SelectValue placeholder="選擇非固定模型" />
+              <SelectValue placeholder={t("models.lease.modelPlaceholder")} />
             </SelectTrigger>
             <SelectContent>
               {eligible.map((item) => (
@@ -61,19 +62,19 @@ export function ModelLeaseSettings({
         }
       />
       <SettingRow
-        title="閒置保留時間"
-        description="透過模型預熱介面更新保留時間，並執行一次短預熱。"
+        title={t("models.lease.idle")}
+        description={t("models.lease.idleHint")}
         control={
           <Select value={keepAlive} onValueChange={setKeepAlive}>
-            <SelectTrigger aria-label="閒置保留時間" className="w-40">
+            <SelectTrigger aria-label={t("models.lease.idle")} className="w-40">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
               {[
-                ["5m", "5 分鐘"],
-                ["15m", "15 分鐘"],
-                ["1h", "1 小時"],
-                ["-1", "持續保留"],
+                ["5m", t("models.lease.5m")],
+                ["15m", t("models.lease.15m")],
+                ["1h", t("models.lease.1h")],
+                ["-1", t("models.lease.forever")],
               ].map(([value, label]) => (
                 <SelectItem key={value} value={value}>
                   {label}
@@ -96,12 +97,12 @@ export function ModelLeaseSettings({
             )
           }
         >
-          套用並預熱
+          {t("models.lease.apply")}
         </Button>
       </div>
       {!eligible.length && (
         <p className="text-xs text-muted-foreground">
-          目前沒有可調整的模型。需由多模型服務註冊非固定模型。
+          {t("models.lease.none")}
         </p>
       )}
     </SectionCard>

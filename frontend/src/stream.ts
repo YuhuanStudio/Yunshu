@@ -1,4 +1,5 @@
 import { failureMessage, statusMessage } from "./errors.ts";
+import { t } from "./i18n/index.ts";
 
 export interface StreamConnection {
   baseUrl: string;
@@ -357,7 +358,7 @@ function throwIfAborted(signal: AbortSignal): void {
   if (signal.aborted) throw abortReason(signal);
 }
 
-/** HTTP failure with zh-TW `message`; the backend's own text stays in `detail`. */
+/** HTTP failure with a localised `message`; the backend's own text stays in `detail`. */
 export class StreamHttpError extends Error {
   readonly status: number;
   readonly detail: string;
@@ -374,7 +375,7 @@ export class StreamHttpError extends Error {
   }
 }
 
-/** Short zh-TW text plus optional raw 詳細資訊 for any failure of a stream. */
+/** Short localised text plus optional raw details for any failure of a stream. */
 export function describeStreamError(error: unknown): {
   message: string;
   detail?: string;
@@ -386,8 +387,8 @@ export function describeStreamError(error: unknown): {
   if (error instanceof DOMException && error.name === "TimeoutError")
     return { message: failureMessage("timeout"), detail: error.message };
   if (error instanceof Error)
-    return { message: "生成中斷，引擎回報了錯誤。", detail: error.message };
-  return { message: "生成失敗" };
+    return { message: t("errors.stream.interrupted"), detail: error.message };
+  return { message: t("errors.stream.failed") };
 }
 
 async function httpError(response: Response): Promise<Error> {

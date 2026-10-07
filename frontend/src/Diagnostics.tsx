@@ -41,30 +41,32 @@ import { ApiError, type Connection, type EngineStatus } from "./api";
 import { requestServerJson } from "./management-api";
 import { detailText } from "./errors.ts";
 import { ErrorNote } from "./error-note";
+import { has, t, tr } from "./i18n/index.ts";
+import { list } from "./i18n/format.ts";
 import { SectionCard, clock, elapsed, number, type Engine } from "./ui";
 const groups = {
   system: [
-    { key: "system", title: "主機資源", path: "/debug/system" },
-    { key: "engine", title: "引擎計數", path: "/debug/engine" },
+    { key: "system", path: "/debug/system" },
+    { key: "engine", path: "/debug/engine" },
   ],
-  requests: [{ key: "requests", title: "請求與延遲", path: "/debug/requests" }],
+  requests: [{ key: "requests", path: "/debug/requests" }],
   cache: [
-    { key: "kv", title: "KV 前綴快取", path: "/debug/kv-cache" },
-    { key: "ssd", title: "SSD 快取", path: "/debug/ssd-cache" },
+    { key: "kv", path: "/debug/kv-cache" },
+    { key: "ssd", path: "/debug/ssd-cache" },
   ],
   decode: [
-    { key: "spec", title: "推測解碼", path: "/debug/spec-decode" },
-    { key: "perModel", title: "逐模型運行情況", path: "/debug/per-model" },
+    { key: "spec", path: "/debug/spec-decode" },
+    { key: "perModel", path: "/debug/per-model" },
   ],
   memory: [
-    { key: "guard", title: "記憶體保護", path: "/debug/memory-guard" },
-    { key: "census", title: "配置明細", path: "/debug/memory-census" },
+    { key: "guard", path: "/debug/memory-guard" },
+    { key: "census", path: "/debug/memory-census" },
   ],
 } as const;
 type Group = keyof typeof groups;
+const groupTitle = (key: string) => tr(`diagnostics.group.${key}`);
 type Result = {
   key: string;
-  title: string;
   path: string;
   data?: unknown;
   error?: string;
@@ -99,13 +101,8 @@ type Health = {
     tone: "accent" | "warning";
   };
 };
-const STATE_LABEL: Record<string, string> = {
-  running: "運作中",
-  ready: "就緒",
-  starting: "準備中",
-  loading: "載入中",
-  error: "錯誤",
-};
+const stateLabel = (state: string) =>
+  has(`diagnostics.state.${state}`) ? tr(`diagnostics.state.${state}`) : state;
 const groupIcon: Record<Group, LucideIcon> = {
   system: Server,
   requests: Timer,
@@ -123,39 +120,42 @@ export function healthChecks(
   if (!status) {
     rows.push({
       key: "engine",
-      name: "引擎狀態",
+      name: t("diagnostics.health.engine.name"),
       status: "offline",
-      value: "無法讀取",
-      hint: "/v1/yunshu/status 沒有回應，請確認引擎位址與存取權杖。",
+      value: t("diagnostics.health.engine.unreadable"),
+      hint: t("diagnostics.health.engine.unreachableHint"),
     });
   } else {
     const running = ["running", "ready"].includes(status.state);
     rows.push({
       key: "engine",
-      name: "引擎狀態",
+      name: t("diagnostics.health.engine.name"),
       status: status.load_error ? "offline" : running ? "online" : "away",
-      value: STATE_LABEL[status.state] ?? status.state,
+      value: stateLabel(status.state),
       hint:
         status.load_error ??
-        `版本 ${status.version}，已運行 ${elapsed(status.uptime_s)}`,
+        t("diagnostics.health.engine.versionHint", {
+          version: status.version,
+          uptime: elapsed(status.uptime_s),
+        }),
     });
     const loaded = status.models.filter((m) => m.loaded).length;
     rows.push({
       key: "models",
-      name: "模型載入",
+      name: t("diagnostics.health.models.name"),
       status: loaded > 0 ? "online" : "neutral",
       value: `${loaded} / ${status.models.length}`,
       hint:
         loaded > 0
-          ? "已載入的模型可直接推論。"
-          : "目前沒有已載入的模型，首個請求會觸發載入。",
+          ? t("diagnostics.health.models.hintLoaded")
+          : t("diagnostics.health.models.hintNone"),
     });
     const active = status.memory.active_gb,
       total = status.memory.total_gb;
     const ratio = active != null && total ? active / total : undefined;
     rows.push({
       key: "memory",
-      name: "Metal 記憶體",
+      name: t("diagnostics.health.memory.name"),
       status: ratio == null ? "neutral" : ratio > 0.9 ? "away" : "online",
       bar:
         ratio == null || !total
@@ -171,32 +171,38 @@ export function healthChecks(
           : "—",
       hint:
         ratio != null && ratio > 0.9
-          ? "Metal 活躍記憶體超過總量的 90%，可能觸發記憶體保護。"
-          : "Metal 活躍記憶體佔總量的比例正常。",
+          ? t("diagnostics.health.memory.hintHigh")
+          : t("diagnostics.health.memory.hintOk"),
     });
     rows.push({
       key: "queue",
-      name: "請求排隊",
+      name: t("diagnostics.health.queue.name"),
       status: status.requests.queued > 0 ? "away" : "online",
-      value: `${number(status.requests.active, 0)} 進行 · ${number(status.requests.queued, 0)} 排隊`,
+      value: t("diagnostics.health.queue.value", {
+        active: number(status.requests.active, 0),
+        queued: number(status.requests.queued, 0),
+      }),
       hint:
         status.requests.queued > 0
-          ? "有請求在排隊等待前一個請求完成。"
-          : "沒有排隊中的請求。",
+          ? t("diagnostics.health.queue.hintQueued")
+          : t("diagnostics.health.queue.hintNone"),
     });
     const tps =
       status.throughput.live_decode_tps ?? status.throughput.mean_decode_tps;
     rows.push({
       key: "throughput",
-      name: "解碼速度",
+      name: t("diagnostics.health.throughput.name"),
       status: tps == null ? "neutral" : "online",
       value: tps == null ? "—" : `${number(tps)} tok/s`,
-      hint: `近 ${number(status.throughput.window_s, 0)} 秒內 ${number(status.throughput.requests, 0)} 個請求。`,
+      hint: t("diagnostics.health.throughput.hint", {
+        window: number(status.throughput.window_s, 0),
+        count: status.throughput.requests,
+      }),
     });
   }
   rows.push({
     key: "debug",
-    name: "診斷介面",
+    name: t("diagnostics.health.debug.name"),
     status:
       systemState === "ok"
         ? "online"
@@ -205,28 +211,30 @@ export function healthChecks(
           : "offline",
     value:
       systemState === "ok"
-        ? "可用"
+        ? t("diagnostics.health.debug.ok")
         : systemState === "pending"
-          ? "讀取中"
+          ? t("diagnostics.health.debug.pending")
           : systemState === "disabled"
-            ? "未啟用"
-            : "讀取失敗",
+            ? t("diagnostics.health.debug.disabled")
+            : t("diagnostics.health.debug.failed"),
     hint:
       systemState === "disabled"
-        ? "引擎需設定 YUNSHU_DEBUG_ROUTES=1 並重新啟動，才會提供 /debug。"
+        ? t("diagnostics.health.debug.hintDisabled")
         : systemState === "error"
-          ? "/debug/system 回應錯誤，可能需要有效的存取權杖。"
-          : "/debug/system 可讀取。",
+          ? t("diagnostics.health.debug.hintError")
+          : t("diagnostics.health.debug.hintOk"),
   });
   const cpu = metric(at(system, "cpu", "percent"));
   if (cpu != null)
     rows.push({
       key: "cpu",
-      name: "主機 CPU",
+      name: t("diagnostics.health.cpu.name"),
       status: cpu > 90 ? "away" : "online",
       value: `${number(cpu)}%`,
       bar: { value: cpu, total: 100, tone: cpu > 90 ? "warning" : "accent" },
-      hint: `${number(metric(at(system, "cpu", "logical_cores")), 0)} 個邏輯核心。`,
+      hint: t("diagnostics.health.cpu.hint", {
+        n: metric(at(system, "cpu", "logical_cores")) ?? 0,
+      }),
     });
   return rows;
 }
@@ -298,7 +306,8 @@ export function Diagnostics({
         } catch (e) {
           return {
             ...endpoint,
-            error: e instanceof Error ? e.message : "無法取得資料",
+            error:
+              e instanceof Error ? e.message : t("diagnostics.row.fetchFailed"),
             detail: detailText(e),
             status: e instanceof ApiError ? e.status : undefined,
           } as Result;
@@ -349,8 +358,8 @@ export function Diagnostics({
   return (
     <DashboardPage data-testid="diagnostics">
       <PageHeader
-        title="引擎診斷"
-        description="直接讀取服務的資源、請求、快取與解碼狀態。"
+        title={t("diagnostics.page.title")}
+        description={t("diagnostics.page.description")}
         actions={
           <div className="flex gap-2">
             <Button
@@ -361,10 +370,10 @@ export function Diagnostics({
             >
               {copied === "done" ? <Check size={13} /> : <Copy size={13} />}
               {copied === "done"
-                ? "已複製"
+                ? t("diagnostics.action.copied")
                 : copied === "failed"
-                  ? "無法寫入剪貼簿"
-                  : "複製診斷資料"}
+                  ? t("diagnostics.action.copyFailed")
+                  : t("diagnostics.action.copy")}
             </Button>
             <Button
               size="sm"
@@ -376,7 +385,9 @@ export function Diagnostics({
               }}
             >
               <RefreshCw size={13} />
-              {loading ? "讀取中" : "重新讀取"}
+              {loading
+                ? t("diagnostics.action.refreshing")
+                : t("diagnostics.action.refresh")}
             </Button>
           </div>
         }
@@ -390,43 +401,49 @@ export function Diagnostics({
               icon={Cpu}
               label="CPU"
               value={`${number(metric(at(system, "cpu", "percent")))}%`}
-              subtext={`${number(metric(at(system, "cpu", "logical_cores")), 0)} 個邏輯核心`}
+              subtext={t("diagnostics.stat.cpuCores", {
+                n: metric(at(system, "cpu", "logical_cores")) ?? 0,
+              })}
             />
           )}
           {hasSystem && (
             <StatCard
               compact
               icon={Activity}
-              label="統一記憶體"
+              label={t("diagnostics.stat.unifiedMemory")}
               value={`${number(metric(at(system, "memory", "percent")))}%`}
-              subtext={`${number(gb(at(system, "memory", "used_bytes")))} GB 已使用`}
+              subtext={t("diagnostics.stat.memoryUsed", {
+                value: number(gb(at(system, "memory", "used_bytes"))),
+              })}
             />
           )}
           <StatCard
             compact
             icon={Database}
-            label="Metal 記憶體（活躍）"
+            label={t("diagnostics.stat.metalActive")}
             value={`${number(status?.memory.active_gb ?? gb(at(system, "gpu", "active_bytes")))} GB`}
-            subtext={`峰值 ${number(status?.memory.peak_gb)} GB`}
+            subtext={t("diagnostics.stat.metalPeak", {
+              value: number(status?.memory.peak_gb),
+            })}
           />
           {engineCounters !== undefined && (
             <StatCard
               compact
               icon={Server}
-              label="已處理請求"
+              label={t("diagnostics.stat.requestsProcessed")}
               value={number(
                 metric(at(engineCounters, "requests_processed")),
                 0,
               )}
-              subtext="引擎計數器"
+              subtext={t("diagnostics.stat.engineCounter")}
             />
           )}
         </StatGrid>
       )}
       <SectionCard
         icon={HeartPulse}
-        title="健康檢查"
-        description="只用 /v1/yunshu/status 與 /debug/system 的實際回報判斷。"
+        title={t("diagnostics.health.title")}
+        description={t("diagnostics.health.description")}
         data-testid="health-checks"
       >
         <ul className="-my-2 divide-y divide-border">
@@ -453,7 +470,7 @@ export function Diagnostics({
                   height={6}
                   total={check.bar.total}
                   segments={[{ value: check.bar.value, tone: check.bar.tone }]}
-                  label={`${check.name}：${check.value}`}
+                  label={`${check.name}: ${check.value}`}
                 />
               )}
             </li>
@@ -463,32 +480,33 @@ export function Diagnostics({
       {debugOff && (
         <SectionCard
           icon={Server}
-          title="/debug 診斷介面未啟用"
-          description="逐項診斷（主機、請求、快取、解碼、記憶體）需要它。"
+          title={t("diagnostics.off.title")}
+          description={t("diagnostics.off.description")}
           data-testid="debug-disabled"
         >
           <p className="text-sm text-muted-foreground">
-            以 <code className="font-mono">YUNSHU_DEBUG_ROUTES=1</code>{" "}
-            啟動引擎後重新連線；另需存取權杖，或設定{" "}
-            <code className="font-mono">YUNSHU_AUTH_DISABLED</code>
-            。控制台不會自行變更引擎設定。
+            {t("diagnostics.off.body", {
+              flag: "YUNSHU_DEBUG_ROUTES=1",
+              authFlag: "YUNSHU_AUTH_DISABLED",
+            })}
           </p>
         </SectionCard>
       )}
       {!debugOff && (
         <>
           <SectionRow
-            title="逐項診斷"
+            title={t("diagnostics.items.title")}
             action={
               <p className="text-xs text-muted-foreground">
-                {updated ? `讀取於 ${clock(updated)}` : "尚未取得資料"} ·
-                手動更新
+                {updated
+                  ? t("diagnostics.items.updated", { time: clock(updated) })
+                  : t("diagnostics.items.notLoaded")}
               </p>
             }
           />
           <div>
             <NavTabs
-              ariaLabel="診斷類別"
+              ariaLabel={t("diagnostics.tabs.aria")}
               activeKey={group}
               onChange={(value) => setGroup(value as Group)}
               tabs={[
@@ -497,7 +515,7 @@ export function Diagnostics({
                   label: (
                     <>
                       <Server size={14} />
-                      主機與引擎
+                      {t("diagnostics.tabs.system")}
                     </>
                   ),
                 },
@@ -506,7 +524,7 @@ export function Diagnostics({
                   label: (
                     <>
                       <Activity size={14} />
-                      請求
+                      {t("diagnostics.tabs.requests")}
                     </>
                   ),
                 },
@@ -515,7 +533,7 @@ export function Diagnostics({
                   label: (
                     <>
                       <Database size={14} />
-                      快取
+                      {t("diagnostics.tabs.cache")}
                     </>
                   ),
                 },
@@ -524,7 +542,7 @@ export function Diagnostics({
                   label: (
                     <>
                       <Cpu size={14} />
-                      解碼
+                      {t("diagnostics.tabs.decode")}
                     </>
                   ),
                 },
@@ -533,7 +551,7 @@ export function Diagnostics({
                   label: (
                     <>
                       <Database size={14} />
-                      記憶體
+                      {t("diagnostics.tabs.memory")}
                     </>
                   ),
                 },
@@ -542,14 +560,16 @@ export function Diagnostics({
           </div>
           {loading && (
             <Card className="p-6 text-sm text-muted-foreground" role="status">
-              正在讀取 {groups[group].map((item) => item.title).join("、")}…
+              {t("diagnostics.loading", {
+                items: list(groups[group].map((item) => groupTitle(item.key))),
+              })}
             </Card>
           )}
           {group === "requests" && request !== undefined && (
             <SectionCard
               icon={Timer}
-              title="服務延遲百分位數"
-              description="後端近 60 秒 HTTP 請求耗時統計，與首頁的已觀測首 token 延遲分布不同。"
+              title={t("diagnostics.latency.title")}
+              description={t("diagnostics.latency.description")}
             >
               <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
                 {["p50", "p90", "p95", "p99"].map((key) => (
@@ -568,7 +588,7 @@ export function Diagnostics({
             <SectionCard
               key={row.key}
               icon={groupIcon[group]}
-              title={row.title}
+              title={groupTitle(row.key)}
               description={<span className="font-mono">{row.path}</span>}
               className="min-w-0"
               action={
@@ -578,11 +598,11 @@ export function Diagnostics({
                 >
                   {row.error
                     ? row.status === 404
-                      ? "未啟用"
+                      ? t("diagnostics.row.disabled")
                       : row.status === 401 || row.status === 403
-                        ? "需要授權"
-                        : "讀取失敗"
-                    : "已讀取"}
+                        ? t("diagnostics.row.unauthorized")
+                        : t("diagnostics.row.failed")
+                    : t("diagnostics.row.ok")}
                 </StatusIndicator>
               }
             >
@@ -619,12 +639,12 @@ export function Diagnostics({
                       ))}
                   </DetailList>
                   {Array.isArray(at(row.data, "caches")) && (
-                    <Table scrollLabel="模型快取診斷">
+                    <Table scrollLabel={t("diagnostics.cache.scroll")}>
                       <Thead>
                         <Tr>
-                          <Th>模型</Th>
-                          <Th>前綴命中</Th>
-                          <Th>常駐</Th>
+                          <Th>{t("diagnostics.cache.model")}</Th>
+                          <Th>{t("diagnostics.cache.prefixHit")}</Th>
+                          <Th>{t("diagnostics.cache.resident")}</Th>
                           <Th>SSD</Th>
                         </Tr>
                       </Thead>
@@ -685,7 +705,9 @@ export function Diagnostics({
                       }))
                     }
                   >
-                    {expanded[row.key] ? "收合原始資料" : "查看完整診斷資料"}
+                    {expanded[row.key]
+                      ? t("diagnostics.raw.hide")
+                      : t("diagnostics.raw.show")}
                   </Button>
                   {expanded[row.key] && (
                     <CodeBlock language="json">

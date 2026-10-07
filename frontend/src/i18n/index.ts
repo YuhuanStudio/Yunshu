@@ -23,7 +23,10 @@ function flatten(dict: Record<string, Record<string, string>>): Flat {
 }
 
 const flats = new Map<Locale, Flat>([["zh-TW", flatten(zhTW)]]);
-const loaders: Record<Exclude<Locale, "zh-TW">, () => Promise<{ default: object }>> = {
+const loaders: Record<
+  Exclude<Locale, "zh-TW">,
+  () => Promise<{ default: object }>
+> = {
   "zh-CN": () => import("./locales/zh-CN/index.ts"),
   en: () => import("./locales/en/index.ts"),
 };
@@ -71,7 +74,10 @@ export const getLocale = () => locale;
 
 async function load(next: Locale) {
   if (flats.has(next) || next === "zh-TW") return;
-  const mod = (await loaders[next]()).default as Record<string, Record<string, string>>;
+  const mod = (await loaders[next]()).default as Record<
+    string,
+    Record<string, string>
+  >;
   flats.set(next, flatten(mod));
 }
 

@@ -1,3 +1,5 @@
+import { t, tr } from "./i18n/index.ts";
+
 /** Rows of GET /v1/yunshu/config, normalised for the 有效設定 table. */
 export interface ConfigRow {
   name: string;
@@ -62,8 +64,10 @@ export function parseConfig(payload: unknown): ConfigPayload | null {
 }
 
 export function formatConfigValue(value: unknown): string {
-  if (value === null || value === undefined) return "未設定";
-  if (typeof value === "string") return value === "" ? "（空字串）" : value;
+  if (value === null || value === undefined)
+    return t("diagnostics.config.value.unset");
+  if (typeof value === "string")
+    return value === "" ? t("diagnostics.config.value.empty") : value;
   return JSON.stringify(value);
 }
 
@@ -91,14 +95,11 @@ export function filterConfig(
   );
 }
 
-export const SOURCE_LABEL: Record<string, string> = {
-  default: "預設",
-  env: "環境變數",
-  cli: "命令列",
-  file: "設定檔",
-};
-export const STABILITY_LABEL: Record<string, string> = {
-  stable: "穩定",
-  experimental: "實驗",
-  internal: "內部",
-};
+const SOURCES = ["default", "env", "cli", "file"];
+const STABILITIES = ["stable", "experimental", "internal"];
+export const sourceLabel = (source: string) =>
+  SOURCES.includes(source) ? tr(`diagnostics.config.source.${source}`) : source;
+export const stabilityLabel = (stability: string) =>
+  STABILITIES.includes(stability)
+    ? tr(`diagnostics.config.stability.${stability}`)
+    : stability;

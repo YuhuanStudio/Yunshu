@@ -22,6 +22,7 @@ import {
 } from "lucide-react";
 import type { Connection } from "./api";
 import { ApiCatalog } from "./ApiCatalog";
+import { t, useLocale } from "./i18n/index.ts";
 import { buildIntegrations, serviceRoot } from "./integrations";
 import { CopyField, SectionCard, modelLabel, type Engine } from "./ui";
 
@@ -57,27 +58,30 @@ export function ApiView({
         "",
     );
   }, [status]);
+  const locale = useLocale();
+  // The descriptions are translated inside buildIntegrations, so the language is a dependency.
   const integrations = useMemo(
     () => buildIntegrations(root, model),
-    [root, model],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [root, model, locale],
   );
   return (
     <DashboardPage data-testid="api">
       <PageHeader
-        title="API 接入"
-        description="使用熟悉的 SDK 或程式代理，讓你的應用連接本機模型。"
+        title={t("api.page.title")}
+        description={t("api.page.description")}
       />
       <SectionCard
         icon={Globe}
-        title="服務位址"
-        description="貼進 SDK 或程式代理的 Base URL；範例命令使用下方選定的模型。"
+        title={t("api.address.title")}
+        description={t("api.address.description")}
       >
         <div className="grid gap-5 lg:grid-cols-[1fr_1fr_auto] lg:items-end">
-          <CopyField label="OpenAI API Base URL" value={`${root}/v1`} />
-          <CopyField label="Anthropic Base URL" value={root} />
+          <CopyField label={t("api.address.openai")} value={`${root}/v1`} />
+          <CopyField label={t("api.address.anthropic")} value={root} />
           <div className="min-w-0">
             <p className="mb-1.5 text-xs text-muted-foreground">
-              命令中使用的模型
+              {t("api.address.modelLabel")}
             </p>
             <Select
               value={model || undefined}
@@ -85,7 +89,7 @@ export function ApiView({
               disabled={!models.length}
             >
               <SelectTrigger
-                aria-label="接入使用的模型"
+                aria-label={t("api.address.modelAria")}
                 className="w-full lg:w-56"
               >
                 <SelectValue placeholder="local" />
@@ -101,7 +105,7 @@ export function ApiView({
           </div>
         </div>
       </SectionCard>
-      <SectionRow title="用戶端設定" />
+      <SectionRow title={t("api.clients.title")} />
       <div className="grid gap-4 lg:grid-cols-2" data-testid="integrations">
         {integrations.map((item) => (
           <SectionCard
@@ -119,8 +123,10 @@ export function ApiView({
         ))}
       </div>
       <p className="text-xs text-muted-foreground">
-        命令只引用環境變數 YUNSHU_AUTH_TOKEN（未設定時為
-        local），不會寫入真實權杖。
+        {t("api.clients.note", {
+          env: "YUNSHU_AUTH_TOKEN",
+          fallback: "local",
+        })}
       </p>
       <ApiCatalog connection={connection} />
     </DashboardPage>

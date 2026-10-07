@@ -41,6 +41,8 @@ import { LivePill } from "./LivePill";
 import { tabTitle } from "./engineView";
 import type { Connection } from "./api";
 import { FooterStatus } from "./FooterStatus";
+import { LanguageSwitch } from "./LanguageSwitch";
+import { has, t, tr, useLocale } from "./i18n/index.ts";
 import { ConnectionState, fixed, modelLabel, sizeGb } from "./ui";
 const Dashboard = lazy(() =>
   import("./Dashboard").then((m) => ({ default: m.Dashboard })),
@@ -64,18 +66,19 @@ const Diagnostics = lazy(() =>
 const Playground = lazy(() =>
   import("./Playground").then((m) => ({ default: m.Playground })),
 );
-const titles: Record<string, string> = {
-  overview: "引擎總覽",
-  diagnostics: "引擎診斷",
-  models: "模型庫",
-  requests: "請求與效能",
-  api: "API 接入",
-  settings: "設定",
-  playground: "推理測試",
-};
+const PAGES = [
+  "overview",
+  "diagnostics",
+  "models",
+  "requests",
+  "api",
+  "settings",
+  "playground",
+] as const;
+const pageTitle = (page: string) => tr(`shell.page.${page}`);
 function route() {
   const [p = "", ...rest] = location.hash.replace(/^#\/?/, "").split("/");
-  const page = Object.hasOwn(titles, p) ? p : "overview";
+  const page = (PAGES as readonly string[]).includes(p) ? p : "overview";
   let sub: string | null = null;
   try {
     sub =
@@ -109,28 +112,33 @@ function base() {
   } catch {}
   return location.origin;
 }
+/** YunUI asks for `<namespace>.<key>`; its own strings live in the `yunui` dictionary. */
+const translators = new Map<string, ReturnType<typeof makeTranslator>>();
+function makeTranslator(namespace: string | undefined) {
+  return (key: string, values?: Record<string, unknown>) => {
+    const full = `yunui.${namespace ? namespace + "." : ""}${key}`;
+    // Unknown keys come back as the key itself: YunUI then uses its own English fallback.
+    return has(full)
+      ? // i18n-keys: yunui.
+        tr(full, values as Record<string, string | number>)
+      : key;
+  };
+}
+// One stable function per namespace and locale: YunUI puts the translator in effect deps.
 const adapters = {
-  useT: () => (key: string, values?: Record<string, unknown>) => {
-    const strings: Record<string, string> = {
-      copy: "複製",
-      copied: "已複製",
-      "codeBlock.copyFull": "複製完整程式碼",
-      "codeBlock.copyError": "無法寫入剪貼簿",
-      "codeBlock.showLess": "收合",
-      "codeBlock.tabGroup": "程式碼格式",
-      "codeBlock.scrollHorizontally": "左右捲動",
-      clickToCopy: "點擊複製",
-      "message.prompt": "訊息內容",
-    };
-    if (key === "clickToCopy") return `點擊複製 ${values?.text ?? ""}`.trim();
-    if (key === "codeBlock.lineCount") return `${values?.count ?? 0} 行`;
-    if (key === "codeBlock.showAll") return `顯示全部 ${values?.count ?? 0} 行`;
-    if (key === "codeBlock.scrollRegion")
-      return `${values?.language ?? ""} 程式碼`;
-    return strings[key] ?? key;
+  useT: (namespace?: string) => {
+    const locale = useLocale();
+    const id = `${locale}:${namespace ?? ""}`;
+    let fn = translators.get(id);
+    if (!fn) {
+      fn = makeTranslator(namespace);
+      translators.set(id, fn);
+    }
+    return fn;
   },
 };
 export default function App() {
+  const locale = useLocale();
   const [{ page, sub }, setRoute] = useState(route),
     [menu, setMenu] = useState(false),
     [collapsed, setCollapsed] = useState(() => {
@@ -194,34 +202,34 @@ export default function App() {
     }
   }, [collapsed]);
   useEffect(() => {
-    document.title = tabTitle(engine.status, titles[page]);
-  }, [engine.status, page]);
+    document.title = tabTitle(engine.status, pageTitle(page));
+  }, [engine.status, page, locale]);
   const commands: CommandPaletteItem[] = [
-    ...Object.entries(titles).map(([key, title]) => ({
+    ...PAGES.map((key) => ({
       id: "go:" + key,
-      title,
-      group: "前往",
+      title: pageTitle(key),
+      group: t("shell.cmd.go"),
       onSelect: () => navigate(key),
     })),
     ...(engine.status?.models ?? []).map((m) => ({
       id: "model:" + m.id,
       title: modelLabel(m.id),
-      description: `${m.type} · ${sizeGb(m.size_gb)} · ${m.loaded ? "已載入" : "未載入"}`,
-      group: "模型",
+      description: `${m.type} · ${sizeGb(m.size_gb)} · ${m.loaded ? t("shell.cmd.loaded") : t("shell.cmd.notLoaded")}`,
+      group: t("shell.cmd.models"),
       onSelect: () => navigate("models"),
     })),
     {
       id: "polling",
-      title: engine.polling ? "暫停狀態更新" : "恢復狀態更新",
+      title: engine.polling ? t("shell.cmd.pause") : t("shell.cmd.resume"),
       icon: engine.polling ? <Pause size={14} /> : <Play size={14} />,
-      group: "操作",
+      group: t("shell.cmd.actions"),
       onSelect: () => engine.setPolling(!engine.polling),
     },
     {
       id: "theme",
-      title: dark ? "切換淺色" : "切換深色",
+      title: dark ? t("shell.top.themeLight") : t("shell.top.themeDark"),
       icon: dark ? <Sun size={14} /> : <Moon size={14} />,
-      group: "操作",
+      group: t("shell.cmd.actions"),
       onSelect: () => setDark((v) => !v),
     },
   ];
@@ -264,7 +272,7 @@ export default function App() {
         error: true,
         text:
           e instanceof Error && /timed out/i.test(e.message)
-            ? "等待服務回應逾時；操作可能仍在服務端進行，請重新整理狀態。"
+            ? t("errors.operation.timeout")
             : e instanceof Error
               ? e.message
               : String(e),
@@ -284,7 +292,7 @@ export default function App() {
     } catch {
       setNotice({
         error: false,
-        text: "無法儲存服務位址；目前連線仍會使用新設定。",
+        text: t("errors.operation.saveAddressFailed"),
       });
     }
   }
@@ -293,15 +301,15 @@ export default function App() {
       <Toaster position="bottom-center" offset={56} />
       <div className="relative h-dvh overflow-hidden bg-(--bg-window)">
         <a href="#main-content" className="skip-link" onClick={skipToMain}>
-          跳到主要內容
+          {t("shell.nav.skip")}
         </a>
         <Sidebar
           appName="Yunshu"
-          ariaLabel="控制台導覽"
+          ariaLabel={t("shell.nav.ariaLabel")}
           currentPath={"/" + page}
           isOpen={menu}
           onClose={() => setMenu(false)}
-          closeLabel="關閉導覽"
+          closeLabel={t("shell.nav.close")}
           onNavigate={(href) => navigate(href.replace(/^\//, ""))}
           homeHref="/overview"
           collapsed={collapsed}
@@ -314,42 +322,60 @@ export default function App() {
                 <span className="flex-1 truncate text-base font-semibold tracking-tight">
                   Yunshu
                   <span className="ml-1.5 text-xs font-normal text-muted-foreground">
-                    雲樞
+                    {t("shell.brand.name")}
                   </span>
                 </span>
               </div>
               <IconButton
                 className="hidden lg:inline-flex"
                 icon={<PanelLeftClose size={17} />}
-                label="收合導覽"
+                label={t("shell.nav.collapse")}
                 onClick={() => setCollapsed(true)}
               />
               <IconButton
                 className="lg:hidden"
                 icon={<X size={17} />}
-                label="關閉導覽"
+                label={t("shell.nav.close")}
                 onClick={() => setMenu(false)}
               />
             </div>
           }
           sections={[
             {
-              title: "監控",
+              title: t("shell.nav.section.monitor"),
               items: [
-                { label: "引擎總覽", href: "/overview", icon: Gauge },
-                { label: "請求與效能", href: "/requests", icon: Activity },
-                { label: "引擎診斷", href: "/diagnostics", icon: Stethoscope },
+                {
+                  label: t("shell.page.overview"),
+                  href: "/overview",
+                  icon: Gauge,
+                },
+                {
+                  label: t("shell.page.requests"),
+                  href: "/requests",
+                  icon: Activity,
+                },
+                {
+                  label: t("shell.page.diagnostics"),
+                  href: "/diagnostics",
+                  icon: Stethoscope,
+                },
               ],
             },
             {
-              title: "模型",
-              items: [{ label: "模型庫", href: "/models", icon: Box }],
+              title: t("shell.nav.section.models"),
+              items: [
+                { label: t("shell.page.models"), href: "/models", icon: Box },
+              ],
             },
             {
-              title: "開發",
+              title: t("shell.nav.section.develop"),
               items: [
-                { label: "推理測試", href: "/playground", icon: MessageSquare },
-                { label: "API 接入", href: "/api", icon: Code2 },
+                {
+                  label: t("shell.page.playground"),
+                  href: "/playground",
+                  icon: MessageSquare,
+                },
+                { label: t("shell.page.api"), href: "/api", icon: Code2 },
               ],
             },
           ]}
@@ -360,7 +386,7 @@ export default function App() {
                 className="mb-3 h-auto rounded-[20px] bg-(--bg-card) w-full flex-col items-start gap-0 px-3 py-2.5 text-left font-normal hover:bg-(--bg-elevated)"
                 onClick={() => navigate("models")}
               >
-                <span className="sr-only">開啟模型庫，</span>
+                <span className="sr-only">{t("shell.side.openModels")}</span>
                 <span className="mb-1 flex items-center gap-2 text-xs text-muted-foreground">
                   <StatusIndicator
                     status={
@@ -372,10 +398,10 @@ export default function App() {
                     }
                   />
                   {engine.phase !== "online"
-                    ? "引擎未連線"
+                    ? t("shell.side.offline")
                     : loadedModel
-                      ? "已載入"
-                      : "沒有已載入模型"}
+                      ? t("shell.side.loaded")
+                      : t("shell.side.noModel")}
                 </span>
                 <span
                   className={`block w-full truncate text-base font-semibold ${engine.phase === "online" ? "" : "text-muted-foreground"}`}
@@ -383,12 +409,14 @@ export default function App() {
                   {loadedModel
                     ? modelLabel(loadedModel.id)
                     : engine.phase === "online"
-                      ? "選擇模型"
-                      : "等待引擎"}
+                      ? t("shell.side.pick")
+                      : t("shell.side.waiting")}
                 </span>
                 <span className="mt-0.5 block w-full truncate text-xs tabular-nums text-muted-foreground">
-                  {fixed(engine.status?.memory.active_gb)} /{" "}
-                  {fixed(engine.status?.memory.total_gb)} GB
+                  {t("shell.side.memory", {
+                    used: fixed(engine.status?.memory.active_gb),
+                    total: fixed(engine.status?.memory.total_gb),
+                  })}
                 </span>
               </Button>
               <Button
@@ -402,7 +430,9 @@ export default function App() {
                   className="shrink-0 text-muted-foreground"
                 />
                 <span className="min-w-0 flex-1">
-                  <span className="sr-only">開啟設定，</span>
+                  <span className="sr-only">
+                    {t("shell.side.openSettings")}
+                  </span>
                   <span className="block truncate text-sm font-medium">
                     {(() => {
                       try {
@@ -415,7 +445,7 @@ export default function App() {
                   <span className="block truncate text-xs tabular-nums text-muted-foreground">
                     {engine.status?.version
                       ? `yunshu ${engine.status.version}`
-                      : "本機優先"}
+                      : t("shell.side.localFirst")}
                   </span>
                 </span>
               </Button>
@@ -429,7 +459,7 @@ export default function App() {
             <IconButton
               className="-ml-2 lg:hidden"
               icon={<Menu size={20} />}
-              label="開啟導覽"
+              label={t("shell.nav.open")}
               onClick={() => setMenu(true)}
             />
             {/* Reopen button: inert while the sidebar is open so the collapsed
@@ -439,28 +469,30 @@ export default function App() {
               type="button"
               inert={!collapsed || undefined}
               onClick={() => setCollapsed(false)}
-              aria-label="展開導覽"
+              aria-label={t("shell.nav.expand")}
               className={`hidden shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-all duration-200 ease-in-out hover:bg-muted hover:text-foreground lg:flex ${collapsed ? "-ml-2 max-w-12 p-2 opacity-100" : "pointer-events-none -ml-4 max-w-0 overflow-hidden p-0 opacity-0"}`}
             >
               <PanelLeftOpen size={18} className="shrink-0" />
             </Button>
             <Breadcrumb
-              aria-label="目前位置"
+              aria-label={t("shell.nav.breadcrumb")}
               className="card w-fit min-w-0 whitespace-nowrap px-3 py-2"
             >
               <BreadcrumbList className="flex-nowrap gap-2 overflow-hidden sm:gap-2">
                 <BreadcrumbItem className="shrink-0">
-                  <BreadcrumbLink href="#/overview">雲樞</BreadcrumbLink>
+                  <BreadcrumbLink href="#/overview">
+                    {t("shell.brand.name")}
+                  </BreadcrumbLink>
                 </BreadcrumbItem>
                 <BreadcrumbSeparator />
                 <BreadcrumbItem className="min-w-0">
                   {sub ? (
                     <BreadcrumbLink href="#/models">
-                      {titles[page]}
+                      {pageTitle(page)}
                     </BreadcrumbLink>
                   ) : (
                     <BreadcrumbPage className="truncate">
-                      {titles[page]}
+                      {pageTitle(page)}
                     </BreadcrumbPage>
                   )}
                 </BreadcrumbItem>
@@ -485,15 +517,18 @@ export default function App() {
                 className="card hidden h-8 items-center gap-1.5 rounded-full px-3 py-0 text-xs text-muted-foreground transition-colors hover:text-foreground sm:inline-flex"
               >
                 <Search size={13} />
-                搜尋
+                {t("shell.top.search")}
                 <Kbd>⌘K</Kbd>
               </Button>
               {/* YunUI ThemeToggle is next-themes backed; the console owns its
                   theme state (Settings shares it), so keep a pill IconButton. */}
+              <LanguageSwitch variant="pill" className="hidden sm:block" />
               <IconButton
                 className="card size-8 rounded-full"
                 icon={dark ? <Sun size={16} /> : <Moon size={16} />}
-                label={dark ? "切換淺色" : "切換深色"}
+                label={
+                  dark ? t("shell.top.themeLight") : t("shell.top.themeDark")
+                }
                 onClick={() => setDark((v) => !v)}
               />
             </div>
@@ -510,21 +545,9 @@ export default function App() {
                     <Banner
                       tone="neutral"
                       icon={<Spinner size="sm" />}
-                      title={`${
-                        busy.startsWith("load:")
-                          ? "正在載入模型"
-                          : busy.startsWith("unload:")
-                            ? "正在卸載模型"
-                            : busy.startsWith("warmup:")
-                              ? "正在預熱模型"
-                              : busy.startsWith("pull:")
-                                ? "正在下載模型（後端尚未提供進度）"
-                                : busy.startsWith("copy:")
-                                  ? "正在建立模型別名"
-                                  : busy.startsWith("delete:")
-                                    ? "正在刪除模型"
-                                    : "正在取消請求"
-                      }… 等待服務回應。`}
+                      title={t("shell.busy.waiting", {
+                        action: busyAction(busy),
+                      })}
                     />
                   </div>
                 )}
@@ -534,7 +557,7 @@ export default function App() {
                       tone={notice.error ? "critical" : "info"}
                       title={notice.text}
                       dismissible
-                      dismissLabel="關閉操作訊息"
+                      dismissLabel={t("shell.busy.dismiss")}
                       onDismiss={() => setNotice(null)}
                     />
                   </div>
@@ -625,12 +648,28 @@ export default function App() {
           onQueryChange={setQuery}
           items={shown}
           empty={
-            <p className="p-4 text-sm text-muted-foreground">沒有符合的項目</p>
+            <p className="p-4 text-sm text-muted-foreground">
+              {t("shell.cmd.empty")}
+            </p>
           }
         />
       </div>
     </YunUIProvider>
   );
+}
+
+const BUSY_KINDS = [
+  "load",
+  "unload",
+  "warmup",
+  "pull",
+  "copy",
+  "delete",
+] as const;
+/** What the engine is busy doing, as a sentence start, from the action key (`load:<id>`). */
+function busyAction(key: string) {
+  const kind = BUSY_KINDS.find((k) => key.startsWith(`${k}:`)) ?? "cancel";
+  return tr(`shell.busy.${kind}`);
 }
 
 /** Holds the page area while a route chunk loads; same box as a page, no spinner. */

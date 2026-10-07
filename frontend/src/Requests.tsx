@@ -33,6 +33,7 @@ import {
   WorkspaceLayout,
 } from "@yuhuanowo/yunui/patterns";
 import { Activity, Copy, Gauge, Timer, Zap } from "lucide-react";
+import { t } from "./i18n/index.ts";
 import { rollingMedian, trendDelta } from "./analytics";
 import { Download, Search } from "lucide-react";
 import { ApiError, cancelRequest, requestJson, type Connection } from "./api";
@@ -43,24 +44,26 @@ import {
   finishedFromHistory,
   isLive,
   median,
-  phaseLabels as labels,
+  phaseLabel,
   prefillPercent,
   speculativeText,
   type Row,
 } from "./RequestTrace";
 import {
   clock,
+  dateTime,
   elapsed,
   isOnline,
   modelLabel,
   number,
   phaseDot,
   Readout,
+  relative,
   useMinWidth,
   type Engine,
 } from "./ui";
 import type { Perform } from "./Models";
-import { outcomeLabels, useRecentRequests } from "./recentRequests";
+import { outcomeLabel, useRecentRequests } from "./recentRequests";
 import { RequestBreakdown, RequestTimeline } from "./RequestTimeline";
 
 import { SegmentedTray } from "./SegmentedTray";
@@ -108,11 +111,7 @@ function csv(rows: Row[]) {
 /** Relative text against the last engine poll, so rows never need their own timer. */
 function relativeTime(thenMs: number, nowMs: number) {
   const s = Math.max(0, Math.round((nowMs - thenMs) / 1000));
-  if (s < 5) return "剛剛";
-  if (s < 60) return `${s} 秒前`;
-  if (s < 3600) return `${Math.floor(s / 60)} 分鐘前`;
-  if (s < 86400) return `${Math.floor(s / 3600)} 小時前`;
-  return `${Math.floor(s / 86400)} 天前`;
+  return s < 5 ? t("requests.time.justNow") : relative(s);
 }
 
 export function Requests({
@@ -153,7 +152,8 @@ export function Requests({
           { signal: controller.signal },
         );
         if (controller.signal.aborted) return;
-        if (value.request_id !== id) throw Error("服務回傳了不同的 request ID");
+        if (value.request_id !== id)
+          throw Error(t("requests.detail.idMismatch"));
         setDetail((current) =>
           current?.id === id ? ({ ...current, ...value, id } as Row) : current,
         );
@@ -164,10 +164,10 @@ export function Requests({
         ended = e instanceof ApiError && e.status === 404;
         setDetailError(
           ended
-            ? "此請求已結束或已不在活動清單；下方保留最近採樣。"
+            ? t("requests.detail.ended")
             : e instanceof Error
               ? e.message
-              : "無法取得請求詳情",
+              : t("requests.detail.loadFailed"),
         );
       } finally {
         if (!controller.signal.aborted && !ended)
@@ -246,52 +246,72 @@ export function Requests({
     status?.throughput.live_decode_tps ?? status?.throughput.mean_decode_tps;
   const tiles = [
     {
-      label: "進行中請求",
+      label: t("requests.tile.activeLabel"),
       value: status ? number(activeNow, 0) : "—",
       hint: status
-        ? `排隊 ${number(status.requests.queued, 0)} · Prefill ${number(status.requests.prefill, 0)} · Decode ${number(status.requests.decode, 0)}`
+        ? t("requests.tile.activeHint", {
+            queued: number(status.requests.queued, 0),
+            prefill: number(status.requests.prefill, 0),
+            decode: number(status.requests.decode, 0),
+          })
         : undefined,
       data: activeSeries,
       tone: "accent" as const,
-      name: "進行中請求數趨勢",
+      name: t("requests.tile.activeName"),
       icon: Activity,
       trend: null,
     },
     {
-      label: "TTFT（已結束請求）",
+      label: t("requests.tile.ttftLabel"),
       value: ttfts.length ? number(median(ttfts), 0) : "—",
       unit: ttfts.length ? "ms" : undefined,
       hint: ttfts.length
-        ? `${recent.supported ? "伺服器最近" : "本頁觀測"} ${number(ttfts.length, 0)} 筆中位 · 最近一筆 ${number(ttfts.at(-1), 0)} ms`
-        : "尚未觀測到已結束請求",
+        ? t(
+            recent.supported
+              ? "requests.tile.ttftServer"
+              : "requests.tile.ttftPage",
+            {
+              count: number(ttfts.length, 0),
+              last: number(ttfts.at(-1), 0),
+            },
+          )
+        : t("requests.tile.noFinished"),
       data: rollingMedian(ttfts),
       tone: "accent" as const,
-      name: "已結束請求 TTFT 趨勢",
+      name: t("requests.tile.ttftName"),
       icon: Timer,
       trend: null,
     },
     {
-      label: "Decode 速度",
+      label: t("requests.tile.decodeLabel"),
       value: number(liveDecode),
       unit: liveDecode == null ? undefined : "tok/s",
-      hint: "引擎視窗平均",
+      hint: t("requests.tile.decodeHint"),
       data: decodeSeries,
       tone: "accent" as const,
-      name: "Decode tok/s 趨勢",
+      name: t("requests.tile.decodeName"),
       icon: Zap,
       trend: trendDelta(decodeSeries),
     },
     {
-      label: "前綴命中率",
+      label: t("requests.tile.hitLabel"),
       value: promptSum > 0 ? number((cachedSum / promptSum) * 100, 0) : "—",
       unit: promptSum > 0 ? "%" : undefined,
       hint:
         promptSum > 0
-          ? `${recent.supported ? "伺服器最近" : "本頁觀測"} ${number(finished.length, 0)} 筆加權${hits.length ? ` · 最近一筆 ${number(hits.at(-1), 0)}%` : ""}`
-          : "尚未觀測到已結束請求",
+          ? t(
+              recent.supported
+                ? "requests.tile.hitServer"
+                : "requests.tile.hitPage",
+              { count: number(finished.length, 0) },
+            ) +
+            (hits.length
+              ? t("requests.tile.hitLatest", { value: number(hits.at(-1), 0) })
+              : "")
+          : t("requests.tile.noFinished"),
       data: rollingMedian(hits),
       tone: "accent" as const,
-      name: "快取命中率趨勢",
+      name: t("requests.tile.hitName"),
       icon: Gauge,
       trend: null,
     },
@@ -326,7 +346,7 @@ export function Requests({
         <div className="flex items-center gap-2">
           <StatusIndicator status={phaseDot(view.phase)}>
             <span className="text-sm font-medium">
-              {labels[view.phase] ?? view.phase}
+              {phaseLabel(view.phase)}
             </span>
           </StatusIndicator>
         </div>
@@ -336,7 +356,7 @@ export function Requests({
               className="gap-1.5 text-xs text-muted-foreground"
               status={outcomeDot(view.outcome)}
             >
-              {outcomeLabels[view.outcome]}
+              {outcomeLabel(view.outcome)}
             </StatusIndicator>
             {view.finish_reason && (
               <span className="font-mono text-xs text-muted-foreground">
@@ -352,11 +372,13 @@ export function Requests({
           <Button
             size="sm"
             variant="ghost"
-            aria-label="複製 Request ID"
+            aria-label={t("requests.detail.copyId")}
             onClick={() => copyId(view.id)}
           >
             <Copy size={14} />
-            {copied === view.id ? "已複製" : "複製"}
+            {copied === view.id
+              ? t("requests.detail.copied")
+              : t("requests.detail.copy")}
           </Button>
         </div>
         {detailError && (
@@ -366,27 +388,35 @@ export function Requests({
         )}
         {detailUpdated && (
           <p className="text-xs text-muted-foreground">
-            即時更新 {clock(detailUpdated)}
+            {t("requests.detail.liveUpdated", { time: clock(detailUpdated) })}
           </p>
         )}
       </div>
       {done && (
-        <section className="space-y-4" aria-label="耗時分解">
+        <section
+          className="space-y-4"
+          aria-label={t("requests.detail.breakdownLabel")}
+        >
           <RequestBreakdown row={view} />
           <RequestTimeline row={view} />
           <p className="text-xs text-muted-foreground">
-            時間軸依伺服器量測的階段時間點等比例繪製。引擎不保存 prompt
-            與輸出文字，因此沒有輸入／輸出／推理分頁，只顯示統計。
+            {t("requests.detail.timelineNote")}
           </p>
         </section>
       )}
-      <section className="space-y-3" aria-label="階段與 token 組成">
+      <section
+        className="space-y-3"
+        aria-label={t("requests.detail.stagesLabel")}
+      >
         {!done && <StageRail phase={view.phase} />}
         {view.phase === "queued" && (
           <div className="grid grid-cols-2 gap-5">
-            <Readout label="佇列位置" value={number(view.queue_position, 0)} />
             <Readout
-              label="預估等待（服務端估計）"
+              label={t("requests.detail.queuePosition")}
+              value={number(view.queue_position, 0)}
+            />
+            <Readout
+              label={t("requests.detail.queueWait")}
               value={number(view.queue_est_wait_ms, 0)}
               unit="ms"
             />
@@ -397,27 +427,40 @@ export function Requests({
       </section>
       <div className="grid grid-cols-2 gap-5">
         <Readout
-          label="模型"
-          value={view.model ? modelLabel(view.model) : "未回報"}
+          label={t("requests.detail.model")}
+          value={
+            view.model
+              ? modelLabel(view.model)
+              : t("requests.detail.notReported")
+          }
         />
         {!done && (
           <>
-            <Readout label="經過時間" value={elapsed(view.elapsed_s)} />
-            <Readout label="輸入 token" value={number(view.prompt_tokens, 0)} />
-            <Readout label="命中 token" value={number(view.cached_tokens, 0)} />
             <Readout
-              label="輸出 token"
+              label={t("requests.detail.elapsed")}
+              value={elapsed(view.elapsed_s)}
+            />
+            <Readout
+              label={t("requests.detail.inputTokens")}
+              value={number(view.prompt_tokens, 0)}
+            />
+            <Readout
+              label={t("requests.detail.cachedTokens")}
+              value={number(view.cached_tokens, 0)}
+            />
+            <Readout
+              label={t("requests.detail.outputTokens")}
               value={number(view.completion_tokens, 0)}
             />
             <Readout
-              label="首 token 延遲 (TTFT)"
+              label={t("requests.detail.ttft")}
               value={number(view.ttft_ms)}
               unit="ms"
             />
           </>
         )}
         <Readout
-          label="Decode"
+          label={t("requests.detail.decode")}
           value={number(
             view.decode_tps ??
               (view.phase === "decode" ? view.tokens_per_second : null),
@@ -425,7 +468,7 @@ export function Requests({
           unit="tok/s"
         />
         <Readout
-          label="Prefill"
+          label={t("requests.detail.prefill")}
           value={number(
             view.prefill_tps ??
               (view.phase === "prefill" ? view.tokens_per_second : null),
@@ -435,9 +478,12 @@ export function Requests({
       </div>
       {view.speculative && (
         <div className="grid grid-cols-3 gap-5 border-t border-border/60 pt-5">
-          <Readout label="推測解碼" value={view.speculative.mode ?? "—"} />
           <Readout
-            label="接受率"
+            label={t("requests.detail.speculative")}
+            value={view.speculative.mode ?? "—"}
+          />
+          <Readout
+            label={t("requests.detail.acceptance")}
             value={number(
               view.speculative.acceptance_rate == null
                 ? null
@@ -446,7 +492,10 @@ export function Requests({
             )}
             unit="%"
           />
-          <Readout label="回合" value={number(view.speculative.rounds, 0)} />
+          <Readout
+            label={t("requests.detail.rounds")}
+            value={number(view.speculative.rounds, 0)}
+          />
         </div>
       )}
     </div>
@@ -454,8 +503,8 @@ export function Requests({
   return (
     <DashboardPage width="7xl" data-testid="requests">
       <PageHeader
-        title="請求與效能"
-        description="查看正在處理的工作，以及本頁觀測到的最近已結束請求。"
+        title={t("requests.page.title")}
+        description={t("requests.page.description")}
         actions={
           <Button
             size="sm"
@@ -464,7 +513,7 @@ export function Requests({
             onClick={() => csv(shown)}
           >
             <Download size={14} />
-            匯出 CSV
+            {t("requests.page.exportCsv")}
           </Button>
         }
       />
@@ -503,30 +552,33 @@ export function Requests({
         ))}
       </StatGrid>
       <WorkspaceLayout
-        detailLabel="請求詳情"
+        detailLabel={t("requests.detail.title")}
         list={
           <div className="space-y-5">
             <div className="flex flex-wrap justify-between gap-3">
               <Input
                 className="sm:max-w-xs"
-                aria-label="搜尋請求"
+                aria-label={t("requests.list.search")}
                 icon={<Search size={14} />}
-                placeholder="Request ID 或模型"
+                placeholder={t("requests.list.searchPlaceholder")}
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
               />
               <div className="flex flex-wrap items-center gap-2">
                 <SegmentedTray
-                  aria-label="範圍"
+                  aria-label={t("requests.list.scope")}
                   value={filter}
                   onChange={(v) => {
                     setFilter(v);
                     if (v === "active") setOutcome("all");
                   }}
                   options={[
-                    { value: "active", label: "進行中" },
-                    { value: "complete", label: "已結束" },
-                    { value: "all", label: "全部" },
+                    { value: "active", label: t("requests.list.scopeActive") },
+                    {
+                      value: "complete",
+                      label: t("requests.list.scopeComplete"),
+                    },
+                    { value: "all", label: t("requests.list.scopeAll") },
                   ]}
                 />
                 {filter !== "active" && (
@@ -535,10 +587,19 @@ export function Requests({
                     value={outcome}
                     onChange={setOutcome}
                     options={[
-                      { value: "all", label: "結果：全部" },
-                      { value: "completed", label: "結果：完成" },
-                      { value: "cancelled", label: "結果：已取消" },
-                      { value: "error", label: "結果：錯誤" },
+                      { value: "all", label: t("requests.list.outcomeAll") },
+                      {
+                        value: "completed",
+                        label: t("requests.list.outcomeCompleted"),
+                      },
+                      {
+                        value: "cancelled",
+                        label: t("requests.list.outcomeCancelled"),
+                      },
+                      {
+                        value: "error",
+                        label: t("requests.list.outcomeError"),
+                      },
                     ]}
                   />
                 )}
@@ -547,21 +608,30 @@ export function Requests({
             <Card className="overflow-hidden">
               <div className="min-h-[17rem]">
                 <TooltipProvider delayDuration={200}>
-                  <Table scrollLabel="引擎請求清單" className="table-fixed">
+                  <Table
+                    scrollLabel={t("requests.list.tableLabel")}
+                    className="table-fixed"
+                  >
                     <Thead>
                       <Tr>
-                        <Th>請求</Th>
-                        <Th className="hidden w-48 2xl:table-cell">模型</Th>
-                        <Th className="w-44">用量（輸入 / 輸出）</Th>
+                        <Th>{t("requests.list.colRequest")}</Th>
+                        <Th className="hidden w-48 2xl:table-cell">
+                          {t("requests.list.colModel")}
+                        </Th>
+                        <Th className="w-44">{t("requests.list.colUsage")}</Th>
                         <Th className="w-20">tok/s</Th>
                         <Th className="hidden w-32 md:table-cell">
-                          進度 / 時間
+                          {t("requests.list.colProgress")}
                         </Th>
                         <Th className="hidden w-24 min-[1800px]:table-cell">
-                          推測解碼
+                          {t("requests.list.colSpec")}
                         </Th>
-                        <Th className="hidden w-24 2xl:table-cell">時間</Th>
-                        <Th className="w-36">操作</Th>
+                        <Th className="hidden w-24 2xl:table-cell">
+                          {t("requests.list.colTime")}
+                        </Th>
+                        <Th className="w-36">
+                          {t("requests.list.colActions")}
+                        </Th>
                       </Tr>
                     </Thead>
                     <Tbody>
@@ -600,9 +670,9 @@ export function Requests({
                                   >
                                     {row.phase === "complete"
                                       ? row.outcome
-                                        ? outcomeLabels[row.outcome]
+                                        ? outcomeLabel(row.outcome)
                                         : ""
-                                      : (labels[row.phase] ?? row.phase)}
+                                      : phaseLabel(row.phase)}
                                   </StatusIndicator>
                                 )}
                                 <span
@@ -618,7 +688,7 @@ export function Requests({
                               >
                                 {row.model
                                   ? modelLabel(row.model)
-                                  : "模型未回報"}
+                                  : t("requests.list.modelUnknown")}
                               </p>
                             </Td>
                             <Td className="hidden 2xl:table-cell">
@@ -630,7 +700,7 @@ export function Requests({
                                   modelLabel(row.model)
                                 ) : (
                                   <span className="text-muted-foreground">
-                                    未回報
+                                    {t("requests.detail.notReported")}
                                   </span>
                                 )}
                               </span>
@@ -641,8 +711,10 @@ export function Requests({
                                 {number(row.completion_tokens, 0)}
                               </span>
                               <span className="block truncate text-xs text-muted-foreground">
-                                命中 {number(row.cached_tokens, 0)} /{" "}
-                                {number(row.prompt_tokens, 0)}
+                                {t("requests.list.cachedOf", {
+                                  cached: number(row.cached_tokens, 0),
+                                  prompt: number(row.prompt_tokens, 0),
+                                })}
                               </span>
                             </Td>
                             <Td className="whitespace-nowrap tabular-nums">
@@ -651,13 +723,17 @@ export function Requests({
                             <Td className="hidden tabular-nums md:table-cell">
                               {percent != null ? (
                                 <span>
-                                  Prefill {number(percent, 0)}%
+                                  {t("requests.list.prefillPercent", {
+                                    percent: number(percent, 0),
+                                  })}
                                   <span className="ml-2 text-muted-foreground">
                                     {elapsed(row.elapsed_s)}
                                   </span>
                                 </span>
                               ) : row.phase === "complete" ? (
-                                `${number(row.ttft_ms, 0)} ms TTFT`
+                                t("requests.list.ttftMs", {
+                                  ms: number(row.ttft_ms, 0),
+                                })
                               ) : (
                                 elapsed(row.elapsed_s)
                               )}
@@ -678,7 +754,7 @@ export function Requests({
                                     </span>
                                   </TooltipTrigger>
                                   <TooltipContent>
-                                    {new Date(when).toLocaleString()}
+                                    {dateTime(when)}
                                   </TooltipContent>
                                 </Tooltip>
                               )}
@@ -694,7 +770,7 @@ export function Requests({
                                     setDetail(row);
                                   }}
                                 >
-                                  詳情
+                                  {t("requests.list.details")}
                                 </Button>
                                 {row.phase !== "complete" && (
                                   <Button
@@ -706,7 +782,7 @@ export function Requests({
                                       setCancel(row);
                                     }}
                                   >
-                                    取消
+                                    {t("requests.list.cancel")}
                                   </Button>
                                 )}
                               </div>
@@ -721,11 +797,11 @@ export function Requests({
                   <TableState loading={!engine.status}>
                     {engine.status
                       ? query
-                        ? "沒有符合搜尋的請求"
+                        ? t("requests.list.noMatch")
                         : filter === "active"
-                          ? "目前沒有進行中的請求"
-                          : "目前沒有符合條件的請求；完成記錄只包含開啟本頁後採樣到的最近請求"
-                      : "等待請求資料"}
+                          ? t("requests.list.noActive")
+                          : t("requests.list.noneFiltered")
+                      : t("requests.list.waiting")}
                   </TableState>
                 )}
               </div>
@@ -736,7 +812,9 @@ export function Requests({
                     variant="ghost"
                     onClick={() => setLimit((n) => n + PAGE)}
                   >
-                    顯示更多（還有 {matched.length - shown.length} 筆）
+                    {t("requests.list.showMore", {
+                      count: matched.length - shown.length,
+                    })}
                   </Button>
                 </div>
               )}
@@ -745,22 +823,32 @@ export function Requests({
                 data-testid="requests-footer"
               >
                 <p className="tabular-nums">
-                  顯示 {shown.length} / 符合 {matched.length} / 共 {rows.length}{" "}
-                  筆
+                  {t("requests.footer.counts", {
+                    shown: shown.length,
+                    matched: matched.length,
+                    total: rows.length,
+                  })}
                   {recent.supported && finished.length > 0
-                    ? ` · 自 ${clock(retention.since * 1000).slice(0, 5)} 起 ${number(finished.length, 0)} 筆請求，讀取 ${number(promptSum, 0)} 個 prompt token（重用 ${number(cachedSum, 0)}）`
+                    ? ` · ${t("requests.footer.since", {
+                        time: clock(retention.since * 1000).slice(0, 5),
+                        count: number(finished.length, 0),
+                        prompt: number(promptSum, 0),
+                        cached: number(cachedSum, 0),
+                      })}`
                     : ""}
                 </p>
                 <p className="min-w-0 max-w-3xl">
                   {recent.supported
-                    ? `伺服器保留最近 ${number(recent.capacity, 0)} 筆；重新啟動後清空。記錄只含統計，不含 prompt 與輸出文字。`
+                    ? t("requests.footer.ring", {
+                        capacity: number(recent.capacity, 0),
+                      })
                     : recent.supported === false
-                      ? "此引擎版本沒有提供完成記錄；「已結束」只含本頁開啟後從狀態採樣到的最近一筆，高頻請求之間會漏掉，也不把消失的進行中請求推測成成功。"
-                      : "正在讀取完成記錄…"}
+                      ? t("requests.footer.unsupported")
+                      : t("requests.footer.loading")}
                 </p>
                 {recent.error && (
                   <p role="status" className="text-warning">
-                    完成記錄暫時無法更新：{recent.error}
+                    {t("requests.footer.error", { error: recent.error })}
                   </p>
                 )}
               </div>
@@ -772,7 +860,7 @@ export function Requests({
             <Card className="sticky top-0 max-h-[calc(100dvh-8rem)] overflow-y-auto p-4">
               <GroupLabel
                 className="px-0"
-                title="請求詳情"
+                title={t("requests.detail.title")}
                 action={
                   detail ? (
                     <Button
@@ -783,7 +871,7 @@ export function Requests({
                         detailOpener.current?.focus();
                       }}
                     >
-                      關閉
+                      {t("requests.detail.close")}
                     </Button>
                   ) : undefined
                 }
@@ -791,8 +879,8 @@ export function Requests({
               {detailBody ?? (
                 <EmptyState
                   size="inline"
-                  title="尚未選取請求"
-                  description="在清單中按「詳情」，階段與 token 組成會顯示在這裡。"
+                  title={t("requests.detail.emptyTitle")}
+                  description={t("requests.detail.emptyBody")}
                 />
               )}
             </Card>
@@ -803,8 +891,8 @@ export function Requests({
         <Sheet
           open={!!detail}
           onClose={() => setDetail(null)}
-          title="請求詳情"
-          closeLabel="關閉請求詳情"
+          title={t("requests.detail.title")}
+          closeLabel={t("requests.detail.closeSheet")}
         >
           {detailBody}
         </Sheet>
@@ -815,14 +903,17 @@ export function Requests({
           if (!open) setCancel(null);
         }}
       >
-        <DialogContent closeLabel="關閉取消確認" onCloseAutoFocus={restore}>
-          <DialogTitle>取消這個請求？</DialogTitle>
+        <DialogContent
+          closeLabel={t("requests.cancel.closeLabel")}
+          onCloseAutoFocus={restore}
+        >
+          <DialogTitle>{t("requests.cancel.title")}</DialogTitle>
           <DialogDescription>
-            只取消 {cancel?.id}，其他請求不受影響。
+            {t("requests.cancel.description", { id: cancel?.id ?? "" })}
           </DialogDescription>
           <div className="flex justify-end gap-2">
             <Button variant="secondary" onClick={() => setCancel(null)}>
-              繼續執行
+              {t("requests.cancel.keep")}
             </Button>
             <Button
               onClick={() => {
@@ -834,7 +925,7 @@ export function Requests({
                   );
               }}
             >
-              確認取消
+              {t("requests.cancel.confirm")}
             </Button>
           </div>
         </DialogContent>

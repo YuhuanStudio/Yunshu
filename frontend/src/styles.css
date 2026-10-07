@@ -93,7 +93,16 @@ output {
 }
 
 /* A visible keyboard ring that wrapper classes (pill buttons, cards) cannot remove. */
-:where(a, button, input, textarea, select, summary, [role="button"], [tabindex]):focus-visible {
+:where(
+  a,
+  button,
+  input,
+  textarea,
+  select,
+  summary,
+  [role="button"],
+  [tabindex]
+):focus-visible {
   outline: 2px solid var(--text-primary);
   outline-offset: 2px;
 }
@@ -106,6 +115,15 @@ output {
 }
 .dark {
   --tray-track: color-mix(in srgb, var(--bg-base) 55%, var(--bg-elevated));
-  --tray-selected: color-mix(in srgb, var(--text-primary) 13%, var(--bg-elevated));
+  --tray-selected: color-mix(
+    in srgb,
+    var(--text-primary) 13%,
+    var(--bg-elevated)
+  );
   --tray-selected-ring: var(--border-default);
+}
+
+/* The engine pill carries a model name, which is prose, not a measurement: sans, not mono. */
+.pill-sans .font-mono {
+  font-family: var(--font-sans);
 }

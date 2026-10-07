@@ -12,8 +12,10 @@ import {
   Td,
   Th,
   Thead,
+  TimeSeriesChart,
   Tr,
 } from "@yuhuanowo/yunui";
+import type { ComponentProps, CSSProperties } from "react";
 import { ArrowRight } from "lucide-react";
 import {
   MIN_PERCENTILE_SAMPLES,
@@ -24,8 +26,61 @@ import {
   type LatencyBucket,
   type ObservedRequest,
 } from "./analytics";
+import { t, useLocale } from "./i18n/index.ts";
 import type { SeriesPoint } from "./series";
 import { clock, elapsed, number, Slot, type Engine } from "./ui";
+
+type ChartProps = ComponentProps<typeof TimeSeriesChart>;
+
+/**
+ * The console's time-series chart. The library draws a dashed box (min 180px)
+ * when the visible series have no finite value yet, which is exactly what a
+ * long prefill looks like. Here that state becomes one calm muted caption at
+ * the chart's own height: no border, nothing shifting. "Collecting" while the
+ * engine is busy (values are on their way), "idle" when nothing is running.
+ */
+export function SeriesChart({
+  busy,
+  height = 180,
+  className,
+  ...rest
+}: Omit<
+  ChartProps,
+  | "emptyLabel"
+  | "unavailableLabel"
+  | "missingValueLabel"
+  | "hiddenLabel"
+  | "legendLabel"
+  | "keyboardHint"
+  | "collectingLabel"
+  | "minSamples"
+  | "height"
+> & { busy: boolean; height?: number }) {
+  useLocale();
+  return (
+    <div
+      className={`[&_div[role=status]]:h-(--series-h) [&_div[role=status]]:min-h-0 [&_div[role=status]]:rounded-none [&_div[role=status]]:border-0 [&_div[role=status]]:text-xs ${className ?? ""}`}
+      style={{ "--series-h": `${height}px` } as CSSProperties}
+    >
+      <TimeSeriesChart
+        {...rest}
+        height={height}
+        minSamples={5}
+        emptyLabel={t("overview.chart.empty")}
+        unavailableLabel={
+          busy ? t("overview.chart.collecting") : t("overview.chart.idle")
+        }
+        missingValueLabel={t("overview.chart.missing")}
+        hiddenLabel={t("overview.chart.hidden")}
+        legendLabel={t("overview.chart.legend")}
+        keyboardHint={t("overview.chart.keyboardHint")}
+        collectingLabel={(have, need) =>
+          t("overview.chart.collectingSamples", { have, need })
+        }
+      />
+    </div>
+  );
+}
 
 /** The one header every chart card shares: title and caption left, one control right. */
 export function ChartCard({
@@ -69,6 +124,7 @@ export function PhasePanel({
   engine: Engine;
   navigate: (page: string) => void;
 }) {
+  useLocale();
   const [phase, setPhase] = useState<string | null>(null);
   const data = phaseDistribution(engine.status);
   const active = engine.status?.requests.items ?? [];
@@ -76,23 +132,33 @@ export function PhasePanel({
   return (
     <ChartCard
       data-testid="phase-panel"
-      title="請求階段分布"
-      description="點選圖例，查看目前正在處理的工作"
-      action={<span className="text-xs text-muted-foreground">即時</span>}
+      title={t("overview.phasePanel.title")}
+      description={t("overview.phasePanel.desc")}
+      action={
+        <span className="text-xs text-muted-foreground">
+          {t("overview.phasePanel.live")}
+        </span>
+      }
     >
       <DonutChart
         monochrome
         data={data}
         size={154}
-        ariaLabel="目前請求階段"
-        emptyLabel={engine.status ? "目前沒有活動請求" : "尚未取得請求"}
-        unavailableLabel="未回報"
+        ariaLabel={t("overview.phasePanel.aria")}
+        emptyLabel={
+          engine.status
+            ? t("overview.phasePanel.empty")
+            : t("overview.phasePanel.noStatus")
+        }
+        unavailableLabel={t("overview.chart.missing")}
         center={
           <div>
             <strong className="block text-2xl font-semibold tabular-nums">
               {number(engine.status?.requests.active, 0)}
             </strong>
-            <span className="text-xs text-muted-foreground">活動請求</span>
+            <span className="text-xs text-muted-foreground">
+              {t("overview.phasePanel.center")}
+            </span>
           </div>
         }
         onSelect={(datum) =>
@@ -106,7 +172,7 @@ export function PhasePanel({
           className="mt-3"
           onClick={() => setPhase(null)}
         >
-          清除階段篩選
+          {t("overview.phasePanel.clear")}
         </Button>
       )}
       <div className="mt-4 min-h-[7.5rem] divide-y divide-border/60 border-t border-border/60">
@@ -128,8 +194,8 @@ export function PhasePanel({
         {!selected.length && (
           <p className="py-3 text-xs text-muted-foreground">
             {engine.status
-              ? "目前沒有符合這個階段的請求"
-              : "連線後顯示工作清單"}
+              ? t("overview.phasePanel.noMatch")
+              : t("overview.phasePanel.connectFirst")}
           </p>
         )}
       </div>
@@ -139,7 +205,7 @@ export function PhasePanel({
         className="mt-2"
         onClick={() => navigate("requests")}
       >
-        開啟請求工作區
+        {t("overview.phasePanel.open")}
         <ArrowRight size={13} />
       </Button>
     </ChartCard>
@@ -151,6 +217,7 @@ export function LatencyPanel({
 }: {
   records: readonly ObservedRequest[];
 }) {
+  useLocale();
   const bins = useMemo(() => latencyDistribution(records), [records]);
   const [selection, setSelection] = useState<LatencyBucket | null>(null);
   const valid = records.filter(
@@ -171,17 +238,17 @@ export function LatencyPanel({
   return (
     <ChartCard
       data-testid="latency-panel"
-      title="首 Token 延遲分布"
-      description="點選長條查看請求 · 單位 ms"
+      title={t("overview.latency.title")}
+      description={t("overview.latency.desc")}
       action={
         <span className="text-xs tabular-nums text-muted-foreground">
-          {valid.length} 筆已觀測
+          {t("overview.latency.observed", { n: valid.length })}
         </span>
       }
     >
       <div className="mb-4 flex gap-6" data-testid="latency-figures">
         {[
-          ["最近一筆", latest, "latency-last"],
+          [t("overview.latency.latest"), latest, "latency-last"],
           ["P50", p50, "latency-p50"],
           ["P95", p95, "latency-p95"],
         ].map(([label, value, id]) => (
@@ -196,41 +263,44 @@ export function LatencyPanel({
       </div>
       {valid.length < MIN_PERCENTILE_SAMPLES && (
         <p className="-mt-2 mb-3 text-xs text-muted-foreground">
-          已觀測 {valid.length} 筆，滿 {MIN_PERCENTILE_SAMPLES} 筆才顯示 P50 /
-          P95。
+          {t("overview.latency.minNote", {
+            n: valid.length,
+            min: MIN_PERCENTILE_SAMPLES,
+          })}
         </p>
       )}
       <BarChart
         data={bins.map((bin) => ({ ...bin, tone: "neutral" as const }))}
         height={185}
-        ariaLabel="已觀測首 Token 延遲分布"
-        emptyLabel="尚未觀測到帶有延遲資料的請求"
-        unavailableLabel="未回報"
-        formatValue={(v) => `${v} 筆`}
+        ariaLabel={t("overview.latency.aria")}
+        emptyLabel={t("overview.latency.empty")}
+        unavailableLabel={t("overview.chart.missing")}
+        formatValue={(v) => t("overview.latency.count", { n: v })}
         onSelect={(datum) =>
           setSelection(bins.find((bin) => bin.id === datum.id) ?? null)
         }
       />
       <p className="mt-4 text-xs leading-5 text-muted-foreground">
-        採樣只能取得服務最新一筆結束記錄；已按 request ID
-        去重，這不是完整流量的延遲統計。
+        {t("overview.latency.note")}
       </p>
       <Sheet
         open={!!selection}
         onClose={() => setSelection(null)}
-        title={`延遲 ${selection?.label ?? ""} ms`}
-        closeLabel="關閉延遲明細"
+        title={t("overview.latency.sheetTitle", {
+          label: selection?.label ?? "",
+        })}
+        closeLabel={t("overview.latency.close")}
       >
         <p className="mb-4 text-xs text-muted-foreground">
-          目前觀測範圍內，共 {selected.length} 筆請求。
+          {t("overview.latency.sheetCount", { n: selected.length })}
         </p>
         {selected.length ? (
-          <Table scrollLabel="延遲區間請求">
+          <Table scrollLabel={t("overview.latency.tableLabel")}>
             <Thead>
               <Tr>
-                <Th>Request</Th>
+                <Th>{t("overview.latency.colRequest")}</Th>
                 <Th>TTFT</Th>
-                <Th>重用 tokens</Th>
+                <Th>{t("overview.latency.colCached")}</Th>
               </Tr>
             </Thead>
             <Tbody>
@@ -250,8 +320,8 @@ export function LatencyPanel({
         ) : (
           <EmptyState
             size="inline"
-            title="這個區間沒有觀測記錄"
-            description="可關閉面板，選擇另一個延遲區間。"
+            title={t("overview.latency.emptyTitle")}
+            description={t("overview.latency.emptyDesc")}
           />
         )}
       </Sheet>
@@ -270,9 +340,12 @@ export function ActivityPanel({
   end: number;
   onSelectTime: (at: number | null) => void;
 }) {
+  const locale = useLocale();
   const heat = useMemo(
     () => activityHeatmap(history, start, end),
-    [history, start, end],
+    // locale: the row names are translated inside.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [history, start, end, locale],
   );
   const [selection, setSelection] = useState<{
     row: number;
@@ -305,14 +378,13 @@ export function ActivityPanel({
   return (
     <ChartCard
       data-testid="activity-panel"
-      title="請求活動熱圖"
-      description="每個區間的已採樣峰值 · 點選格子，聯動時序圖游標"
+      title={t("overview.heat.title")}
+      description={t("overview.heat.desc")}
       action={
         <span className="text-xs text-muted-foreground">
-          <Slot ch={4} align="right">
-            {history.length}
-          </Slot>{" "}
-          次採樣
+          <Slot ch={10} align="right">
+            {t("overview.heat.samples", { n: history.length })}
+          </Slot>
         </span>
       }
     >
@@ -320,21 +392,23 @@ export function ActivityPanel({
         rows={heat.rows}
         columns={columns}
         data={heat.data}
-        ariaLabel="請求階段活動熱圖"
+        ariaLabel={t("overview.heat.aria")}
         unavailableLabel="—"
-        emptyLabel="沒有採樣"
+        emptyLabel={t("overview.heat.empty")}
         tone="neutral"
         formatValue={(v) => String(v)}
         onSelect={select}
       />
       <div className="mt-4 flex flex-wrap items-center justify-between gap-3 text-xs text-muted-foreground">
-        <p>0 代表已觀測到閒置；— 代表沒有採樣。色階表示區間峰值。</p>
+        <p>{t("overview.heat.legend")}</p>
         {selection && (
           <p role="status">
-            {clock(heat.starts[selection.column])}–
-            {clock(heat.ends[selection.column])} ·{" "}
-            {heat.coverage[selection.column]} 次觀測 · 峰值{" "}
-            {number(heat.data[selection.row][selection.column], 0)}
+            {t("overview.heat.selection", {
+              from: clock(heat.starts[selection.column]),
+              to: clock(heat.ends[selection.column]),
+              n: heat.coverage[selection.column],
+              peak: number(heat.data[selection.row][selection.column], 0),
+            })}
           </p>
         )}
       </div>

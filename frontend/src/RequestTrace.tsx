@@ -1,4 +1,5 @@
 import { Progress, SegmentedBar, StatusIndicator } from "@yuhuanowo/yunui";
+import { t } from "./i18n/index.ts";
 import type { EngineHistoryPoint } from "./useEngine";
 import { number, phaseDot, Readout } from "./ui";
 
@@ -49,13 +50,19 @@ export type Offsets = {
 };
 export type Outcome = "completed" | "cancelled" | "error";
 
-export const phaseLabels: Record<string, string> = {
-  queued: "排隊",
-  starting: "準備中",
-  prefill: "Prefill",
-  decode: "Decode",
-  complete: "已結束",
-};
+/** Label for a reported phase; an unknown phase is shown as reported. */
+export const phaseLabel = (phase: string): string =>
+  phase === "queued"
+    ? t("requests.phase.queued")
+    : phase === "starting"
+      ? t("requests.phase.starting")
+      : phase === "prefill"
+        ? t("requests.phase.prefill")
+        : phase === "decode"
+          ? t("requests.phase.decode")
+          : phase === "complete"
+            ? t("requests.phase.complete")
+            : phase;
 export const isLive = (phase: string) =>
   phase === "decode" || phase === "prefill" || phase === "starting";
 
@@ -99,16 +106,15 @@ export const speculativeText = (row: Row) => {
     spec.acceptance_rate == null
       ? null
       : `${number(spec.acceptance_rate * 100, 0)}%`;
-  return [spec.mode ?? "speculative", rate && `接受 ${rate}`]
+  return [
+    spec.mode ?? "speculative", // i18n-ignore
+    rate && t("requests.trace.speculativeAccept", { rate }),
+  ]
     .filter(Boolean)
     .join(" · ");
 };
 
-const stages = [
-  { key: "queued", label: "排隊" },
-  { key: "prefill", label: "Prefill" },
-  { key: "decode", label: "Decode" },
-] as const;
+const stages = ["queued", "prefill", "decode"] as const;
 const stageIndex = (phase: string) =>
   phase === "queued"
     ? 0
@@ -126,7 +132,7 @@ export function StageRail({ phase }: { phase: string }) {
   return (
     <ol
       className="flex flex-wrap items-center gap-x-5 gap-y-2 text-xs"
-      aria-label="請求階段"
+      aria-label={t("requests.trace.stagesLabel")}
     >
       {stages.map((stage, index) => {
         const state =
@@ -139,7 +145,7 @@ export function StageRail({ phase }: { phase: string }) {
                 : "pending";
         return (
           <li
-            key={stage.key}
+            key={stage}
             aria-current={state === "current" ? "step" : undefined}
           >
             <StatusIndicator
@@ -158,9 +164,9 @@ export function StageRail({ phase }: { phase: string }) {
                     : "text-foreground"
                 }
               >
-                {stage.label}
+                {phaseLabel(stage)}
                 {state === "current" && phase === "starting"
-                  ? "（準備中）"
+                  ? t("requests.trace.startingNote")
                   : ""}
               </span>
             </StatusIndicator>
@@ -183,25 +189,37 @@ export function TokenTrace({ row }: { row: Row }) {
   if (prompt == null || prompt <= 0)
     return (
       <p className="text-xs text-muted-foreground">
-        服務尚未回報 prompt token 數，無法繪製比例。
+        {t("requests.trace.noPromptTokens")}
       </p>
     );
   const computed = prompt - cached;
   return (
     <div className="space-y-2">
       <SegmentedBar
-        label={`Token 組成：快取命中 ${cached}，本次預填 ${computed}，輸出 ${output}`}
+        label={t("requests.trace.compositionLabel", {
+          cached,
+          computed,
+          output,
+        })}
         height={10}
         legend
         formatValue={(value) => `${number(value, 0)} tok`}
         segments={[
-          { value: cached, tone: "info", label: "快取命中（跳過預填）" },
-          { value: computed, tone: "neutral", label: "本次預填計算" },
-          { value: output, tone: "success", label: "已輸出" },
+          { value: cached, tone: "info", label: t("requests.trace.segCached") },
+          {
+            value: computed,
+            tone: "neutral",
+            label: t("requests.trace.segComputed"),
+          },
+          {
+            value: output,
+            tone: "success",
+            label: t("requests.trace.segOutput"),
+          },
         ]}
       />
       <p className="text-xs text-muted-foreground">
-        寬度依 token 數比例，不代表耗時；服務未提供各階段時間。
+        {t("requests.trace.proportionNote")}
       </p>
     </div>
   );
@@ -213,17 +231,19 @@ export function PrefillMeter({ row }: { row: Row }) {
   return (
     <div className="space-y-1.5">
       <div className="flex justify-between text-xs">
-        <span className="text-muted-foreground">Prefill 進度</span>
+        <span className="text-muted-foreground">
+          {t("requests.trace.prefillProgress")}
+        </span>
         <span className="tabular-nums">
           {number(percent)}%
           {row.eta_s != null && (
             <span className="ml-2 text-muted-foreground">
-              預估剩餘 {number(row.eta_s)}s
+              {t("requests.trace.eta", { value: number(row.eta_s) })}
             </span>
           )}
         </span>
       </div>
-      <Progress value={percent} label="Prefill 進度" />
+      <Progress value={percent} label={t("requests.trace.prefillProgress")} />
     </div>
   );
 }

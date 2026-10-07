@@ -3,6 +3,7 @@ import { StatusPill, StatusPillBar } from "@yuhuanowo/yunui/patterns";
 import type { Connection } from "./api";
 import type { Engine } from "./ui";
 import { footerPills, gpuBusyFraction } from "./footer-status";
+import { t } from "./i18n/index.ts";
 import { useMemoryLedger } from "./memory-api";
 
 /** The status band: engine, what it does now, the machine. Current state only. */
@@ -35,10 +36,14 @@ export function FooterStatus({
     ledger: online ? ledger.data : null,
   });
   return (
-    <StatusPillBar ariaLabel="引擎狀態" className="shrink-0 px-4 lg:px-6">
+    <StatusPillBar
+      ariaLabel={t("shell.footer.ariaLabel")}
+      className="shrink-0 px-4 lg:px-6"
+    >
       {pills.map((p) => (
         <StatusPill
           key={p.key}
+          className={p.key === "engine" ? "pill-sans" : undefined}
           label={p.label}
           value={p.value}
           valueMinCh={p.minCh}

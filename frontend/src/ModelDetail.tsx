@@ -1,3 +1,4 @@
+import { t } from "./i18n/index.ts";
 import { useEffect, useState } from "react";
 import {
   Button,
@@ -28,23 +29,25 @@ import {
 
 export const modelState = (model: Model) =>
   model.error
-    ? ({ status: "offline", text: "載入失敗" } as const)
+    ? ({ status: "offline", text: t("models.state.failed") } as const)
     : model.loading
-      ? ({ status: "away", text: "載入中" } as const)
+      ? ({ status: "away", text: t("models.state.loading") } as const)
       : model.loaded
-        ? ({ status: "online", text: "已載入" } as const)
-        : ({ status: "neutral", text: "未載入" } as const);
+        ? ({ status: "online", text: t("models.state.loaded") } as const)
+        : ({ status: "neutral", text: t("models.state.notLoaded") } as const);
 
 export const retention = (model: Model) =>
   !model.loaded
     ? "—"
     : model.pinned
-      ? "固定保留"
+      ? t("models.retention.pinned")
       : model.expires_in_s != null
-        ? `${elapsed(model.expires_in_s)} 後釋放`
+        ? t("models.retention.releaseIn", { time: elapsed(model.expires_in_s) })
         : model.keep_alive_s != null
-          ? `閒置 ${elapsed(model.keep_alive_s)} 後釋放`
-          : "依服務預設";
+          ? t("models.retention.idleRelease", {
+              time: elapsed(model.keep_alive_s),
+            })
+          : t("models.retention.serverDefault");
 
 /** Per-model page: only facts the status and model endpoints report. */
 export function ModelDetail({
@@ -91,7 +94,7 @@ export function ModelDetail({
   const backButton = (
     <Button size="sm" variant="secondary" onClick={back}>
       <ArrowLeft size={14} />
-      返回模型庫
+      {t("models.detail.back")}
     </Button>
   );
   if (!model)
@@ -101,11 +104,15 @@ export function ModelDetail({
         <Card>
           <EmptyState
             icon={<Box size={25} />}
-            title={engine.status ? "服務沒有註冊這個模型" : "等待模型清單"}
+            title={
+              engine.status
+                ? t("models.detail.missingTitle")
+                : t("models.detail.waitingTitle")
+            }
             description={
               engine.status
-                ? "模型可能已被刪除或重新命名；返回模型庫查看目前清單。"
-                : "確認服務位址與存取權杖後重新整理。"
+                ? t("models.detail.missingDescription")
+                : t("models.detail.waitingDescription")
             }
           />
         </Card>
@@ -124,12 +131,12 @@ export function ModelDetail({
           {
             value: Math.min(model.size_gb, active),
             tone: "accent" as const,
-            label: "此模型權重",
+            label: t("models.detail.weights"),
           },
           {
             value: Math.max(0, active - model.size_gb),
             tone: "neutral" as const,
-            label: "其他活躍配置",
+            label: t("models.detail.otherActive"),
           },
         ]
       : null;
@@ -163,16 +170,16 @@ export function ModelDetail({
         <div className="min-w-0 space-y-6">
           <SectionCard
             icon={MemoryStick}
-            title="記憶體"
+            title={t("models.detail.memory.title")}
             description={
               model.loaded
-                ? "模型權重在統一記憶體中的佔比。"
-                : "尚未載入；顯示的是載入後權重佔用的預估比例。"
+                ? t("models.detail.memory.loadedDescription")
+                : t("models.detail.memory.unloadedDescription")
             }
           >
             {share == null ? (
               <p className="text-sm text-muted-foreground">
-                服務沒有回報這個模型的大小或統一記憶體總量。
+                {t("models.detail.memory.unknown")}
               </p>
             ) : (
               <div className="flex flex-wrap items-center gap-6">
@@ -182,14 +189,18 @@ export function ModelDetail({
                   thickness={8}
                   tone={share > 85 ? "warning" : "accent"}
                   label={`${number(share, 0)}%`}
-                  ariaLabel={`模型權重佔統一記憶體 ${number(share, 0)}%`}
+                  ariaLabel={t("models.detail.memory.gaugeAria", {
+                    percent: number(share, 0),
+                  })}
                 />
                 <div className="min-w-0 flex-1 space-y-3">
                   <p className="text-sm tabular-nums">
                     <ModelSize gb={model.size_gb} />
                     <span className="text-muted-foreground">
                       {" "}
-                      / {number(total, 0)} GB 統一記憶體
+                      {t("models.detail.memory.ofTotal", {
+                        total: number(total, 0),
+                      })}
                     </span>
                   </p>
                   {memorySegments && (
@@ -199,7 +210,7 @@ export function ModelDetail({
                       legend
                       height={8}
                       formatValue={(v) => `${number(v)} GB`}
-                      label="MLX 活躍配置組成"
+                      label={t("models.detail.memory.barLabel")}
                     />
                   )}
                 </div>
@@ -208,30 +219,30 @@ export function ModelDetail({
           </SectionCard>
           <SectionCard
             icon={MemoryStick}
-            title="記憶體持有者"
-            description="統一記憶體目前由誰持有；估算值標示「估算」，未知不是 0。"
+            title={t("models.detail.holders.title")}
+            description={t("models.detail.holders.description")}
           >
             {ledger?.unsupported ? (
               <p
                 className="text-sm text-muted-foreground"
                 data-testid="memory-ledger-unsupported"
               >
-                此引擎版本沒有提供記憶體持有者明細（需要較新的 Yunshu）。
+                {t("models.detail.holders.unsupported")}
               </p>
             ) : ledger?.data ? (
               <MemoryLedgerView data={ledger.data} />
             ) : (
               <p role="status" className="text-sm text-muted-foreground">
                 {ledger?.error
-                  ? `無法讀取記憶體明細：${ledger.error}`
-                  : "讀取記憶體明細…"}
+                  ? t("models.detail.holders.error", { error: ledger.error })
+                  : t("models.detail.holders.loading")}
               </p>
             )}
           </SectionCard>
           <SectionCard
             icon={FileJson}
-            title="模型卡"
-            description="服務對此模型回傳的原始資料。"
+            title={t("models.detail.card.title")}
+            description={t("models.detail.card.description")}
           >
             {cardError ? (
               <p role="alert" className="text-sm text-error">
@@ -243,14 +254,16 @@ export function ModelDetail({
               </CodeBlock>
             ) : (
               <p role="status" className="text-sm text-muted-foreground">
-                {online ? "讀取模型資訊…" : "引擎未連線"}
+                {online
+                  ? t("models.detail.card.loading")
+                  : t("models.detail.card.offline")}
               </p>
             )}
           </SectionCard>
         </div>
         <SectionCard
           icon={Timer}
-          title="狀態與保留"
+          title={t("models.detail.facts.title")}
           className="h-fit"
           data-testid="model-facts"
         >
@@ -258,10 +271,14 @@ export function ModelDetail({
             <LocalModelIcon id={model.id} size={32} />
             <IDBadge text={model.id} truncate />
           </div>
-          <DetailList ariaLabel="模型事實">
-            <DetailRow label="類型" value={model.type} mono={false} />
+          <DetailList ariaLabel={t("models.detail.facts.aria")}>
             <DetailRow
-              label="狀態"
+              label={t("models.detail.facts.type")}
+              value={model.type}
+              mono={false}
+            />
+            <DetailRow
+              label={t("models.detail.facts.state")}
               mono={false}
               value={
                 <StatusIndicator status={state.status}>
@@ -269,16 +286,30 @@ export function ModelDetail({
                 </StatusIndicator>
               }
             />
-            <DetailRow label="大小" value={<ModelSize gb={model.size_gb} />} />
-            <DetailRow label="保留" value={retention(model)} mono={false} />
             <DetailRow
-              label="固定保留"
-              value={model.pinned ? "是" : "否"}
+              label={t("models.detail.facts.size")}
+              value={<ModelSize gb={model.size_gb} />}
+            />
+            <DetailRow
+              label={t("models.detail.facts.retention")}
+              value={retention(model)}
               mono={false}
             />
-            <DetailRow label="閒置" value={elapsed(model.idle_s)} />
             <DetailRow
-              label="保留時間"
+              label={t("models.detail.facts.pinned")}
+              value={
+                model.pinned
+                  ? t("models.detail.facts.yes")
+                  : t("models.detail.facts.no")
+              }
+              mono={false}
+            />
+            <DetailRow
+              label={t("models.detail.facts.idle")}
+              value={elapsed(model.idle_s)}
+            />
+            <DetailRow
+              label={t("models.detail.facts.keepAlive")}
               value={
                 model.keep_alive_s != null ? elapsed(model.keep_alive_s) : "—"
               }

@@ -1,7 +1,7 @@
+import { t } from "./i18n/index.ts";
 import { number } from "./ui";
 
-export const SIZE_UNKNOWN_REASON =
-  "這個引擎版本沒有回報模型大小（size_gb）；升級後會顯示。這裡不猜測數字。";
+export const sizeUnknownReason = () => t("models.size.unknownReason");
 
 /** Model size in GB, or an honest dash that explains itself. */
 export function ModelSize({ gb }: { gb: number | null | undefined }) {
@@ -9,8 +9,8 @@ export function ModelSize({ gb }: { gb: number | null | undefined }) {
     return <>{`${number(gb)} GB`}</>;
   return (
     <span
-      title={SIZE_UNKNOWN_REASON}
-      aria-label={`大小未知。${SIZE_UNKNOWN_REASON}`}
+      title={sizeUnknownReason()}
+      aria-label={t("models.size.unknownAria", { reason: sizeUnknownReason() })}
       tabIndex={0}
       className="cursor-help"
       data-testid="size-unknown"

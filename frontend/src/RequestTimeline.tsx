@@ -1,3 +1,4 @@
+import { t } from "./i18n/index.ts";
 import { TraceTimeline } from "@yuhuanowo/yunui/patterns";
 import type { Row } from "./RequestTrace";
 import { number, Readout } from "./ui";
@@ -40,7 +41,7 @@ export function RequestTimeline({ row }: { row: Row }) {
   if (end == null || end <= 0)
     return (
       <p className="text-xs text-muted-foreground">
-        伺服器沒有回報各階段時間點，無法繪製時間軸。
+        {t("requests.timeline.none")}
       </p>
     );
   const spans = [];
@@ -50,7 +51,7 @@ export function RequestTimeline({ row }: { row: Row }) {
       track: "t",
       start: 0,
       end: b.admit,
-      label: "排隊",
+      label: t("requests.timeline.queue"),
       tone: "neutral" as const,
     });
   if (b.admit != null && b.first != null && b.first > b.admit)
@@ -59,18 +60,33 @@ export function RequestTimeline({ row }: { row: Row }) {
       track: "t",
       start: b.admit,
       end: b.first,
-      label: "預填",
+      label: t("requests.timeline.prefill"),
       tone: "info" as const,
       detail: (
         <p className="text-xs">
-          命中 {number(row.cached_tokens, 0)} token · 新增{" "}
-          {number(
-            Math.max((row.prompt_tokens ?? 0) - (row.cached_tokens ?? 0), 0),
-            0,
-          )}{" "}
-          token
-          {reload != null &&
-            ` · 前綴載入 ${formatMs(reload)}（${row.cache?.tier ?? "—"}）`}
+          {reload != null
+            ? t("requests.timeline.prefillDetailReload", {
+                cached: number(row.cached_tokens, 0),
+                fresh: number(
+                  Math.max(
+                    (row.prompt_tokens ?? 0) - (row.cached_tokens ?? 0),
+                    0,
+                  ),
+                  0,
+                ),
+                ms: formatMs(reload),
+                tier: row.cache?.tier ?? "—",
+              })
+            : t("requests.timeline.prefillDetail", {
+                cached: number(row.cached_tokens, 0),
+                fresh: number(
+                  Math.max(
+                    (row.prompt_tokens ?? 0) - (row.cached_tokens ?? 0),
+                    0,
+                  ),
+                  0,
+                ),
+              })}
         </p>
       ),
     });
@@ -81,37 +97,47 @@ export function RequestTimeline({ row }: { row: Row }) {
       track: "t",
       start: b.first,
       end: decodeEnd,
-      label: "解碼",
+      label: t("requests.timeline.decode"),
       tone: "success" as const,
       detail: (
         <p className="text-xs">
-          輸出 {number(row.completion_tokens, 0)} token ·{" "}
-          {number(row.decode_tps)} tok/s
+          {t("requests.timeline.decodeDetail", {
+            tokens: number(row.completion_tokens, 0),
+            tps: number(row.decode_tps),
+          })}
         </p>
       ),
     });
   return (
     <TraceTimeline
-      label={`請求 ${row.id} 時間軸`}
-      tracks={[{ id: "t", label: "請求" }]}
+      label={t("requests.timeline.label", { id: row.id })}
+      tracks={[{ id: "t", label: t("requests.timeline.track") }]}
       spans={spans}
       markers={
-        b.first != null ? [{ id: "ft", at: b.first, label: "首 token" }] : []
+        b.first != null
+          ? [
+              {
+                id: "ft",
+                at: b.first,
+                label: t("requests.timeline.firstToken"),
+              },
+            ]
+          : []
       }
       duration={end}
       formatTime={formatMs}
       labels={{
-        view: "檢視",
-        timeline: "時間軸",
-        table: "表格",
-        track: "軌道",
-        span: "階段",
-        start: "開始",
-        end: "結束",
-        duration: "耗時",
-        marker: "標記",
-        running: "進行中",
-        expand: "展開詳情",
+        view: t("requests.timeline.view"),
+        timeline: t("requests.timeline.timeline"),
+        table: t("requests.timeline.table"),
+        track: t("requests.timeline.trackCol"),
+        span: t("requests.timeline.span"),
+        start: t("requests.timeline.start"),
+        end: t("requests.timeline.end"),
+        duration: t("requests.timeline.duration"),
+        marker: t("requests.timeline.marker"),
+        running: t("requests.timeline.running"),
+        expand: t("requests.timeline.expand"),
       }}
     />
   );
@@ -127,32 +153,35 @@ export function RequestBreakdown({ row }: { row: Row }) {
   return (
     <div className="space-y-4">
       <div className="grid min-h-[3.5rem] grid-cols-2 gap-x-5 gap-y-4">
-        <Readout label="排隊" value={ms(b.queue)} />
-        <Readout label="首 token 延遲 (TTFT)" value={ms(b.ttft)} />
-        <Readout label="解碼" value={ms(b.decode)} />
-        <Readout label="總計" value={ms(b.total)} />
+        <Readout label={t("requests.breakdown.queue")} value={ms(b.queue)} />
+        <Readout label={t("requests.breakdown.ttft")} value={ms(b.ttft)} />
+        <Readout label={t("requests.breakdown.decode")} value={ms(b.decode)} />
+        <Readout label={t("requests.breakdown.total")} value={ms(b.total)} />
       </div>
       <div className="grid min-h-[3.5rem] grid-cols-2 gap-x-5 gap-y-4">
         <Readout
-          label="命中 token"
+          label={t("requests.breakdown.cachedTokens")}
           value={number(prompt == null ? null : cached, 0)}
         />
         <Readout
-          label="新增 token"
+          label={t("requests.breakdown.newTokens")}
           value={number(
             prompt == null ? null : Math.max(prompt - cached, 0),
             0,
           )}
         />
-        <Readout label="輸出 token" value={number(row.completion_tokens, 0)} />
         <Readout
-          label="推測接受率"
+          label={t("requests.breakdown.outputTokens")}
+          value={number(row.completion_tokens, 0)}
+        />
+        <Readout
+          label={t("requests.breakdown.specAccept")}
           value={
             spec?.acceptance_rate == null
               ? "—"
               : `${number(spec.acceptance_rate * 100, 0)}%`
           }
-          hint={spec ? undefined : "未啟用推測解碼"}
+          hint={spec ? undefined : t("requests.breakdown.specOff")}
         />
       </div>
     </div>

@@ -1,3 +1,4 @@
+import { t, tr } from "./i18n/index.ts";
 import { useRef, useState } from "react";
 import {
   Button,
@@ -227,11 +228,15 @@ export function Models({
           <Table scrollLabel={title} className="min-w-[640px] table-fixed">
             <Thead>
               <Tr>
-                <Th>模型</Th>
-                <Th className="w-40">狀態</Th>
-                <Th className="hidden w-24 md:table-cell">大小</Th>
-                <Th className="hidden w-32 xl:table-cell">保留</Th>
-                <Th className="w-72">操作</Th>
+                <Th>{t("models.list.col.model")}</Th>
+                <Th className="w-40">{t("models.list.col.state")}</Th>
+                <Th className="hidden w-24 md:table-cell">
+                  {t("models.list.col.size")}
+                </Th>
+                <Th className="hidden w-32 xl:table-cell">
+                  {t("models.list.col.keep")}
+                </Th>
+                <Th className="w-72">{t("models.list.col.actions")}</Th>
               </Tr>
             </Thead>
             <Tbody>
@@ -281,12 +286,12 @@ export function Models({
                       >
                         <span className="whitespace-nowrap text-foreground">
                           {model.loading
-                            ? "載入中"
+                            ? t("models.state.loading")
                             : model.error
-                              ? "載入失敗"
+                              ? t("models.state.failed")
                               : model.loaded
-                                ? "已載入"
-                                : "未載入"}
+                                ? t("models.state.loaded")
+                                : t("models.state.notLoaded")}
                         </span>
                       </StatusIndicator>
                       <div className="mt-2 h-1">
@@ -294,7 +299,9 @@ export function Models({
                           <Progress
                             indeterminate
                             className="h-1"
-                            label={`${modelLabel(model.id)} 載入中`}
+                            label={t("models.list.loadingAria", {
+                              name: modelLabel(model.id),
+                            })}
                           />
                         )}
                       </div>
@@ -306,8 +313,10 @@ export function Models({
                   <Td className="hidden tabular-nums text-muted-foreground xl:table-cell">
                     {model.loaded
                       ? model.pinned
-                        ? "固定保留"
-                        : `${elapsed(model.expires_in_s)} 後釋放`
+                        ? t("models.retention.pinned")
+                        : t("models.retention.releaseIn", {
+                            time: elapsed(model.expires_in_s),
+                          })
                       : "—"}
                   </Td>
                   <Td>
@@ -347,8 +356,8 @@ export function Models({
       ) : (
         <>
           <PageHeader
-            title="模型庫"
-            description="管理此服務註冊的模型，查看載入狀態、記憶體與保留時間。"
+            title={t("models.list.title")}
+            description={t("models.list.description")}
             actions={
               <div className="flex flex-wrap gap-2">
                 <ModelManagement
@@ -356,9 +365,9 @@ export function Models({
                   disabled={!online || !!busy}
                   disabledReason={
                     !online
-                      ? "引擎未連線，連線後才能匯入模型"
+                      ? t("models.list.offlineReason")
                       : busy
-                        ? "另一項操作進行中"
+                        ? t("models.list.busyReason")
                         : undefined
                   }
                   perform={perform}
@@ -369,7 +378,7 @@ export function Models({
                   onClick={() => void engine.refresh()}
                 >
                   <RefreshCw size={14} />
-                  重新整理
+                  {t("models.list.refresh")}
                 </Button>
               </div>
             }
@@ -377,17 +386,17 @@ export function Models({
           <Card className="flex flex-wrap items-center gap-3 p-4">
             <SearchInput
               className="w-full sm:max-w-xs"
-              aria-label="搜尋模型"
+              aria-label={t("models.list.searchAria")}
               value={query}
               onChange={setQuery}
-              placeholder="搜尋模型 ID"
+              placeholder={t("models.list.searchPlaceholder")}
             />
             <SegmentedTray
               value={filter}
               onChange={setFilter}
               options={[
-                { value: "all", label: "全部模型" },
-                { value: "loaded", label: "已載入" },
+                { value: "all", label: t("models.list.filterAll") },
+                { value: "loaded", label: t("models.list.filterLoaded") },
               ]}
             />
             {kinds.length > 1 && (
@@ -395,7 +404,7 @@ export function Models({
                 value={kind}
                 onChange={setKind}
                 options={[
-                  { value: "all", label: "所有類型" },
+                  { value: "all", label: t("models.list.kindAll") },
                   ...kinds.map((k) => ({ value: k, label: k })),
                 ]}
               />
@@ -405,15 +414,25 @@ export function Models({
               value={view}
               onChange={(v) => setView(v as "table" | "cards")}
               options={[
-                { value: "table", label: "表格", icon: Table2 },
-                { value: "cards", label: "卡片", icon: LayoutGrid },
+                {
+                  value: "table",
+                  label: t("models.list.viewTable"),
+                  icon: Table2,
+                },
+                {
+                  value: "cards",
+                  label: t("models.list.viewCards"),
+                  icon: LayoutGrid,
+                },
               ]}
             />
           </Card>
           {memTotal != null && memTotal > 0 && (
             <Card className="flex flex-wrap items-center gap-x-6 gap-y-3 px-5 py-4">
               <div className="min-w-0">
-                <p className="text-xs text-muted-foreground">統一記憶體使用</p>
+                <p className="text-xs text-muted-foreground">
+                  {t("models.list.memoryUsage")}
+                </p>
                 <p className="mt-1 text-2xl font-semibold tabular-nums">
                   <Slot ch={5} align="right">
                     {fixed(memActive)}
@@ -429,14 +448,17 @@ export function Models({
                   0,
                   Math.min(100, ((memActive ?? 0) / memTotal) * 100),
                 )}
-                label="統一記憶體使用"
+                label={t("models.list.memoryUsage")}
               />
               <Slot
                 ch={22}
                 align="right"
                 className="text-xs text-muted-foreground"
               >
-                已載入 {loadedRows.length} · 可用 {fixed(memFree)} GB
+                {t("models.list.memorySummary", {
+                  loaded: loadedRows.length,
+                  free: fixed(memFree),
+                })}
               </Slot>
             </Card>
           )}
@@ -445,24 +467,29 @@ export function Models({
               <EmptyState
                 size="inline"
                 icon={<Box size={22} />}
-                title={engine.status ? "沒有符合條件的模型" : "等待模型清單"}
+                title={
+                  engine.status
+                    ? t("models.list.emptyTitle")
+                    : t("models.detail.waitingTitle")
+                }
                 description={
                   engine.status
-                    ? "清除篩選條件；或匯入 Hugging Face 原生 MLX 模型。"
-                    : "確認服務位址與存取權杖後重新整理。"
+                    ? t("models.list.emptyDescription")
+                    : t("models.detail.waitingDescription")
                 }
               />
             </Card>
           ) : (
             <>
-              {loadedRows.length > 0 && group("已載入的模型", loadedRows)}
+              {loadedRows.length > 0 &&
+                group(t("models.list.groupLoaded"), loadedRows)}
               {filter === "all" &&
                 availableRows.length > 0 &&
-                group("可用模型", availableRows)}
+                group(t("models.list.groupAvailable"), availableRows)}
             </>
           )}
           <p className="text-xs text-muted-foreground">
-            載入、卸載與預熱會呼叫此引擎。單模型模式固定保留；服務可能因正在執行請求而拒絕卸載。
+            {t("models.list.note")}
           </p>
         </>
       )}
@@ -472,14 +499,17 @@ export function Models({
           if (!open) setUnloading(null);
         }}
       >
-        <DialogContent closeLabel="關閉卸載確認" onCloseAutoFocus={restore}>
-          <DialogTitle>卸載模型？</DialogTitle>
+        <DialogContent
+          closeLabel={t("models.unload.close")}
+          onCloseAutoFocus={restore}
+        >
+          <DialogTitle>{t("models.unload.title")}</DialogTitle>
           <DialogDescription>
-            {unloading?.id} 將釋放記憶體，之後使用前需要重新載入。
+            {t("models.unload.description", { id: unloading?.id ?? "" })}
           </DialogDescription>
           <div className="flex justify-end gap-2">
             <Button variant="secondary" onClick={() => setUnloading(null)}>
-              保留模型
+              {t("models.unload.keep")}
             </Button>
             <Button
               onClick={() => {
@@ -491,7 +521,7 @@ export function Models({
                   );
               }}
             >
-              卸載
+              {t("models.unload.confirm")}
             </Button>
           </div>
         </DialogContent>
@@ -505,11 +535,14 @@ export function Models({
           }
         }}
       >
-        <DialogContent closeLabel="關閉模型資訊" onCloseAutoFocus={restore}>
+        <DialogContent
+          closeLabel={t("models.info.close")}
+          onCloseAutoFocus={restore}
+        >
           <DialogTitle>
-            {details ? modelLabel(details.id) : "模型資訊"}
+            {details ? modelLabel(details.id) : t("models.info.title")}
           </DialogTitle>
-          <DialogDescription>服務回傳的模型卡與能力資訊</DialogDescription>
+          <DialogDescription>{t("models.info.description")}</DialogDescription>
           {detailError ? (
             <p role="alert" className="text-sm text-error">
               {detailError}
@@ -520,7 +553,7 @@ export function Models({
             </CodeBlock>
           ) : (
             <p role="status" className="text-sm text-muted-foreground">
-              讀取模型資訊…
+              {t("models.info.loading")}
             </p>
           )}
           {details && (
@@ -534,7 +567,7 @@ export function Models({
                   open(id);
                 }}
               >
-                開啟詳細頁
+                {t("models.info.openDetail")}
               </Button>
             </DialogFooter>
           )}

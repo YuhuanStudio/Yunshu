@@ -11,9 +11,7 @@ export function pluralCategory(locale: Locale, n: number): string {
 }
 
 type Part =
-  | string
-  | { v: string }
-  | { v: string; plural: Record<string, Part[]> };
+  string | { v: string } | { v: string; plural: Record<string, Part[]> };
 
 const parsed = new Map<string, Part[]>();
 
@@ -81,7 +79,10 @@ function run(
     else if ("plural" in p) {
       const n = Number(vars[p.v]);
       const body =
-        p.plural[`=${n}`] ?? p.plural[pluralCategory(locale, n)] ?? p.plural.other ?? [];
+        p.plural[`=${n}`] ??
+        p.plural[pluralCategory(locale, n)] ??
+        p.plural.other ??
+        [];
       s += run(body, vars, locale, String(n));
     } else if (p.v === "#") s += hash;
     else s += vars[p.v] == null ? "" : String(vars[p.v]);

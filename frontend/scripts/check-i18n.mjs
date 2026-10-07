@@ -131,6 +131,8 @@ for (const file of files) {
         else fail(`${where(node)} tr(${k.text}) needs a "// i18n-keys: <prefix>" comment`);
       }
     }
+    // A string literal equal to a key counts as a use (keys passed around as data).
+    if (ts.isStringLiteral(node) && node.text in source) used.add(node.text);
     // Hard-coded strings
     if ((ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node) || ts.isTemplateHead(node) || ts.isTemplateMiddle(node) || ts.isTemplateTail(node)) && CJK.test(node.text) && !ignored(node)) {
       fail(`${where(node)} hard-coded CJK: ${JSON.stringify(node.text.slice(0, 40))}`);

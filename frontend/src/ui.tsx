@@ -10,11 +10,22 @@ import {
   type ReactNode,
 } from "react";
 import type { EngineStatus } from "./api";
+import { t } from "./i18n/index.ts";
 import type { useEngine } from "./useEngine";
 import { offlineCause } from "./errors";
 export type Engine = ReturnType<typeof useEngine>;
 export type Model = EngineStatus["models"][number];
-export { number, fixed, clock, elapsed, percent, gb, bytes, relative, dateTime } from "./i18n/format.ts";
+export {
+  number,
+  fixed,
+  clock,
+  elapsed,
+  percent,
+  gb,
+  bytes,
+  relative,
+  dateTime,
+} from "./i18n/format.ts";
 import { clock, number } from "./i18n/format.ts";
 /**
  * A numeric slot that keeps its width: tabular figures plus a reserved minimum
@@ -55,9 +66,9 @@ export function ConnectionState({
   const cause = offlineCause(engine.phase, engine.errorStatus);
   const description = [
     cause.hint,
-    engine.phase === "offline" ? "每 3 秒自動重試。" : "",
+    engine.phase === "offline" ? t("common.autoRetry") : "",
     engine.updatedAt
-      ? `最後成功連線 ${clock(engine.updatedAt)}，下方保留上次資料。`
+      ? t("common.lastOk", { time: clock(engine.updatedAt) })
       : "",
   ]
     .filter(Boolean)
@@ -76,10 +87,10 @@ export function ConnectionState({
               onClick={() => void engine.refresh()}
             >
               <RefreshCw size={13} />
-              重試
+              {t("common.retry")}
             </Button>
             <Button size="sm" variant="ghost" onClick={configure}>
-              連線設定
+              {t("common.configure")}
             </Button>
           </>
         }
@@ -279,15 +290,15 @@ export function CopyField({
             size="sm"
             variant="secondary"
             type="button"
-            aria-label={`複製${label}`}
+            aria-label={t("common.copyLabel", { label })}
             onClick={() => void copy()}
           >
             {state === "done" ? <Check size={13} /> : <Copy size={13} />}
             {state === "done"
-              ? "已複製"
+              ? t("common.copied")
               : state === "failed"
-                ? "無法寫入剪貼簿"
-                : "複製"}
+                ? t("common.copyFailed")
+                : t("common.copy")}
           </Button>
         </div>
       </label>

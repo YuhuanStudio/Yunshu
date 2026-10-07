@@ -1,4 +1,5 @@
 import { failureMessage, statusMessage } from "./errors.ts";
+import { t } from "./i18n/index.ts";
 /** Small, typed client for Yunshu's same-origin `/v1` control/status routes. */
 export interface Connection {
   /** Server origin or API base, with or without a trailing `/v1`. */
@@ -152,15 +153,14 @@ function apiRoot(connection: Connection): URL {
   try {
     url = new URL(connection.baseUrl.trim());
   } catch {
-    throw new ApiError("請輸入有效的引擎位址。");
+    throw new ApiError(t("errors.address.invalid"));
   }
   if (url.protocol !== "http:" && url.protocol !== "https:") {
-    throw new ApiError("引擎位址必須使用 HTTP 或 HTTPS。");
+    throw new ApiError(t("errors.address.protocol"));
   }
   if (url.username || url.password)
-    throw new ApiError("引擎位址不可包含帳號或密碼。");
-  if (url.search || url.hash)
-    throw new ApiError("引擎位址不可包含查詢參數或錨點。");
+    throw new ApiError(t("errors.address.credentials"));
+  if (url.search || url.hash) throw new ApiError(t("errors.address.query"));
 
   const path = url.pathname.replace(/\/+$/, "");
   url.pathname = path.endsWith("/v1") ? `${path}/` : `${path}/v1/`;
@@ -176,11 +176,11 @@ function buildUrl(connection: Connection, path: string): URL {
     path.includes("?") ||
     path.includes("#")
   ) {
-    throw new ApiError("無效的 API 路徑。");
+    throw new ApiError(t("errors.address.path"));
   }
   const relativePath = path.replace(/^\/+/, "");
   if (relativePath.split("/").some((part) => part === ".." || part === ".")) {
-    throw new ApiError("無效的 API 路徑。");
+    throw new ApiError(t("errors.address.path"));
   }
   return new URL(relativePath, apiRoot(connection));
 }

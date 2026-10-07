@@ -83,11 +83,13 @@ const yunui: Shape<typeof zh> = {
   "components.confirmModal.cancel": "取消",
   "components.confirmModal.confirm": "确认",
   "components.confirmModal.delete": "删除",
-  "components.confirmModal.deleteMessage": "确定要删除 \"{item}\" 吗？此操作无法撤销。",
+  "components.confirmModal.deleteMessage":
+    '确定要删除 "{item}" 吗？此操作无法撤销。',
   "components.confirmModal.deleteQuestion": "删除？",
   "components.confirmModal.processing": "处理中...",
   "components.confirmModal.regenerate": "重新生成",
-  "components.confirmModal.regenerateMessage": "确定要重新生成 \"{item}\" 吗？旧值将立即失效。",
+  "components.confirmModal.regenerateMessage":
+    '确定要重新生成 "{item}" 吗？旧值将立即失效。',
   "components.confirmModal.regenerateQuestion": "重新生成？",
   "components.mediaPageHeader.error": "错误",
   "components.mediaPageHeader.loading": "加载中...",

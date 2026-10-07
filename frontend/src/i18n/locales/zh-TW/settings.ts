@@ -1,2 +1,37 @@
-const settings = {} as const;
+const settings = {
+  title: "設定",
+  description: "連線到本機服務，並調整控制台偏好。",
+  "nav.label": "設定分類",
+  "nav.connection": "引擎連線",
+  "nav.appearance": "外觀",
+  "nav.models": "模型保留",
+  "nav.config": "有效設定",
+  "nav.shortcuts": "鍵盤快速鍵",
+  "connection.title": "引擎連線",
+  "connection.description": "控制台要連到哪一個 Yunshu 服務。",
+  "connection.url": "服務位址",
+  "connection.urlHelp":
+    "預設使用同一個服務來源。開發模式由 Vite 轉送至本機 8000 埠。",
+  "connection.token": "存取權杖",
+  "connection.tokenHelp":
+    "只保留在此頁記憶體；重新整理後需要再輸入。更改服務位址會清除權杖。",
+  "connection.tokenPlaceholder": "服務沒有啟用驗證時可留空",
+  "connection.showToken": "顯示權杖",
+  "connection.hideToken": "隱藏權杖",
+  "connection.save": "儲存並連線",
+  "connection.invalid": "請使用不含帳密、查詢參數或錨點的 HTTP(S) 服務位址。",
+  "connection.invalidShort": "服務位址無效",
+  "appearance.title": "外觀",
+  "appearance.dark": "深色介面",
+  "appearance.darkHelp": "儲存於此瀏覽器。",
+  "appearance.language": "語言",
+  "appearance.languageHelp": "儲存於此瀏覽器；切換後立即生效。",
+  "permissions.title": "模型操作權限",
+  "permissions.description":
+    "載入與卸載需要服務允許的權限；若出現 401，請使用服務設定的 YUNSHU_AUTH_TOKEN。此頁不會修改引擎啟動參數或關閉驗證。",
+  "shortcuts.title": "鍵盤快速鍵",
+  "shortcuts.palette": "開啟命令面板，快速切換頁面與模型",
+  "shortcuts.send": "在測試台送出訊息",
+  "shortcuts.close": "關閉對話框與選單",
+};
 export default settings;

@@ -11,5 +11,5 @@ export function thinkingOpen(
   return streaming && !hasAnswer;
 }
 
-/** Seconds the 復原 strip stays after clearing a conversation. */
+/** Seconds the undo strip stays after clearing a conversation. */
 export const UNDO_WINDOW_MS = 8000;

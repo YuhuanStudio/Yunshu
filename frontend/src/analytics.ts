@@ -1,3 +1,5 @@
+import { number } from "./i18n/format.ts";
+import { t, tr } from "./i18n/index.ts";
 import type { EngineHistoryPoint } from "./useEngine";
 import type { SeriesPoint } from "./series";
 import type { EngineLastRequest, EngineStatus } from "./api";
@@ -12,12 +14,9 @@ export interface LatencyBucket {
   min: number;
   max: number;
 }
-export const phaseNames: Record<string, string> = {
-  queued: "排隊",
-  starting: "準備中",
-  prefill: "預填",
-  decode: "解碼",
-};
+const PHASE_IDS = ["queued", "starting", "prefill", "decode"];
+export const phaseName = (id: string) =>
+  PHASE_IDS.includes(id) ? tr(`overview.phase.${id}`) : id;
 export const phaseTones = {
   queued: "warning",
   starting: "neutral",
@@ -100,7 +99,7 @@ export function phaseDistribution(status: EngineStatus | null) {
   return [...counts].map(([id, value]) => ({
     id,
     value,
-    label: Object.hasOwn(phaseNames, id) ? phaseNames[id] : id,
+    label: phaseName(id),
     tone: Object.hasOwn(phaseTones, id)
       ? phaseTones[id as keyof typeof phaseTones]
       : ("neutral" as const),
@@ -117,7 +116,12 @@ export function activityHeatmap(
   const count = Math.max(1, Math.floor(columns)),
     span = Math.max(1, end - start),
     step = span / count;
-  const rows = ["活動請求", "排隊", "預填", "解碼"];
+  const rows = [
+    t("overview.activity.rowActive"),
+    t("overview.phase.queued"),
+    t("overview.phase.prefill"),
+    t("overview.phase.decode"),
+  ];
   const data: (number | null)[][] = rows.map(() =>
     Array.from({ length: count }, () => null),
   );
@@ -240,7 +244,7 @@ export function trendDelta(
     label:
       Math.abs(value) > TREND_CAP
         ? `>${TREND_CAP}%`
-        : `${Math.abs(value).toFixed(0)}%`,
+        : `${number(Math.abs(value), 0)}%`,
   };
 }
 

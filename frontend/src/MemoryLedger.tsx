@@ -11,6 +11,8 @@ import {
 } from "@yuhuanowo/yunui";
 import type { BarMark, BarSegment, SegmentTone } from "@yuhuanowo/yunui";
 import type { Connection } from "./api";
+import { gb, number } from "./i18n/format.ts";
+import { has, t, tr, useLocale } from "./i18n/index.ts";
 import {
   useMemoryLedger,
   type MemoryLedgerData,
@@ -21,14 +23,6 @@ import {
 export const LEDGER_WARN = 0.8,
   LEDGER_DANGER = 0.92;
 
-const KIND_LABEL: Record<string, string> = {
-  weights: "模型權重",
-  apc_ram: "前綴快取（記憶體）",
-  apc_warm: "前綴快取（暖層）",
-  live_kv: "進行中請求的 KV",
-  mlx_cache: "記憶體保留池",
-  other: "其他",
-};
 const KIND_TONE: Record<string, SegmentTone> = {
   weights: "accent",
   apc_ram: "info",
@@ -39,10 +33,12 @@ const KIND_TONE: Record<string, SegmentTone> = {
 };
 
 const gbText = (v: number | null, digits = 1) =>
-  v == null ? "未知" : `${v.toFixed(digits)} GB`;
+  v == null ? t("overview.ledger.unknown") : gb(v, digits);
 
 export function ownerLabel(o: MemoryOwner) {
-  const base = KIND_LABEL[o.kind] ?? o.kind;
+  const key = `overview.ledger.kind.${o.kind}`;
+  // i18n-keys: overview.ledger.kind.
+  const base = has(key) ? tr(key) : o.kind;
   return o.id ? `${base} · ${o.id.split("/").pop()}` : base;
 }
 
@@ -68,25 +64,29 @@ function ledgerBar(d: MemoryLedgerData) {
     .map((o) => ({
       value: o.gb as number,
       tone: KIND_TONE[o.kind] ?? "neutral",
-      label: `${ownerLabel(o)}${o.estimated ? "（估算）" : ""}`,
+      label: `${ownerLabel(o)}${o.estimated ? t("overview.ledger.estimated") : ""}`,
     }));
   const marks: BarMark[] = [];
   if (d.mlx.peak_gb != null)
     marks.push({
       value: d.mlx.peak_gb,
-      label: `自啟動峰值 ${gbText(d.mlx.peak_gb)}`,
+      label: t("overview.ledger.peakMark", { gb: gbText(d.mlx.peak_gb) }),
     });
   if (d.mlx.recommended_working_set_gb != null)
     marks.push({
       value: d.mlx.recommended_working_set_gb,
       tone: "warning",
-      label: `Metal 建議上限 ${gbText(d.mlx.recommended_working_set_gb)}`,
+      label: t("overview.ledger.recommendedMark", {
+        gb: gbText(d.mlx.recommended_working_set_gb),
+      }),
     });
   if (d.host.wired_limit_gb != null)
     marks.push({
       value: d.host.wired_limit_gb,
       tone: "error",
-      label: `Wired 上限 ${gbText(d.host.wired_limit_gb)}`,
+      label: t("overview.ledger.wiredMark", {
+        gb: gbText(d.host.wired_limit_gb),
+      }),
     });
   return { segments, marks };
 }
@@ -99,6 +99,7 @@ export function MemoryLedgerView({
   data: MemoryLedgerData;
   compact?: boolean;
 }) {
+  useLocale();
   const usage = ledgerUsage(data),
     tone = ledgerTone(usage);
   const { segments, marks } = ledgerBar(data);
@@ -107,41 +108,53 @@ export function MemoryLedgerView({
     <div className="space-y-4" data-testid="memory-ledger">
       <div className="flex flex-wrap items-center gap-5">
         {usage == null ? (
-          <p className="text-sm text-muted-foreground">Metal 記憶體：未知</p>
+          <p className="text-sm text-muted-foreground">
+            {t("overview.ledger.metalUnknown")}
+          </p>
         ) : (
           <Gauge
             value={usage * 100}
             size={compact ? 72 : 96}
             thickness={compact ? 7 : 8}
             tone={tone}
-            label={`${(usage * 100).toFixed(0)}%`}
-            ariaLabel={`Metal 記憶體佔統一記憶體 ${(usage * 100).toFixed(0)}%`}
+            label={`${number(usage * 100, 0)}%`}
+            ariaLabel={t("overview.ledger.gaugeAria", {
+              pct: number(usage * 100, 0),
+            })}
           />
         )}
         <div className="min-w-0 flex-1 basis-56 space-y-1 text-sm tabular-nums">
           <p>
-            Metal 記憶體 {gbText(data.mlx.active_gb)}
+            {t("overview.ledger.usage", { used: gbText(data.mlx.active_gb) })}
             <span className="text-muted-foreground">
               {" "}
-              / {gbText(data.total_gb, 0)} 統一記憶體
+              {t("overview.ledger.ofTotal", {
+                total: gbText(data.total_gb, 0),
+              })}
             </span>
             {tone === "error" && (
               <StatusIndicator
                 status="offline"
                 className="ml-2 gap-1.5 text-xs text-muted-foreground"
               >
-                接近上限
+                {t("overview.ledger.nearLimit")}
               </StatusIndicator>
             )}
           </p>
           <p className="text-xs text-muted-foreground">
-            可用 {gbText(data.free_gb)} · 自服務啟動峰值{" "}
-            {gbText(data.mlx.peak_gb)}
+            {t("overview.ledger.free", {
+              gb: gbText(data.free_gb),
+              peak: gbText(data.mlx.peak_gb),
+            })}
             {data.host.pressure_level
-              ? ` · 系統壓力 ${data.host.pressure_level}`
+              ? t("overview.ledger.pressure", {
+                  level: data.host.pressure_level,
+                })
               : ""}
             {data.host.swap_used_gb != null
-              ? ` · swap ${gbText(data.host.swap_used_gb, 2)}`
+              ? t("overview.ledger.swap", {
+                  gb: gbText(data.host.swap_used_gb, 2),
+                })
               : ""}
           </p>
         </div>
@@ -153,29 +166,32 @@ export function MemoryLedgerView({
           total={data.total_gb}
           legend={!compact}
           height={compact ? 6 : 10}
-          formatValue={(v) => `${v.toFixed(1)} GB`}
-          label="Metal 記憶體依持有者分佈"
+          formatValue={(v) => gb(v, 1)}
+          label={t("overview.ledger.barLabel")}
         />
       ) : (
         <p className="text-xs text-muted-foreground">
-          尚無可顯示的持有者分佈（沒有載入的模型，或服務沒有回報）。
+          {t("overview.ledger.noOwners")}
         </p>
       )}
       {data.attribution_overshoot_gb != null && (
         <p className="text-xs text-muted-foreground">
-          各持有者加總超過 Metal 活躍記憶體{" "}
-          {gbText(data.attribution_overshoot_gb, 2)}
-          ，「其他」顯示為 0。
+          {t("overview.ledger.overshoot", {
+            gb: gbText(data.attribution_overshoot_gb, 2),
+          })}
         </p>
       )}
       {!compact && (
         <div className="overflow-x-auto">
-          <Table aria-label="記憶體持有者" scrollLabel="記憶體持有者表格">
+          <Table
+            aria-label={t("overview.ledger.tableAria")}
+            scrollLabel={t("overview.ledger.tableLabel")}
+          >
             <Thead>
               <Tr>
-                <Th>持有者</Th>
-                <Th className="text-right">大小</Th>
-                <Th>可回收</Th>
+                <Th>{t("overview.ledger.colOwner")}</Th>
+                <Th className="text-right">{t("overview.ledger.colSize")}</Th>
+                <Th>{t("overview.ledger.colReclaimable")}</Th>
               </Tr>
             </Thead>
             <Tbody>
@@ -184,24 +200,26 @@ export function MemoryLedgerView({
                   <Td>{ownerLabel(o)}</Td>
                   <Td
                     className="text-right tabular-nums"
-                    title={o.source ?? "服務沒有這項的計數"}
+                    title={o.source ?? t("overview.ledger.noCounter")}
                   >
                     {o.gb == null ? (
-                      "未知"
+                      t("overview.ledger.unknown")
                     ) : (
                       <>
                         {o.estimated ? "≈ " : ""}
-                        {o.gb.toFixed(2)} GB
+                        {gb(o.gb, 2)}
                         {o.estimated && (
                           <span className="ml-1 text-xs text-muted-foreground">
-                            估算
+                            {t("overview.ledger.estimatedShort")}
                           </span>
                         )}
                       </>
                     )}
                   </Td>
                   <Td className="text-muted-foreground">
-                    {o.reclaimable ? "可回收" : "否"}
+                    {o.reclaimable
+                      ? t("overview.ledger.reclaimable")
+                      : t("overview.ledger.notReclaimable")}
                   </Td>
                 </Tr>
               ))}
@@ -209,7 +227,7 @@ export function MemoryLedgerView({
           </Table>
           {unknownOwners.length > 0 && (
             <p className="mt-2 text-xs text-muted-foreground">
-              「未知」表示服務沒有這項的計數，不代表 0。
+              {t("overview.ledger.unknownNote")}
             </p>
           )}
         </div>
@@ -228,6 +246,7 @@ export function MemoryLedger({
   enabled?: boolean;
   compact?: boolean;
 }) {
+  useLocale();
   const { data, unsupported, error } = useMemoryLedger(connection, enabled);
   if (unsupported)
     return (
@@ -235,13 +254,15 @@ export function MemoryLedger({
         className="text-sm text-muted-foreground"
         data-testid="memory-ledger-unsupported"
       >
-        此引擎版本沒有提供記憶體持有者明細（需要較新的 Yunshu）。
+        {t("overview.ledger.unsupported")}
       </p>
     );
   if (!data)
     return (
       <p role="status" className="text-sm text-muted-foreground">
-        {error ? `無法讀取記憶體明細：${error}` : "讀取記憶體明細…"}
+        {error
+          ? t("overview.ledger.error", { error })
+          : t("overview.ledger.loading")}
       </p>
     );
   return <MemoryLedgerView data={data} compact={compact} />;

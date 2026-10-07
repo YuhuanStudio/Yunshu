@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { t } from "./i18n/index.ts";
 import { ApiError, type Connection } from "./api";
 import type { Offsets, Outcome, Row } from "./RequestTrace";
 
@@ -25,13 +26,14 @@ export type RecentEntry = {
   cancelled?: boolean;
 };
 
-export const outcomeLabels: Record<Outcome, string> = {
-  completed: "完成",
-  cancelled: "已取消",
-  error: "錯誤",
-};
+export const outcomeLabel = (o: Outcome): string =>
+  o === "completed"
+    ? t("requests.outcome.completed")
+    : o === "cancelled"
+      ? t("requests.outcome.cancelled")
+      : t("requests.outcome.error");
 
-/** `status` is the HTTP status the server answered with; a cancel or an error never counts as 完成. */
+/** `status` is the HTTP status the server answered with; a cancel or an error never counts as completed. */
 export function outcomeOf(
   e: Pick<RecentEntry, "status" | "cancelled">,
 ): Outcome {
@@ -145,7 +147,8 @@ export function useRecentRequests(
         }
         setState((s) => ({
           ...s,
-          error: e instanceof Error ? e.message : "無法取得完成記錄",
+          error:
+            e instanceof Error ? e.message : t("requests.recent.loadFailed"),
         }));
       } finally {
         flying = false;

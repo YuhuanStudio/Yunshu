@@ -19,6 +19,7 @@ import {
 import { ExternalLink, ListTree, Search } from "lucide-react";
 import { ApiError, type Connection } from "./api";
 import { requestServerJson } from "./management-api";
+import { t } from "./i18n/index.ts";
 import { SectionCard } from "./ui";
 import { CopyIconButton, ErrorNote } from "./error-note";
 type Operation = {
@@ -63,7 +64,7 @@ export function ApiCatalog({ connection }: { connection: Connection }) {
               tag:
                 Array.isArray(item.tags) && typeof item.tags[0] === "string"
                   ? item.tags[0]
-                  : "其他",
+                  : t("api.catalog.tag.other"),
               id: typeof item.operationId === "string" ? item.operationId : "",
             });
           }
@@ -93,8 +94,8 @@ export function ApiCatalog({ connection }: { connection: Connection }) {
   return (
     <SectionCard
       icon={ListTree}
-      title="此服務的完整 API"
-      description={`從目前引擎的 OpenAPI 定義讀取，共 ${operations.length} 個操作。`}
+      title={t("api.catalog.title")}
+      description={t("api.catalog.description", { count: operations.length })}
       className="min-w-0 overflow-hidden"
       bodyClassName="p-0"
       data-testid="api-catalog"
@@ -107,7 +108,7 @@ export function ApiCatalog({ connection }: { connection: Connection }) {
           }
         >
           <ExternalLink size={13} />
-          API 文件
+          {t("api.catalog.docs")}
         </Button>
       }
     >
@@ -116,17 +117,20 @@ export function ApiCatalog({ connection }: { connection: Connection }) {
           <Input
             className="sm:max-w-sm"
             icon={<Search size={13} />}
-            aria-label="搜尋 API"
-            placeholder="搜尋路徑、方法或功能"
+            aria-label={t("api.catalog.search.aria")}
+            placeholder={t("api.catalog.search.placeholder")}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />
           <Select value={tag} onValueChange={setTag}>
-            <SelectTrigger aria-label="API 類別" className="w-48">
+            <SelectTrigger
+              aria-label={t("api.catalog.tag.aria")}
+              className="w-48"
+            >
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="all">全部功能</SelectItem>
+              <SelectItem value="all">{t("api.catalog.tag.all")}</SelectItem>
               {tags.map((item) => (
                 <SelectItem key={item} value={item}>
                   {item}
@@ -141,19 +145,19 @@ export function ApiCatalog({ connection }: { connection: Connection }) {
             message={
               error instanceof ApiError
                 ? error.publicMessage
-                : "無法取得 API 定義"
+                : t("api.catalog.error")
             }
             error={error}
           />
         )}
       </div>
       <ScrollFade className="max-h-[32rem] overflow-auto">
-        <Table scrollLabel="服務 API 目錄">
+        <Table scrollLabel={t("api.catalog.table.aria")}>
           <Thead>
             <Tr>
-              <Th>方法</Th>
-              <Th>路徑</Th>
-              <Th>功能</Th>
+              <Th>{t("api.catalog.table.method")}</Th>
+              <Th>{t("api.catalog.table.path")}</Th>
+              <Th>{t("api.catalog.table.function")}</Th>
             </Tr>
           </Thead>
           <Tbody>
@@ -178,7 +182,10 @@ export function ApiCatalog({ connection }: { connection: Connection }) {
                     </a>
                     <CopyIconButton
                       value={root + item.path}
-                      label={`複製 ${item.method} ${item.path} 的完整網址`}
+                      label={t("api.catalog.copy", {
+                        method: item.method,
+                        path: item.path,
+                      })}
                     />
                   </span>
                 </Td>
@@ -197,12 +204,12 @@ export function ApiCatalog({ connection }: { connection: Connection }) {
           size="inline"
           title={
             loading
-              ? "讀取 API 定義…"
+              ? t("api.catalog.loading")
               : error
-                ? "API 定義尚未取得"
-                : "沒有符合的 API"
+                ? t("api.catalog.unavailable")
+                : t("api.catalog.empty")
           }
-          description="此目錄反映服務實際提供的路由，不會推測未提供的功能。"
+          description={t("api.catalog.emptyNote")}
         />
       )}
     </SectionCard>

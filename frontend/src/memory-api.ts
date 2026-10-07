@@ -1,4 +1,6 @@
 import { useEffect, useState } from "react";
+import { fixed } from "./i18n/format.ts";
+import { t } from "./i18n/index.ts";
 import { ApiError, requestJson, type Connection } from "./api.ts";
 
 export type MemoryOwner = {
@@ -164,22 +166,13 @@ export function fitVerdict(
   freeGb: number | null | undefined,
 ): Fit {
   if (!sizeGb || sizeGb <= 0)
-    return { verdict: "unknown", text: "大小未知，無法判斷是否放得下" };
+    return { verdict: "unknown", text: t("overview.fit.unknownSize") };
   if (freeGb == null)
-    return { verdict: "unknown", text: "未取得可用記憶體，無法判斷是否放得下" };
-  const f = (n: number) => n.toFixed(1);
+    return { verdict: "unknown", text: t("overview.fit.unknownFree") };
+  const vars = { size: fixed(sizeGb), free: fixed(freeGb) };
   if (sizeGb > freeGb)
-    return {
-      verdict: "no",
-      text: `約需 ${f(sizeGb)} GB，目前可用 ${f(freeGb)} GB，可能放不下`,
-    };
+    return { verdict: "no", text: t("overview.fit.no", vars) };
   if (sizeGb > freeGb * 0.85)
-    return {
-      verdict: "tight",
-      text: `約需 ${f(sizeGb)} GB，目前可用 ${f(freeGb)} GB，餘裕很小`,
-    };
-  return {
-    verdict: "fits",
-    text: `約需 ${f(sizeGb)} GB，目前可用 ${f(freeGb)} GB，放得下`,
-  };
+    return { verdict: "tight", text: t("overview.fit.tight", vars) };
+  return { verdict: "fits", text: t("overview.fit.fits", vars) };
 }

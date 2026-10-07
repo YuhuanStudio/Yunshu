@@ -1,3 +1,4 @@
+import { t } from "./i18n/index.ts";
 import { Play, Square, Zap } from "lucide-react";
 import { Button } from "@yuhuanowo/yunui";
 import { loadModel, warmupModel, type Connection } from "./api";
@@ -44,12 +45,12 @@ export function ModelActions({
             disabled={!online || !supportsChat(model)}
             title={
               supportsChat(model)
-                ? "文字或視覺推理測試"
-                : "此模型請使用 API 接入對應端點"
+                ? t("models.actions.testTitleChat")
+                : t("models.actions.testTitleApi")
             }
             onClick={() => test(model.id)}
           >
-            測試
+            {t("models.actions.test")}
           </Button>
           <Button
             variant="ghost"
@@ -62,7 +63,7 @@ export function ModelActions({
             }
           >
             <Zap size={12} />
-            預熱
+            {t("models.actions.warmup")}
           </Button>
         </>
       ) : (
@@ -77,7 +78,9 @@ export function ModelActions({
           }
         >
           <Play size={12} />
-          {busy?.endsWith(model.id) ? "處理中" : "載入"}
+          {busy?.endsWith(model.id)
+            ? t("models.actions.working")
+            : t("models.actions.load")}
         </Button>
       )}
       {model.loaded && (
@@ -88,7 +91,9 @@ export function ModelActions({
           onClick={(e) => requestUnload(model, e.currentTarget)}
         >
           <Square size={12} />
-          {busy?.endsWith(model.id) ? "處理中" : "卸載"}
+          {busy?.endsWith(model.id)
+            ? t("models.actions.working")
+            : t("models.actions.unload")}
         </Button>
       )}
       {fit && fit.verdict !== "unknown" && (

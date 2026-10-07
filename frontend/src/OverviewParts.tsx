@@ -6,15 +6,13 @@ import {
   activity,
   decodeFigures,
   decodeHeadline,
-  phaseLabels,
   prefillHeadline,
-  speedTerms,
-  windowLabel,
   type ActivityPhase,
   type Headline,
   type Totals,
 } from "./engineView";
 import { livePrefillTps } from "./series";
+import { t, tr, useLocale } from "./i18n/index.ts";
 import { clock, elapsed, fixed, number, Slot } from "./ui";
 
 const order: ActivityPhase[] = ["idle", "queued", "prefill", "decode"];
@@ -33,39 +31,64 @@ const dot = (phase: ActivityPhase, lit: boolean) =>
  * progress bar follows the prompt being read.
  */
 export function StateStrip({ status }: { status: EngineStatus | null }) {
+  useLocale();
   const a = status ? activity(status) : null;
   const last = status?.last ?? null;
   const countOf = (id: ActivityPhase) =>
     !a || id === "idle" ? 0 : a.counts[id as "queued" | "prefill" | "decode"];
-  let left = "等待引擎回應";
+  let left = t("overview.strip.waitingEngine");
   let right = "";
   let progress: number | null = null;
   if (status && a) {
     if (a.phase === "idle") {
       left = last
-        ? `等待請求 · 最近一筆 ${clock(last.t * 1000)} · ${number(last.prompt_tokens, 0)} 輸入 / ${number(last.completion_tokens, 0)} 輸出 token`
-        : "等待請求";
+        ? t("overview.strip.idleLast", {
+            t: clock(last.t * 1000),
+            input: number(last.prompt_tokens, 0),
+            output: number(last.completion_tokens, 0),
+          })
+        : t("overview.strip.waitingRequest");
       right =
         last?.decode_tps != null
-          ? `${speedTerms.last} 解碼 ${fixed(last.decode_tps)} tok/s`
+          ? t("overview.strip.idleDecode", {
+              label: t("overview.speed.last"),
+              tps: fixed(last.decode_tps),
+            })
           : "";
     } else if (a.phase === "queued") {
-      left = `${a.counts.queued} 個請求排隊中`;
+      left = t("overview.strip.queued", { n: a.counts.queued });
     } else if (a.phase === "prefill") {
       const row = a.prefilling;
       progress = a.progress;
       left = a.preparing
-        ? "準備中，尚未開始讀取提示詞"
-        : `預填 ${a.progress != null ? number(a.progress, 0) + "%" : ""} · ${number(row?.processed_tokens, 0)} / ${number(row?.prompt_tokens, 0)} token`;
+        ? t("overview.strip.preparing")
+        : t("overview.strip.prefill", {
+            pct: a.progress != null ? number(a.progress, 0) + "%" : "",
+            done: number(row?.processed_tokens, 0),
+            total: number(row?.prompt_tokens, 0),
+          });
       right =
         row?.tokens_per_second != null
-          ? `${number(row.tokens_per_second, 0)} tok/s${row.eta_s != null ? ` · 約 ${elapsed(row.eta_s)} 後開始輸出` : ""}`
+          ? row.eta_s != null
+            ? t("overview.strip.prefillRate", {
+                tps: number(row.tokens_per_second, 0),
+                eta: elapsed(row.eta_s),
+              })
+            : t("overview.strip.prefillRateOnly", {
+                tps: number(row.tokens_per_second, 0),
+              })
           : "";
     } else {
-      left = `解碼中${a.generated != null ? ` · 已輸出 ${number(a.generated, 0)} token` : ""}`;
+      left =
+        a.generated != null
+          ? t("overview.strip.decodingN", { n: number(a.generated, 0) })
+          : t("overview.strip.decoding");
       right =
         a.decodeNow != null
-          ? `${fixed(a.decodeNow)} tok/s ${speedTerms.live}`
+          ? t("overview.strip.decodeLive", {
+              tps: fixed(a.decodeNow),
+              live: t("overview.speed.live"),
+            })
           : "";
     }
   }
@@ -74,7 +97,10 @@ export function StateStrip({ status }: { status: EngineStatus | null }) {
       className="relative flex flex-wrap items-center gap-x-4 gap-y-1 overflow-hidden px-4 py-2"
       data-testid="state-strip"
     >
-      <ul className="flex shrink-0 items-center gap-0.5" aria-label="引擎階段">
+      <ul
+        className="flex shrink-0 items-center gap-0.5"
+        aria-label={t("overview.strip.aria")}
+      >
         {order.map((id) => {
           const lit = !!a && a.lit.includes(id);
           return (
@@ -86,7 +112,7 @@ export function StateStrip({ status }: { status: EngineStatus | null }) {
               className={`inline-flex h-6 items-center gap-1.5 rounded-md px-2 text-xs transition-opacity duration-150 ${lit ? "bg-(--bg-elevated) text-foreground" : "text-muted-foreground opacity-50"}`}
             >
               <StatusIndicator status={dot(id, lit)} />
-              {phaseLabels[id]}
+              {tr(`overview.phase.${id}`)}
               {id !== "idle" && (
                 <Slot ch={1} align="right" className="tabular-nums">
                   {lit ? countOf(id) : ""}
@@ -116,8 +142,8 @@ export function StateStrip({ status }: { status: EngineStatus | null }) {
           value={progress == null ? 0 : Math.max(0, Math.min(100, progress))}
           label={
             progress == null
-              ? "預填進度，尚無進度回報"
-              : `預填 ${number(progress, 0)}%`
+              ? t("overview.strip.prefillBarNone")
+              : t("overview.strip.prefillBar", { pct: number(progress, 0) })
           }
         />
       )}
@@ -130,10 +156,11 @@ export function StateStrip({ status }: { status: EngineStatus | null }) {
  * own label (即時合計 / 最近一筆); the window mean is a separate, labelled line.
  */
 export function SpeedPair({ status }: { status: EngineStatus }) {
+  useLocale();
   const f = decodeFigures(status);
   const decode = decodeHeadline(status);
   const prefill = prefillHeadline(status, livePrefillTps(status));
-  const windowText = speedTerms.window(f.windowS);
+  const windowText = t("overview.speed.window", { s: Math.round(f.windowS) });
   const card = (
     term: string,
     icon: typeof Zap,
@@ -171,9 +198,15 @@ export function SpeedPair({ status }: { status: EngineStatus }) {
   );
   return (
     <div className="contents" data-testid="speed-pair">
-      {card("解碼", Zap, decode, f.windowMean, "speed-decode")}
       {card(
-        "預填",
+        t("overview.speed.decodeTitle"),
+        Zap,
+        decode,
+        f.windowMean,
+        "speed-decode",
+      )}
+      {card(
+        t("overview.speed.prefillTitle"),
         BookOpenText,
         prefill,
         status.throughput.mean_prefill_tps,
@@ -192,15 +225,32 @@ const compact = (n: number) =>
 
 /** "自 HH:MM 起 N 筆請求…": what this page has seen finish, with token-weighted rates. */
 export function TotalsLine({ totals }: { totals: Totals | null }) {
+  useLocale();
   return (
     <p
       className="mt-3 min-h-8 text-xs leading-4 text-muted-foreground"
       data-testid="totals-line"
-      title="只計入本頁開啟後觀測到的已結束請求，不是引擎的全部流量。"
+      title={t("overview.totals.hint")}
     >
       {totals
-        ? `自 ${clock(totals.since)} 起 ${number(totals.requests, 0)} 筆請求 · 輸入 ${compact(totals.promptTokens)} token（命中 ${compact(totals.cachedTokens)}）${totals.prefillTps != null ? `，預填 ${number(totals.prefillTps, 0)} tok/s` : ""} · 輸出 ${compact(totals.completionTokens)} token${totals.decodeTps != null ? `，解碼 ${fixed(totals.decodeTps)} tok/s` : ""}`
-        : "本頁開啟後尚未觀測到已結束的請求。"}
+        ? t("overview.totals.line", {
+            t: clock(totals.since),
+            n: totals.requests,
+            input: compact(totals.promptTokens),
+            cached: compact(totals.cachedTokens),
+            prefill:
+              totals.prefillTps != null
+                ? t("overview.totals.prefill", {
+                    tps: number(totals.prefillTps, 0),
+                  })
+                : "",
+            output: compact(totals.completionTokens),
+            decode:
+              totals.decodeTps != null
+                ? t("overview.totals.decode", { tps: fixed(totals.decodeTps) })
+                : "",
+          })
+        : t("overview.totals.none")}
     </p>
   );
 }

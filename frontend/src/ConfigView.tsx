@@ -15,14 +15,15 @@ import {
 import { Search, SlidersHorizontal } from "lucide-react";
 import { ApiError, requestJson, type Connection } from "./api";
 import {
-  SOURCE_LABEL,
-  STABILITY_LABEL,
+  sourceLabel,
+  stabilityLabel,
   filterConfig,
   formatConfigValue,
   isChanged,
   parseConfig,
   type ConfigPayload,
 } from "./config-view";
+import { t } from "./i18n/index.ts";
 import { ErrorNote } from "./error-note";
 import { SectionCard } from "./ui";
 
@@ -46,7 +47,7 @@ export function ConfigView({ connection }: { connection: Connection }) {
       .then((payload) => {
         if (controller.signal.aborted) return;
         const parsed = parseConfig(payload);
-        if (!parsed) throw new ApiError("引擎回傳的資料格式不符合預期。");
+        if (!parsed) throw new ApiError(t("diagnostics.config.badShape"));
         setData(parsed);
         setState("ok");
       })
@@ -67,11 +68,14 @@ export function ConfigView({ connection }: { connection: Connection }) {
   return (
     <SectionCard
       icon={SlidersHorizontal}
-      title="有效設定"
+      title={t("diagnostics.config.title")}
       description={
         state === "ok"
-          ? `引擎實際生效的設定，共 ${data?.rows.length ?? 0} 項，${changed} 項與預設不同。唯讀；修改請用 yunshu config 或環境變數並重新啟動。`
-          : "引擎實際生效的設定與來源。"
+          ? t("diagnostics.config.description", {
+              count: data?.rows.length ?? 0,
+              changed,
+            })
+          : t("diagnostics.config.descriptionShort")
       }
       data-testid="config-view"
       className="min-w-0 overflow-hidden"
@@ -80,8 +84,8 @@ export function ConfigView({ connection }: { connection: Connection }) {
       {state === "missing" && (
         <EmptyState
           size="inline"
-          title="這個引擎尚未提供有效設定"
-          description="需要提供 /v1/yunshu/config 的引擎版本；請以命令列 yunshu config 查看。"
+          title={t("diagnostics.config.missing.title")}
+          description={t("diagnostics.config.missing.description")}
         />
       )}
       {state === "error" && (
@@ -91,7 +95,7 @@ export function ConfigView({ connection }: { connection: Connection }) {
             message={
               failure instanceof ApiError
                 ? failure.publicMessage
-                : "無法取得有效設定。"
+                : t("diagnostics.config.error")
             }
             error={failure}
           />
@@ -99,7 +103,7 @@ export function ConfigView({ connection }: { connection: Connection }) {
       )}
       {state === "loading" && (
         <p role="status" className="px-5 pb-5 text-sm text-muted-foreground">
-          正在讀取有效設定…
+          {t("diagnostics.config.loading")}
         </p>
       )}
       {state === "ok" && data && (
@@ -108,49 +112,54 @@ export function ConfigView({ connection }: { connection: Connection }) {
             <Input
               className="sm:max-w-sm"
               icon={<Search size={13} />}
-              aria-label="搜尋設定"
-              placeholder="搜尋名稱、值或類別"
+              aria-label={t("diagnostics.config.search.aria")}
+              placeholder={t("diagnostics.config.search.placeholder")}
               value={query}
               onChange={(e) => setQuery(e.target.value)}
             />
             <span className="flex items-center gap-2 text-xs text-muted-foreground">
               <Switch
-                label="只看與預設不同"
+                label={t("diagnostics.config.changedOnly")}
                 checked={changedOnly}
                 onCheckedChange={setChangedOnly}
               />
-              只看與預設不同
+              {t("diagnostics.config.changedOnly")}
             </span>
             <span className="flex items-center gap-2 text-xs text-muted-foreground">
               <Switch
-                label="含實驗與內部設定"
+                label={t("diagnostics.config.includeAll")}
                 checked={all}
                 onCheckedChange={setAll}
               />
-              含實驗與內部設定
+              {t("diagnostics.config.includeAll")}
             </span>
             <span className="text-xs text-muted-foreground">
-              實驗旗標 {data.experimentalCount} / {data.experimentalMax}
+              {t("diagnostics.config.experimental", {
+                count: data.experimentalCount,
+                max: data.experimentalMax,
+              })}
             </span>
           </div>
           {data.warnings.length > 0 && (
             <div className="px-5 pb-3">
               <ErrorNote
                 tone="warning"
-                message={`有 ${data.warnings.length} 則設定警告。`}
+                message={t("diagnostics.config.warnings", {
+                  count: data.warnings.length,
+                })}
                 detail={data.warnings.join("\n")}
               />
             </div>
           )}
           <ScrollFade className="max-h-[36rem] overflow-auto">
-            <Table scrollLabel="有效設定">
+            <Table scrollLabel={t("diagnostics.config.table.aria")}>
               <Thead>
                 <Tr>
-                  <Th>名稱</Th>
-                  <Th>值</Th>
-                  <Th>預設</Th>
-                  <Th>來源</Th>
-                  <Th>穩定度</Th>
+                  <Th>{t("diagnostics.config.table.name")}</Th>
+                  <Th>{t("diagnostics.config.table.value")}</Th>
+                  <Th>{t("diagnostics.config.table.default")}</Th>
+                  <Th>{t("diagnostics.config.table.source")}</Th>
+                  <Th>{t("diagnostics.config.table.stability")}</Th>
                 </Tr>
               </Thead>
               <Tbody>
@@ -184,7 +193,7 @@ export function ConfigView({ connection }: { connection: Connection }) {
                       <span
                         className={`text-xs ${row.source === "default" ? "text-muted-foreground" : "font-medium"}`}
                       >
-                        {SOURCE_LABEL[row.source] ?? row.source}
+                        {sourceLabel(row.source)}
                       </span>
                     </Td>
                     <Td>
@@ -192,7 +201,7 @@ export function ConfigView({ connection }: { connection: Connection }) {
                         className="gap-1.5 text-xs text-muted-foreground"
                         status={row.stability === "stable" ? "neutral" : "away"}
                       >
-                        {STABILITY_LABEL[row.stability] ?? row.stability}
+                        {stabilityLabel(row.stability)}
                       </StatusIndicator>
                     </Td>
                   </Tr>
@@ -200,7 +209,9 @@ export function ConfigView({ connection }: { connection: Connection }) {
               </Tbody>
             </Table>
           </ScrollFade>
-          {!rows.length && <EmptyState size="inline" title="沒有符合的設定" />}
+          {!rows.length && (
+            <EmptyState size="inline" title={t("diagnostics.config.empty")} />
+          )}
         </>
       )}
     </SectionCard>

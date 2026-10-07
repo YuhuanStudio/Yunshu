@@ -1,9 +1,10 @@
 import { useState } from "react";
 import { Button } from "@yuhuanowo/yunui";
 import { Check, Copy } from "lucide-react";
+import { t } from "./i18n/index.ts";
 import { detailText } from "./errors.ts";
 
-/** One calm zh-TW line with the raw backend text tucked behind 詳細資訊. */
+/** One calm line with the raw backend text tucked behind the details. */
 export function ErrorNote({
   message,
   detail,
@@ -30,7 +31,9 @@ export function ErrorNote({
       <p className={color}>{message}</p>
       {raw && (
         <details className="mt-1 text-muted-foreground">
-          <summary className="cursor-pointer select-none">詳細資訊</summary>
+          <summary className="cursor-pointer select-none">
+            {t("common.details")}
+          </summary>
           <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap break-all font-mono">
             {raw}
           </pre>

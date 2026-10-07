@@ -1,3 +1,5 @@
+import { t } from "./i18n/index.ts";
+
 /**
  * Setup commands for common clients, generated for the current service address
  * and model. Shapes follow docs/guides/CLIENTS.md and AGENT_COMPAT.md; the real
@@ -27,8 +29,7 @@ export function buildIntegrations(
     {
       id: "claude-code",
       title: "Claude Code",
-      description:
-        "走 Anthropic Messages 介面；所有模型別名都指向目前的模型。也可執行 yunshu launch claude 自動設定。",
+      description: t("api.integration.claudeCode.description"),
       language: "bash",
       code: [
         `export ANTHROPIC_BASE_URL=${root}`,
@@ -43,8 +44,7 @@ export function buildIntegrations(
     {
       id: "codex",
       title: "Codex",
-      description:
-        "加入 ~/.codex/config.toml，使用 Responses 介面，並設定環境變數 YUNSHU_API_KEY。也可執行 yunshu launch codex。",
+      description: t("api.integration.codex.description"),
       language: "toml",
       filename: "config.toml",
       code: [
@@ -61,8 +61,7 @@ export function buildIntegrations(
     {
       id: "opencode",
       title: "opencode",
-      description:
-        "加入 opencode.json；limit 請依模型實際的上下文長度調整。也可執行 yunshu launch opencode。",
+      description: t("api.integration.opencode.description"),
       language: "json",
       filename: "opencode.json",
       code: JSON.stringify(
@@ -85,7 +84,7 @@ export function buildIntegrations(
     {
       id: "openai",
       title: "OpenAI Python SDK",
-      description: "標準 OpenAI 介面，只需換掉 base_url。",
+      description: t("api.integration.openai.description"),
       language: "python",
       code: [
         "import os",
@@ -102,7 +101,7 @@ export function buildIntegrations(
     {
       id: "anthropic",
       title: "Anthropic SDK",
-      description: "base_url 不含 /v1，SDK 會自行加上路徑。",
+      description: t("api.integration.anthropic.description"),
       language: "python",
       code: [
         "import os",
@@ -120,7 +119,7 @@ export function buildIntegrations(
     {
       id: "curl",
       title: "curl",
-      description: "直接呼叫 chat completions。",
+      description: t("api.integration.curl.description"),
       language: "bash",
       code: [
         `curl ${v1}/chat/completions \\`,
