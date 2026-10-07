@@ -56,6 +56,22 @@ const seconds = (ms: number) => `${number(ms / 1000, 2)} s`;
 const signed = (v: number, digits: number) =>
   `${v > 0 ? "+" : v < 0 ? "−" : ""}${number(Math.abs(v), digits)}`;
 
+/** Speculative decoding as reported by the engine: mode, tokens committed per
+ *  verify round and draft acceptance. Only what x_yunshu.speculative carries. */
+function specLabel(
+  spec: { mode: string; rounds?: number; acceptanceRate?: number },
+  tokens: number | undefined,
+) {
+  const mode = spec.mode.toUpperCase();
+  const perRound =
+    spec.rounds && tokens ? ` · 每輪 ${number(tokens / spec.rounds, 2)} tok` : "";
+  const rate =
+    spec.acceptanceRate != null
+      ? ` · 接受率 ${number(spec.acceptanceRate * 100, 0)}%`
+      : "";
+  return `${mode}${perRound}${rate}`;
+}
+
 /** Per-reply engine stats; live while `now` ticks, final once `endAt` is set. */
 function ReplyStats({ run, now }: { run: Run; now: number }) {
   if (!run.timing) return null;
@@ -82,6 +98,11 @@ function ReplyStats({ run, now }: { run: Run; now: number }) {
         <Badge variant="outline">
           快取 {number(s.cachedTokens, 0)}
           {s.promptTokens !== undefined ? `/${number(s.promptTokens, 0)}` : ""}
+        </Badge>
+      )}
+      {run.timing.usage?.spec && (
+        <Badge variant="outline">
+          {specLabel(run.timing.usage.spec, s.tokens)}
         </Badge>
       )}
       {s.estimated && !live && (

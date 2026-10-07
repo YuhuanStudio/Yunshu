@@ -60,6 +60,12 @@ export interface EngineLastRequest {
   decode_tps: number | null;
   ttft_ms: number | null;
   t: number;
+  /** Speculative decoding of that request (x_yunshu.speculative), when it drafted. */
+  speculative?: {
+    mode?: string;
+    acceptance_rate?: number | null;
+    rounds?: number;
+  } | null;
   [key: string]: unknown;
 }
 

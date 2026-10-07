@@ -512,6 +512,7 @@ def record_done(info: RequestInfo, stats: dict) -> None:
             "prefill_tps": stats.get("prefill_tps"),
             "decode_tps": stats.get("decode_tps"),
             "ttft_ms": stats.get("ttft_ms"),
+            "speculative": stats.get("speculative"),
         }
     )
     with contextlib.suppress(Exception):

@@ -29,6 +29,12 @@ export interface CompletionUsage {
   completionTokens?: number;
   cachedTokens?: number;
   ttftMs?: number;
+  /** x_yunshu.speculative: speculative decoding as the engine ran it. */
+  spec?: {
+    mode: string;
+    rounds?: number;
+    acceptanceRate?: number;
+  };
 }
 
 export interface CompletionDelta {
@@ -42,7 +48,7 @@ const finiteNumber = (value: unknown): number | undefined =>
   typeof value === "number" && Number.isFinite(value) ? value : undefined;
 
 /** Read OpenAI `usage` (plus optional x_yunshu extras) from a stream chunk. */
-function parseUsage(
+export function parseUsage(
   record: Record<string, unknown>,
 ): CompletionUsage | undefined {
   const usage =
@@ -69,6 +75,17 @@ function parseUsage(
   if (completionTokens !== undefined) out.completionTokens = completionTokens;
   if (cachedTokens !== undefined) out.cachedTokens = cachedTokens;
   if (ttftMs !== undefined) out.ttftMs = ttftMs;
+  const spec =
+    extra?.speculative && typeof extra.speculative === "object"
+      ? (extra.speculative as Record<string, unknown>)
+      : undefined;
+  if (spec && typeof spec.mode === "string") {
+    out.spec = { mode: spec.mode };
+    const rounds = finiteNumber(spec.rounds),
+      rate = finiteNumber(spec.acceptance_rate);
+    if (rounds !== undefined) out.spec.rounds = rounds;
+    if (rate !== undefined) out.spec.acceptanceRate = rate;
+  }
   return Object.keys(out).length ? out : undefined;
 }
 

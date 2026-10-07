@@ -505,6 +505,17 @@ export default function App() {
               <Badge variant="outline">
                 Decode {number(last.decode_tps)} tok/s
               </Badge>
+              {last.speculative?.mode && (
+                <Badge variant="outline">
+                  {String(last.speculative.mode).toUpperCase()}
+                  {last.speculative.rounds && last.completion_tokens
+                    ? ` · 每輪 ${number(last.completion_tokens / last.speculative.rounds, 2)} tok`
+                    : ""}
+                  {last.speculative.acceptance_rate != null
+                    ? ` · 接受 ${number(last.speculative.acceptance_rate * 100, 0)}%`
+                    : ""}
+                </Badge>
+              )}
               {last.prompt_tokens > 0 && (
                 <Badge variant="outline">
                   快取 {number(last.cached_tokens, 0)} /{" "}
