@@ -763,3 +763,19 @@ def test_openai_sdk_decisions_create_round_trips(served):
     assert (
         d.usage.total_tokens == 42 and d.usage.input_tokens_details.cached_tokens == 0
     )
+
+
+def test_model_card_of_a_decision_checkpoint(tmp_path):
+    from yunshu_engine.model_card import build_model_card
+
+    _checkpoint(tmp_path, dict(CFG, hidden_size=5120))
+    card = build_model_card(tmp_path)
+    assert card.kind == "decision"
+    assert (
+        "/v1/decisions" in card.api["endpoints"]
+        and "/v1/systemone" in card.api["endpoints"]
+    )
+    assert "decision" in card.capabilities()
+    assert card.input_modalities == ["text", "image"] and card.output_modalities == [
+        "decision"
+    ]
