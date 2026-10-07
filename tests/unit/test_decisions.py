@@ -779,3 +779,16 @@ def test_model_card_of_a_decision_checkpoint(tmp_path):
     assert card.input_modalities == ["text", "image"] and card.output_modalities == [
         "decision"
     ]
+
+
+def test_reordering_choices_gives_the_same_token_sequence():
+    a = choice("c", ["billing", "support", "sales"])
+    b = Question("choice", "c", a.instructions, tuple(reversed(a.options)))
+    ra = de.encode_record(tok, "state", [a, score("s", ["x", "y"])])
+    rb = de.encode_record(tok, "state", [b, score("s", ["x", "y"])])
+    assert (
+        ra.input_ids == rb.input_ids
+    )  # so the logits are identical: order cannot matter
+    # while adding a question changes the sequence: the head decides all fields jointly
+    rc = de.encode_record(tok, "state", [a])
+    assert rc.input_ids != ra.input_ids

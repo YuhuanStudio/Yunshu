@@ -165,7 +165,8 @@ def run_checks(oa, http, model, semantic=True, timings=None):
 
     # 3. option order must not move the probabilities: the head sees choices sorted by id, so the
     #    token sequences are identical. Any difference is compute noise, measured and bounded here.
-    rev = [dict(qs[0], choices=list(reversed(qs[0]["choices"])))]
+    #    (the head decides ALL questions jointly, so the whole question set is sent again)
+    rev = [dict(qs[0], choices=list(reversed(qs[0]["choices"]))), qs[1]]
     r2 = oa.decisions.create(model=model, input=review_neg, questions=rev)
     a, b = _probs(neg.answers[0]), _probs(r2.answers[0])
     expect(a.keys() == b.keys(), f"order changed the values: {a} vs {b}")
