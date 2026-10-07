@@ -59,15 +59,6 @@ const titles: Record<string, string> = {
   settings: "設定",
   playground: "推理測試",
 };
-/** Sidebar groups; the topbar breadcrumb reads the same table. */
-const groupOf: Record<string, string> = {
-  overview: "監控",
-  requests: "監控",
-  diagnostics: "監控",
-  models: "模型",
-  playground: "開發",
-  api: "開發",
-};
 function route() {
   const [p = "", ...rest] = location.hash.replace(/^#\/?/, "").split("/");
   const page = Object.hasOwn(titles, p) ? p : "overview";
@@ -395,63 +386,62 @@ export default function App() {
           }
         />
         <main
-          className={`flex h-dvh min-w-0 flex-col ${collapsed ? "" : "lg:pl-64"}`}
+          className={`flex h-dvh min-w-0 flex-col transition-[padding] duration-200 ease-in-out ${collapsed ? "lg:pl-0" : "lg:pl-64"}`}
         >
-          <header className="flex min-h-14 shrink-0 items-center justify-between gap-2 border-b border-border/60 px-4 lg:px-6">
-            <div className="flex items-center gap-2">
-              <IconButton
-                className="lg:hidden"
-                icon={<Menu size={18} />}
-                label="開啟導覽"
-                onClick={() => setMenu(true)}
-              />
-              {collapsed && (
-                <IconButton
-                  className="hidden lg:inline-flex"
-                  icon={<PanelLeftOpen size={18} />}
-                  label="展開導覽"
-                  onClick={() => setCollapsed(false)}
-                />
-              )}
-              <Breadcrumb aria-label="目前位置" className="min-w-0">
-                <BreadcrumbList className="flex-nowrap">
-                  <BreadcrumbItem className="hidden sm:inline-flex">
-                    <BreadcrumbLink href="#/overview">Yunshu</BreadcrumbLink>
-                  </BreadcrumbItem>
-                  {groupOf[page] && (
-                    <>
-                      <BreadcrumbSeparator className="hidden sm:inline-flex" />
-                      <BreadcrumbItem className="hidden sm:inline-flex">
-                        {groupOf[page]}
-                      </BreadcrumbItem>
-                    </>
+          <header className="sticky top-0 z-30 flex shrink-0 items-center gap-4 px-4 pt-4 lg:px-6">
+            <IconButton
+              className="-ml-2 lg:hidden"
+              icon={<Menu size={20} />}
+              label="開啟導覽"
+              onClick={() => setMenu(true)}
+            />
+            {/* Reopen button: inert while the sidebar is open so the collapsed
+                animation (max-w-0, opacity-0) cannot leave an invisible tab stop. */}
+            <Button
+              variant="ghost"
+              type="button"
+              inert={!collapsed || undefined}
+              onClick={() => setCollapsed(false)}
+              aria-label="展開導覽"
+              className={`hidden shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-all duration-200 ease-in-out hover:bg-muted hover:text-foreground lg:flex ${collapsed ? "-ml-2 max-w-12 p-2 opacity-100" : "pointer-events-none -ml-4 max-w-0 overflow-hidden p-0 opacity-0"}`}
+            >
+              <PanelLeftOpen size={18} className="shrink-0" />
+            </Button>
+            <Breadcrumb
+              aria-label="目前位置"
+              className="card w-fit min-w-0 whitespace-nowrap px-3 py-2"
+            >
+              <BreadcrumbList className="flex-nowrap gap-2 overflow-hidden sm:gap-2">
+                <BreadcrumbItem className="shrink-0">
+                  <BreadcrumbLink href="#/overview">雲樞</BreadcrumbLink>
+                </BreadcrumbItem>
+                <BreadcrumbSeparator />
+                <BreadcrumbItem className="min-w-0">
+                  {sub ? (
+                    <BreadcrumbLink href="#/models">
+                      {titles[page]}
+                    </BreadcrumbLink>
+                  ) : (
+                    <BreadcrumbPage className="truncate">
+                      {titles[page]}
+                    </BreadcrumbPage>
                   )}
-                  <BreadcrumbSeparator className="hidden sm:inline-flex" />
-                  <BreadcrumbItem>
-                    {sub ? (
-                      <BreadcrumbLink href="#/models">
-                        {titles[page]}
-                      </BreadcrumbLink>
-                    ) : (
-                      <BreadcrumbPage>{titles[page]}</BreadcrumbPage>
-                    )}
-                  </BreadcrumbItem>
-                  {sub && (
-                    <>
-                      <BreadcrumbSeparator />
-                      <BreadcrumbItem className="min-w-0">
-                        <BreadcrumbPage className="truncate">
-                          {modelLabel(sub)}
-                        </BreadcrumbPage>
-                      </BreadcrumbItem>
-                    </>
-                  )}
-                </BreadcrumbList>
-              </Breadcrumb>
-            </div>
-            <div className="flex items-center gap-3">
+                </BreadcrumbItem>
+                {sub && (
+                  <>
+                    <BreadcrumbSeparator />
+                    <BreadcrumbItem className="min-w-0">
+                      <BreadcrumbPage className="truncate">
+                        {modelLabel(sub)}
+                      </BreadcrumbPage>
+                    </BreadcrumbItem>
+                  </>
+                )}
+              </BreadcrumbList>
+            </Breadcrumb>
+            <div className="ml-auto flex shrink-0 items-center gap-1.5">
               {engine.phase === "online" && engine.status && (
-                <span className="hidden items-center gap-3 text-xs tabular-nums text-muted-foreground md:flex">
+                <span className="card hidden items-center gap-3 rounded-full px-3 py-1.5 text-xs tabular-nums text-muted-foreground md:flex">
                   <span>
                     <span className="text-foreground">
                       {number(engine.status.requests.active, 0)}
@@ -470,17 +460,17 @@ export default function App() {
                 </span>
               )}
               <Button
-                size="sm"
                 variant="ghost"
-                className="hidden text-muted-foreground sm:inline-flex"
+                type="button"
                 onClick={() => setPalette(true)}
+                className="card hidden items-center gap-1.5 rounded-full px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground sm:inline-flex"
               >
                 <Search size={13} />
                 搜尋
                 <Kbd>⌘K</Kbd>
               </Button>
               <StatusIndicator
-                className="hidden text-xs text-muted-foreground sm:inline-flex"
+                className="card hidden rounded-full px-3 py-1.5 text-xs text-muted-foreground sm:inline-flex"
                 status={
                   engine.phase === "online"
                     ? "online"
@@ -495,7 +485,10 @@ export default function App() {
                     ? "連線中"
                     : "未連線"}
               </StatusIndicator>
+              {/* YunUI ThemeToggle is next-themes backed; the console owns its
+                  theme state (Settings shares it), so keep a pill IconButton. */}
               <IconButton
+                className="card rounded-full"
                 icon={dark ? <Sun size={16} /> : <Moon size={16} />}
                 label={dark ? "切換淺色" : "切換深色"}
                 onClick={() => setDark((v) => !v)}
@@ -503,7 +496,7 @@ export default function App() {
             </div>
           </header>
           {(busy || notice) && (
-            <div className="shrink-0 space-y-2 px-4 pt-4 lg:px-6">
+            <div className="mx-auto w-full max-w-7xl shrink-0 space-y-2 px-4 pt-4 lg:px-6">
               {busy && (
                 <div role="status">
                   <Banner
@@ -546,7 +539,7 @@ export default function App() {
                 className={
                   engine.phase === "online"
                     ? "hidden"
-                    : "shrink-0 px-4 pt-4 lg:px-6"
+                    : "mx-auto w-full max-w-7xl shrink-0 px-4 pt-4 lg:px-6"
                 }
               >
                 <ConnectionState
@@ -563,48 +556,50 @@ export default function App() {
               />
             ) : (
               <div className="min-h-0 flex-1 overflow-y-auto p-4 lg:p-6">
-                {page === "diagnostics" && (
-                  <Diagnostics connection={connection} engine={engine} />
-                )}
-                {page === "overview" && (
-                  <Dashboard engine={engine} navigate={navigate} />
-                )}
-                {page === "models" && (
-                  <Models
-                    engine={engine}
-                    connection={connection}
-                    perform={perform}
-                    busy={busy}
-                    selected={sub}
-                    open={(id) => navigate("models", id)}
-                    test={(id) => {
-                      setTestModel(id);
-                      navigate("playground");
-                    }}
-                  />
-                )}
-                {page === "requests" && (
-                  <Requests
-                    engine={engine}
-                    connection={connection}
-                    perform={perform}
-                    busy={busy}
-                  />
-                )}
-                {page === "settings" && (
-                  <Settings
-                    connection={connection}
-                    save={save}
-                    dark={dark}
-                    setDark={setDark}
-                    disabled={!!busy}
-                    engine={engine}
-                    perform={perform}
-                  />
-                )}
-                {page === "api" && (
-                  <ApiView connection={connection} engine={engine} />
-                )}
+                <div className="mx-auto w-full max-w-7xl">
+                  {page === "diagnostics" && (
+                    <Diagnostics connection={connection} engine={engine} />
+                  )}
+                  {page === "overview" && (
+                    <Dashboard engine={engine} navigate={navigate} />
+                  )}
+                  {page === "models" && (
+                    <Models
+                      engine={engine}
+                      connection={connection}
+                      perform={perform}
+                      busy={busy}
+                      selected={sub}
+                      open={(id) => navigate("models", id)}
+                      test={(id) => {
+                        setTestModel(id);
+                        navigate("playground");
+                      }}
+                    />
+                  )}
+                  {page === "requests" && (
+                    <Requests
+                      engine={engine}
+                      connection={connection}
+                      perform={perform}
+                      busy={busy}
+                    />
+                  )}
+                  {page === "settings" && (
+                    <Settings
+                      connection={connection}
+                      save={save}
+                      dark={dark}
+                      setDark={setDark}
+                      disabled={!!busy}
+                      engine={engine}
+                      perform={perform}
+                    />
+                  )}
+                  {page === "api" && (
+                    <ApiView connection={connection} engine={engine} />
+                  )}
+                </div>
               </div>
             )}
           </div>
