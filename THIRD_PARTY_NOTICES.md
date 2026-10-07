@@ -84,3 +84,16 @@ Tool-call constrained decoding builds a Lark grammar (structural tag: free text,
 the call body) and runs it with llguidance's token-mask matcher and MLX bitmask apply.
 Used as a library, not copied. Copyright (c) Microsoft Corporation, MIT license.
 https://github.com/guidance-ai/llguidance
+
+## Yunshu Console
+
+The console imports the pinned YunUI package in
+`frontend/vendor/yuhuanowo-yunui-0.2.18.tgz` (Apache-2.0); its source commit and SHA-256
+are recorded in `frontend/vendor/README.md`, and other frontend dependencies are
+locked by `frontend/pnpm-lock.yaml`. No oMLX dashboard source was copied into this
+frontend. YunUI includes MIT-licensed Beautiful UI adaptations.
+
+The build ships YunUI's license, upstream notices and retained Beautiful UI MIT
+text under `console_static/licenses/yunui/`; Vite generates the bundled dependency
+license catalogue at `console_static/licenses/bundled-dependencies.md`. The local
+Geist and JetBrains Mono font assets carry their OFL texts under `console_static/fonts/`.
