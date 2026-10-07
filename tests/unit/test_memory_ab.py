@@ -99,3 +99,16 @@ def test_apc_restore_time_parses_arguments():
     with pytest.raises(SystemExit) as exc:
         apc_restore_time.main(["--help"])
     assert exc.value.code == 0
+
+
+def test_server_that_died_at_startup_reports_its_log_and_stops_cleanly(tmp_path):
+    import subprocess
+
+    m = _load()
+    log = tmp_path / "server.log"
+    log.write_text("Cannot listen on 127.0.0.1:18995: Address already in use\n")
+    assert "Address already in use" in m.log_tail(str(log))
+    assert "no log" in m.log_tail(str(tmp_path / "missing.log"))
+    proc = subprocess.Popen(["true"], start_new_session=True)
+    proc.wait()
+    m.stop_server(proc)  # the process group is gone: must not raise

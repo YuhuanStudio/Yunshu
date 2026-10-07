@@ -1186,3 +1186,25 @@ job (v0.1.2, spec off, 128K prose, progress prints) was healthy, 621 s end to en
 at 7.8 tok/s, follow-up 40 s); the earlier "stalled" cells were slow cells with no output for 10 minutes, not hangs.
 Retrieval for old tags (`longreg-trend2-v011/v012` longqa) was still queued at p-1 when this was written.
 No regression found between origin/main and main on long requests.
+
+### apc2 branch retention (2026-10-05, Qwen3.8-27B oQ4e-mtp, M5 Max)
+apc_branch_ab, 3 reps, arm order rotated (cached tokens / TTFT s, base -> cand):
+- a linear follow-up (49.7K): 49732 -> 49732 cached; 0.33-0.60 -> 0.34 s (same)
+- b branch at midpoint of a ~50K conversation (ideal 24893): 62 -> 24892..24913 cached; 26.4-26.8 -> 0.31 s
+- c sub-agents, 20K shared in system: 25309 -> 25309; 0.23 -> 0.24 s (same, already hit)
+- c sub-agents, 20K shared in first user turn: 24576 -> 24576; 1.22 -> 1.22 s (same; the ideal 25304 is not reached by either arm)
+Memory (apc_branch_ab, after all scenarios): APC resident 15.08 -> 21.86 GiB (+6.8), idle footprint 28.9 -> 29.6 GiB (+0.7), peak footprint 36.1-37.0 -> 36.9-39.0 GiB.
+yv ab full (base 140e9529 vs cand 5511302f): preflight/smoke/identity (18 cells, 0 mismatches, spec on==off)/apc/quality (107 vs 107 of 200)/speed (all within noise) PASS; memory FAIL: peak 47.1 -> 50.4 GiB (+3.3, limit 1.66), idle 35.0 -> 35.4 GiB (+0.4).
+Verdict FAIL on memory only; the retained anchors are not yet bounded tightly enough.
+
+### apc2 follow-up: honest APC accounting, anchor cap, shed-first, lazy re-point (2026-10-05, 27B oQ4e-mtp)
+Why +6.8 GiB APC resident was not real: the metric summed each entry's logical nbytes, so rows that anchors view from the newest checkpoint were counted per anchor. /debug/memory-census at idle (96K run): MLX active 29.13 GiB vs 28.68 GiB base (+0.44), while the census' logical total was 22.4 vs 12.0 GiB. Sharing was working; accounting was not. resident_bytes now counts a shared K/V buffer once (and a buffer pinned by views after its owner left, once).
+Changes: anchor budget min(4 GiB, 15% of APC budget) of owned bytes; anchors are evicted before anything else in _make_room (under pressure, before a big prefill/restore); freed anchor buffers go back to the allocator at once; anchors are re-pointed at the new checkpoint before its copy is evaluated (flush frees superseded state first on main for the same reason; retaining anchors had removed that: the 96K turn-2 peak jump was this).
+apc_branch_ab, final code, 3 reps rotated (base -> cand): b branch cached 62 -> 24892..24913, TTFT 26.3-27.0 -> 0.32 s; a linear 49732 same, 0.33 s same; c system 25309 same, 0.23 -> 0.25 s; c user 24576 same, 1.22 same. APC resident after all scenarios 15.08 -> 14.30 GiB (was 21.86 counted logically); idle footprint 28.9 -> 29.6 GiB.
+yv memory (27B, 96K turn-1/2): MLX peak 44.99 -> 45.28 GiB (+0.29); idle footprint +0.43 GiB; APC resident 12.03 -> 12.46 GiB. Process-footprint peak is noisy (base alone 46.2-50.0 over 4 reps): 4 reps base 48.7 vs cand 51.75 (+3.05), a 2-rep run base 47.1 vs cand 48.9 (+1.77, limit 1.66). yv verdict still FAIL at the footprint peak; identity (18 cells, 0 mismatches, spec on==off), APC, quality (107 vs 107), speed PASS.
+
+### apc2: 96K footprint-peak timeline, 128K and 161K branch sessions (2026-10-05, 27B oQ4e-mtp)
+20 ms footprint timeline (apc_peak_timeline.py, MLX gauges every 100 ms), 96K turn 1: base 51.50/51.54/51.93/51.65 GiB, cand 51.69/51.83/51.85; base vs base 51.29-51.94 (4 runs, sd 0.3). The peak is a ~0.4 s spike 3.8 s before the request ends (last prefill chunk: MLX active ~42-44 + allocator cache ~6 + ~3.6 other), not the checkpoint copy. yv's 0.2 s sampler (plus ps cost) catches a random part of that spike: base alone 46.2-50.0 over 4 reps. The yv gap vs the cached base reps was sampling luck plus a real +0.29 GiB MLX peak. Returning the allocator pool before the checkpoint copies did not change the peak and cost +2% follow-up TTFT (8K prose, 32K code): reverted. Free memory is now read once per make-room (the extra read was the earlier +1-2% follow-up TTFT).
+128K session (127K tokens, 8 turns of ~16K; branches at 50% and 25%), 20 ms timeline, base -> cand: branch at 63.7K cached 62 -> 63650 (ideal 63651), TTFT 77.9 -> 0.62 s; branch at 31.9K cached 62 -> 31858, TTFT 34.2 -> 0.47 s; linear follow-up 127221 cached, 1.41 -> 0.92 s. Footprint peak over the session 54.5 -> 56.1 GiB (+1.6), MLX peak 48.16 -> 49.17 (+1.0); APC resident (honest) 15.95 -> 16.95 GiB at the last build turn, idle ~+0.4 GiB.
+161K session (8 turns of 20K tokens), 3 branches: branch at 80.5K cached 62 -> 80540, TTFT 105 -> 0.78 s; at 40.3K 62 -> 40302, 44.2 -> 0.42 s; MLX peak 64.9 -> 67.0 GiB (+2.1), idle footprint 35.06 -> 35.50 GiB.
+Cost per anchor: ~0.28 GiB of recurrent state that cannot be shared (resident grows ~0.29 GiB per retained anchor, ~3 anchors at 128K); the 1 GiB anchor budget is not binding there.

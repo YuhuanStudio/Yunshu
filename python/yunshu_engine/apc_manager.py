@@ -35,6 +35,7 @@ import logging
 import threading
 import time
 from dataclasses import dataclass
+from types import SimpleNamespace
 from typing import Any
 
 import mlx_vlm.apc as _upstream_apc
@@ -546,6 +547,51 @@ def _single_native_arrays_row(source):
 
 
 MATERIALIZE_BYTES = 512 << 20
+ANCHOR_MIN_GAP = 8192
+_BORN_KEEP = 4096
+# Retained anchors may hold at most this share of the APC byte budget, and never more than
+# this many bytes, counting only memory they own (rows viewed from a newer checkpoint are free).
+ANCHOR_BUDGET_FRACTION = 0.15
+ANCHOR_BUDGET_MAX_BYTES = 1 << 30
+# Freed anchor buffers would sit in MLX's allocator pool and count in the process footprint
+# until idle; give them back at once when at least this much was freed (a release walks
+# every pooled buffer, which costs milliseconds on the follow-up's path).
+RELEASE_FREED_BYTES = 1 << 30
+
+
+def release_freed_buffers(freed_bytes: int) -> None:
+    if freed_bytes >= RELEASE_FREED_BYTES:
+        import mlx.core as mx
+
+        mx.clear_cache()
+
+
+def thin_chain(chain: dict, end: int) -> list:
+    """Keys of ``chain`` (key -> length) to keep before a checkpoint of length ``end``.
+
+    A checkpoint is redundant when its two kept neighbours are closer than ``anchor_gap``:
+    dropping it costs a branch between them less than that gap. The newest old checkpoint is
+    judged against ``end`` only once a longer one exists, so a conversation growing by small
+    steps accumulates anchors a gap apart instead of dropping each turn as it is superseded.
+    """
+    seq: list[tuple[int, int | None]] = [(0, None)]
+    for key, n in sorted(chain.items(), key=lambda kv: kv[1]):
+        seq.append((n, key))
+        while len(seq) >= 3 and seq[-1][0] - seq[-3][0] < anchor_gap(seq[-1][0]):
+            if seq[-2][1] is None:
+                break
+            del seq[-2]
+    seq.append((end, None))
+    while len(seq) >= 3 and seq[-1][0] - seq[-3][0] < anchor_gap(seq[-1][0]):
+        if seq[-2][1] is None:
+            break
+        del seq[-2]
+    return [key for _, key in seq if key is not None]
+
+
+def anchor_gap(length: int) -> int:
+    """Smallest distance an earlier checkpoint must lie below the next kept one to be kept."""
+    return max(ANCHOR_MIN_GAP, length // 3)
 
 
 def materialize(target_lists, limit_bytes: int = MATERIALIZE_BYTES) -> None:
@@ -843,6 +889,11 @@ class _Coordinator(APCCoordinator):
             )
             if ok:
                 self._publish_checkpoint_policy(tokens, extra_hash, policy, signature)
+                # an immediate store superseded the earlier checkpoints without a flush to
+                # follow: anchors would otherwise keep (and pin) their own buffers
+                share = getattr(self.manager, "share_anchor_rows", None)
+                if share is not None:
+                    share(tokens, extra_hash)
             return ok
         targets: list[Any] = []
         snapshot = [
@@ -857,6 +908,11 @@ class _Coordinator(APCCoordinator):
             )
             if ok:
                 self._publish_checkpoint_policy(tokens, extra_hash, policy, signature)
+                # an immediate store superseded the earlier checkpoints without a flush to
+                # follow: anchors would otherwise keep (and pin) their own buffers
+                share = getattr(self.manager, "share_anchor_rows", None)
+                if share is not None:
+                    share(tokens, extra_hash)
             return ok
         pending = self.__dict__.setdefault("_deferred_checkpoints", [])
         pending.append(
@@ -897,6 +953,11 @@ class _Coordinator(APCCoordinator):
             if release is not None:
                 release(tokens, extra_hash, _generation=generation)
         views = share_prefix_rows(pending)
+        longest = max(pending, key=lambda p: len(p[0]))
+        share_lazy = getattr(self.manager, "share_anchor_rows_lazy", None)
+        if share_lazy is not None:
+            # retained anchors give up their own rows before the new copy is made
+            views = views + share_lazy(longest[0], longest[1], longest[2])
         materialize([entry[3] for entry in pending])
         if views:
             import mlx.core as mx
@@ -916,6 +977,9 @@ class _Coordinator(APCCoordinator):
                 kwargs["_generation"] = generation
             if self.manager.store_exact_cache(tokens, snapshot, **kwargs):
                 self._publish_checkpoint_policy(tokens, extra_hash, policy, signature)
+        finish = getattr(self.manager, "finish_anchor_sharing", None)
+        if finish is not None:
+            finish()
 
     def discard_deferred_checkpoints(self) -> None:
         self.__dict__.pop("_deferred_checkpoints", None)
@@ -1026,6 +1090,14 @@ class YunshuAPCManager(APCManager):
         self._expired_boundaries: set[int] = set()
         self._born: dict[int, int] = {}
         self._head_keys: set[int] = set()
+        self._last_hit: tuple[tuple, int] | None = None
+        self._last_shared_keys: list[int] = []
+        self._nbytes_memo: dict[int, tuple[Any, int]] = {}
+        self._anchors: dict[int, int] = {}  # retained superseded checkpoint -> length
+        # entry key -> (root buffer owner key, K/V bytes it views instead of owning), and the
+        # K/V bytes of each root buffer: lets resident_bytes count a shared buffer once.
+        self._kv_share: dict[int, tuple[int, int]] = {}
+        self._roots: dict[int, int] = {}
         self._head_lengths: set[int] = set()
         self._plock = threading.Lock()
         self.warm = None
@@ -1108,7 +1180,7 @@ class YunshuAPCManager(APCManager):
         process did not store or restore itself (it may serve another session)."""
         with self._plock:
             newest = self._born.get(cache_hash)
-            heads = set(self._head_keys) | set(self._retention)
+            heads = set(self._head_keys) | set(self._retention) | set(self._anchors)
         disk = self.disk
         if newest is None or disk is None:
             return
@@ -1333,6 +1405,20 @@ class YunshuAPCManager(APCManager):
             gen = self._generation if _generation is None else _generation
             is_head = n in self._head_lengths
         self._supersede(token_ids, extra_hash, gen)
+        # Retained anchors give up their own rows before the copy below is made, the way
+        # the superseded checkpoints they replace were freed before it: re-point them at the
+        # incoming cache (a view, no copy) and again at the stored copy once it exists.
+        rebound: list[int] = []
+        if not _owned:
+            views = self.share_anchor_rows_lazy(token_ids, prompt_cache, extra_hash)
+            rebound = list(self._last_shared_keys)
+            if views:
+                import mlx.core as mx
+
+                mx.eval(views)
+                # not yet: the anchors view a cache that is about to be copied and stored,
+                # and its bytes are not theirs; the budget is enforced once the copy exists
+                self.finish_anchor_sharing(enforce=False)
         key = _sequence_hash(
             tuple(int(t) for t in token_ids), extra_hash, self.block_size
         )
@@ -1355,6 +1441,12 @@ class YunshuAPCManager(APCManager):
                 self._born.pop(key, None)
                 if is_head:
                     self._head_keys.discard(key)
+        if rebound:
+            if ok:
+                # the anchors view the incoming (live) cache: move them onto the stored copy
+                self.share_anchor_rows(token_ids, extra_hash)
+            else:
+                self._drop_anchor_keys(rebound)  # never pin a buffer that is not stored
         return ok
 
     def release_superseded(
@@ -1366,31 +1458,315 @@ class YunshuAPCManager(APCManager):
         self._supersede(token_ids, extra_hash, gen)
 
     def _supersede(self, token_ids, extra_hash: int, gen: int) -> None:
-        """Drop RAM checkpoints of earlier requests that are prefixes of this one."""
+        """Thin the checkpoints of earlier requests that are prefixes of this one.
+
+        A longer checkpoint makes the earlier ones redundant for a linear follow-up, but an
+        agent that retries, edits an earlier turn or forks a sub-agent branches somewhere
+        inside the old conversation, and only an earlier checkpoint can serve that. The chain
+        of earlier checkpoints is therefore kept at geometric spacing (see ``anchor_gap``)
+        instead of dropped: a branch loses at most about a third of the shared prefix and the
+        retained set stays a handful of checkpoints. Anchors sit at the oldest end of the LRU,
+        so the byte and entry budgets evict them before anything newer.
+        """
         tokens = tuple(int(t) for t in token_ids)
-        dropped = 0
+        with self._plock:
+            protected = set(self._head_keys) | set(self._retention)
+            anchors = dict(self._anchors)
+        chain: dict[int, int] = {}  # candidate key -> length
+        dropped_by_filter: dict[int, int] = {}
         with self.lock:
-            for key, entry in list(self._exact_cache.items()):
+            for key, entry in self._exact_cache.items():
                 stored = entry.token_ids
                 if (
                     entry.extra_hash != extra_hash
                     or len(stored) >= len(tokens)
-                    or key in self._head_keys
-                    or key in self._retention
+                    or key in protected
                     or self._born.get(key, gen) >= gen
                     or tokens[: len(stored)] != stored
                 ):
                     continue
-                del self._exact_cache[key]
+                chain[key] = len(stored)
+        if self.prefill_stride:
+            # Hybrid state is only exact at a position every request runs a forward boundary
+            # at (a stride multiple or a semantic boundary): any other anchor could not be
+            # restored without changing the recurrence's numerical spans.
+            semantic = self.semantic_boundaries(tokens)
+            stride = self.prefill_stride
+            dropped_by_filter = {
+                k: n for k, n in chain.items() if not (n % stride == 0 or n in semantic)
+            }
+            for k in dropped_by_filter:
+                del chain[k]
+        for key, n in anchors.items():
+            if key not in chain and key not in protected and n < len(tokens):
+                if _sequence_hash(tokens[:n], extra_hash, self.block_size) == key:
+                    chain[key] = n
+        keep = set(thin_chain(chain, len(tokens)))
+        chain.update(dropped_by_filter)
+        dropped = 0
+        with self.lock:
+            for key in chain:
+                if key in keep:
+                    continue
+                if self._exact_cache.pop(key, None) is not None:
+                    dropped += 1
                 # _born stays: a copy of this checkpoint may still be on the SSD, and the
                 # disk supersede needs its generation to know it is an earlier request's
-                dropped += 1
+        with self._plock:
+            for key in chain:
+                if key in keep:
+                    self._anchors[key] = chain[key]
+                else:
+                    self._anchors.pop(key, None)
+            if len(self._anchors) > _BORN_KEEP:
+                self._anchors = dict(list(self._anchors.items())[-_BORN_KEEP:])
+            held = set(self._head_keys) | set(self._retention) | set(self._anchors)
         if self.warm is not None:
-            with self._plock:
-                keep = set(self._head_keys) | set(self._retention)
-            dropped += self.warm.supersede(tokens, extra_hash, gen, keep)
+            dropped += self.warm.supersede(tokens, extra_hash, gen, held)
         if dropped:
             logger.debug("APC: superseded %d earlier checkpoint(s)", dropped)
+
+    def _resident_bytes_locked(self) -> int:
+        """Resident bytes with a K/V buffer shared by several checkpoints counted once."""
+        logical = super()._resident_bytes_locked()
+        saved, pinned = self._share_accounting()
+        return max(0, logical - saved + pinned)
+
+    def _share_accounting(self) -> tuple[int, int]:
+        """(bytes viewed rather than owned, bytes of root buffers held only through views)."""
+        cache = self._exact_cache
+        for key in [k for k in self._kv_share if k not in cache]:
+            del self._kv_share[key]
+        saved = sum(v for _, v in self._kv_share.values())
+        used = {root for root, _ in self._kv_share.values()}
+        for root in [r for r in self._roots if r not in used]:
+            del self._roots[root]
+        # a root whose owner is still a normal entry is already in the logical total
+        pinned = sum(
+            self._roots.get(root, 0)
+            for root in used
+            if root not in cache or root in self._kv_share
+        )
+        return saved, pinned
+
+    def anchor_bytes(self) -> int:
+        """Bytes the retained anchors own: their state plus K/V rows no newer checkpoint holds."""
+        from mlx_vlm.apc import _cache_nbytes
+
+        with self.lock:
+            _, pinned = self._share_accounting()
+            own = 0
+            memo = self._nbytes_memo
+            for key in self._anchors:
+                entry = self._exact_cache.get(key)
+                if entry is not None:
+                    cached = memo.get(key)
+                    if cached is None or cached[0] is not entry:
+                        cached = (entry, _cache_nbytes(entry.prompt_cache))
+                        memo[key] = cached
+                    own += cached[1] - self._kv_share.get(key, (0, 0))[1]
+            for key in [k for k in memo if k not in self._anchors]:
+                del memo[key]
+            return max(0, own + pinned)
+
+    def anchor_budget_bytes(self) -> int:
+        return min(
+            ANCHOR_BUDGET_MAX_BYTES, int(ANCHOR_BUDGET_FRACTION * self.memory_max_bytes)
+        )
+
+    def _drop_anchor_keys(self, keys) -> None:
+        with self.lock:
+            for key in keys:
+                self._exact_cache.pop(key, None)
+        with self._plock:
+            for key in keys:
+                self._anchors.pop(key, None)
+
+    def _drop_anchor(self) -> bool:
+        """Evict the retained anchor that owns the most bytes (ties: the shortest).
+
+        Anchors whose K/V rows are views of a newer checkpoint cost only their recurrent
+        state; one that still owns its rows is the expensive one, so shedding by owned bytes
+        keeps the cheap branch points instead of wiping the chain shortest-first.
+        """
+        from mlx_vlm.apc import _cache_nbytes
+
+        with self.lock:
+            live = []
+            for k, n in self._anchors.items():
+                entry = self._exact_cache.get(k)
+                if entry is None or k in self._head_keys:
+                    continue
+                own = (
+                    _cache_nbytes(entry.prompt_cache) - self._kv_share.get(k, (0, 0))[1]
+                )
+                live.append((-own, n, k))
+            if not live:
+                return False
+            _, _, key = min(live)
+            self._exact_cache.pop(key, None)
+        with self._plock:
+            self._anchors.pop(key, None)
+        return True
+
+    def enforce_anchor_budget(self) -> int:
+        dropped = 0
+        budget = self.anchor_budget_bytes()
+        while self.anchor_bytes() > budget and self._drop_anchor():
+            dropped += 1
+        return dropped
+
+    def _memory_headroom(self) -> int:
+        memo = getattr(self, "_headroom_memo", None)
+        return super()._memory_headroom() if memo is None else memo
+
+    def _make_room(self, allocation_bytes: int = 0, *, retain_bytes: int = 0) -> bool:
+        """Evict anchors before anything else, so they never raise the peak of a big request.
+
+        The free-memory reading (a system query) is taken once per call and shared with the
+        upstream pass: dropping anchors moves resident and headroom by the same bytes, so the
+        eviction target is unchanged.
+        """
+        self._headroom_memo = None
+        try:
+            if self._anchors:
+                self._headroom_memo = self._memory_headroom()
+                required = self.memory_reserve_bytes + (
+                    self._prefill_reserve_bytes + allocation_bytes
+                    if retain_bytes
+                    else max(self._prefill_reserve_bytes, allocation_bytes)
+                )
+                dropped = 0
+                while True:
+                    with self.lock:
+                        resident = self._resident_bytes_locked()
+                        target = max(
+                            0,
+                            min(
+                                self.memory_max_bytes - retain_bytes,
+                                resident + self._headroom_memo - required,
+                            ),
+                        )
+                    if resident <= target or not self._drop_anchor():
+                        break
+                    dropped += 1
+                if dropped:
+                    release_freed_buffers(1 << 40)
+            return super()._make_room(allocation_bytes, retain_bytes=retain_bytes)
+        finally:
+            self._headroom_memo = None
+
+    def share_anchor_rows(self, donor_tokens, extra_hash: int = 0) -> int:
+        """Share rows with the checkpoint just stored, then bring anchors under their budget."""
+        try:
+            shared, views, freed = self._share_anchor_rows(donor_tokens, extra_hash)
+            if views:
+                import mlx.core as mx
+
+                mx.eval(views)
+            return shared
+        finally:
+            self.enforce_anchor_budget()
+
+    def share_anchor_rows_lazy(self, donor_tokens, donor_cache, extra_hash: int = 0):
+        """Re-point anchors at a checkpoint that is still being copied (not yet stored).
+
+        Done before the copy is evaluated, an anchor's own buffer is released at once, the
+        way ``release_superseded`` releases what a checkpoint replaces, so the old and the new
+        copy never coexist. Returns the views to evaluate with the copy; call
+        ``finish_anchor_sharing`` afterwards.
+        """
+        _, views, freed = self._share_anchor_rows(
+            donor_tokens, extra_hash, donor_cache=donor_cache
+        )
+        self._lazy_freed = getattr(self, "_lazy_freed", 0) + freed
+        return views
+
+    def finish_anchor_sharing(self, enforce: bool = True) -> None:
+        self._lazy_freed = 0
+        if enforce:
+            self.enforce_anchor_budget()
+
+    def _share_anchor_rows(self, donor_tokens, extra_hash: int = 0, donor_cache=None):
+        """Re-point the K/V rows of retained anchors at the checkpoint just stored.
+
+        A request that restored a checkpoint at ``h`` holds, for every position up to ``h``,
+        the very rows of that restore, so a retained anchor at or below ``h`` that is a prefix
+        of the new checkpoint stores the same bits again. Making it a view of the new
+        checkpoint's buffer frees its own copy: a whole chain of anchors costs one buffer.
+        Anchors above the restore point were computed by an earlier request and keep their own.
+        """
+        from mlx_vlm.models.cache import KVCache
+
+        self._last_shared_keys = []
+        donor_tokens = tuple(int(t) for t in donor_tokens)
+        hit = self._last_hit
+        if hit is None or hit[1] != extra_hash or donor_tokens[: len(hit[0])] != hit[0]:
+            return 0, [], 0
+        limit = len(hit[0])
+        views: list = []
+        shared = 0
+        freed = 0
+        with self.lock:
+            donor_key = _sequence_hash(donor_tokens, extra_hash, self.block_size)
+            if donor_cache is not None:
+                donor = SimpleNamespace(
+                    prompt_cache=donor_cache, token_ids=donor_tokens
+                )
+            else:
+                donor = self._exact_cache.get(donor_key)
+            if donor is None or donor.token_ids != donor_tokens:
+                return 0, [], 0
+            root = self._kv_share.get(donor_key, (donor_key, 0))[0]
+            if root == donor_key:
+                self._roots[root] = sum(
+                    c.keys.nbytes + c.values.nbytes
+                    for c in donor.prompt_cache
+                    if type(c) is KVCache
+                    and c.keys is not None
+                    and c.values is not None
+                )
+            with self._plock:
+                keys = list(self._anchors)
+            for key in keys:
+                entry = self._exact_cache.get(key)
+                n = len(entry.token_ids) if entry is not None else 0
+                if (
+                    entry is None
+                    or entry is donor
+                    or n > limit
+                    or n >= len(donor_tokens)
+                    or entry.extra_hash != extra_hash
+                    or donor_tokens[:n] != entry.token_ids
+                ):
+                    continue
+                viewed = 0
+                for mine, theirs in zip(
+                    entry.prompt_cache, donor.prompt_cache, strict=False
+                ):
+                    if type(mine) is not KVCache or type(theirs) is not KVCache:
+                        continue
+                    if mine.keys is None or theirs.keys is None or mine.values is None:
+                        continue
+                    rows = mine.keys.shape[-2]
+                    if (
+                        mine.values.shape[-2] != rows
+                        or theirs.keys.shape[-2] < rows
+                        or theirs.values.shape[-2] < rows
+                        or mine.keys.shape[:-2] != theirs.keys.shape[:-2]
+                        or mine.keys.dtype != theirs.keys.dtype
+                    ):
+                        continue
+                    mine.keys = theirs.keys[..., :rows, :]
+                    mine.values = theirs.values[..., :rows, :]
+                    views += [mine.keys, mine.values]
+                    viewed += mine.keys.nbytes + mine.values.nbytes
+                if viewed:
+                    self._kv_share[key] = (root, viewed)
+                    freed += viewed
+                    self._last_shared_keys.append(key)
+                shared += 1
+        return shared, views, freed
 
     # ── provenance ─────────────────────────────────────────────────────
     def semantic_boundaries(self, token_ids):
@@ -1523,6 +1899,7 @@ class YunshuAPCManager(APCManager):
                 positional[1] = maximum
                 retry.pop("max_prefix_tokens")
             cache, n = super().lookup_exact_cache(token_ids, *positional, **retry)
+        self._last_hit = (tuple(int(t) for t in token_ids[:n]), extra) if n else None
         if n and refresh_retention:
             self.touch_boundary(token_ids[:n], extra)
         ms = (time.perf_counter() - t0) * 1000.0
