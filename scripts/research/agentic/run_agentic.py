@@ -291,18 +291,20 @@ def cmd_run(args):
     t_job = time.time()
     try:
         if args.serve:
-            from servers import Server, free_ports
+            from servers import Server, start_server
 
-            sp, pp = free_ports(2)
-            args.proxy_port = pp
-            server = Server(
-                args.serve,
-                args.checkpoint,
-                sp,
-                out.parent / "logs" / f"server-{args.engine_label}-{args.agent}.log",
-                extra=args.server_arg,
+            server, (_, args.proxy_port) = start_server(
+                2,
+                lambda port: Server(
+                    args.serve,
+                    args.checkpoint,
+                    port,
+                    out.parent
+                    / "logs"
+                    / f"server-{args.engine_label}-{args.agent}.log",
+                    extra=args.server_arg,
+                ),
             )
-            server.start()
             engine_url, model, pid = server.url, server.model_id, server.proc.pid
             spec_mode = server.engaged_spec_mode() if args.serve == "yunshu" else None
             want = os.environ.get("AGENTIC_EXPECT_SPEC")

@@ -370,7 +370,10 @@ async function installDiagnostics(
     failures.push(`${request.url()} ${request.failure()?.errorText}`);
   });
   page.on("request", (request) => {
-    if (new URL(request.url()).origin !== "http://127.0.0.1:3971")
+    if (
+      new URL(request.url()).origin !==
+      new URL(process.env.PLAYWRIGHT_BASE_URL ?? "http://127.0.0.1:3971").origin
+    )
       external.push(request.url());
   });
   page.on("response", (response) => {
@@ -479,7 +482,9 @@ test("auth, model lifecycle, warmup and request cancellation use the real /v1 AP
   await expect(qwenSmall.getByText("已載入", { exact: true })).toBeVisible();
   await qwenSmall.getByRole("button", { name: "預熱", exact: true }).click();
   await expect(
-    page.getByRole("status").filter({ hasText: "操作已完成" }),
+    page
+      .getByRole("status")
+      .filter({ hasText: "模型已載入；此類型未執行文字預熱。" }),
   ).toBeVisible();
   expect(api.warmupCount).toBe(1);
 
@@ -565,7 +570,11 @@ test("stream send/stop and changing service URL resets sampled history", async (
     .toBe(1);
 
   await page.getByRole("button", { name: "設定", exact: true }).click();
-  await page.getByLabel("服務位址").fill("http://127.0.0.1:3971/qa-connection");
+  await page
+    .getByLabel("服務位址")
+    .fill(
+      `${new URL(process.env.PLAYWRIGHT_BASE_URL ?? "http://127.0.0.1:3971").origin}/qa-connection`,
+    );
   await page.getByLabel("存取權杖").fill(api.token);
   await page.getByRole("button", { name: "儲存並連線", exact: true }).click();
   await expect

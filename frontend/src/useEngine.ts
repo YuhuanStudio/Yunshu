@@ -140,6 +140,8 @@ export function useEngine(connection: Connection): UseEngineResult {
         )
           return;
         const apiError = error instanceof ApiError ? error : null;
+        if (apiError?.status === 401 || apiError?.status === 403)
+          setPolling(false);
         setState((current) => {
           const previous =
             current.connectionKey === connectionKey

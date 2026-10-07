@@ -32,18 +32,67 @@ TF_DRAFTER = "/Volumes/P5Plus/models/incoai/Qwen3.8-27B-DFlash2"
 SERVER_HOME = Path("/Volumes/P5Plus/yunshu-build/agentic/server-home")
 
 
-def free_ports(n: int) -> list[int]:
-    out = []
-    for p in PORT_RANGE:
-        with socket.socket() as s:
-            try:
-                s.bind(("127.0.0.1", p))
-            except OSError:
-                continue
-        out.append(p)
+def port_bindable(port: int) -> bool:
+    """Whether a server can listen on 127.0.0.1:port (SO_REUSEADDR as uvicorn sets it)."""
+    with socket.socket() as s:
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            s.bind(("127.0.0.1", port))
+        except OSError:
+            return False
+    return True
+
+
+def free_ports(
+    n: int,
+    skip=frozenset(),
+    wait_s: float = 600.0,
+    interval_s: float = 5.0,
+    sleep=time.sleep,
+    clock=time.monotonic,
+) -> list[int]:
+    """n free ports of the pool. The pool is shared with other gpuq jobs, and paused (preempted)
+    jobs keep their ports bound, so momentary exhaustion is normal: re-scan every interval_s for
+    up to wait_s before giving up. `skip` holds ports that already lost a bind race."""
+    t0 = clock()
+    while True:
+        out = [p for p in PORT_RANGE if p not in skip and port_bindable(p)][:n]
         if len(out) == n:
             return out
-    raise RuntimeError("no free port in 18990-18999")
+        left = wait_s - (clock() - t0)
+        if left <= 0:
+            lo, hi = PORT_RANGE[0], PORT_RANGE[-1]
+            raise RuntimeError(f"no free port in {lo}-{hi} after {wait_s:.0f}s")
+        print(
+            f"[agentic] only {len(out)}/{n} ports free in the pool; waiting "
+            f"(up to {left:.0f}s more)",
+            flush=True,
+        )
+        sleep(min(interval_s, left))
+
+
+def start_server(
+    n_ports: int, make_server, attempts: int = 3, **port_kw
+) -> tuple[Server, list[int]]:
+    """Pick n_ports free ports, build make_server(ports[0]) and start it. When it dies with
+    "address already in use" (another process took the port between probe and bind), choose new
+    ports and retry, up to `attempts` times. Returns (server, ports)."""
+    lost: set[int] = set()
+    for attempt in range(1, attempts + 1):
+        ports = free_ports(n_ports, skip=frozenset(lost), **port_kw)
+        server = make_server(ports[0])
+        try:
+            return server.start(), ports
+        except RuntimeError:
+            if attempt == attempts or "address already in use" not in server.log_tail():
+                raise
+            lost.add(ports[0])
+            print(
+                f"[agentic] port {ports[0]} lost a bind race; retrying "
+                f"({attempt}/{attempts})",
+                flush=True,
+            )
+    raise AssertionError("unreachable")
 
 
 class Server:
@@ -148,6 +197,11 @@ class Server:
             return None
         modes = re.findall(r"VLM batch runner: [^\n]*?draft=(dflash|mtp|off)\b", text)
         return modes[-1] if modes else None
+    def log_tail(self, n: int = 30) -> str:
+        try:
+            return "".join(self.log.read_text(errors="replace").splitlines(True)[-n:])
+        except OSError:
+            return ""
 
     @property
     def model_id(self) -> str:
