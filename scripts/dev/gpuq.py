@@ -7,7 +7,7 @@ then FIFO order, each under a timeout, with output in a log file. Waiting is a
 plain local process (``wait``), so whoever submitted can block on completion
 without polling anything else.
 
-    gpuq submit [--label L] [--timeout MIN] [--priority N] [--serving-ok] [--mem-gb G] -- cmd args...
+    gpuq submit [--label L] [--timeout MIN] [--priority N] [--gate] [--serving-ok] [--mem-gb G] -- cmd args...
     gpuq wait [--max-seconds N] ID [ID ...]  # exit 0 verified / 1 failed / 2 unfinished / 3 contended perf
     gpuq run [opts] -- cmd ...   # submit + wait (drop-in for the old gpu_run.sh)
     gpuq status                  # queue table (paused / waiting-idle / waiting-mem columns)
@@ -572,6 +572,9 @@ def _pick(jobs: list[dict], eligible=None) -> dict | None:
     return min(
         pending,
         key=lambda j: (
+            not j.get(
+                "gate"
+            ),  # --gate: a verdict job never waits behind a same-priority backlog
             not _is_short(j),
             last.get((_owner(j), _lane(j)), 0.0),
             j["submitted"],
@@ -633,6 +636,7 @@ def submit(
     quiet: bool = False,
     cpu_config: dict | None = None,
     device: str = "m5",
+    gate: bool = False,
 ) -> str:
     if device not in {"m5", "m3", "any"}:
         raise ValueError("device must be m5, m3 or any")
@@ -703,6 +707,7 @@ def submit(
                 "timeout_note": timeout_note,
                 "stall_s": stall_min * 60,
                 "priority": priority,
+                "gate": bool(gate),
                 "serving_ok": serving_ok,
                 "mem_gb": mem_gb,
                 "outputs": [
@@ -1686,6 +1691,11 @@ def main() -> int:
         )
         p.add_argument("--priority", type=int, default=0, help="higher runs first")
         p.add_argument(
+            "--gate",
+            action="store_true",
+            help="verdict job (release gate): runs before every ordinary job of the same priority",
+        )
+        p.add_argument(
             "--stall",
             type=float,
             default=STALL_S / 60,
@@ -1778,6 +1788,7 @@ def main() -> int:
                     if v is not None
                 },
                 device=a.device,
+                gate=a.gate,
             )
         except ValueError as e:
             print(f"gpuq: {e}", file=sys.stderr)
