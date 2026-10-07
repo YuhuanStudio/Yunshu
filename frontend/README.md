@@ -16,9 +16,15 @@ The built app is served by Yunshu at `/console/`. Enter an optional service toke
 in Settings; tokens stay in memory. The console does not launch the engine.
 
 Charts show observations collected since page load, not historical fixtures.
-No missing metric is invented. Model operations and request cancellation follow
-the server's existing authorization and return errors without optimistic success.
+No missing metric is invented. Reusable YunUI time-series, bar, donut and heatmap
+components provide synchronized inspection and host-owned drilldowns. Model operations and request cancellation follow
+the server's existing authorization and return errors without optimistic success. Import/alias/delete, idle retention,
+VLM image and JSON/thinking controls, diagnostics, and live OpenAPI discovery use
+the backend's existing endpoints.
 
 See [the console guide](../docs/CONSOLE.md) for metric definitions and packaging,
 and [the pinned YunUI package](vendor/README.md) for provenance. Keep using public
 YunUI components when extending this application; do not recreate its controls.
+
+Current agent validation is CPU/fixture-only: do not use GPU inference or restart
+the test engine without renewed explicit owner instruction.

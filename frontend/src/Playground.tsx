@@ -5,6 +5,8 @@ import {
   EmptyState,
   IconButton,
   Input,
+  FileDropzone,
+  SegmentedSelect,
   Select,
   SelectContent,
   SelectItem,
@@ -20,10 +22,10 @@ import {
   ChatMessageList,
 } from "@yuhuanowo/yunui/chat";
 import { ThinkingBlock } from "@yuhuanowo/yunui/ai";
-import { SlidersHorizontal, Plus, Sparkles } from "lucide-react";
+import { SlidersHorizontal, Plus, Sparkles, ImagePlus, X } from "lucide-react";
 import { streamCompletion } from "./stream";
 import type { Connection } from "./api";
-import { modelLabel, type Engine } from "./ui";
+import { modelLabel, supportsChat, type Engine } from "./ui";
 const Markdown = lazy(() =>
   import("@yuhuanowo/yunui/content").then((m) => ({
     default: m.MarkdownRenderer,
@@ -36,6 +38,8 @@ type Message = {
   reasoning?: string;
   model: string;
   incomplete?: boolean;
+  image?: { name: string; url: string };
+  finishReason?: string;
 };
 export function Playground({
   connection,
@@ -54,7 +58,12 @@ export function Playground({
     [settings, setSettings] = useState(false),
     [temperature, setTemperature] = useState(0.7),
     [system, setSystem] = useState(""),
-    [maxTokens, setMaxTokens] = useState(512);
+    [maxTokens, setMaxTokens] = useState(512),
+    [thinking, setThinking] = useState("auto"),
+    [jsonMode, setJsonMode] = useState("text"),
+    [image, setImage] = useState<{ name: string; url: string } | null>(null),
+    [attachmentOpen, setAttachmentOpen] = useState(false),
+    [readingImage, setReadingImage] = useState(false);
   const controller = useRef<AbortController | null>(null),
     mounted = useRef(true);
   useEffect(() => {
@@ -66,16 +75,64 @@ export function Playground({
   }, []);
   const models = engine.status?.models ?? [],
     chosen = models.find((m) => m.id === model),
-    canSend = engine.phase === "online" && !!chosen?.loaded;
+    canSend =
+      engine.phase === "online" && !!chosen?.loaded && supportsChat(chosen);
   useEffect(() => {
     if (!model && models.length)
       setModel(models.find((m) => m.loaded)?.id ?? models[0].id);
   }, [model, models]);
+  async function attach(files: File[]) {
+    const file = files[0];
+    if (!file) return;
+    if (
+      !["image/png", "image/jpeg", "image/webp"].includes(file.type) ||
+      file.size > 8 * 1024 * 1024
+    ) {
+      setError("請選擇 8 MB 以下的 PNG、JPEG 或 WebP 圖片。");
+      return;
+    }
+    setReadingImage(true);
+    setError("");
+    try {
+      const url = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () =>
+          typeof reader.result === "string"
+            ? resolve(reader.result)
+            : reject(Error("無法讀取圖片"));
+        reader.onerror = () => reject(Error("無法讀取圖片"));
+        reader.readAsDataURL(file);
+      });
+      if (mounted.current) {
+        setImage({ name: file.name, url });
+        setAttachmentOpen(false);
+      }
+    } catch (e) {
+      if (mounted.current)
+        setError(e instanceof Error ? e.message : "無法讀取圖片");
+    } finally {
+      if (mounted.current) setReadingImage(false);
+    }
+  }
+  const supportsImage = chosen?.type.toLowerCase().includes("vlm") ?? false;
   async function send() {
-    if (!canSend || !draft.trim() || controller.current) return;
+    if (
+      !canSend ||
+      !draft.trim() ||
+      controller.current ||
+      readingImage ||
+      ((image || messages.some((message) => !!message.image)) && !supportsImage)
+    )
+      return;
     const content = draft.trim(),
       id = crypto.randomUUID(),
-      user: Message = { id: crypto.randomUUID(), role: "user", content, model };
+      user: Message = {
+        id: crypto.randomUUID(),
+        role: "user",
+        content,
+        model,
+        ...(image ? { image } : {}),
+      };
     const history = [...messages.filter((m) => !m.incomplete), user];
     const c = new AbortController();
     controller.current = c;
@@ -85,6 +142,7 @@ export function Playground({
       { id, role: "assistant", content: "", model },
     ]);
     setDraft("");
+    setImage(null);
     setLoading(true);
     setError("");
     try {
@@ -94,10 +152,27 @@ export function Playground({
           model,
           messages: [
             ...(system ? [{ role: "system", content: system }] : []),
-            ...history.map((m) => ({ role: m.role, content: m.content })),
+            ...history.map((m) => ({
+              role: m.role,
+              content: m.image
+                ? [
+                    { type: "text" as const, text: m.content },
+                    {
+                      type: "image_url" as const,
+                      image_url: { url: m.image.url },
+                    },
+                  ]
+                : m.content,
+            })),
           ],
           temperature,
           max_tokens: maxTokens,
+          ...(thinking !== "auto"
+            ? { enable_thinking: thinking === "on" }
+            : {}),
+          ...(jsonMode === "json"
+            ? { response_format: { type: "json_object" as const } }
+            : {}),
         },
         (delta) => {
           if (mounted.current)
@@ -108,6 +183,7 @@ export function Playground({
                       ...m,
                       content: m.content + (delta.content ?? ""),
                       reasoning: (m.reasoning ?? "") + (delta.reasoning ?? ""),
+                      finishReason: delta.finishReason ?? m.finishReason,
                     }
                   : m,
               ),
@@ -200,6 +276,13 @@ export function Playground({
               density="compact"
               name={m.role === "assistant" ? modelLabel(m.model) : undefined}
             >
+              {m.image && (
+                <img
+                  src={m.image.url}
+                  alt={m.image.name}
+                  className="mb-3 max-h-56 max-w-full rounded-lg object-contain"
+                />
+              )}
               {m.reasoning && (
                 <ThinkingBlock
                   labels={{
@@ -228,6 +311,11 @@ export function Playground({
                   }
                 />
               </Suspense>
+              {m.finishReason === "length" && (
+                <p className="mt-2 text-xs text-warning">
+                  已達輸出上限，可調高最大輸出 tokens 或關閉思考模式再測試。
+                </p>
+              )}
               {m.incomplete && (
                 <p className="mt-2 text-xs text-muted-foreground">
                   未完成的回覆
@@ -243,11 +331,19 @@ export function Playground({
             {error}
           </p>
         )}
+        {!supportsImage &&
+          (image || messages.some((message) => !!message.image)) && (
+            <p className="mb-3 text-xs text-warning">
+              此測試包含圖片，請選擇視覺模型，或建立新測試。
+            </p>
+          )}
         {!canSend && (
           <p className="mb-3 text-xs text-muted-foreground">
             {engine.phase !== "online"
               ? "連接引擎後即可開始測試。"
-              : "請先在模型庫載入此模型。"}
+              : !supportsChat(chosen)
+                ? "此模型不適用文字聊天測試，請使用 API 接入對應端點。"
+                : "請先在模型庫載入此模型。"}
           </p>
         )}
         <ChatComposer
@@ -256,19 +352,53 @@ export function Playground({
           onSend={() => void send()}
           onStop={() => controller.current?.abort()}
           loading={loading}
-          sendDisabled={!canSend}
+          sendDisabled={
+            !canSend ||
+            readingImage ||
+            ((!!image || messages.some((message) => !!message.image)) &&
+              !supportsImage)
+          }
+          attachments={
+            image ? (
+              <div className="flex items-center gap-2 text-xs">
+                <img
+                  src={image.url}
+                  alt="待傳送圖片"
+                  className="size-10 rounded object-cover"
+                />
+                <span className="min-w-0 truncate">{image.name}</span>
+                <IconButton
+                  icon={<X size={13} />}
+                  label="移除圖片"
+                  disabled={loading}
+                  onClick={() => setImage(null)}
+                />
+              </div>
+            ) : undefined
+          }
           placeholder="輸入測試提示詞…"
           labels={{ send: "傳送測試", stop: "停止生成" }}
           toolbar={
-            <IconButton
-              icon={<SlidersHorizontal size={15} />}
-              label="生成參數"
-              disabled={loading}
-              onClick={(e) => {
-                e.currentTarget.focus();
-                setSettings(true);
-              }}
-            />
+            <div className="flex items-center gap-1">
+              <IconButton
+                icon={<ImagePlus size={15} />}
+                label="加入圖片"
+                disabled={loading || !supportsImage}
+                onClick={(e) => {
+                  e.currentTarget.focus();
+                  setAttachmentOpen(true);
+                }}
+              />
+              <IconButton
+                icon={<SlidersHorizontal size={15} />}
+                label="生成參數"
+                disabled={loading}
+                onClick={(e) => {
+                  e.currentTarget.focus();
+                  setSettings(true);
+                }}
+              />
+            </div>
           }
         />
         <p className="mt-2 text-center text-[10px] text-muted-foreground">
@@ -282,6 +412,34 @@ export function Playground({
         closeLabel="關閉生成參數"
       >
         <div className="space-y-6">
+          <div>
+            <p className="mb-3 text-sm">思考模式</p>
+            <SegmentedSelect
+              aria-label="思考模式"
+              value={thinking}
+              onChange={setThinking}
+              options={[
+                { value: "auto", label: "模型預設" },
+                { value: "on", label: "開啟" },
+                { value: "off", label: "關閉" },
+              ]}
+            />
+          </div>
+          <div>
+            <p className="mb-3 text-sm">輸出格式</p>
+            <SegmentedSelect
+              aria-label="輸出格式"
+              value={jsonMode}
+              onChange={setJsonMode}
+              options={[
+                { value: "text", label: "文字" },
+                { value: "json", label: "JSON" },
+              ]}
+            />
+            <p className="mt-2 text-xs text-muted-foreground">
+              JSON 模式會傳送 response_format，由引擎約束輸出格式。
+            </p>
+          </div>
           <div>
             <p className="mb-4 text-sm">
               Temperature · {temperature.toFixed(1)}
@@ -324,6 +482,20 @@ export function Playground({
             />
           </div>
         </div>
+      </Sheet>
+      <Sheet
+        open={attachmentOpen}
+        onClose={() => setAttachmentOpen(false)}
+        title="圖片輸入"
+        closeLabel="關閉圖片輸入"
+      >
+        <FileDropzone
+          accept="image/png,image/jpeg,image/webp"
+          disabled={readingImage}
+          label={readingImage ? "讀取中…" : "選擇或拖入圖片"}
+          hint="PNG、JPEG、WebP，最多 8 MB。圖片會隨提示詞傳給所選 VLM。"
+          onFiles={(files) => void attach(files)}
+        />
       </Sheet>
     </section>
   );

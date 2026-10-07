@@ -22,9 +22,12 @@ import { Dashboard } from "./Dashboard";
 import { Models } from "./Models";
 import { Requests } from "./Requests";
 import { Settings, ApiView } from "./Settings";
+import { operationResult } from "./operation-result";
+import { Diagnostics } from "./Diagnostics";
 import { Playground } from "./Playground";
 const titles: Record<string, string> = {
   overview: "引擎總覽",
+  diagnostics: "引擎診斷",
   models: "模型庫",
   requests: "請求與效能",
   api: "API 接入",
@@ -121,18 +124,18 @@ export default function App() {
     setBusy(key);
     setNotice(null);
     try {
-      await action();
+      const result = await action();
       await engine.refresh();
-      setNotice({
-        error: false,
-        text: key.startsWith("cancel:")
-          ? "已送出取消請求。"
-          : "操作已完成。",
-      });
+      setNotice(operationResult(key, result));
     } catch (e) {
       setNotice({
         error: true,
-        text: e instanceof Error ? e.message : String(e),
+        text:
+          e instanceof Error && /timed out/i.test(e.message)
+            ? "等待服務回應逾時；操作可能仍在服務端進行，請重新整理狀態。"
+            : e instanceof Error
+              ? e.message
+              : String(e),
       });
     } finally {
       setBusy(null);
@@ -199,6 +202,7 @@ export default function App() {
                 { label: "模型庫", href: "/models", icon: Box },
                 { label: "請求與效能", href: "/requests", icon: Activity },
                 { label: "API 接入", href: "/api", icon: Code2 },
+                { label: "引擎診斷", href: "/diagnostics", icon: Activity },
               ],
             },
             {
@@ -225,7 +229,7 @@ export default function App() {
           }
         />
         <main className="flex h-dvh min-w-0 flex-col lg:pl-64">
-          <header className="flex min-h-16 shrink-0 items-center justify-between gap-2 border-b border-border/60 px-4 sm:px-7">
+          <header className="flex min-h-16 shrink-0 items-center justify-between gap-2 border-b border-border/60 px-4 lg:px-6">
             <div className="flex items-center gap-2">
               <IconButton
                 className="lg:hidden"
@@ -261,7 +265,13 @@ export default function App() {
                   ? "正在卸載模型"
                   : busy.startsWith("warmup:")
                     ? "正在預熱模型"
-                    : "正在取消請求"}
+                    : busy.startsWith("pull:")
+                      ? "正在下載模型（後端尚未提供進度）"
+                      : busy.startsWith("copy:")
+                        ? "正在建立模型別名"
+                        : busy.startsWith("delete:")
+                          ? "正在刪除模型"
+                          : "正在取消請求"}
               … 等待服務回應。
             </div>
           )}
@@ -291,7 +301,7 @@ export default function App() {
                 className={
                   engine.phase === "online"
                     ? "hidden"
-                    : "shrink-0 px-4 pt-4 sm:px-7"
+                    : "shrink-0 px-4 pt-4 lg:px-6"
                 }
               >
                 <ConnectionState
@@ -307,7 +317,10 @@ export default function App() {
                 initialModel={testModel}
               />
             ) : (
-              <div className="min-h-0 flex-1 overflow-y-auto">
+              <div className="min-h-0 flex-1 overflow-y-auto p-4 lg:p-6">
+                {page === "diagnostics" && (
+                  <Diagnostics connection={connection} />
+                )}
                 {page === "overview" && (
                   <Dashboard engine={engine} navigate={navigate} />
                 )}
@@ -338,6 +351,8 @@ export default function App() {
                     dark={dark}
                     setDark={setDark}
                     disabled={!!busy}
+                    engine={engine}
+                    perform={perform}
                   />
                 )}
                 {page === "api" && <ApiView connection={connection} />}

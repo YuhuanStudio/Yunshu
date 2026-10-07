@@ -1,6 +1,10 @@
 import { useState } from "react";
 import { Button, Card, Input, Switch } from "@yuhuanowo/yunui";
 import { PageHeader, SettingRow, CodeBlock } from "@yuhuanowo/yunui/patterns";
+import { ModelLeaseSettings } from "./ModelLeaseSettings";
+import type { Engine } from "./ui";
+import type { Perform } from "./Models";
+import { ApiCatalog } from "./ApiCatalog";
 import type { Connection } from "./api";
 export function Settings({
   connection,
@@ -8,12 +12,16 @@ export function Settings({
   dark,
   setDark,
   disabled,
+  engine,
+  perform,
 }: {
   connection: Connection;
   save: (next: Connection) => void;
   dark: boolean;
   setDark: (v: boolean) => void;
   disabled: boolean;
+  engine: Engine;
+  perform: Perform;
 }) {
   const [url, setUrl] = useState(connection.baseUrl),
     [token, setToken] = useState(connection.token),
@@ -36,10 +44,7 @@ export function Settings({
     }
   }
   return (
-    <section
-      className="mx-auto max-w-4xl space-y-5 p-4 sm:p-7"
-      data-testid="settings"
-    >
+    <section className="w-full max-w-4xl space-y-6" data-testid="settings">
       <PageHeader
         title="設定"
         description="連線到本機服務，並調整控制台偏好。"
@@ -92,6 +97,12 @@ export function Settings({
           儲存並連線
         </Button>
       </Card>
+      <ModelLeaseSettings
+        connection={connection}
+        engine={engine}
+        perform={perform}
+        busy={disabled}
+      />
       <Card className="px-5">
         <SettingRow
           title="深色介面"
@@ -115,10 +126,7 @@ export function ApiView({ connection }: { connection: Connection }) {
   const base =
     connection.baseUrl.replace(/\/+$/, "").replace(/\/v1$/, "") + "/v1";
   return (
-    <section
-      className="mx-auto max-w-5xl space-y-5 p-4 sm:p-7"
-      data-testid="api"
-    >
+    <section className="w-full max-w-5xl space-y-6" data-testid="api">
       <PageHeader
         title="API 接入"
         description="使用熟悉的 SDK，讓你的應用連接本機模型。"
@@ -144,23 +152,7 @@ export function ApiView({ connection }: { connection: Connection }) {
           },
         ]}
       />
-      <Card className="space-y-3 p-5">
-        <h2 className="text-sm font-semibold">可用介面</h2>
-        {[
-          "POST /v1/chat/completions",
-          "POST /v1/messages",
-          "GET /v1/models",
-          "GET /v1/yunshu/status",
-          "GET /v1/requests",
-        ].map((path) => (
-          <p
-            key={path}
-            className="break-all font-mono text-xs text-muted-foreground"
-          >
-            {path}
-          </p>
-        ))}
-      </Card>
+      <ApiCatalog connection={connection} />
     </section>
   );
 }

@@ -29,11 +29,13 @@ import {
 import {
   elapsed,
   isOnline,
+  supportsChat,
   modelLabel,
   number,
   type Engine,
   type Model,
 } from "./ui";
+import { ModelManagement } from "./ModelManagement";
 export type Perform = (
   key: string,
   action: () => Promise<unknown>,
@@ -86,22 +88,26 @@ export function Models({
     }
   }
   return (
-    <section
-      className="mx-auto max-w-7xl space-y-5 p-4 sm:p-7"
-      data-testid="models"
-    >
+    <section className="w-full max-w-7xl space-y-6" data-testid="models">
       <PageHeader
         title="模型庫"
         description="管理此服務註冊的模型，查看載入狀態、記憶體與保留時間。"
         actions={
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={() => void engine.refresh()}
-          >
-            <RefreshCw size={14} />
-            重新整理
-          </Button>
+          <div className="flex flex-wrap gap-2">
+            <ModelManagement
+              connection={connection}
+              disabled={!online || !!busy}
+              perform={perform}
+            />
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => void engine.refresh()}
+            >
+              <RefreshCw size={14} />
+              重新整理
+            </Button>
+          </div>
         }
       />
       <div className="flex flex-wrap justify-between gap-3">
@@ -228,11 +234,24 @@ export function Models({
                     <Button
                       variant="ghost"
                       size="sm"
-                      disabled={!online || !model.loaded}
+                      disabled={
+                        !online || !model.loaded || !supportsChat(model)
+                      }
+                      title={
+                        supportsChat(model)
+                          ? "文字或視覺推理測試"
+                          : "此模型請使用 API 接入對應端點"
+                      }
                       onClick={() => test(model.id)}
                     >
                       測試
                     </Button>
+                    <ModelManagement
+                      connection={connection}
+                      modelId={model.id}
+                      disabled={!online || !!busy || model.loading}
+                      perform={perform}
+                    />
                   </div>
                 </Td>
               </Tr>
@@ -245,7 +264,7 @@ export function Models({
             title={engine.status ? "沒有符合條件的模型" : "等待模型清單"}
             description={
               engine.status
-                ? "清除篩選條件；新增模型請透過 Yunshu 的啟動設定註冊。"
+                ? "清除篩選條件；或匯入 Hugging Face 原生 MLX 模型。"
                 : "確認服務位址與存取權杖後重新整理。"
             }
           />
