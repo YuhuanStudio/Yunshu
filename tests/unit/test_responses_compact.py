@@ -61,9 +61,19 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr(resp_mod, "create_response", inner)
     summaries: list = []
 
-    async def fake_summarize(request, model, transcript, instructions):
+    async def fake_summarize(request, model, messages, tools=None):
         summaries.append(
-            {"model": model, "transcript": transcript, "instr": instructions}
+            {
+                "model": model,
+                "messages": messages,
+                "tools": tools,
+                "transcript": "\n".join(
+                    ln for m in messages if (ln := ctx._transcript_line(m))
+                ),
+                "instr": messages[0]["content"]
+                if messages[0]["role"] == "system"
+                else None,
+            }
         )
         return SUMMARY, {
             "input_tokens": 50,
@@ -339,9 +349,10 @@ async def _fake_chat(request):
     assert request.url.path == "/v1/chat/completions"
     assert body["stream"] is False and body["model"] == "m"
     assert body["max_tokens"] == 321
-    assert body["messages"][0]["role"] == "system"
-    assert "Additional guidance:\nbe brief" in body["messages"][0]["content"]
-    assert "user: hello" in body["messages"][1]["content"]
+    assert body["messages"][0] == {"role": "system", "content": "sys"}
+    assert body["messages"][1] == {"role": "user", "content": "hello"}
+    assert body["messages"][-1]["content"].startswith(ctx.COMPACT_PROMPT)
+    assert body["tools"][0]["function"]["name"] == "f"
     assert request.headers["authorization"] == "Bearer t"
     return httpx.Response(
         200,
@@ -366,7 +377,10 @@ async def test_summarize_loopback(monkeypatch):
     from yunshu_gateway.routers import ollama
 
     monkeypatch.setattr(ollama, "_client", fake_client)
-    text, usage = await ctx.summarize(None, "m", "user: hello", "be brief")
+    msgs = ctx._summary_request_messages([{"role": "user", "content": "hello"}], "sys")
+    text, usage = await ctx.summarize(
+        None, "m", msgs, ctx.chat_tools([{"type": "function", "name": "f"}])
+    )
     assert text == "the summary" and usage["total_tokens"] == 10
 
 
@@ -384,5 +398,111 @@ async def test_summarize_error_status(monkeypatch):
 
     monkeypatch.setattr(ollama, "_client", fake_client)
     with pytest.raises(ctx.ContextError) as ei:
-        await ctx.summarize(None, "m", "x", None)
+        await ctx.summarize(None, "m", [{"role": "user", "content": "x"}])
     assert ei.value.status == 404 and "no model" in ei.value.message
+
+
+# ---- prefix reuse, multi-pass folding, streaming progress -------------------
+
+
+def _msgs(*pairs):
+    return [{"role": r, "content": c} for r, c in pairs]
+
+
+def test_summary_request_keeps_history_as_prefix():
+    hist = _msgs(("user", "a"), ("assistant", "b"))
+    req = ctx._summary_request_messages(hist, "sys", "be brief")
+    assert req[:3] == [{"role": "system", "content": "sys"}, *hist]
+    assert req[-1]["role"] == "user" and "be brief" in req[-1]["content"]
+    assert req[-1]["content"].startswith(ctx.COMPACT_PROMPT)
+
+
+def test_safe_boundaries_never_split_tool_call_from_result():
+    call = {"role": "assistant", "tool_calls": [{"id": "c1"}, {"id": "c2"}]}
+    entries = [
+        (None, [{"role": "user", "content": "q1"}]),
+        (None, [call]),
+        (None, [{"role": "tool", "tool_call_id": "c1", "content": "r"}]),
+        (None, [{"role": "user", "content": "mid-call user"}]),
+        (None, [{"role": "tool", "tool_call_id": "c2", "content": "r"}]),
+        (None, [{"role": "assistant", "content": "done"}]),
+        (None, [{"role": "user", "content": "q2"}]),
+    ]
+    assert ctx.safe_boundaries(entries) == [6]
+
+
+@pytest.mark.asyncio
+async def test_over_window_history_folds_in_passes(monkeypatch):
+    # window of 40 "tokens" (1 per message): 3x the window must still summarize, every call
+    # under the window, each later pass starting from the previous summary.
+    monkeypatch.setattr(ctx, "_context_budget", lambda model: 40)
+    monkeypatch.setattr(ctx, "_count_tokens", lambda msgs: len(msgs))
+    entries = [
+        (
+            None,
+            [
+                {"role": "user", "content": f"q{i}"},
+                {"role": "assistant", "content": f"a{i}"},
+            ],
+        )
+        for i in range(60)
+    ]
+    calls: list = []
+
+    async def fake(request, model, messages, tools=None):
+        calls.append(messages)
+        return f"S{len(calls)}", {
+            "input_tokens": len(messages),
+            "output_tokens": 1,
+            "total_tokens": len(messages) + 1,
+        }
+
+    monkeypatch.setattr(ctx, "summarize", fake)
+    text, usage = await ctx.summarize_history(None, "m", entries)
+    assert text == f"S{len(calls)}" and 2 <= len(calls) <= 8
+    assert all(len(m) <= 40 for m in calls)
+    assert ctx.SUMMARY_PREFIX + "S1" in calls[1][0]["content"]
+    assert usage["input_tokens"] == sum(len(m) for m in calls)
+
+
+@pytest.mark.asyncio
+async def test_single_exchange_over_window_is_an_error(monkeypatch):
+    monkeypatch.setattr(ctx, "_context_budget", lambda model: 3)
+    monkeypatch.setattr(ctx, "_count_tokens", lambda msgs: len(msgs) * 10)
+    with pytest.raises(ctx.ContextError) as ei:
+        await ctx.summarize_history(
+            None, "m", [(None, [{"role": "user", "content": "x"}])]
+        )
+    assert ei.value.status == 400
+
+
+def test_streaming_auto_compaction_sends_bytes_before_summary_returns(env, monkeypatch):
+    client, inner, summaries = env
+    monkeypatch.setattr(ctx, "_count_tokens", lambda msgs: 999)
+    monkeypatch.setattr(ctx, "_PROGRESS_SECONDS", 0.01)
+    import asyncio
+
+    orig = ctx.summarize_history
+    gate: dict = {}
+
+    async def slow(*a, **k):
+        await asyncio.sleep(0.1)
+        return await orig(*a, **k)
+
+    monkeypatch.setattr(ctx, "summarize_history", slow)
+    with client.stream(
+        "POST",
+        "/v1/responses",
+        json={
+            "model": "m",
+            "input": "hi",
+            "stream": True,
+            "context_management": _threshold(5),
+        },
+    ) as r:
+        chunks = list(r.iter_raw())
+    first = chunks[0]
+    assert first.startswith(b": compacting")
+    assert b"".join(chunks).count(b": compacting") >= 2
+    assert inner.calls and inner.calls[0].context_management is None
+    assert gate == {}

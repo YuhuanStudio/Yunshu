@@ -20,7 +20,7 @@ import json
 import logging
 import secrets
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from typing import Any
 
 from fastapi import Request
@@ -292,31 +292,70 @@ def entries_from_messages(
     return [(_msg_to_item(m), [m]) for m in msgs]
 
 
+SUMMARY_INSTRUCTION = (
+    COMPACT_PROMPT
+    + " The conversation so far is the messages above this one; do not continue it "
+    "and do not call tools. If it starts with an earlier summary, fold it in and update "
+    "what changed."
+)
+
+MAX_SUMMARY_PASSES = 8
+
+
+def chat_tools(tools: Any) -> list[dict] | None:
+    """Responses function tools as chat-completions tools, so the summary request renders the
+    same template head (tool block) as the conversation and shares its prefix cache."""
+    out = []
+    for t in tools or []:
+        if not isinstance(t, dict) or t.get("type") != "function" or not t.get("name"):
+            continue
+        out.append(
+            {
+                "type": "function",
+                "function": {
+                    "name": t["name"],
+                    "description": t.get("description") or "",
+                    "parameters": t.get("parameters")
+                    or {"type": "object", "properties": {}},
+                },
+            }
+        )
+    return out or None
+
+
+def _summary_request_messages(
+    history: list[dict], instructions: str | None, guidance: str | None = None
+) -> list[dict]:
+    """The real messages first (the prefix the server already holds in its cache), the
+    summarize instruction last."""
+    ask = SUMMARY_INSTRUCTION
+    if guidance:
+        ask += "\n\nAdditional guidance:\n" + guidance
+    head = [{"role": "system", "content": instructions}] if instructions else []
+    return [*head, *history, {"role": "user", "content": ask}]
+
+
 async def summarize(
-    request: Request, model: str, transcript: str, instructions: str | None
+    request: Request,
+    model: str,
+    messages: list[dict],
+    tools: list[dict] | None = None,
 ) -> tuple[str, dict]:
-    """Ask this server (loopback chat completions, same model) for the summary."""
+    """Ask this server (loopback chat completions, same model) to summarize ``messages``
+    (which already end with the summarize instruction)."""
     from .routers.ollama import _client
 
-    system = COMPACT_PROMPT
-    if instructions:
-        system += "\n\nAdditional guidance:\n" + instructions
-    body = {
+    body: dict = {
         "model": model,
         "stream": False,
         "temperature": 0.2,
         "max_tokens": int(settings.get("YUNSHU_COMPACT_MAX_TOKENS")),
         "enable_thinking": False,
-        "messages": [
-            {"role": "system", "content": system},
-            {
-                "role": "user",
-                "content": "<conversation>\n"
-                + transcript
-                + "\n</conversation>\n\nWrite the summary now.",
-            },
-        ],
+        "messages": messages,
     }
+    if tools:
+        body["tools"] = tools
+        body["tool_choice"] = "none"
     async with _client(request) as c:
         r = await c.post("/v1/chat/completions", json=body)
     if r.status_code != 200:
@@ -333,13 +372,113 @@ async def summarize(
     u = data.get("usage") or {}
     pt = int(u.get("prompt_tokens", u.get("input_tokens", 0)) or 0)
     ct = int(u.get("completion_tokens", u.get("output_tokens", 0)) or 0)
+    det = u.get("prompt_tokens_details") or u.get("input_tokens_details") or {}
     return text.strip(), {
         "input_tokens": pt,
         "output_tokens": ct,
         "total_tokens": pt + ct,
-        "input_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0},
+        "input_tokens_details": {
+            "cached_tokens": int(det.get("cached_tokens", 0) or 0),
+            "cache_write_tokens": 0,
+        },
         "output_tokens_details": {"reasoning_tokens": 0},
     }
+
+
+def safe_boundaries(entries: list[tuple[dict | None, list[dict]]]) -> list[int]:
+    """Entry indexes (> 0) where a user message starts and no tool call is still waiting for
+    its result: the only places a history may be cut."""
+    pending: set[str] = set()
+    out = []
+    for i, (_, msgs) in enumerate(entries):
+        if i and not pending and msgs and msgs[0].get("role") == "user":
+            out.append(i)
+        for m in msgs:
+            for tc in m.get("tool_calls") or []:
+                pending.add(tc.get("id") or "")
+            if m.get("role") == "tool":
+                pending.discard(m.get("tool_call_id") or "")
+    return out
+
+
+def _context_budget(model: str) -> int | None:
+    """Prompt tokens one summary call may hold: the context window minus the summary."""
+    from .engine import get_engine
+    from .streaming import get_max_context_window
+
+    try:
+        win = get_max_context_window(model, get_engine())
+    except Exception:
+        return None
+    if not win:
+        return None
+    return max(256, int(win) - int(settings.get("YUNSHU_COMPACT_MAX_TOKENS")) - 256)
+
+
+def _add_usage(total: dict, u: dict) -> None:
+    for k in ("input_tokens", "output_tokens", "total_tokens"):
+        total[k] = total.get(k, 0) + u.get(k, 0)
+    for k in ("cached_tokens", "cache_write_tokens"):
+        d = total.setdefault("input_tokens_details", {})
+        d[k] = d.get(k, 0) + (u.get("input_tokens_details") or {}).get(k, 0)
+    total.setdefault("output_tokens_details", {"reasoning_tokens": 0})
+
+
+async def summarize_history(
+    request: Request,
+    model: str,
+    entries: list[tuple[dict | None, list[dict]]],
+    instructions: str | None = None,
+    guidance: str | None = None,
+    tools: list[dict] | None = None,
+    progress: Callable[[int, int], None] | None = None,
+) -> tuple[str, dict]:
+    """Summary of ``entries``. One call when the whole history fits the model window (the
+    messages are the prompt prefix, so the cache the conversation built is reused); otherwise
+    up to ``MAX_SUMMARY_PASSES`` passes, each folding the previous summary plus the most whole
+    exchanges that fit, cutting only at safe boundaries (a tool call never loses its result)."""
+    budget = _context_budget(model)
+    ctools = chat_tools(tools)
+    pending = list(entries)
+    summary_msg: list[dict] = []
+    usage: dict = {}
+    for n in range(1, MAX_SUMMARY_PASSES + 1):
+
+        def build(k: int) -> list[dict]:
+            hist = summary_msg + [m for _, ms in pending[:k] for m in ms]
+            return _summary_request_messages(hist, instructions, guidance)
+
+        cut = len(pending)
+        if budget is not None and _count_tokens(build(cut)) > budget:
+            bounds = [*safe_boundaries(pending), len(pending)]
+            lo, hi = 0, len(bounds)
+            while lo < hi:
+                mid = (lo + hi) // 2
+                if _count_tokens(build(bounds[mid])) <= budget:
+                    lo = mid + 1
+                else:
+                    hi = mid
+            if lo == 0:
+                raise ContextError(
+                    400,
+                    "a single conversation exchange does not fit the model's context "
+                    "window, so it cannot be summarized",
+                    "context_length_exceeded",
+                )
+            cut = bounds[lo - 1]
+        if progress:
+            progress(n, MAX_SUMMARY_PASSES)
+        text, u = await summarize(request, model, build(cut), ctools)
+        _add_usage(usage, u)
+        pending = pending[cut:]
+        if not pending:
+            return text, usage
+        summary_msg = [{"role": "user", "content": SUMMARY_PREFIX + text}]
+    raise ContextError(
+        400,
+        f"compaction needs more than {MAX_SUMMARY_PASSES} summary passes",
+        "context_length_exceeded",
+    )
 
 
 async def compact_entries(
@@ -347,11 +486,16 @@ async def compact_entries(
     model: str,
     entries: list[tuple[dict | None, list[dict]]],
     instructions: str | None = None,
+    *,
+    guidance: str | None = None,
+    tools: list[dict] | None = None,
+    progress: Callable[[int, int], None] | None = None,
 ) -> tuple[list[dict], dict]:
     """Kept user/developer messages verbatim, then one ``compaction`` item; plus the usage."""
     kept = [it for it, _ in entries if it is not None]
-    lines = [ln for _, msgs in entries for m in msgs if (ln := _transcript_line(m))]
-    summary, usage = await summarize(request, model, "\n".join(lines), instructions)
+    summary, usage = await summarize_history(
+        request, model, entries, instructions, guidance, tools, progress
+    )
     out = [normalize_item(it) for it in kept]
     out.append(make_compaction_item(summary))
     return out, usage
@@ -501,7 +645,6 @@ def count_state_items(req, request: Request) -> tuple[list[dict], str | None]:
 async def run_stateful_response(req, request: Request, inner):
     """Wrapper called from ``create_response``; ``inner`` is ``create_response`` itself."""
     from .routers.models import _check_permission
-    from .routers.responses import ResponseInputText
 
     _check_permission(request, "can_infer")
     conv_id = _conversation_id(req)
@@ -534,7 +677,17 @@ async def run_stateful_response(req, request: Request, inner):
                 rendered = [{"role": "system", "content": req.instructions}, *rendered]
             if _count_tokens(rendered) > thr:
                 all_entries = entries_from_messages(chain) + entries
-                out, _usage = await compact_entries(request, model, all_entries)
+                if req.stream:
+                    return _compacting_stream(
+                        req, request, inner, conv_id, own_items, items, all_entries
+                    )
+                out, _usage = await compact_entries(
+                    request,
+                    model,
+                    all_entries,
+                    req.instructions,
+                    tools=_tool_dicts(req),
+                )
                 compaction = out[-1]
                 items = out[:-1] + [
                     summary_message(
@@ -545,6 +698,91 @@ async def run_stateful_response(req, request: Request, inner):
         items = expand_compaction_items(items)
     except (ContextError, ConversationError) as exc:
         return error_json(exc)
+
+    return await _respond(
+        req, request, inner, items, prev_id, conv_id, own_items, compaction
+    )
+
+
+def _tool_dicts(req) -> list[dict]:
+    return [t if isinstance(t, dict) else _item_dict(t) for t in (req.tools or [])]
+
+
+def _sse_error(exc: ContextError | ConversationError) -> bytes:
+    body = json.loads(error_json(exc).body)
+    return (
+        "event: error\ndata: " + json.dumps({"type": "error", **body}) + "\n\n"
+    ).encode()
+
+
+def _compacting_stream(
+    req, request: Request, inner, conv_id, own_items, items, all_entries
+) -> StreamingResponse:
+    """Streaming request that needs compaction first: send the SSE headers at once and an SSE
+    comment line per summary pass (and every few seconds while a pass runs) so the client's
+    connection does not idle for the minutes a long summary takes, then relay the real response.
+    Responses has no event for compaction progress (events need a response id that only exists
+    once the real response starts), so progress is comments, which SDKs and proxies ignore."""
+    import asyncio
+
+    async def gen() -> AsyncIterator[bytes]:
+        marks: list[tuple[int, int]] = []
+        task = asyncio.ensure_future(
+            compact_entries(
+                request,
+                req.model,
+                all_entries,
+                req.instructions,
+                tools=_tool_dicts(req),
+                progress=lambda n, total: marks.append((n, total)),
+            )
+        )
+        yield b": compacting conversation\n\n"
+        sent = 0
+        try:
+            while not task.done():
+                await asyncio.wait({task}, timeout=_PROGRESS_SECONDS)
+                if len(marks) > sent:
+                    sent = len(marks)
+                    yield f": compacting pass {marks[-1][0]}\n\n".encode()
+                elif not task.done():
+                    yield b": compacting\n\n"
+            out, _usage = task.result()
+        except (ContextError, ConversationError) as exc:
+            yield _sse_error(exc)
+            return
+        except BaseException:
+            task.cancel()
+            raise
+        compaction = out[-1]
+        new_items = out[:-1] + [
+            summary_message(unseal_compaction(compaction["encrypted_content"]) or "")
+        ]
+        resp = await _respond(
+            req,
+            request,
+            inner,
+            expand_compaction_items(new_items),
+            None,
+            conv_id,
+            own_items,
+            compaction,
+        )
+        if isinstance(resp, StreamingResponse):
+            async for chunk in resp.body_iterator:
+                yield chunk.encode() if isinstance(chunk, str) else bytes(chunk)
+        else:
+            body = getattr(resp, "body", b"{}")
+            yield b"event: error\ndata: " + (body or b"{}") + b"\n\n"
+
+    return StreamingResponse(gen(), media_type="text/event-stream")
+
+
+_PROGRESS_SECONDS = 5.0
+
+
+async def _respond(req, request, inner, items, prev_id, conv_id, own_items, compaction):
+    from .routers.responses import ResponseInputText
 
     new_req = req.model_copy(
         update={
@@ -644,7 +882,14 @@ async def compact_endpoint(request: Request, body: dict) -> dict:
         ) from None
     if not entries:
         raise ContextError(400, "nothing to compact", "invalid_value", "input")
-    out, usage = await compact_entries(request, model, entries, instructions)
+    tools = body.get("tools")
+    if tools is not None and not isinstance(tools, list):
+        raise ContextError(400, "tools must be an array", "invalid_type", "tools")
+    # ``instructions`` is the conversation's own system prompt (as in POST /responses; Codex sends
+    # its base instructions here), so it leads the summary request and shares the prefix cache.
+    out, usage = await compact_entries(
+        request, model, entries, instructions, tools=tools
+    )
     return {
         "id": f"resp_{secrets.token_hex(12)}",
         "object": "response.compaction",

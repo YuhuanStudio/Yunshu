@@ -1062,6 +1062,98 @@ def _compact(c: Ctx):
     )
 
 
+def _compact_history(n_turns: int, tag: str) -> list[dict]:
+    """User/assistant text turns of roughly 60 tokens each (``tag`` makes every history unique)."""
+    out = []
+    for i in range(n_turns):
+        out.append(
+            {
+                "role": "user",
+                "content": f"[{tag}] Question {i}: what does record {i} of ledger {tag} "
+                f"say about the invoice number {i * 7919} and the shipment of {i * 31} crates?",
+            }
+        )
+        out.append(
+            {
+                "role": "assistant",
+                "content": f"Record {i} of ledger {tag}: invoice {i * 7919} was paid, "
+                f"shipment of {i * 31} crates left the warehouse on day {i % 28 + 1}.",
+            }
+        )
+    out.append({"role": "user", "content": "Continue with the next record."})
+    return out
+
+
+def _tokens(c: Ctx, msgs: list[dict]) -> tuple[int, int | None]:
+    text = "\n".join(m["content"] for m in msgs)
+    r = c.http.post("/v1/tokenize", json={"model": c.model, "prompt": text}).json()
+    return int(r["count"]), r.get("max_model_len")
+
+
+def _history_of_tokens(
+    c: Ctx, target: int, tag: str
+) -> tuple[list[dict], int, int | None]:
+    """A history of about ``target`` tokens (sized from a measured probe)."""
+    probe = _compact_history(40, tag)
+    per_turn = _tokens(c, probe)[0] / 40
+    msgs = _compact_history(int(target / per_turn), tag)
+    n, window = _tokens(c, msgs)
+    return msgs, n, window
+
+
+@check("responses_compact_history", "POST /v1/responses/compact", served=True)
+def _compact_history_check(c: Ctx):
+    """The summary request keeps the real messages as its prefix (cached tokens ~ history length
+    for a history the server just served) and a history larger than the context window still
+    compacts (several passes, each under the window)."""
+    import time
+
+    # ~20K tokens, served once so its KV is warm
+    msgs, n, window = _history_of_tokens(c, 20_000, f"warm{int(time.time())}")
+    expect(15_000 < n < 25_000, f"history is {n} tokens, wanted ~20K")
+    c.oa.chat.completions.create(model=c.model, messages=msgs, max_tokens=1)
+    r = c.oa.responses.compact(model=c.model, input=msgs)
+    u = r.usage
+    cached = u.input_tokens_details.cached_tokens
+    c.notes["compact_cached_tokens"] = f"{cached}/{u.input_tokens} (history {n})"
+    expect(
+        any(o.type == "compaction" for o in r.output),
+        "no compaction item (warm history)",
+    )
+    expect(
+        cached >= 0.8 * n,
+        f"compaction cached only {cached} of {u.input_tokens} input tokens "
+        f"(history {n}): the summary request is not reusing the history's prefix cache",
+    )
+    if not window:  # /tokenize does not know it: read it off the server's own refusal
+        import re
+
+        try:
+            c.oa.chat.completions.create(
+                model=c.model,
+                messages=[{"role": "user", "content": "a " * 2_000_000}],
+                max_tokens=1,
+            )
+        except Exception as exc:  # noqa: BLE001
+            m = re.search(r"> (\d+) maximum", str(exc))
+            window = int(m.group(1)) if m else None
+    c.notes["compact_window"] = str(window)
+    # a history over the window (only where the model's window is small enough to build one)
+    if not window or window > 40_000:
+        return
+    big, nb, _ = _history_of_tokens(c, int(window * 1.3), f"big{int(time.time())}")
+    expect(nb > window, f"over-window history is {nb} tokens, window {window}")
+    r = c.oa.responses.compact(model=c.model, input=big)
+    expect(
+        any(o.type == "compaction" for o in r.output),
+        "no compaction item (over window)",
+    )
+    c.notes["compact_over_window"] = (
+        f"{nb} tokens, window {window}, input_tokens summed {r.usage.input_tokens}"
+    )
+    expect(r.usage.input_tokens > window, "over-window compaction used one call?")
+
+
 # ── token counting ───────────────────────────────────────────────────────────────────────
 
 
