@@ -8,6 +8,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@yuhuanowo/yunui";
+import { SettingRow } from "@yuhuanowo/yunui/patterns";
 import { warmupModel, type Connection } from "./api";
 import { modelLabel, type Engine } from "./ui";
 import type { Perform } from "./Models";
@@ -32,43 +33,53 @@ export function ModelLeaseSettings({
       setModel(eligible[0]?.id ?? "");
   }, [engine.status?.models, model]);
   return (
-    <Card className="space-y-4 p-5">
-      <div>
-        <h2 className="text-sm font-semibold">模型保留時間</h2>
-        <p className="mt-1 text-xs leading-5 text-muted-foreground">
-          透過模型預熱介面更新閒置保留時間，並執行一次短預熱。固定保留的單模型不適用。
-        </p>
-      </div>
-      <div className="flex flex-wrap gap-3">
-        <Select value={model || undefined} onValueChange={setModel}>
-          <SelectTrigger aria-label="保留時間的模型" className="w-64">
-            <SelectValue placeholder="選擇非固定模型" />
-          </SelectTrigger>
-          <SelectContent>
-            {eligible.map((item) => (
-              <SelectItem key={item.id} value={item.id}>
-                {modelLabel(item.id)}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <Select value={keepAlive} onValueChange={setKeepAlive}>
-          <SelectTrigger aria-label="閒置保留時間" className="w-40">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {[
-              ["5m", "5 分鐘"],
-              ["15m", "15 分鐘"],
-              ["1h", "1 小時"],
-              ["-1", "持續保留"],
-            ].map(([value, label]) => (
-              <SelectItem key={value} value={value}>
-                {label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+    <Card className="px-5 pb-5">
+      <h2 className="pt-5 text-sm font-semibold">模型保留時間</h2>
+      <SettingRow
+        title="模型"
+        description="固定保留的單模型不適用。"
+        control={
+          <Select value={model || undefined} onValueChange={setModel}>
+            <SelectTrigger
+              aria-label="保留時間的模型"
+              className="w-full sm:w-64"
+            >
+              <SelectValue placeholder="選擇非固定模型" />
+            </SelectTrigger>
+            <SelectContent>
+              {eligible.map((item) => (
+                <SelectItem key={item.id} value={item.id}>
+                  {modelLabel(item.id)}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        }
+      />
+      <SettingRow
+        title="閒置保留時間"
+        description="透過模型預熱介面更新保留時間，並執行一次短預熱。"
+        control={
+          <Select value={keepAlive} onValueChange={setKeepAlive}>
+            <SelectTrigger aria-label="閒置保留時間" className="w-40">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {[
+                ["5m", "5 分鐘"],
+                ["15m", "15 分鐘"],
+                ["1h", "1 小時"],
+                ["-1", "持續保留"],
+              ].map(([value, label]) => (
+                <SelectItem key={value} value={value}>
+                  {label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        }
+      />
+      <div className="pt-4">
         <Button
           disabled={!model || busy || engine.phase !== "online"}
           onClick={() =>

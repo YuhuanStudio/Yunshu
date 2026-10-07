@@ -1,10 +1,14 @@
 import { useState } from "react";
-import { Button, Card, Input, Switch } from "@yuhuanowo/yunui";
-import { PageHeader, SettingRow, CodeBlock } from "@yuhuanowo/yunui/patterns";
+import { Button, Card, Input, Kbd, Switch } from "@yuhuanowo/yunui";
+import {
+  PageHeader,
+  SettingRow,
+  SettingsShell,
+} from "@yuhuanowo/yunui/patterns";
+import { Keyboard, Link2, MemoryStick, Palette } from "lucide-react";
 import { ModelLeaseSettings } from "./ModelLeaseSettings";
 import type { Engine } from "./ui";
 import type { Perform } from "./Models";
-import { ApiCatalog } from "./ApiCatalog";
 import type { Connection } from "./api";
 export function Settings({
   connection,
@@ -43,116 +47,141 @@ export function Settings({
       setError(e instanceof Error ? e.message : "服務位址無效");
     }
   }
+  const [section, setSection] = useState("connection");
+  const go = (key: string) => {
+    setSection(key);
+    document
+      .getElementById(`settings-${key}`)
+      ?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
+  const shortcuts: [string, string][] = [
+    ["⌘ K / Ctrl K", "開啟命令面板，快速切換頁面與模型"],
+    ["Enter", "在測試台送出訊息"],
+    ["Esc", "關閉對話框與選單"],
+  ];
   return (
-    <section className="w-full max-w-4xl space-y-6" data-testid="settings">
-      <PageHeader
-        title="設定"
-        description="連線到本機服務，並調整控制台偏好。"
-      />
-      <Card className="space-y-5 p-5">
-        <div>
-          <h2 className="text-sm font-semibold">引擎連線</h2>
-          <p className="mt-1 text-xs text-muted-foreground">
-            預設使用同一個服務來源。開發模式由 Vite 轉送至本機 8000 埠。
-          </p>
-        </div>
-        <div>
-          <label htmlFor="base-url" className="text-sm">
-            服務位址
-          </label>
-          <Input
-            id="base-url"
-            className="mt-2 font-mono"
-            value={url}
-            onChange={(e) => {
-              setUrl(e.target.value);
-              setToken("");
-            }}
-            placeholder="http://127.0.0.1:8000"
+    <section className="w-full max-w-5xl" data-testid="settings">
+      <SettingsShell
+        header={
+          <PageHeader
+            title="設定"
+            description="連線到本機服務，並調整控制台偏好。"
           />
-        </div>
-        <div>
-          <label htmlFor="access-token" className="text-sm">
-            存取權杖
-          </label>
-          <Input
-            id="access-token"
-            className="mt-2"
-            type="password"
-            autoComplete="off"
-            value={token}
-            onChange={(e) => setToken(e.target.value)}
-            placeholder="服務沒有啟用驗證時可留空"
-          />
-          <p className="mt-2 text-xs text-muted-foreground">
-            只保留在此頁記憶體；重新整理後需要再輸入。更改服務位址會清除權杖。
-          </p>
-        </div>
-        {error && (
-          <p role="alert" className="text-sm text-error">
-            {error}
-          </p>
-        )}
-        <Button disabled={disabled} onClick={submit}>
-          儲存並連線
-        </Button>
-      </Card>
-      <ModelLeaseSettings
-        connection={connection}
-        engine={engine}
-        perform={perform}
-        busy={disabled}
-      />
-      <Card className="px-5">
-        <SettingRow
-          title="深色介面"
-          description="儲存於此瀏覽器。"
-          control={
-            <Switch label="深色介面" checked={dark} onCheckedChange={setDark} />
-          }
-        />
-      </Card>
-      <Card className="space-y-3 p-5">
-        <h2 className="text-sm font-semibold">模型操作權限</h2>
-        <p className="text-xs leading-6 text-muted-foreground">
-          模型載入與卸載需要服務允許的權限。若出現 401，請使用服務設定的
-          YUNSHU_AUTH_TOKEN。此頁不會修改引擎啟動參數或關閉驗證。
-        </p>
-      </Card>
-    </section>
-  );
-}
-export function ApiView({ connection }: { connection: Connection }) {
-  const base =
-    connection.baseUrl.replace(/\/+$/, "").replace(/\/v1$/, "") + "/v1";
-  return (
-    <section className="w-full max-w-5xl space-y-6" data-testid="api">
-      <PageHeader
-        title="API 接入"
-        description="使用熟悉的 SDK，讓你的應用連接本機模型。"
-      />
-      <Card className="space-y-2 p-5">
-        <p className="text-xs text-muted-foreground">OpenAI API Base URL</p>
-        <p className="break-all font-mono text-sm">{base}</p>
-      </Card>
-      <CodeBlock
-        code=""
-        tabs={[
+        }
+        navigationLabel="設定分類"
+        value={section}
+        onValueChange={go}
+        groups={[
           {
-            id: "python",
-            label: "Python",
-            language: "python",
-            code: `import os\nfrom openai import OpenAI\n\nclient = OpenAI(\n    base_url=${JSON.stringify(base)},\n    api_key=os.environ.get("YUNSHU_AUTH_TOKEN", "local"),\n)\nmodels = client.models.list()\nprint([model.id for model in models.data])`,
-          },
-          {
-            id: "curl",
-            label: "cURL",
-            language: "bash",
-            code: `curl ${JSON.stringify(base + "/models")} \\\n  -H "Authorization: Bearer $YUNSHU_AUTH_TOKEN"`,
+            key: "console",
+            items: [
+              { key: "connection", label: "引擎連線", icon: Link2 },
+              { key: "appearance", label: "外觀", icon: Palette },
+              { key: "models", label: "模型保留", icon: MemoryStick },
+              { key: "shortcuts", label: "鍵盤快速鍵", icon: Keyboard },
+            ],
           },
         ]}
-      />
-      <ApiCatalog connection={connection} />
+      >
+        <div className="space-y-6">
+          <Card id="settings-connection" className="scroll-mt-4 px-5 pb-5">
+            <h2 className="pt-5 text-sm font-semibold">引擎連線</h2>
+            <SettingRow
+              title={<label htmlFor="base-url">服務位址</label>}
+              description="預設使用同一個服務來源。開發模式由 Vite 轉送至本機 8000 埠。"
+              control={
+                <Input
+                  id="base-url"
+                  className="w-full font-mono sm:w-72"
+                  value={url}
+                  onChange={(e) => {
+                    setUrl(e.target.value);
+                    setToken("");
+                  }}
+                  placeholder="http://127.0.0.1:8000"
+                />
+              }
+            />
+            <SettingRow
+              title={<label htmlFor="access-token">存取權杖</label>}
+              description="只保留在此頁記憶體；重新整理後需要再輸入。更改服務位址會清除權杖。"
+              control={
+                <Input
+                  id="access-token"
+                  className="w-full sm:w-72"
+                  type="password"
+                  autoComplete="off"
+                  value={token}
+                  onChange={(e) => setToken(e.target.value)}
+                  placeholder="服務沒有啟用驗證時可留空"
+                />
+              }
+            />
+            {error && (
+              <p role="alert" className="pt-2 text-sm text-error">
+                {error}
+              </p>
+            )}
+            <div className="pt-4">
+              <Button disabled={disabled} onClick={submit}>
+                儲存並連線
+              </Button>
+            </div>
+          </Card>
+          <Card id="settings-appearance" className="scroll-mt-4 px-5">
+            <SettingRow
+              title="深色介面"
+              description="儲存於此瀏覽器。"
+              control={
+                <Switch
+                  label="深色介面"
+                  checked={dark}
+                  onCheckedChange={setDark}
+                />
+              }
+            />
+          </Card>
+          <div id="settings-models" className="scroll-mt-4 space-y-6">
+            <ModelLeaseSettings
+              connection={connection}
+              engine={engine}
+              perform={perform}
+              busy={disabled}
+            />
+            <Card className="space-y-2 p-5">
+              <h2 className="text-sm font-semibold">模型操作權限</h2>
+              <p className="text-xs leading-6 text-muted-foreground">
+                模型載入與卸載需要服務允許的權限。若出現 401，請使用服務設定的
+                YUNSHU_AUTH_TOKEN。此頁不會修改引擎啟動參數或關閉驗證。
+              </p>
+            </Card>
+          </div>
+          <Card id="settings-shortcuts" className="scroll-mt-4 px-5 pb-2">
+            <h2 className="pt-5 text-sm font-semibold">鍵盤快速鍵</h2>
+            {shortcuts.map(([keys, text]) => (
+              <SettingRow
+                key={keys}
+                title={text}
+                control={
+                  <span className="flex items-center gap-1">
+                    {keys.split(" ").map((k, i) =>
+                      k === "/" ? (
+                        <span key={i} className="text-xs text-muted-foreground">
+                          /
+                        </span>
+                      ) : (
+                        <Kbd key={i}>{k}</Kbd>
+                      ),
+                    )}
+                  </span>
+                }
+              />
+            ))}
+          </Card>
+        </div>
+      </SettingsShell>
     </section>
   );
 }
+
+export { ApiView } from "./ApiAccess";
