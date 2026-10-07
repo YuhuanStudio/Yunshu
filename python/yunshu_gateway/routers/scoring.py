@@ -368,7 +368,9 @@ async def create_score(req: ScoreRequest, request: Request):
                     {"object": "score", "index": i, "score": score}
                     for i, score in enumerate(scores)
                 ],
-                "usage": _text_usage(engine, texts_a + texts_b),
+                "usage": engine.token_usage(
+                    pairs=list(zip(texts_a, texts_b, strict=True))
+                ),
             }
         )
 
@@ -462,15 +464,23 @@ async def _rerank_cross_encoder(
             item["document"] = doc if isinstance(doc, dict) else {"text": doc}
         results.append(item)
 
-    # Token counting isn't meaningful for a cross-encoder pass; report item count.
+    from yunshu_engine.scoring_engine import TextScoringEngine
+
     n = len(truncated_docs) + 1
+    usage = (
+        engine.token_usage(
+            pairs=[(req.query, d) for d in truncated_docs], instruction=req.instruction
+        )
+        if isinstance(engine, TextScoringEngine)
+        else {"prompt_tokens": n, "total_tokens": n}
+    )
     return JSONResponse(
         {
             "id": f"rerank-{int(time.time())}",
             "object": "list",
             "model": req.model,
             "results": results,
-            "usage": {"prompt_tokens": n, "total_tokens": n},
+            "usage": usage,
         }
     )
 
@@ -644,7 +654,7 @@ async def classify_input(req: ClassifyRequest, request: Request):
             "model": req.model,
             "data": data,
             "labels": engine.labels,
-            "usage": _text_usage(engine, texts),
+            "usage": engine.token_usage(texts=texts),
         }
         if isinstance(req.input, str):
             result["results"] = sorted(
@@ -729,14 +739,6 @@ async def classify_input(req: ClassifyRequest, request: Request):
 
 
 # ── Shared helpers ───────────────────────────────────────────────────────────
-
-
-def _text_usage(engine, texts):
-    tokenizer = getattr(engine, "_tokenizer", None)
-    n = sum(
-        len(tokenizer.encode(t)) if tokenizer else max(1, len(t) // 4) for t in texts
-    )
-    return {"prompt_tokens": n, "total_tokens": n}
 
 
 async def _resolve_engine(model_id: str):

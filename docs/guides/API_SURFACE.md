@@ -129,7 +129,7 @@ The `yunshu` block (the ModelCard):
 
 | Field | Meaning |
 |---|---|
-| `kind` | `chat`, `vlm`, `omni`, `embedding`, `reranker`, `asr`, `tts`, `sts`, `image`, `ocr`, `video` |
+| `kind` | `chat`, `vlm`, `omni`, `embedding`, `reranker`, `classifier`, `asr`, `tts`, `sts`, `image`, `ocr`, `video` |
 | `family`, `architecture`, `parameters` | config `model_type`, `architectures[0]`, parameter count from the safetensors headers (quantized words unpacked at each layer's own bit width, scales skipped) |
 | `quantization` | `bits`, `group_size`, `mode`, `layer_groups` (`{bits: layers}` for mixed-precision checkpoints), `skip_components` (diffusion) |
 | `input_modalities`, `output_modalities` | `text`, `image`, `video`, `audio`, `embedding`, `score` |
@@ -336,3 +336,35 @@ Explicit endpoints have a separate numerical cache identity. Their suffixes
 finish the same absolute prefill spans as a cold request; restores from a
 different earlier breakpoint plan are rejected. These endpoints are retained
 within this process's bounded APC policy; a restart may require a new write.
+
+### Text reranking and classification heads
+
+Text `Qwen3-Reranker` checkpoints use the model-card Transformers prompt and the
+last-position yes/no logits, with a sigmoid of the logit difference. Original
+`BertForSequenceClassification`, `RobertaForSequenceClassification` and
+`XLMRobertaForSequenceClassification` safetensors checkpoints use their trained
+heads. Other head architectures and quantized encoder heads return a load error.
+
+`POST /v1/rerank` retains `query`, `documents`, `instruction`, `top_n`, and
+`return_documents`, and the existing `results[{index,relevance_score,document?}]`
+shape. Text cross-encoders require string inputs; image objects require a VL reranker.
+
+`POST /v1/score` uses joint query/document scoring for single-label head models
+(sigmoid) and Qwen3 rerankers (yes/no probability), and cosine similarity for
+embedding models. Scalar/list and length-one broadcasting preserve one result per
+pair. `dot` / `euclidean` remain embedding-only extensions.
+
+For trained heads, `POST /v1/classify` accepts `input` as a string or list and no
+`labels`. It returns `data[{object:"classification",index,probs}]` with checkpoint
+`labels` in head order: softmax for single-label multiclass, sigmoid for one logit
+or a checkpoint declaring `multi_label_classification`. A scalar input also returns
+the existing sorted `results[{label,score,index}]` convenience field. Providing
+candidate labels selects the existing embedding-based zero-shot mode and is rejected
+on trained heads. `temperature` applies only to the embedding-based mode.
+
+`yv ab --base BASE_SHA --cand CAND_SHA --suite rerank --label rerank-TOPIC --priority -1`
+checks candidate HTTP scores against independent float32 CPU Transformers recipes
+on four small original checkpoints. This capability stage uses the original
+checkpoint as its numerical oracle; the base commit is pinned and recorded, but
+has no trained-head endpoint to compare against. Scores must differ by at most
+0.003 and preserve every ranking. No speed claims are made by this stage.

@@ -108,12 +108,15 @@ def load_sequence_classifier(path: str, config: dict):
             return self.classifier.out_proj(mx.tanh(self.classifier.dense(hidden)))
 
     model = Classifier()
-    weights = {}
+    weights: dict[str, Any] = {}
     files = sorted(Path(path).glob("*.safetensors"))
     if not files:
         raise ValueError("Sequence classifiers require safetensors weights")
     for file in files:
-        weights.update(mx.load(str(file)))
+        shard = mx.load(str(file))
+        if not isinstance(shard, dict):
+            raise ValueError(f"Not a safetensors weight dictionary: {file}")
+        weights.update(shard)
     weights = {
         k: v
         for k, v in weights.items()
@@ -179,11 +182,7 @@ class TextScoringEngine:
 
         await self._run(clear)
 
-    def _head_logits(self, first, second=None):
-        import mlx.core as mx
-
-        if not self._loaded:
-            raise RuntimeError("Engine not started")
+    def _encode_head(self, first, second=None):
         limit = min(
             self._tokenizer.model_max_length, self._config["max_position_embeddings"]
         )
@@ -194,7 +193,39 @@ class TextScoringEngine:
                 - self._config.get("pad_token_id", 1)
                 - 1,
             )
-        encoded = self._tokenizer(first, second, truncation=True, max_length=limit)
+        return self._tokenizer(first, second, truncation=True, max_length=limit)
+
+    def token_usage(self, texts=None, pairs=None, instruction=None):
+        if self._tokenizer is None:
+            return {"prompt_tokens": 0, "total_tokens": 0}
+        if pairs is not None:
+            if self.kind == "qwen3":
+                n = sum(
+                    len(
+                        qwen_input_ids(
+                            self._tokenizer,
+                            a,
+                            b,
+                            instruction,
+                            min(
+                                8192, self._config.get("max_position_embeddings", 8192)
+                            ),
+                        )
+                    )
+                    for a, b in pairs
+                )
+            else:
+                n = sum(len(self._encode_head(a, b)["input_ids"]) for a, b in pairs)
+        else:
+            n = sum(len(self._encode_head(t)["input_ids"]) for t in texts)
+        return {"prompt_tokens": n, "total_tokens": n}
+
+    def _head_logits(self, first, second=None):
+        import mlx.core as mx
+
+        if not self._loaded:
+            raise RuntimeError("Engine not started")
+        encoded = self._encode_head(first, second)
         inputs = {
             k: mx.array([v])
             for k, v in encoded.items()
@@ -241,6 +272,16 @@ class TextScoringEngine:
 
     async def rerank(self, query, documents, instruction=None):
         return await self.score_pairs([(query, d) for d in documents], instruction)
+
+    def embed(self, texts, normalize=True, **kwargs):
+        raise ValueError(
+            "Scoring checkpoints do not provide embeddings; load an embedding model"
+        )
+
+    def pool(self, texts, pooling_type="CLS"):
+        raise ValueError(
+            "Scoring checkpoints do not provide pooled embeddings; use /v1/score or /v1/classify"
+        )
 
     async def classify(self, texts: list[str]):
         if not self.is_classifier:

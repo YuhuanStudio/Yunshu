@@ -32,8 +32,10 @@ def compare(got, ref, tolerance=0.003):
     if len(flat_g) != len(flat_r) or not all(math.isfinite(v) for v in flat_g + flat_r):
         raise ValueError("Invalid score shape or non-finite scores")
     gap = max(abs(a - b) for a, b in zip(flat_g, flat_r, strict=True))
+
     def rank(row):
         return sorted(range(len(row)), key=lambda i: row[i], reverse=True)
+
     same = (
         all(rank(a) == rank(b) for a, b in zip(got, ref, strict=True))
         if isinstance(got[0], list)

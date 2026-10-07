@@ -167,3 +167,45 @@ def test_score_multi_class_head_rejected(head_client):
     client, _ = head_client
     r = client.post("/v1/score", json={"model": "m", "text_1": "q", "text_2": "d"})
     assert r.status_code == 400
+
+
+@pytest.mark.parametrize("family", ["bert", "roberta", "xlm-roberta"])
+def test_encoder_head_matches_transformers_fixture(tmp_path, family):
+    """Small-array unit test, independently exercising the complete trained head."""
+    import mlx.core as mx
+    import torch
+    from transformers import (
+        AutoModelForSequenceClassification,
+        BertConfig,
+        RobertaConfig,
+        XLMRobertaConfig,
+    )
+
+    from yunshu_engine.scoring_engine import load_sequence_classifier
+
+    torch.manual_seed(23)
+    cls = {
+        "bert": BertConfig,
+        "roberta": RobertaConfig,
+        "xlm-roberta": XLMRobertaConfig,
+    }[family]
+    config = cls(
+        vocab_size=32,
+        hidden_size=8,
+        intermediate_size=16,
+        num_hidden_layers=1,
+        num_attention_heads=2,
+        max_position_embeddings=32,
+        num_labels=2,
+        attn_implementation="eager",
+    )
+    model = AutoModelForSequenceClassification.from_config(config).eval()
+    model.save_pretrained(tmp_path)
+    mlx_model = load_sequence_classifier(
+        str(tmp_path), json.loads((tmp_path / "config.json").read_text())
+    )
+    ids = [[2, 7, 9, 3]]
+    with torch.no_grad():
+        ref = model(input_ids=torch.tensor(ids)).logits[0].tolist()
+    got = mlx_model(input_ids=mx.array(ids))[0].tolist()
+    assert got == pytest.approx(ref, abs=1e-6)
