@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import os
 import signal
+import socket
 import subprocess
 import sys
 import threading
@@ -14,7 +15,10 @@ from pathlib import Path
 import httpx
 
 ROOT = Path(__file__).resolve().parents[2]
-PORT = 18991
+PORTS = range(
+    18990, 18999
+)  # the range this repo's tests may use; other workers' servers share it
+PORT = 18991  # rebound per test by _start: a fixed port can be held by someone else's server
 
 
 def test_graceful_shutdown_timeout_values():
@@ -23,7 +27,30 @@ def test_graceful_shutdown_timeout_values():
     assert g(0) == 0 and g(0.4) == 1 and g(30.0) == 30 and g(-1) == 0
 
 
+def _free_port() -> int:
+    """A port of the shared range nobody listens on. A fixed port flaked in full runs: another
+    worker's server already on it answered the readiness probe and the test then streamed from
+    (and SIGTERMed nothing of) the wrong process."""
+    for port in PORTS:
+        with (
+            socket.socket() as probe
+        ):  # a live listener (SO_REUSEADDR may still let bind pass)
+            probe.settimeout(0.5)
+            if probe.connect_ex(("127.0.0.1", port)) == 0:
+                continue
+        with socket.socket() as s:
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            try:
+                s.bind(("127.0.0.1", port))
+            except OSError:
+                continue
+            return port
+    raise AssertionError(f"no free port in {PORTS}")
+
+
 def _start(drain: str, delay="0.2", n="15"):
+    global PORT
+    PORT = _free_port()
     env = {
         **os.environ,
         "YUNSHU_DRAIN_TIMEOUT": drain,
@@ -43,6 +70,10 @@ def _start(drain: str, delay="0.2", n="15"):
         stderr=subprocess.STDOUT,
     )
     for _ in range(100):
+        if (
+            p.poll() is not None
+        ):  # our server died (port taken, import error): never probe on
+            raise AssertionError("server exited: " + p.stdout.read().decode()[-500:])
         try:
             if (
                 httpx.get(f"http://127.0.0.1:{PORT}/health/live", timeout=1).status_code
@@ -114,3 +145,14 @@ def test_drain_zero_aborts_the_stream_fast():
     finally:
         if p.poll() is None:
             p.kill()
+
+
+def test_free_port_skips_a_port_someone_else_listens_on(monkeypatch):
+    with socket.socket() as holder, socket.socket() as spare:
+        holder.bind(("127.0.0.1", 0))
+        holder.listen()
+        spare.bind(("127.0.0.1", 0))
+        taken, free = holder.getsockname()[1], spare.getsockname()[1]
+        spare.close()
+        monkeypatch.setattr(sys.modules[__name__], "PORTS", [taken, free])
+        assert _free_port() == free
