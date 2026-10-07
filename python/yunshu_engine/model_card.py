@@ -44,6 +44,7 @@ _KIND_FOR_TYPE = {
     "EMBEDDING": "embedding",
     "RERANKER": "reranker",
     "CLASSIFIER": "classifier",
+    "DECISION": "decision",
 }
 
 # Sampling / control parameters accepted by the chat routes (names are ChatRequest fields;
@@ -99,6 +100,7 @@ _ENDPOINTS: dict[str, list[str]] = {
     "embedding": ["/v1/embeddings", "/pooling"],
     "reranker": ["/rerank", "/score"],
     "classifier": ["/v1/classify"],
+    "decision": ["/v1/decisions", "/v1/systemone"],
     "asr": ["/v1/audio/transcriptions"],
     "tts": ["/v1/audio/speech", "/v1/audio/speech/stream", "/v1/audio/voices"],
     "image": ["/v1/images/generations"],
@@ -423,6 +425,8 @@ class ModelCard:
                 caps += ["classify"]
         if self.kind == "classifier":
             caps += ["classify"]
+        if self.kind == "decision":
+            caps += ["decision"]
         if self.kind == "asr":
             caps += ["transcription"]
         if self.kind == "tts":
@@ -502,6 +506,10 @@ def _modalities(
         return ins, ["embedding"] if kind == "embedding" else ["score"]
     if kind == "classifier":
         return ["text"], ["classification"]
+    if kind == "decision":
+        return ["text", "image"] if "vision_config" in config else ["text"], [
+            "decision"
+        ]
     if kind == "asr":
         return ["audio"], ["text"]
     if kind == "tts":
@@ -532,6 +540,7 @@ def _context(kind: str, config: dict, text_cfg: dict) -> dict:
         "reranker",
         "classifier",
         "ocr",
+        "decision",
     ):
         return {}
     length = None

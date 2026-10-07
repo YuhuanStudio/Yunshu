@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Badge,
   Button,
@@ -21,7 +21,7 @@ import {
 } from "@yuhuanowo/yunui";
 import { PageHeader } from "@yuhuanowo/yunui/patterns";
 import { Download, Search } from "lucide-react";
-import { cancelRequest, type Connection } from "./api";
+import { ApiError, cancelRequest, requestJson, type Connection } from "./api";
 import {
   clock,
   elapsed,
@@ -104,6 +104,51 @@ export function Requests({
     [detail, setDetail] = useState<Row | null>(null),
     [cancel, setCancel] = useState<Row | null>(null),
     opener = useRef<HTMLButtonElement | null>(null);
+  const [detailError, setDetailError] = useState<string | null>(null),
+    [detailUpdated, setDetailUpdated] = useState<number | null>(null);
+  useEffect(() => {
+    setDetailError(null);
+    setDetailUpdated(null);
+    if (!detail || detail.phase === "complete") return;
+    const id = detail.id,
+      controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined,
+      ended = false;
+    const poll = async () => {
+      try {
+        const value = await requestJson<Record<string, unknown>>(
+          connection,
+          `/requests/${encodeURIComponent(id)}`,
+          { signal: controller.signal },
+        );
+        if (controller.signal.aborted) return;
+        if (value.request_id !== id) throw Error("服務回傳了不同的 request ID");
+        setDetail((current) =>
+          current?.id === id ? ({ ...current, ...value, id } as Row) : current,
+        );
+        setDetailError(null);
+        setDetailUpdated(Date.now());
+      } catch (e) {
+        if (controller.signal.aborted) return;
+        ended = e instanceof ApiError && e.status === 404;
+        setDetailError(
+          ended
+            ? "此請求已結束或已不在活動清單；下方保留最近採樣。"
+            : e instanceof Error
+              ? e.message
+              : "無法取得請求詳情",
+        );
+      } finally {
+        if (!controller.signal.aborted && !ended)
+          timer = setTimeout(() => void poll(), 1500);
+      }
+    };
+    void poll();
+    return () => {
+      controller.abort();
+      if (timer) clearTimeout(timer);
+    };
+  }, [detail?.id, connection.baseUrl, connection.token]);
   const rows = useMemo(() => {
     const observed = new Map<string, Row>();
     for (const sample of engine.history) {
@@ -136,10 +181,7 @@ export function Requests({
     }
   };
   return (
-    <section
-      className="mx-auto max-w-7xl space-y-5 p-4 sm:p-7"
-      data-testid="requests"
-    >
+    <section className="w-full max-w-5xl space-y-6" data-testid="requests">
       <PageHeader
         title="請求與效能"
         description="查看正在處理的工作，以及本頁觀測到的最近已結束請求。"
@@ -279,6 +321,16 @@ export function Requests({
         {detail && (
           <div className="space-y-5">
             <p className="break-all font-mono text-xs">{detail.id}</p>
+            {detailError && (
+              <p role="status" className="text-xs text-warning">
+                {detailError}
+              </p>
+            )}
+            {detailUpdated && (
+              <p className="text-xs text-muted-foreground">
+                即時更新 {clock(detailUpdated)}
+              </p>
+            )}
             <Badge>{labels[detail.phase] ?? detail.phase}</Badge>
             <dl className="grid grid-cols-2 gap-5">
               {[

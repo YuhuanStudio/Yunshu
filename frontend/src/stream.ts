@@ -5,7 +5,12 @@ export interface StreamConnection {
 
 export interface CompletionMessage {
   role: string;
-  content: string;
+  content:
+    | string
+    | readonly (
+        | { type: "text"; text: string }
+        | { type: "image_url"; image_url: { url: string } }
+      )[];
 }
 
 export interface CompletionBody {
@@ -14,11 +19,14 @@ export interface CompletionBody {
   temperature: number;
   max_tokens: number;
   stream?: boolean;
+  enable_thinking?: boolean;
+  response_format?: { type: "json_object" };
 }
 
 export interface CompletionDelta {
   content?: string;
   reasoning?: string;
+  finishReason?: string;
 }
 
 /** Normalize a server URL or API base URL to the OpenAI chat completions endpoint. */
@@ -196,7 +204,10 @@ export async function streamCompletion(
       typeof choices[0] !== "object"
     )
       return;
-    const delta = (choices[0] as Record<string, unknown>).delta;
+    const choice = choices[0] as Record<string, unknown>;
+    if (typeof choice.finish_reason === "string")
+      onDelta({ finishReason: choice.finish_reason });
+    const delta = choice.delta;
     if (!delta || typeof delta !== "object") return;
     const deltaRecord = delta as Record<string, unknown>;
     const content =

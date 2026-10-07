@@ -1,4 +1,4 @@
-import { Badge, Button, Card, EmptyState, AreaChart } from "@yuhuanowo/yunui";
+import { Button, Card } from "@yuhuanowo/yunui";
 import { RefreshCw } from "lucide-react";
 import type { EngineStatus } from "./api";
 import type { useEngine } from "./useEngine";
@@ -70,49 +70,5 @@ export function ConnectionState({
     </Card>
   );
 }
-export function MetricChart({
-  title,
-  description,
-  data,
-  unit,
-  tone = "accent",
-  height = 170,
-}: {
-  title: string;
-  description: string;
-  data: { value: number; label: string }[];
-  unit: string;
-  tone?: "accent" | "info" | "success" | "warning";
-  height?: number;
-}) {
-  return (
-    <div className="min-w-0">
-      <div className="mb-4 flex items-start justify-between gap-3">
-        <div>
-          <h2 className="text-sm font-semibold">{title}</h2>
-          <p className="mt-1 text-xs text-muted-foreground">{description}</p>
-        </div>
-        <Badge variant="outline">{unit}</Badge>
-      </div>
-      <AreaChart
-        data={data}
-        height={height}
-        tone={tone}
-        ariaLabel={`${title}，單位 ${unit}`}
-        formatValue={(v) => `${number(v)} ${unit}`}
-        noDataLabel={
-          data.length === 1
-            ? "已取得第一筆資料，等待下一次採樣"
-            : "目前沒有可用的採樣"
-        }
-        showTooltip
-      />
-      {data.length > 1 && (
-        <div className="mt-2 flex justify-between font-mono text-[10px] text-muted-foreground">
-          <span>{data[0].label}</span>
-          <span>{data.at(-1)?.label}</span>
-        </div>
-      )}
-    </div>
-  );
-}
+export const supportsChat = (model: Model | undefined) =>
+  !!model && /llm|vlm|batched|omni/i.test(model.type);
