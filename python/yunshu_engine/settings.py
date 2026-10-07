@@ -69,6 +69,9 @@ class Setting:
     added: str = ""  # experimental only: date added
     empty_is_value: bool = False  # "" is a real value, not "unset"
     secret: bool = False
+    # When a changed value takes effect (see ``APPLIES``): "live" (re-read on
+    # each use), "reload" (next model load), "restart" (read once at startup).
+    applies: str = ""
 
 
 REGISTRY: dict[str, Setting] = {}
@@ -289,6 +292,193 @@ _add("YUNSHU_HF_ENDPOINT", "str", None, "Hugging Face Hub endpoint for `yunshu s
 
 # fmt: on
 
+# ── when a change applies ──────────────────────────────────────────────
+# Classified from each setting's read sites (the strictest site wins):
+#   live    re-read on every use (per request / call), or rebuilt when it
+#           changes; a changed value applies now.
+#   reload  read when an engine, runner or connection is built; applies on the
+#           next model load.
+#   restart read once at process start (create_app, lifespan, serve, module
+#           import); applies after a restart.
+# A new setting must be added here (import fails otherwise; unit-tested).
+APPLIES_CLASSES = ("live", "reload", "restart")
+_LIVE = frozenset(
+    {
+        "YUNSHU_AUTH_TOKEN",
+        "YUNSHU_AUTH_DISABLED",
+        "YUNSHU_ACTOR_IDENTITY",
+        "YUNSHU_CORS_ORIGINS",
+        "YUNSHU_HF_CACHE_MODELS",
+        "YUNSHU_QUEUE_LIMIT",
+        "YUNSHU_MEMORY_PRESSURE_REJECT",
+        "YUNSHU_MAX_PREFILL_TOKENS",
+        "YUNSHU_WS_MAX_INFLIGHT",
+        "YUNSHU_WS_PING_INTERVAL",
+        "YUNSHU_WS_SEND_QUEUE",
+        "YUNSHU_PROGRESS_INTERVAL_S",
+        "YUNSHU_BATCH_MAX_ITEMS",
+        "YUNSHU_BATCH_TIMEOUT",
+        "YUNSHU_ALLOW_LOCAL_FILES",
+        "YUNSHU_MEDIA_DIR",
+        "YUNSHU_FILES_DIR",
+        "YUNSHU_FILES_MAX_BYTES",
+        "YUNSHU_FILES_TTL_DAYS",
+        "YUNSHU_FILES_MAX_TOTAL_BYTES",
+        "YUNSHU_CONVERSATIONS_DIR",
+        "YUNSHU_CONVERSATION_MAX_ITEMS",
+        "YUNSHU_COMPACT_MAX_TOKENS",
+        "YUNSHU_ALLOW_AUTO_LOAD",
+        "YUNSHU_DEBUG_STREAM_CAPTURE",
+        "YUNSHU_PREFILL_STEP_SIZE",
+        "YUNSHU_CACHE_RESERVE_PCT",
+        "YUNSHU_CACHE_RESERVE_GB",
+        "YUNSHU_CACHE_STALE_DAYS",
+        "YUNSHU_VLM_MAX_IMAGE_BYTES",
+        "YUNSHU_VLM_INSECURE_SSL",
+        "YUNSHU_GPU_SAMPLER",
+        "YUNSHU_JUMP_FORWARD",
+        "YUNSHU_JSON_SCHEMA_ENGINE",
+        "YUNSHU_GRAMMAR_BITMASK",
+        "YUNSHU_TOOL_GRAMMAR",
+        "YUNSHU_OMNI_PERSONA",
+        "YUNSHU_REALTIME_SILENCE_MS",
+        "YUNSHU_REALTIME_BARGE_IN_MS",
+        "YUNSHU_REALTIME_VAD_THRESHOLD",
+        "YUNSHU_REALTIME_PREFIX_PADDING_MS",
+        "YUNSHU_REALTIME_VAD",
+        "YUNSHU_REALTIME_VAD_MODEL",
+        "YUNSHU_REALTIME_MAX_INPUT_AUDIO_BYTES",
+        "YUNSHU_REALTIME_MAX_CONVERSATION_ITEMS",
+        "YUNSHU_ANE_EMBEDDINGS",
+        "YUNSHU_ANE_EMBEDDING_MODEL",
+        "YUNSHU_WEB_SEARCH_PROVIDER",
+        "YUNSHU_SEARXNG_URL",
+        "YUNSHU_BRAVE_API_KEY",
+        "YUNSHU_TAVILY_API_KEY",
+        "YUNSHU_EXA_API_KEY",
+        "YUNSHU_WEB_SEARCH_RESULTS",
+        "YUNSHU_WEB_FETCH",
+        "YUNSHU_WEB_FETCH_ALLOW_PRIVATE",
+        "YUNSHU_WEB_FETCH_MAX_BYTES",
+        "YUNSHU_WEB_FETCH_TIMEOUT",
+        "YUNSHU_WEB_FETCH_MAX_TEXT_CHARS",
+        "YUNSHU_MCP_CONNECTOR",
+        "YUNSHU_MCP_CONNECTOR_ALLOW_PRIVATE",
+        "YUNSHU_MCP_CONNECTOR_TIMEOUT",
+        "YUNSHU_MCP_CONNECTOR_MAX_BYTES",
+        "YUNSHU_SERVER_TOOL_MAX_ITERATIONS",
+        "YUNSHU_MODEL_ALIASES",
+        "YUNSHU_LOG_MAX_MB",
+        "YUNSHU_LOG_ROTATE_HOURS",
+        "YUNSHU_LOG_KEEP",
+        "YUNSHU_LOG_RETENTION_DAYS",
+        "YUNSHU_SERVE_LOG",
+        "YUNSHU_SERVE_LOG_DIR",
+        "YUNSHU_SERVE_LOG_MAX_MB",
+        "YUNSHU_SERVE_LOG_KEEP",
+        "YUNSHU_ARM",
+        "YUNSHU_GATEWAY_URL",
+    }
+)
+_RELOAD = frozenset(
+    {
+        "YUNSHU_MAX_LORAS",
+        "YUNSHU_TRUST_REMOTE_CODE",
+        "YUNSHU_WARM_PROMPTS",
+        "YUNSHU_UNCACHED_SCHEDULING",
+        "YUNSHU_AUXILIARY_SCHEDULING",
+        "YUNSHU_DEFAULT_MAX_TOKENS",
+        "YUNSHU_MEM_PRESSURE_THRESHOLD",
+        "YUNSHU_PREFIX_MAX_ENTRIES",
+        "YUNSHU_PREFIX_HOT_LIMIT",
+        "YUNSHU_SSD_CACHE",
+        "YUNSHU_SSD_CACHE_DIR",
+        "YUNSHU_SSD_CACHE_PRECISION",
+        "YUNSHU_SSD_CACHE_PREFILL_CEIL_TPS",
+        "YUNSHU_SSD_CACHE_MAX_GB",
+        "YUNSHU_KV_QUANT_BITS",
+        "YUNSHU_VLM_APC_MEMORY_GB",
+        "YUNSHU_VLM_APC_DISK",
+        "YUNSHU_VLM_APC_DISK_DIR",
+        "YUNSHU_KV_PRECISION",
+        "YUNSHU_VLM_APC_DISK_GB",
+        "YUNSHU_PREFILL_MATMUL",
+        "YUNSHU_PREFILL_BUFFER_CACHE_GB",
+        "YUNSHU_PREFILL_GDN",
+        "YUNSHU_VLM_APC_DISK_TIERS",
+        "YUNSHU_VLM_APC_DISK_ENCODING",
+        "YUNSHU_VLM_APC_WARM",
+        "YUNSHU_VLM_APC_WARM_SHARE",
+        "YUNSHU_MTP",
+        "YUNSHU_VLM_DRAFT",
+        "YUNSHU_MTP_BLOCK_SIZE",
+        "YUNSHU_SPEC_COPY_ROWS",
+        "YUNSHU_DRAFT_BITS",
+        "YUNSHU_SPEC_TREE",
+        "YUNSHU_NGRAM_DEFAULT",
+        "YUNSHU_SPEC_PROPOSER",
+        "YUNSHU_GEMMA4_ASSISTANT",
+        "YUNSHU_QUANT_MODE",
+        "YUNSHU_QUANT_CONFIG",
+        "YUNSHU_ROUND_PREFILL_CHUNK",
+        "YUNSHU_ROUND_DRIVER",
+        "YUNSHU_MTP_ROW_EXACT",
+        "YUNSHU_ENGINE_LOOP",
+        "YUNSHU_OVERLAP",
+        "YUNSHU_SPEC_UNVERIFIED",
+        "YUNSHU_DRAFT_MODEL",
+        "YUNSHU_OMNI_THINKER_MAX",
+        "YUNSHU_DIFFUSION_SCHEDULER",
+    }
+)
+_RESTART = frozenset(
+    {
+        "YUNSHU_MODEL",
+        "YUNSHU_MULTI_MODEL",
+        "YUNSHU_MODELS_DIR",
+        "YUNSHU_MODEL_TTL_SECONDS",
+        "YUNSHU_CONFIG",
+        "YUNSHU_MAX_CONCURRENT",
+        "YUNSHU_COMPLETION_BATCH_SIZE",
+        "YUNSHU_STARTUP_TIMEOUT",
+        "YUNSHU_DRAIN_TIMEOUT",
+        "YUNSHU_KEEP_ALIVE_TIMEOUT",
+        "YUNSHU_UDS",
+        "YUNSHU_MAX_REQUEST_SIZE",
+        "YUNSHU_SLOW_REQUEST_THRESHOLD",
+        "YUNSHU_RESPONSE_CACHE",
+        "YUNSHU_DEBUG_ROUTES",
+        "YUNSHU_RATE_LIMIT_RPM",
+        "YUNSHU_TRUSTED_PROXIES",
+        "YUNSHU_FOOTPRINT_SAMPLE_MS",
+        "YUNSHU_MAX_MEMORY_GB",
+        "YUNSHU_REALTIME_OMNI",
+        "YUNSHU_OMNI_MODEL",
+        "YUNSHU_OMNI_PRELOAD",
+        "YUNSHU_MCP_CONFIG",
+        "YUNSHU_MCP_SERVERS",
+        "YUNSHU_LOG_LEVEL",
+        "YUNSHU_AUDIT_LOG_FILE",
+        "YUNSHU_HISTORY_INTERVAL_S",
+        "YUNSHU_HISTORY_HOURS",
+        "YUNSHU_HF_ENDPOINT",
+    }
+)
+
+
+def _classify() -> None:
+    from dataclasses import replace
+
+    for cls, group in (("live", _LIVE), ("reload", _RELOAD), ("restart", _RESTART)):
+        for name in group:
+            REGISTRY[name] = replace(REGISTRY[name], applies=cls)
+    missing = [n for n, s in REGISTRY.items() if not s.applies]
+    if missing:
+        raise RuntimeError(f"settings without an applies class: {missing}")
+
+
+_classify()
+
 # ── resolution ─────────────────────────────────────────────────────────
 
 _overrides: dict[str, str] = {}
@@ -378,25 +568,44 @@ def _file() -> dict[str, str]:
     return _file_values
 
 
-def write_config_value(name: str, value: Any | None, path: Path | None = None) -> Path:
-    """Set (or with ``value=None`` remove) one setting in a TOML config file,
-    validating it against the registry first. Entries are written flat."""
-    s = _setting(name)
+def active_config_path() -> Path:
+    """The file a write lands in: the config file in use (``--config`` /
+    ``YUNSHU_CONFIG``), else the user file."""
+    path = _config_path()
+    return Path(path).expanduser() if path else user_config_path()
+
+
+def write_config_values(
+    changes: Mapping[str, Any | None], path: Path | None = None
+) -> Path:
+    """Set (``None`` removes) several settings in a TOML config file in one
+    write, validating every value against the registry first (nothing is
+    written when one is bad). Entries are written flat."""
     target = Path(path).expanduser() if path else user_config_path()
     values = load_config_file(target) if target.is_file() else {}
-    if value is None:
-        values.pop(name, None)
-    else:
-        text = _to_text(value)
-        _parse(s, text)  # raises SettingError on a bad value
-        values[name] = text
+    for name, value in changes.items():
+        s = _setting(name)
+        if value is None:
+            values.pop(name, None)
+        else:
+            text = _to_text(value)
+            _parse(s, text)  # raises SettingError on a bad value
+            values[name] = text
     target.parent.mkdir(parents=True, exist_ok=True)
     lines = [
         "# Yunshu settings (`yunshu config set KEY VALUE`); see docs/CONFIGURATION.md"
     ]
     lines += [f"{k} = {json.dumps(v)}" for k, v in sorted(values.items())]
-    target.write_text("\n".join(lines) + "\n")
+    tmp = target.with_name(target.name + ".tmp")
+    tmp.write_text("\n".join(lines) + "\n")
+    tmp.replace(target)
     return target
+
+
+def write_config_value(name: str, value: Any | None, path: Path | None = None) -> Path:
+    """Set (or with ``value=None`` remove) one setting in a TOML config file,
+    validating it against the registry first."""
+    return write_config_values({name: value}, path)
 
 
 def raw(name: str) -> tuple[str | None, str]:
@@ -562,6 +771,9 @@ def effective(include: tuple[str, ...] = ("stable",)) -> list[dict[str, Any]]:
                 "default": s.default,
                 "type": s.type,
                 "choices": list(s.choices),
+                "applies": s.applies,
+                "minimum": s.minimum,
+                "secret": s.secret,
             }
         )
     return rows
