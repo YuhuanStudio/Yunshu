@@ -675,6 +675,22 @@ def share_prefix_rows(pending, max_tail: int = SHARE_MAX_TAIL) -> list:
 class _Coordinator(APCCoordinator):
     """Checkpoint positions: the prompt end, one interval boundary, the end of the system turn."""
 
+    # Dense block restores intentionally reject media prefixes upstream. A media
+    # lane instead snapshots every layer at one text-only suffix boundary, just
+    # like the recurrent/windowed plans, retaining the original position state.
+    media_checkpoint = False
+
+    @property
+    def strategy(self):
+        strategy = super().strategy
+        return (
+            "checkpoint" if self.media_checkpoint and strategy == "block" else strategy
+        )
+
+    @property
+    def legacy_mode(self):
+        return "exact" if self.strategy == "checkpoint" else self.strategy
+
     def set_request(self, token_ids, policy):
         if policy is None:
             return

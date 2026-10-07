@@ -675,6 +675,7 @@ class VLMBatchRunner:
         sampler,
         greedy=True,
         auxiliary=False,
+        media_checkpoint=False,
     ):
         from mlx_vlm.generate.ar import BatchGenerator
 
@@ -715,6 +716,8 @@ class VLMBatchRunner:
             and getattr(gen, "apc", None) is not None
         ):
             gen.apc = bind(gen.model)
+            gen.apc.media_checkpoint = media_checkpoint
+            gen.apc_mode = gen.apc.legacy_mode
         return gen
 
     def _driver_takes(self, job: _Job, alone: bool) -> bool:
@@ -883,6 +886,7 @@ class VLMBatchRunner:
                 use_apc,
                 job.cache_plan is not None,
                 job.guide is not None or job.logprobs,
+                job.prompt_kwargs is not None,
             )
             group = self._batches.get(key)
             if group is None:
@@ -894,6 +898,7 @@ class VLMBatchRunner:
                         top_logprobs=job.top_logprobs,
                         sampler=sampler,
                         auxiliary=job.priority < 0,
+                        media_checkpoint=job.prompt_kwargs is not None,
                     ),
                     spec=False,
                     sampler=sampler,

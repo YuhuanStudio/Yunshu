@@ -981,6 +981,59 @@ def _memory_valid(path: Path):
     return True, ""
 
 
+def stage_multimodal(ctx: Ctx) -> StageResult:
+    """Pinned media sessions: raw IDs, pixel isolation, short + long TTFT."""
+    cells = []
+    for rep in range(int(ctx.suite.get("reps", 3))):
+        for arm in ("base", "cand"):
+            key = f"{arm}-r{rep}"
+            env = ctx.arm_env(arm, {"YUNSHU_VLM_APC_DISK": "0"})
+            argv = ["env", f"PYTHONPATH={ctx.tree(arm).path / 'python'}"]
+            argv += [f"{k}={v}" for k, v in env.items()]
+            argv += [
+                ctx.py,
+                str(REPO / "scripts/research/multimodal_apc.py"),
+                "--model",
+                ctx.model,
+                "--out",
+                "{out}",
+                "--sizes",
+            ]
+            argv += [str(n) for n in ctx.suite["ctx"]]
+            if arm == "cand":
+                argv += ["--require-hit"]
+            cells.append(
+                Cell(
+                    "multimodal",
+                    key,
+                    argv,
+                    mem_gb=ctx.mem_gb,
+                    quiet=True,
+                    timeout_min=20,
+                    device="m5",
+                )
+            )
+    results = ctx.exe.run_cells(cells)
+    reasons = _failed_cells(results)
+    numbers = {}
+    if not reasons:
+        for key, result in results.items():
+            rows = [
+                r for r in read_jsonl(result.evidence) if r.get("event") == "request"
+            ]
+            numbers[key] = [
+                {k: r[k] for k in ("kind", "size", "pt", "cached", "ttft_s", "sha")}
+                for r in rows
+            ]
+        for rep in range(int(ctx.suite.get("reps", 3))):
+            b, c = numbers[f"base-r{rep}"], numbers[f"cand-r{rep}"]
+            if [(r["kind"], r["size"], r["sha"]) for r in b] != [
+                (r["kind"], r["size"], r["sha"]) for r in c
+            ]:
+                reasons.append(f"raw token identity differs base/cand rep {rep}")
+    return _finish(ctx, StageResult("multimodal", not reasons, reasons, numbers))
+
+
 STAGE_FUNCS = {
     "preflight": stage_preflight,
     "smoke": stage_smoke,
@@ -991,4 +1044,5 @@ STAGE_FUNCS = {
     "memory": stage_memory,
     "longqa": stage_longqa,
     "conc": stage_conc,
+    "multimodal": stage_multimodal,
 }
