@@ -1025,3 +1025,21 @@ def test_ttft_profile_is_opt_in_and_requires_complete_spans(tmp_path):
     rows[1]["call_spans"] = []
     path.write_text("\n".join(json.dumps(r) for r in rows) + "\n")
     assert not stages._ttft_profile_valid(path)[0]
+
+
+def test_yv_imports_on_its_macos_system_interpreter():
+    import os
+
+    interpreter = Path("/usr/bin/python3")
+    if not interpreter.exists():
+        pytest.skip("macOS system interpreter unavailable")
+    result = subprocess.run(
+        [str(interpreter), "-m", "verify", "suites"],
+        cwd=REPO,
+        env=dict(os.environ, PYTHONPATH=str(REPO / "scripts")),
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "long" in result.stdout
