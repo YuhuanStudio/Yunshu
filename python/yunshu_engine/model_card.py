@@ -419,6 +419,8 @@ class ModelCard:
             caps += ["embedding"]
         if self.kind == "reranker":
             caps += ["rerank", "score"]
+            if (self.architecture or "").endswith("ForSequenceClassification"):
+                caps += ["classify"]
         if self.kind == "classifier":
             caps += ["classify"]
         if self.kind == "asr":
@@ -805,6 +807,14 @@ def _derive(p: Path, mid: str, model_type_name: str | None) -> ModelCard:
     )
     family = text_cfg.get("model_type") or config.get("model_type")
     ctx = _context(kind, config, text_cfg)
+    from .scoring_engine import scoring_kind, scoring_max_length
+
+    if ctx and scoring_kind(config, str(p)):
+        tokenizer_config = _read_json(p / "tokenizer_config.json") or {}
+        cap = scoring_max_length(config, tokenizer_config.get("model_max_length"))
+        ctx["length"] = ctx["effective"] = min(ctx["length"], cap)
+        ctx["serving_cap"] = cap
+
     max_out = None
     if text_like:
         max_out = (
@@ -883,6 +893,10 @@ def _derive(p: Path, mid: str, model_type_name: str | None) -> ModelCard:
     if kind != "embedding" and not text_like:
         card.embeddings = None
     endpoints = list(_ENDPOINTS.get(kind, []))
+    if kind == "reranker" and any(
+        a.endswith("ForSequenceClassification") for a in archs
+    ):
+        endpoints.append("/v1/classify")
     if kind == "asr" and config.get("model_type") == "whisper":
         endpoints.append("/v1/audio/translations")
     card.api = {

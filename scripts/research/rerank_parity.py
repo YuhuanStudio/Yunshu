@@ -16,6 +16,11 @@ PAIRS = [
     ),
     ("What is the capital of China?", "Paris is the capital of France."),
     ("What is the capital of China?", "北京是中國的首都。"),
+    (
+        "What is the capital of China?",
+        "The harbour committee reviewed ferry timetables and harbour maintenance. "
+        * 80,
+    ),
 ]
 TEXTS = [
     "I loved this movie!",
@@ -59,8 +64,15 @@ async def run(model_dir, reference_path):
     ref = json.loads(Path(reference_path).read_text())
     if ref.get("complete") is not True:
         raise ValueError("Incomplete oracle")
-    engine = TextScoringEngine(model_dir)
-    await engine.start()
+    from yunshu_engine.model_manager import _detect_model_type, instantiate_engine
+
+    detected = _detect_model_type(model_dir)
+    engine = await instantiate_engine(detected, model_dir)
+    if not isinstance(engine, TextScoringEngine):
+        await engine.stop()
+        raise ValueError(
+            f"Model detection selected {type(engine).__name__}, expected TextScoringEngine"
+        )
     set_engine(engine)
     try:
         async with httpx.AsyncClient(
@@ -145,7 +157,15 @@ async def run(model_dir, reference_path):
                     sync_client.close()
 
             verdict["route_checks"] = await asyncio.to_thread(registered_checks)
-            return {**verdict, "scores": got, "kind": engine.kind, "model": model_dir}
+            return {
+                **verdict,
+                "scores": got,
+                "kind": engine.kind,
+                "model": model_dir,
+                "detected_type": detected.name,
+                "engine_class": type(engine).__name__,
+                "n_items": len(got),
+            }
     finally:
         set_engine(None)
         await engine.stop()

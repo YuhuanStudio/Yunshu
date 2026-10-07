@@ -40,7 +40,8 @@ def reference(model_dir, pairs=None, texts=None, instruction=None):
             s = tokenizer.encode(post, add_special_tokens=False)
             task = (
                 instruction
-                or "Given a web search query, retrieve relevant passages that answer the query"
+                if instruction is not None
+                else "Given a web search query, retrieve relevant passages that answer the query"
             )
             body = f"<Instruct>: {task}\n<Query>: {item[0]}\n<Document>: {item[1]}"
             ids = tokenizer(body, truncation=True, max_length=8192 - len(p) - len(s))[

@@ -997,20 +997,10 @@ def stage_rerank(ctx: Ctx) -> StageResult:
         "ms-marco-MiniLM-L-6-v2",
         "bert-tiny-finetuned-sst2",
     ]
-    pairs = [
-        ["What is the capital of China?", d]
-        for d in [
-            "The capital of China is Beijing.",
-            "Gravity attracts two bodies towards each other.",
-            "Paris is the capital of France.",
-            "北京是中國的首都。",
-        ]
-    ]
-    texts = [
-        "I loved this movie!",
-        "This was an awful boring film.",
-        "A surprising and enjoyable story.",
-    ]
+    import runpy
+
+    cases = runpy.run_path(str(tree / "scripts/research/rerank_parity.py"))
+    pairs, texts = cases["PAIRS"], cases["TEXTS"]
     numbers, reasons = {}, []
     for name in names:
         model = root / name

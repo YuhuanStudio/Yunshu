@@ -344,6 +344,10 @@ last-position yes/no logits, with a sigmoid of the logit difference. Original
 `BertForSequenceClassification`, `RobertaForSequenceClassification` and
 `XLMRobertaForSequenceClassification` safetensors checkpoints use their trained
 heads. Other head architectures and quantized encoder heads return a load error.
+Encoder heads require the `embeddings` extra. Model cards report the effective
+serving window: Qwen3 scoring caps at 8192 tokens; RoBERTa position padding offsets
+and the tokenizer window constrain encoder inputs. Busy scoring work blocks
+non-forced model unload, including when its HTTP waiter has been cancelled.
 
 `POST /v1/rerank` retains `query`, `documents`, `instruction`, `top_n`, and
 `return_documents`, and the existing `results[{index,relevance_score,document?}]`
@@ -367,7 +371,11 @@ on trained heads. `temperature` applies only to the embedding-based mode.
 
 `yv ab --base BASE_SHA --cand CAND_SHA --suite rerank --label rerank-TOPIC --priority -1`
 checks candidate HTTP scores against independent float32 CPU Transformers recipes
-on four small original checkpoints. This capability stage uses the original
+on four small original checkpoints (five pairs, including a long document, and
+three classification inputs). This capability stage uses the original
 checkpoint as its numerical oracle; the base commit is pinned and recorded, but
 has no trained-head endpoint to compare against. Scores must differ by at most
 0.003 and preserve every ranking. No speed claims are made by this stage.
+
+The recipes follow the [Qwen model card](https://huggingface.co/Qwen/Qwen3-Reranker-0.6B)
+and [vLLM scoring semantics](https://docs.vllm.ai/en/latest/models/pooling_models/scoring/).

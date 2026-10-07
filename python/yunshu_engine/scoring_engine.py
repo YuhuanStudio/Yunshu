@@ -48,6 +48,19 @@ def qwen_input_ids(
     return prefix + ids + suffix
 
 
+def scoring_max_length(config: dict, tokenizer_max_length=None) -> int:
+    limit = int(config["max_position_embeddings"])
+    if config.get("model_type") == "qwen3":
+        return min(8192, limit)
+    if config.get("model_type") in ("roberta", "xlm-roberta"):
+        limit -= int(config.get("pad_token_id", 1)) + 1
+    return (
+        min(limit, int(tokenizer_max_length))
+        if tokenizer_max_length is not None
+        else limit
+    )
+
+
 def scoring_kind(config: dict, model_path: str) -> str | None:
     architectures = config.get("architectures", [])
     if any(a.endswith("ForSequenceClassification") for a in architectures):
@@ -142,6 +155,7 @@ class TextScoringEngine:
         self.supports_multimodal = False
         self._model = self._tokenizer = None
         self._loaded = False
+        self._active = 0
 
     @property
     def is_loaded(self):
@@ -151,10 +165,27 @@ class TextScoringEngine:
     def model_name(self):
         return Path(self._model_path).name
 
+    def has_active_requests(self):
+        return self._active > 0
+
     async def _run(self, fn):
         from .mlx_executor import get_mlx_executor
 
-        return await asyncio.get_running_loop().run_in_executor(get_mlx_executor(), fn)
+        self._active += 1
+        try:
+            future = asyncio.get_running_loop().run_in_executor(get_mlx_executor(), fn)
+        except BaseException:
+            self._active -= 1
+            raise
+
+        def completed(done):
+            self._active -= 1
+            if not done.cancelled():
+                done.exception()  # retrieve exceptions even when the HTTP waiter was cancelled
+
+        future.add_done_callback(completed)
+        # Cancellation ends the HTTP wait, but the queued/running Metal work remains active.
+        return await asyncio.shield(future)
 
     async def start(self):
         def load():
@@ -183,16 +214,7 @@ class TextScoringEngine:
         await self._run(clear)
 
     def _encode_head(self, first, second=None):
-        limit = min(
-            self._tokenizer.model_max_length, self._config["max_position_embeddings"]
-        )
-        if self._config["model_type"] in ("roberta", "xlm-roberta"):
-            limit = min(
-                limit,
-                self._config["max_position_embeddings"]
-                - self._config.get("pad_token_id", 1)
-                - 1,
-            )
+        limit = scoring_max_length(self._config, self._tokenizer.model_max_length)
         return self._tokenizer(first, second, truncation=True, max_length=limit)
 
     def token_usage(self, texts=None, pairs=None, instruction=None):
@@ -207,9 +229,7 @@ class TextScoringEngine:
                             a,
                             b,
                             instruction,
-                            min(
-                                8192, self._config.get("max_position_embeddings", 8192)
-                            ),
+                            scoring_max_length(self._config),
                         )
                     )
                     for a, b in pairs
@@ -261,7 +281,7 @@ class TextScoringEngine:
                         a,
                         b,
                         instruction,
-                        min(8192, self._config.get("max_position_embeddings", 8192)),
+                        scoring_max_length(self._config),
                     )
                     logits = self._model(mx.array([ids]))[0, -1].astype(mx.float32)
                     yes = self._tokenizer.convert_tokens_to_ids("yes")

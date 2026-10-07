@@ -35,6 +35,90 @@ def test_head_and_reranker_detection(tmp_path):
     assert _detect_model_type(str(q)) == ModelType.RERANKER
 
 
+def test_model_card_states_real_scoring_limits(tmp_path):
+    from yunshu_engine.model_card import build_model_card
+
+    (tmp_path / "config.json").write_text(
+        json.dumps(
+            {
+                "model_type": "xlm-roberta",
+                "architectures": ["XLMRobertaForSequenceClassification"],
+                "max_position_embeddings": 514,
+                "pad_token_id": 1,
+                "id2label": {"0": "relevance"},
+            }
+        )
+    )
+    card = build_model_card(tmp_path)
+    assert card.context["effective"] == 512
+    assert card.context["native"] == 514
+    assert {"rerank", "score", "classify"} <= set(card.capabilities())
+    assert "/v1/classify" in card.api["endpoints"]
+    q = tmp_path / "Qwen3-Reranker"
+    q.mkdir()
+    (q / "config.json").write_text(
+        json.dumps(
+            {
+                "model_type": "qwen3",
+                "architectures": ["Qwen3ForCausalLM"],
+                "max_position_embeddings": 40960,
+            }
+        )
+    )
+    assert build_model_card(q).context["effective"] == 8192
+
+
+def test_cancelled_waiter_remains_active_until_executor_finishes(head_client):
+    import asyncio
+    import threading
+
+    _, engine = head_client
+    entered, release = threading.Event(), threading.Event()
+
+    def work():
+        entered.set()
+        release.wait(timeout=5)
+
+    async def run():
+        task = asyncio.create_task(engine._run(work))
+        await asyncio.to_thread(entered.wait, 2)
+        assert engine.has_active_requests()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert engine.has_active_requests()
+        release.set()
+
+        for _ in range(100):
+            if not engine.has_active_requests():
+                break
+            await asyncio.sleep(0.01)
+        assert not engine.has_active_requests()
+
+    try:
+        asyncio.run(run())
+    finally:
+        release.set()
+
+
+def test_rejected_executor_submission_does_not_leave_engine_busy(
+    head_client, monkeypatch
+):
+    import asyncio
+
+    from yunshu_engine import mlx_executor
+
+    class Rejected:
+        def submit(self, *args):
+            raise RuntimeError("executor shut down")
+
+    _, engine = head_client
+    monkeypatch.setattr(mlx_executor, "get_mlx_executor", lambda: Rejected())
+    with pytest.raises(RuntimeError, match="shut down"):
+        asyncio.run(engine._run(lambda: None))
+    assert not engine.has_active_requests()
+
+
 def test_probability_rules_and_bad_logits():
     assert sigmoid(-1000) == 0
     assert sigmoid(1000) == 1
@@ -215,10 +299,10 @@ def test_media_route_checks_against_fake_http(head_client):
     engine.is_reranker = True
 
     async def score(pairs, instruction=None, use_activation=True):
-        return [0.8, 0.2, 0.4, 0.6]
+        return [0.8, 0.2, 0.4, 0.6, 0.1]
 
     engine.score_pairs = score
-    ctx.fixtures["rerank_reference"] = lambda pairs: [0.8, 0.2, 0.4, 0.6]
+    ctx.fixtures["rerank_reference"] = lambda pairs: [0.8, 0.2, 0.4, 0.6, 0.1]
     _rerank_served(ctx)
     assert ctx.notes["rerank_oracle"]["passed"]
 
@@ -242,7 +326,7 @@ def test_entire_probe_on_fake_engine(tmp_path, monkeypatch):
             }
         )
     )
-    scores = [0.8, 0.2, 0.4, 0.6]
+    scores = [0.8, 0.2, 0.4, 0.6, 0.1]
     reference = tmp_path / "reference.json"
     reference.write_text(json.dumps({"scores": scores, "complete": True}))
 
