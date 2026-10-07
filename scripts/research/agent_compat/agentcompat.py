@@ -55,7 +55,12 @@ SSH = [
     "BatchMode=yes",
 ]
 M3_HOST = os.environ.get("M3_HOST", "yuhuan@192.168.50.55")
-SERVER_PORT, CONTROL_PORT, MCP_PORT = 18994, 18995, 18996
+# Ports on the laptop (its server and control socket) ...
+SERVER_PORT, CONTROL_PORT = 18994, 18995
+# ... and on this Mac: the forwards and the MCP fake use 18997-18999, outside the 18990-18996
+# range of M5 gpuq jobs, which run at the same time as M3 jobs (2026-10-07: a forward on 18995
+# made an M5 yv memory job fail to listen).
+LOCAL_SERVER_PORT, LOCAL_CONTROL_PORT, MCP_PORT = 18997, 18998, 18999
 E2E_SCENARIOS = "cc_edit,cx_edit,oc_edit,oc_bash,cc_mcp,cx_mcp,cc_image,cc_context"
 
 
@@ -226,7 +231,9 @@ def run_watched(cmd, tunnel, timeout, **kw):
 def server_identity_ready(identity: str) -> bool:
     """The control socket must belong to this queued job, not another lane server."""
     try:
-        with socket.create_connection(("127.0.0.1", CONTROL_PORT), timeout=2) as c:
+        with socket.create_connection(
+            ("127.0.0.1", LOCAL_CONTROL_PORT), timeout=2
+        ) as c:
             c.sendall(f"ready {identity}\n".encode())
             return c.recv(256).decode().strip() == f"ready {identity}"
     except OSError:
@@ -238,7 +245,7 @@ def with_m3_server(out: Path, tag: str, model: str, minutes: float, work) -> dic
     sha = run(
         ["git", "-C", str(REPO), "rev-parse", "--short", "HEAD"], capture_output=True
     ).stdout.strip()
-    for p in (SERVER_PORT, CONTROL_PORT, MCP_PORT):
+    for p in (LOCAL_SERVER_PORT, LOCAL_CONTROL_PORT, MCP_PORT):
         if not port_free(p):
             return dict(ok=False, why=f"local port {p} is busy")
     identity = uuid.uuid4().hex
@@ -300,16 +307,16 @@ def with_m3_server(out: Path, tag: str, model: str, minutes: float, work) -> dic
             "ServerAliveCountMax=3",
             "-N",
             "-L",
-            f"{SERVER_PORT}:127.0.0.1:{SERVER_PORT}",
+            f"{LOCAL_SERVER_PORT}:127.0.0.1:{SERVER_PORT}",
             "-L",
-            f"{CONTROL_PORT}:127.0.0.1:{CONTROL_PORT}",
+            f"{LOCAL_CONTROL_PORT}:127.0.0.1:{CONTROL_PORT}",
             M3_HOST,
         ],
         stdin=subprocess.DEVNULL,
     )
     res: dict = dict(job=job, commit=sha, tag=tag)
     try:
-        url = f"http://127.0.0.1:{SERVER_PORT}"
+        url = f"http://127.0.0.1:{LOCAL_SERVER_PORT}"
         t0 = time.time()
         ready = False
         while time.time() - t0 < 30 * 60:
@@ -344,7 +351,7 @@ def with_m3_server(out: Path, tag: str, model: str, minutes: float, work) -> dic
         if ready:
             with contextlib.suppress(Exception):
                 with socket.create_connection(
-                    ("127.0.0.1", CONTROL_PORT), timeout=5
+                    ("127.0.0.1", LOCAL_CONTROL_PORT), timeout=5
                 ) as c:
                     c.sendall(f"stop {identity}\n".encode())
         done = run(
