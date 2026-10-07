@@ -409,6 +409,133 @@ def _console_data(c: Ctx):
 
 
 @check(
+    "console_manage",
+    "GET /v1/yunshu/models/local",
+    "GET /v1/yunshu/cache",
+    "POST /v1/yunshu/cache/clear",
+    "GET /v1/yunshu/logs",
+    "GET /v1/yunshu/logs/stream",
+    "GET /v1/yunshu/bundle",
+    served=True,
+)
+def _console_manage(c: Ctx):
+    """Model inventory, cache tiers and clear, the log ring (with a line the server just wrote),
+    its SSE tail and the diagnostics bundle, against a server that has served requests."""
+    r = c.req("GET", "/v1/yunshu/models/local?refresh=true")
+    expect(r.status_code == 200, f"models/local {r.status_code} {r.text[:100]}")
+    models = r.json().get("models") or []
+    expect(models, "models/local lists no model on disk")
+    expect(
+        all(
+            m["size_bytes"] > 0 and m["complete"] is True for m in models if m["loaded"]
+        ),
+        f"a loaded model without size or marked incomplete: {models[:2]}",
+    )
+    expect(any(m["loaded"] for m in models), "models/local: nothing marked loaded")
+    ch = c.req("GET", "/v1/yunshu/cache")
+    expect(ch.status_code == 200, f"cache {ch.status_code} {ch.text[:100]}")
+    cj = ch.json()
+    if c.kind == "vlm":
+        expect(cj["enabled"] and cj["caches"], f"cache: VLM runner reports none: {cj}")
+        tiers = {t["name"] for t in cj["caches"][0]["tiers"]}
+        expect("ram" in tiers, f"cache tiers {tiers}")
+        blob = json.dumps(cj)
+        expect("prompt" not in blob and "content" not in blob, "cache view names text")
+        r = c.req("POST", "/v1/yunshu/cache/clear", json={"tier": "ram"})
+        expect(r.status_code == 200, f"cache/clear {r.status_code} {r.text[:100]}")
+        expect(r.json()["freed_bytes"] >= 0, f"cache/clear {r.json()}")
+    else:
+        c.unserved()  # the text fast path has no prefix cache to list
+    lg = c.req("GET", "/v1/yunshu/logs?limit=50")
+    expect(lg.status_code == 200, f"logs {lg.status_code} {lg.text[:100]}")
+    lj = lg.json()
+    expect(
+        {"records", "next_id", "dropped"} <= set(lj) and lj["records"],
+        f"logs: empty ring on a server that has been running: {list(lj)}",
+    )
+    expect(
+        not any(c.token and c.token in r["msg"] for r in lj["records"]),
+        "logs leaked the token",
+    )
+    with c.http.stream(
+        "GET", "/v1/yunshu/logs/stream?level=warning", headers=c.auth(), timeout=10
+    ) as st:
+        expect(st.status_code == 200, f"logs/stream {st.status_code}")
+        expect(
+            st.headers.get("content-type", "").startswith("text/event-stream"),
+            f"logs/stream type {st.headers.get('content-type')}",
+        )
+    b = c.req("GET", "/v1/yunshu/bundle", timeout=120)
+    expect(b.status_code == 200, f"bundle {b.status_code} {b.text[:100]}")
+    expect(
+        "attachment" in b.headers.get("content-disposition", ""), "bundle: no filename"
+    )
+    bj = b.json()
+    expect(
+        {"version", "packages", "settings_changed", "doctor"} <= set(bj),
+        f"bundle keys {list(bj)}",
+    )
+    expect(not (c.token and c.token in b.text), "bundle leaked the token")
+
+
+@check(
+    "console_downloads",
+    "POST /v1/yunshu/downloads",
+    "GET /v1/yunshu/downloads",
+    "GET /v1/yunshu/downloads/{job_id}",
+    "DELETE /v1/yunshu/downloads/{job_id}",
+    served=True,
+)
+def _console_downloads(c: Ctx):
+    """A real, tiny download (one README, no model files, so nothing is registered): progress
+    reaches done with real byte counts, the list and detail agree, cancelling a finished job
+    is a no-op that returns it."""
+    r = c.req(
+        "POST",
+        "/v1/yunshu/downloads",
+        json={
+            "repo": "mlx-community/Qwen2.5-0.5B-Instruct-4bit",
+            "allow_patterns": ["README.md"],
+        },
+    )
+    expect(r.status_code == 202, f"POST downloads {r.status_code} {r.text[:200]}")
+    job = r.json()
+    t0 = time.time()
+    while time.time() - t0 < 120 and job["state"] in ("queued", "running"):
+        time.sleep(1)
+        job = c.req("GET", f"/v1/yunshu/downloads/{job['id']}").json()
+    expect(job["state"] == "done", f"download ended {job['state']}: {job.get('error')}")
+    expect(job["bytes_total"] > 0 and job["bytes_done"] == job["bytes_total"], f"{job}")
+    expect(job["files"] and job["files"][0]["name"] == "README.md", f"files {job}")
+    ls = c.req("GET", "/v1/yunshu/downloads").json()
+    expect(
+        any(d["id"] == job["id"] and d["state"] == "done" for d in ls["downloads"]),
+        "list lacks the finished job",
+    )
+    expect(ls["free_bytes"], "list: no free-space figure")
+    d = c.req("DELETE", f"/v1/yunshu/downloads/{job['id']}")
+    expect(
+        d.status_code == 200 and d.json()["state"] == "done",
+        f"{d.status_code} {d.text[:100]}",
+    )
+
+
+@check(
+    "console_fit",
+    "GET /v1/yunshu/models/{model_id:path}/fit",
+    needs="multi",
+    served=True,
+)
+def _console_fit(c: Ctx):
+    expect(c.mm_models, "multi-model server lists no model")
+    r = c.req("GET", f"/v1/yunshu/models/{c.mm_models[0]}/fit")
+    expect(r.status_code == 200, f"fit {r.status_code} {r.text[:100]}")
+    j = r.json()
+    expect(j["verdict"] in ("fits", "tight", "wont_fit"), f"fit verdict {j}")
+    expect(j["needed_bytes"] > 0 and j["weights_bytes"] > 0, f"fit sizes {j}")
+
+
+@check(
     "cancel_live",
     "POST /v1/cancel",
     "DELETE /v1/requests/{request_id}",

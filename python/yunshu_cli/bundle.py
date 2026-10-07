@@ -40,13 +40,13 @@ _PAYLOAD = [
 _OPAQUE = {"YUNSHU_MCP_SERVERS", "YUNSHU_MCP_CONFIG"}
 
 
-def scrub_line(line: str) -> str:
+def scrub_line(line: str, limit: int = MAX_LINE) -> str:
     """One log line made safe to share: secrets redacted, payload fragments removed, cut."""
     line = log_rotation.redact(line.rstrip("\n"))
     line = _PAYLOAD[0].sub("input_value=[OMITTED]", line)
     for pat in _PAYLOAD[1:]:
         line = pat.sub(lambda m: f"{m.group(1)}[OMITTED]", line)
-    return line[:MAX_LINE]
+    return line[:limit]
 
 
 def _read_lines(path: Path) -> list[str]:

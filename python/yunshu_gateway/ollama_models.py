@@ -125,36 +125,118 @@ async def delete_model(request, name: str):
             await asyncio.to_thread(shutil.rmtree, target)
 
 
-async def pull_model(request, name: str):
-    manager = manager_for(request, "can_load_models")
+def _pull_target(manager, name: str) -> Path | None:
+    """Validate a pull request; None when the model is already registered."""
     target = model_link(name)
-    async with _LOCK:
-        if registered_entry(manager, name):
-            return
-        if len(name.split("/")) != 2 or ":" in name:
-            raise HTTPException(
-                400,
-                "Use a Hugging Face MLX repository id (org/name); Ollama registry / GGUF models are unsupported",
-            )
-        from huggingface_hub import snapshot_download
+    if registered_entry(manager, name):
+        return None
+    if len(name.split("/")) != 2 or ":" in name:
+        raise HTTPException(
+            400,
+            "Use a Hugging Face MLX repository id (org/name); Ollama registry / GGUF models are unsupported",
+        )
+    return target
 
-        try:
-            snapshot = Path(await asyncio.to_thread(snapshot_download, repo_id=name))
-        except Exception as exc:
-            raise HTTPException(400, f"model '{name}' download failed") from exc
+
+def check_pull(request, name: str) -> None:
+    """Auth, mode and name errors of a pull, raised before a streamed answer starts."""
+    _pull_target(manager_for(request, "can_load_models"), name)
+
+
+def _link_pulled(manager, name: str, target: Path):
+    """After the download: check it is a native safetensors model, link and register it."""
+
+    def finish(job) -> None:
+        snapshot = Path(job.path or "")
         if not (snapshot / "config.json").is_file() or not any(
             snapshot.glob("*.safetensors")
         ):
-            raise HTTPException(
-                400,
-                "Repository is not a native safetensors model; GGUF conversion is unsupported",
+            raise RuntimeError(
+                "Repository is not a native safetensors model; GGUF conversion is unsupported"
             )
         target.parent.mkdir(parents=True, exist_ok=True)
         if target.exists() or target.is_symlink():
-            raise HTTPException(409, f"model '{name}' already exists on disk")
+            raise RuntimeError(f"model '{name}' already exists on disk")
         target.symlink_to(snapshot.resolve(), target_is_directory=True)
         try:
             manager.register_model(name, str(target))
         except Exception:
             target.unlink()
             raise
+        job.registered = True
+
+    return finish
+
+
+async def start_pull(request, name: str):
+    """Queue the download on the shared registry; None when the model is already here."""
+    from . import downloads
+
+    manager = manager_for(request, "can_load_models")
+    async with _LOCK:
+        target = _pull_target(manager, name)
+        if target is None:
+            return None
+        reg = downloads.get_registry()
+        try:
+            await asyncio.to_thread(reg.preflight, name, None, None, None)
+        except downloads.InsufficientDiskError as exc:
+            raise HTTPException(507, str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(400, f"model '{name}' download failed") from exc
+        return reg.submit(name, on_complete=_link_pulled(manager, name, target))
+
+
+async def pull_model(request, name: str):
+    """Blocking pull (``stream: false``): returns when the model is registered."""
+    job = await start_pull(request, name)
+    if job is None:
+        return
+    await asyncio.to_thread(job.wait)
+    if job.state != "done":
+        raise HTTPException(400, f"model '{name}' download failed")
+
+
+async def pull_events(request, name: str):
+    """Ollama's streamed pull: status lines, then ``pulling`` progress, then ``success``.
+
+    The registry job is one aggregate layer (total/completed are real bytes across all
+    files). A client disconnect does not cancel the download; DELETE the job to do that.
+    """
+    import hashlib
+    import json
+
+    yield {"status": "pulling manifest"}
+    try:
+        job = await start_pull(request, name)
+    except HTTPException as exc:
+        yield {"error": str(exc.detail)}
+        return
+    if job is None:
+        yield {"status": "success"}
+        return
+    digest = "sha256:" + hashlib.sha256(name.encode()).hexdigest()
+    last = None
+    while True:
+        done = job.finished_event.is_set()
+        view = job.to_dict()
+        if view["state"] == "failed":
+            yield {"error": view["error"] or f"model '{name}' download failed"}
+            return
+        if view["state"] == "cancelled":
+            yield {"error": "download cancelled"}
+            return
+        line = {
+            "status": f"pulling {digest[7:19]}",
+            "digest": digest,
+            "total": view["bytes_total"],
+            "completed": view["bytes_done"],
+        }
+        key = json.dumps(line)
+        if key != last:
+            yield line
+            last = key
+        if done:
+            break
+        await asyncio.sleep(0.5)
+    yield {"status": "success"}
