@@ -1337,6 +1337,7 @@ def _apply_previous_response_chain(req, messages: list[dict], request) -> list[d
                 "local_shell_call",
                 "tool_search_call",
                 "tool_search_output",
+                "custom_tool_call_output",
             ):
                 _turn.extend(
                     input_item_to_messages(out, _prev.get("_server_tool_texts"))
@@ -1421,6 +1422,15 @@ async def create_response(req: ResponsesRequest, request: Request):
     # background is not supported here (would require resumable SSE), so it only
     # triggers when stream is off.
     if has_server_tools_responses(req):
+        from ..responses_client_tools import declarations
+
+        if any(
+            d.get("type") in ("custom", "local_shell", "tool_search")
+            for d in declarations(req.tools).values()
+        ):
+            raise HTTPException(
+                400, "Custom tools cannot be combined with server-side tools yet"
+            )
         return await create_with_server_tools_responses(req, request, create_response)
     if req.background and not req.stream:
         return await _start_background_response(req, request)
@@ -1456,7 +1466,7 @@ async def create_response(req: ResponsesRequest, request: Request):
         return await create_client_tools(req, request, create_response)
     _fn_tools = function_tools(req.tools)
     if _fn_tools != req.tools:
-        # namespaces flattened, non-function tools (custom, ...) dropped: the engine sees plain functions
+        # The engine sees named functions; the outward custom schema is preserved.
         req = req.model_copy(update={"tools": _fn_tools})
     messages = _convert_to_messages(req)
     # Snapshot THIS hop's own input before previous_response_id chaining mutates
@@ -1579,6 +1589,9 @@ async def create_response(req: ResponsesRequest, request: Request):
     from ..model_guards import reject_embedding_only
 
     reject_embedding_only(engine, req.model)
+    from ..model_guards import validate_forced_tools
+
+    validate_forced_tools(engine, req.tools, req.tool_choice, req.parallel_tool_calls)
 
     # Reject prompts over the context window (400) or too large to prefill (413),
     # before generation (see chat.py).

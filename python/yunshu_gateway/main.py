@@ -1235,6 +1235,13 @@ def create_app() -> FastAPI:
     # Anthropic SDK sends requests to /v1/messages without /v1 prefix
     app.include_router(anthropic.router)
 
+    # Optional built frontend. Static assets are same-origin and public; all API
+    # routes retain their existing authentication rules. Hash routing needs no
+    # history fallback, so missing asset paths remain 404s.
+    from .console_ui import mount_console_ui
+
+    mount_console_ui(app)
+
     return app
 
 

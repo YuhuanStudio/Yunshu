@@ -1426,6 +1426,17 @@ async def create_message(req: AnthropicMessagesRequest, request: Request):
 
     try:
         reject_embedding_only(engine, req.model)
+        from ..model_guards import validate_forced_tools
+
+        validate_forced_tools(
+            engine,
+            req.tools,
+            req.tool_choice,
+            not (
+                isinstance(req.tool_choice, dict)
+                and req.tool_choice.get("disable_parallel_tool_use")
+            ),
+        )
         reject_images_for_text_model(engine, has_images)
     except HTTPException as e:
         for _tf_path in _temp_files:

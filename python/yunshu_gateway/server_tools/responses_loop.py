@@ -78,7 +78,7 @@ def has_server_tools_responses(req) -> bool:
 
 def function_tools(tools):
     """The tools the engine's chat template can use: plain named functions. Codex ``namespace``
-    tools are flattened to their child functions; other kinds (custom / freeform ...) are dropped.
+    tools are flattened to their children; freeform custom tools use an internal input function.
     Returns the input object itself when nothing needed changing."""
     if not tools:
         return tools

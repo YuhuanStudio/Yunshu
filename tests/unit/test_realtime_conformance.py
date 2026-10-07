@@ -54,8 +54,15 @@ class FakeEngine:
 
 @pytest.fixture()
 def server(monkeypatch):
+    from unittest.mock import AsyncMock
+
     import uvicorn
 
+    monkeypatch.setattr("yunshu_gateway.engine.get_engine", lambda: None)
+    monkeypatch.setattr(
+        "yunshu_gateway.engine.get_engine_for_model",
+        AsyncMock(return_value=FakeEngine()),
+    )
     monkeypatch.setattr(
         rt.RealtimeSession, "_resolve_engine", lambda self: FakeEngine()
     )

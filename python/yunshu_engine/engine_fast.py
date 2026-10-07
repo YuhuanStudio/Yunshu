@@ -186,6 +186,11 @@ class EngineFastMixin:
                     )
         return p
 
+    def validate_forced_tools(self, tools, choice, parallel=True):
+        from .tool_call_grammar import validate_forced_tools
+
+        validate_forced_tools(self, tools, choice, parallel)
+
     def _tool_call_processor(self: _engine.BatchedEngine, input_ids: list[int]):  # type: ignore[misc]
         """Structural-tag logits processor for the request's native tools (free until
         the tool-call marker, then the call body is masked to this request's tool
@@ -219,7 +224,7 @@ class EngineFastMixin:
                 tool_choice=choice,
                 parallel=parallel,
             )
-        grammar = cache[key]
+        grammar = tcg.require_tool_grammar(cache[key], choice)
         if grammar is None:
             return None
         guide = grammar.guide(

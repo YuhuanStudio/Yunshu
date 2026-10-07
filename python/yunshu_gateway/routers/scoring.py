@@ -2,23 +2,13 @@ from __future__ import annotations
 
 """Scoring endpoints: /v1/pooling, /v1/score, /v1/rerank, /v1/classify.
 
-Implements vLLM-compatible scoring endpoints built on the existing
-embeddings infrastructure. All endpoints leverage the same
-underlying engine resolution and embedding generation.
-
-- /v1/pooling  — raw hidden state pooling (CLS, MEAN, LAST)
-- /v1/score    — single/pair similarity scoring (cosine, dot, euclidean)
-- /v1/rerank   — BI-ENCODER reranking: embeds the query and each document
-                 separately and ranks by cosine similarity scaled to a [0,1]
-                 relevance score. This is NOT a true cross-encoder (no joint
-                 (query, document) forward pass), so ranking quality is lower
-                 than a dedicated cross-encoder reranker — a true cross-encoder
-                 model + joint scoring is a deferred enhancement.
-- /v1/classify — zero-shot classification via label similarity
+Cross-encoders jointly score query/document pairs; embedding models retain cosine
+scoring and zero-shot label similarity. Sequence classifiers use their trained heads.
 """
 import logging
 import math
 import time
+import uuid
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
@@ -100,6 +90,47 @@ class ScoreRequest(BaseModel):
     text_1: str | list[str]
     text_2: str | list[str]
     scoring_type: str = "cosine"  # cosine, dot, euclidean
+    use_activation: bool | None = None
+    instruction: str | None = Field(default=None, max_length=_MAX_INPUT_TEXT_LENGTH)
+    chat_template_kwargs: dict[str, Any] | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def accept_score_aliases(cls, data):
+        if isinstance(data, dict):
+            data = dict(data)
+            for field, aliases in (
+                ("text_1", ("queries", "data_1")),
+                ("text_2", ("documents", "items", "data_2")),
+            ):
+                if field not in data:
+                    for alias in aliases:
+                        if alias in data:
+                            data[field] = data[alias]
+                            break
+        return data
+
+    @property
+    def effective_instruction(self):
+        """The single instruction source: chat_template_kwargs.instruction wins."""
+        kwargs = self.chat_template_kwargs or {}
+        unsupported = set(kwargs) - {"instruction"}
+        if unsupported:
+            raise HTTPException(
+                400,
+                "Unsupported score chat_template_kwargs: "
+                + ", ".join(sorted(unsupported)),
+            )
+        instruction = kwargs.get("instruction", self.instruction)
+        if instruction is not None and (
+            not isinstance(instruction, str)
+            or len(instruction) > _MAX_INPUT_TEXT_LENGTH
+        ):
+            raise HTTPException(
+                400,
+                f"instruction must be a string of at most {_MAX_INPUT_TEXT_LENGTH} characters",
+            )
+        return instruction
 
     @model_validator(mode="after")
     def validate_request(self):
@@ -180,7 +211,8 @@ class RerankRequest(BaseModel):
     return_documents: bool = True
     # Optional retrieval instruction — used by a true cross-encoder reranker
     # (Qwen3-VL-Reranker); ignored by the bi-encoder cosine fallback.
-    instruction: str | None = None
+    instruction: str | None = Field(default=None, max_length=_MAX_INPUT_TEXT_LENGTH)
+    use_activation: bool | None = None
 
     @model_validator(mode="after")
     def validate_request(self):
@@ -209,7 +241,7 @@ class RerankRequest(BaseModel):
 
 class ClassifyRequest(BaseModel):
     model: str
-    input: str
+    input: str | list[str]
     labels: list[str] = Field(default_factory=list)
     # Softmax temperature over label cosine similarities (lower = sharper). This is
     # embedding-similarity zero-shot classification, not a trained classifier head.
@@ -232,9 +264,12 @@ class ClassifyRequest(BaseModel):
     def validate_request(self):
         if not self.model or not self.model.strip():
             raise ValueError("model: field is required and cannot be empty")
-        if not self.input or not self.input.strip():
+        inputs = self.input if isinstance(self.input, list) else [self.input]
+        if not inputs or any(not t.strip() for t in inputs):
             raise ValueError("input: field is required and cannot be empty")
-        if len(self.labels) < 2:
+        if len(inputs) > _MAX_INPUT_TEXTS:
+            raise ValueError(f"input: maximum {_MAX_INPUT_TEXTS} items per request")
+        if self.labels and len(self.labels) < 2:
             raise ValueError("labels: at least 2 labels required for classification")
         if len(self.labels) > _MAX_INPUT_TEXTS:
             raise ValueError(f"labels: maximum {_MAX_INPUT_TEXTS} labels per request")
@@ -244,7 +279,7 @@ class ClassifyRequest(BaseModel):
                 raise ValueError(
                     f"labels: item at index {i} is empty or whitespace-only"
                 )
-        _reject_overlong_texts("input", [self.input])
+        _reject_overlong_texts("input", inputs)
         _reject_overlong_texts("labels", self.labels)
         return self
 
@@ -355,16 +390,73 @@ async def create_score(req: ScoreRequest, request: Request):
     if engine is None:
         raise HTTPException(status_code=404, detail=f"Model '{req.model}' not found")
 
+    from yunshu_engine.scoring_engine import TextScoringEngine
+
+    instruction = req.effective_instruction
+    if isinstance(engine, TextScoringEngine):
+        if req.scoring_type != "cosine":
+            raise HTTPException(
+                400, "scoring_type is only configurable for embedding models"
+            )
+        try:
+            scores = await engine.score_pairs(
+                list(zip(texts_a, texts_b, strict=True)),
+                instruction=instruction,
+                use_activation=req.use_activation is not False,
+            )
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from None
+        except MemoryError:
+            raise HTTPException(507, "Out of GPU memory") from None
+        return JSONResponse(
+            {
+                "object": "list",
+                "id": f"score-{uuid.uuid4().hex}",
+                "created": int(time.time()),
+                "model": req.model,
+                "data": [
+                    {"object": "score", "index": i, "score": score}
+                    for i, score in enumerate(scores)
+                ],
+                "usage": engine.token_usage(
+                    pairs=list(zip(texts_a, texts_b, strict=True)),
+                    instruction=instruction,
+                ),
+            }
+        )
+
+    # Remaining engines: use_activation is a TextScoringEngine-only knob. Like vLLM, a
+    # bi-encoder ignores `instruction`; a VL cross-encoder reranker (is_reranker) uses it.
+    is_cross = getattr(engine, "is_reranker", False) is True
+    if req.use_activation is not None:
+        raise HTTPException(400, "use_activation requires a text cross-encoder")
+
     # dot/euclidean need RAW (un-normalized) vectors; cosine needs unit vectors.
     _norm_for_score = req.scoring_type == "cosine"
+    cross_scores = None
     try:
-        emb_a = await _get_embeddings(engine, texts_a, normalize=_norm_for_score)
-        emb_b = await _get_embeddings(engine, texts_b, normalize=_norm_for_score)
+        if is_cross:
+            if req.scoring_type != "cosine":
+                raise HTTPException(
+                    400, "Cross-encoder score does not support dot/euclidean"
+                )
+            cross_scores = []
+            for query, document in zip(texts_a, texts_b, strict=True):
+                scores = await engine.rerank(query, [document], instruction=instruction)
+                if len(scores) != 1:
+                    raise ValueError("Cross-encoder must return one score per pair")
+                cross_scores.append(float(scores[0]))
+            emb_a, emb_b = [], []
+        else:
+            # Like vLLM, bi-encoder scoring does not apply a score template or instruction.
+            emb_a = await _get_embeddings(engine, texts_a, normalize=_norm_for_score)
+            emb_b = await _get_embeddings(engine, texts_b, normalize=_norm_for_score)
+    except HTTPException:
+        raise
     except MemoryError:
         logger.error("Score OOM", exc_info=True)
         raise HTTPException(status_code=507, detail="Out of GPU memory") from None
     except ValueError as e:
-        # bad-input errors should be 400 not 500
         logger.warning(f"Score validation: {e}")
         raise HTTPException(status_code=400, detail=str(e)) from None
     except Exception as e:
@@ -375,9 +467,13 @@ async def create_score(req: ScoreRequest, request: Request):
     total_tokens = 0
     tok = getattr(engine, "_tokenizer", None)
     try:
-        for i, (a, b) in enumerate(zip(emb_a, emb_b, strict=False)):
-            score = _compute_similarity(a, b, req.scoring_type)
-            if not math.isfinite(score):  # avoid a bare NaN JSON literal (invalid)
+        for i in range(len(texts_a)):
+            score = (
+                cross_scores[i]
+                if cross_scores is not None
+                else _compute_similarity(emb_a[i], emb_b[i], req.scoring_type)
+            )
+            if not math.isfinite(score):
                 score = 0.0
             data.append({"object": "score", "index": i, "score": score})
             total_tokens += (
@@ -387,12 +483,13 @@ async def create_score(req: ScoreRequest, request: Request):
                 len(tok.encode(texts_b[i])) if tok else max(1, len(texts_b[i]) // 4)
             )
     except ValueError as e:
-        logger.error(f"Score computation error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e)) from None
 
     return JSONResponse(
         {
             "object": "list",
+            "id": f"score-{uuid.uuid4().hex}",
+            "created": int(time.time()),
             "data": data,
             "model": req.model,
             "usage": {"prompt_tokens": total_tokens, "total_tokens": total_tokens},
@@ -412,13 +509,22 @@ async def _rerank_cross_encoder(
     embeddings — higher accuracy than the bi-encoder cosine fallback. Returns the
     same response shape as the cosine path so clients see no difference.
     """
-    try:
-        scores = await engine.rerank(
-            req.query, truncated_docs, instruction=req.instruction
+    from yunshu_engine.scoring_engine import TextScoringEngine
+
+    kwargs: dict[str, Any] = {"instruction": req.instruction}
+    if isinstance(engine, TextScoringEngine):
+        kwargs["use_activation"] = req.use_activation is not False
+    elif req.use_activation is not None:
+        raise HTTPException(
+            400, "use_activation is currently supported for text cross-encoders"
         )
+    try:
+        scores = await engine.rerank(req.query, truncated_docs, **kwargs)
     except MemoryError:
         logger.error("Cross-encoder rerank OOM", exc_info=True)
         raise HTTPException(status_code=507, detail="Out of GPU memory") from None
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from None
     except Exception as e:
         logger.error(f"Cross-encoder rerank error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Reranking failed") from None
@@ -443,15 +549,23 @@ async def _rerank_cross_encoder(
             item["document"] = doc if isinstance(doc, dict) else {"text": doc}
         results.append(item)
 
-    # Token counting isn't meaningful for a cross-encoder pass; report item count.
+    from yunshu_engine.scoring_engine import TextScoringEngine
+
     n = len(truncated_docs) + 1
+    usage = (
+        engine.token_usage(
+            pairs=[(req.query, d) for d in truncated_docs], instruction=req.instruction
+        )
+        if isinstance(engine, TextScoringEngine)
+        else {"prompt_tokens": n, "total_tokens": n}
+    )
     return JSONResponse(
         {
             "id": f"rerank-{int(time.time())}",
             "object": "list",
             "model": req.model,
             "results": results,
-            "usage": {"prompt_tokens": n, "total_tokens": n},
+            "usage": usage,
         }
     )
 
@@ -482,15 +596,21 @@ async def create_rerank(req: RerankRequest, request: Request):
     # accurate than embedding the query and documents separately and taking
     # cosine. Use it when such a model is loaded; otherwise fall through to the
     # bi-encoder cosine path below.
-    from yunshu_engine.vl_embedding_engine import VLEmbeddingEngine
-
     # Only a true CROSS-ENCODER (Qwen3-VL-Reranker) scores (query, doc) jointly via
     # the yes/no logit gap. A VL *embedding* model reuses the same class but was never
     # trained on the reranker prompt format — running it through the cross path yields
     # plausible-but-meaningless scores. Gate on is_reranker; a multimodal request still
     # needs a real reranker (the bi-encoder cosine path can't ingest images).
-    if isinstance(engine, VLEmbeddingEngine) and getattr(engine, "is_reranker", False):
+    from yunshu_engine.scoring_engine import TextScoringEngine
+    from yunshu_engine.vl_embedding_engine import VLEmbeddingEngine
+
+    if isinstance(engine, (VLEmbeddingEngine, TextScoringEngine)) and getattr(
+        engine, "is_reranker", False
+    ):
         return await _rerank_cross_encoder(req, engine, truncated_docs)
+
+    if req.use_activation is not None:
+        raise HTTPException(400, "use_activation requires a text cross-encoder")
 
     # Multimodal (image) query/documents only make sense for a cross-encoder
     # reranker — the bi-encoder cosine fallback embeds text and can't ingest images.
@@ -598,6 +718,49 @@ async def classify_input(req: ClassifyRequest, request: Request):
     engine = await _resolve_engine(req.model)
     if engine is None:
         raise HTTPException(status_code=404, detail=f"Model '{req.model}' not found")
+
+    from yunshu_engine.scoring_engine import TextScoringEngine
+
+    if isinstance(engine, TextScoringEngine):
+        if req.labels:
+            raise HTTPException(
+                400, "Head classifiers use checkpoint labels; omit labels"
+            )
+        texts = req.input if isinstance(req.input, list) else [req.input]
+        try:
+            probs = await engine.classify(texts)
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from None
+        except MemoryError:
+            raise HTTPException(507, "Out of GPU memory") from None
+        data = [
+            {"object": "classification", "index": i, "probs": row}
+            for i, row in enumerate(probs)
+        ]
+        result = {
+            "object": "list",
+            "model": req.model,
+            "data": data,
+            "labels": engine.labels,
+            "usage": engine.token_usage(texts=texts),
+        }
+        if isinstance(req.input, str):
+            result["results"] = sorted(
+                [
+                    {"label": label, "score": prob, "index": i}
+                    for i, (label, prob) in enumerate(
+                        zip(engine.labels, probs[0], strict=True)
+                    )
+                ],
+                key=lambda x: x["score"],
+                reverse=True,
+            )
+        return JSONResponse(result)
+    if not req.labels or isinstance(req.input, list):
+        raise HTTPException(
+            400,
+            "Zero-shot classification requires one input string and at least two labels",
+        )
 
     try:
         input_emb = (await _get_embeddings(engine, [req.input]))[0]

@@ -133,6 +133,7 @@ def test_full_suite_has_every_stage():
         "longqa",
         "conc",
         "client_compat",
+        "rerank",
     }
 
 
@@ -334,6 +335,29 @@ def test_executor_reuses_completed_cells(world):
     # a changed command is a different cell: not served from the cache
     r3 = ex2.run_cells([cell("a", OK_BODY + ";pass")])
     assert not r3["a"].cached
+
+
+def test_executor_preserves_declared_gpuq_output(world):
+    rd, ex = mkexec(world)
+    res = ex.run_cells([cell("a", OK_BODY)])
+    assert res["a"].ok
+    original = rd.cell_path("st", "a", "a1.jsonl")
+    assert original.exists(), "gpuq digest must still find its declared output"
+    assert original.read_bytes() == rd.cell_path("st", "a").read_bytes()
+
+
+def test_executor_requires_explicit_zero_return_code(world, monkeypatch):
+    rd, ex = mkexec(world)
+    wait = world.gq.wait
+
+    def unknown_rc(jid):
+        job = wait(jid)
+        return core.Job({**job.d, "rc": None})
+
+    monkeypatch.setattr(world.gq, "wait", unknown_rc)
+    res = ex.run_cells([cell("a", OK_BODY)])
+    assert not res["a"].ok
+    assert not rd.cell_path("st", "a").exists()
 
 
 def test_executor_failfast_and_failed_cell_costs_only_itself(world):
