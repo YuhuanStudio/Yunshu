@@ -62,11 +62,6 @@ def check(name: str, *routes: str, served: bool, needs: str = "main"):
 # belongs here only when no server run (with the four small checkpoints) can exercise it.
 EXEMPT: dict[str, str] = {
     "POST /api/push": "documented 501 by design: nothing to push to",
-    "PATCH /v1/yunshu/config": "rewrites the operator's own config file; unit-tested against a temp file",
-    "GET /v1/yunshu/service": "reports the operator's launchd agent; unit-tested with launchctl mocked",
-    "POST /v1/yunshu/service/restart": "restarts the real service; unit-tested with launchctl mocked",
-    "GET /v1/yunshu/cors": "admin read of the CORS origins; unit-tested with the live middleware",
-    "PATCH /v1/yunshu/cors": "rewrites the operator's config file; unit-tested with the live middleware",
 }
 
 
@@ -101,6 +96,10 @@ class Ctx:
     notes: dict = field(default_factory=dict)
     mm_models: list = field(default_factory=list)  # multi-model server: model ids
     log_tail: Any = None  # callable(n) -> the server log's last n lines
+    home: str = (
+        ""  # the server's throwaway HOME: config, keys and the launchd plist path
+    )
+    online: bool = False  # the server may reach the Hugging Face Hub
     shared: dict = field(
         default_factory=dict
     )  # kept across the servers of one job (TTS -> ASR)
@@ -490,6 +489,11 @@ def _console_downloads(c: Ctx):
     """A real, tiny download (one README, no model files, so nothing is registered): progress
     reaches done with real byte counts, the list and detail agree, cancelling a finished job
     is a no-op that returns it."""
+    if not c.online:
+        # A real network call (one README from the Hugging Face Hub). With
+        # YUNSHU_ROUTES_OFFLINE=1 the server runs with HF_HUB_OFFLINE=1: the check skips and
+        # the download routes are reported unverified, never silently passed.
+        skip("offline run (YUNSHU_ROUTES_OFFLINE=1): no Hugging Face Hub access")
     r = c.req(
         "POST",
         "/v1/yunshu/downloads",
@@ -504,6 +508,12 @@ def _console_downloads(c: Ctx):
     while time.time() - t0 < 120 and job["state"] in ("queued", "running"):
         time.sleep(1)
         job = c.req("GET", f"/v1/yunshu/downloads/{job['id']}").json()
+    if job["state"] == "error" and re.search(
+        r"connect|resolve|network|timed? ?out|offline|unreachable",
+        str(job.get("error")),
+        re.I,
+    ):
+        skip(f"Hugging Face Hub unreachable from this machine: {job.get('error')}")
     expect(job["state"] == "done", f"download ended {job['state']}: {job.get('error')}")
     expect(job["bytes_total"] > 0 and job["bytes_done"] == job["bytes_total"], f"{job}")
     expect(job["files"] and job["files"][0]["name"] == "README.md", f"files {job}")
@@ -533,6 +543,195 @@ def _console_fit(c: Ctx):
     j = r.json()
     expect(j["verdict"] in ("fits", "tight", "wont_fit"), f"fit verdict {j}")
     expect(j["needed_bytes"] > 0 and j["weights_bytes"] > 0, f"fit sizes {j}")
+
+
+@check(
+    "console_reload",
+    "POST /v1/yunshu/models/{model_id:path}/reload",
+    needs="multi",
+    served=True,
+)
+def _console_reload(c: Ctx):
+    """Reload a model on the multi-model server: an idle model unloads and loads again and still
+    answers; an unknown id is a 404; the route is admin-only."""
+    expect(c.mm_models, "multi-model server lists no model")
+    mid = c.mm_models[0]
+    path = f"/v1/yunshu/models/{mid}/reload"
+    expect(c.http.post(path).status_code == 401, "reload without the token must be 401")
+    r = c.req("POST", path, json={})
+    expect(r.status_code == 200, f"reload {r.status_code} {r.text[:200]}")
+    j = r.json()
+    expect(j["status"] == "reloaded" and j["model"] == mid, f"reload body {j}")
+    r2 = c.req("POST", path, json={})  # now surely loaded: unload + load for real
+    expect(
+        r2.status_code == 200 and r2.json()["was_loaded"] is True, f"{r2.text[:200]}"
+    )
+    a = c.req(
+        "POST",
+        "/v1/chat/completions",
+        json={
+            "model": mid,
+            "messages": [{"role": "user", "content": "Say hi."}],
+            "max_tokens": 8,
+        },
+    )
+    expect(a.status_code == 200, f"chat after reload {a.status_code} {a.text[:150]}")
+    msg = a.json()["choices"][0]["message"]
+    expect(
+        msg.get("content") or msg.get("reasoning_content"),
+        "chat after reload returned nothing",
+    )
+    gone = c.req("POST", "/v1/yunshu/models/no-such-org/no-such-model/reload")
+    expect(gone.status_code == 404, f"unknown model -> {gone.status_code}")
+
+
+@check(
+    "console_admin_config",
+    "PATCH /v1/yunshu/config",
+    "GET /v1/yunshu/cors",
+    "PATCH /v1/yunshu/cors",
+    "GET /v1/yunshu/service",
+    "POST /v1/yunshu/service/restart",
+    served=True,
+)
+def _console_admin_config(c: Ctx):
+    """Settings writes, CORS origins and the service routes against the throwaway HOME the check
+    server runs with (config file `<HOME>/.yunshu/config.toml`). Nothing here touches the
+    operator's real config or launchd: the first step refuses to go on unless the server's
+    launchd plist path lies under that throwaway HOME, and the restart is only ever POSTed to a
+    server that is not the launchd job, where it must answer 409."""
+    from pathlib import Path
+
+    expect(c.home, "the check server's throwaway HOME is unknown")
+    home = Path(c.home).resolve()
+    sv = c.req("GET", "/v1/yunshu/service")
+    expect(sv.status_code == 200, f"service {sv.status_code} {sv.text[:100]}")
+    svj = sv.json()
+    expect(
+        home in Path(svj["plist"]).resolve().parents,
+        f"server is not on the throwaway HOME ({svj['plist']} vs {home}): refusing to write",
+    )
+    expect(svj["under_launchd"] is False, f"check server is under launchd: {svj}")
+    expect(svj["pid_self"] and svj["version"], f"service view {svj}")
+    cfg = home / ".yunshu" / "config.toml"
+    live, reload_, restart = (
+        "YUNSHU_BATCH_MAX_ITEMS",
+        "YUNSHU_PREFIX_MAX_ENTRIES",
+        "YUNSHU_KEEP_ALIVE_TIMEOUT",
+    )
+    try:
+        r = c.req(
+            "PATCH",
+            "/v1/yunshu/config",
+            json={"settings": {live: 321}, "dry_run": True},
+        )
+        expect(r.status_code == 200, f"dry run {r.status_code} {r.text[:150]}")
+        expect(
+            not cfg.exists() or live not in cfg.read_text(), "dry run wrote the file"
+        )
+        r = c.req(
+            "PATCH",
+            "/v1/yunshu/config",
+            json={"settings": {live: 321, reload_: 65, restart: 6}},
+        )
+        expect(r.status_code == 200, f"patch {r.status_code} {r.text[:200]}")
+        j = r.json()
+        res = j["results"]
+        expect(res[live]["status"] == "applied" and res[live]["value"] == 321, f"{res}")
+        expect(res[reload_]["status"] == "needs_reload", f"{res[reload_]}")
+        expect(res[restart]["status"] == "needs_restart", f"{res[restart]}")
+        expect(j["reload_required"] and j["restart_required"], f"flags {j}")
+        expect(
+            j["restart"]["available"] is False and j["restart"]["manual"],
+            f"restart hint {j['restart']}",
+        )
+        expect(
+            Path(j["saved_to"]).resolve() == cfg.resolve(),
+            f"wrote {j['saved_to']}, want {cfg}",
+        )
+        text = cfg.read_text()
+        expect(
+            live in text and "321" in text and reload_ in text, "file lacks the values"
+        )
+        rows = {
+            x["name"]: x
+            for x in c.req("GET", "/v1/yunshu/config?include=all").json()["settings"]
+        }
+        expect(
+            rows[live]["source"] == "file" and str(rows[live]["value"]) == "321",
+            f"GET config after PATCH: {rows[live]}",
+        )
+        bad = c.req("PATCH", "/v1/yunshu/config", json={"settings": {live: "abc"}})
+        expect(bad.status_code == 422, f"bad value -> {bad.status_code}")
+        expect(live in bad.text, f"422 does not name the setting: {bad.text[:150]}")
+        unk = c.req("PATCH", "/v1/yunshu/config", json={"settings": {"YUNSHU_NOPE": 1}})
+        expect(unk.status_code == 422, f"unknown setting -> {unk.status_code}")
+
+        # CORS: validated, written to the same file, applied to the very next request
+        g = c.req("GET", "/v1/yunshu/cors")
+        expect(g.status_code == 200 and g.json()["applies"] == "live", g.text[:150])
+        origin = "http://console.example.test:5173"
+        w = c.req("PATCH", "/v1/yunshu/cors", json={"origins": [origin]})
+        expect(w.status_code == 200, f"cors patch {w.status_code} {w.text[:150]}")
+        expect(w.json()["origins"] == [origin], f"cors view {w.json()}")
+        pre = c.http.options(
+            "/v1/models",
+            headers={
+                "Origin": origin,
+                "Access-Control-Request-Method": "GET",
+                "Access-Control-Request-Headers": "authorization",
+            },
+        )
+        expect(
+            pre.headers.get("access-control-allow-origin") == origin,
+            f"live CORS: preflight not allowed after PATCH: {pre.status_code} {dict(pre.headers)}",
+        )
+        other = c.http.options(
+            "/v1/models",
+            headers={
+                "Origin": "http://evil.example.test",
+                "Access-Control-Request-Method": "GET",
+            },
+        )
+        expect(
+            other.headers.get("access-control-allow-origin") is None,
+            "an origin that was not allowed got an allow-origin header",
+        )
+        wild = c.req("PATCH", "/v1/yunshu/cors", json={"origins": ["*"]})
+        expect(wild.status_code == 400, f"'*' without confirm -> {wild.status_code}")
+        badc = c.req("PATCH", "/v1/yunshu/cors", json={"origins": ["not a url"]})
+        expect(badc.status_code == 422, f"bad origin -> {badc.status_code}")
+        rs = c.req("PATCH", "/v1/yunshu/cors", json={"origins": None})
+        expect(rs.status_code == 200, f"cors reset {rs.status_code}")
+        post = c.http.options(
+            "/v1/models",
+            headers={"Origin": origin, "Access-Control-Request-Method": "GET"},
+        )
+        expect(
+            post.headers.get("access-control-allow-origin") != origin,
+            "reset CORS still allows the old origin",
+        )
+
+        # service restart: this server is not the launchd job, so it must refuse, not restart
+        rr = c.req("POST", "/v1/yunshu/service/restart", json={"confirm": True})
+        expect(rr.status_code == 409, f"restart off launchd -> {rr.status_code}")
+        expect(
+            "not_under_launchd" in rr.text and "manual" in rr.text,
+            f"restart refusal body {rr.text[:200]}",
+        )
+        expect(c.http.get("/health/live").status_code == 200, "server went down")
+    finally:  # leave the throwaway config as found
+        c.req(
+            "PATCH",
+            "/v1/yunshu/config",
+            json={"settings": {live: None, reload_: None, restart: None}},
+        )
+        c.req("PATCH", "/v1/yunshu/cors", json={"origins": None})
+    after = cfg.read_text() if cfg.exists() else ""
+    expect(
+        not any(k in after for k in (live, reload_, restart, "YUNSHU_CORS_ORIGINS")),
+        f"config file not restored: {after[:200]}",
+    )
 
 
 @check(

@@ -511,3 +511,141 @@ def test_fit_loaded_unknown_and_single_engine_mode(fit_client):
     h["m"] = _fit_manager(10 * GB, [("org/a", 4 * GB, True, 0)])
     assert client.get("/v1/yunshu/models/org/a/fit").json()["loaded"] is True
     assert client.get("/v1/yunshu/models/nope/fit").status_code == 404
+
+
+# ── reload ─────────────────────────────────────────────────────────────
+
+
+class FakeManager:
+    def __init__(self, loaded=True, active=False, leases=0, load_error=None):
+        self.entry = SimpleNamespace(
+            is_loaded=loaded,
+            leases=leases,
+            engine=SimpleNamespace(has_active_requests=lambda: active)
+            if loaded
+            else None,
+        )
+        self.calls: list = []
+        self.load_error = load_error
+
+    def resolve_model_id(self, mid):
+        return mid if mid == "org/a" else None
+
+    def get_entry(self, mid):
+        return self.entry if mid == "org/a" else None
+
+    async def unload_model(self, mid, force=False):
+        self.calls.append(("unload", mid, force))
+        self.entry.is_loaded = False
+        return True
+
+    async def get_engine(self, mid):
+        self.calls.append(("load", mid))
+        if self.load_error:
+            raise self.load_error
+        self.entry.is_loaded = True
+        return SimpleNamespace(is_running=True)
+
+
+@pytest.fixture
+def reload_client(monkeypatch):
+    holder = {}
+    monkeypatch.setattr(am, "get_model_manager", lambda: holder.get("m"))
+    monkeypatch.setattr(am, "_check_permission", lambda *a: None)
+    app = FastAPI()
+    app.include_router(am.router, prefix="/v1")
+    return TestClient(app), holder
+
+
+def test_reload_unloads_then_loads_the_same_model(reload_client):
+    client, h = reload_client
+    h["m"] = FakeManager()
+    r = client.post("/v1/yunshu/models/org/a/reload")
+    assert r.status_code == 200, r.text
+    j = r.json()
+    assert j["status"] == "reloaded" and j["model"] == "org/a" and j["was_loaded"]
+    assert h["m"].calls == [("unload", "org/a", False), ("load", "org/a")]
+
+
+def test_reload_of_an_unloaded_model_just_loads(reload_client):
+    client, h = reload_client
+    h["m"] = FakeManager(loaded=False)
+    r = client.post("/v1/yunshu/models/org/a/reload")
+    assert r.status_code == 200 and r.json()["was_loaded"] is False
+    assert h["m"].calls == [("load", "org/a")]
+
+
+def test_reload_refuses_while_requests_run_unless_forced(reload_client):
+    client, h = reload_client
+    h["m"] = FakeManager(active=True)
+    r = client.post("/v1/yunshu/models/org/a/reload")
+    assert r.status_code == 409 and h["m"].calls == []
+    r = client.post("/v1/yunshu/models/org/a/reload", json={"force": True})
+    assert r.status_code == 200 and r.json()["forced"] is True
+    assert h["m"].calls[0] == ("unload", "org/a", True)
+
+
+def test_reload_refuses_a_leased_model(reload_client):
+    client, h = reload_client
+    h["m"] = FakeManager(leases=1)
+    assert client.post("/v1/yunshu/models/org/a/reload").status_code == 409
+    assert h["m"].calls == []
+
+
+def test_reload_unknown_model_and_single_engine_mode(reload_client):
+    client, h = reload_client
+    assert client.post("/v1/yunshu/models/org/a/reload").status_code == 400
+    h["m"] = FakeManager()
+    assert client.post("/v1/yunshu/models/org/zzz/reload").status_code == 404
+
+
+def test_reload_reports_a_failed_load_and_frees_the_guard(reload_client):
+    from yunshu_gateway.routers import models as models_router
+
+    client, h = reload_client
+    h["m"] = FakeManager(load_error=RuntimeError("boom"))
+    r = client.post("/v1/yunshu/models/org/a/reload")
+    assert r.status_code == 500 and "boom" in r.json()["detail"]
+    assert "org/a" not in models_router._model_ops_inflight
+
+
+def test_reload_needs_admin(monkeypatch):
+    app = FastAPI()
+    app.include_router(am.router, prefix="/v1")
+    monkeypatch.setattr(am, "get_model_manager", lambda: FakeManager())
+    monkeypatch.delenv("YUNSHU_AUTH_TOKEN", raising=False)
+    monkeypatch.delenv("YUNSHU_AUTH_DISABLED", raising=False)
+    c = TestClient(app)
+    assert c.post("/v1/yunshu/models/org/a/reload").status_code == 401
+    monkeypatch.setenv("YUNSHU_AUTH_TOKEN", "tok")
+    assert c.post("/v1/yunshu/models/org/a/reload").status_code == 401
+    ok = c.post(
+        "/v1/yunshu/models/org/a/reload", headers={"Authorization": "Bearer tok"}
+    )
+    assert ok.status_code == 200
+
+
+def test_local_inventory_lists_a_model_served_from_an_explicit_path(env, monkeypatch):
+    """`serve -m /some/path` loads a model that is in neither the models dir nor the HF cache;
+    the console must still list it, marked loaded."""
+    client, _, _, tmp = env
+    ext = _model(
+        tmp / "elsewhere", "my-model", {"model_type": "qwen3"}, weights=b"w" * 128
+    )
+    monkeypatch.setattr("yunshu_cli.model.scan_hf_cache", lambda: [])
+    monkeypatch.setattr(am, "_inv_cache", None)
+    monkeypatch.setattr(
+        am,
+        "get_model_manager",
+        lambda: SimpleNamespace(
+            list_entries=lambda: [
+                SimpleNamespace(
+                    model_id="my-model", model_path=str(ext), is_loaded=True
+                )
+            ]
+        ),
+    )
+    j = client.get("/v1/yunshu/models/local").json()
+    row = next(m for m in j["models"] if m["id"] == "my-model")
+    assert row["loaded"] is True and row["source"] == "path"
+    assert row["size_bytes"] >= 128

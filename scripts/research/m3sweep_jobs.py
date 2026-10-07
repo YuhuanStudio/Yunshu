@@ -209,7 +209,14 @@ def write(path, d):
     Path(path).write_text(json.dumps(d, indent=1, ensure_ascii=False, default=str))
 
 
-def start_server(model, label, sets=()):
+def routes_online() -> bool:
+    """Route-check servers may reach the Hugging Face Hub (the download check fetches one README).
+    Set YUNSHU_ROUTES_OFFLINE=1 to keep them offline: that check then skips and the run reports
+    the download routes as unverified."""
+    return os.environ.get("YUNSHU_ROUTES_OFFLINE") != "1"
+
+
+def start_server(model, label, sets=(), online=False, token=None):
     from covaudit_session import Srv
 
     home = Path(os.environ.get("HOME", "/tmp")) / f"m3sweep-{label}"
@@ -218,7 +225,11 @@ def start_server(model, label, sets=()):
         os.environ["COVAUDIT_BIN"] = str(cand)
     log = home / "server.log"
     log.unlink(missing_ok=True)  # a stale log's load failures must not fail this server
-    srv = Srv(model, str(ROOT / "python"), home, log, list(sets))
+    if token:  # admin routes need the static token; the readiness probe presents it too
+        sets = [*sets, f"YUNSHU_AUTH_TOKEN={token}"]
+    srv = Srv(
+        model, str(ROOT / "python"), home, log, list(sets), online=online, token=token
+    )
     srv.wait_ready()
     return srv
 
@@ -701,13 +712,19 @@ def run_route_checks(ctx, needs, only, res, srv, tag=""):
         write(res["_out"], res)
 
 
+# The single-model server runs with a token: the admin routes (keys, logs, downloads, config)
+# are denied without one. Bare `ctx.http` calls carry it too (the multi server tests auth itself).
+ROUTES_MAIN_TOKEN = "routes-main-token-xyz"
+
+
 def routes_make_ctx(srv, token, kind, model_id=None):
     import anthropic
     import httpx
     import openai
     import route_checks as rc
 
-    http = httpx.Client(base_url=srv.url, timeout=300)
+    hdr = {"Authorization": f"Bearer {token}"} if token and kind != "multi" else {}
+    http = httpx.Client(base_url=srv.url, timeout=300, headers=hdr)
     return rc.Ctx(
         url=srv.url,
         token=token or "",
@@ -721,6 +738,8 @@ def routes_make_ctx(srv, token, kind, model_id=None):
             base_url=srv.url, api_key=token or "x", max_retries=0, timeout=300
         ),
         log_tail=srv.log_tail,
+        home=str(srv.home),
+        online=routes_online(),
     )
 
 
@@ -775,9 +794,15 @@ def cmd_routes(a):
         name = Path(model).name
         srv = None
         try:
-            srv = start_server(model, "routes", ["YUNSHU_VLM_APC_DISK=0"])
+            srv = start_server(
+                model,
+                "routes",
+                ["YUNSHU_VLM_APC_DISK=0"],
+                online=routes_online(),
+                token=ROUTES_MAIN_TOKEN,
+            )
             kind = "vlm" if "Qwen3.5" in model else "text"
-            ctx = routes_make_ctx(srv, "", kind)
+            ctx = routes_make_ctx(srv, ROUTES_MAIN_TOKEN, kind)
             run_route_checks(ctx, "main", only, res, srv, name)
             res["notes"][name] = ctx.notes
             if srv.proc.poll() is not None:
@@ -797,7 +822,7 @@ def cmd_routes(a):
         name = f"{needs}:{Path(model).name}"
         srv = None
         try:
-            srv = start_server(model, f"routes-{needs}", [])
+            srv = start_server(model, f"routes-{needs}", [], online=routes_online())
             ctx = routes_make_ctx(srv, "", needs)
             ctx.shared = shared
             if needs == "embed":
@@ -867,6 +892,7 @@ def cmd_routes(a):
                 ],
                 models_dir=str(mdir),
                 token=token,
+                online=routes_online(),
             )
             srv.wait_ready()
             ctx = routes_make_ctx(srv, token, "multi")

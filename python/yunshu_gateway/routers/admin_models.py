@@ -6,6 +6,7 @@
 - ``DELETE /v1/yunshu/downloads/{id}``   cancel (partial files stay; POST again resumes)
 - ``GET    /v1/yunshu/models/local``     models on disk (models dir + HF cache), registered or not
 - ``GET    /v1/yunshu/models/{id}/fit``  dry run of the load-time memory check
+- ``POST   /v1/yunshu/models/{id}/reload`` unload + load the same model (applies ``reload`` settings)
 
 Reads follow the inference endpoints' access; starting or cancelling a download needs the
 ``admin`` permission (a token when one is configured, otherwise denied).
@@ -25,10 +26,12 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
+from yunshu_control.audit_log import log_operation, resolve_actor
 from yunshu_engine import paths
 
 from .. import downloads as dl
 from ..engine import get_engine, get_model_manager
+from . import models as models_router
 from .models import _check_permission
 
 logger = logging.getLogger(__name__)
@@ -256,8 +259,24 @@ async def local_models(
     _check_permission(request, "can_infer")
 
     def build() -> dict[str, Any]:
-        rows = _scan_disk(refresh)
+        from yunshu_cli.model import _detect_model_type, _dir_size
+
+        rows = list(_scan_disk(refresh))
         loaded = _loaded_paths()
+        known = {str(Path(r["path"]).resolve()) for r in rows}
+        # A model started from an explicit path lives outside the models dir and the
+        # Hugging Face cache; it is still the model the console must show as loaded.
+        for path, (reg_id, _is_loaded) in loaded.items():
+            if path not in known and Path(path).is_dir():
+                rows.append(
+                    {
+                        "name": reg_id,
+                        "path": path,
+                        "type": _detect_model_type(Path(path)),
+                        "size": _dir_size(Path(path)),
+                        "source": "path",
+                    }
+                )
         models = [_describe(r, loaded) for r in rows]
         return {
             "models": models,
@@ -282,3 +301,92 @@ async def model_fit(model_id: str, request: Request) -> dict[str, Any]:
         return manager.fit_check(resolved)
     except KeyError:
         raise HTTPException(404, f"model '{model_id}' not registered") from None
+
+
+class ReloadRequest(BaseModel):
+    force: bool = Field(
+        default=False,
+        description="reload even while requests are running (they are torn down)",
+    )
+
+
+@router.post("/yunshu/models/{model_id:path}/reload")
+async def reload_model(
+    model_id: str, request: Request, body: ReloadRequest | None = None
+) -> dict[str, Any]:
+    """Unload and load the same model so ``reload`` settings (``needs_reload`` from
+    ``PATCH /v1/yunshu/config``) take effect. Refuses while the model has running
+    requests unless ``force``. Multi-model mode only; a single-engine server
+    restarts instead."""
+    _check_permission(request, "admin")
+    actor = resolve_actor(request)
+    force = bool(body and body.force)
+    manager = get_model_manager()
+    if manager is None:
+        raise HTTPException(
+            400,
+            "reload needs multi-model mode (--models-dir); restart the server to "
+            "apply reload settings (POST /v1/yunshu/service/restart)",
+        )
+    resolved = manager.resolve_model_id(model_id) or model_id
+    entry = manager.get_entry(resolved)
+    if entry is None:
+        raise HTTPException(404, f"model '{model_id}' not registered")
+    async with models_router._model_ops_lock:
+        if resolved in models_router._model_ops_inflight:
+            raise HTTPException(
+                409, f"Model '{model_id}' is already being loaded or unloaded"
+            )
+        models_router._model_ops_inflight.add(resolved)
+    t0 = time.monotonic()
+    try:
+        was_loaded = bool(entry.is_loaded)
+        if was_loaded:
+            if not force:
+                active = False
+                if entry.engine is not None:
+                    try:
+                        active = bool(entry.engine.has_active_requests())
+                    except Exception:
+                        active = True  # cannot prove it is idle
+                if active or entry.leases > 0:
+                    log_operation(
+                        "model_reload",
+                        model_id,
+                        "failure",
+                        actor=actor,
+                        detail="active_requests",
+                    )
+                    raise HTTPException(
+                        409,
+                        f"Cannot reload '{model_id}': requests are running. Wait for "
+                        "them or send force=true to tear them down.",
+                    )
+            if not await manager.unload_model(resolved, force=force):
+                raise HTTPException(
+                    409,
+                    f"Model '{model_id}' was not unloaded (it became active). Retry.",
+                )
+        try:
+            engine = await manager.get_engine(resolved)
+            if hasattr(engine, "is_running") and not engine.is_running:
+                await engine.start()
+        except Exception as e:
+            logger.error("Model reload failed: %s", e, exc_info=True)
+            log_operation(
+                "model_reload", model_id, "failure", actor=actor, detail=str(e)[:120]
+            )
+            raise HTTPException(
+                500, f"Model '{model_id}' was unloaded but loading it again failed: {e}"
+            ) from None
+        log_operation("model_reload", model_id, "success", actor=actor)
+        return {
+            "status": "reloaded",
+            "model": resolved,
+            "was_loaded": was_loaded,
+            "forced": force,
+            "elapsed_s": round(time.monotonic() - t0, 2),
+        }
+    finally:
+        async with models_router._model_ops_lock:
+            models_router._model_ops_inflight.discard(resolved)
