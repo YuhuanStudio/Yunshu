@@ -67,10 +67,10 @@ def make_rows(job, engaged=None, **drop):
 def test_plan_counts_and_labels():
     jobs = cells()
     # per engine and rep: 6 decode groups + 1 concurrency; needles (3 groups) only in rep 0
-    assert len(jobs) == 8 * (3 * 7 + 3)
+    assert len(jobs) == 7 * (3 * 7 + 3)
     labels = [j.label for j in jobs]
     assert len(set(labels)) == len(labels)
-    assert all(label.startswith("bench014-") for label in labels)
+    assert all(label.startswith("snapshot014-") for label in labels)
     assert all(j.out != Path() for j in jobs)
 
 
@@ -104,7 +104,7 @@ def test_decode_job_requests_2048_token_replies_and_never_sets_a_draft_override(
     assert a[a.index("--decode-tokens") + 1] == "2048" and "--long-ask" in a
     assert "YUNSHU_VLM_DRAFT" not in j.env and "YUNSHU_VLM_DRAFT" not in " ".join(a)
     assert j.env["TFB_YUNSHU_SRC"] == "/t/new/python"
-    base = next(j for j in cells() if j.engine == "yunshu-base")
+    base = bs.plan_cells(["yunshu-base"], 1, OUT, TREES)[0]
     assert base.env["TFB_YUNSHU_SRC"] == "/t/base/python"
 
 
@@ -123,7 +123,7 @@ def test_timeouts_cover_the_estimate_and_stall_covers_the_cold_prefill():
 def test_submit_args_priority_label_quiet_and_declared_output():
     j = cells()[0]
     args = bs.submit_args(j)
-    assert "--quiet" in args and "--priority=-1" in args and "--expect-complete" in args
+    assert "--quiet" in args and "--priority=0" in args and "--expect-complete" in args
     assert args[args.index("--label") + 1] == j.label
     assert args[args.index("--out") + 1] == str(j.out)
     assert args[args.index("--mem-gb") + 1] == str(j.mem_gb)
@@ -320,7 +320,8 @@ def test_dry_run_plans_every_job_without_submitting(capsys, monkeypatch):
     out = capsys.readouterr().out
     print(out)
     assert (
-        "bench014-yunshu-new-d128k-prose-r2" in out and "bench014-llamacpp-pilot" in out
+        "snapshot014-yunshu-new-d128k-prose-r2" in out
+        and "snapshot014-llamacpp-pilot" in out
     )
     assert "total" in out and "GPU h" in out
 
@@ -349,3 +350,27 @@ def test_tfbench_rows_carry_the_meta_fields(tmp_path, monkeypatch):
         and row["drafter"] == be.DRAFTER
         and row["version"] == "0.1.4"
     )
+
+
+def test_exact_prompt_budget_and_instruction():
+    from snapshot_prompts import assert_prompt, exact_prompt
+    from tokenizers import Tokenizer
+    from tokenizers.models import WordLevel
+    from tokenizers.pre_tokenizers import Whitespace
+
+    tok = Tokenizer(
+        WordLevel({"[UNK]": 0, "source": 1, "write": 2, "a": 3}, unk_token="[UNK]")
+    )
+    tok.pre_tokenizer = Whitespace()
+    result = exact_prompt("source " * 140000, 131072, " write", tok)
+    assert "write" in result
+    assert assert_prompt(result, 131072, tok) == 131072
+    with pytest.raises(AssertionError, match="expected=131072"):
+        assert_prompt("source", 131072, tok)
+
+
+def test_snapshot_pilot_is_not_a_timing_job():
+    job = bs.plan_pilots(["mlxlm"], OUT, TREES)[0]
+    assert "--quiet" not in bs.submit_args(job)
+    assert job.env["GPUQ_OWNER"] == "snapshot014"
+    assert job.env["TFB_EXACT_PROMPTS"] == "1"

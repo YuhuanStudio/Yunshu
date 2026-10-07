@@ -39,9 +39,9 @@ AGENTBENCH = str(MAIN / "scripts/dev/agentbench")
 TFBENCH = str(HERE / "tfbench.py")
 PY = be.MAIN_PY
 BUILD = Path("/Volumes/P5Plus/yunshu-build/bench014")
-DEFAULT_OUT = MAIN / "docs/research/bench014/runs"
-PRIORITY = -1
-LABEL_PREFIX = "bench014"
+DEFAULT_OUT = Path(__file__).resolve().parents[2] / "docs/research/snapshot014/runs"
+PRIORITY = 0
+LABEL_PREFIX = "snapshot014"
 
 CTXS = (1024, 8192, 32768, 65536, 131072)
 KINDS = ("prose", "code")
@@ -51,7 +51,6 @@ NEEDLES = 10
 PHASES = ("cold", "warm", "turn2")
 ENGINE_ORDER = (
     "yunshu-new",
-    "yunshu-base",
     "tf-new",
     "splash",
     "omlx",
@@ -323,7 +322,14 @@ def plan_pilots(engines, outdir: Path, trees: dict) -> list[Job]:
 
 
 def job_env(engine: str, trees: dict) -> dict:
-    env = {"TFB_OUT": str(BUILD / "work"), "TFB_PORT_LAST": "18999"}
+    env = {
+        "TFB_OUT": str(BUILD / "work"),
+        "TFB_PORT_LAST": "18999",
+        "TFB_WORK": "/Volumes/P5Plus/yunshu-build/snapshot014/corpus",
+        "TFB_EXACT_PROMPTS": "1",
+        "GPUQ_OWNER": "snapshot014",
+        "GPUQ_DIR": "/Volumes/P5Plus/yunshu-gpuq",
+    }
     if be.ENGINES[engine].kind == "yunshu":
         src = trees.get(engine)
         if src:
@@ -431,7 +437,7 @@ def submit_args(job: Job) -> list[str]:
         f"--priority={PRIORITY}",
         "--mem-gb",
         str(job.mem_gb),
-        "--quiet",
+        *(["--quiet"] if job.stage != "pilot" else []),
         "--out",
         str(job.out),
         "--expect-complete",
@@ -862,7 +868,7 @@ def main(argv=None) -> int:
     ap.add_argument("--needle-reps", type=int, default=1)
     ap.add_argument("--out", type=Path, default=DEFAULT_OUT)
     ap.add_argument(
-        "--new-ref", default="main", help="the final 0.1.4 sha (verify tree)"
+        "--new-ref", default="v0.1.4", help="released 0.1.4 tag (pinned tree)"
     )
     ap.add_argument("--base-ref", default="v0.1.3")
     ap.add_argument("--agents", default="claude,opencode")

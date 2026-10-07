@@ -52,7 +52,7 @@ ROOT = Path("/Users/yuhuan/Documents/YuhuanStudio/Yunshu")
 RUNS = ROOT / "docs/research/runs/2026-09-30-agtraffic/artifacts"
 BODIES = RUNS / "cap-opencode-fix-cart-discount-r1/bodies"
 BODIES2 = RUNS / "cap-opencode-polyglot-wordy-r1/bodies"
-WORK = Path("/Volumes/P5Plus/yunshu-build/tfnew")
+WORK = Path(os.environ.get("TFB_WORK", "/Volumes/P5Plus/yunshu-build/tfnew"))
 # Server homes and logs go here (prompts stay in WORK); lets reruns keep their data apart.
 OUT = Path(os.environ.get("TFB_OUT", str(WORK)))
 
@@ -130,7 +130,9 @@ class Srv:
             cmd = list(self.launch.cmd)
             if bench_engines.ENGINES[engine].kind == "yunshu":
                 if not YUNSHU_SRC:
-                    raise RuntimeError("TFB_YUNSHU_SRC (pinned tree python/) is required")
+                    raise RuntimeError(
+                        "TFB_YUNSHU_SRC (pinned tree python/) is required"
+                    )
                 env["PYTHONPATH"] = YUNSHU_SRC
                 cmd[0] = own_venv_bin(YUNSHU_SRC, "yunshu") or cmd[0]
         elif engine == "yunshu":
@@ -366,6 +368,18 @@ def load_prompt(name):
     return (WORK / "prompts" / f"{name}.txt").read_text()
 
 
+def decode_prompt(kind, ctx, long_ask):
+    text = load_prompt(f"{kind}-{ctx}")
+    if os.environ.get("TFB_EXACT_PROMPTS") == "1":
+        from snapshot_prompts import assert_prompt
+
+        assert_prompt(text, ctx)
+        if long_ask and LONG_ASK not in text:
+            raise AssertionError("exact prompt lacks LONG_ASK")
+        return text
+    return text + (LONG_ASK if long_ask else "")
+
+
 def make_prompt(kind, ntok, salt):
     files = corpus(kind)
     cpt = 4.0 if kind == "prose" else 3.2
@@ -489,7 +503,7 @@ def part_decode(s, out, a):
             text = (
                 "Write a short example and explain it."
                 if a.smoke
-                else load_prompt(f"{kind}-{ctx}") + (LONG_ASK if a.long_ask else "")
+                else decode_prompt(kind, ctx, a.long_ask)
             )
             reply = ""
             for phase in ("cold", "warm", "turn2"):
@@ -511,7 +525,11 @@ def part_decode(s, out, a):
                 r["text"] = r.pop("_text")
                 r["rep4"] = ngram_repeat(r["text"])
                 emit(out, part="decode", ctx=ctx, kind=kind, phase=phase, **r)
-            if a.engine in bench_engines.TF_ENGINES and ctx == 1024:
+            if (
+                a.engine in bench_engines.TF_ENGINES
+                and ctx == 1024
+                and os.environ.get("TFB_EXACT_PROMPTS") != "1"
+            ):
                 r = send(s.url, req(s.model, text, n_dec, extra={"draft": False}))
                 r["text"] = r.pop("_text")
                 emit(out, part="decode", ctx=ctx, kind=kind, phase="specoff", **r)
@@ -748,7 +766,9 @@ def parse_args(argv=None):
         default=256,
         help="reply length of decode cells; a cell that does not end finish=length at exactly N is an error",
     )
-    ap.add_argument("--conc-ns", default="", help="concurrency levels, e.g. 2,4 (default 2,4,8)")
+    ap.add_argument(
+        "--conc-ns", default="", help="concurrency levels, e.g. 2,4 (default 2,4,8)"
+    )
     ap.add_argument("--conc-trials", type=int, default=2)
     ap.add_argument(
         "--ctx-tokens",
@@ -756,9 +776,14 @@ def parse_args(argv=None):
         default=140000,
         help="context window to start engines that need one (llama.cpp -c)",
     )
-    ap.add_argument("--parallel", type=int, default=1, help="server slots (llama.cpp -np)")
     ap.add_argument(
-        "--idle-s", type=float, default=30.0, help="pause before the idle footprint sample"
+        "--parallel", type=int, default=1, help="server slots (llama.cpp -np)"
+    )
+    ap.add_argument(
+        "--idle-s",
+        type=float,
+        default=30.0,
+        help="pause before the idle footprint sample",
     )
     ap.add_argument("--dry-run", action="store_true")
     args = list(sys.argv[1:] if argv is None else argv)
@@ -781,7 +806,7 @@ def main():
         if a.part == "decode" and not a.smoke:
             for ctx in a.only_ctx or [1024, 8192, 32768]:
                 for kind in a.only_kind or ("prose", "code"):
-                    load_prompt(f"{kind}-{ctx}")
+                    decode_prompt(kind, ctx, a.long_ask)
         elif a.part in ("conc", "agent", "ca"):
             for directory in (BODIES, BODIES2):
                 if not list(directory.glob("*-req.json")):
