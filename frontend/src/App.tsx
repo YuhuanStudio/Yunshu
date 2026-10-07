@@ -219,7 +219,7 @@ export default function App() {
   }
   return (
     <YunUIProvider adapters={adapters}>
-      <div className="h-dvh overflow-hidden bg-background">
+      <div className="h-dvh overflow-hidden bg-(--bg-window)">
         <Sidebar
           appName="Yunshu"
           ariaLabel="控制台導覽"
