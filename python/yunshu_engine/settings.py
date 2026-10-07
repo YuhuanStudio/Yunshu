@@ -250,9 +250,10 @@ _add("YUNSHU_MCP_CONFIG", "path", None, "MCP client config file (JSON/YAML) list
 _add("YUNSHU_MCP_SERVERS", "json", None, "MCP tool servers as a JSON array (alternative to YUNSHU_MCP_CONFIG).", "mcp")
 
 # ── server-side tools (web search / web fetch / MCP connector) ──────────
-_add("YUNSHU_WEB_SEARCH_PROVIDER", "enum", "auto", "Search backend. Auto runs lightweight DDG, Wikipedia, Mwmbl and configured keyed providers in parallel with health backoff and RRF. SearXNG is optional. Queries leave the machine; none disables search.", "server-tools", choices=("auto", "none", "searxng", "brave", "tavily", "exa", "serper", "perplexity", "ddg_html", "wikipedia", "mwmbl"))
+_add("YUNSHU_WEB_SEARCH_PROVIDER", "enum", "auto", "Search backend. Auto runs lightweight DDG, Wikipedia and configured keyed providers (Mwmbl is an explicit noncommercial opt-in) in parallel with health backoff and RRF. SearXNG is optional. Queries leave the machine; none disables search.", "server-tools", choices=("auto", "none", "searxng", "brave", "tavily", "exa", "serper", "perplexity", "ddg_html", "wikipedia", "mwmbl"))
 _add("YUNSHU_WEB_SEARCH_PROVIDER_TIMEOUT", "float", 1.0, "Per-provider metasearch deadline in seconds; slow providers cannot block the whole query.", "server-tools", minimum=0.1)
 _add("YUNSHU_WEB_SEARCH_HEALTH_FILE", "path", "~/.yunshu/cache/websearch-health.json", "Small query-free provider health snapshot read by yunshu config. No SERPs or credentials are stored.", "server-tools")
+_add("YUNSHU_WEB_MWMBL", "bool", False, "Opt in to Mwmbl's open small-web index in auto metasearch. Dataset is CC-BY-NC-SA 4.0 (noncommercial, attribution/share-alike); code is not vendored. Explicit provider=mwmbl also opts in.", "server-tools")
 _add("YUNSHU_WEB_KEYLESS", "bool", True, "Allow keyless DuckDuckGo (best effort; may block) and Wikipedia. Query text and IP leave the machine.", "server-tools")
 _add("YUNSHU_SERPER_API_KEY", "str", None, "Serper Google SERP API key.", "server-tools", secret=True)
 _add("YUNSHU_PERPLEXITY_API_KEY", "str", None, "Perplexity Search API key (raw results, not Sonar).", "server-tools", secret=True)

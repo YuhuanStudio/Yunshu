@@ -60,7 +60,7 @@ PROVIDER_ORDER = (
     "mwmbl",
 )
 logger = logging.getLogger(__name__)
-PRIVACY_NOTICE = "Web search sends query text off-device. Keyless mode uses DuckDuckGo (best effort), Wikipedia and Mwmbl; fetched pages contact their origins without cookies. Set YUNSHU_WEB_SEARCH_PROVIDER=none to disable."
+PRIVACY_NOTICE = "Web search sends query text off-device. Keyless mode uses DuckDuckGo (best effort) and Wikipedia; Mwmbl is opt-in (noncommercial CC-BY-NC-SA data); fetched pages contact their origins without cookies. Set YUNSHU_WEB_SEARCH_PROVIDER=none to disable."
 
 SETUP_HINT = (
     "Server-side web search is off. Enable built-in metasearch with "
@@ -599,6 +599,12 @@ def get_provider() -> SearchProvider | None:
             if url := settings.get("YUNSHU_SEARXNG_URL"):
                 providers.append(SearXNG(url))
         elif name in ("ddg_html", "wikipedia", "mwmbl"):
+            if (
+                name == "mwmbl"
+                and want == "auto"
+                and not settings.get("YUNSHU_WEB_MWMBL")
+            ):
+                continue
             if settings.get("YUNSHU_WEB_KEYLESS"):
                 providers.append(
                     {"ddg_html": DuckDuckGo, "wikipedia": Wikipedia, "mwmbl": Mwmbl}[

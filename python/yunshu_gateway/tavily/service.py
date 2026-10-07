@@ -108,6 +108,10 @@ def country_code(country):
         "north korea": "Korea, Democratic People's Republic of",
         "taiwan": "Taiwan, Province of China",
         "czech republic": "Czechia",
+        "brunei": "Brunei Darussalam",
+        "cape verde": "Cabo Verde",
+        "russia": "Russian Federation",
+        "turkey": "Türkiye",
     }
     try:
         return pycountry.countries.lookup(

@@ -222,9 +222,10 @@ internal ones, `--json` prints JSON, `--config FILE` includes a config file.
 
 | Setting | Type | Default | Description |
 |---|---|---|---|
-| `YUNSHU_WEB_SEARCH_PROVIDER` | `auto` \| `none` \| `searxng` \| `brave` \| `tavily` \| `exa` \| `serper` \| `perplexity` \| `ddg_html` \| `wikipedia` \| `mwmbl` | auto | Search backend. Auto runs lightweight DDG, Wikipedia, Mwmbl and configured keyed providers in parallel with health backoff and RRF. SearXNG is optional. Queries leave the machine; none disables search. |
+| `YUNSHU_WEB_SEARCH_PROVIDER` | `auto` \| `none` \| `searxng` \| `brave` \| `tavily` \| `exa` \| `serper` \| `perplexity` \| `ddg_html` \| `wikipedia` \| `mwmbl` | auto | Search backend. Auto runs lightweight DDG, Wikipedia and configured keyed providers (Mwmbl is an explicit noncommercial opt-in) in parallel with health backoff and RRF. SearXNG is optional. Queries leave the machine; none disables search. |
 | `YUNSHU_WEB_SEARCH_PROVIDER_TIMEOUT` | float | 1.0 | Per-provider metasearch deadline in seconds; slow providers cannot block the whole query. |
 | `YUNSHU_WEB_SEARCH_HEALTH_FILE` | path | ~/.yunshu/cache/websearch-health.json | Small query-free provider health snapshot read by yunshu config. No SERPs or credentials are stored. |
+| `YUNSHU_WEB_MWMBL` | bool | off | Opt in to Mwmbl's open small-web index in auto metasearch. Dataset is CC-BY-NC-SA 4.0 (noncommercial, attribution/share-alike); code is not vendored. Explicit provider=mwmbl also opts in. |
 | `YUNSHU_WEB_KEYLESS` | bool | on | Allow keyless DuckDuckGo (best effort; may block) and Wikipedia. Query text and IP leave the machine. |
 | `YUNSHU_SERPER_API_KEY` | str | unset | Serper Google SERP API key. |
 | `YUNSHU_PERPLEXITY_API_KEY` | str | unset | Perplexity Search API key (raw results, not Sonar). |

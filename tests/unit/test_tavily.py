@@ -605,3 +605,20 @@ async def test_auto_topic_respects_explicit_country(srv):
         SearchRequest(query="latest news today", country="taiwan", auto_parameters=True)
     )
     assert result["auto_parameters"]["topic"] == "general"
+
+
+@pytest.mark.parametrize(
+    "country,code",
+    [
+        ("brunei", "bn"),
+        ("cape verde", "cv"),
+        ("russia", "ru"),
+        ("turkey", "tr"),
+        ("taiwan", "tw"),
+        ("south korea", "kr"),
+    ],
+)
+def test_country_provider_codes_match_tavily_names(country, code):
+    from yunshu_gateway.tavily.service import country_code
+
+    assert country_code(country) == code

@@ -129,3 +129,18 @@ async def test_ddg_legitimate_empty_is_distinct_from_parser_failure():
     ) as client:
         with pytest.raises(search.SearchError, match="layout"):
             await search.DuckDuckGo().search("q", limit=5, client=client)
+
+
+def test_mwmbl_is_explicit_opt_in(monkeypatch):
+    search.set_provider_for_tests(None)
+    monkeypatch.setenv("YUNSHU_WEB_SEARCH_PROVIDER", "auto")
+    monkeypatch.setenv("YUNSHU_WEB_KEYLESS", "1")
+    monkeypatch.setenv("YUNSHU_WEB_MWMBL", "0")
+    assert "mwmbl" not in {
+        provider.name for provider in search.get_provider().providers
+    }
+    monkeypatch.setenv("YUNSHU_WEB_MWMBL", "1")
+    assert "mwmbl" in {provider.name for provider in search.get_provider().providers}
+    monkeypatch.setenv("YUNSHU_WEB_MWMBL", "0")
+    monkeypatch.setenv("YUNSHU_WEB_SEARCH_PROVIDER", "mwmbl")
+    assert search.get_provider().name == "mwmbl"

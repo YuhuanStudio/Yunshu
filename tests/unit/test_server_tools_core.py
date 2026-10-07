@@ -315,6 +315,7 @@ async def test_provider_http_errors_map_to_spec_codes():
 
 def test_provider_selection(monkeypatch):
     search.set_provider_for_tests(None)
+    monkeypatch.setenv("YUNSHU_WEB_MWMBL", "0")
     for k in (
         "YUNSHU_SEARXNG_URL",
         "YUNSHU_BRAVE_API_KEY",
@@ -328,7 +329,6 @@ def test_provider_selection(monkeypatch):
     assert {p.name for p in search.get_provider().providers} == {
         "ddg_html",
         "wikipedia",
-        "mwmbl",
     }
     monkeypatch.setenv("YUNSHU_EXA_API_KEY", "e")
     assert search.get_provider().name == "metasearch"

@@ -28,12 +28,17 @@ Usage is currently returned even when `include_usage` is false, to keep local ac
 
 ## Retrieval and latency
 
-The SERP remains a provider. Built-in metasearch runs direct DDG HTML, Wikipedia and Mwmbl, plus configured
+The SERP remains a provider. Built-in metasearch runs direct DDG HTML and Wikipedia, plus configured
 keyed sources, in parallel; reciprocal-rank fusion deduplicates candidates. DDG is best effort and can block
 automation. SearXNG is optional and requires an explicit instance, never required or recommended. Query text
 leaves the machine to these providers. `yunshu config` shows the most recent query-free provider health snapshot;
 `/tavily/providers` shows live health. Three consecutive failures trigger bounded exponential backoff; a
 half-open probe restores a recovered source. Captcha/rate limits back off immediately.
+
+Mwmbl is available via `YUNSHU_WEB_MWMBL=1` or explicit `provider=mwmbl`. Its dataset is
+CC-BY-NC-SA 4.0; retain attribution and observe the noncommercial/share-alike terms
+([official terms](https://api.mwmbl.org/static/terms-and-conditions/)). It is not silently enabled for
+commercial/general use. No Mwmbl implementation code is copied.
 
 Plain search uses BM25, provider priors, exact spans and deduplication, with **no LLM calls**. Each excerpt is
 at most 500 characters; excerpts join with ` [...] `. Depth controls fetch breadth and the total retrieval

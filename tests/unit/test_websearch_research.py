@@ -32,6 +32,7 @@ def isolated(monkeypatch, tmp_path):
     monkeypatch.delenv("YUNSHU_SEARXNG_URL", raising=False)
     monkeypatch.setenv("YUNSHU_WEB_SEARCH_PROVIDER", "auto")
     monkeypatch.setenv("YUNSHU_WEB_KEYLESS", "1")
+    monkeypatch.setenv("YUNSHU_WEB_MWMBL", "1")
     monkeypatch.setenv("YUNSHU_WEB_RESEARCH", "0")
     monkeypatch.setenv("YUNSHU_WEB_SEARCH_HEALTH_FILE", str(tmp_path / "health.json"))
     from yunshu_gateway.server_tools.metasearch import _health
