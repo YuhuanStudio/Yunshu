@@ -381,17 +381,9 @@ async function install(page: Page, w: World) {
   });
 }
 
-/** The real route once the shell has it, the dev harness before that. */
 async function openPage(page: Page, name: "downloads" | "cache") {
   await page.goto(`/console/#/${name}`, { waitUntil: "domcontentloaded" });
-  try {
-    await page.getByTestId(name).waitFor({ timeout: 2500 });
-  } catch {
-    await page.goto(`/console/pages-harness.html#/${name}`, {
-      waitUntil: "domcontentloaded",
-    });
-    await page.getByTestId(name).waitFor();
-  }
+  await page.getByTestId(name).waitFor();
 }
 const openModels = async (page: Page, sub = "") => {
   await page.goto(`/console/#/models${sub}`, { waitUntil: "domcontentloaded" });

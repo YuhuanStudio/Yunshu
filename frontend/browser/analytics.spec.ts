@@ -98,7 +98,11 @@ function installStatusFixture(page: Page, holdFirst = false) {
     const url = new URL(route.request().url());
     if (url.pathname !== "/v1/yunshu/status") {
       // Engine history and the memory ledger are optional; these fixtures model an older server.
-      if (!/^\/v1\/yunshu\/(history|memory)$/.test(url.pathname))
+      if (
+        !/^\/v1\/yunshu\/(history|memory|downloads|requests\/recent)$/.test(
+          url.pathname,
+        )
+      )
         unexpected.push(`${route.request().method()} ${url.pathname}`);
       await route.fulfill({
         status: 404,

@@ -25,7 +25,7 @@ type RequestFixture = {
 
 /** Engine routes the console treats as optional (history, memory ledger, effective config, recent requests). */
 const OPTIONAL_ROUTE =
-  /\/v1\/yunshu\/(history|memory|config|requests\/recent)(\?|$)/;
+  /\/v1\/yunshu\/(history|memory|config|downloads|service|cors|keys|requests\/recent)(\?|$)/;
 
 function createApiFixture() {
   const token = "playwright-only-token";
@@ -369,7 +369,7 @@ async function installDiagnostics(
       OPTIONAL_ROUTE.test(message.location().url)
     )
       return;
-    unexpectedConsole.push(message.text());
+    unexpectedConsole.push(`${message.text()} ${message.location().url}`);
   });
   page.on("requestfailed", (request) => {
     const path = new URL(request.url()).pathname;
