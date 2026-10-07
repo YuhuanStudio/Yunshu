@@ -1,4 +1,6 @@
 import { Card, Progress, StatusIndicator } from "@yuhuanowo/yunui";
+import { StatCard } from "@yuhuanowo/yunui/patterns";
+import { BookOpenText, Zap } from "lucide-react";
 import type { EngineStatus } from "./api";
 import {
   activity,
@@ -12,7 +14,7 @@ import {
   type Headline,
   type Totals,
 } from "./engineView";
-import { livePrefillTps, type SeriesPoint } from "./series";
+import { livePrefillTps } from "./series";
 import { clock, elapsed, fixed, number, Slot } from "./ui";
 
 const order: ActivityPhase[] = ["idle", "queued", "prefill", "decode"];
@@ -68,217 +70,115 @@ export function StateStrip({ status }: { status: EngineStatus | null }) {
     }
   }
   return (
-    <Card className="p-4" data-testid="state-strip">
-      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
-        <ul className="flex items-center gap-1" aria-label="引擎階段">
-          {order.map((id) => {
-            const lit = !!a && a.lit.includes(id);
-            return (
-              <li
-                key={id}
-                data-phase={id}
-                data-lit={lit ? "true" : "false"}
-                aria-current={a?.phase === id ? "true" : undefined}
-                className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs transition-opacity duration-150 ${lit ? "bg-(--bg-elevated) text-foreground" : "text-muted-foreground opacity-50"}`}
-              >
-                <StatusIndicator status={dot(id, lit)} />
-                {phaseLabels[id]}
-                {id !== "idle" && (
-                  <Slot ch={1} align="right" className="tabular-nums">
-                    {lit ? countOf(id) : ""}
-                  </Slot>
-                )}
-              </li>
-            );
-          })}
-        </ul>
-        <Slot
-          ch={22}
-          align="right"
-          className="min-w-0 truncate text-xs text-muted-foreground"
-        >
-          {right}
-        </Slot>
-      </div>
+    <Card
+      className="relative flex flex-wrap items-center gap-x-4 gap-y-1 overflow-hidden px-4 py-2"
+      data-testid="state-strip"
+    >
+      <ul className="flex shrink-0 items-center gap-0.5" aria-label="引擎階段">
+        {order.map((id) => {
+          const lit = !!a && a.lit.includes(id);
+          return (
+            <li
+              key={id}
+              data-phase={id}
+              data-lit={lit ? "true" : "false"}
+              aria-current={a?.phase === id ? "true" : undefined}
+              className={`inline-flex h-6 items-center gap-1.5 rounded-md px-2 text-xs transition-opacity duration-150 ${lit ? "bg-(--bg-elevated) text-foreground" : "text-muted-foreground opacity-50"}`}
+            >
+              <StatusIndicator status={dot(id, lit)} />
+              {phaseLabels[id]}
+              {id !== "idle" && (
+                <Slot ch={1} align="right" className="tabular-nums">
+                  {lit ? countOf(id) : ""}
+                </Slot>
+              )}
+            </li>
+          );
+        })}
+      </ul>
       <p
-        className="mt-3 h-5 truncate text-sm tabular-nums"
+        className="h-6 min-w-0 flex-1 truncate text-sm leading-6 tabular-nums"
         data-testid="state-strip-detail"
       >
         {left}
       </p>
-      <Progress
-        className="mt-2 h-1.5"
-        value={progress == null ? 0 : Math.max(0, Math.min(100, progress))}
-        label={
-          progress == null
-            ? "預填進度，尚無進度回報"
-            : `預填 ${number(progress, 0)}%`
-        }
-      />
+      <Slot
+        ch={22}
+        align="right"
+        className="min-w-0 truncate text-xs text-muted-foreground"
+      >
+        {right}
+      </Slot>
+      {/* The bar belongs to prefill only; it sits on the card edge, so it never moves the row. */}
+      {a?.phase === "prefill" && (
+        <Progress
+          className="absolute inset-x-0 bottom-0 h-0.5 rounded-none"
+          value={progress == null ? 0 : Math.max(0, Math.min(100, progress))}
+          label={
+            progress == null
+              ? "預填進度，尚無進度回報"
+              : `預填 ${number(progress, 0)}%`
+          }
+        />
+      )}
     </Card>
   );
 }
 
 /**
- * Two series on one time axis and one value scale, broken wherever a sample is
- * missing. Idle stretches are gaps, not zeros.
+ * Decode and prefill as two stat cards of the same grid. Each number carries its
+ * own label (即時合計 / 最近一筆); the window mean is a separate, labelled line.
  */
-export function PairSparkline({
-  points,
-  label,
-}: {
-  points: readonly SeriesPoint[];
-  label: string;
-}) {
-  const W = 200,
-    H = 40;
-  const t0 = points.length ? points[0].at : 0;
-  const t1 = points.length ? points[points.length - 1].at : 1;
-  const span = Math.max(1, t1 - t0);
-  let max = 0;
-  for (const p of points) {
-    if (p.decode != null && p.decode > max) max = p.decode;
-    if (p.prefill != null && p.prefill > max) max = p.prefill;
-  }
-  const path = (pick: (p: SeriesPoint) => number | null) => {
-    let d = "";
-    let open = false;
-    for (const p of points) {
-      const v = pick(p);
-      if (v == null || max <= 0) {
-        open = false;
-        continue;
-      }
-      const x = ((p.at - t0) / span) * W;
-      const y = H - 2 - (v / max) * (H - 4);
-      d += `${open ? "L" : "M"}${x.toFixed(1)} ${y.toFixed(1)} `;
-      open = true;
-    }
-    return d;
-  };
-  const decode = path((p) => p.decode),
-    prefill = path((p) => p.prefill);
-  return (
-    <svg
-      viewBox={`0 0 ${W} ${H}`}
-      preserveAspectRatio="none"
-      role="img"
-      aria-label={label}
-      className="h-10 w-full"
-      data-testid="speed-sparkline"
-    >
-      <line
-        x1="0"
-        x2={W}
-        y1={H - 1}
-        y2={H - 1}
-        stroke="currentColor"
-        strokeOpacity=".15"
-        vectorEffect="non-scaling-stroke"
-      />
-      {prefill && (
-        <path
-          d={prefill}
-          fill="none"
-          stroke="currentColor"
-          strokeOpacity=".4"
-          strokeWidth="1.5"
-          vectorEffect="non-scaling-stroke"
-          className="text-muted-foreground"
-        />
-      )}
-      {decode && (
-        <path
-          d={decode}
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="1.5"
-          vectorEffect="non-scaling-stroke"
-          className="text-foreground"
-        />
-      )}
-    </svg>
-  );
-}
-
-function Figure({
-  term,
-  headline,
-  windowMean,
-  windowText,
-  testId,
-}: {
-  term: string;
-  headline: Headline;
-  windowMean: number | null;
-  windowText: string;
-  testId: string;
-}) {
-  return (
-    <div className="min-w-0" data-testid={testId}>
-      <p className="text-xs text-muted-foreground">{term}</p>
-      <p className="mt-1 yunui-stat-value text-2xl tabular-nums">
-        <Slot ch={6}>
-          {headline.value == null ? "—" : fixed(headline.value)}
-        </Slot>
-        <span className="ml-1.5 text-xs font-normal text-muted-foreground">
-          tok/s
-        </span>
-      </p>
-      <p
-        className="mt-0.5 truncate text-xs text-muted-foreground"
-        data-testid={testId + "-label"}
-      >
-        <span className="text-foreground">{headline.label}</span>
-        {headline.note ? ` · ${headline.note}` : ""}
-      </p>
-      <p className="truncate text-xs text-muted-foreground">
-        {windowText} {windowMean == null ? "—" : fixed(windowMean)} tok/s
-      </p>
-    </div>
-  );
-}
-
-/**
- * Decode and prefill side by side in one card with one shared sparkline. Each
- * number carries its own label (即時合計 / 最近一筆); window means are a
- * separate, labelled line, never the headline.
- */
-export function SpeedPair({
-  status,
-  points,
-}: {
-  status: EngineStatus;
-  points: readonly SeriesPoint[];
-}) {
+export function SpeedPair({ status }: { status: EngineStatus }) {
   const f = decodeFigures(status);
   const decode = decodeHeadline(status);
   const prefill = prefillHeadline(status, livePrefillTps(status));
   const windowText = speedTerms.window(f.windowS);
+  const card = (
+    term: string,
+    icon: typeof Zap,
+    headline: Headline,
+    windowMean: number | null,
+    testId: string,
+  ) => (
+    <div className="contents" data-testid={testId}>
+      <StatCard
+        compact
+        valueFirst
+        icon={icon}
+        label={term}
+        value={
+          <>
+            {headline.value == null ? "—" : fixed(headline.value)}
+            <span className="ml-1 text-xs font-normal text-muted-foreground">
+              tok/s
+            </span>
+          </>
+        }
+        subtext={
+          <>
+            <span className="block truncate" data-testid={testId + "-label"}>
+              <span className="text-foreground">{headline.label}</span>
+              {headline.note ? ` · ${headline.note}` : ""}
+            </span>
+            <span className="block truncate">
+              {windowText} {windowMean == null ? "—" : fixed(windowMean)} tok/s
+            </span>
+          </>
+        }
+      />
+    </div>
+  );
   return (
-    <div className="card p-4" data-testid="speed-pair">
-      <div className="grid grid-cols-2 gap-4">
-        <Figure
-          term="解碼"
-          headline={decode}
-          windowMean={f.windowMean}
-          windowText={windowText}
-          testId="speed-decode"
-        />
-        <Figure
-          term="預填"
-          headline={prefill}
-          windowMean={status.throughput.mean_prefill_tps}
-          windowText={windowText}
-          testId="speed-prefill"
-        />
-      </div>
-      <div className="mt-3">
-        <PairSparkline
-          points={points}
-          label={`${windowLabel(status)}內解碼與預填的即時合計速度走勢，空白處代表當時沒有請求`}
-        />
-      </div>
+    <div className="contents" data-testid="speed-pair">
+      {card("解碼", Zap, decode, f.windowMean, "speed-decode")}
+      {card(
+        "預填",
+        BookOpenText,
+        prefill,
+        status.throughput.mean_prefill_tps,
+        "speed-prefill",
+      )}
     </div>
   );
 }

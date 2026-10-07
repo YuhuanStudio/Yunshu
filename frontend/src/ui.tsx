@@ -87,19 +87,22 @@ export function ConnectionState({
   configure: () => void;
 }) {
   if (engine.phase === "online") return null;
-  const title = offlineCause(engine.phase, engine.errorStatus).title;
+  const cause = offlineCause(engine.phase, engine.errorStatus);
+  const description = [
+    cause.hint,
+    engine.phase === "offline" ? "每 3 秒自動重試。" : "",
+    engine.updatedAt
+      ? `最後成功連線 ${clock(engine.updatedAt)}，下方保留上次資料。`
+      : "",
+  ]
+    .filter(Boolean)
+    .join("");
   return (
     <div role="status">
       <Banner
         tone={engine.phase === "connecting" ? "neutral" : "warning"}
-        title={title}
-        description={`${engine.error ?? "正在取得服務狀態…"}${
-          engine.phase === "offline" ? " · 每 3 秒自動重試" : ""
-        }${
-          engine.updatedAt
-            ? ` · 最後成功：${clock(engine.updatedAt)}，下方保留上次資料。`
-            : ""
-        }`}
+        title={cause.title}
+        description={description}
         actions={
           <>
             <Button

@@ -1,5 +1,6 @@
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import {
+  CustomSelect,
   toast,
   StatusIndicator,
   Button,
@@ -43,9 +44,6 @@ import {
   ImagePlus,
   X,
   Code2,
-  MessageSquare,
-  Reply,
-  Bot,
 } from "lucide-react";
 import {
   describeStreamError,
@@ -95,15 +93,9 @@ type Message = Run & {
   image?: { name: string; url: string };
 };
 type Mode = "chat" | "compare";
-const dialectOptions = [
-  { value: "chat" as Dialect, label: DIALECT_LABEL.chat, icon: MessageSquare },
-  {
-    value: "responses" as Dialect,
-    label: DIALECT_LABEL.responses,
-    icon: Reply,
-  },
-  { value: "messages" as Dialect, label: DIALECT_LABEL.messages, icon: Bot },
-];
+const dialectOptions = (["chat", "responses", "messages"] as Dialect[]).map(
+  (value) => ({ value, label: DIALECT_LABEL[value] }),
+);
 const codeTabs: { value: CodeLanguage; label: string; language: string }[] = [
   { value: "curl", label: "curl", language: "bash" },
   { value: "python", label: "Python", language: "python" },
@@ -598,13 +590,15 @@ export function Playground({
         }
         status={
           <div className="flex flex-wrap items-center gap-2">
-            <SegmentedTray
-              aria-label="API 格式"
-              value={dialect}
-              onChange={(v) => !loading && setDialect(v)}
-              options={dialectOptions}
-              wrap
-            />
+            <div role="group" aria-label="API 格式">
+              <CustomSelect
+                className="w-44 [&_button]:h-8 [&_button]:text-xs"
+                value={dialect}
+                disabled={loading}
+                onChange={(v) => setDialect(v as Dialect)}
+                options={dialectOptions}
+              />
+            </div>
             <SegmentedTray
               aria-label="測試模式"
               value={mode}

@@ -235,6 +235,7 @@ export function Dashboard({
 }) {
   const [range, setRange] = useState("15m"),
     [metric, setMetric] = useState("decode"),
+    [heroMetric, setHeroMetric] = useState("decode"),
     [table, setTable] = useState(false),
     [activeX, setActiveX] = useState<number | null>(null),
     [copied, setCopied] = useState<string | null>(null);
@@ -436,10 +437,10 @@ export function Dashboard({
         </StatGrid>
       ) : (
         <div
-          className="grid gap-3 sm:grid-cols-2 xl:grid-cols-[minmax(0,2fr)_repeat(3,minmax(0,1fr))]"
+          className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5"
           data-testid="overview-stats"
         >
-          <SpeedPair status={status} points={heroPoints} />
+          <SpeedPair status={status} />
           <StatCard
             compact
             valueFirst
@@ -482,16 +483,28 @@ export function Dashboard({
       >
         <div className="flex min-w-0 flex-col justify-between gap-5 border-b border-border/60 p-5 sm:p-6 lg:border-b-0 lg:border-r">
           <div className="min-w-0">
-            <p className="text-xs text-muted-foreground">
-              即時合計速度 · 近 5 分鐘走勢 · tok/s
-            </p>
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-xs text-muted-foreground">
+                {heroMetric === "decode" ? "解碼" : "預填"}即時合計速度 · 近 5
+                分鐘走勢 · tok/s
+              </p>
+              <SegmentedSelect
+                aria-label="走勢指標"
+                value={heroMetric}
+                onChange={setHeroMetric}
+                options={[
+                  { value: "decode", label: "解碼" },
+                  { value: "prefill", label: "預填" },
+                ]}
+              />
+            </div>
             <TimeSeriesChart
               {...chartLabels}
               className="mt-3"
               data={heroData}
-              series={rateSeries.both}
+              series={rateSeries[heroMetric as "decode" | "prefill"]}
               height={150}
-              ariaLabel="近 5 分鐘解碼與預填的即時合計速度，單位 tok/s"
+              ariaLabel={`近 5 分鐘${heroMetric === "decode" ? "解碼" : "預填"}的即時合計速度，單位 tok/s`}
               formatX={clock}
               formatY={formatNumber}
               maxGap={12000}

@@ -614,7 +614,7 @@ export default function App() {
               </Suspense>
             </div>
           </main>
-          <footer>
+          <footer className="shrink-0 border-t border-border/60 bg-(--bg-window)">
             <FooterStatus engine={engine} connection={connection} />
           </footer>
         </div>

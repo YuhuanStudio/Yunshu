@@ -90,3 +90,47 @@ test.describe("shell scroll containment", () => {
     expect(g.docScroll).toBeLessThanOrEqual(g.inner);
   });
 });
+
+test.describe("status band never covers content", () => {
+  for (const route of [
+    "overview",
+    "requests",
+    "models",
+    "diagnostics",
+    "api",
+    "settings",
+    "playground",
+  ]) {
+    test(`${route}: scrolled to the end, the last content ends above the band`, async ({
+      page,
+    }) => {
+      await page.setViewportSize({ width: 1280, height: 560 });
+      await install(page);
+      await page.goto(`/console/#/${route}`, { waitUntil: "domcontentloaded" });
+      await page.waitForTimeout(1500);
+      const r = await page.evaluate(() => {
+        const band = document.querySelector("ul[aria-label='引擎狀態']")!;
+        const footer = band.closest("footer")!;
+        const main = document.querySelector("main")!;
+        const scroller = [main, ...main.querySelectorAll("*")].find(
+          (e) =>
+            e.scrollHeight > e.clientHeight + 1 &&
+            /auto|scroll/.test(getComputedStyle(e).overflowY),
+        );
+        if (scroller) scroller.scrollTop = 1e6;
+        const top = footer.getBoundingClientRect().top;
+        const area = (scroller ?? main).getBoundingClientRect().bottom;
+        let lowest = 0;
+        for (const el of (scroller ?? main).querySelectorAll("*")) {
+          const b = el.getBoundingClientRect();
+          if (b.height > 0 && b.bottom > lowest && b.top < area)
+            lowest = b.bottom;
+        }
+        return { top, area, lowest, scrolled: !!scroller };
+      });
+      expect(r.area).toBeLessThanOrEqual(r.top + 0.5);
+      // Whatever is visible inside the scroll area ends at or above the band.
+      expect(Math.min(r.lowest, r.area)).toBeLessThanOrEqual(r.top + 0.5);
+    });
+  }
+});

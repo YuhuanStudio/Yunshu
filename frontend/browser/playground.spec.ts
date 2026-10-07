@@ -1,4 +1,10 @@
-import { expect, test, type Page, type Route } from "@playwright/test";
+import {
+  expect,
+  test,
+  type Locator,
+  type Page,
+  type Route,
+} from "@playwright/test";
 
 type ModelFixture = {
   id: string;
@@ -356,6 +362,15 @@ async function openPlayground(
   return page.getByTestId("playground");
 }
 
+/** The API format is a compact select (Chat Completions, Responses, Anthropic Messages). */
+async function pickDialect(page: Page, playground: Locator, label: string) {
+  await playground
+    .getByRole("group", { name: "API 格式" })
+    .getByRole("button")
+    .click();
+  await page.getByRole("option", { name: label, exact: true }).click();
+}
+
 async function installDiagnostics(
   page: Page,
   expected: Array<{ status: number; method: string; sourcePath: string }>,
@@ -664,7 +679,7 @@ for (const [dialect, label, path, text] of [
     );
     const playground = await openPlayground(page, api);
     const captured = await mockDialect(page, path);
-    await playground.getByRole("tab", { name: label, exact: true }).click();
+    await pickDialect(page, playground, label);
     await playground.locator("textarea").first().fill("dialect check");
     await page.getByRole("button", { name: "傳送測試", exact: true }).click();
     await expect(playground).toContainText(text);
@@ -705,7 +720,7 @@ test("view code reproduces the current request in curl, Python and JavaScript", 
     "code",
   );
   const playground = await openPlayground(page, api);
-  await playground.getByRole("tab", { name: "Responses", exact: true }).click();
+  await pickDialect(page, playground, "Responses");
   await playground.locator("textarea").first().fill("show me the code");
   await playground.getByRole("button", { name: "檢視程式碼" }).click();
   const dialog = page.getByRole("dialog");
@@ -739,9 +754,7 @@ test("view code reproduces the current request in curl, Python and JavaScript", 
   );
   await page.keyboard.press("Escape");
   await expect(dialog).toBeHidden();
-  await playground
-    .getByRole("tab", { name: "Anthropic Messages", exact: true })
-    .click();
+  await pickDialect(page, playground, "Anthropic Messages");
   await playground.getByRole("button", { name: "檢視程式碼" }).click();
   await expect(
     page.getByRole("dialog").getByTestId("code-javascript"),

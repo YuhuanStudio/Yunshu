@@ -94,7 +94,7 @@ const ZONES: Record<string, string> = {
   "status pills": "ul[aria-label='引擎狀態'] > li:nth-child(-n+2)",
   sidebar: "[aria-label='控制台導覽']",
   "stat tiles":
-    "[data-testid='overview-stats'], [data-testid='request-stats'], [data-testid='resource-readouts'], [data-testid='models']",
+    "[data-testid='overview-stats'], [data-testid='request-stats'], [data-testid='resource-readouts'], [data-testid='health-checks'], [data-testid='models']",
 };
 
 /** Every non-inline box inside the zone, in DOM order: [tag, x, y, w, h]. */

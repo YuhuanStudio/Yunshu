@@ -27,7 +27,7 @@ export function LivePill({
       <span className="inline-block h-4 w-[2.75rem] truncate leading-4 text-foreground">
         {pill.phase}
       </span>
-      <span className="hidden w-[10.5rem] truncate tabular-nums sm:inline-block h-4 leading-4">
+      <span className="hidden w-[6.75rem] truncate tabular-nums sm:inline-block h-4 leading-4">
         {pill.detail}
       </span>
     </span>

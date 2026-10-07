@@ -96,7 +96,7 @@ type Health = {
   bar?: {
     value: number;
     total: number;
-    tone: "success" | "warning" | "neutral";
+    tone: "accent" | "warning";
   };
 };
 const STATE_LABEL: Record<string, string> = {
@@ -145,9 +145,6 @@ export function healthChecks(
       name: "模型載入",
       status: loaded > 0 ? "online" : "neutral",
       value: `${loaded} / ${status.models.length}`,
-      bar: status.models.length
-        ? { value: loaded, total: status.models.length, tone: "success" }
-        : undefined,
       hint:
         loaded > 0
           ? "已載入的模型可直接推論。"
@@ -166,7 +163,7 @@ export function healthChecks(
           : {
               value: active ?? 0,
               total,
-              tone: ratio > 0.9 ? "warning" : "success",
+              tone: ratio > 0.9 ? "warning" : "accent",
             },
       value:
         active != null && total
@@ -228,7 +225,7 @@ export function healthChecks(
       name: "主機 CPU",
       status: cpu > 90 ? "away" : "online",
       value: `${number(cpu)}%`,
-      bar: { value: cpu, total: 100, tone: cpu > 90 ? "warning" : "success" },
+      bar: { value: cpu, total: 100, tone: cpu > 90 ? "warning" : "accent" },
       hint: `${number(metric(at(system, "cpu", "logical_cores")), 0)} 個邏輯核心。`,
     });
   return rows;
@@ -384,42 +381,48 @@ export function Diagnostics({
           </div>
         }
       />
-      <StatGrid data-testid="resource-readouts">
-        {hasSystem && (
+      {/* Without /debug there is one tile at most; that figure is already a health row. */}
+      {hasSystem && (
+        <StatGrid data-testid="resource-readouts">
+          {hasSystem && (
+            <StatCard
+              compact
+              icon={Cpu}
+              label="CPU"
+              value={`${number(metric(at(system, "cpu", "percent")))}%`}
+              subtext={`${number(metric(at(system, "cpu", "logical_cores")), 0)} 個邏輯核心`}
+            />
+          )}
+          {hasSystem && (
+            <StatCard
+              compact
+              icon={Activity}
+              label="統一記憶體"
+              value={`${number(metric(at(system, "memory", "percent")))}%`}
+              subtext={`${number(gb(at(system, "memory", "used_bytes")))} GB 已使用`}
+            />
+          )}
           <StatCard
             compact
-            icon={Cpu}
-            label="CPU"
-            value={`${number(metric(at(system, "cpu", "percent")))}%`}
-            subtext={`${number(metric(at(system, "cpu", "logical_cores")), 0)} 個邏輯核心`}
+            icon={Database}
+            label="Metal 記憶體（活躍）"
+            value={`${number(status?.memory.active_gb ?? gb(at(system, "gpu", "active_bytes")))} GB`}
+            subtext={`峰值 ${number(status?.memory.peak_gb)} GB`}
           />
-        )}
-        {hasSystem && (
-          <StatCard
-            compact
-            icon={Activity}
-            label="統一記憶體"
-            value={`${number(metric(at(system, "memory", "percent")))}%`}
-            subtext={`${number(gb(at(system, "memory", "used_bytes")))} GB 已使用`}
-          />
-        )}
-        <StatCard
-          compact
-          icon={Database}
-          label="Metal 記憶體（活躍）"
-          value={`${number(status?.memory.active_gb ?? gb(at(system, "gpu", "active_bytes")))} GB`}
-          subtext={`峰值 ${number(status?.memory.peak_gb)} GB`}
-        />
-        {engineCounters !== undefined && (
-          <StatCard
-            compact
-            icon={Server}
-            label="已處理請求"
-            value={number(metric(at(engineCounters, "requests_processed")), 0)}
-            subtext="引擎計數器"
-          />
-        )}
-      </StatGrid>
+          {engineCounters !== undefined && (
+            <StatCard
+              compact
+              icon={Server}
+              label="已處理請求"
+              value={number(
+                metric(at(engineCounters, "requests_processed")),
+                0,
+              )}
+              subtext="引擎計數器"
+            />
+          )}
+        </StatGrid>
+      )}
       <SectionCard
         icon={HeartPulse}
         title="健康檢查"
@@ -440,7 +443,9 @@ export function Diagnostics({
                     {check.hint}
                   </p>
                 </div>
-                <span className="text-sm tabular-nums">{check.value}</span>
+                <span className="min-w-28 text-right text-sm tabular-nums">
+                  {check.value}
+                </span>
               </div>
               {check.bar && (
                 <SegmentedBar

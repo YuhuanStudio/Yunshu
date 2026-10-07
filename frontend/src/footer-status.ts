@@ -118,7 +118,7 @@ export function footerPills(input: FooterInput): FooterPill[] {
             ? "warning"
             : "danger",
       dot: true,
-      help: cause.hint,
+      help: `引擎目前：${cause.short}。`,
     });
     return pills;
   }
