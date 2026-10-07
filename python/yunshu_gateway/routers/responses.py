@@ -1222,7 +1222,8 @@ def _enforce_tool_choice(req: ResponsesRequest, calls: list[dict]) -> list[dict]
         calls = calls[: req.max_tool_calls]
     for call in calls:
         custom_item(
-            {"type": "function_call", **call}, getattr(req, "_custom_names", set())
+            {"type": "function_call", "status": "completed", **call},
+            getattr(req, "_custom_names", set()),
         )
     return calls
 
@@ -1663,7 +1664,7 @@ async def create_response(req: ResponsesRequest, request: Request):
                 "Use stream=False for multiple completions, or stream=True with n=1.",
             )
         return StreamingResponse(
-            _stream_response(
+            _stream_custom_response(
                 engine,
                 req,
                 messages,
@@ -2181,8 +2182,8 @@ async def create_response(req: ResponsesRequest, request: Request):
                 _ns_tracker.unregister(response_id)
 
 
-async def _stream_response(engine, req, *args, **kwargs):
-    source = _stream_response_engine(engine, req, *args, **kwargs)
+async def _stream_custom_response(engine, req, *args, **kwargs):
+    source = _stream_response(engine, req, *args, **kwargs)
     names = getattr(req, "_custom_names", set())
     if names:
         source = custom_stream(source, names)
@@ -2190,7 +2191,7 @@ async def _stream_response(engine, req, *args, **kwargs):
         yield chunk
 
 
-async def _stream_response_engine(
+async def _stream_response(
     engine,
     req,
     messages,
