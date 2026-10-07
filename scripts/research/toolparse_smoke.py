@@ -87,13 +87,24 @@ def requests(model: str):
         "structural_tool",
         {
             **base,
-            "tools": TOOLS,
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "weather",
+                        "parameters": {
+                            **SCHEMA,
+                            "properties": {"city": {"type": "string"}},
+                        },
+                    },
+                }
+            ],
             "tool_choice": "auto",
             "response_format": RF_TOOL,
             "messages": [
                 {
                     "role": "user",
-                    "content": 'Call weather for Taipei using <tool_call>{"name":"weather","arguments":{"city":"Taipei"}}</tool_call>. You may reason briefly first.',
+                    "content": 'Call weather for Tokyo using <tool_call>{"name":"weather","arguments":{"city":"Tokyo"}}</tool_call>. You may reason briefly first.',
                 }
             ],
             "thinking_budget": 96,
@@ -129,14 +140,25 @@ def judge(kind: str, response: dict | str) -> dict:
     else:
         message = response["choices"][0]["message"]
         content = message.get("content") or ""
-        if "<result>" not in content or "</result>" not in content:
-            raise ValueError("structural tag never engaged or did not close")
+        if "<result>" not in content:
+            if not content and not message.get("reasoning_content"):
+                raise ValueError("empty free response")
+            return {
+                "kind": kind,
+                "ok": True,
+                "engaged": False,
+                "content": content,
+                "reasoning_chars": len(message.get("reasoning_content") or ""),
+            }
+        if "</result>" not in content:
+            raise ValueError("structural tag started but did not close")
         body = content.split("<result>", 1)[1].split("</result>", 1)[0]
         if json.loads(body) != {"city": "Taipei"}:
             raise ValueError("structural schema mismatch")
         return {
             "kind": kind,
             "ok": True,
+            "engaged": True,
             "reasoning_chars": len(message.get("reasoning_content") or ""),
             "content": content,
         }

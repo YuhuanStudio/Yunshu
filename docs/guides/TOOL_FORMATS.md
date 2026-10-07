@@ -55,4 +55,7 @@ output and lazy auto-tools). Run `scripts/dev/yv ab --base BASE_SHA --cand CAND_
 --suite preflight,toolparse --model /path/to/small-model --label toolparse-smoke-topic
 --priority -1 --detach`; it is not added to existing release/performance ladders.
 The lazy-output prompt asks for Tokyo while the hidden schema forces Taipei,
-so the evidence must show the constraint engaged rather than natural adherence.
+so triggered output must show the constraint engaged rather than natural adherence.
+An omitted trigger is valid free output; the auto-tool check separately requires
+a parsed call with Taipei while the prompt asks for Tokyo and its visible tool
+schema only declares a string.

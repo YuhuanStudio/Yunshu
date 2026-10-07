@@ -86,7 +86,7 @@ def test_probe_with_fake_server():
 
 def test_probe_fails_without_trigger_or_stream_arguments():
     with pytest.raises(ValueError):
-        probe.judge("structural", {"choices": [{"message": {"content": "prose only"}}]})
+        probe.judge("structural", {"choices": [{"message": {"content": "<result>{}"}}]})
     with pytest.raises(ValueError):
         probe.judge("stream", "data: [DONE]\n")
     args = probe.parser().parse_args(["--model", "fake", "--out", "out.json"])
@@ -118,3 +118,19 @@ def test_yv_probe_validator_and_optional_stage(tmp_path):
     assert not _toolparse_valid(path)[0]
     assert "toolparse" not in LADDER
     assert parse_suite("preflight,toolparse")["stages"] == ["preflight", "toolparse"]
+
+
+def test_lazy_free_response_and_hidden_tool_schema():
+    row = probe.judge(
+        "structural", {"choices": [{"message": {"content": '{"city":"Tokyo"}'}}]}
+    )
+    assert row["ok"] and row["engaged"] is False
+    kind, payload = list(probe.requests("fake"))[-1]
+    assert kind == "structural_tool"
+    assert payload["tools"][0]["function"]["parameters"]["properties"]["city"] == {
+        "type": "string"
+    }
+    assert "Tokyo" in payload["messages"][0]["content"]
+    assert payload["response_format"]["structures"][0]["schema"]["properties"][
+        "arguments"
+    ]["properties"]["city"] == {"const": "Taipei"}
