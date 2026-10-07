@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import {
   Badge,
   BarChart,
@@ -27,6 +27,41 @@ import {
 import { clock, elapsed, number, type Engine } from "./ui";
 import type { EngineHistoryPoint } from "./useEngine";
 
+/** The one header every chart card shares: title and caption left, one control right. */
+export function ChartCard({
+  title,
+  description,
+  action,
+  children,
+  className,
+  "data-testid": testId,
+}: {
+  title: ReactNode;
+  description?: ReactNode;
+  action?: ReactNode;
+  children: ReactNode;
+  className?: string;
+  "data-testid"?: string;
+}) {
+  return (
+    <Card
+      className={"min-w-0 p-5 sm:p-6 " + (className ?? "")}
+      data-testid={testId}
+    >
+      <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h2 className="heading-md">{title}</h2>
+          {description && (
+            <p className="mt-1 text-xs text-muted-foreground">{description}</p>
+          )}
+        </div>
+        {action && <div className="shrink-0">{action}</div>}
+      </div>
+      {children}
+    </Card>
+  );
+}
+
 export function PhasePanel({
   engine,
   navigate,
@@ -39,16 +74,12 @@ export function PhasePanel({
   const active = engine.status?.requests.items ?? [];
   const selected = phase ? active.filter((row) => row.phase === phase) : active;
   return (
-    <Card className="min-w-0 p-5 sm:p-6" data-testid="phase-panel">
-      <div className="mb-5 flex items-center justify-between gap-3">
-        <div>
-          <h2 className="heading-md">請求階段分布</h2>
-          <p className="mt-1 text-xs text-muted-foreground">
-            點選圖例，查看目前正在處理的工作
-          </p>
-        </div>
-        <Badge variant="outline">即時</Badge>
-      </div>
+    <ChartCard
+      data-testid="phase-panel"
+      title="請求階段分布"
+      description="點選圖例，查看目前正在處理的工作"
+      action={<Badge variant="outline">即時</Badge>}
+    >
       <DonutChart
         monochrome
         data={data}
@@ -107,7 +138,7 @@ export function PhasePanel({
         開啟請求工作區
         <ArrowRight size={13} />
       </Button>
-    </Card>
+    </ChartCard>
   );
 }
 
@@ -129,16 +160,12 @@ export function LatencyPanel({
       )
     : [];
   return (
-    <Card className="min-w-0 p-5 sm:p-6" data-testid="latency-panel">
-      <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h2 className="heading-md">首 Token 延遲分布</h2>
-          <p className="mt-1 text-xs text-muted-foreground">
-            點選長條查看請求 · 單位 ms
-          </p>
-        </div>
-        <Badge variant="outline">{valid.length} 筆已觀測</Badge>
-      </div>
+    <ChartCard
+      data-testid="latency-panel"
+      title="首 Token 延遲分布"
+      description="點選長條查看請求 · 單位 ms"
+      action={<Badge variant="outline">{valid.length} 筆已觀測</Badge>}
+    >
       <div className="mb-4 flex gap-6">
         <div>
           <p className="text-[10px] text-muted-foreground">P50</p>
@@ -222,7 +249,7 @@ export function LatencyPanel({
           />
         )}
       </Sheet>
-    </Card>
+    </ChartCard>
   );
 }
 
@@ -270,16 +297,12 @@ export function ActivityPanel({
     onSelectTime(peak?.at ?? null);
   };
   return (
-    <Card className="min-w-0 p-5 sm:p-6" data-testid="activity-panel">
-      <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h2 className="heading-md">請求活動熱圖</h2>
-          <p className="mt-1 text-xs text-muted-foreground">
-            每個區間的已採樣峰值 · 點選格子，聯動時序圖游標
-          </p>
-        </div>
-        <Badge variant="outline">{history.length} 次採樣</Badge>
-      </div>
+    <ChartCard
+      data-testid="activity-panel"
+      title="請求活動熱圖"
+      description="每個區間的已採樣峰值 · 點選格子，聯動時序圖游標"
+      action={<Badge variant="outline">{history.length} 次採樣</Badge>}
+    >
       <Heatmap
         rows={heat.rows}
         columns={columns}
@@ -302,6 +325,6 @@ export function ActivityPanel({
           </p>
         )}
       </div>
-    </Card>
+    </ChartCard>
   );
 }

@@ -8,6 +8,7 @@ import {
   observedRequests,
   percentile,
   timeSeries,
+  trendDelta,
 } from "../src/analytics.ts";
 import type { EngineStatus } from "../src/api.ts";
 const snapshot = (at: number, last: EngineStatus["last"] = null) => ({
@@ -100,4 +101,18 @@ test("unknown request phases cannot collide with object prototypes", () => {
       ["toString", 1, "neutral"],
     ],
   );
+});
+
+test("trendDelta compares halves honestly and stays null without evidence", () => {
+  assert.equal(trendDelta([10, 10]), null);
+  assert.equal(trendDelta([10, 10, 10, 10, 10, 10]), null);
+  assert.equal(trendDelta([0, 0, 0, 5, 5, 5]), null);
+  const up = trendDelta([10, 10, 10, 15, 15, 15])!;
+  assert.equal(Math.round(up.value), 50);
+  assert.equal(up.positive, true);
+  const slower = trendDelta([100, 100, 100, 150, 150, 150], {
+    lowerIsBetter: true,
+  })!;
+  assert.equal(slower.positive, false);
+  assert.equal(trendDelta([10, 10, 10, Number.NaN, 10, 10]), null);
 });

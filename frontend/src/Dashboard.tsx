@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   AnimatedNumber,
   Badge,
@@ -10,6 +10,7 @@ import {
   ScrollFade,
   SegmentedBar,
   SegmentedSelect,
+  Skeleton,
   Sparkline,
   StatusIndicator,
   Table,
@@ -22,21 +23,45 @@ import {
 } from "@yuhuanowo/yunui";
 import {
   ArrowRight,
+  Check,
+  Copy,
   Download,
+  Gauge,
+  HardDrive,
+  Link2,
   Pause,
   Play,
   RefreshCw,
   Server,
+  Stethoscope,
+  Timer,
+  Zap,
 } from "lucide-react";
 import {
+  CodeBlock,
+  DashboardPage,
   DetailList,
   DetailRow,
   HoverRow,
   PageHeader,
+  SectionRow,
+  StatCard,
+  StatGrid,
 } from "@yuhuanowo/yunui/patterns";
-import { ActivityPanel, LatencyPanel, PhasePanel } from "./AnalyticsPanels";
-import { observationCsv, timeSeries } from "./analytics";
+import {
+  ActivityPanel,
+  ChartCard,
+  LatencyPanel,
+  PhasePanel,
+} from "./AnalyticsPanels";
+import {
+  observationCsv,
+  observedRequests,
+  timeSeries,
+  trendDelta,
+} from "./analytics";
 import type { RequestRow } from "./api";
+import { buildIntegrations, serviceRoot } from "./integrations";
 import {
   clock,
   elapsed,
@@ -110,20 +135,29 @@ function RequestLane({ row }: { row: RequestRow }) {
     <li className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-2 py-3">
       <div className="flex min-w-0 items-center gap-2.5">
         <StatusIndicator
+          className="shrink-0"
           status={phaseDot(phase)}
           pulse={phase === "decode" || phase === "prefill"}
         />
-        <span className="text-sm font-medium">{phaseText[phase] ?? phase}</span>
-        <span className="truncate font-mono text-xs text-muted-foreground">
+        <span className="shrink-0 whitespace-nowrap text-sm font-medium">
+          {phaseText[phase] ?? phase}
+        </span>
+        <span
+          title={row.request_id}
+          className="min-w-0 max-w-[9rem] shrink truncate font-mono text-xs text-muted-foreground"
+        >
           {row.request_id}
         </span>
         {row.model && (
-          <span className="hidden truncate text-xs text-muted-foreground sm:inline">
+          <span
+            title={row.model}
+            className="hidden min-w-0 flex-1 truncate text-xs text-muted-foreground sm:inline"
+          >
             · {modelLabel(row.model)}
           </span>
         )}
       </div>
-      <div className="flex items-center gap-4 text-xs tabular-nums text-muted-foreground">
+      <div className="flex shrink-0 items-center gap-4 text-xs tabular-nums text-muted-foreground">
         <span>
           {phase === "decode"
             ? `${number(row.completion_tokens, 0)} tok`
@@ -152,6 +186,44 @@ function RequestLane({ row }: { row: RequestRow }) {
   );
 }
 
+function savedBaseUrl() {
+  try {
+    return localStorage.getItem("yunshu.console.url") || location.origin;
+  } catch {
+    return location.origin;
+  }
+}
+
+function QuickAction({
+  icon,
+  title,
+  caption,
+  onClick,
+}: {
+  icon: ReactNode;
+  title: string;
+  caption: string;
+  onClick: () => void;
+}) {
+  return (
+    <Card className="min-w-0 p-1">
+      <HoverRow
+        onClick={onClick}
+        className="flex w-full items-center gap-3 px-3 py-3 text-left"
+      >
+        <span className="text-muted-foreground">{icon}</span>
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-sm font-medium">{title}</span>
+          <span className="block truncate text-xs text-muted-foreground">
+            {caption}
+          </span>
+        </span>
+        <ArrowRight size={14} className="shrink-0 text-muted-foreground/60" />
+      </HoverRow>
+    </Card>
+  );
+}
+
 export function Dashboard({
   engine,
   navigate,
@@ -162,7 +234,8 @@ export function Dashboard({
   const [range, setRange] = useState("15m"),
     [metric, setMetric] = useState("decode"),
     [table, setTable] = useState(false),
-    [activeX, setActiveX] = useState<number | null>(null);
+    [activeX, setActiveX] = useState<number | null>(null),
+    [copied, setCopied] = useState<string | null>(null);
   const status = engine.status,
     online = engine.phase === "online";
   const end = engine.updatedAt ?? Date.now(),
@@ -205,6 +278,28 @@ export function Dashboard({
         : null))
     : null;
   const loaded = (status?.models ?? []).filter((m) => m.loaded);
+  // Trends compare the later half of this window's samples with the earlier half.
+  const observed = useMemo(() => observedRequests(points), [points]);
+  const ttftValues = observed.flatMap((r) =>
+    r.ttft_ms == null ? [] : [r.ttft_ms],
+  );
+  const hitValues = observed.flatMap((r) =>
+    r.prompt_tokens > 0 ? [(r.cached_tokens / r.prompt_tokens) * 100] : [],
+  );
+  const baseUrl = serviceRoot(savedBaseUrl());
+  const quickModel = (loaded.find(supportsChat) ?? loaded[0])?.id ?? "";
+  const curl =
+    buildIntegrations(baseUrl, quickModel).find((i) => i.id === "curl")?.code ??
+    "";
+  const copy = (id: string, text: string) => {
+    void navigator.clipboard?.writeText(text).then(
+      () => {
+        setCopied(id);
+        setTimeout(() => setCopied((c) => (c === id ? null : c)), 2000);
+      },
+      () => undefined,
+    );
+  };
   const chooseRange = (next: string) => {
     setRange(next);
     setActiveX(null);
@@ -221,10 +316,7 @@ export function Dashboard({
   }
   if (!status && engine.phase !== "connecting")
     return (
-      <section
-        className="mx-auto w-full max-w-7xl space-y-6"
-        data-testid="overview"
-      >
+      <DashboardPage width="7xl" data-testid="overview">
         <PageHeader
           title="引擎總覽"
           description="模型、請求與效能，都從你的本機引擎開始。"
@@ -257,13 +349,12 @@ export function Dashboard({
             ))}
           </ol>
         </Card>
-      </section>
+        <SectionRow title="連線後可直接呼叫" />
+        <CodeBlock code={curl} language="bash" filename={baseUrl} />
+      </DashboardPage>
     );
   return (
-    <section
-      className="mx-auto w-full max-w-7xl space-y-5"
-      data-testid="overview"
-    >
+    <DashboardPage width="7xl" data-testid="overview">
       <PageHeader
         title="引擎總覽"
         description="觀察這台 Mac 如何處理每一次推理。"
@@ -324,6 +415,64 @@ export function Dashboard({
           <span className="text-error">{status.load_error}</span>
         )}
       </p>
+
+      {!status ? (
+        <StatGrid>
+          {[0, 1, 2, 3].map((i) => (
+            <Skeleton key={i} className="h-[104px] w-full rounded-lg" />
+          ))}
+        </StatGrid>
+      ) : (
+        <StatGrid data-testid="overview-stats">
+          <StatCard
+            compact
+            valueFirst
+            icon={Zap}
+            label="Decode 速度"
+            value={liveDecode == null ? "—" : `${number(liveDecode)} tok/s`}
+            subtext={
+              status.throughput.live_decode_tps != null
+                ? `${status.requests.active} 個請求合計`
+                : "近 5 分鐘平均（閒置）"
+            }
+            trend={trendDelta(decodeTrend) ?? undefined}
+          />
+          <StatCard
+            compact
+            valueFirst
+            icon={Timer}
+            label="首 Token 延遲"
+            value={
+              last?.ttft_ms == null ? "—" : `${number(last.ttft_ms, 0)} ms`
+            }
+            subtext={
+              last ? `最近一筆 · ${clock(last.t * 1000)}` : "尚無完成請求"
+            }
+            trend={trendDelta(ttftValues, { lowerIsBetter: true }) ?? undefined}
+          />
+          <StatCard
+            compact
+            valueFirst
+            icon={Gauge}
+            label="前綴重用率"
+            value={cache == null ? "—" : `${number(cache)}%`}
+            subtext={
+              last
+                ? `cached ${number(last.cached_tokens, 0)} / ${number(last.prompt_tokens, 0)}`
+                : "尚無完成請求"
+            }
+            trend={trendDelta(hitValues) ?? undefined}
+          />
+          <StatCard
+            compact
+            valueFirst
+            icon={HardDrive}
+            label="Metal 記憶體"
+            value={`${number(memory?.active_gb)} GB`}
+            subtext={`實體 ${number(memory?.total_gb)} GB · 峰值 ${number(memory?.peak_gb)} GB`}
+          />
+        </StatGrid>
+      )}
 
       {/* Live: what the engine is doing right now. */}
       <Card
@@ -395,28 +544,11 @@ export function Dashboard({
               <div className="h-px w-full bg-border" />
             </div>
           )}
-          <div className="grid grid-cols-3 gap-4 border-t border-border/60 pt-4">
+          <div className="border-t border-border/60 pt-4">
             <Readout
               label="Prefill 單請求平均"
               value={number(status?.throughput.mean_prefill_tps, 0)}
               unit="tok/s"
-            />
-            <Readout
-              label="首 Token 延遲"
-              value={number(last?.ttft_ms, 0)}
-              unit="ms"
-              hint={
-                last ? `最近一筆 · ${clock(last.t * 1000)}` : "尚無完成請求"
-              }
-            />
-            <Readout
-              label="前綴重用率"
-              value={cache == null ? "—" : `${number(cache)}%`}
-              hint={
-                last
-                  ? `${number(last.cached_tokens, 0)} / ${number(last.prompt_tokens, 0)} tokens`
-                  : undefined
-              }
             />
           </div>
         </div>
@@ -464,15 +596,76 @@ export function Dashboard({
         </div>
       </Card>
 
+      <SectionRow title="快速開始" />
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <QuickAction
+          icon={<Play size={18} strokeWidth={1.5} />}
+          title="測試一段提示"
+          caption="在推理測試送出請求"
+          onClick={() => navigate("playground")}
+        />
+        <QuickAction
+          icon={<HardDrive size={18} strokeWidth={1.5} />}
+          title="載入模型"
+          caption="管理權重與保留時間"
+          onClick={() => navigate("models")}
+        />
+        <QuickAction
+          icon={
+            copied === "url" ? (
+              <Check size={18} strokeWidth={1.5} />
+            ) : (
+              <Link2 size={18} strokeWidth={1.5} />
+            )
+          }
+          title={copied === "url" ? "已複製" : "複製 API 網址"}
+          caption={`${baseUrl}/v1`}
+          onClick={() => copy("url", `${baseUrl}/v1`)}
+        />
+        <QuickAction
+          icon={<Stethoscope size={18} strokeWidth={1.5} />}
+          title="開啟診斷"
+          caption="檢查服務與環境"
+          onClick={() => navigate("diagnostics")}
+        />
+      </div>
+      <CodeBlock code={curl} language="bash" filename="curl" />
+
+      <SectionRow
+        title="效能觀測"
+        action={
+          <div className="flex flex-wrap items-center gap-2">
+            <SegmentedSelect
+              aria-label="觀測時間範圍"
+              value={range}
+              onChange={chooseRange}
+              options={[
+                { value: "5m", label: "5 分鐘" },
+                { value: "15m", label: "15 分鐘" },
+                { value: "1h", label: "1 小時" },
+              ]}
+            />
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={!points.length}
+              onClick={exportData}
+            >
+              <Download size={13} />
+              匯出觀測
+            </Button>
+          </div>
+        }
+      />
+      <p className="-mt-3 text-xs text-muted-foreground">
+        本頁開啟後採樣 · {points.length} 筆 · 中斷期間不補資料
+      </p>
       <div className="grid gap-5 xl:grid-cols-[minmax(0,7fr)_minmax(0,5fr)]">
-        <Card className="min-w-0 p-5 sm:p-6" data-testid="throughput-panel">
-          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <h2 className="text-sm font-medium">吞吐觀測</h2>
-              <p className="mt-1 text-xs text-muted-foreground">
-                近 5 分鐘平均速度的時間變化 · tok/s
-              </p>
-            </div>
+        <ChartCard
+          data-testid="throughput-panel"
+          title="吞吐觀測"
+          description="近 5 分鐘平均速度的時間變化 · tok/s"
+          action={
             <SegmentedSelect
               aria-label="吞吐指標"
               value={metric}
@@ -483,7 +676,8 @@ export function Dashboard({
                 { value: "both", label: "比較" },
               ]}
             />
-          </div>
+          }
+        >
           <TimeSeriesChart
             {...chartLabels}
             data={data}
@@ -529,13 +723,15 @@ export function Dashboard({
               </Table>
             </ScrollFade>
           )}
-        </Card>
-        <Card className="min-w-0 p-5 sm:p-6" data-testid="memory-panel">
-          <div className="flex items-center justify-between">
-            <h2 className="text-sm font-medium">Metal 記憶體</h2>
+        </ChartCard>
+        <ChartCard
+          data-testid="memory-panel"
+          title="Metal 記憶體"
+          action={
             <Badge variant="outline">實體 {number(memory?.total_gb)} GB</Badge>
-          </div>
-          <p className="mt-4 text-3xl font-semibold tracking-tight tabular-nums">
+          }
+        >
+          <p className="text-3xl font-semibold tracking-tight tabular-nums">
             {number(memory?.active_gb)}
             <span className="ml-1.5 text-sm font-normal text-muted-foreground">
               / {number(memory?.total_gb)} GB 活躍配置
@@ -602,35 +798,9 @@ export function Dashboard({
             activeX={activeX}
             onActiveXChange={setActiveX}
           />
-        </Card>
+        </ChartCard>
       </div>
 
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <p className="text-xs text-muted-foreground">
-          本頁開啟後採樣 · {points.length} 筆 · 中斷期間不補資料
-        </p>
-        <div className="flex flex-wrap items-center gap-2">
-          <SegmentedSelect
-            aria-label="觀測時間範圍"
-            value={range}
-            onChange={chooseRange}
-            options={[
-              { value: "5m", label: "5 分鐘" },
-              { value: "15m", label: "15 分鐘" },
-              { value: "1h", label: "1 小時" },
-            ]}
-          />
-          <Button
-            size="sm"
-            variant="ghost"
-            disabled={!points.length}
-            onClick={exportData}
-          >
-            <Download size={13} />
-            匯出觀測
-          </Button>
-        </div>
-      </div>
       {activePoint && (
         <div
           className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border/60 px-4 py-2 text-xs text-muted-foreground"
@@ -655,13 +825,10 @@ export function Dashboard({
         end={end}
         onSelectTime={setActiveX}
       />
-      <Card className="min-w-0 p-5 sm:p-6">
-        <div className="mb-4">
-          <h2 className="text-sm font-medium">請求並行趨勢</h2>
-          <p className="mt-1 text-xs text-muted-foreground">
-            不同處理階段，共用請求數刻度
-          </p>
-        </div>
+      <ChartCard
+        title="請求並行趨勢"
+        description="不同處理階段，共用請求數刻度"
+      >
         <TimeSeriesChart
           {...chartLabels}
           data={data}
@@ -674,16 +841,18 @@ export function Dashboard({
           activeX={activeX}
           onActiveXChange={setActiveX}
         />
-      </Card>
-      <Card className="min-w-0 p-0">
-        <div className="flex items-center justify-between px-5 pb-2 pt-5 sm:px-6">
-          <h2 className="text-sm font-medium">模型</h2>
+      </ChartCard>
+      <SectionRow
+        title="模型"
+        action={
           <Button size="sm" variant="ghost" onClick={() => navigate("models")}>
             模型庫
             <ArrowRight size={13} />
           </Button>
-        </div>
-        <ul className="divide-y divide-border/60">
+        }
+      />
+      <Card className="min-w-0 p-0">
+        <ul className="divide-y divide-border/60 py-1">
           {(status?.models ?? []).slice(0, 6).map((model) => (
             <li key={model.id} className="px-3 py-0.5 sm:px-4">
               <HoverRow
@@ -727,6 +896,6 @@ export function Dashboard({
           )}
         </ul>
       </Card>
-    </section>
+    </DashboardPage>
   );
 }

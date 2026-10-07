@@ -180,3 +180,33 @@ export function observationCsv(history: readonly EngineHistoryPoint[]): string {
     [header, ...rows].map((row) => row.map(cell).join(",")).join("\r\n")
   );
 }
+
+export interface TrendDelta {
+  /** Signed percent change of the recent half against the earlier half. */
+  value: number;
+  /** True when the change is an improvement (direction depends on the metric). */
+  positive: boolean;
+}
+
+/**
+ * Honest trend: mean of the later half of the observed samples against the
+ * earlier half. Returns null unless both halves have enough samples, the
+ * earlier mean is positive, and the change is at least `minPercent`; a flat or
+ * unobserved series shows no arrow rather than an invented 0%.
+ */
+export function trendDelta(
+  values: readonly number[],
+  { lowerIsBetter = false, minPerSide = 3, minPercent = 5 } = {},
+): TrendDelta | null {
+  const clean = values.filter((v) => Number.isFinite(v));
+  const half = Math.floor(clean.length / 2);
+  if (half < minPerSide) return null;
+  const mean = (xs: readonly number[]) =>
+    xs.reduce((s, x) => s + x, 0) / xs.length;
+  const before = mean(clean.slice(0, half)),
+    after = mean(clean.slice(clean.length - half));
+  if (!(before > 0)) return null;
+  const value = ((after - before) / before) * 100;
+  if (Math.abs(value) < minPercent) return null;
+  return { value, positive: lowerIsBetter ? value < 0 : value > 0 };
+}
