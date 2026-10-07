@@ -692,8 +692,10 @@ def create_app() -> FastAPI:
             "CORS: allow_origins=['*'] — set YUNSHU_CORS_ORIGINS for production"
         )
 
+    from .middleware.surrogate_guard import SurrogateGuardMiddleware
     from .middleware.tool_reasoning import ToolReasoningMiddleware
 
+    app.add_middleware(SurrogateGuardMiddleware)
     app.add_middleware(ToolReasoningMiddleware)
     app.add_middleware(
         CORSMiddleware,
