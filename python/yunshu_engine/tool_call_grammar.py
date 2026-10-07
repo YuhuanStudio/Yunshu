@@ -585,6 +585,10 @@ def validate_forced_tools(engine, tools, choice, parallel=True):
         cfg = getattr(engine, "_config", None) or {}
         args = getattr(getattr(engine, "_model", None), "args", None)
         tok = engine._tokenizer
+        if tok is None:
+            raise ValueError(
+                "Cannot guarantee forced tool_choice: model tokenizer is unavailable"
+            )
         vocab = (
             (cfg.get("text_config") or {}).get("vocab_size")
             or cfg.get("vocab_size")

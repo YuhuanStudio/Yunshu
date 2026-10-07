@@ -1342,10 +1342,12 @@ class ModelManager:
                 continue
 
             model_id = subdir.name
+            alias_type = None
             if model_id.startswith(".ollama--") and subdir.is_symlink():
                 from urllib.parse import unquote
 
                 model_id = unquote(model_id.removeprefix(".ollama--"))
+                alias_type = _detect_model_type(str(subdir.resolve()))
 
             # Skip if already registered and loaded/loading.
             # Loading entries must not be overwritten — would orphan loading events.
@@ -1372,6 +1374,7 @@ class ModelManager:
                 model_path=str(subdir),
                 estimated_bytes=estimated,
                 pinned=was_pinned,
+                **({"model_type": alias_type} if alias_type is not None else {}),
             )
             count += 1
 

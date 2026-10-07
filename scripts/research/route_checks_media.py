@@ -542,8 +542,8 @@ def _embed(c: Ctx):
         "/v1/score",
         json={
             "model": c.model,
-            "queries": "a cat",
-            "documents": ["a feline", "a car"],
+            "queries": CAT,
+            "documents": [KITTEN, STOCK],
             "instruction": "ignored for bi-encoder",
         },
     )

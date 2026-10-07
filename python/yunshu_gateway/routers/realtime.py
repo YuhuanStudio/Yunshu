@@ -3571,8 +3571,9 @@ class RealtimeSession:
         """Resolve the inference engine for this session."""
         from ..engine import get_engine, get_model_manager
 
-        if self.session.model == getattr(self, "_initial_model", None):
-            return self._initial_engine
+        initial_engine = getattr(self, "_initial_engine", None)
+        if initial_engine is not None and self.session.model == self._initial_model:
+            return initial_engine
 
         # Try multi-model
         manager = get_model_manager()

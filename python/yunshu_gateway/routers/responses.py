@@ -33,6 +33,7 @@ from pydantic import (
 
 from yunshu_engine import settings
 
+from ..custom_tools import custom_item, custom_names, custom_stream
 from ..engine import get_engine, get_engine_for_model
 from ..error_envelope import EngineStreamError, server_error_body
 from ..usage_shapes import responses_usage
@@ -180,7 +181,10 @@ def _config_echo(req: ResponsesRequest) -> dict:
         "temperature": req.temperature,
         "top_p": req.top_p,
         "max_output_tokens": req.max_output_tokens,
-        "tools": [t.model_dump(exclude_none=True) for t in (req.tools or [])],
+        "tools": [
+            t.model_dump(exclude_none=True)
+            for t in (getattr(req, "_public_tools", req.tools) or [])
+        ],
         "tool_choice": req.tool_choice or "auto",
         "parallel_tool_calls": req.parallel_tool_calls,
         "text": text,
@@ -1216,6 +1220,10 @@ def _enforce_tool_choice(req: ResponsesRequest, calls: list[dict]) -> list[dict]
         calls = calls[:1]
     if req.max_tool_calls:
         calls = calls[: req.max_tool_calls]
+    for call in calls:
+        custom_item(
+            {"type": "function_call", **call}, getattr(req, "_custom_names", set())
+        )
     return calls
 
 
@@ -1271,7 +1279,12 @@ def _apply_previous_response_chain(req, messages: list[dict], request) -> list[d
                             _amsg["reasoning_content"] = "\n".join(_rs_pending)
                             _rs_pending = []
                         _turn.append(_amsg)
-            elif out.get("type") in ("web_search_call", "mcp_call"):
+            elif out.get("type") in (
+                "web_search_call",
+                "mcp_call",
+                "custom_tool_call",
+                "custom_tool_call_output",
+            ):
                 _turn.extend(
                     input_item_to_messages(out, _prev.get("_server_tool_texts"))
                 )
@@ -1355,12 +1368,18 @@ async def create_response(req: ResponsesRequest, request: Request):
     # background is not supported here (would require resumable SSE), so it only
     # triggers when stream is off.
     if has_server_tools_responses(req):
+        if custom_names(req.tools):
+            raise HTTPException(
+                400, "Custom tools cannot be combined with server-side tools yet"
+            )
         return await create_with_server_tools_responses(req, request, create_response)
     if req.background and not req.stream:
         return await _start_background_response(req, request)
+    req._custom_names = custom_names(req.tools)
+    req._public_tools = req.tools
     _fn_tools = function_tools(req.tools)
     if _fn_tools != req.tools:
-        # namespaces flattened, non-function tools (custom, ...) dropped: the engine sees plain functions
+        # The engine sees named functions; the outward custom schema is preserved.
         req = req.model_copy(update={"tools": _fn_tools})
     messages = _convert_to_messages(req)
     # Snapshot THIS hop's own input before previous_response_id chaining mutates
@@ -2035,6 +2054,11 @@ async def create_response(req: ResponsesRequest, request: Request):
                         }
                     )
 
+        all_output_items = [
+            custom_item(i, getattr(req, "_custom_names", set()))
+            for i in all_output_items
+        ]
+
         # if EVERY choice failed (none produced an output item), re-raise the
         # last error so the outer 507 (MemoryError) / 500 handler responds — don't return a
         # 200 with empty output. A partial success (some choices made it) returns normally.
@@ -2157,7 +2181,16 @@ async def create_response(req: ResponsesRequest, request: Request):
                 _ns_tracker.unregister(response_id)
 
 
-async def _stream_response(
+async def _stream_response(engine, req, *args, **kwargs):
+    source = _stream_response_engine(engine, req, *args, **kwargs)
+    names = getattr(req, "_custom_names", set())
+    if names:
+        source = custom_stream(source, names)
+    async for chunk in source:
+        yield chunk
+
+
+async def _stream_response_engine(
     engine,
     req,
     messages,
@@ -2870,6 +2903,7 @@ async def _stream_response(
                         "arguments": tc["arguments"],
                         "status": "completed",
                     }
+                    fc_item = custom_item(fc_item, getattr(req, "_custom_names", set()))
                     _fc_done_data = {
                         "type": "response.output_item.done",
                         "output_index": output_index,

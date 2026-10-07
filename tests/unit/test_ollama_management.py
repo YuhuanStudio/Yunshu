@@ -154,3 +154,32 @@ def test_persistent_namespace_names_are_discovered(managed):
         found["user/copy:latest"]["model_path"]
         == entries["user/copy:latest"].model_path
     )
+
+
+def test_alias_discovery_preserves_reranker_role(managed):
+    from yunshu_engine.model_manager import ModelManager, ModelType
+
+    client, entries, manager = managed
+    root = om.paths.models_dir()
+    source = root / "Qwen3-VL-Reranker-2B"
+    source.mkdir()
+    (source / "config.json").write_text('{"model_type":"qwen3_vl","vision_config":{}}')
+    entries["retrieval"] = SimpleNamespace(
+        model_id="retrieval",
+        model_path=str(source),
+        estimated_bytes=0,
+        model_type=ModelType.RERANKER,
+        is_loaded=False,
+    )
+    assert (
+        client.post(
+            "/api/copy", json={"source": "retrieval", "destination": "generic-copy"}
+        ).status_code
+        == 200
+    )
+    scanner = object.__new__(ModelManager)
+    scanner._entries = {}
+    found = {}
+    scanner.register_model = lambda model_id, **kw: found.update({model_id: kw})
+    scanner.discover_models(str(root))
+    assert found["generic-copy"]["model_type"] is ModelType.RERANKER

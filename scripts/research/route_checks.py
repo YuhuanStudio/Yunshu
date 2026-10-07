@@ -2188,6 +2188,20 @@ def _ollama_management(c: Ctx):
             r.status_code == 200 and r.json() == {"status": "success"},
             f"create: {r.text}",
         )
+        tagged = c.req(
+            "POST",
+            "/api/chat",
+            json={
+                "model": copy + ":latest",
+                "stream": False,
+                "messages": [{"role": "user", "content": "Hi"}],
+                "options": {"num_predict": 4},
+            },
+        )
+        expect(
+            tagged.status_code == 200,
+            f"latest alias: {tagged.status_code} {tagged.text[:100]}",
+        )
         response = c.oa.chat.completions.create(
             model=copy, messages=[{"role": "user", "content": "Hi"}], max_tokens=4
         )
@@ -2291,3 +2305,53 @@ def _forced_tool_uncompilable(c: Ctx):
                 and "Cannot guarantee forced tool_choice" in r.text,
                 f"forced compilation {path}: {r.status_code} {r.text[:160]}",
             )
+
+
+@check("responses_custom_tool", "POST /v1/responses", served=True)
+def _responses_custom_tool(c: Ctx):
+    tools = [
+        {
+            "type": "custom",
+            "name": "echo_freeform",
+            "description": "Return the requested text as freeform input",
+            "format": {"type": "text"},
+        }
+    ]
+    for stream in (False, True):
+        response = c.oa.responses.create(
+            model=c.model,
+            input="Call echo_freeform with input HELLO.",
+            tools=tools,
+            tool_choice={"type": "custom", "name": "echo_freeform"},
+            extra_body={"enable_thinking": False},
+            max_output_tokens=256,
+            stream=stream,
+        )
+        if stream:
+            events = list(response)
+            response = events[-1].response
+            expect(
+                any(e.type == "response.custom_tool_call_input.done" for e in events),
+                "custom input done missing",
+            )
+        calls = [item for item in response.output if item.type == "custom_tool_call"]
+        expect(
+            calls
+            and calls[0].name == "echo_freeform"
+            and isinstance(calls[0].input, str)
+            and calls[0].input,
+            "custom tool output missing",
+        )
+        follow = c.oa.responses.create(
+            model=c.model,
+            previous_response_id=response.id,
+            input=[
+                {
+                    "type": "custom_tool_call_output",
+                    "call_id": calls[0].call_id,
+                    "output": "HELLO",
+                }
+            ],
+            max_output_tokens=8,
+        )
+        expect(follow.output, "custom tool history did not round-trip")

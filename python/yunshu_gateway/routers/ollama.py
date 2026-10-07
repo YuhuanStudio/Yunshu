@@ -84,6 +84,18 @@ def _model_name(body: dict) -> str:
     return m
 
 
+def _native_model_id(model: str) -> str:
+    """Ollama's omitted :latest tag and configured aliases resolve to a native id."""
+    from ..engine import get_model_manager
+
+    manager = get_model_manager()
+    if manager is None:
+        return model
+    entry = manager.get_entry(model) or manager.get_entry(model.removesuffix(":latest"))
+    mid = getattr(entry, "model_id", None)
+    return mid if isinstance(mid, str) and mid else model
+
+
 def _details(model_id: str) -> dict:
     low = model_id.lower()
     quant = next((q for q in ("4bit", "8bit", "bf16", "fp16", "mxfp4") if q in low), "")
@@ -283,7 +295,7 @@ async def _run_chat(request: Request, body: dict, *, generate: bool):
         if not isinstance(msgs, list):
             raise OllamaError(400, "messages is required")
     oa: dict[str, Any] = {
-        "model": model,
+        "model": _native_model_id(model),
         "messages": _to_openai_messages(msgs),
         "stream": bool(stream),
         **_sampling(body.get("options"), body.get("format"), body),
@@ -452,7 +464,7 @@ async def embed(request: Request):
         raise OllamaError(400, "input is required")
     t0 = time.perf_counter()
     async with _client(request) as c:
-        payload: dict[str, Any] = {"model": model, "input": inp}
+        payload: dict[str, Any] = {"model": _native_model_id(model), "input": inp}
         if body.get("dimensions"):
             payload["dimensions"] = body["dimensions"]
         resp = await c.post("/v1/embeddings", json=payload)
@@ -475,7 +487,8 @@ async def embeddings_legacy(request: Request):
     model = _model_name(body)
     async with _client(request) as c:
         resp = await c.post(
-            "/v1/embeddings", json={"model": model, "input": body.get("prompt", "")}
+            "/v1/embeddings",
+            json={"model": _native_model_id(model), "input": body.get("prompt", "")},
         )
     if resp.status_code != 200:
         raise _err_from(resp.text, resp.status_code)
