@@ -135,6 +135,10 @@ def build_parser() -> argparse.ArgumentParser:
     gt.add_argument("--fresh", action="store_true", help="rerun every stage")
     gt.add_argument("--stages", default=",".join(gate_mod.DEFAULT_STAGES))
     gt.add_argument("--priority", type=int, default=0)
+    gt.add_argument(
+        "--ref", help="verify this pinned commit instead of the current tree"
+    )
+    gt.add_argument("--label-prefix", default="infra", help="gpuq job owner prefix")
     sub.add_parser("suites", help="list suites")
     return ap
 
@@ -184,6 +188,8 @@ def main(argv: list | None = None) -> int:
                 [s for s in a.stages.split(",") if s],
                 resume=not a.fresh,
                 priority=a.priority,
+                repo=resolve_arm("cand", a.ref).path if a.ref else None,
+                label_prefix=a.label_prefix,
                 log=lambda m: print(f"[yv] {m}", flush=True),
             )
         if a.cmd == "ab":

@@ -12,6 +12,7 @@ scripts/dev/yv status <run>      # state of a run (directory or name under .../v
 scripts/dev/yv wait <run>        # block until the verdict; exit code = the verdict's
 scripts/dev/yv suites            # list suites
 scripts/dev/yv gate              # release gate with per-stage persistence
+scripts/dev/yv gate --ref COMMIT_SHA --label-prefix worker --stages install,serve-27b,families
 ```
 
 Exit code: 0 every stage passed, 1 a stage failed, 2 infrastructure error (tool, git, gpuq,
@@ -78,7 +79,7 @@ changes.
 ## `yv gate`
 
 Runs `scripts/release/gate.sh` one stage per gpuq job (`install`, `serve-27b`, `families`,
-`soak-mmlu`, `soak-realistic`, `agent-sessions`; port 18993) plus the `long` stage (`yv ab --suite long`, cand = HEAD, base = last `v*` tag; verdict judged fail-closed) and records each in `runs/gate-<commit>/`. A stage
+`soak-mmlu`, `soak-realistic`, `agent-sessions`; port 18993) plus the `long` stage (`yv ab --suite long`, cand = HEAD, base = last `v*` tag; verdict judged fail-closed) and records each in `runs/gate-<commit>/`. `--ref COMMIT_SHA` builds a clean pinned tree; `--label-prefix worker` attributes every GPU job to that worker. The `serve-27b` timing stage requests quiet admission. A stage
 passes when its check rows have no FAIL or CONTENDED, at least one PASS, and the job exited 0.
 A rerun on the same commit skips passed stages (`--fresh` reruns all); `install` reruns if
 `$GATE_ROOT` holds another commit's install.

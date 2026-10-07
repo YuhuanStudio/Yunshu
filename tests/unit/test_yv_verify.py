@@ -1023,3 +1023,47 @@ def test_detach_pins_arms_resolved_by_the_caller(tmp_path):
     ]
     dir_arm = core.Arm("cand", str(wt), "c" * 40, wt.resolve(), "")
     assert cli.pinned_spec(dir_arm) == str(wt.resolve())
+
+
+def test_gate_owner_prefix_and_timing_admission(gate_world):
+    assert (
+        run_gate(gate_world, stages=["install", "serve-27b"], label_prefix="sync015")
+        == 0
+    )
+    records = [
+        json.loads(p.read_text()) for p in (gate_world.tmp / "jobs").glob("*.json")
+    ]
+    assert all(r["label"].startswith("sync015-gate-") for r in records)
+    for record in records:
+        assert ("--quiet" in record["opts"]) == ("serve-27b" in record["label"])
+
+
+def test_gate_cli_pins_ref_and_forwards_owner_prefix(world, monkeypatch):
+    from verify import cli
+
+    commit = git(world.repo, "rev-parse", "base")
+    seen = {}
+    monkeypatch.setattr(core, "TREES", world.trees)
+
+    def capture(stages, **kwargs):
+        seen.update(kwargs)
+        assert stages == ["install"]
+        return 0
+
+    monkeypatch.setattr(cli.gate_mod, "run_gate", capture)
+    assert (
+        cli.main(
+            [
+                "gate",
+                "--ref",
+                commit,
+                "--label-prefix",
+                "sync015",
+                "--stages",
+                "install",
+            ]
+        )
+        == 0
+    )
+    assert git(seen["repo"], "rev-parse", "HEAD") == commit
+    assert seen["label_prefix"] == "sync015"

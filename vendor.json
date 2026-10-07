@@ -11,7 +11,10 @@
       "local_changes": [
         "imports point at yunshu_engine.kernels.omlx"
       ],
-      "kind": "vendored"
+      "kind": "vendored",
+      "reviewed_commit": "25aebb3ee0bb052a264241953bef6820f102dd0b",
+      "reviewed_date": "2026-10-08",
+      "review_reason": "Retain the independently qualified local serving routes. 0eb8df1f adds verify-route introspection and changes sigmoid rounding; local GDN admission already probes its arithmetic. c82ab6dd/3f585300 widen Qwen4/MoE batching, not the 27B default. Cache/memory changes use upstream scheduler/SSD contracts. No unmeasured shape or numerical admission is broadened."
     },
     {
       "path": "python/yunshu_engine/kernels/omlx/qwen35_gdn_prework.py",
@@ -24,9 +27,9 @@
         "imports point at yunshu_engine.kernels.omlx"
       ],
       "kind": "vendored",
-      "reviewed_commit": "68c8c09f6f6a54fe36181f9aabba9525797d1b58",
-      "reviewed_date": "2026-10-04",
-      "review_reason": "Retain stock mlx-vlm 0.7.4 q/k normalization and the qualified local prework. Upstream 5f70e462 changes epsilon arithmetic and prefix namespace; 107e271a adds deferred state/tiles. Neither is a transparent dependency sync; candidate gates belong to the spec owner."
+      "reviewed_commit": "25aebb3ee0bb052a264241953bef6820f102dd0b",
+      "reviewed_date": "2026-10-08",
+      "review_reason": "Retain the independently qualified local serving routes. 0eb8df1f adds verify-route introspection and changes sigmoid rounding; local GDN admission already probes its arithmetic. c82ab6dd/3f585300 widen Qwen4/MoE batching, not the 27B default. Cache/memory changes use upstream scheduler/SSD contracts. No unmeasured shape or numerical admission is broadened."
     },
     {
       "path": "python/yunshu_engine/kernels/omlx/qwen35_gdn_verify_fused.py",
@@ -40,9 +43,9 @@
         "ported upstream omlx e37e07f5: _sigmoid_exp() probes metal::exp vs metal::precise::exp against mlx-vlm _precise_swiglu, norm-gate source uses the winner, fused_eligible declines when neither is bit-equal"
       ],
       "kind": "vendored",
-      "reviewed_commit": "68c8c09f6f6a54fe36181f9aabba9525797d1b58",
-      "reviewed_date": "2026-10-04",
-      "review_reason": "The e37e07f5 precise-exp admission is already ported locally. Keep it and the qualified rollback contract; upstream deferred GDN states need a separate lossless owner A/B."
+      "reviewed_commit": "25aebb3ee0bb052a264241953bef6820f102dd0b",
+      "reviewed_date": "2026-10-08",
+      "review_reason": "Retain the independently qualified local serving routes. 0eb8df1f adds verify-route introspection and changes sigmoid rounding; local GDN admission already probes its arithmetic. c82ab6dd/3f585300 widen Qwen4/MoE batching, not the 27B default. Cache/memory changes use upstream scheduler/SSD contracts. No unmeasured shape or numerical admission is broadened."
     },
     {
       "path": "python/yunshu_engine/kernels/omlx/qwen35_verify_sdpa_split.py",
@@ -93,9 +96,9 @@
       ],
       "why": "row-exact verify projections (one-row qmv arithmetic per row)",
       "kind": "vendored",
-      "reviewed_commit": "68c8c09f6f6a54fe36181f9aabba9525797d1b58",
-      "reviewed_date": "2026-10-04",
-      "review_reason": "26375259 bit-width layout is already ported. Retain qualified local geometry; new unrolled tile admission/group plans in 107e271a are performance candidates, requiring a separate kernel parity and end-to-end A/B."
+      "reviewed_commit": "25aebb3ee0bb052a264241953bef6820f102dd0b",
+      "reviewed_date": "2026-10-08",
+      "review_reason": "Retain the independently qualified local serving routes. 0eb8df1f adds verify-route introspection and changes sigmoid rounding; local GDN admission already probes its arithmetic. c82ab6dd/3f585300 widen Qwen4/MoE batching, not the 27B default. Cache/memory changes use upstream scheduler/SSD contracts. No unmeasured shape or numerical admission is broadened."
     },
     {
       "path": "python/yunshu_engine/kernels/omlx/module_cache.py",
@@ -138,9 +141,9 @@
       ],
       "why": "integer-code tensor-unit matmul (5/6/8-bit via uint8 widening), used by kernels/int_code_linear.py",
       "kind": "vendored",
-      "reviewed_commit": "609ca419abecebdc5a059498a613680bd3aa847f",
-      "reviewed_date": "2026-10-04",
-      "review_reason": "Upstream extends non-4-bit group32 widening; local qualification is group64 plus the existing 4-bit group32 path. Retain M1-M4 portable coordinates and M5 source selection; do not broaden numerical admission without same-checkpoint evidence."
+      "reviewed_commit": "f8fe17d24629aedabf90bbf78279dd776e6d62e7",
+      "reviewed_date": "2026-10-08",
+      "review_reason": "Upstream 394d566 removes the Python engine in favor of native Zig. Preserve the qualified local Python arithmetic, M1-M4 coordinates, M5 sources and request-local state contracts; upstream file deletion is not a correctness reason to remove supported local decoding. New native projection/cache ideas require separate lossless A/B."
     },
     {
       "path": "python/yunshu_engine/kernels/tensorfold/lane_widen.py",
@@ -153,9 +156,9 @@
         "cooperative tensor element coordinates queried through MPP for M1-M4 portability; original M5 strings selected on g17/g18"
       ],
       "kind": "vendored",
-      "reviewed_commit": "609ca419abecebdc5a059498a613680bd3aa847f",
-      "reviewed_date": "2026-10-04",
-      "review_reason": "Upstream adds grouped widening variants. Keep qualified group64 source and local M1-M4 coordinate handling; group32 non-4-bit support remains a separately gated candidate."
+      "reviewed_commit": "f8fe17d24629aedabf90bbf78279dd776e6d62e7",
+      "reviewed_date": "2026-10-08",
+      "review_reason": "Upstream 394d566 removes the Python engine in favor of native Zig. Preserve the qualified local Python arithmetic, M1-M4 coordinates, M5 sources and request-local state contracts; upstream file deletion is not a correctness reason to remove supported local decoding. New native projection/cache ideas require separate lossless A/B."
     },
     {
       "path": "python/yunshu_engine/kernels/tensorfold/lane_m5.py",
@@ -168,9 +171,9 @@
         "main 38ac21ed M5 fragment source strings preserved byte-for-byte"
       ],
       "kind": "vendored",
-      "reviewed_commit": "609ca419abecebdc5a059498a613680bd3aa847f",
-      "reviewed_date": "2026-10-04",
-      "review_reason": "Preserve the byte-for-byte qualified M5 fragment source snapshot; upstream group32 API additions do not supersede the generation-specific arithmetic."
+      "reviewed_commit": "f8fe17d24629aedabf90bbf78279dd776e6d62e7",
+      "reviewed_date": "2026-10-08",
+      "review_reason": "Upstream 394d566 removes the Python engine in favor of native Zig. Preserve the qualified local Python arithmetic, M1-M4 coordinates, M5 sources and request-local state contracts; upstream file deletion is not a correctness reason to remove supported local decoding. New native projection/cache ideas require separate lossless A/B."
     },
     {
       "path": "python/yunshu_engine/kernels/tensorfold/lane_widen_m5.py",
@@ -183,9 +186,9 @@
         "main 38ac21ed M5 widening source strings preserved byte-for-byte"
       ],
       "kind": "vendored",
-      "reviewed_commit": "609ca419abecebdc5a059498a613680bd3aa847f",
-      "reviewed_date": "2026-10-04",
-      "review_reason": "Preserve the qualified M5 widening source snapshot; grouped variants require separate kernel admission and do not replace this source."
+      "reviewed_commit": "f8fe17d24629aedabf90bbf78279dd776e6d62e7",
+      "reviewed_date": "2026-10-08",
+      "review_reason": "Upstream 394d566 removes the Python engine in favor of native Zig. Preserve the qualified local Python arithmetic, M1-M4 coordinates, M5 sources and request-local state contracts; upstream file deletion is not a correctness reason to remove supported local decoding. New native projection/cache ideas require separate lossless A/B."
     },
     {
       "path": "python/yunshu_engine/kernels/tensorfold/inputs.py",
@@ -195,7 +198,10 @@
       "commit": "34bae79a",
       "license": "MIT",
       "local_changes": [],
-      "kind": "vendored"
+      "kind": "vendored",
+      "reviewed_commit": "f8fe17d24629aedabf90bbf78279dd776e6d62e7",
+      "reviewed_date": "2026-10-08",
+      "review_reason": "Upstream 394d566 removes the Python engine in favor of native Zig. Preserve the qualified local Python arithmetic, M1-M4 coordinates, M5 sources and request-local state contracts; upstream file deletion is not a correctness reason to remove supported local decoding. New native projection/cache ideas require separate lossless A/B."
     }
   ],
   "derived": [
@@ -212,7 +218,10 @@
       "local_changes": [
         "prework_source(): the conv window is gathered inside the kernel from the cached conv tail and the window rows (conv_idx), and the unused conv-state output writes are dropped; every tap, product and sum is the upstream kernel's own line"
       ],
-      "why": "fast-tree GDN prework without the per-layer concatenate + gather"
+      "why": "fast-tree GDN prework without the per-layer concatenate + gather",
+      "reviewed_commit": "25aebb3ee0bb052a264241953bef6820f102dd0b",
+      "reviewed_date": "2026-10-08",
+      "review_reason": "Retain the independently qualified local serving routes. 0eb8df1f adds verify-route introspection and changes sigmoid rounding; local GDN admission already probes its arithmetic. c82ab6dd/3f585300 widen Qwen4/MoE batching, not the 27B default. Cache/memory changes use upstream scheduler/SSD contracts. No unmeasured shape or numerical admission is broadened."
     },
     {
       "kind": "derived",
@@ -225,9 +234,9 @@
       "commit": "34bae79a",
       "license": "MIT",
       "why": "prompt-copy / lookup drafting (SuffixLookupProposer: n-gram index, longest backward match, silence after misses), rewritten with a full-prompt index, a windowed benefit estimate and a verify-window parameter; Rapid-MLX's copy drafts inform the idea",
-      "reviewed_commit": "609ca419abecebdc5a059498a613680bd3aa847f",
-      "reviewed_date": "2026-10-04",
-      "review_reason": "Independent full-prompt n-gram index and benefit/window policy retained. Upstream bulk lookup and context bookkeeping are candidates for the active drafter owner, not replacements for our qualified proposal policy."
+      "reviewed_commit": "f8fe17d24629aedabf90bbf78279dd776e6d62e7",
+      "reviewed_date": "2026-10-08",
+      "review_reason": "Upstream 394d566 removes the Python engine in favor of native Zig. Preserve the qualified local Python arithmetic, M1-M4 coordinates, M5 sources and request-local state contracts; upstream file deletion is not a correctness reason to remove supported local decoding. New native projection/cache ideas require separate lossless A/B."
     },
     {
       "kind": "derived",
@@ -242,7 +251,10 @@
       "local_changes": [
         "reuse the registered hardware-selected lane body with original split-K",
         "Yunshu virtual column pointers and separate contiguous outputs; no projection parameter mutation"
-      ]
+      ],
+      "reviewed_commit": "f8fe17d24629aedabf90bbf78279dd776e6d62e7",
+      "reviewed_date": "2026-10-08",
+      "review_reason": "Upstream 394d566 removes the Python engine in favor of native Zig. Preserve the qualified local Python arithmetic, M1-M4 coordinates, M5 sources and request-local state contracts; upstream file deletion is not a correctness reason to remove supported local decoding. New native projection/cache ideas require separate lossless A/B."
     },
     {
       "kind": "derived",
@@ -255,9 +267,9 @@
       "commit": "34bae79a",
       "license": "MIT",
       "why": "row-invariant quantized projections on the tensor units",
-      "reviewed_commit": "609ca419abecebdc5a059498a613680bd3aa847f",
-      "reviewed_date": "2026-10-04",
-      "review_reason": "Retain local arithmetic namespace, row geometry and group eligibility. Upstream group32 extension is optional capability work and not a same-checkpoint numerics fix."
+      "reviewed_commit": "f8fe17d24629aedabf90bbf78279dd776e6d62e7",
+      "reviewed_date": "2026-10-08",
+      "review_reason": "Upstream 394d566 removes the Python engine in favor of native Zig. Preserve the qualified local Python arithmetic, M1-M4 coordinates, M5 sources and request-local state contracts; upstream file deletion is not a correctness reason to remove supported local decoding. New native projection/cache ideas require separate lossless A/B."
     },
     {
       "kind": "derived",
@@ -271,9 +283,9 @@
       "commit": "34bae79a",
       "license": "MIT",
       "why": "5/6/8-bit integer-code matmul wrapper",
-      "reviewed_commit": "609ca419abecebdc5a059498a613680bd3aa847f",
-      "reviewed_date": "2026-10-04",
-      "review_reason": "Keep the locally qualified 5/6/8-bit group64 wrapper and portability policy; upstream grouped kernel additions have not been qualified for our wider row blocks."
+      "reviewed_commit": "f8fe17d24629aedabf90bbf78279dd776e6d62e7",
+      "reviewed_date": "2026-10-08",
+      "review_reason": "Upstream 394d566 removes the Python engine in favor of native Zig. Preserve the qualified local Python arithmetic, M1-M4 coordinates, M5 sources and request-local state contracts; upstream file deletion is not a correctness reason to remove supported local decoding. New native projection/cache ideas require separate lossless A/B."
     },
     {
       "kind": "derived",
@@ -285,7 +297,10 @@
       ],
       "commit": "34bae79a",
       "license": "MIT",
-      "why": "cost-aware draft allocation across rows"
+      "why": "cost-aware draft allocation across rows",
+      "reviewed_commit": "f8fe17d24629aedabf90bbf78279dd776e6d62e7",
+      "reviewed_date": "2026-10-08",
+      "review_reason": "Upstream 394d566 removes the Python engine in favor of native Zig. Preserve the qualified local Python arithmetic, M1-M4 coordinates, M5 sources and request-local state contracts; upstream file deletion is not a correctness reason to remove supported local decoding. New native projection/cache ideas require separate lossless A/B."
     },
     {
       "kind": "derived",
@@ -322,9 +337,9 @@
       "commit": "deb9f00a",
       "license": "Apache-2.0",
       "why": "deprecated port of the oMLX MTP patch (PR 990)",
-      "reviewed_commit": "68c8c09f6f6a54fe36181f9aabba9525797d1b58",
-      "reviewed_date": "2026-10-04",
-      "review_reason": "Deprecated compatibility port is not the mlx-vlm 27B serving path. Upstream Lightning multi-row/coarse-head/cap policies differ from the shared runner contract; retain the supported compatibility behavior, no speculative default change."
+      "reviewed_commit": "25aebb3ee0bb052a264241953bef6820f102dd0b",
+      "reviewed_date": "2026-10-08",
+      "review_reason": "Retain the independently qualified local serving routes. 0eb8df1f adds verify-route introspection and changes sigmoid rounding; local GDN admission already probes its arithmetic. c82ab6dd/3f585300 widen Qwen4/MoE batching, not the 27B default. Cache/memory changes use upstream scheduler/SSD contracts. No unmeasured shape or numerical admission is broadened."
     },
     {
       "kind": "derived",
@@ -378,9 +393,9 @@
       "commit": "deb9f00a",
       "license": "Apache-2.0",
       "why": "process memory limit enforcer, simplified to one asyncio loop",
-      "reviewed_commit": "68c8c09f6f6a54fe36181f9aabba9525797d1b58",
-      "reviewed_date": "2026-10-04",
-      "review_reason": "Local simplified single-node asyncio enforcer does not use upstream tier/rank/prefill accounting. Retain local settings and bounded process policy; memory accounting improvements are separate model-owner work."
+      "reviewed_commit": "25aebb3ee0bb052a264241953bef6820f102dd0b",
+      "reviewed_date": "2026-10-08",
+      "review_reason": "Retain the independently qualified local serving routes. 0eb8df1f adds verify-route introspection and changes sigmoid rounding; local GDN admission already probes its arithmetic. c82ab6dd/3f585300 widen Qwen4/MoE batching, not the 27B default. Cache/memory changes use upstream scheduler/SSD contracts. No unmeasured shape or numerical admission is broadened."
     },
     {
       "kind": "derived",
@@ -422,7 +437,10 @@
       ],
       "commit": "64ea011cb65f14d9ce2737e60db9a4ae91ed7441",
       "license": "MIT",
-      "why": "Native MLX 0.32.3 NAX QMM accumulation over lane-tiled weights/paired scales; only input loader and M tile differ. Installed headers are version-guarded and source-hashed into the prefill arithmetic namespace."
+      "why": "Native MLX 0.32.3 NAX QMM accumulation over lane-tiled weights/paired scales; only input loader and M tile differ. Installed headers are version-guarded and source-hashed into the prefill arithmetic namespace.",
+      "reviewed_commit": "6553c47ba6500e877d7348dd576c021c43a22cf7",
+      "reviewed_date": "2026-10-08",
+      "review_reason": "f8aaf49d qmv float bias sums and partial output tiles are transcribed by qmvsync 20c67dee with version selection. Retain mlx<0.32.4 until a genuine stock source build passes M5 gates; missing Metal compiler prevents admission. Local NAX prefill is independently qualified, not blindly re-copied."
     },
     {
       "kind": "derived",
@@ -470,7 +488,10 @@
       "local_changes": [
         "bounded one-dispatch best-first GPU proposal search and integer ancestry plan",
         "original last-use row order and state-slot liveness; preserve original proposal-rank statistics"
-      ]
+      ],
+      "reviewed_commit": "f8fe17d24629aedabf90bbf78279dd776e6d62e7",
+      "reviewed_date": "2026-10-08",
+      "review_reason": "Upstream 394d566 removes the Python engine in favor of native Zig. Preserve the qualified local Python arithmetic, M1-M4 coordinates, M5 sources and request-local state contracts; upstream file deletion is not a correctness reason to remove supported local decoding. New native projection/cache ideas require separate lossless A/B."
     },
     {
       "kind": "inspired",
@@ -483,9 +504,9 @@
       "commit": "34bae79a",
       "license": "MIT",
       "why": "position-keyed Gumbel-max sampling, so a drafted token is accepted exactly when serial sampling would draw it",
-      "reviewed_commit": "609ca419abecebdc5a059498a613680bd3aa847f",
-      "reviewed_date": "2026-10-04",
-      "review_reason": "Independent explicit request seed and keyed min_p contract already cover the useful sampler behavior. Do not adopt process-wide prompt seed salt, which would change API seed semantics."
+      "reviewed_commit": "f8fe17d24629aedabf90bbf78279dd776e6d62e7",
+      "reviewed_date": "2026-10-08",
+      "review_reason": "Upstream 394d566 removes the Python engine in favor of native Zig. Preserve the qualified local Python arithmetic, M1-M4 coordinates, M5 sources and request-local state contracts; upstream file deletion is not a correctness reason to remove supported local decoding. New native projection/cache ideas require separate lossless A/B."
     },
     {
       "kind": "inspired",
@@ -498,9 +519,9 @@
       "commit": "34bae79a",
       "license": "MIT",
       "why": "restricted draft vocabulary (draft_vocab); ours adds a per-request learned extension",
-      "reviewed_commit": "609ca419abecebdc5a059498a613680bd3aa847f",
-      "reviewed_date": "2026-10-04",
-      "review_reason": "Local independent reduced-head path retains group metadata and per-request learned vocabulary. Upstream group-size validation/rotated-head support is a candidate guard; no unmeasured kernel path is adopted."
+      "reviewed_commit": "f8fe17d24629aedabf90bbf78279dd776e6d62e7",
+      "reviewed_date": "2026-10-08",
+      "review_reason": "Upstream 394d566 removes the Python engine in favor of native Zig. Preserve the qualified local Python arithmetic, M1-M4 coordinates, M5 sources and request-local state contracts; upstream file deletion is not a correctness reason to remove supported local decoding. New native projection/cache ideas require separate lossless A/B."
     },
     {
       "kind": "inspired",
@@ -512,7 +533,10 @@
       ],
       "commit": "34bae79a",
       "license": "MIT",
-      "why": "draft-tree lattice scoring (unary + edge*pairwise, tau)"
+      "why": "draft-tree lattice scoring (unary + edge*pairwise, tau)",
+      "reviewed_commit": "f8fe17d24629aedabf90bbf78279dd776e6d62e7",
+      "reviewed_date": "2026-10-08",
+      "review_reason": "Upstream 394d566 removes the Python engine in favor of native Zig. Preserve the qualified local Python arithmetic, M1-M4 coordinates, M5 sources and request-local state contracts; upstream file deletion is not a correctness reason to remove supported local decoding. New native projection/cache ideas require separate lossless A/B."
     },
     {
       "kind": "inspired",
@@ -524,7 +548,10 @@
       ],
       "commit": "34bae79a",
       "license": "MIT",
-      "why": "tree-shaped bit-exact verify"
+      "why": "tree-shaped bit-exact verify",
+      "reviewed_commit": "f8fe17d24629aedabf90bbf78279dd776e6d62e7",
+      "reviewed_date": "2026-10-08",
+      "review_reason": "Upstream 394d566 removes the Python engine in favor of native Zig. Preserve the qualified local Python arithmetic, M1-M4 coordinates, M5 sources and request-local state contracts; upstream file deletion is not a correctness reason to remove supported local decoding. New native projection/cache ideas require separate lossless A/B."
     },
     {
       "kind": "inspired",
@@ -538,9 +565,9 @@
       "commit": "34bae79a",
       "license": "MIT",
       "why": "lane round driver structure",
-      "reviewed_commit": "609ca419abecebdc5a059498a613680bd3aa847f",
-      "reviewed_date": "2026-10-04",
-      "review_reason": "Keep independent per-row scheduler/grammar/cache ownership. Upstream FamilyRounds and Nemotron/CUDA APIs are not drop-in; draft cost and failure handling ideas are assigned as backlog candidates."
+      "reviewed_commit": "f8fe17d24629aedabf90bbf78279dd776e6d62e7",
+      "reviewed_date": "2026-10-08",
+      "review_reason": "Upstream 394d566 removes the Python engine in favor of native Zig. Preserve the qualified local Python arithmetic, M1-M4 coordinates, M5 sources and request-local state contracts; upstream file deletion is not a correctness reason to remove supported local decoding. New native projection/cache ideas require separate lossless A/B."
     },
     {
       "kind": "inspired",
@@ -554,9 +581,9 @@
       "commit": "34bae79a",
       "license": "MIT",
       "why": "packed segment forward over rows",
-      "reviewed_commit": "609ca419abecebdc5a059498a613680bd3aa847f",
-      "reviewed_date": "2026-10-04",
-      "review_reason": "Independent packed segment forward retained. Upstream CUDA/prompt ingestion and family metadata updates do not replace this local row-invariant kernel contract."
+      "reviewed_commit": "f8fe17d24629aedabf90bbf78279dd776e6d62e7",
+      "reviewed_date": "2026-10-08",
+      "review_reason": "Upstream 394d566 removes the Python engine in favor of native Zig. Preserve the qualified local Python arithmetic, M1-M4 coordinates, M5 sources and request-local state contracts; upstream file deletion is not a correctness reason to remove supported local decoding. New native projection/cache ideas require separate lossless A/B."
     },
     {
       "kind": "inspired",
@@ -568,7 +595,10 @@
       ],
       "commit": "34bae79a",
       "license": "MIT",
-      "why": "ordered chunk merge idea"
+      "why": "ordered chunk merge idea",
+      "reviewed_commit": "f8fe17d24629aedabf90bbf78279dd776e6d62e7",
+      "reviewed_date": "2026-10-08",
+      "review_reason": "Upstream 394d566 removes the Python engine in favor of native Zig. Preserve the qualified local Python arithmetic, M1-M4 coordinates, M5 sources and request-local state contracts; upstream file deletion is not a correctness reason to remove supported local decoding. New native projection/cache ideas require separate lossless A/B."
     },
     {
       "kind": "inspired",
@@ -580,7 +610,10 @@
       ],
       "commit": "a98d8c8c",
       "license": "Apache-2.0",
-      "why": "fused (a+b, rms_norm(a+b)) between layers"
+      "why": "fused (a+b, rms_norm(a+b)) between layers",
+      "reviewed_commit": "25aebb3ee0bb052a264241953bef6820f102dd0b",
+      "reviewed_date": "2026-10-08",
+      "review_reason": "Retain the independently qualified local serving routes. 0eb8df1f adds verify-route introspection and changes sigmoid rounding; local GDN admission already probes its arithmetic. c82ab6dd/3f585300 widen Qwen4/MoE batching, not the 27B default. Cache/memory changes use upstream scheduler/SSD contracts. No unmeasured shape or numerical admission is broadened."
     },
     {
       "kind": "inspired",
@@ -593,9 +626,9 @@
       "commit": "c64a578f",
       "license": "Apache-2.0",
       "why": "lossless spec: batch-invariant kernels so spec on == spec off",
-      "reviewed_commit": "5d9950c64a5d8b20cd5a886e0e470543d013cb39",
-      "reviewed_date": "2026-10-04",
-      "review_reason": "Inspired algorithm only, no Splash ABI/code port. Upstream paged KV extent/INT8 variants use a different storage and precision contract; local lossless arithmetic remains required."
+      "reviewed_commit": "0d5a035ea26d1cc566e3c7ee4e08e5e06fa68cf7",
+      "reviewed_date": "2026-10-08",
+      "review_reason": "Independent algorithm inspiration retained. Native ABI cleanup and new ANE FFN split are not compatible Python kernel refreshes; ANE calibration, fallback and finite-join rules are research candidates requiring roofline and same-checkpoint lossless gates."
     },
     {
       "kind": "inspired",
@@ -623,9 +656,9 @@
       "commit": "v0.31.3",
       "license": "MIT",
       "why": "upstream parsers backing each format",
-      "reviewed_commit": "5cfec4cb39deba54210b3ff4d86f2337c7bc10b5",
-      "reviewed_date": "2026-10-04",
-      "review_reason": "Installed mlx-vlm 0.7.4/mlx-lm 0.32.0 parsers already contain the relevant released tool/harmony fixes. Local dispatch and request schemas remain independent; main typed-argument fix is tracked as a regression candidate."
+      "reviewed_commit": "259b8dd0418b687e31ce53258775dff35f879440",
+      "reviewed_date": "2026-10-08",
+      "review_reason": "a537041 untyped XML object/array conversion is covered by tool_arguments.py and test_untyped_xml_containers.py; literal scalars and declared string unions stay exact. 259b8dd MiniCPM5 parser is a new family capability, not a replacement for local template dispatch. Installed 0.32.0 patch symbol sources are unchanged."
     },
     {
       "kind": "inspired",
@@ -700,7 +733,10 @@
       ],
       "commit": "1b97ff11",
       "license": "Apache-2.0",
-      "why": "TeaCache config and hook"
+      "why": "TeaCache config and hook",
+      "reviewed_commit": "c32a26a8450b553d60436d211fa4f67fca31bf52",
+      "reviewed_date": "2026-10-08",
+      "review_reason": "Upstream TeaCache changes add native family/SP support. Keep local lossy cache as an explicit option; no supported 27B shared path changes or lossless default is inferred."
     },
     {
       "kind": "inspired",
@@ -713,9 +749,9 @@
       "commit": "924707f1",
       "license": "Apache-2.0",
       "why": "block pool adapted for UMA",
-      "reviewed_commit": "84bcbc62644356270aaaa5e2d0237d03adc9bb3a",
-      "reviewed_date": "2026-10-04",
-      "review_reason": "Independent local KV block lifecycle retained. Upstream change formats extra keys for distributed cache events, which this single-node block type does not emit."
+      "reviewed_commit": "3ca00a8261c7790ba7487e2001ab9004ad8065f2",
+      "reviewed_date": "2026-10-08",
+      "review_reason": "Retain independent single-node cache/proposer code. BlockPool change is a docstring correction; GPU NGram MRV2 signatures and speculative metrics aggregation belong to a different execution contract. New mRoPE/grammar/cache fixes are backlog probes, not CUDA code ports."
     },
     {
       "kind": "inspired",
@@ -752,9 +788,9 @@
       "commit": "deb9f00a",
       "license": "Apache-2.0",
       "why": "per-model runtime settings loaded from the model directory",
-      "reviewed_commit": "68c8c09f6f6a54fe36181f9aabba9525797d1b58",
-      "reviewed_date": "2026-10-04",
-      "review_reason": "Independent local model options go through Yunshu settings and do not use oMLX offload/profile tiers. Upstream adaptive MTP depth is a separately measured candidate."
+      "reviewed_commit": "25aebb3ee0bb052a264241953bef6820f102dd0b",
+      "reviewed_date": "2026-10-08",
+      "review_reason": "Retain the independently qualified local serving routes. 0eb8df1f adds verify-route introspection and changes sigmoid rounding; local GDN admission already probes its arithmetic. c82ab6dd/3f585300 widen Qwen4/MoE batching, not the 27B default. Cache/memory changes use upstream scheduler/SSD contracts. No unmeasured shape or numerical admission is broadened."
     },
     {
       "kind": "inspired",
@@ -767,9 +803,9 @@
       "commit": "deb9f00a",
       "license": "Apache-2.0",
       "why": "mRoPE delta capture and batch decode positions",
-      "reviewed_commit": "68c8c09f6f6a54fe36181f9aabba9525797d1b58",
-      "reviewed_date": "2026-10-04",
-      "review_reason": "Only mRoPE algorithm is inspired by upstream scheduler. Upstream changes are scheduler/memory/offload/prefill-tail contracts, not replacements for local request-local rotary positions."
+      "reviewed_commit": "25aebb3ee0bb052a264241953bef6820f102dd0b",
+      "reviewed_date": "2026-10-08",
+      "review_reason": "Retain the independently qualified local serving routes. 0eb8df1f adds verify-route introspection and changes sigmoid rounding; local GDN admission already probes its arithmetic. c82ab6dd/3f585300 widen Qwen4/MoE batching, not the 27B default. Cache/memory changes use upstream scheduler/SSD contracts. No unmeasured shape or numerical admission is broadened."
     },
     {
       "kind": "inspired",
@@ -860,9 +896,9 @@
       "commit": "a0ba1968",
       "license": "Apache-2.0",
       "why": "radix-tree prefix matching",
-      "reviewed_commit": "3dc7f4b816707781716f30446433467c66c4c0ed",
-      "reviewed_date": "2026-10-04",
-      "review_reason": "Independent radix/cache optimizations retained. SGLang checkpoint/supports_prefix_sharing API changes are architecture ideas, not a code dependency or an upstream fix to transplant."
+      "reviewed_commit": "7760d5264ac16b85392aefb1bf5c13ce38d9632e",
+      "reviewed_date": "2026-10-08",
+      "review_reason": "Retain independent local radix/cache arithmetic. TreeLock and checkpoint/publication changes use SGLang ownership hooks; draft KV capture bounds and exact beta sigmoid are correctness probes in the backlog. No distributed cache hooks or lossy defaults are imported."
     },
     {
       "kind": "inspired",
@@ -906,9 +942,9 @@
       "commit": "dc9879cf",
       "license": "MIT",
       "why": "common_speculative_state: one proposer interface for n-gram, draft model and MTP",
-      "reviewed_commit": "836d57176dc699a726c55418e4f96b8ca628e1bf",
-      "reviewed_date": "2026-10-04",
-      "review_reason": "Independent local n-gram proposal retained. Upstream probabilistic MTP/simple-draft acceptance is a different sampling contract and requires explicit paired quality before adoption."
+      "reviewed_commit": "bd4eeaa047006cb1fe71999fbd11134b5836e167",
+      "reviewed_date": "2026-10-08",
+      "review_reason": "Retain independent local proposal/keyed sampling. Greedy temperature-zero selection and recurrent rollback anchors are backlog regression probes; GGUF/native C++ kernel and parser changes are not drop-in replacements."
     },
     {
       "kind": "inspired",
@@ -923,7 +959,10 @@
       "license": "Apache-2.0",
       "local_changes": [
         "structured_outputs request field folded into Yunshu's grammar/response_format"
-      ]
+      ],
+      "reviewed_commit": "3ca00a8261c7790ba7487e2001ab9004ad8065f2",
+      "reviewed_date": "2026-10-08",
+      "review_reason": "Retain independent single-node cache/proposer code. BlockPool change is a docstring correction; GPU NGram MRV2 signatures and speculative metrics aggregation belong to a different execution contract. New mRoPE/grammar/cache fixes are backlog probes, not CUDA code ports."
     },
     {
       "kind": "inspired",
@@ -1027,7 +1066,10 @@
       "license": "MIT",
       "local_changes": [
         "EmbeddingGemma 2 text tower (bidirectional, projection-only per-layer embeddings, scale 1.0, local/global head sizes) written from the Hugging Face transformers embedding_gemma2 architecture (Apache-2.0, transformers 5.19); the vision and audio towers are imported from mlx-vlm gemma4, not copied; sentence-transformers prompts and pooling follow the model card"
-      ]
+      ],
+      "reviewed_commit": "8f8efa57e6d6b2be87d9460acaedb3f485a193aa",
+      "reviewed_date": "2026-10-08",
+      "review_reason": "Installed 0.7.6 patch symbol fingerprints are unchanged. d13bd3c packed GDN changes multi-token prefill, not one-token/with-states verification; admission awaits a released dependency and M5 APC/numerics gates. RF-DETR/SAM/EmbeddingGemma changes are separate families, not reasons to change the 27B local arithmetic."
     },
     {
       "kind": "inspired",
@@ -1041,7 +1083,24 @@
       "license": "Apache-2.0",
       "local_changes": [
         "only the public design of oMLX PR #4315 (a /v1/systemone route next to a decision engine for Clef) informed this; its code was NOT read. License checked: Apache-2.0, same as the oMLX files already vendored. Wire formats come from openai-python 3.26 types and TypeSafe's published System One docs"
-      ]
+      ],
+      "reviewed_commit": "25aebb3ee0bb052a264241953bef6820f102dd0b",
+      "reviewed_date": "2026-10-08",
+      "review_reason": "Retain the independently qualified local serving routes. 0eb8df1f adds verify-route introspection and changes sigmoid rounding; local GDN admission already probes its arithmetic. c82ab6dd/3f585300 widen Qwen4/MoE batching, not the 27B default. Cache/memory changes use upstream scheduler/SSD contracts. No unmeasured shape or numerical admission is broadened."
+    },
+    {
+      "path": "python/yunshu_engine/tool_arguments.py",
+      "repo": "https://github.com/ml-explore/mlx-lm",
+      "clone": "reference/mlx-lm",
+      "upstream_paths": [
+        "mlx_lm/tool_parsers/qwen3_coder.py"
+      ],
+      "commit": "a537041adc86d73cfae4cc1375b2c8851c652c60",
+      "license": "MIT",
+      "kind": "inspired",
+      "reviewed_commit": "259b8dd0418b687e31ce53258775dff35f879440",
+      "reviewed_date": "2026-10-08",
+      "review_reason": "Independent request-local untyped XML container coercion. Preserve JSON scalar text, explicit string unions and JSON-wire values; tests/unit/test_untyped_xml_containers.py fails without the fix."
     }
   ],
   "patches": [
@@ -2045,8 +2104,8 @@
         "omlx/patches/mlx_vlm_mtp/*.py"
       ],
       "why": "new or changed Qwen3.5-family kernels we may want",
-      "commit": "68c8c09f6f6a54fe36181f9aabba9525797d1b58",
-      "reviewed_date": "2026-10-04"
+      "commit": "25aebb3ee0bb052a264241953bef6820f102dd0b",
+      "reviewed_date": "2026-10-08"
     },
     {
       "repo": "https://github.com/Blaizzy/mlx-vlm",
@@ -2059,8 +2118,8 @@
       ],
       "why": "runner, APC, speculative decode we build on",
       "pin_package": "mlx-vlm",
-      "commit": "1dcc142dbe2c579d1de7638aaac263f7e4e11734",
-      "reviewed_date": "2026-10-04"
+      "commit": "8f8efa57e6d6b2be87d9460acaedb3f485a193aa",
+      "reviewed_date": "2026-10-08"
     },
     {
       "repo": "https://github.com/ml-explore/mlx-lm",
@@ -2072,8 +2131,8 @@
       ],
       "why": "text path, caches, samplers",
       "pin_package": "mlx-lm",
-      "commit": "5cfec4cb39deba54210b3ff4d86f2337c7bc10b5",
-      "reviewed_date": "2026-10-04"
+      "commit": "259b8dd0418b687e31ce53258775dff35f879440",
+      "reviewed_date": "2026-10-08"
     },
     {
       "repo": "https://github.com/ml-explore/mlx",
@@ -2085,8 +2144,8 @@
       ],
       "why": "quantized matmul / NAX kernels",
       "pin_package": "mlx",
-      "commit": "0e3ff3643b1c3719f78814b98e0d222afbad867c",
-      "reviewed_date": "2026-10-04"
+      "commit": "6553c47ba6500e877d7348dd576c021c43a22cf7",
+      "reviewed_date": "2026-10-08"
     },
     {
       "repo": "https://github.com/ashhart/TensorFold",
@@ -2095,8 +2154,8 @@
         "src/tensorfold/**"
       ],
       "why": "exact speculative decoding, lane engine, multi-bit tensor-unit kernels for Qwen3.8",
-      "commit": "609ca419abecebdc5a059498a613680bd3aa847f",
-      "reviewed_date": "2026-10-04"
+      "commit": "f8fe17d24629aedabf90bbf78279dd776e6d62e7",
+      "reviewed_date": "2026-10-08"
     },
     {
       "repo": "https://github.com/basecompute/baseRT",
@@ -2116,8 +2175,8 @@
         "python/sglang/srt/constrained/**/*.py"
       ],
       "why": "radix prefix cache, speculative decoding, structured output",
-      "commit": "3dc7f4b816707781716f30446433467c66c4c0ed",
-      "reviewed_date": "2026-10-04"
+      "commit": "7760d5264ac16b85392aefb1bf5c13ce38d9632e",
+      "reviewed_date": "2026-10-08"
     },
     {
       "repo": "https://github.com/vllm-project/vllm",
@@ -2130,8 +2189,8 @@
         "vllm/model_executor/models/gemma4_mtp.py"
       ],
       "why": "n-gram / suffix / MTP proposers, block pool, mRoPE",
-      "commit": "84bcbc62644356270aaaa5e2d0237d03adc9bb3a",
-      "reviewed_date": "2026-10-04"
+      "commit": "3ca00a8261c7790ba7487e2001ab9004ad8065f2",
+      "reviewed_date": "2026-10-08"
     },
     {
       "repo": "https://github.com/ggml-org/llama.cpp",
@@ -2144,8 +2203,8 @@
         "common/chat.*"
       ],
       "why": "n-gram speculation, samplers, grammar and chat templates",
-      "commit": "836d57176dc699a726c55418e4f96b8ca628e1bf",
-      "reviewed_date": "2026-10-04"
+      "commit": "bd4eeaa047006cb1fe71999fbd11134b5836e167",
+      "reviewed_date": "2026-10-08"
     },
     {
       "repo": "https://github.com/incoai/splash",
@@ -2155,8 +2214,8 @@
         "runtime/metal/abi/**"
       ],
       "why": "batch-invariant Metal kernels (decode, prefill, paged attention)",
-      "commit": "5d9950c64a5d8b20cd5a886e0e470543d013cb39",
-      "reviewed_date": "2026-10-04"
+      "commit": "0d5a035ea26d1cc566e3c7ee4e08e5e06fa68cf7",
+      "reviewed_date": "2026-10-08"
     },
     {
       "repo": "https://github.com/bstnxbt/dflash-mlx",
@@ -2174,7 +2233,8 @@
         "mtplx/**/*.py"
       ],
       "why": "MTP speculative decoding on MLX",
-      "commit": "1de2b1c0"
+      "commit": "9882703f3105363ddc37eca9f97aa09a1d387112",
+      "reviewed_date": "2026-10-08"
     },
     {
       "repo": "https://github.com/raullenchai/Rapid-MLX",
@@ -2183,8 +2243,8 @@
         "rapid_mlx/**/*.py"
       ],
       "why": "MLX serving engine: tools, caching, agent runtime",
-      "commit": "73ce1521746ca587ba6784c6374590da31eca733",
-      "reviewed_date": "2026-10-04"
+      "commit": "082d72230417bcc5a24ff16e44d70c62a8c09049",
+      "reviewed_date": "2026-10-08"
     },
     {
       "repo": "https://github.com/waybarrios/vllm-mlx",
@@ -2246,7 +2306,8 @@
         "mlx_audio/server.py"
       ],
       "why": "ASR / TTS backend we depend on",
-      "commit": "94c77162"
+      "commit": "200aac3c64e5140dbe0daa4570dcb129f0f7afc9",
+      "reviewed_date": "2026-10-08"
     },
     {
       "repo": "https://github.com/Blaizzy/mlx-embeddings",
@@ -2265,7 +2326,8 @@
         "vllm_omni/diffusion/cache/teacache/**"
       ],
       "why": "TeaCache diffusion step cache",
-      "commit": "bbee488d"
+      "commit": "c32a26a8450b553d60436d211fa4f67fca31bf52",
+      "reviewed_date": "2026-10-08"
     },
     {
       "repo": "https://github.com/guidance-ai/llguidance",

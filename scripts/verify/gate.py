@@ -124,7 +124,9 @@ def judge_long(verdict: dict | None, planned: list) -> tuple[bool, list]:
     return not bad, bad
 
 
-def run_long_stage(a, gq, log, runs, repo, priority) -> tuple[bool, list, str]:
+def run_long_stage(
+    a, gq, log, runs, repo, priority, label_prefix="infra"
+) -> tuple[bool, list, str]:
     """Run the long suite (candidate = the commit under test, base = long_base) and judge it."""
     import argparse
 
@@ -134,7 +136,7 @@ def run_long_stage(a, gq, log, runs, repo, priority) -> tuple[bool, list, str]:
     commit = git("rev-parse", "HEAD", cwd=repo)
     ns = argparse.Namespace(
         base=a["base"], cand=str(repo), env=[], cand_env=[], base_env=[],
-        suite=LONG_SUITE, label=f"gate-long-{commit[:8]}", model=a["model"],
+        suite=LONG_SUITE, label=f"{label_prefix}-gate-long-{commit[:8]}", model=a["model"],
         model_name="", engaged=[], ctx=None, reps=None, mmlu_n=None, mem_sizes=None,
         mem_reps=None, speed_tol=None, spec_off=None, no_apc_hit_required=False,
         mem_gb=0, priority=priority,
@@ -168,6 +170,7 @@ def run_gate(
     repo: Path | None = None,
     extra_env: dict | None = None,
     priority: int = 0,
+    label_prefix: str = "infra",
 ) -> int:
     gq = gq or Gpuq()
     repo = repo or REPO
@@ -220,7 +223,13 @@ def run_gate(
                 )
             else:
                 ok, reasons, where = run_long_stage(
-                    {"base": base, "model": model}, gq, log, runs, repo, priority
+                    {"base": base, "model": model},
+                    gq,
+                    log,
+                    runs,
+                    repo,
+                    priority,
+                    label_prefix,
                 )
             rd.append(
                 name,
@@ -267,7 +276,7 @@ def run_gate(
             "zsh",
             str(repo / "scripts/release/gate.sh"),
         ]
-        label = f"infra-gate-{commit[:8]}-{name}-{int(now()) % 100000}"
+        label = f"{label_prefix}-gate-{commit[:8]}-{name}-{int(now()) % 100000}"
         jid = gq.submit(
             label,
             argv,
@@ -276,6 +285,7 @@ def run_gate(
             mem_gb=mem,
             priority=priority,
             cwd=repo,
+            quiet=name == "serve-27b",
         )
         rd.append(name, {"ev": "cell_submitted", "cell": name, "job": jid})
         log(f"gate {name}: job {jid}")

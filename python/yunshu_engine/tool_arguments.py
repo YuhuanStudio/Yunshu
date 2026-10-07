@@ -1,3 +1,4 @@
+# Upstream (inspired): ml-explore/mlx-lm (MIT) mlx_lm/tool_parsers/qwen3_coder.py @ a537041
 """Type tool-call arguments with the request's JSON schema.
 
 Formats such as Qwen's native ``<tool_call><function=f><parameter=days>3
@@ -156,6 +157,20 @@ def coerce_tool_arguments(
                 types = _types(prop) if isinstance(prop, dict) else []
                 if value == "null" and "string" in types and "null" in types:
                     args[key] = None
+                elif (
+                    isinstance(value, str)
+                    and isinstance(prop, dict)
+                    and "type" not in prop
+                    and not types
+                ):
+                    # Untyped XML containers follow mlx-lm a537041. Keep
+                    # scalars and explicit string unions as literal text.
+                    try:
+                        container = json.loads(value)
+                    except ValueError:
+                        continue
+                    if isinstance(container, (dict, list)):
+                        args[key] = container
         coerced = _coerce(args, schema)
     except Exception:
         return arguments
