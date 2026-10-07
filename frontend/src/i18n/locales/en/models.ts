@@ -140,5 +140,59 @@ const models: Shape<typeof zh> = {
   "info.description": "Model card and capabilities from the server",
   "info.loading": "Reading model info…",
   "info.openDetail": "Open details page",
+  "actions.offlineReason": "The engine is offline; try again once it is back.",
+  "actions.loadingReason":
+    "The model is still loading; wait until it finishes.",
+  "actions.busyReason": "Another operation is running; wait for it to finish.",
+  "actions.pinnedReason":
+    "This model is pinned and cannot be unloaded; unpin it in Settings first.",
+  "loading.elapsed": "{time} elapsed",
+  "fit.title": "Will it fit",
+  "fit.description":
+    "A dry run of loading this model against the current memory budget. Nothing is loaded.",
+  "fit.checking": "Checking",
+  "fit.error":
+    "The check is unavailable right now; you can still load the model.",
+  "fit.fits": "Fits",
+  "fit.tight": "Tight",
+  "fit.wontFit": "Will not fit",
+  "fit.needed": "Needed",
+  "fit.weights": "Weights",
+  "fit.kv": "KV reserve",
+  "fit.free": "Free now",
+  "fit.spare": "Left after load",
+  "fit.wouldEvict": "These idle models would be unloaded first:",
+  "fit.estimated":
+    "≈ Estimate: derived from weight size and the KV reserve ratio, not measured.",
+  "fit.dialogTitle": "Load {id}?",
+  "fit.dialogTight": "Memory is tight; loading may unload other models.",
+  "fit.dialogWont":
+    "This model does not fit the current budget, even after unloading everything that can be unloaded.",
+  "fit.wontReason":
+    "It will not fit: unload another model or pick a smaller quantization.",
+  "fit.loadAnyway": "Load anyway",
+  "fit.cancel": "Cancel",
+  "fit.close": "Close load check",
+  "local.title": "On disk, not registered",
+  "local.quant": "{bits}-bit",
+  "local.context": "{tokens} context",
+  "local.cap.vision": "Vision",
+  "local.cap.audio": "Audio",
+  "local.cap.tools": "Tools",
+  "local.cap.reasoning": "Reasoning",
+  "local.cap.embedding": "Embedding",
+  "local.complete": "Complete",
+  "local.incomplete": "Incomplete",
+  "local.incompleteReason":
+    "The model files are incomplete; download them again first.",
+  "local.register": "Register and load",
+  "local.cannotRegister":
+    "This engine version cannot register {id} while running; it is picked up after an engine restart.",
+  "local.free": "Free space in the models directory",
+  "list.download": "Download model",
+  "list.downloading": "{count} downloads in progress",
+  "list.viewDownloads": "View downloads",
+  "detail.facts.disk": "On disk",
+  "detail.facts.files": "Files",
 };
 export default models;

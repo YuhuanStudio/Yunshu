@@ -232,6 +232,15 @@ export function MemoryLedgerView({
           )}
         </div>
       )}
+      {data.owners.some((o) => o.kind.startsWith("apc")) && (
+        <a
+          className="inline-block text-xs underline underline-offset-2"
+          href="#/cache"
+          data-testid="ledger-cache-link"
+        >
+          {t("cache.ledgerLink")}
+        </a>
+      )}
     </div>
   );
 }

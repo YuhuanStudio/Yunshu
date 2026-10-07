@@ -1,7 +1,18 @@
 import { t } from "./i18n/index.ts";
+import { useState } from "react";
 import { Play, Square, Zap } from "lucide-react";
-import { Button } from "@yuhuanowo/yunui";
+import {
+  Button,
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogTitle,
+} from "@yuhuanowo/yunui";
 import { loadModel, warmupModel, type Connection } from "./api";
+import { getFit, UNSUPPORTED, type FitResult } from "./admin-models-api";
+import { FitPanel } from "./FitPanel";
+import { Reasoned } from "./Reasoned";
+import { markLoading } from "./loading-clock";
 import { ModelManagement } from "./ModelManagement";
 import { supportsChat, type Model } from "./ui";
 import { fitVerdict } from "./memory-api";
@@ -32,6 +43,28 @@ export function ModelActions({
   /** Free GB from the memory ledger; undefined when the server has no ledger. Informs only. */
   freeGb?: number | null;
 }) {
+  const [checking, setChecking] = useState(false),
+    [review, setReview] = useState<FitResult | null>(null);
+  const load = () => {
+    markLoading(model.id, true);
+    void perform(`load:${model.id}`, () => loadModel(connection, model.id));
+  };
+  /** Dry-run the load first; only a tight or failing verdict stops to ask. */
+  async function startLoad() {
+    setChecking(true);
+    try {
+      const v = await getFit(connection, model.id);
+      if (v !== UNSUPPORTED && v.verdict !== "fits" && !v.loaded) {
+        setReview(v);
+        return;
+      }
+    } catch {
+      // the check is advisory: a failed dry run never blocks loading
+    } finally {
+      setChecking(false);
+    }
+    load();
+  }
   const fit =
     !model.loaded && !model.loading && freeGb !== undefined
       ? fitVerdict(model.size_gb, freeGb)
@@ -67,34 +100,58 @@ export function ModelActions({
           </Button>
         </>
       ) : (
-        <Button
-          size="sm"
-          disabled={!online || !!busy || model.loading}
-          title={fit?.text}
-          onClick={() =>
-            void perform(`load:${model.id}`, () =>
-              loadModel(connection, model.id),
-            )
+        <Reasoned
+          reason={
+            !online
+              ? t("models.actions.offlineReason")
+              : model.loading
+                ? t("models.actions.loadingReason")
+                : busy
+                  ? t("models.actions.busyReason")
+                  : null
           }
         >
-          <Play size={12} />
-          {busy?.endsWith(model.id)
-            ? t("models.actions.working")
-            : t("models.actions.load")}
-        </Button>
+          <Button
+            size="sm"
+            disabled={!online || !!busy || model.loading || checking}
+            title={fit?.text}
+            onClick={() => void startLoad()}
+          >
+            <Play size={12} />
+            {checking
+              ? t("models.fit.checking")
+              : busy?.endsWith(model.id)
+                ? t("models.actions.working")
+                : t("models.actions.load")}
+          </Button>
+        </Reasoned>
       )}
       {model.loaded && (
-        <Button
-          variant="secondary"
-          size="sm"
-          disabled={!online || !!busy || model.loading || model.pinned}
-          onClick={(e) => requestUnload(model, e.currentTarget)}
+        <Reasoned
+          reason={
+            model.pinned
+              ? t("models.actions.pinnedReason")
+              : model.loading
+                ? t("models.actions.loadingReason")
+                : !online
+                  ? t("models.actions.offlineReason")
+                  : busy
+                    ? t("models.actions.busyReason")
+                    : null
+          }
         >
-          <Square size={12} />
-          {busy?.endsWith(model.id)
-            ? t("models.actions.working")
-            : t("models.actions.unload")}
-        </Button>
+          <Button
+            variant="secondary"
+            size="sm"
+            disabled={!online || !!busy || model.loading || model.pinned}
+            onClick={(e) => requestUnload(model, e.currentTarget)}
+          >
+            <Square size={12} />
+            {busy?.endsWith(model.id)
+              ? t("models.actions.working")
+              : t("models.actions.unload")}
+          </Button>
+        </Reasoned>
       )}
       {fit && fit.verdict !== "unknown" && (
         <span
@@ -111,6 +168,41 @@ export function ModelActions({
         disabled={!online || !!busy || model.loading}
         perform={perform}
       />
+      <Dialog open={!!review} onOpenChange={(o) => !o && setReview(null)}>
+        <DialogContent closeLabel={t("models.fit.close")}>
+          <DialogTitle>
+            {t("models.fit.dialogTitle", { id: model.id })}
+          </DialogTitle>
+          <DialogDescription>
+            {review?.verdict === "wont_fit"
+              ? t("models.fit.dialogWont")
+              : t("models.fit.dialogTight")}
+          </DialogDescription>
+          {review && <FitPanel fit={review} />}
+          <div className="flex justify-end gap-2">
+            <Button variant="secondary" onClick={() => setReview(null)}>
+              {t("models.fit.cancel")}
+            </Button>
+            <Reasoned
+              reason={
+                review?.verdict === "wont_fit"
+                  ? t("models.fit.wontReason")
+                  : null
+              }
+            >
+              <Button
+                disabled={review?.verdict === "wont_fit"}
+                onClick={() => {
+                  setReview(null);
+                  load();
+                }}
+              >
+                {t("models.fit.loadAnyway")}
+              </Button>
+            </Reasoned>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

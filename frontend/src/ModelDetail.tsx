@@ -11,12 +11,23 @@ import {
 import { IDBadge } from "@yuhuanowo/yunui/ai";
 import { CodeBlock } from "@yuhuanowo/yunui/content";
 import { DetailList, DetailRow, PageHeader } from "@yuhuanowo/yunui/patterns";
-import { ArrowLeft, Box, FileJson, MemoryStick, Timer } from "lucide-react";
+import {
+  ArrowLeft,
+  Box,
+  FileJson,
+  Gauge as GaugeIcon,
+  MemoryStick,
+  Timer,
+} from "lucide-react";
 import { getModel, type Connection } from "./api";
 import { ModelSize } from "./ModelSize";
 import { MemoryLedgerView } from "./MemoryLedger";
 import type { LedgerState } from "./memory-api";
 import { ModelActions, type Perform } from "./ModelActions";
+import { FitPanel, useFit } from "./FitPanel";
+import { LoadingElapsed } from "./loading-clock";
+import { localFacts } from "./LocalInventory";
+import type { LocalModel } from "./admin-models-api";
 import {
   LocalModelIcon,
   SectionCard,
@@ -61,6 +72,7 @@ export function ModelDetail({
   requestUnload,
   back,
   ledger,
+  local,
 }: {
   id: string;
   engine: Engine;
@@ -72,8 +84,15 @@ export function ModelDetail({
   requestUnload: (model: Model, button: HTMLButtonElement) => void;
   back: () => void;
   ledger?: LedgerState;
+  /** Disk facts for this model from /models/local, when the server has them. */
+  local?: LocalModel | null;
 }) {
   const model = engine.status?.models.find((m) => m.id === id);
+  const fitState = useFit(
+    connection,
+    id,
+    online && !!model && !model.loaded && !model.loading,
+  );
   const [card, setCard] = useState<unknown>(null),
     [cardError, setCardError] = useState("");
   useEffect(() => {
@@ -217,6 +236,24 @@ export function ModelDetail({
               </div>
             )}
           </SectionCard>
+          {!model.loaded && !model.loading && !fitState.unsupported && (
+            <SectionCard
+              icon={GaugeIcon}
+              title={t("models.fit.title")}
+              description={t("models.fit.description")}
+              data-testid="fit-card"
+            >
+              {fitState.fit ? (
+                <FitPanel fit={fitState.fit} />
+              ) : (
+                <p role="status" className="text-sm text-muted-foreground">
+                  {fitState.error
+                    ? t("models.fit.error")
+                    : t("models.fit.checking")}
+                </p>
+              )}
+            </SectionCard>
+          )}
           <SectionCard
             icon={MemoryStick}
             title={t("models.detail.holders.title")}
@@ -281,9 +318,12 @@ export function ModelDetail({
               label={t("models.detail.facts.state")}
               mono={false}
               value={
-                <StatusIndicator status={state.status}>
-                  {state.text}
-                </StatusIndicator>
+                <span className="inline-flex flex-wrap items-center gap-x-3">
+                  <StatusIndicator status={state.status}>
+                    {state.text}
+                  </StatusIndicator>
+                  {model.loading && <LoadingElapsed id={model.id} />}
+                </span>
               }
             />
             <DetailRow
@@ -304,6 +344,24 @@ export function ModelDetail({
               }
               mono={false}
             />
+            {local && (
+              <>
+                <DetailRow
+                  label={t("models.detail.facts.disk")}
+                  value={localFacts(local).join(" · ") || "—"}
+                  mono={false}
+                />
+                <DetailRow
+                  label={t("models.detail.facts.files")}
+                  value={
+                    local.complete
+                      ? t("models.local.complete")
+                      : t("models.local.incomplete")
+                  }
+                  mono={false}
+                />
+              </>
+            )}
             <DetailRow
               label={t("models.detail.facts.idle")}
               value={elapsed(model.idle_s)}

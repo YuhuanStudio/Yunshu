@@ -1,5 +1,5 @@
 import { t, tr } from "./i18n/index.ts";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Button,
   Card,
@@ -27,7 +27,7 @@ import {
 } from "@yuhuanowo/yunui/patterns";
 import { CodeBlock } from "@yuhuanowo/yunui/content";
 import { IDBadge, ModelCard, isKnownCapability } from "@yuhuanowo/yunui/ai";
-import { Box, LayoutGrid, RefreshCw, Table2 } from "lucide-react";
+import { Box, Download, LayoutGrid, RefreshCw, Table2 } from "lucide-react";
 import { getModel, unloadModel, type Connection } from "./api";
 import {
   elapsed,
@@ -36,13 +36,16 @@ import {
   isOnline,
   modelLabel,
   number,
-  Slot,
   useStoredChoice,
   type Engine,
   type Model,
 } from "./ui";
 import { ModelSize } from "./ModelSize";
 import { useMemoryLedger } from "./memory-api";
+import { useDownloads, useLocalInventory } from "./admin-hooks";
+import { isActive } from "./admin-models-api";
+import { LocalInventory } from "./LocalInventory";
+import { LoadingElapsed } from "./loading-clock";
 import { ModelManagement } from "./ModelManagement";
 import { ModelActions, type Perform } from "./ModelActions";
 import { ModelDetail, modelState, retention } from "./ModelDetail";
@@ -82,6 +85,25 @@ export function Models({
     detailSequence = useRef(0);
   const online = isOnline(engine);
   const ledger = useMemoryLedger(connection, online);
+  const downloads = useDownloads(connection, online);
+  const local = useLocalInventory(connection, online);
+  const running = downloads.data?.jobs.filter(isActive).length ?? 0;
+  const finishedCount =
+    downloads.data?.jobs.filter((j) => j.state === "done").length ?? 0;
+  const lastFinished = useRef(finishedCount);
+  useEffect(() => {
+    // a download finished: it registered itself, so show it in the library now
+    if (finishedCount > lastFinished.current) {
+      void engine.refresh();
+      local.refresh();
+    }
+    lastFinished.current = finishedCount;
+  }, [finishedCount]); // eslint-disable-line react-hooks/exhaustive-deps
+  const unregistered = (local.data?.models ?? []).filter(
+    (m) =>
+      m.registeredAs == null &&
+      m.id.toLowerCase().includes(query.toLowerCase()),
+  );
   const freeGb = ledger.data ? (ledger.data.free_gb ?? null) : undefined;
   const rows = (engine.status?.models ?? []).filter(
     (m) =>
@@ -197,6 +219,7 @@ export function Models({
                       <StatusIndicator status={state.status}>
                         <span className="text-foreground">{state.text}</span>
                       </StatusIndicator>
+                      {model.loading && <LoadingElapsed id={model.id} />}
                       <span>{model.type}</span>
                       <span>
                         <ModelSize gb={model.size_gb} />
@@ -294,7 +317,12 @@ export function Models({
                                 : t("models.state.notLoaded")}
                         </span>
                       </StatusIndicator>
-                      <div className="mt-2 h-1">
+                      {model.loading && (
+                        <div className="mt-1 text-xs">
+                          <LoadingElapsed id={model.id} />
+                        </div>
+                      )}
+                      <div className="mt-1 h-1">
                         {model.loading && (
                           <Progress
                             indeterminate
@@ -352,6 +380,9 @@ export function Models({
           requestUnload={requestUnload}
           back={() => open(null)}
           ledger={ledger}
+          local={
+            local.data?.models.find((m) => m.registeredAs === selected) ?? null
+          }
         />
       ) : (
         <>
@@ -372,6 +403,18 @@ export function Models({
                   }
                   perform={perform}
                 />
+                {!downloads.unsupported && (
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => {
+                      location.hash = "/downloads";
+                    }}
+                  >
+                    <Download size={14} />
+                    {t("models.list.download")}
+                  </Button>
+                )}
                 <Button
                   variant="secondary"
                   size="sm"
@@ -427,42 +470,55 @@ export function Models({
               ]}
             />
           </Card>
+          {running > 0 && (
+            <Card
+              className="flex flex-wrap items-center gap-3 px-5 py-3 text-sm"
+              data-testid="downloads-running"
+            >
+              <Download size={14} className="text-muted-foreground" />
+              <span>{t("models.list.downloading", { count: running })}</span>
+              <a
+                className="ml-auto text-sm underline underline-offset-2"
+                href="#/downloads"
+              >
+                {t("models.list.viewDownloads")}
+              </a>
+            </Card>
+          )}
           {memTotal != null && memTotal > 0 && (
-            <Card className="flex flex-wrap items-center gap-x-6 gap-y-3 px-5 py-4">
-              <div className="min-w-0">
+            <Card
+              className="flex flex-col items-stretch gap-3 px-5 py-4 sm:flex-row sm:flex-wrap sm:items-center sm:gap-x-6"
+              data-testid="memory-summary"
+            >
+              <div className="min-w-0 text-left">
                 <p className="text-xs text-muted-foreground">
                   {t("models.list.memoryUsage")}
                 </p>
                 <p className="mt-1 text-2xl font-semibold tabular-nums">
-                  <Slot ch={5} align="right">
-                    {fixed(memActive)}
-                  </Slot>
+                  {fixed(memActive)}
                   <span className="ml-1 text-xs font-normal text-muted-foreground">
                     / {number(memTotal, 0)} GB
                   </span>
                 </p>
               </div>
               <Progress
-                className="h-1.5 min-w-40 flex-1"
+                className="h-1.5 w-full sm:min-w-40 sm:flex-1"
                 value={Math.max(
                   0,
                   Math.min(100, ((memActive ?? 0) / memTotal) * 100),
                 )}
                 label={t("models.list.memoryUsage")}
               />
-              <Slot
-                ch={22}
-                align="right"
-                className="text-xs text-muted-foreground"
-              >
+              <p className="text-left text-xs tabular-nums text-muted-foreground sm:text-right">
                 {t("models.list.memorySummary", {
-                  loaded: loadedRows.length,
+                  loaded: loadedRows.filter((m) => m.loaded && !m.loading)
+                    .length,
                   free: fixed(memFree),
                 })}
-              </Slot>
+              </p>
             </Card>
           )}
-          {!rows.length ? (
+          {!rows.length && !unregistered.length ? (
             <Card className="p-2">
               <EmptyState
                 size="inline"
@@ -487,6 +543,16 @@ export function Models({
                 availableRows.length > 0 &&
                 group(t("models.list.groupAvailable"), availableRows)}
             </>
+          )}
+          {filter === "all" && unregistered.length > 0 && (
+            <LocalInventory
+              items={unregistered}
+              connection={connection}
+              online={online}
+              busy={busy}
+              perform={perform}
+              freeBytes={local.data?.freeBytes ?? null}
+            />
           )}
           <p className="text-xs text-muted-foreground">
             {t("models.list.note")}

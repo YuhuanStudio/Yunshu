@@ -1,6 +1,8 @@
 import api from "./api.ts";
 import common from "./common.ts";
+import cache from "./cache.ts";
 import diagnostics from "./diagnostics.ts";
+import downloads from "./downloads.ts";
 import errors from "./errors.ts";
 import models from "./models.ts";
 import overview from "./overview.ts";
@@ -15,6 +17,8 @@ export default {
   overview,
   requests,
   models,
+  downloads,
+  cache,
   playground,
   diagnostics,
   api,
