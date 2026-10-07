@@ -251,11 +251,7 @@ export function Dashboard({
     if (activeX !== null && !points.some((point) => point.at === activeX))
       setActiveX(null);
   }, [points, activeX]);
-  const last = status?.last,
-    cache =
-      last && last.prompt_tokens > 0
-        ? (last.cached_tokens / last.prompt_tokens) * 100
-        : null;
+  const last = status?.last;
   const activePoint =
     activeX == null ? null : points.find((sample) => sample.at === activeX);
   const items = status?.requests.items ?? [];
@@ -280,11 +276,18 @@ export function Dashboard({
   const loaded = (status?.models ?? []).filter((m) => m.loaded);
   // Trends compare the later half of this window's samples with the earlier half.
   const observed = useMemo(() => observedRequests(points), [points]);
-  const ttftValues = observed.flatMap((r) =>
-    r.ttft_ms == null ? [] : [r.ttft_ms],
-  );
-  const hitValues = observed.flatMap((r) =>
-    r.prompt_tokens > 0 ? [(r.cached_tokens / r.prompt_tokens) * 100] : [],
+  // Prefix reuse is weighted over the observed finished requests (cached /
+  // prompt tokens); the latest request is a secondary line, as on Requests.
+  const promptSum = observed.reduce((n, r) => n + r.prompt_tokens, 0),
+    cachedSum = observed.reduce((n, r) => n + r.cached_tokens, 0);
+  const cache = promptSum > 0 ? (cachedSum / promptSum) * 100 : null;
+  const lastHit =
+    last && last.prompt_tokens > 0
+      ? (last.cached_tokens / last.prompt_tokens) * 100
+      : null;
+  const heroData = useMemo(
+    () => timeSeries(points.filter((p) => p.at >= end - 300_000)),
+    [points, end],
   );
   const baseUrl = serviceRoot(savedBaseUrl());
   const quickModel = (loaded.find(supportsChat) ?? loaded[0])?.id ?? "";
@@ -448,20 +451,18 @@ export function Dashboard({
             subtext={
               last ? `最近一筆 · ${clock(last.t * 1000)}` : "尚無完成請求"
             }
-            trend={trendDelta(ttftValues, { lowerIsBetter: true }) ?? undefined}
           />
           <StatCard
             compact
             valueFirst
             icon={Gauge}
             label="前綴重用率"
-            value={cache == null ? "—" : `${number(cache)}%`}
+            value={cache == null ? "—" : `${number(cache, 0)}%`}
             subtext={
-              last
-                ? `cached ${number(last.cached_tokens, 0)} / ${number(last.prompt_tokens, 0)}`
-                : "尚無完成請求"
+              cache == null
+                ? "尚無完成請求"
+                : `近 ${number(observed.length, 0)} 筆加權${lastHit == null ? "" : ` · 最近一筆 ${number(lastHit, 0)}%`}`
             }
-            trend={trendDelta(hitValues) ?? undefined}
           />
           <StatCard
             compact
@@ -506,42 +507,21 @@ export function Dashboard({
               </p>
             </div>
           ) : (
-            <div>
+            <div className="min-w-0">
               <p className="text-xs text-muted-foreground">
-                {status?.throughput.live_decode_tps != null
-                  ? `目前 Decode 總速率（${status?.requests.active ?? 0} 個請求合計）`
-                  : "Decode · 近 5 分鐘平均（閒置）"}
+                即時吞吐 · 近 5 分鐘 · tok/s
               </p>
-              <p
-                className={
-                  "mt-2 text-5xl font-semibold tracking-tight tabular-nums" +
-                  (status?.throughput.live_decode_tps != null
-                    ? ""
-                    : " text-muted-foreground")
-                }
-              >
-                {liveDecode == null ? (
-                  "—"
-                ) : (
-                  <AnimatedNumber value={liveDecode} decimals={1} />
-                )}
-                <span className="ml-2 text-base font-normal text-muted-foreground">
-                  tok/s
-                </span>
-              </p>
-            </div>
-          )}
-          {decodeTrend.length > 1 ? (
-            <Sparkline
-              className="h-14 w-full"
-              data={decodeTrend}
-              tone="accent"
-              area
-              label="平均 Decode 速度趨勢"
-            />
-          ) : (
-            <div className="flex h-14 items-end">
-              <div className="h-px w-full bg-border" />
+              <TimeSeriesChart
+                {...chartLabels}
+                className="mt-3"
+                data={heroData}
+                series={rateSeries.both}
+                height={150}
+                ariaLabel="近 5 分鐘 Decode 與 Prefill 速度，單位 tok/s"
+                formatX={clock}
+                formatY={formatNumber}
+                maxGap={12000}
+              />
             </div>
           )}
           <div className="border-t border-border/60 pt-4">

@@ -34,7 +34,7 @@ import {
   WorkspaceLayout,
 } from "@yuhuanowo/yunui/patterns";
 import { Gauge, HardDrive, Timer, Zap } from "lucide-react";
-import { trendDelta } from "./analytics";
+import { rollingMedian, trendDelta } from "./analytics";
 import { Download, Search } from "lucide-react";
 import { ApiError, cancelRequest, requestJson, type Connection } from "./api";
 import {
@@ -237,16 +237,16 @@ export function Requests({
     },
     {
       label: "TTFT（已結束請求）",
-      value: ttfts.length ? number(ttfts.at(-1), 0) : "—",
+      value: ttfts.length ? number(median(ttfts), 0) : "—",
       unit: ttfts.length ? "ms" : undefined,
       hint: ttfts.length
-        ? `中位 ${number(median(ttfts), 0)} ms · ${number(ttfts.length, 0)} 筆`
+        ? `近 ${number(ttfts.length, 0)} 筆中位 · 最近一筆 ${number(ttfts.at(-1), 0)} ms`
         : "尚未觀測到已結束請求",
-      data: ttfts,
+      data: rollingMedian(ttfts),
       tone: "accent" as const,
       name: "已結束請求 TTFT 趨勢",
       icon: Timer,
-      trend: trendDelta(ttfts, { lowerIsBetter: true }),
+      trend: null,
     },
     {
       label: "Decode 速度",
@@ -265,13 +265,13 @@ export function Requests({
       unit: promptSum > 0 ? "%" : undefined,
       hint:
         promptSum > 0
-          ? `已結束請求加權 · ${number(hits.length, 0)} 筆`
+          ? `近 ${number(finished.length, 0)} 筆加權${hits.length ? ` · 最近一筆 ${number(hits.at(-1), 0)}%` : ""}`
           : "尚未觀測到已結束請求",
-      data: hits,
+      data: rollingMedian(hits),
       tone: "accent" as const,
       name: "快取命中率趨勢",
       icon: Gauge,
-      trend: trendDelta(hits),
+      trend: null,
     },
   ];
   const xl = useMinWidth(1280);

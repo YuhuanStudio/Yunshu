@@ -184,29 +184,72 @@ export function observationCsv(history: readonly EngineHistoryPoint[]): string {
 export interface TrendDelta {
   /** Signed percent change of the recent half against the earlier half. */
   value: number;
+  /** Which way the metric moved. Independent of whether that is good. */
+  direction: "up" | "down";
   /** True when the change is an improvement (direction depends on the metric). */
   positive: boolean;
+  /** Calm tone: the arrow alone carries direction, no red/green. */
+  neutral: true;
+  /** Display text; large changes are capped as ">100%". */
+  label: string;
 }
+
+const TREND_CAP = 100;
 
 /**
  * Honest trend: mean of the later half of the observed samples against the
- * earlier half. Returns null unless both halves have enough samples, the
- * earlier mean is positive, and the change is at least `minPercent`; a flat or
- * unobserved series shows no arrow rather than an invented 0%.
+ * earlier half, pct = (late - early) / early * 100. Returns null unless both
+ * halves have at least `minPerSide` samples, the earlier mean is positive and
+ * stable (spread within `maxSpread` of the mean) and the change is at least
+ * `minPercent`; a flat, thin or bursty series shows no arrow rather than an
+ * invented number. Large moves display as ">100%" instead of a raw ratio.
  */
 export function trendDelta(
   values: readonly number[],
-  { lowerIsBetter = false, minPerSide = 3, minPercent = 5 } = {},
+  {
+    lowerIsBetter = false,
+    minPerSide = 10,
+    minPercent = 5,
+    maxSpread = 1,
+  } = {},
 ): TrendDelta | null {
   const clean = values.filter((v) => Number.isFinite(v));
   const half = Math.floor(clean.length / 2);
   if (half < minPerSide) return null;
   const mean = (xs: readonly number[]) =>
     xs.reduce((s, x) => s + x, 0) / xs.length;
-  const before = mean(clean.slice(0, half)),
-    after = mean(clean.slice(clean.length - half));
+  const earlier = clean.slice(0, half),
+    later = clean.slice(clean.length - half);
+  const before = mean(earlier),
+    after = mean(later);
   if (!(before > 0)) return null;
+  const spread =
+    Math.sqrt(mean(earlier.map((x) => (x - before) ** 2))) / before;
+  if (spread > maxSpread) return null;
   const value = ((after - before) / before) * 100;
   if (Math.abs(value) < minPercent) return null;
-  return { value, positive: lowerIsBetter ? value < 0 : value > 0 };
+  const up = value > 0;
+  return {
+    value,
+    direction: up ? "up" : "down",
+    positive: lowerIsBetter ? !up : up,
+    neutral: true,
+    label:
+      Math.abs(value) > TREND_CAP
+        ? `>${TREND_CAP}%`
+        : `${Math.abs(value).toFixed(0)}%`,
+  };
+}
+
+/**
+ * Rolling median over the last `k` samples (shorter at the start). A series of
+ * one value per request is spiky; the median shows the level without inventing
+ * points or letting one outlier dominate.
+ */
+export function rollingMedian(values: readonly number[], k = 5): number[] {
+  return values.map((_, i) => {
+    const w = values.slice(Math.max(0, i - k + 1), i + 1).sort((a, b) => a - b);
+    const m = w.length >> 1;
+    return w.length % 2 ? w[m] : (w[m - 1] + w[m]) / 2;
+  });
 }

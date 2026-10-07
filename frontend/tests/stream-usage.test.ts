@@ -11,7 +11,13 @@ test("usage chunk carries x_yunshu timing, cache and speculative stats", () => {
     },
     x_yunshu: {
       ttft_ms: 180.4,
-      speculative: { mode: "dflash", drafted: 900, accepted: 540, acceptance_rate: 0.6, rounds: 75 },
+      speculative: {
+        mode: "dflash",
+        drafted: 900,
+        accepted: 540,
+        acceptance_rate: 0.6,
+        rounds: 75,
+      },
     },
   });
   assert.deepEqual(usage, {
@@ -24,6 +30,9 @@ test("usage chunk carries x_yunshu timing, cache and speculative stats", () => {
 });
 
 test("no spec block when the engine did not draft", () => {
-  const usage = parseUsage({ usage: { completion_tokens: 3 }, x_yunshu: { ttft_ms: 9 } });
+  const usage = parseUsage({
+    usage: { completion_tokens: 3 },
+    x_yunshu: { ttft_ms: 9 },
+  });
   assert.equal(usage?.spec, undefined);
 });
