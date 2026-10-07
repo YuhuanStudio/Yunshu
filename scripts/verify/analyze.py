@@ -106,9 +106,23 @@ def _pct(a: float, b: float) -> float:
     return (b / a - 1.0) * 100.0
 
 
-def speed_compare(base_reps: list, cand_reps: list, tol_pct: float = 2.0) -> dict:
+def _mad(xs: list) -> float:
+    m = statistics.median(xs)
+    return statistics.median([abs(x - m) for x in xs])
+
+
+def speed_compare(
+    base_reps: list,
+    cand_reps: list,
+    tol_pct: float = 2.0,
+    robust: bool = False,
+    only: Iterable | None = None,
+) -> dict:
     """Per (ctx, kind, metric): medians, per-rep paired deltas, noise = half range of the paired
-    deltas; a regression is a median worsening beyond max(tol, noise). Reps pair by index."""
+    deltas; a regression is a median worsening beyond max(tol, noise). Reps pair by index.
+    `robust` (confirmation reps): the delta is the median of the per-rep paired deltas and the
+    noise is the larger of 1.4826 x MAD of those deltas and of each arm's own spread (MAD as a
+    percent of its median), so one stalled rep cannot decide. `only` limits it to (ctx, kind)s."""
     out, regress, missing = [], [], []
     n = min(len(base_reps), len(cand_reps))
     if n == 0:
@@ -122,6 +136,9 @@ def speed_compare(base_reps: list, cand_reps: list, tol_pct: float = 2.0) -> dic
     bidx = [decode_index(r) for r in base_reps[:n]]
     cidx = [decode_index(r) for r in cand_reps[:n]]
     cells = sorted({(k[0], k[1]) for i in bidx + cidx for k in i})
+    if only is not None:
+        keep = {tuple(x) for x in only}
+        cells = [c for c in cells if c in keep]
     for ctx, kind in cells:
         for name, (phase, fld, higher) in METRICS.items():
             bv, cv = [], []
@@ -142,6 +159,10 @@ def speed_compare(base_reps: list, cand_reps: list, tol_pct: float = 2.0) -> dic
             deltas = [_pct(a, b) for a, b in zip(bv, cv)]  # noqa: B905 - Python 3.9
             med = _pct(statistics.median(bv), statistics.median(cv))
             noise = (max(deltas) - min(deltas)) / 2.0 if n > 1 else 0.0
+            if robust:
+                med = statistics.median(deltas)
+                arm = [100.0 * _mad(v) / statistics.median(v) for v in (bv, cv)]
+                noise = 1.4826 * max([_mad(deltas), *arm])
             worse = -med if higher else med  # positive = candidate worse
             limit = max(tol_pct, noise)
             verdict = (

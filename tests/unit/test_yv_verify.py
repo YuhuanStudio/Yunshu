@@ -497,6 +497,59 @@ def test_speed_regression_fails_with_numbers(world):
     assert s["numbers"]["cells"][0]["rep_deltas_pct"]
 
 
+def _speed_cells_run(rd):
+    return [
+        r["cell"]
+        for r in core.read_jsonl(rd / "speed.jsonl")
+        if r.get("ev") == "cell_submitted"
+    ]
+
+
+def test_speed_spike_in_both_cand_reps_is_not_confirmed(world):
+    # a GPU stall hits both cand reps: the paired deltas agree, so the first judgement fails ...
+    assert (
+        go(
+            world,
+            suite="speed",
+            reps=2,
+            cand_env=["FAKE_SPIKE_REPS=0,1", "FAKE_SPIKE_KIND=prose"],
+        )
+        == 0
+    )  # ... but the confirmation reps do not reproduce it
+    v, rd = verdict_of(world)
+    s = v["stages"][0]
+    cf = s["numbers"]["confirmation"]
+    assert (
+        cf["initial_verdict"] == "regression" and cf["confirmed_verdict"] == "neutral"
+    )
+    assert "confirmed: neutral" in (rd / "verdict.md").read_text()
+    sub = _speed_cells_run(rd)
+    assert "cand-r2@c1024prose" in sub and "base-r3@c1024prose" in sub
+    assert not any("code" in c for c in sub)  # only the regressing cell reran
+
+
+def test_speed_consistent_regression_survives_confirmation(world):
+    assert go(world, suite="speed", reps=2, cand_env=["FAKE_TTFT_MULT=1.4"]) == 1
+    v, rd = verdict_of(world)
+    s = v["stages"][0]
+    assert s["status"] == "FAIL" and "warm_ttft_s" in s["reasons"][0]
+    assert s["numbers"]["confirmation"]["confirmed_verdict"] == "regression"
+    assert "cand-r3@c1024prose" in _speed_cells_run(rd)
+
+
+def test_resume_reuses_confirmation_cells(world):
+    args = dict(suite="speed", reps=2, cand_env=["FAKE_TTFT_MULT=1.4"])
+    assert go(world, **args) == 1
+    v, rd = verdict_of(world)
+    first = _speed_cells_run(rd)
+    (rd / "verdict.json").unlink()
+    assert go(world, **args) == 1
+    assert (
+        _speed_cells_run(rd) == first
+    )  # nothing submitted again, confirmation included
+    assert any(c.startswith("cand-r3@") for c in first)
+
+
 def test_speed_interleaves_arms(world):
     assert go(world, suite="speed") == 0
     rd = next(world.runs.glob("t-*"))
