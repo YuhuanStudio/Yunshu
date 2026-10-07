@@ -33,7 +33,7 @@ import {
   TableState,
   WorkspaceLayout,
 } from "@yuhuanowo/yunui/patterns";
-import { Gauge, HardDrive, Timer, Zap } from "lucide-react";
+import { Activity, Copy, Gauge, Timer, Zap } from "lucide-react";
 import { rollingMedian, trendDelta } from "./analytics";
 import { Download, Search } from "lucide-react";
 import { ApiError, cancelRequest, requestJson, type Connection } from "./api";
@@ -61,6 +61,15 @@ import {
   type Engine,
 } from "./ui";
 import type { Perform } from "./Models";
+import { outcomeLabels, useRecentRequests } from "./recentRequests";
+import { RequestBreakdown, RequestTimeline } from "./RequestTimeline";
+
+const PAGE = 50;
+/** Long ids keep both ends so ids that differ only at the tail stay distinguishable. */
+const shortId = (id: string) =>
+  id.length > 20 ? `${id.slice(0, 9)}…${id.slice(-8)}` : id;
+const outcomeBadge = (o?: string) =>
+  o === "error" ? "destructive" : o === "cancelled" ? "warning" : "outline";
 function csv(rows: Row[]) {
   const keys: (keyof Row)[] = [
     "id",
@@ -126,6 +135,9 @@ export function Requests({
   busy: string | null;
 }) {
   const [filter, setFilter] = useState("active"),
+    [outcome, setOutcome] = useState("all"),
+    [limit, setLimit] = useState(PAGE),
+    [copied, setCopied] = useState<string | null>(null),
     [query, setQuery] = useState(""),
     [detail, setDetail] = useState<Row | null>(null),
     [cancel, setCancel] = useState<Row | null>(null),
@@ -176,10 +188,20 @@ export function Requests({
       if (timer) clearTimeout(timer);
     };
   }, [detail?.id, connection.baseUrl, connection.token]);
-  const finished = useMemo(
-    () => finishedFromHistory(engine.history),
+  const recent = useRecentRequests(connection, engine.status?.last?.request_id);
+  const sampled = useMemo(
+    () =>
+      finishedFromHistory(engine.history).map(
+        (row) => ({ ...row, source: "sampled" as const }) satisfies Row,
+      ),
     [engine.history],
   );
+  // The server ring when it exists; otherwise only what this page sampled from status polls.
+  const finished = useMemo(
+    () => (recent.supported ? [...recent.rows].reverse() : sampled),
+    [recent.supported, recent.rows, sampled],
+  );
+  useEffect(() => setLimit(PAGE), [filter, outcome, query]);
   const rows = useMemo(() => {
     const observed = new Map<string, Row>();
     for (const row of finished) observed.set(row.id, row);
@@ -187,16 +209,19 @@ export function Requests({
       observed.set(row.request_id, { ...row, id: row.request_id } as Row);
     return [...observed.values()].reverse();
   }, [finished, engine.status]);
-  const shown = rows.filter(
+  const matched = rows.filter(
     (row) =>
       (filter === "all" ||
         (filter === "active"
           ? row.phase !== "complete"
           : row.phase === "complete")) &&
+      (outcome === "all" ||
+        (row.phase === "complete" && row.outcome === outcome)) &&
       `${row.id} ${row.model ?? ""}`
         .toLowerCase()
-        .includes(query.toLowerCase()),
+        .includes(query.trim().toLowerCase()),
   );
+  const shown = matched.slice(0, limit);
   const restore = (e: Event) => {
     if (opener.current?.isConnected) {
       e.preventDefault();
@@ -220,6 +245,11 @@ export function Requests({
   );
   const promptSum = finished.reduce((n, r) => n + (r.prompt_tokens ?? 0), 0),
     cachedSum = finished.reduce((n, r) => n + (r.cached_tokens ?? 0), 0);
+  const retention = {
+    since: Math.min(
+      ...finished.map((r) => r.t ?? Infinity).concat(Date.now() / 1000),
+    ),
+  };
   const liveDecode =
     status?.throughput.live_decode_tps ?? status?.throughput.mean_decode_tps;
   const tiles = [
@@ -232,7 +262,7 @@ export function Requests({
       data: activeSeries,
       tone: "accent" as const,
       name: "進行中請求數趨勢",
-      icon: HardDrive,
+      icon: Activity,
       trend: null,
     },
     {
@@ -240,7 +270,7 @@ export function Requests({
       value: ttfts.length ? number(median(ttfts), 0) : "—",
       unit: ttfts.length ? "ms" : undefined,
       hint: ttfts.length
-        ? `近 ${number(ttfts.length, 0)} 筆中位 · 最近一筆 ${number(ttfts.at(-1), 0)} ms`
+        ? `${recent.supported ? "伺服器最近" : "本頁觀測"} ${number(ttfts.length, 0)} 筆中位 · 最近一筆 ${number(ttfts.at(-1), 0)} ms`
         : "尚未觀測到已結束請求",
       data: rollingMedian(ttfts),
       tone: "accent" as const,
@@ -260,12 +290,12 @@ export function Requests({
       trend: trendDelta(decodeSeries),
     },
     {
-      label: "前綴快取命中",
+      label: "前綴命中率",
       value: promptSum > 0 ? number((cachedSum / promptSum) * 100, 0) : "—",
       unit: promptSum > 0 ? "%" : undefined,
       hint:
         promptSum > 0
-          ? `近 ${number(finished.length, 0)} 筆加權${hits.length ? ` · 最近一筆 ${number(hits.at(-1), 0)}%` : ""}`
+          ? `${recent.supported ? "伺服器最近" : "本頁觀測"} ${number(finished.length, 0)} 筆加權${hits.length ? ` · 最近一筆 ${number(hits.at(-1), 0)}%` : ""}`
           : "尚未觀測到已結束請求",
       data: rollingMedian(hits),
       tone: "accent" as const,
@@ -287,17 +317,53 @@ export function Requests({
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, [xl, detail]);
-  const detailBody = detail ? (
+  const view =
+    (detail &&
+      finished.find((r) => r.id === detail.id && r.source === "ring")) ||
+    detail;
+  const done = view?.phase === "complete";
+  const copyId = (id: string) => {
+    void navigator.clipboard?.writeText(id).then(() => {
+      setCopied(id);
+      setTimeout(() => setCopied((c) => (c === id ? null : c)), 1500);
+    });
+  };
+  const detailBody = view ? (
     <div className="space-y-6">
       <div className="space-y-2">
         <div className="flex items-center gap-2">
-          <StatusIndicator status={phaseDot(detail.phase)}>
+          <StatusIndicator status={phaseDot(view.phase)}>
             <span className="text-sm font-medium">
-              {labels[detail.phase] ?? detail.phase}
+              {labels[view.phase] ?? view.phase}
             </span>
           </StatusIndicator>
         </div>
-        <p className="break-all font-mono text-xs">{detail.id}</p>
+        {done && view.outcome && (
+          <div className="flex min-h-6 flex-wrap items-center gap-2">
+            <Badge variant={outcomeBadge(view.outcome)}>
+              {outcomeLabels[view.outcome]}
+            </Badge>
+            {view.finish_reason && (
+              <span className="font-mono text-xs text-muted-foreground">
+                {view.finish_reason}
+              </span>
+            )}
+          </div>
+        )}
+        <div className="flex items-start gap-2">
+          <p className="min-w-0 flex-1 break-all font-mono text-xs">
+            {view.id}
+          </p>
+          <Button
+            size="sm"
+            variant="ghost"
+            aria-label="複製 Request ID"
+            onClick={() => copyId(view.id)}
+          >
+            <Copy size={14} />
+            {copied === view.id ? "已複製" : "複製"}
+          </Button>
+        </div>
         {detailError && (
           <p role="status" className="text-xs text-warning">
             {detailError}
@@ -309,78 +375,83 @@ export function Requests({
           </p>
         )}
       </div>
+      {done && (
+        <section className="space-y-4" aria-label="耗時分解">
+          <RequestBreakdown row={view} />
+          <RequestTimeline row={view} />
+          <p className="text-xs text-muted-foreground">
+            時間軸依伺服器量測的階段時間點等比例繪製。引擎不保存 prompt
+            與輸出文字，因此沒有輸入／輸出／推理分頁，只顯示統計。
+          </p>
+        </section>
+      )}
       <section className="space-y-3" aria-label="階段與 token 組成">
-        <StageRail phase={detail.phase} />
-        {detail.phase === "queued" && (
+        {!done && <StageRail phase={view.phase} />}
+        {view.phase === "queued" && (
           <div className="grid grid-cols-2 gap-5">
-            <Readout
-              label="佇列位置"
-              value={number(detail.queue_position, 0)}
-            />
+            <Readout label="佇列位置" value={number(view.queue_position, 0)} />
             <Readout
               label="預估等待（服務端估計）"
-              value={number(detail.queue_est_wait_ms, 0)}
+              value={number(view.queue_est_wait_ms, 0)}
               unit="ms"
             />
           </div>
         )}
-        <PrefillMeter row={detail} />
-        <TokenTrace row={detail} />
+        <PrefillMeter row={view} />
+        <TokenTrace row={view} />
       </section>
       <div className="grid grid-cols-2 gap-5">
         <Readout
           label="模型"
-          value={detail.model ? modelLabel(detail.model) : "未回報"}
+          value={view.model ? modelLabel(view.model) : "未回報"}
         />
-        <Readout label="經過時間" value={elapsed(detail.elapsed_s)} />
-        <Readout
-          label="Prompt tokens"
-          value={number(detail.prompt_tokens, 0)}
-        />
-        <Readout
-          label="Cached tokens"
-          value={number(detail.cached_tokens, 0)}
-        />
-        <Readout
-          label="Output tokens"
-          value={number(detail.completion_tokens, 0)}
-        />
-        <Readout
-          label="首 Token 延遲"
-          value={number(detail.ttft_ms)}
-          unit="ms"
-        />
+        {!done && (
+          <>
+            <Readout label="經過時間" value={elapsed(view.elapsed_s)} />
+            <Readout label="輸入 token" value={number(view.prompt_tokens, 0)} />
+            <Readout label="命中 token" value={number(view.cached_tokens, 0)} />
+            <Readout
+              label="輸出 token"
+              value={number(view.completion_tokens, 0)}
+            />
+            <Readout
+              label="首 token 延遲 (TTFT)"
+              value={number(view.ttft_ms)}
+              unit="ms"
+            />
+          </>
+        )}
         <Readout
           label="Decode"
           value={number(
-            detail.decode_tps ??
-              (detail.phase === "decode" ? detail.tokens_per_second : null),
+            view.decode_tps ??
+              (view.phase === "decode" ? view.tokens_per_second : null),
           )}
           unit="tok/s"
         />
         <Readout
           label="Prefill"
           value={number(
-            detail.prefill_tps ??
-              (detail.phase === "prefill" ? detail.tokens_per_second : null),
+            view.prefill_tps ??
+              (view.phase === "prefill" ? view.tokens_per_second : null),
           )}
           unit="tok/s"
         />
       </div>
-      {detail.speculative && (
+      {view.speculative && (
         <div className="grid grid-cols-3 gap-5 border-t border-border/60 pt-5">
-          <Readout label="推測解碼" value={detail.speculative.mode ?? "—"} />
+          <Readout label="推測解碼" value={view.speculative.mode ?? "—"} />
           <Readout
             label="接受率"
             value={number(
-              detail.speculative.acceptance_rate == null
+              view.speculative.acceptance_rate == null
                 ? null
-                : detail.speculative.acceptance_rate * 100,
+                : view.speculative.acceptance_rate * 100,
               0,
             )}
             unit="%"
           />
-          <Readout label="回合" value={number(detail.speculative.rounds, 0)} />
+          <Readout label="回合" value={number(view.speculative.rounds, 0)} />
         </div>
       )}
     </div>
@@ -449,15 +520,31 @@ export function Requests({
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
               />
-              <SegmentedSelect
-                value={filter}
-                onChange={setFilter}
-                options={[
-                  { value: "active", label: "進行中" },
-                  { value: "complete", label: "觀測到的已結束請求" },
-                  { value: "all", label: "全部" },
-                ]}
-              />
+              <div className="flex flex-wrap gap-2">
+                <SegmentedSelect
+                  value={filter}
+                  onChange={setFilter}
+                  options={[
+                    { value: "active", label: "進行中" },
+                    { value: "complete", label: "已結束" },
+                    { value: "all", label: "全部" },
+                  ]}
+                />
+                <SegmentedSelect
+                  value={outcome}
+                  onChange={(v) => {
+                    setOutcome(v);
+                    if (v !== "all" && filter === "active")
+                      setFilter("complete");
+                  }}
+                  options={[
+                    { value: "all", label: "所有結果" },
+                    { value: "completed", label: "完成" },
+                    { value: "cancelled", label: "已取消" },
+                    { value: "error", label: "錯誤" },
+                  ]}
+                />
+              </div>
             </div>
             <Card className="overflow-hidden">
               <div className="min-h-[17rem]">
@@ -467,8 +554,8 @@ export function Requests({
                       <Tr>
                         <Th>請求</Th>
                         <Th className="hidden w-48 2xl:table-cell">模型</Th>
-                        <Th className="w-28">用量</Th>
-                        <Th className="w-16">tok/s</Th>
+                        <Th className="w-44">用量（輸入 / 輸出）</Th>
+                        <Th className="w-20">tok/s</Th>
                         <Th className="hidden w-32 md:table-cell">
                           進度 / 時間
                         </Th>
@@ -512,8 +599,18 @@ export function Requests({
                                   title={row.id}
                                   className="min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground"
                                 >
-                                  {row.id}
+                                  {shortId(row.id)}
                                 </span>
+                                {row.phase === "complete" &&
+                                  row.outcome &&
+                                  row.outcome !== "completed" && (
+                                    <Badge
+                                      variant={outcomeBadge(row.outcome)}
+                                      className="shrink-0 whitespace-nowrap"
+                                    >
+                                      {outcomeLabels[row.outcome]}
+                                    </Badge>
+                                  )}
                               </div>
                               <p
                                 title={row.model ?? undefined}
@@ -538,17 +635,19 @@ export function Requests({
                                 )}
                               </span>
                             </Td>
-                            <Td className="tabular-nums">
-                              <span className="block whitespace-nowrap">
+                            <Td className="overflow-hidden tabular-nums">
+                              <span className="block truncate">
                                 {number(row.prompt_tokens, 0)} /{" "}
                                 {number(row.completion_tokens, 0)}
                               </span>
-                              <span className="block whitespace-nowrap text-xs text-muted-foreground">
-                                cached {number(row.cached_tokens, 0)}/
+                              <span className="block truncate text-xs text-muted-foreground">
+                                命中 {number(row.cached_tokens, 0)} /{" "}
                                 {number(row.prompt_tokens, 0)}
                               </span>
                             </Td>
-                            <Td className="tabular-nums">{number(speed)}</Td>
+                            <Td className="whitespace-nowrap tabular-nums">
+                              {number(speed)}
+                            </Td>
                             <Td className="hidden tabular-nums md:table-cell">
                               {percent != null ? (
                                 <span>
@@ -630,14 +729,40 @@ export function Requests({
                   </TableState>
                 )}
               </div>
-              <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-1 border-t border-border/60 bg-muted/30 px-4 py-2.5 text-xs text-muted-foreground">
-                <span className="tabular-nums">
-                  顯示 {shown.length} / 共 {rows.length} 筆觀測
-                </span>
-                <span className="min-w-0 max-w-3xl">
-                  「已結束」為本頁開啟後觀測到的已完成請求（依 Request ID
-                  去重）。服務目前只提供最新一筆完成記錄，高頻請求之間可能有未觀測到的完成資料；此頁不把消失的活動請求推測成成功。
-                </span>
+              {matched.length > shown.length && (
+                <div className="flex justify-center border-t border-border/60 py-2">
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => setLimit((n) => n + PAGE)}
+                  >
+                    顯示更多（還有 {matched.length - shown.length} 筆）
+                  </Button>
+                </div>
+              )}
+              <div
+                className="min-h-[3.25rem] space-y-1 border-t border-border/60 bg-muted/30 px-4 py-2.5 text-xs text-muted-foreground"
+                data-testid="requests-footer"
+              >
+                <p className="tabular-nums">
+                  顯示 {shown.length} / 符合 {matched.length} / 共 {rows.length}{" "}
+                  筆
+                  {recent.supported && finished.length > 0
+                    ? ` · 自 ${clock(retention.since * 1000).slice(0, 5)} 起 ${number(finished.length, 0)} 筆請求，讀取 ${number(promptSum, 0)} 個 prompt token（重用 ${number(cachedSum, 0)}）`
+                    : ""}
+                </p>
+                <p className="min-w-0 max-w-3xl">
+                  {recent.supported
+                    ? `伺服器保留最近 ${number(recent.capacity, 0)} 筆；重新啟動後清空。記錄只含統計，不含 prompt 與輸出文字。`
+                    : recent.supported === false
+                      ? "此引擎版本沒有提供完成記錄；「已結束」只含本頁開啟後從狀態採樣到的最近一筆，高頻請求之間會漏掉，也不把消失的進行中請求推測成成功。"
+                      : "正在讀取完成記錄…"}
+                </p>
+                {recent.error && (
+                  <p role="status" className="text-warning">
+                    完成記錄暫時無法更新：{recent.error}
+                  </p>
+                )}
               </div>
             </Card>
           </div>

@@ -33,9 +33,42 @@ const items = [
   },
 ];
 
-function installFixture(page: Page) {
+type Recent = Record<string, unknown>;
+function ringEntry(i: number, extra: Recent = {}): Recent {
+  return {
+    request_id: `ring-req-0123456789abcdef-${String(i).padStart(3, "0")}`,
+    t: 1_800_000_000 - i,
+    path: "/v1/chat/completions",
+    model: "org/qwen-mlx",
+    status: 200,
+    finish_reason: "stop",
+    stream: true,
+    t0_wall: 1_799_999_990 - i,
+    offsets_ms: {
+      arrive: 0,
+      admit: 40,
+      first_token: 340,
+      last_token: 2340,
+      done: 2360,
+    },
+    queue_wait_ms: 40,
+    ttft_ms: 300,
+    prompt_tokens: 4000,
+    cached_tokens: 1000,
+    completion_tokens: 80,
+    prefill_tps: 800,
+    decode_tps: 40,
+    cache: { tier: "ram", reload_ms: null },
+    speculative: { mode: "mtp", acceptance_rate: 0.8, rounds: 20 },
+    cancelled: false,
+    ...extra,
+  };
+}
+
+function installFixture(page: Page, recent: Recent[] | null = null) {
   let sample = 0;
   const detailPaths: string[] = [];
+  const recentCalls: string[] = [];
   const unexpected: string[] = [];
   const json = (route: Route, status: number, body: unknown) =>
     route.fulfill({
@@ -95,11 +128,26 @@ function installFixture(page: Page) {
   };
   return {
     detailPaths,
+    recentCalls,
     unexpected,
     install: () =>
       page.route("**/v1/**", async (route) => {
         const path = new URL(route.request().url()).pathname;
         if (path === "/v1/yunshu/status") return json(route, 200, status());
+        // The shell may also ask for the server history ring; this page does not use it.
+        if (path === "/v1/yunshu/history")
+          return json(route, 404, { detail: "Not Found" });
+        if (path === "/v1/yunshu/requests/recent") {
+          recentCalls.push(route.request().url());
+          return recent
+            ? json(route, 200, {
+                object: "list",
+                data: recent,
+                count: recent.length,
+                capacity: 512,
+              })
+            : json(route, 404, { detail: "Not Found" });
+        }
         const match = /^\/v1\/requests\/(.+)$/.exec(path);
         const item = items.find((i) => i.request_id === match?.[1]);
         if (route.request().method() === "GET" && item) {
@@ -112,8 +160,8 @@ function installFixture(page: Page) {
   };
 }
 
-async function open(page: Page) {
-  const fixture = installFixture(page);
+async function open(page: Page, recent: Recent[] | null = null) {
+  const fixture = installFixture(page, recent);
   const pageErrors: string[] = [];
   page.on("pageerror", (error) => pageErrors.push(error.message));
   await fixture.install();
@@ -140,7 +188,7 @@ test.describe("requests page trace", () => {
       requests.getByText("Decode 速度", { exact: true }),
     ).toBeVisible();
     await expect(
-      requests.getByText("前綴快取命中", { exact: true }),
+      requests.getByText("前綴命中率", { exact: true }),
     ).toBeVisible();
     const live = requests.getByRole("row").filter({ hasText: "qa-decode-01" });
     await expect(live).toContainText("28.5");
@@ -148,7 +196,7 @@ test.describe("requests page trace", () => {
       requests.getByRole("row").filter({ hasText: "qa-prefill-01" }),
     ).toContainText("Prefill 63%");
 
-    await requests.getByRole("button", { name: "觀測到的已結束請求" }).click();
+    await requests.getByRole("button", { name: "已結束", exact: true }).click();
     // Three distinct ids appear over successive 3 s polls; a repeated `last` is deduped.
     await expect(
       requests.getByRole("row").filter({ hasText: "qa-done-3" }),
@@ -162,7 +210,7 @@ test.describe("requests page trace", () => {
     await expect(done).toContainText("mtp · 接受 82%");
     await expect(done).toContainText("330 ms TTFT");
     await expect(
-      requests.getByText(/本頁開啟後觀測到的已完成請求/),
+      requests.getByText(/此引擎版本沒有提供完成記錄/),
     ).toBeVisible();
     expect(fixture.unexpected).toEqual([]);
     expect(pageErrors).toEqual([]);
@@ -222,7 +270,7 @@ test.describe("requests page trace", () => {
     page,
   }) => {
     const { fixture, pageErrors, requests } = await open(page);
-    await requests.getByRole("button", { name: "觀測到的已結束請求" }).click();
+    await requests.getByRole("button", { name: "已結束", exact: true }).click();
     await requests
       .getByRole("row")
       .filter({ hasText: "qa-done-3" })
@@ -237,6 +285,131 @@ test.describe("requests page trace", () => {
     await expect(dialog.getByText("回合")).toBeVisible();
     await expect(dialog.getByText("750 tok", { exact: true })).toBeVisible();
     expect(fixture.detailPaths).toEqual([]); // finished requests are not polled
+    expect(pageErrors).toEqual([]);
+  });
+});
+
+test.describe("requests page finished-request ring", () => {
+  const ring = [
+    ...Array.from({ length: 118 }, (_, i) => ringEntry(i + 3)),
+    ringEntry(1, { status: 504, finish_reason: "error", cancelled: false }),
+    ringEntry(2, { cancelled: true, finish_reason: "abort", status: 200 }),
+  ];
+  const withRing = async (page: Page) => {
+    const o = await open(page, ring);
+    await o.requests
+      .getByRole("button", { name: "已結束", exact: true })
+      .click();
+    return o;
+  };
+
+  test("rows are capped, show more grows them, ids keep both ends and tok/s never overlaps", async ({
+    page,
+  }) => {
+    const { fixture, pageErrors, requests } = await withRing(page);
+    const rows = requests.getByRole("row");
+    await expect(rows.filter({ hasText: "ring-req-" })).toHaveCount(50);
+    await requests.getByRole("button", { name: /顯示更多/ }).click();
+    await expect(rows.filter({ hasText: "ring-req-" })).toHaveCount(100);
+    const first = rows.filter({ hasText: "ring-req-" }).first();
+    const id = first.locator("span[title^='ring-req-']");
+    await expect(id).toHaveAttribute(
+      "title",
+      /ring-req-0123456789abcdef-\d{3}/,
+    );
+    await expect(id).toContainText("…");
+    const boxes = await first.locator("td").evaluateAll((cells) =>
+      cells
+        .map((c) => c.getBoundingClientRect())
+        .filter((r) => r.width > 0)
+        .map((r) => [r.left, r.right]),
+    );
+    for (let i = 1; i < boxes.length; i++)
+      expect(boxes[i][0]).toBeGreaterThanOrEqual(
+        (boxes[i - 1][1] as number) - 1,
+      );
+    await expect(first).toContainText("命中 1,000 / 4,000");
+    expect(fixture.unexpected).toEqual([]);
+    expect(pageErrors).toEqual([]);
+  });
+
+  test("status filter uses the real status and cancel flag; search narrows by id", async ({
+    page,
+  }) => {
+    const { pageErrors, requests } = await withRing(page);
+    const rows = requests.getByRole("row");
+    await requests.getByRole("button", { name: "錯誤", exact: true }).click();
+    await expect(rows.filter({ hasText: "ring-req-" })).toHaveCount(1);
+    await expect(rows.filter({ hasText: "-001" })).toBeVisible();
+    await requests.getByRole("button", { name: "已取消", exact: true }).click();
+    await expect(rows.filter({ hasText: "ring-req-" })).toHaveCount(1);
+    await expect(rows.filter({ hasText: "-002" })).toBeVisible();
+    await requests
+      .getByRole("button", { name: "所有結果", exact: true })
+      .click();
+    await requests.getByLabel("搜尋請求").fill("0123456789abcdef-017");
+    await expect(rows.filter({ hasText: "ring-req-" })).toHaveCount(1);
+    expect(pageErrors).toEqual([]);
+  });
+
+  test("detail shows the wall-clock breakdown, a time-proportional timeline and no invented text tabs", async ({
+    page,
+  }) => {
+    const { pageErrors, requests } = await withRing(page);
+    await requests
+      .getByRole("row")
+      .filter({ hasText: "-005" })
+      .getByRole("button", { name: "詳情", exact: true })
+      .click();
+    const panel = page
+      .getByRole("dialog", { name: "請求詳情" })
+      .or(page.getByRole("complementary", { name: "請求詳情" }));
+    const breakdown = panel.getByRole("region", { name: "耗時分解" });
+    await expect(breakdown.locator("p", { hasText: /^排隊$/ })).toBeVisible();
+    await expect(breakdown).toContainText("40 ms");
+    await expect(breakdown).toContainText("300 ms");
+    await expect(breakdown).toContainText("2 s");
+    await expect(breakdown).toContainText("2.36 s");
+    await expect(breakdown).toContainText("命中 token");
+    await expect(breakdown).toContainText("80%");
+    const timeline = panel.getByLabel(
+      "請求 ring-req-0123456789abcdef-005 時間軸",
+    );
+    await expect(timeline).toBeVisible();
+    await expect(timeline).toContainText("預填");
+    await expect(timeline).toContainText("解碼");
+    await expect(panel.getByRole("tab")).toHaveCount(0);
+    await expect(panel.getByText(/引擎不保存 prompt 與輸出文字/)).toBeVisible();
+    expect(pageErrors).toEqual([]);
+  });
+
+  test("footer prints the retention contract and the prompt-token totals", async ({
+    page,
+  }) => {
+    const { requests } = await withRing(page);
+    const footer = requests.getByTestId("requests-footer");
+    await expect(footer).toContainText("伺服器保留最近 512 筆");
+    await expect(footer).toContainText(/自 \d{2}:\d{2} 起 120 筆請求/);
+    await expect(footer).toContainText(
+      "讀取 480,000 個 prompt token（重用 120,000）",
+    );
+  });
+
+  test("an older server without the endpoint falls back to sampled rows and says so", async ({
+    page,
+  }) => {
+    const { fixture, pageErrors, requests } = await open(page, null);
+    await expect(requests.getByTestId("requests-footer")).toContainText(
+      "此引擎版本沒有提供完成記錄",
+    );
+    await expect(requests.getByTestId("requests-footer")).not.toContainText(
+      "伺服器保留最近",
+    );
+    const early = fixture.recentCalls.length; // dev StrictMode may mount twice
+    expect(early).toBeLessThanOrEqual(2);
+    await page.waitForTimeout(6_000);
+    expect(fixture.recentCalls).toHaveLength(early); // 404 stops the polling
+    expect(fixture.unexpected).toEqual([]);
     expect(pageErrors).toEqual([]);
   });
 });

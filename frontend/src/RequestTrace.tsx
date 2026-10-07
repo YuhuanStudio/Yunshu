@@ -27,7 +27,27 @@ export type Row = {
   } | null;
   t?: number;
   path?: string;
+  /** Finished-request ring fields (`GET /v1/yunshu/requests/recent`). */
+  outcome?: Outcome;
+  status_code?: number | null;
+  finish_reason?: string | null;
+  offsets_ms?: Offsets | null;
+  cache?: { tier?: string | null; reload_ms?: number | null } | null;
+  queue_wait_ms?: number | null;
+  stream?: boolean | null;
+  /** Epoch seconds the request arrived. */
+  t0_wall?: number | null;
+  /** Where a finished row came from: the server ring or the page's own status samples. */
+  source?: "ring" | "sampled";
 };
+export type Offsets = {
+  arrive?: number | null;
+  admit?: number | null;
+  first_token?: number | null;
+  last_token?: number | null;
+  done?: number | null;
+};
+export type Outcome = "completed" | "cancelled" | "error";
 
 export const phaseLabels: Record<string, string> = {
   queued: "排隊",
