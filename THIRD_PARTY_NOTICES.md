@@ -14,6 +14,7 @@ comment. Summary of upstreams and licenses:
 | ml-explore/mlx-lm | MIT | patched Qwen3.5 GatedDeltaNet (`n_confirmed_patch.py`); tool parsers; speculative verification (`spec_draft_verifier.py`), sampler order (`batched_engine.py`) |
 | ml-explore/mlx | MIT | patched `nn.QuantizedLinear.__call__` for batch-invariant decode; derived native NAX prefill loader (`nax_prefill.py`) |
 | vllm-project/vllm, vllm-omni | Apache-2.0 | derived `gemma4_assistant.py`; inspired Qwen3 reasoning ends at a tool-call marker (`vlm_engine.py`), `structured_outputs` request field and entrypoint request-validation / route checks (`schemas/structured_outputs.py`, `scripts/research/route_checks_vllm.py`), n-gram / suffix proposers, block pool, mRoPE state, TeaCache |
+| huggingface/transformers | Apache-2.0 | inspired EmbeddingGemma 2 text tower (`embedding_gemma2.py`; the vision / audio towers are imported from mlx-vlm gemma4) |
 | ggml-org/llama.cpp | MIT | inspired n-gram hash pool |
 | sgl-project/sglang | Apache-2.0 | inspired radix-tree prefix matching (`kv_optimizations.py`) |
 | waybarrios/vllm-mlx | Apache-2.0 | inspired warm-prompt preloading (`model_optimizations.py`) |

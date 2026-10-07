@@ -29,6 +29,9 @@ M3_MODELS = frozenset(
         "GLM-OCR-bf16",
         "Z-Image-Turbo-MLX-4bit",
         "Qwen3-Embedding-0.6B",
+        # EmbeddingGemma 2 (1.5 GB): text / image / audio / video embeddings, next to the Qwen3
+        # recipe above (last-token pooling vs mean pooling are different code paths)
+        "embeddinggemma-2",
         # input-omni (audio + image + video in): the smallest Gemma 4 with an audio tower,
         # 3.3 GB 4-bit, so audio / image / video input and the Realtime voice cascade
         # (with the ASR + TTS above) run on a real server (user 2026-10-06). No speech-out

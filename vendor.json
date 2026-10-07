@@ -996,6 +996,21 @@
       "local_changes": [
         "drain timeout 0 aborts in-flight requests (vLLM shutdown_timeout semantics)"
       ]
+    },
+    {
+      "kind": "inspired",
+      "path": "python/yunshu_engine/embedding_gemma2.py",
+      "repo": "https://github.com/Blaizzy/mlx-vlm",
+      "clone": "reference/mlx-vlm",
+      "upstream_paths": [
+        "mlx_vlm/models/gemma4/language.py",
+        "mlx_vlm/models/gemma4/gemma4.py"
+      ],
+      "commit": "92b31ad",
+      "license": "MIT",
+      "local_changes": [
+        "EmbeddingGemma 2 text tower (bidirectional, projection-only per-layer embeddings, scale 1.0, local/global head sizes) written from the Hugging Face transformers embedding_gemma2 architecture (Apache-2.0, transformers 5.19); the vision and audio towers are imported from mlx-vlm gemma4, not copied; sentence-transformers prompts and pooling follow the model card"
+      ]
     }
   ],
   "patches": [

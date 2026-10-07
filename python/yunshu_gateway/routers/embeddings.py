@@ -31,7 +31,9 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["embeddings"])
 
 _VALID_ENCODING_FORMATS = {"float", "base64"}
-_MAX_INPUT_TEXT_LENGTH = 8192  # chars per text input
+_MAX_INPUT_TEXT_LENGTH = (
+    65536  # chars per text input (8K-token models: ~8 chars/token at most)
+)
 _MAX_TOTAL_INPUTS = 2048
 
 
@@ -48,7 +50,8 @@ class EmbeddingRequest(BaseModel):
     # Plus a multimodal form for VL embedders (Qwen3-VL-Embedding): each item is
     # a {"text"?: str, "image"?: url|path|data-uri, "instruction"?: str} object,
     # embedded into the SAME space as text (cross-modal retrieval).
-    input: str | list[str] | list[int] | list[list[int]] | list[dict]
+    # With ``messages`` (below) ``input`` may be omitted.
+    input: str | list[str] | list[int] | list[list[int]] | list[dict] | None = None
     encoding_format: str = "float"  # float, base64
     # Matryoshka truncation. ASSUMES the model is MRL-trained — for a non-MRL embedder
     # this returns a degraded (but unit-norm) prefix; over-requesting native dim → 400.
@@ -61,11 +64,28 @@ class EmbeddingRequest(BaseModel):
     # Optional retrieval instruction applied to items without their own
     # (multimodal/VL embedders only; ignored by plain text embedders).
     instruction: str | None = None
+    # Task prompt name for models that define prompts (EmbeddingGemma 2: SearchQuery, Document,
+    # QuestionAnswering, FactChecking, CodeRetrieval, Classification, Clustering,
+    # SentenceSimilarity). Unset = the raw text. A per-item "task" overrides it.
+    task: str | None = None
+    # vLLM-style chat form: ONE embedding of a message list whose content parts may be text,
+    # image_url, input_audio / audio_url and (frames) video. Multimodal embedders only.
+    messages: list[dict] | None = None
 
     @model_validator(mode="after")
     def validate_request(self):
         if not self.model or not self.model.strip():
             raise ValueError("model: field is required and cannot be empty")
+        if self.messages is not None:
+            if self.input is not None:
+                raise ValueError("pass either input or messages, not both")
+            if not self.messages:
+                raise ValueError("messages: cannot be an empty list")
+            self.input = [messages_to_item(self.messages)]
+        if self.input is None:
+            raise ValueError(
+                "input: field is required (or messages for multimodal models)"
+            )
         if self.encoding_format not in _VALID_ENCODING_FORMATS:
             raise ValueError(
                 f"encoding_format: must be one of {', '.join(sorted(_VALID_ENCODING_FORMATS))}, "
@@ -120,6 +140,58 @@ class EmbeddingRequest(BaseModel):
         return self
 
 
+def messages_to_item(messages: list[dict]) -> dict:
+    """vLLM-style chat ``messages`` -> one multimodal item {"text": ... with <|image|> markers, ...}.
+
+    Content parts keep their order: text parts are concatenated, an image_url / input_audio /
+    audio_url / video part adds the model's placeholder and its media. A video part is
+    {"type": "video", "frames": [<image url>, ...]} (the caller samples frames).
+    """
+    markers = {"image": "<|image|>", "audio": "<|audio|>", "video": "<|video|>"}
+    text = ""
+    media: dict[str, list] = {}
+
+    def add(kind: str, value):
+        nonlocal text
+        text += markers[kind]
+        media.setdefault(kind, []).append(value)
+
+    for mi, msg in enumerate(messages):
+        content = msg.get("content") if isinstance(msg, dict) else None
+        if isinstance(content, str):
+            text += content
+            continue
+        if not isinstance(content, list):
+            raise ValueError(
+                f"messages[{mi}].content must be a string or a list of parts"
+            )
+        for part in content:
+            t = part.get("type") if isinstance(part, dict) else None
+            if t == "text":
+                text += part.get("text", "")
+            elif t == "image_url":
+                u = part.get("image_url")
+                add("image", u.get("url") if isinstance(u, dict) else u)
+            elif t == "input_audio":
+                d = part.get("input_audio") or {}
+                data = d.get("data")
+                if not data:
+                    raise ValueError("input_audio needs base64 data")
+                add("audio", "data:audio/wav;base64," + data)
+            elif t == "audio_url":
+                u = part.get("audio_url")
+                add("audio", u.get("url") if isinstance(u, dict) else u)
+            elif t == "video":
+                if not part.get("frames"):
+                    raise ValueError("video part needs a non-empty frames list")
+                add("video", list(part["frames"]))
+            else:
+                raise ValueError(f"unsupported content part type {t!r}")
+    item: dict = {"text": text}
+    item.update(media)
+    return item
+
+
 @router.post("/embeddings", response_model=None)
 async def create_embedding(req: EmbeddingRequest, request: Request):
     """Generate embeddings for the given input text(s)."""
@@ -138,6 +210,8 @@ async def _embed_and_format(req: EmbeddingRequest) -> dict:
     "not yet supported".
     """
     # Handler-level validation (safety net beyond Pydantic model_validator)
+    if req.input is None:
+        raise HTTPException(status_code=422, detail="input is required")
     if req.encoding_format not in _VALID_ENCODING_FORMATS:
         raise HTTPException(
             status_code=422,
@@ -165,6 +239,14 @@ async def _embed_and_format(req: EmbeddingRequest) -> dict:
     _vl = await _resolve_embedding_engine(req.model)
     if isinstance(_vl, VLEmbeddingEngine):
         return await _embed_multimodal(req, _vl)
+    if req.messages is not None or any(
+        isinstance(x, dict) for x in _as_list(req.input)
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="image / audio / video inputs (messages or object items) need a multimodal "
+            "embedding model such as EmbeddingGemma 2 or Qwen3-VL-Embedding",
+        )
 
     # Normalize input to a list[str] by decoding any token-id forms first.
     # OpenAI spec: list[int] = single text as tokens, list[list[int]] = batch.
@@ -402,6 +484,10 @@ async def _embed_and_format(req: EmbeddingRequest) -> dict:
     }
 
 
+def _as_list(x) -> list:
+    return x if isinstance(x, list) else [x]
+
+
 def _finalize_embedding(emb: list[float], req: EmbeddingRequest):
     """Sanitize (NaN/Inf→0) → optional Matryoshka truncation+renorm → encode.
 
@@ -436,20 +522,29 @@ async def _embed_multimodal(req: EmbeddingRequest, engine) -> dict:
     OpenAI embeddings response; prompt_tokens is reported as the item count
     (token counting is not meaningful for image inputs).
     """
-    raw = req.input if isinstance(req.input, list) else [req.input]
+    raw: list = req.input if isinstance(req.input, list) else [req.input]
+    if raw and all(isinstance(x, int) and not isinstance(x, bool) for x in raw):
+        raw = [raw]  # OpenAI: list[int] is ONE text as token ids
     items: list = []
     for i, it in enumerate(raw):
-        if isinstance(it, str):
+        if isinstance(it, list) and it and all(isinstance(x, int) for x in it):
+            if not hasattr(engine, "decode"):
+                raise HTTPException(
+                    status_code=400,
+                    detail="token-id input is not supported by this embedding model",
+                )
+            items.append(engine.decode(it))
+        elif isinstance(it, str):
             if not it.strip():
                 raise HTTPException(
                     status_code=422, detail=f"input at index {i} is empty"
                 )
             items.append(it)
         elif isinstance(it, dict):
-            if not (it.get("text") or it.get("image")):
+            if not any(it.get(k) for k in ("text", "image", "audio", "video")):
                 raise HTTPException(
                     status_code=422,
-                    detail=f"input at index {i} must have a 'text' or 'image' key",
+                    detail=f"input at index {i} must have a 'text', 'image', 'audio' or 'video' key",
                 )
             items.append(it)
         else:
@@ -457,9 +552,21 @@ async def _embed_multimodal(req: EmbeddingRequest, engine) -> dict:
                 status_code=422,
                 detail=f"input at index {i} must be a string or a {{text, image}} object",
             )
+    tokens = None
     try:
-        vecs = await engine.embed(items, instruction=req.instruction)
+        if hasattr(engine, "embed_with_usage"):
+            vecs, tokens = await engine.embed_with_usage(
+                items, instruction=req.instruction, task=req.task
+            )
+        else:
+            vecs = await engine.embed(items, instruction=req.instruction)
     except HTTPException:
+        raise
+    except ValueError as e:
+        if hasattr(
+            engine, "embed_with_usage"
+        ):  # bad task / media / markers: the caller's input
+            raise HTTPException(status_code=400, detail=str(e)) from None
         raise
     except MemoryError:
         logger.error("VL embedding OOM", exc_info=True)
@@ -474,7 +581,7 @@ async def _embed_multimodal(req: EmbeddingRequest, engine) -> dict:
         {"object": "embedding", "index": i, "embedding": _finalize_embedding(v, req)}
         for i, v in enumerate(vecs)
     ]
-    n = len(items)
+    n = tokens if tokens is not None else len(items)
     _record_embedding_metrics(n)
     return {
         "object": "list",
