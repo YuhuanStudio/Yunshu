@@ -159,6 +159,8 @@ def test_remote_receipt_and_rsync_on_failure(queue, monkeypatch, tmp_path, rc, b
             return str(tmp_path) + "\n"
         if "write-tree" in cmd or "commit-tree" in cmd:
             return "abc\n"
+        if "df -k" in " ".join(cmd):
+            return str(500 * 2**20) + "\n"  # 500 GiB free, no checkpoints to send
         return str(rc)
 
     monkeypatch.setattr("subprocess.check_output", check)
@@ -635,3 +637,15 @@ def test_remote_rc_read_retries_ssh_connection_failures_only():
 
     with pytest.raises(subprocess.TimeoutExpired):
         read_remote_rc(["ssh"], run=down, sleep=lambda s: None)
+
+
+def test_m3_space_guard_counts_only_new_checkpoints():
+    from gpuq_remote import M3_MIN_FREE_GIB, space_needed, space_ok
+
+    models = {"/m/a": "/r/a", "/m/b": "/r/b"}
+    sizes = {"/m/a": 5 * 2**30, "/m/b": 2 * 2**30}
+    need = space_needed(models, ["have", "new"], size=sizes.__getitem__)
+    assert need == 2 * 2**30
+    gib = 2**30
+    assert space_ok((M3_MIN_FREE_GIB + 2) * gib, need)
+    assert not space_ok((M3_MIN_FREE_GIB + 1) * gib, need)

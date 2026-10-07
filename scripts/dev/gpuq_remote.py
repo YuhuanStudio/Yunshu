@@ -59,6 +59,23 @@ IDLE_SCRIPT = (
 )
 
 
+M3_MIN_FREE_GIB = 20
+
+
+def dir_bytes(path) -> int:
+    return sum(f.stat().st_size for f in Path(path).rglob("*") if f.is_file())
+
+
+def space_needed(models: dict, states: list, size=dir_bytes) -> int:
+    """Bytes of the checkpoints the laptop does not have yet (`states`: "have"/"new" per model)."""
+    pairs = zip(models, states)  # noqa: B905 - gpuq runs on the system Python 3.9
+    return sum(size(src) for src, st in pairs if st != "have")
+
+
+def space_ok(free_bytes: int, need_bytes: int) -> bool:
+    return free_bytes - need_bytes >= M3_MIN_FREE_GIB * 2**30
+
+
 def read_remote_rc(cmd, run=None, sleep=time.sleep, waits=(5, 15, 30)):
     """The job's exit code from the laptop. ssh connection failures (exit 255, timeouts) are
     retried: on 2026-10-07 three M3 jobs whose checks had passed and whose outputs were collected
@@ -326,6 +343,23 @@ class Remote:
         if errors:
             raise RuntimeError("; ".join(errors))
 
+    def check_space(self, models):
+        """Refuse a job whose new checkpoints would leave the laptop under M3_MIN_FREE_GIB free
+        (2026-10-07: its data volume was at 97%, 27 GiB free, with 45 GB of ours on it)."""
+        q = shlex.quote
+        probe = "df -k " + q(self.repo) + " | tail -1 | awk '{print $4}'"
+        for dest in models.values():
+            probe += "; test -d " + q(dest) + " && echo have || echo new"
+        lines = subprocess.check_output(
+            self.ssh_cmd(probe), text=True, timeout=30
+        ).split()
+        need = space_needed(models, lines[1:])
+        if not space_ok(int(lines[0]) * 1024, need):
+            raise ValueError(
+                f"M3: {need / 2**30:.1f} GiB of new checkpoints would leave the laptop under "
+                f"{M3_MIN_FREE_GIB} GiB free ({int(lines[0]) / 2**20:.1f} GiB free now)"
+            )
+
     def run(self):
         top, wt, pairs, models = paths(self.job, self.repo)
         refused = sorted(Path(m).name for m in models if Path(m).name not in M3_MODELS)
@@ -394,6 +428,7 @@ class Remote:
             )
         finally:
             index.unlink(missing_ok=True)
+        self.check_space(models)
         for source, dest in models.items():
             self.sync(source + "/", self.host + ":" + dest + "/")
         self.call(
