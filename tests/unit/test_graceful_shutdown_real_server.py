@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import os
 import signal
+import socket
 import subprocess
 import sys
 import threading
@@ -17,6 +18,23 @@ ROOT = Path(__file__).resolve().parents[2]
 PORT = 18991
 
 
+def _bound_socket():
+    for port in range(18990, 19000):
+        sock = socket.socket()
+        try:
+            sock.bind(("127.0.0.1", port))
+            sock.listen()
+            return sock
+        except OSError:
+            sock.close()
+    raise RuntimeError("no free test port in 18990-18999")
+
+
+def test_scripted_listener_is_reserved_until_child_inherits_it():
+    with _bound_socket() as first, _bound_socket() as second:
+        assert first.getsockname()[1] != second.getsockname()[1]
+
+
 def test_graceful_shutdown_timeout_values():
     from yunshu_cli.serve import graceful_shutdown_timeout as g
 
@@ -24,6 +42,9 @@ def test_graceful_shutdown_timeout_values():
 
 
 def _start(drain: str, delay="0.2", n="15"):
+    global PORT
+    listener = _bound_socket()
+    PORT = listener.getsockname()[1]
     env = {
         **os.environ,
         "YUNSHU_DRAIN_TIMEOUT": drain,
@@ -37,12 +58,19 @@ def _start(drain: str, delay="0.2", n="15"):
             str(PORT),
             delay,
             n,
+            str(listener.fileno()),
         ],
         env=env,
+        pass_fds=(listener.fileno(),),
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
     )
+    listener.close()
     for _ in range(100):
+        if p.poll() is not None:
+            raise AssertionError(
+                "owned server exited: " + p.stdout.read().decode()[-500:]
+            )
         try:
             if (
                 httpx.get(f"http://127.0.0.1:{PORT}/health/live", timeout=1).status_code
