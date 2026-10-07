@@ -81,8 +81,10 @@ from gpuq_contention import (  # noqa: E402
     MAX_POLL_GAP_S,
     ContentionMonitor,
     QuietGate,
+    busy_foreign_models,
     contention_config,
     flag_sample_time,
+    foreign_model_reason,
     requires_quiet,
 )
 
@@ -295,6 +297,8 @@ def _cpu_blocker(job: dict, gate: ServingGate):
         )
     elif cpu is None:
         reason = "CPU sampling unavailable"
+    elif busy_foreign_models(sample, cfg):
+        reason = foreign_model_reason(busy_foreign_models(sample, cfg)[0])
     elif cpu >= cfg["threshold_pct"]:
         reason = f"foreign CPU {cpu:.1f}% >= {cfg['threshold_pct']:.1f}%"
     else:
