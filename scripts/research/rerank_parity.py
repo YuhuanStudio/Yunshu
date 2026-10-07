@@ -78,6 +78,15 @@ async def run(model_dir, reference_path):
                 verdict = compare(got, ref["scores"])
                 if not verdict["passed"]:
                     return {**verdict, "scores": got}
+                raw = await client.post(
+                    "/v1/score", json={**body, "use_activation": False}
+                )
+                raw.raise_for_status()
+                from yunshu_engine.scoring_engine import sigmoid
+
+                activated = [sigmoid(x["score"]) for x in raw.json()["data"]]
+                if any(abs(a - b) > 1e-6 for a, b in zip(activated, got, strict=True)):
+                    raise ValueError("Raw/activated scoring inconsistency")
                 rr = await client.post(
                     "/v1/rerank",
                     json={
@@ -108,6 +117,34 @@ async def run(model_dir, reference_path):
                 r.raise_for_status()
                 got = [x["probs"] for x in r.json()["data"]]
                 verdict = compare(got, ref["scores"])
+
+            # Exercise the same registered embed-route checks used by real-server sweeps.
+            def registered_checks():
+                import route_checks
+                from fastapi.testclient import TestClient
+                from route_checks_media import _classify_head_served, _rerank_served
+
+                # No lifespan: the already-loaded scoring engine is the sole model in this job.
+                sync_client = TestClient(create_app())
+                try:
+                    ctx = route_checks.Ctx(
+                        url="http://test",
+                        token="",
+                        model=model_dir,
+                        kind="text",
+                        http=sync_client,
+                    )
+                    if engine.is_reranker:
+                        ctx.fixtures["rerank_reference"] = lambda pairs: ref["scores"]
+                        _rerank_served(ctx)
+                    else:
+                        ctx.fixtures["classify_reference"] = lambda texts: ref["scores"]
+                        _classify_head_served(ctx)
+                    return ctx.notes
+                finally:
+                    sync_client.close()
+
+            verdict["route_checks"] = await asyncio.to_thread(registered_checks)
             return {**verdict, "scores": got, "kind": engine.kind, "model": model_dir}
     finally:
         set_engine(None)

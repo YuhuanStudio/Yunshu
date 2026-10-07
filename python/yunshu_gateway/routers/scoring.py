@@ -8,6 +8,7 @@ scoring and zero-shot label similarity. Sequence classifiers use their trained h
 import logging
 import math
 import time
+import uuid
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
@@ -89,6 +90,18 @@ class ScoreRequest(BaseModel):
     text_1: str | list[str]
     text_2: str | list[str]
     scoring_type: str = "cosine"  # cosine, dot, euclidean
+    use_activation: bool | None = None
+    instruction: str | None = Field(default=None, max_length=_MAX_INPUT_TEXT_LENGTH)
+
+    @model_validator(mode="before")
+    @classmethod
+    def accept_vllm_names(cls, data):
+        if isinstance(data, dict):
+            data = dict(data)
+            for canonical, alias in (("text_1", "queries"), ("text_2", "documents")):
+                if canonical not in data and alias in data:
+                    data[canonical] = data[alias]
+        return data
 
     @model_validator(mode="after")
     def validate_request(self):
@@ -169,7 +182,8 @@ class RerankRequest(BaseModel):
     return_documents: bool = True
     # Optional retrieval instruction — used by a true cross-encoder reranker
     # (Qwen3-VL-Reranker); ignored by the bi-encoder cosine fallback.
-    instruction: str | None = None
+    instruction: str | None = Field(default=None, max_length=_MAX_INPUT_TEXT_LENGTH)
+    use_activation: bool | None = None
 
     @model_validator(mode="after")
     def validate_request(self):
@@ -355,7 +369,11 @@ async def create_score(req: ScoreRequest, request: Request):
                 400, "scoring_type is only configurable for embedding models"
             )
         try:
-            scores = await engine.score_pairs(list(zip(texts_a, texts_b, strict=True)))
+            scores = await engine.score_pairs(
+                list(zip(texts_a, texts_b, strict=True)),
+                instruction=req.instruction,
+                use_activation=req.use_activation is not False,
+            )
         except ValueError as e:
             raise HTTPException(400, str(e)) from None
         except MemoryError:
@@ -363,15 +381,23 @@ async def create_score(req: ScoreRequest, request: Request):
         return JSONResponse(
             {
                 "object": "list",
+                "id": f"score-{uuid.uuid4().hex}",
+                "created": int(time.time()),
                 "model": req.model,
                 "data": [
                     {"object": "score", "index": i, "score": score}
                     for i, score in enumerate(scores)
                 ],
                 "usage": engine.token_usage(
-                    pairs=list(zip(texts_a, texts_b, strict=True))
+                    pairs=list(zip(texts_a, texts_b, strict=True)),
+                    instruction=req.instruction,
                 ),
             }
+        )
+
+    if req.use_activation is not None or req.instruction is not None:
+        raise HTTPException(
+            400, "use_activation and instruction require a text cross-encoder"
         )
 
     # dot/euclidean need RAW (un-normalized) vectors; cosine needs unit vectors.
@@ -412,6 +438,8 @@ async def create_score(req: ScoreRequest, request: Request):
     return JSONResponse(
         {
             "object": "list",
+            "id": f"score-{uuid.uuid4().hex}",
+            "created": int(time.time()),
             "data": data,
             "model": req.model,
             "usage": {"prompt_tokens": total_tokens, "total_tokens": total_tokens},
@@ -431,10 +459,17 @@ async def _rerank_cross_encoder(
     embeddings — higher accuracy than the bi-encoder cosine fallback. Returns the
     same response shape as the cosine path so clients see no difference.
     """
-    try:
-        scores = await engine.rerank(
-            req.query, truncated_docs, instruction=req.instruction
+    from yunshu_engine.scoring_engine import TextScoringEngine
+
+    kwargs: dict[str, Any] = {"instruction": req.instruction}
+    if isinstance(engine, TextScoringEngine):
+        kwargs["use_activation"] = req.use_activation is not False
+    elif req.use_activation is not None:
+        raise HTTPException(
+            400, "use_activation is currently supported for text cross-encoders"
         )
+    try:
+        scores = await engine.rerank(req.query, truncated_docs, **kwargs)
     except MemoryError:
         logger.error("Cross-encoder rerank OOM", exc_info=True)
         raise HTTPException(status_code=507, detail="Out of GPU memory") from None
@@ -523,6 +558,9 @@ async def create_rerank(req: RerankRequest, request: Request):
         engine, "is_reranker", False
     ):
         return await _rerank_cross_encoder(req, engine, truncated_docs)
+
+    if req.use_activation is not None:
+        raise HTTPException(400, "use_activation requires a text cross-encoder")
 
     # Multimodal (image) query/documents only make sense for a cross-encoder
     # reranker — the bi-encoder cosine fallback embeds text and can't ingest images.

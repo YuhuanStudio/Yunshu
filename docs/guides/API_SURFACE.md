@@ -351,8 +351,11 @@ shape. Text cross-encoders require string inputs; image objects require a VL rer
 
 `POST /v1/score` uses joint query/document scoring for single-label head models
 (sigmoid) and Qwen3 rerankers (yes/no probability), and cosine similarity for
-embedding models. Scalar/list and length-one broadcasting preserve one result per
-pair. `dot` / `euclidean` remain embedding-only extensions.
+embedding models. vLLM's `queries` / `documents` names are accepted alongside the
+existing `text_1` / `text_2`. Scalar/list and length-one broadcasting preserve one
+result per pair. `use_activation: false` returns the trained raw logit (Qwen3:
+yes-minus-no logit), while omission or `null` uses probability scores. `instruction`
+is passed to the Qwen3 prompt. `dot` / `euclidean` remain embedding-only extensions.
 
 For trained heads, `POST /v1/classify` accepts `input` as a string or list and no
 `labels`. It returns `data[{object:"classification",index,probs}]` with checkpoint

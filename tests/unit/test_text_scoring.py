@@ -116,7 +116,7 @@ def test_rerank_and_score_joint_dispatch(head_client):
     engine.is_reranker = True
     calls = []
 
-    async def score(pairs, instruction=None):
+    async def score(pairs, instruction=None, use_activation=True):
         calls.append((pairs, instruction))
         return [0.2, 0.8][: len(pairs)]
 
@@ -169,11 +169,105 @@ def test_score_multi_class_head_rejected(head_client):
     assert r.status_code == 400
 
 
+def test_vllm_score_aliases_and_raw_logits(head_client):
+    client, engine = head_client
+    engine.is_reranker = True
+
+    async def score(pairs, instruction=None, use_activation=True):
+        assert pairs == [("q", "d")]
+        assert instruction == "custom"
+        return [0.75 if use_activation else 1.0986122886681098]
+
+    engine.score_pairs = score
+    r = client.post(
+        "/v1/score",
+        json={
+            "model": "m",
+            "queries": "q",
+            "documents": ["d"],
+            "instruction": "custom",
+            "use_activation": False,
+        },
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["data"][0]["score"] == pytest.approx(1.0986122886681098)
+    assert r.json()["id"].startswith("score-")
+    assert isinstance(r.json()["created"], int)
+
+
+def test_media_route_checks_against_fake_http(head_client):
+    import sys
+    from types import SimpleNamespace
+
+    sys.path.insert(0, str(Path(__file__).parents[2] / "scripts/research"))
+    import route_checks  # noqa: F401 - initializes the shared registry first
+    from route_checks_media import _classify_head_served, _rerank_served
+
+    client, engine = head_client
+    ctx = SimpleNamespace(
+        model="m",
+        req=client.request,
+        fixtures={"classify_reference": lambda texts: [[0.1, 0.9] for _ in texts]},
+        notes={},
+    )
+    _classify_head_served(ctx)
+    assert ctx.notes["classifier_oracle"]["passed"]
+    engine.is_reranker = True
+
+    async def score(pairs, instruction=None, use_activation=True):
+        return [0.8, 0.2, 0.4, 0.6]
+
+    engine.score_pairs = score
+    ctx.fixtures["rerank_reference"] = lambda pairs: [0.8, 0.2, 0.4, 0.6]
+    _rerank_served(ctx)
+    assert ctx.notes["rerank_oracle"]["passed"]
+
+
+def test_entire_probe_on_fake_engine(tmp_path, monkeypatch):
+    """Exercise argument-independent probe flow on CPU before any model is loaded."""
+    import asyncio
+    import math
+    import sys
+
+    sys.path.insert(0, str(Path(__file__).parents[2] / "scripts/research"))
+    import rerank_parity
+    import route_checks  # noqa: F401
+
+    (tmp_path / "config.json").write_text(
+        json.dumps(
+            {
+                "model_type": "bert",
+                "architectures": ["BertForSequenceClassification"],
+                "id2label": {"0": "relevant"},
+            }
+        )
+    )
+    scores = [0.8, 0.2, 0.4, 0.6]
+    reference = tmp_path / "reference.json"
+    reference.write_text(json.dumps({"scores": scores, "complete": True}))
+
+    async def start(self):
+        self._loaded = True
+
+    async def score(self, pairs, instruction=None, use_activation=True):
+        out = [scores[rerank_parity.PAIRS.index((a, b))] for a, b in pairs]
+        return out if use_activation else [math.log(v / (1 - v)) for v in out]
+
+    monkeypatch.setattr(TextScoringEngine, "start", start)
+    monkeypatch.setattr(TextScoringEngine, "score_pairs", score)
+    monkeypatch.delenv("YUNSHU_AUTH_TOKEN", raising=False)
+    result = asyncio.run(rerank_parity.run(str(tmp_path), str(reference)))
+    assert result["passed"]
+    assert result["route_checks"]["rerank_oracle"]["passed"]
+
+
 @pytest.mark.parametrize("family", ["bert", "roberta", "xlm-roberta"])
 def test_encoder_head_matches_transformers_fixture(tmp_path, family):
     """Small-array unit test, independently exercising the complete trained head."""
     import mlx.core as mx
-    import torch
+
+    torch = pytest.importorskip("torch")
+    pytest.importorskip("mlx_embeddings")
     from transformers import (
         AutoModelForSequenceClassification,
         BertConfig,

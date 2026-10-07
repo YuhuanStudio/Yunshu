@@ -43,7 +43,7 @@ def qwen_input_ids(
     budget = max_length - len(prefix) - len(suffix)
     if budget <= 0:
         raise ValueError("Context too short for the reranker template")
-    body = f"<Instruct>: {instruction or DEFAULT_INSTRUCTION}\n<Query>: {query}\n<Document>: {document}"
+    body = f"<Instruct>: {DEFAULT_INSTRUCTION if instruction is None else instruction}\n<Query>: {query}\n<Document>: {document}"
     ids = tokenizer(body, truncation=True, max_length=budget)["input_ids"]
     return prefix + ids + suffix
 
@@ -235,7 +235,9 @@ class TextScoringEngine:
         mx.eval(logits)
         return logits[0].tolist()
 
-    async def score_pairs(self, pairs: list[tuple[str, str]], instruction=None):
+    async def score_pairs(
+        self, pairs: list[tuple[str, str]], instruction=None, use_activation=True
+    ):
         if not self.is_reranker:
             raise ValueError(
                 "/v1/score requires a single-label cross-encoder or an embedding model"
@@ -251,7 +253,8 @@ class TextScoringEngine:
             scores = []
             for a, b in pairs:
                 if self.kind == "head":
-                    scores.append(sigmoid(self._head_logits(a, b)[0]))
+                    value = self._head_logits(a, b)[0]
+                    scores.append(sigmoid(value) if use_activation else value)
                 else:
                     ids = qwen_input_ids(
                         self._tokenizer,
@@ -265,13 +268,18 @@ class TextScoringEngine:
                     no = self._tokenizer.convert_tokens_to_ids("no")
                     gap = logits[yes] - logits[no]
                     mx.eval(gap)
-                    scores.append(sigmoid(float(gap.item())))
+                    value = float(gap.item())
+                    scores.append(sigmoid(value) if use_activation else value)
+            if not all(math.isfinite(s) for s in scores):
+                raise ValueError("Non-finite classification logit")
             return scores
 
         return await self._run(score)
 
-    async def rerank(self, query, documents, instruction=None):
-        return await self.score_pairs([(query, d) for d in documents], instruction)
+    async def rerank(self, query, documents, instruction=None, use_activation=True):
+        return await self.score_pairs(
+            [(query, d) for d in documents], instruction, use_activation
+        )
 
     def embed(self, texts, normalize=True, **kwargs):
         raise ValueError(
