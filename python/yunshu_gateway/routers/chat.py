@@ -576,7 +576,19 @@ class ChatCompletionRequest(BaseModel):
                 raise ValueError(
                     "response_format.json_schema: must be provided when type is 'json_schema'"
                 )
-            if rf_type not in ("json_object", "json_schema", "text", None):
+            if rf_type == "structural_tag":
+                from yunshu_gateway.schemas.structured_outputs import (
+                    structural_tag_grammar,
+                )
+
+                structural_tag_grammar(self.response_format)
+            if rf_type not in (
+                "json_object",
+                "json_schema",
+                "structural_tag",
+                "text",
+                None,
+            ):
                 raise ValueError(
                     f"response_format.type: must be 'json_object', 'json_schema', or 'text', got '{rf_type}'"
                 )
@@ -696,6 +708,10 @@ def _parse_response_format_unchecked(
         return None
 
     rf_type = response_format.get("type")
+    if rf_type == "structural_tag":
+        from yunshu_gateway.schemas.structured_outputs import structural_tag_grammar
+
+        return {"type": "cfg", "grammar": structural_tag_grammar(response_format)}
     if rf_type == "json_object":
         return "json_object"
     if rf_type == "json_schema":
@@ -2920,7 +2936,7 @@ async def _stream_vlm_response(
                 elif out.tool_call:
                     if not tc_args_streamed:
                         args = (out.tool_call.arguments or "").strip()
-                        if args and args != "{}":
+                        if args:
                             yield _format_tool_call_args_delta_chunk(
                                 completion_id,
                                 req.model,
@@ -3602,7 +3618,7 @@ async def _stream_response_multi(
                                     )
                                 if not _choice_tc_args_streamed:
                                     _full_args = (out.tool_call.arguments or "").strip()
-                                    if _full_args and _full_args != "{}":
+                                    if _full_args:
                                         yield _format_tool_call_args_delta_chunk(
                                             completion_id,
                                             req.model,
@@ -3821,7 +3837,7 @@ async def _stream_response_multi(
                                     )
                                 if not _choice_tc_args_streamed:
                                     _full_args = (out.tool_call.arguments or "").strip()
-                                    if _full_args and _full_args != "{}":
+                                    if _full_args:
                                         yield _format_tool_call_args_delta_chunk(
                                             completion_id,
                                             req.model,
@@ -4338,7 +4354,7 @@ async def _stream_response(
                             # Anthropic path's fix). Guard avoids duplicating args.
                             if not _tc_args_streamed:
                                 _full_args = (out.tool_call.arguments or "").strip()
-                                if _full_args and _full_args != "{}":
+                                if _full_args:
                                     yield _format_tool_call_args_delta_chunk(
                                         completion_id,
                                         req.model,
@@ -4562,7 +4578,7 @@ async def _stream_response(
                     # same empty-arguments fix on the flush path.
                     if not _tc_args_streamed:
                         _full_args = (out.tool_call.arguments or "").strip()
-                        if _full_args and _full_args != "{}":
+                        if _full_args:
                             yield _format_tool_call_args_delta_chunk(
                                 completion_id,
                                 req.model,

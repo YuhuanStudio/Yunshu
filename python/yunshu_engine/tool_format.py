@@ -426,10 +426,42 @@ JSON_MESSAGE = ToolFormat(
     whole=True,
 )
 
+# Native formats do not depend on the installed MLX parser registry.
+from . import tool_family_parsers as _families
+
+HERMES = ToolFormat("hermes", "<tool_call>", "</tool_call>", _parse_yunshu_json)
+LLAMA_JSON = ToolFormat("llama3_json", "", "", _parse_json_message, whole=True)
+PYTHONIC = ToolFormat("llama3_pythonic", "", "", _families.pythonic, whole=True)
+GLM = ToolFormat("glm47", "<tool_call>", "</tool_call>", _families.glm)
+MISTRAL = ToolFormat("mistral", "[TOOL_CALLS]", "", _families.mistral)
+KIMI = ToolFormat(
+    "kimi_k2",
+    "<|tool_calls_section_begin|>",
+    "<|tool_calls_section_end|>",
+    _families.kimi,
+)
+HARMONY = ToolFormat("harmony", "<|start|>assistant", "<|ghissue|>", _families.harmony)
+DSML = ToolFormat(
+    "deepseek_v32",
+    "<｜DSML｜function_calls>",
+    "</｜DSML｜function_calls>",
+    _families.dsml,
+)
+DSML_V4 = ToolFormat(
+    "deepseek_v4", "<｜DSML｜tool_calls>", "</｜DSML｜tool_calls>", _families.dsml
+)
+
 # Chat-template markers for the Yunshu-owned formats (upstream's registry
 # decides everything else).
 _OWN_TEMPLATE_MARKERS: tuple[tuple[str, ToolFormat], ...] = (
+    ("<｜DSML｜tool_calls>", DSML_V4),
+    ("<｜DSML｜function_calls>", DSML),
     ("<｜tool▁calls▁begin｜>", DEEPSEEK),
+    ("<|tool_calls_section_begin|>", KIMI),
+    ("<|ghissue|>", HARMONY),
+    ("[TOOL_CALLS]", MISTRAL),
+    ("<arg_key>", GLM),
+    ("<|python_tag|>", LLAMA_JSON),
 )
 
 _FALLBACK: tuple[ToolFormat, ...] = (INJECTED_JSON, JSON_MESSAGE)
@@ -459,9 +491,24 @@ def native_format(tokenizer: Any) -> ToolFormat | None:
     text = _template_text(tokenizer)
     if not text:
         return None
+    model_hint = str(getattr(tokenizer, "name_or_path", "")).lower()
+    if "glm" in model_hint and "<tool_call>" in text:
+        return GLM
+    if "<|python_tag|>" in text and (
+        "pythonic" in text.lower() or "[" in text and "parameters" not in text
+    ):
+        return PYTHONIC
     for marker, fmt in _OWN_TEMPLATE_MARKERS:
         if marker in text:
             return fmt
+    if (
+        "<tool_call>" in text
+        and "<function=" not in text
+        and ("arguments" in text or "arg_value" in text or "parameters" in text)
+    ):
+        if "arg_value" in text or "tool.name" in text and '"name"' not in text:
+            return GLM
+        return HERMES
     name = None
     try:
         from mlx_vlm.tools.registry import _infer_tool_parser
@@ -474,7 +521,7 @@ def native_format(tokenizer: Any) -> ToolFormat | None:
             from mlx_lm.tokenizer_utils import _infer_tool_parser as lm_infer
 
             name = lm_infer(tokenizer)
-        except ImportError:  # pragma: no cover
+        except (ImportError, AttributeError):  # pragma: no cover
             name = None
     if name is None or name == "json_tools":
         # json_tools is the same shape Yunshu's injected prompt uses.

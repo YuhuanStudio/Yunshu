@@ -1006,6 +1006,8 @@ class _LlgConstraint:
             raise UnsupportedGrammarError(
                 f"CFG constraints need a Hugging Face tokenizer: {exc}"
             ) from exc
+        self._binding_tokenizer = tokenizer
+        self._binding_llt = llt
         grammar = self._make_grammar()
         from .grammar_compile import new_llg_matcher
 
@@ -1031,7 +1033,9 @@ class _LlgConstraint:
         if self._done or self._dead or self._matcher is None or not token_text:
             return
         self._text_buffer += token_text
-        for tid in self._llt.tokenize_str(token_text):
+        for tid in self._llt.tokenize_str(
+            token_text, parse_special=getattr(self, "_parse_special", False)
+        ):
             if not self._matcher.consume_token(tid):
                 # The model emitted text the mask forbade: fail closed.
                 self._dead = True
@@ -1130,11 +1134,30 @@ class CfgGrammarConstraint(_LlgConstraint):
             raise UnsupportedGrammarError("CFG grammars must define a 'start' rule")
         super().__init__(grammar, tokenizer)
 
+    def advance_token(self, token: int) -> None:
+        """Consume the actual sampled ID; preserve special and UTF-8 byte tokens."""
+        if self._done or self._dead or self._matcher is None:
+            return
+        if not self._matcher.consume_token(int(token)):
+            self._dead = True
+            return
+        self._consumed += 1
+        if self._matcher.is_stopped():
+            self._done = True
+
     def _make_grammar(self) -> str:
         from .grammar_compile import llg_grammar
 
         try:
-            return llg_grammar("cfg", self._grammar_text)
+            source = self._grammar_text
+            if source.startswith("// yunshu structural_tag"):
+                self._parse_special = True
+                from .structural_tag import bind_structural_tag
+
+                source = bind_structural_tag(
+                    source, self._binding_tokenizer, self._binding_llt
+                )
+            return llg_grammar("cfg", source)
         except Exception as exc:
             raise self._error(str(exc)) from exc
 

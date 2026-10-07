@@ -1011,6 +1011,26 @@
       "local_changes": [
         "EmbeddingGemma 2 text tower (bidirectional, projection-only per-layer embeddings, scale 1.0, local/global head sizes) written from the Hugging Face transformers embedding_gemma2 architecture (Apache-2.0, transformers 5.19); the vision and audio towers are imported from mlx-vlm gemma4, not copied; sentence-transformers prompts and pooling follow the model card"
       ]
+    },
+    {
+      "kind": "inspired",
+      "path": "python/yunshu_engine/tool_family_parsers.py",
+      "repo": "https://github.com/vllm-project/vllm",
+      "clone": "reference/vllm",
+      "upstream_paths": [
+        "tests/tool_parsers/test_deepseekv31_tool_parser.py",
+        "tests/tool_parsers/test_deepseekv32_tool_parser.py",
+        "tests/tool_parsers/test_deepseekv4_tool_parser.py",
+        "tests/tool_parsers/test_hermes_tool_parser.py",
+        "tests/tool_parsers/test_llama3_json_tool_parser.py",
+        "tests/tool_parsers/test_pythonic_tool_parser.py",
+        "tests/tool_parsers/test_glm4_moe_tool_parser.py",
+        "tests/tool_parsers/test_glm47_moe_tool_parser.py",
+        "tests/tool_parsers/test_kimi_k2_tool_parser.py"
+      ],
+      "commit": "2342343746093e5cd33799cd60186d10c4addea9",
+      "license": "Apache-2.0",
+      "why": "Wire fixture shapes only, independently implemented readers; no parser or test code copied."
     }
   ],
   "patches": [

@@ -279,6 +279,12 @@ class GrammarBitmaskEngine:
     def advance(self, token_text: str) -> None:
         self._constraint.advance(token_text)
 
+    def advance_token(self, token: int, tokenizer: Any) -> None:
+        if hasattr(self._constraint, "advance_token"):
+            self._constraint.advance_token(token)
+        else:
+            self._constraint.advance(tokenizer.decode([token]))
+
     def get_allowed_tokens(
         self, tokenizer: Any, generated_token_ids: list[int]
     ) -> list[int]:
@@ -436,7 +442,13 @@ class BitmaskConstrainedSampler:
         token_id = int(token)
         self._generated_ids.append(token_id)
 
-        if should_advance and token_id not in self._table.eos_ids:
+        if (
+            should_advance
+            and token_id not in self._table.eos_ids
+            and hasattr(self._engine._constraint, "advance_token")
+        ):
+            self._engine.advance_token(token_id, self._tokenizer)
+        elif should_advance and token_id not in self._table.eos_ids:
             try:
                 token_text = self._tokenizer.decode([token_id])
             except Exception:

@@ -2577,7 +2577,9 @@ class ConstrainedSampler:
         # checkpoint/rollback correctness.
         eos_ids = set(normalize_eos_ids(self._tokenizer))
 
-        if token_id not in eos_ids:
+        if token_id not in eos_ids and hasattr(self._constraint, "advance_token"):
+            self._constraint.advance_token(token_id)
+        elif token_id not in eos_ids:
             try:
                 token_text = self._tokenizer.decode([token_id])
             except Exception:

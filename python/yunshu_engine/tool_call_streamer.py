@@ -106,9 +106,9 @@ class ToolCallStreamer:
             head = self._buf.lstrip()
             if not final and "<|python_tag|>".startswith(head):
                 return out  # nothing yet, or a partial python tag
-            if head.startswith(("{", "<|python_tag|>")) and not final:
+            if head.startswith(("{", "[", "<|python_tag|>")) and not final:
                 return out  # the message may be a JSON call: hold it
-            if head.startswith(("{", "<|python_tag|>")):
+            if head.startswith(("{", "[", "<|python_tag|>")):
                 for fmt in self._formats:
                     if not fmt.whole:
                         continue
@@ -161,6 +161,8 @@ class ToolCallStreamer:
 
     def _emit_call(self, call: dict, out: list[StreamOutput]) -> None:
         name = call["name"]
+        if self._tools and name not in {t["function"]["name"] for t in self._tools}:
+            return
         if self._forced is not None and name != self._forced:
             return
         if not self._allow_parallel and self._accepted >= 1:

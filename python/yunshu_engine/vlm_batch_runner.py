@@ -143,7 +143,10 @@ class ConstraintProcessor:
     def process_last_token(self, token: int, logits: mx.array) -> mx.array:
         token = int(token)
         self._generated.append(token)
-        self._constraint.advance(self._tokenizer.decode([token]))
+        if hasattr(self._constraint, "advance_token"):
+            self._constraint.advance_token(token)
+        else:
+            self._constraint.advance(self._tokenizer.decode([token]))
         return self._mask(logits)
 
 
