@@ -449,3 +449,29 @@ def test_json_style_inlines_local_refs():
     assert tcg._inline_refs({"properties": {"a": {"$ref": "http://x/y"}}}) is None
     spec = tcg.ToolSpec("T", shared)
     assert tcg.build_json_grammar([spec], start_id=1, end_id=2) is not None
+
+
+def test_forced_reply_cannot_end_inside_its_reasoning(request):
+    """A forced reply that thinks first may not stop (EOS) before </think>: Qwen3.5-0.8B ended its
+    reasoning with end-of-turn and the reply carried no call (M3, Responses stream, 1 in 80)."""
+    tok = request.getfixturevalue("xml_tok")
+    grammar = tcg.compile_tool_grammar(
+        TOOLS, tok, len(tok) + 243, tool_choice="required"
+    )
+    assert grammar is not None and grammar.think_end_id is not None
+    assert tok.eos_token_id in grammar.eos_ids
+    guide = grammar.guide(thinking_open=True)
+    assert guide.phase == tcg.WAIT and guide.constrained
+    row = guide.mask()
+    assert row is not None
+    for eos in grammar.eos_ids:
+        assert not allowed(row, eos)
+    word = tok.encode("Sure", add_special_tokens=False)[0]
+    assert allowed(row, word) and allowed(row, grammar.think_end_id)
+    assert guide.plan([word, grammar.think_end_id], 3) is not None
+    guide.feed(grammar.think_end_id)
+    assert guide.phase == tcg.BODY
+    # not forced: reasoning stays unmasked
+    auto = tcg.compile_tool_grammar(TOOLS, tok, len(tok) + 243)
+    free = auto.guide(thinking_open=True)
+    assert not free.constrained and free.mask() is None

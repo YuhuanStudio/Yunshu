@@ -175,7 +175,7 @@ def main():
             for _i in range(a.reps):
                 st, raw = mp.post(srv.url, path, body)
                 if st != 200 or not has_call(kind, stream, raw):
-                    bad.append(raw[-1500:] if stream else raw[:800])
+                    bad.append(raw[:4000])
             res["variants"][name] = {"bad": len(bad), "of": a.reps}
             res["bad"][name] = bad[:2]
             print(name, f"bad {len(bad)}/{a.reps}", flush=True)

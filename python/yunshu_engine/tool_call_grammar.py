@@ -377,6 +377,7 @@ class ToolGrammar:
         think_end_id: int | None,
         forced: bool,
         style: str,
+        eos_ids: tuple[int, ...] = (),
     ):
         from llguidance import LLMatcher
 
@@ -387,6 +388,7 @@ class ToolGrammar:
         self.think_end_id = think_end_id
         self.forced = forced
         self.style = style
+        self.eos_ids = tuple(eos_ids)
         self.words = (llt.vocab_size + 31) // 32
         self._template = LLMatcher(llt, LLMatcher.grammar_from_lark(lark))
         err = self._template.get_error()
@@ -431,6 +433,26 @@ def _token_id(tokenizer: Any, token: str) -> int | None:
     ):
         return None
     return int(tid)
+
+
+def _eos_ids(tokenizer: Any) -> tuple[int, ...]:
+    """Every token that ends generation for ``tokenizer`` (its eos ids plus the chat / text
+    end markers), so a forced reply cannot end inside its reasoning."""
+    ids: set[int] = set()
+    for tok in (tokenizer, getattr(tokenizer, "_tokenizer", None)):
+        if tok is None:
+            continue
+        many = getattr(tok, "eos_token_ids", None)
+        if isinstance(many, (set, list, tuple)):
+            ids.update(int(i) for i in many if isinstance(i, int))
+        one = getattr(tok, "eos_token_id", None)
+        if isinstance(one, int):
+            ids.add(one)
+    for name in ("<|im_end|>", "<|endoftext|>", "<|eot_id|>", "</s>"):
+        i = _token_id(tokenizer, name)
+        if i is not None:
+            ids.add(i)
+    return tuple(sorted(ids))
 
 
 def is_forced(choice: Any) -> bool:
@@ -532,6 +554,7 @@ def compile_tool_grammar(
             think_end_id=_token_id(tokenizer, "</think>"),
             forced=forced,
             style=style,
+            eos_ids=_eos_ids(tokenizer),
         )
     except Exception:
         logger.warning(
@@ -591,7 +614,8 @@ class ToolCallGuide:
     # ── state ──
     @property
     def constrained(self) -> bool:
-        return self.phase == BODY
+        # a forced reply is also masked while it reasons: it must not end before the call
+        return self.phase == BODY or (self.phase == WAIT and self.grammar.forced)
 
     def arms(self, token: int) -> bool:
         """True when ``token``, fed now, switches an unconstrained state into a
@@ -687,6 +711,16 @@ class ToolCallGuide:
     def fill(self, out: np.ndarray) -> bool:
         """Write the next-token mask into ``out`` (int32 words); False when the next
         token is unconstrained."""
+        if self.phase == WAIT and self.grammar.forced:
+            # reasoning is free text, but it may not end (EOS) before the forced call: a
+            # model that stops inside <think> would otherwise answer with no call at all
+            out[:] = -1
+            bits = out.view(np.uint32)
+            for t in self.grammar.eos_ids:
+                if t < self.grammar.words * 32:
+                    bits[t >> 5] &= np.uint32(~(1 << (t & 31)) & 0xFFFFFFFF)
+            self.masked += 1
+            return True
         if self.phase != BODY or self.matcher is None:
             return False
         import llguidance.numpy as lnp
@@ -714,7 +748,7 @@ class ToolCallGuide:
         walked along the draft path and the guide rewound; positions after a draft
         the grammar rejects, or that arms a constraint, are left unconstrained
         (the round discards them)."""
-        if self.phase != BODY:
+        if not self.constrained:
             return None
         out = np.full((n_pos, self.grammar.words), -1, dtype=np.int32)
         cp = self.checkpoint()
