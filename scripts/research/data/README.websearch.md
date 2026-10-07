@@ -14,8 +14,9 @@ at least 200 answers; this 130-query set alone cannot satisfy that gate.
 
 Current replay arms: plain snippets, local BM25/dense preparation, no-search
 floor. Capture separate snapshots for Brave/Tavily/Exa/keyless to compare index
-quality. Dense ranking in a separate eval process needs a resident in-process
-engine; the dedicated yv websearch smoke proves the actual server fusion path.
+quality. Replay `--ranking-model` calls the local `/v1/embeddings` route only after
+confirming the model is already loaded; unavailable ranking retains BM25. The
+dedicated yv websearch smoke also proves the in-process server fusion path.
 Semantic citation support and rubric grading require reviewed references and a
 separate judge; mechanical substring validation does not prove claim support.
 

@@ -43,6 +43,16 @@ def fuse(sparse: list[int], dense: list[int]) -> list[int]:
     return sorted(scores, key=lambda i: (-scores[i], i))
 
 
+def embedding_inputs(model: str, texts: list[str]) -> list[str]:
+    texts = list(texts)
+    if texts and "qwen3-embedding" in model.lower():
+        texts[0] = (
+            "Instruct: Retrieve web excerpts relevant to this question.\nQuery: "
+            + texts[0]
+        )
+    return texts
+
+
 async def local_vectors(texts: list[str]):
     model = settings.get("YUNSHU_WEB_RESEARCH_MODEL")
     if not model:
@@ -64,7 +74,9 @@ async def local_vectors(texts: list[str]):
 
     scope = LeaseScope()
     scope.add(entry)
-    task = asyncio.create_task(_get_embeddings(entry.engine, texts))
+    task = asyncio.create_task(
+        _get_embeddings(entry.engine, embedding_inputs(model, texts))
+    )
 
     def finished(future):
         scope.release()

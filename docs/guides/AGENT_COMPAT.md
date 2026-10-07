@@ -171,7 +171,7 @@ results rejected by domain filters advance to the next provider. Explicit provid
 
 **Queries leave the machine.** Model-generated query text can contain conversation context.
 DuckDuckGo/Wikipedia and any configured provider see that query and your IP; origin pages see
-fetch URLs. No conversation history or user credentials are forwarded. `yunshu config` and
+fetch URLs. No conversation history or client authentication credentials are forwarded. Provider keys go only to their search APIs. `yunshu config` and
 search tool output disclose this. DuckDuckGo HTML is best effort for personal local use: automated
 access has uncertain terms, may be blocked and has no SLA. Admission is at most one DDG request
 per second, with a five-minute cooldown after a block and no automatic retries. Prefer a configured

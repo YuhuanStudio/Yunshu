@@ -201,3 +201,45 @@ async def test_frozen_replay_with_fake_server_body_auth_and_citations(
     assert await m.run(args) == 0 and len(seen) == 3
     result = json.loads(output.read_text().splitlines()[0])
     assert result["research"]["correct"] and result["research"]["valid_citations"] == 1
+
+
+async def test_dense_replay_uses_only_resident_models_and_local_embeddings():
+    import httpx
+
+    m = module()
+    calls = []
+    loaded = [False]
+
+    def fake(req):
+        calls.append(req.url.path)
+        if req.url.path == "/v1/models":
+            return httpx.Response(
+                200,
+                json={"data": [{"id": "Qwen3-Embedding-0.6B", "loaded": loaded[0]}]},
+            )
+        body = json.loads(req.content)
+        assert body["input"][0].startswith("Instruct:")
+        assert body["input"][1] == "document"
+        return httpx.Response(
+            200,
+            json={
+                "data": [
+                    {"index": 1, "embedding": [0.0, 1.0]},
+                    {"index": 0, "embedding": [1.0, 0.0]},
+                ]
+            },
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(fake)) as client:
+        state = {"requests": 0, "completed": 0}
+        assert (
+            m.resident_embedder(client, "http://fixture", "Qwen3-Embedding-0.6B", state)
+            is None
+        )
+        assert calls == ["/v1/models"]
+        loaded[0] = True
+        embed = m.resident_embedder(
+            client, "http://fixture", "Qwen3-Embedding-0.6B", state
+        )
+        assert await embed(["query", "document"]) == [[1.0, 0.0], [0.0, 1.0]]
+        assert state["requests"] == state["completed"] == 1

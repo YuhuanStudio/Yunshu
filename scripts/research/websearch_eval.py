@@ -26,6 +26,10 @@ def parser():
         type=Path,
         help="Bearer token file for a protected local eval server",
     )
+    p.add_argument(
+        "--ranking-model",
+        help="Already-loaded local embedding model ID; BM25 fallback when unavailable",
+    )
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--require-design-set", action="store_true")
     p.add_argument(
@@ -106,26 +110,84 @@ def quality_verdict(pairs: list[dict]):
     return {"pass": abs(delta) <= 1, "net_correct": delta, "pairs": len(pairs)}
 
 
-async def prepare(row):
+def resident_embedder(client, url: str, model: str | None, state: dict):
+    if not model:
+        return None
+    try:
+        response = client.get(url.rstrip("/") + "/v1/models")
+        response.raise_for_status()
+        loaded = any(
+            item.get("id") == model and item.get("loaded") is True
+            for item in response.json().get("data", [])
+        )
+        state["loaded_at_start"] = loaded
+        if not loaded:
+            return None  # never call a resolving endpoint for an unloaded model
+    except Exception:
+        state["loaded_at_start"] = False
+        return None
+
+    async def embed(texts):
+        from yunshu_gateway.server_tools.research.rank import embedding_inputs
+
+        state["requests"] += 1
+        response = client.post(
+            url.rstrip("/") + "/v1/embeddings",
+            timeout=1.0,
+            json={
+                "model": model,
+                "input": embedding_inputs(model, texts),
+                "encoding_format": "float",
+            },
+        )
+        response.raise_for_status()
+        vectors = [
+            item["embedding"]
+            for item in sorted(
+                response.json().get("data", []), key=lambda item: item["index"]
+            )
+        ]
+        if len(vectors) != len(texts):
+            raise ValueError("incomplete embedding response")
+        state["completed"] += 1
+        return vectors
+
+    return embed
+
+
+async def prepare(row, embedder=None):
     from dataclasses import asdict
 
     from yunshu_gateway.server_tools.research.chunk import chunks
     from yunshu_gateway.server_tools.research.extract import extract
     from yunshu_gateway.server_tools.research.pipeline import select
     from yunshu_gateway.server_tools.research.rank import rank
+    from yunshu_gateway.server_tools.search import Passage
 
     extracted = {url: extract(body, url)[1] for url, body in row["pages"].items()}
-    results = []
-    for result in row["results"][:5]:
+    results = [dict(result) for result in row["results"][:5]]
+    flat, owners, fetched = [], [], set()
+    for index, result in enumerate(results):
         spans = chunks(extracted.get(result["url"], ""))
-        order = await rank(row["query"], spans)
-        result = dict(result)
-        if order:
-            selected = select(row["query"], spans, order)
+        if spans:
+            fetched.add(index)
+        elif result.get("snippet"):
+            spans = [Passage(result["snippet"], heading=result.get("title", ""))]
+        flat.extend(spans)
+        owners.extend([index] * len(spans))
+    order = await rank(row["query"], flat, embedder)
+    first = {}
+    for index, result in enumerate(results):
+        indices = [i for i in order if owners[i] == index]
+        first[index] = next(
+            (pos for pos, i in enumerate(order) if owners[i] == index),
+            len(order) + index,
+        )
+        if index in fetched:
+            selected = select(row["query"], flat, indices)
             result["snippet"] = "\n\n".join(p.text for p in selected)
             result["passages"] = [asdict(p) for p in selected]
-        results.append(result)
-    return results, extracted
+    return [results[i] for i in sorted(first, key=lambda i: first[i])], extracted
 
 
 async def capture(a):
@@ -133,6 +195,7 @@ async def capture(a):
     import datetime
     from dataclasses import asdict
 
+    from yunshu_engine import settings
     from yunshu_gateway.server_tools.research.extract import extract
     from yunshu_gateway.server_tools.research.politeness import politeness
     from yunshu_gateway.server_tools.search import run_search
@@ -159,6 +222,10 @@ async def capture(a):
         )
         return 0
     a.out.parent.mkdir(parents=True, exist_ok=True)
+    settings.set_override(
+        "YUNSHU_WEB_FETCH_MAX_TEXT_CHARS",
+        int(settings.get("YUNSHU_WEB_FETCH_MAX_BYTES")),
+    )
     failed = 0
     with a.out.open("w") as out:
         for query in queries:
@@ -237,9 +304,15 @@ async def run(a):
     headers = {}
     if a.token_file:
         headers["Authorization"] = "Bearer " + a.token_file.read_text().strip()
+    ranking = {"model": a.ranking_model, "requests": 0, "completed": 0}
     with a.out.open("w") as out, httpx.Client(timeout=120, headers=headers) as client:
+        embedder = (
+            None
+            if a.dry_run
+            else resident_embedder(client, a.url, a.ranking_model, ranking)
+        )
         for row in rows:
-            prepared, extracted = await prepare(row)
+            prepared, extracted = await prepare(row, embedder)
             pair = {"id": row["id"], "category": row.get("category")}
             for arm, results in (
                 ("snippets", row["results"][:5]),
@@ -339,7 +412,7 @@ async def run(a):
                     raise ValueError(f"{row['id']} {arm}: empty answer")
                 # Replayed server-tool blocks restore citation sources without live search.
                 citations = [
-                    c for b in data.get("content", []) for c in b.get("citations", [])
+                    c for b in data.get("content", []) for c in b.get("citations") or []
                 ]
                 pair[arm] = {
                     **score(text, citations, row, extracted),
@@ -360,6 +433,7 @@ async def run(a):
                     "p95": values[min(len(values) - 1, int(len(values) * 0.95))],
                 }
         final = {
+            "ranking": ranking,
             "latency_seconds": latency,
             "complete": True,
             "dry_run": a.dry_run,

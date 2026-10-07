@@ -215,7 +215,12 @@ def main(argv=None):
             if models_dir:
                 token_file.write_text(token)
                 token_file.chmod(0o600)
-                argv += ["--token-file", str(token_file)]
+                argv += [
+                    "--token-file",
+                    str(token_file),
+                    "--ranking-model",
+                    a.embedding_model.name,
+                ]
             try:
                 rc = asyncio.run(
                     websearch_eval.run(websearch_eval.parser().parse_args(argv))
@@ -248,6 +253,7 @@ def main(argv=None):
                         p["research"]["injection_success"] for p in pairs
                     ),
                     "quality_gate": evidence[-1]["quality_gate"],
+                    "ranking": evidence[-1]["ranking"],
                     "snapshot_sha256": evidence[-1]["snapshot_sha256"],
                 }
             )
