@@ -287,6 +287,7 @@ def cmd_run(args):
     if not todo:
         return 0
     server = None
+    spec_mode = None
     t_job = time.time()
     try:
         if args.serve:
@@ -303,6 +304,12 @@ def cmd_run(args):
             )
             server.start()
             engine_url, model, pid = server.url, server.model_id, server.proc.pid
+            spec_mode = server.engaged_spec_mode() if args.serve == "yunshu" else None
+            want = os.environ.get("AGENTIC_EXPECT_SPEC")
+            if want and spec_mode != want:
+                raise RuntimeError(
+                    f"expected spec mode {want!r}, engaged {spec_mode!r}"
+                )
             print(
                 f"[agentic] server {args.serve} ready in {server.ready_s:.0f}s as {model!r}",
                 flush=True,
@@ -327,6 +334,7 @@ def cmd_run(args):
                 agent=args.agent,
                 agent_version=agents.agent_version(args.agent),
                 flags=args.server_arg,
+                spec_mode=spec_mode,
                 yunshu_env={
                     k: v for k, v in os.environ.items() if k.startswith("YUNSHU_")
                 },

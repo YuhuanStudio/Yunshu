@@ -22,6 +22,8 @@ import urllib.request
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "dev"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import bench_engines  # noqa: E402
 from gpuq_contention import was_contended  # noqa: E402
 
 M = "/Volumes/P5Plus/models/Jundot/Qwen3.8-27B-oQ4e-mtp"
@@ -89,9 +91,15 @@ def engaged_spec_mode(engine, log):
 
 
 class Srv:
-    def __init__(self, engine, extra_env, tag, model=None):
+    def __init__(
+        self, engine, extra_env, tag, model=None, ctx_tokens=140000, parallel=1
+    ):
         self.engine, self.port = engine, free_port()
         self.requested_spec_mode, extra_env = spec_request(engine, extra_env)
+        self.launch = None
+        self.probe = None
+        if bench_engines.is_new_engine(engine):
+            self.requested_spec_mode = bench_engines.ENGINES[engine].expected_mode
         self.extra_env = extra_env
         self.home = OUT / "home" / tag
         shutil.rmtree(self.home, ignore_errors=True)
@@ -106,7 +114,26 @@ class Srv:
         env.update(
             HOME=str(self.home), HF_HUB_OFFLINE="1", NO_PROXY="127.0.0.1", **extra_env
         )
-        if engine == "yunshu":
+        if bench_engines.is_new_engine(engine):
+            self.launch = bench_engines.build_launch(
+                engine, self.port, self.home, os.environ, ctx_tokens, parallel
+            )
+            env = dict(self.launch.env, **extra_env)
+            for path, text in self.launch.files.items():
+                Path(path).parent.mkdir(parents=True, exist_ok=True)
+                Path(path).write_text(text)
+            for link, target in self.launch.links.items():
+                Path(link).parent.mkdir(parents=True, exist_ok=True)
+                if Path(link).is_symlink() or Path(link).exists():
+                    Path(link).unlink()
+                os.symlink(target, link)
+            cmd = list(self.launch.cmd)
+            if bench_engines.ENGINES[engine].kind == "yunshu":
+                if not YUNSHU_SRC:
+                    raise RuntimeError("TFB_YUNSHU_SRC (pinned tree python/) is required")
+                env["PYTHONPATH"] = YUNSHU_SRC
+                cmd[0] = own_venv_bin(YUNSHU_SRC, "yunshu") or cmd[0]
+        elif engine == "yunshu":
             if YUNSHU_SRC:
                 env["PYTHONPATH"] = YUNSHU_SRC
             cmd = [
@@ -140,6 +167,7 @@ class Srv:
                 start_new_session=True,
             )
         self.url = f"http://127.0.0.1:{self.port}"
+        self.mem = MemSampler(getattr(self.proc, "pid", None))
         t0 = time.time()
         while time.time() - t0 < 900:
             if self.proc.poll() is not None:
@@ -164,10 +192,30 @@ class Srv:
             self.kill()
             raise
 
+    def probe_text(self):
+        path = self.launch.probe if self.launch else None
+        if not path:
+            return None
+        try:
+            with urllib.request.urlopen(self.url + path, timeout=10) as r:
+                return r.read().decode("utf-8", "replace")[:20000]
+        except Exception as e:  # noqa: BLE001
+            return f"probe failed: {e!r}"
+
     def verify_spec_mode(self):
-        self.engaged_spec_mode = engaged_spec_mode(
-            self.engine, self.log.read_text(errors="replace")
-        )
+        log = self.log.read_text(errors="replace")
+        if self.engine in bench_engines.ENGINES:
+            # registry engines: evidence from the log (and a status probe) must match the expected mode
+            self.probe = self.probe_text()
+            self.engaged_spec_mode = bench_engines.detect_mode(
+                self.engine, log, self.probe
+            )
+            if os.environ.get("TFB_SKIP_ENGAGED") == "1":
+                self.engaged_spec_mode = self.engaged_spec_mode or "unchecked"
+                return
+            bench_engines.check_engaged(self.engine, self.engaged_spec_mode)
+            return
+        self.engaged_spec_mode = engaged_spec_mode(self.engine, log)
         if os.environ.get("TFB_SKIP_ENGAGED") == "1":
             # old releases (v0.1.0) have no speculative decoding and no engagement marker
             self.engaged_spec_mode = self.engaged_spec_mode or "unchecked"
@@ -188,7 +236,10 @@ class Srv:
         # the next server of this tag starts from an emptied home anyway. Left behind, finished
         # yv runs held 362 GB of it on P5Plus (2026-10-07).
         if self.proc.poll() is not None:
-            shutil.rmtree(self.home / ".yunshu" / "cache", ignore_errors=True)
+            for sub in (".yunshu/cache", "omlx-ssd", "mtplx-cache", "omlx-base/cache"):
+                shutil.rmtree(self.home / sub, ignore_errors=True)
+        if getattr(self, "mem", None):
+            self.mem.stop()
 
 
 def send(url, body, timeout=600):
@@ -350,7 +401,48 @@ def req(model, text, mt, seed=None, extra=None, temp=0):
     return b
 
 
+META: dict = {}  # engine / version / sha / flags / drafter / engaged spec mode / checkpoint, on every row
+
+
+class MemSampler:
+    """Peak physical footprint of the server's process tree (macOS proc_pid_rusage, accounting sum),
+    sampled every 2 s from the moment the server starts; sample() reads one more point (idle)."""
+
+    def __init__(self, pid, every=2.0):
+        import threading
+
+        self.pid, self.every = pid, every
+        self.peak_gib = 0.0
+        self.last_gib = None
+        self.n = 0
+        self._stop = threading.Event()
+        self._t = threading.Thread(target=self._run, daemon=True)
+        if pid:
+            self._t.start()
+
+    def sample(self):
+        try:
+            from process_memory import process_tree_memory
+
+            m = process_tree_memory(self.pid)
+            g = round(m["physical_footprint_sum_bytes"] / 2**30, 3)
+            self.last_gib = g
+            self.peak_gib = max(self.peak_gib, g)
+            self.n += 1
+            return g
+        except Exception:  # noqa: BLE001 - a sampling miss is not a result
+            return None
+
+    def _run(self):
+        while not self._stop.wait(self.every):
+            self.sample()
+
+    def stop(self):
+        self._stop.set()
+
+
 def emit(out, **kw):
+    kw = {**META, **kw}
     print(
         json.dumps({k: v for k, v in kw.items() if k not in ("text", "cmd", "env")})[
             :300
@@ -419,7 +511,7 @@ def part_decode(s, out, a):
                 r["text"] = r.pop("_text")
                 r["rep4"] = ngram_repeat(r["text"])
                 emit(out, part="decode", ctx=ctx, kind=kind, phase=phase, **r)
-            if a.engine != "yunshu" and ctx == 1024:
+            if a.engine in bench_engines.TF_ENGINES and ctx == 1024:
                 r = send(s.url, req(s.model, text, n_dec, extra={"draft": False}))
                 r["text"] = r.pop("_text")
                 emit(out, part="decode", ctx=ctx, kind=kind, phase="specoff", **r)
@@ -552,8 +644,9 @@ def part_conc32(s, out, a):
 
 
 def part_conc(s, out, a):
-    for n in (2,) if a.smoke else (2, 4, 8):
-        for trial in range(1 if a.smoke else 2):
+    ns = [int(x) for x in (a.conc_ns or "2,4,8").split(",")]
+    for n in (2,) if a.smoke else ns:
+        for trial in range(1 if a.smoke else a.conc_trials):
             texts = [
                 "Say hello."
                 if a.smoke
@@ -655,6 +748,18 @@ def parse_args(argv=None):
         default=256,
         help="reply length of decode cells; a cell that does not end finish=length at exactly N is an error",
     )
+    ap.add_argument("--conc-ns", default="", help="concurrency levels, e.g. 2,4 (default 2,4,8)")
+    ap.add_argument("--conc-trials", type=int, default=2)
+    ap.add_argument(
+        "--ctx-tokens",
+        type=int,
+        default=140000,
+        help="context window to start engines that need one (llama.cpp -c)",
+    )
+    ap.add_argument("--parallel", type=int, default=1, help="server slots (llama.cpp -np)")
+    ap.add_argument(
+        "--idle-s", type=float, default=30.0, help="pause before the idle footprint sample"
+    )
     ap.add_argument("--dry-run", action="store_true")
     args = list(sys.argv[1:] if argv is None else argv)
     # Tags are filename suffixes and often begin with '-'. Keep registered
@@ -681,7 +786,11 @@ def main():
             for directory in (BODIES, BODIES2):
                 if not list(directory.glob("*-req.json")):
                     raise FileNotFoundError(directory)
-        if not (Path(a.model) / "config.json").is_file():
+        if a.engine in bench_engines.ENGINES:
+            gone = bench_engines.missing_paths(a.engine)
+            if gone:
+                raise FileNotFoundError(f"{a.engine}: missing {gone}")
+        elif not (Path(a.model) / "config.json").is_file():
             raise FileNotFoundError(a.model)
         mode, selected = spec_request(a.engine, extra_env)
         print(
@@ -695,9 +804,28 @@ def main():
             )
         )
         return
-    s = Srv(a.engine, extra_env, f"{a.engine}-{a.part}-{a.rep}{a.tag}", model=a.model)
+    s = Srv(
+        a.engine,
+        extra_env,
+        f"{a.engine}-{a.part}-{a.rep}{a.tag}",
+        model=a.model,
+        ctx_tokens=a.ctx_tokens,
+        parallel=a.parallel,
+    )
     try:
         with open(a.out, "a") as out:
+            if a.engine in bench_engines.ENGINES:
+                version, sha = bench_engines.engine_version(a.engine, YUNSHU_SRC)
+                META.update(
+                    bench_engines.meta_row(
+                        a.engine,
+                        version=version,
+                        git_sha=sha,
+                        engaged=s.engaged_spec_mode,
+                        flags=(s.launch.flags if s.launch else {"drafter": D}),
+                    )
+                )
+                META["snapshot_rep"] = a.rep
             emit(
                 out,
                 part="session",
@@ -724,6 +852,21 @@ def main():
                     "conc32": part_conc32,
                 }[a.part](s, out, a)
             s.verify_spec_mode()
+            mem = getattr(s, "mem", None)
+            if mem is not None:
+                time.sleep(a.idle_s)
+                idle = mem.sample()
+                peak = max(mem.peak_gib, idle or 0.0)
+                if not peak or idle is None:
+                    raise RuntimeError("memory sampling produced no data")
+                emit(
+                    out,
+                    part="memory",
+                    peak_gib=peak,
+                    idle_gib=idle,
+                    samples=mem.n,
+                    idle_after_s=a.idle_s,
+                )
             emit(
                 out,
                 part="part_done",
