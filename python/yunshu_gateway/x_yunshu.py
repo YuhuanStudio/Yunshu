@@ -307,6 +307,11 @@ def progress_payload(info: RequestInfo) -> dict:
         out["eta_s"] = round((total - done) / rate, 1) if rate else None
     else:
         out["completion_tokens"] = st.generated
+        if st.phase == "decode" and st.t_first and st.t_last > st.t_first:
+            # Same formula as the live aggregate in /v1/yunshu/status.
+            out["tokens_per_second"] = round(
+                (st.generated - 1) / (st.t_last - st.t_first), 1
+            )
     return out
 
 
@@ -513,6 +518,7 @@ def record_done(info: RequestInfo, stats: dict) -> None:
             "decode_tps": stats.get("decode_tps"),
             "ttft_ms": stats.get("ttft_ms"),
             "speculative": stats.get("speculative"),
+            "model": getattr(info.gen, "model", None),
         }
     )
     with contextlib.suppress(Exception):

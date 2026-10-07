@@ -16,6 +16,7 @@ from __future__ import annotations
 import logging
 import os
 import time
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -61,6 +62,25 @@ def _memory() -> dict[str, Any]:
     return out
 
 
+_WEIGHT_GB: dict[str, float | None] = {}
+
+
+def _weights_gb(model_path: str | None) -> float | None:
+    """On-disk safetensors size of a checkpoint in GB, stat'ed once per path."""
+    if not model_path:
+        return None
+    if model_path not in _WEIGHT_GB:
+        total = 0
+        try:
+            total = sum(
+                f.stat().st_size for f in Path(model_path).rglob("*.safetensors")
+            )
+        except OSError:
+            total = 0
+        _WEIGHT_GB[model_path] = round(total / 1e9, 1) if total else None
+    return _WEIGHT_GB[model_path]
+
+
 def _models() -> list[dict[str, Any]]:
     manager = get_model_manager()
     rows: list[dict[str, Any]] = []
@@ -98,6 +118,7 @@ def _models() -> list[dict[str, Any]]:
                 "loaded": bool(getattr(engine, "is_loaded", False)),
                 "loading": False,
                 "pinned": True,  # single-model mode never frees its model
+                "size_gb": _weights_gb(getattr(engine, "_model_path", None)),
                 "keep_alive_s": None,
                 "expires_in_s": None,
             }
