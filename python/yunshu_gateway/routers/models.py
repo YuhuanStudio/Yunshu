@@ -105,6 +105,24 @@ class LoadModelRequest(BaseModel):
         return data
 
 
+def _can_inspect_residency(request: Request) -> bool:
+    role = getattr(request.state, "role", None)
+    if role == "admin":
+        return True  # legacy authenticated adapters
+    if role != "owner":
+        return False
+    # Middleware also stamps owner on unprotected local requests. That identity
+    # alone must not turn public model metadata into authenticated detail.
+    token = settings.get("YUNSHU_AUTH_TOKEN")
+    auth = request.headers.get("Authorization", "")
+    presented = (
+        auth[7:] if auth.startswith("Bearer ") else request.headers.get("x-api-key")
+    )
+    from ..token_compare import tokens_equal
+
+    return bool(token and presented and tokens_equal(presented, token))
+
+
 def _model_payload(card, entry, authenticated: bool) -> dict:
     """One ``/v1/models`` item: the card in every wire format, plus admin-only detail."""
     from ..model_card_formats import openai_model
@@ -138,7 +156,7 @@ async def list_models(request: Request) -> dict:
     from ..model_cards import all_cards, entry_card
 
     # Static-token authentication uses the single-owner role; retain legacy admin stubs.
-    _authenticated = getattr(request.state, "role", None) in ("owner", "admin")
+    _authenticated = _can_inspect_residency(request)
     manager = get_model_manager()
     models = []
     if manager is not None:
@@ -179,9 +197,7 @@ async def get_model(model_id: str, request: Request) -> dict:
         if manager is not None
         else None
     )
-    item = _model_payload(
-        card, entry, getattr(request.state, "role", None) in ("owner", "admin")
-    )
+    item = _model_payload(card, entry, _can_inspect_residency(request))
     if entry is not None:
         item.pop("stats", None)  # detail view: the card is enough
     return item
