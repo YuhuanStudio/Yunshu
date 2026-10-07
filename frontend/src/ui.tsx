@@ -14,28 +14,8 @@ import type { useEngine } from "./useEngine";
 import { offlineCause } from "./errors";
 export type Engine = ReturnType<typeof useEngine>;
 export type Model = EngineStatus["models"][number];
-// Intl formatters are expensive to build and a poll formats hundreds of
-// values (every chart tick), so each distinct format is built once.
-const numberFormats = new Map<string, Intl.NumberFormat>();
-function numberFormat(min: number, max: number) {
-  const key = min + ":" + max;
-  let f = numberFormats.get(key);
-  if (!f) {
-    f = new Intl.NumberFormat("zh-TW", {
-      minimumFractionDigits: min,
-      maximumFractionDigits: max,
-    });
-    numberFormats.set(key, f);
-  }
-  return f;
-}
-export const number = (v: number | null | undefined, digits = 1) =>
-  v == null || !Number.isFinite(v) ? "—" : numberFormat(0, digits).format(v);
-/** Fixed decimals, so a polled value keeps the same number of characters. */
-export const fixed = (v: number | null | undefined, digits = 1) =>
-  v == null || !Number.isFinite(v)
-    ? "—"
-    : numberFormat(digits, digits).format(v);
+export { number, fixed, clock, elapsed, percent, gb, bytes, relative, dateTime } from "./i18n/format.ts";
+import { clock, number } from "./i18n/format.ts";
 /**
  * A numeric slot that keeps its width: tabular figures plus a reserved minimum
  * width in `ch`, so a value that changes length (or is briefly "—") never moves
@@ -61,21 +41,6 @@ export function Slot({
     </span>
   );
 }
-const clockFormat = new Intl.DateTimeFormat("zh-TW", {
-  hourCycle: "h23",
-  hour: "2-digit",
-  minute: "2-digit",
-  second: "2-digit",
-});
-export const clock = (t: number) => clockFormat.format(t);
-export const elapsed = (seconds: number | null | undefined) =>
-  seconds == null
-    ? "—"
-    : seconds >= 3600
-      ? `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`
-      : seconds >= 60
-        ? `${Math.floor(seconds / 60)}m ${Math.floor(seconds % 60)}s`
-        : `${number(seconds)}s`;
 export const modelLabel = (id: string) =>
   id.split("/").filter(Boolean).at(-1) ?? id;
 export const isOnline = (engine: Engine) => engine.phase === "online";
