@@ -12,5 +12,6 @@ const common: Shape<typeof zh> = {
   copyFailed: "Could not write to the clipboard",
   copyLabel: "Copy {label}",
   "language.label": "Language",
+  sentenceGap: " ",
 };
 export default common;

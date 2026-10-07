@@ -321,9 +321,11 @@ export default function App() {
                 <CloudMark />
                 <span className="flex-1 truncate text-base font-semibold tracking-tight">
                   Yunshu
-                  <span className="ml-1.5 text-xs font-normal text-muted-foreground">
-                    {t("shell.brand.name")}
-                  </span>
+                  {t("shell.brand.name") !== "Yunshu" && (
+                    <span className="ml-1.5 text-xs font-normal text-muted-foreground">
+                      {t("shell.brand.name")}
+                    </span>
+                  )}
                 </span>
               </div>
               <IconButton

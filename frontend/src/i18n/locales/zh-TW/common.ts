@@ -9,5 +9,6 @@ const common = {
   copyFailed: "無法寫入剪貼簿",
   copyLabel: "複製{label}",
   "language.label": "語言",
+  sentenceGap: "",
 };
 export default common;

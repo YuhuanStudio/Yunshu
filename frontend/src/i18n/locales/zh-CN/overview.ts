@@ -90,9 +90,9 @@ const overview: Shape<typeof zh> = {
   "perf.range15m": "15 分钟",
   "perf.range1h": "1 小时",
   "perf.export": "导出观测",
-  "perf.noteEngine": "含引擎端历史（自 {t} 起）· {n} 条 · 中断期间不补数据",
+  "perf.noteEngine": "含引擎端历史（自 {t}） · {n} 条 · 中断期间不补数据",
   "perf.noteLocal":
-    "本页打开后采样（此引擎没有提供历史）· {n} 条 · 中断期间不补数据",
+    "本页打开后采样（此引擎没有提供历史） · {n} 条 · 中断期间不补数据",
   "throughput.title": "吞吐观测",
   "throughput.desc": "解码与预填充的实时合计速度 · 没有请求时留白 · tok/s",
   "throughput.metric": "吞吐指标",

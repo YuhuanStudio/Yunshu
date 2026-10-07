@@ -72,7 +72,7 @@ export function ConnectionState({
       : "",
   ]
     .filter(Boolean)
-    .join("");
+    .join(t("common.sentenceGap"));
   return (
     <div role="status">
       <Banner

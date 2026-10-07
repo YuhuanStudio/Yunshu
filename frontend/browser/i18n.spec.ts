@@ -140,7 +140,7 @@ for (const l of LOCALES) {
         expect(text, `page ${p}`).not.toContain("⟦");
         if (p === "overview")
           await expect(
-            page.getByRole("link", { name: l.overview }).first(),
+            page.locator("nav").getByText(l.overview, { exact: true }).first(),
           ).toBeVisible();
         if (l.locale === "en")
           expect(text, `page ${p}`).not.toMatch(/[㐀-鿿]{2}/);
@@ -169,7 +169,7 @@ test.describe("switching", () => {
       .click();
     await expect(page.locator("html")).toHaveAttribute("lang", "en");
     await expect(
-      page.getByRole("link", { name: "Overview" }).first(),
+      page.locator("nav").getByText("Overview", { exact: true }).first(),
     ).toBeVisible();
     expect(
       await page.evaluate(

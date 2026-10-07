@@ -12,5 +12,6 @@ const common: Shape<typeof zh> = {
   copyFailed: "无法写入剪贴板",
   copyLabel: "复制{label}",
   "language.label": "语言",
+  sentenceGap: "",
 };
 export default common;

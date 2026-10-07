@@ -87,9 +87,9 @@ const overview = {
   "perf.range15m": "15 分鐘",
   "perf.range1h": "1 小時",
   "perf.export": "匯出觀測",
-  "perf.noteEngine": "含引擎端歷史（自 {t} 起）· {n} 筆 · 中斷期間不補資料",
+  "perf.noteEngine": "含引擎端歷史（自 {t}） · {n} 筆 · 中斷期間不補資料",
   "perf.noteLocal":
-    "本頁開啟後採樣（此引擎沒有提供歷史）· {n} 筆 · 中斷期間不補資料",
+    "本頁開啟後採樣（此引擎沒有提供歷史） · {n} 筆 · 中斷期間不補資料",
   "throughput.title": "吞吐觀測",
   "throughput.desc": "解碼與預填的即時合計速度 · 沒有請求時留白 · tok/s",
   "throughput.metric": "吞吐指標",
