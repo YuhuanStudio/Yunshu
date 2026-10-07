@@ -132,7 +132,7 @@ def harmony(body: str, tools: Any) -> list[dict[str, str]]:
     match = re.search(r"(?:^|\s)to=([\w.-]+)", header)
     if not sep or match is None:
         raise ValueError("not a Harmony tool message")
-    args = re.split(r"<\|(?:ghissue|end|fim_suffix)\|>", args, maxsplit=1)[0]
+    args = re.split(r"<\|(?:call|end|return)\|>", args, maxsplit=1)[0]
     return [_call(match[1].removeprefix("functions."), args)]
 
 

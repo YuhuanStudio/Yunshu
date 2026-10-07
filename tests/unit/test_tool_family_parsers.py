@@ -48,7 +48,7 @@ CASES = [
     ),
     (
         tf.HARMONY,
-        '<|start|>assistant to=weather<|channel|>commentary<|message|>{"city":"Taipei","days":3}<|ghissue|>',
+        '<|start|>assistant to=weather<|channel|>commentary<|message|>{"city":"Taipei","days":3}<|call|>',
     ),
 ]
 
@@ -143,10 +143,10 @@ def test_native_grammar_compiles_and_accepts_own_wire(fmt):
 
 
 def test_harmony_generation_header_suffix_all_boundaries():
-    tok = SimpleNamespace(chat_template="<|ghissue|>")
+    tok = SimpleNamespace(chat_template="<|call|>")
     formats = tf.formats_for_tokenizer(tok)
     for head in ("to=weather<|channel|>analysis", "<|channel|>commentary to=weather"):
-        text = head + '<|message|>{"city":"Taipei","days":3}<|ghissue|>'
+        text = head + '<|message|>{"city":"Taipei","days":3}<|call|>'
         for cut in range(len(text) + 1):
             s = ToolCallStreamer(formats, tools=TOOLS)
             out = s.process_token(text[:cut]) + s.process_token(text[cut:]) + s.flush()
@@ -487,3 +487,16 @@ def test_native_raw_value_closes_with_actual_special_token():
     for token in tokenizer(CASES[8][1]):
         assert m.consume_token(token), m.get_error()
     assert m.is_accepting()
+
+
+def test_harmony_uses_real_gpt_oss_control_tokens():
+    # gpt-oss ends a tool call with <|call|> (final answer <|return|>), and its
+    # template contains <|call|>; the marker must match that real token.
+    from types import SimpleNamespace
+
+    from yunshu_engine import tool_format
+
+    tok = SimpleNamespace(chat_template="...<|start|>assistant<|channel|>...<|call|>")
+    assert tool_format.native_format(tok) is tool_format.HARMONY
+    assert tool_format.HARMONY.end == "<|call|>"
+    assert "<|return|>" in tool_format.HARMONY.alternate_ends

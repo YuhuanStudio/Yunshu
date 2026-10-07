@@ -455,9 +455,9 @@ KIMI = ToolFormat(
 HARMONY = ToolFormat(
     "harmony",
     "<|start|>assistant",
-    "<|ghissue|>",
+    "<|call|>",
     _families.harmony,
-    alternate_ends=("<|end|>", "<|fim_suffix|>"),
+    alternate_ends=("<|end|>", "<|return|>"),
 )
 HARMONY_SUFFIX = ToolFormat(
     "harmony_suffix",
@@ -485,7 +485,7 @@ _OWN_TEMPLATE_MARKERS: tuple[tuple[str, ToolFormat], ...] = (
     ("<｜DSML｜function_calls>", DSML),
     ("<｜tool▁calls▁begin｜>", DEEPSEEK),
     ("<|tool_calls_section_begin|>", KIMI),
-    ("<|ghissue|>", HARMONY),
+    ("<|call|>", HARMONY),
     ("[TOOL_CALLS]", MISTRAL),
     ("<arg_key>", GLM),
     ("<|python_tag|>", LLAMA_JSON),
