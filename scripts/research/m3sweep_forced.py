@@ -100,6 +100,59 @@ def variants(m):
                 },
             },
         )
+        out[f"chat-required-{'s' if stream else 'j'}"] = (
+            "chat",
+            stream,
+            "/v1/chat/completions",
+            {
+                "model": m,
+                "max_tokens": 1500,
+                "stream": stream,
+                "messages": msgs,
+                "tools": [CTOOL],
+                "tool_choice": "required",
+            },
+        )
+        out[f"chat-required-serial-{'s' if stream else 'j'}"] = (
+            "chat",
+            stream,
+            "/v1/chat/completions",
+            {
+                "model": m,
+                "max_tokens": 1500,
+                "stream": stream,
+                "messages": msgs,
+                "tools": [CTOOL],
+                "tool_choice": "required",
+                "parallel_tool_calls": False,
+            },
+        )
+        out[f"messages-any-serial-{'s' if stream else 'j'}"] = (
+            "messages",
+            stream,
+            "/v1/messages",
+            {
+                "model": m,
+                "max_tokens": 1500,
+                "stream": stream,
+                "messages": msgs,
+                "tools": [ATOOL],
+                "tool_choice": {"type": "any", "disable_parallel_tool_use": True},
+            },
+        )
+        out[f"responses-named-{'s' if stream else 'j'}"] = (
+            "responses",
+            stream,
+            "/v1/responses",
+            {
+                "model": m,
+                "max_output_tokens": 1500,
+                "stream": stream,
+                "input": "hi",
+                "tools": [{"type": "function", **CTOOL["function"]}],
+                "tool_choice": {"type": "function", "name": "get_weather"},
+            },
+        )
     return out
 
 
@@ -109,16 +162,20 @@ def main():
     ap.add_argument("--out", required=True)
     ap.add_argument("--reps", type=int, default=12)
     ap.add_argument("--set", action="append", default=[])
+    ap.add_argument("--only", default="", help="comma list of name substrings")
     a = ap.parse_args()
     srv = mj.start_server(a.model, "forced", ["YUNSHU_VLM_APC_DISK=0", *a.set])
     res = {"complete": False, "pass": False, "variants": {}, "bad": {}}
     try:
+        want = [w for w in a.only.split(",") if w]
         for name, (kind, stream, path, body) in variants(srv.model_id).items():
+            if want and not any(w in name for w in want):
+                continue
             bad = []
             for _i in range(a.reps):
                 st, raw = mp.post(srv.url, path, body)
                 if st != 200 or not has_call(kind, stream, raw):
-                    bad.append(raw[:700] if stream else raw[:500])
+                    bad.append(raw[:4000])
             res["variants"][name] = {"bad": len(bad), "of": a.reps}
             res["bad"][name] = bad[:2]
             print(name, f"bad {len(bad)}/{a.reps}", flush=True)

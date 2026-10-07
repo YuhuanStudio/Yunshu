@@ -391,3 +391,87 @@ def test_json_style_calls(json_tok):
         g.feed(grammar.start_id)
         assert run_tokens(g, json_tok.encode(bad, add_special_tokens=False)) is not None
     assert json.loads(good.split("\n")[1])["name"] == "Bash"
+
+
+def _ws_tokens(tok):
+    return [
+        tok.encode(s, add_special_tokens=False)[0]
+        for s in ("\n", "\n\n", " ")
+        if len(tok.encode(s, add_special_tokens=False)) == 1
+    ]
+
+
+@pytest.mark.parametrize("parallel", [True, False])
+@pytest.mark.parametrize("which", ["xml", "json"])
+def test_forced_reply_cannot_loop_on_whitespace(request, which, parallel):
+    """A forced reply may not stall in blanks: EOS is masked until a call closes, so unbounded
+    whitespace let one sampled newline run to max_tokens with no call (M3 sweep, chat stream)."""
+    tok = request.getfixturevalue(f"{which}_tok")
+    grammar = tcg.compile_tool_grammar(
+        TOOLS, tok, len(tok) + 243, tool_choice="required", parallel=parallel
+    )
+    assert grammar is not None
+    ws = _ws_tokens(tok)
+    assert ws
+    guide = grammar.guide()
+    # two characters of blank are allowed, a third never is, and the call marker always is
+    for _ in range(2):
+        assert allowed(guide.mask(), grammar.start_id)
+        w = ws[0]
+        assert allowed(guide.mask(), w)
+        guide.feed(w)
+        if not allowed(guide.mask(), w):
+            break
+    for t in ws:
+        assert not allowed(guide.mask(), t)
+    assert allowed(guide.mask(), grammar.start_id)
+    assert not allowed(guide.mask(), tok.eos_token_id)
+
+
+def test_json_style_inlines_local_refs():
+    shared = {
+        "type": "object",
+        "properties": {"p": {"$ref": "#/$defs/Pt"}},
+        "required": ["p"],
+        "$defs": {"Pt": {"type": "object", "properties": {"x": {"type": "integer"}}}},
+    }
+    out = tcg._inline_refs(shared)
+    assert out["properties"]["p"] == {
+        "type": "object",
+        "properties": {"x": {"type": "integer"}},
+    }
+    assert "$defs" not in out
+    loop = {
+        "properties": {"n": {"$ref": "#/$defs/N"}},
+        "$defs": {"N": {"properties": {"n": {"$ref": "#/$defs/N"}}}},
+    }
+    assert tcg._inline_refs(loop) is None
+    assert tcg._inline_refs({"properties": {"a": {"$ref": "http://x/y"}}}) is None
+    spec = tcg.ToolSpec("T", shared)
+    assert tcg.build_json_grammar([spec], start_id=1, end_id=2) is not None
+
+
+def test_forced_reply_cannot_end_inside_its_reasoning(request):
+    """A forced reply that thinks first may not stop (EOS) before </think>: Qwen3.5-0.8B ended its
+    reasoning with end-of-turn and the reply carried no call (M3, Responses stream, 1 in 80)."""
+    tok = request.getfixturevalue("xml_tok")
+    grammar = tcg.compile_tool_grammar(
+        TOOLS, tok, len(tok) + 243, tool_choice="required"
+    )
+    assert grammar is not None and grammar.think_end_id is not None
+    assert tok.eos_token_id in grammar.eos_ids
+    guide = grammar.guide(thinking_open=True)
+    assert guide.phase == tcg.WAIT and guide.constrained
+    row = guide.mask()
+    assert row is not None
+    for eos in grammar.eos_ids:
+        assert not allowed(row, eos)
+    word = tok.encode("Sure", add_special_tokens=False)[0]
+    assert allowed(row, word) and allowed(row, grammar.think_end_id)
+    assert guide.plan([word, grammar.think_end_id], 3) is not None
+    guide.feed(grammar.think_end_id)
+    assert guide.phase == tcg.BODY
+    # not forced: reasoning stays unmasked
+    auto = tcg.compile_tool_grammar(TOOLS, tok, len(tok) + 243)
+    free = auto.guide(thinking_open=True)
+    assert not free.constrained and free.mask() is None

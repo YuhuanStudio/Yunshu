@@ -54,6 +54,11 @@ _TEXT_SPECIAL_TOKENS = (
 
 _JSON_TYPES = {"array", "object"}
 
+# Whitespace a forced reply may put before, between and after calls: at most two characters. The
+# mask removes EOS until a call has closed, so an unbounded whitespace rule let one sampled "\n"
+# snowball into 1500 tokens of blanks and no call (M3 sweep, Qwen2.5-3B, chat stream).
+_WS_RULE = "WS: /[ \\n]{1,2}/"
+
 
 # ── grammar text ────────────────────────────────────────────────────────────
 
@@ -208,11 +213,60 @@ def build_xml_grammar(
         head = [
             f"start: WS? tcall{' (WS? tcall)*' if parallel else ''} WS?",
             f"tcall: {one}",
-            "WS: /[ \\n]+/",
+            _WS_RULE,
         ]
     else:
         head = ['start: "\\n"? call']
     return "\n".join([*head, f"call: {call_alt}", *lines, *text_rules]) + "\n"
+
+
+def _inline_refs(schema: Any, _depth: int = 0) -> dict | None:
+    """``schema`` with its local ``$ref``s (``#/$defs/X``, ``#/definitions/X``) replaced by the
+    definitions they name, so a tool whose parameters use shared definitions still compiles.
+    None when a reference is not local or recurses (a call grammar cannot be unbounded)."""
+    defs: dict = {}
+    if isinstance(schema, dict):
+        for key in ("$defs", "definitions"):
+            if isinstance(schema.get(key), dict):
+                defs.update(schema[key])
+
+    def walk(node: Any, seen: tuple) -> Any:
+        if isinstance(node, list):
+            items = [walk(n, seen) for n in node]
+            return None if any(o is None for o in items) else items
+        if not isinstance(node, dict):
+            return node
+        ref = node.get("$ref")
+        if ref is not None:
+            name = ref.rsplit("/", 1)[-1] if isinstance(ref, str) else None
+            if (
+                not isinstance(ref, str)
+                or not ref.startswith(("#/$defs/", "#/definitions/"))
+                or name not in defs
+                or name in seen
+                or len(seen) > 8
+            ):
+                return None
+            rest = {k: v for k, v in node.items() if k != "$ref"}
+            target = walk(defs[name], (*seen, name))
+            if target is None:
+                return None
+            if not isinstance(target, dict):
+                return target
+            merged = {**target, **walk(rest, seen)} if rest else target
+            return merged
+        copy: dict = {}
+        for k, v in node.items():
+            if k in ("$defs", "definitions"):
+                continue
+            w = walk(v, seen)
+            if w is None and v is not None:
+                return None
+            copy[k] = w
+        return copy
+
+    res = walk(schema, ())
+    return res if isinstance(res, dict) else None
 
 
 def build_json_grammar(
@@ -230,8 +284,8 @@ def build_json_grammar(
     for tool in tools:
         if only is not None and tool.name != only:
             continue
-        params = tool.parameters or {"type": "object"}
-        if "$ref" in json.dumps(params) or "$defs" in params:
+        params = _inline_refs(tool.parameters or {"type": "object"})
+        if params is None:
             return None
         branches.append(
             {
@@ -254,7 +308,7 @@ def build_json_grammar(
                 f"start: WS? tcall{' (WS? tcall)*' if parallel else ''} WS?",
                 f"tcall: <[{start_id}]> call",
                 f"call: {call}",
-                "WS: /[ \\n]+/",
+                _WS_RULE,
             ]
         )
     return f"start: call\ncall: {call}\n"
@@ -323,6 +377,7 @@ class ToolGrammar:
         think_end_id: int | None,
         forced: bool,
         style: str,
+        eos_ids: tuple[int, ...] = (),
     ):
         from llguidance import LLMatcher
 
@@ -333,6 +388,7 @@ class ToolGrammar:
         self.think_end_id = think_end_id
         self.forced = forced
         self.style = style
+        self.eos_ids = tuple(eos_ids)
         self.words = (llt.vocab_size + 31) // 32
         self._template = LLMatcher(llt, LLMatcher.grammar_from_lark(lark))
         err = self._template.get_error()
@@ -377,6 +433,26 @@ def _token_id(tokenizer: Any, token: str) -> int | None:
     ):
         return None
     return int(tid)
+
+
+def _eos_ids(tokenizer: Any) -> tuple[int, ...]:
+    """Every token that ends generation for ``tokenizer`` (its eos ids plus the chat / text
+    end markers), so a forced reply cannot end inside its reasoning."""
+    ids: set[int] = set()
+    for tok in (tokenizer, getattr(tokenizer, "_tokenizer", None)):
+        if tok is None:
+            continue
+        many = getattr(tok, "eos_token_ids", None)
+        if isinstance(many, (set, list, tuple)):
+            ids.update(int(i) for i in many if isinstance(i, int))
+        one = getattr(tok, "eos_token_id", None)
+        if isinstance(one, int):
+            ids.add(one)
+    for name in ("<|im_end|>", "<|endoftext|>", "<|eot_id|>", "</s>"):
+        i = _token_id(tokenizer, name)
+        if i is not None:
+            ids.add(i)
+    return tuple(sorted(ids))
 
 
 def is_forced(choice: Any) -> bool:
@@ -478,6 +554,7 @@ def compile_tool_grammar(
             think_end_id=_token_id(tokenizer, "</think>"),
             forced=forced,
             style=style,
+            eos_ids=_eos_ids(tokenizer),
         )
     except Exception:
         logger.warning(
@@ -537,7 +614,8 @@ class ToolCallGuide:
     # ── state ──
     @property
     def constrained(self) -> bool:
-        return self.phase == BODY
+        # a forced reply is also masked while it reasons: it must not end before the call
+        return self.phase == BODY or (self.phase == WAIT and self.grammar.forced)
 
     def arms(self, token: int) -> bool:
         """True when ``token``, fed now, switches an unconstrained state into a
@@ -633,6 +711,16 @@ class ToolCallGuide:
     def fill(self, out: np.ndarray) -> bool:
         """Write the next-token mask into ``out`` (int32 words); False when the next
         token is unconstrained."""
+        if self.phase == WAIT and self.grammar.forced:
+            # reasoning is free text, but it may not end (EOS) before the forced call: a
+            # model that stops inside <think> would otherwise answer with no call at all
+            out[:] = -1
+            bits = out.view(np.uint32)
+            for t in self.grammar.eos_ids:
+                if t < self.grammar.words * 32:
+                    bits[t >> 5] &= np.uint32(~(1 << (t & 31)) & 0xFFFFFFFF)
+            self.masked += 1
+            return True
         if self.phase != BODY or self.matcher is None:
             return False
         import llguidance.numpy as lnp
@@ -660,7 +748,7 @@ class ToolCallGuide:
         walked along the draft path and the guide rewound; positions after a draft
         the grammar rejects, or that arms a constraint, are left unconstrained
         (the round discards them)."""
-        if self.phase != BODY:
+        if not self.constrained:
             return None
         out = np.full((n_pos, self.grammar.words), -1, dtype=np.int32)
         cp = self.checkpoint()
