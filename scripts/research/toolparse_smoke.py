@@ -158,7 +158,10 @@ def run(url: str, model: str) -> list[dict]:
         with urllib.request.urlopen(req, timeout=180) as reply:
             raw = reply.read().decode()
         parsed = raw if kind == "stream" else json.loads(raw)
-        row = judge(kind, parsed)
+        try:
+            row = judge(kind, parsed)
+        except (ValueError, KeyError) as exc:
+            raise ValueError(f"{kind}: {exc}; response={parsed!r}") from exc
         rows.append(row)
         print(json.dumps(row, ensure_ascii=False), flush=True)
     return rows
@@ -229,7 +232,18 @@ def main() -> int:
         )
         return 0
     except Exception as exc:
-        args.out.write_text(json.dumps({"complete": False, "error": str(exc)}) + "\n")
+        args.out.write_text(
+            json.dumps(
+                {
+                    "complete": False,
+                    "error": str(exc),
+                    "server_log_tail": args.out.with_suffix(".server.log")
+                    .read_text(errors="replace")
+                    .splitlines()[-80:],
+                }
+            )
+            + "\n"
+        )
         print(str(exc), file=sys.stderr, flush=True)
         return 1
     finally:
