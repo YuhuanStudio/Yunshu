@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 import {
-  Badge,
   Button,
   Card,
   EmptyState,
@@ -260,11 +259,7 @@ export function ModelDetail({
             <IDBadge text={model.id} truncate />
           </div>
           <DetailList ariaLabel="模型事實">
-            <DetailRow
-              label="類型"
-              value={<Badge>{model.type}</Badge>}
-              mono={false}
-            />
+            <DetailRow label="類型" value={model.type} mono={false} />
             <DetailRow
               label="狀態"
               mono={false}

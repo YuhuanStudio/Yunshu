@@ -1,6 +1,5 @@
 import { useRef, useState } from "react";
 import {
-  Badge,
   Button,
   Card,
   Dialog,
@@ -11,7 +10,6 @@ import {
   EmptyState,
   Progress,
   SearchInput,
-  SegmentedSelect,
   StatusIndicator,
   Table,
   Thead,
@@ -47,6 +45,7 @@ import { useMemoryLedger } from "./memory-api";
 import { ModelManagement } from "./ModelManagement";
 import { ModelActions, type Perform } from "./ModelActions";
 import { ModelDetail, modelState, retention } from "./ModelDetail";
+import { SegmentedTray } from "./SegmentedTray";
 export type { Perform } from "./ModelActions";
 export function Models({
   engine,
@@ -197,7 +196,7 @@ export function Models({
                       <StatusIndicator status={state.status}>
                         <span className="text-foreground">{state.text}</span>
                       </StatusIndicator>
-                      <Badge variant="secondary">{model.type}</Badge>
+                      <span>{model.type}</span>
                       <span>
                         <ModelSize gb={model.size_gb} />
                       </span>
@@ -251,7 +250,9 @@ export function Models({
                           {modelLabel(model.id)}
                         </Button>
                         <div className="mt-1 flex flex-wrap items-center gap-1.5">
-                          <Badge variant="secondary">{model.type}</Badge>
+                          <span className="text-xs text-muted-foreground">
+                            {model.type}
+                          </span>
                           {/vlm|omni/i.test(model.type) &&
                             isKnownCapability("vision") && (
                               <CapabilityBadge capability="vision" short />
@@ -381,7 +382,7 @@ export function Models({
               onChange={setQuery}
               placeholder="搜尋模型 ID"
             />
-            <SegmentedSelect
+            <SegmentedTray
               value={filter}
               onChange={setFilter}
               options={[
@@ -390,7 +391,7 @@ export function Models({
               ]}
             />
             {kinds.length > 1 && (
-              <SegmentedSelect
+              <SegmentedTray
                 value={kind}
                 onChange={setKind}
                 options={[
@@ -399,7 +400,7 @@ export function Models({
                 ]}
               />
             )}
-            <SegmentedSelect
+            <SegmentedTray
               className="ml-auto"
               value={view}
               onChange={(v) => setView(v as "table" | "cards")}

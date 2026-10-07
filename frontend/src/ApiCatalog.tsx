@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
 import {
-  Badge,
   Button,
   EmptyState,
   ScrollFade,
@@ -161,17 +160,11 @@ export function ApiCatalog({ connection }: { connection: Connection }) {
             {rows.map((item) => (
               <Tr key={item.method + item.path}>
                 <Td>
-                  <Badge
-                    variant={
-                      item.method === "GET"
-                        ? "secondary"
-                        : item.method === "DELETE"
-                          ? "warning"
-                          : "info"
-                    }
+                  <span
+                    className={`text-xs font-medium tabular-nums ${item.method === "GET" ? "text-muted-foreground" : "text-foreground"}`}
                   >
                     {item.method}
-                  </Badge>
+                  </span>
                 </Td>
                 <Td>
                   <span className="inline-flex items-center gap-1">

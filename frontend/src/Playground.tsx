@@ -1,13 +1,12 @@
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import {
-  Badge,
+  StatusIndicator,
   Button,
   Card,
   EmptyState,
   IconButton,
   Input,
   FileDropzone,
-  SegmentedSelect,
   Dialog,
   DialogContent,
   DialogDescription,
@@ -69,6 +68,7 @@ import {
   type Engine,
 } from "./ui";
 import { compareOutputs, runStats, type RunTiming } from "./playground-metrics";
+import { SegmentedTray } from "./SegmentedTray";
 const CodeBlock = lazy(() =>
   import("@yuhuanowo/yunui/content").then((m) => ({ default: m.CodeBlock })),
 );
@@ -157,15 +157,17 @@ function ReplyStats({ run, now }: { run: Run; now: number }) {
         labels={statLabels}
       />
       {live && s.ttftMs === undefined && (
-        <Badge variant="outline">等待首個 token</Badge>
+        <span className="text-xs text-muted-foreground">等待首個 token</span>
       )}
       {run.timing.usage?.spec && (
-        <Badge variant="outline">
+        <span className="text-xs text-muted-foreground">
           {specLabel(run.timing.usage.spec, s.tokens)}
-        </Badge>
+        </span>
       )}
       {s.estimated && !live && (
-        <Badge variant="secondary">token 數為串流片段估算</Badge>
+        <span className="text-xs text-muted-foreground">
+          token 數為串流片段估算
+        </span>
       )}
     </div>
   );
@@ -602,14 +604,14 @@ export function Playground({
         }
         status={
           <div className="flex flex-wrap items-center gap-2">
-            <SegmentedSelect
+            <SegmentedTray
               aria-label="API 格式"
               value={dialect}
               onChange={(v) => !loading && setDialect(v)}
               options={dialectOptions}
               wrap
             />
-            <SegmentedSelect
+            <SegmentedTray
               aria-label="測試模式"
               value={mode}
               onChange={(v) => !loading && setMode(v as Mode)}
@@ -678,13 +680,15 @@ export function Playground({
                       data-testid={`compare-col-${i === 0 ? "a" : "b"}`}
                     >
                       <div className="flex flex-wrap items-center gap-2">
-                        <Badge variant="secondary">{i === 0 ? "A" : "B"}</Badge>
+                        <span className="text-xs font-medium text-muted-foreground">
+                          {i === 0 ? "A" : "B"}
+                        </span>
                         <span className="min-w-0 truncate text-sm font-medium">
                           {modelLabel(i === 0 ? model : modelB)}
                         </span>
-                        <Badge variant="outline" className="tabular-nums">
+                        <span className="text-xs tabular-nums text-muted-foreground">
                           T={number(run?.temperature ?? columnTemp(i), 1)}
-                        </Badge>
+                        </span>
                       </div>
                       {run ? (
                         <>
@@ -711,27 +715,35 @@ export function Playground({
               >
                 <span className="text-xs text-muted-foreground">B 相對 A</span>
                 {deltas?.tps !== undefined && (
-                  <Badge variant="outline">
+                  <span className="text-xs text-muted-foreground">
                     Δ tok/s {signed(deltas.tps, 1)}
-                  </Badge>
+                  </span>
                 )}
                 {deltas?.ttft !== undefined && (
-                  <Badge variant="outline">
+                  <span className="text-xs text-muted-foreground">
                     Δ 首 token 延遲 {signed(deltas.ttft, 0)} ms
-                  </Badge>
+                  </span>
                 )}
                 {verdict?.kind === "identical" &&
                   (verdict.greedy ? (
-                    <Badge variant="success">輸出完全一致</Badge>
+                    <StatusIndicator
+                      status="online"
+                      className="gap-1.5 text-xs text-muted-foreground"
+                    >
+                      輸出完全一致
+                    </StatusIndicator>
                   ) : (
-                    <Badge variant="secondary">
+                    <span className="text-xs text-muted-foreground">
                       文字相同（取樣非貪婪，不代表確定性）
-                    </Badge>
+                    </span>
                   ))}
                 {verdict?.kind === "diverged" && (
-                  <Badge variant="warning">
+                  <StatusIndicator
+                    status="away"
+                    className="gap-1.5 text-xs text-muted-foreground"
+                  >
                     首次分歧於字元偏移 {number(verdict.offset, 0)}（從 0 起算）
-                  </Badge>
+                  </StatusIndicator>
                 )}
               </Card>
             )}
@@ -806,7 +818,7 @@ export function Playground({
             {([0, 1] as const).map((i) => (
               <div key={i} className="flex items-center gap-2">
                 <span>{i === 0 ? "A" : "B"} 取樣</span>
-                <SegmentedSelect
+                <SegmentedTray
                   aria-label={`${i === 0 ? "A" : "B"} 取樣方式`}
                   value={tempMode[i]}
                   onChange={(v) =>
@@ -899,7 +911,7 @@ export function Playground({
         <div className="space-y-6">
           <div>
             <p className="mb-3 text-sm">思考模式</p>
-            <SegmentedSelect
+            <SegmentedTray
               aria-label="思考模式"
               value={thinking}
               onChange={setThinking}
@@ -912,7 +924,7 @@ export function Playground({
           </div>
           <div>
             <p className="mb-3 text-sm">輸出格式</p>
-            <SegmentedSelect
+            <SegmentedTray
               aria-label="輸出格式"
               value={jsonMode}
               onChange={setJsonMode}

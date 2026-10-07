@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import {
-  Badge,
+  StatusIndicator,
   EmptyState,
   Input,
   ScrollFade,
@@ -181,20 +181,19 @@ export function ConfigView({ connection }: { connection: Connection }) {
                       </span>
                     </Td>
                     <Td>
-                      <Badge
-                        variant={row.source === "default" ? "outline" : "info"}
+                      <span
+                        className={`text-xs ${row.source === "default" ? "text-muted-foreground" : "font-medium"}`}
                       >
                         {SOURCE_LABEL[row.source] ?? row.source}
-                      </Badge>
+                      </span>
                     </Td>
                     <Td>
-                      <Badge
-                        variant={
-                          row.stability === "stable" ? "outline" : "warning"
-                        }
+                      <StatusIndicator
+                        className="gap-1.5 text-xs text-muted-foreground"
+                        status={row.stability === "stable" ? "neutral" : "away"}
                       >
                         {STABILITY_LABEL[row.stability] ?? row.stability}
-                      </Badge>
+                      </StatusIndicator>
                     </Td>
                   </Tr>
                 ))}

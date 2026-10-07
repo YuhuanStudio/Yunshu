@@ -456,7 +456,7 @@ test("compare mode runs sequentially and reports identical greedy output", async
     "compare",
   );
   const playground = await openPlayground(page, api);
-  await page.getByRole("button", { name: "比較", exact: true }).click();
+  await page.getByRole("tab", { name: "比較", exact: true }).click();
   await playground.getByRole("button", { name: "貪婪 T=0" }).nth(0).click();
   await playground.getByRole("button", { name: "貪婪 T=0" }).nth(1).click();
   await playground.locator("textarea").first().fill("same prompt");
@@ -499,7 +499,7 @@ test("compare mode shows the first divergence offset and never claims identity",
     "diverge",
   );
   const playground = await openPlayground(page, api);
-  await page.getByRole("button", { name: "比較", exact: true }).click();
+  await page.getByRole("tab", { name: "比較", exact: true }).click();
   await playground.getByRole("button", { name: "貪婪 T=0" }).nth(0).click();
   await playground.getByRole("button", { name: "貪婪 T=0" }).nth(1).click();
   await playground.locator("textarea").first().fill("DIVERGE now");
@@ -521,7 +521,7 @@ test("compare mode with sampling does not claim determinism", async ({
     "sampled",
   );
   const playground = await openPlayground(page, api);
-  await page.getByRole("button", { name: "比較", exact: true }).click();
+  await page.getByRole("tab", { name: "比較", exact: true }).click();
   await playground.locator("textarea").first().fill("same prompt");
   await page.getByRole("button", { name: "傳送測試", exact: true }).click();
   const delta = playground.getByTestId("compare-delta");
@@ -699,7 +699,7 @@ test("view code reproduces the current request in curl, Python and JavaScript", 
   );
   const playground = await openPlayground(page, api);
   await playground
-    .getByRole("button", { name: "Responses", exact: true })
+    .getByRole("tab", { name: "Responses", exact: true })
     .click();
   await playground.locator("textarea").first().fill("show me the code");
   await playground.getByRole("button", { name: "檢視程式碼" }).click();
@@ -735,7 +735,7 @@ test("view code reproduces the current request in curl, Python and JavaScript", 
   await page.keyboard.press("Escape");
   await expect(dialog).toBeHidden();
   await playground
-    .getByRole("button", { name: "Anthropic Messages", exact: true })
+    .getByRole("tab", { name: "Anthropic Messages", exact: true })
     .click();
   await playground.getByRole("button", { name: "檢視程式碼" }).click();
   await expect(

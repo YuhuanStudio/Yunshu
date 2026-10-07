@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 import {
-  Badge,
   Button,
   Card,
   EmptyState,
@@ -568,7 +567,10 @@ export function Diagnostics({
               description={<span className="font-mono">{row.path}</span>}
               className="min-w-0"
               action={
-                <Badge variant={row.error ? "warning" : "success"}>
+                <StatusIndicator
+                  className="gap-1.5 text-xs text-muted-foreground"
+                  status={row.error ? "away" : "online"}
+                >
                   {row.error
                     ? row.status === 404
                       ? "未啟用"
@@ -576,7 +578,7 @@ export function Diagnostics({
                         ? "需要授權"
                         : "讀取失敗"
                     : "已讀取"}
-                </Badge>
+                </StatusIndicator>
               }
             >
               {row.error ? (

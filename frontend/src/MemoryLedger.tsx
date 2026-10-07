@@ -1,4 +1,4 @@
-import { Gauge, SegmentedBar, Badge } from "@yuhuanowo/yunui";
+import { Gauge, SegmentedBar, StatusIndicator } from "@yuhuanowo/yunui";
 import type { BarMark, BarSegment, SegmentTone } from "@yuhuanowo/yunui";
 import type { Connection } from "./api";
 import {
@@ -116,9 +116,12 @@ export function MemoryLedgerView({
               / {gbText(data.total_gb, 0)} 統一記憶體
             </span>
             {tone === "error" && (
-              <Badge variant="error" className="ml-2">
+              <StatusIndicator
+                status="offline"
+                className="ml-2 gap-1.5 text-xs text-muted-foreground"
+              >
                 接近上限
-              </Badge>
+              </StatusIndicator>
             )}
           </p>
           <p className="text-xs text-muted-foreground">

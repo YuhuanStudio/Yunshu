@@ -520,8 +520,8 @@ test.describe("fixture-only API controls", () => {
       .getByRole("button", { name: "生成參數", exact: true })
       .click();
     const settings = page.getByRole("dialog", { name: "生成參數" });
-    await settings.getByRole("button", { name: "關閉", exact: true }).click();
-    await settings.getByRole("button", { name: "JSON", exact: true }).click();
+    await settings.getByRole("tab", { name: "關閉", exact: true }).click();
+    await settings.getByRole("tab", { name: "JSON", exact: true }).click();
     await settings
       .getByRole("button", { name: "關閉生成參數", exact: true })
       .click();

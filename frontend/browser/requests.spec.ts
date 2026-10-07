@@ -196,7 +196,7 @@ test.describe("requests page trace", () => {
       requests.getByRole("row").filter({ hasText: "qa-prefill-01" }),
     ).toContainText("Prefill 63%");
 
-    await requests.getByRole("button", { name: "已結束", exact: true }).click();
+    await requests.getByRole("tab", { name: "已結束", exact: true }).click();
     // Three distinct ids appear over successive 3 s polls; a repeated `last` is deduped.
     await expect(
       requests.getByRole("row").filter({ hasText: "qa-done-3" }),
@@ -270,7 +270,7 @@ test.describe("requests page trace", () => {
     page,
   }) => {
     const { fixture, pageErrors, requests } = await open(page);
-    await requests.getByRole("button", { name: "已結束", exact: true }).click();
+    await requests.getByRole("tab", { name: "已結束", exact: true }).click();
     await requests
       .getByRole("row")
       .filter({ hasText: "qa-done-3" })
@@ -298,7 +298,7 @@ test.describe("requests page finished-request ring", () => {
   const withRing = async (page: Page) => {
     const o = await open(page, ring);
     await o.requests
-      .getByRole("button", { name: "已結束", exact: true })
+      .getByRole("tab", { name: "已結束", exact: true })
       .click();
     return o;
   };
@@ -338,15 +338,18 @@ test.describe("requests page finished-request ring", () => {
   }) => {
     const { pageErrors, requests } = await withRing(page);
     const rows = requests.getByRole("row");
-    await requests.getByRole("button", { name: "錯誤", exact: true }).click();
+    const pick = async (label: string) => {
+      await requests.getByRole("button", { name: /^結果：/ }).click();
+      await page.getByRole("option", { name: label, exact: true }).click();
+    };
+    await requests.getByRole("tab", { name: "已結束", exact: true }).click();
+    await pick("結果：錯誤");
     await expect(rows.filter({ hasText: "ring-req-" })).toHaveCount(1);
     await expect(rows.filter({ hasText: "-001" })).toBeVisible();
-    await requests.getByRole("button", { name: "已取消", exact: true }).click();
+    await pick("結果：已取消");
     await expect(rows.filter({ hasText: "ring-req-" })).toHaveCount(1);
     await expect(rows.filter({ hasText: "-002" })).toBeVisible();
-    await requests
-      .getByRole("button", { name: "所有結果", exact: true })
-      .click();
+    await pick("結果：全部");
     await requests.getByLabel("搜尋請求").fill("0123456789abcdef-017");
     await expect(rows.filter({ hasText: "ring-req-" })).toHaveCount(1);
     expect(pageErrors).toEqual([]);

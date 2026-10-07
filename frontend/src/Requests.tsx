@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  Badge,
+  CustomSelect,
   Button,
   Card,
   Dialog,
@@ -9,7 +9,6 @@ import {
   DialogTitle,
   EmptyState,
   Input,
-  SegmentedSelect,
   Sheet,
   Sparkline,
   StatusIndicator,
@@ -64,12 +63,13 @@ import type { Perform } from "./Models";
 import { outcomeLabels, useRecentRequests } from "./recentRequests";
 import { RequestBreakdown, RequestTimeline } from "./RequestTimeline";
 
+import { SegmentedTray } from "./SegmentedTray";
 const PAGE = 50;
 /** Long ids keep both ends so ids that differ only at the tail stay distinguishable. */
 const shortId = (id: string) =>
   id.length > 20 ? `${id.slice(0, 9)}…${id.slice(-8)}` : id;
-const outcomeBadge = (o?: string) =>
-  o === "error" ? "destructive" : o === "cancelled" ? "warning" : "outline";
+const outcomeDot = (o?: string) =>
+  o === "error" ? "offline" : o === "cancelled" ? "away" : "neutral";
 function csv(rows: Row[]) {
   const keys: (keyof Row)[] = [
     "id",
@@ -104,15 +104,6 @@ function csv(rows: Row[]) {
   a.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
-const phaseBadge = (phase: string) =>
-  phase === "decode"
-    ? "success"
-    : phase === "prefill" || phase === "starting"
-      ? "info"
-      : phase === "complete"
-        ? "outline"
-        : "secondary";
-
 /** Relative text against the last engine poll, so rows never need their own timer. */
 function relativeTime(thenMs: number, nowMs: number) {
   const s = Math.max(0, Math.round((nowMs - thenMs) / 1000));
@@ -340,9 +331,12 @@ export function Requests({
         </div>
         {done && view.outcome && (
           <div className="flex min-h-6 flex-wrap items-center gap-2">
-            <Badge variant={outcomeBadge(view.outcome)}>
+            <StatusIndicator
+              className="gap-1.5 text-xs text-muted-foreground"
+              status={outcomeDot(view.outcome)}
+            >
               {outcomeLabels[view.outcome]}
-            </Badge>
+            </StatusIndicator>
             {view.finish_reason && (
               <span className="font-mono text-xs text-muted-foreground">
                 {view.finish_reason}
@@ -520,30 +514,33 @@ export function Requests({
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
               />
-              <div className="flex flex-wrap gap-2">
-                <SegmentedSelect
+              <div className="flex flex-wrap items-center gap-2">
+                <SegmentedTray
+                  aria-label="範圍"
                   value={filter}
-                  onChange={setFilter}
+                  onChange={(v) => {
+                    setFilter(v);
+                    if (v === "active") setOutcome("all");
+                  }}
                   options={[
                     { value: "active", label: "進行中" },
                     { value: "complete", label: "已結束" },
                     { value: "all", label: "全部" },
                   ]}
                 />
-                <SegmentedSelect
-                  value={outcome}
-                  onChange={(v) => {
-                    setOutcome(v);
-                    if (v !== "all" && filter === "active")
-                      setFilter("complete");
-                  }}
-                  options={[
-                    { value: "all", label: "所有結果" },
-                    { value: "completed", label: "完成" },
-                    { value: "cancelled", label: "已取消" },
-                    { value: "error", label: "錯誤" },
-                  ]}
-                />
+                {filter !== "active" && (
+                  <CustomSelect
+                    className="w-36 [&_button]:h-8 [&_button]:text-xs"
+                    value={outcome}
+                    onChange={setOutcome}
+                    options={[
+                      { value: "all", label: "結果：全部" },
+                      { value: "completed", label: "結果：完成" },
+                      { value: "cancelled", label: "結果：已取消" },
+                      { value: "error", label: "結果：錯誤" },
+                    ]}
+                  />
+                )}
               </div>
             </div>
             <Card className="overflow-hidden">
@@ -589,32 +586,34 @@ export function Requests({
                           >
                             <Td>
                               <div className="flex min-w-0 items-center gap-2">
-                                <Badge
-                                  variant={phaseBadge(row.phase)}
-                                  className="shrink-0 whitespace-nowrap"
-                                >
-                                  {labels[row.phase] ?? row.phase}
-                                </Badge>
+                                {(row.phase !== "complete" ||
+                                  (row.outcome &&
+                                    row.outcome !== "completed")) && (
+                                  <StatusIndicator
+                                    className="shrink-0 gap-1.5 whitespace-nowrap font-sans text-xs text-muted-foreground"
+                                    status={
+                                      row.phase === "complete"
+                                        ? outcomeDot(row.outcome)
+                                        : phaseDot(row.phase)
+                                    }
+                                  >
+                                    {row.phase === "complete"
+                                      ? row.outcome
+                                        ? outcomeLabels[row.outcome]
+                                        : ""
+                                      : (labels[row.phase] ?? row.phase)}
+                                  </StatusIndicator>
+                                )}
                                 <span
                                   title={row.id}
                                   className="min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground"
                                 >
                                   {shortId(row.id)}
                                 </span>
-                                {row.phase === "complete" &&
-                                  row.outcome &&
-                                  row.outcome !== "completed" && (
-                                    <Badge
-                                      variant={outcomeBadge(row.outcome)}
-                                      className="shrink-0 whitespace-nowrap"
-                                    >
-                                      {outcomeLabels[row.outcome]}
-                                    </Badge>
-                                  )}
                               </div>
                               <p
                                 title={row.model ?? undefined}
-                                className="mt-1 truncate font-mono text-xs text-muted-foreground 2xl:hidden"
+                                className="mt-1 truncate text-xs text-muted-foreground 2xl:hidden"
                               >
                                 {row.model
                                   ? modelLabel(row.model)
@@ -624,7 +623,7 @@ export function Requests({
                             <Td className="hidden 2xl:table-cell">
                               <span
                                 title={row.model ?? undefined}
-                                className="block truncate font-mono text-xs"
+                                className="block truncate text-xs text-muted-foreground"
                               >
                                 {row.model ? (
                                   modelLabel(row.model)
