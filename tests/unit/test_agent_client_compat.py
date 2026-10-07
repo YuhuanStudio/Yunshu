@@ -1416,3 +1416,45 @@ def test_text_completions_continuous_usage_on_real_stream_wrapper(monkeypatch):
     assert chunks and all("usage" in e for e in chunks)
     assert chunks[-1]["usage"]["completion_tokens"] == 2
     assert ev[-1]["usage"]["completion_tokens"] == 2
+
+
+def test_shell_probe_uses_greedy_followup(monkeypatch):
+    import sys
+    from pathlib import Path
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts/research"))
+    import route_checks  # noqa: F401
+    import route_checks_agent_compat as probe
+
+    requests = []
+
+    def events(c, path, body):
+        name = body["tools"][0]["type"]
+        item = {"type": name + "_call", "call_id": "call_probe"}
+        if name == "local_shell":
+            item["action"] = {"type": "exec", "command": ["pwd"], "env": {}}
+        else:
+            item.update(execution="client", arguments={"query": "files"})
+        return [
+            {
+                "type": "response.completed",
+                "response": {"id": "resp_probe", "output": [item]},
+            }
+        ]
+
+    def request(method, path, **kwargs):
+        body = kwargs["json"]
+        requests.append(body)
+        output = (
+            [{"type": "message", "content": [{"text": "COBALT"}]}]
+            if "previous_response_id" in body
+            else [{"type": "function_call", "name": "compat_read"}]
+        )
+        return SimpleNamespace(
+            status_code=200, json=lambda: {"output": output}, text="ok"
+        )
+
+    monkeypatch.setattr(probe, "_events", events)
+    probe.shell_search(SimpleNamespace(model="fake", req=request))
+    assert requests[0]["temperature"] == 0
+    assert requests[0]["input"][0]["id"] == "call_probe"

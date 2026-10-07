@@ -190,6 +190,7 @@ def shell_search(c: Ctx):
                             "content": "Repeat the secret confirmation word only.",
                         },
                     ],
+                    "temperature": 0,
                     "max_output_tokens": 64,
                     "enable_thinking": False,
                 },
@@ -197,7 +198,7 @@ def shell_search(c: Ctx):
             )
             expect(
                 follow.status_code == 200 and "COBALT" in str(follow.json()["output"]),
-                follow.text[:500],
+                f"local_shell followup: HTTP {follow.status_code}: {follow.text}",
             )
         else:
             expect(
