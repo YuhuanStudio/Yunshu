@@ -104,9 +104,9 @@ M5 Max, Jundot/Qwen3.8-27B-oQ4e-mtp, separate experiments, not cumulative. Sourc
 | M5 Max | 27B, DFlash | Decode, 2048-token replies, 128K prose | 40.1 → 41.6 tok/s | same (128K code 68.3 → 64.0 within ±10.8% noise; tfbench A/B 69.6 → 70.0) |
 | M5 Max | 27B, DFlash | Verify round at 1K / 8K | 54.5 → 50.7 ms / 62.3 → 56.0 ms | merge 583edbeb |
 
-Release gate, v0.1.3 → v0.1.4 (long suite, 27B with default settings, 2048-token replies, 2 reps): decode at 32K / 64K / 128K
-is +8.3–9.3% / +11.2–16.2% / +6.1–6.5%. Cold TTFT is −5.1% to −7.3% and warm TTFT −17.8% to −37.3%. Server peak memory is
-75.3 → 56.9 GiB and idle 43.4 → 34.4 GiB. Identity is 0/36 mismatches and long-context QA 30/30 on both versions.
+Release gate, v0.1.3 → v0.1.4 (long suite, 27B with default settings, 2048-token replies; two full passes, ranges
+cover both): decode at 32K / 64K / 128K +8.3–9.3% / +5.8–16.2% / +4.3–6.5%; cold TTFT −4.8% to −7.3%; warm TTFT
+−0.9% to −37.5%; server peak memory 75.3 → 56.7–56.9 GiB; identity 0/36 mismatches and long-context QA 30/30 on both.
 
 Regressions and limits: 8K code follow-up TTFT +1.7% (0.528 → 0.537 s) from the memory work; 32K turn-2 warm
 TTFT is unchanged on the restore-handle change; the fast tree only applies to bounded 1K-class greedy requests
