@@ -192,6 +192,8 @@ def check_loaded_cache(
     token count and every tensor must have a plausible rank, dtype and batch of one. A
     corrupt or foreign file fails here and the caller falls back to a cold prefill.
     """
+    from mlx_vlm.models.cache import RotatingKVCache
+
     n_tokens = len(token_ids)
     if not prompt_cache or n_tokens <= 0:
         return False
@@ -205,12 +207,31 @@ def check_loaded_cache(
             if keys is None or values is None or isinstance(keys, (tuple, list)):
                 return False
             offset = int(getattr(c, "offset", 0))
+            if keys.ndim != 4 or values.ndim != 4:
+                return False
+            rotating = isinstance(c, RotatingKVCache)
+            if rotating:
+                # Absolute position can exceed the ring's physical token rows.
+                # Validate its native metadata rather than treating it as a
+                # truncated dense cache. Multi-token prefill may hold >window
+                # rows until the next decode update normalises the ring.
+                if (
+                    offset != n_tokens
+                    or not 0 <= c.keep < c.max_size
+                    or not 0 < c._idx <= keys.shape[2]
+                    or (
+                        template is not None
+                        and (c.max_size, c.keep)
+                        != (template[i].max_size, template[i].keep)
+                    )
+                ):
+                    return False
             if (
                 keys.ndim != 4
                 or keys.shape[0] != 1
                 or keys.shape[:3] != values.shape[:3]
                 or keys.dtype != values.dtype
-                or not 0 < offset <= min(keys.shape[2], n_tokens)
+                or (not rotating and not 0 < offset <= min(keys.shape[2], n_tokens))
                 or (kv_heads is not None and keys.shape[1] != kv_heads)
                 or (head_dim is not None and keys.shape[3] != head_dim)
             ):

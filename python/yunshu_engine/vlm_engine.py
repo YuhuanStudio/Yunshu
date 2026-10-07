@@ -1274,8 +1274,7 @@ class VLMEngine:
 
     def backend_capabilities(self, lm: Any = None) -> Any:
         """This backbone's cache layout via the shared ``model_backend`` layer
-        (memoized); the runner build uses it to skip APC for sliding-window
-        caches."""
+        (memoized); callers use it to describe cache layout."""
         if self._backend_caps is not None:
             return self._backend_caps
         from .model_backend import BackendKind, derive_capabilities
@@ -1827,9 +1826,13 @@ class VLMEngine:
 
             from .apc_manager import YunshuAPCManager
 
-            # Sliding-window (rotating) caches cannot be checkpointed at a
-            # prefix boundary, so those families decode without APC.
-            if not self.backend_capabilities(lm).cache.has_sliding_window:
+            # A rotating cache cannot be assembled from dense KV blocks, but
+            # its native snapshot includes the window, absolute offset and
+            # ring index. Upstream's grouped plan checks that every component
+            # has a restore contract before admitting exact checkpoints.
+            from mlx_vlm.apc import model_apc_plan
+
+            if model_apc_plan(lm).restorable:
                 warm_mode = str(settings.get("YUNSHU_VLM_APC_WARM"))
                 share = float(settings.get("YUNSHU_VLM_APC_WARM_SHARE"))
                 warm_gb = budget * share if warm_mode != "off" else 0.0

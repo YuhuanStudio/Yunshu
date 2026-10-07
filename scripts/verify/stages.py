@@ -987,12 +987,21 @@ def stage_multimodal(ctx: Ctx) -> StageResult:
     for rep in range(int(ctx.suite.get("reps", 3))):
         for arm in ("base", "cand"):
             key = f"{arm}-r{rep}"
-            env = ctx.arm_env(arm, {"YUNSHU_VLM_APC_DISK": "0"})
+            scratch = ctx.run.path / "media" / key
+            scratch.mkdir(parents=True, exist_ok=True)
+            env = ctx.arm_env(
+                arm,
+                {
+                    "YUNSHU_VLM_APC_DISK": "0",
+                    "YUNSHU_MEDIA_DIR": str(scratch),
+                    "HF_HUB_OFFLINE": "1",
+                },
+            )
             argv = ["env", f"PYTHONPATH={ctx.tree(arm).path / 'python'}"]
             argv += [f"{k}={v}" for k, v in env.items()]
             argv += [
                 ctx.py,
-                str(REPO / "scripts/research/multimodal_apc.py"),
+                str(ctx.cand.path / "scripts/research/multimodal_apc.py"),
                 "--model",
                 ctx.model,
                 "--out",
@@ -1008,9 +1017,11 @@ def stage_multimodal(ctx: Ctx) -> StageResult:
                     key,
                     argv,
                     mem_gb=ctx.mem_gb,
-                    quiet=True,
+                    quiet=int(ctx.suite.get("reps", 3)) >= 3,
                     timeout_min=20,
-                    device="m5",
+                    device="any"
+                    if "gemma-4-e2b" in ctx.model and int(ctx.suite.get("reps", 3)) == 1
+                    else "m5",
                 )
             )
     results = ctx.exe.run_cells(cells)

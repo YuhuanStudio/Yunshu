@@ -26,9 +26,6 @@ def messages(size: int, rgb=(200, 30, 30)) -> list:
                     "type": "image_url",
                     "image_url": {
                         "url": "data:image/png;base64,"
-                        + base64.b64encode(png()).decode()
-                        if rgb == (200, 30, 30)
-                        else "data:image/png;base64,"
                         + base64.b64encode(png(rgb=rgb)).decode()
                     },
                 },

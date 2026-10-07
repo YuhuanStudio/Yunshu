@@ -20,9 +20,12 @@ def test_non_qwen_family_gets_runner_without_speculative_decode(monkeypatch):
     eng._executor = None
     eng._model_path = "/models/gemma-4-e4b-it"
     eng._mx_large_model = False
-    # Rotating (sliding-window) cache: no APC for this family.
+    # An unsupported cache must still run without APC.
     eng.backend_capabilities = lambda lm=None: SimpleNamespace(
         cache=SimpleNamespace(has_sliding_window=True)
+    )
+    monkeypatch.setattr(
+        "mlx_vlm.apc.model_apc_plan", lambda lm: SimpleNamespace(restorable=False)
     )
     monkeypatch.setenv("YUNSHU_VLM_DRAFT", "/nonexistent/drafter")
 
@@ -172,3 +175,23 @@ def test_gateway_rejects_lora_and_logits_processors_for_vlm():
     assert "is not supported for multimodal" in src
     assert "status_code=400" in src
     assert "_apply_lora_adapter(vlm_engine" not in inspect.getsource(chat)
+
+
+def test_restorable_sliding_window_family_gets_checkpoint_apc(monkeypatch):
+    from mlx_vlm.models.cache import KVCache, RotatingKVCache
+
+    eng = VLMEngine("/models/gemma-4-e2b-it-4bit")
+    eng._config = {"model_type": "gemma4"}
+    lm = SimpleNamespace(make_cache=lambda: [RotatingKVCache(max_size=8), KVCache()])
+    eng._model = SimpleNamespace(language_model=lm)
+    eng._processor = object()
+    eng._mx_large_model = False
+    monkeypatch.setenv("YUNSHU_VLM_APC_MEMORY_GB", "1")
+    monkeypatch.setenv("YUNSHU_VLM_APC_DISK", "0")
+    monkeypatch.setattr(eng, "_install_apc_identity", lambda lm: None)
+    runner = eng._build_batch_runner(eng._model_path)
+    assert runner.apc_manager is not None
+    coordinator = runner.apc_manager.coordinator(lm)
+    assert coordinator.is_checkpoint and coordinator.enabled
+    runner.apc_manager.close()
+    eng._executor.shutdown()
