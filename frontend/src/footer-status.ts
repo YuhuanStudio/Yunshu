@@ -156,8 +156,12 @@ export function footerPills(input: FooterInput): FooterPill[] {
   });
 
   const mem = status.memory;
-  const total = input.ledger?.total_gb ?? mem.total_gb;
-  const active = input.ledger?.mlx.active_gb ?? mem.active_gb;
+  // One source per view: the engine status (3 s) feeds the sidebar, the overview
+  // and this band. The host ledger (5 s) only adds pressure and swap, never a second GB figure.
+  const total = finite(mem.total_gb) ? mem.total_gb : input.ledger?.total_gb;
+  const active = finite(mem.active_gb)
+    ? mem.active_gb
+    : input.ledger?.mlx.active_gb;
   if (finite(active) && finite(total) && total > 0) {
     const level = input.ledger?.host.pressure_level ?? null;
     const usage = active / total;
@@ -184,7 +188,8 @@ export function footerPills(input: FooterInput): FooterPill[] {
         (levelText
           ? t("shell.footer.memory.pressure", { level: levelText })
           : "") +
-        t("shell.footer.sentenceEnd"),
+        t("shell.footer.sentenceEnd") +
+        t("shell.footer.memory.source"),
     });
   }
   const a = activity(status);
@@ -198,9 +203,14 @@ export function footerPills(input: FooterInput): FooterPill[] {
         : a.preparing
           ? t("shell.engine.phase.starting")
           : "—";
+  const loadingModel =
+    a.phase === "idle" ? status.models.find((m) => m.loading) : undefined;
+  if (loadingModel)
+    value =
+      loadingModel.id.split("/").filter(Boolean).at(-1) ?? loadingModel.id;
   pills.push({
     key: "now",
-    label: phaseLabels[a.phase],
+    label: loadingModel ? t("shell.engine.live.loading") : phaseLabels[a.phase],
     value,
     tone: "neutral",
     dot: false,

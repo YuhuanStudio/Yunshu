@@ -7,7 +7,12 @@ import {
 } from "./api";
 import type { ObservedRequest } from "./analytics";
 import { fetchServerHistory } from "./history-api";
-import { mergeSeries, pointFromStatus, type SeriesPoint } from "./series";
+import {
+  gapPoint,
+  mergeSeries,
+  pointFromStatus,
+  type SeriesPoint,
+} from "./series";
 
 export type EngineConnectionPhase =
   "connecting" | "online" | "offline" | "unauthorized";
@@ -54,6 +59,12 @@ interface EngineViewState {
   series: SeriesPoint[];
   finished: ObservedRequest[];
   historyFrom: number | null;
+}
+
+/** The series with an outage marker at its end, unless it already ends in one. */
+function withGap(series: SeriesPoint[], at: number): SeriesPoint[] {
+  const last = series[series.length - 1];
+  return !last || last.gap ? series : [...series, gapPoint(at)];
 }
 
 function initialState(connectionKey: symbol): EngineViewState {
@@ -152,7 +163,11 @@ export function useEngine(connection: Connection): UseEngineResult {
             status.uptime_s < previous.status.uptime_s;
           if (restarted) historyAskedRef.current = null;
           const samples = restarted ? [] : previous.history;
-          const series = restarted ? [] : previous.series;
+          // A restart keeps the chart history but marks the break, so the line
+          // never runs straight through the time the engine was down.
+          const series = restarted
+            ? withGap(previous.series, at - 1)
+            : previous.series;
           const known = restarted ? [] : previous.finished;
           const last = status.last;
           // The engine reports only its latest finished request; keep each once.
@@ -225,6 +240,7 @@ export function useEngine(connection: Connection): UseEngineResult {
               : initialState(connectionKey);
           return {
             ...previous,
+            series: withGap(previous.series, Date.now()),
             connectionKey,
             phase:
               apiError?.status === 401 || apiError?.status === 403

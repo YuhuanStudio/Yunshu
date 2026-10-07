@@ -74,6 +74,13 @@ export const clock = (t: number) =>
     minute: "2-digit",
     second: "2-digit",
   }).format(t);
+/** HH:MM, for events where the second adds nothing (a restart, a stale stamp). */
+export const clockShort = (t: number) =>
+  dateFormat("clockShort", {
+    hourCycle: "h23",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(t);
 export const dateTime = (t: number | Date) =>
   dateFormat("dt", {
     dateStyle: "medium",

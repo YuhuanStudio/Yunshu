@@ -272,6 +272,14 @@ export function livePill(
       tone: "away",
     };
   const a = activity(status);
+  // A model that is loading is work the engine is doing: never "idle".
+  const loading = status.models.find((m) => m.loading);
+  if (a.phase === "idle" && loading)
+    return {
+      phase: t("shell.engine.live.loading"),
+      detail: loading.id.split("/").filter(Boolean).at(-1) ?? loading.id,
+      tone: "away",
+    };
   if (a.phase === "idle")
     return { phase: phaseLabels.idle, detail: "", tone: "neutral" };
   if (a.phase === "queued")

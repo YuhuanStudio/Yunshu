@@ -128,7 +128,7 @@ export function activityHeatmap(
   const coverage = Array.from({ length: count }, () => 0);
   for (const point of history) {
     const at = point.at;
-    if (at < start || at > end) continue;
+    if (point.gap || at < start || at > end) continue;
     const index = Math.min(count - 1, Math.floor((at - start) / step));
     coverage[index]++;
     [

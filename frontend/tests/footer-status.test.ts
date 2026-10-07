@@ -153,3 +153,16 @@ test("uptime text", () => {
   assert.equal(uptimeText(3725), "1 小時 2 分");
   assert.equal(uptimeText(90000), "1 天 1 小時");
 });
+
+test("memory GB comes from the status only; the ledger adds pressure, never a second figure", () => {
+  const ledger = parseMemory({
+    total_gb: 192,
+    mlx: { active_gb: 99 },
+    host: { pressure_level: "warn", swap_used_gb: 0 },
+  });
+  const memory = footerPills(input(mk(), { ledger })).find(
+    (p) => p.key === "memory",
+  );
+  assert.equal(memory?.value, "40.0/128 GB");
+  assert.equal(memory?.tone, "warning");
+});

@@ -43,7 +43,7 @@ test("curl body is shell-safe and python uses python literals", () => {
   assert.ok(r.snippets.curl.includes(`'\\''quoted'\\''`));
   assert.ok(r.snippets.python.includes("False"));
   assert.ok(!r.snippets.python.includes("false"));
-  assert.ok(r.snippets.curl.includes("$YUNSHU_API_KEY"));
+  assert.ok(r.snippets.curl.includes("$YUNSHU_AUTH_TOKEN"));
 });
 
 test("messages dialect maps system, thinking and omits json mode", () => {

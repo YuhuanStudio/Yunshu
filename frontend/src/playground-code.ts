@@ -83,7 +83,7 @@ export function buildSnippets({
   const json = JSON.stringify(value, null, 2);
   const curl = [
     `curl -N ${shellQuote(url)} \\`,
-    `  -H "Authorization: Bearer $YUNSHU_API_KEY" \\`,
+    `  -H "Authorization: Bearer $YUNSHU_AUTH_TOKEN" \\`,
     `  -H "Content-Type: application/json" \\`,
     `  -d ${shellQuote(json)}`,
   ].join("\n");
@@ -97,7 +97,7 @@ export function buildSnippets({
     "",
     "with requests.post(",
     `    ${JSON.stringify(url)},`,
-    '    headers={"Authorization": f"Bearer {os.environ[\'YUNSHU_API_KEY\']}"},',
+    '    headers={"Authorization": f"Bearer {os.environ[\'YUNSHU_AUTH_TOKEN\']}"},',
     "    json=payload,",
     "    stream=True,",
     ") as response:",
@@ -110,7 +110,7 @@ export function buildSnippets({
     `const response = await fetch(${JSON.stringify(url)}, {`,
     '  method: "POST",',
     "  headers: {",
-    "    Authorization: `Bearer ${process.env.YUNSHU_API_KEY}`,",
+    "    Authorization: `Bearer ${process.env.YUNSHU_AUTH_TOKEN}`,",
     '    "Content-Type": "application/json",',
     "  },",
     `  body: JSON.stringify(${indent(json, 2)}),`,

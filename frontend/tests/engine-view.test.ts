@@ -239,3 +239,38 @@ test("totals are token-weighted and counted only from what was seen", () => {
   assert.equal(Math.round(t.prefillTps!), 550);
   assert.equal(t.decodeTps, 50);
 });
+
+test("a loading model shows as loading, never idle", () => {
+  const status = parseEngineStatus({
+    object: "yunshu.status",
+    version: "t",
+    state: "running",
+    uptime_s: 10,
+    load_error: null,
+    models: [
+      {
+        id: "/m/Qwen3.5-9B",
+        type: "LLM",
+        loaded: false,
+        loading: true,
+        pinned: false,
+      },
+    ],
+    memory: {},
+    requests: { active: 0, queued: 0, prefill: 0, decode: 0, items: [] },
+    last: null,
+    throughput: {
+      window_s: 60,
+      requests: 0,
+      prompt_tokens: 0,
+      completion_tokens: 0,
+      live_decode_tps: null,
+      mean_prefill_tps: null,
+      mean_decode_tps: null,
+    },
+  });
+  const pill = livePill("online", status);
+  assert.equal(pill.phase, "載入中");
+  assert.equal(pill.detail, "Qwen3.5-9B");
+  assert.equal(pill.tone, "away");
+});

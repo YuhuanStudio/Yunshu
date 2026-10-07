@@ -22,6 +22,27 @@ export interface SeriesPoint {
   memCache: number | null;
   /** True for rows that came from the engine's own history, not a live poll. */
   backfilled?: boolean;
+  /**
+   * An outage marker: every value null, so the chart breaks the line here and
+   * never draws a bridge across the time the engine could not be reached.
+   */
+  gap?: true;
+}
+
+/** The marker the console inserts when the engine is declared unreachable. */
+export function gapPoint(at: number): SeriesPoint {
+  return {
+    at,
+    decode: null,
+    prefill: null,
+    active: null,
+    queued: null,
+    prefillRequests: null,
+    decodeRequests: null,
+    memActive: null,
+    memCache: null,
+    gap: true,
+  };
 }
 
 const finite = (v: unknown): number | null =>
@@ -132,44 +153,53 @@ export function chartRows(
   const size = Math.ceil(points.length / max);
   const rows: ChartRow[] = [];
   for (let i = 0; i < points.length; i += size) {
-    const group = points.slice(i, i + size);
-    if (group.length === 1) {
-      rows.push(chartRow(group[0]));
-      continue;
+    // An outage marker stays its own all-null row: averaging it away would bridge the outage.
+    let run: SeriesPoint[] = [];
+    for (const p of points.slice(i, i + size)) {
+      if (p.gap) {
+        if (run.length) rows.push(aggregate(run));
+        run = [];
+        rows.push(chartRow(p));
+      } else run.push(p);
     }
-    const mean = (pick: (p: SeriesPoint) => number | null) => {
-      let sum = 0;
-      let n = 0;
-      for (const p of group) {
-        const v = pick(p);
-        if (v != null) {
-          sum += v;
-          n++;
-        }
-      }
-      return n ? sum / n : null;
-    };
-    const peak = (pick: (p: SeriesPoint) => number | null) => {
-      let best: number | null = null;
-      for (const p of group) {
-        const v = pick(p);
-        if (v != null && (best == null || v > best)) best = v;
-      }
-      return best;
-    };
-    rows.push({
-      x: group[group.length - 1].at,
-      values: {
-        decode: mean((p) => p.decode),
-        prefill: mean((p) => p.prefill),
-        active: mean((p) => p.memActive),
-        cache: mean((p) => p.memCache),
-        requests: peak((p) => p.active),
-        queued: peak((p) => p.queued),
-        prefillRequests: peak((p) => p.prefillRequests),
-        decodeRequests: peak((p) => p.decodeRequests),
-      },
-    });
+    if (run.length) rows.push(aggregate(run));
   }
   return rows;
+}
+
+function aggregate(group: readonly SeriesPoint[]): ChartRow {
+  if (group.length === 1) return chartRow(group[0]);
+  const mean = (pick: (p: SeriesPoint) => number | null) => {
+    let sum = 0;
+    let n = 0;
+    for (const p of group) {
+      const v = pick(p);
+      if (v != null) {
+        sum += v;
+        n++;
+      }
+    }
+    return n ? sum / n : null;
+  };
+  const peak = (pick: (p: SeriesPoint) => number | null) => {
+    let best: number | null = null;
+    for (const p of group) {
+      const v = pick(p);
+      if (v != null && (best == null || v > best)) best = v;
+    }
+    return best;
+  };
+  return {
+    x: group[group.length - 1].at,
+    values: {
+      decode: mean((p) => p.decode),
+      prefill: mean((p) => p.prefill),
+      active: mean((p) => p.memActive),
+      cache: mean((p) => p.memCache),
+      requests: peak((p) => p.active),
+      queued: peak((p) => p.queued),
+      prefillRequests: peak((p) => p.prefillRequests),
+      decodeRequests: peak((p) => p.decodeRequests),
+    },
+  };
 }
