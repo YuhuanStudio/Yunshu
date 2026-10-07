@@ -196,6 +196,18 @@
       "license": "MIT",
       "local_changes": [],
       "kind": "vendored"
+    },
+    {
+      "path": "python/yunshu_engine/_vendor/deepseek_v4/encoding.py",
+      "repo": "https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash-0731",
+      "clone": "reference/deepseek-v4-flash-0731",
+      "upstream_path": "encoding/encoding_dsv4.py",
+      "commit": "7872f01b1d1fe23eabc4c98b48bffcef5a386062",
+      "license": "MIT",
+      "local_changes": [
+        "Added provenance, lint/format/type-check pragmas; encoding implementation unchanged"
+      ],
+      "kind": "vendored"
     }
   ],
   "derived": [
@@ -2245,6 +2257,17 @@
       ],
       "why": "grammar / JSON-schema engine we depend on",
       "commit": "e7c69004"
+    },
+    {
+      "repo": "https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash-0731",
+      "clone": "reference/deepseek-v4-flash-0731",
+      "commit": "7872f01b1d1fe23eabc4c98b48bffcef5a386062",
+      "globs": [
+        "encoding/*.py",
+        "tokenizer_config.json",
+        "LICENSE"
+      ],
+      "why": "Official V4 prompt and DSML encoding; source fetched via pinned HF revision, weights are not cloned"
     }
   ],
   "packages": [

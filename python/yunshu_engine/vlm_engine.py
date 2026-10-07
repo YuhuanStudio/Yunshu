@@ -71,6 +71,37 @@ class _RunnerCall(functools.partial):
     """
 
 
+def _prepare_vlm_weights(model, model_class, model_config, weights):
+    """Apply the upstream checkpoint transforms before quantization/filtering."""
+    from mlx_vlm.utils import sanitize_weights
+
+    weights = sanitize_weights(model, weights)
+    for component in ("Vision", "Language", "Audio"):
+        config_name = (
+            "text_config" if component == "Language" else f"{component.lower()}_config"
+        )
+        cls = getattr(model_class, f"{component}Model", None)
+        cfg = getattr(model_config, config_name, None)
+        if cls is not None and cfg is not None:
+            weights = sanitize_weights(cls, weights, cfg)
+    return weights
+
+
+def _vlm_module_quantization(model, quantization, path):
+    """Honor checkpoint names before and after a model's key sanitation."""
+    aliases = [path]
+    if path.startswith("language_model."):
+        aliases.append(path.removeprefix("language_model."))
+    model_aliases = getattr(model, "quantization_path_aliases", None)
+    if callable(model_aliases):
+        aliases.extend(model_aliases(path))
+    for alias in aliases:
+        value = quantization.get(alias)
+        if isinstance(value, dict) or value is False:
+            return value
+    return None
+
+
 def _quantize_shape_safety_patch():
     """Context manager that wraps `nn.Linear.to_quantized` so layers whose
     last-dim weight shape is not divisible by the quantization group size
@@ -564,6 +595,7 @@ class VLMEngine:
             model_config.model_path = str(model_path)
 
         model = model_class.Model(model_config)
+        weights = _prepare_vlm_weights(model, model_class, model_config, weights)
 
         # Apply quantization BEFORE filtering — the predicate needs to see
         # `.scales` keys to decide which modules to quantize. If we filter
@@ -594,8 +626,9 @@ class VLMEngine:
                 # Address Fault on the first forward (the model loads fine via
                 # mlx_vlm.load, which DOES honor this). Mirror
                 # mlx_vlm.utils.get_class_predicate.
-                if isinstance(quantization, dict) and p in quantization:
-                    return quantization[p]
+                per_module = _vlm_module_quantization(model, quantization, p)
+                if per_module is not None:
+                    return per_module
                 if not hasattr(m, "to_quantized"):
                     return False
                 if hasattr(m, "weight") and m.weight.size % 64 != 0:
@@ -640,6 +673,12 @@ class VLMEngine:
             self._processor = load_processor(Path(model_path))
         except Exception as e:
             logger.warning(f"Could not load VLM processor: {e}")
+
+        if self._config.get("model_type") == "deepseek_v4":
+            from .deepseek_v4_chat import install
+
+            if install(self._tokenizer, self._processor):
+                logger.info("DeepSeek V4: installed official 0731 chat encoder")
 
         # Large VLMs (e.g. 30B-MoE) GPU-hang under sustained load unless the MLX
         # buffer pool is released between requests. Use the on-disk weight size
@@ -2882,7 +2921,8 @@ class VLMEngine:
         try:
             from yunshu_engine.message_adapter import adapt_messages
 
-            messages = adapt_messages(messages, self.model_name)
+            if self._config.get("model_type") != "deepseek_v4":
+                messages = adapt_messages(messages, self.model_name)
         except Exception:
             logger.debug("VLM message adapter failed", exc_info=True)
 
