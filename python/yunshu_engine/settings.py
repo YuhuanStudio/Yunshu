@@ -250,7 +250,9 @@ _add("YUNSHU_MCP_CONFIG", "path", None, "MCP client config file (JSON/YAML) list
 _add("YUNSHU_MCP_SERVERS", "json", None, "MCP tool servers as a JSON array (alternative to YUNSHU_MCP_CONFIG).", "mcp")
 
 # ── server-side tools (web search / web fetch / MCP connector) ──────────
-_add("YUNSHU_WEB_SEARCH_PROVIDER", "enum", "auto", "Search backend. Auto tries configured SearXNG, keyed brave/tavily/exa/serper/perplexity, then best-effort DuckDuckGo HTML and Wikipedia. Queries leave the machine; none disables search.", "server-tools", choices=("auto", "none", "searxng", "brave", "tavily", "exa", "serper", "perplexity", "ddg_html", "wikipedia"))
+_add("YUNSHU_WEB_SEARCH_PROVIDER", "enum", "auto", "Search backend. Auto runs lightweight DDG, Wikipedia, Mwmbl and configured keyed providers in parallel with health backoff and RRF. SearXNG is optional. Queries leave the machine; none disables search.", "server-tools", choices=("auto", "none", "searxng", "brave", "tavily", "exa", "serper", "perplexity", "ddg_html", "wikipedia", "mwmbl"))
+_add("YUNSHU_WEB_SEARCH_PROVIDER_TIMEOUT", "float", 1.0, "Per-provider metasearch deadline in seconds; slow providers cannot block the whole query.", "server-tools", minimum=0.1)
+_add("YUNSHU_WEB_SEARCH_HEALTH_FILE", "path", "~/.yunshu/cache/websearch-health.json", "Small query-free provider health snapshot read by yunshu config. No SERPs or credentials are stored.", "server-tools")
 _add("YUNSHU_WEB_KEYLESS", "bool", True, "Allow keyless DuckDuckGo (best effort; may block) and Wikipedia. Query text and IP leave the machine.", "server-tools")
 _add("YUNSHU_SERPER_API_KEY", "str", None, "Serper Google SERP API key.", "server-tools", secret=True)
 _add("YUNSHU_PERPLEXITY_API_KEY", "str", None, "Perplexity Search API key (raw results, not Sonar).", "server-tools", secret=True)
@@ -258,7 +260,7 @@ _add("YUNSHU_WEB_RESEARCH", "bool", False, "Enrich search snippets with origin p
 _add("YUNSHU_WEB_RESEARCH_BUDGET", "float", 4.0, "Overall enrichment deadline in seconds (maximum 4).", "server-tools", minimum=0.1)
 _add("YUNSHU_WEB_RESEARCH_PAGES", "int", 6, "Maximum origin pages per enrichment (capped at 6).", "server-tools", minimum=1)
 _add("YUNSHU_WEB_RESEARCH_MODEL", "str", None, "Already-loaded local embedding model ID. Never loads a model; absent/unavailable uses BM25 only. Qwen3-Embedding-0.6B is recommended.", "server-tools")
-_add("YUNSHU_SEARXNG_URL", "str", None, "Base URL of a self-hosted SearXNG instance (JSON output enabled), e.g. http://127.0.0.1:8080. The privacy-friendly default recommendation.", "server-tools")
+_add("YUNSHU_SEARXNG_URL", "str", None, "Base URL of a self-hosted SearXNG instance (JSON output enabled), e.g. http://127.0.0.1:8080. Optional only; built-in metasearch needs no SearXNG setup.", "server-tools")
 _add("YUNSHU_BRAVE_API_KEY", "str", None, "Brave Search API key.", "server-tools", secret=True)
 _add("YUNSHU_TAVILY_API_KEY", "str", None, "Tavily API key.", "server-tools", secret=True)
 _add("YUNSHU_EXA_API_KEY", "str", None, "Exa API key.", "server-tools", secret=True)

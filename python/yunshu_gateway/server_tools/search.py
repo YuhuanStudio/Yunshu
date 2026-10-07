@@ -10,6 +10,7 @@ Error codes follow Anthropic's ``web_search_tool_result_error``: ``too_many_requ
 from __future__ import annotations
 
 import contextvars
+import copy
 import html
 import logging
 import re
@@ -48,22 +49,23 @@ logging.getLogger("httpx").addFilter(_QueryLogFilter())
 
 MAX_QUERY_LEN = 400
 PROVIDER_ORDER = (
-    "searxng",
     "brave",
+    "searxng",
     "tavily",
     "exa",
     "serper",
     "perplexity",
     "ddg_html",
     "wikipedia",
+    "mwmbl",
 )
 logger = logging.getLogger(__name__)
 PRIVACY_NOTICE = "Web search sends query text off-device. Keyless mode uses DuckDuckGo (best effort) and Wikipedia; fetched pages contact their origins without cookies. Set YUNSHU_WEB_SEARCH_PROVIDER=none to disable."
 
 SETUP_HINT = (
-    "Server-side web search is off. Point Yunshu at a search backend: run a SearXNG instance and "
-    "set YUNSHU_SEARXNG_URL (recommended, private), or set one of YUNSHU_BRAVE_API_KEY, "
-    "YUNSHU_TAVILY_API_KEY, YUNSHU_EXA_API_KEY, YUNSHU_SERPER_API_KEY, YUNSHU_PERPLEXITY_API_KEY. `yunshu config` shows the effective values."
+    "Server-side web search is off. Enable built-in metasearch with "
+    "YUNSHU_WEB_SEARCH_PROVIDER=auto, or provide a Brave, Serper or Exa key. "
+    "SearXNG is an optional explicit backend. `yunshu config` shows provider health."
 )
 
 
@@ -111,6 +113,7 @@ class SearchProvider:
         blocked_domains: list[str] | None = None,
         user_location: dict | None = None,
         client: httpx.AsyncClient,
+        options: dict | None = None,
     ) -> list[SearchResult]:
         raise NotImplementedError
 
@@ -142,6 +145,7 @@ class SearXNG(SearchProvider):
         blocked_domains=None,
         user_location=None,
         client,
+        options=None,
     ):
         params = {
             "q": query,
@@ -149,6 +153,15 @@ class SearXNG(SearchProvider):
             "categories": "general",
             "safesearch": "0",
         }
+        options = options or {}
+        params["categories"] = (
+            "news" if options.get("topic") in ("news", "finance") else "general"
+        )
+        params["safesearch"] = "2" if options.get("safe_search") else "0"
+        if options.get("time_range"):
+            params["time_range"] = options["time_range"]
+        if options.get("language"):
+            params["language"] = options["language"]
         if user_location and user_location.get("country"):
             params["language"] = f"en-{user_location['country']}"
         r = await client.get(
@@ -189,12 +202,29 @@ class Brave(SearchProvider):
         blocked_domains=None,
         user_location=None,
         client,
+        options=None,
     ):
         params = {"q": query, "count": min(20, max(limit * 2, limit))}
         if user_location and user_location.get("country"):
             params["country"] = user_location["country"]
+        options = options or {}
+        if options.get("language"):
+            params["search_lang"] = options["language"]
+        if options.get("time_range"):
+            params["freshness"] = {
+                "day": "pd",
+                "week": "pw",
+                "month": "pm",
+                "year": "py",
+            }.get(options["time_range"], options["time_range"])
+        elif options.get("start_date") or options.get("end_date"):
+            params["freshness"] = (
+                f"{options.get('start_date') or '1900-01-01'}to{options.get('end_date') or time.strftime('%Y-%m-%d')}"
+            )
+        params["safesearch"] = "strict" if options.get("safe_search") else "off"
+        endpoint = "news" if options.get("topic") in ("news", "finance") else "web"
         r = await client.get(
-            "https://api.search.brave.com/res/v1/web/search",
+            f"https://api.search.brave.com/res/v1/{endpoint}/search",
             params=params,
             headers={"X-Subscription-Token": self.key, "Accept": "application/json"},
         )
@@ -206,7 +236,11 @@ class Brave(SearchProvider):
                 _clean(x.get("description")),
                 x.get("age"),
             )
-            for x in (r.json().get("web") or {}).get("results", [])
+            for x in (
+                (r.json().get("web") or {}).get("results", [])
+                if endpoint == "web"
+                else r.json().get("results", [])
+            )
             if x.get("url")
         ]
 
@@ -227,6 +261,7 @@ class Tavily(SearchProvider):
         blocked_domains=None,
         user_location=None,
         client,
+        options=None,
     ):
         body: dict = {"query": query, "max_results": min(20, limit * 2)}
         if allowed_domains:
@@ -267,12 +302,18 @@ class Exa(SearchProvider):
         blocked_domains=None,
         user_location=None,
         client,
+        options=None,
     ):
         body: dict = {
             "query": query,
             "numResults": min(25, limit * 2),
             "contents": {"text": {"maxCharacters": 800}},
         }
+        options = options or {}
+        if options.get("start_date"):
+            body["startPublishedDate"] = options["start_date"]
+        if options.get("end_date"):
+            body["endPublishedDate"] = options["end_date"]
         if allowed_domains:
             body["includeDomains"] = allowed_domains
         if blocked_domains:
@@ -342,7 +383,14 @@ class DuckDuckGo(SearchProvider):
         type(self)._next = now + 1.0
         r = await client.get(
             "https://html.duckduckgo.com/html/",
-            params={"q": query},
+            params={
+                "q": query,
+                **(
+                    {"df": (kwargs.get("options") or {})["time_range"][0]}
+                    if (kwargs.get("options") or {}).get("time_range")
+                    else {}
+                ),
+            },
             headers={
                 "User-Agent": "YunshuSearch/1.0 (+https://github.com/YuhuanStudio/Yunshu)"
             },
@@ -399,9 +447,21 @@ class Serper(SearchProvider):
         self.key = key
 
     async def search(self, query, *, limit, client, **kwargs):
+        options = kwargs.get("options") or {}
+        body = {"q": query, "num": min(100, limit * 2)}
+        if options.get("language"):
+            body["hl"] = options["language"]
+        location = kwargs.get("user_location") or {}
+        if location.get("country"):
+            body["gl"] = location["country"]
+        if options.get("time_range"):
+            body["tbs"] = "qdr:" + options["time_range"][0]
+        if options.get("safe_search"):
+            body["safe"] = "active"
+        endpoint = "news" if options.get("topic") in ("news", "finance") else "search"
         r = await client.post(
-            "https://google.serper.dev/search",
-            json={"q": query, "num": min(100, limit * 2)},
+            f"https://google.serper.dev/{endpoint}",
+            json=body,
             headers={"X-API-KEY": self.key},
         )
         _raise_http(r, "Serper")
@@ -412,7 +472,7 @@ class Serper(SearchProvider):
                 _clean(x.get("snippet")),
                 x.get("date"),
             )
-            for x in r.json().get("organic", [])
+            for x in r.json().get("news" if endpoint == "news" else "organic", [])
             if x.get("link")
         ]
 
@@ -520,15 +580,19 @@ def get_provider() -> SearchProvider | None:
     want = settings.get("YUNSHU_WEB_SEARCH_PROVIDER")
     if want == "none":
         return None
+    from .metasearch import Metasearch, Mwmbl
+
     providers: list[SearchProvider] = []
     for name in PROVIDER_ORDER if want == "auto" else (want,):
         if name == "searxng":
             if url := settings.get("YUNSHU_SEARXNG_URL"):
                 providers.append(SearXNG(url))
-        elif name in ("ddg_html", "wikipedia"):
+        elif name in ("ddg_html", "wikipedia", "mwmbl"):
             if settings.get("YUNSHU_WEB_KEYLESS"):
                 providers.append(
-                    {"ddg_html": DuckDuckGo, "wikipedia": Wikipedia}[name]()
+                    {"ddg_html": DuckDuckGo, "wikipedia": Wikipedia, "mwmbl": Mwmbl}[
+                        name
+                    ]()
                 )
         elif key := settings.get(f"YUNSHU_{name.upper()}_API_KEY"):
             providers.append(
@@ -542,7 +606,7 @@ def get_provider() -> SearchProvider | None:
             )
     if not providers:
         return None
-    return FallbackChain(providers) if want == "auto" else providers[0]
+    return Metasearch(providers) if want == "auto" else providers[0]
 
 
 async def run_search(
@@ -552,18 +616,29 @@ async def run_search(
     blocked_domains: list[str] | None = None,
     user_location: dict | None = None,
     client: httpx.AsyncClient | None = None,
+    limit: int | None = None,
+    options: dict | None = None,
+    enrich_results: bool | None = None,
+    max_query_len: int = MAX_QUERY_LEN,
 ) -> tuple[str, list[SearchResult]]:
     """Run one search. Returns (provider name, filtered results) or raises :class:`SearchError`."""
     if not isinstance(query, str) or not query.strip():
         raise SearchError("invalid_input", "query is required")
-    if len(query) > MAX_QUERY_LEN:
+    if len(query) > max_query_len:
         raise SearchError(
-            "query_too_long", f"query longer than {MAX_QUERY_LEN} characters"
+            "query_too_long", f"query longer than {max_query_len} characters"
         )
     prov = get_provider()
     if prov is None:
         raise SearchError("unavailable", SETUP_HINT)
-    limit = int(settings.get("YUNSHU_WEB_SEARCH_RESULTS"))
+    limit = int(settings.get("YUNSHU_WEB_SEARCH_RESULTS")) if limit is None else limit
+    if limit == 0:
+        return prov.name, []
+    do_enrich = (
+        settings.get("YUNSHU_WEB_RESEARCH")
+        if enrich_results is None
+        else enrich_results
+    )
     candidates = prov.providers if isinstance(prov, FallbackChain) else [prov]
     cache_key = (
         query.strip(),
@@ -571,6 +646,7 @@ async def run_search(
         tuple(allowed_domains or []),
         tuple(blocked_domains or []),
         str(user_location),
+        repr(sorted((options or {}).items())),
         tuple(
             (p.name, getattr(p, "base", None), getattr(p, "key", None))
             for p in candidates
@@ -578,9 +654,9 @@ async def run_search(
     )
     cached = _search_cache.get(cache_key) if _override is None else None
     if cached and cached[0] > time.monotonic():
-        name, out = cached[1], list(cached[2])
+        name, out = cached[1], copy.deepcopy(cached[2])
         _search_cache.move_to_end(cache_key)
-        if settings.get("YUNSHU_WEB_RESEARCH"):
+        if do_enrich:
             from .research.pipeline import enrich
 
             out = await enrich(
@@ -607,6 +683,7 @@ async def run_search(
                 blocked_domains=blocked_domains,
                 user_location=user_location,
                 client=client,
+                **({"options": options} if options is not None else {}),
             )
         except SearchError:
             raise
@@ -624,11 +701,15 @@ async def run_search(
             out.append(r)
     out = out[:limit]
     if _override is None and out:
-        _search_cache[cache_key] = (time.monotonic() + 300, prov.name, list(out))
+        _search_cache[cache_key] = (
+            time.monotonic() + 300,
+            prov.name,
+            copy.deepcopy(out),
+        )
         _search_cache.move_to_end(cache_key)
         while len(_search_cache) > 128:
             _search_cache.popitem(last=False)
-    if settings.get("YUNSHU_WEB_RESEARCH") and out:
+    if do_enrich and out:
         from .research.pipeline import enrich
 
         out = await enrich(

@@ -83,6 +83,13 @@ def format_error_response(
     if retry_after is not None:
         headers["Retry-After"] = str(retry_after)
 
+    if path.startswith("/tavily/"):
+        return JSONResponse(
+            status_code=status_code,
+            content={"detail": {"error": message}},
+            headers=headers,
+        )
+
     if path == _MCP_PATH:
         return JSONResponse(
             status_code=status_code,

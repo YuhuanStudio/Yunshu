@@ -1043,7 +1043,6 @@ def stage_websearch(ctx: Ctx) -> StageResult:
     return _finish(ctx, StageResult("websearch", not reasons, reasons, numbers))
 
 
-
 def stage_rerank(ctx: Ctx) -> StageResult:
     """New capabilities: candidate HTTP output vs independent Transformers oracle.
 
@@ -1133,8 +1132,106 @@ def stage_rerank(ctx: Ctx) -> StageResult:
     return _finish(ctx, StageResult("rerank", not reasons, reasons, numbers))
 
 
+def stage_tavily(ctx: Ctx) -> StageResult:
+    cells = [
+        Cell(
+            "tavily",
+            arm,
+            [
+                "env",
+                "PYTHONPATH=" + str(ctx.tree(arm).path / "python"),
+                ctx.py,
+                str(ctx.cand.path / "scripts/research/tavily_probe.py"),
+                "--src",
+                str(ctx.tree(arm).path / "python"),
+                "--model",
+                ctx.model,
+                "--out",
+                "{out}",
+                *(["--baseline"] if arm == "base" else []),
+            ],
+            mem_gb=ctx.mem_gb or 14,
+            timeout_min=8,
+            stall_min=4,
+            validate=_websearch_valid,
+            device="m5",
+        )
+        for arm in ("base", "cand")
+    ]
+    results = ctx.exe.run_cells(cells)
+    reasons = _failed_cells(results)
+    return _finish(
+        ctx,
+        StageResult(
+            "tavily",
+            not reasons,
+            reasons,
+            {
+                key: read_jsonl(result.evidence) if result.evidence else []
+                for key, result in results.items()
+            },
+        ),
+    )
+
+
+def _searchrank_valid(path):
+    rows = read_jsonl(path)
+    arms = {row.get("backend"): row for row in rows if "backend" in row}
+    ok = bool(
+        rows
+        and rows[-1].get("complete") is True
+        and all(
+            arms.get(name, {}).get("status") == "ok"
+            for name in ("cpu", "coreml_cpu_ne", "mlx")
+        )
+    )
+    return ok, "All CPU/Core ML/MLX backends must finish with finite scores"
+
+
+def stage_searchrank(ctx: Ctx) -> StageResult:
+    interpreter = ctx.env.get("SEARCHRANK_PY", ctx.py)
+    cell = Cell(
+        "searchrank",
+        "backends",
+        [
+            "env",
+            "PYTHONPATH=" + str(ctx.cand.path / "python"),
+            interpreter,
+            str(ctx.cand.path / "scripts/research/searchrank_backends.py"),
+            "--model",
+            ctx.model,
+            "--out",
+            "{out}",
+            "--cache",
+            str(ctx.run.path / "coreml-cache"),
+        ],
+        mem_gb=4,
+        timeout_min=10,
+        stall_min=5,
+        quiet=True,
+        validate=_searchrank_valid,
+        device="m5",
+    )
+    results = ctx.exe.run_cells([cell])
+    reasons = _failed_cells(results)
+    return _finish(
+        ctx,
+        StageResult(
+            "searchrank",
+            not reasons,
+            reasons,
+            {
+                key: read_jsonl(result.evidence) if result.evidence else []
+                for key, result in results.items()
+            },
+        ),
+    )
+
+
 STAGE_FUNCS = {
     "websearch": stage_websearch,
+    "tavily": stage_tavily,
+    "searchrank": stage_searchrank,
     "rerank": stage_rerank,
     "preflight": stage_preflight,
     "smoke": stage_smoke,

@@ -13,7 +13,15 @@ from .politeness import politeness
 _global = asyncio.Semaphore(4)
 
 
-async def page(url: str, *, automated: bool = True, **kwargs):
+async def page(
+    url: str,
+    *,
+    automated: bool = True,
+    timeout: float = 3,
+    extractor=None,
+    cache_namespace: str = "",
+    **kwargs,
+):
     try:
         host = parse_url(url).hostname or ""
     except UrlNotAllowedError as exc:
@@ -23,7 +31,8 @@ async def page(url: str, *, automated: bool = True, **kwargs):
         blocked and domain_matches(host, blocked)
     ):
         raise FetchError("url_not_allowed", "Domain filter rejected page")
-    if cached := pages.get(url):
+    cache_key = (cache_namespace + "::" + url) if cache_namespace else url
+    if cached := pages.get(cache_key):
         # Recheck final redirect domain for each request's filters.
         final = parse_url(cached.url).hostname or ""
         if (allowed and not domain_matches(final, allowed)) or (
@@ -34,13 +43,13 @@ async def page(url: str, *, automated: bool = True, **kwargs):
             )
         return cached
     state = politeness.host(url)
-    async with _global, state.slots, asyncio.timeout(3):
+    async with _global, state.slots, asyncio.timeout(timeout):
         if automated and not await politeness.allowed(url, state, **kwargs):
             raise FetchError(
                 "url_not_allowed", "robots.txt disallows or is unavailable"
             )
         await politeness.admit(state)
-        stale = pages.get(url, stale=True)
+        stale = pages.get(cache_key, stale=True)
         headers = {}
         if stale:
             if stale.etag:
@@ -52,7 +61,14 @@ async def page(url: str, *, automated: bool = True, **kwargs):
             # Automated cross-origin redirects require a new admission/robots budget.
             # Conservatively keep the provider snippet instead of bypassing that policy.
             source, destination = urlsplit(url), urlsplit(target)
-            if (destination.scheme.lower(), destination.netloc.lower()) != (
+            if destination.scheme.lower() != source.scheme.lower():
+                raise FetchError(
+                    "url_not_allowed", "Cross-origin scheme-changing redirect"
+                )
+            if automated and (
+                destination.scheme.lower(),
+                destination.netloc.lower(),
+            ) != (
                 source.scheme.lower(),
                 source.netloc.lower(),
             ):
@@ -64,7 +80,7 @@ async def page(url: str, *, automated: bool = True, **kwargs):
         try:
             result = await _fetch_url(
                 url,
-                extractor=extract_with_metadata,
+                extractor=extractor or extract_with_metadata,
                 request_headers=headers,
                 before_redirect=before_redirect,
                 **kwargs,
@@ -88,7 +104,7 @@ async def page(url: str, *, automated: bool = True, **kwargs):
                 if (urlsplit(result.url).hostname or "").lower() in docs_hosts
                 else 900
             )
-            pages.put(url, result, ttl=ttl)
+            pages.put(cache_key, result, ttl=ttl)
             return result
         except TimeoutError:
             politeness.failed(state, FetchError("url_not_accessible", "timed out"))

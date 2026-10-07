@@ -70,6 +70,7 @@ class FetchResult:
     last_modified: str | None = None
     not_modified: bool = False
     published_at: str | None = None
+    metadata: dict = field(default_factory=dict)
 
 
 # ── HTML to text ──────────────────────────────────────────────────────────────
@@ -251,16 +252,23 @@ async def _fetch_url(
     extractor=None,
     request_headers: dict[str, str] | None = None,
     before_redirect=None,
+    timeout_seconds: float | None = None,
+    max_url_length: int = MAX_URL_LEN,
+    allow_pdf: bool = False,
 ) -> FetchResult:
     if not settings.get("YUNSHU_WEB_FETCH"):
         raise FetchError("unavailable", "web_fetch is disabled (YUNSHU_WEB_FETCH=0)")
     if not isinstance(url, str) or not url.strip():
         raise FetchError("invalid_tool_input", "url is required")
-    if len(url) > MAX_URL_LEN:
-        raise FetchError("url_too_long", f"url longer than {MAX_URL_LEN} characters")
+    if len(url) > max_url_length:
+        raise FetchError("url_too_long", f"url longer than {max_url_length} characters")
     allow_private = bool(settings.get("YUNSHU_WEB_FETCH_ALLOW_PRIVATE"))
     max_bytes = int(settings.get("YUNSHU_WEB_FETCH_MAX_BYTES"))
-    timeout = float(settings.get("YUNSHU_WEB_FETCH_TIMEOUT"))
+    timeout = (
+        float(settings.get("YUNSHU_WEB_FETCH_TIMEOUT"))
+        if timeout_seconds is None
+        else timeout_seconds
+    )
     cap = int(settings.get("YUNSHU_WEB_FETCH_MAX_TEXT_CHARS"))
     if max_content_chars:
         cap = min(cap, int(max_content_chars))
@@ -340,6 +348,7 @@ async def _fetch_url(
                         not ctype.startswith(_TEXT_TYPES)
                         and "+xml" not in ctype
                         and "+json" not in ctype
+                        and not (allow_pdf and ctype == "application/pdf")
                     ):
                         raise FetchError(
                             "unsupported_content_type", f"cannot read {ctype}"
@@ -367,8 +376,32 @@ async def _fetch_url(
             text = _decode(bytes(buf), raw_ctype)
             title = ""
             published_at = None
+            metadata = {}
             media = "text/plain"
-            if ctype in ("text/html", "application/xhtml+xml") or (
+            if ctype == "application/pdf" and allow_pdf:
+                import io
+
+                def pdf_text():
+                    from pypdf import PdfReader
+
+                    reader = PdfReader(io.BytesIO(buf))
+                    parts, count = [], 0
+                    for pdf_page in reader.pages[:100]:
+                        value = (pdf_page.extract_text() or "")[:cap]
+                        parts.append(value)
+                        count += len(value)
+                        if count >= cap:
+                            break
+                    return "\n\n".join(parts)[:cap]
+
+                try:
+                    text = await asyncio.to_thread(pdf_text)
+                except Exception as exc:
+                    raise FetchError(
+                        "unsupported_content_type", "Could not extract PDF"
+                    ) from exc
+                media = "application/pdf"
+            elif ctype in ("text/html", "application/xhtml+xml") or (
                 "<html" in text[:2000].lower()
             ):
                 # off the event loop: parsing a large page must not stall other streams
@@ -378,6 +411,8 @@ async def _fetch_url(
                 title, text = extracted[:2]
                 if len(extracted) > 2:
                     published_at = extracted[2]
+                if len(extracted) > 3:
+                    metadata = extracted[3]
             elif ctype == "text/markdown":
                 media = "text/markdown"
             if len(text) > cap:
@@ -392,6 +427,7 @@ async def _fetch_url(
                 bytes_read=len(buf),
                 redirects=hops,
                 published_at=published_at,
+                metadata=metadata,
                 etag=resp.headers.get("etag"),
                 last_modified=resp.headers.get("last-modified"),
             )

@@ -61,6 +61,12 @@ class _ErrorFormatter:
         # MCP is JSON-RPC — a middleware-level auth/rate-limit denial on /v1/mcp
         # must return a JSON-RPC 2.0 error object, not the OpenAI envelope a JSON-RPC client
         # can't parse. id is null (no parsed body).
+        if path.startswith("/tavily/"):
+            return JSONResponse(
+                status_code=status_code,
+                content={"detail": {"error": message}},
+                headers=headers,
+            )
         if path == "/v1/mcp":
             return JSONResponse(
                 status_code=status_code,
@@ -167,6 +173,20 @@ class AuthMiddleware(BaseHTTPMiddleware):
         auth = request.headers.get("Authorization", "")
         # Anthropic SDKs send the key as x-api-key instead of a bearer token.
         api_key = request.headers.get("x-api-key", "")
+
+        if (
+            path.startswith("/tavily/")
+            and not auth
+            and not api_key
+            and request.method == "POST"
+        ):
+            try:
+                body = await request.json()
+                api_key = body.get("api_key", "") if isinstance(body, dict) else ""
+                if not isinstance(api_key, str):
+                    api_key = ""
+            except (ValueError, TypeError):
+                pass
 
         if auth.startswith("Bearer "):
             token = auth[7:]

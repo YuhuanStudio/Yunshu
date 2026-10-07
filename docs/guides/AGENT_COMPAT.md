@@ -197,7 +197,7 @@ Anthropic retains its [web search blocks and citation fields](https://platform.c
 
 | Setting | Meaning |
 |---|---|
-| `YUNSHU_SEARXNG_URL` | a self-hosted SearXNG with the JSON format enabled (the private default recommendation) |
+| `YUNSHU_SEARXNG_URL` | a self-hosted SearXNG with the JSON format enabled (optional; built-in metasearch needs no SearXNG setup) |
 | `YUNSHU_BRAVE_API_KEY`, `YUNSHU_TAVILY_API_KEY`, `YUNSHU_EXA_API_KEY`, `YUNSHU_SERPER_API_KEY`, `YUNSHU_PERPLEXITY_API_KEY` | hosted providers; `YUNSHU_WEB_SEARCH_PROVIDER` picks one (`auto` prefers SearXNG) |
 | `YUNSHU_WEB_FETCH`, `YUNSHU_WEB_FETCH_ALLOW_PRIVATE`, `..._MAX_BYTES`, `..._TIMEOUT` | web_fetch needs no provider; private, loopback and link-local addresses are blocked (also after redirects and DNS), 2 MB and 20 s by default | Model input is parsed tolerantly (`uri`/`link`/`href` keys, a bare string, nested `input`, truncated JSON, a scheme-less host) and an unusable call returns an `invalid_tool_input` error that states the expected `{"url": "https://..."}`.
 | `YUNSHU_MCP_CONNECTOR`, `YUNSHU_MCP_CONNECTOR_ALLOW_PRIVATE`, `..._TIMEOUT` | the MCP connector (streamable HTTP, legacy SSE) |

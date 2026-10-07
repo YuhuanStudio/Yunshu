@@ -25,7 +25,7 @@ from yunshu_gateway.server_tools.webfetch import FetchError, FetchResult
 
 
 @pytest.fixture(autouse=True)
-def isolated(monkeypatch):
+def isolated(monkeypatch, tmp_path):
     settings.clear_overrides()
     for name in search.PROVIDER_ORDER:
         monkeypatch.delenv(f"YUNSHU_{name.upper()}_API_KEY", raising=False)
@@ -33,6 +33,10 @@ def isolated(monkeypatch):
     monkeypatch.setenv("YUNSHU_WEB_SEARCH_PROVIDER", "auto")
     monkeypatch.setenv("YUNSHU_WEB_KEYLESS", "1")
     monkeypatch.setenv("YUNSHU_WEB_RESEARCH", "0")
+    monkeypatch.setenv("YUNSHU_WEB_SEARCH_HEALTH_FILE", str(tmp_path / "health.json"))
+    from yunshu_gateway.server_tools.metasearch import _health
+
+    _health.clear()
     search.set_provider_for_tests(None)
     search._search_cache.clear()
     search.DuckDuckGo._next = search.DuckDuckGo._blocked_until = 0
@@ -61,6 +65,8 @@ async def test_auto_falls_back_after_error_empty_and_filtered(monkeypatch):
             )
         if req.url.host == "html.duckduckgo.com":
             return httpx.Response(202, text="captcha")
+        if req.url.host == "api.mwmbl.org":
+            return httpx.Response(200, json={"results": []})
         assert req.url.host == "en.wikipedia.org"
         return httpx.Response(
             200,
@@ -77,7 +83,7 @@ async def test_auto_falls_back_after_error_empty_and_filtered(monkeypatch):
         )
     assert provider == "wikipedia"
     assert rows[0].snippet == "Array framework"
-    assert len(requests) == 4
+    assert len(requests) == 5
     assert search.DuckDuckGo._blocked_until > 0
 
 
@@ -146,12 +152,14 @@ def test_disabled_and_order(monkeypatch):
     assert [p.name for p in search.get_provider().providers] == [
         "ddg_html",
         "wikipedia",
+        "mwmbl",
     ]
     monkeypatch.setenv("YUNSHU_SERPER_API_KEY", "k")
     assert [p.name for p in search.get_provider().providers] == [
         "serper",
         "ddg_html",
         "wikipedia",
+        "mwmbl",
     ]
     monkeypatch.setenv("YUNSHU_WEB_SEARCH_PROVIDER", "none")
     assert search.get_provider() is None
@@ -502,7 +510,7 @@ async def test_search_cache_avoids_duplicate_keyless_requests():
     async with httpx.AsyncClient(transport=httpx.MockTransport(fake)) as c:
         one = await search.run_search("unique cache query", client=c)
         two = await search.run_search("unique cache query", client=c)
-    assert one == two and len(requests) == 1
+    assert one == two and len(requests) == 3
 
 
 async def test_query_not_logged_at_info_and_context_resets(caplog):

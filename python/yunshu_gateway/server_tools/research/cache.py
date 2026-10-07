@@ -1,5 +1,6 @@
 """Per-process bounded LRU cache, no disk persistence."""
 
+import json
 import time
 from collections import OrderedDict
 from dataclasses import dataclass
@@ -46,6 +47,7 @@ class PageCache:
             value.last_modified or "",
             value.published_at or "",
             *value.redirects,
+            json.dumps(value.metadata, ensure_ascii=False),
         ]
         size = len(key.encode()) + sum(len(v.encode()) for v in fields) + 512
         if old := self.rows.pop(key, None):
