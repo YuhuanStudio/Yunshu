@@ -167,6 +167,10 @@ def _detect_model_type(model_path: str) -> ModelType:
     # so p.name is the hash; the readable repo name lives upstream in the path.
     _path_lower = str(model_path).lower()
     _is_vl = "vl" in model_type or "vision_config" in config
+    if (
+        model_type == "embedding_gemma2"
+    ):  # Google EmbeddingGemma 2: text/image/audio/video embedder
+        return ModelType.EMBEDDING
     if "reranker" in _path_lower and _is_vl:
         return ModelType.RERANKER
     if "embedding" in _path_lower and _is_vl:
@@ -356,6 +360,24 @@ class ModelEntry:
     leases: int = 0
 
 
+def _is_embedding_gemma2(model_path: str) -> bool:
+    try:
+        with open(Path(model_path) / "config.json") as f:
+            return bool(json.load(f).get("model_type") == "embedding_gemma2")
+    except (OSError, ValueError):
+        return False
+
+
+def _embedding_engine_class(model_path: str) -> Any:
+    if _is_embedding_gemma2(model_path):
+        from .gemma_embedding_engine import GemmaEmbeddingEngine
+
+        return GemmaEmbeddingEngine
+    from .vl_embedding_engine import VLEmbeddingEngine
+
+    return VLEmbeddingEngine
+
+
 async def instantiate_engine(
     model_type: ModelType | None, model_path: str, config: Any = None
 ) -> Any:
@@ -388,9 +410,7 @@ async def instantiate_engine(
         await engine.start()
         return engine
     if model_type in (ModelType.EMBEDDING, ModelType.RERANKER):
-        from .vl_embedding_engine import VLEmbeddingEngine
-
-        engine = VLEmbeddingEngine(model_path, config)
+        engine = _embedding_engine_class(model_path)(model_path, config)
         await engine.start()
         return engine
     if model_type in (ModelType.STS, ModelType.VIDEO):

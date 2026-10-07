@@ -736,6 +736,23 @@ def _embed_reference_fn(model):
     return fn
 
 
+def _gemma2_reference_fns(model):
+    """Official sentence-transformers vectors for EmbeddingGemma 2 (CPU torch, no MLX), as
+    (items -> vectors, (text, task) -> vector)."""
+
+    def fn(items):
+        from egemma2_reference import reference_embed
+
+        return reference_embed(model, list(items))
+
+    def task_fn(text, task):
+        from egemma2_reference import reference_embed
+
+        return reference_embed(model, [text], task=task)[0]
+
+    return fn, task_fn
+
+
 def cmd_routes(a):
     """Every registered route against real servers (scripts/research/route_checks.py): each --model
     in the default configuration (one server after the other: the ports are few), and, with
@@ -785,6 +802,10 @@ def cmd_routes(a):
             ctx.shared = shared
             if needs == "embed":
                 ctx.fixtures["embed_reference"] = _embed_reference_fn(model)
+            if needs == "embed2":
+                fn, task_fn = _gemma2_reference_fns(model)
+                ctx.fixtures["embed_reference"] = fn
+                ctx.fixtures["embed_reference_task"] = task_fn
             run_route_checks(ctx, needs, only, res, srv, name)
             res["notes"][name] = ctx.notes
             if srv.proc.poll() is not None:
@@ -1086,7 +1107,7 @@ def build_parser():
                 "--media",
                 action="append",
                 default=[],
-                help="NEEDS=MODEL: tts asr ocr image embed",
+                help="NEEDS=MODEL: tts asr ocr image embed embed2",
             )
             p.add_argument("--only")
         if n == "agent":

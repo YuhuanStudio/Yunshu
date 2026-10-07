@@ -90,6 +90,7 @@ def test_checks_are_well_formed():
             "ocr",
             "image",
             "embed",
+            "embed2",
             "translate",
             "omni",
             "cascade",

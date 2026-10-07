@@ -241,6 +241,7 @@ def test_routes_job_in_plan_with_two_models_and_a_multi_server(tmp_path):
         "routes-ocr",
         "routes-image",
         "routes-embed",
+        "routes-embed2",
     ]
     # one server per modality, every checkpoint on the M3 allowlist, declared memory under the cap
     allowed = d.MODELS and _m3_models()

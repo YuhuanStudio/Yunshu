@@ -657,3 +657,211 @@ def _whisper_translations(c: Ctx):
         p.status_code == 200 and p.text.strip(),
         f"text format {p.status_code} {p.text[:100]}",
     )
+
+
+# ── EmbeddingGemma 2: text, image, audio, video, interleaved ─────────────────────────────
+
+_MIME = {".png": "image/png", ".wav": "audio/wav"}
+
+
+def _data_uri(path: str) -> str:
+    import os
+
+    with open(path, "rb") as f:
+        raw = f.read()
+    mime = _MIME.get(os.path.splitext(path)[1], "application/octet-stream")
+    return f"data:{mime};base64,{base64.b64encode(raw).decode()}"
+
+
+def egemma2_wire_item(item):
+    """A reference item (media as file paths) -> the request item (media as data URIs)."""
+    if isinstance(item, str):
+        return item
+    out = {}
+    for k, v in item.items():
+        if k in ("image", "audio"):
+            out[k] = [_data_uri(p) for p in v] if isinstance(v, list) else _data_uri(v)
+        elif k == "video":
+            out[k] = [[_data_uri(p) for p in fr] for fr in v]
+        else:
+            out[k] = v
+    return out
+
+
+def egemma2_chat_messages(m):
+    """The vLLM-style `messages` form of the interleaved case (one embedding)."""
+    img = lambda p: {"type": "image_url", "image_url": {"url": _data_uri(p)}}  # noqa: E731
+    return [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Photos: "},
+                img(m["red"]),
+                {"type": "text", "text": " and "},
+                img(m["blue"]),
+                {"type": "text", "text": " side by side."},
+            ],
+        }
+    ]
+
+
+@check(
+    "embed_gemma2_served",
+    "POST /v1/embeddings",
+    "POST /v1/score",
+    "POST /api/embed",
+    needs="embed2",
+    served=True,
+)
+def _embed_gemma2(c: Ctx):
+    import os
+    import tempfile
+
+    from egemma2_cases import cases, make_media
+
+    ref_fn = c.fixtures.get("embed_reference")
+    expect(ref_fn, "no reference embedder in this run (fixtures['embed_reference'])")
+    media = make_media(
+        c.fixtures.get("egemma2_media") or tempfile.mkdtemp(prefix="eg2-")
+    )
+    cs = cases(media)
+    names = list(cs)
+    ref = dict(zip(names, ref_fn([cs[n] for n in names]), strict=True))
+
+    def post(**body):
+        r = c.req(
+            "POST", "/v1/embeddings", json={"model": c.model, **body}, timeout=600
+        )
+        expect(r.status_code == 200, f"embeddings {r.status_code} {r.text[:200]}")
+        return r.json()
+
+    def served(name):
+        item = egemma2_wire_item(cs[name])
+        d = post(input=[item] if isinstance(item, dict) else item)
+        return d["data"][0]["embedding"], d["usage"]["prompt_tokens"]
+
+    cos = {}
+    toks = {}
+    for n in names:
+        v, toks[n] = served(n)
+        cos[n] = cosine(v, ref[n])
+    bad = {n: round(x, 4) for n, x in cos.items() if x < REF_COS}
+    expect(not bad, f"served vectors differ from the official reference (cos): {bad}")
+    for n, lo in (
+        ("text_long", 1500),
+        ("image_red", 100),
+        ("audio_speech", 50),
+        ("video", 100),
+    ):
+        expect(toks[n] > lo, f"usage.prompt_tokens for {n}: {toks[n]} (want > {lo})")
+    c.notes["egemma2_min_cos"] = round(min(cos.values()), 5)
+    c.notes["egemma2_cos"] = {n: round(x, 4) for n, x in cos.items()}
+    expect(len(ref["text_cat"]) == 768, "native dimension is 768")
+
+    # one batch of every case (mixed lengths and modalities) equals the singles
+    wire = [egemma2_wire_item(cs[n]) for n in names]
+    wire = [w if isinstance(w, dict) else {"text": w} for w in wire]
+    b = post(input=wire)
+    expect([d["index"] for d in b["data"]] == list(range(len(names))), "batch order")
+    gaps = {
+        n: round(cosine(d["embedding"], ref[n]), 4)
+        for n, d in zip(names, b["data"], strict=True)
+    }
+    gaps = {n: x for n, x in gaps.items() if x < REF_COS}
+    expect(not gaps, f"batch differs from the reference: {gaps}")
+
+    # task prompts: SearchQuery / Document are the official prefixes; the vectors differ
+    q, d_ = "What causes the northern lights?", "Sun particles hit the atmosphere."
+    rq = ref_fn([q])[0]
+    plain = post(input=q)["data"][0]["embedding"]
+    expect(cosine(plain, rq) > REF_COS, "plain text is the raw-text reference")
+    tq = post(input=q, task="SearchQuery")["data"][0]["embedding"]
+    expect(
+        cosine(tq, plain) < 0.9999,
+        "task=SearchQuery changed nothing (prefix not applied)",
+    )
+    task_ref = c.fixtures.get("embed_reference_task")
+    if task_ref:
+        for task, text in (("SearchQuery", q), ("Document", d_)):
+            got = post(input=text, task=task)["data"][0]["embedding"]
+            expect(
+                cosine(got, task_ref(text, task)) > REF_COS,
+                f"task={task} differs from the reference",
+            )
+    bad_task = c.req(
+        "POST", "/v1/embeddings", json={"model": c.model, "input": q, "task": "Nope"}
+    )
+    err_ok(bad_task, "openai")
+    expect(bad_task.status_code == 400, f"unknown task -> {bad_task.status_code}")
+
+    # Matryoshka
+    d256 = post(input=CAT, dimensions=256)["data"][0]["embedding"]
+    full = ref["text_cat"]
+    tr = [x for x in full[:256]]
+    expect(
+        len(d256) == 256 and cosine(d256, tr) > REF_COS,
+        "dimensions=256 vs truncated reference",
+    )
+    expect(
+        abs(math.sqrt(sum(x * x for x in d256)) - 1) < 1e-3,
+        "dimensions=256 not renormalised",
+    )
+
+    # chat-style messages (vLLM form) = the interleaved item
+    mm = post(messages=egemma2_chat_messages(media))["data"][0]["embedding"]
+    expect(
+        cosine(mm, ref["interleaved"]) > REF_COS,
+        "messages form differs from the interleaved item",
+    )
+
+    # cross-modal: the spoken sentence is closer to its text than to another sentence
+    sp = served("audio_speech")[0]
+    from egemma2_cases import SPEECH
+
+    t_same = post(input=SPEECH)["data"][0]["embedding"]
+    t_other = post(input=STOCK)["data"][0]["embedding"]
+    expect(
+        cosine(sp, t_same) > cosine(sp, t_other) + 0.05,
+        "audio not closer to its transcript",
+    )
+    rd = served("image_red")[0]
+    expect(
+        cosine(
+            rd, post(input="a red circle on a white background")["data"][0]["embedding"]
+        )
+        > cosine(rd, post(input="a blue rectangle")["data"][0]["embedding"]),
+        "image not closer to its caption",
+    )
+
+    # errors are 400, never 500: marker count, wrong media, unreadable audio, over the context
+    for body in (
+        {"input": [{"text": "x <|image|> y"}]},
+        {"input": [{"audio": "data:audio/wav;base64,AAAA"}]},
+        {"input": [{"image": "data:image/png;base64,AAAA"}]},
+        {"input": "word " * 12000},
+    ):
+        r = c.req(
+            "POST", "/v1/embeddings", json={"model": c.model, **body}, timeout=600
+        )
+        err_ok(r, "openai")
+        expect(
+            r.status_code in (400, 422),
+            f"bad input {str(body)[:60]} -> {r.status_code} {r.text[:100]}",
+        )
+
+    # score and Ollama go through the same engine
+    s = c.req(
+        "POST",
+        "/v1/score",
+        json={"model": c.model, "text_1": CAT, "text_2": [KITTEN, STOCK]},
+    )
+    expect(s.status_code == 200, f"score {s.status_code} {s.text[:150]}")
+    sc = [x["score"] for x in s.json()["data"]]
+    expect(sc[0] > sc[1], f"score {sc}")
+    o = c.req("POST", "/api/embed", json={"model": c.model, "input": [CAT, STOCK]})
+    expect(o.status_code == 200, f"/api/embed {o.status_code} {o.text[:150]}")
+    oe = o.json()["embeddings"]
+    expect(
+        cosine(oe[0], ref["text_cat"]) > REF_COS,
+        "/api/embed differs from the reference",
+    )

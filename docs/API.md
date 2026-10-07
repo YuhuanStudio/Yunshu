@@ -91,6 +91,21 @@ objects (image = url/path/data-uri) for a `Qwen3-VL-Embedding` model — text, i
 cross-modal vectors land in one shared space. Optional top-level `instruction`. See
 [examples/multimodal_embeddings.py](../examples/multimodal_embeddings.py).
 
+**EmbeddingGemma 2** (`google/embeddinggemma-2`, 768-d, 8K tokens; text, image, audio, video and
+mixes in one space). Extensions on the OpenAI request, all optional, SDKs keep working:
+
+| Field | Meaning |
+|---|---|
+| `input` item `{text?, image?, audio?, video?, task?, instruction?}` | Media is a URL, file path or data URI (one value or a list; audio = PCM WAV, any rate, resampled to 16 kHz mono; `video` = a list of frames, sampled by the caller). `text` may carry `<\|image\|>` / `<\|audio\|>` / `<\|video\|>` markers that place each media item in order; without markers the order is the key order of the item. |
+| `messages` | vLLM-style chat form, ONE embedding per request: content parts `text`, `image_url`, `input_audio` (base64 WAV), `audio_url`, `{"type":"video","frames":[...]}`. Use `input` or `messages`, not both. |
+| `task` | A prompt of the model (`SearchQuery`, `Document`, `QuestionAnswering`, `FactChecking`, `CodeRetrieval`, `Classification`, `Clustering`, `SentenceSimilarity`); unset = the raw text, as `SentenceTransformer.encode` without a prompt. A per-item `task` wins. Applies to text only. |
+| `instruction` | A literal text prefix instead of a named task. |
+| `dimensions` | Matryoshka: the leading values, re-normalised (128, 256, 512, 768 are the trained sizes). |
+
+`usage.prompt_tokens` counts the real sequence (text tokens plus image / frame / audio soft tokens;
+280 per image, 25 per second of audio). More than 8192 tokens is a 400. The vision and audio towers
+load on the first image / audio request (about 0.3 / 0.6 GB more), the text tower alone is 0.55 GB.
+
 ### Other
 
 | Method | Path | Notes |
