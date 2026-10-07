@@ -1198,7 +1198,7 @@ Same checkpoint (Qwen3.8-27B-oQ4e-mtp), same prompts and `--long-ask`, greedy, T
 | 64K code | 105.6 / 94.3 (112%) | 118% | 0.377 / 0.273 | 105% |
 | 64K prose | 48.6 / 56.7 (86%) | 119% | 0.376 / 0.254 | 105% |
 | 128K code | 69.6 / 63.9 (109%) | 138% | 0.599 / 0.450 | 124% |
-| 128K prose | 40.9 / 46.7 (88%) | 140% | 0.621 / n/a | 124% |
+| 128K prose | 40.9 / 46.3 (88%) | 140% | 0.621 / 0.420 | 124% |
 
 Round anatomy (ms/round, commits/round): Yunshu chain 53.8/4.81 (32K code), 52.8/3.13 (32K prose), 63.3/6.68, 58.5/2.84 (64K), 73.5/5.11, 70.5/2.88 (128K); TF (tree, ~16-18 rows) 60.0/8.66, 56.8/4.26, 68.8/6.52, 65.5/3.72, 87.6/5.61, 83.6/3.88. Our rounds are shorter; TF commits more per round. A chain deeper than DFlash2's block (YUNSHU_MTP_BLOCK_SIZE 10, 12) is slower (32K code 80 vs 89 tok/s, 64K code 94-99 vs 106).
 Roofline: weights 15 GB + KV (65 KB/token: 2.15 GB at 32K, 8.6 GB at 128K) at 614 GB/s gives a 28 ms (32K) to 38 ms (128K) forward floor; both engines run 54-91 ms rounds.
@@ -1214,6 +1214,6 @@ Fix (f271d284): `tree_verify.compact_kv` evaluates the gathers before the writes
 | 64K code | 105.6 | 118.9 | +12.6% | 63.3 -> 66.4 | 6.68 -> 7.89 | 94.3 | 126% |
 | 64K prose | 48.6 | 48.9 | +0.7% | 58.5 -> 67.7 | 2.84 -> 3.29 | 56.7 | 86% |
 | 128K code | 69.6 | 70.0 | +0.6% | 73.5 -> 91.0 | 5.11 -> 6.27 | 63.9 | 110% |
-| 128K prose | 40.9 | 41.7 | +1.8% | 70.5 -> 79.4 | 2.88 -> 3.31 | 46.7 | 89% |
+| 128K prose | 40.9 | 41.7 | +1.8% | 70.5 -> 79.4 | 2.88 -> 3.31 | 46.3 | 90% |
 
 Cold, warm and follow-up TTFT are unchanged (within noise). Remaining gaps: prose decode 86-89% of TF at 32K-128K (tree round still +5-17 ms over the chain; the 16-row tree attention reads the prefix at 0.27 ms per K keys against a 0.1 ms floor, and TF commits ~15% more per round on prose), warm TTFT 62-71% of TF at 64K-128K (0.1-0.2 s absolute; linear in context, probably the APC restore; not investigated).
