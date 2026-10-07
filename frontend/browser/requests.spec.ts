@@ -134,8 +134,8 @@ function installFixture(page: Page, recent: Recent[] | null = null) {
       page.route("**/v1/**", async (route) => {
         const path = new URL(route.request().url()).pathname;
         if (path === "/v1/yunshu/status") return json(route, 200, status());
-        // The shell may also ask for the server history ring; this page does not use it.
-        if (path === "/v1/yunshu/history")
+        // The shell may also ask for the history ring and the memory ledger; this page uses neither.
+        if (path === "/v1/yunshu/history" || path === "/v1/yunshu/memory")
           return json(route, 404, { detail: "Not Found" });
         if (path === "/v1/yunshu/requests/recent") {
           recentCalls.push(route.request().url());
@@ -297,9 +297,7 @@ test.describe("requests page finished-request ring", () => {
   ];
   const withRing = async (page: Page) => {
     const o = await open(page, ring);
-    await o.requests
-      .getByRole("tab", { name: "已結束", exact: true })
-      .click();
+    await o.requests.getByRole("tab", { name: "已結束", exact: true }).click();
     return o;
   };
 

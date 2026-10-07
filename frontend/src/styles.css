@@ -97,3 +97,15 @@ output {
   outline: 2px solid var(--text-primary);
   outline-offset: 2px;
 }
+
+/* Tray (segmented) control: a recessed track with a raised selected segment, legible in both themes. */
+:root {
+  --tray-track: var(--bg-elevated);
+  --tray-selected: var(--bg-card);
+  --tray-selected-ring: var(--border-subtle);
+}
+.dark {
+  --tray-track: color-mix(in srgb, var(--bg-base) 55%, var(--bg-elevated));
+  --tray-selected: color-mix(in srgb, var(--text-primary) 13%, var(--bg-elevated));
+  --tray-selected-ring: var(--border-default);
+}

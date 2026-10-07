@@ -88,7 +88,10 @@ async function install(page: Page) {
 
 const ZONES: Record<string, string> = {
   "top bar": "header",
-  "status pills": "ul[aria-label='最近一筆請求']",
+  // Engine and memory always lead the band at a fixed width. 現在 (decode, prefill,
+  // idle) changes width with the phase and the pills after it (GPU, 請求, 交換)
+  // appear only when they have something to say, so they sit behind the stable pair.
+  "status pills": "ul[aria-label='引擎狀態'] > li:nth-child(-n+2)",
   sidebar: "[aria-label='控制台導覽']",
   "stat tiles":
     "[data-testid='overview-stats'], [data-testid='request-stats'], [data-testid='resource-readouts'], [data-testid='models']",
@@ -102,6 +105,12 @@ function snapshot(page: Page, selector: string) {
       for (const el of [root, ...root.querySelectorAll("*")]) {
         // Chart and bar content is data: it may move. Its frame may not.
         if (el.closest("svg")) continue;
+        // A model icon loads lazily into a slot of fixed size: the slot is a box, its content is not.
+        if (
+          el.closest("[data-icon-slot]") &&
+          !el.hasAttribute("data-icon-slot")
+        )
+          continue;
         const host = el.parentElement?.closest(
           "[role=img], [role=progressbar], [role=meter]",
         );
@@ -127,7 +136,7 @@ for (const route of ["overview", "requests", "models", "diagnostics"]) {
     await install(page);
     await page.clock.install();
     await page.goto(`/console/#/${route}`, { waitUntil: "domcontentloaded" });
-    await page.getByLabel("最近一筆請求").waitFor();
+    await page.getByLabel("引擎狀態").waitFor();
     const readings: Record<string, string[]> = {};
     const frames: Record<string, Awaited<ReturnType<typeof snapshot>>[]> = {};
     for (const name of Object.keys(ZONES)) frames[name] = [];
@@ -137,10 +146,7 @@ for (const route of ["overview", "requests", "models", "diagnostics"]) {
       for (const [name, selector] of Object.entries(ZONES))
         frames[name].push(await snapshot(page, selector));
       (readings.pills ??= []).push(
-        (await page.getByLabel("最近一筆請求").innerText()).replace(
-          /\s+/g,
-          " ",
-        ),
+        (await page.getByLabel("引擎狀態").innerText()).replace(/\s+/g, " "),
       );
     }
     // The feed really changed what is on screen between frames.
@@ -148,7 +154,17 @@ for (const route of ["overview", "requests", "models", "diagnostics"]) {
     for (const [name, list] of Object.entries(frames)) {
       expect(list[0].length, `${name} has boxes`).toBeGreaterThan(0);
       for (const f of list.slice(1)) {
-        expect(f.length, `${name} keeps its box count`).toBe(list[0].length);
+        const names = (frame: typeof f) => frame.map((box) => box[0]);
+        const extra = names(f).filter(
+          (n, i, a) =>
+            a.indexOf(n) === i &&
+            names(f).filter((x) => x === n).length !==
+              names(list[0]).filter((x) => x === n).length,
+        );
+        expect(
+          f.length,
+          `${name} keeps its box count (changed: ${extra.join(" | ")})`,
+        ).toBe(list[0].length);
         // Half a pixel of rounding is allowed; a digit changing width is not.
         const moved = f.filter((box, k) =>
           box.some(

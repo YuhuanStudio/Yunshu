@@ -195,7 +195,8 @@ test("playground: 5xx is zh-TW with details, clearing offers 復原, reasoning f
   await expect(think).toHaveAttribute("aria-expanded", "true");
   await pg.getByRole("button", { name: "新測試" }).click();
   await expect(pg).not.toContainText("final answer");
-  await expect(pg).toContainText("已清除這段測試");
-  await pg.getByRole("button", { name: "復原" }).click();
+  // 復原 is a toast action now (rendered by the app Toaster, outside the playground).
+  await expect(page.getByText("已清除這段測試")).toBeVisible();
+  await page.getByRole("button", { name: "復原" }).click();
   await expect(pg).toContainText("final answer");
 });

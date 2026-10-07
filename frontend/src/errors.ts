@@ -45,3 +45,39 @@ export function detailText(
   if (cause instanceof Error && cause.message) parts.push(cause.message);
   return parts.length ? parts.join("\n") : undefined;
 }
+
+/** Why the console shows the engine as not online: banner title plus the two-word pill value. */
+export function offlineCause(
+  phase: "connecting" | "online" | "offline" | "unauthorized",
+  status: number | null | undefined,
+): { title: string; short: string; hint: string } {
+  if (phase === "connecting")
+    return {
+      title: "正在連接引擎",
+      short: "連線中",
+      hint: "正在連線到本機引擎。",
+    };
+  if (phase === "unauthorized" || status === 401 || status === 403)
+    return {
+      title: "需要有效的存取權杖",
+      short: "未授權",
+      hint: "引擎拒絕了這組存取金鑰，請到設定更新。",
+    };
+  if (typeof status === "number" && status >= 500)
+    return {
+      title: "引擎內部錯誤",
+      short: "內部錯誤",
+      hint: `引擎回應 HTTP ${status}，請查看引擎日誌。`,
+    };
+  if (typeof status === "number")
+    return {
+      title: `引擎回傳 HTTP ${status}`,
+      short: `HTTP ${status}`,
+      hint: `引擎對狀態查詢回應了 HTTP ${status}。`,
+    };
+  return {
+    title: "無法連接引擎",
+    short: "無法連線",
+    hint: "沒有收到引擎的回應，請確認 Yunshu 服務正在執行。",
+  };
+}

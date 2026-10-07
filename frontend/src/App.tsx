@@ -11,16 +11,12 @@ import {
   IconButton,
   Kbd,
   Spinner,
+  Toaster,
   StatusIndicator,
   useCommandPaletteShortcut,
   type CommandPaletteItem,
 } from "@yuhuanowo/yunui";
-import {
-  Banner,
-  Sidebar,
-  StatusPill,
-  StatusPillBar,
-} from "@yuhuanowo/yunui/patterns";
+import { Banner, Sidebar } from "@yuhuanowo/yunui/patterns";
 import { YunUIProvider } from "@yuhuanowo/yunui/adapters";
 import {
   Activity,
@@ -43,15 +39,9 @@ import {
 import { useEngine } from "./useEngine";
 import { LivePill } from "./LivePill";
 import { tabTitle } from "./engineView";
-import type { Connection, EngineLastRequest } from "./api";
-import {
-  ConnectionState,
-  clock,
-  fixed,
-  modelLabel,
-  number,
-  sizeGb,
-} from "./ui";
+import type { Connection } from "./api";
+import { FooterStatus } from "./FooterStatus";
+import { ConnectionState, fixed, modelLabel, sizeGb } from "./ui";
 const Dashboard = lazy(() =>
   import("./Dashboard").then((m) => ({ default: m.Dashboard })),
 );
@@ -241,7 +231,6 @@ export default function App() {
         `${c.title} ${c.description ?? ""} ${c.id}`.toLowerCase().includes(q),
       )
     : commands;
-  const last = engine.status?.last;
   useEffect(() => {
     const fn = () => {
       setRoute(route());
@@ -301,6 +290,7 @@ export default function App() {
   }
   return (
     <YunUIProvider adapters={adapters}>
+      <Toaster position="bottom-center" offset={56} />
       <div className="relative h-dvh overflow-hidden bg-(--bg-window)">
         <a href="#main-content" className="skip-link" onClick={skipToMain}>
           跳到主要內容
@@ -422,7 +412,7 @@ export default function App() {
                       }
                     })()}
                   </span>
-                  <span className="block truncate font-mono text-xs text-muted-foreground">
+                  <span className="block truncate text-xs tabular-nums text-muted-foreground">
                     {engine.status?.version
                       ? `yunshu ${engine.status.version}`
                       : "本機優先"}
@@ -492,7 +482,7 @@ export default function App() {
                 variant="ghost"
                 type="button"
                 onClick={openPalette}
-                className="card hidden items-center gap-1.5 rounded-full px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground sm:inline-flex"
+                className="card hidden h-8 items-center gap-1.5 rounded-full px-3 py-0 text-xs text-muted-foreground transition-colors hover:text-foreground sm:inline-flex"
               >
                 <Search size={13} />
                 搜尋
@@ -501,7 +491,7 @@ export default function App() {
               {/* YunUI ThemeToggle is next-themes backed; the console owns its
                   theme state (Settings shares it), so keep a pill IconButton. */}
               <IconButton
-                className="card rounded-full"
+                className="card size-8 rounded-full"
                 icon={dark ? <Sun size={16} /> : <Moon size={16} />}
                 label={dark ? "切換淺色" : "切換深色"}
                 onClick={() => setDark((v) => !v)}
@@ -625,103 +615,7 @@ export default function App() {
             </div>
           </main>
           <footer>
-            <StatusPillBar
-              ariaLabel="最近一筆請求"
-              className="shrink-0 px-4 lg:px-6"
-            >
-              <StatusPill
-                label={connectionText[engine.phase]}
-                tone={connectionTone[engine.phase]}
-                help={
-                  engine.phase === "online" && engine.status?.version
-                    ? `引擎連線正常 · yunshu ${engine.status.version}`
-                    : connectionHelp[engine.phase]
-                }
-              />
-              <li className="text-xs text-muted-foreground">最近一筆</li>
-              {/* Every pill is always present with a reserved value slot, so a new
-                request changes digits, never the number or width of the pills. */}
-              {engine.phase === "online" && (
-                <>
-                  <StatusPill
-                    label="TTFT"
-                    value={
-                      last?.ttft_ms != null
-                        ? `${number(last.ttft_ms, 0)} ms`
-                        : "—"
-                    }
-                    valueMinCh={9}
-                    help={
-                      last ? lastHelp(last, "首 token 延遲") : noRequestHelp
-                    }
-                    dot={false}
-                  />
-                  <StatusPill
-                    label="解碼"
-                    value={
-                      last?.decode_tps != null
-                        ? `${fixed(last.decode_tps)} tok/s`
-                        : "—"
-                    }
-                    valueMinCh={13}
-                    help={last ? lastHelp(last, "解碼速度") : noRequestHelp}
-                    dot={false}
-                  />
-                  <StatusPill
-                    label="預填"
-                    value={
-                      last?.prefill_tps != null
-                        ? `${number(last.prefill_tps, 0)} tok/s`
-                        : "—"
-                    }
-                    valueMinCh={13}
-                    help={last ? lastHelp(last, "預填速度") : noRequestHelp}
-                    dot={false}
-                  />
-                  <StatusPill
-                    label="前綴命中"
-                    value={
-                      last && last.prompt_tokens > 0
-                        ? `${number(last.cached_tokens, 0)} / ${number(last.prompt_tokens, 0)}`
-                        : "—"
-                    }
-                    valueMinCh={17}
-                    help={
-                      last
-                        ? lastHelp(last, "命中前綴的 token 數 / 輸入 token 數")
-                        : noRequestHelp
-                    }
-                    dot={false}
-                  />
-                  <StatusPill
-                    label="推測解碼"
-                    value={
-                      last?.speculative?.mode
-                        ? `${String(last.speculative.mode).toUpperCase()}${
-                            last.speculative.acceptance_rate != null
-                              ? ` 接受 ${number(last.speculative.acceptance_rate * 100, 0)}%`
-                              : ""
-                          }`
-                        : "—"
-                    }
-                    valueMinCh={14}
-                    tone={last?.speculative?.mode ? "info" : "neutral"}
-                    help={
-                      last?.speculative?.mode
-                        ? lastHelp(
-                            last,
-                            `推測解碼${
-                              last.speculative.rounds && last.completion_tokens
-                                ? ` · 每輪 ${number(last.completion_tokens / last.speculative.rounds, 2)} tok`
-                                : ""
-                            }`,
-                          )
-                        : "最近一筆請求沒有使用推測解碼。"
-                    }
-                  />
-                </>
-              )}
-            </StatusPillBar>
+            <FooterStatus engine={engine} connection={connection} />
           </footer>
         </div>
         <CommandPalette
@@ -748,32 +642,6 @@ function PageFallback() {
       data-testid="page-loading"
     />
   );
-}
-
-const connectionText = {
-  connecting: "連線中",
-  online: "運作中",
-  offline: "離線",
-  unauthorized: "未授權",
-} as const;
-const connectionTone = {
-  connecting: "neutral",
-  online: "success",
-  offline: "danger",
-  unauthorized: "warning",
-} as const;
-const connectionHelp = {
-  connecting: "正在連線到本機引擎。",
-  online: "引擎連線正常。",
-  offline: "無法連線到引擎，請確認 Yunshu 服務正在執行。",
-  unauthorized: "引擎拒絕了這組存取金鑰，請到設定更新。",
-} as const;
-
-const noRequestHelp = "尚無完成的請求。";
-
-/** The sentence behind a last-request pill: which request, when, how many tokens. */
-function lastHelp(last: EngineLastRequest, what: string): string {
-  return `${what} · 最近一筆請求 ${last.request_id} · ${clock(last.t * 1000)} · ${number(last.prompt_tokens, 0)} 輸入 / ${number(last.completion_tokens, 0)} 輸出`;
 }
 
 /** Brand mark: a pivot (樞) with cloud arcs turning around it. Host content. */

@@ -1,6 +1,5 @@
 import { useMemo, useState, type ReactNode } from "react";
 import {
-  Badge,
   BarChart,
   Button,
   Card,
@@ -79,7 +78,7 @@ export function PhasePanel({
       data-testid="phase-panel"
       title="請求階段分布"
       description="點選圖例，查看目前正在處理的工作"
-      action={<Badge variant="outline">即時</Badge>}
+      action={<span className="text-xs text-muted-foreground">即時</span>}
     >
       <DonutChart
         monochrome
@@ -174,7 +173,11 @@ export function LatencyPanel({
       data-testid="latency-panel"
       title="首 Token 延遲分布"
       description="點選長條查看請求 · 單位 ms"
-      action={<Badge variant="outline">{valid.length} 筆已觀測</Badge>}
+      action={
+        <span className="text-xs tabular-nums text-muted-foreground">
+          {valid.length} 筆已觀測
+        </span>
+      }
     >
       <div className="mb-4 flex gap-6" data-testid="latency-figures">
         {[
@@ -305,12 +308,12 @@ export function ActivityPanel({
       title="請求活動熱圖"
       description="每個區間的已採樣峰值 · 點選格子，聯動時序圖游標"
       action={
-        <Badge variant="outline">
+        <span className="text-xs text-muted-foreground">
           <Slot ch={4} align="right">
             {history.length}
           </Slot>{" "}
           次採樣
-        </Badge>
+        </span>
       }
     >
       <Heatmap

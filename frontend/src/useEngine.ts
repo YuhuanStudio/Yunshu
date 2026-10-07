@@ -20,6 +20,8 @@ export interface UseEngineResult {
   status: EngineStatus | null;
   phase: EngineConnectionPhase;
   error: string | null;
+  /** HTTP status of the failed poll, or null when the engine was unreachable. */
+  errorStatus: number | null;
   updatedAt: number | null;
   history: readonly EngineHistoryPoint[];
   /** Slim chart samples: the engine's own history first, then live polls. */
@@ -45,6 +47,8 @@ interface EngineViewState {
   status: EngineStatus | null;
   phase: EngineConnectionPhase;
   error: string | null;
+  /** HTTP status of the failed poll, or null when the engine was unreachable. */
+  errorStatus: number | null;
   updatedAt: number | null;
   history: EngineHistoryPoint[];
   series: SeriesPoint[];
@@ -58,6 +62,7 @@ function initialState(connectionKey: symbol): EngineViewState {
     status: null,
     phase: "connecting",
     error: null,
+    errorStatus: null,
     updatedAt: null,
     history: [],
     series: [],
@@ -159,6 +164,7 @@ export function useEngine(connection: Connection): UseEngineResult {
             status,
             phase: "online",
             error: null,
+            errorStatus: null,
             updatedAt: at,
             history: [...samples, { at, status }].slice(-MAX_HISTORY_POINTS),
             series: [...series, pointFromStatus(at, status)].slice(
@@ -226,6 +232,7 @@ export function useEngine(connection: Connection): UseEngineResult {
                 : "offline",
             error:
               apiError?.publicMessage ?? "Could not reach the Yunshu service.",
+            errorStatus: apiError?.status ?? null,
           };
         });
       } finally {
@@ -280,6 +287,7 @@ export function useEngine(connection: Connection): UseEngineResult {
     status: stateForConnection.status,
     phase: stateForConnection.phase,
     error: stateForConnection.error,
+    errorStatus: stateForConnection.errorStatus,
     updatedAt: stateForConnection.updatedAt,
     history: stateForConnection.history,
     series: stateForConnection.series,

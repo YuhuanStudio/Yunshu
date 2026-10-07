@@ -68,8 +68,9 @@ const PAGE = 50;
 /** Long ids keep both ends so ids that differ only at the tail stay distinguishable. */
 const shortId = (id: string) =>
   id.length > 20 ? `${id.slice(0, 9)}…${id.slice(-8)}` : id;
-const outcomeDot = (o?: string) =>
-  o === "error" ? "offline" : o === "cancelled" ? "away" : "neutral";
+/** Error is the only red dot; a cancel is the user's own choice, so it stays neutral (amber means in progress). */
+const outcomeDot = (o?: string): "busy" | "neutral" =>
+  o === "error" ? "busy" : "neutral";
 function csv(rows: Row[]) {
   const keys: (keyof Row)[] = [
     "id",

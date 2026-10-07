@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ApiError, requestJson, type Connection } from "./api";
+import { ApiError, requestJson, type Connection } from "./api.ts";
 
 export type MemoryOwner = {
   kind: string;

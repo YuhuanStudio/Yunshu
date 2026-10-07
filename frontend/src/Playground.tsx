@@ -1,5 +1,6 @@
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import {
+  toast,
   StatusIndicator,
   Button,
   Card,
@@ -54,6 +55,8 @@ import {
 } from "./stream";
 import { ErrorNote } from "./error-note";
 import { UNDO_WINDOW_MS, thinkingOpen } from "./playground-ui-state";
+
+const UNDO_TOAST_ID = "playground-undo";
 import {
   buildSnippets,
   DIALECT_LABEL,
@@ -244,11 +247,6 @@ export function Playground({
       message: string;
       detail?: string;
     } | null>(null),
-    [undo, setUndo] = useState<{
-      messages: Message[];
-      pair: Pair;
-      pairPrompt: Message | null;
-    } | null>(null),
     [settings, setSettings] = useState(false),
     [temperature, setTemperature] = useState(0.7),
     [system, setSystem] = useState(""),
@@ -269,11 +267,7 @@ export function Playground({
       controller.current?.abort();
     };
   }, []);
-  useEffect(() => {
-    if (!undo) return;
-    const timer = window.setTimeout(() => setUndo(null), UNDO_WINDOW_MS);
-    return () => window.clearTimeout(timer);
-  }, [undo]);
+  useEffect(() => () => toast.dismiss(UNDO_TOAST_ID), []);
   useEffect(() => {
     if (!loading) return;
     const timer = window.setInterval(() => setNow(performance.now()), 100);
@@ -435,7 +429,7 @@ export function Playground({
     setImage(null);
     setLoading(true);
     setError("");
-    setUndo(null);
+    toast.dismiss(UNDO_TOAST_ID);
     try {
       if (compare) {
         const cfgs = [
@@ -634,7 +628,18 @@ export function Playground({
               disabled={loading}
               onClick={() => {
                 if (messages.length || pairPrompt)
-                  setUndo({ messages, pair, pairPrompt });
+                  toast.info("已清除這段測試。", undefined, {
+                    id: UNDO_TOAST_ID,
+                    duration: UNDO_WINDOW_MS,
+                    action: {
+                      label: "復原",
+                      onClick: () => {
+                        setMessages(messages);
+                        setPair(pair);
+                        setPairPrompt(pairPrompt);
+                      },
+                    },
+                  });
                 setMessages([]);
                 setPair([null, null]);
                 setPairPrompt(null);
@@ -780,26 +785,6 @@ export function Playground({
           </div>
         )}
       </ChatMessageList>
-      {undo && (
-        <div
-          role="status"
-          className="mx-auto mb-2 flex w-full max-w-3xl items-center justify-between gap-3 rounded-lg border border-border bg-(--bg-card) px-3 py-2 text-xs shadow-sm"
-        >
-          <span>已清除這段測試。</span>
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={() => {
-              setMessages(undo.messages);
-              setPair(undo.pair);
-              setPairPrompt(undo.pairPrompt);
-              setUndo(null);
-            }}
-          >
-            復原
-          </Button>
-        </div>
-      )}
       <div className="mx-auto w-full max-w-3xl shrink-0 px-4 pb-5 pt-3">
         {error && (
           <ErrorNote
@@ -1016,7 +1001,7 @@ export function Playground({
                             </pre>
                           }
                         >
-                          <CodeBlock language={t.language}>
+                          <CodeBlock language={t.language} defaultExpanded>
                             {code.snippets[t.value]}
                           </CodeBlock>
                         </Suspense>

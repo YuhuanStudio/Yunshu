@@ -51,7 +51,7 @@ const geometry = (page: Page) =>
       )
         e.scrollTop = 1e6;
     window.scrollTo(0, 1e6);
-    const bar = document.querySelector("ul[aria-label='最近一筆請求']");
+    const bar = document.querySelector("ul[aria-label='引擎狀態']");
     const doc = document.scrollingElement!;
     return {
       barBottom: bar?.getBoundingClientRect().bottom ?? null,

@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   AnimatedNumber,
-  Badge,
   Button,
   Card,
   EmptyState,
@@ -352,7 +351,7 @@ export function Dashboard({
               ["03", "觀察與驗證", "查看圖表、請求與推理結果"],
             ].map(([step, title, description]) => (
               <li key={step}>
-                <span className="font-mono text-xs text-muted-foreground">
+                <span className="text-xs tabular-nums text-muted-foreground">
                   {step}
                 </span>
                 <h2 className="yunui-section-title mt-2 text-base font-semibold">
@@ -679,7 +678,9 @@ export function Dashboard({
           data-testid="memory-panel"
           title="Metal 記憶體"
           action={
-            <Badge variant="outline">實體 {number(memory?.total_gb)} GB</Badge>
+            <span className="text-xs tabular-nums text-muted-foreground">
+              實體 {number(memory?.total_gb)} GB
+            </span>
           }
         >
           <p className="text-2xl font-semibold tabular-nums">

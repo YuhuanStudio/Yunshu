@@ -1,4 +1,14 @@
-import { Gauge, SegmentedBar, StatusIndicator } from "@yuhuanowo/yunui";
+import {
+  Gauge,
+  SegmentedBar,
+  StatusIndicator,
+  Table,
+  Tbody,
+  Td,
+  Th,
+  Thead,
+  Tr,
+} from "@yuhuanowo/yunui";
 import type { BarMark, BarSegment, SegmentTone } from "@yuhuanowo/yunui";
 import type { Connection } from "./api";
 import {
@@ -160,20 +170,20 @@ export function MemoryLedgerView({
       )}
       {!compact && (
         <div className="overflow-x-auto">
-          <table className="w-full text-sm" aria-label="記憶體持有者">
-            <thead>
-              <tr className="text-left text-xs text-muted-foreground">
-                <th className="py-1 pr-3 font-medium">持有者</th>
-                <th className="py-1 pr-3 text-right font-medium">大小</th>
-                <th className="py-1 font-medium">可回收</th>
-              </tr>
-            </thead>
-            <tbody>
+          <Table aria-label="記憶體持有者" scrollLabel="記憶體持有者表格">
+            <Thead>
+              <Tr>
+                <Th>持有者</Th>
+                <Th className="text-right">大小</Th>
+                <Th>可回收</Th>
+              </Tr>
+            </Thead>
+            <Tbody>
               {data.owners.map((o, i) => (
-                <tr key={`${o.kind}-${o.id}-${i}`} className="border-t">
-                  <td className="py-1.5 pr-3">{ownerLabel(o)}</td>
-                  <td
-                    className="py-1.5 pr-3 text-right tabular-nums"
+                <Tr key={`${o.kind}-${o.id}-${i}`}>
+                  <Td>{ownerLabel(o)}</Td>
+                  <Td
+                    className="text-right tabular-nums"
                     title={o.source ?? "服務沒有這項的計數"}
                   >
                     {o.gb == null ? (
@@ -189,14 +199,14 @@ export function MemoryLedgerView({
                         )}
                       </>
                     )}
-                  </td>
-                  <td className="py-1.5 text-muted-foreground">
+                  </Td>
+                  <Td className="text-muted-foreground">
                     {o.reclaimable ? "可回收" : "否"}
-                  </td>
-                </tr>
+                  </Td>
+                </Tr>
               ))}
-            </tbody>
-          </table>
+            </Tbody>
+          </Table>
           {unknownOwners.length > 0 && (
             <p className="mt-2 text-xs text-muted-foreground">
               「未知」表示服務沒有這項的計數，不代表 0。

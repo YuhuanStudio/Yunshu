@@ -19,7 +19,7 @@ export function LivePill({
   const pill = livePill(phase, status);
   return (
     <span
-      className="card inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-xs text-muted-foreground"
+      className="card inline-flex h-8 items-center gap-2 rounded-full px-3 text-xs text-muted-foreground"
       data-testid="live-phase"
       data-phase={pill.phase}
     >

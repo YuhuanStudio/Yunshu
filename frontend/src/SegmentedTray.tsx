@@ -34,7 +34,7 @@ export function SegmentedTray<T extends string = string>({
     >
       <TabsList
         aria-label={ariaLabel}
-        className="h-8 flex-wrap gap-0.5 rounded-lg p-0.5"
+        className="h-8 flex-wrap gap-0.5 rounded-lg bg-(--tray-track) p-0.5"
       >
         {options.map(({ value: v, label, icon: Icon }) => (
           <TabsTrigger
@@ -42,7 +42,8 @@ export function SegmentedTray<T extends string = string>({
             value={v}
             className={cn(
               "h-7 gap-1.5 rounded-md px-2.5 py-0 text-xs",
-              "data-[state=active]:text-foreground data-[state=inactive]:text-muted-foreground",
+              "data-[state=active]:bg-(--tray-selected) data-[state=active]:text-foreground data-[state=active]:shadow-none data-[state=active]:ring-1 data-[state=active]:ring-(--tray-selected-ring)",
+              "data-[state=inactive]:text-muted-foreground",
             )}
           >
             {Icon && <Icon size={13} />}

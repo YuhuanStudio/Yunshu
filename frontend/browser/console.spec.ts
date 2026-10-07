@@ -23,6 +23,10 @@ type RequestFixture = {
   percent?: number;
 };
 
+/** Engine routes the console treats as optional (history, memory ledger, effective config, recent requests). */
+const OPTIONAL_ROUTE =
+  /\/v1\/yunshu\/(history|memory|config|requests\/recent)(\?|$)/;
+
 function createApiFixture() {
   const token = "playwright-only-token";
   const models: ModelFixture[] = [
@@ -228,6 +232,8 @@ function createApiFixture() {
         fixture: true,
       });
     }
+    if (method === "GET" && OPTIONAL_ROUTE.test(url.pathname))
+      return json(route, { detail: "Not available on this fixture." }, 404);
     return json(
       route,
       { detail: `Unhandled Playwright fixture route: ${method} ${path}` },
@@ -360,7 +366,7 @@ async function installDiagnostics(
     if (/status of 401|status of 409/.test(message.text())) return;
     if (
       /status of 404/.test(message.text()) &&
-      message.location().url.includes("/v1/yunshu/history")
+      OPTIONAL_ROUTE.test(message.location().url)
     )
       return;
     unexpectedConsole.push(message.text());
@@ -369,7 +375,7 @@ async function installDiagnostics(
     const path = new URL(request.url()).pathname;
     if (
       /ERR_ABORTED|cancelled/i.test(request.failure()?.errorText ?? "") &&
-      path.endsWith("/v1/yunshu/status")
+      (path.endsWith("/v1/yunshu/status") || OPTIONAL_ROUTE.test(path))
     )
       return;
     failures.push(`${request.url()} ${request.failure()?.errorText}`);
@@ -383,7 +389,7 @@ async function installDiagnostics(
   });
   page.on("response", (response) => {
     if (response.status() < 400) return;
-    if (new URL(response.url()).pathname === "/v1/yunshu/history") return;
+    if (OPTIONAL_ROUTE.test(new URL(response.url()).pathname)) return;
     const index = expected.findIndex(
       (item) =>
         item.status === response.status() &&
@@ -407,7 +413,8 @@ async function installDiagnostics(
         !(
           item.status === 401 &&
           item.method === "GET" &&
-          item.sourcePath.endsWith("/v1/yunshu/status")
+          (item.sourcePath.endsWith("/v1/yunshu/status") ||
+            OPTIONAL_ROUTE.test(item.sourcePath))
         ),
     );
     expect(remaining, `${label} unobserved operation error responses`).toEqual(
@@ -498,9 +505,8 @@ test("auth, model lifecycle, warmup and request cancellation use the real /v1 AP
   await qwenSmall.getByRole("button", { name: "卸載", exact: true }).click();
   const unloadDialog = page.getByRole("dialog");
   await unloadDialog.getByRole("button", { name: "卸載", exact: true }).click();
-  await expect(page.getByRole("alert")).toContainText(
-    "active Playwright fixture request",
-  );
+  // The zh-TW line is the alert; the backend text sits behind 詳細資訊.
+  await expect(page.getByRole("alert")).toContainText("狀態衝突");
   await expect(qwenSmall.getByText("已載入", { exact: true })).toBeVisible();
   await qwenSmall.getByRole("button", { name: "卸載", exact: true }).click();
   await page

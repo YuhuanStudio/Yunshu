@@ -41,19 +41,24 @@ export default function LocalModelIcon({
       live = false;
     };
   }, [file]);
-  return url ? (
-    <ModelIcon
-      iconUrl={url}
-      developer={developer}
-      provider={developer}
-      size={size}
-      rounded
-    />
-  ) : (
+  // The slot has its final size from the first paint; the icon fills it when it loads,
+  // so nothing around it moves.
+  return (
     <span
-      aria-hidden="true"
-      className="inline-block shrink-0"
+      data-icon-slot=""
+      aria-hidden={url ? undefined : "true"}
+      className="inline-flex shrink-0 items-center justify-center"
       style={{ width: size, height: size }}
-    />
+    >
+      {url && (
+        <ModelIcon
+          iconUrl={url}
+          developer={developer}
+          provider={developer}
+          size={size}
+          rounded
+        />
+      )}
+    </span>
   );
 }

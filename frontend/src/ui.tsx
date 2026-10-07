@@ -11,6 +11,7 @@ import {
 } from "react";
 import type { EngineStatus } from "./api";
 import type { useEngine } from "./useEngine";
+import { offlineCause } from "./errors";
 export type Engine = ReturnType<typeof useEngine>;
 export type Model = EngineStatus["models"][number];
 // Intl formatters are expensive to build and a poll formats hundreds of
@@ -86,12 +87,7 @@ export function ConnectionState({
   configure: () => void;
 }) {
   if (engine.phase === "online") return null;
-  const title =
-    engine.phase === "connecting"
-      ? "正在連接引擎"
-      : engine.phase === "unauthorized"
-        ? "需要有效的存取權杖"
-        : "無法連接引擎";
+  const title = offlineCause(engine.phase, engine.errorStatus).title;
   return (
     <div role="status">
       <Banner
