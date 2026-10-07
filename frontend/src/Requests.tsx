@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  Badge,
   Button,
   Card,
   Dialog,
@@ -9,9 +8,10 @@ import {
   DialogTitle,
   EmptyState,
   Input,
-  Progress,
   SegmentedSelect,
   Sheet,
+  Sparkline,
+  StatusIndicator,
   Table,
   Tbody,
   Td,
@@ -23,6 +23,20 @@ import { PageHeader } from "@yuhuanowo/yunui/patterns";
 import { Download, Search } from "lucide-react";
 import { ApiError, cancelRequest, requestJson, type Connection } from "./api";
 import {
+  PrefillMeter,
+  Readout,
+  StageRail,
+  TokenTrace,
+  finishedFromHistory,
+  isLive,
+  median,
+  phaseDot,
+  phaseLabels as labels,
+  prefillPercent,
+  speculativeText,
+  type Row,
+} from "./RequestTrace";
+import {
   clock,
   elapsed,
   isOnline,
@@ -31,29 +45,6 @@ import {
   type Engine,
 } from "./ui";
 import type { Perform } from "./Models";
-type Row = {
-  id: string;
-  phase: string;
-  model?: string;
-  elapsed_s?: number;
-  prompt_tokens?: number;
-  cached_tokens?: number;
-  completion_tokens?: number;
-  percent?: number;
-  tokens_per_second?: number | null;
-  ttft_ms?: number | null;
-  decode_tps?: number | null;
-  prefill_tps?: number | null;
-  t?: number;
-  path?: string;
-};
-const labels: Record<string, string> = {
-  queued: "排隊",
-  starting: "準備中",
-  prefill: "Prefill",
-  decode: "Decode",
-  complete: "已結束",
-};
 function csv(rows: Row[]) {
   const keys: (keyof Row)[] = [
     "id",
@@ -149,21 +140,17 @@ export function Requests({
       if (timer) clearTimeout(timer);
     };
   }, [detail?.id, connection.baseUrl, connection.token]);
+  const finished = useMemo(
+    () => finishedFromHistory(engine.history),
+    [engine.history],
+  );
   const rows = useMemo(() => {
     const observed = new Map<string, Row>();
-    for (const sample of engine.history) {
-      const last = sample.status.last;
-      if (last)
-        observed.set(last.request_id, {
-          ...last,
-          id: last.request_id,
-          phase: "complete",
-        });
-    }
+    for (const row of finished) observed.set(row.id, row);
     for (const row of engine.status?.requests.items ?? [])
-      observed.set(row.request_id, { ...row, id: row.request_id });
+      observed.set(row.request_id, { ...row, id: row.request_id } as Row);
     return [...observed.values()].reverse();
-  }, [engine.history, engine.status]);
+  }, [finished, engine.status]);
   const shown = rows.filter(
     (row) =>
       (filter === "all" ||
@@ -180,8 +167,74 @@ export function Requests({
       opener.current.focus();
     }
   };
+  const status = engine.status,
+    activeNow = status?.requests.active ?? 0;
+  const activeSeries = engine.history.map((p) => p.status.requests.active);
+  const decodeSeries = engine.history.flatMap((p) => {
+    const v =
+      p.status.throughput.live_decode_tps ??
+      p.status.throughput.mean_decode_tps;
+    return v == null ? [] : [v];
+  });
+  const ttfts = finished.flatMap((r) => (r.ttft_ms == null ? [] : [r.ttft_ms]));
+  const hits = finished.flatMap((r) =>
+    (r.prompt_tokens ?? 0) > 0
+      ? [((r.cached_tokens ?? 0) / (r.prompt_tokens ?? 1)) * 100]
+      : [],
+  );
+  const promptSum = finished.reduce((n, r) => n + (r.prompt_tokens ?? 0), 0),
+    cachedSum = finished.reduce((n, r) => n + (r.cached_tokens ?? 0), 0);
+  const liveDecode =
+    status?.throughput.live_decode_tps ?? status?.throughput.mean_decode_tps;
+  const tiles = [
+    {
+      label: "進行中請求",
+      value: status ? number(activeNow, 0) : "—",
+      hint: status
+        ? `排隊 ${number(status.requests.queued, 0)} · Prefill ${number(status.requests.prefill, 0)} · Decode ${number(status.requests.decode, 0)}`
+        : undefined,
+      data: activeSeries,
+      tone: "accent" as const,
+      name: "進行中請求數趨勢",
+    },
+    {
+      label: "TTFT（已結束請求）",
+      value: ttfts.length ? number(ttfts.at(-1), 0) : "—",
+      unit: ttfts.length ? "ms" : undefined,
+      hint: ttfts.length
+        ? `中位 ${number(median(ttfts), 0)} ms · ${number(ttfts.length, 0)} 筆`
+        : "尚未觀測到已結束請求",
+      data: ttfts,
+      tone: "info" as const,
+      name: "已結束請求 TTFT 趨勢",
+    },
+    {
+      label: "Decode 速度",
+      value: number(liveDecode),
+      unit: liveDecode == null ? undefined : "tok/s",
+      hint: "引擎視窗平均",
+      data: decodeSeries,
+      tone: "success" as const,
+      name: "Decode tok/s 趨勢",
+    },
+    {
+      label: "前綴快取命中",
+      value: promptSum > 0 ? number((cachedSum / promptSum) * 100, 0) : "—",
+      unit: promptSum > 0 ? "%" : undefined,
+      hint:
+        promptSum > 0
+          ? `已結束請求加權 · ${number(hits.length, 0)} 筆`
+          : "尚未觀測到已結束請求",
+      data: hits,
+      tone: "accent" as const,
+      name: "快取命中率趨勢",
+    },
+  ];
   return (
-    <section className="w-full max-w-5xl space-y-6" data-testid="requests">
+    <section
+      className="mx-auto w-full max-w-6xl space-y-5"
+      data-testid="requests"
+    >
       <PageHeader
         title="請求與效能"
         description="查看正在處理的工作，以及本頁觀測到的最近已結束請求。"
@@ -197,6 +250,30 @@ export function Requests({
           </Button>
         }
       />
+      <Card className="grid grid-cols-2 gap-x-6 gap-y-5 p-4 lg:grid-cols-4">
+        {tiles.map((tile) => (
+          <div key={tile.label} className="min-w-0 space-y-2">
+            <Readout
+              label={tile.label}
+              value={tile.value}
+              unit={tile.unit}
+              hint={tile.hint}
+            />
+            {tile.data.length > 1 ? (
+              <Sparkline
+                data={tile.data.slice(-60)}
+                tone={tile.tone}
+                area
+                height={28}
+                className="h-7 w-full"
+                label={tile.name}
+              />
+            ) : (
+              <div className="h-7" />
+            )}
+          </div>
+        ))}
+      </Card>
       <div className="flex flex-wrap justify-between gap-3">
         <Input
           className="sm:max-w-xs"
@@ -217,89 +294,108 @@ export function Requests({
         />
       </div>
       <Card className="overflow-hidden">
-        <Table scrollLabel="引擎請求清單" className="min-w-[720px]">
+        <Table scrollLabel="引擎請求清單" className="min-w-[860px]">
           <Thead>
             <Tr>
               <Th>請求</Th>
-              <Th>階段</Th>
               <Th>輸入 / 快取</Th>
               <Th>輸出</Th>
+              <Th>tok/s</Th>
               <Th>進度 / 時間</Th>
+              <Th>推測解碼</Th>
               <Th>操作</Th>
             </Tr>
           </Thead>
           <Tbody>
-            {shown.map((row) => (
-              <Tr key={row.id}>
-                <Td>
-                  <p className="max-w-44 truncate font-mono text-xs">
-                    {row.id}
-                  </p>
-                  <p className="mt-1 max-w-44 truncate text-[11px] text-muted-foreground">
-                    {row.model
-                      ? modelLabel(row.model)
-                      : row.t
-                        ? clock(row.t * 1000)
-                        : "模型尚未回報"}
-                  </p>
-                </Td>
-                <Td>
-                  <Badge variant={"secondary"}>
-                    {labels[row.phase] ?? row.phase}
-                  </Badge>
-                </Td>
-                <Td className="font-mono text-xs">
-                  {number(row.prompt_tokens, 0)} /{" "}
-                  {number(row.cached_tokens, 0)}
-                </Td>
-                <Td className="font-mono text-xs">
-                  {number(row.completion_tokens, 0)}
-                </Td>
-                <Td>
-                  {row.phase === "prefill" && row.percent != null ? (
-                    <div className="w-24">
-                      <Progress value={row.percent} label="Prefill 進度" />
-                      <span className="mt-1 block text-xs">
-                        {number(row.percent)}%
+            {shown.map((row) => {
+              const percent =
+                  row.phase === "prefill" ? prefillPercent(row) : null,
+                speed =
+                  row.phase === "complete"
+                    ? row.decode_tps
+                    : row.tokens_per_second;
+              return (
+                <Tr key={row.id}>
+                  <Td>
+                    <div className="flex items-center gap-2">
+                      <StatusIndicator
+                        status={phaseDot(row.phase)}
+                        pulse={isLive(row.phase)}
+                      />
+                      <span className="text-xs font-medium">
+                        {labels[row.phase] ?? row.phase}
+                      </span>
+                      <span className="max-w-40 truncate font-mono text-xs text-muted-foreground">
+                        {row.id}
                       </span>
                     </div>
-                  ) : (
-                    <span className="text-xs">
-                      {row.phase === "complete"
-                        ? `${number(row.ttft_ms, 0)} ms TTFT`
-                        : elapsed(row.elapsed_s)}
+                    <p className="mt-1 max-w-72 truncate pl-4 text-[11px] text-muted-foreground">
+                      {row.model
+                        ? modelLabel(row.model)
+                        : row.t
+                          ? clock(row.t * 1000)
+                          : "模型尚未回報"}
+                    </p>
+                  </Td>
+                  <Td className="text-xs tabular-nums">
+                    {number(row.prompt_tokens, 0)} /{" "}
+                    <span className="text-muted-foreground">
+                      {number(row.cached_tokens, 0)}
                     </span>
-                  )}
-                </Td>
-                <Td>
-                  <div className="flex gap-1">
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={(e) => {
-                        e.currentTarget.focus();
-                        setDetail(row);
-                      }}
-                    >
-                      詳情
-                    </Button>
-                    {row.phase !== "complete" && (
+                  </Td>
+                  <Td className="text-xs tabular-nums">
+                    {number(row.completion_tokens, 0)}
+                  </Td>
+                  <Td className="text-xs tabular-nums">{number(speed)}</Td>
+                  <Td className="text-xs tabular-nums">
+                    {percent != null ? (
+                      <span>
+                        Prefill {number(percent, 0)}%
+                        <span className="ml-2 text-muted-foreground">
+                          {elapsed(row.elapsed_s)}
+                        </span>
+                      </span>
+                    ) : row.phase === "complete" ? (
+                      `${number(row.ttft_ms, 0)} ms TTFT`
+                    ) : (
+                      elapsed(row.elapsed_s)
+                    )}
+                  </Td>
+                  <Td className="text-xs">
+                    {speculativeText(row) ?? (
+                      <span className="text-muted-foreground">—</span>
+                    )}
+                  </Td>
+                  <Td>
+                    <div className="flex gap-1">
                       <Button
                         variant="ghost"
                         size="sm"
-                        disabled={!isOnline(engine) || !!busy}
                         onClick={(e) => {
-                          opener.current = e.currentTarget;
-                          setCancel(row);
+                          e.currentTarget.focus();
+                          setDetail(row);
                         }}
                       >
-                        取消
+                        詳情
                       </Button>
-                    )}
-                  </div>
-                </Td>
-              </Tr>
-            ))}
+                      {row.phase !== "complete" && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          disabled={!isOnline(engine) || !!busy}
+                          onClick={(e) => {
+                            opener.current = e.currentTarget;
+                            setCancel(row);
+                          }}
+                        >
+                          取消
+                        </Button>
+                      )}
+                    </div>
+                  </Td>
+                </Tr>
+              );
+            })}
           </Tbody>
         </Table>
         {!shown.length && (
@@ -310,7 +406,8 @@ export function Requests({
         )}
       </Card>
       <p className="text-xs text-muted-foreground">
-        服務目前只提供最新完成記錄；高頻請求之間可能有未觀測到的完成資料。此頁不把消失的活動請求推測成成功。
+        「已結束」為本頁開啟後觀測到的已完成請求（依 Request ID
+        去重）。服務目前只提供最新一筆完成記錄，高頻請求之間可能有未觀測到的完成資料；此頁不把消失的活動請求推測成成功。
       </p>
       <Sheet
         open={!!detail}
@@ -319,39 +416,114 @@ export function Requests({
         closeLabel="關閉請求詳情"
       >
         {detail && (
-          <div className="space-y-5">
-            <p className="break-all font-mono text-xs">{detail.id}</p>
-            {detailError && (
-              <p role="status" className="text-xs text-warning">
-                {detailError}
-              </p>
-            )}
-            {detailUpdated && (
-              <p className="text-xs text-muted-foreground">
-                即時更新 {clock(detailUpdated)}
-              </p>
-            )}
-            <Badge>{labels[detail.phase] ?? detail.phase}</Badge>
-            <dl className="grid grid-cols-2 gap-5">
-              {[
-                ["模型", detail.model ?? "未回報"],
-                ["經過時間", elapsed(detail.elapsed_s)],
-                ["Prompt tokens", number(detail.prompt_tokens, 0)],
-                ["Cached tokens", number(detail.cached_tokens, 0)],
-                ["Output tokens", number(detail.completion_tokens, 0)],
-                ["首 Token 延遲", `${number(detail.ttft_ms)} ms`],
-                ["Decode", `${number(detail.decode_tps)} tok/s`],
-                [
-                  "Prefill",
-                  `${number(detail.prefill_tps ?? detail.tokens_per_second)} tok/s`,
-                ],
-              ].map(([name, value]) => (
-                <div key={name}>
-                  <dt className="text-xs text-muted-foreground">{name}</dt>
-                  <dd className="mt-1 break-all text-sm">{value}</dd>
+          <div className="space-y-6">
+            <div className="space-y-2">
+              <div className="flex items-center gap-2">
+                <StatusIndicator
+                  status={phaseDot(detail.phase)}
+                  pulse={isLive(detail.phase)}
+                >
+                  <span className="text-sm font-medium">
+                    {labels[detail.phase] ?? detail.phase}
+                  </span>
+                </StatusIndicator>
+              </div>
+              <p className="break-all font-mono text-xs">{detail.id}</p>
+              {detailError && (
+                <p role="status" className="text-xs text-warning">
+                  {detailError}
+                </p>
+              )}
+              {detailUpdated && (
+                <p className="text-xs text-muted-foreground">
+                  即時更新 {clock(detailUpdated)}
+                </p>
+              )}
+            </div>
+            <section className="space-y-3" aria-label="階段與 token 組成">
+              <StageRail phase={detail.phase} />
+              {detail.phase === "queued" && (
+                <div className="grid grid-cols-2 gap-5">
+                  <Readout
+                    label="佇列位置"
+                    value={number(detail.queue_position, 0)}
+                  />
+                  <Readout
+                    label="預估等待（服務端估計）"
+                    value={number(detail.queue_est_wait_ms, 0)}
+                    unit="ms"
+                  />
                 </div>
-              ))}
-            </dl>
+              )}
+              <PrefillMeter row={detail} />
+              <TokenTrace row={detail} />
+            </section>
+            <div className="grid grid-cols-2 gap-5">
+              <Readout
+                label="模型"
+                value={detail.model ? modelLabel(detail.model) : "未回報"}
+              />
+              <Readout label="經過時間" value={elapsed(detail.elapsed_s)} />
+              <Readout
+                label="Prompt tokens"
+                value={number(detail.prompt_tokens, 0)}
+              />
+              <Readout
+                label="Cached tokens"
+                value={number(detail.cached_tokens, 0)}
+              />
+              <Readout
+                label="Output tokens"
+                value={number(detail.completion_tokens, 0)}
+              />
+              <Readout
+                label="首 Token 延遲"
+                value={number(detail.ttft_ms)}
+                unit="ms"
+              />
+              <Readout
+                label="Decode"
+                value={number(
+                  detail.decode_tps ??
+                    (detail.phase === "decode"
+                      ? detail.tokens_per_second
+                      : null),
+                )}
+                unit="tok/s"
+              />
+              <Readout
+                label="Prefill"
+                value={number(
+                  detail.prefill_tps ??
+                    (detail.phase === "prefill"
+                      ? detail.tokens_per_second
+                      : null),
+                )}
+                unit="tok/s"
+              />
+            </div>
+            {detail.speculative && (
+              <div className="grid grid-cols-3 gap-5 border-t border-border/60 pt-5">
+                <Readout
+                  label="推測解碼"
+                  value={detail.speculative.mode ?? "—"}
+                />
+                <Readout
+                  label="接受率"
+                  value={number(
+                    detail.speculative.acceptance_rate == null
+                      ? null
+                      : detail.speculative.acceptance_rate * 100,
+                    0,
+                  )}
+                  unit="%"
+                />
+                <Readout
+                  label="回合"
+                  value={number(detail.speculative.rounds, 0)}
+                />
+              </div>
+            )}
           </div>
         )}
       </Sheet>

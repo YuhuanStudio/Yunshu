@@ -1,0 +1,250 @@
+import { Progress, SegmentedBar, StatusIndicator } from "@yuhuanowo/yunui";
+import type { EngineHistoryPoint } from "./useEngine";
+import { number } from "./ui";
+
+/** One request as the console sees it: a live item, a detail poll or a `last` record. */
+export type Row = {
+  id: string;
+  phase: string;
+  model?: string;
+  elapsed_s?: number;
+  prompt_tokens?: number;
+  cached_tokens?: number;
+  processed_tokens?: number;
+  completion_tokens?: number;
+  percent?: number;
+  tokens_per_second?: number | null;
+  eta_s?: number | null;
+  queue_position?: number;
+  queue_est_wait_ms?: number;
+  ttft_ms?: number | null;
+  decode_tps?: number | null;
+  prefill_tps?: number | null;
+  speculative?: {
+    mode?: string;
+    acceptance_rate?: number | null;
+    rounds?: number;
+  } | null;
+  t?: number;
+  path?: string;
+};
+
+export const phaseLabels: Record<string, string> = {
+  queued: "排隊",
+  starting: "準備中",
+  prefill: "Prefill",
+  decode: "Decode",
+  complete: "已結束",
+};
+export const phaseDot = (phase: string) =>
+  phase === "decode"
+    ? "online"
+    : phase === "queued"
+      ? "away"
+      : phase === "prefill" || phase === "starting"
+        ? "busy"
+        : "neutral";
+export const isLive = (phase: string) =>
+  phase === "decode" || phase === "prefill" || phase === "starting";
+
+/** Prefill progress in percent, from what the API actually reports. */
+export function prefillPercent(row: Row): number | null {
+  if (row.percent != null) return Math.max(0, Math.min(100, row.percent));
+  const prompt = row.prompt_tokens ?? 0;
+  return prompt > 0 && row.processed_tokens != null
+    ? Math.max(0, Math.min(100, (row.processed_tokens / prompt) * 100))
+    : null;
+}
+
+/** Distinct finished requests in the sampled history, oldest first (dedup by id). */
+export function finishedFromHistory(
+  history: readonly EngineHistoryPoint[],
+): Row[] {
+  const seen = new Map<string, Row>();
+  for (const sample of history) {
+    const last = sample.status.last;
+    if (last && !seen.has(last.request_id))
+      seen.set(last.request_id, {
+        ...last,
+        id: last.request_id,
+        phase: "complete",
+      } as Row);
+  }
+  return [...seen.values()];
+}
+
+export function median(values: number[]): number | null {
+  if (!values.length) return null;
+  const sorted = [...values].sort((a, b) => a - b),
+    mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+}
+
+export const speculativeText = (row: Row) => {
+  const spec = row.speculative;
+  if (!spec) return null;
+  const rate =
+    spec.acceptance_rate == null
+      ? null
+      : `${number(spec.acceptance_rate * 100, 0)}%`;
+  return [spec.mode ?? "speculative", rate && `接受 ${rate}`]
+    .filter(Boolean)
+    .join(" · ");
+};
+
+/** A label + value pair with tabular numerals (same shape as the overview's readout). */
+export function Readout({
+  label,
+  value,
+  unit,
+  hint,
+}: {
+  label: string;
+  value: string;
+  unit?: string;
+  hint?: string;
+}) {
+  return (
+    <div className="min-w-0">
+      <p className="text-[11px] tracking-wide text-muted-foreground">{label}</p>
+      <p className="mt-1 truncate text-lg font-semibold tabular-nums">
+        {value}
+        {unit && (
+          <span className="ml-1 text-xs font-normal text-muted-foreground">
+            {unit}
+          </span>
+        )}
+      </p>
+      {hint && (
+        <p className="mt-0.5 truncate text-[11px] text-muted-foreground">
+          {hint}
+        </p>
+      )}
+    </div>
+  );
+}
+
+const stages = [
+  { key: "queued", label: "排隊" },
+  { key: "prefill", label: "Prefill" },
+  { key: "decode", label: "Decode" },
+] as const;
+const stageIndex = (phase: string) =>
+  phase === "queued"
+    ? 0
+    : phase === "starting" || phase === "prefill"
+      ? 1
+      : phase === "decode"
+        ? 2
+        : phase === "complete"
+          ? 3
+          : -1;
+
+/** Queue → prefill → decode, marked done / current / pending from the reported phase only. */
+export function StageRail({ phase }: { phase: string }) {
+  const at = stageIndex(phase);
+  return (
+    <ol
+      className="flex flex-wrap items-center gap-x-5 gap-y-2 text-xs"
+      aria-label="請求階段"
+    >
+      {stages.map((stage, index) => {
+        const state =
+          at < 0
+            ? "pending"
+            : index < at
+              ? "done"
+              : index === at
+                ? "current"
+                : "pending";
+        return (
+          <li
+            key={stage.key}
+            aria-current={state === "current" ? "step" : undefined}
+          >
+            <StatusIndicator
+              status={
+                state === "done"
+                  ? "online"
+                  : state === "current"
+                    ? phaseDot(phase)
+                    : "neutral"
+              }
+              pulse={state === "current" && isLive(phase)}
+            >
+              <span
+                className={
+                  state === "pending"
+                    ? "text-muted-foreground"
+                    : "text-foreground"
+                }
+              >
+                {stage.label}
+                {state === "current" && phase === "starting"
+                  ? "（準備中）"
+                  : ""}
+              </span>
+            </StatusIndicator>
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
+/**
+ * Token proportions of one request: cache-hit prompt, newly computed prompt,
+ * generated output. Proportions are token counts; the API gives no per-phase
+ * durations, so this is deliberately not a time axis.
+ */
+export function TokenTrace({ row }: { row: Row }) {
+  const prompt = row.prompt_tokens,
+    cached = Math.min(row.cached_tokens ?? 0, prompt ?? 0),
+    output = row.completion_tokens ?? 0;
+  if (prompt == null || prompt <= 0)
+    return (
+      <p className="text-xs text-muted-foreground">
+        服務尚未回報 prompt token 數，無法繪製比例。
+      </p>
+    );
+  const computed = prompt - cached;
+  return (
+    <div className="space-y-2">
+      <SegmentedBar
+        label={`Token 組成：快取命中 ${cached}，本次預填 ${computed}，輸出 ${output}`}
+        height={10}
+        legend
+        formatValue={(value) => `${number(value, 0)} tok`}
+        segments={[
+          { value: cached, tone: "info", label: "快取命中（跳過預填）" },
+          { value: computed, tone: "neutral", label: "本次預填計算" },
+          { value: output, tone: "success", label: "已輸出" },
+        ]}
+      />
+      <p className="text-[11px] text-muted-foreground">
+        寬度依 token 數比例，不代表耗時；服務未提供各階段時間。
+      </p>
+    </div>
+  );
+}
+
+export function PrefillMeter({ row }: { row: Row }) {
+  const percent = prefillPercent(row);
+  if (percent == null) return null;
+  return (
+    <div className="space-y-1.5">
+      <div className="flex justify-between text-xs">
+        <span className="text-muted-foreground">Prefill 進度</span>
+        <span className="tabular-nums">
+          {number(percent)}%
+          {row.eta_s != null && (
+            <span className="ml-2 text-muted-foreground">
+              預估剩餘 {number(row.eta_s)}s
+            </span>
+          )}
+        </span>
+      </div>
+      <Progress value={percent} label="Prefill 進度" />
+    </div>
+  );
+}
