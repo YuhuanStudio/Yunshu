@@ -13,6 +13,9 @@ import { CodeBlock } from "@yuhuanowo/yunui/content";
 import { DetailList, DetailRow, PageHeader } from "@yuhuanowo/yunui/patterns";
 import { ArrowLeft, Box, FileJson, MemoryStick, Timer } from "lucide-react";
 import { getModel, type Connection } from "./api";
+import { ModelSize } from "./ModelSize";
+import { MemoryLedgerView } from "./MemoryLedger";
+import type { LedgerState } from "./memory-api";
 import { ModelActions, type Perform } from "./ModelActions";
 import {
   LocalModelIcon,
@@ -20,7 +23,6 @@ import {
   elapsed,
   modelLabel,
   number,
-  sizeGb,
   type Engine,
   type Model,
 } from "./ui";
@@ -56,6 +58,7 @@ export function ModelDetail({
   test,
   requestUnload,
   back,
+  ledger,
 }: {
   id: string;
   engine: Engine;
@@ -66,6 +69,7 @@ export function ModelDetail({
   test: (id: string) => void;
   requestUnload: (model: Model, button: HTMLButtonElement) => void;
   back: () => void;
+  ledger?: LedgerState;
 }) {
   const model = engine.status?.models.find((m) => m.id === id);
   const [card, setCard] = useState<unknown>(null),
@@ -145,6 +149,7 @@ export function ModelDetail({
               perform={perform}
               test={test}
               requestUnload={requestUnload}
+              freeGb={ledger ? (ledger.data?.free_gb ?? undefined) : undefined}
             />
             {backButton}
           </div>
@@ -182,7 +187,7 @@ export function ModelDetail({
                 />
                 <div className="min-w-0 flex-1 space-y-3">
                   <p className="text-sm tabular-nums">
-                    {sizeGb(model.size_gb)}
+                    <ModelSize gb={model.size_gb} />
                     <span className="text-muted-foreground">
                       {" "}
                       / {number(total, 0)} GB 統一記憶體
@@ -200,6 +205,28 @@ export function ModelDetail({
                   )}
                 </div>
               </div>
+            )}
+          </SectionCard>
+          <SectionCard
+            icon={MemoryStick}
+            title="記憶體持有者"
+            description="統一記憶體目前由誰持有；估算值標示「估算」，未知不是 0。"
+          >
+            {ledger?.unsupported ? (
+              <p
+                className="text-sm text-muted-foreground"
+                data-testid="memory-ledger-unsupported"
+              >
+                此引擎版本沒有提供記憶體持有者明細（需要較新的 Yunshu）。
+              </p>
+            ) : ledger?.data ? (
+              <MemoryLedgerView data={ledger.data} />
+            ) : (
+              <p role="status" className="text-sm text-muted-foreground">
+                {ledger?.error
+                  ? `無法讀取記憶體明細：${ledger.error}`
+                  : "讀取記憶體明細…"}
+              </p>
             )}
           </SectionCard>
           <SectionCard
@@ -247,7 +274,7 @@ export function ModelDetail({
                 </StatusIndicator>
               }
             />
-            <DetailRow label="大小" value={sizeGb(model.size_gb)} />
+            <DetailRow label="大小" value={<ModelSize gb={model.size_gb} />} />
             <DetailRow label="保留" value={retention(model)} mono={false} />
             <DetailRow
               label="固定保留"

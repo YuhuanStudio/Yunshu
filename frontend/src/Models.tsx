@@ -37,24 +37,17 @@ import {
   isOnline,
   modelLabel,
   number,
-  sizeGb,
   Slot,
   useStoredChoice,
   type Engine,
   type Model,
 } from "./ui";
+import { ModelSize } from "./ModelSize";
+import { useMemoryLedger } from "./memory-api";
 import { ModelManagement } from "./ModelManagement";
 import { ModelActions, type Perform } from "./ModelActions";
 import { ModelDetail, modelState, retention } from "./ModelDetail";
 export type { Perform } from "./ModelActions";
-/** Fit against unified memory; empty when the engine did not report the numbers. */
-function fitHint(model: Model, free: number | undefined) {
-  if (model.loaded || model.loading || free == null || model.size_gb == null)
-    return null;
-  return model.size_gb <= free
-    ? { ok: true, text: `可載入 · 剩 ${number(free, 0)} GB` }
-    : { ok: false, text: "記憶體不足" };
-}
 export function Models({
   engine,
   connection,
@@ -88,6 +81,8 @@ export function Models({
   const opener = useRef<HTMLButtonElement | null>(null),
     detailSequence = useRef(0);
   const online = isOnline(engine);
+  const ledger = useMemoryLedger(connection, online);
+  const freeGb = ledger.data ? (ledger.data.free_gb ?? null) : undefined;
   const rows = (engine.status?.models ?? []).filter(
     (m) =>
       (filter === "all" || m.loaded || m.loading) &&
@@ -158,7 +153,9 @@ export function Models({
                       {state.text}
                     </StatusIndicator>
                     <span>{model.type}</span>
-                    <span>{sizeGb(model.size_gb)}</span>
+                    <span>
+                      <ModelSize gb={model.size_gb} />
+                    </span>
                     <span>{retention(model)}</span>
                   </span>
                 }
@@ -180,7 +177,54 @@ export function Models({
             </span>
           }
         />
-        <Card className="overflow-hidden">
+        <div className="space-y-2 md:hidden" data-testid="model-rows-mobile">
+          {items.map((model) => {
+            const state = modelState(model);
+            return (
+              <Card key={model.id} className="space-y-3 p-4">
+                <div className="flex min-w-0 items-start gap-3">
+                  <LocalModelIcon id={model.id} />
+                  <div className="min-w-0 flex-1">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-auto max-w-full whitespace-normal break-words p-0 text-left"
+                      onClick={(e) => void show(model, e.currentTarget)}
+                    >
+                      {modelLabel(model.id)}
+                    </Button>
+                    <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs tabular-nums text-muted-foreground">
+                      <StatusIndicator status={state.status}>
+                        <span className="text-foreground">{state.text}</span>
+                      </StatusIndicator>
+                      <Badge variant="secondary">{model.type}</Badge>
+                      <span>
+                        <ModelSize gb={model.size_gb} />
+                      </span>
+                      <span>{retention(model)}</span>
+                    </div>
+                    {model.error && (
+                      <p className="mt-1 break-words text-xs text-error">
+                        {model.error}
+                      </p>
+                    )}
+                  </div>
+                </div>
+                <ModelActions
+                  model={model}
+                  connection={connection}
+                  online={online}
+                  busy={busy}
+                  perform={perform}
+                  test={test}
+                  requestUnload={requestUnload}
+                  freeGb={freeGb}
+                />
+              </Card>
+            );
+          })}
+        </div>
+        <Card className="hidden overflow-hidden md:block">
           <Table scrollLabel={title} className="min-w-[640px] table-fixed">
             <Thead>
               <Tr>
@@ -212,13 +256,6 @@ export function Models({
                             isKnownCapability("vision") && (
                               <CapabilityBadge capability="vision" short />
                             )}
-                          {fitHint(model, memFree) && (
-                            <span
-                              className={`text-xs tabular-nums ${fitHint(model, memFree)?.ok ? "text-muted-foreground" : "text-error"}`}
-                            >
-                              {fitHint(model, memFree)?.text}
-                            </span>
-                          )}
                         </div>
                         {model.error && (
                           <p className="mt-1 max-w-xs break-words text-xs text-error">
@@ -263,12 +300,7 @@ export function Models({
                     </div>
                   </Td>
                   <Td className="hidden tabular-nums md:table-cell">
-                    {model.size_gb ? number(model.size_gb) : "—"}
-                    {model.size_gb ? (
-                      <span className="ml-1 text-xs text-muted-foreground">
-                        GB
-                      </span>
-                    ) : null}
+                    <ModelSize gb={model.size_gb} />
                   </Td>
                   <Td className="hidden tabular-nums text-muted-foreground xl:table-cell">
                     {model.loaded
@@ -286,6 +318,7 @@ export function Models({
                       perform={perform}
                       test={test}
                       requestUnload={requestUnload}
+                      freeGb={freeGb}
                     />
                   </Td>
                 </Tr>
@@ -308,6 +341,7 @@ export function Models({
           test={test}
           requestUnload={requestUnload}
           back={() => open(null)}
+          ledger={ledger}
         />
       ) : (
         <>

@@ -166,6 +166,12 @@ function createApiFixture(page: Page, withActiveRequest = false) {
       return;
     }
 
+    // Older engines have no memory ledger; the console falls back quietly.
+    // Optional Yunshu-native reads (memory ledger, config, recent requests) are absent
+    // on older engines; the console falls back, so the fixture answers 404 without flagging.
+    if (call.method === "GET" && call.path.startsWith("/v1/yunshu/"))
+      return json(route, 404, { detail: "Not Found" });
+
     if (call.method !== "GET")
       unexpectedMutations.push(`${call.method} ${call.path}`);
     unexpected.push(`${call.method} ${call.path}`);
