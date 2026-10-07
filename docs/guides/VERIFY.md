@@ -166,6 +166,7 @@ capability oracle, rather than a comparison with the old bi-encoder implementati
 Use full commit SHAs and the main checkout's gpuq explicitly:
 
 ```sh
+PATH=/Users/yuhuan/Documents/YuhuanStudio/Yunshu/.venv/bin:$PATH \
 YV_GPUQ=/Users/yuhuan/Documents/YuhuanStudio/Yunshu/scripts/dev/gpuq \
 GPUQ_OWNER=rerank GPUQ_DIR=/Volumes/P5Plus/yunshu-gpuq \
 scripts/dev/yv ab --base BASE_SHA --cand CAND_SHA --suite rerank \

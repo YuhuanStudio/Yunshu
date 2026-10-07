@@ -379,3 +379,13 @@ has no trained-head endpoint to compare against. Scores must differ by at most
 
 The recipes follow the [Qwen model card](https://huggingface.co/Qwen/Qwen3-Reranker-0.6B)
 and [vLLM scoring semantics](https://docs.vllm.ai/en/latest/models/pooling_models/scoring/).
+
+Verified 2026-10-07 on M5, code commit `08a91d28`, yv base `5269e9e5`:
+Qwen3-Reranker-0.6B, BGE-reranker-base, MiniLM-L-6-v2 (five pairs, including the
+5840-character document), and BERT-tiny SST2 (three inputs). The candidate used
+`TextScoringEngine` through `instantiate_engine`; all rankings matched independent
+CPU Transformers float32 inference. Maximum probability errors were respectively
+0.000208504, 0.000011891, 0.000037973 and 0.000001683 (limit 0.003). Raw score
+activation, broadcasting and the registered embed-route checks passed. Evidence:
+`/Volumes/P5Plus/yunshu-build/verify/runs/rerank-tiny-heads-handoff-1007-08a91d280b74/verdict.json`.
+This is numerical and API evidence, with no speed or retrieval-quality claim.
