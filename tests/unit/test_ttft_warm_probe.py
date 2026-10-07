@@ -142,11 +142,18 @@ def test_main_with_fake_server_writes_complete_and_engaged_mode(tmp_path, monkey
     )
     requests = []
 
-    def send(url, body):
+    def send(url, body, *, capture_timestamps=False):
+        assert capture_timestamps
         requests.append(body)
         phase = len(requests)
         return dict(
-            _text="reply", ct=32, pt=100, cached=0 if phase == 1 else 99, ttft_s=0.1
+            _text="reply",
+            ct=32,
+            pt=100,
+            cached=0 if phase == 1 else 99,
+            ttft_s=0.1,
+            _sent_at_s=1.0,
+            _first_at_s=1.1,
         )
 
     fake = SimpleNamespace(
@@ -197,3 +204,29 @@ def test_load_samples_does_not_mix_call_spans_with_stacks(tmp_path):
         json.dumps([1, 2, "mlx", "gpu_wait", "eval"]) + "\n"
     )
     assert probe.load_samples(str(tmp_path / "samples")) == [[1, "mlx", ["frame"]]]
+
+
+def test_http_trace_ignores_role_usage_and_done():
+    spec = importlib.util.spec_from_file_location(
+        "http_spans", _PATH.parent / "ttft_probe_site/spans.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    for payload in (
+        dict(choices=[dict(delta=dict(role="assistant"))]),
+        dict(usage={}),
+        "[DONE]",
+    ):
+        assert not module.sse_has_token(
+            b"data: " + json.dumps(payload).encode() + b"\n\n"
+        )
+    for delta in (
+        dict(content="hello"),
+        dict(reasoning_content="think"),
+        dict(tool_calls=[dict(index=0)]),
+    ):
+        body = (
+            b"data: " + json.dumps(dict(choices=[dict(delta=delta)])).encode() + b"\n\n"
+        )
+        assert module.sse_has_token(body)
+    assert not module.sse_has_token(b"data: [DONE]\n\n")

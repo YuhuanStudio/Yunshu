@@ -191,7 +191,7 @@ class Srv:
             shutil.rmtree(self.home / ".yunshu" / "cache", ignore_errors=True)
 
 
-def send(url, body, timeout=600):
+def send(url, body, timeout=600, *, capture_timestamps=False):
     body = dict(body, stream=True, stream_options={"include_usage": True})
     req = urllib.request.Request(
         url + "/v1/chat/completions",
@@ -258,7 +258,7 @@ def send(url, body, timeout=600):
             [c, rs, [tools[i] for i in sorted(tools)], finish], ensure_ascii=False
         ).encode()
     ).hexdigest()[:16]
-    return dict(
+    result = dict(
         ttft_s=round((tf or t1) - t0, 3),
         total_s=round(t1 - t0, 3),
         ct=ct,
@@ -283,6 +283,10 @@ def send(url, body, timeout=600):
         if xy
         else None,
     )
+    if capture_timestamps:
+        result["_sent_at_s"] = t0
+        result["_first_at_s"] = tf or t1
+    return result
 
 
 def corpus(kind):

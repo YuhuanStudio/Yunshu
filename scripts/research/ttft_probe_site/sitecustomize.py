@@ -15,6 +15,16 @@ from collections import deque
 _OUT = os.environ.get("TTFT_PROBE_OUT")
 if _OUT:
     _ring = deque(maxlen=400000)
+    import importlib.metadata
+
+    with open(f"{os.path.dirname(_OUT)}/runtime.{os.getpid()}.json", "w") as f:
+        json.dump(
+            {
+                key: importlib.metadata.version(key)
+                for key in ("mlx", "mlx-lm", "mlx-vlm")
+            },
+            f,
+        )
     _calls = None
     if os.environ.get("TTFT_PROBE_CALLS") == "1":
         from spans import CallSpans

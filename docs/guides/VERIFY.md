@@ -159,3 +159,9 @@ The profile perturbs Python costs: its PASS means complete diagnostic evidence,
 not a speed or identity verdict. Use `long --reps 3` for those verdicts.
 `http_sse_queue_other` includes transport, executor queue and uninstrumented work;
 it is not pure network overhead. Raw spans retain the exact evaluation callsite.
+
+The probe also records exact client send/first-token timestamps, client request
+preparation, Uvicorn ingress and first nonempty SSE submission, and runtime
+package versions. SSE role-only, usage and DONE records are excluded from first-token
+measurement. `--synthetic-prompt --draft off` is a self-contained tiny-model pilot,
+not the long timing corpus.

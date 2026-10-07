@@ -194,11 +194,16 @@ def main():
         help="diagnostic Python/C spans (adds profiling overhead)",
     )
     ap.add_argument("--thread", default="mlx", help="executor thread name substring")
+    ap.add_argument(
+        "--synthetic-prompt",
+        action="store_true",
+        help="self-contained tiny-model pilot (not a timing corpus)",
+    )
     ap.add_argument("--env", action="append", default=[], help="server environment K=V")
     a = ap.parse_args()
     os.environ["TFB_YUNSHU_SRC"] = a.src
     os.environ["TFB_OUT"] = str(a.out.parent / a.tag)
-    os.environ["TFB_PORT_LAST"] = "18999"
+    os.environ["TFB_PORT_LAST"] = "18996"
     sys.path.insert(0, str(HERE))
     import tfbench
 
@@ -218,7 +223,11 @@ def main():
         return real_popen(cmd, **kw)
 
     tfbench.subprocess.Popen = popen
-    prompt = tfbench.load_prompt(f"{a.kind}-{a.ctx}")
+    prompt = (
+        "Explain this material in detail: local inference uses a prefix cache. " * 128
+        if a.synthetic_prompt
+        else tfbench.load_prompt(f"{a.kind}-{a.ctx}")
+    )
     extra_env = {"YUNSHU_VLM_DRAFT": a.draft}
     for assignment in a.env:
         key, sep, value = assignment.partition("=")
@@ -243,12 +252,23 @@ def main():
                     },
                 ]
             t0 = time.perf_counter()
-            r = tfbench.send(s.url, body)
+            r = tfbench.send(s.url, body, capture_timestamps=True)
+            sent_at = r.pop("_sent_at_s")
+            first_at = r.pop("_first_at_s")
             if phase == "cold":
                 reply = r["_text"]
             r.pop("_text", None)
             validate_response(r, phase)
-            rows.append(dict(rep=i, phase=phase, start=t0, first=t0 + r["ttft_s"], **r))
+            rows.append(
+                dict(
+                    rep=i,
+                    phase=phase,
+                    start=sent_at,
+                    first=first_at,
+                    client_prepare_ms=(sent_at - t0) * 1000,
+                    **r,
+                )
+            )
             print(
                 f"{phase} {i}: TTFT {r['ttft_s']:.3f}s cached {r['cached']}/{r['pt']}",
                 flush=True,
@@ -262,6 +282,7 @@ def main():
             for line in p.read_text().splitlines()
             if line
         ]
+        runtime = [json.loads(p.read_text()) for p in out.glob("runtime.*.json")]
         if not samples:
             print("FAIL: no samples")
             sys.exit(1)
@@ -286,7 +307,25 @@ def main():
                     if t < row["first"] and end > row["start"]
                 ]
                 row["exclusive_call_stage_ms"] = partition_spans(
-                    row["call_spans"], row["ttft_s"] * 1000, a.thread
+                    row["call_spans"], (row["first"] - row["start"]) * 1000, a.thread
+                )
+                http_receive = [
+                    r["start_ms"]
+                    for r in row["call_spans"]
+                    if r["stage"] == "http_receive"
+                ]
+                http_sse = [
+                    r["start_ms"]
+                    for r in row["call_spans"]
+                    if r["stage"] == "http_first_sse"
+                ]
+                row["http"] = dict(
+                    ingress_ms=min(http_receive) if http_receive else None,
+                    first_sse_submit_ms=min(http_sse) if http_sse else None,
+                    sse_submit_to_client_ms=(row["first"] - row["start"]) * 1000
+                    - min(http_sse)
+                    if http_sse
+                    else None,
                 )
                 row["timeline"] = timeline(samples, row["start"], row["first"])
                 row.update(
@@ -297,6 +336,7 @@ def main():
                     engaged=mode,
                     timing_method="Python/C call spans + 2ms stack sampling; not GPU attribution",
                     diagnostic_only=True,
+                    runtime=runtime,
                 )
                 f.write(json.dumps(row) + "\n")
             f.write(
