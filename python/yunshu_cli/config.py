@@ -37,6 +37,10 @@ def config(
     include = ("stable", "experimental", "internal") if all_ else ("stable",)
     rows = settings.effective(include)
     warnings = settings.validate(warn=False) if _valid() else []
+    if settings.get("YUNSHU_WEB_SEARCH_PROVIDER") != "none":
+        from yunshu_gateway.server_tools.search import PRIVACY_NOTICE
+
+        warnings.append(PRIVACY_NOTICE)
     if as_json:
         typer.echo(json.dumps({"settings": rows, "warnings": warnings}, default=str))
         return

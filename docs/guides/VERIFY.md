@@ -150,3 +150,9 @@ matrix is about 6 to 8 hours of 27B time), and **before a release** by running i
 Ad-hoc scripts are for measurements `yv` does not cover. Put them in `scripts/research/` with a CPU
 unit test, make them write a final `complete: true` record, and then add them as a stage or a
 cell in `scripts/verify/stages.py` so the next worker does not need the script.
+
+### Web tools
+
+`yv ab --base BASE_SHA --cand CAND_SHA --suite preflight,websearch --label websearch-smoke --model /Volumes/P5Plus/models/Qwen3.5-0.8B-MLX-bf16 --priority -1` exercises the existing `route_checks_tools` search contract against a loopback SearXNG/page fixture, then candidate Responses `open_page`/`find_in_page` and resident Qwen3-Embedding-0.6B fusion. This optional stage is excluded from the core full/decode ladder. Use the main checkout gpuq (`YV_GPUQ`) and `GPUQ_OWNER=websearch`. CPU probe/validator tests run before queue submission; every result ends with `complete: true`. It is correctness smoke, never a performance or answer-quality verdict.
+
+The frozen eval entry point is `scripts/research/websearch_eval.py`; the dated 130-query seed set is `scripts/research/data/websearch_queries.jsonl`. Capture writes pending gold, never invented answers. Curate references before replay; `--dry-run` makes no answer-quality claim. Raw page snapshots remain private.

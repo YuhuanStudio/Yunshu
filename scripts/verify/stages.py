@@ -981,7 +981,65 @@ def _memory_valid(path: Path):
     return True, ""
 
 
+def _websearch_valid(path: Path):
+    rows = read_jsonl(path)
+    if not rows or rows[-1].get("complete") is not True:
+        return False, "missing final complete record"
+    checks = [r for r in rows if r.get("check")]
+    if not checks or any(r.get("pass") is not True for r in checks):
+        return False, "missing or failed web tool checks"
+    return True, ""
+
+
+def stage_websearch(ctx: Ctx) -> StageResult:
+    # Candidate harness checks old search contract on base; new page actions on candidate.
+    script = ctx.cand.path / "scripts/research/websearch_probe.py"
+    cells = []
+    for arm in ("base", "cand"):
+        cells.append(
+            Cell(
+                "websearch",
+                arm,
+                [
+                    "env",
+                    "PYTHONPATH="
+                    + str(ctx.tree(arm).path / "python")
+                    + os.pathsep
+                    + os.environ.get("PYTHONPATH", ""),
+                    ctx.py,
+                    str(script),
+                    "--src",
+                    str(ctx.tree(arm).path / "python"),
+                    "--model",
+                    ctx.model,
+                    "--out",
+                    "{out}",
+                    *(
+                        ["--baseline"]
+                        if arm == "base"
+                        else [
+                            "--embedding-model",
+                            "/Volumes/P5Plus/models/Qwen3-Embedding-0.6B",
+                        ]
+                    ),
+                ],
+                mem_gb=14,
+                timeout_min=8,
+                stall_min=4,
+                validate=_websearch_valid,
+                device="m5",
+            )
+        )
+    results = ctx.exe.run_cells(cells)
+    reasons = _failed_cells(results)
+    numbers = {
+        key: read_jsonl(r.evidence) if r.evidence else [] for key, r in results.items()
+    }
+    return _finish(ctx, StageResult("websearch", not reasons, reasons, numbers))
+
+
 STAGE_FUNCS = {
+    "websearch": stage_websearch,
     "preflight": stage_preflight,
     "smoke": stage_smoke,
     "identity": stage_identity,

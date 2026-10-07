@@ -164,15 +164,41 @@ match softmax(filtered logits / T), none fall outside the filtered support, and 
 
 ## Server-side tools
 
-Off unless configured. A request that asks for web search with no provider gets the API's own error
-(`web_search_tool_result_error`, `error_code: "unavailable"` / a failed `web_search_call`), the model is told
-why, and `x_yunshu.server_tools` carries the setup hint. `GET /v1/models` advertises the state under
-`yunshu.server_tools`.
+Search works without keys: `auto` tries configured SearXNG, then keyed Brave, Tavily, Exa,
+Serper and Perplexity Search, then DuckDuckGo HTML and Wikipedia. Failures, empty results and
+results rejected by domain filters advance to the next provider. Explicit providers stay explicit.
+`none` disables search; `YUNSHU_WEB_KEYLESS=0` disables the keyless fallback.
+
+**Queries leave the machine.** Model-generated query text can contain conversation context.
+DuckDuckGo/Wikipedia and any configured provider see that query and your IP; origin pages see
+fetch URLs. No conversation history or user credentials are forwarded. `yunshu config` and
+search tool output disclose this. DuckDuckGo HTML is best effort for personal local use: automated
+access has uncertain terms, may be blocked and has no SLA. Admission is at most one DDG request
+per second, with a five-minute cooldown after a block and no automatic retries. Prefer a configured
+search API or your own SearXNG for dependable service. `GET /v1/models` advertises availability.
+
+`YUNSHU_WEB_RESEARCH=1` opts into origin fetch/extraction and local ranking. It stays off pending
+paired quality evaluation. The pipeline shares web_fetch's DNS pinning, redirect SSRF checks and
+byte limits, honors robots for automated fetches, caps parallel work (4 global, 2 per origin), and
+returns snippets for failed pages or unfinished work after a four-second overall deadline (three
+seconds per page, six pages maximum). Cached extracted pages are in memory only (64 MiB LRU,
+15-minute TTL (24 hours for a small official documentation host allowlist), conditional ETag/Last-Modified revalidation); no training store is created.
+Trafilatura 2.1.0 is Apache-2.0 ([upstream package](https://pypi.org/project/trafilatura/2.1.0/)).
+Hidden attributes, inline styles, simple local CSS hide rules and invisible control characters are removed; external CSS is not rendered. Suspected instruction text is retained and counted by `yunshu_web_research_instruction_pages_total`. Excerpts remain untrusted data; these
+filters do not guarantee resistance to prompt injection. Citations use verbatim passage spans.
+
+`YUNSHU_WEB_RESEARCH_MODEL` optionally names an **already-loaded** local embedding model;
+BM25 ranks first and one RRF batch fuses dense ranks of the best 40 chunks across all ready pages. Up to three query-centered, exact-span excerpts fit within 1,200 characters per result. Automated cross-origin redirects conservatively fall back to snippets rather than bypass origin admission. It never loads a model or
+falls back to the generation model. Unavailable dense ranking retains BM25. Use an Apache-2.0
+Qwen3-Embedding-0.6B checkpoint; no embedding model is downloaded or bundled. Responses also
+supports `open_page` and `find_in_page` actions over the guarded page cache, preserving the
+[OpenAI action shapes](https://github.com/openai/openai-python/blob/main/src/openai/types/responses/response_function_web_search.py).
+Anthropic retains its [web search blocks and citation fields](https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-search-tool).
 
 | Setting | Meaning |
 |---|---|
 | `YUNSHU_SEARXNG_URL` | a self-hosted SearXNG with the JSON format enabled (the private default recommendation) |
-| `YUNSHU_BRAVE_API_KEY`, `YUNSHU_TAVILY_API_KEY`, `YUNSHU_EXA_API_KEY` | hosted providers; `YUNSHU_WEB_SEARCH_PROVIDER` picks one (`auto` prefers SearXNG) |
+| `YUNSHU_BRAVE_API_KEY`, `YUNSHU_TAVILY_API_KEY`, `YUNSHU_EXA_API_KEY`, `YUNSHU_SERPER_API_KEY`, `YUNSHU_PERPLEXITY_API_KEY` | hosted providers; `YUNSHU_WEB_SEARCH_PROVIDER` picks one (`auto` prefers SearXNG) |
 | `YUNSHU_WEB_FETCH`, `YUNSHU_WEB_FETCH_ALLOW_PRIVATE`, `..._MAX_BYTES`, `..._TIMEOUT` | web_fetch needs no provider; private, loopback and link-local addresses are blocked (also after redirects and DNS), 2 MB and 20 s by default | Model input is parsed tolerantly (`uri`/`link`/`href` keys, a bare string, nested `input`, truncated JSON, a scheme-less host) and an unusable call returns an `invalid_tool_input` error that states the expected `{"url": "https://..."}`.
 | `YUNSHU_MCP_CONNECTOR`, `YUNSHU_MCP_CONNECTOR_ALLOW_PRIVATE`, `..._TIMEOUT` | the MCP connector (streamable HTTP, legacy SSE) |
 | `YUNSHU_SERVER_TOOL_MAX_ITERATIONS` | generate / run / continue rounds per request (8) |

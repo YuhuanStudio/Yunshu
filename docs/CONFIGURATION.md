@@ -222,7 +222,14 @@ internal ones, `--json` prints JSON, `--config FILE` includes a config file.
 
 | Setting | Type | Default | Description |
 |---|---|---|---|
-| `YUNSHU_WEB_SEARCH_PROVIDER` | `auto` \| `none` \| `searxng` \| `brave` \| `tavily` \| `exa` | auto | Search backend for the server-side web_search tool (Anthropic web_search_*, OpenAI Responses web_search). 'auto' picks the first configured of searxng, brave, tavily, exa; 'none' disables. Unconfigured: requests get the API's 'unavailable' error with a hint. |
+| `YUNSHU_WEB_SEARCH_PROVIDER` | `auto` \| `none` \| `searxng` \| `brave` \| `tavily` \| `exa` \| `serper` \| `perplexity` \| `ddg_html` \| `wikipedia` | auto | Search backend. Auto tries configured SearXNG, keyed brave/tavily/exa/serper/perplexity, then best-effort DuckDuckGo HTML and Wikipedia. Queries leave the machine; none disables search. |
+| `YUNSHU_WEB_KEYLESS` | bool | on | Allow keyless DuckDuckGo (best effort; may block) and Wikipedia. Query text and IP leave the machine. |
+| `YUNSHU_SERPER_API_KEY` | str | unset | Serper Google SERP API key. |
+| `YUNSHU_PERPLEXITY_API_KEY` | str | unset | Perplexity Search API key (raw results, not Sonar). |
+| `YUNSHU_WEB_RESEARCH` | bool | off | Enrich search snippets with origin pages, untrusted excerpts and local ranking. Stable opt-in pending quality evaluation; fetched URLs leave the machine. |
+| `YUNSHU_WEB_RESEARCH_BUDGET` | float | 4.0 | Overall enrichment deadline in seconds (maximum 4). |
+| `YUNSHU_WEB_RESEARCH_PAGES` | int | 6 | Maximum origin pages per enrichment (capped at 6). |
+| `YUNSHU_WEB_RESEARCH_MODEL` | str | unset | Already-loaded local embedding/rerank model ID. Never loads a model; absent/unavailable uses BM25 only. Qwen3-Embedding-0.6B is recommended. |
 | `YUNSHU_SEARXNG_URL` | str | unset | Base URL of a self-hosted SearXNG instance (JSON output enabled), e.g. http://127.0.0.1:8080. The privacy-friendly default recommendation. |
 | `YUNSHU_BRAVE_API_KEY` | str | unset | Brave Search API key. |
 | `YUNSHU_TAVILY_API_KEY` | str | unset | Tavily API key. |

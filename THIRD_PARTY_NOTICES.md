@@ -84,3 +84,9 @@ Tool-call constrained decoding builds a Lark grammar (structural tag: free text,
 the call body) and runs it with llguidance's token-mask matcher and MLX bitmask apply.
 Used as a library, not copied. Copyright (c) Microsoft Corporation, MIT license.
 https://github.com/guidance-ai/llguidance
+
+## Trafilatura
+
+Web research uses the unmodified Python dependency trafilatura 2.1.0, licensed under
+Apache-2.0. Source and license: https://github.com/adbar/trafilatura/tree/v2.1.0 .
+No source is vendored. Earlier versions before 1.8 are not used.

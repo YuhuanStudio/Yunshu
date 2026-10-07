@@ -189,7 +189,8 @@ def test_web_search_stream_events(make):
     assert part_done["part"]["annotations"]
 
 
-def test_web_search_no_provider_fails_item(make):
+def test_web_search_no_provider_fails_item(make, monkeypatch):
+    monkeypatch.setenv("YUNSHU_WEB_KEYLESS", "0")
     c, inner = make([[call("web_search", {"query": "q"})], [text("I cannot search.")]])
     m = c.post("/v1/responses", json=body([WS])).json()
     assert m["output"][0]["type"] == "web_search_call"
@@ -742,3 +743,40 @@ def test_explicit_search_request_steers_only_the_first_round_responses():
     assert (
         responses_loop._inner_request(quiet, [], tools, True, defs).tool_choice is None
     )
+
+
+@pytest.mark.parametrize("action", ["open_page", "find_in_page"])
+def test_response_page_action_wire_and_replay(make, monkeypatch, action):
+    from yunshu_gateway.server_tools.research import pipeline
+
+    async def fake(url, pattern, **kwargs):
+        return search.SearchResult("Page", url, "The needle is here.")
+
+    monkeypatch.setattr(pipeline, "open_page", fake)
+    c, _ = make(
+        [
+            [
+                call(
+                    "web_search",
+                    {
+                        "action": action,
+                        "url": "https://example.org/page",
+                        "pattern": "needle",
+                    },
+                )
+            ],
+            [text("Found [1].")],
+        ]
+    )
+    m = c.post(
+        "/v1/responses", json=body([WS], include=["web_search_call.action.sources"])
+    ).json()
+    item = m["output"][0]
+    expected = {"type": action, "url": "https://example.org/page"}
+    if action == "find_in_page":
+        expected["pattern"] = "needle"
+    assert item["action"] == expected and item["status"] == "completed"
+    # SDK validates discriminated action shapes, including no search-only sources.
+    from openai.types.responses import ResponseFunctionWebSearch
+
+    assert ResponseFunctionWebSearch.model_validate(item).action.type == action

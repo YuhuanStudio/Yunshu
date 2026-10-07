@@ -1,9 +1,7 @@
 """Pluggable web search backends for the server-side ``web_search`` tool.
 
-Providers: a self-hosted SearXNG (the privacy-friendly default recommendation), Brave, Tavily
-and Exa (API keys). Nothing is on unless configured (``YUNSHU_WEB_SEARCH_PROVIDER`` /
-``YUNSHU_SEARXNG_URL`` / ``YUNSHU_*_API_KEY``); with no provider a request gets the API's own
-``unavailable`` error plus a hint that says how to configure one.
+Auto tries configured SearXNG, keyed providers, then best-effort DuckDuckGo HTML and
+Wikipedia. Queries leave the machine; ``none`` disables all search.
 
 Error codes follow Anthropic's ``web_search_tool_result_error``: ``too_many_requests``,
 ``invalid_input``, ``max_uses_exceeded``, ``query_too_long``, ``unavailable``.
@@ -11,9 +9,14 @@ Error codes follow Anthropic's ``web_search_tool_result_error``: ``too_many_requ
 
 from __future__ import annotations
 
+import html
+import logging
 import re
-from dataclasses import dataclass
-from urllib.parse import urlsplit
+import time
+from collections import OrderedDict
+from dataclasses import dataclass, field
+from html.parser import HTMLParser
+from urllib.parse import parse_qs, quote, urljoin, urlsplit
 
 import httpx
 
@@ -21,12 +24,23 @@ from yunshu_engine import settings
 from yunshu_engine.netguard import domain_matches
 
 MAX_QUERY_LEN = 400
-PROVIDER_ORDER = ("searxng", "brave", "tavily", "exa")
+PROVIDER_ORDER = (
+    "searxng",
+    "brave",
+    "tavily",
+    "exa",
+    "serper",
+    "perplexity",
+    "ddg_html",
+    "wikipedia",
+)
+logger = logging.getLogger(__name__)
+PRIVACY_NOTICE = "Web search sends query text off-device. Keyless mode uses DuckDuckGo (best effort) and Wikipedia; fetched pages contact their origins without cookies. Set YUNSHU_WEB_SEARCH_PROVIDER=none to disable."
 
 SETUP_HINT = (
     "Server-side web search is off. Point Yunshu at a search backend: run a SearXNG instance and "
     "set YUNSHU_SEARXNG_URL (recommended, private), or set one of YUNSHU_BRAVE_API_KEY, "
-    "YUNSHU_TAVILY_API_KEY, YUNSHU_EXA_API_KEY. `yunshu config` shows the effective values."
+    "YUNSHU_TAVILY_API_KEY, YUNSHU_EXA_API_KEY, YUNSHU_SERPER_API_KEY, YUNSHU_PERPLEXITY_API_KEY. `yunshu config` shows the effective values."
 )
 
 
@@ -38,11 +52,23 @@ class SearchError(Exception):
 
 
 @dataclass
+class Passage:
+    text: str
+    score: float = 0.0
+    heading: str = ""
+    start: int = 0
+    end: int = 0
+
+
+@dataclass
 class SearchResult:
     title: str
     url: str
     snippet: str = ""
     page_age: str | None = None
+    passages: list[Passage] = field(default_factory=list)
+    content_hash: str = ""
+    fetched: bool = False
 
     @property
     def domain(self) -> str:
@@ -51,6 +77,7 @@ class SearchResult:
 
 class SearchProvider:
     name = "base"
+    capabilities = {"content": False, "freshness": False, "domain_filter": False}
 
     async def search(
         self,
@@ -78,6 +105,7 @@ def _clean(s: str | None, n: int = 600) -> str:
 
 class SearXNG(SearchProvider):
     name = "searxng"
+    capabilities = {"content": False, "freshness": True, "domain_filter": False}
 
     def __init__(self, base_url: str):
         self.base = base_url.rstrip("/")
@@ -124,6 +152,7 @@ class SearXNG(SearchProvider):
 
 class Brave(SearchProvider):
     name = "brave"
+    capabilities = {"content": False, "freshness": True, "domain_filter": False}
 
     def __init__(self, key: str):
         self.key = key
@@ -161,6 +190,7 @@ class Brave(SearchProvider):
 
 class Tavily(SearchProvider):
     name = "tavily"
+    capabilities = {"content": False, "freshness": True, "domain_filter": True}
 
     def __init__(self, key: str):
         self.key = key
@@ -200,6 +230,7 @@ class Tavily(SearchProvider):
 
 class Exa(SearchProvider):
     name = "exa"
+    capabilities = {"content": False, "freshness": True, "domain_filter": True}
 
     def __init__(self, key: str):
         self.key = key
@@ -239,6 +270,219 @@ class Exa(SearchProvider):
         ]
 
 
+class _DDGParser(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.rows: list[SearchResult] = []
+        self.mode = ""
+        self.depth = 0
+
+    def handle_starttag(self, tag, attrs):
+        attrs = dict(attrs)
+        classes = (attrs.get("class") or "").split()
+        if tag == "a" and "result__a" in classes:
+            url = urljoin("https://duckduckgo.com", attrs.get("href") or "")
+            url = parse_qs(urlsplit(url).query).get("uddg", [url])[0]
+            if urlsplit(url).scheme in ("http", "https"):
+                self.rows.append(SearchResult("", url))
+                self.mode, self.depth = "title", 1
+        elif "result__snippet" in classes and self.rows:
+            self.mode, self.depth = "snippet", 1
+        elif self.mode:
+            self.depth += 1
+
+    def handle_endtag(self, tag):
+        if self.mode:
+            self.depth -= 1
+            if self.depth <= 0:
+                self.mode = ""
+
+    def handle_data(self, data):
+        if self.mode and self.rows:
+            row = self.rows[-1]
+            if self.mode == "title":
+                row.title += data
+            else:
+                row.snippet += data
+
+
+class DuckDuckGo(SearchProvider):
+    name = "ddg_html"
+    # Shared admission across requests: no retry loops, at most one request/second.
+    _next = 0.0
+    _blocked_until = 0.0
+
+    async def search(self, query, *, limit, client, **kwargs):
+        now = time.monotonic()
+        if now < self._blocked_until or now < self._next:
+            raise SearchError("too_many_requests", "DuckDuckGo cooling down")
+        type(self)._next = now + 1.0
+        r = await client.get(
+            "https://html.duckduckgo.com/html/",
+            params={"q": query},
+            headers={
+                "User-Agent": "YunshuSearch/1.0 (+https://github.com/YuhuanStudio/Yunshu)"
+            },
+        )
+        if r.status_code in (202, 403, 429) or "anomaly.js" in r.text:
+            type(self)._blocked_until = now + 300
+            raise SearchError(
+                "too_many_requests", "DuckDuckGo blocked automated search"
+            )
+        _raise_http(r, "DuckDuckGo")
+        parser = _DDGParser()
+        parser.feed(r.text)
+        for row in parser.rows:
+            row.title, row.snippet = _clean(row.title, 300), _clean(row.snippet)
+        return parser.rows
+
+
+class Wikipedia(SearchProvider):
+    name = "wikipedia"
+
+    async def search(self, query, *, limit, client, **kwargs):
+        r = await client.get(
+            "https://en.wikipedia.org/w/api.php",
+            params={
+                "action": "query",
+                "list": "search",
+                "srsearch": query,
+                "srlimit": min(20, limit * 2),
+                "format": "json",
+                "utf8": 1,
+            },
+            headers={
+                "User-Agent": "YunshuSearch/1.0 (https://github.com/YuhuanStudio/Yunshu; local search)"
+            },
+        )
+        _raise_http(r, "Wikipedia")
+        return [
+            SearchResult(
+                x["title"],
+                "https://en.wikipedia.org/wiki/" + quote(x["title"].replace(" ", "_")),
+                _clean(html.unescape(x.get("snippet", ""))),
+                x.get("timestamp"),
+            )
+            for x in r.json().get("query", {}).get("search", [])
+            if x.get("title")
+        ]
+
+
+class Serper(SearchProvider):
+    name = "serper"
+    capabilities = {"content": False, "freshness": True, "domain_filter": False}
+
+    def __init__(self, key):
+        self.key = key
+
+    async def search(self, query, *, limit, client, **kwargs):
+        r = await client.post(
+            "https://google.serper.dev/search",
+            json={"q": query, "num": min(100, limit * 2)},
+            headers={"X-API-KEY": self.key},
+        )
+        _raise_http(r, "Serper")
+        return [
+            SearchResult(
+                _clean(x.get("title"), 300),
+                x["link"],
+                _clean(x.get("snippet")),
+                x.get("date"),
+            )
+            for x in r.json().get("organic", [])
+            if x.get("link")
+        ]
+
+
+class Perplexity(SearchProvider):
+    name = "perplexity"
+    capabilities = {"content": False, "freshness": True, "domain_filter": True}
+
+    def __init__(self, key):
+        self.key = key
+
+    async def search(
+        self,
+        query,
+        *,
+        limit,
+        client,
+        allowed_domains=None,
+        blocked_domains=None,
+        **kwargs,
+    ):
+        body = {
+            "query": query,
+            "max_results": min(20, limit * 2),
+            "max_tokens_per_page": 256,
+        }
+        if allowed_domains or blocked_domains:
+            body["search_domain_filter"] = (allowed_domains or []) + [
+                "-" + x for x in blocked_domains or []
+            ]
+        r = await client.post(
+            "https://api.perplexity.ai/search",
+            json=body,
+            headers={"Authorization": f"Bearer {self.key}"},
+        )
+        _raise_http(r, "Perplexity")
+        return [
+            SearchResult(
+                _clean(x.get("title"), 300),
+                x["url"],
+                _clean(x.get("snippet")),
+                x.get("date"),
+            )
+            for x in r.json().get("results", [])
+            if x.get("url")
+        ]
+
+
+class FallbackChain(SearchProvider):
+    def __init__(self, providers):
+        self.providers = providers
+        self.name = providers[0].name
+
+    async def search(self, query, *, limit, client, **kwargs):
+        last = None
+        for provider in self.providers:
+            try:
+                rows = await provider.search(
+                    query, limit=limit, client=client, **kwargs
+                )
+                rows = _filter(
+                    rows, kwargs.get("allowed_domains"), kwargs.get("blocked_domains")
+                )
+                if rows:
+                    self.name = provider.name
+                    return rows
+            except (
+                SearchError,
+                httpx.HTTPError,
+                ValueError,
+                KeyError,
+                TypeError,
+            ) as exc:
+                last = exc
+        if last:
+            if isinstance(last, SearchError):
+                raise last
+            raise SearchError("unavailable", "All search providers failed") from last
+        return []
+
+
+def _filter(rows, allowed, blocked):
+    return [
+        r
+        for r in rows
+        if urlsplit(r.url).scheme in ("http", "https")
+        and (not allowed or domain_matches(r.domain, allowed))
+        and (not blocked or not domain_matches(r.domain, blocked))
+    ]
+
+
+_search_cache: OrderedDict[tuple, tuple[float, str, list[SearchResult]]] = OrderedDict()
+
 _override: SearchProvider | None = None  # tests inject a fake provider here
 
 
@@ -248,25 +492,34 @@ def set_provider_for_tests(p: SearchProvider | None) -> None:
 
 
 def get_provider() -> SearchProvider | None:
-    """The configured provider, or None when web search is not set up."""
     if _override is not None:
         return _override
     want = settings.get("YUNSHU_WEB_SEARCH_PROVIDER")
     if want == "none":
         return None
-    url = settings.get("YUNSHU_SEARXNG_URL")
-    keys = {
-        "brave": settings.get("YUNSHU_BRAVE_API_KEY"),
-        "tavily": settings.get("YUNSHU_TAVILY_API_KEY"),
-        "exa": settings.get("YUNSHU_EXA_API_KEY"),
-    }
-    order = PROVIDER_ORDER if want == "auto" else (want,)
-    for n in order:
-        if n == "searxng" and url:
-            return SearXNG(url)
-        if n in keys and keys[n]:
-            return {"brave": Brave, "tavily": Tavily, "exa": Exa}[n](keys[n])
-    return None
+    providers: list[SearchProvider] = []
+    for name in PROVIDER_ORDER if want == "auto" else (want,):
+        if name == "searxng":
+            if url := settings.get("YUNSHU_SEARXNG_URL"):
+                providers.append(SearXNG(url))
+        elif name in ("ddg_html", "wikipedia"):
+            if settings.get("YUNSHU_WEB_KEYLESS"):
+                providers.append(
+                    {"ddg_html": DuckDuckGo, "wikipedia": Wikipedia}[name]()
+                )
+        elif key := settings.get(f"YUNSHU_{name.upper()}_API_KEY"):
+            providers.append(
+                {
+                    "brave": Brave,
+                    "tavily": Tavily,
+                    "exa": Exa,
+                    "serper": Serper,
+                    "perplexity": Perplexity,
+                }[name](key)
+            )
+    if not providers:
+        return None
+    return FallbackChain(providers) if want == "auto" else providers[0]
 
 
 async def run_search(
@@ -288,9 +541,37 @@ async def run_search(
     if prov is None:
         raise SearchError("unavailable", SETUP_HINT)
     limit = int(settings.get("YUNSHU_WEB_SEARCH_RESULTS"))
+    candidates = prov.providers if isinstance(prov, FallbackChain) else [prov]
+    cache_key = (
+        query.strip(),
+        limit,
+        tuple(allowed_domains or []),
+        tuple(blocked_domains or []),
+        str(user_location),
+        tuple(
+            (p.name, getattr(p, "base", None), getattr(p, "key", None))
+            for p in candidates
+        ),
+    )
+    cached = _search_cache.get(cache_key) if _override is None else None
+    if cached and cached[0] > time.monotonic():
+        name, out = cached[1], list(cached[2])
+        _search_cache.move_to_end(cache_key)
+        if settings.get("YUNSHU_WEB_RESEARCH"):
+            from .research.pipeline import enrich
+
+            out = await enrich(
+                query,
+                out,
+                allowed_domains=allowed_domains,
+                blocked_domains=blocked_domains,
+            )
+        return name, out
     own = client is None
     client = client or httpx.AsyncClient(
-        timeout=float(settings.get("YUNSHU_WEB_FETCH_TIMEOUT"))
+        trust_env=False,
+        follow_redirects=False,
+        timeout=float(settings.get("YUNSHU_WEB_FETCH_TIMEOUT")),
     )
     try:
         try:
@@ -309,13 +590,22 @@ async def run_search(
     finally:
         if own:
             await client.aclose()
-    if allowed_domains:
-        rows = [r for r in rows if domain_matches(r.domain, allowed_domains)]
-    if blocked_domains:
-        rows = [r for r in rows if not domain_matches(r.domain, blocked_domains)]
+    rows = _filter(rows, allowed_domains, blocked_domains)
     seen, out = set(), []
     for r in rows:
         if r.url not in seen:
             seen.add(r.url)
             out.append(r)
-    return prov.name, out[:limit]
+    out = out[:limit]
+    if _override is None and out:
+        _search_cache[cache_key] = (time.monotonic() + 300, prov.name, list(out))
+        _search_cache.move_to_end(cache_key)
+        while len(_search_cache) > 128:
+            _search_cache.popitem(last=False)
+    if settings.get("YUNSHU_WEB_RESEARCH") and out:
+        from .research.pipeline import enrich
+
+        out = await enrich(
+            query, out, allowed_domains=allowed_domains, blocked_domains=blocked_domains
+        )
+    return prov.name, out

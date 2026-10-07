@@ -322,7 +322,7 @@ def test_provider_selection(monkeypatch):
         "YUNSHU_EXA_API_KEY",
     ):
         monkeypatch.delenv(k, raising=False)
-    assert search.get_provider() is None
+    assert search.get_provider().name == "ddg_html"
     monkeypatch.setenv("YUNSHU_EXA_API_KEY", "e")
     assert search.get_provider().name == "exa"
     monkeypatch.setenv("YUNSHU_SEARXNG_URL", "http://sx")
@@ -359,6 +359,7 @@ async def test_run_search_validation_and_filters():
 
 
 async def test_no_provider_gives_unavailable_with_hint(monkeypatch):
+    monkeypatch.setenv("YUNSHU_WEB_KEYLESS", "0")
     search.set_provider_for_tests(None)
     for k in (
         "YUNSHU_SEARXNG_URL",

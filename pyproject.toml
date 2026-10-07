@@ -68,6 +68,7 @@ dependencies = [
     "uvicorn[standard]>=0.34.0",
     "pydantic>=2.11.0",
     "httpx>=0.28.0",
+    "trafilatura==2.1.0",  # Apache-2.0, verified upstream/PyPI (>=1.8 required).
     "websockets>=15.0.0",
     "sse-starlette>=2.2.0",
     # ── Auth ──
