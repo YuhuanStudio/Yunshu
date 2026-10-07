@@ -192,6 +192,7 @@ _add("YUNSHU_VLM_APC_DISK_ENCODING", "enum", "auto", "How the lower APC storage 
 _add("YUNSHU_VLM_APC_WARM", "enum", "off", "APC WARM tier: what happens to a prefix checkpoint that leaves the RAM tier (HOT, ready-to-use arrays) before it goes to SSD. 'off': straight to SSD. 'lossless': kept in RAM compressed (zstd after a byte-plane shuffle; bit-exact, a WARM hit equals a HOT hit token for token; costs CPU for compression and a decode on hit). 'int8' / 'int4': attention K/V kept in RAM as affine group-quantized codes (LOSSY: a hit restores dequantized K/V, so output can differ from a cold prefill; the SSD tier keeps exact states in these modes). The WARM tier takes YUNSHU_VLM_APC_WARM_SHARE of the APC RAM budget.", "vlm-runner", choices=("off", "lossless", "int8", "int4"))
 _add("YUNSHU_VLM_APC_WARM_SHARE", "float", 0.4, "Share of the APC RAM budget (YUNSHU_VLM_APC_MEMORY_GB) that the WARM tier takes when YUNSHU_VLM_APC_WARM is on; the HOT tier keeps the rest. One budget, split: total APC RAM does not grow.", "vlm-runner", minimum=0.05)
 _add("YUNSHU_VLM_MAX_IMAGE_BYTES", "int", 25 * 1024 * 1024, "Largest image a request may reference by URL, in bytes.", "vlm-runner", minimum=1)
+_add("YUNSHU_VLM_MAX_VIDEO_BYTES", "int", 100 * 1024 * 1024, "Largest video a request may reference by URL, in bytes.", "vlm-runner", minimum=1)
 _add("YUNSHU_VLM_INSECURE_SSL", "bool", False, "Retry image downloads without TLS verification when verification fails.", "vlm-runner")
 
 # ── speculative decoding ───────────────────────────────────────────────

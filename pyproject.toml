@@ -68,6 +68,8 @@ dependencies = [
     "uvicorn[standard]>=0.34.0",
     "pydantic>=2.11.0",
     "httpx>=0.28.0",
+    "pypdf>=6.0.0",
+    "pypdfium2>=5.0.0",
     "websockets>=15.0.0",
     "sse-starlette>=2.2.0",
     # ── Auth ──

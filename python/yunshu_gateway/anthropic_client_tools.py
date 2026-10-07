@@ -9,10 +9,11 @@ a short description; the client still executes the tool and sends the ``tool_res
 from __future__ import annotations
 
 import re
+from typing import Any
 
 _EDITOR_COMMANDS = ["view", "create", "str_replace", "insert", "undo_edit"]
 
-BASH = {
+BASH: dict[str, Any] = {
     "description": "Run commands in a bash shell. State (working directory, variables) persists between calls.",
     "input_schema": {
         "type": "object",
@@ -26,7 +27,7 @@ BASH = {
     },
 }
 
-TEXT_EDITOR = {
+TEXT_EDITOR: dict[str, Any] = {
     "description": (
         "View, create and edit text files. `view` shows a file (optionally a line range) or lists a directory; "
         "`create` writes `file_text`; `str_replace` replaces the exact text `old_str` with `new_str`; "
@@ -67,7 +68,7 @@ TEXT_EDITOR = {
     },
 }
 
-MEMORY = {
+MEMORY: dict[str, Any] = {
     "description": (
         "Store and retrieve information across conversations in the /memories directory: "
         "`view`, `create`, `str_replace`, `insert`, `delete`, `rename`."
@@ -93,7 +94,52 @@ MEMORY = {
     },
 }
 
+COMPUTER: dict[str, Any] = {
+    "description": "Control the client's computer display. Coordinates are pixels; execute actions on the client and return screenshots as tool results.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "action": {
+                "type": "string",
+                "enum": [
+                    "key",
+                    "type",
+                    "mouse_move",
+                    "left_click",
+                    "left_click_drag",
+                    "right_click",
+                    "middle_click",
+                    "double_click",
+                    "screenshot",
+                    "cursor_position",
+                    "scroll",
+                    "triple_click",
+                    "left_mouse_down",
+                    "left_mouse_up",
+                    "hold_key",
+                    "wait",
+                ],
+            },
+            "text": {"type": "string"},
+            "coordinate": {
+                "type": "array",
+                "items": {"type": "integer"},
+                "minItems": 2,
+                "maxItems": 2,
+            },
+            "scroll_direction": {
+                "type": "string",
+                "enum": ["up", "down", "left", "right"],
+            },
+            "scroll_amount": {"type": "integer", "minimum": 0},
+            "duration": {"type": "number", "minimum": 0},
+        },
+        "required": ["action"],
+    },
+}
+
 _FAMILIES = (
+    (re.compile(r"^computer_\d+$"), COMPUTER),
     (re.compile(r"^bash_\d+$"), BASH),
     (re.compile(r"^text_editor_\d+$"), TEXT_EDITOR),
     (re.compile(r"^memory_\d+$"), MEMORY),
@@ -104,11 +150,46 @@ def schema_for(tool_type: str | None) -> dict | None:
     """``{"description", "input_schema"}`` for a client-executed Anthropic tool type, else None."""
     for pat, spec in _FAMILIES:
         if tool_type and pat.match(tool_type):
-            return spec
+            import copy
+
+            result = copy.deepcopy(spec)
+            if (
+                tool_type.startswith("text_editor_")
+                and tool_type >= "text_editor_20250429"
+            ):
+                result["input_schema"]["properties"]["command"]["enum"].remove(
+                    "undo_edit"
+                )
+                result["input_schema"]["properties"]["max_characters"] = {
+                    "type": "integer",
+                    "minimum": 1,
+                }
+            if tool_type == "computer_20241022":
+                result["input_schema"]["properties"]["action"]["enum"] = [
+                    "key",
+                    "type",
+                    "mouse_move",
+                    "left_click",
+                    "left_click_drag",
+                    "right_click",
+                    "middle_click",
+                    "double_click",
+                    "screenshot",
+                    "cursor_position",
+                ]
+            elif tool_type.startswith("computer_") and tool_type >= "computer_20251124":
+                result["input_schema"]["properties"]["action"]["enum"].append("zoom")
+                result["input_schema"]["properties"]["region"] = {
+                    "type": "array",
+                    "items": {"type": "integer"},
+                    "minItems": 4,
+                    "maxItems": 4,
+                }
+            return result
     return None
 
 
-def fill_client_tool_schemas(tools: list) -> bool:
+def fill_client_tool_schemas(tools: list | None) -> bool:
     """Give schema-less ``bash_*`` / ``text_editor_*`` / ``memory_*`` tools their schema, in place.
 
     Returns True when something changed. Tools that already carry an ``input_schema`` are left alone.
@@ -117,7 +198,14 @@ def fill_client_tool_schemas(tools: list) -> bool:
     for t in tools or []:
         spec = schema_for(getattr(t, "type", None))
         if spec is not None and not getattr(t, "input_schema", None):
-            t.input_schema = spec["input_schema"]
+            import copy
+
+            t.input_schema = copy.deepcopy(spec["input_schema"])
+            if str(getattr(t, "type", "")).startswith("computer_"):
+                t.description = (
+                    (t.description or spec["description"])
+                    + f" Display: {getattr(t, 'display_width_px', '?')} x {getattr(t, 'display_height_px', '?')} pixels, display {getattr(t, 'display_number', 1)}."
+                )
             if not getattr(t, "description", None):
                 t.description = spec["description"]
             changed = True

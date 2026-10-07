@@ -252,7 +252,13 @@ async def _vlm_to_responses(req, messages, request, logit_bias, own_input_messag
     family entirely). See."""
     import json as _json
 
-    from .chat import ChatCompletionRequest, ChatMessage, _handle_vlm_chat
+    from .chat import (
+        ChatCompletionRequest,
+        ChatMessage,
+        ToolDefinition,
+        ToolFunction,
+        _handle_vlm_chat,
+    )
 
     chat_response_format = req.response_format or None
     chat_messages = [
@@ -287,7 +293,19 @@ async def _vlm_to_responses(req, messages, request, logit_bias, own_input_messag
         spec_decode=req.spec_decode,
         n=1,
         stream=False,
-        stream_options=req.stream_options,
+        stream_options=None,
+        tools=[
+            ToolDefinition(
+                function=ToolFunction(
+                    name=t.name, description=t.description, parameters=t.parameters
+                )
+            )
+            for t in req.tools
+        ]
+        if req.tools
+        else None,
+        tool_choice=_chat_tool_choice(req.tool_choice),
+        parallel_tool_calls=req.parallel_tool_calls,
         logits_processors=req.logits_processors,
         response_format=chat_response_format,
         xtc_probability=req.xtc_probability,
@@ -298,7 +316,7 @@ async def _vlm_to_responses(req, messages, request, logit_bias, own_input_messag
         timeout=req.timeout,
         grammar=req.grammar,
     )
-    vlm_json_schema = _parse_response_format(chat_response_format)
+    vlm_json_schema = _parse_response_format(chat_response_format, req.grammar)
     chat_resp = await _handle_vlm_chat(
         chat_req, messages, request, json_schema=vlm_json_schema
     )
@@ -331,7 +349,7 @@ async def _vlm_to_responses(req, messages, request, logit_bias, own_input_messag
     else:
         response_id = f"resp-{uuid.uuid4().hex[:24]}"
 
-    text_s = text.strip()
+    text_s = text if getattr(req, "_custom_raw_input", False) else text.strip()
     msg_id = f"msg-{uuid.uuid4().hex[:24]}"
     content_parts = [{"type": "output_text", "text": text_s, "annotations": []}]
     # reasoning is a SEPARATE output item (rs_ id) preceding the message —
@@ -357,6 +375,18 @@ async def _vlm_to_responses(req, messages, request, logit_bias, own_input_messag
     }
     msg_idx = 1 if reasoning_item else 0
     final_output = ([reasoning_item] if reasoning_item else []) + [message_item]
+    for call in msg.get("tool_calls") or []:
+        fn = call.get("function") or {}
+        final_output.append(
+            {
+                "type": "function_call",
+                "id": f"fc-{uuid.uuid4().hex[:24]}",
+                "call_id": call.get("id") or f"call_{uuid.uuid4().hex[:24]}",
+                "name": fn.get("name", ""),
+                "arguments": fn.get("arguments", "{}"),
+                "status": "completed" if status == "completed" else "incomplete",
+            }
+        )
     payload = {
         "id": response_id,
         "object": "response",
@@ -384,6 +414,11 @@ async def _vlm_to_responses(req, messages, request, logit_bias, own_input_messag
 
     if not req.stream:
         return JSONResponse(payload)
+
+    if msg.get("tool_calls"):
+        from ..responses_client_tools import replay
+
+        return StreamingResponse(replay(payload), media_type="text/event-stream")
 
     async def _replay():
         _seq = 0
@@ -575,7 +610,9 @@ class ResponseInputText(BaseModel):
     # back in for multi-turn agent loops.
     call_id: str | None = None
     name: str | None = None
-    arguments: str | None = None
+    arguments: Any = (
+        None  # tool_search_call arguments are a JSON value, functions use strings
+    )
     # function_call_output / custom_tool_call_output carry a string or a list of content items.
     output: Any = None
 
@@ -588,6 +625,16 @@ class ResponseInputText(BaseModel):
     def _require_content_for_messages(self):
         if self.type in ("message", "") and self.content is None:
             raise ValueError("content is required for message input items")
+        if (
+            self.type == "function_call"
+            and self.arguments is not None
+            and not isinstance(self.arguments, str)
+        ):
+            raise ValueError("function_call arguments must be a JSON string")
+        if self.type == "custom_tool_call" and not isinstance(
+            getattr(self, "input", None), str
+        ):
+            raise ValueError("custom_tool_call input must be a string")
         return self
 
 
@@ -942,11 +989,10 @@ def _convert_to_messages(req: ResponsesRequest) -> list[dict]:
             if itype not in ("message", "", "function_call", "function_call_output"):
                 # web_search_call / mcp_call / custom tool calls become a tool-call pair; reasoning,
                 # mcp_list_tools, approvals, compaction, item_reference ... are skipped.
-                messages.extend(
-                    input_item_to_messages(
-                        item.model_dump() if hasattr(item, "model_dump") else dict(item)
-                    )
+                converted = input_item_to_messages(
+                    item.model_dump() if hasattr(item, "model_dump") else dict(item)
                 )
+                messages.extend(_take_reasoning(m) for m in converted)
                 continue
             # Tool-conversation items: feed a prior tool call + its result back so
             # multi-turn agent loops work. Previously these had no role/content and
@@ -1271,7 +1317,14 @@ def _apply_previous_response_chain(req, messages: list[dict], request) -> list[d
                             _amsg["reasoning_content"] = "\n".join(_rs_pending)
                             _rs_pending = []
                         _turn.append(_amsg)
-            elif out.get("type") in ("web_search_call", "mcp_call"):
+            elif out.get("type") in (
+                "web_search_call",
+                "mcp_call",
+                "custom_tool_call",
+                "local_shell_call",
+                "tool_search_call",
+                "tool_search_output",
+            ):
                 _turn.extend(
                     input_item_to_messages(out, _prev.get("_server_tool_texts"))
                 )
@@ -1358,6 +1411,22 @@ async def create_response(req: ResponsesRequest, request: Request):
         return await create_with_server_tools_responses(req, request, create_response)
     if req.background and not req.stream:
         return await _start_background_response(req, request)
+    from ..responses_client_tools import create_client_tools, declarations
+
+    _client_defs = declarations(req.tools)
+    if isinstance(req.input, list):
+        for item in req.input:
+            if item.type in ("tool_search_output", "additional_tools"):
+                _client_defs.update(declarations(getattr(item, "tools", [])))
+    if any(
+        d.get("type") in ("custom", "local_shell", "tool_search")
+        for d in _client_defs.values()
+    ) or (
+        isinstance(req.input, list)
+        and any(i.type in ("tool_search_output", "additional_tools") for i in req.input)
+        and bool(_client_defs)
+    ):
+        return await create_client_tools(req, request, create_response)
     _fn_tools = function_tools(req.tools)
     if _fn_tools != req.tools:
         # namespaces flattened, non-function tools (custom, ...) dropped: the engine sees plain functions
@@ -1929,7 +1998,11 @@ async def create_response(req: ResponsesRequest, request: Request):
             # Extract thinking content for reasoning models
             from ..streaming import extract_thinking
 
-            _thinking, text = extract_thinking(text, req.model)
+            _thinking, text = (
+                ("", text)
+                if getattr(req, "_custom_raw_input", False)
+                else extract_thinking(text, req.model)
+            )
             if _thinking and _reasoning_tokens == 0:
                 # cap at ct. output_tokens (= total_ct) already
                 # INCLUDES reasoning (reasoning is reported as a subset detail), so
@@ -1969,7 +2042,13 @@ async def create_response(req: ResponsesRequest, request: Request):
                     finish_reason = "tool_calls"
 
             # Build output item for this choice
-            text_part = {"type": "output_text", "text": text.strip(), "annotations": []}
+            text_part = {
+                "type": "output_text",
+                "text": text
+                if getattr(req, "_custom_raw_input", False)
+                else text.strip(),
+                "annotations": [],
+            }
             # Include logprobs if requested
             # Responses API logprobs format: flat list of {"token", "logprob", "top_logprobs"}
             # NOT the Chat Completions {"content": [...]} wrapper.
@@ -3364,9 +3443,10 @@ async def list_response_input_items(
                 }
             },
         )
-    items: list[dict] = []
-    for i, m in enumerate(payload.get("_input_messages") or []):
-        items.extend(_input_item_of(response_id, i, m))
+    items: list[dict] = list(payload.get("_client_input_items") or [])
+    if "_client_input_items" not in payload:
+        for i, m in enumerate(payload.get("_input_messages") or []):
+            items.extend(_input_item_of(response_id, i, m))
     if order == "desc":
         items.reverse()
     ids = [it["id"] for it in items]

@@ -129,7 +129,11 @@ def test_suite_named_and_adhoc():
 
 def test_full_suite_has_every_stage():
     assert suites.parse_suite("full")["stages"] == list(suites.LADDER)
-    assert set(suites.STAGES) - set(suites.LADDER) == {"longqa", "conc"}
+    assert set(suites.STAGES) - set(suites.LADDER) == {
+        "longqa",
+        "conc",
+        "client_compat",
+    }
 
 
 # ── diff -> tests ────────────────────────────────────────────────────────
@@ -1000,3 +1004,59 @@ def test_detach_pins_arms_resolved_by_the_caller(tmp_path):
     ]
     dir_arm = core.Arm("cand", str(wt), "c" * 40, wt.resolve(), "")
     assert cli.pinned_spec(dir_arm) == str(wt.resolve())
+
+
+def test_client_routes_validator_fails_closed(tmp_path):
+    names = (
+        "agent-custom-tools",
+        "agent-shell-search",
+        "agent-documents-citations",
+        "agent-anthropic-client-tools",
+        "agent-continuous-usage",
+        "agent-template-props",
+        "agent-http-video",
+    )
+    path = tmp_path / "routes.json"
+    assert not stages.client_routes_valid(path)[0]
+    data = {
+        "complete": True,
+        "pass": True,
+        "checks": {n: {"status": "pass"} for n in names},
+    }
+    path.write_text(json.dumps(data))
+    assert stages.client_routes_valid(path)[0]
+    data["checks"]["agent-custom-tools"]["status"] = "fail"
+    path.write_text(json.dumps(data))
+    assert not stages.client_routes_valid(path)[0]
+
+
+def test_client_compat_pilot_is_pinned_and_stops_before_second_model(
+    world, monkeypatch
+):
+    from types import SimpleNamespace
+
+    from verify.execute import CellResult
+
+    calls = []
+
+    class FakeExecutor:
+        jobs = []
+
+        def run_cells(self, cells):
+            cell = cells[0]
+            calls.append(cell)
+            return {
+                cell.key: CellResult(cell.key, False, "pilot failure", job="job-test")
+            }
+
+    ctx = SimpleNamespace(
+        cand=SimpleNamespace(path=world.repo, key="cand"),
+        suite={"client_compat_device": "m3"},
+        exe=FakeExecutor(),
+        run=SimpleNamespace(append=lambda *args: None),
+        py=sys.executable,
+    )
+    result = stages.stage_client_compat(ctx)
+    assert not result.passed and len(calls) == 1
+    assert calls[0].cwd == world.repo and calls[0].device == "m3"
+    assert "--tree-sha" in calls[0].argv and "Qwen3.5-0.8B" in " ".join(calls[0].argv)

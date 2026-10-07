@@ -20,7 +20,11 @@ def _run(parts):
     return asyncio.run(eng._extract_video_frames(msgs))
 
 
-def test_http_video_url_fails_loud():
+def test_http_video_url_fetch_failure_is_not_silently_dropped(monkeypatch):
+    async def fail(self, url):
+        raise ValueError("http video fetch failed")
+
+    monkeypatch.setattr(VLMEngine, "_download_video", fail)
     with pytest.raises(ValueError, match="http"):
         _run(
             [

@@ -575,7 +575,7 @@ def test_tool_types_validate():
         "custom",
     ]
     fn = function_tools(r.tools)
-    assert [t.name for t in fn] == ["f"]
+    assert [t.name for t in fn] == ["f", "apply_patch"]
 
 
 @pytest.mark.skipif(
