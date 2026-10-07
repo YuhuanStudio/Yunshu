@@ -447,8 +447,9 @@ are rejected explicitly.
 Anthropic documents accept text, custom content, stored-file references, and bounded
 PDF base64/HTTPS sources. Vision models receive PDF page images and the text layer;
 image-only PDFs require a vision model. Citations use checked character, page, or
-content-block ranges and round-trip as `citations_delta` events. Document responses
-currently buffer generation before replaying their Messages stream. Client tool
+content-block ranges and round-trip as `citations_delta` events. Document requests with
+citations enabled buffer generation before replaying their Messages stream; without
+citations the stream passes through live. Client tool
 schemas cover versioned bash, text editor, and legacy computer tools; computer zoom
 is opt-in, and text-editor `max_characters` is tool configuration. The newer
 `computer_toolset_20260801` member protocol is not implemented.

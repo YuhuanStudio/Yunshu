@@ -460,6 +460,42 @@ def test_document_route_renders_source_instead_of_base64(monkeypatch):
     assert citation["cited_text"] == "BLUE"
 
 
+def test_document_stream_without_citations_is_not_buffered():
+    from fastapi.responses import StreamingResponse
+
+    from yunshu_gateway.anthropic_documents import create_documents
+    from yunshu_gateway.routers.anthropic import AnthropicMessagesRequest
+
+    seen = []
+
+    async def inner(q, request):
+        seen.append(q.stream)
+        return StreamingResponse(iter(["event: ping\ndata: {}\n\n"]))
+
+    q = AnthropicMessagesRequest(
+        model="local",
+        max_tokens=16,
+        stream=True,
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "document",
+                        "source": {
+                            "type": "text",
+                            "media_type": "text/plain",
+                            "data": "BLUE",
+                        },
+                    }
+                ],
+            }
+        ],
+    )
+    result = asyncio.run(create_documents(q, None, inner))
+    assert seen == [True] and isinstance(result, StreamingResponse)
+
+
 def test_computer_schema_includes_display_and_does_not_mutate_shared_schema():
     from yunshu_gateway.anthropic_client_tools import fill_client_tool_schemas
     from yunshu_gateway.routers.anthropic import AnthropicTool

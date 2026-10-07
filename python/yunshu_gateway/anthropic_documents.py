@@ -309,6 +309,9 @@ async def create_documents(req, request, inner):
         engine, _ = await _resolve_engine(req.model)
         vision = bool(getattr(engine, "has_vision", False))
     adapted, docs = await prepare_documents(req, vision)
+    if req.stream and not any(d.enabled for d in docs):
+        # No citation to attach: stream the generation as it happens.
+        return await inner(adapted, request)
     adapted = adapted.model_copy(update={"stream": False})
     response = await inner(adapted, request)
     if response.status_code != 200:
