@@ -26,6 +26,8 @@ import {
 import {
   Activity,
   Check,
+  Download,
+  ScrollText,
   Copy,
   Cpu,
   Database,
@@ -39,6 +41,7 @@ import {
 } from "lucide-react";
 import { ApiError, type Connection, type EngineStatus } from "./api";
 import { requestServerJson } from "./management-api";
+import { downloadBundle } from "./admin-logs-api";
 import { detailText } from "./errors.ts";
 import { ErrorNote } from "./error-note";
 import { has, t, tr } from "./i18n/index.ts";
@@ -238,6 +241,30 @@ export function healthChecks(
     });
   return rows;
 }
+export type Verdict = {
+  level: "ok" | "attention" | "abnormal";
+  /** The checks behind a non-healthy verdict, worst first. */
+  reasons: Health[];
+};
+/**
+ * One verdict over the health rows: any offline row is 異常, any away row 注意, else 健康.
+ * A disabled /debug surface is a setting, not a fault, so it never counts.
+ */
+export function healthVerdict(
+  checks: Health[],
+  systemState: "ok" | "disabled" | "error" | "pending",
+): Verdict {
+  const counted = checks.filter(
+    (c) => !(c.key === "debug" && systemState !== "error"),
+  );
+  const bad = counted.filter((c) => c.status === "offline"),
+    warn = counted.filter((c) => c.status === "away");
+  return bad.length
+    ? { level: "abnormal", reasons: [...bad, ...warn] }
+    : warn.length
+      ? { level: "attention", reasons: warn }
+      : { level: "ok", reasons: [] };
+}
 export function Diagnostics({
   connection,
   engine,
@@ -256,7 +283,11 @@ export function Diagnostics({
     [systemState, setSystemState] = useState<
       "ok" | "disabled" | "error" | "pending"
     >("pending"),
-    [copied, setCopied] = useState<"idle" | "done" | "failed">("idle");
+    [copied, setCopied] = useState<"idle" | "done" | "failed">("idle"),
+    [bundle, setBundle] = useState<{
+      state: "idle" | "busy" | "done" | "missing" | "denied" | "failed";
+      name?: string;
+    }>({ state: "idle" });
   useEffect(() => {
     const controller = new AbortController();
     setSystemState("pending");
@@ -326,6 +357,24 @@ export function Diagnostics({
     engineCounters = results.find((r) => r.key === "engine")?.data,
     request = results.find((r) => r.key === "requests")?.data;
   const checks = healthChecks(status, system, systemState);
+  const verdict = healthVerdict(checks, systemState);
+  async function saveBundle() {
+    setBundle({ state: "busy" });
+    try {
+      const name = await downloadBundle(connection);
+      setBundle({ state: "done", name });
+    } catch (e) {
+      const code = e instanceof ApiError ? e.status : undefined;
+      setBundle({
+        state:
+          code === 404 || code === 405
+            ? "missing"
+            : code === 401 || code === 403
+              ? "denied"
+              : "failed",
+      });
+    }
+  }
   async function copyBundle() {
     const bundle = JSON.stringify(
       {
@@ -378,6 +427,17 @@ export function Diagnostics({
             <Button
               size="sm"
               variant="secondary"
+              disabled={bundle.state === "busy"}
+              onClick={() => void saveBundle()}
+            >
+              <Download size={13} />
+              {bundle.state === "busy"
+                ? t("diagnostics.action.bundling")
+                : t("diagnostics.action.bundle")}
+            </Button>
+            <Button
+              size="sm"
+              variant="secondary"
               disabled={loading}
               onClick={() => {
                 void engine.refresh();
@@ -392,6 +452,21 @@ export function Diagnostics({
           </div>
         }
       />
+      {bundle.state !== "idle" && bundle.state !== "busy" && (
+        <p
+          role="status"
+          data-testid="bundle-note"
+          className={`text-xs ${bundle.state === "done" ? "text-muted-foreground" : "text-warning"}`}
+        >
+          {bundle.state === "done"
+            ? t("diagnostics.bundle.done", { name: bundle.name ?? "" })
+            : bundle.state === "missing"
+              ? t("diagnostics.bundle.missing")
+              : bundle.state === "denied"
+                ? t("diagnostics.bundle.denied")
+                : t("diagnostics.bundle.failed")}
+        </p>
+      )}
       {/* Without /debug there is one tile at most; that figure is already a health row. */}
       {hasSystem && (
         <StatGrid data-testid="resource-readouts">
@@ -446,6 +521,51 @@ export function Diagnostics({
         description={t("diagnostics.health.description")}
         data-testid="health-checks"
       >
+        <div
+          className="mb-3 flex flex-wrap items-center justify-between gap-x-4 gap-y-1 border-b border-border pb-3"
+          data-testid="health-verdict"
+          data-level={verdict.level}
+        >
+          <div className="min-w-0">
+            <StatusIndicator
+              status={
+                verdict.level === "ok"
+                  ? "online"
+                  : verdict.level === "attention"
+                    ? "away"
+                    : "offline"
+              }
+            >
+              <span className="text-sm font-semibold text-foreground">
+                {t(
+                  verdict.level === "ok"
+                    ? "diagnostics.verdict.ok"
+                    : verdict.level === "attention"
+                      ? "diagnostics.verdict.attention"
+                      : "diagnostics.verdict.abnormal",
+                )}
+              </span>
+            </StatusIndicator>
+            <p className="mt-0.5 pl-4 text-xs text-muted-foreground">
+              {verdict.reasons.length
+                ? list(
+                    verdict.reasons.map((c) =>
+                      t("diagnostics.verdict.reason", {
+                        name: c.name,
+                        value: c.value,
+                      }),
+                    ),
+                  )
+                : t("diagnostics.verdict.okBody")}
+            </p>
+          </div>
+          <Button size="sm" variant="ghost" asChild>
+            <a href="#/logs">
+              <ScrollText size={14} />
+              {t("diagnostics.verdict.logs")}
+            </a>
+          </Button>
+        </div>
         <ul className="-my-2 divide-y divide-border">
           {checks.map((check) => (
             <li key={check.key} className="py-3">

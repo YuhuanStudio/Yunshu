@@ -122,16 +122,13 @@ const requests: Shape<typeof zh> = {
   "list.outcomeError": "Outcome: error",
   "list.tableLabel": "Engine requests",
   "list.colRequest": "Request",
-  "list.colModel": "Model",
   "list.colUsage": "Usage (in / out)",
-  "list.colProgress": "Progress / time",
   "list.colSpec": "Speculative",
   "list.colTime": "Time",
   "list.colActions": "Actions",
   "list.modelUnknown": "Model not reported",
   "list.cachedOf": "{cached} / {prompt} cached",
   "list.prefillPercent": "Prefill {percent}%",
-  "list.ttftMs": "{ms} ms TTFT",
   "list.details": "Details",
   "list.cancel": "Cancel",
   "list.noMatch": "No requests match the search",
@@ -155,5 +152,48 @@ const requests: Shape<typeof zh> = {
   "cancel.closeLabel": "Close cancel confirmation",
   "cancel.keep": "Keep running",
   "cancel.confirm": "Cancel request",
+  "cause.unknown":
+    "The engine did not report stage times, so where the time went cannot be told.",
+  "cause.error":
+    "The request failed (HTTP {code}, finish reason {reason}); there is no duration to compare.",
+  "cause.cancelled": "The request was cancelled after {total}.",
+  "cause.cancelledNoTime":
+    "The request was cancelled; the engine did not report how long it had run.",
+  "cause.fast": "Fast overall: {total} in total, nothing to chase.",
+  "cause.queue":
+    "Queued {wait}, {share}% of the request; it was not slow itself, it waited behind other requests.",
+  "cause.prefillMiss":
+    "Most time went to prefilling {fresh} new tokens (prefix cache hit {hit}%, a miss); prefill took {time}.",
+  "cause.prefillReload":
+    "Most time went to loading the prefix cache: {tier} reload {reload}; prefill took {time}.",
+  "cause.prefill": "Most time went to prefilling {fresh} new tokens, {time}.",
+  "cause.decodeSpec":
+    "Slow decode: speculative acceptance is only {rate}%; decode took {time}.",
+  "cause.decodeSlow": "Slow decode: {tps} tok/s; decode took {time}.",
+  "cause.decodeLong":
+    "Most time went to decoding {tokens} output tokens, {time} (normal speed).",
+  "cause.balanced": "No single stage takes half or more; {total} in total.",
+  "detail.cause": "Where the time went",
+  "detail.logs": "Logs around this request",
+  "list.colTtft": "TTFT",
+  "list.colTotal": "Total",
+  "list.sortBy": "Sort",
+  "list.sortTime": "Sort: time",
+  "list.sortTtft": "Sort: TTFT",
+  "list.sortTotal": "Sort: total",
+  "list.sortTps": "Sort: tok/s",
+  "list.sortHint": "Click to sort, again to reverse",
+  "list.speedAll": "Speed: all",
+  "list.speedSlow": "Speed: slow requests",
+  "list.speedTtft": "Speed: TTFT > 5 s",
+  "list.speedTotal": "Speed: total > 30 s",
+  "list.speedAria": "Filter by speed",
+  "list.slowRuleP90":
+    "Slow requests: TTFT > {ttft} or total > {total} (p90 of the finished requests in this view).",
+  "list.slowRuleFixed":
+    "Slow requests: TTFT > {ttft} or total > {total} (fixed thresholds; fewer than 20 finished requests, so no percentile).",
+  "list.slowMark": "Above the slow-request threshold",
+  "list.mobileLine": "TTFT {ttft} · total {total} · {tps} tok/s",
+  "list.clockTitle": "{relative}  {date}",
 };
 export default requests;

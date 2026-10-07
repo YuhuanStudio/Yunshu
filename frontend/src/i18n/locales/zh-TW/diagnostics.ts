@@ -119,5 +119,17 @@ const diagnostics = {
   "tabs.memory": "記憶體",
   "tabs.requests": "請求",
   "tabs.system": "主機與引擎",
+  "action.bundle": "下載診斷包",
+  "action.bundling": "打包中",
+  "bundle.done": "已下載 {name}。內容不含提示詞與金鑰。",
+  "bundle.missing": "這個引擎還沒有診斷包介面；請改用「複製診斷資料」。",
+  "bundle.denied": "診斷包需要管理權限的金鑰。",
+  "bundle.failed": "診斷包下載失敗，稍後再試一次。",
+  "verdict.ok": "健康",
+  "verdict.attention": "注意",
+  "verdict.abnormal": "異常",
+  "verdict.okBody": "所有檢查都正常。",
+  "verdict.logs": "查看日誌",
+  "verdict.reason": "{name}：{value}",
 };
 export default diagnostics;

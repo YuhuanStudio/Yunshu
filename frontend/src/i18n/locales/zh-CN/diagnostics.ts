@@ -121,5 +121,17 @@ const diagnostics: Shape<typeof zh> = {
   "tabs.memory": "内存",
   "tabs.requests": "请求",
   "tabs.system": "主机与引擎",
+  "action.bundle": "下载诊断包",
+  "action.bundling": "打包中",
+  "bundle.done": "已下载 {name}。内容不含提示词和密钥。",
+  "bundle.missing": "这个引擎还没有诊断包接口；请改用“复制诊断数据”。",
+  "bundle.denied": "诊断包需要管理权限的密钥。",
+  "bundle.failed": "诊断包下载失败，请稍后再试。",
+  "verdict.ok": "健康",
+  "verdict.attention": "注意",
+  "verdict.abnormal": "异常",
+  "verdict.okBody": "所有检查都正常。",
+  "verdict.logs": "查看日志",
+  "verdict.reason": "{name}：{value}",
 };
 export default diagnostics;

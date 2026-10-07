@@ -4,6 +4,7 @@ import cache from "./cache.ts";
 import diagnostics from "./diagnostics.ts";
 import downloads from "./downloads.ts";
 import errors from "./errors.ts";
+import logs from "./logs.ts";
 import keys from "./keys.ts";
 import models from "./models.ts";
 import overview from "./overview.ts";
@@ -23,6 +24,7 @@ export default {
   cache,
   playground,
   diagnostics,
+  logs,
   api,
   settings,
   keys,

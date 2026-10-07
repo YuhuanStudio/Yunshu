@@ -2,6 +2,8 @@ import { Progress, SegmentedBar, StatusIndicator } from "@yuhuanowo/yunui";
 import { t } from "./i18n/index.ts";
 import type { EngineHistoryPoint } from "./useEngine";
 import { number, phaseDot, Readout } from "./ui";
+import { diagnose, type Cause } from "./request-insight";
+import { formatMs } from "./RequestTimeline";
 
 /** One request as the console sees it: a live item, a detail poll or a `last` record. */
 export type Row = {
@@ -247,3 +249,68 @@ export function PrefillMeter({ row }: { row: Row }) {
     </div>
   );
 }
+
+/** 41,000 reads as "41K" above ten thousand, so a long prompt is one glance. */
+const tokens = (n: number) =>
+  n >= 10_000 ? `${number(n / 1000, 0)}K` : number(n, 0);
+
+/** The one-sentence cause of a finished request; rules and thresholds live in request-insight.ts. */
+export function causeText(cause: Cause): string {
+  switch (cause.kind) {
+    case "unknown":
+      return t("requests.cause.unknown");
+    case "error":
+      return t("requests.cause.error", {
+        code: cause.code ?? "—",
+        reason: cause.reason ?? "—",
+      });
+    case "cancelled":
+      return cause.totalMs == null
+        ? t("requests.cause.cancelledNoTime")
+        : t("requests.cause.cancelled", { total: formatMs(cause.totalMs) });
+    case "fast":
+      return t("requests.cause.fast", { total: formatMs(cause.totalMs) });
+    case "queue":
+      return t("requests.cause.queue", {
+        wait: formatMs(cause.ms),
+        share: number(cause.share * 100, 0),
+      });
+    case "prefillMiss":
+      return t("requests.cause.prefillMiss", {
+        fresh: tokens(cause.fresh),
+        hit: number(cause.hitPercent, 0),
+        time: formatMs(cause.ms),
+      });
+    case "prefillReload":
+      return t("requests.cause.prefillReload", {
+        reload: formatMs(cause.reloadMs),
+        tier: cause.tier ?? "—",
+        time: formatMs(cause.ms),
+      });
+    case "prefill":
+      return t("requests.cause.prefill", {
+        fresh: tokens(cause.fresh),
+        time: formatMs(cause.ms),
+      });
+    case "decodeSpec":
+      return t("requests.cause.decodeSpec", {
+        rate: number(cause.acceptPercent, 0),
+        time: formatMs(cause.ms),
+      });
+    case "decodeSlow":
+      return t("requests.cause.decodeSlow", {
+        tps: number(cause.tps),
+        time: formatMs(cause.ms),
+      });
+    case "decodeLong":
+      return t("requests.cause.decodeLong", {
+        tokens: tokens(cause.tokens),
+        time: formatMs(cause.ms),
+      });
+    case "balanced":
+      return t("requests.cause.balanced", { total: formatMs(cause.totalMs) });
+  }
+}
+
+/** The cause sentence for a finished row, with the dominant-stage wording or an honest "unknown". */
+export const causeOf = (row: Row) => causeText(diagnose(row));

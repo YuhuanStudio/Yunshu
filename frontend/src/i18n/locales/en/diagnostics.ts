@@ -130,5 +130,18 @@ const diagnostics: Shape<typeof zh> = {
   "tabs.memory": "Memory",
   "tabs.requests": "Requests",
   "tabs.system": "Host and engine",
+  "action.bundle": "Download bundle",
+  "action.bundling": "Packing",
+  "bundle.done": "Downloaded {name}. It holds no prompts and no keys.",
+  "bundle.missing":
+    "This engine has no bundle endpoint yet; use Copy diagnostics instead.",
+  "bundle.denied": "The bundle needs an admin key.",
+  "bundle.failed": "The bundle download failed; try again in a moment.",
+  "verdict.ok": "Healthy",
+  "verdict.attention": "Attention",
+  "verdict.abnormal": "Abnormal",
+  "verdict.okBody": "Every check is normal.",
+  "verdict.logs": "View logs",
+  "verdict.reason": "{name}: {value}",
 };
 export default diagnostics;
