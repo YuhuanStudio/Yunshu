@@ -38,7 +38,7 @@ mkdir -p "$CIHOME/tmp" "$CIHOME/shim"
 # The sandbox answers EPERM where the runner answers ENOENT (the paths do not exist there), and
 # Python 3.13's Path.exists() raises on EPERM. Report ENOENT for the denied roots, as on the runner.
 cat > "$CIHOME/shim/sitecustomize.py" <<PYEOF
-import os
+import os, sys
 _deny = ("/Volumes/P5Plus", "$SRC")
 _stat, _lstat = os.stat, os.lstat
 def _wrap(fn):
@@ -50,7 +50,10 @@ def _wrap(fn):
                 raise FileNotFoundError(2, "No such file or directory", os.fspath(path)) from None
             raise
     return inner
-os.stat, os.lstat = _wrap(_stat), _wrap(_lstat)
+# Only 3.13+ raises on EPERM in Path.exists(); older interpreters (system python3 in the tool
+# tests' subprocesses) bind os.stat as a pathlib accessor method, which a Python wrapper breaks.
+if sys.version_info >= (3, 13):
+    os.stat, os.lstat = _wrap(_stat), _wrap(_lstat)
 PYEOF
 # The sandboxed suite writes its output inside $WORK: if the caller redirected stdout to a denied
 # path (e.g. a log on /Volumes/P5Plus), every write would fail and pytest would exit 120 silently.
