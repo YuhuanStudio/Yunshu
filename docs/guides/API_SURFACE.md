@@ -74,7 +74,7 @@ multi-model mode (`--models-dir`) an unknown model is a 404 `model_not_found`.
 |---|---|---|---|
 | `POST /v1/messages` (and `/messages`) | kept, fixed | `system` (string or blocks with `cache_control`), `tools`, `tool_choice` (`auto`, `any`, `tool`, `none`), `thinking` (`budget_tokens` must be < `max_tokens`), `stop_sequences` (`stop_reason: stop_sequence` and the matched string, streaming and not), `metadata`, `top_k`, `tool_use` / `tool_result` / `image` (base64; a 400 on a text-only model, like OpenAI `image_url`) / `document` (text source) blocks. Streaming: `message_start`, `content_block_start/delta/stop` (`text_delta`, `thinking_delta`, `input_json_delta`), `message_delta`, `message_stop`. Usage includes `cache_read_input_tokens` and `cache_creation_input_tokens`. | real 2026-10-06: `routes` + `wire` (SDK; stream and not, tools, `tool_choice`, stop sequences, image block on 0.8B, 400 on 3B, the `/messages` alias). `thinking.budget_tokens`, `cache_control` breakpoints, `document` text source, `top_k`, `metadata`: unit |
 | `POST /v1/messages/count_tokens` | kept | Counts system, messages, tools, images. Tools are rendered the way generation renders them (natively when the chat template does it), so the count equals the call's usage (it counted an injected prompt generation no longer uses: 101 against 272). | real 2026-10-06: `routes` (SDK): equal to the real call's usage without and with tools; alias path; 400 without messages |
-| `POST /v1/messages` with `web_search_20250305`, `web_fetch_20250910` | added | Server tools, run inside the generation loop: `server_tool_use` + `web_search_tool_result` / `web_fetch_tool_result` blocks, text with `citations` (`web_search_result_location`), `max_uses`, `allowed_domains` / `blocked_domains`, `user_location`, `usage.server_tool_use`, `pause_turn` at the iteration cap. Search needs a configured provider, otherwise `web_search_tool_result_error` `unavailable` with an `x_yunshu` hint. SDK (`messages`, `beta.messages`) + unit + Claude Code end to end. See [Server-side tools](#server-side-tools). | real 2026-10-06: `routes` against a fake SearXNG (forced `web_search`: `server_tool_use` + `web_search_tool_result`, `max_uses`, stream assembled by the SDK, `usage.server_tool_use`); no provider configured (the `unavailable` error blocks); `web_fetch` of a loopback page refused with `web_fetch_tool_result_error`. Citations, `allowed_domains`, `pause_turn`, a real search provider and a real page fetch: unit |
+| `POST /v1/messages` with `web_search_20250305`, `web_fetch_20250910` | added | Server tools, run inside the generation loop: `server_tool_use` + `web_search_tool_result` / `web_fetch_tool_result` blocks, text with `citations` (`web_search_result_location`), `max_uses`, `allowed_domains` / `blocked_domains`, `user_location`, `usage.server_tool_use`, `pause_turn` at the iteration cap. Search defaults to best-effort DDG/Wikipedia; when disabled, `web_search_tool_result_error` `unavailable` with an `x_yunshu` hint. SDK (`messages`, `beta.messages`) + unit + Claude Code end to end. See [Server-side tools](#server-side-tools). | real 2026-10-06: `routes` against a fake SearXNG (forced `web_search`: `server_tool_use` + `web_search_tool_result`, `max_uses`, stream assembled by the SDK, `usage.server_tool_use`); no provider configured (the `unavailable` error blocks); `web_fetch` of a loopback page refused with `web_fetch_tool_result_error`. Citations, `allowed_domains`, `pause_turn`, a real search provider and a real page fetch: unit |
 | `POST /v1/messages` with `mcp_servers` (beta `mcp-client`) and `mcp_toolset` | added | The gateway connects to the named MCP servers (streamable HTTP or legacy SSE) and runs their tools: `mcp_tool_use` / `mcp_tool_result` blocks, `authorization_token`, `tool_configuration.allowed_tools`, per-tool enable. | real 2026-10-06: `routes` against a fake MCP server (initialize, tools/list reach it; tool call when the model makes one). `authorization_token`, `allowed_tools`, per-tool enable: unit |
 | `thinking: {type: "adaptive"}`, `output_config.effort`, `context_management` | accepted | Claude Code sends all three (the first two used to be a 400 / ignored). `adaptive` leaves the model's template default, `output_config.effort` becomes the template's `reasoning_effort`; earlier `thinking` blocks return as `reasoning_content`. | unit; Claude Code 2.1.285 / 2.1.291 sessions in `agentcompat` (see AGENT_COMPAT.md) |
 | `POST/GET /v1/messages/batches`, `GET .../{id}`, `.../{id}/results`, `.../{id}/cancel`, `DELETE .../{id}` | added | Message Batches over the same loopback worker as `/v1/batches`; results JSONL. unit. | real 2026-10-06: `routes` (SDK: create -> poll -> results -> cancel an in-flight batch -> delete -> 404) |
@@ -98,7 +98,7 @@ cache serves the shared prefix and a continuation prefills only the new tokens (
 | Web fetch | `web_fetch_20250910` | not part of the API |
 | MCP connector | `mcp_servers` + `mcp_toolset` | `{type: "mcp"}` |
 
-Off unless configured (settings, see [AGENT_COMPAT.md](AGENT_COMPAT.md#server-side-tools)): a self-hosted SearXNG,
+Zero-config best-effort DDG/Wikipedia; queries leave the machine. Configured providers take precedence (settings, see [AGENT_COMPAT.md](AGENT_COMPAT.md#server-side-tools)): a self-hosted SearXNG,
 Brave, Tavily or Exa for search; `web_fetch` needs no provider and blocks private, loopback and link-local
 addresses (also after redirects and DNS resolution). With no provider a search request gets the API's own error
 shape and `x_yunshu.server_tools` carries the hint that says how to configure one; `GET /v1/models` shows the
@@ -468,3 +468,40 @@ Runs accept `jsonl` and `completions` data sources, with inline `file_content`, 
 Supported graders: `string_check` (`eq`, `ne`, substring `like`/case-insensitive `ilike`), `text_similarity`, `score_model`, and `label_model`. Similarity is model-free: token-frequency cosine, character SequenceMatcher fuzzy match, effective-order sentence BLEU without smoothing, GLEU, ROUGE n-gram F1 (1–5), ROUGE-L F1, and exact-token METEOR with fragmentation penalty on both candidate and reference alignments (no stemming/synonym corpus). Lexical metrics return 0 for empty token inputs or unavailable n-grams; character fuzzy match preserves its raw-string equality/whitespace behavior. Scores use a caller-supplied pass threshold; local model graders request schema-constrained JSON through `/v1/chat/completions`. SDK Evals text/image/audio content blocks are normalized to the ordinary chat wire format. Python graders and Responses sampling sources return 400 as unsupported.
 
 State uses atomic JSON replacement under `YUNSHU_EVALS_DIR` (default `~/.yunshu/evals`). Source rows and grader definitions are snapshotted per run; credentials stay in memory. Pure lexical grading uses one dedicated CPU worker with cooperative cancellation, keeping metadata and cancel routes available during long comparisons. Cancellation interrupts CPU grading and the active normal request, preserving completed items. Deleted evals cascade to their runs; parent checks and progress writes are serialized with deletion, and recovery removes orphan children after an interrupted cascade. Interrupted runs become `failed` on server restart; they are not automatically replayed. Reports are available through output-item routes (`report_url` is empty; no hosted dashboard). Maximum 10,000 rows per run; list pages accept 1–100 items with cursor/order/status filtering.
+
+### Agent-client additions (2026-10-07)
+
+Responses client tools `custom`, legacy `local_shell`, and client-executed `tool_search`
+are adapted to the model's function template and returned as `custom_tool_call`,
+`local_shell_call`, and `tool_search_call`. `call_id` survives manual history and
+`previous_response_id`; legacy shell outputs may identify the call with `id`.
+Custom input supports text, regex, and Lark formats. Forced custom input streams
+incrementally through the constrained decoder. Auto mode preserves text streaming;
+a selected grammar-bearing custom call adds a constrained generation, sharing the
+request's output-token budget. Deferred schemas remain hidden until loaded by a
+client `tool_search_output`. Hosted tool search and duplicate names across namespaces
+are rejected explicitly.
+
+Anthropic documents accept text, custom content, stored-file references, and bounded
+PDF base64/HTTPS sources. Vision models receive PDF page images and the text layer;
+image-only PDFs require a vision model. Citations use checked character, page, or
+content-block ranges and round-trip as `citations_delta` events. Document requests with
+citations enabled buffer generation before replaying their Messages stream; without
+citations the stream passes through live. Client tool
+schemas cover versioned bash, text editor, and legacy computer tools; computer zoom
+is opt-in, and text-editor `max_characters` is tool configuration. The newer
+`computer_toolset_20260801` member protocol is not implemented.
+
+Chat and text completions support `stream_options.continuous_usage_stats` together with `include_usage`.
+HTTP(S) video fetches use DNS-pinned redirects, TLS verification, and
+`YUNSHU_VLM_MAX_VIDEO_BYTES` (100 MiB by default). `POST /apply-template` renders the
+loaded tokenizer's template; `GET /props` exposes minimal loaded-model properties.
+Both have `/v1` aliases.
+
+CPU regression evidence: `test_agent_client_compat.py`. Served probes are registered
+as `agent-custom-tools`, `agent-shell-search`, `agent-documents-citations`,
+`agent-anthropic-client-tools`, `agent-continuous-usage`, `agent-template-props`,
+and `agent-http-video` in `route_checks_agent_compat.py`. `yv --suite client_compat`
+uses the M3 lane; `client_compat_m5` uses the M5. Both run the 0.8B pilot before the
+3B text model, validate the commit-pinned source tree, and fail closed on missing
+or unsuccessful checks. Real-server evidence is pending for this addition.

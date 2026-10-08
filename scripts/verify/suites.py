@@ -12,10 +12,14 @@ STAGES = (
     "memory",
     "longqa",
     "conc",
+    "client_compat",
+    "websearch",
     "rerank",
     "embedding",
     "priorart",
     "evals",
+    "tavily",
+    "searchrank",
 )
 
 # `full` and `tiny` climb the original seven; the long stages (needle retrieval, concurrent
@@ -23,7 +27,19 @@ STAGES = (
 LADDER = tuple(
     s
     for s in STAGES
-    if s not in ("longqa", "conc", "rerank", "embedding", "priorart", "evals")
+    if s
+    not in (
+        "longqa",
+        "conc",
+        "client_compat",
+        "websearch",
+        "rerank",
+        "embedding",
+        "priorart",
+        "evals",
+        "tavily",
+        "searchrank",
+    )
 )
 
 # Every key is a default; the CLI can override ctx / reps / mmlu_n / mem_sizes.
@@ -31,6 +47,14 @@ SUITES = {
     "priorart": {"stages": ["preflight", "priorart"]},
     "embedding": {"stages": ["preflight", "embedding"]},
     "evals": {"stages": ["preflight", "evals"]},
+    "client_compat": {
+        "stages": ["preflight", "client_compat"],
+        "client_compat_device": "m3",
+    },
+    "client_compat_m5": {
+        "stages": ["preflight", "client_compat"],
+        "client_compat_device": "m5",
+    },
     "rerank": {"stages": ["preflight", "rerank"]},
     # decode-path change (kernels, spec decode, sampler): identity incl. spec on == off, speed
     "decode": {

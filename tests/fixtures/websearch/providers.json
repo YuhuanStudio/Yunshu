@@ -1,0 +1,12 @@
+{
+  "provenance": "Sanitized wire-contract samples frozen 2026-10-07; authored from official provider/SDK shapes. Not live quality captures.",
+  "ddg_html": {"status": 200, "body": "<a class=\"result__a\" href=\"//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.org%2Fguide\">Guide <b>title</b></a><a class=\"result__snippet\">An exact <b>answer</b>.</a>"},
+  "wikipedia": {"query": {"search": [{"title": "Guide title", "snippet": "An exact <b>answer</b>.", "timestamp": "2026-10-07T00:00:00Z"}]}},
+  "mwmbl": {"query": "guide", "number_of_results": 1, "monthly_usage": null, "monthly_limit": null, "results": [{"title": "Guide title", "url": "https://example.org/guide", "content": "An exact answer.", "engine": "mwmbl", "score": 1}]},
+  "brave": {"web": {"results": [{"title": "Guide title", "url": "https://example.org/guide", "description": "An exact <b>answer</b>.", "age": "2026-10-07"}]}},
+  "serper": {"organic": [{"title": "Guide title", "link": "https://example.org/guide", "snippet": "An exact answer.", "date": "2026-10-07"}]},
+  "exa": {"results": [{"title": "Guide title", "url": "https://example.org/guide", "text": "An exact answer.", "publishedDate": "2026-10-07"}]},
+  "tavily": {"results": [{"title": "Guide title", "url": "https://example.org/guide", "content": "An exact answer.", "published_date": "2026-10-07"}]},
+  "perplexity": {"results": [{"title": "Guide title", "url": "https://example.org/guide", "snippet": "An exact answer.", "date": "2026-10-07"}]},
+  "searxng": {"results": [{"title": "Guide title", "url": "https://example.org/guide", "content": "An exact answer.", "publishedDate": "2026-10-07"}]}
+}
