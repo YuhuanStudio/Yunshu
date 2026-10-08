@@ -65,3 +65,18 @@ request data. Local inference does not imply every optional tool works offline.
 output or token IDs. Prompt caches contain conversation-derived state on disk:
 protect the cache directory and diagnostics as local user data. See
 [configuration](docs/CONFIGURATION.md) and [API extensions](docs/guides/API_EXTENSIONS.md).
+
+## LAN credentials and stored data
+
+The current server accepts one shared `YUNSHU_AUTH_TOKEN`; it does not provide
+per-key isolation or quotas. Authenticated clients share Files, stored chats and
+Evals data. Protect these directories like prompts; diagnostics redaction is not
+encryption. Configuration writes use owner-only (0600) files. The static token is
+stored as plaintext when configured in TOML, because the engine must read it;
+protect environment variables and launchd configuration too.
+
+Realtime `ek_` secrets authenticate only Realtime WebSockets until expiry (expiry
+limits new connections, not the lifetime of an already accepted session).
+Transcription secrets cannot create model responses. Treat these as credentials.
+Use explicit CORS origins on LAN; any wildcard disables CORS credentials.
+Outbound download headers are bound to the original origin across redirects.
