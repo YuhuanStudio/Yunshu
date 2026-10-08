@@ -1023,7 +1023,8 @@ def _multimodal_valid(
             a, b = requests[n, miss], requests[n, hit]
             if not a.get("ids") or a["ids"] != b.get("ids") or a.get("cached") != 0:
                 return False, "raw token hit/miss identity failed"
-            if require_hit and b.get("cached", 0) <= 0:
+            skipped = hit == "turn2-hit" and b.get("restore_skipped") is True
+            if require_hit and b.get("cached", 0) <= 0 and not skipped:
                 return False, "media APC not engaged"
     if any(requests[n, "other-image"].get("cached") != 0 for n in sizes):
         return False, "different image reused state"
@@ -1058,6 +1059,30 @@ def _multimodal_quality_valid(path, sizes, n):
     ):
         return False, "invalid paired quality scores"
     return True, ""
+
+
+def _multimodal_speed(numbers, reps, tolerance):
+    def timing(arm, rep):
+        phases = {"cold": "cold", "warm": "warm", "turn2-hit": "turn2"}
+        return [
+            dict(
+                part="decode",
+                ctx=r["size"],
+                kind="media",
+                phase=phases[r["kind"]],
+                ttft_s=r["ttft_s"],
+                dec_tps=1.0,
+            )
+            for r in numbers[f"{arm}-r{rep}"]
+            if r["kind"] in phases
+        ]
+
+    return analyze.speed_compare(
+        [timing("base", i) for i in range(reps)],
+        [timing("cand", i) for i in range(reps)],
+        tolerance,
+        robust=True,
+    )
 
 
 def stage_multimodal(ctx: Ctx) -> StageResult:
@@ -1109,6 +1134,8 @@ def stage_multimodal(ctx: Ctx) -> StageResult:
             "--sizes",
         ]
         argv += [str(n) for n in ctx.suite["ctx"]]
+        if ctx.env.get("APC_PROBE_IMAGE_AUDIO") == "1":
+            argv += ["--image-audio"]
         if arm == "cand":
             argv += ["--require-hit"]
         else:
@@ -1191,6 +1218,13 @@ def stage_multimodal(ctx: Ctx) -> StageResult:
             bd, cd = {r.get("device") for r in br}, {r.get("device") for r in cr}
             if len(bd) != 1 or bd != cd or not bd <= {"m3", "m5"}:
                 reasons.append(f"mixed or missing devices rep {rep}: {bd} / {cd}")
+    if not reasons and int(ctx.suite.get("reps", 3)) >= 3:
+        speed = _multimodal_speed(
+            numbers, int(ctx.suite["reps"]), float(ctx.suite["speed_tol_pct"])
+        )
+        numbers["speed"] = speed
+        reasons.extend(_speed_reason(r) for r in speed["regressions"])
+        reasons.extend(speed["missing"])
     return _finish(ctx, StageResult("multimodal", not reasons, reasons, numbers))
 
 

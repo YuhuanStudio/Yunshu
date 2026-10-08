@@ -117,6 +117,33 @@ def jobs(w):
 
 
 # ── suites ───────────────────────────────────────────────────────────────
+def test_multimodal_speed_rejects_short_turn_regression_and_keeps_long_cells():
+    numbers = {}
+    for rep in range(3):
+        for arm in ("base", "cand"):
+            numbers[f"{arm}-r{rep}"] = [
+                dict(
+                    size=size,
+                    kind=kind,
+                    ttft_s=(
+                        0.1177
+                        if arm == "cand" and kind == "turn2-hit" and size == 46
+                        else 0.1
+                    ),
+                )
+                for size in (46, 32768)
+                for kind in ("cold", "warm", "turn2-hit")
+            ]
+    result = stages._multimodal_speed(numbers, 3, 2)
+    assert not result["ok"]
+    assert result["regressions"][0]["ctx"] == 46
+    assert {r["ctx"] for r in result["cells"]} == {46, 32768}
+    for rep in range(3):
+        for row in numbers[f"cand-r{rep}"]:
+            row["ttft_s"] = 0.1
+    assert stages._multimodal_speed(numbers, 3, 2)["ok"]
+
+
 def test_suite_named_and_adhoc():
     assert suites.parse_suite("decode")["stages"][0] == "preflight"
     cfg = suites.parse_suite("speed,smoke")

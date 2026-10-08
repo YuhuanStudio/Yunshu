@@ -1333,6 +1333,15 @@ class VLMBatchRunner:
         disk = getattr(self.apc_manager, "disk", None)
         observe = getattr(disk, "observe_prefill", None)
         st = job.stats
+        cost = getattr(self.apc_manager, "media_restore_cost", None)
+        if (
+            cost is not None
+            and getattr(job, "prompt_kwargs", None) is not None
+            and st.t_first
+            and st.t_admit
+            and self._active_jobs() == 0
+        ):
+            cost.observe(len(job.ids), st.cached_tokens, st.t_first - st.t_admit)
         if (
             observe is None
             or not st.t_first

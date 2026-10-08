@@ -26,6 +26,26 @@ def test_arguments_fixture_and_identity_rule():
         p.validate_pair(cold, {**warm, "ids": [1, 3]}, True)
     with pytest.raises(ValueError, match="not engaged"):
         p.validate_pair(cold, cold, True)
+    skipped = {**cold, "restore_skipped": True}
+    p.validate_pair(cold, skipped, True, allow_skip=True)
+    with pytest.raises(ValueError, match="not engaged"):
+        p.validate_pair(cold, skipped, True)
+
+
+def test_joint_media_fixture_is_deterministic_pcm_and_keeps_image():
+    import base64
+    import io
+    import wave
+
+    msg = p.messages(1)
+    combined = p.with_audio(msg)
+    assert combined == p.with_audio(msg)
+    assert len(msg[0]["content"]) == 2
+    assert combined[0]["content"][0] == msg[0]["content"][0]
+    with wave.open(
+        io.BytesIO(base64.b64decode(combined[0]["content"][1]["input_audio"]["data"]))
+    ) as f:
+        assert (f.getnchannels(), f.getframerate(), f.getnframes()) == (1, 16000, 8000)
 
 
 @pytest.mark.asyncio

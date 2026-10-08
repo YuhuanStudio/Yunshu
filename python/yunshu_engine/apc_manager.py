@@ -50,6 +50,10 @@ _CANONICAL_LOOKUP: contextvars.ContextVar[
 
 GIB = 1 << 30
 
+_MEDIA_COST: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "yunshu_media_restore_cost", default=False
+)
+
 # ``APCManager``'s clone of a prompt cache (restoring a checkpoint, storing one) differs
 # from upstream in two ways, both pure scheduling of the same copies:
 # - ``store_exact_cache`` clones the cache it is given, so a checkpoint that is already a
@@ -802,7 +806,11 @@ class _Coordinator(APCCoordinator):
         # Media processors may expand / reshape positions; retain their existing
         # boundary policy. Text prefixes use the same grid in cold and warm runs.
         if not stride or kwargs["prefix_has_media"](len(token_ids)):
-            return super().lookup(token_ids, **kwargs)
+            context = _MEDIA_COST.set(self.media_checkpoint)
+            try:
+                return super().lookup(token_ids, **kwargs)
+            finally:
+                _MEDIA_COST.reset(context)
         policy = (
             id(self.manager),
             stride,
@@ -1121,6 +1129,9 @@ class YunshuAPCManager(APCManager):
         self.prefill_assistant_header = prefill_assistant_header
         self.prefill_message_end = prefill_message_end
         self.lookups: collections.deque[Lookup] = collections.deque(maxlen=64)
+        from .apc_restore_cost import MediaRestoreCost
+
+        self.media_restore_cost = MediaRestoreCost()
         self._generation = 0
         # Explicit endpoints are protected against superseding until their
         # inactivity TTL expires, always within the existing byte/entry budgets.
@@ -1883,6 +1894,13 @@ class YunshuAPCManager(APCManager):
     def lookup_exact_cache(self, token_ids, *args, **kwargs):
         refresh_retention = kwargs.pop("refresh_retention", True)
         self._expire_boundaries()
+        if _MEDIA_COST.get() and self._skip_media_restore(token_ids, args, kwargs):
+            self.media_restore_cost.skips += 1
+            self.tier_hits["none"] += 1
+            self.lookups.append(
+                Lookup(len(token_ids), 0, "none", 0.0, time.perf_counter(), None)
+            )
+            return None, 0
         policy = _CANONICAL_LOOKUP.get()
         if policy is not None and policy[0] == id(self):
             names = ("extra_hash", "max_prefix_tokens", "min_prefix_tokens")
@@ -1958,6 +1976,34 @@ class YunshuAPCManager(APCManager):
             )
         )
         return cache, n
+
+    def _skip_media_restore(self, token_ids, args, kwargs):
+        """Inspect HOT metadata before upstream allocates/copies the restore.
+
+        Explicit checkpoint policies do not set _MEDIA_COST. Unknown or trimmed
+        layouts retain the existing lookup path rather than guessing their bytes.
+        """
+        from mlx_vlm.apc import _cache_nbytes
+
+        tokens = tuple(int(t) for t in token_ids)
+        extra = self._extra_of(args, kwargs)
+        maximum = kwargs.get("max_prefix_tokens", args[1] if len(args) > 1 else None)
+        minimum = kwargs.get("min_prefix_tokens", args[2] if len(args) > 2 else 0)
+        maximum = min(len(tokens) - 1, maximum or len(tokens) - 1)
+        with self.lock:
+            candidates = [
+                e
+                for e in self._exact_cache.values()
+                if e.extra_hash == extra
+                and minimum < len(e.token_ids) <= maximum
+                and tokens[: len(e.token_ids)] == e.token_ids
+            ]
+            entry = max(candidates, key=lambda e: len(e.token_ids), default=None)
+            if entry is None:
+                return False
+            n = len(entry.token_ids)
+            size = _cache_nbytes(entry.prompt_cache)
+        return not self.media_restore_cost.worth(size, n, len(tokens) - n)
 
     @staticmethod
     def _extra_of(args, kwargs) -> int:

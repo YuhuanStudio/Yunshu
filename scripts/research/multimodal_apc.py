@@ -11,16 +11,46 @@ import asyncio
 import base64
 import copy
 import hashlib
+import io
 import json
+import math
 import os
+import struct
 import sys
 import time
+import wave
 from importlib.metadata import version
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "dev"))
 from gpuq_pause import was_paused  # noqa: E402
 from omni_apc_probe import png  # noqa: E402
+
+
+def with_audio(msg):
+    """A deterministic PCM fixture exercises joint image/audio feature keys."""
+    audio = io.BytesIO()
+    with wave.open(audio, "wb") as f:
+        f.setnchannels(1)
+        f.setsampwidth(2)
+        f.setframerate(16000)
+        f.writeframes(
+            b"".join(
+                struct.pack("<h", int(2000 * math.sin(2 * math.pi * 440 * i / 16000)))
+                for i in range(8000)
+            )
+        )
+    msg = copy.deepcopy(msg)
+    msg[0]["content"].insert(
+        1,
+        dict(
+            type="input_audio",
+            input_audio=dict(
+                data=base64.b64encode(audio.getvalue()).decode(), format="wav"
+            ),
+        ),
+    )
+    return msg
 
 
 def messages(size: int, rgb=(200, 30, 30), tokenizer=None) -> list:
@@ -62,10 +92,16 @@ def messages(size: int, rgb=(200, 30, 30), tokenizer=None) -> list:
     ]
 
 
-def validate_pair(cold: dict, warm: dict, require_hit: bool) -> None:
+def validate_pair(
+    cold: dict, warm: dict, require_hit: bool, *, allow_skip=False
+) -> None:
     if not cold["ids"] or cold["ids"] != warm["ids"]:
         raise ValueError("APC hit != miss raw token IDs")
-    if require_hit and warm["cached"] <= 0:
+    if (
+        require_hit
+        and warm["cached"] <= 0
+        and not (allow_skip and warm.get("restore_skipped") is True)
+    ):
         raise ValueError("APC not engaged")
     if cold["cached"] != 0:
         raise ValueError("cold control unexpectedly hit")
@@ -75,6 +111,8 @@ async def probe(engine, msg: list, *, cold=False):
     # Flush the RAM manager rather than change kernels/settings between controls.
     if cold and engine._apc_backend is not None:
         engine._apc_backend.clear()
+    cost = getattr(engine._apc_backend, "media_restore_cost", None)
+    skips = getattr(cost, "skips", 0)
     ids = []
     original = engine._runner_events
 
@@ -105,6 +143,7 @@ async def probe(engine, msg: list, *, cold=False):
         ids=ids,
         sha=hashlib.sha256(json.dumps(ids).encode()).hexdigest(),
         cached=last.cached_tokens,
+        restore_skipped=getattr(cost, "skips", 0) > skips,
         pt=last.prompt_tokens,
         ttft_s=(first or time.perf_counter()) - start,
         text="".join(text),
@@ -245,6 +284,7 @@ async def run(a):
                 {
                     "event": "engaged",
                     "runner": type(engine._batch_runner).__name__,
+                    "image_audio": a.image_audio,
                     "model": a.model,
                     "settings": {
                         k: settings.get(k)
@@ -262,6 +302,8 @@ async def run(a):
             )
             for size in a.sizes:
                 msg = messages(size, tokenizer=engine._tokenizer)
+                if a.image_audio:
+                    msg = with_audio(msg)
                 cold = await measured(lambda: probe(engine, msg, cold=True))
                 warm = await measured(
                     lambda: probe(engine, msg),
@@ -284,12 +326,22 @@ async def run(a):
                 miss = await measured(lambda: probe(engine, follow, cold=True))
                 emit({"event": "request", "kind": "turn2-hit", "size": size, **hit})
                 emit({"event": "request", "kind": "turn2-miss", "size": size, **miss})
-                validate_pair(miss, hit, a.require_hit)
+                validate_pair(miss, hit, a.require_hit, allow_skip=True)
                 # Same placeholder IDs, different pixels must never reuse the image state.
                 other = await measured(
                     lambda: probe(
                         engine,
-                        messages(size, (30, 30, 200), tokenizer=engine._tokenizer),
+                        (
+                            with_audio(
+                                messages(
+                                    size, (30, 30, 200), tokenizer=engine._tokenizer
+                                )
+                            )
+                            if a.image_audio
+                            else messages(
+                                size, (30, 30, 200), tokenizer=engine._tokenizer
+                            )
+                        ),
                     ),
                     restore=lambda: probe(engine, follow, cold=True),
                 )
@@ -372,6 +424,8 @@ async def run(a):
             scores = {"cold": 0, "hit": 0}
             for i in range(a.parity_items):
                 msg, gold = arithmetic_item(i)
+                if a.image_audio:
+                    msg = with_audio(msg)
                 cold = await probe(engine, msg, cold=True)
                 hit = await probe(engine, msg)
                 emit(
@@ -406,6 +460,7 @@ def parser():
     p.add_argument("--sizes", type=int, nargs="+", default=[1, 32768])
     p.add_argument("--parity-items", type=int, default=0)
     p.add_argument("--require-hit", action="store_true")
+    p.add_argument("--image-audio", action="store_true")
     p.add_argument(
         "--skip-anthropic",
         action="store_true",

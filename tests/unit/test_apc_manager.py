@@ -817,7 +817,41 @@ def test_dense_media_lane_uses_exact_checkpoint_and_rejects_foreign_pixels():
     )
     hit = c.lookup(ids, extra_hash=123, **args)
     assert hit is not None and hit["prefix_len"] == 107
+
     assert c.lookup(ids, extra_hash=456, **args) is None
     # A multi-turn continuation reuses the same image-containing checkpoint.
     hit = c.lookup(ids + [3] * 12, extra_hash=123, **args)
     assert hit is not None and hit["prefix_len"] == 107
+
+
+def test_media_cost_rejects_before_clone_and_leaves_text_lookup_unchanged(monkeypatch):
+    from types import SimpleNamespace
+
+    from mlx_vlm.apc import APCManager
+
+    m = _mgr()
+    c = m.coordinator(SimpleNamespace(make_cache=lambda: [KVCache()]))
+    c.media_checkpoint = True
+    ids = list(range(108))
+    m.store_exact_cache(ids[:107], _cache(107), extra_hash=123)
+    m.media_restore_cost.observe(108, 0, 0.06)
+    m.media_restore_cost.observe(108, 107, 0.015)
+    calls = []
+    original = APCManager.lookup_exact_cache
+
+    def lookup(*a, **kw):
+        calls.append(1)
+        return original(*a, **kw)
+
+    monkeypatch.setattr(APCManager, "lookup_exact_cache", lookup)
+    args = dict(
+        safe_lookup_min=0,
+        suffix_is_text_only=lambda n: True,
+        prefix_has_media=lambda n: True,
+    )
+    assert c.lookup(ids + [200] * 31, extra_hash=123, **args) is None
+    assert calls == [] and m.media_restore_cost.skips == 1
+    assert c.lookup(ids, extra_hash=123, **args)["prefix_len"] == 107
+    assert len(calls) == 1
+    # The context must be reset; direct/text callers retain normal admission.
+    assert m.lookup_exact_cache(ids + [200] * 31, extra_hash=123)[1] == 107

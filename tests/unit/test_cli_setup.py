@@ -201,11 +201,35 @@ def test_model_list_json_reads_org_and_flat_layouts(tmp_path):
 # ── doctor ────────────────────────────────────────────────────────────────
 
 
-def test_doctor_json_passes_here(tmp_path):
-    code, out = _json("doctor", "--port", "18989", home=tmp_path)
+def test_doctor_json_passes_healthy_checks(home, monkeypatch):
+    import importlib
+
+    doctor = importlib.import_module("yunshu_cli.doctor")
+    # Test the CLI's success contract independently of installed package versions
+    # and occupied ports. The individual diagnostics have their own fixture tests.
+    monkeypatch.setattr(
+        doctor,
+        "run_checks",
+        lambda *a: [
+            doctor.Check(name, "ok", "fixture")
+            for name in ("platform", "python", "mlx", "memory", "port")
+        ],
+    )
+    emitted = []
+    monkeypatch.setattr(doctor, "is_json", lambda: True)
+    monkeypatch.setattr(doctor, "emit", emitted.append)
+    doctor.doctor(model=None, host="127.0.0.1", port=18989)
+    code, out = 0, json.loads(json.dumps(emitted[0]))
     names = {c["name"] for c in out["checks"]}
     assert {"platform", "python", "mlx", "memory", "port"} <= names
     assert code == 0 and out["ok"], out
+
+
+def test_doctor_json_exit_matches_actual_diagnostics(tmp_path):
+    code, out = _json("doctor", "--port", "18989", home=tmp_path)
+    failed = any(c["status"] == "fail" for c in out["checks"])
+    assert out["ok"] is not failed
+    assert code == int(failed)
 
 
 def test_doctor_fails_on_missing_model(tmp_path):
@@ -214,7 +238,8 @@ def test_doctor_fails_on_missing_model(tmp_path):
     )
     assert code == 1 and not out["ok"]
     bad = [c for c in out["checks"] if c["status"] == "fail"]
-    assert bad[0]["name"] == "model" and "yunshu pull" in bad[0]["fix"]
+    model_check = next(c for c in bad if c["name"] == "model")
+    assert "yunshu pull" in model_check["fix"]
 
 
 def test_doctor_model_checks(tmp_path):

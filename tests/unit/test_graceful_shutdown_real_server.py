@@ -14,7 +14,8 @@ from pathlib import Path
 import httpx
 
 ROOT = Path(__file__).resolve().parents[2]
-PORT = 18991
+sys.path.insert(0, str(ROOT / "scripts/research"))
+from agentic.servers import free_ports  # noqa: E402
 
 
 def test_graceful_shutdown_timeout_values():
@@ -24,6 +25,7 @@ def test_graceful_shutdown_timeout_values():
 
 
 def _start(drain: str, delay="0.2", n="15"):
+    port = free_ports(1)[0]
     env = {
         **os.environ,
         "YUNSHU_DRAIN_TIMEOUT": drain,
@@ -34,7 +36,7 @@ def _start(drain: str, delay="0.2", n="15"):
         [
             sys.executable,
             str(ROOT / "scripts/research/scripted_server.py"),
-            str(PORT),
+            str(port),
             delay,
             n,
         ],
@@ -45,9 +47,12 @@ def _start(drain: str, delay="0.2", n="15"):
     for _ in range(100):
         try:
             if (
-                httpx.get(f"http://127.0.0.1:{PORT}/health/live", timeout=1).status_code
+                httpx.get(f"http://127.0.0.1:{port}/health/live", timeout=1).status_code
                 < 500
             ):
+                if p.poll() is not None:
+                    break
+                p.yunshu_port = port
                 return p
         except httpx.HTTPError:
             time.sleep(0.2)
@@ -62,7 +67,7 @@ def _stream_then_sigterm(p):
         try:
             with httpx.stream(
                 "POST",
-                f"http://127.0.0.1:{PORT}/v1/chat/completions",
+                f"http://127.0.0.1:{p.yunshu_port}/v1/chat/completions",
                 json={
                     "model": "m",
                     "messages": [{"role": "user", "content": "hi"}],
