@@ -127,6 +127,22 @@ SUITES = {
         "mem_reps": 2,
         "speed_tol_pct": 3.0,
     },
+    # follow-up TTFT after the user reads the reply (next-turn rehearsal needs idle time):
+    # same cells as `long`, 12 s between the reply and the follow-up, code only, 3 reps
+    "followup": {
+        "stages": ["preflight", "identity", "apc", "speed"],
+        "ctx": [32768, 131072],
+        "kinds": ["code"],
+        "spec_off": False,
+        "reps": 3,
+        "decode_tokens": 2048,
+        "turn2_tokens": 256,
+        "think_s": 12,
+        "split_cells": True,
+        "long_ask": True,
+        "keep_going": True,
+        "speed_tol_pct": 3.0,
+    },
     # release trend: one rep of the headline long cells, no noise estimate (compare tags pairwise)
     "longtrend": {
         "stages": ["preflight", "identity", "apc", "memory", "longqa"],

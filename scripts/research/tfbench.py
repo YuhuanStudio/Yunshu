@@ -468,6 +468,10 @@ def part_decode(s, out, a):
                         },
                     ]
                 extra_rec = {}
+                if phase == "turn2" and a.think_s:
+                    time.sleep(
+                        a.think_s
+                    )  # the user reads the reply before the follow-up
                 if phase == "turn2" and a.rehearse:
                     extra_rec = rehearse(s, b)
                 r = send(s.url, b)
@@ -714,6 +718,12 @@ def parse_args(argv=None):
         type=int,
         default=256,
         help="reply length of decode cells; a cell that does not end finish=length at exactly N is an error",
+    )
+    ap.add_argument(
+        "--think-s",
+        type=float,
+        default=0.0,
+        help="seconds between the first reply and the follow-up (the user's reading time)",
     )
     ap.add_argument(
         "--rehearse",

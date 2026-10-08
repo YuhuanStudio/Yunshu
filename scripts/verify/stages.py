@@ -138,6 +138,8 @@ def _dec_args(ctx: Ctx) -> list:
         out.append("--long-ask")
     if ctx.suite.get("turn2_tokens"):
         out += ["--turn2-tokens", str(int(ctx.suite["turn2_tokens"]))]
+    if ctx.suite.get("think_s"):
+        out += ["--think-s", str(float(ctx.suite["think_s"]))]
     return out
 
 
