@@ -279,5 +279,34 @@ const settingdesc = {
     "Console history: seconds between samples of the in-memory ring behind GET /v1/yunshu/history (throughput, request counts, memory, TTFT percentiles); 0 turns sampling off. The ring has a fixed size and never grows.",
   YUNSHU_HISTORY_HOURS:
     "Console history: hours the history ring keeps (capacity = hours × 3600 ÷ sample interval, allocated once; 12 h at 5 s is about 0.4 MiB).",
+  YUNSHU_EVALS_DIR:
+    "Folder of the local Evals API JSON store; unset: `~/.yunshu/evals`.",
+  YUNSHU_VLM_MAX_VIDEO_BYTES:
+    "Largest video a request may reference by URL, in bytes.",
+  YUNSHU_WEB_SEARCH_PROVIDER_TIMEOUT:
+    "Per-provider deadline of the combined web search, in seconds; a slow provider cannot hold up the whole query.",
+  YUNSHU_WEB_SEARCH_HEALTH_FILE:
+    "Small snapshot of provider health (no queries, results or credentials) read by `yunshu config`.",
+  YUNSHU_WEB_MWMBL:
+    "Adds Mwmbl's open small-web index to automatic web search (CC-BY-NC-SA 4.0 data, noncommercial); asking for provider=mwmbl also opts in.",
+  YUNSHU_WEB_KEYLESS:
+    "Allows keyless DuckDuckGo (best effort, may be blocked) and Wikipedia search; the query text and IP leave this machine.",
+  YUNSHU_MOJEEK_API_KEY:
+    "API key for Mojeek's independent index; once set it joins automatic web search.",
+  YUNSHU_MARGINALIA_API_KEY:
+    "Explicit opt-in to Marginalia small-web search; public API data is CC-BY-NC-SA 4.0 (noncommercial), commercial keys have their own terms, and there is no implicit public key.",
+  YUNSHU_SERPER_API_KEY: "API key for Serper (Google search results).",
+  YUNSHU_PERPLEXITY_API_KEY:
+    "API key for Perplexity Search (raw results, not Sonar).",
+  YUNSHU_WEB_RESEARCH:
+    "Enriches search snippets with origin pages, untrusted excerpts and local ranking; a stable opt-in pending quality evaluation; fetched URLs leave this machine.",
+  YUNSHU_WEB_RENDER:
+    "Local Chromium fallback for pages that are only a JavaScript shell in advanced Tavily extract/crawl/map (needs the web-render extra and an installed Playwright Chromium; same-origin GET only, no cookies, never downloads a browser).",
+  YUNSHU_WEB_RESEARCH_BUDGET:
+    "Overall deadline for enriching search snippets, in seconds (at most 4).",
+  YUNSHU_WEB_RESEARCH_PAGES:
+    "Most origin pages used per enrichment (capped at 6).",
+  YUNSHU_WEB_RESEARCH_MODEL:
+    "Id of an already-loaded local embedding model; it never loads one, and without it ranking is BM25 only. Qwen3-Embedding-0.6B is recommended.",
 };
 export default settingdesc;

@@ -263,5 +263,31 @@ const settingdesc = {
     "主控台歷史：記憶體內歷史環取樣的間隔秒數（吞吐、請求數、記憶體、TTFT 百分位，供 GET /v1/yunshu/history 使用）；0 表示關閉取樣。環的大小固定，不會增長。",
   YUNSHU_HISTORY_HOURS:
     "主控台歷史：歷史環保留的小時數（容量 = 小時數 × 3600 ÷ 取樣間隔，啟動時一次配置；5 秒間隔下 12 小時約 0.4 MiB）。",
+  YUNSHU_EVALS_DIR:
+    "Evals API 本機 JSON 儲存的資料夾；未設定時為 `~/.yunshu/evals`。",
+  YUNSHU_VLM_MAX_VIDEO_BYTES: "請求以網址引用的影片大小上限（位元組）。",
+  YUNSHU_WEB_SEARCH_PROVIDER_TIMEOUT:
+    "聯合搜尋每個來源的期限（秒）；慢的來源不會拖住整個查詢。",
+  YUNSHU_WEB_SEARCH_HEALTH_FILE:
+    "搜尋來源健康狀態的小型快照檔（不含查詢、搜尋結果或憑證），供 `yunshu config` 讀取。",
+  YUNSHU_WEB_MWMBL:
+    "在自動聯合搜尋中加入 Mwmbl 開放小型網站索引（資料為 CC-BY-NC-SA 4.0，限非商業）；明確指定 provider=mwmbl 也算同意。",
+  YUNSHU_WEB_KEYLESS:
+    "允許不需金鑰的 DuckDuckGo（盡力而為，可能被封鎖）與 Wikipedia 搜尋；查詢文字與 IP 會離開這台機器。",
+  YUNSHU_MOJEEK_API_KEY:
+    "Mojeek 獨立索引的 API 金鑰；設定後會加入自動聯合搜尋。",
+  YUNSHU_MARGINALIA_API_KEY:
+    "明確選用 Marginalia 小型網站搜尋；公開 API 資料為 CC-BY-NC-SA 4.0（非商業），商業金鑰另有條款，沒有預設的公用金鑰。",
+  YUNSHU_SERPER_API_KEY: "Serper（Google 搜尋結果）的 API 金鑰。",
+  YUNSHU_PERPLEXITY_API_KEY:
+    "Perplexity Search 的 API 金鑰（原始搜尋結果，不是 Sonar）。",
+  YUNSHU_WEB_RESEARCH:
+    "用來源頁面、不受信任的摘錄與本機排序補強搜尋摘要；穩定的選用功能，品質評估前不預設開啟；擷取的網址會離開這台機器。",
+  YUNSHU_WEB_RENDER:
+    "進階 Tavily 擷取／爬取／地圖在遇到只有 JavaScript 外殼的頁面時，改用本機 Chromium 後備（需 web-render 套件與已安裝的 Playwright Chromium；只發同源 GET，不帶 cookie，不會自動下載瀏覽器）。",
+  YUNSHU_WEB_RESEARCH_BUDGET: "補強搜尋摘要的整體期限（秒，最多 4）。",
+  YUNSHU_WEB_RESEARCH_PAGES: "每次補強最多取用的來源頁面數（上限 6）。",
+  YUNSHU_WEB_RESEARCH_MODEL:
+    "已載入的本機嵌入模型 id；不會自動載入模型，沒有或不可用時只用 BM25。建議 Qwen3-Embedding-0.6B。",
 };
 export default settingdesc;
