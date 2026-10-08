@@ -62,7 +62,7 @@ def _dir_size(path: Path) -> int:
     return sum(f.stat().st_size for f in path.rglob("*") if f.is_file())
 
 
-def scan_models_dir(base: Path) -> list[dict]:
+def scan_models_dir(base: Path, *, detect_types: bool = True) -> list[dict]:
     """Model folders directly under ``base`` or one level down (``org/name``),
     the same layout the server's multi-model discovery reads."""
     found: list[Path] = []
@@ -82,7 +82,7 @@ def scan_models_dir(base: Path) -> list[dict]:
         {
             "name": str(p.relative_to(base)),
             "path": str(p),
-            "type": _detect_model_type(p),
+            "type": _detect_model_type(p) if detect_types else "UNKNOWN",
             "size": _dir_size(p),
             "source": "models-dir",
         }
@@ -161,6 +161,7 @@ def list_models(
             resp = httpx.get(
                 f"{url.rstrip('/')}/v1/models", headers=auth_headers(), timeout=5
             )
+            resp.raise_for_status()
             data = resp.json()
         except Exception as e:
             fail(f"Error querying {url}: {e}", code=1)
@@ -246,7 +247,11 @@ def pull(
     Hugging Face cache); an interrupted download is resumed.
     """
     parts = repo_id.split("/")
-    if len(parts) != 2 or not all(parts):
+    if (
+        len(parts) != 2
+        or not all(parts)
+        or any(p in {".", ".."} or "\\" in p for p in parts)
+    ):
         fail(f"Expected a Hugging Face repo id like org/name, got {repo_id!r}.", code=2)
     base = Path(models_dir).expanduser() if models_dir else _get_models_dir()
     target = base / parts[0] / parts[1]
@@ -547,3 +552,49 @@ def benchmark_model(
     table.add_row("Prompt tokens", str(prompt_tokens))
     table.add_row("Output tokens", str(max_tokens))
     console.print(table)
+
+
+@model_app.command("rm")
+def remove_model(
+    model: str = typer.Argument(help="Exact model name under the models directory."),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Confirm removal."),
+):
+    """Remove a downloaded model. HF cache and external/symlinked models are kept."""
+    import shutil
+
+    base = _get_models_dir().resolve()
+    # Deletion uses exact inventory names only, never fuzzy resolution or arbitrary paths.
+    matches = [m for m in scan_models_dir(base) if m["name"] == model]
+    if not matches:
+        fail(f"No downloaded model named {model!r}. Run `yunshu models list`.", code=2)
+    target = Path(matches[0]["path"])
+    if (
+        not target.resolve().is_relative_to(base)
+        or target.is_symlink()
+        or target.parent.is_symlink()
+    ):
+        fail(
+            "Refusing to remove a symlinked or external model. Manage its source directly.",
+            code=2,
+        )
+    if not yes:
+        if is_json():
+            fail("Removal needs --yes: yunshu models rm <org/name> --yes", code=2)
+        if not typer.confirm(f"Remove {model} from {target}?"):
+            emit(
+                {"removed": False, "name": model},
+                human=lambda: typer.echo("Kept model."),
+            )
+            return
+    try:
+        shutil.rmtree(target)
+    except OSError as exc:
+        fail(f"Cannot remove {target}: {exc}. Check directory permissions.")
+    emit(
+        {"removed": True, "name": model, "path": str(target)},
+        human=lambda: typer.echo(f"Removed {model}"),
+    )
+
+
+model_app.command("pull")(pull)
+model_app.command("show")(model_info)
