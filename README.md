@@ -283,6 +283,7 @@ All settings: [Configuration](docs/CONFIGURATION.md).
 
 ## Docs
 
+- [CLI](docs/guides/CLI.md) — first run, models, launchd, JSON and shell completion
 - [Clients](docs/guides/CLIENTS.md) — curl, OpenAI / Anthropic SDKs, Open WebUI, agents
 - [API surface](docs/guides/API_SURFACE.md) and [API reference](docs/API.md)
 - [Agent compatibility](docs/guides/AGENT_COMPAT.md)

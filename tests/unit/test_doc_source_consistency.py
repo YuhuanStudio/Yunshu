@@ -161,3 +161,14 @@ def test_documented_endpoints_exist(path, routes):
 def test_unknown_endpoint_is_rejected(routes):
     assert not route_matches("/v1/docs015_invented_endpoint", routes)
     assert route_matches("/v1/chat/completions/{completion_id}", routes)
+
+
+@pytest.mark.parametrize("name", ["API_SURFACE.md", "API_EXTENSIONS.md"])
+def test_memory_unit_contract_is_documented(name):
+    from yunshu_engine.units import GIB
+
+    text = (ROOT / "docs/guides" / name).read_text()
+    assert GIB == 1024**3
+    assert "1 GiB = 1024^3 bytes" in text
+    assert "`*_bytes`" in text
+    assert "128.0" in text

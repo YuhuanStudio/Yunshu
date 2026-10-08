@@ -148,7 +148,7 @@ The `yunshu` block (the ModelCard):
 | `supported_parameters` | request fields the chat routes accept for this model (checked against `ChatCompletionRequest` by a test) |
 | `generation_defaults` | `generation_config.json` sampling defaults |
 
-Anonymous callers never see filesystem paths; authenticated callers also get `loaded`, `size_gb`, `stats` and `yunshu.path`.
+Anonymous callers never see filesystem paths; authenticated callers also get `loaded`, `size_gb` (binary GB, 1024^3, like macOS; exact `size_bytes` beside it), `stats` and `yunshu.path`.
 `reasoning_effort` values outside the template's own list are mapped (`high` becomes `xhigh`) instead of failing the template.
 
 **Yunxin.** Its `vllm` adapter reads `max_model_len`, `task`, `capabilities`; its `lmstudio` adapter reads `max_context_length`,
@@ -272,9 +272,12 @@ Z-Image ControlNet through `control_image`, is unchanged.
 
 ## CLI
 
+See [CLI guide](CLI.md) for first-run selection, model management, monitoring, JSON and shell completion.
+
 | Command | Status | Notes |
 |---|---|---|
 | `serve`, `chat`, `pull`, `doctor`, `config` (`set`, `unset`, `path`), `service` (`install`, `uninstall`, `start`, `stop`, `restart`, `status`, `logs`, `rotate-logs`), `cache` (`status`, `gc`), `model` (`list`, `info`, `load`, `unload`, `download`) | kept | Smoke-tested; `model load/unload` need the token on the server. |
+| `setup`, `models` (`list`, `pull`, `show`, `rm`), `top`, `completion` (`zsh`, `bash`, `fish`) | added | First-run guidance; global `--json` produces machine-readable results; `top` JSON is one snapshot. |
 | `launch claude` / `codex` / `opencode` / `pi` (`--dry-run`, `--effort`) | extended | Reads the model card and configures the agent with the real context window, output limit, reasoning levels and vision support; see [AGENT_COMPAT.md](AGENT_COMPAT.md#launching-an-agent). |
 | `status`, `diagnose gpu`, `diagnose server`, `diagnose bundle`, `launch list` | kept | `diagnose gpu` and `bench roofline` printed thousands of TFLOPS because the lazy matmuls were never evaluated; fixed. |
 | `complete`, `embed`, `tokenize`, `detokenize`, `rerank`, `score`, `classify`, `transcribe`, `speak`, `ocr`, `image`, `image-edit`, `image-variations`, `voices`, `cancel` | kept | Talk to a running server. |
@@ -496,3 +499,11 @@ and `agent-http-video` in `route_checks_agent_compat.py`. `yv --suite client_com
 uses the M3 lane; `client_compat_m5` uses the M5. Both run the 0.8B pilot before the
 3B text model, validate the commit-pinned source tree, and fail closed on missing
 or unsuccessful checks. Real-server evidence is pending for this addition.
+
+## Memory units
+
+All engine-returned `*_gb` fields use binary GiB: 1 GiB = 1024^3 bytes,
+with exact integer `*_bytes` siblings. This includes status memory, model `size_gb` /
+`size_bytes`, model-pool memory, hardware info and trace host statistics.
+A 128 GB Mac reports `total_gb: 128.0`; earlier decimal values were about 7% higher.
+Prometheus memory metrics remain in bytes. See [API extensions](API_EXTENSIONS.md#memory-units).

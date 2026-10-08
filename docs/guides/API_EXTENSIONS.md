@@ -161,7 +161,7 @@ stay minimal: they are public, and orchestrators key off their status codes.
 ```json
 {"object":"yunshu.status","version":"0.1.2","state":"running","uptime_s":17.3,
  "models":[{"id":"Qwen3.8-27B-oQ4e-mtp","type":"VLMEngine","loaded":true,"pinned":true}],
- "memory":{"active_gb":17.4,"cache_gb":0.3,"peak_gb":18.1,"total_gb":137.4,"pressure":0.127},
+ "memory":{"active_gb":16.2,"active_bytes":17394617344,"cache_gb":0.28,"cache_bytes":300000000,"peak_gb":16.9,"peak_bytes":18100000000,"total_gb":128.0,"total_bytes":137438953472,"pressure":0.127},
  "requests":{"active":1,"queued":0,"prefill":0,"decode":1,"items":[{"request_id":"job-7","phase":"decode","completion_tokens":112}]},
  "throughput":{"window_s":60,"requests":3,"prompt_tokens":11765,"completion_tokens":64,
                "live_decode_tps":41.8,"mean_prefill_tps":502.9,"mean_decode_tps":51.7}}
@@ -226,3 +226,11 @@ prefilled into the prefix cache, the response has no output and `x_yunshu.prewar
 |---|---|
 | Non-streaming keep-alive whitespace | Rejected on purpose, see Prefill progress. |
 | `load_duration` on the Ollama layer | Always 0: a model that has to be loaded first is reported by the model-loading status, not per response. |
+
+## Memory units
+
+All engine-returned `*_gb` fields use binary GiB: 1 GiB = 1024^3 bytes.
+Each has an exact integer `*_bytes` sibling, including status memory
+(`active_bytes`, `cache_bytes`, `peak_bytes`, `total_bytes`) and model `size_bytes`.
+A 128 GB Mac reports `total_gb: 128.0`. Earlier decimal values were about 7% higher;
+update consumers when upgrading. Prometheus memory metrics remain in bytes.

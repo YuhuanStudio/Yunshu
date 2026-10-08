@@ -12,6 +12,8 @@ label later main measurements as unreleased. Start at the top-level [README](../
 
 ## Use and configure
 
+- [guides/CLI.md](guides/CLI.md): first run, models, monitoring, JSON and shell completion
+
 - [guides/FIRST_RUN.md](guides/FIRST_RUN.md): install, choose a cached or small model, readiness, first chat/API request and upgrades
 - [guides/CLIENTS.md](guides/CLIENTS.md): connecting OpenAI / Anthropic SDKs, coding agents, Open
   WebUI

@@ -35,6 +35,7 @@ and web-retrieval compatibility to the `yunshu` package. These changes are merge
 
 - Credentialed browser clients must use explicit `YUNSHU_CORS_ORIGINS`; any wildcard now disables
   CORS credentials. Configuration writes replace files atomically with owner-only permissions (0600).
+- Every `*_gb` field the engine returns (`/v1/yunshu/status` memory and models, `/v1/models` `size_gb`, model-pool status, `memory_usage`, hardware info, trace host stats) is now binary: GB = 1024^3 bytes, the unit macOS, `yunshu doctor` and the `YUNSHU_*_GB` settings use. It was decimal (1e9) for engine memory and model sizes, so values drop by about 7% (a 128 GB Mac reads 128.0, not 137.4). Scripts that read `*_gb` see the new numbers; each field now has an exact integer `*_bytes` sibling (`active_bytes`, `cache_bytes`, `peak_bytes`, `total_bytes`, `size_bytes`, `current_bytes`, `max_bytes`, `max_memory_bytes`, `current_memory_bytes`, `total_memory_bytes`, `working_set_bytes`, `memory_available_bytes`). Prometheus metrics stay in bytes.
 
 ### Performance
 
@@ -45,6 +46,10 @@ No new decode or TTFT claim is made for this cycle here. Historical measurements
 [Benchmarks](docs/BENCHMARKS.md).
 
 ### Added
+
+- First-run model selection (`setup` / unconfigured `serve`), `models list/pull/show/rm`,
+  live `top`, zsh/bash/fish completion and consistent global `--json` output with next steps.
+  [CLI guide](docs/guides/CLI.md).
 
 - `POST /v1/decisions` and `POST /v1/systemone`: text and inline-image typed decisions on Clef MLX
   models, with probabilities, refusals for non-finite head results and no text decoding.
@@ -76,6 +81,8 @@ No new decode or TTFT claim is made for this cycle here. Historical measurements
   tests avoid shared server-port collisions. [Contributor workflow](CONTRIBUTING.md).
 
 ### Fixed
+
+- GPU guard blocks broad `pkill` commands that could terminate another worker or user process.
 
 - EmbeddingGemma 2 loading retains every weight shard instead of keeping only the last shard.
 - MCP notifications return an empty 204 body, preventing a dropped connection from a JSON `null` body.

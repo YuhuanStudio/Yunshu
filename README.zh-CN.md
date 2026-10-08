@@ -261,6 +261,8 @@ Yunshu 的贪婪输出。相对于原版 MLX 路径的准确度，分三个层�
 
 ## 文档
 
+- [CLI](docs/guides/CLI.md)：命令行：首次启动、模型、launchd、JSON 与 shell completion
+
 - [客户端](docs/guides/CLIENTS.md)：curl、OpenAI / Anthropic SDK、Open WebUI、agent
 - [API surface](docs/guides/API_SURFACE.md) 与 [API 参考](docs/API.md)
 - [Agent 兼容性](docs/guides/AGENT_COMPAT.md)
