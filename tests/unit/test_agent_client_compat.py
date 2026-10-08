@@ -1446,7 +1446,12 @@ def test_shell_probe_uses_greedy_followup(monkeypatch):
         body = kwargs["json"]
         requests.append(body)
         output = (
-            [{"type": "message", "content": [{"text": "COBALT"}]}]
+            [
+                {
+                    "type": "message",
+                    "content": [{"type": "output_text", "text": "COBALT"}],
+                }
+            ]
             if "previous_response_id" in body
             else [{"type": "function_call", "name": "compat_read"}]
         )
@@ -1458,3 +1463,39 @@ def test_shell_probe_uses_greedy_followup(monkeypatch):
     probe.shell_search(SimpleNamespace(model="fake", req=request))
     assert requests[0]["temperature"] == 0
     assert requests[0]["input"][0]["id"] == "call_probe"
+
+
+@pytest.mark.parametrize(
+    "body,word,expected",
+    [
+        ({"content": [{"type": "text", "text": "Blue."}]}, "BLUE", True),
+        (
+            {
+                "output": [
+                    {
+                        "type": "message",
+                        "content": [{"type": "output_text", "text": "Cobalt"}],
+                    }
+                ]
+            },
+            "COBALT",
+            True,
+        ),
+        ({"content": [{"type": "text", "text": "BLUEBERRY"}]}, "BLUE", False),
+        (
+            {"content": [{"type": "text", "text": "RED"}], "model": "BLUE"},
+            "BLUE",
+            False,
+        ),
+        ({"output": [{"type": "function_call", "arguments": "BLUE"}]}, "BLUE", False),
+    ],
+)
+def test_probe_confirmation_uses_whole_words_in_answer_text(body, word, expected):
+    import sys
+    from pathlib import Path
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts/research"))
+    import route_checks  # noqa: F401
+    import route_checks_agent_compat as probe
+
+    assert probe._has_confirmation(body, word) is expected

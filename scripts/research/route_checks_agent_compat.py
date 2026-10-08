@@ -5,9 +5,26 @@ from __future__ import annotations
 import base64
 import io
 import json
+import re
 from pathlib import Path
 
 from route_checks import Ctx, check, expect, skip
+
+
+def _has_confirmation(body, word):
+    """Check answer text, excluding IDs, tool arguments, and other metadata."""
+    texts = []
+    for item in body.get("output", body.get("content", [])):
+        blocks = item.get("content", []) if item.get("type") == "message" else [item]
+        texts.extend(
+            block.get("text", "")
+            for block in blocks
+            if block.get("type") in ("text", "output_text")
+        )
+    return any(
+        re.search(r"(?<!\w)" + re.escape(word) + r"(?!\w)", text, re.IGNORECASE)
+        for text in texts
+    )
 
 
 def _events(c, path, body):
@@ -113,12 +130,13 @@ def custom_tools(c: Ctx):
                     },
                 ],
                 "max_output_tokens": 64,
+                "temperature": 0,
                 "enable_thinking": False,
             },
             timeout=240,
         )
         expect(
-            follow.status_code == 200 and "MAGENTA" in str(follow.json()["output"]),
+            follow.status_code == 200 and _has_confirmation(follow.json(), "MAGENTA"),
             f"custom call_id followup failed: {follow.text[:500]}",
         )
 
@@ -197,7 +215,8 @@ def shell_search(c: Ctx):
                 timeout=240,
             )
             expect(
-                follow.status_code == 200 and "COBALT" in str(follow.json()["output"]),
+                follow.status_code == 200
+                and _has_confirmation(follow.json(), "COBALT"),
                 f"local_shell followup: HTTP {follow.status_code}: {follow.text}",
             )
         else:
@@ -365,13 +384,16 @@ def documents(c: Ctx):
                                 }
                             ],
                         },
-                        {"role": "user", "content": "What is the single word in the document? Answer with that word only."},
+                        {
+                            "role": "user",
+                            "content": "What is the single word in the document? Answer with that word only.",
+                        },
                     ],
                 },
                 timeout=240,
             )
             expect(
-                follow.status_code == 200 and "BLUE" in str(follow.json()["content"]),
+                follow.status_code == 200 and _has_confirmation(follow.json(), "BLUE"),
                 follow.text[:500],
             )
 
@@ -429,6 +451,7 @@ def anthropic_tools(c: Ctx):
             json={
                 "model": c.model,
                 "max_tokens": 64,
+                "temperature": 0,
                 "thinking": {"type": "disabled"},
                 "messages": [
                     {"role": "user", "content": instruction},
@@ -452,7 +475,7 @@ def anthropic_tools(c: Ctx):
             timeout=240,
         )
         expect(
-            follow.status_code == 200 and "BLUE" in str(follow.json()["content"]),
+            follow.status_code == 200 and _has_confirmation(follow.json(), "BLUE"),
             follow.text[:500],
         )
 
