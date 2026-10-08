@@ -796,3 +796,76 @@ test("model picker lists models with a vision filter and selects by id", async (
   await page.keyboard.press("Escape");
   await verifyClean();
 });
+
+test("presets: built-in applies, a saved preset persists per service address and can be deleted", async ({
+  page,
+}) => {
+  const api = createApiFixture();
+  await api.attach(page);
+  const playground = await openPlayground(page, api);
+  await page.getByRole("button", { name: "預設與紀錄" }).click();
+  const library = page.getByTestId("playground-library");
+  await library.getByRole("button", { name: "套用" }).first().click();
+  await expect(page.getByText(/已套用預設「精確」/).first()).toBeVisible();
+  // Save the current settings under a name.
+  await page.getByRole("button", { name: "預設與紀錄" }).click();
+  await library.getByLabel("預設名稱").fill("我的預設");
+  await library.getByRole("button", { name: "儲存目前設定" }).click();
+  await expect(library.getByTestId("saved-preset")).toContainText("我的預設");
+  const stored = await page.evaluate(() =>
+    Object.entries(localStorage).filter(([k]) =>
+      k.startsWith("yunshu.console.playground:"),
+    ),
+  );
+  expect(stored).toHaveLength(1);
+  expect(stored[0][1]).not.toContain(api.token);
+  await page.reload();
+  await page.getByRole("link", { name: "推理測試", exact: true }).click();
+  await page.getByRole("button", { name: "預設與紀錄" }).click();
+  await expect(library.getByTestId("saved-preset")).toContainText("我的預設");
+  await library.getByRole("button", { name: "刪除預設 我的預設" }).click();
+  await expect(library.getByTestId("saved-preset")).toHaveCount(0);
+  await expect(playground).toBeVisible();
+});
+
+test("history: a finished chat is kept locally, resumes after a new test, deletes and clears", async ({
+  page,
+}) => {
+  const api = createApiFixture();
+  await api.attach(page);
+  const playground = await openPlayground(page, api);
+  await playground.locator("textarea").first().fill("remember this chat");
+  await page.getByRole("button", { name: "傳送測試", exact: true }).click();
+  await expect(playground).toContainText("is four.");
+  await page.getByRole("button", { name: "新測試" }).click();
+  await expect(playground).not.toContainText("is four.");
+  await page.getByRole("button", { name: "預設與紀錄" }).click();
+  const library = page.getByTestId("playground-library");
+  await library.getByRole("tab", { name: "紀錄" }).click();
+  const list = library.getByTestId("history-list");
+  await expect(list).toContainText("remember this chat");
+  await list.getByRole("button", { name: "繼續" }).click();
+  await expect(playground).toContainText("is four.");
+  await page.getByRole("button", { name: "預設與紀錄" }).click();
+  await library.getByRole("tab", { name: "紀錄" }).click();
+  await library.getByRole("button", { name: /^刪除紀錄/ }).click();
+  await expect(library).toContainText("尚無紀錄");
+});
+
+test("storage that throws never breaks the playground", async ({ page }) => {
+  const api = createApiFixture();
+  await api.attach(page);
+  const playground = await openPlayground(page, api);
+  await page.evaluate(() => {
+    Storage.prototype.setItem = () => {
+      throw new Error("quota");
+    };
+  });
+  await playground.locator("textarea").first().fill("no storage");
+  await page.getByRole("button", { name: "傳送測試", exact: true }).click();
+  await expect(playground).toContainText("is four.");
+  await page.getByRole("button", { name: "預設與紀錄" }).click();
+  await expect(page.getByTestId("playground-library")).toContainText(
+    "瀏覽器拒絕儲存",
+  );
+});

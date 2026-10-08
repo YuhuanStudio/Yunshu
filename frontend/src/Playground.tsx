@@ -44,6 +44,7 @@ import {
   Sparkles,
   ImagePlus,
   X,
+  BookMarked,
   Code2,
 } from "lucide-react";
 import {
@@ -73,6 +74,19 @@ import {
 } from "./ui";
 import { compareOutputs, runStats, type RunTiming } from "./playground-metrics";
 import { SegmentedTray } from "./SegmentedTray";
+import { BUILTIN_PRESETS, PlaygroundLibrary } from "./PlaygroundLibrary";
+import {
+  deleteHistory,
+  deletePreset,
+  loadLibrary,
+  newId,
+  saveLibrary,
+  savePreset,
+  upsertHistory,
+  type HistoryEntry,
+  type Library,
+  type Preset,
+} from "./playground-library.ts";
 import { t, tr, useLocale } from "./i18n/index.ts";
 const CodeBlock = lazy(() =>
   import("@yuhuanowo/yunui/code").then((m) => ({ default: m.CodeBlock })),
@@ -261,7 +275,14 @@ export function Playground({
     [jsonMode, setJsonMode] = useState("text"),
     [image, setImage] = useState<{ name: string; url: string } | null>(null),
     [attachmentOpen, setAttachmentOpen] = useState(false),
-    [readingImage, setReadingImage] = useState(false);
+    [readingImage, setReadingImage] = useState(false),
+    [libraryOpen, setLibraryOpen] = useState(false),
+    [library, setLibrary] = useState<Library>(() =>
+      loadLibrary(connection.baseUrl),
+    ),
+    [libraryStored, setLibraryStored] = useState(true);
+  // The conversation being kept in the history list; a new test or a resume changes it.
+  const conversationId = useRef(newId());
   const setError = (message: string) =>
     setErrorState(message ? { message } : null);
   const controller = useRef<AbortController | null>(null),
@@ -632,6 +653,66 @@ export function Playground({
       ),
     };
   })();
+  // Presets and history: browser-local, per service address, never required.
+  function updateLibrary(next: Library) {
+    setLibrary(next);
+    setLibraryStored(saveLibrary(connection.baseUrl, next));
+  }
+  useEffect(() => {
+    // Keep a finished, non-empty chat in the history list (compare runs and partial replies are not kept).
+    if (loading || compare) return;
+    const done = messages.filter((m) => !m.incomplete && m.content.trim());
+    if (done.length < 2) return;
+    updateLibrary({
+      ...library,
+      history: upsertHistory(library.history, {
+        id: conversationId.current,
+        at: Date.now(),
+        model,
+        messages: done.map((m) => ({ role: m.role, content: m.content })),
+      }),
+    });
+    // The list is read, not watched: only a changed conversation writes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [messages, loading]);
+  const currentPreset = (): Omit<Preset, "id" | "name"> => ({
+    system,
+    temperature,
+    maxTokens,
+    thinking: thinking === "on" || thinking === "off" ? thinking : "auto",
+    format: jsonMode === "json" ? "json" : "text",
+    model,
+  });
+  function applyPreset(p: Omit<Preset, "id" | "name">, name: string) {
+    setSystem(p.system);
+    setTemperature(p.temperature);
+    setMaxTokens(p.maxTokens);
+    setThinking(p.thinking);
+    setJsonMode(p.format);
+    if (p.model && models.some((m) => m.id === p.model)) setModel(p.model);
+    toast.info(t("playground.library.preset.applied", { name }));
+    setLibraryOpen(false);
+  }
+  function resume(entry: HistoryEntry) {
+    if (loading) return;
+    conversationId.current = entry.id;
+    setMode("chat");
+    setPair([null, null]);
+    setPairPrompt(null);
+    setError("");
+    if (entry.model && models.some((m) => m.id === entry.model))
+      setModel(entry.model);
+    setMessages(
+      entry.messages.map((m) => ({
+        id: newId(),
+        role: m.role,
+        content: m.content,
+        model: entry.model || model,
+        temperature,
+      })),
+    );
+    setLibraryOpen(false);
+  }
   function newTest() {
     if (messages.length || pairPrompt)
       toast.info(t("playground.header.cleared"), undefined, {
@@ -650,6 +731,7 @@ export function Playground({
     setPair([null, null]);
     setPairPrompt(null);
     setError("");
+    conversationId.current = newId();
   }
   const empty = (
     <EmptyState
@@ -738,6 +820,14 @@ export function Playground({
         actions={
           <>
             <div className="flex items-center gap-1">
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => setLibraryOpen(true)}
+              >
+                <BookMarked size={13} />
+                {t("playground.library.open")}
+              </Button>
               <Button
                 size="sm"
                 variant="ghost"
@@ -1184,6 +1274,50 @@ export function Playground({
             })()}
         </DialogContent>
       </Dialog>
+      <PlaygroundLibrary
+        open={libraryOpen}
+        onClose={() => setLibraryOpen(false)}
+        presets={library.presets}
+        history={library.history}
+        stored={libraryStored}
+        currentPreset={currentPreset}
+        onApplyBuiltin={(id) => {
+          const b = BUILTIN_PRESETS.find((x) => x.id === id)!;
+          applyPreset(
+            {
+              system: "",
+              temperature: b.temperature,
+              maxTokens,
+              thinking: "auto",
+              format: b.format,
+              model: "",
+            },
+            tr(`playground.library.builtin.${id}`),
+          );
+        }}
+        onApply={(p) => applyPreset(p, p.name)}
+        onSave={(p) => {
+          updateLibrary({
+            ...library,
+            presets: savePreset(library.presets, p),
+          });
+          toast.success(t("playground.library.preset.saved", { name: p.name }));
+        }}
+        onDeletePreset={(id) =>
+          updateLibrary({
+            ...library,
+            presets: deletePreset(library.presets, id),
+          })
+        }
+        onResume={resume}
+        onDeleteHistory={(id) =>
+          updateLibrary({
+            ...library,
+            history: deleteHistory(library.history, id),
+          })
+        }
+        onClearHistory={() => updateLibrary({ ...library, history: [] })}
+      />
       <Sheet
         open={attachmentOpen}
         onClose={() => setAttachmentOpen(false)}
