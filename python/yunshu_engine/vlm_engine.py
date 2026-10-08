@@ -44,7 +44,7 @@ from typing import Any
 
 import mlx.core as mx
 
-from . import gc_policy, netguard, settings
+from . import gc_policy, netguard, next_turn, settings
 from .moe_pack import tensor_quantization_override, unsupported_pack_reason
 from .request import RequestOutput
 from .types import EngineConfig
@@ -395,6 +395,8 @@ class VLMEngine:
         self._config: dict = {}
         self._running = False
         self._active_count = 0
+        self._rehearsal_cancel: threading.Event | None = None
+        self._rehearsal_task: asyncio.Future | None = None
         self._active_count_lock = threading.Lock()
         self._num_requests_processed = 0
         self._total_reasoning_tokens = 0
@@ -887,6 +889,7 @@ class VLMEngine:
             messages = messages or []
         if self._model is None:
             raise RuntimeError("Engine not started")
+        self._cancel_rehearsal()
         tpl_extra = self._request_template_extra(kwargs)
         # A timeout below must be able to stop the generation it abandons.
         if kwargs.get("cancel_event") is None:
@@ -1024,6 +1027,16 @@ class VLMEngine:
                 )
             except Exception:
                 pass
+            self._maybe_rehearse(
+                messages,
+                result.rsplit("</think>", 1)[-1].strip(),
+                finish_reason=_finish_reason,
+                completion_tokens=completion_token_count,
+                enable_thinking=_enable_thinking,
+                tpl_extra=tpl_extra,
+                has_media=bool(image_paths or audio_paths),
+                kwargs=kwargs,
+            )
             return {
                 "text": result,
                 "finish_reason": _finish_reason,
@@ -1081,6 +1094,7 @@ class VLMEngine:
         if self._model is None:
             raise RuntimeError("Engine not started")
 
+        self._cancel_rehearsal()
         tpl_extra = self._request_template_extra(kwargs)
         if cancel_event is None:
             cancel_event = threading.Event()
@@ -1265,6 +1279,8 @@ class VLMEngine:
         _model_id = self.model_name
 
         _ended_normally = False
+        _reply_parts: list[tuple[str, str]] = []
+        _finish_seen: str | None = None
 
         try:
             while True:
@@ -1291,6 +1307,9 @@ class VLMEngine:
                     break
                 if output.finished and output.finish_reason != "error":
                     _ended_normally = True
+                    _finish_seen = output.finish_reason
+                if output.new_text:
+                    _reply_parts.append((output.new_text, output.current_state))
                 if output.prompt_tokens > 0:
                     _prompt_tokens_count = output.prompt_tokens
                 if output.completion_tokens > 0:
@@ -1345,6 +1364,17 @@ class VLMEngine:
                     queue.get_nowait()
                 except asyncio.QueueEmpty:
                     break
+            if _ended_normally and not cancel_event.is_set():
+                self._maybe_rehearse(
+                    messages,
+                    next_turn.reply_text(_reply_parts),
+                    finish_reason=_finish_seen,
+                    completion_tokens=_completion_tokens_count,
+                    enable_thinking=enable_thinking,
+                    tpl_extra=tpl_extra,
+                    has_media=bool(image_paths or audio_paths),
+                    kwargs=kwargs,
+                )
             # This async generator is driven step-by-step from a separate task by
             # the SSE keepalive wrapper, so this finally can run in a different
             # contextvars.Context than the one .set() ran in — reset() would then
@@ -1361,6 +1391,124 @@ class VLMEngine:
                             f for f in self._temp_files if f not in _mine_set
                         ]
             self._cleanup_temp_files(_mine)
+
+    # -- next-turn rehearsal (YUNSHU_NEXT_TURN_PREFILL) ---------------------------------
+
+    def _cancel_rehearsal(self) -> None:
+        """A real request arrived: stop an unfinished rehearsal at its next prefill atom."""
+        ev = getattr(self, "_rehearsal_cancel", None)
+        if ev is not None:
+            ev.set()
+
+    def _maybe_rehearse(
+        self,
+        messages: list[dict],
+        reply: str,
+        *,
+        finish_reason: str | None,
+        completion_tokens: int,
+        enable_thinking: bool | None,
+        tpl_extra: dict | None,
+        has_media: bool,
+        kwargs: dict,
+    ) -> None:
+        if not settings.get("YUNSHU_NEXT_TURN_PREFILL"):
+            return
+        if not next_turn.eligible(
+            finish_reason=finish_reason,
+            completion_tokens=completion_tokens,
+            reply=reply,
+            has_media=has_media,
+            has_tools=bool(kwargs.get("_tool_spec") or kwargs.get("tools")),
+            constrained=bool(kwargs.get("json_schema") or kwargs.get("grammar")),
+        ):
+            return
+        if self._active_count > 1 or self._batch_runner is None:
+            return  # other work is waiting: the GPU is not idle
+        task = asyncio.ensure_future(
+            self._rehearse(messages, reply, enable_thinking, tpl_extra)
+        )
+        self._rehearsal_task = task
+
+    async def _rehearse(
+        self,
+        messages: list[dict],
+        reply: str,
+        enable_thinking: bool | None,
+        tpl_extra: dict | None,
+    ) -> None:
+        loop = asyncio.get_running_loop()
+        ev = threading.Event()
+        self._rehearsal_cancel = ev
+        rehearsal_messages = next_turn.with_reply(messages, reply)
+        marker = self._chatml_head_marker()
+        tokenizer = self._tokenizer
+
+        def _prepare():
+            full = self._tokenize_with_cache(
+                rehearsal_messages,
+                enable_thinking=enable_thinking,
+                template_extra=tpl_extra,
+            ).tolist()
+            ids = next_turn.cut_before_user_turn(
+                full,
+                marker[0] if marker else None,
+                lambda toks: tokenizer.decode(list(toks)),
+            )
+            if ids is None or ev.is_set():
+                return None
+            params = self._runner_kwargs(
+                max_tokens=1,
+                temperature=0.0,
+                top_p=1.0,
+                top_k=0,
+                min_p=0.0,
+                seed=None,
+                stop=None,
+                stop_token_ids=[],
+                repetition_penalty=1.0,
+                logprobs=False,
+                top_logprobs=None,
+                enable_thinking=enable_thinking,
+                thinking_budget=None,
+                cancel_event=ev,
+                kwargs={},
+            )
+            return _RunnerCall(
+                self._generate_vlm_runner_text,
+                ids,
+                extras={},
+                prompt_kwargs=None,
+                apc_semantic_hash=None,
+                prompt_cache_plan=self._resolve_prompt_cache_plan(
+                    None,
+                    rehearsal_messages[:-1],
+                    ids,
+                    None,
+                    enable_thinking,
+                    tpl_extra,
+                    {"ttl": None},
+                ),
+                **params,
+            )
+
+        try:
+            call = await loop.run_in_executor(self._executor, _prepare)
+            if call is None:
+                logger.debug("next-turn rehearsal skipped (no clean cut)")
+                return
+            t0 = time.perf_counter()
+            await loop.run_in_executor(self._runner_consumers(), call)
+            logger.info(
+                "next-turn rehearsal done in %.2fs%s",
+                time.perf_counter() - t0,
+                " (cancelled)" if ev.is_set() else "",
+            )
+        except (Exception, asyncio.CancelledError):
+            logger.debug("next-turn rehearsal ended", exc_info=True)
+        finally:
+            if getattr(self, "_rehearsal_cancel", None) is ev:
+                self._rehearsal_cancel = None
 
     def backend_capabilities(self, lm: Any = None) -> Any:
         """This backbone's cache layout via the shared ``model_backend`` layer
