@@ -52,3 +52,11 @@ Gemma4 DualMode: config.model_type is `gemma4`, and the files are embedding head
 and LoRA adapters, not EmbeddingGemma 2 weight shards. Split-component files under
 subdirectories likewise do not reach the raw root-shard loader. This is a dated
 inventory, not a claim about future uploads.
+
+The published Qwen3 0.6B 4bit chat template expects `query` and `document` roles.
+The pinned aperepel service supplies `user`; that template drops the query and
+document, so distinct pairs produce identical IDs and logits. Yunshu’s official
+recipe matches the converted role template. Verification records this raw
+negative result separately from the upstream readout with fixed identical IDs;
+the latter isolates yes/no logit extraction without claiming service-template
+parity. The Apache-2.0 converted template is pinned as a CPU fixture in vendor.json.

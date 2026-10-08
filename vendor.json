@@ -233,6 +233,16 @@
       "local_changes": [
         "Absolute imports for installed mlx-vlm shared components; formatting."
       ]
+    },
+    {
+      "path": "tests/fixtures/priorfix/qwen3_reranker.jinja",
+      "repo": "https://huggingface.co/mlx-community/Qwen3-Reranker-0.6B-4bit",
+      "clone": "reference/Qwen3-Reranker-0.6B-4bit",
+      "upstream_path": "chat_template.jinja",
+      "commit": "5f324548f1d20c2b5a450f126fc6ef2fb1126524",
+      "license": "Apache-2.0",
+      "kind": "vendored",
+      "local_changes": []
     }
   ],
   "derived": [

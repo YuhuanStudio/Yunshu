@@ -11,6 +11,21 @@ from pathlib import Path
 import numpy as np
 
 
+class FixedInputTokenizer:
+    """Isolate reference readout from the known incompatible chat-role template."""
+
+    def __init__(self, ids):
+        if not ids:
+            raise ValueError("fixed input must be non-empty")
+        self.ids = tuple(ids)
+
+    def apply_chat_template(self, *args, **kwargs):
+        return "controlled-input"
+
+    def encode(self, *args, **kwargs):
+        return list(self.ids)
+
+
 def parser():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument(
@@ -118,13 +133,22 @@ def retrieval(reference):
         mx.eval(logits)
         ours = [float(logits[0, -1, i]) for i in [upstream._yes_id, upstream._no_id]]
         score = upstream._score_pair(query, doc)
+        raw = dict(captured)
+        upstream._tokenizer = FixedInputTokenizer(ids)
+        held_score = upstream._score_pair(query, doc)
+        controlled_ids_equal = ids == captured["ids"]
+        controlled_logits_equal = exact(ours, captured["yes_no"])
+        upstream._tokenizer = tok
         qwen.append(
             {
-                "input_ids_equal": ids == captured["ids"],
+                "input_ids_equal": ids == raw["ids"],
+                "controlled_ids_equal": controlled_ids_equal,
+                "controlled_logits_equal": controlled_logits_equal,
+                "controlled_score": held_score,
                 "ours_tokens": len(ids),
-                "upstream_tokens": len(captured["ids"]),
+                "upstream_tokens": len(raw["ids"]),
                 "ours_yes_no": ours,
-                "upstream_yes_no": captured["yes_no"],
+                "upstream_yes_no": raw["yes_no"],
                 "upstream_score": score,
             }
         )
@@ -179,7 +203,10 @@ def retrieval(reference):
     # The aperepel system/body differs from the official recipe. Record this
     # negative comparator result without changing the official Qwen template.
     return {
-        "passed": all(r["passed"] and r["empty"] for r in rows),
+        "passed": all(r["passed"] and r["empty"] for r in rows)
+        and all(
+            r["controlled_ids_equal"] and r["controlled_logits_equal"] for r in qwen
+        ),
         "vl": rows,
         "qwen_comparator": qwen,
         "qwen_template_parity": all(r["input_ids_equal"] for r in qwen),

@@ -127,8 +127,18 @@ def run(args):
     passed = all(r["passed"] for r in rows) and (
         floor is None or all(r[2] >= floor for r in fp32_rows)
     )
+    from mlx.utils import tree_flatten
+
+    quantized_roots = sorted(
+        {
+            k.split(".")[0]
+            for k, _ in tree_flatten(model._upstream.parameters())
+            if k.endswith(".scales")
+        }
+    )
     return {
         "complete": True,
+        "quantized_roots": quantized_roots,
         "shard_count": len(shards),
         "raw_multishard": raw_multishard,
         "passed": passed,
@@ -138,6 +148,10 @@ def run(args):
         "fp32_cases": len(fp32_rows),
         "fp32_floor": floor,
         "fp32_min_cosine": min(r[2] for r in fp32_rows),
+        "loader_backend": type(model._upstream).__module__,
+        "text_embedding_class": type(
+            model._upstream.language_model.embed_tokens
+        ).__name__,
         "engaged": "mlx-vlm embedding loader (native or pinned MIT fallback)",
     }
 
