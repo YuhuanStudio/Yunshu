@@ -2295,7 +2295,8 @@
     "mlx-vlm",
     "mlx-metal",
     "transformers",
-    "llguidance"
+    "llguidance",
+    "trafilatura"
   ],
   "watch_excluded": {
     "reference/ACE-Step-1.5": "multimodal generation (image / video / audio synthesis) is parked; no LLM/VLM decode, TTFT or cache technique to learn",
@@ -2360,5 +2361,29 @@
     "reference/mlx-examples": "superseded or covered elsewhere (mlx-examples -> mlx-lm; our own fork; hot-swap multimodal server)",
     "reference/mlx-vlm-yunshu": "superseded or covered elsewhere (mlx-examples -> mlx-lm; our own fork; hot-swap multimodal server)",
     "reference/mlx-serve-multimodal": "superseded or covered elsewhere (mlx-examples -> mlx-lm; our own fork; hot-swap multimodal server)"
-  }
+  },
+  "websearch_prior_art": [
+    {
+      "repo": "https://github.com/adbar/trafilatura",
+      "license": "Apache-2.0 (2.1.0)",
+      "reviewed_date": "2026-10-08",
+      "use": "Declared dependency; sanitized HTML extraction; existing heading/code and hidden-content fixtures."
+    },
+    {
+      "repo": "https://github.com/searxng/searxng",
+      "license": "AGPL-3.0-or-later",
+      "reviewed_date": "2026-10-08",
+      "use": "External HTTP JSON adapter only; fixture parser/ranking tests; no copied source."
+    },
+    {
+      "repo": "https://github.com/cedarsaam/agent-search",
+      "reviewed_date": "2026-10-08",
+      "use": "Architecture comparison: SearXNG + cited retrieval + Tavily/MCP surface; no copied source; license not relied on."
+    },
+    {
+      "repo": "https://github.com/modelcontextprotocol/python-sdk",
+      "reviewed_date": "2026-10-08",
+      "use": "Installed SDK compatibility probes; no copied source."
+    }
+  ]
 }
