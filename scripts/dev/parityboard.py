@@ -191,6 +191,39 @@ def summarize(reps, minimum=3, strict=True):
     return {'status': 'measured', 'median': median, 'mad': mad, 'samples': evidence}
 
 
+FAMILIES = {'decode': 'decode', 'ttft_cold_s': 'ttft', 'ttft_warm_s': 'ttft', 'followup_ttft_s': 'followup_ttft',
+            'prefill_cold_tps': 'prefill', 'agentic_session_s': 'agentic'}
+H2H_ENGINES = ('llamacpp', 'mlxlm', 'omlx', 'splash', 'tf-new')
+
+
+def family(metric):
+    return 'decode' if metric.startswith('decode_') else FAMILIES.get(metric)
+
+
+def head_to_head(items_prov):
+    """items_prov: [(metric, higher_is_better, {engine: provisional summary})]. Win/tie/loss for Yunshu per
+    engine and metric family; tie = directional gap within combined MAD; provisional if any side <3 reps."""
+    out = {}
+    for metric, high, prov in items_prov:
+        fam = family(metric)
+        ours = prov.get('yunshu-new')
+        if not fam or not ours or ours['status'] != 'measured':
+            continue
+        for eng in H2H_ENGINES:
+            theirs = prov.get(eng)
+            if not theirs or theirs['status'] != 'measured':
+                continue
+            cell = out.setdefault(eng, {}).setdefault(
+                fam, {'win': 0, 'tie': 0, 'loss': 0, 'n': 0, 'provisional': False})
+            gap = (theirs['median'] - ours['median']) if high else (ours['median'] - theirs['median'])
+            noise = ours['mad'] + theirs['mad']
+            cell['win' if gap < -noise else 'tie' if gap <= noise else 'loss'] += 1
+            cell['n'] += 1
+            if min(len(ours['samples']), len(theirs['samples'])) < 3:
+                cell['provisional'] = True
+    return out
+
+
 def build(runs, jobs, models=(MODEL,)):
     cells, rejected, sources = load_cells(runs, jobs)
     flagged = []
@@ -200,6 +233,8 @@ def build(runs, jobs, models=(MODEL,)):
                       else ('agentic',) if metric.startswith('agentic') else ('prose', 'code'))}
     keys.update(key[:4] for key in samples)
     items = []
+    h2h_in = []
+    with_data = best_ours = 0
     for key in sorted(keys):
         model, ctx, kind, metric = key
         engines = {engine: summarize(samples.get((*key, engine), {})) for engine in ENGINES}
@@ -227,6 +262,11 @@ def build(runs, jobs, models=(MODEL,)):
             b, o = pb[1]['median'], prov['yunshu-new']['median']
             item['provisional'] = {'best_engine': pb[0], 'best': b, 'ours': o, 'ratio': o / b if b else None,
                                    'reps': {e: len(v['samples']) for e, v in pm}}
+        if metric in FAMILIES or metric.startswith('decode_'):
+            h2h_in.append((metric, high, prov))
+            if item['provisional']:
+                with_data += 1
+                best_ours += item['provisional']['best_engine'] == 'yunshu-new'
         items.append(item)
     n = sum(i['status'] == 'parity' for i in items)
     unknown = [f"{i['model']}/{i['ctx']}/{i['kind']}/{i['metric']}" for i in items if i['status'] == 'unknown']
@@ -236,14 +276,18 @@ def build(runs, jobs, models=(MODEL,)):
             groups[i['metric']].append(f"{i['ctx']}/{i['kind']}")
     verdict = f"parity: {n}/{len(items)} items, missing: " + (
         '; '.join(f"{m} x{len(v)}" for m, v in sorted(groups.items())) or 'none')
-    return {'schema_version': 1, 'verdict': verdict, 'parity': n, 'total': len(items),
+    h2h = head_to_head(h2h_in)
+    summary = (f"unknown = not enough reps (<3) or excluded evidence, NOT behind. {with_data} items have provisional "
+               f"data (excluding memory/energy); Yunshu is currently best engine on {best_ours} of them.")
+    return {'schema_version': 1, 'verdict': verdict, 'summary': summary, 'head_to_head': h2h,
+            'with_data': with_data, 'best_ours': best_ours, 'parity': n, 'total': len(items),
             'missing': unknown, 'gate_open': n == len(items), 'items': items,
             'rejected': rejected, 'sources': sources, 'memory_method_flagged': flagged,
             'policy': 'Product ranking, not same-checkpoint proof; >=3 reps; combined MAD; missing engines listed individually; no historical markdown numbers used as gate evidence.'}
 
 
 def markdown(board):
-    lines = ['# Per-item parity board', '', board['verdict'], '', board['policy'], '',
+    lines = ['# Per-item parity board', '', board['verdict'], '', board['summary'], '', board['policy'], '',
              'Ratio = ours / best; positive directional gap means Yunshu is worse. Values are M5 only.',
              'Memory is whole cell-group process-tree peak/30s idle, not per-request RAM. Prefill uses engine accounting only.',
              '', '| Model | Context | Kind | Item | Best engine | Best | Ours | Ratio | Gap | MAD band | Status |',
@@ -258,6 +302,11 @@ def markdown(board):
         if pv and i['status'] == 'unknown':
             lines.append(f"| {i['ctx']} | {i['kind']} | {i['metric']} | {pv['best_engine']} | {pv['best']:.5g} | "
                          f"{pv['ours']:.5g} | {pv['ratio']:.3f} | {pv['reps']} |")
+    lines += ['', '## Head-to-head: Yunshu vs each engine (win/tie/loss, same MAD band; * = provisional, <3 reps)', '',
+              '| Engine | Family | Win | Tie | Loss | Items |', '|---|---|---|---|---|---|']
+    for eng, fams in board['head_to_head'].items():
+        for fam, c in sorted(fams.items()):
+            lines.append(f"| {eng} | {fam} | {c['win']} | {c['tie']} | {c['loss']} | {c['n']}{'*' if c['provisional'] else ''} |")
     flagged = board.get('memory_method_flagged', [])
     lines += ['', '## Memory cells needing rerun (method != system-delta; never counted as gap or parity)', '',
               'phys_footprint (single PID or process tree) excludes mmap/file-backed weights, so it is not comparable across engines.',
