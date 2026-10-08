@@ -40,6 +40,7 @@ def test_snapshot_stops_failed_engine_and_records_all_other_evidence(
     ctx = SimpleNamespace(
         cand=SimpleNamespace(path=Path(__file__).resolve().parents[2], key="candidate"),
         base=SimpleNamespace(path=tmp_path, key="release", commit="release"),
+        env={},
         suite={"snapshot_agents": False},
         run=SimpleNamespace(path=tmp_path),
         exe=SimpleNamespace(run_cells=run),

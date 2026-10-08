@@ -68,7 +68,7 @@ def main(argv=None):
         )
         return 0
     args.out.parent.mkdir(parents=True, exist_ok=True)
-    server = tfbench.Srv(
+    server = tfbench.start_server(
         args.engine, {}, f"agent-{args.engine}-{args.task}", ctx_tokens=140000
     )
     try:

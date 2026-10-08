@@ -472,3 +472,55 @@ def test_stock_server_models_endpoint_has_an_existing_isolated_hf_cache(tmp_path
         Path(path).parent.mkdir(parents=True, exist_ok=True)
         Path(path).write_text(text)
     assert (tmp_path / ".cache/huggingface/hub").is_dir()
+
+
+def test_bind_race_retries_and_preserves_the_failed_log(tmp_path, monkeypatch):
+    import tfbench
+
+    monkeypatch.setattr(tfbench, "OUT", tmp_path)
+    log = tmp_path / "out/server-fixture.log"
+    log.parent.mkdir()
+    calls = []
+
+    def launch(*args, **kwargs):
+        calls.append(1)
+        if len(calls) == 1:
+            log.write_text("Address already in use")
+            raise RuntimeError("server exited early")
+        return "owned server"
+
+    monkeypatch.setattr(tfbench, "Srv", launch)
+    monkeypatch.setattr(tfbench.time, "sleep", lambda *_: None)
+    assert tfbench.start_server("splash", {}, "fixture") == "owned server"
+    assert len(calls) == 2
+    assert log.with_suffix(".bind-attempt0.log").read_text() == "Address already in use"
+
+
+def test_model_error_is_not_retried_as_a_bind_race(tmp_path, monkeypatch):
+    import tfbench
+
+    monkeypatch.setattr(tfbench, "OUT", tmp_path)
+    log = tmp_path / "out/server-fixture.log"
+    log.parent.mkdir()
+    log.write_text("model architecture unsupported")
+    monkeypatch.setattr(
+        tfbench,
+        "Srv",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("model error")),
+    )
+    with pytest.raises(RuntimeError, match="model error"):
+        tfbench.start_server("splash", {}, "fixture")
+
+
+def test_listener_ownership_refuses_an_unowned_process_group(monkeypatch):
+    import tfbench
+
+    monkeypatch.setattr(
+        tfbench.subprocess,
+        "run",
+        lambda *a, **k: subprocess.CompletedProcess([], 0, "200\n", ""),
+    )
+    monkeypatch.setattr(tfbench.os, "getpgid", lambda pid: {100: 100, 200: 200}[pid])
+    assert not tfbench.owns_listener(100, 18990)
+    monkeypatch.setattr(tfbench.os, "getpgid", lambda pid: 100)
+    assert tfbench.owns_listener(100, 18990)

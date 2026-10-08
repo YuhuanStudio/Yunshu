@@ -68,6 +68,46 @@ def free_port():
     raise RuntimeError("no port")
 
 
+def owns_listener(pid, port):
+    """A ready endpoint must belong to our process group before inference."""
+    result = subprocess.run(
+        ["lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN", "-t"],
+        capture_output=True,
+        text=True,
+        timeout=5,
+    )
+    try:
+        group = os.getpgid(pid)
+        return any(os.getpgid(int(owner)) == group for owner in result.stdout.split())
+    except (ProcessLookupError, ValueError):
+        return False
+
+
+def start_server(engine, extra_env, tag, **kwargs):
+    """Retry bind races only; model/protocol failures remain fail-fast."""
+    for attempt in range(5):
+        try:
+            return Srv(engine, extra_env, tag, **kwargs)
+        except RuntimeError:
+            log = OUT / "out" / f"server-{tag}.log"
+            text = log.read_text(errors="replace") if log.exists() else ""
+            if not any(
+                marker in text.lower()
+                for marker in (
+                    "address already in use",
+                    "errno 48",
+                    "error while attempting to bind",
+                )
+            ):
+                raise
+            log.rename(log.with_suffix(f".bind-attempt{attempt}.log"))
+            if attempt == 4:
+                raise
+            print(f"port bind race; retrying our {engine} instance", flush=True)
+            time.sleep(1)
+    raise RuntimeError("port pool remained unavailable")
+
+
 def spec_request(engine, extra_env):
     """Make the comparison independent of drafter discovery under isolated HOME."""
     if engine != "yunshu":
@@ -182,6 +222,9 @@ class Srv:
                 self.kill()
                 raise RuntimeError(f"server startup failed; see {self.log}")
             try:
+                if not owns_listener(self.proc.pid, self.port):
+                    time.sleep(0.2)
+                    continue
                 with urllib.request.urlopen(self.url + "/v1/models", timeout=3) as r:
                     self.model = json.load(r)["data"][0]["id"]
                     self.ready_s = time.time() - t0
@@ -879,7 +922,7 @@ def main():
             raise AssertionError(
                 "Yunshu pinned tree does not match expected release SHA"
             )
-    s = Srv(
+    s = start_server(
         a.engine,
         extra_env,
         f"{a.engine}-{a.part}-{a.rep}{a.tag}",
@@ -911,7 +954,7 @@ def main():
                 env=s.extra_env,
                 requested_spec_mode=s.requested_spec_mode,
                 engaged_spec_mode=s.engaged_spec_mode,
-                engine_probe=s.probe,
+                engine_probe=getattr(s, "probe", None),
                 tag=a.tag,
             )
             for _ in range(2):

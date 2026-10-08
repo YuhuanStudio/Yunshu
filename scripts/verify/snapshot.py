@@ -15,7 +15,14 @@ def stage_snapshot(ctx):
     sys.path.insert(0, str(harness))
     import bench_snapshot as bs
 
-    engines = list(bs.ENGINE_ORDER)
+    engines = [
+        e
+        for e in ctx.env.get("SNAPSHOT_ENGINES", ",".join(bs.ENGINE_ORDER)).split(",")
+        if e
+    ]
+    unknown = set(engines) - set(bs.ENGINE_ORDER)
+    if unknown:
+        raise ValueError(f"unknown snapshot engines: {sorted(unknown)}")
     outdir = ctx.run.path / "snapshot"
     trees = {"yunshu-new": str(ctx.base.path / "python")}
     jobs = bs.plan_pilots(engines, outdir, trees)
@@ -24,6 +31,7 @@ def stage_snapshot(ctx):
     pilot_failed = set()
     reasons, evidence = [], {}
     for job in jobs:
+        job.env["TFB_OUT"] = str(ctx.run.path / "work")
         if job.engine == "yunshu-new":
             job.env["TFB_EXPECT_YUNSHU_SHA"] = ctx.base.commit
         if job.engine in failed_engines:
@@ -84,6 +92,7 @@ def stage_snapshot(ctx):
                     return snapshot_agent.validate(bs.read_rows(path), task)
 
                 env = bs.job_env(engine, trees)
+                env["TFB_OUT"] = str(ctx.run.path / "work")
                 if engine == "yunshu-new":
                     env["TFB_EXPECT_YUNSHU_SHA"] = ctx.base.commit
                 cell = Cell(
