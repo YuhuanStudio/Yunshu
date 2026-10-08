@@ -2,13 +2,13 @@
 """Cross-engine snapshot driver: plan -> gpuq -> validate -> aggregate (resumable, fail closed).
 
     bench_snapshot.py plan   [--dry-run]            print every planned job, count and GPU-hour estimate
-    bench_snapshot.py submit --stage pilot          one smoke job per engine (engaged-mode proof), priority -1
+    bench_snapshot.py submit --stage pilot          one smoke job per engine (engaged-mode proof), priority 0
     bench_snapshot.py submit --stage cells          measurement cells; refuses engines whose pilot did not validate
     bench_snapshot.py submit --stage agent          agentbench: Yunshu new vs base (+ TensorFold)
     bench_snapshot.py status                        which jobs are complete / failed / missing
     bench_snapshot.py aggregate [--md FILE]         medians and ranges as markdown
 
-Every cell is one gpuq job (priority -1, label bench014-<engine>-<group>-r<rep>, --quiet) that runs
+Every cell is one gpuq job (priority 0, label snapshot014-<engine>-<group>-r<rep>, --quiet) that runs
 scripts/research/tfbench.py once: one fresh server, one engine, one cell group. A job is complete only
 when its JSONL validates (engaged spec mode == expected, part_done, memory row, every row carries the
 engine / version / sha / flags / drafter / spec mode / checkpoint fields, the expected number of cells).
@@ -71,7 +71,8 @@ REQUIRED_META = (
 # (group, part, ctxs, kinds): the cell groups. Short contexts share a server, long ones get their own
 # job so each stays inside one gpuq timeout and a failure costs one cell.
 DECODE_GROUPS = (
-    ("d1k8k", (1024, 8192), KINDS),
+    ("d1k", (1024,), KINDS),
+    ("d8k", (8192,), KINDS),
     ("d32k", (32768,), KINDS),
     ("d64k-prose", (65536,), ("prose",)),
     ("d64k-code", (65536,), ("code",)),
@@ -166,15 +167,15 @@ def estimate_minutes(engine: str, part: str, ctxs, kinds) -> float:
         s += sum(decode_cell_seconds(engine, c) for c in ctxs for _ in kinds)
     elif part == "needle":
         for c in ctxs:
-            s += prefill_seconds(engine, c) + NEEDLES * (
-                4 + 0.1 * prefill_seconds(engine, c)
-            )
+            # Generic hybrid-cache servers may prefill every changed question.
+            # Reserve the cold worst case rather than assuming prefix reuse.
+            s += NEEDLES * (prefill_seconds(engine, c) + 4)
     elif part == "conc":
         s += (
             len(CONC_NS)
             * CONC_TRIALS
             * (sum(CONC_NS) / len(CONC_NS))
-            * decode_seconds(engine, 4096, 256)
+            * (decode_seconds(engine, 32768, 2048) + prefill_seconds(engine, 32768))
         )
     elif part == "smoke":
         s += 60
@@ -248,7 +249,9 @@ def tfbench_argv(job: Job, out: Path) -> list[str]:
             "--conc-trials",
             str(CONC_TRIALS),
             "--ctx-tokens",
-            "16384",
+            str((32768 + 4096) * max(CONC_NS)),
+            "--conc-tokens",
+            "2048",
             "--parallel",
             str(max(CONC_NS)),
         ]
@@ -274,7 +277,7 @@ def plan_cells(
             tuple(ctxs),
             tuple(kinds),
             est,
-            job_mem_gb(engine, ctxs),
+            72 if part == "conc" else job_mem_gb(engine, ctxs),
             timeout_minutes(est),
             stall_minutes(engine, ctxs),
             outdir / engine / f"{group}-r{rep}.jsonl",
@@ -329,6 +332,8 @@ def job_env(engine: str, trees: dict) -> dict:
         "TFB_EXACT_PROMPTS": "1",
         "GPUQ_OWNER": "snapshot014",
         "GPUQ_DIR": "/Volumes/P5Plus/yunshu-gpuq",
+        "TFB_YUNSHU_BIN": "/Volumes/P5Plus/yunshu-test-envs/snapshot014-yunshu/bin/yunshu",
+        "TFB_MLXLM_PY": "/Volumes/P5Plus/yunshu-test-envs/snapshot014-mlxlm/bin/python",
     }
     if be.ENGINES[engine].kind == "yunshu":
         src = trees.get(engine)
@@ -406,10 +411,13 @@ def validate_rows(job: Job, rows: list[dict]) -> list[str]:
             if (
                 r.get("part") == "decode"
                 and r.get("phase") in ("cold", "warm")
-                and r.get("ct") != DECODE_TOKENS
+                and (
+                    r.get("ct") != DECODE_TOKENS
+                    or r.get("content_tokens") != r.get("ctx")
+                )
             ):
                 problems.append(
-                    f"decode {r.get('kind')}-{r.get('ctx')} {r.get('phase')}: ct={r.get('ct')}"
+                    f"decode {r.get('kind')}-{r.get('ctx')} {r.get('phase')}: ct={r.get('ct')}, content_tokens={r.get('content_tokens')}"
                 )
                 break
     return problems
@@ -514,7 +522,9 @@ def pilot_ok(engine: str, outdir: Path) -> bool:
 def pin_tree(ref: str) -> tuple[str, str]:
     """(sha, <tree>/python) of a pinned detached worktree of `ref` in the main repo."""
     sha = subprocess.run(
-        ["git", "-C", str(MAIN), "rev-parse", ref], capture_output=True, text=True
+        ["git", "-C", str(MAIN), "rev-parse", ref + "^{commit}"],
+        capture_output=True,
+        text=True,
     ).stdout.strip()
     if not sha:
         sys.exit(f"unknown ref {ref}")
@@ -538,6 +548,14 @@ def pin_tree(ref: str) -> tuple[str, str]:
         )
         if r.returncode:
             sys.exit(r.stderr)
+    actual = subprocess.run(
+        ["git", "-C", str(tree), "rev-parse", "HEAD"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    if actual != sha:
+        sys.exit(f"pinned tree mismatch: expected {sha}, got {actual}")
     return sha, str(tree / "python")
 
 
@@ -547,7 +565,7 @@ def resolve_trees(args, dry: bool) -> tuple[dict, dict]:
     for eng, ref in refs.items():
         if dry:
             sha = subprocess.run(
-                ["git", "-C", str(MAIN), "rev-parse", ref],
+                ["git", "-C", str(MAIN), "rev-parse", ref + "^{commit}"],
                 capture_output=True,
                 text=True,
             ).stdout.strip()
@@ -703,7 +721,7 @@ AGENT_MIN_PER_JOB = 7.0
 def med_range(vals) -> str:
     v = [x for x in vals if isinstance(x, int | float)]
     if not v:
-        return "-"
+        return "unknown"
     m = statistics.median(v)
     return (
         f"{m:.2f} ({min(v):.2f}-{max(v):.2f}) n={len(v)}"
@@ -712,23 +730,44 @@ def med_range(vals) -> str:
     )
 
 
-def collect(outdir: Path, engines) -> dict:
+def collect(outdir: Path, engines, yv_run: Path | None = None) -> dict:
     """{(engine, metric, ctx, kind): [values per rep]} from every validated output."""
     cells: dict = {}
     for e in engines:
-        for f in sorted((outdir / e).glob("*.jsonl")) if (outdir / e).is_dir() else []:
-            if ".failed" in f.name or f.name == "pilot.jsonl":
+        files = (
+            sorted((yv_run / "cells").glob(f"snapshot.{e}-*.jsonl"))
+            if yv_run
+            else sorted((outdir / e).glob("*.jsonl"))
+            if (outdir / e).is_dir()
+            else []
+        )
+        for f in files:
+            name = f.name.removeprefix(f"snapshot.{e}-") if yv_run else f.name
+            if ".failed" in name or name == "pilot.jsonl":
                 continue
             rows = read_rows(f)
-            if not any(
-                r.get("part") == "part_done" and r.get("complete") for r in rows
-            ):
+            planned = {
+                j.out.name: j for j in plan_cells([e], 9, outdir, {}, needle_reps=9)
+            }
+            job = planned.get(name)
+            if job is None or validate_rows(job, rows):
+                continue
+            if any(r.get("contended") for r in rows):
                 continue
             for r in rows:
                 p = r.get("part")
                 if p == "decode":
                     k = (e, r["phase"], r["ctx"], r["kind"])
                     cells.setdefault(k + ("ttft_s",), []).append(r.get("ttft_s"))
+                    if (
+                        r["phase"] == "warm"
+                        and isinstance(r.get("cached"), int)
+                        and isinstance(r.get("pt"), int)
+                        and r["cached"] >= r["pt"] - 1
+                    ):
+                        cells.setdefault(
+                            (e, "fullhit", r["ctx"], r["kind"], "ttft_s"), []
+                        ).append(r.get("ttft_s"))
                     if r["phase"] == "cold":
                         cells.setdefault(k + ("dec_tps",), []).append(r.get("dec_tps"))
                 elif p == "needle":
@@ -739,18 +778,66 @@ def collect(outdir: Path, engines) -> dict:
                     cells.setdefault((e, "conc", r["n"], "-", "agg_tps"), []).append(
                         r.get("agg_tps")
                     )
+                    for metric, field in (
+                        ("mean_ttft_s", "ttfts"),
+                        ("mean_dec_tps", "per_req_dec"),
+                    ):
+                        values = r.get(field, [])
+                        if values and all(isinstance(v, int | float) for v in values):
+                            cells.setdefault(
+                                (e, "conc", r["n"], "-", metric), []
+                            ).append(statistics.mean(values))
                 elif p == "memory":
-                    cells.setdefault((e, "mem", f.stem, "-", "peak_gib"), []).append(
-                        r.get("peak_gib")
-                    )
-                    cells.setdefault((e, "mem", f.stem, "-", "idle_gib"), []).append(
-                        r.get("idle_gib")
-                    )
+                    cells.setdefault(
+                        (e, "mem", job.out.stem, "-", "peak_gib"), []
+                    ).append(r.get("peak_gib"))
+                    cells.setdefault(
+                        (e, "mem", job.out.stem, "-", "idle_gib"), []
+                    ).append(r.get("idle_gib"))
     return cells
 
 
 def fmt_ctx(c) -> str:
     return f"{c // 1024}K" if isinstance(c, int) and c >= 1024 else str(c)
+
+
+GAP_HYPOTHESES = {
+    "yunshu-new": {
+        "ttft": "Hybrid-state checkpoint restore, prefix lookup and first-token dispatch may dominate warm TTFT; cold TTFT includes prefill projections and GDN recurrence.",
+        "decode": "DFlash acceptance, verify block cost and prompt-copy opportunities vary between prose/code and context lengths.",
+        "memory": "Retained APC snapshots, allocator pools and speculative scratch may explain peak/idle differences.",
+    },
+    "tf-new": {
+        "ttft": "Snapshot selection/restore and prefill kernel scheduling may account for differences.",
+        "decode": "DFlash verify kernels, proposal acceptance and scheduler overhead may account for differences.",
+        "memory": "Snapshot retention and allocator release policy may account for differences.",
+    },
+    "mlxlm": {
+        "ttft": "Generic prefill kernels and hybrid-cache prefix reuse limits may account for differences.",
+        "decode": "Autoregressive decoding evaluates the target each token; speculative engines amortize target verification over accepted proposals.",
+        "memory": "No speculative drafter reduces resident weights; prompt cache and allocator retention still contribute.",
+    },
+    "omlx": {
+        "ttft": "Paged prefix-cache lookup, hybrid state restore and SSD/hot-cache transitions may account for differences.",
+        "decode": "DFlash acceptance and continuous-batch scheduling may account for differences.",
+        "memory": "Hot/SSD cache policy, page pools and concurrent-request guard may account for differences.",
+    },
+    "splash": {
+        "ttft": "Native prefill and GDN-state/cache scheduling may account for differences; BF16 KV is deliberately used here.",
+        "decode": "Native Metal verification and DFlash proposal batching may account for differences; target weights differ.",
+        "memory": "Native buffer arenas and prefix retention may account for differences; different target quantization confounds comparisons.",
+    },
+    "llamacpp": {
+        "ttft": "GGUF kernels, graph scheduling and slot prefix reuse may account for differences; weights differ from oQ4e.",
+        "decode": "Native MTP proposal acceptance, GGUF kernel layout and Metal graph dispatch may account for differences.",
+        "memory": "Preallocated per-slot KV and graph buffers may account for differences; GGUF weight sizes differ.",
+    },
+    "mtplx": {
+        "ttft": "Native-MTP hybrid prefill and SessionBank snapshot restore may account for differences.",
+        "decode": "Native MTP acceptance, compiled verification routing and per-step state work may account for differences.",
+        "memory": "Repaged KV and SessionBank retention may account for peak/idle differences.",
+    },
+}
 
 
 def render_markdown(cells: dict, engines) -> str:
@@ -771,12 +858,37 @@ def render_markdown(cells: dict, engines) -> str:
                 vals = [
                     fmt(cells.get((e, phase, ctx, kind, suffix), [])) for e in engines
                 ]
-                if any(v != "-" for v in vals):
-                    out.append(f"| {fmt_ctx(ctx)} {kind} | " + " | ".join(vals) + " |")
+                samples = [
+                    cells.get((e, phase, ctx, kind, suffix), []) for e in engines
+                ]
+                medians = [
+                    statistics.median([x for x in v if isinstance(x, int | float)])
+                    if sum(isinstance(x, int | float) for x in v) >= 3
+                    else None
+                    for v in samples
+                ]
+                measured = [v for v in medians if v is not None]
+                best = (
+                    (max(measured) if suffix == "dec_tps" else min(measured))
+                    if measured
+                    else None
+                )
+                if best and best > 0:
+                    vals = [
+                        v
+                        + (
+                            f"; gap {100 * (1 - m / best if suffix == 'dec_tps' else m / best - 1):.1f}%"
+                            if m is not None
+                            else "; gap unknown (<3 reps)"
+                        )
+                        for v, m in zip(vals, medians, strict=True)
+                    ]
+                out.append(f"| {fmt_ctx(ctx)} {kind} | " + " | ".join(vals) + " |")
         out.append("")
 
     table("Cold TTFT", "ttft", "cold")
-    table("Warm (repeat) TTFT", "ttft", "warm")
+    table("Warm full-hit TTFT (cached_tokens >= prompt_tokens - 1)", "ttft", "fullhit")
+    table("Warm repeated-request TTFT (cache coverage varies)", "ttft", "warm")
     table("Follow-up turn TTFT", "ttft", "turn2")
     table(
         "Decode tok/s (2048-token reply, cold request)", "dec", "cold", suffix="dec_tps"
@@ -791,41 +903,71 @@ def render_markdown(cells: dict, engines) -> str:
         row = []
         for e in engines:
             v = cells.get((e, "needle", ctx, "prose", "correct"), [])
-            row.append(f"{int(sum(v))}/{len(v)}" if v else "-")
+            row.append(f"{int(sum(v))}/{len(v)}" if v else "unknown")
         out.append(f"| {fmt_ctx(ctx)} | " + " | ".join(row) + " |")
-    out += [
-        "",
-        "## Concurrency (aggregate tok/s, 256-token replies)",
-        "",
-        "| n | " + " | ".join(engines) + " |",
-        "|---|" + "---|" * len(engines),
-    ]
-    for n in CONC_NS:
-        out.append(
-            f"| {n} | "
-            + " | ".join(
-                med_range(cells.get((e, "conc", n, "-", "agg_tps"), []))
-                for e in engines
+
+    def comparison(values, maximize=False):
+        medians = [statistics.median(v) if len(v) >= 3 else None for v in values]
+        eligible = [v for v in medians if v is not None]
+        best = (max(eligible) if maximize else min(eligible)) if eligible else None
+        return [
+            med_range(v)
+            + (
+                f"; gap {100 * (1 - m / best if maximize else m / best - 1):.1f}%"
+                if best and m is not None
+                else "; gap unknown"
             )
-            + " |"
-        )
-    out += [
-        "",
-        "## Memory (process-tree physical footprint, per job group: peak / idle after 30 s)",
-        "",
-    ]
+            for v, m in zip(values, medians, strict=True)
+        ]
+
+    for metric, title, maximize in (
+        ("agg_tps", "Concurrency effective throughput (prefill included), tok/s", True),
+        ("mean_ttft_s", "Concurrency mean per-request TTFT, seconds", False),
+        ("mean_dec_tps", "Concurrency mean per-request decode, tok/s", True),
+    ):
+        out += [
+            "",
+            f"## {title} (32K prompts, 2048-token replies)",
+            "",
+            "| n | " + " | ".join(engines) + " |",
+            "|---|" + "---|" * len(engines),
+        ]
+        for n in CONC_NS:
+            values = [cells.get((e, "conc", n, "-", metric), []) for e in engines]
+            out.append(f"| {n} | " + " | ".join(comparison(values, maximize)) + " |")
+
     groups = [g for g, _, _ in DECODE_GROUPS] + ["c2c4"] + [g for g, _ in NEEDLE_GROUPS]
-    out += ["| group | " + " | ".join(engines) + " |", "|---|" + "---|" * len(engines)]
-    for g in groups:
-        row = []
-        for e in engines:
-            ks = [(e, "mem", f"{g}-r{r}", "-") for r in range(9)]
-            pk = [v for k in ks for v in cells.get(k + ("peak_gib",), [])]
-            idl = [v for k in ks for v in cells.get(k + ("idle_gib",), [])]
-            row.append(
-                f"{max(pk):.1f} / {statistics.median(idl):.1f}" if pk and idl else "-"
-            )
-        out.append(f"| {g} | " + " | ".join(row) + " |")
+    for metric, title in (
+        ("peak_gib", "Sampled peak memory"),
+        ("idle_gib", "Idle memory after 30 seconds"),
+    ):
+        out += [
+            "",
+            f"## {title} (process-tree physical footprint, GiB)",
+            "",
+            "| group | " + " | ".join(engines) + " |",
+            "|---|" + "---|" * len(engines),
+        ]
+        for group in groups:
+            values = [
+                [
+                    v
+                    for rep in range(9)
+                    for v in cells.get((e, "mem", f"{group}-r{rep}", "-", metric), [])
+                ]
+                for e in engines
+            ]
+            out.append(f"| {group} | " + " | ".join(comparison(values)) + " |")
+    out.append("")
+    out += [
+        "## Gap hypotheses (unproven; applies to each positive gap in the corresponding engine/metric)",
+        "",
+        "| engine | metric | hypothesis |",
+        "|---|---|---|",
+    ]
+    for engine in engines:
+        for metric, hypothesis in GAP_HYPOTHESES.get(engine, {}).items():
+            out.append(f"| {engine} | {metric} | {hypothesis} |")
     out.append("")
     out.append(
         "Weights differ for splash (own Splash quantization) and llamacpp (UD-Q4_K_M GGUF), see SETUP.md."
@@ -875,6 +1017,7 @@ def main(argv=None) -> int:
     ap.add_argument("--agent-tf", action=argparse.BooleanOptionalAction, default=True)
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--md", type=Path)
+    ap.add_argument("--yv-run", type=Path)
     a = ap.parse_args(argv)
     engines = [e for e in a.engines.split(",") if e]
     bad = [e for e in engines if e not in be.ENGINES]
@@ -890,9 +1033,9 @@ def main(argv=None) -> int:
             f"# new={a.new_ref} ({shas.get('yunshu-new', '')[:12]}) base={a.base_ref} ({shas.get('yunshu-base', '')[:12]})"
         ]
         print_plan(pilots + cells, extra)
-        n_agent = 20 * len(a.agents.split(",")) * 2 + (20 if a.agent_tf else 0)
+        n_agent = 20 * len(engines)
         print(
-            f"\nagent stage: {n_agent} jobs (20 tasks x agents x versions, +TensorFold), ~{n_agent * AGENT_MIN_PER_JOB / 60:.1f} GPU h "
+            f"\nagent stage: {n_agent} jobs (20 tasks x engines, opencode; executed through yv snapshot), ~{n_agent * AGENT_MIN_PER_JOB / 60:.1f} GPU h "
             f"(estimate, ~{AGENT_MIN_PER_JOB:.0f} min per job)"
         )
         for e in engines:
@@ -907,7 +1050,7 @@ def main(argv=None) -> int:
             )
         return 0
     if a.cmd == "aggregate":
-        md = render_markdown(collect(a.out, engines), engines)
+        md = render_markdown(collect(a.out, engines, a.yv_run), engines)
         if a.md:
             a.md.write_text(md)
         print(md)
@@ -929,30 +1072,9 @@ def main(argv=None) -> int:
             )
         print(submit_jobs(cells, a.out))
         return 0
-    for spec in agent_jobs(a):
-        if spec["kind"] == "agentbench":
-            state = load_state(a.out)
-            if spec["name"] in state:
-                print(
-                    spec["name"], "already submitted:", state[spec["name"]]["summary"]
-                )
-                continue
-            cmd, env = agent_argv(spec, a.out)
-            r = subprocess.run(
-                cmd, capture_output=True, text=True, env={**os.environ, **env}
-            )
-            summary = (r.stdout or r.stderr).strip().splitlines()[-2:]
-            print(spec["name"], r.returncode, summary)
-            if r.returncode:
-                return 1
-            state[spec["name"]] = {
-                "summary": summary,
-                "submitted": time.strftime("%FT%T"),
-            }
-            save_state(a.out, state)
-        elif spec["kind"] == "tensorfold":
-            print(spec["name"], submit_agent_tf(a.out))
-    return 0
+    sys.exit(
+        "agent cells run through scripts/dev/yv --suite snapshot, pinned release/harness SHAs"
+    )
 
 
 if __name__ == "__main__":

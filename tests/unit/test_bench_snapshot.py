@@ -51,6 +51,7 @@ def make_rows(job, engaged=None, **drop):
                     "ct": bs.DECODE_TOKENS,
                     "phase": ph,
                     "ctx": c,
+                    "content_tokens": c,
                     "kind": k,
                     "correct": True,
                     "n": 2,
@@ -67,7 +68,7 @@ def make_rows(job, engaged=None, **drop):
 def test_plan_counts_and_labels():
     jobs = cells()
     # per engine and rep: 6 decode groups + 1 concurrency; needles (3 groups) only in rep 0
-    assert len(jobs) == 7 * (3 * 7 + 3)
+    assert len(jobs) == 7 * (3 * 8 + 3)
     labels = [j.label for j in jobs]
     assert len(set(labels)) == len(labels)
     assert all(label.startswith("snapshot014-") for label in labels)
@@ -78,7 +79,7 @@ def test_engines_interleave_inside_each_cell_and_reps_are_outermost():
     jobs = cells()
     first = jobs[: len(bs.ENGINE_ORDER)]
     assert [j.engine for j in first] == list(bs.ENGINE_ORDER)
-    assert {j.group for j in first} == {"d1k8k"} and {j.rep for j in first} == {0}
+    assert {j.group for j in first} == {"d1k"} and {j.rep for j in first} == {0}
     reps = [j.rep for j in jobs]
     assert reps == sorted(reps)
 
@@ -115,7 +116,7 @@ def test_timeouts_cover_the_estimate_and_stall_covers_the_cold_prefill():
     long = next(
         j for j in cells() if j.engine == "llamacpp" and j.group == "d128k-prose"
     )
-    short = next(j for j in cells() if j.engine == "yunshu-new" and j.group == "d1k8k")
+    short = next(j for j in cells() if j.engine == "yunshu-new" and j.group == "d1k")
     assert long.timeout_min > short.timeout_min
     assert long.stall_min >= bs.prefill_seconds("llamacpp", 131072) * 1.5 / 60
 
@@ -196,7 +197,7 @@ def test_other_engine_launches(tmp_path):
     )
     assert "draft-mtp" in ll.cmd and be.GGUF in ll.cmd
     mt = be.build_launch("mtplx", 18993, tmp_path, {})
-    assert mt.cmd[0].endswith("mtplx/.venv/bin/mtplx") and "stable" in mt.cmd
+    assert mt.cmd[0].endswith("mtplx/.venv/bin/mtplx") and "turbo" in mt.cmd
     sp = be.build_launch("splash", 18994, tmp_path, {})
     assert "--port" in sp.cmd and "18994" in sp.cmd and sp.probe == "/status"
     assert all(c.id != "" for c in be.ENGINES.values())
@@ -294,7 +295,7 @@ def test_aggregate_reports_median_and_range(tmp_path):
         j = next(
             j
             for j in bs.plan_cells(["mlxlm"], 3, tmp_path, TREES)
-            if j.group == "d1k8k" and j.rep == rep
+            if j.group == "d1k" and j.rep == rep
         )
         rows = make_rows(j)
         for r in rows:
@@ -304,7 +305,7 @@ def test_aggregate_reports_median_and_range(tmp_path):
         j.out.write_text("\n".join(json.dumps(r) for r in rows) + "\n")
     md = bs.render_markdown(bs.collect(tmp_path, ["mlxlm"]), ["mlxlm"])
     assert "2.00 (1.00-3.00) n=3" in md
-    assert "Cold TTFT" in md and "Memory" in md
+    assert "Cold TTFT" in md and "memory" in md
 
 
 def test_dry_run_plans_every_job_without_submitting(capsys, monkeypatch):
@@ -374,3 +375,57 @@ def test_snapshot_pilot_is_not_a_timing_job():
     assert "--quiet" not in bs.submit_args(job)
     assert job.env["GPUQ_OWNER"] == "snapshot014"
     assert job.env["TFB_EXACT_PROMPTS"] == "1"
+
+
+def test_aggregate_rejects_completed_but_wrong_token_budget(tmp_path):
+    job = bs.plan_cells(["mlxlm"], 1, tmp_path, TREES)[0]
+    job.out.parent.mkdir(parents=True)
+    rows = make_rows(job)
+    rows[1]["content_tokens"] = 1000
+    job.out.write_text("\n".join(json.dumps(r) for r in rows))
+    assert bs.collect(tmp_path, ["mlxlm"]) == {}
+
+
+def test_aggregate_reads_only_promoted_yv_evidence(tmp_path):
+    job = bs.plan_cells(["mlxlm"], 1, tmp_path, TREES)[0]
+    directory = tmp_path / "cells"
+    directory.mkdir()
+    (directory / f"snapshot.{job.name}.a0.jsonl").write_text(
+        "\n".join(json.dumps(r) for r in make_rows(job))
+    )
+    assert bs.collect(tmp_path, ["mlxlm"], tmp_path) == {}
+    (directory / f"snapshot.{job.name}.jsonl").write_text(
+        "\n".join(json.dumps(r) for r in make_rows(job))
+    )
+    assert bs.collect(tmp_path, ["mlxlm"], tmp_path)
+
+
+def test_generation_manifest_covers_exact_ladder_and_concurrent_cohorts(
+    tmp_path, monkeypatch
+):
+    import gen_snapshot_prompts as gen
+
+    source, destination = tmp_path / "source", tmp_path / "out"
+    source.mkdir()
+    for ctx in bs.CTXS:
+        for kind in bs.KINDS:
+            (source / f"{kind}-{ctx}.txt").write_text("body\n\n---\nask")
+    (tmp_path / "tokenizer.json").write_text("fixture")
+    monkeypatch.setattr(gen, "MODEL", tmp_path)
+    monkeypatch.setattr(
+        gen,
+        "exact_prompt",
+        lambda source, target, suffix: f"{target}\n{source}{suffix}",
+    )
+    monkeypatch.setattr(
+        gen, "assert_prompt", lambda text, target: int(text.splitlines()[0])
+    )
+    manifest = gen.generate(source, destination)
+    assert manifest["complete"] is True
+    assert len(manifest["prompts"]) == 10 + 2 * (2 + 4) * 2
+    assert (destination / "prose-131072.txt").read_text().startswith("131072\n")
+    assert (destination / "code-131072.txt").read_text().startswith("131072\n")
+    assert (
+        "cohort n=4 trial=1 request=3"
+        in (destination / "conc-4-1-code-3.txt").read_text()
+    )

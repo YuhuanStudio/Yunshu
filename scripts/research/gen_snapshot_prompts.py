@@ -21,8 +21,7 @@ def generate(source, destination):
             body, ask = original[:split], original[split:]
             text = exact_prompt(body * 2, ctx, ask + LONG_ASK)
             count = assert_prompt(text, ctx)
-            path = destination / f"{kind}-{ctx}.txt"
-            path.write_text(text)
+            (destination / f"{kind}-{ctx}.txt").write_text(text)
             records.append(
                 {
                     "kind": kind,
@@ -32,6 +31,29 @@ def generate(source, destination):
                 }
             )
             print(json.dumps(records[-1]), flush=True)
+    for kind in ("prose", "code"):
+        body = (source / f"{kind}-32768.txt").read_text()
+        split = body.rfind("\n\n---\n")
+        for n in (2, 4):
+            for trial in range(2):
+                for i in range(n):
+                    header = f"Concurrent cohort n={n} trial={trial} request={i}.\n"
+                    text = exact_prompt(
+                        header + body[:split] * 2, 32768, body[split:] + LONG_ASK
+                    )
+                    path = destination / f"conc-{n}-{trial}-{kind}-{i}.txt"
+                    path.write_text(text)
+                    records.append(
+                        {
+                            "kind": kind,
+                            "ctx": 32768,
+                            "cohort_n": n,
+                            "trial": trial,
+                            "concurrent_variant": i,
+                            "content_tokens": assert_prompt(text, 32768),
+                            "sha256": hashlib.sha256(text.encode()).hexdigest(),
+                        }
+                    )
     manifest = {
         "complete": True,
         "checkpoint": str(MODEL),

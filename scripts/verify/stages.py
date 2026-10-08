@@ -26,6 +26,7 @@ from .core import (
 )
 from .core import sha as _sha
 from .execute import Cell, Executor
+from .snapshot import stage_snapshot
 
 TFBENCH = REPO / "scripts/research/tfbench.py"
 MEMORY_AB = REPO / "scripts/research/memory_ab.py"
@@ -1071,6 +1072,7 @@ def stage_rerank(ctx: Ctx) -> StageResult:
 
 
 STAGE_FUNCS = {
+    "snapshot": stage_snapshot,
     "rerank": stage_rerank,
     "preflight": stage_preflight,
     "smoke": stage_smoke,

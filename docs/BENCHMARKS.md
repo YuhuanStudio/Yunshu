@@ -1,200 +1,227 @@
-# Benchmarks: methods, results and limits
+# Yunshu v0.1.4 cross-engine benchmark snapshot
 
-Measurements below are snapshots, not scores for the latest release. Latest release:
-**v0.1.2 (2026-10-02)**; v0.1.1 was released on 2026-09-29. Changes after v0.1.2 are
-**unreleased main**. Unless stated otherwise: M5 Max, 128 GB, Qwen3.8-27B
-`Jundot/Qwen3.8-27B-oQ4e-mtp`. Raw JSONL and captured agent prompts stay private;
-the harnesses are public. The [append-only measurement log](reports/PERF_TREND.md)
-keeps historical observations, including losses. Do not pool different builds or corpora.
+Release: `8c099150f9aeb084658f05e1f5a27747388f8aae` (tag resolved 2026-10-08 08:04, Asia/Taipei).
+Snapshot in progress: **unmeasured/rejected cells are unknown**. Startup pilots are excluded from rankings.
+Historical observations remain in [PERF_TREND](reports/PERF_TREND.md) under their original builds and limitations.
 
-## Single-request comparison (tfbench, 2026-10-02)
+## Method
 
-Source: [PERF_TREND](reports/PERF_TREND.md), recorded by `4e1338c4`.
-Same checkpoint, greedy, 256 generated tokens, GPU-queue serialized; each cell is the
-median of three independent server sessions. Code and prose prompts at each context
-are separate cells. `scripts/research/tfbench.py` records wire TTFT, decode rate,
-response digests and `x_yunshu` speculative counters; cold, repeated and edited-tail
-requests are distinct. TTFT is arrival to first meaningful streamed output; decode
-excludes prefill. Aggregate concurrent rates are not single-request rates.
+M5 Max, 128 GB. One benchmark engine resident at a time, own instance on ports 18990–18999, main-checkout gpuq,
+p0, owner/label prefix `snapshot014`. Three independent server-session repetitions alternate engines within each
+context/corpus group. Timing cells require quiet admission; contended evidence is rejected and retried.
 
-**The Yunshu build was that morning's main; its SHA was not captured. It actually used
-MTP**, confirmed by `Speculative decoding: mtp` in the log: the isolated HOME hid the
-DFlash2 drafter from automatic discovery. TensorFold explicitly used DFlash2. This is
-a measured deployment comparison with a draft-mode mismatch, not a same-drafter A/B,
-and it predates the prefill, wide-verify and prompt-copy merges below.
+One frozen corpus, greedy sampling. Content **including instructions** is exactly 1024/8192/32768/65536/131072 tokens
+under the Jundot 27B tokenizer, asserted before sending. Chat-template overhead is additional and recorded in actual
+`prompt_tokens`; counts from different tokenizers are not silently equated. Prose/code 128K corpus SHA256:
+`d80ff95ec9affd08dae32d6d66e5c1fddd11c6087f2c6a1700ff5c542dd15eeb` /
+`a48764c60a9b24f615d458c30f0d39e1491d26f1ee2b3dfdba790791f6697b12`.
 
-| Context / output | TensorFold 0.6.1 decode tok/s / cold TTFT s | TensorFold 0.3.6.1 decode tok/s / cold TTFT s | Yunshu main (MTP) decode tok/s / cold TTFT s |
+Cold = first corpus request in a fresh instance after two tiny startup requests; loading time is separate. Cold/repeated
+replies must reach 2048 tokens; follow-up appends the previous answer and a continuation request (256-token reply).
+TTFT ends at the first meaningful streamed content/reasoning/tool delta; decode excludes TTFT. Full-hit requires
+reported `cached_tokens >= prompt_tokens - 1`; absent proof means unknown, with repeated-request TTFT reported separately.
+
+Long QA is yv's ten deterministic station/passcode needles at 32K/64K/128K, with every question fitted to the exact content
+budget. Concurrency: 2/4 simultaneous 32K prompts, 2048-token replies, deterministic cohort headers preventing cross-trial
+cache reuse. Effective throughput includes prefill; per-request TTFT/decode are separate. Agentbench: same 20 opencode
+tasks and CLI, generation forced to temperature 0/top_p 1; API/tool-contract failures are listed explicitly.
+
+Memory: process-tree physical-footprint accounting sum, sampled every two seconds from startup; idle is 30 seconds after
+the group. Short spikes can be missed and shared pages are not deduplicated. Each group owns a fresh server. Gaps are
+excess latency/memory or throughput deficit versus the best; ranking requires three clean session repetitions.
+Hypotheses below are possible causes, not profiler-established findings.
+
+## Engine configurations
+
+| engine | version / isolated environment | requested configuration | target weights |
 |---|---|---|---|
-| 1K code | 140.5 / 1.2 | 134.7 / 1.2 | 69.3 / 1.4 |
-| 1K prose | 72.4 / 1.2 | 75.6 / 1.2 | 52.9 / 1.4 |
-| 8K code | 80.6 / 8.4 | 80.7 / 8.9 | 60.2 / 11.1 |
-| 8K prose | 67.4 / 8.5 | 68.9 / 9.0 | 57.5 / 11.1 |
-| 32K code | 91.2 / 39.4 | 86.4 / 42.5 | 58.7 / 47.2 |
-| 32K prose | 55.1 / 39.4 | 58.7 / 41.3 | 46.3 / 47.7 |
+| yunshu-new | v0.1.4 frozen lock; snapshot014-yunshu | release defaults; normal-layout DFlash2 discovery; no tuning override | Jundot/Qwen3.8-27B-oQ4e-mtp |
+| tf-new | TensorFold 0.6.1; tensorfold-0.6.1 | explicit DFlash2, own snapshots, update check off | same oQ4e |
+| mlxlm | mlx-lm 0.32.0 / MLX 0.32.3; snapshot014-mlxlm | stock server; prompt/decode concurrency 8; thinking off | same oQ4e |
+| omlx | v0.7.0; omlx-bench/venv | DFlash2; own base/model/SSD paths; concurrency 8; 96 GiB guard; hot 8GB / SSD 20GB | same oQ4e |
+| splash | 1.1.0 packaged native engine | own port; DFlash2; **BF16 KV**, disk cache off, reasoning none | different: prepared Splash target |
+| llamacpp | 836d57176dc699a726c55418e4f96b8ca628e1bf; llamacpp/build | Metal all layers, Flash Attention, MTP, unquantized KV, thinking off; context capacity per slot | different: UD-Q4_K_M GGUF + Q4_0 MTP head |
+| mtplx | 2.12.0; mtplx/.venv | turbo/native-MTP (documented fastest verify profile, context fallback); KV quant off; own cache | same oQ4e |
 
-TensorFold leads in every cell above. At concurrency 2 / 4 / 8, aggregate decode was
-79.8 / 129.6 / 164.2 tok/s (TF 0.6.1), 80.8 / 131.1 / 168.6 (TF 0.3.6.1), and
-39.8 / 73.2 / 112.6 (Yunshu MTP). Warm agent replay: TF 0.6.1 105–159 tok/s,
-Yunshu 38–90, medians for four recorded opencode request bodies; cold TTFT was similar.
-These replay rates are not whole-agent task success rates.
+Python environments live under `/Volumes/P5Plus/yunshu-test-envs/`. The user's oMLX app and pre-existing Splash services
+are never managed. Splash/GGUF are product comparisons within the 27B family: different target quantizations confound
+quality, size and speed. Requested lossless paths are checked for engagement; cross-engine bit identity is not claimed.
 
-## Later main measurements (unreleased, 2026-10-02)
+## Reproduce
 
-| Change / workload | Before | After | Provenance |
-|---|---|---|---|
-| Cold TTFT, 8K | 11.0 s | 8.57 s | prefill merge `a4d71bc8` |
-| Cold TTFT, 32K | 47.5 s | 38.3 s | prefill merge `a4d71bc8` |
-| MTP prompt-copy, 32K code turn 2 | 63 tok/s | 100–138 tok/s | PERF_TREND, `c666be70`, merged `bb4895ca` |
-| MTP prompt-copy, 8K code turn 2 | 62 tok/s | 86 tok/s | same |
-| MTP prompt-copy, 1K code cold | 72 tok/s | 83 tok/s | same |
+Use Python 3.13+ from the installed main venv for CPU scripts. Generate the corpus with
+`scripts/research/gen_snapshot_prompts.py`, then run `scripts/dev/yv ab --base 8c099150f9aeb084658f05e1f5a27747388f8aae
+--cand HARNESS_COMMIT_SHA --suite snapshot --label snapshot014-released --priority 0 --detach`, with
+`GPUQ_DIR=/Volumes/P5Plus/yunshu-gpuq`, `GPUQ_OWNER=snapshot014`, and `YV_GPUQ` set to the main checkout's gpuq.
+Both refs must be full, distinct intended commit SHAs; check the first line of `yv.log`. Resume with the same command.
+Use `yv status/wait RUN_DIRECTORY`; aggregate promoted evidence with
+`bench_snapshot.py aggregate --yv-run RUN_DIRECTORY`. Only rc 0, terminal complete, valid schema/token budgets,
+expected engaged mode and clean contention evidence enter tables. Raw evidence/job IDs remain attached to the verdict.
 
-The prefill figures come from the dated merge measurement record (`a4d71bc8`), not
-from a fresh run for this documentation update; the public record does not give repeat
-counts or intervals. Harnesses: `scripts/research/prefill_profile.py` (forward time by
-operation class), `tfbench.py` (HTTP cold TTFT), `apc_restore_identity.py` (cold vs partial
-and full restore, token and logprob identity). Stock matmul for large prefill chunks and
-the chunked GDN core change cold-prefill numerics relative to the old path. Prefill
-settings are part of APC keys and disk namespaces; this is not bit identity across builds.
+# Metric tables
 
-Prompt-copy: greedy output digests matched off/on for every recorded cell. Prose was
-unchanged within ±3% single-run noise; editing replay 0004 went 92 → 106 tok/s, the
-other three replays were unchanged. These are workload-specific observations, not a
-universal speedup. Use `scripts/research/agentic/replay_traffic.py` for recorded traffic.
-Wide invariant verify is implemented up to 32 rows (`a4566d5a`), but there is no updated
-full cross-engine battery after these merges. Wider tree drafting remains off by default.
+Cells are median (min-max) n=<reps>; TTFT in s, decode in tok/s, memory in GiB.
 
-## Splash: historical exploratory comparison
+## Cold TTFT
 
-Source: PERF_TREND, **2026-09-27**, M5 Max / 128 GiB, 3,323-token prompt, single runs,
-non-exclusive GPU. These are not medians or release scores.
+| ctx / kind | yunshu-new | tf-new | splash | omlx | mtplx | mlxlm | llamacpp |
+|---|---|---|---|---|---|---|---|
+| 1K prose | unknown | unknown | unknown | unknown | unknown | unknown | unknown |
+| 1K code | unknown | unknown | unknown | unknown | unknown | unknown | unknown |
+| 8K prose | unknown | unknown | unknown | unknown | unknown | unknown | unknown |
+| 8K code | unknown | unknown | unknown | unknown | unknown | unknown | unknown |
+| 32K prose | unknown | unknown | unknown | unknown | unknown | unknown | unknown |
+| 32K code | unknown | unknown | unknown | unknown | unknown | unknown | unknown |
+| 64K prose | unknown | unknown | unknown | unknown | unknown | unknown | unknown |
+| 64K code | unknown | unknown | unknown | unknown | unknown | unknown | unknown |
+| 128K prose | unknown | unknown | unknown | unknown | unknown | unknown | unknown |
+| 128K code | unknown | unknown | unknown | unknown | unknown | unknown | unknown |
 
-| Engine / condition | Cold / repeated TTFT s |
-|---|---|
-| Yunshu direct VLMEngine (build SHA not recorded) | 3.511 / 3.512 |
-| mlx-vlm 0.7.3, APC off | 3.464 / 3.459 |
-| Splash 1.1.0, its own quantized model, INT8 KV | 3.221 / 0.130 |
+## Warm full-hit TTFT (cached_tokens >= prompt_tokens - 1)
 
-Splash was ahead here. Different weights and cache configuration prevent attributing
-this difference to the engine alone. No new Splash comparison followed the main merges.
-The old README's MMLU-Pro and decode leaderboard lacked numeric provenance in this
-page or PERF_TREND and has been removed rather than promoted to current results.
+| ctx / kind | yunshu-new | tf-new | splash | omlx | mtplx | mlxlm | llamacpp |
+|---|---|---|---|---|---|---|---|
+| 1K prose | unknown | unknown | unknown | unknown | unknown | unknown | unknown |
+| 1K code | unknown | unknown | unknown | unknown | unknown | unknown | unknown |
+| 8K prose | unknown | unknown | unknown | unknown | unknown | unknown | unknown |
+| 8K code | unknown | unknown | unknown | unknown | unknown | unknown | unknown |
+| 32K prose | unknown | unknown | unknown | unknown | unknown | unknown | unknown |
+| 32K code | unknown | unknown | unknown | unknown | unknown | unknown | unknown |
+| 64K prose | unknown | unknown | unknown | unknown | unknown | unknown | unknown |
+| 64K code | unknown | unknown | unknown | unknown | unknown | unknown | unknown |
+| 128K prose | unknown | unknown | unknown | unknown | unknown | unknown | unknown |
+| 128K code | unknown | unknown | unknown | unknown | unknown | unknown | unknown |
 
-## Agentic coding (partial, 2026-10-02)
+## Warm repeated-request TTFT (cache coverage varies)
 
-Source: PERF_TREND, recorded by `2815311c`; method:
-[AGENTIC_BENCH](guides/AGENTIC_BENCH.md). Real pinned agent CLIs, isolated homes,
-local server, hidden-test grading, 20-task target with repeats. Failed runs remain in
-the denominator. The available snapshots differ; do not interpret their medians as
-paired speedups. `prod2` and `prod3` have no results.
+| ctx / kind | yunshu-new | tf-new | splash | omlx | mtplx | mlxlm | llamacpp |
+|---|---|---|---|---|---|---|---|
+| 1K prose | unknown | unknown | unknown | unknown | unknown | unknown | unknown |
+| 1K code | unknown | unknown | unknown | unknown | unknown | unknown | unknown |
+| 8K prose | unknown | unknown | unknown | unknown | unknown | unknown | unknown |
+| 8K code | unknown | unknown | unknown | unknown | unknown | unknown | unknown |
+| 32K prose | unknown | unknown | unknown | unknown | unknown | unknown | unknown |
+| 32K code | unknown | unknown | unknown | unknown | unknown | unknown | unknown |
+| 64K prose | unknown | unknown | unknown | unknown | unknown | unknown | unknown |
+| 64K code | unknown | unknown | unknown | unknown | unknown | unknown | unknown |
+| 128K prose | unknown | unknown | unknown | unknown | unknown | unknown | unknown |
+| 128K code | unknown | unknown | unknown | unknown | unknown | unknown | unknown |
 
-| Snapshot | Agent | Pass / runs | Rate (Wilson 95%) | Wall median / p90 s | Cache hit | Decode median tok/s | TTFT median s | Timeouts |
-|---|---|---|---|---|---|---|---|---|
-| prod, `c4e2b244+`, 2026-09-30 | opencode | 34 / 41 | 83% (69–91%) | 337 / 1200 | 83.6% | 22.2 | 0.9 | 5 |
-| prod4, `d225f16c`, measured 2026-10-02 | Claude Code | 14 / 15 | 93% (70–99%) | 93 / 309 | 89.2% | 60.8 | 1.9 | 0 |
-| prod4, `d225f16c`, measured 2026-10-02 | opencode | 9 / 10 | 90% (60–98%) | 112 / 137 | 84.2% | 56.9 | 0.8 | 0 |
+## Follow-up turn TTFT
 
-All recorded rows had 0 API errors, malformed calls and leaked call markup. Prod4 covers
-10 of 20 tasks with 1–3 repeats each; neither agent cell is complete. Codex and TensorFold
-agentic cells have no published result. Snapshot `d225f16c` is included in v0.1.2; the
-measurements are not evidence for the later unreleased changes.
+| ctx / kind | yunshu-new | tf-new | splash | omlx | mtplx | mlxlm | llamacpp |
+|---|---|---|---|---|---|---|---|
+| 1K prose | unknown | unknown | unknown | unknown | unknown | unknown | unknown |
+| 1K code | unknown | unknown | unknown | unknown | unknown | unknown | unknown |
+| 8K prose | unknown | unknown | unknown | unknown | unknown | unknown | unknown |
+| 8K code | unknown | unknown | unknown | unknown | unknown | unknown | unknown |
+| 32K prose | unknown | unknown | unknown | unknown | unknown | unknown | unknown |
+| 32K code | unknown | unknown | unknown | unknown | unknown | unknown | unknown |
+| 64K prose | unknown | unknown | unknown | unknown | unknown | unknown | unknown |
+| 64K code | unknown | unknown | unknown | unknown | unknown | unknown | unknown |
+| 128K prose | unknown | unknown | unknown | unknown | unknown | unknown | unknown |
+| 128K code | unknown | unknown | unknown | unknown | unknown | unknown | unknown |
 
-## Accuracy: three distinct tiers
+## Decode tok/s (2048-token reply, cold request)
 
-Source and complete conditions: [ACCURACY](guides/ACCURACY.md), 2026-10-02 results
-recorded by `2815311c`. Tier 1 is teacher-forced KLD / top-1 / perplexity, Tier 2 is
-fixed-prompt greedy divergence, Tier 3 is paired task evaluation. Invariant verify vs
-invariant one-token decode can be bit-exact without matching stock MLX's reductions.
-The recorded Tier 2 plain-runner vs speculative-path gate failed (26/50 matches);
-inside the invariant path and round driver the spec-on/off gate holds. Do not claim
-unqualified stock-output identity or infer task equivalence from a short soak.
+| ctx / kind | yunshu-new | tf-new | splash | omlx | mtplx | mlxlm | llamacpp |
+|---|---|---|---|---|---|---|---|
+| 1K prose | unknown | unknown | unknown | unknown | unknown | unknown | unknown |
+| 1K code | unknown | unknown | unknown | unknown | unknown | unknown | unknown |
+| 8K prose | unknown | unknown | unknown | unknown | unknown | unknown | unknown |
+| 8K code | unknown | unknown | unknown | unknown | unknown | unknown | unknown |
+| 32K prose | unknown | unknown | unknown | unknown | unknown | unknown | unknown |
+| 32K code | unknown | unknown | unknown | unknown | unknown | unknown | unknown |
+| 64K prose | unknown | unknown | unknown | unknown | unknown | unknown | unknown |
+| 64K code | unknown | unknown | unknown | unknown | unknown | unknown | unknown |
+| 128K prose | unknown | unknown | unknown | unknown | unknown | unknown | unknown |
+| 128K code | unknown | unknown | unknown | unknown | unknown | unknown | unknown |
 
-| Paired evaluation | Status / n | Stock mlx-vlm | Yunshu defaults | Delta points (95% CI) | McNemar p |
-|---|---|---|---|---|---|
-| GSM8K | final, 1319 | 97.12% | 97.65% | +0.53 [+0.04, +1.02] | 0.065 |
-| MMLU-Pro | partial, 917 / 2000 | 83.97% | 83.53% | -0.44 [-1.44, +0.57] | 0.523 |
-| IFEval | partial, 179 / 541 | 90.50% | 88.27% | -2.23 [-6.01, +1.54] | 0.388 |
-| BFCL / needle | pending | — | — | — | — |
+## Long-context recall (needle, correct / asked)
 
-Same checkpoint, greedy, thinking on / medium except BFCL and needle. Pair only items
-completed in both arms; reference transport failures bias the partial subsets. Reference
-error attempts: GSM8K 1319, MMLU-Pro 168, IFEval 6; Yunshu: 0, 16, 1 respectively.
-The guide gives attempts, unresolved items and truncation counts. None of these rows
-establishes an accuracy improvement; partial rows are not benchmark-wide scores.
-Scripts: `scripts/research/accuracy/kld.py`, `greedy_div.py`, `paired_eval.py`.
+| ctx | yunshu-new | tf-new | splash | omlx | mtplx | mlxlm | llamacpp |
+|---|---|---|---|---|---|---|---|
+| 32K | unknown | unknown | unknown | unknown | unknown | unknown | unknown |
+| 64K | unknown | unknown | unknown | unknown | unknown | unknown | unknown |
+| 128K | unknown | unknown | unknown | unknown | unknown | unknown | unknown |
 
-## APC storage tiers (unreleased main, 2026-10-02)
+## Concurrency effective throughput (prefill included), tok/s (32K prompts, 2048-token replies)
 
-Source: [KV_CACHE_MATRIX](guides/KV_CACHE_MATRIX.md), measurement record `d00f61d7`,
-identity record `63b00e16`, merged `57272ed7`. Three growing sessions, 27 greedy requests,
-20 s idle gaps, TB4 SSD unless stated; prompt-token cache fraction differs from request
-hit rate. These are replay summaries, not repeated-run confidence intervals.
+| n | yunshu-new | tf-new | splash | omlx | mtplx | mlxlm | llamacpp |
+|---|---|---|---|---|---|---|---|
+| 2 | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown |
+| 4 | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown |
 
-| Configuration | Prompt tokens from cache | TTFT mean / p50 / p90 / max s | Peak RSS GiB |
-|---|---|---|---|
-| 4 GiB RAM only | 31.7% | 21.2 / 17.7 / 39.8 / 44.7 | 4.7 |
-| 4 GiB RAM + SSD, disk supersede | 86.3% | 6.3 / 6.0 / 9.1 / 13.9 | 5.7 |
-| 4 GiB + lossless WARM + SSD | 86.3% | 6.2 / 6.2 / 8.9 / 13.9 | 9.0 |
-| 4 GiB + int8 WARM + SSD (lossy) | 86.3% | 7.2 / 6.0 / 14.7 / 19.0 | 6.3 |
-| 4 GiB + internal SSD > TB4 > simulated HDD | 85.7% | 5.6 / 5.7 / 8.9 / 14.0 | 5.4 |
-| 4 GiB + TB4 > simulated HDD | 81.3% | 10.4 / 7.7 / 19.2 / 28.3 | 5.8 |
+## Concurrency mean per-request TTFT, seconds (32K prompts, 2048-token replies)
 
-Lossless WARM did not improve this workload and stays off; int8 / int4 are lossy options.
-Tier restores with the same cached length matched all-RAM text: 24 HOT, 131 SSD,
-21 lossless-WARM hits and 7 cold requests, none different. Disk supersede left 6 files /
-10.8 GiB instead of 46 / 63 GiB with the same hits. HDD / NAS results are throttled
-simulations, not measurements on real HDD / NAS hardware.
-Scripts: `scripts/research/apc_audit/{tier_roofline,tier_breakeven,tier_capacity_model,
-session_replay,tier_report}.py` and `queue_tier4.sh`. The guide distinguishes codec
-rooflines from through-server restore time; do not quote the former as HTTP TTFT.
+| n | yunshu-new | tf-new | splash | omlx | mtplx | mlxlm | llamacpp |
+|---|---|---|---|---|---|---|---|
+| 2 | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown |
+| 4 | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown |
 
-## Reproducing and recording a result
+## Concurrency mean per-request decode, tok/s (32K prompts, 2048-token replies)
 
-Run GPU work through `scripts/dev/gpuq` with a unique label and `GPUQ_OWNER`; never
-compete with the serving process. See [SERVE_AND_DEVELOP](guides/SERVE_AND_DEVELOP.md).
-Unit tests and lint run directly. The harnesses use local checkpoint paths / private
-corpora: inspect them and prepare those inputs before running, rather than treating
-them as portable one-command benchmarks.
+| n | yunshu-new | tf-new | splash | omlx | mtplx | mlxlm | llamacpp |
+|---|---|---|---|---|---|---|---|
+| 2 | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown |
+| 4 | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown |
 
-```bash
-uv run --no-sync python scripts/research/tfbench.py --help
-uv run --no-sync python scripts/research/agentic/run_agentic.py --help
-uv run --no-sync python scripts/research/accuracy/paired_eval.py --help
-```
+## Sampled peak memory (process-tree physical footprint, GiB)
 
-For tfbench, actual dispatch is `--part decode` or `--part ca` (concurrency + agent
-replay); the module header's standalone `conc` / `agent` examples are stale. For Yunshu
-DFlash, pass `--env YUNSHU_VLM_DRAFT=/absolute/path/to/drafter` and verify the engaged
-mode in the log. Pin both engine SHAs, dependencies, checkpoint fingerprint, prompt
-corpus, seed, sampling, context, output budget and cache state. Use at least three
-interleaved runs for a new speed claim. Require rc 0, expected outputs, and the
-harness's terminal record (`part_done` for tfbench); interrupted parts are not results.
-Compare complete digests for lossless A/Bs and record failures, timeout and truncation
-counts alongside accuracy. No benchmark or server was started for this docs update.
+| group | yunshu-new | tf-new | splash | omlx | mtplx | mlxlm | llamacpp |
+|---|---|---|---|---|---|---|---|
+| d1k | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown |
+| d8k | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown |
+| d32k | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown |
+| d64k-prose | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown |
+| d64k-code | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown |
+| d128k-prose | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown |
+| d128k-code | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown |
+| c2c4 | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown |
+| n32k | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown |
+| n64k | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown |
+| n128k | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown |
 
+## Idle memory after 30 seconds (process-tree physical footprint, GiB)
 
-## 0.1.3 draft measurements (2026-10-03)
+| group | yunshu-new | tf-new | splash | omlx | mtplx | mlxlm | llamacpp |
+|---|---|---|---|---|---|---|---|
+| d1k | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown |
+| d8k | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown |
+| d32k | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown |
+| d64k-prose | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown |
+| d64k-code | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown |
+| d128k-prose | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown |
+| d128k-code | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown |
+| c2c4 | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown |
+| n32k | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown |
+| n64k | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown |
+| n128k | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown | unknown; gap unknown |
 
-M5 Max, Jundot/Qwen3.8-27B-oQ4e-mtp; each comparison uses the same checkpoint.
-These experiments use distinct source snapshots and workloads. Do not multiply
-improvements or compare their rates across rows. The append-only
-[PERF_TREND](reports/PERF_TREND.md) retains full runs, engaged modes, output checks
-and rejected experiments.
+## Gap hypotheses (unproven; applies to each positive gap in the corresponding engine/metric)
 
-| Change / metric | Before → after | Source in PERF_TREND / receipt |
+| engine | metric | hypothesis |
 |---|---|---|
-| Complete JSON warm decode, AR → DFlash | 23.4 → 111.4 tok/s | Oct 3 constrained speculation; `1003-125849-00-cspec-complete-json-tool-quiet-r3-1254` |
-| Complete tool-call warm decode, AR → DFlash | 23.0 → 77.7 tok/s | Same receipt; complete schema-valid output, tokens equal |
-| Follow-up TTFT, 8K code / 32K code, MTP | 569 → 512 ms / 900 → 721 ms | Oct 3 native singleton KV capacity; `1003-145700-00-prefill4-http-combo8k-1456` / `http-combo32k-1456` |
-| DFlash cold code decode, 1K / 8K / 32K | 97.74 → 109.48 / 74.50 → 82.19 / 72.74 → 82.56 tok/s | Oct 3 DFlash2 greedy prompt-copy islands; `1003-161523-00-wide4-timing-bundle-1615` |
-| MTP copy cap 8 → 16, 8K code turn 2 | 106.1 → 129.2 tok/s | Oct 3 prompt-copy maximum; `1003-110949-00-wide3-copy-cap-bindfix-1111` |
+| yunshu-new | ttft | Hybrid-state checkpoint restore, prefix lookup and first-token dispatch may dominate warm TTFT; cold TTFT includes prefill projections and GDN recurrence. |
+| yunshu-new | decode | DFlash acceptance, verify block cost and prompt-copy opportunities vary between prose/code and context lengths. |
+| yunshu-new | memory | Retained APC snapshots, allocator pools and speculative scratch may explain peak/idle differences. |
+| tf-new | ttft | Snapshot selection/restore and prefill kernel scheduling may account for differences. |
+| tf-new | decode | DFlash verify kernels, proposal acceptance and scheduler overhead may account for differences. |
+| tf-new | memory | Snapshot retention and allocator release policy may account for differences. |
+| splash | ttft | Native prefill and GDN-state/cache scheduling may account for differences; BF16 KV is deliberately used here. |
+| splash | decode | Native Metal verification and DFlash proposal batching may account for differences; target weights differ. |
+| splash | memory | Native buffer arenas and prefix retention may account for differences; different target quantization confounds comparisons. |
+| omlx | ttft | Paged prefix-cache lookup, hybrid state restore and SSD/hot-cache transitions may account for differences. |
+| omlx | decode | DFlash acceptance and continuous-batch scheduling may account for differences. |
+| omlx | memory | Hot/SSD cache policy, page pools and concurrent-request guard may account for differences. |
+| mtplx | ttft | Native-MTP hybrid prefill and SessionBank snapshot restore may account for differences. |
+| mtplx | decode | Native MTP acceptance, compiled verification routing and per-step state work may account for differences. |
+| mtplx | memory | Repaged KV and SessionBank retention may account for peak/idle differences. |
+| mlxlm | ttft | Generic prefill kernels and hybrid-cache prefix reuse limits may account for differences. |
+| mlxlm | decode | Autoregressive decoding evaluates the target each token; speculative engines amortize target verification over accepted proposals. |
+| mlxlm | memory | No speculative drafter reduces resident weights; prompt cache and allocator retention still contribute. |
+| llamacpp | ttft | GGUF kernels, graph scheduling and slot prefix reuse may account for differences; weights differ from oQ4e. |
+| llamacpp | decode | Native MTP proposal acceptance, GGUF kernel layout and Metal graph dispatch may account for differences. |
+| llamacpp | memory | Preallocated per-slot KV and graph buffers may account for differences; GGUF weight sizes differ. |
 
-All above are medians of three interleaved clean repetitions, with matching token
-digests. JSON/tool runs also verify complete schema-valid outputs and warm cache
-hits. Prompt copying has workload-dependent tradeoffs: cap 16 lowered measured
-prose rates by 0.2–1.0%; DFlash copy-island prose changes ranged −0.05% to +4.23%.
-The follow-up experiment leaves 32K prose/code TTFT 56/51 ms behind TensorFold;
-8K gaps are 1/7 ms. No claim of universal superiority follows from these rows.
-
-Prompt-cache single-flight is also landed, but its performance summary in merge
-`85f6ae01` is not yet recorded in PERF_TREND. Its numerical claim is withheld here
-until the underlying measurement is added to the canonical log.
+Weights differ for splash (own Splash quantization) and llamacpp (UD-Q4_K_M GGUF), see SETUP.md.

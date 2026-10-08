@@ -524,7 +524,17 @@ def part_decode(s, out, a):
                     reply = r["_text"]
                 r["text"] = r.pop("_text")
                 r["rep4"] = ngram_repeat(r["text"])
-                emit(out, part="decode", ctx=ctx, kind=kind, phase=phase, **r)
+                emit(
+                    out,
+                    part="decode",
+                    ctx=ctx,
+                    kind=kind,
+                    phase=phase,
+                    content_tokens=ctx
+                    if os.environ.get("TFB_EXACT_PROMPTS") == "1" and not a.smoke
+                    else None,
+                    **r,
+                )
             if (
                 a.engine in bench_engines.TF_ENGINES
                 and ctx == 1024
@@ -591,7 +601,13 @@ def part_needle(s, out, a):
         for i, (nm, code) in enumerate(items):
             if not lo <= i < hi:
                 continue
-            r = send(s.url, req(s.model, hay + needle_question(nm), 16))
+            text = hay + needle_question(nm)
+            if not a.smoke and os.environ.get("TFB_EXACT_PROMPTS") == "1":
+                from snapshot_prompts import assert_prompt, exact_prompt
+
+                text = exact_prompt(hay * 2, ctx, needle_question(nm))
+                assert_prompt(text, ctx)
+            r = send(s.url, req(s.model, text, 16))
             ans = r.pop("_text")
             emit(
                 out,
@@ -669,19 +685,30 @@ def part_conc(s, out, a):
                 "Say hello."
                 if a.smoke
                 else load_prompt(
-                    f"conc-{'prose' if (i + trial) % 2 == 0 else 'code'}-{i}"
+                    f"conc-{n}-{trial}-{'prose' if (i + trial) % 2 == 0 else 'code'}-{i}"
+                    if os.environ.get("TFB_EXACT_PROMPTS") == "1"
+                    else f"conc-{'prose' if (i + trial) % 2 == 0 else 'code'}-{i}"
                 )
                 for i in range(n)
             ]
+            if not a.smoke and os.environ.get("TFB_EXACT_PROMPTS") == "1":
+                from snapshot_prompts import assert_prompt
+
+                for text in texts:
+                    assert_prompt(text, 32768)
             t0 = time.perf_counter()
             with cf.ThreadPoolExecutor(n) as ex:
                 rs = list(
                     ex.map(
-                        lambda t: send(s.url, req(s.model, t, 16 if a.smoke else 256)),
+                        lambda t: send(
+                            s.url, req(s.model, t, 16 if a.smoke else a.conc_tokens)
+                        ),
                         texts,
                     )
                 )
             for r in rs:
+                if not a.smoke:
+                    check_decode_len(r, a.conc_tokens, f"conc n={n} trial={trial}")
                 r.pop("_text")
             wall = time.perf_counter() - t0
             tot = sum(r["ct"] for r in rs)
@@ -695,6 +722,9 @@ def part_conc(s, out, a):
                 agg_tps=round(tot / wall, 1),
                 per_req_dec=[r["dec_tps"] for r in rs],
                 ttfts=[r["ttft_s"] for r in rs],
+                cached=[r["cached"] for r in rs],
+                pts=[r["pt"] for r in rs],
+                cts=[r["ct"] for r in rs],
                 shas=[r["sha"] for r in rs],
             )
 
@@ -770,6 +800,7 @@ def parse_args(argv=None):
         "--conc-ns", default="", help="concurrency levels, e.g. 2,4 (default 2,4,8)"
     )
     ap.add_argument("--conc-trials", type=int, default=2)
+    ap.add_argument("--conc-tokens", type=int, default=256)
     ap.add_argument(
         "--ctx-tokens",
         type=int,
@@ -829,6 +860,15 @@ def main():
             )
         )
         return
+    if (
+        a.engine in bench_engines.ENGINES
+        and bench_engines.ENGINES[a.engine].kind == "yunshu"
+    ):
+        expected = os.environ.get("TFB_EXPECT_YUNSHU_SHA")
+        if expected and bench_engines.tree_version(YUNSHU_SRC)[1] != expected:
+            raise AssertionError(
+                "Yunshu pinned tree does not match expected release SHA"
+            )
     s = Srv(
         a.engine,
         extra_env,

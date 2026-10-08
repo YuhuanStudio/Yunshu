@@ -150,7 +150,7 @@ ENGINES: dict[str, Engine] = {
             CHECKPOINT,
             None,
             "external",
-            "native MTP, profile stable",
+            "native MTP, profile turbo (recommended fastest lossless path)",
             0.7,
             60.0,
         ),
@@ -230,7 +230,14 @@ def build_launch(
         links = yunshu_home_links(home)
         model = str(Path(home) / ".yunshu/models/Jundot/Qwen3.8-27B-oQ4e-mtp")
         return Launch(
-            [YUNSHU_BIN, "serve", "-m", model, "--port", p],
+            [
+                environ.get("TFB_YUNSHU_BIN", YUNSHU_BIN),
+                "serve",
+                "-m",
+                model,
+                "--port",
+                p,
+            ],
             scrubbed_env(environ, base_env),
             {
                 "yunshu_vlm_draft": "unset (auto-discovery)",
@@ -242,7 +249,7 @@ def build_launch(
     if engine == "mlxlm":
         return Launch(
             [
-                MAIN_PY,
+                environ.get("TFB_MLXLM_PY", MAIN_PY),
                 "-m",
                 "mlx_lm",
                 "server",
@@ -348,13 +355,17 @@ def build_launch(
                 "--port",
                 p,
                 "--profile",
-                "stable",
+                "turbo",
                 "--no-auth",
                 "--cache-dir",
                 str(Path(home) / "mtplx-cache"),
             ],
             scrubbed_env(environ, base_env),
-            {"profile": "stable", "generation_mode": "mtp (default)"},
+            {
+                "profile": "turbo",
+                "generation_mode": "mtp (default)",
+                "kv_quant": "off (default)",
+            },
             {},
             {},
         )
