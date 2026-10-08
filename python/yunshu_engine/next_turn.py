@@ -37,7 +37,7 @@ def eligible(
     constrained: bool,
 ) -> bool:
     """Only a finished plain-text reply of useful size is worth prefilling."""
-    if finish_reason != "stop" or not reply:
+    if finish_reason not in ("stop", "length") or not reply:
         return False
     if has_media or has_tools or constrained:
         return False

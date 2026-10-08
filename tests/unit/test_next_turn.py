@@ -45,7 +45,7 @@ def test_eligibility():
     )
     assert nt.eligible(**ok)
     for k, v in (
-        ("finish_reason", "length"),
+        ("finish_reason", "error"),
         ("completion_tokens", 3),
         ("completion_tokens", 10**6),
         ("reply", ""),
@@ -61,4 +61,16 @@ def test_with_reply_appends_assistant_and_sentinel():
     assert (
         m[-2] == {"role": "assistant", "content": "a"}
         and m[-1]["content"] == nt.SENTINEL
+    )
+
+
+def test_length_capped_reply_is_rehearsed():
+    # the yv followup cells cap the first reply at max_tokens; it is re-sent unchanged
+    assert nt.eligible(
+        finish_reason="length",
+        completion_tokens=2048,
+        reply="x",
+        has_media=False,
+        has_tools=False,
+        constrained=False,
     )

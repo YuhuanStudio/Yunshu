@@ -95,7 +95,7 @@ def test_rehearsal_prefills_prefix_before_the_next_user_turn(monkeypatch):
 @pytest.mark.parametrize(
     "over",
     [
-        {"finish_reason": "length"},
+        {"finish_reason": "error"},
         {"has_media": True},
         {"kwargs": {"tools": [1]}},
         {"completion_tokens": 2},
