@@ -52,6 +52,21 @@ for (const l of LOCALES.slice(1)) {
   }
 }
 
+// ---- every engine setting has a description in every locale ----------------
+// The engine's registry (python/yunshu_engine/settings.py) is the list; the effective-config table
+// shows localized text, so a setting added there without a settingdesc.<NAME> key fails here.
+// Keys for settings a newer or older engine lacks are harmless (the table falls back to the engine text).
+{
+  let registry = "";
+  try {
+    registry = readFileSync(join(root, "..", "python", "yunshu_engine", "settings.py"), "utf8");
+  } catch {}
+  const names = [...registry.matchAll(/^\s*_add\(\s*"(YUNSHU_[A-Z0-9_]+)"/gm)].map((m) => m[1]);
+  if (registry && names.length < 50) fail(`settings registry scan found only ${names.length} names; fix the pattern`);
+  for (const n of names)
+    for (const l of LOCALES) if (!flat[l][`settingdesc.${n}`]) fail(`[${l}] missing settingdesc.${n} (setting in settings.py)`);
+}
+
 // ---- source scan --------------------------------------------------------
 function walk(dir) {
   return readdirSync(dir).flatMap((n) => {

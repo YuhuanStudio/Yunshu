@@ -58,12 +58,19 @@ import {
   type ConfigRow,
   type Drafts,
 } from "./config-view";
-import { t } from "./i18n/index.ts";
+import { has, t, tr } from "./i18n/index.ts";
 import { ErrorNote } from "./error-note";
 import { RestartControl } from "./Service";
 import { CopyField, SectionCard } from "./ui";
 
 /** Effective settings from GET /v1/yunshu/config, editable through PATCH (admin). */
+/** The localized description of a registry setting; a setting this console predates keeps the engine's own text. */
+// i18n-keys: settingdesc.
+const describe = (row: { name: string; description: string }) =>
+  has(`settingdesc.${row.name}`)
+    ? tr(`settingdesc.${row.name}`)
+    : row.description;
+
 export function ConfigView({
   connection,
   loadedModels = [],
@@ -400,12 +407,12 @@ function ConfigRowView({
     >
       <Td className="min-w-48 max-w-72 align-top">
         <span className="break-all font-mono text-xs">{row.name}</span>
-        {row.description && (
+        {describe(row) && (
           <span
             className="mt-0.5 line-clamp-2 block text-xs text-muted-foreground"
-            title={row.description}
+            title={describe(row)}
           >
-            {row.description}
+            {describe(row)}
           </span>
         )}
         {row.stability !== "stable" && (
