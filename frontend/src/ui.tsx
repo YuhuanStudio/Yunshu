@@ -226,7 +226,7 @@ export function SectionCard({
         >
           <Icon size={17} strokeWidth={1.75} />
         </span>
-        <div className="min-w-0 flex-1">
+        <div className="min-w-40 flex-1">
           <h2 className="yunui-section-title truncate text-base font-semibold">
             {title}
           </h2>

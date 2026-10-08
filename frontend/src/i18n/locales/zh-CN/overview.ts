@@ -135,8 +135,6 @@ const overview: Shape<typeof zh> = {
   "strip.decoding": "解码中",
   "strip.decodingN": "解码中 · 已输出 {n} token",
   "strip.decodeLive": "{tps} tok/s {live}",
-  "strip.prefillBar": "预填充 {pct}%",
-  "strip.prefillBarNone": "预填充进度，暂无进度上报",
   "speed.decodeTitle": "解码",
   "speed.prefillTitle": "预填充",
   "totals.requests": "本页累计",

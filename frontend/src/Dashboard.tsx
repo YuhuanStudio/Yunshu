@@ -374,7 +374,7 @@ export function Dashboard({
               </Button>
             }
           />
-          <ol className="mt-3 grid gap-4 border-t border-border/60 pt-4 sm:grid-cols-3">
+          <ol className="mt-4 grid gap-4 sm:grid-cols-3">
             {(["1", "2", "3"] as const).map((n) => (
               <li key={n}>
                 <span className="text-xs tabular-nums text-muted-foreground">
@@ -871,7 +871,7 @@ export function Dashboard({
                 legend
                 formatValue={(v) => `${number(v)} GB`}
               />
-              <DetailList className="mt-4 border-t border-border/60 pt-4">
+              <DetailList className="mt-4">
                 <DetailRow
                   label={t("overview.memory.peak")}
                   value={`${number(memory?.peak_gb)} GB`}

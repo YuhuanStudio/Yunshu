@@ -468,7 +468,7 @@ export default function Logs({ connection }: { connection: Connection }) {
               : t("logs.action.jump")}
           </Button>
         )}
-        <div className="flex min-h-9 flex-wrap items-center justify-between gap-x-4 gap-y-1 border-t border-border/60 bg-muted/30 px-4 py-2 text-xs text-muted-foreground">
+        <div className="flex min-h-9 flex-wrap items-center justify-between gap-x-4 gap-y-1 bg-muted/30 px-4 py-2 text-xs text-muted-foreground">
           <span className="tabular-nums">
             {t("logs.footer.counts", {
               count: number(records.length, 0),
@@ -486,7 +486,7 @@ export default function Logs({ connection }: { connection: Connection }) {
           <span role="status">{note ?? ""}</span>
         </div>
         <p
-          className="border-t border-border/60 px-4 py-2 text-xs text-muted-foreground"
+          className="px-4 py-2 text-xs text-muted-foreground"
           data-testid="logs-redaction"
         >
           {t("logs.note.redaction", { capacity: number(RING_LIMIT, 0) })}

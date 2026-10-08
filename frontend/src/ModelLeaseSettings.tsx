@@ -41,6 +41,7 @@ export function ModelLeaseSettings({
       bodyClassName="px-4 pb-4"
     >
       <SettingRow
+        divider={false}
         title={t("models.lease.model")}
         description={t("models.lease.modelHint")}
         control={
@@ -62,6 +63,7 @@ export function ModelLeaseSettings({
         }
       />
       <SettingRow
+        divider={false}
         title={t("models.lease.idle")}
         description={t("models.lease.idleHint")}
         control={

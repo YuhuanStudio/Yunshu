@@ -121,6 +121,8 @@ test.describe("overview tells the truth about the engine", () => {
     // Idle is no pill of its own: it is the absence of a lit phase.
     await expect(strip.locator("[data-phase=idle]")).toHaveCount(0);
     await expect(strip.getByTestId("state-strip-detail")).toContainText("34%");
+    // The percentage is in the sentence; no bar is glued to the card edge (it read as a stray line).
+    await expect(strip.getByRole("progressbar")).toHaveCount(0);
     await expect(page.getByTestId("live-phase")).toContainText("預填");
     await expect(page.getByTestId("live-phase")).toContainText("34%");
   });

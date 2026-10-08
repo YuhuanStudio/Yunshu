@@ -604,7 +604,7 @@ export function Requests({
         />
       </div>
       {view.speculative && (
-        <div className="grid grid-cols-3 gap-5 border-t border-border/60 pt-5">
+        <div className="grid grid-cols-3 gap-5 pt-1">
           <Readout
             label={t("requests.detail.speculative")}
             value={view.speculative.mode ?? "—"}
@@ -784,7 +784,7 @@ export function Requests({
                           k="time"
                           sort={sort}
                           setSort={setSort}
-                          className="w-24"
+                          className="w-24 max-sm:hidden"
                         >
                           {t("requests.list.colTime")}
                         </SortTh>
@@ -853,7 +853,7 @@ export function Requests({
                                 : undefined
                             }
                           >
-                            <Td className="whitespace-nowrap tabular-nums">
+                            <Td className="whitespace-nowrap tabular-nums max-sm:hidden">
                               {when == null ? (
                                 "—"
                               ) : (
@@ -909,6 +909,13 @@ export function Requests({
                                   : t("requests.list.modelUnknown")}
                               </p>
                               <p className="mt-0.5 truncate text-xs tabular-nums text-muted-foreground md:hidden">
+                                {/* The time column is gone on phones; the time rides on this line. */}
+                                {when != null && (
+                                  <span className="sm:hidden">
+                                    {clock(when)}
+                                    {" · "}
+                                  </span>
+                                )}
                                 {row.phase === "complete"
                                   ? t("requests.list.mobileLine", {
                                       ttft: ttftText,
@@ -1012,7 +1019,7 @@ export function Requests({
                 )}
               </div>
               {matched.length > shown.length && (
-                <div className="flex justify-center border-t border-border/60 py-2">
+                <div className="flex justify-center py-2">
                   <Button
                     size="sm"
                     variant="ghost"
@@ -1025,7 +1032,7 @@ export function Requests({
                 </div>
               )}
               <div
-                className="min-h-[3.25rem] space-y-1 border-t border-border/60 bg-muted/30 px-4 py-2.5 text-xs text-muted-foreground"
+                className="min-h-[3.25rem] space-y-1 bg-muted/30 px-4 py-2.5 text-xs text-muted-foreground"
                 data-testid="requests-footer"
               >
                 <p className="tabular-nums">

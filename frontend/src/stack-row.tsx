@@ -16,7 +16,7 @@ export function StackRow({
 }) {
   return (
     <div
-      className="flex flex-col gap-2 border-b border-border py-3 last:border-0 sm:flex-row sm:items-center sm:justify-between sm:gap-4"
+      className="flex flex-col gap-2 py-3.5 sm:flex-row sm:items-center sm:justify-between sm:gap-4"
       data-testid="stack-row"
     >
       <div className="min-w-0 sm:flex-1">

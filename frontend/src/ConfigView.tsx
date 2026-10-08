@@ -292,7 +292,7 @@ export function ConfigView({
             </div>
           )}
           <div
-            className="flex min-h-12 flex-wrap items-center gap-3 border-t border-b border-border px-5 py-2"
+            className="flex min-h-12 flex-wrap items-center gap-3 px-5 py-2"
             data-testid="config-actions"
           >
             <span className="mr-auto text-sm text-muted-foreground tabular-nums">

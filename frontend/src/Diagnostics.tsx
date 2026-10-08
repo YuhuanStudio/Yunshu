@@ -556,7 +556,7 @@ export function Diagnostics({
           </div>
         }
       >
-        <ul className="-my-2 divide-y divide-border">
+        <ul className="-my-2">
           {checks.map((check) => (
             <li key={check.key} className="py-3">
               <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-1">

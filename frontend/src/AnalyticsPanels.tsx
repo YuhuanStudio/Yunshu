@@ -195,7 +195,7 @@ export function PhasePanel({
           {t("overview.phasePanel.clear")}
         </Button>
       )}
-      <div className="mt-4 min-h-[7.5rem] divide-y divide-border/60 border-t border-border/60">
+      <div className="mt-4 min-h-[7.5rem] divide-y divide-border/60">
         {selected.slice(0, 3).map((row) => (
           <div
             key={row.request_id}

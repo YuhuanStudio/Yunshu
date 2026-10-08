@@ -132,8 +132,6 @@ const overview = {
   "strip.decoding": "解碼中",
   "strip.decodingN": "解碼中 · 已輸出 {n} token",
   "strip.decodeLive": "{tps} tok/s {live}",
-  "strip.prefillBar": "預填 {pct}%",
-  "strip.prefillBarNone": "預填進度，尚無進度回報",
   "speed.decodeTitle": "解碼",
   "speed.prefillTitle": "預填",
   "totals.requests": "本頁累計",

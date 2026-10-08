@@ -313,3 +313,24 @@ test("playground toolbar: model full width, dialect and mode on one row, actions
   await expect(page.getByRole("button", { name: "檢視程式碼" })).toBeVisible();
   await expect(page.getByRole("button", { name: "新測試" })).toBeVisible();
 });
+
+test("requests: the phone list fits the width with its actions reachable (no sideways scroll)", async ({
+  page,
+}) => {
+  await install(page);
+  await page.goto("/console/#/requests", { waitUntil: "domcontentloaded" });
+  const details = page.getByRole("button", { name: "詳情" }).first();
+  await expect(details).toBeVisible();
+  const box = await details.boundingBox();
+  const vw = page.viewportSize()!.width;
+  expect(box!.x + box!.width).toBeLessThanOrEqual(vw);
+  const overflow = await page
+    .getByTestId("request-identity")
+    .first()
+    .evaluate((td) => {
+      const table = td.closest("table")!;
+      const box = table.parentElement!;
+      return box.scrollWidth - box.clientWidth;
+    });
+  expect(overflow).toBeLessThanOrEqual(1);
+});

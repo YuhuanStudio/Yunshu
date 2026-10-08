@@ -4,7 +4,6 @@ import {
   Collapsible,
   CollapsibleContent,
   CollapsibleTrigger,
-  Progress,
   StatusIndicator,
 } from "@yuhuanowo/yunui";
 import { StatCard } from "@yuhuanowo/yunui/patterns";
@@ -147,18 +146,6 @@ export function StateStrip({
           {right}
         </Slot>
       </div>
-      {/* The bar belongs to prefill only; it sits on the card edge, so it never moves the row. */}
-      {a?.phase === "prefill" && (
-        <Progress
-          className="absolute inset-x-0 bottom-0 h-0.5 rounded-none"
-          value={progress == null ? 0 : Math.max(0, Math.min(100, progress))}
-          label={
-            progress == null
-              ? t("overview.strip.prefillBarNone")
-              : t("overview.strip.prefillBar", { pct: number(progress, 0) })
-          }
-        />
-      )}
     </Card>
   );
 }

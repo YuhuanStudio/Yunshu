@@ -116,6 +116,38 @@ async function lint(page: Page): Promise<string[]> {
           );
       }
     }
+    // 6. no hairline rules inside cards: only table rows and list items may separate content
+    const inCard = (e: Element) =>
+      e.closest('.card, [data-yunui="card"], [data-slot="card"]');
+    for (const el of document.querySelectorAll("main *")) {
+      if (!vis(el) || !inCard(el) || el === inCard(el)) continue;
+      if (el.closest("table, li, svg, [role=tablist], [role=progressbar]"))
+        continue;
+      if (/^(BUTTON|INPUT|TEXTAREA|SELECT|A)$/.test(el.tagName)) continue;
+      if (
+        el.closest(
+          "button, [role=combobox], [role=switch], [data-radix-popper-content-wrapper]",
+        )
+      )
+        continue;
+      const cs = getComputedStyle(el);
+      const w = el.getBoundingClientRect().width;
+      // YunUI parts with their own structure: heatmap rows, a code block's filled header bar,
+      // and a bar chart's baseline (the box that holds the bars).
+      if (el.closest("[role=row]")) continue;
+      if (cs.backgroundColor !== "rgba(0, 0, 0, 0)") continue;
+      if (el.querySelector("[role=img][aria-label], [role=button][aria-label]"))
+        continue;
+      // A rule is a top or bottom edge only; a box with all four borders is a field, not a rule.
+      const line =
+        (parseFloat(cs.borderTopWidth) > 0 ||
+          parseFloat(cs.borderBottomWidth) > 0) &&
+        parseFloat(cs.borderLeftWidth) === 0;
+      if (line && w >= 200)
+        out.push(
+          `hairline inside a card: ${el.tagName.toLowerCase()}.${String(el.className).split(" ").slice(0, 4).join(".")}`,
+        );
+    }
     // 5. standard frame and title
     const h1 = document.querySelector("h1");
     if (!h1 || !vis(h1)) out.push("page has no visible h1");

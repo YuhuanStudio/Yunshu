@@ -142,8 +142,6 @@ const overview: Shape<typeof zh> = {
   "strip.decoding": "Decoding",
   "strip.decodingN": "Decoding · {n} tokens out",
   "strip.decodeLive": "{tps} tok/s {live}",
-  "strip.prefillBar": "Prefill {pct}%",
-  "strip.prefillBarNone": "Prefill progress, none reported yet",
   "speed.decodeTitle": "Decode",
   "speed.prefillTitle": "Prefill",
   "totals.requests": "This page",
