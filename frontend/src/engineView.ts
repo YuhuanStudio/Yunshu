@@ -150,6 +150,8 @@ export interface Headline {
   label: string;
   /** One honest sentence about the state. */
   note: string;
+  /** One-line variant of the note (the note itself goes to the tooltip). */
+  short?: string;
 }
 
 /** Decode headline: live while decoding, otherwise the last request, labelled so. */
@@ -165,20 +167,23 @@ export function decodeHeadline(status: EngineStatus): Headline {
     };
   if (a.counts.active > 0) {
     // Busy but not decoding: say which phase, never "閒置".
-    const why =
+    const whyKey =
       a.phase === "queued"
-        ? t("shell.engine.headline.whyQueued")
+        ? "Queued"
         : a.preparing
-          ? t("shell.engine.headline.whyStarting")
-          : t("shell.engine.headline.whyPrefill");
+          ? "Starting"
+          : "Prefill";
+    const why = t(`shell.engine.headline.why${whyKey}` as const);
+    const short = t(`shell.engine.headline.short${whyKey}` as const);
     return f.last != null
       ? {
           kind: "last",
           value: f.last,
           label: speedTerms.last,
           note: why,
+          short,
         }
-      : { kind: "none", value: null, label: speedTerms.live, note: why };
+      : { kind: "none", value: null, label: speedTerms.live, note: why, short };
   }
   return f.last != null
     ? {

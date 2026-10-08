@@ -17,7 +17,7 @@ const settings: Shape<typeof zh> = {
   "connection.description": "控制台要连接到哪一个 Yunshu 服务。",
   "connection.url": "服务地址",
   "connection.urlHelp":
-    "默认使用同一个服务来源。开发模式下由 Vite 转发到所配置的引擎地址。",
+    "默认使用同一个服务来源；本机启动的默认端口为 8000。开发模式下由 Vite 转发到所配置的引擎地址。",
   "connection.token": "访问令牌",
   "connection.tokenHelp":
     "默认只保留在此页内存中；刷新后需要重新输入。更改服务地址会清除令牌。",

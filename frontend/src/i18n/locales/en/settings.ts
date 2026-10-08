@@ -17,7 +17,7 @@ const settings: Shape<typeof zh> = {
   "connection.description": "Which Yunshu server the console talks to.",
   "connection.url": "Server address",
   "connection.urlHelp":
-    "Defaults to the same origin. In development Vite forwards to the configured engine address.",
+    "Defaults to the same origin; a local server listens on port 8000 by default. In development Vite forwards to the configured engine address.",
   "connection.token": "Access token",
   "connection.tokenHelp":
     "By default kept in this page's memory only; enter it again after a reload. Changing the address clears it.",

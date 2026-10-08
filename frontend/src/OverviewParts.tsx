@@ -183,12 +183,16 @@ export function SpeedPair({ status }: { status: EngineStatus }) {
         }
         subtext={
           <>
-            <span className="whitespace-nowrap" data-testid={testId + "-label"}>
+            <span
+              className="whitespace-nowrap"
+              data-testid={testId + "-label"}
+              title={headline.note || undefined}
+            >
               {headline.label}
               {headline.note &&
               headline.kind !== "live" &&
               (headline.kind !== "last" || status.requests.active > 0)
-                ? ` · ${headline.note}`
+                ? ` · ${headline.short ?? headline.note}`
                 : ""}
             </span>
             {" · "}

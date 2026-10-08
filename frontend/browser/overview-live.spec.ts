@@ -111,7 +111,11 @@ test.describe("overview tells the truth about the engine", () => {
     await install(page, () => prefilling);
     await page.goto("/console/#/overview");
     const decode = page.getByTestId("speed-decode");
-    await expect(decode).toContainText("預填中，尚無解碼速度");
+    await expect(decode).toContainText("預填中");
+    await expect(decode.getByTestId("speed-decode-label")).toHaveAttribute(
+      "title",
+      "預填中，尚無解碼速度",
+    );
     await expect(decode).not.toContainText("閒置");
     const strip = page.getByTestId("state-strip");
     await expect(strip.locator("[data-phase=prefill]")).toHaveAttribute(

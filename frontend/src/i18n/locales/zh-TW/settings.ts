@@ -14,7 +14,7 @@ const settings = {
   "connection.description": "控制台要連到哪一個 Yunshu 服務。",
   "connection.url": "服務位址",
   "connection.urlHelp":
-    "預設使用同一個服務來源。開發模式由 Vite 轉送至所設定的引擎位址。",
+    "預設使用同一個服務來源；本機啟動的預設埠為 8000。開發模式由 Vite 轉送至所設定的引擎位址。",
   "connection.token": "存取權杖",
   "connection.tokenHelp":
     "預設只保留在此頁記憶體；重新整理後需要再輸入。更改服務位址會清除權杖。",

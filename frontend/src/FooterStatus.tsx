@@ -62,8 +62,23 @@ export function FooterStatus({
     </StatusPillBar>
   );
   if (wide) return bar;
-  // The same state-to-colour map as the top-bar pill: idle is grey, decode green, work in between amber.
+  // The collapsed pill leads with the ENGINE state (same tone as the first pill
+  // of the band), then the phase as secondary text: 「運作中 · 閒置」.
   const live = livePill(engine.phase, engine.status);
+  const lead = pills[0];
+  const dot =
+    lead.tone === "success"
+      ? engine.status?.models.some((m) => m.loading)
+        ? "away"
+        : "online"
+      : lead.tone === "danger"
+        ? "offline"
+        : lead.tone === "warning"
+          ? "away"
+          : "neutral";
+  const secondary = online
+    ? [live.phase, live.detail].filter(Boolean).join(" ")
+    : (lead.value ?? "");
   return (
     <>
       <div className="px-4 pb-3 pt-1">
@@ -75,9 +90,9 @@ export function FooterStatus({
           data-testid="footer-compact"
           onClick={() => setOpen(true)}
         >
-          <StatusIndicator status={live.tone} />
+          <StatusIndicator status={dot} />
           <span className="truncate tabular-nums">
-            {[live.phase, live.detail].filter(Boolean).join(" ")}
+            {[lead.label, secondary].filter(Boolean).join(" · ")}
           </span>
           <ChevronUp size={13} className="shrink-0 text-muted-foreground" />
         </Button>

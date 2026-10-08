@@ -183,24 +183,22 @@ function RequestLane({ row }: { row: RequestRow }) {
           {elapsed(row.elapsed_s)}
         </Slot>
       </div>
-      {/* One fixed-height line for either the prefill bar or the cache hint, so a
-          phase change never adds or removes a row. */}
-      <div className="col-span-2 flex h-4 items-center">
-        {progress != null ? (
+      {progress != null ? (
+        <div className="col-span-2 flex h-4 items-center">
           <Progress
             className="h-1 w-full"
             value={Math.max(0, Math.min(100, progress))}
             label={t("overview.lane.prefill", { pct: number(progress, 0) })}
           />
-        ) : phase !== "prefill" && cached > 0 && prompt > 0 ? (
-          <p className="truncate text-xs text-muted-foreground">
-            {t("overview.lane.prefixHit", {
-              cached: number(cached, 0),
-              prompt: number(prompt, 0),
-            })}
-          </p>
-        ) : null}
-      </div>
+        </div>
+      ) : phase !== "prefill" && cached > 0 && prompt > 0 ? (
+        <p className="col-span-2 truncate text-xs text-muted-foreground">
+          {t("overview.lane.prefixHit", {
+            cached: number(cached, 0),
+            prompt: number(prompt, 0),
+          })}
+        </p>
+      ) : null}
     </li>
   );
 }
