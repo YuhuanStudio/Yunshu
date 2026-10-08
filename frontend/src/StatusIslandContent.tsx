@@ -359,10 +359,10 @@ function MachineCard({ host, now }: { host: HostState; now: number }) {
       ) : (
         <Collapsible open={open} onOpenChange={setOpen}>
           <CollapsibleTrigger asChild>
-            <button
-              type="button"
+            <Button
+              variant="ghost"
               data-testid="island-machine-toggle"
-              className="flex w-full items-center justify-between gap-2 rounded-md text-left text-[13px] tabular-nums text-foreground outline-none focus-visible:outline-2 focus-visible:outline-(--color-accent)"
+              className="h-auto w-full justify-between gap-2 border-transparent bg-transparent p-0 text-left text-[13px] font-normal tabular-nums text-foreground hover:bg-transparent"
             >
               <span className="truncate">{summary || DASH}</span>
               <ChevronDown
@@ -370,7 +370,7 @@ function MachineCard({ host, now }: { host: HostState; now: number }) {
                 size={14}
                 className={`shrink-0 text-muted-foreground transition-transform duration-[180ms] ease-out motion-reduce:transition-none ${open ? "" : "-rotate-90"}`}
               />
-            </button>
+            </Button>
           </CollapsibleTrigger>
           <CollapsibleContent>
             <div className="pt-1.5">{rows}</div>

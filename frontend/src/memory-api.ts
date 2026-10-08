@@ -88,8 +88,8 @@ export function parseMemory(raw: unknown): MemoryLedgerData {
     }),
     attribution_overshoot_gb: gbNum(r.attribution_overshoot_gb),
     limits: {
-      apc_max_gb: gbNum(limits.apc_max_gb),
-      apc_warm_max_gb: gbNum(limits.apc_warm_max_gb),
+      apc_max_gb: num(limits.apc_max_gb),
+      apc_warm_max_gb: num(limits.apc_warm_max_gb),
       guard_margin_pct: num(limits.guard_margin_pct),
     },
   };

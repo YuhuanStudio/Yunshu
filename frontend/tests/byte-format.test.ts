@@ -54,3 +54,9 @@ test("status memory and model sizes are binary too", () => {
   assert.ok(Math.abs((s.models[0].size_gb as number) - 10) < 1e-9);
   assert.equal(s.memory.pressure, 0.2);
 });
+
+test("configured limits are shown exactly as entered (the engine reads them as GiB), never converted", () => {
+  const m = parseMemory({ limits: { apc_max_gb: 8, apc_warm_max_gb: 4 } });
+  assert.equal(m.limits.apc_max_gb, 8);
+  assert.equal(m.limits.apc_warm_max_gb, 4);
+});

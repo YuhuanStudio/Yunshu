@@ -111,16 +111,16 @@ export function FooterStatus({
                 />
               ))}
             </StatusPillBar>
-            <button
-              type="button"
-              ref={(el) => {
+            <Button
+              variant="ghost"
+              ref={(el: HTMLButtonElement | null) => {
                 anchorRef.current = el;
               }}
               aria-haspopup="dialog"
               aria-expanded={open}
               aria-label={t("shell.island.trigger")}
               data-testid="footer-trigger"
-              className="absolute inset-0 rounded-2xl outline-none transition-colors hover:bg-foreground/[0.04] focus-visible:outline-2 focus-visible:outline-(--color-accent)"
+              className="absolute inset-0 h-auto w-full rounded-2xl border-transparent bg-transparent p-0 hover:bg-foreground/[0.04]"
               onClick={toggle}
             />
           </div>
