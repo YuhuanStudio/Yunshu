@@ -116,8 +116,8 @@
  },
  {
   "match": "openai * /evals*",
-  "status": "planned",
-  "reason": "Evals (create, runs, output items): a local grader runner over stored completions is a fit and is the next item after stored completions; string_check / text_similarity graders need no model, label_model / score_model use the loaded model. Not started."
+  "status": "implemented",
+  "reason": "12 Evals CRUD, runs and output-item routes; local JSONL/stored-completion sources and local graders."
  },
  {
   "match": "openai * /skills*",

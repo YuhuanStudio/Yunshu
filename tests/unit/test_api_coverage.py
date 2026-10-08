@@ -50,7 +50,7 @@ def test_declarations_are_not_stale(world):
 
 def test_declarations_carry_real_reasons():
     for d in ac.load_declarations():
-        assert d["status"] in ("not_applicable", "planned")
+        assert d["status"] in ("not_applicable", "planned", "implemented")
         assert len(d["reason"]) >= 40, d["match"]
 
 
@@ -78,3 +78,19 @@ def test_an_unknown_endpoint_is_flagged():
     served = ac.Endpoint("openai", "POST", "/decisions")
     rows, _ = ac.classify([served], {"POST /v1/decisions"}, [])
     assert rows[0][1] == "implemented"
+
+
+def test_implemented_declaration_cannot_hide_missing_route():
+    ep = ac.Endpoint("openai", "POST", "/evals")
+    declaration = [
+        {
+            "match": "openai * /evals*",
+            "status": "implemented",
+            "reason": "SDK Evals endpoint is implemented and must have a served route.",
+        }
+    ]
+    rows, _ = ac.classify([ep], set(), declaration)
+    assert rows[0][1] == "UNCLASSIFIED"
+    rows, used = ac.classify([ep], {"POST /v1/evals"}, declaration)
+    assert rows[0][1] == "implemented" and used == {0}
+    assert not ac.contradictions([ep], {"POST /v1/evals"}, declaration)

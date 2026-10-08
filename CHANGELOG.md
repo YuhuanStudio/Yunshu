@@ -7,6 +7,8 @@ Release steps: [RELEASING.md](RELEASING.md).
 
 ## [Unreleased]
 
+- OpenAI Evals API: 12 CRUD/run/output-item endpoints, atomic local persistence, cancellable background runs through normal chat inference, JSONL/file/stored-completion sources, lexical similarity and local score/label graders.
+
 Changes on main after 0.1.4; not part of a published package yet.
 
 ### Highlights
