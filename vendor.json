@@ -2349,6 +2349,16 @@
       "why": "Clef decision model reference implementation and head layout we serve (decision_engine.py); a changed head or encoding changes every probability",
       "commit": "2f3de3dd85f379784083b0814d997ab627200f0c",
       "reviewed_date": "2026-10-07"
+    },
+    {
+      "repo": "https://huggingface.co/mlx-community/Qwen3-Reranker-0.6B-4bit",
+      "clone": "reference/Qwen3-Reranker-0.6B-4bit",
+      "globs": [
+        "chat_template.jinja"
+      ],
+      "why": "Published role-template encoding is the independent Qwen reranker input-ID oracle; a changed template can discard query/document inputs.",
+      "commit": "5f324548f1d20c2b5a450f126fc6ef2fb1126524",
+      "reviewed_date": "2026-10-08"
     }
   ],
   "packages": [
