@@ -15,39 +15,17 @@ from pathlib import Path
 import httpx
 
 ROOT = Path(__file__).resolve().parents[2]
-PORT = 18991
 
 
-def _free_port():
-    for port in range(18990, 19000):
-        with socket.socket() as sock:
-            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            try:
-                sock.bind(("127.0.0.1", port))
-            except OSError:
-                continue
-            return port
-    raise RuntimeError("no free port in 18990-18999")
+def _free_port() -> int:
+    # An OS-assigned port, never one of the shared 18990-18999 pool that live servers
+    # (gpuq jobs) may already hold; a fixed port made the test talk to a foreign server.
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
 
 
-def test_free_port_skips_busy_ports(monkeypatch):
-    class Socket:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args):
-            pass
-
-        def setsockopt(self, *args):
-            pass
-
-        def bind(self, address):
-            assert 18990 <= address[1] <= 18999
-            if address[1] < 18993:
-                raise OSError("busy")
-
-    monkeypatch.setattr(socket, "socket", Socket)
-    assert _free_port() == 18993
+PORT = _free_port()
 
 
 def test_graceful_shutdown_timeout_values():
@@ -176,3 +154,7 @@ def test_drain_zero_aborts_the_stream_fast():
     finally:
         if p.poll() is None:
             p.kill()
+
+
+def test_port_is_outside_the_shared_server_pool():
+    assert not 18990 <= PORT <= 18999

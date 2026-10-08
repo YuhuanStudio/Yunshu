@@ -1,8 +1,9 @@
 # Benchmarks: methods, results and limits
 
 Measurements below are snapshots, not scores for the latest release. Latest release:
-**v0.1.2 (2026-10-02)**; v0.1.1 was released on 2026-09-29. Changes after v0.1.2 are
-**unreleased main**. Unless stated otherwise: M5 Max, 128 GB, Qwen3.8-27B
+**v0.1.4 (2026-10-08)**. A same-build, same-window cross-engine snapshot for 0.1.4 is being
+measured after the release; until it lands, the sections below are older snapshots and are labeled
+with the build they measured. Changes after v0.1.4 are **unreleased main**. Unless stated otherwise: M5 Max, 128 GB, Qwen3.8-27B
 `Jundot/Qwen3.8-27B-oQ4e-mtp`. Raw JSONL and captured agent prompts stay private;
 the harnesses are public. The [append-only measurement log](reports/PERF_TREND.md)
 keeps historical observations, including losses. Do not pool different builds or corpora.

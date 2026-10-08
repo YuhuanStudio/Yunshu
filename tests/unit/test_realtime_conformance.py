@@ -52,14 +52,10 @@ class FakeEngine:
 
 
 def _free_port() -> int:
-    for port in range(18990, 19000):
-        with socket.socket() as s:
-            try:
-                s.bind(("127.0.0.1", port))
-                return port
-            except OSError:
-                continue
-    raise RuntimeError("no free port in 18990-18999")
+    # OS-assigned: the 18990-18999 pool belongs to live servers and may be full.
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
 
 
 @pytest.fixture()
