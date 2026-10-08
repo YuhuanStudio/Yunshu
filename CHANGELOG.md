@@ -15,6 +15,8 @@ Changes on main after 0.1.4; not part of a published package yet.
 
 ### Upgrade notes / breaking changes
 
+- Every `*_gb` field the engine returns (`/v1/yunshu/status` memory and models, `/v1/models` `size_gb`, model-pool status, `memory_usage`, hardware info, trace host stats) is now binary: GB = 1024^3 bytes, the unit macOS, `yunshu doctor` and the `YUNSHU_*_GB` settings use. It was decimal (1e9) for engine memory and model sizes, so values drop by about 7% (a 128 GB Mac reads 128.0, not 137.4). Scripts that read `*_gb` see the new numbers; each field now has an exact integer `*_bytes` sibling (`active_bytes`, `cache_bytes`, `peak_bytes`, `total_bytes`, `size_bytes`, `current_bytes`, `max_bytes`, `max_memory_bytes`, `current_memory_bytes`, `total_memory_bytes`, `working_set_bytes`, `memory_available_bytes`). Prometheus metrics stay in bytes.
+
 ### Performance
 
 | Machine | Model / mode | Metric / workload | Before → after | Recorded source |

@@ -148,7 +148,7 @@ The `yunshu` block (the ModelCard):
 | `supported_parameters` | request fields the chat routes accept for this model (checked against `ChatCompletionRequest` by a test) |
 | `generation_defaults` | `generation_config.json` sampling defaults |
 
-Anonymous callers never see filesystem paths; authenticated callers also get `loaded`, `size_gb`, `stats` and `yunshu.path`.
+Anonymous callers never see filesystem paths; authenticated callers also get `loaded`, `size_gb` (binary GB, 1024^3, like macOS; exact `size_bytes` beside it), `stats` and `yunshu.path`.
 `reasoning_effort` values outside the template's own list are mapped (`high` becomes `xhigh`) instead of failing the template.
 
 **Yunxin.** Its `vllm` adapter reads `max_model_len`, `task`, `capabilities`; its `lmstudio` adapter reads `max_context_length`,

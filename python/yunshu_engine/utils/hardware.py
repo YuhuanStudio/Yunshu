@@ -490,6 +490,8 @@ def get_hardware_profile() -> dict:
         "chip_generation": chip_gen,
         "chip_tier": chip_tier,
         "total_memory_gb": round(hw.total_memory_gb, 1),
+        "total_memory_bytes": int(hw.total_memory_gb * (1 << 30)),
+        "working_set_bytes": int(hw.max_working_set_bytes),
         "working_set_gb": round(hw.max_working_set_bytes / (1024**3), 1),
         "gpu_cores": hw.gpu_cores,
         "gpu_family": hw.gpu_family,

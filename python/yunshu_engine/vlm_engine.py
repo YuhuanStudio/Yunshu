@@ -655,8 +655,8 @@ class VLMEngine:
             _thresh = 10 * 1024**3
             self._mx_large_model = _bytes > _thresh
             logger.info(
-                "VLM model ~%.1fGB on disk, large=%s (clear buffer pool on idle %s)",
-                _bytes / 1e9,
+                "VLM model ~%.1fGiB on disk, large=%s (clear buffer pool on idle %s)",
+                _bytes / (1 << 30),
                 self._mx_large_model,
                 "ON" if self._mx_large_model else "off",
             )
