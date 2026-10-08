@@ -98,6 +98,14 @@ def engaged_spec_mode(engine, log):
     return None
 
 
+def ready_request(url, extra_env):
+    """Readiness probe; the server may require the key the arm configured."""
+    token = extra_env.get("YUNSHU_AUTH_TOKEN", "k")
+    return urllib.request.Request(
+        url + "/v1/models", headers={"Authorization": "Bearer " + token}
+    )
+
+
 class Srv:
     def __init__(self, engine, extra_env, tag, model=None):
         self.engine, self.port = engine, free_port()
@@ -159,7 +167,8 @@ class Srv:
                 self.kill()
                 raise RuntimeError(f"server startup failed; see {self.log}")
             try:
-                with urllib.request.urlopen(self.url + "/v1/models", timeout=3) as r:
+                request = ready_request(self.url, self.extra_env)
+                with urllib.request.urlopen(request, timeout=3) as r:
                     self.model = json.load(r)["data"][0]["id"]
                     self.ready_s = time.time() - t0
                     break
@@ -269,6 +278,13 @@ def send(url, body, timeout=600):
         ).encode()
     ).hexdigest()[:16]
     return dict(
+        energy=(xy or {}).get("energy"),
+        joules_per_token=((xy or {}).get("energy") or {})
+        .get("decode", {})
+        .get("joules_per_token"),
+        gpu_watts_mean=((xy or {}).get("energy") or {})
+        .get("decode", {})
+        .get("gpu_watts_mean"),
         ttft_s=round((tf or t1) - t0, 3),
         total_s=round(t1 - t0, 3),
         ct=ct,
@@ -288,6 +304,7 @@ def send(url, body, timeout=600):
                 "prefill_tps",
                 "ttft_ms",
                 "decode_ms",
+                "energy",
             )
         }
         if xy

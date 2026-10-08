@@ -267,3 +267,41 @@ def test_busy_port_pool_waits_and_recovers(monkeypatch):
     with pytest.raises(RuntimeError, match="bounded wait"):
         tfbench.free_port(wait_s=2, interval_s=3, sleep=sleep, clock=lambda: now[0])
     assert now[0] == 2
+
+
+def test_ready_request_carries_the_configured_key():
+    request = tfbench.ready_request("http://x", {"YUNSHU_AUTH_TOKEN": "tok"})
+    assert request.get_header("Authorization") == "Bearer tok"
+    assert tfbench.ready_request("http://x", {}).get_header("Authorization") == (
+        "Bearer k"
+    )
+
+
+def test_send_surfaces_energy_from_x_yunshu(monkeypatch):
+    import json as _json
+
+    energy = {"decode": {"joules_per_token": 0.05, "gpu_watts_mean": 11.0}}
+    chunks = [
+        {"choices": [{"delta": {"content": "a"}, "finish_reason": None}]},
+        {"choices": [{"delta": {}, "finish_reason": "stop"}]},
+        {"usage": {"completion_tokens": 2, "prompt_tokens": 1}},
+        {"x_yunshu": {"energy": energy}},
+    ]
+    lines = [b"data: " + _json.dumps(c).encode() + b"\n" for c in chunks]
+    lines.append(b"data: [DONE]\n")
+
+    class Resp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def __iter__(self):
+            return iter(lines)
+
+    monkeypatch.setattr(tfbench.urllib.request, "urlopen", lambda *a, **k: Resp())
+    out = tfbench.send("http://x", {"messages": []})
+    assert out["energy"] == energy
+    assert out["joules_per_token"] == 0.05
+    assert out["xy"]["energy"] == energy
