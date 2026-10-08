@@ -89,7 +89,7 @@ async def main() -> int:
             contents = []
             usage_ok = True
             correct = 0
-            for (q, want), r in zip(QUESTIONS, responses):
+            for (_q, want), r in zip(QUESTIONS, responses, strict=False):
                 if r.status_code != 200:
                     contents.append(f"[{r.status_code}]")
                     continue
@@ -111,7 +111,7 @@ async def main() -> int:
                 correct >= 5
             )
             detail.append(f"correct={correct}/{len(QUESTIONS)}")
-            for (q, _), c in zip(QUESTIONS, contents):
+            for (q, _), c in zip(QUESTIONS, contents, strict=False):
                 detail.append(f"  {q[:34]:34s} → {c!r}")
     finally:
         set_engine(None)

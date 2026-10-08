@@ -45,6 +45,7 @@ from typing import Any
 import mlx.core as mx
 
 from . import netguard, settings
+from .moe_pack import tensor_quantization_override, unsupported_pack_reason
 from .request import RequestOutput
 from .types import EngineConfig
 
@@ -69,6 +70,37 @@ class _RunnerCall(functools.partial):
     must wait for its tokens on another thread; ``_generate_sync`` /
     ``_stream_sync`` return this instead of generating inline.
     """
+
+
+def _prepare_vlm_weights(model, model_class, model_config, weights):
+    """Apply the upstream checkpoint transforms before quantization/filtering."""
+    from mlx_vlm.utils import sanitize_weights
+
+    weights = sanitize_weights(model, weights)
+    for component in ("Vision", "Language", "Audio"):
+        config_name = (
+            "text_config" if component == "Language" else f"{component.lower()}_config"
+        )
+        cls = getattr(model_class, f"{component}Model", None)
+        cfg = getattr(model_config, config_name, None)
+        if cls is not None and cfg is not None:
+            weights = sanitize_weights(cls, weights, cfg)
+    return weights
+
+
+def _vlm_module_quantization(model, quantization, path):
+    """Honor checkpoint names before and after a model's key sanitation."""
+    aliases = [path]
+    if path.startswith("language_model."):
+        aliases.append(path.removeprefix("language_model."))
+    model_aliases = getattr(model, "quantization_path_aliases", None)
+    if callable(model_aliases):
+        aliases.extend(model_aliases(path))
+    for alias in aliases:
+        value = quantization.get(alias)
+        if isinstance(value, dict) or value is False:
+            return value
+    return None
 
 
 def _quantize_shape_safety_patch():
@@ -550,6 +582,10 @@ class VLMEngine:
         for wf in weight_files:
             weights.update(mx.load(wf))
 
+        reason = unsupported_pack_reason(config, weights)
+        if reason:
+            raise ValueError(f"unsupported checkpoint pack: {reason}")
+
         model_class, _ = get_model_and_args(config=config)
 
         config.setdefault("text_config", config.pop("llm_config", {}))
@@ -564,6 +600,7 @@ class VLMEngine:
             model_config.model_path = str(model_path)
 
         model = model_class.Model(model_config)
+        weights = _prepare_vlm_weights(model, model_class, model_config, weights)
 
         # Apply quantization BEFORE filtering — the predicate needs to see
         # `.scales` keys to decide which modules to quantize. If we filter
@@ -579,10 +616,17 @@ class VLMEngine:
         # quantization_config, incl. text_config nesting) instead of reading only the
         # top-level "quantization" key — see _derive_vlm_quantization.
         quantization = _derive_vlm_quantization(config)
+        if quantization is None and any(k.endswith(".scales") for k in weights):
+            # Native packed tensors without a quantization block (e.g. mx fp4/fp8 packs):
+            # the tensor shapes decide per module.
+            quantization = {}
+            logger.info("checkpoint has scales but no quantization config; deriving")
         if quantization is not None:
             config["quantization"] = (
                 quantization  # so the per-layer predicate (p in ...) holds
             )
+
+            _quant_overrides: dict[str, dict] = {}
 
             def _quantize_predicate(p, m):
                 # honor PER-LAYER quantization overrides. A model's
@@ -594,8 +638,19 @@ class VLMEngine:
                 # Address Fault on the first forward (the model loads fine via
                 # mlx_vlm.load, which DOES honor this). Mirror
                 # mlx_vlm.utils.get_class_predicate.
-                if isinstance(quantization, dict) and p in quantization:
-                    return quantization[p]
+                per_module = _vlm_module_quantization(model, quantization, p)
+                derived = tensor_quantization_override(
+                    weights,
+                    p,
+                    getattr(getattr(m, "weight", None), "shape", None),
+                    quantization,
+                    per_module,
+                )
+                if derived is not None:
+                    _quant_overrides[p] = derived
+                    return derived
+                if per_module is not None:
+                    return per_module
                 if not hasattr(m, "to_quantized"):
                     return False
                 if hasattr(m, "weight") and m.weight.size % 64 != 0:
@@ -611,6 +666,13 @@ class VLMEngine:
                 mode=quantization.get("mode", "affine"),
                 class_predicate=_quantize_predicate,
             )
+            if _quant_overrides:
+                logger.warning(
+                    "quantization config disagreed with %d tensors; used tensor-derived "
+                    "bits/group_size (first: %s)",
+                    len(_quant_overrides),
+                    next(iter(_quant_overrides.items())),
+                )
 
         # NOW the model's parameter set reflects QuantizedLinear's
         # (weight + scales + biases), so we can safely drop weights the
@@ -641,6 +703,12 @@ class VLMEngine:
         except Exception as e:
             logger.warning(f"Could not load VLM processor: {e}")
 
+        if self._config.get("model_type") == "deepseek_v4":
+            from .deepseek_v4_chat import install
+
+            if install(self._tokenizer, self._processor):
+                logger.info("DeepSeek V4: installed official 0731 chat encoder")
+
         # Large VLMs (e.g. 30B-MoE) GPU-hang under sustained load unless the MLX
         # buffer pool is released between requests. Use the on-disk weight size
         # (an MoE's .parameters() can undercount lazily-structured experts);
@@ -655,8 +723,8 @@ class VLMEngine:
             _thresh = 10 * 1024**3
             self._mx_large_model = _bytes > _thresh
             logger.info(
-                "VLM model ~%.1fGB on disk, large=%s (clear buffer pool on idle %s)",
-                _bytes / 1e9,
+                "VLM model ~%.1fGiB on disk, large=%s (clear buffer pool on idle %s)",
+                _bytes / (1 << 30),
                 self._mx_large_model,
                 "ON" if self._mx_large_model else "off",
             )
@@ -2914,7 +2982,8 @@ class VLMEngine:
         try:
             from yunshu_engine.message_adapter import adapt_messages
 
-            messages = adapt_messages(messages, self.model_name)
+            if self._config.get("model_type") != "deepseek_v4":
+                messages = adapt_messages(messages, self.model_name)
         except Exception:
             logger.debug("VLM message adapter failed", exc_info=True)
 

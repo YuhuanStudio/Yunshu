@@ -50,8 +50,8 @@ class _FakeTok:
 
 def main() -> int:
     from yunshu_engine.engine_core import EngineCore, EngineCoreConfig
-    from yunshu_engine.scheduler import SchedulingPolicy
     from yunshu_engine.priority_queue import make_waiting_queue
+    from yunshu_engine.scheduler import SchedulingPolicy
 
     checks: dict[str, bool] = {}
 

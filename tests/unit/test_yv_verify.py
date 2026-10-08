@@ -205,9 +205,13 @@ def test_full_suite_has_every_stage():
         "longqa",
         "conc",
         "multimodal",
+        "modelprobe",
         "client_compat",
+        "respfeat",
         "websearch",
         "rerank",
+        "embedding",
+        "priorart",
         "evals",
         "tavily",
         "searchrank",
@@ -1107,7 +1111,20 @@ def test_gate_long_stage_runs_suite_and_fails_closed(gate_world, monkeypatch):
         gate, "local_env", lambda: {"GATE_ROOT": str(w.tmp / "gateroot"), "M": w.model}
     )
     assert "long" in gate.DEFAULT_STAGES
+    original = runner.run_ab
+    captured = []
+
+    def pinned(a, **kwargs):
+        captured.append(a)
+        return original(a, **kwargs)
+
+    monkeypatch.setattr(runner, "run_ab", pinned)
+    monkeypatch.setenv("YV_LABEL_PREFIX", "releng015-test")
     assert run_gate(w, stages=["long"]) == 0
+    assert captured[0].base == git(w.repo, "rev-parse", "v0.0.1^{commit}")
+    assert captured[0].cand == git(w.repo, "rev-parse", "HEAD")
+    assert captured[0].base != captured[0].cand
+    assert captured[0].label.startswith("releng015-")
     # gate_world is shared across tests: pick this run's verdict, not another gate's
     verdicts = [
         json.loads(d.joinpath("verdict.json").read_text())
@@ -1200,6 +1217,22 @@ def test_multimodal_evidence_is_fail_closed(tmp_path):
     rows[1]["ids"] = [8]
     path.write_text("".join(json.dumps(r) + "\n" for r in rows))
     assert not stages._multimodal_valid(path, [1], True)[0]
+
+
+def test_detach_retains_caller_verifier_implementation(monkeypatch, tmp_path):
+    from verify import cli
+
+    script = tmp_path / "worker" / "scripts" / "verify" / "cli.py"
+    monkeypatch.setattr(cli, "__file__", str(script))
+    assert cli.verifier_scripts() == script.parents[1]
+    assert cli.verifier_scripts() != cli.REPO / "scripts"
+
+
+def test_modelprobe_is_explicit_and_not_in_release_suites():
+    assert suites.parse_suite("modelprobe")["stages"] == ["modelprobe"]
+    assert "modelprobe" in stages.STAGE_FUNCS
+    for suite in suites.SUITES.values():
+        assert "modelprobe" not in suite["stages"]
 
 
 def test_evals_suite_is_a_separate_correctness_probe():

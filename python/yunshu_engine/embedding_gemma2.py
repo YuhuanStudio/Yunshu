@@ -295,6 +295,26 @@ def _sanitize_audio(weights: dict, channels: tuple) -> dict:
     return out
 
 
+class _PublishedText:
+    """Preserve Yunshu's prepared-media interface over the upstream text tower."""
+
+    def __init__(self, model):
+        self.model = model
+
+    def embed(self, ids):
+        import mlx.core as mx
+
+        embeddings = self.model.embed_tokens(ids)
+        return embeddings * mx.array(
+            self.model.config.hidden_size**0.5, dtype=embeddings.dtype
+        )
+
+    def __call__(self, embeddings, valid):
+        from mlx_vlm.models.pooling import mean_pooling, normalize_embeddings
+
+        return normalize_embeddings(mean_pooling(self.model(embeddings, valid), valid))
+
+
 class EmbeddingGemma2:
     """Loaded model: ``embed_items`` -> unit vectors (numpy float32, [N, 768 or dims])."""
 
@@ -326,6 +346,23 @@ class EmbeddingGemma2:
         self.audio: Any = None
         self.embed_audio: Any = None
         self._processor = None
+        if (
+            dtype == "bfloat16"
+            or self.config.get("quantization")
+            or self.config.get("quantization_config")
+        ):
+            from pathlib import Path
+
+            from .embedding_gemma2_loader import load_published_model
+
+            self._upstream = load_published_model(Path(model_dir), lazy=True)
+            mx.eval(self._upstream.language_model.parameters())
+            self.text = _PublishedText(self._upstream.language_model)
+            self.vision = self._upstream.vision_tower
+            self.embed_vision = self._upstream.embed_vision
+            self.audio = self._upstream.audio_tower
+            self.embed_audio = self._upstream.embed_audio
+            return
         text_cls, self._embedder_cls = _build()
         self.text = text_cls(self.tc)
         self._strict_load(self.text, "language_model.")

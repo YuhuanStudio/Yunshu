@@ -18,6 +18,7 @@ Run:
 """
 
 import asyncio
+import contextlib
 import logging
 import os
 
@@ -52,7 +53,7 @@ async def ask(engine, user, max_tokens=16, **kw):
 async def main():
     from yunshu_engine.batched_engine import BatchedEngine
 
-    print(f"=== engine-loop correctness verify ===")
+    print("=== engine-loop correctness verify ===")
     print(
         f"model: {MODEL}  ENGINE_LOOP={os.environ.get('YUNSHU_ENGINE_LOOP')} "
         f"OFFLOAD_THRESHOLD={os.environ.get('YUNSHU_KV_OFFLOAD_THRESHOLD')}"
@@ -79,8 +80,8 @@ async def main():
             for q, _ in qs
         ]
     )
-    nok = sum(1 for (txt, _), (_, a) in zip(res, qs) if a in txt)
-    for (txt, _), (q, a) in zip(res, qs):
+    nok = sum(1 for (txt, _), (_, a) in zip(res, qs, strict=False) if a in txt)
+    for (txt, _), (q, a) in zip(res, qs, strict=False):
         mark = "ok" if a in txt else "BAD"
         if a not in txt:
             print(f"      {mark}: {q} -> {txt!r} (want {a})")
@@ -141,10 +142,8 @@ async def main():
     )
 
     print(f"\n=== RESULT: {_PASS} passed, {_FAIL} failed ===")
-    try:
+    with contextlib.suppress(Exception):
         await engine.stop()
-    except Exception:
-        pass
     return _FAIL
 
 

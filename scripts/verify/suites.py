@@ -13,9 +13,13 @@ STAGES = (
     "longqa",
     "conc",
     "multimodal",
+    "modelprobe",
     "client_compat",
+    "respfeat",
     "websearch",
     "rerank",
+    "embedding",
+    "priorart",
     "evals",
     "tavily",
     "searchrank",
@@ -31,9 +35,13 @@ LADDER = tuple(
         "longqa",
         "conc",
         "multimodal",
+        "modelprobe",
         "client_compat",
+        "respfeat",
         "websearch",
         "rerank",
+        "embedding",
+        "priorart",
         "evals",
         "tavily",
         "searchrank",
@@ -42,6 +50,9 @@ LADDER = tuple(
 
 # Every key is a default; the CLI can override ctx / reps / mmlu_n / mem_sizes.
 SUITES = {
+    "respfeat": {"stages": ["preflight", "respfeat"]},
+    "priorart": {"stages": ["preflight", "priorart"]},
+    "embedding": {"stages": ["preflight", "embedding"]},
     "evals": {"stages": ["preflight", "evals"]},
     "client_compat": {
         "stages": ["preflight", "client_compat"],

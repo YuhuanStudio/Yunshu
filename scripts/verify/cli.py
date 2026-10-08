@@ -166,6 +166,11 @@ def pin_arms(argv: list, base, cand) -> list:
     return out
 
 
+def verifier_scripts() -> Path:
+    """Detached runs retain this verifier implementation, including new stages."""
+    return Path(__file__).resolve().parents[1]
+
+
 def main(argv: list | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     a = build_parser().parse_args(argv)
@@ -206,7 +211,7 @@ def main(argv: list | None = None) -> int:
                     stdout=log,
                     stderr=subprocess.STDOUT,
                     start_new_session=True,
-                    env=dict(os.environ, PYTHONPATH=str(REPO / "scripts")),
+                    env=dict(os.environ, PYTHONPATH=str(verifier_scripts())),
                     cwd=str(REPO),
                 )
                 print(
