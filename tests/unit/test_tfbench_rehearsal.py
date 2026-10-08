@@ -35,3 +35,53 @@ def test_followup_suite_passes_think_time_to_the_cells():
     assert "--think-s" not in stages._dec_args(
         type("D", (), {"suite": suites.SUITES["long"]})
     )
+
+
+METRICS = (
+    'yunshu_next_turn_rehearsals_total{outcome="started"} 2\n'
+    'yunshu_next_turn_rehearsals_total{outcome="completed"} 1\n'
+)
+
+
+def test_completed_rehearsals_parses_metrics():
+    assert tfbench.completed_rehearsals(METRICS) == 1
+    assert tfbench.completed_rehearsals("other 3\n") == 0
+
+
+def _srv(env):
+    return type("S", (), {"extra_env": env, "url": "http://x"})
+
+
+def test_engagement_check_fails_closed_when_flag_on_and_zero_completed(monkeypatch):
+    import io
+
+    monkeypatch.setattr(
+        tfbench.urllib.request,
+        "urlopen",
+        lambda *a, **k: io.BytesIO(
+            b'yunshu_next_turn_rehearsals_total{outcome="started"} 1\n'
+        ),
+    )
+    a = type("A", (), {"think_s": 12.0})
+    with pytest.raises(RuntimeError, match="never engaged"):
+        tfbench.check_rehearsal_engaged(_srv({"YUNSHU_NEXT_TURN_PREFILL": "1"}), a)
+    # flag off: no check; no think time: a mid-rehearsal cancel is legitimate
+    assert tfbench.check_rehearsal_engaged(_srv({}), a) is None
+    assert (
+        tfbench.check_rehearsal_engaged(
+            _srv({"YUNSHU_NEXT_TURN_PREFILL": "1"}), type("B", (), {"think_s": 0.0})
+        )
+        == 0
+    )
+
+
+def test_engagement_check_passes_when_completed(monkeypatch):
+    import io
+
+    monkeypatch.setattr(
+        tfbench.urllib.request, "urlopen", lambda *a, **k: io.BytesIO(METRICS.encode())
+    )
+    a = type("A", (), {"think_s": 12.0})
+    assert (
+        tfbench.check_rehearsal_engaged(_srv({"YUNSHU_NEXT_TURN_PREFILL": "1"}), a) == 1
+    )

@@ -385,6 +385,38 @@ def _post_json(url, path, body, timeout=600):
         return json.loads(r.read())
 
 
+def completed_rehearsals(metrics_text):
+    """Value of yunshu_next_turn_rehearsals_total{outcome="completed"} (0 when absent)."""
+    for line in metrics_text.splitlines():
+        if line.startswith("yunshu_next_turn_rehearsals_total{") and (
+            'outcome="completed"' in line
+        ):
+            return int(float(line.rsplit(" ", 1)[1]))
+    return 0
+
+
+def check_rehearsal_engaged(s, a):
+    """Fail closed: a server run with YUNSHU_NEXT_TURN_PREFILL=1 and a think time must have
+    completed at least one rehearsal, or the A/B would measure a feature that never ran."""
+    if str(s.extra_env.get("YUNSHU_NEXT_TURN_PREFILL", "")).lower() not in (
+        "1",
+        "true",
+        "on",
+    ):
+        return None
+    req = urllib.request.Request(
+        s.url + "/metrics", headers={"Authorization": "Bearer k"}
+    )
+    with urllib.request.urlopen(req, timeout=30) as r:
+        done = completed_rehearsals(r.read().decode())
+    if a.think_s and done < 1:
+        raise RuntimeError(
+            "YUNSHU_NEXT_TURN_PREFILL=1 but /metrics shows 0 completed rehearsals: "
+            "the feature never engaged (not noise, broken run)"
+        )
+    return done
+
+
 def rehearse(s, b):
     """Prefill the assistant reply the way the next turn will (opt-in pilot, --rehearse)."""
     kw = b.get("chat_template_kwargs")
@@ -482,6 +514,10 @@ def part_decode(s, out, a):
                     reply = r["_text"]
                 r["text"] = r.pop("_text")
                 r["rep4"] = ngram_repeat(r["text"])
+                if phase == "turn2":
+                    done = check_rehearsal_engaged(s, a)
+                    if done is not None:
+                        r["rehearsals_completed"] = done
                 emit(out, part="decode", ctx=ctx, kind=kind, phase=phase, **r)
             if a.engine != "yunshu" and ctx == 1024:
                 r = send(s.url, req(s.model, text, n_dec, extra={"draft": False}))

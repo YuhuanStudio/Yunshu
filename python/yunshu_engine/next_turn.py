@@ -15,7 +15,11 @@ Pure helpers live here so they are unit-testable without a model.
 
 from __future__ import annotations
 
+import logging
+import threading
 from collections.abc import Callable, Sequence
+
+logger = logging.getLogger(__name__)
 
 SENTINEL = "⁣next-turn-rehearsal⁣"
 MIN_REPLY_TOKENS = 16
@@ -27,21 +31,10 @@ def reply_text(parts: Sequence[tuple[str, str]]) -> str:
     return "".join(t for t, state in parts if state != "reasoning").strip()
 
 
-def eligible(
-    *,
-    finish_reason: str | None,
-    completion_tokens: int,
-    reply: str,
-    has_media: bool,
-    has_tools: bool,
-    constrained: bool,
-) -> bool:
-    """Only a finished plain-text reply of useful size is worth prefilling."""
-    if finish_reason not in ("stop", "length") or not reply:
-        return False
-    if has_media or has_tools or constrained:
-        return False
-    return MIN_REPLY_TOKENS <= completion_tokens <= MAX_REPLY_TOKENS
+def eligible(**kw) -> bool:
+    """Only a complete plain-text reply of useful size is worth prefilling (stop or length:
+    a length-capped reply is re-sent as is)."""
+    return ineligible_reason(**kw) is None
 
 
 def with_reply(messages: list[dict], reply: str) -> list[dict]:
@@ -76,3 +69,62 @@ def cut_before_user_turn(
     if not tail.lstrip().split("\n", 1)[0].endswith("user"):
         return None
     return list(ids[:cut])
+
+
+OUTCOMES = ("started", "completed", "cancelled", "ineligible")
+_lock = threading.Lock()
+_counts: dict[str, int] = dict.fromkeys(OUTCOMES, 0)
+_tokens = 0
+
+
+def record(outcome: str, tokens: int = 0) -> None:
+    """Count one rehearsal outcome (in process, and on /metrics when the exporter exists)."""
+    global _tokens
+    if outcome not in OUTCOMES:
+        raise ValueError(outcome)
+    with _lock:
+        _counts[outcome] += 1
+        _tokens += tokens
+    try:
+        from yunshu_gateway.middleware.prometheus_exporter import (
+            get_prometheus_metrics,
+        )
+
+        m = get_prometheus_metrics()
+        m.inc_counter("next_turn_rehearsals", {"outcome": outcome})
+        if tokens:
+            m.inc_counter("next_turn_rehearsed_tokens", None, tokens)
+    except Exception:
+        logger.debug("next-turn metrics unavailable", exc_info=True)
+
+
+def snapshot() -> dict:
+    with _lock:
+        return {**_counts, "tokens": _tokens}
+
+
+def ineligible_reason(
+    *,
+    finish_reason: str | None,
+    completion_tokens: int,
+    reply: str,
+    has_media: bool,
+    has_tools: bool,
+    constrained: bool,
+) -> str | None:
+    """Why a reply is not rehearsed (None = eligible)."""
+    if finish_reason not in ("stop", "length"):
+        return f"finish_reason={finish_reason}"
+    if not reply:
+        return "empty reply"
+    if has_media:
+        return "media request"
+    if has_tools:
+        return "tools request"
+    if constrained:
+        return "constrained decoding"
+    if completion_tokens < MIN_REPLY_TOKENS:
+        return f"reply too short ({completion_tokens} tokens)"
+    if completion_tokens > MAX_REPLY_TOKENS:
+        return f"reply too long ({completion_tokens} tokens)"
+    return None

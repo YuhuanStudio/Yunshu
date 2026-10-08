@@ -132,3 +132,67 @@ def test_new_request_cancels_the_rehearsal(monkeypatch):
     eng._rehearsal_cancel = ev
     eng._cancel_rehearsal()
     assert ev.is_set()
+
+
+def test_counters_record_started_and_completed_tokens(monkeypatch):
+    eng, calls = _engine(monkeypatch)
+    before = next_turn.snapshot()
+
+    def runner(ids, extras=None, **kw):
+        extras["prompt_tokens"] = 8
+        return ("", 0, 1, True, False, 0)
+
+    eng._generate_vlm_runner_text = runner
+
+    async def main():
+        _go(eng)
+        await eng._rehearsal_task
+
+    asyncio.run(main())
+    after = next_turn.snapshot()
+    assert after["started"] == before["started"] + 1
+    assert after["completed"] == before["completed"] + 1
+    assert after["tokens"] == before["tokens"] + 8
+
+
+def test_cancelled_rehearsal_is_counted(monkeypatch):
+    eng, calls = _engine(monkeypatch)
+    before = next_turn.snapshot()
+
+    def runner(ids, extras=None, cancel_event=None, **kw):
+        cancel_event.set()
+        raise asyncio.CancelledError()
+
+    eng._generate_vlm_runner_text = runner
+
+    async def main():
+        _go(eng)
+        await eng._rehearsal_task
+
+    asyncio.run(main())
+    assert next_turn.snapshot()["cancelled"] == before["cancelled"] + 1
+    assert next_turn.snapshot()["completed"] == before["completed"]
+
+
+def test_ineligible_is_counted_with_reason(monkeypatch, caplog):
+    eng, _ = _engine(monkeypatch)
+    before = next_turn.snapshot()
+    import logging
+
+    with caplog.at_level(logging.DEBUG):
+
+        async def main():
+            _go(eng, completion_tokens=2)
+
+        asyncio.run(main())
+    assert next_turn.snapshot()["ineligible"] == before["ineligible"] + 1
+    assert "too short" in caplog.text
+
+
+def test_metrics_endpoint_exposes_the_counters():
+    from yunshu_gateway.middleware.prometheus_exporter import get_prometheus_metrics
+
+    next_turn.record("completed", 5)
+    text = get_prometheus_metrics().generate()
+    assert "yunshu_next_turn_rehearsals_total" in text
+    assert "yunshu_next_turn_rehearsed_tokens_total" in text

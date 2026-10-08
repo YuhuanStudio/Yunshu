@@ -178,3 +178,12 @@ def test_real_watchdog_releases_a_stuck_hold():
     finally:
         if not was:
             gc.disable()
+
+
+def test_gc_policy_default_is_defer_with_python_opt_out():
+    from yunshu_engine import settings
+
+    spec = settings.REGISTRY["YUNSHU_GC_POLICY"]
+    assert spec.default == "defer"
+    assert spec.stability == "stable"
+    assert "default" in spec.choices  # opt-out: Python's own collector

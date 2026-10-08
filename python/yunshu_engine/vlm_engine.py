@@ -1414,16 +1414,21 @@ class VLMEngine:
     ) -> None:
         if not settings.get("YUNSHU_NEXT_TURN_PREFILL"):
             return
-        if not next_turn.eligible(
+        reason = next_turn.ineligible_reason(
             finish_reason=finish_reason,
             completion_tokens=completion_tokens,
             reply=reply,
             has_media=has_media,
             has_tools=bool(kwargs.get("_tool_spec") or kwargs.get("tools")),
             constrained=bool(kwargs.get("json_schema") or kwargs.get("grammar")),
-        ):
+        )
+        if reason is not None:
+            logger.debug("next-turn rehearsal ineligible: %s", reason)
+            next_turn.record("ineligible")
             return
         if self._active_count > 1 or self._batch_runner is None:
+            logger.debug("next-turn rehearsal ineligible: engine busy")
+            next_turn.record("ineligible")
             return  # other work is waiting: the GPU is not idle
         task = asyncio.ensure_future(
             self._rehearse(messages, reply, enable_thinking, tpl_extra)
@@ -1492,20 +1497,31 @@ class VLMEngine:
                 **params,
             )
 
+        started = False
         try:
             call = await loop.run_in_executor(self._executor, _prepare)
             if call is None:
                 logger.debug("next-turn rehearsal skipped (no clean cut)")
                 return
+            next_turn.record("started")
+            started = True
             t0 = time.perf_counter()
+            extras: dict = call.keywords["extras"]
             await loop.run_in_executor(self._runner_consumers(), call)
+            cancelled = ev.is_set()
+            next_turn.record(
+                "cancelled" if cancelled else "completed",
+                0 if cancelled else int(extras.get("prompt_tokens") or 0),
+            )
             logger.info(
                 "next-turn rehearsal done in %.2fs%s",
                 time.perf_counter() - t0,
-                " (cancelled)" if ev.is_set() else "",
+                " (cancelled)" if cancelled else "",
             )
         except (Exception, asyncio.CancelledError):
             logger.debug("next-turn rehearsal ended", exc_info=True)
+            if started and ev.is_set():
+                next_turn.record("cancelled")
         finally:
             if getattr(self, "_rehearsal_cancel", None) is ev:
                 self._rehearsal_cancel = None
