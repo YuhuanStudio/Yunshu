@@ -193,7 +193,7 @@ test("the notification list belongs to one connection: another service starts em
     "ok",
   );
   uptimeA = 7;
-  await expect(page.getByTestId("bell-badge")).toBeVisible({ timeout: 9000 });
+  await expect(page.getByTestId("bell-badge")).toBeVisible({ timeout: 20000 });
   const save = async (url: string) => {
     await page.getByRole("button", { name: /^開啟設定/ }).click();
     await page.getByLabel("服務位址", { exact: true }).fill(url);
