@@ -10,7 +10,6 @@ import asyncio
 import base64
 import importlib.util
 import pathlib
-import socket
 import threading
 import time
 from types import SimpleNamespace
@@ -20,6 +19,8 @@ from fastapi import FastAPI
 
 from yunshu_engine import settings
 from yunshu_gateway.routers import realtime as rt
+
+from .bound_listener import reserve_listener
 
 SCRIPT = (
     pathlib.Path(__file__).resolve().parents[2]
@@ -51,13 +52,6 @@ class FakeEngine:
         )
 
 
-def _free_port() -> int:
-    # OS-assigned: the 18990-18999 pool belongs to live servers and may be full.
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
-
-
 @pytest.fixture()
 def server(monkeypatch):
     from unittest.mock import AsyncMock
@@ -85,13 +79,14 @@ def server(monkeypatch):
     monkeypatch.setattr(rt.RealtimeSession, "_synthesize_audio_response", fake_tts)
     app = FastAPI()
     app.include_router(rt.router)
-    port = _free_port()
+    listener = reserve_listener()
+    port = listener.getsockname()[1]
     srv = uvicorn.Server(
         uvicorn.Config(
             app, host="127.0.0.1", port=port, log_level="error", ws="websockets"
         )
     )
-    th = threading.Thread(target=srv.run, daemon=True)
+    th = threading.Thread(target=srv.run, kwargs={"sockets": [listener]}, daemon=True)
     th.start()
     deadline = time.time() + 10
     while not srv.started and time.time() < deadline:
@@ -100,6 +95,7 @@ def server(monkeypatch):
     yield f"http://127.0.0.1:{port}"
     srv.should_exit = True
     th.join(timeout=10)
+    listener.close()
 
 
 def _load_script():

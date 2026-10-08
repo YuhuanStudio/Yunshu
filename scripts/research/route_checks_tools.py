@@ -13,7 +13,7 @@ class FakeBackend:
     (`POST /mcp`, JSON-RPC) and a plain page (`GET /page`); it records every request so a check can
     prove the Yunshu server really called out (or, for the SSRF guard, did not)."""
 
-    def __init__(self, port: int):
+    def __init__(self, port: int, *, page_results: bool = False):
         import http.server
         import threading
 
@@ -46,22 +46,34 @@ class FakeBackend:
                         {
                             "results": [
                                 {
-                                    "url": "https://example.org/paris-weather",
+                                    "url": (
+                                        outer.url + "/page?weather"
+                                        if page_results
+                                        else "https://example.org/paris-weather"
+                                    ),
                                     "title": "Paris weather today",
                                     "content": "Paris is sunny, 21 degrees Celsius.",
                                 },
                                 {
-                                    "url": "https://example.org/paris-forecast",
+                                    "url": (
+                                        outer.url + "/page?forecast"
+                                        if page_results
+                                        else "https://example.org/paris-forecast"
+                                    ),
                                     "title": "Paris forecast",
                                     "content": "Dry all week in Paris.",
                                 },
                             ]
                         },
                     )
+                elif u.path == "/robots.txt":
+                    self._send(200, b"User-agent: *\nAllow: /\n", "text/plain")
                 elif u.path == "/page":
                     outer.pages.append(self.path)
                     self._send(
-                        200, b"<html><body>SECRET PAGE</body></html>", "text/html"
+                        200,
+                        b"<html><body><article><h1>Paris weather</h1><p>Paris is sunny, 21 degrees Celsius. Dry all week in Paris. SECRET PAGE</p></article></body></html>",
+                        "text/html",
                     )
                 else:
                     self._send(404, {"error": "not found"})
@@ -129,10 +141,15 @@ class FakeBackend:
                         },
                     )
 
+        self.page_results = page_results
         self.port = port
         self.httpd = http.server.ThreadingHTTPServer(("127.0.0.1", port), H)
         self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
         self.thread.start()
+
+    @property
+    def search_origin(self):
+        return self.url if self.page_results else "https://example.org/"
 
     @property
     def url(self):
@@ -176,7 +193,7 @@ def _web_search_provider(c: Ctx):
         ok, f"no successful web_search_tool_result: {[r.content for r in results][:2]}"
     )
     expect(
-        ok[0].content[0].url.startswith("https://example.org/")
+        ok[0].content[0].url.startswith(c.fake.search_origin)
         and ok[0].content[0].title,
         f"result block {ok[0].content[0]}",
     )

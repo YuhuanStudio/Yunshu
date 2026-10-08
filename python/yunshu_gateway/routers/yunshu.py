@@ -23,6 +23,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from yunshu_engine.request_tracker import get_request_tracker
+from yunshu_engine.units import put_gb
 from yunshu_engine.version import yunshu_version
 
 from ..console_contracts import (
@@ -55,16 +56,16 @@ def _memory() -> dict[str, Any]:
     try:
         import mlx.core as mx
 
-        out["active_gb"] = round(mx.get_active_memory() / 1e9, 2)
-        out["cache_gb"] = round(mx.get_cache_memory() / 1e9, 2)
-        out["peak_gb"] = round(mx.get_peak_memory() / 1e9, 2)
+        put_gb(out, "active", mx.get_active_memory())
+        put_gb(out, "cache", mx.get_cache_memory())
+        put_gb(out, "peak", mx.get_peak_memory())
     except Exception:
         logger.debug("mlx memory unavailable", exc_info=True)
     try:
         total = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
-        out["total_gb"] = round(total / 1e9, 1)
-        if "active_gb" in out and total:
-            out["pressure"] = round(out["active_gb"] * 1e9 / total, 3)
+        put_gb(out, "total", total, 1)
+        if "active_bytes" in out and total:
+            out["pressure"] = round(out["active_bytes"] / total, 3)
     except (ValueError, OSError, AttributeError):
         pass
     return out
@@ -86,7 +87,8 @@ def _models() -> list[dict[str, Any]]:
                     "loaded": e.is_loaded,
                     "loading": e.is_loading,
                     "pinned": e.is_pinned,
-                    "size_gb": round(e.estimated_bytes / 1e9, 1),
+                    "size_gb": round(e.estimated_bytes / (1 << 30), 1),
+                    "size_bytes": int(e.estimated_bytes),
                     "idle_s": round(now - e.last_access, 1)
                     if e.is_loaded and e.last_access
                     else None,

@@ -2269,6 +2269,7 @@ from route_checks_omni import (
 from route_checks_tools import (
     FakeBackend,  # noqa: E402,F401  registers the server-tool checks
 )
+from route_checks_tavily import tavily_routes  # noqa: E402,F401
 from route_checks_vision import (
     _vision_input,  # noqa: E402,F401  registers the image-input check
 )
@@ -2317,6 +2318,9 @@ def _ollama_unsupported(c: Ctx):
         err_ok(r, "ollama")
 
 
+from route_checks_agent_compat import (  # noqa: E402,F401
+    custom_tools as _agent_custom_tools,
+)
 from route_checks_vllm import (
     _chat_validation,  # noqa: E402,F401  registers the vLLM-derived validation checks
 )

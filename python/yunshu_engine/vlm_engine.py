@@ -655,8 +655,8 @@ class VLMEngine:
             _thresh = 10 * 1024**3
             self._mx_large_model = _bytes > _thresh
             logger.info(
-                "VLM model ~%.1fGB on disk, large=%s (clear buffer pool on idle %s)",
-                _bytes / 1e9,
+                "VLM model ~%.1fGiB on disk, large=%s (clear buffer pool on idle %s)",
+                _bytes / (1 << 30),
                 self._mx_large_model,
                 "ON" if self._mx_large_model else "off",
             )
@@ -3424,6 +3424,31 @@ class VLMEngine:
         self._register_temp_file(tmp.name)
         return tmp.name
 
+    async def _download_video(self, url: str) -> str:
+        """Bounded, DNS-pinned HTTP video fetch; redirects pass the same SSRF guard."""
+        await _resolve_media_target(url)
+        from urllib.parse import urlsplit
+
+        ext = Path(urlsplit(url).path).suffix.lower()
+        if ext not in (".mp4", ".webm", ".mov", ".mkv", ".avi"):
+            ext = ".mp4"
+        tmp = tempfile.NamedTemporaryFile(suffix=ext, delete=False)  # noqa: SIM115
+        tmp.close()
+        self._register_temp_file(tmp.name)
+        try:
+            await netguard.download_to_file(
+                url,
+                tmp.name,
+                max_bytes=settings.get("YUNSHU_VLM_MAX_VIDEO_BYTES"),
+                timeout=60,
+                allow_private=False,
+                verify=True,
+                headers={"User-Agent": "Yunshu/1.0"},
+            )
+        except Exception as exc:
+            raise ValueError(f"Cannot download video: {exc}") from exc
+        return tmp.name
+
     async def _download_image(self, url: str) -> str:
         """Download an image from HTTP/HTTPS URL to a temp file."""
 
@@ -3570,10 +3595,8 @@ class VLMEngine:
                                 raise ValueError(f"video file not found: {url}")
                             video_paths.append(path)
                         elif url.startswith(("http://", "https://")):
-                            raise ValueError(
-                                "video_url http(s) fetch is not supported — provide a "
-                                "data: URL or a file under YUNSHU_MEDIA_DIR"
-                            )
+                            path = await self._download_video(url)
+                            video_paths.append(path)
                         elif url:
                             path = _VALIDATE_LOCAL_PATH(url)  # raises on traversal
                             if not os.path.exists(path):

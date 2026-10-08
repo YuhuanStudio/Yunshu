@@ -15,8 +15,12 @@ STAGES = (
     "memory",
     "longqa",
     "conc",
+    "client_compat",
+    "websearch",
     "rerank",
     "evals",
+    "tavily",
+    "searchrank",
 )
 
 # `full` and `tiny` climb the original seven; the long stages (needle retrieval, concurrent
@@ -28,17 +32,29 @@ LADDER = tuple(
     not in (
         "longqa",
         "conc",
-        "rerank",
+        "client_compat",
         "console",
-        "evals",
         "telemetry",
         "telemetry-tiny",
+        "websearch",
+        "rerank",
+        "evals",
+        "tavily",
+        "searchrank",
     )
 )
 
 # Every key is a default; the CLI can override ctx / reps / mmlu_n / mem_sizes.
 SUITES = {
     "evals": {"stages": ["preflight", "evals"]},
+    "client_compat": {
+        "stages": ["preflight", "client_compat"],
+        "client_compat_device": "m3",
+    },
+    "client_compat_m5": {
+        "stages": ["preflight", "client_compat"],
+        "client_compat_device": "m5",
+    },
     "console": {"stages": ["console"]},
     "console-identity": {
         # Full unit + ci-local are external merge gates; avoid a third overlapping

@@ -191,7 +191,8 @@ prefill progress, decode speed and cache hits.
 - **Codex** — Responses API with reasoning items, function calls, local compaction and `web_search`.
 - **opencode** — Chat Completions with tools and usage.
 
-Server-side web search uses a configurable backend (for example SearXNG); MCP servers named in a
+Server-side web search defaults to best-effort DuckDuckGo HTML and Wikipedia; queries leave the machine.
+`YUNSHU_WEB_SEARCH_PROVIDER=none` disables it. Configured SearXNG or keyed providers take precedence; MCP servers named in a
 request are connected by the gateway. What each agent calls and how it was checked is in
 [Agent compatibility](docs/guides/AGENT_COMPAT.md).
 
@@ -271,6 +272,7 @@ All settings: [Configuration](docs/CONFIGURATION.md).
 
 ## Docs
 
+- [CLI](docs/guides/CLI.md) — first run, models, launchd, JSON and shell completion
 - [Clients](docs/guides/CLIENTS.md) — curl, OpenAI / Anthropic SDKs, Open WebUI, agents
 - [API surface](docs/guides/API_SURFACE.md) and [API reference](docs/API.md)
 - [Agent compatibility](docs/guides/AGENT_COMPAT.md)

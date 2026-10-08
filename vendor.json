@@ -2365,7 +2365,8 @@
     "mlx-vlm",
     "mlx-metal",
     "transformers",
-    "llguidance"
+    "llguidance",
+    "trafilatura"
   ],
   "watch_excluded": {
     "reference/ACE-Step-1.5": "multimodal generation (image / video / audio synthesis) is parked; no LLM/VLM decode, TTFT or cache technique to learn",
@@ -2584,6 +2585,62 @@
       "reviewed_date": "2026-10-08",
       "owner": "consolegaps",
       "action": "Per-response timing and cached-token accounting; reference only."
+    }
+  ],
+  "websearch_prior_art": [
+    {
+      "repo": "https://github.com/adbar/trafilatura",
+      "license": "Apache-2.0 (2.1.0)",
+      "reviewed_date": "2026-10-08",
+      "use": "Declared dependency; sanitized HTML extraction; existing heading/code and hidden-content fixtures."
+    },
+    {
+      "repo": "https://github.com/searxng/searxng",
+      "license": "AGPL-3.0-or-later",
+      "reviewed_date": "2026-10-08",
+      "use": "External HTTP JSON adapter only; fixture parser/ranking tests; no copied source."
+    },
+    {
+      "repo": "https://github.com/cedarsaam/agent-search",
+      "reviewed_date": "2026-10-08",
+      "use": "Architecture comparison: SearXNG + cited retrieval + Tavily/MCP surface; no copied source; license not relied on."
+    },
+    {
+      "repo": "https://github.com/modelcontextprotocol/python-sdk",
+      "reviewed_date": "2026-10-08",
+      "use": "Installed SDK compatibility probes; no copied source."
+    }
+  ],
+  "cli_prior_art": [
+    {
+      "url": "https://docs.ollama.com/cli",
+      "reviewed_date": "2026-10-08",
+      "owner": "cliux",
+      "use": "Explicit pull/list/rm and separate server lifecycle; UX comparison only, no copied source."
+    },
+    {
+      "url": "https://lmstudio.ai/docs/cli",
+      "reviewed_date": "2026-10-08",
+      "owner": "cliux",
+      "use": "Model acquisition/select and load lifecycle; UX comparison only, no copied source."
+    },
+    {
+      "url": "https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md",
+      "reviewed_date": "2026-10-08",
+      "owner": "cliux",
+      "use": "HF repository or local checkpoint server startup; UX comparison only, no copied source."
+    },
+    {
+      "url": "https://github.com/ml-explore/mlx-lm/blob/main/mlx_lm/SERVER.md",
+      "reviewed_date": "2026-10-08",
+      "owner": "cliux",
+      "use": "Explicit MLX repository server startup; UX comparison only, no copied source."
+    },
+    {
+      "url": "https://docs.vllm.ai/en/latest/cli/",
+      "reviewed_date": "2026-10-08",
+      "owner": "cliux",
+      "use": "serve, chat, complete and benchmark command organization; UX comparison only, no copied source."
     }
   ]
 }

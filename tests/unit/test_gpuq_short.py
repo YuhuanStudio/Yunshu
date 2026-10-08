@@ -130,6 +130,8 @@ def test_ineligible_short_is_skipped(gpuq):
 
 def test_short_flag_counts_as_short_and_caps_timeout(gpuq, tmp_path, monkeypatch):
     monkeypatch.setattr(gpuq.time, "time", time.time)  # real clock for submit
+    # submit() starts a daemon on demand; a test daemon outlived the test (3 orphans found 2026-10-08)
+    monkeypatch.setattr(gpuq, "_ensure_daemon", lambda: None)
     jid = gpuq.submit(["true"], "x-short", 60, -1, short=True)
     j = json.loads((gpuq.JOBS / f"{jid}.json").read_text())
     assert j["short"] is True and j["timeout_s"] == gpuq.SHORT_MIN * 60

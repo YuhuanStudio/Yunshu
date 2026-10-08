@@ -1,14 +1,12 @@
-"""Cached server host telemetry view; never starts a local sampler."""
-
-from __future__ import annotations
+"""Live status using the currently merged server monitoring API."""
 
 import time
 
-import httpx
 import typer
-from rich.console import Console
-from rich.live import Live
 from rich.table import Table
+
+from ._output import is_json
+from .status import console, status
 
 
 def render(host: dict) -> Table:
@@ -41,36 +39,20 @@ def render(host: dict) -> Table:
 
 
 def top(
-    ctx: typer.Context,
-    once: bool = typer.Option(False, "--once"),
-    interval: float = typer.Option(1.0, "--interval", min=0.1),
+    url: str = typer.Option(
+        "http://localhost:8000", "--url", "-u", envvar="YUNSHU_GATEWAY_URL"
+    ),
+    once: bool = typer.Option(False, "--once", help="Print one snapshot and exit."),
+    interval: float = typer.Option(2.0, "--interval", min=0.5, help="Refresh seconds."),
 ) -> None:
-    """Watch GPU power, frequency, temperature and OS pressure (admin key)."""
-    from ._output import auth_headers, emit, fail, is_json
-
-    url = (ctx.obj or {}).get("url", "http://localhost:8000")
-
-    def fetch():
+    """Refresh server health, memory, engine and models. --json returns one snapshot."""
+    while True:
+        if not once and not is_json():
+            console.clear()
+        status(url=url)
+        if once or is_json():
+            return
         try:
-            response = httpx.get(
-                url + "/v1/yunshu/host", headers=auth_headers(), timeout=10
-            )
-            response.raise_for_status()
-            return response.json()
-        except (httpx.HTTPError, ValueError) as exc:
-            fail(str(exc), code=2)
-
-    if once or is_json():
-        host = fetch()
-        if is_json():
-            emit(host)
-        else:
-            Console().print(render(host))
-        return
-    try:
-        with Live(render(fetch()), refresh_per_second=2) as live:
-            while True:
-                time.sleep(interval)
-                live.update(render(fetch()))
-    except KeyboardInterrupt:
-        return
+            time.sleep(interval)
+        except KeyboardInterrupt:
+            return
