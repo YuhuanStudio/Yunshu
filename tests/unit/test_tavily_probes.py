@@ -6,6 +6,32 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def test_probe_waits_for_busy_port_pool_and_fails_fast_otherwise():
+    import pytest
+
+    probe = module("tavily_probe")
+    now = [0]
+
+    def sleep(seconds):
+        now[0] += seconds
+
+    def busy():
+        if now[0] < 4:
+            raise RuntimeError("no free port in 18990-18996")
+        return "ready"
+
+    assert probe.wait_for_port(busy, clock=lambda: now[0], sleep=sleep) == "ready"
+    assert now[0] == 4
+    now[0] = 0
+    with pytest.raises(RuntimeError, match="no free port"):
+        probe.wait_for_port(busy, timeout=1, clock=lambda: now[0], sleep=sleep)
+    assert now[0] == 1
+    with pytest.raises(RuntimeError, match="model missing"):
+        probe.wait_for_port(
+            lambda: (_ for _ in ()).throw(RuntimeError("model missing"))
+        )
+
+
 def module(name):
     spec = importlib.util.spec_from_file_location(
         name, ROOT / "scripts/research" / (name + ".py")

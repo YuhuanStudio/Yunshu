@@ -55,6 +55,8 @@ PROVIDER_ORDER = (
     "exa",
     "serper",
     "perplexity",
+    "mojeek",
+    "marginalia",
     "ddg_html",
     "wikipedia",
     "mwmbl",
@@ -591,7 +593,7 @@ def get_provider() -> SearchProvider | None:
     want = settings.get("YUNSHU_WEB_SEARCH_PROVIDER")
     if want == "none":
         return None
-    from .metasearch import Metasearch, Mwmbl
+    from .metasearch import Marginalia, Metasearch, Mojeek, Mwmbl
 
     providers: list[SearchProvider] = []
     for name in PROVIDER_ORDER if want == "auto" else (want,):
@@ -619,6 +621,8 @@ def get_provider() -> SearchProvider | None:
                     "exa": Exa,
                     "serper": Serper,
                     "perplexity": Perplexity,
+                    "mojeek": Mojeek,
+                    "marginalia": Marginalia,
                 }[name](key)
             )
     if not providers:

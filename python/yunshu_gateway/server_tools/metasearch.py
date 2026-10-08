@@ -28,6 +28,89 @@ from .search import (
 logger = logging.getLogger(__name__)
 
 
+class Marginalia(SearchProvider):
+    """Independent small-web index; a configured key is an explicit opt-in."""
+
+    name = "marginalia"
+
+    def __init__(self, key):
+        self.key = key
+
+    async def search(self, query, *, limit, client, options=None, **kwargs):
+        r = await client.get(
+            "https://api2.marginalia-search.com/search",
+            params={
+                "query": query,
+                "count": min(100, max(1, limit * 2)),
+                "nsfw": int(bool((options or {}).get("safe_search"))),
+            },
+            headers={"API-Key": self.key},
+        )
+        _raise_http(r, "Marginalia")
+        return [
+            SearchResult(
+                _clean(x.get("title"), 300), x["url"], _clean(x.get("description"))
+            )
+            for x in r.json().get("results", [])
+            if x.get("url")
+        ][: limit * 2]
+
+
+class Mojeek(SearchProvider):
+    """Official independent-index API; no model or additional service required."""
+
+    name = "mojeek"
+    capabilities = {"content": False, "freshness": True, "domain_filter": False}
+
+    def __init__(self, key):
+        self.key = key
+
+    async def search(
+        self, query, *, limit, client, options=None, user_location=None, **kwargs
+    ):
+        options = options or {}
+        params = {
+            "q": query,
+            "api_key": self.key,
+            "fmt": "json",
+            "t": min(10, max(1, limit * 2)),
+            "date": 1,
+            "safe": int(bool(options.get("safe_search"))),
+        }
+        language = options.get("language")
+        if language and len(language) == 2:
+            params.update(lb=language.upper(), lbb=100)
+        if user_location and user_location.get("country"):
+            params.update(rb=user_location["country"].upper(), rbb=10)
+        # The local date filter remains authoritative (Mojeek's `before` is exclusive).
+        for field, upstream in (("start_date", "since"), ("end_date", "before")):
+            if options.get(field):
+                from datetime import date, timedelta
+
+                day = date.fromisoformat(options[field])
+                if field == "end_date":
+                    if day == date.max:
+                        continue
+                    day += timedelta(days=1)
+                params[upstream] = day.strftime("%Y%m%d")
+        r = await client.get("https://api.mojeek.com/search", params=params)
+        _raise_http(r, "Mojeek")
+        data = r.json()["response"]
+        if data.get("status") != "OK":
+            # Never echo upstream text: it can contain query strings or credentials.
+            raise SearchError("unavailable", "Mojeek returned an API error")
+        return [
+            SearchResult(
+                _clean(x.get("title"), 300),
+                x["url"],
+                _clean(x.get("desc")),
+                x.get("date"),
+            )
+            for x in data.get("results", [])
+            if x.get("url")
+        ][: limit * 2]
+
+
 class Mwmbl(SearchProvider):
     name = "mwmbl"
 

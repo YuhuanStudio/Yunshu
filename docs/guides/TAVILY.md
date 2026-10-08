@@ -40,6 +40,18 @@ CC-BY-NC-SA 4.0; retain attribution and observe the noncommercial/share-alike te
 ([official terms](https://api.mwmbl.org/static/terms-and-conditions/)). It is not silently enabled for
 commercial/general use. No Mwmbl implementation code is copied.
 
+Mojeek is available with `YUNSHU_MOJEEK_API_KEY`; Marginalia with
+`YUNSHU_MARGINALIA_API_KEY`. Configured keys participate in auto metasearch, or select
+`YUNSHU_WEB_SEARCH_PROVIDER=mojeek|marginalia` explicitly. Neither adapter loads a model.
+Mojeek forwards safe-search, country/language boosts and date bounds; its adapter requests
+at most ten candidates to fit the entry API plan. [Mojeek API](https://www.mojeek.com/support/api/search/).
+Marginalia forwards safe-search and result count. There is no implicit `public` key;
+setting it explicitly opts into the shared development quota. Noncommercial keys serve
+CC-BY-NC-SA 4.0 data; commercial keys have separate terms.
+[Marginalia API and terms](https://about.marginalia-search.com/article/api/).
+Common Crawl's URL index and Wikipedia dumps require corpus ingestion and a local full-text
+index; they are not keyword SERP endpoints and are not downloaded or enabled automatically.
+
 Plain search uses BM25, provider priors, exact spans and deduplication, with **no LLM calls**. Each excerpt is
 at most 500 characters; excerpts join with ` [...] `. Depth controls fetch breadth and the total retrieval
 budget: ultra-fast 0.7 s (provider text), fast 1 s / 3 pages, basic 1.3 s / 6 pages, advanced 3 s / 20 pages.
