@@ -1,0 +1,52 @@
+{
+  "name": "yunshu-docs",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "gen": "python3 scripts/gen_content.py",
+    "dev": "next dev -H 0.0.0.0 -p 3991",
+    "build": "next build",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "test": "node --test tests/*.test.mjs",
+    "check:links": "node scripts/check-links.mjs",
+    "serve": "node scripts/serve-out.mjs"
+  },
+  "dependencies": {
+    "@orama/tokenizers": "^3.1.18",
+    "@types/mdx": "^2.0.14",
+    "@yuhuanowo/yunui": "file:../frontend/vendor/yuhuanowo-yunui-0.2.18-analytics.tgz",
+    "fumadocs-core": "^16.14.0",
+    "fumadocs-mdx": "^15.2.2",
+    "fumadocs-ui": "^16.14.0",
+    "katex": "^0.18.1",
+    "lucide-react": "^1.28.0",
+    "mermaid": "^11.16.1",
+    "next": "16.3.0",
+    "next-themes": "^0.4.6",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "react-markdown": "^10.1.0",
+    "rehype-katex": "^7.0.1",
+    "rehype-raw": "^7.0.0",
+    "rehype-slug": "^6.0.0",
+    "remark-gfm": "^4.0.1",
+    "remark-math": "^6.0.0",
+    "shiki": "^4.4.2",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.62.1",
+    "@tailwindcss/postcss": "^4.3.3",
+    "@types/node": "^26.1.2",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.4",
+    "eslint": "^9.39.5",
+    "eslint-config-next": "16.3.0",
+    "tailwindcss": "^4.3.3",
+    "typescript": "^6.0.3"
+  },
+  "packageManager": "pnpm@12.8.1",
+  "engines": { "node": ">=22.18" }
+}
