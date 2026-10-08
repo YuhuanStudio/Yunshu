@@ -4,6 +4,8 @@ Release: `8c099150f9aeb084658f05e1f5a27747388f8aae` (tag resolved 2026-10-08 08:
 Snapshot in progress: **unmeasured/rejected cells are unknown**. Startup pilots are excluded from rankings.
 Historical observations remain in [PERF_TREND](reports/PERF_TREND.md) under their original builds and limitations.
 
+Changes after v0.1.4 on main are unreleased and are excluded from this pinned snapshot.
+
 ## Method
 
 M5 Max, 128 GB. One benchmark engine resident at a time, own instance on ports 18990–18999, main-checkout gpuq,

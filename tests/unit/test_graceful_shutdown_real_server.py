@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import os
 import signal
+import socket
 import subprocess
 import sys
 import threading
@@ -13,10 +14,19 @@ from pathlib import Path
 
 import httpx
 import pytest
-from scripts.research.tfbench import free_port
 
 ROOT = Path(__file__).resolve().parents[2]
-PORT = 18991
+
+
+def _free_port() -> int:
+    # An OS-assigned port, never one of the shared 18990-18999 pool that live servers
+    # (gpuq jobs) may already hold; a fixed port made the test talk to a foreign server.
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+PORT = _free_port()
 
 
 def test_graceful_shutdown_timeout_values():
@@ -27,7 +37,7 @@ def test_graceful_shutdown_timeout_values():
 
 def _start(drain: str, delay="0.2", n="15", home: Path | None = None):
     global PORT
-    PORT = free_port()
+    PORT = _free_port()
     env = {
         **{k: v for k, v in os.environ.items() if not k.startswith("YUNSHU_")},
         "YUNSHU_DRAIN_TIMEOUT": drain,
@@ -131,7 +141,7 @@ def test_failed_start_never_uses_an_unowned_healthy_server(monkeypatch, tmp_path
     from types import SimpleNamespace
 
     monkeypatch.setattr(
-        "tests.unit.test_graceful_shutdown_real_server.free_port", lambda: 18999
+        "tests.unit.test_graceful_shutdown_real_server._free_port", lambda: 23456
     )
     monkeypatch.setattr(
         subprocess,
@@ -147,3 +157,7 @@ def test_failed_start_never_uses_an_unowned_healthy_server(monkeypatch, tmp_path
     with pytest.raises(AssertionError, match="our scripted server exited: bind failed"):
         _start("20", home=tmp_path)
     assert seen == []
+
+
+def test_port_is_outside_the_shared_server_pool():
+    assert not 18990 <= PORT <= 18999
