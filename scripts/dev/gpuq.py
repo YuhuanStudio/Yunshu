@@ -1984,6 +1984,12 @@ def main() -> int:
     sub.add_parser("cancel").add_argument("id")
     sub.add_parser("_daemon")
     sub.add_parser("digest", add_help=False)  # flags handled by gpuq_digest.py
+    sub.add_parser("report", add_help=False)  # flags handled by gpuq_report.py
+    if sys.argv[1:2] == ["report"]:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import gpuq_report  # noqa: PLC0415
+
+        return gpuq_report.main(sys.argv[2:])
     if sys.argv[1:2] == ["digest"]:
         sys.path.insert(0, str(Path(__file__).resolve().parent))
         import gpuq_digest  # noqa: PLC0415
