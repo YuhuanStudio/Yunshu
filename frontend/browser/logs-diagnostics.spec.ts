@@ -149,8 +149,13 @@ test.describe("logs page", () => {
     const logs = page.getByTestId("logs");
     await expect(logs.getByText("memory pressure 0.91")).toBeVisible();
     const row = logs.getByText("memory pressure 0.91").locator("..");
+    // Keyboard users reach the per-line copy button: it is in the tab order.
+    const copyLine = row.getByRole("button", { name: "複製這一行" });
+    await expect(copyLine).not.toHaveAttribute("tabindex", "-1");
+    await copyLine.focus();
+    await expect(copyLine).toBeFocused();
     await row.hover();
-    await row.getByRole("button", { name: "複製這一行" }).click();
+    await copyLine.click();
     const copied = await page.evaluate(
       () => (window as unknown as { __copied: string[] }).__copied,
     );

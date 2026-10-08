@@ -429,7 +429,6 @@ export default function Logs({ connection }: { connection: Connection }) {
                   {r.msg}
                 </span>
                 <IconButton
-                  tabIndex={-1}
                   icon={<Copy size={12} />}
                   label={t("logs.action.copyLine")}
                   onClick={() => copy(formatLine(r), t("logs.copiedLine"))}

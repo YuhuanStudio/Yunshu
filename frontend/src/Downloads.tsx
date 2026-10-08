@@ -38,7 +38,7 @@ import {
 
 const jobStatus = (j: DownloadJob) =>
   j.state === "failed"
-    ? "offline"
+    ? "busy"
     : j.state === "running" || j.state === "queued"
       ? "away"
       : j.state === "done"

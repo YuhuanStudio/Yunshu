@@ -331,7 +331,7 @@ export function Models({
                       <StatusIndicator
                         status={
                           model.error
-                            ? "offline"
+                            ? "busy"
                             : model.loading
                               ? "away"
                               : model.loaded

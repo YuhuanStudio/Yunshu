@@ -40,7 +40,7 @@ import {
 
 export const modelState = (model: Model) =>
   model.error
-    ? ({ status: "offline", text: t("models.state.failed") } as const)
+    ? ({ status: "busy", text: t("models.state.failed") } as const)
     : model.loading
       ? ({ status: "away", text: t("models.state.loading") } as const)
       : model.loaded
