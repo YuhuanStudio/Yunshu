@@ -45,7 +45,7 @@ def _rel_err(orig, deq):
 
 
 def main() -> int:
-    from yunshu_engine.kv_quantization import KVQuantizer, KVQuantConfig
+    from yunshu_engine.kv_quantization import KVQuantConfig, KVQuantizer
 
     kv = _make_kv()
     results = {}

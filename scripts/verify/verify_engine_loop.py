@@ -18,6 +18,7 @@ Run:
 """
 
 import asyncio
+import contextlib
 import logging
 import os
 
@@ -141,10 +142,8 @@ async def main():
     )
 
     print(f"\n=== RESULT: {_PASS} passed, {_FAIL} failed ===")
-    try:
+    with contextlib.suppress(Exception):
         await engine.stop()
-    except Exception:
-        pass
     return _FAIL
 
 

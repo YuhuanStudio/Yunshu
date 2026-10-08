@@ -12,6 +12,7 @@ over shapes, so they are testable without MLX.
 from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
+from typing import cast
 
 _AFFINE_BITS = (2, 3, 4, 5, 6, 8)
 _AFFINE_GROUPS = (32, 64, 128)
@@ -53,10 +54,11 @@ def infer_quantization(
 def quantization_matches(declared: dict | None, derived: dict) -> bool:
     if not declared:
         return False
-    return (
+    return cast(
+        bool,
         declared.get("bits") == derived["bits"]
         and declared.get("group_size") == derived["group_size"]
-        and declared.get("mode", "affine") == derived["mode"]
+        and declared.get("mode", "affine") == derived["mode"],
     )
 
 

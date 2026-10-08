@@ -222,7 +222,7 @@ def doctor_cli(home, monkeypatch):
         for name in ("platform", "python", "mlx", "memory", "port")
     ]
 
-    def checks(model, host, port):
+    def checks(model, host, port, *, no_metal=False):
         return healthy + (doctor.check_model(model, {}) if model else [])
 
     monkeypatch.setattr(doctor, "run_checks", checks)
@@ -256,7 +256,7 @@ def test_doctor_cli_keeps_dependency_failures(doctor_cli, monkeypatch):
     monkeypatch.setattr(
         doctor,
         "run_checks",
-        lambda *args: [
+        lambda *args, **kwargs: [
             doctor.Check("version mlx-vlm", "fail", "below minimum", "upgrade")
         ],
     )

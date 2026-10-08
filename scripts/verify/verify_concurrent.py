@@ -89,7 +89,7 @@ async def main() -> int:
             contents = []
             usage_ok = True
             correct = 0
-            for (q, want), r in zip(QUESTIONS, responses, strict=False):
+            for (_q, want), r in zip(QUESTIONS, responses, strict=False):
                 if r.status_code != 200:
                     contents.append(f"[{r.status_code}]")
                     continue
