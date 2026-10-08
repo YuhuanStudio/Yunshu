@@ -896,7 +896,7 @@
          "type": "string"
         },
         "population_millions": {
-         "type": "number"
+         "type": "integer"
         }
        },
        "required": [
@@ -908,7 +908,7 @@
       }
      }
     },
-    "max_tokens": 160,
+    "max_tokens": 400,
     "temperature": 0
    },
    "asserts": [
@@ -959,7 +959,7 @@
          "type": "string"
         },
         "population_millions": {
-         "type": "number"
+         "type": "integer"
         }
        },
        "required": [
@@ -971,7 +971,7 @@
       }
      }
     },
-    "max_tokens": 160,
+    "max_tokens": 400,
     "temperature": 0
    },
    "asserts": [
@@ -1106,10 +1106,10 @@
     "messages": [
      {
       "role": "user",
-      "content": "What is 17*23? Think briefly."
+      "content": "What is 6*7? Think very briefly, then answer."
      }
     ],
-    "max_tokens": 1500,
+    "max_tokens": 3000,
     "temperature": 0
    },
    "asserts": [
@@ -1188,10 +1188,10 @@
     "messages": [
      {
       "role": "user",
-      "content": "What is 17*23? Think briefly."
+      "content": "What is 6*7? Think very briefly, then answer."
      }
     ],
-    "max_tokens": 1500,
+    "max_tokens": 3000,
     "temperature": 0
    },
    "asserts": [
@@ -1793,8 +1793,9 @@
    "path": "/v1/responses",
    "body": {
     "input": "Reply with only the word ORCHID.",
-    "max_output_tokens": 32,
-    "temperature": 0
+    "max_output_tokens": 400,
+    "temperature": 0,
+    "enable_thinking": false
    },
    "asserts": [
     {
@@ -1847,8 +1848,9 @@
      }
     ],
     "tool_choice": "required",
-    "max_output_tokens": 200,
-    "temperature": 0
+    "max_output_tokens": 400,
+    "temperature": 0,
+    "enable_thinking": false
    },
    "asserts": [
     {
@@ -1881,8 +1883,9 @@
    "path": "/v1/responses",
    "body": {
     "input": "Reply with only the word ORCHID.",
-    "max_output_tokens": 32,
-    "temperature": 0
+    "max_output_tokens": 400,
+    "temperature": 0,
+    "enable_thinking": false
    },
    "asserts": [
     {

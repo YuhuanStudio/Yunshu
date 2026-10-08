@@ -67,7 +67,7 @@ class Client:
         """Read an SSE stream and aggregate it (kind openai | anthropic | responses)."""
         c = self.conn()
         agg = {
-            "status": 0,
+            "http_status": 0,
             "text": "",
             "reasoning": "",
             "tool_calls": [],
@@ -83,7 +83,7 @@ class Client:
         try:
             c.request("POST", path, json.dumps(body), self.headers(path))
             r = c.getresponse()
-            agg["status"] = r.status
+            agg["http_status"] = r.status
             if r.status != 200:
                 agg["error"] = r.read()[:300].decode("utf-8", "replace")
                 return agg
@@ -401,7 +401,7 @@ def run_row(cl, row):
                 body if row.get("method", "POST") != "GET" else None,
             )
             resp = {
-                "status": resp["status"],
+                "http_status": resp["status"],
                 **(
                     resp["json"]
                     if isinstance(resp["json"], dict)
@@ -418,9 +418,9 @@ def run_row(cl, row):
         fails = []
         want_status = row.get("status", 200)
         want_status = want_status if isinstance(want_status, list) else [want_status]
-        if resp.get("status") not in want_status:
+        if resp.get("http_status") not in want_status:
             fails.append(
-                f"status {resp.get('status')} not in {want_status}: {str(resp)[:200]}"
+                f"status {resp.get('http_status')} not in {want_status}: {str(resp)[:200]}"
             )
         else:
             for a in row["asserts"]:
@@ -429,6 +429,15 @@ def run_row(cl, row):
                     fails.append(
                         f"{a['path']} {a['op']} {a.get('value', '')!s}: got {str(v)[:80]}"
                     )
+        if fails:
+            fails.append(
+                "response: "
+                + json.dumps(
+                    {k: resp[k] for k in resp if k not in ("events", "usage")},
+                    ensure_ascii=False,
+                    default=str,
+                )[:600]
+            )
         return {"status": "fail" if fails else "pass", "detail": fails or "ok"}
     except Exception as e:  # noqa: BLE001 - any exception is a failed row, never a skip
         return {"status": "error", "detail": f"{type(e).__name__}: {e}"}
