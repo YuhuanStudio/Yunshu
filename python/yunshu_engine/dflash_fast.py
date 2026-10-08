@@ -6,12 +6,15 @@ arrays live in the current TreeResult, rather than a global id-keyed cache.
 """
 
 import hashlib
+import logging
 from typing import Any
 
 import mlx.core as mx
 
 from . import tree_verify as tv
 from .dflash_plan import live_bound
+
+logger = logging.getLogger(__name__)
 
 _KERNELS: dict[str, Any] = {}
 
@@ -391,6 +394,12 @@ def rounds(
         copy.extend(context)
         copy.extend([first_bonus])
     keep = context_window(draft)
+    logger.info(
+        "DFlash drafter context: %d prompt-hidden positions (window %s, target KV %d)",
+        int(hidden.shape[1]) if hidden is not None else 0,
+        keep,
+        context_length(lm, cache),
+    )
     skipped = 0
     verifier = Verifier(q35._EXACT_SPECULATIVE_VERIFIER)
     bonus = int(first_bonus)
