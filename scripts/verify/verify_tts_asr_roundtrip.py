@@ -18,6 +18,7 @@ Run: PYTHONPATH=. uv run python scripts/verify_tts_asr_roundtrip.py
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 import re
 import sys
@@ -41,6 +42,11 @@ def _words(s: str) -> set[str]:
 def _overlap(orig: str, got: str) -> float:
     o = _words(orig)
     return len(o & _words(got)) / len(o) if o else 0.0
+
+
+def _has_riff_header(path: str) -> bool:
+    with open(path, "rb") as stream:
+        return stream.read(4) == b"RIFF"
 
 
 async def main() -> int:
@@ -71,7 +77,7 @@ async def main() -> int:
 
     checks: dict[str, bool] = {}
     detail: list[str] = []
-    valid_wav = all(open(p, "rb").read(4) == b"RIFF" for p in wav_paths) and all(
+    valid_wav = all(_has_riff_header(p) for p in wav_paths) and all(
         d > 0.3 for d in durations
     )
     checks["TTS: valid non-trivial WAV for each phrase"] = valid_wav
@@ -93,10 +99,8 @@ async def main() -> int:
         )
     finally:
         for p in wav_paths:
-            try:
+            with contextlib.suppress(OSError):
                 os.unlink(p)
-            except OSError:
-                pass
 
     for k, v in checks.items():
         print(f"  {'OK ' if v else 'BAD'} {k}")
