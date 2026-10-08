@@ -11,7 +11,7 @@ import type { MemoryLedgerData } from "./memory-api.ts";
  * Last-request figures belong to the Requests page. Each pill is two words plus a
  * tooltip sentence; a pill with nothing to say is not produced.
  */
-export type PillTone = "neutral" | "warning" | "danger";
+export type PillTone = "neutral" | "success" | "warning" | "danger";
 export interface FooterPill {
   key: string;
   label: string;
@@ -139,7 +139,7 @@ export function footerPills(input: FooterInput): FooterPill[] {
         ? `${first} +${loaded.length - 1}`
         : first
       : undefined,
-    tone: "neutral",
+    tone: "success",
     dot: true,
     help:
       t("shell.footer.engine.okHelp", {
@@ -212,8 +212,14 @@ export function footerPills(input: FooterInput): FooterPill[] {
     key: "now",
     label: loadingModel ? t("shell.engine.live.loading") : phaseLabels[a.phase],
     value,
-    tone: "neutral",
-    dot: false,
+    // The same state-to-colour map as the top pill: decode green, other work amber, idle no dot.
+    tone:
+      a.phase === "decode"
+        ? "success"
+        : a.phase === "idle" && !loadingModel
+          ? "neutral"
+          : "warning",
+    dot: a.phase !== "idle" || !!loadingModel,
     minCh: a.phase === "decode" ? 9 : a.phase === "prefill" ? 4 : undefined,
     help:
       a.phase === "idle"

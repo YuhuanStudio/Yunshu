@@ -90,12 +90,6 @@ async function lint(page: Page): Promise<string[]> {
     for (const el of document.querySelectorAll("[data-stat-grid] *"))
       if (vis(el) && getComputedStyle(el).textOverflow === "ellipsis")
         out.push(`ellipsis in a stat card: ${el.className}`);
-    // 2. status band: dot and plain text, no bordered chips
-    for (const li of document.querySelectorAll(
-      "ul[aria-label] > li[data-tone]",
-    ))
-      if (vis(li) && parseFloat(getComputedStyle(li).borderTopWidth) > 0)
-        out.push(`bordered chip in the status band: ${li.textContent}`);
     // 3. unavailable notices keep a readable measure
     for (const el of document.querySelectorAll(
       '[data-testid$="-unsupported"], [data-testid$="-unavailable"]',
@@ -322,5 +316,115 @@ test("phone top bar is the hamburger and the title; search and the bell live in 
     await expect(page.getByTestId("bell-badge")).toBeAttached();
     await expect(sheet).toBeVisible();
     await page.reload({ waitUntil: "domcontentloaded" });
+  }
+});
+
+// ---- Round 9 ----
+
+test("status band: separate bordered capsule pills, no full-width bar, no hairline, running dot is the success tone", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await install(page);
+  await page.goto("/console/#/overview", { waitUntil: "domcontentloaded" });
+  const band = page.locator("footer ul[aria-label]");
+  await band.waitFor();
+  await page.waitForTimeout(800);
+  const m = await page.evaluate(() => {
+    const footer = document.querySelector("footer")!;
+    const fcs = getComputedStyle(footer);
+    const ul = footer.querySelector("ul[aria-label]")!;
+    const ucs = getComputedStyle(ul);
+    const probe = document.createElement("i");
+    probe.style.color = "var(--success)";
+    document.body.append(probe);
+    const success = getComputedStyle(probe).color;
+    probe.remove();
+    const pills = [...ul.querySelectorAll("li[data-tone]")].map((li) => {
+      const cs = getComputedStyle(li);
+      const dot = li.querySelector("span[aria-hidden]") as HTMLElement | null;
+      return {
+        tone: li.getAttribute("data-tone"),
+        text: li.textContent,
+        border: parseFloat(cs.borderTopWidth),
+        radius: parseFloat(cs.borderTopLeftRadius),
+        height: li.getBoundingClientRect().height,
+        fill: cs.backgroundColor,
+        dot: dot ? getComputedStyle(dot).backgroundColor : null,
+        dotSize: dot ? dot.getBoundingClientRect().width : 0,
+      };
+    });
+    return {
+      footerBorder: parseFloat(fcs.borderTopWidth),
+      footerFill: fcs.backgroundColor,
+      barFill: ucs.backgroundColor,
+      barWidth: ul.getBoundingClientRect().width,
+      pillsRight: Math.max(
+        ...[...ul.querySelectorAll("li")].map(
+          (l) => l.getBoundingClientRect().right,
+        ),
+      ),
+      success,
+      pills,
+    };
+  });
+  expect(m.footerBorder).toBe(0);
+  expect(m.footerFill).toBe("rgba(0, 0, 0, 0)");
+  expect(m.barFill).toBe("rgba(0, 0, 0, 0)");
+  expect(m.pills.length).toBeGreaterThanOrEqual(2);
+  for (const p of m.pills) {
+    expect(p.border, p.text ?? "").toBeGreaterThan(0);
+    expect(p.radius, p.text ?? "").toBeGreaterThanOrEqual(p.height / 2 - 1);
+    expect(p.fill, p.text ?? "").not.toBe("rgba(0, 0, 0, 0)");
+  }
+  // The running engine pill carries the success tone on a 6px dot.
+  const engine = m.pills[0];
+  expect(engine.tone).toBe("success");
+  expect(engine.dot).toBe(m.success);
+  expect(engine.dotSize).toBeCloseTo(6, 0);
+  // No reserved gap: the pills end where their content ends, far short of the bar's full width.
+  expect(m.pillsRight).toBeLessThan(1000);
+});
+
+test("no chart carries the always-on mono readout row under its plot", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await install(page);
+  await page.goto("/console/#/overview", { waitUntil: "domcontentloaded" });
+  await page.getByRole("heading", { level: 1 }).first().waitFor();
+  await page.waitForTimeout(1500);
+  expect(await page.locator('[data-yunui="time-series-readout"]').count()).toBe(
+    0,
+  );
+});
+
+test("stat card meta never breaks inside a term", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await install(page);
+  await page.goto("/console/#/overview", { waitUntil: "domcontentloaded" });
+  await page.getByTestId("overview-stats").waitFor();
+  const bad = await page
+    .getByTestId("overview-stats")
+    .evaluate((grid) =>
+      [...grid.querySelectorAll(".yunui-stat-sub")].flatMap((sub) =>
+        [...sub.querySelectorAll("span")]
+          .filter((s) => getComputedStyle(s).whiteSpace !== "nowrap")
+          .map((s) => s.textContent),
+      ),
+    );
+  expect(bad).toEqual([]);
+});
+
+test("phone lint: every page at 402px has no hairlines in cards and no stray rules", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 402, height: 874 });
+  await install(page);
+  for (const p of PAGES) {
+    await page.goto(`/console/#/${p}`, { waitUntil: "domcontentloaded" });
+    await page.getByRole("heading", { level: 1 }).first().waitFor();
+    await page.waitForTimeout(600);
+    expect(await lint(page), p).toEqual([]);
   }
 });

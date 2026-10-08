@@ -46,12 +46,11 @@ export function FooterStatus({
   const bar = (
     <StatusPillBar
       ariaLabel={t("shell.footer.ariaLabel")}
-      className="shrink-0 gap-x-5 px-4 lg:px-6"
+      className="shrink-0 px-4 pb-3 pt-1 lg:px-6"
     >
       {pills.map((p) => (
         <StatusPill
           key={p.key}
-          flat
           label={p.label}
           value={p.value}
           valueMinCh={p.minCh}
@@ -67,22 +66,22 @@ export function FooterStatus({
   const live = livePill(engine.phase, engine.status);
   return (
     <>
-      <Button
-        variant="ghost"
-        className="h-10 w-full justify-between rounded-none px-4"
-        aria-haspopup="dialog"
-        aria-expanded={open}
-        data-testid="footer-compact"
-        onClick={() => setOpen(true)}
-      >
-        <span className="flex min-w-0 items-center gap-2 text-xs">
+      <div className="px-4 pb-3 pt-1">
+        <Button
+          variant="outline"
+          className="h-8 max-w-full gap-2 rounded-full bg-(--bg-elevated) px-3 text-[11px]"
+          aria-haspopup="dialog"
+          aria-expanded={open}
+          data-testid="footer-compact"
+          onClick={() => setOpen(true)}
+        >
           <StatusIndicator status={live.tone} />
           <span className="truncate tabular-nums">
             {[live.phase, live.detail].filter(Boolean).join(" ")}
           </span>
-        </span>
-        <ChevronUp size={14} className="shrink-0 text-muted-foreground" />
-      </Button>
+          <ChevronUp size={13} className="shrink-0 text-muted-foreground" />
+        </Button>
+      </div>
       <Sheet
         open={open}
         onClose={() => setOpen(false)}

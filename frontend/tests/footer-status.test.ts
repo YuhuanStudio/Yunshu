@@ -67,7 +67,10 @@ test("idle online: engine, now and memory only; no last-request pills", () => {
   assert.equal(pills[2].value, undefined);
   assert.ok(!JSON.stringify(pills).includes("TTFT"));
   assert.ok(pills[0].help.includes("2 小時 1 分"));
-  assert.ok(pills.every((p) => p.tone === "neutral"));
+  // Running is the success tone on the dot; idle work has no dot and stays neutral.
+  assert.equal(pills[0].tone, "success");
+  assert.equal(pills[2].tone, "neutral");
+  assert.equal(pills[2].dot, false);
 });
 
 test("decoding shows live tok/s and the active count", () => {

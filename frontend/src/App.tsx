@@ -847,7 +847,7 @@ export default function App() {
                 </Suspense>
               </div>
             </main>
-            <footer className="safe-bottom shrink-0 border-t border-border/60 bg-(--bg-window)">
+            <footer className="safe-bottom shrink-0" data-testid="status-band">
               <FooterStatus engine={engine} connection={connection} />
             </footer>
           </div>
