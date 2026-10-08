@@ -107,3 +107,30 @@ List API/CLI/default changes and migration steps in Unreleased. Stable interface
 follow the [deprecation policy](RELEASING.md#compatibility-and-deprecation-policy).
 Large architecture changes use the [RFC process](docs/ROADMAP.md#lightweight-rfc-process).
 Triage uses the [label vocabulary](.github/LABELS.md).
+
+## Local CI and shared GPU verification
+
+`scripts/dev/ci-local <commit-sha>` reproduces release build-and-check in a clean
+Python 3.13 checkout: lint, sandboxed unit tests, package build, twine validation
+and wheel-install smoke. It is CPU only. Use `nice -n 15` for heavy test/build
+commands on a shared benchmark Mac. Focused public-doc checks are:
+
+```bash
+nice -n 15 uv run pytest tests/unit/test_public_docs.py tests/unit/test_doc_source_consistency.py -q
+uv run python scripts/gen_config_docs.py --check
+uv run python scripts/dev/api_coverage.py
+```
+
+On the project's shared test machine, every model run goes through
+`scripts/dev/gpuq`; run candidate comparisons through [yv](docs/guides/VERIFY.md)
+with distinct committed base/candidate SHAs. A queue job being done is insufficient:
+read its exit status and complete output record. Timing jobs use `--quiet`;
+correctness jobs do not. Labels identify their owner; experimental work uses
+priority -1 (>=80 GB uses -2). Priority 0 is reserved for designated snapshot/sync
+work; do not use positive priorities. Servers share ports 18990–18999 and wait
+for a free port. Never stop a user's server to make a test fit.
+
+`gpuq submit --gate` moves a gate ahead of same-priority backlog. Declared short
+jobs (`--timeout` <=10 minutes or `--short`) may interleave between long cells,
+without preempting active work. See `scripts/dev/gpuq --help` for current options.
+Documentation-only changes can use `yv ab --suite preflight` without GPU jobs.

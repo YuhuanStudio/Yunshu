@@ -6,6 +6,9 @@ tests Yunshu the way a user gets it: built into a wheel, installed with `uv tool
 clean environment, and driven over HTTP with the official OpenAI and Anthropic SDKs. Every check
 prints `PASS`, `FAIL` or `SKIP`. The run ends with a table and exits 1 if anything failed.
 
+On a shared benchmark machine, invoke `scripts/dev/yv gate` so model runs are
+queued. The direct script commands below are for a dedicated machine.
+
 ```sh
 zsh scripts/release/gate.sh                          # install, serve-27b, families, soak
 STAGE=install,serve-27b zsh scripts/release/gate.sh  # any subset, comma-separated
