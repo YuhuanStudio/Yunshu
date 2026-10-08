@@ -730,9 +730,9 @@
       "commit": "v0.31.3",
       "license": "MIT",
       "why": "upstream parsers backing each format",
-      "reviewed_commit": "5cfec4cb39deba54210b3ff4d86f2337c7bc10b5",
-      "reviewed_date": "2026-10-04",
-      "review_reason": "Installed mlx-vlm 0.7.4/mlx-lm 0.32.0 parsers already contain the relevant released tool/harmony fixes. Local dispatch and request schemas remain independent; main typed-argument fix is tracked as a regression candidate."
+      "reviewed_commit": "9d8abd94d63a9b3c72e7e9b146e43af1005368fa",
+      "reviewed_date": "2026-10-08",
+      "review_reason": "Reviewed 259b8dd MiniCPM5 parser (new family, not served locally) and a537041 Qwen3 Coder missing top-level type fix; the latter is covered by the independent untyped-XML coercion in tool_arguments.py with its own regressions. Local dispatch stays independent."
     },
     {
       "kind": "inspired",
@@ -877,9 +877,9 @@
       "commit": "deb9f00a",
       "license": "Apache-2.0",
       "why": "mRoPE delta capture and batch decode positions",
-      "reviewed_commit": "68c8c09f6f6a54fe36181f9aabba9525797d1b58",
-      "reviewed_date": "2026-10-04",
-      "review_reason": "Only mRoPE algorithm is inspired by upstream scheduler. Upstream changes are scheduler/memory/offload/prefill-tail contracts, not replacements for local request-local rotary positions."
+      "reviewed_commit": "b75060e85560cdb49448d4c91c08bf8a6c91fd0d",
+      "reviewed_date": "2026-10-08",
+      "review_reason": "Reviewed eight scheduler.py commits (MiniMax grammar after thinking, qwen4 prefill route, paged KV out of completion snapshots, MLX 0.32.3 upgrade, SSD-streamed MoE experts). None touches the mRoPE position algorithm this file is inspired by; Yunshu keeps mlx<0.32.4. No port."
     },
     {
       "kind": "inspired",
@@ -970,9 +970,9 @@
       "commit": "a0ba1968",
       "license": "Apache-2.0",
       "why": "radix-tree prefix matching",
-      "reviewed_commit": "7760d5264ac16b85392aefb1bf5c13ce38d9632e",
+      "reviewed_commit": "943621c3364de6948fc02ee13c55b4f1cdf97f3a",
       "reviewed_date": "2026-10-08",
-      "review_reason": "Retain independent local radix/cache arithmetic. TreeLock and checkpoint/publication changes use SGLang ownership hooks; draft KV capture bounds and exact beta sigmoid are correctness probes in the backlog. No distributed cache hooks or lossy defaults are imported."
+      "review_reason": "Reviewed 5a4d01a3 match_prefix returning only the matched length with KV indices read off the node path; an SGLang radix-tree API refactor, local prefix match already returns lengths from its own tree. No port."
     },
     {
       "kind": "inspired",
@@ -2237,8 +2237,8 @@
       "pin_package": "mlx",
       "commit": "6553c47ba6500e877d7348dd576c021c43a22cf7",
       "reviewed_date": "2026-10-08",
-      "reviewed_commit": "6553c47ba6500e877d7348dd576c021c43a22cf7",
-      "review_reason": "Reviewed 264c14fe ruff-only Python changes, fa7b5b8c C_per_group=8 convolution loader, f8aaf49d partial-output float-sum qmv (already transcribed by qmvsync), and 83b976ea SDPA VJP. Keep <0.32.4 pending real wheel/compiler and long M5 numerics; no inference default copied from training VJP. See U015-R2-03."
+      "reviewed_commit": "3c40e8f92d0cce0866fc2f436f9b5096cf3b0ea7",
+      "review_reason": "Reviewed 3c40e8f9 thin-N NAX GEMM (new steel_gemm_thin_nax kernels, stock-only; local verify/decode kernels do not call it) and 494c8a6c split-K quantized-matmul partials in float32 (changes stock qmm_splitk rounding; stock path is not used by the batch-invariant lane). Both land after 0.32.3; the mlx<0.32.4 cap stays until a genuine source build passes the long identity."
     },
     {
       "repo": "https://github.com/ashhart/TensorFold",
@@ -2269,7 +2269,9 @@
       ],
       "why": "radix prefix cache, speculative decoding, structured output",
       "commit": "7760d5264ac16b85392aefb1bf5c13ce38d9632e",
-      "reviewed_date": "2026-10-08"
+      "reviewed_date": "2026-10-08",
+      "reviewed_commit": "943621c3364de6948fc02ee13c55b4f1cdf97f3a",
+      "review_reason": "Reviewed 5a4d01a3 match_prefix returns only matched length, b3e6c87b single KV-loc translation, 508ddc85 DFLASH/DSPARK admission with fused draft KV under unified memory. Scheduler-internal refactors of a different cache design; no local equivalent changes. Independent single-node code retained."
     },
     {
       "repo": "https://github.com/vllm-project/vllm",
@@ -2283,7 +2285,9 @@
       ],
       "why": "n-gram / suffix / MTP proposers, block pool, mRoPE",
       "commit": "3ca00a8261c7790ba7487e2001ab9004ad8065f2",
-      "reviewed_date": "2026-10-08"
+      "reviewed_date": "2026-10-08",
+      "reviewed_commit": "458ba2edf85bc9b7ebc0d5141f34ea658520faf5",
+      "review_reason": "Reviewed e161a079 free-KV-queue overhead reduction in the paged block pool; Yunshu has no block pool. No port."
     },
     {
       "repo": "https://github.com/ggml-org/llama.cpp",
@@ -2397,9 +2401,9 @@
       ],
       "why": "fused add+norm and other Metal kernels in a Zig MLX server",
       "commit": "6281442d",
-      "reviewed_commit": "f9ff1f1024ac054f874abf62234a527b39114d57",
+      "reviewed_commit": "459a68b75a940b1d1d1c286615b916d087c1d7ab",
       "reviewed_date": "2026-10-08",
-      "review_reason": "Reviewed full 214-commit history (117 watched in prior receipt) through 93efabb: decode-end hybrid checkpoint+MTP carried row, one-token SSD restore guard, durable-store disk probe, late-system templates, tools/schema/ref parsing, token-id completion, usage/UTF8 SSE, model/LoRA refusals, MTP cleanup and family loaders. Decisions D1/Clef follow decisions2; Zig/EXL3/Sushi/Flash-Next kernels are not drop-in 27B Python ports. See U015-R2-19..26. Fetch follow-up f9ff1f1 removes one duplicate mlx_from_fp8 Zig extern declaration introduced by merged PRs; no local Zig ABI/code to port."
+      "review_reason": "Reviewed 431b353 omp launcher sends thinking level as reasoning_effort (CLI launch glue only). No server-side change to port."
     },
     {
       "repo": "https://github.com/Blaizzy/mlx-audio",
@@ -2484,7 +2488,9 @@
       ],
       "why": "Independent Z-Image parity bridge depends on unchanged HF raw cache, mapper and applier APIs; watch native quantized-format support and arithmetic drift.",
       "commit": "465df30a3965b38c9c64fa853e26df140ddd5c55",
-      "reviewed_date": "2026-10-08"
+      "reviewed_date": "2026-10-08",
+      "reviewed_commit": "52295bc4d6309917639c885e2d0218d89b49525d",
+      "review_reason": "Reviewed c621239 --scheduler=NAME CLI spelling on Z-Image/ERNIE; loader, mapper and applier APIs the parity bridge uses are unchanged."
     }
   ],
   "packages": [
@@ -2850,6 +2856,15 @@
       ],
       "reviewed_date": "2026-10-08",
       "reason": "Installed tokenizers 0.23.2 and diffusers 0.41.0 both require huggingface-hub<2.0; keep the resolver-valid 1.33.0. Recheck when either wheel or latest hub version changes."
+    },
+    "trafilatura": {
+      "installed_version": "2.1.0",
+      "latest_version": "2.3.1",
+      "blocked_by": [
+        "pyproject"
+      ],
+      "reviewed_date": "2026-10-08",
+      "reason": "2.3.1 escapes underscores in extracted markdown (CODE_01_RIVER becomes CODE\\_01\\_RIVER), failing tests/unit/test_websearch_eval.py gold-answer fixtures; keep the ==2.1.0 pin until the extraction wrapper normalizes or upstream restores it. Expires when the pin or either version changes."
     }
   }
 }

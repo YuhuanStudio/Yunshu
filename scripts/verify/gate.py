@@ -170,8 +170,14 @@ def run_gate(
     repo: Path | None = None,
     extra_env: dict | None = None,
     priority: int = 0,
-    label_prefix: str = "infra",
+    label_prefix: str | None = None,
 ) -> int:
+    label_prefix = (
+        label_prefix
+        or os.environ.get("YV_LABEL_PREFIX")
+        or os.environ.get("GPUQ_OWNER")
+        or "infra"
+    )
     gq = gq or Gpuq()
     repo = repo or REPO
     stages = stages or list(DEFAULT_STAGES)

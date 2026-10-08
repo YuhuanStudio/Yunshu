@@ -273,3 +273,28 @@ def test_package_review_only_covers_exact_version_with_live_blocker(
     assert cu.check_packages({"huggingface-hub": [">=1"]}, reviews) == (
         0 if latest == "2.1.1" and blocked else 1
     )
+
+
+@pytest.mark.parametrize(
+    ("installed", "latest", "spec", "expected"),
+    [
+        ("2.1.0", "2.3.1", "==2.1.0", ["pyproject: ==2.1.0"]),
+        ("2.1.0", "2.3.1", ">=2.1.0", []),  # pin lifted: the review no longer applies
+        ("2.1.0", "2.4.0", "==2.1.0", []),  # newer release than the one reviewed
+    ],
+)
+def test_package_review_covers_a_deliberate_pyproject_pin(
+    installed, latest, spec, expected
+):
+    reviews = {
+        "trafilatura": {
+            "installed_version": "2.1.0",
+            "latest_version": "2.3.1",
+            "blocked_by": ["pyproject"],
+            "reason": "2.3.1 escapes underscores in extracted markdown.",
+        }
+    }
+    assert (
+        cu.reviewed_package_blockers("trafilatura", installed, latest, reviews, spec)
+        == expected
+    )

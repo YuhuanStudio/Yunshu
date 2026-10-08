@@ -344,7 +344,7 @@ def check_watch(watch, vendored_paths: set, pins: dict) -> int:
 
 
 def reviewed_package_blockers(
-    name: str, installed: str, latest: str, reviews: dict
+    name: str, installed: str, latest: str, reviews: dict, declared: str = ""
 ) -> list[str]:
     """A review expires when either version or the installed constraints change."""
     from packaging.requirements import Requirement
@@ -359,6 +359,15 @@ def reviewed_package_blockers(
         return []
     blockers = []
     for owner in review.get("blocked_by", []):
+        if owner == "pyproject":
+            # A deliberate pin of our own: expires when the pin or either version moves.
+            from packaging.specifiers import SpecifierSet
+
+            for raw in filter(None, (s.strip() for s in declared.split(","))):
+                spec = SpecifierSet(raw)
+                if Version(installed) in spec and Version(latest) not in spec:
+                    blockers.append(f"pyproject: {raw}")
+            continue
         try:
             requirements = importlib.metadata.requires(owner) or []
         except importlib.metadata.PackageNotFoundError:
@@ -394,7 +403,7 @@ def check_packages(packages, reviews: dict | None = None) -> int:
             latest = "?"
         flag = "" if latest in ("?", installed) else "  <- newer on PyPI"
         blockers = (
-            reviewed_package_blockers(name, installed, latest, reviews or {})
+            reviewed_package_blockers(name, installed, latest, reviews or {}, declared)
             if flag
             else []
         )

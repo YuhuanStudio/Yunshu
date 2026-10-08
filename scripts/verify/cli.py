@@ -138,7 +138,11 @@ def build_parser() -> argparse.ArgumentParser:
     gt.add_argument(
         "--ref", help="verify this pinned commit instead of the current tree"
     )
-    gt.add_argument("--label-prefix", default="infra", help="gpuq job owner prefix")
+    gt.add_argument(
+        "--label-prefix",
+        default=None,
+        help="gpuq job owner prefix (default: YV_LABEL_PREFIX, GPUQ_OWNER, then infra)",
+    )
     gt.add_argument("--root", help="isolated gate install/cache root")
     sub.add_parser("suites", help="list suites")
     return ap
