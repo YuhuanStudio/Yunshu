@@ -836,18 +836,19 @@ test("presets: built-in applies, a saved preset persists per service address and
       ),
     )
     .toContain("我的預設");
-  const stored = await page.evaluate(() =>
-    new Promise<string>((resolve) => {
-      const open = indexedDB.open("yunshu-playground", 1);
-      open.onsuccess = () => {
-        const db = open.result;
-        const r = db.transaction("library").objectStore("library").getAll();
-        r.onsuccess = () => {
-          db.close();
-          resolve(JSON.stringify(r.result));
+  const stored = await page.evaluate(
+    () =>
+      new Promise<string>((resolve) => {
+        const open = indexedDB.open("yunshu-playground", 1);
+        open.onsuccess = () => {
+          const db = open.result;
+          const r = db.transaction("library").objectStore("library").getAll();
+          r.onsuccess = () => {
+            db.close();
+            resolve(JSON.stringify(r.result));
+          };
         };
-      };
-    }),
+      }),
   );
   expect(stored).not.toContain(api.token);
   await page.reload();
@@ -886,15 +887,24 @@ test("history: a finished chat is kept locally, resumes after a new test, delete
 test("storage that throws never breaks the playground", async ({ page }) => {
   const api = createApiFixture();
   await api.attach(page);
-  const playground = await openPlayground(page, api);
-  await page.evaluate(() => {
+  // Storage is broken from the first script on, not patched after the app has started. Patching the
+  // factory's `open` after load was racy: WebKit keeps IndexedDB data between tests of one worker, so
+  // a database an earlier test created made the late patch miss the app's write and the "browser
+  // refused to save" notice never came.
+  await page.addInitScript(() => {
     Storage.prototype.setItem = () => {
       throw new Error("quota");
     };
-    indexedDB.open = () => {
-      throw new Error("blocked");
-    };
+    Object.defineProperty(window, "indexedDB", {
+      configurable: true,
+      value: {
+        open: () => {
+          throw new Error("blocked");
+        },
+      },
+    });
   });
+  const playground = await openPlayground(page, api);
   await playground.locator("textarea").first().fill("no storage");
   await page.getByRole("button", { name: "傳送測試", exact: true }).click();
   await expect(playground).toContainText("is four.");
@@ -931,13 +941,17 @@ test("library: rename and overwrite a preset, branch a conversation, export and 
   await expect(library.getByTestId("saved-preset")).toContainText("新名");
   // History: branch makes a second entry.
   await library.getByRole("tab", { name: "紀錄" }).click();
-  await expect(library.getByTestId("history-list").locator("li")).toHaveCount(1);
+  await expect(library.getByTestId("history-list").locator("li")).toHaveCount(
+    1,
+  );
   await library.getByRole("button", { name: /^從 .* 建立分支$/ }).click();
   await library
     .getByTestId("branch-editor")
     .getByRole("button", { name: "建立分支", exact: true })
     .click();
-  await expect(library.getByTestId("history-list").locator("li")).toHaveCount(2);
+  await expect(library.getByTestId("history-list").locator("li")).toHaveCount(
+    2,
+  );
   await expect(library.getByTestId("history-list")).toContainText("（分支）");
   // Export, then import a wrong file (refused) and a good one (merged, undoable).
   const download = page.waitForEvent("download");
@@ -952,5 +966,7 @@ test("library: rename and overwrite a preset, branch a conversation, export and 
   });
   await expect(page.getByText("不是推理測試的匯出檔").first()).toBeVisible();
   await library.locator('input[type="file"]').setInputFiles(path!);
-  await expect(page.getByText(/已匯入 1 個預設、2 則紀錄/).first()).toBeVisible();
+  await expect(
+    page.getByText(/已匯入 1 個預設、2 則紀錄/).first(),
+  ).toBeVisible();
 });
