@@ -1507,14 +1507,17 @@ class VLMEngine:
             started = True
             t0 = time.perf_counter()
             extras: dict = call.keywords["extras"]
-            await loop.run_in_executor(self._runner_consumers(), call)
+            outcome = await loop.run_in_executor(self._runner_consumers(), call)
+            cached = int(outcome[5]) if outcome and len(outcome) > 5 else -1
             cancelled = ev.is_set()
             next_turn.record(
                 "cancelled" if cancelled else "completed",
                 0 if cancelled else int(extras.get("prompt_tokens") or 0),
             )
             logger.info(
-                "next-turn rehearsal done in %.2fs%s",
+                "next-turn rehearsal: prompt %s tokens, %s cached, done in %.2fs%s",
+                extras.get("prompt_tokens"),
+                cached,
                 time.perf_counter() - t0,
                 " (cancelled)" if cancelled else "",
             )
