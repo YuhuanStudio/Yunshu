@@ -5,17 +5,12 @@
 2	python/yunshu_cli/config.py	arg-type	Argument 3 to "write_config_value" has incompatible type "str | None"; expected "Path | None"
 1	python/yunshu_cli/diagnose.py	assignment	Incompatible types in assignment (expression has type "float", variable has type "int")
 2	python/yunshu_cli/doctor.py	attr-defined	Module has no attribute "__version__"
-2	python/yunshu_cli/eval.py	arg-type	Argument 2 to "run" of "BaseBenchmark" has incompatible type "str | None"; expected "str"
 2	python/yunshu_cli/eval.py	no-any-return	Returning Any from function declared to return "bool"
 2	python/yunshu_cli/eval.py	no-any-return	Returning Any from function declared to return "str | None"
 3	python/yunshu_cli/eval.py	no-any-return	Returning Any from function declared to return "str"
-1	python/yunshu_cli/eval.py	union-attr	Item "None" of "BaseBenchmark | None" has no attribute "load_dataset"
-2	python/yunshu_cli/eval.py	union-attr	Item "None" of "BaseBenchmark | None" has no attribute "name"
-1	python/yunshu_cli/eval.py	union-attr	Item "None" of "BaseBenchmark | None" has no attribute "run"
 1	python/yunshu_cli/infer.py	assignment	Incompatible types in assignment (expression has type "int", target has type "Sequence[str]")
 1	python/yunshu_cli/infer.py	no-any-return	Returning Any from function declared to return "bytes"
 1	python/yunshu_cli/infer.py	no-any-return	Returning Any from function declared to return "dict[Any, Any]"
-1	python/yunshu_cli/infer.py	return	Missing return statement
 1	python/yunshu_cli/integrations/__init__.py	arg-type	Argument 1 to "_claude_user_settings" has incompatible type "_Environ[str]"; expected "dict[str, str]"
 2	python/yunshu_cli/integrations/__init__.py	no-any-return	Returning Any from function declared to return "str | None"
 1	python/yunshu_cli/model.py	misc	Cannot infer type of lambda
