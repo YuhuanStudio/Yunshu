@@ -18,17 +18,28 @@ import pytest
 
 from yunshu_engine import tool_format as tf
 
-REF = Path(__file__).resolve()
-for parent in REF.parents:
-    cand = parent / "reference" / "mlx-lm" / "mlx_lm" / "tool_parsers"
-    if cand.is_dir():
-        REF = cand
-        break
-else:
-    # worktrees sit beside the main checkout
-    REF = Path(
-        "/Users/yuhuan/Documents/YuhuanStudio/Yunshu/reference/mlx-lm/mlx_lm/tool_parsers"
-    )
+_MAIN = Path(
+    "/Users/yuhuan/Documents/YuhuanStudio/Yunshu/reference/mlx-lm/mlx_lm/tool_parsers"
+)
+
+
+def _find_ref() -> Path | None:
+    for cand in (
+        *(
+            p / "reference/mlx-lm/mlx_lm/tool_parsers"
+            for p in Path(__file__).resolve().parents
+        ),
+        _MAIN,
+    ):
+        try:
+            if cand.is_dir():
+                return cand
+        except OSError:  # unreadable under the CI sandbox
+            continue
+    return None
+
+
+REF = _find_ref()
 
 pytestmark = pytest.mark.skipif(
     not REF.is_dir(), reason="reference/mlx-lm clone missing"
