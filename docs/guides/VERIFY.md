@@ -6,19 +6,24 @@ submits every GPU job to gpuq itself with sane memory / timeout / `--quiet` sett
 the first failed stage, remembers what finished, and writes `verdict.json` and `verdict.md`.
 
 ```sh
-scripts/dev/yv ab --base main --cand my-branch --suite decode --label wide8-lane-fusion
-scripts/dev/yv ab --base main --cand . --cand-env YUNSHU_FOO=1 --suite prefill --label prefill7-x --detach
+scripts/dev/yv ab --base <base-sha> --cand <candidate-sha> --suite decode --label wide8-lane-fusion
+scripts/dev/yv ab --base <base-sha> --cand <candidate-sha> --cand-env YUNSHU_VLM_DRAFT=mtp --suite prefill --label prefill7-x --detach
 scripts/dev/yv status <run>      # state of a run (directory or name under .../verify/runs)
 scripts/dev/yv wait <run>        # block until the verdict; exit code = the verdict's
 scripts/dev/yv suites            # list suites
 scripts/dev/yv gate              # release gate with per-stage persistence
 scripts/dev/yv gate --ref COMMIT_SHA --label-prefix worker --root /Volumes/P5Plus/yunshu-build/gate-worker --stages install,serve-27b,families
+scripts/dev/yv ab --base <base-sha> --cand <candidate-sha> --suite preflight --label docs-check  # CPU only
 ```
 
 Exit code: 0 every stage passed, 1 a stage failed, 2 infrastructure error (tool, git, gpuq,
 parameter mismatch). `yv ab` blocks until done; `--detach` returns at once.
 
 ## Arms
+
+For a reviewable verdict, commit both arms and pass their full commit SHAs. Check the
+first line of `yv.log` to confirm the intended base and candidate differ. Directory
+arms are supported by the tool but do not provide a final committed verdict.
 
 `--base` / `--cand` take a git ref or a checkout directory. A ref becomes a detached worktree
 under `/Volumes/P5Plus/yunshu-build/verify/trees/<commit12>`, reused by commit hash. A directory
@@ -50,7 +55,7 @@ context, harness hash, device): the next candidate against the same base reruns 
 
 ## Suites
 
-`decode` (preflight, smoke, identity at 1K / 8K, apc, speed; `--spec-off` adds spec on == off (fails on main today, see BACKLOG)), `prefill`
+`decode` (preflight, smoke, identity at 1K / 8K, apc, speed; `--spec-off` adds spec on == off), `prefill`
 (identity up to 32K, apc, quality, speed), `scheduler`, `memory`, `full` (everything, 1K / 8K / 32K),
 `long` (32K / 64K / 128K split cells of 2048-token replies via `tfbench --decode-tokens`: identity incl. spec on == off, apc, speed, memory at 32K / 128K, longqa, conc; every stage runs even after a failure), `longtrend` (one rep, 32K / 128K prose, for tag-to-tag comparisons), `tiny` (everything on a small model, for dry runs of the tool). `--suite smoke,identity,speed`
 builds an ad-hoc ladder (stages keep their canonical order). Overrides: `--ctx 1024,8192`,
@@ -143,14 +148,21 @@ configuration on a pinned tree of `--ref` (default `main`), the pinned agent CLI
 error, malformed tool call or tool-call markup leak is FAIL; the pass rate per agent is compared with the 2026-09-30 baseline (Wilson 95%
 interval) and a drop below its lower bound is REGRESSION. Reported per agent: pass rate, API errors, malformed tool calls, markup leaks,
 cache-hit ratio, largest prompt, median wall time, peak memory. Where it runs: **nightly at priority -1** (idle GPU time only; one full
-matrix is about 6 to 8 hours of 27B time), and **before a release** by running it on the release commit and attaching its verdict next to
-`yv gate`'s (not a `gate` stage yet: the full matrix is longer than the rest of the gate together).
+matrix is about 6 to 8 hours of 27B time), and **during release verification** through `scripts/dev/release_check`: it submits the same committed candidate
+at priority -3 without waiting, prints its later collect command, and treats its verdict as informational.
+The gate, M3 sweep and agent compatibility remain blocking. Never leave its result uncollected.
 
 ## Adding a new kind of measurement
 
 Ad-hoc scripts are for measurements `yv` does not cover. Put them in `scripts/research/` with a CPU
 unit test, make them write a final `complete: true` record, and then add them as a stage or a
 cell in `scripts/verify/stages.py` so the next worker does not need the script.
+
+### Web tools
+
+`yv ab --base BASE_SHA --cand CAND_SHA --suite preflight,websearch --label websearch-smoke --model /Volumes/P5Plus/models/Qwen3.5-0.8B-MLX-bf16 --priority -1` exercises the existing `route_checks_tools` search contract against a loopback SearXNG/page fixture, then candidate Responses `open_page`/`find_in_page` and resident Qwen3-Embedding-0.6B fusion, plus ten frozen adversarial fixture replays. The fixture pilot cannot approve the 200-pair quality gate. This optional stage is excluded from the core full/decode ladder. Use the main checkout gpuq (`YV_GPUQ`) and `GPUQ_OWNER=websearch`. CPU probe/validator tests run before queue submission; every result ends with `complete: true`. It is correctness smoke, never a performance or answer-quality verdict.
+
+The frozen eval entry point is `scripts/research/websearch_eval.py`; the dated 130-query seed set is `scripts/research/data/websearch_queries.jsonl`. Capture writes pending gold, never invented answers. Curate references before replay; `--dry-run` makes no answer-quality claim. Raw page snapshots remain private.
 
 ### Reranker / classifier oracle
 
@@ -180,3 +192,7 @@ RERANK_MODEL_ROOT=PATH` overrides the model root. Encoder head serving needs the
 promotes a copy of successful evidence and keeps the original gpuq-declared output
 so digest and watchdog checks can still verify it. A finished job without an
 explicit return code of zero fails verification.
+
+### Evals API correctness
+
+`yv ab --base <main-sha> --cand <candidate-sha> --suite evals --model /Volumes/P5Plus/models/Qwen3.5-0.8B-MLX-bf16 --label evals-smoke-<unique> --priority -1 --detach` runs CPU preflight and the 12-route SDK check against a real server. The `evals` stage exercises normal chat sampling plus local score/label graders; it makes no speed or accuracy comparison. Its JSONL evidence must end with `complete: true`, `passed: true`, 12 routes and three model invocations.

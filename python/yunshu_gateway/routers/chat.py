@@ -32,6 +32,7 @@ from yunshu_engine import settings
 from yunshu_engine.tool_call_streamer import ToolCallStreamer
 from yunshu_engine.tool_format import parse_tool_output, tool_formats
 
+from ..continuous_usage import update_usage, with_continuous_usage
 from ..engine import get_engine, get_model_manager
 from ..error_envelope import EngineStreamError, server_error_body, server_error_sse
 from ..streaming import (
@@ -389,6 +390,7 @@ class StreamOptions(BaseModel):
     """OpenAI stream_options parameter."""
 
     include_usage: bool = False
+    continuous_usage_stats: bool = False
 
 
 class ChatCompletionRequest(BaseModel):
@@ -2844,8 +2846,15 @@ async def _handle_vlm_chat(
             )
         if err is not None:
             return JSONResponse(
-                status_code=500,
-                content={"error": {"message": err, "type": "inference_error"}},
+                status_code=400 if err.startswith("input_error:") else 500,
+                content={
+                    "error": {
+                        "message": err,
+                        "type": "invalid_request_error"
+                        if err.startswith("input_error:")
+                        else "inference_error",
+                    }
+                },
             )
 
     if json_schema is not None:
@@ -2930,6 +2939,7 @@ async def _handle_vlm_chat(
     )
 
 
+@with_continuous_usage
 async def _stream_vlm_response(
     vlm_engine,
     messages: list[dict],
@@ -3103,6 +3113,13 @@ async def _stream_vlm_response(
                 if output.finish_reason is not None:
                     vlm_last_finish_reason = output.finish_reason
                 # Track emitted text for stop-sequence correction
+                update_usage(
+                    req,
+                    vlm_prompt_tok,
+                    vlm_completion_tok,
+                    vlm_reasoning_tok,
+                    vlm_cached_tok,
+                )
                 _vlm_token_text = output.token_text or ""
                 if (
                     _vlm_token_text
@@ -3137,6 +3154,13 @@ async def _stream_vlm_response(
                             break
                 # Route thinking content based on engine's current_state
                 _is_reasoning = getattr(output, "current_state", None) == "reasoning"
+                update_usage(
+                    req,
+                    vlm_prompt_tok,
+                    vlm_completion_tok,
+                    vlm_reasoning_tok,
+                    vlm_cached_tok,
+                )
                 _vlm_token_text = output.token_text or ""
                 _vlm_is_final = output.finish_reason is not None
                 _chunk_lp = (
@@ -3419,6 +3443,7 @@ def _format_tool_call_args_delta_chunk(
     return f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
 
 
+@with_continuous_usage
 async def _stream_response_multi(
     engine,
     messages: list[dict],
@@ -3578,6 +3603,13 @@ async def _stream_response_multi(
                     ):
                         # Only count non-reasoning tokens toward completion_tok
                         choice_completion_tok += 1
+                    update_usage(
+                        req,
+                        total_prompt_tok,
+                        total_completion_tok + choice_completion_tok,
+                        total_reasoning_tok + choice_reasoning_tok,
+                        total_cached_tok,
+                    )
                     # Only set finish_reason on the final token from engine
                     fr = output.finish_reason
                     if fr is not None:
@@ -3625,6 +3657,13 @@ async def _stream_response_multi(
                                     except Exception:
                                         pass
                                 break
+                    update_usage(
+                        req,
+                        total_prompt_tok,
+                        total_completion_tok + choice_completion_tok,
+                        total_reasoning_tok + choice_reasoning_tok,
+                        total_cached_tok,
+                    )
                     # Route thinking content based on SequenceStateMachine state
                     _is_reasoning = (
                         getattr(output, "current_state", None) == "reasoning"
@@ -3800,6 +3839,13 @@ async def _stream_response_multi(
                     ):
                         # Only count non-reasoning tokens toward completion_tok
                         choice_completion_tok += 1
+                    update_usage(
+                        req,
+                        total_prompt_tok,
+                        total_completion_tok + choice_completion_tok,
+                        total_reasoning_tok + choice_reasoning_tok,
+                        total_cached_tok,
+                    )
                     # Only set finish_reason on the final token from engine
                     fr = getattr(output, "finish_reason", None)
                     if fr is not None:
@@ -3844,6 +3890,13 @@ async def _stream_response_multi(
                                     except Exception:
                                         pass
                                 break
+                    update_usage(
+                        req,
+                        total_prompt_tok,
+                        total_completion_tok + choice_completion_tok,
+                        total_reasoning_tok + choice_reasoning_tok,
+                        total_cached_tok,
+                    )
                     # Route thinking content based on SequenceStateMachine state
                     _is_reasoning = (
                         getattr(output, "current_state", None) == "reasoning"
@@ -4160,6 +4213,7 @@ def _format_chat_logprobs(
     return {"content": content} if content else None
 
 
+@with_continuous_usage
 async def _stream_response(
     engine,
     messages: list[dict],
@@ -4369,6 +4423,7 @@ async def _stream_response(
                                     pass
                             break
 
+                update_usage(req, prompt_tok, completion_tok, reasoning_tok, cached_tok)
                 _chunk_lp = (
                     _format_chat_logprobs(
                         output.logprobs,
@@ -4522,6 +4577,7 @@ async def _stream_response(
                     cached_tok = max(cached_tok, output.cached_tokens)
                 if output.finish_reason is not None:
                     last_finish_reason = output.finish_reason
+                update_usage(req, prompt_tok, completion_tok, reasoning_tok, cached_tok)
                 _chunk_lp = (
                     _format_chat_logprobs(
                         output.logprobs,

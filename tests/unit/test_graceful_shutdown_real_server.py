@@ -15,13 +15,7 @@ from pathlib import Path
 import httpx
 
 ROOT = Path(__file__).resolve().parents[2]
-
-
-def _pick_port() -> int:
-    # CPU-only fixture: avoid the GPU server pool.
-    with socket.socket() as probe:
-        probe.bind(("127.0.0.1", 0))
-        return probe.getsockname()[1]
+from .bound_listener import reserve_listener
 
 
 def test_graceful_shutdown_timeout_values():
@@ -31,14 +25,16 @@ def test_graceful_shutdown_timeout_values():
 
 
 def _start(drain: str, delay="0.2", n="15"):
-    port = _pick_port()
     env = {
         **os.environ,
         "YUNSHU_DRAIN_TIMEOUT": drain,
-        "PYTHONPATH": str(ROOT / "python"),
-        "YUNSHU_AUTH_DISABLED": "1",
+        "PYTHONPATH": os.pathsep.join(
+            filter(None, (str(ROOT / "python"), os.environ.get("PYTHONPATH")))
+        ),
     }
     env.pop("YUNSHU_AUTH_TOKEN", None)
+    listener = reserve_listener()
+    port = listener.getsockname()[1]
     p = subprocess.Popen(
         [
             sys.executable,
@@ -46,35 +42,63 @@ def _start(drain: str, delay="0.2", n="15"):
             str(port),
             delay,
             n,
+            str(listener.fileno()),
         ],
         env=env,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
+        pass_fds=(listener.fileno(),),
     )
+    listener.close()
+    p.test_port = port
     for _ in range(100):
         if p.poll() is not None:
-            break
+            raise AssertionError(
+                "owned server exited before readiness: "
+                + p.stdout.read().decode()[-500:]
+            )
         try:
-            response = httpx.get(f"http://127.0.0.1:{port}/_scripted_owner", timeout=1)
-            if response.status_code == 200 and response.json() == {"pid": p.pid}:
-                return p, port
-        except (httpx.HTTPError, ValueError):
-            pass
-        time.sleep(0.2)
-    if p.poll() is None:
-        p.kill()
-    p.wait()
+            if (
+                httpx.get(f"http://127.0.0.1:{port}/health/live", timeout=1).status_code
+                < 500
+            ):
+                return p
+        except httpx.HTTPError:
+            time.sleep(0.2)
+    p.kill()
     raise AssertionError("server did not start: " + p.stdout.read().decode()[-500:])
 
 
-def _stream_then_sigterm(p, port):
+def test_scripted_child_preserves_isolated_dependency_path(monkeypatch):
+    from types import SimpleNamespace
+
+    captured = {}
+    process = SimpleNamespace(poll=lambda: None)
+    monkeypatch.setenv("PYTHONPATH", "/fixture/isolated-dependencies")
+
+    def popen(cmd, **kwargs):
+        captured.update(kwargs)
+        return process
+
+    monkeypatch.setattr(subprocess, "Popen", popen)
+    monkeypatch.setattr(
+        httpx, "get", lambda *args, **kwargs: SimpleNamespace(status_code=200)
+    )
+    assert _start("0") is process
+    assert captured["env"]["PYTHONPATH"].split(os.pathsep) == [
+        str(ROOT / "python"),
+        "/fixture/isolated-dependencies",
+    ]
+
+
+def _stream_then_sigterm(p):
     got = {"text": "", "err": None}
 
     def run():
         try:
             with httpx.stream(
                 "POST",
-                f"http://127.0.0.1:{port}/v1/chat/completions",
+                f"http://127.0.0.1:{p.test_port}/v1/chat/completions",
                 json={
                     "model": "m",
                     "messages": [{"role": "user", "content": "hi"}],
@@ -101,9 +125,9 @@ def _stream_then_sigterm(p, port):
 
 
 def test_sigterm_drains_the_in_flight_stream_then_exits():
-    p, port = _start("20")
+    p = _start("20")
     try:
-        got, _ = _stream_then_sigterm(p, port)
+        got, _ = _stream_then_sigterm(p)
         assert got["err"] is None, got["err"]
         assert "[DONE]" in got["text"] and '"finish_reason": "stop"' in got["text"]
         assert "w14" in got["text"]
@@ -117,9 +141,9 @@ def test_sigterm_drains_the_in_flight_stream_then_exits():
 
 
 def test_drain_zero_aborts_the_stream_fast():
-    p, port = _start("0")
+    p = _start("0")
     try:
-        got, took = _stream_then_sigterm(p, port)
+        got, took = _stream_then_sigterm(p)
         assert took < 8, took
         assert "w14" not in got["text"]
         p.wait(15)
@@ -128,36 +152,13 @@ def test_drain_zero_aborts_the_stream_fast():
             p.kill()
 
 
-def test_start_rejects_a_foreign_listener(monkeypatch):
-    import io
+def test_listener_reservation_prevents_a_foreign_bind():
 
     import pytest
 
-    class Child:
-        pid = 123
-        stdout = io.BytesIO(b"bind failed")
-        polls = 0
-
-        def poll(self):
-            self.polls += 1
-            return None if self.polls == 1 else 3
-
-        def wait(self):
-            return 3
-
-    class Foreign:
-        status_code = 200
-
-        def json(self):
-            return {"pid": 999}
-
-    monkeypatch.setattr(sys.modules[__name__], "_pick_port", lambda: 18990)
-    monkeypatch.setattr(subprocess, "Popen", lambda *a, **kw: Child())
-    monkeypatch.setattr(httpx, "get", lambda *a, **kw: Foreign())
-    monkeypatch.setattr(time, "sleep", lambda _: None)
-    with pytest.raises(AssertionError, match="bind failed"):
-        _start("0")
-
-
-def test_port_is_outside_the_shared_server_pool():
-    assert not 18990 <= _pick_port() <= 18999
+    listener = reserve_listener()
+    try:
+        with socket.socket() as contender, pytest.raises(OSError):
+            contender.bind(listener.getsockname())
+    finally:
+        listener.close()

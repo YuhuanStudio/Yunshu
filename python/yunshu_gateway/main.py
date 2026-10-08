@@ -328,12 +328,20 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     except Exception:
         logger.warning("Batch runner resume failed", exc_info=True)
 
+    from . import evals_runner
+
+    evals_runner.recover()
     yield
 
+    await evals_runner.stop()
     try:
         await _batches.stop_runner()
     except Exception:
         logger.debug("Batch runner stop failed", exc_info=True)
+
+    tavily_service = getattr(app.state, "tavily_service", None)
+    if tavily_service is not None:
+        await tavily_service.close()
 
     # ═══ Graceful shutdown ═══
     logger.info(
@@ -359,6 +367,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             drain_timeout,
             _active_requests,
         )
+
+    from .realtime_webrtc import close_all
+
+    await close_all()
 
     # Disconnect MCP client manager
     try:
@@ -522,6 +534,17 @@ def create_app() -> FastAPI:
     async def http_error_handler(request: Request, exc: StarletteHTTPException):
         """Ensure all HTTP errors follow the correct format for the endpoint."""
         path = request.url.path
+        if path.startswith("/tavily/"):
+            message = (
+                exc.detail.get("error", "Internal Server Error")
+                if isinstance(exc.detail, dict)
+                else str(exc.detail)
+            )
+            return JSONResponse(
+                status_code=exc.status_code,
+                content={"detail": {"error": message}},
+                headers=exc.headers,
+            )
 
         # Anthropic endpoints: return Anthropic error format
         if path in _ANTHROPIC_PATHS:
@@ -685,9 +708,9 @@ def create_app() -> FastAPI:
     # Note: allow_credentials=True is invalid with allow_origins=["*"] per CORS spec;
     # browsers will reject the response. Use specific origins in production.
     cors_origins_str = settings.get("YUNSHU_CORS_ORIGINS")
-    cors_origins = cors_origins_str.split(",") if cors_origins_str != "*" else ["*"]
-    allow_credentials = cors_origins != ["*"]
-    if cors_origins == ["*"]:
+    cors_origins = [o.strip() for o in cors_origins_str.split(",") if o.strip()]
+    allow_credentials = "*" not in cors_origins
+    if "*" in cors_origins:
         logger.warning(
             "CORS: allow_origins=['*'] — set YUNSHU_CORS_ORIGINS for production"
         )
@@ -866,6 +889,8 @@ def create_app() -> FastAPI:
         ):
             # Fail closed: a malformed / negative Content-Length cannot be bounded.
             msg = f"Invalid Content-Length header: {content_length!r}"
+            if request.url.path.startswith("/tavily/"):
+                return JSONResponse(status_code=400, content={"detail": {"error": msg}})
             if request.url.path in _ANTHROPIC_PATHS:
                 return JSONResponse(
                     status_code=400,
@@ -888,6 +913,11 @@ def create_app() -> FastAPI:
             try:
                 if int(content_length) > max_request_size:
                     path = request.url.path
+                    if path.startswith("/tavily/"):
+                        return JSONResponse(
+                            status_code=413,
+                            content={"detail": {"error": "Request body too large"}},
+                        )
                     if path in _ANTHROPIC_PATHS:
                         return JSONResponse(
                             status_code=413,
@@ -928,6 +958,11 @@ def create_app() -> FastAPI:
                     total_size += len(chunk)
                     if total_size > max_request_size:
                         path = request.url.path
+                        if path.startswith("/tavily/"):
+                            return JSONResponse(
+                                status_code=413,
+                                content={"detail": {"error": "Request body too large"}},
+                            )
                         if path in _ANTHROPIC_PATHS:
                             return JSONResponse(
                                 status_code=413,
@@ -1064,6 +1099,9 @@ def create_app() -> FastAPI:
     from .routers import realtime_secrets as realtime_secrets_mod
 
     app.include_router(realtime_secrets_mod.router, prefix="/v1")
+    from .routers import voices
+
+    app.include_router(voices.router, prefix="/v1")
     from .routers import omni as omni_mod
 
     app.include_router(completions.router, prefix="/v1")
@@ -1075,6 +1113,9 @@ def create_app() -> FastAPI:
     )  # before /responses/{id}
     app.include_router(responses_mod.router, prefix="/v1")
     app.include_router(conversations_mod.router, prefix="/v1")
+    from .routers import evals as evals_mod
+
+    app.include_router(evals_mod.router, prefix="/v1")
     app.include_router(embeddings.router, prefix="/v1")
     app.include_router(models.router, prefix="/v1")
     from .routers import batches as batches_mod
@@ -1090,14 +1131,19 @@ def create_app() -> FastAPI:
     app.include_router(mcp.router, prefix="/v1")
     app.include_router(scoring.router, prefix="/v1")
     from .routers import decisions as decisions_mod
+    from .routers import tavily as tavily_mod
 
     app.include_router(decisions_mod.router, prefix="/v1")
+    app.include_router(tavily_mod.router)
     app.include_router(cancel_mod.router, prefix="/v1")
     from .routers import yunshu as yunshu_mod
 
     app.include_router(yunshu_mod.router, prefix="/v1")  # status, requests, warmup
     app.include_router(ocr_mod.router)
     app.include_router(realtime.router)
+    from . import realtime_webrtc
+
+    app.include_router(realtime_webrtc.router)
     app.include_router(stream_ws.router)
     from .routers import ollama as ollama_mod
 

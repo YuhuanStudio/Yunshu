@@ -290,3 +290,51 @@ def _resolve_tokenizer(model_id: str):
     raise HTTPException(
         status_code=404, detail=f"No tokenizer available for model '{model_id}'"
     )
+
+
+class ApplyTemplateRequest(BaseModel):
+    model: str | None = None
+    messages: list[dict[str, Any]]
+    tools: list[dict[str, Any]] | None = None
+    add_generation_prompt: bool = True
+    chat_template_kwargs: dict[str, Any] | None = None
+
+
+@router.post("/apply-template", response_model=None)
+async def apply_template(req: ApplyTemplateRequest, request: Request):
+    from .models import _check_model_access, _check_permission
+
+    _check_permission(request, "can_infer")
+    if req.model:
+        _check_model_access(request, req.model)
+    tokenizer = _resolve_tokenizer(req.model or "")
+    try:
+        prompt = tokenizer.apply_chat_template(
+            req.messages,
+            tools=req.tools,
+            tokenize=False,
+            add_generation_prompt=req.add_generation_prompt,
+            **(req.chat_template_kwargs or {}),
+        )
+    except Exception as exc:
+        raise HTTPException(400, f"chat template failed: {exc}") from exc
+    return {"prompt": prompt}
+
+
+@router.get("/props", response_model=None)
+async def props(request: Request):
+    from .models import _check_permission
+
+    _check_permission(request, "can_infer")
+    engine = get_engine()
+    if engine is None or not engine.is_loaded:
+        raise HTTPException(503, "No model is loaded")
+    tokenizer = _resolve_tokenizer(getattr(engine, "model_name", "") or "")
+    return {
+        "default_generation_settings": {
+            "n_ctx": _resolve_context_limit(getattr(engine, "model_name", "") or "")
+        },
+        "model_path": getattr(engine, "model_name", ""),
+        "chat_template": getattr(tokenizer, "chat_template", None),
+        "total_slots": 1,
+    }

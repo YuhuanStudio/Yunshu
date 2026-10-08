@@ -32,11 +32,13 @@
 
 ## 快速开始
 
+模型选择、外接存储、就绪检查与升级请参阅[首次使用指南](docs/guides/FIRST_RUN.md)。
+
 需要 Apple Silicon、macOS 14 以上、Python 3.13 以上与 [uv](https://docs.astral.sh/uv/)。
 
 ```bash
 uv tool install --python 3.13 "yunshu[vision]"
-yunshu doctor                                   # 检查这台 Mac，并说明怎么修
+yunshu doctor                                   # checks this Mac and says how to fix problems
 yunshu pull mlx-community/Qwen3.5-9B-MLX-4bit
 yunshu serve -m mlx-community/Qwen3.5-9B-MLX-4bit
 ```
@@ -46,10 +48,10 @@ yunshu serve -m mlx-community/Qwen3.5-9B-MLX-4bit
 ```python
 from openai import OpenAI
 
-client = OpenAI(base_url="http://127.0.0.1:8000/v1", api_key="local")  # 任意 key 皆可
+client = OpenAI(base_url="http://127.0.0.1:8000/v1", api_key="local")  # any key works
 r = client.chat.completions.create(
     model="local",
-    messages=[{"role": "user", "content": "用一句话解释 MLX。"}],
+    messages=[{"role": "user", "content": "Explain MLX in one sentence."}],
 )
 print(r.choices[0].message.content)
 ```
@@ -60,19 +62,31 @@ from anthropic import Anthropic
 client = Anthropic(base_url="http://127.0.0.1:8000", api_key="local")
 msg = client.messages.create(
     model="local", max_tokens=512,
-    messages=[{"role": "user", "content": "用一句话解释 MLX。"}],
+    messages=[{"role": "user", "content": "Explain MLX in one sentence."}],
 )
 print(msg.content[0].text)
 ```
 
-模型放在 `~/.yunshu/models`（用 `yunshu config set models_dir PATH` 搬移）；`serve -m org/name`
+模型放在 `~/.yunshu/models`（`yunshu config set models_dir PATH` 指定后续下载目录，不移动现有权重）；`serve -m org/name`
 也会找 Hugging Face 缓存，只有需要时才下载。`yunshu service install -m <model>` 让服务器在登录时启动。
+
+### 本地 console
+
+源代码包含 YunUI 引擎 console，入口为 `/console/`，提供状态、资源图表、模型操作、请求查看／取消与流式诊断。
+
+```bash
+cd frontend
+pnpm install --frozen-lockfile
+pnpm build
+```
+
+[Console](docs/CONSOLE.md)
 
 ### Qwen3.8-27B
 
 ```bash
 yunshu pull Jundot/Qwen3.8-27B-oQ4e-mtp
-yunshu pull incoai/Qwen3.8-27B-DFlash2          # 选用的草稿模型，会自动使用
+yunshu pull incoai/Qwen3.8-27B-DFlash2          # optional drafter, picked up automatically
 yunshu serve -m Jundot/Qwen3.8-27B-oQ4e-mtp
 ```
 
@@ -90,16 +104,16 @@ uv run yunshu serve -m <model>
 ## 运作方式
 
 ```
- OpenAI / Anthropic / Ollama 客户端 ──► FastAPI gateway（单一进程）
-                                          │  请求验证、工具／推理解析、
-                                          │  服务器端工具（网页搜索／抓取／MCP）
-                                          ▼
-                                  引擎（单一 MLX 线程）
+ OpenAI / Anthropic / Ollama clients ──► FastAPI gateway (one process)
+                                           │  request validation, tool/reasoning parsing,
+                                           │  server-side tools (web search / fetch / MCP)
+                                           ▼
+                                  engine (one MLX thread)
           ┌────────────────────────────────┴───────────────────────────────┐
-   VLM batch runner（所有 mlx-vlm 模型）                纯文本快速路径（mlx-lm 模型）
-   共享连续批处理、每列各自采样                           单请求 generate_step
-   推测解码通道：DFlash2 / MTP / prompt-copy
-   前缀缓存：RAM ─► SSD ─► 选用的存储层
+   VLM batch runner (every mlx-vlm model)                 text fast path (mlx-lm models)
+   shared continuous batch, per-row sampling              single-request generate_step
+   speculative lane: DFlash2 / MTP / prompt-copy
+   prefix cache: RAM ─► SSD ─► optional storage tiers
 ```
 
 所有 GPU 工作都在同一条 MLX 线程上，请求之间不会互抢 GPU。每个回应在自己的生成结束时就回传。
@@ -154,10 +168,14 @@ strict `json_schema`）、`stop`、`logprobs` / `top_logprobs`（流式输出也
 错误使用各 API 自己的格式。扩充字段都有命名空间（`x_yunshu`、`X-Yunshu-*`），官方 SDK 会忽略。
 完整矩阵与每一列的验证方式见 [API surface](docs/guides/API_SURFACE.md)。
 
+main 的 0.1.5 周期已提供本地决策（`/v1/decisions`、`/v1/systemone`）、存储聊天响应、Evals（`/v1/evals`）与 Realtime client secrets。决策需要支持的决策 checkpoint，不使用聊天解码器。
+
+[决策](docs/guides/DECISIONS.md)、[Evals](docs/guides/EVALS.md)、[网页搜索](docs/guides/WEB_SEARCH.md)与 [Tavily API](docs/guides/TAVILY.md)
+
 ## 编程 agent
 
 ```bash
-yunshu launch claude      # 或：codex、opencode
+yunshu launch claude      # or: codex, opencode
 ```
 
 `yunshu launch` 会写好客户端设置（base URL、模型、上下文长度与输出上限、reasoning effort）并启动
@@ -242,6 +260,8 @@ Yunshu 的贪婪输出。相对于原版 MLX 路径的准确度，分三个层�
 所有设置见 [设置](docs/CONFIGURATION.md)。
 
 ## 文档
+
+- [CLI](docs/guides/CLI.md)：命令行：首次启动、模型、launchd、JSON 与 shell completion
 
 - [客户端](docs/guides/CLIENTS.md)：curl、OpenAI / Anthropic SDK、Open WebUI、agent
 - [API surface](docs/guides/API_SURFACE.md) 与 [API 参考](docs/API.md)

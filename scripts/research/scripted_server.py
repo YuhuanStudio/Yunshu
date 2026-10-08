@@ -36,6 +36,7 @@ uvicorn.run(
     app,
     host="127.0.0.1",
     port=port,
+    fd=int(sys.argv[4]) if len(sys.argv) > 4 else None,
     log_level="warning",
     timeout_graceful_shutdown=graceful_shutdown_timeout(
         settings.get("YUNSHU_DRAIN_TIMEOUT")

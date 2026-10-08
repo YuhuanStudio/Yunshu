@@ -296,6 +296,93 @@ def _smoke_valid(path: Path):
     return True, ""
 
 
+def client_routes_valid(path: Path):
+    import json
+
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, ValueError) as exc:
+        return False, f"missing/invalid route evidence: {exc}"
+    required = {
+        "agent-custom-tools",
+        "agent-shell-search",
+        "agent-documents-citations",
+        "agent-anthropic-client-tools",
+        "agent-continuous-usage",
+        "agent-template-props",
+        "agent-http-video",
+    }
+    rows = data.get("checks", {})
+    seen = {key.split("@")[0] for key in rows}
+    if (
+        data.get("complete") is not True
+        or data.get("pass") is not True
+        or required - seen
+    ):
+        return False, str(
+            data.get("failures") or sorted(required - seen) or "incomplete routes"
+        )
+    if any(row.get("status") not in ("pass", "skip") for row in rows.values()):
+        return False, "a route check failed"
+    return True, ""
+
+
+def stage_client_compat(ctx: Ctx) -> StageResult:
+    import json
+
+    stage = "client_compat"
+    device = ctx.suite.get("client_compat_device", "m3")
+    jobs, numbers, reasons = (
+        [],
+        {"device": device, "candidate_commit": ctx.cand.key},
+        [],
+    )
+    tree_sha = subprocess.check_output(
+        ["git", "-C", str(ctx.cand.path), "rev-parse", "HEAD^{tree}"], text=True
+    ).strip()
+    numbers["tree_sha"] = tree_sha
+    # One successful pilot before the second model; both use the commit-pinned tree.
+    for model in ("Qwen3.5-0.8B-MLX-bf16", "Qwen2.5-3B-Instruct-4bit"):
+        cell = Cell(
+            stage,
+            model,
+            [
+                ctx.py,
+                str(ctx.cand.path / "scripts/research/client_compat_routes.py"),
+                "--model",
+                str(Path("/Volumes/P5Plus/models") / model),
+                "--tree-sha",
+                tree_sha,
+                "--device",
+                device,
+                "--out",
+                "{out}",
+            ],
+            mem_gb=8,
+            timeout_min=35,
+            stall_min=10,
+            validate=client_routes_valid,
+            device=device,
+            cwd=ctx.cand.path,
+        )
+        result = ctx.exe.run_cells([cell])[cell.key]
+        jobs.append(result.job)
+        if result.evidence and result.evidence.exists():
+            data = json.loads(result.evidence.read_text())
+            numbers[model] = {
+                "checks": data.get("checks"),
+                "tree_sha": data.get("tree_sha"),
+                "device": data.get("device"),
+            }
+            if data.get("tree_sha") != tree_sha or data.get("device") != device:
+                reasons.append(f"{model}: wrong source tree/device")
+        if not result.ok:
+            reasons.append(f"{model}: {result.reason}")
+        if reasons:
+            break
+    return _finish(ctx, StageResult(stage, not reasons, reasons, numbers, jobs))
+
+
 def stage_smoke(ctx: Ctx) -> StageResult:
     cells = []
     for arm in ("base", "cand"):
@@ -985,6 +1072,105 @@ def _memory_valid(path: Path):
     return True, ""
 
 
+def stage_modelprobe(ctx: Ctx) -> StageResult:
+    """Candidate-only absolute reserve/serving pilot; no relative-model verdict."""
+    script = ctx.cand.path / "scripts/research/bigmoe_probe.py"
+    cell = Cell(
+        "modelprobe",
+        "cand-pilot",
+        [
+            ctx.py,
+            str(script),
+            "--model",
+            ctx.model,
+            "--src",
+            str(ctx.cand.path / "python"),
+            "--out",
+            "{out}",
+        ],
+        mem_gb=ctx.mem_gb,
+        timeout_min=15,
+        stall_min=8,
+    )
+    result = ctx.exe.run_cells([cell])
+    reasons = _failed_cells(result)
+    numbers = {
+        "scope": "candidate-only absolute reserve and generic serving; not model superiority"
+    }
+    evidence = result["cand-pilot"].evidence
+    if evidence:
+        rows = read_jsonl(evidence)
+        if rows:
+            numbers.update(rows[-1])
+    return _finish(ctx, StageResult("modelprobe", not reasons, reasons, numbers))
+
+
+def _websearch_valid(path: Path):
+    rows = read_jsonl(path)
+    if not rows or rows[-1].get("complete") is not True:
+        return False, "missing final complete record"
+    checks = [r for r in rows if r.get("check")]
+    if not checks or any(r.get("pass") is not True for r in checks):
+        return False, "missing or failed web tool checks"
+    return True, ""
+
+
+def stage_websearch(ctx: Ctx) -> StageResult:
+    # Candidate harness checks old search contract on base; new page actions on candidate.
+    script = ctx.cand.path / "scripts/research/websearch_probe.py"
+    cells = []
+    for arm in ("base", "cand"):
+        cells.append(
+            Cell(
+                "websearch",
+                arm,
+                [
+                    "env",
+                    *[
+                        f"{key}={value}"
+                        for key, value in sorted(ctx.arm_env(arm).items())
+                    ],
+                    "PYTHONPATH="
+                    + str(ctx.tree(arm).path / "python")
+                    + os.pathsep
+                    + os.environ.get("PYTHONPATH", ""),
+                    ctx.py,
+                    str(script),
+                    "--src",
+                    str(ctx.tree(arm).path / "python"),
+                    "--model",
+                    ctx.model,
+                    "--out",
+                    "{out}",
+                    *(
+                        ["--baseline"]
+                        if arm == "base"
+                        else [
+                            "--embedding-model",
+                            "/Volumes/P5Plus/models/Qwen3-Embedding-0.6B",
+                            "--eval-snapshot",
+                            str(
+                                ctx.cand.path
+                                / "scripts/research/data/websearch_adversarial.jsonl"
+                            ),
+                        ]
+                    ),
+                ],
+                mem_gb=14,
+                timeout_min=8,
+                stall_min=4,
+                validate=_websearch_valid,
+                device="m5",
+            )
+        )
+    results = ctx.exe.run_cells(cells)
+    reasons = _failed_cells(results)
+    numbers = {
+        key: read_jsonl(r.evidence) if r.evidence else [] for key, r in results.items()
+    }
+    return _finish(ctx, StageResult("websearch", not reasons, reasons, numbers))
+
+
 def stage_rerank(ctx: Ctx) -> StageResult:
     """New capabilities: candidate HTTP output vs independent Transformers oracle.
 
@@ -1074,10 +1260,323 @@ def stage_rerank(ctx: Ctx) -> StageResult:
     return _finish(ctx, StageResult("rerank", not reasons, reasons, numbers))
 
 
+def stage_embedding(ctx: Ctx) -> StageResult:
+    """Published-format loader and independent same-device upstream invocation."""
+    reference = ctx.env.get(
+        "EMBEDDING_REFERENCE",
+        "/Volumes/P5Plus/yunshu-build/codex/priorfix/gemma-ref/ref.json",
+    )
+    root = Path(ctx.env.get("EMBEDDING_MODEL_ROOT", "/Volumes/P5Plus/models"))
+    reasons, numbers = [], {}
+    for name in (
+        "embeddinggemma-2-bf16",
+        "embeddinggemma-2-4bit",
+        "embeddinggemma-2-bf16-multishard",
+    ):
+        cell = Cell(
+            "embedding",
+            name,
+            [
+                "env",
+                f"PYTHONPATH={ctx.cand.path / 'python'}",
+                "HF_HUB_OFFLINE=1",
+                ctx.py,
+                str(ctx.cand.path / "scripts/research/priorfix_embedding_parity.py"),
+                "--model",
+                str(root / name),
+                "--reference",
+                reference,
+                "--out",
+                "{out}",
+            ],
+            mem_gb=8,
+            timeout_min=10,
+            stall_min=5,
+            priority=-1,
+            device="m5",
+        )
+        results = ctx.exe.run_cells([cell])
+        reasons += _failed_cells(results)
+        if reasons:
+            break
+        rows = read_jsonl(results[name].evidence)
+        numbers[name] = rows[-1]
+        if not rows[-1].get("passed"):
+            reasons.append(f"{name} parity failed")
+            break
+    return _finish(ctx, StageResult("embedding", not reasons, reasons, numbers))
+
+
+def stage_priorart(ctx: Ctx) -> StageResult:
+    reasons, numbers = [], {}
+    kinds = ctx.env.get("PRIORART_KINDS", "retrieval,classifier,diffusion,omni").split(
+        ","
+    )
+    for kind in kinds:
+        prefix = str(ctx.cand.path / "python")
+        if kind.startswith("diffusion") or kind == "capabilities":
+            prefix += ":/Volumes/P5Plus/yunshu-build/codex/priorfix/mflux-deps"
+        extra = []
+        if kind in ("retrieval", "capabilities"):
+            import urllib.request
+
+            reference = ctx.run.path / "aperepel-cfe20b0-server.py"
+            if not reference.exists():
+                url = "https://raw.githubusercontent.com/aperepel/mlx-rerank/cfe20b0b0e2505240be91dbcf6e5575b8a8d7388/server.py"
+                with urllib.request.urlopen(url, timeout=30) as response:
+                    reference.write_bytes(response.read())
+            compile(reference.read_text(), str(reference), "exec")
+            extra = ["--rerank-reference", str(reference)]
+        script = ctx.cand.path / "scripts/research/priorfix_runtime_parity.py"
+        mode_args = ["--kind", kind]
+        if kind == "diffusion-timing":
+            script = ctx.cand.path / "scripts/research/priorfix_diffusion_timing.py"
+            mode_args = []
+        elif kind == "capabilities":
+            script = ctx.cand.path / "scripts/research/priorfix_capabilities.py"
+            mode_args = [
+                "--model-root",
+                ctx.env.get("EMBEDDING_MODEL_ROOT", "/Volumes/P5Plus/models"),
+                "--reference",
+                ctx.env.get(
+                    "EMBEDDING_REFERENCE",
+                    "/Volumes/P5Plus/yunshu-build/codex/priorfix/gemma-ref/ref.json",
+                ),
+            ]
+        cell = Cell(
+            "priorart",
+            kind,
+            [
+                "env",
+                f"PYTHONPATH={prefix}",
+                "HF_HUB_OFFLINE=1",
+                ctx.py,
+                str(script),
+                *mode_args,
+                *extra,
+                "--out",
+                "{out}",
+            ],
+            # The floating two-runtime image pilot peaked at 57.3 (M5 gpuq RSS).
+            mem_gb=64 if kind.startswith("diffusion") or kind == "capabilities" else 8,
+            quiet=kind == "diffusion-timing",
+            timeout_min=10,
+            stall_min=5,
+            priority=-1,
+            device="m5",
+        )
+        results = ctx.exe.run_cells([cell])
+        reasons += _failed_cells(results)
+        if reasons:
+            break
+        rows = read_jsonl(results[kind].evidence)
+        numbers[kind] = rows[-1]
+        if not rows[-1].get("passed"):
+            reasons.append(f"{kind} parity failed")
+            break
+    return _finish(ctx, StageResult("priorart", not reasons, reasons, numbers))
+
+
+def stage_evals(ctx: Ctx) -> StageResult:
+    """SDK shape + local engine route coverage; CPU probe tests run in preflight."""
+    tree = ctx.tree("cand").path
+    cell = Cell(
+        "evals",
+        "sdk-routes",
+        [
+            "env",
+            f"PYTHONPATH={tree / 'python'}",
+            "HF_HUB_OFFLINE=1",
+            ctx.py,
+            str(tree / "scripts/research/evals_verify.py"),
+            "--model",
+            ctx.model,
+            "--src",
+            str(tree / "python"),
+            "--out",
+            "{out}",
+        ],
+        mem_gb=6,
+        timeout_min=10,
+        stall_min=5,
+        priority=-1,
+        device="m5",
+    )
+    results = ctx.exe.run_cells([cell])
+    reasons = _failed_cells(results)
+    numbers = {}
+    if not reasons:
+        rows = read_jsonl(results["sdk-routes"].evidence)
+        numbers = rows[-1]
+        if not numbers.get("passed"):
+            reasons.append("Evals SDK route smoke failed")
+    return _finish(ctx, StageResult("evals", not reasons, reasons, numbers))
+
+
+def stage_tavily(ctx: Ctx) -> StageResult:
+    cells = [
+        Cell(
+            "tavily",
+            arm,
+            [
+                "env",
+                *[f"{key}={value}" for key, value in sorted(ctx.arm_env(arm).items())],
+                "PYTHONPATH=" + str(ctx.tree(arm).path / "python"),
+                ctx.py,
+                str(ctx.cand.path / "scripts/research/tavily_probe.py"),
+                "--src",
+                str(ctx.tree(arm).path / "python"),
+                "--model",
+                ctx.model,
+                "--out",
+                "{out}",
+                *(["--baseline"] if arm == "base" else []),
+            ],
+            mem_gb=ctx.mem_gb or 14,
+            timeout_min=8,
+            stall_min=4,
+            validate=_websearch_valid,
+            device="m5",
+        )
+        for arm in ("base", "cand")
+    ]
+    results = ctx.exe.run_cells(cells)
+    reasons = _failed_cells(results)
+    return _finish(
+        ctx,
+        StageResult(
+            "tavily",
+            not reasons,
+            reasons,
+            {
+                key: read_jsonl(result.evidence) if result.evidence else []
+                for key, result in results.items()
+            },
+        ),
+    )
+
+
+def _searchrank_valid(path):
+    rows = read_jsonl(path)
+    arms = {row.get("backend"): row for row in rows if "backend" in row}
+    ok = bool(
+        rows
+        and rows[-1].get("complete") is True
+        and all(
+            arms.get(name, {}).get("status") == "ok"
+            for name in ("cpu", "coreml_cpu_ne", "mlx")
+        )
+    )
+    return ok, "All CPU/Core ML/MLX backends must finish with finite scores"
+
+
+def stage_searchrank(ctx: Ctx) -> StageResult:
+    interpreter = ctx.env.get("SEARCHRANK_PY", ctx.py)
+    cell = Cell(
+        "searchrank",
+        "backends",
+        [
+            "env",
+            "PYTHONPATH=" + str(ctx.cand.path / "python"),
+            interpreter,
+            str(ctx.cand.path / "scripts/research/searchrank_backends.py"),
+            "--model",
+            ctx.model,
+            "--out",
+            "{out}",
+            "--cache",
+            str(ctx.run.path / "coreml-cache"),
+        ],
+        mem_gb=4,
+        timeout_min=10,
+        stall_min=5,
+        quiet=True,
+        validate=_searchrank_valid,
+        device="m5",
+    )
+    results = ctx.exe.run_cells([cell])
+    reasons = _failed_cells(results)
+    return _finish(
+        ctx,
+        StageResult(
+            "searchrank",
+            not reasons,
+            reasons,
+            {
+                key: read_jsonl(result.evidence) if result.evidence else []
+                for key, result in results.items()
+            },
+        ),
+    )
+
+
+def stage_respfeat(ctx: Ctx) -> StageResult:
+    """One bounded M5 tiny server covers client-executed tools and transports."""
+    import json
+
+    tree_sha = subprocess.check_output(
+        ["git", "-C", str(ctx.cand.path), "rev-parse", "HEAD^{tree}"], text=True
+    ).strip()
+    argv = [
+        ctx.py,
+        str(ctx.cand.path / "scripts/research/respfeat_routes.py"),
+        "--model",
+        ctx.model,
+        "--tree-sha",
+        tree_sha,
+        "--device",
+        "m5",
+        "--out",
+        "{out}",
+    ]
+    if ctx.cand_env.get("RESPFEAT_EXTRA_PYTHONPATH"):
+        argv += ["--extra-pythonpath", ctx.cand_env["RESPFEAT_EXTRA_PYTHONPATH"]]
+
+    def valid(path):
+        from scripts.research.respfeat_routes import judge
+
+        try:
+            return judge(json.loads(path.read_text()))
+        except (OSError, ValueError) as exc:
+            return False, str(exc)
+
+    cell = Cell(
+        "respfeat",
+        "tiny-routes",
+        argv,
+        mem_gb=8,
+        timeout_min=10,
+        validate=valid,
+        device="m5",
+        cwd=ctx.cand.path,
+        retries=0,
+    )
+    result = ctx.exe.run_cells([cell])[cell.key]
+    evidence = json.loads(result.evidence.read_text()) if result.evidence else {}
+    return _finish(
+        ctx,
+        StageResult(
+            "respfeat",
+            result.ok,
+            [] if result.ok else [result.reason],
+            {"device": "m5", "candidate_commit": ctx.cand.key, "evidence": evidence},
+            [result.job],
+        ),
+    )
+
+
 STAGE_FUNCS = {
+    "respfeat": stage_respfeat,
+    "priorart": stage_priorart,
+    "embedding": stage_embedding,
+    "evals": stage_evals,
+    "websearch": stage_websearch,
+    "tavily": stage_tavily,
+    "searchrank": stage_searchrank,
     "rerank": stage_rerank,
     "preflight": stage_preflight,
     "smoke": stage_smoke,
+    "client_compat": stage_client_compat,
     "identity": stage_identity,
     "apc": stage_apc,
     "quality": stage_quality,
@@ -1085,4 +1584,5 @@ STAGE_FUNCS = {
     "memory": stage_memory,
     "longqa": stage_longqa,
     "conc": stage_conc,
+    "modelprobe": stage_modelprobe,
 }

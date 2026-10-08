@@ -86,6 +86,12 @@ the call body) and runs it with llguidance's token-mask matcher and MLX bitmask 
 Used as a library, not copied. Copyright (c) Microsoft Corporation, MIT license.
 https://github.com/guidance-ai/llguidance
 
+## Trafilatura
+
+Web research uses the unmodified Python dependency trafilatura 2.1.0, licensed under
+Apache-2.0. Source and license: https://github.com/adbar/trafilatura/tree/v2.1.0 .
+No source is vendored. Earlier versions before 1.8 are not used.
+
 ## Yunshu Console
 
 The console imports the pinned YunUI package in
@@ -98,3 +104,23 @@ The build ships YunUI's license, upstream notices and retained Beautiful UI MIT
 text under `console_static/licenses/yunui/`; Vite generates the bundled dependency
 license catalogue at `console_static/licenses/bundled-dependencies.md`. The local
 Geist and JetBrains Mono font assets carry their OFL texts under `console_static/fonts/`.
+
+## aiortc — optional WebRTC dependency
+
+The `webrtc` extra uses unmodified aiortc (BSD-3-Clause) and PyAV (BSD-3-Clause).
+Their source and binaries are not vendored in Yunshu. The reviewed macOS arm64
+PyAV 17.1 wheel links shared FFmpeg libraries whose `avcodec_license()` reports
+"LGPL version 3 or later". FFmpeg and codec licensing remains part of the separate
+installed dependency distribution; Yunshu does not bundle or relink those binaries.
+Sources and dependency licenses: https://github.com/aiortc/aiortc and
+https://github.com/PyAV-Org/PyAV . The SDK protocol adapters are independent code
+checked against openai-python (Apache-2.0) and anthropic-sdk-python (MIT).
+
+## mflux — independent image reference probe
+
+The priorfix_mflux_reference probe uses the unchanged loader cache, HF mapper
+and weight applier APIs of mflux-community/mflux (MIT, reviewed commit
+465df30a3965b38c9c64fa853e26df140ddd5c55). The probe decodes downloaded diffusers
+affine4 tensors before mapping; its reference uses floating arithmetic. No mflux
+source is copied and the serving engine does not import this bridge.
+https://github.com/mflux-community/mflux

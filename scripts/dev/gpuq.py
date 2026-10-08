@@ -7,7 +7,7 @@ then FIFO order, each under a timeout, with output in a log file. Waiting is a
 plain local process (``wait``), so whoever submitted can block on completion
 without polling anything else.
 
-    gpuq submit [--label L] [--timeout MIN] [--priority N] [--gate] [--serving-ok] [--mem-gb G] -- cmd args...
+    gpuq submit [--label L] [--timeout MIN] [--priority N] [--gate] [--short] [--serving-ok] [--mem-gb G] -- cmd args...
     gpuq wait [--max-seconds N] ID [ID ...]  # exit 0 verified / 1 failed / 2 unfinished / 3 contended perf
     gpuq run [opts] -- cmd ...   # submit + wait (drop-in for the old gpu_run.sh)
     gpuq status                  # queue table (paused / waiting-idle / waiting-mem columns)
@@ -73,6 +73,15 @@ POLL_S = 2.0
 DEFAULT_MEM_GB = 24.0
 DEFAULT_RESERVE_GB = 16.0
 CLAIM_LOCK = threading.Lock()
+# Short-job lane: a job declaring --timeout <= SHORT_MIN minutes may run between the cells of a
+# long suite (see _interleave_choice). Env: GPUQ_SHORT_MIN, GPUQ_SHORT_WAIT_S, GPUQ_SHORT_SHARE.
+SHORT_MIN = float(os.environ.get("GPUQ_SHORT_MIN", 10))
+SHORT_WAIT_S = float(os.environ.get("GPUQ_SHORT_WAIT_S", 5 * 60))
+SHORT_SHARE = float(os.environ.get("GPUQ_SHORT_SHARE", 0.15))
+SHORT_WINDOW_S = 2 * 3600
+# Filler: while the head job waits only for a quiet CPU, an idle GPU runs one job that needs no quiet CPU.
+FILLER_WAIT_S = float(os.environ.get("GPUQ_FILLER_WAIT_S", 30))
+FILLER_MAX_MIN = float(os.environ.get("GPUQ_FILLER_MAX_MIN", 30))
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import gpuq_preflight  # noqa: E402
@@ -323,6 +332,46 @@ def _cpu_blocker(job: dict, gate: ServingGate):
     return "cpu" if blocked else None
 
 
+def _filler(jobs, pending, blockers, head, now) -> dict | None:
+    """A job to run on the otherwise idle GPU while `head` (a --quiet timing job) waits only for a
+    quiet CPU. Needs no quiet CPU itself, passed memory/serving admission, is bounded
+    (FILLER_MAX_MIN), shorts first (and then inside the short-lane budget). One at a time: the lane
+    is single. Only after the head has waited FILLER_WAIT_S in its current window, so the head gets
+    the first quiet slot after every filler."""
+    if now - head.get("quiet_wait_started", now) < FILLER_WAIT_S:
+        return None
+    cands = [
+        j
+        for j in pending
+        if j is not head
+        and blockers.get(j["id"]) is None
+        and not requires_quiet(j)
+        and j.get("timeout_s", 1e9) <= FILLER_MAX_MIN * 60
+        and j.get("device", "m5") in {"m5", "any"}
+    ]
+    if not cands:
+        return None
+    last = {}
+    for j in jobs:
+        if j.get("started"):
+            last[_owner(j)] = max(last.get(_owner(j), 0.0), j["started"])
+    cands.sort(
+        key=lambda j: (not _lane_short(j), last.get(_owner(j), 0.0), j["submitted"])
+    )
+    pick = cands[0]
+    if _lane_short(pick):
+        used, _, allowed = interleave_budget(jobs, now)
+        if used >= allowed:
+            cands = [j for j in cands if not _lane_short(j)]
+            if not cands:
+                return None
+            pick = cands[0]
+        else:
+            pick["interleaved"] = True
+    pick["filler"] = True
+    return pick
+
+
 def _release_quiet_hold(job: dict, now: float) -> None:
     start = job.get("quiet_hold_started")
     if start is not None:
@@ -345,7 +394,11 @@ def _admit(jobs: list[dict], gate: ServingGate, preempt=False) -> dict | None:
     ]
     blocker = _preempt_blocker if preempt else _blocker
     blockers = {j["id"]: blocker(j, gate, cpu=False) for j in pending}
-    winner = _pick(jobs, lambda j: j["id"] in blockers and blockers[j["id"]] is None)
+    winner = _pick(
+        jobs,
+        lambda j: j["id"] in blockers and blockers[j["id"]] is None,
+        interleave=not preempt,
+    )
     now = _now()
     for job in pending:
         if job is not winner:
@@ -375,6 +428,13 @@ def _admit(jobs: list[dict], gate: ServingGate, preempt=False) -> dict | None:
         if job.get("waiting") != why:
             _patch_job(JOBS / f"{job['id']}.json", waiting=why)
         job["waiting"] = why
+    if not preempt and winner is not None and winner["waiting"] == "cpu":
+        filler = _filler(jobs, pending, blockers, winner, now)
+        if filler is not None:
+            # The head's hold is released: after the filler it starts a fresh quiet window,
+            # and no second filler starts before it has waited FILLER_WAIT_S again.
+            _release_quiet_hold(winner, now)
+            return filler
     return winner if winner is not None and winner["waiting"] is None else None
 
 
@@ -486,11 +546,13 @@ _JOBS_CACHE: dict = {"dir": None, "key": None, "t": 0.0, "files": {}}
 JOBS_RESCAN_S = 30.0
 
 
-def _job_files() -> list[dict]:
+def _job_protos() -> tuple[int, list]:
+    """(version, [(prototype dict, raw JSON or None)]) of the parsed job files; the version
+    changes only when a file was added, changed or removed."""
     try:
         key = JOBS.stat().st_mtime_ns
     except OSError:
-        return []
+        return -1, []
     c = _JOBS_CACHE
     now = time.monotonic()
     if c["dir"] != str(JOBS) or c["key"] != key or now - c["t"] > JOBS_RESCAN_S:
@@ -506,17 +568,42 @@ def _job_files() -> list[dict]:
             if old is not None and old[0] == sig:
                 fresh[p.name] = old
             elif data := _read(p):
-                fresh[p.name] = (sig, json.dumps(data))
+                raw = None if data.get("state") in FINAL else json.dumps(data)
+                fresh[p.name] = (sig, data, raw)
+        if c["dir"] != str(JOBS) or {k: v[0] for k, v in fresh.items()} != {
+            k: v[0] for k, v in files.items()
+        }:
+            c["version"] = c.get("version", 0) + 1
         c.update(dir=str(JOBS), key=key, t=now, files=fresh)
-    return [json.loads(raw) for _, raw in c["files"].values()]
+    return c.get("version", 0), [(d, raw) for _, d, raw in c["files"].values()]
+
+
+def _job_files() -> list[dict]:
+    # Callers mutate what they get. Finished jobs (thousands, immutable on disk) are handed out as
+    # shallow copies; active ones (few) as fresh parses. Re-parsing every file's JSON on each of
+    # the ~4 calls per 2 s poll cost the daemon ~75% of a core (2026-10-09, 5000 jobs / 58 MB).
+    return [dict(d) if raw is None else json.loads(raw) for d, raw in _job_protos()[1]]
+
+
+_SORTED: dict = {"key": None, "rows": []}
 
 
 def _jobs() -> list[dict]:
+    """All jobs, ordered by priority then submission. The ordered, cap-adjusted list is cached
+    until a job file or the caps change; callers get copies they may mutate."""
     caps = _priority_caps()
-    return sorted(
-        (_cap_priority(j, caps) for j in _job_files()),
-        key=lambda j: (-j.get("priority", 0), j["submitted"], j["id"]),
-    )
+    version, protos = _job_protos()
+    key = (str(JOBS), version, tuple(sorted(caps.items())))
+    if _SORTED["key"] != key:
+        rows = sorted(
+            (_cap_priority(dict(d), caps) for d, _ in protos),
+            key=lambda j: (-j.get("priority", 0), j["submitted"], j["id"]),
+        )
+        _SORTED.update(key=key, rows=rows, raw={id(d): raw for d, raw in protos})
+    out = []
+    for j in _SORTED["rows"]:
+        out.append(dict(j) if j.get("state") in FINAL else json.loads(json.dumps(j)))
+    return out
 
 
 def _owner(job: dict) -> str:
@@ -547,7 +634,67 @@ def _lane(job: dict) -> str:
     return "m3" if dev == "m3" else "m5"
 
 
-def _pick(jobs: list[dict], eligible=None) -> dict | None:
+def _lane_short(job: dict) -> bool:
+    """Declared short: --short, or a timeout of at most SHORT_MIN minutes."""
+    return bool(job.get("short")) or job.get("timeout_s", 1e9) <= SHORT_MIN * 60
+
+
+def _run_s(j: dict, now: float, lo: float) -> float:
+    st = j.get("started")
+    if not st:
+        return 0.0
+    en = j.get("ended") or now
+    return max(0.0, min(en, now) - max(st, lo))
+
+
+def interleave_budget(jobs: list[dict], now: float) -> tuple[float, float, float]:
+    """(interleaved seconds used, long-job seconds, allowed seconds) in the rolling window (M5 lane)."""
+    lo = now - SHORT_WINDOW_S
+    used = long_ = 0.0
+    for j in jobs:
+        if j.get("device", "m5") == "m3":
+            continue
+        if j.get("interleaved"):
+            used += _run_s(j, now, lo)
+        elif not _lane_short(j):
+            long_ += _run_s(j, now, lo)
+    return used, long_, SHORT_SHARE * long_
+
+
+def _interleave_choice(jobs, pending, winner, now) -> dict | None:
+    """A waiting short job to run before `winner` (a non-short pick), or None.
+
+    Only p>=-1 shorts that waited SHORT_WAIT_S, never right after another interleaved
+    short (short, long, short, long), and only while interleaved time stays under
+    SHORT_SHARE of the window's long-job time. --gate winners and short winners are
+    never displaced; nothing running is preempted (this runs only when the lane is free)."""
+    if winner.get("gate") or _lane_short(winner):
+        return None
+    cands = [
+        j
+        for j in pending
+        if _lane_short(j)
+        and j.get("priority", 0) >= -1
+        and not j.get("gate")
+        and now - j.get("submitted", now) >= SHORT_WAIT_S
+    ]
+    if not cands:
+        return None
+    started = [j for j in jobs if j.get("started") and j.get("device", "m5") != "m3"]
+    if started and max(started, key=lambda j: j["started"]).get("interleaved"):
+        return None
+    used, _, allowed = interleave_budget(jobs, now)
+    if used >= allowed:
+        return None
+    last = {}
+    for j in started:
+        last[_owner(j)] = max(last.get(_owner(j), 0.0), j["started"])
+    pick = min(cands, key=lambda j: (last.get(_owner(j), 0.0), j["submitted"]))
+    pick["interleaved"] = True
+    return pick
+
+
+def _pick(jobs: list[dict], eligible=None, interleave=False) -> dict | None:
     """Highest priority first; within it, the owner that last ran longest ago
     (round-robin across agents), then that owner's oldest job. `eligible` filters
     out jobs the serving gate / memory admission currently blocks."""
@@ -569,7 +716,7 @@ def _pick(jobs: list[dict], eligible=None) -> dict | None:
     # Short correctness checks (tiny / smoke / dry-run labels) go first within a
     # priority: they take a minute and unblock a worker's next step, while a
     # 27B timing job behind them barely moves.
-    return min(
+    winner = min(
         pending,
         key=lambda j: (
             not j.get(
@@ -580,6 +727,12 @@ def _pick(jobs: list[dict], eligible=None) -> dict | None:
             j["submitted"],
         ),
     )
+    if interleave:
+        every = [j for j in jobs if j["state"] == "pending" and not j.get("cancel")]
+        if eligible is not None:
+            every = [j for j in every if eligible(j)]
+        return _interleave_choice(jobs, every, winner, now) or winner
+    return winner
 
 
 _SHORT = re.compile(r"(^|[-_])(tiny|smoke|dry)([-_]|$)", re.I)
@@ -637,7 +790,10 @@ def submit(
     cpu_config: dict | None = None,
     device: str = "m5",
     gate: bool = False,
+    short: bool = False,
 ) -> str:
+    if short:
+        timeout_min = min(timeout_min, SHORT_MIN)
     if device not in {"m5", "m3", "any"}:
         raise ValueError("device must be m5, m3 or any")
     if quiet and device != "m5":
@@ -688,6 +844,8 @@ def submit(
         timeout_s, timeout_note = gpuq_preflight.learned_timeout(
             label, timeout_min * 60, _jobs()
         )
+        if short and timeout_s > SHORT_MIN * 60:
+            timeout_s, timeout_note = SHORT_MIN * 60, "capped at the short-lane limit"
         if timeout_note:
             print(f"gpuq: timeout {timeout_note}", file=sys.stderr)
         _write(
@@ -708,6 +866,7 @@ def submit(
                 "stall_s": stall_min * 60,
                 "priority": priority,
                 "gate": bool(gate),
+                "short": bool(short),
                 "serving_ok": serving_ok,
                 "mem_gb": mem_gb,
                 "outputs": [
@@ -913,6 +1072,11 @@ def _priority_step(pauser: Pauser, gate: ServingGate, now: float) -> bool:
     # aged job must not hold the GPU for hours while interactive work queues).
     if pauser.job.get("priority", 0) >= 0:
         return False  # only backlog (raw p<=-1) work is ever paused for priority
+    if pauser.job.get("interleaved"):
+        # An interleaved short job was started instead of the waiting long job and
+        # is bounded by the short timeout: pausing it for that same job would leave
+        # the GPU idle with the short job resident and the long job not yet admitted.
+        return False
     if pauser.job.get("requeued_as"):
         return False  # being stopped for a requeue: the cancel path finishes it
     if _draining():
@@ -1042,6 +1206,13 @@ def _run_one(job: dict, path: Path, gate: ServingGate | None = None) -> None:
             elif now - pauser.total(now) - last_growth > job.get("stall_s", STALL_S):
                 why = "stalled"
             if why:
+                if why == "timeout" and _lane_short(job):
+                    log.write(
+                        f"\ngpuq: short-lane job exceeded its {job['timeout_s'] / 60:g} min "
+                        "timeout and was killed (declare an honest --timeout; >"
+                        f"{SHORT_MIN:g} min jobs are not short)\n"
+                    )
+                    log.flush()
                 os.killpg(proc.pid, signal.SIGINT)
                 try:
                     rc = proc.wait(timeout=30)
@@ -1584,6 +1755,10 @@ def stats(hours: float = 24.0) -> None:
         row[2] += mins
         row[3] += mins if bad else 0.0
     total = [sum(r[i] for r in lines.values()) for i in range(4)]
+    inter = sum(
+        _run_s(j, now, now - hours * 3600) for j in _jobs() if j.get("interleaved")
+    )
+    print(f"short-lane interleaved: {inter / 60:.1f} min")
     print(
         f"last {hours:g} h: {total[0]:.0f} jobs, {total[2]:.0f} GPU min, "
         f"{total[3]:.0f} min wasted ({100 * total[3] / max(total[2], 1):.1f}%)"
@@ -1645,6 +1820,12 @@ def status() -> None:
             "idle: "
             + "; ".join(reasons or ["awaiting daemon scheduling/admission poll"])
         )
+    used, long_, allowed = interleave_budget(rows, now)
+    shorts = [j["id"] for j in pending if _lane_short(j)]
+    print(
+        f"short lane (<= {SHORT_MIN:g} min): interleave budget {used / 60:.1f}/{allowed / 60:.1f} min "
+        f"({SHORT_SHARE:.0%} of {long_ / 60:.0f} long min in 2 h); pending short: {len(shorts)}"
+    )
     for j in active + recent[-15:]:
         t0 = j.get("started", j["submitted"])
         age = (j.get("ended") or now) - t0
@@ -1672,6 +1853,8 @@ def status() -> None:
                 else j.get("waiting") or "GPU priority/fairness"
             )
             extra += f"  held={held:.0f}/{limit:g}s ({reason})"
+        if _lane_short(j):
+            extra += "  short" + (" interleaved" if j.get("interleaved") else "")
         print(
             f"{display_state(j):>9}  device={j.get('device', 'm5')}  {age:6.0f}s  p{j.get('priority', 0)}  {j['id']}{extra}"
         )
@@ -1694,6 +1877,11 @@ def main() -> int:
             "--gate",
             action="store_true",
             help="verdict job (release gate): runs before every ordinary job of the same priority",
+        )
+        p.add_argument(
+            "--short",
+            action="store_true",
+            help=f"assert a short verification job: timeout capped at {SHORT_MIN:g} min (killed beyond it); may run between the cells of long suites",
         )
         p.add_argument(
             "--stall",
@@ -1789,6 +1977,7 @@ def main() -> int:
                 },
                 device=a.device,
                 gate=a.gate,
+                short=a.short,
             )
         except ValueError as e:
             print(f"gpuq: {e}", file=sys.stderr)

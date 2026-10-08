@@ -43,6 +43,7 @@ Environment overrides: `GPUQ_SERVING_URLS` (comma separated), `GPUQ_IDLE_START_S
 ```bash
 scripts/dev/gpuq submit --label eval --mem-gb 30 -- python bench.py     # gated, preemptible
 scripts/dev/gpuq submit --label lint --serving-ok -- python cpu_job.py  # bypasses the gate
+scripts/dev/gpuq submit --label x-smoke --timeout 5 -- python smoke.py  # short lane (see below)
 ```
 
 ## Submit labels and bounded waits
@@ -117,10 +118,10 @@ window, but never resets a reserved slot's deadline; time waiting behind other G
 toward the CPU admission timeout. It writes a single CPU summary to the log at completion;
 monitoring never adds log heartbeats that could mask a stalled command.
 
-Only jobs explicitly submitted with `--quiet` must have foreign CPU below 150% for
+Only jobs explicitly submitted with `--quiet` must have foreign CPU below 90% of all cores (1620% on an 18-core Mac) for
 20 continuous seconds before starting. Selection first applies priority, aging and owner fairness,
 ignoring CPU admission (serving and memory admission still apply). A selected quiet job reserves the
-GPU while waiting; other pending jobs cannot bypass it just because they omit `--quiet`.
+GPU while waiting, subject to the bounded non-quiet filler lane described below.
 The hold is bounded by `min(job max_wait_s, GPUQ_QUIET_HOLD_MAX_S)`, default 300 seconds;
 the latter is configured in the **daemon environment**, including for already-submitted jobs with larger
 max waits. On expiry the selected job starts with
@@ -128,7 +129,7 @@ max waits. On expiry the selected job starts with
 the CPU gate. Configure per submission (values are saved with the job and exported to its harness):
 
 ```bash
-scripts/dev/gpuq submit --quiet --priority -1 --cpu-threshold 150 --quiet-window 20 \
+scripts/dev/gpuq submit --quiet --priority -1 --quiet-window 20 \
   --quiet-max-wait 300 --label cpu-quiet-unique -- python bench.py
 ```
 
@@ -143,18 +144,18 @@ Finished `done` jobs with contamination display as
 return 2, real command/output failures return 1. Contended negative-priority audits are shown but remain
 successful. Digest flags contended perf/quiet jobs as untrustworthy, with a distinct family state.
 
-Agents must run CPU-only test suites and builds directly with background QoS and low priority:
+Agents must run CPU-only test suites and builds directly under `nice -n 15`:
 
 ```bash
-PYTHONPATH=python nice -n 15 taskpolicy -b \
+PYTHONPATH=python nice -n 15 \
   /Users/yuhuan/Documents/YuhuanStudio/Yunshu/.venv/bin/python \
   -m pytest tests/unit -q -p no:cacheprovider
-nice -n 15 taskpolicy -b uv run --no-sync ruff check python tests
-nice -n 15 taskpolicy -b npm run build
+nice -n 15 uv run --no-sync ruff check python tests
+nice -n 15 npm run build
 ```
 
-On macOS, `taskpolicy -b` requests background QoS (favoring efficiency cores) and `nice -n 15`
-also makes the process and inheriting children invisible to foreign-CPU admission/monitoring.
+`nice -n 15` excludes the process and inheriting children from foreign-CPU admission/monitoring.
+Do not add `taskpolicy -b` to unit tests: efficiency-core scheduling can break timing-sensitive checks.
 Load averages remain recorded without filtering; they can still include background work.
 
 `GPUQ_CONTENTION_FILE` names the atomic JSON flag file. Harnesses can use
@@ -263,3 +264,24 @@ their M5 meaning. An M3 failure requires M5 reproduction before rejecting an
 M5 optimization; an M3 pass cannot approve an M5 GPU hot-path default or merge.
 Use M3 results for portability and fast logic feedback, then run the final M5
 gate. CPU suites should use `nice -n 15`, directly or via `m3run --no-lock`.
+
+## Short-job lane
+
+A job whose declared `--timeout` is at most 10 minutes (`GPUQ_SHORT_MIN`), or that is submitted with `--short`
+(timeout capped at 10 minutes), is a *short* job. When the lane is free and the next pick would be a non-short
+job, a pending short job with priority >= -1 that has waited 5 minutes (`GPUQ_SHORT_WAIT_S`) runs first, so
+verification jobs are not stuck for hours behind a long suite. Limits: interleaved time stays under 15%
+(`GPUQ_SHORT_SHARE`) of the long-job time in the rolling 2-hour window; never two interleaved shorts in a row
+(short, long, short, long); `--gate` jobs still go first; p-2 (big-memory) jobs are not eligible; a running job
+is never paused or preempted for the lane. A short job that exceeds its timeout is killed and marked `timeout`
+with the reason in its log, so declare an honest `--timeout`. `gpuq status` shows the budget and which jobs are
+short; `gpuq stats` reports interleaved minutes.
+
+### Filler for a CPU-quiet-blocked head
+
+When the head job is a `--quiet` timing job that waits only for a quiet CPU (never for memory or serving), the GPU would
+sit idle. After the head has waited 30 s (`GPUQ_FILLER_WAIT_S`) in its current window, the daemon starts one pending job
+that needs no quiet CPU, passed memory admission, and declares a timeout of at most 30 min (`GPUQ_FILLER_MAX_MIN`);
+short jobs first, and short fillers count against the short-lane budget. The head's window restarts when the filler
+ends, so the head gets the next quiet slot before any second filler. The daemon also caches parsed job files, so a queue
+with thousands of finished jobs costs about 2.5% of a core idle and about 4% while a job runs.

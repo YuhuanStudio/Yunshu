@@ -37,6 +37,7 @@ import json
 import logging
 import math
 import os
+import tempfile
 import tomllib
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -146,6 +147,7 @@ _add("YUNSHU_FILES_DIR", "path", None, "Directory of the local Files / Batch API
 _add("YUNSHU_FILES_MAX_BYTES", "int", 536870912, "Files API: maximum size of one uploaded file in bytes (default 512 MB).", "server", minimum=1)
 _add("YUNSHU_FILES_TTL_DAYS", "float", None, "Files API: delete uploaded files after this many days. Unset: keep forever.", "server", minimum=0.0)
 _add("YUNSHU_FILES_MAX_TOTAL_BYTES", "int", 0, "Files API: total bytes the store may hold; an upload that would exceed it fails with 413 storage_quota_exceeded (expired files are reaped first). 0: unlimited.", "server", minimum=0)
+_add("YUNSHU_EVALS_DIR", "path", None, "Directory of the local Evals API JSON store. Unset: ~/.yunshu/evals.", "server")
 _add("YUNSHU_CONVERSATIONS_DIR", "path", None, "Directory of the Conversations API store (JSON, one file per conversation). Unset: ~/.yunshu/conversations.", "server")
 _add("YUNSHU_CHAT_COMPLETIONS_DIR", "path", None, "Directory of stored chat completions (store=true; JSON, one file per completion). Unset: ~/.yunshu/chat_completions.", "server")
 _add("YUNSHU_CHAT_COMPLETIONS_MAX", "int", 5000, "Stored chat completions kept; the oldest are evicted past this count.", "server", minimum=1)
@@ -194,6 +196,7 @@ _add("YUNSHU_VLM_APC_DISK_ENCODING", "enum", "auto", "How the lower APC storage 
 _add("YUNSHU_VLM_APC_WARM", "enum", "off", "APC WARM tier: what happens to a prefix checkpoint that leaves the RAM tier (HOT, ready-to-use arrays) before it goes to SSD. 'off': straight to SSD. 'lossless': kept in RAM compressed (zstd after a byte-plane shuffle; bit-exact, a WARM hit equals a HOT hit token for token; costs CPU for compression and a decode on hit). 'int8' / 'int4': attention K/V kept in RAM as affine group-quantized codes (LOSSY: a hit restores dequantized K/V, so output can differ from a cold prefill; the SSD tier keeps exact states in these modes). The WARM tier takes YUNSHU_VLM_APC_WARM_SHARE of the APC RAM budget.", "vlm-runner", choices=("off", "lossless", "int8", "int4"))
 _add("YUNSHU_VLM_APC_WARM_SHARE", "float", 0.4, "Share of the APC RAM budget (YUNSHU_VLM_APC_MEMORY_GB) that the WARM tier takes when YUNSHU_VLM_APC_WARM is on; the HOT tier keeps the rest. One budget, split: total APC RAM does not grow.", "vlm-runner", minimum=0.05)
 _add("YUNSHU_VLM_MAX_IMAGE_BYTES", "int", 25 * 1024 * 1024, "Largest image a request may reference by URL, in bytes.", "vlm-runner", minimum=1)
+_add("YUNSHU_VLM_MAX_VIDEO_BYTES", "int", 100 * 1024 * 1024, "Largest video a request may reference by URL, in bytes.", "vlm-runner", minimum=1)
 _add("YUNSHU_VLM_INSECURE_SSL", "bool", False, "Retry image downloads without TLS verification when verification fails.", "vlm-runner")
 
 # ── speculative decoding ───────────────────────────────────────────────
@@ -202,7 +205,7 @@ _add("YUNSHU_VLM_DRAFT", "path", None, "Qwen3.5-family VLMs: speculative draft o
 _add("YUNSHU_MTP_BLOCK_SIZE", "int", None, "Draft block size (DFlash: the ceiling its acceptance-driven depth stays under). Unset: 6 for MTP, the drafter's trained block for DFlash.", "speculative", minimum=2)
 _add("YUNSHU_SPEC_COPY_ROWS", "int", 16, "Qwen3.5-family single-request speculative lane: verify rows a prompt-copy round may use (copy drafts = rows - 1). A copy round proposes the continuation of the longest earlier occurrence of the current tail in the request's full prompt plus its generated text, and the same verify checks it, so output is unchanged (greedy: identical to plain decode; sampled: keyed-sampler exact); agent / code-editing and multi-turn traffic that quotes its context commits several times more tokens per round. Qualified dense DFlash2 greedy requests use their trained model block plus copied runs; sampled and unsupported requests retain the original depth controller. The default is 16 rows, capped to the backend's certified width (32 for dense lane projections with compatible tile attention, 8 otherwise). 0 turns copy rounds off.", "speculative", minimum=0)
 _add("YUNSHU_DRAFT_BITS", "int", 8, "Qwen3.5-family DFlash drafter weight bits: 8 (default), 4, or 0 to keep the shipped bf16. Drafts are verified by the target, so output is token-identical for every value; fewer bits cut the drafter's bytes per round but can lower acceptance (27B on M5: 4-bit +4% to +8% decode at 1K-8K, -7% on 32K code).", "speculative", minimum=0, stability="stable")
-_add("YUNSHU_SPEC_TREE", "enum", "auto", "Qwen3.5-family single-request speculative lane: off keeps trained chain + copy; tree forces the draft-tree verifier; auto uses the certified M5 Q4 DFlash2 fast tree for bounded 1K-class greedy requests, retaining chain + copy elsewhere. Greedy tokens remain identical to plain decode.", "speculative", choices=("off", "tree", "auto"), stability="stable")
+_add("YUNSHU_SPEC_TREE", "enum", "auto", "Qwen3.5-family single-request speculative lane: off keeps trained chain + copy; tree forces the draft-tree verifier; auto uses the certified M5 Q4 DFlash2 fast tree for eligible greedy requests within its live-context safety bounds, including long contexts, retaining chain + copy elsewhere. Greedy tokens remain identical to plain decode.", "speculative", choices=("off", "tree", "auto"), stability="stable")
 _add("YUNSHU_NGRAM_DEFAULT", "bool", False, "Text models: lossless n-gram speculation on greedy requests by default (per-request spec_decode also enables it). Wins on repetitive output.", "speculative")
 _add("YUNSHU_SPEC_PROPOSER", "enum", "ngram", "Text models: speculative proposer family for n-gram speculation.", "speculative", choices=("ngram", "suffix"))
 _add("YUNSHU_GEMMA4_ASSISTANT", "path", None, "Text Gemma-4 models: assistant drafter directory (KV-shared speculative drafter).", "speculative")
@@ -252,8 +255,21 @@ _add("YUNSHU_MCP_CONFIG", "path", None, "MCP client config file (JSON/YAML) list
 _add("YUNSHU_MCP_SERVERS", "json", None, "MCP tool servers as a JSON array (alternative to YUNSHU_MCP_CONFIG).", "mcp")
 
 # ── server-side tools (web search / web fetch / MCP connector) ──────────
-_add("YUNSHU_WEB_SEARCH_PROVIDER", "enum", "auto", "Search backend for the server-side web_search tool (Anthropic web_search_*, OpenAI Responses web_search). 'auto' picks the first configured of searxng, brave, tavily, exa; 'none' disables. Unconfigured: requests get the API's 'unavailable' error with a hint.", "server-tools", choices=("auto", "none", "searxng", "brave", "tavily", "exa"))
-_add("YUNSHU_SEARXNG_URL", "str", None, "Base URL of a self-hosted SearXNG instance (JSON output enabled), e.g. http://127.0.0.1:8080. The privacy-friendly default recommendation.", "server-tools")
+_add("YUNSHU_WEB_SEARCH_PROVIDER", "enum", "auto", "Search backend. Auto runs lightweight DDG, Wikipedia and configured keyed providers (Mwmbl is an explicit noncommercial opt-in) in parallel with health backoff and RRF. SearXNG is optional. Queries leave the machine; none disables search.", "server-tools", choices=("auto", "none", "searxng", "brave", "tavily", "exa", "serper", "perplexity", "ddg_html", "wikipedia", "mwmbl", "mojeek", "marginalia"))
+_add("YUNSHU_WEB_SEARCH_PROVIDER_TIMEOUT", "float", 1.0, "Per-provider metasearch deadline in seconds; slow providers cannot block the whole query.", "server-tools", minimum=0.1)
+_add("YUNSHU_WEB_SEARCH_HEALTH_FILE", "path", "~/.yunshu/cache/websearch-health.json", "Small query-free provider health snapshot read by yunshu config. No SERPs or credentials are stored.", "server-tools")
+_add("YUNSHU_WEB_MWMBL", "bool", False, "Opt in to Mwmbl's open small-web index in auto metasearch. Dataset is CC-BY-NC-SA 4.0 (noncommercial, attribution/share-alike); code is not vendored. Explicit provider=mwmbl also opts in.", "server-tools")
+_add("YUNSHU_WEB_KEYLESS", "bool", True, "Allow keyless DuckDuckGo (best effort; may block) and Wikipedia. Query text and IP leave the machine.", "server-tools")
+_add("YUNSHU_MOJEEK_API_KEY", "str", None, "Mojeek independent-index API key. Configured keys participate in auto metasearch.", "server-tools", secret=True)
+_add("YUNSHU_MARGINALIA_API_KEY", "str", None, "Explicit opt-in to Marginalia small-web search. Noncommercial/public API data is CC-BY-NC-SA 4.0; commercial keys have separate terms. No implicit public key.", "server-tools", secret=True)
+_add("YUNSHU_SERPER_API_KEY", "str", None, "Serper Google SERP API key.", "server-tools", secret=True)
+_add("YUNSHU_PERPLEXITY_API_KEY", "str", None, "Perplexity Search API key (raw results, not Sonar).", "server-tools", secret=True)
+_add("YUNSHU_WEB_RESEARCH", "bool", False, "Enrich search snippets with origin pages, untrusted excerpts and local ranking. Stable opt-in pending quality evaluation; fetched URLs leave the machine.", "server-tools")
+_add("YUNSHU_WEB_RENDER", "bool", False, "Optional local Chromium fallback for short JavaScript shells in advanced Tavily extract/crawl/map. Requires the web-render extra and an installed Playwright Chromium; same-origin GET resources only, no cookies. Never downloads a browser automatically.", "server-tools")
+_add("YUNSHU_WEB_RESEARCH_BUDGET", "float", 4.0, "Overall enrichment deadline in seconds (maximum 4).", "server-tools", minimum=0.1)
+_add("YUNSHU_WEB_RESEARCH_PAGES", "int", 6, "Maximum origin pages per enrichment (capped at 6).", "server-tools", minimum=1)
+_add("YUNSHU_WEB_RESEARCH_MODEL", "str", None, "Already-loaded local embedding model ID. Never loads a model; absent/unavailable uses BM25 only. Qwen3-Embedding-0.6B is recommended.", "server-tools")
+_add("YUNSHU_SEARXNG_URL", "str", None, "Base URL of a self-hosted SearXNG instance (JSON output enabled), e.g. http://127.0.0.1:8080. Optional only; built-in metasearch needs no SearXNG setup.", "server-tools")
 _add("YUNSHU_BRAVE_API_KEY", "str", None, "Brave Search API key.", "server-tools", secret=True)
 _add("YUNSHU_TAVILY_API_KEY", "str", None, "Tavily API key.", "server-tools", secret=True)
 _add("YUNSHU_EXA_API_KEY", "str", None, "Exa API key.", "server-tools", secret=True)
@@ -395,7 +411,17 @@ def write_config_value(name: str, value: Any | None, path: Path | None = None) -
         "# Yunshu settings (`yunshu config set KEY VALUE`); see docs/CONFIGURATION.md"
     ]
     lines += [f"{k} = {json.dumps(v)}" for k, v in sorted(values.items())]
-    target.write_text("\n".join(lines) + "\n")
+    # Atomic replacement keeps credentials owner-readable even with a permissive umask
+    # or a previously world-readable config. mkstemp creates mode 0600.
+    fd, tmp = tempfile.mkstemp(prefix=f".{target.name}.", dir=target.parent)
+    try:
+        with os.fdopen(fd, "w") as stream:
+            stream.write("\n".join(lines) + "\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(tmp, target)
+    finally:
+        Path(tmp).unlink(missing_ok=True)
     return target
 
 

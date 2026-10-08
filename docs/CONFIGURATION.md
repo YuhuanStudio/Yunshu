@@ -96,6 +96,7 @@ internal ones, `--json` prints JSON, `--config FILE` includes a config file.
 | `YUNSHU_FILES_MAX_BYTES` | int | 536870912 (512 MiB) | Files API: maximum size of one uploaded file in bytes (default 512 MB). |
 | `YUNSHU_FILES_TTL_DAYS` | float | unset | Files API: delete uploaded files after this many days. Unset: keep forever. |
 | `YUNSHU_FILES_MAX_TOTAL_BYTES` | int | 0 | Files API: total bytes the store may hold; an upload that would exceed it fails with 413 storage_quota_exceeded (expired files are reaped first). 0: unlimited. |
+| `YUNSHU_EVALS_DIR` | path | unset | Directory of the local Evals API JSON store. Unset: ~/.yunshu/evals. |
 | `YUNSHU_CONVERSATIONS_DIR` | path | unset | Directory of the Conversations API store (JSON, one file per conversation). Unset: ~/.yunshu/conversations. |
 | `YUNSHU_CHAT_COMPLETIONS_DIR` | path | unset | Directory of stored chat completions (store=true; JSON, one file per completion). Unset: ~/.yunshu/chat_completions. |
 | `YUNSHU_CHAT_COMPLETIONS_MAX` | int | 5000 | Stored chat completions kept; the oldest are evicted past this count. |
@@ -154,6 +155,7 @@ internal ones, `--json` prints JSON, `--config FILE` includes a config file.
 | `YUNSHU_VLM_APC_WARM` | `off` \| `lossless` \| `int8` \| `int4` | off | APC WARM tier: what happens to a prefix checkpoint that leaves the RAM tier (HOT, ready-to-use arrays) before it goes to SSD. 'off': straight to SSD. 'lossless': kept in RAM compressed (zstd after a byte-plane shuffle; bit-exact, a WARM hit equals a HOT hit token for token; costs CPU for compression and a decode on hit). 'int8' / 'int4': attention K/V kept in RAM as affine group-quantized codes (LOSSY: a hit restores dequantized K/V, so output can differ from a cold prefill; the SSD tier keeps exact states in these modes). The WARM tier takes YUNSHU_VLM_APC_WARM_SHARE of the APC RAM budget. |
 | `YUNSHU_VLM_APC_WARM_SHARE` | float | 0.4 | Share of the APC RAM budget (YUNSHU_VLM_APC_MEMORY_GB) that the WARM tier takes when YUNSHU_VLM_APC_WARM is on; the HOT tier keeps the rest. One budget, split: total APC RAM does not grow. |
 | `YUNSHU_VLM_MAX_IMAGE_BYTES` | int | 26214400 (25 MiB) | Largest image a request may reference by URL, in bytes. |
+| `YUNSHU_VLM_MAX_VIDEO_BYTES` | int | 104857600 (100 MiB) | Largest video a request may reference by URL, in bytes. |
 | `YUNSHU_VLM_INSECURE_SSL` | bool | off | Retry image downloads without TLS verification when verification fails. |
 | `YUNSHU_ROUND_PREFILL_CHUNK` | int | 512 | Round driver: prompt tokens per prefill span. A decoding request only steps between prefill forwards, so smaller spans keep it running next to a long prompt (Qwen3.8-27B, M5 Max, one MTP row beside an 8K prompt: 512 -> 6 tok/s, 128 -> 24 tok/s, ~20% lower prefill speed). Atoms are fixed per prompt (idle steps merge consecutive full atoms without changing any bit), so output stays independent of what else is running; prompts prefilled with different chunk sizes are each self-consistent but not bit-identical to each other. |
 
@@ -166,7 +168,7 @@ internal ones, `--json` prints JSON, `--config FILE` includes a config file.
 | `YUNSHU_MTP_BLOCK_SIZE` | int | unset | Draft block size (DFlash: the ceiling its acceptance-driven depth stays under). Unset: 6 for MTP, the drafter's trained block for DFlash. |
 | `YUNSHU_SPEC_COPY_ROWS` | int | 16 | Qwen3.5-family single-request speculative lane: verify rows a prompt-copy round may use (copy drafts = rows - 1). A copy round proposes the continuation of the longest earlier occurrence of the current tail in the request's full prompt plus its generated text, and the same verify checks it, so output is unchanged (greedy: identical to plain decode; sampled: keyed-sampler exact); agent / code-editing and multi-turn traffic that quotes its context commits several times more tokens per round. Qualified dense DFlash2 greedy requests use their trained model block plus copied runs; sampled and unsupported requests retain the original depth controller. The default is 16 rows, capped to the backend's certified width (32 for dense lane projections with compatible tile attention, 8 otherwise). 0 turns copy rounds off. |
 | `YUNSHU_DRAFT_BITS` | int | 8 | Qwen3.5-family DFlash drafter weight bits: 8 (default), 4, or 0 to keep the shipped bf16. Drafts are verified by the target, so output is token-identical for every value; fewer bits cut the drafter's bytes per round but can lower acceptance (27B on M5: 4-bit +4% to +8% decode at 1K-8K, -7% on 32K code). |
-| `YUNSHU_SPEC_TREE` | `off` \| `tree` \| `auto` | auto | Qwen3.5-family single-request speculative lane: off keeps trained chain + copy; tree forces the draft-tree verifier; auto uses the certified M5 Q4 DFlash2 fast tree for bounded 1K-class greedy requests, retaining chain + copy elsewhere. Greedy tokens remain identical to plain decode. |
+| `YUNSHU_SPEC_TREE` | `off` \| `tree` \| `auto` | auto | Qwen3.5-family single-request speculative lane: off keeps trained chain + copy; tree forces the draft-tree verifier; auto uses the certified M5 Q4 DFlash2 fast tree for eligible greedy requests within its live-context safety bounds, including long contexts, retaining chain + copy elsewhere. Greedy tokens remain identical to plain decode. |
 | `YUNSHU_NGRAM_DEFAULT` | bool | off | Text models: lossless n-gram speculation on greedy requests by default (per-request spec_decode also enables it). Wins on repetitive output. |
 | `YUNSHU_SPEC_PROPOSER` | `ngram` \| `suffix` | ngram | Text models: speculative proposer family for n-gram speculation. |
 | `YUNSHU_GEMMA4_ASSISTANT` | path | unset | Text Gemma-4 models: assistant drafter directory (KV-shared speculative drafter). |
@@ -224,8 +226,21 @@ internal ones, `--json` prints JSON, `--config FILE` includes a config file.
 
 | Setting | Type | Default | Description |
 |---|---|---|---|
-| `YUNSHU_WEB_SEARCH_PROVIDER` | `auto` \| `none` \| `searxng` \| `brave` \| `tavily` \| `exa` | auto | Search backend for the server-side web_search tool (Anthropic web_search_*, OpenAI Responses web_search). 'auto' picks the first configured of searxng, brave, tavily, exa; 'none' disables. Unconfigured: requests get the API's 'unavailable' error with a hint. |
-| `YUNSHU_SEARXNG_URL` | str | unset | Base URL of a self-hosted SearXNG instance (JSON output enabled), e.g. http://127.0.0.1:8080. The privacy-friendly default recommendation. |
+| `YUNSHU_WEB_SEARCH_PROVIDER` | `auto` \| `none` \| `searxng` \| `brave` \| `tavily` \| `exa` \| `serper` \| `perplexity` \| `ddg_html` \| `wikipedia` \| `mwmbl` \| `mojeek` \| `marginalia` | auto | Search backend. Auto runs lightweight DDG, Wikipedia and configured keyed providers (Mwmbl is an explicit noncommercial opt-in) in parallel with health backoff and RRF. SearXNG is optional. Queries leave the machine; none disables search. |
+| `YUNSHU_WEB_SEARCH_PROVIDER_TIMEOUT` | float | 1.0 | Per-provider metasearch deadline in seconds; slow providers cannot block the whole query. |
+| `YUNSHU_WEB_SEARCH_HEALTH_FILE` | path | ~/.yunshu/cache/websearch-health.json | Small query-free provider health snapshot read by yunshu config. No SERPs or credentials are stored. |
+| `YUNSHU_WEB_MWMBL` | bool | off | Opt in to Mwmbl's open small-web index in auto metasearch. Dataset is CC-BY-NC-SA 4.0 (noncommercial, attribution/share-alike); code is not vendored. Explicit provider=mwmbl also opts in. |
+| `YUNSHU_WEB_KEYLESS` | bool | on | Allow keyless DuckDuckGo (best effort; may block) and Wikipedia. Query text and IP leave the machine. |
+| `YUNSHU_MOJEEK_API_KEY` | str | unset | Mojeek independent-index API key. Configured keys participate in auto metasearch. |
+| `YUNSHU_MARGINALIA_API_KEY` | str | unset | Explicit opt-in to Marginalia small-web search. Noncommercial/public API data is CC-BY-NC-SA 4.0; commercial keys have separate terms. No implicit public key. |
+| `YUNSHU_SERPER_API_KEY` | str | unset | Serper Google SERP API key. |
+| `YUNSHU_PERPLEXITY_API_KEY` | str | unset | Perplexity Search API key (raw results, not Sonar). |
+| `YUNSHU_WEB_RESEARCH` | bool | off | Enrich search snippets with origin pages, untrusted excerpts and local ranking. Stable opt-in pending quality evaluation; fetched URLs leave the machine. |
+| `YUNSHU_WEB_RENDER` | bool | off | Optional local Chromium fallback for short JavaScript shells in advanced Tavily extract/crawl/map. Requires the web-render extra and an installed Playwright Chromium; same-origin GET resources only, no cookies. Never downloads a browser automatically. |
+| `YUNSHU_WEB_RESEARCH_BUDGET` | float | 4.0 | Overall enrichment deadline in seconds (maximum 4). |
+| `YUNSHU_WEB_RESEARCH_PAGES` | int | 6 | Maximum origin pages per enrichment (capped at 6). |
+| `YUNSHU_WEB_RESEARCH_MODEL` | str | unset | Already-loaded local embedding model ID. Never loads a model; absent/unavailable uses BM25 only. Qwen3-Embedding-0.6B is recommended. |
+| `YUNSHU_SEARXNG_URL` | str | unset | Base URL of a self-hosted SearXNG instance (JSON output enabled), e.g. http://127.0.0.1:8080. Optional only; built-in metasearch needs no SearXNG setup. |
 | `YUNSHU_BRAVE_API_KEY` | str | unset | Brave Search API key. |
 | `YUNSHU_TAVILY_API_KEY` | str | unset | Tavily API key. |
 | `YUNSHU_EXA_API_KEY` | str | unset | Exa API key. |

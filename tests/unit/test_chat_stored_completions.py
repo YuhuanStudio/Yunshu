@@ -209,3 +209,38 @@ def test_store_json_response_with_memoryview_body(monkeypatch):
     )
     assert chat_mod._tee_store(response, object()) is response
     assert saved == [completion]
+
+
+def test_store_accepts_jsonresponse_memoryview_body(tmp_path, monkeypatch):
+    from fastapi.responses import JSONResponse
+
+    from yunshu_gateway.routers.chat import ChatCompletionRequest, _tee_store
+
+    monkeypatch.setenv("YUNSHU_CHAT_COMPLETIONS_DIR", str(tmp_path))
+    chat_store.reset_store()
+    body = {
+        "id": "chatcmpl-memory",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "local",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "ok"},
+                "finish_reason": "stop",
+            }
+        ],
+    }
+    response = JSONResponse(body)
+    response.body = memoryview(response.body)
+    req = ChatCompletionRequest(
+        model="local", messages=[{"role": "user", "content": "hi"}], store=True
+    )
+    assert _tee_store(response, req) is response
+    assert (
+        chat_store.get_store().get("chatcmpl-memory")["choices"][0]["message"][
+            "content"
+        ]
+        == "ok"
+    )
+    chat_store.reset_store()

@@ -906,7 +906,10 @@ def _chat_stored(c: Ctx):
         model=c.model, messages=msgs, max_tokens=24, store=True, metadata={"tag": tag}
     )
     got = c.oa.chat.completions.retrieve(r.id)
-    expect(got.id == r.id and got.metadata == {"tag": tag}, f"retrieve {got.id} {got.metadata}")
+    expect(
+        got.id == r.id and got.metadata == {"tag": tag},
+        f"retrieve {got.id} {got.metadata}",
+    )
     expect(
         got.choices[0].message.content == r.choices[0].message.content
         and got.usage.total_tokens == r.usage.total_tokens,
@@ -930,7 +933,9 @@ def _chat_stored(c: Ctx):
         (sgot.choices[0].message.content or "") == text,
         f"stored stream {sgot.choices[0].message.content!r} != streamed {text!r}",
     )
-    listed = [x.id for x in c.oa.chat.completions.list(metadata={"tag": tag}, order="asc")]
+    listed = [
+        x.id for x in c.oa.chat.completions.list(metadata={"tag": tag}, order="asc")
+    ]
     expect(listed == [r.id, sid], f"list by metadata {listed}")
     pm = list(c.oa.chat.completions.messages.list(r.id))
     expect(
@@ -969,7 +974,9 @@ def _realtime_secrets(c: Ctx):
             "output_modalities": ["text"],
         },
     )
-    expect(sec.value.startswith("ek_") and sec.session.type == "realtime", f"secret {sec}")
+    expect(
+        sec.value.startswith("ek_") and sec.session.type == "realtime", f"secret {sec}"
+    )
     expect(sec.session.instructions == "Reply briefly.", "session config not echoed")
     # the ephemeral secret, not the static key, opens the socket and carries its session
     with connect(
@@ -979,9 +986,17 @@ def _realtime_secrets(c: Ctx):
         max_size=None,
     ) as ws:
         first = json.loads(ws.recv(timeout=30))
-        expect(first.get("type") == "session.created", f"first event {first.get('type')}")
-        expect(first["session"]["id"] == sec.session.id, "session id differs from the secret's")
-        expect(first["session"]["instructions"] == "Reply briefly.", "secret session not applied")
+        expect(
+            first.get("type") == "session.created", f"first event {first.get('type')}"
+        )
+        expect(
+            first["session"]["id"] == sec.session.id,
+            "session id differs from the secret's",
+        )
+        expect(
+            first["session"]["instructions"] == "Reply briefly.",
+            "secret session not applied",
+        )
         ws.send(
             json.dumps(
                 {
@@ -995,8 +1010,13 @@ def _realtime_secrets(c: Ctx):
             )
         )
         ws.send(json.dumps({"type": "response.create"}))
-        evs = _ws_events(ws, lambda e: e.get("type") in ("response.done", "error"), timeout=240)
-        expect(evs[-1]["type"] == "response.done", f"secret turn ended with {evs[-1]['type']}")
+        evs = _ws_events(
+            ws, lambda e: e.get("type") in ("response.done", "error"), timeout=240
+        )
+        expect(
+            evs[-1]["type"] == "response.done",
+            f"secret turn ended with {evs[-1]['type']}",
+        )
     if c.token:
         bad = None
         try:
@@ -1009,8 +1029,13 @@ def _realtime_secrets(c: Ctx):
         except Exception:
             bad = None
         expect(bad is None, f"an unknown ek_ secret was accepted: {bad}")
-    s = c.oa.beta.realtime.sessions.create(model=c.model, instructions="hi", modalities=["text"])
-    expect(s.client_secret.value.startswith("ek_") and s.modalities == ["text"], f"sessions {s}")
+    s = c.oa.beta.realtime.sessions.create(
+        model=c.model, instructions="hi", modalities=["text"]
+    )
+    expect(
+        s.client_secret.value.startswith("ek_") and s.modalities == ["text"],
+        f"sessions {s}",
+    )
     t = c.oa.beta.realtime.transcription_sessions.create(
         input_audio_transcription={"model": "whisper-1"}
     )
@@ -2244,6 +2269,7 @@ from route_checks_omni import (
 from route_checks_tools import (
     FakeBackend,  # noqa: E402,F401  registers the server-tool checks
 )
+from route_checks_tavily import tavily_routes  # noqa: E402,F401
 from route_checks_vision import (
     _vision_input,  # noqa: E402,F401  registers the image-input check
 )
@@ -2292,6 +2318,10 @@ def _ollama_unsupported(c: Ctx):
         err_ok(r, "ollama")
 
 
+from route_checks_agent_compat import (  # noqa: E402,F401
+    custom_tools as _agent_custom_tools,
+)
+from route_checks_respfeat import computer as _respfeat_computer  # noqa: E402,F401
 from route_checks_vllm import (
     _chat_validation,  # noqa: E402,F401  registers the vLLM-derived validation checks
 )
@@ -2511,3 +2541,140 @@ def _responses_custom_tool(c: Ctx):
             max_output_tokens=8,
         )
         expect(follow.output, "custom tool history did not round-trip")
+
+
+@check(
+    "evals",
+    "POST /v1/evals",
+    "GET /v1/evals",
+    "GET /v1/evals/{eval_id}",
+    "POST /v1/evals/{eval_id}",
+    "DELETE /v1/evals/{eval_id}",
+    "POST /v1/evals/{eval_id}/runs",
+    "GET /v1/evals/{eval_id}/runs",
+    "GET /v1/evals/{eval_id}/runs/{run_id}",
+    "POST /v1/evals/{eval_id}/runs/{run_id}/cancel",
+    "DELETE /v1/evals/{eval_id}/runs/{run_id}",
+    "GET /v1/evals/{eval_id}/runs/{run_id}/output_items",
+    "GET /v1/evals/{eval_id}/runs/{run_id}/output_items/{output_item_id}",
+    served=True,
+)
+def evals_check(c: Ctx):
+    sdk = c.oa
+    ev = sdk.evals.create(
+        name="route smoke",
+        data_source_config={"type": "custom", "item_schema": {"type": "object"}},
+        testing_criteria=[
+            {
+                "type": "string_check",
+                "name": "string",
+                "input": "{{sample.output_text}}",
+                "reference": "hello",
+                "operation": "ne",
+            },
+            {
+                "type": "text_similarity",
+                "name": "lexical",
+                "input": "{{item.answer}}",
+                "reference": "hello",
+                "evaluation_metric": "rouge_l",
+                "pass_threshold": 1,
+            },
+            {
+                "type": "score_model",
+                "name": "score",
+                "model": c.model,
+                "input": [
+                    {
+                        "role": "user",
+                        "content": "Assign score 1. Return only JSON with score.",
+                    }
+                ],
+                "range": [0, 1],
+                "pass_threshold": 0,
+            },
+            {
+                "type": "label_model",
+                "name": "label",
+                "model": c.model,
+                "input": [
+                    {
+                        "role": "user",
+                        "content": "Assign label good. Return only JSON with label.",
+                    }
+                ],
+                "labels": ["good", "bad"],
+                "passing_labels": ["good", "bad"],
+            },
+        ],
+    )
+    try:
+        expect(sdk.evals.retrieve(ev.id).id == ev.id, "retrieve eval")
+        expect(
+            sdk.evals.update(ev.id, name="updated", metadata={"check": "evals"}).name
+            == "updated",
+            "update eval",
+        )
+        expect(any(e.id == ev.id for e in sdk.evals.list()), "list evals")
+        ds = {
+            "type": "completions",
+            "model": c.model,
+            "input_messages": {
+                "type": "template",
+                "template": [{"role": "user", "content": "Reply with one word: hi"}],
+            },
+            "sampling_params": {"max_completion_tokens": 32, "temperature": 0},
+            "source": {
+                "type": "file_content",
+                "content": [{"item": {"answer": "hello"}}],
+            },
+        }
+        run = sdk.evals.runs.create(ev.id, data_source=ds)
+        deadline = time.monotonic() + 180
+        while time.monotonic() < deadline:
+            run = sdk.evals.runs.retrieve(run.id, eval_id=ev.id)
+            if run.status not in ("queued", "in_progress"):
+                break
+            time.sleep(0.2)
+        expect(
+            run.status == "completed"
+            and run.result_counts.total == 1
+            and run.result_counts.errored == 0,
+            f"eval run: {run.model_dump()}",
+        )
+        expect(
+            run.per_model_usage[0].invocation_count == 3,
+            "local sampling + two local graders",
+        )
+        expect(any(r.id == run.id for r in sdk.evals.runs.list(ev.id)), "list runs")
+        items = sdk.evals.runs.output_items.list(run.id, eval_id=ev.id)
+        expect(
+            len(items.data) == 1 and len(items.data[0].results) == 4,
+            "four grader results",
+        )
+        item = sdk.evals.runs.output_items.retrieve(
+            items.data[0].id, eval_id=ev.id, run_id=run.id
+        )
+        expect(item.sample.usage.completion_tokens > 0, "sample used normal engine")
+        cancel_ds = {
+            **ds,
+            "source": {
+                "type": "file_content",
+                "content": [{"item": {"answer": "hello"}} for _ in range(100)],
+            },
+        }
+        canceled = sdk.evals.runs.create(ev.id, data_source=cancel_ds)
+        expect(
+            sdk.evals.runs.cancel(canceled.id, eval_id=ev.id).status == "canceled",
+            "cancel run",
+        )
+        expect(sdk.evals.runs.delete(canceled.id, eval_id=ev.id).deleted, "delete run")
+        c.notes["evals"] = {
+            "run_id": run.id,
+            "counts": run.result_counts.model_dump(),
+            "invocations": run.per_model_usage[0].invocation_count,
+            "graders": len(item.results),
+            "sdk": __import__("openai").__version__,
+        }
+    finally:
+        expect(sdk.evals.delete(ev.id).deleted, "delete eval")
