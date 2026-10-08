@@ -127,3 +127,14 @@ def test_loop_stage_crash_rolls_back(tmp_path):
     rolled = []
     r = Loop(tmp_path / "l", st, lambda c: None, rolled.append).run("z")
     assert r.outcome == "rolled_back" and rolled == ["z"]
+
+
+def test_default_space_knobs_are_registered():
+    from yunshu_engine import settings
+
+    for k in bandit.DEFAULT_SPACE:
+        assert (
+            k in settings.REGISTRY
+            if hasattr(settings, "REGISTRY")
+            else settings.get(k) is not None
+        )
