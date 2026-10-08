@@ -1412,7 +1412,8 @@ class VLMEngine:
         has_media: bool,
         kwargs: dict,
     ) -> None:
-        if not settings.get("YUNSHU_NEXT_TURN_PREFILL"):
+        mode = settings.get("YUNSHU_NEXT_TURN_PREFILL")
+        if mode in (None, False, "", "off", "boundary"):
             return
         reason = next_turn.ineligible_reason(
             finish_reason=finish_reason,
@@ -1431,7 +1432,7 @@ class VLMEngine:
             next_turn.record("ineligible")
             return  # other work is waiting: the GPU is not idle
         task = asyncio.ensure_future(
-            self._rehearse(messages, reply, enable_thinking, tpl_extra)
+            self._rehearse(messages, reply, enable_thinking, tpl_extra, str(mode))
         )
         self._rehearsal_task = task
 
@@ -1441,6 +1442,7 @@ class VLMEngine:
         reply: str,
         enable_thinking: bool | None,
         tpl_extra: dict | None,
+        mode: str = "stride",
     ) -> None:
         loop = asyncio.get_running_loop()
         ev = threading.Event()
@@ -1465,10 +1467,15 @@ class VLMEngine:
             stride = int(getattr(self, "_apc_prefill_stride", 0) or 0)
             manager = getattr(self._apc_backend, "manager", None)
             guard = int(getattr(manager, "exact_cache_guard_tokens", 1) or 1)
-            target = next_turn.rehearsal_length(len(ids), stride, guard)
-            if target is None:
-                return None
-            ids = ids[:target]
+            if mode == "exact":
+                # end exactly at the next turn's header: the manager's turn boundary is
+                # the checkpoint, the guard token is the header itself
+                ids = full[: len(ids) + guard]
+            else:
+                target = next_turn.rehearsal_length(len(ids), stride, guard)
+                if target is None:
+                    return None
+                ids = ids[:target]
             params = self._runner_kwargs(
                 max_tokens=1,
                 temperature=0.0,
@@ -2131,6 +2138,10 @@ class VLMEngine:
                     prefill_boundary_tokens=tuple(boundary_tokens),
                     prefill_assistant_header=assistant_header,
                     prefill_message_end=message_end,
+                    prefill_turn_boundary=(
+                        settings.get("YUNSHU_NEXT_TURN_PREFILL")
+                        in ("boundary", "exact")
+                    ),
                 )
                 self._install_apc_identity(lm)
                 self._apc_semantic_hash = semantic_extra_hash(

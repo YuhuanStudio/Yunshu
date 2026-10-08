@@ -1071,6 +1071,7 @@ class YunshuAPCManager(APCManager):
         prefill_boundary_tokens: tuple[int, ...] = (),
         prefill_assistant_header: tuple[int, int] | None = None,
         prefill_message_end: int | None = None,
+        prefill_turn_boundary: bool = False,
         **kwargs: Any,
     ):
         overrides = dict(kwargs.pop("overrides", None) or {})
@@ -1083,6 +1084,9 @@ class YunshuAPCManager(APCManager):
         self.prefill_boundary_tokens = frozenset(prefill_boundary_tokens)
         self.prefill_assistant_header = prefill_assistant_header
         self.prefill_message_end = prefill_message_end
+        # next-turn rehearsal: the end of every earlier assistant turn (the position of the
+        # next turn's header) is a forward boundary and a restore point
+        self.prefill_turn_boundary = bool(prefill_turn_boundary)
         self.lookups: collections.deque[Lookup] = collections.deque(maxlen=64)
         self._generation = 0
         # Explicit endpoints are protected against superseding until their
@@ -1776,8 +1780,18 @@ class YunshuAPCManager(APCManager):
         header = self.prefill_assistant_header
         assistant = header is None
         previous = None
+        turn_end_pending = False
         for i, token in enumerate(token_ids):
             if header is not None:
+                if self.prefill_turn_boundary:
+                    if token == header[0] and turn_end_pending:
+                        boundaries.add(
+                            i
+                        )  # a prior assistant turn ended just before here
+                    if token == header[0]:
+                        turn_end_pending = False
+                    elif token == self.prefill_message_end:
+                        turn_end_pending = bool(assistant)
                 if token == header[0] or token == self.prefill_message_end:
                     assistant = False
                 elif previous == header[0]:

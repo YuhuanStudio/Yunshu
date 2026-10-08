@@ -62,7 +62,11 @@ def _engine(monkeypatch, *, on=True):
     monkeypatch.setattr(
         settings,
         "get",
-        lambda k, *a, **kw: on if k == "YUNSHU_NEXT_TURN_PREFILL" else None,
+        lambda k, *a, **kw: (
+            ("stride" if on is True else on or "off")
+            if k == "YUNSHU_NEXT_TURN_PREFILL"
+            else None
+        ),
     )
     return eng, calls
 
@@ -214,3 +218,30 @@ def test_rehearsal_stops_at_the_stride_grid(monkeypatch):
     ids, _ = calls[0]
     # prefix is 8 tokens; stride 4 -> S = 8 would pass the prefix with the guard, so S = 4
     assert ids == [9, 1, 3, 4, 9]
+
+
+def test_exact_mode_rehearses_through_the_next_turn_header(monkeypatch):
+    eng, calls = _engine(monkeypatch, on="exact")
+    eng._apc_prefill_stride = 2048
+    mgr = type("M", (), {"exact_cache_guard_tokens": 1})()
+    eng._apc_backend = type("B", (), {"manager": mgr})()
+
+    async def main():
+        _go(eng)
+        await eng._rehearsal_task
+
+    asyncio.run(main())
+    ids, _ = calls[0]
+    # prefix is 8 tokens (ends before the sentinel user header); exact adds the header token
+    assert ids == [9, 1, 3, 4, 9, 2, 3, 5, 9]
+
+
+def test_boundary_mode_never_rehearses(monkeypatch):
+    eng, calls = _engine(monkeypatch, on="boundary")
+
+    async def main():
+        _go(eng)
+        assert eng._rehearsal_task is None
+
+    asyncio.run(main())
+    assert calls == []

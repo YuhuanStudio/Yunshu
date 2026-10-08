@@ -398,10 +398,11 @@ def completed_rehearsals(metrics_text):
 def check_rehearsal_engaged(s, a):
     """Fail closed: a server run with YUNSHU_NEXT_TURN_PREFILL=1 and a think time must have
     completed at least one rehearsal, or the A/B would measure a feature that never ran."""
-    if str(s.extra_env.get("YUNSHU_NEXT_TURN_PREFILL", "")).lower() not in (
-        "1",
-        "true",
-        "on",
+    if str(s.extra_env.get("YUNSHU_NEXT_TURN_PREFILL", "")).lower() in (
+        "",
+        "off",
+        "0",
+        "false",
     ):
         return None
     req = urllib.request.Request(
