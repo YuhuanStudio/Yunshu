@@ -1277,10 +1277,10 @@ def stage_priorart(ctx: Ctx) -> StageResult:
     )
     for kind in kinds:
         prefix = str(ctx.cand.path / "python")
-        if kind.startswith("diffusion"):
+        if kind.startswith("diffusion") or kind == "capabilities":
             prefix += ":/Volumes/P5Plus/yunshu-build/codex/priorfix/mflux-deps"
         extra = []
-        if kind == "retrieval":
+        if kind in ("retrieval", "capabilities"):
             import urllib.request
 
             reference = ctx.run.path / "aperepel-cfe20b0-server.py"
@@ -1295,6 +1295,17 @@ def stage_priorart(ctx: Ctx) -> StageResult:
         if kind == "diffusion-timing":
             script = ctx.cand.path / "scripts/research/priorfix_diffusion_timing.py"
             mode_args = []
+        elif kind == "capabilities":
+            script = ctx.cand.path / "scripts/research/priorfix_capabilities.py"
+            mode_args = [
+                "--model-root",
+                ctx.env.get("EMBEDDING_MODEL_ROOT", "/Volumes/P5Plus/models"),
+                "--reference",
+                ctx.env.get(
+                    "EMBEDDING_REFERENCE",
+                    "/Volumes/P5Plus/yunshu-build/codex/priorfix/gemma-ref/ref.json",
+                ),
+            ]
         cell = Cell(
             "priorart",
             kind,
@@ -1309,7 +1320,7 @@ def stage_priorart(ctx: Ctx) -> StageResult:
                 "--out",
                 "{out}",
             ],
-            mem_gb=32 if kind.startswith("diffusion") else 8,
+            mem_gb=32 if kind.startswith("diffusion") or kind == "capabilities" else 8,
             quiet=kind == "diffusion-timing",
             timeout_min=10,
             stall_min=5,
@@ -1362,8 +1373,6 @@ def stage_evals(ctx: Ctx) -> StageResult:
         if not numbers.get("passed"):
             reasons.append("Evals SDK route smoke failed")
     return _finish(ctx, StageResult("evals", not reasons, reasons, numbers))
-
-
 
 
 def stage_tavily(ctx: Ctx) -> StageResult:

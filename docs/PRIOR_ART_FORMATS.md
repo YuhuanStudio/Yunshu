@@ -76,3 +76,11 @@ before the unchanged mflux HF mapper/applier. Packed pad tokens are decoded too.
 Evidence explicitly labels this as a floating reference with a format bridge;
 it is not native mflux quantized loading or a lossless serving replacement. The
 bridge is isolated to research scripts and changes no serving defaults.
+
+`--suite priorart --env PRIORART_KINDS=capabilities` qualifies the three Gemma
+formats, retrieval, classifier, diffusion audit and Omni preparation in one
+bounded GPU admission. It runs the existing probes in separate child processes
+so models are released between arms, retains one evidence file and return code
+per arm, and rejects missing, incomplete, stale or wrong-device evidence. All
+seven arms are recorded even if one fails. This avoids seven separate queue waits
+without changing their numerical acceptance rules.
