@@ -73,6 +73,28 @@ class EvalStore:
             self.get(id)
             self.path(id).unlink()
 
+    def create_run(self, rec: dict) -> dict:
+        # Serialize parent existence with child creation and cascade deletion.
+        with _lock:
+            self.get_eval(rec["eval_id"])
+            return self.save(rec)
+
+    def save_progress(self, rec: dict) -> dict:
+        with _lock:
+            self.run(rec["eval_id"], rec["id"])
+            return self.save(rec)
+
+    def delete_eval(self, id: str) -> list[str]:
+        with _lock:
+            self.get_eval(id)
+            children = [r["id"] for r in self.rows("evalrun") if r["eval_id"] == id]
+            # Unlink the parent first. Recovery removes child leftovers if a
+            # process crashes partway through this multi-file cascade.
+            self.path(id).unlink()
+            for rid in children:
+                self.path(rid).unlink(missing_ok=True)
+            return children
+
     def get_eval(self, id: str) -> dict:
         if not id.startswith("eval_"):
             raise ConversationError(404, "Eval not found", "not_found")

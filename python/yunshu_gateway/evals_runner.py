@@ -221,10 +221,10 @@ def add_usage(rec: dict, model: str, payload: dict):
 
 
 async def process(store: EvalStore, rid: str, app, headers: dict):
-    rec = store.get(rid)
     try:
-        store.change(rid, status="in_progress")
+        rec = store.get(rid)
         rec["status"] = "in_progress"
+        store.save_progress(rec)
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=app),
             base_url="http://yunshu.local",
@@ -378,7 +378,7 @@ async def process(store: EvalStore, rid: str, app, headers: dict):
                         if s["testing_criteria"] == result["name"]
                     )
                     summary["passed" if result["passed"] else "failed"] += 1
-                store.save(rec)
+                store.save_progress(rec)
                 await asyncio.sleep(0.01)
         store.change(rid, status="completed")
     except asyncio.CancelledError:
@@ -412,7 +412,11 @@ async def cancel(rid: str):
 
 def recover():
     store = get_store()
+    parents = {r["id"] for r in store.rows("eval")}
     for rec in store.rows("evalrun"):
+        if rec["eval_id"] not in parents:
+            store.delete(rec["id"])
+            continue
         if rec["status"] in ("queued", "in_progress"):
             store.change(
                 rec["id"],

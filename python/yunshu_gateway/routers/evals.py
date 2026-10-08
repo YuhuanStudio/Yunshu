@@ -222,12 +222,9 @@ async def update_eval(request: Request, eval_id: str):
 @endpoint
 async def delete_eval(request: Request, eval_id: str):
     store = get_store()
-    await _io(store.get_eval, eval_id)
-    for run in await _io(store.rows, "evalrun"):
-        if run["eval_id"] == eval_id:
-            await evals_runner.cancel(run["id"])
-            await _io(store.delete, run["id"])
-    await _io(store.delete, eval_id)
+    children = await _io(store.delete_eval, eval_id)
+    for rid in children:
+        await evals_runner.cancel(rid)
     return dict(object="eval.deleted", deleted=True, eval_id=eval_id)
 
 
@@ -288,7 +285,7 @@ async def create_run(request: Request, eval_id: str):
         _criteria=ev["testing_criteria"],
         _outputs=[],
     )
-    await _io(store.save, rec)
+    await _io(store.create_run, rec)
     headers = {
         k: v
         for k, v in request.headers.items()

@@ -654,3 +654,72 @@ def test_nonfinite_inline_and_file_json_are_400(env):
             e.id,
             data_source={"type": "jsonl", "source": {"type": "file_id", "id": f.id}},
         )
+
+
+def test_concurrent_create_after_parent_delete_has_no_orphan_or_inference(
+    env, monkeypatch
+):
+    import threading
+
+    sdk, _, calls, _ = env
+    e = definition(sdk)
+    entered, release = threading.Event(), threading.Event()
+    original = evals_runner.source_rows
+
+    def delayed(source, config):
+        entered.set()
+        assert release.wait(5)
+        return original(source, config)
+
+    monkeypatch.setattr(evals_runner, "source_rows", delayed)
+    outcomes = []
+
+    def create():
+        try:
+            sdk.evals.runs.create(e.id, data_source=source(1, sampling=True))
+            outcomes.append("created")
+        except openai.NotFoundError:
+            outcomes.append("not_found")
+
+    thread = threading.Thread(target=create)
+    thread.start()
+    try:
+        assert entered.wait(3)
+        assert sdk.evals.delete(e.id).deleted
+    finally:
+        release.set()
+        thread.join(5)
+    assert not thread.is_alive() and outcomes == ["not_found"]
+    assert not get_store().rows("evalrun") and not calls
+
+
+def test_deleted_runs_cannot_be_resurrected_by_progress_or_late_start(env):
+    from yunshu_gateway.conversations_store import ConversationError
+    from yunshu_gateway.evals_store import new_id
+
+    sdk, client, calls, _ = env
+    e = definition(sdk)
+    store = get_store()
+    rec = {
+        "id": new_id("evalrun"),
+        "eval_id": e.id,
+        "created_at": 0,
+        "status": "queued",
+    }
+    store.create_run(rec)
+
+    async def late():
+        evals_runner.start(store, rec["id"], client.app, {})
+        task = evals_runner._tasks[rec["id"]]
+        assert store.delete_eval(e.id) == [rec["id"]]
+        await task  # missing record is normal termination, not an unhandled exception
+        assert rec["id"] not in evals_runner._tasks
+
+    asyncio.run(late())
+    with pytest.raises(ConversationError):
+        store.save_progress(rec)
+    assert not store.rows("evalrun") and not calls
+    # A crash midway through a multi-file cascade can leave a child file.
+    store.save(rec)
+    evals_runner.recover()
+    assert not store.rows("evalrun")
