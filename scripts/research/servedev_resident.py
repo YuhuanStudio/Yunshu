@@ -264,7 +264,9 @@ def run(a):
             except httpx.HTTPError:
                 pass
             if resident is not None and resident.poll() is not None:
-                raise RuntimeError("resident exited: " + (directory / "yunshu.log").read_text()[-3000:])
+                raise RuntimeError(
+                    "resident exited: " + (directory / "yunshu.log").read_text()[-3000:]
+                )
             if time.monotonic() > deadline:
                 raise RuntimeError(
                     "resident not ready; "
@@ -282,6 +284,10 @@ def run(a):
             }
             for n in map(int, a.ctx.split(","))
         ]
+        for (
+            body
+        ) in bodies:  # warm each shape so the baseline is not a cold first request
+            request(url, body)
         for rep in range(a.reps):
             for body in bodies:
                 baseline = request(url, body)
