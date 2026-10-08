@@ -245,6 +245,20 @@ class Executor:
     def run_cells(self, cells: list) -> dict:
         """Run every cell not already completed; returns key -> CellResult. Stops at the first
         failure (fail-fast): pending cells of the batch are cancelled and left unresults."""
+        # Long suites contain many contexts/reps. Keep at most six cells in
+        # flight, as required by gpuq ownership hygiene, while preserving the
+        # interleaved arm order and the existing fail-fast/resume behavior.
+        if len(cells) > 6:
+            results = {}
+            for start in range(0, len(cells), 6):
+                batch = cells[start : start + 6]
+                partial = self.run_cells(batch)
+                results.update(partial)
+                if len(partial) != len(batch) or any(
+                    not r.ok for r in partial.values()
+                ):
+                    break
+            return results
         results: dict = {}
         todo: list = []
         for c in cells:

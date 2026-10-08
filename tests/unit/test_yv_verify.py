@@ -340,6 +340,42 @@ def mkexec(w, label="x"):
     return rd, Executor(rd, w.gq, label, lambda m: None, cache_dir=w.tmp / "cellcache")
 
 
+@pytest.mark.parametrize("failure", [None, "6"])
+def test_executor_bounds_pending_cells_and_stops_before_next_window(
+    world, monkeypatch, failure
+):
+    from verify.execute import CellResult
+
+    _, ex = mkexec(world)
+    live, submitted, cancelled = set(), [], []
+    monkeypatch.setattr(ex, "_cached", lambda c: None)
+    monkeypatch.setattr(ex, "_shared", lambda c: None)
+    monkeypatch.setattr(ex, "_inflight", lambda c: None)
+    monkeypatch.setattr(ex, "_attempts", lambda c: 0)
+
+    def submit(c, attempt):
+        live.add(c.key)
+        submitted.append(c.key)
+        assert len(live) <= 6
+        return c.key
+
+    def finish(c, jid, attempt):
+        live.remove(c.key)
+        return CellResult(c.key, c.key != failure)
+
+    monkeypatch.setattr(ex, "_submit", submit)
+    monkeypatch.setattr(ex, "_finish", finish)
+    monkeypatch.setattr(ex.gq, "cancel", cancelled.append)
+    results = ex.run_cells([Cell("st", str(i), []) for i in range(18)])
+    if failure is None:
+        assert len(results) == len(submitted) == 18
+        assert not live and not cancelled
+    else:
+        assert submitted == [str(i) for i in range(12)]
+        assert len(results) == 7 and not results["6"].ok
+        assert cancelled == [str(i) for i in range(7, 12)]
+
+
 def cell(key, body, **kw):
     return Cell("st", key, [sys.executable, "-c", body, "{out}"], **kw)
 
