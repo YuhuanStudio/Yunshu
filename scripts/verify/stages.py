@@ -1068,6 +1068,72 @@ def _memory_valid(path: Path):
     return True, ""
 
 
+def _websearch_valid(path: Path):
+    rows = read_jsonl(path)
+    if not rows or rows[-1].get("complete") is not True:
+        return False, "missing final complete record"
+    checks = [r for r in rows if r.get("check")]
+    if not checks or any(r.get("pass") is not True for r in checks):
+        return False, "missing or failed web tool checks"
+    return True, ""
+
+
+def stage_websearch(ctx: Ctx) -> StageResult:
+    # Candidate harness checks old search contract on base; new page actions on candidate.
+    script = ctx.cand.path / "scripts/research/websearch_probe.py"
+    cells = []
+    for arm in ("base", "cand"):
+        cells.append(
+            Cell(
+                "websearch",
+                arm,
+                [
+                    "env",
+                    *[
+                        f"{key}={value}"
+                        for key, value in sorted(ctx.arm_env(arm).items())
+                    ],
+                    "PYTHONPATH="
+                    + str(ctx.tree(arm).path / "python")
+                    + os.pathsep
+                    + os.environ.get("PYTHONPATH", ""),
+                    ctx.py,
+                    str(script),
+                    "--src",
+                    str(ctx.tree(arm).path / "python"),
+                    "--model",
+                    ctx.model,
+                    "--out",
+                    "{out}",
+                    *(
+                        ["--baseline"]
+                        if arm == "base"
+                        else [
+                            "--embedding-model",
+                            "/Volumes/P5Plus/models/Qwen3-Embedding-0.6B",
+                            "--eval-snapshot",
+                            str(
+                                ctx.cand.path
+                                / "scripts/research/data/websearch_adversarial.jsonl"
+                            ),
+                        ]
+                    ),
+                ],
+                mem_gb=14,
+                timeout_min=8,
+                stall_min=4,
+                validate=_websearch_valid,
+                device="m5",
+            )
+        )
+    results = ctx.exe.run_cells(cells)
+    reasons = _failed_cells(results)
+    numbers = {
+        key: read_jsonl(r.evidence) if r.evidence else [] for key, r in results.items()
+    }
+    return _finish(ctx, StageResult("websearch", not reasons, reasons, numbers))
+
+
 def stage_rerank(ctx: Ctx) -> StageResult:
     """New capabilities: candidate HTTP output vs independent Transformers oracle.
 
@@ -1193,8 +1259,110 @@ def stage_evals(ctx: Ctx) -> StageResult:
     return _finish(ctx, StageResult("evals", not reasons, reasons, numbers))
 
 
+
+
+def stage_tavily(ctx: Ctx) -> StageResult:
+    cells = [
+        Cell(
+            "tavily",
+            arm,
+            [
+                "env",
+                *[f"{key}={value}" for key, value in sorted(ctx.arm_env(arm).items())],
+                "PYTHONPATH=" + str(ctx.tree(arm).path / "python"),
+                ctx.py,
+                str(ctx.cand.path / "scripts/research/tavily_probe.py"),
+                "--src",
+                str(ctx.tree(arm).path / "python"),
+                "--model",
+                ctx.model,
+                "--out",
+                "{out}",
+                *(["--baseline"] if arm == "base" else []),
+            ],
+            mem_gb=ctx.mem_gb or 14,
+            timeout_min=8,
+            stall_min=4,
+            validate=_websearch_valid,
+            device="m5",
+        )
+        for arm in ("base", "cand")
+    ]
+    results = ctx.exe.run_cells(cells)
+    reasons = _failed_cells(results)
+    return _finish(
+        ctx,
+        StageResult(
+            "tavily",
+            not reasons,
+            reasons,
+            {
+                key: read_jsonl(result.evidence) if result.evidence else []
+                for key, result in results.items()
+            },
+        ),
+    )
+
+
+def _searchrank_valid(path):
+    rows = read_jsonl(path)
+    arms = {row.get("backend"): row for row in rows if "backend" in row}
+    ok = bool(
+        rows
+        and rows[-1].get("complete") is True
+        and all(
+            arms.get(name, {}).get("status") == "ok"
+            for name in ("cpu", "coreml_cpu_ne", "mlx")
+        )
+    )
+    return ok, "All CPU/Core ML/MLX backends must finish with finite scores"
+
+
+def stage_searchrank(ctx: Ctx) -> StageResult:
+    interpreter = ctx.env.get("SEARCHRANK_PY", ctx.py)
+    cell = Cell(
+        "searchrank",
+        "backends",
+        [
+            "env",
+            "PYTHONPATH=" + str(ctx.cand.path / "python"),
+            interpreter,
+            str(ctx.cand.path / "scripts/research/searchrank_backends.py"),
+            "--model",
+            ctx.model,
+            "--out",
+            "{out}",
+            "--cache",
+            str(ctx.run.path / "coreml-cache"),
+        ],
+        mem_gb=4,
+        timeout_min=10,
+        stall_min=5,
+        quiet=True,
+        validate=_searchrank_valid,
+        device="m5",
+    )
+    results = ctx.exe.run_cells([cell])
+    reasons = _failed_cells(results)
+    return _finish(
+        ctx,
+        StageResult(
+            "searchrank",
+            not reasons,
+            reasons,
+            {
+                key: read_jsonl(result.evidence) if result.evidence else []
+                for key, result in results.items()
+            },
+        ),
+    )
+
+
 STAGE_FUNCS = {
     "evals": stage_evals,
+    "websearch": stage_websearch,
+    "tavily": stage_tavily,
+    "searchrank": stage_searchrank,
     "rerank": stage_rerank,
     "preflight": stage_preflight,
     "smoke": stage_smoke,

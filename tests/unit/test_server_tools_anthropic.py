@@ -166,6 +166,7 @@ def test_web_search_stream_events(make):
 
 
 def test_no_provider_is_unavailable_with_hint(make, monkeypatch):
+    monkeypatch.setenv("YUNSHU_WEB_KEYLESS", "0")
     for k in (
         "YUNSHU_SEARXNG_URL",
         "YUNSHU_BRAVE_API_KEY",

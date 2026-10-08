@@ -28,7 +28,9 @@ def _start(drain: str, delay="0.2", n="15"):
     env = {
         **os.environ,
         "YUNSHU_DRAIN_TIMEOUT": drain,
-        "PYTHONPATH": str(ROOT / "python"),
+        "PYTHONPATH": os.pathsep.join(
+            filter(None, (str(ROOT / "python"), os.environ.get("PYTHONPATH")))
+        ),
     }
     env.pop("YUNSHU_AUTH_TOKEN", None)
     listener = reserve_listener()
@@ -65,6 +67,28 @@ def _start(drain: str, delay="0.2", n="15"):
             time.sleep(0.2)
     p.kill()
     raise AssertionError("server did not start: " + p.stdout.read().decode()[-500:])
+
+
+def test_scripted_child_preserves_isolated_dependency_path(monkeypatch):
+    from types import SimpleNamespace
+
+    captured = {}
+    process = SimpleNamespace(poll=lambda: None)
+    monkeypatch.setenv("PYTHONPATH", "/fixture/isolated-dependencies")
+
+    def popen(cmd, **kwargs):
+        captured.update(kwargs)
+        return process
+
+    monkeypatch.setattr(subprocess, "Popen", popen)
+    monkeypatch.setattr(
+        httpx, "get", lambda *args, **kwargs: SimpleNamespace(status_code=200)
+    )
+    assert _start("0") is process
+    assert captured["env"]["PYTHONPATH"].split(os.pathsep) == [
+        str(ROOT / "python"),
+        "/fixture/isolated-dependencies",
+    ]
 
 
 def _stream_then_sigterm(p):

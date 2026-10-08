@@ -23,6 +23,51 @@ from verify import analyze, core, gate, runner, stages, suites, verdict  # noqa:
 from verify.execute import Cell, Executor  # noqa: E402
 
 
+@pytest.mark.parametrize("stage", [stages.stage_tavily, stages.stage_websearch])
+def test_web_cells_apply_recorded_arm_environment(stage, tmp_path):
+    from types import SimpleNamespace
+
+    cells = []
+
+    class CapturedError(Exception):
+        pass
+
+    class Capture:
+        def run_cells(self, submitted):
+            cells.extend(submitted)
+            raise CapturedError
+
+    ctx = stages.Ctx(
+        run=None,
+        exe=Capture(),
+        base=SimpleNamespace(path=tmp_path / "base"),
+        cand=SimpleNamespace(path=tmp_path / "cand"),
+        env={
+            "COVAUDIT_BIN": "/isolated path/yunshu",
+            "SHARED": "common",
+            "PYTHONPATH": "wrong-tree",
+        },
+        base_env={"ARM": "base", "SHARED": "base-override"},
+        cand_env={"ARM": "cand", "SHARED": "cand-override"},
+        model="tiny",
+        model_name="tiny",
+        suite={},
+        mem_gb=14,
+    )
+    with pytest.raises(CapturedError):
+        stage(ctx)
+    assert len(cells) == 2
+    for cell in cells:
+        interpreter = cell.argv.index(ctx.py)
+        assignments = dict(arg.split("=", 1) for arg in cell.argv[1:interpreter])
+        assert assignments["COVAUDIT_BIN"] == "/isolated path/yunshu"
+        assert assignments["ARM"] == cell.key
+        assert assignments["SHARED"] == cell.key + "-override"
+        assert assignments["PYTHONPATH"].split(":")[0] == str(
+            tmp_path / cell.key / "python"
+        )
+
+
 def git(cwd, *a):
     return subprocess.run(
         ["git", "-c", "user.name=t", "-c", "user.email=t@t", *a],
@@ -133,8 +178,11 @@ def test_full_suite_has_every_stage():
         "longqa",
         "conc",
         "client_compat",
+        "websearch",
         "rerank",
         "evals",
+        "tavily",
+        "searchrank",
     }
 
 

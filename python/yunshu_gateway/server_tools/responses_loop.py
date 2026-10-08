@@ -34,8 +34,8 @@ from yunshu_engine import settings
 
 from .mcp_connector import McpError
 from .runtime import (
-    WEB_SEARCH_DESC,
-    WEB_SEARCH_SCHEMA,
+    RESPONSES_WEB_DESC,
+    RESPONSES_WEB_SCHEMA,
     ServerToolDef,
     ServerToolRuntime,
     format_search_text,
@@ -43,6 +43,7 @@ from .runtime import (
     parse_tool_args,
     run_all,
     safe_fname,
+    web_action,
 )
 from .search import SearchResult
 
@@ -124,7 +125,7 @@ def input_item_to_messages(item: dict, texts: dict | None = None) -> list[dict]:
 
     if ty == "web_search_call":
         action = item.get("action") or {}
-        q = action.get("query")
+        q = action.get("query") or action.get("url")
         if not q:
             return []
         res = texts.get(iid)
@@ -137,7 +138,9 @@ def input_item_to_messages(item: dict, texts: dict | None = None) -> list[dict]:
             ]
             if urls:
                 res += "\nSources:\n" + "\n".join(urls)
-        return pair("web_search", json.dumps({"query": q}, ensure_ascii=False), res)
+        args = {"action": action.get("type", "search")}
+        args.update({k: action[k] for k in ("query", "url", "pattern") if k in action})
+        return pair("web_search", json.dumps(args, ensure_ascii=False), res)
     if ty == "mcp_call":
         name = item.get("name")
         if not name:
@@ -284,7 +287,7 @@ async def _setup(req) -> _Setup | JSONResponse:
         ty = t.get("type") or "function"
         if _is_web(t):
             filt = t.get("filters") or {}
-            spec: dict = {}
+            spec: dict = {"page_actions": True}
             if filt.get("allowed_domains"):
                 spec["allowed_domains"] = list(filt["allowed_domains"])
             if t.get("user_location"):
@@ -295,8 +298,8 @@ async def _setup(req) -> _Setup | JSONResponse:
                 ServerToolDef(
                     "web_search",
                     "web_search",
-                    WEB_SEARCH_DESC,
-                    WEB_SEARCH_SCHEMA,
+                    RESPONSES_WEB_DESC,
+                    RESPONSES_WEB_SCHEMA,
                     spec=spec,
                 )
             )
@@ -640,7 +643,7 @@ async def run_stream(req, request, inner: Inner, setup: _Setup, run: _Run):
         for label, listed in setup.mcp_lists.items():
             if label in known:
                 continue
-            item = {
+            item: dict[str, Any] = {
                 "id": _new_id("mcpl_"),
                 "type": "mcp_list_tools",
                 "server_label": label,
@@ -884,10 +887,7 @@ async def run_stream(req, request, inner: Inner, setup: _Setup, run: _Run):
                         "id": _new_id("ws_"),
                         "type": "web_search_call",
                         "status": "in_progress",
-                        "action": {
-                            "type": "search",
-                            "query": str(args.get("query", "")),
-                        },
+                        "action": web_action(args),
                     }
                     idx = run.add_item(item)
                     c.update(item=item, idx=idx)
@@ -975,7 +975,11 @@ async def run_stream(req, request, inner: Inner, setup: _Setup, run: _Run):
                             oc.query or "", oc.results, start=off + 1
                         )
                     item = {**item, "status": "failed" if oc.is_error else "completed"}
-                    if include_sources and not oc.is_error:
+                    if (
+                        include_sources
+                        and not oc.is_error
+                        and item["action"]["type"] == "search"
+                    ):
                         item["action"] = {
                             **item["action"],
                             "sources": [
