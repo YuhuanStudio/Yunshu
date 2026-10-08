@@ -49,7 +49,7 @@ from .runtime import (
     run_all,
     safe_fname,
 )
-from .search import SearchResult
+from .search import Passage, SearchResult
 
 logger = logging.getLogger(__name__)
 
@@ -174,24 +174,41 @@ async def _setup(req) -> _Setup | JSONResponse:
 
 
 # ── history: turn the spec's server-tool blocks back into plain tool_use / tool_result turns ──
-def _result_text(block: dict) -> str:
+def replay_search_results(block: dict) -> list[SearchResult]:
+    content = block.get("content")
+    if not isinstance(content, list):
+        return []
+    results = []
+    for item in content:
+        d = decode_result(item.get("encrypted_content", "")) or {
+            "title": item.get("title", ""),
+            "url": item.get("url", ""),
+            "snippet": "",
+            "page_age": item.get("page_age"),
+        }
+        results.append(
+            SearchResult(
+                d["title"],
+                d["url"],
+                d["snippet"],
+                d.get("page_age"),
+                passages=[Passage(**p) for p in d.get("passages", [])],
+                content_hash=d.get("content_hash", ""),
+                fetched=d.get("fetched", False),
+            )
+        )
+    return results
+
+
+def _result_text(block: dict, start: int = 1) -> str:
     c = block.get("content")
     ty = block.get("type")
     if ty == "web_search_tool_result":
         if isinstance(c, dict):
             return f"Error: web search failed ({c.get('error_code', 'unavailable')})"
-        res = []
-        for x in c or []:
-            d = decode_result(x.get("encrypted_content", "")) or {
-                "title": x.get("title", ""),
-                "url": x.get("url", ""),
-                "snippet": "",
-                "page_age": x.get("page_age"),
-            }
-            res.append(
-                SearchResult(d["title"], d["url"], d["snippet"], d.get("page_age"))
-            )
-        return format_search_text("(earlier search)", res)
+        return format_search_text(
+            "(earlier search)", replay_search_results(block), start=start
+        )
     if ty == "web_fetch_tool_result":
         if isinstance(c, dict) and c.get("type") == "web_fetch_tool_result_error":
             return f"Error: could not fetch ({c.get('error_code')})"
@@ -204,10 +221,14 @@ def _result_text(block: dict) -> str:
     return "\n".join(parts) if not isinstance(c, str) else c
 
 
-def normalize_history(messages: list) -> list[dict]:
+def normalize_history(
+    messages: list, sources: list[SearchResult] | None = None
+) -> list[dict]:
     """Assistant turns that carry server_tool_use / mcp_tool_use plus their results become the
     plain sequence the model saw: assistant(text, tool_use) -> user(tool_result) -> assistant(rest)."""
     out: list[dict] = []
+    if sources is None:
+        sources = []
     for m in messages:
         d = m.model_dump() if hasattr(m, "model_dump") else dict(m)
         c = d.get("content")
@@ -253,11 +274,14 @@ def normalize_history(messages: list) -> list[dict]:
                 "web_fetch_tool_result",
                 "mcp_tool_result",
             ):
+                start = len(sources) + 1
+                if ty == "web_search_tool_result":
+                    sources.extend(replay_search_results(b))
                 pending.append(
                     {
                         "type": "tool_result",
                         "tool_use_id": b.get("tool_use_id"),
-                        "content": _result_text(b),
+                        "content": _result_text(b, start=start),
                         "is_error": bool(b.get("is_error")),
                     }
                 )
@@ -336,7 +360,9 @@ def _sources_for(text: str, sources: list[SearchResult]) -> list[dict]:
                     "url": r.url,
                     "title": r.title,
                     "encrypted_index": encode_result(r),
-                    "cited_text": r.snippet[:150],
+                    "cited_text": (r.passages[0].text if r.passages else r.snippet)[
+                        :150
+                    ],
                 }
             )
     return cites
@@ -417,12 +443,12 @@ async def run_stream(req, request, inner: Inner, setup: _Setup) -> AsyncIterator
         {"name": d.fname, "description": d.description, "input_schema": d.schema}
         for d in setup.defs
     ]
-    history = normalize_history(req.messages)
+    sources: list[SearchResult] = []
+    history = normalize_history(req.messages, sources=sources)
     total = _Usage()
     out_index = 0
     started = False
     stop_reason = "end_turn"
-    sources: list[SearchResult] = []
     stats = {"rounds": 0, "tools": [], "round_usage": []}
     msg_id = _new_id("msg_")
     try:

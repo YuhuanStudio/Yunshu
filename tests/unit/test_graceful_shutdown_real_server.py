@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import os
 import signal
+import socket
 import subprocess
 import sys
 import threading
@@ -12,11 +13,9 @@ import time
 from pathlib import Path
 
 import httpx
-import pytest
-from scripts.research.agentic.servers import free_ports
 
 ROOT = Path(__file__).resolve().parents[2]
-PORT = 18991
+from .bound_listener import reserve_listener
 
 
 def test_graceful_shutdown_timeout_values():
@@ -26,32 +25,41 @@ def test_graceful_shutdown_timeout_values():
 
 
 def _start(drain: str, delay="0.2", n="15"):
-    global PORT
-    PORT = free_ports(1)[0]
     env = {
         **os.environ,
         "YUNSHU_DRAIN_TIMEOUT": drain,
-        "PYTHONPATH": str(ROOT / "python"),
+        "PYTHONPATH": os.pathsep.join(
+            filter(None, (str(ROOT / "python"), os.environ.get("PYTHONPATH")))
+        ),
     }
     env.pop("YUNSHU_AUTH_TOKEN", None)
+    listener = reserve_listener()
+    port = listener.getsockname()[1]
     p = subprocess.Popen(
         [
             sys.executable,
             str(ROOT / "scripts/research/scripted_server.py"),
-            str(PORT),
+            str(port),
             delay,
             n,
+            str(listener.fileno()),
         ],
         env=env,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
+        pass_fds=(listener.fileno(),),
     )
+    listener.close()
+    p.test_port = port
     for _ in range(100):
         if p.poll() is not None:
-            raise AssertionError("server exited: " + p.stdout.read().decode()[-500:])
+            raise AssertionError(
+                "owned server exited before readiness: "
+                + p.stdout.read().decode()[-500:]
+            )
         try:
             if (
-                httpx.get(f"http://127.0.0.1:{PORT}/health/live", timeout=1).status_code
+                httpx.get(f"http://127.0.0.1:{port}/health/live", timeout=1).status_code
                 < 500
             ):
                 return p
@@ -61,6 +69,28 @@ def _start(drain: str, delay="0.2", n="15"):
     raise AssertionError("server did not start: " + p.stdout.read().decode()[-500:])
 
 
+def test_scripted_child_preserves_isolated_dependency_path(monkeypatch):
+    from types import SimpleNamespace
+
+    captured = {}
+    process = SimpleNamespace(poll=lambda: None)
+    monkeypatch.setenv("PYTHONPATH", "/fixture/isolated-dependencies")
+
+    def popen(cmd, **kwargs):
+        captured.update(kwargs)
+        return process
+
+    monkeypatch.setattr(subprocess, "Popen", popen)
+    monkeypatch.setattr(
+        httpx, "get", lambda *args, **kwargs: SimpleNamespace(status_code=200)
+    )
+    assert _start("0") is process
+    assert captured["env"]["PYTHONPATH"].split(os.pathsep) == [
+        str(ROOT / "python"),
+        "/fixture/isolated-dependencies",
+    ]
+
+
 def _stream_then_sigterm(p):
     got = {"text": "", "err": None}
 
@@ -68,7 +98,7 @@ def _stream_then_sigterm(p):
         try:
             with httpx.stream(
                 "POST",
-                f"http://127.0.0.1:{PORT}/v1/chat/completions",
+                f"http://127.0.0.1:{p.test_port}/v1/chat/completions",
                 json={
                     "model": "m",
                     "messages": [{"role": "user", "content": "hi"}],
@@ -122,18 +152,13 @@ def test_drain_zero_aborts_the_stream_fast():
             p.kill()
 
 
-def test_shutdown_server_uses_a_free_pool_port(monkeypatch):
-    import sys
+def test_listener_reservation_prevents_a_foreign_bind():
 
-    module = sys.modules[__name__]
-    monkeypatch.setattr(module, "free_ports", lambda n: [18999])
-    commands = []
+    import pytest
 
-    def launch(command, **kwargs):
-        commands.append(command)
-        raise RuntimeError("CPU launch sentinel")
-
-    monkeypatch.setattr(subprocess, "Popen", launch)
-    with pytest.raises(RuntimeError, match="CPU launch sentinel"):
-        _start("20")
-    assert commands[0][2] == "18999"
+    listener = reserve_listener()
+    try:
+        with socket.socket() as contender, pytest.raises(OSError):
+            contender.bind(listener.getsockname())
+    finally:
+        listener.close()

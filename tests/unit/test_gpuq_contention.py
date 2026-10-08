@@ -122,7 +122,11 @@ def test_submit_quiet_cli_and_configuration(q, monkeypatch, capsys):
     data = q._read(q.JOBS / (capsys.readouterr().out.strip() + ".json"))
     assert data["quiet"]
     assert data["contention_config"] == dict(
-        threshold_pct=80, window_s=4, max_wait_s=9, sample_s=30
+        threshold_pct=80,
+        window_s=4,
+        max_wait_s=9,
+        sample_s=30,
+        foreign_model_cpu_pct=15,
     )
 
 
@@ -769,3 +773,93 @@ def test_default_threshold_scales_with_cores(monkeypatch):
     finally:
         monkeypatch.undo()
         importlib.reload(fresh)
+
+
+# ---- foreign model processes (servers started outside gpuq) ----
+
+
+def _fake_ps(monkeypatch, h, snaps, args):
+    it = iter(snaps)
+    monkeypatch.setattr(h, "process_snapshot", lambda: next(it))
+    monkeypatch.setattr(h, "process_args", lambda: args)
+    monkeypatch.setattr(h.os, "getloadavg", lambda: (1, 1, 1))
+
+
+SERVE = "python -m yunshu_cli serve --port 8000 --models-dir /tmp/m"
+ARGS = {
+    10: "python /app/bench.py",
+    30: SERVE,
+    31: "uvicorn yunshu_gateway.app:app",
+    32: "/usr/bin/vim notes.txt",
+    33: "python -m mlx_lm.server --model x",
+    34: "python -m yunshu_cli serve --port 1",  # nice 10: excluded
+    35: "python gpuq.py run -- python -m yunshu_cli serve",  # gpuq client
+}
+
+
+def _rows(t30, t31=0, t33=0):
+    return (
+        "10 1 10 0 5 0:01.00 python\n"
+        f"30 1 30 0 0 0:{t30:05.2f} python\n31 1 31 0 0 0:{t31:05.2f} python\n"
+        "32 1 32 0 0 0:00.00 vim\n"
+        f"33 1 33 0 0 0:{t33:05.2f} python\n34 1 34 10 0 0:00.00 python\n"
+        "35 1 35 0 0 0:00.00 python\n"
+    )
+
+
+def test_foreign_model_listed_but_idle_does_not_latch(monkeypatch, q):
+    h = helper()
+    _fake_ps(monkeypatch, h, [_rows(0)] * 3, ARGS)
+    job = dict(id="j", quiet=True, env={})
+    path = q.JOBS / "j.json"
+    q._write(path, job)
+    m = h.ContentionMonitor(job, path, q.LOGS, q._write, q._read)
+    m.record("start", now=100)
+    m.record("poll", now=102)
+    assert not job.get("contended")
+    pids = {x["pid"] for x in job["foreign_model_processes"]}
+    assert pids == {30, 31, 33}  # not vim, nice>=10, gpuq client, or the job
+    assert all(x["max_cpu_pct"] < 15 for x in job["foreign_model_processes"])
+
+
+def test_busy_foreign_model_latches_with_reason(monkeypatch, q):
+    h = helper()
+    _fake_ps(monkeypatch, h, [_rows(0), _rows(1.0)], ARGS)
+    job = dict(id="j", quiet=True, env={})
+    path = q.JOBS / "j.json"
+    q._write(path, job)
+    m = h.ContentionMonitor(job, path, q.LOGS, q._write, q._read)
+    m.record("start", now=100)
+    assert not job.get("contended")
+    m.record("poll", now=102)  # 1s cpu in 2s = 50%
+    assert job["contended"]
+    reason = [r for r in job["contention_reasons"] if r.startswith("foreign model")]
+    assert reason == [f"foreign model process 30 busy 50.0% ({SERVE})"]
+    top = max(job["foreign_model_processes"], key=lambda x: x["max_cpu_pct"])
+    assert (top["pid"], top["max_cpu_pct"]) == (30, 50.0)
+
+
+def test_foreign_model_threshold_env_and_extra_pattern(monkeypatch, q):
+    h = helper()
+    args = {10: "x", 30: "/opt/mymodel-runner --serve"}
+    monkeypatch.setenv("GPUQ_FOREIGN_MODEL_PATTERNS", "mymodel-runner")
+    _fake_ps(monkeypatch, h, [_rows(0), _rows(1.0)], args)
+    job = dict(id="j", quiet=True, env=dict(os.environ, GPUQ_FOREIGN_MODEL_CPU="80"))
+    path = q.JOBS / "j.json"
+    q._write(path, job)
+    m = h.ContentionMonitor(job, path, q.LOGS, q._write, q._read)
+    m.record("start", now=100)
+    m.record("poll", now=102)  # 50% < 80%
+    assert not job.get("contended")
+    assert [x["pid"] for x in job["foreign_model_processes"]] == [30]
+
+
+def test_busy_foreign_model_blocks_quiet_admission(monkeypatch):
+    h = helper()
+    _fake_ps(monkeypatch, h, [_rows(0), _rows(1.0), _rows(2.0)], ARGS)
+    gate = h.QuietGate()
+    job = dict(priority=0, quiet=True, env={})
+    gate.blocked(job, gate.sample(100), 100)
+    for t in (102, 104):
+        assert gate.blocked(job, gate.sample(t), t)  # busy server: never quiet
+    assert job["quiet_since"] is None

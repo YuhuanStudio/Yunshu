@@ -56,7 +56,7 @@ def main(argv: list[str]) -> int:
     proc = subprocess.run(
         [sys.executable, "-m", "mypy", "python/"], capture_output=True, text=True
     )
-    if "error:" not in proc.stdout and proc.returncode not in (0, 1):
+    if proc.returncode != 0 and "error:" not in proc.stdout:
         sys.stderr.write(proc.stdout + proc.stderr)
         return 2
     current = collect(proc.stdout)

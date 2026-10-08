@@ -37,8 +37,20 @@ def config(
     include = ("stable", "experimental", "internal") if all_ else ("stable",)
     rows = settings.effective(include)
     warnings = settings.validate(warn=False) if _valid() else []
+    if settings.get("YUNSHU_WEB_SEARCH_PROVIDER") != "none":
+        from yunshu_gateway.server_tools.search import PRIVACY_NOTICE
+
+        warnings.append(PRIVACY_NOTICE)
+    from yunshu_gateway.server_tools.metasearch import read_health
+
+    health = read_health()
     if as_json:
-        typer.echo(json.dumps({"settings": rows, "warnings": warnings}, default=str))
+        typer.echo(
+            json.dumps(
+                {"settings": rows, "warnings": warnings, "web_search_health": health},
+                default=str,
+            )
+        )
         return
     table = Table(show_lines=False)
     for col in ("Setting", "Value", "Source", "Category"):
@@ -53,6 +65,11 @@ def config(
         source = r["source"] if r["source"] == "default" else f"[bold]{r['source']}[/]"
         table.add_row(name, value, source, r["category"])
     console.print(table)
+    if health:
+        console.print("Web search provider health (last server snapshot):")
+        console.print_json(data=health)
+    else:
+        console.print("Web search provider health: no server observations yet")
     for w in warnings:
         console.print(f"[yellow]Warning:[/] {w}")
 
