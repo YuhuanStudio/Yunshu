@@ -146,6 +146,8 @@ _add("YUNSHU_FILES_DIR", "path", None, "Directory of the local Files / Batch API
 _add("YUNSHU_FILES_MAX_BYTES", "int", 536870912, "Files API: maximum size of one uploaded file in bytes (default 512 MB).", "server", minimum=1)
 _add("YUNSHU_FILES_TTL_DAYS", "float", None, "Files API: delete uploaded files after this many days. Unset: keep forever.", "server", minimum=0.0)
 _add("YUNSHU_FILES_MAX_TOTAL_BYTES", "int", 0, "Files API: total bytes the store may hold; an upload that would exceed it fails with 413 storage_quota_exceeded (expired files are reaped first). 0: unlimited.", "server", minimum=0)
+_add("YUNSHU_CHAT_COMPLETIONS_DIR", "path", None, "Directory of stored chat completions (store=true; JSON, one file per completion). Unset: ~/.yunshu/chat_completions.", "server")
+_add("YUNSHU_EVALS_DIR", "path", None, "Directory of the local Evals API JSON store. Unset: ~/.yunshu/evals.", "server")
 _add("YUNSHU_CONVERSATIONS_DIR", "path", None, "Directory of the Conversations API store (JSON, one file per conversation). Unset: ~/.yunshu/conversations.", "server")
 _add("YUNSHU_CONVERSATION_MAX_ITEMS", "int", 10000, "Conversations API: maximum number of items one conversation may hold.", "server", minimum=1)
 _add("YUNSHU_COMPACT_MAX_TOKENS", "int", 2048, "Responses compaction: maximum tokens of the model-written summary.", "server", minimum=64)

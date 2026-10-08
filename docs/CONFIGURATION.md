@@ -96,6 +96,8 @@ internal ones, `--json` prints JSON, `--config FILE` includes a config file.
 | `YUNSHU_FILES_MAX_BYTES` | int | 536870912 (512 MiB) | Files API: maximum size of one uploaded file in bytes (default 512 MB). |
 | `YUNSHU_FILES_TTL_DAYS` | float | unset | Files API: delete uploaded files after this many days. Unset: keep forever. |
 | `YUNSHU_FILES_MAX_TOTAL_BYTES` | int | 0 | Files API: total bytes the store may hold; an upload that would exceed it fails with 413 storage_quota_exceeded (expired files are reaped first). 0: unlimited. |
+| `YUNSHU_CHAT_COMPLETIONS_DIR` | path | unset | Directory of stored chat completions (store=true; JSON, one file per completion). Unset: ~/.yunshu/chat_completions. |
+| `YUNSHU_EVALS_DIR` | path | unset | Directory of the local Evals API JSON store. Unset: ~/.yunshu/evals. |
 | `YUNSHU_CONVERSATIONS_DIR` | path | unset | Directory of the Conversations API store (JSON, one file per conversation). Unset: ~/.yunshu/conversations. |
 | `YUNSHU_CONVERSATION_MAX_ITEMS` | int | 10000 | Conversations API: maximum number of items one conversation may hold. |
 | `YUNSHU_COMPACT_MAX_TOKENS` | int | 2048 | Responses compaction: maximum tokens of the model-written summary. |

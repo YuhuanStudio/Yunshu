@@ -323,9 +323,9 @@ clients must not treat its zero-shot scores as those probabilities.
 `scripts/dev/api_coverage.py` reads the resource modules of the installed `openai` and `anthropic` SDKs (AST only) and lists every
 endpoint they can request (575 on openai 3.26.0 / anthropic 1.11.0, websockets included). `tests/unit/test_api_coverage.py` fails when
 one is neither served by the gateway nor declared in `scripts/dev/api_coverage_na.json` as `not_applicable` or `planned`, each with a
-reason, and when a declaration matches nothing or sits over an implemented route. This replaces building the matrix from the routes
-we already had (which is how `POST /v1/decisions` was missed). Current state: 53 implemented, 46 planned (OpenAI and Anthropic skills,
-evals, stored chat completions, Realtime client secrets / sessions / calls, custom voices), the rest not applicable (organization and
+reason, and when a declaration matches nothing or still calls a served route planned/not applicable. An `implemented` declaration documents completed work but cannot hide a missing route. This replaces building the matrix from the routes
+we already had (which is how `POST /v1/decisions` was missed). Current state: 65 implemented, 34 planned (OpenAI and Anthropic skills,
+stored chat completions, Realtime client secrets / sessions / calls, custom voices), the rest not applicable (organization and
 admin APIs, fine-tuning, Assistants/Threads, vector stores, hosted agent platforms, video, containers, webhooks, ChatKit, Live).
 Upgrading an SDK is the trigger: a new endpoint fails the test until someone decides.
 
@@ -447,3 +447,13 @@ CPU Transformers float32 inference. Maximum probability errors were respectively
 activation, broadcasting and the registered embed-route checks passed. Evidence:
 `/Volumes/P5Plus/yunshu-build/verify/runs/rerank-tiny-heads-handoff-1007-08a91d280b74/verdict.json`.
 This is numerical and API evidence, with no speed or retrieval-quality claim.
+
+### Evals
+
+All 12 OpenAI Evals endpoints are served under `/v1/evals`: create/list/retrieve/update/delete evals; create/list/retrieve/cancel/delete runs; list/retrieve run output items. SDK 3.26 tests and the `evals` real-server route check cover them. See the [official Evals reference](https://developers.openai.com/api/reference/resources/evals/methods/create).
+
+Runs accept `jsonl` and `completions` data sources, with inline `file_content`, Files API `file_id`, or `stored_completions` filtered by model, metadata and inclusive creation timestamps. `completions` can sample the local model using message templates or an item reference. Items are validated against the eval's JSON schema before scheduling. Stored completions read the exact atomic JSON storage format of apiplanned (`fc28350d`) without copying its module; that branch supplies `store=true` ingestion.
+
+Supported graders: `string_check` (`eq`, `ne`, substring `like`/case-insensitive `ilike`), `text_similarity`, `score_model`, and `label_model`. Similarity is model-free: token-frequency cosine, character SequenceMatcher fuzzy match, effective-order sentence BLEU without smoothing, GLEU, ROUGE n-gram F1 (1–5), ROUGE-L F1, and exact-token METEOR with fragmentation penalty (no stemming/synonym corpus). Scores use a caller-supplied pass threshold; local model graders request schema-constrained JSON through `/v1/chat/completions`. Python graders and Responses sampling sources return 400 as unsupported.
+
+State uses atomic JSON replacement under `YUNSHU_EVALS_DIR` (default `~/.yunshu/evals`). Source rows and grader definitions are snapshotted per run; credentials stay in memory. Cancellation interrupts the active normal request and preserves completed items. Deleted evals cascade to their runs. Interrupted runs become `failed` on server restart; they are not automatically replayed. Reports are available through output-item routes (`report_url` is empty; no hosted dashboard). Maximum 10,000 rows per run; list pages accept 1–100 items with cursor/order/status filtering.

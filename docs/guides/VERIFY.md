@@ -179,3 +179,7 @@ RERANK_MODEL_ROOT=PATH` overrides the model root. Encoder head serving needs the
 promotes a copy of successful evidence and keeps the original gpuq-declared output
 so digest and watchdog checks can still verify it. A finished job without an
 explicit return code of zero fails verification.
+
+### Evals API correctness
+
+`yv ab --base <main-sha> --cand <candidate-sha> --suite evals --model /Volumes/P5Plus/models/Qwen3.5-0.8B-MLX-bf16 --label evals-smoke-<unique> --priority -1 --detach` runs CPU preflight and the 12-route SDK check against a real server. The `evals` stage exercises normal chat sampling plus local score/label graders; it makes no speed or accuracy comparison. Its JSONL evidence must end with `complete: true`, `passed: true`, 12 routes and three model invocations.

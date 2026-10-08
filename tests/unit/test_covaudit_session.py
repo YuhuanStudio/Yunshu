@@ -394,7 +394,9 @@ def test_server_does_not_retry_other_exits(tmp_path, monkeypatch):
 
     monkeypatch.setattr(cs, "free_port", lambda skip=frozenset(): 18990)
     monkeypatch.setattr(
-        cs.subprocess, "Popen", lambda cmd, stdout, **kw: (stdout.write(b"boom\n"), _FakeProc(1))[1]
+        cs.subprocess,
+        "Popen",
+        lambda cmd, stdout, **kw: (stdout.write(b"boom\n"), _FakeProc(1))[1],
     )
     srv = cs.Srv("/m", None, tmp_path / "home", tmp_path / "srv.log")
     with pytest.raises(RuntimeError, match="server exited rc=1"):

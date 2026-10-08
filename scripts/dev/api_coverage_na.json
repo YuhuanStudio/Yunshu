@@ -121,8 +121,8 @@
  },
  {
   "match": "openai * /evals*",
-  "status": "planned",
-  "reason": "Evals (create, runs, output items) could grade local models; medium priority, not started."
+  "status": "implemented",
+  "reason": "12 Evals CRUD, runs and output-item routes; local JSONL/stored-completion sources and local graders."
  },
  {
   "match": "openai * /skills*",
