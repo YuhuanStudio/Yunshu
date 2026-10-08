@@ -1320,7 +1320,8 @@ def stage_priorart(ctx: Ctx) -> StageResult:
                 "--out",
                 "{out}",
             ],
-            mem_gb=32 if kind.startswith("diffusion") or kind == "capabilities" else 8,
+            # The floating two-runtime image pilot peaked at 57.3 (M5 gpuq RSS).
+            mem_gb=64 if kind.startswith("diffusion") or kind == "capabilities" else 8,
             quiet=kind == "diffusion-timing",
             timeout_min=10,
             stall_min=5,

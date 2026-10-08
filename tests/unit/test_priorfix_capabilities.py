@@ -130,6 +130,6 @@ def test_yv_routes_capabilities_to_one_bounded_nonquiet_cell(monkeypatch, tmp_pa
     assert str(root / "scripts/research/priorfix_capabilities.py") in cell.argv
     assert "--kind" not in cell.argv
     assert "model-root" in cell.argv and "oracle.json" in cell.argv
-    assert cell.mem_gb == 32 and cell.timeout_min == 10 and cell.priority == -1
+    assert cell.mem_gb == 64 and cell.timeout_min == 10 and cell.priority == -1
     assert not cell.quiet and cell.device == "m5"
     assert result.numbers["capabilities"]["passed"]
