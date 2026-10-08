@@ -1,0 +1,2037 @@
+{
+ "version": 1,
+ "description": "Yunshu capability matrix: one row per capability; see scripts/dev/capmatrix.py.",
+ "engines": [
+  "yunshu",
+  "llamacpp",
+  "mlxlm",
+  "omlx",
+  "splash"
+ ],
+ "features": [
+  "vision",
+  "audio",
+  "embeddings",
+  "thinking"
+ ],
+ "rows": [
+  {
+   "id": "chat_basic",
+   "group": "core",
+   "api": "POST /v1/chat/completions",
+   "desc": "plain completion, usage and finish_reason",
+   "applies": [
+    "yunshu",
+    "llamacpp",
+    "mlxlm",
+    "omlx",
+    "splash"
+   ],
+   "path": "/v1/chat/completions",
+   "body": {
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with only the word ORCHID."
+     }
+    ],
+    "max_tokens": 16,
+    "temperature": 0
+   },
+   "asserts": [
+    {
+     "path": "choices.0.message.content",
+     "op": "contains",
+     "value": "orchid"
+    },
+    {
+     "path": "choices.0.finish_reason",
+     "op": "eq",
+     "value": "stop"
+    },
+    {
+     "path": "usage.completion_tokens",
+     "op": "gte",
+     "value": 1
+    },
+    {
+     "path": "usage.prompt_tokens",
+     "op": "gte",
+     "value": 1
+    }
+   ],
+   "think": false
+  },
+  {
+   "id": "system_multiturn",
+   "group": "core",
+   "api": "POST /v1/chat/completions",
+   "desc": "system prompt and multi-turn history are honoured",
+   "applies": [
+    "yunshu",
+    "llamacpp",
+    "mlxlm",
+    "omlx",
+    "splash"
+   ],
+   "path": "/v1/chat/completions",
+   "body": {
+    "messages": [
+     {
+      "role": "system",
+      "content": "You answer with one word."
+     },
+     {
+      "role": "user",
+      "content": "My name is Zelda. Remember it."
+     },
+     {
+      "role": "assistant",
+      "content": "Noted."
+     },
+     {
+      "role": "user",
+      "content": "What is my name?"
+     }
+    ],
+    "max_tokens": 16,
+    "temperature": 0
+   },
+   "asserts": [
+    {
+     "path": "choices.0.message.content",
+     "op": "contains",
+     "value": "zelda"
+    }
+   ],
+   "think": false
+  },
+  {
+   "id": "max_tokens_length",
+   "group": "core",
+   "api": "POST /v1/chat/completions",
+   "desc": "max_tokens ends with finish_reason length",
+   "applies": [
+    "yunshu",
+    "llamacpp",
+    "mlxlm",
+    "omlx",
+    "splash"
+   ],
+   "path": "/v1/chat/completions",
+   "body": {
+    "messages": [
+     {
+      "role": "user",
+      "content": "Write a long story about a dragon."
+     }
+    ],
+    "max_tokens": 5,
+    "temperature": 0
+   },
+   "asserts": [
+    {
+     "path": "choices.0.finish_reason",
+     "op": "eq",
+     "value": "length"
+    },
+    {
+     "path": "usage.completion_tokens",
+     "op": "lte",
+     "value": 5
+    }
+   ],
+   "think": false
+  },
+  {
+   "id": "stop_sequence",
+   "group": "core",
+   "api": "POST /v1/chat/completions",
+   "desc": "stop string is honoured and excluded",
+   "applies": [
+    "yunshu",
+    "llamacpp",
+    "mlxlm",
+    "omlx",
+    "splash"
+   ],
+   "path": "/v1/chat/completions",
+   "body": {
+    "messages": [
+     {
+      "role": "user",
+      "content": "Count from 1 to 9 separated by single spaces."
+     }
+    ],
+    "max_tokens": 60,
+    "temperature": 0,
+    "stop": [
+     "5"
+    ]
+   },
+   "asserts": [
+    {
+     "path": "choices.0.message.content",
+     "op": "not_contains",
+     "value": "5"
+    },
+    {
+     "path": "choices.0.message.content",
+     "op": "contains",
+     "value": "4"
+    },
+    {
+     "path": "choices.0.finish_reason",
+     "op": "eq",
+     "value": "stop"
+    }
+   ],
+   "think": false
+  },
+  {
+   "id": "n_choices",
+   "group": "core",
+   "api": "POST /v1/chat/completions",
+   "desc": "n=2 returns two choices",
+   "applies": [
+    "yunshu",
+    "llamacpp",
+    "mlxlm"
+   ],
+   "path": "/v1/chat/completions",
+   "body": {
+    "messages": [
+     {
+      "role": "user",
+      "content": "Name a color."
+     }
+    ],
+    "max_tokens": 8,
+    "n": 2,
+    "temperature": 0.8
+   },
+   "asserts": [
+    {
+     "path": "choices",
+     "op": "len_eq",
+     "value": 2
+    }
+   ],
+   "think": false
+  },
+  {
+   "id": "seed_determinism",
+   "group": "core",
+   "api": "POST /v1/chat/completions",
+   "desc": "same seed, same sampled text",
+   "applies": [
+    "yunshu",
+    "llamacpp",
+    "mlxlm",
+    "omlx",
+    "splash"
+   ],
+   "script": "seed"
+  },
+  {
+   "id": "logprobs",
+   "group": "core",
+   "api": "POST /v1/chat/completions",
+   "desc": "logprobs with top_logprobs",
+   "applies": [
+    "yunshu",
+    "llamacpp",
+    "mlxlm",
+    "omlx",
+    "splash"
+   ],
+   "path": "/v1/chat/completions",
+   "body": {
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with only the word ORCHID."
+     }
+    ],
+    "max_tokens": 4,
+    "temperature": 0,
+    "logprobs": true,
+    "top_logprobs": 3
+   },
+   "asserts": [
+    {
+     "path": "choices.0.logprobs.content",
+     "op": "len_gte",
+     "value": 1
+    },
+    {
+     "path": "choices.0.logprobs.content.0.top_logprobs",
+     "op": "len_gte",
+     "value": 3
+    },
+    {
+     "path": "choices.0.logprobs.content.0.logprob",
+     "op": "lte",
+     "value": 0
+    }
+   ],
+   "think": false
+  },
+  {
+   "id": "stream_basic",
+   "group": "stream",
+   "api": "POST /v1/chat/completions",
+   "desc": "SSE stream ends with finish_reason and [DONE]",
+   "applies": [
+    "yunshu",
+    "llamacpp",
+    "mlxlm",
+    "omlx",
+    "splash"
+   ],
+   "path": "/v1/chat/completions",
+   "body": {
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with only the word ORCHID."
+     }
+    ],
+    "max_tokens": 16,
+    "temperature": 0
+   },
+   "asserts": [
+    {
+     "path": "done",
+     "op": "eq",
+     "value": true
+    },
+    {
+     "path": "text",
+     "op": "contains",
+     "value": "orchid"
+    },
+    {
+     "path": "finish_reason",
+     "op": "eq",
+     "value": "stop"
+    }
+   ],
+   "think": false,
+   "stream": "openai"
+  },
+  {
+   "id": "stream_usage",
+   "group": "stream",
+   "api": "POST /v1/chat/completions",
+   "desc": "stream_options.include_usage gives a final usage chunk with empty choices",
+   "applies": [
+    "yunshu",
+    "llamacpp",
+    "mlxlm",
+    "omlx",
+    "splash"
+   ],
+   "path": "/v1/chat/completions",
+   "body": {
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with only the word ORCHID."
+     }
+    ],
+    "max_tokens": 16,
+    "temperature": 0,
+    "stream_options": {
+     "include_usage": true
+    }
+   },
+   "asserts": [
+    {
+     "path": "usage.total_tokens",
+     "op": "gte",
+     "value": 2
+    },
+    {
+     "path": "usage_chunk_no_choices",
+     "op": "eq",
+     "value": true
+    }
+   ],
+   "think": false,
+   "stream": "openai"
+  },
+  {
+   "id": "cancel_midstream",
+   "group": "stream",
+   "api": "POST /v1/chat/completions",
+   "desc": "client disconnect mid-stream frees the server for the next request",
+   "applies": [
+    "yunshu",
+    "llamacpp",
+    "mlxlm",
+    "omlx",
+    "splash"
+   ],
+   "script": "cancel"
+  },
+  {
+   "id": "tool_auto",
+   "group": "tools",
+   "api": "POST /v1/chat/completions",
+   "desc": "tool_choice auto calls the tool",
+   "applies": [
+    "yunshu",
+    "llamacpp",
+    "mlxlm",
+    "omlx",
+    "splash"
+   ],
+   "path": "/v1/chat/completions",
+   "body": {
+    "messages": [
+     {
+      "role": "user",
+      "content": "What is the weather in Paris right now? Use the tool."
+     }
+    ],
+    "tools": [
+     {
+      "type": "function",
+      "function": {
+       "name": "get_weather",
+       "description": "Get the current weather for a city.",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "city": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "city"
+        ]
+       }
+      }
+     }
+    ],
+    "tool_choice": "auto",
+    "max_tokens": 200,
+    "temperature": 0
+   },
+   "asserts": [
+    {
+     "path": "choices.0.finish_reason",
+     "op": "eq",
+     "value": "tool_calls"
+    },
+    {
+     "path": "choices.0.message.tool_calls.0.function.name",
+     "op": "eq",
+     "value": "get_weather"
+    },
+    {
+     "path": "choices.0.message.tool_calls.0.function.arguments",
+     "op": "json_arg_nonempty",
+     "value": "city"
+    }
+   ],
+   "think": false
+  },
+  {
+   "id": "tool_required",
+   "group": "tools",
+   "api": "POST /v1/chat/completions",
+   "desc": "tool_choice required calls a tool",
+   "applies": [
+    "yunshu",
+    "llamacpp",
+    "mlxlm",
+    "omlx",
+    "splash"
+   ],
+   "path": "/v1/chat/completions",
+   "body": {
+    "messages": [
+     {
+      "role": "user",
+      "content": "What is the weather in Paris right now? Use the tool."
+     }
+    ],
+    "tools": [
+     {
+      "type": "function",
+      "function": {
+       "name": "get_weather",
+       "description": "Get the current weather for a city.",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "city": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "city"
+        ]
+       }
+      }
+     }
+    ],
+    "tool_choice": "required",
+    "max_tokens": 200,
+    "temperature": 0
+   },
+   "asserts": [
+    {
+     "path": "choices.0.finish_reason",
+     "op": "eq",
+     "value": "tool_calls"
+    },
+    {
+     "path": "choices.0.message.tool_calls.0.function.name",
+     "op": "eq",
+     "value": "get_weather"
+    },
+    {
+     "path": "choices.0.message.tool_calls.0.function.arguments",
+     "op": "json_arg_nonempty",
+     "value": "city"
+    }
+   ],
+   "think": false
+  },
+  {
+   "id": "tool_named",
+   "group": "tools",
+   "api": "POST /v1/chat/completions",
+   "desc": "named tool_choice calls that function",
+   "applies": [
+    "yunshu",
+    "llamacpp",
+    "mlxlm",
+    "omlx",
+    "splash"
+   ],
+   "path": "/v1/chat/completions",
+   "body": {
+    "messages": [
+     {
+      "role": "user",
+      "content": "What is the weather in Paris right now? Use the tool."
+     }
+    ],
+    "tools": [
+     {
+      "type": "function",
+      "function": {
+       "name": "get_weather",
+       "description": "Get the current weather for a city.",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "city": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "city"
+        ]
+       }
+      }
+     }
+    ],
+    "tool_choice": {
+     "type": "function",
+     "function": {
+      "name": "get_weather"
+     }
+    },
+    "max_tokens": 200,
+    "temperature": 0
+   },
+   "asserts": [
+    {
+     "path": "choices.0.finish_reason",
+     "op": "eq",
+     "value": "tool_calls"
+    },
+    {
+     "path": "choices.0.message.tool_calls.0.function.name",
+     "op": "eq",
+     "value": "get_weather"
+    },
+    {
+     "path": "choices.0.message.tool_calls.0.function.arguments",
+     "op": "json_arg_nonempty",
+     "value": "city"
+    }
+   ],
+   "think": false
+  },
+  {
+   "id": "tool_none",
+   "group": "tools",
+   "api": "POST /v1/chat/completions",
+   "desc": "tool_choice none produces no tool call",
+   "applies": [
+    "yunshu",
+    "llamacpp",
+    "mlxlm",
+    "omlx",
+    "splash"
+   ],
+   "path": "/v1/chat/completions",
+   "body": {
+    "messages": [
+     {
+      "role": "user",
+      "content": "What is the weather in Paris right now? Use the tool."
+     }
+    ],
+    "tools": [
+     {
+      "type": "function",
+      "function": {
+       "name": "get_weather",
+       "description": "Get the current weather for a city.",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "city": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "city"
+        ]
+       }
+      }
+     }
+    ],
+    "tool_choice": "none",
+    "max_tokens": 60,
+    "temperature": 0
+   },
+   "asserts": [
+    {
+     "path": "choices.0.message.tool_calls",
+     "op": "absent"
+    }
+   ],
+   "think": false
+  },
+  {
+   "id": "tool_parallel",
+   "group": "tools",
+   "api": "POST /v1/chat/completions",
+   "desc": "two independent lookups yield two tool calls",
+   "applies": [
+    "yunshu",
+    "llamacpp",
+    "mlxlm",
+    "omlx",
+    "splash"
+   ],
+   "path": "/v1/chat/completions",
+   "body": {
+    "messages": [
+     {
+      "role": "user",
+      "content": "Get the weather in Paris and the time in Tokyo. Call both tools now."
+     }
+    ],
+    "tools": [
+     {
+      "type": "function",
+      "function": {
+       "name": "get_weather",
+       "description": "Get the current weather for a city.",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "city": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "city"
+        ]
+       }
+      }
+     },
+     {
+      "type": "function",
+      "function": {
+       "name": "get_time",
+       "description": "Get the current time in a city.",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "city": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "city"
+        ]
+       }
+      }
+     }
+    ],
+    "tool_choice": "auto",
+    "max_tokens": 300,
+    "temperature": 0
+   },
+   "asserts": [
+    {
+     "path": "choices.0.message.tool_calls",
+     "op": "len_gte",
+     "value": 2
+    }
+   ],
+   "think": false
+  },
+  {
+   "id": "tool_result_roundtrip",
+   "group": "tools",
+   "api": "POST /v1/chat/completions",
+   "desc": "tool result message is used in the answer",
+   "applies": [
+    "yunshu",
+    "llamacpp",
+    "mlxlm",
+    "omlx",
+    "splash"
+   ],
+   "path": "/v1/chat/completions",
+   "body": {
+    "messages": [
+     {
+      "role": "user",
+      "content": "What is the weather in Paris right now? Use the tool."
+     },
+     {
+      "role": "assistant",
+      "content": null,
+      "tool_calls": [
+       {
+        "id": "call_1",
+        "type": "function",
+        "function": {
+         "name": "get_weather",
+         "arguments": "{\"city\": \"Paris\"}"
+        }
+       }
+      ]
+     },
+     {
+      "role": "tool",
+      "tool_call_id": "call_1",
+      "content": "{\"temp_c\": 17, \"sky\": \"drizzle\"}"
+     }
+    ],
+    "tools": [
+     {
+      "type": "function",
+      "function": {
+       "name": "get_weather",
+       "description": "Get the current weather for a city.",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "city": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "city"
+        ]
+       }
+      }
+     }
+    ],
+    "max_tokens": 120,
+    "temperature": 0
+   },
+   "asserts": [
+    {
+     "path": "choices.0.message.content",
+     "op": "contains",
+     "value": "17"
+    }
+   ],
+   "think": false
+  },
+  {
+   "id": "tool_stream",
+   "group": "tools",
+   "api": "POST /v1/chat/completions",
+   "desc": "streamed tool_calls deltas assemble to valid JSON",
+   "applies": [
+    "yunshu",
+    "llamacpp",
+    "mlxlm",
+    "omlx",
+    "splash"
+   ],
+   "path": "/v1/chat/completions",
+   "body": {
+    "messages": [
+     {
+      "role": "user",
+      "content": "What is the weather in Paris right now? Use the tool."
+     }
+    ],
+    "tools": [
+     {
+      "type": "function",
+      "function": {
+       "name": "get_weather",
+       "description": "Get the current weather for a city.",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "city": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "city"
+        ]
+       }
+      }
+     }
+    ],
+    "tool_choice": "required",
+    "max_tokens": 200,
+    "temperature": 0
+   },
+   "asserts": [
+    {
+     "path": "tool_calls.0.name",
+     "op": "eq",
+     "value": "get_weather"
+    },
+    {
+     "path": "tool_calls.0.arguments",
+     "op": "json_arg_nonempty",
+     "value": "city"
+    },
+    {
+     "path": "finish_reason",
+     "op": "eq",
+     "value": "tool_calls"
+    }
+   ],
+   "think": false,
+   "stream": "openai"
+  },
+  {
+   "id": "json_object",
+   "group": "structured",
+   "api": "POST /v1/chat/completions",
+   "desc": "response_format json_object parses",
+   "applies": [
+    "yunshu",
+    "llamacpp",
+    "mlxlm",
+    "omlx",
+    "splash"
+   ],
+   "path": "/v1/chat/completions",
+   "body": {
+    "messages": [
+     {
+      "role": "user",
+      "content": "Return a JSON object with keys name and age for a fictional person."
+     }
+    ],
+    "response_format": {
+     "type": "json_object"
+    },
+    "max_tokens": 120,
+    "temperature": 0
+   },
+   "asserts": [
+    {
+     "path": "choices.0.message.content",
+     "op": "json_object"
+    }
+   ],
+   "think": false
+  },
+  {
+   "id": "json_schema",
+   "group": "structured",
+   "api": "POST /v1/chat/completions",
+   "desc": "strict json_schema output has the required keys",
+   "applies": [
+    "yunshu",
+    "llamacpp",
+    "mlxlm",
+    "omlx",
+    "splash"
+   ],
+   "path": "/v1/chat/completions",
+   "body": {
+    "messages": [
+     {
+      "role": "user",
+      "content": "Describe Paris as JSON."
+     }
+    ],
+    "response_format": {
+     "type": "json_schema",
+     "json_schema": {
+      "name": "city",
+      "strict": true,
+      "schema": {
+       "type": "object",
+       "properties": {
+        "city": {
+         "type": "string"
+        },
+        "country": {
+         "type": "string"
+        },
+        "population_millions": {
+         "type": "number"
+        }
+       },
+       "required": [
+        "city",
+        "country",
+        "population_millions"
+       ],
+       "additionalProperties": false
+      }
+     }
+    },
+    "max_tokens": 160,
+    "temperature": 0
+   },
+   "asserts": [
+    {
+     "path": "choices.0.message.content",
+     "op": "json_has_keys",
+     "value": [
+      "city",
+      "country",
+      "population_millions"
+     ]
+    }
+   ],
+   "think": false
+  },
+  {
+   "id": "json_schema_stream",
+   "group": "structured",
+   "api": "POST /v1/chat/completions",
+   "desc": "json_schema while streaming",
+   "applies": [
+    "yunshu",
+    "llamacpp",
+    "mlxlm",
+    "omlx",
+    "splash"
+   ],
+   "path": "/v1/chat/completions",
+   "body": {
+    "messages": [
+     {
+      "role": "user",
+      "content": "Describe Tokyo as JSON."
+     }
+    ],
+    "response_format": {
+     "type": "json_schema",
+     "json_schema": {
+      "name": "city",
+      "strict": true,
+      "schema": {
+       "type": "object",
+       "properties": {
+        "city": {
+         "type": "string"
+        },
+        "country": {
+         "type": "string"
+        },
+        "population_millions": {
+         "type": "number"
+        }
+       },
+       "required": [
+        "city",
+        "country",
+        "population_millions"
+       ],
+       "additionalProperties": false
+      }
+     }
+    },
+    "max_tokens": 160,
+    "temperature": 0
+   },
+   "asserts": [
+    {
+     "path": "text",
+     "op": "json_has_keys",
+     "value": [
+      "city",
+      "country",
+      "population_millions"
+     ]
+    },
+    {
+     "path": "done",
+     "op": "eq",
+     "value": true
+    }
+   ],
+   "think": false,
+   "stream": "openai"
+  },
+  {
+   "id": "regex_constraint",
+   "group": "structured",
+   "api": "POST /v1/chat/completions",
+   "desc": "guided_regex constrains the output (vLLM/Yunshu extension)",
+   "applies": [
+    "yunshu"
+   ],
+   "path": "/v1/chat/completions",
+   "body": {
+    "messages": [
+     {
+      "role": "user",
+      "content": "Give a US ZIP code."
+     }
+    ],
+    "guided_regex": "[0-9]{5}",
+    "max_tokens": 20,
+    "temperature": 0
+   },
+   "asserts": [
+    {
+     "path": "choices.0.message.content",
+     "op": "regex",
+     "value": "[0-9]{5}"
+    }
+   ],
+   "think": false
+  },
+  {
+   "id": "guided_choice",
+   "group": "structured",
+   "api": "POST /v1/chat/completions",
+   "desc": "guided_choice picks one of the options",
+   "applies": [
+    "yunshu"
+   ],
+   "path": "/v1/chat/completions",
+   "body": {
+    "messages": [
+     {
+      "role": "user",
+      "content": "Is the sky blue? Answer yes or no."
+     }
+    ],
+    "guided_choice": [
+     "yes",
+     "no"
+    ],
+    "max_tokens": 8,
+    "temperature": 0
+   },
+   "asserts": [
+    {
+     "path": "choices.0.message.content",
+     "op": "in",
+     "value": [
+      "yes",
+      "no"
+     ]
+    }
+   ],
+   "think": false
+  },
+  {
+   "id": "grammar_constraint",
+   "group": "structured",
+   "api": "POST /v1/chat/completions",
+   "desc": "grammar-constrained output (llama.cpp `grammar` GBNF, Yunshu `guided_grammar`)",
+   "applies": [
+    "yunshu"
+   ],
+   "path": "/v1/chat/completions",
+   "body": {
+    "messages": [
+     {
+      "role": "user",
+      "content": "Answer yes or no."
+     }
+    ],
+    "max_tokens": 8,
+    "temperature": 0,
+    "guided_grammar": "start: \"yes\" | \"no\""
+   },
+   "asserts": [
+    {
+     "path": "choices.0.message.content",
+     "op": "in",
+     "value": [
+      "yes",
+      "no"
+     ]
+    }
+   ],
+   "think": false
+  },
+  {
+   "id": "reasoning_split",
+   "group": "reasoning",
+   "api": "POST /v1/chat/completions",
+   "desc": "thinking on: reasoning_content separate, no think tags in content",
+   "applies": [
+    "yunshu",
+    "llamacpp",
+    "mlxlm",
+    "omlx",
+    "splash"
+   ],
+   "path": "/v1/chat/completions",
+   "body": {
+    "messages": [
+     {
+      "role": "user",
+      "content": "What is 17*23? Think briefly."
+     }
+    ],
+    "max_tokens": 1500,
+    "temperature": 0
+   },
+   "asserts": [
+    {
+     "path": "choices.0.message.reasoning_content",
+     "op": "nonempty"
+    },
+    {
+     "path": "choices.0.message.content",
+     "op": "nonempty"
+    },
+    {
+     "path": "choices.0.message.content",
+     "op": "not_contains",
+     "value": "</think>"
+    }
+   ],
+   "think": true,
+   "requires": [
+    "thinking"
+   ]
+  },
+  {
+   "id": "reasoning_off",
+   "group": "reasoning",
+   "api": "POST /v1/chat/completions",
+   "desc": "enable_thinking false: no reasoning_content",
+   "applies": [
+    "yunshu",
+    "llamacpp",
+    "mlxlm",
+    "omlx",
+    "splash"
+   ],
+   "path": "/v1/chat/completions",
+   "body": {
+    "messages": [
+     {
+      "role": "user",
+      "content": "What is 2+2? Answer with the number only."
+     }
+    ],
+    "max_tokens": 40,
+    "temperature": 0
+   },
+   "asserts": [
+    {
+     "path": "choices.0.message.reasoning_content",
+     "op": "absent"
+    },
+    {
+     "path": "choices.0.message.content",
+     "op": "contains",
+     "value": "4"
+    }
+   ],
+   "think": false,
+   "requires": [
+    "thinking"
+   ]
+  },
+  {
+   "id": "reasoning_stream",
+   "group": "reasoning",
+   "api": "POST /v1/chat/completions",
+   "desc": "streamed reasoning arrives in reasoning_content deltas",
+   "applies": [
+    "yunshu",
+    "llamacpp",
+    "mlxlm",
+    "omlx",
+    "splash"
+   ],
+   "path": "/v1/chat/completions",
+   "body": {
+    "messages": [
+     {
+      "role": "user",
+      "content": "What is 17*23? Think briefly."
+     }
+    ],
+    "max_tokens": 1500,
+    "temperature": 0
+   },
+   "asserts": [
+    {
+     "path": "reasoning",
+     "op": "nonempty"
+    },
+    {
+     "path": "text",
+     "op": "nonempty"
+    },
+    {
+     "path": "done",
+     "op": "eq",
+     "value": true
+    }
+   ],
+   "think": true,
+   "stream": "openai",
+   "requires": [
+    "thinking"
+   ]
+  },
+  {
+   "id": "vision_image",
+   "group": "media",
+   "api": "POST /v1/chat/completions",
+   "desc": "image_url input is understood",
+   "applies": [
+    "yunshu",
+    "llamacpp",
+    "mlxlm",
+    "omlx",
+    "splash"
+   ],
+   "path": "/v1/chat/completions",
+   "body": {
+    "messages": [
+     {
+      "role": "user",
+      "content": [
+       {
+        "type": "image_url",
+        "image_url": {
+         "url": "IMG"
+        }
+       },
+       {
+        "type": "text",
+        "text": "What is the dominant color of this image? One word."
+       }
+      ]
+     }
+    ],
+    "max_tokens": 16,
+    "temperature": 0
+   },
+   "asserts": [
+    {
+     "path": "choices.0.message.content",
+     "op": "contains",
+     "value": "red"
+    }
+   ],
+   "think": false,
+   "requires": [
+    "vision"
+   ],
+   "img": true
+  },
+  {
+   "id": "vision_tools",
+   "group": "media",
+   "api": "POST /v1/chat/completions",
+   "desc": "image together with tools",
+   "applies": [
+    "yunshu",
+    "llamacpp",
+    "mlxlm",
+    "omlx",
+    "splash"
+   ],
+   "path": "/v1/chat/completions",
+   "body": {
+    "messages": [
+     {
+      "role": "user",
+      "content": [
+       {
+        "type": "image_url",
+        "image_url": {
+         "url": "IMG"
+        }
+       },
+       {
+        "type": "text",
+        "text": "Look at the image, then call get_weather for Paris."
+       }
+      ]
+     }
+    ],
+    "tools": [
+     {
+      "type": "function",
+      "function": {
+       "name": "get_weather",
+       "description": "Get the current weather for a city.",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "city": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "city"
+        ]
+       }
+      }
+     }
+    ],
+    "tool_choice": "required",
+    "max_tokens": 200,
+    "temperature": 0
+   },
+   "asserts": [
+    {
+     "path": "choices.0.message.tool_calls.0.function.name",
+     "op": "eq",
+     "value": "get_weather"
+    }
+   ],
+   "think": false,
+   "requires": [
+    "vision"
+   ],
+   "img": true
+  },
+  {
+   "id": "audio_input",
+   "group": "media",
+   "api": "POST /v1/chat/completions",
+   "desc": "input_audio part is accepted",
+   "applies": [
+    "yunshu"
+   ],
+   "path": "/v1/chat/completions",
+   "body": {
+    "messages": [
+     {
+      "role": "user",
+      "content": [
+       {
+        "type": "input_audio",
+        "input_audio": {
+         "data": "AUDIO",
+         "format": "wav"
+        }
+       },
+       {
+        "type": "text",
+        "text": "Describe this sound in one word."
+       }
+      ]
+     }
+    ],
+    "max_tokens": 24,
+    "temperature": 0
+   },
+   "asserts": [
+    {
+     "path": "choices.0.message.content",
+     "op": "nonempty"
+    }
+   ],
+   "think": false,
+   "requires": [
+    "audio"
+   ],
+   "audio": true
+  },
+  {
+   "id": "prompt_cache_cached_tokens",
+   "group": "cache",
+   "api": "POST /v1/chat/completions",
+   "desc": "repeat of a long prompt reports cached_tokens>0 (first call 0/absent)",
+   "applies": [
+    "yunshu",
+    "llamacpp",
+    "mlxlm",
+    "omlx",
+    "splash"
+   ],
+   "script": "cache",
+   "lines": 400
+  },
+  {
+   "id": "long_context_32k",
+   "group": "cache",
+   "api": "POST /v1/chat/completions",
+   "desc": "needle at 2/3 of a ~32K-token prompt is recalled",
+   "applies": [
+    "yunshu",
+    "llamacpp",
+    "mlxlm",
+    "omlx",
+    "splash"
+   ],
+   "script": "long",
+   "lines": 2600,
+   "min_prompt_tokens": 28000
+  },
+  {
+   "id": "anthropic_messages",
+   "group": "anthropic",
+   "api": "POST /v1/messages",
+   "desc": "Messages API text reply with usage",
+   "applies": [
+    "yunshu",
+    "llamacpp"
+   ],
+   "path": "/v1/messages",
+   "body": {
+    "max_tokens": 16,
+    "temperature": 0,
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with only the word ORCHID."
+     }
+    ],
+    "thinking": {
+     "type": "disabled"
+    }
+   },
+   "asserts": [
+    {
+     "path": "content.0.text",
+     "op": "contains",
+     "value": "orchid"
+    },
+    {
+     "path": "stop_reason",
+     "op": "eq",
+     "value": "end_turn"
+    },
+    {
+     "path": "usage.output_tokens",
+     "op": "gte",
+     "value": 1
+    },
+    {
+     "path": "type",
+     "op": "eq",
+     "value": "message"
+    }
+   ]
+  },
+  {
+   "id": "anthropic_stream",
+   "group": "anthropic",
+   "api": "POST /v1/messages",
+   "desc": "Messages SSE event sequence",
+   "applies": [
+    "yunshu",
+    "llamacpp"
+   ],
+   "path": "/v1/messages",
+   "body": {
+    "max_tokens": 16,
+    "temperature": 0,
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with only the word ORCHID."
+     }
+    ],
+    "thinking": {
+     "type": "disabled"
+    }
+   },
+   "asserts": [
+    {
+     "path": "text",
+     "op": "contains",
+     "value": "orchid"
+    },
+    {
+     "path": "done",
+     "op": "eq",
+     "value": true
+    },
+    {
+     "path": "events.0",
+     "op": "eq",
+     "value": "message_start"
+    }
+   ],
+   "stream": "anthropic"
+  },
+  {
+   "id": "anthropic_tool_use",
+   "group": "anthropic",
+   "api": "POST /v1/messages",
+   "desc": "tool_use block for a forced tool",
+   "applies": [
+    "yunshu",
+    "llamacpp"
+   ],
+   "path": "/v1/messages",
+   "body": {
+    "max_tokens": 200,
+    "temperature": 0,
+    "messages": [
+     {
+      "role": "user",
+      "content": "What is the weather in Paris right now? Use the tool."
+     }
+    ],
+    "tools": [
+     {
+      "name": "get_weather",
+      "description": "Get the current weather for a city.",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "city": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "city"
+       ]
+      }
+     }
+    ],
+    "tool_choice": {
+     "type": "any"
+    },
+    "thinking": {
+     "type": "disabled"
+    }
+   },
+   "asserts": [
+    {
+     "path": "stop_reason",
+     "op": "eq",
+     "value": "tool_use"
+    },
+    {
+     "path": "content.0.type",
+     "op": "eq",
+     "value": "tool_use"
+    },
+    {
+     "path": "content.0.name",
+     "op": "eq",
+     "value": "get_weather"
+    },
+    {
+     "path": "content.0.input.city",
+     "op": "nonempty"
+    }
+   ]
+  },
+  {
+   "id": "anthropic_tool_result",
+   "group": "anthropic",
+   "api": "POST /v1/messages",
+   "desc": "tool_result block is used in the answer",
+   "applies": [
+    "yunshu",
+    "llamacpp"
+   ],
+   "path": "/v1/messages",
+   "body": {
+    "max_tokens": 120,
+    "temperature": 0,
+    "tools": [
+     {
+      "name": "get_weather",
+      "description": "Get the current weather for a city.",
+      "input_schema": {
+       "type": "object",
+       "properties": {
+        "city": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "city"
+       ]
+      }
+     }
+    ],
+    "messages": [
+     {
+      "role": "user",
+      "content": "What is the weather in Paris right now? Use the tool."
+     },
+     {
+      "role": "assistant",
+      "content": [
+       {
+        "type": "tool_use",
+        "id": "toolu_1",
+        "name": "get_weather",
+        "input": {
+         "city": "Paris"
+        }
+       }
+      ]
+     },
+     {
+      "role": "user",
+      "content": [
+       {
+        "type": "tool_result",
+        "tool_use_id": "toolu_1",
+        "content": "17 C, drizzle"
+       }
+      ]
+     }
+    ],
+    "thinking": {
+     "type": "disabled"
+    }
+   },
+   "asserts": [
+    {
+     "path": "content.0.text",
+     "op": "contains",
+     "value": "17"
+    }
+   ]
+  },
+  {
+   "id": "anthropic_stop_sequence",
+   "group": "anthropic",
+   "api": "POST /v1/messages",
+   "desc": "stop_sequences gives stop_reason stop_sequence",
+   "applies": [
+    "yunshu",
+    "llamacpp"
+   ],
+   "path": "/v1/messages",
+   "body": {
+    "max_tokens": 60,
+    "temperature": 0,
+    "stop_sequences": [
+     "5"
+    ],
+    "messages": [
+     {
+      "role": "user",
+      "content": "Count from 1 to 9 separated by single spaces."
+     }
+    ],
+    "thinking": {
+     "type": "disabled"
+    }
+   },
+   "asserts": [
+    {
+     "path": "stop_reason",
+     "op": "eq",
+     "value": "stop_sequence"
+    },
+    {
+     "path": "stop_sequence",
+     "op": "eq",
+     "value": "5"
+    }
+   ]
+  },
+  {
+   "id": "anthropic_thinking",
+   "group": "anthropic",
+   "api": "POST /v1/messages",
+   "desc": "thinking enabled returns a thinking block then text",
+   "applies": [
+    "yunshu",
+    "llamacpp"
+   ],
+   "path": "/v1/messages",
+   "body": {
+    "max_tokens": 2000,
+    "temperature": 1,
+    "thinking": {
+     "type": "enabled",
+     "budget_tokens": 1024
+    },
+    "messages": [
+     {
+      "role": "user",
+      "content": "What is 17*23?"
+     }
+    ]
+   },
+   "asserts": [
+    {
+     "path": "content.0.type",
+     "op": "eq",
+     "value": "thinking"
+    },
+    {
+     "path": "content.0.thinking",
+     "op": "nonempty"
+    }
+   ],
+   "requires": [
+    "thinking"
+   ]
+  },
+  {
+   "id": "anthropic_count_tokens",
+   "group": "anthropic",
+   "api": "POST /v1/messages",
+   "desc": "count_tokens returns input_tokens",
+   "applies": [
+    "yunshu",
+    "llamacpp"
+   ],
+   "path": "/v1/messages",
+   "body": {
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with only the word ORCHID."
+     }
+    ]
+   },
+   "asserts": [
+    {
+     "path": "input_tokens",
+     "op": "gte",
+     "value": 3
+    }
+   ],
+   "path_override": "/v1/messages/count_tokens"
+  },
+  {
+   "id": "anthropic_vision",
+   "group": "anthropic",
+   "api": "POST /v1/messages",
+   "desc": "base64 image block is understood",
+   "applies": [
+    "yunshu"
+   ],
+   "path": "/v1/messages",
+   "body": {
+    "max_tokens": 16,
+    "temperature": 0,
+    "messages": [
+     {
+      "role": "user",
+      "content": [
+       {
+        "type": "image",
+        "source": {
+         "type": "base64",
+         "media_type": "image/png",
+         "data": "IMGB64"
+        }
+       },
+       {
+        "type": "text",
+        "text": "What is the dominant color? One word."
+       }
+      ]
+     }
+    ],
+    "thinking": {
+     "type": "disabled"
+    }
+   },
+   "asserts": [
+    {
+     "path": "content.0.text",
+     "op": "contains",
+     "value": "red"
+    }
+   ],
+   "requires": [
+    "vision"
+   ],
+   "img": true
+  },
+  {
+   "id": "responses_basic",
+   "group": "responses",
+   "api": "POST /v1/responses",
+   "desc": "Responses API text output with usage",
+   "applies": [
+    "yunshu",
+    "llamacpp",
+    "omlx"
+   ],
+   "path": "/v1/responses",
+   "body": {
+    "input": "Reply with only the word ORCHID.",
+    "max_output_tokens": 32,
+    "temperature": 0
+   },
+   "asserts": [
+    {
+     "path": "status",
+     "op": "eq",
+     "value": "completed"
+    },
+    {
+     "path": "output_text",
+     "op": "contains",
+     "value": "orchid"
+    },
+    {
+     "path": "usage.output_tokens",
+     "op": "gte",
+     "value": 1
+    }
+   ],
+   "think": false
+  },
+  {
+   "id": "responses_tools",
+   "group": "responses",
+   "api": "POST /v1/responses",
+   "desc": "Responses API function_call output",
+   "applies": [
+    "yunshu",
+    "llamacpp",
+    "omlx"
+   ],
+   "path": "/v1/responses",
+   "body": {
+    "input": "What is the weather in Paris right now? Use the tool.",
+    "tools": [
+     {
+      "type": "function",
+      "name": "get_weather",
+      "description": "Get the weather for a city.",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "city": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "city"
+       ]
+      }
+     }
+    ],
+    "tool_choice": "required",
+    "max_output_tokens": 200,
+    "temperature": 0
+   },
+   "asserts": [
+    {
+     "path": "output.0.type",
+     "op": "eq",
+     "value": "function_call"
+    },
+    {
+     "path": "output.0.name",
+     "op": "eq",
+     "value": "get_weather"
+    },
+    {
+     "path": "output.0.arguments",
+     "op": "json_arg_nonempty",
+     "value": "city"
+    }
+   ]
+  },
+  {
+   "id": "responses_stream",
+   "group": "responses",
+   "api": "POST /v1/responses",
+   "desc": "Responses SSE reaches response.completed",
+   "applies": [
+    "yunshu",
+    "llamacpp",
+    "omlx"
+   ],
+   "path": "/v1/responses",
+   "body": {
+    "input": "Reply with only the word ORCHID.",
+    "max_output_tokens": 32,
+    "temperature": 0
+   },
+   "asserts": [
+    {
+     "path": "done",
+     "op": "eq",
+     "value": true
+    },
+    {
+     "path": "text",
+     "op": "contains",
+     "value": "orchid"
+    }
+   ],
+   "stream": "responses"
+  },
+  {
+   "id": "embeddings_shape",
+   "group": "embeddings",
+   "api": "POST /v1/embeddings",
+   "desc": "embedding vector shape, one per input",
+   "applies": [
+    "yunshu",
+    "llamacpp",
+    "mlxlm",
+    "omlx",
+    "splash"
+   ],
+   "path": "/v1/embeddings",
+   "body": {
+    "input": [
+     "a cat",
+     "a dog"
+    ]
+   },
+   "asserts": [
+    {
+     "path": "data",
+     "op": "len_eq",
+     "value": 2
+    },
+    {
+     "path": "data.0.embedding",
+     "op": "len_gte",
+     "value": 32
+    },
+    {
+     "path": "usage.prompt_tokens",
+     "op": "gte",
+     "value": 1
+    }
+   ],
+   "requires": [
+    "embeddings"
+   ]
+  },
+  {
+   "id": "ollama_chat",
+   "group": "ollama",
+   "api": "POST /api/chat",
+   "desc": "Ollama chat non-stream with eval counts",
+   "applies": [
+    "yunshu"
+   ],
+   "path": "/api/chat",
+   "body": {
+    "messages": [
+     {
+      "role": "user",
+      "content": "Reply with only the word ORCHID."
+     }
+    ],
+    "stream": false,
+    "options": {
+     "temperature": 0,
+     "num_predict": 16
+    },
+    "think": false
+   },
+   "asserts": [
+    {
+     "path": "message.content",
+     "op": "contains",
+     "value": "orchid"
+    },
+    {
+     "path": "done",
+     "op": "eq",
+     "value": true
+    },
+    {
+     "path": "eval_count",
+     "op": "gte",
+     "value": 1
+    }
+   ]
+  },
+  {
+   "id": "models_list",
+   "group": "meta",
+   "api": "GET /v1/models",
+   "desc": "model list contains the served model",
+   "applies": [
+    "yunshu",
+    "llamacpp",
+    "mlxlm",
+    "omlx",
+    "splash"
+   ],
+   "path": "/v1/models",
+   "method": "GET",
+   "body": {},
+   "asserts": [
+    {
+     "path": "data",
+     "op": "len_gte",
+     "value": 1
+    },
+    {
+     "path": "data.0.id",
+     "op": "nonempty"
+    }
+   ]
+  },
+  {
+   "id": "error_shape",
+   "group": "meta",
+   "api": "POST /v1/chat/completions",
+   "desc": "malformed request is a 4xx with an error object (never 200)",
+   "applies": [
+    "yunshu",
+    "llamacpp",
+    "mlxlm",
+    "omlx",
+    "splash"
+   ],
+   "path": "/v1/chat/completions",
+   "body": {
+    "messages": "not-a-list"
+   },
+   "status": [
+    400,
+    422
+   ],
+   "asserts": [
+    {
+     "path": "error",
+     "op": "exists"
+    }
+   ]
+  }
+ ]
+}
