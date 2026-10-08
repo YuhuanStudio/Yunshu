@@ -6,7 +6,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@yuhuanowo/yunui";
-import { CodeBlock } from "@yuhuanowo/yunui/code";
+import { CodeBlock } from "./LazyCodeBlock";
 import {
   DashboardPage,
   PageHeader,

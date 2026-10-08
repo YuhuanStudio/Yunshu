@@ -298,4 +298,3 @@ export function Settings({
   );
 }
 
-export { ApiView } from "./ApiAccess";

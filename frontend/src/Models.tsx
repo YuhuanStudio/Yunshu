@@ -25,7 +25,7 @@ import {
   PageHeader,
   SectionRow,
 } from "@yuhuanowo/yunui/patterns";
-import { CodeBlock } from "@yuhuanowo/yunui/code";
+import { CodeBlock } from "./LazyCodeBlock";
 import { IDBadge, ModelCard, isKnownCapability } from "@yuhuanowo/yunui/ai";
 import { Box, Download, LayoutGrid, RefreshCw, Table2 } from "lucide-react";
 import { getModel, loadModel, unloadModel, type Connection } from "./api";

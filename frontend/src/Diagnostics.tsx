@@ -13,7 +13,7 @@ import {
   Thead,
   Tr,
 } from "@yuhuanowo/yunui";
-import { CodeBlock } from "@yuhuanowo/yunui/code";
+import { CodeBlock } from "./LazyCodeBlock";
 import {
   DashboardPage,
   DetailList,
