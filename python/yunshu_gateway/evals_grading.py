@@ -58,10 +58,10 @@ def ngrams(tokens: list[str], n: int) -> Counter:
 
 def similarity(a: str, b: str, metric: str) -> float:
     x, y = a.split(), b.split()
-    if not x or not y:
-        return float(x == y)
     if metric == "fuzzy_match":
         return SequenceMatcher(None, a, b, autojunk=False).ratio()
+    if not x or not y:
+        return 0.0
     if metric == "cosine":
         u, v = Counter(x), Counter(y)
         return sum(c * v[t] for t, c in u.items()) / math.sqrt(
@@ -79,27 +79,28 @@ def similarity(a: str, b: str, metric: str) -> float:
         # Greedy exact-token alignment, fragmented matches receive METEOR's penalty.
         unused = set(range(len(y)))
         alignment = []
-        for t in x:
+        for i, t in enumerate(x):
             matched_j = next((j for j in sorted(unused) if y[j] == t), None)
             if matched_j is not None:
                 unused.remove(matched_j)
-                alignment.append(matched_j)
+                alignment.append((i, matched_j))
         m = len(alignment)
         if not m:
             return 0.0
         chunks = 1 + sum(
-            b != a + 1 for a, b in zip(alignment, alignment[1:], strict=False)
+            (b[0] != a[0] + 1 or b[1] != a[1] + 1)
+            for a, b in zip(alignment, alignment[1:], strict=False)
         )
         return (10 * m / (len(x) + 9 * len(y))) * (1 - 0.5 * (chunks / m) ** 3)
     if metric.startswith("rouge_"):
         n = int(metric.split("_")[1])
         u, v = ngrams(x, n), ngrams(y, n)
         denom = sum(u.values()) + sum(v.values())
-        return 2 * sum((u & v).values()) / denom if denom else float(x == y)
-    orders = range(1, min(4, len(x), len(y)) + 1)
+        return 2 * sum((u & v).values()) / denom if denom else 0.0
+    orders = range(1, min(4, len(x)) + 1)
     if metric == "gleu":
         u, v = Counter(), Counter()
-        for n in orders:
+        for n in range(1, 5):
             u.update(ngrams(x, n))
             v.update(ngrams(y, n))
         return sum((u & v).values()) / max(sum(u.values()), sum(v.values()))

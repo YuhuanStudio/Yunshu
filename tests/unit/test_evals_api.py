@@ -346,7 +346,7 @@ def test_metrics(metric):
         "one two three four five", "one two three four five", metric
     ) == pytest.approx(1)
     assert similarity("aaaaa", "zzzzz", metric) == 0
-    assert similarity("", "", metric) == 1
+    assert similarity("", "", metric) == (1 if metric == "fuzzy_match" else 0)
     assert similarity("a", "", metric) == 0
 
 
@@ -723,3 +723,90 @@ def test_deleted_runs_cannot_be_resurrected_by_progress_or_late_start(env):
     store.save(rec)
     evals_runner.recover()
     assert not store.rows("evalrun")
+
+
+@pytest.mark.parametrize(
+    "a,b,metric,expected",
+    [
+        ("a a b", "a b b", "cosine", 0.8),
+        ("abc", "axc", "fuzzy_match", 2 / 3),
+        ("", " ", "fuzzy_match", 0),
+        (" ", "  ", "fuzzy_match", 2 / 3),
+        ("a a b", "a b b", "rouge_1", 2 / 3),
+        ("a a b", "a b b", "rouge_2", 0.5),
+        ("a", "a", "rouge_5", 0),
+        ("a x b", "a b", "rouge_l", 0.8),
+        ("a b", "a", "bleu", 0),
+        ("a b", "a", "gleu", 1 / 3),
+        ("a x b", "a b", "meteor", 10 / 21),
+        ("a b", "a x b", "meteor", 10 / 29),
+    ],
+)
+def test_classic_metric_numeric_fixtures(a, b, metric, expected):
+    assert similarity(a, b, metric) == pytest.approx(expected)
+
+
+def test_bleu_brevity_penalty():
+    import math
+
+    assert similarity("a b", "a b c d", "bleu") == pytest.approx(math.exp(-1))
+
+
+def test_stored_media_parts_survive_sampling(env):
+    from pathlib import Path
+
+    from yunshu_engine import settings
+
+    sdk, _, calls, _ = env
+    parts = [
+        {"type": "text", "text": "hi"},
+        {"type": "image_url", "image_url": {"url": "data:image/png;base64,eA=="}},
+    ]
+    root = Path(settings.get("YUNSHU_CHAT_COMPLETIONS_DIR"))
+    root.mkdir(parents=True)
+    (root / "000000000001_chatcmpl-media.json").write_text(
+        json.dumps(
+            {
+                "completion": {
+                    "id": "chatcmpl-media",
+                    "created": 1,
+                    "model": "local",
+                    "metadata": {},
+                    "choices": [{"message": {"role": "assistant", "content": "hello"}}],
+                },
+                "messages": [{"role": "user", "content": "hi", "content_parts": parts}],
+            }
+        )
+    )
+    e = sdk.evals.create(
+        data_source_config={"type": "stored_completions"},
+        testing_criteria=[
+            {
+                "type": "string_check",
+                "name": "exact",
+                "input": "{{sample.output_text}}",
+                "reference": "hello",
+                "operation": "eq",
+            }
+        ],
+    )
+    r = sdk.evals.runs.create(
+        e.id,
+        data_source={
+            "type": "completions",
+            "model": "local",
+            "input_messages": {
+                "type": "item_reference",
+                "item_reference": "item.input_trajectory",
+            },
+            "source": {"type": "stored_completions"},
+        },
+    )
+    assert finished(sdk, e.id, r.id).result_counts.passed == 1
+    assert calls[0]["messages"][0]["content"] == parts
+
+
+def test_sample_input_string_shape_for_null_and_empty_media():
+    assert evals_runner.sample_inputs(
+        [{"role": "assistant", "content": None}, {"role": "user", "content": []}]
+    ) == [{"role": "assistant", "content": ""}, {"role": "user", "content": "[]"}]

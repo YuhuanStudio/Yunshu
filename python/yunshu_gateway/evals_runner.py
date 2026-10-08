@@ -37,7 +37,9 @@ def chat_messages(messages: list) -> list[dict]:
                 400, "Input messages must be objects", "invalid_type"
             )
         message = dict(message)
-        content = message.get("content")
+        content = message.get("content_parts")
+        if content is None:
+            content = message.get("content")
         if isinstance(content, dict):
             content = [content]
         if isinstance(content, list):
@@ -55,22 +57,23 @@ def chat_messages(messages: list) -> list[dict]:
                             image["detail"] = part["detail"]
                         part = {"type": "image_url", "image_url": image}
                 parts.append(part)
-            message["content"] = parts
+            content = parts
+        message["content"] = content
         result.append(message)
     return result
 
 
 def sample_inputs(messages: list) -> list[dict]:
     # The SDK's output SampleInput.content is a string even for media inputs.
-    return [
-        {
-            "role": m["role"],
-            "content": m.get("content")
-            if isinstance(m.get("content"), str)
-            else json.dumps(m.get("content") or "", ensure_ascii=False),
-        }
-        for m in messages
-    ]
+    result = []
+    for message in messages:
+        content = message.get("content")
+        if content is None:
+            content = ""
+        elif not isinstance(content, str):
+            content = json.dumps(content, ensure_ascii=False)
+        result.append({"role": message["role"], "content": content})
+    return result
 
 
 def source_rows(source: dict, config: dict) -> list[dict]:
@@ -114,7 +117,7 @@ def source_rows(source: dict, config: dict) -> list[dict]:
                 and c["created"] > source["created_before"]
             ):
                 continue
-            messages = stored["messages"]
+            messages = chat_messages(stored["messages"])
             rows.append(
                 {
                     "item": {
