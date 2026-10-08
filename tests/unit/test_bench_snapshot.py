@@ -59,7 +59,15 @@ def make_rows(job, engaged=None, **drop):
                     "agg_tps": 90.0,
                 }
             )
-    rows.append({**meta, "part": "memory", "peak_gib": 30.0, "idle_gib": 20.0})
+    rows.append(
+        {
+            **meta,
+            "part": "memory",
+            "peak_gib": 30.0,
+            "idle_gib": 20.0,
+            "memory_method": "system-delta",
+        }
+    )
     rows.append({**meta, "part": "part_done", "complete": True})
     for key in drop.get("drop", ()):
         rows = [r for r in rows if r.get("part") != key]
@@ -231,6 +239,13 @@ def test_validate_fails_closed():
         "no memory row" in p
         for p in bs.validate_rows(j, make_rows(j, drop=("memory",)))
     )
+    old = [
+        {k: v for k, v in r.items() if k != "memory_method"}
+        if r.get("part") == "memory"
+        else r
+        for r in good
+    ]
+    assert any("system-delta" in p for p in bs.validate_rows(j, old))
     assert any(
         "decode: 5 rows" in p
         for p in bs.validate_rows(j, [r for i, r in enumerate(good) if i != 3])

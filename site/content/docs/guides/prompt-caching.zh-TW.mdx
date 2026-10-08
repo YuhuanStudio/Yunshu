@@ -1,0 +1,193 @@
+---
+title: 提示詞快取
+description: Yunshu 如何重用共同提示詞前綴的 KV 快取、命中如何顯示在 usage 中，以及控制記憶體、SSD 儲存與精度的選項。
+---
+
+代理與聊天的流量會一再重複：每一輪都會重送 system prompt、工具清單與到目前為止的整段對話。Yunshu 會保留先前提示詞的注意力狀態（KV 快取），當新的提示詞以相同的 token 開頭時，就略過那一段的預填，只處理新增的 token。這會降低第一輪之後每一輪的首 token 延遲，而且不需要修改用戶端。
+
+重用是**自動**的。下面提到的各 API 方言欄位（`cache_control`、`prompt_cache_breakpoint`）只是建立在同一份快取之上的提示與回報控制，並非必要。
+
+## 快取如何運作
+
+有兩條服務路徑，各自有自己的前綴快取。
+
+| 服務路徑 | 服務對象 | 前綴快取 | 說明 |
+|---|---|---|---|
+| VLM batch runner | 所有 `mlx-vlm` 模型，包含 Qwen3.5 家族 | APC（automatic prefix cache），使用精確檢查點 | 以提示詞 token 為鍵；視覺與音訊輸入另以媒體內容為鍵。預設開啟，有 RAM 預算與 SSD 層 |
+| 純文字快速路徑 | 純文字 `mlx-lm` 模型 | `KVPrefixCache` | RAM 項目，另有選用的 SSD 層（預設關閉） |
+
+命中的條件是新提示詞必須以快取中的 token 完全相同地開頭。提示詞前段任何變動（例如每一輪都會變的 system reminder）都會讓之後的內容位移，降低重用率。對含有循環層的模型（Qwen3.5 家族混用注意力與 GatedDeltaNet 層），VLM runner 儲存的是精確檢查點，同時包含某個 token 位置的注意力 KV 與循環狀態，所以命中時還原的狀態與冷啟動預填產生的完全一致。
+
+除了對話本身的檢查點，VLM runner 也會為 system 回合的結尾（system prompt 加工具清單）保留一個檢查點，因此以相同 system prompt 與工具開始的新工作階段可以重用這個開頭。對話變長時，較新的檢查點會取代作為其前綴的舊檢查點，所以一段長對話只會保留一份，而不是每輪一份。
+
+## 在 usage 中看到快取命中
+
+各方言的標準 usage 欄位會回報有多少提示詞 token 來自快取。
+
+| API | 欄位 |
+|---|---|
+| Chat Completions | `usage.prompt_tokens_details.cached_tokens` |
+| Responses | `usage.input_tokens_details.cached_tokens` |
+| Messages | `usage.cache_read_input_tokens`（從快取讀取的 token）與 `usage.cache_creation_input_tokens`（本輪寫入的可快取前綴）。`input_tokens` 是其餘部分，所以三者相加等於提示詞大小 |
+
+串流時，相同的欄位會出現在 usage chunk（chat，需 `stream_options: {"include_usage": true}`）、`response.completed` 事件（Responses）以及 Messages 的 usage 事件中。
+
+```json
+{
+  "usage": {
+    "prompt_tokens": 3273,
+    "completion_tokens": 120,
+    "total_tokens": 3393,
+    "prompt_tokens_details": { "cached_tokens": 3264 }
+  }
+}
+```
+
+Yunshu 另外加入一個 `x_yunshu` 物件（非串流回應還有 `X-Yunshu-Cached-Tokens`、`X-Yunshu-Cache-Tier` 與 `X-Yunshu-Cache-Reload-Ms` 標頭），說明命中來自哪一層。這些是附加欄位，SDK 會直接忽略。
+
+```json
+"x_yunshu": {
+  "cached_tokens": 13867,
+  "cache": { "tier": "ram", "cached_tokens": 13867, "reload_ms": 41.2 }
+}
+```
+
+`tier` 為 `ram`、`warm`、`ssd` 或 `none`。`reload_ms` 是查找花費的時間，包含從 SSD 讀取。設定了多個儲存層時，`ssd` 命中還會帶有 `device`。未知的欄位為 `null`。
+
+### 用 OpenAI SDK 驗證
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="http://localhost:8000/v1", api_key="sk-local")
+
+long_context = "You are a careful assistant. " + "Reference text. " * 600
+for question in ["What is this about?", "Summarize it in one line."]:
+    r = client.chat.completions.create(
+        model="local",
+        messages=[
+            {"role": "system", "content": long_context},
+            {"role": "user", "content": question},
+        ],
+        max_tokens=64,
+    )
+    print(r.usage.prompt_tokens, r.usage.prompt_tokens_details.cached_tokens)
+```
+
+第一次呼叫的 `cached_tokens` 很小或為零；第二次會回報提示詞的大部分。
+
+## 請求欄位
+
+### Anthropic `cache_control`
+
+在 `POST /v1/messages` 上，`cache_control: {"type": "ephemeral"}` 可標記 system 區塊、訊息內容區塊或工具上的快取斷點；頂層的 `cache_control` 也會被接受，作為自動標記。`ttl` 可為 `"5m"`（預設）或 `"1h"`；最多支援四個斷點。
+
+```python
+import anthropic
+
+client = anthropic.Anthropic(base_url="http://localhost:8000", api_key="sk-local")
+
+msg = client.messages.create(
+    model="local",
+    max_tokens=128,
+    system=[
+        {"type": "text", "text": "<long reference document>", "cache_control": {"type": "ephemeral"}},
+    ],
+    messages=[{"role": "user", "content": "Question about the document."}],
+)
+print(msg.usage.cache_creation_input_tokens, msg.usage.cache_read_input_tokens)
+```
+
+需要知道的行為：
+
+- 標記只是提示，請求不會因為標記而被拒絕。如果模型的聊天模板丟掉或重複了標記（Qwen 模板會移除先前回合的推理內容，所以放在思考區塊上的標記會消失），請求會在沒有明確檢查點的情況下處理，並在伺服器日誌中寫明原因。
+- 在 VLM runner 上，標記會經由實際的聊天模板（包含原生工具定義）對應，`cache_creation_input_tokens` 與 `cache_read_input_tokens` 回報的是真實的檢查點寫入與讀取。
+- 在純文字快速路徑上，只會讀取 `system` 區塊上的標記。訊息區塊上的標記在那裡不會被偵測，因此它的 `cache_creation_input_tokens` 與 `cache_read_input_tokens` 維持 0，不過前綴快取仍會自動重用該前綴。
+
+### OpenAI `prompt_cache_*`
+
+Chat Completions 與 Responses 都接受 OpenAI 風格的欄位。
+
+| 欄位 | 行為 |
+|---|---|
+| `prompt_cache_key` | <Support status="partial">接受並傳遞，但不會路由或分割快取。是否重用只由提示詞 token 決定</Support> |
+| `prompt_cache_retention` | <Support status="partial">接受；在 VLM runner 上作為 `prompt_cache_options` 的預設 `ttl`</Support> |
+| `prompt_cache_options` | <Support status="supported">VLM runner：</Support>`{"mode": "implicit" \| "explicit", "ttl": "30m" \| "24h" \| "in_memory"}`。未提供時套用預設的自動重用 |
+| 文字內容片段上的 `prompt_cache_breakpoint` | <Support status="supported">VLM runner：</Support>在該片段結尾設定明確斷點，必須放在文字片段上 |
+
+在純文字快速路徑上，這些欄位會被接受，但除了自動前綴重用之外沒有其他作用。
+
+## 哪些模型不支援
+
+前綴重用需要能在前綴邊界建立檢查點的快取。**含有滑動視窗注意力層的模型**（rotating KV cache）做不到，因此 VLM runner 會在沒有前綴快取的情況下服務它們，`GET /v1/models` 的 `yunshu` 鍵底下會回報 `prefix_cache.supported: false` 與原因。在純文字快速路徑上，快取為混合／循環式或滑動視窗的模型同樣無法重用已儲存的前綴。沒有這些層的模型，以及 VLM runner 上的混合式 Qwen3.5 家族，則受支援。
+
+## 記憶體與儲存選項
+
+所有設定都在設定註冊表中，完整列表見[設定](/docs/guides/configuration)。
+
+### VLM runner（APC）
+
+| 設定 | 預設 | 說明 |
+|---|---|---|
+| `YUNSHU_VLM_APC_MEMORY_GB` | 自動 | RAM 預算（GiB）；`0` 停用前綴快取。未設定時：取權重與系統保留量之後剩餘記憶體的一半，上限為機器記憶體的四分之一與 32 GiB，剩餘不到 1 GiB 時關閉 |
+| `YUNSHU_VLM_APC_DISK` | 開 | SSD 層：被 RAM 淘汰的檢查點（以及關機時仍在 RAM 的檢查點）會寫到磁碟，下次直接讀回而不重新計算。位元精確、無損；快取可跨重啟保留。設為 `0` 則只用 RAM |
+| `YUNSHU_VLM_APC_DISK_DIR` | `~/.yunshu/cache/apc` | SSD 層的位置；可指向快速的外接磁碟以保持內建磁碟乾淨 |
+| `YUNSHU_VLM_APC_DISK_GB` | 自動 | 整個目錄的 SSD 層容量上限（未設定：磁碟區的四分之一，最多 64 GiB） |
+| `YUNSHU_VLM_APC_DISK_TIERS` | 未設定 | SSD 目錄之下的更多儲存層（外接 SSD、HDD、NAS 掛載），格式為 `PATH[@GiB]`；啟動時會量測各磁碟區並依實測讀取速度排序 |
+| `YUNSHU_VLM_APC_WARM` | `off` | 為被淘汰的檢查點多加一層 RAM：`lossless`（壓縮、位元精確）或有損的 `int8` / `int4` |
+| `YUNSHU_CACHE_RESERVE_PCT`、`YUNSHU_CACHE_RESERVE_GB` | `10`、`20` | 磁碟區上任何快取寫入都不得動用的剩餘空間 |
+| `YUNSHU_CACHE_STALE_DAYS` | `7` | 超過此天數未使用、或模型已改變的命名空間會優先被清除 |
+
+SSD 中的狀態以檢查點的權重作為命名空間，所以就地替換模型不會讀到過期的狀態。
+
+### 純文字快速路徑（`KVPrefixCache`）
+
+| 設定 | 預設 | 說明 |
+|---|---|---|
+| `YUNSHU_PREFIX_MAX_ENTRIES` | `64` | 保留的前綴項目數 |
+| `YUNSHU_SSD_CACHE` | 關 | 把前綴 KV 持久化到 SSD |
+| `YUNSHU_SSD_CACHE_DIR` | `~/.cache/yunshu/kv-ssd` | SSD 目錄 |
+| `YUNSHU_SSD_CACHE_MAX_GB` | `10` | 該目錄的容量上限 |
+| `YUNSHU_SSD_CACHE_PREFILL_CEIL_TPS` | `20000` | 模型預填速度超過此值時略過 SSD 還原，因為此時重新計算和讀取一樣快 |
+
+### 管理 SSD 快取
+
+```bash
+yunshu cache status        # 各 SSD 快取的大小、上限與問題
+yunshu cache gc            # 試跑：回報過期或損毀的項目
+yunshu cache gc --apply    # 刪除它們並修剪到容量上限
+```
+
+`yunshu doctor` 也會印出快取目錄、大小與剩餘空間。
+
+## 預設無損，有損由你選擇
+
+從 RAM 或 SSD 重用精確檢查點，得到的狀態與冷啟動預填完全相同。下列選項則以輸出品質換取記憶體。它們是預設為無損的使用者選項，不會被自動啟用。
+
+| 設定 | 效果 |
+|---|---|
+| `YUNSHU_KV_QUANT_BITS` | 文字引擎：把 KV 快取量化為 2、3、4 或 8 位元（`auto` 會在快取超過約 2 GiB 時改用 8 位元）。預設 `off` |
+| `YUNSHU_KV_PRECISION` | Qwen3.5 家族 runner：`int8` 以 int8 編碼加每組縮放值儲存共用解碼批次的 KV，記憶體與讀取頻寬約減半。預設 `bf16`。單一請求與推測解碼通道維持 bf16 |
+| `YUNSHU_VLM_APC_WARM` = `int8` 或 `int4` | 被淘汰的檢查點以量化形式留在 RAM；命中時還原的是反量化的 K/V，輸出可能與冷啟動預填不同。SSD 層仍保存精確狀態 |
+| `YUNSHU_PREFIX_HOT_LIMIT` | 文字引擎：只有這麼多項目保持全精度，較舊的以 4 位元儲存（預設 `0`：全部全精度） |
+| `YUNSHU_SSD_CACHE_PRECISION` = `int8` | 文字引擎：以 int8 儲存 SSD 項目，位元組數約減半。預設 `native`（位元精確） |
+
+## 支援狀況
+
+| 功能 | 狀態 |
+|---|---|
+| 自動前綴重用（VLM runner 與純文字快速路徑） | <Support status="supported">支援</Support> |
+| usage 中的 `cached_tokens` 與 `cache_read_input_tokens` | <Support status="supported">支援</Support> |
+| `system` 區塊上的 `cache_control` | <Support status="supported">支援</Support> |
+| 訊息區塊與工具上的 `cache_control` | <Support status="partial">僅 VLM runner；純文字快速路徑不計入回報</Support> |
+| `prompt_cache_key` | <Support status="partial">接受，無作用</Support> |
+| `prompt_cache_options`、`prompt_cache_breakpoint` | <Support status="partial">僅 VLM runner</Support> |
+| 滑動視窗模型的前綴快取 | <Support status="unsupported">尚未支援</Support> |
+| 具名的快取內容物件（Gemini 風格的 `cachedContents`） | <Support status="unsupported">不提供</Support> |
+
+## 相關頁面
+
+- [Messages](/docs/api/messages)、[Chat Completions](/docs/api/chat-completions) 與 [Responses](/docs/api/responses)
+- [架構](/docs/developers/architecture)
+- [設定](/docs/guides/configuration)
+- [模型支援](/docs/guides/model-support)

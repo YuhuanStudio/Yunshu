@@ -110,6 +110,7 @@ class ThinkingSegmentSubstore:
         # KV quantizer for compression (lazy init)
         self._quantizer = None
         # SSD cache directory
+        self._ssd_dir: Path | None
         if self.config.enable_ssd and self.config.ssd_cache_dir:
             self._ssd_dir = Path(self.config.ssd_cache_dir)
         elif self.config.enable_ssd:

@@ -402,8 +402,11 @@ def validate_rows(job: Job, rows: list[dict]) -> list[str]:
         r.get("git_sha") for r in rows
     ):
         problems.append("yunshu rows carry no git sha")
-    if not [r for r in rows if r.get("part") == "memory"]:
+    memory_rows = [r for r in rows if r.get("part") == "memory"]
+    if not memory_rows:
         problems.append("no memory row")
+    elif any(r.get("memory_method") != "system-delta" for r in memory_rows):
+        problems.append("memory row is not memory_method=system-delta")
     for part, n in expected_rows(job).items():
         got = len([r for r in rows if r.get("part") == part])
         if got != n:

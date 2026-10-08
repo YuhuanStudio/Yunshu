@@ -1,0 +1,194 @@
+---
+title: 檔案
+description: 本機檔案儲存區，在同一組 /v1/files 路徑上同時支援 OpenAI Files API 與 Anthropic Files API。
+---
+
+Yunshu 把上傳的檔案存放在同一個本機儲存區（預設 `~/.yunshu/files`）。同一組路由會以兩種格式回應，由請求決定：只要請求帶有 `anthropic-version` 標頭（所有 Anthropic SDK 都會送出）就使用 Anthropic 格式，否則使用 OpenAI 格式。OpenAI SDK 不會送這個標頭。
+
+儲存的檔案會用在其他地方：批次的輸入與輸出檔（[批次](/docs/api/batches)）、評測資料（[評測](/docs/api/evals)）、登錄的自訂語音（[音訊](/docs/api/audio)），以及 [Responses](/docs/api/responses) 與 [Messages](/docs/api/messages) 請求中的檔案引用。
+
+<Endpoint method="POST" path="/v1/files" />
+<Endpoint method="GET" path="/v1/files" />
+<Endpoint method="GET" path="/v1/files/{file_id}" />
+<Endpoint method="GET" path="/v1/files/{file_id}/content" />
+<Endpoint method="DELETE" path="/v1/files/{file_id}" />
+
+<Callout type="info">
+只有在設定了 `YUNSHU_AUTH_TOKEN` 時才會強制驗證。這裡只有單一擁有者：出示 token 的人（未設定 token 時則是任何人）看得到所有檔案。
+</Callout>
+
+## 限制與儲存
+
+| 設定 | 預設值 | 作用 |
+| --- | --- | --- |
+| `YUNSHU_FILES_DIR` | `~/.yunshu/files` | 儲存區目錄。 |
+| `YUNSHU_FILES_MAX_BYTES` | 536870912（512 MB） | 單一上傳檔的大小上限；超過會以 `413` `file_too_large` 失敗。 |
+| `YUNSHU_FILES_MAX_TOTAL_BYTES` | 0（不限） | 儲存區總大小；上傳後會超過時以 `413` `storage_quota_exceeded` 失敗（會先清除已過期的檔案）。 |
+| `YUNSHU_FILES_TTL_DAYS` | 未設定 | 上傳後經過這麼多天就刪除。未設定則保留到手動刪除。 |
+
+其他行為：
+
+- id 的形式是 `file_` 加 24 個十六進位字元。凡是需要 id 的地方，也接受 OpenAI 的寫法 `file-...`，並對應到 `file_...`。
+- 中繼資料與內容都以原子方式寫入；過期檔案會在存取時以及儲存區啟動時被清除。
+- 磁碟已滿時，上傳回傳 `507`，code 為 `insufficient_storage`。
+
+## 上傳
+
+`POST /v1/files` 使用 `multipart/form-data`。
+
+| 參數 | 型別 | 必填 | 說明 | 狀態 |
+| --- | --- | --- | --- | --- |
+| `file` | file | 是 | 檔案部分。 | 支援 |
+| `purpose` | string | OpenAI：是 | `assistants`、`batch`、`fine-tune`、`vision`、`user_data`、`evals` 之一，其他值回傳 `400`。Anthropic 請求會忽略（以 `user_data` 儲存）。 | 支援 |
+| `expires_after` | object | 否 | 僅 OpenAI。`{"anchor": "created_at", "seconds": 3600..2592000}`，可用 `expires_after[anchor]` 與 `expires_after[seconds]` 表單欄位，或單一 JSON 字串送出。 | 支援 |
+
+OpenAI 上傳不可為空檔案。所有 `purpose` 值都會被接受，但只有 Yunshu 會用到的值才有實際作用：`batch` 對應[批次](/docs/api/batches)，`evals` 對應[評測](/docs/api/evals)。這裡不會執行任何微調。
+
+OpenAI 回應：
+
+```json
+{
+  "id": "file_0a1b2c3d4e5f60718293a4b5",
+  "object": "file",
+  "bytes": 1204,
+  "created_at": 1767225600,
+  "expires_at": null,
+  "filename": "requests.jsonl",
+  "purpose": "batch",
+  "status": "processed",
+  "status_details": null
+}
+```
+
+Anthropic 回應：
+
+```json
+{
+  "id": "file_0a1b2c3d4e5f60718293a4b5",
+  "type": "file",
+  "filename": "report.pdf",
+  "mime_type": "application/pdf",
+  "size_bytes": 48210,
+  "created_at": "2026-01-01T00:00:00Z",
+  "downloadable": false
+}
+```
+
+儲存的 `mime_type` 優先採用上傳時宣告且夠具體的 content type，否則從內容判斷（PDF、PNG、JPEG、GIF、WebP），再依檔名推測。
+
+## 列出、取得、刪除
+
+| 路由 | OpenAI 格式 | Anthropic 格式 |
+| --- | --- | --- |
+| `GET /v1/files` | 查詢參數：`purpose`、`limit`（1 到 10000，預設 10000）、`order`（`asc` 或 `desc`，預設 `desc`）、`after`（檔案 id）。回傳 `{"object": "list", "data", "has_more", "first_id", "last_id"}`。 | 查詢參數：`limit`（1 到 1000，預設 20）、`after_id`、`before_id`。回傳 `{"data", "first_id", "last_id", "has_more"}`。不依 `purpose` 篩選。 |
+| `GET /v1/files/{file_id}` | 檔案物件。 | 檔案物件。 |
+| `DELETE /v1/files/{file_id}` | `{"id", "object": "file", "deleted": true}` | `{"id", "type": "file_deleted"}` |
+
+列表依建立時間由新到舊。
+
+## 下載內容
+
+`GET /v1/files/{file_id}/content` 以附件形式回傳儲存的位元組，並帶有儲存的 content type 與檔名。
+
+在 Anthropic 格式下，遵循 Anthropic 的規則：只有工具產生的檔案可以下載，使用者上傳的不行。Yunshu 把所有上傳檔案標為 `downloadable: false`，因此 Anthropic 風格的請求（帶 `anthropic-version` 標頭）會得到 `403`。要讀回檔案，請使用 OpenAI 格式（不帶 `anthropic-version` 標頭）。
+
+## 在請求中使用儲存的檔案
+
+請求中以 id 引用時，儲存的檔案會被內嵌到模型請求中：
+
+| 位置 | 引用方式 |
+| --- | --- |
+| [Messages](/docs/api/messages) | `{"type": "image"}` 或 `{"type": "document"}` 區塊，搭配 `"source": {"type": "file", "file_id": "file_..."}`。文字文件會變成文字來源，其他轉成 base64。 |
+| [Responses](/docs/api/responses) | 帶 `file_id` 的 `input_file` 或 `input_image` 項目。 |
+
+id 不存在時回傳 `404` `file_not_found`。
+
+## 範例
+
+<Tabs items={["curl", "Python", "JavaScript"]}>
+<Tab value="curl">
+
+```bash
+# Upload (OpenAI dialect)
+curl http://localhost:8000/v1/files \
+  -F purpose=user_data \
+  -F file=@notes.txt
+
+# List and download
+curl "http://localhost:8000/v1/files?limit=5"
+curl http://localhost:8000/v1/files/file_0a1b2c3d4e5f60718293a4b5/content -o notes.txt
+
+# Upload with the Anthropic dialect: the header selects it
+curl http://localhost:8000/v1/files \
+  -H "anthropic-version: 2023-06-01" \
+  -F file=@report.pdf
+```
+
+</Tab>
+<Tab value="Python">
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="http://localhost:8000/v1", api_key="not-needed")
+
+f = client.files.create(file=open("notes.txt", "rb"), purpose="user_data")
+print(f.id, f.bytes)
+
+for item in client.files.list(limit=5):
+    print(item.id, item.filename)
+
+print(client.files.content(f.id).text)
+client.files.delete(f.id)
+```
+
+</Tab>
+<Tab value="JavaScript">
+
+```ts
+import OpenAI from "openai";
+import fs from "node:fs";
+
+const client = new OpenAI({ baseURL: "http://localhost:8000/v1", apiKey: "not-needed" });
+
+const f = await client.files.create({
+  file: fs.createReadStream("notes.txt"),
+  purpose: "user_data",
+});
+console.log(f.id, f.bytes);
+await client.files.del(f.id);
+```
+
+</Tab>
+</Tabs>
+
+## 錯誤
+
+OpenAI 格式的錯誤使用 `{"error": {"message", "type", "param", "code"}}`；Anthropic 格式的錯誤使用 `{"type": "error", "error": {"type", "message"}}`。
+
+| 狀態碼 | Code | 情況 |
+| --- | --- | --- |
+| `400` | `invalid_value` | `purpose`、`expires_after`、`limit` 或 `order` 不合法。 |
+| `400` | | 不是 multipart 本文、缺少 `file`、檔案為空（OpenAI）。 |
+| `404` | `file_not_found` | id 不存在、格式錯誤或已過期。 |
+| `403` | | 以 Anthropic 格式下載上傳的檔案內容。 |
+| `413` | `file_too_large`、`storage_quota_exceeded` | 超過單檔或總量上限。 |
+| `507` | `insufficient_storage` | 磁碟已滿。 |
+
+## 支援狀況
+
+| 功能 | 狀態 |
+| --- | --- |
+| OpenAI Files：上傳、列出、取得、刪除、內容 | <Support status="supported">支援</Support> |
+| 依 `anthropic-version` 選擇的 Anthropic Files 格式 | <Support status="supported">支援</Support> |
+| `expires_after` | <Support status="supported">1 小時到 30 天，只支援 `created_at` 錨點</Support> |
+| Anthropic 格式下載上傳的檔案 | <Support status="unsupported">403，與 Anthropic API 相同</Support> |
+| 分段 / 可續傳的 `uploads` API | <Support status="unsupported">未提供</Support> |
+| `purpose` 背後的微調、assistants、vision 流程 | <Support status="unsupported">purpose 值只會被接受並儲存</Support> |
+
+## 相關頁面
+
+- [批次](/docs/api/batches)：輸入與輸出 JSONL 檔。
+- [評測](/docs/api/evals)：以 `purpose=evals` 上傳的資料集。
+- [音訊](/docs/api/audio)：存放在此儲存區的自訂語音。
+- [Messages](/docs/api/messages) 與 [Responses](/docs/api/responses)：檔案引用。

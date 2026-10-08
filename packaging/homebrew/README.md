@@ -43,3 +43,11 @@ The tap's README lists what it installs. Add a line for Yunshu next to YunAudio:
 ```sh
 brew install yuhuanstudio/tap/yunshu
 ```
+
+## CLI UX proposal
+
+`cliux-proposed.diff` proposes completion installation and `yunshu setup` for the
+next published release containing those commands. The current tap formula is
+0.1.4; do not apply the proposal to that sdist. Update URL/SHA from PyPI when
+the new version is published, then review/apply the diff in the tap. This worker
+has not edited or pushed the tap.

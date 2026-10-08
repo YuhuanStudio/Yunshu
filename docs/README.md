@@ -2,7 +2,7 @@
 
 Yunshu is a fast, local, single-node LLM / VLM inference engine for Apple Silicon.
 Qwen3.8-27B is the first fully tuned model; other modalities are supported capabilities.
-Latest release: v0.1.2 (2026-10-02), following v0.1.1 (2026-09-29). Benchmark pages
+Latest release: v0.1.4 (2026-10-08); main contains the unreleased 0.1.5 cycle. Benchmark pages
 label later main measurements as unreleased. Start at the top-level [README](../README.md).
 
 ## Start here
@@ -12,11 +12,18 @@ label later main measurements as unreleased. Start at the top-level [README](../
 
 ## Use and configure
 
+- [guides/CLI.md](guides/CLI.md): first run, models, monitoring, JSON and shell completion
+
 - [guides/FIRST_RUN.md](guides/FIRST_RUN.md): install, choose a cached or small model, readiness, first chat/API request and upgrades
 - [guides/CLIENTS.md](guides/CLIENTS.md): connecting OpenAI / Anthropic SDKs, coding agents, Open
   WebUI
 - [guides/SERVICE.md](guides/SERVICE.md): running in the background (launchd), uninstalling
 - [guides/TROUBLESHOOTING.md](guides/TROUBLESHOOTING.md)
+- [guides/DECISIONS.md](guides/DECISIONS.md): typed decisions and supported checkpoints
+- [guides/EVALS.md](guides/EVALS.md): local eval definitions, runs and graders
+- [guides/WEB_SEARCH.md](guides/WEB_SEARCH.md): search/fetch configuration and privacy
+- [guides/TAVILY.md](guides/TAVILY.md): Tavily-compatible retrieval and research
+- [CONSOLE.md](CONSOLE.md): build and use the source console
 - [API.md](API.md): endpoints
 - [CONFIGURATION.md](CONFIGURATION.md): every `YUNSHU_*` setting (generated)
 - [guides/ACCURACY.md](guides/ACCURACY.md): distribution, greedy and paired task evidence

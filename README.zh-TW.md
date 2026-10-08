@@ -32,11 +32,13 @@
 
 ## 快速開始
 
+模型選擇、外接儲存、就緒檢查與升級請參閱[首次使用指南](docs/guides/FIRST_RUN.md)。
+
 需要 Apple Silicon、macOS 14 以上、Python 3.13 以上與 [uv](https://docs.astral.sh/uv/)。
 
 ```bash
 uv tool install --python 3.13 "yunshu[vision]"
-yunshu doctor                                   # 檢查這台 Mac，並說明怎麼修
+yunshu doctor                                   # checks this Mac and says how to fix problems
 yunshu pull mlx-community/Qwen3.5-9B-MLX-4bit
 yunshu serve -m mlx-community/Qwen3.5-9B-MLX-4bit
 ```
@@ -46,10 +48,10 @@ yunshu serve -m mlx-community/Qwen3.5-9B-MLX-4bit
 ```python
 from openai import OpenAI
 
-client = OpenAI(base_url="http://127.0.0.1:8000/v1", api_key="local")  # 任意 key 皆可
+client = OpenAI(base_url="http://127.0.0.1:8000/v1", api_key="local")  # any key works
 r = client.chat.completions.create(
     model="local",
-    messages=[{"role": "user", "content": "用一句話解釋 MLX。"}],
+    messages=[{"role": "user", "content": "Explain MLX in one sentence."}],
 )
 print(r.choices[0].message.content)
 ```
@@ -60,19 +62,31 @@ from anthropic import Anthropic
 client = Anthropic(base_url="http://127.0.0.1:8000", api_key="local")
 msg = client.messages.create(
     model="local", max_tokens=512,
-    messages=[{"role": "user", "content": "用一句話解釋 MLX。"}],
+    messages=[{"role": "user", "content": "Explain MLX in one sentence."}],
 )
 print(msg.content[0].text)
 ```
 
-模型放在 `~/.yunshu/models`（用 `yunshu config set models_dir PATH` 搬移）；`serve -m org/name`
+模型放在 `~/.yunshu/models`（`yunshu config set models_dir PATH` 指定後續下載目錄，不搬動現有權重）；`serve -m org/name`
 也會找 Hugging Face 快取，只有需要時才下載。`yunshu service install -m <model>` 讓伺服器在登入時啟動。
+
+### 本地 console
+
+原始碼包含 YunUI 引擎 console，入口為 `/console/`，提供狀態、資源圖表、模型操作、請求檢視／取消與串流診斷。
+
+```bash
+cd frontend
+pnpm install --frozen-lockfile
+pnpm build
+```
+
+[Console](docs/CONSOLE.md)
 
 ### Qwen3.8-27B
 
 ```bash
 yunshu pull Jundot/Qwen3.8-27B-oQ4e-mtp
-yunshu pull incoai/Qwen3.8-27B-DFlash2          # 選用的草稿模型，會自動使用
+yunshu pull incoai/Qwen3.8-27B-DFlash2          # optional drafter, picked up automatically
 yunshu serve -m Jundot/Qwen3.8-27B-oQ4e-mtp
 ```
 
@@ -90,16 +104,16 @@ uv run yunshu serve -m <model>
 ## 運作方式
 
 ```
- OpenAI / Anthropic / Ollama 客戶端 ──► FastAPI gateway（單一進程）
-                                          │  請求驗證、工具／推理解析、
-                                          │  伺服器端工具（網頁搜尋／抓取／MCP）
-                                          ▼
-                                  引擎（單一 MLX 執行緒）
+ OpenAI / Anthropic / Ollama clients ──► FastAPI gateway (one process)
+                                           │  request validation, tool/reasoning parsing,
+                                           │  server-side tools (web search / fetch / MCP)
+                                           ▼
+                                  engine (one MLX thread)
           ┌────────────────────────────────┴───────────────────────────────┐
-   VLM batch runner（所有 mlx-vlm 模型）                純文字快速路徑（mlx-lm 模型）
-   共享連續批次、每列各自取樣                           單請求 generate_step
-   推測解碼通道：DFlash2 / MTP / prompt-copy
-   前綴快取：RAM ─► SSD ─► 選用的儲存層
+   VLM batch runner (every mlx-vlm model)                 text fast path (mlx-lm models)
+   shared continuous batch, per-row sampling              single-request generate_step
+   speculative lane: DFlash2 / MTP / prompt-copy
+   prefix cache: RAM ─► SSD ─► optional storage tiers
 ```
 
 所有 GPU 工作都在同一條 MLX 執行緒上，請求之間不會互搶 GPU。每個回應在自己的生成結束時就回傳。
@@ -154,10 +168,14 @@ strict `json_schema`）、`stop`、`logprobs` / `top_logprobs`（串流也有）
 錯誤使用各 API 自己的格式。擴充欄位都有命名空間（`x_yunshu`、`X-Yunshu-*`），官方 SDK 會忽略。
 完整矩陣與每一列的驗證方式見 [API surface](docs/guides/API_SURFACE.md)。
 
+main 的 0.1.5 週期已提供本地決策（`/v1/decisions`、`/v1/systemone`）、儲存聊天回應、Evals（`/v1/evals`）與 Realtime client secrets。決策需要支援的決策 checkpoint，不使用聊天解碼器。
+
+[決策](docs/guides/DECISIONS.md)、[Evals](docs/guides/EVALS.md)、[網頁搜尋](docs/guides/WEB_SEARCH.md)與 [Tavily API](docs/guides/TAVILY.md)
+
 ## 程式碼 agent
 
 ```bash
-yunshu launch claude      # 或：codex、opencode
+yunshu launch claude      # or: codex, opencode
 ```
 
 `yunshu launch` 會寫好客戶端設定（base URL、模型、上下文長度與輸出上限、reasoning effort）並啟動
@@ -168,7 +186,7 @@ agent。對 Claude Code 還會裝上狀態列，即時顯示預填進度、解�
 - **Codex**：Responses API，含推理項目、function call、本地壓縮與 `web_search`。
 - **opencode**：Chat Completions，含工具與 usage。
 
-伺服器端網頁搜尋使用可設定的後端（例如 SearXNG）；請求中指定的 MCP 伺服器由 gateway 連線。
+伺服器端搜尋預設以 best-effort DuckDuckGo HTML、Wikipedia 與已設定的 keyed providers 並行查詢；查詢會離開本機。`YUNSHU_WEB_SEARCH_PROVIDER=none` 可停用。SearXNG 為選用；請求指定的 MCP 伺服器由 gateway 連線。
 各 agent 實際呼叫了什麼、怎麼驗證的，見 [Agent 相容性](docs/guides/AGENT_COMPAT.md)。
 
 ## 效能
@@ -242,6 +260,8 @@ Yunshu 的貪婪輸出。相對於原版 MLX 路徑的準確度，分三個層�
 所有設定見 [設定](docs/CONFIGURATION.md)。
 
 ## 文件
+
+- [CLI](docs/guides/CLI.md)：命令列：首次啟動、模型、launchd、JSON 與 shell completion
 
 - [客戶端](docs/guides/CLIENTS.md)：curl、OpenAI / Anthropic SDK、Open WebUI、agent
 - [API surface](docs/guides/API_SURFACE.md) 與 [API 參考](docs/API.md)

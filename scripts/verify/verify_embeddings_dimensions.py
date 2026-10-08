@@ -29,7 +29,9 @@ def _norm(v):
 
 def _cos(a, b):
     na, nb = _norm(a), _norm(b)
-    return sum(x * y for x, y in zip(a, b)) / (na * nb) if na and nb else 0.0
+    return (
+        sum(x * y for x, y in zip(a, b, strict=False)) / (na * nb) if na and nb else 0.0
+    )
 
 
 async def main() -> int:

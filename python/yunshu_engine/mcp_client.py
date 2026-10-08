@@ -60,7 +60,7 @@ class MCPServerConnection:
         self.config = config
         self.tools: list[MCPTool] = []
         self._connected = False
-        self._process = None
+        self._process: asyncio.subprocess.Process | None = None
         # A single stdin/stdout pair is shared by every concurrent caller. Without
         # serialization, two coroutines interleave writes into stdin (corrupting the framed
         # JSON-RPC) and race readline() on stdout (one consumes the other's response → the

@@ -100,34 +100,29 @@
   "reason": "Realtime speech translation sessions; voice is a parked modality."
  },
  {
-  "match": "openai * /realtime/*",
-  "status": "planned",
-  "reason": "Realtime client secrets, sessions, transcription sessions and calls: the Realtime SDK flow mints a client secret before opening the websocket; the websocket itself is served."
+  "match": "openai POST /realtime/calls",
+  "status": "implemented",
+  "reason": "Optional yunshu[webrtc] aiortc SDP signalling, oai-events data channel and PCM/RTP audio bridge to the shared Realtime session; absent extra returns 503 with WS /v1/realtime alternative. CPU dual-peer and SDK tests; respfeat real-server probe."
  },
  {
-  "match": "openai * /chat/completions/{}*",
-  "status": "planned",
-  "reason": "Stored chat completions (GET list / retrieve / messages / update / delete) need a store=true persistence layer; only POST /chat/completions is served. Cheap once a store exists."
- },
- {
-  "match": "openai GET /chat/completions",
-  "status": "planned",
-  "reason": "List of stored chat completions; see the other stored-completion routes."
+  "match": "openai POST /realtime/calls/{}/*",
+  "status": "not_applicable",
+  "reason": "Accept / reject / refer / hangup of an inbound SIP call: a telephony trunk (Twilio, SIP webhooks) that a local server does not have."
  },
  {
   "match": "openai POST /audio/voices",
-  "status": "planned",
-  "reason": "Custom voice creation for speech; low priority (voice is parked)."
+  "status": "implemented",
+  "reason": "Local audio_sample enrollment backed by bounded Files storage, local consent recording and ref_audio-capable TTS models. Prompt-designed OpenAI Live voices are rejected explicitly; SDK TestClient and respfeat enrollment route probe."
  },
  {
   "match": "openai * /evals*",
-  "status": "planned",
-  "reason": "Evals (create, runs, output items) could grade local models; medium priority, not started."
+  "status": "implemented",
+  "reason": "12 Evals CRUD, runs and output-item routes; local JSONL/stored-completion sources and local graders."
  },
  {
   "match": "openai * /skills*",
-  "status": "planned",
-  "reason": "Skills for Responses (versions, content); agent parity item, not started."
+  "status": "not_applicable",
+  "reason": "Skills are versioned bundles mounted into OpenAI-hosted shell / code-execution containers. Yunshu has no hosted sandbox to mount them in, so a skill store would hold files nothing can run; local agents keep skills in their own checkout."
  },
  {
   "match": "anthropic * /v1/organizations/*",
@@ -136,8 +131,8 @@
  },
  {
   "match": "anthropic * /v1/skills*",
-  "status": "planned",
-  "reason": "Agent Skills (create, versions, delete); agent parity item shared with the OpenAI skills routes, not started."
+  "status": "not_applicable",
+  "reason": "Agent Skills are uploaded bundles loaded into Anthropic-hosted code-execution containers (container.skills). Yunshu has no hosted sandbox; Claude Code-style agents load skills from their own filesystem."
  },
  {
   "match": "anthropic * /v1/agents*",

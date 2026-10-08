@@ -19,6 +19,7 @@ import logging
 import time
 from dataclasses import dataclass
 from enum import Enum, auto
+from typing import NotRequired, TypedDict, cast
 
 logger = logging.getLogger(__name__)
 
@@ -84,6 +85,18 @@ class DecodeStrategy(Enum):
     PRIORITY_ONLY = auto()  # Strict priority ordering
 
 
+class _TokenSchedulerStats(TypedDict):
+    budget_computations: int
+    total_prefill_tokens_allocated: int
+    total_decode_tokens_allocated: int
+    total_requests_scheduled: int
+    budget_utilization: list[float]
+    max_weight_seen: float
+    min_weight_seen: float
+    steps_with_allocations: int
+    avg_budget_utilization: NotRequired[float]
+
+
 class TokenLevelScheduler:
     """Fine-grained token-level scheduling within a batch step.
 
@@ -129,7 +142,7 @@ class TokenLevelScheduler:
         self.decode_strategy = decode_strategy
 
         # Stats tracking
-        self._stats = {
+        self._stats: _TokenSchedulerStats = {
             "budget_computations": 0,
             "total_prefill_tokens_allocated": 0,
             "total_decode_tokens_allocated": 0,
@@ -475,9 +488,9 @@ class TokenLevelScheduler:
 
         return max(weight, 0.001)  # Floor to avoid zero weight
 
-    def get_stats(self) -> dict:
+    def get_stats(self) -> _TokenSchedulerStats:
         """Return scheduling statistics."""
-        stats = dict(self._stats)
+        stats = cast(_TokenSchedulerStats, dict(self._stats))
         if stats["budget_utilization"]:
             recent = stats["budget_utilization"][-100:]
             stats["avg_budget_utilization"] = round(sum(recent) / len(recent), 3)

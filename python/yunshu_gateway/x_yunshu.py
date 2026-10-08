@@ -143,6 +143,9 @@ class RequestInfo:
     path: str
     arrived: float = field(default_factory=time.perf_counter)
     arrived_wall: float = field(default_factory=time.time)
+    latency_marks: dict[str, float] = field(default_factory=dict)
+    model: str | None = None
+    structured_output: dict | None = None
     gen: Any = None  # ActiveGeneration, linked by RequestTracker.register()
     engine_request_id: str | None = None
     stream: bool = False
@@ -342,6 +345,52 @@ def _ms(seconds: float | None) -> float | None:
     return None if seconds is None else round(seconds * 1000.0, 1)
 
 
+def latency_breakdown(info: RequestInfo) -> dict:
+    """Monotonic host durations; unobserved/fused engine stages stay null.
+
+    SSE flush means ASGI send completion, not receipt at the remote client.
+    Prefill completion callbacks may fuse the final forward and first sampling;
+    we never infer a separate GPU duration from token counts.
+    """
+    st = info.stats
+    marks = {"gateway_receive": info.arrived, **info.latency_marks}
+    if st is not None:
+        for key, attr in (
+            ("engine_submit", "t_submit"),
+            ("engine_admit", "t_admit"),
+            ("prefill_end", "t_prefill_end"),
+            ("first_decode", "t_first"),
+        ):
+            value = getattr(st, attr, 0)
+            if value:
+                marks[key] = value
+        marks.update(getattr(st, "latency_marks", {}))
+
+    def duration(start, end):
+        a, b = marks.get(start), marks.get(end)
+        return _ms(b - a) if a is not None and b is not None and b >= a else None
+
+    return {
+        "milestones_ms": {
+            k: _ms(v - info.arrived) for k, v in marks.items() if v >= info.arrived
+        },
+        "durations_ms": {
+            "model_lease": duration("model_lease_start", "model_lease"),
+            "gateway_admit": duration("gateway_receive", "gateway_admit"),
+            "engine_queue": duration("engine_submit", "engine_admit"),
+            "template_tokenize": duration("template_start", "template_end"),
+            "apc_lookup_restore": duration("apc_start", "apc_end")
+            if "apc_start" in marks and "apc_end" in marks
+            else (getattr(st, "cache_reload_ms", None) if st is not None else None),
+            "prefill": duration("prefill_start", "prefill_end"),
+            "first_decode": duration("prefill_end", "first_decode"),
+            "sse_first_flush": duration("first_decode", "sse_first_flush"),
+        },
+        "clock": "perf_counter",
+        "flush_boundary": "asgi_send_complete",
+    }
+
+
 def build_stats(info: RequestInfo, usage: dict | None = None) -> dict:
     """The ``x_yunshu`` object: TTFT, prefill / decode speed, cache hits, speculation, queue wait."""
     now = time.perf_counter()
@@ -399,6 +448,11 @@ def build_stats(info: RequestInfo, usage: dict | None = None) -> dict:
                 else None
             ),
         }
+    if spec is not None:
+        from yunshu_engine.spec_metrics import depth_rows
+
+        spec["per_depth"] = depth_rows(st)
+        spec["position_basis"] = "depth"
     if spec is not None and st.spec_rounds:
         spec["rounds"] = st.spec_rounds
         if st.spec_copy_rounds:
@@ -408,6 +462,21 @@ def build_stats(info: RequestInfo, usage: dict | None = None) -> dict:
             }
     out = {
         "request_id": info.request_id,
+        "model": getattr(info.gen, "model", None) or info.model,
+        "reasons": {
+            "cache": getattr(st, "cache_reason", None),
+            "spec": getattr(st, "spec_reason", None),
+        },
+        "structured_output": getattr(st, "structured_output", None)
+        or info.structured_output
+        or {
+            "requested": False,
+            "enforced": False,
+            "engine": None,
+            "grammar_backend": None,
+            "reason": "not_requested",
+        },
+        "latency": latency_breakdown(info),
         "queue_wait_ms": _ms(queue_wait),
         "ttft_ms": _ms(ttft),
         "prompt_tokens": prompt_tokens,
@@ -448,6 +517,17 @@ def build_stats(info: RequestInfo, usage: dict | None = None) -> dict:
             "predicted_per_second": decode_tps,
         },
     }
+    from yunshu_engine.telemetry.sampler import get as get_telemetry
+
+    telemetry = get_telemetry()
+    if telemetry is not None and st is not None:
+        st.energy = telemetry.receipt(st)
+        out["energy"] = st.energy
+    else:
+        out["energy"] = {
+            "state": "unknown",
+            "reason": "telemetry disabled or engine timing unavailable",
+        }
     if info.cancel_requested or getattr(info.gen, "cancelled", False):
         out["cancelled"] = True
     if info.context_policy:
@@ -502,16 +582,31 @@ def queue_headers(info: RequestInfo) -> list[tuple[bytes, bytes]]:
 
 
 def record_done(info: RequestInfo, stats: dict) -> None:
+    from yunshu_engine.telemetry.sampler import get as get_telemetry
+
+    telemetry = get_telemetry()
+    if telemetry is not None:
+        telemetry.record(stats.get("energy") or {})
     registry.record_done(
         {
             "t": time.time(),
             "request_id": info.request_id,
+            "model": stats.get("model"),
+            "speculative": stats.get("speculative"),
+            "cache": stats.get("cache"),
+            "structured_output": stats.get("structured_output"),
+            "reasons": stats.get("reasons"),
             "prompt_tokens": stats.get("prompt_tokens") or 0,
             "completion_tokens": stats.get("completion_tokens") or 0,
             "cached_tokens": stats.get("cached_tokens") or 0,
             "prefill_tps": stats.get("prefill_tps"),
             "decode_tps": stats.get("decode_tps"),
             "ttft_ms": stats.get("ttft_ms"),
+            "latency": stats.get("latency"),
+            "energy": stats.get("energy"),
+            "status": info.status,
+            "stream": info.stream,
+            "path": info.path,
         }
     )
     with contextlib.suppress(Exception):
@@ -561,6 +656,7 @@ class YunshuExtensionsMiddleware:
         info = RequestInfo(request_id, scope.get("method", ""), path)
         if tracked:
             refused = self._refuse(info, raw_headers)
+            info.latency_marks["gateway_admit"] = time.perf_counter()
             if refused is not None:
                 await refused(scope, receive, send)
                 return
@@ -856,6 +952,10 @@ class YunshuExtensionsMiddleware:
                 if not more:
                     state["done"] = True
                 await emit(message)
+                if info.t_first_chunk is not None:
+                    info.latency_marks.setdefault(
+                        "sse_first_flush", time.perf_counter()
+                    )
                 return
             if mode == "json":
                 state["body"] += message.get("body", b"")

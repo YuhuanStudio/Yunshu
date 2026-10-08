@@ -23,6 +23,51 @@ from verify import analyze, core, gate, runner, stages, suites, verdict  # noqa:
 from verify.execute import Cell, Executor  # noqa: E402
 
 
+@pytest.mark.parametrize("stage", [stages.stage_tavily, stages.stage_websearch])
+def test_web_cells_apply_recorded_arm_environment(stage, tmp_path):
+    from types import SimpleNamespace
+
+    cells = []
+
+    class CapturedError(Exception):
+        pass
+
+    class Capture:
+        def run_cells(self, submitted):
+            cells.extend(submitted)
+            raise CapturedError
+
+    ctx = stages.Ctx(
+        run=None,
+        exe=Capture(),
+        base=SimpleNamespace(path=tmp_path / "base"),
+        cand=SimpleNamespace(path=tmp_path / "cand"),
+        env={
+            "COVAUDIT_BIN": "/isolated path/yunshu",
+            "SHARED": "common",
+            "PYTHONPATH": "wrong-tree",
+        },
+        base_env={"ARM": "base", "SHARED": "base-override"},
+        cand_env={"ARM": "cand", "SHARED": "cand-override"},
+        model="tiny",
+        model_name="tiny",
+        suite={},
+        mem_gb=14,
+    )
+    with pytest.raises(CapturedError):
+        stage(ctx)
+    assert len(cells) == 2
+    for cell in cells:
+        interpreter = cell.argv.index(ctx.py)
+        assignments = dict(arg.split("=", 1) for arg in cell.argv[1:interpreter])
+        assert assignments["COVAUDIT_BIN"] == "/isolated path/yunshu"
+        assert assignments["ARM"] == cell.key
+        assert assignments["SHARED"] == cell.key + "-override"
+        assert assignments["PYTHONPATH"].split(":")[0] == str(
+            tmp_path / cell.key / "python"
+        )
+
+
 def git(cwd, *a):
     return subprocess.run(
         ["git", "-c", "user.name=t", "-c", "user.email=t@t", *a],
@@ -132,8 +177,20 @@ def test_full_suite_has_every_stage():
     assert set(suites.STAGES) - set(suites.LADDER) == {
         "longqa",
         "conc",
-        "rerank",
         "snapshot",
+        "modelprobe",
+        "client_compat",
+        "respfeat",
+        "websearch",
+        "rerank",
+        "embedding",
+        "priorart",
+        "evals",
+        "console",
+        "telemetry",
+        "telemetry-tiny",
+        "tavily",
+        "searchrank",
     }
 
 
@@ -994,7 +1051,20 @@ def test_gate_long_stage_runs_suite_and_fails_closed(gate_world, monkeypatch):
         gate, "local_env", lambda: {"GATE_ROOT": str(w.tmp / "gateroot"), "M": w.model}
     )
     assert "long" in gate.DEFAULT_STAGES
+    original = runner.run_ab
+    captured = []
+
+    def pinned(a, **kwargs):
+        captured.append(a)
+        return original(a, **kwargs)
+
+    monkeypatch.setattr(runner, "run_ab", pinned)
+    monkeypatch.setenv("YV_LABEL_PREFIX", "releng015-test")
     assert run_gate(w, stages=["long"]) == 0
+    assert captured[0].base == git(w.repo, "rev-parse", "v0.0.1^{commit}")
+    assert captured[0].cand == git(w.repo, "rev-parse", "HEAD")
+    assert captured[0].base != captured[0].cand
+    assert captured[0].label.startswith("releng015-")
     # gate_world is shared across tests: pick this run's verdict, not another gate's
     verdicts = [
         json.loads(d.joinpath("verdict.json").read_text())
@@ -1028,3 +1098,97 @@ def test_detach_pins_arms_resolved_by_the_caller(tmp_path):
     ]
     dir_arm = core.Arm("cand", str(wt), "c" * 40, wt.resolve(), "")
     assert cli.pinned_spec(dir_arm) == str(wt.resolve())
+
+
+def test_detach_retains_caller_verifier_implementation(monkeypatch, tmp_path):
+    from verify import cli
+
+    script = tmp_path / "worker" / "scripts" / "verify" / "cli.py"
+    monkeypatch.setattr(cli, "__file__", str(script))
+    assert cli.verifier_scripts() == script.parents[1]
+    assert cli.verifier_scripts() != cli.REPO / "scripts"
+
+
+def test_modelprobe_is_explicit_and_not_in_release_suites():
+    assert suites.parse_suite("modelprobe")["stages"] == ["modelprobe"]
+    assert "modelprobe" in stages.STAGE_FUNCS
+    for suite in suites.SUITES.values():
+        assert "modelprobe" not in suite["stages"]
+
+
+def test_evals_suite_is_a_separate_correctness_probe():
+    assert suites.parse_suite("evals")["stages"] == ["preflight", "evals"]
+    assert "evals" in stages.STAGE_FUNCS
+
+
+def test_declared_short_timeout_preserves_gpuq_short_lane(monkeypatch):
+    from types import SimpleNamespace
+
+    calls = []
+
+    def run(argv, **kw):
+        calls.append(argv)
+        return SimpleNamespace(returncode=0, stdout="fake-job-id\n", stderr="")
+
+    monkeypatch.setattr(core, "subprocess", SimpleNamespace(run=run))
+    gq = core.Gpuq(binary="fake-gpuq")
+    gq.submit("short", ["python", "--version"], timeout_min=10, mem_gb=60, priority=-1)
+    gq.submit("long", ["python", "--version"], timeout_min=14, mem_gb=60, priority=-1)
+    assert "--short" in calls[0]
+    assert "--short" not in calls[1]
+
+
+def test_client_routes_validator_fails_closed(tmp_path):
+    names = (
+        "agent-custom-tools",
+        "agent-shell-search",
+        "agent-documents-citations",
+        "agent-anthropic-client-tools",
+        "agent-continuous-usage",
+        "agent-template-props",
+        "agent-http-video",
+    )
+    path = tmp_path / "routes.json"
+    assert not stages.client_routes_valid(path)[0]
+    data = {
+        "complete": True,
+        "pass": True,
+        "checks": {n: {"status": "pass"} for n in names},
+    }
+    path.write_text(json.dumps(data))
+    assert stages.client_routes_valid(path)[0]
+    data["checks"]["agent-custom-tools"]["status"] = "fail"
+    path.write_text(json.dumps(data))
+    assert not stages.client_routes_valid(path)[0]
+
+
+def test_client_compat_pilot_is_pinned_and_stops_before_second_model(
+    world, monkeypatch
+):
+    from types import SimpleNamespace
+
+    from verify.execute import CellResult
+
+    calls = []
+
+    class FakeExecutor:
+        jobs = []
+
+        def run_cells(self, cells):
+            cell = cells[0]
+            calls.append(cell)
+            return {
+                cell.key: CellResult(cell.key, False, "pilot failure", job="job-test")
+            }
+
+    ctx = SimpleNamespace(
+        cand=SimpleNamespace(path=world.repo, key="cand"),
+        suite={"client_compat_device": "m3"},
+        exe=FakeExecutor(),
+        run=SimpleNamespace(append=lambda *args: None),
+        py=sys.executable,
+    )
+    result = stages.stage_client_compat(ctx)
+    assert not result.passed and len(calls) == 1
+    assert calls[0].cwd == world.repo and calls[0].device == "m3"
+    assert "--tree-sha" in calls[0].argv and "Qwen3.5-0.8B" in " ".join(calls[0].argv)

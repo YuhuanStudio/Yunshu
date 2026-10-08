@@ -8,6 +8,30 @@ from pathlib import Path
 from .execute import Cell
 
 
+def select_jobs(bs, engines, outdir, trees, env):
+    """Pilots + cells for a full snapshot, or only the named cells (SNAPSHOT_CELLS).
+
+    SNAPSHOT_CELLS=engine-group-rN,... runs just those cells (any rep index, e.g. extra
+    reps r3..r5) with no pilots unless SNAPSHOT_PILOTS=1; an unknown name is an error."""
+    names = [c for c in env.get("SNAPSHOT_CELLS", "").split(",") if c]
+    if not names:
+        return bs.plan_pilots(engines, outdir, trees) + bs.plan_cells(
+            engines, 3, outdir, trees
+        )
+    top = max(int(n.rsplit("-r", 1)[1]) for n in names) + 1
+    by_name = {
+        j.name: j for j in bs.plan_cells(engines, top, outdir, trees, needle_reps=top)
+    }
+    missing = [n for n in names if n not in by_name]
+    if missing:
+        raise ValueError(f"unknown snapshot cells for engines {engines}: {missing}")
+    jobs = []
+    if env.get("SNAPSHOT_PILOTS") == "1":
+        jobs += bs.plan_pilots(engines, outdir, trees)
+    jobs += [by_name[n] for n in names]
+    return jobs
+
+
 def stage_snapshot(ctx):
     from .stages import StageResult, _finish
 
@@ -25,8 +49,7 @@ def stage_snapshot(ctx):
         raise ValueError(f"unknown snapshot engines: {sorted(unknown)}")
     outdir = ctx.run.path / "snapshot"
     trees = {"yunshu-new": str(ctx.base.path / "python")}
-    jobs = bs.plan_pilots(engines, outdir, trees)
-    jobs += bs.plan_cells(engines, 3, outdir, trees)
+    jobs = select_jobs(bs, engines, outdir, trees, ctx.env)
     failed_engines = set()
     pilot_failed = set()
     reasons, evidence = [], {}
@@ -77,7 +100,9 @@ def stage_snapshot(ctx):
         "complete_jobs": len(evidence),
         "planned_jobs": len(jobs),
     }
-    if ctx.suite.get("snapshot_agents", True):
+    if ctx.env.get("SNAPSHOT_AGENTS", "1") != "0" and ctx.suite.get(
+        "snapshot_agents", True
+    ):
         import snapshot_agent
 
         agent_results = {}

@@ -4,6 +4,9 @@ from __future__ import annotations
 
 STAGES = (
     "preflight",
+    "console",
+    "telemetry-tiny",
+    "telemetry",
     "smoke",
     "identity",
     "apc",
@@ -12,17 +15,89 @@ STAGES = (
     "memory",
     "longqa",
     "conc",
+    "modelprobe",
+    "client_compat",
+    "respfeat",
+    "websearch",
     "rerank",
     "snapshot",
+    "embedding",
+    "priorart",
+    "evals",
+    "tavily",
+    "searchrank",
 )
 
 # `full` and `tiny` climb the original seven; the long stages (needle retrieval, concurrent
 # sub-agents) need the 32K-128K prompt files and belong to the `long` suite.
-LADDER = tuple(s for s in STAGES if s not in ("longqa", "conc", "rerank", "snapshot"))
+LADDER = tuple(
+    s
+    for s in STAGES
+    if s
+    not in (
+        "longqa",
+        "conc",
+        "snapshot",
+        "modelprobe",
+        "client_compat",
+        "console",
+        "telemetry",
+        "telemetry-tiny",
+        "respfeat",
+        "websearch",
+        "rerank",
+        "embedding",
+        "priorart",
+        "evals",
+        "tavily",
+        "searchrank",
+    )
+)
 
 # Every key is a default; the CLI can override ctx / reps / mmlu_n / mem_sizes.
 SUITES = {
     "snapshot": {"stages": ["snapshot"]},
+    "respfeat": {"stages": ["preflight", "respfeat"]},
+    "priorart": {"stages": ["preflight", "priorart"]},
+    "embedding": {"stages": ["preflight", "embedding"]},
+    "evals": {"stages": ["preflight", "evals"]},
+    "client_compat": {
+        "stages": ["preflight", "client_compat"],
+        "client_compat_device": "m3",
+    },
+    "client_compat_m5": {
+        "stages": ["preflight", "client_compat"],
+        "client_compat_device": "m5",
+    },
+    "console": {"stages": ["console"]},
+    "console-identity": {
+        # Full unit + ci-local are external merge gates; avoid a third overlapping
+        # broad CPU suite before these short GPU-only correctness wrappers.
+        "stages": ["identity", "apc"],
+        "ctx": [1024, 32768],
+        "spec_off": True,
+        "decode_tokens": 256,
+        "identity_timeout_min": 10,
+        "require_spec_depth": True,
+    },
+    "telemetry": {"stages": ["telemetry"]},
+    "telemetry-tiny": {"stages": ["telemetry-tiny"]},
+    "telemetry-overhead": {
+        "stages": [
+            "preflight",
+            "telemetry-tiny",
+            "telemetry",
+            "smoke",
+            "identity",
+            "apc",
+            "speed",
+        ],
+        "ctx": [1024, 32768],
+        "kinds": ["prose"],
+        "reps": 3,
+        "split_cells": True,
+        "speed_tol_pct": 0.0,
+    },
     "rerank": {"stages": ["preflight", "rerank"]},
     # decode-path change (kernels, spec decode, sampler): identity incl. spec on == off, speed
     "decode": {

@@ -382,6 +382,11 @@ class MetricsMiddleware(BaseHTTPMiddleware):
         if request.url.path == "/metrics":
             _check_metrics_auth(request)
             parts = [_metrics.to_prometheus()]
+            from yunshu_engine.telemetry.sampler import get as get_telemetry
+
+            host_telemetry = get_telemetry()
+            if host_telemetry is not None:
+                parts.append(host_telemetry.prometheus())
             # Append Prometheus exporter gauges (engine-level metrics)
             try:
                 from .prometheus_exporter import get_prometheus_metrics

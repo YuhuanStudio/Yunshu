@@ -86,6 +86,12 @@ the call body) and runs it with llguidance's token-mask matcher and MLX bitmask 
 Used as a library, not copied. Copyright (c) Microsoft Corporation, MIT license.
 https://github.com/guidance-ai/llguidance
 
+## Trafilatura
+
+Web research uses the unmodified Python dependency trafilatura 2.1.0, licensed under
+Apache-2.0. Source and license: https://github.com/adbar/trafilatura/tree/v2.1.0 .
+No source is vendored. Earlier versions before 1.8 are not used.
+
 ## Yunshu Console
 
 The console imports the pinned YunUI package in
@@ -98,3 +104,62 @@ The build ships YunUI's license, upstream notices and retained Beautiful UI MIT
 text under `console_static/licenses/yunui/`; Vite generates the bundled dependency
 license catalogue at `console_static/licenses/bundled-dependencies.md`. The local
 Geist and JetBrains Mono font assets carry their OFL texts under `console_static/fonts/`.
+
+## mlx2 telemetry
+
+`python/yunshu_engine/telemetry/apple.py` is derived from pierre427/mlx2
+`src/mlx2/apple_telemetry.py`, revision `92ada04cc7a59c3263e214b0a1127924fedd52db`,
+under Apache-2.0. Upstream NOTICE: “mlx2 is licensed under the Apache License, Version 2.0 (see LICENSE).”
+The unrelated third-party adaptations listed in upstream NOTICE are not used by this telemetry module.
+Source: https://github.com/pierre427/mlx2. Yunshu changes ownership cleanup and reporting integration.
+
+## macmon Apple telemetry compatibility
+
+`telemetry/clpc.py` derives the macOS 27 driver/counter catalog and scalar IOReport
+descriptor format from vladkens/macmon `src/clpc.rs` / `src/sources.rs`, revision
+`7df49f55d9a1b9072e31fc8ba991abda84593563`. `telemetry/apple.py` uses channel-family
+and MTR sensor naming knowledge from `src/metrics.rs`. Source: https://github.com/vladkens/macmon.
+Native lifetime handling is rewritten in Python; unknown OS/driver catalogs are rejected.
+
+MIT License
+
+Copyright (c) 2024 vladkens
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+
+## aiortc — optional WebRTC dependency
+
+The `webrtc` extra uses unmodified aiortc (BSD-3-Clause) and PyAV (BSD-3-Clause).
+Their source and binaries are not vendored in Yunshu. The reviewed macOS arm64
+PyAV 17.1 wheel links shared FFmpeg libraries whose `avcodec_license()` reports
+"LGPL version 3 or later". FFmpeg and codec licensing remains part of the separate
+installed dependency distribution; Yunshu does not bundle or relink those binaries.
+Sources and dependency licenses: https://github.com/aiortc/aiortc and
+https://github.com/PyAV-Org/PyAV . The SDK protocol adapters are independent code
+checked against openai-python (Apache-2.0) and anthropic-sdk-python (MIT).
+
+## mflux — independent image reference probe
+
+The priorfix_mflux_reference probe uses the unchanged loader cache, HF mapper
+and weight applier APIs of mflux-community/mflux (MIT, reviewed commit
+465df30a3965b38c9c64fa853e26df140ddd5c55). The probe decodes downloaded diffusers
+affine4 tensors before mapping; its reference uses floating arithmetic. No mflux
+source is copied and the serving engine does not import this bridge.
+https://github.com/mflux-community/mflux

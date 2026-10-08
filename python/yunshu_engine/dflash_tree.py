@@ -213,9 +213,8 @@ def dflash_tree_rounds(
     _original=None,
 ):
     """Drop-in for upstream ``_dflash_rounds`` (single row): tree drafts."""
-    from mlx_vlm.speculative.common import _record_speculative_round
-
     from . import mtp_lane
+    from .spec_metrics import record as _record_speculative_round
 
     lm = model.language_model if hasattr(model, "language_model") else model
     if (
@@ -275,7 +274,7 @@ def dflash_tree_rounds(
         path = walk(tokens, wparents, row_tokens)
         new_tokens = [tokens[r] for r in path[1:]] + [row_tokens[path[-1]]]
         if n:
-            _record_speculative_round(draft_model, len(path) - 1, n)
+            _record_speculative_round(draft_model, len(path) - 1, n, parents=wparents)
         tv.tree_commit(lm, prompt_cache, res, path)
         kept = mx.concatenate(res.captured, axis=-1)[:, mx.array(path, dtype=mx.int32)]
         # a round without drafts leaves the committed positions for the next draft

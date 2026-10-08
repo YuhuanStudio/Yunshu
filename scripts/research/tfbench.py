@@ -57,15 +57,25 @@ WORK = Path(os.environ.get("TFB_WORK", "/Volumes/P5Plus/yunshu-build/tfnew"))
 OUT = Path(os.environ.get("TFB_OUT", str(WORK)))
 
 
-def free_port():
-    for p in range(18990, int(os.environ.get("TFB_PORT_LAST", "18999")) + 1):
-        with socket.socket() as s:
-            try:
-                s.bind(("127.0.0.1", p))
-            except OSError:
-                continue
-        return p
-    raise RuntimeError("no port")
+def free_port(wait_s=600.0, interval_s=5.0, sleep=None, clock=None):
+    """Paused gpuq jobs retain ports; wait for the bounded shared pool."""
+    sleep = sleep or time.sleep
+    clock = clock or time.monotonic
+    deadline = clock() + wait_s
+    while True:
+        for p in range(18990, int(os.environ.get("TFB_PORT_LAST", "18999")) + 1):
+            with socket.socket() as s:
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                try:
+                    s.bind(("127.0.0.1", p))
+                except OSError:
+                    continue
+            return p
+        left = deadline - clock()
+        if left <= 0:
+            raise RuntimeError("no port after bounded wait")
+        print(f"[tfbench] port pool busy; waiting ({left:.0f}s left)", flush=True)
+        sleep(min(interval_s, left))
 
 
 def owns_listener(pid, port):
@@ -203,6 +213,9 @@ class Srv:
                 "--no-update-check",
             ]
         self.cmd = cmd
+        baseline_used = (
+            host_used_bytes()
+        )  # before launch: weights/mmap count in the delta
         with open(self.log, "wb") as server_log:
             self.proc = subprocess.Popen(
                 cmd,
@@ -212,7 +225,9 @@ class Srv:
                 start_new_session=True,
             )
         self.url = f"http://127.0.0.1:{self.port}"
-        self.mem = MemSampler(getattr(self.proc, "pid", None))
+        self.mem = MemSampler(
+            getattr(self.proc, "pid", None), baseline_bytes=baseline_used
+        )
         t0 = time.time()
         while time.time() - t0 < 900:
             if self.proc.poll() is not None:
@@ -465,23 +480,48 @@ def req(model, text, mt, seed=None, extra=None, temp=0):
 META: dict = {}  # engine / version / sha / flags / drafter / engaged spec mode / checkpoint, on every row
 
 
-class MemSampler:
-    """Peak physical footprint of the server's process tree (macOS proc_pid_rusage, accounting sum),
-    sampled every 2 s from the moment the server starts; sample() reads one more point (idle)."""
+def host_used_bytes():
+    """Host used memory (active+wired+compressor); None when vm_stat is unavailable."""
+    try:
+        from process_memory import system_used_bytes
 
-    def __init__(self, pid, every=2.0):
+        return system_used_bytes()
+    except Exception:  # noqa: BLE001 - a baseline miss disables system-delta, never fakes it
+        return None
+
+
+class MemSampler:
+    """Server memory, sampled every 2 s from server start.
+
+    Headline numbers use memory_method="system-delta": host used memory (vm_stat active + wired +
+    compressor) minus a baseline taken BEFORE the server launched. Unlike per-process phys_footprint it
+    counts mmap'd file-backed weights, so engines that load weights differently are comparable. The
+    process-tree phys_footprint / RSS stay as secondary fields. Without a baseline the method falls
+    back to "process-footprint" and the parity board does not compare it."""
+
+    def __init__(self, pid, every=2.0, baseline_bytes=None, used_fn=None):
         import threading
 
         self.pid, self.every = pid, every
+        self.baseline_bytes = baseline_bytes
+        self._used_fn = used_fn or host_used_bytes
         self.peak_gib = 0.0
         self.peak_rss_gib = 0.0
         self.last_rss_gib = None
         self.last_gib = None
+        self.peak_footprint_gib = 0.0
+        self.last_footprint_gib = None
+        self.peak_delta_gib = 0.0
+        self.last_delta_gib = None
         self.n = 0
         self._stop = threading.Event()
         self._t = threading.Thread(target=self._run, daemon=True)
         if pid:
             self._t.start()
+
+    @property
+    def method(self):
+        return "system-delta" if self.baseline_bytes else "process-footprint"
 
     def sample(self):
         try:
@@ -489,14 +529,23 @@ class MemSampler:
 
             m = process_tree_memory(self.pid)
             g = round(m["physical_footprint_sum_bytes"] / 2**30, 3)
-            self.last_gib = g
-            self.peak_gib = max(self.peak_gib, g)
+            self.last_footprint_gib = g
+            self.peak_footprint_gib = max(self.peak_footprint_gib, g)
             rss = m.get("rss_sum_bytes")
             if rss is not None:
                 self.last_rss_gib = round(rss / 2**30, 3)
                 self.peak_rss_gib = max(self.peak_rss_gib, self.last_rss_gib)
+            head = g
+            if self.baseline_bytes:
+                used = self._used_fn()
+                if used is not None:
+                    head = round((used - self.baseline_bytes) / 2**30, 3)
+                    self.last_delta_gib = head
+                    self.peak_delta_gib = max(self.peak_delta_gib, head)
+            self.last_gib = head
+            self.peak_gib = max(self.peak_gib, head)
             self.n += 1
-            return g
+            return head
         except Exception:  # noqa: BLE001 - a sampling miss is not a result
             return None
 
@@ -983,6 +1032,10 @@ def main():
                     part="memory",
                     peak_gib=peak,
                     idle_gib=idle,
+                    memory_method=mem.method,
+                    baseline_used_gib=round((mem.baseline_bytes or 0) / 2**30, 3),
+                    peak_footprint_gib=mem.peak_footprint_gib,
+                    idle_footprint_gib=mem.last_footprint_gib,
                     peak_rss_gib=mem.peak_rss_gib,
                     idle_rss_gib=mem.last_rss_gib,
                     samples=mem.n,
