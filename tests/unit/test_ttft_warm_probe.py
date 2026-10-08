@@ -127,9 +127,10 @@ def test_nested_call_spans_are_not_double_counted():
     assert sum(result.values()) == 100
 
 
+@pytest.mark.parametrize("gc_policy", ["auto", "defer"])
 @pytest.mark.parametrize("mode", ["off", "dflash"])
 def test_main_with_fake_server_writes_complete_and_engaged_mode(
-    tmp_path, monkeypatch, mode
+    tmp_path, monkeypatch, mode, gc_policy
 ):
     import sys
     from types import SimpleNamespace
@@ -176,6 +177,10 @@ def test_main_with_fake_server_writes_complete_and_engaged_mode(
         )
 
     def create_server(engine, env, tag, **kw):
+        assert env["TTFT_PROBE_COPY_INDEX_GC"] == gc_policy
+        (tmp_path / "cpu" / "runtime.1.json").write_text(
+            json.dumps({"copy_index_gc": gc_policy})
+        )
         assert env["YUNSHU_VLM_DRAFT"] == (
             "/fixture/drafter" if mode == "dflash" else "off"
         )
@@ -214,6 +219,8 @@ def test_main_with_fake_server_writes_complete_and_engaged_mode(
             "1",
             "--draft",
             mode,
+            "--copy-index-gc",
+            gc_policy,
         ],
     )
     probe.main()
@@ -221,6 +228,10 @@ def test_main_with_fake_server_writes_complete_and_engaged_mode(
     assert rows[-1] == dict(complete=True, requests=3, threads=["mlx"])
     assert [row["phase"] for row in rows[:-1]] == ["cold", "warm", "followup"]
     assert all(row["engaged"] == mode for row in rows[:-1])
+    assert all(
+        row["copy_index_gc"] == gc_policy and row["copy_index_gc_engaged"]
+        for row in rows[:-1]
+    )
     assert requests[-1]["messages"][1] == dict(role="assistant", content="reply")
     for row in rows[:-1]:
         assert len(row["call_spans"]) == 2
@@ -298,3 +309,48 @@ def test_tiny_can_explicitly_allow_followup_miss_but_long_default_fails():
     with pytest.raises(ValueError, match="followup"):
         probe.validate_response(result, "followup")
     probe.validate_response(result, "followup", require_followup_hit=False)
+
+
+def test_clip_spans_excludes_other_requests_and_splits_gc_at_first_token():
+    spans = [
+        (1.05, 1.15, "mlx", "python_gc", "gen2"),
+        (1.19, 1.3, "mlx", "copy_index", "index"),
+        (1.21, 1.3, "mlx", "python_gc", "after-response"),
+        (1.12, 1.12, "http", "http_first_sse", "request=other"),
+    ]
+    before = probe.clip_spans(spans, 1.0, 1.1, "this")
+    after = probe.clip_spans(spans, 1.1, 1.2, "this")
+    assert [r["stage"] for r in before] == ["python_gc"]
+    assert before[0]["end_ms"] == pytest.approx(100)
+    assert [r["stage"] for r in after] == ["python_gc", "copy_index"]
+    assert after[0]["start_ms"] == 0
+    assert after[0]["end_ms"] == pytest.approx(50)
+    assert after[1]["end_ms"] == pytest.approx(100)
+
+
+@pytest.mark.parametrize("assignment", ["BROKEN", "TTFT_PROBE_COPY_INDEX_GC=freeze"])
+def test_probe_validates_experiment_env_before_server_start(
+    tmp_path, monkeypatch, assignment
+):
+    import sys
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "probe",
+            "--model",
+            "fake",
+            "--src",
+            "fake",
+            "--tag",
+            "bad",
+            "--out",
+            str(tmp_path / "out"),
+            "--env",
+            assignment,
+        ],
+    )
+    with pytest.raises(SystemExit) as error:
+        probe.main()
+    assert error.value.code == 2

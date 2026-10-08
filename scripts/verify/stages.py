@@ -992,6 +992,8 @@ def _ttft_profile_valid(path: Path):
     if any(not r.get("call_spans") or not r.get("engaged") for r in requests[1:]):
         return False, "missing diagnostic spans or engaged mode"
     for row in requests[1:]:
+        if not row.get("copy_index_gc_engaged"):
+            return False, "missing runtime proof of copy-index GC policy"
         if not any(r.get("stage") == "gpu_wait" for r in row["call_spans"]):
             return False, "missing native evaluation spans"
         if row.get("http", {}).get("first_sse_submit_ms") is None:
@@ -1026,6 +1028,7 @@ def stage_ttft_profile(ctx: Ctx) -> StageResult:
                             "--warm",
                             "3",
                             "--calls",
+                            "--no-stacks",
                             "--tag",
                             f"{ctx.exe.label}-{key}",
                             "--out",

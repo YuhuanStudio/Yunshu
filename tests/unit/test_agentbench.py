@@ -112,7 +112,7 @@ def test_dry_run_plans_every_agent_and_task(capsys):
             [
                 "--dry-run",
                 "--tasks",
-                "polyglot-bowling,polyglot-forth",
+                "cli-add-flag,shell-report",  # built-in tasks: polyglot ones need the downloaded cache
                 "--agents",
                 "codex",
             ]
@@ -120,4 +120,4 @@ def test_dry_run_plans_every_agent_and_task(capsys):
         == 0
     )
     out = json.loads(capsys.readouterr().out)
-    assert [j["task"] for j in out] == ["polyglot-bowling", "polyglot-forth"]
+    assert [j["task"] for j in out] == ["cli-add-flag", "shell-report"]

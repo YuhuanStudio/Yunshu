@@ -1041,6 +1041,7 @@ def test_ttft_profile_is_opt_in_and_requires_complete_spans(tmp_path):
             engaged="dflash",
             cached=1,
             followup_apc_required=True,
+            copy_index_gc_engaged=True,
             http=dict(first_sse_submit_ms=10),
         )
         for phase in ("cold", "warm", "warm", "warm", "followup")
@@ -1071,3 +1072,62 @@ def test_yv_imports_on_its_macos_system_interpreter():
     )
     assert result.returncode == 0, result.stderr
     assert "long" in result.stdout
+
+
+def test_executor_batches_at_most_six_cells_and_stops_before_later_batches(
+    world, monkeypatch
+):
+    _, ex = mkexec(world)
+    submit, finish = ex._submit, ex._finish
+    live, peaks, submitted = set(), [], []
+
+    def track_submit(c, attempt):
+        jid = submit(c, attempt)
+        live.add(jid)
+        submitted.append(c.key)
+        peaks.append(len(live))
+        return jid
+
+    def track_finish(c, jid, attempt):
+        result = finish(c, jid, attempt)
+        live.remove(jid)
+        return result
+
+    monkeypatch.setattr(ex, "_submit", track_submit)
+    monkeypatch.setattr(ex, "_finish", track_finish)
+    result = ex.run_cells([cell(str(i), OK_BODY) for i in range(14)])
+    assert len(result) == 14 and all(r.ok for r in result.values())
+    assert max(peaks) == 6 and not live
+    _, broken = mkexec(world, "bounded-fail")
+    failed = broken.run_cells(
+        [cell(str(i), "raise RuntimeError()" if i == 0 else OK_BODY) for i in range(14)]
+    )
+    assert not failed["0"].ok
+    rows = broken.run.rows("st")
+    assert sum(r.get("ev") == "cell_submitted" for r in rows) == 6
+
+
+@pytest.mark.parametrize("quiet", [True, False])
+def test_executor_retries_paused_timing_but_accepts_correctness(
+    world, monkeypatch, quiet
+):
+    rd, ex = mkexec(world)
+    wait = world.gq.wait
+    calls = []
+
+    def paused_once(jid):
+        job = wait(jid)
+        calls.append(jid)
+        if len(calls) == 1:
+            return core.Job({**job.d, "pauses": [[1, 2]], "contended": False})
+        return job
+
+    monkeypatch.setattr(world.gq, "wait", paused_once)
+    result = ex.run_cells([cell("p", OK_BODY, quiet=quiet)])
+    assert result["p"].ok
+    assert len(calls) == (2 if quiet else 1)
+    done = [r for r in rd.rows("st") if r.get("ev") == "cell_done"]
+    assert done[0]["paused"] and not done[0]["contended"]
+    assert done[0]["ok"] is (not quiet)
+    if quiet:
+        assert "paused" in done[0]["reason"]

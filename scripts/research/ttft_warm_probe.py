@@ -142,6 +142,26 @@ def partition_spans(spans, duration_ms, thread):
     return {key: round(value, 3) for key, value in totals.items()}
 
 
+def clip_spans(spans, start, end, trace_id):
+    """Clip spans to one delivery interval, retaining request-correlated HTTP marks."""
+    return [
+        dict(
+            start_ms=(max(t, start) - start) * 1000,
+            end_ms=(min(stop, end) - start) * 1000,
+            thread=name,
+            stage=label,
+            detail=detail,
+        )
+        for t, stop, name, label, detail in spans
+        if t < end
+        and stop > start
+        and (
+            label not in ("http_receive", "http_first_sse")
+            or detail.endswith("request=" + trace_id)
+        )
+    ]
+
+
 def validate_response(result, phase, *, require_followup_hit=True):
     if result["ct"] < 1 or result["ttft_s"] <= 0:
         raise ValueError("missing generated token or TTFT")
@@ -203,6 +223,12 @@ def main():
         action="store_true",
         help="call/GC spans only, to test stack-sampler observer effects",
     )
+    ap.add_argument(
+        "--copy-index-gc",
+        choices=("auto", "defer"),
+        default=None,
+        help="diagnostic only: defer automatic GC during copy-index build",
+    )
     ap.add_argument("--thread", default="mlx", help="executor thread name substring")
     ap.add_argument(
         "--synthetic-prompt",
@@ -213,6 +239,16 @@ def main():
     a = ap.parse_args()
     if a.no_stacks and not a.calls:
         ap.error("--no-stacks requires --calls")
+    server_env = {}
+    for assignment in a.env:
+        key, sep, value = assignment.partition("=")
+        if not key or not sep:
+            ap.error("--env requires K=V")
+        server_env[key] = value
+    gc_policy = a.copy_index_gc or server_env.get("TTFT_PROBE_COPY_INDEX_GC", "auto")
+    if gc_policy not in ("auto", "defer"):
+        ap.error("TTFT_PROBE_COPY_INDEX_GC must be auto or defer")
+    server_env["TTFT_PROBE_COPY_INDEX_GC"] = gc_policy
     os.environ["TFB_YUNSHU_SRC"] = a.src
     os.environ["TFB_OUT"] = str(a.out.parent / a.tag)
     os.environ["TFB_PORT_LAST"] = "18996"
@@ -242,11 +278,7 @@ def main():
         else tfbench.load_prompt(f"{a.kind}-{a.ctx}")
     )
     extra_env = {"YUNSHU_VLM_DRAFT": tfbench.D if a.draft == "dflash" else a.draft}
-    for assignment in a.env:
-        key, sep, value = assignment.partition("=")
-        if not key or not sep:
-            ap.error("--env requires K=V")
-        extra_env[key] = value
+    extra_env.update(server_env)
     s = tfbench.Srv("yunshu", extra_env, f"-probe-{a.tag}", model=a.model)
     try:
         rows = []
@@ -267,6 +299,7 @@ def main():
             t0 = time.perf_counter()
             trace_id = f"ttft-{os.getpid()}-{i}"
             r = tfbench.send(s.url, body, capture_timestamps=True, trace_id=trace_id)
+            finished_at = time.perf_counter()
             sent_at = r.pop("_sent_at_s")
             first_at = r.pop("_first_at_s")
             if first_at is None:
@@ -281,6 +314,7 @@ def main():
                     phase=phase,
                     start=sent_at,
                     first=first_at,
+                    finished=finished_at,
                     client_prepare_ms=(sent_at - t0) * 1000,
                     trace_id=trace_id,
                     **r,
@@ -312,21 +346,19 @@ def main():
                 row["sampled_stage_ms"] = stage_summary(
                     samples, row["start"], row["first"], a.thread
                 )
-                row["call_spans"] = [
-                    dict(
-                        start_ms=(max(t, row["start"]) - row["start"]) * 1000,
-                        end_ms=(min(end, row["first"]) - row["start"]) * 1000,
-                        thread=name,
-                        stage=label,
-                        detail=detail,
-                    )
-                    for t, end, name, label, detail in spans
-                    if t < row["first"]
-                    and end > row["start"]
-                    and (
-                        label not in ("http_receive", "http_first_sse")
-                        or detail.endswith("request=" + row["trace_id"])
-                    )
+                row["call_spans"] = clip_spans(
+                    spans, row["start"], row["first"], row["trace_id"]
+                )
+                # Retain GC/index work after first delivery: suppression may only relocate it.
+                full_spans = clip_spans(
+                    spans, row["start"], row["finished"], row["trace_id"]
+                )
+                first_ms = (row["first"] - row["start"]) * 1000
+                row["delivery_tail_spans"] = [
+                    dict(r, start_ms=max(first_ms, r["start_ms"]))
+                    for r in full_spans
+                    if r["stage"] in ("python_gc", "copy_index")
+                    and r["end_ms"] > first_ms
                 ]
                 row["exclusive_call_stage_ms"] = partition_spans(
                     row["call_spans"], (row["first"] - row["start"]) * 1000, a.thread
@@ -361,6 +393,9 @@ def main():
                     followup_apc_required=not a.allow_followup_miss,
                     stack_sampling=not a.no_stacks,
                     runtime=runtime,
+                    copy_index_gc=gc_policy,
+                    copy_index_gc_engaged=bool(runtime)
+                    and all(r.get("copy_index_gc") == gc_policy for r in runtime),
                 )
                 f.write(json.dumps(row) + "\n")
             f.write(

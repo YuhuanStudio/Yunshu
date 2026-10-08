@@ -17,11 +17,28 @@ if _OUT:
     _ring = deque(maxlen=400000)
     import importlib.metadata
 
+    _gc_policy = os.environ.get("TTFT_PROBE_COPY_INDEX_GC", "auto")
+    if _gc_policy not in ("auto", "defer"):
+        raise ValueError("TTFT_PROBE_COPY_INDEX_GC must be auto or defer")
+    if _gc_policy == "defer":
+        from gc_policy import defer_index_gc
+
+        from yunshu_engine.copy_drafter import CopyDrafter
+
+        CopyDrafter._sync_index = defer_index_gc(CopyDrafter._sync_index)
+    print(
+        f"TTFT probe copy-index GC policy engaged: {_gc_policy}",
+        file=sys.stderr,
+        flush=True,
+    )
     with open(f"{os.path.dirname(_OUT)}/runtime.{os.getpid()}.json", "w") as f:
         json.dump(
             {
-                key: importlib.metadata.version(key)
-                for key in ("mlx", "mlx-lm", "mlx-vlm")
+                **{
+                    key: importlib.metadata.version(key)
+                    for key in ("mlx", "mlx-lm", "mlx-vlm")
+                },
+                "copy_index_gc": _gc_policy,
             },
             f,
         )

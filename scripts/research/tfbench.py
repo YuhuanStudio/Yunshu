@@ -55,15 +55,21 @@ WORK = Path("/Volumes/P5Plus/yunshu-build/tfnew")
 OUT = Path(os.environ.get("TFB_OUT", str(WORK)))
 
 
-def free_port():
-    for p in range(18990, int(os.environ.get("TFB_PORT_LAST", "18999")) + 1):
-        with socket.socket() as s:
-            try:
-                s.bind(("127.0.0.1", p))
-            except OSError:
-                continue
-        return p
-    raise RuntimeError("no port")
+def free_port(wait_s=600, interval_s=1.0, sleep=time.sleep):
+    """Paused jobs retain ports; wait for the allowed pool instead of failing immediately."""
+    deadline = time.monotonic() + wait_s
+    while True:
+        for p in range(18990, int(os.environ.get("TFB_PORT_LAST", "18999")) + 1):
+            with socket.socket() as s:
+                try:
+                    s.bind(("127.0.0.1", p))
+                except OSError:
+                    continue
+            return p
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise RuntimeError("no port in 18990-18999 before deadline")
+        sleep(min(interval_s, remaining))
 
 
 def spec_request(engine, extra_env):

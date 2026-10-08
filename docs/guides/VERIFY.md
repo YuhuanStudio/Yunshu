@@ -199,3 +199,18 @@ RERANK_MODEL_ROOT=PATH` overrides the model root. Encoder head serving needs the
 promotes a copy of successful evidence and keeps the original gpuq-declared output
 so digest and watchdog checks can still verify it. A finished job without an
 explicit return code of zero fails verification.
+
+
+Timing cells interrupted by gpuq priority pauses are rejected and retried, even
+if CPU contention is clean. Correctness cells can retain their digest evidence.
+Each stage submits at most six cells at a time; later batches remain unsubmitted
+when a cell fails.
+
+The TTFT diagnostic stage defaults to `--no-stacks` as an observer-effect control.
+`--cand-env TTFT_PROBE_COPY_INDEX_GC=defer` installs a diagnostic-only scoped GC
+wrapper around copy-index building. It preserves the previous GC enabled state
+and restores it on exceptions; normal serving is unchanged. The runtime manifest
+must prove the policy was installed. `delivery_tail_spans` records GC/index work
+between the first token and client completion so moving a collection later
+cannot be mistaken for eliminating its cost. Use an uninstrumented long speed
+verdict before promoting any production GC strategy.

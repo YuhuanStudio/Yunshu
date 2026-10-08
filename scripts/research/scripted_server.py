@@ -1,5 +1,5 @@
 """Real HTTP server (uvicorn, real lifespan) in front of the scripted engine: CPU-only, no model.
-Used by tests/unit/test_graceful_shutdown_real_server.py. Usage: scripted_server.py PORT DELAY_S PIECES."""
+Used by tests/unit/test_graceful_shutdown_real_server.py. Usage: scripted_server.py PORT DELAY_S PIECES [BOUND_FD]."""
 
 from __future__ import annotations
 
@@ -26,6 +26,7 @@ uvicorn.run(
     create_app(),
     host="127.0.0.1",
     port=port,
+    fd=int(sys.argv[4]) if len(sys.argv) > 4 else None,
     log_level="warning",
     timeout_graceful_shutdown=graceful_shutdown_timeout(
         settings.get("YUNSHU_DRAIN_TIMEOUT")

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import os
 import signal
+import socket
 import subprocess
 import sys
 import threading
@@ -14,7 +15,24 @@ from pathlib import Path
 import httpx
 
 ROOT = Path(__file__).resolve().parents[2]
-PORT = 18991
+
+
+def _reserve_port(wait_s=60):
+    """Own the listener before launching, so other suites/paused jobs cannot steal it."""
+    deadline = time.monotonic() + wait_s
+    while True:
+        for port in range(18990, 19000):
+            listener = socket.socket()
+            try:
+                listener.bind(("127.0.0.1", port))
+                listener.listen(128)
+            except OSError:
+                listener.close()
+                continue
+            return listener
+        if time.monotonic() >= deadline:
+            raise AssertionError("no free scripted-server port before deadline")
+        time.sleep(0.1)
 
 
 def test_graceful_shutdown_timeout_values():
@@ -30,22 +48,34 @@ def _start(drain: str, delay="0.2", n="15"):
         "PYTHONPATH": str(ROOT / "python"),
     }
     env.pop("YUNSHU_AUTH_TOKEN", None)
-    p = subprocess.Popen(
-        [
-            sys.executable,
-            str(ROOT / "scripts/research/scripted_server.py"),
-            str(PORT),
-            delay,
-            n,
-        ],
-        env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-    )
+    listener = _reserve_port()
+    port = listener.getsockname()[1]
+    try:
+        p = subprocess.Popen(
+            [
+                sys.executable,
+                str(ROOT / "scripts/research/scripted_server.py"),
+                str(port),
+                delay,
+                n,
+                str(listener.fileno()),
+            ],
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            pass_fds=(listener.fileno(),),
+        )
+    finally:
+        listener.close()
+    p._yunshu_test_port = port
     for _ in range(100):
+        if p.poll() is not None:
+            raise AssertionError(
+                "scripted server exited: " + p.stdout.read().decode()[-500:]
+            )
         try:
             if (
-                httpx.get(f"http://127.0.0.1:{PORT}/health/live", timeout=1).status_code
+                httpx.get(f"http://127.0.0.1:{port}/health/live", timeout=1).status_code
                 < 500
             ):
                 return p
@@ -56,13 +86,14 @@ def _start(drain: str, delay="0.2", n="15"):
 
 
 def _stream_then_sigterm(p):
+    port = p._yunshu_test_port
     got = {"text": "", "err": None}
 
     def run():
         try:
             with httpx.stream(
                 "POST",
-                f"http://127.0.0.1:{PORT}/v1/chat/completions",
+                f"http://127.0.0.1:{port}/v1/chat/completions",
                 json={
                     "model": "m",
                     "messages": [{"role": "user", "content": "hi"}],
@@ -114,3 +145,17 @@ def test_drain_zero_aborts_the_stream_fast():
     finally:
         if p.poll() is None:
             p.kill()
+
+
+def test_reserved_scripted_listener_cannot_be_stolen():
+    listener = _reserve_port()
+    try:
+        port = listener.getsockname()[1]
+        assert 18990 <= port <= 18999
+        with socket.socket() as competing:
+            import pytest
+
+            with pytest.raises(OSError):
+                competing.bind(("127.0.0.1", port))
+    finally:
+        listener.close()
