@@ -1239,3 +1239,19 @@ Fix (f271d284): `tree_verify.compact_kv` evaluates the gathers before the writes
 | 128K prose | 40.9 | 41.7 | +1.8% | 70.5 -> 79.4 | 2.88 -> 3.31 | 46.3 | 90% |
 
 Cold, warm and follow-up TTFT are unchanged (within noise). Remaining gaps: prose decode 86-89% of TF at 32K-128K (tree round still +5-17 ms over the chain; the 16-row tree attention reads the prefix at 0.27 ms per K keys against a 0.1 ms floor, and TF commits ~15% more per round on prose), warm TTFT 62-71% of TF at 64K-128K (0.1-0.2 s absolute; linear in context, probably the APC restore; not investigated).
+
+
+## 2026-10-08 release gate v0.1.4 (long suite vs v0.1.3, M5 Max, Qwen3.8-27B-oQ4e-mtp, default settings)
+
+Candidate 5ca1fd1d (the tag adds an MCP 204 fix and test-only commits; engine code identical in the gated paths). Second full pass (a2 cells) after a preflight environment failure; verdict PASS.
+
+```
+verify gate-long-5ca1fd1d: base 5062366e3c60 vs cand 5ca1fd1db5a7-d1dfc8083 on /Volumes/P5Plus/models/Jundot/Qwen3.8-27B-oQ4e-mtp, suite long -> PASS
+  preflight: PASS - 438 changed files, 565 related test files, pytest rc 0
+  identity: PASS - base_vs_cand 18 cells, 0 mismatches; spec_on_vs_off 18 cells, 0 mismatches
+  apc: PASS - 6 cold/warm pairs, hits 32812,32811,65580,65580,131110,131112
+  speed: PASS - code@32768 decode_tps 90.25->98.6 (+9.2%, noise +-0.9%, reps [10.19, 8.31]); code@32768 cold_ttft_s 36.929->34.428 (-6.8%, noise +-0.0%, reps [-6.77, -6.78]); code@32768 followup_ttft_s 3.209->3.138 (-2.2%, noise +-0.1%, reps [-2.3, -2.15]); code@32768 warm_ttft_s 0.271->0.269 (-0.9%, noise +-13.9%, reps [-13.07, 14.83]); prose@32768 decode_tps 59.5->64.6 (+8.6%, noise +-1.5%, reps [10.08, 7.06]); prose@32768 cold_ttft_s 36.897->34.389 (-6.8%, noise +-0.0%, reps [-6.82, -6.78]); prose@32768 followup_ttft_s 3.199->3.126 (-2.3%, noise +-0.1%, reps [-2.19, -2.35]); prose@32768 warm_ttft_s 0.232->0.167 (-28.2%, noise +-2.1%, reps [-30.29, -26.01]); code@65536 decode_tps 104.7->120.45 (+15.0%, noise +-0.8%, reps [15.87, 14.22]); code@65536 cold_ttft_s 84.02->78.953 (-6.0%, noise +-0.0%, reps [-6.02, -6.04]); code@65536 followup_ttft_s 4.177->4.033 (-3.5%, noise +-0.1%, reps [-3.38, -3.51]); code@65536 warm_ttft_s 0.495->0.309 (-37.5%, noise +-0.8%, reps [-36.71, -38.23]); prose@65536 decode_tps 48.15->50.95 (+5.8%, noise +-1.9%, reps [3.95, 7.68]); prose@65536 cold_ttft_s 84.011->78.994 (-6.0%, noise +-0.1%, reps [-5.89, -6.05]); prose@65536 followup_ttft_s 4.166->4.038 (-3.1%, noise +-0.2%, reps [-2.89, -3.26]); prose@65536 warm_ttft_s 0.399->0.31 (-22.2%, noise +-2.2%, reps [-24.38, -20.0]); code@131072 decode_tps 68.2->72.5 (+6.3%, noise +-1.5%, reps [4.84, 7.77]); code@131072 cold_ttft_s 209.536->199.367 (-4.8%, noise +-0.0%, reps [-4.83, -4.87]); code@131072 followup_ttft_s 6.421->6.187 (-3.7%, noise +-0.2%, reps [-3.82, -3.5]); code@131072 warm_ttft_s 0.833->0.612 (-26.6%, noise +-3.5%, reps [-22.97, -30.01]); prose@131072 decode_tps 40.4->42.15 (+4.3%, noise +-1.6%, reps [5.94, 2.72]); prose@131072 cold_ttft_s 209.519->199.399 (-4.8%, noise +-0.0%, reps [-4.86, -4.81]); prose@131072 followup_ttft_s 6.413->6.175 (-3.7%, noise +-0.4%, reps [-4.07, -3.35]); prose@131072 warm_ttft_s 0.785->0.597 (-23.9%, noise +-3.4%, reps [-27.14, -20.35])
+  memory: PASS - peak 75.346->56.668 GiB; idle 55.249->34.288 GiB; held 34.738->31.392 GiB
+  longqa: PASS - base 30/30 cand 30/30 per ctx {32768: [10, 10, 10], 65536: [10, 10, 10], 131072: [10, 10, 10]}
+  conc: PASS - base ttft [5.151, 4.726] dec [20.9, 20.7]; base ttft [6.386, 11.634] dec [18.6, 20.5]; base ttft [9.47, 5.048] dec [20.3, 18.7]; cand ttft [5.112, 2.462] dec [21.0, 20.0]; cand ttft [6.071, 13.436] dec [18.8, 20.7]; cand ttft [10.761, 5.197] dec [16.5, 15.3]
+```
