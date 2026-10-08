@@ -117,3 +117,18 @@ test("speculation panel says plainly when no request reports speculation", async
     "都沒有推測解碼紀錄",
   );
 });
+
+test("support bundle preview lists included, redacted and excluded for both exports", async ({
+  page,
+}) => {
+  await install(page);
+  await page.goto("/console/#/diagnostics", { waitUntil: "domcontentloaded" });
+  const preview = page.getByTestId("bundle-preview");
+  await preview.getByRole("button", { name: "支援包內容預覽" }).click();
+  const engine = preview.locator('[data-bundle="engine"]');
+  await expect(engine).toContainText("提示詞、回覆內容、請求本文、模型權重");
+  await expect(engine).toContainText("[OMITTED]");
+  const copy = preview.locator('[data-bundle="page"]');
+  await expect(copy).toContainText("存取權杖、API 金鑰");
+  await expect(copy).toContainText("/debug/system");
+});

@@ -44,6 +44,7 @@ import { requestServerJson } from "./management-api";
 import { downloadBundle } from "./admin-logs-api";
 import { detailText } from "./errors.ts";
 import { ErrorNote } from "./error-note";
+import { SupportBundlePreview } from "./SupportBundlePreview";
 import { has, t, tr } from "./i18n/index.ts";
 import { list } from "./i18n/format.ts";
 import { SectionCard, clock, elapsed, number, type Engine } from "./ui";
@@ -448,6 +449,7 @@ export function Diagnostics({
           </div>
         }
       />
+      <SupportBundlePreview endpoints={results.map((r) => r.path)} />
       {bundle.state !== "idle" && bundle.state !== "busy" && (
         <p
           role="status"
