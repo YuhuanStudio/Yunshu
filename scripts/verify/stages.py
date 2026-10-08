@@ -1259,8 +1259,6 @@ def stage_evals(ctx: Ctx) -> StageResult:
     return _finish(ctx, StageResult("evals", not reasons, reasons, numbers))
 
 
-
-
 def stage_tavily(ctx: Ctx) -> StageResult:
     cells = [
         Cell(
