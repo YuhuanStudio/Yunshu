@@ -115,3 +115,8 @@ collects the closing interval after short requests. Sampling timestamps are take
 before CF parsing, so phase windows remain contiguous; uncovered sub-millisecond
 phases never become invented zero-joule readings. For the overhead decision use
 `--speed-tol 0`: consistent costs beyond measured noise select default off.
+
+`--suite telemetry-overhead` selects the entire ladder with 1K/32K prose cells,
+three interleaved reps, a zero fixed speed tolerance and per-context jobs. Native
+pilots use 10-minute timeouts; individual timing cells fit the bounded gpuq short
+lane, keeping no more than four cells pending together without raising priority.

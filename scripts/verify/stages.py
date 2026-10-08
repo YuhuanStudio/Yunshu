@@ -1152,7 +1152,7 @@ def stage_telemetry(ctx: Ctx, *, pilot: bool = False) -> StageResult:
             "{out}",
         ],
         mem_gb=14 if pilot else ctx.mem_gb,
-        timeout_min=15,
+        timeout_min=10,
         quiet=False,
         validate=validate,
     )

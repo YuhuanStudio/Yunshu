@@ -197,8 +197,22 @@ def test_yv_tiny_pilot_precedes_27b_and_uses_small_budget(tmp_path, monkeypatch)
     result = stages.STAGE_FUNCS["telemetry-tiny"](ctx)
     assert result.name == "telemetry-tiny"
     assert seen[0].mem_gb == 14 and not seen[0].quiet
+    assert seen[0].timeout_min == 10
     assert "Qwen3.5-0.8B" in seen[0].argv[seen[0].argv.index("--model") + 1]
     assert seen[0].argv[seen[0].argv.index("--draft") + 1] == "off"
     assert ctx.model == "27B"
     ladder = suites.parse_suite("telemetry,telemetry-tiny,speed")["stages"]
     assert ladder == ["telemetry-tiny", "telemetry", "speed"]
+
+
+def test_overhead_suite_tracks_long_cells_without_raising_priority():
+    import sys
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
+    from verify import suites
+
+    policy = suites.parse_suite("telemetry-overhead")
+    assert policy["ctx"] == [1024, 32768]
+    assert policy["reps"] == 3 and policy["speed_tol_pct"] == 0
+    assert policy["split_cells"] is True and policy["kinds"] == ["prose"]
+    assert policy["stages"][:3] == ["preflight", "telemetry-tiny", "telemetry"]
