@@ -91,7 +91,11 @@ class ModelType(Enum):
     STS = auto()
     VIDEO = auto()
     EMBEDDING = auto()  # dedicated multimodal embedder (Qwen3-VL-Embedding)
+    CLASSIFIER = auto()  # trained sequence-classification head
     RERANKER = auto()  # cross-encoder reranker (Qwen3-VL-Reranker)
+    DECISION = (
+        auto()
+    )  # backbone + trained decision head (Cloudflare Clef): /v1/decisions
 
 
 # mlx-lm's MODEL_REMAPPING (subset we need to replicate for probing)
@@ -119,6 +123,13 @@ def _detect_model_type(model_path: str) -> ModelType:
     5. Default: LLM
     """
     p = Path(model_path)
+
+    # Decision models: a trained head sits next to the backbone. Loaded as a plain LLM/VLM the
+    # head would be dropped silently, so the head's files decide, before any other signal.
+    from .decision_engine import is_decision_checkpoint
+
+    if is_decision_checkpoint(p):
+        return ModelType.DECISION
 
     # Image gen: diffusion pipeline models have model_index.json
     if (p / "model_index.json").exists():
@@ -155,6 +166,14 @@ def _detect_model_type(model_path: str) -> ModelType:
     model_type = config.get("model_type", "").lower().replace("-", "_")
     architectures = config.get("architectures", [])
     name_lower = p.name.lower()
+
+    from .scoring_engine import scoring_kind
+
+    _scoring = scoring_kind(config, str(model_path))
+    if _scoring == "head":
+        return ModelType.CLASSIFIER
+    if _scoring == "qwen3":
+        return ModelType.RERANKER
 
     # Qwen3-VL retrieval models (Qwen3-VL-Embedding / Qwen3-VL-Reranker): these
     # share model_type=qwen3_vl + Qwen3VLForConditionalGeneration with a normal
@@ -369,6 +388,12 @@ def _is_embedding_gemma2(model_path: str) -> bool:
 
 
 def _embedding_engine_class(model_path: str) -> Any:
+    with open(Path(model_path) / "config.json") as f:
+        config = json.load(f)
+    from .scoring_engine import TextScoringEngine, scoring_kind
+
+    if scoring_kind(config, model_path):
+        return TextScoringEngine
     if _is_embedding_gemma2(model_path):
         from .gemma_embedding_engine import GemmaEmbeddingEngine
 
@@ -403,14 +428,26 @@ async def instantiate_engine(
         engine = VLMEngine(model_path, config)
         await engine.start()
         return engine
+    if model_type == ModelType.DECISION:
+        from .decision_engine import DecisionEngine
+
+        decision_engine = DecisionEngine(model_path, config)
+        await decision_engine.start()
+        return decision_engine
     if model_type == ModelType.IMAGE_GEN:
         from .image_engine import ImageGenEngine
 
         engine = ImageGenEngine(model_path, config)
         await engine.start()
         return engine
-    if model_type in (ModelType.EMBEDDING, ModelType.RERANKER):
+    if model_type in (ModelType.EMBEDDING, ModelType.RERANKER, ModelType.CLASSIFIER):
         engine = _embedding_engine_class(model_path)(model_path, config)
+        # TextScoringEngine derives is_reranker from its own head (num_labels/kind); only
+        # the class-level embedding engines (VL/Gemma) take it from the detected role.
+        from .scoring_engine import TextScoringEngine
+
+        if hasattr(engine, "is_reranker") and not isinstance(engine, TextScoringEngine):
+            engine.is_reranker = model_type == ModelType.RERANKER
         await engine.start()
         return engine
     if model_type in (ModelType.STS, ModelType.VIDEO):
@@ -1342,6 +1379,12 @@ class ModelManager:
                 continue
 
             model_id = subdir.name
+            alias_type = None
+            if model_id.startswith(".ollama--") and subdir.is_symlink():
+                from urllib.parse import unquote
+
+                model_id = unquote(model_id.removeprefix(".ollama--"))
+                alias_type = _detect_model_type(str(subdir.resolve()))
 
             # Skip if already registered and loaded/loading.
             # Loading entries must not be overwritten — would orphan loading events.
@@ -1368,6 +1411,7 @@ class ModelManager:
                 model_path=str(subdir),
                 estimated_bytes=estimated,
                 pinned=was_pinned,
+                **({"model_type": alias_type} if alias_type is not None else {}),
             )
             count += 1
 

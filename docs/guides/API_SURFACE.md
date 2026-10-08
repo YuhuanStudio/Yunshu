@@ -10,10 +10,10 @@ API). **The Verified column of each row is the evidence, and a row claims no mor
 | `unit` | A test in `tests/unit` with a scripted engine, a fake or `TestClient`: **mock only**, no model ran. |
 | `audit` | A real-model smoke run during the earlier audit (Qwen3-Embedding-0.6B, Qwen3-ASR-1.7B, whisper-large-v3-mlx, Qwen3-TTS, Z-Image-Turbo, GLM-OCR, Qwen3-Omni). No automated job repeats it: it carries no date and is not evidence for today's code. |
 
-The served path of every modality is verified on its own checkpoint (Qwen3-TTS, Qwen3-ASR, GLM-OCR, Z-Image-Turbo, Qwen3-Embedding; allowlisted on the M3). A check that only sees an absent-capability or error answer (a chat model asked for speech) is an error-path check and never counts as coverage: `route_checks.py` declares `served=True/False` per check and the gate needs one served check per route. Exempt (reviewed list): `POST /v1/omni/speech/stream` (Qwen3-Omni, omnismall line), `POST /v1/audio/translations` (Whisper-only), and the five Ollama model-management verbs (documented 501). Realtime is served here by a text turn on a chat model; voice in / out belongs to the omnismall line.
+The served path of every modality is verified on its own checkpoint (Qwen3-TTS, Qwen3-ASR, GLM-OCR, Z-Image-Turbo, Qwen3-Embedding; allowlisted on the M3). A check that only sees an absent-capability or error answer (a chat model asked for speech) is an error-path check and never counts as coverage: `route_checks.py` declares `served=True/False` per check and the gate needs one served check per route. Exempt (reviewed list): `POST /v1/omni/speech/stream` (Qwen3-Omni, omnismall line), `POST /v1/audio/translations` (Whisper-only), and Ollama registry uploads (`/api/push`, documented 501). Realtime is served here by a text turn on a chat model; voice in / out belongs to the omnismall line.
 
 **Route coverage gate.** `tests/unit/test_route_coverage.py` lists every route the gateway registers (websockets included) and fails when one
-has no SERVED check in `scripts/research/route_checks.py` (or a reasoned entry in its `EXEMPT` table: seven today, reviewed by the lead; the gate counts only checks that declare `served=True`). `scripts/dev/m3sweep` (jobs
+has no SERVED check in `scripts/research/route_checks.py` (or a reasoned entry in its `EXEMPT` table: reviewed by the lead; the gate counts only checks that declare `served=True`). `scripts/dev/m3sweep` (jobs
 `routes`, `wire`, `agent`, `units`) fails when a registered route was not verified by a passing check in the same run. Add a route, add a check.
 
 `model` is advisory in single-model mode (`yunshu serve -m`): the loaded model answers under any name
@@ -26,7 +26,7 @@ multi-model mode (`--models-dir`) an unknown model is a 404 `model_not_found`.
 |---|---|---|---|
 | `POST /v1/chat/completions` | kept, fixed | `stop` accepts a string or a list. `usage.prompt_tokens_details.cached_tokens` and `completion_tokens_details.reasoning_tokens` are always present. Context overflow is 400 `context_length_exceeded`. Images on a text-only model are a 400. An embedding-only model (sentence-transformers export) answers a 400 that points to `/v1/embeddings`. | real 2026-10-06: `routes` + `wire` (SDK, typed) on 0.8B, 3B and (wire) 9B-4bit; image input on 0.8B, 400 on 3B; `input_audio` / `audio_url`, image + audio and `video_url` on gemma-4-e2b-it-4bit (M5, answers reflect the spoken word / the colour; stream and not). Parameters: see the table below |
 | `POST /v1/completions` | kept | `echo`, `logprobs` (int; also on the VLM runner, streamed and not), `n`, `stop`, `seed`, `stream_options.include_usage`, prompt as string / list / token ids. | real 2026-10-06: `routes` + `wire` (SDK; basic, truncation, stop, usage). `echo`, `logprobs`, `n`, `seed`, token-id prompts: unit |
-| `POST /v1/responses` | kept, fixed | `text.format` (`json_schema`, `json_object`) now maps to constrained decoding (it was ignored). `instructions`, input items, `previous_response_id` / `store`, `function_call` and `function_call_output`, `text.format` json_schema, `reasoning`, streaming event types (created, in_progress, output_item, content_part, output_text delta/done, completed). Usage details always present. Server-side tools run inside the generation loop: `web_search` (`web_search_call` items, `url_citation` annotations, `filters.allowed_domains`, `user_location`) and `{type: "mcp"}` (`mcp_list_tools`, `mcp_call`, `mcp_approval_request` / `mcp_approval_response`, `allowed_tools`, `require_approval`), see [Server-side tools](#server-side-tools). `generate: false` (Codex's WebSocket prewarm) prefills the prompt and returns a chainable empty response; `include: ["reasoning.encrypted_content"]` returns reasoning items that come back as `reasoning_content`; `namespace` / `custom` tools, `developer` messages and unknown input item types are accepted; `input_file` / `input_image` file ids resolve from the local Files store. The Response echoes the request configuration (`instructions`, `temperature`, `top_p`, `max_output_tokens`, `tools`, `tool_choice`, `text`, `reasoning`, `truncation`, `store`, `service_tier`, `max_tool_calls`, ...) in the body, the stored copy and every `response.*` event. `truncation: "auto"` drops the oldest input items when the prompt overflows the context (`"disabled"`, the default, answers 400); `max_tool_calls` caps the function calls of a response; `include`, `prompt_cache_key`, `safety_identifier` are accepted and echoed only. `x_yunshu` is in `usage`. | real 2026-10-06: `routes` + `wire` (create, stream, tools, `json_schema`, `previous_response_id`, conversation, background, input image, `web_search` and MCP against a fake backend, WS). `generate: false`, `include`, `truncation`, `max_tool_calls`, `namespace` / `custom` tools, `developer` messages: unit |
+| `POST /v1/responses` | kept, fixed | `text.format` (`json_schema`, `json_object`) now maps to constrained decoding (it was ignored). `instructions`, input items, `previous_response_id` / `store`, `function_call` and `function_call_output`, `text.format` json_schema, `reasoning`, streaming event types (created, in_progress, output_item, content_part, output_text delta/done, completed). Usage details always present. Server-side tools run inside the generation loop: `web_search` (`web_search_call` items, `url_citation` annotations, `filters.allowed_domains`, `user_location`) and `{type: "mcp"}` (`mcp_list_tools`, `mcp_call`, `mcp_approval_request` / `mcp_approval_response`, `allowed_tools`, `require_approval`), see [Server-side tools](#server-side-tools). `generate: false` (Codex's WebSocket prewarm) prefills the prompt and returns a chainable empty response; `include: ["reasoning.encrypted_content"]` returns reasoning items that come back as `reasoning_content`; `namespace` tools are flattened; freeform `custom` tools map to a native input function and return `custom_tool_call` items / `response.custom_tool_call_input` events; custom CFG formats and custom + server-side tool combinations return a clear 400. `developer` messages and unknown input item types are accepted; `input_file` / `input_image` file ids resolve from the local Files store. The Response echoes the request configuration (`instructions`, `temperature`, `top_p`, `max_output_tokens`, `tools`, `tool_choice`, `text`, `reasoning`, `truncation`, `store`, `service_tier`, `max_tool_calls`, ...) in the body, the stored copy and every `response.*` event. `truncation: "auto"` drops the oldest input items when the prompt overflows the context (`"disabled"`, the default, answers 400); `max_tool_calls` caps the function calls of a response; `include`, `prompt_cache_key`, `safety_identifier` are accepted and echoed only. `x_yunshu` is in `usage`. | real 2026-10-06: `routes` + `wire` (create, stream, tools, `json_schema`, `previous_response_id`, conversation, background, input image, `web_search` and MCP against a fake backend, WS). `generate: false`, `include`, `truncation`, `max_tool_calls`, `namespace` / `custom` tools, `developer` messages: unit |
 | `GET/DELETE /v1/responses/{id}`, `POST /v1/responses/{id}/cancel` | kept, fixed | Cancelling a running background response answers `status: "cancelled"` (it answered the `in_progress` snapshot) and a poll agrees; cancelling a finished response returns it unchanged. | real 2026-10-06: `routes` lifecycle (create `store` -> retrieve -> input_items -> chain -> background cancel -> delete -> 404) on 0.8B and 3B |
 | `GET /v1/responses/{id}/input_items` | added | The stored response's own input as Responses items (`message` with `input_text` / `input_image`, `function_call`, `function_call_output`), `limit` 1-100, `order` (`desc` default), `after` / `before` cursors. `instructions` and system / developer messages are not listed (like the hosted API); history through `previous_response_id` belongs to the earlier responses. The route was missing (the SDK's `input_items.list` got a 404). | real 2026-10-06: `routes` (SDK `input_items.list`) |
 | `POST /v1/responses/compact` | kept | Server-side compaction: returns a `compaction` item the next request takes as input. | real 2026-10-06: `routes` (SDK `responses.compact`, then the output used as input) |
@@ -129,7 +129,7 @@ The `yunshu` block (the ModelCard):
 
 | Field | Meaning |
 |---|---|
-| `kind` | `chat`, `vlm`, `omni`, `embedding`, `reranker`, `asr`, `tts`, `sts`, `image`, `ocr`, `video` |
+| `kind` | `chat`, `vlm`, `omni`, `embedding`, `reranker`, `classifier`, `asr`, `tts`, `sts`, `image`, `ocr`, `video` |
 | `family`, `architecture`, `parameters` | config `model_type`, `architectures[0]`, parameter count from the safetensors headers (quantized words unpacked at each layer's own bit width, scales skipped) |
 | `quantization` | `bits`, `group_size`, `mode`, `layer_groups` (`{bits: layers}` for mixed-precision checkpoints), `skip_components` (diffusion) |
 | `input_modalities`, `output_modalities` | `text`, `image`, `video`, `audio`, `embedding`, `score` |
@@ -188,7 +188,8 @@ Streaming is NDJSON. Auth follows the app-wide token.
 | `POST /api/generate` | implemented | Verified on the VLM runner too (with `think` the reasoning arrives in `thinking`). Errors from the OpenAI routes pass through: images on a text-only model and chat on an embedding model are 400s. `prompt`, `system`, `images`, `format`, `options`; an empty prompt answers `done_reason: load`. `raw`, `suffix`, `template`, `context` are not supported. | real 2026-10-06: `routes` + `wire` (non-stream and NDJSON) |
 | `POST /api/embed`, `POST /api/embeddings` | implemented | | real 2026-10-06: `routes` served on Qwen3-Embedding-0.6B (`/api/embed` equals `/v1/embeddings`, similar > unrelated; `/api/embeddings`). `show`, `tags`, `ps`, `version`: chat models |
 | `GET /api/tags`, `GET /api/ps`, `POST /api/show`, `GET /api/version` | implemented | Built from the model card: `size` is the weight bytes, `details` has family / parameter size / quantization, `show` returns `capabilities` (`completion`, `tools`, `vision`, `thinking`, `embedding`) and `model_info` (`general.architecture`, `general.parameter_count`, `<arch>.context_length`, `<arch>.embedding_length`). `show` 404s for an unknown model. | real 2026-10-06: `routes` (tags, ps, version, `show` with `capabilities` and `details`) |
-| `POST /api/pull`, `/api/push`, `/api/create`, `/api/copy`, `DELETE /api/delete` | not applicable | 501 with a message: models are managed with `yunshu pull` / `yunshu model`. | real 2026-10-06: `routes`: 501 with the Ollama error shape on all five verbs (documented; exempt from the served gate) |
+| `POST /api/pull`, `/api/create`, `/api/copy`, `DELETE /api/delete` | implemented for native models | Multi-model mode, administrative token; native HF safetensors pull, persistent names sharing weights, `create {model, from}`, deletion inside the configured model directory. Unsupported create options are 400. See the native management contract below. | real 2026-10-07: M3 `routes` 12-check API sweep (`3e365a31`, `agentapi-smoke-routes-3e365a31-1007`), existing-model pull / alias lifecycle / copied model generation; new network downloads: unit only |
+| `POST /api/push` | not applicable | Ollama registry uploads are unsupported (501). | real 2026-10-06: `routes` error-path check, exempt from the served gate |
 
 ## Tokenizer (vLLM schema)
 
@@ -203,6 +204,13 @@ Streaming is NDJSON. Auth follows the app-wide token.
 | Route | Status | Notes | Verified |
 |---|---|---|---|
 | `POST /v1/score`, `/v1/rerank`, `/v1/pooling`, `/v1/classify` | kept | On a model that cannot embed (hybrid architectures, Qwen3.5) all four answer a 400 that says so (`classify` answered a 500). | real 2026-10-06: `routes` served on Qwen3-Embedding-0.6B (embedding-similarity scoring, not a trained reranker): pooling width, score similar > unrelated, rerank puts the relevant document first, classify picks the right label and sums to 1. On chat models: Qwen2.5-3B answers 200, Qwen3.5-0.8B the 400 "cannot be used as a text embedder" (error path) |
+
+## Decisions (OpenAI Decisions API, TypeSafe System One)
+
+| Route | Status | Notes | Verified |
+|---|---|---|---|
+| `POST /v1/decisions` | added | OpenAI's Decisions API (public beta 2026-10-06), wire format from the `openai` 3.26 types (`Decision`, `DecisionCreateParams`). `input` is a string or user messages with `input_text` and inline `input_image` (base64 data URLs only; at most 128). `questions` are `predicate`, `choice` (typed `value`: a string `"true"` and a boolean `true` collide, so they are a 400) and `score` (`levels`); the response lists `answers` in question order with probabilities, a `refusal` for a question whose logits are not finite (never a made-up value), and `usage` (`output_tokens` 0, nothing is generated). Stateless, non-streaming. Served by a decision checkpoint (`ModelType.DECISION`): Cloudflare Clef / Clef-flash in MLX format (backbone through mlx-vlm plus the joint schema head, one forward pass). A chat model, or a checkpoint whose head is not the Clef joint schema head, is not served: a 400 / a load error, never a plain LLM that drops the head. Images need the checkpoint's vision tower, else 400. An input over 16384 tokens (state + images + schema) is a 400, not truncated. `safety_identifier` is accepted (64 characters) and ignored. | unit: fake engine, request validation, error shape, and the real `openai` 3.26 client (`client.decisions.create` -> typed `Decision`); the MLX head against a torch transcription of the reference. real 2026-10-08 (M5, `scripts/research/decisions_verify.py`, gpuq job `1008-002058-00-decisions-verify-clef4-c`): `yunshu serve` on abenzerps/Clef-MLX 4-bit (detected as DECISION, loaded in 6 s), the `openai` 3.26 client: a rainy text gives rain 0.92 / dry 0.02, a complaint routes to `support` and scores 0.35 against 3.91 for a glowing review, a boolean choice stays boolean, reordering choices or repeating a request is bit-identical, base64 red and blue images are answered red and blue, `/v1/chat/completions` on the decision model is a 400; about 0.23 s for one question and 0.53 s for five on a 235-token input (informal, not a quiet-CPU timing) |
+| `POST /v1/systemone` | added | TypeSafe Jev / System One wire on the same engine and one shared internal request: `{model, state (string, object or array), questions: {id: {type: noul / choice / score, instructions, criteria}}, images?}` returning `{model, answers: {id: ...}, usage: {input_tokens, output_tokens}}` with `noul`, `choice` + `confidence` + `probabilities` and `score` + `legend`, rounded to 4 places like the reference. Validation errors are 422 (as TypeSafe documents). | unit: as above. real 2026-10-08: same job, `/v1/systemone` routes the same complaint to `support` (noul 0.79, score 0.55) |
 
 ## Other
 
@@ -271,6 +279,56 @@ Z-Image ControlNet through `control_image`, is unchanged.
 | `bench roofline`, `latency`, `throughput`, `memory`, `inference`, `eval` | kept | |
 | `image-inpaint`, `image-controlnet`, `image-depth`, `video`, `audio-enhance`, `audio-separate`, `audio-transform`, `voice-pipeline` | removed | Their routes are gone. |
 
+### Native model management and retrieval contracts
+
+Ollama `pull`, `copy`, `create` and `delete` use the Ollama body and response shapes in
+multi-model mode. `pull` accepts Hugging Face native safetensors repositories (or an
+already registered model), with a final `status: success` in JSON or NDJSON. `copy`
+and `create {model, from}` persist a symlink name without duplicating weights. `delete`
+unlinks that name, or removes checkpoint data inside the configured models directory;
+external checkpoint paths are refused. Delete copies before deleting their source.
+`create` rejects custom templates, system/messages, parameters, adapters, blobs and
+quantization; GGUF conversion and Ollama registry downloads/uploads are unsupported.
+These operations use the same administrative authorization as `/v1/models/load`.
+`ps` lists only loaded models even when `/v1/models` omits private state fields.
+Verification: unit regressions and the `ollama_management` real-server check; a real
+run is required before claiming a dated result.
+
+Responses freeform custom tools preserve plain-text `input` outward and in chained history,
+with SDK-typed custom delta/done events. The model sees one internal string parameter;
+that transport detail is not exposed in the public tool definition. Custom CFG formats
+and custom + server-side tool combinations are refused with 400 rather than silently dropped.
+Verification: real 2026-10-07 M3 `responses_custom_tool` on 0.8B and 3B,
+stream / non-stream + chained tool output (`d26ebaaf`, `agentapi-smoke-custom-routes-1007b`).
+
+Forced tools are checked before streaming headers. A tool grammar that cannot compile
+(unsupported marker tokenization or recursive references) returns 400 with
+`Cannot guarantee forced tool_choice`; auto retains its existing fallback.
+Realtime `?model=` uses the HTTP lazy loader, including aliases, and emits an error
+and closes on an unknown model or load failure. It never silently selects a different
+model. Verification: unit + `forced_tool_uncompilable` / `realtime_lazy_load` checks.
+
+`score` accepts vLLM's `queries/documents`, `queries/items`, `data_1/data_2` and the
+legacy `text_1/text_2` names. A cross-encoder scores each pair jointly and receives
+`instruction`; `chat_template_kwargs.instruction` takes precedence. A bi-encoder
+ignores scoring instructions, matching [vLLM's score-template contract](https://docs.vllm.ai/en/latest/models/pooling_models/scoring/).
+Other score template kwargs are rejected explicitly. `classify` remains Yunshu's
+label-similarity extension (`input`, `labels`, temperature), rather than vLLM's
+trained classification-head API (`input` or `messages`, no candidate labels,
+`data[].probs/num_classes`). No trained classification head is implemented here;
+clients must not treat its zero-shot scores as those probabilities.
+
+## SDK coverage walk
+
+`scripts/dev/api_coverage.py` reads the resource modules of the installed `openai` and `anthropic` SDKs (AST only) and lists every
+endpoint they can request (575 on openai 3.26.0 / anthropic 1.11.0, websockets included). `tests/unit/test_api_coverage.py` fails when
+one is neither served by the gateway nor declared in `scripts/dev/api_coverage_na.json` as `not_applicable` or `planned`, each with a
+reason, and when a declaration matches nothing or sits over an implemented route. This replaces building the matrix from the routes
+we already had (which is how `POST /v1/decisions` was missed). Current state: 53 implemented, 46 planned (OpenAI and Anthropic skills,
+evals, stored chat completions, Realtime client secrets / sessions / calls, custom voices), the rest not applicable (organization and
+admin APIs, fine-tuning, Assistants/Threads, vector stores, hosted agent platforms, video, containers, webhooks, ChatKit, Live).
+Upgrading an SDK is the trigger: a new endpoint fails the test until someone decides.
+
 ## Known gaps
 
 | Item | State |
@@ -336,3 +394,56 @@ Explicit endpoints have a separate numerical cache identity. Their suffixes
 finish the same absolute prefill spans as a cold request; restores from a
 different earlier breakpoint plan are rejected. These endpoints are retained
 within this process's bounded APC policy; a restart may require a new write.
+
+### Text reranking and classification heads
+
+Text `Qwen3-Reranker` checkpoints use the model-card Transformers prompt and the
+last-position yes/no logits, with a sigmoid of the logit difference. Original
+`BertForSequenceClassification`, `RobertaForSequenceClassification` and
+`XLMRobertaForSequenceClassification` safetensors checkpoints use their trained
+heads. Other head architectures and quantized encoder heads return a load error.
+Encoder heads require the `embeddings` extra. Model cards report the effective
+serving window: Qwen3 scoring caps at 8192 tokens; RoBERTa position padding offsets
+and the tokenizer window constrain encoder inputs. Busy scoring work blocks
+non-forced model unload, including when its HTTP waiter has been cancelled.
+
+`POST /v1/rerank` retains `query`, `documents`, `instruction`, `top_n`, and
+`return_documents`, and the existing `results[{index,relevance_score,document?}]`
+shape. Text cross-encoders require string inputs; image objects require a VL reranker.
+
+`POST /v1/score` uses joint query/document scoring for single-label head models
+(sigmoid) and Qwen3 rerankers (yes/no probability), and cosine similarity for
+embedding models. vLLM's `queries` / `documents` names are accepted alongside the
+existing `text_1` / `text_2`. Scalar/list and length-one broadcasting preserve one
+result per pair. `use_activation: false` returns the trained raw logit (Qwen3:
+yes-minus-no logit), while omission or `null` uses probability scores. `instruction`
+is passed to the Qwen3 prompt. `dot` / `euclidean` remain embedding-only extensions.
+
+For trained heads, `POST /v1/classify` accepts `input` as a string or list and no
+`labels`. It returns `data[{object:"classification",index,probs}]` with checkpoint
+`labels` in head order: softmax for single-label multiclass, sigmoid for one logit
+or a checkpoint declaring `multi_label_classification`. A scalar input also returns
+the existing sorted `results[{label,score,index}]` convenience field. Providing
+candidate labels selects the existing embedding-based zero-shot mode and is rejected
+on trained heads. `temperature` applies only to the embedding-based mode.
+
+`yv ab --base BASE_SHA --cand CAND_SHA --suite rerank --label rerank-TOPIC --priority -1`
+checks candidate HTTP scores against independent float32 CPU Transformers recipes
+on four small original checkpoints (five pairs, including a long document, and
+three classification inputs). This capability stage uses the original
+checkpoint as its numerical oracle; the base commit is pinned and recorded, but
+has no trained-head endpoint to compare against. Scores must differ by at most
+0.003 and preserve every ranking. No speed claims are made by this stage.
+
+The recipes follow the [Qwen model card](https://huggingface.co/Qwen/Qwen3-Reranker-0.6B)
+and [vLLM scoring semantics](https://docs.vllm.ai/en/latest/models/pooling_models/scoring/).
+
+Verified 2026-10-07 on M5, code commit `08a91d28`, yv base `5269e9e5`:
+Qwen3-Reranker-0.6B, BGE-reranker-base, MiniLM-L-6-v2 (five pairs, including the
+5840-character document), and BERT-tiny SST2 (three inputs). The candidate used
+`TextScoringEngine` through `instantiate_engine`; all rankings matched independent
+CPU Transformers float32 inference. Maximum probability errors were respectively
+0.000208504, 0.000011891, 0.000037973 and 0.000001683 (limit 0.003). Raw score
+activation, broadcasting and the registered embed-route checks passed. Evidence:
+`/Volumes/P5Plus/yunshu-build/verify/runs/rerank-tiny-heads-handoff-1007-08a91d280b74/verdict.json`.
+This is numerical and API evidence, with no speed or retrieval-quality claim.

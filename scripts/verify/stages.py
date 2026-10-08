@@ -1194,7 +1194,97 @@ def stage_multimodal(ctx: Ctx) -> StageResult:
     return _finish(ctx, StageResult("multimodal", not reasons, reasons, numbers))
 
 
+def stage_rerank(ctx: Ctx) -> StageResult:
+    """New capabilities: candidate HTTP output vs independent Transformers oracle.
+
+    The baseline commit is recorded by yv, but cannot serve these trained heads;
+    the numerical baseline for this stage is the original checkpoint on CPU.
+    """
+    import json
+
+    tree = ctx.cand.path
+    root = Path(ctx.env.get("RERANK_MODEL_ROOT", "/Volumes/P5Plus/models"))
+    names = [
+        "Qwen3-Reranker-0.6B",
+        "bge-reranker-base",
+        "ms-marco-MiniLM-L-6-v2",
+        "bert-tiny-finetuned-sst2",
+    ]
+    import runpy
+
+    cases = runpy.run_path(str(tree / "scripts/research/rerank_parity.py"))
+    pairs, texts = cases["PAIRS"], cases["TEXTS"]
+    numbers, reasons = {}, []
+    for name in names:
+        model = root / name
+        if not (model / "config.json").exists():
+            reasons.append(f"missing checkpoint {model}")
+            break
+        items = ctx.run.path / f"{name}.items.json"
+        reference = ctx.run.path / f"{name}.reference.json"
+        items.write_text(
+            json.dumps(
+                {"texts": texts} if name.startswith("bert-tiny") else {"pairs": pairs}
+            )
+        )
+        # CPU oracle runs before occupying a GPU slot and stays under nice 15.
+        if not reference.exists():
+            result = subprocess.run(
+                [
+                    "nice",
+                    "-n",
+                    "15",
+                    ctx.py,
+                    str(tree / "scripts/research/rerank_reference.py"),
+                    str(model),
+                    "--items",
+                    str(items),
+                    "--out",
+                    str(reference),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=600,
+            )
+            if result.returncode:
+                reasons.append(f"{name} oracle: {result.stderr[-1000:]}")
+                break
+        cell = Cell(
+            "rerank",
+            name,
+            [
+                "env",
+                f"PYTHONPATH={tree / 'python'}",
+                "HF_HUB_OFFLINE=1",
+                ctx.py,
+                str(tree / "scripts/research/rerank_parity.py"),
+                "--model",
+                str(model),
+                "--reference",
+                str(reference),
+                "--out",
+                "{out}",
+            ],
+            mem_gb=6,
+            timeout_min=5,
+            stall_min=3,
+            priority=-1,
+            device="m5",
+        )
+        results = ctx.exe.run_cells([cell])
+        reasons += _failed_cells(results)
+        if reasons:
+            break
+        rows = read_jsonl(results[name].evidence)
+        numbers[name] = rows[-1]
+        if not rows[-1].get("passed"):
+            reasons.append(f"{name} oracle parity failed")
+            break
+    return _finish(ctx, StageResult("rerank", not reasons, reasons, numbers))
+
+
 STAGE_FUNCS = {
+    "rerank": stage_rerank,
     "preflight": stage_preflight,
     "smoke": stage_smoke,
     "identity": stage_identity,

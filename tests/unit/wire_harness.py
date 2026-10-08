@@ -45,6 +45,11 @@ def _piece(p):
 
 
 class ScriptedEngine(BatchedEngine):
+    def validate_forced_tools(self, tools, choice, parallel=True):
+        # This engine replays fixtures; it has neither logits nor a real tokenizer.
+        # Grammar preflight is tested separately against real tokenizers.
+        pass
+
     def __init__(self, script: Script | None = None):
         super().__init__()
         self._model = object()
