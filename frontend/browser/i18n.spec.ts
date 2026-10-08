@@ -200,7 +200,7 @@ test.describe("switching", () => {
   });
 });
 
-for (const width of [1024, 390]) {
+for (const width of [1024, 402, 390]) {
   test.describe(`English layout at ${width}px`, () => {
     test.use({ locale: "en" });
     test("no page overflows horizontally", async ({ page }) => {

@@ -14,6 +14,8 @@ const common: Shape<typeof zh> = {
   "language.label": "Language",
   sentenceGap: " ",
   offlineFor: "Offline for {t}.",
+  retrying:
+    "Temporarily unable to update; showing the last reading, retrying automatically",
   staleAt: "Data as of {time}",
   "unlock.placeholder": "Paste the access token",
   "unlock.label": "Unlock key",

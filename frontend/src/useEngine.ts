@@ -35,6 +35,8 @@ export interface UseEngineResult {
   finished: readonly ObservedRequest[];
   /** Epoch ms of the oldest engine-side history row, or null when there is none. */
   historyFrom: number | null;
+  /** One or two polls failed in a row: the page shows the last good numbers and says so. */
+  retrying: boolean;
   refresh: () => Promise<void>;
   polling: boolean;
   setPolling: (enabled: boolean) => void;
@@ -59,6 +61,8 @@ interface EngineViewState {
   series: SeriesPoint[];
   finished: ObservedRequest[];
   historyFrom: number | null;
+  /** A poll failed but fewer than OFFLINE_AFTER_FAILURES in a row: the numbers are the last good ones. */
+  retrying: boolean;
 }
 
 /** The series with an outage marker at its end, unless it already ends in one. */
@@ -79,6 +83,7 @@ function initialState(connectionKey: symbol): EngineViewState {
     series: [],
     finished: [],
     historyFrom: null,
+    retrying: false,
   };
 }
 
@@ -120,6 +125,8 @@ export function useEngine(connection: Connection): UseEngineResult {
     activeControllerRef.current?.abort();
     activeControllerRef.current = null;
     inFlightRef.current = null;
+    // Failures counted against the previous service say nothing about this one.
+    failuresRef.current = 0;
     setState(initialState(connectionKey));
     setPolling(true);
     return () => {
@@ -191,6 +198,7 @@ export function useEngine(connection: Connection): UseEngineResult {
                 )
               : known,
             historyFrom: restarted ? null : previous.historyFrom,
+            retrying: false,
           };
         });
         // Backfill the charts from the engine's own history, once per
@@ -232,7 +240,15 @@ export function useEngine(connection: Connection): UseEngineResult {
         if (refused) setPolling(false);
         failuresRef.current += 1;
         // A restart or one slow poll must not flash the offline banner.
-        if (!refused && failuresRef.current < OFFLINE_AFTER_FAILURES) return;
+        if (!refused && failuresRef.current < OFFLINE_AFTER_FAILURES) {
+          // Keep the last numbers, but say so: they are no longer live.
+          setState((current) =>
+            current.connectionKey === connectionKey
+              ? { ...current, retrying: true }
+              : current,
+          );
+          return;
+        }
         setState((current) => {
           const previous =
             current.connectionKey === connectionKey
@@ -309,6 +325,7 @@ export function useEngine(connection: Connection): UseEngineResult {
     series: stateForConnection.series,
     finished: stateForConnection.finished,
     historyFrom: stateForConnection.historyFrom,
+    retrying: stateForConnection.retrying,
     refresh,
     polling,
     setPolling,

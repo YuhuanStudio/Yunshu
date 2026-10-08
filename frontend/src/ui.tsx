@@ -177,6 +177,16 @@ export function ConnectionState({
 
 /** 「資料停在 HH:MM」: shown over panels whose numbers are no longer being refreshed. */
 export function StaleStamp({ engine }: { engine: Engine }) {
+  if (engine.phase === "online" && engine.retrying)
+    return (
+      <p
+        className="text-xs text-muted-foreground"
+        data-testid="retry-stamp"
+        role="status"
+      >
+        {t("common.retrying")}
+      </p>
+    );
   if (engine.phase !== "offline" || engine.updatedAt == null) return null;
   return (
     <p

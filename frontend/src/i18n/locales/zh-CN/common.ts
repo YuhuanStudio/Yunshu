@@ -14,6 +14,7 @@ const common: Shape<typeof zh> = {
   "language.label": "语言",
   sentenceGap: "",
   offlineFor: "已离线 {t}。",
+  retrying: "暂时无法更新，数字为上一次读取，将自动重试",
   staleAt: "数据停在 {time}",
   "unlock.placeholder": "粘贴访问令牌",
   "unlock.label": "解锁密钥",

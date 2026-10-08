@@ -1,3 +1,4 @@
+import { connectionScope, useScopedState } from "./scoped-state";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Connection } from "./api.ts";
 import {
@@ -34,11 +35,10 @@ export function usePolled<T>(
   intervalMs: (data: T | null) => number,
   key = "",
 ): Polled<T> {
-  const [state, setState] = useState<Omit<Polled<T>, "refresh">>({
-    data: null,
-    unsupported: false,
-    error: "",
-  });
+  const [state, setState] = useScopedState<Omit<Polled<T>, "refresh">>(
+    connectionScope(connection),
+    { data: null, unsupported: false, error: "" },
+  );
   const kick = useRef<() => void>(() => undefined);
   const loadRef = useRef(load),
     intervalRef = useRef(intervalMs);

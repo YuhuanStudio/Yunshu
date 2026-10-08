@@ -11,6 +11,7 @@ const common = {
   "language.label": "語言",
   sentenceGap: "",
   offlineFor: "已離線 {t}。",
+  retrying: "暫時無法更新，數字為上一次讀取，將自動重試",
   staleAt: "資料停在 {time}",
   "unlock.placeholder": "貼上存取權杖",
   "unlock.label": "解鎖金鑰",

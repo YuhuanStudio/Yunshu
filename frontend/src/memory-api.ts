@@ -1,3 +1,4 @@
+import { connectionScope, useScopedState } from "./scoped-state";
 import { useEffect, useState } from "react";
 import { fixed } from "./i18n/format.ts";
 import { t } from "./i18n/index.ts";
@@ -116,11 +117,10 @@ export function useMemoryLedger(
   enabled: boolean,
   intervalMs = 5000,
 ): LedgerState {
-  const [state, setState] = useState<LedgerState>({
-    data: null,
-    unsupported: false,
-    error: "",
-  });
+  const [state, setState] = useScopedState<LedgerState>(
+    connectionScope(connection),
+    { data: null, unsupported: false, error: "" },
+  );
   useEffect(() => {
     if (!enabled) return;
     const controller = new AbortController();

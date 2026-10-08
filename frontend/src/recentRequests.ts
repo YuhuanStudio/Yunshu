@@ -1,3 +1,4 @@
+import { connectionScope, useScopedState } from "./scoped-state";
 import { useEffect, useRef, useState } from "react";
 import { t } from "./i18n/index.ts";
 import { ApiError, type Connection } from "./api";
@@ -108,12 +109,15 @@ export function useRecentRequests(
   connection: Connection,
   signal: string | null | undefined,
 ): Recent {
-  const [state, setState] = useState<Recent>({
-    supported: null,
-    rows: [],
-    capacity: 512,
-    error: null,
-  });
+  const [state, setState] = useScopedState<Recent>(
+    connectionScope(connection),
+    {
+      supported: null,
+      rows: [],
+      capacity: 512,
+      error: null,
+    },
+  );
   const missing = useRef(false);
   const kick = useRef<(() => void) | null>(null);
   useEffect(() => {

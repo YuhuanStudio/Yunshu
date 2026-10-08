@@ -1,3 +1,4 @@
+import { connectionScope, useScopedState } from "./scoped-state.ts";
 import {
   createContext,
   useCallback,
@@ -61,7 +62,10 @@ function useDownloadFacts(
   connection: Connection,
   enabled: boolean,
 ): readonly DownloadFact[] | null {
-  const [facts, setFacts] = useState<readonly DownloadFact[] | null>(null);
+  const [facts, setFacts] = useScopedState<readonly DownloadFact[] | null>(
+    connectionScope(connection),
+    null,
+  );
   useEffect(() => {
     if (!enabled) return;
     const controller = new AbortController();
