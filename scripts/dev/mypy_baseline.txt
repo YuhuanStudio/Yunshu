@@ -76,11 +76,9 @@
 1	python/yunshu_engine/engine_core.py	assignment	Incompatible types in assignment (expression has type "TieredKVCacheManager", variable has type "KVCacheManager")
 1	python/yunshu_engine/engine_core.py	attr-defined	"SamplingParams" has no attribute "_original_priority"
 1	python/yunshu_engine/engine_core.py	attr-defined	"TuningDecision" has no attribute "__iter__" (not iterable)
-1	python/yunshu_engine/engine_core.py	attr-defined	"type[RequestStatus]" has no attribute "is_finished"
 1	python/yunshu_engine/engine_core.py	call-overload	No overload variant of "set" matches argument type "RequestPriorityQueue[Request]"
 1	python/yunshu_engine/engine_core.py	index	Invalid index type "slice[int, None, None]" for "deque[TuningDecision]"; expected type "SupportsIndex"
 1	python/yunshu_engine/engine_core.py	no-any-return	Returning Any from function declared to return "str"
-1	python/yunshu_engine/engine_core.py	operator	Unsupported operand types for + ("object" and "int")
 3	python/yunshu_engine/engine_core.py	union-attr	Item "None" of "Any | None" has no attribute "outputs"
 1	python/yunshu_engine/engine_diagnostics.py	no-any-return	Returning Any from function declared to return "bool"
 2	python/yunshu_engine/engine_embeddings.py	arg-type	Argument 1 to "float" has incompatible type "Any | int | float | complex"; expected "str | Buffer | SupportsFloat | SupportsIndex"
@@ -152,15 +150,6 @@
 1	python/yunshu_engine/image_engine.py	union-attr	Item "None" of "ZImageTransformer | None" has no attribute "load_weights"
 1	python/yunshu_engine/image_engine.py	union-attr	Item "None" of "ZImageTransformer | None" has no attribute "named_modules"
 3	python/yunshu_engine/image_engine.py	union-attr	Item "None" of "ZImageTransformer | None" has no attribute "parameters"
-1	python/yunshu_engine/json_schema.py	arg-type	Argument 1 to "_get_type_from_schema" of "JsonSchemaConstraint" has incompatible type "dict[Any, Any] | None"; expected "dict[Any, Any]"
-1	python/yunshu_engine/json_schema.py	arg-type	Argument 1 to "_init_object_keys" of "JsonSchemaConstraint" has incompatible type "dict[Any, Any] | None"; expected "dict[Any, Any]"
-6	python/yunshu_engine/json_schema.py	arg-type	Argument 1 to "append" of "list" has incompatible type "tuple[JsonState, dict[Any, Any] | None]"; expected "tuple[JsonState, dict[Any, Any]]"
-4	python/yunshu_engine/json_schema.py	attr-defined	"type[JsonSchemaConstraint]" has no attribute "_token_char_cache"
-2	python/yunshu_engine/json_schema.py	attr-defined	"type[JsonSchemaConstraint]" has no attribute "_token_text_cache"
-1	python/yunshu_engine/json_schema.py	no-any-return	Returning Any from function declared to return "dict[Any, Any] | None"
-1	python/yunshu_engine/json_schema.py	no-any-return	Returning Any from function declared to return "dict[int, str]"
-1	python/yunshu_engine/json_schema.py	no-any-return	Returning Any from function declared to return "str | list[str]"
-3	python/yunshu_engine/json_schema.py	no-redef	Name "chars" already defined on line N
 1	python/yunshu_engine/kernels/batch_invariant.py	attr-defined	"type[PackedLinear]" has no attribute "_yunshu_invariant_pad"
 2	python/yunshu_engine/kernels/batch_invariant.py	method-assign	Cannot assign to a method
 2	python/yunshu_engine/kernels/batch_invariant.py	no-any-return	Returning Any from function declared to return "array"
@@ -293,18 +282,12 @@
 1	python/yunshu_engine/ocr_engine.py	attr-defined	"None" has no attribute "tokenizer"
 1	python/yunshu_engine/ocr_engine.py	no-any-return	Returning Any from function declared to return "int"
 1	python/yunshu_engine/paged_scheduler.py	arg-type	Argument 1 to "pop" of "dict" has incompatible type "Any | None"; expected "int"
-1	python/yunshu_engine/paged_scheduler.py	attr-defined	"type[RequestStatus]" has no attribute "is_finished"
 1	python/yunshu_engine/paged_scheduler.py	no-any-return	Returning Any from function declared to return "SchedulerOutput"
 1	python/yunshu_engine/priority_queue.py	assignment	Incompatible types in assignment (expression has type "tuple[int, int, T]", variable has type "tuple[int, T]")
 1	python/yunshu_engine/priority_queue.py	attr-defined	Module has no attribute "_siftdown"
 1	python/yunshu_engine/priority_queue.py	attr-defined	Module has no attribute "_siftup"
 1	python/yunshu_engine/priority_queue.py	no-any-return	Returning Any from function declared to return "T"
 1	python/yunshu_engine/prompt_cache.py	assignment	Incompatible types in assignment (expression has type "dict[str, Any]", target has type "list[dict[Any, Any]]")
-2	python/yunshu_engine/request.py	attr-defined	"type[RequestStatus]" has no attribute "finish_reason"
-4	python/yunshu_engine/request.py	attr-defined	"type[RequestStatus]" has no attribute "is_finished"
-1	python/yunshu_engine/request.py	call-overload	No overload variant of "get" of "dict" matches argument type "int"
-1	python/yunshu_engine/request.py	no-any-return	Returning Any from function declared to return "bool"
-1	python/yunshu_engine/request.py	no-any-return	Returning Any from function declared to return "str | None"
 2	python/yunshu_engine/round_driver/batch.py	arg-type	Argument 1 to "_scatter_rows" has incompatible type "array | None"; expected "array"
 2	python/yunshu_engine/round_driver/batch.py	arg-type	Argument 1 to "take" has incompatible type "array | None"; expected "array"
 1	python/yunshu_engine/round_driver/batch.py	arg-type	Argument 2 to "ragged_decode_attention" has incompatible type "array | None"; expected "array"
@@ -347,7 +330,6 @@
 1	python/yunshu_engine/scheduler.py	attr-defined	"Request" has no attribute "_spec_prefill_selected"
 1	python/yunshu_engine/scheduler.py	attr-defined	"float" has no attribute "update"
 1	python/yunshu_engine/scheduler.py	attr-defined	"object" has no attribute "get"
-1	python/yunshu_engine/scheduler.py	attr-defined	"type[RequestStatus]" has no attribute "is_finished"
 1	python/yunshu_engine/scheduler.py	call-overload	No overload variant of "get" of "dict" matches argument type "str"
 2	python/yunshu_engine/scheduler.py	dict-item	Dict entry 3 has incompatible type "str": "str"; expected "str": "int"
 1	python/yunshu_engine/scheduler.py	index	Unsupported target for indexed assignment ("object")
@@ -392,12 +374,6 @@
 1	python/yunshu_engine/thinking_budget.py	no-any-return	Returning Any from function declared to return "int | None"
 2	python/yunshu_engine/thinking_budget.py	no-any-return	Returning Any from function declared to return "list[int] | None"
 1	python/yunshu_engine/thinking_budget.py	no-any-return	Returning Any from function declared to return "str | None"
-1	python/yunshu_engine/token_scheduler.py	arg-type	Argument 1 to "len" has incompatible type "object"; expected "Sized"
-1	python/yunshu_engine/token_scheduler.py	attr-defined	"object" has no attribute "append"
-1	python/yunshu_engine/token_scheduler.py	call-overload	No overload variant of "max" matches argument types "object", "float"
-1	python/yunshu_engine/token_scheduler.py	call-overload	No overload variant of "min" matches argument types "object", "float"
-2	python/yunshu_engine/token_scheduler.py	index	Value of type "object" is not indexable
-4	python/yunshu_engine/token_scheduler.py	operator	Unsupported operand types for + ("object" and "int")
 2	python/yunshu_engine/tool_arguments.py	union-attr	Item "None" of "Any | dict[Any, Any] | None" has no attribute "get"
 2	python/yunshu_engine/tool_call_grammar.py	assignment	Incompatible types in assignment (expression has type "list[str]", variable has type "str")
 1	python/yunshu_engine/tool_call_grammar.py	assignment	Incompatible types in assignment (expression has type "str | None", variable has type "str")

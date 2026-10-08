@@ -13,7 +13,7 @@ import contextlib
 import enum
 import time
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 
 class RequestStatus(enum.IntEnum):
@@ -22,6 +22,14 @@ class RequestStatus(enum.IntEnum):
     WAITING -> PREFILLING -> RUNNING -> FINISHED_*
     PREFILLING is used during external prefill (chunked progress tracking).
     """
+
+    if TYPE_CHECKING:
+
+        @staticmethod
+        def is_finished(status: int) -> bool: ...
+
+        @staticmethod
+        def finish_reason(status: int) -> str | None: ...
 
     WAITING = enum.auto()
     PREFILLING = enum.auto()
@@ -43,7 +51,7 @@ def _rs_is_finished(status: int) -> bool:
 
 def _rs_finish_reason(status: int) -> str | None:
     """Map a request status to its finish reason string."""
-    mapping = {
+    mapping: dict[int, str] = {
         RequestStatus.FINISHED_STOPPED: "stop",
         RequestStatus.FINISHED_LENGTH: "length",
         RequestStatus.FINISHED_ABORTED: "abort",
@@ -53,8 +61,9 @@ def _rs_finish_reason(status: int) -> str | None:
     return mapping.get(status)
 
 
-RequestStatus.is_finished = staticmethod(_rs_is_finished)
-RequestStatus.finish_reason = staticmethod(_rs_finish_reason)
+if not TYPE_CHECKING:
+    RequestStatus.is_finished = staticmethod(_rs_is_finished)
+    RequestStatus.finish_reason = staticmethod(_rs_finish_reason)
 
 
 @dataclass
