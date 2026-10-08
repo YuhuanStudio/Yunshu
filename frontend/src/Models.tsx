@@ -1,4 +1,5 @@
 import { gbTotalText } from "./byte-format";
+import { modelsFreeMemory } from "./memory-api";
 import { has, t, tr } from "./i18n/index.ts";
 import { unloadImpact } from "./model-impact";
 import { useEffect, useRef, useState } from "react";
@@ -137,8 +138,11 @@ export function Models({
   }
   const memTotal = engine.status?.memory.total_gb,
     memActive = engine.status?.memory.active_gb,
-    memFree =
-      memTotal != null && memActive != null ? memTotal - memActive : undefined;
+    memFree = modelsFreeMemory({
+      ledgerFreeGb: ledger.data?.free_gb,
+      totalGb: memTotal,
+      activeGb: memActive,
+    });
   const loadedRows = rows.filter((m) => m.loaded || m.loading),
     availableRows = rows.filter((m) => !m.loaded && !m.loading);
   const requestUnload = (model: Model, button: HTMLButtonElement) => {
@@ -551,12 +555,26 @@ export function Models({
                 )}
                 label={t("models.list.memoryUsage")}
               />
-              <p className="text-left text-xs tabular-nums text-muted-foreground sm:w-44 sm:shrink-0 sm:text-right">
-                {t("models.list.memorySummary", {
-                  loaded: loadedRows.filter((m) => m.loaded && !m.loading)
-                    .length,
-                  free: fixed(memFree),
-                })}
+              <p
+                className="text-left text-xs tabular-nums text-muted-foreground sm:w-48 sm:shrink-0 sm:text-right"
+                data-testid="memory-free"
+                data-source={memFree.source}
+                title={
+                  memFree.source === "system"
+                    ? t("models.list.freeTip")
+                    : t("models.list.freeTipMetal")
+                }
+              >
+                {t(
+                  memFree.source === "system"
+                    ? "models.list.memorySummary"
+                    : "models.list.memorySummaryMetal",
+                  {
+                    loaded: loadedRows.filter((m) => m.loaded && !m.loading)
+                      .length,
+                    free: fixed(memFree.gb),
+                  },
+                )}
               </p>
             </Card>
           )}

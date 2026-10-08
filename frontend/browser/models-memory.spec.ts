@@ -166,6 +166,36 @@ test.describe("models page, mobile and memory ledger", () => {
     ).toBeEnabled();
   });
 
+  test("the summary card and every row use the same available-memory figure", async ({
+    page,
+  }) => {
+    await install(
+      page,
+      ledger({ free_gb: 93.1, free_bytes: Math.round(93.1 * 2 ** 30) }),
+    );
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.goto("/console/#/models", { waitUntil: "domcontentloaded" });
+    const card = page.getByTestId("memory-free");
+    await expect(card).toContainText("系統可用 93.1 GB");
+    await expect(card).toHaveAttribute("data-source", "system");
+    // Every sized, unloaded row measures itself against the very same number.
+    const hints = page.locator('[data-testid="fit-hint"]:visible');
+    await expect(hints.first()).toContainText("系統可用 93.1 GB");
+    for (const text of await hints.allTextContents())
+      expect(text).toContain("系統可用 93.1 GB");
+  });
+
+  test("without a ledger the card says it is Metal's remainder, not the system figure", async ({
+    page,
+  }) => {
+    await install(page, null);
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.goto("/console/#/models", { waitUntil: "domcontentloaded" });
+    const card = page.getByTestId("memory-free");
+    await expect(card).toHaveAttribute("data-source", "metal");
+    await expect(card).toContainText("Metal 之外");
+  });
+
   test("detail page renders the ledger with estimated and unknown values", async ({
     page,
   }) => {

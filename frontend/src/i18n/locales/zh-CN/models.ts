@@ -108,7 +108,6 @@ const models: Shape<typeof zh> = {
   "list.viewTable": "表格",
   "list.viewCards": "卡片",
   "list.memoryUsage": "统一内存使用",
-  "list.memorySummary": "已加载 {loaded} · 可用 {free} GB",
   "list.emptyTitle": "没有符合条件的模型",
   "list.emptyDescription": "清除筛选条件；或导入 Hugging Face 原生 MLX 模型。",
   "list.groupLoaded": "已加载的模型",
@@ -129,8 +128,10 @@ const models: Shape<typeof zh> = {
   "unload.confirmInterrupt": "仍要卸载",
   "unload.impact.none": "当前没有请求使用这个模型。",
   "unload.impact.some": "{n} 个进行中的请求使用这个模型，卸载时可能被中断：",
-  "unload.impact.hint": "引擎没有上报卸载是否会等请求完成，这里列出的是可能受影响的请求。",
-  "unload.impact.unattributed": "另有 {n} 个请求没有上报所属模型，也可能受影响。",
+  "unload.impact.hint":
+    "引擎没有上报卸载是否会等请求完成，这里列出的是可能受影响的请求。",
+  "unload.impact.unattributed":
+    "另有 {n} 个请求没有上报所属模型，也可能受影响。",
   "unload.impact.row": "{phase} · 已 {elapsed}",
   "unload.impact.aria": "卸载影响预览",
   "info.close": "关闭模型信息",
@@ -184,5 +185,11 @@ const models: Shape<typeof zh> = {
   "list.viewDownloads": "查看下载",
   "detail.facts.disk": "磁盘信息",
   "detail.facts.files": "文件",
+  "list.memorySummary": "已加载 {loaded} · 系统可用 {free} GB",
+  "list.memorySummaryMetal": "已加载 {loaded} · Metal 之外 {free} GB",
+  "list.freeTip":
+    "系统当前可用的内存，与下方每个模型的「系统可用」是同一个数字；它不是加载上限，加载前会再用试算确认。",
+  "list.freeTipMetal":
+    "还没取得系统可用内存（引擎没有回报），这里是总量减去 Metal 已分配的量，没计入其他程序，会偏高。",
 };
 export default models;

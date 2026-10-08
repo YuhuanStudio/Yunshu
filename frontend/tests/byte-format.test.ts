@@ -166,3 +166,28 @@ test("ledger and history work for both generations", () => {
       1e-9,
   );
 });
+
+import { modelsFreeMemory } from "../src/memory-api.ts";
+test("models page: one available-memory figure, the system's, with an honest fallback", () => {
+  const sys = modelsFreeMemory({
+    ledgerFreeGb: 93.1,
+    totalGb: 128,
+    activeGb: 23.2,
+  });
+  assert.deepEqual(sys, { gb: 93.1, source: "system" });
+  const metal = modelsFreeMemory({
+    ledgerFreeGb: null,
+    totalGb: 128,
+    activeGb: 23.2,
+  });
+  assert.equal(metal.source, "metal");
+  assert.ok(Math.abs((metal.gb as number) - 104.8) < 1e-9);
+  assert.deepEqual(
+    modelsFreeMemory({
+      ledgerFreeGb: undefined,
+      totalGb: null,
+      activeGb: null,
+    }),
+    { gb: null, source: "metal" },
+  );
+});

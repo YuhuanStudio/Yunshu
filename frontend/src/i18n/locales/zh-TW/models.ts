@@ -105,7 +105,6 @@ const models = {
   "list.viewTable": "表格",
   "list.viewCards": "卡片",
   "list.memoryUsage": "統一記憶體使用",
-  "list.memorySummary": "已載入 {loaded} · 可用 {free} GB",
   "list.emptyTitle": "沒有符合條件的模型",
   "list.emptyDescription": "清除篩選條件；或匯入 Hugging Face 原生 MLX 模型。",
   "list.groupLoaded": "已載入的模型",
@@ -126,8 +125,10 @@ const models = {
   "unload.confirmInterrupt": "仍要卸載",
   "unload.impact.none": "目前沒有請求使用這個模型。",
   "unload.impact.some": "{n} 個進行中的請求使用這個模型，卸載時可能被中斷：",
-  "unload.impact.hint": "引擎沒有回報卸載是否會等請求完成，這裡列出的是可能受影響的請求。",
-  "unload.impact.unattributed": "另有 {n} 個請求沒有回報所屬模型，也可能受影響。",
+  "unload.impact.hint":
+    "引擎沒有回報卸載是否會等請求完成，這裡列出的是可能受影響的請求。",
+  "unload.impact.unattributed":
+    "另有 {n} 個請求沒有回報所屬模型，也可能受影響。",
   "unload.impact.row": "{phase} · 已 {elapsed}",
   "unload.impact.aria": "卸載影響預覽",
   "info.close": "關閉模型資訊",
@@ -182,5 +183,11 @@ const models = {
   "list.viewDownloads": "檢視下載",
   "detail.facts.disk": "磁碟資訊",
   "detail.facts.files": "檔案",
+  "list.memorySummary": "已載入 {loaded} · 系統可用 {free} GB",
+  "list.memorySummaryMetal": "已載入 {loaded} · Metal 之外 {free} GB",
+  "list.freeTip":
+    "系統目前可用的記憶體，與下方每個模型的「系統可用」是同一個數字；它不是載入上限，載入前會再用試算確認。",
+  "list.freeTipMetal":
+    "還沒取得系統可用記憶體（引擎沒有回報），這裡是總量減去 Metal 已配置的量，沒計入其他程式，會偏高。",
 };
 export default models;

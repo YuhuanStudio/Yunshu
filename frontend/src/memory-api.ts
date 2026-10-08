@@ -185,3 +185,22 @@ export function fitVerdict(
     return { verdict: "tight", text: t("overview.fit.tight", vars) };
   return { verdict: "fits", text: t("overview.fit.fits", vars) };
 }
+
+/**
+ * The one "available memory" figure of the Models page. Every unloaded row says how much it needs
+ * against it, so the summary card must show the same number: the system's available memory from the
+ * ledger. Only when the ledger is missing (an older engine) does it fall back to total minus Metal's
+ * allocation, which ignores other apps, and it says so (`source: "metal"`) instead of passing it off as
+ * the same thing.
+ */
+export function modelsFreeMemory(input: {
+  ledgerFreeGb: number | null | undefined;
+  totalGb: number | null | undefined;
+  activeGb: number | null | undefined;
+}): { gb: number | null; source: "system" | "metal" } {
+  if (input.ledgerFreeGb != null)
+    return { gb: input.ledgerFreeGb, source: "system" };
+  if (input.totalGb != null && input.activeGb != null)
+    return { gb: input.totalGb - input.activeGb, source: "metal" };
+  return { gb: null, source: "metal" };
+}

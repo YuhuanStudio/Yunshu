@@ -115,7 +115,6 @@ const models: Shape<typeof zh> = {
   "list.viewTable": "Table",
   "list.viewCards": "Cards",
   "list.memoryUsage": "Unified memory used",
-  "list.memorySummary": "{loaded} loaded · {free} GB free",
   "list.emptyTitle": "No matching models",
   "list.emptyDescription":
     "Clear the filters, or import a native Hugging Face MLX model.",
@@ -137,9 +136,12 @@ const models: Shape<typeof zh> = {
   "unload.confirm": "Unload",
   "unload.confirmInterrupt": "Unload anyway",
   "unload.impact.none": "No request is using this model right now.",
-  "unload.impact.some": "{n} in-flight requests use this model and may be interrupted:",
-  "unload.impact.hint": "The engine does not report whether an unload waits for requests to finish; these are the requests it could affect.",
-  "unload.impact.unattributed": "{n} more requests did not report their model and may be affected too.",
+  "unload.impact.some":
+    "{n} in-flight requests use this model and may be interrupted:",
+  "unload.impact.hint":
+    "The engine does not report whether an unload waits for requests to finish; these are the requests it could affect.",
+  "unload.impact.unattributed":
+    "{n} more requests did not report their model and may be affected too.",
   "unload.impact.row": "{phase} · {elapsed} in",
   "unload.impact.aria": "Unload impact preview",
   "info.close": "Close model info",
@@ -201,5 +203,11 @@ const models: Shape<typeof zh> = {
   "list.viewDownloads": "View downloads",
   "detail.facts.disk": "On disk",
   "detail.facts.files": "Files",
+  "list.memorySummary": "{loaded} loaded · {free} GB system free",
+  "list.memorySummaryMetal": "{loaded} loaded · {free} GB outside Metal",
+  "list.freeTip":
+    "Memory the system has available now. It is the same figure each model below is measured against; it is not a load limit, and a load is still checked first.",
+  "list.freeTipMetal":
+    "The engine did not report system-available memory, so this is total minus what Metal has allocated. It ignores other apps and reads high.",
 };
 export default models;
