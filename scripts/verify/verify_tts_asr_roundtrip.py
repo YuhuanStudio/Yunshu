@@ -82,7 +82,7 @@ async def main() -> int:
 
         model = load(ASR)
         overlaps = []
-        for ph, p in zip(PHRASES, wav_paths):
+        for ph, p in zip(PHRASES, wav_paths, strict=False):
             r = model.generate(p)
             txt = getattr(r, "text", None) or str(r)
             ov = _overlap(ph, txt)

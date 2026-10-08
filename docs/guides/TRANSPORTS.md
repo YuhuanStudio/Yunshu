@@ -26,7 +26,7 @@ to 60 min, up to 16 in-flight responses and 32 named `stream_id`s per connection
 **Anthropic Messages**: SSE (`stream: true`) is the only streaming transport. There is no official
 WebSocket mode, so nothing to match; Messages is reachable through our own `/v1/stream` (`api: "messages"`).
 
-**OpenAI Realtime** (`/api/docs/guides/realtime-websocket`, `-conversations`, `-webrtc`):
+**OpenAI Realtime** (OpenAI documentation paths `realtime-websocket`, `realtime-conversations`, `realtime-webrtc`):
 - WebSocket `wss://.../v1/realtime?model=M`, `Authorization: Bearer`, browsers use the subprotocols
   `realtime` and `openai-insecure-api-key.<key>`. Events are JSON text frames.
 - GA client events: `session.update`, `conversation.item.create|truncate|delete`, `response.create|cancel`,
@@ -41,12 +41,6 @@ WebSocket mode, so nothing to match; Messages is reachable through our own `/v1/
   mono, 16-bit), `audio/pcmu`, `audio/pcma`. Turn detection `server_vad` / `semantic_vad` / null.
 - WebRTC: `POST /v1/realtime/calls` with `Content-Type: application/sdp` (offer in, answer out), an
   `oai-events` data channel carrying the same JSON events, audio on media tracks, ephemeral keys for browsers.
-
-**Other local servers.** vLLM: `/v1/realtime` WebSocket for streaming speech-to-text only (16 kHz PCM16,
-`transcription.delta/done`); no text WebSocket. llama.cpp `llama-server`, Ollama (NDJSON over HTTP) and
-LM Studio (its own SDK socket, not an API): text is SSE/NDJSON only, no multiplexing, no mid-stream
-control besides dropping the connection. None serves Realtime with speech-to-speech, WebRTC, or a Unix socket
-with the OpenAI/Anthropic surface.
 
 ## 2. `WS /v1/stream` (Yunshu protocol)
 

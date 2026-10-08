@@ -738,10 +738,12 @@ class HealthDashboard:
             mem = psutil.virtual_memory()
             data["memory_percent"] = mem.percent
             data["memory_available_gb"] = round(mem.available / (1024**3), 2)
+            data["memory_available_bytes"] = int(mem.available)
         except ImportError:
             data["cpu_percent"] = 0
             data["memory_percent"] = 0
             data["memory_available_gb"] = 0
+            data["memory_available_bytes"] = 0
 
         try:
             import mlx.core as mx

@@ -19,7 +19,7 @@ Qwen3.5-0.8B and Qwen3.8-27B-oQ4e-mtp, 23/23 and 24/24 checks).
 | Server | What it exposes | Taken | Left out, and why |
 |---|---|---|---|
 | Ollama | Per-response `total_duration`, `load_duration`, `prompt_eval_count/duration`, `eval_count/duration`; `keep_alive` on requests; `/api/ps` with `expires_at` | Same measurements (as `x_yunshu.timings`, in ms rather than ns); `keep_alive` with Ollama's grammar (`"5m"`, `300`, `-1`, `0`) on chat and completions; `expires_in_s` per model in the status endpoint | Nanosecond fields: the Ollama layer (`/api/*`) keeps its own timings. Ollama's default of unloading after 5 minutes: a single-node engine that is slow to load should keep its model unless told otherwise (`YUNSHU_MODEL_TTL_SECONDS`). |
-| llama.cpp `llama-server` | `timings` object (`prompt_n`, `prompt_ms`, `prompt_per_second`, `predicted_*`, `cache_n`) in every response; `return_progress` sends `prompt_progress` (total / cache / processed / time_ms) while prefilling; `/props`, `/slots` (per-slot state), `/health` | `timings` with the same key names inside `x_yunshu` (tools that read them find them); prefill progress with total / processed / cached, plus %, tokens/s and ETA; `/v1/requests` is the analogue of `/slots` | Progress as a JSON `data:` chunk (`return_progress`): a strict OpenAI client would parse it as a chat chunk with no `choices`. We send an SSE comment instead. `n_probs` / `/props`: model and sampling metadata belongs to the `/v1/models` and `/api/show` work, not here. |
+| llama.cpp `llama-server` | `timings` object (`prompt_n`, `prompt_ms`, `prompt_per_second`, `predicted_*`, `cache_n`) in every response; `return_progress` sends `prompt_progress` (total / cache / processed / time_ms) while prefilling; `/props`, `/slots` (per-slot state), `/health` | `timings` with the same key names inside `x_yunshu` (tools that read them find them); prefill progress with total / processed / cached, plus %, tokens/s and ETA; `/v1/requests` is the analogue of `/slots` | Progress as a JSON `data:` chunk (`return_progress`): a strict OpenAI client would parse it as a chat chunk with no `choices`. We send an SSE comment instead. `n_probs` is not exposed here. `/props` now provides minimal loaded-model properties; `/v1/models` and `/api/show` carry the model contract. |
 | vLLM | `/metrics` (Prometheus), `/health`, `X-Request-Id` support (`--enable-request-id-headers`), `/tokenize`, `/detokenize`, abort-on-disconnect | Request ids on by default; `/metrics`, `/tokenize` already exist; disconnect aborts already exist | Continuous-batching scheduler stats (waiting / running per step): not a goal of a single-node engine. |
 | LM Studio | `stats` block per response (`tokens_per_second`, `time_to_first_token`, `generation_time`, `stop_reason`); `/api/v0/*` REST with model state | The same numbers in `x_yunshu` (`ttft_ms`, `decode_tps`, ...) | A separate `/api/v0` namespace: the additive fields on the standard routes reach existing clients with no code change. |
 | OpenRouter | `GET /generation?id=` (cost, tokens, latency by generation id); provider error metadata (`error.metadata.provider_name`, raw upstream error); `X-Request-Id`-style ids | `GET /v1/requests/{id}` by the id the client chose; `error.x_yunshu` next to the OpenAI error object, with the id and the fix | Cost accounting and a persistent generation log: no billing on a local engine. |
@@ -161,7 +161,7 @@ stay minimal: they are public, and orchestrators key off their status codes.
 ```json
 {"object":"yunshu.status","version":"0.1.2","state":"running","uptime_s":17.3,
  "models":[{"id":"Qwen3.8-27B-oQ4e-mtp","type":"VLMEngine","loaded":true,"pinned":true}],
- "memory":{"active_gb":17.4,"cache_gb":0.3,"peak_gb":18.1,"total_gb":137.4,"pressure":0.127},
+ "memory":{"active_gb":16.2,"active_bytes":17394617344,"cache_gb":0.28,"cache_bytes":300000000,"peak_gb":16.9,"peak_bytes":18100000000,"total_gb":128.0,"total_bytes":137438953472,"pressure":0.127},
  "requests":{"active":1,"queued":0,"prefill":0,"decode":1,"items":[{"request_id":"job-7","phase":"decode","completion_tokens":112}]},
  "throughput":{"window_s":60,"requests":3,"prompt_tokens":11765,"completion_tokens":64,
                "live_decode_tps":41.8,"mean_prefill_tps":502.9,"mean_decode_tps":51.7}}
@@ -226,3 +226,11 @@ prefilled into the prefix cache, the response has no output and `x_yunshu.prewar
 |---|---|
 | Non-streaming keep-alive whitespace | Rejected on purpose, see Prefill progress. |
 | `load_duration` on the Ollama layer | Always 0: a model that has to be loaded first is reported by the model-loading status, not per response. |
+
+## Memory units
+
+All engine-returned `*_gb` fields use binary GiB: 1 GiB = 1024^3 bytes.
+Each has an exact integer `*_bytes` sibling, including status memory
+(`active_bytes`, `cache_bytes`, `peak_bytes`, `total_bytes`) and model `size_bytes`.
+A 128 GB Mac reports `total_gb: 128.0`. Earlier decimal values were about 7% higher;
+update consumers when upgrading. Prometheus memory metrics remain in bytes.

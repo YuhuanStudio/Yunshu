@@ -76,7 +76,7 @@ async def main() -> int:
             reads.append(txt.upper())
             detail.append(f"{word} → {txt.strip()[:40]!r}")
 
-        for word, got in zip(WORDS, reads):
+        for word, got in zip(WORDS, reads, strict=False):
             other = next(w for w in WORDS if w != word)
             checks[f"reads {word} correctly"] = word in got
             checks[f"does not confuse {word} with {other}"] = other not in got

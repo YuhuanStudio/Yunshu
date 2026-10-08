@@ -196,6 +196,18 @@
       "license": "MIT",
       "local_changes": [],
       "kind": "vendored"
+    },
+    {
+      "path": "python/yunshu_engine/_vendor/deepseek_v4/encoding.py",
+      "repo": "https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash-0731",
+      "clone": "reference/deepseek-v4-flash-0731",
+      "upstream_path": "encoding/encoding_dsv4.py",
+      "commit": "7872f01b1d1fe23eabc4c98b48bffcef5a386062",
+      "license": "MIT",
+      "local_changes": [
+        "Added provenance, lint/format/type-check pragmas; encoding implementation unchanged"
+      ],
+      "kind": "vendored"
     }
   ],
   "derived": [
@@ -2278,6 +2290,17 @@
       "commit": "e7c69004"
     },
     {
+      "repo": "https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash-0731",
+      "clone": "reference/deepseek-v4-flash-0731",
+      "commit": "7872f01b1d1fe23eabc4c98b48bffcef5a386062",
+      "globs": [
+        "encoding/*.py",
+        "tokenizer_config.json",
+        "LICENSE"
+      ],
+      "why": "Official V4 prompt and DSML encoding; source fetched via pinned HF revision, weights are not cloned"
+    },
+    {
       "repo": "https://huggingface.co/Cloudflare/clef",
       "clone": "reference/clef",
       "globs": [
@@ -2485,6 +2508,38 @@
       "repo": "https://github.com/modelcontextprotocol/python-sdk",
       "reviewed_date": "2026-10-08",
       "use": "Installed SDK compatibility probes; no copied source."
+    }
+  ],
+  "cli_prior_art": [
+    {
+      "url": "https://docs.ollama.com/cli",
+      "reviewed_date": "2026-10-08",
+      "owner": "cliux",
+      "use": "Explicit pull/list/rm and separate server lifecycle; UX comparison only, no copied source."
+    },
+    {
+      "url": "https://lmstudio.ai/docs/cli",
+      "reviewed_date": "2026-10-08",
+      "owner": "cliux",
+      "use": "Model acquisition/select and load lifecycle; UX comparison only, no copied source."
+    },
+    {
+      "url": "https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md",
+      "reviewed_date": "2026-10-08",
+      "owner": "cliux",
+      "use": "HF repository or local checkpoint server startup; UX comparison only, no copied source."
+    },
+    {
+      "url": "https://github.com/ml-explore/mlx-lm/blob/main/mlx_lm/SERVER.md",
+      "reviewed_date": "2026-10-08",
+      "owner": "cliux",
+      "use": "Explicit MLX repository server startup; UX comparison only, no copied source."
+    },
+    {
+      "url": "https://docs.vllm.ai/en/latest/cli/",
+      "reviewed_date": "2026-10-08",
+      "owner": "cliux",
+      "use": "serve, chat, complete and benchmark command organization; UX comparison only, no copied source."
     }
   ],
   "respfeat_prior_art": [

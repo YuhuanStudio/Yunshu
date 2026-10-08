@@ -12,6 +12,7 @@ STAGES = (
     "memory",
     "longqa",
     "conc",
+    "modelprobe",
     "client_compat",
     "respfeat",
     "websearch",
@@ -30,6 +31,7 @@ LADDER = tuple(
     not in (
         "longqa",
         "conc",
+        "modelprobe",
         "client_compat",
         "respfeat",
         "websearch",

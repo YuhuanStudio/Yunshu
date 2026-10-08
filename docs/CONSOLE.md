@@ -117,11 +117,9 @@ package under `frontend/vendor/`. That package contains the approved YunUI code
 without requiring a sibling checkout or an npm release; provenance and checksum are
 recorded in `frontend/vendor/README.md`. No release version was changed.
 
-Agent validation must respect the owner's current **no GPU use** instruction.
-Use the intercepted browser/API tests for further checks; do not start a model,
-run warmup/generation/benchmark, or restart the isolated test engine without a new
-explicit instruction. The console itself still calls the real APIs when the owner
-uses it with their engine.
+Browser/API fixture checks validate the UI without model inference. Model-backed
+acceptance checks on a shared machine belong in `gpuq` / `yv`; see
+[verification](guides/VERIFY.md).
 
 ### 2026-10-07 local validation
 

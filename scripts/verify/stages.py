@@ -1068,6 +1068,39 @@ def _memory_valid(path: Path):
     return True, ""
 
 
+def stage_modelprobe(ctx: Ctx) -> StageResult:
+    """Candidate-only absolute reserve/serving pilot; no relative-model verdict."""
+    script = ctx.cand.path / "scripts/research/bigmoe_probe.py"
+    cell = Cell(
+        "modelprobe",
+        "cand-pilot",
+        [
+            ctx.py,
+            str(script),
+            "--model",
+            ctx.model,
+            "--src",
+            str(ctx.cand.path / "python"),
+            "--out",
+            "{out}",
+        ],
+        mem_gb=ctx.mem_gb,
+        timeout_min=15,
+        stall_min=8,
+    )
+    result = ctx.exe.run_cells([cell])
+    reasons = _failed_cells(result)
+    numbers = {
+        "scope": "candidate-only absolute reserve and generic serving; not model superiority"
+    }
+    evidence = result["cand-pilot"].evidence
+    if evidence:
+        rows = read_jsonl(evidence)
+        if rows:
+            numbers.update(rows[-1])
+    return _finish(ctx, StageResult("modelprobe", not reasons, reasons, numbers))
+
+
 def _websearch_valid(path: Path):
     rows = read_jsonl(path)
     if not rows or rows[-1].get("complete") is not True:
@@ -1428,4 +1461,5 @@ STAGE_FUNCS = {
     "memory": stage_memory,
     "longqa": stage_longqa,
     "conc": stage_conc,
+    "modelprobe": stage_modelprobe,
 }

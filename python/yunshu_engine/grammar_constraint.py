@@ -21,7 +21,7 @@ import logging
 import re
 import re._parser as _sre_parse
 import weakref
-from typing import Any
+from typing import Any, ClassVar
 
 from yunshu_engine.constraint_eos import normalize_eos_ids
 
@@ -419,6 +419,10 @@ class RegexConstraint:
     Supports checkpoint/rollback for speculative decoding.
     """
 
+    # Declared without values so the caches remain lazily initialized.
+    _token_char_cache: ClassVar[weakref.WeakKeyDictionary[Any, dict[str, list[int]]]]
+    _token_text_cache: ClassVar[weakref.WeakKeyDictionary[Any, dict[int, str]]]
+
     def __init__(self, pattern: str) -> None:
         self._pattern = pattern
         # Build the DFA first: it validates the pattern and rejects anything
@@ -743,6 +747,10 @@ class ChoiceConstraint:
     Efficiently prunes tokens by maintaining a trie of remaining
     valid completions.
     """
+
+    # Declared without values so the caches remain lazily initialized.
+    _token_char_cache: ClassVar[weakref.WeakKeyDictionary[Any, dict[str, list[int]]]]
+    _token_text_cache: ClassVar[weakref.WeakKeyDictionary[Any, dict[int, str]]]
 
     def __init__(self, choices: list[str], case_sensitive: bool = True) -> None:
         self._choices = choices
@@ -1401,7 +1409,7 @@ def build_json_constraint(
 # ── Shared utilities ────────────────────────────────────────────────────────
 
 
-def _build_token_text_map(tokenizer: Any) -> dict[int, str]:
+def _build_token_text_map_with_fallback(tokenizer: Any) -> dict[int, str]:
     """Build a mapping from token_id → its decoded text (cached once).
 
     Used by ChoiceConstraint to filter candidate tokens by their FULL text
