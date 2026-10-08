@@ -349,6 +349,11 @@ class EngineFastMixin:
                     "context window truncation skipped in fast path", exc_info=True
                 )
 
+        from .request_tracker import current_request_info
+
+        _latency_info = current_request_info.get()
+        _latency_marks = getattr(_latency_info, "latency_marks", {})
+        _latency_marks["template_start"] = time.perf_counter()
         # Encode prompt
         if isinstance(prompt, str):
             text = prompt
@@ -365,6 +370,7 @@ class EngineFastMixin:
 
         input_ids = self._encode_prompt(tokenizer, text)
         prompt_tokens = len(input_ids)
+        _latency_marks["template_end"] = time.perf_counter()
 
         if not input_ids:
             bos_id = getattr(tokenizer, "bos_token_id", None)

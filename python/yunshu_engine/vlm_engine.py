@@ -856,12 +856,19 @@ class VLMEngine:
                 kwargs=kwargs,
             )
 
+            from .request_tracker import current_request_info
+
+            _latency_info = current_request_info.get()
+
             def _prepare():
                 # Templating + media encoding on the MLX thread; generation is
                 # then consumed off it (the runner's driver needs that thread).
+                _marks = getattr(_latency_info, "latency_marks", {})
+                _marks["template_start"] = time.perf_counter()
                 ids, pkw, salt = self._runner_input(
                     messages, image_paths, audio_paths, _enable_thinking, tpl_extra
                 )
+                _marks["template_end"] = time.perf_counter()
                 return _RunnerCall(
                     self._generate_vlm_runner_text,
                     ids,
@@ -1094,10 +1101,17 @@ class VLMEngine:
             },
         )
 
+        from .request_tracker import current_request_info
+
+        _latency_info = current_request_info.get()
+
         def _prepare():
+            _marks = getattr(_latency_info, "latency_marks", {})
+            _marks["template_start"] = time.perf_counter()
             ids, pkw, salt = self._runner_input(
                 messages, image_paths, audio_paths, enable_thinking, tpl_extra
             )
+            _marks["template_end"] = time.perf_counter()
             return _RunnerCall(
                 self._stream_vlm_runner_text,
                 ids,

@@ -2377,3 +2377,68 @@ def _responses_custom_tool(c: Ctx):
             max_output_tokens=8,
         )
         expect(follow.output, "custom tool history did not round-trip")
+
+
+@check(
+    "console_host_latency",
+    "GET /v1/yunshu/host",
+    "GET /v1/yunshu/requests/recent",
+    served=True,
+    needs="multi",
+)
+def console_host_latency(c):
+    host = c.http.get("/v1/yunshu/host")
+    expect(host.status_code == 200, host.text)
+    data = host.json()
+    for key in ("thermal", "power", "memory_pressure"):
+        expect("state" in data[key], f"{key}: missing state")
+        if data[key]["state"] == "unknown":
+            expect(bool(data[key].get("reason")), f"{key}: missing reason")
+    recent = c.http.get("/v1/yunshu/requests/recent")
+    expect(recent.status_code == 200, recent.text)
+    expect(isinstance(recent.json()["data"], list), "recent data must be a list")
+
+
+@check(
+    "console_registration_cancel",
+    "POST /v1/yunshu/models/register",
+    "DELETE /v1/yunshu/models/register/{model_id:path}",
+    "POST /v1/yunshu/models/cancel",
+    served=True,
+    needs="multi",
+)
+def console_registration_cancel(c):
+    """The console probe supplies a real local checkpoint; cancellation must actually engage."""
+    import concurrent.futures
+
+    model_path = c.notes.get("console_model_path")
+    if not model_path:
+        skip("consolefeat_routes supplies the real checkpoint path")
+    model = "consolefeat-local"
+    r = c.http.post(
+        "/v1/yunshu/models/register", json={"model": model, "path": model_path}
+    )
+    expect(r.status_code == 200 and r.json()["loaded"] is False, r.text)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(c.http.post, "/v1/models/load", json={"model": model})
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline:
+            status = c.http.get("/v1/yunshu/status").json()
+            if any(m["id"] == model and m["loading"] for m in status["models"]):
+                break
+            expect(not future.done(), "load completed before cancel was observed")
+            time.sleep(0.01)
+        else:
+            raise Fail("load never entered loading state")
+        cancel = c.http.post("/v1/yunshu/models/cancel", json={"model": model})
+        expect(cancel.status_code == 200 and cancel.json()["load"], cancel.text)
+        loaded = future.result(timeout=180)
+        expect(
+            loaded.status_code == 400 and "cancel" in loaded.text.lower(), loaded.text
+        )
+    status = c.http.get("/v1/yunshu/status").json()
+    row = next(m for m in status["models"] if m["id"] == model)
+    expect(not row["loaded"] and not row["loading"], "cancel left model loaded/loading")
+    r = c.http.delete("/v1/yunshu/models/register/" + model)
+    expect(r.status_code == 200, r.text)
+    c.notes["cancel_load_status"] = loaded.status_code

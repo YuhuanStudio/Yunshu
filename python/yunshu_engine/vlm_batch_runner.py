@@ -86,6 +86,8 @@ class RunStats:
     # Timing / progress (time.perf_counter() values; 0.0 = not reached yet). The
     # gateway reads them live for prefill-progress events and the per-response
     # ``x_yunshu`` stats.
+    latency_marks: dict[str, float] = field(default_factory=dict)
+    t_prefill_end: float = 0.0
     t_submit: float = 0.0  # handed to the runner
     t_admit: float = 0.0  # left the queue, prefill started
     t_first: float = 0.0  # first generated token
@@ -1301,6 +1303,7 @@ class VLMBatchRunner:
             job.stats.cache_tier = rec.tier
             job.stats.cache_reload_ms = rec.ms
             job.stats.cache_device = rec.device
+            job.stats.latency_marks["prefill_start"] = rec.t
 
     def _note_driver_prefill(self, driver=None) -> None:
         """Publish prefill progress of the round driver's rows."""
@@ -1309,6 +1312,8 @@ class VLMBatchRunner:
                 st = row.req.handle.stats
                 if st.t_first == 0.0:
                     st.prefill_done = min(row.done - row.hit, st.prefill_total)
+                    if st.prefill_done >= st.prefill_total and not st.t_prefill_end:
+                        st.t_prefill_end = time.perf_counter()
         except Exception:
             logger.debug("driver prefill progress unavailable", exc_info=True)
 
@@ -1343,6 +1348,8 @@ class VLMBatchRunner:
             st = getattr(job, "stats", None)
             if st is not None and uid not in waiting and st.t_first == 0.0:
                 st.prefill_done = st.prefill_total
+                if not st.t_prefill_end:
+                    st.t_prefill_end = time.perf_counter()
 
     def busy_snapshot(self) -> dict:
         """Cumulative GPU-busy accounting: all slices and the round driver's share."""

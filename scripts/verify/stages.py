@@ -1070,7 +1070,52 @@ def stage_rerank(ctx: Ctx) -> StageResult:
     return _finish(ctx, StageResult("rerank", not reasons, reasons, numbers))
 
 
+def stage_console(ctx: Ctx) -> StageResult:
+    """Single-node console API correctness on a pinned candidate; no timing verdict."""
+
+    def validate(path):
+        rows = read_jsonl(path)
+        if not rows or not rows[-1].get("complete") or rows[-1].get("failures"):
+            return False, "console route probe incomplete or failed"
+        required = {
+            "console_registration_cancel",
+            "console_host_latency",
+            "stream_latency",
+        }
+        if set(rows[-1].get("checks", {})) != required:
+            return False, "missing console route checks"
+        return True, ""
+
+    cell = Cell(
+        "console",
+        "cand",
+        [
+            ctx.py,
+            str(ctx.cand.path / "scripts/research/consolefeat_routes.py"),
+            "--model",
+            ctx.model,
+            "--src",
+            str(ctx.cand.path / "python"),
+            "--out",
+            "{out}",
+        ],
+        mem_gb=12,
+        timeout_min=10,
+        quiet=False,
+        validate=validate,
+    )
+    result = ctx.exe.run_cells([cell])["cand"]
+    numbers = read_jsonl(result.evidence)[-1] if result.ok and result.evidence else {}
+    return _finish(
+        ctx,
+        StageResult(
+            "console", result.ok, [] if result.ok else [result.reason], numbers
+        ),
+    )
+
+
 STAGE_FUNCS = {
+    "console": stage_console,
     "rerank": stage_rerank,
     "preflight": stage_preflight,
     "smoke": stage_smoke,

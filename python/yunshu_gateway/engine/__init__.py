@@ -176,6 +176,19 @@ def _discover_models(models_dir: str) -> None:
 
 
 async def get_engine_for_model(model_id: str) -> Engine:
+    """Acquire/start a model and record the lease boundary for both serving modes."""
+    import time
+
+    from yunshu_engine.request_tracker import current_request_info
+
+    marks = getattr(current_request_info.get(), "latency_marks", {})
+    marks.setdefault("model_lease_start", time.perf_counter())
+    engine = await _get_engine_for_model(model_id)
+    marks["model_lease"] = time.perf_counter()
+    return engine
+
+
+async def _get_engine_for_model(model_id: str) -> Engine:
     """Get an engine for the specified model.
 
     Resolution order:

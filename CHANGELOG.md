@@ -11,6 +11,8 @@ Changes on main after 0.1.4; not part of a published package yet.
 
 ### Highlights
 
+- Add authenticated single-node console routes for cooperative model load/download cancellation, validated local/HF snapshot registration and unregister, cached CPU-only thermal/power/memory-pressure/swap telemetry, and recent request latency breakdowns in `x_yunshu`.
+
 ### Upgrade notes / breaking changes
 
 ### Performance
