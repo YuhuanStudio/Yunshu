@@ -140,11 +140,6 @@
 1	python/yunshu_engine/grammar_bitmask.py	no-any-return	Returning Any from function declared to return "int"
 1	python/yunshu_engine/grammar_bitmask.py	no-any-return	Returning Any from function declared to return "list[int]"
 2	python/yunshu_engine/grammar_bitmask.py	union-attr	Item "None" of "TokenStringTable | None" has no attribute "eos_ids"
-4	python/yunshu_engine/grammar_constraint.py	attr-defined	"type[ChoiceConstraint]" has no attribute "_token_char_cache"
-4	python/yunshu_engine/grammar_constraint.py	attr-defined	"type[ChoiceConstraint]" has no attribute "_token_text_cache"
-8	python/yunshu_engine/grammar_constraint.py	attr-defined	"type[RegexConstraint]" has no attribute "_token_char_cache"
-4	python/yunshu_engine/grammar_constraint.py	attr-defined	"type[RegexConstraint]" has no attribute "_token_text_cache"
-1	python/yunshu_engine/grammar_constraint.py	no-redef	Name "_build_token_text_map" already defined on line N
 1	python/yunshu_engine/image_engine.py	arg-type	Argument 1 to "exp" has incompatible type "float"; expected "array"
 1	python/yunshu_engine/image_engine.py	arg-type	Argument 1 to "int" has incompatible type "int | float | complex"; expected "str | Buffer | SupportsInt | SupportsIndex | SupportsTrunc"
 1	python/yunshu_engine/image_engine.py	arg-type	Argument 1 to "update" of "MutableMapping" has incompatible type "array | dict[str, array] | tuple[dict[str, array], dict[str, Any]]"; expected "SupportsKeysAndGetItem[str, Any]"
