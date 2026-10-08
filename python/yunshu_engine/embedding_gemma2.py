@@ -338,7 +338,7 @@ class EmbeddingGemma2:
             w: dict = {}
             for f in self._files:
                 loaded: Any = mx.load(f)
-            w.update(loaded)
+                w.update(loaded)
             self._weights = w
         return self._weights
 
