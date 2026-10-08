@@ -48,7 +48,7 @@ def test_pattern_kills_are_blocked():
     for cmd in (
         stash,
         stash + " -q",
-        "git -C ../wt " + stash + " push",
+        "git -C ../wt st" + "ash push",
         "cd x && " + stash + " pop",
     ):
         assert guard.verdict(cmd), cmd
