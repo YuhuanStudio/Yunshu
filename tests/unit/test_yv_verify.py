@@ -36,6 +36,8 @@ def git(cwd, *a):
 @pytest.fixture
 def world(tmp_path, monkeypatch):
     """A tiny repo with two commits (cand edits foo.py + its test) and fakes wired in."""
+    # The caller's production queue window must not alter fixture expectations.
+    monkeypatch.delenv("YV_MAX_PENDING", raising=False)
     repo = tmp_path / "repo"
     (repo / "python/yunshu_engine").mkdir(parents=True)
     for pkg in ("yunshu_engine", "yunshu_gateway", "yunshu_kv"):
