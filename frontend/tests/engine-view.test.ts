@@ -1,3 +1,4 @@
+import { binaryGb } from "../src/byte-format.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { EngineStatus } from "../src/api.ts";
@@ -126,7 +127,7 @@ test("null or malformed optional fields never fail the status", () => {
   });
   assert.equal(s.models[0].size_gb, undefined);
   assert.equal(s.memory.active_gb, undefined);
-  assert.equal(s.memory.cache_gb, 2);
+  assert.ok(Math.abs((s.memory.cache_gb as number) - binaryGb(2)) < 1e-9);
 });
 
 test("percentiles need 20 samples", () => {

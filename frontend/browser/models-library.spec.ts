@@ -12,7 +12,7 @@ const model = (id: string, over: Record<string, unknown> = {}) => ({
   expires_in_s: null,
   ...over,
 });
-const GB = 1e9;
+const GB = 2 ** 30; // binary, labelled GB as macOS does
 
 type World = {
   models: Record<string, unknown>[];
@@ -41,7 +41,7 @@ const job = (over: Record<string, unknown>) => ({
   files_total: 12,
   files_done: 3,
   active_files: ["model-00004-of-00005.safetensors"],
-  rate_bps: 45 * 1e6,
+  rate_bps: 45 * 2 ** 20,
   eta_s: 108,
   created: 1,
   started: 1,

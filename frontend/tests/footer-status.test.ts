@@ -25,7 +25,7 @@ const mk = (over: Record<string, unknown> = {}) =>
         pinned: false,
       },
     ],
-    memory: { active_gb: 40, total_gb: 128 },
+    memory: { active_gb: 42.94967296, total_gb: 137.438953472 },
     requests: { active: 0, queued: 0, prefill: 0, decode: 0, items: [] },
     last: {
       request_id: "r",
@@ -95,8 +95,8 @@ test("decoding shows live tok/s and the active count", () => {
 
 test("memory tone follows pressure level, swap and gpu only when present", () => {
   const ledger = parseMemory({
-    total_gb: 128,
-    mlx: { active_gb: 40 },
+    total_gb: 137.438953472,
+    mlx: { active_gb: 42.94967296 },
     host: { pressure_level: "critical", swap_used_gb: 2.34 },
   });
   const pills = footerPills(input(mk(), { ledger, gpuBusy: 0.853 }));
@@ -104,13 +104,13 @@ test("memory tone follows pressure level, swap and gpu only when present", () =>
   assert.equal(byKey.memory.tone, "danger");
   assert.match(byKey.memory.help, /嚴重/);
   assert.match(byKey.memory.value ?? "", /^40\.0\/128 GB$/);
-  assert.equal(byKey.swap.value, "2.3 GB");
+  assert.equal(byKey.swap.value, "2.2 GB");
   assert.equal(byKey.gpu.value, "85%");
   const calm = footerPills(
     input(mk(), {
       ledger: parseMemory({
-        total_gb: 128,
-        mlx: { active_gb: 40 },
+        total_gb: 137.438953472,
+        mlx: { active_gb: 42.94967296 },
         host: { pressure_level: "normal", swap_used_gb: 0 },
       }),
     }),

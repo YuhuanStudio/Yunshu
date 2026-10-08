@@ -1,5 +1,11 @@
+import { useState } from "react";
+import { ChevronDown } from "lucide-react";
+import { useMinWidth } from "./ui";
 import {
   Button,
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
   SegmentMeter,
   Sparkline,
   StatusIndicator,
@@ -8,6 +14,7 @@ import {
   StatusIslandCard,
   StatusIslandHeader,
   StatusIslandMetric,
+  StatusIslandNavGroup,
   StatusIslandNavRow,
 } from "@yuhuanowo/yunui/patterns";
 import type { HostState } from "./host-hook";
@@ -244,6 +251,8 @@ export function StatusIslandContent({
 }
 
 function MachineCard({ host, now }: { host: HostState; now: number }) {
+  const wide = useMinWidth(640);
+  const [open, setOpen] = useState(false);
   const snap = host.host;
   if (!snap || snap === "unsupported" || !snap.telemetry) return null;
   const tm = snap.telemetry;
@@ -272,21 +281,15 @@ function MachineCard({ host, now }: { host: HostState; now: number }) {
               pct: number(system.thermal.speedLimitPercent, 0),
             })
           : t("overview.host.thermalLimitedPlain");
-  return (
-    <StatusIslandCard
-      title={t("overview.host.title")}
-      note={
-        <span title={t("overview.host.sourceTip")}>
-          {ageS == null
-            ? t("overview.host.noSample")
-            : stale
-              ? t("overview.host.stale", { n: number(ageS, 0) })
-              : t("overview.host.age", { n: number(ageS, 0) })}
-        </span>
-      }
-      className={stale ? "opacity-60" : undefined}
-      data-testid="island-machine"
-    >
+  const summary = [
+    busy != null ? `GPU ${num(busy)}%` : null,
+    tm.temperature.dieMaxC != null ? `${num(tm.temperature.dieMaxC)}°C` : null,
+    tm.watts.gpu != null ? `${fixed(tm.watts.gpu, 1)}W` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  const rows = (
+    <>
       <StatusIslandMetric
         label={t("shell.island.host.busy")}
         value={num(busy)}
@@ -334,6 +337,46 @@ function MachineCard({ host, now }: { host: HostState; now: number }) {
             : undefined
         }
       />
+    </>
+  );
+  return (
+    <StatusIslandCard
+      title={t("overview.host.title")}
+      note={
+        <span title={t("overview.host.sourceTip")}>
+          {ageS == null
+            ? t("overview.host.noSample")
+            : stale
+              ? t("overview.host.stale", { n: number(ageS, 0) })
+              : t("overview.host.age", { n: number(ageS, 0) })}
+        </span>
+      }
+      className={stale ? "opacity-60" : undefined}
+      data-testid="island-machine"
+    >
+      {wide ? (
+        rows
+      ) : (
+        <Collapsible open={open} onOpenChange={setOpen}>
+          <CollapsibleTrigger asChild>
+            <button
+              type="button"
+              data-testid="island-machine-toggle"
+              className="flex w-full items-center justify-between gap-2 rounded-md text-left text-[13px] tabular-nums text-foreground outline-none focus-visible:outline-2 focus-visible:outline-(--color-accent)"
+            >
+              <span className="truncate">{summary || DASH}</span>
+              <ChevronDown
+                aria-hidden
+                size={14}
+                className={`shrink-0 text-muted-foreground transition-transform duration-[180ms] ease-out motion-reduce:transition-none ${open ? "" : "-rotate-90"}`}
+              />
+            </button>
+          </CollapsibleTrigger>
+          <CollapsibleContent>
+            <div className="pt-1.5">{rows}</div>
+          </CollapsibleContent>
+        </Collapsible>
+      )}
     </StatusIslandCard>
   );
 }
@@ -350,7 +393,7 @@ function Nav({
   onNavigate?: () => void;
 }) {
   return (
-    <>
+    <StatusIslandNavGroup>
       <StatusIslandNavRow
         label={t("shell.island.nav.requests")}
         detail={
@@ -381,6 +424,6 @@ function Nav({
         href={routeHref("logs")}
         onClick={onNavigate}
       />
-    </>
+    </StatusIslandNavGroup>
   );
 }

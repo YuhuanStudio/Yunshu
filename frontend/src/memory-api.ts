@@ -1,3 +1,4 @@
+import { binaryGb } from "./byte-format.ts";
 import { connectionScope, useScopedState } from "./scoped-state.ts";
 import { useEffect, useState } from "react";
 import { fixed } from "./i18n/format.ts";
@@ -46,6 +47,11 @@ const rec = (v: unknown): Record<string, unknown> =>
 const num = (v: unknown): number | null =>
   typeof v === "number" && Number.isFinite(v) ? v : null;
 const str = (v: unknown): string | null => (typeof v === "string" ? v : null);
+/** A `*_gb` field: the engine reports decimal GB, the console shows binary ("GB" as macOS does). */
+const gbNum = (v: unknown): number | null => {
+  const n = num(v);
+  return n == null ? null : binaryGb(n);
+};
 
 /** Tolerant parse: a missing or mistyped field becomes null, never 0. */
 export function parseMemory(raw: unknown): MemoryLedgerData {
@@ -54,19 +60,19 @@ export function parseMemory(raw: unknown): MemoryLedgerData {
     mlx = rec(r.mlx),
     limits = rec(r.limits);
   return {
-    total_gb: num(r.total_gb),
-    free_gb: num(r.free_gb),
+    total_gb: gbNum(r.total_gb),
+    free_gb: gbNum(r.free_gb),
     host: {
       pressure_level: str(host.pressure_level),
-      swap_used_gb: num(host.swap_used_gb),
-      swap_total_gb: num(host.swap_total_gb),
-      wired_limit_gb: num(host.wired_limit_gb),
+      swap_used_gb: gbNum(host.swap_used_gb),
+      swap_total_gb: gbNum(host.swap_total_gb),
+      wired_limit_gb: gbNum(host.wired_limit_gb),
     },
     mlx: {
-      active_gb: num(mlx.active_gb),
-      cache_gb: num(mlx.cache_gb),
-      peak_gb: num(mlx.peak_gb),
-      recommended_working_set_gb: num(mlx.recommended_working_set_gb),
+      active_gb: gbNum(mlx.active_gb),
+      cache_gb: gbNum(mlx.cache_gb),
+      peak_gb: gbNum(mlx.peak_gb),
+      recommended_working_set_gb: gbNum(mlx.recommended_working_set_gb),
     },
     owners: (Array.isArray(r.owners) ? r.owners : []).map((o) => {
       const x = rec(o);
@@ -74,16 +80,16 @@ export function parseMemory(raw: unknown): MemoryLedgerData {
         kind: str(x.kind) ?? "other",
         id: str(x.id),
         bytes: num(x.bytes),
-        gb: num(x.gb),
+        gb: gbNum(x.gb),
         reclaimable: x.reclaimable === true,
         estimated: x.estimated === true,
         source: str(x.source),
       };
     }),
-    attribution_overshoot_gb: num(r.attribution_overshoot_gb),
+    attribution_overshoot_gb: gbNum(r.attribution_overshoot_gb),
     limits: {
-      apc_max_gb: num(limits.apc_max_gb),
-      apc_warm_max_gb: num(limits.apc_warm_max_gb),
+      apc_max_gb: gbNum(limits.apc_max_gb),
+      apc_warm_max_gb: gbNum(limits.apc_warm_max_gb),
       guard_margin_pct: num(limits.guard_margin_pct),
     },
   };

@@ -1,3 +1,4 @@
+import { FRESH_ROW, useFreshIds } from "./fresh-rows";
 import { ErrorNote } from "./error-note";
 import { RequestWaterfall } from "./RequestWaterfall";
 import { LatencyDistribution } from "./LatencyDistribution";
@@ -325,6 +326,7 @@ export function Requests({
         });
   const matched = useMemo(() => sortRows(bySpeed, sort), [bySpeed, sort]);
   const shown = matched.slice(0, limit);
+  const fresh = useFreshIds(shown.map((r) => r.id));
   const restore = (e: Event) => {
     if (opener.current?.isConnected) {
       e.preventDefault();
@@ -444,7 +446,8 @@ export function Requests({
   const view =
     (detail &&
       finished.find(
-        (r) => r.id === detail.id && (r.source === "ring" || r.source === "archive"),
+        (r) =>
+          r.id === detail.id && (r.source === "ring" || r.source === "archive"),
       )) ||
     detail;
   const done = view?.phase === "complete";
@@ -693,7 +696,9 @@ export function Requests({
         })}
       </StatGrid>
       {recent.supported && <LatencyDistribution rows={finished} />}
-      {recent.supported && <SpeculationPanel rows={finished} connection={connection} />}
+      {recent.supported && (
+        <SpeculationPanel rows={finished} connection={connection} />
+      )}
       <div className="flex flex-wrap justify-between gap-3">
         <div className="w-full sm:w-auto sm:max-w-xs">
           <Input
@@ -859,9 +864,12 @@ export function Requests({
                           <Tr
                             key={row.id}
                             className={
-                              detail?.id === row.id
-                                ? "bg-accent-subtle"
-                                : undefined
+                              [
+                                detail?.id === row.id ? "bg-accent-subtle" : "",
+                                fresh(row.id) ? FRESH_ROW : "",
+                              ]
+                                .filter(Boolean)
+                                .join(" ") || undefined
                             }
                           >
                             <Td className="whitespace-nowrap tabular-nums max-sm:hidden">

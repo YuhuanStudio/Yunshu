@@ -3,7 +3,16 @@ import { fixed, number } from "./i18n/format.ts";
 const UNITS = ["B", "KB", "MB", "GB", "TB"] as const; // i18n-ignore
 const MISSING = Object.freeze({ value: "—", unit: "" });
 
-/** Decimal byte size split into number and unit, so the unit can sit smaller after the number. */
+/**
+ * Memory and file sizes use binary units labelled "GB"/"MB" (1024-based), as macOS, Activity Monitor and
+ * Apple spec sheets do: a 128 GiB machine reads "128 GB", never "137 GB". The engine reports
+ * decimal gigabytes in its `*_gb` fields; `binaryGb` converts them once, at the parse boundary.
+ */
+export const BINARY_GB_PER_DECIMAL_GB = 1e9 / 2 ** 30;
+export const binaryGb = (decimalGb: number): number =>
+  decimalGb * BINARY_GB_PER_DECIMAL_GB;
+
+/** Byte size (1024-based, labelled KB/MB/GB) split into number and unit, so the unit can sit smaller after the number. */
 export function splitBytes(v: number | null | undefined): {
   value: string;
   unit: string;
@@ -11,8 +20,8 @@ export function splitBytes(v: number | null | undefined): {
   if (v == null || !Number.isFinite(v) || v < 0) return MISSING;
   let n = v,
     i = 0;
-  while (n >= 1000 && i < UNITS.length - 1) {
-    n /= 1000;
+  while (n >= 1024 && i < UNITS.length - 1) {
+    n /= 1024;
     i++;
   }
   return {

@@ -17,6 +17,7 @@ import {
   Info,
   type LucideIcon,
 } from "lucide-react";
+import { FRESH_ROW, useFreshIds } from "./fresh-rows";
 import { NOTIF_HREF, type NotifTone } from "./notifications";
 import { describeNotification } from "./notification-text";
 import { relative } from "./i18n/format.ts";
@@ -34,6 +35,7 @@ const TONES: Record<NotifTone, { icon: LucideIcon; tint: string }> = {
 export function NotificationCenter() {
   useLocale();
   const { notifications, unread, markRead, clearAll } = useSignals();
+  const fresh = useFreshIds(notifications.map((n) => n.id));
   const [open, setOpen] = useState(false);
   const anchor = useRef<HTMLSpanElement>(null);
   const change = (next: boolean) => {
@@ -100,6 +102,7 @@ export function NotificationCenter() {
             return (
               <NotificationItem
                 key={n.id}
+                className={fresh(n.id) ? FRESH_ROW : undefined}
                 icon={<Icon size={14} />}
                 iconClassName={tint}
                 title={title}

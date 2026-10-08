@@ -1,4 +1,5 @@
 import { requestJson, type Connection } from "./api.ts";
+import { binaryGb } from "./byte-format.ts";
 import type { SeriesPoint } from "./series.ts";
 
 export interface ServerHistory {
@@ -8,6 +9,11 @@ export interface ServerHistory {
 
 const num = (v: unknown): number | null =>
   typeof v === "number" && Number.isFinite(v) ? v : null;
+
+const gbOf = (v: unknown): number | null => {
+  const n = num(v);
+  return n == null ? null : binaryGb(n);
+};
 
 /**
  * Parse `GET /v1/yunshu/history` (columnar rows, epoch seconds). Anything that
@@ -49,8 +55,8 @@ export function parseServerHistory(payload: unknown): ServerHistory | null {
       queued: num(queued[i]),
       prefillRequests: null,
       decodeRequests: null,
-      memActive: num(memActive[i]),
-      memCache: num(memCache[i]),
+      memActive: gbOf(memActive[i]),
+      memCache: gbOf(memCache[i]),
       backfilled: true,
     });
   }

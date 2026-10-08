@@ -15,7 +15,7 @@ const status = (tps: number | null) => ({
       pinned: false,
     },
   ],
-  memory: { active_gb: 12, cache_gb: 2, peak_gb: 14, total_gb: 64 },
+  memory: { active_gb: 12, cache_gb: 2, peak_gb: 14, total_gb: 137.438953472 },
   requests: {
     active: tps ? 1 : 0,
     queued: 0,
@@ -146,4 +146,17 @@ test("a nav row goes to the page and closes the island", async ({ page }) => {
     .click();
   await expect(page.getByRole("dialog", { name: "引擎狀態" })).toBeHidden();
   await expect(page).toHaveURL(/#\/diagnostics/);
+});
+
+test("a 128 GiB machine shows 128 GB, never 137 GB (binary units, as macOS)", async ({
+  page,
+}) => {
+  await install(page, false);
+  await page.goto("/console/#/overview");
+  await expect(page.getByTestId("status-band")).toContainText("128 GB");
+  await expect(page.getByTestId("status-band")).not.toContainText("137");
+  await trigger(page).click();
+  const memory = page.getByTestId("island-memory");
+  await expect(memory).toContainText("/128");
+  await expect(memory).not.toContainText("137");
 });

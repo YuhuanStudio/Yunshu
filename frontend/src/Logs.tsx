@@ -1,3 +1,4 @@
+import { FRESH_ROW, useFreshIds } from "./fresh-rows";
 import {
   useCallback,
   useEffect,
@@ -100,6 +101,7 @@ export default function Logs({ connection }: { connection: Connection }) {
   // a side effect inside a state updater would run twice under StrictMode.
   const recordsRef = useRef<LogRecord[]>([]);
   recordsRef.current = records;
+  const fresh = useFreshIds(records.map((r) => String(r.id)));
   const append = useCallback((incoming: LogRecord[]) => {
     if (!incoming.length) return;
     const prev = recordsRef.current;
@@ -411,7 +413,7 @@ export default function Logs({ connection }: { connection: Connection }) {
             {records.map((r) => (
               <div
                 key={r.id}
-                className="group flex flex-wrap items-baseline gap-x-3 px-4 py-1 text-xs hover:bg-muted/40"
+                className={`group flex flex-wrap items-baseline gap-x-3 px-4 py-1 text-xs hover:bg-muted/40 ${fresh(String(r.id)) ? FRESH_ROW : ""}`}
               >
                 <span className="w-[6.75rem] shrink-0 tabular-nums text-muted-foreground">
                   {stamp(r)}

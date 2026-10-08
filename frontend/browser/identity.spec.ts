@@ -31,7 +31,7 @@ const ledgerA = {
   object: "yunshu.memory",
   total_gb: 64,
   free_gb: 2,
-  host: { pressure_level: "critical", swap_used_gb: 17.3 },
+  host: { pressure_level: "critical", swap_used_gb: 18.5753 },
   mlx: {
     active_gb: 10,
     cache_gb: 1,

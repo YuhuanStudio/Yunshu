@@ -170,6 +170,7 @@ const shell: Shape<typeof zh> = {
   "keys.item.stop": "Stop generating (Playground)",
   "keys.item.send": "Send the prompt (Playground)",
   "engine.live.loading": "Loading",
+  "island.trigger": "Open status panel",
   "island.overview": "Overview",
   "island.version": "yunshu {version} · up {uptime}",
   "island.noModel": "No model loaded",

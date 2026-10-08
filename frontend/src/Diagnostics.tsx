@@ -90,7 +90,7 @@ const metric = (value: unknown) =>
   typeof value === "number" && Number.isFinite(value) ? value : undefined;
 const gb = (value: unknown) => {
   const n = metric(value);
-  return n == null ? undefined : n / 1e9;
+  return n == null ? undefined : n / 2 ** 30;
 };
 type Health = {
   key: string;
@@ -793,7 +793,7 @@ export function Diagnostics({
                                     ? undefined
                                     : Number(
                                         at(cache, "apc", "resident_bytes"),
-                                      ) / 1e6,
+                                      ) / 2 ** 20,
                                 )}{" "}
                                 MB
                               </Td>
@@ -802,7 +802,7 @@ export function Diagnostics({
                                   metric(at(cache, "apc", "disk_bytes")) == null
                                     ? undefined
                                     : Number(at(cache, "apc", "disk_bytes")) /
-                                        1e6,
+                                        2 ** 20,
                                 )}{" "}
                                 MB
                               </Td>

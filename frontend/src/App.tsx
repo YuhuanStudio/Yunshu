@@ -15,6 +15,7 @@ import {
   StatusIndicator,
   useCommandPaletteShortcut,
   type CommandPaletteItem,
+  ScrollFade,
 } from "@yuhuanowo/yunui";
 import { Banner, Sidebar } from "@yuhuanowo/yunui/patterns";
 import { YunUIProvider } from "@yuhuanowo/yunui/adapters";
@@ -786,8 +787,14 @@ export default function App() {
                       initialModel={testModel}
                     />
                   ) : (
-                    <div className="relative min-h-0 flex-1 overflow-y-scroll p-4 pb-6 [scrollbar-gutter:stable] lg:p-6">
-                      <div className="mx-auto w-full max-w-7xl">
+                    <ScrollFade
+                      data-testid="page-scroll"
+                      className="relative min-h-0 flex-1 overflow-y-scroll p-4 pb-6 [scrollbar-gutter:stable] lg:p-6"
+                    >
+                      <div
+                        key={page}
+                        className="yunui-fade-in mx-auto w-full max-w-7xl"
+                      >
                         {page === "diagnostics" && (
                           <Diagnostics
                             connection={connection}
@@ -846,7 +853,7 @@ export default function App() {
                           <Downloads connection={connection} engine={engine} />
                         )}
                       </div>
-                    </div>
+                    </ScrollFade>
                   )}
                 </Suspense>
               </div>

@@ -162,6 +162,7 @@ const shell = {
   "keys.item.stop": "停止生成（推理測試）",
   "keys.item.send": "送出提示詞（推理測試）",
   "engine.live.loading": "載入中",
+  "island.trigger": "開啟狀態面板",
   "island.overview": "總覽",
   "island.version": "yunshu {version} · 已運作 {uptime}",
   "island.noModel": "尚未載入模型",

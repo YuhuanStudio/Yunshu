@@ -93,11 +93,11 @@ export function FooterStatus({
   if (wide)
     return (
       <>
-        <div className="shrink-0 px-4 pb-3 pt-1 lg:px-6">
+        <div className="shrink-0 px-4 lg:px-6">
           <div className="relative w-fit max-w-full">
             <StatusPillBar
               ariaLabel={t("shell.footer.ariaLabel")}
-              className="p-0"
+              className="px-0"
             >
               {pills.map((p) => (
                 <StatusPill
@@ -118,9 +118,9 @@ export function FooterStatus({
               }}
               aria-haspopup="dialog"
               aria-expanded={open}
-              aria-label={t("shell.footer.sheetTitle")}
+              aria-label={t("shell.island.trigger")}
               data-testid="footer-trigger"
-              className="absolute -inset-1 rounded-2xl outline-none transition-colors hover:bg-foreground/[0.04] focus-visible:outline-2 focus-visible:outline-(--color-accent)"
+              className="absolute inset-0 rounded-2xl outline-none transition-colors hover:bg-foreground/[0.04] focus-visible:outline-2 focus-visible:outline-(--color-accent)"
               onClick={toggle}
             />
           </div>

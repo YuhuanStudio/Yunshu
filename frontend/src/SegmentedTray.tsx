@@ -36,6 +36,7 @@ export function SegmentedTray<T extends string = string>({
       className={cn(fillOnPhone && "max-sm:w-full", className)}
     >
       <TabsList
+        indicator
         aria-label={ariaLabel}
         className={cn(
           "h-8 flex-wrap gap-0.5 rounded-lg bg-(--tray-track) p-0.5",
@@ -49,7 +50,7 @@ export function SegmentedTray<T extends string = string>({
             className={cn(
               "h-7 gap-1.5 rounded-md px-2.5 py-0 text-xs",
               fillOnPhone && "max-sm:flex-1",
-              "data-[state=active]:bg-(--tray-selected) data-[state=active]:text-foreground data-[state=active]:shadow-none data-[state=active]:ring-1 data-[state=active]:ring-(--tray-selected-ring)",
+              "data-[state=active]:bg-transparent data-[state=active]:text-foreground data-[state=active]:shadow-none",
               "data-[state=inactive]:text-muted-foreground",
             )}
           >

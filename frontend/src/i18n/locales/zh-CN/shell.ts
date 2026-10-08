@@ -164,6 +164,7 @@ const shell: Shape<typeof zh> = {
   "keys.item.stop": "停止生成（推理测试）",
   "keys.item.send": "发送提示词（推理测试）",
   "engine.live.loading": "加载中",
+  "island.trigger": "打开状态面板",
   "island.overview": "总览",
   "island.version": "yunshu {version} · 已运行 {uptime}",
   "island.noModel": "尚未加载模型",

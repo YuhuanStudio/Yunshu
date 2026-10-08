@@ -1,3 +1,4 @@
+import { binaryGb } from "./byte-format.ts";
 import { failureMessage, statusMessage } from "./errors.ts";
 import { t } from "./i18n/index.ts";
 /** Small, typed client for Yunshu's same-origin `/v1` control/status routes. */
@@ -425,6 +426,7 @@ function validateMemory(value: Record<string, unknown>): EngineMemoryStatus {
   const memory: Record<string, unknown> = { ...value };
   for (const field of fields) {
     if (!isFiniteNumber(value[field])) delete memory[field];
+    else if (field !== "pressure") memory[field] = binaryGb(value[field]);
   }
   return memory as EngineMemoryStatus;
 }
@@ -467,7 +469,9 @@ export function parseEngineStatus(value: unknown): EngineStatus {
       const raw = model[field];
       if (raw === undefined) continue;
       optional[field] = isFiniteNumber(raw)
-        ? raw
+        ? field === "size_gb"
+          ? binaryGb(raw)
+          : raw
         : field === "size_gb"
           ? undefined
           : null;

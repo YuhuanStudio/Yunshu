@@ -166,7 +166,7 @@ test("patterns split on commas and newlines; the repo id must be org/name", () =
 });
 
 test("bytes: unit split off the number, unknown is a dash", () => {
-  assert.deepEqual(splitBytes(1_500_000_000), { value: "1.5", unit: "GB" });
+  assert.deepEqual(splitBytes(1.5 * 1024 ** 3), { value: "1.5", unit: "GB" });
   assert.deepEqual(splitBytes(null), { value: "—", unit: "" });
   assert.equal(rateText(null), "—");
 });
