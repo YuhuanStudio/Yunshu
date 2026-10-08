@@ -26,7 +26,7 @@ import re
 import time
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
-from typing import Any
+from typing import Any, cast
 
 from fastapi.responses import JSONResponse, StreamingResponse
 
@@ -61,7 +61,7 @@ def _new_id(prefix: str) -> str:
 
 def _dump(t: Any) -> dict:
     if hasattr(t, "model_dump"):
-        return t.model_dump(exclude_none=True)
+        return cast(dict, t.model_dump(exclude_none=True))
     return dict(t)
 
 
@@ -137,7 +137,7 @@ def input_item_to_messages(item: dict, texts: dict | None = None) -> list[dict]:
                 if isinstance(s, dict) and s.get("url")
             ]
             if urls:
-                res += "\nSources:\n" + "\n".join(urls)
+                res += "\nSources:\n" + "\n".join(cast(list[str], urls))
         args = {"action": action.get("type", "search")}
         args.update({k: action[k] for k in ("query", "url", "pattern") if k in action})
         return pair("web_search", json.dumps(args, ensure_ascii=False), res)
@@ -177,7 +177,7 @@ def input_item_to_messages(item: dict, texts: dict | None = None) -> list[dict]:
         ]
     if ty in ("local_shell_call", "tool_search_call"):
         name = "local_shell" if ty == "local_shell_call" else "tool_search"
-        tool_args = (
+        call_args = (
             item.get("action") if ty == "local_shell_call" else item.get("arguments")
         )
         return [
@@ -190,7 +190,7 @@ def input_item_to_messages(item: dict, texts: dict | None = None) -> list[dict]:
                         "type": "function",
                         "function": {
                             "name": name,
-                            "arguments": _json_text(tool_args or {}),
+                            "arguments": _json_text(call_args or {}),
                         },
                     }
                 ],
@@ -219,7 +219,9 @@ def input_item_to_messages(item: dict, texts: dict | None = None) -> list[dict]:
 
 
 # ── errors ────────────────────────────────────────────────────────────────────
-def _err(status: int, msg: str, code: str | None = None, param: str | None = None):
+def _err(
+    status: int, msg: str, code: str | None = None, param: str | None = None
+) -> JSONResponse:
     return JSONResponse(
         status_code=status,
         content={
@@ -435,7 +437,7 @@ class _Run:
         self.created_at = int(time.time())
         self.seq = -1
         self.output: list[dict] = []
-        self.usage = {
+        self.usage: dict[str, Any] = {
             "input_tokens": 0,
             "output_tokens": 0,
             "total_tokens": 0,
