@@ -891,6 +891,140 @@ def _conversations(c: Ctx):
 
 
 @check(
+    "chat_stored_completions",
+    "GET /v1/chat/completions",
+    "GET /v1/chat/completions/{completion_id}",
+    "POST /v1/chat/completions/{completion_id}",
+    "DELETE /v1/chat/completions/{completion_id}",
+    "GET /v1/chat/completions/{completion_id}/messages",
+    served=True,
+)
+def _chat_stored(c: Ctx):
+    tag = f"routes-{int(time.time())}"
+    msgs = [{"role": "user", "content": "Say hi in three words."}]
+    r = c.oa.chat.completions.create(
+        model=c.model, messages=msgs, max_tokens=24, store=True, metadata={"tag": tag}
+    )
+    got = c.oa.chat.completions.retrieve(r.id)
+    expect(got.id == r.id and got.metadata == {"tag": tag}, f"retrieve {got.id} {got.metadata}")
+    expect(
+        got.choices[0].message.content == r.choices[0].message.content
+        and got.usage.total_tokens == r.usage.total_tokens,
+        "stored completion differs from the one returned",
+    )
+    stream = c.oa.chat.completions.create(
+        model=c.model,
+        messages=msgs,
+        max_tokens=24,
+        stream=True,
+        store=True,
+        metadata={"tag": tag},
+    )
+    text, sid = "", None
+    for ch in stream:
+        sid = ch.id
+        if ch.choices and ch.choices[0].delta.content:
+            text += ch.choices[0].delta.content
+    sgot = c.oa.chat.completions.retrieve(sid)
+    expect(
+        (sgot.choices[0].message.content or "") == text,
+        f"stored stream {sgot.choices[0].message.content!r} != streamed {text!r}",
+    )
+    listed = [x.id for x in c.oa.chat.completions.list(metadata={"tag": tag}, order="asc")]
+    expect(listed == [r.id, sid], f"list by metadata {listed}")
+    pm = list(c.oa.chat.completions.messages.list(r.id))
+    expect(
+        len(pm) == 1 and pm[0].role == "user" and pm[0].content == msgs[0]["content"],
+        f"messages {pm}",
+    )
+    up = c.oa.chat.completions.update(r.id, metadata={"tag": tag, "x": "1"})
+    expect(up.metadata == {"tag": tag, "x": "1"}, f"update {up.metadata}")
+    plain = c.oa.chat.completions.create(model=c.model, messages=msgs, max_tokens=8)
+    miss = c.req("GET", f"/v1/chat/completions/{plain.id}")
+    err_ok(miss, "openai")
+    expect(miss.status_code == 404, f"unstored completion -> {miss.status_code}")
+    for cid in (r.id, sid):
+        d = c.oa.chat.completions.delete(cid)
+        expect(d.deleted is True and d.id == cid, f"delete {d}")
+    gone = c.req("GET", f"/v1/chat/completions/{r.id}")
+    expect(gone.status_code == 404, f"deleted -> {gone.status_code}")
+
+
+@check(
+    "realtime_client_secrets",
+    "POST /v1/realtime/client_secrets",
+    "POST /v1/realtime/sessions",
+    "POST /v1/realtime/transcription_sessions",
+    served=True,
+)
+def _realtime_secrets(c: Ctx):
+    from websockets.sync.client import connect
+
+    sec = c.oa.realtime.client_secrets.create(
+        expires_after={"anchor": "created_at", "seconds": 300},
+        session={
+            "type": "realtime",
+            "model": c.model,
+            "instructions": "Reply briefly.",
+            "output_modalities": ["text"],
+        },
+    )
+    expect(sec.value.startswith("ek_") and sec.session.type == "realtime", f"secret {sec}")
+    expect(sec.session.instructions == "Reply briefly.", "session config not echoed")
+    # the ephemeral secret, not the static key, opens the socket and carries its session
+    with connect(
+        c.ws_url("/v1/realtime") + f"?model={c.model}",
+        additional_headers={"Authorization": f"Bearer {sec.value}"},
+        open_timeout=30,
+        max_size=None,
+    ) as ws:
+        first = json.loads(ws.recv(timeout=30))
+        expect(first.get("type") == "session.created", f"first event {first.get('type')}")
+        expect(first["session"]["id"] == sec.session.id, "session id differs from the secret's")
+        expect(first["session"]["instructions"] == "Reply briefly.", "secret session not applied")
+        ws.send(
+            json.dumps(
+                {
+                    "type": "conversation.item.create",
+                    "item": {
+                        "type": "message",
+                        "role": "user",
+                        "content": [{"type": "input_text", "text": "Say hi."}],
+                    },
+                }
+            )
+        )
+        ws.send(json.dumps({"type": "response.create"}))
+        evs = _ws_events(ws, lambda e: e.get("type") in ("response.done", "error"), timeout=240)
+        expect(evs[-1]["type"] == "response.done", f"secret turn ended with {evs[-1]['type']}")
+    if c.token:
+        bad = None
+        try:
+            with connect(
+                c.ws_url("/v1/realtime") + f"?model={c.model}",
+                additional_headers={"Authorization": "Bearer ek_not-a-real-secret"},
+                open_timeout=30,
+            ) as ws2:
+                bad = ws2.recv(timeout=5)
+        except Exception:
+            bad = None
+        expect(bad is None, f"an unknown ek_ secret was accepted: {bad}")
+    s = c.oa.beta.realtime.sessions.create(model=c.model, instructions="hi", modalities=["text"])
+    expect(s.client_secret.value.startswith("ek_") and s.modalities == ["text"], f"sessions {s}")
+    t = c.oa.beta.realtime.transcription_sessions.create(
+        input_audio_transcription={"model": "whisper-1"}
+    )
+    expect(t.client_secret.value.startswith("ek_"), f"transcription_sessions {t}")
+    bad_ttl = c.req(
+        "POST",
+        "/v1/realtime/client_secrets",
+        json={"expires_after": {"anchor": "created_at", "seconds": 1}},
+    )
+    err_ok(bad_ttl, "openai")
+    expect(bad_ttl.status_code == 400, f"ttl 1 -> {bad_ttl.status_code}")
+
+
+@check(
     "responses_lifecycle",
     "POST /v1/responses",
     "GET /v1/responses/{response_id}",

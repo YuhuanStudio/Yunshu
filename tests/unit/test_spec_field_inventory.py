@@ -38,8 +38,6 @@ ACCEPTED_IGNORED = {
         "audio": "audio output modality (use /v1/audio/speech or Realtime)",
         "modalities": "text only",
         "prediction": "predicted outputs: no local speed-up path",
-        "store": HOSTED,
-        "metadata": HOSTED,
         "service_tier": HOSTED,
         "moderation": HOSTED,
         "safety_identifier": HOSTED,

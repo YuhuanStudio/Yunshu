@@ -9,7 +9,8 @@ set -eu
 REF="${1:-HEAD}"
 SRC="$(cd "$(dirname "$0")/../.." && pwd)"
 SHA="$(git -C "$SRC" rev-parse "$REF")"
-WORK="${TMPDIR:-/tmp}/yunshu-ci-local-$(echo "$SHA" | cut -c1-12)"
+# Short path on purpose: AF_UNIX socket paths cap at 104 bytes on macOS and the runner's TMPDIR is short.
+WORK="/tmp/ycl-$(echo "$SHA" | cut -c1-8)"
 rm -rf "$WORK"
 git clone -q --no-hardlinks "$SRC" "$WORK"
 git -C "$WORK" checkout -q "$SHA"
@@ -19,20 +20,50 @@ if [ -n "$TAG" ]; then
   grep -q "^## \[${TAG#v}\]" CHANGELOG.md || { echo "ci-local: CHANGELOG has no [${TAG#v}] section"; exit 1; }
 fi
 uv python install 3.13 >/dev/null
-UV_PROJECT_ENVIRONMENT="$WORK/.venv" uv sync -q --dev --extra vision --extra compression
-uv run ruff check python/ tests/
+UV_PROJECT_ENVIRONMENT="$WORK/.venv" uv sync -q --python 3.13 --dev --extra vision --extra compression
+uv run --python 3.13 ruff check python/ tests/
 PROFILE="$WORK/ci.sb"
 cat > "$PROFILE" <<EOF
 (version 1)
 (allow default)
 (deny file-read* file-write* (subpath "/Volumes/P5Plus"))
 (deny file-read* file-write* (subpath "$SRC"))
+; setuid binaries (ps) cannot exec inside any sandbox profile; the runner has them, so run them unsandboxed.
+(allow process-exec* (with no-sandbox) (literal "/bin/ps"))
 EOF
 # HOME is a throwaway dir too: the runner has no ~/.yunshu, model caches or agent configs.
 CIHOME="$WORK/home"
 mkdir -p "$CIHOME"
-sandbox-exec -f "$PROFILE" env -u YV_PY -u YV_ROOT -u YUNSHU_MAIN HOME="$CIHOME" \
-  "$WORK/.venv/bin/python" -m pytest tests/unit -q --tb=short -p no:cacheprovider
+mkdir -p "$CIHOME/tmp" "$CIHOME/shim"
+# The sandbox answers EPERM where the runner answers ENOENT (the paths do not exist there), and
+# Python 3.13's Path.exists() raises on EPERM. Report ENOENT for the denied roots, as on the runner.
+cat > "$CIHOME/shim/sitecustomize.py" <<PYEOF
+import os, sys
+_deny = ("/Volumes/P5Plus", "$SRC")
+_stat, _lstat = os.stat, os.lstat
+def _wrap(fn):
+    def inner(path, *a, **k):
+        try:
+            return fn(path, *a, **k)
+        except PermissionError:
+            if isinstance(path, (str, bytes, os.PathLike)) and os.fspath(path) and str(os.fspath(path)).startswith(_deny):
+                raise FileNotFoundError(2, "No such file or directory", os.fspath(path)) from None
+            raise
+    return inner
+# Only 3.13+ raises on EPERM in Path.exists(); older interpreters (system python3 in the tool
+# tests' subprocesses) bind os.stat as a pathlib accessor method, which a Python wrapper breaks.
+if sys.version_info >= (3, 13):
+    os.stat, os.lstat = _wrap(_stat), _wrap(_lstat)
+PYEOF
+# The sandboxed suite writes its output inside $WORK: if the caller redirected stdout to a denied
+# path (e.g. a log on /Volumes/P5Plus), every write would fail and pytest would exit 120 silently.
+set +e
+sandbox-exec -f "$PROFILE" env -u YV_PY -u YV_ROOT -u YUNSHU_MAIN -u VIRTUAL_ENV PYTHONPATH="$CIHOME/shim" TMPDIR="$CIHOME/tmp" HOME="$CIHOME" \
+  "$WORK/.venv/bin/python" -m pytest tests/unit -q --tb=short -p no:cacheprovider > "$WORK/pytest.log" 2>&1
+rc=$?
+set -e
+cat "$WORK/pytest.log"
+[ "$rc" -eq 0 ] || { echo "ci-local: FAIL (pytest rc $rc) $SHA"; exit "$rc"; }
 uv build -q
 uvx -q twine check dist/*
 echo "ci-local: PASS $SHA ($WORK)"

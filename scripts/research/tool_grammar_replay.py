@@ -32,7 +32,6 @@ import contextlib
 import json
 import os
 import signal
-import socket
 import subprocess
 import sys
 import tempfile
@@ -41,23 +40,16 @@ import urllib.request
 from pathlib import Path
 
 MARKERS = ("<tool_call>", "</tool_call>", "<function=", "<parameter=", "</function>")
-PORTS = range(18990, 19000)
 
-
-def free_port() -> int:
-    for port in PORTS:
-        with socket.socket() as s:
-            try:
-                s.bind(("127.0.0.1", port))
-            except OSError:
-                continue
-        return port
-    raise RuntimeError("no free port in 18990-18999")
+sys.path.insert(0, str(Path(__file__).resolve().parent / "agentic"))
+from servers import free_ports  # noqa: E402  waits for a free pool port (26d58d83)
 
 
 class Server:
-    def __init__(self, checkpoint: str, src: str | None, env: dict, log: Path):
-        self.port = free_port()
+    def __init__(
+        self, checkpoint: str, src: str | None, env: dict, log: Path, port: int
+    ):
+        self.port = port
         self.url = f"http://127.0.0.1:{self.port}"
         self.log = log
         py = os.environ.get("YUNSHU_PY")
@@ -106,6 +98,36 @@ class Server:
                 self.proc.kill()
             with contextlib.suppress(Exception):
                 self.proc.wait(timeout=30)
+
+
+def start_server(
+    checkpoint: str,
+    src: str | None,
+    env: dict,
+    log: Path,
+    attempts: int = 3,
+    make=Server,
+    **port_kw,
+):
+    """Wait for a free pool port (it is shared with other gpuq jobs), start the server there, and
+    when another process took the port between probe and bind ("address already in use" in the
+    server log) pick another port and retry."""
+    lost: set[int] = set()
+    for attempt in range(1, attempts + 1):
+        (port,) = free_ports(1, skip=frozenset(lost), **port_kw)
+        size = log.stat().st_size if log.exists() else 0
+        try:
+            return make(checkpoint, src, env, log, port)
+        except RuntimeError:
+            tail = ""
+            with contextlib.suppress(OSError), log.open("rb") as f:
+                f.seek(size)
+                tail = f.read().decode(errors="replace")
+            if attempt == attempts or "address already in use" not in tail:
+                raise
+            lost.add(port)
+            print(f"port {port} lost a bind race; retrying ({attempt}/{attempts})")
+    raise AssertionError("unreachable")
 
 
 def stream_reply(url: str, body: dict) -> dict:
@@ -228,7 +250,7 @@ def main():
     )
     a = ap.parse_args()
     env = dict(kv.split("=", 1) for kv in a.env)
-    srv = Server(a.checkpoint, a.src, env, Path(a.log))
+    srv = start_server(a.checkpoint, a.src, env, Path(a.log))
     out = Path(a.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     totals = dict(replies=0, tool_use=0, malformed=0, leaked=0, dropped=0, errors=0)

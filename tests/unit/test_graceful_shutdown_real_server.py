@@ -17,16 +17,12 @@ import httpx
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def _pick_port():
-    for port in range(18990, 19000):
-        with socket.socket() as probe:
-            probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            try:
-                probe.bind(("127.0.0.1", port))
-            except OSError:
-                continue
-        return port
-    raise RuntimeError("no free shutdown-test port in 18990..18999")
+def _pick_port() -> int:
+    # CPU-only fixture: avoid the GPU server pool.
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        return probe.getsockname()[1]
+
 
 
 def test_graceful_shutdown_timeout_values():
@@ -162,3 +158,7 @@ def test_start_rejects_a_foreign_listener(monkeypatch):
     monkeypatch.setattr(time, "sleep", lambda _: None)
     with pytest.raises(AssertionError, match="bind failed"):
         _start("0")
+
+
+def test_port_is_outside_the_shared_server_pool():
+    assert not 18990 <= _pick_port() <= 18999
