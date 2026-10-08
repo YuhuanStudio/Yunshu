@@ -4,28 +4,41 @@ import type { ReactNode } from "react";
 import "../globals.css";
 import { Providers } from "@/components/providers";
 import { defineI18nUI } from "fumadocs-ui/i18n";
-import { LANGS, LANG_NAMES, i18n, isLang, type Lang } from "@/lib/i18n";
+import { i18n } from "@/lib/i18n";
+import { LANGS, LANG_NAMES, isLang, type Lang } from "@/lib/i18n";
 import { asset } from "@/lib/site";
 import { MESSAGES } from "@/lib/messages";
 
 const geistSans = Geist({ variable: "--font-geist-sans", subsets: ["latin"] });
 const geistMono = Geist_Mono({ variable: "--font-geist-mono", subsets: ["latin"] });
 
-const { provider } = defineI18nUI(i18n, Object.fromEntries(
+const translations = Object.fromEntries(
   LANGS.map((l) => {
     const m = MESSAGES[l];
-    return [l, {
-      displayName: LANG_NAMES[l],
-      search: m.search,
-      searchNoResult: m.searchNoResult,
-      toc: m.toc,
-      nextPage: m.next,
-      previousPage: m.previous,
-      chooseTheme: m.theme,
-      chooseLanguage: m.language,
-    }];
+    return [
+      l,
+      {
+        displayName: LANG_NAMES[l],
+        "Search(search dialog)": m.search.replace("...", ""),
+        "Search(search trigger)": m.search.replace("...", ""),
+        "No results found(search dialog)": m.searchNoResult,
+        "On this page(table of contents)": m.toc,
+        "Table of Contents(inline table of contents)": m.toc,
+        "Next Page(pagination)": m.next,
+        "Previous Page(pagination)": m.previous,
+        "Choose a language(language switcher)": m.language,
+        "Choose a language(language switcher)(aria-label)": m.language,
+        "Copy Markdown(page actions)": m.copyMd,
+        "Copied Markdown(page actions)": m.copiedMd,
+        "Open in GitHub(page actions)": m.openGithub,
+        "Page Not Found(404 page)": m.notFound,
+        "Back to Home(404 page)": m.backHome,
+      },
+    ];
   }),
-) as Record<Lang, never>);
+) as Record<Lang, never>;
+
+const { provider } = defineI18nUI(i18n, translations);
 
 export const dynamicParams = false;
 

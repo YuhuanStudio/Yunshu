@@ -9,7 +9,9 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def _load(name: str):
-    spec = importlib.util.spec_from_file_location(name, ROOT / "site" / "scripts" / f"{name}.py")
+    spec = importlib.util.spec_from_file_location(
+        name, ROOT / "site" / "scripts" / f"{name}.py"
+    )
     assert spec and spec.loader
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)

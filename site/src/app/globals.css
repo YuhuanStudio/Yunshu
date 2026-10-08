@@ -13,3 +13,8 @@
 :root:not(.dark) {
   --color-fd-muted-foreground: #525252;
 }
+
+/* Inline code may wrap on phones instead of being clipped at the column edge. */
+:not(pre) > code {
+  overflow-wrap: anywhere;
+}
