@@ -104,3 +104,12 @@ The build ships YunUI's license, upstream notices and retained Beautiful UI MIT
 text under `console_static/licenses/yunui/`; Vite generates the bundled dependency
 license catalogue at `console_static/licenses/bundled-dependencies.md`. The local
 Geist and JetBrains Mono font assets carry their OFL texts under `console_static/fonts/`.
+
+## mflux — independent image reference probe
+
+The priorfix_mflux_reference probe uses the unchanged loader cache, HF mapper
+and weight applier APIs of mflux-community/mflux (MIT, reviewed commit
+465df30a3965b38c9c64fa853e26df140ddd5c55). The probe decodes downloaded diffusers
+affine4 tensors before mapping; its reference uses floating arithmetic. No mflux
+source is copied and the serving engine does not import this bridge.
+https://github.com/mflux-community/mflux

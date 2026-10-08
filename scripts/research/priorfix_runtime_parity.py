@@ -257,15 +257,16 @@ def diffusion():
     import mlx.core as mx
     from mflux.models.common.config.config import Config
     from mflux.models.common.config.model_config import ModelConfig
-    from mflux.models.z_image.variants.z_image import ZImage
     from PIL import Image
+    from priorfix_mflux_reference import checkpoint_contract, load_reference
 
     from yunshu_engine.image_engine import ImageGenEngine, _compute_sigmas
 
     path = "/Volumes/P5Plus/models/Z-Image-Turbo-MLX-4bit"
+    checkpoint_contract(path)
     ours = ImageGenEngine(path)
     ours.load()
-    upstream = ZImage(model_path=path)
+    upstream, reference_format = load_reference(path)
     config = Config(
         width=256,
         height=256,
@@ -304,6 +305,7 @@ def diffusion():
         )
     return {
         "passed": True,
+        "reference_format": reference_format,
         "scheduler_equal": exact(a, b),
         "seeds": rows,
         "output_parity": all(r["pixel_equal"] for r in rows),

@@ -49,14 +49,15 @@ def run(args):
     import math
 
     import numpy as np
-    from mflux.models.z_image.variants.z_image import ZImage
     from PIL import Image
+    from priorfix_mflux_reference import checkpoint_contract, load_reference
 
     from yunshu_engine.image_engine import ImageGenEngine
 
+    checkpoint_contract(args.model)
     ours = ImageGenEngine(args.model)
     ours.load()
-    mflux = ZImage(model_path=args.model)
+    mflux, reference_format = load_reference(args.model)
     prompt = "A red ball on a white table."
     rows, images = [], {}
     for rep, arm in plan():
@@ -85,6 +86,7 @@ def run(args):
         "passed": True,
         "device": "M5",
         "rows": rows,
+        "reference_format": reference_format,
         "output_pixel_rmse": float(
             np.mean((images["ours"] - images["mflux"]) ** 2) ** 0.5
         ),

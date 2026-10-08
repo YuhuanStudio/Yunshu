@@ -67,3 +67,12 @@ admission. Both arms materialize PNGs at 256px / 2 steps / seed 7; loading is
 excluded. Results report medians, output difference and the exact workload, not
 a default-changing speed verdict. The CPU validator rejects incomplete pairs,
 mixed devices and non-finite times.
+
+The andrevp diffusers affine4 checkpoint has no mflux safetensors metadata. The
+reviewed mflux HF mapping drops its scales/biases, leaving packed projection words
+in ordinary Linear modules. The independent probe therefore validates the complete
+affine tensor triplets and Qwen projection dimensions on CPU, then decodes weights
+before the unchanged mflux HF mapper/applier. Packed pad tokens are decoded too.
+Evidence explicitly labels this as a floating reference with a format bridge;
+it is not native mflux quantized loading or a lossless serving replacement. The
+bridge is isolated to research scripts and changes no serving defaults.

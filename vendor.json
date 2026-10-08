@@ -1104,6 +1104,21 @@
       "local_changes": [
         "only the public design of oMLX PR #4315 (a /v1/systemone route next to a decision engine for Clef) informed this; its code was NOT read. License checked: Apache-2.0, same as the oMLX files already vendored. Wire formats come from openai-python 3.26 types and TypeSafe's published System One docs"
       ]
+    },
+    {
+      "kind": "inspired",
+      "path": "scripts/research/priorfix_mflux_reference.py",
+      "repo": "https://github.com/mflux-community/mflux",
+      "clone": "reference/mflux",
+      "commit": "465df30a3965b38c9c64fa853e26df140ddd5c55",
+      "license": "MIT",
+      "upstream_paths": [
+        "src/mflux/models/common/weights/loading/weight_loader.py",
+        "src/mflux/models/z_image/z_image_initializer.py"
+      ],
+      "local_changes": [
+        "Probe-only explicit affine4 diffusers bridge through unchanged upstream raw cache, mapper and applier; floating reference arithmetic, no source copied or global monkeypatch."
+      ]
     }
   ],
   "patches": [
@@ -2559,7 +2574,7 @@
       "kind": "discovery-only",
       "owner": "priorfix",
       "reviewed_date": "2026-10-08",
-      "action": "Bounded Z-Image fixed-seed parity pilot and CPU-tested three-interleaved-pair quiet timing harness; GPU timing only after pilot succeeds. Delegation decision pending numeric evidence; no source copied."
+      "action": "Native mflux HF mapping drops packed diffusers scales/biases. Probe-only explicit CPU-tested affine4 decode bridge is registered under inspired; results disclose floating reference arithmetic. No serving delegation or lossless/default claim."
     },
     {
       "url": "https://github.com/IonDen/mlx-teacache",
