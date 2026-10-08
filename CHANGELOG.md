@@ -33,6 +33,9 @@ and web-retrieval compatibility to the `yunshu` package. These changes are merge
 - Search sends queries to external providers and fetch sends URLs to destination sites. Use
   `YUNSHU_WEB_SEARCH_PROVIDER=none` and `YUNSHU_WEB_FETCH=0` to disable these server tools.
 
+- Credentialed browser clients must use explicit `YUNSHU_CORS_ORIGINS`; any wildcard now disables
+  CORS credentials. Configuration writes replace files atomically with owner-only permissions (0600).
+
 ### Performance
 
 | Machine | Model / mode | Metric / workload | Before → after | Recorded source |
@@ -80,6 +83,10 @@ No new decode or TTFT claim is made for this cycle here. Historical measurements
 
 ### Security
 
+- Drop authorization/API-key/cookie headers when a download redirects to another origin; redact Realtime
+  ephemeral secrets from logs. Transcription secrets cannot create model responses. Model downloads
+  reject traversal-style repository IDs before disk access. Authenticated clients still share Files,
+  stored completions and Evals data under one static token; this is not per-key isolation.
 - HTTP video and optional rendered-page resources use checked fetch boundaries; unsupported redirects,
   private destinations and cross-origin rendered resources are rejected according to the fetch policy.
   See [API surface](docs/guides/API_SURFACE.md) and [Tavily limitations](docs/guides/TAVILY.md).

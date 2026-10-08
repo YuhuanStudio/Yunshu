@@ -17,7 +17,7 @@ route matrix includes Files, Batches, Conversations, compaction and WebSocket de
 | POST | `/v1/chat/completions` | Chat. Tool-calling, JSON-schema/grammar (`response_format`), streaming, `logprobs`. Plus extras: `top_n_sigma`, `min_p`, `xtc_probability`/`xtc_threshold`, `spec_decode`. |
 | GET/POST/DELETE | `/v1/chat/completions/{id}` | Retrieve, update metadata or delete a completion created with `store: true`; list at `GET /v1/chat/completions`, input messages at `GET /v1/chat/completions/{id}/messages`. |
 | POST | `/v1/evals` | [Local Evals](guides/EVALS.md): definitions, runs, cancellation and output items. |
-| POST | `/v1/realtime/client_secrets` | Ephemeral keys for the Realtime WebSocket; beta session routes are also served. Transcription-only configuration is echoed but not executed. |
+| POST | `/v1/realtime/client_secrets` | Ephemeral keys for the Realtime WebSocket; beta session routes are also served. Transcription-only configuration is echoed but not executed; transcription secrets cannot create model responses. |
 | POST | `/v1/completions` | Legacy text completion. |
 | POST | `/v1/responses` | Responses API (+ `GET/POST /v1/responses/{id}`, `/cancel`, `DELETE`). |
 | POST | `/v1/embeddings` | Text **and multimodal** embeddings — see [below](#post-v1embeddings-multimodal). |

@@ -32,6 +32,7 @@ Queries, destination URLs and the client's IP leave the Mac to reach providers/p
 Search is not offline inference. `YUNSHU_WEB_FETCH=0` disables server-side fetch.
 Fetch blocks private, loopback and link-local addresses by default, including after
 DNS resolution and redirects; keep `YUNSHU_WEB_FETCH_ALLOW_PRIVATE` off for this policy.
+Download authorization/API-key/cookie headers are dropped across origin-changing redirects.
 Body, timeout and extracted-text limits are registered settings.
 
 Plain Tavily search uses lexical ranking and deduplication without an LLM. Optional

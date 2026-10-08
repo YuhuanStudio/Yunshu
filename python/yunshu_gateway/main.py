@@ -704,9 +704,9 @@ def create_app() -> FastAPI:
     # Note: allow_credentials=True is invalid with allow_origins=["*"] per CORS spec;
     # browsers will reject the response. Use specific origins in production.
     cors_origins_str = settings.get("YUNSHU_CORS_ORIGINS")
-    cors_origins = cors_origins_str.split(",") if cors_origins_str != "*" else ["*"]
-    allow_credentials = cors_origins != ["*"]
-    if cors_origins == ["*"]:
+    cors_origins = [o.strip() for o in cors_origins_str.split(",") if o.strip()]
+    allow_credentials = "*" not in cors_origins
+    if "*" in cors_origins:
         logger.warning(
             "CORS: allow_origins=['*'] — set YUNSHU_CORS_ORIGINS for production"
         )
