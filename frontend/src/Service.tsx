@@ -8,7 +8,7 @@ import {
   Switch,
   Tag,
 } from "@yuhuanowo/yunui";
-import { CodeBlock } from "@yuhuanowo/yunui/content";
+import { CodeBlock } from "@yuhuanowo/yunui/code";
 import { Banner } from "@yuhuanowo/yunui/patterns";
 import { CircleAlert, Globe, Plus, Server } from "lucide-react";
 import type { Connection } from "./api";

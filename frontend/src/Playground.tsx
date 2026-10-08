@@ -75,7 +75,7 @@ import { compareOutputs, runStats, type RunTiming } from "./playground-metrics";
 import { SegmentedTray } from "./SegmentedTray";
 import { t, tr, useLocale } from "./i18n/index.ts";
 const CodeBlock = lazy(() =>
-  import("@yuhuanowo/yunui/content").then((m) => ({ default: m.CodeBlock })),
+  import("@yuhuanowo/yunui/code").then((m) => ({ default: m.CodeBlock })),
 );
 const Markdown = lazy(() =>
   import("@yuhuanowo/yunui/content").then((m) => ({

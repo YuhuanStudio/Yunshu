@@ -9,7 +9,7 @@ import {
   StatusIndicator,
 } from "@yuhuanowo/yunui";
 import { IDBadge } from "@yuhuanowo/yunui/ai";
-import { CodeBlock } from "@yuhuanowo/yunui/content";
+import { CodeBlock } from "@yuhuanowo/yunui/code";
 import { DetailList, DetailRow, PageHeader } from "@yuhuanowo/yunui/patterns";
 import {
   ArrowLeft,

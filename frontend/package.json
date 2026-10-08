@@ -7,7 +7,7 @@
     "dev": "vite --host 127.0.0.1 --port 3971 --strictPort",
     "build": "tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
-    "test": "node scripts/check-i18n.mjs && node --test tests/*.test.ts",
+    "test": "node scripts/check-i18n.mjs && node --test tests/*.test.ts && node scripts/check-bundle.mjs",
     "check:i18n": "node scripts/check-i18n.mjs",
     "preview": "vite preview --host 127.0.0.1 --port 3971 --strictPort",
     "test:browser": "playwright test",
