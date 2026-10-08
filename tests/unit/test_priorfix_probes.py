@@ -110,3 +110,15 @@ def test_fixed_input_reference_rejects_empty_and_keeps_ids_immutable():
     got = t.encode("ignored")
     got[0] = 8
     assert t.encode("another") == [1, 2, 3]
+
+
+def test_runtime_exact_supports_mlx_bfloat16_and_packed_uint32():
+    import mlx.core as mx
+
+    path = Path(__file__).parents[2] / "scripts/research/priorfix_runtime_parity.py"
+    spec = importlib.util.spec_from_file_location("runtime_probe", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    assert module.exact(mx.array([1.25, 2.5], dtype=mx.bfloat16), [1.25, 2.5])
+    assert not module.exact(mx.array([1.25, 2.5], dtype=mx.bfloat16), [1.25, 3])
+    assert module.exact(mx.array([4294967295], dtype=mx.uint32), [4294967295])

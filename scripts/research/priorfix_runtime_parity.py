@@ -40,6 +40,9 @@ def parser():
 
 
 def exact(a, b):
+    # NumPy has no native bfloat16 PEP3118 buffer; tolist preserves its exact values.
+    a = a.tolist() if hasattr(a, "tolist") else a
+    b = b.tolist() if hasattr(b, "tolist") else b
     a, b = np.asarray(a), np.asarray(b)
     return a.shape == b.shape and np.array_equal(a, b)
 
