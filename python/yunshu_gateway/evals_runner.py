@@ -75,6 +75,10 @@ def source_rows(source: dict, config: dict) -> list[dict]:
                         **c,
                     },
                     "sample": {
+                        "model": c.get("model") or "",
+                        "usage": usage_of(c),
+                        "input": messages,
+                        "finish_reason": c["choices"][0].get("finish_reason") or "stop",
                         "output_text": c["choices"][0]["message"].get("content") or "",
                         "output": [c["choices"][0]["message"]],
                     },
@@ -221,6 +225,13 @@ async def process(store: EvalStore, rid: str, app, headers: dict):
                             finish_reason=choice.get("finish_reason") or "stop",
                         )
                     else:
+                        sample.update(
+                            {
+                                k: context["sample"][k]
+                                for k in ("model", "usage", "input", "finish_reason")
+                                if k in context["sample"]
+                            }
+                        )
                         sample["output"] = context["sample"].get("output") or [
                             {
                                 "role": "assistant",

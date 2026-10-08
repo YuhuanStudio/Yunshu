@@ -498,3 +498,71 @@ def test_stored_filters_are_intersection_and_zero_timestamp(env):
     rec["completion"]["created"] = 1
     (root / "000000000000_chatcmpl-zero.json").write_text(json.dumps(rec))
     assert not source_rows(s, {})
+
+
+def test_actual_stored_chat_ingestion_after_apiplanned_merge(env, monkeypatch):
+    from types import SimpleNamespace
+
+    from yunshu_gateway.routers import chat
+
+    sdk, client, _, _ = env
+
+    class FakeEngine:
+        is_loaded = True
+        _tokenizer = None
+
+        async def generate(self, **kw):
+            return SimpleNamespace(
+                generated_text="hello",
+                prompt_token_count=2,
+                completion_token_count=1,
+                finish_reason="stop",
+            )
+
+    monkeypatch.setattr(chat, "get_engine", lambda: FakeEngine())
+    monkeypatch.setattr(chat, "get_model_manager", lambda: None)
+    client.app.router.routes = [
+        r
+        for r in client.app.router.routes
+        if getattr(r, "path", "") != "/v1/chat/completions"
+    ]
+    client.app.include_router(chat.router, prefix="/v1")
+    response = sdk.chat.completions.create(
+        model="local",
+        messages=[{"role": "user", "content": "hi"}],
+        store=True,
+        metadata={"check": "evals"},
+    )
+    assert response.choices[0].message.content == "hello"
+    e = sdk.evals.create(
+        data_source_config={
+            "type": "stored_completions",
+            "metadata": {"check": "evals"},
+        },
+        testing_criteria=[
+            {
+                "type": "string_check",
+                "name": "stored_output",
+                "input": "{{sample.output_text}}",
+                "reference": "hello",
+                "operation": "eq",
+            },
+            {
+                "type": "string_check",
+                "name": "stored_input",
+                "input": "{{item.input_trajectory.0.content}}",
+                "reference": "hi",
+                "operation": "eq",
+            },
+        ],
+    )
+    r = sdk.evals.runs.create(
+        e.id,
+        data_source={
+            "type": "completions",
+            "source": {"type": "stored_completions", "model": "local"},
+        },
+    )
+    assert finished(sdk, e.id, r.id).result_counts.passed == 1
+    sample = sdk.evals.runs.output_items.list(r.id, eval_id=e.id).data[0].sample
+    assert sample.model == "local" and sample.usage.total_tokens == 3

@@ -100,19 +100,14 @@
   "reason": "Realtime speech translation sessions; voice is a parked modality."
  },
  {
-  "match": "openai * /realtime/*",
+  "match": "openai POST /realtime/calls",
   "status": "planned",
-  "reason": "Realtime client secrets, sessions, transcription sessions and calls: the Realtime SDK flow mints a client secret before opening the websocket; the websocket itself is served."
+  "reason": "WebRTC signalling (SDP offer in, answer out) for browsers; needs aiortc with its native codec stack, which is not in the dependency set, and a real audio round trip to verify (docs/guides/TRANSPORTS.md). The WebSocket path and the ephemeral client secrets that browsers use are served."
  },
  {
-  "match": "openai * /chat/completions/{}*",
-  "status": "planned",
-  "reason": "Stored chat completions (GET list / retrieve / messages / update / delete) need a store=true persistence layer; only POST /chat/completions is served. Cheap once a store exists."
- },
- {
-  "match": "openai GET /chat/completions",
-  "status": "planned",
-  "reason": "List of stored chat completions; see the other stored-completion routes."
+  "match": "openai POST /realtime/calls/{}/*",
+  "status": "not_applicable",
+  "reason": "Accept / reject / refer / hangup of an inbound SIP call: a telephony trunk (Twilio, SIP webhooks) that a local server does not have."
  },
  {
   "match": "openai POST /audio/voices",
@@ -126,8 +121,8 @@
  },
  {
   "match": "openai * /skills*",
-  "status": "planned",
-  "reason": "Skills for Responses (versions, content); agent parity item, not started."
+  "status": "not_applicable",
+  "reason": "Skills are versioned bundles mounted into OpenAI-hosted shell / code-execution containers. Yunshu has no hosted sandbox to mount them in, so a skill store would hold files nothing can run; local agents keep skills in their own checkout."
  },
  {
   "match": "anthropic * /v1/organizations/*",
@@ -136,8 +131,8 @@
  },
  {
   "match": "anthropic * /v1/skills*",
-  "status": "planned",
-  "reason": "Agent Skills (create, versions, delete); agent parity item shared with the OpenAI skills routes, not started."
+  "status": "not_applicable",
+  "reason": "Agent Skills are uploaded bundles loaded into Anthropic-hosted code-execution containers (container.skills). Yunshu has no hosted sandbox; Claude Code-style agents load skills from their own filesystem."
  },
  {
   "match": "anthropic * /v1/agents*",
