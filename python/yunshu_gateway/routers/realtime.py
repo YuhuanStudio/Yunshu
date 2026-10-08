@@ -24,7 +24,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from yunshu_engine import settings
 
-from .. import realtime_ga
+from .. import realtime_ga, realtime_secrets
 from ..error_envelope import EngineStreamError
 
 logger = logging.getLogger(__name__)
@@ -3654,6 +3654,7 @@ async def realtime_endpoint(ws: WebSocket):
                 return
 
     auth_token = settings.get("YUNSHU_AUTH_TOKEN")
+    secret = None
     if auth_token and not settings.get_bool("YUNSHU_AUTH_DISABLED"):
         token = ws.headers.get("authorization", "").removeprefix("Bearer ").strip()
         if not token:
@@ -3665,8 +3666,10 @@ async def realtime_endpoint(ws: WebSocket):
         if not token:
             token = ws.query_params.get("token") or ""
         if not (token and tokens_equal(token, auth_token)):
-            await ws.close(code=1008)
-            return
+            secret = realtime_secrets.lookup(token)
+            if secret is None:
+                await ws.close(code=1008)
+                return
 
     protos = ws.scope.get("subprotocols", [])
     accept_proto = "realtime" if "realtime" in protos else None
@@ -3675,7 +3678,18 @@ async def realtime_endpoint(ws: WebSocket):
     legacy = ws.scope.get("path", "").rstrip("/") == "/realtime"
     dialect = "beta" if legacy or realtime_ga.wants_beta(ws.headers) else "ga"
     session = RealtimeSession(ws, dialect=dialect)
+    if secret is None:
+        # An ephemeral secret presented where no static token is configured still applies its session.
+        h = ws.headers.get("authorization", "").removeprefix("Bearer ").strip()
+        for proto in ws.scope.get("subprotocols", []):
+            if proto.startswith("openai-insecure-api-key."):
+                h = proto.removeprefix("openai-insecure-api-key.")
+        secret = realtime_secrets.lookup(h or ws.query_params.get("token"))
     model = ws.query_params.get("model")
+    if secret is not None:
+        session.session.update({k: v for k, v in secret.config.items() if k != "model"})
+        session.session.id = secret.session_id
+        model = model or secret.config.get("model")
     if model:
         from ..engine import get_engine, get_engine_for_model
 
