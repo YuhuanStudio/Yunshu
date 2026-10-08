@@ -137,7 +137,8 @@ const requests: Shape<typeof zh> = {
     "自 {time} 起 {count} 条请求，读取 {prompt} 个 prompt token（复用 {cached}）",
   "footer.ring":
     "服务器保留最近 {capacity} 条；重启后清空。记录只含统计，不含 prompt 与输出文本。",
-  "footer.unsupported": "此引擎版本没有提供完成记录，“已结束”只含本页采样到的最近请求",
+  "footer.unsupported":
+    "此引擎版本没有提供完成记录，“已结束”只含本页采样到的最近请求",
   "footer.unsupportedDetail":
     "“已结束”只含本页打开后从状态采样到的最近一条，高频请求之间会漏掉，也不把消失的进行中请求推测成成功。",
   "footer.loading": "正在读取完成记录…",

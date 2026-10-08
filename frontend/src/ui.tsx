@@ -411,7 +411,7 @@ export function UnavailableNotice({
 }) {
   return (
     <Alert
-      variant="info"
+      variant="neutral"
       title={title}
       data-testid={testId}
       className="max-w-3xl"

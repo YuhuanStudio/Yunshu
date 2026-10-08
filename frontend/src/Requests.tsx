@@ -627,6 +627,8 @@ export function Requests({
       )}
     </div>
   ) : null;
+  // The trend slot is reserved only once some tile has a trend to draw; before that the cards stay compact.
+  const anySpark = tiles.some((tile) => hasTrend(tile.data));
   return (
     <DashboardPage width="7xl" data-testid="requests">
       <PageHeader
@@ -661,7 +663,9 @@ export function Requests({
                 <span className="block min-w-0 space-y-1 sm:space-y-2">
                   <span className="block whitespace-normal">{tile.hint}</span>
                   {/* The trend slot keeps its height before and after samples arrive; only the line waits for data. */}
-                  <span className="hidden h-7 sm:block">
+                  <span
+                    className={`hidden sm:block ${anySpark ? "h-7" : "sm:hidden"}`}
+                  >
                     {spark && (
                       <Sparkline
                         data={tile.data.slice(-60)}

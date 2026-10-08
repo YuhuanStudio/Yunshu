@@ -1,10 +1,6 @@
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import {
   CustomSelect,
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
   toast,
   StatusIndicator,
   Button,
@@ -49,7 +45,6 @@ import {
   ImagePlus,
   X,
   Code2,
-  MoreHorizontal,
 } from "lucide-react";
 import {
   describeStreamError,
@@ -702,7 +697,7 @@ export function Playground({
         description={t("playground.page.desc")}
       />
       <ChatHeader
-        className="flex-wrap gap-3 border-0 bg-transparent px-0 py-3 sm:h-auto sm:px-0 sm:py-3 max-sm:[&>*]:w-full max-sm:[&>*:last-child]:hidden"
+        className="flex-wrap gap-3 border-0 bg-transparent px-0 py-3 sm:h-auto sm:px-0 sm:py-3 max-sm:[&>*]:w-full"
         left={
           <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
             {modelSelect(model, setModel, t("playground.model.testModel"))}
@@ -738,31 +733,11 @@ export function Playground({
                 { value: "compare", label: t("playground.header.modeCompare") },
               ]}
             />
-            <div className="shrink-0 sm:hidden">
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <IconButton
-                    icon={<MoreHorizontal size={16} />}
-                    label={t("playground.header.more")}
-                  />
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end">
-                  <DropdownMenuItem onSelect={() => setCodeOpen(true)}>
-                    <Code2 size={14} />
-                    {t("playground.header.viewCode")}
-                  </DropdownMenuItem>
-                  <DropdownMenuItem disabled={loading} onSelect={newTest}>
-                    <Plus size={14} />
-                    {t("playground.header.newTest")}
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
-            </div>
           </div>
         }
         actions={
           <>
-            <div className="hidden items-center gap-1 sm:flex">
+            <div className="flex items-center gap-1">
               <Button
                 size="sm"
                 variant="ghost"

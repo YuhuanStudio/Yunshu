@@ -110,6 +110,5 @@ const playground: Shape<typeof zh> = {
   "model.loadingNow": "Loading {name}…",
   "compare.specNote":
     "The engine decides speculative decoding itself. There is no per-request switch today (the spec_decode field is ignored), so an on/off comparison is not offered here.",
-  "header.more": "More actions",
 };
 export default playground;

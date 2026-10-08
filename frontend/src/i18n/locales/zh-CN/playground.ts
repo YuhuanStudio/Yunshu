@@ -98,6 +98,5 @@ const playground: Shape<typeof zh> = {
   "model.loadingNow": "正在加载 {name}…",
   "compare.specNote":
     "推测解码由引擎自行决定，请求端目前没有逐次开关（spec_decode 字段会被忽略），因此这里不提供“推测开/关”对比。",
-  "header.more": "更多操作",
 };
 export default playground;

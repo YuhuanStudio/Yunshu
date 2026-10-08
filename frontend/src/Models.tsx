@@ -459,14 +459,16 @@ export function Models({
             }
           />
           <Card className="flex flex-wrap items-center gap-3 p-4">
-            <SearchInput
-              id="models-search"
-              className="w-full max-sm:min-w-full sm:max-w-xs"
-              aria-label={t("models.list.searchAria")}
-              value={query}
-              onChange={setQuery}
-              placeholder={t("models.list.searchPlaceholder")}
-            />
+            <div className="w-full sm:w-auto sm:max-w-xs [&>*]:w-full">
+              <SearchInput
+                id="models-search"
+                className="w-full"
+                aria-label={t("models.list.searchAria")}
+                value={query}
+                onChange={setQuery}
+                placeholder={t("models.list.searchPlaceholder")}
+              />
+            </div>
             <SegmentedTray
               fillOnPhone
               value={filter}

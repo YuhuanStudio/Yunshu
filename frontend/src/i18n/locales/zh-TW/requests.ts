@@ -134,7 +134,8 @@ const requests = {
     "自 {time} 起 {count} 筆請求，讀取 {prompt} 個 prompt token（重用 {cached}）",
   "footer.ring":
     "伺服器保留最近 {capacity} 筆；重新啟動後清空。記錄只含統計，不含 prompt 與輸出文字。",
-  "footer.unsupported": "此引擎版本沒有提供完成記錄，「已結束」只含本頁採樣到的最近請求",
+  "footer.unsupported":
+    "此引擎版本沒有提供完成記錄，「已結束」只含本頁採樣到的最近請求",
   "footer.unsupportedDetail":
     "「已結束」只含本頁開啟後從狀態採樣到的最近一筆，高頻請求之間會漏掉，也不把消失的進行中請求推測成成功。",
   "footer.loading": "正在讀取完成記錄…",

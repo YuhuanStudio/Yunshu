@@ -308,6 +308,8 @@ test("playground toolbar: model full width, dialect and mode on one row, actions
   expect(model!.width).toBeGreaterThan(300);
   expect(dialect!.y).toBeGreaterThan(model!.y + model!.height - 2);
   expect(Math.abs(dialect!.y - mode!.y)).toBeLessThan(12);
-  await expect(page.getByRole("button", { name: "更多動作" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "檢視程式碼" })).toBeHidden();
+  // No lone overflow dot: the two actions are plain labelled buttons on their own row.
+  await expect(page.getByRole("button", { name: "更多動作" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "檢視程式碼" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "新測試" })).toBeVisible();
 });

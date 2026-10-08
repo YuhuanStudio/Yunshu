@@ -111,7 +111,7 @@ export function StateStrip({
       {header}
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
         <ul
-          className="flex shrink-0 items-center gap-0.5 max-sm:w-full max-sm:justify-between"
+          className={`-ml-2 flex shrink-0 items-center gap-0.5 max-sm:w-full max-sm:justify-between ${a?.phase === "idle" ? "max-sm:hidden" : ""}`}
           aria-label={t("overview.strip.aria")}
         >
           {order.map((id) => {

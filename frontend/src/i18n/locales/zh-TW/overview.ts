@@ -68,7 +68,7 @@ const overview = {
   "active.all": "全部",
   "active.idleDesc": "沒有進行中的請求",
   "active.idleDescPool":
-    "沒有進行中的請求 · {gb} GB 保留池閒置後歸還系統",
+    "沒有進行中的請求 · {gb} GB 保留池會在不活動後歸還系統",
   "quick.title": "快速開始",
   "quick.prompt.title": "測試一段提示",
   "quick.prompt.caption": "在推理測試送出請求",

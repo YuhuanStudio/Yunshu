@@ -71,7 +71,7 @@ const overview: Shape<typeof zh> = {
   "active.all": "全部",
   "active.idleDesc": "没有进行中的请求",
   "active.idleDescPool":
-    "没有进行中的请求 · {gb} GB 保留池空闲后归还系统",
+    "没有进行中的请求 · {gb} GB 保留池会在不活动后归还系统",
   "quick.title": "快速开始",
   "quick.prompt.title": "测试一段提示",
   "quick.prompt.caption": "在推理测试中发送请求",

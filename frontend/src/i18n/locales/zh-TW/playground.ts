@@ -95,6 +95,5 @@ const playground = {
   "model.loadingNow": "正在載入 {name}…",
   "compare.specNote":
     "推測解碼由引擎自行決定，請求端目前沒有逐次開關（spec_decode 欄位會被忽略），因此這裡不提供「推測開／關」比較。",
-  "header.more": "更多動作",
 };
 export default playground;
