@@ -1070,7 +1070,51 @@ def stage_rerank(ctx: Ctx) -> StageResult:
     return _finish(ctx, StageResult("rerank", not reasons, reasons, numbers))
 
 
+def stage_embedding(ctx: Ctx) -> StageResult:
+    """Published-format loader and independent same-device upstream invocation."""
+    reference = ctx.env.get(
+        "EMBEDDING_REFERENCE",
+        "/Volumes/P5Plus/yunshu-build/codex/priorfix/gemma-ref/ref.json",
+    )
+    root = Path(ctx.env.get("EMBEDDING_MODEL_ROOT", "/Volumes/P5Plus/models"))
+    reasons, numbers = [], {}
+    for name in ("embeddinggemma-2-bf16", "embeddinggemma-2-4bit"):
+        cell = Cell(
+            "embedding",
+            name,
+            [
+                "env",
+                f"PYTHONPATH={ctx.cand.path / 'python'}",
+                "HF_HUB_OFFLINE=1",
+                ctx.py,
+                str(ctx.cand.path / "scripts/research/priorfix_embedding_parity.py"),
+                "--model",
+                str(root / name),
+                "--reference",
+                reference,
+                "--out",
+                "{out}",
+            ],
+            mem_gb=8,
+            timeout_min=10,
+            stall_min=5,
+            priority=-1,
+            device="m5",
+        )
+        results = ctx.exe.run_cells([cell])
+        reasons += _failed_cells(results)
+        if reasons:
+            break
+        rows = read_jsonl(results[name].evidence)
+        numbers[name] = rows[-1]
+        if not rows[-1].get("passed"):
+            reasons.append(f"{name} parity failed")
+            break
+    return _finish(ctx, StageResult("embedding", not reasons, reasons, numbers))
+
+
 STAGE_FUNCS = {
+    "embedding": stage_embedding,
     "rerank": stage_rerank,
     "preflight": stage_preflight,
     "smoke": stage_smoke,

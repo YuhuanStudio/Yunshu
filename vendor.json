@@ -196,6 +196,54 @@
       "license": "MIT",
       "local_changes": [],
       "kind": "vendored"
+    },
+    {
+      "path": "python/yunshu_engine/_vendor/embedding_gemma2/config.py",
+      "repo": "https://github.com/Blaizzy/mlx-vlm",
+      "clone": "reference/mlx-vlm",
+      "upstream_path": "mlx_vlm/models/embedding_gemma2/config.py",
+      "commit": "3d87e88402f307efbf68e568971aa887ee7d9ed0",
+      "license": "MIT",
+      "kind": "vendored",
+      "local_changes": [
+        "Absolute imports for installed mlx-vlm shared components; formatting."
+      ]
+    },
+    {
+      "path": "python/yunshu_engine/_vendor/embedding_gemma2/language.py",
+      "repo": "https://github.com/Blaizzy/mlx-vlm",
+      "clone": "reference/mlx-vlm",
+      "upstream_path": "mlx_vlm/models/embedding_gemma2/language.py",
+      "commit": "3d87e88402f307efbf68e568971aa887ee7d9ed0",
+      "license": "MIT",
+      "kind": "vendored",
+      "local_changes": [
+        "Absolute imports for installed mlx-vlm shared components; formatting."
+      ]
+    },
+    {
+      "path": "python/yunshu_engine/_vendor/embedding_gemma2/model.py",
+      "repo": "https://github.com/Blaizzy/mlx-vlm",
+      "clone": "reference/mlx-vlm",
+      "upstream_path": "mlx_vlm/models/embedding_gemma2/embedding_gemma2.py",
+      "commit": "3d87e88402f307efbf68e568971aa887ee7d9ed0",
+      "license": "MIT",
+      "kind": "vendored",
+      "local_changes": [
+        "Absolute imports for installed mlx-vlm shared components; formatting."
+      ]
+    },
+    {
+      "path": "python/yunshu_engine/embedding_gemma2_loader.py",
+      "repo": "https://github.com/Blaizzy/mlx-vlm",
+      "clone": "reference/mlx-vlm",
+      "upstream_path": "mlx_vlm/encoder_loader.py",
+      "commit": "3d87e88402f307efbf68e568971aa887ee7d9ed0",
+      "license": "MIT",
+      "kind": "derived",
+      "local_changes": [
+        "Prefer installed native embedding loader; fallback resolves vendored model without registry mutations; no unrelated encoder features."
+      ]
     }
   ],
   "derived": [

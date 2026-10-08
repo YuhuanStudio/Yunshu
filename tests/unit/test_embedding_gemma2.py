@@ -163,3 +163,70 @@ def test_weight_loader_merges_every_shard_and_memoizes(monkeypatch):
     assert calls == list(shards)
     assert model._all_weights() is weights
     assert calls == list(shards)
+
+
+def test_upstream_loader_prefers_native_module(monkeypatch, tmp_path):
+    import sys
+    import types
+
+    from yunshu_engine.embedding_gemma2_loader import load_published_model
+
+    marker = object()
+    seen = []
+    native = types.ModuleType("mlx_vlm.models.embedding_gemma2")
+    loader = types.ModuleType("mlx_vlm.embedding_loader")
+    loader.load_embedding_model = lambda path, **kw: seen.append((path, kw)) or marker
+    monkeypatch.setitem(sys.modules, "mlx_vlm.models.embedding_gemma2", native)
+    monkeypatch.setitem(sys.modules, "mlx_vlm.embedding_loader", loader)
+    assert load_published_model(tmp_path) is marker
+    assert seen == [(tmp_path, {"strict": True})]
+
+
+def test_derived_loader_mixed_precision_quantized_multishard(tmp_path):
+    import json
+
+    import mlx.core as mx
+    import mlx.nn as nn
+    from mlx.utils import tree_flatten
+
+    from yunshu_engine._vendor.embedding_gemma2.config import ModelConfig
+    from yunshu_engine._vendor.embedding_gemma2.model import Model
+    from yunshu_engine.embedding_gemma2_loader import _load_derived
+
+    config = {
+        "model_type": "embedding_gemma2",
+        "text_config": {
+            "vocab_size": 64,
+            "hidden_size": 64,
+            "intermediate_size": 64,
+            "num_hidden_layers": 1,
+            "num_attention_heads": 1,
+            "num_key_value_heads": 1,
+            "head_dim": 64,
+            "hidden_size_per_layer_input": 0,
+            "embedding_dim": 64,
+            "per_layer_config": {},
+        },
+        "quantization": {"group_size": 64, "bits": 4, "mode": "affine"},
+    }
+    model = Model(ModelConfig.from_dict(config))
+    nn.quantize(
+        model,
+        group_size=64,
+        bits=4,
+        class_predicate=lambda path, module: path == "language_model.embed_tokens",
+    )
+    weights = dict(tree_flatten(model.parameters()))
+    for i, part in enumerate([list(weights.items())[::2], list(weights.items())[1::2]]):
+        mx.save_safetensors(
+            str(tmp_path / f"model-0000{i + 1}.safetensors"), dict(part)
+        )
+    (tmp_path / "config.json").write_text(json.dumps(config))
+    loaded = _load_derived(tmp_path)
+    assert isinstance(loaded.language_model.embed_tokens, nn.QuantizedEmbedding)
+    assert isinstance(loaded.language_model.embedding_projection, nn.Linear)
+    ids = mx.array([[2, 3, 4]])
+    assert loaded(ids).text_embeds.tolist() == model(ids).text_embeds.tolist()
+    (tmp_path / "model-00002.safetensors").unlink()
+    with pytest.raises(ValueError):
+        _load_derived(tmp_path)
