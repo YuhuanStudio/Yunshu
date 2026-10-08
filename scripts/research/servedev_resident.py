@@ -37,6 +37,7 @@ def parser():
     p.add_argument("--ctx", default="1024,32768")
     p.add_argument("--research-gb", type=float, default=18)
     p.add_argument("--research-child", action="store_true")
+    p.add_argument("--resident", choices=("process", "launchd"), default="process")
     p.add_argument("--dry-run", action="store_true")
     return p
 
@@ -197,6 +198,7 @@ def run(a):
 
     worker = threading.Thread(target=scheduler)
     installed = False
+    resident = None
     rows = []
     try:
         args = [
@@ -218,8 +220,38 @@ def run(a):
             "YUNSHU_MEDIA_DIR": str(directory / "media"),
         }.items():
             args += ["--set", f"{key}={value}"]
-        subprocess.run(args, env=env, check=True)
-        installed = True
+        if a.resident == "launchd":
+            r = subprocess.run(args, env=env, capture_output=True, text=True)
+            if r.returncode:
+                raise RuntimeError(
+                    "launchd install failed: " + (r.stdout + r.stderr)[-1500:]
+                )
+            installed = True
+        else:  # plain child process in this gpuq job: same server, no launchd dependency
+            senv = dict(env)
+            for i, tok in enumerate(args):
+                if tok == "--set":
+                    k, v = args[i + 1].split("=", 1)
+                    senv[k] = v
+            resident_log = (directory / "yunshu.log").open("w")
+            resident = subprocess.Popen(
+                [
+                    sys.executable,
+                    "-m",
+                    "yunshu_cli",
+                    "serve",
+                    "--host",
+                    "127.0.0.1",
+                    "--port",
+                    str(port),
+                    "--model",
+                    a.model,
+                ],
+                env=senv,
+                stdout=resident_log,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+            )
         worker.start()
         import httpx
 
@@ -231,9 +263,11 @@ def run(a):
                     break
             except httpx.HTTPError:
                 pass
+            if resident is not None and resident.poll() is not None:
+                raise RuntimeError("resident exited: " + (directory / "yunshu.log").read_text()[-3000:])
             if time.monotonic() > deadline:
                 raise RuntimeError(
-                    "launchd resident not ready; "
+                    "resident not ready; "
                     + (directory / "yunshu.log").read_text()[-3000:]
                 )
             time.sleep(0.5)
@@ -323,7 +357,7 @@ def run(a):
             "complete": True,
             "device": "m5",
             "rows": rows,
-            "resident": "launchd",
+            "resident": a.resident,
             "research_kind": "synthetic allocation + matmul",
             "log": str(directory / "yunshu.log"),
         }
@@ -341,6 +375,12 @@ def run(a):
             child.wait(timeout=10)
         if installed:
             subprocess.run([*cli, "uninstall"], env=env, check=True)
+        if resident and resident.poll() is None:
+            os.killpg(resident.pid, signal.SIGTERM)
+            try:
+                resident.wait(timeout=20)
+            except subprocess.TimeoutExpired:
+                os.killpg(resident.pid, signal.SIGKILL)
 
 
 def main(argv=None):
