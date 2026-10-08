@@ -84,11 +84,46 @@ class Arm:
             path,
             dirty,
         )
+        self.runtime_fingerprint = self._runtime_fingerprint()
+
+    def _runtime_fingerprint(self) -> str:
+        """Hash marked wheel receipts without importing or initializing MLX."""
+        venv = self.path / ".venv"
+        if (
+            not (self.path / ".yv-own-venv").exists()
+            or not (venv / "bin/python").is_file()
+        ):
+            return ""
+        digest = hashlib.sha256()
+        digest.update(str((venv / "bin/python").resolve()).encode())
+        cfg = venv / "pyvenv.cfg"
+        if cfg.exists():
+            digest.update(cfg.read_bytes())
+        # RECORD includes native binary checksums; direct_url records source
+        # installs. A rebuilt MLX wheel must not reuse another build's verdict.
+        for pattern in ("RECORD", "direct_url.json"):
+            for receipt in sorted(
+                venv.glob(f"lib/python*/site-packages/*.dist-info/{pattern}")
+            ):
+                digest.update(str(receipt.relative_to(venv)).encode())
+                digest.update(receipt.read_bytes())
+        return digest.hexdigest()[:12]
+
+    def python(self, fallback: str) -> str:
+        """Honor an explicitly marked dependency-upgrade environment."""
+        own = self.path / ".venv/bin/python"
+        if (self.path / ".yv-own-venv").exists() and own.is_file():
+            return str(own)
+        return fallback
 
     @property
     def key(self) -> str:
         """Identity of the code under test: commit, plus a hash of uncommitted changes."""
-        return self.commit[:12] + (f"-d{self.dirty}" if self.dirty else "")
+        return (
+            self.commit[:12]
+            + (f"-d{self.dirty}" if self.dirty else "")
+            + (f"-v{self.runtime_fingerprint}" if self.runtime_fingerprint else "")
+        )
 
     def to_json(self) -> dict:
         return {
@@ -98,6 +133,7 @@ class Arm:
             "key": self.key,
             "path": str(self.path),
             "dirty": bool(self.dirty),
+            "runtime_fingerprint": self.runtime_fingerprint,
         }
 
 

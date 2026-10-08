@@ -1061,9 +1061,75 @@ def test_gate_cli_pins_ref_and_forwards_owner_prefix(world, monkeypatch):
                 "sync015",
                 "--stages",
                 "install",
+                "--root",
+                str(world.tmp / "own-gate"),
             ]
         )
         == 0
     )
     assert git(seen["repo"], "rev-parse", "HEAD") == commit
     assert seen["label_prefix"] == "sync015"
+    assert seen["extra_env"] == {"GATE_ROOT": str(world.tmp / "own-gate")}
+
+
+def test_executor_bounds_submitted_cells_before_waiting(world, monkeypatch):
+    monkeypatch.setenv("YV_MAX_PENDING", "2")
+    _, ex = mkexec(world)
+    submit, finish = ex._submit, ex._finish
+    live = peak = 0
+
+    def tracked_submit(*args):
+        nonlocal live, peak
+        result = submit(*args)
+        live += 1
+        peak = max(peak, live)
+        return result
+
+    def tracked_finish(*args):
+        nonlocal live
+        result = finish(*args)
+        live -= 1
+        return result
+
+    monkeypatch.setattr(ex, "_submit", tracked_submit)
+    monkeypatch.setattr(ex, "_finish", tracked_finish)
+    result = ex.run_cells([cell(str(i), OK_BODY) for i in range(7)])
+    assert len(result) == 7 and all(r.ok for r in result.values())
+    assert peak <= 2
+
+
+def test_quality_uses_marked_arm_interpreters(world):
+    for name in ("base", "cand"):
+        arm = core.resolve_arm(name, name, world.trees)
+        (arm.path / ".venv/bin").mkdir(parents=True)
+        (arm.path / ".venv/bin/python").symlink_to(sys.executable)
+        (arm.path / ".yv-own-venv").touch()
+    assert go(world, suite="quality", mmlu_n=2) == 0
+    records = [json.loads(p.read_text()) for p in (world.tmp / "jobs").glob("*.json")]
+    for record in records:
+        command = record["cmd"]
+        tree = Path(
+            next(x.split("=", 1)[1] for x in command if x.startswith("PAIRED_TREE="))
+        )
+        expected = str(tree / ".venv/bin/python")
+        assert f"PAIRED_PY={expected}" in command
+        assert expected in command
+
+
+def test_marked_runtime_record_changes_arm_identity(tmp_path):
+    bindir = tmp_path / ".venv/bin"
+    bindir.mkdir(parents=True)
+    (bindir / "python").write_text("python")
+    (tmp_path / ".yv-own-venv").touch()
+    record = tmp_path / ".venv/lib/python3.13/site-packages/mlx-0.32.4.dist-info/RECORD"
+    record.parent.mkdir(parents=True)
+    record.write_text("mlx/core.so,sha256=old,1\n")
+    before = core.Arm("cand", "c", "a" * 40, tmp_path, "")
+    key = before.key
+    record.write_text("mlx/core.so,sha256=new,1\n")
+    after = core.Arm("cand", "c", "a" * 40, tmp_path, "")
+    assert after.key != key
+    assert before.key == key  # a run freezes its installed-runtime receipt
+    (tmp_path / ".yv-own-venv").unlink()
+    unmarked = core.Arm("cand", "c", "a" * 40, tmp_path, "")
+    assert unmarked.key == "a" * 12

@@ -139,6 +139,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--ref", help="verify this pinned commit instead of the current tree"
     )
     gt.add_argument("--label-prefix", default="infra", help="gpuq job owner prefix")
+    gt.add_argument("--root", help="isolated gate install/cache root")
     sub.add_parser("suites", help="list suites")
     return ap
 
@@ -190,6 +191,7 @@ def main(argv: list | None = None) -> int:
                 priority=a.priority,
                 repo=resolve_arm("cand", a.ref).path if a.ref else None,
                 label_prefix=a.label_prefix,
+                extra_env={"GATE_ROOT": a.root} if a.root else None,
                 log=lambda m: print(f"[yv] {m}", flush=True),
             )
         if a.cmd == "ab":

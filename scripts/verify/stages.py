@@ -192,7 +192,7 @@ def stage_preflight(ctx: Ctx) -> StageResult:
         e = dict(env, PYTHONPATH=str(arm.path / "python"))
         r = subprocess.run(
             [
-                ctx.py,
+                arm.python(ctx.py),
                 "-c",
                 "import yunshu_engine, yunshu_gateway, yunshu_kv; print('ok')",
             ],
@@ -555,6 +555,12 @@ def stage_quality(ctx: Ctx, max_rounds: int = 6) -> StageResult:
             break
         cells = []
         for arm in todo:
+            py = ctx.tree(arm).python(
+                os.environ.get(
+                    "PAIRED_PY",
+                    "/Volumes/P5Plus/yunshu-test-envs/paired-eval/bin/python",
+                )
+            )
             cells.append(
                 Cell(
                     "quality",
@@ -566,10 +572,8 @@ def stage_quality(ctx: Ctx, max_rounds: int = 6) -> StageResult:
                         f"PAIRED_PORT_LAST={PORT_LAST}",
                         f"PAIRED_MAX_TOKENS={ctx.suite.get('quality_max_tokens', 2048)}",
                         f"PAIRED_THINKING={1 if ctx.suite.get('quality_thinking') else 0}",
-                        os.environ.get(
-                            "PAIRED_PY",
-                            "/Volumes/P5Plus/yunshu-test-envs/paired-eval/bin/python",
-                        ),
+                        f"PAIRED_PY={py}",
+                        py,
                         str(PAIRED),
                         "run",
                         "--bench",
