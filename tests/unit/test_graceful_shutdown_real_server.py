@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import os
 import signal
+import socket
 import subprocess
 import sys
 import threading
@@ -14,7 +15,17 @@ from pathlib import Path
 import httpx
 
 ROOT = Path(__file__).resolve().parents[2]
-PORT = 18991
+
+
+def _free_port() -> int:
+    # An OS-assigned port, never one of the shared 18990-18999 pool that live servers
+    # (gpuq jobs) may already hold; a fixed port made the test talk to a foreign server.
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+PORT = _free_port()
 
 
 def test_graceful_shutdown_timeout_values():
@@ -114,3 +125,7 @@ def test_drain_zero_aborts_the_stream_fast():
     finally:
         if p.poll() is None:
             p.kill()
+
+
+def test_port_is_outside_the_shared_server_pool():
+    assert not 18990 <= PORT <= 18999
