@@ -44,7 +44,7 @@ def test_measured_short_request_is_admitted(admission):
 )
 def test_other_requests_keep_the_original_rounds(monkeypatch, admission, damage):
     if damage == "long":
-        monkeypatch.setitem(mtp_lane._STATE, "context", list(range(20000)))
+        monkeypatch.setitem(mtp_lane._STATE, "context", [1] * (fast.CONTEXT_LIMIT + 10))
     elif damage == "short":
         monkeypatch.setitem(mtp_lane._STATE, "context", [1] * 40)
     elif damage == "guide":
@@ -400,7 +400,8 @@ def test_supported_rejects_a_missing_decoder(monkeypatch):
     assert not fast.supported(None, draft)
 
 
-def test_round_room_stops_at_generated_limit():
+def test_round_room_stops_at_generated_limit(monkeypatch):
+    monkeypatch.setattr(fast, "GENERATED_LIMIT", 256)
     assert fast.round_room(1000, 4096, 0) == fast.GENERATED_LIMIT
     assert fast.round_room(1000, 4096, fast.GENERATED_LIMIT - 3) == 3
     assert fast.round_room(1000, 4096, fast.GENERATED_LIMIT) == 0

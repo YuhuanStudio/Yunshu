@@ -1000,6 +1000,23 @@ def tree_forward(*args, **kwargs) -> TreeResult:
         vq.clear_group_sums()
 
 
+def compact_kv(caches: list, src: mx.array, n0: int, m: int) -> None:
+    """Move the accepted window rows ``src`` to ``n0 + 1 .. n0 + m - 1`` in every cache.
+
+    The gathers are evaluated before the writes. A write whose source array is
+    still referenced by a pending gather cannot reuse the buffer, so MLX copies
+    the whole key/value buffer (16 ms per round at 64K context); with the
+    gathered rows already materialized the write updates the buffer in place.
+    """
+    rows = []
+    for c in caches:
+        rows.append((mx.take(c.keys, src, axis=2), mx.take(c.values, src, axis=2)))
+    mx.eval(rows)
+    for c, (k, v) in zip(caches, rows, strict=True):
+        c.keys[..., n0 + 1 : n0 + m, :] = k
+        c.values[..., n0 + 1 : n0 + m, :] = v
+
+
 def tree_commit(lm, cache: list, res: TreeResult, path: list[int]) -> None:
     """Keep the window rows in ``path`` (root first, each row a child of the
     previous one): the caches end as if those tokens had been decoded one by one."""
@@ -1012,12 +1029,12 @@ def tree_commit(lm, cache: list, res: TreeResult, path: list[int]) -> None:
     compact = path != list(range(m))
     if compact:
         src = mx.array([n0 + r for r in path[1:]], dtype=mx.int32)
+    kv_caches = [cache[i] for i, rec in res.records.items() if rec[0] == "kv"]
+    if compact and m > 1 and kv_caches:
+        compact_kv(kv_caches, src, n0, m)
     for i, rec in res.records.items():
         c = cache[i]
         if rec[0] == "kv":
-            if compact and m > 1:
-                c.keys[..., n0 + 1 : n0 + m, :] = mx.take(c.keys, src, axis=2)
-                c.values[..., n0 + 1 : n0 + m, :] = mx.take(c.values, src, axis=2)
             c.trim(w - m)
         else:
             _, layer, state, conv_prev, mixed, rows = rec

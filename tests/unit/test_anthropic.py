@@ -789,7 +789,9 @@ class TestAnthropicEndpoint:
                 "tool_choice": {"type": "tool", "name": "test"},
             },
         )
-        assert resp.status_code in (200, 404, 500, 503)
+        # The loaded fixture has no tokenizer: a forced choice must fail closed.
+        assert resp.status_code == 400
+        assert "Cannot guarantee forced tool_choice" in resp.text
 
     def test_messages_endpoint_no_prefix_route(self, _setup_engine):
         """Anthropic SDK sends to /messages without /v1 prefix — both routes should work."""

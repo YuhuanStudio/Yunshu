@@ -72,6 +72,14 @@ Models live in `~/.yunshu/models` (`yunshu config set models_dir PATH` moves the
 `serve -m org/name` also finds the Hugging Face cache and downloads only if needed.
 `yunshu service install -m <model>` runs the server at login.
 
+### Local console
+
+The source checkout includes a YunUI-based engine console at `/console/`: live
+status and resource charts, model operations, request inspection/cancellation, and
+a streaming diagnostic playground. Build it with `cd frontend && pnpm install
+--frozen-lockfile && pnpm build`, then use your normal Yunshu server. See the
+[console guide](docs/CONSOLE.md) for development, authentication and metric scope.
+
 ### Qwen3.8-27B
 
 ```bash

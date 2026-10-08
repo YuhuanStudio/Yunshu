@@ -18,6 +18,7 @@ import json
 import logging
 import time
 import uuid
+from typing import Any
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
@@ -683,6 +684,10 @@ class RealtimeSession:
 
     # Audio chunk duration for streaming: 20ms at 24kHz, 16-bit mono = 960 bytes
     _AUDIO_CHUNK_BYTES = 960
+
+    # Engine/model preloaded at connect time (lazy-load handoff).
+    _initial_engine: Any = None
+    _initial_model: str | None = None
 
     # G.711 μ-law decoding table (8-bit → 16-bit linear PCM)
     _ULAW_TABLE: list[int] | None = None
@@ -3571,6 +3576,10 @@ class RealtimeSession:
         """Resolve the inference engine for this session."""
         from ..engine import get_engine, get_model_manager
 
+        initial_engine = getattr(self, "_initial_engine", None)
+        if initial_engine is not None and self.session.model == self._initial_model:
+            return initial_engine
+
         # Try multi-model
         manager = get_model_manager()
         if manager is not None:
@@ -3580,6 +3589,8 @@ class RealtimeSession:
                     if entry.is_loaded and entry.engine is not None:
                         if getattr(entry, "model_id", None) == self.session.model:
                             return entry.engine
+                # An explicit model must never silently use a different loaded model.
+                return None
             # Fall back to the first loaded CHAT engine: an ASR / TTS model loaded beside it (the
             # voice cascade) has no generate_stream and must never answer the conversation
             for entry in manager.list_entries():
@@ -3666,5 +3677,44 @@ async def realtime_endpoint(ws: WebSocket):
     session = RealtimeSession(ws, dialect=dialect)
     model = ws.query_params.get("model")
     if model:
+        from ..engine import get_engine, get_engine_for_model
+
+        try:
+            engine = get_engine()
+            # Single-model HTTP routes accept the loaded model under any client name.
+            if engine is None or not engine.is_loaded:
+                engine = await get_engine_for_model(model)
+        except KeyError:
+            await ws.send_json(
+                _event(
+                    "error",
+                    error={
+                        "type": "invalid_request_error",
+                        "code": "model_not_found",
+                        "message": f"Model '{model}' not found",
+                        "param": "model",
+                    },
+                )
+            )
+            await ws.close(code=1008)
+            return
+        except Exception:
+            logger.exception("Realtime model load failed for %s", model)
+            await ws.send_json(
+                _event(
+                    "error",
+                    error={
+                        "type": "server_error",
+                        "code": "model_load_failed",
+                        "message": f"Model '{model}' failed to load",
+                        "param": "model",
+                    },
+                )
+            )
+            await ws.close(code=1011)
+            return
         session.session.model = model
+        # Keep the resolved alias as well as the requested session name.
+        session._initial_engine = engine
+        session._initial_model = model
     await session.run()

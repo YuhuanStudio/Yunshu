@@ -1,0 +1,3 @@
+/* YunUI component scanning is relative to this file, including npm aliases. */
+@import "@yuhuanowo/yunui/css";
+@source "../node_modules/@yuhuanowo/yunui/dist";

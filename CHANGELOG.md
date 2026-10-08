@@ -32,6 +32,8 @@ Changes on main after 0.1.3; not part of a published package yet.
 
 - Every route the gateway registers has a real-server check: `scripts/dev/m3sweep` job `routes` (`scripts/research/route_checks.py`) drives files, batches, conversations, the Responses lifecycle, Messages batches, token counting, websockets, MCP, server tools and model load / unload on the M3 lane, and `tests/unit/test_route_coverage.py` fails when a route has none. `docs/guides/API_SURFACE.md` says per row how it is verified.
 - `GET /v1/responses/{id}/input_items` (the route was missing).
+- `POST /v1/decisions` (OpenAI's Decisions API: predicate / choice / score questions answered with probabilities, text and inline images) and `POST /v1/systemone` (TypeSafe Jev / System One wire), served by decision checkpoints: Cloudflare Clef in MLX format (`ModelType.DECISION`; backbone through mlx-vlm plus the joint schema head in MLX, one forward pass, no decoding). A checkpoint with a decision head is never loaded as a plain LLM; unknown heads fail closed.
+- `scripts/dev/api_coverage.py`: walks the `openai` and `anthropic` SDK resources and fails (`tests/unit/test_api_coverage.py`) when an endpoint is neither served nor declared planned / not applicable with a reason.
 - `scripts/dev/agentbench`: the real-agent benchmark (Claude Code, Codex, opencode on the 27B) as one repeatable command with a fail-closed verdict and a baseline comparison.
 
 ### Changed

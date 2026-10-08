@@ -321,11 +321,11 @@ def compare_rows(a: list, b: list) -> list:
     return out
 
 
-def free_port() -> int:
+def free_port(skip: frozenset = frozenset()) -> int:
     """First free port of 18990-18996 (COVAUDIT_PORT_LO raises the lower end, so a worker limited
-    to 18994-18996 stays inside its range)."""
+    to 18994-18996 stays inside its range); `skip` holds ports that already lost a bind race."""
     for p in range(int(os.environ.get("COVAUDIT_PORT_LO", "18990")), 18997):
-        if port_bindable(p):
+        if p not in skip and port_bindable(p):
             return p
     raise RuntimeError("no free port in 18990-18996")
 
@@ -387,24 +387,42 @@ class Srv:
         env.update(HOME=str(home), HF_HUB_OFFLINE="1", NO_PROXY="127.0.0.1")
         if src:
             env["PYTHONPATH"] = src + os.pathsep + env.get("PYTHONPATH", "")
-        cmd = [
+        self._env = env
+        self._base_cmd = [
             os.environ.get("COVAUDIT_BIN") or str(MAIN / ".venv/bin/yunshu"),
             "serve",
             *(["--models-dir", models_dir] if models_dir else ["-m", model]),
-            "--port",
-            str(self.port),
         ]
-        for s in sets:
-            cmd += ["--set", s]
+        self._sets = list(sets)
+        self._lost_ports: set[int] = set()
         log.parent.mkdir(parents=True, exist_ok=True)
-        with log.open("ab") as lf:
+        self._launch()
+
+    def _launch(self) -> None:
+        cmd = [*self._base_cmd, "--port", str(self.port)]
+        for s in self._sets:
+            cmd += ["--set", s]
+        with self.log.open("ab") as lf:
             self.proc = subprocess.Popen(
                 cmd,
                 stdout=lf,
                 stderr=subprocess.STDOUT,
-                env=env,
+                env=self._env,
                 start_new_session=True,
             )
+
+    def _rebind(self) -> bool:
+        """The port was free when probed but another server bound it before ours finished
+        loading (a preempted gpuq job that resumed, 2026-10-07 release gate). Retry on the next
+        free port, at most 3 times; any other exit stays a failure."""
+        if len(self._lost_ports) >= 3 or "address already in use" not in self.log_tail(20):
+            return False
+        self._lost_ports.add(self.port)
+        self.port = free_port(frozenset(self._lost_ports))
+        self.url = f"http://127.0.0.1:{self.port}"
+        print(f"port lost a bind race; restarting on {self.port}", flush=True)
+        self._launch()
+        return True
 
     def log_tail(self, n: int = 50) -> str:
         try:
@@ -421,6 +439,8 @@ class Srv:
         last = 0.0
         while time.monotonic() - t0 < timeout:
             if self.proc.poll() is not None:
+                if self._rebind():
+                    continue
                 raise RuntimeError(
                     f"server exited rc={self.proc.returncode}; log tail:\n{self.log_tail()}"
                 )

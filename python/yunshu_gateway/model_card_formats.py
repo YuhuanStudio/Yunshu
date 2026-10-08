@@ -37,6 +37,7 @@ _TASKS = {
     "omni": "generate",
     "embedding": "embed",
     "reranker": "score",
+    "decision": "decide",
     "asr": "transcription",
     "tts": "speech",
     "image": "image_generation",

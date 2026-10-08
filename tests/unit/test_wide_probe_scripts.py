@@ -37,3 +37,8 @@ def test_api_probe_dry_run_counts_cells():
         "1",
     )
     assert r["complete"] and r["cells"] == 2 * 2 * 2 * 2
+
+
+def test_ctx_scaling_probe_dry_run_counts_cells():
+    r = _dry("probe_ctx_scaling.py", "--contexts", "8192", "65536", "--rows", "8", "16")
+    assert r["cells"] == 16 and "noattn" in r["variants"]

@@ -38,8 +38,34 @@ jobs:
           uv run ruff check python/ tests/
           uv run pytest tests/unit -q --tb=short
 
+      - name: Set up Node for the console
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Build and validate the console
+        working-directory: frontend
+        run: |
+          corepack enable
+          corepack prepare pnpm@11.19.0 --activate
+          pnpm install --frozen-lockfile
+          pnpm test
+          pnpm build
+          pnpm exec yunui doctor --strict
+          pnpm exec yunui audit --strict
+
       - name: Build sdist + wheel
         run: uv build
+
+      - name: Verify packaged console assets
+        run: |
+          python3 - <<'PYCODE'
+          import glob, tarfile, zipfile
+          with zipfile.ZipFile(glob.glob("dist/*.whl")[0]) as wheel:
+              assert "yunshu_gateway/console_static/index.html" in wheel.namelist()
+          with tarfile.open(glob.glob("dist/*.tar.gz")[0]) as source:
+              assert any(name.endswith("python/yunshu_gateway/console_static/index.html") for name in source.getnames())
+          PYCODE
 
       - name: Check package metadata (twine)
         run: uvx twine check dist/*

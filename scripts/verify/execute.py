@@ -193,7 +193,7 @@ class Executor:
         j = self.gq.wait(jid)
         out = self.run.cell_path(cell.stage, cell.key, f"a{attempt}.jsonl")
         ok, reason = True, ""
-        if j.state != "done" or j.rc not in (0, None):
+        if j.state != "done" or j.rc != 0:
             ok = False
             reason = f"job {j.id} {j.state} rc={j.rc}: " + self.gq.log_tail(j.id, 6)
         elif cell.needs_out:
@@ -204,7 +204,10 @@ class Executor:
             ok, reason = False, f"job {j.id} was CPU-contended (timing not trusted)"
         final = self.run.cell_path(cell.stage, cell.key)
         if ok and cell.needs_out:
-            os.replace(out, final)
+            # Keep gpuq's declared output for digest/watchdog; promote a copy atomically.
+            promoted = final.with_suffix(".tmp")
+            shutil.copyfile(out, promoted)
+            os.replace(promoted, final)
             if cell.share_key:
                 self.cache_dir.mkdir(parents=True, exist_ok=True)
                 tmp = self.cache_dir / f".{cell.share_key}.tmp"

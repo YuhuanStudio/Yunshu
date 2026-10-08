@@ -213,7 +213,7 @@ if has soak || has soak-mmlu || has soak-realistic; then
       if [ $SOAK_MMLU = 1 ]; then
       log "soak mmlu"
       $PY scripts/research/soak_mmlu_pro.py --url $URL --model Qwen3.8-27B --pid $YP \
-        --ids $MMLU_IDS --note "release gate" --output $OUT/soak-mmlu.jsonl > $OUT/soak-mmlu.log 2>&1
+        --ids $MMLU_IDS --note "release gate" --output $OUT/soak-mmlu.jsonl 2>&1 | tee $OUT/soak-mmlu.log
       s=$(jget $OUT/soak-mmlu.jsonl "f\"{correct} {errors} {n} {time_s} {tok_per_s} {start_footprint_gib} {max_footprint_gib} {end_footprint_gib} {start_footprint_ex_apc_gib} {end_footprint_ex_apc_gib} {start_apc_gib} {end_apc_gib}\"")
       if [ -z "$s" ]; then rec soak.mmlu FAIL "no summary (soak-mmlu.log)"
       else

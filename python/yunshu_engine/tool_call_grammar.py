@@ -563,6 +563,46 @@ def compile_tool_grammar(
         return None
 
 
+def require_tool_grammar(grammar, choice):
+    """Forced choices fail closed; auto may still use the unconstrained path."""
+    if grammar is None and is_forced(choice):
+        raise ValueError(
+            "Cannot guarantee forced tool_choice for this model and tool schema: "
+            "tool grammar cannot compile (unsupported format, multi-token markers "
+            "or recursive schema). Use tool_choice='auto' or a supported schema."
+        )
+    return grammar
+
+
+def validate_forced_tools(engine, tools, choice, parallel=True):
+    """CPU-only preflight, before response headers; reuse the engine's grammar cache."""
+    choice = normalize_tool_choice(choice)
+    if not is_forced(choice):
+        return
+    cache = engine.__dict__.setdefault("_tool_grammars", {})
+    key = grammar_key(tools, choice, parallel)
+    if key not in cache:
+        cfg = getattr(engine, "_config", None) or {}
+        args = getattr(getattr(engine, "_model", None), "args", None)
+        tok = engine._tokenizer
+        if tok is None:
+            raise ValueError(
+                "Cannot guarantee forced tool_choice: model tokenizer is unavailable"
+            )
+        vocab = (
+            (cfg.get("text_config") or {}).get("vocab_size")
+            or cfg.get("vocab_size")
+            or getattr(args, "vocab_size", None)
+            or len(getattr(tok, "_tokenizer", tok))
+        )
+        if len(cache) >= 8:
+            cache.pop(next(iter(cache)))
+        cache[key] = compile_tool_grammar(
+            tools, tok, int(vocab), tool_choice=choice, parallel=parallel
+        )
+    require_tool_grammar(cache[key], choice)
+
+
 def grammar_key(tools: Any, tool_choice: Any, parallel: bool) -> str:
     payload = json.dumps(
         [

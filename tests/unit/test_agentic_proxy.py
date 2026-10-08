@@ -94,3 +94,23 @@ def test_leak_detection_and_kind():
     assert t.summary(1.0)["leaked_tool_markup"]
     assert api_kind("/v1/messages?beta=true") == "messages"
     assert api_kind("/v1/models") is None
+
+
+@pytest.mark.parametrize(
+    "marker", ["<tool_call>", "<function=", "<|tool_call", "[TOOL_CALLS]"]
+)
+def test_leak_marker_across_every_chunk_boundary(marker):
+    for split in range(1, len(marker)):
+        tracker = Tracker("responses", 0)
+        tracker.feed_event(
+            {"type": "response.output_text.delta", "delta": marker[:split]}, 1
+        )
+        assert not tracker.leaked
+        tracker.feed_event(
+            {"type": "response.output_text.delta", "delta": marker[split:]}, 2
+        )
+        assert tracker.leaked
+        assert (
+            len(tracker._leak_tail)
+            <= max(map(len, __import__("proxy").LEAK_MARKERS)) - 1
+        )

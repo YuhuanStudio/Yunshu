@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 ModelType = Literal[
     "llm", "vlm", "audio_tts", "audio_stt", "image_gen", "ocr", "sts", "video"
 ]
-EngineType = Literal["batched", "vlm", "audio", "image"]
+EngineType = Literal["batched", "vlm", "audio", "image", "decision"]
 
 IMAGE_GEN_MODEL_TYPES = {"flux", "sd3", "sdxl", "z_image"}
 
@@ -80,7 +80,7 @@ def _is_model_dir(path: Path) -> bool:
 
 
 def _engine_for_type(mt: ModelType) -> EngineType:
-    return {
+    table: dict[str, EngineType] = {
         "llm": "batched",
         "vlm": "vlm",
         "audio_tts": "audio",
@@ -89,7 +89,9 @@ def _engine_for_type(mt: ModelType) -> EngineType:
         "ocr": "vlm",
         "sts": "audio",
         "video": "vlm",
-    }.get(mt, "batched")
+        "decision": "decision",
+    }
+    return table.get(mt, "batched")
 
 
 def discover_models(model_dir: Path) -> dict[str, DiscoveredModel]:

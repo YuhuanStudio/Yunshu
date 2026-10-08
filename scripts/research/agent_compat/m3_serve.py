@@ -32,6 +32,7 @@ def wait_stop(
     alive,
     beat=lambda: None,
     every: float = 30.0,
+    identity: str = "",
 ) -> str:
     """Block until a client sends `stop` (-> "stop"), the deadline passes (-> "deadline") or alive() is False
     (-> "server-died")."""
@@ -52,10 +53,13 @@ def wait_stop(
         with conn:
             conn.settimeout(2.0)
             try:
-                line = conn.recv(64).decode("utf-8", "replace").strip()
+                line = conn.recv(256).decode("utf-8", "replace").strip()
             except OSError:
                 line = ""
-            if line == "stop":
+            if identity and line == f"ready {identity}":
+                conn.sendall(f"ready {identity}\n".encode())
+                continue
+            if line == (f"stop {identity}" if identity else "stop"):
                 with contextlib.suppress(OSError):
                     conn.sendall(b"stopping\n")
                 return "stop"
@@ -63,6 +67,7 @@ def wait_stop(
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
+    ap.add_argument("--identity", default="")
     ap.add_argument("--model", required=True)
     ap.add_argument("--port", type=int, required=True)
     ap.add_argument("--control-port", type=int, required=True)
@@ -116,6 +121,7 @@ def main(argv=None) -> int:
                 control,
                 time.monotonic() + a.minutes * 60,
                 lambda: proc.poll() is None,
+                identity=a.identity,
                 beat=lambda: print(
                     f"HEARTBEAT {time.monotonic() - t_start:.0f}s", flush=True
                 ),

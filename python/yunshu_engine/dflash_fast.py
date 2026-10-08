@@ -15,15 +15,14 @@ from .dflash_plan import live_bound
 
 _KERNELS: dict[str, Any] = {}
 
-# Same-checkpoint sweeps (27B oQ4e + DFlash2, M5): fast tree beat chain+copy
-# at 512..10240 for code and prose; prose lost at 12288 (-6.7%), so 10240.
-# 256 is excluded: prose with 512+ new tokens measured -4.5% there (3 reps).
+# The fast tree used to stop at 10240 live keys and 256 generated tokens. Those
+# limits came from sweeps made while every non-prefix commit copied the whole
+# key/value buffer (tree_verify.compact_kv); with that fixed the tree wins at
+# 32K-128K (27B oQ4e + DFlash2, M5, see PERF_TREND). The limits stay as safety
+# bounds only: kernels were bit-checked to 131072 keys; 262144 is the model's.
 CONTEXT_MIN = 512
-CONTEXT_LIMIT = 10240
-# The fast tree's edge is in the first tokens of a reply (+10-20% at <=256 new
-# tokens); over a long reply the chain's copy drafter catches up and the tree's
-# slower round (62 vs 51 ms at 8K) loses (yv: +0.2% at 1K, -2.5% prose at 8K).
-GENERATED_LIMIT = 256
+CONTEXT_LIMIT = 262144
+GENERATED_LIMIT = 1 << 30
 
 
 def live_eligible(context, generated=0):

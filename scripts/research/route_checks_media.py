@@ -405,6 +405,63 @@ def _image(c: Ctx):
 
 # ── embeddings ───────────────────────────────────────────────────────────────────────────
 
+
+@check(
+    "rerank_served", "POST /v1/rerank", "POST /v1/score", needs="rerank", served=True
+)
+def _rerank_served(c: Ctx):
+    from rerank_parity import PAIRS, compare
+
+    ref_fn = c.fixtures.get("rerank_reference")
+    expect(ref_fn, "missing Transformers reranker oracle")
+    ref = ref_fn(PAIRS)
+    score = c.req(
+        "POST",
+        "/v1/score",
+        json={"model": c.model, "text_1": PAIRS[0][0], "text_2": [b for a, b in PAIRS]},
+    )
+    expect(score.status_code == 200, f"score {score.status_code}: {score.text[:200]}")
+    scores = [r["score"] for r in score.json()["data"]]
+    verdict = compare(scores, ref)
+    expect(verdict["passed"], f"rerank reference mismatch: {verdict}")
+    rerank = c.req(
+        "POST",
+        "/v1/rerank",
+        json={
+            "model": c.model,
+            "query": PAIRS[0][0],
+            "documents": [b for a, b in PAIRS],
+            "top_n": 2,
+            "return_documents": False,
+        },
+    )
+    expect(
+        rerank.status_code == 200, f"rerank {rerank.status_code}: {rerank.text[:200]}"
+    )
+    rows = rerank.json()["results"]
+    order = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[:2]
+    expect([r["index"] for r in rows] == order, "rerank/score ranking differs")
+    expect(all("document" not in r for r in rows), "return_documents=false ignored")
+    c.notes["rerank_oracle"] = verdict
+
+
+@check("classify_head_served", "POST /v1/classify", needs="classifier", served=True)
+def _classify_head_served(c: Ctx):
+    from rerank_parity import TEXTS, compare
+
+    ref_fn = c.fixtures.get("classify_reference")
+    expect(ref_fn, "missing Transformers classifier oracle")
+    response = c.req("POST", "/v1/classify", json={"model": c.model, "input": TEXTS})
+    expect(
+        response.status_code == 200,
+        f"classify {response.status_code}: {response.text[:200]}",
+    )
+    got = [row["probs"] for row in response.json()["data"]]
+    verdict = compare(got, ref_fn(TEXTS))
+    expect(verdict["passed"], f"classification reference mismatch: {verdict}")
+    c.notes["classifier_oracle"] = verdict
+
+
 CAT = "A cat sat on the warm windowsill."
 KITTEN = "A small kitten rests on the sunny window ledge."
 FIN = "financial news about interest rates and markets"
@@ -537,6 +594,21 @@ def _embed(c: Ctx):
     expect(s.status_code == 200, f"score {s.status_code} {s.text[:150]}")
     sc = [x["score"] for x in s.json()["data"]]
     expect(sc[0] > sc[1], f"score {sc}")
+    alias = c.req(
+        "POST",
+        "/v1/score",
+        json={
+            "model": c.model,
+            "queries": CAT,
+            "documents": [KITTEN, STOCK],
+            "instruction": "ignored for bi-encoder",
+        },
+    )
+    expect(
+        alias.status_code == 200 and len(alias.json().get("data", [])) == 2,
+        f"score aliases: {alias.status_code} {alias.text[:160]}",
+    )
+
     # rerank: the relevant document first
     docs = [STOCK, KITTEN, "Rain is expected tomorrow."]
     r = c.req(
@@ -714,7 +786,6 @@ def egemma2_chat_messages(m):
     served=True,
 )
 def _embed_gemma2(c: Ctx):
-    import os
     import tempfile
 
     from egemma2_cases import cases, make_media

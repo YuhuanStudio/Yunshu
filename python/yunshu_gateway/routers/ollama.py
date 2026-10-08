@@ -4,8 +4,9 @@ Ollama clients (the official `ollama` SDKs, Open WebUI, Continue, ...) speak NDJ
 `/api/chat`, `/api/generate`, `/api/embed`, `/api/tags`, `/api/show`, `/api/ps`, `/api/version`.
 Each request is translated to the matching OpenAI request and sent back to this same server over
 loopback (so streaming is real, and auth, model routing, prefix cache, tools and constrained
-decoding behave exactly as on the OpenAI routes). Model management (`pull`, `create`, `copy`,
-`delete`, `push`) is not applicable: models are managed with `yunshu pull` / `yunshu model`.
+decoding behave exactly as on the OpenAI routes). Model management supports native MLX
+repositories and persistent names without duplicating checkpoints; registry uploads and
+GGUF conversion are unsupported.
 """
 
 from __future__ import annotations
@@ -19,8 +20,8 @@ from datetime import UTC, datetime
 from typing import Any
 
 import httpx
-from fastapi import APIRouter, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from yunshu_engine.version import yunshu_version
 
@@ -81,6 +82,18 @@ def _model_name(body: dict) -> str:
     if not m or not isinstance(m, str):
         raise OllamaError(400, "model is required")
     return m
+
+
+def _native_model_id(model: str) -> str:
+    """Ollama's omitted :latest tag and configured aliases resolve to a native id."""
+    from ..engine import get_model_manager
+
+    manager = get_model_manager()
+    if manager is None:
+        return model
+    entry = manager.get_entry(model) or manager.get_entry(model.removesuffix(":latest"))
+    mid = getattr(entry, "model_id", None)
+    return mid if isinstance(mid, str) and mid else model
 
 
 def _details(model_id: str) -> dict:
@@ -282,7 +295,7 @@ async def _run_chat(request: Request, body: dict, *, generate: bool):
         if not isinstance(msgs, list):
             raise OllamaError(400, "messages is required")
     oa: dict[str, Any] = {
-        "model": model,
+        "model": _native_model_id(model),
         "messages": _to_openai_messages(msgs),
         "stream": bool(stream),
         **_sampling(body.get("options"), body.get("format"), body),
@@ -409,6 +422,8 @@ def _wrap(fn):
             return await fn(request)
         except OllamaError as e:
             return error_response(e.status, e.message)
+        except HTTPException as e:
+            return error_response(e.status_code, str(e.detail))
 
     inner.__name__ = fn.__name__
     return inner
@@ -449,7 +464,7 @@ async def embed(request: Request):
         raise OllamaError(400, "input is required")
     t0 = time.perf_counter()
     async with _client(request) as c:
-        payload: dict[str, Any] = {"model": model, "input": inp}
+        payload: dict[str, Any] = {"model": _native_model_id(model), "input": inp}
         if body.get("dimensions"):
             payload["dimensions"] = body["dimensions"]
         resp = await c.post("/v1/embeddings", json=payload)
@@ -472,7 +487,8 @@ async def embeddings_legacy(request: Request):
     model = _model_name(body)
     async with _client(request) as c:
         resp = await c.post(
-            "/v1/embeddings", json={"model": model, "input": body.get("prompt", "")}
+            "/v1/embeddings",
+            json={"model": _native_model_id(model), "input": body.get("prompt", "")},
         )
     if resp.status_code != 200:
         raise _err_from(resp.text, resp.status_code)
@@ -514,8 +530,16 @@ async def tags(request: Request):
 @router.get("/ps")
 @_wrap
 async def ps(request: Request):
+    from ..engine import get_model_manager
+
+    manager = get_model_manager()
+    loaded = (
+        {e.model_id for e in manager.list_entries() if e.is_loaded} if manager else None
+    )
     out = []
     for m in await _list_models(request):
+        if loaded is not None and m["id"] not in loaded:
+            continue
         if m.get("loaded") is False or m.get("state") == "not-loaded":
             continue
         mid = m["id"]
@@ -567,20 +591,87 @@ async def version():
     return {"version": yunshu_version()}
 
 
-for _path in ("/pull", "/push", "/create", "/copy"):
+@router.post("/copy")
+@_wrap
+async def copy(request: Request):
+    from ..ollama_models import copy_model
 
-    async def _na(request: Request, _p=_path):
-        return error_response(
-            501,
-            f"/api{_p} is not supported: manage models with `yunshu pull` / `yunshu model`",
-        )
-
-    router.add_api_route(_path, _na, methods=["POST"], include_in_schema=True)
+    body = await _json_body(request)
+    source, destination = body.get("source"), body.get("destination")
+    if (
+        not isinstance(source, str)
+        or not source
+        or not isinstance(destination, str)
+        or not destination
+    ):
+        raise OllamaError(400, "source and destination are required")
+    await copy_model(request, source, destination)
+    return Response(status_code=200)
 
 
 @router.delete("/delete")
-async def delete_na(request: Request):
+@_wrap
+async def delete(request: Request):
+    from ..ollama_models import delete_model
+
+    await delete_model(request, _model_name(await _json_body(request)))
+    return Response(status_code=200)
+
+
+def _status_success(body):
+    if body.get("stream", True):
+
+        async def events():
+            yield _ndjson({"status": "success"})
+
+        return StreamingResponse(events(), media_type="application/x-ndjson")
+    return {"status": "success"}
+
+
+@router.post("/create")
+@_wrap
+async def create(request: Request):
+    from ..ollama_models import copy_model
+
+    body = await _json_body(request)
+    model = _model_name(body)
+    source = body.get("from")
+    if not isinstance(source, str) or not source:
+        raise OllamaError(
+            400, "from is required: create supports naming an existing native MLX model"
+        )
+    unsupported = [
+        key
+        for key in (
+            "files",
+            "adapters",
+            "quantize",
+            "parameters",
+            "template",
+            "system",
+            "messages",
+        )
+        if body.get(key)
+    ]
+    if unsupported:
+        raise OllamaError(400, "Unsupported create fields: " + ", ".join(unsupported))
+    await copy_model(request, source, model)
+    return _status_success(body)
+
+
+@router.post("/pull")
+@_wrap
+async def pull(request: Request):
+    from ..ollama_models import pull_model
+
+    body = await _json_body(request)
+    await pull_model(request, _model_name(body))
+    return _status_success(body)
+
+
+@router.post("/push")
+async def push_na(request: Request):
     return error_response(
         501,
-        "/api/delete is not supported: remove model files from the models directory",
+        "Ollama registry uploads are unsupported: Yunshu serves native MLX repositories",
     )

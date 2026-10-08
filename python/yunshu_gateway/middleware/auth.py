@@ -122,10 +122,11 @@ class AuthMiddleware(BaseHTTPMiddleware):
         "/openapi.json",
         "/redoc",
         "/",
+        "/console",
         "/favicon.ico",
     }
     # Prefixes that are always public (e.g., static assets)
-    PUBLIC_PREFIXES = ("/static/", "/assets/")
+    PUBLIC_PREFIXES = ("/static/", "/assets/", "/console/")
 
     def _is_auth_enabled(self) -> bool:
         if settings.get_bool("YUNSHU_AUTH_DISABLED"):

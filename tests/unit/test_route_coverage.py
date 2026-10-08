@@ -91,6 +91,8 @@ def test_checks_are_well_formed():
             "image",
             "embed",
             "embed2",
+            "rerank",
+            "classifier",
             "translate",
             "omni",
             "cascade",

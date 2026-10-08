@@ -1,0 +1,192 @@
+[
+ {
+  "match": "openai * /organization/*",
+  "status": "not_applicable",
+  "reason": "OpenAI organization administration (keys, users, projects, usage, audit logs, certificates, spend limits). Yunshu is a single-user local server: the admin API and multi-tenant RBAC were removed on purpose (CLAUDE.md refocus)."
+ },
+ {
+  "match": "openai * /projects/*",
+  "status": "not_applicable",
+  "reason": "Project administration inside an OpenAI organization (roles, groups, service accounts, rate limits); there is no organization here."
+ },
+ {
+  "match": "openai * /fine_tuning/*",
+  "status": "not_applicable",
+  "reason": "Hosted fine-tuning jobs, checkpoints, permissions and graders. Yunshu is an inference engine; training is out of scope. LoRA adapters are loaded, not trained, here."
+ },
+ {
+  "match": "openai DELETE /models/{}",
+  "status": "not_applicable",
+  "reason": "Deletes a fine-tuned model of the caller's organization; models here are local directories managed with the CLI."
+ },
+ {
+  "match": "openai * /assistants*",
+  "status": "not_applicable",
+  "reason": "Assistants API, deprecated by OpenAI in favour of Responses and Conversations (both served)."
+ },
+ {
+  "match": "openai * /threads*",
+  "status": "not_applicable",
+  "reason": "Threads and Runs belong to the deprecated Assistants API; Conversations and Responses replace them."
+ },
+ {
+  "match": "openai * /vector_stores*",
+  "status": "not_applicable",
+  "reason": "Hosted retrieval index behind file_search; there is no hosted vector store. Local retrieval is /v1/embeddings plus the caller's own index."
+ },
+ {
+  "match": "openai * /uploads*",
+  "status": "not_applicable",
+  "reason": "Multipart upload of files above the Files API size limit for hosted storage; the local Files store takes the file in one request."
+ },
+ {
+  "match": "openai * /moderations",
+  "status": "not_applicable",
+  "reason": "Needs a hosted moderation classifier; no moderation model is shipped. /v1/classify serves a local classifier checkpoint for the same job."
+ },
+ {
+  "match": "openai * /videos*",
+  "status": "not_applicable",
+  "reason": "Video generation (Sora) is a parked modality in this engine (CLAUDE.md: other modalities are supported capabilities, not the identity)."
+ },
+ {
+  "match": "openai * /containers*",
+  "status": "not_applicable",
+  "reason": "Hosted Code Interpreter sandboxes and their files; Yunshu runs no remote sandbox."
+ },
+ {
+  "match": "openai * /webhook_endpoints*",
+  "status": "not_applicable",
+  "reason": "Subscriptions to OpenAI-hosted events (batch / response completed); a local server has no event bus. Clients poll or stream."
+ },
+ {
+  "match": "openai * /webhook_event_types",
+  "status": "not_applicable",
+  "reason": "Catalogue for the hosted webhook subscriptions above."
+ },
+ {
+  "match": "openai * /chatkit/*",
+  "status": "not_applicable",
+  "reason": "Backend of OpenAI's hosted ChatKit widget (sessions, threads)."
+ },
+ {
+  "match": "openai * /safety/*",
+  "status": "not_applicable",
+  "reason": "OpenAI's hosted safety alerts and cases for an organization."
+ },
+ {
+  "match": "openai * /content_provenance_checks",
+  "status": "not_applicable",
+  "reason": "Verifies OpenAI watermarks / C2PA on hosted generations; no generation is signed here."
+ },
+ {
+  "match": "openai * /vaults*",
+  "status": "not_applicable",
+  "reason": "Hosted credential vaults of the Agents platform."
+ },
+ {
+  "match": "openai * /agents*",
+  "status": "not_applicable",
+  "reason": "OpenAI's managed Agents platform (sessions, environments, vaults, traces); hosted runtime. Agent workloads reach Yunshu through /v1/responses, MCP and the chat routes."
+ },
+ {
+  "match": "openai * /live*",
+  "status": "not_applicable",
+  "reason": "GPT-Live voice sessions, forks and sideband sockets; native voice is a parked modality (Realtime is served as a text turn)."
+ },
+ {
+  "match": "openai * /realtime/translations/*",
+  "status": "not_applicable",
+  "reason": "Realtime speech translation sessions; voice is a parked modality."
+ },
+ {
+  "match": "openai * /realtime/*",
+  "status": "planned",
+  "reason": "Realtime client secrets, sessions, transcription sessions and calls: the Realtime SDK flow mints a client secret before opening the websocket; the websocket itself is served."
+ },
+ {
+  "match": "openai * /chat/completions/{}*",
+  "status": "planned",
+  "reason": "Stored chat completions (GET list / retrieve / messages / update / delete) need a store=true persistence layer; only POST /chat/completions is served. Cheap once a store exists."
+ },
+ {
+  "match": "openai GET /chat/completions",
+  "status": "planned",
+  "reason": "List of stored chat completions; see the other stored-completion routes."
+ },
+ {
+  "match": "openai POST /audio/voices",
+  "status": "planned",
+  "reason": "Custom voice creation for speech; low priority (voice is parked)."
+ },
+ {
+  "match": "openai * /evals*",
+  "status": "planned",
+  "reason": "Evals (create, runs, output items) could grade local models; medium priority, not started."
+ },
+ {
+  "match": "openai * /skills*",
+  "status": "planned",
+  "reason": "Skills for Responses (versions, content); agent parity item, not started."
+ },
+ {
+  "match": "anthropic * /v1/organizations/*",
+  "status": "not_applicable",
+  "reason": "Anthropic Admin API (keys, users, invites, workspaces, rate limits, spend limits, RBAC, plugins, federation); admin was removed with multi-tenant control."
+ },
+ {
+  "match": "anthropic * /v1/skills*",
+  "status": "planned",
+  "reason": "Agent Skills (create, versions, delete); agent parity item shared with the OpenAI skills routes, not started."
+ },
+ {
+  "match": "anthropic * /v1/agents*",
+  "status": "not_applicable",
+  "reason": "Claude Managed Agents: hosted agent definitions and runtime."
+ },
+ {
+  "match": "anthropic * /v1/sessions*",
+  "status": "not_applicable",
+  "reason": "Claude Managed Agents sessions, events and resources (hosted runtime)."
+ },
+ {
+  "match": "anthropic * /v1/environments*",
+  "status": "not_applicable",
+  "reason": "Managed Agents execution environments (hosted sandboxes)."
+ },
+ {
+  "match": "anthropic * /v1/vaults*",
+  "status": "not_applicable",
+  "reason": "Hosted credential vaults of Managed Agents."
+ },
+ {
+  "match": "anthropic * /v1/memory_stores*",
+  "status": "not_applicable",
+  "reason": "Hosted Memory stores of Managed Agents; local memory is the caller's own store."
+ },
+ {
+  "match": "anthropic * /v1/dreams*",
+  "status": "not_applicable",
+  "reason": "Managed Agents background memory consolidation (hosted)."
+ },
+ {
+  "match": "anthropic * /v1/deployments*",
+  "status": "not_applicable",
+  "reason": "Managed Agents deployments (hosted). Hosted Anthropic service with no local counterpart in a single-node engine."
+ },
+ {
+  "match": "anthropic * /v1/deployment_runs*",
+  "status": "not_applicable",
+  "reason": "Managed Agents deployment runs (hosted)."
+ },
+ {
+  "match": "anthropic * /v1/tunnels*",
+  "status": "not_applicable",
+  "reason": "Network tunnels for Managed Agents environments (hosted)."
+ },
+ {
+  "match": "anthropic * /v1/user_profiles*",
+  "status": "not_applicable",
+  "reason": "Hosted end-user profiles of the Managed Agents platform."
+ }
+]

@@ -133,6 +133,7 @@ def _upstream() -> tuple[FastAPI, list[dict]]:
 
 @pytest.fixture
 def client(monkeypatch):
+    monkeypatch.setattr("yunshu_gateway.engine.get_model_manager", lambda: None)
     up, seen = _upstream()
 
     def fake_client(request):
@@ -283,5 +284,35 @@ def test_errors_use_ollama_shape(client):
     assert r.status_code == 400 and r.json()["error"] == "bad request here"
     assert client.post("/api/chat", content=b"{").status_code == 400
     assert client.post("/api/chat", json={"messages": []}).status_code == 400
-    assert client.post("/api/pull", json={"name": "x"}).status_code == 501
-    assert client.delete("/api/delete").status_code == 501
+    assert client.post("/api/pull", json={"name": "x"}).status_code == 400
+    assert client.delete("/api/delete").status_code == 400
+
+
+def test_ps_filters_unloaded_models_without_private_list_fields(client, monkeypatch):
+    from types import SimpleNamespace
+
+    manager = SimpleNamespace(
+        list_entries=lambda: [SimpleNamespace(model_id="demo-4bit", is_loaded=False)]
+    )
+    monkeypatch.setattr("yunshu_gateway.engine.get_model_manager", lambda: manager)
+    assert client.get("/api/ps").json() == {"models": []}
+
+
+def test_latest_tag_routes_to_native_id_but_echoes_requested_model(client, monkeypatch):
+    from types import SimpleNamespace
+
+    entry = SimpleNamespace(model_id="demo-4bit")
+    manager = SimpleNamespace(
+        get_entry=lambda name: entry if name == "demo-4bit" else None
+    )
+    monkeypatch.setattr("yunshu_gateway.engine.get_model_manager", lambda: manager)
+    r = client.post(
+        "/api/chat",
+        json={
+            "model": "demo-4bit:latest",
+            "stream": False,
+            "messages": [{"role": "user", "content": "hi"}],
+        },
+    )
+    assert r.status_code == 200 and r.json()["model"] == "demo-4bit:latest"
+    assert client.seen[-1]["model"] == "demo-4bit"
