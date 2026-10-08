@@ -130,3 +130,36 @@ def test_model_manager_routes_embedding_gemma2(tmp_path):
         json.dumps({"model_type": "qwen3_vl", "vision_config": {}})
     )
     assert mm._embedding_engine_class(str(tmp_path)).__name__ == "VLEmbeddingEngine"
+
+
+def test_weight_loader_merges_every_shard_and_memoizes(monkeypatch):
+    import sys
+    import types
+
+    calls = []
+    shards = {
+        "model-00001.safetensors": {"language_model.embed_tokens.weight": object()},
+        "model-00002.safetensors": {"language_model.layers.0.weight": object()},
+    }
+
+    def load(path):
+        calls.append(path)
+        return shards[path]
+
+    fake_core = types.ModuleType("mlx.core")
+    fake_core.load = load
+    fake_mlx = types.ModuleType("mlx")
+    fake_mlx.core = fake_core
+    monkeypatch.setitem(sys.modules, "mlx", fake_mlx)
+    monkeypatch.setitem(sys.modules, "mlx.core", fake_core)
+    model = eg.EmbeddingGemma2.__new__(eg.EmbeddingGemma2)
+    model._files = list(shards)
+    model._weights = None
+
+    weights = model._all_weights()
+    assert weights == {
+        key: value for shard in shards.values() for key, value in shard.items()
+    }
+    assert calls == list(shards)
+    assert model._all_weights() is weights
+    assert calls == list(shards)
