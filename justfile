@@ -69,3 +69,7 @@ dist:
 # What changed upstream for vendored kernels, watched repos and pinned packages
 vendor-check *args:
     uv run python scripts/vendor/check_upstream.py {{args}}
+
+# Private read-only live view of docs/research on http://0.0.0.0:3990 (content never enters git)
+research-site:
+    cd tools/research-site && pnpm install --prefer-offline && pnpm build && node server/index.ts

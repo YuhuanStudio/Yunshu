@@ -17,6 +17,7 @@ line also runs it before committing so its own row is current.
 
     scripts/dev/research_index.py [--index PATH] [--codex DIR] [--jobs DIR] [--base-tag v0.1.4]
                                   [--main BRANCH] [--check-age]   # --check-age: exit 1 if stamp > 60 min
+                                  [--json PATH|-]   # per-line data as JSON (read-only; tools/research-site)
 """
 
 from __future__ import annotations
@@ -123,9 +124,10 @@ def gpuq_counts(jobs_dir: Path) -> list[tuple[str, str]]:
     return rows
 
 
-def line_rows(
+def line_data(
     repo: Path, codex: Path, jobs_dir: Path, main: str, now: float
-) -> list[str]:
+) -> list[dict]:
+    """One dict per line (worktree branch); `line_rows` renders them, `--json` emits them."""
     workers = live_workers(codex)
     jobs = gpuq_counts(jobs_dir)
     rows = []
@@ -139,31 +141,64 @@ def line_rows(
             .rstrip("\n")
             .split("\t", 1)
         )
-        when = _age(now - float(info[0])) if info and info[0].isdigit() else "?"
-        subj = (info[1] if len(info) > 1 else "")[:80].replace("|", "/")
+        commit_ts = float(info[0]) if info and info[0].isdigit() else None
+        subj = info[1] if len(info) > 1 else ""
         rep = report_for(branch, codex)
         head, ready = report_head(rep) if rep else ("", "")
-        rep_cell = f"[{rep.name}]({rep}): {head}".replace("|", "/") if rep else "-"
-        live = (
-            "live" if any(str(path) in w or f"-C {path}" in w for w in workers) else "-"
-        )
+        live = any(str(path) in w or f"-C {path}" in w for w in workers)
         stem = branch.split("/")[-1]
         mine = [st for lb, st in jobs if lb.startswith(stem + "-")]
         pend, run = mine.count("pending"), mine.count("running")
-        q = f"{run}r/{pend}q" if (pend or run) else "-"
         head_sha = _git(repo, "rev-parse", branch).strip()
         if ahead == "0":
             status = "merged"
         elif ready:
-            status = (
-                f"READY {ready}"
-                if head_sha.startswith(ready)
-                else f"READY(old) {ready}"
-            )
+            status = "ready" if head_sha.startswith(ready) else "ready-old"
         else:
             status = "open"
         rows.append(
-            f"| {branch} | +{ahead}/-{behind} | {status} | {live} | {q} | {when} {subj} | {rep_cell} |"
+            {
+                "branch": branch,
+                "worktree": str(path),
+                "ahead": ahead,
+                "behind": behind,
+                "status": status,
+                "ready_sha": ready,
+                "head_sha": head_sha[:8],
+                "worker_live": live,
+                "gpuq_running": run,
+                "gpuq_pending": pend,
+                "commit_ts": commit_ts,
+                "commit_age": _age(now - commit_ts) if commit_ts else "?",
+                "commit_subject": subj,
+                "report_path": str(rep) if rep else "",
+                "report_head": head,
+            }
+        )
+    return rows
+
+
+def line_rows(
+    repo: Path, codex: Path, jobs_dir: Path, main: str, now: float
+) -> list[str]:
+    rows = []
+    for d in line_data(repo, codex, jobs_dir, main, now):
+        subj = d["commit_subject"][:80].replace("|", "/")
+        rep = d["report_path"]
+        rep_cell = (
+            f"[{Path(rep).name}]({rep}): {d['report_head']}".replace("|", "/")
+            if rep
+            else "-"
+        )
+        status = {
+            "ready": f"READY {d['ready_sha']}",
+            "ready-old": f"READY(old) {d['ready_sha']}",
+        }.get(d["status"], d["status"])
+        pend, run = d["gpuq_pending"], d["gpuq_running"]
+        q = f"{run}r/{pend}q" if (pend or run) else "-"
+        live = "live" if d["worker_live"] else "-"
+        rows.append(
+            f"| {d['branch']} | +{d['ahead']}/-{d['behind']} | {status} | {live} | {q} | {d['commit_age']} {subj} | {rep_cell} |"
         )
     return rows
 
@@ -174,7 +209,13 @@ def parity_verdict(repo: Path) -> str:
     try:
         board = json.loads(path.read_text())
         n, total, missing = board["parity"], board["total"], board["missing"]
-        if type(n) is not int or type(total) is not int or not 0 <= n <= total or total == 0 or not isinstance(missing, list):
+        if (
+            type(n) is not int
+            or type(total) is not int
+            or not 0 <= n <= total
+            or total == 0
+            or not isinstance(missing, list)
+        ):
             raise ValueError("invalid counts")
         return f"parity: {n}/{total} items, missing: {len(missing)} (board snapshot; rerun scripts/dev/parityboard to refresh)"
     except (OSError, ValueError, KeyError, TypeError):
@@ -257,8 +298,28 @@ def main_cli(argv: list[str] | None = None) -> int:
     ap.add_argument("--base-tag", default="v0.1.4")
     ap.add_argument("--main", default="main")
     ap.add_argument("--check-age", action="store_true")
+    ap.add_argument(
+        "--json",
+        metavar="PATH",
+        help="print the per-line data as JSON to PATH ('-' = stdout) and exit; never writes the index",
+    )
     a = ap.parse_args(argv)
     root = main_root(a.repo)
+    if a.json:
+        now = time.time()
+        doc = json.dumps(
+            {
+                "generated": now,
+                "main": a.main,
+                "lines": line_data(root, a.codex, a.jobs, a.main, now),
+            },
+            ensure_ascii=False,
+        )
+        if a.json == "-":
+            print(doc)
+        else:
+            Path(a.json).write_text(doc)
+        return 0
     index = a.index or root / "docs" / "research" / "INDEX.md"
     if not index.exists():
         print(f"research_index: {index} not found", file=sys.stderr)
