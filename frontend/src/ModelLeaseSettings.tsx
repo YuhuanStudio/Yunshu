@@ -38,7 +38,7 @@ export function ModelLeaseSettings({
       icon={MemoryStick}
       title={t("models.lease.title")}
       description={t("models.lease.description")}
-      bodyClassName="px-5 pb-5"
+      bodyClassName="px-4 pb-4"
     >
       <SettingRow
         title={t("models.lease.model")}

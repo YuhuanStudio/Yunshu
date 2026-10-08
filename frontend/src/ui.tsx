@@ -196,7 +196,7 @@ export function SectionCard({
   action,
   children,
   className,
-  bodyClassName = "p-5",
+  bodyClassName = "p-4",
   ...props
 }: {
   icon: LucideIcon;
@@ -209,7 +209,7 @@ export function SectionCard({
 } & Omit<HTMLAttributes<HTMLDivElement>, "title">) {
   return (
     <Card className={className} {...props}>
-      <div className="flex flex-wrap items-center gap-3 px-5 pt-5">
+      <div className="flex flex-wrap items-center gap-3 px-4 pt-4">
         <span
           aria-hidden="true"
           className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-(--bg-elevated) text-muted-foreground"
@@ -418,5 +418,26 @@ export function UnavailableNotice({
     >
       {description}
     </Alert>
+  );
+}
+
+/**
+ * A stat value with its unit: the unit sits right after the number, smaller and muted,
+ * on the same baseline. A percent sign stays glued to the number at full size.
+ * `text` may carry the unit itself ("344 ms"), the way the duration formatter prints it.
+ */
+export function StatValue({ text, unit }: { text: string; unit?: string }) {
+  const m = unit ? null : /^(-?[\d.,]+)\s+(\S+)$/.exec(text);
+  const value = m ? m[1] : text;
+  const u = unit ?? m?.[2];
+  if (!u || value === "—") return <>{value}</>;
+  if (u === "%") return <>{value}%</>;
+  return (
+    <>
+      {value}
+      <span className="ml-1 text-xs font-normal text-muted-foreground">
+        {u}
+      </span>
+    </>
   );
 }

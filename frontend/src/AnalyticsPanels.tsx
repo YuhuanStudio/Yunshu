@@ -122,10 +122,7 @@ export function ChartCard({
   "data-testid"?: string;
 }) {
   return (
-    <Card
-      className={"min-w-0 p-5 sm:p-6 " + (className ?? "")}
-      data-testid={testId}
-    >
+    <Card className={"min-w-0 p-4 " + (className ?? "")} data-testid={testId}>
       <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <h2 className="heading-md">{title}</h2>

@@ -2,8 +2,8 @@ import { expect, test, type Page, type Route } from "@playwright/test";
 
 /**
  * RULES: at most 8 type styles app-wide on the YunDesign scale (13 body, 12 label, 14/600 section,
- * 20 page title, 22 stat value, plus mono for ids and code). A style is size / weight / mono-or-sans,
- * measured on every rendered text node of every page.
+ * 20 page title, 22 stat value, plus mono for ids and code). A style is size / weight / line-height /
+ * mono-or-sans, measured on every rendered text node of every page.
  */
 const MAX_STYLES = 8;
 /** The YunDesign scale: sizes 12, 13, 14, 20 and 22 only, weights 400-600. */
@@ -70,7 +70,45 @@ const status = {
   },
 };
 
-async function install(page: Page) {
+/** A busy engine: a queued, a prefilling and a decoding request, so lanes, the phase strip and the live panel render. */
+const busyStatus = {
+  ...status,
+  requests: {
+    active: 3,
+    queued: 1,
+    prefill: 1,
+    decode: 1,
+    items: [
+      {
+        request_id: "req-q",
+        elapsed_s: 1,
+        phase: "queued",
+        prompt_tokens: 800,
+      },
+      {
+        request_id: "req-p",
+        elapsed_s: 3,
+        phase: "prefill",
+        prompt_tokens: 4000,
+        processed_tokens: 1500,
+        tokens_per_second: 500,
+        eta_s: 5,
+      },
+      {
+        request_id: "req-d",
+        elapsed_s: 9,
+        phase: "decode",
+        prompt_tokens: 900,
+        cached_tokens: 600,
+        completion_tokens: 120,
+        tokens_per_second: 38,
+      },
+    ],
+  },
+  throughput: { ...status.throughput, live_decode_tps: 38 },
+};
+
+async function install(page: Page, busy = false) {
   await page.addInitScript(() =>
     localStorage.setItem("yunshu.console.url", location.origin),
   );
@@ -82,7 +120,8 @@ async function install(page: Page) {
         contentType: "application/json",
         body: JSON.stringify(b),
       });
-    if (path === "/v1/yunshu/status") return json(200, status);
+    if (path === "/v1/yunshu/status")
+      return json(200, busy ? busyStatus : status);
     if (path === "/v1/models")
       return json(200, {
         object: "list",
@@ -123,8 +162,14 @@ export async function typeStyles(page: Page): Promise<Record<string, string>> {
       if (cs.display === "none" || cs.visibility === "hidden" || r.width < 3)
         continue;
       const mono = /mono|menlo|courier|consolas/i.test(cs.fontFamily);
-      const key = `${cs.fontSize}/${cs.fontWeight}/${mono ? "mono" : "sans"}`;
-      out[key] ??= `${el.tagName.toLowerCase()}.${String(el.className).split(" ").slice(0, 3).join(".")} "${text.slice(0, 24)}"`;
+      // "normal" resolves to a font-dependent number; measure it as rendered, in whole px.
+      const lh =
+        cs.lineHeight === "normal"
+          ? `${Math.round(parseFloat(cs.fontSize) * 1.2)}px`
+          : `${Math.round(parseFloat(cs.lineHeight))}px`;
+      const key = `${cs.fontSize}/${cs.fontWeight}/${lh}/${mono ? "mono" : "sans"}`;
+      out[key] ??=
+        `${el.tagName.toLowerCase()}.${String(el.className).split(" ").slice(0, 3).join(".")} "${text.slice(0, 24)}"`;
     }
     return out;
   });
@@ -141,13 +186,34 @@ test("the whole console uses at most 8 type styles", async ({ page }) => {
     await page.waitForTimeout(1500);
     const found = await typeStyles(page);
     if (process.env.TYPE_STYLES_LOG)
-      console.log(p, Object.keys(found).length, (await page.locator("body").innerText()).length, (await page.locator("body").innerText()).slice(0, 200).replace(/\n/g, "|"));
+      console.log(
+        p,
+        Object.keys(found).length,
+        (await page.locator("body").innerText()).length,
+        (await page.locator("body").innerText())
+          .slice(0, 200)
+          .replace(/\n/g, "|"),
+      );
     for (const [k, v] of Object.entries(found)) all[k] ??= `${p}: ${v}`;
+  }
+  // Busy engine: the live lanes, phase pills and request rows join the same budget.
+  await page.unroute("**/v1/**");
+  await install(page, true);
+  for (const p of ["overview", "requests"]) {
+    await page.goto(`/console/#/${p}`, { waitUntil: "domcontentloaded" });
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await page.waitForTimeout(1500);
+    for (const [k, v] of Object.entries(await typeStyles(page)))
+      all[k] ??= `${p} (busy): ${v}`;
   }
   const keys = Object.keys(all);
   const off = keys.filter((k) => !SCALE_SIZES.has(k.split("/")[0]));
-  expect(off, `sizes off the scale:\n${off.map((k) => `${k}  ${all[k]}`).join("\n")}`).toEqual([]);
-  if (process.env.TYPE_STYLES_LOG) console.log(keys.map((k) => `${k}  ${all[k]}`).join("\n"));
+  expect(
+    off,
+    `sizes off the scale:\n${off.map((k) => `${k}  ${all[k]}`).join("\n")}`,
+  ).toEqual([]);
+  if (process.env.TYPE_STYLES_LOG)
+    console.log(keys.map((k) => `${k}  ${all[k]}`).join("\n"));
   expect(
     keys.length,
     `type styles in use:\n${keys.map((k) => `${k}  ${all[k]}`).join("\n")}`,

@@ -159,7 +159,7 @@ export function Settings({
             title={t("settings.connection.title")}
             description={t("settings.connection.description")}
             className="scroll-mt-4"
-            bodyClassName="px-5 pb-5"
+            bodyClassName="px-4 pb-4"
           >
             <StackRow
               title={
@@ -228,7 +228,7 @@ export function Settings({
             icon={Palette}
             title={t("settings.appearance.title")}
             className="scroll-mt-4"
-            bodyClassName="px-5"
+            bodyClassName="px-4"
           >
             <StackRow
               title={t("settings.appearance.dark")}
@@ -279,7 +279,7 @@ export function Settings({
             icon={Keyboard}
             title={t("settings.shortcuts.title")}
             className="scroll-mt-4"
-            bodyClassName="px-5 pb-2"
+            bodyClassName="px-4 pb-2"
           >
             {shortcuts.map(([keys, text]) => (
               <StackRow

@@ -17,6 +17,7 @@ export function SegmentedTray<T extends string = string>({
   onChange,
   className,
   "aria-label": ariaLabel,
+  fillOnPhone,
 }: {
   options: TrayOption<T>[];
   value: T;
@@ -25,16 +26,21 @@ export function SegmentedTray<T extends string = string>({
   "aria-label"?: string;
   /** Accepted for drop-in compatibility; the tray always wraps if it must. */
   wrap?: boolean;
+  /** Phone: the tray spans its row and the segments share it equally, so stacked trays align. */
+  fillOnPhone?: boolean;
 }) {
   return (
     <Tabs
       value={value}
       onValueChange={(v) => onChange(v as T)}
-      className={className}
+      className={cn(fillOnPhone && "max-sm:w-full", className)}
     >
       <TabsList
         aria-label={ariaLabel}
-        className="h-8 flex-wrap gap-0.5 rounded-lg bg-(--tray-track) p-0.5"
+        className={cn(
+          "h-8 flex-wrap gap-0.5 rounded-lg bg-(--tray-track) p-0.5",
+          fillOnPhone && "max-sm:w-full",
+        )}
       >
         {options.map(({ value: v, label, icon: Icon }) => (
           <TabsTrigger
@@ -42,6 +48,7 @@ export function SegmentedTray<T extends string = string>({
             value={v}
             className={cn(
               "h-7 gap-1.5 rounded-md px-2.5 py-0 text-xs",
+              fillOnPhone && "max-sm:flex-1",
               "data-[state=active]:bg-(--tray-selected) data-[state=active]:text-foreground data-[state=active]:shadow-none data-[state=active]:ring-1 data-[state=active]:ring-(--tray-selected-ring)",
               "data-[state=inactive]:text-muted-foreground",
             )}

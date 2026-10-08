@@ -45,14 +45,41 @@ output {
 }
 
 /*
- * Type scale (YunDesign): the whole console uses eight styles.
- *   12/400  caption          13/400  body            13/500  label, button
- *   14/600  section heading  22/600  page title/stat 12/400 mono  code, ids
- * Wrapper classes (text-sm, font-medium, text-3xl ...) cannot add a ninth.
+ * Type scale (YunDesign): the whole console uses eight styles, each size / weight / line-height.
+ *   12/400/16 caption     12/500/16 label     12/400/16 mono (ids, code)
+ *   13/400/20 body        13/500/20 button    14/600/20 section heading
+ *   20/600/28 page title  22/600/28 stat value
+ * Wrapper classes (text-sm, font-medium, leading-snug ...) cannot add a ninth: every element's
+ * line-height snaps to the 4px grid (round(1.45em): 12 -> 16, 13 -> 20, 14 -> 20, 20 -> 28) and the
+ * named classes below pin theirs. Unlayered on purpose, so it beats the utilities layer.
  */
+:where([data-yunui-density="compact"]) * {
+  line-height: round(nearest, 1.45em, 4px);
+}
+[data-yunui-density="compact"] .text-caption,
+[data-yunui-density="compact"] .text-label,
+[data-yunui-density="compact"] .yunui-table .yunui-th {
+  line-height: 16px;
+}
+[data-yunui-density="compact"] .text-body,
+[data-yunui-density="compact"] .yunui-table,
+[data-yunui-density="compact"] .nav-item,
+[data-yunui-density="compact"] .nav-tab {
+  line-height: 20px;
+}
+/* Buttons follow their own size: 13 -> 20, 12 -> 16. */
+[data-yunui-density="compact"] .btn {
+  line-height: round(nearest, 1.45em, 4px);
+}
+[data-yunui-density="compact"] .heading-md,
+[data-yunui-density="compact"] .yunui-section-title,
+[data-yunui-density="compact"] .yunui-card-title {
+  line-height: 20px;
+}
 :where(.font-mono, code, kbd, samp, pre, pre *) {
   font-size: 12px;
   font-weight: 400;
+  line-height: 16px;
 }
 [data-yunui-density="compact"] .nav-section,
 .text-xs.font-medium {
@@ -64,9 +91,30 @@ output {
   font-size: 13px;
   font-weight: 500;
 }
-[data-yunui-density="compact"] .heading-xl,
-.text-3xl {
+/* Page title 20/600/28; stat value 22/600/28. Descendants keep the pinned line-height. */
+.text-2xl *,
+.text-3xl *,
+:where([data-yunui-density="compact"]) .yunui-stat-value *,
+:where([data-yunui-density="compact"]) .heading-xl * {
+  line-height: inherit;
+}
+/* ...except where a descendant sets its own size: that size's line-height wins again. */
+.text-xs {
+  line-height: 16px;
+}
+.text-sm,
+.text-base {
+  line-height: 20px;
+}
+[data-yunui-density="compact"] .heading-xl {
+  font-size: 20px;
+  line-height: 28px;
+}
+.text-3xl,
+.text-2xl,
+[data-yunui-density="compact"] .yunui-stat-value {
   font-size: 22px;
+  line-height: 28px;
 }
 .text-base.font-semibold,
 .text-lg.font-semibold {
@@ -175,7 +223,7 @@ h1[tabindex="-1"]:focus-visible {
 /* One stat value size app-wide (the YunDesign 22). */
 .yunui-stat-value {
   font-size: 1.375rem;
-  line-height: 1.75rem;
+  line-height: 28px;
 }
 
 /* Stat sub-lines wrap instead of ending in an ellipsis: the copy is short enough, and a clipped number is worse than a second line. */
@@ -184,5 +232,5 @@ h1[tabindex="-1"]:focus-visible {
   text-overflow: clip;
   white-space: normal;
   /* Two lines reserved, so a sub-line that wraps for one reading never moves the row below. */
-  min-height: 2.6em;
+  min-height: 2lh;
 }

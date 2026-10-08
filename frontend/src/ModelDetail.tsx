@@ -207,7 +207,9 @@ export function ModelDetail({
                   size={96}
                   thickness={8}
                   tone={share > 85 ? "warning" : "accent"}
-                  label={`${number(share, 0)}%`}
+                  label={
+                    <span className="text-base font-semibold">{`${number(share, 0)}%`}</span>
+                  }
                   ariaLabel={t("models.detail.memory.gaugeAria", {
                     percent: number(share, 0),
                   })}

@@ -468,6 +468,7 @@ export function Models({
               placeholder={t("models.list.searchPlaceholder")}
             />
             <SegmentedTray
+              fillOnPhone
               value={filter}
               onChange={setFilter}
               options={[
@@ -477,6 +478,7 @@ export function Models({
             />
             {kinds.length > 1 && (
               <SegmentedTray
+                fillOnPhone
                 value={kind}
                 onChange={setKind}
                 options={[
@@ -486,7 +488,8 @@ export function Models({
               />
             )}
             <SegmentedTray
-              className="ml-auto"
+              fillOnPhone
+              className="sm:ml-auto"
               value={view}
               onChange={(v) => setView(v as "table" | "cards")}
               options={[

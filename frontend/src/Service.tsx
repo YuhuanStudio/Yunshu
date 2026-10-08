@@ -162,7 +162,7 @@ export function ServiceSection({ connection }: { connection: Connection }) {
       title={t("service.title")}
       description={t("service.description")}
       className="scroll-mt-4"
-      bodyClassName="px-5 pb-5"
+      bodyClassName="px-4 pb-4"
       data-testid="service-section"
       action={
         load.state === "ok" ? (
@@ -296,7 +296,7 @@ export function NetworkSection({ connection }: { connection: Connection }) {
       title={t("service.network.title")}
       description={t("service.network.description")}
       className="scroll-mt-4"
-      bodyClassName="px-5 pb-5"
+      bodyClassName="px-4 pb-4"
       data-testid="network-section"
     >
       <StackRow
@@ -350,7 +350,7 @@ export function CorsSection({ connection }: { connection: Connection }) {
       title={t("service.cors.title")}
       description={t("service.cors.description")}
       className="scroll-mt-4"
-      bodyClassName="px-5 pb-5"
+      bodyClassName="px-4 pb-4"
       data-testid="cors-section"
     >
       {load.state === "loading" && (
