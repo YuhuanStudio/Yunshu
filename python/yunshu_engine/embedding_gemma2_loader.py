@@ -9,7 +9,7 @@ from importlib import import_module
 from pathlib import Path
 
 
-def load_published_model(model_path: Path):
+def load_published_model(model_path: Path, *, lazy: bool = False):
     try:
         import_module("mlx_vlm.models.embedding_gemma2")
     except ModuleNotFoundError as exc:
@@ -18,11 +18,11 @@ def load_published_model(model_path: Path):
     else:
         from mlx_vlm.embedding_loader import load_embedding_model
 
-        return load_embedding_model(model_path, strict=True)
-    return _load_derived(model_path)
+        return load_embedding_model(model_path, strict=True, lazy=lazy)
+    return _load_derived(model_path, lazy=lazy)
 
 
-def _load_derived(model_path: Path):
+def _load_derived(model_path: Path, *, lazy: bool = False):
     import mlx.core as mx
     import mlx.nn as nn
     from mlx_vlm.encoder_loader import _weight_files
@@ -65,7 +65,8 @@ def _load_derived(model_path: Path):
             class_predicate=predicate,
         )
     model.load_weights(list(weights.items()), strict=True)
-    mx.eval(model.parameters())
+    if not lazy:
+        mx.eval(model.parameters())
     model.model_path = model_path
     model.eval()
     return model

@@ -28,6 +28,26 @@ def compare(a, b, floor):
     }
 
 
+def processor_payload(item):
+    """CPU-checkable fixture normalization, before any model is allocated."""
+    from yunshu_engine.embedding_gemma2 import (
+        _load_audio,
+        _load_image,
+        _load_video,
+        build_text,
+    )
+
+    text, media = build_text({"text": item} if isinstance(item, str) else item)
+    kw = {"text": [text], "return_tensors": "np"}
+    if "image" in media:
+        kw["images"] = [[_load_image(x) for x in media["image"]]]
+    if "audio" in media:
+        kw["audio"] = [_load_audio(x) for x in media["audio"]]
+    if "video" in media:
+        kw["videos"] = [[_load_video(x) for x in media["video"]]]
+    return kw
+
+
 def parser():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--model", required=True)
@@ -43,29 +63,20 @@ def run(args):
 
     from yunshu_engine.embedding_gemma2 import (
         EmbeddingGemma2,
-        build_text,
         resolve_prompt,
     )
     from yunshu_engine.embedding_gemma2_loader import load_published_model
 
     root = Path(args.reference).parent
     cs = _cases(str(root))
+    payloads = {name: processor_payload(item) for name, item in cs.items()}
     model = EmbeddingGemma2(args.model)
     # Fresh upstream loader instance, direct processor/model invocation; no Yunshu
     # batching, feature scatter, mean-pooling or task adapter in the oracle arm.
     upstream = load_published_model(Path(args.model))
     rows, single = [], {}
     for name, item in cs.items():
-        text, media = build_text(item)
-        from yunshu_engine.embedding_gemma2 import _load_audio, _load_image, _load_video
-
-        kw = {"text": [text], "return_tensors": "np"}
-        if "image" in media:
-            kw["images"] = [[_load_image(x) for x in media["image"]]]
-        if "audio" in media:
-            kw["audio"] = [_load_audio(x) for x in media["audio"]]
-        if "video" in media:
-            kw["videos"] = [[_load_video(x) for x in media["video"]]]
+        kw = payloads[name]
         prepared = model.processor(**kw)
         expected = upstream(**{k: mx.array(v) for k, v in prepared.items()}).text_embeds
         mx.eval(expected)
@@ -103,7 +114,11 @@ def run(args):
     shards = sorted(Path(args.model).glob("*.safetensors"))
     if len(shards) > 1:
         raw = EmbeddingGemma2(args.model, dtype="float32")
-        name = next(n for n, item in cs.items() if list(item) == ["text"])
+        name = next(
+            n
+            for n, item in cs.items()
+            if isinstance(item, str) or list(item) == ["text"]
+        )
         vector = raw.embed_items([cs[name]])[0]
         reference = json.loads(Path(args.reference).read_text())["plain"][name]
         raw_multishard = compare(vector, [reference], 0.99985)

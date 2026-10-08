@@ -179,7 +179,9 @@ def test_upstream_loader_prefers_native_module(monkeypatch, tmp_path):
     monkeypatch.setitem(sys.modules, "mlx_vlm.models.embedding_gemma2", native)
     monkeypatch.setitem(sys.modules, "mlx_vlm.embedding_loader", loader)
     assert load_published_model(tmp_path) is marker
-    assert seen == [(tmp_path, {"strict": True})]
+    assert seen == [(tmp_path, {"strict": True, "lazy": False})]
+    assert load_published_model(tmp_path, lazy=True) is marker
+    assert seen[-1] == (tmp_path, {"strict": True, "lazy": True})
 
 
 def test_derived_loader_mixed_precision_quantized_multishard(tmp_path):

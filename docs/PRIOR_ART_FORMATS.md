@@ -43,3 +43,11 @@ published snapshots. Repacked/private multi-shard checkpoints could reach it.
 This statement is about the shard defect only; it does not imply 0.1.4 could load
 published quantized formats. Pinned snapshots and index evidence are kept in the
 private priorfix notes.
+
+The wider HF search snapshot contains 101 matching repository names, including
+GGUF/ONNX/CoreML and unrelated substring matches. No listed model shard filenames
+were found. The two repositories with multiple root safetensors are Sakura
+Gemma4 DualMode: config.model_type is `gemma4`, and the files are embedding head
+and LoRA adapters, not EmbeddingGemma 2 weight shards. Split-component files under
+subdirectories likewise do not reach the raw root-shard loader. This is a dated
+inventory, not a claim about future uploads.

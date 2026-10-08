@@ -486,7 +486,8 @@
       "license": "MIT",
       "kind": "derived",
       "local_changes": [
-        "Prefer installed native embedding loader; fallback resolves vendored model without registry mutations; no unrelated encoder features."
+        "Prefer installed native embedding loader; fallback resolves vendored model without registry mutations; no unrelated encoder features.",
+        "Pass lazy through native/fallback loader so adapter evaluates text parameters first and media towers on demand."
       ],
       "upstream_paths": [
         "mlx_vlm/encoder_loader.py"

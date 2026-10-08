@@ -46,3 +46,19 @@ def test_runtime_probe_cli_and_exact_rule():
             .parse_args(["--kind", kind, "--out", "out", "--dry-run"])
             .dry_run
         )
+
+
+def test_embedding_probe_normalizes_every_real_fixture_before_loading(
+    monkeypatch, tmp_path
+):
+    monkeypatch.syspath_prepend(str(Path(__file__).parents[2] / "scripts/research"))
+    from egemma2_cases import cases, make_media
+
+    p = probe()
+    assert p.processor_payload("a cat")["text"] == ["a cat"]
+    fixtures = cases(make_media(str(tmp_path)))
+    assert len(fixtures) == 13
+    for item in fixtures.values():
+        payload = p.processor_payload(item)
+        assert payload["return_tensors"] == "np"
+        assert len(payload["text"]) == 1

@@ -355,7 +355,8 @@ class EmbeddingGemma2:
 
             from .embedding_gemma2_loader import load_published_model
 
-            self._upstream = load_published_model(Path(model_dir))
+            self._upstream = load_published_model(Path(model_dir), lazy=True)
+            mx.eval(self._upstream.language_model.parameters())
             self.text = _PublishedText(self._upstream.language_model)
             self.vision = self._upstream.vision_tower
             self.embed_vision = self._upstream.embed_vision
