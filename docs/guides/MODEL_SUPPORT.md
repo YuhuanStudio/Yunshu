@@ -12,6 +12,7 @@ before using tools, structured output, logprobs or media. See
 | Tuned family | Qwen3.5-family models | Family-specific speculation and prompt reuse; exact feature support depends on checkpoint and backend |
 | Generic text | Other mlx-lm models | Text serving path; upstream support alone is not an endpoint certification |
 | Generic vision-language | Other mlx-vlm models | Shared vision-language serving path; model-specific media/template/capability restrictions apply |
+| Decisions | Clef / Clef-flash MLX joint schema head | Separate forward-only engine; [guide](DECISIONS.md); other decision heads are rejected |
 | Other modalities | Audio, embeddings, image/video generation | Optional extras and model-specific routes; see API and configuration docs |
 
 For a new validation result, record exact model repository/revision, quantization,

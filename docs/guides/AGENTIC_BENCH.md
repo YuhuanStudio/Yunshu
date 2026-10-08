@@ -51,7 +51,9 @@ queue timeout. Output files begin with a `meta` row (engine, checkpoint, git SHA
 The commands above run one agent against one server. `scripts/dev/agentbench` is the whole matrix as one command (Claude Code, Codex and
 opencode on all 20 tasks against the default 27B server on `main`): one low-priority gpuq job per cell, a verdict that fails closed on API
 errors, malformed tool calls, markup leaks and missing runs, and the comparison with the 2026-09-30 run. See
-[VERIFY.md](VERIFY.md#agentbench-real-coding-agents-on-the-27b). Run it nightly at priority -1 and on every release commit.
+[VERIFY.md](VERIFY.md#agentbench-real-coding-agents-on-the-27b). Nightly standalone runs default to priority -1. `scripts/dev/release_check` submits the release candidate
+at priority -3 and prints a later collect command; agentbench is informational, while the gate, M3
+sweep and agent compatibility block release. Collect and record every submitted result.
 
 ## Add a task
 

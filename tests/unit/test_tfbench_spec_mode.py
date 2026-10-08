@@ -233,6 +233,42 @@ def test_kill_drops_the_servers_prefix_cache_keeps_logs(tmp_path):
     assert (srv.home / "server.log").read_text() == "log"
 
 
+def test_busy_port_pool_waits_and_recovers(monkeypatch):
+    calls = []
+    now = [0.0]
+
+    class Socket:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def setsockopt(self, *args):
+            pass
+
+        def bind(self, address):
+            calls.append(address[1])
+            if now[0] < 3:
+                raise OSError("busy")
+
+    monkeypatch.setenv("TFB_PORT_LAST", "18990")
+    monkeypatch.setattr(tfbench.socket, "socket", Socket)
+
+    def sleep(seconds):
+        now[0] += seconds
+
+    assert (
+        tfbench.free_port(wait_s=5, interval_s=3, sleep=sleep, clock=lambda: now[0])
+        == 18990
+    )
+    assert calls == [18990, 18990]
+    now[0] = 0
+    with pytest.raises(RuntimeError, match="bounded wait"):
+        tfbench.free_port(wait_s=2, interval_s=3, sleep=sleep, clock=lambda: now[0])
+    assert now[0] == 2
+
+
 def test_optional_client_timestamps_are_exact_and_not_in_default_schema(monkeypatch):
     import json
 
@@ -267,46 +303,3 @@ def test_optional_client_timestamps_are_exact_and_not_in_default_schema(monkeypa
             assert result["_first_at_s"] == 1.1
         else:
             assert "_sent_at_s" not in result and "_first_at_s" not in result
-
-
-def test_tfbench_busy_port_pool_waits_then_uses_only_allowed_port(monkeypatch):
-    available = False
-    attempts = []
-
-    class Socket:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args):
-            pass
-
-        def bind(self, address):
-            attempts.append(address[1])
-            if not available or address[1] != 18992:
-                raise OSError("busy")
-
-    def sleep(seconds):
-        nonlocal available
-        assert seconds > 0
-        available = True
-
-    monkeypatch.setattr(tfbench.socket, "socket", Socket)
-    monkeypatch.setenv("TFB_PORT_LAST", "18996")
-    assert tfbench.free_port(wait_s=60, sleep=sleep) == 18992
-    assert all(18990 <= port <= 18996 for port in attempts)
-
-
-def test_tfbench_busy_pool_has_a_bounded_deadline(monkeypatch):
-    class Socket:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args):
-            pass
-
-        def bind(self, address):
-            raise OSError("busy")
-
-    monkeypatch.setattr(tfbench.socket, "socket", Socket)
-    with pytest.raises(RuntimeError, match="deadline"):
-        tfbench.free_port(wait_s=0, sleep=lambda _: pytest.fail("must not sleep"))

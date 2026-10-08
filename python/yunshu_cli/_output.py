@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import sys
 from collections.abc import Callable
-from typing import Any
+from typing import Any, Never
 
 from rich.console import Console
 
@@ -63,7 +63,7 @@ def emit(data: Any, human: Callable[[], None] | None = None) -> None:
         human()
 
 
-def fail(message: str, code: int = 1, **extra: Any) -> None:
+def fail(message: str, code: int = 1, **extra: Any) -> Never:
     """Emit an error and raise typer.Exit(code).
 
     JSON mode → ``{"error": message, ...extra}`` on stdout; human mode → red text on stderr.

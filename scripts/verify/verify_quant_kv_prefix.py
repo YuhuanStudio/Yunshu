@@ -96,7 +96,7 @@ async def check(model, kv_quant=None):
 
     # warm: P1 first (caches CTX), then P2 reuses the shared CTX prefix
     eng = await fresh(model, kv_quant)
-    w1 = await run(eng, P1)
+    await run(eng, P1)
     # decode tps on the warm engine (4-bit weights → expect the ~3x lever)
     t0 = time.perf_counter()
     w2 = await run(eng, P2, mt=160)

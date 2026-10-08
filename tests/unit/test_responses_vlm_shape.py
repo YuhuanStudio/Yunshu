@@ -10,6 +10,7 @@ import asyncio
 import json
 import types
 
+from fastapi import Request
 from fastapi.responses import JSONResponse
 
 from yunshu_gateway.routers.responses import (
@@ -132,3 +133,131 @@ def test_streaming_emits_response_events(monkeypatch):
     ]
     assert seqs == sorted(seqs)
     assert seqs[0] == 0
+
+
+def test_vlm_bridge_preserves_computer_roundtrip_metadata(monkeypatch):
+    from yunshu_gateway.routers import chat
+    from yunshu_gateway.routers.responses import _convert_to_messages
+
+    seen = []
+
+    async def fake(chat_req, messages, request, json_schema=None):
+        seen.extend(chat_req.messages)
+        return JSONResponse(
+            {
+                "choices": [
+                    {
+                        "message": {"role": "assistant", "content": "BLUE"},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {"prompt_tokens": 3, "completion_tokens": 1},
+            }
+        )
+
+    monkeypatch.setattr(chat, "_handle_vlm_chat", fake)
+    req = ResponsesRequest(
+        model="local",
+        store=False,
+        input=[
+            {"role": "user", "content": "Show the screen."},
+            {
+                "type": "reasoning",
+                "summary": [{"type": "summary_text", "text": "inspect screen"}],
+            },
+            {
+                "type": "computer_call",
+                "id": "item",
+                "call_id": "call_screen",
+                "status": "completed",
+                "actions": [{"type": "screenshot"}],
+                "pending_safety_checks": [],
+            },
+            {
+                "type": "computer_call_output",
+                "call_id": "call_screen",
+                "output": {
+                    "type": "computer_screenshot",
+                    "image_url": "data:image/png;base64,aGVsbG8=",
+                },
+            },
+        ],
+    )
+    messages = _convert_to_messages(req)
+    response = asyncio.run(
+        _vlm_to_responses(req, messages, _fake_request(), None, messages)
+    )
+    assert response.status_code == 200
+    assert seen[1].tool_calls[0].id == "call_screen"
+    assert seen[1].reasoning_content == "inspect screen"
+    assert seen[2].tool_call_id == "call_screen"
+    normalized = chat._extract_messages(seen)
+    assert (
+        normalized[2]["content"][0]["image_url"]["url"]
+        == "data:image/png;base64,aGVsbG8="
+    )
+
+
+def test_computer_screenshot_sdk_reaches_vlm_bridge(monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from openai import OpenAI
+
+    from yunshu_gateway.routers import chat
+    from yunshu_gateway.routers.responses import _convert_to_messages
+
+    async def fake(chat_req, messages, request, json_schema=None):
+        assert chat_req.messages[-1].tool_call_id == "call_screen"
+        assert chat_req.messages[-2].tool_calls[0].id == "call_screen"
+        return JSONResponse(
+            {
+                "choices": [
+                    {
+                        "message": {"role": "assistant", "content": "BLUE"},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {"prompt_tokens": 3, "completion_tokens": 1},
+            }
+        )
+
+    monkeypatch.setattr(chat, "_handle_vlm_chat", fake)
+    app = FastAPI()
+
+    @app.post("/v1/responses")
+    async def route(req: ResponsesRequest, request: Request):
+        messages = _convert_to_messages(req)
+        return await _vlm_to_responses(req, messages, request, None, messages)
+
+    with TestClient(app) as client:
+        sdk = OpenAI(api_key="x", base_url="http://testserver/v1", http_client=client)
+        for stream in (False, True):
+            result = sdk.responses.create(
+                model="local",
+                store=False,
+                stream=stream,
+                input=[
+                    {"role": "user", "content": "Show the screen."},
+                    {
+                        "type": "computer_call",
+                        "id": "item",
+                        "call_id": "call_screen",
+                        "status": "completed",
+                        "actions": [{"type": "screenshot"}],
+                        "pending_safety_checks": [],
+                    },
+                    {
+                        "type": "computer_call_output",
+                        "call_id": "call_screen",
+                        "output": {
+                            "type": "computer_screenshot",
+                            "image_url": "data:image/png;base64,aGVsbG8=",
+                        },
+                    },
+                ],
+            )
+            if stream:
+                events = list(result)
+                assert events[-1].type == "response.completed"
+                result = events[-1].response
+            assert result.status == "completed" and result.output_text == "BLUE"

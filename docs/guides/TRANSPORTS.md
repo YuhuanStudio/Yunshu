@@ -9,7 +9,7 @@ so auth, middleware, request ids, prefix cache and cancellation behave identical
 | Text WebSocket, multiplexed | `WS /v1/stream` | stable, Yunshu protocol (below) |
 | Responses WebSocket mode | `WS /v1/responses` | stable, OpenAI's protocol |
 | Realtime WebSocket | `WS /v1/realtime` (GA schema; beta with `OpenAI-Beta: realtime=v1`), `/realtime` (beta) | stable |
-| Realtime WebRTC | `POST /v1/realtime/calls` | planned, see below |
+| Realtime WebRTC | `POST /v1/realtime/calls` | optional `yunshu[webrtc]`, see below |
 | Unix domain socket | `yunshu serve --uds PATH` | stable |
 | HTTP/2 (h2c) | not offered, see below | -- |
 
@@ -26,7 +26,7 @@ to 60 min, up to 16 in-flight responses and 32 named `stream_id`s per connection
 **Anthropic Messages**: SSE (`stream: true`) is the only streaming transport. There is no official
 WebSocket mode, so nothing to match; Messages is reachable through our own `/v1/stream` (`api: "messages"`).
 
-**OpenAI Realtime** (`/api/docs/guides/realtime-websocket`, `-conversations`, `-webrtc`):
+**OpenAI Realtime** (OpenAI documentation paths `realtime-websocket`, `realtime-conversations`, `realtime-webrtc`):
 - WebSocket `wss://.../v1/realtime?model=M`, `Authorization: Bearer`, browsers use the subprotocols
   `realtime` and `openai-insecure-api-key.<key>`. Events are JSON text frames.
 - GA client events: `session.update`, `conversation.item.create|truncate|delete`, `response.create|cancel`,
@@ -41,12 +41,6 @@ WebSocket mode, so nothing to match; Messages is reachable through our own `/v1/
   mono, 16-bit), `audio/pcmu`, `audio/pcma`. Turn detection `server_vad` / `semantic_vad` / null.
 - WebRTC: `POST /v1/realtime/calls` with `Content-Type: application/sdp` (offer in, answer out), an
   `oai-events` data channel carrying the same JSON events, audio on media tracks, ephemeral keys for browsers.
-
-**Other local servers.** vLLM: `/v1/realtime` WebSocket for streaming speech-to-text only (16 kHz PCM16,
-`transcription.delta/done`); no text WebSocket. llama.cpp `llama-server`, Ollama (NDJSON over HTTP) and
-LM Studio (its own SDK socket, not an API): text is SSE/NDJSON only, no multiplexing, no mid-stream
-control besides dropping the connection. None serves Realtime with speech-to-speech, WebRTC, or a Unix socket
-with the OpenAI/Anthropic surface.
 
 ## 2. `WS /v1/stream` (Yunshu protocol)
 
@@ -141,16 +135,29 @@ real-model smoke in `scripts/dev/transport_smoke.py`). Known differences from ap
 - Spoken replies carry `output_audio` content parts with the `transcript` (`audio` in the beta dialect).
 - Pass-through of unsupported session fields is silent (no `invalid_request_error`).
 
-### WebRTC (planned)
+### WebRTC (optional)
 
-Plan: `POST /v1/realtime/calls` (SDP offer in, answer out; `POST /v1/realtime/client_secrets` is served already and the
-secret authenticates the WebSocket), built on `aiortc`: an `oai-events` data channel carrying the exact events of the WebSocket path (the
-`RealtimeSession` already takes any object with `send_json`/`receive_text`), an inbound Opus track decoded
-to 24 kHz PCM feeding `input_audio_buffer.append`, and an outbound track fed from `response.output_audio.delta`.
-Not done because `aiortc` needs PyAV/libopus/libvpx native builds that are not in the dependency set and a
-real audio round trip needs a browser or a second aiortc peer to verify; shipping it unverified would be
-guesswork. Everything else in the session engine is transport-agnostic, so the work is the signalling
-route, the audio track adapters and an ICE config (loopback-only by default).
+Install `uv pip install 'yunshu[webrtc]'`. `POST /v1/realtime/calls` accepts an SDP
+body (`application/sdp`) or multipart `sdp` plus JSON `session`, matching
+`client.realtime.calls.create`. It returns 201, an SDP answer and a `Location` call ID.
+An `oai-events` data channel shares the GA Realtime session. Incoming audio is
+resampled on CPU to mono PCM16 at 24 kHz; outgoing PCM travels on the RTP track,
+with a bounded two-second buffer. Audio format changes on the data channel are
+normalized to PCM24k; RTP negotiates the wire codec. Sessions close on peer failure,
+client channel close, server shutdown, or after one hour; offers without an opened
+channel expire after 60 seconds. At most 16 calls remain live.
+
+aiortc 1.15 uses BSD-3-Clause; its PyAV arm64 wheel is about 18 MB. It is an opt-in
+extra, so text-only installs do not acquire the codec stack. There are no public
+STUN/TURN servers: loopback/LAN peers must have directly reachable ICE candidates.
+Missing the extra returns 503 with `WS /v1/realtime` as the user-visible alternative.
+WebSocket audio uses `input_audio_buffer.append` and `response.output_audio.delta`.
+Ephemeral client secrets also authenticate this signalling endpoint. SIP call
+management and a monitoring sideband WebSocket are not provided.
+
+CPU evidence: SDK SDP create through ASGI/TestClient, two real aiortc peers exchanging
+session events and audio frames, PCM framing, queue bounds and cleanup in
+`tests/unit/test_respfeat.py`. M5 tiny real-server probe: `yv --suite respfeat`.
 
 ## 4. Unix domain socket
 

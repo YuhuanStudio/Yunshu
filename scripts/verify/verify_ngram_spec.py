@@ -72,7 +72,7 @@ def _degenerate(s: str) -> bool:
 def _common_prefix_tokens(a: str, b: str) -> int:
     aw, bw = a.split(), b.split()
     n = 0
-    for x, y in zip(aw, bw):
+    for x, y in zip(aw, bw, strict=False):
         if x != y:
             break
         n += 1

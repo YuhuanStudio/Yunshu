@@ -9,8 +9,8 @@
 class Yunshu < Formula
   desc "Fast local LLM/VLM inference engine for Apple Silicon (MLX)"
   homepage "https://github.com/YuhuanStudio/Yunshu"
-  url "https://files.pythonhosted.org/packages/d3/1e/d5fb41e9455f55a64caa0db714398ea01a7516d392874ceac5a993b377b5/yunshu-0.1.3.tar.gz"
-  sha256 "9308a4e0134c4bb134dafba00d57c3e3d1a01bbe9e9e179e36bbef5c2debb87b"
+  url "https://files.pythonhosted.org/packages/03/f6/8aad7ec201e345edd9e5abfc35caec09f33f4e34d15cbc423fb471cc46b7/yunshu-0.1.4.tar.gz"
+  sha256 "dc7835dbf39b928c5e4710e07ba0ceb899742e654bcf2914680aadbf8a033498"
   license "Apache-2.0"
   head "https://github.com/YuhuanStudio/Yunshu.git", branch: "main"
 

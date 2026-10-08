@@ -2,7 +2,7 @@
 # Run the release workflow's build-and-check job locally before tagging (CPU only, no GPU).
 #   scripts/dev/ci-local [REF]      # REF defaults to HEAD
 # Mirrors .github/workflows/release.yml: a fresh checkout of REF, `uv sync --dev --extra vision
-# --extra compression` into its own venv, ruff, the unit suite, uv build, twine check and a wheel
+# --extra compression` into its own venv, ruff/mypy, console checks, the unit suite, uv build, twine and a wheel
 # install smoke. The suite runs under sandbox-exec with this machine's build volume and the main
 # checkout unreadable, as on the CI runner, so tests that depend on local paths fail here first.
 set -eu
@@ -22,6 +22,9 @@ fi
 uv python install 3.13 >/dev/null
 UV_PROJECT_ENVIRONMENT="$WORK/.venv" uv sync -q --python 3.13 --dev --extra vision --extra compression
 uv run --python 3.13 ruff check python/ tests/
+uv run --python 3.13 ruff format --check python/ tests/
+uv run --python 3.13 python scripts/dev/mypy_gate.py
+(cd frontend && pnpm install --frozen-lockfile && pnpm exec tsc --noEmit && pnpm test && pnpm build && pnpm exec yunui doctor --strict && pnpm exec yunui audit --strict)
 PROFILE="$WORK/ci.sb"
 cat > "$PROFILE" <<EOF
 (version 1)
@@ -65,5 +68,14 @@ set -e
 cat "$WORK/pytest.log"
 [ "$rc" -eq 0 ] || { echo "ci-local: FAIL (pytest rc $rc) $SHA"; exit "$rc"; }
 uv build -q
+"$WORK/.venv/bin/python" - <<'PYCODE'
+import glob, tarfile, zipfile
+with zipfile.ZipFile(glob.glob("dist/*.whl")[0]) as wheel:
+    assert "yunshu_gateway/console_static/index.html" in wheel.namelist()
+with tarfile.open(glob.glob("dist/*.tar.gz")[0]) as source:
+    assert any(name.endswith("python/yunshu_gateway/console_static/index.html") for name in source.getnames())
+PYCODE
 uvx -q twine check dist/*
+UV_TOOL_DIR="$WORK/tools" UV_TOOL_BIN_DIR="$WORK/bin" uv tool install --python 3.13 "$(ls dist/yunshu-*.whl)"
+"$WORK/bin/yunshu" --version
 echo "ci-local: PASS $SHA ($WORK)"

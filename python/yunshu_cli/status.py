@@ -44,7 +44,7 @@ def status(
         healthy = resp.status_code == 200
         if healthy:
             engine_loaded = bool(resp.json().get("engine", {}).get("loaded"))
-    except httpx.ConnectError:
+    except (httpx.HTTPError, ValueError):
         fail(f"Cannot connect to {url} — start the server with `yunshu serve`.", code=2)
 
     status_color = "green" if healthy else "red"

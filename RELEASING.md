@@ -16,37 +16,38 @@ maintainer.
 
 ## Cut a release
 
+Prepare the version in `pyproject.toml` and dated CHANGELOG entry, then commit them.
+All verification must refer to that final commit; changes afterward need another check.
+
 ```bash
-# 1. Start from a green main.
-git switch main && git pull
-just test && just lint
-# ... and a passing release gate on this commit (docs/guides/RELEASE_GATE.md):
-zsh scripts/release/gate.sh
+# Maintainer: after each merge batch, before pushing main:
+nice -n 15 scripts/dev/ci-local main
+scripts/dev/yv gate --priority -1 --stages install,serve-27b,families,agent-sessions
+# Only after both pass on the same SHA:
+git push origin main
 
-# 2. Bump the version in pyproject.toml (one place; the CLI, /version and
-#    MCP read it from the installed package metadata).
-#    version = "0.1.1"
+# Final release: CI first, then gate + M3 sweep + agent compatibility + agentbench
+# together. Agentbench runs at -3 and is informational, not a release blocker.
+scripts/dev/release_check main --label-prefix release015
+# Review the single checklist and every verdict. Gate resumes passed stages on rerun; use the same --out directory if overridden.
+# Preview only (no CI, no GPU jobs):
+scripts/dev/release_check main --dry-run
 
-# 3. Turn "## [Unreleased]" in CHANGELOG.md into "## [0.1.1] - YYYY-MM-DD"
-#    and start a new "## [Unreleased]" above it with the required headings,
-#    an empty performance table and a compare footer to main. Leave lists empty
-#    until changes land; do not invent highlights for an empty draft.
-
-# 4. Build and check locally.
-rm -rf dist && uv build
-uvx twine check dist/*
-uv tool install --force "yunshu[vision] @ file://$PWD/$(ls dist/yunshu-*.whl)" && yunshu doctor
-
-# 5. Commit, tag, push. The tag triggers .github/workflows/release.yml.
-git commit -am "Release 0.1.1"
-git tag -a v0.1.1 -m "Yunshu 0.1.1"
-git push origin main v0.1.1
+# Only after ci-local, full gate, m3sweep and agentcompat PASS on this commit:
+git tag -a v0.1.5 -m "Yunshu 0.1.5"
+git push origin main v0.1.5
 ```
+
+Run the gate from the checkout of the commit being pushed. Never run `gate.sh`
+directly: `yv gate` submits through gpuq and preserves successful stage evidence.
+`release_check` keeps its SHA-keyed evidence under `/Volumes/P5Plus/yunshu-build/release-check/` and pins a clean tree and prints the pending agentbench collect command;
+collect it later and record its quality/regression verdict even though it does not
+block the release. CPU-only workers use `--dry-run` exclusively.
 
 The release workflow then does the following:
 
-1. Checks that the tag matches `pyproject.toml` and that `CHANGELOG.md` has a `## [0.1.1]` entry.
-2. Lints and runs the unit tests on an Apple Silicon runner.
+1. Checks that the tag matches `pyproject.toml` and that `CHANGELOG.md` has an entry for the tagged version.
+2. Runs ruff, mypy, console type checks/tests/build and the unit tests on an Apple Silicon runner.
 3. Builds the sdist and wheel, runs `twine check`, and installs the wheel into a clean tool env.
 4. Waits for approval on the `pypi` environment, then publishes to PyPI.
 5. Opens a **draft** GitHub release with the changelog section as its notes. Review the draft and
@@ -56,7 +57,7 @@ If something fails before step 4, nothing was published. Delete the tag, fix the
 again:
 
 ```bash
-git push --delete origin v0.1.1 && git tag -d v0.1.1
+git push --delete origin v0.1.5 && git tag -d v0.1.5
 ```
 
 A version that reached PyPI cannot be re-uploaded. Fix forward with the next patch version.
@@ -139,3 +140,18 @@ options; if security or correctness requires immediate removal, explain why.
 Experimental settings may be retired after their recorded decision, but still
 list user-visible removals. Python internals are not a stable embedding API.
 Security fixes target main and the latest release, as described in SECURITY.md.
+
+## Verify the exact release candidate
+
+Run `nice -n 15 scripts/dev/ci-local <candidate-sha>` before tagging to catch
+clean-install and sandbox/path-dependent failures. Use committed SHAs for `yv`
+arms and inspect the first line of `yv.log`; the base and candidate must differ.
+Read every completed job's exit status and final evidence record. Resume a failed
+stage after fixing infrastructure instead of rerunning already passed stages.
+
+On the shared GPU queue, priorities are non-positive: designated snapshot/sync
+jobs use 0, other work -1 (>=80 GB: -2). `--gate` admits a gate ahead of the same
+priority's backlog. Timing cells require quiet admission; correctness cells do not.
+A CPU-only documentation candidate can use `yv ab --suite preflight`; it does not
+certify engine output or performance. See [Contributing](CONTRIBUTING.md) and
+[verification](docs/guides/VERIFY.md) for the development checks.

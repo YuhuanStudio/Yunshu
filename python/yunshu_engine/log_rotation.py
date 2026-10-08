@@ -40,6 +40,7 @@ _PATTERNS: list[tuple[re.Pattern[str], str]] = [
         rf"\1\2{_REDACTED}",
     ),
     (re.compile(r"\b(sk|rk|pk)-[A-Za-z0-9_-]{16,}"), _REDACTED),
+    (re.compile(r"\bek_[A-Za-z0-9_-]{16,}"), _REDACTED),
     (re.compile(r"\bhf_[A-Za-z0-9]{20,}"), _REDACTED),
     (re.compile(r"\bgh[pousr]_[A-Za-z0-9]{30,}"), _REDACTED),
     (re.compile(r"\bAKIA[0-9A-Z]{16}\b"), _REDACTED),

@@ -184,7 +184,7 @@ def weights_bytes(model_path: Path) -> int:
     return sum(f.stat().st_size for f in model_path.rglob("*.safetensors"))
 
 
-def check_model(model: str, info: dict) -> list[Check]:
+def check_model(model: str, info: dict, *, metadata_only: bool = False) -> list[Check]:
     """Does ``model`` (a path or a Hugging Face repo id) exist, and does it fit?"""
     from .model import _hf_cached_snapshot, weights_complete
 
@@ -220,7 +220,14 @@ def check_model(model: str, info: dict) -> list[Check]:
             ]
         resolved = p
     else:
-        cached = _hf_cached_snapshot(model)
+        if metadata_only:
+            from yunshu_engine.model_discovery import hf_cache_snapshots
+
+            cached = next(
+                (p for repo, p, _ in hf_cache_snapshots() if repo == model), None
+            )
+        else:
+            cached = _hf_cached_snapshot(model)
         if cached is None:
             return [
                 Check(
@@ -293,7 +300,7 @@ def check_models_dir(base: Path) -> list[Check]:
                 "where your models live.",
             )
         ]
-    n = len(scan_models_dir(base))
+    n = len(scan_models_dir(base, detect_types=False))
     checks = [Check("models dir", "ok", f"{base} ({n} models)")]
     free = shutil.disk_usage(base).free
     if free < 20 * 1024**3:
@@ -720,7 +727,7 @@ def check_downloads(base: Path) -> list[Check]:
     if not base.is_dir():
         return []
     out = []
-    names = {m["name"] for m in scan_models_dir(base)}
+    names = {m["name"] for m in scan_models_dir(base, detect_types=False)}
     candidates = [
         c for c in sorted(base.iterdir()) if c.is_dir() and not c.name.startswith(".")
     ]
@@ -770,12 +777,66 @@ def check_service() -> Check:
     )
 
 
-def run_checks(model: str | None, host: str, port: int) -> list[Check]:
+def check_local_api_storage() -> list[Check]:
+    """0.1.5 stores are checked without creating files or exercising inference."""
+    roots = {
+        "Evals storage": Path(
+            settings.get("YUNSHU_EVALS_DIR") or paths.home() / "evals"
+        ).expanduser(),
+    }
+    roots["stored completions"] = Path(
+        settings.get("YUNSHU_CHAT_COMPLETIONS_DIR") or paths.home() / "chat_completions"
+    ).expanduser()
+    out = []
+    import os
+
+    for name, root in roots.items():
+        probe = root
+        while not probe.exists() and probe != probe.parent:
+            probe = probe.parent
+        writable = probe.is_dir() and os.access(probe, os.W_OK | os.X_OK)
+        out.append(
+            Check(
+                name,
+                "ok" if writable else "warn",
+                str(root),
+                ""
+                if writable
+                else "Choose a writable storage directory in `yunshu config`.",
+            )
+        )
+    out.append(
+        Check(
+            "0.1.5 APIs",
+            "ok",
+            "Evals and stored completions use local JSON stores; Realtime client secrets follow inference auth; Decisions require a compatible model",
+        )
+    )
+    return out
+
+
+def run_checks(
+    model: str | None, host: str, port: int, *, no_metal: bool = False
+) -> list[Check]:
     checks = check_platform()
     checks.append(check_python())
     if any(c.status == "fail" for c in checks):
         return checks
-    mlx_checks, info = check_mlx()
+    info: dict
+    if no_metal:
+        mlx_checks, info = (
+            [
+                Check(
+                    "mlx",
+                    "warn",
+                    "Metal probe skipped",
+                    "Run `yunshu doctor` for the Metal availability check.",
+                )
+            ],
+            {},
+        )
+    else:
+        mlx_checks, info = check_mlx()
     checks += mlx_checks
     checks.append(check_memory(info))
     checks += check_versions()
@@ -786,9 +847,11 @@ def run_checks(model: str | None, host: str, port: int) -> list[Check]:
     checks += check_disk_budget(paths.models_dir())
     checks += check_cache_integrity()
     checks += check_api_features(host)
+    checks += check_local_api_storage()
     if model:
-        checks += check_model(model, info)
-        checks += check_speculative(model)
+        checks += check_model(model, info, metadata_only=no_metal)
+        if not no_metal:
+            checks += check_speculative(model)
     checks.append(check_port(host, port))
     checks.append(check_prefix_disk())
     tiers = check_prefix_tiers()
@@ -810,9 +873,14 @@ def doctor(
     ),
     host: str = typer.Option("127.0.0.1", "--host", help="Host you will serve on."),
     port: int = typer.Option(8000, "--port", "-p", help="Port you will serve on."),
+    no_metal: bool = typer.Option(
+        False, "--no-metal", help="Skip importing MLX; inspect CPU configuration only."
+    ),
 ):
     """Check that this Mac can run Yunshu, and say how to fix what cannot."""
-    checks = run_checks(model or settings.get("YUNSHU_MODEL"), host, port)
+    checks = run_checks(
+        model or settings.get("YUNSHU_MODEL"), host, port, no_metal=no_metal
+    )
     failed = any(c.status == "fail" for c in checks)
     from yunshu_engine.version import yunshu_version
 

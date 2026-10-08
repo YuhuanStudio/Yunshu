@@ -1,6 +1,6 @@
 # KV cache: current serving paths and measured APC tiers
 
-Current architecture, including **unreleased main after v0.1.2**. Latest APC measurements:
+Current architecture on main in the **0.1.5 cycle**. The tier measurements below are historical:
 2026-10-02, M5 Max / 128 GB, Qwen3.8-27B oQ4e-mtp; measurement record `d00f61d7`,
 identity record `63b00e16`, merge `57272ed7`. Results are replay summaries, not confidence
 intervals from repeated sessions. The old M3 Max pre-runner VLM tables are historical;

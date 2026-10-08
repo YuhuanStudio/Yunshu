@@ -39,13 +39,13 @@ def _flat(x):
 
 def _rel_err(orig, deq):
     o, d = _flat(orig), _flat(deq)
-    num = sum(abs(a - b) for a, b in zip(o, d))
+    num = sum(abs(a - b) for a, b in zip(o, d, strict=False))
     den = sum(abs(a) for a in o) or 1.0
     return num / den
 
 
 def main() -> int:
-    from yunshu_engine.kv_quantization import KVQuantizer, KVQuantConfig
+    from yunshu_engine.kv_quantization import KVQuantConfig, KVQuantizer
 
     kv = _make_kv()
     results = {}

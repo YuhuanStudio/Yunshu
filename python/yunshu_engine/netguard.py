@@ -171,7 +171,7 @@ async def download_to_file(
     """Download ``url`` into ``dest`` under the network policy and return the byte count.
 
     One deadline covers DNS, every redirect hop and the body. Each hop is resolved, checked and
-    pinned. No credentials are sent. Raises ``ValueError`` (message contains "size limit" for an
+    pinned. Caller headers are sent only to the original origin. Raises ``ValueError`` (message contains "size limit" for an
     oversized body, "SSRF blocked" for a refused address) for every failure the caller maps to a
     clean 400.
     """
@@ -192,7 +192,10 @@ async def download_to_file(
                 async with client.stream(
                     "GET",
                     pinned,
-                    headers={**(headers or {}), **extra},
+                    headers={
+                        **((headers or {}) if same_origin(url, cur) else {}),
+                        **extra,
+                    },
                     extensions=ext,
                 ) as resp:
                     if resp.status_code in (

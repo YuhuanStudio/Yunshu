@@ -1147,6 +1147,39 @@ def stage_ttft_profile(ctx: Ctx) -> StageResult:
     )
 
 
+def stage_modelprobe(ctx: Ctx) -> StageResult:
+    """Candidate-only absolute reserve/serving pilot; no relative-model verdict."""
+    script = ctx.cand.path / "scripts/research/bigmoe_probe.py"
+    cell = Cell(
+        "modelprobe",
+        "cand-pilot",
+        [
+            ctx.py,
+            str(script),
+            "--model",
+            ctx.model,
+            "--src",
+            str(ctx.cand.path / "python"),
+            "--out",
+            "{out}",
+        ],
+        mem_gb=ctx.mem_gb,
+        timeout_min=15,
+        stall_min=8,
+    )
+    result = ctx.exe.run_cells([cell])
+    reasons = _failed_cells(result)
+    numbers = {
+        "scope": "candidate-only absolute reserve and generic serving; not model superiority"
+    }
+    evidence = result["cand-pilot"].evidence
+    if evidence:
+        rows = read_jsonl(evidence)
+        if rows:
+            numbers.update(rows[-1])
+    return _finish(ctx, StageResult("modelprobe", not reasons, reasons, numbers))
+
+
 def _websearch_valid(path: Path):
     rows = read_jsonl(path)
     if not rows or rows[-1].get("complete") is not True:
@@ -1435,8 +1468,64 @@ def stage_searchrank(ctx: Ctx) -> StageResult:
     )
 
 
+def stage_respfeat(ctx: Ctx) -> StageResult:
+    """One bounded M5 tiny server covers client-executed tools and transports."""
+    import json
+
+    tree_sha = subprocess.check_output(
+        ["git", "-C", str(ctx.cand.path), "rev-parse", "HEAD^{tree}"], text=True
+    ).strip()
+    argv = [
+        ctx.py,
+        str(ctx.cand.path / "scripts/research/respfeat_routes.py"),
+        "--model",
+        ctx.model,
+        "--tree-sha",
+        tree_sha,
+        "--device",
+        "m5",
+        "--out",
+        "{out}",
+    ]
+    if ctx.cand_env.get("RESPFEAT_EXTRA_PYTHONPATH"):
+        argv += ["--extra-pythonpath", ctx.cand_env["RESPFEAT_EXTRA_PYTHONPATH"]]
+
+    def valid(path):
+        from scripts.research.respfeat_routes import judge
+
+        try:
+            return judge(json.loads(path.read_text()))
+        except (OSError, ValueError) as exc:
+            return False, str(exc)
+
+    cell = Cell(
+        "respfeat",
+        "tiny-routes",
+        argv,
+        mem_gb=8,
+        timeout_min=10,
+        validate=valid,
+        device="m5",
+        cwd=ctx.cand.path,
+        retries=0,
+    )
+    result = ctx.exe.run_cells([cell])[cell.key]
+    evidence = json.loads(result.evidence.read_text()) if result.evidence else {}
+    return _finish(
+        ctx,
+        StageResult(
+            "respfeat",
+            result.ok,
+            [] if result.ok else [result.reason],
+            {"device": "m5", "candidate_commit": ctx.cand.key, "evidence": evidence},
+            [result.job],
+        ),
+    )
+
+
 STAGE_FUNCS = {
     "ttft_profile": stage_ttft_profile,
+    "respfeat": stage_respfeat,
     "evals": stage_evals,
     "websearch": stage_websearch,
     "tavily": stage_tavily,
@@ -1452,4 +1541,5 @@ STAGE_FUNCS = {
     "memory": stage_memory,
     "longqa": stage_longqa,
     "conc": stage_conc,
+    "modelprobe": stage_modelprobe,
 }

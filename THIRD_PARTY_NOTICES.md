@@ -110,3 +110,14 @@ Geist and JetBrains Mono font assets carry their OFL texts under `console_static
 Collecting once and calling `gc.freeze()` on the startup heap after model load follows vLLM's
 `freeze_gc_heap` (vllm/utils/gc_utils.py, Apache-2.0) and SGLang's `freeze_gc`
 (python/sglang/srt/utils/common.py, Apache-2.0). No code is copied; the code is written independently.
+
+## aiortc — optional WebRTC dependency
+
+The `webrtc` extra uses unmodified aiortc (BSD-3-Clause) and PyAV (BSD-3-Clause).
+Their source and binaries are not vendored in Yunshu. The reviewed macOS arm64
+PyAV 17.1 wheel links shared FFmpeg libraries whose `avcodec_license()` reports
+"LGPL version 3 or later". FFmpeg and codec licensing remains part of the separate
+installed dependency distribution; Yunshu does not bundle or relink those binaries.
+Sources and dependency licenses: https://github.com/aiortc/aiortc and
+https://github.com/PyAV-Org/PyAV . The SDK protocol adapters are independent code
+checked against openai-python (Apache-2.0) and anthropic-sdk-python (MIT).

@@ -197,6 +197,12 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 request, "Missing or invalid Authorization header"
             )
 
+        if path == "/v1/realtime/calls" and request.method == "POST":
+            from ..realtime_secrets import lookup
+
+            if lookup(token) is not None:
+                return await call_next(request)
+
         # Static token auth (constant-time comparison). The single consumer
         # authenticates with the one configured bearer token.
         if auth_token and tokens_equal(token, auth_token):

@@ -71,7 +71,7 @@ jobs:
         run: uv python install ${{ env.PYTHON_VERSION }}
 
       - name: Install dependencies
-        run: uv sync --dev
+        run: uv sync --dev --extra vision --extra compression
 
       - name: mypy (no new errors beyond baseline)
         run: uv run python scripts/dev/mypy_gate.py
@@ -98,6 +98,7 @@ jobs:
           corepack enable
           corepack prepare pnpm@11.19.0 --activate
           pnpm install --frozen-lockfile
+          pnpm exec tsc --noEmit
           pnpm test
           pnpm build
           pnpm exec yunui doctor --strict

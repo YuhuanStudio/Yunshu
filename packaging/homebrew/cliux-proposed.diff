@@ -1,0 +1,30 @@
+# Next release only: update URL/SHA to the published sdist containing setup/completion.
+--- a/Formula/yunshu.rb
++++ b/Formula/yunshu.rb
+@@ -22,19 +22,23 @@
+   depends_on arch: :arm64
+   depends_on macos: :sonoma
+   depends_on "python@3.13"
++  depends_on "uv"
+ 
+   def install
+-    system "python3.13", "-m", "venv", libexec
++    system "uv", "venv", "--python", "python3.13", libexec
+     # The vision extra (mlx-vlm) is what the Qwen3.5 / 3.6 / 3.8 family and
+-    # every VLM need; the other extras stay opt-in via pip in libexec.
+-    system libexec/"bin/pip", "install", "#{buildpath}[vision]"
++    # every VLM need; other extras stay opt-in via uv with this Python.
++    system "uv", "pip", "install", "--no-cache", "--python", libexec/"bin/python", "#{buildpath}[vision]"
+     bin.install_symlink libexec/"bin/yunshu"
++    generate_completions_from_executable(bin/"yunshu", "completion",
++                                        shells: [:bash, :zsh, :fish])
+   end
+ 
+   def caveats
+     <<~EOS
+       Check the machine and download a model:
+         yunshu doctor
++        yunshu setup
+         yunshu pull mlx-community/Qwen3.5-9B-MLX-4bit
+ 
+       Serve it (http://127.0.0.1:8000/v1):

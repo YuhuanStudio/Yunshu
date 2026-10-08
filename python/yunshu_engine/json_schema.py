@@ -31,7 +31,7 @@ import re
 import weakref
 from collections.abc import Callable
 from enum import Enum, auto
-from typing import Any
+from typing import Any, ClassVar, cast
 
 from yunshu_engine.constraint_eos import ConstrainedDecodingError, normalize_eos_ids
 
@@ -609,6 +609,9 @@ class JsonSchemaConstraint:
         allowed = constraint.get_allowed_tokens(tokenizer, generated_token_ids)
     """
 
+    _token_text_cache: ClassVar[weakref.WeakKeyDictionary[Any, dict[int, str]]]
+    _token_char_cache: ClassVar[weakref.WeakKeyDictionary[Any, dict[str, list[int]]]]
+
     def __init__(self, schema: dict | None = None) -> None:
         """Initialize constraint with optional JSON Schema.
 
@@ -619,7 +622,9 @@ class JsonSchemaConstraint:
         """
         if schema is not None:
             validate_supported_schema(schema)
-        self._schema = _repair_json_schema(schema) if schema is not None else None
+        self._schema: dict = (
+            _repair_json_schema(schema) if schema is not None else cast(dict, None)
+        )
         self._state = JsonState.START
         self._text_buffer = ""  # decoded text so far
         self._schema_stack: list[tuple[JsonState, dict]] = []
@@ -715,7 +720,7 @@ class JsonSchemaConstraint:
     def _get_type_from_schema(self, schema: dict) -> str | list[str]:
         """Extract the type from a schema, with default."""
         if "type" in schema:
-            return schema["type"]
+            return cast(str | list[str], schema["type"])
         # Infer type from other keywords
         if "properties" in schema:
             return "object"
@@ -900,7 +905,7 @@ class JsonSchemaConstraint:
                 return {"-", "0", "1", "2", "3", "4", "5", "6", "7", "8", "9"} | ws
             if isinstance(self._top_level_type, list):
                 # Multiple types possible
-                chars = set()
+                chars: set[str] = set()
                 for t in self._top_level_type:
                     chars.update(self._type_to_start_chars(t))
                 return chars | ws
@@ -980,7 +985,7 @@ class JsonSchemaConstraint:
                         candidates = [k for k in declared if k not in seen]
                         if candidates:
                             partial = self._text_buffer[self._string_start :]
-                            chars: set[str] = set()
+                            chars = set()
                             for cand in candidates:
                                 if cand.startswith(partial):
                                     if len(cand) == len(partial):
@@ -1038,7 +1043,7 @@ class JsonSchemaConstraint:
                 str_opts = [o for o in (opts or []) if isinstance(o, str)]
                 if str_opts:
                     partial = self._text_buffer[self._string_start :]
-                    chars: set[str] = set()
+                    chars = set()
                     for o in str_opts:
                         if o.startswith(partial):
                             chars.add(
@@ -1072,7 +1077,7 @@ class JsonSchemaConstraint:
         if state == JsonState.NUMBER_ZERO:
             # After leading '0', only '.', 'eE', or terminators (no more digits).
             # For integer type, exclude '.' and 'eE'.
-            chars: set[str] = set()
+            chars = set()
             if not self._is_integer:
                 chars.add(".")
                 chars.update("eE")
@@ -1167,7 +1172,7 @@ class JsonSchemaConstraint:
 
         # Handle enum: restrict to first chars of each enum value
         if "enum" in value_schema and isinstance(value_schema["enum"], list):
-            chars: set[str] = set()
+            chars = set()
             for val in value_schema["enum"]:
                 s = json_encode_value(val)
                 if s:
@@ -1345,7 +1350,7 @@ class JsonSchemaConstraint:
             if self._current_key and "properties" in parent_schema:
                 result = parent_schema["properties"].get(self._current_key)
                 if result is not None:
-                    return result
+                    return cast(dict, result)
             # Key not found in properties — check additionalProperties schema.
             # If additionalProperties is a dict, it defines the value schema
             # for unknown keys.  If True (or absent), return None to allow any type.

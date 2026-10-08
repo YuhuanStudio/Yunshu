@@ -57,6 +57,7 @@ def test_uds_skips_tcp_probe(monkeypatch, tmp_path):
 
     monkeypatch.setattr(serve_module, "_check_bind_address", must_not_probe)
     monkeypatch.setattr("uvicorn.run", lambda *args, **kwargs: None)
+    settings.set_override("YUNSHU_MULTI_MODEL", True)
     monkeypatch.setattr(serve_module, "_rotate_service_log", lambda: None)
     result = CliRunner().invoke(app, ["serve", "--uds", str(tmp_path / "server.sock")])
     assert result.exit_code == 0, result.output
