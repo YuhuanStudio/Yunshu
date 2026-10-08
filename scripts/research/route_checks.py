@@ -2574,6 +2574,19 @@ def console_registration_cancel(c):
     model_path = c.notes.get("console_model_path")
     if not model_path:
         skip("consolefeat_routes supplies the real checkpoint path")
+    hf_snapshot = c.notes.get("console_hf_snapshot")
+    if hf_snapshot:
+        r = c.http.post(
+            "/v1/yunshu/models/register",
+            json={"model": "consolefeat-hf", "path": hf_snapshot},
+        )
+        expect(r.status_code == 200 and r.json()["loaded"] is False, r.text)
+        expect(
+            c.http.delete("/v1/yunshu/models/register/consolefeat-hf").status_code
+            == 200,
+            "HF snapshot unregister failed",
+        )
+        c.notes["hf_snapshot_registration"] = "PASS"
     model = "consolefeat-local"
     r = c.http.post(
         "/v1/yunshu/models/register", json={"model": model, "path": model_path}

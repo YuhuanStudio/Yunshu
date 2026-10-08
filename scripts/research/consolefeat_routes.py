@@ -92,6 +92,21 @@ def run(a):
     (models / "consolefeat-seed").symlink_to(
         Path(a.model).resolve(), target_is_directory=True
     )
+    hf_snapshot = (
+        scratch / "hf" / "models--consolefeat--tiny" / "snapshots" / "revision"
+    )
+    hf_snapshot.mkdir(parents=True)
+    weights = []
+    for source in Path(a.model).iterdir():
+        if source.is_file():
+            (hf_snapshot / source.name).symlink_to(source.resolve())
+            if source.suffix == ".safetensors":
+                weights.append(source.name)
+    if not (hf_snapshot / "model.safetensors.index.json").exists():
+        # This view is only registered/unregistered, never loaded; test indexed external shards.
+        (hf_snapshot / "model.safetensors.index.json").write_text(
+            json.dumps({"weight_map": {str(i): name for i, name in enumerate(weights)}})
+        )
     token = "consolefeat-probe-token"
     result = {
         "device": "M5",
@@ -123,6 +138,7 @@ def run(a):
         ) as client:
             ctx = Ctx(server.url, token, "consolefeat-model", "multi", http=client)
             ctx.notes["console_model_path"] = a.model
+            ctx.notes["console_hf_snapshot"] = str(hf_snapshot)
             for name in ("console_registration_cancel", "console_host_latency"):
                 REGISTRY[name].fn(ctx)
                 result["checks"][name] = "PASS"

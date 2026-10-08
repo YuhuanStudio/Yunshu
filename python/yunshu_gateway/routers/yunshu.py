@@ -374,6 +374,7 @@ async def register_local(req: RegisterLocalRequest, request: Request) -> dict:
             or not config["model_type"].strip()
         ):
             raise ValueError("config.json requires a model_type")
+        weight_files = list(path.glob("*.safetensors"))
         index = path / "model.safetensors.index.json"
         if index.exists():
             index_config = json.loads(index.read_text())
@@ -388,10 +389,13 @@ async def register_local(req: RegisterLocalRequest, request: Request) -> dict:
                 if (
                     not isinstance(shard, str)
                     or not shard.endswith(".safetensors")
-                    or not (path / shard).resolve().is_relative_to(path)
+                    or Path(shard).is_absolute()
+                    or ".." in Path(shard).parts
                     or not (path / shard).is_file()
                 ):
                     raise ValueError("invalid or missing weights index shard")
+            # HF snapshot shards legitimately point outside snapshots/ into blobs/.
+            weight_files = [path / name for name in set(weight_map.values())]
         import importlib.metadata
         import re
 
@@ -424,7 +428,7 @@ async def register_local(req: RegisterLocalRequest, request: Request) -> dict:
         complete, reason = weights_complete(path)
         if not complete:
             raise ValueError(reason)
-        size = sum(f.stat().st_size for f in path.glob("*.safetensors"))
+        size = sum(f.stat().st_size for f in weight_files)
         return path, size
 
     try:

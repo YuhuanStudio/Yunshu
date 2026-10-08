@@ -459,7 +459,7 @@ into `YUNSHU_AUTH_DISABLED`. Unconfigured admin access is denied.
 | Route | Contract |
 |---|---|
 | `GET /v1/yunshu/host` | CPU-only `pmset -g therm`, `pmset -g batt`, OS memory pressure and memory/swap bytes. Cached 15 s; failed probes return `state: unknown` and `reason`. No root required. |
-| `POST /v1/yunshu/models/register` | `{model, path}`: validate local config/model type and complete safetensors shards; register without loading or copying. Accepts an HF cache snapshot directory. Requires multi-model mode; registration lasts for this process. Duplicate id: 409; invalid checkpoint: 400. |
+| `POST /v1/yunshu/models/register` | `{model, path}`: validate local config/model type and complete safetensors shards; register without loading or copying. Accepts an HF cache snapshot directory, including shard symlinks into `blobs/`; index filenames must be relative and cannot contain `..`. Requires multi-model mode; registration lasts for this process. Duplicate id: 409; invalid checkpoint: 400. |
 | `DELETE /v1/yunshu/models/register/{model_id}` | Remove only an unloaded, non-loading registration (409 otherwise). Does not delete checkpoint files or HF cache. |
 | `POST /v1/yunshu/models/cancel` | `{model}`: mark an active load and/or HF pull for cooperative cancellation. 202-style `status: cancelling` response (HTTP 200); poll status until loading clears. MLX work already executing is safely drained, then stopped and discarded, never handed to waiters. HF partial files remain resumable. No active operation: 404. |
 | `GET /v1/yunshu/requests/recent?limit=50` | Latest completed successful requests, newest first (limit 1–512), including `latency`. In-memory bounded metadata only; no prompt/response bodies. |

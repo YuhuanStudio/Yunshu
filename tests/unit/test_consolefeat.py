@@ -411,3 +411,57 @@ def test_probe_retries_busy_port(monkeypatch):
     assert module.retry_server(start) == "server" and len(calls) == 3
     with pytest.raises(RuntimeError, match="load failed"):
         module.retry_server(lambda: (_ for _ in ()).throw(RuntimeError("load failed")))
+
+
+def test_register_hf_snapshot_shard_symlinks(client, monkeypatch, tmp_path):
+    from yunshu_engine.model_manager import ModelManager
+
+    manager = ModelManager()
+    monkeypatch.setattr(
+        "yunshu_gateway.ollama_models.get_model_manager", lambda: manager
+    )
+    blobs = tmp_path / "models--org--test" / "blobs"
+    snapshot = tmp_path / "models--org--test" / "snapshots" / "revision"
+    blobs.mkdir(parents=True)
+    snapshot.mkdir(parents=True)
+    (blobs / "configblob").write_text('{"model_type":"qwen2"}')
+    (blobs / "weightblob").write_bytes(b"weights")
+    (snapshot / "config.json").symlink_to(blobs / "configblob")
+    (snapshot / "model.safetensors").symlink_to(blobs / "weightblob")
+    (snapshot / "model.safetensors.index.json").write_text(
+        '{"weight_map":{"weight":"model.safetensors"}}'
+    )
+    r = client.post(
+        "/v1/yunshu/models/register", json={"model": "hf-model", "path": str(snapshot)}
+    )
+    assert r.status_code == 200, r.text
+    assert not manager.get_entry("hf-model").is_loaded
+    assert manager.get_entry("hf-model").estimated_bytes == int(len(b"weights") * 1.8)
+    assert client.delete("/v1/yunshu/models/register/hf-model").status_code == 200
+    assert (blobs / "weightblob").exists() and (
+        snapshot / "model.safetensors"
+    ).is_symlink()
+
+
+@pytest.mark.parametrize("absolute", [False, True])
+def test_index_cannot_name_files_outside_model(client, monkeypatch, tmp_path, absolute):
+    from yunshu_engine.model_manager import ModelManager
+
+    monkeypatch.setattr(
+        "yunshu_gateway.ollama_models.get_model_manager", lambda: ModelManager()
+    )
+    root = tmp_path / "snapshot"
+    root.mkdir()
+    outside = tmp_path / "outside.safetensors"
+    outside.write_bytes(b"weights")
+    (root / "config.json").write_text('{"model_type":"qwen2"}')
+    shard = str(outside) if absolute else "../outside.safetensors"
+    (root / "model.safetensors.index.json").write_text(
+        json.dumps({"weight_map": {"weight": shard}})
+    )
+    assert (
+        client.post(
+            "/v1/yunshu/models/register", json={"model": "test", "path": str(root)}
+        ).status_code
+        == 400
+    )
