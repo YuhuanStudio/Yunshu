@@ -1115,6 +1115,8 @@ def _console_validate(path):
         "console_host_latency",
         "stream_latency",
         "single_stream_latency",
+        "console_backend_gaps",
+        "history_restart",
     }
     checks = rows[-1].get("checks", {})
     # gpuq adds device / execution_device / remote_host to every record: require the

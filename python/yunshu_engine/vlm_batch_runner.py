@@ -22,6 +22,7 @@ tokens from a queue on any other thread.
 
 from __future__ import annotations
 
+import collections
 import contextlib
 import logging
 import os
@@ -66,6 +67,7 @@ DRIVER_MAX_UNCACHED_TOKENS = 12288
 
 @dataclass
 class RunStats:
+    request_id: str | None = None
     prompt_tokens: int = 0
     cached_tokens: int = 0
     # Where the cached prefix came from ("ram", "ssd" or "none") and how long the lookup
@@ -95,7 +97,12 @@ class RunStats:
     t_last: float = 0.0  # latest generated token
     prefill_done: int = 0  # prompt tokens computed so far (cache hits excluded)
     prefill_total: int = 0  # prompt tokens to compute (cache hits excluded)
+    cache_reason: str | None = None
+    spec_reason: str | None = None
     spec_mode: str | None = None  # "mtp" / "dflash" while a drafter is in use
+    spec_depth_drafted: list[int] = field(default_factory=list)
+    spec_depth_accepted: list[int] = field(default_factory=list)
+    structured_output: dict | None = None
     spec_drafted: int = 0
     spec_accepted: int = 0
     spec_rounds: int = 0  # verify rounds this request took part in
@@ -462,6 +469,11 @@ class VLMBatchRunner:
         """
         stats = stats if stats is not None else RunStats()
         ids = input_ids.tolist() if hasattr(input_ids, "tolist") else list(input_ids)
+        from .request_tracker import current_request_id
+
+        stats.request_id = (
+            getattr(cancel_event, "client_request_id", None) or current_request_id.get()
+        )
         stats.prompt_tokens = len(ids)
         greedy = temperature is None or temperature < 1e-6
         processors = list(logits_processors or [])
@@ -801,9 +813,21 @@ class VLMBatchRunner:
         if self._driver_takes(job, alone) and job.cache_plan is None:
             self._admit_driver(job, use_apc)
             return
+        job.stats.cache_reason = (
+            "lookup_pending" if use_apc else "apc_disabled_or_admission_refused"
+        )
         job.stats.used_apc = use_apc
         spec_lane = self._aux_spec if job.priority < 0 else self._spec
         spec = job.use_draft and alone and spec_lane is None
+        job.stats.spec_reason = (
+            "engaged"
+            if spec
+            else "drafter_unavailable"
+            if self.drafter is None
+            else "request_ineligible"
+            if not job.use_draft
+            else "concurrent_or_lane_busy"
+        )
         if not spec:
             job.use_draft = False
             job.stats.used_draft = False
@@ -904,6 +928,12 @@ class VLMBatchRunner:
         if getattr(group.gen, "apc", None) is not None and hasattr(
             group.gen.apc, "set_request"
         ):
+            manager = group.gen.apc.manager
+            manager._console_requests.setdefault(
+                tuple(job.ids), collections.deque()
+            ).append(getattr(job.stats, "request_id", None))
+            while len(manager._console_requests) > 512:
+                manager._console_requests.popitem(last=False)
             group.gen.apc.set_request(job.ids, job.cache_plan)
         extra_hash = getattr(group.gen, "_apc_extra_hash", None)
         if extra_hash is not None:
@@ -1029,11 +1059,14 @@ class VLMBatchRunner:
                     oldest.handoff_graced = True
         self._observe_prefill(job)
         coordinator = getattr(group.gen, "apc", None)
-        if (
-            job.cache_plan is not None
-            and coordinator is not None
-            and hasattr(coordinator, "release_request")
-        ):
+        if coordinator is not None and hasattr(coordinator, "release_request"):
+            pending_ids = coordinator.manager._console_requests.get(tuple(job.ids))
+            if pending_ids is not None:
+                request_id = getattr(job.stats, "request_id", None)
+                if request_id in pending_ids:
+                    pending_ids.remove(request_id)
+                if not pending_ids:
+                    coordinator.manager._console_requests.pop(tuple(job.ids), None)
             coordinator.release_request(job.ids, job.cache_plan)
         if not group.jobs and getattr(group, "spec", False):
             from .spec_release import release_rounds
@@ -1156,6 +1189,10 @@ class VLMBatchRunner:
             if hasattr(lm, "_rope_deltas"):
                 lm._rope_deltas = mx.array([[job.rope_delta]], dtype=mx.float32)
         if group.spec:
+            from . import spec_metrics
+
+            spec_metrics.install()
+            spec_metrics.bind(job.stats)
             from . import mtp_lane
 
             mtp_lane.set_guide(job.guide)
@@ -1200,6 +1237,7 @@ class VLMBatchRunner:
             if flush is not None and apc is not None:
                 apc.defer_checkpoint_stores = False
             if group.spec:
+                spec_metrics.bind(None)
                 mtp_lane.set_guide(None)
                 mtp_lane.set_context(None)
                 set_request(None)
@@ -1301,6 +1339,7 @@ class VLMBatchRunner:
             return
         rec = take(len(job.ids), job.stats.cached_tokens, since=job.stats.t_admit)
         if rec is not None:
+            job.stats.cache_reason = "hit" if rec.cached else "no_reusable_prefix"
             job.stats.cache_tier = rec.tier
             job.stats.cache_reload_ms = rec.ms
             job.stats.cache_device = rec.device

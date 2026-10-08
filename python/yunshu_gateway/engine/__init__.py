@@ -10,6 +10,7 @@ The gateway routers use get_engine_for_model() which works in all modes.
 
 import logging
 from pathlib import Path
+from typing import Any
 
 from yunshu_engine import settings
 from yunshu_engine.batched_engine import BatchedEngine as Engine
@@ -48,7 +49,10 @@ def get_engine() -> Engine | None:
 
     from yunshu_engine.request_tracker import current_request_info
 
-    marks = getattr(current_request_info.get(), "latency_marks", None)
+    info: Any = current_request_info.get()
+    if info is not None and _engine is not None:
+        info.model = _display_model_id or getattr(_engine, "model_name", None)
+    marks = getattr(info, "latency_marks", None)
     if (
         marks is not None
         and _engine is not None
@@ -194,7 +198,10 @@ async def get_engine_for_model(model_id: str) -> Engine:
 
     from yunshu_engine.request_tracker import current_request_info
 
-    marks = getattr(current_request_info.get(), "latency_marks", {})
+    info: Any = current_request_info.get()
+    if info is not None:
+        info.model = model_id
+    marks = getattr(info, "latency_marks", {})
     marks.setdefault("model_lease_start", time.perf_counter())
     engine = await _get_engine_for_model(model_id)
     marks["model_lease"] = time.perf_counter()

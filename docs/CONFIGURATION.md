@@ -259,6 +259,7 @@ internal ones, `--json` prints JSON, `--config FILE` includes a config file.
 | `YUNSHU_SERVE_LOG` | bool | off | Write one numbers-only JSON line per finished generation request (timings, token counts, speculative acceptance, cache tier, concurrency, arm, build) to a local, size-capped, rotated file. Never prompts, outputs or token ids. Off by default; nothing leaves the machine. |
 | `YUNSHU_SERVE_LOG_DIR` | path | unset | Directory of the serve log. Unset: ~/.yunshu/logs. |
 | `YUNSHU_SERVE_LOG_MAX_MB` | float | 4.0 | Serve log: rotate at this size in MiB; with YUNSHU_SERVE_LOG_KEEP the directory is capped at max * (keep + 1). |
+| `YUNSHU_SERVE_LOG_RETENTION_DAYS` | int | 30 | History API metadata retention window in days; 0 disables age filtering. File storage remains bounded by SERVE_LOG_MAX_MB and SERVE_LOG_KEEP. |
 | `YUNSHU_SERVE_LOG_KEEP` | int | 4 | Serve log: rotated files kept. |
 | `YUNSHU_ARM` | str | unset | Label recorded in the serve log for the configuration arm this server runs (for offline A/B analysis); it changes no behaviour. |
 

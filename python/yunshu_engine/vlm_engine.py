@@ -2157,6 +2157,14 @@ class VLMEngine:
                 TokenMaskProcessor(eos_ids=list(self._get_eos_ids()), **mask_kw)
             )
         constraint = self._build_text_constraint(json_schema)
+        from .structured_report import backend_name, report
+
+        stats.structured_output = report(
+            "mlx-vlm",
+            json_schema,
+            backend_name(constraint),
+            enforced=constraint is not None,
+        )
         constraint_guide = None
         if constraint is not None:
             from .constrained_spec import ConstraintGuide

@@ -196,6 +196,21 @@
       "license": "MIT",
       "local_changes": [],
       "kind": "vendored"
+    },
+    {
+      "kind": "patches",
+      "path": "python/yunshu_engine/spec_metrics.py",
+      "repo": "https://github.com/Blaizzy/mlx-vlm",
+      "clone": "reference/mlx-vlm",
+      "package": "mlx-vlm",
+      "module": "mlx_vlm.speculative.common",
+      "symbol": "_record_speculative_round",
+      "signature": "(draft_model: nn.Module, accepted: float, draft_count: int)",
+      "license": "MIT",
+      "commit": "v0.7.6",
+      "why": "Preserve upstream lifetime counters while adding host-only per-depth request and aggregate counters; tree paths provide explicit parent topology.",
+      "source_sha256": "d76e582c8fa642340c47bb269e78f3d3415df1b9ad3fc49a886ac5a20233883c",
+      "installed_version": "0.7.6"
     }
   ],
   "derived": [
@@ -2515,6 +2530,60 @@
       "owner": "priorart/lead",
       "reviewed_date": "2026-10-08",
       "action": "EmbeddingGemma2 embedding_loader.load_embedding_model adoption/parity candidate; published quantized formats not yet qualified."
+    },
+    {
+      "url": "https://docs.vllm.ai/en/latest/api/vllm/v1/spec_decode/metrics/",
+      "kind": "discovery-only",
+      "license": "Apache-2.0",
+      "revision": "documentation reviewed 2026-10-08",
+      "reviewed_date": "2026-10-08",
+      "owner": "consolegaps",
+      "action": "Counters and per-position acceptance names; independently implemented host counters."
+    },
+    {
+      "url": "https://github.com/sgl-project/sglang/blob/main/docs_new/docs/references/production_metrics.mdx",
+      "kind": "discovery-only",
+      "license": "Apache-2.0",
+      "revision": "documentation reviewed 2026-10-08",
+      "reviewed_date": "2026-10-08",
+      "owner": "consolegaps",
+      "action": "Counter denominators, cache-hit metrics; reference only."
+    },
+    {
+      "url": "https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md",
+      "kind": "discovery-only",
+      "license": "MIT",
+      "revision": "documentation reviewed 2026-10-08",
+      "reviewed_date": "2026-10-08",
+      "owner": "consolegaps",
+      "action": "Slots/cache/metrics API; reference only."
+    },
+    {
+      "url": "https://github.com/jundot/omlx/blob/main/docs/usage-analytics.md",
+      "kind": "discovery-only",
+      "license": "Apache-2.0",
+      "revision": "documentation reviewed 2026-10-08",
+      "reviewed_date": "2026-10-08",
+      "owner": "consolegaps",
+      "action": "Metadata-only persistent usage and disabled semantics; reference only."
+    },
+    {
+      "url": "https://lmstudio.ai/docs/cli/serve/log-stream",
+      "kind": "discovery-only",
+      "license": "proprietary-documentation",
+      "revision": "documentation reviewed 2026-10-08",
+      "reviewed_date": "2026-10-08",
+      "owner": "consolegaps",
+      "action": "Server log stream exposes content; Yunshu keeps metadata-only history instead."
+    },
+    {
+      "url": "https://github.com/ollama/ollama/blob/main/docs/api/usage.mdx",
+      "kind": "discovery-only",
+      "license": "MIT",
+      "revision": "documentation reviewed 2026-10-08",
+      "reviewed_date": "2026-10-08",
+      "owner": "consolegaps",
+      "action": "Per-response timing and cached-token accounting; reference only."
     }
   ]
 }

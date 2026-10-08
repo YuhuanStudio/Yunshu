@@ -2752,3 +2752,117 @@ def console_registration_cancel(c):
     r = c.http.delete("/v1/yunshu/models/register/" + model)
     expect(r.status_code == 200, r.text)
     c.notes["cancel_load_status"] = loaded.status_code
+
+
+@check(
+    "console_backend_gaps",
+    "GET /v1/yunshu/cache",
+    "POST /v1/yunshu/cache/clear",
+    "GET /v1/yunshu/requests/history",
+    "GET /v1/yunshu/spec-decode",
+    "GET /v1/yunshu/bundle",
+    "GET /v1/yunshu/bundle/manifest",
+    "GET /v1/yunshu/models/impact",
+    served=True,
+    needs="multi",
+)
+def console_backend_gaps(c):
+    body = {
+        "model": c.model,
+        "messages": [
+            {
+                "role": "user",
+                "content": "context " * 600 + "\nReturn an object with ok=true.",
+            }
+        ],
+        "temperature": 0,
+        "max_tokens": 64,
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "receipt",
+                "strict": True,
+                "schema": {
+                    "type": "object",
+                    "properties": {"ok": {"type": "boolean", "const": True}},
+                    "required": ["ok"],
+                    "additionalProperties": False,
+                },
+            },
+        },
+    }
+    response = c.http.post(
+        "/v1/chat/completions",
+        json=body,
+        headers={"X-Request-Id": "consolegaps-schema"},
+    )
+    expect(response.status_code == 200, response.text)
+    content = response.json()["choices"][0]["message"]["content"]
+    expect(
+        json.loads(content).get("ok") is True, "schema-constrained content is invalid"
+    )
+    stats = response.json()["x_yunshu"]
+    expect(
+        stats["structured_output"]["enforced"] is True,
+        "schema enforcement not reported",
+    )
+    expect(
+        bool(stats["structured_output"]["grammar_backend"]), "grammar backend absent"
+    )
+    cache = c.http.get("/v1/yunshu/cache")
+    expect(cache.status_code == 200, cache.text)
+    expect(cache.json()["data"], "real prefill produced no cache entries")
+    for entry in cache.json()["data"]:
+        expect(
+            all(
+                k in entry
+                for k in (
+                    "namespace",
+                    "tokens",
+                    "bytes_logical",
+                    "bytes_physical",
+                    "tier",
+                    "last_hit",
+                    "hits",
+                )
+            ),
+            "cache entry contract",
+        )
+    expect(
+        any(
+            event["request_id"] == "consolegaps-schema"
+            for event in cache.json()["events"]
+        ),
+        "cache event lacks request link",
+    )
+    for path in ("spec-decode", "bundle/manifest", "bundle"):
+        result = c.http.get("/v1/yunshu/" + path)
+        expect(result.status_code == 200, result.text)
+    manifest = c.http.get("/v1/yunshu/bundle/manifest").json()
+    bundle = c.http.get("/v1/yunshu/bundle").json()
+    expect(set(manifest["included"]) == set(bundle), "CLI bundle manifest mismatched")
+    impact = c.http.get("/v1/yunshu/models/impact", params={"model": c.model})
+    expect(
+        impact.status_code == 200
+        and impact.json()["unload"]["in_flight_policy"] == "reject",
+        impact.text,
+    )
+    history = c.http.get("/v1/yunshu/requests/history", params={"limit": 1})
+    expect(history.status_code == 200 and history.json()["enabled"], history.text)
+    expect(
+        history.json()["data"][0]["request_id"] == "consolegaps-schema",
+        "persisted metadata missing",
+    )
+    expect("context context" not in history.text, "history leaked prompt")
+    cleared = c.http.post("/v1/yunshu/cache/clear")
+    expect(cleared.status_code == 200, cleared.text)
+    expect(
+        c.http.get("/v1/yunshu/cache").json()["data"] == [],
+        "resident clear did not clear",
+    )
+    c.notes["consolegaps"] = {
+        "cache_entries": len(cache.json()["data"]),
+        "cache_events": len(cache.json()["events"]),
+        "structured_output": stats["structured_output"],
+        "speculative": stats["speculative"],
+    }

@@ -136,7 +136,12 @@ def run(a):
                 a.src,
                 scratch / "home",
                 scratch / "server.log",
-                ["YUNSHU_AUTH_TOKEN=" + token, "YUNSHU_VLM_APC_DISK=0"],
+                [
+                    "YUNSHU_AUTH_TOKEN=" + token,
+                    "YUNSHU_VLM_APC_DISK=0",
+                    "YUNSHU_SERVE_LOG=1",
+                    "YUNSHU_SERVE_LOG_DIR=" + str(scratch / "history"),
+                ],
                 models_dir=str(models),
                 token=token,
             )
@@ -161,6 +166,8 @@ def run(a):
             result["latency_ms"] = validate_latency(row["latency"])
             result["milestones_ms"] = row["latency"]["milestones_ms"]
             result["checks"]["stream_latency"] = "PASS"
+            REGISTRY["console_backend_gaps"].fn(ctx)
+            result["checks"]["console_backend_gaps"] = "PASS"
             result["notes"] = ctx.notes
             result["server_log_tail"] = server.log_tail(40)
         server.kill()
@@ -170,7 +177,12 @@ def run(a):
                 a.src,
                 scratch / "single-home",
                 scratch / "single.log",
-                ["YUNSHU_AUTH_TOKEN=" + token, "YUNSHU_VLM_APC_DISK=0"],
+                [
+                    "YUNSHU_AUTH_TOKEN=" + token,
+                    "YUNSHU_VLM_APC_DISK=0",
+                    "YUNSHU_SERVE_LOG=1",
+                    "YUNSHU_SERVE_LOG_DIR=" + str(scratch / "history"),
+                ],
                 token=token,
             )
         )
@@ -180,6 +192,12 @@ def run(a):
             headers={"Authorization": "Bearer " + token},
             timeout=180,
         ) as client:
+            persisted = client.get("/v1/yunshu/requests/history?limit=512").json()[
+                "data"
+            ]
+            if not any(r["request_id"] == "consolegaps-schema" for r in persisted):
+                raise AssertionError("history did not survive server restart")
+            result["checks"]["history_restart"] = "PASS"
             row = stream_latency(client, server.model_id, "consolefeat-single-latency")
             result["single_latency_ms"] = validate_latency(row["latency"])
             result["single_milestones_ms"] = row["latency"]["milestones_ms"]

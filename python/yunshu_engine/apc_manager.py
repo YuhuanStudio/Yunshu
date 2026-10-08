@@ -838,6 +838,9 @@ class _Coordinator(APCCoordinator):
     def store_checkpoint(
         self, token_ids, prompt_cache, *, extra_hash=0, batch_idx=None
     ) -> bool:
+        self.manager.observation.request_id = self.manager.__dict__.get(
+            "_console_generations", {}
+        ).get(getattr(self, "_request_generation", None))
         tokens = tuple(token_ids)
         full_ids = getattr(self, "_current_ids", tokens)
         policy = self.request(full_ids)
@@ -989,6 +992,12 @@ class _Coordinator(APCCoordinator):
 
     def checkpoint_lengths(self, token_ids, media_token_ids, *, begin=True):
         if begin:
+            pending_ids = self.manager._console_requests.get(tuple(token_ids))
+            self.manager.observation.request_id = (
+                pending_ids.popleft() if pending_ids else None
+            )
+            if pending_ids is not None and not pending_ids:
+                self.manager._console_requests.pop(tuple(token_ids), None)
             self._current_ids = tuple(token_ids)
         final = self.checkpoint_len(token_ids, media_token_ids)
         if final <= 0:
@@ -1083,6 +1092,12 @@ class YunshuAPCManager(APCManager):
         self.prefill_boundary_tokens = frozenset(prefill_boundary_tokens)
         self.prefill_assistant_header = prefill_assistant_header
         self.prefill_message_end = prefill_message_end
+        from .cache_observation import Observation
+
+        self.observation = Observation()
+        self._console_requests: collections.OrderedDict[tuple, collections.deque] = (
+            collections.OrderedDict()
+        )
         self.lookups: collections.deque[Lookup] = collections.deque(maxlen=64)
         self._generation = 0
         # Explicit endpoints are protected against superseding until their
@@ -1117,8 +1132,14 @@ class YunshuAPCManager(APCManager):
                     warm_mode,
                     e,
                 )
-        if isinstance(self.disk, SpillDiskStore) or self.warm is not None:
-            self._exact_cache = _SpillingDict(self._demote)
+        from .cache_observation import ObservedCache
+
+        self._exact_cache = ObservedCache(
+            self.observation,
+            self._demote
+            if isinstance(self.disk, SpillDiskStore) or self.warm is not None
+            else None,
+        )
         if isinstance(self.disk, SpillDiskStore):
             self.disk.on_exact_written = self._disk_superseded_by
 
@@ -1150,6 +1171,13 @@ class YunshuAPCManager(APCManager):
         except Exception as e:
             logger.warning("APC warm: demotion failed (%s)", e)
             taken = False
+        self.observation.event(
+            "demotion" if taken else "rejection",
+            key,
+            len(entry.token_ids),
+            "warm",
+            "lru" if taken else "warm_capacity_or_encode",
+        )
         if not taken and not warm.lossy:
             self._spill(key, entry)
 
@@ -1160,6 +1188,9 @@ class YunshuAPCManager(APCManager):
         if warm is None:
             return
         for key, ent in warm.drain():
+            self.observation.event(
+                "eviction", key, len(ent.token_ids), "warm", "warm_budget"
+            )
             if warm.lossy:
                 warm.stats.dropped += 1
                 continue
@@ -1284,6 +1315,7 @@ class YunshuAPCManager(APCManager):
             self._born[key] = born
             if head:
                 self._head_keys.add(key)
+        self.observation.event("promotion", key, n, "ram", "warm_hit")
         self._promoted = (n, (time.perf_counter() - t0) * 1000.0)
 
     def close(self) -> None:
@@ -1381,6 +1413,12 @@ class YunshuAPCManager(APCManager):
     def begin_request(self) -> None:
         with self._plock:
             self._generation += 1
+            origins = self.__dict__.setdefault(
+                "_console_generations", collections.OrderedDict()
+            )
+            origins[self._generation] = self.observation.request_id
+            while len(origins) > 1024:
+                origins.popitem(last=False)
             if (
                 len(self._born) > _BORN_MAX
             ):  # bookkeeping only: forget the oldest generations
@@ -1401,6 +1439,10 @@ class YunshuAPCManager(APCManager):
         _owned=False,
     ) -> bool:
         n = len(token_ids)
+        if _generation is not None:
+            self.observation.request_id = self.__dict__.get(
+                "_console_generations", {}
+            ).get(_generation)
         with self._plock:
             # A deferred checkpoint belongs to the request that captured it,
             # even when another group began prefill before publication.
@@ -1431,6 +1473,7 @@ class YunshuAPCManager(APCManager):
             self._born[key] = gen
             if is_head:
                 self._head_keys.add(key)
+        before_rejects = self.stats.rejects
         token = _OWNED_SNAPSHOT.set(bool(_owned))
         try:
             ok = super().store_exact_cache(
@@ -1449,6 +1492,20 @@ class YunshuAPCManager(APCManager):
                 self.share_anchor_rows(token_ids, extra_hash)
             else:
                 self._drop_anchor_keys(rebound)  # never pin a buffer that is not stored
+        reject_reason = (
+            "below_min_tokens"
+            if n < self.exact_cache_min_tokens
+            else "capacity_or_storage"
+        )
+        if not ok and self.stats.rejects > before_rejects:
+            reject_reason = (self.stats.last_reject or {}).get("reason", reject_reason)
+        self.observation.event(
+            "admission" if ok else "rejection",
+            key,
+            n,
+            "ram" if key in self._exact_cache else "ssd" if ok else "none",
+            "stored" if ok else reject_reason,
+        )
         return bool(ok)
 
     def release_superseded(
@@ -1629,6 +1686,7 @@ class YunshuAPCManager(APCManager):
         upstream pass: dropping anchors moves resident and headroom by the same bytes, so the
         eviction target is unchanged.
         """
+        self.observation.reason = "memory_pressure"
         self._headroom_memo = None
         try:
             if self._anchors:
@@ -1656,6 +1714,7 @@ class YunshuAPCManager(APCManager):
                     release_freed_buffers(1 << 40)
             return super()._make_room(allocation_bytes, retain_bytes=retain_bytes)
         finally:
+            self.observation.reason = "superseded"
             self._headroom_memo = None
 
     def share_anchor_rows(self, donor_tokens, extra_hash: int = 0) -> int:
@@ -1913,6 +1972,11 @@ class YunshuAPCManager(APCManager):
             self._note_disk_hit(
                 tuple(int(t) for t in token_ids), int(n), self._extra_of(args, kwargs)
             )
+        if n:
+            key = _sequence_hash(tuple(token_ids[:n]), extra, self.block_size)
+            self.observation.hit(key)
+            if tier == "ssd":
+                self.observation.event("promotion", key, n, "ram", "ssd_hit")
         self.tier_hits[tier] += 1
         device = getattr(self.disk, "last_device", None) if tier == "ssd" else None
         self.lookups.append(
@@ -1930,6 +1994,8 @@ class YunshuAPCManager(APCManager):
         """Block-mode (plain KV) families: the in-RAM block pool."""
         t0 = time.perf_counter()
         matched, n = super().lookup_prefix(token_ids, *args, **kwargs)
+        for block in matched:
+            self.observation.hit(block.block_hash)
         ms = (time.perf_counter() - t0) * 1000.0
         self.lookups.append(
             Lookup(
@@ -1963,6 +2029,94 @@ class YunshuAPCManager(APCManager):
             if rec.prompt_len == prompt_len and rec.cached == cached:
                 return rec
         return None
+
+    def clear(self) -> None:
+        if self.warm is not None:
+            self.warm.clear()
+        super().clear()
+        self._nbytes_memo.clear()
+        self._anchors.clear()
+        self._kv_share.clear()
+        self._roots.clear()
+        self._last_hit = None
+        self._last_shared_keys.clear()
+        self._console_requests.clear()
+
+    def console_snapshot(self) -> dict:
+        from mlx_vlm.apc import _cache_nbytes
+
+        obs = self.observation
+        rows = []
+        with self.lock:
+            for key, entry in self._exact_cache.items():
+                logical = _cache_nbytes(entry.prompt_cache)
+                physical = max(0, logical - self._kv_share.get(key, (0, 0))[1])
+                rows.append(
+                    obs.row(
+                        key,
+                        entry.extra_hash,
+                        len(entry.token_ids),
+                        logical,
+                        physical,
+                        "ram",
+                    )
+                )
+            for key, block in self.hash_table.items():
+                rows.append(
+                    obs.row(
+                        key,
+                        "blocks",
+                        len(block.token_ids),
+                        block.resident_bytes(),
+                        block.resident_bytes(),
+                        "ram",
+                    )
+                )
+        if self.warm is not None:
+            for key, entry in list(self.warm.entries.items()):
+                rows.append(
+                    obs.row(
+                        key,
+                        entry.extra_hash,
+                        len(entry.token_ids),
+                        entry.raw_nbytes,
+                        entry.nbytes,
+                        "warm",
+                    )
+                )
+        if isinstance(self.disk, SpillDiskStore):
+            with self.disk._index_lock:
+                items = list(self.disk._exact_index.items())
+            for key, path in items:
+                try:
+                    parsed = self.disk._open_shard_header(path)
+                    if parsed is None:
+                        continue
+                    metadata = parsed[1]
+                    logical = sum(
+                        int(value["data_offsets"][1]) - int(value["data_offsets"][0])
+                        for value in parsed[0].values()
+                    )
+                    tokens = sum(
+                        bool(x) for x in metadata.get("token_ids", "").split(",")
+                    )
+                    rows.append(
+                        obs.row(
+                            key,
+                            metadata.get("extra_hash", "0"),
+                            tokens,
+                            logical,
+                            path.stat().st_size,
+                            "ssd",
+                        )
+                    )
+                except OSError:
+                    continue
+        return {
+            "entries": rows,
+            "events": list(obs.events),
+            "event_capacity": obs.events.maxlen,
+        }
 
     def snapshot(self) -> dict:
         """Counters and occupancy for /debug/kv-cache and /metrics."""

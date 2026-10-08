@@ -496,3 +496,34 @@ host and SSE-latency probe on the pinned candidate.
 unknown reasons), under the same console admin permission. `x_yunshu.energy` and
 `GET /v1/yunshu/requests/recent` expose GPU+DRAM phase-window estimates. See
 [TELEMETRY.md](TELEMETRY.md) for the exact schema, cache ages, and concurrency limits.
+
+### Console round 10 backend data
+
+All routes require the same admin authentication as model management. OpenAPI lists
+the routes and query parameters. CPU unit coverage is implemented; real-server
+evidence is pending until the consolegaps console yv verdict is recorded.
+
+| Route | Behavior |
+|---|---|
+| `GET /v1/yunshu/spec-decode` | Process-lifetime VLM MTP/DFlash counters and drafted/accepted tokens per zero-based draft depth; tree siblings share the depth denominator. Prometheus `yunshu_spec_decode_*_total`, labelled by engine/mode/position, uses the same totals. |
+| `GET /v1/yunshu/cache` | APC entries: model, namespace, tokens, logical/attributed physical bytes, tier, last hit and process hits. Up to 512 lifecycle events, reason and originating request ID when known. Read-side snapshots run on the existing MLX executor. |
+| `POST /v1/yunshu/cache/clear` | Refuses if any loaded engine cannot be proven idle (409). Clears resident APC, including pending WARM encode results; keeps SSD files and WARM configuration. Scope is explicitly `resident_apc`. |
+| `GET /v1/yunshu/requests/history?limit=50&before=CURSOR` | Newest-first rotated serve-log metadata; limit 1–512, opaque exclusive cursor. Disabled log returns `enabled:false`. Unknown old measurements remain null. `YUNSHU_SERVE_LOG_RETENTION_DAYS` filters aged records; MAX_MB/KEEP bound stored bytes. No prompt/output/token IDs. |
+| `GET /v1/yunshu/bundle/manifest` | Exact top-level fields included by `yunshu_cli.bundle.build`, redaction/exclusion policy and line caps. |
+| `GET /v1/yunshu/bundle` | JSON attachment from the CLI diagnostics builder; no upload. |
+| `GET /v1/yunshu/models/impact?model=ID` | Non-forced unload rejects in-flight requests (does not wait or interrupt). Advisory pre-load budget/slot LRU eviction list; post-load pressure is rechecked separately. Multi-model mode required. |
+
+Recent rows now carry `model`, `speculative` (rounds and per-depth counts), cache
+provenance and `structured_output`. Response `x_yunshu.structured_output` reports
+`requested`, `enforced`, `engine`, `grammar_backend` and a reason. Enforcement means
+the actual constraint was installed; output JSON validation remains a client task,
+and a response cut short by max_tokens can be incomplete. No constraint setup
+failure is represented as enforced. Status request rows always include `model`
+(null only before the requested model has been attributed).
+
+Cache physical bytes mean attributed array/storage bytes, not allocator footprint.
+SSD file physical bytes include headers; unknown logical size is null. Entry hit
+counts are bounded process metadata and restart at zero. Events are bounded and
+may omit earlier lifecycle changes; a null request ID denotes an unattributed
+background/legacy operation. Persistent history cursors are exclusive; concurrent
+rotation can omit a row that leaves retention while paging.

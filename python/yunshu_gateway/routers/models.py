@@ -384,7 +384,7 @@ async def unload_model(model_id: str, request: Request) -> dict:
                 detail=f"Model '{model_id}' was not unloaded — it became active or was already unloaded. Retry after in-flight requests complete.",
             )
         log_operation("model_unload", model_id, "success", actor=actor)
-        return {"status": "unloaded", "model": model_id}
+        return {"status": "unloaded", "model": model_id, "in_flight_policy": "reject"}
     except HTTPException:
         raise
     except Exception as e:

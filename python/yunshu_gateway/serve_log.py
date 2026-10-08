@@ -17,7 +17,10 @@ Off by default (``YUNSHU_SERVE_LOG``). Logging never raises into a request.
 
 from __future__ import annotations
 
+import base64
 import contextlib
+import hashlib
+import heapq
 import json
 import logging
 import re
@@ -101,11 +104,17 @@ def event_from_stats(stats: dict, ctx: dict) -> dict:
     """The log line for one request: a whitelist projection of ``x_yunshu`` ``stats`` and the
     request context ``ctx`` (route, dialect, model, finish_reason, t_start/t_end wall time,
     concurrency_start/end, stream, arm, build). Unknown keys in either are ignored."""
+    from .metadata_projection import extras
+
     spec = stats.get("speculative") or {}
     cache = stats.get("cache") or {}
     prompt = _num(stats.get("prompt_tokens"))
     return {
+        **extras(stats),
         "schema": SCHEMA,
+        "status": _num(ctx.get("status")),
+        "prefill_tps": _num(stats.get("prefill_tps")),
+        "request_id": label(ctx.get("request_id")),
         "t_start": _num(ctx.get("t_start"), 3),
         "t_end": _num(ctx.get("t_end"), 3),
         "route": label(ctx.get("route")),
@@ -132,6 +141,83 @@ def event_from_stats(stats: dict, ctx: dict) -> dict:
         "concurrency_end": _num(ctx.get("concurrency_end")),
         "arm": label(ctx.get("arm")),
         "build": label(ctx.get("build")),
+    }
+
+
+def history_row(raw: dict) -> dict:
+    """Project untrusted on-disk metadata; never forward arbitrary JSON keys."""
+    from .metadata_projection import extras
+
+    safe = event_from_stats({}, {})
+    for key in safe:
+        if key in ("schema", "stream", "cancelled"):
+            safe[key] = bool(raw.get(key)) if key != "schema" else SCHEMA
+        elif key in (
+            "request_id",
+            "model",
+            "route",
+            "dialect",
+            "spec_mode",
+            "cache_tier",
+            "finish_reason",
+            "arm",
+            "build",
+        ):
+            safe[key] = label(raw.get(key))
+        elif key not in (
+            "ctx_bucket",
+            "speculative",
+            "structured_output",
+            "latency",
+            "energy",
+            "cache",
+            "reasons",
+        ):
+            safe[key] = _num(raw.get(key))
+    rid = (
+        safe["request_id"]
+        or "legacy_"
+        + hashlib.sha256(json.dumps(safe, sort_keys=True).encode()).hexdigest()[:24]
+    )
+    extra = extras(raw)
+    if not raw.get("speculative"):
+        extra.pop("speculative")
+    if not raw.get("cache"):
+        extra.pop("cache")
+    return {
+        "t": safe["t_end"],
+        "request_id": rid,
+        "model": safe["model"],
+        "path": safe["route"],
+        "stream": safe["stream"],
+        "status": safe["status"],
+        **{
+            k: safe[k]
+            for k in (
+                "prompt_tokens",
+                "completion_tokens",
+                "cached_tokens",
+                "ttft_ms",
+                "decode_tps",
+            )
+        },
+        "prefill_tps": safe["prefill_tps"],
+        "latency": None,
+        "energy": None,
+        "speculative": {
+            "mode": safe["spec_mode"],
+            "drafted": safe["spec_drafted"],
+            "accepted": safe["spec_accepted"],
+            "acceptance_rate": safe["spec_acceptance"],
+        }
+        if safe["spec_mode"]
+        else None,
+        "cache": {
+            "tier": safe["cache_tier"],
+            "cached_tokens": safe["cached_tokens"],
+            "reload_ms": None,
+        },
+        **extra,
     }
 
 
@@ -187,6 +273,69 @@ class ServeLog:
         out = [self._rotated(i) for i in range(self.keep, 0, -1)] + [self.path]
         return [p for p in out if p.exists()]
 
+    def history(self, *, limit: int, before: str | None, retention_days: int) -> dict:
+        """Cursor page over rotated files, with a second structural privacy boundary.
+
+        Only limit+1 candidates remain in memory. Concurrent append/rotation may
+        omit newly rotated rows; the cursor prevents repeats of already read rows.
+        """
+        boundary = None
+        if before:
+            try:
+                value = json.loads(
+                    base64.urlsafe_b64decode(before + "=" * (-len(before) % 4))
+                )
+                if (
+                    not isinstance(value, list)
+                    or len(value) != 2
+                    or _num(value[0]) is None
+                    or not label(value[1])
+                ):
+                    raise ValueError("invalid history cursor")
+                boundary = (value[0], value[1])
+            except (ValueError, TypeError):
+                raise ValueError("invalid history cursor") from None
+        cutoff = time.time() - retention_days * 86400 if retention_days else 0
+        picked: list[tuple[tuple, int, dict]] = []
+        serial = 0
+        for path in self.files():
+            with contextlib.suppress(OSError):
+                with path.open() as source:
+                    for line in source:
+                        try:
+                            raw = json.loads(line)
+                        except ValueError:
+                            continue
+                        if not isinstance(raw, dict):
+                            continue
+                        stamp = _num(raw.get("t_end"))
+                        if stamp is None or stamp < cutoff:
+                            continue
+                        row = history_row(raw)
+                        key = (stamp, row["request_id"])
+                        if boundary is not None and key >= boundary:
+                            continue
+                        serial += 1
+                        heapq.heappush(picked, (key, serial, row))
+                        if len(picked) > limit + 1:
+                            heapq.heappop(picked)
+        ordered = sorted(picked, reverse=True)
+        data = [item[2] for item in ordered[:limit]]
+        cursor = None
+        if len(ordered) > limit:
+            cursor = (
+                base64.urlsafe_b64encode(json.dumps(ordered[limit - 1][0]).encode())
+                .decode()
+                .rstrip("=")
+            )
+        return {
+            "object": "list",
+            "enabled": True,
+            "data": data,
+            "count": len(data),
+            "next_cursor": cursor,
+        }
+
     def read(self) -> list[dict]:
         """Every parseable event, oldest first; a torn line is skipped, not guessed."""
         rows: list[dict] = []
@@ -233,6 +382,8 @@ def record(info: Any, stats: dict, concurrency_end: int | None = None) -> None:
     gen = getattr(info, "gen", None)
     path = getattr(info, "path", "") or ""
     ctx = {
+        "request_id": getattr(info, "request_id", None),
+        "status": getattr(info, "status", None),
         "t_start": getattr(info, "arrived_wall", None),
         "t_end": time.time(),
         "route": path,

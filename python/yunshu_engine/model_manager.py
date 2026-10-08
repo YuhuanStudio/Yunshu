@@ -1192,8 +1192,57 @@ class ModelManager:
                 return None
             return victim.model_id
 
+    def console_impact(self, model_id: str) -> dict:
+        """Read-only advisory preview; load rechecks idleness and actual memory."""
+        entry = self._entries.get(model_id)
+        if entry is None:
+            raise KeyError(model_id)
+        needed = entry.estimated_bytes
+        if entry.model_type not in (ModelType.TTS, ModelType.ASR):
+            needed += int(needed * self.kv_reserve_ratio)
+        memory = self._current_memory_bytes
+        slots = sum(e.is_loaded for e in self._entries.values())
+        excluded = {model_id}
+        victims = []
+        while not entry.is_loaded and (
+            (
+                self.max_memory_bytes is not None
+                and memory + needed > self.max_memory_bytes
+            )
+            or (self.max_models > 0 and slots >= self.max_models)
+        ):
+            victim = self._find_lru_victim(exclude_model_id=model_id, excluded=excluded)
+            if victim is None:
+                break
+            excluded.add(victim.model_id)
+            victims.append(victim.model_id)
+            memory -= victim.estimated_bytes
+            slots -= 1
+        blocked = not entry.is_loaded and (
+            (
+                self.max_memory_bytes is not None
+                and memory + needed > self.max_memory_bytes
+            )
+            or (self.max_models > 0 and slots >= self.max_models)
+        )
+        return {
+            "object": "yunshu.model.impact",
+            "model": model_id,
+            "unload": {
+                "in_flight_policy": "reject",
+                "waits": False,
+                "interrupts": False,
+            },
+            "load": {
+                "would_evict": victims,
+                "blocked": blocked,
+                "advisory": True,
+                "post_load_pressure": "rechecked_after_load",
+            },
+        }
+
     def _find_lru_victim(
-        self, exclude_model_id: str | None = None
+        self, exclude_model_id: str | None = None, *, excluded: set[str] | None = None
     ) -> ModelEntry | None:
         """Find the least-recently-used non-pinned, loaded model.
 
@@ -1210,6 +1259,7 @@ class ModelManager:
             and not e.is_pinned
             and not e.is_loading
             and e.model_id != exclude_model_id
+            and e.model_id not in (excluded or ())
             and not self._held(e)
         ]
         # Filter out engines with active requests.

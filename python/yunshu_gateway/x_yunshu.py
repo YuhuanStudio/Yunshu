@@ -144,6 +144,8 @@ class RequestInfo:
     arrived: float = field(default_factory=time.perf_counter)
     arrived_wall: float = field(default_factory=time.time)
     latency_marks: dict[str, float] = field(default_factory=dict)
+    model: str | None = None
+    structured_output: dict | None = None
     gen: Any = None  # ActiveGeneration, linked by RequestTracker.register()
     engine_request_id: str | None = None
     stream: bool = False
@@ -446,6 +448,11 @@ def build_stats(info: RequestInfo, usage: dict | None = None) -> dict:
                 else None
             ),
         }
+    if spec is not None:
+        from yunshu_engine.spec_metrics import depth_rows
+
+        spec["per_depth"] = depth_rows(st)
+        spec["position_basis"] = "depth"
     if spec is not None and st.spec_rounds:
         spec["rounds"] = st.spec_rounds
         if st.spec_copy_rounds:
@@ -455,6 +462,20 @@ def build_stats(info: RequestInfo, usage: dict | None = None) -> dict:
             }
     out = {
         "request_id": info.request_id,
+        "model": getattr(info.gen, "model", None) or info.model,
+        "reasons": {
+            "cache": getattr(st, "cache_reason", None),
+            "spec": getattr(st, "spec_reason", None),
+        },
+        "structured_output": getattr(st, "structured_output", None)
+        or info.structured_output
+        or {
+            "requested": False,
+            "enforced": False,
+            "engine": None,
+            "grammar_backend": None,
+            "reason": "not_requested",
+        },
         "latency": latency_breakdown(info),
         "queue_wait_ms": _ms(queue_wait),
         "ttft_ms": _ms(ttft),
@@ -570,6 +591,11 @@ def record_done(info: RequestInfo, stats: dict) -> None:
         {
             "t": time.time(),
             "request_id": info.request_id,
+            "model": stats.get("model"),
+            "speculative": stats.get("speculative"),
+            "cache": stats.get("cache"),
+            "structured_output": stats.get("structured_output"),
+            "reasons": stats.get("reasons"),
             "prompt_tokens": stats.get("prompt_tokens") or 0,
             "completion_tokens": stats.get("completion_tokens") or 0,
             "cached_tokens": stats.get("cached_tokens") or 0,

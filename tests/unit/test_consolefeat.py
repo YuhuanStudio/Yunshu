@@ -482,6 +482,8 @@ def test_console_stage_accepts_gpuq_device_fields(tmp_path):
         "console_host_latency": "PASS",
         "stream_latency": "PASS",
         "single_stream_latency": "PASS",
+        "console_backend_gaps": "PASS",
+        "history_restart": "PASS",
         "device": "m5",
         "execution_device": "m5",
         "remote_host": None,
