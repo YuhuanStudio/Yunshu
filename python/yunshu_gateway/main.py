@@ -1058,6 +1058,12 @@ def create_app() -> FastAPI:
     from .routers import responses as responses_mod
 
     app.include_router(chat.router, prefix="/v1")
+    from .routers import chat_stored as chat_stored_mod
+
+    app.include_router(chat_stored_mod.router, prefix="/v1")
+    from .routers import realtime_secrets as realtime_secrets_mod
+
+    app.include_router(realtime_secrets_mod.router, prefix="/v1")
     from .routers import omni as omni_mod
 
     app.include_router(completions.router, prefix="/v1")
