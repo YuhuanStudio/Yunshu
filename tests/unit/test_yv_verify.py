@@ -135,6 +135,7 @@ def test_full_suite_has_every_stage():
         "rerank",
         "console",
         "telemetry",
+        "telemetry-tiny",
     }
 
 

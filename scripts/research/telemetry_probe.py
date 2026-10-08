@@ -98,7 +98,9 @@ def main(argv=None):
                     "messages": [
                         {
                             "role": "user",
-                            "content": "Write a long, detailed explanation of the history of computing.",
+                            "content": "Computing evolved through mechanical calculators, programmable machines and integrated circuits. "
+                            * 128
+                            + "Write a long, detailed explanation of the history of computing.",
                         }
                     ],
                     "temperature": 0,
@@ -106,7 +108,8 @@ def main(argv=None):
                     "seed": 1234,
                 },
             )
-            while not pending.done():
+            finished_at = None
+            while True:
                 req = urllib.request.Request(
                     server.url + "/v1/yunshu/host",
                     headers={"Authorization": "Bearer k"},
@@ -115,7 +118,12 @@ def main(argv=None):
                     sample = json.load(response)
                 samples.append(sample)
                 print(json.dumps({"sample": sample}), flush=True)
-                time.sleep(1)
+                if pending.done():
+                    if finished_at is None:
+                        finished_at = time.perf_counter()
+                    if time.perf_counter() - finished_at >= 1.1:
+                        break
+                time.sleep(0.1 if finished_at is not None else 1.0)
             result = pending.result()
         summary = validate(samples, result)
         record = {

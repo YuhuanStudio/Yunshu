@@ -100,7 +100,7 @@ class HostSampler:
             while not self._stop.wait(self.interval):
                 try:
                     reading = energy.read()
-                    end = time.perf_counter()
+                    end = getattr(reading, "t_end", 0.0) or time.perf_counter()
                     temps: dict = unknown(temp_reason or "no die sensors")
                     if temperature is not None:
                         try:
@@ -221,7 +221,7 @@ class HostSampler:
                 gpu_j += gpu * extrapolated
                 covered += extrapolated
         duration = end - start
-        ok = abs(covered - duration) < 0.01
+        ok = covered > 0 and abs(covered - duration) <= max(1e-9, duration * 1e-9)
         return {
             "state": "estimated" if ok else "unknown",
             "reason": None if ok else "phase not fully covered by valid samples",

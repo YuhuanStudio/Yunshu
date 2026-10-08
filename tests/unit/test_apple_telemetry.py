@@ -300,3 +300,42 @@ def test_thread_start_failure_never_prevents_gateway_start(monkeypatch):
     assert host.snapshot()["state"] == "unknown"
     assert "thread resources exhausted" in host.snapshot()["reason"]
     host.close()
+
+
+def test_short_unobserved_phase_never_invents_zero_joules():
+    host = sampler.HostSampler()
+    result = host.window(10, 10.001, 1)
+    assert result["state"] == "unknown" and result["joules"] is None
+    assert result["coverage_ratio"] == 0
+    host.publish(reading(0.0005), 10.001, {}, [300, 600])
+    result = host.window(10, 10.001, 1)
+    assert result["joules"] is None and result["coverage_ratio"] < 1
+
+
+def test_native_capture_clock_is_not_shifted_by_parser_work(monkeypatch):
+    cf = FakeCF()
+    ior = SimpleNamespace(
+        IOReportCreateSamples=lambda *a: 2, IOReportCreateSamplesDelta=lambda *a: 3
+    )
+    monkeypatch.setattr(apple, "_LIBS", (cf, None, ior))
+    now = [12.0]
+    monkeypatch.setattr(apple.time, "perf_counter", lambda: now[0])
+    energy = apple.EnergySampler.__new__(apple.EnergySampler)
+    energy._lock = threading.Lock()
+    energy._sub, energy._key, energy._prev, energy._subbed, energy._t = (
+        10,
+        20,
+        1,
+        apple._vp(5),
+        10,
+    )
+
+    def parse(delta, seconds):
+        now[0] = 99.0
+        return apple.EnergyReading(seconds)
+
+    energy._parse = parse
+    result = energy.read()
+    assert result.t_end == 12.0 and result.seconds == 2.0
+    assert energy._t == 12.0
+    energy.close()

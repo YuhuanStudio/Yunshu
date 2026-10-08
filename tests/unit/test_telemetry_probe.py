@@ -93,3 +93,112 @@ def test_yv_telemetry_stage_is_registered_and_fail_closed(tmp_path):
     assert result.passed is False and result.reasons == ["fake failure"]
     assert seen[0].quiet is False
     assert seen[0].argv[seen[0].argv.index("--draft") + 1] == "off"
+
+
+def test_probe_retains_closing_interval_after_fast_request(tmp_path, monkeypatch):
+    import io
+    import json
+    import sys
+    from types import SimpleNamespace
+
+    module = probe()
+    clock = [0.0]
+    submitted = [None]
+    killed = []
+
+    class Server:
+        def __init__(self, *args):
+            self.model, self.url, self.log = (
+                "fake",
+                "http://fake",
+                tmp_path / "server.log",
+            )
+            self.log.write_text("fake")
+
+        def kill(self):
+            killed.append(True)
+
+    class Future:
+        def done(self):
+            return clock[0] - submitted[0] >= 0.2
+
+        def result(self):
+            return {"energy": {"decode": {"joules": 1}}}
+
+    class Pool:
+        def __init__(self, *args):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def submit(self, *args):
+            submitted[0] = clock[0]
+            return Future()
+
+    def response(*args, **kwargs):
+        active = 1 <= clock[0] - submitted[0] < 2
+        host = {
+            "telemetry": {
+                "state": "ok",
+                "watts": {"gpu": 30 if active else 0},
+                "gpu": {"frequency_mhz": 900 if active else None},
+                "temperature": {"die_max_c": 60},
+            }
+        }
+        return io.BytesIO(json.dumps(host).encode())
+
+    monkeypatch.setitem(
+        sys.modules,
+        "tfbench",
+        SimpleNamespace(
+            Srv=Server, send=lambda *a: None, engaged_spec_mode=lambda *a: "off"
+        ),
+    )
+    monkeypatch.setattr(module.concurrent.futures, "ThreadPoolExecutor", Pool)
+    monkeypatch.setattr(
+        module.time, "sleep", lambda seconds: clock.__setitem__(0, clock[0] + seconds)
+    )
+    monkeypatch.setattr(module.time, "perf_counter", lambda: clock[0])
+    monkeypatch.setattr(module.urllib.request, "urlopen", response)
+    out = tmp_path / "result.json"
+    module.main(["--out", str(out), "--model", "fake", "--tokens", "32"])
+    result = json.loads(out.read_text())
+    assert result["complete"] is True and result["summary"]["gpu_peak_watts"] == 30
+    assert killed == [True]
+
+
+def test_yv_tiny_pilot_precedes_27b_and_uses_small_budget(tmp_path, monkeypatch):
+    import sys
+    from types import SimpleNamespace
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
+    from verify import stages, suites
+
+    seen = []
+
+    def run(cells):
+        seen.extend(cells)
+        return {"cand": SimpleNamespace(ok=False, reason="fake failure", evidence=None)}
+
+    monkeypatch.setattr(stages, "_finish", lambda ctx, result: result)
+    ctx = SimpleNamespace(
+        cand=SimpleNamespace(path=tmp_path),
+        run=SimpleNamespace(path=tmp_path),
+        exe=SimpleNamespace(run_cells=run),
+        py="python",
+        model="27B",
+        big=True,
+        mem_gb=60,
+    )
+    result = stages.STAGE_FUNCS["telemetry-tiny"](ctx)
+    assert result.name == "telemetry-tiny"
+    assert seen[0].mem_gb == 14 and not seen[0].quiet
+    assert "Qwen3.5-0.8B" in seen[0].argv[seen[0].argv.index("--model") + 1]
+    assert seen[0].argv[seen[0].argv.index("--draft") + 1] == "off"
+    assert ctx.model == "27B"
+    ladder = suites.parse_suite("telemetry,telemetry-tiny,speed")["stages"]
+    assert ladder == ["telemetry-tiny", "telemetry", "speed"]

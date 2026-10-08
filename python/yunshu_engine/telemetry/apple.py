@@ -216,6 +216,7 @@ class EnergyReading:
     gpu_states: list = field(default_factory=list)  # [(name, residency)]
 
     reasons: dict[str, str] = field(default_factory=dict)
+    t_end: float = 0.0  # perf_counter at sample capture, before CF parsing
 
     @property
     def gpu_watts(self) -> float | None:
@@ -331,7 +332,7 @@ class EnergySampler:
             raise
         finally:
             _release(*temporaries)
-        self._t = time.monotonic()
+        self._t = time.perf_counter()
 
     def read(self) -> EnergyReading:
         cf, _, ior = _LIBS
@@ -342,7 +343,7 @@ class EnergySampler:
                 ior.IOReportCreateSamples(self._sub, self._subbed, None),
                 "IOReportCreateSamples",
             )
-            now = time.monotonic()
+            now = time.perf_counter()
             delta = ior.IOReportCreateSamplesDelta(self._prev, cur, None)
             dt = max(now - self._t, 1e-6)
             cf.CFRelease(self._prev)
@@ -351,7 +352,9 @@ class EnergySampler:
             self._prev, self._t = cur, now
             _owned(delta, "IOReportCreateSamplesDelta")
             try:
-                return self._parse(delta, dt)
+                reading = self._parse(delta, dt)
+                reading.t_end = now
+                return reading
             finally:
                 cf.CFRelease(delta)
 

@@ -1114,7 +1114,7 @@ def stage_console(ctx: Ctx) -> StageResult:
     )
 
 
-def stage_telemetry(ctx: Ctx) -> StageResult:
+def stage_telemetry(ctx: Ctx, *, pilot: bool = False) -> StageResult:
     """Unprivileged sensor plausibility + request receipt on the pinned candidate."""
 
     def validate(path):
@@ -1130,25 +1130,28 @@ def stage_telemetry(ctx: Ctx) -> StageResult:
             return False, "missing power, frequency or temperature evidence"
         return True, ""
 
+    name = "telemetry-tiny" if pilot else "telemetry"
+    model = "/Volumes/P5Plus/models/Qwen3.5-0.8B-MLX-bf16" if pilot else ctx.model
+    big = False if pilot else ctx.big
     cell = Cell(
-        "telemetry",
+        name,
         "cand",
         [
             "env",
             f"TFB_YUNSHU_SRC={ctx.cand.path / 'python'}",
-            f"TFB_OUT={ctx.run.path / 'tfb' / 'telemetry'}",
+            f"TFB_OUT={ctx.run.path / 'tfb' / name}",
             ctx.py,
             str(ctx.cand.path / "scripts/research/telemetry_probe.py"),
             "--model",
-            ctx.model,
+            model,
             "--draft",
-            "mtp" if ctx.big else "off",
+            "mtp" if big else "off",
             "--tokens",
-            "512" if ctx.big else "2048",
+            "512" if big else "2048",
             "--out",
             "{out}",
         ],
-        mem_gb=ctx.mem_gb,
+        mem_gb=14 if pilot else ctx.mem_gb,
         timeout_min=15,
         quiet=False,
         validate=validate,
@@ -1161,15 +1164,14 @@ def stage_telemetry(ctx: Ctx) -> StageResult:
     )
     return _finish(
         ctx,
-        StageResult(
-            "telemetry", result.ok, [] if result.ok else [result.reason], numbers
-        ),
+        StageResult(name, result.ok, [] if result.ok else [result.reason], numbers),
     )
 
 
 STAGE_FUNCS = {
     "console": stage_console,
     "telemetry": stage_telemetry,
+    "telemetry-tiny": lambda ctx: stage_telemetry(ctx, pilot=True),
     "rerank": stage_rerank,
     "preflight": stage_preflight,
     "smoke": stage_smoke,

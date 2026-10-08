@@ -108,3 +108,10 @@ CPU channels ending in `CPU Energy` and ANE/DRAM channel families are aggregated
 a malformed unit or negative delta invalidates that domain. Die temperature
 prefers HID `tdie` sensors, falling back to `pACC/eACC/GPU MTR Temp Sensor` names
 when no tdie values exist, without mixing sensor families.
+
+`--suite preflight,telemetry-tiny,telemetry,smoke,identity,apc,speed` runs a pinned
+M5 0.8B pilot before the 27B sensor gate, stopping on the first failure. The probe
+collects the closing interval after short requests. Sampling timestamps are taken
+before CF parsing, so phase windows remain contiguous; uncovered sub-millisecond
+phases never become invented zero-joule readings. For the overhead decision use
+`--speed-tol 0`: consistent costs beyond measured noise select default off.
