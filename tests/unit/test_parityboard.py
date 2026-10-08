@@ -69,11 +69,11 @@ def fixture_cell(root, engine="yunshu-new", rep=0, value=1.0):
     return run, jobs, out, job
 
 
-def item(board, metric="ttft_cold_s"):
+def item(board, metric="ttft_cold_s", kind="prose"):
     return next(
         i
         for i in board["items"]
-        if i["ctx"] == 1024 and i["kind"] == "prose" and i["metric"] == metric
+        if i["ctx"] == 1024 and i["kind"] == kind and i["metric"] == metric
     )
 
 
@@ -170,3 +170,17 @@ def test_provisional_needs_external_engine_and_never_gates(tmp_path):
     got = item(board)
     assert got["status"] == "unknown" and got["provisional"]["best_engine"] == "splash"
     assert board["parity"] == 0 and board["gate_open"] is False
+
+
+def test_memory_cells_without_system_delta_method_are_flagged_not_compared(tmp_path):
+    run, jobs, _, _ = fixture_cell(tmp_path, "yunshu-new", 0, 1.0)
+    fixture_cell(tmp_path, "splash", 0, 0.5)
+    board = pb.build([run], jobs)
+    got = item(board, "memory_peak_gib", "session")
+    assert (
+        got["ours"] is None
+        and got["provisional"] is None
+        and got["status"] == "unknown"
+    )
+    assert {f["method"] for f in board["memory_method_flagged"]} == {"single-pid"}
+    assert "needing rerun" in pb.markdown(board)

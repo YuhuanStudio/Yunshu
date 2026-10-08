@@ -19,6 +19,9 @@ from pathlib import Path
 ENGINES = ('yunshu-new', 'llamacpp', 'mlxlm', 'omlx', 'splash', 'tf-new', 'mtplx', 'strata')
 CONTEXTS = (1024, 32768, 131072)
 MODEL = 'Qwen3.8-27B'
+# Memory cells compare only when measured as host-level used-memory delta. Per-process phys_footprint (single
+# PID or whole tree) misses file-backed/mmap'd weights, so engines that mmap (e.g. Splash: 3.4 GiB on a 27B) look tiny.
+COMPARABLE_MEMORY_METHOD = 'system-delta'
 METRICS = {
     'ttft_cold_s': False, 'ttft_warm_s': False, 'followup_ttft_s': False,
     'decode_cold_tps': True, 'decode_warm_tps': True, 'decode_turn2_tps': True,
@@ -128,7 +131,8 @@ def load_cells(runs, jobs):
     return accepted, rejected, sources
 
 
-def samples_from(cells):
+def samples_from(cells, flagged=None):
+    flagged = [] if flagged is None else flagged
     samples = defaultdict(dict)
     for cell in cells:
         rows = cell['rows']
@@ -161,6 +165,10 @@ def samples_from(cells):
             add(row['ctx'], row['kind'], 'energy_j_token', row.get('energy_j_token'))
         for row in rows:
             if row['part'] == 'memory':
+                method = row.get('memory_method', 'single-pid')
+                if method != COMPARABLE_MEMORY_METHOD:
+                    flagged.append({'cell': cell['cell'], 'engine': engine, 'method': method})
+                    continue
                 for ctx in {r['ctx'] for r in decode}:
                     for metric, field in (('memory_peak_gib', 'peak_gib'), ('memory_idle_gib', 'idle_gib')):
                         add(ctx, 'session', metric, row.get(field))
@@ -185,7 +193,8 @@ def summarize(reps, minimum=3, strict=True):
 
 def build(runs, jobs, models=(MODEL,)):
     cells, rejected, sources = load_cells(runs, jobs)
-    samples = samples_from(cells)
+    flagged = []
+    samples = samples_from(cells, flagged)
     keys = {(m, c, k, metric) for m in models for c in CONTEXTS for metric in METRICS
             for k in (('session',) if metric.startswith('memory') else ('needle',) if metric.startswith('accuracy')
                       else ('agentic',) if metric.startswith('agentic') else ('prose', 'code'))}
@@ -229,7 +238,7 @@ def build(runs, jobs, models=(MODEL,)):
         '; '.join(f"{m} x{len(v)}" for m, v in sorted(groups.items())) or 'none')
     return {'schema_version': 1, 'verdict': verdict, 'parity': n, 'total': len(items),
             'missing': unknown, 'gate_open': n == len(items), 'items': items,
-            'rejected': rejected, 'sources': sources,
+            'rejected': rejected, 'sources': sources, 'memory_method_flagged': flagged,
             'policy': 'Product ranking, not same-checkpoint proof; >=3 reps; combined MAD; missing engines listed individually; no historical markdown numbers used as gate evidence.'}
 
 
@@ -249,6 +258,11 @@ def markdown(board):
         if pv and i['status'] == 'unknown':
             lines.append(f"| {i['ctx']} | {i['kind']} | {i['metric']} | {pv['best_engine']} | {pv['best']:.5g} | "
                          f"{pv['ours']:.5g} | {pv['ratio']:.3f} | {pv['reps']} |")
+    flagged = board.get('memory_method_flagged', [])
+    lines += ['', '## Memory cells needing rerun (method != system-delta; never counted as gap or parity)', '',
+              'phys_footprint (single PID or process tree) excludes mmap/file-backed weights, so it is not comparable across engines.',
+              'Rerun with memory_method=system-delta (host used-memory delta vs a pre-launch baseline).', '']
+    lines += [f"- {f['cell']} ({f['engine']}): method={f['method']}" for f in flagged]
     lines += ['', '## Excluded evidence', '']
     lines += [f"- {r.get('cell', r.get('run'))}: {r['reason']} (job {r.get('job', 'unknown')})" for r in board['rejected']]
     return '\n'.join(lines) + '\n'
