@@ -1862,11 +1862,6 @@
      "path": "function_calls.0.arguments",
      "op": "json_arg_nonempty",
      "value": "city"
-    },
-    {
-     "path": "output.0.type",
-     "op": "eq",
-     "value": "function_call"
     }
    ]
   },

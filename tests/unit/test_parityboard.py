@@ -311,7 +311,9 @@ def test_capability_from_capmatrix_verdict(tmp_path):
     assert pb.capability_item(tmp_path)["status"] == "unknown"
     d = tmp_path / "27b"
     write_verdict(d, "yunshu", 30)
-    assert pb.capability_item(tmp_path)["status"] == "unknown"  # fewer than 34 applicable
+    assert (
+        pb.capability_item(tmp_path)["status"] == "unknown"
+    )  # fewer than 34 applicable
     write_verdict(d, "yunshu", 40, fail=1)
     assert pb.capability_item(tmp_path)["status"] == "gap"
     write_verdict(d, "yunshu", 40, complete=False)
