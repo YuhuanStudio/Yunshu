@@ -89,3 +89,36 @@ for (const kind of ["url", "token"] as const) {
     await expect(page.getByText(/引擎已重新啟動/)).toHaveCount(0);
   });
 }
+
+test("changing credentials does not inherit the previous unread list", async ({
+  page,
+}) => {
+  let uptime = 100,
+    bStatus = 0;
+  await page.route("**/v1/**", (route) => {
+    if (new URL(route.request().url()).pathname.endsWith("/status")) {
+      if (route.request().headers()["authorization"] === "Bearer service-b")
+        bStatus++;
+      return route.fulfill({ json: { ...status, uptime_s: uptime } });
+    }
+    return route.fulfill({ status: 404, json: { detail: "fixture" } });
+  });
+  await page.goto("/console/#/overview");
+  await expect(page.getByTestId("health-verdict")).toHaveAttribute(
+    "data-level",
+    "ok",
+  );
+  await page.getByRole("button", { name: "暫停更新", exact: true }).click();
+  uptime = 2;
+  await page.getByRole("button", { name: "更新", exact: true }).click();
+  await expect(page.getByTestId("bell-badge")).toBeVisible();
+  await page.getByRole("button", { name: /^開啟設定/ }).click();
+  const field = page.getByLabel("存取權杖", { exact: true });
+  await expect(async () => {
+    await field.fill("service-b");
+    expect(await field.inputValue()).toBe("service-b");
+  }).toPass();
+  await page.getByRole("button", { name: "儲存並連線", exact: true }).click();
+  await expect.poll(() => bStatus).toBeGreaterThan(0);
+  await expect(page.getByTestId("bell-badge")).toBeHidden();
+});

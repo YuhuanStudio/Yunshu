@@ -161,18 +161,30 @@ export function useShellSignals(
   // service's own history (empty for a token change, restored for a known address) and the
   // change tracker starts from a fresh baseline, so service B never announces service A's events.
   const scope = connectionScope(connection);
-  const [held, setHeld] = useState<{ scope: string; list: NotifRecord[] }>(
-    () => ({ scope, list: readStored(connection) }),
-  );
-  const notifications =
-    held.scope === scope ? held.list : readStored(connection);
+  const [held, setHeld] = useState<{
+    scope: string;
+    address: string;
+    list: NotifRecord[];
+  }>(() => ({
+    scope,
+    address: connection.baseUrl,
+    list: readStored(connection),
+  }));
+  // Advance even when the new service has no events, so a quiet B does not leave A as the
+  // holder (returning to A would then look like a token change). A token change on the same
+  // address starts empty; a known address restores its own history.
+  // (ported from consolereview e2ad881e, Codex)
+  if (held.scope !== scope) {
+    setHeld({
+      scope,
+      address: connection.baseUrl,
+      list: held.address === connection.baseUrl ? [] : readStored(connection),
+    });
+  }
+  const notifications = held.scope === scope ? held.list : [];
   const setNotifications = useCallback(
     (update: (list: NotifRecord[]) => NotifRecord[]) =>
-      setHeld((h) => ({
-        scope,
-        list: update(h.scope === scope ? h.list : readStored(connection)),
-      })),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+      setHeld((h) => (h.scope === scope ? { ...h, list: update(h.list) } : h)),
     [scope],
   );
   const tracker = useRef(initialTracker());
