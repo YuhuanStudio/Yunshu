@@ -254,3 +254,113 @@ test("request archive is off by default, opt-in keeps finished rows across an en
   await controls.getByRole("button", { name: "清除瀏覽器紀錄" }).click();
   await expect(page.getByTestId("archive-count")).toHaveCount(0);
 });
+
+test("tools tester: invalid definitions block the send with a reason; a tool round shows validated calls and sends results back as tool messages", async ({
+  page,
+}) => {
+  const bodies: Record<string, unknown>[] = [];
+  await install(page);
+  await page.route("**/v1/models", (r) =>
+    r.fulfill({ json: { object: "list", data: [{ id: "Qwen3.5-9B" }] } }),
+  );
+  await page.route("**/v1/chat/completions", (route) => {
+    const body = route.request().postDataJSON() as Record<string, unknown>;
+    bodies.push(body);
+    const first = bodies.length === 1;
+    return route.fulfill({
+      json: first
+        ? {
+            choices: [
+              {
+                message: {
+                  role: "assistant",
+                  content: null,
+                  tool_calls: [
+                    {
+                      id: "call_1",
+                      type: "function",
+                      function: {
+                        name: "get_weather",
+                        arguments: '{"unit":"k"}',
+                      },
+                    },
+                  ],
+                },
+                finish_reason: "tool_calls",
+              },
+            ],
+            usage: { prompt_tokens: 30, completion_tokens: 12 },
+          }
+        : {
+            choices: [
+              {
+                message: { role: "assistant", content: "It is 20 degrees." },
+                finish_reason: "stop",
+              },
+            ],
+          },
+    });
+  });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/console/#/playground", { waitUntil: "domcontentloaded" });
+  await page.getByRole("button", { name: "工具與結構化輸出" }).click();
+  const dialog = page.getByTestId("tools-tester");
+  await dialog.getByLabel("工具定義 (JSON)").fill("[");
+  await expect(dialog.getByTestId("defs-status")).toContainText("不是合法 JSON");
+  await expect(dialog.getByRole("button", { name: "送出第一輪" })).toBeDisabled();
+  await dialog.getByLabel("工具定義 (JSON)").fill(
+    JSON.stringify([
+      {
+        type: "function",
+        function: {
+          name: "get_weather",
+          parameters: {
+            type: "object",
+            required: ["city"],
+            properties: { city: { type: "string" }, unit: { enum: ["c", "f"] } },
+          },
+        },
+      },
+    ]),
+  );
+  await expect(dialog.getByTestId("defs-status")).toContainText("1 個工具");
+  await dialog.getByRole("button", { name: "送出第一輪" }).click();
+  const call = dialog.getByTestId("tool-call");
+  await expect(call).toContainText("get_weather");
+  await expect(call).toContainText("參數不符");
+  await expect(call).toContainText("$.city required");
+  await dialog.getByLabel("回傳給 get_weather 的結果").fill('{"temp": 20}');
+  await dialog.getByRole("button", { name: "送回結果並繼續" }).click();
+  await expect(dialog.getByTestId("tool-final")).toContainText("It is 20 degrees.");
+  const second = bodies[1] as { messages: { role: string; content?: string; tool_call_id?: string }[] };
+  expect(second.messages.map((m) => m.role)).toEqual(["user", "assistant", "tool"]);
+  expect(second.messages[2]).toMatchObject({ tool_call_id: "call_1", content: '{"temp": 20}' });
+});
+
+test("structured output tester tells JSON from schema violations", async ({
+  page,
+}) => {
+  await install(page);
+  await page.route("**/v1/models", (r) =>
+    r.fulfill({ json: { object: "list", data: [{ id: "Qwen3.5-9B" }] } }),
+  );
+  await page.route("**/v1/chat/completions", (route) => {
+    const body = route.request().postDataJSON() as { response_format?: { type?: string } };
+    expect(body.response_format?.type).toBe("json_schema");
+    return route.fulfill({
+      json: {
+        choices: [
+          { message: { role: "assistant", content: '{"city":"Taipei","temperature_c":"hot"}' }, finish_reason: "stop" },
+        ],
+      },
+    });
+  });
+  await page.goto("/console/#/playground", { waitUntil: "domcontentloaded" });
+  await page.getByRole("button", { name: "工具與結構化輸出" }).click();
+  const dialog = page.getByTestId("tools-tester");
+  await dialog.getByRole("tab", { name: "結構化輸出" }).click();
+  await dialog.getByRole("button", { name: "送出", exact: true }).click();
+  const result = dialog.getByTestId("schema-result");
+  await expect(result).toContainText("不符合 schema");
+  await expect(result).toContainText("$.temperature_c type");
+});

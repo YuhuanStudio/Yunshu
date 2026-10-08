@@ -45,6 +45,7 @@ import {
   ImagePlus,
   X,
   BookMarked,
+  Wrench,
   Code2,
 } from "lucide-react";
 import {
@@ -76,6 +77,7 @@ import { compareOutputs, runStats, type RunTiming } from "./playground-metrics";
 import { SegmentedTray } from "./SegmentedTray";
 import { BUILTIN_PRESETS, PlaygroundLibrary } from "./PlaygroundLibrary";
 import { saveBlob } from "./admin-logs-api";
+import { ToolsTester } from "./ToolsTester";
 import { readStoredLibrary, writeStoredLibrary } from "./library-store";
 import {
   deleteHistory,
@@ -286,6 +288,7 @@ export function Playground({
     [attachmentOpen, setAttachmentOpen] = useState(false),
     [readingImage, setReadingImage] = useState(false),
     [libraryOpen, setLibraryOpen] = useState(false),
+    [toolsOpen, setToolsOpen] = useState(false),
     [library, setLibrary] = useState<Library>(() =>
       loadLibrary(connection.baseUrl),
     ),
@@ -867,6 +870,14 @@ export function Playground({
               <Button
                 size="sm"
                 variant="ghost"
+                onClick={() => setToolsOpen(true)}
+              >
+                <Wrench size={13} />
+                {t("playground.tools.open")}
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
                 onClick={() => setCodeOpen(true)}
               >
                 <Code2 size={13} />
@@ -1310,6 +1321,12 @@ export function Playground({
             })()}
         </DialogContent>
       </Dialog>
+      <ToolsTester
+        open={toolsOpen}
+        onClose={() => setToolsOpen(false)}
+        connection={connection}
+        model={model}
+      />
       <PlaygroundLibrary
         open={libraryOpen}
         onClose={() => setLibraryOpen(false)}
