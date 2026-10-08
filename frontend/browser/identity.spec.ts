@@ -169,3 +169,39 @@ test("failures counted against service A do not carry over to service B", async 
     timeout: 10_000,
   });
 });
+
+test("the notification list belongs to one connection: another service starts empty, the first one's history returns with it", async ({
+  page,
+}) => {
+  let uptimeA = 5000;
+  await page.addInitScript(() =>
+    localStorage.setItem("yunshu.console.url", location.origin),
+  );
+  await page.route("**/v1/**", (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (!path.endsWith("/yunshu/status"))
+      return json(route, 404, { detail: "fixture" });
+    return json(
+      route,
+      200,
+      status(path.startsWith("/server-b/") ? 9000 : uptimeA),
+    );
+  });
+  await page.goto("/console/#/overview");
+  await expect(page.getByTestId("health-verdict")).toHaveAttribute(
+    "data-level",
+    "ok",
+  );
+  uptimeA = 7;
+  await expect(page.getByTestId("bell-badge")).toBeVisible({ timeout: 9000 });
+  const save = async (url: string) => {
+    await page.getByRole("button", { name: /^開啟設定/ }).click();
+    await page.getByLabel("服務位址", { exact: true }).fill(url);
+    await page.getByRole("button", { name: "儲存並連線", exact: true }).click();
+  };
+  const origin = new URL(page.url()).origin;
+  await save(`${origin}/server-b`);
+  await expect(page.getByTestId("bell-badge")).toBeHidden();
+  await save(origin);
+  await expect(page.getByTestId("bell-badge")).toBeVisible();
+});

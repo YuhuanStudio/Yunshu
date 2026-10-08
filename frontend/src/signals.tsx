@@ -118,9 +118,11 @@ function useDownloadFacts(
   return facts;
 }
 
-function readStored(): NotifRecord[] {
+/** The session's notifications live per service address (never per token: the token is not stored). */
+const storageKey = (c: Connection) => `${STORAGE_KEY}:${c.baseUrl}`;
+function readStored(c: Connection): NotifRecord[] {
   try {
-    return loadNotifications(sessionStorage.getItem(STORAGE_KEY));
+    return loadNotifications(sessionStorage.getItem(storageKey(c)));
   } catch {
     return [];
   }
@@ -155,9 +157,33 @@ export function useShellSignals(
     [engine.phase, engine.status, ledger, facts],
   );
 
-  const [notifications, setNotifications] = useState<NotifRecord[]>(readStored);
+  // The list belongs to one connection identity: switching address or token shows that
+  // service's own history (empty for a token change, restored for a known address) and the
+  // change tracker starts from a fresh baseline, so service B never announces service A's events.
+  const scope = connectionScope(connection);
+  const [held, setHeld] = useState<{ scope: string; list: NotifRecord[] }>(
+    () => ({ scope, list: readStored(connection) }),
+  );
+  const notifications =
+    held.scope === scope ? held.list : readStored(connection);
+  const setNotifications = useCallback(
+    (update: (list: NotifRecord[]) => NotifRecord[]) =>
+      setHeld((h) => ({
+        scope,
+        list: update(h.scope === scope ? h.list : readStored(connection)),
+      })),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [scope],
+  );
   const tracker = useRef(initialTracker());
+  const trackerScope = useRef(scope);
   useEffect(() => {
+    // A different service is a fresh baseline, not a restart or a recovery
+    // (reset after the approach of consolereview 89403c99).
+    if (trackerScope.current !== scope) {
+      tracker.current = initialTracker();
+      trackerScope.current = scope;
+    }
     if (engine.phase === "connecting") return;
     const { state, events } = observe(tracker.current, {
       at: Date.now(),
@@ -174,20 +200,26 @@ export function useShellSignals(
       const { title, body } = describeNotification(e);
       (e.tone === "error" ? toast.error : toast.warning)(title, body);
     }
-  }, [engine.phase, engine.status, facts, downloads]);
+  }, [scope, engine.phase, engine.status, facts, downloads]);
   useEffect(() => {
     try {
-      sessionStorage.setItem(STORAGE_KEY, JSON.stringify(notifications));
+      sessionStorage.setItem(
+        storageKey(connection),
+        JSON.stringify(notifications),
+      );
     } catch {
       /* storage may be unavailable */
     }
-  }, [notifications]);
+  }, [notifications, connection.baseUrl]);
 
   const markRead = useCallback(
     () => setNotifications((list) => markAllRead(list)),
-    [],
+    [setNotifications],
   );
-  const clearAll = useCallback(() => setNotifications([]), []);
+  const clearAll = useCallback(
+    () => setNotifications(() => []),
+    [setNotifications],
+  );
   return useMemo(
     () => ({
       ledger,
