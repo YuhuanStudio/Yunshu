@@ -22,6 +22,11 @@ def unknown(reason: str) -> dict:
 
 
 def frequency(states: list, table: list[int]) -> tuple[float | None, str | None]:
+    if any(
+        not name or residency < 0 or not math.isfinite(residency)
+        for name, residency in states
+    ):
+        return None, "invalid GPU state residency"
     indices = sorted(
         int(n[1:]) for n, _ in states if n and n.startswith("P") and n[1:].isdigit()
     )
@@ -138,7 +143,13 @@ class HostSampler:
             sum(watts.values()) if all(v is not None for v in watts.values()) else None
         )
         mhz, reason = frequency(reading.gpu_states, table)
-        gpu = {"frequency_mhz": mhz, "active_ratio": reading.gpu_active_fraction()}
+        ratio = reading.gpu_active_fraction()
+        if ratio is not None and (not math.isfinite(ratio) or not 0 <= ratio <= 1):
+            ratio = None
+            reason = "invalid GPU active residency ratio"
+        if reason == "invalid GPU state residency":
+            ratio = None
+        gpu = {"frequency_mhz": mhz, "active_ratio": ratio}
         if reason:
             gpu["reason"] = reason
         snap = {

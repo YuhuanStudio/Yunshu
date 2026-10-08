@@ -265,3 +265,22 @@ def test_failed_energy_constructor_releases_all_temporaries(monkeypatch):
     with pytest.raises(RuntimeError, match="GPU Stats"):
         apple.EnergySampler()
     assert sorted(cf.released) == owned
+
+
+@pytest.mark.parametrize(
+    "states",
+    [
+        [("OFF", -25), ("P1", 75)],
+        [(None, 25), ("P1", 75)],
+        [("OFF", float("nan")), ("P1", 75)],
+    ],
+)
+def test_invalid_gpu_residency_is_unknown_with_reason(states):
+    host = sampler.HostSampler()
+    invalid = reading()
+    invalid.gpu_states = states
+    host.publish(invalid, 10, {}, [300])
+    gpu = host.snapshot()["gpu"]
+    assert gpu["frequency_mhz"] is None and gpu["active_ratio"] is None
+    assert gpu["reason"]
+    assert host.snapshot()["watts"]["gpu"] == 10
