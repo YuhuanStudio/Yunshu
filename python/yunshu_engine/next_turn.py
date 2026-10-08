@@ -24,10 +24,6 @@ logger = logging.getLogger(__name__)
 SENTINEL = "⁣next-turn-rehearsal⁣"
 MIN_REPLY_TOKENS = 16
 MAX_REPLY_TOKENS = 4096
-# A request that follows a reply within this time (an agent loop, a retry, a warm resend) is not
-# a user reading: starting the rehearsal then would make it wait for a prefill atom (~2 s on
-# the 27B; the first yv run measured warm TTFT 0.18 -> 2.9 s without a delay).
-START_DELAY_S = 2.0
 
 
 def reply_text(parts: Sequence[tuple[str, str]]) -> str:
@@ -149,3 +145,52 @@ def rehearsal_length(prefix_len: int, stride: int, guard: int) -> int | None:
     if s + guard > prefix_len:
         s -= stride
     return s + guard if s >= stride else None
+
+
+def extends(request_ids: Sequence[int], rehearsed_ids: Sequence[int]) -> bool:
+    """True when the request's prompt starts with every rehearsed token (it is the follow-up)."""
+    n = len(rehearsed_ids)
+    return (
+        n > 0 and len(request_ids) >= n and list(request_ids[:n]) == list(rehearsed_ids)
+    )
+
+
+class RehearsalState:
+    """One in-flight rehearsal: when a request may adopt it and when it must cancel it.
+
+    A request that arrives after the rehearsal was submitted and whose prompt extends the
+    rehearsed prefix needs exactly that prefill: it adopts the work (the runner's single-flight
+    wait releases it at the checkpoint). Anything else cancels the rehearsal at the next prefill
+    atom; a request that arrives before submission (still tokenizing, or inside the start
+    delay) cancels it too, since no useful work is running yet.
+    """
+
+    def __init__(self, cancel_event):
+        self.cancel_event = cancel_event
+        self.ids: tuple | None = None
+        self.submitted = False
+        self._lock = threading.Lock()
+
+    def set_ids(self, ids: Sequence[int]) -> None:
+        with self._lock:
+            self.ids = tuple(ids)
+
+    def submit(self) -> bool:
+        """Called right before the runner call; False when a request already cancelled it."""
+        with self._lock:
+            if self.cancel_event.is_set():
+                return False
+            self.submitted = True
+            return True
+
+    def arrive(self, request_ids: Sequence[int]) -> str:
+        """A real request's prompt is known: 'adopt' (leave running) or 'cancel'."""
+        with self._lock:
+            if (
+                self.submitted
+                and self.ids is not None
+                and extends(request_ids, self.ids)
+            ):
+                return "adopt"
+            self.cancel_event.set()
+            return "cancel"

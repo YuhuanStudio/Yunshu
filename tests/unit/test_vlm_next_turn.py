@@ -32,7 +32,7 @@ class _Arr:
 
 
 def _engine(monkeypatch, *, on=True):
-    monkeypatch.setattr(next_turn, "START_DELAY_S", 0.0)
+    pass
     eng = object.__new__(vlm_engine.VLMEngine)
     eng._rehearsal_cancel = None
     eng._rehearsal_task = None
@@ -248,17 +248,75 @@ def test_boundary_mode_never_rehearses(monkeypatch):
     assert calls == []
 
 
+def _delay(monkeypatch, seconds):
+    real = settings.get
+    monkeypatch.setattr(
+        settings,
+        "get",
+        lambda k, *a, **kw: (
+            seconds if k == "YUNSHU_NEXT_TURN_DELAY_S" else real(k, *a, **kw)
+        ),
+    )
+
+
 def test_request_during_the_start_delay_prevents_the_rehearsal(monkeypatch):
     eng, calls = _engine(monkeypatch)
-    monkeypatch.setattr(next_turn, "START_DELAY_S", 0.05)
+    _delay(monkeypatch, 0.05)
     before = next_turn.snapshot()
 
     async def main():
         _go(eng)
-        eng._cancel_rehearsal()  # a request arrives right after the reply
+        await asyncio.sleep(0.01)  # the rehearsal ids are known, the delay is running
+        # even the follow-up itself arrives before any work started: nothing to adopt yet
+        eng._settle_rehearsal([9, 1, 3, 4, 9, 2, 3, 5, 9, 1])
         await eng._rehearsal_task
 
     asyncio.run(main())
     assert calls == []
     assert next_turn.snapshot()["started"] == before["started"]
     assert next_turn.snapshot()["cancelled"] == before["cancelled"] + 1
+
+
+def test_follow_up_adopts_a_running_rehearsal_and_a_diverging_request_cancels(
+    monkeypatch,
+):
+    eng, calls = _engine(monkeypatch)
+    release = threading.Event()
+    seen = {}
+
+    def runner(ids, extras=None, cancel_event=None, **kw):
+        seen["ev"] = cancel_event
+        release.wait(2)
+        return ("", 0, 1, True, False, 0)
+
+    eng._generate_vlm_runner_text = runner
+
+    async def main():
+        _go(eng)
+        for _ in range(200):
+            if "ev" in seen:
+                break
+            await asyncio.sleep(0.005)
+        prefix = [9, 1, 3, 4, 9, 2, 3, 5]
+        eng._settle_rehearsal(
+            prefix + [9, 1, 3, 6]
+        )  # same conversation, new user message
+        assert not seen["ev"].is_set()  # adopted: the rehearsal keeps running
+        eng._settle_rehearsal([9, 1, 3, 4, 9, 7])  # another prompt
+        assert seen["ev"].is_set()  # cancelled at the next atom
+        release.set()
+        await eng._rehearsal_task
+
+    asyncio.run(main())
+
+
+def test_extends_and_state_rules():
+    assert next_turn.extends([1, 2, 3, 4], [1, 2, 3])
+    assert not next_turn.extends([1, 2], [1, 2, 3])
+    assert not next_turn.extends([1, 9, 3, 4], [1, 2, 3])
+    assert not next_turn.extends([1, 2, 3], [])
+    ev = threading.Event()
+    st = next_turn.RehearsalState(ev)
+    st.set_ids([1, 2, 3])
+    assert st.arrive([1, 2, 3, 4]) == "cancel"  # not submitted yet: no work to adopt
+    assert ev.is_set() and not st.submit()

@@ -411,7 +411,7 @@ def check_rehearsal_engaged(s, a):
     )
     with urllib.request.urlopen(req, timeout=30) as r:
         done = completed_rehearsals(r.read().decode())
-    if a.think_s and done < 1:
+    if (a.think_s or getattr(a, "require_engaged", False)) and done < 1:
         raise RuntimeError(
             "YUNSHU_NEXT_TURN_PREFILL=1 but /metrics shows 0 completed rehearsals: "
             "the feature never engaged (not noise, broken run)"
@@ -525,6 +525,85 @@ def part_decode(s, out, a):
                 r = send(s.url, req(s.model, text, n_dec, extra={"draft": False}))
                 r["text"] = r.pop("_text")
                 emit(out, part="decode", ctx=ctx, kind=kind, phase="specoff", **r)
+
+
+def arrival_offsets(window_s, n):
+    """n arrival times spread uniformly over the rehearsal window, plus one after it (control)."""
+    step = window_s / n
+    return [round(step * (i + 0.5), 3) for i in range(n)] + [round(window_s * 3, 3)]
+
+
+def part_arrive(s, out, a):
+    """A request arriving while a next-turn rehearsal runs (YUNSHU_NEXT_TURN_PREFILL).
+
+    One shared prompt is primed once; every trial asks a variant of it (cached prefix, so a trial
+    costs one decode), waits its offset after the reply and sends either a diverging request
+    (--arrive-mode diverge: another session, a tiny prompt) or the conversation's follow-up
+    (adopt). TTFT of that request against the offset gives the wait a rehearsal can cost
+    (diverge) or the time it saves (adopt)."""
+    ctx = (a.only_ctx or [32768])[0]
+    kind = (a.only_kind or ["code"])[0]
+    base = load_prompt(f"{kind}-{ctx}") + LONG_ASK
+    n_dec = int(a.decode_tokens)
+    send(s.url, req(s.model, base, 16))  # prime: the 32K prefix enters the cache
+    baseline = send(s.url, req(s.model, "Say hi.", 8))["ttft_s"]
+    emit(
+        out,
+        part="arrive",
+        ctx=ctx,
+        kind=kind,
+        mode=a.arrive_mode,
+        role="baseline",
+        ttft_s=baseline,
+    )
+    for k, off in enumerate(arrival_offsets(a.arrive_window, a.arrive_n)):
+        text = base + f"\nVariant {k}: answer in a different style."
+        r = send(s.url, req(s.model, text, n_dec))
+        check_decode_len(r, n_dec, f"arrive {ctx} trial {k}")
+        reply = r["_text"]
+        time.sleep(off)
+        if a.arrive_mode == "diverge":
+            b = req(s.model, "Say hi.", 8)
+        else:
+            b = req(s.model, text, 16)
+            b["messages"] += [
+                {"role": "assistant", "content": reply},
+                {
+                    "role": "user",
+                    "content": "Continue with the next part, at the same length.",
+                },
+            ]
+        probe = send(s.url, b)
+        rec = {
+            "offset_s": off,
+            "ttft_s": probe["ttft_s"],
+            "cached": probe.get("cached"),
+            "pt": probe.get("pt"),
+        }
+        if a.arrive_mode == "diverge":
+            rec["wait_s"] = round(probe["ttft_s"] - baseline, 3)
+        emit(
+            out,
+            part="arrive",
+            ctx=ctx,
+            kind=kind,
+            mode=a.arrive_mode,
+            role="trial",
+            trial=k,
+            **rec,
+        )
+        time.sleep(a.arrive_settle)
+    a.require_engaged = True
+    done = check_rehearsal_engaged(s, a)
+    emit(
+        out,
+        part="arrive",
+        ctx=ctx,
+        kind=kind,
+        mode=a.arrive_mode,
+        role="summary",
+        rehearsals_completed=done,
+    )
 
 
 NEEDLE_NAMES = [
@@ -757,6 +836,16 @@ def parse_args(argv=None):
         default=256,
         help="reply length of decode cells; a cell that does not end finish=length at exactly N is an error",
     )
+    ap.add_argument("--arrive-mode", choices=("diverge", "adopt"), default="diverge")
+    ap.add_argument(
+        "--arrive-n", type=int, default=8, help="arrival offsets in the window"
+    )
+    ap.add_argument(
+        "--arrive-window", type=float, default=3.0, help="rehearsal window, seconds"
+    )
+    ap.add_argument(
+        "--arrive-settle", type=float, default=8.0, help="seconds after each probe"
+    )
     ap.add_argument(
         "--think-s",
         type=float,
@@ -783,8 +872,10 @@ def parse_args(argv=None):
 def main():
     a = parse_args()
     extra_env = dict(kv.split("=", 1) for kv in a.env)
-    if a.part not in ("decode", "conc", "agent", "ca", "needle", "conc32"):
-        raise ValueError("supported parts: decode, conc, agent, ca, needle, conc32")
+    if a.part not in ("decode", "conc", "agent", "ca", "needle", "conc32", "arrive"):
+        raise ValueError(
+            "supported parts: decode, conc, agent, ca, needle, conc32, arrive"
+        )
     if a.dry_run:
         if a.part == "decode" and not a.smoke:
             for ctx in a.only_ctx or [1024, 8192, 32768]:
@@ -831,6 +922,7 @@ def main():
             else:
                 {
                     "decode": part_decode,
+                    "arrive": part_arrive,
                     "conc": part_conc,
                     "agent": part_agent,
                     "needle": part_needle,

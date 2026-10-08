@@ -95,3 +95,40 @@ def test_boundary_reference_mode_is_not_checked(monkeypatch):
         )
         is None
     )
+
+
+def test_arrival_offsets_are_uniform_with_a_control_after_the_window():
+    offs = tfbench.arrival_offsets(3.0, 6)
+    assert offs[:-1] == [0.25, 0.75, 1.25, 1.75, 2.25, 2.75]
+    assert offs[-1] == 9.0
+
+
+def test_arrive_part_is_registered_and_parses():
+    a = tfbench.parse_args(
+        [
+            "--engine",
+            "yunshu",
+            "--part",
+            "arrive",
+            "--out",
+            "x",
+            "--arrive-mode",
+            "adopt",
+        ]
+    )
+    assert a.part == "arrive" and a.arrive_mode == "adopt" and a.arrive_n == 8
+
+
+def test_arrive_requires_engagement_even_without_think_time(monkeypatch):
+    import io
+
+    monkeypatch.setattr(
+        tfbench.urllib.request,
+        "urlopen",
+        lambda *a, **k: io.BytesIO(
+            b'yunshu_next_turn_rehearsals_total{outcome="started"} 1\n'
+        ),
+    )
+    a = type("A", (), {"think_s": 0.0, "require_engaged": True})
+    with pytest.raises(RuntimeError, match="never engaged"):
+        tfbench.check_rehearsal_engaged(_srv({"YUNSHU_NEXT_TURN_PREFILL": "exact"}), a)

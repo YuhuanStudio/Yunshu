@@ -396,6 +396,7 @@ class VLMEngine:
         self._running = False
         self._active_count = 0
         self._rehearsal_cancel: threading.Event | None = None
+        self._rehearsal_state: next_turn.RehearsalState | None = None
         self._rehearsal_task: asyncio.Future | None = None
         self._active_count_lock = threading.Lock()
         self._num_requests_processed = 0
@@ -889,7 +890,6 @@ class VLMEngine:
             messages = messages or []
         if self._model is None:
             raise RuntimeError("Engine not started")
-        self._cancel_rehearsal()
         tpl_extra = self._request_template_extra(kwargs)
         # A timeout below must be able to stop the generation it abandons.
         if kwargs.get("cancel_event") is None:
@@ -939,6 +939,7 @@ class VLMEngine:
                 ids, pkw, salt = self._runner_input(
                     messages, image_paths, audio_paths, _enable_thinking, tpl_extra
                 )
+                self._settle_rehearsal(ids)
                 return _RunnerCall(
                     self._generate_vlm_runner_text,
                     ids,
@@ -1094,7 +1095,6 @@ class VLMEngine:
         if self._model is None:
             raise RuntimeError("Engine not started")
 
-        self._cancel_rehearsal()
         tpl_extra = self._request_template_extra(kwargs)
         if cancel_event is None:
             cancel_event = threading.Event()
@@ -1195,6 +1195,7 @@ class VLMEngine:
             ids, pkw, salt = self._runner_input(
                 messages, image_paths, audio_paths, enable_thinking, tpl_extra
             )
+            self._settle_rehearsal(ids)
             return _RunnerCall(
                 self._stream_vlm_runner_text,
                 ids,
@@ -1395,10 +1396,18 @@ class VLMEngine:
     # -- next-turn rehearsal (YUNSHU_NEXT_TURN_PREFILL) ---------------------------------
 
     def _cancel_rehearsal(self) -> None:
-        """A real request arrived: stop an unfinished rehearsal at its next prefill atom."""
+        """Stop an unfinished rehearsal at its next prefill atom (no prompt to compare)."""
         ev = getattr(self, "_rehearsal_cancel", None)
         if ev is not None:
             ev.set()
+
+    def _settle_rehearsal(self, ids: list[int]) -> None:
+        """A real request's prompt is known: adopt the running rehearsal or cancel it."""
+        state = getattr(self, "_rehearsal_state", None)
+        if state is None:
+            return
+        verdict = state.arrive(ids)
+        logger.debug("next-turn rehearsal vs arriving request: %s", verdict)
 
     def _maybe_rehearse(
         self,
@@ -1435,8 +1444,12 @@ class VLMEngine:
         # still be able to cancel it
         ev = threading.Event()
         self._rehearsal_cancel = ev
+        state = next_turn.RehearsalState(ev)
+        self._rehearsal_state = state
         task = asyncio.ensure_future(
-            self._rehearse(messages, reply, enable_thinking, tpl_extra, str(mode), ev)
+            self._rehearse(
+                messages, reply, enable_thinking, tpl_extra, str(mode), state
+            )
         )
         self._rehearsal_task = task
 
@@ -1447,12 +1460,14 @@ class VLMEngine:
         enable_thinking: bool | None,
         tpl_extra: dict | None,
         mode: str = "stride",
-        ev: threading.Event | None = None,
+        state: next_turn.RehearsalState | None = None,
     ) -> None:
         loop = asyncio.get_running_loop()
-        if ev is None:
-            ev = threading.Event()
-            self._rehearsal_cancel = ev
+        if state is None:
+            state = next_turn.RehearsalState(threading.Event())
+            self._rehearsal_cancel = state.cancel_event
+            self._rehearsal_state = state
+        ev = state.cancel_event
         rehearsal_messages = next_turn.with_reply(messages, reply)
         marker = self._chatml_head_marker()
         tokenizer = self._tokenizer
@@ -1499,6 +1514,7 @@ class VLMEngine:
                 cancel_event=ev,
                 kwargs={},
             )
+            state.set_ids(ids)
             return _RunnerCall(
                 self._generate_vlm_runner_text,
                 ids,
@@ -1520,13 +1536,15 @@ class VLMEngine:
         started = False
         call = None
         try:
-            await asyncio.sleep(next_turn.START_DELAY_S)
-            if ev.is_set():
-                next_turn.record("cancelled")
-                return
             call = await loop.run_in_executor(self._executor, _prepare)
             if call is None:
                 logger.debug("next-turn rehearsal skipped (no clean cut)")
+                return
+            delay = float(settings.get("YUNSHU_NEXT_TURN_DELAY_S") or 0.0)
+            if delay > 0:
+                await asyncio.sleep(delay)
+            if not state.submit():
+                next_turn.record("cancelled")
                 return
             next_turn.record("started")
             started = True
@@ -1553,6 +1571,8 @@ class VLMEngine:
         finally:
             if getattr(self, "_rehearsal_cancel", None) is ev:
                 self._rehearsal_cancel = None
+            if getattr(self, "_rehearsal_state", None) is state:
+                self._rehearsal_state = None
 
     def backend_capabilities(self, lm: Any = None) -> Any:
         """This backbone's cache layout via the shared ``model_backend`` layer
