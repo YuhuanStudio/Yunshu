@@ -457,11 +457,20 @@ def detect_mode(engine: str, log: str, probe_text: str | None = None) -> str | N
         text = m.group(1).lower()
         return "mtp" if "mtp" in text else "ar" if "ar" in text.split() else None
     if engine == "llamacpp":
+        loaded_mtp = re.search(
+            r"loading draft model [^\n]*[/\\]MTP[/\\]mtp-", log, re.I
+        )
+        drafted = re.search(
+            r"draft acceptance\s*=\s*[0-9.]+\s*\(\s*\d+ accepted /\s*([1-9]\d*) generated",
+            log,
+        )
         configured = re.search(
             r'"speculative\.types"\s*:\s*"draft-mtp"', probe_text or ""
         )
-        if configured or re.search(
-            r"draft-mtp|speculative decoding.*mtp|mtp.*draft", log, re.I
+        if (
+            (loaded_mtp and drafted)
+            or configured
+            or re.search(r"draft-mtp|speculative decoding.*mtp|mtp.*draft", log, re.I)
         ):
             return "mtp"
         return None

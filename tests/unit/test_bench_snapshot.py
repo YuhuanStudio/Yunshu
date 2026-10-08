@@ -524,3 +524,16 @@ def test_listener_ownership_refuses_an_unowned_process_group(monkeypatch):
     assert not tfbench.owns_listener(100, 18990)
     monkeypatch.setattr(tfbench.os, "getpgid", lambda pid: 100)
     assert tfbench.owns_listener(100, 18990)
+
+
+def test_llama_mtp_engagement_uses_loaded_head_and_actual_drafts():
+    log = "common_speculative_init_result: loading draft model '/m/MTP/mtp-Qwen.gguf'\n"
+    assert be.detect_mode("llamacpp", log) is None
+    log += "slot print_timing: draft acceptance = 0.64286 (9 accepted /14 generated), mean len = 2.80\n"
+    assert be.detect_mode("llamacpp", log) == "mtp"
+    assert (
+        be.detect_mode(
+            "llamacpp", "slot draft acceptance = 0.5 (1 accepted /2 generated)"
+        )
+        is None
+    )
