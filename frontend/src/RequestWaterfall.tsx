@@ -45,7 +45,15 @@ export function RequestWaterfall({ row }: { row: Row }) {
 }
 
 const jFmt = (v: number | null) =>
-  v == null ? "—" : v >= 100 ? number(v, 0) : number(v, v >= 10 ? 1 : 2);
+  v == null
+    ? "—"
+    : v >= 100
+      ? number(v, 0)
+      : v >= 10
+        ? number(v, 1)
+        : v >= 1
+          ? number(v, 2)
+          : number(v, 3);
 
 /**
  * Host energy of this request's prefill and decode windows. It is an ESTIMATE of GPU + DRAM
@@ -79,7 +87,7 @@ export function EnergyReceipt({ energy }: { energy: RequestEnergy }) {
         <ul className="space-y-1 text-sm tabular-nums">
           {phases.map(([id, p]) => (
             <li key={id} className="flex flex-wrap gap-x-3">
-              <span className="w-12 text-muted-foreground">
+              <span className="w-[3.75rem] text-muted-foreground">
                 {t(`requests.energy.${id}`)}
               </span>
               {p && p.state === "estimated" ? (
@@ -91,7 +99,7 @@ export function EnergyReceipt({ energy }: { energy: RequestEnergy }) {
                       : `${jFmt(p.joulesPerToken)} J/token`}
                   </span>
                   {p.coverageRatio != null && (
-                    <span className="text-xs text-muted-foreground">
+                    <span className="basis-full pl-[3.75rem] text-xs text-muted-foreground">
                       {t("requests.energy.coverage", {
                         pct: number(p.coverageRatio * 100, 0),
                       })}

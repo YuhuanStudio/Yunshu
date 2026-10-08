@@ -28,6 +28,15 @@ import { SegmentedTray } from "./SegmentedTray";
 import { number } from "./ui";
 
 // i18n-keys: requests.dist.group., requests.dist.dim.
+const k = (ms: number) => (ms >= 1000 ? `${ms / 1000}s` : String(ms));
+/** Bucket labels in the unit-free style of the overview histogram: "<100", "100–250", "≥10s". */
+const binLabel = (min: number, max: number) =>
+  min === 0
+    ? `<${k(max)}`
+    : max === Infinity
+      ? `≥${k(min)}`
+      : `${k(min)}–${k(max)}`;
+
 const groupLabel = (id: string) =>
   id === "all"
     ? t("requests.dist.group.all")
@@ -93,10 +102,7 @@ export function LatencyDistribution({ rows }: { rows: readonly Row[] }) {
       <BarChart
         data={bins.map((b) => ({
           id: `b${b.min}`,
-          label:
-            b.max === Infinity
-              ? `≥${formatMs(b.min)}`
-              : `${b.min === 0 ? "" : "≥"}${formatMs(b.min)}`,
+          label: binLabel(b.min, b.max),
           value: b.count,
           tone: "neutral" as const,
         }))}
@@ -119,7 +125,7 @@ export function LatencyDistribution({ rows }: { rows: readonly Row[] }) {
               <Td className="max-w-40 truncate text-sm">{groupLabel(g.id)}</Td>
               <Td className="tabular-nums">{number(g.n, 0)}</Td>
               <Td
-                className="tabular-nums"
+                className="whitespace-nowrap tabular-nums"
                 title={
                   g.p50 == null
                     ? t("requests.dist.tooFew", { min: MIN_PERCENTILE_SAMPLES })
@@ -129,7 +135,7 @@ export function LatencyDistribution({ rows }: { rows: readonly Row[] }) {
                 {ms(g.p50)}
               </Td>
               <Td
-                className="tabular-nums"
+                className="whitespace-nowrap tabular-nums"
                 title={
                   g.p90 == null
                     ? t("requests.dist.tooFew", { min: MIN_PERCENTILE_SAMPLES })

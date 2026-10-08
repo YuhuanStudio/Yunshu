@@ -16,7 +16,7 @@ import { ChartCard, SeriesChart } from "./AnalyticsPanels";
 import type { HostTelemetry, HostSystem } from "./host-api";
 import type { HostState } from "./host-hook";
 import { has, t, tr, useLocale } from "./i18n/index.ts";
-import { clock, number } from "./ui";
+import { clock, fixed, number } from "./ui";
 
 /** A sample older than this is stale: the values stay (dimmed) and the age says so. */
 export const HOST_STALE_S = 6;
@@ -44,7 +44,7 @@ function Reading({
     return <span title={reason ?? t("overview.host.unknownTip")}>{dash}</span>;
   return (
     <>
-      {number(v, digits)}
+      {digits > 0 ? fixed(v, digits) : number(v, 0)}
       {unit(u)}
     </>
   );
