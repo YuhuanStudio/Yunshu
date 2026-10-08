@@ -45,6 +45,7 @@ from typing import Any
 import mlx.core as mx
 
 from . import netguard, settings
+from .moe_pack import tensor_quantization_override, unsupported_pack_reason
 from .request import RequestOutput
 from .types import EngineConfig
 
@@ -581,6 +582,10 @@ class VLMEngine:
         for wf in weight_files:
             weights.update(mx.load(wf))
 
+        reason = unsupported_pack_reason(config, weights)
+        if reason:
+            raise ValueError(f"unsupported checkpoint pack: {reason}")
+
         model_class, _ = get_model_and_args(config=config)
 
         config.setdefault("text_config", config.pop("llm_config", {}))
@@ -611,10 +616,17 @@ class VLMEngine:
         # quantization_config, incl. text_config nesting) instead of reading only the
         # top-level "quantization" key — see _derive_vlm_quantization.
         quantization = _derive_vlm_quantization(config)
+        if quantization is None and any(k.endswith(".scales") for k in weights):
+            # Native packed tensors without a quantization block (e.g. mx fp4/fp8 packs):
+            # the tensor shapes decide per module.
+            quantization = {}
+            logger.info("checkpoint has scales but no quantization config; deriving")
         if quantization is not None:
             config["quantization"] = (
                 quantization  # so the per-layer predicate (p in ...) holds
             )
+
+            _quant_overrides: dict[str, dict] = {}
 
             def _quantize_predicate(p, m):
                 # honor PER-LAYER quantization overrides. A model's
@@ -627,6 +639,16 @@ class VLMEngine:
                 # mlx_vlm.load, which DOES honor this). Mirror
                 # mlx_vlm.utils.get_class_predicate.
                 per_module = _vlm_module_quantization(model, quantization, p)
+                derived = tensor_quantization_override(
+                    weights,
+                    p,
+                    getattr(getattr(m, "weight", None), "shape", None),
+                    quantization,
+                    per_module,
+                )
+                if derived is not None:
+                    _quant_overrides[p] = derived
+                    return derived
                 if per_module is not None:
                     return per_module
                 if not hasattr(m, "to_quantized"):
@@ -644,6 +666,13 @@ class VLMEngine:
                 mode=quantization.get("mode", "affine"),
                 class_predicate=_quantize_predicate,
             )
+            if _quant_overrides:
+                logger.warning(
+                    "quantization config disagreed with %d tensors; used tensor-derived "
+                    "bits/group_size (first: %s)",
+                    len(_quant_overrides),
+                    next(iter(_quant_overrides.items())),
+                )
 
         # NOW the model's parameter set reflects QuantizedLinear's
         # (weight + scales + biases), so we can safely drop weights the
