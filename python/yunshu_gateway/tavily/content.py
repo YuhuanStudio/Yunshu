@@ -15,6 +15,7 @@ def page_content(body, url):
     metadata = {"links": [], "images": [], "favicon": None, "language": None}
     try:
         root = html.fromstring(body)
+        metadata["js_shell"] = bool(root.xpath("//script")) and len(text.strip()) < 200
         metadata["language"] = root.get("lang")
         for key, values in (
             ("links", root.xpath("//a/@href")),

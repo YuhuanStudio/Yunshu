@@ -22,6 +22,7 @@ async def page(
     timeout: float = 3,
     extractor=None,
     cache_namespace: str = "",
+    redirect_guard=None,
     **kwargs,
 ):
     if automated and kwargs.get("client") is None:
@@ -35,6 +36,7 @@ async def page(
                 timeout=timeout,
                 extractor=extractor,
                 cache_namespace=cache_namespace,
+                redirect_guard=redirect_guard,
                 client=shared,
                 **kwargs,
             )
@@ -50,6 +52,8 @@ async def page(
     cache_key = (cache_namespace + "::" + url) if cache_namespace else url
     state = politeness.host(url)
     if cached := pages.get(cache_key):
+        if redirect_guard is not None and cached.url != url:
+            redirect_guard(cached.url)
         # Recheck final redirect domain for each request's filters.
         final = parse_url(cached.url).hostname or ""
         if (allowed and not domain_matches(final, allowed)) or (
@@ -89,6 +93,8 @@ async def page(
                 headers["If-Modified-Since"] = stale.last_modified
 
         async def before_redirect(target):
+            if redirect_guard is not None:
+                redirect_guard(target)
             # Automated cross-origin redirects require a new admission/robots budget.
             # Conservatively keep the provider snippet instead of bypassing that policy.
             source, destination = urlsplit(url), urlsplit(target)

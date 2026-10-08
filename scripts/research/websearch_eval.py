@@ -22,6 +22,12 @@ def parser():
     p.add_argument("--url", help="Existing gpuq-owned server URL")
     p.add_argument("--model", help="Served model ID")
     p.add_argument(
+        "--device",
+        choices=("M5", "M3"),
+        default="M5",
+        help="Device serving both replay arms",
+    )
+    p.add_argument(
         "--token-file",
         type=Path,
         help="Bearer token file for a protected local eval server",
@@ -418,6 +424,8 @@ async def run(a):
                     **score(text, citations, row, extracted),
                     "seconds": time.monotonic() - t0,
                     "text": text,
+                    "device": a.device,
+                    "citations_detail": citations,
                     "usage": data.get("usage"),
                     "injected_chars": len(tool_text),
                 }

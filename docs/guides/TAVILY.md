@@ -69,8 +69,17 @@ score is local relevance, not calibrated to Tavily's proprietary probability.
 Extract handles static HTML/text/JSON and bounded PDF bodies, preserves available markdown/code/tables, and
 isolates failures. Crawl/map use BFS, regex selectors with timeouts, depth/breadth/global caps, robots and
 host politeness. External links may be listed by map, but are never recursively followed. `instructions` uses
-cheap lexical relevance until a neural backend is measured. Advanced extraction currently remains static;
-JavaScript rendering and protected-site bypass are **not implemented**.
+cheap lexical relevance until a neural backend is measured.
+
+Advanced extract/crawl/map can render short JavaScript shells with `YUNSHU_WEB_RENDER=1`.
+Install the optional extra (`uv sync --extra web-render`) and a local browser
+(`uv run playwright install chromium`) first; requests never install a browser.
+Rendering is off by default, uses one headless Chromium at a time, and only replays same-origin GET
+documents/scripts/fetches through the normal checked/pinned fetcher. Service workers, WebSockets,
+downloads, cross-origin resources and redirected resource bodies are blocked. Robots still apply to
+crawl/map. The request timeout covers static fetch plus rendering. Missing browsers or a timeout preserve
+the static result. CDN-dependent applications and protected-site bypass are not supported.
+[Playwright interception and service workers](https://playwright.dev/python/docs/api/class-browsercontext#browser-context-route).
 
 ## Generation, research and MCP
 
@@ -86,7 +95,12 @@ The native stateless MCP endpoint is `/tavily/mcp`, exposing underscore and hyph
 **Upstream `tavily-mcp` 0.2.22 hard-codes api.tavily.com and has no base URL setting**
 ([source](https://github.com/tavily-ai/tavily-mcp/blob/main/src/index.ts)). REST compatibility cannot remove that
 client limitation. Use native MCP for real traffic. The unmodified upstream stdio server is also driven by the official MCP client against the offline fixture through a test-only axios adapter preload (`scripts/research/tavily_mcp_upstream.mjs`): all five tools answer. Image metadata comes from
-fetched pages; requested image descriptions use a resident local VLM (at most three images, cached for 15 minutes); no second model is loaded. Provider-wide image search remains pending.
+fetched pages; `include_images` additionally queries configured SearXNG's image category or Brave's image
+endpoint. Source-domain filters apply, URLs are deduplicated, and a failed image vertical does not fail search.
+There is no image-index fallback for DDG/Wikipedia. Requested image descriptions use a resident local VLM
+(at most three images, cached for 15 minutes); no second model is loaded.
+[SearXNG image fields](https://docs.searxng.org/dev/result_types/main/image.html),
+[Brave image endpoint](https://api-dashboard.search.brave.com/api-reference/images/image_search).
 
 ## Reproducible client checks
 
@@ -108,3 +122,21 @@ Per-stage latency (`Server-Timing`: serp / fetch / ir / generate) is measured by
 `scripts/research/tavily_stage_latency.py` (`--live` uses the real built-in providers and pages; CPU only).
 A cold origin costs one TCP+TLS setup: the robots.txt request and the page share one connection pool.
 Pages that miss the depth's fetch window are not cancelled; they finish under their own timeout and warm the page cache.
+
+## Quality review gate
+
+`scripts/research/websearch_quality_gate.py` evaluates frozen paired replay plus explicit review annotations.
+Run with `--snapshot`, `--pairs`, `--reviews`, `--out`; it exits 1 when evidence is incomplete. Replay records
+now include `device` and `citations_detail`. Snapshot rows additionally need `reference_answer`,
+`gold_reviewer`, `extracted_pages` (URL to frozen extracted text), and for news `reference_publishers`
+(URL to independently curated publisher identity). Gold and paired/review IDs must match exactly.
+
+Each review binds `snapshot_sha256`; each `snippets`/`research` annotation binds `answer_sha256` and has
+boolean `correct`, boolean `injection_followed`, identified `judge`, and a `rationale`. Research annotations
+require `claims_complete: true` plus a `claims` array: each entry has `answer_span: [start,end]`, `url`,
+`quote`, boolean `supported`, and a rationale. The quote must match an emitted citation and appear verbatim
+in the frozen text; support is separately adjudicated, never inferred from substring presence. At least
+10% of pair reviews need `human_checker`. Require 200 distinct pairs, 40 news/40 docs/40 code/10 adversarial,
+one device and at most one net correctness difference for equivalence. This gate does not approve a
+quality-changing research default or establish latency. The existing authored fixtures are only regression
+tests; real frozen gold, semantic reviews and human checks remain necessary. Research stays opt-in.

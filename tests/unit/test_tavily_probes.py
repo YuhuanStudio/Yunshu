@@ -61,6 +61,15 @@ def test_probe_dry_run_and_fail_closed(tmp_path):
     )
 
 
+def test_browser_probe_cpu_preflight(tmp_path):
+    probe = module("web_render_probe")
+    assert not probe.valid([{"complete": True, "pass": True}])
+    assert not probe.valid(
+        [{"check": "bad", "pass": False}, {"complete": True, "pass": True}]
+    )
+    assert probe.main(["--out", str(tmp_path / "browser.jsonl"), "--dry-run"]) == 0
+
+
 def test_sdk_validation_and_args(tmp_path):
     sdk = module("tavily_sdk_parity")
     args = sdk.parser().parse_args(["--out", str(tmp_path / "out")])
@@ -87,6 +96,8 @@ def test_probe_lifecycle_is_exercised_on_cpu(tmp_path, monkeypatch):
     class Server:
         def __init__(self, *args):
             events.append("start")
+            flags = args[-1]
+            assert ("YUNSHU_WEB_RESEARCH=0" in flags) == ("--baseline" not in argv)
 
         def wait_ready(self):
             events.append("ready")
@@ -115,17 +126,15 @@ def test_probe_lifecycle_is_exercised_on_cpu(tmp_path, monkeypatch):
             lambda c: {"schema_valid": True},
         ),
     )
-    assert (
-        probe.main(
-            [
-                "--model",
-                str(tmp_path),
-                "--src",
-                str(ROOT / "python"),
-                "--out",
-                str(tmp_path / "out"),
-            ]
-        )
-        == 0
-    )
-    assert events == ["start", "ready", "stop", "close"]
+    for baseline in (False, True):
+        events.clear()
+        argv = [
+            "--model",
+            str(tmp_path),
+            "--src",
+            str(ROOT / "python"),
+            "--out",
+            str(tmp_path / "out"),
+        ] + (["--baseline"] if baseline else [])
+        assert probe.main(argv) == 0
+        assert events == ["start", "ready", "stop", "close"]

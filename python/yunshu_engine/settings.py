@@ -260,6 +260,7 @@ _add("YUNSHU_MARGINALIA_API_KEY", "str", None, "Explicit opt-in to Marginalia sm
 _add("YUNSHU_SERPER_API_KEY", "str", None, "Serper Google SERP API key.", "server-tools", secret=True)
 _add("YUNSHU_PERPLEXITY_API_KEY", "str", None, "Perplexity Search API key (raw results, not Sonar).", "server-tools", secret=True)
 _add("YUNSHU_WEB_RESEARCH", "bool", False, "Enrich search snippets with origin pages, untrusted excerpts and local ranking. Stable opt-in pending quality evaluation; fetched URLs leave the machine.", "server-tools")
+_add("YUNSHU_WEB_RENDER", "bool", False, "Optional local Chromium fallback for short JavaScript shells in advanced Tavily extract/crawl/map. Requires the web-render extra and an installed Playwright Chromium; same-origin GET resources only, no cookies. Never downloads a browser automatically.", "server-tools")
 _add("YUNSHU_WEB_RESEARCH_BUDGET", "float", 4.0, "Overall enrichment deadline in seconds (maximum 4).", "server-tools", minimum=0.1)
 _add("YUNSHU_WEB_RESEARCH_PAGES", "int", 6, "Maximum origin pages per enrichment (capped at 6).", "server-tools", minimum=1)
 _add("YUNSHU_WEB_RESEARCH_MODEL", "str", None, "Already-loaded local embedding model ID. Never loads a model; absent/unavailable uses BM25 only. Qwen3-Embedding-0.6B is recommended.", "server-tools")

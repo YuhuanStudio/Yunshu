@@ -22,11 +22,13 @@ from urllib.parse import urlsplit
 
 import regex
 
+from yunshu_engine import settings
 from yunshu_engine.netguard import UrlNotAllowedError, domain_matches, parse_url
 from yunshu_gateway.server_tools.research.fetcher import page
 from yunshu_gateway.server_tools.research.rank import bm25, tokens
 from yunshu_gateway.server_tools.search import Passage, SearchError, run_search
 from yunshu_gateway.server_tools.webfetch import FetchError
+from yunshu_gateway.tavily.images import run_images
 
 from .content import favicon, page_content, plain_text, top_chunks
 from .models import (
@@ -157,11 +159,19 @@ def language_matches(language, text, declared):
 
 class TavilyService:
     def __init__(
-        self, generator=None, fetcher=None, searcher=None, image_describer=None
+        self,
+        generator=None,
+        fetcher=None,
+        searcher=None,
+        image_describer=None,
+        image_searcher=None,
+        renderer=None,
     ):
         self.generator = generator
         self._warming: set = set()
         self.image_describer = image_describer
+        self.image_searcher = image_searcher or run_images
+        self.renderer = renderer
         self.image_cache: OrderedDict[str, tuple[float, str]] = OrderedDict()
         self.fetcher = fetcher or page
         self.searcher = searcher or run_search
@@ -202,8 +212,9 @@ class TavilyService:
         if not task.cancelled():
             task.exception()
 
-    async def fetched(self, url, *, automated, timeout):
-        return await self.fetcher(
+    async def fetched(self, url, *, automated, timeout, advanced=False):
+        start = time.monotonic()
+        result = await self.fetcher(
             url,
             automated=automated,
             timeout=timeout,
@@ -213,6 +224,24 @@ class TavilyService:
             extractor=page_content,
             cache_namespace="tavily",
         )
+        if (
+            advanced
+            and result.metadata.get("js_shell")
+            and settings.get("YUNSHU_WEB_RENDER")
+        ):
+            from yunshu_gateway.tavily.render import render
+
+            remaining = timeout - (time.monotonic() - start)
+            if remaining > 0:
+                try:
+                    rendered = await (self.renderer or render)(
+                        result.url, automated=automated, timeout=remaining
+                    )
+                    if len(rendered.text.strip()) > len(result.text.strip()):
+                        return rendered
+                except (FetchError, TimeoutError):
+                    pass  # Optional browser failure preserves the static result.
+        return result
 
     async def generate(
         self,
@@ -478,6 +507,21 @@ class TavilyService:
         candidates.sort(key=lambda row: (-row["score"], row["url"]))
         candidates = candidates[: req.max_results]
         timings["ir"] = time.perf_counter() - t0
+        if req.include_images and req.max_results > 0:
+            t0 = time.perf_counter()
+            top_images.extend(
+                await self.image_searcher(
+                    req.query,
+                    limit=20,
+                    allowed_domains=allowed,
+                    blocked_domains=req.exclude_domains,
+                    options=options,
+                    user_location={"country": country_code(req.country)}
+                    if req.country
+                    else None,
+                )
+            )
+            timings["image_search"] = time.perf_counter() - t0
         if (
             req.include_images
             and req.include_image_descriptions
@@ -582,7 +626,12 @@ class TavilyService:
 
         async def one(url):
             try:
-                fetched = await self.fetched(url, automated=False, timeout=timeout)
+                fetched = await self.fetched(
+                    url,
+                    automated=False,
+                    timeout=timeout,
+                    advanced=req.extract_depth == "advanced",
+                )
                 if not fetched.text.strip():
                     raise FetchError("url_not_accessible", "Failed to retrieve content")
                 return self.extracted_result(fetched, req, req.query), None
@@ -664,7 +713,10 @@ class TavilyService:
                 try:
                     remaining = req.timeout - (time.perf_counter() - start)
                     fetched = await self.fetched(
-                        url, automated=True, timeout=min(10, max(0.01, remaining))
+                        url,
+                        automated=True,
+                        timeout=min(10, max(0.01, remaining)),
+                        advanced=req.extract_depth == "advanced",
                     )
                     return url, depth, fetched
                 except FetchError as exc:

@@ -49,10 +49,13 @@ def create_fixture():
             )
         return "Paris is sunny, 21 degrees Celsius [1]."
 
+    async def image_search(query, **kwargs):
+        return [{"url": ROOT + "/authored-fixture.png"}]
+
     app = FastAPI()
     app.add_middleware(AuthMiddleware)
     app.state.tavily_service = TavilyService(
-        generator=generate, searcher=search, fetcher=fetch
+        generator=generate, searcher=search, fetcher=fetch, image_searcher=image_search
     )
     app.include_router(router)
     return app

@@ -127,6 +127,7 @@ Issues = "https://github.com/YuhuanStudio/Yunshu/issues"
 Changelog = "https://github.com/YuhuanStudio/Yunshu/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
+web-render = ["playwright>=1.48,<2"]
 # Vision / VLM / OCR (mlx-vlm) — needed for image inputs and vision-language models.
 vision = [
     # >=0.7.3: APC (semantic_extra_hash / resident_bytes) and speculative MTP,

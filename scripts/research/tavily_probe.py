@@ -102,10 +102,12 @@ def main(argv=None):
                     f"YUNSHU_SEARXNG_URL={fake.url}",
                     "YUNSHU_WEB_SEARCH_PROVIDER=searxng",
                     "YUNSHU_WEB_FETCH_ALLOW_PRIVATE=1",
-                    "YUNSHU_WEB_RESEARCH=0",
                     "YUNSHU_VLM_APC_DISK=0",
                     *(
-                        [f"YUNSHU_WEB_SEARCH_HEALTH_FILE={root / 'health.json'}"]
+                        [
+                            "YUNSHU_WEB_RESEARCH=0",
+                            f"YUNSHU_WEB_SEARCH_HEALTH_FILE={root / 'health.json'}",
+                        ]
                         if not args.baseline
                         else []
                     ),

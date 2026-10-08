@@ -232,6 +232,7 @@ internal ones, `--json` prints JSON, `--config FILE` includes a config file.
 | `YUNSHU_SERPER_API_KEY` | str | unset | Serper Google SERP API key. |
 | `YUNSHU_PERPLEXITY_API_KEY` | str | unset | Perplexity Search API key (raw results, not Sonar). |
 | `YUNSHU_WEB_RESEARCH` | bool | off | Enrich search snippets with origin pages, untrusted excerpts and local ranking. Stable opt-in pending quality evaluation; fetched URLs leave the machine. |
+| `YUNSHU_WEB_RENDER` | bool | off | Optional local Chromium fallback for short JavaScript shells in advanced Tavily extract/crawl/map. Requires the web-render extra and an installed Playwright Chromium; same-origin GET resources only, no cookies. Never downloads a browser automatically. |
 | `YUNSHU_WEB_RESEARCH_BUDGET` | float | 4.0 | Overall enrichment deadline in seconds (maximum 4). |
 | `YUNSHU_WEB_RESEARCH_PAGES` | int | 6 | Maximum origin pages per enrichment (capped at 6). |
 | `YUNSHU_WEB_RESEARCH_MODEL` | str | unset | Already-loaded local embedding model ID. Never loads a model; absent/unavailable uses BM25 only. Qwen3-Embedding-0.6B is recommended. |
