@@ -98,3 +98,11 @@ The build ships YunUI's license, upstream notices and retained Beautiful UI MIT
 text under `console_static/licenses/yunui/`; Vite generates the bundled dependency
 license catalogue at `console_static/licenses/bundled-dependencies.md`. The local
 Geist and JetBrains Mono font assets carry their OFL texts under `console_static/fonts/`.
+
+## mlx2 telemetry
+
+`python/yunshu_engine/telemetry/apple.py` is derived from pierre427/mlx2
+`src/mlx2/apple_telemetry.py`, revision `92ada04cc7a59c3263e214b0a1127924fedd52db`,
+under Apache-2.0. Upstream NOTICE: “mlx2 is licensed under the Apache License, Version 2.0 (see LICENSE).”
+The unrelated third-party adaptations listed in upstream NOTICE are not used by this telemetry module.
+Source: https://github.com/pierre427/mlx2. Yunshu changes ownership cleanup and reporting integration.

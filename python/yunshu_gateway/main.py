@@ -328,7 +328,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     except Exception:
         logger.warning("Batch runner resume failed", exc_info=True)
 
-    yield
+    from yunshu_engine.telemetry import sampler as host_sampler
+
+    host_sampler.start()
+    try:
+        yield
+    finally:
+        await asyncio.to_thread(host_sampler.stop)
 
     try:
         await _batches.stop_runner()

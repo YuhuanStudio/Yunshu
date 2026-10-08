@@ -272,6 +272,8 @@ _add("YUNSHU_MODEL_ALIASES", "json", None, "Multi-model mode: map the model name
 
 # ── observability ──────────────────────────────────────────────────────
 _add("YUNSHU_LOG_LEVEL", "enum", "INFO", "Log level for Yunshu's loggers (third-party loggers stay at WARNING).", "observability", choices=("DEBUG", "INFO", "WARNING", "ERROR"))
+_add("YUNSHU_TELEMETRY", "enum", "on", "Unprivileged Apple power/GPU/temperature sampler (on/off); 1 Hz by default, restart required.", "observability", choices=("on", "off"))
+_add("YUNSHU_TELEMETRY_INTERVAL_S", "float", 1.0, "Host telemetry sampling interval in seconds (restart required).", "observability", minimum=0.1)
 _add("YUNSHU_AUDIT_LOG_FILE", "path", None, "Also write the audit log to this file.", "observability")
 _add("YUNSHU_LOG_MAX_MB", "float", 50.0, "Service log (launchd): rotate the log file at this size in MiB; 0 turns size rotation off.", "observability", minimum=0.0)
 _add("YUNSHU_LOG_ROTATE_HOURS", "float", 24.0, "Service log: also rotate when this many hours passed since the last rotation; 0 turns time rotation off.", "observability", minimum=0.0)

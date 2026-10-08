@@ -17,7 +17,7 @@ import re
 import secrets
 import threading
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from yunshu_engine import settings
 
@@ -126,7 +126,7 @@ class ChatCompletionStore:
         return None
 
     def _load(self, p: Path) -> dict:
-        return json.loads(p.read_text())
+        return cast(dict, json.loads(p.read_text()))
 
     def _write(self, p: Path, rec: dict) -> None:
         tmp = p.with_name(p.name + f".{secrets.token_hex(4)}.tmp")
@@ -161,7 +161,7 @@ class ChatCompletionStore:
             p = self._path_of(cid)
             if p is None:
                 raise _not_found(cid)
-            return self._load(p)["completion"]
+            return cast(dict, self._load(p)["completion"])
 
     def update_metadata(self, cid: str, metadata: Any) -> dict:
         meta = check_metadata(metadata)
@@ -172,7 +172,7 @@ class ChatCompletionStore:
             rec = self._load(p)
             rec["completion"]["metadata"] = meta
             self._write(p, rec)
-            return rec["completion"]
+            return cast(dict, rec["completion"])
 
     def delete(self, cid: str) -> None:
         with _lock:
@@ -184,7 +184,7 @@ class ChatCompletionStore:
     @staticmethod
     def _page(
         rows: list[dict], ids: list[str], *, limit: int, order: str, after: str | None
-    ):
+    ) -> dict:
         if order == "desc":
             rows = rows[::-1]
             ids = ids[::-1]
