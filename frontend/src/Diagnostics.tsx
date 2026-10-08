@@ -543,14 +543,22 @@ export function Diagnostics({
                 )}
               </span>
             </StatusIndicator>
-            {verdict.level !== "ok" && (
-              <Button size="sm" variant="ghost" asChild>
-                <a href="#/logs">
-                  <ScrollText size={14} />
-                  {t("diagnostics.verdict.logs")}
-                </a>
-              </Button>
-            )}
+            {/* The slot keeps its box while the verdict flips, so polling never moves the header. */}
+            <Button
+              size="sm"
+              variant="ghost"
+              asChild
+              className={verdict.level === "ok" ? "invisible" : undefined}
+            >
+              <a
+                href="#/logs"
+                tabIndex={verdict.level === "ok" ? -1 : undefined}
+                aria-hidden={verdict.level === "ok" ? true : undefined}
+              >
+                <ScrollText size={14} />
+                {t("diagnostics.verdict.logs")}
+              </a>
+            </Button>
           </div>
         }
       >

@@ -268,8 +268,8 @@ test.describe("diagnostics", () => {
     await diag(page, {}, 200);
     const v = page.getByTestId("health-verdict");
     await expect(v).toContainText("健康");
-    // A healthy engine shows the compact chip only, with no link to the logs.
-    await expect(v.getByRole("link", { name: "查看日誌" })).toHaveCount(0);
+    // A healthy engine shows the compact chip only: the logs link keeps its slot but is hidden.
+    await expect(v.locator("a[href='#/logs']")).toBeHidden();
     await page.unroute("**/v1/**");
     await diag(
       page,

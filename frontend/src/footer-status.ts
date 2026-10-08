@@ -178,7 +178,7 @@ export function footerPills(input: FooterInput): FooterPill[] {
       value: `${n(active, 1)}/${n(total, 0)} GB`,
       tone,
       dot: true,
-      minCh: 10,
+      minCh: 12,
       help:
         t("shell.footer.memory.help", {
           active: n(active, 1),

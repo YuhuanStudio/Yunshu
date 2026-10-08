@@ -99,7 +99,7 @@ function installStatusFixture(page: Page, holdFirst = false) {
     if (url.pathname !== "/v1/yunshu/status") {
       // Engine history and the memory ledger are optional; these fixtures model an older server.
       if (
-        !/^\/v1\/yunshu\/(history|memory|downloads|requests\/recent)$/.test(
+        !/^\/v1\/yunshu\/(history|memory|downloads|host|requests\/recent)$/.test(
           url.pathname,
         )
       )
