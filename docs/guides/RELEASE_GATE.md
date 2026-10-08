@@ -6,11 +6,17 @@ tests Yunshu the way a user gets it: built into a wheel, installed with `uv tool
 clean environment, and driven over HTTP with the official OpenAI and Anthropic SDKs. Every check
 prints `PASS`, `FAIL` or `SKIP`. The run ends with a table and exits 1 if anything failed.
 
+Run the public entry point through `yv`, which queues every model stage:
+
 ```sh
-zsh scripts/release/gate.sh                          # install, serve-27b, families, soak
-STAGE=install,serve-27b zsh scripts/release/gate.sh  # any subset, comma-separated
-STAGE=service GATE_SERVICE=1 zsh scripts/release/gate.sh   # also load a real launchd agent
+scripts/dev/yv gate --priority -1
+scripts/dev/yv gate --priority -1 --stages install,serve-27b
+GATE_SERVICE=1 scripts/dev/yv gate --priority -1 --stages service
 ```
+
+Do not invoke `gate.sh` directly; `yv` preserves successful stage evidence. For a
+complete release checklist, use `scripts/dev/release_check <commit-sha>` after
+preparing the final version/changelog commit. CPU-only review uses `--dry-run`.
 
 `scripts/dev/yv gate` runs the same stages as separate gpuq jobs and remembers which passed on the commit, so a rerun after a late failure skips them ([VERIFY.md](VERIFY.md)).
 

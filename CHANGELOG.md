@@ -7,14 +7,34 @@ Release steps: [RELEASING.md](RELEASING.md).
 
 ## [Unreleased]
 
-- OpenAI Evals API: 12 CRUD/run/output-item endpoints, atomic local persistence, cancellable background runs through normal chat inference, JSONL/file/stored-completion sources, lexical similarity and local score/label graders.
-
-Changes on main after 0.1.4; not part of a published package yet.
+The 0.1.5 cycle adds local decision models, repeatable evaluations and broader coding-agent
+and web-retrieval compatibility to the `yunshu` package. These changes are merged on main;
+0.1.4 remains the published version. This draft does not include unmerged model-head or console redesign work.
 
 ### Highlights
 
+- Ask typed predicate, choice and score questions with the Decisions API on Clef MLX checkpoints,
+  without generating a text answer. [Guide](docs/guides/DECISIONS.md).
+- Store chat completions locally and use them in repeatable Evals runs, with cancellable sampling,
+  lexical graders and local model graders. [Guide](docs/guides/EVALS.md).
+- Coding clients can use custom grammar-bearing tools, local shell/tool-search calls, Anthropic
+  documents/citations and continuous streamed usage. [Coverage and limits](docs/guides/API_SURFACE.md).
+- Search, extract, crawl and research through a local Tavily-compatible API with provider health
+  backoff and lexical ranking; generation runs only where requested. [Guide](docs/guides/TAVILY.md).
+
 ### Upgrade notes / breaking changes
 
+- New APIs are available from a source build of main until 0.1.5 is released; upgrading the published
+  0.1.4 package does not add them. No package version bump is part of this draft.
+- Decisions require a supported Clef joint-schema checkpoint; ordinary chat checkpoints and unknown
+  decision heads are rejected. OpenJev, Laya and D1 support is not included in this merged loader.
+- `store: true` retains chat content locally. Configure `YUNSHU_CHAT_COMPLETIONS_DIR` and
+  `YUNSHU_CHAT_COMPLETIONS_MAX` to choose its directory and retention cap; omitted/false does not store.
+- Search sends queries to external providers and fetch sends URLs to destination sites. Use
+  `YUNSHU_WEB_SEARCH_PROVIDER=none` and `YUNSHU_WEB_FETCH=0` to disable these server tools.
+
+- Credentialed browser clients must use explicit `YUNSHU_CORS_ORIGINS`; any wildcard now disables
+  CORS credentials. Configuration writes replace files atomically with owner-only permissions (0600).
 - Every `*_gb` field the engine returns (`/v1/yunshu/status` memory and models, `/v1/models` `size_gb`, model-pool status, `memory_usage`, hardware info, trace host stats) is now binary: GB = 1024^3 bytes, the unit macOS, `yunshu doctor` and the `YUNSHU_*_GB` settings use. It was decimal (1e9) for engine memory and model sizes, so values drop by about 7% (a 128 GB Mac reads 128.0, not 137.4). Scripts that read `*_gb` see the new numbers; each field now has an exact integer `*_bytes` sibling (`active_bytes`, `cache_bytes`, `peak_bytes`, `total_bytes`, `size_bytes`, `current_bytes`, `max_bytes`, `max_memory_bytes`, `current_memory_bytes`, `total_memory_bytes`, `working_set_bytes`, `memory_available_bytes`). Prometheus metrics stay in bytes.
 
 ### Performance
@@ -22,19 +42,64 @@ Changes on main after 0.1.4; not part of a published package yet.
 | Machine | Model / mode | Metric / workload | Before → after | Recorded source |
 |---|---|---|---|---|
 
+No new decode or TTFT claim is made for this cycle here. Historical measurements remain in
+[Benchmarks](docs/BENCHMARKS.md).
+
 ### Added
 
-- `POST /v1/decisions` (OpenAI's Decisions API: predicate / choice / score questions answered with probabilities, text and inline images) and `POST /v1/systemone` (TypeSafe Jev / System One wire), served by decision checkpoints: Cloudflare Clef in MLX format (`ModelType.DECISION`; backbone through mlx-vlm plus the joint schema head in MLX, one forward pass, no decoding). A checkpoint with a decision head is never loaded as a plain LLM; unknown heads fail closed.
-- Stored chat completions: `store: true` (and `metadata`) on `/v1/chat/completions`, with `GET /v1/chat/completions`, `GET/POST/DELETE /v1/chat/completions/{id}` and `/messages` (OpenAI shapes, pagination, `model` / `metadata[k]` filters; streams are stored once complete). Local store `YUNSHU_CHAT_COMPLETIONS_DIR`, capped by `YUNSHU_CHAT_COMPLETIONS_MAX`.
-- Realtime ephemeral keys: `POST /v1/realtime/client_secrets` and the beta `POST /v1/realtime/sessions` / `transcription_sessions`; the minted `ek_` secret authenticates `/v1/realtime` and applies its session configuration.
-- SDK coverage walk decisions: OpenAI and Anthropic skills, and SIP call control (accept / reject / refer / hangup), are declared not applicable with reasons; evals, WebRTC `calls` and custom voices stay planned (14 left).
-- `scripts/dev/api_coverage.py`: walks the `openai` and `anthropic` SDK resources and fails (`tests/unit/test_api_coverage.py`) when an endpoint is neither served nor declared planned / not applicable with a reason.
+- First-run model selection (`setup` / unconfigured `serve`), `models list/pull/show/rm`,
+  live `top`, zsh/bash/fish completion and consistent global `--json` output with next steps.
+  [CLI guide](docs/guides/CLI.md).
+
+- `POST /v1/decisions` and `POST /v1/systemone`: text and inline-image typed decisions on Clef MLX
+  models, with probabilities, refusals for non-finite head results and no text decoding.
+- Stored chat completions: creation with `store: true` / `metadata`, list/retrieve/update/delete,
+  input-message listing, pagination and filters; streams are stored after completion.
+- Realtime ephemeral keys: `POST /v1/realtime/client_secrets` and beta session/transcription-session
+  creation. Secrets authenticate the Realtime WebSocket and apply session configuration; transcription-only
+  configuration is echoed but is not executed as a transcription-only engine session.
+- Twelve Evals routes for definitions, runs, cancellation and output items, with atomic local persistence,
+  inline/file/stored-completion sources and `string_check`, `text_similarity`, `score_model`, `label_model`.
+- Tavily-compatible search/extract/crawl/map/research, feedback/logs/usage/provider health and native MCP;
+  additional metasearch adapters and optional bounded Chromium rendering. [Limits](docs/guides/TAVILY.md).
+- Agent-client adaptations for custom text/regex/Lark tools, legacy local shell, client tool search,
+  Anthropic documents/citations, continuous usage stats, template rendering and model properties.
+- Source-built YunUI console with engine status/resource charts, model operations, request inspection,
+  cancellation and a streaming diagnostic playground. [Build and scope](docs/CONSOLE.md).
+- `scripts/dev/release_check`: SHA-pinned release checklist, CI first and concurrent gate/M3/client checks;
+  informational agentbench is submitted separately at priority -3 and collected later. CPU-only planning uses `--dry-run`.
+- SDK endpoint coverage walker, prior-art discovery tool, local clean-checkout CI, and live private
+  research-index generation. Public-doc checks enforce translated README structure and registered APIs/settings.
 
 ### Changed
 
+- gpuq admits declared short verification jobs between long cells without preemption, with a bounded
+  time budget; `--gate` takes precedence over same-priority backlog. Foreign CPU contention is measured,
+  parsed job records are cached, and non-quiet filler work can run while quiet work waits for CPU admission.
+- CI and local CI include frontend type checks, tests and build plus Python lint/format/mypy and package checks.
+- Local CI matches the release runner's Python 3.13 environment, short paths and inaccessible local data;
+  tests avoid shared server-port collisions. [Contributor workflow](CONTRIBUTING.md).
+
 ### Fixed
 
+- GPU guard blocks broad `pkill` commands that could terminate another worker or user process.
+
+- EmbeddingGemma 2 loading retains every weight shard instead of keeping only the last shard.
+- MCP notifications return an empty 204 body, preventing a dropped connection from a JSON `null` body.
+- Server probes wait/retry on occupied test ports; interrupted short jobs no longer immediately pause
+  behind the long job they were admitted between. Queue tests no longer leave isolated daemons behind.
+- Public documentation now includes the new APIs and correct native Ollama model operations, supported
+  decision heads and current release status.
+
 ### Security
+
+- Drop authorization/API-key/cookie headers when a download redirects to another origin; redact Realtime
+  ephemeral secrets from logs. Transcription secrets cannot create model responses. Model downloads
+  reject traversal-style repository IDs before disk access. Authenticated clients still share Files,
+  stored completions and Evals data under one static token; this is not per-key isolation.
+- HTTP video and optional rendered-page resources use checked fetch boundaries; unsupported redirects,
+  private destinations and cross-origin rendered resources are rejected according to the fetch policy.
+  See [API surface](docs/guides/API_SURFACE.md) and [Tavily limitations](docs/guides/TAVILY.md).
 
 [Full changelog: v0.1.4…main](https://github.com/YuhuanStudio/Yunshu/compare/v0.1.4...main)
 
