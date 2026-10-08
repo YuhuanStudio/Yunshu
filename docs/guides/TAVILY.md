@@ -24,7 +24,8 @@ Endpoints: POST `/search`, `/extract`, `/crawl`, `/map`, `/research`, `/feedback
 `/research/{request_id}`, `/usage`, `/providers`. Errors use `detail.error`, with 400/401/403/404/413/429/500
 as applicable and 422 for field validation. Cloud-only credit/plan statuses 432/433 are not fabricated.
 Product responses carry request IDs, elapsed seconds and informational local credits. Array fields are stable.
-Usage is currently returned even when `include_usage` is false, to keep local accounting visible.
+Search/extract/crawl/map and research polling return `usage` only with `include_usage=true`;
+internal accounting continues even when usage is omitted from the response.
 
 ## Retrieval and latency
 

@@ -246,6 +246,8 @@ async def execute(endpoint, body, request):
             getattr(model, "search_depth", getattr(model, "extract_depth", "basic")),
             ctx,
         )
+        if not model.include_usage:
+            result = {key: value for key, value in result.items() if key != "usage"}
     return response(result)
 
 
@@ -286,10 +288,11 @@ async def usage(request: Request):
 
 
 @router.get("/research/{request_id}")
-async def research(request_id: str, request: Request):
+async def research(request_id: str, request: Request, include_usage: bool = False):
     try:
         result = service(request).research(request_id)
-        # Always include usage; tolerated by clients even if they did not request it.
+        if not include_usage:
+            result = {key: value for key, value in result.items() if key != "usage"}
         return response(
             result, 202 if result["status"] in ("pending", "in_progress") else 200
         )

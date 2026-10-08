@@ -35,7 +35,8 @@ def check_response(response, endpoint):
     assert isinstance(response, dict)
     assert isinstance(response.get("response_time"), (int, float))
     assert isinstance(response.get("request_id"), str)
-    assert isinstance(response.get("usage"), dict)
+    if "usage" in response:
+        assert isinstance(response["usage"], dict)
     if endpoint in ("search", "extract", "crawl", "map"):
         assert isinstance(response["results"], list)
     if endpoint == "search":

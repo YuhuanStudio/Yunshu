@@ -169,7 +169,8 @@ def test_extract_failures_and_single_url(client):
     assert len(result["results"]) == len(result["failed_results"]) == 1
     assert isinstance(result["results"][0]["images"], list)
     result = client.post(
-        "/tavily/extract", json={"urls": "https://example.org/fail"}
+        "/tavily/extract",
+        json={"urls": "https://example.org/fail", "include_usage": True},
     ).json()
     assert result["results"] == [] and result["usage"]["credits"] == 0
     assert (
@@ -228,6 +229,43 @@ def test_feedback_usage_logs(client):
     assert client.get("/tavily/usage").json()["key"]["search_usage"] == 1
     logs = client.post("/tavily/logs", json={"endpoints": ["search"]}).json()
     assert logs["count"] == 1 and "query" not in logs["logs"][0]
+
+
+@pytest.mark.parametrize(
+    "endpoint, body",
+    [
+        ("search", {"query": "Paris"}),
+        ("extract", {"urls": "https://example.org"}),
+        ("map", {"url": "https://example.org", "limit": 1}),
+        ("crawl", {"url": "https://example.org", "limit": 1}),
+    ],
+)
+def test_usage_is_opt_in_without_losing_accounting(client, endpoint, body):
+    hidden = client.post("/tavily/" + endpoint, json=body)
+    assert hidden.status_code == 200 and "usage" not in hidden.json()
+    before = client.get("/tavily/usage").json()["key"][endpoint + "_usage"]
+    assert before > 0
+    shown = client.post("/tavily/" + endpoint, json={**body, "include_usage": True})
+    assert shown.status_code == 200 and shown.json()["usage"]["credits"] > 0
+    after = client.get("/tavily/usage").json()["key"][endpoint + "_usage"]
+    assert after == before + shown.json()["usage"]["credits"]
+
+
+def test_poll_usage_visibility_does_not_mutate_stored_result(client, srv):
+    srv.tasks["completed-fixture"] = {
+        "request_id": "completed-fixture",
+        "status": "completed",
+        "response_time": 1.0,
+        "usage": {"credits": 4},
+        "content": "Paris [1]",
+    }
+    path = "/tavily/research/completed-fixture"
+    assert "usage" not in client.get(path).json()
+    assert client.get(path, params={"include_usage": "true"}).json()["usage"] == {
+        "credits": 4
+    }
+    assert "usage" not in client.get(path, params={"include_usage": "false"}).json()
+    assert srv.tasks["completed-fixture"]["usage"] == {"credits": 4}
 
 
 async def test_research_async_registry_schema_sse_failure_and_queue(srv):
