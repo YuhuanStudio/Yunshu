@@ -320,3 +320,76 @@ test("request detail: an engine without stage fields gets one compact notice", a
   await expect(detail.getByTestId("waterfall-unsupported")).toBeVisible();
   await expect(detail.getByTestId("request-waterfall")).toHaveCount(0);
 });
+
+test("latency distribution: P50/P90 only for groups with at least 20 requests", async ({
+  page,
+}) => {
+  const data = [
+    ...Array.from({ length: 25 }, (_, i) =>
+      ring({
+        request_id: `ring-warm-${i}`,
+        ttft_ms: 100 + i,
+        prompt_tokens: 1000,
+        cached_tokens: 900,
+      }),
+    ),
+    ...Array.from({ length: 5 }, (_, i) =>
+      ring({
+        request_id: `ring-cold-${i}`,
+        ttft_ms: 9000,
+        prompt_tokens: 1000,
+        cached_tokens: 0,
+      }),
+    ),
+  ];
+  await install(page, [], undefined, {
+    object: "list",
+    data,
+    count: data.length,
+    capacity: 512,
+  });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/console/#/requests", { waitUntil: "domcontentloaded" });
+  const panel = page.getByTestId("latency-distribution");
+  await expect(panel).toBeVisible();
+  const warm = panel.locator('tr[data-group="warm"]');
+  const cold = panel.locator('tr[data-group="cold"]');
+  await expect(warm).toContainText("25");
+  await expect(warm).not.toContainText("—");
+  await expect(cold).toContainText("5");
+  await expect(cold).toContainText("—");
+  await expect(panel).not.toContainText("9 s");
+});
+
+test("latency distribution on a phone fits without sideways scroll", async ({
+  page,
+}) => {
+  const data = Array.from({ length: 25 }, (_, i) =>
+    ring({ request_id: `ring-w-${i}`, ttft_ms: 100 + i * 40 }),
+  );
+  await install(page, [], undefined, {
+    object: "list",
+    data,
+    count: data.length,
+    capacity: 512,
+  });
+  await page.setViewportSize({ width: 402, height: 874 });
+  await page.goto("/console/#/requests", { waitUntil: "domcontentloaded" });
+  const panel = page.getByTestId("latency-distribution");
+  await expect(panel).toBeVisible();
+  const de = await page.evaluate(() => ({
+    sw: document.documentElement.scrollWidth,
+    cw: document.documentElement.clientWidth,
+  }));
+  expect(de.sw).toBeLessThanOrEqual(de.cw + 1);
+  const scrolls = await panel.evaluate((el) =>
+    [...el.querySelectorAll<HTMLElement>("*")]
+      .filter(
+        (n) =>
+          /auto|scroll/.test(getComputedStyle(n).overflowX) &&
+          n.scrollWidth > n.clientWidth + 1,
+      )
+      .map((n) => `${n.tagName}.${String(n.className).slice(0, 40)}`),
+  );
+  expect(scrolls).toEqual([]);
+});
