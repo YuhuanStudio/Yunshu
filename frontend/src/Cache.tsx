@@ -38,6 +38,7 @@ import { ByteValue } from "./ByteValue";
 import { Reasoned } from "./Reasoned";
 import { useMemoryLedger } from "./memory-api";
 import { useRouteAction } from "./useRouteAction";
+import { CacheLifecyclePanel } from "./CacheLifecyclePanel";
 import { number, percent, relative } from "./i18n/format";
 import { SectionCard, UnavailableNotice, modelLabel, type Engine } from "./ui";
 
@@ -359,6 +360,7 @@ export default function Cache({
           title={t("cache.unsupportedTitle")}
           description={t("cache.unsupportedDescription")}
         />
+        <CacheLifecyclePanel connection={connection} enabled={online} />
       </DashboardPage>
     );
 
@@ -440,6 +442,7 @@ export default function Cache({
               onClear={setTarget}
             />
           ))}
+          <CacheLifecyclePanel connection={connection} enabled={online} />
           <p className="text-xs text-muted-foreground">
             <a className="underline underline-offset-2" href="#/models">
               {t("cache.toMemory")}

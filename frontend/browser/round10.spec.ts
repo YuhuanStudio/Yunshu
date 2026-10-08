@@ -172,3 +172,59 @@ test("without /debug the counters say they are not provided", async ({
   await page.goto("/console/#/requests", { waitUntil: "domcontentloaded" });
   await expect(page.getByTestId("spec-counters")).toContainText("沒有提供");
 });
+
+const kv = {
+  caches: [
+    {
+      model_id: "org/Qwen3.5-9B",
+      apc: {
+        entries: 12,
+        resident_bytes: 2_000_000_000,
+        warm_bytes: 500_000_000,
+        warm_ratio: 2,
+        disk_bytes: 9_000_000_000,
+        lookups_hit: 30,
+        lookups_miss: 10,
+        matched_tokens: 90000,
+        memory_evictions: 0,
+        memory_skips: 3,
+        warm_demotions: 7,
+      },
+    },
+  ],
+};
+
+test("cache lifecycle: counters by stage, hit requests apart from cached tokens, reported zero stays zero", async ({
+  page,
+}) => {
+  await install(page);
+  await page.route("**/debug/kv-cache", (r) => r.fulfill({ json: kv }));
+  await page.goto("/console/#/cache", { waitUntil: "domcontentloaded" });
+  const life = page.getByTestId("cache-lifecycle");
+  await expect(life).toBeVisible();
+  await expect(life.locator('[data-counter="memory_evictions"]')).toContainText(
+    "0",
+  );
+  await expect(life.locator('[data-counter="memory_skips"]')).toContainText(
+    "3",
+  );
+  await expect(life.locator('[data-counter="lookups_hit"]')).toContainText(
+    "30",
+  );
+  await expect(life.locator('[data-counter="matched_tokens"]')).toContainText(
+    "90,000",
+  );
+  await expect(life).toContainText("請求命中率 75");
+  await expect(life).toContainText("≈ 估算");
+  await expect(life.locator('[data-counter="warm_dropped"]')).toHaveCount(0);
+});
+
+test("cache lifecycle without /debug says it is not provided", async ({
+  page,
+}) => {
+  await install(page);
+  await page.goto("/console/#/cache", { waitUntil: "domcontentloaded" });
+  await expect(page.getByTestId("cache-lifecycle-unavailable")).toContainText(
+    "沒有提供",
+  );
+});
