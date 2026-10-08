@@ -19,7 +19,7 @@ console = Console()
 
 serve_app = typer.Typer(
     help="Start inference server.",
-    no_args_is_help=True,
+    no_args_is_help=False,
     context_settings={"allow_interspersed_args": True},
 )
 
@@ -259,6 +259,16 @@ def serve(
 
     effective_model = settings.get("YUNSHU_MODEL")
     effective_dir = settings.get("YUNSHU_MODELS_DIR")
+    if (
+        not effective_model
+        and not effective_dir
+        and not settings.get_bool("YUNSHU_MULTI_MODEL")
+    ):
+        from .setup import select_model
+
+        effective_model = select_model()
+        settings.set_override("YUNSHU_MODEL", effective_model)
+        env["YUNSHU_MODEL"] = effective_model
     if effective_model:
         from yunshu_engine.model_discovery import resolve_model_ref
 
@@ -331,6 +341,19 @@ def serve(
             if stat.S_ISSOCK(os.stat(uds_path).st_mode):
                 os.unlink(uds_path)
     _rotate_service_log()
+    from ._output import emit
+
+    emit(
+        {
+            "event": "starting",
+            "model": effective_model,
+            "models_dir": effective_dir,
+            "host": host,
+            "port": port,
+            "uds": uds_path,
+            "health_url": f"http://{host}:{port}/health" if not uds_path else None,
+        }
+    )
     uvicorn.run(
         "yunshu_gateway.main:app",
         **({"uds": uds_path} if uds_path else {"host": host, "port": port}),

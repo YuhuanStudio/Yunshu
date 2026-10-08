@@ -298,7 +298,7 @@ def _healthy(url: str) -> bool:
 
 @service_app.command("logs")
 def logs(
-    lines: int = typer.Option(50, "--lines", "-n", help="Lines to show."),
+    lines: int = typer.Option(50, "--lines", "-n", min=1, help="Lines to show."),
     follow: bool = typer.Option(False, "--follow", "-f", help="Keep printing."),
 ):
     """Show the service log."""
@@ -306,9 +306,17 @@ def logs(
     if not path.exists():
         fail(f"No log yet at {path}.")
     cmd = ["tail", "-n", str(lines)] + (["-F"] if follow else []) + [str(path)]
+    if follow and is_json():
+        fail("--json logs is a snapshot; omit --follow or omit --json.", code=2)
     if follow:
         os.execvp("tail", cmd)
-    print(subprocess.run(cmd, capture_output=True, text=True).stdout, end="")
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode:
+        fail(f"Cannot read {path}: {result.stderr.strip()}. Check log permissions.")
+    emit(
+        {"path": str(path), "lines": result.stdout.splitlines()},
+        human=lambda: typer.echo(result.stdout, nl=False),
+    )
 
 
 @service_app.command("rotate-logs")
