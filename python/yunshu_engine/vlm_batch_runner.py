@@ -323,6 +323,7 @@ class VLMBatchRunner:
         self._handoff_timer: threading.Timer | None = None
         self.clear_on_idle = False
         self._idle_memory: IdleMemory | None = None
+        self.gc_guard: Any = None  # gc_policy.TtftGcGuard when YUNSHU_GC_POLICY=defer
         # Requests the engine has accepted, including ones still being
         # prepared (templating, image encoding) — the runner alone cannot see
         # those, and a request is only "alone" if the engine has no others.
@@ -604,6 +605,8 @@ class VLMBatchRunner:
                 "request cancelled"
             )
         job.out.put(item)
+        if self.gc_guard is not None:
+            self.gc_guard.first_token(id(job))
         # The first target token is already complete. Starting copy lookup now
         # can run a full cyclic collection while the SSE consumer still needs
         # the GIL. Give that consumer one bounded opportunity to deliver first.
@@ -674,6 +677,8 @@ class VLMBatchRunner:
     def _submit(self, job: _Job) -> None:
         if self._idle_memory is not None:
             self._idle_memory.activity()
+        if self.gc_guard is not None:
+            self.gc_guard.begin(id(job))
         with self._lock:
             job.queued = job.last_service = time.perf_counter()
             self._pending.append(job)

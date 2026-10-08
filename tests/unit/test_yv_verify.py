@@ -1181,6 +1181,8 @@ def test_executor_retries_paused_timing_but_accepts_correctness(
     assert done[0]["ok"] is (not quiet)
     if quiet:
         assert "paused" in done[0]["reason"]
+
+
 def test_evals_suite_is_a_separate_correctness_probe():
     assert suites.parse_suite("evals")["stages"] == ["preflight", "evals"]
     assert "evals" in stages.STAGE_FUNCS

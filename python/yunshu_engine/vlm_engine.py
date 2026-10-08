@@ -44,7 +44,7 @@ from typing import Any
 
 import mlx.core as mx
 
-from . import netguard, settings
+from . import gc_policy, netguard, settings
 from .request import RequestOutput
 from .types import EngineConfig
 
@@ -669,6 +669,9 @@ class VLMEngine:
         # Every request goes through the runner; a model it cannot serve fails
         # at load instead of silently taking another path.
         self._batch_runner = self._build_batch_runner(str(model_path))
+        policy = settings.get("YUNSHU_GC_POLICY")
+        self._gc_policy = policy
+        self._batch_runner.gc_guard = gc_policy.install(policy)
 
     async def start(self) -> None:
         if self._model is not None:
@@ -717,6 +720,9 @@ class VLMEngine:
         self._batch_runner = None
         self._processor = None
         self._running = False
+        if getattr(self, "_gc_policy", "default") != "default":
+            gc_policy.unfreeze()
+            self._gc_policy = "default"
 
         self._text_prompt_cache.clear()
         guard_counts = getattr(self, "_guard_token_counts", None)

@@ -182,3 +182,33 @@ def test_failure_detaches_work_before_notifying_consumers(runner, monkeypatch): 
     error = RuntimeError("executor failed")
     runner._fail_all(error)
     assert emitted == [(job, error)]
+
+
+def test_gc_guard_spans_request_arrival_to_first_emit(runner):  # noqa: F811
+    from yunshu_engine.gc_policy import TtftGcGuard
+
+    class Spy(TtftGcGuard):
+        def __init__(self):
+            super().__init__(watchdog=False)
+            self.log = []
+
+        def begin(self, key):
+            self.log.append("begin")
+            super().begin(key)
+
+        def first_token(self, key):
+            self.log.append("first")
+            super().first_token(key)
+
+    import gc
+
+    spy = Spy()
+    runner.gc_guard = spy
+    was = gc.isenabled()
+    try:
+        assert len(_run(runner, n=3)) >= 1
+    finally:
+        if was:
+            gc.enable()
+    assert spy.log[0] == "begin" and "first" in spy.log
+    assert gc.isenabled() == was and not spy._held
