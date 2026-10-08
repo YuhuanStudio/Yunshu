@@ -108,6 +108,7 @@ def decode_affine_weights(weights, *, bits=4, group_size=64):
 
 def load_reference(path):
     contract = checkpoint_contract(path)
+    import mlx.core as mx
     from mflux.models.common.weights.loading.loaded_weights import (
         LoadedWeights,
         MetaData,
@@ -147,6 +148,13 @@ def load_reference(path):
         components[component.name] = mapped
     ZImageInitializer._apply_weights(
         model, LoadedWeights(components=components, meta_data=MetaData()), quantize=None
+    )
+    # Affine decode and precision casts are lazy. Finish them before either probe
+    # times generation, and catch any deferred loader failure during admission.
+    mx.eval(
+        model.transformer.parameters(),
+        model.text_encoder.parameters(),
+        model.vae.parameters(),
     )
     return model, {
         "format_adapter": "diffusers affine4 decoded before mflux HF mapping; floating reference arithmetic",

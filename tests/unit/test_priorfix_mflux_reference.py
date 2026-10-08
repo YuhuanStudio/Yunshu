@@ -141,7 +141,16 @@ def test_reference_bridge_loader_orchestration_without_real_model(
             assert raw_weights_cache[key] == {"decoded": {"packed": True}}
             return {"q_proj": "floating"}, None, None
 
-    model = SimpleNamespace(bits=4)
+    import mlx.core as mx
+
+    materialized = []
+    monkeypatch.setattr(mx, "eval", lambda *params: materialized.append(params))
+    model = SimpleNamespace(
+        bits=4,
+        transformer=SimpleNamespace(parameters=lambda: {"transformer": "decoded"}),
+        text_encoder=SimpleNamespace(parameters=lambda: {"encoder": "decoded"}),
+        vae=SimpleNamespace(parameters=lambda: {"vae": "decoded"}),
+    )
 
     class Initializer:
         @staticmethod
@@ -173,6 +182,9 @@ def test_reference_bridge_loader_orchestration_without_real_model(
         monkeypatch.setitem(sys.modules, name, fake)
     got, evidence = module.load_reference(tmp_path)
     assert got is model and got.bits is None
+    assert materialized == [
+        ({"transformer": "decoded"}, {"encoder": "decoded"}, {"vae": "decoded"})
+    ]
     assert "floating reference" in evidence["format_adapter"]
 
 

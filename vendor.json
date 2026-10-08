@@ -2374,6 +2374,17 @@
       "why": "Published role-template encoding is the independent Qwen reranker input-ID oracle; a changed template can discard query/document inputs.",
       "commit": "5f324548f1d20c2b5a450f126fc6ef2fb1126524",
       "reviewed_date": "2026-10-08"
+    },
+    {
+      "repo": "https://github.com/mflux-community/mflux",
+      "clone": "reference/mflux",
+      "globs": [
+        "src/mflux/models/common/weights/loading/*.py",
+        "src/mflux/models/z_image/**/*.py"
+      ],
+      "why": "Independent Z-Image parity bridge depends on unchanged HF raw cache, mapper and applier APIs; watch native quantized-format support and arithmetic drift.",
+      "commit": "465df30a3965b38c9c64fa853e26df140ddd5c55",
+      "reviewed_date": "2026-10-08"
     }
   ],
   "packages": [
@@ -2421,7 +2432,6 @@
     "reference/mlx-gen": "multimodal generation (image / video / audio synthesis) is parked; no LLM/VLM decode, TTFT or cache technique to learn",
     "reference/mlx-h3": "multimodal generation (image / video / audio synthesis) is parked; no LLM/VLM decode, TTFT or cache technique to learn",
     "reference/mlx-video": "multimodal generation (image / video / audio synthesis) is parked; no LLM/VLM decode, TTFT or cache technique to learn",
-    "reference/mflux": "multimodal generation (image / video / audio synthesis) is parked; no LLM/VLM decode, TTFT or cache technique to learn",
     "reference/mflux-multimodal": "multimodal generation (image / video / audio synthesis) is parked; no LLM/VLM decode, TTFT or cache technique to learn",
     "reference/stable-audio-tools": "multimodal generation (image / video / audio synthesis) is parked; no LLM/VLM decode, TTFT or cache technique to learn",
     "reference/stable-diffusion.cpp": "multimodal generation (image / video / audio synthesis) is parked; no LLM/VLM decode, TTFT or cache technique to learn",
