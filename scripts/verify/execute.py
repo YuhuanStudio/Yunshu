@@ -32,12 +32,17 @@ class Cell:
     # Deterministic evidence (greedy digests of a base arm) that any run with the same inputs may
     # reuse: a content key (commit, env, model, harness hash, cell parameters), never run paths.
     share_key: str = ""
+    cwd: Path | None = None  # pinned source tree for remote route probes
     device: str = ""  # "any": small-model liveness cells may run on the M3 lane
     cwd: Path | None = None  # remote snapshots must come from this pinned arm
 
     @property
     def sig(self) -> str:
-        return sha(self.argv, self.quiet)
+        return (
+            sha(self.argv, self.quiet, str(self.cwd))
+            if self.cwd
+            else sha(self.argv, self.quiet)
+        )
 
 
 @dataclass
@@ -175,7 +180,7 @@ class Executor:
             out=out if cell.needs_out else None,
             expect_complete=cell.needs_out,
             device=cell.device,
-            cwd=cell.cwd,
+            **({"cwd": cell.cwd} if cell.cwd else {}),
         )
         self.run.append(
             cell.stage,

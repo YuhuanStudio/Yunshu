@@ -1,5 +1,5 @@
 {
-  "_doc": "Everything Yunshu took from another project. kind: vendored = copied file; derived = rewritten from specific upstream files; inspired = same algorithm, independent code; patches = we monkeypatch an upstream symbol (source_sha256 pins the code we depend on). scripts/vendor/check_upstream.py reports upstream changes since 'commit'. 'local_changes' lists deliberate edits to keep on a sync. watch = every reference clone we follow for ideas or fixes (commit = reviewed up to). watch_excluded = every other clone with the reason it is not followed; scripts/vendor/check_upstream.py fails when a clone is in neither list. packages = extra pins on top of everything declared in pyproject.toml, which is read automatically. reviewed_commit/reviewed_date/review_reason record a deliberate retention after upstream review without rewriting the copied commit provenance.",
+  "_doc": "Everything Yunshu took from another project. kind: vendored = copied file; derived = rewritten from specific upstream files; inspired = same algorithm, independent code; patches = we monkeypatch an upstream symbol (source_sha256 pins the code we depend on). scripts/vendor/check_upstream.py reports upstream changes since 'commit'. 'local_changes' lists deliberate edits to keep on a sync. watch = every reference clone we follow for ideas or fixes (commit = reviewed up to). watch_excluded = every other clone with the reason it is not followed; scripts/vendor/check_upstream.py fails when a clone is in neither list. packages = extra pins on top of everything declared in pyproject.toml, which is read automatically. reviewed_commit/reviewed_date/review_reason record a deliberate retention after upstream review without rewriting the copied commit provenance. prior_art = discovery-only candidates with separate licenses/revisions/owners and pending actions; these are NOT adopted code, qualified loaders or parity passes.",
   "vendored": [
     {
       "path": "python/yunshu_engine/kernels/omlx/qwen35_verify_qmm.py",
@@ -2340,7 +2340,8 @@
     "mlx-vlm",
     "mlx-metal",
     "transformers",
-    "llguidance"
+    "llguidance",
+    "trafilatura"
   ],
   "watch_excluded": {
     "reference/ACE-Step-1.5": "multimodal generation (image / video / audio synthesis) is parked; no LLM/VLM decode, TTFT or cache technique to learn",
@@ -2405,5 +2406,130 @@
     "reference/mlx-examples": "superseded or covered elsewhere (mlx-examples -> mlx-lm; our own fork; hot-swap multimodal server)",
     "reference/mlx-vlm-yunshu": "superseded or covered elsewhere (mlx-examples -> mlx-lm; our own fork; hot-swap multimodal server)",
     "reference/mlx-serve-multimodal": "superseded or covered elsewhere (mlx-examples -> mlx-lm; our own fork; hot-swap multimodal server)"
-  }
+  },
+  "prior_art": [
+    {
+      "url": "https://huggingface.co/aac6fef/laya-mlx",
+      "kind": "discovery-only",
+      "license": "apache-2.0",
+      "revision": "20aed815fc6acde75733882e7ec0e3f28aeb9717",
+      "reviewed_date": "2026-10-08",
+      "owner": "decisions2",
+      "action": "Published format loading and runtime parity pending; not adopted or qualified."
+    },
+    {
+      "url": "https://huggingface.co/aac6fef/laya-typed-decisions-mlx",
+      "kind": "discovery-only",
+      "license": "apache-2.0",
+      "revision": "f9e501c2080cc57c13d6887820329758f5351125",
+      "reviewed_date": "2026-10-08",
+      "owner": "decisions2",
+      "action": "Published format loading and runtime parity pending; not adopted or qualified."
+    },
+    {
+      "url": "https://huggingface.co/aac6fef/laya-multilingual-mlx",
+      "kind": "discovery-only",
+      "license": "apache-2.0",
+      "revision": "f2b4faf51023039425946074e2cf1361d2db11d5",
+      "reviewed_date": "2026-10-08",
+      "owner": "decisions2",
+      "action": "Published format loading and runtime parity pending; not adopted or qualified."
+    },
+    {
+      "url": "https://huggingface.co/millat/laya-mlx",
+      "kind": "discovery-only",
+      "license": "apache-2.0",
+      "revision": "90f2daef06f75dbcb186d46726a11ef21b6e4365",
+      "reviewed_date": "2026-10-08",
+      "owner": "decisions2",
+      "action": "Published format loading and runtime parity pending; not adopted or qualified."
+    },
+    {
+      "url": "https://huggingface.co/sjoerdbodbijl/laya-mlx",
+      "kind": "discovery-only",
+      "license": "apache-2.0",
+      "revision": "a3da39702854641289479310798b0d4f0fef09a4",
+      "reviewed_date": "2026-10-08",
+      "owner": "decisions2",
+      "action": "Published format loading and runtime parity pending; not adopted or qualified."
+    },
+    {
+      "url": "https://huggingface.co/sahilchachra/Laya-English-MXFP4",
+      "kind": "discovery-only",
+      "license": "unverified",
+      "revision": "8aa0c4846d2afded56b4a3fdbc39bc03aaa5754c",
+      "reviewed_date": "2026-10-08",
+      "owner": "decisions2",
+      "action": "Published format loading and runtime parity pending; not adopted or qualified."
+    },
+    {
+      "url": "https://huggingface.co/mlx-community/embeddinggemma-2-4bit",
+      "kind": "discovery-only",
+      "license": "apache-2.0",
+      "revision": "8ab839e127cb8cb305edd71fb7a02c82f2d49ab3",
+      "reviewed_date": "2026-10-08",
+      "owner": "priorart",
+      "action": "Published format loading and runtime parity pending; not adopted or qualified."
+    },
+    {
+      "url": "https://huggingface.co/mlx-community/clef-4bit",
+      "kind": "discovery-only",
+      "license": "apache-2.0",
+      "revision": "5c646a43ed30b5d79822b16e11c6b3d621800b94",
+      "reviewed_date": "2026-10-08",
+      "owner": "decisions2",
+      "action": "Published format loading and runtime parity pending; not adopted or qualified."
+    },
+    {
+      "url": "https://huggingface.co/openjev/openjev-MLX",
+      "kind": "discovery-only",
+      "license": "cc-by-nc-4.0",
+      "revision": "a9dcc20aa827a6c7eae478f6ebb3b255bb135451",
+      "reviewed_date": "2026-10-08",
+      "owner": "decisions2",
+      "action": "Published format loading and runtime parity pending; not adopted or qualified."
+    },
+    {
+      "url": "https://huggingface.co/DJLougen/d1-3B-MLX-8bit",
+      "kind": "discovery-only",
+      "license": "other",
+      "revision": "0260d8283545180e983346b762810d66074a7147",
+      "reviewed_date": "2026-10-08",
+      "owner": "decisions2",
+      "action": "Published format loading and runtime parity pending; not adopted or qualified."
+    },
+    {
+      "url": "https://github.com/Blaizzy/mlx-vlm/tree/3d87e88402f307efbf68e568971aa887ee7d9ed0",
+      "kind": "discovery-only",
+      "license": "MIT",
+      "revision": "3d87e88402f307efbf68e568971aa887ee7d9ed0",
+      "owner": "priorart/lead",
+      "reviewed_date": "2026-10-08",
+      "action": "EmbeddingGemma2 embedding_loader.load_embedding_model adoption/parity candidate; published quantized formats not yet qualified."
+    }
+  ],
+  "websearch_prior_art": [
+    {
+      "repo": "https://github.com/adbar/trafilatura",
+      "license": "Apache-2.0 (2.1.0)",
+      "reviewed_date": "2026-10-08",
+      "use": "Declared dependency; sanitized HTML extraction; existing heading/code and hidden-content fixtures."
+    },
+    {
+      "repo": "https://github.com/searxng/searxng",
+      "license": "AGPL-3.0-or-later",
+      "reviewed_date": "2026-10-08",
+      "use": "External HTTP JSON adapter only; fixture parser/ranking tests; no copied source."
+    },
+    {
+      "repo": "https://github.com/cedarsaam/agent-search",
+      "reviewed_date": "2026-10-08",
+      "use": "Architecture comparison: SearXNG + cited retrieval + Tavily/MCP surface; no copied source; license not relied on."
+    },
+    {
+      "repo": "https://github.com/modelcontextprotocol/python-sdk",
+      "reviewed_date": "2026-10-08",
+      "use": "Installed SDK compatibility probes; no copied source."
+    }
+  ]
 }

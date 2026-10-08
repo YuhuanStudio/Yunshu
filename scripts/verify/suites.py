@@ -13,15 +13,44 @@ STAGES = (
     "longqa",
     "conc",
     "multimodal",
+    "client_compat",
+    "websearch",
     "rerank",
+    "evals",
+    "tavily",
+    "searchrank",
 )
 
 # `full` and `tiny` climb the original seven; the long stages (needle retrieval, concurrent
 # sub-agents) need the 32K-128K prompt files and belong to the `long` suite.
-LADDER = tuple(s for s in STAGES if s not in ("longqa", "conc", "multimodal", "rerank"))
+LADDER = tuple(
+    s
+    for s in STAGES
+    if s
+    not in (
+        "longqa",
+        "conc",
+        "multimodal",
+        "client_compat",
+        "websearch",
+        "rerank",
+        "evals",
+        "tavily",
+        "searchrank",
+    )
+)
 
 # Every key is a default; the CLI can override ctx / reps / mmlu_n / mem_sizes.
 SUITES = {
+    "evals": {"stages": ["preflight", "evals"]},
+    "client_compat": {
+        "stages": ["preflight", "client_compat"],
+        "client_compat_device": "m3",
+    },
+    "client_compat_m5": {
+        "stages": ["preflight", "client_compat"],
+        "client_compat_device": "m5",
+    },
     "multimodal": {
         "stages": ["preflight", "multimodal"],
         "ctx": [46, 32768],

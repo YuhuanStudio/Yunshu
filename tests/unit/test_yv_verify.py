@@ -23,6 +23,51 @@ from verify import analyze, core, gate, runner, stages, suites, verdict  # noqa:
 from verify.execute import Cell, Executor  # noqa: E402
 
 
+@pytest.mark.parametrize("stage", [stages.stage_tavily, stages.stage_websearch])
+def test_web_cells_apply_recorded_arm_environment(stage, tmp_path):
+    from types import SimpleNamespace
+
+    cells = []
+
+    class CapturedError(Exception):
+        pass
+
+    class Capture:
+        def run_cells(self, submitted):
+            cells.extend(submitted)
+            raise CapturedError
+
+    ctx = stages.Ctx(
+        run=None,
+        exe=Capture(),
+        base=SimpleNamespace(path=tmp_path / "base"),
+        cand=SimpleNamespace(path=tmp_path / "cand"),
+        env={
+            "COVAUDIT_BIN": "/isolated path/yunshu",
+            "SHARED": "common",
+            "PYTHONPATH": "wrong-tree",
+        },
+        base_env={"ARM": "base", "SHARED": "base-override"},
+        cand_env={"ARM": "cand", "SHARED": "cand-override"},
+        model="tiny",
+        model_name="tiny",
+        suite={},
+        mem_gb=14,
+    )
+    with pytest.raises(CapturedError):
+        stage(ctx)
+    assert len(cells) == 2
+    for cell in cells:
+        interpreter = cell.argv.index(ctx.py)
+        assignments = dict(arg.split("=", 1) for arg in cell.argv[1:interpreter])
+        assert assignments["COVAUDIT_BIN"] == "/isolated path/yunshu"
+        assert assignments["ARM"] == cell.key
+        assert assignments["SHARED"] == cell.key + "-override"
+        assert assignments["PYTHONPATH"].split(":")[0] == str(
+            tmp_path / cell.key / "python"
+        )
+
+
 def git(cwd, *a):
     return subprocess.run(
         ["git", "-c", "user.name=t", "-c", "user.email=t@t", *a],
@@ -160,7 +205,12 @@ def test_full_suite_has_every_stage():
         "longqa",
         "conc",
         "multimodal",
+        "client_compat",
+        "websearch",
         "rerank",
+        "evals",
+        "tavily",
+        "searchrank",
     }
 
 
@@ -1150,3 +1200,64 @@ def test_multimodal_evidence_is_fail_closed(tmp_path):
     rows[1]["ids"] = [8]
     path.write_text("".join(json.dumps(r) + "\n" for r in rows))
     assert not stages._multimodal_valid(path, [1], True)[0]
+
+
+def test_evals_suite_is_a_separate_correctness_probe():
+    assert suites.parse_suite("evals")["stages"] == ["preflight", "evals"]
+    assert "evals" in stages.STAGE_FUNCS
+
+
+def test_client_routes_validator_fails_closed(tmp_path):
+    names = (
+        "agent-custom-tools",
+        "agent-shell-search",
+        "agent-documents-citations",
+        "agent-anthropic-client-tools",
+        "agent-continuous-usage",
+        "agent-template-props",
+        "agent-http-video",
+    )
+    path = tmp_path / "routes.json"
+    assert not stages.client_routes_valid(path)[0]
+    data = {
+        "complete": True,
+        "pass": True,
+        "checks": {n: {"status": "pass"} for n in names},
+    }
+    path.write_text(json.dumps(data))
+    assert stages.client_routes_valid(path)[0]
+    data["checks"]["agent-custom-tools"]["status"] = "fail"
+    path.write_text(json.dumps(data))
+    assert not stages.client_routes_valid(path)[0]
+
+
+def test_client_compat_pilot_is_pinned_and_stops_before_second_model(
+    world, monkeypatch
+):
+    from types import SimpleNamespace
+
+    from verify.execute import CellResult
+
+    calls = []
+
+    class FakeExecutor:
+        jobs = []
+
+        def run_cells(self, cells):
+            cell = cells[0]
+            calls.append(cell)
+            return {
+                cell.key: CellResult(cell.key, False, "pilot failure", job="job-test")
+            }
+
+    ctx = SimpleNamespace(
+        cand=SimpleNamespace(path=world.repo, key="cand"),
+        suite={"client_compat_device": "m3"},
+        exe=FakeExecutor(),
+        run=SimpleNamespace(append=lambda *args: None),
+        py=sys.executable,
+    )
+    result = stages.stage_client_compat(ctx)
+    assert not result.passed and len(calls) == 1
+    assert calls[0].cwd == world.repo and calls[0].device == "m3"
+    assert "--tree-sha" in calls[0].argv and "Qwen3.5-0.8B" in " ".join(calls[0].argv)
