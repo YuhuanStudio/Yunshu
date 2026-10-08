@@ -218,7 +218,7 @@ def input_item_to_messages(item: dict, texts: dict | None = None) -> list[dict]:
         ]
     if ty in ("local_shell_call", "tool_search_call"):
         name = "local_shell" if ty == "local_shell_call" else "tool_search"
-        client_args = (
+        tool_args = (
             item.get("action") if ty == "local_shell_call" else item.get("arguments")
         )
         return [
@@ -231,7 +231,7 @@ def input_item_to_messages(item: dict, texts: dict | None = None) -> list[dict]:
                         "type": "function",
                         "function": {
                             "name": name,
-                            "arguments": _json_text(client_args or {}),
+                            "arguments": _json_text(tool_args or {}),
                         },
                     }
                 ],

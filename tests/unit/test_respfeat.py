@@ -547,3 +547,99 @@ def test_respfeat_probe_stops_at_first_failed_check():
         registry,
     )
     assert seen == ["first"] and len(rows) == len(failures) == 1
+
+
+def test_webrtc_preserves_transcription_secret_scope(monkeypatch):
+    import sys
+    from types import SimpleNamespace
+
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from yunshu_gateway import realtime_secrets
+    from yunshu_gateway import realtime_webrtc as rtc
+    from yunshu_gateway.routers.realtime import RealtimeSession
+
+    seen = []
+
+    class Peer:
+        def __init__(self, config):
+            self.callbacks = {}
+            self.localDescription = SimpleNamespace(sdp="v=0\n")
+
+        def on(self, name):
+            def register(fn):
+                self.callbacks[name] = fn
+                return fn
+
+            return register
+
+        def addTrack(self, track):
+            pass
+
+        async def setRemoteDescription(self, offer):
+            pass
+
+        async def createAnswer(self):
+            return None
+
+        async def setLocalDescription(self, answer):
+            channel = SimpleNamespace(label="oai-events", on=lambda *args: None)
+            self.callbacks["datachannel"](channel)
+            await asyncio.sleep(0)
+
+        async def close(self):
+            pass
+
+    async def run(session):
+        seen.append(session._secret_kind)
+
+    monkeypatch.setattr(RealtimeSession, "run", run)
+    monkeypatch.setattr(rtc, "output_track", lambda: None)
+    monkeypatch.setitem(
+        sys.modules,
+        "aiortc",
+        SimpleNamespace(
+            RTCConfiguration=lambda **kwargs: None,
+            RTCPeerConnection=Peer,
+            RTCSessionDescription=lambda **kwargs: None,
+        ),
+    )
+    monkeypatch.setitem(sys.modules, "av", SimpleNamespace(AudioResampler=None))
+    secret = realtime_secrets.mint({}, "transcription", 60)
+    app = FastAPI()
+    app.include_router(rtc.router)
+    try:
+        with TestClient(app) as client:
+            response = client.post(
+                "/v1/realtime/calls",
+                content="v=0\n",
+                headers={
+                    "content-type": "application/sdp",
+                    "authorization": "Bearer " + secret.value,
+                },
+            )
+            assert response.status_code == 201, response.text
+        assert seen == ["transcription"] and not rtc._calls
+    finally:
+        realtime_secrets.reset()
+
+
+def test_respfeat_waits_for_pool_without_retrying_model_failures():
+    from scripts.research.respfeat_routes import wait_for_port
+
+    clock, attempts = [0.0], []
+
+    def factory():
+        attempts.append(True)
+        if len(attempts) == 1:
+            raise RuntimeError("no free port in 18990-18996")
+        return "server"
+
+    def sleep(seconds):
+        clock[0] += seconds
+
+    assert wait_for_port(factory, now=lambda: clock[0], sleep=sleep) == "server"
+    assert len(attempts) == 2 and clock[0] == 2
+    with pytest.raises(RuntimeError, match="model failed"):
+        wait_for_port(lambda: (_ for _ in ()).throw(RuntimeError("model failed")))

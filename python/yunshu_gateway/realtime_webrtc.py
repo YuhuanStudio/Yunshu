@@ -238,6 +238,7 @@ async def create_call(request: Request):
         socket.session = session
         session.session.update(config)
         if secret:
+            session._secret_kind = secret.kind
             session.session.id = secret.session_id
         channel.on("message", socket.feed)
         channel.on("close", socket.disconnect)

@@ -37,6 +37,7 @@ import json
 import logging
 import math
 import os
+import tempfile
 import tomllib
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -410,7 +411,17 @@ def write_config_value(name: str, value: Any | None, path: Path | None = None) -
         "# Yunshu settings (`yunshu config set KEY VALUE`); see docs/CONFIGURATION.md"
     ]
     lines += [f"{k} = {json.dumps(v)}" for k, v in sorted(values.items())]
-    target.write_text("\n".join(lines) + "\n")
+    # Atomic replacement keeps credentials owner-readable even with a permissive umask
+    # or a previously world-readable config. mkstemp creates mode 0600.
+    fd, tmp = tempfile.mkstemp(prefix=f".{target.name}.", dir=target.parent)
+    try:
+        with os.fdopen(fd, "w") as stream:
+            stream.write("\n".join(lines) + "\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(tmp, target)
+    finally:
+        Path(tmp).unlink(missing_ok=True)
     return target
 
 

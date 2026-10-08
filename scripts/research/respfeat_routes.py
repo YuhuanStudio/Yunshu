@@ -7,6 +7,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 CHECKS = (
@@ -66,6 +67,18 @@ def run_checks(ctx, srv, registry):
     return rows, failures
 
 
+def wait_for_port(factory, budget=120, now=time.monotonic, sleep=time.sleep):
+    """Wait for the shared worker pool; never retry model/startup failures."""
+    deadline = now() + budget
+    while True:
+        try:
+            return factory()
+        except RuntimeError as exc:
+            if "no free port in 18990-18996" not in str(exc) or now() >= deadline:
+                raise
+            sleep(min(2, max(0, deadline - now())))
+
+
 def main(argv=None):
     a = parser().parse_args(argv)
     root = Path(__file__).resolve().parents[2]
@@ -102,12 +115,14 @@ def main(argv=None):
     }
     srv, ctx = None, None
     try:
-        srv = Srv(
-            a.model,
-            str(root / "python"),
-            out.parent / "home",
-            out.parent / "server.log",
-            ["YUNSHU_VLM_APC_DISK=0"],
+        srv = wait_for_port(
+            lambda: Srv(
+                a.model,
+                str(root / "python"),
+                out.parent / "home",
+                out.parent / "server.log",
+                ["YUNSHU_VLM_APC_DISK=0"],
+            )
         )
         srv.wait_ready()
         ctx = sweep.routes_make_ctx(srv, "", "vlm")
