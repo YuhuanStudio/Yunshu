@@ -68,7 +68,7 @@ msg = client.messages.create(
 print(msg.content[0].text)
 ```
 
-Models live in `~/.yunshu/models` (`yunshu config set models_dir PATH` moves them);
+Models live in `~/.yunshu/models` (`yunshu config set models_dir PATH` selects the directory for future downloads; it does not move existing weights);
 `serve -m org/name` also finds the Hugging Face cache and downloads only if needed.
 `yunshu service install -m <model>` runs the server at login.
 
@@ -76,8 +76,15 @@ Models live in `~/.yunshu/models` (`yunshu config set models_dir PATH` moves the
 
 The source checkout includes a YunUI-based engine console at `/console/`: live
 status and resource charts, model operations, request inspection/cancellation, and
-a streaming diagnostic playground. Build it with `cd frontend && pnpm install
---frozen-lockfile && pnpm build`, then use your normal Yunshu server. See the
+a streaming diagnostic playground. Build it, then use your normal Yunshu server:
+
+```bash
+cd frontend
+pnpm install --frozen-lockfile
+pnpm build
+```
+
+See the
 [console guide](docs/CONSOLE.md) for development, authentication and metric scope.
 
 ### Qwen3.8-27B
@@ -176,6 +183,10 @@ usage, and cached-token counts in `usage`. Errors use each API's own error shape
 namespaced (`x_yunshu`, `X-Yunshu-*`), so the official SDKs ignore them. The full matrix, with how
 each row was verified, is in [API surface](docs/guides/API_SURFACE.md).
 
+Local decisions (`/v1/decisions`, `/v1/systemone`), stored chat completions, Evals (`/v1/evals`) and Realtime client secrets are available on main for the 0.1.5 cycle. Decisions require a supported decision checkpoint; they do not use the chat decoder.
+
+[Decisions](docs/guides/DECISIONS.md), [Evals](docs/guides/EVALS.md), [web search](docs/guides/WEB_SEARCH.md) and [Tavily API](docs/guides/TAVILY.md)
+
 ## Coding agents
 
 ```bash
@@ -192,8 +203,8 @@ prefill progress, decode speed and cache hits.
 - **opencode** — Chat Completions with tools and usage.
 
 Server-side web search defaults to best-effort DuckDuckGo HTML and Wikipedia; queries leave the machine.
-`YUNSHU_WEB_SEARCH_PROVIDER=none` disables it. Configured SearXNG or keyed providers take precedence; MCP servers named in a
-request are connected by the gateway. What each agent calls and how it was checked is in
+`YUNSHU_WEB_SEARCH_PROVIDER=none` disables it. Auto metasearch runs configured keyed providers in parallel with the keyless sources;
+SearXNG is optional. MCP servers named in a request are connected by the gateway. What each agent calls and how it was checked is in
 [Agent compatibility](docs/guides/AGENT_COMPAT.md).
 
 ## Performance

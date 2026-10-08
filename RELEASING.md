@@ -140,3 +140,18 @@ options; if security or correctness requires immediate removal, explain why.
 Experimental settings may be retired after their recorded decision, but still
 list user-visible removals. Python internals are not a stable embedding API.
 Security fixes target main and the latest release, as described in SECURITY.md.
+
+## Verify the exact release candidate
+
+Run `nice -n 15 scripts/dev/ci-local <candidate-sha>` before tagging to catch
+clean-install and sandbox/path-dependent failures. Use committed SHAs for `yv`
+arms and inspect the first line of `yv.log`; the base and candidate must differ.
+Read every completed job's exit status and final evidence record. Resume a failed
+stage after fixing infrastructure instead of rerunning already passed stages.
+
+On the shared GPU queue, priorities are non-positive: designated snapshot/sync
+jobs use 0, other work -1 (>=80 GB: -2). `--gate` admits a gate ahead of the same
+priority's backlog. Timing cells require quiet admission; correctness cells do not.
+A CPU-only documentation candidate can use `yv ab --suite preflight`; it does not
+certify engine output or performance. See [Contributing](CONTRIBUTING.md) and
+[verification](docs/guides/VERIFY.md) for the development checks.
