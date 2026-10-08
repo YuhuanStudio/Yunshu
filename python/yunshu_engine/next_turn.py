@@ -128,3 +128,20 @@ def ineligible_reason(
     if completion_tokens > MAX_REPLY_TOKENS:
         return f"reply too long ({completion_tokens} tokens)"
     return None
+
+
+def rehearsal_length(prefix_len: int, stride: int, guard: int) -> int | None:
+    """Prompt length to rehearse on the canonical prefill grid.
+
+    With a position-keyed grid (``stride`` tokens per atom) the cache restores a follow-up only
+    at a stride multiple, so the rehearsal request ends ``guard`` tokens after the largest
+    multiple ``S`` that fits in the shared prefix: the cache stores its checkpoint at ``S``
+    (request length minus the guard) and the follow-up prefills only ``prefix_len - S`` plus its
+    new message. Returns None when no multiple fits.
+    """
+    if stride <= 0:
+        return prefix_len
+    s = (prefix_len // stride) * stride
+    if s + guard > prefix_len:
+        s -= stride
+    return s + guard if s >= stride else None

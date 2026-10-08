@@ -37,6 +37,8 @@ def _engine(monkeypatch, *, on=True):
     eng._rehearsal_task = None
     eng._active_count = 1
     eng._batch_runner = object()
+    eng._apc_backend = None
+    eng._apc_prefill_stride = 0
     eng._tokenizer = _Tok()
     eng._executor = concurrent.futures.ThreadPoolExecutor(1)
     pool = concurrent.futures.ThreadPoolExecutor(1)
@@ -196,3 +198,19 @@ def test_metrics_endpoint_exposes_the_counters():
     text = get_prometheus_metrics().generate()
     assert "yunshu_next_turn_rehearsals_total" in text
     assert "yunshu_next_turn_rehearsed_tokens_total" in text
+
+
+def test_rehearsal_stops_at_the_stride_grid(monkeypatch):
+    eng, calls = _engine(monkeypatch)
+    eng._apc_prefill_stride = 4
+    mgr = type("M", (), {"exact_cache_guard_tokens": 1})()
+    eng._apc_backend = type("B", (), {"manager": mgr})()
+
+    async def main():
+        _go(eng)
+        await eng._rehearsal_task
+
+    asyncio.run(main())
+    ids, _ = calls[0]
+    # prefix is 8 tokens; stride 4 -> S = 8 would pass the prefix with the guard, so S = 4
+    assert ids == [9, 1, 3, 4, 9]

@@ -74,3 +74,12 @@ def test_length_capped_reply_is_rehearsed():
         has_tools=False,
         constrained=False,
     )
+
+
+def test_rehearsal_length_ends_one_guard_after_the_stride_multiple():
+    assert nt.rehearsal_length(34860, 2048, 1) == 34816 + 1
+    assert (
+        nt.rehearsal_length(34816, 2048, 1) == 34816 - 2048 + 1
+    )  # guard would pass the prefix
+    assert nt.rehearsal_length(1500, 2048, 1) is None
+    assert nt.rehearsal_length(5000, 0, 1) == 5000  # no canonical grid: rehearse it all

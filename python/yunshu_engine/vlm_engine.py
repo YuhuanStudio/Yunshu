@@ -1462,6 +1462,13 @@ class VLMEngine:
             )
             if ids is None or ev.is_set():
                 return None
+            stride = int(getattr(self, "_apc_prefill_stride", 0) or 0)
+            manager = getattr(self._apc_backend, "manager", None)
+            guard = int(getattr(manager, "exact_cache_guard_tokens", 1) or 1)
+            target = next_turn.rehearsal_length(len(ids), stride, guard)
+            if target is None:
+                return None
+            ids = ids[:target]
             params = self._runner_kwargs(
                 max_tokens=1,
                 temperature=0.0,
