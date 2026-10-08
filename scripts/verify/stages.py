@@ -1419,6 +1419,7 @@ STAGE_FUNCS = {
     "preflight": stage_preflight,
     "smoke": stage_smoke,
     "toolparse": stage_toolparse,
+    "client_compat": stage_client_compat,
     "identity": stage_identity,
     "apc": stage_apc,
     "quality": stage_quality,
