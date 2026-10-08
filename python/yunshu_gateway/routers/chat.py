@@ -396,6 +396,9 @@ class ChatCompletionRequest(BaseModel):
     messages: list[ChatMessage]
     # Ollama-style: how long the model stays loaded after this request ("5m", 300, -1, 0).
     keep_alive: str | int | float | None = None
+    # OpenAI stored completions: store=true keeps the completion for GET /chat/completions/{id}.
+    store: bool | None = None
+    metadata: dict[str, str] | None = None
     prompt_cache_key: str | None = None
     prompt_cache_retention: str | None = None
     prompt_cache_options: dict | None = None
@@ -1742,6 +1745,98 @@ def _enforce_capability_contract(req: ChatCompletionRequest) -> None:
 
 @router.post("/chat/completions", response_model=None)
 async def create_chat_completion(req: ChatCompletionRequest, request: Request):
+    if not req.store:
+        return await _create_chat_completion(req, request)
+    from yunshu_gateway.chat_store import check_metadata
+
+    try:
+        check_metadata(req.metadata)
+    except Exception as exc:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": {
+                    "message": getattr(exc, "message", str(exc)),
+                    "type": "invalid_request_error",
+                    "param": "metadata",
+                    "code": getattr(exc, "code", None),
+                }
+            },
+        )
+    resp = await _create_chat_completion(req, request)
+    return _tee_store(resp, req)
+
+
+def _store_completion(completion: dict | None, req: ChatCompletionRequest) -> None:
+    if not completion or not completion.get("choices"):
+        return
+    try:
+        from yunshu_gateway.chat_store import get_store
+
+        get_store().save(
+            completion,
+            [m.model_dump(exclude_none=True) for m in req.messages],
+            req.metadata,
+        )
+    except Exception:
+        logger.warning("storing chat completion failed", exc_info=True)
+
+
+def _tee_store(resp, req: ChatCompletionRequest):
+    """Save a finished 200 completion (JSON body, or the stream folded back) when store=true."""
+    if isinstance(resp, StreamingResponse):
+        inner = resp.body_iterator
+
+        async def _gen():
+            from yunshu_gateway.chat_store import completion_from_chunks
+
+            chunks: list[dict] = []
+            clean = False
+            buf = ""
+            async for piece in inner:
+                yield piece
+                text = (
+                    piece.decode("utf-8", "replace")
+                    if isinstance(piece, bytes)
+                    else str(piece)
+                )
+                buf += text
+                while "\n\n" in buf:
+                    ev, buf = buf.split("\n\n", 1)
+                    for line in ev.splitlines():
+                        if not line.startswith("data:"):
+                            continue
+                        data = line[5:].strip()
+                        if data == "[DONE]":
+                            clean = True
+                        elif data:
+                            try:
+                                obj = json.loads(data)
+                            except ValueError:
+                                continue
+                            if (
+                                isinstance(obj, dict)
+                                and obj.get("object") == "chat.completion.chunk"
+                            ):
+                                chunks.append(obj)
+            if clean:
+                _store_completion(completion_from_chunks(chunks), req)
+
+        resp.body_iterator = _gen()
+        return resp
+    if isinstance(resp, JSONResponse) and resp.status_code == 200:
+        try:
+            body = json.loads(resp.body)
+        except ValueError:
+            return resp
+        if isinstance(body, dict) and body.get("object") == "chat.completion":
+            _store_completion(body, req)
+    elif isinstance(resp, dict) and resp.get("object") == "chat.completion":
+        _store_completion(resp, req)
+    return resp
+
+
+async def _create_chat_completion(req: ChatCompletionRequest, request: Request):
     from yunshu_gateway.admission import classify_request, defer_auxiliary
 
     classify_request(req.model_dump())
