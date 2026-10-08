@@ -206,3 +206,33 @@ def test_m3sweep_plan_priority_and_label_prefix(tmp_path):
     assert all(j["submit"][j["submit"].index("--priority") + 1] == "-1" for j in jobs)
     default = m3.plan("abcdef0", tmp_path)
     assert all("--priority" not in j["submit"] for j in default)
+
+
+def test_unload_when_idle_retries_a_conflict_until_the_lease_is_released():
+    # A socket's model lease outlives the client's close handshake by a few ms; the first
+    # unload answers 409 and the check must retry rather than fail the route.
+    answers = [409, 409, 200]
+    calls = []
+
+    class Resp:
+        def __init__(self, code):
+            self.status_code = code
+
+    class C:
+        def req(self, method, path, **kw):
+            calls.append((method, path))
+            return Resp(answers.pop(0))
+
+    assert rc.unload_when_idle(C(), "m", wait=5).status_code == 200
+    assert len(calls) == 3 and calls[0] == ("POST", "/v1/models/unload/m")
+
+
+def test_unload_when_idle_gives_up_after_the_wait():
+    class Resp:
+        status_code = 409
+
+    class C:
+        def req(self, *a, **kw):
+            return Resp()
+
+    assert rc.unload_when_idle(C(), "m", wait=0.3).status_code == 409

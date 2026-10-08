@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel
 
 from yunshu_engine.version import yunshu_version
@@ -848,7 +848,7 @@ async def mcp_endpoint(request: Request):
         req = JSONRPCRequest(**body)
     except ValidationError as e:
         if is_notification:
-            return JSONResponse(content=None, status_code=204)
+            return Response(status_code=204)
         _msg = (
             e.errors()[0].get("msg", "validation error")
             if e.errors()
@@ -922,7 +922,7 @@ async def mcp_endpoint(request: Request):
                 _check_model_access(request, _uri.replace("yunshu://models/", "", 1))
     except HTTPException as _acc_err:
         if is_notification:
-            return JSONResponse(content=None, status_code=204)
+            return Response(status_code=204)
         return JSONResponse(
             _rpc_error(
                 JSONRPCError.INVALID_REQUEST, f"Forbidden: {_acc_err.detail}", _raw_id
@@ -934,7 +934,7 @@ async def mcp_endpoint(request: Request):
 
     if req.jsonrpc != "2.0":
         if is_notification:
-            return JSONResponse(content=None, status_code=204)
+            return Response(status_code=204)
         return JSONResponse(
             _rpc_error(JSONRPCError.INVALID_REQUEST, "Invalid jsonrpc version", req.id)
         )
@@ -942,7 +942,7 @@ async def mcp_endpoint(request: Request):
     handler = _METHODS.get(req.method)
     if handler is None:
         if is_notification:
-            return JSONResponse(content=None, status_code=204)
+            return Response(status_code=204)
         return JSONResponse(
             _rpc_error(
                 JSONRPCError.METHOD_NOT_FOUND, f"Method not found: {req.method}", req.id
@@ -952,12 +952,12 @@ async def mcp_endpoint(request: Request):
     try:
         result = await handler(req.params, req.id)
         if is_notification:
-            return JSONResponse(content=None, status_code=204)
+            return Response(status_code=204)
         return JSONResponse(result)
     except Exception as e:
         logger.error(f"MCP handler error for {req.method}: {e}", exc_info=True)
         if is_notification:
-            return JSONResponse(content=None, status_code=204)
+            return Response(status_code=204)
         # do NOT echo the raw exception string (str(e)) to the client — it can
         # carry a file/model path or internal detail. The traceback is logged above;
         # return a generic message (mirrors the global exception handler's non-leak policy).

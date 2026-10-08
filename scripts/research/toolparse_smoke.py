@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import socket
 import subprocess
 import sys
 import time
@@ -198,6 +199,26 @@ def parser():
     return p
 
 
+def available_port(preferred: int, wait_s: float = 600.0) -> int:
+    """Wait for the shared server pool; paused gpuq jobs retain their listeners."""
+    deadline = time.monotonic() + wait_s
+    ports = [preferred, *[p for p in range(18990, 19000) if p != preferred]]
+    while True:
+        for port in ports:
+            with socket.socket() as sock:
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                try:
+                    sock.bind(("127.0.0.1", port))
+                except OSError:
+                    continue
+                return port
+        left = deadline - time.monotonic()
+        if left <= 0:
+            raise RuntimeError("server port pool busy after waiting")
+        print("toolparse: server port pool busy; waiting", flush=True)
+        time.sleep(min(5.0, left))
+
+
 def main() -> int:
     args = parser().parse_args()
     if not 18990 <= args.port <= 18999:
@@ -208,6 +229,8 @@ def main() -> int:
     try:
         url = args.base_url or f"http://127.0.0.1:{args.port}"
         if not args.base_url:
+            args.port = available_port(args.port)
+            url = f"http://127.0.0.1:{args.port}"
             proc = subprocess.Popen(
                 [
                     sys.executable,

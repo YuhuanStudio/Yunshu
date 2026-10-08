@@ -423,6 +423,23 @@
       "commit": "64ea011cb65f14d9ce2737e60db9a4ae91ed7441",
       "license": "MIT",
       "why": "Native MLX 0.32.3 NAX QMM accumulation over lane-tiled weights/paired scales; only input loader and M tile differ. Installed headers are version-guarded and source-hashed into the prefill arithmetic namespace."
+    },
+    {
+      "kind": "derived",
+      "path": "python/yunshu_engine/decision_engine.py",
+      "repo": "https://huggingface.co/Cloudflare/clef",
+      "clone": "reference/clef",
+      "upstream_paths": [
+        "joint_schema_model.py"
+      ],
+      "commit": "2f3de3dd85f379784083b0814d997ab627200f0c",
+      "license": "Apache-2.0",
+      "local_changes": [
+        "encode_record / question_options / the readout re-implemented over a tokenizer callable and our own request types; options keep request order in answers",
+        "JointSchemaHead re-implemented functionally in MLX (float32; packed in_proj attention, pre-norm decoder layers, exact GELU), checked tensor by tensor against a torch transcription in tests/unit/test_decisions.py",
+        "lexical option vectors are rows of the 4-bit lm_head dequantized on the fly; an over-long input is rejected instead of truncated; unknown head layouts fail closed"
+      ],
+      "why": "serves Cloudflare Clef / Clef-flash (MLX conversions: abenzerps/Clef-MLX @ 65781a8d37979a361af4e80984142dc40b2675b6) for /v1/decisions and /v1/systemone; the model card ships joint_schema_model.py as the reference implementation"
     }
   ],
   "inspired": [
@@ -1031,6 +1048,20 @@
       "commit": "2342343746093e5cd33799cd60186d10c4addea9",
       "license": "Apache-2.0",
       "why": "Wire fixture shapes only, independently implemented readers; no parser or test code copied."
+    },
+    {
+      "kind": "inspired",
+      "path": "python/yunshu_gateway/routers/decisions.py",
+      "repo": "https://github.com/jundot/omlx",
+      "clone": "reference/omlx",
+      "upstream_paths": [
+        "omlx/api/systemone_models.py"
+      ],
+      "commit": "a98d8c8c",
+      "license": "Apache-2.0",
+      "local_changes": [
+        "only the public design of oMLX PR #4315 (a /v1/systemone route next to a decision engine for Clef) informed this; its code was NOT read. License checked: Apache-2.0, same as the oMLX files already vendored. Wire formats come from openai-python 3.26 types and TypeSafe's published System One docs"
+      ]
     }
   ],
   "patches": [
@@ -2265,6 +2296,17 @@
       ],
       "why": "grammar / JSON-schema engine we depend on",
       "commit": "e7c69004"
+    },
+    {
+      "repo": "https://huggingface.co/Cloudflare/clef",
+      "clone": "reference/clef",
+      "globs": [
+        "joint_schema_model.py",
+        "joint_head_config.json"
+      ],
+      "why": "Clef decision model reference implementation and head layout we serve (decision_engine.py); a changed head or encoding changes every probability",
+      "commit": "2f3de3dd85f379784083b0814d997ab627200f0c",
+      "reviewed_date": "2026-10-07"
     }
   ],
   "packages": [

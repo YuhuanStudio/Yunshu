@@ -12,6 +12,8 @@ import time
 from pathlib import Path
 
 import httpx
+import pytest
+from scripts.research.agentic.servers import free_ports
 
 ROOT = Path(__file__).resolve().parents[2]
 PORT = 18991
@@ -24,6 +26,8 @@ def test_graceful_shutdown_timeout_values():
 
 
 def _start(drain: str, delay="0.2", n="15"):
+    global PORT
+    PORT = free_ports(1)[0]
     env = {
         **os.environ,
         "YUNSHU_DRAIN_TIMEOUT": drain,
@@ -43,6 +47,8 @@ def _start(drain: str, delay="0.2", n="15"):
         stderr=subprocess.STDOUT,
     )
     for _ in range(100):
+        if p.poll() is not None:
+            raise AssertionError("server exited: " + p.stdout.read().decode()[-500:])
         try:
             if (
                 httpx.get(f"http://127.0.0.1:{PORT}/health/live", timeout=1).status_code
@@ -114,3 +120,20 @@ def test_drain_zero_aborts_the_stream_fast():
     finally:
         if p.poll() is None:
             p.kill()
+
+
+def test_shutdown_server_uses_a_free_pool_port(monkeypatch):
+    import sys
+
+    module = sys.modules[__name__]
+    monkeypatch.setattr(module, "free_ports", lambda n: [18999])
+    commands = []
+
+    def launch(command, **kwargs):
+        commands.append(command)
+        raise RuntimeError("CPU launch sentinel")
+
+    monkeypatch.setattr(subprocess, "Popen", launch)
+    with pytest.raises(RuntimeError, match="CPU launch sentinel"):
+        _start("20")
+    assert commands[0][2] == "18999"

@@ -134,3 +134,27 @@ def test_lazy_free_response_and_hidden_tool_schema():
     assert payload["response_format"]["structures"][0]["schema"]["properties"][
         "arguments"
     ]["properties"]["city"] == {"const": "Taipei"}
+
+
+def test_probe_waits_when_the_port_pool_is_busy(monkeypatch):
+    class BusySocket:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def setsockopt(self, *args):
+            pass
+
+        def bind(self, addr):
+            raise OSError("busy")
+
+    monkeypatch.setattr(probe.socket, "socket", BusySocket)
+    times = iter([0.0, 0.0, 6.0])
+    monkeypatch.setattr(probe.time, "monotonic", lambda: next(times))
+    sleeps = []
+    monkeypatch.setattr(probe.time, "sleep", sleeps.append)
+    with pytest.raises(RuntimeError, match="pool busy"):
+        probe.available_port(18996, wait_s=5.0)
+    assert sleeps == [5.0]
