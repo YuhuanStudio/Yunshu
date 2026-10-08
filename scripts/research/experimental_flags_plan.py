@@ -80,6 +80,16 @@ EVIDENCE = {
         ],
         "Same-tokenizer ordinary target/draft pair is available. CPU preflight validates configs/vocabularies/imports; successful model smoke must precede three alternating traced-parity and uninstrumented-timing repetitions.",
     ),
+    "YUNSHU_NEXT_TURN_PREFILL": (
+        "ttft",
+        "cpu_correctness_only",
+        [
+            "tests/unit/test_next_turn.py",
+            "tests/unit/test_vlm_next_turn.py",
+            "yv suite followup (run ttftfloor-rehearse32-*)",
+        ],
+        "Prefills the finished assistant reply while idle so the follow-up only prefills the new user message. CPU tests cover the cut, gating and cancel; the 27B yv followup A/B decides.",
+    ),
 }
 
 
