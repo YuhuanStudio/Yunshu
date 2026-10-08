@@ -1,0 +1,102 @@
+@import "tailwindcss";
+/* yunui:styles:start */
+@import "../.yunui/setup.css";
+/* yunui:styles:end */
+
+@source "./**/*.{ts,tsx}";
+@font-face {
+  font-family: Geist;
+  src: url("/fonts/caa3a2e1cccd8315-s.p.0wgildi0cnwt9.woff2") format("woff2");
+  font-weight: 100 900;
+  font-display: swap;
+}
+@font-face {
+  font-family: "JetBrains Mono";
+  src: url("/fonts/JetBrainsMono-Regular.woff2") format("woff2");
+  font-weight: 100 900;
+  font-display: swap;
+}
+@theme {
+  --font-sans: Geist, ui-sans-serif, system-ui, "PingFang TC", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+}
+body {
+  margin: 0;
+  background: var(--bg-base);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+* {
+  box-sizing: border-box;
+}
+::selection {
+  background: var(--accent-muted);
+}
+/* YunDesign motion: ease-out, 0.12s hover / 0.15s selection / 0.18s disclosure; route cross-fade <= 150ms */
+@keyframes rs-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.rs-route {
+  animation: rs-fade 0.15s ease-out;
+}
+@keyframes rs-row {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.rs-in {
+  animation: rs-row 0.18s ease-out both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .rs-route,
+  .rs-in {
+    animation: none;
+  }
+}
+.rs-scroll-fade {
+  position: sticky;
+  bottom: 0;
+  height: 22px;
+  margin-top: -22px;
+  pointer-events: none;
+  background: linear-gradient(to bottom, transparent, var(--bg-base));
+}
+/* Markdown */
+.rs-md {
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+.rs-md h1 { font-size: 20px; font-weight: 600; color: var(--text-primary); margin: 0 0 12px; letter-spacing: -0.015em; }
+.rs-md h2 { font-size: 14px; font-weight: 600; color: var(--text-primary); margin: 28px 0 10px; padding-top: 4px; scroll-margin-top: 80px; }
+.rs-md h3, .rs-md h4 { font-size: 13px; font-weight: 600; color: var(--text-primary); margin: 20px 0 8px; scroll-margin-top: 80px; }
+.rs-md p { margin: 0 0 10px; }
+.rs-md ul, .rs-md ol { margin: 0 0 10px; padding-left: 20px; }
+.rs-md ul { list-style: disc; }
+.rs-md ol { list-style: decimal; }
+.rs-md li { margin: 2px 0; }
+.rs-md a { color: var(--text-primary); text-decoration: underline; text-decoration-color: var(--border-strong); text-underline-offset: 3px; transition: text-decoration-color 0.12s ease-out; }
+.rs-md a:hover { text-decoration-color: var(--text-primary); }
+.rs-md blockquote { margin: 0 0 10px; padding: 2px 0 2px 12px; border-left: 2px solid var(--border-strong); color: var(--text-tertiary); }
+.rs-md code { font-family: var(--font-mono); font-size: 12px; background: var(--bg-elevated); border-radius: 4px; padding: 1px 5px; }
+.rs-md pre { margin: 0 0 12px; padding: 12px 14px; overflow-x: auto; background: var(--bg-elevated); border: 1px solid var(--border-default); border-radius: 10px; }
+.rs-md pre code { background: none; padding: 0; font-size: 12px; line-height: 1.6; }
+.rs-md hr { border: 0; border-top: 1px solid var(--border-default); margin: 20px 0; }
+.rs-md .rs-table { margin: 0 0 14px; overflow-x: auto; border: 1px solid var(--border-default); border-radius: 10px; }
+.rs-md table { border-collapse: collapse; width: max-content; min-width: 100%; font-size: 12px; }
+.rs-md th { text-align: left; font-weight: 500; color: var(--text-tertiary); background: var(--bg-elevated); padding: 8px 12px; white-space: nowrap; }
+.rs-md td { padding: 8px 12px; border-top: 1px solid var(--border-default); vertical-align: top; min-width: 80px; max-width: 460px; }
+.rs-md img { max-width: 100%; }

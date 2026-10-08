@@ -209,7 +209,13 @@ def parity_verdict(repo: Path) -> str:
     try:
         board = json.loads(path.read_text())
         n, total, missing = board["parity"], board["total"], board["missing"]
-        if type(n) is not int or type(total) is not int or not 0 <= n <= total or total == 0 or not isinstance(missing, list):
+        if (
+            type(n) is not int
+            or type(total) is not int
+            or not 0 <= n <= total
+            or total == 0
+            or not isinstance(missing, list)
+        ):
             raise ValueError("invalid counts")
         return f"parity: {n}/{total} items, missing: {len(missing)} (board snapshot; rerun scripts/dev/parityboard to refresh)"
     except (OSError, ValueError, KeyError, TypeError):
