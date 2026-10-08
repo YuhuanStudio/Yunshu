@@ -300,7 +300,9 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--arm", action="append", required=True, help="name=tree")
     ap.add_argument("--model", required=True)
-    ap.add_argument("--port", type=int, default=18993)  # 18997-18999 are the M3 forwards
+    ap.add_argument(
+        "--port", type=int, default=18993
+    )  # 18997-18999 are the M3 forwards
     ap.add_argument("--reps", type=int, default=2)
     ap.add_argument("--sizes", type=int, nargs="+", default=[8192, 32768, 98304])
     ap.add_argument("--out", required=True)

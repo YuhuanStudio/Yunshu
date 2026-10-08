@@ -1242,3 +1242,38 @@ def test_client_compat_pilot_is_pinned_and_stops_before_second_model(
     assert not result.passed and len(calls) == 1
     assert calls[0].cwd == world.repo and calls[0].device == "m3"
     assert "--tree-sha" in calls[0].argv and "Qwen3.5-0.8B" in " ".join(calls[0].argv)
+
+
+def test_ttft_profile_32k_cells_use_the_short_lane_and_128k_does_not(tmp_path):
+    from types import SimpleNamespace
+
+    class Stop(Exception):
+        pass
+
+    cells = []
+
+    class Capture:
+        label = "t"
+
+        def run_cells(self, submitted):
+            cells.extend(submitted)
+            raise Stop
+
+    for size, limit_ok in ((32768, True), (131072, False)):
+        cells.clear()
+        ctx = stages.Ctx(
+            run=None,
+            exe=Capture(),
+            base=SimpleNamespace(path=tmp_path / "base"),
+            cand=SimpleNamespace(path=tmp_path / "cand"),
+            env={},
+            base_env={},
+            cand_env={},
+            model="tiny",
+            model_name="tiny",
+            suite={"ctx": [size], "kinds": ["code"]},
+            mem_gb=60,
+        )
+        with pytest.raises(Stop):
+            stages.stage_ttft_profile(ctx)
+        assert (max(c.timeout_min for c in cells) <= 10) is limit_ok

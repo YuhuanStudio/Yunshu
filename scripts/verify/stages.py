@@ -398,7 +398,8 @@ def stage_smoke(ctx: Ctx) -> StageResult:
                     ["--part", "decode", "--smoke", "--rep", "0"],
                 ),
                 mem_gb=ctx.mem_gb,
-                timeout_min=12 if ctx.big else 5,
+                # measured 10-16 s with a resident 27B load: honest short-lane declaration
+                timeout_min=9 if ctx.big else 5,
                 stall_min=6 if ctx.big else 2,
                 validate=_smoke_valid,
                 device="" if ctx.big else "any",
@@ -1123,8 +1124,9 @@ def stage_ttft_profile(ctx: Ctx) -> StageResult:
                             *_env_flags(ctx.arm_env(arm)),
                         ],
                         mem_gb=ctx.mem_gb,
-                        timeout_min=30,
-                        stall_min=12,
+                        # measured 117 s at 32K (27B); only 128K needs the long lane
+                        timeout_min=9 if size <= 32768 else 30,
+                        stall_min=6 if size <= 32768 else 12,
                         quiet=True,
                         validate=_ttft_profile_valid,
                     )
@@ -1143,6 +1145,8 @@ def stage_ttft_profile(ctx: Ctx) -> StageResult:
             },
         ),
     )
+
+
 def _websearch_valid(path: Path):
     rows = read_jsonl(path)
     if not rows or rows[-1].get("complete") is not True:
@@ -1332,8 +1336,6 @@ def stage_evals(ctx: Ctx) -> StageResult:
         if not numbers.get("passed"):
             reasons.append("Evals SDK route smoke failed")
     return _finish(ctx, StageResult("evals", not reasons, reasons, numbers))
-
-
 
 
 def stage_tavily(ctx: Ctx) -> StageResult:

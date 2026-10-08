@@ -906,7 +906,10 @@ def _chat_stored(c: Ctx):
         model=c.model, messages=msgs, max_tokens=24, store=True, metadata={"tag": tag}
     )
     got = c.oa.chat.completions.retrieve(r.id)
-    expect(got.id == r.id and got.metadata == {"tag": tag}, f"retrieve {got.id} {got.metadata}")
+    expect(
+        got.id == r.id and got.metadata == {"tag": tag},
+        f"retrieve {got.id} {got.metadata}",
+    )
     expect(
         got.choices[0].message.content == r.choices[0].message.content
         and got.usage.total_tokens == r.usage.total_tokens,
@@ -930,7 +933,9 @@ def _chat_stored(c: Ctx):
         (sgot.choices[0].message.content or "") == text,
         f"stored stream {sgot.choices[0].message.content!r} != streamed {text!r}",
     )
-    listed = [x.id for x in c.oa.chat.completions.list(metadata={"tag": tag}, order="asc")]
+    listed = [
+        x.id for x in c.oa.chat.completions.list(metadata={"tag": tag}, order="asc")
+    ]
     expect(listed == [r.id, sid], f"list by metadata {listed}")
     pm = list(c.oa.chat.completions.messages.list(r.id))
     expect(
@@ -969,7 +974,9 @@ def _realtime_secrets(c: Ctx):
             "output_modalities": ["text"],
         },
     )
-    expect(sec.value.startswith("ek_") and sec.session.type == "realtime", f"secret {sec}")
+    expect(
+        sec.value.startswith("ek_") and sec.session.type == "realtime", f"secret {sec}"
+    )
     expect(sec.session.instructions == "Reply briefly.", "session config not echoed")
     # the ephemeral secret, not the static key, opens the socket and carries its session
     with connect(
@@ -979,9 +986,17 @@ def _realtime_secrets(c: Ctx):
         max_size=None,
     ) as ws:
         first = json.loads(ws.recv(timeout=30))
-        expect(first.get("type") == "session.created", f"first event {first.get('type')}")
-        expect(first["session"]["id"] == sec.session.id, "session id differs from the secret's")
-        expect(first["session"]["instructions"] == "Reply briefly.", "secret session not applied")
+        expect(
+            first.get("type") == "session.created", f"first event {first.get('type')}"
+        )
+        expect(
+            first["session"]["id"] == sec.session.id,
+            "session id differs from the secret's",
+        )
+        expect(
+            first["session"]["instructions"] == "Reply briefly.",
+            "secret session not applied",
+        )
         ws.send(
             json.dumps(
                 {
@@ -995,8 +1010,13 @@ def _realtime_secrets(c: Ctx):
             )
         )
         ws.send(json.dumps({"type": "response.create"}))
-        evs = _ws_events(ws, lambda e: e.get("type") in ("response.done", "error"), timeout=240)
-        expect(evs[-1]["type"] == "response.done", f"secret turn ended with {evs[-1]['type']}")
+        evs = _ws_events(
+            ws, lambda e: e.get("type") in ("response.done", "error"), timeout=240
+        )
+        expect(
+            evs[-1]["type"] == "response.done",
+            f"secret turn ended with {evs[-1]['type']}",
+        )
     if c.token:
         bad = None
         try:
@@ -1009,8 +1029,13 @@ def _realtime_secrets(c: Ctx):
         except Exception:
             bad = None
         expect(bad is None, f"an unknown ek_ secret was accepted: {bad}")
-    s = c.oa.beta.realtime.sessions.create(model=c.model, instructions="hi", modalities=["text"])
-    expect(s.client_secret.value.startswith("ek_") and s.modalities == ["text"], f"sessions {s}")
+    s = c.oa.beta.realtime.sessions.create(
+        model=c.model, instructions="hi", modalities=["text"]
+    )
+    expect(
+        s.client_secret.value.startswith("ek_") and s.modalities == ["text"],
+        f"sessions {s}",
+    )
     t = c.oa.beta.realtime.transcription_sessions.create(
         input_audio_transcription={"model": "whisper-1"}
     )
