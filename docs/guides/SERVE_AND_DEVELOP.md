@@ -276,3 +276,12 @@ verification jobs are not stuck for hours behind a long suite. Limits: interleav
 is never paused or preempted for the lane. A short job that exceeds its timeout is killed and marked `timeout`
 with the reason in its log, so declare an honest `--timeout`. `gpuq status` shows the budget and which jobs are
 short; `gpuq stats` reports interleaved minutes.
+
+### Filler for a CPU-quiet-blocked head
+
+When the head job is a `--quiet` timing job that waits only for a quiet CPU (never for memory or serving), the GPU would
+sit idle. After the head has waited 30 s (`GPUQ_FILLER_WAIT_S`) in its current window, the daemon starts one pending job
+that needs no quiet CPU, passed memory admission, and declares a timeout of at most 30 min (`GPUQ_FILLER_MAX_MIN`);
+short jobs first, and short fillers count against the short-lane budget. The head's window restarts when the filler
+ends, so the head gets the next quiet slot before any second filler. The daemon also caches parsed job files, so a queue
+with thousands of finished jobs costs about 2.5% of a core idle and about 4% while a job runs.
