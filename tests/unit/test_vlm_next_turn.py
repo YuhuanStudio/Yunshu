@@ -32,6 +32,7 @@ class _Arr:
 
 
 def _engine(monkeypatch, *, on=True):
+    monkeypatch.setattr(next_turn, "START_DELAY_S", 0.0)
     eng = object.__new__(vlm_engine.VLMEngine)
     eng._rehearsal_cancel = None
     eng._rehearsal_task = None
@@ -245,3 +246,19 @@ def test_boundary_mode_never_rehearses(monkeypatch):
 
     asyncio.run(main())
     assert calls == []
+
+
+def test_request_during_the_start_delay_prevents_the_rehearsal(monkeypatch):
+    eng, calls = _engine(monkeypatch)
+    monkeypatch.setattr(next_turn, "START_DELAY_S", 0.05)
+    before = next_turn.snapshot()
+
+    async def main():
+        _go(eng)
+        eng._cancel_rehearsal()  # a request arrives right after the reply
+        await eng._rehearsal_task
+
+    asyncio.run(main())
+    assert calls == []
+    assert next_turn.snapshot()["started"] == before["started"]
+    assert next_turn.snapshot()["cancelled"] == before["cancelled"] + 1

@@ -24,6 +24,10 @@ logger = logging.getLogger(__name__)
 SENTINEL = "⁣next-turn-rehearsal⁣"
 MIN_REPLY_TOKENS = 16
 MAX_REPLY_TOKENS = 4096
+# A request that follows a reply within this time (an agent loop, a retry, a warm resend) is not
+# a user reading: starting the rehearsal then would make it wait for a prefill atom (~2 s on
+# the 27B; the first yv run measured warm TTFT 0.18 -> 2.9 s without a delay).
+START_DELAY_S = 2.0
 
 
 def reply_text(parts: Sequence[tuple[str, str]]) -> str:

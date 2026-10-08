@@ -1431,8 +1431,12 @@ class VLMEngine:
             logger.debug("next-turn rehearsal ineligible: engine busy")
             next_turn.record("ineligible")
             return  # other work is waiting: the GPU is not idle
+        # created here, not in the task: a request arriving before the task first runs must
+        # still be able to cancel it
+        ev = threading.Event()
+        self._rehearsal_cancel = ev
         task = asyncio.ensure_future(
-            self._rehearse(messages, reply, enable_thinking, tpl_extra, str(mode))
+            self._rehearse(messages, reply, enable_thinking, tpl_extra, str(mode), ev)
         )
         self._rehearsal_task = task
 
@@ -1443,10 +1447,12 @@ class VLMEngine:
         enable_thinking: bool | None,
         tpl_extra: dict | None,
         mode: str = "stride",
+        ev: threading.Event | None = None,
     ) -> None:
         loop = asyncio.get_running_loop()
-        ev = threading.Event()
-        self._rehearsal_cancel = ev
+        if ev is None:
+            ev = threading.Event()
+            self._rehearsal_cancel = ev
         rehearsal_messages = next_turn.with_reply(messages, reply)
         marker = self._chatml_head_marker()
         tokenizer = self._tokenizer
@@ -1512,7 +1518,12 @@ class VLMEngine:
             )
 
         started = False
+        call = None
         try:
+            await asyncio.sleep(next_turn.START_DELAY_S)
+            if ev.is_set():
+                next_turn.record("cancelled")
+                return
             call = await loop.run_in_executor(self._executor, _prepare)
             if call is None:
                 logger.debug("next-turn rehearsal skipped (no clean cut)")
