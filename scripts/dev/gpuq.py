@@ -79,6 +79,9 @@ SHORT_MIN = float(os.environ.get("GPUQ_SHORT_MIN", 10))
 SHORT_WAIT_S = float(os.environ.get("GPUQ_SHORT_WAIT_S", 5 * 60))
 SHORT_SHARE = float(os.environ.get("GPUQ_SHORT_SHARE", 0.15))
 SHORT_WINDOW_S = 2 * 3600
+# Filler: while the head job waits only for a quiet CPU, an idle GPU runs one job that needs no quiet CPU.
+FILLER_WAIT_S = float(os.environ.get("GPUQ_FILLER_WAIT_S", 30))
+FILLER_MAX_MIN = float(os.environ.get("GPUQ_FILLER_MAX_MIN", 30))
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import gpuq_preflight  # noqa: E402
@@ -329,6 +332,46 @@ def _cpu_blocker(job: dict, gate: ServingGate):
     return "cpu" if blocked else None
 
 
+def _filler(jobs, pending, blockers, head, now) -> dict | None:
+    """A job to run on the otherwise idle GPU while `head` (a --quiet timing job) waits only for a
+    quiet CPU. Needs no quiet CPU itself, passed memory/serving admission, is bounded
+    (FILLER_MAX_MIN), shorts first (and then inside the short-lane budget). One at a time: the lane
+    is single. Only after the head has waited FILLER_WAIT_S in its current window, so the head gets
+    the first quiet slot after every filler."""
+    if now - head.get("quiet_wait_started", now) < FILLER_WAIT_S:
+        return None
+    cands = [
+        j
+        for j in pending
+        if j is not head
+        and blockers.get(j["id"]) is None
+        and not requires_quiet(j)
+        and j.get("timeout_s", 1e9) <= FILLER_MAX_MIN * 60
+        and j.get("device", "m5") in {"m5", "any"}
+    ]
+    if not cands:
+        return None
+    last = {}
+    for j in jobs:
+        if j.get("started"):
+            last[_owner(j)] = max(last.get(_owner(j), 0.0), j["started"])
+    cands.sort(
+        key=lambda j: (not _lane_short(j), last.get(_owner(j), 0.0), j["submitted"])
+    )
+    pick = cands[0]
+    if _lane_short(pick):
+        used, _, allowed = interleave_budget(jobs, now)
+        if used >= allowed:
+            cands = [j for j in cands if not _lane_short(j)]
+            if not cands:
+                return None
+            pick = cands[0]
+        else:
+            pick["interleaved"] = True
+    pick["filler"] = True
+    return pick
+
+
 def _release_quiet_hold(job: dict, now: float) -> None:
     start = job.get("quiet_hold_started")
     if start is not None:
@@ -385,6 +428,13 @@ def _admit(jobs: list[dict], gate: ServingGate, preempt=False) -> dict | None:
         if job.get("waiting") != why:
             _patch_job(JOBS / f"{job['id']}.json", waiting=why)
         job["waiting"] = why
+    if not preempt and winner is not None and winner["waiting"] == "cpu":
+        filler = _filler(jobs, pending, blockers, winner, now)
+        if filler is not None:
+            # The head's hold is released: after the filler it starts a fresh quiet window,
+            # and no second filler starts before it has waited FILLER_WAIT_S again.
+            _release_quiet_hold(winner, now)
+            return filler
     return winner if winner is not None and winner["waiting"] is None else None
 
 
@@ -496,11 +546,13 @@ _JOBS_CACHE: dict = {"dir": None, "key": None, "t": 0.0, "files": {}}
 JOBS_RESCAN_S = 30.0
 
 
-def _job_files() -> list[dict]:
+def _job_protos() -> tuple[int, list]:
+    """(version, [(prototype dict, raw JSON or None)]) of the parsed job files; the version
+    changes only when a file was added, changed or removed."""
     try:
         key = JOBS.stat().st_mtime_ns
     except OSError:
-        return []
+        return -1, []
     c = _JOBS_CACHE
     now = time.monotonic()
     if c["dir"] != str(JOBS) or c["key"] != key or now - c["t"] > JOBS_RESCAN_S:
@@ -516,17 +568,42 @@ def _job_files() -> list[dict]:
             if old is not None and old[0] == sig:
                 fresh[p.name] = old
             elif data := _read(p):
-                fresh[p.name] = (sig, json.dumps(data))
+                raw = None if data.get("state") in FINAL else json.dumps(data)
+                fresh[p.name] = (sig, data, raw)
+        if c["dir"] != str(JOBS) or {k: v[0] for k, v in fresh.items()} != {
+            k: v[0] for k, v in files.items()
+        }:
+            c["version"] = c.get("version", 0) + 1
         c.update(dir=str(JOBS), key=key, t=now, files=fresh)
-    return [json.loads(raw) for _, raw in c["files"].values()]
+    return c.get("version", 0), [(d, raw) for _, d, raw in c["files"].values()]
+
+
+def _job_files() -> list[dict]:
+    # Callers mutate what they get. Finished jobs (thousands, immutable on disk) are handed out as
+    # shallow copies; active ones (few) as fresh parses. Re-parsing every file's JSON on each of
+    # the ~4 calls per 2 s poll cost the daemon ~75% of a core (2026-10-09, 5000 jobs / 58 MB).
+    return [dict(d) if raw is None else json.loads(raw) for d, raw in _job_protos()[1]]
+
+
+_SORTED: dict = {"key": None, "rows": []}
 
 
 def _jobs() -> list[dict]:
+    """All jobs, ordered by priority then submission. The ordered, cap-adjusted list is cached
+    until a job file or the caps change; callers get copies they may mutate."""
     caps = _priority_caps()
-    return sorted(
-        (_cap_priority(j, caps) for j in _job_files()),
-        key=lambda j: (-j.get("priority", 0), j["submitted"], j["id"]),
-    )
+    version, protos = _job_protos()
+    key = (str(JOBS), version, tuple(sorted(caps.items())))
+    if _SORTED["key"] != key:
+        rows = sorted(
+            (_cap_priority(dict(d), caps) for d, _ in protos),
+            key=lambda j: (-j.get("priority", 0), j["submitted"], j["id"]),
+        )
+        _SORTED.update(key=key, rows=rows, raw={id(d): raw for d, raw in protos})
+    out = []
+    for j in _SORTED["rows"]:
+        out.append(dict(j) if j.get("state") in FINAL else json.loads(json.dumps(j)))
+    return out
 
 
 def _owner(job: dict) -> str:
