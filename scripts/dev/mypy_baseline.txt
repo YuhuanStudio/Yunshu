@@ -222,7 +222,6 @@
 2	python/yunshu_engine/lora_manager.py	misc	Cannot assign to a type
 1	python/yunshu_engine/mamba_cache.py	attr-defined	"object" has no attribute "itemsize"
 1	python/yunshu_engine/mamba_cache.py	no-any-return	Returning Any from function declared to return "bool"
-1	python/yunshu_engine/mcp_client.py	assignment	Incompatible types in assignment (expression has type "Process", variable has type "None")
 2	python/yunshu_engine/media_tokens.py	no-any-return	Returning Any from function declared to return "tuple[int, int] | None"
 1	python/yunshu_engine/memory_aware_scheduler.py	no-any-return	Returning Any from function declared to return "int"
 1	python/yunshu_engine/memory_guard.py	no-any-return	Returning Any from function declared to return "bool"
@@ -310,32 +309,14 @@
 5	python/yunshu_engine/round_driver/forward.py	no-any-return	Returning Any from function declared to return "array"
 1	python/yunshu_engine/round_driver/mtp.py	no-any-return	Returning Any from function declared to return "array"
 1	python/yunshu_engine/scheduler.py	arg-type	Argument 1 to "_snapshot_cache" of "SpeculativeDecoder" has incompatible type "None"; expected "list[Any]"
-1	python/yunshu_engine/scheduler.py	arg-type	Argument 1 to "len" has incompatible type "int | float | complex | list[list_or_scalar]"; expected "Sized"
 2	python/yunshu_engine/scheduler.py	arg-type	Argument 1 to "pop" of "dict" has incompatible type "Any | None"; expected "int"
 1	python/yunshu_engine/scheduler.py	arg-type	Argument 1 to "pop" of "dict" has incompatible type "int | None"; expected "int"
-1	python/yunshu_engine/scheduler.py	arg-type	Argument 2 to "_generate_draft_tokens" of "Scheduler" has incompatible type "Any | None"; expected "SpeculativeDecoder"
 1	python/yunshu_engine/scheduler.py	arg-type	Argument 2 to "generate_draft" of "SpeculativeDecoder" has incompatible type "None"; expected "list[Any]"
 1	python/yunshu_engine/scheduler.py	assignment	Incompatible types in assignment (expression has type "BatchGenerator", variable has type "None")
-2	python/yunshu_engine/scheduler.py	assignment	Incompatible types in assignment (expression has type "None", variable has type "ChunkedPrefillOptimizer")
-5	python/yunshu_engine/scheduler.py	assignment	Incompatible types in assignment (expression has type "dict[Any, Any]", target has type "float")
-2	python/yunshu_engine/scheduler.py	assignment	Incompatible types in assignment (expression has type "dict[str, Any]", target has type "float")
-1	python/yunshu_engine/scheduler.py	assignment	Incompatible types in assignment (expression has type "dict[str, bool]", target has type "float")
-1	python/yunshu_engine/scheduler.py	assignment	Incompatible types in assignment (expression has type "dict[str, int]", target has type "float")
-5	python/yunshu_engine/scheduler.py	assignment	Incompatible types in assignment (expression has type "float", target has type "int")
 1	python/yunshu_engine/scheduler.py	assignment	Incompatible types in assignment (expression has type "list[Any]", variable has type "None")
 1	python/yunshu_engine/scheduler.py	attr-defined	"None" has no attribute "next"
 1	python/yunshu_engine/scheduler.py	attr-defined	"None" has no attribute "next_generated"
-1	python/yunshu_engine/scheduler.py	attr-defined	"Request" has no attribute "_last_preempt_time"
-1	python/yunshu_engine/scheduler.py	attr-defined	"Request" has no attribute "_prefill_progress"
-1	python/yunshu_engine/scheduler.py	attr-defined	"Request" has no attribute "_spec_prefill_selected"
-1	python/yunshu_engine/scheduler.py	attr-defined	"float" has no attribute "update"
-1	python/yunshu_engine/scheduler.py	attr-defined	"object" has no attribute "get"
 1	python/yunshu_engine/scheduler.py	call-overload	No overload variant of "get" of "dict" matches argument type "str"
-2	python/yunshu_engine/scheduler.py	dict-item	Dict entry 3 has incompatible type "str": "str"; expected "str": "int"
-1	python/yunshu_engine/scheduler.py	index	Unsupported target for indexed assignment ("object")
-2	python/yunshu_engine/scheduler.py	operator	Unsupported operand types for + ("object" and "int")
-1	python/yunshu_engine/scheduler.py	return-value	Incompatible return value type (got "int | float | complex | list[list_or_scalar]", expected "list[int] | None")
-1	python/yunshu_engine/scheduler.py	union-attr	Item "None" of "Any | None" has no attribute "config"
 1	python/yunshu_engine/scheduler_mixins.py	no-any-return	Returning Any from function declared to return "bool"
 1	python/yunshu_engine/scheduler_mixins.py	no-any-return	Returning Any from function declared to return "list[str]"
 1	python/yunshu_engine/settings.py	assignment	Incompatible types in assignment (expression has type "tuple[str | None, None]", variable has type "tuple[str, int] | None")
@@ -374,7 +355,6 @@
 1	python/yunshu_engine/thinking_budget.py	no-any-return	Returning Any from function declared to return "int | None"
 2	python/yunshu_engine/thinking_budget.py	no-any-return	Returning Any from function declared to return "list[int] | None"
 1	python/yunshu_engine/thinking_budget.py	no-any-return	Returning Any from function declared to return "str | None"
-2	python/yunshu_engine/tool_arguments.py	union-attr	Item "None" of "Any | dict[Any, Any] | None" has no attribute "get"
 2	python/yunshu_engine/tool_call_grammar.py	assignment	Incompatible types in assignment (expression has type "list[str]", variable has type "str")
 1	python/yunshu_engine/tool_call_grammar.py	assignment	Incompatible types in assignment (expression has type "str | None", variable has type "str")
 1	python/yunshu_engine/tool_call_grammar.py	union-attr	Item "None" of "Any | None" has no attribute "consume_token"
@@ -546,7 +526,6 @@
 2	python/yunshu_kv/radix_attention.py	attr-defined	"RadixNode" has no attribute "_replaced_blocks"
 2	python/yunshu_kv/radix_attention.py	misc	List comprehension has incompatible type List[tuple[float, int, RadixNode]]; expected List[tuple[int, int, RadixNode]]
 1	python/yunshu_kv/serialization.py	no-any-return	Returning Any from function declared to return "bytes"
-1	python/yunshu_kv/thinking_segment.py	assignment	Incompatible types in assignment (expression has type "None", variable has type "Path")
 2	python/yunshu_kv/tiered.py	assignment	Incompatible types in assignment (expression has type "dict[Any, Any]", target has type "float")
 1	python/yunshu_kv/tiered.py	no-any-return	Returning Any from function declared to return "tuple[BlockTable, PrefixMatch]"
 1	python/yunshu_kv/tiered.py	no-redef	Name "stored_block_hash" already defined on line N

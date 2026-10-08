@@ -165,6 +165,12 @@ class Request:
     Integrates with mlx-lm's BatchGenerator via batch_uid.
     """
 
+    if TYPE_CHECKING:
+        # Scheduler-owned dynamic fields: declarations must not create dataclass defaults.
+        _prefill_progress: dict[str, Any] = field(init=False)
+        _last_preempt_time: float = field(init=False)
+        _spec_prefill_selected: list[int] = field(init=False)
+
     request_id: str
     prompt: str | list[int] | list[dict]
     sampling_params: SamplingParams = field(default_factory=SamplingParams)

@@ -11,7 +11,7 @@ every value whose declared type is a string or unknown, is left unchanged.
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, cast
 
 
 def tool_schemas(tools: Any) -> dict[str, dict]:
@@ -24,7 +24,11 @@ def tool_schemas(tools: Any) -> dict[str, dict]:
             tool = tool.model_dump()
         if not isinstance(tool, dict):
             continue
-        fn = tool.get("function") if isinstance(tool.get("function"), dict) else tool
+        fn = (
+            cast(dict, tool.get("function"))
+            if isinstance(tool.get("function"), dict)
+            else tool
+        )
         name = fn.get("name")
         params = fn.get("parameters") or fn.get("input_schema")
         if isinstance(name, str) and isinstance(params, dict):
