@@ -75,10 +75,19 @@ import {
 import { compareOutputs, runStats, type RunTiming } from "./playground-metrics";
 import { SegmentedTray } from "./SegmentedTray";
 import { BUILTIN_PRESETS, PlaygroundLibrary } from "./PlaygroundLibrary";
+import { saveBlob } from "./admin-logs-api";
+import { readStoredLibrary, writeStoredLibrary } from "./library-store";
 import {
   deleteHistory,
   deletePreset,
   loadLibrary,
+  reconcile,
+  branchEntry,
+  exportLibrary,
+  mergeLibraries,
+  parseExport,
+  updatePreset,
+  removeLocalLibrary,
   newId,
   saveLibrary,
   savePreset,
@@ -656,8 +665,35 @@ export function Playground({
   // Presets and history: browser-local, per service address, never required.
   function updateLibrary(next: Library) {
     setLibrary(next);
-    setLibraryStored(saveLibrary(connection.baseUrl, next));
+    const base = connection.baseUrl;
+    // IndexedDB first (no 5 MB cap); the localStorage copy is only the fallback when it refuses.
+    void writeStoredLibrary(base, next).then((ok) => {
+      if (ok) {
+        removeLocalLibrary(base);
+        setLibraryStored(true);
+      } else setLibraryStored(saveLibrary(base, next));
+    });
   }
+  useEffect(() => {
+    // After upgrading, the localStorage copy moves to IndexedDB once; afterwards the store wins.
+    let live = true;
+    const base = connection.baseUrl;
+    void readStoredLibrary(base).then((stored) => {
+      if (!live) return;
+      const { library: next, migrate } = reconcile(
+        loadLibrary(base),
+        stored,
+      );
+      setLibrary(next);
+      if (migrate)
+        void writeStoredLibrary(base, next).then(
+          (ok) => ok && removeLocalLibrary(base),
+        );
+    });
+    return () => {
+      live = false;
+    };
+  }, [connection.baseUrl]);
   useEffect(() => {
     // Keep a finished, non-empty chat in the history list (compare runs and partial replies are not kept).
     if (loading || compare) return;
@@ -1309,6 +1345,70 @@ export function Playground({
             presets: deletePreset(library.presets, id),
           })
         }
+        onRename={(id, name) => {
+          updateLibrary({
+            ...library,
+            presets: updatePreset(library.presets, id, { name }),
+          });
+          toast.success(t("playground.library.preset.updated", { name }));
+        }}
+        onOverwrite={(id) => {
+          const name = library.presets.find((p) => p.id === id)?.name ?? "";
+          updateLibrary({
+            ...library,
+            presets: updatePreset(library.presets, id, currentPreset()),
+          });
+          toast.success(t("playground.library.preset.updated", { name }));
+        }}
+        onBranch={(entry, keep) => {
+          const branch = branchEntry(entry, keep);
+          updateLibrary({
+            ...library,
+            history: upsertHistory(library.history, {
+              ...branch,
+              title: t("playground.library.history.branchTitle", {
+                title: entry.title,
+              }),
+            }),
+          });
+          toast.success(t("playground.library.history.branched"));
+        }}
+        onExport={() =>
+          saveBlob(
+            "yunshu-playground.json",
+            new Blob([JSON.stringify(exportLibrary(library), null, 2)], {
+              type: "application/json",
+            }),
+          )
+        }
+        onImport={(file) => {
+          void file
+            .text()
+            .then((text) => parseExport(JSON.parse(text)))
+            .catch(() => null)
+            .then((imported) => {
+              if (!imported) {
+                toast.error(t("playground.library.transfer.rejected"));
+                return;
+              }
+              const before = library;
+              updateLibrary(mergeLibraries(library, imported));
+              toast.info(
+                t("playground.library.transfer.imported", {
+                  presets: imported.presets.length,
+                  history: imported.history.length,
+                }),
+                undefined,
+                {
+                  duration: UNDO_WINDOW_MS,
+                  action: {
+                    label: t("playground.library.transfer.undo"),
+                    onClick: () => updateLibrary(before),
+                  },
+                },
+              );
+            });
+        }}
         onResume={resume}
         onDeleteHistory={(id) =>
           updateLibrary({

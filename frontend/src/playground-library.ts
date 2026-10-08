@@ -89,7 +89,14 @@ function parseEntry(v: unknown): HistoryEntry | null {
 /** Anything unreadable is dropped, never thrown. */
 export function parseLibrary(raw: string | null): Library {
   try {
-    const data: unknown = raw ? JSON.parse(raw) : null;
+    return parseLibraryData(raw ? JSON.parse(raw) : null);
+  } catch {
+    return emptyLibrary();
+  }
+}
+
+export function parseLibraryData(data: unknown): Library {
+  try {
     if (!isRecord(data)) return emptyLibrary();
     return {
       presets: (Array.isArray(data.presets) ? data.presets : [])
@@ -111,6 +118,13 @@ export function loadLibrary(baseUrl: string): Library {
     return parseLibrary(localStorage.getItem(libraryKey(baseUrl)));
   } catch {
     return emptyLibrary();
+  }
+}
+export function removeLocalLibrary(baseUrl: string) {
+  try {
+    localStorage.removeItem(libraryKey(baseUrl));
+  } catch {
+    /* nothing to remove */
   }
 }
 /** false when the browser refused (private window, quota): the caller keeps working in memory. */
@@ -159,3 +173,95 @@ export const deleteHistory = (history: HistoryEntry[], id: string) =>
 
 export const newId = () =>
   `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;
+
+/** Version of the export file; an import of any other version is refused, not guessed at. */
+export const EXPORT_SCHEMA = 1;
+
+export function exportLibrary(library: Library, nowMs = Date.now()) {
+  return {
+    schema: EXPORT_SCHEMA,
+    kind: "yunshu.playground",
+    exported_at: new Date(nowMs).toISOString(),
+    presets: library.presets,
+    history: library.history,
+  };
+}
+
+/** A parsed export, or null when it is not a Playground export of this schema. */
+export function parseExport(raw: unknown): Library | null {
+  if (!isRecord(raw) || raw.kind !== "yunshu.playground") return null;
+  if (raw.schema !== EXPORT_SCHEMA) return null;
+  return parseLibraryData(raw);
+}
+
+/**
+ * Merge an imported library into the current one. Same id: the imported copy wins. The caps
+ * apply afterwards (newest history first), so an import can never push the list past them.
+ */
+export function mergeLibraries(current: Library, imported: Library): Library {
+  const presetIds = new Set(imported.presets.map((p) => p.id));
+  const historyIds = new Set(imported.history.map((h) => h.id));
+  return {
+    presets: [
+      ...imported.presets,
+      ...current.presets.filter((p) => !presetIds.has(p.id)),
+    ].slice(0, MAX_PRESETS),
+    history: [
+      ...imported.history,
+      ...current.history.filter((h) => !historyIds.has(h.id)),
+    ]
+      .sort((a, b) => b.at - a.at)
+      .slice(0, MAX_HISTORY),
+  };
+}
+
+/**
+ * A new conversation that shares the first `keep` messages of `entry`: the point to continue
+ * from a different answer. `keep` is clamped to what exists and cut back to end on an
+ * assistant reply (a branch point is a finished exchange).
+ */
+export function branchEntry(
+  entry: HistoryEntry,
+  keep: number,
+  at = Date.now(),
+): HistoryEntry {
+  let n = Math.max(1, Math.min(keep, entry.messages.length));
+  while (n > 1 && entry.messages[n - 1].role !== "assistant") n--;
+  return {
+    id: newId(),
+    at,
+    model: entry.model,
+    title: entry.title,
+    messages: entry.messages.slice(0, n).map((m) => ({ ...m })),
+  };
+}
+
+/** Rename a preset or overwrite its parameters with the current ones, keeping id and name. */
+export function updatePreset(
+  presets: Preset[],
+  id: string,
+  change: Partial<Omit<Preset, "id">>,
+): Preset[] {
+  return presets.map((p) =>
+    p.id === id
+      ? {
+          ...p,
+          ...change,
+          name: (change.name ?? p.name).trim().slice(0, 80) || p.name,
+        }
+      : p,
+  );
+}
+
+/**
+ * Which copy to trust after the async store answers: the store when it has anything,
+ * else the synchronous one (a first run after upgrading), which then gets migrated.
+ */
+export function reconcile(
+  sync: Library,
+  stored: Library | null | undefined,
+): { library: Library; migrate: boolean } {
+  const has = (l: Library) => l.presets.length + l.history.length > 0;
+  if (stored && has(stored)) return { library: stored, migrate: false };
+  return { library: sync, migrate: stored !== undefined && has(sync) };
+}

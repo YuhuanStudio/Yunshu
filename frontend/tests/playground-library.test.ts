@@ -108,3 +108,77 @@ test("the title is the first user line, one line, shortened", () => {
   );
   assert.equal(titleOf([]), "");
 });
+
+import {
+  branchEntry,
+  exportLibrary,
+  mergeLibraries,
+  parseExport,
+  reconcile,
+  updatePreset,
+} from "../src/playground-library.ts";
+
+test("export round-trips through a schema check; another schema or kind is refused", () => {
+  const lib = { presets: [preset("p")], history: [entry("h", 5)] };
+  const round = parseExport(JSON.parse(JSON.stringify(exportLibrary(lib, 0))));
+  assert.equal(round?.presets[0].id, "p");
+  assert.equal(round?.history[0].id, "h");
+  assert.equal(parseExport({ ...exportLibrary(lib), schema: 2 }), null);
+  assert.equal(parseExport({ ...exportLibrary(lib), kind: "other" }), null);
+  assert.equal(parseExport("nope"), null);
+});
+
+test("import merges by id with the imported copy winning, newest history first, within the caps", () => {
+  const current = { presets: [preset("a", "old")], history: [entry("h1", 1)] };
+  const imported = {
+    presets: [preset("a", "new"), preset("b")],
+    history: [entry("h2", 9)],
+  };
+  const merged = mergeLibraries(current, imported);
+  assert.deepEqual(
+    merged.presets.map((p) => p.name),
+    ["new", "b"],
+  );
+  assert.deepEqual(
+    merged.history.map((h) => h.id),
+    ["h2", "h1"],
+  );
+});
+
+test("a branch keeps the exchange up to the chosen point and gets its own id", () => {
+  const e: HistoryEntry = {
+    ...entry("h"),
+    messages: [
+      { role: "user", content: "1" },
+      { role: "assistant", content: "a" },
+      { role: "user", content: "2" },
+      { role: "assistant", content: "b" },
+    ],
+  };
+  const b = branchEntry(e, 3);
+  assert.equal(b.messages.length, 2);
+  assert.notEqual(b.id, e.id);
+  assert.equal(e.messages.length, 4);
+  assert.equal(branchEntry(e, 99).messages.length, 4);
+});
+
+test("renaming a preset trims, caps and never blanks the name", () => {
+  const out = updatePreset([preset("a", "x")], "a", { name: "  " });
+  assert.equal(out[0].name, "x");
+  assert.equal(
+    updatePreset([preset("a")], "a", { name: " Hi " })[0].name,
+    "Hi",
+  );
+});
+
+test("after upgrading, the synchronous copy is migrated once; the store wins when it has data", () => {
+  const empty = { presets: [], history: [] };
+  const sync = { presets: [preset("a")], history: [] };
+  assert.deepEqual(reconcile(sync, empty), { library: sync, migrate: true });
+  assert.equal(reconcile(sync, undefined).migrate, false);
+  const stored = { presets: [preset("z")], history: [] };
+  assert.deepEqual(reconcile(sync, stored), {
+    library: stored,
+    migrate: false,
+  });
+});

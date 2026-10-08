@@ -1,6 +1,16 @@
-import { useState } from "react";
-import { Button, IconButton, Input, Sheet } from "@yuhuanowo/yunui";
-import { Trash2 } from "lucide-react";
+import { useRef, useState } from "react";
+import {
+  Button,
+  IconButton,
+  Input,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+  Sheet,
+} from "@yuhuanowo/yunui";
+import { Download, GitBranch, Pencil, Trash2, Upload } from "lucide-react";
 import { SegmentedTray } from "./SegmentedTray";
 import { fixed, number } from "./ui";
 import { relative } from "./i18n/format.ts";
@@ -40,6 +50,11 @@ export function PlaygroundLibrary({
   onResume,
   onDeleteHistory,
   onClearHistory,
+  onRename,
+  onOverwrite,
+  onBranch,
+  onExport,
+  onImport,
 }: {
   open: boolean;
   onClose: () => void;
@@ -55,10 +70,20 @@ export function PlaygroundLibrary({
   onResume: (entry: HistoryEntry) => void;
   onDeleteHistory: (id: string) => void;
   onClearHistory: () => void;
+  onRename: (id: string, name: string) => void;
+  onOverwrite: (id: string) => void;
+  onBranch: (entry: HistoryEntry, keep: number) => void;
+  onExport: () => void;
+  onImport: (file: File) => void;
 }) {
   useLocale();
   const [tab, setTab] = useState<Tab>("presets");
   const [name, setName] = useState("");
+  const [editing, setEditing] = useState<string | null>(null);
+  const [editName, setEditName] = useState("");
+  const [branching, setBranching] = useState<string | null>(null);
+  const [branchKeep, setBranchKeep] = useState("");
+  const fileRef = useRef<HTMLInputElement>(null);
   const save = () => {
     const trimmed = name.trim();
     if (!trimmed) return;
@@ -122,7 +147,7 @@ export function PlaygroundLibrary({
                 <li
                   key={p.id}
                   data-testid="saved-preset"
-                  className="flex items-center gap-3 rounded-lg px-2 py-2"
+                  className="flex flex-wrap items-center gap-3 rounded-lg px-2 py-2"
                 >
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-sm">{p.name}</span>
@@ -137,12 +162,63 @@ export function PlaygroundLibrary({
                     {t("playground.library.preset.apply")}
                   </Button>
                   <IconButton
+                    icon={<Pencil size={14} />}
+                    label={t("playground.library.preset.edit", {
+                      name: p.name,
+                    })}
+                    onClick={() => {
+                      setEditing(editing === p.id ? null : p.id);
+                      setEditName(p.name);
+                    }}
+                  />
+                  <IconButton
                     icon={<Trash2 size={14} />}
                     label={t("playground.library.preset.delete", {
                       name: p.name,
                     })}
                     onClick={() => onDeletePreset(p.id)}
                   />
+                  {editing === p.id && (
+                    <form
+                      className="flex w-full basis-full flex-wrap items-center gap-2"
+                      data-testid="preset-editor"
+                      onSubmit={(e) => {
+                        e.preventDefault();
+                        if (!editName.trim()) return;
+                        onRename(p.id, editName.trim());
+                        setEditing(null);
+                      }}
+                    >
+                      <Input
+                        className="min-w-0 flex-1"
+                        aria-label={t("playground.library.preset.rename")}
+                        value={editName}
+                        maxLength={80}
+                        onChange={(e) => setEditName(e.target.value)}
+                      />
+                      <Button
+                        type="submit"
+                        size="sm"
+                        variant="ghost"
+                        disabled={
+                          !editName.trim() || editName.trim() === p.name
+                        }
+                      >
+                        {t("playground.library.preset.renameSave")}
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => {
+                          onOverwrite(p.id);
+                          setEditing(null);
+                        }}
+                      >
+                        {t("playground.library.preset.overwrite")}
+                      </Button>
+                    </form>
+                  )}
                 </li>
               ))}
             </ul>
@@ -177,7 +253,7 @@ export function PlaygroundLibrary({
                 {history.map((h) => (
                   <li
                     key={h.id}
-                    className="flex items-center gap-3 rounded-lg px-2 py-2"
+                    className="flex flex-wrap items-center gap-3 rounded-lg px-2 py-2"
                   >
                     <span className="min-w-0 flex-1">
                       <span className="block truncate text-sm">
@@ -199,12 +275,69 @@ export function PlaygroundLibrary({
                       {t("playground.library.history.resume")}
                     </Button>
                     <IconButton
+                      icon={<GitBranch size={14} />}
+                      label={t("playground.library.history.branch", {
+                        title: h.title,
+                      })}
+                      onClick={() => {
+                        setBranching(branching === h.id ? null : h.id);
+                        setBranchKeep(String(h.messages.length));
+                      }}
+                    />
+                    <IconButton
                       icon={<Trash2 size={14} />}
                       label={t("playground.library.history.delete", {
                         title: h.title,
                       })}
                       onClick={() => onDeleteHistory(h.id)}
                     />
+                    {branching === h.id && (
+                      <div
+                        className="flex w-full basis-full flex-wrap items-center gap-2"
+                        data-testid="branch-editor"
+                      >
+                        <Select
+                          value={branchKeep}
+                          onValueChange={setBranchKeep}
+                        >
+                          <SelectTrigger
+                            aria-label={t(
+                              "playground.library.history.branchAt",
+                              { n: "" },
+                            )}
+                            className="w-44"
+                          >
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {h.messages.flatMap((m, i) =>
+                              m.role === "assistant"
+                                ? [
+                                    <SelectItem key={i} value={String(i + 1)}>
+                                      {t(
+                                        "playground.library.history.branchAt",
+                                        {
+                                          n: (i + 1) / 2,
+                                        },
+                                      )}
+                                    </SelectItem>,
+                                  ]
+                                : [],
+                            )}
+                          </SelectContent>
+                        </Select>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => {
+                            onBranch(h, Number(branchKeep));
+                            setBranching(null);
+                          }}
+                        >
+                          {t("playground.library.history.branchCreate")}
+                        </Button>
+                      </div>
+                    )}
                   </li>
                 ))}
               </ul>
@@ -220,6 +353,37 @@ export function PlaygroundLibrary({
             )}
           </>
         )}
+        <div className="space-y-2" data-testid="library-transfer">
+          <div className="flex flex-wrap items-center gap-2">
+            <Button size="sm" variant="ghost" onClick={onExport}>
+              <Download size={13} />
+              {t("playground.library.transfer.export")}
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => fileRef.current?.click()}
+            >
+              <Upload size={13} />
+              {t("playground.library.transfer.import")}
+            </Button>
+            <input
+              ref={fileRef}
+              type="file"
+              accept="application/json,.json"
+              className="hidden"
+              aria-label={t("playground.library.transfer.file")}
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                e.target.value = "";
+                if (f) onImport(f);
+              }}
+            />
+          </div>
+          <p className="text-xs text-muted-foreground">
+            {t("playground.library.transfer.help")}
+          </p>
+        </div>
       </div>
     </Sheet>
   );

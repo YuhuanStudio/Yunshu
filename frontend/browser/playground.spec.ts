@@ -812,13 +812,44 @@ test("presets: built-in applies, a saved preset persists per service address and
   await library.getByLabel("預設名稱").fill("我的預設");
   await library.getByRole("button", { name: "儲存目前設定" }).click();
   await expect(library.getByTestId("saved-preset")).toContainText("我的預設");
+  // The library lives in IndexedDB (no 5 MB cap), keyed by service address; never the token.
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          new Promise<string>((resolve) => {
+            const open = indexedDB.open("yunshu-playground", 1);
+            open.onsuccess = () => {
+              const db = open.result;
+              const r = db
+                .transaction("library")
+                .objectStore("library")
+                .getAll();
+              r.onsuccess = () => {
+                db.close();
+                resolve(JSON.stringify(r.result));
+              };
+              r.onerror = () => resolve("");
+            };
+            open.onerror = () => resolve("");
+          }),
+      ),
+    )
+    .toContain("我的預設");
   const stored = await page.evaluate(() =>
-    Object.entries(localStorage).filter(([k]) =>
-      k.startsWith("yunshu.console.playground:"),
-    ),
+    new Promise<string>((resolve) => {
+      const open = indexedDB.open("yunshu-playground", 1);
+      open.onsuccess = () => {
+        const db = open.result;
+        const r = db.transaction("library").objectStore("library").getAll();
+        r.onsuccess = () => {
+          db.close();
+          resolve(JSON.stringify(r.result));
+        };
+      };
+    }),
   );
-  expect(stored).toHaveLength(1);
-  expect(stored[0][1]).not.toContain(api.token);
+  expect(stored).not.toContain(api.token);
   await page.reload();
   await page.getByRole("link", { name: "推理測試", exact: true }).click();
   await page.getByRole("button", { name: "預設與紀錄" }).click();
@@ -860,6 +891,9 @@ test("storage that throws never breaks the playground", async ({ page }) => {
     Storage.prototype.setItem = () => {
       throw new Error("quota");
     };
+    indexedDB.open = () => {
+      throw new Error("blocked");
+    };
   });
   await playground.locator("textarea").first().fill("no storage");
   await page.getByRole("button", { name: "傳送測試", exact: true }).click();
@@ -868,4 +902,55 @@ test("storage that throws never breaks the playground", async ({ page }) => {
   await expect(page.getByTestId("playground-library")).toContainText(
     "瀏覽器拒絕儲存",
   );
+});
+
+test("library: rename and overwrite a preset, branch a conversation, export and import with undo", async ({
+  page,
+}) => {
+  const api = createApiFixture();
+  await api.attach(page);
+  const playground = await openPlayground(page, api);
+  await playground.locator("textarea").first().fill("branch me");
+  await page.getByRole("button", { name: "傳送測試", exact: true }).click();
+  await expect(playground).toContainText("is four.");
+  await page.getByRole("button", { name: "預設與紀錄" }).click();
+  const library = page.getByTestId("playground-library");
+  // Preset: save, rename, overwrite.
+  await library.getByLabel("預設名稱").fill("原名");
+  await library.getByRole("button", { name: "儲存目前設定" }).click();
+  await library.getByRole("button", { name: "編輯預設 原名" }).click();
+  const editor = library.getByTestId("preset-editor");
+  await editor.getByLabel("預設名稱").fill("新名");
+  await editor.getByRole("button", { name: "儲存名稱" }).click();
+  await expect(library.getByTestId("saved-preset")).toContainText("新名");
+  await library.getByRole("button", { name: "編輯預設 新名" }).click();
+  await library
+    .getByTestId("preset-editor")
+    .getByRole("button", { name: "以目前設定覆寫" })
+    .click();
+  await expect(library.getByTestId("saved-preset")).toContainText("新名");
+  // History: branch makes a second entry.
+  await library.getByRole("tab", { name: "紀錄" }).click();
+  await expect(library.getByTestId("history-list").locator("li")).toHaveCount(1);
+  await library.getByRole("button", { name: /^從 .* 建立分支$/ }).click();
+  await library
+    .getByTestId("branch-editor")
+    .getByRole("button", { name: "建立分支", exact: true })
+    .click();
+  await expect(library.getByTestId("history-list").locator("li")).toHaveCount(2);
+  await expect(library.getByTestId("history-list")).toContainText("（分支）");
+  // Export, then import a wrong file (refused) and a good one (merged, undoable).
+  const download = page.waitForEvent("download");
+  await library.getByRole("button", { name: "匯出" }).click();
+  const file = await download;
+  const path = await file.path();
+  expect(path).toBeTruthy();
+  await library.getByLabel("匯入檔案").setInputFiles({
+    name: "bad.json",
+    mimeType: "application/json",
+    buffer: Buffer.from('{"schema":9}'),
+  });
+  await expect(page.getByText("不是推理測試的匯出檔").first()).toBeVisible();
+  await library.getByLabel("匯入檔案").setInputFiles(path!);
+  await expect(page.getByText(/已匯入 1 個預設、2 則紀錄/).first()).toBeVisible();
 });
