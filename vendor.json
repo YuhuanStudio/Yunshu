@@ -2508,6 +2508,69 @@
       "owner": "priorart/lead",
       "reviewed_date": "2026-10-08",
       "action": "EmbeddingGemma2 embedding_loader.load_embedding_model adoption/parity candidate; published quantized formats not yet qualified."
+    },
+    {
+      "url": "https://github.com/aperepel/mlx-rerank",
+      "revision": "cfe20b0b0e2505240be91dbcf6e5575b8a8d7388",
+      "license": "unreported",
+      "kind": "discovery-only",
+      "owner": "priorfix",
+      "reviewed_date": "2026-10-08",
+      "action": "Qwen parity comparator only; no source copied. Template differs from official input recipe."
+    },
+    {
+      "url": "https://github.com/jak-pan/mlx-rerank",
+      "revision": "e278e8cbe13d5ad1770d67b5b562391d0fe68eec",
+      "license": "Apache-2.0",
+      "kind": "discovery-only",
+      "owner": "priorfix",
+      "reviewed_date": "2026-10-08",
+      "action": "Rust KalM runtime; not a Qwen3 parity oracle."
+    },
+    {
+      "url": "https://github.com/mflux-community/mflux",
+      "revision": "465df30a3965b38c9c64fa853e26df140ddd5c55",
+      "license": "MIT",
+      "kind": "discovery-only",
+      "owner": "priorfix",
+      "reviewed_date": "2026-10-08",
+      "action": "Bounded Z-Image fixed-seed comparison; delegation decision pending numeric evidence."
+    },
+    {
+      "url": "https://github.com/IonDen/mlx-teacache",
+      "revision": null,
+      "license": "unverified",
+      "kind": "discovery-only",
+      "owner": "priorfix",
+      "reviewed_date": "2026-10-08",
+      "action": "Discovery only; cached approximate diffusion needs separate opt-in quality qualification."
+    },
+    {
+      "url": "https://huggingface.co/mlx-community/Qwen3-VL-Embedding-2B-4bit",
+      "revision": "c713a965783416b9467b419f2d14ca6445847455",
+      "license": "Apache-2.0",
+      "kind": "discovery-only",
+      "owner": "priorfix",
+      "reviewed_date": "2026-10-08",
+      "action": "Published load and model.process parity; GPL mlx-embeddings used as comparator/dependency, no code copied."
+    },
+    {
+      "url": "https://huggingface.co/mlx-community/Qwen3-VL-Reranker-2B-4bit",
+      "revision": "374a7dc08e7c3b553c8b2730a425e53c7a926510",
+      "license": "Apache-2.0",
+      "kind": "discovery-only",
+      "owner": "priorfix",
+      "reviewed_date": "2026-10-08",
+      "action": "Published load and model.process parity pending."
+    },
+    {
+      "url": "https://huggingface.co/mlx-community/jina-reranker-v3-4bit-mxfp4",
+      "revision": "00ce276e691f7f8041b397131c77f30a3e894d12",
+      "license": "CC-BY-NC-4.0",
+      "kind": "discovery-only",
+      "owner": "priorfix",
+      "reviewed_date": "2026-10-08",
+      "action": "JinaForRanking custom head: explicitly unsupported; must not route to Qwen yes/no. Generic quantized BERT-family classifier heads supported separately."
     }
   ]
 }

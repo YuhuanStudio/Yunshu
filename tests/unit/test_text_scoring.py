@@ -387,3 +387,59 @@ def test_encoder_head_matches_transformers_fixture(tmp_path, family):
         ref = model(input_ids=torch.tensor(ids)).logits[0].tolist()
     got = mlx_model(input_ids=mx.array(ids))[0].tolist()
     assert got == pytest.approx(ref, abs=1e-6)
+
+
+def test_quantized_classifier_keeps_float_trained_head(tmp_path):
+    import mlx.core as mx
+    import mlx.nn as nn
+    from mlx.utils import tree_flatten
+    from transformers import BertConfig, BertForSequenceClassification
+
+    from yunshu_engine.scoring_engine import load_sequence_classifier
+
+    config = BertConfig(
+        vocab_size=64,
+        hidden_size=64,
+        intermediate_size=64,
+        num_hidden_layers=1,
+        num_attention_heads=1,
+        max_position_embeddings=64,
+        num_labels=2,
+    )
+    BertForSequenceClassification(config).save_pretrained(tmp_path)
+    cfg = json.loads((tmp_path / "config.json").read_text())
+    original = load_sequence_classifier(str(tmp_path), cfg)
+    nn.quantize(
+        original,
+        group_size=64,
+        bits=4,
+        class_predicate=lambda path, module: (
+            path.startswith("bert.") and hasattr(module, "to_quantized")
+        ),
+    )
+    mx.save_safetensors(
+        str(tmp_path / "model.safetensors"), dict(tree_flatten(original.parameters()))
+    )
+    cfg["quantization"] = {"group_size": 64, "bits": 4}
+    loaded = load_sequence_classifier(str(tmp_path), cfg)
+    assert isinstance(loaded.classifier, nn.Linear)
+    assert loaded.classifier.weight.tolist() == original.classifier.weight.tolist()
+    ids = mx.array([[2, 7, 9, 3]])
+    assert loaded(input_ids=ids).tolist() == original(input_ids=ids).tolist()
+    weights = dict(tree_flatten(original.parameters()))
+    weights.pop("classifier.weight")
+    mx.save_safetensors(str(tmp_path / "model.safetensors"), weights)
+    with pytest.raises(ValueError):
+        load_sequence_classifier(str(tmp_path), cfg)
+
+
+def test_jina_ranking_head_is_not_qwen_yes_no():
+    from yunshu_engine.scoring_engine import scoring_kind
+
+    assert (
+        scoring_kind(
+            {"model_type": "qwen3", "architectures": ["JinaForRanking"]},
+            "jina-reranker-v3-4bit-mxfp4",
+        )
+        is None
+    )

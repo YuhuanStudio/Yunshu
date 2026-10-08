@@ -1078,7 +1078,11 @@ def stage_embedding(ctx: Ctx) -> StageResult:
     )
     root = Path(ctx.env.get("EMBEDDING_MODEL_ROOT", "/Volumes/P5Plus/models"))
     reasons, numbers = [], {}
-    for name in ("embeddinggemma-2-bf16", "embeddinggemma-2-4bit"):
+    for name in (
+        "embeddinggemma-2-bf16",
+        "embeddinggemma-2-4bit",
+        "embeddinggemma-2-bf16-multishard",
+    ):
         cell = Cell(
             "embedding",
             name,
@@ -1113,7 +1117,47 @@ def stage_embedding(ctx: Ctx) -> StageResult:
     return _finish(ctx, StageResult("embedding", not reasons, reasons, numbers))
 
 
+def stage_priorart(ctx: Ctx) -> StageResult:
+    reasons, numbers = [], {}
+    kinds = ctx.env.get("PRIORART_KINDS", "retrieval,omni,diffusion").split(",")
+    for kind in kinds:
+        prefix = str(ctx.cand.path / "python")
+        if kind == "diffusion":
+            prefix += ":/Volumes/P5Plus/yunshu-build/codex/priorfix/mflux-deps"
+        cell = Cell(
+            "priorart",
+            kind,
+            [
+                "env",
+                f"PYTHONPATH={prefix}",
+                "HF_HUB_OFFLINE=1",
+                ctx.py,
+                str(ctx.cand.path / "scripts/research/priorfix_runtime_parity.py"),
+                "--kind",
+                kind,
+                "--out",
+                "{out}",
+            ],
+            mem_gb=32 if kind == "diffusion" else 8,
+            timeout_min=10,
+            stall_min=5,
+            priority=-1,
+            device="m5",
+        )
+        results = ctx.exe.run_cells([cell])
+        reasons += _failed_cells(results)
+        if reasons:
+            break
+        rows = read_jsonl(results[kind].evidence)
+        numbers[kind] = rows[-1]
+        if not rows[-1].get("passed"):
+            reasons.append(f"{kind} parity failed")
+            break
+    return _finish(ctx, StageResult("priorart", not reasons, reasons, numbers))
+
+
 STAGE_FUNCS = {
+    "priorart": stage_priorart,
     "embedding": stage_embedding,
     "rerank": stage_rerank,
     "preflight": stage_preflight,

@@ -449,3 +449,10 @@ CPU Transformers float32 inference. Maximum probability errors were respectively
 activation, broadcasting and the registered embed-route checks passed. Evidence:
 `/Volumes/P5Plus/yunshu-build/verify/runs/rerank-tiny-heads-handoff-1007-08a91d280b74/verdict.json`.
 This is numerical and API evidence, with no speed or retrieval-quality claim.
+
+### Published retrieval checkpoints
+
+EmbeddingGemma 2 published bf16/4bit loading, quantized BERT-family trained heads,
+and Qwen3-VL retrieval wrapper contracts are described in
+[PRIOR_ART_FORMATS.md](../PRIOR_ART_FORMATS.md). Jina v3 `JinaForRanking` remains
+explicitly unsupported. Empty VL embeddings return `[]` without processor work.

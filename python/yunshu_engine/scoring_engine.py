@@ -65,7 +65,11 @@ def scoring_kind(config: dict, model_path: str) -> str | None:
     architectures = config.get("architectures", [])
     if any(a.endswith("ForSequenceClassification") for a in architectures):
         return "head"
-    if config.get("model_type") == "qwen3" and "reranker" in model_path.lower():
+    if (
+        config.get("model_type") == "qwen3"
+        and "reranker" in model_path.lower()
+        and (not architectures or architectures == ["Qwen3ForCausalLM"])
+    ):
         return "qwen3"
     return None
 
@@ -90,10 +94,6 @@ def load_sequence_classifier(path: str, config: dict):
     ):
         raise ValueError(
             "Only GELU / absolute-position encoder classifiers are supported"
-        )
-    if config.get("quantization"):
-        raise ValueError(
-            "Sequence classifiers require original unquantized safetensors"
         )
     labels = int(config.get("num_labels", len(config.get("id2label", {})) or 2))
 
@@ -135,6 +135,27 @@ def load_sequence_classifier(path: str, config: dict):
         for k, v in weights.items()
         if not k.endswith(("position_ids", "token_type_ids"))
     }
+    quantization = config.get("quantization") or config.get("quantization_config")
+    if quantization:
+        from mlx_vlm.utils import _quantization_for_module_path
+
+        def predicate(path, module):
+            if not hasattr(module, "to_quantized"):
+                return False
+            per_module = _quantization_for_module_path(quantization, path, model)
+            if per_module is not None:
+                return per_module
+            # Quantize only tensors packed by the converter. In particular,
+            # small trained output heads often remain floating point.
+            return f"{path}.scales" in weights
+
+        nn.quantize(
+            model,
+            group_size=quantization["group_size"],
+            bits=quantization["bits"],
+            mode=quantization.get("mode", "affine"),
+            class_predicate=predicate,
+        )
     # strict=True ensures every backbone AND classifier parameter comes from the checkpoint.
     model.load_weights(list(weights.items()), strict=True)
     model.eval()

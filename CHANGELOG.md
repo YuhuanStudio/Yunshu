@@ -30,6 +30,13 @@ Changes on main after 0.1.4; not part of a published package yet.
 
 ### Fixed
 
+- EmbeddingGemma 2 loader constructs published quantized layers through the pinned
+  MIT mlx-vlm port, preferring the installed native loader when available.
+- Quantized BERT-family sequence classifiers retain their trained head under strict
+  loading. Jina v3 custom ranking heads are rejected rather than scored as Qwen yes/no.
+- Qwen3-VL embedding handles empty inputs and keeps caller dictionaries unchanged.
+  Format support and release shard impact are documented in `docs/PRIOR_ART_FORMATS.md`.
+
 ### Security
 
 [Full changelog: v0.1.4…main](https://github.com/YuhuanStudio/Yunshu/compare/v0.1.4...main)

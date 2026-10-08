@@ -14,14 +14,18 @@ STAGES = (
     "conc",
     "rerank",
     "embedding",
+    "priorart",
 )
 
 # `full` and `tiny` climb the original seven; the long stages (needle retrieval, concurrent
 # sub-agents) need the 32K-128K prompt files and belong to the `long` suite.
-LADDER = tuple(s for s in STAGES if s not in ("longqa", "conc", "rerank", "embedding"))
+LADDER = tuple(
+    s for s in STAGES if s not in ("longqa", "conc", "rerank", "embedding", "priorart")
+)
 
 # Every key is a default; the CLI can override ctx / reps / mmlu_n / mem_sizes.
 SUITES = {
+    "priorart": {"stages": ["preflight", "priorart"]},
     "embedding": {"stages": ["preflight", "embedding"]},
     "rerank": {"stages": ["preflight", "rerank"]},
     # decode-path change (kernels, spec decode, sampler): identity incl. spec on == off, speed

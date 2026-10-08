@@ -45,7 +45,7 @@ def _normalize_item(item: Any) -> dict:
     if isinstance(item, str):
         return {"text": item}
     if isinstance(item, dict):
-        return item
+        return dict(item)
     raise ValueError(
         f"embedding input must be a str or a dict with text/image keys, got {type(item).__name__}"
     )
@@ -121,6 +121,8 @@ class VLEmbeddingEngine:
         """
         if not self._loaded:
             raise RuntimeError("Engine not started")
+        if not inputs:
+            return []
         items = [_normalize_item(x) for x in inputs]
         if instruction:
             for it in items:
