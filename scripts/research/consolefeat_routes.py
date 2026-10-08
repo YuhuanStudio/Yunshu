@@ -64,8 +64,19 @@ def stream_latency(client, model, request_id):
     response.raise_for_status()
     if "data: [DONE]" not in response.text:
         raise AssertionError("stream did not complete")
-    rows = client.get("/v1/yunshu/requests/recent").json()["data"]
-    return next(row for row in rows if row["request_id"] == request_id)
+    # The server records a streamed request when its generator finishes, which can be
+    # a moment after the client has read [DONE]: poll briefly instead of racing it.
+    deadline = time.monotonic() + 10
+    while True:
+        rows = client.get("/v1/yunshu/requests/recent").json()["data"]
+        found = next((row for row in rows if row["request_id"] == request_id), None)
+        if found is not None:
+            return found
+        if time.monotonic() > deadline:
+            raise AssertionError(
+                f"request {request_id} not in /v1/yunshu/requests/recent after 10 s"
+            )
+        time.sleep(0.1)
 
 
 def retry_server(factory):
