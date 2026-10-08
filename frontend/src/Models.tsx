@@ -523,7 +523,7 @@ export function Models({
               className="flex flex-col items-stretch gap-3 px-5 py-4 sm:flex-row sm:flex-wrap sm:items-center sm:gap-x-6"
               data-testid="memory-summary"
             >
-              <div className="min-w-0 text-left">
+              <div className="min-w-0 text-left sm:min-w-32">
                 <p className="text-xs text-muted-foreground">
                   {t("models.list.memoryUsage")}
                 </p>
@@ -542,7 +542,7 @@ export function Models({
                 )}
                 label={t("models.list.memoryUsage")}
               />
-              <p className="text-left text-xs tabular-nums text-muted-foreground sm:text-right">
+              <p className="text-left text-xs tabular-nums text-muted-foreground sm:w-44 sm:shrink-0 sm:text-right">
                 {t("models.list.memorySummary", {
                   loaded: loadedRows.filter((m) => m.loaded && !m.loading)
                     .length,

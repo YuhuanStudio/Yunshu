@@ -310,7 +310,7 @@ test.describe("requests: find the slow one", () => {
 });
 
 test.describe("requests: phone profile (402x874)", () => {
-  test("no overflow, full-width search, tray and sort on one row, actions reachable", async ({
+  test("no overflow, full-width search, tray row then an even select grid, actions reachable", async ({
     page,
   }) => {
     await page.setViewportSize({ width: 402, height: 874 });
@@ -323,7 +323,9 @@ test.describe("requests: phone profile (402x874)", () => {
     const sort = (await requests
       .getByRole("button", { name: /^排序：/ })
       .boundingBox())!;
-    expect(Math.abs(tray.y - sort.y)).toBeLessThan(12);
+    // An even grid: the scope tray owns a row, the sort select spans the next one.
+    expect(sort.y).toBeGreaterThan(tray.y + 20);
+    expect(sort.width).toBeGreaterThan(402 - 2 * 24);
     // Stat cards keep their content: no clipped sub-line, short cards.
     const card = requests.getByTestId("request-stats").locator("> *").first();
     expect((await card.boundingBox())!.height).toBeLessThan(180);

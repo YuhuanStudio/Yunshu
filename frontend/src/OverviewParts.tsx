@@ -194,12 +194,12 @@ export function SpeedPair({ status }: { status: EngineStatus }) {
         }
         subtext={
           <>
-            <span className="block" data-testid={testId + "-label"}>
+            <span className="block min-h-9" data-testid={testId + "-label"}>
               <span className="text-foreground">{headline.label}</span>
               {headline.note ? ` · ${headline.note}` : ""}
             </span>
             <span className="block">
-              {windowText} {windowMean == null ? "—" : fixed(windowMean)} tok/s
+              {windowText} {windowMean == null ? "—" : fixed(windowMean)}
             </span>
           </>
         }

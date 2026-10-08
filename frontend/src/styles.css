@@ -183,4 +183,6 @@ h1[tabindex="-1"]:focus-visible {
   overflow: visible;
   text-overflow: clip;
   white-space: normal;
+  /* Two lines reserved, so a sub-line that wraps for one reading never moves the row below. */
+  min-height: 2.6em;
 }

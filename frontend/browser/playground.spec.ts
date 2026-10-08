@@ -355,9 +355,17 @@ async function openPlayground(
 ) {
   await installCompareSse(page);
   await page.goto("/console/");
+  // Let the first (unauthorised) poll settle before typing the token; a late 401 re-rendering
+  // the shell mid-fill is a race the test creates.
+  await expect(page.getByTestId("live-phase")).toContainText("未授權");
   await page.getByRole("button", { name: /^開啟設定/ }).click();
   await page.getByLabel("存取權杖").fill(api.token);
   await page.getByRole("button", { name: "儲存並連線", exact: true }).click();
+  // Wait for the engine to accept the token before leaving: navigating while the first
+  // authorised poll is in flight is a race the test, not the user, creates.
+  await expect(page.getByTestId("live-phase")).not.toContainText(
+    /未授權|離線|連線中/,
+  );
   await page.getByRole("link", { name: "推理測試", exact: true }).click();
   return page.getByTestId("playground");
 }

@@ -767,7 +767,7 @@ export default function App() {
                       initialModel={testModel}
                     />
                   ) : (
-                    <div className="relative min-h-0 flex-1 overflow-y-auto p-4 pb-6 lg:p-6">
+                    <div className="relative min-h-0 flex-1 overflow-y-scroll p-4 pb-6 [scrollbar-gutter:stable] lg:p-6">
                       <div className="mx-auto w-full max-w-7xl">
                         {page === "diagnostics" && (
                           <Diagnostics

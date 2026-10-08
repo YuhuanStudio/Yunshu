@@ -27,11 +27,11 @@ export function LivePill({
       <span className="inline-block h-4 min-w-[2.75rem] truncate leading-4 text-foreground">
         {pill.phase}
       </span>
-      {pill.detail && (
-        <span className="hidden h-4 w-[6.75rem] truncate leading-4 tabular-nums sm:inline-block">
-          {pill.detail}
-        </span>
-      )}
+      <span
+        className={`hidden h-4 truncate leading-4 tabular-nums sm:inline-block ${pill.detail ? "w-[6.75rem]" : "w-0"}`}
+      >
+        {pill.detail}
+      </span>
     </span>
   );
 }

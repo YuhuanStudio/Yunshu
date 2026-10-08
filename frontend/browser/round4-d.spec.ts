@@ -125,9 +125,10 @@ test("settings lists effective config with changed rows and masked secrets", asy
   await install(page);
   await page.goto("/console/#/settings", { waitUntil: "domcontentloaded" });
   const view = page.getByTestId("config-view");
-  await expect(view.getByText("YUNSHU_PORT")).toBeVisible();
+  await expect(view.getByText("YUNSHU_PORT", { exact: true })).toBeVisible();
   await expect(view.locator('tr[data-changed="true"]')).toHaveCount(2);
-  await expect(view.getByText("***").first()).toBeVisible();
+  // A secret is never rendered, not even masked: the field only says it is set.
+  await expect(view.getByPlaceholder(/已設定/).first()).toBeVisible();
   await view.getByLabel("搜尋設定").fill("log");
   await expect(view.getByText("YUNSHU_PORT")).toHaveCount(0);
   await expect(view.getByText("YUNSHU_LOG_LEVEL")).toBeVisible();

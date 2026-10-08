@@ -105,6 +105,13 @@ function snapshot(page: Page, selector: string) {
       for (const el of [root, ...root.querySelectorAll("*")]) {
         // Chart and bar content is data: it may move. Its frame may not.
         if (el.closest("svg")) continue;
+        // The top-bar pill is sized to its content (idle shows no number slot), so it and the
+        // group around it change width when the phase changes; the other top-bar boxes stay put.
+        if (
+          el.closest("[data-testid=live-phase]") ||
+          el.querySelector("[data-testid=live-phase]")
+        )
+          continue;
         // A model icon loads lazily into a slot of fixed size: the slot is a box, its content is not.
         if (
           el.closest("[data-icon-slot]") &&
@@ -145,6 +152,7 @@ for (const route of ["overview", "requests", "models", "diagnostics"]) {
       await page.waitForTimeout(150);
       for (const [name, selector] of Object.entries(ZONES))
         frames[name].push(await snapshot(page, selector));
+      if (process.env.LS_DEBUG) console.log(route, k, JSON.stringify(await page.evaluate(() => [...document.querySelectorAll("*")].filter((e) => e.scrollHeight > e.clientHeight + 2 && /(auto|scroll)/.test(getComputedStyle(e).overflowY)).map((e) => [e.tagName, String(e.className).slice(0, 30), e.clientWidth, e.offsetWidth, e.scrollHeight, e.clientHeight]))));
       (readings.pills ??= []).push(
         (await page.getByLabel("引擎狀態").innerText()).replace(/\s+/g, " "),
       );
@@ -153,8 +161,10 @@ for (const route of ["overview", "requests", "models", "diagnostics"]) {
     expect(new Set(readings.pills).size).toBeGreaterThan(3);
     for (const [name, list] of Object.entries(frames)) {
       expect(list[0].length, `${name} has boxes`).toBeGreaterThan(0);
+      if (process.env.LS_DEBUG) console.log(route, name, list.map((f) => f.length).join(","), JSON.stringify(list[0].filter((b) => /text-left|progress/.test(b[0]))), JSON.stringify(list.at(-1)!.filter((b) => /text-left|progress/.test(b[0]))));
       for (const f of list.slice(1)) {
-        const names = (frame: typeof f) => frame.map((box) => box[0]);
+        const names = (frame: typeof f) =>
+          frame.map((box) => `${box[0]} ${box[3]}x${box[4]}`);
         const extra = names(f).filter(
           (n, i, a) =>
             a.indexOf(n) === i &&
@@ -174,7 +184,10 @@ for (const route of ["overview", "requests", "models", "diagnostics"]) {
           ),
         );
         expect(
-          moved.map((box) => box[0]),
+          moved.map(
+            (box) =>
+              `${box[0]} ${box.slice(1)} (was ${list[0][f.indexOf(box)].slice(1)})`,
+          ),
           `${name} keeps every box where it was`,
         ).toEqual([]);
       }

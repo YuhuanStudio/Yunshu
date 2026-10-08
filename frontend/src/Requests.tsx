@@ -662,8 +662,9 @@ export function Requests({
               subtext={
                 <span className="block min-w-0 space-y-1 sm:space-y-2">
                   <span className="block whitespace-normal">{tile.hint}</span>
-                  {spark && (
-                    <span className="hidden h-7 sm:block">
+                  {/* The trend slot keeps its height before and after samples arrive; only the line waits for data. */}
+                  <span className="hidden h-7 sm:block">
+                    {spark && (
                       <Sparkline
                         data={tile.data.slice(-60)}
                         tone={tile.tone}
@@ -672,8 +673,8 @@ export function Requests({
                         className="h-7 w-full"
                         label={tile.name}
                       />
-                    </span>
-                  )}
+                    )}
+                  </span>
                 </span>
               }
             />
@@ -694,7 +695,7 @@ export function Requests({
         <div className="grid w-full grid-cols-2 items-center gap-2 sm:flex sm:w-auto sm:flex-wrap">
           <SegmentedTray
             className="col-span-2 sm:col-auto"
-aria-label={t("requests.list.scope")}
+            aria-label={t("requests.list.scope")}
             value={filter}
             onChange={(v) => {
               setFilter(v);

@@ -203,7 +203,7 @@ test.describe("analytics dashboard contracts", () => {
     fixture.releaseFirst();
     await collectSixSamples(page, fixture);
 
-    await throughput.getByRole("button", { name: "比較", exact: true }).click();
+    await throughput.getByRole("tab", { name: "比較", exact: true }).click();
     const seriesGroup = throughput.getByRole("group", {
       name: "吞吐速度時序圖，單位 tok/s 顯示或隱藏序列",
     });
@@ -240,7 +240,7 @@ test.describe("analytics dashboard contracts", () => {
       memory.locator('[data-yunui="time-series-chart"]'),
     ).toHaveAttribute("data-active-x", selectedX!);
 
-    await overview.getByRole("button", { name: "5 分鐘", exact: true }).click();
+    await overview.getByRole("tab", { name: "5 分鐘", exact: true }).click();
     const downloadPromise = page.waitForEvent("download");
     await overview
       .getByRole("button", { name: "匯出觀測", exact: true })

@@ -376,7 +376,7 @@ test.describe("requests page finished-request ring", () => {
     await expect(breakdown).toContainText("40 ms");
     await expect(breakdown).toContainText("300 ms");
     await expect(breakdown).toContainText("2 s");
-    await expect(breakdown).toContainText("2.36 s");
+    await expect(breakdown).toContainText("2.4 s");
     await expect(breakdown).toContainText("命中 token");
     await expect(breakdown).toContainText("80%");
     const timeline = panel.getByLabel(

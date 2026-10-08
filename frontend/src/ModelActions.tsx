@@ -163,13 +163,14 @@ export function ModelActions({
           perform={perform}
         />
       </div>
-      {fit && fit.verdict !== "unknown" && (
+      {/* The hint line keeps its slot whether or not there is a verdict, so polled free memory never moves the row. */}
+      {fit && (
         <span
-          data-testid="fit-hint"
-          data-verdict={fit.verdict}
-          className={`basis-full text-xs ${fit.verdict === "no" ? "text-error" : "text-muted-foreground"}`}
+          data-testid={fit.verdict !== "unknown" ? "fit-hint" : undefined}
+          data-verdict={fit.verdict !== "unknown" ? fit.verdict : undefined}
+          className={`min-h-4 basis-full text-xs ${fit.verdict === "no" ? "text-error" : "text-muted-foreground"}`}
         >
-          {fit.text}
+          {fit.verdict !== "unknown" ? fit.text : ""}
         </span>
       )}
       <Dialog open={!!review} onOpenChange={(o) => !o && setReview(null)}>

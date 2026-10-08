@@ -64,7 +64,7 @@ export function SeriesChart({
       return typeof v === "number" && Number.isFinite(v) && v !== 0;
     }),
   );
-  if (!hasValues)
+  if (rest.data.length > 0 && !hasValues)
     return (
       <div
         role="status"

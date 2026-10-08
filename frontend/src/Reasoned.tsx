@@ -17,7 +17,8 @@ export function Reasoned({
   reason?: string | null;
   children: ReactNode;
 }) {
-  if (!reason) return <>{children}</>;
+  // Same wrapper box with or without a reason, so a reason appearing or going never changes the layout.
+  if (!reason) return <span className="inline-flex">{children}</span>;
   return (
     <TooltipProvider>
       <Tooltip>

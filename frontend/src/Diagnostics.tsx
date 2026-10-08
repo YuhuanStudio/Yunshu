@@ -410,7 +410,7 @@ export function Diagnostics({
         title={t("diagnostics.page.title")}
         description={t("diagnostics.page.description")}
         actions={
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             <Button
               size="sm"
               variant="secondary"
@@ -522,11 +522,11 @@ export function Diagnostics({
         data-testid="health-checks"
       >
         <div
-          className="mb-3 flex flex-wrap items-center justify-between gap-x-4 gap-y-1 border-b border-border pb-3"
+          className="mb-3 flex flex-wrap items-center justify-between gap-x-4 gap-y-1 pb-1"
           data-testid="health-verdict"
           data-level={verdict.level}
         >
-          <div className="min-w-0">
+          <div className="min-w-0 flex-1">
             <StatusIndicator
               status={
                 verdict.level === "ok"

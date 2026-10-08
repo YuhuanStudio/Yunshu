@@ -1072,7 +1072,7 @@ packages:
         optional: true
 
   '@yuhuanowo/yunui@file:vendor/yuhuanowo-yunui-0.2.18-global-ab.tgz':
-    resolution: {integrity: sha512-nA1mAqVKxBEmpMgXMDxK0+zIz4y3s47D8gNjN2DGw8kPUiu+D2QjFlHWUHvhEQSqiMApynHpUr85GTf2303x+g==, tarball: file:vendor/yuhuanowo-yunui-0.2.18-global-ab.tgz}
+    resolution: {integrity: sha512-CfJSrXFPe1KP1nf3zOU4Bm2s3XE87w8k/HGEIWTAGZnLy3fnSxNADm/4m95nlNlhFp+9mtEmhSzjZx8rJFUOTw==, tarball: file:vendor/yuhuanowo-yunui-0.2.18-global-ab.tgz}
     version: 0.2.18
     hasBin: true
     peerDependencies:

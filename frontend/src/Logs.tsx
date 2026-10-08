@@ -96,16 +96,21 @@ export default function Logs({ connection }: { connection: Connection }) {
     return () => clearTimeout(id);
   }, [text]);
 
+  // The latest list lives in a ref too, so the unseen counter is bumped once per batch:
+  // a side effect inside a state updater would run twice under StrictMode.
+  const recordsRef = useRef<LogRecord[]>([]);
+  recordsRef.current = records;
   const append = useCallback((incoming: LogRecord[]) => {
     if (!incoming.length) return;
-    setRecords((prev) => {
-      const seen = new Set(prev.slice(-incoming.length - 50).map((r) => r.id));
-      const fresh = incoming.filter((r) => !seen.has(r.id));
-      if (!fresh.length) return prev;
-      if (!followRef.current) setUnseen((n) => n + fresh.length);
-      const next = prev.concat(fresh);
-      return next.length > CLIENT_CAP ? next.slice(-CLIENT_CAP) : next;
-    });
+    const prev = recordsRef.current;
+    const seen = new Set(prev.slice(-incoming.length - 50).map((r) => r.id));
+    const fresh = incoming.filter((r) => !seen.has(r.id));
+    if (!fresh.length) return;
+    if (!followRef.current) setUnseen((n) => n + fresh.length);
+    const next = prev.concat(fresh);
+    recordsRef.current =
+      next.length > CLIENT_CAP ? next.slice(-CLIENT_CAP) : next;
+    setRecords(recordsRef.current);
   }, []);
 
   const sinceFor = useCallback(

@@ -27,7 +27,7 @@ const overview: Shape<typeof zh> = {
   "activity.rowActive": "Active requests",
   "speed.live": "Live total",
   "speed.last": "Latest request",
-  "speed.window": "Mean, last {s}s",
+  "speed.window": "{s}s mean",
   "lane.prefill": "Prefill {pct}%",
   "lane.prefixHit": "Prefix hit {cached} / {prompt} tokens",
   "page.title": "Engine overview",
