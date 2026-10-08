@@ -277,16 +277,16 @@ def test_probe_server_env_needs_no_auth_header(monkeypatch, tmp_path):
 
     seen = {}
 
-    class StopError(Exception):
+    class Stop(Exception):
         pass
 
     def fake_srv(engine, env, *args):
         seen.update(env)
-        raise StopError
+        raise Stop
 
     monkeypatch.setitem(sys.modules, "tfbench", types.SimpleNamespace(Srv=fake_srv))
     module = probe()
-    with pytest.raises(StopError):
+    with pytest.raises(Stop):
         module.main(["--out", str(tmp_path / "r.json"), "--model", "fake"])
     assert "YUNSHU_AUTH_TOKEN" not in seen
     assert seen["YUNSHU_AUTH_DISABLED"] == "1"
