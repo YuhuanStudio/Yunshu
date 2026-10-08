@@ -1247,7 +1247,7 @@ def test_client_compat_pilot_is_pinned_and_stops_before_second_model(
 def test_ttft_profile_32k_cells_use_the_short_lane_and_128k_does_not(tmp_path):
     from types import SimpleNamespace
 
-    class Stop(Exception):
+    class StopError(Exception):
         pass
 
     cells = []
@@ -1257,7 +1257,7 @@ def test_ttft_profile_32k_cells_use_the_short_lane_and_128k_does_not(tmp_path):
 
         def run_cells(self, submitted):
             cells.extend(submitted)
-            raise Stop
+            raise StopError
 
     for size, limit_ok in ((32768, True), (131072, False)):
         cells.clear()
@@ -1274,6 +1274,6 @@ def test_ttft_profile_32k_cells_use_the_short_lane_and_128k_does_not(tmp_path):
             suite={"ctx": [size], "kinds": ["code"]},
             mem_gb=60,
         )
-        with pytest.raises(Stop):
+        with pytest.raises(StopError):
             stages.stage_ttft_profile(ctx)
         assert (max(c.timeout_min for c in cells) <= 10) is limit_ok
