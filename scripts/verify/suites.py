@@ -5,6 +5,8 @@ from __future__ import annotations
 STAGES = (
     "preflight",
     "console",
+    "telemetry-tiny",
+    "telemetry",
     "smoke",
     "identity",
     "apc",
@@ -19,12 +21,34 @@ STAGES = (
 
 # `full` and `tiny` climb the original seven; the long stages (needle retrieval, concurrent
 # sub-agents) need the 32K-128K prompt files and belong to the `long` suite.
-LADDER = tuple(s for s in STAGES if s not in ("longqa", "conc", "rerank", "console", "evals"))
+LADDER = tuple(
+    s
+    for s in STAGES
+    if s not in ("longqa", "conc", "rerank", "console", "evals", "telemetry", "telemetry-tiny")
+)
 
 # Every key is a default; the CLI can override ctx / reps / mmlu_n / mem_sizes.
 SUITES = {
     "evals": {"stages": ["preflight", "evals"]},
     "console": {"stages": ["console"]},
+    "telemetry": {"stages": ["telemetry"]},
+    "telemetry-tiny": {"stages": ["telemetry-tiny"]},
+    "telemetry-overhead": {
+        "stages": [
+            "preflight",
+            "telemetry-tiny",
+            "telemetry",
+            "smoke",
+            "identity",
+            "apc",
+            "speed",
+        ],
+        "ctx": [1024, 32768],
+        "kinds": ["prose"],
+        "reps": 3,
+        "split_cells": True,
+        "speed_tol_pct": 0.0,
+    },
     "rerank": {"stages": ["preflight", "rerank"]},
     # decode-path change (kernels, spec decode, sampler): identity incl. spec on == off, speed
     "decode": {

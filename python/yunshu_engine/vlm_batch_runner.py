@@ -86,6 +86,7 @@ class RunStats:
     # Timing / progress (time.perf_counter() values; 0.0 = not reached yet). The
     # gateway reads them live for prefill-progress events and the per-response
     # ``x_yunshu`` stats.
+    energy: dict | None = None  # populated off the MLX thread by gateway telemetry
     latency_marks: dict[str, float] = field(default_factory=dict)
     t_prefill_end: float = 0.0
     t_submit: float = 0.0  # handed to the runner

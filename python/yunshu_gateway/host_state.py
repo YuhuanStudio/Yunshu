@@ -71,8 +71,12 @@ def snapshot() -> dict:
     global _CACHED, _EXPIRES
     with _LOCK:
         if _CACHED is not None and time.monotonic() < _EXPIRES:
-            return dict(_CACHED)
-        out = {"object": "yunshu.host", "sampled_at": time.time(), "cache_ttl_s": 15}
+            return _with_telemetry(_CACHED)
+        out: dict = {
+            "object": "yunshu.host",
+            "sampled_at": time.time(),
+            "cache_ttl_s": 15,
+        }
         for name, args, parser in (
             ("thermal", ["pmset", "-g", "therm"], parse_thermal),
             ("power", ["pmset", "-g", "batt"], parse_power),
@@ -109,4 +113,10 @@ def snapshot() -> dict:
         except (OSError, ValueError, subprocess.SubprocessError) as exc:
             out["memory_pressure"] = {"state": "unknown", "reason": str(exc)}
         _CACHED, _EXPIRES = out, time.monotonic() + 15
-        return dict(out)
+        return _with_telemetry(out)
+
+
+def _with_telemetry(host: dict) -> dict:
+    from yunshu_engine.telemetry.sampler import snapshot as telemetry_snapshot
+
+    return {**host, "telemetry": telemetry_snapshot()}

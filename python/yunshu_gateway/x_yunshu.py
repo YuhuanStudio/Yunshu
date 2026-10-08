@@ -496,6 +496,17 @@ def build_stats(info: RequestInfo, usage: dict | None = None) -> dict:
             "predicted_per_second": decode_tps,
         },
     }
+    from yunshu_engine.telemetry.sampler import get as get_telemetry
+
+    telemetry = get_telemetry()
+    if telemetry is not None and st is not None:
+        st.energy = telemetry.receipt(st)
+        out["energy"] = st.energy
+    else:
+        out["energy"] = {
+            "state": "unknown",
+            "reason": "telemetry disabled or engine timing unavailable",
+        }
     if info.cancel_requested or getattr(info.gen, "cancelled", False):
         out["cancelled"] = True
     if info.context_policy:
@@ -550,6 +561,11 @@ def queue_headers(info: RequestInfo) -> list[tuple[bytes, bytes]]:
 
 
 def record_done(info: RequestInfo, stats: dict) -> None:
+    from yunshu_engine.telemetry.sampler import get as get_telemetry
+
+    telemetry = get_telemetry()
+    if telemetry is not None:
+        telemetry.record(stats.get("energy") or {})
     registry.record_done(
         {
             "t": time.time(),
@@ -561,6 +577,7 @@ def record_done(info: RequestInfo, stats: dict) -> None:
             "decode_tps": stats.get("decode_tps"),
             "ttft_ms": stats.get("ttft_ms"),
             "latency": stats.get("latency"),
+            "energy": stats.get("energy"),
             "status": info.status,
             "stream": info.stream,
             "path": info.path,

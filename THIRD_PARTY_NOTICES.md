@@ -98,3 +98,41 @@ The build ships YunUI's license, upstream notices and retained Beautiful UI MIT
 text under `console_static/licenses/yunui/`; Vite generates the bundled dependency
 license catalogue at `console_static/licenses/bundled-dependencies.md`. The local
 Geist and JetBrains Mono font assets carry their OFL texts under `console_static/fonts/`.
+
+## mlx2 telemetry
+
+`python/yunshu_engine/telemetry/apple.py` is derived from pierre427/mlx2
+`src/mlx2/apple_telemetry.py`, revision `92ada04cc7a59c3263e214b0a1127924fedd52db`,
+under Apache-2.0. Upstream NOTICE: “mlx2 is licensed under the Apache License, Version 2.0 (see LICENSE).”
+The unrelated third-party adaptations listed in upstream NOTICE are not used by this telemetry module.
+Source: https://github.com/pierre427/mlx2. Yunshu changes ownership cleanup and reporting integration.
+
+## macmon Apple telemetry compatibility
+
+`telemetry/clpc.py` derives the macOS 27 driver/counter catalog and scalar IOReport
+descriptor format from vladkens/macmon `src/clpc.rs` / `src/sources.rs`, revision
+`7df49f55d9a1b9072e31fc8ba991abda84593563`. `telemetry/apple.py` uses channel-family
+and MTR sensor naming knowledge from `src/metrics.rs`. Source: https://github.com/vladkens/macmon.
+Native lifetime handling is rewritten in Python; unknown OS/driver catalogs are rejected.
+
+MIT License
+
+Copyright (c) 2024 vladkens
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

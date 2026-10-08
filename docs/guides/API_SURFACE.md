@@ -488,3 +488,11 @@ Real-server coverage is registered in `scripts/research/route_checks.py`;
 `yv ab --base BASE_SHA --cand CAND_SHA --suite console --model PATH --label
 consolefeat-TOPIC --priority -1` runs the small-model cancellation, registration,
 host and SSE-latency probe on the pinned candidate.
+
+### Host power and request energy
+
+`GET /v1/yunshu/host` preserves consolefeat host fields and adds cached `telemetry`
+(CPU/GPU/ANE/DRAM/package watts, active GPU MHz/ratio, die temperatures, explicit
+unknown reasons), under the same console admin permission. `x_yunshu.energy` and
+`GET /v1/yunshu/requests/recent` expose GPU+DRAM phase-window estimates. See
+[TELEMETRY.md](TELEMETRY.md) for the exact schema, cache ages, and concurrency limits.

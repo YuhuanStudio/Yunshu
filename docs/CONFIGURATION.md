@@ -249,6 +249,8 @@ internal ones, `--json` prints JSON, `--config FILE` includes a config file.
 |---|---|---|---|
 | `YUNSHU_DEBUG_ROUTES` | bool | off | Mount the /debug/* diagnostic routes (engine, system, kv-cache, spec-decode, ...). They need the auth token or YUNSHU_AUTH_DISABLED. /metrics is always mounted. |
 | `YUNSHU_LOG_LEVEL` | `DEBUG` \| `INFO` \| `WARNING` \| `ERROR` | INFO | Log level for Yunshu's loggers (third-party loggers stay at WARNING). |
+| `YUNSHU_TELEMETRY` | `on` \| `off` | on | Unprivileged Apple power/GPU/temperature sampler (on/off); 1 Hz by default, restart required. |
+| `YUNSHU_TELEMETRY_INTERVAL_S` | float | 1.0 | Host telemetry sampling interval in seconds (restart required). |
 | `YUNSHU_AUDIT_LOG_FILE` | path | unset | Also write the audit log to this file. |
 | `YUNSHU_LOG_MAX_MB` | float | 50.0 | Service log (launchd): rotate the log file at this size in MiB; 0 turns size rotation off. |
 | `YUNSHU_LOG_ROTATE_HOURS` | float | 24.0 | Service log: also rotate when this many hours passed since the last rotation; 0 turns time rotation off. |

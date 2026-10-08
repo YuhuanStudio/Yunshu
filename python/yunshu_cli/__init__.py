@@ -96,12 +96,14 @@ from .serve import serve_app
 from .service import service_app
 from .status import status_app
 from .statusline import statusline_app
+from .top import top
 
 _START = "Get started"
 _SERVER = "Server and models"
 _TOOLS = "Evaluate and diagnose"
 _INFER = "Inference (calls a running server)"
 
+app.command("top", rich_help_panel=_SERVER)(top)
 app.command("doctor", rich_help_panel=_START)(doctor)
 app.command("pull", rich_help_panel=_START)(pull)
 app.add_typer(serve_app, name="serve", rich_help_panel=_START)

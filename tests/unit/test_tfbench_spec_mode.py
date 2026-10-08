@@ -231,3 +231,49 @@ def test_kill_drops_the_servers_prefix_cache_keeps_logs(tmp_path):
     srv.kill()
     assert not (srv.home / ".yunshu" / "cache").exists()
     assert (srv.home / "server.log").read_text() == "log"
+
+
+def test_free_port_waits_for_paused_job_port(monkeypatch):
+    now = [0.0]
+    attempts = []
+
+    class Socket:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def bind(self, addr):
+            attempts.append(addr)
+            if now[0] == 0:
+                raise OSError("busy")
+
+    monkeypatch.setattr(tfbench.socket, "socket", Socket)
+    monkeypatch.setenv("TFB_PORT_LAST", "18991")
+
+    def sleep(seconds):
+        now[0] += seconds
+
+    assert tfbench.free_port(wait_s=10, sleep=sleep, clock=lambda: now[0]) == 18990
+    assert len(attempts) == 3 and now[0] == 5
+
+
+def test_free_port_timeout_and_range(monkeypatch):
+    class Socket:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def bind(self, addr):
+            raise OSError("busy")
+
+    monkeypatch.setattr(tfbench.socket, "socket", Socket)
+    monkeypatch.setenv("TFB_PORT_LAST", "18990")
+    with pytest.raises(RuntimeError, match="bounded wait"):
+        tfbench.free_port(wait_s=0)
+    monkeypatch.setenv("TFB_PORT_LAST", "19000")
+    with pytest.raises(ValueError, match="18990-18999"):
+        tfbench.free_port(wait_s=0)

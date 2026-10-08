@@ -55,15 +55,25 @@ WORK = Path("/Volumes/P5Plus/yunshu-build/tfnew")
 OUT = Path(os.environ.get("TFB_OUT", str(WORK)))
 
 
-def free_port():
-    for p in range(18990, int(os.environ.get("TFB_PORT_LAST", "18999")) + 1):
-        with socket.socket() as s:
-            try:
-                s.bind(("127.0.0.1", p))
-            except OSError:
-                continue
-        return p
-    raise RuntimeError("no port")
+def free_port(wait_s=600.0, sleep=time.sleep, clock=time.monotonic):
+    """Paused jobs retain ports; bounded waiting avoids failing a queued GPU job."""
+    deadline = clock() + wait_s
+    last = int(os.environ.get("TFB_PORT_LAST", "18999"))
+    if not 18990 <= last <= 18999:
+        raise ValueError("TFB_PORT_LAST must be in 18990-18999")
+    while True:
+        for p in range(18990, last + 1):
+            with socket.socket() as s:
+                try:
+                    s.bind(("127.0.0.1", p))
+                except OSError:
+                    continue
+            return p
+        left = deadline - clock()
+        if left <= 0:
+            raise RuntimeError("no port in 18990-18999 after bounded wait")
+        print(f"tfbench: port pool busy, waiting ({left:.0f}s remaining)", flush=True)
+        sleep(min(5.0, left))
 
 
 def spec_request(engine, extra_env):
@@ -149,7 +159,14 @@ class Srv:
                 self.kill()
                 raise RuntimeError(f"server startup failed; see {self.log}")
             try:
-                with urllib.request.urlopen(self.url + "/v1/models", timeout=3) as r:
+                request = urllib.request.Request(
+                    self.url + "/v1/models",
+                    headers={
+                        "Authorization": "Bearer "
+                        + self.extra_env.get("YUNSHU_AUTH_TOKEN", "k")
+                    },
+                )
+                with urllib.request.urlopen(request, timeout=3) as r:
                     self.model = json.load(r)["data"][0]["id"]
                     self.ready_s = time.time() - t0
                     break
@@ -259,6 +276,13 @@ def send(url, body, timeout=600):
         ).encode()
     ).hexdigest()[:16]
     return dict(
+        energy=(xy or {}).get("energy"),
+        joules_per_token=((xy or {}).get("energy") or {})
+        .get("decode", {})
+        .get("joules_per_token"),
+        gpu_watts_mean=((xy or {}).get("energy") or {})
+        .get("decode", {})
+        .get("gpu_watts_mean"),
         ttft_s=round((tf or t1) - t0, 3),
         total_s=round(t1 - t0, 3),
         ct=ct,
@@ -278,6 +302,7 @@ def send(url, body, timeout=600):
                 "prefill_tps",
                 "ttft_ms",
                 "decode_ms",
+                "energy",
             )
         }
         if xy
