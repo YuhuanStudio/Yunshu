@@ -135,7 +135,6 @@ def test_documented_endpoints_exist(path, routes):
     exceptions = {
         "API_EXTENSIONS.md": {"/api/v0": "LM Studio", "/api/v0/*": "LM Studio"},
         "API_SURFACE.md": {
-            "/v1/realtime/calls": "planned",
             "/v1/fine_tuning": "not applicable",
             "/v1/moderations": "not applicable",
             "/v1/assistants": "not applicable",
@@ -143,7 +142,6 @@ def test_documented_endpoints_exist(path, routes):
             "/v1/uploads": "not applicable",
             "/api/v1/gw/monitoring/prometheus": "Was",
         },
-        "TRANSPORTS.md": {"/v1/realtime/calls": "planned"},
         "PROMPT_CACHING_APIS.md": {"/v1/cachedContents": "no longer offers"},
     }.get(path.name, {})
     mentions = endpoint_mentions(text)

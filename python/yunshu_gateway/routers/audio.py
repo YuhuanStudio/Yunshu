@@ -361,7 +361,7 @@ def _split_text_segments(text: str, max_chars: int = 300) -> list[str]:
 class TTSRequest(BaseModel):
     model: str
     input: str
-    voice: str = "alloy"
+    voice: str | dict[str, str] = "alloy"
     speed: float = Field(default=1.0, ge=0.25, le=4.0)
     response_format: str = "wav"  # Only "wav" currently supported
     # temperature was unbounded → NaN/Inf accepted, downstream
@@ -391,7 +391,10 @@ class TTSRequest(BaseModel):
         # OpenAI TTS API limits input to 4096 chars; allow some slack for legitimate use
         if len(self.input) > 32768:
             raise ValueError(f"input: maximum 32768 characters, got {len(self.input)}")
-        if not self.voice or not self.voice.strip():
+        if isinstance(self.voice, dict):
+            if set(self.voice) != {"id"} or not self.voice["id"].startswith("voice_"):
+                raise ValueError("voice: custom voice requires a local voice id")
+        elif not self.voice or not self.voice.strip():
             raise ValueError("voice: field is required and cannot be empty")
         # was hard-rejecting anything but "wav".
         # Broke OpenAI SDK which defaults to mp3. Fixed only the
@@ -579,6 +582,9 @@ async def create_speech(request: Request) -> Response:
             detail=f"Unsupported response_format '{req.response_format}'. "
             f"Allowed: {', '.join(_OPENAI_SUPPORTED)}.",
         )
+    from .voices import resolve_voice
+
+    req = resolve_voice(req, tts_engine)
     try:
         # VoiceDesign models require 'instruct' for voice description
         instruct = req.instruct
@@ -667,6 +673,10 @@ async def stream_speech(req: TTSRequest, request: Request):
                 else "No TTS engine available"
             ),
         )
+
+    from .voices import resolve_voice
+
+    req = resolve_voice(req, tts_engine)
 
     # advertise the model's REAL output rate (was hardcoded 24000
     # in both the SSE header event and X-Sample-Rate — non-24k models like dia=44100
@@ -1093,11 +1103,13 @@ async def create_translation(
 async def list_voices(request: Request) -> dict:
     """List available TTS voices."""
     from .models import _check_permission
+    from .voices import list_custom_voices
 
     _check_permission(request, "can_infer")
     return {
         "object": "list",
-        "data": [{"id": v, "object": "voice"} for v in _list_tts_voices()],
+        "data": [{"id": v, "object": "voice"} for v in _list_tts_voices()]
+        + await asyncio.to_thread(list_custom_voices),
     }
 
 

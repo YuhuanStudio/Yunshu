@@ -47,6 +47,10 @@ No new decode or TTFT claim is made for this cycle here. Historical measurements
 
 ### Added
 
+- Client-executed Responses computer actions and screenshot round trips.
+- Incremental Anthropic document citation streaming with checked source ranges.
+- Optional WebRTC Realtime transport (`yunshu[webrtc]`) and local audio-sample voice enrollment for reference-audio TTS models.
+
 - First-run model selection (`setup` / unconfigured `serve`), `models list/pull/show/rm`,
   live `top`, zsh/bash/fish completion and consistent global `--json` output with next steps.
   [CLI guide](docs/guides/CLI.md).

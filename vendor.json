@@ -2541,5 +2541,48 @@
       "owner": "cliux",
       "use": "serve, chat, complete and benchmark command organization; UX comparison only, no copied source."
     }
+  ],
+  "respfeat_prior_art": [
+    {
+      "url": "https://github.com/openai/openai-python",
+      "license": "Apache-2.0",
+      "reviewed_date": "2026-10-08",
+      "use": "Installed 3.26.0 computer actions / calls / voice SDK type contracts; independent adapters, no copied source."
+    },
+    {
+      "url": "https://github.com/anthropics/anthropic-sdk-python",
+      "license": "MIT",
+      "reviewed_date": "2026-10-08",
+      "use": "Installed 1.11.0 citations_delta SDK contract; independent bounded incremental parser."
+    },
+    {
+      "url": "https://github.com/aiortc/aiortc",
+      "license": "BSD-3-Clause",
+      "revision": "1.15.0",
+      "reviewed_date": "2026-10-08",
+      "use": "Optional declared WebRTC dependency, independent RealtimeSession bridge. macOS arm64 PyAV 17.1 wheel ~18 MB, aiortc wheel 93.7 KB; acceptable as opt-in."
+    },
+    {
+      "url": "https://github.com/realtime-ai/openai-realtime-webrtc-python",
+      "reviewed_date": "2026-10-08",
+      "use": "Discovery-only external client architecture; no source adopted and no license relied on."
+    },
+    {
+      "url": "https://github.com/Blaizzy/mlx-audio/blob/main/docs/guides/voice-cloning.md",
+      "license": "MIT",
+      "reviewed_date": "2026-10-08",
+      "use": "Existing reference-audio runtime contract: Qwen3-TTS Base needs transcript; CustomVoice/VoiceDesign ignore ref_audio. Reject unsupported clone paths, no copied code."
+    },
+    {
+      "url": "https://huggingface.co/mlx-community/Qwen3-TTS-12Hz-1.7B-Base-bf16",
+      "license": "Apache-2.0",
+      "reviewed_date": "2026-10-08",
+      "use": "Discovery-only published MLX cloning checkpoint; not downloaded, no GPU TTS parity claim in CPU-only respfeat."
+    },
+    {
+      "url": "https://github.com/lablup/mlxcel/blob/main/docs/responses-api.md",
+      "reviewed_date": "2026-10-08",
+      "use": "Discovery-only Responses subset comparison; built-in tools unsupported there, no adapter code adopted."
+    }
   ]
 }

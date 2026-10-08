@@ -14,6 +14,7 @@ STAGES = (
     "conc",
     "modelprobe",
     "client_compat",
+    "respfeat",
     "websearch",
     "rerank",
     "evals",
@@ -32,6 +33,7 @@ LADDER = tuple(
         "conc",
         "modelprobe",
         "client_compat",
+        "respfeat",
         "websearch",
         "rerank",
         "evals",
@@ -42,6 +44,7 @@ LADDER = tuple(
 
 # Every key is a default; the CLI can override ctx / reps / mmlu_n / mem_sizes.
 SUITES = {
+    "respfeat": {"stages": ["preflight", "respfeat"]},
     "evals": {"stages": ["preflight", "evals"]},
     "client_compat": {
         "stages": ["preflight", "client_compat"],

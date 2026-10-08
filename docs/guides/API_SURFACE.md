@@ -43,7 +43,7 @@ multi-model mode (`--models-dir`) an unknown model is a 404 `model_not_found`.
 | `WS /v1/realtime` | kept | OpenAI Realtime, GA schema (what `client.realtime.connect()` speaks) or beta with `OpenAI-Beta: realtime=v1`. Differences from the hosted API are listed in [TRANSPORTS.md](TRANSPORTS.md); `scripts/dev/realtime_conformance.py` is the SDK conformance script. | real 2026-10-06: `routes` raw-socket text turn (`session.created` -> `response.done` with usage) and a disconnect mid-response on 0.8B and 3B. Voice turn, real 2026-10-06 (M5): cascade on gemma-4-e2b-it-4bit + Qwen3-ASR-1.7B + Qwen3-TTS (spoken "The secret word is pineapple." in; `input_audio_transcription.completed` carries the same words; 150 KB of speech out) and native speech on Qwen3-Omni-30B-A3B-4bit. The SDK conformance script: unit (fake engine) |
 | `WS /realtime` | kept | Legacy path, beta schema. | real 2026-10-06: same checks as `/v1/realtime` (`routes`); voice turn on the beta schema (`modalities`) on the same cascade (gemma-4-e2b-it-4bit + ASR + TTS) and on Qwen3-Omni-30B-A3B-4bit (M5) |
 | `POST /v1/realtime/client_secrets`, `POST /v1/realtime/sessions`, `POST /v1/realtime/transcription_sessions` | added | Ephemeral keys for browser / device clients. The caller authenticates normally and gets an `ek_...` value (default 600 s, `expires_after.seconds` 10-7200 else 400) with the effective session (GA `realtime` or `transcription`, or the beta shapes). The `/v1/realtime` socket accepts the secret as its bearer token until it expires, starts with that session configuration and the secret's session id, and a secret can open several sockets. In memory only; a restart drops every secret. Transcription configuration is echoed but not acted on (the engine has no transcription-only session); a transcription secret cannot create model responses. Expiry prevents new connections, not already accepted sessions. | unit: the real `openai` SDK (`realtime.client_secrets.create`, `beta.realtime.sessions` / `transcription_sessions`) and a TestClient websocket with a static token set (secret accepted and applied, unknown or expired refused). real 2026-10-08 (M5, 0.8B): `routes` check `realtime_client_secrets` passed (same job: an `ek_` secret opens `/v1/realtime`, session id and instructions applied, a text turn ends in `response.done`, beta sessions, TTL 1 is 400) |
-| `POST /v1/realtime/calls` (WebRTC) | planned | Not implemented: needs `aiortc`; plan in [TRANSPORTS.md](TRANSPORTS.md). Accept / reject / refer / hangup are SIP-only and not applicable. | not registered, nothing to verify |
+| `POST /v1/realtime/calls` (WebRTC) | optional extra | `yunshu[webrtc]`: SDP offer/answer, GA data channel, PCM/RTP audio. No public ICE relay. Missing extra: 503 and WebSocket alternative. See [TRANSPORTS.md](TRANSPORTS.md). | unit: SDK + two-peer audio tests; M5 respfeat probe pending |
 | `WS /v1/responses` | kept | OpenAI Responses WebSocket mode (`client.responses.connect()`): `response.create` in, raw `response.*` events out, `stream_id` lanes. | real 2026-10-06: `routes` raw socket (two chained turns, malformed message, disconnect mid-generation) + SDK `client.responses.connect()` on 0.8B and 3B; unauthenticated upgrade refused (multi-model server with a token) |
 | `WS /v1/stream` | kept, extension | Yunshu protocol: many chat.completions / completions / responses / messages requests on one socket, cancel / stop / max_tokens update by id, heartbeats, backpressure. Anthropic has no official WebSocket mode. | real 2026-10-06: `routes` (all four APIs on one socket, cancel by id, malformed message, disconnect mid-generation) on 0.8B and 3B |
 | Unix socket (`yunshu serve --uds PATH`) | kept | Same app; `curl --unix-socket`, httpx `uds=`. | unit + audit |
@@ -329,7 +329,7 @@ clients must not treat its zero-shot scores as those probabilities.
 endpoint they can request (575 on openai 3.26.0 / anthropic 1.11.0, websockets included). `tests/unit/test_api_coverage.py` fails when
 one is neither served by the gateway nor declared in `scripts/dev/api_coverage_na.json` as `not_applicable` or `planned`, each with a
 reason, and when a declaration matches nothing or still calls a served route planned/not applicable. An `implemented` declaration documents completed work but cannot hide a missing route. This replaces building the matrix from the routes
-we already had (which is how `POST /v1/decisions` was missed). Current state: 73 implemented, 2 planned (Realtime WebRTC `calls`, custom voices), the rest not applicable (OpenAI and Anthropic
+we already had (which is how `POST /v1/decisions` was missed). Current state: 75 implemented, 0 planned, the rest not applicable (OpenAI and Anthropic
 skills, which mount into hosted sandboxes, SIP call control, organization and admin APIs, fine-tuning, Assistants/Threads, vector stores, hosted
 agent platforms, video, containers, webhooks, ChatKit, Live).
 Upgrading an SDK is the trigger: a new endpoint fails the test until someone decides.
@@ -480,8 +480,9 @@ Anthropic documents accept text, custom content, stored-file references, and bou
 PDF base64/HTTPS sources. Vision models receive PDF page images and the text layer;
 image-only PDFs require a vision model. Citations use checked character, page, or
 content-block ranges and round-trip as `citations_delta` events. Document requests with
-citations enabled buffer generation before replaying their Messages stream; without
-citations the stream passes through live. Client tool
+citations enabled stream live: only a possible partial `[[cite:...]]` marker is
+held, and validated markers emit `citations_delta` immediately. Invalid source ranges
+emit an SSE error without a successful terminal event. Client tool
 schemas cover versioned bash, text editor, and legacy computer tools; computer zoom
 is opt-in, and text-editor `max_characters` is tool configuration. The newer
 `computer_toolset_20260801` member protocol is not implemented.
@@ -500,6 +501,34 @@ uses the M3 lane; `client_compat_m5` uses the M5. Both run the 0.8B pilot before
 3B text model, validate the commit-pinned source tree, and fail closed on missing
 or unsuccessful checks. Real-server evidence is pending for this addition.
 
+
+### Responses computer and local voice enrollment
+
+`tools: [{"type":"computer"}]` maps to a local function schema with nine action
+variants. Responses expose `computer_call.actions` in order, and
+`computer_call_output` screenshots (URL or local file ID) retain their `call_id` and
+vision content. The client executes every action. The gateway does not execute a
+computer action or invent model safety checks; `pending_safety_checks` is empty.
+Legacy single `action` input calls can be replayed, while the new tool emits `actions`.
+
+`POST /v1/audio/voice_consents` records multipart `name`, `language`, `recording`.
+`POST /v1/audio/voices` accepts `name`, `consent` and `audio_sample` through the OpenAI
+SDK. Consent IDs are local; OpenAI-hosted consent IDs cannot be resolved here.
+Audio must decode locally, be at most 10 MiB and 60 seconds, with at most 10 MiB
+of decoded PCM. Enrollment keeps the reference and metadata in the bounded Files
+store (`YUNSHU_FILES_DIR`, quota and TTL apply). It records a submitted consent;
+it does not authenticate a speaker's identity. `GET /v1/audio/voices` includes
+custom records. Speech accepts `voice: {"id":"voice_..."}` only for TTS models with
+an explicit `ref_audio` generate parameter. Other models return a clear 400.
+Qwen3-TTS Base also requires `ref_text` (sample transcript): submit it at enrollment
+with SDK `extra_body` or in the speech request. Its CustomVoice/VoiceDesign variants
+ignore cloning references and are rejected. Prompt-designed Live voices are
+unsupported. Enrollment requires the audio extra.
+
+CPU SDK and streaming evidence: `tests/unit/test_respfeat.py`. Real-server checks
+are `respfeat-computer`, `respfeat-citations`, `respfeat-voices`, `respfeat-webrtc`;
+`yv --suite respfeat` runs one M5 Qwen3.5-0.8B job with a ten-minute budget.
+Enrollment evidence does not claim a real TTS voice-cloning round trip.
 ## Memory units
 
 All engine-returned `*_gb` fields use binary GiB: 1 GiB = 1024^3 bytes,

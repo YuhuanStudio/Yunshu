@@ -1389,7 +1389,63 @@ def stage_searchrank(ctx: Ctx) -> StageResult:
     )
 
 
+def stage_respfeat(ctx: Ctx) -> StageResult:
+    """One bounded M5 tiny server covers client-executed tools and transports."""
+    import json
+
+    tree_sha = subprocess.check_output(
+        ["git", "-C", str(ctx.cand.path), "rev-parse", "HEAD^{tree}"], text=True
+    ).strip()
+    argv = [
+        ctx.py,
+        str(ctx.cand.path / "scripts/research/respfeat_routes.py"),
+        "--model",
+        ctx.model,
+        "--tree-sha",
+        tree_sha,
+        "--device",
+        "m5",
+        "--out",
+        "{out}",
+    ]
+    if ctx.cand_env.get("RESPFEAT_EXTRA_PYTHONPATH"):
+        argv += ["--extra-pythonpath", ctx.cand_env["RESPFEAT_EXTRA_PYTHONPATH"]]
+
+    def valid(path):
+        from scripts.research.respfeat_routes import judge
+
+        try:
+            return judge(json.loads(path.read_text()))
+        except (OSError, ValueError) as exc:
+            return False, str(exc)
+
+    cell = Cell(
+        "respfeat",
+        "tiny-routes",
+        argv,
+        mem_gb=8,
+        timeout_min=10,
+        validate=valid,
+        device="m5",
+        cwd=ctx.cand.path,
+        retries=0,
+    )
+    result = ctx.exe.run_cells([cell])[cell.key]
+    evidence = json.loads(result.evidence.read_text()) if result.evidence else {}
+    return _finish(
+        ctx,
+        StageResult(
+            "respfeat",
+            result.ok,
+            [] if result.ok else [result.reason],
+            {"device": "m5", "candidate_commit": ctx.cand.key, "evidence": evidence},
+            [result.job],
+        ),
+    )
+
+
 STAGE_FUNCS = {
+    "respfeat": stage_respfeat,
     "evals": stage_evals,
     "websearch": stage_websearch,
     "tavily": stage_tavily,
