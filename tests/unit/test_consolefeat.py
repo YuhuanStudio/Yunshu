@@ -327,3 +327,44 @@ async def test_download_cancel_keeps_registry_consistent(client, monkeypatch, tm
     assert failure.value.status_code == 400
     assert not om._DOWNLOADS and manager.get_entry("org/model") is None
     assert not (tmp_path / "alias").exists()
+
+
+def test_malformed_index_is_client_error(client, monkeypatch, tmp_path):
+    from yunshu_engine.model_manager import ModelManager
+
+    monkeypatch.setattr(
+        "yunshu_gateway.ollama_models.get_model_manager", lambda: ModelManager()
+    )
+    (tmp_path / "config.json").write_text('{"model_type":"qwen2"}')
+    (tmp_path / "model.safetensors.index.json").write_text("[]")
+    assert (
+        client.post(
+            "/v1/yunshu/models/register", json={"model": "test", "path": str(tmp_path)}
+        ).status_code
+        == 400
+    )
+
+
+def test_fast_path_stage_marks_preserved(monkeypatch):
+    from yunshu_engine.fast_path_stats import FastPathStats
+    from yunshu_gateway import x_yunshu as x
+
+    clock = iter([10.0, 10.05, 10.09, 10.10])
+    monkeypatch.setattr(
+        "yunshu_engine.fast_path_stats.time.perf_counter", lambda: next(clock)
+    )
+    fp = FastPathStats(None, 100)
+    fp.stats.latency_marks.update(
+        engine_admit=10.01, apc_start=10.02, apc_end=10.03, prefill_start=10.04
+    )
+    fp.admit(0, 100)
+    fp.progress(100, 100)
+    fp.token(1)
+    info = x.RequestInfo(
+        "fast", "POST", "/", arrived=10.0, gen=SimpleNamespace(stats=fp.stats)
+    )
+    durations = x.latency_breakdown(info)["durations_ms"]
+    assert durations["engine_queue"] == 10.0
+    assert durations["apc_lookup_restore"] == 10.0
+    assert durations["prefill"] == 50.0
+    assert durations["first_decode"] == 10.0

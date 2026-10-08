@@ -376,7 +376,12 @@ async def register_local(req: RegisterLocalRequest, request: Request) -> dict:
             raise ValueError("config.json requires a model_type")
         index = path / "model.safetensors.index.json"
         if index.exists():
-            weight_map = json.loads(index.read_text()).get("weight_map")
+            index_config = json.loads(index.read_text())
+            weight_map = (
+                index_config.get("weight_map")
+                if isinstance(index_config, dict)
+                else None
+            )
             if not isinstance(weight_map, dict) or not weight_map:
                 raise ValueError("weights index requires a nonempty weight_map")
             for shard in weight_map.values():

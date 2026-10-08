@@ -754,6 +754,8 @@ class EngineFastMixin:
         def _run():
             import mlx.core as mx
 
+            _fp_stats.stats.latency_marks["engine_admit"] = time.perf_counter()
+
             if seed is not None:
                 mx.random.seed(seed)
             ids = mx.array(input_ids)
@@ -855,6 +857,7 @@ class EngineFastMixin:
             # with a trim=1 refeed (and stores post-generation state), which
             # corrupts non-trimmable recurrent layers. Hybrid uses boundary
             # snapshots only.
+            _fp_stats.stats.latency_marks["apc_start"] = time.perf_counter()
             _pc_hit = False
             if (
                 not _bypass_cache
@@ -968,6 +971,8 @@ class EngineFastMixin:
                 if len(ids_to_prefill) == 0 and len(ids) > 0:
                     ids_to_prefill = ids[-1:]
 
+            _fp_stats.stats.latency_marks["apc_end"] = time.perf_counter()
+
             # Inflight prefix sharing: check for in-flight
             # prefills with matching prefix to share partial KV blocks.
             # Skip when seed-bypass is active so seeded requests stay
@@ -1018,6 +1023,7 @@ class EngineFastMixin:
             _last_tok_time = 0.0
             _lprocs = logits_processors if logits_processors else None
 
+            _fp_stats.stats.latency_marks["prefill_start"] = time.perf_counter()
             # HYBRID boundary-snapshot capture. Chunk-prefill
             # the prompt (minus its last token) into `cache`, storing a trim=0
             # snapshot at each block boundary so future shared-prefix requests

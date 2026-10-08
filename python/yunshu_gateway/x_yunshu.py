@@ -377,9 +377,9 @@ def latency_breakdown(info: RequestInfo) -> dict:
             "gateway_admit": duration("gateway_receive", "gateway_admit"),
             "engine_queue": duration("engine_submit", "engine_admit"),
             "template_tokenize": duration("template_start", "template_end"),
-            "apc_lookup_restore": getattr(st, "cache_reload_ms", None)
-            if st is not None
-            else None,
+            "apc_lookup_restore": duration("apc_start", "apc_end")
+            if "apc_start" in marks and "apc_end" in marks
+            else (getattr(st, "cache_reload_ms", None) if st is not None else None),
             "prefill": duration("prefill_start", "prefill_end"),
             "first_decode": duration("prefill_end", "first_decode"),
             "sse_first_flush": duration("first_decode", "sse_first_flush"),

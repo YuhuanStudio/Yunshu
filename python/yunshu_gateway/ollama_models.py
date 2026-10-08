@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import shutil
+import threading
 from pathlib import Path
 from urllib.parse import quote
 
@@ -18,7 +19,7 @@ from yunshu_engine import paths
 from .engine import get_model_manager
 
 _LOCK = asyncio.Lock()
-_DOWNLOADS: dict[str, object] = {}
+_DOWNLOADS: dict[str, threading.Event] = {}
 
 
 def cancel_download(name: str) -> bool:
@@ -147,7 +148,6 @@ async def pull_model(request, name: str):
                 400,
                 "Use a Hugging Face MLX repository id (org/name); Ollama registry / GGUF models are unsupported",
             )
-        import threading
 
         from huggingface_hub import snapshot_download
         from tqdm.auto import tqdm

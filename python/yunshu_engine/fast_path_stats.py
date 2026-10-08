@@ -45,7 +45,7 @@ class FastPathStats:
         st.prefill_total = int(to_prefill)
         st.prefill_done = 0
         st.t_admit = time.perf_counter()
-        st.latency_marks["prefill_start"] = st.t_admit
+        st.latency_marks.setdefault("prefill_start", st.t_admit)
 
     def progress(self, processed: int, total: int) -> None:
         """``generate_step(prompt_progress_callback=...)``: tokens prefilled so far."""
