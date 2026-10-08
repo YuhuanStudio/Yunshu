@@ -91,7 +91,9 @@ async function lint(page: Page): Promise<string[]> {
       if (vis(el) && getComputedStyle(el).textOverflow === "ellipsis")
         out.push(`ellipsis in a stat card: ${el.className}`);
     // 2. status band: dot and plain text, no bordered chips
-    for (const li of document.querySelectorAll("ul[aria-label] > li[data-tone]"))
+    for (const li of document.querySelectorAll(
+      "ul[aria-label] > li[data-tone]",
+    ))
       if (vis(li) && parseFloat(getComputedStyle(li).borderTopWidth) > 0)
         out.push(`bordered chip in the status band: ${li.textContent}`);
     // 3. unavailable notices keep a readable measure
@@ -99,7 +101,9 @@ async function lint(page: Page): Promise<string[]> {
       '[data-testid$="-unsupported"], [data-testid$="-unavailable"]',
     ))
       if (vis(el) && el.getBoundingClientRect().width < 320)
-        out.push(`narrow notice (${Math.round(el.getBoundingClientRect().width)}px)`);
+        out.push(
+          `narrow notice (${Math.round(el.getBoundingClientRect().width)}px)`,
+        );
     // 4. no reserved gap inside one line of text
     for (const p of document.querySelectorAll("main p, main [role=status]")) {
       const kids = [...p.children].filter(vis);
@@ -107,13 +111,16 @@ async function lint(page: Page): Promise<string[]> {
         const a = kids[i - 1].getBoundingClientRect();
         const b = kids[i].getBoundingClientRect();
         if (Math.abs(a.top - b.top) < 4 && b.left - a.right > 32)
-          out.push(`gap ${Math.round(b.left - a.right)}px in: ${p.textContent?.slice(0, 40)}`);
+          out.push(
+            `gap ${Math.round(b.left - a.right)}px in: ${p.textContent?.slice(0, 40)}`,
+          );
       }
     }
     // 5. standard frame and title
     const h1 = document.querySelector("h1");
     if (!h1 || !vis(h1)) out.push("page has no visible h1");
-    else if (!h1.closest(".max-w-7xl")) out.push("h1 is outside the max-w-7xl frame");
+    else if (!h1.closest(".max-w-7xl"))
+      out.push("h1 is outside the max-w-7xl frame");
     return out;
   });
 }
@@ -127,3 +134,132 @@ for (const p of PAGES)
     await page.waitForTimeout(1500);
     expect(await lint(page)).toEqual([]);
   });
+
+// ---- Round 7: measurable limits for the defects the review kept finding ----
+
+test("idle overview: no giant empty cards, and Idle is said once outside the status band", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await install(page);
+  await page.goto("/console/#/overview", { waitUntil: "domcontentloaded" });
+  await page.getByTestId("live-panel").waitFor();
+  await page.waitForTimeout(1000);
+  // The idle live card is one compact card, not a half-empty chart plus list.
+  const live = await page.getByTestId("live-panel").boundingBox();
+  expect(live!.height).toBeLessThan(220);
+  expect(await page.getByTestId("live-panel").getAttribute("data-idle")).toBe(
+    "true",
+  );
+  // The status block, stat cards and live card never say the idle word (the top pill and the band do).
+  for (const id of ["state-strip", "overview-stats", "live-panel"])
+    expect(await page.getByTestId(id).innerText(), id).not.toContain("閒置");
+  // One status block: the verdict row and the phase strip share a card.
+  const strip = page.getByTestId("state-strip");
+  await expect(strip.getByTestId("health-verdict")).toBeVisible();
+});
+
+test("every stat card has the same inner structure: value, label, one meta line", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await install(page);
+  await page.goto("/console/#/overview", { waitUntil: "domcontentloaded" });
+  await page.getByTestId("overview-stats").waitFor();
+  await page.waitForTimeout(800);
+  const shape = await page.getByTestId("overview-stats").evaluate((grid) =>
+    [...grid.querySelectorAll(".card")].map((card) => {
+      const box = card.getBoundingClientRect();
+      const sub = card.querySelector(".yunui-stat-sub");
+      const value = card.querySelector(".yunui-stat-value");
+      return {
+        h: Math.round(box.height),
+        // The meta line is plain muted text: no foreground-coloured run inside it.
+        mutedOnly: sub
+          ? [...sub.querySelectorAll("*")].every(
+              (e) => getComputedStyle(e).color === getComputedStyle(sub).color,
+            )
+          : false,
+        hasValue: !!value,
+      };
+    }),
+  );
+  expect(shape.length).toBeGreaterThanOrEqual(4);
+  expect(new Set(shape.map((s) => s.h)).size).toBe(1);
+  for (const s of shape) {
+    expect(s.hasValue).toBe(true);
+    expect(s.mutedOnly).toBe(true);
+  }
+});
+
+test("phone: stat cards are compact, 2-up, at most 88px tall", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 402, height: 874 });
+  await install(page);
+  await page.goto("/console/#/overview", { waitUntil: "domcontentloaded" });
+  await page.getByTestId("overview-stats").waitFor();
+  await page.waitForTimeout(800);
+  const heights = await page
+    .getByTestId("overview-stats")
+    .evaluate((grid) =>
+      [...grid.querySelectorAll(".card")].map((c) =>
+        Math.round(c.getBoundingClientRect().height),
+      ),
+    );
+  for (const h of heights) expect(h).toBeLessThanOrEqual(88);
+});
+
+test("the top status pill hugs its content", async ({ page }) => {
+  for (const width of [402, 1440]) {
+    await page.setViewportSize({ width, height: 874 });
+    await install(page);
+    await page.goto("/console/#/overview", { waitUntil: "domcontentloaded" });
+    const pill = page.getByTestId("live-phase");
+    await pill.waitFor();
+    await page.waitForTimeout(800);
+    const m = await pill.evaluate((el) => {
+      const cs = getComputedStyle(el);
+      const kids = [...el.children].filter(
+        (c) => c.getBoundingClientRect().width > 0,
+      );
+      const inner = kids.reduce(
+        (n, c) => n + c.getBoundingClientRect().width,
+        0,
+      );
+      const gaps =
+        Math.max(0, kids.length - 1) * parseFloat(cs.columnGap || "0");
+      const pad = parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight);
+      return {
+        w: el.getBoundingClientRect().width,
+        content: inner + gaps + pad,
+      };
+    });
+    expect(m.w).toBeLessThanOrEqual(m.content + 2);
+  }
+});
+
+test("zh-TW pages carry no untranslated glossary words", async ({ page }) => {
+  test.setTimeout(90_000);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await install(page);
+  const WORDS =
+    /\b(Decode|Prefill|Queued|Idle|Starting|Unload|Warm ?up|Latest request|Speculative|Prefix hit)\b/;
+  for (const p of [
+    "overview",
+    "requests",
+    "diagnostics",
+    "models",
+    "playground",
+    "settings",
+  ]) {
+    await page.goto(`/console/#/${p}`, { waitUntil: "domcontentloaded" });
+    await page.getByRole("heading", { level: 1 }).first().waitFor();
+    await page.waitForTimeout(800);
+    const text = await page.locator("main").innerText();
+    expect(
+      text.match(WORDS)?.[0] ?? null,
+      `English glossary word on ${p}`,
+    ).toBeNull();
+  }
+});

@@ -263,10 +263,8 @@ test.describe("diagnostics", () => {
     await diag(page, {}, 200);
     const v = page.getByTestId("health-verdict");
     await expect(v).toContainText("健康");
-    await expect(v.getByRole("link", { name: "查看日誌" })).toHaveAttribute(
-      "href",
-      "#/logs",
-    );
+    // A healthy engine shows the compact chip only, with no link to the logs.
+    await expect(v.getByRole("link", { name: "查看日誌" })).toHaveCount(0);
     await page.unroute("**/v1/**");
     await diag(
       page,
@@ -274,7 +272,12 @@ test.describe("diagnostics", () => {
       200,
     );
     await expect(page.getByTestId("health-verdict")).toContainText("注意");
-    await expect(page.getByTestId("health-verdict")).toContainText("排隊");
+    await expect(
+      page
+        .getByTestId("health-verdict")
+        .getByRole("link", { name: "查看日誌" }),
+    ).toHaveAttribute("href", "#/logs");
+    await expect(page.getByTestId("health-checks")).toContainText("排隊");
     await page.unroute("**/v1/**");
     await diag(page, { load_error: "weights missing" }, 200);
     await expect(page.getByTestId("health-verdict")).toContainText("異常");

@@ -142,8 +142,9 @@ const requests: Shape<typeof zh> = {
     "Since {time}: {count} requests, {prompt} prompt tokens read ({cached} reused)",
   "footer.ring":
     "The server keeps the latest {capacity} requests and clears them on restart. Records hold statistics only, never prompt or output text.",
-  "footer.unsupported":
-    "This engine version does not provide finished records. Finished shows only the latest request sampled from status since this page opened, so rapid requests are missed, and a vanished active request is never assumed to have succeeded.",
+  "footer.unsupported": "This engine does not provide finished records; Finished shows only requests sampled on this page",
+  "footer.unsupportedDetail":
+    "Finished shows only the latest request sampled from status since this page opened, so rapid requests are missed, and a vanished active request is never assumed to have succeeded.",
   "footer.loading": "Loading finished records…",
   "footer.error": "Finished records could not be refreshed: {error}",
   "cancel.title": "Cancel this request?",

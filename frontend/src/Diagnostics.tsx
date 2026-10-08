@@ -520,13 +520,12 @@ export function Diagnostics({
         title={t("diagnostics.health.title")}
         description={t("diagnostics.health.description")}
         data-testid="health-checks"
-      >
-        <div
-          className="mb-3 flex flex-wrap items-center justify-between gap-x-4 gap-y-1 pb-1"
-          data-testid="health-verdict"
-          data-level={verdict.level}
-        >
-          <div className="min-w-0 flex-1">
+        action={
+          <div
+            className="flex items-center gap-2"
+            data-testid="health-verdict"
+            data-level={verdict.level}
+          >
             <StatusIndicator
               status={
                 verdict.level === "ok"
@@ -536,7 +535,7 @@ export function Diagnostics({
                     : "offline"
               }
             >
-              <span className="text-sm font-semibold text-foreground">
+              <span className="text-xs font-medium text-foreground">
                 {t(
                   verdict.level === "ok"
                     ? "diagnostics.verdict.ok"
@@ -546,26 +545,17 @@ export function Diagnostics({
                 )}
               </span>
             </StatusIndicator>
-            <p className="mt-0.5 pl-4 text-xs text-muted-foreground">
-              {verdict.reasons.length
-                ? list(
-                    verdict.reasons.map((c) =>
-                      t("diagnostics.verdict.reason", {
-                        name: c.name,
-                        value: c.value,
-                      }),
-                    ),
-                  )
-                : t("diagnostics.verdict.okBody")}
-            </p>
+            {verdict.level !== "ok" && (
+              <Button size="sm" variant="ghost" asChild>
+                <a href="#/logs">
+                  <ScrollText size={14} />
+                  {t("diagnostics.verdict.logs")}
+                </a>
+              </Button>
+            )}
           </div>
-          <Button size="sm" variant="ghost" asChild>
-            <a href="#/logs">
-              <ScrollText size={14} />
-              {t("diagnostics.verdict.logs")}
-            </a>
-          </Button>
-        </div>
+        }
+      >
         <ul className="-my-2 divide-y divide-border">
           {checks.map((check) => (
             <li key={check.key} className="py-3">
@@ -679,7 +669,7 @@ export function Diagnostics({
             />
           </div>
           {loading && (
-            <Card className="p-6 text-sm text-muted-foreground" role="status">
+            <Card className="p-4 text-sm text-muted-foreground" role="status">
               {t("diagnostics.loading", {
                 items: list(groups[group].map((item) => groupTitle(item.key))),
               })}

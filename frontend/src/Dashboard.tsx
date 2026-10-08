@@ -5,7 +5,6 @@ import {
   Button,
   Card,
   EmptyState,
-  IconButton,
   Progress,
   ScrollFade,
   SegmentedBar,
@@ -79,6 +78,7 @@ import {
   StaleStamp,
   supportsChat,
   type Engine,
+  StatValue,
 } from "./ui";
 import { formatMs } from "./RequestTimeline";
 const memorySeries = () => [
@@ -305,6 +305,11 @@ export function Dashboard({
       ? (last.cached_tokens / last.prompt_tokens) * 100
       : null;
   const heroData = useMemo(() => chartRows(heroPoints), [heroPoints]);
+  // Idle sparkline only when the last five minutes actually carried decode traffic.
+  const recent = heroData.some((p) => {
+    const v = p.values.decode;
+    return typeof v === "number" && Number.isFinite(v) && v !== 0;
+  });
   const baseUrl = serviceRoot(savedBaseUrl());
   const quickModel = (loaded.find(supportsChat) ?? loaded[0])?.id ?? "";
   const curl =
@@ -398,7 +403,7 @@ export function Dashboard({
           <div className="flex items-center gap-1.5">
             <Button
               size="sm"
-              variant="ghost"
+              variant="secondary"
               onClick={() => engine.setPolling(!engine.polling)}
             >
               {engine.polling ? <Pause size={13} /> : <Play size={13} />}
@@ -406,11 +411,14 @@ export function Dashboard({
                 ? t("overview.actions.pause")
                 : t("overview.actions.resume")}
             </Button>
-            <IconButton
-              icon={<RefreshCw size={14} />}
-              label={t("overview.actions.refresh")}
+            <Button
+              size="sm"
+              variant="secondary"
               onClick={() => void engine.refresh()}
-            />
+            >
+              <RefreshCw size={13} />
+              {t("overview.actions.refresh")}
+            </Button>
             <Button
               size="sm"
               disabled={
@@ -427,42 +435,49 @@ export function Dashboard({
           </div>
         }
       />
-      {/* One header block: the health verdict, then where the engine is and when it was read. */}
-      <div className="flex flex-wrap items-center gap-x-5 gap-y-1">
-        <HealthLine
-          verdict={verdict}
-          checking={!status && engine.phase === "connecting"}
-          navigate={navigate}
-        />
-        <p className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs tabular-nums text-muted-foreground">
-          <StatusIndicator status={online ? "online" : "offline"}>
-            <span className="text-foreground">
-              {online
-                ? status?.state === "running"
-                  ? t("overview.status.running")
-                  : (status?.state ?? t("overview.status.connected"))
-                : t("overview.status.offline")}
-            </span>
-          </StatusIndicator>
-          <span>Yunshu {status?.version ?? "—"}</span>
-          <span>
-            {t("overview.status.uptime", { t: elapsed(status?.uptime_s) })}
-          </span>
-          <span>
-            {engine.updatedAt
-              ? t("overview.status.updated", { t: clock(engine.updatedAt) })
-              : t("overview.status.waiting")}
-          </span>
-          {!engine.polling && <span>{t("overview.status.paused")}</span>}
-          {status?.load_error && (
-            <span className="text-error">{status.load_error}</span>
-          )}
-        </p>
-      </div>
-
       <StaleStamp engine={engine} />
+      {/* One status block: verdict and version on top, the phase pipeline under it. */}
       <div className={dim} data-stale={stale ? "true" : undefined}>
-        <StateStrip status={status ?? null} />
+        <StateStrip
+          status={status ?? null}
+          header={
+            <div className="flex flex-wrap items-center justify-between gap-x-5 gap-y-1">
+              <HealthLine
+                verdict={verdict}
+                checking={!status && engine.phase === "connecting"}
+                navigate={navigate}
+              />
+              <p className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs tabular-nums text-muted-foreground">
+                {(!online || (status && status.state !== "running")) && (
+                  <StatusIndicator status={online ? "away" : "offline"}>
+                    <span className="text-foreground">
+                      {online
+                        ? (status?.state ?? t("overview.status.connected"))
+                        : t("overview.status.offline")}
+                    </span>
+                  </StatusIndicator>
+                )}
+                <span>Yunshu {status?.version ?? "—"}</span>
+                <span>
+                  {t("overview.status.uptime", {
+                    t: elapsed(status?.uptime_s),
+                  })}
+                </span>
+                <span>
+                  {engine.updatedAt
+                    ? t("overview.status.updated", {
+                        t: clock(engine.updatedAt),
+                      })
+                    : t("overview.status.waiting")}
+                </span>
+                {!engine.polling && <span>{t("overview.status.paused")}</span>}
+                {status?.load_error && (
+                  <span className="text-error">{status.load_error}</span>
+                )}
+              </p>
+            </div>
+          }
+        />
       </div>
 
       {!status ? (
@@ -483,7 +498,11 @@ export function Dashboard({
             valueFirst
             icon={Timer}
             label={t("overview.stats.ttft")}
-            value={last?.ttft_ms == null ? "—" : formatMs(last.ttft_ms)}
+            value={
+              <StatValue
+                text={last?.ttft_ms == null ? "—" : formatMs(last.ttft_ms)}
+              />
+            }
             subtext={
               last
                 ? t("overview.stats.latestAt", { t: clock(last.t * 1000) })
@@ -514,7 +533,7 @@ export function Dashboard({
             valueFirst
             icon={HardDrive}
             label={t("overview.stats.metal")}
-            value={`${number(memory?.active_gb)} GB`}
+            value={<StatValue text={`${number(memory?.active_gb)} GB`} />}
             subtext={t("overview.stats.metalSub", {
               total: number(memory?.total_gb),
               peak: number(memory?.peak_gb),
@@ -523,47 +542,13 @@ export function Dashboard({
         </div>
       )}
 
-      {/* Live: what the engine is doing right now. */}
-      <Card
-        className={`grid min-w-0 overflow-hidden p-0 lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)] ${dim}`}
-        data-testid="live-panel"
-      >
-        <div className="flex min-w-0 flex-col justify-between gap-5 p-5 max-lg:order-2 sm:p-6">
-          <div className="min-w-0">
-            <div className="flex items-center justify-between gap-3">
-              <p className="text-xs text-muted-foreground">
-                {heroMetric === "decode"
-                  ? t("overview.hero.decode")
-                  : t("overview.hero.prefill")}
-              </p>
-              <SegmentedTray
-                aria-label={t("overview.hero.metric")}
-                value={heroMetric}
-                onChange={setHeroMetric}
-                options={[
-                  { value: "decode", label: t("overview.series.decode") },
-                  { value: "prefill", label: t("overview.series.prefill") },
-                ]}
-              />
-            </div>
-            <SeriesChart
-              busy={busy}
-              className="mt-3"
-              data={heroData}
-              series={rates[heroMetric as "decode" | "prefill"]}
-              height={150}
-              ariaLabel={
-                heroMetric === "decode"
-                  ? t("overview.hero.ariaDecode")
-                  : t("overview.hero.ariaPrefill")
-              }
-              formatX={clock}
-              formatY={formatNumber}
-              maxGap={12000}
-            />
-          </div>
-        </div>
-        <div className="flex min-w-0 flex-col p-5 max-lg:order-1 sm:p-6">
+      {/* Live: what the engine is doing right now. Idle collapses to one compact card. */}
+      {items.length === 0 && !busy ? (
+        <Card
+          className={`flex min-w-0 flex-col gap-3 p-4 ${dim}`}
+          data-testid="live-panel"
+          data-idle="true"
+        >
           <div className="flex items-center justify-between gap-3">
             <h2 className="yunui-section-title text-base font-semibold">
               {t("overview.active.title")}
@@ -572,12 +557,12 @@ export function Dashboard({
               </span>
             </h2>
             <div className="flex items-center gap-3 text-xs text-muted-foreground">
-              <Slot ch={14} align="right">
+              <span className="max-sm:hidden">
                 {t("overview.active.window", {
                   s: number(status?.throughput.window_s ?? 60, 0),
                   n: number(status?.throughput.requests, 0),
                 })}
-              </Slot>
+              </span>
               <Button
                 size="sm"
                 variant="ghost"
@@ -588,32 +573,107 @@ export function Dashboard({
               </Button>
             </div>
           </div>
-          {/* The list (or the idle note) owns the free height, so the totals line sits at the card bottom in both states. */}
-          <div className="flex min-h-0 flex-1 flex-col">
-            {items.length ? (
-              <ul className="mt-2 divide-y divide-border/60">
-                {items.slice(0, 5).map((row) => (
-                  <RequestLane key={row.request_id} row={row} />
-                ))}
-              </ul>
-            ) : (
-              <EmptyState
-                size="inline"
-                className="flex-1"
-                title={t("overview.active.idle")}
-                description={
-                  memory?.cache_gb
-                    ? t("overview.active.idleDescPool", {
-                        gb: number(memory.cache_gb),
-                      })
-                    : t("overview.active.idleDesc")
-                }
+          <p className="text-xs text-muted-foreground">
+            {memory?.cache_gb
+              ? t("overview.active.idleDescPool", {
+                  gb: number(memory.cache_gb),
+                })
+              : t("overview.active.idleDesc")}
+          </p>
+          {recent && (
+            <div className="min-w-0" data-testid="live-spark">
+              <p className="text-xs text-muted-foreground">
+                {t("overview.hero.decode")}
+              </p>
+              <SeriesChart
+                busy={busy}
+                className="mt-2"
+                data={heroData}
+                series={rates.decode}
+                height={72}
+                ariaLabel={t("overview.hero.ariaDecode")}
+                formatX={clock}
+                formatY={formatNumber}
+                maxGap={12000}
               />
-            )}
-          </div>
+            </div>
+          )}
           <TotalsLine totals={totals} />
-        </div>
-      </Card>
+        </Card>
+      ) : (
+        <Card
+          className={`grid min-w-0 overflow-hidden p-0 lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)] ${dim}`}
+          data-testid="live-panel"
+        >
+          <div className="flex min-w-0 flex-col justify-between gap-5 p-4 max-lg:order-2">
+            <div className="min-w-0">
+              <div className="flex items-center justify-between gap-3">
+                <p className="text-xs text-muted-foreground">
+                  {heroMetric === "decode"
+                    ? t("overview.hero.decode")
+                    : t("overview.hero.prefill")}
+                </p>
+                <SegmentedTray
+                  aria-label={t("overview.hero.metric")}
+                  value={heroMetric}
+                  onChange={setHeroMetric}
+                  options={[
+                    { value: "decode", label: t("overview.series.decode") },
+                    { value: "prefill", label: t("overview.series.prefill") },
+                  ]}
+                />
+              </div>
+              <SeriesChart
+                busy={busy}
+                className="mt-3"
+                data={heroData}
+                series={rates[heroMetric as "decode" | "prefill"]}
+                height={150}
+                ariaLabel={
+                  heroMetric === "decode"
+                    ? t("overview.hero.ariaDecode")
+                    : t("overview.hero.ariaPrefill")
+                }
+                formatX={clock}
+                formatY={formatNumber}
+                maxGap={12000}
+              />
+            </div>
+          </div>
+          <div className="flex min-w-0 flex-col gap-3 p-4 max-lg:order-1">
+            <div className="flex items-center justify-between gap-3">
+              <h2 className="yunui-section-title text-base font-semibold">
+                {t("overview.active.title")}
+                <span className="ml-2 text-muted-foreground tabular-nums">
+                  {number(status?.requests.active, 0)}
+                </span>
+              </h2>
+              <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                <Slot ch={14} align="right">
+                  {t("overview.active.window", {
+                    s: number(status?.throughput.window_s ?? 60, 0),
+                    n: number(status?.throughput.requests, 0),
+                  })}
+                </Slot>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => navigate("requests")}
+                >
+                  {t("overview.active.all")}
+                  <ArrowRight size={13} />
+                </Button>
+              </div>
+            </div>
+            <ul className="flex-1 divide-y divide-border/60">
+              {items.slice(0, 5).map((row) => (
+                <RequestLane key={row.request_id} row={row} />
+              ))}
+            </ul>
+            <TotalsLine totals={totals} />
+          </div>
+        </Card>
+      )}
 
       <FoldSection title={t("overview.quick.title")}>
         <SectionRow title={t("overview.quick.title")} />

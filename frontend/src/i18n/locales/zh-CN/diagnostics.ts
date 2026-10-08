@@ -130,8 +130,6 @@ const diagnostics: Shape<typeof zh> = {
   "verdict.ok": "健康",
   "verdict.attention": "注意",
   "verdict.abnormal": "异常",
-  "verdict.okBody": "所有检查都正常。",
   "verdict.logs": "查看日志",
-  "verdict.reason": "{name}：{value}",
 };
 export default diagnostics;

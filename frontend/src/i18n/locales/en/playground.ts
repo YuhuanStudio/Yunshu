@@ -33,7 +33,13 @@ const playground: Shape<typeof zh> = {
   "empty.compareBody":
     "The same prompt goes to both setups in turn (never at the same time, so timing stays clean), and the output and speed are shown side by side.",
   "empty.chatTitle": "Check a model response",
-  "page.desc": "Send a prompt to a loaded model and watch the streamed output and stats.",
+  "page.desc":
+    "Send a prompt to a loaded model and watch the streamed output and stats.",
+  "empty.examples": "Try one of these",
+  "empty.example.a": "Explain what a KV cache is in three sentences",
+  "empty.example.b": "Translate to French: The weather is nice today",
+  "empty.example.c":
+    "Write a Python function that checks whether a string is a palindrome",
   "empty.chatBody":
     "Send a prompt to a loaded model and watch the real streamed output.",
   "header.apiFormat": "API format",

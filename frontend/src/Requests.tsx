@@ -1,3 +1,4 @@
+import { ErrorNote } from "./error-note";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   CustomSelect,
@@ -62,6 +63,7 @@ import {
   relative,
   useMinWidth,
   type Engine,
+  StatValue,
 } from "./ui";
 import type { Perform } from "./Models";
 import { outcomeLabel, useRecentRequests } from "./recentRequests";
@@ -653,11 +655,7 @@ export function Requests({
               valueFirst
               icon={tile.icon}
               label={tile.label}
-              value={
-                tile.unit && tile.value !== "—"
-                  ? `${tile.value} ${tile.unit}`
-                  : tile.value
-              }
+              value={<StatValue text={tile.value} unit={tile.unit} />}
               trend={tile.trend ?? undefined}
               subtext={
                 <span className="block min-w-0 space-y-1 sm:space-y-2">
@@ -692,9 +690,10 @@ export function Requests({
             onChange={(e) => setQuery(e.target.value)}
           />
         </div>
-        <div className="grid w-full grid-cols-2 items-center gap-2 sm:flex sm:w-auto sm:flex-wrap">
+        <div className="grid w-full grid-cols-3 items-center gap-2 sm:flex sm:w-auto sm:flex-wrap">
           <SegmentedTray
-            className="col-span-2 sm:col-auto"
+            fillOnPhone
+            className="col-span-3 sm:col-auto"
             aria-label={t("requests.list.scope")}
             value={filter}
             onChange={(v) => {
@@ -710,7 +709,9 @@ export function Requests({
               { value: "all", label: t("requests.list.scopeAll") },
             ]}
           />
-          <div className="col-span-2 min-w-0 sm:col-auto sm:flex-none">
+          <div
+            className={`min-w-0 sm:col-auto sm:flex-none ${filter === "active" ? "col-span-3" : ""}`}
+          >
             <CustomSelect
               className="w-full sm:w-40 [&_button]:h-8 [&_button]:text-xs"
               aria-label={t("requests.list.sortBy")}
@@ -727,7 +728,7 @@ export function Requests({
           {filter !== "active" && (
             <>
               <CustomSelect
-                className="w-36 [&_button]:h-8 [&_button]:text-xs"
+                className="w-full sm:w-36 [&_button]:h-8 [&_button]:text-xs"
                 value={outcome}
                 onChange={setOutcome}
                 options={[
@@ -747,7 +748,7 @@ export function Requests({
                 ]}
               />
               <CustomSelect
-                className="w-44 [&_button]:h-8 [&_button]:text-xs"
+                className="w-full sm:w-44 [&_button]:h-8 [&_button]:text-xs"
                 aria-label={t("requests.list.speedAria")}
                 value={speed}
                 onChange={setSpeed}
@@ -1038,15 +1039,22 @@ export function Requests({
                       })}`
                     : ""}
                 </p>
-                <p className="min-w-0 max-w-3xl">
-                  {recent.supported
-                    ? t("requests.footer.ring", {
-                        capacity: number(recent.capacity, 0),
-                      })
-                    : recent.supported === false
-                      ? t("requests.footer.unsupported")
+                {recent.supported === false ? (
+                  <ErrorNote
+                    tone="muted"
+                    className="min-w-0 max-w-3xl"
+                    message={t("requests.footer.unsupported")}
+                    detail={t("requests.footer.unsupportedDetail")}
+                  />
+                ) : (
+                  <p className="min-w-0 max-w-3xl">
+                    {recent.supported
+                      ? t("requests.footer.ring", {
+                          capacity: number(recent.capacity, 0),
+                        })
                       : t("requests.footer.loading")}
-                </p>
+                  </p>
+                )}
                 {speed !== "all" && (
                   <p data-testid="slow-rule">
                     {t(

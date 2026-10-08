@@ -25,7 +25,8 @@ import { t, tr, useLocale } from "./i18n/index.ts";
 import { clock, elapsed, fixed, number, Slot, useMinWidth } from "./ui";
 import { HEALTH_TARGET, type Verdict } from "./health";
 
-const order: ActivityPhase[] = ["idle", "queued", "prefill", "decode"];
+// Idle is the absence of a lit phase, never a pill of its own: the top pill and the status band already say it.
+const order: Exclude<ActivityPhase, "idle">[] = ["queued", "prefill", "decode"];
 const dot = (phase: ActivityPhase, lit: boolean) =>
   !lit
     ? "neutral"
@@ -40,12 +41,19 @@ const dot = (phase: ActivityPhase, lit: boolean) =>
  * moving from queue to prefill to decode changes emphasis, never layout. One
  * progress bar follows the prompt being read.
  */
-export function StateStrip({ status }: { status: EngineStatus | null }) {
+export function StateStrip({
+  status,
+  header,
+}: {
+  status: EngineStatus | null;
+  /** The verdict / version row that shares this block, so the page header is one status block. */
+  header?: ReactNode;
+}) {
   useLocale();
   const a = status ? activity(status) : null;
   const last = status?.last ?? null;
-  const countOf = (id: ActivityPhase) =>
-    !a || id === "idle" ? 0 : a.counts[id as "queued" | "prefill" | "decode"];
+  const countOf = (id: "queued" | "prefill" | "decode") =>
+    !a ? 0 : a.counts[id];
   let left = t("overview.strip.waitingEngine");
   let right = "";
   let progress: number | null = null;
@@ -58,13 +66,6 @@ export function StateStrip({ status }: { status: EngineStatus | null }) {
             output: number(last.completion_tokens, 0),
           })
         : t("overview.strip.waitingRequest");
-      right =
-        last?.decode_tps != null
-          ? t("overview.strip.idleDecode", {
-              label: t("overview.speed.last"),
-              tps: fixed(last.decode_tps),
-            })
-          : "";
     } else if (a.phase === "queued") {
       left = t("overview.strip.queued", { n: a.counts.queued });
     } else if (a.phase === "prefill") {
@@ -104,47 +105,48 @@ export function StateStrip({ status }: { status: EngineStatus | null }) {
   }
   return (
     <Card
-      className="relative flex flex-wrap items-center gap-x-4 gap-y-1 overflow-hidden px-4 py-2 max-sm:pb-3"
+      className="relative flex flex-col gap-2 overflow-hidden p-4"
       data-testid="state-strip"
     >
-      <ul
-        className="flex shrink-0 items-center gap-0.5 max-sm:w-full max-sm:justify-between"
-        aria-label={t("overview.strip.aria")}
-      >
-        {order.map((id) => {
-          const lit = !!a && a.lit.includes(id);
-          return (
-            <li
-              key={id}
-              data-phase={id}
-              data-lit={lit ? "true" : "false"}
-              aria-current={a?.phase === id ? "true" : undefined}
-              className={`inline-flex h-6 items-center gap-1.5 rounded-md px-2 text-xs transition-opacity duration-150 ${lit ? "bg-(--bg-elevated) text-foreground" : "text-muted-foreground opacity-50"}`}
-            >
-              <StatusIndicator status={dot(id, lit)} />
-              {tr(`overview.phase.${id}`)}
-              {id !== "idle" && (
+      {header}
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+        <ul
+          className="flex shrink-0 items-center gap-0.5 max-sm:w-full max-sm:justify-between"
+          aria-label={t("overview.strip.aria")}
+        >
+          {order.map((id) => {
+            const lit = !!a && a.lit.includes(id);
+            return (
+              <li
+                key={id}
+                data-phase={id}
+                data-lit={lit ? "true" : "false"}
+                aria-current={a?.phase === id ? "true" : undefined}
+                className={`inline-flex h-6 items-center gap-1.5 rounded-md px-2 text-xs transition-opacity duration-150 ${lit ? "bg-(--bg-elevated) text-foreground" : "text-muted-foreground opacity-50"}`}
+              >
+                <StatusIndicator status={dot(id, lit)} />
+                {tr(`overview.phase.${id}`)}
                 <Slot ch={1} align="right" className="tabular-nums">
                   {lit ? countOf(id) : ""}
                 </Slot>
-              )}
-            </li>
-          );
-        })}
-      </ul>
-      <p
-        className="h-6 min-w-0 flex-1 truncate text-sm leading-6 tabular-nums max-sm:h-auto max-sm:basis-full max-sm:whitespace-normal"
-        data-testid="state-strip-detail"
-      >
-        {left}
-      </p>
-      <Slot
-        ch={22}
-        align="right"
-        className="min-w-0 truncate text-xs text-muted-foreground max-sm:hidden"
-      >
-        {right}
-      </Slot>
+              </li>
+            );
+          })}
+        </ul>
+        <p
+          className="min-h-6 min-w-0 flex-1 truncate text-sm tabular-nums max-sm:h-auto max-sm:basis-full max-sm:whitespace-normal"
+          data-testid="state-strip-detail"
+        >
+          {left}
+        </p>
+        <Slot
+          ch={22}
+          align="right"
+          className="min-w-0 truncate text-xs text-muted-foreground max-sm:hidden"
+        >
+          {right}
+        </Slot>
+      </div>
       {/* The bar belongs to prefill only; it sits on the card edge, so it never moves the row. */}
       {a?.phase === "prefill" && (
         <Progress
@@ -194,13 +196,15 @@ export function SpeedPair({ status }: { status: EngineStatus }) {
         }
         subtext={
           <>
-            <span className="block min-h-9" data-testid={testId + "-label"}>
-              <span className="text-foreground">{headline.label}</span>
-              {headline.note ? ` · ${headline.note}` : ""}
+            <span data-testid={testId + "-label"}>
+              {headline.label}
+              {headline.note &&
+              (headline.kind !== "last" || status.requests.active > 0)
+                ? ` · ${headline.note}`
+                : ""}
             </span>
-            <span className="block">
-              {windowText} {windowMean == null ? "—" : fixed(windowMean)}
-            </span>
+            {" · "}
+            {windowText} {windowMean == null ? "—" : fixed(windowMean)}
           </>
         }
       />
@@ -233,33 +237,50 @@ const compact = (n: number) =>
       ? `${number(n / 1000, 0)}k`
       : number(n, 0);
 
-/** "自 HH:MM 起 N 筆請求…": what this page has seen finish, with token-weighted rates. */
+/** What this page has seen finish, as labelled figures instead of one long sentence. */
 export function TotalsLine({ totals }: { totals: Totals | null }) {
   useLocale();
+  const items: [string, string][] = totals
+    ? [
+        [
+          t("overview.totals.requests"),
+          t("overview.totals.since", {
+            n: totals.requests,
+            t: clock(totals.since),
+          }),
+        ],
+        [
+          t("overview.totals.input"),
+          t("overview.totals.inputValue", {
+            n: compact(totals.promptTokens),
+            cached: compact(totals.cachedTokens),
+          }),
+        ],
+        [t("overview.totals.output"), compact(totals.completionTokens)],
+        [
+          t("overview.totals.prefill"),
+          totals.prefillTps != null
+            ? `${number(totals.prefillTps, 0)} tok/s`
+            : "—",
+        ],
+        [
+          t("overview.totals.decode"),
+          totals.decodeTps != null ? `${fixed(totals.decodeTps)} tok/s` : "—",
+        ],
+      ]
+    : [];
   return (
     <p
-      className="mt-3 min-h-8 text-xs leading-4 text-muted-foreground"
+      className="flex flex-wrap gap-x-5 gap-y-1 text-xs tabular-nums text-muted-foreground"
       data-testid="totals-line"
       title={t("overview.totals.hint")}
     >
       {totals
-        ? t("overview.totals.line", {
-            t: clock(totals.since),
-            n: totals.requests,
-            input: compact(totals.promptTokens),
-            cached: compact(totals.cachedTokens),
-            prefill:
-              totals.prefillTps != null
-                ? t("overview.totals.prefill", {
-                    tps: number(totals.prefillTps, 0),
-                  })
-                : "",
-            output: compact(totals.completionTokens),
-            decode:
-              totals.decodeTps != null
-                ? t("overview.totals.decode", { tps: fixed(totals.decodeTps) })
-                : "",
-          })
+        ? items.map(([k, v]) => (
+            <span key={k}>
+              {k} <span className="text-foreground">{v}</span>
+            </span>
+          ))
         : t("overview.totals.none")}
     </p>
   );
@@ -312,7 +333,7 @@ export function HealthLine({
         }
       />
       <span
-        className={`text-sm font-semibold ${level === "bad" && !checking ? "text-error" : ""}`}
+        className={`text-base font-semibold ${level === "bad" && !checking ? "text-error" : ""}`}
       >
         {/* i18n-keys: overview.health. */}
         {checking ? "—" : tr(`overview.health.${level}`)}

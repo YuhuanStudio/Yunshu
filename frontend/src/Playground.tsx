@@ -78,7 +78,7 @@ import {
 } from "./ui";
 import { compareOutputs, runStats, type RunTiming } from "./playground-metrics";
 import { SegmentedTray } from "./SegmentedTray";
-import { t, useLocale } from "./i18n/index.ts";
+import { t, tr, useLocale } from "./i18n/index.ts";
 const CodeBlock = lazy(() =>
   import("@yuhuanowo/yunui/content").then((m) => ({ default: m.CodeBlock })),
 );
@@ -669,6 +669,27 @@ export function Playground({
           ? t("playground.empty.compareBody")
           : t("playground.empty.chatBody")
       }
+      action={
+        <div
+          className="flex max-w-xl flex-wrap justify-center gap-2"
+          role="group"
+          aria-label={t("playground.empty.examples")}
+          data-testid="playground-examples"
+        >
+          {(["a", "b", "c"] as const).map((k) => (
+            <Button
+              key={k}
+              size="sm"
+              variant="secondary"
+              className="h-auto max-w-full whitespace-normal py-1.5 text-left"
+              disabled={loading}
+              onClick={() => setDraft(tr(`playground.empty.example.${k}`))}
+            >
+              {tr(`playground.empty.example.${k}`)}
+            </Button>
+          ))}
+        </div>
+      }
     />
   );
   return (
@@ -681,7 +702,7 @@ export function Playground({
         description={t("playground.page.desc")}
       />
       <ChatHeader
-        className="flex-wrap gap-3 border-0 bg-transparent px-0 py-3 sm:h-auto sm:px-0 sm:py-3 max-sm:[&>*]:w-full"
+        className="flex-wrap gap-3 border-0 bg-transparent px-0 py-3 sm:h-auto sm:px-0 sm:py-3 max-sm:[&>*]:w-full max-sm:[&>*:last-child]:hidden"
         left={
           <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
             {modelSelect(model, setModel, t("playground.model.testModel"))}
@@ -717,6 +738,26 @@ export function Playground({
                 { value: "compare", label: t("playground.header.modeCompare") },
               ]}
             />
+            <div className="shrink-0 sm:hidden">
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <IconButton
+                    icon={<MoreHorizontal size={16} />}
+                    label={t("playground.header.more")}
+                  />
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem onSelect={() => setCodeOpen(true)}>
+                    <Code2 size={14} />
+                    {t("playground.header.viewCode")}
+                  </DropdownMenuItem>
+                  <DropdownMenuItem disabled={loading} onSelect={newTest}>
+                    <Plus size={14} />
+                    {t("playground.header.newTest")}
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
           </div>
         }
         actions={
@@ -739,26 +780,6 @@ export function Playground({
                 <Plus size={13} />
                 {t("playground.header.newTest")}
               </Button>
-            </div>
-            <div className="sm:hidden">
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <IconButton
-                    icon={<MoreHorizontal size={16} />}
-                    label={t("playground.header.more")}
-                  />
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end">
-                  <DropdownMenuItem onSelect={() => setCodeOpen(true)}>
-                    <Code2 size={14} />
-                    {t("playground.header.viewCode")}
-                  </DropdownMenuItem>
-                  <DropdownMenuItem disabled={loading} onSelect={newTest}>
-                    <Plus size={14} />
-                    {t("playground.header.newTest")}
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
             </div>
           </>
         }

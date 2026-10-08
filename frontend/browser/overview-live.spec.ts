@@ -118,10 +118,8 @@ test.describe("overview tells the truth about the engine", () => {
       "data-lit",
       "true",
     );
-    await expect(strip.locator("[data-phase=idle]")).toHaveAttribute(
-      "data-lit",
-      "false",
-    );
+    // Idle is no pill of its own: it is the absence of a lit phase.
+    await expect(strip.locator("[data-phase=idle]")).toHaveCount(0);
     await expect(strip.getByTestId("state-strip-detail")).toContainText("34%");
     await expect(page.getByTestId("live-phase")).toContainText("預填");
     await expect(page.getByTestId("live-phase")).toContainText("34%");

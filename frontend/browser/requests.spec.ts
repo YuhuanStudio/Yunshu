@@ -184,9 +184,7 @@ test.describe("requests page trace", () => {
     await expect(
       requests.getByText("TTFT（已結束請求）", { exact: true }),
     ).toBeVisible();
-    await expect(
-      requests.getByText("Decode 速度", { exact: true }),
-    ).toBeVisible();
+    await expect(requests.getByText("解碼速度", { exact: true })).toBeVisible();
     await expect(
       requests.getByText("前綴命中率", { exact: true }),
     ).toBeVisible();
@@ -194,7 +192,7 @@ test.describe("requests page trace", () => {
     await expect(live).toContainText("28.5");
     await expect(
       requests.getByRole("row").filter({ hasText: "qa-prefill-01" }),
-    ).toContainText("Prefill 63%");
+    ).toContainText("預填 63%");
 
     await requests.getByRole("tab", { name: "已結束", exact: true }).click();
     // Three distinct ids appear over successive 3 s polls; a repeated `last` is deduped.
@@ -244,7 +242,7 @@ test.describe("requests page trace", () => {
       dialog
         .getByRole("list", { name: "請求階段" })
         .locator('[aria-current="step"]'),
-    ).toContainText("Prefill");
+    ).toContainText("預填");
     await expect(dialog.getByText(/不代表耗時/)).toBeVisible();
     expect(fixture.detailPaths.length).toBeGreaterThan(0);
     expect(pageErrors).toEqual([]);
