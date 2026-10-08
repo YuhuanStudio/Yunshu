@@ -2558,7 +2558,7 @@
       "kind": "discovery-only",
       "owner": "priorfix",
       "reviewed_date": "2026-10-08",
-      "action": "Bounded Z-Image fixed-seed comparison; delegation decision pending numeric evidence."
+      "action": "Bounded Z-Image fixed-seed parity pilot and CPU-tested three-interleaved-pair quiet timing harness; GPU timing only after pilot succeeds. Delegation decision pending numeric evidence; no source copied."
     },
     {
       "url": "https://github.com/IonDen/mlx-teacache",

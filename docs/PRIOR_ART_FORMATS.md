@@ -60,3 +60,10 @@ recipe matches the converted role template. Verification records this raw
 negative result separately from the upstream readout with fixed identical IDs;
 the latter isolates yes/no logit extraction without claiming service-template
 parity. The Apache-2.0 converted template is pinned as a CPU fixture in vendor.json.
+
+After a successful diffusion pilot, `--suite priorart --env
+PRIORART_KINDS=diffusion-timing` runs three interleaved M5 pairs under gpuq quiet
+admission. Both arms materialize PNGs at 256px / 2 steps / seed 7; loading is
+excluded. Results report medians, output difference and the exact workload, not
+a default-changing speed verdict. The CPU validator rejects incomplete pairs,
+mixed devices and non-finite times.

@@ -122,3 +122,24 @@ def test_runtime_exact_supports_mlx_bfloat16_and_packed_uint32():
     assert module.exact(mx.array([1.25, 2.5], dtype=mx.bfloat16), [1.25, 2.5])
     assert not module.exact(mx.array([1.25, 2.5], dtype=mx.bfloat16), [1.25, 3])
     assert module.exact(mx.array([4294967295], dtype=mx.uint32), [4294967295])
+
+
+def test_diffusion_timing_requires_three_interleaved_same_device_pairs():
+    path = Path(__file__).parents[2] / "scripts/research/priorfix_diffusion_timing.py"
+    spec = importlib.util.spec_from_file_location("timing_probe", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    rows = [
+        {"rep": rep, "arm": arm, "seconds": 2 if arm == "ours" else 1, "device": "M5"}
+        for rep, arm in module.plan()
+    ]
+    assert module.summarize(rows)["mflux_over_ours"] == 0.5
+    with pytest.raises(ValueError):
+        module.summarize(rows[:-1])
+    rows[0]["device"] = "M3"
+    with pytest.raises(ValueError):
+        module.summarize(rows)
+    rows[0]["device"] = "M5"
+    rows[0]["seconds"] = float("nan")
+    with pytest.raises(ValueError):
+        module.summarize(rows)

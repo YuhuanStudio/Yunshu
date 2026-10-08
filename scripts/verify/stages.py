@@ -1124,7 +1124,7 @@ def stage_priorart(ctx: Ctx) -> StageResult:
     )
     for kind in kinds:
         prefix = str(ctx.cand.path / "python")
-        if kind == "diffusion":
+        if kind.startswith("diffusion"):
             prefix += ":/Volumes/P5Plus/yunshu-build/codex/priorfix/mflux-deps"
         extra = []
         if kind == "retrieval":
@@ -1137,6 +1137,11 @@ def stage_priorart(ctx: Ctx) -> StageResult:
                     reference.write_bytes(response.read())
             compile(reference.read_text(), str(reference), "exec")
             extra = ["--rerank-reference", str(reference)]
+        script = ctx.cand.path / "scripts/research/priorfix_runtime_parity.py"
+        mode_args = ["--kind", kind]
+        if kind == "diffusion-timing":
+            script = ctx.cand.path / "scripts/research/priorfix_diffusion_timing.py"
+            mode_args = []
         cell = Cell(
             "priorart",
             kind,
@@ -1145,14 +1150,14 @@ def stage_priorart(ctx: Ctx) -> StageResult:
                 f"PYTHONPATH={prefix}",
                 "HF_HUB_OFFLINE=1",
                 ctx.py,
-                str(ctx.cand.path / "scripts/research/priorfix_runtime_parity.py"),
-                "--kind",
-                kind,
+                str(script),
+                *mode_args,
                 *extra,
                 "--out",
                 "{out}",
             ],
-            mem_gb=32 if kind == "diffusion" else 8,
+            mem_gb=32 if kind.startswith("diffusion") else 8,
+            quiet=kind == "diffusion-timing",
             timeout_min=10,
             stall_min=5,
             priority=-1,

@@ -30,6 +30,10 @@ Changes on main after 0.1.4; not part of a published package yet.
 
 ### Changed
 
+- Modality qualification through yv includes published embedding/classifier loaders,
+  prepared-input parity and bounded fixed-seed diffusion comparisons. Diffusion
+  timing requires three same-device interleaved quiet pairs after a successful pilot.
+
 ### Fixed
 
 - EmbeddingGemma 2 loader constructs published quantized layers through the pinned
