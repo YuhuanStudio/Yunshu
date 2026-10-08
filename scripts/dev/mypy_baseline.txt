@@ -275,10 +275,6 @@
 1	python/yunshu_engine/model_optimizations.py	no-redef	Name "result" already defined on line N
 1	python/yunshu_engine/model_preprocessor.py	abstract	Cannot instantiate abstract class "ModelPreprocessor" with abstract attributes "input_type", "model_family" and "preprocess"
 2	python/yunshu_engine/model_preprocessor.py	no-any-return	Returning Any from function declared to return "bool"
-6	python/yunshu_engine/model_registry.py	attr-defined	"ModelRegistry" has no attribute "_lock"
-15	python/yunshu_engine/model_registry.py	attr-defined	"ModelRegistry" has no attribute "_owners"
-1	python/yunshu_engine/model_registry.py	misc	Generator has incompatible item type "int"; expected "bool"
-1	python/yunshu_engine/model_registry.py	misc	Type cannot be declared in assignment to non-self attribute
 1	python/yunshu_engine/mrope.py	arg-type	Argument "sections" to "MRoPEInfo" has incompatible type "tuple[int, ...]"; expected "tuple[int, int, int] | None"
 1	python/yunshu_engine/mtp_decoder.py	arg-type	Argument 1 to "append" of "list" has incompatible type "tuple[None, None]"; expected "tuple[str, list[Any]]"
 1	python/yunshu_engine/mtp_decoder.py	arg-type	Argument 1 to "int" has incompatible type "int | float | complex"; expected "str | Buffer | SupportsInt | SupportsIndex | SupportsTrunc"
