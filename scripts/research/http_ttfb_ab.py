@@ -104,7 +104,7 @@ async def measure(n, warmup=10):
 def compare(paths):
     arms = {}
     for p in paths:
-        d = json.load(open(p))
+        d = json.loads(Path(p).read_text())
         arms.setdefault(
             f"fastapi {d['fastapi']}/starlette {d['starlette']}", []
         ).extend(d["times_ms"])
