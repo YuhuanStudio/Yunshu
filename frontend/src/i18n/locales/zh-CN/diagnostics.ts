@@ -54,10 +54,7 @@ const diagnostics: Shape<typeof zh> = {
   "group.system": "主机资源",
   "health.cpu.hint": "{n} 个逻辑核心。",
   "health.cpu.name": "主机 CPU",
-  "health.debug.disabled": "未启用",
   "health.debug.failed": "读取失败",
-  "health.debug.hintDisabled":
-    "引擎需设置 YUNSHU_DEBUG_ROUTES=1 并重新启动，才会提供 /debug。",
   "health.debug.hintError": "/debug/system 返回错误，可能需要有效的访问令牌。",
   "health.debug.hintOk": "/debug/system 可读取。",
   "health.debug.name": "诊断接口",

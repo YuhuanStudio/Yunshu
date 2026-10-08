@@ -263,6 +263,15 @@ function createApiFixture() {
   };
 }
 
+/** Settings hydrates its lazy sections right after navigation and a controlled field can drop a value typed in that window: type again until it sticks. */
+async function fillToken(page: Page, token: string) {
+  const field = page.getByLabel("存取權杖");
+  await expect(async () => {
+    await field.fill(token);
+    expect(await field.inputValue()).toBe(token);
+  }).toPass();
+}
+
 async function installRouteSse(page: Page) {
   await page.addInitScript(() => {
     const state = ((
@@ -545,7 +554,7 @@ test("stream send/stop and changing service URL resets sampled history", async (
   );
   await page.goto("/console/");
   await page.getByRole("button", { name: /^開啟設定/ }).click();
-  await page.getByLabel("存取權杖").fill(api.token);
+  await fillToken(page, api.token);
   await page.getByRole("button", { name: "儲存並連線", exact: true }).click();
   await page.getByRole("link", { name: "推理測試", exact: true }).click();
   const playground = page.getByTestId("playground");
@@ -587,7 +596,7 @@ test("stream send/stop and changing service URL resets sampled history", async (
     .fill(
       `${new URL(process.env.PLAYWRIGHT_BASE_URL ?? "http://127.0.0.1:3971").origin}/qa-connection`,
     );
-  await page.getByLabel("存取權杖").fill(api.token);
+  await fillToken(page, api.token);
   await page.getByRole("button", { name: "儲存並連線", exact: true }).click();
   await expect
     .poll(

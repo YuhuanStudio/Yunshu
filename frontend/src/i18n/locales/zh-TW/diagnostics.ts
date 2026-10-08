@@ -51,10 +51,7 @@ const diagnostics = {
   "group.system": "主機資源",
   "health.cpu.hint": "{n} 個邏輯核心。",
   "health.cpu.name": "主機 CPU",
-  "health.debug.disabled": "未啟用",
   "health.debug.failed": "讀取失敗",
-  "health.debug.hintDisabled":
-    "引擎需設定 YUNSHU_DEBUG_ROUTES=1 並重新啟動，才會提供 /debug。",
   "health.debug.hintError": "/debug/system 回應錯誤，可能需要有效的存取權杖。",
   "health.debug.hintOk": "/debug/system 可讀取。",
   "health.debug.name": "診斷介面",

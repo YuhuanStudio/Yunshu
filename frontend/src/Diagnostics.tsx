@@ -203,30 +203,28 @@ export function healthChecks(
       }),
     });
   }
-  rows.push({
-    key: "debug",
-    name: t("diagnostics.health.debug.name"),
-    status:
-      systemState === "ok"
-        ? "online"
-        : systemState === "pending"
-          ? "neutral"
-          : "offline",
-    value:
-      systemState === "ok"
-        ? t("diagnostics.health.debug.ok")
-        : systemState === "pending"
-          ? t("diagnostics.health.debug.pending")
-          : systemState === "disabled"
-            ? t("diagnostics.health.debug.disabled")
+  // A /debug that is switched off is a setting, not a fault: its own card explains it, so no row and no verdict.
+  if (systemState !== "disabled")
+    rows.push({
+      key: "debug",
+      name: t("diagnostics.health.debug.name"),
+      status:
+        systemState === "ok"
+          ? "online"
+          : systemState === "pending"
+            ? "neutral"
+            : "offline",
+      value:
+        systemState === "ok"
+          ? t("diagnostics.health.debug.ok")
+          : systemState === "pending"
+            ? t("diagnostics.health.debug.pending")
             : t("diagnostics.health.debug.failed"),
-    hint:
-      systemState === "disabled"
-        ? t("diagnostics.health.debug.hintDisabled")
-        : systemState === "error"
+      hint:
+        systemState === "error"
           ? t("diagnostics.health.debug.hintError")
           : t("diagnostics.health.debug.hintOk"),
-  });
+    });
   const cpu = metric(at(system, "cpu", "percent"));
   if (cpu != null)
     rows.push({

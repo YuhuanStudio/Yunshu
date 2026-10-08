@@ -350,7 +350,11 @@ test("the token is remembered only after an explicit opt-in", async ({
     ),
   ).toBeNull();
   await sw.click();
-  await page.getByLabel("存取權杖").fill("secret-token");
+  const tokenField = page.getByLabel("存取權杖");
+  await expect(async () => {
+    await tokenField.fill("secret-token");
+    expect(await tokenField.inputValue()).toBe("secret-token");
+  }).toPass();
   await page.getByRole("button", { name: "儲存並連線" }).click();
   const stored = await page.evaluate(() =>
     localStorage.getItem("yunshu.console.rememberedToken"),

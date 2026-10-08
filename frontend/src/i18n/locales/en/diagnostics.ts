@@ -56,10 +56,7 @@ const diagnostics: Shape<typeof zh> = {
   "health.cpu.hint":
     "{n, plural, one {# logical core} other {# logical cores}}.",
   "health.cpu.name": "Host CPU",
-  "health.debug.disabled": "Disabled",
   "health.debug.failed": "Failed",
-  "health.debug.hintDisabled":
-    "Set YUNSHU_DEBUG_ROUTES=1 and restart the engine to expose /debug.",
   "health.debug.hintError":
     "/debug/system returned an error. A valid access token may be required.",
   "health.debug.hintOk": "/debug/system is readable.",
