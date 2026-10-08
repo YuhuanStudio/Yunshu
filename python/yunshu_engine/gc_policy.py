@@ -147,9 +147,14 @@ def install(policy: str, collector: Any = gc) -> TtftGcGuard | None:
         raise ValueError(f"unknown GC policy {policy!r}")
     if policy == "default":
         return None
-    freeze_startup_heap(collector)
+    info = freeze_startup_heap(collector)
+    logger.info("GC policy %s: froze %d objects", policy, info["frozen"])
     if policy == "freeze":
         return None
     g0, g1, _ = collector.get_threshold()
     collector.set_threshold(g0, g1, GEN2_MULTIPLIER)
+    logger.info(
+        "GC policy defer: thresholds %s, first-token hold armed",
+        (g0, g1, GEN2_MULTIPLIER),
+    )
     return TtftGcGuard(collector)
