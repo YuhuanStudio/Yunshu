@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import functools
+import json
 import math
 import time
 from collections.abc import Iterable
@@ -45,6 +46,7 @@ def invalid(message: str, param=None) -> NoReturn:
 
 def sdk_body(body: dict, sdk_type) -> dict:
     try:
+        json.dumps(body, allow_nan=False)
         adapter = TypeAdapter(sdk_type)
         value = adapter.validate_python(body, strict=True)
 
@@ -58,7 +60,7 @@ def sdk_body(body: dict, sdk_type) -> dict:
 
         exhaust(value)  # SDK Iterable fields validate lazily; never persist iterators.
         return body
-    except ValidationError as exc:
+    except (ValidationError, ValueError) as exc:
         invalid(str(exc), "body")
 
 

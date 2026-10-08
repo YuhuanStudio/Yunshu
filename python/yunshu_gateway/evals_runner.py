@@ -24,6 +24,55 @@ from .files_store import text_of
 _tasks: dict[str, asyncio.Task] = {}
 
 
+def chat_messages(messages: list) -> list[dict]:
+    """Convert SDK EvalItem content blocks to normal Chat Completions messages."""
+    if not isinstance(messages, list):
+        raise ConversationError(
+            400, "Input trajectory must be an array of messages", "invalid_type"
+        )
+    result = []
+    for message in messages:
+        if not isinstance(message, dict):
+            raise ConversationError(
+                400, "Input messages must be objects", "invalid_type"
+            )
+        message = dict(message)
+        content = message.get("content")
+        if isinstance(content, dict):
+            content = [content]
+        if isinstance(content, list):
+            parts = []
+            for part in content:
+                if isinstance(part, str):
+                    part = {"type": "text", "text": part}
+                elif isinstance(part, dict):
+                    part = dict(part)
+                    if part.get("type") in ("input_text", "output_text"):
+                        part["type"] = "text"
+                    elif part.get("type") == "input_image":
+                        image = {"url": part["image_url"]}
+                        if "detail" in part:
+                            image["detail"] = part["detail"]
+                        part = {"type": "image_url", "image_url": image}
+                parts.append(part)
+            message["content"] = parts
+        result.append(message)
+    return result
+
+
+def sample_inputs(messages: list) -> list[dict]:
+    # The SDK's output SampleInput.content is a string even for media inputs.
+    return [
+        {
+            "role": m["role"],
+            "content": m.get("content")
+            if isinstance(m.get("content"), str)
+            else json.dumps(m.get("content") or "", ensure_ascii=False),
+        }
+        for m in messages
+    ]
+
+
 def source_rows(source: dict, config: dict) -> list[dict]:
     kind = source.get("type")
     if kind == "file_content":
@@ -69,7 +118,7 @@ def source_rows(source: dict, config: dict) -> list[dict]:
             rows.append(
                 {
                     "item": {
-                        "input": messages,
+                        "input": sample_inputs(messages),
                         "input_trajectory": messages,
                         "metadata": c.get("metadata") or {},
                         **c,
@@ -77,7 +126,7 @@ def source_rows(source: dict, config: dict) -> list[dict]:
                     "sample": {
                         "model": c.get("model") or "",
                         "usage": usage_of(c),
-                        "input": messages,
+                        "input": sample_inputs(messages),
                         "finish_reason": c["choices"][0].get("finish_reason") or "stop",
                         "output_text": c["choices"][0]["message"].get("content") or "",
                         "output": [c["choices"][0]["message"]],
@@ -97,6 +146,12 @@ def source_rows(source: dict, config: dict) -> list[dict]:
         raise ConversationError(
             400, "Data source must contain at most 10000 rows", "invalid_value"
         )
+    try:
+        json.dumps(rows, allow_nan=False)
+    except ValueError as exc:
+        raise ConversationError(
+            400, "Source rows must contain finite JSON values", "invalid_value"
+        ) from exc
     schema = config.get("item_schema")
     validator = Draft202012Validator(schema) if schema else None
     for row in rows:
@@ -137,7 +192,12 @@ async def completion(
     params = {k: v for k, v in params.items() if v is not None}
     if "max_completions_tokens" in params:
         params["max_completion_tokens"] = params.pop("max_completions_tokens")
-    body = {"model": model, "messages": messages, **params, "stream": False}
+    body = {
+        "model": model,
+        "messages": chat_messages(messages),
+        **params,
+        "stream": False,
+    }
     if schema:
         body.setdefault("enable_thinking", False)
         body["response_format"] = {
@@ -219,7 +279,7 @@ async def process(store: EvalStore, rid: str, app, headers: dict):
                             "tool_calls": choice["message"].get("tool_calls") or [],
                         }
                         sample.update(
-                            input=messages,
+                            input=sample_inputs(messages),
                             output=context["sample"]["output"],
                             usage=usage_of(payload),
                             finish_reason=choice.get("finish_reason") or "stop",
@@ -343,7 +403,7 @@ def start(store: EvalStore, rid: str, app, headers: dict):
 
 
 async def cancel(rid: str):
-    task = _tasks.get(rid)
+    task = _tasks.pop(rid, None)
     if task:
         task.cancel()
         with contextlib.suppress(asyncio.CancelledError):

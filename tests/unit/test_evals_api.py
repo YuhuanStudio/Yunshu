@@ -566,3 +566,91 @@ def test_actual_stored_chat_ingestion_after_apiplanned_merge(env, monkeypatch):
     assert finished(sdk, e.id, r.id).result_counts.passed == 1
     sample = sdk.evals.runs.output_items.list(r.id, eval_id=e.id).data[0].sample
     assert sample.model == "local" and sample.usage.total_tokens == 3
+
+
+def test_cancel_before_worker_starts_releases_registry(env):
+    _, client, _, _ = env
+
+    async def queued():
+        rid = "cancel-before-start"
+        evals_runner.start(get_store(), rid, client.app, {})
+        await evals_runner.cancel(rid)
+        assert rid not in evals_runner._tasks
+
+    asyncio.run(queued())
+
+
+def test_sdk_content_blocks_use_normal_chat_wire_format(env):
+    sdk, _, calls, _ = env
+    e = definition(
+        sdk,
+        [
+            {
+                "type": "label_model",
+                "name": "label",
+                "model": "local",
+                "input": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "input_text",
+                                "text": "Grade {{sample.output_text}}",
+                            },
+                            {
+                                "type": "input_image",
+                                "image_url": "data:image/png;base64,eA==",
+                                "detail": "low",
+                            },
+                            "plain",
+                        ],
+                    }
+                ],
+                "labels": ["good"],
+                "passing_labels": ["good"],
+            }
+        ],
+    )
+    ds = source(1, sampling=True)
+    ds["input_messages"]["template"][0]["content"] = {
+        "type": "output_text",
+        "text": "Say {{item.answer}}",
+    }
+    r = sdk.evals.runs.create(e.id, data_source=ds)
+    assert finished(sdk, e.id, r.id).result_counts.passed == 1
+    assert calls[0]["messages"][0]["content"] == [{"type": "text", "text": "Say hello"}]
+    assert calls[1]["messages"][0]["content"] == [
+        {"type": "text", "text": "Grade hello"},
+        {
+            "type": "image_url",
+            "image_url": {"url": "data:image/png;base64,eA==", "detail": "low"},
+        },
+        {"type": "text", "text": "plain"},
+    ]
+    sample = sdk.evals.runs.output_items.list(r.id, eval_id=e.id).data[0].sample
+    assert isinstance(sample.input[0].content, str)
+
+
+def test_nonfinite_inline_and_file_json_are_400(env):
+    sdk, client, _, _ = env
+    e = definition(sdk)
+    ds = source(1)
+    ds["source"]["content"][0]["sample"]["output_text"] = float("nan")
+    raw = json.dumps({"data_source": ds})
+    assert (
+        client.post(
+            f"/v1/evals/{e.id}/runs",
+            content=raw,
+            headers={"content-type": "application/json"},
+        ).status_code
+        == 400
+    )
+    f = sdk.files.create(
+        file=("bad.jsonl", json.dumps(ds["source"]["content"][0]).encode()),
+        purpose="evals",
+    )
+    with pytest.raises(openai.BadRequestError):
+        sdk.evals.runs.create(
+            e.id,
+            data_source={"type": "jsonl", "source": {"type": "file_id", "id": f.id}},
+        )
