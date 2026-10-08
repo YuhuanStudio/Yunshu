@@ -143,6 +143,23 @@ SUITES = {
         "keep_going": True,
         "speed_tol_pct": 3.0,
     },
+    # the follow-up arrives 1 s after the warm resend, i.e. while the next-turn rehearsal of the
+    # warm reply is still prefilling (adopt case); the warm resend itself arrives right after the
+    # cold reply (a diverging request mid-rehearsal). Run with YUNSHU_NEXT_TURN_DELAY_S=0.
+    "followup_mid": {
+        "stages": ["preflight", "identity", "apc", "speed"],
+        "ctx": [32768],
+        "kinds": ["code"],
+        "spec_off": False,
+        "reps": 3,
+        "decode_tokens": 2048,
+        "turn2_tokens": 256,
+        "think_s": 1,
+        "split_cells": True,
+        "long_ask": True,
+        "keep_going": True,
+        "speed_tol_pct": 3.0,
+    },
     # release trend: one rep of the headline long cells, no noise estimate (compare tags pairwise)
     "longtrend": {
         "stages": ["preflight", "identity", "apc", "memory", "longqa"],
