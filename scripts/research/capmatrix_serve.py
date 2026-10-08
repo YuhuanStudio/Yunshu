@@ -98,6 +98,7 @@ def main(argv=None) -> int:
             a.engine,
             set(filter(None, a.features.split(","))),
         )
+        v["tag"] = a.out.name
         (a.out / f"verdict-{a.engine}.json").write_text(
             json.dumps(v, indent=2, ensure_ascii=False) + "\n"
         )

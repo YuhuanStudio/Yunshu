@@ -293,21 +293,38 @@ def test_extra_items_unknown_without_sources(tmp_path):
     assert not board["gate_open"]
 
 
-def test_capability_needs_34_checks(tmp_path):
-    d = tmp_path / "rel"
-    d.mkdir()
-    (d / "verdict.json").write_text(
-        json.dumps({"stages": {"a": {"ok": True}, "b": {"ok": True}}})
+def write_verdict(d, engine, passed, fail=0, complete=True, na=0):
+    d.mkdir(parents=True, exist_ok=True)
+    (d / f"verdict-{engine}.json").write_text(
+        json.dumps(
+            {
+                "engine": engine,
+                "complete": complete,
+                "counts": {"pass": passed, "fail": fail, "error": 0, "na": na},
+                "applicable": passed + fail,
+            }
+        )
     )
+
+
+def test_capability_from_capmatrix_verdict(tmp_path):
     assert pb.capability_item(tmp_path)["status"] == "unknown"
-    (d / "verdict.json").write_text(
-        json.dumps({"stages": {f"s{i}": {"ok": i != 3} for i in range(34)}})
-    )
+    d = tmp_path / "27b"
+    write_verdict(d, "yunshu", 30)
+    assert pb.capability_item(tmp_path)["status"] == "unknown"  # fewer than 34 applicable
+    write_verdict(d, "yunshu", 40, fail=1)
     assert pb.capability_item(tmp_path)["status"] == "gap"
-    (d / "verdict.json").write_text(
-        json.dumps({"stages": {f"s{i}": {"ok": True} for i in range(34)}})
-    )
-    assert pb.capability_item(tmp_path)["status"] == "parity"
+    write_verdict(d, "yunshu", 40, complete=False)
+    assert pb.capability_item(tmp_path)["status"] == "unknown"
+    write_verdict(d, "yunshu", 40)
+    write_verdict(d, "llamacpp", 20, fail=5)
+    item = pb.capability_item(tmp_path)
+    assert item["status"] == "parity" and item["rivals"] == {"llamacpp": "20/25"}
+
+
+def test_capability_ignores_tiny_model_verdicts(tmp_path):
+    write_verdict(tmp_path / "tiny", "yunshu", 40)
+    assert pb.capability_item(tmp_path)["status"] == "unknown"
 
 
 def write_arm(root, name, flags):
