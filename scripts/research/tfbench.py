@@ -401,6 +401,7 @@ def check_rehearsal_engaged(s, a):
     if str(s.extra_env.get("YUNSHU_NEXT_TURN_PREFILL", "")).lower() in (
         "",
         "off",
+        "boundary",  # the no-rehearsal reference
         "0",
         "false",
     ):

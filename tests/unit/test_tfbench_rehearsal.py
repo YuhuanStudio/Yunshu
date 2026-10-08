@@ -85,3 +85,13 @@ def test_engagement_check_passes_when_completed(monkeypatch):
     assert (
         tfbench.check_rehearsal_engaged(_srv({"YUNSHU_NEXT_TURN_PREFILL": "1"}), a) == 1
     )
+
+
+def test_boundary_reference_mode_is_not_checked(monkeypatch):
+    a = type("A", (), {"think_s": 12.0})
+    assert (
+        tfbench.check_rehearsal_engaged(
+            _srv({"YUNSHU_NEXT_TURN_PREFILL": "boundary"}), a
+        )
+        is None
+    )
