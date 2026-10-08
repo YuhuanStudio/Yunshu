@@ -62,6 +62,8 @@ def check(name: str, *routes: str, served: bool, needs: str = "main"):
 # belongs here only when no server run (with the four small checkpoints) can exercise it.
 EXEMPT: dict[str, str] = {
     "POST /api/push": "documented 501 by design: nothing to push to",
+    "POST /v1/decisions": "needs a decision checkpoint (Cloudflare Clef); verified by the decisions-* gpuq jobs (scripts/research/decisions_verify.py), unit-tested with a fake engine and the openai 3.26 client",
+    "POST /v1/systemone": "same engine and checkpoint as /v1/decisions (TypeSafe Jev wire); see decisions_verify.py",
 }
 
 
@@ -2227,6 +2229,19 @@ def _ollama_management(c: Ctx):
     )
 
 
+def unload_when_idle(c, model, wait=10.0):
+    """Unload a model, retrying a 409 conflict for up to `wait` seconds. A socket's model lease
+    is released when the handler returns, a few ms after the client sees its close handshake
+    finish, so an unload sent at once can meet the still-held lease; the 409 says "retry after
+    in-flight requests complete", which is what this does."""
+    deadline = time.time() + wait
+    while True:
+        r = c.req("POST", "/v1/models/unload/" + model, timeout=300)
+        if r.status_code != 409 or time.time() >= deadline:
+            return r
+        time.sleep(0.1)
+
+
 @check(
     "realtime_lazy_load", "WS /v1/realtime", "WS /realtime", needs="multi", served=True
 )
@@ -2236,7 +2251,7 @@ def _realtime_lazy_load(c: Ctx):
         # Load then unload so every socket proves lazy loading from an unloaded state.
         r = c.req("POST", "/v1/models/load", json={"model": model}, timeout=300)
         expect(r.status_code == 200, f"load before unload: {r.text}")
-        r = c.req("POST", "/v1/models/unload/" + model, timeout=300)
+        r = unload_when_idle(c, model)
         expect(r.status_code == 200, f"unload before realtime: {r.text}")
         expect(
             model not in [m["name"] for m in c.req("GET", "/api/ps").json()["models"]],

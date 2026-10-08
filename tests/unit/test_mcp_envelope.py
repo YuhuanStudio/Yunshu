@@ -84,3 +84,17 @@ def test_valid_request_dispatches(monkeypatch):
     b = _body(resp)
     assert b["result"]["serverInfo"]["name"] == "yunshu"
     assert b["id"] == 1
+
+
+def test_notification_204_carries_no_body(monkeypatch):
+    # JSONResponse(None) renders the 4 bytes "null"; a 204 with a body is an HTTP framing
+    # violation (uvicorn: "Response content longer than Content-Length") that drops the
+    # connection, so the client's next request on it sees "Server disconnected".
+    for raw in (
+        {"jsonrpc": "2.0", "method": "notifications/initialized"},
+        {"jsonrpc": "2.0"},
+        {"jsonrpc": "2.0", "method": "nope/never"},
+    ):
+        resp = _call(raw, monkeypatch)
+        assert resp.status_code == 204
+        assert bytes(resp.body) == b""

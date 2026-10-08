@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import os
 import signal
+import socket
 import subprocess
 import sys
 import threading
@@ -17,6 +18,38 @@ ROOT = Path(__file__).resolve().parents[2]
 PORT = 18991
 
 
+def _free_port():
+    for port in range(18990, 19000):
+        with socket.socket() as sock:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            try:
+                sock.bind(("127.0.0.1", port))
+            except OSError:
+                continue
+            return port
+    raise RuntimeError("no free port in 18990-18999")
+
+
+def test_free_port_skips_busy_ports(monkeypatch):
+    class Socket:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def setsockopt(self, *args):
+            pass
+
+        def bind(self, address):
+            assert 18990 <= address[1] <= 18999
+            if address[1] < 18993:
+                raise OSError("busy")
+
+    monkeypatch.setattr(socket, "socket", Socket)
+    assert _free_port() == 18993
+
+
 def test_graceful_shutdown_timeout_values():
     from yunshu_cli.serve import graceful_shutdown_timeout as g
 
@@ -24,6 +57,8 @@ def test_graceful_shutdown_timeout_values():
 
 
 def _start(drain: str, delay="0.2", n="15"):
+    global PORT
+    PORT = _free_port()
     env = {
         **os.environ,
         "YUNSHU_DRAIN_TIMEOUT": drain,
@@ -43,6 +78,8 @@ def _start(drain: str, delay="0.2", n="15"):
         stderr=subprocess.STDOUT,
     )
     for _ in range(100):
+        if p.poll() is not None:
+            raise AssertionError("server exited: " + p.stdout.read().decode()[-500:])
         try:
             if (
                 httpx.get(f"http://127.0.0.1:{PORT}/health/live", timeout=1).status_code

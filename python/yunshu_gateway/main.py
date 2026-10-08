@@ -1110,8 +1110,10 @@ def create_app() -> FastAPI:
     app.include_router(tokenize.router)  # vLLM-native /tokenize, /detokenize
     app.include_router(mcp.router, prefix="/v1")
     app.include_router(scoring.router, prefix="/v1")
+    from .routers import decisions as decisions_mod
     from .routers import tavily as tavily_mod
 
+    app.include_router(decisions_mod.router, prefix="/v1")
     app.include_router(tavily_mod.router)
     app.include_router(cancel_mod.router, prefix="/v1")
     from .routers import yunshu as yunshu_mod
