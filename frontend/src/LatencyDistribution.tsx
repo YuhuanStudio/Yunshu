@@ -122,7 +122,12 @@ export function LatencyDistribution({ rows }: { rows: readonly Row[] }) {
         <Tbody>
           {dist.groups.map((g) => (
             <Tr key={g.id} data-group={g.id}>
-              <Td className="max-w-40 truncate text-sm">{groupLabel(g.id)}</Td>
+              <Td
+                className="max-w-32 truncate text-sm"
+                title={groupLabel(g.id)}
+              >
+                {groupLabel(g.id)}
+              </Td>
               <Td className="tabular-nums">{number(g.n, 0)}</Td>
               <Td
                 className="whitespace-nowrap tabular-nums"
