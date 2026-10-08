@@ -79,7 +79,9 @@ def main(argv=None):
         "yunshu",
         {
             "YUNSHU_TELEMETRY": "on",
-            "YUNSHU_AUTH_TOKEN": "k",
+            # tfbench probes readiness and sends without a key; the admin host route
+            # is open only when auth is explicitly disabled.
+            "YUNSHU_AUTH_DISABLED": "1",
             "YUNSHU_VLM_DRAFT": a.draft,
         },
         "telemetry-probe",
@@ -110,10 +112,7 @@ def main(argv=None):
             )
             finished_at = None
             while True:
-                req = urllib.request.Request(
-                    server.url + "/v1/yunshu/host",
-                    headers={"Authorization": "Bearer k"},
-                )
+                req = urllib.request.Request(server.url + "/v1/yunshu/host")
                 with urllib.request.urlopen(req, timeout=10) as response:
                     sample = json.load(response)
                 samples.append(sample)
