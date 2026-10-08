@@ -95,6 +95,8 @@ const shell: Shape<typeof zh> = {
   "top.search": "搜索",
   "top.themeLight": "切换浅色",
   "top.themeDark": "切换深色",
+  "cmd.placeholder": "搜索页面、模型与操作…",
+  "cmd.title": "命令面板",
   "cmd.go": "前往",
   "cmd.models": "模型",
   "cmd.actions": "操作",

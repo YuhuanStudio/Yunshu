@@ -155,8 +155,10 @@ test("a 128 GiB machine shows 128 GB, never 137 GB (binary units, as macOS)", as
   await page.goto("/console/#/overview");
   await expect(page.getByTestId("status-band")).toContainText("128 GB");
   await expect(page.getByTestId("status-band")).not.toContainText("137");
+  // One used / total rule: the band reads "x / 128 GB" with spaces, like the sidebar.
+  await expect(page.getByTestId("status-band")).toContainText(/\d \/ 128 GB/);
   await trigger(page).click();
   const memory = page.getByTestId("island-memory");
-  await expect(memory).toContainText("/128");
+  await expect(memory).toContainText("/ 128");
   await expect(memory).not.toContainText("137");
 });

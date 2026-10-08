@@ -1,3 +1,4 @@
+import { gbTotalText } from "./byte-format";
 import { Suspense, lazy, useEffect, useRef, useState } from "react";
 import {
   Breadcrumb,
@@ -591,12 +592,14 @@ export default function App() {
                         ? t("shell.side.pick")
                         : t("shell.side.waiting")}
                   </span>
-                  <span className="mt-0.5 block w-full truncate text-xs tabular-nums text-muted-foreground">
-                    {t("shell.side.memory", {
-                      used: fixed(engine.status?.memory.active_gb),
-                      total: fixed(engine.status?.memory.total_gb),
-                    })}
-                  </span>
+                  {engine.status?.memory.total_gb != null && (
+                    <span className="mt-0.5 block w-full truncate text-xs tabular-nums text-muted-foreground">
+                      {t("shell.side.memory", {
+                        used: fixed(engine.status?.memory.active_gb),
+                        total: gbTotalText(engine.status?.memory.total_gb ?? 0),
+                      })}
+                    </span>
+                  )}
                 </Button>
                 <Button
                   variant="outline"
@@ -869,6 +872,11 @@ export default function App() {
             query={query}
             onQueryChange={setQuery}
             items={shown}
+            labels={{
+              placeholder: t("shell.cmd.placeholder"),
+              title: t("shell.cmd.title"),
+              close: t("shell.nav.close"),
+            }}
             empty={
               <p className="p-4 text-sm text-muted-foreground">
                 {t("shell.cmd.empty")}

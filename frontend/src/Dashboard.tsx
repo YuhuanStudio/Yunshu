@@ -1,3 +1,4 @@
+import { gbTotalText } from "./byte-format";
 import { SegmentedTray } from "./SegmentedTray";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import {
@@ -489,11 +490,14 @@ export function Dashboard({
       </div>
 
       {!status ? (
-        <StatGrid data-stat-grid="">
-          {[0, 1, 2, 3].map((i) => (
-            <Skeleton key={i} className="h-[104px] w-full rounded-lg" />
-          ))}
-        </StatGrid>
+        // Offline or refused: the banner says why; four empty placeholder cards would only add blank space.
+        engine.phase === "connecting" ? (
+          <StatGrid data-stat-grid="">
+            {[0, 1, 2, 3].map((i) => (
+              <Skeleton key={i} className="h-[104px] w-full rounded-lg" />
+            ))}
+          </StatGrid>
+        ) : null
       ) : (
         <div
           className={`grid grid-cols-2 gap-2 sm:gap-3 xl:grid-cols-5 max-sm:[&>:last-child]:col-span-2 ${dim}`}
@@ -853,7 +857,10 @@ export function Dashboard({
                 <Slot ch={5}>{fixed(memory?.active_gb)}</Slot>
                 <span className="ml-1.5 text-sm font-normal text-muted-foreground">
                   {t("overview.memory.activeOf", {
-                    gb: fixed(memory?.total_gb),
+                    gb:
+                      memory?.total_gb != null
+                        ? gbTotalText(memory.total_gb)
+                        : fixed(memory?.total_gb),
                   })}
                 </span>
               </p>

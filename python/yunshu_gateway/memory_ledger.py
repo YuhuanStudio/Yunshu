@@ -17,16 +17,29 @@ import threading
 import time
 from typing import Any
 
+from yunshu_engine import units
+
 logger = logging.getLogger(__name__)
 
 HOST_TTL_S = 15.0
-_GB = 1e9
 
 _PRESSURE_NAMES = {1: "normal", 2: "warn", 4: "critical"}
 
 
 def gb(value: float | int | None, digits: int = 3) -> float | None:
-    return None if value is None else round(value / _GB, digits)
+    """Bytes -> binary GB (GB = 1024**3, as macOS and the YUNSHU_*_GB settings); None stays None."""
+    return units.gb(value, digits)
+
+
+def put(
+    out: dict[str, Any], key: str, n_bytes: float | int | None, digits: int = 3
+) -> None:
+    """``out[key_gb]`` (binary GB) and ``out[key_bytes]`` (exact int); both None when unknown."""
+    if n_bytes is None:
+        out[f"{key}_gb"] = None
+        out[f"{key}_bytes"] = None
+    else:
+        units.put_gb(out, key, n_bytes, digits)
 
 
 # ── host (OS) ───────────────────────────────────────────────────────────
@@ -57,37 +70,32 @@ def _sysctl_int(name: str) -> int | None:
 
 
 def _host_uncached() -> dict[str, Any]:
-    out: dict[str, Any] = {
-        "total_gb": None,
-        "pressure_level": None,
-        "swap_used_gb": None,
-        "swap_total_gb": None,
-        "wired_limit_gb": None,
-        "available_gb": None,
-    }
+    out: dict[str, Any] = {"pressure_level": None}
+    for key in ("total", "swap_used", "swap_total", "wired_limit", "available"):
+        put(out, key, None)
     total = _sysctl_int("hw.memsize")
     if total is None:
         try:
             total = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
         except (ValueError, OSError, AttributeError):
             total = None
-    out["total_gb"] = gb(total, 1)
+    put(out, "total", total, 1)
     level = _sysctl_int("kern.memorystatus_vm_pressure_level")
     if level is not None:
         out["pressure_level"] = _PRESSURE_NAMES.get(level, str(level))
     swap = _sysctl_raw("vm.swapusage", 32)
     if swap is not None and len(swap) >= 24:
         s_total, _avail, s_used = struct.unpack_from("<QQQ", swap, 0)
-        out["swap_total_gb"] = gb(s_total, 2)
-        out["swap_used_gb"] = gb(s_used, 2)
+        put(out, "swap_total", s_total, 2)
+        put(out, "swap_used", s_used, 2)
     wired_mb = _sysctl_int("iogpu.wired_limit_mb")
     if wired_mb is not None:
         # 0 means "the system default", which is not a number: report it as unknown.
-        out["wired_limit_gb"] = round(wired_mb * 1048576 / _GB, 2) if wired_mb else None
+        put(out, "wired_limit", wired_mb * 1048576 if wired_mb else None, 2)
     try:
         import psutil
 
-        out["available_gb"] = gb(psutil.virtual_memory().available, 2)
+        put(out, "available", psutil.virtual_memory().available, 2)
     except Exception:
         logger.debug("psutil unavailable", exc_info=True)
     return out
@@ -151,6 +159,30 @@ def mlx_counters() -> dict[str, int | None]:
         out["peak"] = int(mx.get_peak_memory())
     except Exception:
         logger.debug("mlx memory unavailable", exc_info=True)
+    return out
+
+
+def _bytes_block(values: dict[str, float | int | None]) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    for key, n in values.items():
+        put(out, key, n)
+    return out
+
+
+def _mlx_block(mlx: dict[str, Any]) -> dict[str, Any]:
+    return _bytes_block(
+        {
+            "active": mlx["active"],
+            "cache": mlx["cache"],
+            "peak": mlx["peak"],
+            "recommended_working_set": recommended_working_set(),
+        }
+    )
+
+
+def _overshoot_block(overshoot: float | int | None) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    put(out, "attribution_overshoot", overshoot if overshoot else None)
     return out
 
 
@@ -360,32 +392,28 @@ def collect(manager: Any, engine: Any, display_id: str | None = None) -> dict[st
         o["gb"] = gb(o["bytes"])
 
     total_gb = hst["total_gb"]
-    free_bytes = None
-    if hst["available_gb"] is not None:
-        free_bytes = int(hst["available_gb"] * _GB)
+    free_bytes = hst.get("available_bytes")
     return {
         "object": "yunshu.memory",
         "t": round(time.time(), 3),
         "total_gb": total_gb,
+        "total_bytes": hst.get("total_bytes"),
         "free_gb": hst["available_gb"],
         "free_bytes": free_bytes,
-        "host": {k: v for k, v in hst.items() if k not in ("total_gb", "available_gb")},
-        "mlx": {
-            "active_gb": gb(mlx["active"]),
-            "cache_gb": gb(mlx["cache"]),
-            "peak_gb": gb(mlx["peak"]),
-            "recommended_working_set_gb": gb(recommended_working_set()),
+        "host": {
+            k: v
+            for k, v in hst.items()
+            if k not in ("total_gb", "total_bytes", "available_gb", "available_bytes")
         },
-        "process": {
-            "footprint_gb": gb(proc["footprint"]),
-            "footprint_peak_gb": gb(proc["footprint_peak"]),
-        },
+        "mlx": _mlx_block(mlx),
+        "process": _bytes_block(
+            {"footprint": proc["footprint"], "footprint_peak": proc["footprint_peak"]}
+        ),
         "owners": owners,
-        "attribution_overshoot_gb": gb(overshoot) if overshoot else None,
+        **_overshoot_block(overshoot),
         "storage_tiers": storage,
         "limits": {
-            "apc_max_gb": gb(apc_max),
-            "apc_warm_max_gb": gb(warm_max),
+            **_bytes_block({"apc_max": apc_max, "apc_warm_max": warm_max}),
             "guard_margin_pct": guard_margin,
         },
     }

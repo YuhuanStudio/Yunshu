@@ -16,6 +16,7 @@ import {
   DialogTitle,
   Sheet,
   Slider,
+  Switch,
   Tabs,
   TabsContent,
   TabsList,
@@ -45,6 +46,7 @@ import {
   ImagePlus,
   X,
   BookMarked,
+  ScanText,
   Wrench,
   Code2,
 } from "lucide-react";
@@ -53,6 +55,7 @@ import {
   streamCompletion,
   type CompletionBody,
   type Dialect,
+  type TokenLogprob,
 } from "./stream";
 import { ErrorNote } from "./error-note";
 import { UNDO_WINDOW_MS, thinkingOpen } from "./playground-ui-state";
@@ -75,9 +78,9 @@ import {
 } from "./ui";
 import { compareOutputs, runStats, type RunTiming } from "./playground-metrics";
 import { SegmentedTray } from "./SegmentedTray";
+import { ocrCapable } from "./ocr-api";
 import { BUILTIN_PRESETS, PlaygroundLibrary } from "./PlaygroundLibrary";
 import { saveBlob } from "./admin-logs-api";
-import { ToolsTester } from "./ToolsTester";
 import { readStoredLibrary, writeStoredLibrary } from "./library-store";
 import {
   deleteHistory,
@@ -115,6 +118,10 @@ type Run = {
   incomplete?: boolean;
   finishReason?: string;
   timing?: RunTiming;
+  /** Per-token probabilities, when logprobs were requested and the engine returned them. */
+  tokens?: TokenLogprob[];
+  /** True when this reply was asked for logprobs, so a missing answer can be said out loud. */
+  wantedLogprobs?: boolean;
 };
 type Message = Run & {
   id: string;
@@ -201,6 +208,37 @@ function ReplyStats({ run, now }: { run: Run; now: number }) {
   );
 }
 
+// The tools tester is a dialog opened on demand: its schema validator and rounds loop load with it.
+const ToolsTester = lazy(() =>
+  import("./ToolsTester").then((m) => ({ default: m.ToolsTester })),
+);
+const OcrDialog = lazy(() =>
+  import("./OcrDialog").then((m) => ({ default: m.OcrDialog })),
+);
+const TokenConfidencePanel = lazy(() =>
+  import("./TokenConfidencePanel").then((m) => ({
+    default: m.TokenConfidencePanel,
+  })),
+);
+
+/** Token-by-token confidence under a reply, or one honest line when logprobs were asked for and never came. */
+function ReplyConfidence({ run, streaming }: { run: Run; streaming: boolean }) {
+  if (!run.tokens?.length)
+    return run.wantedLogprobs && !streaming && run.content ? (
+      <p
+        className="mt-2 text-xs text-muted-foreground"
+        data-testid="conf-unavailable"
+      >
+        {t("playground.conf.unavailable")}
+      </p>
+    ) : null;
+  return (
+    <Suspense fallback={null}>
+      <TokenConfidencePanel tokens={run.tokens} />
+    </Suspense>
+  );
+}
+
 function ReplyBody({ run, streaming }: { run: Run; streaming: boolean }) {
   const [userOpen, setUserOpen] = useState<boolean | null>(null);
   return (
@@ -235,6 +273,7 @@ function ReplyBody({ run, streaming }: { run: Run; streaming: boolean }) {
           }
         />
       </Suspense>
+      <ReplyConfidence run={run} streaming={streaming} />
       {run.finishReason === "length" && (
         <p className="mt-2 text-xs text-warning">
           {t("playground.reply.lengthLimit")}
@@ -258,6 +297,8 @@ export function Playground({
   initialModel: string;
 }) {
   useLocale();
+  const toolsEverOpened = useRef(false);
+  const ocrEverOpened = useRef(false);
   const [model, setModel] = useState(initialModel),
     [mode, setMode] = useState<Mode>("chat"),
     [dialect, setDialect] = useState<Dialect>("chat"),
@@ -284,6 +325,8 @@ export function Playground({
     [maxTokens, setMaxTokens] = useState(512),
     [thinking, setThinking] = useState("auto"),
     [jsonMode, setJsonMode] = useState("text"),
+    [logprobs, setLogprobs] = useState(false),
+    [ocrOpen, setOcrOpen] = useState(false),
     [image, setImage] = useState<{ name: string; url: string } | null>(null),
     [attachmentOpen, setAttachmentOpen] = useState(false),
     [readingImage, setReadingImage] = useState(false),
@@ -406,6 +449,15 @@ export function Playground({
       if (mounted.current) setReadingImage(false);
     }
   }
+  if (toolsOpen) toolsEverOpened.current = true;
+  if (ocrOpen) ocrEverOpened.current = true;
+  // OCR engines first, then any loaded VLM (the route falls back to one).
+  const ocrModel =
+    (engine.status?.models ?? []).find(
+      (m) => ocrCapable(m) && /ocr/i.test(m.type),
+    )?.id ??
+    (engine.status?.models ?? []).find(ocrCapable)?.id ??
+    "";
   const isVlm = (m: typeof chosen) =>
       m?.type.toLowerCase().includes("vlm") ?? false,
     supportsImage = compare ? isVlm(chosen) && isVlm(chosenB) : isVlm(chosen),
@@ -440,6 +492,9 @@ export function Playground({
       ...(jsonMode === "json"
         ? { response_format: { type: "json_object" as const } }
         : {}),
+      ...(logprobs && dialect === "chat"
+        ? { logprobs: true, top_logprobs: 5 }
+        : {}),
     };
   }
   /** Stream one reply; `patch` updates the owning Run state. Never throws on abort. */
@@ -450,7 +505,11 @@ export function Playground({
     patch: (fn: (r: Run) => Run) => void,
   ) {
     const timing: RunTiming = { start: performance.now(), chunks: 0 };
-    patch((r) => ({ ...r, timing: { ...timing } }));
+    patch((r) => ({
+      ...r,
+      timing: { ...timing },
+      wantedLogprobs: logprobs && dialect === "chat",
+    }));
     try {
       await streamCompletion(
         connection,
@@ -468,6 +527,9 @@ export function Playground({
             content: m.content + (delta.content ?? ""),
             reasoning: (m.reasoning ?? "") + (delta.reasoning ?? ""),
             finishReason: delta.finishReason ?? m.finishReason,
+            tokens: delta.tokens
+              ? [...(m.tokens ?? []), ...delta.tokens]
+              : m.tokens,
             timing: { ...timing },
           }));
         },
@@ -683,10 +745,7 @@ export function Playground({
     const base = connection.baseUrl;
     void readStoredLibrary(base).then((stored) => {
       if (!live) return;
-      const { library: next, migrate } = reconcile(
-        loadLibrary(base),
-        stored,
-      );
+      const { library: next, migrate } = reconcile(loadLibrary(base), stored);
       setLibrary(next);
       if (migrate)
         void writeStoredLibrary(base, next).then(
@@ -866,6 +925,16 @@ export function Playground({
               >
                 <BookMarked size={13} />
                 {t("playground.library.open")}
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={!ocrModel}
+                title={ocrModel ? undefined : t("playground.ocr.unavailable")}
+                onClick={() => setOcrOpen(true)}
+              >
+                <ScanText size={13} />
+                {t("playground.ocr.open")}
               </Button>
               <Button
                 size="sm"
@@ -1223,6 +1292,22 @@ export function Playground({
             </p>
           </div>
           <div>
+            <label className="flex items-center justify-between gap-3 text-sm">
+              {t("playground.params.logprobs")}
+              <Switch
+                label={t("playground.params.logprobs")}
+                checked={logprobs}
+                onCheckedChange={setLogprobs}
+                disabled={dialect !== "chat"}
+              />
+            </label>
+            <p className="mt-2 text-xs text-muted-foreground">
+              {dialect === "chat"
+                ? t("playground.params.logprobsNote")
+                : t("playground.params.logprobsOther")}
+            </p>
+          </div>
+          <div>
             <p className="mb-4 text-sm">
               Temperature · {fixed(temperature, 1)}
             </p>
@@ -1321,12 +1406,26 @@ export function Playground({
             })()}
         </DialogContent>
       </Dialog>
-      <ToolsTester
-        open={toolsOpen}
-        onClose={() => setToolsOpen(false)}
-        connection={connection}
-        model={model}
-      />
+      {ocrEverOpened.current && (
+        <Suspense fallback={null}>
+          <OcrDialog
+            open={ocrOpen}
+            onClose={() => setOcrOpen(false)}
+            connection={connection}
+            model={ocrModel}
+          />
+        </Suspense>
+      )}
+      {toolsEverOpened.current && (
+        <Suspense fallback={null}>
+          <ToolsTester
+            open={toolsOpen}
+            onClose={() => setToolsOpen(false)}
+            connection={connection}
+            model={model}
+          />
+        </Suspense>
+      )}
       <PlaygroundLibrary
         open={libraryOpen}
         onClose={() => setLibraryOpen(false)}

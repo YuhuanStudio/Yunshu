@@ -1,3 +1,4 @@
+import { memoryPairText } from "./byte-format.ts";
 import type { EngineStatus } from "./api.ts";
 import { activity, phaseLabels } from "./engineView.ts";
 import { offlineCause } from "./errors.ts";
@@ -175,10 +176,10 @@ export function footerPills(input: FooterInput): FooterPill[] {
     pills.push({
       key: "memory",
       label: t("shell.footer.memory.label"),
-      value: `${n(active, 1)}/${n(total, 0)} GB`,
+      value: memoryPairText(active, total),
       tone,
       dot: true,
-      minCh: 12,
+      minCh: 14,
       help:
         t("shell.footer.memory.help", {
           active: n(active, 1),

@@ -93,6 +93,8 @@ const shell = {
   "top.search": "搜尋",
   "top.themeLight": "切換淺色",
   "top.themeDark": "切換深色",
+  "cmd.placeholder": "搜尋頁面、模型與操作…",
+  "cmd.title": "命令面板",
   "cmd.go": "前往",
   "cmd.models": "模型",
   "cmd.actions": "操作",

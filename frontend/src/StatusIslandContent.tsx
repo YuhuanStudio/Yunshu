@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { gbTotalText, memoryPairText } from "./byte-format";
 import { ChevronDown } from "lucide-react";
 import { useMinWidth } from "./ui";
 import {
@@ -197,7 +198,7 @@ export function StatusIslandContent({
           title={t("shell.island.mem.title")}
           note={
             <span>
-              {fixed(active, 1)}/{number(total, 0)}
+              {fixed(active, 1)} / {gbTotalText(total)}
               <span className="text-xs">GB</span>
             </span>
           }
@@ -206,7 +207,7 @@ export function StatusIslandContent({
           <SegmentMeter
             value={usage}
             label={t("shell.island.mem.meter")}
-            valueText={`${fixed(active, 1)} / ${number(total, 0)} GB`}
+            valueText={memoryPairText(active, total)}
             segments={32}
             warnAt={MEMORY_WARN}
             dangerAt={MEMORY_DANGER}

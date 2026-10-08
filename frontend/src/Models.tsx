@@ -1,3 +1,4 @@
+import { gbTotalText } from "./byte-format";
 import { has, t, tr } from "./i18n/index.ts";
 import { unloadImpact } from "./model-impact";
 import { useEffect, useRef, useState } from "react";
@@ -538,7 +539,7 @@ export function Models({
                 <p className="mt-1 text-2xl font-semibold tabular-nums">
                   {fixed(memActive)}
                   <span className="ml-1 text-xs font-normal text-muted-foreground">
-                    / {number(memTotal, 0)} GB
+                    / {memTotal != null ? gbTotalText(memTotal) : "—"} GB
                   </span>
                 </p>
               </div>

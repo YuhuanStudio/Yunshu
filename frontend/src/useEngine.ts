@@ -208,6 +208,9 @@ export function useEngine(connection: Connection): UseEngineResult {
           historyAskedRef.current = connectionKey;
           void fetchServerHistory(apiConnection, {
             signal: controller.signal,
+            // A newer engine sends exact bytes in /status and binary GB everywhere.
+            binary:
+              (status.memory as { total_bytes?: unknown }).total_bytes != null,
           }).then(
             (loaded) => {
               if (!loaded || generation !== generationRef.current) return;

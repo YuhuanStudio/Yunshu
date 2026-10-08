@@ -1,3 +1,4 @@
+import { memoryPairText } from "./byte-format";
 import { useEffect, useState } from "react";
 import {
   Button,
@@ -44,6 +45,7 @@ import { requestServerJson } from "./management-api";
 import { downloadBundle } from "./admin-logs-api";
 import { detailText } from "./errors.ts";
 import { ErrorNote } from "./error-note";
+import { RealtimeHealth } from "./RealtimeHealth";
 import { SupportBundlePreview } from "./SupportBundlePreview";
 import { has, t, tr } from "./i18n/index.ts";
 import { list } from "./i18n/format.ts";
@@ -170,10 +172,7 @@ export function healthChecks(
               total,
               tone: ratio > 0.9 ? "warning" : "accent",
             },
-      value:
-        active != null && total
-          ? `${number(active)} / ${number(total)} GB`
-          : "—",
+      value: active != null && total ? memoryPairText(active, total) : "—",
       hint:
         ratio != null && ratio > 0.9
           ? t("diagnostics.health.memory.hintHigh")
@@ -449,6 +448,7 @@ export function Diagnostics({
           </div>
         }
       />
+      <RealtimeHealth connection={connection} />
       <SupportBundlePreview endpoints={results.map((r) => r.path)} />
       {bundle.state !== "idle" && bundle.state !== "busy" && (
         <p
@@ -793,7 +793,8 @@ export function Diagnostics({
                                     ? undefined
                                     : Number(
                                         at(cache, "apc", "resident_bytes"),
-                                      ) / 2 ** 20,
+                                      ) /
+                                        2 ** 20,
                                 )}{" "}
                                 MB
                               </Td>

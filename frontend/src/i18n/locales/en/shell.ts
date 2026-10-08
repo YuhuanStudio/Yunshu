@@ -100,6 +100,8 @@ const shell: Shape<typeof zh> = {
   "top.search": "Search",
   "top.themeLight": "Switch to light",
   "top.themeDark": "Switch to dark",
+  "cmd.placeholder": "Search pages, models and actions…",
+  "cmd.title": "Command palette",
   "cmd.go": "Go to",
   "cmd.models": "Models",
   "cmd.actions": "Actions",

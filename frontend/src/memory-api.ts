@@ -1,4 +1,4 @@
-import { binaryGb } from "./byte-format.ts";
+import { BYTES_PER_GB, binaryGb, readGb } from "./byte-format.ts";
 import { connectionScope, useScopedState } from "./scoped-state.ts";
 import { useEffect, useState } from "react";
 import { fixed } from "./i18n/format.ts";
@@ -60,19 +60,19 @@ export function parseMemory(raw: unknown): MemoryLedgerData {
     mlx = rec(r.mlx),
     limits = rec(r.limits);
   return {
-    total_gb: gbNum(r.total_gb),
-    free_gb: gbNum(r.free_gb),
+    total_gb: readGb(r, "total"),
+    free_gb: readGb(r, "free"),
     host: {
       pressure_level: str(host.pressure_level),
-      swap_used_gb: gbNum(host.swap_used_gb),
-      swap_total_gb: gbNum(host.swap_total_gb),
-      wired_limit_gb: gbNum(host.wired_limit_gb),
+      swap_used_gb: readGb(host, "swap_used"),
+      swap_total_gb: readGb(host, "swap_total"),
+      wired_limit_gb: readGb(host, "wired_limit"),
     },
     mlx: {
-      active_gb: gbNum(mlx.active_gb),
-      cache_gb: gbNum(mlx.cache_gb),
-      peak_gb: gbNum(mlx.peak_gb),
-      recommended_working_set_gb: gbNum(mlx.recommended_working_set_gb),
+      active_gb: readGb(mlx, "active"),
+      cache_gb: readGb(mlx, "cache"),
+      peak_gb: readGb(mlx, "peak"),
+      recommended_working_set_gb: readGb(mlx, "recommended_working_set"),
     },
     owners: (Array.isArray(r.owners) ? r.owners : []).map((o) => {
       const x = rec(o);
@@ -80,13 +80,16 @@ export function parseMemory(raw: unknown): MemoryLedgerData {
         kind: str(x.kind) ?? "other",
         id: str(x.id),
         bytes: num(x.bytes),
-        gb: gbNum(x.gb),
+        gb:
+          num(x.bytes) != null
+            ? (x.bytes as number) / BYTES_PER_GB
+            : gbNum(x.gb),
         reclaimable: x.reclaimable === true,
         estimated: x.estimated === true,
         source: str(x.source),
       };
     }),
-    attribution_overshoot_gb: gbNum(r.attribution_overshoot_gb),
+    attribution_overshoot_gb: readGb(r, "attribution_overshoot"),
     limits: {
       apc_max_gb: num(limits.apc_max_gb),
       apc_warm_max_gb: num(limits.apc_warm_max_gb),

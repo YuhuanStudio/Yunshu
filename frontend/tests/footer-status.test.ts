@@ -103,7 +103,7 @@ test("memory tone follows pressure level, swap and gpu only when present", () =>
   const byKey = Object.fromEntries(pills.map((p) => [p.key, p]));
   assert.equal(byKey.memory.tone, "danger");
   assert.match(byKey.memory.help, /嚴重/);
-  assert.match(byKey.memory.value ?? "", /^40\.0\/128 GB$/);
+  assert.match(byKey.memory.value ?? "", /^40\.0 \/ 128 GB$/);
   assert.equal(byKey.swap.value, "2.2 GB");
   assert.equal(byKey.gpu.value, "85%");
   const calm = footerPills(
@@ -166,6 +166,6 @@ test("memory GB comes from the status only; the ledger adds pressure, never a se
   const memory = footerPills(input(mk(), { ledger })).find(
     (p) => p.key === "memory",
   );
-  assert.equal(memory?.value, "40.0/128 GB");
+  assert.equal(memory?.value, "40.0 / 128 GB");
   assert.equal(memory?.tone, "warning");
 });

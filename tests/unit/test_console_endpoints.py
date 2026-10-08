@@ -171,7 +171,7 @@ def test_sample_row_reads_registry_without_an_engine(monkeypatch):
     monkeypatch.setattr(
         memory_ledger,
         "mlx_counters",
-        lambda: {"active": 4e9, "cache": 1e9, "peak": 5e9},
+        lambda: {"active": 4 * 2**30, "cache": 2**30, "peak": 5 * 2**30},
     )
     info = x_yunshu.RequestInfo(
         request_id="live", method="POST", path="/v1/chat/completions"
@@ -231,7 +231,7 @@ async def test_sampler_task_runs_and_stops(monkeypatch):
 
 # ── B1 ──────────────────────────────────────────────────────────────────
 
-GB = 10**9
+GB = 2**30
 
 
 class _Eng:
@@ -513,3 +513,19 @@ def test_measured_weight_bytes_walks_parameters():
     eng = SimpleNamespace(_model=model)
     assert memory_ledger.measured_weight_bytes(eng) == 175
     assert memory_ledger.measured_weight_bytes(SimpleNamespace()) is None
+
+
+def test_ledger_reports_binary_gb_with_exact_bytes(monkeypatch):
+    """GB = 1024**3 and every *_gb has an exact *_bytes sibling (engine memunits contract)."""
+    _fake_world(monkeypatch)
+    led = memory_ledger.collect(_manager(_entry("m", _Eng())), None)
+    assert led["mlx"]["active_gb"] == 20.0
+    assert led["mlx"]["active_bytes"] == 20 * GB
+    assert led["mlx"]["recommended_working_set_bytes"] == 100 * GB
+    assert led["process"]["footprint_bytes"] == 22 * GB
+    assert led["process"]["footprint_peak_bytes"] is None
+    assert "apc_max_bytes" in led["limits"]
+    assert memory_ledger.gb(128 * GB, 1) == 128.0
+    out: dict = {}
+    memory_ledger.put(out, "x", None)
+    assert out == {"x_gb": None, "x_bytes": None}

@@ -10,17 +10,20 @@ export interface ServerHistory {
 const num = (v: unknown): number | null =>
   typeof v === "number" && Number.isFinite(v) ? v : null;
 
-const gbOf = (v: unknown): number | null => {
-  const n = num(v);
-  return n == null ? null : binaryGb(n);
-};
-
 /**
  * Parse `GET /v1/yunshu/history` (columnar rows, epoch seconds). Anything that
  * is not the documented shape yields null, so an older or odd server simply
  * means "no engine-side history" and the charts start from live polls.
  */
-export function parseServerHistory(payload: unknown): ServerHistory | null {
+export function parseServerHistory(
+  payload: unknown,
+  /** True when the engine reports binary GB (it also sends `*_bytes` in /status); older engines are decimal. */
+  binary = false,
+): ServerHistory | null {
+  const gbOf = (v: unknown): number | null => {
+    const n = num(v);
+    return n == null ? null : binary ? n : binaryGb(n);
+  };
   if (!payload || typeof payload !== "object") return null;
   const body = payload as Record<string, unknown>;
   if (body.enabled === false) return null;
@@ -66,7 +69,12 @@ export function parseServerHistory(payload: unknown): ServerHistory | null {
 /** The engine's own history for the last hour; null when the server has none. */
 export async function fetchServerHistory(
   connection: Connection,
-  options: { signal?: AbortSignal; now?: number; windowS?: number } = {},
+  options: {
+    signal?: AbortSignal;
+    now?: number;
+    windowS?: number;
+    binary?: boolean;
+  } = {},
 ): Promise<ServerHistory | null> {
   const now = options.now ?? Date.now();
   try {
@@ -75,7 +83,7 @@ export async function fetchServerHistory(
       timeoutMs: 8_000,
       search: { since: String(now / 1000 - (options.windowS ?? 3600)) },
     });
-    return parseServerHistory(payload);
+    return parseServerHistory(payload, options.binary);
   } catch (error) {
     if (options.signal?.aborted) throw error;
     return null;

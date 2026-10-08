@@ -1,4 +1,4 @@
-import { binaryGb } from "./byte-format.ts";
+import { readGb } from "./byte-format.ts";
 import { failureMessage, statusMessage } from "./errors.ts";
 import { t } from "./i18n/index.ts";
 /** Small, typed client for Yunshu's same-origin `/v1` control/status routes. */
@@ -116,6 +116,8 @@ export interface RequestOptions {
   body?: unknown;
   signal?: AbortSignal;
   timeoutMs?: number;
+  /** A multipart body (file upload); sent as is, without a JSON content type. */
+  form?: FormData;
   /** Query parameters, kept apart from the path so the path stays validated. */
   search?: Readonly<Record<string, string>>;
 }
@@ -235,8 +237,10 @@ export async function requestJson<T>(
   const headers = new Headers({ Accept: "application/json" });
   if (connection.token.trim())
     headers.set("Authorization", `Bearer ${connection.token.trim()}`);
-  let body: string | undefined;
-  if (options.body !== undefined) {
+  let body: string | FormData | undefined;
+  if (options.form) {
+    body = options.form;
+  } else if (options.body !== undefined) {
     headers.set("Content-Type", "application/json");
     body = JSON.stringify(options.body);
   }
@@ -425,8 +429,13 @@ function validateMemory(value: Record<string, unknown>): EngineMemoryStatus {
   // Memory figures are display-only: an absent or malformed one is unknown.
   const memory: Record<string, unknown> = { ...value };
   for (const field of fields) {
-    if (!isFiniteNumber(value[field])) delete memory[field];
-    else if (field !== "pressure") memory[field] = binaryGb(value[field]);
+    if (field === "pressure") {
+      if (!isFiniteNumber(value[field])) delete memory[field];
+      continue;
+    }
+    const gb = readGb(value, field.slice(0, -3));
+    if (gb == null) delete memory[field];
+    else memory[field] = gb;
   }
   return memory as EngineMemoryStatus;
 }
@@ -468,9 +477,10 @@ export function parseEngineStatus(value: unknown): EngineStatus {
     ] as const) {
       const raw = model[field];
       if (raw === undefined) continue;
+      const sizeGb = field === "size_gb" ? readGb(model, "size") : null;
       optional[field] = isFiniteNumber(raw)
         ? field === "size_gb"
-          ? binaryGb(raw)
+          ? (sizeGb ?? raw)
           : raw
         : field === "size_gb"
           ? undefined

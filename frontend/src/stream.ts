@@ -24,6 +24,9 @@ export interface CompletionBody {
   stream?: boolean;
   enable_thinking?: boolean;
   response_format?: { type: "json_object" };
+  /** Chat dialect only: ask for the probability of every chosen token (and its runner-ups). */
+  logprobs?: boolean;
+  top_logprobs?: number;
   stream_options?: { include_usage: boolean };
 }
 
@@ -40,8 +43,17 @@ export interface CompletionUsage {
   };
 }
 
+/** One chosen token with its log-probability and the engine's runner-up candidates. */
+export interface TokenLogprob {
+  token: string;
+  logprob: number;
+  alternatives?: { token: string; logprob: number }[];
+}
+
 export interface CompletionDelta {
   content?: string;
+  /** OpenAI `choices[0].logprobs.content`: the tokens this chunk added. */
+  tokens?: TokenLogprob[];
   reasoning?: string;
   finishReason?: string;
   usage?: CompletionUsage;
@@ -49,6 +61,40 @@ export interface CompletionDelta {
 
 const finiteNumber = (value: unknown): number | undefined =>
   typeof value === "number" && Number.isFinite(value) ? value : undefined;
+
+/**
+ * `choices[0].logprobs.content` of a chat chunk: every entry needs a string token and a finite
+ * logprob, anything else is dropped (a malformed row never becomes a 0% token).
+ */
+export function parseLogprobs(logprobs: unknown): TokenLogprob[] {
+  const content =
+    logprobs && typeof logprobs === "object"
+      ? (logprobs as Record<string, unknown>).content
+      : undefined;
+  if (!Array.isArray(content)) return [];
+  const out: TokenLogprob[] = [];
+  for (const entry of content) {
+    if (!entry || typeof entry !== "object") continue;
+    const e = entry as Record<string, unknown>;
+    if (typeof e.token !== "string" || !finiteNumber(e.logprob)) continue;
+    const tops = Array.isArray(e.top_logprobs)
+      ? e.top_logprobs.flatMap((a): { token: string; logprob: number }[] => {
+          const r = a as Record<string, unknown> | null;
+          return r &&
+            typeof r.token === "string" &&
+            finiteNumber(r.logprob) !== undefined
+            ? [{ token: r.token, logprob: r.logprob as number }]
+            : [];
+        })
+      : [];
+    out.push({
+      token: e.token,
+      logprob: e.logprob as number,
+      ...(tops.length ? { alternatives: tops } : {}),
+    });
+  }
+  return out;
+}
 
 /** Read OpenAI `usage` (plus optional x_yunshu extras) from a stream chunk. */
 export function parseUsage(
@@ -540,6 +586,8 @@ export async function streamCompletion(
     const choice = choices[0] as Record<string, unknown>;
     if (typeof choice.finish_reason === "string")
       onDelta({ finishReason: choice.finish_reason });
+    const tokens = parseLogprobs(choice.logprobs);
+    if (tokens.length) onDelta({ tokens });
     const delta = choice.delta;
     if (!delta || typeof delta !== "object") return;
     const deltaRecord = delta as Record<string, unknown>;

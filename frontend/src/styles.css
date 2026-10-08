@@ -140,17 +140,14 @@ output {
   transform: none;
 }
 
-/* A visible keyboard ring that wrapper classes (pill buttons, cards) cannot remove. */
-:where(
-  a,
-  button,
-  input,
-  textarea,
-  select,
-  summary,
-  [role="button"],
-  [tabindex]
-):focus-visible {
+/* A visible keyboard ring that wrapper classes (pill buttons, cards) cannot remove. Text fields that
+   live inside a host which draws its own focus state (the command palette, the chat composer) and
+   list options (which highlight their row) are left out: a square ring inside a rounded card clashes. */
+:where(a, button, select, summary, [role="button"], [tabindex]):not(
+    [role="option"],
+    [role="menuitem"]
+  ):focus-visible,
+:where(input, textarea):not([role="combobox"], [data-yunui="chat-composer"] *):focus-visible {
   outline: 2px solid var(--text-primary);
   outline-offset: 2px;
 }

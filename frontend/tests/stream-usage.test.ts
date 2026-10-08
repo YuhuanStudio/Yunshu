@@ -36,3 +36,20 @@ test("no spec block when the engine did not draft", () => {
   });
   assert.equal(usage?.spec, undefined);
 });
+
+import { parseLogprobs } from "../src/stream.ts";
+test("logprobs: valid entries kept with runner-ups, malformed ones dropped, never 0", () => {
+  const tokens = parseLogprobs({
+    content: [
+      { token: "a", logprob: -0.1, top_logprobs: [{ token: "a", logprob: -0.1 }, { token: "b", logprob: -2.3 }, { token: 5 }] },
+      { token: "b" },
+      { logprob: -1 },
+      null,
+      { token: "c", logprob: Number.NaN },
+    ],
+  });
+  assert.equal(tokens.length, 1);
+  assert.equal(tokens[0].alternatives?.length, 2);
+  assert.deepEqual(parseLogprobs(null), []);
+  assert.deepEqual(parseLogprobs({ content: "x" }), []);
+});
