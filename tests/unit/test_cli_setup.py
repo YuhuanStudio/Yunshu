@@ -201,20 +201,68 @@ def test_model_list_json_reads_org_and_flat_layouts(tmp_path):
 # ── doctor ────────────────────────────────────────────────────────────────
 
 
-def test_doctor_json_passes_here(tmp_path):
-    code, out = _json("doctor", "--port", "18989", home=tmp_path)
+@pytest.fixture
+def doctor_cli(home, monkeypatch):
+    """CLI contracts must not depend on the shared venv or the host's GPU."""
+    import importlib
+
+    doctor = importlib.import_module("yunshu_cli.doctor")
+    output = importlib.import_module("yunshu_cli._output")
+    monkeypatch.setattr(output, "_json_mode", output._json_mode)
+    monkeypatch.setattr(output, "_real_stdout", output._real_stdout)
+
+    def json_mode(enabled):
+        # CliRunner owns stdout/stderr capture; do not replace its streams.
+        output._json_mode = enabled
+        output._real_stdout = sys.stdout
+
+    monkeypatch.setattr(output, "set_json_mode", json_mode)
+    healthy = [
+        doctor.Check(name, "ok", "fixture")
+        for name in ("platform", "python", "mlx", "memory", "port")
+    ]
+
+    def checks(model, host, port):
+        return healthy + (doctor.check_model(model, {}) if model else [])
+
+    monkeypatch.setattr(doctor, "run_checks", checks)
+
+    def invoke(*args):
+        result = runner.invoke(app, ["--json", "doctor", *args])
+        assert result.output, (result.exit_code, result.exception)
+        return result.exit_code, json.loads(result.output)
+
+    return invoke, doctor
+
+
+def test_doctor_json_passes_here(doctor_cli):
+    invoke, _ = doctor_cli
+    code, out = invoke("--port", "18989")
     names = {c["name"] for c in out["checks"]}
     assert {"platform", "python", "mlx", "memory", "port"} <= names
     assert code == 0 and out["ok"], out
 
 
-def test_doctor_fails_on_missing_model(tmp_path):
-    code, out = _json(
-        "doctor", "-m", str(tmp_path / "missing"), "--port", "18989", home=tmp_path
-    )
+def test_doctor_fails_on_missing_model(tmp_path, doctor_cli):
+    invoke, _ = doctor_cli
+    code, out = invoke("-m", str(tmp_path / "missing"), "--port", "18989")
     assert code == 1 and not out["ok"]
     bad = [c for c in out["checks"] if c["status"] == "fail"]
     assert bad[0]["name"] == "model" and "yunshu pull" in bad[0]["fix"]
+
+
+def test_doctor_cli_keeps_dependency_failures(doctor_cli, monkeypatch):
+    invoke, doctor = doctor_cli
+    monkeypatch.setattr(
+        doctor,
+        "run_checks",
+        lambda *args: [
+            doctor.Check("version mlx-vlm", "fail", "below minimum", "upgrade")
+        ],
+    )
+    code, out = invoke()
+    assert code == 1 and not out["ok"]
+    assert out["checks"][0]["name"] == "version mlx-vlm"
 
 
 def test_doctor_model_checks(tmp_path):

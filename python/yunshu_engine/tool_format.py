@@ -426,10 +426,26 @@ JSON_MESSAGE = ToolFormat(
     whole=True,
 )
 
+
+def _parse_deepseek_v4(body: str) -> list[Call]:
+    from .deepseek_v4_chat import parse_calls
+
+    return parse_calls(body)
+
+
 # Chat-template markers for the Yunshu-owned formats (upstream's registry
 # decides everything else).
 _OWN_TEMPLATE_MARKERS: tuple[tuple[str, ToolFormat], ...] = (
     ("<｜tool▁calls▁begin｜>", DEEPSEEK),
+    (
+        "<｜DSML｜tool_calls>",
+        ToolFormat(
+            name="deepseek_v4",
+            start="<｜DSML｜tool_calls>",
+            end="</｜DSML｜tool_calls>",
+            parse=lambda body, tools: _parse_deepseek_v4(body),
+        ),
+    ),
 )
 
 _FALLBACK: tuple[ToolFormat, ...] = (INJECTED_JSON, JSON_MESSAGE)

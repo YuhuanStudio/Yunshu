@@ -177,6 +177,7 @@ def test_full_suite_has_every_stage():
     assert set(suites.STAGES) - set(suites.LADDER) == {
         "longqa",
         "conc",
+        "modelprobe",
         "client_compat",
         "websearch",
         "rerank",
@@ -1090,6 +1091,22 @@ def test_detach_pins_arms_resolved_by_the_caller(tmp_path):
     ]
     dir_arm = core.Arm("cand", str(wt), "c" * 40, wt.resolve(), "")
     assert cli.pinned_spec(dir_arm) == str(wt.resolve())
+
+
+def test_detach_retains_caller_verifier_implementation(monkeypatch, tmp_path):
+    from verify import cli
+
+    script = tmp_path / "worker" / "scripts" / "verify" / "cli.py"
+    monkeypatch.setattr(cli, "__file__", str(script))
+    assert cli.verifier_scripts() == script.parents[1]
+    assert cli.verifier_scripts() != cli.REPO / "scripts"
+
+
+def test_modelprobe_is_explicit_and_not_in_release_suites():
+    assert suites.parse_suite("modelprobe")["stages"] == ["modelprobe"]
+    assert "modelprobe" in stages.STAGE_FUNCS
+    for suite in suites.SUITES.values():
+        assert "modelprobe" not in suite["stages"]
 
 
 def test_evals_suite_is_a_separate_correctness_probe():

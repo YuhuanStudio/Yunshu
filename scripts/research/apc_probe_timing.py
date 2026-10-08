@@ -63,7 +63,9 @@ def _timed_fn(name):
                                 t=round(_time.time(), 3),
                                 fn="module." + name,
                                 ms=round(dt, 3),
-                                arg=args[0] if args and isinstance(args[0], int) else None,
+                                arg=args[0]
+                                if args and isinstance(args[0], int)
+                                else None,
                             )
                         )
                         + "\n"
