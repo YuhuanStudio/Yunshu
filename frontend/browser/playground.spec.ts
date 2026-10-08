@@ -945,12 +945,12 @@ test("library: rename and overwrite a preset, branch a conversation, export and 
   const file = await download;
   const path = await file.path();
   expect(path).toBeTruthy();
-  await library.getByLabel("匯入檔案").setInputFiles({
+  await library.locator('input[type="file"]').setInputFiles({
     name: "bad.json",
     mimeType: "application/json",
     buffer: Buffer.from('{"schema":9}'),
   });
   await expect(page.getByText("不是推理測試的匯出檔").first()).toBeVisible();
-  await library.getByLabel("匯入檔案").setInputFiles(path!);
+  await library.locator('input[type="file"]').setInputFiles(path!);
   await expect(page.getByText(/已匯入 1 個預設、2 則紀錄/).first()).toBeVisible();
 });

@@ -1,6 +1,7 @@
-import { useRef, useState } from "react";
+import { useState } from "react";
 import {
   Button,
+  FileDropzone,
   IconButton,
   Input,
   Select,
@@ -83,7 +84,6 @@ export function PlaygroundLibrary({
   const [editName, setEditName] = useState("");
   const [branching, setBranching] = useState<string | null>(null);
   const [branchKeep, setBranchKeep] = useState("");
-  const fileRef = useRef<HTMLInputElement>(null);
   const save = () => {
     const trimmed = name.trim();
     if (!trimmed) return;
@@ -359,26 +359,14 @@ export function PlaygroundLibrary({
               <Download size={13} />
               {t("playground.library.transfer.export")}
             </Button>
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={() => fileRef.current?.click()}
+            <FileDropzone
+              accept="application/json,.json"
+              onFiles={(files) => files[0] && onImport(files[0])}
+              className="w-auto min-h-0 flex-row gap-1.5 border-0 bg-transparent px-2 py-1 text-sm"
             >
               <Upload size={13} />
               {t("playground.library.transfer.import")}
-            </Button>
-            <input
-              ref={fileRef}
-              type="file"
-              accept="application/json,.json"
-              className="hidden"
-              aria-label={t("playground.library.transfer.file")}
-              onChange={(e) => {
-                const f = e.target.files?.[0];
-                e.target.value = "";
-                if (f) onImport(f);
-              }}
-            />
+            </FileDropzone>
           </div>
           <p className="text-xs text-muted-foreground">
             {t("playground.library.transfer.help")}

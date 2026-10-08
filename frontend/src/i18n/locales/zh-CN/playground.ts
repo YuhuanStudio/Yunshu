@@ -138,7 +138,6 @@ const playground: Shape<typeof zh> = {
   "library.transfer.imported": "已导入 {presets} 个预设、{history} 条记录。",
   "library.transfer.undo": "撤销导入",
   "library.transfer.rejected": "这个文件不是推理测试的导出文件，或版本不符。",
-  "library.transfer.file": "导入文件",
   "tools.open": "工具测试",
   "tools.title": "工具调用与结构化输出测试",
   "tools.desc": "用当前选的模型先检查、再发送：看引擎有没有调用工具、参数是否符合你写的 schema。",
