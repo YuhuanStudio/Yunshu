@@ -101,8 +101,8 @@
  },
  {
   "match": "openai POST /realtime/calls",
-  "status": "planned",
-  "reason": "WebRTC signalling (SDP offer in, answer out) for browsers; needs aiortc with its native codec stack, which is not in the dependency set, and a real audio round trip to verify (docs/guides/TRANSPORTS.md). The WebSocket path and the ephemeral client secrets that browsers use are served."
+  "status": "implemented",
+  "reason": "Optional yunshu[webrtc] aiortc SDP signalling, oai-events data channel and PCM/RTP audio bridge to the shared Realtime session; absent extra returns 503 with WS /v1/realtime alternative. CPU dual-peer and SDK tests; respfeat real-server probe."
  },
  {
   "match": "openai POST /realtime/calls/{}/*",
@@ -111,8 +111,8 @@
  },
  {
   "match": "openai POST /audio/voices",
-  "status": "planned",
-  "reason": "Custom voice creation for speech; low priority (voice is parked)."
+  "status": "implemented",
+  "reason": "Local audio_sample enrollment backed by bounded Files storage, local consent recording and ref_audio-capable TTS models. Prompt-designed OpenAI Live voices are rejected explicitly; SDK TestClient and respfeat enrollment route probe."
  },
  {
   "match": "openai * /evals*",

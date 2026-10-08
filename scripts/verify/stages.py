@@ -1100,6 +1100,39 @@ def _memory_valid(path: Path):
     return True, ""
 
 
+def stage_modelprobe(ctx: Ctx) -> StageResult:
+    """Candidate-only absolute reserve/serving pilot; no relative-model verdict."""
+    script = ctx.cand.path / "scripts/research/bigmoe_probe.py"
+    cell = Cell(
+        "modelprobe",
+        "cand-pilot",
+        [
+            ctx.py,
+            str(script),
+            "--model",
+            ctx.model,
+            "--src",
+            str(ctx.cand.path / "python"),
+            "--out",
+            "{out}",
+        ],
+        mem_gb=ctx.mem_gb,
+        timeout_min=15,
+        stall_min=8,
+    )
+    result = ctx.exe.run_cells([cell])
+    reasons = _failed_cells(result)
+    numbers = {
+        "scope": "candidate-only absolute reserve and generic serving; not model superiority"
+    }
+    evidence = result["cand-pilot"].evidence
+    if evidence:
+        rows = read_jsonl(evidence)
+        if rows:
+            numbers.update(rows[-1])
+    return _finish(ctx, StageResult("modelprobe", not reasons, reasons, numbers))
+
+
 def _websearch_valid(path: Path):
     rows = read_jsonl(path)
     if not rows or rows[-1].get("complete") is not True:
@@ -1253,6 +1286,123 @@ def stage_rerank(ctx: Ctx) -> StageResult:
             reasons.append(f"{name} oracle parity failed")
             break
     return _finish(ctx, StageResult("rerank", not reasons, reasons, numbers))
+
+
+def stage_embedding(ctx: Ctx) -> StageResult:
+    """Published-format loader and independent same-device upstream invocation."""
+    reference = ctx.env.get(
+        "EMBEDDING_REFERENCE",
+        "/Volumes/P5Plus/yunshu-build/codex/priorfix/gemma-ref/ref.json",
+    )
+    root = Path(ctx.env.get("EMBEDDING_MODEL_ROOT", "/Volumes/P5Plus/models"))
+    reasons, numbers = [], {}
+    for name in (
+        "embeddinggemma-2-bf16",
+        "embeddinggemma-2-4bit",
+        "embeddinggemma-2-bf16-multishard",
+    ):
+        cell = Cell(
+            "embedding",
+            name,
+            [
+                "env",
+                f"PYTHONPATH={ctx.cand.path / 'python'}",
+                "HF_HUB_OFFLINE=1",
+                ctx.py,
+                str(ctx.cand.path / "scripts/research/priorfix_embedding_parity.py"),
+                "--model",
+                str(root / name),
+                "--reference",
+                reference,
+                "--out",
+                "{out}",
+            ],
+            mem_gb=8,
+            timeout_min=10,
+            stall_min=5,
+            priority=-1,
+            device="m5",
+        )
+        results = ctx.exe.run_cells([cell])
+        reasons += _failed_cells(results)
+        if reasons:
+            break
+        rows = read_jsonl(results[name].evidence)
+        numbers[name] = rows[-1]
+        if not rows[-1].get("passed"):
+            reasons.append(f"{name} parity failed")
+            break
+    return _finish(ctx, StageResult("embedding", not reasons, reasons, numbers))
+
+
+def stage_priorart(ctx: Ctx) -> StageResult:
+    reasons, numbers = [], {}
+    kinds = ctx.env.get("PRIORART_KINDS", "retrieval,classifier,diffusion,omni").split(
+        ","
+    )
+    for kind in kinds:
+        prefix = str(ctx.cand.path / "python")
+        if kind.startswith("diffusion") or kind == "capabilities":
+            prefix += ":/Volumes/P5Plus/yunshu-build/codex/priorfix/mflux-deps"
+        extra = []
+        if kind in ("retrieval", "capabilities"):
+            import urllib.request
+
+            reference = ctx.run.path / "aperepel-cfe20b0-server.py"
+            if not reference.exists():
+                url = "https://raw.githubusercontent.com/aperepel/mlx-rerank/cfe20b0b0e2505240be91dbcf6e5575b8a8d7388/server.py"
+                with urllib.request.urlopen(url, timeout=30) as response:
+                    reference.write_bytes(response.read())
+            compile(reference.read_text(), str(reference), "exec")
+            extra = ["--rerank-reference", str(reference)]
+        script = ctx.cand.path / "scripts/research/priorfix_runtime_parity.py"
+        mode_args = ["--kind", kind]
+        if kind == "diffusion-timing":
+            script = ctx.cand.path / "scripts/research/priorfix_diffusion_timing.py"
+            mode_args = []
+        elif kind == "capabilities":
+            script = ctx.cand.path / "scripts/research/priorfix_capabilities.py"
+            mode_args = [
+                "--model-root",
+                ctx.env.get("EMBEDDING_MODEL_ROOT", "/Volumes/P5Plus/models"),
+                "--reference",
+                ctx.env.get(
+                    "EMBEDDING_REFERENCE",
+                    "/Volumes/P5Plus/yunshu-build/codex/priorfix/gemma-ref/ref.json",
+                ),
+            ]
+        cell = Cell(
+            "priorart",
+            kind,
+            [
+                "env",
+                f"PYTHONPATH={prefix}",
+                "HF_HUB_OFFLINE=1",
+                ctx.py,
+                str(script),
+                *mode_args,
+                *extra,
+                "--out",
+                "{out}",
+            ],
+            # The floating two-runtime image pilot peaked at 57.3 (M5 gpuq RSS).
+            mem_gb=64 if kind.startswith("diffusion") or kind == "capabilities" else 8,
+            quiet=kind == "diffusion-timing",
+            timeout_min=10,
+            stall_min=5,
+            priority=-1,
+            device="m5",
+        )
+        results = ctx.exe.run_cells([cell])
+        reasons += _failed_cells(results)
+        if reasons:
+            break
+        rows = read_jsonl(results[kind].evidence)
+        numbers[kind] = rows[-1]
+        if not rows[-1].get("passed"):
+            reasons.append(f"{kind} parity failed")
+            break
+    return _finish(ctx, StageResult("priorart", not reasons, reasons, numbers))
 
 
 def stage_evals(ctx: Ctx) -> StageResult:
@@ -1442,6 +1592,61 @@ def stage_console(ctx: Ctx) -> StageResult:
     )
 
 
+def stage_respfeat(ctx: Ctx) -> StageResult:
+    """One bounded M5 tiny server covers client-executed tools and transports."""
+    import json
+
+    tree_sha = subprocess.check_output(
+        ["git", "-C", str(ctx.cand.path), "rev-parse", "HEAD^{tree}"], text=True
+    ).strip()
+    argv = [
+        ctx.py,
+        str(ctx.cand.path / "scripts/research/respfeat_routes.py"),
+        "--model",
+        ctx.model,
+        "--tree-sha",
+        tree_sha,
+        "--device",
+        "m5",
+        "--out",
+        "{out}",
+    ]
+    if ctx.cand_env.get("RESPFEAT_EXTRA_PYTHONPATH"):
+        argv += ["--extra-pythonpath", ctx.cand_env["RESPFEAT_EXTRA_PYTHONPATH"]]
+
+    def valid(path):
+        from scripts.research.respfeat_routes import judge
+
+        try:
+            return judge(json.loads(path.read_text()))
+        except (OSError, ValueError) as exc:
+            return False, str(exc)
+
+    cell = Cell(
+        "respfeat",
+        "tiny-routes",
+        argv,
+        mem_gb=8,
+        timeout_min=10,
+        validate=valid,
+        device="m5",
+        cwd=ctx.cand.path,
+        retries=0,
+    )
+    result = ctx.exe.run_cells([cell])[cell.key]
+    evidence = json.loads(result.evidence.read_text()) if result.evidence else {}
+    return _finish(
+        ctx,
+        StageResult(
+            "respfeat",
+            result.ok,
+            [] if result.ok else [result.reason],
+            {"device": "m5", "candidate_commit": ctx.cand.key, "evidence": evidence},
+            [result.job],
+        ),
+    )
+
+
 def stage_telemetry(ctx: Ctx, *, pilot: bool = False) -> StageResult:
     """Unprivileged sensor plausibility + request receipt on the pinned candidate."""
 
@@ -1500,6 +1705,9 @@ STAGE_FUNCS = {
     "console": stage_console,
     "telemetry": stage_telemetry,
     "telemetry-tiny": lambda ctx: stage_telemetry(ctx, pilot=True),
+    "respfeat": stage_respfeat,
+    "priorart": stage_priorart,
+    "embedding": stage_embedding,
     "evals": stage_evals,
     "websearch": stage_websearch,
     "tavily": stage_tavily,
@@ -1515,4 +1723,5 @@ STAGE_FUNCS = {
     "memory": stage_memory,
     "longqa": stage_longqa,
     "conc": stage_conc,
+    "modelprobe": stage_modelprobe,
 }

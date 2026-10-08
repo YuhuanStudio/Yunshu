@@ -15,6 +15,9 @@ route matrix includes Files, Batches, Conversations, compaction and WebSocket de
 | Method | Path | Notes |
 |---|---|---|
 | POST | `/v1/chat/completions` | Chat. Tool-calling, JSON-schema/grammar (`response_format`), streaming, `logprobs`. Plus extras: `top_n_sigma`, `min_p`, `xtc_probability`/`xtc_threshold`, `spec_decode`. |
+| GET/POST/DELETE | `/v1/chat/completions/{id}` | Retrieve, update metadata or delete a completion created with `store: true`; list at `GET /v1/chat/completions`, input messages at `GET /v1/chat/completions/{id}/messages`. |
+| POST | `/v1/evals` | [Local Evals](guides/EVALS.md): definitions, runs, cancellation and output items. |
+| POST | `/v1/realtime/client_secrets` | Ephemeral keys for the Realtime WebSocket; beta session routes are also served. Transcription-only configuration is echoed but not executed; transcription secrets cannot create model responses. |
 | POST | `/v1/completions` | Legacy text completion. |
 | POST | `/v1/responses` | Responses API (+ `GET/POST /v1/responses/{id}`, `/cancel`, `DELETE`). |
 | POST | `/v1/embeddings` | Text **and multimodal** embeddings — see [below](#post-v1embeddings-multimodal). |
@@ -28,7 +31,8 @@ route matrix includes Files, Batches, Conversations, compaction and WebSocket de
 ## Ollama-compatible
 
 `/api/chat`, `/api/generate`, `/api/embed`, `/api/tags`, `/api/show`, `/api/ps`, `/api/version` (NDJSON streaming),
-verified with the `ollama` SDK. `pull` / `create` / `copy` / `delete` answer 501.
+Native MLX model `pull`, alias `copy` / `create`, and `delete` are supported; registry
+upload (`push`) remains unsupported. GGUF imports and arbitrary Modelfiles are rejected.
 
 ## Anthropic-compatible
 
@@ -151,3 +155,8 @@ mounted with `YUNSHU_DEBUG_ROUTES=1`.
 
 Health: `GET /health`. Prometheus metrics: `GET /metrics`. Endpoint shapes are verified against the
 routers in `python/yunshu_gateway/routers/`.
+
+## Web retrieval
+
+Search and fetch server tools are described in [Web search](guides/WEB_SEARCH.md).
+The Tavily-compatible API has its own `/tavily` base (no `/v1`); see [Tavily](guides/TAVILY.md).

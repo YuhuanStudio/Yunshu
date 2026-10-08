@@ -35,9 +35,10 @@ async def main() -> int:
     if not os.path.isdir(MODEL):
         print(f"SKIP: TTS model not available ({MODEL})")
         return 0
+    import numpy as np
+
     from yunshu_engine.audio_engine import TTSEngine
     from yunshu_engine.types import EngineConfig
-    import numpy as np
 
     eng = TTSEngine(MODEL, EngineConfig())
     await eng.start()

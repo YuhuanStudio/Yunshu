@@ -44,4 +44,13 @@ def test_pattern_kills_are_blocked():
     for cmd in blocked:
         assert guard.verdict(cmd), cmd
     assert guard.verdict("kill 12345") is None
+    stash = "git st" + "ash"
+    for cmd in (
+        stash,
+        stash + " -q",
+        "git -C ../wt st" + "ash push",
+        "cd x && " + stash + " pop",
+    ):
+        assert guard.verdict(cmd), cmd
+    assert guard.verdict(stash + " list") is None
     assert guard.verdict("grep pk" + "ill notes.md") is None

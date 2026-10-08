@@ -4,31 +4,23 @@ This page covers what a new user meets before the first token: installing, the f
 the server, connecting clients, upgrading, uninstalling, and what happens when something is
 wrong. Engine speed and accuracy are tracked in [BENCHMARKS.md](../BENCHMARKS.md).
 
-The reference points are what users of other local servers already know:
-
-- **oMLX**: macOS app with a menu bar and in-app update, a Homebrew tap, `omlx start/stop`,
-  `~/.omlx/models`, an admin web UI with chat, and logs in `~/.omlx/logs`.
-- **Rapid-MLX**: Homebrew core, a `curl | bash` installer that suggests a model for the Mac's RAM,
-  `rapid-mlx launch claude-code/cline/...`, and an agent matrix verified against real clients
-  every release.
-- **mlx-serve**: a single binary.
-- **LM Studio**: a GUI and `lms` CLI, with the server on `localhost:1234` by default.
-
-Status reviewed 2026-10-02 (released v0.1.2; later main changes are unreleased). ✅ done and checked, 🟡 partly done, ❌ missing. P1 = before the
-first public release, P2 = soon after, P3 = later or on request.
+Source review: 2026-10-08, released v0.1.4; main is the unreleased 0.1.5 cycle.
+✅ means the capability exists, with dated runtime evidence stated separately;
+🟡 means incomplete and ❌ means missing. This checklist does not replace a
+commit-pinned release gate or claim a fresh runtime test.
 
 ## Install
 
 | | Status | Notes |
 |---|---|---|
-| From source (`uv sync --extra vision`) | ✅ | `uv.lock` pins MLX 0.32.3 / mlx-lm 0.32.0 / mlx-vlm 0.7.4 |
+| From source (`uv sync --extra vision`) | ✅ | `uv.lock` records exact dependency versions; the vision extra requires mlx-vlm >=0.7.6 |
 | `uv tool install` from a wheel | ✅ | Clean tool env on 2026-09-29, then `doctor`, serve Qwen3.5-0.8B, `/health`, `/version`, `/v1/models`, chat, `/v1/messages`, `service install --dry-run` |
 | `uv tool install` from git | ✅ | Same package as the wheel; the repository is public |
-| PyPI (`uv tool install "yunshu[vision]"`, `pipx install`) | ✅ | v0.1.1 (2026-09-29) and v0.1.2 (2026-10-02) released; see [RELEASING.md](../../RELEASING.md) |
-| Homebrew | 🟡 P2 | Formula points to the published v0.1.2 sdist in the shared tap [YuhuanStudio/homebrew-tap](https://github.com/YuhuanStudio/homebrew-tap) (`brew install yuhuanstudio/tap/yunshu`) in `packaging/homebrew/`; added after the PyPI release ([steps](../../packaging/homebrew/README.md)) |
+| PyPI (`uv tool install "yunshu[vision]"`, `pipx install`) | ✅ | v0.1.4 (2026-10-08) released; see [RELEASING.md](../../RELEASING.md) |
+| Homebrew | 🟡 P2 | Formula points to the v0.1.3 sdist (repository formula; the external tap is not verified here) in the shared tap [YuhuanStudio/homebrew-tap](https://github.com/YuhuanStudio/homebrew-tap) (`brew install yuhuanstudio/tap/yunshu`) in `packaging/homebrew/`; added after the PyPI release ([steps](../../packaging/homebrew/README.md)) |
 | macOS app / menu bar / DMG | — | Not planned for now: CLI + launchd service (decided 2026-09-29) |
 | `curl … \| bash` installer with a model suggestion by RAM | ❌ P3 | Rapid-MLX has one; `uv tool install` + `yunshu doctor` covers most of it |
-| Python versions | 🟡 P3 | 3.13 only (oMLX supports 3.11–3.13) |
+| Python versions | 🟡 P3 | Requires Python >=3.13; CI targets 3.13 |
 
 ## First run
 
@@ -75,7 +67,7 @@ first public release, P2 = soon after, P3 = later or on request.
 | | Status | Notes |
 |---|---|---|
 | One version source | ✅ | `pyproject.toml`; the CLI, `/version`, OpenAPI and MCP read the installed metadata |
-| CHANGELOG | ✅ | `## [0.1.2]` entry; version bumped in `pyproject.toml` and `uv.lock` |
+| CHANGELOG | ✅ | `## [0.1.4]` entry; version bumped in `pyproject.toml` and `uv.lock` |
 | Release workflow | ✅ | Tag-only; checks version / changelog, lint, tests, build, twine, clean install, PyPI behind approval, draft GitHub release |
 | CI on push | 🟡 P1 | Lint + build on Linux; macOS unit tests only on release / manual run (to save quota). See the workflow run history; no fresh CI run is claimed by this checklist |
 | Third-party notices in the artifacts | ✅ | `THIRD_PARTY_NOTICES.md` ships in the wheel and sdist |
@@ -83,7 +75,7 @@ first public release, P2 = soon after, P3 = later or on request.
 
 ## Decisions (2026-09-29)
 
-- The repository is public; v0.1.1 and v0.1.2 are released. Future releases follow the
+- The repository is public; v0.1.4 is released. Future releases follow the
   pre-release check.
 - CLI + launchd service; no app for now.
 - Homebrew through the shared tap `YuhuanStudio/homebrew-tap`.

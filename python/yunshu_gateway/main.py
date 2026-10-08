@@ -374,6 +374,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             _active_requests,
         )
 
+    from .realtime_webrtc import close_all
+
+    await close_all()
+
     # Disconnect MCP client manager
     try:
         from yunshu_engine.mcp_client import get_mcp_client_manager
@@ -1101,6 +1105,9 @@ def create_app() -> FastAPI:
     from .routers import realtime_secrets as realtime_secrets_mod
 
     app.include_router(realtime_secrets_mod.router, prefix="/v1")
+    from .routers import voices
+
+    app.include_router(voices.router, prefix="/v1")
     from .routers import omni as omni_mod
 
     app.include_router(completions.router, prefix="/v1")
@@ -1140,6 +1147,9 @@ def create_app() -> FastAPI:
     app.include_router(yunshu_mod.router, prefix="/v1")  # status, requests, warmup
     app.include_router(ocr_mod.router)
     app.include_router(realtime.router)
+    from . import realtime_webrtc
+
+    app.include_router(realtime_webrtc.router)
     app.include_router(stream_ws.router)
     from .routers import ollama as ollama_mod
 

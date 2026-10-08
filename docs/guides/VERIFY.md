@@ -6,18 +6,23 @@ submits every GPU job to gpuq itself with sane memory / timeout / `--quiet` sett
 the first failed stage, remembers what finished, and writes `verdict.json` and `verdict.md`.
 
 ```sh
-scripts/dev/yv ab --base main --cand my-branch --suite decode --label wide8-lane-fusion
-scripts/dev/yv ab --base main --cand . --cand-env YUNSHU_FOO=1 --suite prefill --label prefill7-x --detach
+scripts/dev/yv ab --base <base-sha> --cand <candidate-sha> --suite decode --label wide8-lane-fusion
+scripts/dev/yv ab --base <base-sha> --cand <candidate-sha> --cand-env YUNSHU_VLM_DRAFT=mtp --suite prefill --label prefill7-x --detach
 scripts/dev/yv status <run>      # state of a run (directory or name under .../verify/runs)
 scripts/dev/yv wait <run>        # block until the verdict; exit code = the verdict's
 scripts/dev/yv suites            # list suites
 scripts/dev/yv gate              # release gate with per-stage persistence
+scripts/dev/yv ab --base <base-sha> --cand <candidate-sha> --suite preflight --label docs-check  # CPU only
 ```
 
 Exit code: 0 every stage passed, 1 a stage failed, 2 infrastructure error (tool, git, gpuq,
 parameter mismatch). `yv ab` blocks until done; `--detach` returns at once.
 
 ## Arms
+
+For a reviewable verdict, commit both arms and pass their full commit SHAs. Check the
+first line of `yv.log` to confirm the intended base and candidate differ. Directory
+arms are supported by the tool but do not provide a final committed verdict.
 
 `--base` / `--cand` take a git ref or a checkout directory. A ref becomes a detached worktree
 under `/Volumes/P5Plus/yunshu-build/verify/trees/<commit12>`, reused by commit hash. A directory
@@ -49,7 +54,7 @@ context, harness hash, device): the next candidate against the same base reruns 
 
 ## Suites
 
-`decode` (preflight, smoke, identity at 1K / 8K, apc, speed; `--spec-off` adds spec on == off (fails on main today, see BACKLOG)), `prefill`
+`decode` (preflight, smoke, identity at 1K / 8K, apc, speed; `--spec-off` adds spec on == off), `prefill`
 (identity up to 32K, apc, quality, speed), `scheduler`, `memory`, `full` (everything, 1K / 8K / 32K),
 `long` (32K / 64K / 128K split cells of 2048-token replies via `tfbench --decode-tokens`: identity incl. spec on == off, apc, speed, memory at 32K / 128K, longqa, conc; every stage runs even after a failure), `longtrend` (one rep, 32K / 128K prose, for tag-to-tag comparisons), `tiny` (everything on a small model, for dry runs of the tool). `--suite smoke,identity,speed`
 builds an ad-hoc ladder (stages keep their canonical order). Overrides: `--ctx 1024,8192`,
@@ -142,8 +147,9 @@ configuration on a pinned tree of `--ref` (default `main`), the pinned agent CLI
 error, malformed tool call or tool-call markup leak is FAIL; the pass rate per agent is compared with the 2026-09-30 baseline (Wilson 95%
 interval) and a drop below its lower bound is REGRESSION. Reported per agent: pass rate, API errors, malformed tool calls, markup leaks,
 cache-hit ratio, largest prompt, median wall time, peak memory. Where it runs: **nightly at priority -1** (idle GPU time only; one full
-matrix is about 6 to 8 hours of 27B time), and **before a release** by running it on the release commit and attaching its verdict next to
-`yv gate`'s (not a `gate` stage yet: the full matrix is longer than the rest of the gate together).
+matrix is about 6 to 8 hours of 27B time), and **during release verification** through `scripts/dev/release_check`: it submits the same committed candidate
+at priority -3 without waiting, prints its later collect command, and treats its verdict as informational.
+The gate, M3 sweep and agent compatibility remain blocking. Never leave its result uncollected.
 
 ## Adding a new kind of measurement
 

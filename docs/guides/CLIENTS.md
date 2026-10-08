@@ -105,9 +105,17 @@ Yunmo (a separate consumer project)'s `llm_adapter` is OpenAI-compatible: set it
 | Endpoint | Auth | Use |
 |---|---|---|
 | `GET /health` | none | liveness + whether a model is loaded (`{"status": "ok", "engine": {"loaded": true}}`) |
-| `GET /health/ready` | none | 200 when a model is loaded and memory is below 95%, else 503 (for load balancers and scripts) |
+| `GET /health/ready` | none | 200 while running with a loaded model or registered on-demand models, and active GPU memory below 95% of unified memory; otherwise 503 |
 | `GET /version` | none | installed Yunshu version |
 | `GET /v1/models` | token if set | served models |
 | `GET /metrics` | token if set | Prometheus metrics |
 
 `yunshu status` prints the same from the command line.
+
+## Additional local APIs
+
+[Decisions](DECISIONS.md), [Evals](EVALS.md), [web search/fetch](WEB_SEARCH.md) and
+[Tavily-compatible clients](TAVILY.md) have dedicated guides. Stored chat completions
+use `store=True` with the regular OpenAI SDK; list/retrieve/update/delete and input
+message listing are documented in [API surface](API_SURFACE.md). Realtime client secrets
+authenticate the WebSocket; they do not add WebRTC or a transcription-only engine.

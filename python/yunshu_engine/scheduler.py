@@ -25,7 +25,10 @@ import logging
 import time
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import Any
+from typing import TYPE_CHECKING, Any, NotRequired, TypedDict, cast
+
+if TYPE_CHECKING:
+    from .kv_optimizations import ChunkedPrefillOptimizer
 
 from yunshu_kv.thinking_segment import ThinkingSegmentConfig, ThinkingSegmentSubstore
 
@@ -170,7 +173,7 @@ class BatchPathSpecPrefill:
                 keep_pct=self.config.keep_rate,
                 chunk_size=self.config.chunk_size,
             )
-            selected_list = selected.tolist()
+            selected_list = cast(list[int], selected.tolist())
             n_kept = len(selected_list)
             n_skipped = len(tokens) - n_kept
 
@@ -191,7 +194,7 @@ class BatchPathSpecPrefill:
 
     def get_stats(self) -> dict:
         """Return SpecPrefill statistics."""
-        stats = dict(self._stats)
+        stats: dict[str, Any] = dict(self._stats)
         if stats["prefills_attempted"] > 0:
             stats["success_rate"] = round(
                 stats["prefills_succeeded"] / stats["prefills_attempted"], 3
@@ -300,7 +303,7 @@ class SpecAwareBatchScheduler:
 
     def get_stats(self) -> dict:
         """Return spec-aware scheduling statistics."""
-        stats = dict(self._stats)
+        stats: dict[str, Any] = dict(self._stats)
         stats["max_num_seqs"] = self.max_num_seqs
         stats["spec_overhead_per_request"] = self.spec_overhead_per_request
         stats["tbo_enabled"] = self.tbo_enabled
@@ -311,6 +314,12 @@ class SpecAwareBatchScheduler:
         else:
             stats["avg_spec_slots"] = 0.0
         return stats
+
+
+class _DraftCollectionStats(TypedDict):
+    collections: int
+    total_tokens_collected: int
+    strategy_breakdown: dict[str, int]
 
 
 class BatchedDraftCollection:
@@ -329,7 +338,7 @@ class BatchedDraftCollection:
     """
 
     def __init__(self) -> None:
-        self._stats = {
+        self._stats: _DraftCollectionStats = {
             "collections": 0,
             "total_tokens_collected": 0,
             "strategy_breakdown": {},
@@ -447,7 +456,7 @@ class BatchedDraftCollection:
 
     def get_stats(self) -> dict:
         """Return collection statistics."""
-        stats = dict(self._stats)
+        stats: dict[str, Any] = dict(self._stats)
         return stats
 
 
@@ -717,6 +726,13 @@ class _LogitsProcessorSampler:
         self._tokens.clear()
 
 
+class _RequestSpecStats(TypedDict):
+    proposals: int
+    accepted: int
+    rejected: int
+    mode: NotRequired[str]
+
+
 class Scheduler:
     """MLX-native continuous batching scheduler.
 
@@ -844,7 +860,7 @@ class Scheduler:
 
         # Per-request spec decode statistics
         self._spec_stats: dict[
-            str, dict[str, int]
+            str, _RequestSpecStats
         ] = {}  # req_id → {proposals, accepted, rejected}
 
         # Aggregate spec decode counters for get_stats()
@@ -959,6 +975,7 @@ class Scheduler:
         )
 
         # Chunked prefill optimizer (semantic chunk boundary selection)
+        self._chunked_prefill_optimizer: ChunkedPrefillOptimizer | None
         if self.config.enable_hybrid_prefill:
             try:
                 from .kv_optimizations import ChunkedPrefillOptimizer
@@ -4574,7 +4591,7 @@ class Scheduler:
     def _try_cross_model_draft(self, req: Request) -> None:
         """Generate draft tokens using the cross-model spec decoder."""
         try:
-            decoder = self._spec_decoder
+            decoder = cast(SpeculativeDecoder, self._spec_decoder)
             K = decoder.config.draft_length
             if K <= 0:
                 return
@@ -5112,7 +5129,7 @@ class Scheduler:
         return self._thinking_store
 
     def get_stats(self) -> dict:
-        stats = {
+        stats: dict[str, Any] = {
             "waiting": len(self.waiting),
             "running": len(self.running),
             "total_requests": len(self.requests),

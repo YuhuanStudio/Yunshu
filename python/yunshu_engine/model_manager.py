@@ -323,7 +323,7 @@ def _detect_model_type(model_path: str) -> ModelType:
     if remapped in ("qwen2_vl", "qwen3_vl", "qwen3_vl_moe", "mistral3", "pixtral"):
         has_vision = True
 
-    if has_vision:
+    if has_vision or (mlx_vlm_supported and not mlx_lm_supported):
         return ModelType.VLM
 
     if not mlx_lm_supported and not mlx_vlm_supported:
