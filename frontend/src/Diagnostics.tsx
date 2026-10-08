@@ -533,7 +533,9 @@ export function Diagnostics({
                     : "offline"
               }
             >
-              <span className="text-xs font-medium text-foreground">
+              <span
+                className={`text-xs font-medium ${verdict.level === "abnormal" ? "text-error" : "text-foreground"}`}
+              >
                 {t(
                   verdict.level === "ok"
                     ? "diagnostics.verdict.ok"
