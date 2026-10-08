@@ -115,3 +115,12 @@ installed dependency distribution; Yunshu does not bundle or relink those binari
 Sources and dependency licenses: https://github.com/aiortc/aiortc and
 https://github.com/PyAV-Org/PyAV . The SDK protocol adapters are independent code
 checked against openai-python (Apache-2.0) and anthropic-sdk-python (MIT).
+
+## mflux — independent image reference probe
+
+The priorfix_mflux_reference probe uses the unchanged loader cache, HF mapper
+and weight applier APIs of mflux-community/mflux (MIT, reviewed commit
+465df30a3965b38c9c64fa853e26df140ddd5c55). The probe decodes downloaded diffusers
+affine4 tensors before mapping; its reference uses floating arithmetic. No mflux
+source is copied and the serving engine does not import this bridge.
+https://github.com/mflux-community/mflux

@@ -182,6 +182,8 @@ def test_full_suite_has_every_stage():
         "respfeat",
         "websearch",
         "rerank",
+        "embedding",
+        "priorart",
         "evals",
         "tavily",
         "searchrank",

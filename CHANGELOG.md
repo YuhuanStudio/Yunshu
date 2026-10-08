@@ -83,6 +83,9 @@ No new decode or TTFT claim is made for this cycle here. Historical measurements
 - CI and local CI include frontend type checks, tests and build plus Python lint/format/mypy and package checks.
 - Local CI matches the release runner's Python 3.13 environment, short paths and inaccessible local data;
   tests avoid shared server-port collisions. [Contributor workflow](CONTRIBUTING.md).
+- Modality qualification through yv includes published embedding/classifier loaders,
+  prepared-input parity and bounded fixed-seed diffusion comparisons. Diffusion
+  timing requires three same-device interleaved quiet pairs after a successful pilot.
 
 ### Fixed
 
@@ -94,6 +97,12 @@ No new decode or TTFT claim is made for this cycle here. Historical measurements
   behind the long job they were admitted between. Queue tests no longer leave isolated daemons behind.
 - Public documentation now includes the new APIs and correct native Ollama model operations, supported
   decision heads and current release status.
+- EmbeddingGemma 2 loader constructs published quantized layers through the pinned
+  MIT mlx-vlm port, preferring the installed native loader when available.
+- Quantized BERT-family sequence classifiers retain their trained head under strict
+  loading. Jina v3 custom ranking heads are rejected rather than scored as Qwen yes/no.
+- Qwen3-VL embedding handles empty inputs and keeps caller dictionaries unchanged.
+  Format support and release shard impact are documented in `docs/PRIOR_ART_FORMATS.md`.
 
 ### Security
 
