@@ -23,6 +23,7 @@ async def page(
     extractor=None,
     cache_namespace: str = "",
     redirect_guard=None,
+    preserve_body: bool = False,
     **kwargs,
 ):
     if automated and kwargs.get("client") is None:
@@ -37,6 +38,7 @@ async def page(
                 extractor=extractor,
                 cache_namespace=cache_namespace,
                 redirect_guard=redirect_guard,
+                preserve_body=preserve_body,
                 client=shared,
                 **kwargs,
             )
@@ -50,6 +52,8 @@ async def page(
     ):
         raise FetchError("url_not_allowed", "Domain filter rejected page")
     cache_key = (cache_namespace + "::" + url) if cache_namespace else url
+    if preserve_body:
+        cache_key = "raw::" + cache_key
     state = politeness.host(url)
     if cached := pages.get(cache_key):
         if redirect_guard is not None and cached.url != url:
@@ -120,6 +124,7 @@ async def page(
                 extractor=extractor or extract_with_metadata,
                 request_headers=headers,
                 before_redirect=before_redirect,
+                preserve_body=preserve_body,
                 **kwargs,
             )
             if result.not_modified:
@@ -128,7 +133,8 @@ async def page(
                         "url_not_accessible", "Unexpected 304 without cache"
                     )
                 result = stale
-            result.text = clean_text(result.text)
+            if not preserve_body:
+                result.text = clean_text(result.text)
             state.failures = 0
             docs_hosts = (
                 "docs.python.org",

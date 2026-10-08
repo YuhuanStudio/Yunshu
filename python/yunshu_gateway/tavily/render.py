@@ -73,6 +73,7 @@ class Resources:
                     extractor=lambda body, url: ("", body),
                     cache_namespace="tavily-render-raw",
                     redirect_guard=reject_redirect,
+                    preserve_body=True,
                 )
                 size = len(result.text.encode("utf-8"))
                 self.bytes += size
@@ -84,12 +85,8 @@ class Resources:
                 ):
                     await route.abort()
                     return
-                content_type = {
-                    "document": "text/html",
-                    "script": "application/javascript",
-                }.get(request.resource_type, "text/plain")
                 await route.fulfill(
-                    status=200, body=result.text, content_type=content_type
+                    status=200, body=result.text, content_type=result.media_type
                 )
         except (FetchError, UrlNotAllowedError, TimeoutError, ValueError):
             await route.abort()

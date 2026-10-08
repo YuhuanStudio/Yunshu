@@ -222,3 +222,52 @@ async def test_cached_redirect_cannot_bypass_render_guard(monkeypatch):
             cache_namespace="raw",
             redirect_guard=guard,
         )
+
+
+async def test_raw_script_preserves_body_and_mime_under_byte_cap(monkeypatch):
+    import httpx
+
+    from yunshu_engine.netguard import Target
+    from yunshu_gateway.server_tools import webfetch
+    from yunshu_gateway.server_tools.research import fetcher
+    from yunshu_gateway.server_tools.research.cache import PageCache
+
+    monkeypatch.setattr(fetcher, "pages", PageCache())
+    original = settings.get
+    monkeypatch.setattr(
+        settings,
+        "get",
+        lambda key: 64 if key == "YUNSHU_WEB_FETCH_MAX_TEXT_CHARS" else original(key),
+    )
+
+    async def resolve(url, **kwargs):
+        return Target(
+            url=url, host="example.org", port=443, scheme="https", ip="93.184.216.34"
+        )
+
+    monkeypatch.setattr(webfetch, "resolve_target", resolve)
+    # The invisible character is legitimate JS string data, not extracted prose.
+    body = "window.fixture = '" + "x" * 50000 + "\u200b';"
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda req: httpx.Response(
+                200, text=body, headers={"content-type": "application/javascript"}
+            )
+        )
+    ) as client:
+        raw = await fetcher.page(
+            "https://example.org/raw-script.js",
+            automated=False,
+            client=client,
+            preserve_body=True,
+            cache_namespace="same-mode-namespace",
+        )
+        assert raw.text == body and not raw.truncated
+        assert raw.media_type == "application/javascript"
+        ordinary = await fetcher.page(
+            "https://example.org/raw-script.js",
+            automated=False,
+            client=client,
+            cache_namespace="same-mode-namespace",
+        )
+        assert len(ordinary.text) == 64 and ordinary.truncated

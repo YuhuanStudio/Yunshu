@@ -39,22 +39,34 @@ async def run(args):
         async def fetch(url, **kwargs):
             calls.append(url)
             if url == "https://fixture.example/":
-                text = """<html><body><main id="content">Loading</main><script>
+                text = '<html><body><main id="content">Loading</main><script src="/bundle.js"></script></body></html>'
+                media = "text/html"
+            elif url == "https://fixture.example/bundle.js":
+                # The bundle exceeds the prose cap and must be replayed whole.
+                text = (
+                    "/*"
+                    + "x" * 50000
+                    + "*/"
+                    + """
                     fetch('/data').then(r => r.text()).then(t => {
                         document.getElementById('content').innerHTML = '<h1>Fixture</h1><p>' + t + '</p>';
                     });
                     fetch('http://127.0.0.1:8000/private').catch(() => {});
                     new WebSocket('wss://external.example/socket');
                     navigator.serviceWorker.register('/worker.js').catch(() => {});
-                </script></body></html>"""
+                """
+                )
+                media = "application/javascript"
             elif url == "https://fixture.example/data":
                 text = (
                     "AUTHORED_RENDER_42. This article came from a guarded same-origin fetch. "
                     * 10
                 )
+                media = "text/plain"
             else:
                 raise AssertionError(f"Unexpected origin request: {url}")
-            return FetchResult(url, "", text, "text/plain", "")
+            assert kwargs.get("preserve_body") is True
+            return FetchResult(url, "", text, media, "")
 
         original = render.page
         render.page = fetch
@@ -70,7 +82,11 @@ async def run(args):
                 {
                     "check": "egress_blocked",
                     "pass": set(calls)
-                    == {"https://fixture.example/", "https://fixture.example/data"},
+                    == {
+                        "https://fixture.example/",
+                        "https://fixture.example/bundle.js",
+                        "https://fixture.example/data",
+                    },
                     "fetch_calls": calls,
                 },
                 {"check": "metadata", "pass": result.metadata.get("rendered") is True},

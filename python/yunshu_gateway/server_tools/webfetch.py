@@ -255,6 +255,7 @@ async def _fetch_url(
     timeout_seconds: float | None = None,
     max_url_length: int = MAX_URL_LEN,
     allow_pdf: bool = False,
+    preserve_body: bool = False,
 ) -> FetchResult:
     if not settings.get("YUNSHU_WEB_FETCH"):
         raise FetchError("unavailable", "web_fetch is disabled (YUNSHU_WEB_FETCH=0)")
@@ -377,7 +378,7 @@ async def _fetch_url(
             title = ""
             published_at = None
             metadata = {}
-            media = "text/plain"
+            media = ctype if preserve_body else "text/plain"
             if ctype == "application/pdf" and allow_pdf:
                 import io
 
@@ -401,8 +402,9 @@ async def _fetch_url(
                         "unsupported_content_type", "Could not extract PDF"
                     ) from exc
                 media = "application/pdf"
-            elif ctype in ("text/html", "application/xhtml+xml") or (
-                "<html" in text[:2000].lower()
+            elif not preserve_body and (
+                ctype in ("text/html", "application/xhtml+xml")
+                or "<html" in text[:2000].lower()
             ):
                 # off the event loop: parsing a large page must not stall other streams
                 extracted = await asyncio.to_thread(
@@ -415,7 +417,7 @@ async def _fetch_url(
                     metadata = extracted[3]
             elif ctype == "text/markdown":
                 media = "text/markdown"
-            if len(text) > cap:
+            if not preserve_body and len(text) > cap:
                 text, truncated = text[:cap], True
             return FetchResult(
                 url=cur,
