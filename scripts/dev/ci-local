@@ -1,0 +1,38 @@
+#!/bin/sh
+# Run the release workflow's build-and-check job locally before tagging (CPU only, no GPU).
+#   scripts/dev/ci-local [REF]      # REF defaults to HEAD
+# Mirrors .github/workflows/release.yml: a fresh checkout of REF, `uv sync --dev --extra vision
+# --extra compression` into its own venv, ruff, the unit suite, uv build, twine check and a wheel
+# install smoke. The suite runs under sandbox-exec with this machine's build volume and the main
+# checkout unreadable, as on the CI runner, so tests that depend on local paths fail here first.
+set -eu
+REF="${1:-HEAD}"
+SRC="$(cd "$(dirname "$0")/../.." && pwd)"
+SHA="$(git -C "$SRC" rev-parse "$REF")"
+WORK="${TMPDIR:-/tmp}/yunshu-ci-local-$(echo "$SHA" | cut -c1-12)"
+rm -rf "$WORK"
+git clone -q --no-hardlinks "$SRC" "$WORK"
+git -C "$WORK" checkout -q "$SHA"
+cd "$WORK"
+TAG="$(git describe --tags --exact-match 2>/dev/null || true)"
+if [ -n "$TAG" ]; then
+  grep -q "^## \[${TAG#v}\]" CHANGELOG.md || { echo "ci-local: CHANGELOG has no [${TAG#v}] section"; exit 1; }
+fi
+uv python install 3.13 >/dev/null
+UV_PROJECT_ENVIRONMENT="$WORK/.venv" uv sync -q --dev --extra vision --extra compression
+uv run ruff check python/ tests/
+PROFILE="$WORK/ci.sb"
+cat > "$PROFILE" <<EOF
+(version 1)
+(allow default)
+(deny file-read* file-write* (subpath "/Volumes/P5Plus"))
+(deny file-read* file-write* (subpath "$SRC"))
+EOF
+# HOME is a throwaway dir too: the runner has no ~/.yunshu, model caches or agent configs.
+CIHOME="$WORK/home"
+mkdir -p "$CIHOME"
+sandbox-exec -f "$PROFILE" env -u YV_PY -u YV_ROOT -u YUNSHU_MAIN HOME="$CIHOME" \
+  "$WORK/.venv/bin/python" -m pytest tests/unit -q --tb=short -p no:cacheprovider
+uv build -q
+uvx -q twine check dist/*
+echo "ci-local: PASS $SHA ($WORK)"

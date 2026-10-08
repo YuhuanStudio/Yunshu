@@ -3,6 +3,7 @@ Used by tests/unit/test_graceful_shutdown_real_server.py. Usage: scripted_server
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -22,8 +23,17 @@ engine_mod._engine = ScriptedEngine(
     Script(pieces=[f"w{i} " for i in range(n)], delay=delay)
 )
 engine_mod._model_manager = None
+app = create_app()
+
+
+@app.get("/_scripted_owner")
+def scripted_owner():
+    """Test-only ownership proof before a shutdown test sends any inference."""
+    return {"pid": os.getpid()}
+
+
 uvicorn.run(
-    create_app(),
+    app,
     host="127.0.0.1",
     port=port,
     log_level="warning",

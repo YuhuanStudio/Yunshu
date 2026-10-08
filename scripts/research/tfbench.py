@@ -55,15 +55,29 @@ WORK = Path("/Volumes/P5Plus/yunshu-build/tfnew")
 OUT = Path(os.environ.get("TFB_OUT", str(WORK)))
 
 
-def free_port():
-    for p in range(18990, int(os.environ.get("TFB_PORT_LAST", "18999")) + 1):
-        with socket.socket() as s:
-            try:
-                s.bind(("127.0.0.1", p))
-            except OSError:
-                continue
-        return p
-    raise RuntimeError("no port")
+def free_port(timeout_s=600):
+    last = int(os.environ.get("TFB_PORT_LAST", "18999"))
+    if not 18990 <= last <= 18999:
+        raise ValueError("TFB_PORT_LAST must be within 18990..18999")
+    deadline = time.monotonic() + timeout_s
+    announced = False
+    while True:
+        for p in range(18990, last + 1):
+            with socket.socket() as s:
+                # Match uvicorn: TIME_WAIT permits reuse, live listeners do not.
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                try:
+                    s.bind(("127.0.0.1", p))
+                except OSError:
+                    continue
+            return p
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise RuntimeError(f"no free port in 18990..{last} after {timeout_s}s")
+        if not announced:
+            print(f"waiting for a free port in 18990..{last}", flush=True)
+            announced = True
+        time.sleep(min(2, remaining))
 
 
 def spec_request(engine, extra_env):

@@ -231,3 +231,48 @@ def test_kill_drops_the_servers_prefix_cache_keeps_logs(tmp_path):
     srv.kill()
     assert not (srv.home / ".yunshu" / "cache").exists()
     assert (srv.home / "server.log").read_text() == "log"
+
+
+def test_free_port_matches_uvicorn_reuse_and_waits_for_pool(monkeypatch):
+    clock = [0.0]
+    busy = [True]
+    options = []
+
+    class Probe:
+        reused = False
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def setsockopt(self, *args):
+            options.append(args)
+            self.reused = True
+
+        def bind(self, address):
+            assert 18990 <= address[1] <= 18999
+            if busy[0] or not self.reused:
+                raise OSError("busy or TIME_WAIT")
+
+    def sleep(seconds):
+        clock[0] += seconds
+        busy[0] = False
+
+    monkeypatch.setattr(tfbench.socket, "socket", Probe)
+    monkeypatch.setattr(tfbench.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(tfbench.time, "sleep", sleep)
+    monkeypatch.setenv("TFB_PORT_LAST", "18999")
+    assert tfbench.free_port() == 18990
+    assert clock[0] > 0
+    assert all(
+        x == (tfbench.socket.SOL_SOCKET, tfbench.socket.SO_REUSEADDR, 1)
+        for x in options
+    )
+
+
+def test_free_port_refuses_outside_the_pool(monkeypatch):
+    monkeypatch.setenv("TFB_PORT_LAST", "19000")
+    with pytest.raises(ValueError, match="18990.*18999"):
+        tfbench.free_port()
