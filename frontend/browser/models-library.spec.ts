@@ -264,7 +264,9 @@ const status = (models: unknown[]) => ({
 
 const ledger = {
   object: "yunshu.memory",
+  // A newer engine: binary GB plus exact bytes (bytes win over the GB fields).
   total_gb: 48,
+  total_bytes: 48 * GB,
   free_gb: 23,
   host: { pressure_level: "normal", swap_used_gb: 0 },
   mlx: {
@@ -277,7 +279,7 @@ const ledger = {
     {
       kind: "weights",
       id: "org/big",
-      bytes: 1,
+      bytes: 22 * GB,
       gb: 22,
       reclaimable: false,
       estimated: false,
@@ -286,7 +288,7 @@ const ledger = {
     {
       kind: "apc_ram",
       id: "org/big",
-      bytes: 1,
+      bytes: 2.4 * GB,
       gb: 2.4,
       reclaimable: true,
       estimated: false,
@@ -295,7 +297,7 @@ const ledger = {
     {
       kind: "apc_warm",
       id: "org/big",
-      bytes: 1,
+      bytes: 0.6 * GB,
       gb: 0.6,
       reclaimable: true,
       estimated: false,
