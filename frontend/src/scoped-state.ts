@@ -1,5 +1,5 @@
 import { useCallback, useState } from "react";
-import type { Connection } from "./api";
+import type { Connection } from "./api.ts";
 
 /**
  * Identity of one engine connection for state that must never outlive it: the address and the

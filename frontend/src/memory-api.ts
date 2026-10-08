@@ -1,4 +1,4 @@
-import { connectionScope, useScopedState } from "./scoped-state";
+import { connectionScope, useScopedState } from "./scoped-state.ts";
 import { useEffect, useState } from "react";
 import { fixed } from "./i18n/format.ts";
 import { t } from "./i18n/index.ts";

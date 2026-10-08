@@ -1,4 +1,4 @@
-import { connectionScope, useScopedState } from "./scoped-state";
+import { connectionScope, useScopedState } from "./scoped-state.ts";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Connection } from "./api.ts";
 import {
