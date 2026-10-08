@@ -62,6 +62,7 @@ def test_yv_stage_fake_executor_handles_dict_results(tmp_path, monkeypatch):
         exe=Executor(),
         run=SimpleNamespace(append=lambda stage, record: records.append(record)),
         tree=lambda arm: SimpleNamespace(path=ROOT),
+        arm_env=lambda arm: {},
     )
     verdict = stages.stage_websearch(ctx)
     assert verdict.passed and verdict.numbers == {"base": [], "cand": []}

@@ -1002,6 +1002,10 @@ def stage_websearch(ctx: Ctx) -> StageResult:
                 arm,
                 [
                     "env",
+                    *[
+                        f"{key}={value}"
+                        for key, value in sorted(ctx.arm_env(arm).items())
+                    ],
                     "PYTHONPATH="
                     + str(ctx.tree(arm).path / "python")
                     + os.pathsep
@@ -1139,6 +1143,7 @@ def stage_tavily(ctx: Ctx) -> StageResult:
             arm,
             [
                 "env",
+                *[f"{key}={value}" for key, value in sorted(ctx.arm_env(arm).items())],
                 "PYTHONPATH=" + str(ctx.tree(arm).path / "python"),
                 ctx.py,
                 str(ctx.cand.path / "scripts/research/tavily_probe.py"),
