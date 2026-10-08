@@ -34,8 +34,25 @@ EOF
 # HOME is a throwaway dir too: the runner has no ~/.yunshu, model caches or agent configs.
 CIHOME="$WORK/home"
 mkdir -p "$CIHOME"
-mkdir -p "$CIHOME/tmp"
-sandbox-exec -f "$PROFILE" env -u YV_PY -u YV_ROOT -u YUNSHU_MAIN TMPDIR="$CIHOME/tmp" HOME="$CIHOME" \
+mkdir -p "$CIHOME/tmp" "$CIHOME/shim"
+# The sandbox answers EPERM where the runner answers ENOENT (the paths do not exist there), and
+# Python 3.13's Path.exists() raises on EPERM. Report ENOENT for the denied roots, as on the runner.
+cat > "$CIHOME/shim/sitecustomize.py" <<PYEOF
+import os
+_deny = ("/Volumes/P5Plus", "$SRC")
+_stat, _lstat = os.stat, os.lstat
+def _wrap(fn):
+    def inner(path, *a, **k):
+        try:
+            return fn(path, *a, **k)
+        except PermissionError:
+            if isinstance(path, (str, bytes, os.PathLike)) and os.fspath(path) and str(os.fspath(path)).startswith(_deny):
+                raise FileNotFoundError(2, "No such file or directory", os.fspath(path)) from None
+            raise
+    return inner
+os.stat, os.lstat = _wrap(_stat), _wrap(_lstat)
+PYEOF
+sandbox-exec -f "$PROFILE" env -u YV_PY -u YV_ROOT -u YUNSHU_MAIN PYTHONPATH="$CIHOME/shim" TMPDIR="$CIHOME/tmp" HOME="$CIHOME" \
   "$WORK/.venv/bin/python" -m pytest tests/unit -q --tb=short -p no:cacheprovider
 uv build -q
 uvx -q twine check dist/*
