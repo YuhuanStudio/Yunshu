@@ -1,3 +1,4 @@
+# Upstream (derived): Blaizzy/mlx-vlm (MIT), encoder_loader.py at 3d87e884
 """Prefer mlx-vlm's maintained loader; bridge its unreleased Gemma 2 port.
 
 Fallback derived from mlx-vlm encoder_loader.py at 3d87e884 (MIT). No global

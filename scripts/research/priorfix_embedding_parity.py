@@ -99,11 +99,23 @@ def run(args):
     fp32_rows = compare_sets(json.loads(Path(args.reference).read_text()), got_sets)
     quantized = bool(model.config.get("quantization"))
     floor = 0.99985 if not quantized else None
+    raw_multishard = None
+    shards = sorted(Path(args.model).glob("*.safetensors"))
+    if len(shards) > 1:
+        raw = EmbeddingGemma2(args.model, dtype="float32")
+        name = next(n for n, item in cs.items() if list(item) == ["text"])
+        vector = raw.embed_items([cs[name]])[0]
+        reference = json.loads(Path(args.reference).read_text())["plain"][name]
+        raw_multishard = compare(vector, [reference], 0.99985)
+        if not raw_multishard["passed"]:
+            raise ValueError(f"raw multi-shard regression failed: {raw_multishard}")
     passed = all(r["passed"] for r in rows) and (
         floor is None or all(r[2] >= floor for r in fp32_rows)
     )
     return {
         "complete": True,
+        "shard_count": len(shards),
+        "raw_multishard": raw_multishard,
         "passed": passed,
         "device": "M5",
         "model": args.model,

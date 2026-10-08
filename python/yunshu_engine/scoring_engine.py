@@ -74,12 +74,38 @@ def scoring_kind(config: dict, model_path: str) -> str | None:
     return None
 
 
+class _ClassifierLogits:
+    """Adapt upstream's typed output while exposing its trained head/parameters."""
+
+    def __init__(self, model):
+        self.model = model
+
+    def __call__(self, **inputs):
+        return self.model(**inputs).logits
+
+    def __getattr__(self, name):
+        return getattr(self.model, name)
+
+
 def load_sequence_classifier(path: str, config: dict):
     """Reuse MLX encoder arithmetic; add the exact HF trained classification head."""
     import mlx.core as mx
     import mlx.nn as nn
 
     family = config.get("model_type")
+    labels = int(config.get("num_labels", len(config.get("id2label", {})) or 2))
+    if labels == 1 and family in ("bert", "xlm-roberta"):
+        try:
+            from mlx_vlm.reranker_loader import load_sequence_classification_model
+        except ModuleNotFoundError as exc:
+            if exc.name != "mlx_vlm.reranker_loader":
+                raise
+        else:
+            return _ClassifierLogits(
+                load_sequence_classification_model(
+                    Path(path), config=config, strict=True
+                )
+            )
     if family == "bert":
         from mlx_embeddings.models.bert import Model, ModelArgs
     elif family in ("roberta", "xlm-roberta"):

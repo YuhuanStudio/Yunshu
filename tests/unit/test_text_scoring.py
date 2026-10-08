@@ -443,3 +443,38 @@ def test_jina_ranking_head_is_not_qwen_yes_no():
         )
         is None
     )
+
+
+def test_published_bge_quantized_namespace_keeps_head(tmp_path):
+    import mlx.core as mx
+    import mlx.nn as nn
+    from mlx.utils import tree_flatten
+    from transformers import XLMRobertaConfig, XLMRobertaForSequenceClassification
+
+    from yunshu_engine.scoring_engine import load_sequence_classifier
+
+    cfg = XLMRobertaConfig(
+        vocab_size=64,
+        hidden_size=64,
+        intermediate_size=64,
+        num_hidden_layers=1,
+        num_attention_heads=1,
+        max_position_embeddings=64,
+        num_labels=1,
+    )
+    XLMRobertaForSequenceClassification(cfg).save_pretrained(tmp_path)
+    config = json.loads((tmp_path / "config.json").read_text())
+    original = load_sequence_classifier(str(tmp_path), config)
+    nn.quantize(original, group_size=64, bits=8)
+    # Published BGE converter removes roberta. and also quantizes the trained head.
+    weights = {
+        k.removeprefix("roberta."): v for k, v in tree_flatten(original.parameters())
+    }
+    mx.save_safetensors(str(tmp_path / "model.safetensors"), weights)
+    config["quantization"] = {"bits": 8, "group_size": 64}
+    loaded = load_sequence_classifier(str(tmp_path), config)
+    assert isinstance(loaded.classifier.out_proj, nn.QuantizedLinear)
+    ids = mx.array([[2, 7, 9, 3]])
+    assert loaded(input_ids=ids)[0].tolist() == pytest.approx(
+        original(input_ids=ids)[0].tolist(), abs=1e-5
+    )

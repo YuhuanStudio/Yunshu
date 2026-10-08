@@ -40,7 +40,7 @@ def test_runtime_probe_cli_and_exact_rule():
     assert module.exact([[1, 2]], [[1, 2]])
     assert not module.exact([[1, 2]], [1, 2])
     assert not module.exact([1, 2], [1, 3])
-    for kind in ["omni", "retrieval", "diffusion"]:
+    for kind in ["omni", "retrieval", "classifier", "diffusion"]:
         assert (
             module.parser()
             .parse_args(["--kind", kind, "--out", "out", "--dry-run"])

@@ -233,18 +233,6 @@
       "local_changes": [
         "Absolute imports for installed mlx-vlm shared components; formatting."
       ]
-    },
-    {
-      "path": "python/yunshu_engine/embedding_gemma2_loader.py",
-      "repo": "https://github.com/Blaizzy/mlx-vlm",
-      "clone": "reference/mlx-vlm",
-      "upstream_path": "mlx_vlm/encoder_loader.py",
-      "commit": "3d87e88402f307efbf68e568971aa887ee7d9ed0",
-      "license": "MIT",
-      "kind": "derived",
-      "local_changes": [
-        "Prefer installed native embedding loader; fallback resolves vendored model without registry mutations; no unrelated encoder features."
-      ]
     }
   ],
   "derived": [
@@ -489,6 +477,20 @@
         "lexical option vectors are rows of the 4-bit lm_head dequantized on the fly; an over-long input is rejected instead of truncated; unknown head layouts fail closed"
       ],
       "why": "serves Cloudflare Clef / Clef-flash (MLX conversions: abenzerps/Clef-MLX @ 65781a8d37979a361af4e80984142dc40b2675b6) for /v1/decisions and /v1/systemone; the model card ships joint_schema_model.py as the reference implementation"
+    },
+    {
+      "path": "python/yunshu_engine/embedding_gemma2_loader.py",
+      "repo": "https://github.com/Blaizzy/mlx-vlm",
+      "clone": "reference/mlx-vlm",
+      "commit": "3d87e88402f307efbf68e568971aa887ee7d9ed0",
+      "license": "MIT",
+      "kind": "derived",
+      "local_changes": [
+        "Prefer installed native embedding loader; fallback resolves vendored model without registry mutations; no unrelated encoder features."
+      ],
+      "upstream_paths": [
+        "mlx_vlm/encoder_loader.py"
+      ]
     }
   ],
   "inspired": [
@@ -2539,8 +2541,8 @@
     },
     {
       "url": "https://github.com/IonDen/mlx-teacache",
-      "revision": null,
-      "license": "unverified",
+      "revision": "bb5cb625d90c06a5502aa51c8641c853c01cb57c",
+      "license": "Apache-2.0",
       "kind": "discovery-only",
       "owner": "priorfix",
       "reviewed_date": "2026-10-08",
@@ -2572,6 +2574,15 @@
       "owner": "priorfix",
       "reviewed_date": "2026-10-08",
       "action": "JinaForRanking custom head: explicitly unsupported; must not route to Qwen yes/no. Generic quantized BERT-family classifier heads supported separately."
+    },
+    {
+      "url": "https://huggingface.co/soichisumi/bge-reranker-v2-m3-mlx-affine8",
+      "revision": "512d2c5984b21da2b134c7f169a9f4176735287c",
+      "license": "Apache-2.0",
+      "kind": "discovery-only",
+      "owner": "priorfix",
+      "reviewed_date": "2026-10-08",
+      "action": "Published bare backbone namespace and quantized trained head; adapter delegates single-label BERT/XLM-RoBERTa to maintained mlx-vlm loader. GPU parity pending."
     }
   ]
 }

@@ -1119,7 +1119,9 @@ def stage_embedding(ctx: Ctx) -> StageResult:
 
 def stage_priorart(ctx: Ctx) -> StageResult:
     reasons, numbers = [], {}
-    kinds = ctx.env.get("PRIORART_KINDS", "retrieval,omni,diffusion").split(",")
+    kinds = ctx.env.get("PRIORART_KINDS", "retrieval,classifier,diffusion,omni").split(
+        ","
+    )
     for kind in kinds:
         prefix = str(ctx.cand.path / "python")
         if kind == "diffusion":

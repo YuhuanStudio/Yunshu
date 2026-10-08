@@ -13,7 +13,11 @@ import numpy as np
 
 def parser():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--kind", required=True, choices=["retrieval", "omni", "diffusion"])
+    p.add_argument(
+        "--kind",
+        required=True,
+        choices=["retrieval", "classifier", "omni", "diffusion"],
+    )
     p.add_argument("--out", required=True)
     p.add_argument("--rerank-reference")
     p.add_argument("--dry-run", action="store_true")
@@ -180,6 +184,42 @@ def retrieval(reference):
         "qwen_comparator": qwen,
         "qwen_template_parity": all(r["input_ids_equal"] for r in qwen),
         "engaged": "published 4bit; Qwen yes/no logits; VL model.process direct",
+    }
+
+
+def classifier():
+    import mlx.core as mx
+    from mlx_vlm.reranker_loader import load_sequence_classification_model
+    from transformers import AutoTokenizer
+
+    from yunshu_engine.scoring_engine import load_sequence_classifier
+
+    path = Path("/Volumes/P5Plus/models/bge-reranker-v2-m3-mlx-affine8")
+    config = json.loads((path / "config.json").read_text())
+    ours = load_sequence_classifier(str(path), config)
+    upstream = load_sequence_classification_model(path, config=config, strict=True)
+    tokenizer = AutoTokenizer.from_pretrained(path)
+    rows = []
+    for query, doc in [
+        ("capital of France", "Paris is France's capital."),
+        ("capital of France", "The ocean is blue."),
+    ]:
+        encoded = tokenizer(query, doc, return_tensors="np")
+        inputs = {k: mx.array(v) for k, v in encoded.items()}
+        a, b = ours(**inputs), upstream(**inputs).logits
+        mx.eval(a, b)
+        rows.append({"passed": exact(a, b), "ours": a.tolist(), "upstream": b.tolist()})
+    from mlx.utils import tree_flatten
+
+    head_equal = all(
+        exact(v, dict(tree_flatten(upstream.classifier.parameters()))[k])
+        for k, v in tree_flatten(ours.classifier.parameters())
+    )
+    return {
+        "passed": head_equal and all(r["passed"] for r in rows),
+        "rows": rows,
+        "trained_head_equal": head_equal,
+        "engaged": "published BGE affine8: bare backbone + quantized dense/out_proj, strict upstream loader",
     }
 
 
