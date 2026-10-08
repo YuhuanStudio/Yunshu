@@ -1,8 +1,8 @@
-import { SegmentedTray } from "./SegmentedTray";
 import { useRouteAction } from "./useRouteAction";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   BarChart,
+  SegmentedSelect,
   Button,
   Checkbox,
   ConfirmModal,
@@ -569,6 +569,7 @@ function UsageChart({ keys, usage }: { keys: ApiKey[]; usage: UsageDay[] }) {
       id: p.day,
       label: p.day.slice(5),
       value: pick(p),
+      tone: "neutral" as const,
     }));
   return (
     <SectionCard
@@ -594,7 +595,8 @@ function UsageChart({ keys, usage }: { keys: ApiKey[]; usage: UsageDay[] }) {
               ))}
             </SelectContent>
           </Select>
-          <SegmentedTray
+          <SegmentedSelect
+            variant="tray"
             options={[
               { value: "7", label: t("keys.usage.days", { count: 7 }) },
               { value: "14", label: t("keys.usage.days", { count: 14 }) },
