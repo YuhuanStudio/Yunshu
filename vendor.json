@@ -2119,7 +2119,9 @@
       "why": "runner, APC, speculative decode we build on",
       "pin_package": "mlx-vlm",
       "commit": "8f8efa57e6d6b2be87d9460acaedb3f485a193aa",
-      "reviewed_date": "2026-10-08"
+      "reviewed_date": "2026-10-08",
+      "reviewed_commit": "fdd94f39552a011e298f5d4160ef001238943c1b",
+      "review_reason": "Reviewed d13bd3c packed Dk128 multi-token fp32 scalar-gate GDN and fdd94f3 Clef joint decisions. Keep released 0.7.6 and qualified local arithmetic; packed prefill requires released runtime plus M5 raw-ID/APC boundary gates. Clef is owned by decisions2. See U015-R2-01/02."
     },
     {
       "repo": "https://github.com/ml-explore/mlx-lm",
@@ -2145,7 +2147,9 @@
       "why": "quantized matmul / NAX kernels",
       "pin_package": "mlx",
       "commit": "6553c47ba6500e877d7348dd576c021c43a22cf7",
-      "reviewed_date": "2026-10-08"
+      "reviewed_date": "2026-10-08",
+      "reviewed_commit": "6553c47ba6500e877d7348dd576c021c43a22cf7",
+      "review_reason": "Reviewed 264c14fe ruff-only Python changes, fa7b5b8c C_per_group=8 convolution loader, f8aaf49d partial-output float-sum qmv (already transcribed by qmvsync), and 83b976ea SDPA VJP. Keep <0.32.4 pending real wheel/compiler and long M5 numerics; no inference default copied from training VJP. See U015-R2-03."
     },
     {
       "repo": "https://github.com/ashhart/TensorFold",
@@ -2244,7 +2248,9 @@
       ],
       "why": "MLX serving engine: tools, caching, agent runtime",
       "commit": "082d72230417bcc5a24ff16e44d70c62a8c09049",
-      "reviewed_date": "2026-10-08"
+      "reviewed_date": "2026-10-08",
+      "reviewed_commit": "e77bbeb0322d0e7c0cc671accfd0ea24672915b5",
+      "review_reason": "Reviewed seven commits through e77bbeb0: typed request refusals/model-window cap, family/GLM prompt-store retention, thinking-off nonstream content, base runtime packaging and CLI source preflight; desktop localization excluded. Local context budget and request-local reasoning already exist; add cross-surface regressions and optional-runtime diagnostics, not TensorFold/native or desktop code. See U015-R2-04/05/06."
     },
     {
       "repo": "https://github.com/waybarrios/vllm-mlx",
@@ -2256,7 +2262,10 @@
         "vllm_mlx/engine/**"
       ],
       "why": "prefix cache, warm prompts, constrained decoding on MLX",
-      "commit": "f5d7e00a"
+      "commit": "f5d7e00a",
+      "reviewed_commit": "80e7fdec7e8641c8f81b01ece2d7cc256348b76f",
+      "reviewed_date": "2026-10-08",
+      "review_reason": "Reviewed 17 commits through 80e7fde, including four watched changes: c2600e0 per-request MTP counters and dead helper removals. Also read hybrid owned replay, short-prefill cancellation, schema-aware streamed arguments and HTTP exhaustion metrics. Port only finite-JSON coercion guard (independent implementation with regression tests); cache ownership/counters require local contract fixtures. See U015-R2-07/08/09."
     },
     {
       "repo": "https://github.com/nRanzo/MLX-MTP",
@@ -2275,7 +2284,10 @@
         "docs/**/*.md"
       ],
       "why": "experimental Apple Silicon inference runtime for the next Qwen generation",
-      "commit": "3d0b9d58"
+      "commit": "3d0b9d58",
+      "reviewed_commit": "92ada04cc7a59c3263e214b0a1127924fedd52db",
+      "reviewed_date": "2026-10-08",
+      "review_reason": "Reviewed full 362-commit log (356 watched in prior receipt), new-file inventory and mechanism diffs/tests through 92ada04: shared snapshot ledger/value retention, exact route/numerics receipts, PLD committed-segment composition, completion-cost prefill stalls, MoE NAX width/mask admission, power/thermal sampling, semantic capsules, rollback/publication guards and API contracts. Capsule/HySparse2 training changes alter semantics and are not lossless defaults; no native kernels or throughput control plane imported. See U015-R2-10..18."
     },
     {
       "repo": "https://github.com/VincentGourbin/qwen38-mlx-swift",
@@ -2295,7 +2307,10 @@
         "lib/*.zig"
       ],
       "why": "fused add+norm and other Metal kernels in a Zig MLX server",
-      "commit": "6281442d"
+      "commit": "6281442d",
+      "reviewed_commit": "f9ff1f1024ac054f874abf62234a527b39114d57",
+      "reviewed_date": "2026-10-08",
+      "review_reason": "Reviewed full 214-commit history (117 watched in prior receipt) through 93efabb: decode-end hybrid checkpoint+MTP carried row, one-token SSD restore guard, durable-store disk probe, late-system templates, tools/schema/ref parsing, token-id completion, usage/UTF8 SSE, model/LoRA refusals, MTP cleanup and family loaders. Decisions D1/Clef follow decisions2; Zig/EXL3/Sushi/Flash-Next kernels are not drop-in 27B Python ports. See U015-R2-19..26. Fetch follow-up f9ff1f1 removes one duplicate mlx_from_fp8 Zig extern declaration introduced by merged PRs; no local Zig ABI/code to port."
     },
     {
       "repo": "https://github.com/Blaizzy/mlx-audio",
@@ -2422,5 +2437,17 @@
     "reference/mlx-examples": "superseded or covered elsewhere (mlx-examples -> mlx-lm; our own fork; hot-swap multimodal server)",
     "reference/mlx-vlm-yunshu": "superseded or covered elsewhere (mlx-examples -> mlx-lm; our own fork; hot-swap multimodal server)",
     "reference/mlx-serve-multimodal": "superseded or covered elsewhere (mlx-examples -> mlx-lm; our own fork; hot-swap multimodal server)"
+  },
+  "package_reviews": {
+    "huggingface-hub": {
+      "installed_version": "1.33.0",
+      "latest_version": "2.1.1",
+      "blocked_by": [
+        "tokenizers",
+        "diffusers"
+      ],
+      "reviewed_date": "2026-10-08",
+      "reason": "Installed tokenizers 0.23.2 and diffusers 0.41.0 both require huggingface-hub<2.0; keep the resolver-valid 1.33.0. Recheck when either wheel or latest hub version changes."
+    }
   }
 }

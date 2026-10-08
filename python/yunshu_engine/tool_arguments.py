@@ -66,12 +66,19 @@ def _types(schema: dict) -> list[str]:
     return []
 
 
+def _finite_json(text: str) -> Any:
+    """Decode text only when it can be emitted as standard finite JSON."""
+    value = json.loads(text)
+    json.dumps(value, allow_nan=False)
+    return value
+
+
 def _from_text(text: str, types: list[str]) -> tuple[bool, Any]:
     stripped = text.strip()
     # XML parsers sometimes retain a JSON-quoted scalar. Unwrap only when the
     # schema excludes strings, so identifiers/leading zeroes remain exact.
     try:
-        decoded = json.loads(stripped)
+        decoded = _finite_json(stripped)
         if isinstance(decoded, str) and "string" not in types:
             stripped = decoded.strip()
     except ValueError:
@@ -79,7 +86,7 @@ def _from_text(text: str, types: list[str]) -> tuple[bool, Any]:
     for t in types:
         if t == "integer":
             try:
-                value = json.loads(stripped)
+                value = _finite_json(stripped)
             except ValueError:
                 continue
             if isinstance(value, int) and not isinstance(value, bool):
@@ -88,7 +95,7 @@ def _from_text(text: str, types: list[str]) -> tuple[bool, Any]:
                 return True, int(value)
         elif t == "number":
             try:
-                value = json.loads(stripped)
+                value = _finite_json(stripped)
             except ValueError:
                 continue
             if isinstance(value, (int, float)) and not isinstance(value, bool):
@@ -98,7 +105,7 @@ def _from_text(text: str, types: list[str]) -> tuple[bool, Any]:
                 return True, stripped.lower() == "true"
         elif t in ("array", "object"):
             try:
-                value = json.loads(stripped)
+                value = _finite_json(stripped)
             except ValueError:
                 continue
             if isinstance(value, list if t == "array" else dict):
@@ -166,7 +173,7 @@ def coerce_tool_arguments(
                     # Untyped XML containers follow mlx-lm a537041. Keep
                     # scalars and explicit string unions as literal text.
                     try:
-                        container = json.loads(value)
+                        container = _finite_json(value)
                     except ValueError:
                         continue
                     if isinstance(container, (dict, list)):

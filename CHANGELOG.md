@@ -33,7 +33,7 @@ Changes on main after 0.1.4; not part of a published package yet.
 
 ### Fixed
 
-- Untyped XML tool arguments containing JSON objects or arrays reach clients as containers; scalar text and declared string unions keep their existing types.
+- Untyped XML tool arguments containing JSON objects or arrays reach clients as containers; scalar text and declared string unions keep their existing types. Numeric or nested container text containing non-finite values stays literal instead of emitting invalid JSON.
 
 ### Security
 

@@ -25,12 +25,16 @@ patched symbol changed or is missing or a self-check fails, 1 when anything else
 - `watch`: every reference clone we follow for ideas or fixes, with the globs that matter and `commit` = the upstream
   commit we have reviewed up to (move it forward after reading the report). The report lists commits touching the
   globs since then and files added upstream that match them. Repos pinned to an installed package (`pin_package`) are
-  compared against that release tag.
+  compared against that release tag until an explicit reviewed_commit records unreleased changes.
+  The release/copy commit remains provenance; reviewed_commit plus review_reason advances only the review frontier.
+  Unreviewed watched commits make the check exit 1.
 - `watch_excluded`: every other clone under `reference/`, with the reason it is not followed (parked modality,
   non-goal, superseded). A clone in neither list fails the self-check, so a new clone cannot go unclassified.
 - Packages: read from `pyproject.toml` (base, every extra, every dependency group); `packages` in vendor.json only
   adds names that are not declared there (mlx-metal). The report shows installed, latest on PyPI and the declared
-  specifier, so a new dependency cannot be missed.
+  specifier, so a new dependency cannot be missed. package_reviews can record an exact installed/latest
+  pair blocked by named installed dependency constraints; it is clean only while those constraints
+  still admit the installed version and reject the reviewed latest version. New versions report again.
 - Self-check: a file under `python/` whose first lines say `# Upstream`, "ported/adapted/studied from" or
   "Inspired by" must be in vendor.json (a package `__init__.py` next to registered files is exempt).
 

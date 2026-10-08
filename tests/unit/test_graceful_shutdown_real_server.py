@@ -24,7 +24,6 @@ def _pick_port() -> int:
         return probe.getsockname()[1]
 
 
-
 def test_graceful_shutdown_timeout_values():
     from yunshu_cli.serve import graceful_shutdown_timeout as g
 

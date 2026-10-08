@@ -197,3 +197,15 @@ def test_eviction_keeps_the_newest(sdk, monkeypatch):
         for _ in range(3)
     ]
     assert [c.id for c in sdk.chat.completions.list()] == ids[1:]
+
+
+def test_store_json_response_with_memoryview_body(monkeypatch):
+    completion = _completion("chatcmpl-memoryview", "hello")
+    response = JSONResponse(completion)
+    response.body = memoryview(response.body)
+    saved = []
+    monkeypatch.setattr(
+        chat_mod, "_store_completion", lambda body, req: saved.append(body)
+    )
+    assert chat_mod._tee_store(response, object()) is response
+    assert saved == [completion]

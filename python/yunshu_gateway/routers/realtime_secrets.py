@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
@@ -90,7 +90,7 @@ def _kind(session: dict) -> str:
         raise rs.SecretError(
             "session.type must be 'realtime' or 'transcription'", "session.type"
         )
-    return t
+    return cast(str, t)
 
 
 @router.post("/realtime/client_secrets")
