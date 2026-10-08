@@ -48,7 +48,7 @@ export type Row = {
   latency?: RequestLatency | null;
   energy?: RequestEnergy | null;
   /** Where a finished row came from: the server ring or the page's own status samples. */
-  source?: "ring" | "sampled";
+  source?: "ring" | "sampled" | "archive";
 };
 export type Offsets = {
   arrive?: number | null;

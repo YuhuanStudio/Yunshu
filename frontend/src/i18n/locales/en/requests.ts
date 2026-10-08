@@ -269,5 +269,13 @@ const requests: Shape<typeof zh> = {
   "spec.counters.adaptive": "Adaptive draft",
   "spec.counters.adaptiveValue": "{accepted} / {drafted} tokens · K={k}",
   "spec.counters.unavailable": "Engine counters: this engine does not provide them (/debug is off, or it does not report speculation counters).",
+  "archive.label": "Keep request history in this browser",
+  "archive.help": "The engine keeps only the last {capacity} in memory and forgets them on restart. When on, this browser also stores the numeric record of finished requests (no prompts or replies), up to {rows} rows and {days} days; off by default.",
+  "archive.count": "{n} more kept only in this browser",
+  "archive.export": "Export current list (JSON)",
+  "archive.exportDisabled": "The current list has no requests to export.",
+  "archive.clear": "Clear browser history",
+  "archive.unavailable": "This browser blocks storage (private mode or blocked site data), so nothing is kept.",
+  "archive.engineGap": "The engine has an optional serve log (YUNSHU_SERVE_LOG) that survives restarts, but no route reads it yet, so it is not shown here.",
 };
 export default requests;

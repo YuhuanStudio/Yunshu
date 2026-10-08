@@ -257,5 +257,13 @@ const requests = {
   "spec.counters.adaptive": "自適應草稿",
   "spec.counters.adaptiveValue": "{accepted} / {drafted} token · K={k}",
   "spec.counters.unavailable": "引擎累計計數器：這個引擎沒有提供（/debug 關閉，或此引擎不回報推測解碼計數）。",
+  "archive.label": "在這個瀏覽器保存請求紀錄",
+  "archive.help": "引擎只在記憶體保留最近 {capacity} 筆，重新啟動就清空。開啟後，這個瀏覽器會另存已結束請求的數字紀錄（不含提示詞與回覆），最多 {rows} 筆、{days} 天；預設關閉。",
+  "archive.count": "另有 {n} 筆只在瀏覽器保存",
+  "archive.export": "匯出目前列表 (JSON)",
+  "archive.exportDisabled": "目前列表沒有可匯出的請求。",
+  "archive.clear": "清除瀏覽器紀錄",
+  "archive.unavailable": "這個瀏覽器不允許儲存（私密模式或已封鎖網站資料），紀錄不會保留。",
+  "archive.engineGap": "引擎有選用的 serve log（YUNSHU_SERVE_LOG）可跨重啟保存，但目前沒有讀取它的介面，所以這裡看不到。",
 };
 export default requests;

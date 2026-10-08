@@ -17,7 +17,7 @@ import { number } from "./ui";
 export function RequestWaterfall({ row }: { row: Row }) {
   useLocale();
   // Only rows from the engine's ring carry stage data; a row the page assembled from status polls has none to show.
-  if (row.source !== "ring") return null;
+  if (row.source !== "ring" && row.source !== "archive") return null;
   if (row.latency === undefined && row.energy === undefined)
     return (
       <p

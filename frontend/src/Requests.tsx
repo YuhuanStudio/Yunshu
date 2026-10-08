@@ -2,6 +2,8 @@ import { ErrorNote } from "./error-note";
 import { RequestWaterfall } from "./RequestWaterfall";
 import { LatencyDistribution } from "./LatencyDistribution";
 import { SpeculationPanel } from "./SpeculationPanel";
+import { useRequestArchive } from "./useRequestArchive";
+import { ArchiveControls } from "./ArchiveControls";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   CustomSelect,
@@ -265,9 +267,10 @@ export function Requests({
     [engine.history],
   );
   // The server ring when it exists; otherwise only what this page sampled from status polls.
+  const archive = useRequestArchive(connection.baseUrl, recent.rows);
   const finished = useMemo(
-    () => (recent.supported ? [...recent.rows].reverse() : sampled),
-    [recent.supported, recent.rows, sampled],
+    () => (recent.supported ? [...archive.rows].reverse() : sampled),
+    [recent.supported, archive.rows, sampled],
   );
   // The first tab is decided once from what is running, so it never flips under the reader:
   // 進行中 when something runs, otherwise the finished requests (the thing to investigate).
@@ -440,7 +443,9 @@ export function Requests({
   }, [xl, detail]);
   const view =
     (detail &&
-      finished.find((r) => r.id === detail.id && r.source === "ring")) ||
+      finished.find(
+        (r) => r.id === detail.id && (r.source === "ring" || r.source === "archive"),
+      )) ||
     detail;
   const done = view?.phase === "complete";
   const copyId = (id: string) => {
@@ -1071,6 +1076,14 @@ export function Requests({
                         })
                       : t("requests.footer.loading")}
                   </p>
+                )}
+                {recent.supported && (
+                  <ArchiveControls
+                    archive={archive}
+                    capacity={recent.capacity}
+                    shown={matched}
+                    baseUrl={connection.baseUrl}
+                  />
                 )}
                 {speed !== "all" && (
                   <p data-testid="slow-rule">

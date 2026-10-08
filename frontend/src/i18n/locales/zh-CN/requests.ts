@@ -260,5 +260,13 @@ const requests: Shape<typeof zh> = {
   "spec.counters.adaptive": "自适应草稿",
   "spec.counters.adaptiveValue": "{accepted} / {drafted} token · K={k}",
   "spec.counters.unavailable": "引擎累计计数器：这个引擎没有提供（/debug 关闭，或此引擎不上报推测解码计数）。",
+  "archive.label": "在此浏览器保存请求记录",
+  "archive.help": "引擎只在内存保留最近 {capacity} 条，重启后清空。开启后，此浏览器会另存已结束请求的数字记录（不含提示词与回复），最多 {rows} 条、{days} 天；默认关闭。",
+  "archive.count": "另有 {n} 条只保存在浏览器",
+  "archive.export": "导出当前列表 (JSON)",
+  "archive.exportDisabled": "当前列表没有可导出的请求。",
+  "archive.clear": "清除浏览器记录",
+  "archive.unavailable": "此浏览器不允许存储（隐私模式或已屏蔽网站数据），记录不会保留。",
+  "archive.engineGap": "引擎有可选的 serve log（YUNSHU_SERVE_LOG）可跨重启保存，但目前没有读取它的接口，所以这里看不到。",
 };
 export default requests;

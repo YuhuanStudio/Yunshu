@@ -228,3 +228,29 @@ test("cache lifecycle without /debug says it is not provided", async ({
     "沒有提供",
   );
 });
+
+test("request archive is off by default, opt-in keeps finished rows across an engine restart, clear forgets them", async ({
+  page,
+}) => {
+  let ringRows = [
+    ring({ request_id: "keep-a", t: 1_800_000_100 }),
+    ring({ request_id: "keep-b", t: 1_800_000_200 }),
+  ];
+  await install(page, {
+    "/v1/yunshu/requests/recent": () => list(ringRows),
+  });
+  await page.goto("/console/#/requests", { waitUntil: "domcontentloaded" });
+  const controls = page.getByTestId("archive-controls");
+  const sw = controls.getByRole("switch");
+  await expect(sw).toHaveAttribute("aria-checked", "false");
+  await expect(page.getByTestId("archive-count")).toHaveCount(0);
+  await sw.click();
+  await expect(sw).toHaveAttribute("aria-checked", "true");
+  // Let the first write land, then "restart": the engine's ring is empty again.
+  await page.waitForTimeout(600);
+  ringRows = [];
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await expect(page.getByTestId("archive-count")).toContainText("2");
+  await controls.getByRole("button", { name: "清除瀏覽器紀錄" }).click();
+  await expect(page.getByTestId("archive-count")).toHaveCount(0);
+});
