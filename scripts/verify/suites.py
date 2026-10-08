@@ -41,7 +41,9 @@ SUITES = {
     "evals": {"stages": ["preflight", "evals"]},
     "console": {"stages": ["console"]},
     "console-identity": {
-        "stages": ["preflight", "identity", "apc"],
+        # Full unit + ci-local are external merge gates; avoid a third overlapping
+        # broad CPU suite before these short GPU-only correctness wrappers.
+        "stages": ["identity", "apc"],
         "ctx": [1024, 32768],
         "spec_off": True,
         "decode_tokens": 256,

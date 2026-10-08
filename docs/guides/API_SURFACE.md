@@ -500,7 +500,7 @@ unknown reasons), under the same console admin permission. `x_yunshu.energy` and
 ### Console round 10 backend data
 
 All routes require the same admin authentication as model management. OpenAPI lists
-the routes and query parameters. M5 Qwen3.5-0.8B-MLX-bf16 pilot (2026-10-08, `1159a343`) passed all six console checks via job `1008-142909-00-consolegaps-tiny-pilot-1008-console-cand-a1-44f5`: entries/events, schema enforcement, bundle/manifest, impact, clear and history after restart. Final candidate gates remain pending.
+the routes and query parameters. M5 Qwen3.5-0.8B-MLX-bf16 pilot (2026-10-08, `1159a343`) passed all six console checks via job `1008-142909-00-consolegaps-tiny-pilot-1008-console-cand-a1-44f5`: entries/events, schema enforcement, bundle/manifest, impact, clear and history after restart. A second M5 served check at `e9ddd468` also passed all six checks (`1008-145849-00-consolegaps-tiny-final-1008-console-cand-a1-5911`); the final worker report carries merge-gate evidence.
 
 | Route | Behavior |
 |---|---|

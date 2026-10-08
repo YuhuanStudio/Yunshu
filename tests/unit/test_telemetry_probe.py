@@ -158,12 +158,36 @@ def test_probe_retains_closing_interval_after_fast_request(tmp_path, monkeypatch
             Srv=Server, send=lambda *a: None, engaged_spec_mode=lambda *a: "off"
         ),
     )
-    monkeypatch.setattr(module.concurrent.futures, "ThreadPoolExecutor", Pool)
+    # Keep the fake clock/pool/HTTP local to this probe. The stdlib modules are
+    # shared with background workers from unrelated tests; mutating their functions
+    # can advance this clock/reset submitted while the probe is still sampling.
+    import time as real_time
+
+    real_sleep = real_time.sleep
+    real_perf_counter = real_time.perf_counter
     monkeypatch.setattr(
-        module.time, "sleep", lambda seconds: clock.__setitem__(0, clock[0] + seconds)
+        module,
+        "concurrent",
+        SimpleNamespace(futures=SimpleNamespace(ThreadPoolExecutor=Pool)),
     )
-    monkeypatch.setattr(module.time, "perf_counter", lambda: clock[0])
-    monkeypatch.setattr(module.urllib.request, "urlopen", response)
+    monkeypatch.setattr(
+        module,
+        "time",
+        SimpleNamespace(
+            sleep=lambda seconds: clock.__setitem__(0, clock[0] + seconds),
+            perf_counter=lambda: clock[0],
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "urllib",
+        SimpleNamespace(
+            request=SimpleNamespace(
+                Request=module.urllib.request.Request, urlopen=response
+            )
+        ),
+    )
+    assert real_time.sleep is real_sleep and real_time.perf_counter is real_perf_counter
     out = tmp_path / "result.json"
     module.main(["--out", str(out), "--model", "fake", "--tokens", "32"])
     result = json.loads(out.read_text())
