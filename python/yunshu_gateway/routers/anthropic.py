@@ -2074,8 +2074,8 @@ async def _non_stream_legacy(
     matched_stop = _detect_matched_stop(
         visible_text,
         stop,
-        getattr(result, "finish_reason", None),
-        stopped_by_stop_sequence=getattr(result, "stopped_by_stop_sequence", None),
+        finish_reason,
+        stopped_by_stop_sequence=_g("stopped_by_stop_sequence", None, None),
     )
     if matched_stop and visible_text:
         idx = visible_text.find(matched_stop)

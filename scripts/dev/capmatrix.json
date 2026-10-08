@@ -1854,19 +1854,19 @@
    },
    "asserts": [
     {
-     "path": "output.0.type",
-     "op": "eq",
-     "value": "function_call"
-    },
-    {
-     "path": "output.0.name",
+     "path": "function_calls.0.name",
      "op": "eq",
      "value": "get_weather"
     },
     {
-     "path": "output.0.arguments",
+     "path": "function_calls.0.arguments",
      "op": "json_arg_nonempty",
      "value": "city"
+    },
+    {
+     "path": "output.0.type",
+     "op": "eq",
+     "value": "function_call"
     }
    ]
   },

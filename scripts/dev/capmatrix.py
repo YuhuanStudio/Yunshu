@@ -421,6 +421,11 @@ def run_row(cl, row):
                     else {"body": resp["json"]}
                 ),
             }
+            resp["function_calls"] = [
+                o
+                for o in resp.get("output") or []
+                if isinstance(o, dict) and o.get("type") == "function_call"
+            ]
             resp["output_text"] = "".join(
                 c.get("text", "")
                 for o in resp.get("output") or []
