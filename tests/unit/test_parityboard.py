@@ -220,3 +220,134 @@ def test_head_to_head_tie_within_band():
         "n": 1,
         "provisional": False,
     }
+
+
+def add_conc(out, agg=40.0, n=8, bad=False):
+    rows = [json.loads(x) for x in out.read_text().splitlines()]
+    meta = {
+        k: rows[0][k]
+        for k in (
+            "engine",
+            "git_sha",
+            "version",
+            "checkpoint",
+            "snapshot_rep",
+            "device",
+        )
+    }
+    conc = dict(
+        meta,
+        part="conc",
+        n=n,
+        trial=0,
+        wall_s=10,
+        total_tokens=n * 256 - (1 if bad else 0),
+        agg_tps=agg,
+        per_req_dec=[5.0] * n,
+        ttfts=[1.0] * n,
+        pts=[32768] * n,
+        cts=[256] * n,
+    )
+    rows.insert(-1, conc)
+    out.write_text("\n".join(map(json.dumps, rows)))
+
+
+def test_conc8_item_and_incomplete_conc_rejected(tmp_path):
+    for eng, agg in (("yunshu-new", 30.0), ("splash", 40.0)):
+        for rep in range(3):
+            run, jobs, out, _ = fixture_cell(tmp_path, eng, rep)
+            add_conc(out, agg + rep)
+    board = pb.build([run], jobs)
+    it = [
+        i
+        for i in board["items"]
+        if i["metric"] == "conc8_agg_tps" and i["ctx"] == 32768
+    ][0]
+    assert it["status"] == "gap" and it["best_engine"] == "splash"
+    others = [
+        i
+        for i in board["items"]
+        if i["metric"] == "conc8_agg_tps" and i["ctx"] != 32768
+    ]
+    assert others and all(
+        i["status"] == "unknown" for i in others
+    )  # missing contexts listed, not dropped
+    tmp2 = tmp_path / "bad"
+    tmp2.mkdir()
+    run, jobs, out, _ = fixture_cell(tmp2, "yunshu-new", 0)
+    add_conc(out, bad=True)
+    board = pb.build([run], jobs)
+    assert any("incomplete conc row" in r["reason"] for r in board["rejected"])
+
+
+def test_extra_items_unknown_without_sources(tmp_path):
+    board = pb.build([], tmp_path)
+    assert {e["item"] for e in board["extra"]} == {
+        "capability_matrix",
+        "accuracy_mmlu_pro",
+        "agentic_pass",
+    }
+    assert all(
+        e["status"] == "unknown" and e["measurable_engines"] for e in board["extra"]
+    )
+    assert not board["gate_open"]
+
+
+def test_capability_needs_34_checks(tmp_path):
+    d = tmp_path / "rel"
+    d.mkdir()
+    (d / "verdict.json").write_text(
+        json.dumps({"stages": {"a": {"ok": True}, "b": {"ok": True}}})
+    )
+    assert pb.capability_item(tmp_path)["status"] == "unknown"
+    (d / "verdict.json").write_text(
+        json.dumps({"stages": {f"s{i}": {"ok": i != 3} for i in range(34)}})
+    )
+    assert pb.capability_item(tmp_path)["status"] == "gap"
+    (d / "verdict.json").write_text(
+        json.dumps({"stages": {f"s{i}": {"ok": True} for i in range(34)}})
+    )
+    assert pb.capability_item(tmp_path)["status"] == "parity"
+
+
+def write_arm(root, name, flags):
+    d = root / "mmlu_pro"
+    d.mkdir(exist_ok=True)
+    rows = [{"kind": "meta"}] + [
+        {"kind": "q", "id": f"q{i}", "correct": c} for i, c in enumerate(flags)
+    ]
+    (d / f"{name}.jsonl").write_text("\n".join(map(json.dumps, rows)))
+
+
+def test_accuracy_paired(tmp_path):
+    base = [i % 2 == 0 for i in range(300)]
+    write_arm(tmp_path, "ref", base)
+    write_arm(tmp_path, "default", base[:-1] + [not base[-1]])
+    assert pb.accuracy_item(tmp_path)["status"] == "parity"  # one discordant pair
+    write_arm(tmp_path, "default", [False] * 300)
+    assert pb.accuracy_item(tmp_path)["status"] == "gap"
+    write_arm(tmp_path, "default", base[:50])
+    assert pb.accuracy_item(tmp_path)["status"] == "unknown"  # <200 pairs
+
+
+def test_agentic_ignores_incomplete_verdicts(tmp_path):
+    bad = tmp_path / "a"
+    bad.mkdir()
+    (bad / "verdict.json").write_text(
+        json.dumps({"verdict": "FAIL", "problems": ["missing run"], "current": {}})
+    )
+    assert pb.agentic_item(tmp_path)["status"] == "unknown"
+    ok = tmp_path / "b"
+    ok.mkdir()
+    (ok / "verdict.json").write_text(
+        json.dumps(
+            {
+                "verdict": "PASS",
+                "problems": [],
+                "sha": "x",
+                "current": {"claude": {"passed": 3, "runs": 4}},
+            }
+        )
+    )
+    e = pb.agentic_item(tmp_path)
+    assert e["pass_runs"] == {"claude": [3, 4]} and e["status"] == "unknown"
