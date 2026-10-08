@@ -24,13 +24,30 @@ STAGES = (
 LADDER = tuple(
     s
     for s in STAGES
-    if s not in ("longqa", "conc", "rerank", "console", "evals", "telemetry", "telemetry-tiny")
+    if s
+    not in (
+        "longqa",
+        "conc",
+        "rerank",
+        "console",
+        "evals",
+        "telemetry",
+        "telemetry-tiny",
+    )
 )
 
 # Every key is a default; the CLI can override ctx / reps / mmlu_n / mem_sizes.
 SUITES = {
     "evals": {"stages": ["preflight", "evals"]},
     "console": {"stages": ["console"]},
+    "console-identity": {
+        "stages": ["preflight", "identity", "apc"],
+        "ctx": [1024, 32768],
+        "spec_off": True,
+        "decode_tokens": 256,
+        "identity_timeout_min": 10,
+        "require_spec_depth": True,
+    },
     "telemetry": {"stages": ["telemetry"]},
     "telemetry-tiny": {"stages": ["telemetry-tiny"]},
     "telemetry-overhead": {

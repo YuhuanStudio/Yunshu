@@ -2802,6 +2802,7 @@ def console_backend_gaps(c):
         json.loads(content).get("ok") is True, "schema-constrained content is invalid"
     )
     stats = response.json()["x_yunshu"]
+    expect(stats["model"] == c.model, "request model alias not attributed")
     expect(
         stats["structured_output"]["enforced"] is True,
         "schema enforcement not reported",

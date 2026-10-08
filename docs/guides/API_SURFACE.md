@@ -500,8 +500,7 @@ unknown reasons), under the same console admin permission. `x_yunshu.energy` and
 ### Console round 10 backend data
 
 All routes require the same admin authentication as model management. OpenAPI lists
-the routes and query parameters. CPU unit coverage is implemented; real-server
-evidence is pending until the consolegaps console yv verdict is recorded.
+the routes and query parameters. M5 Qwen3.5-0.8B-MLX-bf16 pilot (2026-10-08, `1159a343`) passed all six console checks via job `1008-142909-00-consolegaps-tiny-pilot-1008-console-cand-a1-44f5`: entries/events, schema enforcement, bundle/manifest, impact, clear and history after restart. Final candidate gates remain pending.
 
 | Route | Behavior |
 |---|---|
@@ -522,7 +521,7 @@ failure is represented as enforced. Status request rows always include `model`
 (null only before the requested model has been attributed).
 
 Cache physical bytes mean attributed array/storage bytes, not allocator footprint.
-SSD file physical bytes include headers; unknown logical size is null. Entry hit
+SSD file physical bytes include headers; primary logical bytes are tensor payload size, lower-tier logical bytes are restored raw-file size. `device` names a configured lower tier; unknown metadata is null. Entry hit
 counts are bounded process metadata and restart at zero. Events are bounded and
 may omit earlier lifecycle changes; a null request ID denotes an unattributed
 background/legacy operation. Persistent history cursors are exclusive; concurrent

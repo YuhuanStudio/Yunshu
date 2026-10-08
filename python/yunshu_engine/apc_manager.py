@@ -274,10 +274,22 @@ class SpillDiskStore(DiskBlockStore):
             size = path.stat().st_size
         except OSError:
             size = 0
+        removed = [h for h, stored in list(self._exact_index.items()) if stored == path]
         self._drop_index_for_path(path)
         path.unlink(missing_ok=True)
         self._disk_bytes = max(0, self._disk_bytes - size)
         self.evictions += 1
+        from .cache_observation import disk_event
+
+        for key in removed:
+            metadata = self._tok_cache().get(key)
+            disk_event(
+                self,
+                "eviction",
+                key,
+                len(metadata[0]) if metadata else None,
+                "disk_budget_or_superseded",
+            )
         return True
 
     def _maybe_evict(self) -> int:
@@ -301,6 +313,9 @@ class SpillDiskStore(DiskBlockStore):
         if ok and h is not None:
             tokens = tuple(int(t) for t in payload.token_ids)
             self._tok_cache()[int(h)] = (tokens, int(payload.extra_hash))
+            from .cache_observation import disk_event
+
+            disk_event(self, "admission", int(h), len(tokens), "ssd_write")
             hook = self.on_exact_written
             if hook is not None:
                 try:
@@ -838,9 +853,10 @@ class _Coordinator(APCCoordinator):
     def store_checkpoint(
         self, token_ids, prompt_cache, *, extra_hash=0, batch_idx=None
     ) -> bool:
-        self.manager.observation.request_id = self.manager.__dict__.get(
-            "_console_generations", {}
-        ).get(getattr(self, "_request_generation", None))
+        if hasattr(self.manager, "observation"):
+            self.manager.observation.request_id = self.manager.__dict__.get(
+                "_console_generations", {}
+            ).get(getattr(self, "_request_generation", None))
         tokens = tuple(token_ids)
         full_ids = getattr(self, "_current_ids", tokens)
         policy = self.request(full_ids)
@@ -992,12 +1008,13 @@ class _Coordinator(APCCoordinator):
 
     def checkpoint_lengths(self, token_ids, media_token_ids, *, begin=True):
         if begin:
-            pending_ids = self.manager._console_requests.get(tuple(token_ids))
-            self.manager.observation.request_id = (
-                pending_ids.popleft() if pending_ids else None
-            )
-            if pending_ids is not None and not pending_ids:
-                self.manager._console_requests.pop(tuple(token_ids), None)
+            if hasattr(self.manager, "observation"):
+                pending_ids = self.manager._console_requests.get(tuple(token_ids))
+                self.manager.observation.request_id = (
+                    pending_ids.popleft() if pending_ids else None
+                )
+                if pending_ids is not None and not pending_ids:
+                    self.manager._console_requests.pop(tuple(token_ids), None)
             self._current_ids = tuple(token_ids)
         final = self.checkpoint_len(token_ids, media_token_ids)
         if final <= 0:
@@ -1142,6 +1159,10 @@ class YunshuAPCManager(APCManager):
         )
         if isinstance(self.disk, SpillDiskStore):
             self.disk.on_exact_written = self._disk_superseded_by
+            self.disk.observation = self.observation
+            self.disk.event_origin = lambda key: self.__dict__.get(
+                "_console_generations", {}
+            ).get(self._born.get(key))
 
     # ── demotion: HOT -> WARM -> SSD ───────────────────────────────────
     def _spill(self, key, entry) -> None:
@@ -1233,7 +1254,7 @@ class YunshuAPCManager(APCManager):
             self.disk_superseded += dropped
             logger.debug("APC: dropped %d superseded SSD checkpoint(s)", dropped)
 
-    def _note_disk_hit(self, tokens, n, extra_hash) -> None:
+    def _note_disk_hit(self, tokens, n, extra_hash) -> int:
         """A checkpoint came back from an SSD tier: it belongs to this request's generation (its
         next, longer checkpoint supersedes it), and it is a head when it ends the system turn."""
         key = _sequence_hash(
@@ -1243,6 +1264,7 @@ class YunshuAPCManager(APCManager):
             self._born.setdefault(key, self._generation)
             if self.head_marker is not None and self.head_boundary(tokens) == n:
                 self._head_keys.add(key)
+        return key
 
     def _promote_warm(
         self, tokens, extra_hash, max_prefix_tokens, min_prefix_tokens
@@ -1968,12 +1990,12 @@ class YunshuAPCManager(APCManager):
         if n and self._promoted is not None and self._promoted[0] == n:
             tier = "warm"
         self._promoted = None
+        key = self._exact_cache.last_access_key
         if tier == "ssd" and n:
-            self._note_disk_hit(
+            key = self._note_disk_hit(
                 tuple(int(t) for t in token_ids), int(n), self._extra_of(args, kwargs)
             )
-        if n:
-            key = _sequence_hash(tuple(token_ids[:n]), extra, self.block_size)
+        if n and key is not None:
             self.observation.hit(key)
             if tier == "ssd":
                 self.observation.event("promotion", key, n, "ram", "ssd_hit")
@@ -2112,6 +2134,23 @@ class YunshuAPCManager(APCManager):
                     )
                 except OSError:
                     continue
+        for tier in getattr(self.disk, "lower", ()):
+            with tier._lock:
+                items = list(tier.index.items())
+            for key, entry in items:
+                rows.append(
+                    {
+                        **obs.row(
+                            key,
+                            entry.extra_hash,
+                            len(entry.tokens),
+                            entry.orig,
+                            entry.size,
+                            "ssd",
+                        ),
+                        "device": tier.name,
+                    }
+                )
         return {
             "entries": rows,
             "events": list(obs.events),

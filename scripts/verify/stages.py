@@ -392,7 +392,8 @@ def _identity_cells(ctx: Ctx) -> list:
                             env=ctx.arm_env(tree_arm, extra),
                         ),
                         mem_gb=ctx.mem_gb,
-                        timeout_min=_decode_est_min(
+                        timeout_min=cfg.get("identity_timeout_min")
+                        or _decode_est_min(
                             ctx,
                             ctxs,
                             len(kinds),
@@ -444,6 +445,32 @@ def _rows_for(res: dict, arm: str, mode: str) -> list:
     return out
 
 
+def _spec_depth_valid(rows: list, mode: str) -> tuple[bool, str]:
+    specs = [(row.get("xy") or {}).get("speculative") for row in rows]
+    specs = [spec for spec in specs if isinstance(spec, dict) and spec.get("drafted")]
+    if not specs:
+        return False, "no speculative draft telemetry recorded"
+    for spec in specs:
+        if spec.get("mode") != mode or not spec.get("rounds"):
+            return False, "speculative mode or rounds missing"
+        depths = spec.get("per_depth") or []
+        if not depths or any(not isinstance(row, dict) for row in depths):
+            return False, "per-depth counters missing"
+        if any(
+            row.get("position") != pos
+            or not isinstance(row.get("drafted"), int)
+            or not isinstance(row.get("accepted"), int)
+            or not 0 <= row["accepted"] <= row["drafted"]
+            for pos, row in enumerate(depths)
+        ):
+            return False, "invalid per-depth counter"
+        if sum(row["drafted"] for row in depths) != spec["drafted"] or sum(
+            row["accepted"] for row in depths
+        ) != spec.get("accepted"):
+            return False, "per-depth counters do not sum to request totals"
+    return True, ""
+
+
 def stage_identity(ctx: Ctx) -> StageResult:
     _check_prompts(ctx.suite["ctx"], ctx.suite["kinds"])
     res = ctx.exe.run_cells(_identity_cells(ctx))
@@ -453,6 +480,11 @@ def stage_identity(ctx: Ctx) -> StageResult:
         for mode in ctx.suite.get("spec_modes") or ["default"]:
             tag = "" if mode == "default" else f"[{mode}] "
             base, cand = _rows_for(res, "base", mode), _rows_for(res, "cand", mode)
+            if ctx.suite.get("require_spec_depth"):
+                depth_ok, why = _spec_depth_valid(cand, mode)
+                numbers[f"{tag}per_depth".strip()] = depth_ok
+                if not depth_ok:
+                    reasons.append(f"{tag}{why}")
             cmp_ = analyze.compare_identity(base, cand, "base", "cand")
             numbers[f"{tag}base_vs_cand".strip()] = {
                 "compared": cmp_["compared"],

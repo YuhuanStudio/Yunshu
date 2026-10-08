@@ -196,21 +196,6 @@
       "license": "MIT",
       "local_changes": [],
       "kind": "vendored"
-    },
-    {
-      "kind": "patches",
-      "path": "python/yunshu_engine/spec_metrics.py",
-      "repo": "https://github.com/Blaizzy/mlx-vlm",
-      "clone": "reference/mlx-vlm",
-      "package": "mlx-vlm",
-      "module": "mlx_vlm.speculative.common",
-      "symbol": "_record_speculative_round",
-      "signature": "(draft_model: nn.Module, accepted: float, draft_count: int)",
-      "license": "MIT",
-      "commit": "v0.7.6",
-      "why": "Preserve upstream lifetime counters while adding host-only per-depth request and aggregate counters; tree paths provide explicit parent topology.",
-      "source_sha256": "d76e582c8fa642340c47bb269e78f3d3415df1b9ad3fc49a886ac5a20233883c",
-      "installed_version": "0.7.6"
     }
   ],
   "derived": [
@@ -2091,6 +2076,21 @@
       "commit": "v0.7.4",
       "why": "native APC restore uses independent copy-on-write handles before direct capacity reservation; stores and custom caches keep upstream detached snapshots",
       "source_sha256": "2f92c734175d88d663e5c687a47fd71c9ea2c741bb0fb94f9231145603f9e4d8",
+      "installed_version": "0.7.6"
+    },
+    {
+      "kind": "patches",
+      "path": "python/yunshu_engine/spec_metrics.py",
+      "repo": "https://github.com/Blaizzy/mlx-vlm",
+      "clone": "reference/mlx-vlm",
+      "package": "mlx-vlm",
+      "module": "mlx_vlm.speculative.common",
+      "symbol": "_record_speculative_round",
+      "signature": "(draft_model: nn.Module, accepted: float, draft_count: int)",
+      "license": "MIT",
+      "commit": "v0.7.6",
+      "why": "Preserve upstream lifetime counters while adding host-only per-depth request and aggregate counters; tree paths provide explicit parent topology.",
+      "source_sha256": "d76e582c8fa642340c47bb269e78f3d3415df1b9ad3fc49a886ac5a20233883c",
       "installed_version": "0.7.6"
     }
   ],

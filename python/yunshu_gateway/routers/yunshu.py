@@ -660,6 +660,9 @@ async def clear_cache(request: Request) -> dict:
 
     _check_permission(request, "can_manage_models")
     engines = list(_collect_engines(get_engine(), get_model_manager()))
+    from yunshu_engine.request_tracker import current_request_id
+
+    request_id = current_request_id.get()
 
     def clear():
         # Recheck on the same executor as generation before touching the pool.
@@ -676,7 +679,12 @@ async def clear_cache(request: Request) -> dict:
                 warm = getattr(apc, "warm", None)
                 if warm is not None:
                     warm.clear()
+                observation = getattr(apc, "observation", None)
+                if observation is not None:
+                    observation.request_id = request_id
                 apc.clear()
+                if observation is not None:
+                    observation.request_id = None
                 cleared.append(model)
         return {
             "object": "yunshu.cache.clear",

@@ -67,7 +67,6 @@ DRIVER_MAX_UNCACHED_TOKENS = 12288
 
 @dataclass
 class RunStats:
-    request_id: str | None = None
     prompt_tokens: int = 0
     cached_tokens: int = 0
     # Where the cached prefix came from ("ram", "ssd" or "none") and how long the lookup
@@ -97,17 +96,18 @@ class RunStats:
     t_last: float = 0.0  # latest generated token
     prefill_done: int = 0  # prompt tokens computed so far (cache hits excluded)
     prefill_total: int = 0  # prompt tokens to compute (cache hits excluded)
-    cache_reason: str | None = None
-    spec_reason: str | None = None
     spec_mode: str | None = None  # "mtp" / "dflash" while a drafter is in use
-    spec_depth_drafted: list[int] = field(default_factory=list)
-    spec_depth_accepted: list[int] = field(default_factory=list)
-    structured_output: dict | None = None
     spec_drafted: int = 0
     spec_accepted: int = 0
     spec_rounds: int = 0  # verify rounds this request took part in
     spec_copy_rounds: int = 0  # of those, rounds that verified a copied run
     spec_copy_tokens: int = 0  # tokens those rounds committed
+    request_id: str | None = None
+    cache_reason: str | None = None
+    spec_reason: str | None = None
+    spec_depth_drafted: list[int] = field(default_factory=list)
+    spec_depth_accepted: list[int] = field(default_factory=list)
+    structured_output: dict | None = None
 
     @property
     def phase(self) -> str:
@@ -929,11 +929,12 @@ class VLMBatchRunner:
             group.gen.apc, "set_request"
         ):
             manager = group.gen.apc.manager
-            manager._console_requests.setdefault(
-                tuple(job.ids), collections.deque()
-            ).append(getattr(job.stats, "request_id", None))
-            while len(manager._console_requests) > 512:
-                manager._console_requests.popitem(last=False)
+            if hasattr(manager, "_console_requests"):
+                manager._console_requests.setdefault(
+                    tuple(job.ids), collections.deque()
+                ).append(getattr(job.stats, "request_id", None))
+                while len(manager._console_requests) > 512:
+                    manager._console_requests.popitem(last=False)
             group.gen.apc.set_request(job.ids, job.cache_plan)
         extra_hash = getattr(group.gen, "_apc_extra_hash", None)
         if extra_hash is not None:
@@ -1060,7 +1061,9 @@ class VLMBatchRunner:
         self._observe_prefill(job)
         coordinator = getattr(group.gen, "apc", None)
         if coordinator is not None and hasattr(coordinator, "release_request"):
-            pending_ids = coordinator.manager._console_requests.get(tuple(job.ids))
+            pending_ids = getattr(coordinator.manager, "_console_requests", {}).get(
+                tuple(job.ids)
+            )
             if pending_ids is not None:
                 request_id = getattr(job.stats, "request_id", None)
                 if request_id in pending_ids:

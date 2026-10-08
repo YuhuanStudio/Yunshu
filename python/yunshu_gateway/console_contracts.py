@@ -28,6 +28,7 @@ class SpecAggregate(BaseModel):
 
 
 class CacheEntry(BaseModel):
+    device: str | None = None
     model: str
     id: str
     namespace: str
@@ -42,12 +43,13 @@ class CacheEntry(BaseModel):
 
 
 class CacheEvent(BaseModel):
+    device: str | None = None
     model: str
     id: int
     t: float
     action: str
     entry_id: str
-    tokens: int
+    tokens: int | None
     tier: str
     reason: str
     request_id: str | None

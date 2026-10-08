@@ -37,6 +37,7 @@ logger = logging.getLogger(__name__)
 FILE_NAME = "serve_log.jsonl"
 SCHEMA = 1
 _LABEL_OK = re.compile(r"^[A-Za-z0-9._:/+\-]{1,96}$")
+_REQUEST_ID_OK = re.compile(r"^[A-Za-z0-9._:\-]{1,128}$")
 
 _arm_override: str | None = None
 _build_id: str | None = None
@@ -47,6 +48,10 @@ def label(value: Any) -> str | None:
     if isinstance(value, str) and _LABEL_OK.match(value):
         return value
     return None
+
+
+def request_label(value: Any) -> str | None:
+    return value if isinstance(value, str) and _REQUEST_ID_OK.fullmatch(value) else None
 
 
 def set_arm(arm: str | None) -> None:
@@ -114,7 +119,7 @@ def event_from_stats(stats: dict, ctx: dict) -> dict:
         "schema": SCHEMA,
         "status": _num(ctx.get("status")),
         "prefill_tps": _num(stats.get("prefill_tps")),
-        "request_id": label(ctx.get("request_id")),
+        "request_id": request_label(ctx.get("request_id")),
         "t_start": _num(ctx.get("t_start"), 3),
         "t_end": _num(ctx.get("t_end"), 3),
         "route": label(ctx.get("route")),
@@ -152,8 +157,9 @@ def history_row(raw: dict) -> dict:
     for key in safe:
         if key in ("schema", "stream", "cancelled"):
             safe[key] = bool(raw.get(key)) if key != "schema" else SCHEMA
+        elif key == "request_id":
+            safe[key] = request_label(raw.get(key))
         elif key in (
-            "request_id",
             "model",
             "route",
             "dialect",
@@ -289,7 +295,7 @@ class ServeLog:
                     not isinstance(value, list)
                     or len(value) != 2
                     or _num(value[0]) is None
-                    or not label(value[1])
+                    or not request_label(value[1])
                 ):
                     raise ValueError("invalid history cursor")
                 boundary = (value[0], value[1])

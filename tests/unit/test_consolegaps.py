@@ -286,6 +286,7 @@ def test_route_probe_on_cpu_fake_server(monkeypatch, tmp_path):
         return {
             "choices": [{"message": {"content": '{"ok":true}'}}],
             "x_yunshu": {
+                "model": "m",
                 "structured_output": {
                     "enforced": enforced,
                     "grammar_backend": "llguidance",
@@ -302,3 +303,88 @@ def test_route_probe_on_cpu_fake_server(monkeypatch, tmp_path):
         enforced = False
         with pytest.raises(Fail, match="schema enforcement"):
             console_backend_gaps(ctx)
+
+
+def test_observed_cache_preserves_pop_and_lru_key_contract():
+    import pytest
+
+    from yunshu_engine.cache_observation import Observation, ObservedCache
+
+    cache = ObservedCache(Observation())
+    with pytest.raises(KeyError):
+        cache.pop("missing")
+    entry = SimpleNamespace(token_ids=[1])
+    cache["opaque-prefix-key"] = entry
+    cache.move_to_end("opaque-prefix-key")
+    assert cache.last_access_key == "opaque-prefix-key"
+    assert cache.pop("missing", None) is None
+
+
+def test_console_identity_uses_long_contexts_and_short_bound():
+    import sys
+    from pathlib import Path
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
+    from verify.suites import parse_suite
+
+    cfg = parse_suite("console-identity")
+    assert cfg["ctx"] == [1024, 32768]
+    assert cfg["identity_timeout_min"] == 10
+    assert cfg["spec_off"] and cfg["decode_tokens"] == 256
+
+
+def test_disk_events_use_explicit_origin_and_unknown_not_previous_request():
+    from yunshu_engine.cache_observation import Observation, disk_event
+
+    obs = Observation()
+    obs.request_id = "unrelated-current-request"
+    store = SimpleNamespace(
+        observation=obs, event_origin=lambda key: None, name="internal"
+    )
+    disk_event(store, "admission", 42, 300, "ssd_write")
+    assert obs.events[-1]["request_id"] is None
+    store.event_origin = lambda key: "captured-generation"
+    disk_event(store, "admission", 42, 300, "ssd_write")
+    assert obs.events[-1]["request_id"] == "captured-generation"
+
+
+def test_history_keeps_full_length_http_request_ids(tmp_path):
+    from yunshu_gateway.serve_log import event_from_stats
+
+    rid = "r" * 128
+    log = ServeLog(tmp_path, 4096, 1)
+    log.append(event_from_stats({}, {"request_id": rid, "t_end": 100}))
+    log.append(event_from_stats({}, {"request_id": rid, "t_end": 101}))
+    page = log.history(limit=1, before=None, retention_days=0)
+    assert page["data"][0]["request_id"] == rid
+    assert (
+        log.history(limit=1, before=page["next_cursor"], retention_days=0)["data"][0][
+            "t"
+        ]
+        == 100
+    )
+
+
+def test_identity_verdict_rejects_missing_or_inconsistent_depth_evidence():
+    import sys
+    from pathlib import Path
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
+    from verify.stages import _spec_depth_valid
+
+    spec = {
+        "mode": "mtp",
+        "rounds": 1,
+        "drafted": 2,
+        "accepted": 1,
+        "per_depth": [
+            {"position": 0, "drafted": 1, "accepted": 1},
+            {"position": 1, "drafted": 1, "accepted": 0},
+        ],
+    }
+    rows = [{"xy": {"speculative": spec}}]
+    assert _spec_depth_valid(rows, "mtp") == (True, "")
+    assert not _spec_depth_valid([], "mtp")[0]
+    assert not _spec_depth_valid(rows, "dflash")[0]
+    spec["drafted"] = 3
+    assert not _spec_depth_valid(rows, "mtp")[0]
