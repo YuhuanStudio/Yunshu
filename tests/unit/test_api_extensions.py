@@ -298,6 +298,8 @@ def test_build_stats_speculative_and_null_when_unknown():
         "mode": "mtp",
         "drafted": 100,
         "accepted": 80,
+        "per_depth": [],
+        "position_basis": "depth",
         "acceptance_rate": 0.8,
     }
     assert out["queue_wait_ms"] == pytest.approx(100.0)

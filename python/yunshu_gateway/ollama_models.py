@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import shutil
+import threading
 from pathlib import Path
 from urllib.parse import quote
 
@@ -18,6 +19,17 @@ from yunshu_engine import paths
 from .engine import get_model_manager
 
 _LOCK = asyncio.Lock()
+_DOWNLOADS: dict[str, threading.Event] = {}
+
+
+def cancel_download(name: str) -> bool:
+    event = _DOWNLOADS.get(name)
+    if event is None:
+        return False
+    event.set()
+    return True
+
+
 _PREFIX = ".ollama--"
 
 
@@ -136,12 +148,31 @@ async def pull_model(request, name: str):
                 400,
                 "Use a Hugging Face MLX repository id (org/name); Ollama registry / GGUF models are unsupported",
             )
+
         from huggingface_hub import snapshot_download
+        from tqdm.auto import tqdm
+
+        cancelled = threading.Event()
+        _DOWNLOADS[name] = cancelled
+
+        class CancellableProgress(tqdm):
+            def update(self, n=1):
+                if cancelled.is_set():
+                    raise RuntimeError("Download cancelled")
+                return super().update(n)
 
         try:
-            snapshot = Path(await asyncio.to_thread(snapshot_download, repo_id=name))
+            snapshot = Path(
+                await asyncio.to_thread(
+                    snapshot_download, repo_id=name, tqdm_class=CancellableProgress
+                )
+            )
+            if cancelled.is_set():
+                raise RuntimeError("Download cancelled")
         except Exception as exc:
             raise HTTPException(400, f"model '{name}' download failed") from exc
+        finally:
+            _DOWNLOADS.pop(name, None)
         if not (snapshot / "config.json").is_file() or not any(
             snapshot.glob("*.safetensors")
         ):

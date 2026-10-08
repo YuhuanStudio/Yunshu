@@ -195,7 +195,7 @@ def _rounds(
 ):
     """Rounds of tree drafts and verify for one greedy row; yields each round's
     committed tokens (a list)."""
-    from mlx_vlm.speculative.common import _record_speculative_round
+    from .spec_metrics import record as _record_speculative_round
 
     lm = model.language_model if hasattr(model, "language_model") else model
     draft_model.reset(model)
@@ -235,7 +235,7 @@ def _rounds(
         path = walk(tokens, wparents, row_tokens)
         new_tokens = [tokens[r] for r in path[1:]] + [row_tokens[path[-1]]]
         if n:
-            _record_speculative_round(draft_model, len(path) - 1, n)
+            _record_speculative_round(draft_model, len(path) - 1, n, parents=wparents)
         tv.tree_commit(lm, prompt_cache, res, path)
         # the head absorbs the kept positions: position j pairs the token after
         # row j with that row's target hidden

@@ -263,6 +263,8 @@ internal ones, `--json` prints JSON, `--config FILE` includes a config file.
 |---|---|---|---|
 | `YUNSHU_DEBUG_ROUTES` | bool | off | Mount the /debug/* diagnostic routes (engine, system, kv-cache, spec-decode, ...). They need the auth token or YUNSHU_AUTH_DISABLED. /metrics is always mounted. |
 | `YUNSHU_LOG_LEVEL` | `DEBUG` \| `INFO` \| `WARNING` \| `ERROR` | INFO | Log level for Yunshu's loggers (third-party loggers stay at WARNING). |
+| `YUNSHU_TELEMETRY` | `on` \| `off` | on | Unprivileged Apple power/GPU/temperature sampler (on/off); 1 Hz by default, restart required. |
+| `YUNSHU_TELEMETRY_INTERVAL_S` | float | 1.0 | Host telemetry sampling interval in seconds (restart required). |
 | `YUNSHU_AUDIT_LOG_FILE` | path | unset | Also write the audit log to this file. |
 | `YUNSHU_LOG_MAX_MB` | float | 50.0 | Service log (launchd): rotate the log file at this size in MiB; 0 turns size rotation off. |
 | `YUNSHU_LOG_ROTATE_HOURS` | float | 24.0 | Service log: also rotate when this many hours passed since the last rotation; 0 turns time rotation off. |
@@ -271,6 +273,7 @@ internal ones, `--json` prints JSON, `--config FILE` includes a config file.
 | `YUNSHU_SERVE_LOG` | bool | off | Write one numbers-only JSON line per finished generation request (timings, token counts, speculative acceptance, cache tier, concurrency, arm, build) to a local, size-capped, rotated file. Never prompts, outputs or token ids. Off by default; nothing leaves the machine. |
 | `YUNSHU_SERVE_LOG_DIR` | path | unset | Directory of the serve log. Unset: ~/.yunshu/logs. |
 | `YUNSHU_SERVE_LOG_MAX_MB` | float | 4.0 | Serve log: rotate at this size in MiB; with YUNSHU_SERVE_LOG_KEEP the directory is capped at max * (keep + 1). |
+| `YUNSHU_SERVE_LOG_RETENTION_DAYS` | int | 30 | History API metadata retention window in days; 0 disables age filtering. File storage remains bounded by SERVE_LOG_MAX_MB and SERVE_LOG_KEEP. |
 | `YUNSHU_SERVE_LOG_KEEP` | int | 4 | Serve log: rotated files kept. |
 | `YUNSHU_ARM` | str | unset | Label recorded in the serve log for the configuration arm this server runs (for offline A/B analysis); it changes no behaviour. |
 
