@@ -130,4 +130,8 @@ def statusline(
     api_key: str = typer.Option("", "--api-key", "-k", envvar="YUNSHU_API_KEY"),
 ) -> None:
     """Print one status line (reads Claude Code's session JSON from stdin when piped)."""
-    typer.echo(render(fetch_status(url, api_key), _read_session()))
+    from ._output import emit
+
+    status = fetch_status(url, api_key)
+    line = render(status, _read_session())
+    emit({"status": status, "line": line}, human=lambda: typer.echo(line))

@@ -10,6 +10,7 @@ Run: PYTHONPATH=. uv run python scripts/verify_tool_calls.py
 
 from __future__ import annotations
 
+import contextlib
 import json
 import sys
 
@@ -24,10 +25,8 @@ def _name_args(c):
         or (c.get("arguments") if isinstance(c, dict) else None)
     )
     if isinstance(args, str):
-        try:
+        with contextlib.suppress(Exception):
             args = json.loads(args)
-        except Exception:
-            pass
     return name, args
 
 
@@ -57,7 +56,7 @@ CASES = [
 
 def main() -> int:
     fails = 0
-    for label, text, model, check in CASES:
+    for label, text, _model, check in CASES:
         calls, _ = parse_tool_output(text, fallback_formats())
         if label == "multiple calls":
             ok = len(calls) == 2 and {_name_args(c)[0] for c in calls} == {"a", "b"}

@@ -13,7 +13,7 @@ from rich.panel import Panel
 from rich.text import Text
 
 console = Console()
-chat_app = typer.Typer(help="Interactive chat.", no_args_is_help=True)
+chat_app = typer.Typer(help="Interactive chat.", no_args_is_help=False)
 
 HISTORY: list[dict[str, str]] = []
 
@@ -39,6 +39,13 @@ def chat(
     no_stream: bool = typer.Option(False, "--no-stream", help="Disable streaming."),
 ):
     """Interactive chat with a Yunshu model."""
+    from ._output import fail, is_json
+
+    if is_json():
+        fail(
+            "Interactive chat needs a terminal. For JSON use `yunshu --json complete --help`.",
+            code=2,
+        )
     import httpx
 
     # Resolve model

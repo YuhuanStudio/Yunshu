@@ -428,6 +428,21 @@ JSON_MESSAGE = ToolFormat(
     whole=True,
 )
 
+
+def _parse_deepseek_v4(body: str) -> list[Call]:
+    from .deepseek_v4_chat import parse_calls
+
+    return parse_calls(body)
+
+
+def _parse_dsml_v4(body: str, tools) -> list[Call]:
+    """Official encoder grammar first; the compact single-line form falls back."""
+    try:
+        return _parse_deepseek_v4(body)
+    except Exception:
+        return _families.dsml(body, tools)
+
+
 # Native formats do not depend on the installed MLX parser registry.
 from . import tool_family_parsers as _families
 
@@ -474,7 +489,10 @@ DSML = ToolFormat(
     _families.dsml,
 )
 DSML_V4 = ToolFormat(
-    "deepseek_v4", "<｜DSML｜tool_calls>", "</｜DSML｜tool_calls>", _families.dsml
+    "deepseek_v4",
+    "<｜DSML｜tool_calls>",
+    "</｜DSML｜tool_calls>",
+    _parse_dsml_v4,
 )
 
 # Chat-template markers for the Yunshu-owned formats (upstream's registry

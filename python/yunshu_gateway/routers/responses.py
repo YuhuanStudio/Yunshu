@@ -262,8 +262,7 @@ async def _vlm_to_responses(req, messages, request, logit_bias, own_input_messag
 
     chat_response_format = req.response_format or None
     chat_messages = [
-        ChatMessage(role=m.get("role", "user"), content=m.get("content", ""))
-        for m in messages
+        ChatMessage(**{"role": "user", "content": "", **m}) for m in messages
     ]
     # Force stream=False / n=1: we wrap a single completion into the Responses shape.
     chat_req = ChatCompletionRequest(
@@ -1357,6 +1356,7 @@ def _apply_previous_response_chain(req, messages: list[dict], request) -> list[d
                 "mcp_call",
                 "custom_tool_call",
                 "local_shell_call",
+                "computer_call",
                 "tool_search_call",
                 "tool_search_output",
                 "custom_tool_call_output",
@@ -1447,7 +1447,7 @@ async def create_response(req: ResponsesRequest, request: Request):
         from ..responses_client_tools import declarations
 
         if any(
-            d.get("type") in ("custom", "local_shell", "tool_search")
+            d.get("type") in ("custom", "local_shell", "tool_search", "computer")
             for d in declarations(req.tools).values()
         ):
             raise HTTPException(
@@ -1473,7 +1473,7 @@ async def create_response(req: ResponsesRequest, request: Request):
         )
     if (
         any(
-            d.get("type") in ("custom", "local_shell", "tool_search")
+            d.get("type") in ("custom", "local_shell", "tool_search", "computer")
             for d in _client_defs.values()
         )
         or _loaded_previous

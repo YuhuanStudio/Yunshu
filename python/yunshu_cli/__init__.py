@@ -64,7 +64,16 @@ def _global_options(
     ctx.ensure_object(dict)
     ctx.obj["url"] = url
     ctx.obj["json"] = json_out
+    import sys
+
+    previous_stdout = sys.stdout
     set_json_mode(json_out)
+
+    def restore_output() -> None:
+        sys.stdout = previous_stdout
+        set_json_mode(False)
+
+    ctx.call_on_close(restore_output)
     # Only propagate to the env var when the URL was EXPLICITLY supplied
     # (via --url or YUNSHU_GATEWAY_URL); the option default
     # `DEFAULT_GATEWAY_URL` would otherwise force every leaf subcommand
@@ -86,6 +95,7 @@ def _global_options(
 from .benchmark import bench_app
 from .cache import cache_app
 from .chat import chat_app
+from .completion import completion
 from .config import config_app
 from .diagnose import diagnose_app
 from .doctor import doctor
@@ -94,20 +104,26 @@ from .integrations import launch_app
 from .model import model_app, pull
 from .serve import serve_app
 from .service import service_app
+from .setup import setup
 from .status import status_app
 from .statusline import statusline_app
+from .top import top
 
 _START = "Get started"
 _SERVER = "Server and models"
 _TOOLS = "Evaluate and diagnose"
 _INFER = "Inference (calls a running server)"
 
+app.command("setup", rich_help_panel=_START)(setup)
+app.command("top", rich_help_panel=_SERVER)(top)
+app.command("completion", rich_help_panel=_START)(completion)
 app.command("doctor", rich_help_panel=_START)(doctor)
 app.command("pull", rich_help_panel=_START)(pull)
 app.add_typer(serve_app, name="serve", rich_help_panel=_START)
 app.add_typer(service_app, name="service", rich_help_panel=_START)
 app.add_typer(chat_app, name="chat", rich_help_panel=_START)
 app.add_typer(model_app, name="model", rich_help_panel=_SERVER)
+app.add_typer(model_app, name="models", rich_help_panel=_SERVER)
 app.add_typer(config_app, name="config", rich_help_panel=_SERVER)
 app.add_typer(status_app, name="status", rich_help_panel=_SERVER)
 app.add_typer(launch_app, name="launch", rich_help_panel=_SERVER)
@@ -135,7 +151,7 @@ def main() -> None:
     import sys
 
     if "--json" not in sys.argv:
-        app()
+        app(prog_name="yunshu")
         return
 
     import json as _json
@@ -146,7 +162,7 @@ def main() -> None:
         from click import exceptions as click_exc
 
     try:
-        rv = app(standalone_mode=False)
+        rv = app(prog_name="yunshu", standalone_mode=False)
     except click_exc.ClickException as e:
         # sys.__stdout__ (not sys.stdout, which --json has swapped to stderr) is the real
         # stdout — the group callback that swaps it runs before subcommand arg validation.

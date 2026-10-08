@@ -201,11 +201,13 @@ def test_m3sweep_plan_priority_and_label_prefix(tmp_path):
     spec = importlib.util.spec_from_loader("m3sweep_mod2", loader)
     m3 = importlib.util.module_from_spec(spec)
     loader.exec_module(m3)
-    jobs = m3.plan("abcdef0", tmp_path, None, -1, "toolparse-m3")
+    jobs = m3.plan("abcdef0", tmp_path, None, prefix="toolparse-m3", priority=-1)
     assert all(j["label"].startswith("toolparse-m3-abcdef0-") for j in jobs)
     assert all(j["submit"][j["submit"].index("--priority") + 1] == "-1" for j in jobs)
     default = m3.plan("abcdef0", tmp_path)
-    assert all("--priority" not in j["submit"] for j in default)
+    assert all(
+        j["submit"][j["submit"].index("--priority") + 1] == "-1" for j in default
+    )
 
 
 def test_unload_when_idle_retries_a_conflict_until_the_lease_is_released():

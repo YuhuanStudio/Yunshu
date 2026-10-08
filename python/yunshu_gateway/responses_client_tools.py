@@ -26,6 +26,69 @@ SHELL_SCHEMA = {
 }
 
 
+def computer_schema():
+    """Independent schema matching the SDK's discriminated computer actions."""
+    xy = {"x": {"type": "integer"}, "y": {"type": "integer"}}
+    keys = {"keys": {"type": "array", "items": {"type": "string"}}}
+    variants = []
+    for kind in (
+        "click",
+        "double_click",
+        "drag",
+        "move",
+        "scroll",
+        "keypress",
+        "type",
+        "wait",
+        "screenshot",
+    ):
+        props = {"type": {"const": kind}}
+        required = ["type"]
+        if kind in ("click", "double_click", "move", "scroll"):
+            props.update(xy)
+            required += ["x", "y"]
+        if kind in ("click", "double_click", "drag", "move", "scroll", "keypress"):
+            props.update(keys)
+        if kind == "click":
+            props["button"] = {"enum": ["left", "right", "wheel", "back", "forward"]}
+            required.append("button")
+        if kind == "scroll":
+            props.update(
+                {"scroll_x": {"type": "integer"}, "scroll_y": {"type": "integer"}}
+            )
+            required += ["scroll_x", "scroll_y"]
+        if kind == "keypress":
+            required.append("keys")
+        if kind == "type":
+            props["text"] = {"type": "string"}
+            required.append("text")
+        if kind == "drag":
+            props["path"] = {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": xy,
+                    "required": ["x", "y"],
+                    "additionalProperties": False,
+                },
+            }
+            required.append("path")
+        variants.append(
+            {
+                "type": "object",
+                "properties": props,
+                "required": required,
+                "additionalProperties": False,
+            }
+        )
+    return {
+        "type": "object",
+        "properties": {"actions": {"type": "array", "items": {"oneOf": variants}}},
+        "required": ["actions"],
+        "additionalProperties": False,
+    }
+
+
 def declarations(tools):
     """Flatten namespaces while retaining the outward tool kind and namespace."""
     out = {}
@@ -66,6 +129,9 @@ def as_function(d):
         description = (
             d.get("description") or ""
         ) + " Pass the complete raw tool input in the input string."
+    elif kind == "computer":
+        schema = computer_schema()
+        description = "Request ordered computer actions on the client. Return actions, then wait for the client screenshot. All execution is client-side."
     elif kind == "local_shell":
         schema, description = (
             SHELL_SCHEMA,
@@ -143,6 +209,19 @@ def call_item(item, d):
             "input": args["input"],
             **({"namespace": d["namespace"]} if d.get("namespace") else {}),
         }
+    if kind == "computer":
+        import jsonschema
+
+        try:
+            jsonschema.validate(args, computer_schema())
+        except jsonschema.ValidationError as exc:
+            raise HTTPException(502, "Model produced invalid computer actions") from exc
+        return {
+            **common,
+            "type": "computer_call",
+            "actions": args["actions"],
+            "pending_safety_checks": [],
+        }
     if kind == "local_shell":
         if (
             not isinstance(args, dict)
@@ -216,6 +295,7 @@ async def create_client_tools(req, request, inner):
     if isinstance(req.tool_choice, dict) and req.tool_choice.get("type") in (
         "local_shell",
         "tool_search",
+        "computer",
     ):
         forced = req.tool_choice["type"]
     if req.tool_choice == "required" and len(defs) == 1:
@@ -680,6 +760,8 @@ def stream_client_calls(response, req, request, defs, formats, raw_input):
             args = (
                 {"input": ""}
                 if declaration["type"] == "custom"
+                else {"actions": []}
+                if declaration["type"] == "computer"
                 else {"command": []}
                 if declaration["type"] == "local_shell"
                 else {}

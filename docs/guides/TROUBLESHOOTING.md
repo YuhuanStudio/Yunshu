@@ -10,7 +10,7 @@ problem. It exits 1 when something blocks serving.
 for example an old Homebrew under `/usr/local`, cannot load it. Install a native interpreter with
 `uv python install 3.13`, then reinstall Yunshu with it.
 
-**`requires-python >=3.13`.** Yunshu needs Python 3.13. `uv tool install` picks up a uv-managed
+**`requires-python >=3.13`.** Yunshu needs Python 3.13 or later. `uv tool install` picks up a uv-managed
 3.13 automatically.
 
 **A Qwen3.5 / 3.6 / 3.8 or vision model fails to load, and doctor shows `mlx-vlm: not installed`.**
@@ -54,7 +54,7 @@ directory or the Hugging Face cache. `YUNSHU_VLM_DRAFT=mtp` forces the checkpoin
 automatic drafter cannot be loaded, the server logs a warning and falls back to MTP.
 
 **A request returns 400 about the prompt or `max_tokens`.** The prompt is longer than the model's
-context window, or `max_tokens` is above the server's limit (131072). Shorten the prompt or lower
+context window, or `max_tokens` is above the request validation cap (1,048,576); the model context and output budget can impose a lower limit. Shorten the prompt or lower
 `max_tokens`; the message states both numbers.
 
 **Stopping the server.** Ctrl-C or `kill` (SIGINT / SIGTERM) stops accepting new requests and lets
