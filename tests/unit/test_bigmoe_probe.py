@@ -55,7 +55,7 @@ def test_admission_refuses_before_subprocess(tmp_path, monkeypatch):
     assert result["failure"].startswith("admission:")
 
 
-def test_fake_server_pipeline_and_guard(tmp_path, monkeypatch):
+def test_fake_server_pipeline_and_guard(tmp_path, monkeypatch, capsys):
     import json
 
     args = probe.build_parser().parse_args(
@@ -104,6 +104,7 @@ def test_fake_server_pipeline_and_guard(tmp_path, monkeypatch):
 
     monkeypatch.setattr(probe.subprocess, "Popen", launch)
     result = probe.run(args)
+    assert json.loads(capsys.readouterr().out)["event"] == "memory_sample"
     assert result["complete"] and result["min_available_bytes"] == 40 * 2**30
     assert result["physical_footprint_peak_bytes"] == 80 * 2**30
     stopped = []

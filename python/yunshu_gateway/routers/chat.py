@@ -1943,6 +1943,9 @@ async def create_chat_completion(req: ChatCompletionRequest, request: Request):
     from ..model_guards import reject_embedding_only
 
     reject_embedding_only(engine, req.model)
+    from ..model_guards import validate_forced_tools
+
+    validate_forced_tools(engine, req.tools, req.tool_choice, req.parallel_tool_calls)
 
     # Engines without a chat interface (OCR, ASR, TTS, image/video generation,
     # embeddings) get a clear 400 instead of an AttributeError mid-stream.
@@ -2460,6 +2463,12 @@ async def _handle_vlm_chat(
                 "(it is not a vision-language model)"
             ),
         )
+
+    from ..model_guards import validate_forced_tools
+
+    validate_forced_tools(
+        vlm_engine, req.tools, req.tool_choice, req.parallel_tool_calls
+    )
 
     # No VLM path implements LoRA adapters or custom logits processors; say so
     # instead of accepting the request and generating on the base model.

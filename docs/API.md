@@ -66,6 +66,33 @@ Tool-calling works on **both** paths — a tool turn emits `function_call` items
 spoken JSON is suppressed (the voice doesn't read the tool call aloud).
 See [examples/talk.py](../examples/talk.py) for a live mic↔speaker client.
 
+### POST `/v1/decisions` — typed decisions (OpenAI Decisions API)
+
+Answers user-defined questions about shared evidence with probabilities, not prose; one forward pass of a
+decision model (Cloudflare Clef in MLX format), nothing is generated. Same shape as `client.decisions.create(...)`
+in the `openai` SDK (3.26+).
+
+```python
+d = client.decisions.create(
+    model="Clef-MLX-4bit",
+    input="The forecast says heavy rain all day.",
+    questions=[
+        {"type": "predicate", "instructions": "Is it raining?", "name": "rain"},
+        {"type": "choice", "instructions": "Pick the activity.", "choices": [
+            {"value": "hike", "description": "outdoors"}, {"value": "museum", "description": "indoors"}]},
+        {"type": "score", "instructions": "How wet?", "levels": [{"label": "dry"}, {"label": "wet"}]},
+    ],
+)
+```
+
+`answers` come back in question order: `predicate` (`probability`), `choice` (`choice`, `confidence`, per-value
+`probabilities`; values keep their JSON type) and `score` (`score`, the probability-weighted level index, plus per-level
+`probabilities`). A question whose logits are not finite is answered `{"type": "refusal"}`. `input` may hold inline
+`input_image` parts (base64 data URLs only). The model sees choices sorted by value, so the order you send them in does
+not move the probabilities. The input (state, images and schema) is limited to 16384 tokens; longer is a 400.
+`POST /v1/systemone` takes the TypeSafe Jev / System One wire (`state`, map-keyed `questions` with `noul` / `choice` /
+`score` and `criteria`) on the same engine.
+
 ### POST `/v1/rerank` — reranking
 
 Cohere-style rerank. Uses a **true cross-encoder** when a `Qwen3-VL-Reranker` model is

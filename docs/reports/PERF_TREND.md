@@ -1208,3 +1208,34 @@ yv memory (27B, 96K turn-1/2): MLX peak 44.99 -> 45.28 GiB (+0.29); idle footpri
 128K session (127K tokens, 8 turns of ~16K; branches at 50% and 25%), 20 ms timeline, base -> cand: branch at 63.7K cached 62 -> 63650 (ideal 63651), TTFT 77.9 -> 0.62 s; branch at 31.9K cached 62 -> 31858, TTFT 34.2 -> 0.47 s; linear follow-up 127221 cached, 1.41 -> 0.92 s. Footprint peak over the session 54.5 -> 56.1 GiB (+1.6), MLX peak 48.16 -> 49.17 (+1.0); APC resident (honest) 15.95 -> 16.95 GiB at the last build turn, idle ~+0.4 GiB.
 161K session (8 turns of 20K tokens), 3 branches: branch at 80.5K cached 62 -> 80540, TTFT 105 -> 0.78 s; at 40.3K 62 -> 40302, 44.2 -> 0.42 s; MLX peak 64.9 -> 67.0 GiB (+2.1), idle footprint 35.06 -> 35.50 GiB.
 Cost per anchor: ~0.28 GiB of recurrent state that cannot be shared (resident grows ~0.29 GiB per retained anchor, ~3 anchors at 128K); the 1 GiB anchor budget is not binding there.
+
+### 2026-10-07 longgap: long-context gap to TensorFold 0.6.1 (32K/64K/128K, 2048-token replies) and the tree-commit fix
+
+Same checkpoint (Qwen3.8-27B-oQ4e-mtp), same prompts and `--long-ask`, greedy, TF 0.6.1 with DFlash2, Yunshu main 00d7cf3d (DFlash chain beyond 10240 keys), 2 reps per cell, one server per job, `tfbench` long cells. Decode tok/s is the median of the cold and warm requests; TTFT gaps are TF/Yunshu (>100% = Yunshu faster). Code outputs of the two engines diverge after ~545 characters (TF's is more compressible, 0.34 vs 0.388), so code tok/s ratios carry a content effect; prose and ms/round are the cleaner signals.
+
+| cell | decode Yunshu / TF tok/s | cold TTFT (TF/Y) | warm TTFT Yunshu / TF s | follow-up TTFT (TF/Y) |
+|---|---:|---:|---:|---:|
+| 32K code | 89.4 / 143.5 (62%) | 114% | 0.179 / 0.179 | 101% |
+| 32K prose | 59.2 / 74.7 (79%) | 114% | 0.178 / 0.163 | 101% |
+| 64K code | 105.6 / 94.3 (112%) | 118% | 0.377 / 0.273 | 105% |
+| 64K prose | 48.6 / 56.7 (86%) | 119% | 0.376 / 0.254 | 105% |
+| 128K code | 69.6 / 63.9 (109%) | 138% | 0.599 / 0.450 | 124% |
+| 128K prose | 40.9 / 46.3 (88%) | 140% | 0.621 / 0.420 | 124% |
+
+Round anatomy (ms/round, commits/round): Yunshu chain 53.8/4.81 (32K code), 52.8/3.13 (32K prose), 63.3/6.68, 58.5/2.84 (64K), 73.5/5.11, 70.5/2.88 (128K); TF (tree, ~16-18 rows) 60.0/8.66, 56.8/4.26, 68.8/6.52, 65.5/3.72, 87.6/5.61, 83.6/3.88. Our rounds are shorter; TF commits more per round. A chain deeper than DFlash2's block (YUNSHU_MTP_BLOCK_SIZE 10, 12) is slower (32K code 80 vs 89 tok/s, 64K code 94-99 vs 106).
+Roofline: weights 15 GB + KV (65 KB/token: 2.15 GB at 32K, 8.6 GB at 128K) at 614 GB/s gives a 28 ms (32K) to 38 ms (128K) forward floor; both engines run 54-91 ms rounds.
+
+Mechanism. `dflash_fast.py` switched the fast tree off above 10240 keys and after 256 generated tokens. Forced on, the tree was token-identical to the chain (same digest, 7950-char output) but not faster: 69.7 ms/round at 32K vs 53.8. Ablation (`probe_ctx_scaling.py`): with attention removed the tree forward is flat in context (35.7 ms at 8K, 36.1 ms at 64K), and `tree_commit` with a non-prefix path costs 3.4 / 9.2 / 16.0 ms at 8K / 32K / 64K versus 1.3 ms for a prefix path. The accepted-row compaction `c.keys[..., a:b, :] = mx.take(c.keys, ...)` kept the pre-write buffer referenced by the pending gather, so MLX copied the whole K/V buffer of all 16 attention layers every round (the 10240 limit was measured while this copy existed). Tree attention itself (16 layers, 16 rows) is 3.3 / 9.8 / 17.9 ms at 8K / 32K / 64K vs 1.8 / 5.7 / 11.0 ms for the 8-row tile kernel, bit-equal at every length tested up to 131072.
+
+Fix (f271d284): `tree_verify.compact_kv` evaluates the gathers before the writes, so the write updates the buffer in place (commit_compact 9.2 -> 1.9 ms at 32K, 16.4 -> 2.4 ms at 64K); `CONTEXT_LIMIT` 262144 and `GENERATED_LIMIT` unbounded. Lossless: arithmetic unchanged, tree == chain digest. Unit test `tests/unit/test_tree_commit_compact.py`.
+
+| cell | main tok/s | candidate tok/s | change | ms/round main -> cand | commits/round main -> cand | TF tok/s | cand / TF |
+|---|---:|---:|---:|---|---|---:|---:|
+| 32K code | 89.4 | 95.3 | +6.6% | 53.8 -> 58.4 | 4.81 -> 5.60 | 143.5 | 66% |
+| 32K prose | 59.2 | 64.4 | +8.8% | 52.8 -> 58.1 | 3.13 -> 3.72 | 74.7 | 86% |
+| 64K code | 105.6 | 118.9 | +12.6% | 63.3 -> 66.4 | 6.68 -> 7.89 | 94.3 | 126% |
+| 64K prose | 48.6 | 48.9 | +0.7% | 58.5 -> 67.7 | 2.84 -> 3.29 | 56.7 | 86% |
+| 128K code | 69.6 | 70.0 | +0.6% | 73.5 -> 91.0 | 5.11 -> 6.27 | 63.9 | 110% |
+| 128K prose | 40.9 | 41.7 | +1.8% | 70.5 -> 79.4 | 2.88 -> 3.31 | 46.3 | 90% |
+
+Cold, warm and follow-up TTFT are unchanged (within noise). Remaining gaps: prose decode 86-89% of TF at 32K-128K (tree round still +5-17 ms over the chain; the 16-row tree attention reads the prefix at 0.27 ms per K keys against a 0.1 ms floor, and TF commits ~15% more per round on prose), warm TTFT 62-71% of TF at 64K-128K (0.1-0.2 s absolute; linear in context, probably the APC restore; not investigated).

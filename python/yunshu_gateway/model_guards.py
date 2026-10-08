@@ -112,3 +112,13 @@ def wrong_modality_detail(kind: str, requested: str | None = None) -> str | None
         f"The model this server is serving ('{served}') cannot {action}. Start a server "
         f"with {example} (yunshu serve -m <model>), or serve several with --models-dir."
     )
+
+
+def validate_forced_tools(engine, tools, choice, parallel=True):
+    """Convert an unsupported forced call into a 400 before streaming starts."""
+    validate = getattr(engine, "validate_forced_tools", None)
+    if callable(validate):
+        try:
+            validate(tools, choice, parallel)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc

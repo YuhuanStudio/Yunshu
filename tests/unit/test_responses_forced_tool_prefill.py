@@ -14,6 +14,8 @@ from yunshu_gateway.engine import set_engine
 def test_forced_response_prefills_only_opening_marker(monkeypatch, choice):
     monkeypatch.setenv("YUNSHU_AUTH_DISABLED", "true")
     engine = BatchedEngine()
+    # Generation is replaced below; this fixture tests prompt construction only.
+    monkeypatch.setattr(engine, "validate_forced_tools", lambda *a: None)
     engine._model = object()
     engine._loaded = True
     engine._running = True

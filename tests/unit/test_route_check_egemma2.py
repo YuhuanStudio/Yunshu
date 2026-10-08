@@ -163,7 +163,9 @@ def build(ignore_task=False, wrong_audio=False):
     media = ec.make_media(d)
     fake = Fake(media, ignore_task)
     if wrong_audio:
-        fake.near.pop(key({"audio": media["speech"]}))
+        # near another sentence, not merely random: a random vector clears the 0.05 margin by chance
+        # (it did on the CI runner, whose `say` voice gives different bytes)
+        fake.near[key({"audio": media["speech"]})] = key(ec.STOCK)
     http = httpx.Client(transport=httpx.MockTransport(fake), base_url="http://srv")
     cs = ec.cases(media)
 

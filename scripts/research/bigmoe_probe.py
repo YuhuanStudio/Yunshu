@@ -137,6 +137,7 @@ def run(args):
         "YUNSHU_FOOTPRINT_SAMPLE_MS=20",
     ]:
         cmd += ["--env", setting]
+    last_progress = -math.inf
     with args.out.with_suffix(".harness.log").open("w") as log:
         proc = subprocess.Popen(cmd, env=env, stdout=log, stderr=subprocess.STDOUT)
         try:
@@ -152,6 +153,19 @@ def run(args):
                 result["min_available_bytes"] = min(
                     current, result["min_available_bytes"]
                 )
+                now = time.monotonic()
+                if now - last_progress >= 30:
+                    print(
+                        json.dumps(
+                            dict(
+                                event="memory_sample",
+                                available_bytes=current,
+                                footprint_bytes=footprint,
+                            )
+                        ),
+                        flush=True,
+                    )
+                    last_progress = now
                 if current < threshold:
                     result["failure"] = "reserve guard crossed"
                     stop_owned(proc)

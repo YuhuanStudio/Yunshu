@@ -241,7 +241,7 @@ class TestRealtimeSession:
             SimpleNamespace(is_loaded=True, engine=chat, model_id="gemma"),
         ]
         mgr = SimpleNamespace(list_entries=lambda: entries)
-        for name in ("default", "no-such-model", "gemma"):
+        for name in ("default", "gemma"):
             session = RealtimeSession.__new__(RealtimeSession)
             session.session = SimpleNamespace(model=name)
             with (
@@ -249,6 +249,9 @@ class TestRealtimeSession:
                 patch("yunshu_gateway.engine.get_engine", return_value=None),
             ):
                 assert session._resolve_engine() is chat, name
+        session.session.model = "no-such-model"
+        with patch("yunshu_gateway.engine.get_model_manager", return_value=mgr):
+            assert session._resolve_engine() is None
 
     def test_item_truncate_trims_assistant_audio_transcript(self):
         """conversation.item.truncate must actually trim what the model

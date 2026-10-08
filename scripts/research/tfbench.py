@@ -55,15 +55,25 @@ WORK = Path("/Volumes/P5Plus/yunshu-build/tfnew")
 OUT = Path(os.environ.get("TFB_OUT", str(WORK)))
 
 
-def free_port():
-    for p in range(18990, int(os.environ.get("TFB_PORT_LAST", "18999")) + 1):
-        with socket.socket() as s:
-            try:
-                s.bind(("127.0.0.1", p))
-            except OSError:
-                continue
-        return p
-    raise RuntimeError("no port")
+def free_port(wait_s=600.0, interval_s=5.0, sleep=None, clock=None):
+    """Paused gpuq jobs retain ports; wait for the bounded shared pool."""
+    sleep = sleep or time.sleep
+    clock = clock or time.monotonic
+    deadline = clock() + wait_s
+    while True:
+        for p in range(18990, int(os.environ.get("TFB_PORT_LAST", "18999")) + 1):
+            with socket.socket() as s:
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                try:
+                    s.bind(("127.0.0.1", p))
+                except OSError:
+                    continue
+            return p
+        left = deadline - clock()
+        if left <= 0:
+            raise RuntimeError("no port after bounded wait")
+        print(f"[tfbench] port pool busy; waiting ({left:.0f}s left)", flush=True)
+        sleep(min(interval_s, left))
 
 
 def spec_request(engine, extra_env):
