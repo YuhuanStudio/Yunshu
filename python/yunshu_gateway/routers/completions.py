@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 from yunshu_engine.tracing import get_inference_tracer, get_structured_logger
 
+from ..continuous_usage import update_usage, with_continuous_usage
 from ..engine import get_engine, get_engine_for_model
 from ..error_envelope import EngineStreamError, server_error_body, server_error_sse
 from ..usage_shapes import openai_usage
@@ -150,6 +151,7 @@ class StreamOptions(BaseModel):
     """OpenAI stream_options parameter."""
 
     include_usage: bool = False
+    continuous_usage_stats: bool = False
 
 
 class CompletionRequest(BaseModel):
@@ -1015,6 +1017,7 @@ async def create_completion(req: CompletionRequest, request: Request):
                 _ns_tracker.unregister(completion_id)
 
 
+@with_continuous_usage
 async def _stream_completion(
     engine, prompt, req, completion_id, request, json_schema=None, trace_id=None
 ) -> AsyncIterator[bytes]:
@@ -1176,6 +1179,13 @@ async def _stream_completion(
                 if _pf_prog is not None:
                     yield f": prefill-progress {_pf_prog[0]}/{_pf_prog[1]}\n\n"
                     continue  # progress outputs carry no text
+                update_usage(
+                    req,
+                    prompt_tok,
+                    sum(completion_tok_per_choice.values()),
+                    sum(reasoning_tok_per_choice.values()),
+                    cached_tok,
+                )
                 # Track emitted text for stop-sequence overcount correction
                 if output.new_text:
                     _choice_streamed_text += output.new_text
@@ -1306,6 +1316,13 @@ async def _stream_completion(
                         else req.logprobs,
                         tokenizer=getattr(engine, "_tokenizer", None),
                     )
+                update_usage(
+                    req,
+                    prompt_tok,
+                    sum(completion_tok_per_choice.values()),
+                    sum(reasoning_tok_per_choice.values()),
+                    cached_tok,
+                )
                 # Track emitted text for stop-sequence overcount correction
                 if output.token_text:
                     _choice_streamed_text += output.token_text

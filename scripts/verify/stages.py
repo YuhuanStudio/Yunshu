@@ -296,6 +296,93 @@ def _smoke_valid(path: Path):
     return True, ""
 
 
+def client_routes_valid(path: Path):
+    import json
+
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, ValueError) as exc:
+        return False, f"missing/invalid route evidence: {exc}"
+    required = {
+        "agent-custom-tools",
+        "agent-shell-search",
+        "agent-documents-citations",
+        "agent-anthropic-client-tools",
+        "agent-continuous-usage",
+        "agent-template-props",
+        "agent-http-video",
+    }
+    rows = data.get("checks", {})
+    seen = {key.split("@")[0] for key in rows}
+    if (
+        data.get("complete") is not True
+        or data.get("pass") is not True
+        or required - seen
+    ):
+        return False, str(
+            data.get("failures") or sorted(required - seen) or "incomplete routes"
+        )
+    if any(row.get("status") not in ("pass", "skip") for row in rows.values()):
+        return False, "a route check failed"
+    return True, ""
+
+
+def stage_client_compat(ctx: Ctx) -> StageResult:
+    import json
+
+    stage = "client_compat"
+    device = ctx.suite.get("client_compat_device", "m3")
+    jobs, numbers, reasons = (
+        [],
+        {"device": device, "candidate_commit": ctx.cand.key},
+        [],
+    )
+    tree_sha = subprocess.check_output(
+        ["git", "-C", str(ctx.cand.path), "rev-parse", "HEAD^{tree}"], text=True
+    ).strip()
+    numbers["tree_sha"] = tree_sha
+    # One successful pilot before the second model; both use the commit-pinned tree.
+    for model in ("Qwen3.5-0.8B-MLX-bf16", "Qwen2.5-3B-Instruct-4bit"):
+        cell = Cell(
+            stage,
+            model,
+            [
+                ctx.py,
+                str(ctx.cand.path / "scripts/research/client_compat_routes.py"),
+                "--model",
+                str(Path("/Volumes/P5Plus/models") / model),
+                "--tree-sha",
+                tree_sha,
+                "--device",
+                device,
+                "--out",
+                "{out}",
+            ],
+            mem_gb=8,
+            timeout_min=35,
+            stall_min=10,
+            validate=client_routes_valid,
+            device=device,
+            cwd=ctx.cand.path,
+        )
+        result = ctx.exe.run_cells([cell])[cell.key]
+        jobs.append(result.job)
+        if result.evidence and result.evidence.exists():
+            data = json.loads(result.evidence.read_text())
+            numbers[model] = {
+                "checks": data.get("checks"),
+                "tree_sha": data.get("tree_sha"),
+                "device": data.get("device"),
+            }
+            if data.get("tree_sha") != tree_sha or data.get("device") != device:
+                reasons.append(f"{model}: wrong source tree/device")
+        if not result.ok:
+            reasons.append(f"{model}: {result.reason}")
+        if reasons:
+            break
+    return _finish(ctx, StageResult(stage, not reasons, reasons, numbers, jobs))
+
+
 def stage_smoke(ctx: Ctx) -> StageResult:
     cells = []
     for arm in ("base", "cand"):
@@ -1111,6 +1198,7 @@ STAGE_FUNCS = {
     "rerank": stage_rerank,
     "preflight": stage_preflight,
     "smoke": stage_smoke,
+    "client_compat": stage_client_compat,
     "identity": stage_identity,
     "apc": stage_apc,
     "quality": stage_quality,

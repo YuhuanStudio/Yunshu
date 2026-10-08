@@ -459,3 +459,40 @@ Runs accept `jsonl` and `completions` data sources, with inline `file_content`, 
 Supported graders: `string_check` (`eq`, `ne`, substring `like`/case-insensitive `ilike`), `text_similarity`, `score_model`, and `label_model`. Similarity is model-free: token-frequency cosine, character SequenceMatcher fuzzy match, effective-order sentence BLEU without smoothing, GLEU, ROUGE n-gram F1 (1–5), ROUGE-L F1, and exact-token METEOR with fragmentation penalty on both candidate and reference alignments (no stemming/synonym corpus). Lexical metrics return 0 for empty token inputs or unavailable n-grams; character fuzzy match preserves its raw-string equality/whitespace behavior. Scores use a caller-supplied pass threshold; local model graders request schema-constrained JSON through `/v1/chat/completions`. SDK Evals text/image/audio content blocks are normalized to the ordinary chat wire format. Python graders and Responses sampling sources return 400 as unsupported.
 
 State uses atomic JSON replacement under `YUNSHU_EVALS_DIR` (default `~/.yunshu/evals`). Source rows and grader definitions are snapshotted per run; credentials stay in memory. Pure lexical grading uses one dedicated CPU worker with cooperative cancellation, keeping metadata and cancel routes available during long comparisons. Cancellation interrupts CPU grading and the active normal request, preserving completed items. Deleted evals cascade to their runs; parent checks and progress writes are serialized with deletion, and recovery removes orphan children after an interrupted cascade. Interrupted runs become `failed` on server restart; they are not automatically replayed. Reports are available through output-item routes (`report_url` is empty; no hosted dashboard). Maximum 10,000 rows per run; list pages accept 1–100 items with cursor/order/status filtering.
+
+### Agent-client additions (2026-10-07)
+
+Responses client tools `custom`, legacy `local_shell`, and client-executed `tool_search`
+are adapted to the model's function template and returned as `custom_tool_call`,
+`local_shell_call`, and `tool_search_call`. `call_id` survives manual history and
+`previous_response_id`; legacy shell outputs may identify the call with `id`.
+Custom input supports text, regex, and Lark formats. Forced custom input streams
+incrementally through the constrained decoder. Auto mode preserves text streaming;
+a selected grammar-bearing custom call adds a constrained generation, sharing the
+request's output-token budget. Deferred schemas remain hidden until loaded by a
+client `tool_search_output`. Hosted tool search and duplicate names across namespaces
+are rejected explicitly.
+
+Anthropic documents accept text, custom content, stored-file references, and bounded
+PDF base64/HTTPS sources. Vision models receive PDF page images and the text layer;
+image-only PDFs require a vision model. Citations use checked character, page, or
+content-block ranges and round-trip as `citations_delta` events. Document requests with
+citations enabled buffer generation before replaying their Messages stream; without
+citations the stream passes through live. Client tool
+schemas cover versioned bash, text editor, and legacy computer tools; computer zoom
+is opt-in, and text-editor `max_characters` is tool configuration. The newer
+`computer_toolset_20260801` member protocol is not implemented.
+
+Chat and text completions support `stream_options.continuous_usage_stats` together with `include_usage`.
+HTTP(S) video fetches use DNS-pinned redirects, TLS verification, and
+`YUNSHU_VLM_MAX_VIDEO_BYTES` (100 MiB by default). `POST /apply-template` renders the
+loaded tokenizer's template; `GET /props` exposes minimal loaded-model properties.
+Both have `/v1` aliases.
+
+CPU regression evidence: `test_agent_client_compat.py`. Served probes are registered
+as `agent-custom-tools`, `agent-shell-search`, `agent-documents-citations`,
+`agent-anthropic-client-tools`, `agent-continuous-usage`, `agent-template-props`,
+and `agent-http-video` in `route_checks_agent_compat.py`. `yv --suite client_compat`
+uses the M3 lane; `client_compat_m5` uses the M5. Both run the 0.8B pilot before the
+3B text model, validate the commit-pinned source tree, and fail closed on missing
+or unsuccessful checks. Real-server evidence is pending for this addition.

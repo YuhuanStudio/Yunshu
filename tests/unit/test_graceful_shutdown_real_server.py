@@ -15,17 +15,7 @@ from pathlib import Path
 import httpx
 
 ROOT = Path(__file__).resolve().parents[2]
-
-
-def _free_port() -> int:
-    # An OS-assigned port, never one of the shared 18990-18999 pool that live servers
-    # (gpuq jobs) may already hold; a fixed port made the test talk to a foreign server.
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
-
-
-PORT = _free_port()
+from .bound_listener import reserve_listener
 
 
 def test_graceful_shutdown_timeout_values():
@@ -35,32 +25,39 @@ def test_graceful_shutdown_timeout_values():
 
 
 def _start(drain: str, delay="0.2", n="15"):
-    global PORT
-    PORT = _free_port()
     env = {
         **os.environ,
         "YUNSHU_DRAIN_TIMEOUT": drain,
         "PYTHONPATH": str(ROOT / "python"),
     }
     env.pop("YUNSHU_AUTH_TOKEN", None)
+    listener = reserve_listener()
+    port = listener.getsockname()[1]
     p = subprocess.Popen(
         [
             sys.executable,
             str(ROOT / "scripts/research/scripted_server.py"),
-            str(PORT),
+            str(port),
             delay,
             n,
+            str(listener.fileno()),
         ],
         env=env,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
+        pass_fds=(listener.fileno(),),
     )
+    listener.close()
+    p.test_port = port
     for _ in range(100):
         if p.poll() is not None:
-            break
+            raise AssertionError(
+                "owned server exited before readiness: "
+                + p.stdout.read().decode()[-500:]
+            )
         try:
             if (
-                httpx.get(f"http://127.0.0.1:{PORT}/health/live", timeout=1).status_code
+                httpx.get(f"http://127.0.0.1:{port}/health/live", timeout=1).status_code
                 < 500
             ):
                 return p
@@ -77,7 +74,7 @@ def _stream_then_sigterm(p):
         try:
             with httpx.stream(
                 "POST",
-                f"http://127.0.0.1:{PORT}/v1/chat/completions",
+                f"http://127.0.0.1:{p.test_port}/v1/chat/completions",
                 json={
                     "model": "m",
                     "messages": [{"role": "user", "content": "hi"}],
@@ -131,5 +128,13 @@ def test_drain_zero_aborts_the_stream_fast():
             p.kill()
 
 
-def test_port_is_outside_the_shared_server_pool():
-    assert not 18990 <= PORT <= 18999
+def test_listener_reservation_prevents_a_foreign_bind():
+
+    import pytest
+
+    listener = reserve_listener()
+    try:
+        with socket.socket() as contender, pytest.raises(OSError):
+            contender.bind(listener.getsockname())
+    finally:
+        listener.close()

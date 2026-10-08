@@ -82,30 +82,14 @@ def function_tools(tools):
     Returns the input object itself when nothing needed changing."""
     if not tools:
         return tools
-    from ..routers.responses import ResponseTool
+    from ..responses_client_tools import as_function, declarations
 
-    out: list = []
-    changed = False
-    for t in tools:
-        d = _dump(t)
-        ty = d.get("type") or "function"
-        if ty == "function" and d.get("name"):
-            out.append(t)
-        elif ty == "custom":
-            from ..custom_tools import custom_function
-
-            changed = True
-            out.append(ResponseTool(**custom_function(d)))
-        elif ty == "namespace":
-            changed = True
-            children = [
-                ResponseTool(**c) for c in d.get("tools") or [] if isinstance(c, dict)
-            ]
-            out.extend(function_tools(children) or [])
-        else:
-            changed = True
-    if not changed:
+    defs = declarations(tools)
+    if all(
+        d.get("type") == "function" and not d.get("namespace") for d in defs.values()
+    ):
         return tools
+    out = [t for d in defs.values() if (t := as_function(d)) is not None]
     return out or None
 
 
@@ -166,12 +150,42 @@ def input_item_to_messages(item: dict, texts: dict | None = None) -> list[dict]:
                 item.get("output") if item.get("output") is not None else ""
             )
         return pair(fname, _json_text(item.get("arguments") or "{}"), res)
-    if ty == "custom_tool_call_output":
+    if ty in (
+        "custom_tool_call_output",
+        "local_shell_call_output",
+        "tool_search_output",
+    ):
+        if ty == "tool_search_output":
+            item = {**item, "output": item.get("tools", [])}
+        output = item.get("output") or ""
+        if ty == "custom_tool_call_output" and isinstance(output, list):
+            from ..routers.responses import _extract_input_text
+
+            output = _extract_input_text(output)
+        else:
+            output = _json_text(output)
         return [
             {
                 "role": "tool",
-                "tool_call_id": item.get("call_id") or "",
-                "content": _json_text(item.get("output") or ""),
+                "tool_call_id": item.get("call_id")
+                or (iid if ty == "local_shell_call_output" else ""),
+                "content": output,
+            }
+        ]
+    if ty in ("local_shell_call", "tool_search_call"):
+        name = "local_shell" if ty == "local_shell_call" else "tool_search"
+        args = item.get("action") if ty == "local_shell_call" else item.get("arguments")
+        return [
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": item.get("call_id") or iid,
+                        "type": "function",
+                        "function": {"name": name, "arguments": _json_text(args or {})},
+                    }
+                ],
             }
         ]
     if ty == "custom_tool_call":
