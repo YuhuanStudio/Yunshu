@@ -28,9 +28,9 @@
 1	python/yunshu_engine/ane_embedding.py	operator	Unsupported operand types for < ("int" and "complex")
 1	python/yunshu_engine/ane_embedding.py	return-value	Incompatible return value type (got "list[array]", expected "list[int]")
 1	python/yunshu_engine/apc_manager.py	has-type	Cannot determine type of "_disk_bytes"
-3	python/yunshu_engine/apc_manager.py	no-any-return	Returning Any from function declared to return "bool"
+1	python/yunshu_engine/apc_manager.py	no-any-return	Returning Any from function declared to return "bool"
 1	python/yunshu_engine/apc_manager.py	no-any-return	Returning Any from function declared to return "dict[Any, Any]"
-2	python/yunshu_engine/apc_manager.py	no-any-return	Returning Any from function declared to return "int"
+1	python/yunshu_engine/apc_manager.py	no-any-return	Returning Any from function declared to return "int"
 1	python/yunshu_engine/audio_engine.py	no-any-return	Returning Any from function declared to return "ASREngine | None"
 1	python/yunshu_engine/audio_engine.py	no-any-return	Returning Any from function declared to return "TTSEngine | None"
 1	python/yunshu_engine/audio_engine.py	no-any-return	Returning Any from function declared to return "bytes"
@@ -261,14 +261,12 @@
 2	python/yunshu_engine/mlxvlm_mtp.py	no-any-return	Returning Any from function declared to return "list[int]"
 3	python/yunshu_engine/model_card.py	no-any-return	Returning Any from function declared to return "dict[Any, Any]"
 1	python/yunshu_engine/model_card.py	union-attr	Item "None" of "Any | dict[Any, Any] | None" has no attribute "get"
-1	python/yunshu_engine/model_discovery.py	return-value	Incompatible return value type (got "str", expected "Literal['batched', 'vlm', 'audio', 'image']")
 1	python/yunshu_engine/model_discovery.py	return-value	Incompatible return value type (got "str", expected "Literal['llm', 'vlm', 'audio_tts', 'audio_stt', 'image_gen', 'ocr', 'sts', 'video']")
 1	python/yunshu_engine/model_manager.py	assignment	Incompatible types in assignment (expression has type "ASREngine", variable has type "TTSEngine")
 1	python/yunshu_engine/model_manager.py	assignment	Incompatible types in assignment (expression has type "BatchedEngine", variable has type "TTSEngine")
 1	python/yunshu_engine/model_manager.py	assignment	Incompatible types in assignment (expression has type "Event | None", variable has type "Event")
 1	python/yunshu_engine/model_manager.py	assignment	Incompatible types in assignment (expression has type "ImageGenEngine", variable has type "TTSEngine")
 1	python/yunshu_engine/model_manager.py	assignment	Incompatible types in assignment (expression has type "OCREngine", variable has type "TTSEngine")
-1	python/yunshu_engine/model_manager.py	assignment	Incompatible types in assignment (expression has type "VLEmbeddingEngine", variable has type "TTSEngine")
 1	python/yunshu_engine/model_manager.py	assignment	Incompatible types in assignment (expression has type "VLMEngine", variable has type "TTSEngine")
 1	python/yunshu_engine/model_manager.py	attr-defined	Module has no attribute "get_memory_info"
 4	python/yunshu_engine/model_manager.py	func-returns-value	"clear_cache" does not return a value (it only ever returns None)
@@ -335,7 +333,6 @@
 1	python/yunshu_engine/round_driver/driver.py	arg-type	Argument 1 to "len" has incompatible type "list[Any] | None"; expected "Sized"
 1	python/yunshu_engine/round_driver/driver.py	arg-type	Argument 1 to "list" has incompatible type "list[Any] | None"; expected "Iterable[Any]"
 1	python/yunshu_engine/round_driver/driver.py	misc	List comprehension has incompatible type List[Segment | None]; expected List[Segment]
-1	python/yunshu_engine/round_driver/driver.py	union-attr	Item "None" of "Any | None" has no attribute "store_checkpoint"
 1	python/yunshu_engine/round_driver/driver.py	union-attr	Item "None" of "MTPHead | None" has no attribute "absorb_prompt"
 1	python/yunshu_engine/round_driver/driver.py	union-attr	Item "None" of "MTPHead | None" has no attribute "join"
 2	python/yunshu_engine/round_driver/driver.py	union-attr	Item "None" of "MTPHead | None" has no attribute "make_cache"
@@ -453,7 +450,7 @@
 1	python/yunshu_engine/vlm_engine.py	attr-defined	"None" has no attribute "audio_sampling_rate"
 1	python/yunshu_engine/vlm_engine.py	attr-defined	"None" has no attribute "convert_tokens_to_ids"
 1	python/yunshu_engine/vlm_engine.py	attr-defined	"None" has no attribute "detokenizer"
-5	python/yunshu_engine/vlm_engine.py	attr-defined	"None" has no attribute "encode"
+4	python/yunshu_engine/vlm_engine.py	attr-defined	"None" has no attribute "encode"
 1	python/yunshu_engine/vlm_engine.py	attr-defined	"None" has no attribute "iter_tokens"
 7	python/yunshu_engine/vlm_engine.py	attr-defined	"None" has no attribute "language_model"
 1	python/yunshu_engine/vlm_engine.py	attr-defined	"None" has no attribute "prepare_media"
@@ -482,11 +479,9 @@
 1	python/yunshu_gateway/model_card_formats.py	arg-type	Argument 1 to "sup" has incompatible type "Any | None"; expected "bool"
 1	python/yunshu_gateway/realtime_dsp.py	no-any-return	Returning Any from function declared to return "bytes"
 1	python/yunshu_gateway/realtime_ga.py	arg-type	Argument 1 to "get" of "dict" has incompatible type "Any | None"; expected "str"
-1	python/yunshu_gateway/responses_context.py	arg-type	Argument 1 to "_stream" has incompatible type "AsyncIterable[str | bytes | memoryview[int]]"; expected "AsyncIterator[bytes | str]"
 1	python/yunshu_gateway/responses_context.py	arg-type	Argument 1 to "loads" has incompatible type "bytes | memoryview[int]"; expected "str | bytes | bytearray"
 1	python/yunshu_gateway/responses_context.py	dict-item	Dict entry 1 has incompatible type "str": "Any | None"; expected "str": "str"
 1	python/yunshu_gateway/responses_context.py	no-any-return	Returning Any from function declared to return "dict[Any, Any]"
-1	python/yunshu_gateway/routers/anthropic.py	arg-type	Argument 1 to "fill_client_tool_schemas" has incompatible type "list[AnthropicTool] | None"; expected "list[Any]"
 1	python/yunshu_gateway/routers/anthropic.py	attr-defined	"AnthropicMessagesRequest" has no attribute "_anthropic_orig_system"
 1	python/yunshu_gateway/routers/anthropic.py	attr-defined	"AnthropicMessagesRequest" has no attribute "_forced_thinking_grammar"
 1	python/yunshu_gateway/routers/anthropic.py	attr-defined	"AnthropicMessagesRequest" has no attribute "_forced_tool_grammar"
@@ -500,7 +495,6 @@
 1	python/yunshu_gateway/routers/audio.py	arg-type	Argument 1 to "_normalize_verbose_segments" has incompatible type "Any | None"; expected "list[Any]"
 1	python/yunshu_gateway/routers/audio.py	no-any-return	Returning Any from function declared to return "str | None"
 3	python/yunshu_gateway/routers/audio.py	return-value	Incompatible return value type (got "Response", expected "dict[Any, Any]")
-1	python/yunshu_gateway/routers/audio.py	union-attr	Item "None" of "ModelManager | None" has no attribute "get_engine"
 4	python/yunshu_gateway/routers/batches.py	attr-defined	"list?[dict[str, Any]]" has no attribute "__iter__" (not iterable)
 1	python/yunshu_gateway/routers/batches.py	no-any-return	Returning Any from function declared to return "str | None"
 1	python/yunshu_gateway/routers/batches.py	union-attr	Item "None" of "Event | None" has no attribute "clear"
@@ -528,8 +522,6 @@
 1	python/yunshu_gateway/routers/mcp.py	attr-defined	"GenerationOutput" has no attribute "generated_text"
 1	python/yunshu_gateway/routers/mcp.py	call-overload	No overload variant of "sub" matches argument types "str", "Callable[[Any], str]", "Sequence[Collection[str]]"
 2	python/yunshu_gateway/routers/mcp.py	index	Value of type "Collection[str]" is not indexable
-1	python/yunshu_gateway/routers/ocr.py	union-attr	Item "None" of "ModelManager | None" has no attribute "get_engine"
-2	python/yunshu_gateway/routers/ocr.py	union-attr	Item "None" of "ModelManager | None" has no attribute "list_entries"
 1	python/yunshu_gateway/routers/ollama.py	assignment	Incompatible types in assignment (expression has type "Any | None", variable has type "list[dict[Any, Any]]")
 1	python/yunshu_gateway/routers/ollama.py	no-any-return	Returning Any from function declared to return "list[dict[Any, Any]]"
 1	python/yunshu_gateway/routers/realtime.py	arg-type	Argument 2 to "_coerce_max_response_tokens" has incompatible type "object"; expected "int"
@@ -547,9 +539,7 @@
 1	python/yunshu_gateway/routers/responses.py	arg-type	Argument "logit_bias" to "chat" of "EngineTemplatesMixin" has incompatible type "dict[str, float] | None"; expected "dict[int, float] | None"
 1	python/yunshu_gateway/routers/responses.py	arg-type	Argument "logit_bias" to "generate" of "BatchedEngine" has incompatible type "dict[str, float] | None"; expected "dict[int, float] | None"
 1	python/yunshu_gateway/routers/responses.py	arg-type	Argument "prompt" to "generate" of "BatchedEngine" has incompatible type "str | list[dict[Any, Any]]"; expected "str"
-1	python/yunshu_gateway/routers/responses.py	arg-type	Argument "tool_choice" to "_inject_tool_system_prompt" has incompatible type "str | dict[Any, Any] | None"; expected "str | ToolChoiceFunction | None"
 1	python/yunshu_gateway/routers/responses.py	arg-type	Argument 1 to "_format_chat_logprobs" has incompatible type "tuple[Any, ...] | list[Any]"; expected "list[dict[Any, Any]] | None"
-1	python/yunshu_gateway/routers/responses.py	assignment	Incompatible types in assignment (expression has type "Any | None", variable has type "str")
 1	python/yunshu_gateway/routers/responses.py	assignment	Incompatible types in assignment (expression has type "dict[int, float] | None", variable has type "dict[str, float] | None")
 1	python/yunshu_gateway/routers/responses.py	assignment	Incompatible types in assignment (expression has type "int", target has type "Sequence[Collection[str]]")
 1	python/yunshu_gateway/routers/responses.py	attr-defined	"ResponsesRequest" has no attribute "_native_tools"
@@ -574,22 +564,6 @@
 1	python/yunshu_gateway/server_tools/anthropic_loop.py	union-attr	Item "None" of "FetchResult | None" has no attribute "title"
 2	python/yunshu_gateway/server_tools/anthropic_loop.py	union-attr	Item "None" of "FetchResult | None" has no attribute "url"
 1	python/yunshu_gateway/server_tools/anthropic_loop.py	var-annotated	Need type annotation for "outb"
-2	python/yunshu_gateway/server_tools/responses_loop.py	arg-type	Argument 1 to "_pair" has incompatible type "Sequence[str]"; expected "str"
-1	python/yunshu_gateway/server_tools/responses_loop.py	arg-type	Argument 1 to "join" of "str" has incompatible type "list[Any | None]"; expected "Iterable[str]"
-1	python/yunshu_gateway/server_tools/responses_loop.py	assignment	Incompatible types in assignment (expression has type "dict[str, list[dict[str, str]]]", target has type "Sequence[str]")
-1	python/yunshu_gateway/server_tools/responses_loop.py	dict-item	Dict entry 1 has incompatible type "str": "list[dict[Any, Any]]"; expected "str": "Sequence[str]"
-3	python/yunshu_gateway/server_tools/responses_loop.py	dict-item	Dict entry 2 has incompatible type "str": "str | None"; expected "str": "Sequence[str]"
-1	python/yunshu_gateway/server_tools/responses_loop.py	dict-item	Dict entry 3 has incompatible type "str": "dict[str, str]"; expected "str": "Sequence[str]"
-3	python/yunshu_gateway/server_tools/responses_loop.py	dict-item	Dict entry 3 has incompatible type "str": "str | None"; expected "str": "Sequence[str]"
-1	python/yunshu_gateway/server_tools/responses_loop.py	dict-item	Dict entry 5 has incompatible type "str": "None"; expected "str": "Sequence[str]"
-1	python/yunshu_gateway/server_tools/responses_loop.py	dict-item	Dict entry 6 has incompatible type "str": "None"; expected "str": "Sequence[str]"
-1	python/yunshu_gateway/server_tools/responses_loop.py	dict-item	Dict entry 7 has incompatible type "str": "None"; expected "str": "Sequence[str]"
-1	python/yunshu_gateway/server_tools/responses_loop.py	dict-item	Unpacked dict entry 0 has incompatible type "Sequence[str]"; expected "SupportsKeysAndGetItem[str, list[dict[str, str]]]"
-2	python/yunshu_gateway/server_tools/responses_loop.py	index	Invalid index type "Sequence[str]" for "dict[str, str]"; expected type "str"
-1	python/yunshu_gateway/server_tools/responses_loop.py	index	Unsupported target for indexed assignment ("object")
-1	python/yunshu_gateway/server_tools/responses_loop.py	index	Value of type "object" is not indexable
-3	python/yunshu_gateway/server_tools/responses_loop.py	no-any-return	Returning Any from function declared to return "_Setup | JSONResponse"
-1	python/yunshu_gateway/server_tools/responses_loop.py	no-any-return	Returning Any from function declared to return "dict[Any, Any]"
 1	python/yunshu_gateway/server_tools/runtime.py	arg-type	Argument 1 to "format_search_text" has incompatible type "Any | None"; expected "str"
 1	python/yunshu_gateway/server_tools/runtime.py	arg-type	Argument 1 to "run_search" has incompatible type "Any | None"; expected "str"
 2	python/yunshu_gateway/server_tools/runtime.py	no-any-return	Returning Any from function declared to return "str | None"
