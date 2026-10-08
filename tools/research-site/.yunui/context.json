@@ -1,9 +1,0 @@
-{
-  "package": "@yuhuanowo/yunui",
-  "module": "@yuhuanowo/yunui",
-  "lastInitializedWithVersion": "0.2.18",
-  "libraryRoot": "node_modules/@yuhuanowo/yunui",
-  "catalogue": "node_modules/@yuhuanowo/yunui/agent/catalog.generated.json",
-  "recipes": "node_modules/@yuhuanowo/yunui/agent/recipes",
-  "setupStylesheet": ".yunui/setup.css"
-}

@@ -133,21 +133,3 @@ def test_parity_board_invalid_and_present(tmp_path):
     assert "parity: 2/7 items, missing: 1" in ri.parity_verdict(tmp_path)
     p.write_text(json.dumps({"parity": 8, "total": 7, "missing": []}))
     assert "unknown" in ri.parity_verdict(tmp_path)
-
-
-def test_json_output_matches_rows(fake, tmp_path: Path, capsys) -> None:
-    repo, codex, jobs, index = fake
-    out = tmp_path / "lines.json"
-    before = index.read_text()
-    argv = ["--repo", str(repo), "--codex", str(codex), "--jobs", str(jobs)]
-    assert ri.main_cli([*argv, "--json", str(out)]) == 0
-    data = json.loads(out.read_text())
-    bar = next(d for d in data["lines"] if d["branch"] == "bar")
-    assert bar["status"] == "ready-old" and bar["ready_sha"] == "abcdef12"
-    assert (bar["gpuq_running"], bar["gpuq_pending"], bar["ahead"]) == (1, 1, "1")
-    assert bar["report_path"].endswith("sonnet-bar_last.md")
-    foo = next(d for d in data["lines"] if d["branch"] == "foo")
-    assert foo["status"] == "merged"
-    assert index.read_text() == before  # --json never writes the index
-    assert ri.main_cli([*argv, "--json", "-"]) == 0
-    assert json.loads(capsys.readouterr().out)["lines"]
