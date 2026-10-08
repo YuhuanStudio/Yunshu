@@ -4,6 +4,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts/research"))
 import snapshot_report as report  # noqa: E402
 
@@ -66,3 +68,43 @@ def test_recall_gaps_require_the_same_ten_item_set():
     }
     markdown = report.recall_table(cells, ["yunshu-new", "mlxlm", "omlx"])
     assert "| 128K | 10/10; gap 0.0 pp | 9/10; gap 10.0 pp | unknown |" in markdown
+
+
+def test_combined_report_refuses_mixed_release_commits(tmp_path):
+    sources = {}
+    for engine, release in (("mlxlm", "release-a"), ("splash", "release-b")):
+        run = tmp_path / engine
+        run.mkdir()
+        (run / "state.json").write_text(
+            json.dumps(
+                {
+                    "status": "finished",
+                    "base": {"commit": release},
+                    "cand": {"commit": "harness"},
+                }
+            )
+        )
+        sources[engine] = run
+    with pytest.raises(ValueError, match="different released engine commits"):
+        report.combined(sources)
+
+
+def test_combined_report_keeps_per_engine_harness_provenance(tmp_path):
+    sources = {}
+    for engine, harness in (("mlxlm", "harness-one"), ("splash", "startup-fix")):
+        run = tmp_path / engine
+        run.mkdir()
+        (run / "state.json").write_text(
+            json.dumps(
+                {
+                    "status": "finished",
+                    "base": {"commit": "release"},
+                    "cand": {"commit": harness},
+                }
+            )
+        )
+        sources[engine] = run
+    result = report.combined(sources)
+    assert result["complete"]
+    assert result["provenance"]["splash"]["harness"] == "startup-fix"
+    assert "harness-one" in result["markdown"] and "startup-fix" in result["markdown"]

@@ -146,12 +146,97 @@ def summarize(run, engines=None):
     }
 
 
+def combined(sources):
+    """One explicit evidence source per engine; never pool different runs."""
+    releases, cells, agent_runs, jobs, failures, mismatches, provenance = (
+        set(),
+        {},
+        [],
+        [],
+        [],
+        [],
+        {},
+    )
+    complete = True
+    for engine, run in sources.items():
+        state = json.loads((run / "state.json").read_text())
+        releases.add(state["base"]["commit"])
+        result = summarize(run, [engine])
+        complete &= result["complete"]
+        cells.update(bs.collect(run / "snapshot", [engine], run))
+        agent_runs += [r for r in result["agent_runs"] if r.get("engine") == engine]
+        selected = [
+            r
+            for r in result["jobs"]
+            if r["cell"].startswith(engine + "-")
+            or r["cell"].startswith("agent-" + engine + "-")
+        ]
+        jobs += selected
+        failures += [r for r in selected if not r.get("ok")]
+        mismatches += [
+            r
+            for r in result["identity_mismatches"]
+            if r["cell"].startswith(engine + "-")
+        ]
+        provenance[engine] = {
+            "run": str(run),
+            "release": state["base"]["commit"],
+            "harness": state["cand"]["commit"],
+        }
+    if len(releases) != 1:
+        raise ValueError("cannot combine different released engine commits")
+    engines = list(sources)
+    markdown = (
+        bs.render_markdown(cells, engines)
+        + "\n"
+        + recall_table(cells, engines)
+        + "\n"
+        + agent_table(agent_runs, engines)
+    )
+    markdown += "\n## Provenance\n\n| engine | release | harness |\n|---|---|---|\n"
+    for engine, source in provenance.items():
+        markdown += f"| {engine} | {source['release']} | {source['harness']} |\n"
+    markdown += "\n## Recorded failures (including retried attempts)\n\n| cell | job | rc | reason |\n|---|---|---|---|\n"
+    for event in failures:
+        reason = str(event.get("reason", "")).replace("|", "\\|").replace("\n", " ")
+        markdown += (
+            f"| {event['cell']} | {event.get('job')} | {event.get('rc')} | {reason} |\n"
+        )
+    return {
+        "complete": bool(complete),
+        "release": next(iter(releases)),
+        "provenance": provenance,
+        "jobs": jobs,
+        "failures": failures,
+        "identity_mismatches": mismatches,
+        "agent_runs": agent_runs,
+        "markdown": markdown,
+    }
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--run", type=Path, required=True)
+    parser.add_argument("--run", type=Path)
+    parser.add_argument(
+        "--source",
+        action="append",
+        default=[],
+        help="ENGINE=RUN, one canonical run per engine",
+    )
     parser.add_argument("--out", type=Path, required=True)
     args = parser.parse_args(argv)
-    report = summarize(args.run)
+    if args.source:
+        sources = {
+            engine: Path(run)
+            for engine, run in (entry.split("=", 1) for entry in args.source)
+        }
+        if len(sources) != len(args.source):
+            parser.error("duplicate engine evidence sources")
+        report = combined(sources)
+    elif args.run:
+        report = summarize(args.run)
+    else:
+        parser.error("--run or --source is required")
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(report.pop("markdown"))
     args.out.with_suffix(".json").write_text(json.dumps(report, indent=2) + "\n")
