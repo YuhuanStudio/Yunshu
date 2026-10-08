@@ -1,3 +1,5 @@
+# Upstream (inspired): vllm-project/vllm (Apache-2.0) vllm/utils/gc_utils.py @ ba77c4c1
+# Freeze-after-load follows vLLM freeze_gc_heap / SGLang freeze_gc; threshold and first-token hold are Yunshu's.
 """Keep Python's cyclic collector out of the time-to-first-token path.
 
 A generation-2 collection walks every tracked container in the process. On a loaded

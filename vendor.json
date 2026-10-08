@@ -1042,6 +1042,21 @@
       "local_changes": [
         "only the public design of oMLX PR #4315 (a /v1/systemone route next to a decision engine for Clef) informed this; its code was NOT read. License checked: Apache-2.0, same as the oMLX files already vendored. Wire formats come from openai-python 3.26 types and TypeSafe's published System One docs"
       ]
+    },
+    {
+      "kind": "inspired",
+      "path": "python/yunshu_engine/gc_policy.py",
+      "repo": "https://github.com/vllm-project/vllm",
+      "clone": "reference/vllm",
+      "upstream_paths": [
+        "vllm/utils/gc_utils.py",
+        "vllm/v1/engine/core.py"
+      ],
+      "commit": "ba77c4c1",
+      "license": "Apache-2.0",
+      "local_changes": [
+        "gc.collect() + gc.freeze() of the startup heap after model load (vLLM freeze_gc_heap, SGLang freeze_gc in python/sglang/srt/utils/common.py); the generation-2 multiplier and the bounded first-token collector hold are Yunshu's own"
+      ]
     }
   ],
   "patches": [
