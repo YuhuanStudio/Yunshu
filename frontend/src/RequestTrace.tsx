@@ -4,6 +4,7 @@ import type { EngineHistoryPoint } from "./useEngine";
 import { number, phaseDot, Readout } from "./ui";
 import { diagnose, type Cause } from "./request-insight";
 import { formatMs } from "./RequestTimeline";
+import type { RequestEnergy, RequestLatency } from "./latency-api";
 
 /** One request as the console sees it: a live item, a detail poll or a `last` record. */
 export type Row = {
@@ -40,6 +41,9 @@ export type Row = {
   stream?: boolean | null;
   /** Epoch seconds the request arrived. */
   t0_wall?: number | null;
+  /** Stage latency and host energy of a ring row; undefined = the engine sent no such field, null = sent but unusable. */
+  latency?: RequestLatency | null;
+  energy?: RequestEnergy | null;
   /** Where a finished row came from: the server ring or the page's own status samples. */
   source?: "ring" | "sampled";
 };

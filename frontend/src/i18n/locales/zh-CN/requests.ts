@@ -204,5 +204,15 @@ const requests: Shape<typeof zh> = {
   "waterfall.stage.prefill": "预填充",
   "waterfall.stage.first_decode": "首个解码",
   "waterfall.stage.sse_first_flush": "首次发送",
+  "energy.title": "主机能耗",
+  "energy.estimate": "估算",
+  "energy.tip": "这是请求时间窗内 GPU 与 DRAM 的主机能量估算，包含其他程序与待机功耗；同时进行的请求共用同一段能量，不是这个请求独占的功率，也不是电池消耗。",
+  "energy.prefill": "预填充",
+  "energy.decode": "解码",
+  "energy.none": "这笔请求没有能耗估算。",
+  "energy.noPerToken": "没有 J/token（无新增 token）",
+  "energy.phaseUnknown": "未取得（遥测没有覆盖这段时间）",
+  "energy.coverage": "采样覆盖 {pct}%",
+  "energy.extrapolated": "，外推 {s} 秒",
 };
 export default requests;

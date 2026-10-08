@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { t } from "./i18n/index.ts";
 import { ApiError, type Connection } from "./api";
 import type { Offsets, Outcome, Row } from "./RequestTrace";
+import { parseEnergy, parseLatency } from "./latency-api";
 
 /** One entry of `GET /v1/yunshu/requests/recent` (numbers and enums only, never prompt text). */
 export type RecentEntry = {
@@ -25,6 +26,8 @@ export type RecentEntry = {
   cache?: { tier?: string | null; reload_ms?: number | null } | null;
   speculative?: Row["speculative"];
   cancelled?: boolean;
+  latency?: unknown;
+  energy?: unknown;
 };
 
 export const outcomeLabel = (o: Outcome): string =>
@@ -70,6 +73,8 @@ export function recentToRow(e: RecentEntry): Row {
     queue_wait_ms: e.queue_wait_ms,
     stream: e.stream,
     t0_wall: e.t0_wall,
+    latency: "latency" in e ? parseLatency(e.latency) : undefined,
+    energy: "energy" in e ? parseEnergy(e.energy) : undefined,
     source: "ring",
   };
 }

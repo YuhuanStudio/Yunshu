@@ -36,3 +36,49 @@ test("an engine without the field is unsupported (null); junk and unknown states
   assert.equal(t.reason, "disabled");
   assert.equal(t.watts.gpu, null);
 });
+
+import {
+  appendSample,
+  parseHostSystem,
+  type HostSample,
+} from "../src/host-api.ts";
+
+const sample = (at: number, state: "ok" | "unknown" = "ok") =>
+  parseHostTelemetry({
+    telemetry: {
+      state,
+      sampled_at: at,
+      watts: { gpu: 10 + at, package: 20 },
+      gpu: { frequency_mhz: 900, active_ratio: 0.5 },
+      temperature: { state: "ok", die_max_c: 60 },
+    },
+  })!;
+
+test("history dedupes by the engine's sampled_at, drops unknown samples and stays bounded", () => {
+  let h: HostSample[] = [];
+  h = appendSample(h, sample(1));
+  h = appendSample(h, sample(1));
+  h = appendSample(h, sample(0));
+  assert.equal(h.length, 1);
+  h = appendSample(h, sample(2, "unknown"));
+  assert.equal(h.length, 1);
+  for (let i = 2; i < 200; i++) h = appendSample(h, sample(i));
+  assert.equal(h.length, 60);
+  assert.equal(h.at(-1)!.at, 199);
+});
+
+test("OS readings: unknown stays unknown, a pmset limit is throttled with its percent", () => {
+  const s = parseHostSystem({
+    thermal: { state: "throttled", cpu_speed_limit_percent: 70 },
+    memory_pressure: { state: "warning", level: 2 },
+    power: { state: "battery", battery_percent: 55 },
+  });
+  assert.equal(s.thermal.state, "throttled");
+  assert.equal(s.thermal.speedLimitPercent, 70);
+  assert.equal(s.pressure.state, "warning");
+  assert.equal(s.power.source, "battery");
+  const u = parseHostSystem({ thermal: { state: "unknown", reason: "x" } });
+  assert.equal(u.thermal.state, "unknown");
+  assert.equal(u.thermal.speedLimitPercent, null);
+  assert.equal(u.pressure.state, "unknown");
+});

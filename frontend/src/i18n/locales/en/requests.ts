@@ -213,5 +213,15 @@ const requests: Shape<typeof zh> = {
   "waterfall.stage.prefill": "Prefill",
   "waterfall.stage.first_decode": "First decode",
   "waterfall.stage.sse_first_flush": "First flush",
+  "energy.title": "Host energy",
+  "energy.estimate": "Estimate",
+  "energy.tip": "An estimate of GPU + DRAM host energy over this request's time window. It includes other programs and idle power, concurrent requests share it, and it is neither this request's exclusive power nor battery use.",
+  "energy.prefill": "Prefill",
+  "energy.decode": "Decode",
+  "energy.none": "This request has no energy estimate.",
+  "energy.noPerToken": "No J/token (no new tokens)",
+  "energy.phaseUnknown": "Not available (telemetry did not cover this window)",
+  "energy.coverage": "{pct}% sample coverage",
+  "energy.extrapolated": ", {s}s extrapolated",
 };
 export default requests;

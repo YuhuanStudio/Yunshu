@@ -201,5 +201,15 @@ const requests = {
   "waterfall.stage.prefill": "預填",
   "waterfall.stage.first_decode": "首個解碼",
   "waterfall.stage.sse_first_flush": "首次送出",
+  "energy.title": "主機能耗",
+  "energy.estimate": "估算",
+  "energy.tip": "這是請求時間窗內 GPU 與 DRAM 的主機能量估算，包含其他程式與待機功耗；同時進行的請求共用同一段能量，不是這個請求獨佔的功率，也不是電池消耗。",
+  "energy.prefill": "預填",
+  "energy.decode": "解碼",
+  "energy.none": "這筆請求沒有能耗估算。",
+  "energy.noPerToken": "沒有 J/token（無新增 token）",
+  "energy.phaseUnknown": "未取得（遙測沒有涵蓋這段時間）",
+  "energy.coverage": "取樣涵蓋 {pct}%",
+  "energy.extrapolated": "，外推 {s} 秒",
 };
 export default requests;

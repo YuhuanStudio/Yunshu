@@ -1,7 +1,5 @@
-import { ApiError, requestJson, type Connection } from "./api.ts";
-
 /**
- * Per-request latency stages from `GET /v1/yunshu/requests/recent` (backend branch consolefeat):
+ * Per-request latency stages from the rows of `GET /v1/yunshu/requests/recent` (backend branch consolefeat):
  * `latency.milestones_ms` (relative to gateway receive) and `latency.durations_ms`. A stage the
  * engine did not observe, or fused into another, is null and stays null, never 0.
  */
@@ -55,40 +53,48 @@ export function parseLatency(value: unknown): RequestLatency | null {
   return { durations, milestones, spans };
 }
 
-export type RecentLatency =
-  { kind: "ok"; byId: Map<string, RequestLatency> } | { kind: "unsupported" };
-
-/** null latency (older engine without the field) on every row means the feature is absent. */
-export function parseRecentLatency(payload: unknown): RecentLatency {
-  if (!isRecord(payload) || !Array.isArray(payload.data))
-    return { kind: "unsupported" };
-  const byId = new Map<string, RequestLatency>();
-  let sawField = false;
-  for (const row of payload.data) {
-    if (!isRecord(row)) continue;
-    if ("latency" in row) sawField = true;
-    const lat = parseLatency(row.latency);
-    if (lat && typeof row.request_id === "string")
-      byId.set(row.request_id, lat);
-  }
-  if (!sawField && payload.data.length > 0) return { kind: "unsupported" };
-  return { kind: "ok", byId };
+/** One phase of the host-window energy estimate (GPU + DRAM, includes other processes). */
+export interface EnergyPhase {
+  state: "estimated" | "unknown";
+  reason: string | null;
+  joules: number | null;
+  joulesPerToken: number | null;
+  gpuWattsMean: number | null;
+  coverageRatio: number | null;
+  extrapolatedS: number | null;
+}
+export interface RequestEnergy {
+  state: "estimated" | "unknown";
+  reason: string | null;
+  prefill: EnergyPhase | null;
+  decode: EnergyPhase | null;
 }
 
-export async function fetchRecentLatency(
-  connection: Connection,
-  signal?: AbortSignal,
-): Promise<RecentLatency> {
-  try {
-    const body = await requestJson<unknown>(
-      connection,
-      "/yunshu/requests/recent",
-      { signal, search: { limit: "512" } },
-    );
-    return parseRecentLatency(body);
-  } catch (e) {
-    if (e instanceof ApiError && [401, 403, 404, 405].includes(e.status ?? 0))
-      return { kind: "unsupported" };
-    throw e;
-  }
+function parsePhase(v: unknown): EnergyPhase | null {
+  if (!isRecord(v)) return null;
+  const n = (x: unknown) =>
+    typeof x === "number" && Number.isFinite(x) ? x : null;
+  return {
+    state: v.state === "estimated" ? "estimated" : "unknown",
+    reason: typeof v.reason === "string" ? v.reason : null,
+    joules: n(v.joules),
+    joulesPerToken: n(v.joules_per_token),
+    gpuWattsMean: n(v.gpu_watts_mean),
+    coverageRatio: n(v.coverage_ratio),
+    extrapolatedS: n(v.extrapolated_s),
+  };
+}
+
+/** schema yunshu.energy.v1; null when the row has no energy object (an engine without telemetry). */
+export function parseEnergy(v: unknown): RequestEnergy | null {
+  if (!isRecord(v)) return null;
+  const prefill = parsePhase(v.prefill),
+    decode = parsePhase(v.decode);
+  const anyEstimate = [prefill, decode].some((p) => p?.state === "estimated");
+  return {
+    state: anyEstimate ? "estimated" : "unknown",
+    reason: typeof v.reason === "string" ? v.reason : null,
+    prefill,
+    decode,
+  };
 }

@@ -64,7 +64,7 @@ import {
   TotalsLine,
 } from "./OverviewParts";
 import { useSignals } from "./signals";
-import type { RequestRow } from "./api";
+import type { Connection, RequestRow } from "./api";
 import { buildIntegrations, serviceRoot } from "./integrations";
 import {
   clock,
@@ -81,6 +81,8 @@ import {
   StatValue,
 } from "./ui";
 import { formatMs } from "./RequestTimeline";
+import { HostPanel } from "./HostPanel";
+import { useHostTelemetry } from "./host-hook";
 const memorySeries = () => [
   {
     key: "active",
@@ -243,9 +245,11 @@ function QuickAction({
 
 export function Dashboard({
   engine,
+  connection,
   navigate,
 }: {
   engine: Engine;
+  connection: Connection;
   navigate: (page: string) => void;
 }) {
   useLocale();
@@ -288,6 +292,11 @@ export function Dashboard({
       : (points.find((sample) => sample.at === activeX) ?? null);
   const items = status?.requests.items ?? [];
   const few = items.length <= 2;
+  const hostState = useHostTelemetry(connection, online);
+  const hostShown =
+    !!hostState.host &&
+    hostState.host !== "unsupported" &&
+    !!hostState.host.telemetry;
   const memory = status?.memory;
   const loaded = (status?.models ?? []).filter((m) => m.loaded);
   // Trends compare the later half of this window's samples with the earlier half.
@@ -679,6 +688,12 @@ export function Dashboard({
             <TotalsLine totals={totals} />
           </div>
         </Card>
+      )}
+
+      {hostShown && (
+        <FoldSection title={t("overview.host.title")}>
+          <HostPanel state={hostState} now={Date.now()} />
+        </FoldSection>
       )}
 
       <FoldSection title={t("overview.quick.title")}>

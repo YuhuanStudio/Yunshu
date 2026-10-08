@@ -527,7 +527,7 @@ export function Requests({
         >
           <RequestBreakdown row={view} />
           <RequestTimeline row={view} />
-          <RequestWaterfall connection={connection} requestId={view.id} />
+          <RequestWaterfall row={view} />
           <p className="text-xs text-muted-foreground">
             {t("requests.detail.timelineNote")}
           </p>

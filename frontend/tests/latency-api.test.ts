@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { parseLatency, parseRecentLatency } from "../src/latency-api.ts";
+import { parseLatency } from "../src/latency-api.ts";
 
 const sample = {
   milestones_ms: {
@@ -57,22 +57,35 @@ test("garbage and negative values are dropped", () => {
   assert.equal(l.durations.first_decode, null);
 });
 
-test("an engine whose rows carry no latency field is unsupported; one with the field is ok", () => {
-  assert.equal(
-    parseRecentLatency({ data: [{ request_id: "a" }] }).kind,
-    "unsupported",
-  );
-  const ok = parseRecentLatency({
-    data: [
-      { request_id: "a", latency: sample },
-      { request_id: "b", latency: null },
-    ],
-  });
-  assert.equal(ok.kind, "ok");
-  if (ok.kind === "ok") {
-    assert.ok(ok.byId.has("a"));
-    assert.ok(!ok.byId.has("b"));
-  }
-  assert.equal(parseRecentLatency({ data: [] }).kind, "ok");
-  assert.equal(parseRecentLatency("x").kind, "unsupported");
+import { parseEnergy } from "../src/latency-api.ts";
+
+test("energy receipts: a phase without coverage stays unknown with null joules, never 0", () => {
+  const e = parseEnergy({
+    schema: "yunshu.energy.v1",
+    prefill: {
+      state: "unknown",
+      reason: "no coverage",
+      joules: null,
+      joules_per_token: null,
+    },
+    decode: {
+      state: "estimated",
+      joules: 32,
+      joules_per_token: 0.4,
+      gpu_watts_mean: 30,
+      coverage_ratio: 1,
+      extrapolated_s: 0.25,
+    },
+  })!;
+  assert.equal(e.state, "estimated");
+  assert.equal(e.prefill!.joules, null);
+  assert.equal(e.prefill!.reason, "no coverage");
+  assert.equal(e.decode!.joulesPerToken, 0.4);
+  const off = parseEnergy({
+    state: "unknown",
+    reason: "telemetry disabled or engine timing unavailable",
+  })!;
+  assert.equal(off.state, "unknown");
+  assert.equal(off.prefill, null);
+  assert.equal(parseEnergy(null), null);
 });

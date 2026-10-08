@@ -39,7 +39,12 @@ function statusWith(items: unknown[]) {
   };
 }
 
-async function install(page: Page, items: unknown[]) {
+async function install(
+  page: Page,
+  items: unknown[],
+  host?: () => unknown,
+  recent?: unknown,
+) {
   await page.addInitScript(() =>
     localStorage.setItem("yunshu.console.url", location.origin),
   );
@@ -47,6 +52,10 @@ async function install(page: Page, items: unknown[]) {
     const path = new URL(route.request().url()).pathname;
     if (path === "/v1/yunshu/status")
       return route.fulfill({ json: statusWith(items) });
+    if (path === "/v1/yunshu/host" && host)
+      return route.fulfill({ json: host() });
+    if (path === "/v1/yunshu/requests/recent" && recent)
+      return route.fulfill({ json: recent });
     return route.fulfill({ status: 404, json: { detail: "Not Found" } });
   });
 }
@@ -98,4 +107,216 @@ test("unload preview says so when nothing runs on the model", async ({
   await expect(
     page.getByRole("button", { name: "卸載", exact: true }),
   ).toBeVisible();
+});
+
+const hostBody = (telemetry: unknown) => ({
+  object: "yunshu.host",
+  sampled_at: Date.now() / 1000,
+  thermal: { state: "normal", cpu_speed_limit_percent: 100 },
+  power: { state: "ac", source: "AC Power", battery_percent: null },
+  memory_pressure: { state: "normal", level: 1 },
+  ...(telemetry ? { telemetry } : {}),
+});
+const sampleTelemetry = (over: Record<string, unknown> = {}) => ({
+  state: "ok",
+  sampled_at: Date.now() / 1000,
+  interval_s: 1.0,
+  watts: { cpu: 5.0, gpu: 30.5, ane: 0.0, dram: 2.0, package: 37.5 },
+  gpu: { frequency_mhz: 900.0, active_ratio: 0.75 },
+  temperature: {
+    state: "ok",
+    die_max_c: 70.0,
+    die_mean_c: 65.0,
+    battery_c: null,
+  },
+  reasons: {},
+  ...over,
+});
+
+test("host panel: power, clock, activity, die temperature and OS limits with source and age", async ({
+  page,
+}) => {
+  await install(page, [], () => hostBody(sampleTelemetry()));
+  await page.goto("/console/#/overview", { waitUntil: "domcontentloaded" });
+  const panel = page.getByTestId("host-panel");
+  await expect(panel).toBeVisible();
+  const stats = panel.getByTestId("host-stats");
+  await expect(stats).toContainText("30.5");
+  await expect(stats).toContainText("900");
+  await expect(stats).toContainText("MHz");
+  await expect(stats).toContainText("70");
+  await expect(stats).toContainText("活躍時間 75%");
+  await expect(stats).toContainText("記憶體壓力 正常");
+  await expect(panel).toContainText("取樣於");
+  await expect(panel).not.toHaveAttribute("data-stale", "true");
+});
+
+test("host panel: a missing counter is a dash with its reason, never 0", async ({
+  page,
+}) => {
+  await install(page, [], () =>
+    hostBody(
+      sampleTelemetry({
+        state: "partial",
+        watts: { cpu: 5.0, gpu: 30.5, ane: null, dram: null, package: null },
+        reasons: {
+          "watts.dram": "counter missing",
+          "watts.ane": "no ANE channel",
+        },
+      }),
+    ),
+  );
+  await page.goto("/console/#/overview", { waitUntil: "domcontentloaded" });
+  const panel = page.getByTestId("host-panel");
+  await expect(panel).toBeVisible();
+  await panel.getByRole("button", { name: "詳細資訊" }).click();
+  const details = panel.getByTestId("host-details");
+  await expect(details).toContainText("DRAM 功耗");
+  await expect(details.getByText("—").first()).toBeVisible();
+  await expect(details).not.toContainText("0 W");
+  await expect(panel.getByTestId("host-reasons")).toContainText(
+    "counter missing",
+  );
+  await expect(panel.getByTestId("host-stats")).toContainText("合計未回報");
+});
+
+test("host panel: unknown telemetry is one calm notice; an old engine shows no panel at all", async ({
+  page,
+}) => {
+  await install(page, [], () =>
+    hostBody({ state: "unknown", reason: "telemetry disabled" }),
+  );
+  await page.goto("/console/#/overview", { waitUntil: "domcontentloaded" });
+  await expect(page.getByTestId("host-unavailable")).toContainText(
+    "telemetry disabled",
+  );
+  await page.unroute("**/v1/**");
+  await install(page, [], () => hostBody(null));
+  await page.goto("/console/#/diagnostics");
+  await page.goto("/console/#/overview", { waitUntil: "domcontentloaded" });
+  await page.getByTestId("live-panel").waitFor();
+  await page.waitForTimeout(2500);
+  await expect(page.getByTestId("host-panel")).toHaveCount(0);
+});
+
+test("host panel: a sample older than a few seconds is marked stale", async ({
+  page,
+}) => {
+  await install(page, [], () =>
+    hostBody(sampleTelemetry({ sampled_at: Date.now() / 1000 - 40 })),
+  );
+  await page.goto("/console/#/overview", { waitUntil: "domcontentloaded" });
+  const panel = page.getByTestId("host-panel");
+  await expect(panel).toHaveAttribute("data-stale", "true");
+  await expect(panel).toContainText("沒有更新");
+});
+
+const ring = (extra: Record<string, unknown>) => ({
+  request_id: "ring-req-latency-001",
+  t: 1_800_000_000,
+  path: "/v1/chat/completions",
+  model: "Qwen3.5-9B",
+  status: 200,
+  finish_reason: "stop",
+  stream: true,
+  t0_wall: 1_799_999_990,
+  offsets_ms: {
+    arrive: 0,
+    admit: 40,
+    first_token: 340,
+    last_token: 2340,
+    done: 2360,
+  },
+  queue_wait_ms: 40,
+  ttft_ms: 300,
+  prompt_tokens: 4000,
+  cached_tokens: 1000,
+  completion_tokens: 80,
+  prefill_tps: 800,
+  decode_tps: 40,
+  cache: { tier: "ram", reload_ms: null },
+  speculative: null,
+  cancelled: false,
+  ...extra,
+});
+
+async function openRingDetail(page: Page, entry: Record<string, unknown>) {
+  await install(page, [], undefined, {
+    object: "list",
+    data: [entry],
+    count: 1,
+    capacity: 512,
+  });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/console/#/requests", { waitUntil: "domcontentloaded" });
+  const requests = page.getByTestId("requests");
+  await requests.getByRole("tab", { name: "已結束", exact: true }).click();
+  await requests
+    .getByRole("row")
+    .filter({ hasText: "ring-req-latency" })
+    .getByRole("button", { name: "詳情", exact: true })
+    .click();
+  return page
+    .getByRole("dialog", { name: "請求詳情" })
+    .or(page.getByRole("complementary", { name: "請求詳情" }));
+}
+
+test("request detail: stage waterfall lists unreported stages as unreported, and energy is an estimate", async ({
+  page,
+}) => {
+  const detail = await openRingDetail(
+    page,
+    ring({
+      latency: {
+        milestones_ms: {
+          gateway_admit: 1,
+          template_start: 2,
+          template_end: 12,
+          prefill_start: 14,
+          prefill_end: 214,
+          first_decode: 230,
+          sse_first_flush: 231,
+        },
+        durations_ms: {
+          model_lease: null,
+          gateway_admit: 1,
+          engine_queue: null,
+          template_tokenize: 10,
+          apc_lookup_restore: null,
+          prefill: 200,
+          first_decode: 16,
+          sse_first_flush: 1,
+        },
+      },
+      energy: {
+        schema: "yunshu.energy.v1",
+        prefill: { state: "unknown", reason: "no coverage", joules: null },
+        decode: {
+          state: "estimated",
+          joules: 32,
+          joules_per_token: 0.4,
+          coverage_ratio: 1,
+          extrapolated_s: 0.25,
+        },
+      },
+    }),
+  );
+  const wf = detail.getByTestId("request-waterfall");
+  await expect(wf).toBeVisible();
+  await expect(wf.getByTestId("waterfall-null")).toContainText("模型租用");
+  await expect(wf.getByTestId("waterfall-null")).toContainText("引擎排隊");
+  await expect(wf.getByTestId("waterfall-null")).not.toContainText("預填");
+  const energy = detail.getByTestId("request-energy");
+  await expect(energy).toContainText("估算");
+  await expect(energy).toContainText("0.4 J/token");
+  await expect(energy).toContainText("未取得");
+  await expect(energy).not.toContainText("0 J ");
+});
+
+test("request detail: an engine without stage fields gets one compact notice", async ({
+  page,
+}) => {
+  const detail = await openRingDetail(page, ring({}));
+  await expect(detail.getByTestId("waterfall-unsupported")).toBeVisible();
+  await expect(detail.getByTestId("request-waterfall")).toHaveCount(0);
 });

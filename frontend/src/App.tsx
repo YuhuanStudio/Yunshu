@@ -795,7 +795,11 @@ export default function App() {
                           />
                         )}
                         {page === "overview" && (
-                          <Dashboard engine={engine} navigate={navigate} />
+                          <Dashboard
+                            engine={engine}
+                            connection={connection}
+                            navigate={navigate}
+                          />
                         )}
                         {page === "models" && (
                           <Models

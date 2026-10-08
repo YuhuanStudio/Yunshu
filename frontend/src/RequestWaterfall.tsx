@@ -1,61 +1,24 @@
-import { useEffect, useState } from "react";
 import { TraceTimeline } from "@yuhuanowo/yunui/patterns";
-import type { Connection } from "./api";
+import type { Row } from "./RequestTrace";
 import {
-  fetchRecentLatency,
   LATENCY_STAGES,
-  type RecentLatency,
+  type RequestEnergy,
   type RequestLatency,
 } from "./latency-api";
 import { t, tr, useLocale } from "./i18n/index.ts";
 import { formatMs } from "./RequestTimeline";
-
-const CACHE_MS = 5_000;
-const cache = new Map<string, { at: number; value: RecentLatency }>();
-
-/** The engine's recent-request latency table, shared by every open detail for a few seconds. */
-function useRecentLatency(connection: Connection): RecentLatency | null {
-  const key = `${connection.baseUrl}|${connection.token}`;
-  const [value, setValue] = useState<RecentLatency | null>(
-    () => cache.get(key)?.value ?? null,
-  );
-  useEffect(() => {
-    const hit = cache.get(key);
-    if (hit && Date.now() - hit.at < CACHE_MS) {
-      setValue(hit.value);
-      return;
-    }
-    const controller = new AbortController();
-    void fetchRecentLatency(connection, controller.signal)
-      .then((v) => {
-        if (controller.signal.aborted) return;
-        cache.set(key, { at: Date.now(), value: v });
-        setValue(v);
-      })
-      .catch(() => {
-        // A transient failure shows nothing rather than a false "unsupported".
-      });
-    return () => controller.abort();
-  }, [key, connection]);
-  return value;
-}
+import { number } from "./ui";
 
 /**
  * Where one request's time went, stage by stage (model lease, gateway admit, queue, template and
  * media preparation, prefix-cache restore, prefill, first decode, first send). Stages the engine
  * did not observe are listed as 未回報, never drawn as zero.
  */
-export function RequestWaterfall({
-  connection,
-  requestId,
-}: {
-  connection: Connection;
-  requestId: string;
-}) {
+export function RequestWaterfall({ row }: { row: Row }) {
   useLocale();
-  const recent = useRecentLatency(connection);
-  if (!recent) return null;
-  if (recent.kind === "unsupported")
+  // Only rows from the engine's ring carry stage data; a row the page assembled from status polls has none to show.
+  if (row.source !== "ring") return null;
+  if (row.latency === undefined && row.energy === undefined)
     return (
       <p
         className="text-xs text-muted-foreground"
@@ -64,8 +27,7 @@ export function RequestWaterfall({
         {t("requests.waterfall.unsupported")}
       </p>
     );
-  const latency = recent.byId.get(requestId);
-  if (!latency)
+  if (!row.latency && !row.energy)
     return (
       <p
         className="text-xs text-muted-foreground"
@@ -74,7 +36,87 @@ export function RequestWaterfall({
         {t("requests.waterfall.missing")}
       </p>
     );
-  return <Waterfall latency={latency} requestId={requestId} />;
+  return (
+    <div className="space-y-4">
+      {row.latency && <Waterfall latency={row.latency} requestId={row.id} />}
+      {row.energy && <EnergyReceipt energy={row.energy} />}
+    </div>
+  );
+}
+
+const jFmt = (v: number | null) =>
+  v == null ? "—" : v >= 100 ? number(v, 0) : number(v, v >= 10 ? 1 : 2);
+
+/**
+ * Host energy of this request's prefill and decode windows. It is an ESTIMATE of GPU + DRAM
+ * energy over the request's time, including other processes and idle power; concurrent requests
+ * share it. Never labelled as the request's own power or battery use.
+ */
+export function EnergyReceipt({ energy }: { energy: RequestEnergy }) {
+  const phases = [
+    ["prefill", energy.prefill],
+    ["decode", energy.decode],
+  ] as const;
+  return (
+    <div className="space-y-1.5" data-testid="request-energy">
+      <p className="flex items-center gap-2 text-xs text-muted-foreground">
+        {t("requests.energy.title")}
+        <span
+          className="rounded-full border border-border px-1.5 py-0.5 text-[10px] leading-none"
+          title={t("requests.energy.tip")}
+        >
+          {t("requests.energy.estimate")}
+        </span>
+      </p>
+      {energy.state === "unknown" && !energy.prefill && !energy.decode ? (
+        <p className="text-xs text-muted-foreground">
+          {t("requests.energy.none")}
+          {energy.reason && (
+            <span className="ml-1 font-mono">{energy.reason}</span>
+          )}
+        </p>
+      ) : (
+        <ul className="space-y-1 text-sm tabular-nums">
+          {phases.map(([id, p]) => (
+            <li key={id} className="flex flex-wrap gap-x-3">
+              <span className="w-12 text-muted-foreground">
+                {t(`requests.energy.${id}`)}
+              </span>
+              {p && p.state === "estimated" ? (
+                <>
+                  <span>{jFmt(p.joules)} J</span>
+                  <span className="text-muted-foreground">
+                    {p.joulesPerToken == null
+                      ? t("requests.energy.noPerToken")
+                      : `${jFmt(p.joulesPerToken)} J/token`}
+                  </span>
+                  {p.coverageRatio != null && (
+                    <span className="text-xs text-muted-foreground">
+                      {t("requests.energy.coverage", {
+                        pct: number(p.coverageRatio * 100, 0),
+                      })}
+                      {p.extrapolatedS
+                        ? t("requests.energy.extrapolated", {
+                            s: number(p.extrapolatedS, 2),
+                          })
+                        : ""}
+                    </span>
+                  )}
+                </>
+              ) : (
+                <span
+                  className="text-muted-foreground"
+                  title={p?.reason ?? undefined}
+                >
+                  {t("requests.energy.phaseUnknown")}
+                </span>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
 }
 
 export function Waterfall({
