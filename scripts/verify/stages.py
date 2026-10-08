@@ -1114,8 +1114,62 @@ def stage_console(ctx: Ctx) -> StageResult:
     )
 
 
+def stage_telemetry(ctx: Ctx) -> StageResult:
+    """Unprivileged sensor plausibility + request receipt on the pinned candidate."""
+
+    def validate(path):
+        rows = read_jsonl(path)
+        if not rows or rows[-1].get("complete") is not True:
+            return False, "telemetry probe incomplete"
+        summary = rows[-1].get("summary", {})
+        if (
+            not summary.get("gpu_peak_watts")
+            or not summary.get("gpu_mhz_max")
+            or not summary.get("die_max_c")
+        ):
+            return False, "missing power, frequency or temperature evidence"
+        return True, ""
+
+    cell = Cell(
+        "telemetry",
+        "cand",
+        [
+            "env",
+            f"TFB_YUNSHU_SRC={ctx.cand.path / 'python'}",
+            f"TFB_OUT={ctx.run.path / 'tfb' / 'telemetry'}",
+            ctx.py,
+            str(ctx.cand.path / "scripts/research/telemetry_probe.py"),
+            "--model",
+            ctx.model,
+            "--draft",
+            "mtp" if ctx.big else "off",
+            "--tokens",
+            "512" if ctx.big else "2048",
+            "--out",
+            "{out}",
+        ],
+        mem_gb=ctx.mem_gb,
+        timeout_min=15,
+        quiet=False,
+        validate=validate,
+    )
+    result = ctx.exe.run_cells([cell])["cand"]
+    numbers = (
+        read_jsonl(result.evidence)[-1].get("summary", {})
+        if result.ok and result.evidence
+        else {}
+    )
+    return _finish(
+        ctx,
+        StageResult(
+            "telemetry", result.ok, [] if result.ok else [result.reason], numbers
+        ),
+    )
+
+
 STAGE_FUNCS = {
     "console": stage_console,
+    "telemetry": stage_telemetry,
     "rerank": stage_rerank,
     "preflight": stage_preflight,
     "smoke": stage_smoke,

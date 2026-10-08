@@ -83,3 +83,9 @@ For sampler overhead, compare an explicitly off baseline with an explicitly on
 candidate, using pinned distinct commit SHAs and at least three interleaved reps
 at 1K and 32K. A positive speed verdict alone does not prove sensors worked;
 check the real-run host evidence too.
+
+`yv ab --suite telemetry --base <sha> --cand <sha> --label telemetry-host --priority -1`
+runs the real sensor/receipt probe as a candidate-only correctness stage (no quiet
+timing admission). `--suite telemetry,smoke,identity,apc,speed --ctx 1024,32768
+--reps 3` combines the sensor and overhead gates. Small-model pilots use spec off;
+27B probes require the logged MTP mode.

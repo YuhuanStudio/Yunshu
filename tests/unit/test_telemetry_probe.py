@@ -57,3 +57,39 @@ def test_tfbench_retains_efficiency_and_yv_reports_it():
     result = speed_compare([[row]] * 3, [[row]] * 3)
     cell = next(c for c in result["cells"] if c["metric"] == "decode_tps")
     assert cell["efficiency"]["cand"] == {"joules_per_token": 0.4, "gpu_watts_mean": 32}
+
+
+def test_yv_telemetry_stage_is_registered_and_fail_closed(tmp_path):
+    import sys
+    from types import SimpleNamespace
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
+    from verify import stages, suites
+
+    assert suites.parse_suite("telemetry")["stages"] == ["telemetry"]
+    seen = []
+    evidence = tmp_path / "evidence.jsonl"
+    evidence.write_text(
+        '{"complete": true, "summary": {"gpu_peak_watts": 30, "gpu_mhz_max": 900, "die_max_c": 60}}\n'
+    )
+
+    def run(cells):
+        seen.extend(cells)
+        assert cells[0].validate(evidence) == (True, "")
+        evidence.write_text('{"complete": false}\n')
+        assert cells[0].validate(evidence)[0] is False
+        return {"cand": SimpleNamespace(ok=False, reason="fake failure", evidence=None)}
+
+    ctx = SimpleNamespace(
+        cand=SimpleNamespace(path=tmp_path),
+        run=SimpleNamespace(path=tmp_path, append=lambda *a: None),
+        exe=SimpleNamespace(run_cells=run, jobs=[]),
+        py="python",
+        model="fake",
+        big=False,
+        mem_gb=14,
+    )
+    result = stages.STAGE_FUNCS["telemetry"](ctx)
+    assert result.passed is False and result.reasons == ["fake failure"]
+    assert seen[0].quiet is False
+    assert seen[0].argv[seen[0].argv.index("--draft") + 1] == "off"
