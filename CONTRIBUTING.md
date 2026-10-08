@@ -40,7 +40,7 @@ just test              # unit suite (integration tests are opt-in, ignored by de
 just test-single tests/unit/test_foo.py   # one file
 ```
 
-Run `just dev` to start the gateway on `:8000` against a local model. CI runs lint and package checks on pushes/PRs; the macOS unit suite runs on
+Run `just dev` to start the gateway on `:8000` against a local model. CI runs lint, type, frontend and package checks on pushes/PRs; the macOS unit suite runs on
 release/manual triggers. Run the full unit suite locally before handoff. See
 [the hardware validation plan](docs/guides/HARDWARE_VALIDATION.md) for planned coverage.
 
@@ -111,7 +111,7 @@ Triage uses the [label vocabulary](.github/LABELS.md).
 ## Local CI and shared GPU verification
 
 `scripts/dev/ci-local <commit-sha>` reproduces release build-and-check in a clean
-Python 3.13 checkout: lint, sandboxed unit tests, package build, twine validation
+Python 3.13 checkout: lint/format/mypy, frontend type/tests/build and YunUI checks, sandboxed unit tests, package build, twine validation
 and wheel-install smoke. It is CPU only. Use `nice -n 15` for heavy test/build
 commands on a shared benchmark Mac. Focused public-doc checks are:
 
@@ -134,3 +134,9 @@ for a free port. Never stop a user's server to make a test fit.
 jobs (`--timeout` <=10 minutes or `--short`) may interleave between long cells,
 without preempting active work. See `scripts/dev/gpuq --help` for current options.
 Documentation-only changes can use `yv ab --suite preflight` without GPU jobs.
+
+For release planning, `scripts/dev/release_check <commit-sha> --dry-run` prints the
+SHA-pinned checklist without CI, trees or GPU jobs. Maintainers run the real command
+only when ready to schedule model checks: ci-local first, then gate, M3 sweep,
+agent compatibility and a separately collected informational agentbench (priority -3).
+See [Releasing](RELEASING.md) for the blocking stages and collection steps.

@@ -61,6 +61,8 @@ No new decode or TTFT claim is made for this cycle here. Historical measurements
   Anthropic documents/citations, continuous usage stats, template rendering and model properties.
 - Source-built YunUI console with engine status/resource charts, model operations, request inspection,
   cancellation and a streaming diagnostic playground. [Build and scope](docs/CONSOLE.md).
+- `scripts/dev/release_check`: SHA-pinned release checklist, CI first and concurrent gate/M3/client checks;
+  informational agentbench is submitted separately at priority -3 and collected later. CPU-only planning uses `--dry-run`.
 - SDK endpoint coverage walker, prior-art discovery tool, local clean-checkout CI, and live private
   research-index generation. Public-doc checks enforce translated README structure and registered APIs/settings.
 
@@ -69,6 +71,7 @@ No new decode or TTFT claim is made for this cycle here. Historical measurements
 - gpuq admits declared short verification jobs between long cells without preemption, with a bounded
   time budget; `--gate` takes precedence over same-priority backlog. Foreign CPU contention is measured,
   parsed job records are cached, and non-quiet filler work can run while quiet work waits for CPU admission.
+- CI and local CI include frontend type checks, tests and build plus Python lint/format/mypy and package checks.
 - Local CI matches the release runner's Python 3.13 environment, short paths and inaccessible local data;
   tests avoid shared server-port collisions. [Contributor workflow](CONTRIBUTING.md).
 

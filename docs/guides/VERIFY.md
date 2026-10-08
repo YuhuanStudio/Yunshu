@@ -147,8 +147,9 @@ configuration on a pinned tree of `--ref` (default `main`), the pinned agent CLI
 error, malformed tool call or tool-call markup leak is FAIL; the pass rate per agent is compared with the 2026-09-30 baseline (Wilson 95%
 interval) and a drop below its lower bound is REGRESSION. Reported per agent: pass rate, API errors, malformed tool calls, markup leaks,
 cache-hit ratio, largest prompt, median wall time, peak memory. Where it runs: **nightly at priority -1** (idle GPU time only; one full
-matrix is about 6 to 8 hours of 27B time), and **before a release** by running it on the release commit and attaching its verdict next to
-`yv gate`'s (not a `gate` stage yet: the full matrix is longer than the rest of the gate together).
+matrix is about 6 to 8 hours of 27B time), and **during release verification** through `scripts/dev/release_check`: it submits the same committed candidate
+at priority -3 without waiting, prints its later collect command, and treats its verdict as informational.
+The gate, M3 sweep and agent compatibility remain blocking. Never leave its result uncollected.
 
 ## Adding a new kind of measurement
 
