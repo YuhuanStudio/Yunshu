@@ -1,0 +1,171 @@
+---
+title: MCP
+description: Yunshu 作为 MCP 服务器（通过 HTTP 的 JSON-RPC），提供生成、语音与图片工具，以及报告 MCP 客户端连接池的路由。
+---
+
+Yunshu 在两个方向上支持 Model Context Protocol。
+
+- 作为 **MCP 服务器**，`POST /v1/mcp` 接受 JSON-RPC 2.0 请求，并把本机模型以工具的形式提供出来：文本生成、语音合成与图片生成。任何支持 MCP 的智能体都能这样使用你的本机模型。
+- 作为 **MCP 客户端**，Yunshu 可以在启动时连到你配置的 MCP 工具服务器，并通过两个只读路由报告找到的内容。
+
+在 Messages 或 Responses 请求中调用远程 MCP 服务器（`mcp_servers` 与 `mcp` 工具功能）是另一项功能，见[服务器端工具](/docs/api/server-tools)。
+
+<Endpoint method="POST" path="/v1/mcp" />
+<Endpoint method="GET" path="/v1/mcp/sse" />
+<Endpoint method="GET" path="/v1/mcp/tools" />
+<Endpoint method="GET" path="/v1/mcp/client/status" />
+<Endpoint method="GET" path="/v1/mcp/client/tools" />
+
+<Callout type="info">
+只有在配置了 `YUNSHU_AUTH_TOKEN` 时才会强制验证；请发送 `Authorization: Bearer <token>` 或 `x-api-key`。`POST /v1/mcp` 上的验证或权限失败，会以 JSON-RPC 错误对象（code `-32600`）加上 HTTP 状态码返回，让 MCP 客户端能解析。限定只能使用特定模型的密钥，在使用 `generate`、`synthesize_speech` 与 `generate_image` 工具时也会被检查。
+</Callout>
+
+## MCP 服务器
+
+### 实作的协定
+
+- 传输：每个 `POST /v1/mcp` 带一则 JSON-RPC 2.0 消息，以单一 `application/json` 响应作答。不支持批量数组（会返回错误对象）。服务器是无状态的：不发放 session id，也不保留每个客户端的状态。
+- 没有 `id` 的消息是通知，响应 `204 No Content`。明确写成 `id: null` 的视为请求。
+- `initialize` 报告 `protocolVersion` 为 `2024-11-05`、`serverInfo` 为 `{"name": "yunshu", "version": ...}`，以及 `tools`、`resources`、`prompts` 能力（都没有 `listChanged` 或 `subscribe`）。
+- 由服务器主动发起的消息（sampling、roots、logging、进度通知、资源订阅）尚未实作。
+
+方法：
+
+| 方法 | 行为 |
+| --- | --- |
+| `initialize` | 返回上述能力。 |
+| `notifications/initialized` | 接受。 |
+| `ping` | 返回 `{}`。 |
+| `tools/list` | 列出下列工具，以及嵌入代码在进程内注册的任何工具。 |
+| `tools/call` | 执行工具。未知的工具：错误 `-32601`。 |
+| `resources/list` | 每个已注册的模型一笔资源，`yunshu://models/<model id>`，MIME 为 `application/json`。单模型模式下为空。 |
+| `resources/read` | 读取上述 URI（以 JSON 文本返回模型消息）。未知的 URI：错误 `-32602`。 |
+| `prompts/list`、`prompts/get` | 四个内置提示模板：`summarize`（`text`）、`translate`（`text`、`target_language`）、`code_review`（`code`、`language`）与 `explain`（`concept`）。缺少必要参数：错误 `-32602`。 |
+
+其他方法返回错误 `-32601`（找不到方法）。JSON 无效是 `-32700`，报文格式错误是 `-32600`，参数错误是 `-32602`，非预期的失败是 `-32603`，消息固定为 `Internal error`。
+
+### 工具
+
+| 工具 | 参数 | 结果 |
+| --- | --- | --- |
+| `generate` | `model`（schema 中为必填；省略时使用默认模型）、`messages`（`{role, content}` 数组，必填）、`max_tokens`（512）、`temperature`（0.7）、`top_p`、`top_k`、`min_p`、`repetition_penalty`、`frequency_penalty`、`presence_penalty`、`enable_thinking`、`seed`、`stop` | 一个 `text` 内容条目，内容为生成的文本。 |
+| `synthesize_speech` | `text`（必填）、`voice`（默认 `alloy`） | 一个 `text` 条目与一个 `audio` 条目（base64 WAV，`audio/wav`）。需要多模型模式并已加载 TTS 模型。 |
+| `generate_image` | `prompt`（必填）、`width`、`height`（默认 512）、`num_inference_steps`（默认 4）、`seed` | 一个 `image` 条目（base64 PNG，`image/png`）与一个 `text` 条目。需要多模型模式并已加载图片模型。 |
+
+结果采标准格式 `{"content": [...], "isError": false}`。工具执行时失败（模型未加载、引擎错误）是一般结果，带有 `isError: true`，消息在 `text` 条目中；缺少必要参数则是 JSON-RPC 错误 `-32602`。文本与 base64 内容会在约 1 MB 处截断。
+
+`generate` 的参数比 Chat Completions 少：没有工具、没有流式，也没有结构化输出。需要这些功能请用 [Chat Completions](/docs/api/chat-completions)。
+
+### 示例
+
+<Tabs items={["curl", "Python"]}>
+<Tab value="curl">
+
+```bash
+curl http://localhost:8000/v1/mcp \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+       "params": {"name": "generate",
+                  "arguments": {"model": "local", "max_tokens": 64,
+                                "messages": [{"role": "user", "content": "Say hello."}]}}}'
+```
+
+</Tab>
+<Tab value="Python">
+
+```python
+import httpx
+
+def rpc(method, params=None, id=1):
+    r = httpx.post(
+        "http://localhost:8000/v1/mcp",
+        headers={"Authorization": "Bearer sk-local"},
+        json={"jsonrpc": "2.0", "id": id, "method": method, "params": params or {}},
+        timeout=120,
+    )
+    return r.json()
+
+print(rpc("initialize")["result"]["serverInfo"])
+print([t["name"] for t in rpc("tools/list")["result"]["tools"]])
+out = rpc("tools/call", {"name": "generate", "arguments": {"messages": [{"role": "user", "content": "Hi"}]}})
+print(out["result"]["content"][0]["text"])
+```
+
+</Tab>
+</Tabs>
+
+`tools/call` 的响应：
+
+```json
+{ "jsonrpc": "2.0", "id": 1, "result": { "content": [{ "type": "text", "text": "Hello!" }], "isError": false } }
+```
+
+### REST 探索
+
+`GET /v1/mcp/tools` 返回与 `tools/list` 相同的工具列表，但没有 JSON-RPC 外层：`{"tools": [{name, description, inputSchema}]}`。
+
+`GET /v1/mcp/sse` 打开一条 Server-Sent Events 流式，先发送一次 `event: endpoint`，内容为 `data: /v1/mcp`，之后大约每 15 秒发送一次 `event: ping`，直到客户端中断连接。它只负责声明该往哪里 POST：响应仍然在每个 `POST /v1/mcp` 的正文中，而不是这条流式。因此期待在事件流式上收到回复的旧式 HTTP+SSE 客户端会收不到；请使用接受 POST 返回纯 JSON 响应的客户端。
+
+### 连接客户端
+
+支持 HTTP 服务器、且接受每次 POST 以 JSON 回复的 MCP 客户端，可以把 `http://localhost:8000/v1/mcp` 当成服务器 URL；打开验证时，以 `Authorization` 标头带上 bearer token。Claude Code 的作法是 `claude mcp add` 的 HTTP 传输；Codex 与其他智能体在各自的 MCP 配置中有对应的选项。由于服务器实作的是协定版本 `2024-11-05` 与上述工具，预期的用途是「把我的本机模型当成工具来调用」，而不是取代智能体自己的工具。以 Yunshu 作为模型端点的程序开发智能体（见[智能体](/docs/guides/agents)）并不需要这个服务器：它们自己连到自己的 MCP 服务器，工具会以一般函数工具的形式交给模型。
+
+## MCP 客户端连接池
+
+Yunshu 可以在启动时连到 MCP 工具服务器，来源可以是文件（`YUNSHU_MCP_CONFIG`），也可以是 `YUNSHU_MCP_SERVERS` 中的 JSON 数组。文件内容是 `{"mcpServers": {"<id>": {...}}}` 或 `{"servers": [...]}`。每个条目：
+
+| 键 | 说明 |
+| --- | --- |
+| `id`／`name` | 服务器 id（`mcpServers` 为对象时，就是键名）。 |
+| `transport` | `stdio`（默认）、`sse` 或 `streamable_http`。 |
+| `command`、`args` | `stdio` 要启动的进程。 |
+| `url`、`headers` | `sse` 与 `streamable_http` 的端点与标头。 |
+| `enabled` | 默认为 `true`。 |
+
+服务器只在启动时连接一次（修改配置后需要重启），连接失败的服务器会被略过。非流式的 Chat Completions 响应中，若有工具调用的名称符合连接池中的工具，Yunshu 会执行它，并把输出以 `mcp_tool_results`（`{tool_call_id, output}` 列表）加到响应正文；结果不会自动回馈给模型，而且只有请求自己声明了某个工具，模型才会看到它。不符合任何连接池工具的工具调用，照常返回给你的客户端。
+
+### 状态与工具
+
+`GET /v1/mcp/client/status`：
+
+```json
+{
+  "enabled": true,
+  "connected_servers": 1,
+  "total_tools": 3,
+  "servers": { "files": { "connected": true, "tools": 3 } }
+}
+```
+
+没有配置连接池时返回 `{"enabled": false, "connected_servers": 0, "total_tools": 0}`。
+
+`GET /v1/mcp/client/tools` 返回 `{"tools": [{name, description, server_id, input_schema}], "openai_format": [{type: "function", function: {name, description, parameters}}]}`；没有连接池时两个列表都是空的。`openai_format` 列表可以直接当作 Chat Completions 请求的 `tools` 使用。
+
+## 错误
+
+| 情况 | 结果 |
+| --- | --- |
+| JSON 无效 | HTTP 200，JSON-RPC 错误 `-32700`。 |
+| 不是 JSON 对象、报文格式错误、`jsonrpc` 不对 | JSON-RPC 错误 `-32600`。 |
+| 未知的方法或工具 | JSON-RPC 错误 `-32601`。 |
+| 缺少或无效的参数 | JSON-RPC 错误 `-32602`。 |
+| 非预期的失败 | JSON-RPC 错误 `-32603`，消息 `Internal error`。 |
+| 验证或权限失败 | JSON-RPC 错误 `-32600`，HTTP `401` 或 `403`。 |
+| 工具执行了但失败 | `isError: true` 的结果。 |
+
+## 支持状况
+
+| 功能 | 状态 |
+| --- | --- |
+| `POST /v1/mcp` 的 `initialize`、工具、资源、提示、`ping` | <Support status="supported">支持</Support> |
+| `generate`、`synthesize_speech`、`generate_image` 工具 | <Support status="supported">支持（后两者需要已加载的 TTS 或图片模型）</Support> |
+| Session、JSON-RPC 批量、服务器对客户端的请求、进度、订阅 | <Support status="unsupported">暂不支持</Support> |
+| 在旧式 SSE 流式上回复 | <Support status="unsupported">暂不支持（回复在 POST 正文中）</Support> |
+| MCP 客户端连接池（stdio、SSE、streamable HTTP）、状态路由 | <Support status="partial">启动时配置；结果只报告，不回馈给模型</Support> |
+
+## 相关页面
+
+- [服务器端工具](/docs/api/server-tools)
+- [智能体](/docs/guides/agents)
+- [Chat Completions](/docs/api/chat-completions)
+- [配置](/docs/guides/configuration)

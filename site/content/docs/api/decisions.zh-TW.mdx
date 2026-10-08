@@ -1,0 +1,197 @@
+---
+title: Decisions
+description: 由決策頭模型在單次前向傳遞中回答型別化問題（是非、單選、有序評分），回傳機率而不產生任何文字。
+---
+
+決策模型針對輸入回答結構化問題，而且不寫出任何文字。你送出一段輸入與一組型別化的問題，模型只讀一次輸入與問題結構，就為每個答案回傳機率。這和聊天補全以及 JSON schema 約束解碼都不同：因為沒有生成，輸出 token 永遠是零，延遲就是一次 prefill。
+
+適合用在路由、分類、護欄檢查與評分，也就是你想要校準過的機率，而不是取樣出來的答案。
+
+<Endpoint method="POST" path="/v1/decisions" />
+
+`POST /v1/systemone` 是同一個引擎的另一種傳輸格式，說明在[擴充](/docs/api/extensions)。
+
+<Callout type="info">
+只有在設定了 `YUNSHU_AUTH_TOKEN` 時才會強制驗證。此路由無狀態，也不支援串流。
+</Callout>
+
+## 決策模型
+
+此路由需要決策 checkpoint，也就是骨幹模型加上訓練好的決策頭。Yunshu 載入 MLX 格式的 Cloudflare Clef 聯合 schema 頭，包含 Clef-flash。checkpoint 會依檔案內容自動偵測；載入後它會被歸類為決策模型，而不是聊天模型。
+
+```bash
+yunshu pull abenzerps/Clef-MLX
+yunshu serve -m abenzerps/Clef-MLX
+```
+
+其他決策頭系列尚未支援，頭部不明的 checkpoint 會載入失敗。對聊天模型要求決策會回傳 `400`。圖片需要支援視覺的 checkpoint（`vision` extra）；在純文字 checkpoint 上送圖片會回傳 `400`。
+
+## 請求
+
+| 參數 | 型別 | 必填 | 說明 | 狀態 |
+| --- | --- | --- | --- | --- |
+| `model` | string | 是 | 決策模型 id（單模型模式：所服務的模型）。 | 支援 |
+| `input` | string 或 array | 是 | 文字，或使用者訊息，見下文。 | 支援 |
+| `questions` | array | 是 | 1 到 128 個問題。答案會依相同順序回傳。 | 支援 |
+| `safety_identifier` | string | 否 | 最多 64 個字元。 | 接受但忽略 |
+
+未知的頂層欄位會被忽略，所以 SDK 的 `extra_body` 不會讓呼叫失敗。問題物件則是嚴格的：問題或訊息內出現未知欄位會以 `400` 拒絕。
+
+### 輸入
+
+可以是字串，或訊息陣列 `{"role": "user", "content": ...}`，其中 `content` 是字串或 part 清單：
+
+| Part | 欄位 | 備註 |
+| --- | --- | --- |
+| `input_text` | `text` | 多段文字以換行串接。 |
+| `input_image` | `image_url`，選填 `detail` | 必須是內嵌的 `data:image/...;base64,...` URL。外部 URL 與檔案 id 會被拒絕。最多 128 張圖片。 |
+
+文字最多 1,000,000 個字元，且輸入加上問題結構的總長度必須在 16,384 個 token 以內。超過會被拒絕，不會被截斷。只允許 `user` 角色。
+
+### 問題
+
+| `type` | 欄位 | 答案 |
+| --- | --- | --- |
+| `predicate` | `instructions`，選填 `name` | 是非機率。 |
+| `choice` | `instructions`、`choices`（2 到 64 個 `{"value", "description"?}`），選填 `name` | 最可能的 `value`、其信心值，以及所有選項的機率。`value` 為字串或布林值，且不可重複（布林 `true` 與字串 `"true"` 會衝突）。 |
+| `score` | `instructions`、`levels`（2 到 64 個 `{"label", "description"?}`），選填 `name` | 期望的從零開始等級索引、信心值與各等級機率。決策頭讀取的是等級的 `description`（沒有時用 `label`），且 label 不可重複。 |
+
+若有指定 `name`，必須唯一。
+
+## 回應
+
+```json
+{
+  "answers": [
+    {
+      "type": "choice",
+      "name": "route",
+      "choice": "support",
+      "confidence": 0.93,
+      "probabilities": [
+        { "value": "support", "probability": 0.93 },
+        { "value": "sales", "probability": 0.07 }
+      ]
+    },
+    { "type": "predicate", "name": "urgent", "probability": 0.81 },
+    {
+      "type": "score",
+      "name": "sentiment",
+      "score": 0.22,
+      "confidence": 0.78,
+      "probabilities": [
+        { "label": "negative", "value": 0, "probability": 0.78 },
+        { "label": "positive", "value": 1, "probability": 0.22 }
+      ]
+    }
+  ],
+  "model": "abenzerps/Clef-MLX",
+  "usage": {
+    "input_tokens": 142,
+    "input_tokens_details": { "cached_tokens": 0, "cache_write_tokens": 0 },
+    "output_tokens": 0,
+    "output_tokens_details": { "reasoning_tokens": 0 },
+    "total_tokens": 142
+  }
+}
+```
+
+如果決策頭對某個問題回傳非有限值，該答案會是 `{"type": "refusal", "name": ...}`，不會編造機率。`usage.input_tokens` 是 prefill 長度，`cached_tokens` 一律為 0。
+
+## 範例
+
+<Tabs items={["curl", "Python", "JavaScript"]}>
+<Tab value="curl">
+
+```bash
+curl http://localhost:8000/v1/decisions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "abenzerps/Clef-MLX",
+    "input": "The customer asks for a refund after a broken delivery.",
+    "questions": [
+      {"type": "choice", "name": "route", "instructions": "Choose the support team.",
+       "choices": [{"value": "support"}, {"value": "sales"}]},
+      {"type": "predicate", "name": "urgent", "instructions": "Is this urgent?"}
+    ]
+  }'
+```
+
+</Tab>
+<Tab value="Python">
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="http://localhost:8000/v1", api_key="not-needed")
+
+decision = client.decisions.create(
+    model="abenzerps/Clef-MLX",
+    input="The customer asks for a refund after a broken delivery.",
+    questions=[
+        {
+            "type": "choice",
+            "name": "route",
+            "instructions": "Choose the support team.",
+            "choices": [{"value": "support"}, {"value": "sales"}],
+        }
+    ],
+)
+print(decision.answers)
+```
+
+`decisions` 資源需要較新的 `openai` SDK。若 SDK 較舊，請用 `httpx` 或 `requests` 送出相同的 JSON 本文。
+
+</Tab>
+<Tab value="JavaScript">
+
+```ts
+const res = await fetch("http://localhost:8000/v1/decisions", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({
+    model: "abenzerps/Clef-MLX",
+    input: "The customer asks for a refund after a broken delivery.",
+    questions: [
+      {
+        type: "choice",
+        name: "route",
+        instructions: "Choose the support team.",
+        choices: [{ value: "support" }, { value: "sales" }],
+      },
+    ],
+  }),
+});
+console.log((await res.json()).answers);
+```
+
+</Tab>
+</Tabs>
+
+## 錯誤
+
+錯誤使用 OpenAI 的格式 `{"error": {"message", "type", "param", "code"}}`。
+
+| 狀態碼 | 情況 |
+| --- | --- |
+| `400` | JSON 或結構不合法、輸入為空、名稱或選項重複、choices 或 levels 少於 2 個、外部圖片 URL、在純文字 checkpoint 上送圖片、該模型不是決策模型、輸入超過 16,384 個 token。 |
+| `404` | 找不到模型或模型未載入。 |
+| `507` | GPU 記憶體不足。 |
+| `500` | 決策執行失敗。 |
+
+## 支援狀況
+
+| 功能 | 狀態 |
+| --- | --- |
+| predicate、choice、score 問題 | <Support status="supported">支援</Support> |
+| 圖片輸入（內嵌 base64） | <Support status="partial">僅支援視覺的 checkpoint</Support> |
+| MLX 格式的 Cloudflare Clef checkpoint | <Support status="supported">支援</Support> |
+| 其他決策頭系列 | <Support status="unsupported">載入失敗</Support> |
+| 串流、提示快取、儲存狀態 | <Support status="unsupported">無狀態，單次前向傳遞</Support> |
+| `safety_identifier` | <Support status="unsupported">接受但忽略</Support> |
+
+## 相關頁面
+
+- [擴充](/docs/api/extensions)：`POST /v1/systemone` 上的 System One 傳輸格式。
+- [結構化輸出](/docs/guides/structured-output)：需要依 JSON schema 生成文字時的做法。
+- [模型](/docs/getting-started/models)：載入 checkpoint。

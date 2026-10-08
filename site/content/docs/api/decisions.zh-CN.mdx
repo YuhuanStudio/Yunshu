@@ -1,0 +1,197 @@
+---
+title: Decisions
+description: 由决策头模型在单次前向传递中回答类型化问题（是非、单选、有序评分），返回几率而不产生任何文本。
+---
+
+决策模型针对输入回答结构化问题，而且不写出任何文本。你发送一段输入与一组类型化的问题，模型只读一次输入与问题结构，就为每个答案返回几率。这和聊天补全以及 JSON schema 约束解码都不同：因为没有生成，输出 token 永远是零，延迟就是一次 prefill。
+
+适合用在路由、分类、护栏检查与评分，也就是你想要校准过的几率，而不是采样出来的答案。
+
+<Endpoint method="POST" path="/v1/decisions" />
+
+`POST /v1/systemone` 是同一个引擎的另一种传输格式，说明在[扩展](/docs/api/extensions)。
+
+<Callout type="info">
+只有在配置了 `YUNSHU_AUTH_TOKEN` 时才会强制验证。此路由无状态，也不支持流式。
+</Callout>
+
+## 决策模型
+
+此路由需要决策 checkpoint，也就是骨干模型加上训练好的决策头。Yunshu 加载 MLX 格式的 Cloudflare Clef 联合 schema 头，包含 Clef-flash。checkpoint 会依文件内容自动侦测；加载后它会被归类为决策模型，而不是聊天模型。
+
+```bash
+yunshu pull abenzerps/Clef-MLX
+yunshu serve -m abenzerps/Clef-MLX
+```
+
+其他决策头系列暂不支持，头部不明的 checkpoint 会加载失败。对聊天模型要求决策会返回 `400`。图片需要支持视觉的 checkpoint（`vision` extra）；在纯文本 checkpoint 上送图片会返回 `400`。
+
+## 请求
+
+| 参数 | 类型 | 必填 | 说明 | 状态 |
+| --- | --- | --- | --- | --- |
+| `model` | string | 是 | 决策模型 id（单模型模式：所服务的模型）。 | 支持 |
+| `input` | string 或 array | 是 | 文本，或用户消息，见下文。 | 支持 |
+| `questions` | array | 是 | 1 到 128 个问题。答案会依相同顺序返回。 | 支持 |
+| `safety_identifier` | string | 否 | 最多 64 个字符。 | 接受但忽略 |
+
+未知的顶层字段会被忽略，所以 SDK 的 `extra_body` 不会让调用失败。问题对象则是严格的：问题或消息内出现未知字段会以 `400` 拒绝。
+
+### 输入
+
+可以是字符串，或消息数组 `{"role": "user", "content": ...}`，其中 `content` 是字符串或 part 列表：
+
+| Part | 字段 | 备注 |
+| --- | --- | --- |
+| `input_text` | `text` | 多段文本以换行拼接。 |
+| `input_image` | `image_url`，选填 `detail` | 必须是内嵌的 `data:image/...;base64,...` URL。外部 URL 与文件 id 会被拒绝。最多 128 张图片。 |
+
+文本最多 1,000,000 个字符，且输入加上问题结构的总长度必须在 16,384 个 token 以内。超过会被拒绝，不会被截断。只允许 `user` 角色。
+
+### 问题
+
+| `type` | 字段 | 答案 |
+| --- | --- | --- |
+| `predicate` | `instructions`，选填 `name` | 是非几率。 |
+| `choice` | `instructions`、`choices`（2 到 64 个 `{"value", "description"?}`），选填 `name` | 最可能的 `value`、其信心值，以及所有选项的几率。`value` 为字符串或布尔值，且不可重复（布尔 `true` 与字符串 `"true"` 会冲突）。 |
+| `score` | `instructions`、`levels`（2 到 64 个 `{"label", "description"?}`），选填 `name` | 期望的从零开始等级索引、信心值与各等级几率。决策头读取的是等级的 `description`（没有时用 `label`），且 label 不可重复。 |
+
+若有指定 `name`，必须唯一。
+
+## 响应
+
+```json
+{
+  "answers": [
+    {
+      "type": "choice",
+      "name": "route",
+      "choice": "support",
+      "confidence": 0.93,
+      "probabilities": [
+        { "value": "support", "probability": 0.93 },
+        { "value": "sales", "probability": 0.07 }
+      ]
+    },
+    { "type": "predicate", "name": "urgent", "probability": 0.81 },
+    {
+      "type": "score",
+      "name": "sentiment",
+      "score": 0.22,
+      "confidence": 0.78,
+      "probabilities": [
+        { "label": "negative", "value": 0, "probability": 0.78 },
+        { "label": "positive", "value": 1, "probability": 0.22 }
+      ]
+    }
+  ],
+  "model": "abenzerps/Clef-MLX",
+  "usage": {
+    "input_tokens": 142,
+    "input_tokens_details": { "cached_tokens": 0, "cache_write_tokens": 0 },
+    "output_tokens": 0,
+    "output_tokens_details": { "reasoning_tokens": 0 },
+    "total_tokens": 142
+  }
+}
+```
+
+如果决策头对某个问题返回非有限值，该答案会是 `{"type": "refusal", "name": ...}`，不会编造几率。`usage.input_tokens` 是 prefill 长度，`cached_tokens` 一律为 0。
+
+## 范例
+
+<Tabs items={["curl", "Python", "JavaScript"]}>
+<Tab value="curl">
+
+```bash
+curl http://localhost:8000/v1/decisions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "abenzerps/Clef-MLX",
+    "input": "The customer asks for a refund after a broken delivery.",
+    "questions": [
+      {"type": "choice", "name": "route", "instructions": "Choose the support team.",
+       "choices": [{"value": "support"}, {"value": "sales"}]},
+      {"type": "predicate", "name": "urgent", "instructions": "Is this urgent?"}
+    ]
+  }'
+```
+
+</Tab>
+<Tab value="Python">
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="http://localhost:8000/v1", api_key="not-needed")
+
+decision = client.decisions.create(
+    model="abenzerps/Clef-MLX",
+    input="The customer asks for a refund after a broken delivery.",
+    questions=[
+        {
+            "type": "choice",
+            "name": "route",
+            "instructions": "Choose the support team.",
+            "choices": [{"value": "support"}, {"value": "sales"}],
+        }
+    ],
+)
+print(decision.answers)
+```
+
+`decisions` 资源需要较新的 `openai` SDK。若 SDK 较旧，请用 `httpx` 或 `requests` 发送相同的 JSON 正文。
+
+</Tab>
+<Tab value="JavaScript">
+
+```ts
+const res = await fetch("http://localhost:8000/v1/decisions", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({
+    model: "abenzerps/Clef-MLX",
+    input: "The customer asks for a refund after a broken delivery.",
+    questions: [
+      {
+        type: "choice",
+        name: "route",
+        instructions: "Choose the support team.",
+        choices: [{ value: "support" }, { value: "sales" }],
+      },
+    ],
+  }),
+});
+console.log((await res.json()).answers);
+```
+
+</Tab>
+</Tabs>
+
+## 错误
+
+错误使用 OpenAI 的格式 `{"error": {"message", "type", "param", "code"}}`。
+
+| 状态码 | 情况 |
+| --- | --- |
+| `400` | JSON 或结构不合法、输入为空、名称或选项重复、choices 或 levels 少于 2 个、外部图片 URL、在纯文本 checkpoint 上送图片、该模型不是决策模型、输入超过 16,384 个 token。 |
+| `404` | 找不到模型或模型未加载。 |
+| `507` | GPU 内存不足。 |
+| `500` | 决策运行失败。 |
+
+## 支持状况
+
+| 功能 | 状态 |
+| --- | --- |
+| predicate、choice、score 问题 | <Support status="supported">支持</Support> |
+| 图片输入（内嵌 base64） | <Support status="partial">仅支持视觉的 checkpoint</Support> |
+| MLX 格式的 Cloudflare Clef checkpoint | <Support status="supported">支持</Support> |
+| 其他决策头系列 | <Support status="unsupported">加载失败</Support> |
+| 流式、提示缓存、保存状态 | <Support status="unsupported">无状态，单次前向传递</Support> |
+| `safety_identifier` | <Support status="unsupported">接受但忽略</Support> |
+
+## 相关页面
+
+- [扩展](/docs/api/extensions)：`POST /v1/systemone` 上的 System One 传输格式。
+- [结构化输出](/docs/guides/structured-output)：需要依 JSON schema 生成文本时的做法。
+- [模型](/docs/getting-started/models)：加载 checkpoint。

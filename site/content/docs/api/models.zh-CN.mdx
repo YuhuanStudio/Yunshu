@@ -1,0 +1,253 @@
+---
+title: 模型
+description: 列出并查询提供服务的模型，模型卡同时涵盖 OpenAI、Anthropic、OpenRouter、vLLM 与 LM Studio 方言；并说明多模型模式下的加载与卸载。
+---
+
+`GET /v1/models` 返回这台服务器可提供的模型。每个条目都是依磁盘上的检查点文件（配置文件、聊天模板、safetensors 头）推导出的模型卡，所以回答的是加载的权重实际能做什么，而不是名称让人猜测的功能。同一个条目同时带有多个生态的字段名称，OpenAI、Anthropic、OpenRouter、vLLM 与 LM Studio 的客户端都能找到自己要的字段。Yunshu 自己的详细信息都放在单个 `yunshu` 键下。
+
+<Endpoint method="GET" path="/v1/models" />
+<Endpoint method="GET" path="/v1/models/{model_id}" />
+<Endpoint method="POST" path="/v1/models/load" />
+<Endpoint method="POST" path="/v1/models/unload/{model_id}" />
+
+<Callout type="info">
+只有在设置 `YUNSHU_AUTH_TOKEN` 时才会强制认证。列出与查询模型在没有 token 时是开放的。加载与卸载属于运维路由：需要已配置的 token（或 `YUNSHU_AUTH_DISABLED=true`），见[加载与卸载](#加载与卸载)。
+</Callout>
+
+## 列出模型
+
+`GET /v1/models` 没有参数。响应是同时符合 OpenAI 与 Anthropic SDK 列表类型的 list 对象。
+
+<Tabs items={["curl", "Python", "JavaScript"]}>
+<Tab value="curl">
+
+```bash
+curl http://localhost:8000/v1/models -H "Authorization: Bearer sk-local"
+```
+
+</Tab>
+<Tab value="Python">
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="http://localhost:8000/v1", api_key="sk-local")
+for m in client.models.list():
+    print(m.id)
+
+import anthropic
+
+a = anthropic.Anthropic(base_url="http://localhost:8000", api_key="sk-local")
+for m in a.models.list():
+    print(m.id, m.display_name, m.max_input_tokens)
+```
+
+</Tab>
+<Tab value="JavaScript">
+
+```ts
+import OpenAI from "openai";
+
+const client = new OpenAI({ baseURL: "http://localhost:8000/v1", apiKey: "sk-local" });
+const models = await client.models.list();
+for (const m of models.data) console.log(m.id);
+```
+
+</Tab>
+</Tabs>
+
+节选的一个条目：
+
+```json
+{
+  "object": "list",
+  "data": [
+    {
+      "id": "mlx-community/Qwen3.5-0.8B-MLX-bf16",
+      "object": "model",
+      "created": 1760000000,
+      "owned_by": "yunshu",
+      "type": "model",
+      "display_name": "Qwen3.5-0.8B-MLX-bf16",
+      "created_at": "2025-10-09T08:53:20Z",
+      "max_input_tokens": 262144,
+      "max_tokens": 131072,
+      "capabilities": {
+        "thinking": { "supported": true, "types": { "adaptive": { "supported": false }, "enabled": { "supported": true } } },
+        "image_input": { "supported": true },
+        "structured_outputs": { "supported": true },
+        "vision": true,
+        "tools": true
+      },
+      "context_length": 262144,
+      "max_model_len": 262144,
+      "task": "generate",
+      "state": "loaded",
+      "compatibility_type": "mlx",
+      "yunshu": {
+        "kind": "vlm",
+        "family": "qwen3_5",
+        "input_modalities": ["text", "image"],
+        "output_modalities": ["text"],
+        "contract": { "unsupported_fields": "400" }
+      }
+    }
+  ],
+  "has_more": false,
+  "first_id": "mlx-community/Qwen3.5-0.8B-MLX-bf16",
+  "last_id": "mlx-community/Qwen3.5-0.8B-MLX-bf16"
+}
+```
+
+数值仅为示意，也省略了许多字段；真实的条目带有下表列出的所有字段。多模型模式下，列表包含所有已注册的模型，无论是否已加载；单模型模式下只有加载的那一个模型。没有分页：`has_more` 始终是 `false`。
+
+### 条目内容
+
+| 方言 | 字段 |
+| --- | --- |
+| OpenAI | `id`、`object`（`"model"`）、`created`、`owned_by`（`"yunshu"`） |
+| Anthropic | `type`（`"model"`）、`display_name`、`created_at`、`max_input_tokens`、`max_tokens`、`capabilities` |
+| OpenRouter | `name`、`canonical_slug`、`description`、`context_length`、`architecture`（`modality`、`input_modalities`、`output_modalities`、`tokenizer`）、`pricing`（全是 `"0"`）、`top_provider`、`supported_parameters`、`default_parameters` |
+| vLLM | `root`、`parent`、`max_model_len`、`task`（`generate`、`embed`、`score`、`transcription`、`speech`、`image_generation`、`ocr`） |
+| LM Studio | `arch`、`quantization`、`state`（`loaded` 或 `not-loaded`）、`max_context_length`、`publisher`、`compatibility_type`（`"mlx"`）、`model_type` |
+| Yunshu | `yunshu`：完整的模型卡，说明如下 |
+
+Anthropic 的 `capabilities` 对象包含 Anthropic SDK 模型要求的所有键（`batch`、`citations`、`code_execution`、`context_management`、`effort`、`image_input`、`pdf_input`、`structured_outputs`、`thinking`），其 `supported` 标志来自模型卡。LM Studio 与 vLLM 客户端使用的扁平布尔值（`vision`、`trained_for_tool_use`、`tools`、`function_calling`、`reasoning`、`embedding`）也放在同一个对象内。
+
+### `yunshu` 模型卡
+
+| 字段 | 含义 |
+| --- | --- |
+| `kind` | `chat`、`vlm`、`omni`、`embedding`、`reranker`、`classifier`、`decision`、`asr`、`tts`、`sts`、`image`、`ocr` 或 `video`。 |
+| `family`、`architecture`、`parameters` | 从检查点读出的模型家族、架构类与参数量。 |
+| `quantization` | 位宽、分组大小与模式；混合精度的检查点还有逐层分组。 |
+| `input_modalities`、`output_modalities` | `text`、`image`、`video`、`audio`、`embedding`、`score`、`decision` 的子集。 |
+| `context` | `length` 与其推导方式。`max_output_tokens` 是对外声明的输出上限。 |
+| `reasoning` | 模型是否有思考模式、切换开关、默认状态、强度等级与别名。 |
+| `tools`、`structured_output`、`logprobs` | 工具调用的支持与模式、支持的约束类型、最大的 `top_logprobs`。 |
+| `embeddings` | Embedding 模型的向量维度、池化方式与是否归一化。 |
+| `audio`、`image` | 语音与图像模型的模态专属细节。 |
+| `speculative` | 模型具备的推测解码方法（例如 `mtp`）以及是否无损。 |
+| `prefix_cache` | 前缀缓存是否服务此模型，以及类型。 |
+| `state`、`memory` | 已加载、加载中、固定、错误；权重字节数与预估内存。 |
+| `api` | 哪些路由与线上格式可服务此模型。 |
+| `supported_parameters` | chat 路由对此模型接受的请求字段。 |
+| `generation_defaults` | 来自检查点 `generation_config.json` 的采样默认值。 |
+| `contract` | 能力契约，见下文。 |
+| `capability_tags` | 扁平标签，例如 `chat`、`tools`、`vision`、`thinking`。 |
+| `server_tools` | 文本类模型专用：网关运行的工具（网页搜索提供者、MCP 连接器）配置了哪些。 |
+
+匿名调用者看不到文件系统路径，也看不到常驻状态。出示已配置的 `YUNSHU_AUTH_TOKEN` 的请求，每个条目还会有 `loaded`、`size_gb`、`size_bytes` 与 `stats`，以及 `yunshu.path` 和带有模型管理器计数器的顶层 `registry` 对象。没有配置 token 时，所有人都是匿名。
+
+## 查询单个模型
+
+`GET /v1/models/{model_id}` 以相同结构返回单个条目。id 可以含斜杠（`mlx-community/Qwen3.5-0.8B-MLX-bf16`），解析方式与推理相同：精确 id、别名、不区分大小写匹配。未知的 id 返回 `404`：
+
+```json
+{
+  "error": {
+    "message": "Model 'nope' not found",
+    "type": "invalid_request_error",
+    "param": null,
+    "code": "model_not_found"
+  }
+}
+```
+
+即使在生成路由接受任何名称的单模型模式下，这个路由对服务器没有列出的 id 仍会返回 `404`。
+
+## 能力契约
+
+每张模型卡都有 `yunshu.contract` 对象，每个生成路由也都强制执行同一个对象，所以列表能精确告诉你请求可以用到什么。
+
+| 键 | 内容 |
+| --- | --- |
+| `tools` | `supported`；`mode`（聊天模板能渲染 tools 时为 `template`，由 Yunshu 注入工具提示时为 `prompt`）；`parallel`；接受的 `tool_choice` 值。 |
+| `structured_output` | `json_object`；`json_schema` 与其引擎（`in-house`，超出内置子集的 schema 另有 `llguidance`）；`regex`；`choice`；`grammar`（Lark 语法，通过 `llguidance`）。 |
+| `logprobs`、`reasoning` | 支持与否、最大的 `top_logprobs`、强度等级。 |
+| `media` | 文本以外的输入与输出模态。 |
+| `speculative` | `mode`（`mtp`、`dflash2` 或 `none`）与 `lossless`。 |
+| `cache_tiers` | `ram`，启用 SSD 层时还有 `ssd`。 |
+| `context` | 窗口长度与最大输出 token 数。 |
+| `unsupported_fields` | 始终是 `"400"`。 |
+
+请求若用到契约排除的功能，会返回 `400` 并指出字段，格式采用该方言的错误格式：
+
+- 对不接受该输入的模型发送 `image`、`audio` 或 `video` 内容块；
+- 对不生成文本的模型（embedding、reranker、语音、图像模型）使用 `tools`、`tool_choice`、`response_format`、`grammar`、`guided_*` 字段或 `logprobs`。
+
+对没有推理模式的模型使用 `reasoning_effort` 与 `thinking_budget` 会被特意接受但没有作用，因为编程 agent 每个请求都会带推理强度。配置文件无法读取的检查点没有契约，也不受限制。
+
+## 加载与卸载
+
+<Callout type="warn">
+这些路由会改变内存中的内容，因此需要认证：没有设置 `YUNSHU_AUTH_TOKEN`（且 `YUNSHU_AUTH_DISABLED` 不是 true）时会返回 `401`，消息为 `No authentication configured. Set YUNSHU_AUTH_TOKEN or YUNSHU_AUTH_DISABLED=true.` 设置 token 后，与其他路由一样发送它即可。
+</Callout>
+
+### 加载模型
+
+`POST /v1/models/load` 加载模型并启动它的引擎。
+
+| 参数 | 类型 | 必填 | 说明 | 状态 |
+| --- | --- | --- | --- | --- |
+| `model` | string | 是 | 在模型管理器中注册的模型 id。接受 `model_id` 作为别名；两者都发时以 `model` 为准。 | 支持 |
+| `pin` | boolean | 否 | 默认 `false`。 | 接受但忽略 |
+
+```bash
+curl -X POST http://localhost:8000/v1/models/load \
+  -H "Authorization: Bearer $YUNSHU_AUTH_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"model": "mlx-community/Qwen3.5-0.8B-MLX-bf16"}'
+```
+
+```json
+{ "status": "loaded", "model": "mlx-community/Qwen3.5-0.8B-MLX-bf16" }
+```
+
+多模型模式下，模型必须已注册（位于 `YUNSHU_MODELS_DIR` 下），否则返回 `404`。没有模型管理器时，这个路由会把指定的路径加载到唯一的引擎；批处理引擎则会拒绝（`400`）。
+
+### 卸载模型
+
+`POST /v1/models/unload/{model_id}` 释放模型占用的内存。仅限多模型模式（其他情况返回 `400`）。id 的解析方式（别名与大小写）与推理相同。
+
+```bash
+curl -X POST http://localhost:8000/v1/models/unload/mlx-community/Qwen3.5-0.8B-MLX-bf16 \
+  -H "Authorization: Bearer $YUNSHU_AUTH_TOKEN"
+```
+
+```json
+{ "status": "unloaded", "model": "mlx-community/Qwen3.5-0.8B-MLX-bf16" }
+```
+
+仍有请求在处理中的模型不会被卸载（`409`），因此运行中的生成不会被硬生生中断。
+
+### 错误
+
+| 状态码 | 时机 |
+| --- | --- |
+| 400 | `model` 为空；加载失败且有特定原因（消息会说明）；在批处理引擎上做单引擎加载；在多模型模式之外卸载。 |
+| 401 | 没有配置 token，或 token 缺少或不正确。 |
+| 404 | 未知的模型（`GET`、卸载），或尚未注册的模型（加载）。 |
+| 409 | 同一个模型正在加载或卸载中；卸载时仍有活动的请求，或模型在卸载期间变成使用中。 |
+| 500 | 加载因意外原因失败（`Model loading failed`）。 |
+| 503 | 引擎尚未初始化。 |
+
+## 支持情况
+
+| 功能 | 状态 |
+| --- | --- |
+| 以 OpenAI 与 Anthropic 列表格式提供 `GET /v1/models` | <Support status="supported">支持</Support> |
+| 每个条目都带 OpenRouter、vLLM、LM Studio 元数据 | <Support status="supported">支持</Support> |
+| 分页参数（`limit`、`after`） | <Support status="unsupported">暂不支持；始终返回完整列表</Support> |
+| 在生成路由强制执行能力契约 | <Support status="supported">支持</Support> |
+| 模型加载与卸载 | <Support status="supported">需认证；卸载仅限多模型模式</Support> |
+| 加载时的 `pin` | <Support status="unsupported">接受但忽略</Support> |
+| 通过 API 从磁盘删除模型 | <Support status="unsupported">这些路由不提供；请见 Ollama 兼容层或 CLI</Support> |
+
+## 相关页面
+
+- [API 概览](/docs/api/overview)
+- [Chat completions](/docs/api/chat-completions)
+- [模型支持](/docs/guides/model-support)
+- [模型入门](/docs/getting-started/models)
+- [Ollama 兼容层](/docs/api/ollama)

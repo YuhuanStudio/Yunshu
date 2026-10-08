@@ -1,0 +1,194 @@
+---
+title: Files
+description: A local file store that speaks both the OpenAI Files API and the Anthropic Files API on the same /v1/files paths.
+---
+
+Yunshu keeps uploaded files in one local store (default `~/.yunshu/files`). The same routes answer in two dialects, and the server picks the dialect from the request: if the request carries an `anthropic-version` header (every Anthropic SDK sends it) the Anthropic shapes are used, otherwise the OpenAI shapes. The OpenAI SDK never sends that header.
+
+Stored files are used as inputs elsewhere: batch input and output files ([Batches](/docs/api/batches)), eval data ([Evals](/docs/api/evals)), enrolled custom voices ([Audio](/docs/api/audio)), and file references in [Responses](/docs/api/responses) and [Messages](/docs/api/messages) requests.
+
+<Endpoint method="POST" path="/v1/files" />
+<Endpoint method="GET" path="/v1/files" />
+<Endpoint method="GET" path="/v1/files/{file_id}" />
+<Endpoint method="GET" path="/v1/files/{file_id}/content" />
+<Endpoint method="DELETE" path="/v1/files/{file_id}" />
+
+<Callout type="info">
+Authentication is only enforced when `YUNSHU_AUTH_TOKEN` is set. There is a single owner: whoever presents the token (or anyone, when no token is set) sees every file.
+</Callout>
+
+## Limits and storage
+
+| Setting | Default | Effect |
+| --- | --- | --- |
+| `YUNSHU_FILES_DIR` | `~/.yunshu/files` | Directory of the store. |
+| `YUNSHU_FILES_MAX_BYTES` | 536870912 (512 MB) | Maximum size of one upload; larger uploads fail with `413` `file_too_large`. |
+| `YUNSHU_FILES_MAX_TOTAL_BYTES` | 0 (unlimited) | Total size of the store; an upload that would exceed it fails with `413` `storage_quota_exceeded` (expired files are removed first). |
+| `YUNSHU_FILES_TTL_DAYS` | unset | Delete files this many days after upload. Unset keeps them until deleted. |
+
+Other behaviour:
+
+- Ids look like `file_` followed by 24 hex characters. The OpenAI spelling `file-...` is accepted wherever an id is expected and mapped to `file_...`.
+- Metadata and bytes are written atomically; expired files are removed lazily and at store start.
+- If the disk is full the upload returns `507` with code `insufficient_storage`.
+
+## Upload
+
+`POST /v1/files` takes `multipart/form-data`.
+
+| Parameter | Type | Required | Description | Status |
+| --- | --- | --- | --- | --- |
+| `file` | file | yes | The file part. | supported |
+| `purpose` | string | OpenAI: yes | One of `assistants`, `batch`, `fine-tune`, `vision`, `user_data`, `evals`. Other values return `400`. Ignored for Anthropic requests (stored as `user_data`). | supported |
+| `expires_after` | object | no | OpenAI only. `{"anchor": "created_at", "seconds": 3600..2592000}`, sent as `expires_after[anchor]` and `expires_after[seconds]` form fields or as one JSON string. | supported |
+
+OpenAI uploads must not be empty. All `purpose` values are accepted, but only the ones Yunshu consumes do anything: `batch` for [Batches](/docs/api/batches) and `evals` for [Evals](/docs/api/evals). Nothing here runs fine-tuning.
+
+OpenAI response:
+
+```json
+{
+  "id": "file_0a1b2c3d4e5f60718293a4b5",
+  "object": "file",
+  "bytes": 1204,
+  "created_at": 1767225600,
+  "expires_at": null,
+  "filename": "requests.jsonl",
+  "purpose": "batch",
+  "status": "processed",
+  "status_details": null
+}
+```
+
+Anthropic response:
+
+```json
+{
+  "id": "file_0a1b2c3d4e5f60718293a4b5",
+  "type": "file",
+  "filename": "report.pdf",
+  "mime_type": "application/pdf",
+  "size_bytes": 48210,
+  "created_at": "2026-01-01T00:00:00Z",
+  "downloadable": false
+}
+```
+
+The stored `mime_type` is the declared content type if it is specific, otherwise it is sniffed from the bytes (PDF, PNG, JPEG, GIF, WebP) and then the filename.
+
+## List, retrieve, delete
+
+| Route | OpenAI dialect | Anthropic dialect |
+| --- | --- | --- |
+| `GET /v1/files` | Query: `purpose`, `limit` (1 to 10000, default 10000), `order` (`asc` or `desc`, default `desc`), `after` (a file id). Returns `{"object": "list", "data", "has_more", "first_id", "last_id"}`. | Query: `limit` (1 to 1000, default 20), `after_id`, `before_id`. Returns `{"data", "first_id", "last_id", "has_more"}`. `purpose` is not filtered. |
+| `GET /v1/files/{file_id}` | The file object. | The file object. |
+| `DELETE /v1/files/{file_id}` | `{"id", "object": "file", "deleted": true}` | `{"id", "type": "file_deleted"}` |
+
+Files are listed newest first.
+
+## Download content
+
+`GET /v1/files/{file_id}/content` returns the stored bytes as an attachment with the stored content type and filename.
+
+In the Anthropic dialect the Anthropic rule applies: only files created by tools are downloadable, uploaded files are not. Yunshu marks every uploaded file `downloadable: false`, so an Anthropic-style request (one with an `anthropic-version` header) gets `403`. Use the OpenAI dialect (no `anthropic-version` header) to read a file back.
+
+## Using stored files in requests
+
+Stored files are inlined into model requests when referenced by id:
+
+| Where | Reference |
+| --- | --- |
+| [Messages](/docs/api/messages) | `{"type": "image"}` or `{"type": "document"}` block with `"source": {"type": "file", "file_id": "file_..."}`. Text documents become text sources, others base64. |
+| [Responses](/docs/api/responses) | `input_file` or `input_image` items with `file_id`. |
+
+An unknown id fails with `404` `file_not_found`.
+
+## Examples
+
+<Tabs items={["curl", "Python", "JavaScript"]}>
+<Tab value="curl">
+
+```bash
+# Upload (OpenAI dialect)
+curl http://localhost:8000/v1/files \
+  -F purpose=user_data \
+  -F file=@notes.txt
+
+# List and download
+curl "http://localhost:8000/v1/files?limit=5"
+curl http://localhost:8000/v1/files/file_0a1b2c3d4e5f60718293a4b5/content -o notes.txt
+
+# Upload with the Anthropic dialect: the header selects it
+curl http://localhost:8000/v1/files \
+  -H "anthropic-version: 2023-06-01" \
+  -F file=@report.pdf
+```
+
+</Tab>
+<Tab value="Python">
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="http://localhost:8000/v1", api_key="not-needed")
+
+f = client.files.create(file=open("notes.txt", "rb"), purpose="user_data")
+print(f.id, f.bytes)
+
+for item in client.files.list(limit=5):
+    print(item.id, item.filename)
+
+print(client.files.content(f.id).text)
+client.files.delete(f.id)
+```
+
+</Tab>
+<Tab value="JavaScript">
+
+```ts
+import OpenAI from "openai";
+import fs from "node:fs";
+
+const client = new OpenAI({ baseURL: "http://localhost:8000/v1", apiKey: "not-needed" });
+
+const f = await client.files.create({
+  file: fs.createReadStream("notes.txt"),
+  purpose: "user_data",
+});
+console.log(f.id, f.bytes);
+await client.files.del(f.id);
+```
+
+</Tab>
+</Tabs>
+
+## Errors
+
+OpenAI dialect errors use `{"error": {"message", "type", "param", "code"}}`. Anthropic dialect errors use `{"type": "error", "error": {"type", "message"}}`.
+
+| Status | Code | When |
+| --- | --- | --- |
+| `400` | `invalid_value` | Bad `purpose`, bad `expires_after`, bad `limit` or `order`. |
+| `400` | | Not a multipart body, missing `file`, empty file (OpenAI). |
+| `404` | `file_not_found` | Unknown, malformed or expired id. |
+| `403` | | Anthropic dialect content download of an uploaded file. |
+| `413` | `file_too_large`, `storage_quota_exceeded` | Over the per-file or total limit. |
+| `507` | `insufficient_storage` | Disk full. |
+
+## Support
+
+| Feature | Status |
+| --- | --- |
+| OpenAI Files: upload, list, retrieve, delete, content | <Support status="supported">supported</Support> |
+| Anthropic Files shapes, selected by `anthropic-version` | <Support status="supported">supported</Support> |
+| `expires_after` | <Support status="supported">1 hour to 30 days, `created_at` anchor only</Support> |
+| Anthropic content download of uploaded files | <Support status="unsupported">403, as in the Anthropic API</Support> |
+| Multipart / resumable `uploads` API | <Support status="unsupported">not served</Support> |
+| Fine-tuning, assistants and vision pipelines behind `purpose` | <Support status="unsupported">purpose values are accepted and stored only</Support> |
+
+## Related
+
+- [Batches](/docs/api/batches) for input and output JSONL files.
+- [Evals](/docs/api/evals) for datasets uploaded with `purpose=evals`.
+- [Audio](/docs/api/audio) for custom voices stored in this store.
+- [Messages](/docs/api/messages) and [Responses](/docs/api/responses) for file references.

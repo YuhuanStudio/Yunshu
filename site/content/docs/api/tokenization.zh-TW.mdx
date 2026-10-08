@@ -1,0 +1,205 @@
+---
+title: Tokenization
+description: 以 vLLM 風格的 tokenize、detokenize 與 apply-template 路由計算並檢視 token，另有 llama.cpp 風格的 props 路由。
+---
+
+這些路由開放已載入模型的 tokenizer 與聊天模板。你可以在送出長提示詞前先計算 token 數、檢查對話如何被轉成模板文字，或把 token id 還原成文字。請求與回應結構遵循 vLLM 的 `/tokenize` 與 `/detokenize`。每個路由都同時提供帶 `/v1` 前綴與不帶前綴的版本。
+
+<Endpoint method="POST" path="/v1/tokenize" />
+<Endpoint method="POST" path="/v1/detokenize" />
+<Endpoint method="POST" path="/v1/apply-template" />
+<Endpoint method="POST" path="/tokenize" />
+<Endpoint method="POST" path="/detokenize" />
+<Endpoint method="POST" path="/apply-template" />
+<Endpoint method="GET" path="/v1/props" />
+
+<Callout type="info">
+只有在設定 `YUNSHU_AUTH_TOKEN` 時才會強制驗證，見 [API 總覽](/docs/api/overview)。若要用 Anthropic 風格計算 token，請使用 `POST /v1/messages/count_tokens`，說明在 [Messages](/docs/api/messages) 頁面。
+</Callout>
+
+## 選擇 tokenizer
+
+三個路由的 `model` 都是選填。tokenizer 來自已載入的模型：
+
+- 單模型模式下，一律使用載入模型的 tokenizer，`model` 僅供參考。
+- 多模型模式下，模型必須已經載入。名稱會先精確比對，再不分大小寫比對，最後比對最後一個 `/` 之後的部分。未載入或未知的模型會回應 `404`，訊息為 `No tokenizer available for model '...'`。伺服器絕不會拿別的模型的詞彙表來回答。
+
+## Tokenize
+
+### 請求
+
+`prompt` 與 `messages` 必須恰好送一個；兩個都送或都不送會回應 `400`。
+
+| 參數 | 型別 | 必填 | 說明 | 狀態 |
+| --- | --- | --- | --- | --- |
+| `model` | string | 否 | 見上文。 | 支援 |
+| `prompt` | string 或字串陣列 | 二選一 | 原始文字。陣列會逐一 tokenize。別名：`text`、`input`。 | 支援 |
+| `messages` | array | 二選一 | 聊天訊息，tokenize 前會先以模型的聊天模板轉換。陣列形式的 `content` 只保留其中的 `text` 區塊；圖片與其他媒體不計入。 | 支援 |
+| `add_special_tokens` | boolean | 否 | 搭配 `prompt`：預設 `true`。搭配 `messages`：預設 `false`，因為模板本身已包含特殊 token。 | 支援 |
+| `add_generation_prompt` | boolean | 否 | 僅限 `messages`。預設 `true`：結尾加上 assistant 回合的開頭。 | 支援 |
+| `continue_final_message` | boolean | 否 | 僅限 `messages`。接續最後一則訊息，而不是開啟新回合；會關閉 `add_generation_prompt`。 | 支援 |
+| `tools` | array | 否 | 僅限 `messages`。交給模板轉換的工具定義。 | 支援 |
+| `chat_template_kwargs` | object | 否 | 僅限 `messages`。額外的模板變數，例如 `enable_thinking`。 | 支援 |
+| `return_token_strs` | boolean | 否 | 同時回傳每個 token 解碼後的文字。預設 `false`。 | 支援 |
+
+### 回應
+
+```json
+{
+  "count": 7,
+  "max_model_len": 262144,
+  "tokens": [9707, 11, 1879, 0],
+  "token_strs": ["Hello", ",", " world", "!"]
+}
+```
+
+- `count` 是所有輸入的 token 總數。
+- `max_model_len` 是模型的上下文視窗；無法判定時為 `null`。
+- 單一 `prompt` 字串或 `messages` 時，`tokens` 是一維清單；`prompt` 為陣列時是清單的清單。
+- `token_strs` 只在 `return_token_strs` 時出現，巢狀結構與 `tokens` 相同。
+
+### 範例
+
+<Tabs items={["curl", "Python", "JavaScript"]}>
+<Tab value="curl">
+
+```bash
+# Raw text
+curl http://localhost:8000/v1/tokenize \
+  -H "Content-Type: application/json" \
+  -d '{"prompt": "Hello, world!", "return_token_strs": true}'
+
+# A conversation as the chat route would render it
+curl http://localhost:8000/v1/tokenize \
+  -H "Content-Type: application/json" \
+  -d '{
+    "messages": [
+      {"role": "system", "content": "You are concise."},
+      {"role": "user", "content": "Hi"}
+    ]
+  }'
+```
+
+</Tab>
+<Tab value="Python">
+
+```python
+import requests
+
+base = "http://localhost:8000"
+r = requests.post(f"{base}/v1/tokenize", json={"prompt": "Hello, world!"})
+ids = r.json()["tokens"]
+
+back = requests.post(f"{base}/v1/detokenize", json={"tokens": ids})
+print(back.json()["prompt"])  # Hello, world!
+
+chat = requests.post(
+    f"{base}/v1/tokenize",
+    json={"messages": [{"role": "user", "content": "Hi"}], "chat_template_kwargs": {"enable_thinking": False}},
+)
+print(chat.json()["count"], "of", chat.json()["max_model_len"])
+```
+
+</Tab>
+<Tab value="JavaScript">
+
+```ts
+const base = "http://localhost:8000";
+const res = await fetch(`${base}/v1/tokenize`, {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ prompt: "Hello, world!" }),
+});
+const { count, tokens } = await res.json();
+console.log(count, tokens);
+```
+
+</Tab>
+</Tabs>
+
+## Detokenize
+
+`POST /v1/detokenize` 把 token id 轉回文字。
+
+| 參數 | 型別 | 必填 | 說明 |
+| --- | --- | --- | --- |
+| `model` | string | 否 | 見上文。 |
+| `tokens` | 整數陣列 | 是 | Token id。 |
+| `skip_special_tokens` | boolean | 否 | 預設 `true`：文字中不含特殊 token。 |
+
+```bash
+curl http://localhost:8000/v1/detokenize \
+  -H "Content-Type: application/json" \
+  -d '{"tokens": [9707, 11, 1879, 0]}'
+```
+
+```json
+{ "prompt": "Hello, world!" }
+```
+
+超出詞彙表範圍的 token id 會回應 `422`。
+
+## Apply template
+
+`POST /v1/apply-template` 以模型的聊天模板轉換訊息，回傳最終的提示詞字串，不做 tokenize。
+
+| 參數 | 型別 | 必填 | 說明 |
+| --- | --- | --- | --- |
+| `model` | string | 否 | 見上文。 |
+| `messages` | array | 是 | 聊天訊息。 |
+| `tools` | array | 否 | 交給模板的工具定義。 |
+| `add_generation_prompt` | boolean | 否 | 預設 `true`。 |
+| `chat_template_kwargs` | object | 否 | 額外的模板變數。 |
+
+```bash
+curl http://localhost:8000/v1/apply-template \
+  -H "Content-Type: application/json" \
+  -d '{"messages": [{"role": "user", "content": "Hi"}]}'
+```
+
+```json
+{ "prompt": "<|im_start|>user\nHi<|im_end|>\n<|im_start|>assistant\n" }
+```
+
+實際文字取決於模型的模板。模板丟出錯誤（例如訊息順序不被允許）時，會回應 `400`，訊息為 `chat template failed: ...`。
+
+## 伺服器屬性
+
+`GET /v1/props`（也可用 `GET /props`）是一份簡短的 llama.cpp 風格已載入模型描述，供會去查詢它的工具使用。
+
+```json
+{
+  "default_generation_settings": { "n_ctx": 262144 },
+  "model_path": "mlx-community/Qwen3.5-0.8B-MLX-bf16",
+  "chat_template": "{% for message in messages %}...",
+  "total_slots": 1
+}
+```
+
+沒有載入任何模型時回應 `503`。完整的模型描述請用 [`GET /v1/models`](/docs/api/models)。
+
+## 錯誤
+
+| 狀態碼 | 時機 |
+| --- | --- |
+| 400 | `prompt` 與 `messages` 兩個都送或都不送；聊天模板錯誤；格式錯誤的 JSON。 |
+| 401 | 已設定 token，但缺少或不正確。 |
+| 404 | 找不到指定模型可用的 tokenizer。 |
+| 422 | `tokens` 中有無效的 token id。 |
+| 503 | 沒有載入任何模型時呼叫 `GET /v1/props`。 |
+
+## 支援狀況
+
+| 功能 | 狀態 |
+| --- | --- |
+| 對文字與聊天訊息做 tokenize | <Support status="supported">支援</Support> |
+| Detokenize、apply-template | <Support status="supported">支援</Support> |
+| 不帶前綴的路由（`/tokenize`、`/detokenize`、`/apply-template`） | <Support status="supported">支援</Support> |
+| `messages` 中的圖片、音訊或影片 token | <Support status="unsupported">不計入；只會 tokenize 文字區塊</Support> |
+| Anthropic 格式中工具、圖片與 system 區塊的 token 計算 | <Support status="supported">請使用 `POST /v1/messages/count_tokens`</Support> |
+
+## 相關頁面
+
+- [Chat completions](/docs/api/chat-completions)
+- [Messages](/docs/api/messages)
+- [模型](/docs/api/models)

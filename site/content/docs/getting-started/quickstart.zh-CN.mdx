@@ -1,0 +1,154 @@
+---
+title: 快速开始
+description: 下载模型、启动服务器、确认就绪，并通过 curl、OpenAI SDK 或 yunshu chat 发送第一个请求。
+---
+
+本页带你从已安装的 `yunshu` 命令走到第一个回答。如果 `yunshu --version` 还无法运行，请先看[安装](/docs/getting-started/install)。
+
+<Steps>
+<Step>
+
+### 下载模型
+
+先看看磁盘上已有哪些模型，再拉取一个小模型作为第一次测试：
+
+```bash
+yunshu model list
+yunshu pull mlx-community/Qwen3.5-0.8B-MLX-bf16
+```
+
+`yunshu pull` 会下载到 `~/.yunshu/models`（参见[模型](/docs/getting-started/models)）。中断的下载可以续传，若模型目录或 Hugging Face 缓存中已有完整的副本，则会直接复用。0.8B 模型只适合做冒烟测试；实际使用请选择更大的 MLX 检查点。
+
+</Step>
+<Step>
+
+### 检查模型并启动服务器
+
+```bash
+yunshu doctor -m mlx-community/Qwen3.5-0.8B-MLX-bf16
+yunshu serve -m mlx-community/Qwen3.5-0.8B-MLX-bf16
+```
+
+模型也可以作为第一个参数传入（`yunshu serve mlx-community/Qwen3.5-0.8B-MLX-bf16`），或指定本地目录。服务器默认监听 `127.0.0.1:8000`。请保持这个终端打开；按 Ctrl-C 即可停止服务器。
+
+如果在交互式终端中运行 `yunshu serve` 但没有配置任何模型，它会请你从磁盘上的模型中选择一个，或输入 Hugging Face 仓库。它不会自行下载模型。在没有终端的环境中，它会以错误退出并提示下一步。
+
+</Step>
+<Step>
+
+### 等待就绪
+
+打开第二个终端：
+
+```bash
+curl --fail http://127.0.0.1:8000/health/ready
+curl --fail http://127.0.0.1:8000/v1/models
+```
+
+模型加载中或加载失败时，`GET /health/ready` 会返回 HTTP 503；服务器可以接受请求后才返回 200。端口开着并不代表模型已就绪。加载失败时，503 的内容会带有 `reason`。
+
+</Step>
+<Step>
+
+### 发送请求
+
+在单模型模式下，`model` 字段只是参考用途：任何名称都会对应到你启动的那个模型。默认不需要 API 密钥；只有设置了 `YUNSHU_AUTH_TOKEN` 才会强制认证。
+
+<Tabs items={["curl", "Python", "JavaScript"]}>
+<Tab value="curl">
+
+```bash
+curl --fail http://localhost:8000/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "model": "local",
+    "messages": [{"role": "user", "content": "Say hello in one sentence."}],
+    "max_tokens": 64,
+    "temperature": 0
+  }'
+```
+
+</Tab>
+<Tab value="Python">
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="http://localhost:8000/v1", api_key="not-needed")
+reply = client.chat.completions.create(
+    model="local",
+    messages=[{"role": "user", "content": "Say hello in one sentence."}],
+    max_tokens=64,
+)
+print(reply.choices[0].message.content)
+```
+
+</Tab>
+<Tab value="JavaScript">
+
+```ts
+import OpenAI from "openai";
+
+const client = new OpenAI({ baseURL: "http://localhost:8000/v1", apiKey: "not-needed" });
+const reply = await client.chat.completions.create({
+  model: "local",
+  messages: [{ role: "user", content: "Say hello in one sentence." }],
+  max_tokens: 64,
+});
+console.log(reply.choices[0].message.content);
+```
+
+</Tab>
+</Tabs>
+
+</Step>
+</Steps>
+
+OpenAI 客户端使用 base URL `http://localhost:8000/v1`。Anthropic 客户端使用不含 `/v1` 的 `http://localhost:8000`，并调用 `POST /v1/messages`。参见 [API 概览](/docs/api/overview)。
+
+## 在终端中对话
+
+`yunshu chat` 是连接到已运行服务器的交互式客户端。它不会下载模型，也不会启动服务器。
+
+```bash
+yunshu chat
+yunshu chat --system "Answer briefly." --temperature 0.2 --thinking
+```
+
+对话中，`/clear` 重置对话，`/thinking` 切换思考模式，`/model <name>` 切换模型，`/help` 列出命令，`/quit`（或 Ctrl-C）退出。选项参见 [CLI 参考](/docs/guides/cli)。
+
+若只需要一次非交互式请求，请使用 `yunshu complete`：
+
+```bash
+yunshu complete "Say hello in one sentence." --max-tokens 64
+yunshu --json complete "Say hello in one sentence."
+```
+
+## 8000 端口被占用时
+
+`yunshu serve` 会在加载模型之前先确认能否绑定地址，无法绑定就会以错误退出。请改用其他端口，并在所有地方使用同一个端口：
+
+```bash
+yunshu serve -m mlx-community/Qwen3.5-0.8B-MLX-bf16 --port 8001
+yunshu chat --url http://127.0.0.1:8001
+```
+
+在检查与实际绑定之间，仍可能有其他进程占用该端口；以最终的绑定错误为准。服务器只监听 `127.0.0.1`。若要接受其他机器的连接，请使用 `--host 0.0.0.0`，并同时设置 `--auth-token`；绑定非本机地址却没有 token 时，`yunshu serve` 会发出警告。
+
+## 配合编程智能体使用
+
+`yunshu launch` 会为编程工具写入配置，并让它连接到你的服务器。请先预览：
+
+```bash
+yunshu launch claude --dry-run
+yunshu launch codex --dry-run
+yunshu launch opencode --dry-run
+```
+
+确认后再去掉 `--dry-run` 运行同一条命令。支持的工具有 `claude`、`codex`、`opencode` 和 `pi`；`yunshu launch list` 会显示哪些已安装。启动器会从服务器读取所服务模型的上下文窗口、输出上限、推理强度等级与视觉支持，并交给该工具。参见[智能体](/docs/guides/agents)。
+
+## 下一步
+
+- [模型](/docs/getting-started/models)：模型存放的位置与管理方式。
+- [服务](/docs/getting-started/service)：登录时自动启动 Yunshu。
+- [控制台](/docs/getting-started/console)：通过网页查看运行中的引擎。

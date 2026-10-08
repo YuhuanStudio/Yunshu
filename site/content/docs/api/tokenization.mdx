@@ -1,0 +1,205 @@
+---
+title: Tokenization
+description: Count and inspect tokens with the vLLM-style tokenize, detokenize and apply-template routes, plus the llama.cpp-style props route.
+---
+
+These routes expose the loaded model's tokenizer and chat template. Use them to count tokens before sending a long prompt, to check how a conversation is rendered, or to turn token ids back into text. The request and response shapes follow vLLM's `/tokenize` and `/detokenize`. Every route is served both with and without the `/v1` prefix.
+
+<Endpoint method="POST" path="/v1/tokenize" />
+<Endpoint method="POST" path="/v1/detokenize" />
+<Endpoint method="POST" path="/v1/apply-template" />
+<Endpoint method="POST" path="/tokenize" />
+<Endpoint method="POST" path="/detokenize" />
+<Endpoint method="POST" path="/apply-template" />
+<Endpoint method="GET" path="/v1/props" />
+
+<Callout type="info">
+Authentication is only enforced when `YUNSHU_AUTH_TOKEN` is set. See [API overview](/docs/api/overview). For Anthropic-style token counting use `POST /v1/messages/count_tokens`, described on the [Messages](/docs/api/messages) page.
+</Callout>
+
+## Choosing the tokenizer
+
+`model` is optional on all three routes. The tokenizer comes from a loaded model:
+
+- In single-model mode the loaded model's tokenizer is always used and `model` is advisory.
+- In multi-model mode the model must already be loaded. The name is matched exactly, then case-insensitively, then by the part after the last `/`. An unloaded or unknown model is a `404` with `No tokenizer available for model '...'`. The server never answers with another model's vocabulary.
+
+## Tokenize
+
+### Request
+
+Send exactly one of `prompt` or `messages`; sending both or neither is a `400`.
+
+| Parameter | Type | Required | Description | Status |
+| --- | --- | --- | --- | --- |
+| `model` | string | no | See above. | supported |
+| `prompt` | string or array of strings | one of | Raw text. An array tokenizes each string. `text` and `input` are accepted as aliases. | supported |
+| `messages` | array | one of | Chat messages, rendered with the model's chat template before tokenizing. Array `content` is reduced to its `text` parts; images and other media are not counted. | supported |
+| `add_special_tokens` | boolean | no | With `prompt`: default `true`. With `messages`: default `false`, because the template already contains the special tokens. | supported |
+| `add_generation_prompt` | boolean | no | `messages` only. Default `true`: end with the assistant turn opener. | supported |
+| `continue_final_message` | boolean | no | `messages` only. Continue the last message instead of starting a new turn; turns `add_generation_prompt` off. | supported |
+| `tools` | array | no | `messages` only. Tool definitions the template renders. | supported |
+| `chat_template_kwargs` | object | no | `messages` only. Extra template variables, for example `enable_thinking`. | supported |
+| `return_token_strs` | boolean | no | Also return each token decoded to text. Default `false`. | supported |
+
+### Response
+
+```json
+{
+  "count": 7,
+  "max_model_len": 262144,
+  "tokens": [9707, 11, 1879, 0],
+  "token_strs": ["Hello", ",", " world", "!"]
+}
+```
+
+- `count` is the total number of tokens across all inputs.
+- `max_model_len` is the model's context window, or `null` when it cannot be determined.
+- `tokens` is a flat list for a single `prompt` string or for `messages`, and a list of lists when `prompt` is an array.
+- `token_strs` appears only with `return_token_strs` and has the same nesting as `tokens`.
+
+### Examples
+
+<Tabs items={["curl", "Python", "JavaScript"]}>
+<Tab value="curl">
+
+```bash
+# Raw text
+curl http://localhost:8000/v1/tokenize \
+  -H "Content-Type: application/json" \
+  -d '{"prompt": "Hello, world!", "return_token_strs": true}'
+
+# A conversation as the chat route would render it
+curl http://localhost:8000/v1/tokenize \
+  -H "Content-Type: application/json" \
+  -d '{
+    "messages": [
+      {"role": "system", "content": "You are concise."},
+      {"role": "user", "content": "Hi"}
+    ]
+  }'
+```
+
+</Tab>
+<Tab value="Python">
+
+```python
+import requests
+
+base = "http://localhost:8000"
+r = requests.post(f"{base}/v1/tokenize", json={"prompt": "Hello, world!"})
+ids = r.json()["tokens"]
+
+back = requests.post(f"{base}/v1/detokenize", json={"tokens": ids})
+print(back.json()["prompt"])  # Hello, world!
+
+chat = requests.post(
+    f"{base}/v1/tokenize",
+    json={"messages": [{"role": "user", "content": "Hi"}], "chat_template_kwargs": {"enable_thinking": False}},
+)
+print(chat.json()["count"], "of", chat.json()["max_model_len"])
+```
+
+</Tab>
+<Tab value="JavaScript">
+
+```ts
+const base = "http://localhost:8000";
+const res = await fetch(`${base}/v1/tokenize`, {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ prompt: "Hello, world!" }),
+});
+const { count, tokens } = await res.json();
+console.log(count, tokens);
+```
+
+</Tab>
+</Tabs>
+
+## Detokenize
+
+`POST /v1/detokenize` turns token ids into text.
+
+| Parameter | Type | Required | Description |
+| --- | --- | --- | --- |
+| `model` | string | no | See above. |
+| `tokens` | array of integers | yes | Token ids. |
+| `skip_special_tokens` | boolean | no | Default `true`: drop special tokens from the text. |
+
+```bash
+curl http://localhost:8000/v1/detokenize \
+  -H "Content-Type: application/json" \
+  -d '{"tokens": [9707, 11, 1879, 0]}'
+```
+
+```json
+{ "prompt": "Hello, world!" }
+```
+
+A token id outside the vocabulary is a `422`.
+
+## Apply template
+
+`POST /v1/apply-template` renders messages with the model's chat template and returns the resulting prompt string without tokenizing it.
+
+| Parameter | Type | Required | Description |
+| --- | --- | --- | --- |
+| `model` | string | no | See above. |
+| `messages` | array | yes | Chat messages. |
+| `tools` | array | no | Tool definitions for the template. |
+| `add_generation_prompt` | boolean | no | Default `true`. |
+| `chat_template_kwargs` | object | no | Extra template variables. |
+
+```bash
+curl http://localhost:8000/v1/apply-template \
+  -H "Content-Type: application/json" \
+  -d '{"messages": [{"role": "user", "content": "Hi"}]}'
+```
+
+```json
+{ "prompt": "<|im_start|>user\nHi<|im_end|>\n<|im_start|>assistant\n" }
+```
+
+The exact text depends on the model's template. A template that raises an error (for example a message order it does not allow) is a `400` with `chat template failed: ...`.
+
+## Server properties
+
+`GET /v1/props` (also `GET /props`) is a small llama.cpp-style description of the loaded model for tools that look for it.
+
+```json
+{
+  "default_generation_settings": { "n_ctx": 262144 },
+  "model_path": "mlx-community/Qwen3.5-0.8B-MLX-bf16",
+  "chat_template": "{% for message in messages %}...",
+  "total_slots": 1
+}
+```
+
+It answers `503` when no model is loaded. For the full model description use [`GET /v1/models`](/docs/api/models).
+
+## Errors
+
+| Status | When |
+| --- | --- |
+| 400 | Both or neither of `prompt` and `messages`; a chat template error; malformed JSON. |
+| 401 | Token configured and missing or wrong. |
+| 404 | No tokenizer is available for the named model. |
+| 422 | A token id in `tokens` is invalid. |
+| 503 | `GET /v1/props` with no model loaded. |
+
+## Support
+
+| Feature | Status |
+| --- | --- |
+| Tokenize text and chat messages | <Support status="supported">supported</Support> |
+| Detokenize, apply-template | <Support status="supported">supported</Support> |
+| Unprefixed routes (`/tokenize`, `/detokenize`, `/apply-template`) | <Support status="supported">supported</Support> |
+| Image, audio or video tokens in `messages` | <Support status="unsupported">not counted; only text parts are tokenized</Support> |
+| Token counting for tools, images and system blocks in the Anthropic format | <Support status="supported">use `POST /v1/messages/count_tokens`</Support> |
+
+## Related
+
+- [Chat completions](/docs/api/chat-completions)
+- [Messages](/docs/api/messages)
+- [Models](/docs/api/models)

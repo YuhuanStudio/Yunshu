@@ -1,0 +1,197 @@
+---
+title: API 概览
+description: 基础 URL、Yunshu 提供的各种 API 方言、认证方式、model 字段的解析规则、错误格式、请求 ID，以及整份 API 的路由对照表。
+---
+
+同一个 Yunshu 进程会同时提供多种线上格式：OpenAI API、Anthropic Messages API、兼容 Ollama 的层、JSON-RPC 的 MCP 端点，以及一组 vLLM 风格的工具路由（tokenize、score、rerank）。它们都是同一个引擎之上的薄薄一层。本页说明所有路由共通的部分，各路由的细节请看[路由总览](#路由总览)中链接的页面。
+
+## 基础 URL
+
+服务器默认监听 `8000` 端口。
+
+| 客户端 | 基础 URL | 说明 |
+| --- | --- | --- |
+| OpenAI SDK 与任何兼容 OpenAI 的工具 | `http://localhost:8000/v1` | SDK 会自行拼接 `/chat/completions`、`/embeddings` 等路径。 |
+| Anthropic SDK | `http://localhost:8000` | SDK 会自行拼接 `/v1/messages`，请不要自己加 `/v1`。 |
+| Ollama 客户端 | `http://localhost:8000` | 路由位于 `/api/*` 下。 |
+| vLLM 风格工具（tokenize） | `http://localhost:8000` | `/tokenize` 与 `/detokenize` 也提供不带 `/v1` 前缀的版本。 |
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="http://localhost:8000/v1", api_key="not-needed")
+```
+
+```python
+import anthropic
+
+client = anthropic.Anthropic(base_url="http://localhost:8000", api_key="not-needed")
+```
+
+## 认证
+
+认证是可选的，由两个配置控制。
+
+- 未设置 `YUNSHU_AUTH_TOKEN`（默认）：推理路由（chat、completions、embeddings、tokenize 等）无需认证。`POST /v1/models/load` 这类运维路由因为无从授权，会返回 `401`。
+- 设置了 `YUNSHU_AUTH_TOKEN`：除了一份很短的公开列表之外，所有请求都需要 token。公开路径为 `/health`、`/health/live`、`/health/ready`、`/version`、`/docs`、`/openapi.json`、`/redoc`、`/`、`/console` 与静态资源前缀。
+- `YUNSHU_AUTH_DISABLED=true` 会完全关闭认证，连运维路由也不例外。仅限本地开发使用。
+
+两种发送方式都可以，服务器在所有路由、所有方言上都接受：
+
+```bash
+curl http://localhost:8000/v1/models -H "Authorization: Bearer $YUNSHU_AUTH_TOKEN"
+curl http://localhost:8000/v1/models -H "x-api-key: $YUNSHU_AUTH_TOKEN"
+```
+
+两个请求头都存在时，采用 `Authorization: Bearer` 的值。比较采用常数时间。缺少 token 时返回 `401`，消息为 `Missing or invalid Authorization header`；token 错误时返回 `401`，消息为 `Invalid or missing API key`。两者都会带 `WWW-Authenticate: Bearer` 头。
+
+<Callout type="info">
+未设置 token 时，SDK 发送的密钥会被忽略，所以 `not-needed` 或 `sk-local` 之类的任何占位字符串都可以。要让服务器对外网开放之前，请保持默认的 localhost 绑定，或先设置 token。
+</Callout>
+
+## `model` 字段
+
+`model` 的含义取决于服务器的启动方式。
+
+| 模式 | 启动方式 | `model` 的含义 |
+| --- | --- | --- |
+| 单模型 | 设置 `YUNSHU_MODEL`，或在 `yunshu serve` 指定一个模型 | 仅供参考。无论你发送什么名称，所有生成路由都使用唯一加载的模型，名称会原样出现在响应中。`GET /v1/models/{id}` 对服务器没有列出的 id 仍会返回 `404`。 |
+| 多模型 | `YUNSHU_MULTI_MODEL=1`，模型放在 `YUNSHU_MODELS_DIR` 下 | 作为选择器。名称会按注册表解析（别名、不区分大小写匹配，以及最后一个 `/` 之后的部分），模型在第一次使用时加载，未知的名称返回 `404`。 |
+
+`GET /v1/models` 会列出可用的 id，详见[模型](/docs/api/models)。embedding、rerank 与 scoring 模型是独立的检查点：多模型模式下在 `model` 填入它们的名称；单模型模式下，加载的那个模型本身就必须是 embedder 或 reranker。
+
+每个生成路由在执行前，还会检查模型的能力契约（capability contract）。请求若用到模型没有的功能（对纯文本模型发送图片块、对 embedding 模型使用 tools、对不生成文本的模型要求 `logprobs`），会返回 `400` 并指出字段名称。契约内容见[模型](/docs/api/models)。
+
+## 错误
+
+错误内容的格式跟随出错路由所属的方言，包括在路由执行前就被认证、限流或请求校验拦下的错误。
+
+OpenAI 格式的路由（Anthropic、Ollama、MCP、Tavily 以外的所有路由）：
+
+```json
+{
+  "error": {
+    "message": "Model 'foo' not found (hint: GET /v1/models lists the model ids this server can serve; pull one with `yunshu pull <repo>`)",
+    "type": "invalid_request_error",
+    "param": null,
+    "code": "model_not_found",
+    "x_yunshu": {
+      "hint": "GET /v1/models lists the model ids this server can serve; pull one with `yunshu pull <repo>`",
+      "request_id": "req_0f3a9c2d4b7e41a6b8c1d2e3"
+    }
+  }
+}
+```
+
+Anthropic 路由（`/v1/messages`、`/messages` 与 `count_tokens` 路由）：
+
+```json
+{
+  "type": "error",
+  "error": { "type": "invalid_request_error", "message": "max_tokens: Field required" }
+}
+```
+
+| 状态码 | OpenAI 的 `type` / `code` | Anthropic 的 `error.type` |
+| --- | --- | --- |
+| 400 | `invalid_request_error` / 结构校验失败为 `validation_error`，其他为 `bad_request` | `invalid_request_error` |
+| 401 | `authentication_error` / `invalid_api_key` | `authentication_error` |
+| 404 | `invalid_request_error` / `model_not_found`（未知路由为 `not_found`） | `not_found_error` |
+| 409 | `invalid_request_error` / `conflict` | `invalid_request_error` |
+| 413 | `invalid_request_error` / `request_too_large` | `request_too_large` |
+| 429 | `rate_limit_error` / `rate_limit_exceeded`，带 `Retry-After` | `rate_limit_error` |
+| 500 | `server_error` / `internal_error` | `api_error` |
+| 503 | `server_error` / `service_unavailable`，带 `Retry-After` | `overloaded_error` |
+
+其他方言：Ollama 路由返回 `{"error": "message"}`，MCP 端点返回 JSON-RPC 2.0 错误对象，Tavily 路由返回 `{"detail": {"error": "message"}}`。
+
+几件值得知道的事：
+
+- 在所有方言上，请求体校验失败都是 `400`，而不是 `422`。`error.param` 会指出出问题的字段。
+- 提示词超出模型的上下文窗口时，返回 `400` 与 `code: "context_length_exceeded"`。
+- `x_yunshu.hint` 是针对常见错误的一行修复建议；同样的文字也会以 `(hint: ...)` 附加在 `message` 后面，因为许多 SDK 只会显示 message。
+- 服务器满载（`YUNSHU_QUEUE_LIMIT`）时返回 `429` 并带 `Retry-After`；内存不足时返回 `503`。OpenAI 与 Anthropic SDK 都会重试这两种状态。
+- 流式开始之后发生的错误无法再改变 HTTP 状态码，流会发送最后一个 `data: {"error": ...}` 事件，接着是 `data: [DONE]`。
+
+## 请求 ID 与请求头
+
+每个请求都有一个 ID。发送 `X-Request-Id`（1 至 128 个 `A-Z a-z 0-9 . _ : -` 字符）可自行指定，否则服务器会生成 `req_...`。这个 ID 会原样出现在 `X-Request-Id` 响应头（错误响应也一样）、`error.x_yunshu.request_id` 与 `x_yunshu.request_id` 中，并用来在服务器日志里识别该请求。
+
+生成路由会读取或返回的其他请求头：
+
+| 请求头 | 方向 | 说明 |
+| --- | --- | --- |
+| `X-Request-Id` | 双向 | 上述的请求 ID。 |
+| `X-Yunshu-Deadline-Ms` | 请求 | 从请求到达起算的墙钟时间预算，含排队等待。超过后生成会被取消，返回 `504`（流式则发送一个终止错误事件）。 |
+| `X-Yunshu-Queue-Position`、`X-Yunshu-Queue-Est-Wait-Ms` | 响应 | 请求到达时服务器的繁忙程度。 |
+| `X-Yunshu-TTFT-Ms`、`X-Yunshu-Prefill-Tps`、`X-Yunshu-Decode-Tps`、`X-Yunshu-Cached-Tokens`、`X-Yunshu-Cache-Tier`、`X-Yunshu-Total-Ms` | 响应（非流式） | `x_yunshu` 内数值的精简副本。值未知时该头会省略。 |
+| `X-Yunshu-Cancelled` | 响应 | 回答因取消或超时而中断时为 `true`。 |
+| `X-Yunshu-Spec`、`X-Yunshu-Spec-Acceptance` | 响应 | 若执行了推测解码，表示其模式与接受率。 |
+| `Retry-After` | 响应 | `429` 与 `503` 时建议等待的秒数。 |
+
+进行中的生成可用请求 ID 取消，详见[运维](/docs/api/operations)。
+
+## Yunshu 扩展字段
+
+Yunshu 新增的内容都放在专属的命名空间下，官方 SDK 因此完全不受影响。
+
+- `x_yunshu`：位于非流式的 chat、completions、Responses 或 Messages 响应 JSON 中，包含排队等待、首 token 延迟、prefill 与 decode 速度、缓存 token 数与缓存层级、推测解码计数，以及适用时的 `cancelled`、`budget` 或 `context_policy`。流式响应则把同一个对象放在最后的 usage 块（OpenAI）或 `usage` 内（Messages、Responses）。
+- OpenAI 格式错误中的 `error.x_yunshu`：`hint`、`request_id`，过载错误时还有原因与队列深度。
+- 请求等待或 prefill 期间发送的 SSE 注释行，例如 `: yunshu-progress {...}`。SSE 解析器会忽略注释。
+- `GET /v1/models` 返回的每个模型对象内的 `yunshu`。
+- 生成路由上的额外请求字段（例如 `top_n_sigma`、`spec_decode`、`thinking_budget`、`keep_alive`、`grammar`）。
+
+字段清单与含义见[扩展功能](/docs/api/extensions)。
+
+## 路由总览
+
+| 路由 | 页面 |
+| --- | --- |
+| `POST /v1/chat/completions`、`POST /v1/completions` | [Chat completions](/docs/api/chat-completions) |
+| `GET /v1/chat/completions`、`GET /v1/chat/completions/{id}`、`POST /v1/chat/completions/{id}`、`DELETE /v1/chat/completions/{id}`、`GET /v1/chat/completions/{id}/messages` | [已存储的 completions](/docs/api/stored-completions) |
+| `POST /v1/responses`、`GET /v1/responses/{id}`、`DELETE /v1/responses/{id}`、`POST /v1/responses/{id}/cancel`、`POST /v1/responses/input_tokens`、`POST /v1/responses/compact`、`WS /v1/responses` | [Responses](/docs/api/responses) |
+| `POST /v1/messages`、`POST /v1/messages/count_tokens`（也提供不带 `/v1` 的版本） | [Messages](/docs/api/messages) |
+| 服务器端的网页搜索、网页抓取与 MCP 连接器工具 | [服务器工具](/docs/api/server-tools) |
+| `POST /v1/embeddings`、`POST /v1/pooling` | [Embeddings](/docs/api/embeddings) |
+| `POST /v1/rerank`、`POST /v1/score`、`POST /v1/classify` | [Rerank 与评分](/docs/api/rerank) |
+| `POST /v1/tokenize`、`POST /v1/detokenize`、`POST /v1/apply-template`（也提供不带 `/v1` 的版本） | [Tokenization](/docs/api/tokenization) |
+| `POST /v1/audio/transcriptions`、`POST /v1/audio/translations`、`POST /v1/audio/speech`、`POST /v1/audio/speech/stream`、`GET /v1/audio/voices` | [音频](/docs/api/audio) |
+| `POST /v1/images/generations`、`POST /v1/images/edits`、`POST /v1/images/variations` | [图像](/docs/api/images) |
+| `GET /v1/models`、`GET /v1/models/{id}`、`POST /v1/models/load`、`POST /v1/models/unload/{id}` | [模型](/docs/api/models) |
+| `POST /v1/files`、`GET /v1/files`、`GET /v1/files/{id}`、`GET /v1/files/{id}/content`、`DELETE /v1/files/{id}` | [文件](/docs/api/files) |
+| `POST /v1/batches`、`GET /v1/batches`、`POST /v1/messages/batches` 及相关路由 | [批处理](/docs/api/batches) |
+| `POST /v1/evals` 及相关路由 | [Evals](/docs/api/evals) |
+| `WS /v1/realtime`、`POST /v1/realtime/client_secrets`、`POST /v1/realtime/calls` | [Realtime](/docs/api/realtime) |
+| `POST /api/chat`、`POST /api/generate`、`POST /api/embed`、`GET /api/tags` 及相关路由 | [Ollama](/docs/api/ollama) |
+| `POST /v1/mcp`、`GET /v1/mcp/sse` | [MCP](/docs/api/mcp) |
+| `POST /v1/decisions`、`POST /v1/systemone` | [Decisions](/docs/api/decisions) |
+| `GET /v1/requests`、`DELETE /v1/requests/{id}`、`POST /v1/cancel`、`GET /v1/yunshu/status`、`GET /health`、`GET /metrics` | [运维](/docs/api/operations) |
+
+## 暂不提供的 OpenAI 与 Anthropic 功能
+
+Yunshu 是本地推理引擎，专为运行托管服务而存在的 API 没有对应物。对这些路由发出请求会得到 `404`。
+
+<NotServed>
+
+| 未提供 | API | 原因 |
+| --- | --- | --- |
+| `/v1/fine_tuning/jobs` | OpenAI | 此服务器不做训练。可用 `mlx-lm` 工具生成 LoRA adapter，并在引擎支持时以 `lora_adapter` 加载。 |
+| `/v1/moderations` | OpenAI | 没有托管的内容审核模型。 |
+| `/v1/assistants`、`/v1/threads`、`/v1/threads/{id}/runs` | OpenAI（旧版） | 已由 Yunshu 提供的 Responses API 取代。 |
+| `/v1/vector_stores`、file search | OpenAI | 没有托管的检索存储库。请配合 `POST /v1/embeddings` 与自己的索引。 |
+| `/v1/uploads` | OpenAI | 未实现分块的 multipart 上传。`POST /v1/files` 接受单次上传。 |
+| `/v1/containers`、code interpreter | OpenAI | 没有托管的沙箱。 |
+| `/v1/videos`（Sora） | OpenAI | 没有视频生成端点。 |
+| `/v1/organizations/*`、`/v1/skills` | Anthropic | 账号与托管技能的管理在本地不存在。 |
+| 代码执行、computer use 与 memory 工具 | Anthropic 与 OpenAI | 托管工具，在本地没有意义。客户端的 function tools 可正常使用。 |
+
+</NotServed>
+
+Yunshu 在生成循环内自行运行的工具（网页搜索、网页抓取、MCP 连接器）请见[服务器工具](/docs/api/server-tools)。
+
+## 相关页面
+
+- [Chat completions](/docs/api/chat-completions)
+- [模型](/docs/api/models)
+- [扩展功能](/docs/api/extensions)
+- [配置](/docs/guides/configuration)

@@ -1,0 +1,209 @@
+---
+title: Operations
+description: Health probes, Prometheus metrics, live request inspection and cancellation, server properties, interactive docs, rate limiting and logging.
+---
+
+These routes are for running Yunshu as a service: probes for a service manager or load balancer, a Prometheus endpoint, a live view of in-flight requests, and the OpenAPI documents. For the richer status object see `GET /v1/yunshu/status` on [Extensions](/docs/api/extensions).
+
+<Endpoint method="GET" path="/health" />
+<Endpoint method="GET" path="/health/live" />
+<Endpoint method="GET" path="/health/ready" />
+<Endpoint method="GET" path="/metrics" />
+<Endpoint method="GET" path="/v1/requests" />
+<Endpoint method="GET" path="/v1/requests/{request_id}" />
+<Endpoint method="DELETE" path="/v1/requests/{request_id}" />
+<Endpoint method="GET" path="/props" />
+<Endpoint method="GET" path="/v1/props" />
+<Endpoint method="GET" path="/version" />
+<Endpoint method="GET" path="/docs" />
+<Endpoint method="GET" path="/openapi.json" />
+
+## Which routes need the token
+
+Authentication is only enforced when `YUNSHU_AUTH_TOKEN` is set. When it is set, these paths stay public so probes and docs keep working: `/health`, `/health/live`, `/health/ready`, `/version`, `/docs`, `/redoc`, `/openapi.json`, `/` and the console assets. Everything else, including `/metrics`, `/props` and the request routes, needs `Authorization: Bearer <token>` or `x-api-key`.
+
+## Health probes
+
+| Route | Purpose | Response |
+| --- | --- | --- |
+| `GET /health` | Minimal liveness summary. Always `200` while the process answers. | `{"status": "ok", "engine": {"loaded": bool}, "server_state": "running", "uptime_seconds": 12.3}` |
+| `GET /health/live` | Liveness probe. | `{"alive": true, "state": "running"}` |
+| `GET /health/ready` | Readiness probe. `200` when ready, `503` when not. | `{"ready": bool, "checks": {...}}` |
+
+`server_state` and `state` are `running`, `shutdown_requested` or `shutting_down`. These endpoints are public and deliberately return no model names, queue depth or memory figures.
+
+`GET /health/ready` is `503` when any of these holds:
+
+- the server is draining for shutdown (`checks.not_shutting_down` is `false`),
+- no model is loaded and none can be loaded on demand (`checks.model_loaded` is `false`),
+- Metal memory use is at or above 95 percent of system memory (`checks.gpu_memory_ok` is `false`).
+
+In multi-model mode, models that are registered but not yet loaded count as ready, because a request loads them on demand; `checks.models_registered` reports how many. When no model is loaded because loading failed, the body carries a `reason` with the load error.
+
+```json
+{ "ready": true, "checks": { "not_shutting_down": true, "model_loaded": true, "gpu_memory_ok": true } }
+```
+
+Use `GET /health/live` as the liveness check and `GET /health/ready` as the readiness check.
+
+## Prometheus metrics
+
+`GET /metrics` returns the Prometheus text exposition format. It is always mounted and follows the bearer token when one is set, so configure bearer authentication in your Prometheus scrape job. Metrics are exposed under the `yunshu_` prefix:
+
+| Family | Contents |
+| --- | --- |
+| `yunshu_request_total`, `yunshu_request_duration_seconds` | HTTP requests by method, status and endpoint bucket; request latency histogram. |
+| `yunshu_gateway_active_requests` | Inference requests currently in flight. |
+| `yunshu_tokens_generated_total`, `yunshu_ttft_seconds`, `yunshu_itl_seconds`, `yunshu_inference_duration_seconds`, `yunshu_prefill_duration_seconds` | Generated tokens, time to first token, inter-token latency, inference and prefill duration histograms. |
+| `yunshu_itl_p50_ms`, `yunshu_itl_p99_ms`, `yunshu_step_duration_ms`, `yunshu_compute_utilization_pct` | Latency percentiles and step timing gauges. |
+| `yunshu_kv_cache_*`, `yunshu_kv_prefix_cache_*`, `yunshu_radix_*` | KV block usage, prefix cache entries, hits, misses and evictions. |
+| `yunshu_apc_*` | The automatic prefix cache of the VLM runner: RAM and SSD tiers, lookups by tier, matched tokens, evictions, WARM tier bytes and compression ratio. |
+| `yunshu_spec_*`, `yunshu_mtp_*` | Speculative decoding: draft and accepted tokens, acceptance rate, MTP cycles, n-gram proposals. Labeled with `model_id`. |
+| `yunshu_gpu_busy_seconds_total`, `yunshu_round_driver_busy_seconds_total` | Cumulative GPU-busy seconds; the idle fraction over a window is one minus the rate of the first. |
+| `yunshu_scheduler_*`, `yunshu_chunked_prefill_*`, `yunshu_attention_eviction_*` | Scheduler and prefill gauges of the batched engine. |
+| `yunshu_model_warmup_*`, `yunshu_lora_*`, `yunshu_response_cache_*` | Warm-up runs, LoRA adapter bookkeeping, response cache hits and misses. |
+
+Which families carry data depends on the engine and features in use; unused families stay at zero. Memory figures in metrics are in bytes.
+
+## Inspect and cancel requests
+
+Every request has an id (your `X-Request-Id` or a generated one, see [Extensions](/docs/api/extensions)). These routes work on that id.
+
+`GET /v1/requests` lists in-flight requests:
+
+```json
+{
+  "object": "list",
+  "count": 1,
+  "data": [
+    {
+      "request_id": "job-8",
+      "elapsed_s": 8.12,
+      "phase": "prefill",
+      "prompt_tokens": 93268,
+      "cached_tokens": 0,
+      "processed_tokens": 92160,
+      "percent": 98.8,
+      "tokens_per_second": 8125.3,
+      "eta_s": 0.1,
+      "path": "/v1/chat/completions",
+      "stream": true,
+      "model": "local",
+      "engine_request_id": "chatcmpl-...",
+      "cancelled": false
+    }
+  ]
+}
+```
+
+`phase` is `starting`, `queued`, `prefill` or `decode`. A queued request shows `queue_position` and `queue_est_wait_ms`; a decoding request shows `completion_tokens`. Generations that did not come through a tracked HTTP path (for example batch jobs) appear with phase `running`.
+
+`GET /v1/requests/{request_id}` returns one request as `{"object": "yunshu.request", ...}` with the same fields, or `404` when it is unknown or already finished. Poll it to follow a long non-streaming prefill.
+
+`DELETE /v1/requests/{request_id}` cancels by the client request id or the completion id. It returns `{"object": "yunshu.request", "id": ..., "status": "cancelled"}`, or `"cancelling"` when the request has been admitted but not yet handed to the engine (it is cancelled as soon as it registers). Unknown ids return `404`. `POST /v1/cancel` does the same by body; see [Extensions](/docs/api/extensions).
+
+## Server properties
+
+`GET /props` and `GET /v1/props` (the same handler) return llama.cpp-style properties of the served model, for tools that probe for them:
+
+```json
+{
+  "default_generation_settings": { "n_ctx": 32768 },
+  "model_path": "mlx-community/Qwen3.5-0.8B-MLX-bf16",
+  "chat_template": "{% ... %}",
+  "total_slots": 1
+}
+```
+
+It reports a single served model; with no model loaded, or in multi-model mode where there is no single served engine, it returns `503`. For per-model details use `GET /v1/models`; see [Models](/docs/api/models).
+
+`GET /version` returns `{"version", "service": "yunshu", "description"}`.
+
+## Interactive docs
+
+`GET /docs` serves Swagger UI, `GET /redoc` serves ReDoc and `GET /openapi.json` serves the OpenAPI document of every registered route. All three are public even when a token is set.
+
+## Tavily-compatible routes
+
+Under `/tavily` Yunshu serves a local implementation of the Tavily REST API, backed by its own search and fetch layers: `POST /tavily/search`, `POST /tavily/extract`, `POST /tavily/crawl`, `POST /tavily/map`, `POST /tavily/research`, `GET /tavily/research/{request_id}`, `POST /tavily/feedback`, `POST /tavily/logs`, `GET /tavily/usage`, `GET /tavily/providers` and an MCP endpoint `POST /tavily/mcp`. There is no `/v1` in these paths, and errors use `{"detail": {"error": "..."}}`. When a token is set, Tavily clients may pass it as the bearer token or as `api_key` in the request body. Credits are not billed: `GET /tavily/usage` always reports zero. See the [Web search guide](/docs/guides/web-search) for providers and setup.
+
+## Rate limiting and admission
+
+- **Per-IP rate limit.** Off by default. Setting `YUNSHU_RATE_LIMIT_RPM` to a positive number turns on a token bucket per client IP (requests per minute, burst equal to the limit). Exceeding it returns `429` with `Retry-After` in the error format of the route. Health, docs and `/metrics` are exempt, and so are CORS preflights. `X-Forwarded-For` is only honored from proxies listed in `YUNSHU_TRUSTED_PROXIES`.
+- **Admission control.** Always on for generation routes. `YUNSHU_QUEUE_LIMIT` (default 64) caps requests in flight and answers `429` beyond it; high memory pressure with other requests running answers `503`. Both carry `Retry-After`. See [Extensions](/docs/api/extensions).
+- **Deadlines.** The `X-Yunshu-Deadline-Ms` request header bounds how long a request may wait and run.
+
+## Logging
+
+Each request is logged with its request id, method, path, status and latency, and the id is returned in the `X-Request-ID` response header. Successful requests are logged at debug level, `4xx` at warning and `5xx` at error, so the default `INFO` level shows only problems; set `YUNSHU_LOG_LEVEL=DEBUG` to see every request. Requests slower than `YUNSHU_SLOW_REQUEST_THRESHOLD` seconds (default 30) log a `SLOW_REQUEST` warning, and memory use above 85 percent of unified memory logs a `MEMORY_PRESSURE` warning. Health, docs and `/metrics` requests are not logged. When Yunshu runs as a launchd service, the service log is rotated and compressed with secrets redacted; see [Service](/docs/getting-started/service).
+
+Extra introspection routes under `/debug` exist but are mounted only when `YUNSHU_DEBUG_ROUTES=1`, and need the token or `YUNSHU_AUTH_DISABLED`. They are diagnostic aids, not a stable API.
+
+## Examples
+
+<Tabs items={["curl", "Python", "JavaScript"]}>
+<Tab value="curl">
+
+```bash
+curl -i http://localhost:8000/health/ready
+curl -s http://localhost:8000/metrics | head
+curl -s http://localhost:8000/v1/requests
+curl -X DELETE http://localhost:8000/v1/requests/job-8
+```
+
+</Tab>
+<Tab value="Python">
+
+```python
+import httpx
+
+base = "http://localhost:8000"
+ready = httpx.get(f"{base}/health/ready")
+print(ready.status_code, ready.json())
+
+for r in httpx.get(f"{base}/v1/requests").json()["data"]:
+    print(r["request_id"], r["phase"], r.get("percent"))
+```
+
+</Tab>
+<Tab value="JavaScript">
+
+```ts
+const base = "http://localhost:8000";
+const ready = await fetch(`${base}/health/ready`);
+console.log(ready.status, await ready.json());
+
+const { data } = await (await fetch(`${base}/v1/requests`)).json();
+for (const r of data) console.log(r.request_id, r.phase, r.percent);
+```
+
+</Tab>
+</Tabs>
+
+## Errors
+
+| Status | When |
+| --- | --- |
+| `401` | A token is set and the route is not public, and the request has no valid token. |
+| `404` | Unknown request id. |
+| `429` | Rate limit (when enabled) or queue limit. |
+| `503` | Readiness failing, memory pressure refusal, or `GET /props` with no single model loaded. |
+
+## Support
+
+| Feature | Status |
+| --- | --- |
+| Liveness, readiness, minimal health | <Support status="supported">supported</Support> |
+| Prometheus `/metrics` | <Support status="supported">supported</Support> |
+| Request listing, polling and cancellation | <Support status="extension">Yunshu extension</Support> |
+| `/props` | <Support status="partial">minimal llama.cpp-style subset, single model</Support> |
+| Per-IP rate limit | <Support status="partial">off unless `YUNSHU_RATE_LIMIT_RPM` is set</Support> |
+| Slot management routes (`/slots`) | <Support status="unsupported">not provided</Support> |
+| Tavily credit billing | <Support status="unsupported">local implementation, no billing</Support> |
+
+## Related
+
+- [Extensions](/docs/api/extensions) for `GET /v1/yunshu/status`, warm-up and request ids.
+- [Service](/docs/getting-started/service) for running under launchd.
+- [Troubleshooting](/docs/guides/troubleshooting) for what to check when a probe fails.
+- [Web search guide](/docs/guides/web-search) for the Tavily-compatible routes.
