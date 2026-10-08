@@ -810,3 +810,85 @@ def test_sample_input_string_shape_for_null_and_empty_media():
     assert evals_runner.sample_inputs(
         [{"role": "assistant", "content": None}, {"role": "user", "content": []}]
     ) == [{"role": "assistant", "content": ""}, {"role": "user", "content": "[]"}]
+
+
+def test_cpu_grader_keeps_metadata_responsive_and_stops_on_cancel(env, monkeypatch):
+    import threading
+
+    from yunshu_gateway.evals_grading import GradingCancelledError
+
+    sdk, _, calls, _ = env
+    entered, exited = threading.Event(), threading.Event()
+
+    def blocked(criterion, context, cancel_event=None):
+        assert cancel_event is not None
+        entered.set()
+        try:
+            assert cancel_event.wait(5)
+            raise GradingCancelledError("canceled")
+        finally:
+            exited.set()
+
+    monkeypatch.setattr(evals_runner, "lexical", blocked)
+    e = definition(sdk)
+    r = sdk.evals.runs.create(e.id, data_source=source(3))
+    assert entered.wait(3)
+    # These ordinary routes must complete while the CPU worker is still blocked.
+    assert sdk.evals.retrieve(e.id).id == e.id
+    assert not exited.is_set()
+    assert sdk.evals.runs.cancel(r.id, eval_id=e.id).status == "canceled"
+    assert exited.wait(3)
+    assert sdk.evals.runs.retrieve(r.id, eval_id=e.id).result_counts.total == 0
+    assert not calls
+
+
+@pytest.mark.parametrize(
+    "metric", ["rouge_l", "meteor", "bleu", "gleu", "rouge_1", "fuzzy_match"]
+)
+def test_lexical_loops_observe_cancellation(metric):
+    from yunshu_gateway.evals_grading import GradingCancelledError
+
+    class CancelAfterChecks:
+        checks = 0
+
+        def is_set(self):
+            self.checks += 1
+            return self.checks >= 3
+
+    with pytest.raises(GradingCancelledError):
+        similarity("a " * 50, "a " * 50, metric, CancelAfterChecks())
+
+
+def test_fuzzy_cancel_wrapper_preserves_scores():
+    from threading import Event
+
+    for a, b in [
+        ("aabca", "abaca"),
+        ("a " * 30, "a " * 29 + "b"),
+        ("", " "),
+        ("abc", "axc"),
+    ]:
+        assert similarity(a, b, "fuzzy_match", Event()) == similarity(
+            a, b, "fuzzy_match"
+        )
+
+
+def test_score_grader_respects_explicit_reasoning_effort(env):
+    sdk, _, calls, _ = env
+    e = definition(
+        sdk,
+        [
+            {
+                "type": "score_model",
+                "name": "score",
+                "model": "local",
+                "input": [{"role": "user", "content": "Grade this"}],
+                "sampling_params": {"reasoning_effort": "high"},
+                "pass_threshold": 0.5,
+            }
+        ],
+    )
+    r = sdk.evals.runs.create(e.id, data_source=source(1))
+    assert finished(sdk, e.id, r.id).result_counts.passed == 1
+    assert calls[0]["reasoning_effort"] == "high"
+    assert "enable_thinking" not in calls[0]

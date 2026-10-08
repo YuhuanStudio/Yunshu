@@ -8,9 +8,12 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import functools
 import json
 import math
 import time
+from concurrent.futures import ThreadPoolExecutor
+from threading import Event
 from typing import cast
 
 import httpx
@@ -22,6 +25,18 @@ from .evals_store import EvalStore, get_store, new_id, stored_completions
 from .files_store import text_of
 
 _tasks: dict[str, asyncio.Task] = {}
+_cpu_pool: ThreadPoolExecutor | None = None
+
+
+async def cpu_grade(criterion: dict, context: dict, event: Event) -> dict:
+    global _cpu_pool
+    if _cpu_pool is None:
+        _cpu_pool = ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="yunshu-eval-cpu"
+        )
+    return await asyncio.get_running_loop().run_in_executor(
+        _cpu_pool, functools.partial(lexical, criterion, context, cancel_event=event)
+    )
 
 
 def chat_messages(messages: list) -> list[dict]:
@@ -202,7 +217,8 @@ async def completion(
         "stream": False,
     }
     if schema:
-        body.setdefault("enable_thinking", False)
+        if params.get("reasoning_effort") in (None, "none"):
+            body.setdefault("enable_thinking", False)
         body["response_format"] = {
             "type": "json_schema",
             "json_schema": {"name": "eval_grade", "strict": True, "schema": schema},
@@ -224,6 +240,7 @@ def add_usage(rec: dict, model: str, payload: dict):
 
 
 async def process(store: EvalStore, rid: str, app, headers: dict):
+    cpu_cancel = Event()
     try:
         rec = store.get(rid)
         rec["status"] = "in_progress"
@@ -304,7 +321,7 @@ async def process(store: EvalStore, rid: str, app, headers: dict):
                     for criterion in rec["_criteria"]:
                         kind = criterion["type"]
                         if kind in ("string_check", "text_similarity"):
-                            result = lexical(criterion, context)
+                            result = await cpu_grade(criterion, context, cpu_cancel)
                         else:
                             g = render(criterion, context)
                             prop = (
@@ -385,6 +402,7 @@ async def process(store: EvalStore, rid: str, app, headers: dict):
                 await asyncio.sleep(0.01)
         store.change(rid, status="completed")
     except asyncio.CancelledError:
+        cpu_cancel.set()
         with contextlib.suppress(ConversationError):
             store.change(rid, status="canceled")
         raise
@@ -432,5 +450,10 @@ def recover():
 
 
 async def stop():
+    global _cpu_pool
     for rid in list(_tasks):
         await cancel(rid)
+
+    pool, _cpu_pool = _cpu_pool, None
+    if pool is not None:
+        await asyncio.to_thread(pool.shutdown, wait=True, cancel_futures=True)

@@ -10,7 +10,9 @@ import json
 import math
 import re
 from collections import Counter
+from collections.abc import Sequence
 from difflib import SequenceMatcher
+from threading import Event
 
 from .conversations_store import ConversationError
 
@@ -23,6 +25,35 @@ METRICS = {
     "rouge_l",
     *(f"rouge_{i}" for i in range(1, 6)),
 }
+
+
+class GradingCancelledError(Exception):
+    """A pure CPU grader observed its run's cooperative cancellation flag."""
+
+
+def _check_cancel(event: Event | None):
+    if event is not None and event.is_set():
+        raise GradingCancelledError("Evaluation canceled")
+
+
+class _CancellableText(Sequence[str]):
+    """Give stdlib SequenceMatcher cancellation points without changing matching."""
+
+    def __init__(self, text: str, event: Event):
+        self.text, self.event = text, event
+
+    def __len__(self):
+        return len(self.text)
+
+    def __getitem__(self, index):
+        _check_cancel(self.event)
+        return self.text[index]
+
+    def __iter__(self):
+        for i, char in enumerate(self.text):
+            if i % 1024 == 0:
+                _check_cancel(self.event)
+            yield char
 
 
 def lookup(path: str, context: dict):
@@ -52,14 +83,23 @@ def render(value, context: dict):
     return value
 
 
-def ngrams(tokens: list[str], n: int) -> Counter:
-    return Counter(tuple(tokens[i : i + n]) for i in range(len(tokens) - n + 1))
+def ngrams(tokens: list[str], n: int, cancel_event: Event | None = None) -> Counter:
+    def grams():
+        for i in range(len(tokens) - n + 1):
+            if i % 1024 == 0:
+                _check_cancel(cancel_event)
+            yield tuple(tokens[i : i + n])
+
+    return Counter(grams())
 
 
-def similarity(a: str, b: str, metric: str) -> float:
-    x, y = a.split(), b.split()
+def similarity(a: str, b: str, metric: str, cancel_event: Event | None = None) -> float:
+    _check_cancel(cancel_event)
     if metric == "fuzzy_match":
-        return SequenceMatcher(None, a, b, autojunk=False).ratio()
+        seq_a = _CancellableText(a, cancel_event) if cancel_event is not None else a
+        seq_b = _CancellableText(b, cancel_event) if cancel_event is not None else b
+        return SequenceMatcher(None, seq_a, seq_b, autojunk=False).ratio()
+    x, y = a.split(), b.split()
     if not x or not y:
         return 0.0
     if metric == "cosine":
@@ -71,6 +111,7 @@ def similarity(a: str, b: str, metric: str) -> float:
         if metric == "rouge_l":
             row = [0] * (len(y) + 1)
             for t in x:
+                _check_cancel(cancel_event)
                 old = row[:]
                 for j, s in enumerate(y, 1):
                     row[j] = old[j - 1] + 1 if t == s else max(old[j], row[j - 1])
@@ -80,6 +121,7 @@ def similarity(a: str, b: str, metric: str) -> float:
         unused = set(range(len(y)))
         alignment = []
         for i, t in enumerate(x):
+            _check_cancel(cancel_event)
             matched_j = next((j for j in sorted(unused) if y[j] == t), None)
             if matched_j is not None:
                 unused.remove(matched_j)
@@ -94,20 +136,20 @@ def similarity(a: str, b: str, metric: str) -> float:
         return (10 * m / (len(x) + 9 * len(y))) * (1 - 0.5 * (chunks / m) ** 3)
     if metric.startswith("rouge_"):
         n = int(metric.split("_")[1])
-        u, v = ngrams(x, n), ngrams(y, n)
+        u, v = ngrams(x, n, cancel_event), ngrams(y, n, cancel_event)
         denom = sum(u.values()) + sum(v.values())
         return 2 * sum((u & v).values()) / denom if denom else 0.0
     orders = range(1, min(4, len(x)) + 1)
     if metric == "gleu":
         u, v = Counter(), Counter()
         for n in range(1, 5):
-            u.update(ngrams(x, n))
-            v.update(ngrams(y, n))
+            u.update(ngrams(x, n, cancel_event))
+            v.update(ngrams(y, n, cancel_event))
         return sum((u & v).values()) / max(sum(u.values()), sum(v.values()))
     if metric == "bleu":
         precision = []
         for n in orders:
-            u, v = ngrams(x, n), ngrams(y, n)
+            u, v = ngrams(x, n, cancel_event), ngrams(y, n, cancel_event)
             p = sum((u & v).values()) / sum(u.values())
             if not p:
                 return 0.0
@@ -116,7 +158,8 @@ def similarity(a: str, b: str, metric: str) -> float:
     raise ValueError(f"Unknown metric {metric}")
 
 
-def lexical(criterion: dict, context: dict) -> dict:
+def lexical(criterion: dict, context: dict, cancel_event: Event | None = None) -> dict:
+    _check_cancel(cancel_event)
     g = render(criterion, context)
     a, b = g["input"], g["reference"]
     if g["type"] == "string_check":
@@ -130,7 +173,7 @@ def lexical(criterion: dict, context: dict) -> dict:
             }[op]
         )
     else:
-        score = similarity(a, b, g["evaluation_metric"])
+        score = similarity(a, b, g["evaluation_metric"], cancel_event)
     return dict(
         name=g["name"],
         type=g["type"],
