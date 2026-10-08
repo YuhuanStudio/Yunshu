@@ -539,3 +539,37 @@ test("keys: list with quotas, secret shown once on create, rotate, delete confir
   await page.getByRole("button", { name: "刪除" }).first().click();
   await expect(page.getByText("無法復原")).toBeVisible();
 });
+
+test("settings uses the standard page header; effective config shows localized descriptions, the raw name stays mono", async ({
+  page,
+}) => {
+  await install(page);
+  await page.goto("/console/#/settings", { waitUntil: "domcontentloaded" });
+  await expect(
+    page.getByRole("heading", { name: "設定", level: 1 }),
+  ).toBeVisible();
+  // One section nav: a tray on wide screens, a Select on phones; never a side column.
+  const nav = page.getByTestId("settings-nav");
+  await expect(nav.locator('[data-variant="tray"]')).toBeVisible();
+  await expect(page.getByTestId("settings-sidebar")).toHaveCount(0);
+  const view = page.getByTestId("config-view");
+  const row = view.locator('tr[data-name="YUNSHU_LOG_LEVEL"]');
+  await expect(row).toBeVisible();
+  await expect(row.locator(".font-mono").first()).toHaveText(
+    "YUNSHU_LOG_LEVEL",
+  );
+  // The engine's English text ("Log level.") is replaced by the zh-TW registry translation.
+  await expect(row).not.toContainText("Log level.");
+  await expect(row).toContainText(/[一-鿿]/);
+});
+
+test("phone settings: section picker is a Select under the standard header", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 402, height: 874 });
+  await install(page);
+  await page.goto("/console/#/settings", { waitUntil: "domcontentloaded" });
+  const nav = page.getByTestId("settings-nav");
+  await expect(nav.getByRole("combobox")).toBeVisible();
+  await expect(nav.locator('[data-variant="tray"]')).toHaveCount(0);
+});
