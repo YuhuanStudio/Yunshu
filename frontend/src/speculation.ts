@@ -93,3 +93,57 @@ export function summarizeSpeculation(
     unattributed,
   };
 }
+
+/** One loaded model's cumulative speculation counters from `GET /debug/spec-decode`. */
+export interface EngineSpecCounters {
+  model: string;
+  mtp: {
+    cycles: number;
+    accepts: number;
+    rejects: number;
+    cooldowns: number | null;
+  } | null;
+  adaptive: {
+    currentK: number | null;
+    drafted: number;
+    accepted: number;
+  } | null;
+}
+
+const rec = (v: unknown): Record<string, unknown> | null =>
+  v && typeof v === "object" && !Array.isArray(v)
+    ? (v as Record<string, unknown>)
+    : null;
+
+/** Only counters the engine actually sent; a model with none of them is left out. */
+export function parseSpecCounters(raw: unknown): EngineSpecCounters[] {
+  const models = rec(raw)?.models;
+  if (!Array.isArray(models)) return [];
+  const out: EngineSpecCounters[] = [];
+  for (const m of models) {
+    const r = rec(m);
+    if (!r) continue;
+    const mt = rec(r.mtp_stats);
+    const cycles = count(mt?.total_cycles);
+    const accepts = count(mt?.accepts);
+    const rejects = count(mt?.rejects);
+    const ad = rec(r.adaptive_spec);
+    const drafted = count(ad?.total_draft_tokens);
+    const accepted = count(ad?.total_accepted_tokens);
+    const mtp =
+      cycles != null && accepts != null && rejects != null
+        ? { cycles, accepts, rejects, cooldowns: count(mt?.cooldowns) }
+        : null;
+    const adaptive =
+      drafted != null && accepted != null
+        ? { currentK: count(ad?.current_k), drafted, accepted }
+        : null;
+    if (mtp || adaptive)
+      out.push({
+        model: typeof r.model_id === "string" ? r.model_id : "",
+        mtp,
+        adaptive,
+      });
+  }
+  return out;
+}

@@ -260,5 +260,14 @@ const requests: Shape<typeof zh> = {
   "spec.depth": "Per-depth acceptance: the engine reports only per-request totals today, so no per-depth chart is drawn.",
   "spec.none": "None of these requests has a speculation record; a configured mode does not mean these used it.",
   "spec.copy": "includes {rounds} copy-draft rounds ({tokens} tokens)",
+  "spec.counters.title": "Engine counters",
+  "spec.counters.desc": "Totals since the engine started, from /debug/spec-decode; a different scope from the recent requests above.",
+  "spec.counters.model": "Model",
+  "spec.counters.cycles": "MTP cycles",
+  "spec.counters.accepts": "Accepted",
+  "spec.counters.rejects": "Rejected",
+  "spec.counters.adaptive": "Adaptive draft",
+  "spec.counters.adaptiveValue": "{accepted} / {drafted} tokens · K={k}",
+  "spec.counters.unavailable": "Engine counters: this engine does not provide them (/debug is off, or it does not report speculation counters).",
 };
 export default requests;

@@ -248,5 +248,14 @@ const requests = {
   "spec.depth": "每個深度的接受率：引擎目前只回報每筆請求的合計，所以不繪製分深度圖。",
   "spec.none": "這些請求都沒有推測解碼紀錄；設定的推測解碼不代表這幾筆有用到。",
   "spec.copy": "含 {rounds} 輪複製草稿（{tokens} token）",
+  "spec.counters.title": "引擎累計計數器",
+  "spec.counters.desc": "自引擎啟動起的合計，來自 /debug/spec-decode；與上表的近期請求是兩個不同的範圍。",
+  "spec.counters.model": "模型",
+  "spec.counters.cycles": "MTP 週期",
+  "spec.counters.accepts": "接受",
+  "spec.counters.rejects": "拒絕",
+  "spec.counters.adaptive": "自適應草稿",
+  "spec.counters.adaptiveValue": "{accepted} / {drafted} token · K={k}",
+  "spec.counters.unavailable": "引擎累計計數器：這個引擎沒有提供（/debug 關閉，或此引擎不回報推測解碼計數）。",
 };
 export default requests;

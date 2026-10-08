@@ -688,7 +688,7 @@ export function Requests({
         })}
       </StatGrid>
       {recent.supported && <LatencyDistribution rows={finished} />}
-      {recent.supported && <SpeculationPanel rows={finished} />}
+      {recent.supported && <SpeculationPanel rows={finished} connection={connection} />}
       <div className="flex flex-wrap justify-between gap-3">
         <div className="w-full sm:w-auto sm:max-w-xs">
           <Input

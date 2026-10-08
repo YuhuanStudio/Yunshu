@@ -251,5 +251,14 @@ const requests: Shape<typeof zh> = {
   "spec.depth": "各深度的接受率：引擎目前只上报每笔请求的合计，所以不绘制分深度图。",
   "spec.none": "这些请求都没有推测解码记录；配置了推测解码不代表这几笔用到了。",
   "spec.copy": "含 {rounds} 轮复制草稿（{tokens} token）",
+  "spec.counters.title": "引擎累计计数器",
+  "spec.counters.desc": "自引擎启动起的合计，来自 /debug/spec-decode；与上表的近期请求是两个不同的范围。",
+  "spec.counters.model": "模型",
+  "spec.counters.cycles": "MTP 周期",
+  "spec.counters.accepts": "接受",
+  "spec.counters.rejects": "拒绝",
+  "spec.counters.adaptive": "自适应草稿",
+  "spec.counters.adaptiveValue": "{accepted} / {drafted} token · K={k}",
+  "spec.counters.unavailable": "引擎累计计数器：这个引擎没有提供（/debug 关闭，或此引擎不上报推测解码计数）。",
 };
 export default requests;

@@ -1,9 +1,15 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Table, Tbody, Td, Th, Thead, Tr } from "@yuhuanowo/yunui";
 import { ChartCard } from "./AnalyticsPanels";
 import { t, useLocale } from "./i18n/index.ts";
 import type { Row } from "./RequestTrace";
-import { summarizeSpeculation } from "./speculation";
+import {
+  parseSpecCounters,
+  summarizeSpeculation,
+  type EngineSpecCounters,
+} from "./speculation";
+import { requestServerJson } from "./management-api";
+import type { Connection } from "./api";
 import { number } from "./ui";
 
 /**
@@ -11,8 +17,24 @@ import { number } from "./ui";
  * reported, token-weighted acceptance with its drafted/accepted denominators, and rounds. Nothing
  * is inferred from configuration, and per-depth acceptance is stated as not reported.
  */
-export function SpeculationPanel({ rows }: { rows: readonly Row[] }) {
+export function SpeculationPanel({
+  rows,
+  connection,
+}: {
+  rows: readonly Row[];
+  connection: Connection;
+}) {
   useLocale();
+  const [counters, setCounters] = useState<EngineSpecCounters[] | null>(null);
+  const finishedCount = rows.length;
+  useEffect(() => {
+    const c = new AbortController();
+    requestServerJson(connection, "/debug/spec-decode", { signal: c.signal })
+      .then((raw) => !c.signal.aborted && setCounters(parseSpecCounters(raw)))
+      .catch(() => !c.signal.aborted && setCounters([]));
+    return () => c.abort();
+    // finishedCount: re-read the totals when a request finishes.
+  }, [connection.baseUrl, connection.token, finishedCount]);
   const s = useMemo(() => summarizeSpeculation(rows), [rows]);
   if (s.total === 0) return null;
   return (
@@ -87,6 +109,66 @@ export function SpeculationPanel({ rows }: { rows: readonly Row[] }) {
           </p>
         )}
         <p>{t("requests.spec.depth")}</p>
+      </div>
+      <div className="mt-4" data-testid="spec-counters">
+        {counters && counters.length > 0 ? (
+          <>
+            <h3 className="text-sm font-semibold">
+              {t("requests.spec.counters.title")}
+            </h3>
+            <p className="mt-1 text-xs text-muted-foreground">
+              {t("requests.spec.counters.desc")}
+            </p>
+            <Table
+              scrollLabel={t("requests.spec.counters.title")}
+              className="mt-2"
+            >
+              <Thead>
+                <Tr>
+                  <Th>{t("requests.spec.counters.model")}</Th>
+                  <Th>{t("requests.spec.counters.cycles")}</Th>
+                  <Th>{t("requests.spec.counters.accepts")}</Th>
+                  <Th>{t("requests.spec.counters.rejects")}</Th>
+                  <Th>{t("requests.spec.counters.adaptive")}</Th>
+                </Tr>
+              </Thead>
+              <Tbody>
+                {counters.map((c) => (
+                  <Tr key={c.model}>
+                    <Td className="max-w-40 truncate text-sm" title={c.model}>
+                      {c.model.split("/").filter(Boolean).at(-1) ?? "—"}
+                    </Td>
+                    <Td className="tabular-nums">
+                      {c.mtp ? number(c.mtp.cycles, 0) : "—"}
+                    </Td>
+                    <Td className="tabular-nums">
+                      {c.mtp ? number(c.mtp.accepts, 0) : "—"}
+                    </Td>
+                    <Td className="tabular-nums">
+                      {c.mtp ? number(c.mtp.rejects, 0) : "—"}
+                    </Td>
+                    <Td className="whitespace-nowrap tabular-nums">
+                      {c.adaptive
+                        ? t("requests.spec.counters.adaptiveValue", {
+                            accepted: number(c.adaptive.accepted, 0),
+                            drafted: number(c.adaptive.drafted, 0),
+                            k:
+                              c.adaptive.currentK == null
+                                ? "—"
+                                : number(c.adaptive.currentK, 0),
+                          })
+                        : "—"}
+                    </Td>
+                  </Tr>
+                ))}
+              </Tbody>
+            </Table>
+          </>
+        ) : counters ? (
+          <p className="text-xs text-muted-foreground">
+            {t("requests.spec.counters.unavailable")}
+          </p>
+        ) : null}
       </div>
     </ChartCard>
   );

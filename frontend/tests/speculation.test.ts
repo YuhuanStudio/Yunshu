@@ -29,3 +29,32 @@ test("no drafted tokens means no acceptance figure, never zero", () => {
   assert.equal(s.modes[0].acceptance, null);
   assert.equal(s.unattributed, 1);
 });
+
+import { parseSpecCounters } from "../src/speculation.ts";
+
+test("engine counters keep only what was sent, never a zero for a missing field", () => {
+  const rows = parseSpecCounters({
+    models: [
+      {
+        model_id: "a",
+        mtp_stats: { accepts: 8, rejects: 2, total_cycles: 10, cooldowns: 1 },
+      },
+      { model_id: "b", mtp_stats: { accepts: 8 } },
+      {
+        model_id: "c",
+        adaptive_spec: {
+          current_k: 4,
+          total_draft_tokens: 100,
+          total_accepted_tokens: 60,
+        },
+      },
+    ],
+  });
+  assert.deepEqual(
+    rows.map((r) => r.model),
+    ["a", "c"],
+  );
+  assert.equal(rows[0].mtp?.cycles, 10);
+  assert.equal(rows[1].adaptive?.accepted, 60);
+  assert.deepEqual(parseSpecCounters(null), []);
+});

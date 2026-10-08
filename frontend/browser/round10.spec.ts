@@ -57,7 +57,13 @@ const ring = (extra: Record<string, unknown>) => ({
   finish_reason: "stop",
   stream: true,
   t0_wall: 1_799_999_990,
-  offsets_ms: { arrive: 0, admit: 40, first_token: 340, last_token: 2340, done: 2360 },
+  offsets_ms: {
+    arrive: 0,
+    admit: 40,
+    first_token: 340,
+    last_token: 2340,
+    done: 2360,
+  },
   queue_wait_ms: 40,
   ttft_ms: 300,
   prompt_tokens: 4000,
@@ -131,4 +137,38 @@ test("support bundle preview lists included, redacted and excluded for both expo
   const copy = preview.locator('[data-bundle="page"]');
   await expect(copy).toContainText("存取權杖、API 金鑰");
   await expect(copy).toContainText("/debug/system");
+});
+
+test("speculation counters from /debug/spec-decode appear next to the request summary", async ({
+  page,
+}) => {
+  await install(page, {
+    "/v1/yunshu/requests/recent": list([ring({ request_id: "p1" })]),
+  });
+  await page.route("**/debug/spec-decode", (route) =>
+    route.fulfill({
+      json: {
+        models: [
+          {
+            model_id: "org/Qwen3.5-9B",
+            mtp_stats: { accepts: 800, rejects: 200, total_cycles: 1000 },
+          },
+        ],
+      },
+    }),
+  );
+  await page.goto("/console/#/requests", { waitUntil: "domcontentloaded" });
+  const c = page.getByTestId("spec-counters");
+  await expect(c).toContainText("Qwen3.5-9B");
+  await expect(c).toContainText("1,000");
+});
+
+test("without /debug the counters say they are not provided", async ({
+  page,
+}) => {
+  await install(page, {
+    "/v1/yunshu/requests/recent": list([ring({ request_id: "p1" })]),
+  });
+  await page.goto("/console/#/requests", { waitUntil: "domcontentloaded" });
+  await expect(page.getByTestId("spec-counters")).toContainText("沒有提供");
 });
