@@ -1106,8 +1106,61 @@ def stage_evals(ctx: Ctx) -> StageResult:
     return _finish(ctx, StageResult("evals", not reasons, reasons, numbers))
 
 
+def _console_validate(path):
+    rows = read_jsonl(path)
+    if not rows or not rows[-1].get("complete") or rows[-1].get("failures"):
+        return False, "console route probe incomplete or failed"
+    required = {
+        "console_registration_cancel",
+        "console_host_latency",
+        "stream_latency",
+        "single_stream_latency",
+    }
+    checks = rows[-1].get("checks", {})
+    # gpuq adds device / execution_device / remote_host to every record: require the
+    # four checks, each PASS, rather than an exact key set.
+    missing = sorted(k for k in required if checks.get(k) != "PASS")
+    if missing:
+        return False, "console route checks missing or failing: " + ", ".join(missing)
+    return True, ""
+
+
+def stage_console(ctx: Ctx) -> StageResult:
+    """Single-node console API correctness on a pinned candidate; no timing verdict."""
+
+    validate = _console_validate
+
+    cell = Cell(
+        "console",
+        "cand",
+        [
+            ctx.py,
+            str(ctx.cand.path / "scripts/research/consolefeat_routes.py"),
+            "--model",
+            ctx.model,
+            "--src",
+            str(ctx.cand.path / "python"),
+            "--out",
+            "{out}",
+        ],
+        mem_gb=12,
+        timeout_min=10,
+        quiet=False,
+        validate=validate,
+    )
+    result = ctx.exe.run_cells([cell])["cand"]
+    numbers = read_jsonl(result.evidence)[-1] if result.ok and result.evidence else {}
+    return _finish(
+        ctx,
+        StageResult(
+            "console", result.ok, [] if result.ok else [result.reason], numbers
+        ),
+    )
+
+
 STAGE_FUNCS = {
     "evals": stage_evals,
+    "console": stage_console,
     "rerank": stage_rerank,
     "preflight": stage_preflight,
     "smoke": stage_smoke,

@@ -906,7 +906,10 @@ def _chat_stored(c: Ctx):
         model=c.model, messages=msgs, max_tokens=24, store=True, metadata={"tag": tag}
     )
     got = c.oa.chat.completions.retrieve(r.id)
-    expect(got.id == r.id and got.metadata == {"tag": tag}, f"retrieve {got.id} {got.metadata}")
+    expect(
+        got.id == r.id and got.metadata == {"tag": tag},
+        f"retrieve {got.id} {got.metadata}",
+    )
     expect(
         got.choices[0].message.content == r.choices[0].message.content
         and got.usage.total_tokens == r.usage.total_tokens,
@@ -930,7 +933,9 @@ def _chat_stored(c: Ctx):
         (sgot.choices[0].message.content or "") == text,
         f"stored stream {sgot.choices[0].message.content!r} != streamed {text!r}",
     )
-    listed = [x.id for x in c.oa.chat.completions.list(metadata={"tag": tag}, order="asc")]
+    listed = [
+        x.id for x in c.oa.chat.completions.list(metadata={"tag": tag}, order="asc")
+    ]
     expect(listed == [r.id, sid], f"list by metadata {listed}")
     pm = list(c.oa.chat.completions.messages.list(r.id))
     expect(
@@ -969,7 +974,9 @@ def _realtime_secrets(c: Ctx):
             "output_modalities": ["text"],
         },
     )
-    expect(sec.value.startswith("ek_") and sec.session.type == "realtime", f"secret {sec}")
+    expect(
+        sec.value.startswith("ek_") and sec.session.type == "realtime", f"secret {sec}"
+    )
     expect(sec.session.instructions == "Reply briefly.", "session config not echoed")
     # the ephemeral secret, not the static key, opens the socket and carries its session
     with connect(
@@ -979,9 +986,17 @@ def _realtime_secrets(c: Ctx):
         max_size=None,
     ) as ws:
         first = json.loads(ws.recv(timeout=30))
-        expect(first.get("type") == "session.created", f"first event {first.get('type')}")
-        expect(first["session"]["id"] == sec.session.id, "session id differs from the secret's")
-        expect(first["session"]["instructions"] == "Reply briefly.", "secret session not applied")
+        expect(
+            first.get("type") == "session.created", f"first event {first.get('type')}"
+        )
+        expect(
+            first["session"]["id"] == sec.session.id,
+            "session id differs from the secret's",
+        )
+        expect(
+            first["session"]["instructions"] == "Reply briefly.",
+            "secret session not applied",
+        )
         ws.send(
             json.dumps(
                 {
@@ -995,8 +1010,13 @@ def _realtime_secrets(c: Ctx):
             )
         )
         ws.send(json.dumps({"type": "response.create"}))
-        evs = _ws_events(ws, lambda e: e.get("type") in ("response.done", "error"), timeout=240)
-        expect(evs[-1]["type"] == "response.done", f"secret turn ended with {evs[-1]['type']}")
+        evs = _ws_events(
+            ws, lambda e: e.get("type") in ("response.done", "error"), timeout=240
+        )
+        expect(
+            evs[-1]["type"] == "response.done",
+            f"secret turn ended with {evs[-1]['type']}",
+        )
     if c.token:
         bad = None
         try:
@@ -1009,8 +1029,13 @@ def _realtime_secrets(c: Ctx):
         except Exception:
             bad = None
         expect(bad is None, f"an unknown ek_ secret was accepted: {bad}")
-    s = c.oa.beta.realtime.sessions.create(model=c.model, instructions="hi", modalities=["text"])
-    expect(s.client_secret.value.startswith("ek_") and s.modalities == ["text"], f"sessions {s}")
+    s = c.oa.beta.realtime.sessions.create(
+        model=c.model, instructions="hi", modalities=["text"]
+    )
+    expect(
+        s.client_secret.value.startswith("ek_") and s.modalities == ["text"],
+        f"sessions {s}",
+    )
     t = c.oa.beta.realtime.transcription_sessions.create(
         input_audio_transcription={"model": "whisper-1"}
     )
@@ -2648,3 +2673,82 @@ def evals_check(c: Ctx):
         }
     finally:
         expect(sdk.evals.delete(ev.id).deleted, "delete eval")
+
+
+@check(
+    "console_host_latency",
+    "GET /v1/yunshu/host",
+    "GET /v1/yunshu/requests/recent",
+    served=True,
+    needs="multi",
+)
+def console_host_latency(c):
+    host = c.http.get("/v1/yunshu/host")
+    expect(host.status_code == 200, host.text)
+    data = host.json()
+    c.notes["host"] = data
+    for key in ("thermal", "power", "memory_pressure"):
+        expect("state" in data[key], f"{key}: missing state")
+        if data[key]["state"] == "unknown":
+            expect(bool(data[key].get("reason")), f"{key}: missing reason")
+    recent = c.http.get("/v1/yunshu/requests/recent")
+    expect(recent.status_code == 200, recent.text)
+    expect(isinstance(recent.json()["data"], list), "recent data must be a list")
+
+
+@check(
+    "console_registration_cancel",
+    "POST /v1/yunshu/models/register",
+    "DELETE /v1/yunshu/models/register/{model_id:path}",
+    "POST /v1/yunshu/models/cancel",
+    served=True,
+    needs="multi",
+)
+def console_registration_cancel(c):
+    """The console probe supplies a real local checkpoint; cancellation must actually engage."""
+    import concurrent.futures
+
+    model_path = c.notes.get("console_model_path")
+    if not model_path:
+        skip("consolefeat_routes supplies the real checkpoint path")
+    hf_snapshot = c.notes.get("console_hf_snapshot")
+    if hf_snapshot:
+        r = c.http.post(
+            "/v1/yunshu/models/register",
+            json={"model": "consolefeat-hf", "path": hf_snapshot},
+        )
+        expect(r.status_code == 200 and r.json()["loaded"] is False, r.text)
+        expect(
+            c.http.delete("/v1/yunshu/models/register/consolefeat-hf").status_code
+            == 200,
+            "HF snapshot unregister failed",
+        )
+        c.notes["hf_snapshot_registration"] = "PASS"
+    model = "consolefeat-local"
+    r = c.http.post(
+        "/v1/yunshu/models/register", json={"model": model, "path": model_path}
+    )
+    expect(r.status_code == 200 and r.json()["loaded"] is False, r.text)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(c.http.post, "/v1/models/load", json={"model": model})
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline:
+            status = c.http.get("/v1/yunshu/status").json()
+            if any(m["id"] == model and m["loading"] for m in status["models"]):
+                break
+            expect(not future.done(), "load completed before cancel was observed")
+            time.sleep(0.01)
+        else:
+            raise Fail("load never entered loading state")
+        cancel = c.http.post("/v1/yunshu/models/cancel", json={"model": model})
+        expect(cancel.status_code == 200 and cancel.json()["load"], cancel.text)
+        loaded = future.result(timeout=180)
+        expect(
+            loaded.status_code == 400 and "cancel" in loaded.text.lower(), loaded.text
+        )
+    status = c.http.get("/v1/yunshu/status").json()
+    row = next(m for m in status["models"] if m["id"] == model)
+    expect(not row["loaded"] and not row["loading"], "cancel left model loaded/loading")
+    r = c.http.delete("/v1/yunshu/models/register/" + model)
+    expect(r.status_code == 200, r.text)
+    c.notes["cancel_load_status"] = loaded.status_code

@@ -459,3 +459,32 @@ Runs accept `jsonl` and `completions` data sources, with inline `file_content`, 
 Supported graders: `string_check` (`eq`, `ne`, substring `like`/case-insensitive `ilike`), `text_similarity`, `score_model`, and `label_model`. Similarity is model-free: token-frequency cosine, character SequenceMatcher fuzzy match, effective-order sentence BLEU without smoothing, GLEU, ROUGE n-gram F1 (1–5), ROUGE-L F1, and exact-token METEOR with fragmentation penalty on both candidate and reference alignments (no stemming/synonym corpus). Lexical metrics return 0 for empty token inputs or unavailable n-grams; character fuzzy match preserves its raw-string equality/whitespace behavior. Scores use a caller-supplied pass threshold; local model graders request schema-constrained JSON through `/v1/chat/completions`. SDK Evals text/image/audio content blocks are normalized to the ordinary chat wire format. Python graders and Responses sampling sources return 400 as unsupported.
 
 State uses atomic JSON replacement under `YUNSHU_EVALS_DIR` (default `~/.yunshu/evals`). Source rows and grader definitions are snapshotted per run; credentials stay in memory. Pure lexical grading uses one dedicated CPU worker with cooperative cancellation, keeping metadata and cancel routes available during long comparisons. Cancellation interrupts CPU grading and the active normal request, preserving completed items. Deleted evals cascade to their runs; parent checks and progress writes are serialized with deletion, and recovery removes orphan children after an interrupted cascade. Interrupted runs become `failed` on server restart; they are not automatically replayed. Reports are available through output-item routes (`report_url` is empty; no hosted dashboard). Maximum 10,000 rows per run; list pages accept 1–100 items with cursor/order/status filtering.
+### Single-operator console backend
+
+All five routes below use the model-management admin authentication contract:
+set `YUNSHU_AUTH_TOKEN` and present it as Bearer / `x-api-key`, or explicitly opt
+into `YUNSHU_AUTH_DISABLED`. Unconfigured admin access is denied.
+
+| Route | Contract |
+|---|---|
+| `GET /v1/yunshu/host` | CPU-only `pmset -g therm`, `pmset -g batt`, OS memory pressure and memory/swap bytes. Cached 15 s; failed probes return `state: unknown` and `reason`. No root required. |
+| `POST /v1/yunshu/models/register` | `{model, path}`: validate local config/model type and complete safetensors shards; register without loading or copying. Accepts an HF cache snapshot directory, including shard symlinks into `blobs/`; index filenames must be relative and cannot contain `..`. Requires multi-model mode; registration lasts for this process. Duplicate id: 409; invalid checkpoint: 400. |
+| `DELETE /v1/yunshu/models/register/{model_id}` | Remove only an unloaded, non-loading registration (409 otherwise). Does not delete checkpoint files or HF cache. |
+| `POST /v1/yunshu/models/cancel` | `{model}`: mark an active load and/or HF pull for cooperative cancellation. 202-style `status: cancelling` response (HTTP 200); poll status until loading clears. MLX work already executing is safely drained, then stopped and discarded, never handed to waiters. HF partial files remain resumable. No active operation: 404. |
+| `GET /v1/yunshu/requests/recent?limit=50` | Latest completed successful requests, newest first (limit 1–512), including `latency`. In-memory bounded metadata only; no prompt/response bodies. |
+
+`x_yunshu.latency` and recent rows expose `milestones_ms` relative to gateway
+receive, and `durations_ms` for model lease, gateway admission, engine queue,
+template/tokenize (including media preparation on VLM), APC lookup/restore,
+prefill, first decode and SSE first flush. All use the same monotonic
+`perf_counter` clock. Missing or fused stages are `null`, not invented zeroes.
+The first-flush boundary is completion of ASGI `send` for the first content event,
+not network delivery at the client. Engine prefill completion is a host callback
+boundary, not a GPU profiler measurement; upstream may fuse its last forward
+with first-token sampling. Gateway admission precedes model acquisition; runner
+admission follows templating, so these milestones describe actual execution order.
+
+Real-server coverage is registered in `scripts/research/route_checks.py`;
+`yv ab --base BASE_SHA --cand CAND_SHA --suite console --model PATH --label
+consolefeat-TOPIC --priority -1` runs the small-model cancellation, registration,
+host and SSE-latency probe on the pinned candidate.

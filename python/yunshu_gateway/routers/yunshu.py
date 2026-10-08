@@ -328,3 +328,169 @@ async def warmup(req: WarmupRequest, request: Request) -> dict:
             result["warning"] = f"warm-up generation failed: {exc}"
         result["warmup_ms"] = round((time.perf_counter() - t1) * 1000, 1)
     return result
+
+
+@router.get("/yunshu/host")
+async def host(request: Request) -> dict:
+    """CPU-only thermal, power, OS memory pressure and swap; cached for 15 seconds.
+
+    Unsupported probes return state=unknown with a reason. No root or MLX required.
+    """
+    import asyncio
+
+    from ..host_state import snapshot
+
+    _check_permission(request, "can_manage_models")
+    return await asyncio.to_thread(snapshot)
+
+
+class RegisterLocalRequest(BaseModel):
+    model: str
+    path: str
+
+
+@router.post("/yunshu/models/register")
+async def register_local(req: RegisterLocalRequest, request: Request) -> dict:
+    """Register a local checkpoint or HF snapshot directory without loading or copying weights."""
+    import asyncio
+    import json
+    from pathlib import Path
+
+    from yunshu_cli.model import weights_complete
+
+    from ..ollama_models import manager_for, model_link, registered_entry
+
+    manager = manager_for(request, "can_load_models")
+    model_link(req.model)  # validate the identifier; no filesystem mutation
+    if registered_entry(manager, req.model):
+        raise HTTPException(409, "Model already registered")
+
+    def validate():
+        path = Path(req.path).expanduser().resolve(strict=True)
+        config = json.loads((path / "config.json").read_text())
+        if (
+            not isinstance(config, dict)
+            or not isinstance(config.get("model_type"), str)
+            or not config["model_type"].strip()
+        ):
+            raise ValueError("config.json requires a model_type")
+        weight_files = list(path.glob("*.safetensors"))
+        index = path / "model.safetensors.index.json"
+        if index.exists():
+            index_config = json.loads(index.read_text())
+            weight_map = (
+                index_config.get("weight_map")
+                if isinstance(index_config, dict)
+                else None
+            )
+            if not isinstance(weight_map, dict) or not weight_map:
+                raise ValueError("weights index requires a nonempty weight_map")
+            for shard in weight_map.values():
+                if (
+                    not isinstance(shard, str)
+                    or not shard.endswith(".safetensors")
+                    or Path(shard).is_absolute()
+                    or ".." in Path(shard).parts
+                    or not (path / shard).is_file()
+                ):
+                    raise ValueError("invalid or missing weights index shard")
+            # HF snapshot shards legitimately point outside snapshots/ into blobs/.
+            weight_files = [path / name for name in set(weight_map.values())]
+        import importlib.metadata
+        import re
+
+        from yunshu_engine.model_manager import _MODEL_TYPE_REMAP
+
+        kind = config["model_type"].lower().replace("-", "_")
+        kind = _MODEL_TYPE_REMAP.get(kind, kind)
+        if not re.fullmatch(r"[a-z0-9_]+", kind):
+            raise ValueError("invalid model_type")
+        supported = False
+        for package, prefix in (
+            ("mlx-lm", "mlx_lm/models"),
+            ("mlx-vlm", "mlx_vlm/models"),
+            ("mlx-audio", "mlx_audio"),
+        ):
+            try:
+                files = importlib.metadata.distribution(package).files or []
+            except importlib.metadata.PackageNotFoundError:
+                continue
+            if any(
+                str(f) == f"{prefix}/{kind}.py"
+                or str(f).startswith(f"{prefix}/{kind}/")
+                or (package == "mlx-audio" and f"/models/{kind}/" in str(f))
+                for f in files
+            ):
+                supported = True
+                break
+        if not supported:
+            raise ValueError("model_type has no installed MLX implementation")
+        complete, reason = weights_complete(path)
+        if not complete:
+            raise ValueError(reason)
+        size = sum(f.stat().st_size for f in weight_files)
+        return path, size
+
+    try:
+        path, size = await asyncio.to_thread(validate)
+        if registered_entry(manager, req.model):
+            raise HTTPException(409, "Model already registered")
+        manager.register_model(req.model, str(path), estimated_bytes=int(size * 1.8))
+    except (OSError, ValueError, TypeError) as exc:
+        raise HTTPException(400, str(exc)) from None
+    entry = manager.get_entry(req.model)
+    return {
+        "object": "yunshu.model",
+        "id": req.model,
+        "path": str(path),
+        "type": entry.model_type.name,
+        "loaded": False,
+    }
+
+
+@router.delete("/yunshu/models/register/{model_id:path}")
+async def unregister_local(model_id: str, request: Request) -> dict:
+    """Remove an unloaded registration only; checkpoint files and HF cache are preserved."""
+    from ..ollama_models import manager_for
+
+    manager = manager_for(request, "can_unload_models")
+    try:
+        removed = manager.unregister_model(model_id)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from None
+    if not removed:
+        raise HTTPException(404, "Model not registered")
+    return {"object": "yunshu.model", "id": model_id, "status": "unregistered"}
+
+
+class CancelModelRequest(BaseModel):
+    model: str
+
+
+@router.post("/yunshu/models/cancel")
+async def cancel_model_operation(req: CancelModelRequest, request: Request) -> dict:
+    """Cancel a pending load/download cooperatively; executing work is safely drained before cleanup."""
+    from ..ollama_models import cancel_download, manager_for
+
+    manager = manager_for(request, "can_load_models")
+    loading = manager.cancel_load(req.model)
+    downloading = cancel_download(req.model)
+    if not loading and not downloading:
+        raise HTTPException(404, "No in-progress load or download")
+    return {
+        "object": "yunshu.model",
+        "id": req.model,
+        "status": "cancelling",
+        "load": loading,
+        "download": downloading,
+    }
+
+
+@router.get("/yunshu/requests/recent")
+async def recent_requests(request: Request, limit: int = 50) -> dict:
+    """Recent completed request metadata and latency breakdown; no prompts or responses stored."""
+    _check_permission(request, "can_manage_models")
+    if not 1 <= limit <= 512:
+        raise HTTPException(400, "limit must be between 1 and 512")
+    rows = registry.recent(float("inf"))[-limit:]
+    return {"object": "list", "data": list(reversed(rows)), "count": len(rows)}

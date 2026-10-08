@@ -13,6 +13,10 @@ Changes on main after 0.1.4; not part of a published package yet.
 
 ### Highlights
 
+- Add authenticated console model load/download cancellation and validated local/HF snapshot registration without loading or copying weights.
+- Expose cached CPU-only thermal, power, OS memory pressure and swap telemetry with explicit unknown reasons.
+- Record per-request latency milestones in `x_yunshu` and expose them through recent request metadata.
+
 ### Upgrade notes / breaking changes
 
 ### Performance
