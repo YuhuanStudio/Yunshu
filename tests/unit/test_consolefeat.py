@@ -368,3 +368,46 @@ def test_fast_path_stage_marks_preserved(monkeypatch):
     assert durations["apc_lookup_restore"] == 10.0
     assert durations["prefill"] == 50.0
     assert durations["first_decode"] == 10.0
+
+
+def test_single_engine_acquisition_marks(monkeypatch):
+    from yunshu_engine.request_tracker import current_request_info
+    from yunshu_gateway import engine as gateway_engine
+    from yunshu_gateway.x_yunshu import RequestInfo
+
+    info = RequestInfo("single", "POST", "/v1/chat/completions", arrived=10.0)
+    engine = SimpleNamespace(is_loaded=True)
+    monkeypatch.setattr(gateway_engine, "_engine", engine)
+    token = current_request_info.set(info)
+    try:
+        assert gateway_engine.get_engine() is engine
+        first = dict(info.latency_marks)
+        assert "model_lease_start" in first and "model_lease" in first
+        gateway_engine.get_engine()
+        assert info.latency_marks == first
+    finally:
+        current_request_info.reset(token)
+
+
+def test_probe_retries_busy_port(monkeypatch):
+    import importlib.util
+    from pathlib import Path
+
+    spec = importlib.util.spec_from_file_location(
+        "consolefeat_retry",
+        Path(__file__).parents[2] / "scripts/research/consolefeat_routes.py",
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    monkeypatch.setattr(module.time, "sleep", lambda _: None)
+    calls = []
+
+    def start():
+        calls.append(1)
+        if len(calls) < 3:
+            raise RuntimeError("no free port in 18990-18996")
+        return "server"
+
+    assert module.retry_server(start) == "server" and len(calls) == 3
+    with pytest.raises(RuntimeError, match="load failed"):
+        module.retry_server(lambda: (_ for _ in ()).throw(RuntimeError("load failed")))

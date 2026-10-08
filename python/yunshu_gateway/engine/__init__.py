@@ -43,7 +43,20 @@ def _get_engine_start_lock():
 
 
 def get_engine() -> Engine | None:
-    """Get the legacy single engine (backward compatible)."""
+    """Get the pinned single engine and record its first acquisition in a request."""
+    import time
+
+    from yunshu_engine.request_tracker import current_request_info
+
+    marks = getattr(current_request_info.get(), "latency_marks", None)
+    if (
+        marks is not None
+        and _engine is not None
+        and getattr(_engine, "is_loaded", False)
+        and "model_lease" not in marks
+    ):
+        marks.setdefault("model_lease_start", time.perf_counter())
+        marks["model_lease"] = time.perf_counter()
     return _engine
 
 

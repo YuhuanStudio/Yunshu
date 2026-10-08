@@ -1081,6 +1081,7 @@ def stage_console(ctx: Ctx) -> StageResult:
             "console_registration_cancel",
             "console_host_latency",
             "stream_latency",
+            "single_stream_latency",
         }
         if set(rows[-1].get("checks", {})) != required:
             return False, "missing console route checks"

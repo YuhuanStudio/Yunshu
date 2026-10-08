@@ -50,6 +50,35 @@ def validate_latency(data):
     return durations
 
 
+def stream_latency(client, model, request_id):
+    body = {
+        "model": model,
+        "messages": [{"role": "user", "content": "Say hello."}],
+        "max_tokens": 16,
+        "temperature": 0,
+        "stream": True,
+    }
+    response = client.post(
+        "/v1/chat/completions", json=body, headers={"X-Request-Id": request_id}
+    )
+    response.raise_for_status()
+    if "data: [DONE]" not in response.text:
+        raise AssertionError("stream did not complete")
+    rows = client.get("/v1/yunshu/requests/recent").json()["data"]
+    return next(row for row in rows if row["request_id"] == request_id)
+
+
+def retry_server(factory):
+    deadline = time.monotonic() + 180
+    while True:
+        try:
+            return factory()
+        except RuntimeError as exc:
+            if "free port" not in str(exc) or time.monotonic() >= deadline:
+                raise
+            time.sleep(2)
+
+
 def run(a):
     import httpx
     from covaudit_session import Srv
@@ -75,23 +104,17 @@ def run(a):
     try:
         os.environ["COVAUDIT_BIN"] = str(Path(sys.executable).parent / "yunshu")
         # Port pool contention is retried; no server outside 18990-18999.
-        deadline = time.monotonic() + 180
-        while True:
-            try:
-                server = Srv(
-                    a.model,
-                    a.src,
-                    scratch / "home",
-                    scratch / "server.log",
-                    ["YUNSHU_AUTH_TOKEN=" + token, "YUNSHU_VLM_APC_DISK=0"],
-                    models_dir=str(models),
-                    token=token,
-                )
-                break
-            except RuntimeError as exc:
-                if "free port" not in str(exc) or time.monotonic() >= deadline:
-                    raise
-                time.sleep(2)
+        server = retry_server(
+            lambda: Srv(
+                a.model,
+                a.src,
+                scratch / "home",
+                scratch / "server.log",
+                ["YUNSHU_AUTH_TOKEN=" + token, "YUNSHU_VLM_APC_DISK=0"],
+                models_dir=str(models),
+                token=token,
+            )
+        )
         server.wait_ready()
         with httpx.Client(
             base_url=server.url,
@@ -107,31 +130,35 @@ def run(a):
                 "/v1/yunshu/models/register", json={"model": ctx.model, "path": a.model}
             )
             r.raise_for_status()
-            body = {
-                "model": ctx.model,
-                "messages": [{"role": "user", "content": "Say hello."}],
-                "max_tokens": 16,
-                "temperature": 0,
-                "stream": True,
-            }
-            r = client.post(
-                "/v1/chat/completions",
-                json=body,
-                headers={"X-Request-Id": "consolefeat-latency"},
-            )
-            r.raise_for_status()
-            if "data: [DONE]" not in r.text:
-                raise AssertionError("stream did not complete")
-            rows = client.get("/v1/yunshu/requests/recent").json()["data"]
-            row = next(
-                row for row in rows if row["request_id"] == "consolefeat-latency"
-            )
+            row = stream_latency(client, ctx.model, "consolefeat-latency")
             result["latency_ms"] = validate_latency(row["latency"])
             result["milestones_ms"] = row["latency"]["milestones_ms"]
             result["checks"]["stream_latency"] = "PASS"
             result["notes"] = ctx.notes
             result["server_log_tail"] = server.log_tail(40)
-            result["complete"] = True
+        server.kill()
+        server = retry_server(
+            lambda: Srv(
+                a.model,
+                a.src,
+                scratch / "single-home",
+                scratch / "single.log",
+                ["YUNSHU_AUTH_TOKEN=" + token, "YUNSHU_VLM_APC_DISK=0"],
+                token=token,
+            )
+        )
+        server.wait_ready()
+        with httpx.Client(
+            base_url=server.url,
+            headers={"Authorization": "Bearer " + token},
+            timeout=180,
+        ) as client:
+            row = stream_latency(client, server.model_id, "consolefeat-single-latency")
+            result["single_latency_ms"] = validate_latency(row["latency"])
+            result["single_milestones_ms"] = row["latency"]["milestones_ms"]
+            result["checks"]["single_stream_latency"] = "PASS"
+            result["single_server_log_tail"] = server.log_tail(30)
+        result["complete"] = True
     except Exception as exc:
         result["failures"].append(f"{type(exc).__name__}: {exc}")
         raise
