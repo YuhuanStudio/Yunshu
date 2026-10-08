@@ -27,7 +27,17 @@ METRICS = {
     'decode_cold_tps': True, 'decode_warm_tps': True, 'decode_turn2_tps': True,
     'prefill_cold_tps': True, 'energy_j_token': False, 'agentic_session_s': False,
     'memory_peak_gib': False, 'memory_idle_gib': False, 'accuracy_needle': True,
+    'conc8_agg_tps': True,
 }
+# Items with a source outside the snapshot cells (see extra_items); engines that can be measured per item.
+EXTRA_MEASURABLE = {
+    'conc8_agg_tps': 'engines with part=conc rows in snapshot cells (tfbench --part conc; llamacpp, splash, yunshu so far)',
+    'capability_matrix': 'yunshu-new only (agentcompat/release gate); no rival capability probe exists',
+    'accuracy_mmlu_pro': 'yunshu-new vs stock mlx-vlm server (same checkpoint, paired_eval); other rivals have no harness',
+    'agentic_pass': 'yunshu and tensorfold (run_agentic --serve); other rivals have no agent harness',
+}
+CAPABILITY_TARGET = 34
+ACCURACY_MIN_PAIRS = 200
 
 
 def read_jsonl(path):
@@ -120,6 +130,12 @@ def load_cells(runs, jobs):
                         raise ValueError('invalid decode metrics')
                 if len([r for r in rows if r.get('part') == 'memory']) != 1:
                     raise ValueError('missing memory')
+            for row in (r for r in rows if r.get('part') == 'conc'):
+                cts = row.get('cts') or []
+                if (len(row.get('per_req_dec') or []) != row.get('n') or len(cts) != row.get('n') or not cts
+                        or sum(cts) != row.get('total_tokens') or not (number(row.get('agg_tps')) and row['agg_tps'] > 0)
+                        or not row.get('pts')):
+                    raise ValueError('incomplete conc row')
             needles = [r for r in rows if r.get('part') == 'needle']
             if needles and (len(needles) != 10 or len({r.get('item') for r in needles}) != 10
                             or any(not isinstance(r.get('correct'), bool) for r in needles)):
@@ -175,6 +191,11 @@ def samples_from(cells, flagged=None):
             elif row['part'] == 'agentic':
                 if row.get('success') is True:
                     add(row['ctx'], row['task'], 'agentic_session_s', row.get('total_s'))
+        conc8 = [r for r in rows if r['part'] == 'conc' and r.get('n') == 8]
+        if conc8:
+            pt = conc8[0]['pts'][0]
+            ctx = next((c for c in CONTEXTS if c * 0.5 <= pt <= c * 1.02), pt)
+            add(ctx, 'conc8', 'conc8_agg_tps', statistics.mean(r['agg_tps'] for r in conc8))
         needle = [r for r in rows if r['part'] == 'needle']
         if needle:
             add(needle[0]['ctx'], 'needle', 'accuracy_needle', sum(r['correct'] for r in needle) / len(needle))
@@ -224,13 +245,87 @@ def head_to_head(items_prov):
     return out
 
 
-def build(runs, jobs, models=(MODEL,)):
+def _latest(paths):
+    paths = [p for p in paths if p.exists()]
+    return max(paths, key=lambda p: p.stat().st_mtime) if paths else None
+
+
+def _extra(item, status, reason, **kw):
+    return {'item': item, 'status': status, 'reason': reason, 'measurable_engines': EXTRA_MEASURABLE[item], **kw}
+
+
+def capability_item(agentcompat_dir):
+    """Ours-only: newest agentcompat verdict.json, one check per stage. Passes only at the decision's 34/34."""
+    f = _latest(Path(agentcompat_dir).glob('*/verdict.json')) if agentcompat_dir else None
+    if f is None:
+        return _extra('capability_matrix', 'unknown', 'no agentcompat verdict found')
+    try:
+        stages = json.loads(f.read_text())['stages']
+        oks = [bool(v['ok']) for v in stages.values()]
+    except (OSError, ValueError, KeyError, TypeError):
+        return _extra('capability_matrix', 'unknown', f'unreadable verdict {f}')
+    passed, total = sum(oks), len(oks)
+    if total < CAPABILITY_TARGET and passed == total:
+        return _extra('capability_matrix', 'unknown', f'{passed}/{total} checks pass but the decision needs a {CAPABILITY_TARGET}-check matrix',
+                      passed=passed, total=total, source=str(f))
+    status = 'parity' if passed == total else 'gap'
+    return _extra('capability_matrix', status, f'{passed}/{total}', passed=passed, total=total, source=str(f))
+
+
+def accuracy_item(paired_dir, bench='mmlu_pro', ours='default', ref='ref'):
+    """Paired MMLU-Pro: yunshu vs stock reference, last row per id; parity = |b-c| within 1.96*sqrt(b+c) (min 1 question)."""
+    def arm(name):
+        try:
+            rows = read_jsonl(Path(paired_dir) / bench / f'{name}.jsonl')
+        except (OSError, ValueError, TypeError):
+            return None
+        return {r['id']: r for r in rows if r.get('kind') == 'q' and not r.get('error') and isinstance(r.get('correct'), bool)}
+    a, b = (arm(ours), arm(ref)) if paired_dir else (None, None)
+    if not a or not b:
+        return _extra('accuracy_mmlu_pro', 'unknown', 'no paired_eval arms found')
+    ids = sorted(set(a) & set(b))
+    only_a = sum(a[i]['correct'] and not b[i]['correct'] for i in ids)
+    only_b = sum(b[i]['correct'] and not a[i]['correct'] for i in ids)
+    info = {'pairs': len(ids), 'ours_acc': sum(a[i]['correct'] for i in ids) / len(ids) if ids else None,
+            'ref_acc': sum(b[i]['correct'] for i in ids) / len(ids) if ids else None, 'ours_only': only_a, 'ref_only': only_b}
+    if len(ids) < ACCURACY_MIN_PAIRS:
+        return _extra('accuracy_mmlu_pro', 'unknown', f'{len(ids)} paired items < {ACCURACY_MIN_PAIRS}', **info)
+    ok = only_b - only_a <= max(1.0, 1.96 * math.sqrt(only_a + only_b))
+    return _extra('accuracy_mmlu_pro', 'parity' if ok else 'gap',
+                  f'ours-only {only_a}, ref-only {only_b} over {len(ids)} pairs', **info)
+
+
+def agentic_item(agentbench_dir):
+    """Ours-only: newest agentbench verdict with no missing/failed runs; pass rate vs rival is unmeasured."""
+    good = []
+    for f in Path(agentbench_dir).glob('*/verdict.json') if agentbench_dir else []:
+        try:
+            v = json.loads(f.read_text())
+        except (OSError, ValueError):
+            continue
+        if v.get('verdict') in ('PASS', 'REGRESSION') and not v.get('problems'):
+            good.append(f)
+    f = _latest(good)
+    if f is None:
+        return _extra('agentic_pass', 'unknown', 'no complete agentbench verdict')
+    v = json.loads(f.read_text())
+    cur = {a: [s['passed'], s['runs']] for a, s in v['current'].items()}
+    return _extra('agentic_pass', 'unknown', f"{v['verdict']} vs own baseline, {cur}; no rival pass rate measured",
+                  verdict=v['verdict'], sha=v.get('sha'), pass_runs=cur, source=str(f))
+
+
+def extra_items(agentcompat_dir=None, paired_dir=None, agentbench_dir=None):
+    return [capability_item(agentcompat_dir), accuracy_item(paired_dir), agentic_item(agentbench_dir)]
+
+
+def build(runs, jobs, models=(MODEL,), agentcompat_dir=None, paired_dir=None, agentbench_dir=None):
     cells, rejected, sources = load_cells(runs, jobs)
     flagged = []
     samples = samples_from(cells, flagged)
     keys = {(m, c, k, metric) for m in models for c in CONTEXTS for metric in METRICS
             for k in (('session',) if metric.startswith('memory') else ('needle',) if metric.startswith('accuracy')
-                      else ('agentic',) if metric.startswith('agentic') else ('prose', 'code'))}
+                      else ('agentic',) if metric.startswith('agentic') else ('conc8',) if metric.startswith('conc8')
+                      else ('prose', 'code'))}
     keys.update(key[:4] for key in samples)
     items = []
     h2h_in = []
@@ -268,6 +363,7 @@ def build(runs, jobs, models=(MODEL,)):
                 with_data += 1
                 best_ours += item['provisional']['best_engine'] == 'yunshu-new'
         items.append(item)
+    extra = extra_items(agentcompat_dir, paired_dir, agentbench_dir)
     n = sum(i['status'] == 'parity' for i in items)
     unknown = [f"{i['model']}/{i['ctx']}/{i['kind']}/{i['metric']}" for i in items if i['status'] == 'unknown']
     groups = defaultdict(list)
@@ -276,12 +372,14 @@ def build(runs, jobs, models=(MODEL,)):
             groups[i['metric']].append(f"{i['ctx']}/{i['kind']}")
     verdict = f"parity: {n}/{len(items)} items, missing: " + (
         '; '.join(f"{m} x{len(v)}" for m, v in sorted(groups.items())) or 'none')
+    verdict += '; extra: ' + ', '.join(f"{e['item']}={e['status']}" for e in extra)
     h2h = head_to_head(h2h_in)
     summary = (f"unknown = not enough reps (<3) or excluded evidence, NOT behind. {with_data} items have provisional "
                f"data (excluding memory/energy); Yunshu is currently best engine on {best_ours} of them.")
     return {'schema_version': 1, 'verdict': verdict, 'summary': summary, 'head_to_head': h2h,
             'with_data': with_data, 'best_ours': best_ours, 'parity': n, 'total': len(items),
-            'missing': unknown, 'gate_open': n == len(items), 'items': items,
+            'missing': unknown, 'extra': extra,
+            'gate_open': n == len(items) and all(e['status'] == 'parity' for e in extra), 'items': items,
             'rejected': rejected, 'sources': sources, 'memory_method_flagged': flagged,
             'policy': 'Product ranking, not same-checkpoint proof; >=3 reps; combined MAD; missing engines listed individually; no historical markdown numbers used as gate evidence.'}
 
@@ -302,6 +400,9 @@ def markdown(board):
         if pv and i['status'] == 'unknown':
             lines.append(f"| {i['ctx']} | {i['kind']} | {i['metric']} | {pv['best_engine']} | {pv['best']:.5g} | "
                          f"{pv['ours']:.5g} | {pv['ratio']:.3f} | {pv['reps']} |")
+    lines += ['', '## Capability, accuracy and agentic items (not cell-based)', '',
+              '| Item | Status | Detail | Measurable engines |', '|---|---|---|---|']
+    lines += [f"| {e['item']} | {e['status']} | {e['reason']} | {e['measurable_engines']} |" for e in board['extra']]
     lines += ['', '## Head-to-head: Yunshu vs each engine (win/tie/loss, same MAD band; * = provisional, <3 reps)', '',
               '| Engine | Family | Win | Tie | Loss | Items |', '|---|---|---|---|---|---|']
     for eng, fams in board['head_to_head'].items():
@@ -323,8 +424,12 @@ def main():
     ap.add_argument('--jobs', type=Path, default=Path('/Volumes/P5Plus/yunshu-gpuq/jobs'))
     ap.add_argument('--out', type=Path, default=Path(__file__).resolve().parents[2] / 'docs/research/parityboard')
     ap.add_argument('--model', action='append')
+    ap.add_argument('--agentcompat', type=Path, default=Path('/Volumes/P5Plus/yunshu-build/agentcompat'))
+    ap.add_argument('--paired', type=Path, default=Path('/Volumes/P5Plus/yunshu-test-cache/paired-eval'))
+    ap.add_argument('--agentbench', type=Path, default=Path('/Volumes/P5Plus/yunshu-build/agentbench/runs'))
     args = ap.parse_args()
-    board = build(args.runs.glob('snapshot014-*'), args.jobs, args.model or (MODEL,))
+    board = build(args.runs.glob('snapshot014-*'), args.jobs, args.model or (MODEL,),
+                  args.agentcompat, args.paired, args.agentbench)
     args.out.mkdir(parents=True, exist_ok=True)
     (args.out / 'board.json').write_text(json.dumps(board, indent=2, ensure_ascii=False) + '\n')
     (args.out / 'BOARD.md').write_text(markdown(board))
