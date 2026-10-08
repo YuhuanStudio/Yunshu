@@ -32,3 +32,12 @@ def test_gpuq_tests_and_reads_pass():
         "/usr/bin/python3 tools/watchdog.py check; git diff main -- scripts/research/tfbench.py",
     ):
         assert guard.verdict(cmd) is None, cmd
+
+
+def test_pattern_kills_are_blocked():
+    # A pattern kill reaches processes this session did not start; only PIDs may be killed.
+    blocked = ("pk" + "ill -f x", "cd x && kill" + "all python3", "nice -n 5 pk" + "ill y")
+    for cmd in blocked:
+        assert guard.verdict(cmd), cmd
+    assert guard.verdict("kill 12345") is None
+    assert guard.verdict("grep pk" + "ill notes.md") is None
