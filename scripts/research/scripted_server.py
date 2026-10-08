@@ -3,6 +3,7 @@ Used by tests/unit/test_graceful_shutdown_real_server.py. Usage: scripted_server
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -22,8 +23,33 @@ engine_mod._engine = ScriptedEngine(
     Script(pieces=[f"w{i} " for i in range(n)], delay=delay)
 )
 engine_mod._model_manager = None
+
+
+class ScriptedIdentity:
+    """Let CPU tests prove readiness belongs to the process they started."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        async def identified(message):
+            if message["type"] == "http.response.start":
+                message = {
+                    **message,
+                    "headers": [
+                        *message.get("headers", []),
+                        (b"x-yunshu-scripted-pid", str(os.getpid()).encode()),
+                    ],
+                }
+            await send(message)
+
+        await self.app(scope, receive, identified)
+
+
+app = create_app()
+app.add_middleware(ScriptedIdentity)
 uvicorn.run(
-    create_app(),
+    app,
     host="127.0.0.1",
     port=port,
     log_level="warning",

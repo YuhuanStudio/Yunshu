@@ -5,7 +5,7 @@ import hashlib
 import json
 from pathlib import Path
 
-from snapshot_prompts import MODEL, assert_prompt, exact_prompt
+from snapshot_prompts import MODEL, assert_chat_prompt, exact_chat_prompt, token_count
 from tfbench import LONG_ASK
 
 
@@ -19,14 +19,15 @@ def generate(source, destination):
             if split < 0:
                 raise ValueError("missing corpus instruction boundary")
             body, ask = original[:split], original[split:]
-            text = exact_prompt(body * 2, ctx, ask + LONG_ASK)
-            count = assert_prompt(text, ctx)
+            text = exact_chat_prompt(body * 2, ctx, ask + LONG_ASK)
+            count = assert_chat_prompt(text, ctx)
             (destination / f"{kind}-{ctx}.txt").write_text(text)
             records.append(
                 {
                     "kind": kind,
                     "ctx": ctx,
-                    "content_tokens": count,
+                    "content_tokens": token_count(text),
+                    "reference_prompt_tokens": count,
                     "sha256": hashlib.sha256(text.encode()).hexdigest(),
                 }
             )
@@ -38,7 +39,7 @@ def generate(source, destination):
             for trial in range(2):
                 for i in range(n):
                     header = f"Concurrent cohort n={n} trial={trial} request={i}.\n"
-                    text = exact_prompt(
+                    text = exact_chat_prompt(
                         header + body[:split] * 2, 32768, body[split:] + LONG_ASK
                     )
                     path = destination / f"conc-{n}-{trial}-{kind}-{i}.txt"
@@ -50,7 +51,8 @@ def generate(source, destination):
                             "cohort_n": n,
                             "trial": trial,
                             "concurrent_variant": i,
-                            "content_tokens": assert_prompt(text, 32768),
+                            "content_tokens": token_count(text),
+                            "reference_prompt_tokens": assert_chat_prompt(text, 32768),
                             "sha256": hashlib.sha256(text.encode()).hexdigest(),
                         }
                     )
@@ -60,7 +62,7 @@ def generate(source, destination):
         "tokenizer_sha256": hashlib.sha256(
             (MODEL / "tokenizer.json").read_bytes()
         ).hexdigest(),
-        "token_budget": "content including instructions; chat-template overhead recorded separately",
+        "token_budget": "complete 27B input including instructions and chat template; native server prompt_tokens also recorded",
         "prompts": records,
     }
     (destination / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")

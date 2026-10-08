@@ -52,3 +52,44 @@ def assert_prompt(text, target, tok=None):
     if actual != target:
         raise AssertionError(f"prompt content tokens={actual}, expected={target}")
     return actual
+
+
+@lru_cache(maxsize=1)
+def chat_tokenizer():
+    from transformers import AutoTokenizer
+
+    return AutoTokenizer.from_pretrained(str(MODEL), local_files_only=True)
+
+
+def chat_token_count(text, tok=None):
+    encoded = (tok or chat_tokenizer()).apply_chat_template(
+        [{"role": "user", "content": text}],
+        tokenize=True,
+        add_generation_prompt=True,
+        enable_thinking=False,
+    )
+    # Transformers 5 returns BatchEncoding, while older versions return IDs.
+    ids = encoded["input_ids"] if hasattr(encoded, "keys") else encoded
+    if ids and isinstance(ids[0], list):
+        ids = ids[0]
+    return len(ids)
+
+
+def assert_chat_prompt(text, target, tok=None):
+    actual = chat_token_count(text, tok)
+    if actual != target:
+        raise AssertionError(f"rendered prompt tokens={actual}, expected={target}")
+    return actual
+
+
+def exact_chat_prompt(source, target, suffix=""):
+    """Fit the entire reference model input, including its chat template."""
+    budget = target - chat_token_count("")
+    for _ in range(8):
+        text = exact_prompt(source, budget, suffix)
+        actual = chat_token_count(text)
+        if actual == target:
+            assert_chat_prompt(text, target)
+            return text
+        budget += target - actual
+    raise ValueError("cannot construct exact rendered chat budget")

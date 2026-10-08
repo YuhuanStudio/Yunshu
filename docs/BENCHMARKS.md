@@ -10,11 +10,11 @@ M5 Max, 128 GB. One benchmark engine resident at a time, own instance on ports 1
 p0, owner/label prefix `snapshot014`. Three independent server-session repetitions alternate engines within each
 context/corpus group. Timing cells require quiet admission; contended evidence is rejected and retried.
 
-One frozen corpus, greedy sampling. Content **including instructions** is exactly 1024/8192/32768/65536/131072 tokens
-under the Jundot 27B tokenizer, asserted before sending. Chat-template overhead is additional and recorded in actual
-`prompt_tokens`; counts from different tokenizers are not silently equated. Prose/code 128K corpus SHA256:
-`d80ff95ec9affd08dae32d6d66e5c1fddd11c6087f2c6a1700ff5c542dd15eeb` /
-`a48764c60a9b24f615d458c30f0d39e1491d26f1ee2b3dfdba790791f6697b12`.
+One frozen corpus, greedy sampling. Complete reference input **including instructions and chat template** is exactly 1024/8192/32768/65536/131072 tokens
+under the Jundot 27B tokenizer, asserted before sending. For 128K, content is 131061 tokens plus 11 template tokens. Actual
+server `prompt_tokens` are recorded and checked for the same-checkpoint engines. Prose/code 128K corpus SHA256:
+`50023b280f09b6aeab89cd5fc84b5dd03cf3a196894b965f0a756357a18c13d9` /
+`d106cb1f3bdeacd5f26ba1ac7ec3165e5cb1b8beca57a8fa589721bf057d8044`.
 
 Cold = first corpus request in a fresh instance after two tiny startup requests; loading time is separate. Cold/repeated
 replies must reach 2048 tokens; follow-up appends the previous answer and a continuation request (256-token reply).
@@ -26,8 +26,8 @@ budget. Concurrency: 2/4 simultaneous 32K prompts, 2048-token replies, determini
 cache reuse. Effective throughput includes prefill; per-request TTFT/decode are separate. Agentbench: same 20 opencode
 tasks and CLI, generation forced to temperature 0/top_p 1; API/tool-contract failures are listed explicitly.
 
-Memory: process-tree physical-footprint accounting sum, sampled every two seconds from startup; idle is 30 seconds after
-the group. Short spikes can be missed and shared pages are not deduplicated. Each group owns a fresh server. Gaps are
+Memory: both process-tree physical-footprint and RSS accounting sums, sampled every two seconds from startup; idle is 30 seconds after
+the group. Short spikes can be missed and shared pages are not deduplicated. File-backed/GPU allocations can be accounted differently by native engines. Each group owns a fresh server. Gaps are
 excess latency/memory or throughput deficit versus the best; ranking requires three clean session repetitions.
 Hypotheses below are possible causes, not profiler-established findings.
 

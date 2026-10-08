@@ -90,6 +90,13 @@ def engaged_spec_mode(engine, log):
     return None
 
 
+def warm_lazy_engine(engine, url, model):
+    # /v1/models is discovery-only for oMLX. Load the target/drafter before
+    # checking the engaged mode, and keep this startup request out of timing.
+    if engine in ("omlx", "llamacpp"):
+        send(url, req(model, "Write a short example and explain it.", 16), timeout=240)
+
+
 class Srv:
     def __init__(
         self, engine, extra_env, tag, model=None, ctx_tokens=140000, parallel=1
@@ -106,11 +113,7 @@ class Srv:
         self.home.mkdir(parents=True)
         self.log = OUT / "out" / f"server-{tag}.log"
         self.log.parent.mkdir(parents=True, exist_ok=True)
-        env = {
-            k: v
-            for k, v in os.environ.items()
-            if not k.startswith(("ANTHROPIC_", "OPENAI_", "CLAUDE", "CODEX", "YUNSHU_"))
-        }
+        env = bench_engines.scrubbed_env(os.environ)
         env.update(
             HOME=str(self.home), HF_HUB_OFFLINE="1", NO_PROXY="127.0.0.1", **extra_env
         )
@@ -189,6 +192,7 @@ class Srv:
             self.kill()
             raise RuntimeError("not ready")
         try:
+            warm_lazy_engine(self.engine, self.url, self.model)
             self.verify_spec_mode()
         except Exception:
             self.kill()
@@ -371,9 +375,9 @@ def load_prompt(name):
 def decode_prompt(kind, ctx, long_ask):
     text = load_prompt(f"{kind}-{ctx}")
     if os.environ.get("TFB_EXACT_PROMPTS") == "1":
-        from snapshot_prompts import assert_prompt
+        from snapshot_prompts import assert_chat_prompt
 
-        assert_prompt(text, ctx)
+        assert_chat_prompt(text, ctx)
         if long_ask and LONG_ASK not in text:
             raise AssertionError("exact prompt lacks LONG_ASK")
         return text
@@ -427,6 +431,8 @@ class MemSampler:
 
         self.pid, self.every = pid, every
         self.peak_gib = 0.0
+        self.peak_rss_gib = 0.0
+        self.last_rss_gib = None
         self.last_gib = None
         self.n = 0
         self._stop = threading.Event()
@@ -442,6 +448,10 @@ class MemSampler:
             g = round(m["physical_footprint_sum_bytes"] / 2**30, 3)
             self.last_gib = g
             self.peak_gib = max(self.peak_gib, g)
+            rss = m.get("rss_sum_bytes")
+            if rss is not None:
+                self.last_rss_gib = round(rss / 2**30, 3)
+                self.peak_rss_gib = max(self.peak_rss_gib, self.last_rss_gib)
             self.n += 1
             return g
         except Exception:  # noqa: BLE001 - a sampling miss is not a result
@@ -530,7 +540,7 @@ def part_decode(s, out, a):
                     ctx=ctx,
                     kind=kind,
                     phase=phase,
-                    content_tokens=ctx
+                    reference_prompt_tokens=ctx
                     if os.environ.get("TFB_EXACT_PROMPTS") == "1" and not a.smoke
                     else None,
                     **r,
@@ -603,10 +613,10 @@ def part_needle(s, out, a):
                 continue
             text = hay + needle_question(nm)
             if not a.smoke and os.environ.get("TFB_EXACT_PROMPTS") == "1":
-                from snapshot_prompts import assert_prompt, exact_prompt
+                from snapshot_prompts import assert_chat_prompt, exact_chat_prompt
 
-                text = exact_prompt(hay * 2, ctx, needle_question(nm))
-                assert_prompt(text, ctx)
+                text = exact_chat_prompt(hay * 2, ctx, needle_question(nm))
+                assert_chat_prompt(text, ctx)
             r = send(s.url, req(s.model, text, 16))
             ans = r.pop("_text")
             emit(
@@ -692,10 +702,10 @@ def part_conc(s, out, a):
                 for i in range(n)
             ]
             if not a.smoke and os.environ.get("TFB_EXACT_PROMPTS") == "1":
-                from snapshot_prompts import assert_prompt
+                from snapshot_prompts import assert_chat_prompt
 
                 for text in texts:
-                    assert_prompt(text, 32768)
+                    assert_chat_prompt(text, 32768)
             t0 = time.perf_counter()
             with cf.ThreadPoolExecutor(n) as ex:
                 rs = list(
@@ -901,6 +911,7 @@ def main():
                 env=s.extra_env,
                 requested_spec_mode=s.requested_spec_mode,
                 engaged_spec_mode=s.engaged_spec_mode,
+                engine_probe=s.probe,
                 tag=a.tag,
             )
             for _ in range(2):
@@ -929,8 +940,11 @@ def main():
                     part="memory",
                     peak_gib=peak,
                     idle_gib=idle,
+                    peak_rss_gib=mem.peak_rss_gib,
+                    idle_rss_gib=mem.last_rss_gib,
                     samples=mem.n,
                     idle_after_s=a.idle_s,
+                    engine_probe=s.probe_text(),
                 )
             emit(
                 out,

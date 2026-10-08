@@ -46,6 +46,7 @@ def stage_snapshot(ctx):
             timeout_min=job.timeout_min,
             stall_min=job.stall_min,
             quiet=job.stage != "pilot",
+            device="m5",
             validate=validate,
             retries=1 if job.stage != "pilot" else 0,
         )
@@ -104,6 +105,7 @@ def stage_snapshot(ctx):
                     timeout_min=28,
                     stall_min=24,
                     quiet=True,
+                    device="m5",
                     validate=agent_validate,
                     retries=1,
                 )

@@ -21,11 +21,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import statistics
 import subprocess
 import sys
 import time
+from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -304,7 +306,7 @@ def plan_pilots(engines, outdir: Path, trees: dict) -> list[Job]:
     for e in engines:
         est = estimate_minutes(e, "smoke", (), ())
         job = Job(
-            f"{e}-pilot",
+            f"{e}-smoke-pilot",
             e,
             "decode",
             "pilot",
@@ -406,6 +408,41 @@ def validate_rows(job: Job, rows: list[dict]) -> list[str]:
         got = len([r for r in rows if r.get("part") == part])
         if got != n:
             problems.append(f"{part}: {got} rows, want {n}")
+    expected_sha = job.env.get("TFB_EXPECT_YUNSHU_SHA")
+    if expected_sha and any(r.get("git_sha") != expected_sha for r in rows):
+        problems.append("release SHA does not match pinned engine")
+    if rows[-1].get("part") != "part_done" or rows[-1].get("complete") is not True:
+        problems.append("terminal record is not complete")
+    if any(r.get("engine") != job.engine for r in rows):
+        problems.append("engine identity mismatch")
+    if job.stage == "cell" and job.part == "decode":
+        got = Counter(
+            (r.get("ctx"), r.get("kind"), r.get("phase"))
+            for r in rows
+            if r.get("part") == "decode"
+        )
+        want_keys = Counter(
+            (c, k, p) for c in job.ctxs for k in job.kinds for p in PHASES
+        )
+        if got != want_keys:
+            problems.append(
+                "decode coverage contains missing, duplicate or unexpected cells"
+            )
+        for r in rows:
+            if r.get("part") != "decode":
+                continue
+            for metric in ("ttft_s", "dec_tps"):
+                v = r.get(metric)
+                if not isinstance(v, int | float) or not math.isfinite(v) or v < 0:
+                    problems.append(f"invalid {metric}")
+            if (
+                be.ENGINES[job.engine].weights == "same"
+                and r.get("phase") in ("cold", "warm")
+                and r.get("pt") != r.get("ctx")
+            ):
+                problems.append(
+                    "actual server prompt tokens differ from reference budget"
+                )
     if job.stage == "cell" and job.part == "decode":
         for r in rows:
             if (
@@ -413,11 +450,11 @@ def validate_rows(job: Job, rows: list[dict]) -> list[str]:
                 and r.get("phase") in ("cold", "warm")
                 and (
                     r.get("ct") != DECODE_TOKENS
-                    or r.get("content_tokens") != r.get("ctx")
+                    or r.get("reference_prompt_tokens") != r.get("ctx")
                 )
             ):
                 problems.append(
-                    f"decode {r.get('kind')}-{r.get('ctx')} {r.get('phase')}: ct={r.get('ct')}, content_tokens={r.get('content_tokens')}"
+                    f"decode {r.get('kind')}-{r.get('ctx')} {r.get('phase')}: ct={r.get('ct')}, reference_prompt_tokens={r.get('reference_prompt_tokens')}"
                 )
                 break
     return problems
@@ -430,12 +467,12 @@ def is_complete(job: Job) -> bool:
 # ---- gpuq ------------------------------------------------------------------------------------------
 
 
-def submit_args(job: Job) -> list[str]:
+def submit_args(job: Job, attempt: int = 0) -> list[str]:
     return [
         GPUQ,
         "submit",
         "--label",
-        job.label,
+        job.label + (f"-a{attempt}" if attempt else ""),
         "--device",
         "m5",
         "--timeout",
@@ -475,6 +512,8 @@ def submit_jobs(jobs, outdir: Path, max_attempts: int = 2) -> dict:
     state = load_state(outdir)
     counts = {"complete": 0, "queued": 0, "submitted": 0, "gave_up": 0}
     for job in jobs:
+        if counts["queued"] + counts["submitted"] >= 6:
+            break
         if is_complete(job):
             counts["complete"] += 1
             continue
@@ -493,7 +532,7 @@ def submit_jobs(jobs, outdir: Path, max_attempts: int = 2) -> dict:
         if job.out.exists():  # a failed attempt's output must not mix with the retry
             job.out.rename(job.out.with_suffix(f".failed{st.get('attempts', 0)}.jsonl"))
         r = subprocess.run(
-            submit_args(job),
+            submit_args(job, st.get("attempts", 0) + 1),
             capture_output=True,
             text=True,
             env={**os.environ, **job.env},
@@ -794,6 +833,11 @@ def collect(outdir: Path, engines, yv_run: Path | None = None) -> dict:
                     cells.setdefault(
                         (e, "mem", job.out.stem, "-", "idle_gib"), []
                     ).append(r.get("idle_gib"))
+                    for metric in ("peak_rss_gib", "idle_rss_gib"):
+                        if isinstance(r.get(metric), int | float):
+                            cells.setdefault(
+                                (e, "mem", job.out.stem, "-", metric), []
+                            ).append(r[metric])
     return cells
 
 
@@ -940,10 +984,12 @@ def render_markdown(cells: dict, engines) -> str:
     for metric, title in (
         ("peak_gib", "Sampled peak memory"),
         ("idle_gib", "Idle memory after 30 seconds"),
+        ("peak_rss_gib", "Sampled peak RSS"),
+        ("idle_rss_gib", "Idle RSS after 30 seconds"),
     ):
         out += [
             "",
-            f"## {title} (process-tree physical footprint, GiB)",
+            f"## {title} (process-tree accounting sum, GiB)",
             "",
             "| group | " + " | ".join(engines) + " |",
             "|---|" + "---|" * len(engines),

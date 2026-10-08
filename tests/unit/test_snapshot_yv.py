@@ -31,7 +31,7 @@ def test_snapshot_stops_failed_engine_and_records_all_other_evidence(
         seen.append(cell.key)
         return {
             cell.key: SimpleNamespace(
-                ok=cell.key != "yunshu-new-pilot",
+                ok=cell.key != "yunshu-new-smoke-pilot",
                 reason="fixture failed",
                 evidence=tmp_path / cell.key,
             )

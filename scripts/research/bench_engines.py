@@ -48,6 +48,10 @@ SCRUB_PREFIXES = (
     "YUNSHU_",
     "MLX_",
     "LLAMA_",
+    "MTPLX_",
+    "OMLX_",
+    "TENSORFOLD_",
+    "SPLASH_",
 )
 
 
@@ -179,7 +183,11 @@ def is_new_engine(engine: str) -> bool:
 
 
 def scrubbed_env(environ: dict, extra: dict | None = None) -> dict:
-    env = {k: v for k, v in environ.items() if not k.startswith(SCRUB_PREFIXES)}
+    env = {
+        k: v
+        for k, v in environ.items()
+        if not k.startswith(SCRUB_PREFIXES) and k not in ("PYTHONPATH", "PYTHONHOME")
+    }
     env.update(extra or {})
     return env
 
@@ -268,7 +276,7 @@ def build_launch(
             ],
             scrubbed_env(environ, base_env),
             {"speculative": "none", "decode_concurrency": 8, "prompt_concurrency": 8},
-            {},
+            {str(Path(home) / ".cache/huggingface/hub/.snapshot014"): ""},
             {},
         )
     if engine == "omlx":
@@ -316,7 +324,7 @@ def build_launch(
     if engine == "splash":
         # Splash keeps its models under the user's ~/Library/Application Support/Splash (read only for us);
         # a separate instance on our port, SSD cache off (its default), nothing written to the user's service.
-        env = scrubbed_env(environ, {"NO_PROXY": "127.0.0.1"})
+        env = scrubbed_env(environ, base_env)
         return Launch(
             [
                 SPLASH_BIN,
@@ -340,7 +348,14 @@ def build_launch(
                 "reasoning_effort": "none",
             },
             {},
-            {},
+            {
+                str(
+                    Path(home)
+                    / "Library/Application Support/Splash/models"
+                    / SPLASH_MODEL
+                ): "/Users/yuhuan/Library/Application Support/Splash/models/"
+                + SPLASH_MODEL
+            },
             probe="/status",
         )
     if engine == "mtplx":
@@ -356,6 +371,8 @@ def build_launch(
                 p,
                 "--profile",
                 "turbo",
+                "--kv-quant",
+                "off",
                 "--no-auth",
                 "--cache-dir",
                 str(Path(home) / "mtplx-cache"),
@@ -440,7 +457,12 @@ def detect_mode(engine: str, log: str, probe_text: str | None = None) -> str | N
         text = m.group(1).lower()
         return "mtp" if "mtp" in text else "ar" if "ar" in text.split() else None
     if engine == "llamacpp":
-        if re.search(r"draft-mtp|speculative decoding.*mtp|mtp.*draft", log, re.I):
+        configured = re.search(
+            r'"speculative\.types"\s*:\s*"draft-mtp"', probe_text or ""
+        )
+        if configured or re.search(
+            r"draft-mtp|speculative decoding.*mtp|mtp.*draft", log, re.I
+        ):
             return "mtp"
         return None
     if engine == "splash":
@@ -488,9 +510,12 @@ def meta_row(
 # ---- versions / preflight ---------------------------------------------------------------------------
 
 STATIC_VERSIONS = {
-    "tf-new": ("0.6.1", None),
-    "mlxlm": ("mlx-lm 0.32.0 (main venv)", None),
-    "omlx": ("0.7.0 (git tag v0.7.0, own venv)", None),
+    "tf-new": ("0.6.1", "17c73e189f5e6a5304cda7ea37f086f9c49b4788"),
+    "mlxlm": ("mlx-lm 0.32.0 (snapshot014 isolated venv)", None),
+    "omlx": (
+        "0.7.0 (git tag v0.7.0, own venv)",
+        "4d4f5a280bc1739ba2cf39c1cee44fd5cc89cb40",
+    ),
     "splash": ("1.1.0 (Homebrew)", None),
     "mtplx": ("2.12.0 (own venv, mlx-lm 0.31.3)", None),
     "llamacpp": ("0.5.0-dev build 242", "836d57176dc699a726c55418e4f96b8ca628e1bf"),

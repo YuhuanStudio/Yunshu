@@ -51,7 +51,8 @@ def make_rows(job, engaged=None, **drop):
                     "ct": bs.DECODE_TOKENS,
                     "phase": ph,
                     "ctx": c,
-                    "content_tokens": c,
+                    "reference_prompt_tokens": c,
+                    "pt": c,
                     "kind": k,
                     "correct": True,
                     "n": 2,
@@ -267,7 +268,7 @@ def test_resumable_submit_skips_complete_and_queued_and_retries_failures(
     monkeypatch.setattr(bs.subprocess, "run", fake_run)
     counts = bs.submit_jobs(jobs, tmp_path)
     assert counts == {"complete": 1, "queued": 1, "submitted": 2, "gave_up": 0}
-    assert submitted == [jobs[2].label, jobs[3].label]
+    assert submitted == [jobs[2].label + "-a2", jobs[3].label + "-a1"]
     assert (
         jobs[2].out.with_suffix(".failed1.jsonl").exists()
     )  # the failed attempt is kept apart
@@ -322,7 +323,7 @@ def test_dry_run_plans_every_job_without_submitting(capsys, monkeypatch):
     print(out)
     assert (
         "snapshot014-yunshu-new-d128k-prose-r2" in out
-        and "snapshot014-llamacpp-pilot" in out
+        and "snapshot014-llamacpp-smoke-pilot" in out
     )
     assert "total" in out and "GPU h" in out
 
@@ -381,7 +382,7 @@ def test_aggregate_rejects_completed_but_wrong_token_budget(tmp_path):
     job = bs.plan_cells(["mlxlm"], 1, tmp_path, TREES)[0]
     job.out.parent.mkdir(parents=True)
     rows = make_rows(job)
-    rows[1]["content_tokens"] = 1000
+    rows[1]["reference_prompt_tokens"] = 1000
     job.out.write_text("\n".join(json.dumps(r) for r in rows))
     assert bs.collect(tmp_path, ["mlxlm"]) == {}
 
@@ -414,12 +415,13 @@ def test_generation_manifest_covers_exact_ladder_and_concurrent_cohorts(
     monkeypatch.setattr(gen, "MODEL", tmp_path)
     monkeypatch.setattr(
         gen,
-        "exact_prompt",
+        "exact_chat_prompt",
         lambda source, target, suffix: f"{target}\n{source}{suffix}",
     )
     monkeypatch.setattr(
-        gen, "assert_prompt", lambda text, target: int(text.splitlines()[0])
+        gen, "assert_chat_prompt", lambda text, target: int(text.splitlines()[0])
     )
+    monkeypatch.setattr(gen, "token_count", lambda text: len(text))
     manifest = gen.generate(source, destination)
     assert manifest["complete"] is True
     assert len(manifest["prompts"]) == 10 + 2 * (2 + 4) * 2
@@ -429,3 +431,44 @@ def test_generation_manifest_covers_exact_ladder_and_concurrent_cohorts(
         "cohort n=4 trial=1 request=3"
         in (destination / "conc-4-1-code-3.txt").read_text()
     )
+
+
+@pytest.mark.parametrize(
+    "encoded", [[1, 2, 3], {"input_ids": [1, 2, 3]}, {"input_ids": [[1, 2, 3]]}]
+)
+def test_reference_chat_count_handles_transformers_encoding_shapes(encoded):
+    from snapshot_prompts import chat_token_count
+
+    class Tokenizer:
+        def apply_chat_template(self, messages, **kwargs):
+            assert messages == [{"role": "user", "content": "fixture"}]
+            assert kwargs == {
+                "tokenize": True,
+                "add_generation_prompt": True,
+                "enable_thinking": False,
+            }
+            return encoded
+
+    assert chat_token_count("fixture", Tokenizer()) == 3
+
+
+def test_lazy_omlx_is_loaded_before_engagement_detection(monkeypatch):
+    import tfbench
+
+    requests = []
+    monkeypatch.setattr(
+        tfbench, "send", lambda url, body, **kw: requests.append((url, body, kw))
+    )
+    tfbench.warm_lazy_engine("mlxlm", "http://fixture", "model")
+    assert requests == []
+    tfbench.warm_lazy_engine("omlx", "http://fixture", "model")
+    assert len(requests) == 1
+    assert requests[0][1]["temperature"] == 0 and requests[0][1]["max_tokens"] == 16
+
+
+def test_stock_server_models_endpoint_has_an_existing_isolated_hf_cache(tmp_path):
+    launch = be.build_launch("mlxlm", 18990, tmp_path, {})
+    for path, text in launch.files.items():
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        Path(path).write_text(text)
+    assert (tmp_path / ".cache/huggingface/hub").is_dir()

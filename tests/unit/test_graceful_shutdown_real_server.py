@@ -12,6 +12,8 @@ import time
 from pathlib import Path
 
 import httpx
+import pytest
+from scripts.research.tfbench import free_port
 
 ROOT = Path(__file__).resolve().parents[2]
 PORT = 18991
@@ -23,12 +25,16 @@ def test_graceful_shutdown_timeout_values():
     assert g(0) == 0 and g(0.4) == 1 and g(30.0) == 30 and g(-1) == 0
 
 
-def _start(drain: str, delay="0.2", n="15"):
+def _start(drain: str, delay="0.2", n="15", home: Path | None = None):
+    global PORT
+    PORT = free_port()
     env = {
-        **os.environ,
+        **{k: v for k, v in os.environ.items() if not k.startswith("YUNSHU_")},
         "YUNSHU_DRAIN_TIMEOUT": drain,
         "PYTHONPATH": str(ROOT / "python"),
     }
+    if home is not None:
+        env["HOME"] = str(home)
     env.pop("YUNSHU_AUTH_TOKEN", None)
     p = subprocess.Popen(
         [
@@ -43,11 +49,15 @@ def _start(drain: str, delay="0.2", n="15"):
         stderr=subprocess.STDOUT,
     )
     for _ in range(100):
+        if p.poll() is not None:
+            raise AssertionError(
+                "our scripted server exited: " + p.stdout.read().decode()[-500:]
+            )
         try:
-            if (
-                httpx.get(f"http://127.0.0.1:{PORT}/health/live", timeout=1).status_code
-                < 500
-            ):
+            response = httpx.get(f"http://127.0.0.1:{PORT}/health/live", timeout=1)
+            if response.status_code < 500 and response.headers.get(
+                "x-yunshu-scripted-pid"
+            ) == str(p.pid):
                 return p
         except httpx.HTTPError:
             time.sleep(0.2)
@@ -88,8 +98,8 @@ def _stream_then_sigterm(p):
     return got, time.time() - t0
 
 
-def test_sigterm_drains_the_in_flight_stream_then_exits():
-    p = _start("20")
+def test_sigterm_drains_the_in_flight_stream_then_exits(tmp_path):
+    p = _start("20", home=tmp_path)
     try:
         got, _ = _stream_then_sigterm(p)
         assert got["err"] is None, got["err"]
@@ -104,8 +114,8 @@ def test_sigterm_drains_the_in_flight_stream_then_exits():
             p.kill()
 
 
-def test_drain_zero_aborts_the_stream_fast():
-    p = _start("0")
+def test_drain_zero_aborts_the_stream_fast(tmp_path):
+    p = _start("0", home=tmp_path)
     try:
         got, took = _stream_then_sigterm(p)
         assert took < 8, took
@@ -114,3 +124,26 @@ def test_drain_zero_aborts_the_stream_fast():
     finally:
         if p.poll() is None:
             p.kill()
+
+
+def test_failed_start_never_uses_an_unowned_healthy_server(monkeypatch, tmp_path):
+    import io
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(
+        "tests.unit.test_graceful_shutdown_real_server.free_port", lambda: 18999
+    )
+    monkeypatch.setattr(
+        subprocess,
+        "Popen",
+        lambda *a, **k: SimpleNamespace(
+            pid=12345, poll=lambda: 3, stdout=io.BytesIO(b"bind failed")
+        ),
+    )
+    seen = []
+    monkeypatch.setattr(
+        httpx, "get", lambda *a, **k: seen.append(a) or SimpleNamespace(status_code=200)
+    )
+    with pytest.raises(AssertionError, match="our scripted server exited: bind failed"):
+        _start("20", home=tmp_path)
+    assert seen == []
