@@ -465,3 +465,35 @@ def test_index_cannot_name_files_outside_model(client, monkeypatch, tmp_path, ab
         ).status_code
         == 400
     )
+
+
+def test_console_stage_accepts_gpuq_device_fields(tmp_path):
+    # gpuq adds device / execution_device / remote_host to the checks record; the judge
+    # failed a real all-PASS run (consolefeat-tiny-final3) because it required an exact key set.
+    import json
+    import sys
+    from pathlib import Path
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
+    from verify import stages
+
+    checks = {
+        "console_registration_cancel": "PASS",
+        "console_host_latency": "PASS",
+        "stream_latency": "PASS",
+        "single_stream_latency": "PASS",
+        "device": "m5",
+        "execution_device": "m5",
+        "remote_host": None,
+    }
+    path = tmp_path / "console.jsonl"
+    path.write_text(
+        json.dumps({"complete": True, "failures": [], "checks": checks}) + "\n"
+    )
+    assert stages._console_validate(path) == (True, "")
+    checks["stream_latency"] = "FAIL"
+    path.write_text(
+        json.dumps({"complete": True, "failures": [], "checks": checks}) + "\n"
+    )
+    ok, why = stages._console_validate(path)
+    assert not ok and "stream_latency" in why

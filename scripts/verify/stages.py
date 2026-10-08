@@ -1070,22 +1070,29 @@ def stage_rerank(ctx: Ctx) -> StageResult:
     return _finish(ctx, StageResult("rerank", not reasons, reasons, numbers))
 
 
+def _console_validate(path):
+    rows = read_jsonl(path)
+    if not rows or not rows[-1].get("complete") or rows[-1].get("failures"):
+        return False, "console route probe incomplete or failed"
+    required = {
+        "console_registration_cancel",
+        "console_host_latency",
+        "stream_latency",
+        "single_stream_latency",
+    }
+    checks = rows[-1].get("checks", {})
+    # gpuq adds device / execution_device / remote_host to every record: require the
+    # four checks, each PASS, rather than an exact key set.
+    missing = sorted(k for k in required if checks.get(k) != "PASS")
+    if missing:
+        return False, "console route checks missing or failing: " + ", ".join(missing)
+    return True, ""
+
+
 def stage_console(ctx: Ctx) -> StageResult:
     """Single-node console API correctness on a pinned candidate; no timing verdict."""
 
-    def validate(path):
-        rows = read_jsonl(path)
-        if not rows or not rows[-1].get("complete") or rows[-1].get("failures"):
-            return False, "console route probe incomplete or failed"
-        required = {
-            "console_registration_cancel",
-            "console_host_latency",
-            "stream_latency",
-            "single_stream_latency",
-        }
-        if set(rows[-1].get("checks", {})) != required:
-            return False, "missing console route checks"
-        return True, ""
+    validate = _console_validate
 
     cell = Cell(
         "console",
