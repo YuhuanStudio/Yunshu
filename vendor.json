@@ -2583,7 +2583,16 @@
       "kind": "discovery-only",
       "owner": "priorfix",
       "reviewed_date": "2026-10-08",
-      "action": "Published bare backbone namespace and quantized trained head; adapter delegates single-label BERT/XLM-RoBERTa to maintained mlx-vlm loader. GPU parity pending."
+      "action": "Published bare backbone namespace and quantized trained head; all BERT/RoBERTa/XLM-RoBERTa label counts delegate to maintained MIT mlx-vlm encoder loader/SequenceClassificationModel. GPU parity pending."
+    },
+    {
+      "url": "https://github.com/Blaizzy/mlx-vlm/blob/3d87e88402f307efbf68e568971aa887ee7d9ed0/mlx_vlm/encoder_loader.py",
+      "revision": "3d87e88402f307efbf68e568971aa887ee7d9ed0",
+      "license": "MIT",
+      "kind": "discovery-only",
+      "owner": "priorfix",
+      "reviewed_date": "2026-10-08",
+      "action": "Imported maintained SequenceClassificationModel loader; replaced local classifier reconstruction and quantization. CPU Torch fixtures pass for all three families / 1 and 2 labels; published BGE M5 pending."
     }
   ]
 }

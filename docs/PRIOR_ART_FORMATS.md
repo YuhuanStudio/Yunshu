@@ -9,8 +9,9 @@ and audio towers can retain floating weights. The original float32 loader remain
 available for unquantized checkpoints. Integer packed tensors are never cast to
 float. See vendor.json for provenance.
 
-Single-label BERT and XLM-RoBERTa use mlx-vlm’s maintained sequence-classification
-loader, including published BGE converters with bare backbone names.
+BERT, RoBERTa and XLM-RoBERTa use mlx-vlm’s maintained encoder loader with
+`SequenceClassificationModel`, including published BGE converters with bare
+backbone names and both single-label and multi-label trained heads.
 Sequence-classification checkpoints for BERT, RoBERTa and XLM-RoBERTa may contain
 quantized encoder layers with floating or quantized trained classifier heads.
 Missing backbone or head tensors remain a load error. Qwen3 yes/no rerankers use

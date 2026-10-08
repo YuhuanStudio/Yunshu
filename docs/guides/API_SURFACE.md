@@ -403,8 +403,10 @@ Text `Qwen3-Reranker` checkpoints use the model-card Transformers prompt and the
 last-position yes/no logits, with a sigmoid of the logit difference. Original
 `BertForSequenceClassification`, `RobertaForSequenceClassification` and
 `XLMRobertaForSequenceClassification` safetensors checkpoints use their trained
-heads. Other head architectures and quantized encoder heads return a load error.
-Encoder heads require the `embeddings` extra. Model cards report the effective
+heads, including published quantized encoder/head weights through mlx-vlm.
+Other head architectures return a load error; Jina v3 `JinaForRanking` is a
+separate unsupported architecture. Encoder heads require the `vision` extra
+(mlx-vlm); no mlx-embeddings source or reconstructed classifier is used. Model cards report the effective
 serving window: Qwen3 scoring caps at 8192 tokens; RoBERTa position padding offsets
 and the tokenizer window constrain encoder inputs. Busy scoring work blocks
 non-forced model unload, including when its HTTP waiter has been cancelled.

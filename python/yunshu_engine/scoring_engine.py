@@ -1,6 +1,6 @@
 """Text cross-encoders: Qwen3 yes/no and trained sequence-classification heads.
 
-Loads original safetensors, preserving trained heads. Unsupported architectures
+Loads published float and quantized safetensors, preserving trained heads. Unsupported architectures
 fail explicitly instead of silently using an embedding or an untrained head.
 """
 
@@ -88,29 +88,9 @@ class _ClassifierLogits:
 
 
 def load_sequence_classifier(path: str, config: dict):
-    """Reuse MLX encoder arithmetic; add the exact HF trained classification head."""
-    import mlx.core as mx
-    import mlx.nn as nn
-
+    """Keep the trained head using mlx-vlm's maintained encoder/quantized loader."""
     family = config.get("model_type")
-    labels = int(config.get("num_labels", len(config.get("id2label", {})) or 2))
-    if labels == 1 and family in ("bert", "xlm-roberta"):
-        try:
-            from mlx_vlm.reranker_loader import load_sequence_classification_model
-        except ModuleNotFoundError as exc:
-            if exc.name != "mlx_vlm.reranker_loader":
-                raise
-        else:
-            return _ClassifierLogits(
-                load_sequence_classification_model(
-                    Path(path), config=config, strict=True
-                )
-            )
-    if family == "bert":
-        from mlx_embeddings.models.bert import Model, ModelArgs
-    elif family in ("roberta", "xlm-roberta"):
-        from mlx_embeddings.models.xlm_roberta import Model, ModelArgs
-    else:
+    if family not in ("bert", "roberta", "xlm-roberta"):
         raise ValueError(
             f"Sequence classification architecture '{family}' is not supported; supported: bert, roberta, xlm-roberta"
         )
@@ -121,72 +101,18 @@ def load_sequence_classifier(path: str, config: dict):
         raise ValueError(
             "Only GELU / absolute-position encoder classifiers are supported"
         )
+    from mlx_vlm.encoder_loader import load_encoder_model
+
     labels = int(config.get("num_labels", len(config.get("id2label", {})) or 2))
-
-    class Classifier(nn.Module):
-        def __init__(self):
-            super().__init__()
-            cfg = dict(config)
-            cfg["add_pooling_layer"] = family == "bert"
-            backbone = Model(ModelArgs.from_dict(cfg))
-            if family == "bert":
-                self.bert = backbone
-                self.classifier = nn.Linear(config["hidden_size"], labels)
-            else:
-                self.roberta = backbone
-                self.classifier = nn.Module()
-                self.classifier.dense = nn.Linear(
-                    config["hidden_size"], config["hidden_size"]
-                )
-                self.classifier.out_proj = nn.Linear(config["hidden_size"], labels)
-
-        def __call__(self, **inputs):
-            if family == "bert":
-                return self.classifier(self.bert(**inputs).pooler_output)
-            hidden = self.roberta(**inputs).last_hidden_state[:, 0]
-            return self.classifier.out_proj(mx.tanh(self.classifier.dense(hidden)))
-
-    model = Classifier()
-    weights: dict[str, Any] = {}
-    files = sorted(Path(path).glob("*.safetensors"))
-    if not files:
-        raise ValueError("Sequence classifiers require safetensors weights")
-    for file in files:
-        shard = mx.load(str(file))
-        if not isinstance(shard, dict):
-            raise ValueError(f"Not a safetensors weight dictionary: {file}")
-        weights.update(shard)
-    weights = {
-        k: v
-        for k, v in weights.items()
-        if not k.endswith(("position_ids", "token_type_ids"))
-    }
-    quantization = config.get("quantization") or config.get("quantization_config")
-    if quantization:
-        from mlx_vlm.utils import _quantization_for_module_path
-
-        def predicate(path, module):
-            if not hasattr(module, "to_quantized"):
-                return False
-            per_module = _quantization_for_module_path(quantization, path, model)
-            if per_module is not None:
-                return per_module
-            # Quantize only tensors packed by the converter. In particular,
-            # small trained output heads often remain floating point.
-            return f"{path}.scales" in weights
-
-        nn.quantize(
-            model,
-            group_size=quantization["group_size"],
-            bits=quantization["bits"],
-            mode=quantization.get("mode", "affine"),
-            class_predicate=predicate,
-        )
-    # strict=True ensures every backbone AND classifier parameter comes from the checkpoint.
-    model.load_weights(list(weights.items()), strict=True)
-    model.eval()
-    mx.eval(model.parameters())
-    return model
+    model = load_encoder_model(
+        Path(path),
+        model_remapping={"roberta": "xlm_roberta", "xlm-roberta": "xlm_roberta"},
+        model_class_name="SequenceClassificationModel",
+        config=config,
+        config_overrides={"num_labels": labels},
+        strict=True,
+    )
+    return _ClassifierLogits(model)
 
 
 class TextScoringEngine:
