@@ -130,7 +130,8 @@ def _model_payload(card, entry, authenticated: bool) -> dict:
     item = openai_model(card, detailed=authenticated)
     if authenticated and entry is not None:
         item["loaded"] = entry.is_loaded
-        item["size_gb"] = round(entry.estimated_bytes / 1e9, 1)
+        item["size_gb"] = round(entry.estimated_bytes / (1 << 30), 1)
+        item["size_bytes"] = int(entry.estimated_bytes)
         if entry.is_loaded and entry.engine is not None:
             try:
                 stats = (

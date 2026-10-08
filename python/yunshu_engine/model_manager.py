@@ -554,8 +554,8 @@ class ModelManager:
                     "Model '%s' estimated size (%.1fGB) exceeds memory budget (%.1fGB) "
                     "— loading will fail unless budget is increased or other models evicted",
                     model_id,
-                    estimated_bytes / 1e9,
-                    self.max_memory_bytes / 1e9,
+                    estimated_bytes / (1 << 30),
+                    self.max_memory_bytes / (1 << 30),
                 )
 
             # Guard: never overwrite a loaded entry — would leak the engine's GPU memory
@@ -758,8 +758,8 @@ class ModelManager:
                 logger.info(
                     f"Loaded model {model_id} "
                     f"({entry.model_type.name}, "
-                    f"{entry.estimated_bytes / 1e9:.1f} GB, "
-                    f"total: {self._current_memory_bytes / 1e9:.1f} GB)"
+                    f"{entry.estimated_bytes / (1 << 30):.1f} GiB, "
+                    f"total: {self._current_memory_bytes / (1 << 30):.1f} GB)"
                 )
 
                 return engine
@@ -998,7 +998,7 @@ class ModelManager:
 
         logger.info(
             f"Unloaded model {model_id} "
-            f"(freed: {(pre_unload_active - mx.get_active_memory()) / 1e9:.1f}GB, "
+            f"(freed: {(pre_unload_active - mx.get_active_memory()) / (1 << 30):.1f}GB, "
             f"settled: {settled})"
         )
         return True
@@ -1030,9 +1030,9 @@ class ModelManager:
             victim = self._find_lru_victim()
             if victim is None:
                 raise MemoryError(
-                    f"Cannot free enough memory: need {needed_bytes / 1e9:.1f} GB, "
-                    f"used {self._current_memory_bytes / 1e9:.1f} / "
-                    f"{self.max_memory_bytes / 1e9:.1f} GB"
+                    f"Cannot free enough memory: need {needed_bytes / (1 << 30):.1f} GiB, "
+                    f"used {self._current_memory_bytes / (1 << 30):.1f} / "
+                    f"{self.max_memory_bytes / (1 << 30):.1f} GB"
                 )
             # check the result — _unload_model_locked refuses (returns False,
             # frees nothing) for any engine it cannot prove idle. Spinning on a refused
@@ -1043,8 +1043,8 @@ class ModelManager:
                 raise MemoryError(
                     f"Cannot free enough memory: LRU victim '{victim.model_id}' could "
                     f"not be evicted (engine cannot be proven idle). Need "
-                    f"{needed_bytes / 1e9:.1f} GB, used "
-                    f"{self._current_memory_bytes / 1e9:.1f} / {self.max_memory_bytes / 1e9:.1f} GB"
+                    f"{needed_bytes / (1 << 30):.1f} GB, used "
+                    f"{self._current_memory_bytes / (1 << 30):.1f} / {self.max_memory_bytes / (1 << 30):.1f} GB"
                 )
             self._eviction_stats["budget_evictions"] += 1
 
@@ -1123,8 +1123,8 @@ class ModelManager:
             "Post-load memory pressure: %.1f%% active (%.1fGB / %.1fGB working-set), "
             "threshold=%.0f%% — initiating LRU eviction",
             utilization * 100,
-            active / 1e9,
-            limit / 1e9,
+            active / (1 << 30),
+            limit / (1 << 30),
             self.memory_pressure_threshold * 100,
         )
 
@@ -1244,7 +1244,8 @@ class ModelManager:
                 "loaded": e.is_loaded,
                 "pinned": e.is_pinned,
                 "loading": e.is_loading,
-                "size_gb": e.estimated_bytes / 1e9,
+                "size_gb": e.estimated_bytes / (1 << 30),
+                "size_bytes": int(e.estimated_bytes),
                 "last_access": e.last_access,
                 "error": e.load_error,
             }
@@ -1302,8 +1303,10 @@ class ModelManager:
     @property
     def memory_usage(self) -> dict:
         return {
-            "current_gb": self._current_memory_bytes / 1e9,
-            "max_gb": (self.max_memory_bytes or 0) / 1e9,
+            "current_gb": self._current_memory_bytes / (1 << 30),
+            "current_bytes": int(self._current_memory_bytes),
+            "max_gb": (self.max_memory_bytes or 0) / (1 << 30),
+            "max_bytes": int(self.max_memory_bytes or 0),
             "models_loaded": sum(1 for e in self._entries.values() if e.is_loaded),
             "models_registered": len(self._entries),
         }
@@ -1499,8 +1502,10 @@ class ModelManager:
     def get_status(self) -> dict:
         """Return detailed pool status."""
         return {
-            "max_memory_gb": (self.max_memory_bytes or 0) / 1e9,
-            "current_memory_gb": self._current_memory_bytes / 1e9,
+            "max_memory_gb": (self.max_memory_bytes or 0) / (1 << 30),
+            "max_memory_bytes": int(self.max_memory_bytes or 0),
+            "current_memory_gb": self._current_memory_bytes / (1 << 30),
+            "current_memory_bytes": int(self._current_memory_bytes),
             "models_registered": len(self._entries),
             "models_loaded": sum(1 for e in self._entries.values() if e.is_loaded),
             "eviction_stats": dict(self._eviction_stats),
@@ -1512,7 +1517,8 @@ class ModelManager:
                     "loaded": e.is_loaded,
                     "loading": e.is_loading,
                     "pinned": e.is_pinned,
-                    "size_gb": round(e.estimated_bytes / 1e9, 2),
+                    "size_gb": round(e.estimated_bytes / (1 << 30), 2),
+                    "size_bytes": int(e.estimated_bytes),
                     "last_access": e.last_access if e.last_access > 0 else None,
                     "error": e.load_error,
                 }
