@@ -246,12 +246,14 @@ def pull(
     Refuses to download a model that is already on disk (models directory or
     Hugging Face cache); an interrupted download is resumed.
     """
+    from huggingface_hub.utils import HFValidationError, validate_repo_id
+
+    try:
+        validate_repo_id(repo_id)
+    except HFValidationError:
+        fail(f"Invalid Hugging Face repo id: {repo_id!r}.", code=2)
     parts = repo_id.split("/")
-    if (
-        len(parts) != 2
-        or not all(parts)
-        or any(p in {".", ".."} or "\\" in p for p in parts)
-    ):
+    if len(parts) != 2 or not all(parts):
         fail(f"Expected a Hugging Face repo id like org/name, got {repo_id!r}.", code=2)
     base = Path(models_dir).expanduser() if models_dir else _get_models_dir()
     target = base / parts[0] / parts[1]
