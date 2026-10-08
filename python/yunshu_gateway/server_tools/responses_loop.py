@@ -28,6 +28,7 @@ import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any
 
+from fastapi import HTTPException
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from yunshu_engine import settings
@@ -123,6 +124,46 @@ def input_item_to_messages(item: dict, texts: dict | None = None) -> list[dict]:
             {"role": "tool", "tool_call_id": iid, "content": result},
         ]
 
+    if ty == "computer_call":
+        computer_args = {
+            "actions": item.get("actions")
+            or ([item["action"]] if item.get("action") else [])
+        }
+        message = pair("computer", json.dumps(computer_args), "")[0]
+        message["tool_calls"][0]["id"] = item.get("call_id") or iid
+        return [message]
+    if ty == "computer_call_output":
+        screenshot = item.get("output") or {}
+        if (
+            not isinstance(screenshot, dict)
+            or screenshot.get("type") != "computer_screenshot"
+        ):
+            raise HTTPException(
+                400, "computer_call_output requires a computer_screenshot"
+            )
+        image = {
+            "type": "input_image",
+            **{k: screenshot[k] for k in ("image_url", "file_id") if screenshot.get(k)},
+        }
+        from ..files_store import FileRefError, resolve_file_block
+        from ..routers.responses import _extract_input_text
+
+        try:
+            image = resolve_file_block(image)
+        except FileRefError as exc:
+            raise HTTPException(exc.status, exc.message) from exc
+        if not image.get("image_url"):
+            raise HTTPException(
+                400, "computer_screenshot requires image_url or file_id"
+            )
+        content = _extract_input_text([image])
+        return [
+            {
+                "role": "tool",
+                "tool_call_id": item.get("call_id") or "",
+                "content": content,
+            }
+        ]
     if ty == "web_search_call":
         action = item.get("action") or {}
         q = action.get("query") or action.get("url")
@@ -177,7 +218,9 @@ def input_item_to_messages(item: dict, texts: dict | None = None) -> list[dict]:
         ]
     if ty in ("local_shell_call", "tool_search_call"):
         name = "local_shell" if ty == "local_shell_call" else "tool_search"
-        args = item.get("action") if ty == "local_shell_call" else item.get("arguments")
+        client_args = (
+            item.get("action") if ty == "local_shell_call" else item.get("arguments")
+        )
         return [
             {
                 "role": "assistant",
@@ -186,7 +229,10 @@ def input_item_to_messages(item: dict, texts: dict | None = None) -> list[dict]:
                     {
                         "id": item.get("call_id") or iid,
                         "type": "function",
-                        "function": {"name": name, "arguments": _json_text(args or {})},
+                        "function": {
+                            "name": name,
+                            "arguments": _json_text(client_args or {}),
+                        },
                     }
                 ],
             }

@@ -2296,6 +2296,7 @@ def _ollama_unsupported(c: Ctx):
 from route_checks_agent_compat import (  # noqa: E402,F401
     custom_tools as _agent_custom_tools,
 )
+from route_checks_respfeat import computer as _respfeat_computer  # noqa: E402,F401
 from route_checks_vllm import (
     _chat_validation,  # noqa: E402,F401  registers the vLLM-derived validation checks
 )

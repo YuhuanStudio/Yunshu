@@ -178,6 +178,7 @@ def test_full_suite_has_every_stage():
         "longqa",
         "conc",
         "client_compat",
+        "respfeat",
         "websearch",
         "rerank",
         "evals",

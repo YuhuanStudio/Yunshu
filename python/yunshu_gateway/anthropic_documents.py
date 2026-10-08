@@ -312,8 +312,21 @@ async def create_documents(req, request, inner):
     if req.stream and not any(d.enabled for d in docs):
         # No citation to attach: stream the generation as it happens.
         return await inner(adapted, request)
+    if req.stream:
+        response = await inner(adapted, request)
+        if isinstance(response, StreamingResponse):
+            return StreamingResponse(
+                stream_citations(response, docs),
+                media_type="text/event-stream",
+                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+            )
+        # Non-stream error responses retain their HTTP status.
+        if response.status_code != 200:
+            return response
+    else:
+        response = None
     adapted = adapted.model_copy(update={"stream": False})
-    response = await inner(adapted, request)
+    response = response or await inner(adapted, request)
     if response.status_code != 200:
         return response
     body = json.loads(response.body)
@@ -392,3 +405,92 @@ async def replay(body):
         usage=body["usage"],
     )
     yield event("message_stop")
+
+
+async def stream_citations(response, documents):
+    """Strip split source markers while forwarding text before generation ends."""
+    from .server_tools.responses_loop import _parse_sse
+
+    buffers, has_text = {}, set()
+
+    def event(data):
+        return (
+            f"event: {data['type']}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+        )
+
+    def drain(index, final=False):
+        text = buffers.get(index, "")
+        out = []
+        while text:
+            match = _MARK.search(text)
+            if match:
+                prefix = text[: match.start()]
+                if prefix:
+                    out.append({"type": "text_delta", "text": prefix})
+                    has_text.add(index)
+                doc, start, end = map(int, match.groups())
+                if doc >= len(documents) or not documents[doc].enabled:
+                    raise HTTPException(
+                        502, "Model referenced an unavailable citation source"
+                    )
+                if index not in has_text:
+                    raise HTTPException(502, "Citation has no preceding response text")
+                out.append(
+                    {
+                        "type": "citations_delta",
+                        "citation": documents[doc].citation(start, end),
+                    }
+                )
+                text = text[match.end() :]
+                continue
+            # Retain only a possible marker suffix, bounded even for bad model output.
+            cut = len(text)
+            for pos in range(len(text)):
+                suffix = text[pos:]
+                if "[[cite:".startswith(suffix) or re.fullmatch(
+                    r"\[\[cite:[0-9:]*\]?", suffix
+                ):
+                    cut = pos
+                    break
+            if final:
+                if cut < len(text) and text[cut:].startswith("[[cite:"):
+                    raise HTTPException(502, "Model returned an incomplete citation")
+                cut = len(text)
+            if len(text) - cut > 128:
+                raise HTTPException(502, "Model returned an oversized citation marker")
+            if cut:
+                out.append({"type": "text_delta", "text": text[:cut]})
+                has_text.add(index)
+            text = text[cut:]
+            break
+        buffers[index] = text
+        return [
+            {"type": "content_block_delta", "index": index, "delta": d} for d in out
+        ]
+
+    try:
+        async for kind, data in _parse_sse(response.body_iterator):
+            if kind == "__comment__":
+                yield data + "\n\n"
+                continue
+            index = data.get("index")
+            if (
+                kind == "content_block_delta"
+                and data.get("delta", {}).get("type") == "text_delta"
+            ):
+                buffers[index] = buffers.get(index, "") + data["delta"]["text"]
+                for translated in drain(index):
+                    yield event(translated)
+            else:
+                if kind == "content_block_stop":
+                    for translated in drain(index, final=True):
+                        yield event(translated)
+                yield event(data)
+    except HTTPException as exc:
+        yield event(
+            {"type": "error", "error": {"type": "api_error", "message": exc.detail}}
+        )
+    finally:
+        close = getattr(response.body_iterator, "aclose", None)
+        if close:
+            await close()

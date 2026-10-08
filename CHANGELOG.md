@@ -22,10 +22,14 @@ Changes on main after 0.1.4; not part of a published package yet.
 
 ### Added
 
+- Client-executed Responses computer actions and screenshot round trips.
+- Incremental Anthropic document citation streaming with checked source ranges.
+- Optional WebRTC Realtime transport (`yunshu[webrtc]`) and local audio-sample voice enrollment for reference-audio TTS models.
+
 - `POST /v1/decisions` (OpenAI's Decisions API: predicate / choice / score questions answered with probabilities, text and inline images) and `POST /v1/systemone` (TypeSafe Jev / System One wire), served by decision checkpoints: Cloudflare Clef in MLX format (`ModelType.DECISION`; backbone through mlx-vlm plus the joint schema head in MLX, one forward pass, no decoding). A checkpoint with a decision head is never loaded as a plain LLM; unknown heads fail closed.
 - Stored chat completions: `store: true` (and `metadata`) on `/v1/chat/completions`, with `GET /v1/chat/completions`, `GET/POST/DELETE /v1/chat/completions/{id}` and `/messages` (OpenAI shapes, pagination, `model` / `metadata[k]` filters; streams are stored once complete). Local store `YUNSHU_CHAT_COMPLETIONS_DIR`, capped by `YUNSHU_CHAT_COMPLETIONS_MAX`.
 - Realtime ephemeral keys: `POST /v1/realtime/client_secrets` and the beta `POST /v1/realtime/sessions` / `transcription_sessions`; the minted `ek_` secret authenticates `/v1/realtime` and applies its session configuration.
-- SDK coverage walk decisions: OpenAI and Anthropic skills, and SIP call control (accept / reject / refer / hangup), are declared not applicable with reasons; evals, WebRTC `calls` and custom voices stay planned (14 left).
+- SDK coverage walk decisions: OpenAI and Anthropic skills, and SIP call control (accept / reject / refer / hangup), are declared not applicable with reasons; Evals, optional WebRTC `calls` and local custom voices are served; no planned SDK endpoints remain.
 - `scripts/dev/api_coverage.py`: walks the `openai` and `anthropic` SDK resources and fails (`tests/unit/test_api_coverage.py`) when an endpoint is neither served nor declared planned / not applicable with a reason.
 
 ### Changed
