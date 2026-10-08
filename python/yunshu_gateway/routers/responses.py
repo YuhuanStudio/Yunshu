@@ -262,8 +262,7 @@ async def _vlm_to_responses(req, messages, request, logit_bias, own_input_messag
 
     chat_response_format = req.response_format or None
     chat_messages = [
-        ChatMessage(role=m.get("role", "user"), content=m.get("content", ""))
-        for m in messages
+        ChatMessage(**{"role": "user", "content": "", **m}) for m in messages
     ]
     # Force stream=False / n=1: we wrap a single completion into the Responses shape.
     chat_req = ChatCompletionRequest(
