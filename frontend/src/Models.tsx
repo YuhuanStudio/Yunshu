@@ -1,4 +1,5 @@
-import { t, tr } from "./i18n/index.ts";
+import { has, t, tr } from "./i18n/index.ts";
+import { unloadImpact } from "./model-impact";
 import { useEffect, useRef, useState } from "react";
 import {
   Button,
@@ -84,6 +85,8 @@ export function Models({
   const opener = useRef<HTMLButtonElement | null>(null),
     detailSequence = useRef(0);
   const online = isOnline(engine);
+  const impact = unloadImpact(engine.status, unloading?.id ?? "");
+  const interrupts = impact.rows.length + impact.unattributed > 0;
   const ledger = useMemoryLedger(connection, online);
   const downloads = useDownloads(connection, online);
   const local = useLocalInventory(connection, online);
@@ -611,11 +614,62 @@ export function Models({
           <DialogDescription>
             {t("models.unload.description", { id: unloading?.id ?? "" })}
           </DialogDescription>
+          <div
+            role="group"
+            aria-label={t("models.unload.impact.aria")}
+            data-testid="unload-impact"
+            data-count={impact.rows.length}
+            className="space-y-2 text-sm"
+          >
+            {impact.rows.length === 0 && impact.unattributed === 0 ? (
+              <p className="text-muted-foreground">
+                {t("models.unload.impact.none")}
+              </p>
+            ) : (
+              <>
+                {impact.rows.length > 0 && (
+                  <>
+                    <p>
+                      {t("models.unload.impact.some", {
+                        n: impact.rows.length,
+                      })}
+                    </p>
+                    <ul className="space-y-1 text-xs text-muted-foreground">
+                      {impact.rows.slice(0, 5).map((row) => (
+                        <li key={row.request_id} className="flex gap-2">
+                          <span className="font-mono">{row.request_id}</span>
+                          <span>
+                            {t("models.unload.impact.row", {
+                              phase: has(`overview.phase.${row.phase}`)
+                                ? tr(`overview.phase.${row.phase}`)
+                                : String(row.phase),
+                              elapsed: elapsed(row.elapsed_s),
+                            })}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  </>
+                )}
+                {impact.unattributed > 0 && (
+                  <p className="text-xs text-muted-foreground">
+                    {t("models.unload.impact.unattributed", {
+                      n: impact.unattributed,
+                    })}
+                  </p>
+                )}
+                <p className="text-xs text-muted-foreground">
+                  {t("models.unload.impact.hint")}
+                </p>
+              </>
+            )}
+          </div>
           <div className="flex justify-end gap-2">
             <Button variant="secondary" onClick={() => setUnloading(null)}>
               {t("models.unload.keep")}
             </Button>
             <Button
+              variant={interrupts ? "destructive" : undefined}
               onClick={() => {
                 const m = unloading;
                 setUnloading(null);
@@ -625,7 +679,9 @@ export function Models({
                   );
               }}
             >
-              {t("models.unload.confirm")}
+              {interrupts
+                ? t("models.unload.confirmInterrupt")
+                : t("models.unload.confirm")}
             </Button>
           </div>
         </DialogContent>

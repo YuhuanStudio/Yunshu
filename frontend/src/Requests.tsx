@@ -1,4 +1,5 @@
 import { ErrorNote } from "./error-note";
+import { RequestWaterfall } from "./RequestWaterfall";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   CustomSelect,
@@ -526,6 +527,7 @@ export function Requests({
         >
           <RequestBreakdown row={view} />
           <RequestTimeline row={view} />
+          <RequestWaterfall connection={connection} requestId={view.id} />
           <p className="text-xs text-muted-foreground">
             {t("requests.detail.timelineNote")}
           </p>
