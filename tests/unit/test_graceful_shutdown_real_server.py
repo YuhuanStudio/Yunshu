@@ -28,6 +28,22 @@ def _free_port() -> int:
 PORT = _free_port()
 
 
+def _free_pool_port() -> int:
+    """A bindable port of the 18990-18999 pool: the pool is shared with gpuq jobs, and a fixed
+    port that a foreign server holds makes the health probe pass against the wrong process."""
+    import socket
+
+    for port in range(18990, 19000):
+        with socket.socket() as sk:
+            sk.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            try:
+                sk.bind(("127.0.0.1", port))
+            except OSError:
+                continue
+        return port
+    raise RuntimeError("no free port in 18990-18999")
+
+
 def test_graceful_shutdown_timeout_values():
     from yunshu_cli.serve import graceful_shutdown_timeout as g
 
@@ -35,6 +51,8 @@ def test_graceful_shutdown_timeout_values():
 
 
 def _start(drain: str, delay="0.2", n="15"):
+    global PORT
+    PORT = _free_pool_port()
     env = {
         **os.environ,
         "YUNSHU_DRAIN_TIMEOUT": drain,
@@ -54,6 +72,8 @@ def _start(drain: str, delay="0.2", n="15"):
         stderr=subprocess.STDOUT,
     )
     for _ in range(100):
+        if p.poll() is not None:
+            break
         try:
             if (
                 httpx.get(f"http://127.0.0.1:{PORT}/health/live", timeout=1).status_code
