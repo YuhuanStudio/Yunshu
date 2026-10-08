@@ -135,6 +135,7 @@ def test_full_suite_has_every_stage():
         "rerank",
         "embedding",
         "priorart",
+        "evals",
     }
 
 
@@ -1029,3 +1030,8 @@ def test_detach_pins_arms_resolved_by_the_caller(tmp_path):
     ]
     dir_arm = core.Arm("cand", str(wt), "c" * 40, wt.resolve(), "")
     assert cli.pinned_spec(dir_arm) == str(wt.resolve())
+
+
+def test_evals_suite_is_a_separate_correctness_probe():
+    assert suites.parse_suite("evals")["stages"] == ["preflight", "evals"]
+    assert "evals" in stages.STAGE_FUNCS

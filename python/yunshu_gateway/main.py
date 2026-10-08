@@ -328,8 +328,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     except Exception:
         logger.warning("Batch runner resume failed", exc_info=True)
 
+    from . import evals_runner
+
+    evals_runner.recover()
     yield
 
+    await evals_runner.stop()
     try:
         await _batches.stop_runner()
     except Exception:
@@ -1075,6 +1079,9 @@ def create_app() -> FastAPI:
     )  # before /responses/{id}
     app.include_router(responses_mod.router, prefix="/v1")
     app.include_router(conversations_mod.router, prefix="/v1")
+    from .routers import evals as evals_mod
+
+    app.include_router(evals_mod.router, prefix="/v1")
     app.include_router(embeddings.router, prefix="/v1")
     app.include_router(models.router, prefix="/v1")
     from .routers import batches as batches_mod

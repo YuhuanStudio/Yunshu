@@ -1826,7 +1826,7 @@ def _tee_store(resp, req: ChatCompletionRequest):
         return resp
     if isinstance(resp, JSONResponse) and resp.status_code == 200:
         try:
-            body = json.loads(resp.body)
+            body = json.loads(bytes(resp.body))
         except ValueError:
             return resp
         if isinstance(body, dict) and body.get("object") == "chat.completion":

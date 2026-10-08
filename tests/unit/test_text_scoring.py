@@ -346,7 +346,8 @@ def test_entire_probe_on_fake_engine(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("family", ["bert", "roberta", "xlm-roberta"])
-def test_encoder_head_matches_transformers_fixture(tmp_path, family):
+@pytest.mark.parametrize("num_labels", [1, 2])
+def test_encoder_head_matches_transformers_fixture(tmp_path, family, num_labels):
     """Small-array unit test, independently exercising the complete trained head."""
     import mlx.core as mx
 
@@ -374,7 +375,7 @@ def test_encoder_head_matches_transformers_fixture(tmp_path, family):
         num_hidden_layers=1,
         num_attention_heads=2,
         max_position_embeddings=32,
-        num_labels=2,
+        num_labels=num_labels,
         attn_implementation="eager",
     )
     model = AutoModelForSequenceClassification.from_config(config).eval()

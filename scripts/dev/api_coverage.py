@@ -192,9 +192,9 @@ def implemented_routes() -> set[str]:
 def load_declarations() -> list[dict]:
     data = json.loads(NA_FILE.read_text())
     for d in data:
-        if d.get("status") not in ("not_applicable", "planned"):
+        if d.get("status") not in ("not_applicable", "planned", "implemented"):
             raise ValueError(
-                f"{NA_FILE.name}: {d!r}: status must be not_applicable or planned"
+                f"{NA_FILE.name}: {d!r}: status must be not_applicable, planned or implemented"
             )
         if len(d.get("reason", "")) < 40:
             raise ValueError(
@@ -227,7 +227,7 @@ def classify(endpoints: list[Endpoint], routes: set[str], declarations: list[dic
                 used.add(
                     match
                 )  # a declaration over an implemented route is reported by the test
-        elif match is not None:
+        elif match is not None and declarations[match]["status"] != "implemented":
             used.add(match)
             rows.append(
                 (ep, declarations[match]["status"], declarations[match]["reason"])
@@ -246,7 +246,7 @@ def contradictions(
         for ep in endpoints
         if served(ep, routes)
         for d in declarations
-        if fnmatch.fnmatchcase(ep.key, d["match"])
+        if d["status"] != "implemented" and fnmatch.fnmatchcase(ep.key, d["match"])
     ]
 
 

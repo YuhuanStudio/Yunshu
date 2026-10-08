@@ -1170,9 +1170,46 @@ def stage_priorart(ctx: Ctx) -> StageResult:
     return _finish(ctx, StageResult("priorart", not reasons, reasons, numbers))
 
 
+def stage_evals(ctx: Ctx) -> StageResult:
+    """SDK shape + local engine route coverage; CPU probe tests run in preflight."""
+    tree = ctx.tree("cand").path
+    cell = Cell(
+        "evals",
+        "sdk-routes",
+        [
+            "env",
+            f"PYTHONPATH={tree / 'python'}",
+            "HF_HUB_OFFLINE=1",
+            ctx.py,
+            str(tree / "scripts/research/evals_verify.py"),
+            "--model",
+            ctx.model,
+            "--src",
+            str(tree / "python"),
+            "--out",
+            "{out}",
+        ],
+        mem_gb=6,
+        timeout_min=10,
+        stall_min=5,
+        priority=-1,
+        device="m5",
+    )
+    results = ctx.exe.run_cells([cell])
+    reasons = _failed_cells(results)
+    numbers = {}
+    if not reasons:
+        rows = read_jsonl(results["sdk-routes"].evidence)
+        numbers = rows[-1]
+        if not numbers.get("passed"):
+            reasons.append("Evals SDK route smoke failed")
+    return _finish(ctx, StageResult("evals", not reasons, reasons, numbers))
+
+
 STAGE_FUNCS = {
     "priorart": stage_priorart,
     "embedding": stage_embedding,
+    "evals": stage_evals,
     "rerank": stage_rerank,
     "preflight": stage_preflight,
     "smoke": stage_smoke,
