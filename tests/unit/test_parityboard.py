@@ -184,3 +184,39 @@ def test_memory_cells_without_system_delta_method_are_flagged_not_compared(tmp_p
     )
     assert {f["method"] for f in board["memory_method_flagged"]} == {"single-pid"}
     assert "needing rerun" in pb.markdown(board)
+
+
+def test_head_to_head_and_summary(tmp_path):
+    run, jobs, _, _ = fixture_cell(tmp_path, "yunshu-new", 0, 1.0)
+    fixture_cell(tmp_path, "splash", 0, 0.5)  # splash faster: ours loses
+    fixture_cell(tmp_path, "llamacpp", 0, 2.0)  # llamacpp slower: ours wins
+    board = pb.build([run], jobs)
+    h = board["head_to_head"]
+    assert h["splash"]["decode"] == {
+        "win": 0,
+        "tie": 0,
+        "loss": 3,
+        "n": 3,
+        "provisional": True,
+    }
+    assert h["llamacpp"]["decode"]["win"] == 3 and h["llamacpp"]["ttft"]["win"] == 2
+    assert h["splash"]["followup_ttft"]["loss"] == 1
+    assert "mlxlm" not in h
+    assert "NOT behind" in board["summary"] and board["parity"] == 0
+    assert "Head-to-head" in pb.markdown(board)
+
+
+def test_head_to_head_tie_within_band():
+    def m(v, mad):
+        return {"status": "measured", "median": v, "mad": mad, "samples": [1, 2, 3]}
+
+    got = pb.head_to_head(
+        [("decode_cold_tps", True, {"yunshu-new": m(100, 3), "omlx": m(105, 3)})]
+    )
+    assert got["omlx"]["decode"] == {
+        "win": 0,
+        "tie": 1,
+        "loss": 0,
+        "n": 1,
+        "provisional": False,
+    }
