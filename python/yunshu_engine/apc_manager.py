@@ -1257,7 +1257,7 @@ class YunshuAPCManager(APCManager):
     def _note_disk_hit(self, tokens, n, extra_hash) -> int:
         """A checkpoint came back from an SSD tier: it belongs to this request's generation (its
         next, longer checkpoint supersedes it), and it is a head when it ends the system turn."""
-        key = _sequence_hash(
+        key: int = _sequence_hash(
             tuple(int(t) for t in tokens[:n]), extra_hash, self.block_size
         )
         with self._plock:
