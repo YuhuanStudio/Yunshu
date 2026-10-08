@@ -149,8 +149,8 @@ const overview: Shape<typeof zh> = {
   "totals.input": "Input",
   "totals.inputValue": "{n} ({cached} cached)",
   "totals.output": "Output",
-  "totals.prefill": "Prefill",
-  "totals.decode": "Decode",
+  "totals.prefill": "Prefill (page-weighted)",
+  "totals.decode": "Decode (page-weighted)",
   "totals.none": "No finished requests observed since this page opened.",
   "totals.hint":
     "Counts only requests that finished while this page was open, not all engine traffic.",

@@ -287,6 +287,7 @@ export function Dashboard({
       ? null
       : (points.find((sample) => sample.at === activeX) ?? null);
   const items = status?.requests.items ?? [];
+  const few = items.length <= 2;
   const memory = status?.memory;
   const loaded = (status?.models ?? []).filter((m) => m.loaded);
   // Trends compare the later half of this window's samples with the earlier half.
@@ -602,10 +603,13 @@ export function Dashboard({
         </Card>
       ) : (
         <Card
-          className={`grid min-w-0 overflow-hidden p-0 lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)] ${dim}`}
+          className={`grid min-w-0 overflow-hidden p-0 ${few ? "" : "lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)]"} ${dim}`}
           data-testid="live-panel"
+          data-layout={few ? "stacked" : "split"}
         >
-          <div className="flex min-w-0 flex-col justify-between gap-5 p-4 max-lg:order-2">
+          <div
+            className={`flex min-w-0 flex-col justify-between gap-5 p-4 ${few ? "order-2 pt-0" : "max-lg:order-2"}`}
+          >
             <div className="min-w-0">
               <div className="flex items-center justify-between gap-3">
                 <p className="text-xs text-muted-foreground">
@@ -640,7 +644,9 @@ export function Dashboard({
               />
             </div>
           </div>
-          <div className="flex min-w-0 flex-col gap-3 p-4 max-lg:order-1">
+          <div
+            className={`flex min-w-0 flex-col gap-3 p-4 ${few ? "order-1" : "max-lg:order-1"}`}
+          >
             <div className="flex items-center justify-between gap-3">
               <h2 className="yunui-section-title text-base font-semibold">
                 {t("overview.active.title")}
@@ -665,7 +671,7 @@ export function Dashboard({
                 </Button>
               </div>
             </div>
-            <ul className="flex-1 divide-y divide-border/60">
+            <ul className={`divide-y divide-border/60 ${few ? "" : "flex-1"}`}>
               {items.slice(0, 5).map((row) => (
                 <RequestLane key={row.request_id} row={row} />
               ))}

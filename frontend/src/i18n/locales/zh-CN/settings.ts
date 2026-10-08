@@ -6,6 +6,7 @@ const settings: Shape<typeof zh> = {
   description: "连接到本机服务，并调整控制台偏好。",
   "nav.label": "设置分类",
   "nav.connection": "引擎连接",
+  "nav.jump": "跳到分区",
   "nav.appearance": "外观",
   "nav.models": "模型保留",
   "nav.config": "生效设置",
@@ -16,7 +17,7 @@ const settings: Shape<typeof zh> = {
   "connection.description": "控制台要连接到哪一个 Yunshu 服务。",
   "connection.url": "服务地址",
   "connection.urlHelp":
-    "默认使用同一个服务来源。开发模式下由 Vite 转发到本机 8000 端口。",
+    "默认使用同一个服务来源。开发模式下由 Vite 转发到所配置的引擎地址。",
   "connection.token": "访问令牌",
   "connection.tokenHelp":
     "默认只保留在此页内存中；刷新后需要重新输入。更改服务地址会清除令牌。",

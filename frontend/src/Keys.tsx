@@ -59,6 +59,7 @@ import {
   dateTime,
   number,
   relative,
+  useMinWidth,
 } from "./ui";
 
 type Phase = "loading" | "ok" | "unsupported" | "denied" | "error";
@@ -71,6 +72,7 @@ const emptyQuotas = (): Quotas => ({
 
 /** Multiple API keys: create (secret shown once), rotate, disable, delete, edit quotas, per-key usage. */
 export default function Keys({ connection }: { connection: Connection }) {
+  const wide = useMinWidth(768);
   useLocale();
   const [keys, setKeys] = useState<ApiKey[]>([]),
     [usage, setUsage] = useState<UsageDay[]>([]),
@@ -189,7 +191,7 @@ export default function Keys({ connection }: { connection: Connection }) {
                 title={t("keys.empty.title")}
                 description={t("keys.empty.description")}
               />
-            ) : (
+            ) : wide ? (
               <ScrollFade className="overflow-auto">
                 <Table scrollLabel={t("keys.table.aria")}>
                   <Thead>
@@ -229,6 +231,29 @@ export default function Keys({ connection }: { connection: Connection }) {
                   </Tbody>
                 </Table>
               </ScrollFade>
+            ) : (
+              <ul
+                className="divide-y divide-border/60"
+                data-testid="keys-cards"
+              >
+                {keys.map((k) => (
+                  <KeyCard
+                    key={k.id}
+                    k={k}
+                    onToggle={(on) =>
+                      void act(
+                        async () =>
+                          void (await patchKey(connection, k.id, {
+                            enabled: on,
+                          })),
+                      )
+                    }
+                    onEdit={() => setEditing(k)}
+                    onRotate={() => setRotating(k)}
+                    onDelete={() => setDeleting(k)}
+                  />
+                ))}
+              </ul>
             )}
           </SectionCard>
           <UsageChart keys={keys} usage={usage} />
@@ -345,6 +370,81 @@ function QuotaCell({
         />
       )}
     </div>
+  );
+}
+
+function KeyCard({
+  k,
+  onToggle,
+  onEdit,
+  onRotate,
+  onDelete,
+}: {
+  k: ApiKey;
+  onToggle: (on: boolean) => void;
+  onEdit: () => void;
+  onRotate: () => void;
+  onDelete: () => void;
+}) {
+  return (
+    <li data-key-id={k.id} className="space-y-3 px-4 py-4">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <span className="block text-sm font-medium">{k.name}</span>
+          <span className="font-mono text-xs text-muted-foreground">
+            {k.prefix}…
+          </span>
+        </div>
+        <Switch
+          label={t("keys.toggleAria", { name: k.name })}
+          checked={k.enabled}
+          onCheckedChange={onToggle}
+        />
+      </div>
+      <span className="flex flex-wrap gap-1">
+        {k.scopes.map((s) => (
+          <Tag key={s} className="whitespace-nowrap">
+            {t(`keys.scope.${s}`)}
+          </Tag>
+        ))}
+      </span>
+      <div className="grid grid-cols-2 gap-4">
+        <QuotaCell
+          used={k.window.requests}
+          quota={k.quotas.requests_per_day}
+          label={t("keys.table.requests")}
+        />
+        <QuotaCell
+          used={k.window.tokens}
+          quota={k.quotas.tokens_per_day}
+          label={t("keys.table.tokens")}
+        />
+      </div>
+      <p className="text-xs text-muted-foreground">
+        {t("keys.table.lastUsed")}{" "}
+        {k.lastUsed == null
+          ? "—"
+          : relative(Math.max(0, Date.now() / 1000 - k.lastUsed))}
+        {" · "}
+        {t("keys.table.expires")}{" "}
+        {k.expires == null
+          ? t("keys.never")
+          : k.expired
+            ? t("keys.expired")
+            : dateTime(k.expires * 1000)}
+      </p>
+      <span className="-ml-2 flex gap-1">
+        <Button size="sm" variant="ghost" onClick={onEdit}>
+          {t("keys.edit")}
+        </Button>
+        <Button size="sm" variant="ghost" onClick={onRotate}>
+          {t("keys.rotate.button")}
+        </Button>
+        <Button size="sm" variant="ghost" onClick={onDelete}>
+          {t("keys.delete.button")}
+        </Button>
+      </span>
+    </li>
   );
 }
 

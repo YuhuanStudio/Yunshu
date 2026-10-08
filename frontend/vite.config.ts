@@ -1,5 +1,7 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+// Dev proxy target: the engine to develop against (YUNSHU_CONSOLE_ENGINE), else the CLI default.
+const engine = process.env.YUNSHU_CONSOLE_ENGINE ?? "http://127.0.0.1:8000";
 export default defineConfig({
   plugins: [react()],
   base: "/console/",
@@ -23,12 +25,12 @@ export default defineConfig({
   },
   server: {
     proxy: {
-      "/v1": "http://127.0.0.1:8000",
-      "/health": "http://127.0.0.1:8000",
-      "/api": "http://127.0.0.1:8000",
-      "/debug": "http://127.0.0.1:8000",
-      "/openapi.json": "http://127.0.0.1:8000",
-      "/docs": "http://127.0.0.1:8000",
+      "/v1": engine,
+      "/health": engine,
+      "/api": engine,
+      "/debug": engine,
+      "/openapi.json": engine,
+      "/docs": engine,
     },
   },
 });

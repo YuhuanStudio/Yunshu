@@ -130,9 +130,9 @@ export function Settings({
             onChange={go}
           />
         ) : (
-          <Select value={section} onValueChange={go}>
+          <Select value="" onValueChange={go}>
             <SelectTrigger aria-label={t("settings.nav.label")}>
-              <SelectValue />
+              <SelectValue placeholder={t("settings.nav.jump")} />
             </SelectTrigger>
             <SelectContent>
               {sections.map(({ key, label }) => (

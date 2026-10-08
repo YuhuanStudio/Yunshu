@@ -118,6 +118,7 @@ export function healthChecks(
   status: EngineStatus | null,
   system: unknown,
   systemState: "ok" | "disabled" | "error" | "pending",
+  systemReason?: string | null,
 ): Health[] {
   const rows: Health[] = [];
   if (!status) {
@@ -208,12 +209,7 @@ export function healthChecks(
     rows.push({
       key: "debug",
       name: t("diagnostics.health.debug.name"),
-      status:
-        systemState === "ok"
-          ? "online"
-          : systemState === "pending"
-            ? "neutral"
-            : "offline",
+      status: systemState === "ok" ? "online" : "neutral",
       value:
         systemState === "ok"
           ? t("diagnostics.health.debug.ok")
@@ -222,7 +218,8 @@ export function healthChecks(
             : t("diagnostics.health.debug.failed"),
       hint:
         systemState === "error"
-          ? t("diagnostics.health.debug.hintError")
+          ? t("diagnostics.health.debug.hintError") +
+            (systemReason ? ` (${systemReason})` : "")
           : t("diagnostics.health.debug.hintOk"),
     });
   const cpu = metric(at(system, "cpu", "percent"));
@@ -250,11 +247,10 @@ export type Verdict = {
  */
 export function healthVerdict(
   checks: Health[],
-  systemState: "ok" | "disabled" | "error" | "pending",
+  _systemState?: "ok" | "disabled" | "error" | "pending",
 ): Verdict {
-  const counted = checks.filter(
-    (c) => !(c.key === "debug" && systemState !== "error"),
-  );
+  // An unreadable /debug (a read-only proxy, a missing scope) is not evidence the engine is unhealthy.
+  const counted = checks.filter((c) => c.key !== "debug");
   const bad = counted.filter((c) => c.status === "offline"),
     warn = counted.filter((c) => c.status === "away");
   return bad.length
@@ -281,6 +277,7 @@ export function Diagnostics({
     [systemState, setSystemState] = useState<
       "ok" | "disabled" | "error" | "pending"
     >("pending"),
+    [systemReason, setSystemReason] = useState<string | null>(null),
     [copied, setCopied] = useState<"idle" | "done" | "failed">("idle"),
     [bundle, setBundle] = useState<{
       state: "idle" | "busy" | "done" | "missing" | "denied" | "failed";
@@ -300,6 +297,7 @@ export function Diagnostics({
       .catch((e) => {
         if (controller.signal.aborted) return;
         setOverviewSystem(undefined);
+        setSystemReason(e instanceof ApiError ? `HTTP ${e.status}` : null);
         setSystemState(
           e instanceof ApiError && e.status === 404 ? "disabled" : "error",
         );
@@ -354,7 +352,7 @@ export function Diagnostics({
   const system = overviewSystem,
     engineCounters = results.find((r) => r.key === "engine")?.data,
     request = results.find((r) => r.key === "requests")?.data;
-  const checks = healthChecks(status, system, systemState);
+  const checks = healthChecks(status, system, systemState, systemReason);
   const verdict = healthVerdict(checks, systemState);
   async function saveBundle() {
     setBundle({ state: "busy" });

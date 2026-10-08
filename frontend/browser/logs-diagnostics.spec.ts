@@ -288,6 +288,23 @@ test.describe("diagnostics", () => {
     await expect(page.getByTestId("health-verdict")).toContainText("異常");
   });
 
+  test("an unreadable /debug/system is a neutral 無法讀取, never an 異常 verdict", async ({
+    page,
+  }) => {
+    await diag(page, {}, 200);
+    await page.unroute("**/debug/**");
+    await page.route("**/debug/**", (route) =>
+      json(route, { detail: "read-only proxy" }, 403),
+    );
+    await page.goto("/console/#/diagnostics");
+    const v = page.getByTestId("health-verdict");
+    await expect(v).toContainText("健康");
+    await expect(v).not.toContainText("異常");
+    const checks = page.getByTestId("health-checks");
+    await expect(checks).toContainText("無法讀取");
+    await expect(checks).toContainText("HTTP 403");
+  });
+
   test("下載診斷包 saves the server file; 404 and 403 explain themselves", async ({
     page,
   }) => {

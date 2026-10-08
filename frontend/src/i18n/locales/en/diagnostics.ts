@@ -56,9 +56,9 @@ const diagnostics: Shape<typeof zh> = {
   "health.cpu.hint":
     "{n, plural, one {# logical core} other {# logical cores}}.",
   "health.cpu.name": "Host CPU",
-  "health.debug.failed": "Failed",
+  "health.debug.failed": "Unreadable",
   "health.debug.hintError":
-    "/debug/system returned an error. A valid access token may be required.",
+    "/debug/system cannot be read (a read-only proxy, missing scope or the surface is off). It does not count toward health.",
   "health.debug.hintOk": "/debug/system is readable.",
   "health.debug.name": "Diagnostics endpoints",
   "health.debug.ok": "Available",

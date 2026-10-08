@@ -3,6 +3,7 @@ const settings = {
   description: "連線到本機服務，並調整控制台偏好。",
   "nav.label": "設定分類",
   "nav.connection": "引擎連線",
+  "nav.jump": "跳到區段",
   "nav.appearance": "外觀",
   "nav.models": "模型保留",
   "nav.config": "有效設定",
@@ -13,7 +14,7 @@ const settings = {
   "connection.description": "控制台要連到哪一個 Yunshu 服務。",
   "connection.url": "服務位址",
   "connection.urlHelp":
-    "預設使用同一個服務來源。開發模式由 Vite 轉送至本機 8000 埠。",
+    "預設使用同一個服務來源。開發模式由 Vite 轉送至所設定的引擎位址。",
   "connection.token": "存取權杖",
   "connection.tokenHelp":
     "預設只保留在此頁記憶體；重新整理後需要再輸入。更改服務位址會清除權杖。",

@@ -6,6 +6,7 @@ const settings: Shape<typeof zh> = {
   description: "Connect to the local server and adjust console preferences.",
   "nav.label": "Settings sections",
   "nav.connection": "Engine connection",
+  "nav.jump": "Jump to section",
   "nav.appearance": "Appearance",
   "nav.models": "Model retention",
   "nav.config": "Effective settings",
@@ -16,7 +17,7 @@ const settings: Shape<typeof zh> = {
   "connection.description": "Which Yunshu server the console talks to.",
   "connection.url": "Server address",
   "connection.urlHelp":
-    "Defaults to the same origin. In development Vite forwards to local port 8000.",
+    "Defaults to the same origin. In development Vite forwards to the configured engine address.",
   "connection.token": "Access token",
   "connection.tokenHelp":
     "By default kept in this page's memory only; enter it again after a reload. Changing the address clears it.",

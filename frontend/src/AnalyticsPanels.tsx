@@ -89,6 +89,7 @@ export function SeriesChart({
         {...rest}
         height={height}
         minSamples={5}
+        showReadout={false}
         emptyLabel={t("overview.chart.empty")}
         unavailableLabel={
           busy ? t("overview.chart.collecting") : t("overview.chart.idle")

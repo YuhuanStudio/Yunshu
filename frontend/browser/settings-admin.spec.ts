@@ -573,3 +573,87 @@ test("phone settings: section picker is a Select under the standard header", asy
   await expect(nav.getByRole("combobox")).toBeVisible();
   await expect(nav.locator('[data-variant="tray"]')).toHaveCount(0);
 });
+
+test("phone settings: no rules between rows, no duplicated section title, no 8000 in the address help", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 402, height: 874 });
+  await install(page);
+  await page.goto("/console/#/settings", { waitUntil: "domcontentloaded" });
+  const trigger = page.getByTestId("settings-nav").getByRole("combobox");
+  await expect(trigger).toBeVisible();
+  // The picker names its job, the card below names the section: they never say the same words.
+  await expect(trigger).not.toHaveText("引擎連線");
+  const card = page.locator("#settings-connection");
+  await expect(card).toContainText("服務位址");
+  await expect(card).not.toContainText("8000");
+  const rules = await card.evaluate((el) => {
+    const out: string[] = [];
+    for (const row of el.querySelectorAll("[data-testid=stack-row]")) {
+      for (const node of [row, row.nextElementSibling]) {
+        if (!node) continue;
+        const cs = getComputedStyle(node);
+        if (
+          parseFloat(cs.borderTopWidth) > 0 ||
+          parseFloat(cs.borderBottomWidth) > 0 ||
+          cs.boxShadow !== "none" ||
+          cs.backgroundImage !== "none"
+        )
+          out.push(String(node.className).slice(0, 60));
+        for (const pseudo of ["::before", "::after"]) {
+          const p = getComputedStyle(node, pseudo);
+          if (p.content !== "none" && p.content !== "normal")
+            out.push(`${pseudo} on ${String(node.className).slice(0, 40)}`);
+        }
+      }
+    }
+    return out;
+  });
+  expect(rules).toEqual([]);
+});
+
+test("phone keys: the usage charts fit the card without scrolling sideways", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 402, height: 874 });
+  await install(page);
+  await page.goto(KEYS_URL, { waitUntil: "domcontentloaded" });
+  const usage = page.getByTestId("keys-usage");
+  await expect(usage.getByRole("group").first()).toBeVisible();
+  const scrolls = await usage.evaluate((el) =>
+    [...el.querySelectorAll<HTMLElement>("*")]
+      .filter(
+        (n) =>
+          /auto|scroll/.test(getComputedStyle(n).overflowX) &&
+          n.scrollWidth > n.clientWidth + 1,
+      )
+      .map((n) => `${n.tagName}.${String(n.className).slice(0, 40)}`),
+  );
+  expect(scrolls).toEqual([]);
+});
+
+test("phone keys: the list is stacked cards, not a table that scrolls sideways", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 402, height: 874 });
+  await install(page);
+  await page.goto(KEYS_URL, { waitUntil: "domcontentloaded" });
+  const list = page.getByTestId("keys-list");
+  await expect(list).toContainText("筆記型電腦");
+  await expect(page.getByTestId("keys-cards")).toBeVisible();
+  const de = await page.evaluate(() => ({
+    sw: document.documentElement.scrollWidth,
+    cw: document.documentElement.clientWidth,
+  }));
+  expect(de.sw).toBeLessThanOrEqual(de.cw + 1);
+  const scrolls = await list.evaluate((el) =>
+    [...el.querySelectorAll<HTMLElement>("*")]
+      .filter(
+        (n) =>
+          /auto|scroll/.test(getComputedStyle(n).overflowX) &&
+          n.scrollWidth > n.clientWidth + 1,
+      )
+      .map((n) => n.tagName),
+  );
+  expect(scrolls).toEqual([]);
+});
