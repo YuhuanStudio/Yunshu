@@ -1,6 +1,7 @@
 import { ErrorNote } from "./error-note";
 import { RequestWaterfall } from "./RequestWaterfall";
 import { LatencyDistribution } from "./LatencyDistribution";
+import { SpeculationPanel } from "./SpeculationPanel";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   CustomSelect,
@@ -687,6 +688,7 @@ export function Requests({
         })}
       </StatGrid>
       {recent.supported && <LatencyDistribution rows={finished} />}
+      {recent.supported && <SpeculationPanel rows={finished} />}
       <div className="flex flex-wrap justify-between gap-3">
         <div className="w-full sm:w-auto sm:max-w-xs">
           <Input

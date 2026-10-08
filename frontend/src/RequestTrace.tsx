@@ -28,6 +28,9 @@ export type Row = {
     mode?: string;
     acceptance_rate?: number | null;
     rounds?: number;
+    drafted?: number | null;
+    accepted?: number | null;
+    copy?: { rounds?: number; tokens?: number } | null;
   } | null;
   t?: number;
   path?: string;

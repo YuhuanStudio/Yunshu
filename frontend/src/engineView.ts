@@ -167,14 +167,21 @@ export function decodeHeadline(status: EngineStatus): Headline {
     };
   if (a.counts.active > 0) {
     // Busy but not decoding: say which phase, never "閒置".
-    const whyKey =
+    const [why, short] =
       a.phase === "queued"
-        ? "Queued"
+        ? [
+            t("shell.engine.headline.whyQueued"),
+            t("shell.engine.headline.shortQueued"),
+          ]
         : a.preparing
-          ? "Starting"
-          : "Prefill";
-    const why = t(`shell.engine.headline.why${whyKey}` as const);
-    const short = t(`shell.engine.headline.short${whyKey}` as const);
+          ? [
+              t("shell.engine.headline.whyStarting"),
+              t("shell.engine.headline.shortStarting"),
+            ]
+          : [
+              t("shell.engine.headline.whyPrefill"),
+              t("shell.engine.headline.shortPrefill"),
+            ];
     return f.last != null
       ? {
           kind: "last",

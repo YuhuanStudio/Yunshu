@@ -238,5 +238,18 @@ const requests: Shape<typeof zh> = {
   "dist.unplaced": "另有 {n} 笔无法归入此分组（缺少输入或命中 token 数）。",
   "dist.aria": "延迟分布直方图，横轴为延迟区间，纵轴为请求数",
   "dist.tableAria": "各组延迟百分位",
+  "spec.title": "推测解码",
+  "spec.desc": "近 {n} 笔已结束请求中，{engaged} 笔上报了推测解码。",
+  "spec.col.mode": "模式",
+  "spec.col.requests": "请求",
+  "spec.col.accept": "接受率",
+  "spec.col.tokens": "接受／草稿 token",
+  "spec.col.rounds": "轮数",
+  "spec.acceptHelp": "接受 token 总数 ÷ 草稿 token 总数，只计上报了两项计数的请求。",
+  "spec.plain": "{n} 笔没有推测解码记录（普通解码，或引擎未上报）。",
+  "spec.unattributed": "{n} 笔只上报了模式、没有计数，未计入接受率。",
+  "spec.depth": "各深度的接受率：引擎目前只上报每笔请求的合计，所以不绘制分深度图。",
+  "spec.none": "这些请求都没有推测解码记录；配置了推测解码不代表这几笔用到了。",
+  "spec.copy": "含 {rounds} 轮复制草稿（{tokens} token）",
 };
 export default requests;

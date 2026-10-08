@@ -247,5 +247,18 @@ const requests: Shape<typeof zh> = {
   "dist.unplaced": "{n} more could not be placed in this split (input or cached token count missing).",
   "dist.aria": "Latency histogram: latency range on the x axis, request count on the y axis",
   "dist.tableAria": "Latency percentiles per group",
+  "spec.title": "Speculative decoding",
+  "spec.desc": "{engaged} of the last {n} finished requests reported speculation.",
+  "spec.col.mode": "Mode",
+  "spec.col.requests": "Requests",
+  "spec.col.accept": "Acceptance",
+  "spec.col.tokens": "Accepted / drafted tokens",
+  "spec.col.rounds": "Rounds",
+  "spec.acceptHelp": "Total accepted tokens divided by total drafted tokens, over requests that reported both counters.",
+  "spec.plain": "{n} had no speculation record (plain decode, or the engine did not say).",
+  "spec.unattributed": "{n} reported a mode but no counters and are left out of the rate.",
+  "spec.depth": "Per-depth acceptance: the engine reports only per-request totals today, so no per-depth chart is drawn.",
+  "spec.none": "None of these requests has a speculation record; a configured mode does not mean these used it.",
+  "spec.copy": "includes {rounds} copy-draft rounds ({tokens} tokens)",
 };
 export default requests;

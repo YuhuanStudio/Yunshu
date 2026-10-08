@@ -235,5 +235,18 @@ const requests = {
   "dist.unplaced": "另有 {n} 筆無法歸入此分組（缺少輸入或命中 token 數）。",
   "dist.aria": "延遲分布直方圖，橫軸為延遲區間，縱軸為請求數",
   "dist.tableAria": "各組延遲百分位",
+  "spec.title": "推測解碼",
+  "spec.desc": "近 {n} 筆已結束請求中，{engaged} 筆回報了推測解碼。",
+  "spec.col.mode": "模式",
+  "spec.col.requests": "請求",
+  "spec.col.accept": "接受率",
+  "spec.col.tokens": "接受／草稿 token",
+  "spec.col.rounds": "輪數",
+  "spec.acceptHelp": "接受 token 總數 ÷ 草稿 token 總數，只計有回報兩項計數的請求。",
+  "spec.plain": "{n} 筆沒有推測解碼紀錄（普通解碼，或引擎未回報）。",
+  "spec.unattributed": "{n} 筆只回報了模式、沒有計數，未計入接受率。",
+  "spec.depth": "每個深度的接受率：引擎目前只回報每筆請求的合計，所以不繪製分深度圖。",
+  "spec.none": "這些請求都沒有推測解碼紀錄；設定的推測解碼不代表這幾筆有用到。",
+  "spec.copy": "含 {rounds} 輪複製草稿（{tokens} token）",
 };
 export default requests;
