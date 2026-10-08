@@ -89,3 +89,22 @@ runs the real sensor/receipt probe as a candidate-only correctness stage (no qui
 timing admission). `--suite telemetry,smoke,identity,apc,speed --ctx 1024,32768
 --reps 3` combines the sensor and overhead gates. Small-model pilots use spec off;
 27B probes require the logged MTP mode.
+
+## macOS 27 power-counter compatibility
+
+On macOS 27, Energy Model CPU/ANE counters can freeze without Apple's entitlement.
+Yunshu uses macmon's driver-qualified CLPC scalar IOReport catalog for macOS 27
+(qualified upstream on 27.0/27.0.1), preferring valid CLPC CPU/GPU/ANE deltas over
+legacy values. Unknown driver/OS catalogs are never guessed. CPU/ANE values on
+macOS 27+ are unknown with a reason when no valid qualified CLPC delta exists;
+other valid Energy Model domains remain available. This avoids reporting a
+frozen zero as measured power. All descriptors, samples and registry objects are
+released. No root, Apple entitlement, SMC access or MLX calls are needed.
+
+The catalog and descriptor format derive from
+[vladkens/macmon](https://github.com/vladkens/macmon), MIT, revision
+`7df49f55d9a1b9072e31fc8ba991abda84593563`; the full MIT notice is retained.
+CPU channels ending in `CPU Energy` and ANE/DRAM channel families are aggregated;
+a malformed unit or negative delta invalidates that domain. Die temperature
+prefers HID `tdie` sensors, falling back to `pACC/eACC/GPU MTR Temp Sensor` names
+when no tdie values exist, without mixing sensor families.

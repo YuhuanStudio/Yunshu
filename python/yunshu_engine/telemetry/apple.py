@@ -1,5 +1,7 @@
 # Upstream (Apache-2.0): pierre427/mlx2 src/mlx2/apple_telemetry.py @ 92ada04cc7a59c3263e214b0a1127924fedd52db (Apache-2.0).
 # Derived: exception-safe HID ownership, explicit failure reporting in sampler.py.
+# Upstream (MIT): macmon src/metrics.rs @ 7df49f55d9a1b9072e31fc8ba991abda84593563
+# inspires energy channel families and HID MTR sensor aliases.
 """Unprivileged Apple-silicon power, GPU DVFS and die-temperature sampling.
 
 ``powermetrics`` needs root.  The same counters are readable without
@@ -35,13 +37,14 @@ _vp = C.c_void_p
 GPU_IDLE_STATES = ("OFF", "IDLE", "DOWN")
 _UTF8 = 0x08000100
 _LIBS: Any = None
+_ARRAY_CALLBACKS: Any = None
 #: (kCFTypeDictionaryKeyCallBacks, kCFTypeDictionaryValueCallBacks) addresses,
 #: so a created dictionary retains its keys and values.
 _DICT_CALLBACKS = (None, None)
 
 
 def _load():
-    global _LIBS, _DICT_CALLBACKS
+    global _LIBS, _DICT_CALLBACKS, _ARRAY_CALLBACKS
     if _LIBS is not None:
         return _LIBS
     if platform.system() != "Darwin":
@@ -70,6 +73,10 @@ def _load():
                 ("CFArrayGetCount", C.c_long, [_vp]),
                 ("CFArrayGetValueAtIndex", _vp, [_vp, C.c_long]),
                 ("CFRelease", None, [_vp]),
+                ("CFArrayCreate", _vp, [_vp, _vp, C.c_long, _vp]),
+                ("CFArrayCreateMutableCopy", _vp, [_vp, C.c_long, _vp]),
+                ("CFArrayAppendValue", None, [_vp, _vp]),
+                ("CFDictionarySetValue", None, [_vp, _vp, _vp]),
                 ("CFDictionaryCreateMutableCopy", _vp, [_vp, C.c_long, _vp]),
                 ("CFNumberCreate", _vp, [_vp, C.c_int, _vp]),
                 ("CFDictionaryCreate", _vp, [_vp, _vp, _vp, C.c_long, _vp, _vp]),
@@ -104,6 +111,24 @@ def _load():
             iok,
             [
                 ("IOHIDEventSystemClientCreate", _vp, [_vp]),
+                ("IOServiceMatching", _vp, [C.c_char_p]),
+                (
+                    "IOServiceGetMatchingServices",
+                    C.c_int,
+                    [C.c_uint32, _vp, C.POINTER(C.c_uint32)],
+                ),
+                ("IOIteratorNext", C.c_uint32, [C.c_uint32]),
+                ("IOObjectRelease", C.c_int, [C.c_uint32]),
+                (
+                    "IORegistryEntryGetRegistryEntryID",
+                    C.c_int,
+                    [C.c_uint32, C.POINTER(C.c_uint64)],
+                ),
+                (
+                    "IORegistryEntryCreateCFProperty",
+                    _vp,
+                    [C.c_uint32, _vp, _vp, C.c_uint32],
+                ),
                 ("IOHIDEventSystemClientSetMatching", C.c_int, [_vp, _vp]),
                 ("IOHIDEventSystemClientCopyServices", _vp, [_vp]),
                 ("IOHIDServiceClientCopyProperty", _vp, [_vp, _vp]),
@@ -123,6 +148,7 @@ def _load():
         C.addressof(C.c_char.in_dll(cf, name))
         for name in ("kCFTypeDictionaryKeyCallBacks", "kCFTypeDictionaryValueCallBacks")
     )
+    _ARRAY_CALLBACKS = C.addressof(C.c_char.in_dll(cf, "kCFTypeArrayCallBacks"))
     _LIBS = (cf, iok, ior)
     return _LIBS
 
@@ -189,6 +215,8 @@ class EnergyReading:
     watts: dict = field(default_factory=dict)  # channel -> mean W
     gpu_states: list = field(default_factory=list)  # [(name, residency)]
 
+    reasons: dict[str, str] = field(default_factory=dict)
+
     @property
     def gpu_watts(self) -> float | None:
         value = self.watts.get("GPU Energy")
@@ -243,6 +271,8 @@ class EnergySampler:
         self._lock = threading.Lock()
         self._sub = self._key = self._prev = None
         self._subbed = _vp()
+        self._untrusted_energy_model = False
+        self._clpc_reason = None
         temporaries = []
         try:
 
@@ -271,6 +301,17 @@ class EnergySampler:
                 cf.CFDictionaryCreateMutableCopy(None, 0, energy),
                 "CFDictionaryCreateMutableCopy",
             )
+            version = platform.mac_ver()[0]
+            self._untrusted_energy_model = bool(
+                version and int(version.split(".")[0]) >= 27
+            )
+            if self._untrusted_energy_model:
+                from .clpc import augment
+
+                try:
+                    augment(desired, version)
+                except Exception as exc:
+                    self._clpc_reason = str(exc)
             # The subscription keeps neither ``desired`` nor ``_subbed``;
             # ``_subbed`` is ours (Create rule) and outlives it in ``close``.
             self._sub = _owned(
@@ -318,24 +359,25 @@ class EnergySampler:
         cf, _, ior = _LIBS
         reading = EnergyReading(seconds=dt)
         chans = cf.CFDictionaryGetValue(delta, self._key)
+        clpc_watts: dict[str, float] = {}
+        invalid = set()
         for i in range(cf.CFArrayGetCount(chans) if chans else 0):
             ch = cf.CFArrayGetValueAtIndex(chans, i)
             group = _str(ior.IOReportChannelGetGroup(ch))
             name = _str(ior.IOReportChannelGetChannelName(ch))
-            if group == "Energy Model":
+            if group in ("Energy Model", "CLPC"):
+                domain = _energy_domain(name)
+                if domain is None:
+                    continue
                 scale = {"mJ": 1e-3, "uJ": 1e-6, "nJ": 1e-9}.get(
                     _str(ior.IOReportChannelGetUnitLabel(ch)) or ""
                 )
-                if scale and name in (
-                    "GPU Energy",
-                    "CPU Energy",
-                    "DRAM",
-                    "ANE",
-                    "GPU SRAM",
-                ):
-                    reading.watts[name] = (
-                        ior.IOReportSimpleGetIntegerValue(ch, 0) * scale / dt
-                    )
+                value = ior.IOReportSimpleGetIntegerValue(ch, 0)
+                if scale is None or value < 0:
+                    invalid.add((group, domain))
+                    continue
+                target = clpc_watts if group == "CLPC" else reading.watts
+                target[domain] = target.get(domain, 0.0) + value * scale / dt
             elif group == "GPU Stats" and name == "GPUPH":
                 reading.gpu_states = [
                     (
@@ -344,6 +386,25 @@ class EnergySampler:
                     )
                     for k in range(ior.IOReportStateGetCount(ch))
                 ]
+        for group, domain in invalid:
+            target = clpc_watts if group == "CLPC" else reading.watts
+            target.pop(domain, None)
+        for domain in ("CPU Energy", "GPU Energy", "ANE"):
+            if domain in clpc_watts:
+                reading.watts[domain] = clpc_watts[domain]
+            elif getattr(self, "_untrusted_energy_model", False) and domain in (
+                "CPU Energy",
+                "ANE",
+            ):
+                reading.watts.pop(domain, None)
+                reading.reasons[domain] = (
+                    "macOS 27+ Energy Model counter may freeze; "
+                    + (
+                        getattr(self, "_clpc_reason", None)
+                        or "no valid qualified CLPC delta"
+                    )
+                )
+
         return reading
 
     def close(self) -> None:
@@ -446,8 +507,28 @@ class TemperatureSampler:
     def die_summary(self) -> dict:
         temps = self.read(match=("tdie", "gas gauge battery"))
         die = [v for k, v in temps.items() if "tdie" in k]
+        if not die:
+            mtr = self.read(
+                match=(
+                    "pACC MTR Temp Sensor",
+                    "eACC MTR Temp Sensor",
+                    "GPU MTR Temp Sensor",
+                )
+            )
+            die = list(mtr.values())
         return {
             "die_max_c": max(die) if die else None,
             "die_mean_c": sum(die) / len(die) if die else None,
             "battery_c": temps.get("gas gauge battery"),
         }
+
+
+def _energy_domain(name: str | None) -> str | None:
+    if not name:
+        return None
+    if name.endswith("CPU Energy"):
+        return "CPU Energy"
+    for prefix in ("ANE", "DRAM", "GPU SRAM"):
+        if name.startswith(prefix):
+            return prefix
+    return "GPU Energy" if name == "GPU Energy" else None

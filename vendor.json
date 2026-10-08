@@ -454,6 +454,21 @@
       "upstream_paths": [
         "src/mlx2/apple_telemetry.py"
       ]
+    },
+    {
+      "repo": "https://github.com/vladkens/macmon",
+      "clone": "/Volumes/P5Plus/yunshu-build/reference-extra/macmon",
+      "commit": "7df49f55d9a1b9072e31fc8ba991abda84593563",
+      "license": "MIT",
+      "kind": "derived",
+      "path": "python/yunshu_engine/telemetry/clpc.py",
+      "upstream_paths": [
+        "src/clpc.rs",
+        "src/sources.rs"
+      ],
+      "local_changes": [
+        "Python ctypes descriptors with explicit CF/IOKit ownership; restrict catalog to macOS 27 and known drivers; atomically augment the existing Energy Model/GPU subscription."
+      ]
     }
   ],
   "inspired": [
@@ -1055,6 +1070,20 @@
       "license": "Apache-2.0",
       "local_changes": [
         "only the public design of oMLX PR #4315 (a /v1/systemone route next to a decision engine for Clef) informed this; its code was NOT read. License checked: Apache-2.0, same as the oMLX files already vendored. Wire formats come from openai-python 3.26 types and TypeSafe's published System One docs"
+      ]
+    },
+    {
+      "repo": "https://github.com/vladkens/macmon",
+      "clone": "/Volumes/P5Plus/yunshu-build/reference-extra/macmon",
+      "commit": "7df49f55d9a1b9072e31fc8ba991abda84593563",
+      "license": "MIT",
+      "kind": "inspired",
+      "path": "python/yunshu_engine/telemetry/apple.py",
+      "upstream_paths": [
+        "src/metrics.rs"
+      ],
+      "local_changes": [
+        "Aggregate CPU/ANE/DRAM channel families; prefer qualified CLPC counters; mark potentially frozen CPU/ANE legacy counters unknown on macOS 27+; fall back to HID MTR die sensors."
       ]
     }
   ],
@@ -2301,6 +2330,18 @@
       "why": "Clef decision model reference implementation and head layout we serve (decision_engine.py); a changed head or encoding changes every probability",
       "commit": "2f3de3dd85f379784083b0814d997ab627200f0c",
       "reviewed_date": "2026-10-07"
+    },
+    {
+      "repo": "https://github.com/vladkens/macmon",
+      "clone": "/Volumes/P5Plus/yunshu-build/reference-extra/macmon",
+      "commit": "7df49f55d9a1b9072e31fc8ba991abda84593563",
+      "license": "MIT",
+      "globs": [
+        "src/clpc.rs",
+        "src/sources.rs",
+        "src/metrics.rs"
+      ],
+      "why": "Qualified unprivileged CLPC energy IDs and Apple telemetry compatibility; CPU/ANE legacy counters may freeze on macOS 27."
     }
   ],
   "packages": [

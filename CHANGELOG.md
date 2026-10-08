@@ -7,7 +7,7 @@ Release steps: [RELEASING.md](RELEASING.md).
 
 ## [Unreleased]
 
-- Add optional unprivileged Apple IOReport/HID host telemetry, request GPU+DRAM energy estimates, Prometheus gauges/counter, `yunshu top`, and tfbench/yv efficiency fields. The 1 Hz default is subject to M5 overhead verification before handoff.
+- Add optional unprivileged Apple IOReport/HID host telemetry, request GPU+DRAM energy estimates, Prometheus gauges/counter, `yunshu top`, and tfbench/yv efficiency fields. Handle qualified macOS 27 CLPC counters and Max ANE/MTR sensor names. The 1 Hz default is subject to M5 overhead verification before handoff.
 
 
 Changes on main after 0.1.4; not part of a published package yet.

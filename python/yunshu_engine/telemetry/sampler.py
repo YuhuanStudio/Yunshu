@@ -137,7 +137,9 @@ class HostSampler:
             value = reading.watts.get(channel)
             if value is None or not math.isfinite(value) or value < 0:
                 value = None
-                reasons[domain] = f"missing or invalid {channel} counter"
+                reasons[domain] = getattr(reading, "reasons", {}).get(
+                    channel, f"missing or invalid {channel} counter"
+                )
             watts[domain] = value
         watts["package"] = (
             sum(watts.values()) if all(v is not None for v in watts.values()) else None
