@@ -211,7 +211,8 @@ test("phone: stat cards are compact, 2-up, at most 88px tall", async ({
 });
 
 test("the top status pill hugs its content", async ({ page }) => {
-  for (const width of [402, 1440]) {
+  // The phone top bar carries no pill (the footer band owns the state), so only the wide bar.
+  for (const width of [1440]) {
     await page.setViewportSize({ width, height: 874 });
     await install(page);
     await page.goto("/console/#/overview", { waitUntil: "domcontentloaded" });
@@ -261,5 +262,33 @@ test("zh-TW pages carry no untranslated glossary words", async ({ page }) => {
       text.match(WORDS)?.[0] ?? null,
       `English glossary word on ${p}`,
     ).toBeNull();
+  }
+});
+
+test("phone top bar is the hamburger and the title; search and the bell live in the menu", async ({
+  page,
+}) => {
+  for (const width of [390, 402]) {
+    await page.setViewportSize({ width, height: 874 });
+    await install(page);
+    await page.goto("/console/#/overview", { waitUntil: "domcontentloaded" });
+    const header = page.locator("header").first();
+    await expect(page.getByTestId("mobile-title")).toBeVisible();
+    const controls = await header
+      .locator("button:visible, a:visible, input:visible")
+      .count();
+    expect(controls).toBe(1); // the hamburger
+    await expect(header.getByTestId("live-phase")).toHaveCount(0);
+    await expect(header.getByTestId("bell-badge")).toHaveCount(0);
+    const over = await page.evaluate(
+      () => document.documentElement.scrollWidth - innerWidth,
+    );
+    expect(over).toBeLessThanOrEqual(0);
+    await page.getByRole("button", { name: "開啟導覽" }).click();
+    const sheet = page.getByRole("navigation", { name: /./ }).first();
+    await expect(page.getByRole("button", { name: "搜尋" })).toBeVisible();
+    await expect(page.getByTestId("bell-badge")).toBeAttached();
+    await expect(sheet).toBeVisible();
+    await page.reload({ waitUntil: "domcontentloaded" });
   }
 });

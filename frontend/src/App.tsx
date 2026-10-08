@@ -57,7 +57,7 @@ import {
   tr,
   useLocale,
 } from "./i18n/index.ts";
-import { ConnectionState, fixed, modelLabel, sizeGb } from "./ui";
+import { ConnectionState, fixed, modelLabel, sizeGb, useMinWidth } from "./ui";
 import { NotificationCenter } from "./NotificationCenter";
 import { ShortcutsSheet } from "./Shortcuts";
 import { SignalsProvider, useShellSignals } from "./signals";
@@ -181,6 +181,9 @@ export default function App() {
     [testModel, setTestModel] = useState("");
   const engine = useEngine(connection);
   const signals = useShellSignals(engine, connection);
+  // Phones (< 640px): the top bar is the hamburger and the title only; search and the bell
+  // live in the menu sheet, and the hamburger carries a dot while something is unread.
+  const wide = useMinWidth(640);
   const [help, setHelp] = useState(false);
   const loadedModel = engine.status?.models.find((m) => m.loaded);
   const [palette, setPalette] = useState(false),
@@ -533,16 +536,28 @@ export default function App() {
               <div className="safe-bottom">
                 <div className="mb-3 flex items-center justify-between gap-2 sm:hidden">
                   <LanguageSwitch variant="pill" />
-                  <IconButton
-                    className="card size-8 rounded-full"
-                    icon={dark ? <Sun size={16} /> : <Moon size={16} />}
-                    label={
-                      dark
-                        ? t("shell.top.themeLight")
-                        : t("shell.top.themeDark")
-                    }
-                    onClick={() => setDark((v) => !v)}
-                  />
+                  <div className="flex items-center gap-1.5">
+                    <IconButton
+                      className="card size-8 rounded-full"
+                      icon={<Search size={15} />}
+                      label={t("shell.top.search")}
+                      onClick={() => {
+                        setMenu(false);
+                        openPalette();
+                      }}
+                    />
+                    {!wide && <NotificationCenter />}
+                    <IconButton
+                      className="card size-8 rounded-full"
+                      icon={dark ? <Sun size={16} /> : <Moon size={16} />}
+                      label={
+                        dark
+                          ? t("shell.top.themeLight")
+                          : t("shell.top.themeDark")
+                      }
+                      onClick={() => setDark((v) => !v)}
+                    />
+                  </div>
                 </div>
                 <Button
                   variant="outline"
@@ -620,12 +635,20 @@ export default function App() {
             className={`flex h-dvh min-w-0 flex-col transition-[padding] duration-150 ease-in-out ${collapsed ? "lg:pl-0" : "lg:pl-64"}`}
           >
             <header className="safe-top-4 safe-x sticky top-0 z-30 flex shrink-0 items-center gap-2 px-4 pt-4 sm:gap-4 lg:px-6">
-              <IconButton
-                className="-ml-2 lg:hidden"
-                icon={<Menu size={20} />}
-                label={t("shell.nav.open")}
-                onClick={() => setMenu(true)}
-              />
+              <span className="relative -ml-2 inline-flex lg:hidden">
+                <IconButton
+                  icon={<Menu size={20} />}
+                  label={t("shell.nav.open")}
+                  onClick={() => setMenu(true)}
+                />
+                {!wide && signals.unread > 0 && (
+                  <span
+                    aria-hidden="true"
+                    data-testid="menu-unread-dot"
+                    className="pointer-events-none absolute right-1.5 top-1.5 size-2 rounded-full bg-(--error)"
+                  />
+                )}
+              </span>
               {/* Reopen button: inert while the sidebar is open so the collapsed
                 animation (max-w-0, opacity-0) cannot leave an invisible tab stop. */}
               <Button
@@ -678,39 +701,35 @@ export default function App() {
               >
                 {pageTitle(page)}
               </span>
-              <div className="ml-auto flex shrink-0 items-center gap-1.5 max-sm:ml-0">
-                <LivePill phase={engine.phase} status={engine.status} />
-                <IconButton
-                  className="card size-8 rounded-full sm:hidden"
-                  icon={<Search size={15} />}
-                  label={t("shell.top.search")}
-                  onClick={openPalette}
-                />
-                <NotificationCenter />
-                <Button
-                  variant="ghost"
-                  type="button"
-                  onClick={openPalette}
-                  className="card hidden h-8 items-center gap-1.5 rounded-full px-3 py-0 text-xs text-muted-foreground transition-colors hover:text-foreground sm:inline-flex"
-                >
-                  <Search size={13} />
-                  {t("shell.top.search")}
-                  <Kbd>⌘K</Kbd>
-                </Button>
-                {/* YunUI ThemeToggle is next-themes backed; the console owns its
+              {wide && (
+                <div className="ml-auto flex shrink-0 items-center gap-1.5">
+                  <LivePill phase={engine.phase} status={engine.status} />
+                  <NotificationCenter />
+                  <Button
+                    variant="ghost"
+                    type="button"
+                    onClick={openPalette}
+                    className="card inline-flex h-8 items-center gap-1.5 rounded-full px-3 py-0 text-xs text-muted-foreground transition-colors hover:text-foreground"
+                  >
+                    <Search size={13} />
+                    {t("shell.top.search")}
+                    <Kbd>⌘K</Kbd>
+                  </Button>
+                  {/* YunUI ThemeToggle is next-themes backed; the console owns its
                   theme state (Settings shares it), so keep a pill IconButton. */}
-                <div className="hidden sm:block">
                   <LanguageSwitch variant="pill" />
+                  <IconButton
+                    className="card size-8 rounded-full"
+                    icon={dark ? <Sun size={16} /> : <Moon size={16} />}
+                    label={
+                      dark
+                        ? t("shell.top.themeLight")
+                        : t("shell.top.themeDark")
+                    }
+                    onClick={() => setDark((v) => !v)}
+                  />
                 </div>
-                <IconButton
-                  className="card size-8 rounded-full max-sm:hidden"
-                  icon={dark ? <Sun size={16} /> : <Moon size={16} />}
-                  label={
-                    dark ? t("shell.top.themeLight") : t("shell.top.themeDark")
-                  }
-                  onClick={() => setDark((v) => !v)}
-                />
-              </div>
+              )}
             </header>
             <main
               id="main-content"
