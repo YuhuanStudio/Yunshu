@@ -46,3 +46,18 @@ legacy loop is recorded in `docs/archive/legacy_vlm_loop/`). Text-only mlx-lm mo
 path (`_generate_fast` → mlx-lm `generate_step`). Both on one MLX thread (`max_workers=1`). Per-request sampler +
 SequenceStateMachine (Aho-Corasick), per-request detokenizer (never pool), `uv` only. Constrained JSON-schema
 decoding is wired into both paths — keep it working.
+
+## Internal docs
+
+Private notes, decisions and evidence live in `docs/research/` (gitignored; never `git add -f` it). It has three
+authoritative files and one rule:
+
+- `docs/research/INDEX.md` — the single entry point (current records, per-line status, archive pointer).
+- `docs/research/DECISIONS.md` — every user decision with date and quote; later ones supersede earlier ones explicitly.
+- `docs/research/GROUND_TRUTH.md` — facts derived from source (ports, defaults, API counts, gpuq policy, CI commands);
+  a doc that contradicts it is wrong, and if reality contradicts it, re-verify from source and update it first.
+- **Rule: add or update research by updating INDEX.md first**, and keep it live: every line updates its INDEX entry /
+  `docs/research/<line>/HANDOFF.md` on each commit. `scripts/dev/research_index.py` regenerates the auto blocks (per-line
+  branch, ahead/behind, last commit, report head, READY TO MERGE, live worker, gpuq jobs); the lead runs it on every
+  watchdog event and hourly, and the watchdog raises `index-stale` after 60 min. Superseded material moves to
+  `docs/research/archive/` (with an `archive/INDEX.md` row); raw evidence is never deleted.

@@ -61,3 +61,35 @@ def test_failing_command_is_recorded_failed(tmp_path, monkeypatch):
     gpuq._run_one(job, path)
     assert job["state"] == "failed"
     assert job["rc"] == 1
+
+
+def test_gate_job_runs_before_same_priority_backlog(tmp_path, monkeypatch):
+    """A --gate verdict job must not wait behind a long p0 backlog (2026-10-08: the
+    release gate waited behind 40 agentbench p0 jobs), but never beats higher priority."""
+    import importlib
+    import sys
+
+    monkeypatch.setenv("GPUQ_DIR", str(tmp_path))
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts" / "dev"))
+    import gpuq
+
+    gpuq = importlib.reload(gpuq)
+
+    def job(i, t, **kw):
+        return {
+            "id": i,
+            "label": i,
+            "state": "pending",
+            "submitted": t,
+            "priority": 0,
+            **kw,
+        }
+
+    backlog = [job(f"bench{n}", n) for n in range(5)]
+    gate = job("release-gate", 100, gate=True)
+    assert gpuq._pick(backlog + [gate])["id"] == "release-gate"
+    assert gpuq._pick(backlog)["id"] == "bench0"
+    higher = job("urgent", 200, priority=1)
+    assert gpuq._pick(backlog + [gate, higher])["id"] == "urgent"
+    low_gate = job("lowgate", __import__("time").time(), gate=True, priority=-1)
+    assert gpuq._pick(backlog + [low_gate])["id"] == "bench0"

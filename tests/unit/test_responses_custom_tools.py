@@ -74,27 +74,3 @@ def test_namespace_custom_is_not_dropped():
     fn = function_tools(req.tools)
     assert fn[0].name == "apply_patch"
     assert fn[0].parameters["required"] == ["input"]
-
-
-def test_custom_grammar_is_a_clear_400(monkeypatch):
-    client, engine = install(monkeypatch, Script(pieces=["should not generate"]))
-    r = client.post(
-        "/v1/responses",
-        json={
-            "model": "scripted",
-            "input": "x",
-            "tools": [
-                {
-                    "type": "custom",
-                    "name": "patch",
-                    "format": {
-                        "type": "grammar",
-                        "syntax": "lark",
-                        "definition": 'start: "x"',
-                    },
-                }
-            ],
-        },
-    )
-    assert r.status_code == 400 and "cannot be guaranteed" in r.text
-    assert not engine.calls

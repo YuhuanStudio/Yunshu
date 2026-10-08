@@ -315,18 +315,29 @@ async def test_provider_http_errors_map_to_spec_codes():
 
 def test_provider_selection(monkeypatch):
     search.set_provider_for_tests(None)
+    monkeypatch.setenv("YUNSHU_WEB_MWMBL", "0")
     for k in (
         "YUNSHU_SEARXNG_URL",
         "YUNSHU_BRAVE_API_KEY",
         "YUNSHU_TAVILY_API_KEY",
         "YUNSHU_EXA_API_KEY",
+        "YUNSHU_SERPER_API_KEY",
+        "YUNSHU_PERPLEXITY_API_KEY",
     ):
         monkeypatch.delenv(k, raising=False)
-    assert search.get_provider() is None
+    assert search.get_provider().name == "metasearch"
+    assert {p.name for p in search.get_provider().providers} == {
+        "ddg_html",
+        "wikipedia",
+    }
     monkeypatch.setenv("YUNSHU_EXA_API_KEY", "e")
-    assert search.get_provider().name == "exa"
+    assert search.get_provider().name == "metasearch"
+    assert "exa" in {p.name for p in search.get_provider().providers}
     monkeypatch.setenv("YUNSHU_SEARXNG_URL", "http://sx")
-    assert search.get_provider().name == "searxng"  # auto prefers the private option
+    assert search.get_provider().name == "metasearch"
+    assert "searxng" in {
+        p.name for p in search.get_provider().providers
+    }  # configured optional source
     monkeypatch.setenv("YUNSHU_WEB_SEARCH_PROVIDER", "exa")
     assert search.get_provider().name == "exa"
     monkeypatch.setenv("YUNSHU_WEB_SEARCH_PROVIDER", "none")
@@ -359,6 +370,7 @@ async def test_run_search_validation_and_filters():
 
 
 async def test_no_provider_gives_unavailable_with_hint(monkeypatch):
+    monkeypatch.setenv("YUNSHU_WEB_KEYLESS", "0")
     search.set_provider_for_tests(None)
     for k in (
         "YUNSHU_SEARXNG_URL",

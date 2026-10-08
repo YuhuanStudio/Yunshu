@@ -34,8 +34,8 @@ from yunshu_engine import settings
 
 from .mcp_connector import McpError
 from .runtime import (
-    WEB_SEARCH_DESC,
-    WEB_SEARCH_SCHEMA,
+    RESPONSES_WEB_DESC,
+    RESPONSES_WEB_SCHEMA,
     ServerToolDef,
     ServerToolRuntime,
     format_search_text,
@@ -43,6 +43,7 @@ from .runtime import (
     parse_tool_args,
     run_all,
     safe_fname,
+    web_action,
 )
 from .search import SearchResult
 
@@ -82,30 +83,14 @@ def function_tools(tools):
     Returns the input object itself when nothing needed changing."""
     if not tools:
         return tools
-    from ..routers.responses import ResponseTool
+    from ..responses_client_tools import as_function, declarations
 
-    out: list = []
-    changed = False
-    for t in tools:
-        d = _dump(t)
-        ty = d.get("type") or "function"
-        if ty == "function" and d.get("name"):
-            out.append(t)
-        elif ty == "custom":
-            from ..custom_tools import custom_function
-
-            changed = True
-            out.append(ResponseTool(**custom_function(d)))
-        elif ty == "namespace":
-            changed = True
-            children = [
-                ResponseTool(**c) for c in d.get("tools") or [] if isinstance(c, dict)
-            ]
-            out.extend(function_tools(children) or [])
-        else:
-            changed = True
-    if not changed:
+    defs = declarations(tools)
+    if all(
+        d.get("type") == "function" and not d.get("namespace") for d in defs.values()
+    ):
         return tools
+    out = [t for d in defs.values() if (t := as_function(d)) is not None]
     return out or None
 
 
@@ -140,7 +125,7 @@ def input_item_to_messages(item: dict, texts: dict | None = None) -> list[dict]:
 
     if ty == "web_search_call":
         action = item.get("action") or {}
-        q = action.get("query")
+        q = action.get("query") or action.get("url")
         if not q:
             return []
         res = texts.get(iid)
@@ -153,7 +138,9 @@ def input_item_to_messages(item: dict, texts: dict | None = None) -> list[dict]:
             ]
             if urls:
                 res += "\nSources:\n" + "\n".join(urls)
-        return pair("web_search", json.dumps({"query": q}, ensure_ascii=False), res)
+        args = {"action": action.get("type", "search")}
+        args.update({k: action[k] for k in ("query", "url", "pattern") if k in action})
+        return pair("web_search", json.dumps(args, ensure_ascii=False), res)
     if ty == "mcp_call":
         name = item.get("name")
         if not name:
@@ -166,12 +153,42 @@ def input_item_to_messages(item: dict, texts: dict | None = None) -> list[dict]:
                 item.get("output") if item.get("output") is not None else ""
             )
         return pair(fname, _json_text(item.get("arguments") or "{}"), res)
-    if ty == "custom_tool_call_output":
+    if ty in (
+        "custom_tool_call_output",
+        "local_shell_call_output",
+        "tool_search_output",
+    ):
+        if ty == "tool_search_output":
+            item = {**item, "output": item.get("tools", [])}
+        output = item.get("output") or ""
+        if ty == "custom_tool_call_output" and isinstance(output, list):
+            from ..routers.responses import _extract_input_text
+
+            output = _extract_input_text(output)
+        else:
+            output = _json_text(output)
         return [
             {
                 "role": "tool",
-                "tool_call_id": item.get("call_id") or "",
-                "content": _json_text(item.get("output") or ""),
+                "tool_call_id": item.get("call_id")
+                or (iid if ty == "local_shell_call_output" else ""),
+                "content": output,
+            }
+        ]
+    if ty in ("local_shell_call", "tool_search_call"):
+        name = "local_shell" if ty == "local_shell_call" else "tool_search"
+        args = item.get("action") if ty == "local_shell_call" else item.get("arguments")
+        return [
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": item.get("call_id") or iid,
+                        "type": "function",
+                        "function": {"name": name, "arguments": _json_text(args or {})},
+                    }
+                ],
             }
         ]
     if ty == "custom_tool_call":
@@ -270,7 +287,7 @@ async def _setup(req) -> _Setup | JSONResponse:
         ty = t.get("type") or "function"
         if _is_web(t):
             filt = t.get("filters") or {}
-            spec: dict = {}
+            spec: dict = {"page_actions": True}
             if filt.get("allowed_domains"):
                 spec["allowed_domains"] = list(filt["allowed_domains"])
             if t.get("user_location"):
@@ -281,8 +298,8 @@ async def _setup(req) -> _Setup | JSONResponse:
                 ServerToolDef(
                     "web_search",
                     "web_search",
-                    WEB_SEARCH_DESC,
-                    WEB_SEARCH_SCHEMA,
+                    RESPONSES_WEB_DESC,
+                    RESPONSES_WEB_SCHEMA,
                     spec=spec,
                 )
             )
@@ -626,7 +643,7 @@ async def run_stream(req, request, inner: Inner, setup: _Setup, run: _Run):
         for label, listed in setup.mcp_lists.items():
             if label in known:
                 continue
-            item = {
+            item: dict[str, Any] = {
                 "id": _new_id("mcpl_"),
                 "type": "mcp_list_tools",
                 "server_label": label,
@@ -870,10 +887,7 @@ async def run_stream(req, request, inner: Inner, setup: _Setup, run: _Run):
                         "id": _new_id("ws_"),
                         "type": "web_search_call",
                         "status": "in_progress",
-                        "action": {
-                            "type": "search",
-                            "query": str(args.get("query", "")),
-                        },
+                        "action": web_action(args),
                     }
                     idx = run.add_item(item)
                     c.update(item=item, idx=idx)
@@ -961,7 +975,11 @@ async def run_stream(req, request, inner: Inner, setup: _Setup, run: _Run):
                             oc.query or "", oc.results, start=off + 1
                         )
                     item = {**item, "status": "failed" if oc.is_error else "completed"}
-                    if include_sources and not oc.is_error:
+                    if (
+                        include_sources
+                        and not oc.is_error
+                        and item["action"]["type"] == "search"
+                    ):
                         item["action"] = {
                             **item["action"],
                             "sources": [

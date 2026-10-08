@@ -32,6 +32,7 @@ from yunshu_engine import settings
 from yunshu_engine.tool_call_streamer import ToolCallStreamer
 from yunshu_engine.tool_format import parse_tool_output, tool_formats
 
+from ..continuous_usage import update_usage, with_continuous_usage
 from ..engine import get_engine, get_model_manager
 from ..error_envelope import EngineStreamError, server_error_body, server_error_sse
 from ..streaming import (
@@ -389,6 +390,7 @@ class StreamOptions(BaseModel):
     """OpenAI stream_options parameter."""
 
     include_usage: bool = False
+    continuous_usage_stats: bool = False
 
 
 class ChatCompletionRequest(BaseModel):
@@ -396,6 +398,9 @@ class ChatCompletionRequest(BaseModel):
     messages: list[ChatMessage]
     # Ollama-style: how long the model stays loaded after this request ("5m", 300, -1, 0).
     keep_alive: str | int | float | None = None
+    # OpenAI stored completions: store=true keeps the completion for GET /chat/completions/{id}.
+    store: bool | None = None
+    metadata: dict[str, str] | None = None
     prompt_cache_key: str | None = None
     prompt_cache_retention: str | None = None
     prompt_cache_options: dict | None = None
@@ -1742,6 +1747,98 @@ def _enforce_capability_contract(req: ChatCompletionRequest) -> None:
 
 @router.post("/chat/completions", response_model=None)
 async def create_chat_completion(req: ChatCompletionRequest, request: Request):
+    if not req.store:
+        return await _create_chat_completion(req, request)
+    from yunshu_gateway.chat_store import check_metadata
+
+    try:
+        check_metadata(req.metadata)
+    except Exception as exc:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": {
+                    "message": getattr(exc, "message", str(exc)),
+                    "type": "invalid_request_error",
+                    "param": "metadata",
+                    "code": getattr(exc, "code", None),
+                }
+            },
+        )
+    resp = await _create_chat_completion(req, request)
+    return _tee_store(resp, req)
+
+
+def _store_completion(completion: dict | None, req: ChatCompletionRequest) -> None:
+    if not completion or not completion.get("choices"):
+        return
+    try:
+        from yunshu_gateway.chat_store import get_store
+
+        get_store().save(
+            completion,
+            [m.model_dump(exclude_none=True) for m in req.messages],
+            req.metadata,
+        )
+    except Exception:
+        logger.warning("storing chat completion failed", exc_info=True)
+
+
+def _tee_store(resp, req: ChatCompletionRequest):
+    """Save a finished 200 completion (JSON body, or the stream folded back) when store=true."""
+    if isinstance(resp, StreamingResponse):
+        inner = resp.body_iterator
+
+        async def _gen():
+            from yunshu_gateway.chat_store import completion_from_chunks
+
+            chunks: list[dict] = []
+            clean = False
+            buf = ""
+            async for piece in inner:
+                yield piece
+                text = (
+                    piece.decode("utf-8", "replace")
+                    if isinstance(piece, bytes)
+                    else str(piece)
+                )
+                buf += text
+                while "\n\n" in buf:
+                    ev, buf = buf.split("\n\n", 1)
+                    for line in ev.splitlines():
+                        if not line.startswith("data:"):
+                            continue
+                        data = line[5:].strip()
+                        if data == "[DONE]":
+                            clean = True
+                        elif data:
+                            try:
+                                obj = json.loads(data)
+                            except ValueError:
+                                continue
+                            if (
+                                isinstance(obj, dict)
+                                and obj.get("object") == "chat.completion.chunk"
+                            ):
+                                chunks.append(obj)
+            if clean:
+                _store_completion(completion_from_chunks(chunks), req)
+
+        resp.body_iterator = _gen()
+        return resp
+    if isinstance(resp, JSONResponse) and resp.status_code == 200:
+        try:
+            body = json.loads(bytes(resp.body))
+        except ValueError:
+            return resp
+        if isinstance(body, dict) and body.get("object") == "chat.completion":
+            _store_completion(body, req)
+    elif isinstance(resp, dict) and resp.get("object") == "chat.completion":
+        _store_completion(resp, req)
+    return resp
+
+
+async def _create_chat_completion(req: ChatCompletionRequest, request: Request):
     from yunshu_gateway.admission import classify_request, defer_auxiliary
 
     classify_request(req.model_dump())
@@ -2749,8 +2846,15 @@ async def _handle_vlm_chat(
             )
         if err is not None:
             return JSONResponse(
-                status_code=500,
-                content={"error": {"message": err, "type": "inference_error"}},
+                status_code=400 if err.startswith("input_error:") else 500,
+                content={
+                    "error": {
+                        "message": err,
+                        "type": "invalid_request_error"
+                        if err.startswith("input_error:")
+                        else "inference_error",
+                    }
+                },
             )
 
     if json_schema is not None:
@@ -2835,6 +2939,7 @@ async def _handle_vlm_chat(
     )
 
 
+@with_continuous_usage
 async def _stream_vlm_response(
     vlm_engine,
     messages: list[dict],
@@ -3008,6 +3113,13 @@ async def _stream_vlm_response(
                 if output.finish_reason is not None:
                     vlm_last_finish_reason = output.finish_reason
                 # Track emitted text for stop-sequence correction
+                update_usage(
+                    req,
+                    vlm_prompt_tok,
+                    vlm_completion_tok,
+                    vlm_reasoning_tok,
+                    vlm_cached_tok,
+                )
                 _vlm_token_text = output.token_text or ""
                 if (
                     _vlm_token_text
@@ -3042,6 +3154,13 @@ async def _stream_vlm_response(
                             break
                 # Route thinking content based on engine's current_state
                 _is_reasoning = getattr(output, "current_state", None) == "reasoning"
+                update_usage(
+                    req,
+                    vlm_prompt_tok,
+                    vlm_completion_tok,
+                    vlm_reasoning_tok,
+                    vlm_cached_tok,
+                )
                 _vlm_token_text = output.token_text or ""
                 _vlm_is_final = output.finish_reason is not None
                 _chunk_lp = (
@@ -3324,6 +3443,7 @@ def _format_tool_call_args_delta_chunk(
     return f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
 
 
+@with_continuous_usage
 async def _stream_response_multi(
     engine,
     messages: list[dict],
@@ -3483,6 +3603,13 @@ async def _stream_response_multi(
                     ):
                         # Only count non-reasoning tokens toward completion_tok
                         choice_completion_tok += 1
+                    update_usage(
+                        req,
+                        total_prompt_tok,
+                        total_completion_tok + choice_completion_tok,
+                        total_reasoning_tok + choice_reasoning_tok,
+                        total_cached_tok,
+                    )
                     # Only set finish_reason on the final token from engine
                     fr = output.finish_reason
                     if fr is not None:
@@ -3530,6 +3657,13 @@ async def _stream_response_multi(
                                     except Exception:
                                         pass
                                 break
+                    update_usage(
+                        req,
+                        total_prompt_tok,
+                        total_completion_tok + choice_completion_tok,
+                        total_reasoning_tok + choice_reasoning_tok,
+                        total_cached_tok,
+                    )
                     # Route thinking content based on SequenceStateMachine state
                     _is_reasoning = (
                         getattr(output, "current_state", None) == "reasoning"
@@ -3705,6 +3839,13 @@ async def _stream_response_multi(
                     ):
                         # Only count non-reasoning tokens toward completion_tok
                         choice_completion_tok += 1
+                    update_usage(
+                        req,
+                        total_prompt_tok,
+                        total_completion_tok + choice_completion_tok,
+                        total_reasoning_tok + choice_reasoning_tok,
+                        total_cached_tok,
+                    )
                     # Only set finish_reason on the final token from engine
                     fr = getattr(output, "finish_reason", None)
                     if fr is not None:
@@ -3749,6 +3890,13 @@ async def _stream_response_multi(
                                     except Exception:
                                         pass
                                 break
+                    update_usage(
+                        req,
+                        total_prompt_tok,
+                        total_completion_tok + choice_completion_tok,
+                        total_reasoning_tok + choice_reasoning_tok,
+                        total_cached_tok,
+                    )
                     # Route thinking content based on SequenceStateMachine state
                     _is_reasoning = (
                         getattr(output, "current_state", None) == "reasoning"
@@ -4065,6 +4213,7 @@ def _format_chat_logprobs(
     return {"content": content} if content else None
 
 
+@with_continuous_usage
 async def _stream_response(
     engine,
     messages: list[dict],
@@ -4274,6 +4423,7 @@ async def _stream_response(
                                     pass
                             break
 
+                update_usage(req, prompt_tok, completion_tok, reasoning_tok, cached_tok)
                 _chunk_lp = (
                     _format_chat_logprobs(
                         output.logprobs,
@@ -4427,6 +4577,7 @@ async def _stream_response(
                     cached_tok = max(cached_tok, output.cached_tokens)
                 if output.finish_reason is not None:
                     last_finish_reason = output.finish_reason
+                update_usage(req, prompt_tok, completion_tok, reasoning_tok, cached_tok)
                 _chunk_lp = (
                     _format_chat_logprobs(
                         output.logprobs,

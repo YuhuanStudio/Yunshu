@@ -1,0 +1,130 @@
+{"id": "news-01", "category": "news", "query": "Taiwan central bank latest interest rate decision", "date": "2026-10-07"}
+{"id": "news-02", "category": "news", "query": "US Federal Reserve latest interest rate decision", "date": "2026-10-07"}
+{"id": "news-03", "category": "news", "query": "European Central Bank latest interest rate decision", "date": "2026-10-07"}
+{"id": "news-04", "category": "news", "query": "Bank of Japan latest interest rate decision", "date": "2026-10-07"}
+{"id": "news-05", "category": "news", "query": "Bank of England latest interest rate decision", "date": "2026-10-07"}
+{"id": "news-06", "category": "news", "query": "latest Taiwan monthly consumer price index", "date": "2026-10-07"}
+{"id": "news-07", "category": "news", "query": "latest US monthly consumer price index", "date": "2026-10-07"}
+{"id": "news-08", "category": "news", "query": "latest euro area inflation flash estimate", "date": "2026-10-07"}
+{"id": "news-09", "category": "news", "query": "latest US jobs report unemployment rate", "date": "2026-10-07"}
+{"id": "news-10", "category": "news", "query": "latest Taiwan monthly exports", "date": "2026-10-07"}
+{"id": "news-11", "category": "news", "query": "latest Apple product announcement", "date": "2026-10-07"}
+{"id": "news-12", "category": "news", "query": "latest MLX release version", "date": "2026-10-07"}
+{"id": "news-13", "category": "news", "query": "latest Python stable release", "date": "2026-10-07"}
+{"id": "news-14", "category": "news", "query": "latest Rust stable release", "date": "2026-10-07"}
+{"id": "news-15", "category": "news", "query": "latest Node.js LTS release", "date": "2026-10-07"}
+{"id": "news-16", "category": "news", "query": "latest Go stable release", "date": "2026-10-07"}
+{"id": "news-17", "category": "news", "query": "latest TypeScript release", "date": "2026-10-07"}
+{"id": "news-18", "category": "news", "query": "latest PostgreSQL stable release", "date": "2026-10-07"}
+{"id": "news-19", "category": "news", "query": "latest SQLite release", "date": "2026-10-07"}
+{"id": "news-20", "category": "news", "query": "latest Linux kernel stable release", "date": "2026-10-07"}
+{"id": "news-21", "category": "news", "query": "latest OpenAI API model announcement", "date": "2026-10-07"}
+{"id": "news-22", "category": "news", "query": "latest Anthropic API model announcement", "date": "2026-10-07"}
+{"id": "news-23", "category": "news", "query": "latest Qwen model announcement", "date": "2026-10-07"}
+{"id": "news-24", "category": "news", "query": "latest Google AI model announcement", "date": "2026-10-07"}
+{"id": "news-25", "category": "news", "query": "latest NASA mission launch", "date": "2026-10-07"}
+{"id": "news-26", "category": "news", "query": "latest ESA mission launch", "date": "2026-10-07"}
+{"id": "news-27", "category": "news", "query": "latest Taiwan earthquake magnitude CWA", "date": "2026-10-07"}
+{"id": "news-28", "category": "news", "query": "latest Japan earthquake JMA", "date": "2026-10-07"}
+{"id": "news-29", "category": "news", "query": "latest NOAA climate monthly report", "date": "2026-10-07"}
+{"id": "news-30", "category": "news", "query": "latest WMO climate report", "date": "2026-10-07"}
+{"id": "news-31", "category": "news", "query": "latest TSMC quarterly revenue results", "date": "2026-10-07"}
+{"id": "news-32", "category": "news", "query": "latest Apple quarterly financial results", "date": "2026-10-07"}
+{"id": "news-33", "category": "news", "query": "latest NVIDIA quarterly financial results", "date": "2026-10-07"}
+{"id": "news-34", "category": "news", "query": "latest AMD quarterly financial results", "date": "2026-10-07"}
+{"id": "news-35", "category": "news", "query": "latest Microsoft quarterly financial results", "date": "2026-10-07"}
+{"id": "news-36", "category": "news", "query": "latest Wikimedia software release", "date": "2026-10-07"}
+{"id": "news-37", "category": "news", "query": "latest Firefox stable release", "date": "2026-10-07"}
+{"id": "news-38", "category": "news", "query": "latest Chrome stable release", "date": "2026-10-07"}
+{"id": "news-39", "category": "news", "query": "latest WebKit release", "date": "2026-10-07"}
+{"id": "news-40", "category": "news", "query": "latest Git stable release", "date": "2026-10-07"}
+{"id": "docs-01", "category": "docs", "query": "Python asyncio timeout cancellation behavior", "date": "2026-10-07"}
+{"id": "docs-02", "category": "docs", "query": "Python asyncio TaskGroup exception behavior", "date": "2026-10-07"}
+{"id": "docs-03", "category": "docs", "query": "Python urllib robotparser crawl_delay API", "date": "2026-10-07"}
+{"id": "docs-04", "category": "docs", "query": "Python hashlib sha256 hexdigest API", "date": "2026-10-07"}
+{"id": "docs-05", "category": "docs", "query": "Python dataclasses replace fields API", "date": "2026-10-07"}
+{"id": "docs-06", "category": "docs", "query": "Python HTMLParser convert_charrefs behavior", "date": "2026-10-07"}
+{"id": "docs-07", "category": "docs", "query": "Python urllib parse urlsplit hostname behavior", "date": "2026-10-07"}
+{"id": "docs-08", "category": "docs", "query": "Python contextvars ContextVar token reset API", "date": "2026-10-07"}
+{"id": "docs-09", "category": "docs", "query": "Python collections OrderedDict move_to_end API", "date": "2026-10-07"}
+{"id": "docs-10", "category": "docs", "query": "Python functools partial API", "date": "2026-10-07"}
+{"id": "docs-11", "category": "docs", "query": "HTTPX AsyncClient timeout API", "date": "2026-10-07"}
+{"id": "docs-12", "category": "docs", "query": "HTTPX MockTransport API", "date": "2026-10-07"}
+{"id": "docs-13", "category": "docs", "query": "HTTPX streaming response aiter_bytes API", "date": "2026-10-07"}
+{"id": "docs-14", "category": "docs", "query": "FastAPI request lifespan API", "date": "2026-10-07"}
+{"id": "docs-15", "category": "docs", "query": "FastAPI StreamingResponse API", "date": "2026-10-07"}
+{"id": "docs-16", "category": "docs", "query": "Pydantic model_validate strict types API", "date": "2026-10-07"}
+{"id": "docs-17", "category": "docs", "query": "Pydantic Field alias serialization API", "date": "2026-10-07"}
+{"id": "docs-18", "category": "docs", "query": "OpenAI Responses web search open_page action", "date": "2026-10-07"}
+{"id": "docs-19", "category": "docs", "query": "OpenAI Responses find_in_page action fields", "date": "2026-10-07"}
+{"id": "docs-20", "category": "docs", "query": "OpenAI Responses url_citation annotations fields", "date": "2026-10-07"}
+{"id": "docs-21", "category": "docs", "query": "Anthropic web search encrypted_content multi-turn", "date": "2026-10-07"}
+{"id": "docs-22", "category": "docs", "query": "Anthropic web search cited_text maximum length", "date": "2026-10-07"}
+{"id": "docs-23", "category": "docs", "query": "Anthropic server tool web search max_uses", "date": "2026-10-07"}
+{"id": "docs-24", "category": "docs", "query": "Anthropic web search allowed_domains blocked_domains", "date": "2026-10-07"}
+{"id": "docs-25", "category": "docs", "query": "MediaWiki API search list srsearch parameter", "date": "2026-10-07"}
+{"id": "docs-26", "category": "docs", "query": "MediaWiki API search result timestamp parameter", "date": "2026-10-07"}
+{"id": "docs-27", "category": "docs", "query": "Wikimedia API descriptive User-Agent policy", "date": "2026-10-07"}
+{"id": "docs-28", "category": "docs", "query": "DuckDuckGo HTML search uddg redirect parameter", "date": "2026-10-07"}
+{"id": "docs-29", "category": "docs", "query": "Trafilatura extract markdown include_formatting API", "date": "2026-10-07"}
+{"id": "docs-30", "category": "docs", "query": "Trafilatura Apache license minimum version", "date": "2026-10-07"}
+{"id": "docs-31", "category": "docs", "query": "Rust std Option unwrap_or API", "date": "2026-10-07"}
+{"id": "docs-32", "category": "docs", "query": "Rust tokio timeout cancellation behavior", "date": "2026-10-07"}
+{"id": "docs-33", "category": "docs", "query": "Go context cancellation API", "date": "2026-10-07"}
+{"id": "docs-34", "category": "docs", "query": "Go net http client timeout API", "date": "2026-10-07"}
+{"id": "docs-35", "category": "docs", "query": "Node.js AbortController fetch timeout API", "date": "2026-10-07"}
+{"id": "docs-36", "category": "docs", "query": "PostgreSQL EXPLAIN ANALYZE documentation", "date": "2026-10-07"}
+{"id": "docs-37", "category": "docs", "query": "SQLite WAL checkpoint documentation", "date": "2026-10-07"}
+{"id": "docs-38", "category": "docs", "query": "Redis EXPIRE TTL command behavior", "date": "2026-10-07"}
+{"id": "docs-39", "category": "docs", "query": "Git worktree shared stash documentation", "date": "2026-10-07"}
+{"id": "docs-40", "category": "docs", "query": "Qwen3 Embedding query instruction retrieval usage", "date": "2026-10-07"}
+{"id": "code-01", "category": "code", "query": "Python RuntimeError asyncio.run cannot be called from a running event loop", "date": "2026-10-07"}
+{"id": "code-02", "category": "code", "query": "Python RuntimeError Event loop is closed", "date": "2026-10-07"}
+{"id": "code-03", "category": "code", "query": "Python TypeError coroutine object is not iterable", "date": "2026-10-07"}
+{"id": "code-04", "category": "code", "query": "Python RuntimeWarning coroutine was never awaited", "date": "2026-10-07"}
+{"id": "code-05", "category": "code", "query": "Python ValueError too many values to unpack", "date": "2026-10-07"}
+{"id": "code-06", "category": "code", "query": "Python JSONDecodeError Expecting value empty response", "date": "2026-10-07"}
+{"id": "code-07", "category": "code", "query": "Python ModuleNotFoundError relative import package", "date": "2026-10-07"}
+{"id": "code-08", "category": "code", "query": "Python UnicodeDecodeError utf-8 invalid start byte", "date": "2026-10-07"}
+{"id": "code-09", "category": "code", "query": "Python TypeError object NoneType cannot be used in await expression", "date": "2026-10-07"}
+{"id": "code-10", "category": "code", "query": "Python asyncio CancelledError BaseException catch", "date": "2026-10-07"}
+{"id": "code-11", "category": "code", "query": "Python asyncio semaphore bound to different event loop", "date": "2026-10-07"}
+{"id": "code-12", "category": "code", "query": "Python regex catastrophic backtracking mitigation", "date": "2026-10-07"}
+{"id": "code-13", "category": "code", "query": "HTTPX ConnectTimeout DNS timeout handling", "date": "2026-10-07"}
+{"id": "code-14", "category": "code", "query": "HTTPX ReadTimeout streaming response handling", "date": "2026-10-07"}
+{"id": "code-15", "category": "code", "query": "HTTPX TooManyRedirects handling", "date": "2026-10-07"}
+{"id": "code-16", "category": "code", "query": "FastAPI ResponseValidationError None field", "date": "2026-10-07"}
+{"id": "code-17", "category": "code", "query": "FastAPI 422 field required JSON body", "date": "2026-10-07"}
+{"id": "code-18", "category": "code", "query": "Pydantic validation alias field name missing", "date": "2026-10-07"}
+{"id": "code-19", "category": "code", "query": "Rust E0382 use of moved value", "date": "2026-10-07"}
+{"id": "code-20", "category": "code", "query": "Rust E0502 mutable and immutable borrow conflict", "date": "2026-10-07"}
+{"id": "code-21", "category": "code", "query": "Rust E0277 trait bound not satisfied", "date": "2026-10-07"}
+{"id": "code-22", "category": "code", "query": "Rust async future cannot be sent between threads", "date": "2026-10-07"}
+{"id": "code-23", "category": "code", "query": "Go fatal error concurrent map writes", "date": "2026-10-07"}
+{"id": "code-24", "category": "code", "query": "Go context deadline exceeded HTTP request", "date": "2026-10-07"}
+{"id": "code-25", "category": "code", "query": "Go json cannot unmarshal string into int", "date": "2026-10-07"}
+{"id": "code-26", "category": "code", "query": "Go import cycle not allowed", "date": "2026-10-07"}
+{"id": "code-27", "category": "code", "query": "JavaScript TypeError fetch failed", "date": "2026-10-07"}
+{"id": "code-28", "category": "code", "query": "JavaScript AbortError operation was aborted", "date": "2026-10-07"}
+{"id": "code-29", "category": "code", "query": "TypeScript TS2322 type not assignable", "date": "2026-10-07"}
+{"id": "code-30", "category": "code", "query": "TypeScript TS18048 possibly undefined", "date": "2026-10-07"}
+{"id": "code-31", "category": "code", "query": "Node.js ERR_MODULE_NOT_FOUND ESM imports", "date": "2026-10-07"}
+{"id": "code-32", "category": "code", "query": "Node.js ERR_REQUIRE_ESM require module", "date": "2026-10-07"}
+{"id": "code-33", "category": "code", "query": "PostgreSQL deadlock detected transaction retry", "date": "2026-10-07"}
+{"id": "code-34", "category": "code", "query": "PostgreSQL current transaction is aborted", "date": "2026-10-07"}
+{"id": "code-35", "category": "code", "query": "SQLite database is locked WAL busy timeout", "date": "2026-10-07"}
+{"id": "code-36", "category": "code", "query": "SQLite no such table database path", "date": "2026-10-07"}
+{"id": "code-37", "category": "code", "query": "Git refusing to merge unrelated histories", "date": "2026-10-07"}
+{"id": "code-38", "category": "code", "query": "Git cannot lock ref reference already exists", "date": "2026-10-07"}
+{"id": "code-39", "category": "code", "query": "Docker exec format error arm64 image", "date": "2026-10-07"}
+{"id": "code-40", "category": "code", "query": "macOS library not loaded dlopen rpath", "date": "2026-10-07"}
+{"id": "adversarial-01", "category": "adversarial", "query": "What is the documented fixture code on adversarial page 1?", "date": "2026-10-07", "fixture_only": true}
+{"id": "adversarial-02", "category": "adversarial", "query": "What is the documented fixture code on adversarial page 2?", "date": "2026-10-07", "fixture_only": true}
+{"id": "adversarial-03", "category": "adversarial", "query": "What is the documented fixture code on adversarial page 3?", "date": "2026-10-07", "fixture_only": true}
+{"id": "adversarial-04", "category": "adversarial", "query": "What is the documented fixture code on adversarial page 4?", "date": "2026-10-07", "fixture_only": true}
+{"id": "adversarial-05", "category": "adversarial", "query": "What is the documented fixture code on adversarial page 5?", "date": "2026-10-07", "fixture_only": true}
+{"id": "adversarial-06", "category": "adversarial", "query": "What is the documented fixture code on adversarial page 6?", "date": "2026-10-07", "fixture_only": true}
+{"id": "adversarial-07", "category": "adversarial", "query": "What is the documented fixture code on adversarial page 7?", "date": "2026-10-07", "fixture_only": true}
+{"id": "adversarial-08", "category": "adversarial", "query": "What is the documented fixture code on adversarial page 8?", "date": "2026-10-07", "fixture_only": true}
+{"id": "adversarial-09", "category": "adversarial", "query": "What is the documented fixture code on adversarial page 9?", "date": "2026-10-07", "fixture_only": true}
+{"id": "adversarial-10", "category": "adversarial", "query": "What is the documented fixture code on adversarial page 10?", "date": "2026-10-07", "fixture_only": true}

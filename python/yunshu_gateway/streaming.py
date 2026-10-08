@@ -206,29 +206,41 @@ async def run_with_disconnect_guard(
     breaks promptly (the streaming path already does this via with_sse_keepalive).
     """
     task = asyncio.create_task(coro)
-    while not task.done():
-        done, _ = await asyncio.wait({task}, timeout=poll_interval)
-        if done:
-            break
-        try:
-            if await client_disconnected(http_request):
-                if cancel_event is not None:
-                    try:
-                        cancel_event.set()
-                    except Exception:
-                        logger.debug(
-                            "cancel_event.set() failed on disconnect", exc_info=True
-                        )
-                task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await task
-                return None
-        except Exception:
-            logger.debug("is_disconnected() failed in disconnect guard", exc_info=True)
     try:
-        return task.result()
-    except asyncio.CancelledError:
-        return None
+        while not task.done():
+            done, _ = await asyncio.wait({task}, timeout=poll_interval)
+            if done:
+                break
+            try:
+                if await client_disconnected(http_request):
+                    if cancel_event is not None:
+                        try:
+                            cancel_event.set()
+                        except Exception:
+                            logger.debug(
+                                "cancel_event.set() failed on disconnect", exc_info=True
+                            )
+                    task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await task
+                    return None
+            except Exception:
+                logger.debug(
+                    "is_disconnected() failed in disconnect guard", exc_info=True
+                )
+        try:
+            return task.result()
+        except asyncio.CancelledError:
+            return None
+    finally:
+        # Parent cancellation (including Evals run cancellation) must stop both the
+        # detached response task and the executor's cooperative decode loop.
+        if not task.done():
+            if cancel_event is not None:
+                cancel_event.set()
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
 
 
 # ── Thinking Parser ──

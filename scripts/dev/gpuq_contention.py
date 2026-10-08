@@ -13,6 +13,7 @@ import contextlib
 import json
 import math
 import os
+import re
 import subprocess
 import time
 from pathlib import Path
@@ -25,14 +26,70 @@ STALE_FLAG_S = 10.0
 # thresholds flagged ordinary background work that did not move GPU-bound timings.
 _DEFAULT_THRESHOLD = 90.0 * (os.cpu_count() or 8)
 DEFAULTS = dict(
-    threshold_pct=_DEFAULT_THRESHOLD, window_s=20.0, max_wait_s=300.0, sample_s=30.0
+    threshold_pct=_DEFAULT_THRESHOLD,
+    window_s=20.0,
+    max_wait_s=300.0,
+    sample_s=30.0,
+    foreign_model_cpu_pct=15.0,
 )
 ENV = dict(
     threshold_pct="GPUQ_CPU_THRESHOLD",
     window_s="GPUQ_QUIET_WINDOW_S",
     max_wait_s="GPUQ_QUIET_MAX_WAIT_S",
     sample_s="GPUQ_CPU_SAMPLE_S",
+    foreign_model_cpu_pct="GPUQ_FOREIGN_MODEL_CPU",
 )
+
+# Command lines of MLX model runtimes started outside gpuq. GPUQ_FOREIGN_MODEL_PATTERNS
+# adds comma-separated regexes. Such a server can use the GPU while a timing job runs
+# without ever reaching the summed-CPU threshold.
+FOREIGN_MODEL_PATTERNS = (
+    r"\byunshu(_cli)?\b.*\bserve\b",
+    r"-m\s+yunshu_cli\b",
+    r"\buvicorn\b.*\byunshu_gateway\b",
+    r"\bmlx_lm[./ ](server|generate)\b",
+    r"\bmlx_vlm\b",
+    r"\bmlx_audio\b",
+)
+_GPUQ_CMD = re.compile(r"(^|[/\s])gpuq(\.py)?(\s|$)")
+
+
+def foreign_model_patterns(env=None):
+    env = os.environ if env is None else env
+    extra = [
+        x.strip() for x in str(env.get("GPUQ_FOREIGN_MODEL_PATTERNS", "")).split(",")
+    ]
+    out = []
+    for p in (*FOREIGN_MODEL_PATTERNS, *[x for x in extra if x]):
+        with contextlib.suppress(re.error):
+            out.append(re.compile(p))
+    return out
+
+
+def process_args():
+    """pid -> full command line (ps comm drops the arguments)."""
+    text = subprocess.run(
+        ["ps", "-A", "-ww", "-o", "pid=,args="],
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=5,
+    ).stdout
+    out = {}
+    for line in text.splitlines():
+        parts = line.strip().split(None, 1)
+        if len(parts) == 2 and parts[0].isdigit():
+            out[int(parts[0])] = parts[1]
+    return out
+
+
+def busy_foreign_models(sample, cfg):
+    limit = cfg["foreign_model_cpu_pct"]
+    return [m for m in sample.get("foreign_models") or [] if m["cpu_pct"] >= limit]
+
+
+def foreign_model_reason(m):
+    return f"foreign model process {m['pid']} busy {m['cpu_pct']:.1f}% ({m['cmd']})"
 
 
 def contention_config(job=None):
@@ -74,10 +131,11 @@ def _cpu_seconds(value):
 
 
 class CpuSampler:
-    def __init__(self):
+    def __init__(self, env=None):
         self.previous = {}
         self.previous_time = None
         self.owned = set()
+        self.env = env
 
     def sample(self, pid=None, now=None):
         now = time.time() if now is None else now
@@ -89,6 +147,7 @@ class CpuSampler:
             load_1m=None,
             load_5m=None,
             top_cpu=[],
+            foreign_models=[],
         )
         with contextlib.suppress(OSError):
             row["load_1m"], row["load_5m"], _ = os.getloadavg()
@@ -120,6 +179,7 @@ class CpuSampler:
                         break
                     self.owned.update(children)
             consumers = []
+            pcts = {}
             dt = now - since
             for p, (_, _, pct, seconds, name, nice) in processes.items():
                 if dt > 0 and p in self.previous:
@@ -128,22 +188,42 @@ class CpuSampler:
                     # A new process cannot have used more than one interval of
                     # its total CPU time. It can use several cores in that interval.
                     pct = seconds * 100 / dt
+                pcts[p] = pct
                 if p not in self.owned and nice < 10:
                     consumers.append(dict(pid=p, name=name, cpu_pct=round(pct, 2)))
             row["foreign_cpu_pct"] = round(sum(p["cpu_pct"] for p in consumers), 2)
             row["top_cpu"] = sorted(consumers, key=lambda p: -p["cpu_pct"])[:8]
+            row["foreign_models"] = self._foreign_models(processes, pcts)
             self.previous = {p: v[3] for p, v in processes.items()}
             self.previous_time = now
         except (OSError, ValueError, subprocess.SubprocessError) as e:
             row["error"] = f"{type(e).__name__}: {e}"
         return row
 
+    def _foreign_models(self, processes, pcts):
+        try:
+            patterns = foreign_model_patterns(self.env)
+            args = process_args()
+        except (OSError, ValueError, subprocess.SubprocessError):
+            return []
+        found = []
+        for p, cmd in args.items():
+            if p not in processes or p in self.owned or processes[p][5] >= 10:
+                continue
+            if p == os.getpid() or _GPUQ_CMD.search(cmd.split(" -- ")[0]):
+                continue
+            if any(rx.search(cmd) for rx in patterns):
+                found.append(
+                    dict(pid=p, cmd=cmd[:120], cpu_pct=round(pcts.get(p, 0.0), 2))
+                )
+        return sorted(found, key=lambda m: -m["cpu_pct"])
+
 
 class QuietGate:
     """One shared pending snapshot per poll, individual continuous quiet windows."""
 
     def __init__(self):
-        self.sampler = CpuSampler()
+        self.sampler = CpuSampler(env=None)
         self.cached = None
 
     def sample(self, now):
@@ -164,7 +244,11 @@ class QuietGate:
         job["quiet_last_poll"] = now
         job.setdefault("quiet_wait_started", now)
         cpu = sample["foreign_cpu_pct"]
-        if cpu is None or cpu >= cfg["threshold_pct"]:
+        if (
+            cpu is None
+            or cpu >= cfg["threshold_pct"]
+            or busy_foreign_models(sample, cfg)
+        ):
             job["quiet_since"] = None
         elif job.get("quiet_since") is None:
             job["quiet_since"] = now
@@ -191,7 +275,8 @@ class ContentionMonitor:
         self.job, self.path, self.write, self.read = job, path, write, read
         self.flag = logs / (job["id"] + ".contention.json")
         self.cfg = contention_config(job)
-        self.sampler = CpuSampler()
+        self.sampler = CpuSampler(env=job.get("env"))
+        self.models = {m["pid"]: m for m in job.get("foreign_model_processes", [])}
         self.samples = list(job.get("cpu_samples", []))
         self.events = list(job.get("contention_events", []))
         self.count = job.get("foreign_cpu_sample_count", 0)
@@ -226,6 +311,20 @@ class ContentionMonitor:
             if reason not in reasons:
                 reasons.append(reason)
             self.events.append([row["since"], row["time"]])
+        for m in row.get("foreign_models") or []:
+            seen = self.models.setdefault(
+                m["pid"], dict(pid=m["pid"], cmd=m["cmd"], max_cpu_pct=0.0)
+            )
+            seen["max_cpu_pct"] = max(seen["max_cpu_pct"], m["cpu_pct"])
+        for m in busy_foreign_models(row, self.cfg):
+            self.job["contended"] = True
+            reasons = self.job.setdefault("contention_reasons", [])
+            reason = foreign_model_reason(m)
+            if not any(
+                r.startswith(f"foreign model process {m['pid']} ") for r in reasons
+            ):
+                reasons.append(reason)
+            self.events.append([row["since"], row["time"]])
         if (
             phase != "poll"
             or self.last_saved_sample is None
@@ -244,6 +343,7 @@ class ContentionMonitor:
             foreign_cpu_sum_pct=self.total,
             foreign_cpu_sample_count=self.count,
             contention_config=self.cfg,
+            foreign_model_processes=list(self.models.values()),
         )
         self.job.update(fields)
         data = self.read(self.path)

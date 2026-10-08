@@ -27,9 +27,7 @@ def test_known_types_have_schemas(t, expect):
     assert spec and expect in spec["input_schema"]["properties"]
 
 
-@pytest.mark.parametrize(
-    "t", [None, "custom", "web_search_20250305", "computer_20250124", "bash"]
-)
+@pytest.mark.parametrize("t", [None, "custom", "web_search_20250305", "bash"])
 def test_unknown_types_are_left_alone(t):
     assert schema_for(t) is None
 

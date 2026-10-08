@@ -143,8 +143,8 @@ real-model smoke in `scripts/dev/transport_smoke.py`). Known differences from ap
 
 ### WebRTC (planned)
 
-Plan: `POST /v1/realtime/calls` (SDP offer in, answer out) plus `POST /v1/realtime/client_secrets`,
-built on `aiortc`: an `oai-events` data channel carrying the exact events of the WebSocket path (the
+Plan: `POST /v1/realtime/calls` (SDP offer in, answer out; `POST /v1/realtime/client_secrets` is served already and the
+secret authenticates the WebSocket), built on `aiortc`: an `oai-events` data channel carrying the exact events of the WebSocket path (the
 `RealtimeSession` already takes any object with `send_json`/`receive_text`), an inbound Opus track decoded
 to 24 kHz PCM feeding `input_audio_buffer.append`, and an outbound track fed from `response.output_audio.delta`.
 Not done because `aiortc` needs PyAV/libopus/libvpx native builds that are not in the dependency set and a

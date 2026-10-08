@@ -15,24 +15,7 @@ from pathlib import Path
 import httpx
 
 ROOT = Path(__file__).resolve().parents[2]
-
-
-def _reserve_port(wait_s=60):
-    """Own the listener before launching, so other suites/paused jobs cannot steal it."""
-    deadline = time.monotonic() + wait_s
-    while True:
-        for port in range(18990, 19000):
-            listener = socket.socket()
-            try:
-                listener.bind(("127.0.0.1", port))
-                listener.listen(128)
-            except OSError:
-                listener.close()
-                continue
-            return listener
-        if time.monotonic() >= deadline:
-            raise AssertionError("no free scripted-server port before deadline")
-        time.sleep(0.1)
+from .bound_listener import reserve_listener
 
 
 def test_graceful_shutdown_timeout_values():
@@ -45,33 +28,34 @@ def _start(drain: str, delay="0.2", n="15"):
     env = {
         **os.environ,
         "YUNSHU_DRAIN_TIMEOUT": drain,
-        "PYTHONPATH": str(ROOT / "python"),
+        "PYTHONPATH": os.pathsep.join(
+            filter(None, (str(ROOT / "python"), os.environ.get("PYTHONPATH")))
+        ),
     }
     env.pop("YUNSHU_AUTH_TOKEN", None)
-    listener = _reserve_port()
+    listener = reserve_listener()
     port = listener.getsockname()[1]
-    try:
-        p = subprocess.Popen(
-            [
-                sys.executable,
-                str(ROOT / "scripts/research/scripted_server.py"),
-                str(port),
-                delay,
-                n,
-                str(listener.fileno()),
-            ],
-            env=env,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            pass_fds=(listener.fileno(),),
-        )
-    finally:
-        listener.close()
-    p._yunshu_test_port = port
+    p = subprocess.Popen(
+        [
+            sys.executable,
+            str(ROOT / "scripts/research/scripted_server.py"),
+            str(port),
+            delay,
+            n,
+            str(listener.fileno()),
+        ],
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        pass_fds=(listener.fileno(),),
+    )
+    listener.close()
+    p.test_port = port
     for _ in range(100):
         if p.poll() is not None:
             raise AssertionError(
-                "scripted server exited: " + p.stdout.read().decode()[-500:]
+                "owned server exited before readiness: "
+                + p.stdout.read().decode()[-500:]
             )
         try:
             if (
@@ -85,15 +69,36 @@ def _start(drain: str, delay="0.2", n="15"):
     raise AssertionError("server did not start: " + p.stdout.read().decode()[-500:])
 
 
+def test_scripted_child_preserves_isolated_dependency_path(monkeypatch):
+    from types import SimpleNamespace
+
+    captured = {}
+    process = SimpleNamespace(poll=lambda: None)
+    monkeypatch.setenv("PYTHONPATH", "/fixture/isolated-dependencies")
+
+    def popen(cmd, **kwargs):
+        captured.update(kwargs)
+        return process
+
+    monkeypatch.setattr(subprocess, "Popen", popen)
+    monkeypatch.setattr(
+        httpx, "get", lambda *args, **kwargs: SimpleNamespace(status_code=200)
+    )
+    assert _start("0") is process
+    assert captured["env"]["PYTHONPATH"].split(os.pathsep) == [
+        str(ROOT / "python"),
+        "/fixture/isolated-dependencies",
+    ]
+
+
 def _stream_then_sigterm(p):
-    port = p._yunshu_test_port
     got = {"text": "", "err": None}
 
     def run():
         try:
             with httpx.stream(
                 "POST",
-                f"http://127.0.0.1:{port}/v1/chat/completions",
+                f"http://127.0.0.1:{p.test_port}/v1/chat/completions",
                 json={
                     "model": "m",
                     "messages": [{"role": "user", "content": "hi"}],
@@ -147,15 +152,13 @@ def test_drain_zero_aborts_the_stream_fast():
             p.kill()
 
 
-def test_reserved_scripted_listener_cannot_be_stolen():
-    listener = _reserve_port()
-    try:
-        port = listener.getsockname()[1]
-        assert 18990 <= port <= 18999
-        with socket.socket() as competing:
-            import pytest
+def test_listener_reservation_prevents_a_foreign_bind():
 
-            with pytest.raises(OSError):
-                competing.bind(("127.0.0.1", port))
+    import pytest
+
+    listener = reserve_listener()
+    try:
+        with socket.socket() as contender, pytest.raises(OSError):
+            contender.bind(listener.getsockname())
     finally:
         listener.close()

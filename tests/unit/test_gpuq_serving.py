@@ -545,3 +545,35 @@ def test_priority_holds_pause_during_serving_start_window(
     assert q._read(hp)["state"] == "pending"
     assert q._read(hp)["waiting"] == "idle"
     assert signals == [(4242, q.signal.SIGSTOP)]
+
+
+def test_interleaved_short_job_is_never_paused_for_priority(q, monkeypatch):
+    # The short lane starts a short job in place of a waiting long p>=0 job; pausing it
+    # for that job left the GPU idle (live queue 2026-10-08: paused after 3 s, nothing ran).
+    monkeypatch.setattr(q, "free_memory_gb", lambda: 100.0)
+    low, path = _job(
+        q,
+        [sys.executable, "-c", "import time; time.sleep(1.0)"],
+        priority=-1,
+        timeout_s=3.0,
+        stall_s=3.0,
+        mem_gb=24,
+    )
+    low["interleaved"] = True
+    q._write(path, low)
+    t = _run_bg(q, low, path, q.ServingGate())
+    assert _wait_for(lambda: low.get("pid"))
+    high, hp = _job(
+        q, [sys.executable, "-c", "import time; time.sleep(0.2)"], priority=0, mem_gb=24
+    )
+    try:
+        t.join(8)
+        assert not t.is_alive()
+        done = q._read(path)
+        assert done["state"] == "done"
+        assert not done.get("pauses")
+        assert q._read(hp).get("state") == "pending"
+    finally:
+        q._patch_job(path, cancel=True)
+        q._patch_job(hp, cancel=True)
+        t.join(8)

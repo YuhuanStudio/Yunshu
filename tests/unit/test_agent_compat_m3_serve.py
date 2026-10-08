@@ -15,7 +15,9 @@ import m3_serve  # noqa: E402
 def _listener():
     s = socket.socket()
     s.bind(("127.0.0.1", 0))
-    s.listen(2)
+    # The identity client opens four connections; a backlog of two can reset
+    # the third connect on macOS before the server thread drains the queue.
+    s.listen(8)
     return s, s.getsockname()[1]
 
 

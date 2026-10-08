@@ -29,7 +29,16 @@ def test_anthropic_document_file_id_is_inlined_before_generation(store, monkeypa
         b"The launch code is TANGERINE-7.", "notes.txt", mime_type="text/plain"
     )
     inner = ScriptedInner([([{"type": "text", "text": "ok"}], "end_turn")])
-    monkeypatch.setattr(anthropic, "create_message", inner)
+
+    async def non_stream_inner(req, request):
+        from fastapi.responses import JSONResponse
+
+        from yunshu_gateway.server_tools.anthropic_loop import assemble_message
+
+        result = await inner(req, request)
+        return JSONResponse(await assemble_message(result.body_iterator))
+
+    monkeypatch.setattr(anthropic, "create_message", non_stream_inner)
     search.set_provider_for_tests(FakeSearch())
     app = FastAPI()
     app.include_router(anthropic.router, prefix="/v1")
@@ -55,11 +64,9 @@ def test_anthropic_document_file_id_is_inlined_before_generation(store, monkeypa
     )
     assert r.status_code == 200, r.text
     doc = inner.requests[0].messages[0].content[0]
-    assert doc["source"] == {
-        "type": "text",
-        "media_type": "text/plain",
-        "data": "The launch code is TANGERINE-7.",
-    }
+    assert doc["type"] == "text"
+    assert "The launch code is TANGERINE-7." in doc["text"]
+    assert "[Document 0" in doc["text"]
 
 
 def test_anthropic_unknown_file_id_is_a_404(store):

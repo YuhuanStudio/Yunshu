@@ -450,7 +450,13 @@ class LeakAudit:
         extra = [
             t
             for t in threading.enumerate()
-            if t.ident not in self.threads0 and t.is_alive() and not t.daemon
+            if t.ident not in self.threads0
+            and t.is_alive()
+            and not t.daemon
+            # The default executor an event loop starts for asyncio.to_thread
+            # ("asyncio_N") belongs to that loop and is joined when it closes; a test's
+            # TestClient loop outlives the assertion.
+            and not t.name.startswith("asyncio_")
         ]
         assert not extra, f"leaked non-daemon threads: {extra}"
 

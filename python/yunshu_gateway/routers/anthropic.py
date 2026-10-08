@@ -421,6 +421,12 @@ def _extract_text_from_content(content: str | list[dict] | None) -> str:
 
         if block_type == "text":
             parts.append(block.get("text", ""))
+            if block.get("citations"):
+                parts.append(
+                    "[Citations: "
+                    + json.dumps(block["citations"], ensure_ascii=False)
+                    + "]"
+                )
 
         elif block_type == "image":
             source = block.get("source", {})
@@ -1150,6 +1156,11 @@ async def create_message(req: AnthropicMessagesRequest, request: Request):
                     },
                 },
             )
+
+    from ..anthropic_documents import create_documents, has_documents
+
+    if has_documents([m.content for m in req.messages]):
+        return await create_documents(req, request, create_message)
 
     if has_server_tools(req):
         return await create_with_server_tools(req, request, create_message)
@@ -3071,6 +3082,24 @@ async def count_tokens(req: AnthropicMessagesRequest, request: Request) -> dict:
       {"type": "error", "error": {"type": "...", "message": "..."}}
     """
     _check_permission(request, "can_infer")
+    from ..anthropic_client_tools import fill_client_tool_schemas
+    from ..anthropic_documents import has_documents, prepare_documents
+    from ..files_store import has_file_refs, resolve_file_refs
+
+    if has_file_refs([m.content for m in req.messages]):
+        req = req.model_copy(
+            update={
+                "messages": [
+                    AnthropicMessage(role=m.role, content=resolve_file_refs(m.content))
+                    for m in req.messages
+                ]
+            }
+        )
+    if has_documents([m.content for m in req.messages]):
+        req, _ = await prepare_documents(
+            req, bool(getattr(get_engine(), "has_vision", False))
+        )
+    fill_client_tool_schemas(req.tools)
     try:
         engine, _ = await _resolve_engine(req.model)
     except HTTPException as e:

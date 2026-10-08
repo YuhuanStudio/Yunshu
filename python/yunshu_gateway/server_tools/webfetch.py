@@ -29,7 +29,7 @@ from yunshu_engine.netguard import (
 MAX_URL_LEN = 250
 MAX_REDIRECTS = 5
 USER_AGENT = (
-    "Mozilla/5.0 (compatible; YunshuFetch/1.0; +https://github.com/yuhuanowo/yunshu)"
+    "Mozilla/5.0 (compatible; Yunshu/1.0; +https://github.com/yuhuanowo/yunshu)"
 )
 _TEXT_TYPES = (
     "text/",
@@ -41,10 +41,19 @@ _TEXT_TYPES = (
 
 
 class FetchError(Exception):
-    def __init__(self, code: str, message: str = ""):
+    def __init__(
+        self,
+        code: str,
+        message: str = "",
+        *,
+        status_code: int | None = None,
+        retry_after: float | None = None,
+    ):
         super().__init__(message or code)
         self.code = code
         self.message = message or code
+        self.status_code = status_code
+        self.retry_after = retry_after
 
 
 @dataclass
@@ -57,6 +66,11 @@ class FetchResult:
     truncated: bool = False
     bytes_read: int = 0
     redirects: list[str] = field(default_factory=list)
+    etag: str | None = None
+    last_modified: str | None = None
+    not_modified: bool = False
+    published_at: str | None = None
+    metadata: dict = field(default_factory=dict)
 
 
 # ── HTML to text ──────────────────────────────────────────────────────────────
@@ -189,6 +203,20 @@ def _decode(raw: bytes, ctype: str) -> str:
     return raw.decode("utf-8", "replace")
 
 
+def _retry_after(value: str | None) -> float | None:
+    from email.utils import parsedate_to_datetime
+
+    if value is None:
+        return None
+    try:
+        return max(0, float(value))
+    except (ValueError, TypeError):
+        try:
+            return max(0, parsedate_to_datetime(value).timestamp() - time.time())
+        except (ValueError, TypeError, OverflowError):
+            return None
+
+
 async def fetch_url(
     url: str,
     *,
@@ -221,16 +249,27 @@ async def _fetch_url(
     blocked_domains: list[str] | None = None,
     max_content_chars: int | None = None,
     client: httpx.AsyncClient | None = None,
+    extractor=None,
+    request_headers: dict[str, str] | None = None,
+    before_redirect=None,
+    timeout_seconds: float | None = None,
+    max_url_length: int = MAX_URL_LEN,
+    allow_pdf: bool = False,
+    preserve_body: bool = False,
 ) -> FetchResult:
     if not settings.get("YUNSHU_WEB_FETCH"):
         raise FetchError("unavailable", "web_fetch is disabled (YUNSHU_WEB_FETCH=0)")
     if not isinstance(url, str) or not url.strip():
         raise FetchError("invalid_tool_input", "url is required")
-    if len(url) > MAX_URL_LEN:
-        raise FetchError("url_too_long", f"url longer than {MAX_URL_LEN} characters")
+    if len(url) > max_url_length:
+        raise FetchError("url_too_long", f"url longer than {max_url_length} characters")
     allow_private = bool(settings.get("YUNSHU_WEB_FETCH_ALLOW_PRIVATE"))
     max_bytes = int(settings.get("YUNSHU_WEB_FETCH_MAX_BYTES"))
-    timeout = float(settings.get("YUNSHU_WEB_FETCH_TIMEOUT"))
+    timeout = (
+        float(settings.get("YUNSHU_WEB_FETCH_TIMEOUT"))
+        if timeout_seconds is None
+        else timeout_seconds
+    )
     cap = int(settings.get("YUNSHU_WEB_FETCH_MAX_TEXT_CHARS"))
     if max_content_chars:
         cap = min(cap, int(max_content_chars))
@@ -239,6 +278,9 @@ async def _fetch_url(
     hops: list[str] = []
     own = client is None
     client = client or httpx.AsyncClient(follow_redirects=False, trust_env=False)
+    from .search import _query_log_context
+
+    log_token = _query_log_context.set(True)
     try:
         for _ in range(MAX_REDIRECTS + 1):
             try:
@@ -254,7 +296,9 @@ async def _fetch_url(
                 raise FetchError("url_not_allowed", str(e)) from e
             pinned, pin_headers, ext = pin_request(tgt)
             headers = {
+                **(request_headers or {}),
                 **pin_headers,
+                "Cookie": "",  # no ambient cookies, including a shared client jar
                 "User-Agent": USER_AGENT,
                 "Accept": "text/html,text/plain,*/*;q=0.5",
             }
@@ -274,15 +318,26 @@ async def _fetch_url(
                             cur = join_url(cur, resp.headers["location"])
                         except UrlNotAllowedError as e:
                             raise FetchError("url_not_allowed", str(e)) from e
+                        if before_redirect is not None:
+                            await before_redirect(cur)
                         hops.append(cur)
                         continue
+                    if resp.status_code == 304:
+                        return FetchResult(
+                            cur, "", "", "text/plain", "", not_modified=True
+                        )
                     if resp.status_code == 429:
                         raise FetchError(
-                            "too_many_requests", "the site rate-limited the fetch"
+                            "too_many_requests",
+                            "the site rate-limited the fetch",
+                            status_code=429,
+                            retry_after=_retry_after(resp.headers.get("retry-after")),
                         )
                     if resp.status_code >= 400:
                         raise FetchError(
-                            "url_not_accessible", f"HTTP {resp.status_code}"
+                            "url_not_accessible",
+                            f"HTTP {resp.status_code}",
+                            status_code=resp.status_code,
                         )
                     ctype = (
                         resp.headers.get("content-type", "text/html")
@@ -294,6 +349,7 @@ async def _fetch_url(
                         not ctype.startswith(_TEXT_TYPES)
                         and "+xml" not in ctype
                         and "+json" not in ctype
+                        and not (allow_pdf and ctype == "application/pdf")
                     ):
                         raise FetchError(
                             "unsupported_content_type", f"cannot read {ctype}"
@@ -320,15 +376,48 @@ async def _fetch_url(
                 ) from e
             text = _decode(bytes(buf), raw_ctype)
             title = ""
-            media = "text/plain"
-            if ctype in ("text/html", "application/xhtml+xml") or (
-                "<html" in text[:2000].lower()
+            published_at = None
+            metadata = {}
+            media = ctype if preserve_body else "text/plain"
+            if ctype == "application/pdf" and allow_pdf:
+                import io
+
+                def pdf_text():
+                    from pypdf import PdfReader
+
+                    reader = PdfReader(io.BytesIO(buf))
+                    parts, count = [], 0
+                    for pdf_page in reader.pages[:100]:
+                        value = (pdf_page.extract_text() or "")[:cap]
+                        parts.append(value)
+                        count += len(value)
+                        if count >= cap:
+                            break
+                    return "\n\n".join(parts)[:cap]
+
+                try:
+                    text = await asyncio.to_thread(pdf_text)
+                except Exception as exc:
+                    raise FetchError(
+                        "unsupported_content_type", "Could not extract PDF"
+                    ) from exc
+                media = "application/pdf"
+            elif not preserve_body and (
+                ctype in ("text/html", "application/xhtml+xml")
+                or "<html" in text[:2000].lower()
             ):
                 # off the event loop: parsing a large page must not stall other streams
-                title, text = await asyncio.to_thread(html_to_text, text, cur)
+                extracted = await asyncio.to_thread(
+                    extractor or html_to_text, text, cur
+                )
+                title, text = extracted[:2]
+                if len(extracted) > 2:
+                    published_at = extracted[2]
+                if len(extracted) > 3:
+                    metadata = extracted[3]
             elif ctype == "text/markdown":
                 media = "text/markdown"
-            if len(text) > cap:
+            if not preserve_body and len(text) > cap:
                 text, truncated = text[:cap], True
             return FetchResult(
                 url=cur,
@@ -339,8 +428,13 @@ async def _fetch_url(
                 truncated=truncated,
                 bytes_read=len(buf),
                 redirects=hops,
+                published_at=published_at,
+                metadata=metadata,
+                etag=resp.headers.get("etag"),
+                last_modified=resp.headers.get("last-modified"),
             )
         raise FetchError("url_not_accessible", "too many redirects")
     finally:
+        _query_log_context.reset(log_token)
         if own:
             await client.aclose()

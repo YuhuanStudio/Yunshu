@@ -23,6 +23,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import json
+import math
 import os
 import random
 import signal
@@ -32,6 +33,9 @@ import sys
 import time
 import urllib.request
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "dev"))
+from gpuq_pause import total_paused  # noqa: E402
 
 MAIN = Path(
     os.environ.get("YUNSHU_MAIN", "/Users/yuhuan/Documents/YuhuanStudio/Yunshu")
@@ -415,7 +419,9 @@ class Srv:
         """The port was free when probed but another server bound it before ours finished
         loading (a preempted gpuq job that resumed, 2026-10-07 release gate). Retry on the next
         free port, at most 3 times; any other exit stays a failure."""
-        if len(self._lost_ports) >= 3 or "address already in use" not in self.log_tail(20):
+        if len(self._lost_ports) >= 3 or "address already in use" not in self.log_tail(
+            20
+        ):
             return False
         self._lost_ports.add(self.port)
         self.port = free_port(frozenset(self._lost_ports))
@@ -435,9 +441,24 @@ class Srv:
         log lines, when the process exits or logs a load failure; the timeout defaults to
         90 s + 6 s per GiB of weights; progress lines are printed every 30 s."""
         timeout = timeout or load_timeout(self.model_path)
+
+        def paused_seconds():
+            paused = total_paused()
+            if not math.isfinite(paused):
+                raise RuntimeError(
+                    "cannot read gpuq pause history for server readiness"
+                )
+            return paused
+
+        paused_at_start = paused_seconds()
         t0 = time.monotonic()
+
+        def elapsed():
+            paused = max(0.0, paused_seconds() - paused_at_start)
+            return max(0.0, time.monotonic() - t0 - paused)
+
         last = 0.0
-        while time.monotonic() - t0 < timeout:
+        while elapsed() < timeout:
             if self.proc.poll() is not None:
                 if self._rebind():
                     continue
@@ -460,18 +481,18 @@ class Srv:
                 if ready and data:
                     self.model_id = data[0]["id"]
                     print(
-                        f"server ready after {time.monotonic() - t0:.0f}s", flush=True
+                        f"server ready after {elapsed():.0f} active seconds", flush=True
                     )
                     return
             except Exception:
                 pass
-            if time.monotonic() - last >= 30:
-                last = time.monotonic()
+            if elapsed() - last >= 30:
+                last = elapsed()
                 tail = [x for x in self.log_tail(5).splitlines() if "GET /" not in x][
                     -1:
                 ]
                 print(
-                    f"waiting for the model {last - t0:.0f}s / {timeout:.0f}s: {tail}",
+                    f"waiting for the model {last:.0f} active seconds / {timeout:.0f}s: {tail}",
                     flush=True,
                 )
             time.sleep(2)
