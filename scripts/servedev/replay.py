@@ -135,3 +135,61 @@ def http_sender(url: str, model: str, timeout: float = 600.0) -> Callable[[dict]
 
 def write(path: Path, result: dict) -> None:
     path.write_text(json.dumps({**result, "complete": True}) + "\n")
+
+
+def ab(
+    base_send: Callable[[dict], dict],
+    cand_send: Callable[[dict], dict],
+    shapes: list[Shape],
+    lossless: bool = True,
+) -> dict:
+    """Paired replay: same shapes, same seeds, interleaved per row so drift hits both arms alike."""
+    base, cand = [], []
+    for i, s in enumerate(shapes):
+        base += run_arm(base_send, [s], seed=1 + i)
+        cand += run_arm(cand_send, [s], seed=1 + i)
+    res = compare(base, cand, lossless)
+    res["pass"] = bool(res["ok"])
+    res["complete"] = True
+    res["note"] = (
+        "synthetic same-shape prompts: shape-level evidence, not real-content parity"
+    )
+    return res
+
+
+def main(argv: list[str] | None = None) -> int:
+    import argparse
+
+    from . import shapes as sh
+
+    ap = argparse.ArgumentParser(
+        description="Replay request shapes (from a numbers-only serve log) on two servers."
+    )
+    ap.add_argument("--base-url", required=True)
+    ap.add_argument("--cand-url", required=True)
+    ap.add_argument("--model", required=True)
+    ap.add_argument("--serve-log-dir", type=Path, required=True)
+    ap.add_argument("--n", type=int, default=12)
+    ap.add_argument("--out", type=Path, required=True)
+    ap.add_argument(
+        "--lossy",
+        action="store_true",
+        help="candidate may change tokens (never auto-promoted)",
+    )
+    a = ap.parse_args(argv)
+    from yunshu_gateway.serve_log import ServeLog
+
+    events = ServeLog(a.serve_log_dir, 1 << 30, 100).read()
+    picked = sh.sample(sh.load(events), a.n)
+    res = ab(
+        http_sender(a.base_url, a.model),
+        http_sender(a.cand_url, a.model),
+        picked,
+        lossless=not a.lossy,
+    )
+    write(a.out, res)
+    return 0 if res["pass"] else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

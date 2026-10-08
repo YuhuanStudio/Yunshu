@@ -138,3 +138,10 @@ def test_default_space_knobs_are_registered():
             if hasattr(settings, "REGISTRY")
             else settings.get(k) is not None
         )
+
+
+def test_ab_pairs_rows_and_marks_shape_level():
+    sh = [shapes.Shape(100, 4), shapes.Shape(5000, 4)]
+    r = replay.ab(fake_send([1, 2]), fake_send([1, 2], ttft=50), sh)
+    assert r["pass"] and r["complete"] and "shape-level" in r["note"]
+    assert not replay.ab(fake_send([1, 2]), fake_send([9]), sh)["pass"]
