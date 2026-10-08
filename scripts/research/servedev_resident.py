@@ -4,6 +4,7 @@
 Does not edit live serving.json or live jobs. Own launchd label, external state,
 dev port, research process group and isolated fake queue records only.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -21,6 +22,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts"))
 sys.path.insert(0, str(ROOT / "python"))
+
+
+def in_gpuq() -> bool:
+    """gpuq sets GPUQ_RC / GPUQ_DEVICE for the job (it never sets a job id variable)."""
+    return bool(os.environ.get("GPUQ_RC") and os.environ.get("GPUQ_DEVICE"))
 
 
 def parser():
@@ -49,10 +55,13 @@ def judge(value):
 
 def researcher(gb):
     import mlx.core as mx
+
     allocation = mx.ones((int(gb * (1 << 30) / 4),), dtype=mx.float32)
     mx.eval(allocation)
     a = mx.ones((1024, 1024))
-    print(json.dumps({"ready": True, "active_bytes": mx.get_active_memory()}), flush=True)
+    print(
+        json.dumps({"ready": True, "active_bytes": mx.get_active_memory()}), flush=True
+    )
     while True:
         mx.eval(a @ a)
         # Retain the unified-memory allocation for the entire job.
@@ -62,15 +71,24 @@ def researcher(gb):
 
 def request(url, body):
     import httpx
+
     t0 = time.perf_counter()
     first = None
     ids = []
     done = False
     finish = None
     stats = {}
-    with httpx.stream("POST", url + "/v1/chat/completions", json={**body, "stream": True,
-                       "stream_options": {"include_usage": True}, "logprobs": True},
-                      timeout=240) as response:
+    with httpx.stream(
+        "POST",
+        url + "/v1/chat/completions",
+        json={
+            **body,
+            "stream": True,
+            "stream_options": {"include_usage": True},
+            "logprobs": True,
+        },
+        timeout=240,
+    ) as response:
         response.raise_for_status()
         for line in response.iter_lines():
             if not line.startswith("data: "):
@@ -84,7 +102,9 @@ def request(url, body):
                 stats = obj["usage"].get("x_yunshu", stats)
             for choice in obj.get("choices", []):
                 delta = choice.get("delta", {})
-                if first is None and any(delta.get(k) for k in ("content", "reasoning_content", "tool_calls")):
+                if first is None and any(
+                    delta.get(k) for k in ("content", "reasoning_content", "tool_calls")
+                ):
                     first = time.perf_counter()
                 for lp in (choice.get("logprobs") or {}).get("content", []):
                     if "token_id" not in lp:
@@ -93,13 +113,19 @@ def request(url, body):
                 finish = choice.get("finish_reason") or finish
     if not done or not finish or first is None or not ids:
         raise RuntimeError("incomplete response or no token IDs")
-    return {"ttft_ms": (first-t0)*1000, "ids": ids, "finish": finish, "stats": stats}
+    return {
+        "ttft_ms": (first - t0) * 1000,
+        "ids": ids,
+        "finish": finish,
+        "stats": stats,
+    }
 
 
 def run(a):
-    if not os.environ.get("GPUQ_JOB_ID"):
+    if not in_gpuq():
         raise RuntimeError("GPU work requires gpuq")
     from research.agentic.servers import free_ports
+
     name = "dev-servedev-" + uuid.uuid4().hex[:12]
     directory = a.out.parent / name
     directory.mkdir(parents=True)
@@ -108,27 +134,46 @@ def run(a):
     activity = directory / "activity.json"
     config = directory / "config.toml"
     config.write_text("")
-    cli = [sys.executable, "-m", "yunshu_cli", "service", "--instance", name,
-           "--state-dir", str(directory)]
+    cli = [
+        sys.executable,
+        "-m",
+        "yunshu_cli",
+        "service",
+        "--instance",
+        name,
+        "--state-dir",
+        str(directory),
+    ]
     env = dict(os.environ, PYTHONPATH=str(ROOT / "python"))
     # A local gate exercises the candidate scheduler without touching the live daemon.
-    spec = importlib.util.spec_from_file_location("servedev_gpuq", ROOT / "scripts/dev/gpuq.py")
+    spec = importlib.util.spec_from_file_location(
+        "servedev_gpuq", ROOT / "scripts/dev/gpuq.py"
+    )
     g = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(g)
     g.LOGS = directory
     gate = g.ServingGate()
-    gate.configure({"activity_files": [str(activity)], "poll_s": .02, "idle_start_s": .2,
-                    "idle_resume_s": .2, "reserve_gb": 16})
+    gate.configure(
+        {
+            "activity_files": [str(activity)],
+            "poll_s": 0.02,
+            "idle_start_s": 0.2,
+            "idle_resume_s": 0.2,
+            "reserve_gb": 16,
+        }
+    )
     from yunshu_gateway.resident_activity import atomic_json
+
     atomic_json(activity, {"schema": 1, "ticket": "initial", "active": 0})
     child = None
     pauser = None
     stop = threading.Event()
     failures = []
     pause_latencies = []
+
     def scheduler():
         last = ""
-        while not stop.wait(.02):
+        while not stop.wait(0.02):
             try:
                 now = time.time()
                 gate.poll(now)
@@ -137,28 +182,47 @@ def run(a):
                 else:
                     gate.acknowledge(True)
                 state = json.loads(activity.read_text())
-                ack_path = Path(str(activity)+".ack")
+                ack_path = Path(str(activity) + ".ack")
                 ack = json.loads(ack_path.read_text()) if ack_path.exists() else {}
-                if state["active"] and ack.get("ticket") == state["ticket"] and last != state["ticket"]:
+                if (
+                    state["active"]
+                    and ack.get("ticket") == state["ticket"]
+                    and last != state["ticket"]
+                ):
                     last = state["ticket"]
-                    pause_latencies.append((ack["updated"]-state["updated"])*1000)
+                    pause_latencies.append((ack["updated"] - state["updated"]) * 1000)
             except Exception as e:
                 failures.append(str(e))
                 stop.set()
+
     worker = threading.Thread(target=scheduler)
     installed = False
     rows = []
     try:
-        args = [*cli, "install", "--model", a.model, "--port", str(port), "--config", str(config)]
-        for key, value in {"YUNSHU_RESEARCH_ACTIVITY_FILE": str(activity),
-                           "YUNSHU_REPLAY_TOKEN_IDS": "1", "YUNSHU_VLM_APC_DISK_DIR": str(directory / "apc"),
-                           "YUNSHU_SERVE_LOG": "1", "YUNSHU_SERVE_LOG_DIR": str(directory),
-                           "YUNSHU_MEDIA_DIR": str(directory / "media")}.items():
+        args = [
+            *cli,
+            "install",
+            "--model",
+            a.model,
+            "--port",
+            str(port),
+            "--config",
+            str(config),
+        ]
+        for key, value in {
+            "YUNSHU_RESEARCH_ACTIVITY_FILE": str(activity),
+            "YUNSHU_REPLAY_TOKEN_IDS": "1",
+            "YUNSHU_VLM_APC_DISK_DIR": str(directory / "apc"),
+            "YUNSHU_SERVE_LOG": "1",
+            "YUNSHU_SERVE_LOG_DIR": str(directory),
+            "YUNSHU_MEDIA_DIR": str(directory / "media"),
+        }.items():
             args += ["--set", f"{key}={value}"]
         subprocess.run(args, env=env, check=True)
         installed = True
         worker.start()
         import httpx
+
         deadline = time.monotonic() + 180
         while True:
             try:
@@ -168,10 +232,22 @@ def run(a):
             except httpx.HTTPError:
                 pass
             if time.monotonic() > deadline:
-                raise RuntimeError("launchd resident not ready; " + (directory / "yunshu.log").read_text()[-3000:])
-            time.sleep(.5)
-        bodies = [{"model": a.model, "messages": [{"role": "user", "content": "hello " * n + "Reply briefly."}],
-                   "max_tokens": 16, "temperature": 0} for n in map(int, a.ctx.split(","))]
+                raise RuntimeError(
+                    "launchd resident not ready; "
+                    + (directory / "yunshu.log").read_text()[-3000:]
+                )
+            time.sleep(0.5)
+        bodies = [
+            {
+                "model": a.model,
+                "messages": [
+                    {"role": "user", "content": "hello " * n + "Reply briefly."}
+                ],
+                "max_tokens": 16,
+                "temperature": 0,
+            }
+            for n in map(int, a.ctx.split(","))
+        ]
         for rep in range(a.reps):
             for body in bodies:
                 baseline = request(url, body)
@@ -179,33 +255,57 @@ def run(a):
                 if free is None or free - a.research_gb < 16:
                     raise RuntimeError("research memory admission rejected")
                 child_log = (directory / f"research-{rep}-{len(rows)}.log").open("w")
-                child = subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "--research-child",
-                                          "--research-gb", str(a.research_gb)], stdout=child_log,
-                                         stderr=subprocess.STDOUT, start_new_session=True)
-                deadline = time.monotonic()+60
+                child = subprocess.Popen(
+                    [
+                        sys.executable,
+                        str(Path(__file__).resolve()),
+                        "--research-child",
+                        "--research-gb",
+                        str(a.research_gb),
+                    ],
+                    stdout=child_log,
+                    stderr=subprocess.STDOUT,
+                    start_new_session=True,
+                )
+                deadline = time.monotonic() + 60
                 while "ready" not in Path(child_log.name).read_text():
                     if child.poll() is not None or time.monotonic() > deadline:
-                        raise RuntimeError("research allocation failed: " + Path(child_log.name).read_text())
-                    time.sleep(.1)
+                        raise RuntimeError(
+                            "research allocation failed: "
+                            + Path(child_log.name).read_text()
+                        )
+                    time.sleep(0.1)
                 headroom = g.free_memory_gb()
-                job = {"id": "synthetic-research", "pid": child.pid, "priority": -1, "state": "running"}
+                job = {
+                    "id": "synthetic-research",
+                    "pid": child.pid,
+                    "priority": -1,
+                    "state": "running",
+                }
                 pauser = g.Pauser(job, directory / "synthetic-job.json")
                 result = request(url, body)
                 if not pauser.pauses:
                     raise RuntimeError("research was never paused")
                 # Observe resumption after the configured idle window.
-                deadline = time.monotonic()+3
-                while pauser.paused and time.monotonic()<deadline:
-                    time.sleep(.02)
+                deadline = time.monotonic() + 3
+                while pauser.paused and time.monotonic() < deadline:
+                    time.sleep(0.02)
                 if pauser.paused:
                     raise RuntimeError("research did not resume after idle")
-                row = {"rep": rep, "prompt_tokens": result["stats"].get("prompt_tokens"),
-                       "baseline_ttft_ms": baseline["ttft_ms"], "research_ttft_ms": result["ttft_ms"],
-                       "ttft_penalty_ms": result["ttft_ms"]-baseline["ttft_ms"],
-                       "identity": baseline["ids"] == result["ids"] and baseline["finish"] == result["finish"],
-                       "pause_latency_ms": pause_latencies[-1], "headroom_gb": headroom,
-                       "research_allocation_gb": a.research_gb, "resumed": True,
-                       "spec_mode": (result["stats"].get("speculative") or {}).get("mode")}
+                row = {
+                    "rep": rep,
+                    "prompt_tokens": result["stats"].get("prompt_tokens"),
+                    "baseline_ttft_ms": baseline["ttft_ms"],
+                    "research_ttft_ms": result["ttft_ms"],
+                    "ttft_penalty_ms": result["ttft_ms"] - baseline["ttft_ms"],
+                    "identity": baseline["ids"] == result["ids"]
+                    and baseline["finish"] == result["finish"],
+                    "pause_latency_ms": pause_latencies[-1],
+                    "headroom_gb": headroom,
+                    "research_allocation_gb": a.research_gb,
+                    "resumed": True,
+                    "spec_mode": (result["stats"].get("speculative") or {}).get("mode"),
+                }
                 print(json.dumps(row), flush=True)
                 rows.append(row)
                 if not row["identity"]:
@@ -219,11 +319,17 @@ def run(a):
                 child_log.close()
         if failures:
             raise RuntimeError(str(failures))
-        value = {"complete": True, "device": "m5", "rows": rows, "resident": "launchd",
-                 "research_kind": "synthetic allocation + matmul", "log": str(directory / "yunshu.log")}
+        value = {
+            "complete": True,
+            "device": "m5",
+            "rows": rows,
+            "resident": "launchd",
+            "research_kind": "synthetic allocation + matmul",
+            "log": str(directory / "yunshu.log"),
+        }
         ok, reason = judge(value)
         value.update(ok=ok, reason=reason)
-        a.out.write_text(json.dumps(value)+"\n")
+        a.out.write_text(json.dumps(value) + "\n")
         return 0 if ok else 1
     finally:
         stop.set()
@@ -240,10 +346,19 @@ def run(a):
 def main(argv=None):
     a = parser().parse_args(argv)
     if a.dry_run:
-        print(json.dumps({"model": a.model, "ctx": a.ctx, "reps": a.reps, "research_gb": a.research_gb}))
+        print(
+            json.dumps(
+                {
+                    "model": a.model,
+                    "ctx": a.ctx,
+                    "reps": a.reps,
+                    "research_gb": a.research_gb,
+                }
+            )
+        )
         return 0
     if a.research_child:
-        if not os.environ.get("GPUQ_JOB_ID"):
+        if not in_gpuq():
             raise RuntimeError("research allocation requires gpuq")
         researcher(a.research_gb)
         return 0

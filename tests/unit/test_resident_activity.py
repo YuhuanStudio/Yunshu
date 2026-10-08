@@ -125,3 +125,18 @@ def test_isolated_launchd_never_targets_product(tmp_path, monkeypatch):
     assert service._plist().parent == tmp_path
     assert service.log_file().parent == tmp_path
     assert service.build_plist(["python"])["Label"].endswith(".dev-servedev-test")
+
+
+def test_resident_script_detects_gpuq_env(monkeypatch):
+    import importlib.util
+
+    path = Path(__file__).resolve().parents[2] / "scripts/research/servedev_resident.py"
+    spec = importlib.util.spec_from_file_location("servedev_resident", path)
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    for k in ("GPUQ_RC", "GPUQ_DEVICE"):
+        monkeypatch.delenv(k, raising=False)
+    assert not m.in_gpuq()
+    monkeypatch.setenv("GPUQ_RC", "/x")
+    monkeypatch.setenv("GPUQ_DEVICE", "m5")
+    assert m.in_gpuq()
