@@ -25,8 +25,9 @@ multi-model mode (`--models-dir`) an unknown model is a 404 `model_not_found`.
 | Route | Status | Notes | Verified |
 |---|---|---|---|
 | `POST /v1/chat/completions` | kept, fixed | `stop` accepts a string or a list. `usage.prompt_tokens_details.cached_tokens` and `completion_tokens_details.reasoning_tokens` are always present. Context overflow is 400 `context_length_exceeded`. Images on a text-only model are a 400. An embedding-only model (sentence-transformers export) answers a 400 that points to `/v1/embeddings`. | real 2026-10-06: `routes` + `wire` (SDK, typed) on 0.8B, 3B and (wire) 9B-4bit; image input on 0.8B, 400 on 3B; `input_audio` / `audio_url`, image + audio and `video_url` on gemma-4-e2b-it-4bit (M5, answers reflect the spoken word / the colour; stream and not). Parameters: see the table below |
+| `GET /v1/chat/completions`, `GET/POST/DELETE /v1/chat/completions/{id}`, `GET /v1/chat/completions/{id}/messages` | added | Stored chat completions. `store: true` (with optional `metadata`, at most 16 string pairs) keeps the finished completion and its input messages in `YUNSHU_CHAT_COMPLETIONS_DIR` (default `~/.yunshu/chat_completions`, one JSON file each, the oldest evicted past `YUNSHU_CHAT_COMPLETIONS_MAX`, default 5000); a stream is stored once it ends with `[DONE]`, folded into one `chat.completion`. List takes `after` / `limit` (1-100) / `order` / `model` / `metadata[k]=v`; `messages` returns the request messages with ids and `content_parts`; `POST` updates `metadata`; `DELETE` returns `chat.completion.deleted`. Unknown id is 404. Requests without `store` are never kept. | unit: the real `openai` SDK against a TestClient (retrieve, update, delete, list filters / pagination / order, messages with image parts, stream folding, eviction, 400s). real 2026-10-08 (M5, 0.8B): `routes` check `chat_stored_completions` passed (gpuq job `1008-075611-00-apiplanned-routes-1`: store, retrieve equals the returned completion, stream stored equals streamed text, list by metadata, messages, update, delete, 404) |
 | `POST /v1/completions` | kept | `echo`, `logprobs` (int; also on the VLM runner, streamed and not), `n`, `stop`, `seed`, `stream_options.include_usage`, prompt as string / list / token ids. | real 2026-10-06: `routes` + `wire` (SDK; basic, truncation, stop, usage). `echo`, `logprobs`, `n`, `seed`, token-id prompts: unit |
-| `POST /v1/responses` | kept, fixed | `text.format` (`json_schema`, `json_object`) now maps to constrained decoding (it was ignored). `instructions`, input items, `previous_response_id` / `store`, `function_call` and `function_call_output`, `text.format` json_schema, `reasoning`, streaming event types (created, in_progress, output_item, content_part, output_text delta/done, completed). Usage details always present. Server-side tools run inside the generation loop: `web_search` (`web_search_call` items, `url_citation` annotations, `filters.allowed_domains`, `user_location`) and `{type: "mcp"}` (`mcp_list_tools`, `mcp_call`, `mcp_approval_request` / `mcp_approval_response`, `allowed_tools`, `require_approval`), see [Server-side tools](#server-side-tools). `generate: false` (Codex's WebSocket prewarm) prefills the prompt and returns a chainable empty response; `include: ["reasoning.encrypted_content"]` returns reasoning items that come back as `reasoning_content`; `namespace` tools are flattened; freeform `custom` tools map to a native input function and return `custom_tool_call` items / `response.custom_tool_call_input` events; custom CFG formats and custom + server-side tool combinations return a clear 400. `developer` messages and unknown input item types are accepted; `input_file` / `input_image` file ids resolve from the local Files store. The Response echoes the request configuration (`instructions`, `temperature`, `top_p`, `max_output_tokens`, `tools`, `tool_choice`, `text`, `reasoning`, `truncation`, `store`, `service_tier`, `max_tool_calls`, ...) in the body, the stored copy and every `response.*` event. `truncation: "auto"` drops the oldest input items when the prompt overflows the context (`"disabled"`, the default, answers 400); `max_tool_calls` caps the function calls of a response; `include`, `prompt_cache_key`, `safety_identifier` are accepted and echoed only. `x_yunshu` is in `usage`. | real 2026-10-06: `routes` + `wire` (create, stream, tools, `json_schema`, `previous_response_id`, conversation, background, input image, `web_search` and MCP against a fake backend, WS). `generate: false`, `include`, `truncation`, `max_tool_calls`, `namespace` / `custom` tools, `developer` messages: unit |
+| `POST /v1/responses` | kept, fixed | `text.format` (`json_schema`, `json_object`) now maps to constrained decoding (it was ignored). `instructions`, input items, `previous_response_id` / `store`, `function_call` and `function_call_output`, `text.format` json_schema, `reasoning`, streaming event types (created, in_progress, output_item, content_part, output_text delta/done, completed). Usage details always present. Server-side tools run inside the generation loop: `web_search` (`web_search_call` items, `url_citation` annotations, `filters.allowed_domains`, `user_location`) and `{type: "mcp"}` (`mcp_list_tools`, `mcp_call`, `mcp_approval_request` / `mcp_approval_response`, `allowed_tools`, `require_approval`), see [Server-side tools](#server-side-tools). `generate: false` (Codex's WebSocket prewarm) prefills the prompt and returns a chainable empty response; `include: ["reasoning.encrypted_content"]` returns reasoning items that come back as `reasoning_content`; `namespace` tools are flattened; freeform `custom` tools map to a native input function and return `custom_tool_call` items / `response.custom_tool_call_input` events; custom text, regex and Lark formats are supported (see Agent-client additions below); unsupported combinations return a clear 400. `developer` messages and unknown input item types are accepted; `input_file` / `input_image` file ids resolve from the local Files store. The Response echoes the request configuration (`instructions`, `temperature`, `top_p`, `max_output_tokens`, `tools`, `tool_choice`, `text`, `reasoning`, `truncation`, `store`, `service_tier`, `max_tool_calls`, ...) in the body, the stored copy and every `response.*` event. `truncation: "auto"` drops the oldest input items when the prompt overflows the context (`"disabled"`, the default, answers 400); `max_tool_calls` caps the function calls of a response; `include`, `prompt_cache_key`, `safety_identifier` are accepted and echoed only. `x_yunshu` is in `usage`. | real 2026-10-06: `routes` + `wire` (create, stream, tools, `json_schema`, `previous_response_id`, conversation, background, input image, `web_search` and MCP against a fake backend, WS). `generate: false`, `include`, `truncation`, `max_tool_calls`, `namespace` / `custom` tools, `developer` messages: unit |
 | `GET/DELETE /v1/responses/{id}`, `POST /v1/responses/{id}/cancel` | kept, fixed | Cancelling a running background response answers `status: "cancelled"` (it answered the `in_progress` snapshot) and a poll agrees; cancelling a finished response returns it unchanged. | real 2026-10-06: `routes` lifecycle (create `store` -> retrieve -> input_items -> chain -> background cancel -> delete -> 404) on 0.8B and 3B |
 | `GET /v1/responses/{id}/input_items` | added | The stored response's own input as Responses items (`message` with `input_text` / `input_image`, `function_call`, `function_call_output`), `limit` 1-100, `order` (`desc` default), `after` / `before` cursors. `instructions` and system / developer messages are not listed (like the hosted API); history through `previous_response_id` belongs to the earlier responses. The route was missing (the SDK's `input_items.list` got a 404). | real 2026-10-06: `routes` (SDK `input_items.list`) |
 | `POST /v1/responses/compact` | kept | Server-side compaction: returns a `compaction` item the next request takes as input. | real 2026-10-06: `routes` (SDK `responses.compact`, then the output used as input) |
@@ -41,7 +42,8 @@ multi-model mode (`--models-dir`) an unknown model is a 404 `model_not_found`.
 | `POST /v1/ocr` | kept, extension | GLM-OCR. Not an OpenAI route; kept because `yunshu ocr` and the release gate use it. | real 2026-10-06: `routes` served on GLM-OCR-bf16: a rendered text image returns its text, a non-image upload is a 400; Qwen3.5-0.8B reads an image through the VLM fallback, Qwen2.5-3B answers 503 naming the fix |
 | `WS /v1/realtime` | kept | OpenAI Realtime, GA schema (what `client.realtime.connect()` speaks) or beta with `OpenAI-Beta: realtime=v1`. Differences from the hosted API are listed in [TRANSPORTS.md](TRANSPORTS.md); `scripts/dev/realtime_conformance.py` is the SDK conformance script. | real 2026-10-06: `routes` raw-socket text turn (`session.created` -> `response.done` with usage) and a disconnect mid-response on 0.8B and 3B. Voice turn, real 2026-10-06 (M5): cascade on gemma-4-e2b-it-4bit + Qwen3-ASR-1.7B + Qwen3-TTS (spoken "The secret word is pineapple." in; `input_audio_transcription.completed` carries the same words; 150 KB of speech out) and native speech on Qwen3-Omni-30B-A3B-4bit. The SDK conformance script: unit (fake engine) |
 | `WS /realtime` | kept | Legacy path, beta schema. | real 2026-10-06: same checks as `/v1/realtime` (`routes`); voice turn on the beta schema (`modalities`) on the same cascade (gemma-4-e2b-it-4bit + ASR + TTS) and on Qwen3-Omni-30B-A3B-4bit (M5) |
-| `POST /v1/realtime/calls` (WebRTC) | planned | Not implemented: needs `aiortc`; plan in [TRANSPORTS.md](TRANSPORTS.md). | not registered, nothing to verify |
+| `POST /v1/realtime/client_secrets`, `POST /v1/realtime/sessions`, `POST /v1/realtime/transcription_sessions` | added | Ephemeral keys for browser / device clients. The caller authenticates normally and gets an `ek_...` value (default 600 s, `expires_after.seconds` 10-7200 else 400) with the effective session (GA `realtime` or `transcription`, or the beta shapes). The `/v1/realtime` socket accepts the secret as its bearer token until it expires, starts with that session configuration and the secret's session id, and a secret can open several sockets. In memory only; a restart drops every secret. Transcription configuration is echoed but not acted on (the engine has no transcription-only session); a transcription secret cannot create model responses. Expiry prevents new connections, not already accepted sessions. | unit: the real `openai` SDK (`realtime.client_secrets.create`, `beta.realtime.sessions` / `transcription_sessions`) and a TestClient websocket with a static token set (secret accepted and applied, unknown or expired refused). real 2026-10-08 (M5, 0.8B): `routes` check `realtime_client_secrets` passed (same job: an `ek_` secret opens `/v1/realtime`, session id and instructions applied, a text turn ends in `response.done`, beta sessions, TTL 1 is 400) |
+| `POST /v1/realtime/calls` (WebRTC) | optional extra | `yunshu[webrtc]`: SDP offer/answer, GA data channel, PCM/RTP audio. No public ICE relay. Missing extra: 503 and WebSocket alternative. See [TRANSPORTS.md](TRANSPORTS.md). | unit: SDK + two-peer audio tests; M5 respfeat probe pending |
 | `WS /v1/responses` | kept | OpenAI Responses WebSocket mode (`client.responses.connect()`): `response.create` in, raw `response.*` events out, `stream_id` lanes. | real 2026-10-06: `routes` raw socket (two chained turns, malformed message, disconnect mid-generation) + SDK `client.responses.connect()` on 0.8B and 3B; unauthenticated upgrade refused (multi-model server with a token) |
 | `WS /v1/stream` | kept, extension | Yunshu protocol: many chat.completions / completions / responses / messages requests on one socket, cancel / stop / max_tokens update by id, heartbeats, backpressure. Anthropic has no official WebSocket mode. | real 2026-10-06: `routes` (all four APIs on one socket, cancel by id, malformed message, disconnect mid-generation) on 0.8B and 3B |
 | Unix socket (`yunshu serve --uds PATH`) | kept | Same app; `curl --unix-socket`, httpx `uds=`. | unit + audit |
@@ -72,7 +74,7 @@ multi-model mode (`--models-dir`) an unknown model is a 404 `model_not_found`.
 |---|---|---|---|
 | `POST /v1/messages` (and `/messages`) | kept, fixed | `system` (string or blocks with `cache_control`), `tools`, `tool_choice` (`auto`, `any`, `tool`, `none`), `thinking` (`budget_tokens` must be < `max_tokens`), `stop_sequences` (`stop_reason: stop_sequence` and the matched string, streaming and not), `metadata`, `top_k`, `tool_use` / `tool_result` / `image` (base64; a 400 on a text-only model, like OpenAI `image_url`) / `document` (text source) blocks. Streaming: `message_start`, `content_block_start/delta/stop` (`text_delta`, `thinking_delta`, `input_json_delta`), `message_delta`, `message_stop`. Usage includes `cache_read_input_tokens` and `cache_creation_input_tokens`. | real 2026-10-06: `routes` + `wire` (SDK; stream and not, tools, `tool_choice`, stop sequences, image block on 0.8B, 400 on 3B, the `/messages` alias). `thinking.budget_tokens`, `cache_control` breakpoints, `document` text source, `top_k`, `metadata`: unit |
 | `POST /v1/messages/count_tokens` | kept | Counts system, messages, tools, images. Tools are rendered the way generation renders them (natively when the chat template does it), so the count equals the call's usage (it counted an injected prompt generation no longer uses: 101 against 272). | real 2026-10-06: `routes` (SDK): equal to the real call's usage without and with tools; alias path; 400 without messages |
-| `POST /v1/messages` with `web_search_20250305`, `web_fetch_20250910` | added | Server tools, run inside the generation loop: `server_tool_use` + `web_search_tool_result` / `web_fetch_tool_result` blocks, text with `citations` (`web_search_result_location`), `max_uses`, `allowed_domains` / `blocked_domains`, `user_location`, `usage.server_tool_use`, `pause_turn` at the iteration cap. Search needs a configured provider, otherwise `web_search_tool_result_error` `unavailable` with an `x_yunshu` hint. SDK (`messages`, `beta.messages`) + unit + Claude Code end to end. See [Server-side tools](#server-side-tools). | real 2026-10-06: `routes` against a fake SearXNG (forced `web_search`: `server_tool_use` + `web_search_tool_result`, `max_uses`, stream assembled by the SDK, `usage.server_tool_use`); no provider configured (the `unavailable` error blocks); `web_fetch` of a loopback page refused with `web_fetch_tool_result_error`. Citations, `allowed_domains`, `pause_turn`, a real search provider and a real page fetch: unit |
+| `POST /v1/messages` with `web_search_20250305`, `web_fetch_20250910` | added | Server tools, run inside the generation loop: `server_tool_use` + `web_search_tool_result` / `web_fetch_tool_result` blocks, text with `citations` (`web_search_result_location`), `max_uses`, `allowed_domains` / `blocked_domains`, `user_location`, `usage.server_tool_use`, `pause_turn` at the iteration cap. Search defaults to best-effort DDG/Wikipedia; when disabled, `web_search_tool_result_error` `unavailable` with an `x_yunshu` hint. SDK (`messages`, `beta.messages`) + unit + Claude Code end to end. See [Server-side tools](#server-side-tools). | real 2026-10-06: `routes` against a fake SearXNG (forced `web_search`: `server_tool_use` + `web_search_tool_result`, `max_uses`, stream assembled by the SDK, `usage.server_tool_use`); no provider configured (the `unavailable` error blocks); `web_fetch` of a loopback page refused with `web_fetch_tool_result_error`. Citations, `allowed_domains`, `pause_turn`, a real search provider and a real page fetch: unit |
 | `POST /v1/messages` with `mcp_servers` (beta `mcp-client`) and `mcp_toolset` | added | The gateway connects to the named MCP servers (streamable HTTP or legacy SSE) and runs their tools: `mcp_tool_use` / `mcp_tool_result` blocks, `authorization_token`, `tool_configuration.allowed_tools`, per-tool enable. | real 2026-10-06: `routes` against a fake MCP server (initialize, tools/list reach it; tool call when the model makes one). `authorization_token`, `allowed_tools`, per-tool enable: unit |
 | `thinking: {type: "adaptive"}`, `output_config.effort`, `context_management` | accepted | Claude Code sends all three (the first two used to be a 400 / ignored). `adaptive` leaves the model's template default, `output_config.effort` becomes the template's `reasoning_effort`; earlier `thinking` blocks return as `reasoning_content`. | unit; Claude Code 2.1.285 / 2.1.291 sessions in `agentcompat` (see AGENT_COMPAT.md) |
 | `POST/GET /v1/messages/batches`, `GET .../{id}`, `.../{id}/results`, `.../{id}/cancel`, `DELETE .../{id}` | added | Message Batches over the same loopback worker as `/v1/batches`; results JSONL. unit. | real 2026-10-06: `routes` (SDK: create -> poll -> results -> cancel an in-flight batch -> delete -> 404) |
@@ -96,7 +98,7 @@ cache serves the shared prefix and a continuation prefills only the new tokens (
 | Web fetch | `web_fetch_20250910` | not part of the API |
 | MCP connector | `mcp_servers` + `mcp_toolset` | `{type: "mcp"}` |
 
-Off unless configured (settings, see [AGENT_COMPAT.md](AGENT_COMPAT.md#server-side-tools)): a self-hosted SearXNG,
+Zero-config best-effort DDG/Wikipedia; queries leave the machine. Configured providers take precedence (settings, see [AGENT_COMPAT.md](AGENT_COMPAT.md#server-side-tools)): a self-hosted SearXNG,
 Brave, Tavily or Exa for search; `web_fetch` needs no provider and blocks private, loopback and link-local
 addresses (also after redirects and DNS resolution). With no provider a search request gets the API's own error
 shape and `x_yunshu.server_tools` carries the hint that says how to configure one; `GET /v1/models` shows the
@@ -129,12 +131,12 @@ The `yunshu` block (the ModelCard):
 
 | Field | Meaning |
 |---|---|
-| `kind` | `chat`, `vlm`, `omni`, `embedding`, `reranker`, `classifier`, `asr`, `tts`, `sts`, `image`, `ocr`, `video` |
+| `kind` | `chat`, `vlm`, `omni`, `embedding`, `reranker`, `classifier`, `decision`, `asr`, `tts`, `sts`, `image`, `ocr`, `video` |
 | `family`, `architecture`, `parameters` | config `model_type`, `architectures[0]`, parameter count from the safetensors headers (quantized words unpacked at each layer's own bit width, scales skipped) |
 | `quantization` | `bits`, `group_size`, `mode`, `layer_groups` (`{bits: layers}` for mixed-precision checkpoints), `skip_components` (diffusion) |
-| `input_modalities`, `output_modalities` | `text`, `image`, `video`, `audio`, `embedding`, `score` |
-| `context` | `length`, `native`, `effective`, `source`, `rope_scaling` (from `max_position_embeddings`; the engine adds no tighter cap) |
-| `max_output_tokens` | `min(131072, context)`, the largest `max_tokens` the chat routes accept |
+| `input_modalities`, `output_modalities` | `text`, `image`, `video`, `audio`, `embedding`, `score`, `decision` |
+| `context` | `length`, `native`, `effective`, `source`, `rope_scaling` (derived from the model config; trained scoring models also report a `serving_cap`) |
+| `max_output_tokens` | `min(131072, context)` for `chat`, `vlm` and `omni` cards (131072 when context is unknown); this advertised card limit is separate from the route validation cap of 1,048,576 |
 | `reasoning` | `supported`, `toggle` (`enable_thinking`), `default_enabled`, `effort_levels` and `default_effort` (parsed from the chat template: Qwen3.8 is `xhigh` / `medium` / `low`), `effort_aliases` (OpenAI `high` maps to `xhigh`, `minimal` to `low`), `budget_field`, `output_field` |
 | `tools`, `structured_output`, `logprobs` | tool support and `tool_choice` values, `json_object` / `json_schema` / `regex` / `grammar` / `choice`, `max_top_logprobs` |
 | `embeddings` | `dimensions`, `pooling`, `normalized` |
@@ -146,7 +148,7 @@ The `yunshu` block (the ModelCard):
 | `supported_parameters` | request fields the chat routes accept for this model (checked against `ChatCompletionRequest` by a test) |
 | `generation_defaults` | `generation_config.json` sampling defaults |
 
-Anonymous callers never see filesystem paths; authenticated callers also get `loaded`, `size_gb`, `stats` and `yunshu.path`.
+Anonymous callers never see filesystem paths; authenticated callers also get `loaded`, `size_gb` (binary GB, 1024^3, like macOS; exact `size_bytes` beside it), `stats` and `yunshu.path`.
 `reasoning_effort` values outside the template's own list are mapped (`high` becomes `xhigh`) instead of failing the template.
 
 **Yunxin.** Its `vllm` adapter reads `max_model_len`, `task`, `capabilities`; its `lmstudio` adapter reads `max_context_length`,
@@ -204,6 +206,13 @@ Streaming is NDJSON. Auth follows the app-wide token.
 | Route | Status | Notes | Verified |
 |---|---|---|---|
 | `POST /v1/score`, `/v1/rerank`, `/v1/pooling`, `/v1/classify` | kept | On a model that cannot embed (hybrid architectures, Qwen3.5) all four answer a 400 that says so (`classify` answered a 500). | real 2026-10-06: `routes` served on Qwen3-Embedding-0.6B (embedding-similarity scoring, not a trained reranker): pooling width, score similar > unrelated, rerank puts the relevant document first, classify picks the right label and sums to 1. On chat models: Qwen2.5-3B answers 200, Qwen3.5-0.8B the 400 "cannot be used as a text embedder" (error path) |
+
+## Decisions (OpenAI Decisions API, TypeSafe System One)
+
+| Route | Status | Notes | Verified |
+|---|---|---|---|
+| `POST /v1/decisions` | added | OpenAI's Decisions API (public beta 2026-10-06), wire format from the `openai` 3.26 types (`Decision`, `DecisionCreateParams`). `input` is a string or user messages with `input_text` and inline `input_image` (base64 data URLs only; at most 128). `questions` are `predicate`, `choice` (typed `value`: a string `"true"` and a boolean `true` collide, so they are a 400) and `score` (`levels`); the response lists `answers` in question order with probabilities, a `refusal` for a question whose logits are not finite (never a made-up value), and `usage` (`output_tokens` 0, nothing is generated). Stateless, non-streaming. Served by a decision checkpoint (`ModelType.DECISION`): Cloudflare Clef / Clef-flash in MLX format (backbone through mlx-vlm plus the joint schema head, one forward pass). A chat model, or a checkpoint whose head is not the Clef joint schema head, is not served: a 400 / a load error, never a plain LLM that drops the head. Images need the checkpoint's vision tower, else 400. An input over 16384 tokens (state + images + schema) is a 400, not truncated. `safety_identifier` is accepted (64 characters) and ignored. | unit: fake engine, request validation, error shape, and the real `openai` 3.26 client (`client.decisions.create` -> typed `Decision`); the MLX head against a torch transcription of the reference. real 2026-10-08 (M5, `scripts/research/decisions_verify.py`, gpuq job `1008-002058-00-decisions-verify-clef4-c`): `yunshu serve` on abenzerps/Clef-MLX 4-bit (detected as DECISION, loaded in 6 s), the `openai` 3.26 client: a rainy text gives rain 0.92 / dry 0.02, a complaint routes to `support` and scores 0.35 against 3.91 for a glowing review, a boolean choice stays boolean, reordering choices or repeating a request is bit-identical, base64 red and blue images are answered red and blue, `/v1/chat/completions` on the decision model is a 400; about 0.23 s for one question and 0.53 s for five on a 235-token input (informal, not a quiet-CPU timing) |
+| `POST /v1/systemone` | added | TypeSafe Jev / System One wire on the same engine and one shared internal request: `{model, state (string, object or array), questions: {id: {type: noul / choice / score, instructions, criteria}}, images?}` returning `{model, answers: {id: ...}, usage: {input_tokens, output_tokens}}` with `noul`, `choice` + `confidence` + `probabilities` and `score` + `legend`, rounded to 4 places like the reference. Validation errors are 422 (as TypeSafe documents). | unit: as above. real 2026-10-08: same job, `/v1/systemone` routes the same complaint to `support` (noul 0.79, score 0.55) |
 
 ## Other
 
@@ -289,9 +298,12 @@ Z-Image ControlNet through `control_image`, is unchanged.
 
 ## CLI
 
+See [CLI guide](CLI.md) for first-run selection, model management, monitoring, JSON and shell completion.
+
 | Command | Status | Notes |
 |---|---|---|
 | `serve`, `chat`, `pull`, `doctor`, `config` (`set`, `unset`, `path`), `service` (`install`, `uninstall`, `start`, `stop`, `restart`, `status`, `logs`, `rotate-logs`), `cache` (`status`, `gc`), `model` (`list`, `info`, `load`, `unload`, `download`) | kept | Smoke-tested; `model load/unload` need the token on the server. |
+| `setup`, `models` (`list`, `pull`, `show`, `rm`), `top`, `completion` (`zsh`, `bash`, `fish`) | added | First-run guidance; global `--json` produces machine-readable results; `top` JSON is one snapshot. |
 | `launch claude` / `codex` / `opencode` / `pi` (`--dry-run`, `--effort`) | extended | Reads the model card and configures the agent with the real context window, output limit, reasoning levels and vision support; see [AGENT_COMPAT.md](AGENT_COMPAT.md#launching-an-agent). |
 | `status`, `diagnose gpu`, `diagnose server`, `diagnose bundle`, `launch list` | kept | `diagnose gpu` and `bench roofline` printed thousands of TFLOPS because the lazy matmuls were never evaluated; fixed. |
 | `complete`, `embed`, `tokenize`, `detokenize`, `rerank`, `score`, `classify`, `transcribe`, `speak`, `ocr`, `image`, `image-edit`, `image-variations`, `voices`, `cancel` | kept | Talk to a running server. |
@@ -336,6 +348,17 @@ label-similarity extension (`input`, `labels`, temperature), rather than vLLM's
 trained classification-head API (`input` or `messages`, no candidate labels,
 `data[].probs/num_classes`). No trained classification head is implemented here;
 clients must not treat its zero-shot scores as those probabilities.
+
+## SDK coverage walk
+
+`scripts/dev/api_coverage.py` reads the resource modules of the installed `openai` and `anthropic` SDKs (AST only) and lists every
+endpoint they can request (575 on openai 3.26.0 / anthropic 1.11.0, websockets included). `tests/unit/test_api_coverage.py` fails when
+one is neither served by the gateway nor declared in `scripts/dev/api_coverage_na.json` as `not_applicable` or `planned`, each with a
+reason, and when a declaration matches nothing or still calls a served route planned/not applicable. An `implemented` declaration documents completed work but cannot hide a missing route. This replaces building the matrix from the routes
+we already had (which is how `POST /v1/decisions` was missed). Current state: 75 implemented, 0 planned, the rest not applicable (OpenAI and Anthropic
+skills, which mount into hosted sandboxes, SIP call control, organization and admin APIs, fine-tuning, Assistants/Threads, vector stores, hosted
+agent platforms, video, containers, webhooks, ChatKit, Live).
+Upgrading an SDK is the trigger: a new endpoint fails the test until someone decides.
 
 ## Known gaps
 
@@ -409,8 +432,10 @@ Text `Qwen3-Reranker` checkpoints use the model-card Transformers prompt and the
 last-position yes/no logits, with a sigmoid of the logit difference. Original
 `BertForSequenceClassification`, `RobertaForSequenceClassification` and
 `XLMRobertaForSequenceClassification` safetensors checkpoints use their trained
-heads. Other head architectures and quantized encoder heads return a load error.
-Encoder heads require the `embeddings` extra. Model cards report the effective
+heads, including published quantized encoder/head weights through mlx-vlm.
+Other head architectures return a load error; Jina v3 `JinaForRanking` is a
+separate unsupported architecture. Encoder heads require the `vision` extra
+(mlx-vlm); no mlx-embeddings source or reconstructed classifier is used. Model cards report the effective
 serving window: Qwen3 scoring caps at 8192 tokens; RoBERTa position padding offsets
 and the tokenizer window constrain encoder inputs. Busy scoring work blocks
 non-forced model unload, including when its HTTP waiter has been cancelled.
@@ -455,6 +480,97 @@ CPU Transformers float32 inference. Maximum probability errors were respectively
 activation, broadcasting and the registered embed-route checks passed. Evidence:
 `/Volumes/P5Plus/yunshu-build/verify/runs/rerank-tiny-heads-handoff-1007-08a91d280b74/verdict.json`.
 This is numerical and API evidence, with no speed or retrieval-quality claim.
+
+### Published retrieval checkpoints
+
+EmbeddingGemma 2 published bf16/4bit loading, quantized BERT-family trained heads,
+and Qwen3-VL retrieval wrapper contracts are described in
+[PRIOR_ART_FORMATS.md](../PRIOR_ART_FORMATS.md). Jina v3 `JinaForRanking` remains
+explicitly unsupported. Empty VL embeddings return `[]` without processor work.
+
+### Evals
+
+All 12 OpenAI Evals endpoints are served under `/v1/evals`: create/list/retrieve/update/delete evals; create/list/retrieve/cancel/delete runs; list/retrieve run output items. SDK 3.26 tests and the `evals` real-server route check cover them. See the [official Evals reference](https://developers.openai.com/api/reference/resources/evals/methods/create).
+
+Runs accept `jsonl` and `completions` data sources, with inline `file_content`, Files API `file_id`, or `stored_completions` filtered by model, metadata and inclusive creation timestamps. `completions` can sample the local model using message templates or an item reference. Items are validated against the eval's JSON schema before scheduling. Stored completions read the exact atomic JSON storage format of apiplanned (`fc28350d`) without copying its module; merged stored-completion support supplies `store=true` ingestion.
+
+Supported graders: `string_check` (`eq`, `ne`, substring `like`/case-insensitive `ilike`), `text_similarity`, `score_model`, and `label_model`. Similarity is model-free: token-frequency cosine, character SequenceMatcher fuzzy match, effective-order sentence BLEU without smoothing, GLEU, ROUGE n-gram F1 (1–5), ROUGE-L F1, and exact-token METEOR with fragmentation penalty on both candidate and reference alignments (no stemming/synonym corpus). Lexical metrics return 0 for empty token inputs or unavailable n-grams; character fuzzy match preserves its raw-string equality/whitespace behavior. Scores use a caller-supplied pass threshold; local model graders request schema-constrained JSON through `/v1/chat/completions`. SDK Evals text/image/audio content blocks are normalized to the ordinary chat wire format. Python graders and Responses sampling sources return 400 as unsupported.
+
+State uses atomic JSON replacement under `YUNSHU_EVALS_DIR` (default `~/.yunshu/evals`). Source rows and grader definitions are snapshotted per run; credentials stay in memory. Pure lexical grading uses one dedicated CPU worker with cooperative cancellation, keeping metadata and cancel routes available during long comparisons. Cancellation interrupts CPU grading and the active normal request, preserving completed items. Deleted evals cascade to their runs; parent checks and progress writes are serialized with deletion, and recovery removes orphan children after an interrupted cascade. Interrupted runs become `failed` on server restart; they are not automatically replayed. Reports are available through output-item routes (`report_url` is empty; no hosted dashboard). Maximum 10,000 rows per run; list pages accept 1–100 items with cursor/order/status filtering.
+
+### Agent-client additions (2026-10-07)
+
+Responses client tools `custom`, legacy `local_shell`, and client-executed `tool_search`
+are adapted to the model's function template and returned as `custom_tool_call`,
+`local_shell_call`, and `tool_search_call`. `call_id` survives manual history and
+`previous_response_id`; legacy shell outputs may identify the call with `id`.
+Custom input supports text, regex, and Lark formats. Forced custom input streams
+incrementally through the constrained decoder. Auto mode preserves text streaming;
+a selected grammar-bearing custom call adds a constrained generation, sharing the
+request's output-token budget. Deferred schemas remain hidden until loaded by a
+client `tool_search_output`. Hosted tool search and duplicate names across namespaces
+are rejected explicitly.
+
+Anthropic documents accept text, custom content, stored-file references, and bounded
+PDF base64/HTTPS sources. Vision models receive PDF page images and the text layer;
+image-only PDFs require a vision model. Citations use checked character, page, or
+content-block ranges and round-trip as `citations_delta` events. Document requests with
+citations enabled stream live: only a possible partial `[[cite:...]]` marker is
+held, and validated markers emit `citations_delta` immediately. Invalid source ranges
+emit an SSE error without a successful terminal event. Client tool
+schemas cover versioned bash, text editor, and legacy computer tools; computer zoom
+is opt-in, and text-editor `max_characters` is tool configuration. The newer
+`computer_toolset_20260801` member protocol is not implemented.
+
+Chat and text completions support `stream_options.continuous_usage_stats` together with `include_usage`.
+HTTP(S) video fetches use DNS-pinned redirects, TLS verification, and
+`YUNSHU_VLM_MAX_VIDEO_BYTES` (100 MiB by default). `POST /apply-template` renders the
+loaded tokenizer's template; `GET /props` exposes minimal loaded-model properties.
+Both have `/v1` aliases.
+
+CPU regression evidence: `test_agent_client_compat.py`. Served probes are registered
+as `agent-custom-tools`, `agent-shell-search`, `agent-documents-citations`,
+`agent-anthropic-client-tools`, `agent-continuous-usage`, `agent-template-props`,
+and `agent-http-video` in `route_checks_agent_compat.py`. `yv --suite client_compat`
+uses the M3 lane; `client_compat_m5` uses the M5. Both run the 0.8B pilot before the
+3B text model, validate the commit-pinned source tree, and fail closed on missing
+or unsuccessful checks. Real-server evidence is pending for this addition.
+
+
+### Responses computer and local voice enrollment
+
+`tools: [{"type":"computer"}]` maps to a local function schema with nine action
+variants. Responses expose `computer_call.actions` in order, and
+`computer_call_output` screenshots (URL or local file ID) retain their `call_id` and
+vision content. The client executes every action. The gateway does not execute a
+computer action or invent model safety checks; `pending_safety_checks` is empty.
+Legacy single `action` input calls can be replayed, while the new tool emits `actions`.
+
+`POST /v1/audio/voice_consents` records multipart `name`, `language`, `recording`.
+`POST /v1/audio/voices` accepts `name`, `consent` and `audio_sample` through the OpenAI
+SDK. Consent IDs are local; OpenAI-hosted consent IDs cannot be resolved here.
+Audio must decode locally, be at most 10 MiB and 60 seconds, with at most 10 MiB
+of decoded PCM. Enrollment keeps the reference and metadata in the bounded Files
+store (`YUNSHU_FILES_DIR`, quota and TTL apply). It records a submitted consent;
+it does not authenticate a speaker's identity. `GET /v1/audio/voices` includes
+custom records. Speech accepts `voice: {"id":"voice_..."}` only for TTS models with
+an explicit `ref_audio` generate parameter. Other models return a clear 400.
+Qwen3-TTS Base also requires `ref_text` (sample transcript): submit it at enrollment
+with SDK `extra_body` or in the speech request. Its CustomVoice/VoiceDesign variants
+ignore cloning references and are rejected. Prompt-designed Live voices are
+unsupported. Enrollment requires the audio extra.
+
+CPU SDK and streaming evidence: `tests/unit/test_respfeat.py`. Real-server checks
+are `respfeat-computer`, `respfeat-citations`, `respfeat-voices`, `respfeat-webrtc`;
+`yv --suite respfeat` runs one M5 Qwen3.5-0.8B job with a ten-minute budget.
+Enrollment evidence does not claim a real TTS voice-cloning round trip.
+## Memory units
+
+All engine-returned `*_gb` fields use binary GiB: 1 GiB = 1024^3 bytes,
+with exact integer `*_bytes` siblings. This includes status memory, model `size_gb` /
+`size_bytes`, model-pool memory, hardware info and trace host statistics.
+A 128 GB Mac reports `total_gb: 128.0`; earlier decimal values were about 7% higher.
+Prometheus memory metrics remain in bytes. See [API extensions](API_EXTENSIONS.md#memory-units).
 
 ### API keys and quotas
 

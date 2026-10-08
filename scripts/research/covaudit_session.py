@@ -23,6 +23,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import json
+import math
 import os
 import random
 import signal
@@ -32,6 +33,9 @@ import sys
 import time
 import urllib.request
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "dev"))
+from gpuq_pause import total_paused  # noqa: E402
 
 MAIN = Path(
     os.environ.get("YUNSHU_MAIN", "/Users/yuhuan/Documents/YuhuanStudio/Yunshu")
@@ -321,11 +325,11 @@ def compare_rows(a: list, b: list) -> list:
     return out
 
 
-def free_port() -> int:
+def free_port(skip: frozenset = frozenset()) -> int:
     """First free port of 18990-18996 (COVAUDIT_PORT_LO raises the lower end, so a worker limited
-    to 18994-18996 stays inside its range)."""
+    to 18994-18996 stays inside its range); `skip` holds ports that already lost a bind race."""
     for p in range(int(os.environ.get("COVAUDIT_PORT_LO", "18990")), 18997):
-        if port_bindable(p):
+        if p not in skip and port_bindable(p):
             return p
     raise RuntimeError("no free port in 18990-18996")
 
@@ -397,24 +401,44 @@ class Srv:
             env["HF_HUB_OFFLINE"] = "1"
         if src:
             env["PYTHONPATH"] = src + os.pathsep + env.get("PYTHONPATH", "")
-        cmd = [
+        self._env = env
+        self._base_cmd = [
             os.environ.get("COVAUDIT_BIN") or str(MAIN / ".venv/bin/yunshu"),
             "serve",
             *(["--models-dir", models_dir] if models_dir else ["-m", model]),
-            "--port",
-            str(self.port),
         ]
-        for s in sets:
-            cmd += ["--set", s]
+        self._sets = list(sets)
+        self._lost_ports: set[int] = set()
         log.parent.mkdir(parents=True, exist_ok=True)
-        with log.open("ab") as lf:
+        self._launch()
+
+    def _launch(self) -> None:
+        cmd = [*self._base_cmd, "--port", str(self.port)]
+        for s in self._sets:
+            cmd += ["--set", s]
+        with self.log.open("ab") as lf:
             self.proc = subprocess.Popen(
                 cmd,
                 stdout=lf,
                 stderr=subprocess.STDOUT,
-                env=env,
+                env=self._env,
                 start_new_session=True,
             )
+
+    def _rebind(self) -> bool:
+        """The port was free when probed but another server bound it before ours finished
+        loading (a preempted gpuq job that resumed, 2026-10-07 release gate). Retry on the next
+        free port, at most 3 times; any other exit stays a failure."""
+        if len(self._lost_ports) >= 3 or "address already in use" not in self.log_tail(
+            20
+        ):
+            return False
+        self._lost_ports.add(self.port)
+        self.port = free_port(frozenset(self._lost_ports))
+        self.url = f"http://127.0.0.1:{self.port}"
+        print(f"port lost a bind race; restarting on {self.port}", flush=True)
+        self._launch()
+        return True
 
     def log_tail(self, n: int = 50) -> str:
         try:
@@ -427,10 +451,27 @@ class Srv:
         log lines, when the process exits or logs a load failure; the timeout defaults to
         90 s + 6 s per GiB of weights; progress lines are printed every 30 s."""
         timeout = timeout or load_timeout(self.model_path)
+
+        def paused_seconds():
+            paused = total_paused()
+            if not math.isfinite(paused):
+                raise RuntimeError(
+                    "cannot read gpuq pause history for server readiness"
+                )
+            return paused
+
+        paused_at_start = paused_seconds()
         t0 = time.monotonic()
+
+        def elapsed():
+            paused = max(0.0, paused_seconds() - paused_at_start)
+            return max(0.0, time.monotonic() - t0 - paused)
+
         last = 0.0
-        while time.monotonic() - t0 < timeout:
+        while elapsed() < timeout:
             if self.proc.poll() is not None:
+                if self._rebind():
+                    continue
                 raise RuntimeError(
                     f"server exited rc={self.proc.returncode}; log tail:\n{self.log_tail()}"
                 )
@@ -450,18 +491,18 @@ class Srv:
                 if ready and data:
                     self.model_id = data[0]["id"]
                     print(
-                        f"server ready after {time.monotonic() - t0:.0f}s", flush=True
+                        f"server ready after {elapsed():.0f} active seconds", flush=True
                     )
                     return
             except Exception:
                 pass
-            if time.monotonic() - last >= 30:
-                last = time.monotonic()
+            if elapsed() - last >= 30:
+                last = elapsed()
                 tail = [x for x in self.log_tail(5).splitlines() if "GET /" not in x][
                     -1:
                 ]
                 print(
-                    f"waiting for the model {last - t0:.0f}s / {timeout:.0f}s: {tail}",
+                    f"waiting for the model {last:.0f} active seconds / {timeout:.0f}s: {tail}",
                     flush=True,
                 )
             time.sleep(2)

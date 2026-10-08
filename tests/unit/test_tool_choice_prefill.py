@@ -184,7 +184,7 @@ def test_streamer_named_force_seeded_with_args_only_completion():
 def test_prefill_gated_on_batched_engine_and_forced_choice():
     from yunshu_gateway.routers import chat
 
-    src = inspect.getsource(chat.create_chat_completion)
+    src = inspect.getsource(chat._create_chat_completion)
     # prefill is computed only when tools are present AND the engine is batched
     # (only BatchedEngine's chat template honors a trailing-assistant prefill).
     # (native tools skip it: tool-call grammar enforces a forced choice instead)

@@ -524,12 +524,13 @@ def locked_versions(lock_text):
     }
 
 
-def lock_mismatches(locked, installed):
+def lock_mismatches(locked, installed, required=()):
     """Packages the lock pins that are installed at another version (absent ones are extras)."""
     return {
-        n: (v, installed[n])
+        n: (v, installed.get(n))
         for n, v in locked.items()
-        if n in installed and installed[n] != v
+        if (n in installed and installed[n] != v)
+        or (n in required and n not in installed)
     }
 
 
@@ -561,7 +562,13 @@ def cmd_env(a):
     res = {"kind": "env", "failures": [], "complete": False}
     lock = ROOT / "uv.lock"
     locked = locked_versions(lock.read_text())
-    mism = lock_mismatches(locked, installed_versions())
+    import tomllib
+
+    from packaging.requirements import Requirement
+
+    project = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]
+    required = {norm(Requirement(d).name) for d in project["dependencies"]}
+    mism = lock_mismatches(locked, installed_versions(), required)
     res["mismatch_before"] = mism
     print("lock mismatches before:", mism, flush=True)
     if mism and a.sync:
@@ -592,7 +599,7 @@ def cmd_env(a):
             if blob and not p.returncode:
                 (Path(sys.prefix) / ".m5-lock-sha").write_text(blob + "\n")
     inst = installed_versions()
-    mism = lock_mismatches(locked, inst)
+    mism = lock_mismatches(locked, inst, required)
     res["mismatch_after"] = mism
     res["versions"] = {n: inst.get(n) for n in KEY_PACKAGES}
     res["locked"] = {n: locked.get(n) for n in KEY_PACKAGES}

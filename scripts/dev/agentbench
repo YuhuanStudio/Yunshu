@@ -28,9 +28,11 @@ from pathlib import Path
 
 MAIN = Path(__file__).resolve().parents[2]
 HERE = Path(__file__).resolve().parent
-GPUQ = str(HERE / "gpuq")
+GPUQ = os.environ.get("YV_GPUQ", str(HERE / "gpuq"))
 AGENTIC = MAIN / "scripts/research/agentic"
-BUILD = Path("/Volumes/P5Plus/yunshu-build/agentbench")
+BUILD = Path(
+    os.environ.get("AGENTBENCH_ROOT", "/Volumes/P5Plus/yunshu-build/agentbench")
+)
 CHECKPOINT = "/Volumes/P5Plus/models/Jundot/Qwen3.8-27B-oQ4e-mtp"
 PY = next(
     (

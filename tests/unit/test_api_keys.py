@@ -237,7 +237,10 @@ def test_admin_crud_validation_and_persist(store, tmp_path):
         == 400
     )
     # a fresh store on the same file sees them
-    assert {k["id"] for k in api_keys.KeyStore(store.path).list_keys()} == {admin.id, kid}
+    assert {k["id"] for k in api_keys.KeyStore(store.path).list_keys()} == {
+        admin.id,
+        kid,
+    }
     assert (
         c.delete(f"/v1/yunshu/keys/{kid}", headers=H(sec_a)).json()["deleted"] is True
     )

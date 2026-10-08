@@ -7,50 +7,256 @@ Release steps: [RELEASING.md](RELEASING.md).
 
 ## [Unreleased]
 
-Changes on main after 0.1.3; not part of a published package yet.
+The 0.1.5 cycle adds local decision models, repeatable evaluations and broader coding-agent
+and web-retrieval compatibility to the `yunshu` package. These changes are merged on main;
+0.1.4 remains the published version. This draft does not include unmerged model-head or console redesign work.
 
 ### Highlights
 
+- Ask typed predicate, choice and score questions with the Decisions API on Clef MLX checkpoints,
+  without generating a text answer. [Guide](docs/guides/DECISIONS.md).
+- Store chat completions locally and use them in repeatable Evals runs, with cancellable sampling,
+  lexical graders and local model graders. [Guide](docs/guides/EVALS.md).
+- Coding clients can use custom grammar-bearing tools, local shell/tool-search calls, Anthropic
+  documents/citations and continuous streamed usage. [Coverage and limits](docs/guides/API_SURFACE.md).
+- Search, extract, crawl and research through a local Tavily-compatible API with provider health
+  backoff and lexical ranking; generation runs only where requested. [Guide](docs/guides/TAVILY.md).
+
 ### Upgrade notes / breaking changes
 
-- Prometheus counters follow the `_total` convention (vLLM / Prometheus naming): `yunshu_request_count` →
-  `yunshu_http_requests_total`, `yunshu_inference_count` → `yunshu_inferences_total`, `yunshu_error_count` →
-  `yunshu_errors_total`, `yunshu_mtp_total_cycles` → `yunshu_mtp_cycles_total`. Update dashboards and alerts.
-- `--drain-timeout 0` now stops in-flight requests at once on shutdown (it used to wait forever).
-- Requests that omit `max_tokens` now get up to `YUNSHU_DEFAULT_MAX_TOKENS` (default 32768, clamped by the
-  context budget) instead of being cut at 512 tokens (2048 on Responses).
-- Stricter validation (400 instead of a silent fallback): `tool_choice` naming an undeclared tool,
-  `response_format: json_schema` without a schema, `stream_options` without `stream`, negative
-  `prompt_logprobs`, conflicting or invalid `structured_outputs`.
+- New APIs are available from a source build of main until 0.1.5 is released; upgrading the published
+  0.1.4 package does not add them. No package version bump is part of this draft.
+- Decisions require a supported Clef joint-schema checkpoint; ordinary chat checkpoints and unknown
+  decision heads are rejected. OpenJev, Laya and D1 support is not included in this merged loader.
+- `store: true` retains chat content locally. Configure `YUNSHU_CHAT_COMPLETIONS_DIR` and
+  `YUNSHU_CHAT_COMPLETIONS_MAX` to choose its directory and retention cap; omitted/false does not store.
+- Search sends queries to external providers and fetch sends URLs to destination sites. Use
+  `YUNSHU_WEB_SEARCH_PROVIDER=none` and `YUNSHU_WEB_FETCH=0` to disable these server tools.
+
+- Credentialed browser clients must use explicit `YUNSHU_CORS_ORIGINS`; any wildcard now disables
+  CORS credentials. Configuration writes replace files atomically with owner-only permissions (0600).
+- Every `*_gb` field the engine returns (`/v1/yunshu/status` memory and models, `/v1/models` `size_gb`, model-pool status, `memory_usage`, hardware info, trace host stats) is now binary: GB = 1024^3 bytes, the unit macOS, `yunshu doctor` and the `YUNSHU_*_GB` settings use. It was decimal (1e9) for engine memory and model sizes, so values drop by about 7% (a 128 GB Mac reads 128.0, not 137.4). Scripts that read `*_gb` see the new numbers; each field now has an exact integer `*_bytes` sibling (`active_bytes`, `cache_bytes`, `peak_bytes`, `total_bytes`, `size_bytes`, `current_bytes`, `max_bytes`, `max_memory_bytes`, `current_memory_bytes`, `total_memory_bytes`, `working_set_bytes`, `memory_available_bytes`). Prometheus metrics stay in bytes.
 
 ### Performance
 
 | Machine | Model / mode | Metric / workload | Before → after | Recorded source |
 |---|---|---|---|---|
 
+No new decode or TTFT claim is made for this cycle here. Historical measurements remain in
+[Benchmarks](docs/BENCHMARKS.md).
+
 ### Added
 
-- Every route the gateway registers has a real-server check: `scripts/dev/m3sweep` job `routes` (`scripts/research/route_checks.py`) drives files, batches, conversations, the Responses lifecycle, Messages batches, token counting, websockets, MCP, server tools and model load / unload on the M3 lane, and `tests/unit/test_route_coverage.py` fails when a route has none. `docs/guides/API_SURFACE.md` says per row how it is verified.
-- `GET /v1/responses/{id}/input_items` (the route was missing).
-- `scripts/dev/agentbench`: the real-agent benchmark (Claude Code, Codex, opencode on the 27B) as one repeatable command with a fail-closed verdict and a baseline comparison.
+- Client-executed Responses computer actions and screenshot round trips.
+- Incremental Anthropic document citation streaming with checked source ranges.
+- Optional WebRTC Realtime transport (`yunshu[webrtc]`) and local audio-sample voice enrollment for reference-audio TTS models.
+
+- First-run model selection (`setup` / unconfigured `serve`), `models list/pull/show/rm`,
+  live `top`, zsh/bash/fish completion and consistent global `--json` output with next steps.
+  [CLI guide](docs/guides/CLI.md).
+
+- `POST /v1/decisions` and `POST /v1/systemone`: text and inline-image typed decisions on Clef MLX
+  models, with probabilities, refusals for non-finite head results and no text decoding.
+- Stored chat completions: creation with `store: true` / `metadata`, list/retrieve/update/delete,
+  input-message listing, pagination and filters; streams are stored after completion.
+- Realtime ephemeral keys: `POST /v1/realtime/client_secrets` and beta session/transcription-session
+  creation. Secrets authenticate the Realtime WebSocket and apply session configuration; transcription-only
+  configuration is echoed but is not executed as a transcription-only engine session.
+- Twelve Evals routes for definitions, runs, cancellation and output items, with atomic local persistence,
+  inline/file/stored-completion sources and `string_check`, `text_similarity`, `score_model`, `label_model`.
+- Tavily-compatible search/extract/crawl/map/research, feedback/logs/usage/provider health and native MCP;
+  additional metasearch adapters and optional bounded Chromium rendering. [Limits](docs/guides/TAVILY.md).
+- Agent-client adaptations for custom text/regex/Lark tools, legacy local shell, client tool search,
+  Anthropic documents/citations, continuous usage stats, template rendering and model properties.
+- Source-built YunUI console with engine status/resource charts, model operations, request inspection,
+  cancellation and a streaming diagnostic playground. [Build and scope](docs/CONSOLE.md).
+- `scripts/dev/release_check`: SHA-pinned release checklist, CI first and concurrent gate/M3/client checks;
+  informational agentbench is submitted separately at priority -3 and collected later. CPU-only planning uses `--dry-run`.
+- SDK endpoint coverage walker, prior-art discovery tool, local clean-checkout CI, and live private
+  research-index generation. Public-doc checks enforce translated README structure and registered APIs/settings.
 
 ### Changed
 
-- Refresh the dependency lock and record reviewed upstream code without losing its original provenance. The MLX stack versions remain unchanged. [Validation](docs/reports/PERF_TREND.md#2026-10-04--014-cycle-dependency-sync-m5-max).
+- gpuq admits declared short verification jobs between long cells without preemption, with a bounded
+  time budget; `--gate` takes precedence over same-priority backlog. Foreign CPU contention is measured,
+  parsed job records are cached, and non-quiet filler work can run while quiet work waits for CPU admission.
+- CI and local CI include frontend type checks, tests and build plus Python lint/format/mypy and package checks.
+- Local CI matches the release runner's Python 3.13 environment, short paths and inaccessible local data;
+  tests avoid shared server-port collisions. [Contributor workflow](CONTRIBUTING.md).
+- Modality qualification through yv includes published embedding/classifier loaders,
+  prepared-input parity and bounded fixed-seed diffusion comparisons. Diffusion
+  timing requires three same-device interleaved quiet pairs after a successful pilot.
 
 ### Fixed
 
-- `POST /v1/responses/input_tokens` and `POST /v1/messages/count_tokens` now equal the `usage` of the real call (they counted raw text without the chat template, and an injected tool prompt generation no longer uses).
-- Cancelling a running background response answers `status: "cancelled"` (it answered `in_progress`).
-- `POST /v1/images/edits` and `/v1/images/variations` accept the multipart/form-data the OpenAI SDK sends (they accepted only JSON).
-- `POST /v1/ocr` on a single-model server: a vision model reads the image through its OCR fallback (the upload was refused as a local file outside `YUNSHU_MEDIA_DIR`, then a missing model manager made every request a 500) and a text model gets a 503 that names the fix.
-- `POST /v1/classify` on a model that cannot embed is a 400 like `/v1/pooling`, `/v1/score` and `/v1/rerank` (it was a 500).
-- Speech, transcription and image routes on a chat model say what is served and what to start instead of "model not found".
-- A `--models-dir` server with models registered and none loaded yet is ready (`/health/ready` answered 503 until the first request).
+- GPU guard blocks broad `pkill` commands that could terminate another worker or user process.
+
+- EmbeddingGemma 2 loading retains every weight shard instead of keeping only the last shard.
+- MCP notifications return an empty 204 body, preventing a dropped connection from a JSON `null` body.
+- Server probes wait/retry on occupied test ports; interrupted short jobs no longer immediately pause
+  behind the long job they were admitted between. Queue tests no longer leave isolated daemons behind.
+- Public documentation now includes the new APIs and correct native Ollama model operations, supported
+  decision heads and current release status.
+- EmbeddingGemma 2 loader constructs published quantized layers through the pinned
+  MIT mlx-vlm port, preferring the installed native loader when available.
+- Quantized BERT-family sequence classifiers retain their trained head under strict
+  loading. Jina v3 custom ranking heads are rejected rather than scored as Qwen yes/no.
+- Qwen3-VL embedding handles empty inputs and keeps caller dictionaries unchanged.
+  Format support and release shard impact are documented in `docs/PRIOR_ART_FORMATS.md`.
 
 ### Security
 
-[Full changelog: v0.1.3…main](https://github.com/YuhuanStudio/Yunshu/compare/v0.1.3...main)
+- Drop authorization/API-key/cookie headers when a download redirects to another origin; redact Realtime
+  ephemeral secrets from logs. Transcription secrets cannot create model responses. Model downloads
+  reject traversal-style repository IDs before disk access. Authenticated clients still share Files,
+  stored completions and Evals data under one static token; this is not per-key isolation.
+- HTTP video and optional rendered-page resources use checked fetch boundaries; unsupported redirects,
+  private destinations and cross-origin rendered resources are rejected according to the fetch policy.
+  See [API surface](docs/guides/API_SURFACE.md) and [Tavily limitations](docs/guides/TAVILY.md).
+
+[Full changelog: v0.1.4…main](https://github.com/YuhuanStudio/Yunshu/compare/v0.1.4...main)
+
+## [0.1.4] - 2026-10-08
+
+Long conversations stay responsive and reusable, forced tool calls and Responses compaction behave the way agents
+expect, EmbeddingGemma 2 adds image, audio and video embeddings, and two silent "random weights" loads are fixed.
+Everything is in the `yunshu` package; the speed rows were measured on one M5 Max with Qwen3.8-27B.
+
+### Highlights
+
+- A short request no longer waits behind a long cold prefill: after each prefill step the scheduler decodes the other
+  rows first, with a capped decode share for rows past their first tokens so a long reply cannot halve a prefill.
+  Identity 0/36 mismatches, speed and memory neutral, long-context QA 30/30 in the long suite.
+- Branch from the middle of a long session and hit the cache: the prefix cache keeps recurrent-state anchors, so a
+  branch at 63.7K tokens of a 127K session answers in **0.62 s instead of 77.9 s** (a 161K session: 105 → 0.78 s).
+  [Measurements](docs/reports/PERF_TREND.md).
+- A forced `tool_choice` always yields a tool call on every API dialect (whitespace is bounded in the forced
+  grammar, EOS is masked while reasoning, Hermes `$ref` is inlined); 40 runs per variant on two small models, 0 misses.
+  Anthropic `any` / `tool` now turns thinking off unless the request enables it, as the Messages API does.
+- Responses compaction reuses the prompt cache (about 99% hit on the history), folds histories larger than the
+  window in up to 8 passes at safe tool-call boundaries (45K history under a 32K window works) and keeps streaming
+  clients alive while it summarizes.
+- New: EmbeddingGemma 2 embeds text, images, audio and video; served vectors match sentence-transformers fp32 at
+  cosine ≥ 0.99985 over 33 cases.
+- Fixed: Qwen3-Embedding checkpoints without the `model.` prefix loaded as random weights and served random
+  vectors; they now load correctly or fail.
+
+- Long replies at long context decode faster: the DFlash fast tree now stays on past 10K tokens and 256 generated
+  tokens because a tree commit compacts the KV cache in place instead of copying it (64K: 16.0 → 2.4 ms per commit).
+  Long suite: decode +7.7–21.9% at 32K–64K, +4.1% at 128K prose; identity 0/36 mismatches.
+
+### Upgrade notes / breaking changes
+
+- **`POST /v1/responses/compact`: `instructions` is now the conversation's system prompt** (as in `POST /responses`;
+  Codex sends its base instructions here) and leads the summary request. It used to be handed to the summarizer as
+  its own instruction. `tools` is now accepted and must be an array.
+- Request text that contains an unpaired UTF-16 surrogate now answers HTTP 400 on every API (it used to fail inside
+  the prompt hash or tokenizer, often after an agent cut tool output through an emoji).
+- Weight loads no longer tolerate missing tensors. A checkpoint whose parameters would stay random now fails to
+  load (Qwen3-Embedding, the MTP target and TTS loads). Re-download or fix a checkpoint that used to "load".
+- `/v1/embeddings` answers 400 when image / audio / video inputs (`messages` or object items) go to a text-only
+  embedder; `input` and `messages` together are rejected.
+- Dependencies: mlx-vlm 0.7.6, mlx-audio 0.5.8, transformers 5.19, openai 3.26, diffusers 0.41, datasets 5.1.
+  mlx is capped below 0.32.4 until the row-exact quantized-matvec copies follow mlx `f8aaf49d`. Run `yunshu doctor`
+  after upgrading.
+- Prometheus counters follow the `_total` convention: `yunshu_request_count` → `yunshu_http_requests_total`,
+  `yunshu_inference_count` → `yunshu_inferences_total`, `yunshu_error_count` → `yunshu_errors_total`,
+  `yunshu_mtp_total_cycles` → `yunshu_mtp_cycles_total`. Update dashboards and alerts.
+- `--drain-timeout 0` now stops in-flight requests at once on shutdown (it used to wait forever).
+- Requests that omit `max_tokens` now get up to `YUNSHU_DEFAULT_MAX_TOKENS` (default 32768, clamped by the
+  context budget) instead of being cut at 512 tokens (2048 on Responses).
+- Stricter validation (400 instead of a silent fallback): `tool_choice` naming an undeclared tool,
+  `response_format: json_schema` without a schema, `stream_options` without `stream`, negative
+  `prompt_logprobs`, conflicting or invalid `structured_outputs`.
+- `YUNSHU_SPEC_TREE` is now a stable setting with default `auto` (see Performance); `off` keeps the chain verifier.
+  Existing prefix-cache namespaces may be recomputed after the prefill and APC changes.
+
+### Performance
+
+M5 Max, Jundot/Qwen3.8-27B-oQ4e-mtp, separate experiments, not cumulative. Sources: [PERF_TREND](docs/reports/PERF_TREND.md).
+
+| Machine | Model / mode | Metric / workload | Before → after | Recorded source |
+|---|---|---|---|---|
+| M5 Max | 27B | TTFT, branch at 63.7K of a 127K session | 77.9 → 0.62 s | PERF_TREND "apc2: 96K footprint-peak timeline" |
+| M5 Max | 27B | TTFT, branch at 31.9K of that session | 34.2 → 0.47 s | same |
+| M5 Max | 27B | TTFT, branch at 80.5K of a 161K session | 105 → 0.78 s | same |
+| M5 Max | 27B | Follow-up TTFT, 127K linear | 1.41 → 0.92 s | same |
+| M5 Max | 27B, DFlash | Decode, 1K code cold / APC warm (greedy, 64–256 token replies) | 109.7 → 120.5 / 107.0 → 112.9 tok/s | PERF_TREND "2026-10-04 wide6" |
+| M5 Max | 27B, DFlash | Decode, 1K prose cold / APC warm | 54.4 → 62.8 / 50.0 → 59.4 tok/s | same |
+| M5 Max | 27B, MTP | Cold TTFT, 8K / 32K prose or code | 8.55/8.43 → 7.77/7.79 s; 36.8/36.7 → 34.1/34.1 s (−6.9 … −9.2%) | merge ce5f4197, M5 Max and 27B shapes only |
+| M5 Max | 27B | APC warm hit TTFT, 32K prose / code | 148 → 116 / 241 → 210 ms | PERF_TREND "native APC restore handles" |
+| M5 Max | 27B | Follow-up TTFT, 8K code / 32K code | 500 → 494 / 703 → 681 ms | merge 02af4fc5 |
+| M5 Max | 27B | Process footprint, 125K turn-1 peak / idle 35 s | 59.5–63.3 → 45.1–48.1 GiB / 50.8 → 29.0 GiB | PERF_TREND "server memory: peak and idle hold" |
+| M5 Max | 27B, DFlash | Decode, 2048-token replies, 32K code / prose | 88.7 → 97.6 / 59.3 → 64.0 tok/s | PERF_TREND "2026-10-07 longgap" (yv long, 2 reps) |
+| M5 Max | 27B, DFlash | Decode, 2048-token replies, 64K code / prose | 97.4 → 118.7 / 48.2 → 51.9 tok/s | same |
+| M5 Max | 27B, DFlash | Decode, 2048-token replies, 128K prose | 40.1 → 41.6 tok/s | same (128K code 68.3 → 64.0 within ±10.8% noise; tfbench A/B 69.6 → 70.0) |
+| M5 Max | 27B, DFlash | Verify round at 1K / 8K | 54.5 → 50.7 ms / 62.3 → 56.0 ms | merge 583edbeb |
+
+Release gate, v0.1.3 → v0.1.4 (long suite, 27B with default settings, 2048-token replies; two full passes, ranges
+cover both): decode at 32K / 64K / 128K +8.3–9.3% / +5.8–16.2% / +4.3–6.5%; cold TTFT −4.8% to −7.3%; warm TTFT
+−0.9% to −37.5%; server peak memory 75.3 → 56.7–56.9 GiB; identity 0/36 mismatches and long-context QA 30/30 on both.
+
+Regressions and limits: 8K code follow-up TTFT +1.7% (0.528 → 0.537 s) from the memory work; 32K turn-2 warm
+TTFT is unchanged on the restore-handle change; the fast tree only applies to bounded 1K-class greedy requests
+(32K +0.7–1.0%); one anchor holds about 0.28 GiB of recurrent state (about 3 anchors at 128K); on the M5 the apc2
+long suite measured memory peak −0.9 GiB and idle +0.24 GiB. The dependency bump changed warm decode by −0.40% to
++0.84% (no claim).
+
+### Added
+
+- EmbeddingGemma 2: `/v1/embeddings` accepts object items `{text, image, audio, video}`, interleaving markers,
+  `messages` in vLLM chat form, `task` / `instruction` prompts and Matryoshka `dimensions`; usage counts real tokens
+  and undecodable media is a 400.
+- `YUNSHU_SPEC_TREE=auto`: lossless fast DFlash tree for bounded short requests on certified M5 27B (see Performance);
+  `YUNSHU_DRAFT_BITS` (default 8) exposes drafter bits (4 is token-identical).
+- Every route the gateway registers has a real-server check (`scripts/dev/m3sweep`, `tests/unit/test_route_coverage.py`);
+  `scripts/dev/agentbench` runs Claude Code, Codex and opencode on the 27B as one repeatable command.
+- `GET /v1/responses/{id}/input_items`; Responses usage reports `cache_write_tokens`.
+- `/debug/memory-census` names the objects holding MLX memory; the idle server returns freed GPU buffers after 30 s.
+- Real rerankers and classifiers: Qwen3-Reranker and BGE-style cross-encoders on `/v1/rerank`, trained
+  sequence-classification heads on `/v1/classify`, and `/v1/score` with vLLM semantics (`queries`/`documents`,
+  `data_1`/`data_2`, `use_activation`, `instruction`). Scores match the Transformers recipe within 0.00021 on four
+  checkpoints, same ranking.
+- Ollama `/api/copy`, `/api/delete`, `/api/create` and `/api/pull` on a `--models-dir` server (names confined to that
+  directory), freeform `custom` tools on Responses (Codex
+  `apply_patch` shape), and Realtime sessions that load their model lazily.
+
+### Changed
+
+- Embedding text inputs may be up to 65536 characters (was 8192); the 2048-input cap is unchanged.
+- Embeddings pool and normalise in float32 (bf16 vectors were not unit length).
+- Auxiliary and uncached requests (such as titles) are scheduled after interactive turns on qualified models
+  (main TTFT p90 8.60 → 7.62 s, six-turn completion −17%, identical tokens; other models stay FIFO).
+- Follow-up prompts reuse the tokenizer prefix: only the new suffix is encoded (32K tokenize 17–25 ms → 2–3 ms).
+- Dependencies refreshed as above.
+
+### Fixed
+
+- MCP notifications (JSON-RPC messages without an `id`) answer HTTP 204 with an empty body. They used to send
+  `null`, uvicorn dropped the connection, and the client's next request on that connection failed.
+- Speculative decoding off now produces the same tokens as on for the Qwen3.5 family (the batch-invariant kernels
+  were only installed with a drafter; 27B 12/12 cells differed).
+- A tool call inside unclosed reasoning reaches the client; `/v1/completions` non-stream reasoning is untagged like
+  stream; prefill is excluded from `prompt_tokens` in one place.
+- Messages on the text engine no longer silently fell back to prompt injection for a forced `tool_choice`; a flat
+  forced function choice on Responses reaches the tool prompt.
+- Server memory: finished requests release their KV at once (it sat in a reference cycle), the APC no longer holds
+  two full copies while storing, and an APC peak of +11.7 GiB above 150K tokens is gone.
+- `POST /v1/responses/input_tokens` and `POST /v1/messages/count_tokens` equal the real call's `usage`; cancelling a
+  background response answers `cancelled`; `/v1/images/edits` and `/variations` accept multipart; OCR on a
+  single-model server works (vision model) or answers 503 naming the fix (text model); `/v1/classify` on a model
+  that cannot embed is 400; a `--models-dir` server with models registered is ready before the first load.
+- Gemma 4 audio, Whisper translations and video (OpenCV, 400 instead of a silent drop); Ollama `show` card leak;
+  Qwen3-Coder unclosed parameters; vLLM-style streaming tool-call cases.
+- Metal event leak in the DFlash tree path.
+- A forced `tool_choice` whose tool grammar cannot compile for the model (unsupported format, multi-token markers,
+  recursive schema) answers 400 before streaming starts instead of decoding unconstrained.
+
+### Security
+
+- No security-policy change in this range.
+
+[Full changelog: v0.1.3…v0.1.4](https://github.com/YuhuanStudio/Yunshu/compare/v0.1.3...v0.1.4)
 
 ## [0.1.3] - 2026-10-03
 

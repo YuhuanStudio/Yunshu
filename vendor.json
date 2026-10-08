@@ -1,5 +1,5 @@
 {
-  "_doc": "Everything Yunshu took from another project. kind: vendored = copied file; derived = rewritten from specific upstream files; inspired = same algorithm, independent code; patches = we monkeypatch an upstream symbol (source_sha256 pins the code we depend on). scripts/vendor/check_upstream.py reports upstream changes since 'commit'. 'local_changes' lists deliberate edits to keep on a sync. watch = every reference clone we follow for ideas or fixes (commit = reviewed up to). watch_excluded = every other clone with the reason it is not followed; scripts/vendor/check_upstream.py fails when a clone is in neither list. packages = extra pins on top of everything declared in pyproject.toml, which is read automatically. reviewed_commit/reviewed_date/review_reason record a deliberate retention after upstream review without rewriting the copied commit provenance.",
+  "_doc": "Everything Yunshu took from another project. kind: vendored = copied file; derived = rewritten from specific upstream files; inspired = same algorithm, independent code; patches = we monkeypatch an upstream symbol (source_sha256 pins the code we depend on). scripts/vendor/check_upstream.py reports upstream changes since 'commit'. 'local_changes' lists deliberate edits to keep on a sync. watch = every reference clone we follow for ideas or fixes (commit = reviewed up to). watch_excluded = every other clone with the reason it is not followed; scripts/vendor/check_upstream.py fails when a clone is in neither list. packages = extra pins on top of everything declared in pyproject.toml, which is read automatically. reviewed_commit/reviewed_date/review_reason record a deliberate retention after upstream review without rewriting the copied commit provenance. prior_art = discovery-only candidates with separate licenses/revisions/owners and pending actions; these are NOT adopted code, qualified loaders or parity passes.",
   "vendored": [
     {
       "path": "python/yunshu_engine/kernels/omlx/qwen35_verify_qmm.py",
@@ -196,6 +196,65 @@
       "license": "MIT",
       "local_changes": [],
       "kind": "vendored"
+    },
+    {
+      "path": "python/yunshu_engine/_vendor/deepseek_v4/encoding.py",
+      "repo": "https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash-0731",
+      "clone": "reference/deepseek-v4-flash-0731",
+      "upstream_path": "encoding/encoding_dsv4.py",
+      "commit": "7872f01b1d1fe23eabc4c98b48bffcef5a386062",
+      "license": "MIT",
+      "local_changes": [
+        "Added provenance, lint/format/type-check pragmas; encoding implementation unchanged"
+      ],
+      "kind": "vendored"
+    },
+    {
+      "path": "python/yunshu_engine/_vendor/embedding_gemma2/config.py",
+      "repo": "https://github.com/Blaizzy/mlx-vlm",
+      "clone": "reference/mlx-vlm",
+      "upstream_path": "mlx_vlm/models/embedding_gemma2/config.py",
+      "commit": "3d87e88402f307efbf68e568971aa887ee7d9ed0",
+      "license": "MIT",
+      "kind": "vendored",
+      "local_changes": [
+        "Absolute imports for installed mlx-vlm shared components; formatting."
+      ]
+    },
+    {
+      "path": "python/yunshu_engine/_vendor/embedding_gemma2/language.py",
+      "repo": "https://github.com/Blaizzy/mlx-vlm",
+      "clone": "reference/mlx-vlm",
+      "upstream_path": "mlx_vlm/models/embedding_gemma2/language.py",
+      "commit": "3d87e88402f307efbf68e568971aa887ee7d9ed0",
+      "license": "MIT",
+      "kind": "vendored",
+      "local_changes": [
+        "Absolute imports for installed mlx-vlm shared components; formatting.",
+        "Assert dataclass post-init initialization for static type checking."
+      ]
+    },
+    {
+      "path": "python/yunshu_engine/_vendor/embedding_gemma2/model.py",
+      "repo": "https://github.com/Blaizzy/mlx-vlm",
+      "clone": "reference/mlx-vlm",
+      "upstream_path": "mlx_vlm/models/embedding_gemma2/embedding_gemma2.py",
+      "commit": "3d87e88402f307efbf68e568971aa887ee7d9ed0",
+      "license": "MIT",
+      "kind": "vendored",
+      "local_changes": [
+        "Absolute imports for installed mlx-vlm shared components; formatting."
+      ]
+    },
+    {
+      "path": "tests/fixtures/priorfix/qwen3_reranker.jinja",
+      "repo": "https://huggingface.co/mlx-community/Qwen3-Reranker-0.6B-4bit",
+      "clone": "reference/Qwen3-Reranker-0.6B-4bit",
+      "upstream_path": "chat_template.jinja",
+      "commit": "5f324548f1d20c2b5a450f126fc6ef2fb1126524",
+      "license": "Apache-2.0",
+      "kind": "vendored",
+      "local_changes": []
     }
   ],
   "derived": [
@@ -423,6 +482,38 @@
       "commit": "64ea011cb65f14d9ce2737e60db9a4ae91ed7441",
       "license": "MIT",
       "why": "Native MLX 0.32.3 NAX QMM accumulation over lane-tiled weights/paired scales; only input loader and M tile differ. Installed headers are version-guarded and source-hashed into the prefill arithmetic namespace."
+    },
+    {
+      "kind": "derived",
+      "path": "python/yunshu_engine/decision_engine.py",
+      "repo": "https://huggingface.co/Cloudflare/clef",
+      "clone": "reference/clef",
+      "upstream_paths": [
+        "joint_schema_model.py"
+      ],
+      "commit": "2f3de3dd85f379784083b0814d997ab627200f0c",
+      "license": "Apache-2.0",
+      "local_changes": [
+        "encode_record / question_options / the readout re-implemented over a tokenizer callable and our own request types; options keep request order in answers",
+        "JointSchemaHead re-implemented functionally in MLX (float32; packed in_proj attention, pre-norm decoder layers, exact GELU), checked tensor by tensor against a torch transcription in tests/unit/test_decisions.py",
+        "lexical option vectors are rows of the 4-bit lm_head dequantized on the fly; an over-long input is rejected instead of truncated; unknown head layouts fail closed"
+      ],
+      "why": "serves Cloudflare Clef / Clef-flash (MLX conversions: abenzerps/Clef-MLX @ 65781a8d37979a361af4e80984142dc40b2675b6) for /v1/decisions and /v1/systemone; the model card ships joint_schema_model.py as the reference implementation"
+    },
+    {
+      "path": "python/yunshu_engine/embedding_gemma2_loader.py",
+      "repo": "https://github.com/Blaizzy/mlx-vlm",
+      "clone": "reference/mlx-vlm",
+      "commit": "3d87e88402f307efbf68e568971aa887ee7d9ed0",
+      "license": "MIT",
+      "kind": "derived",
+      "local_changes": [
+        "Prefer installed native embedding loader; fallback resolves vendored model without registry mutations; no unrelated encoder features.",
+        "Pass lazy through native/fallback loader so adapter evaluates text parameters first and media towers on demand."
+      ],
+      "upstream_paths": [
+        "mlx_vlm/encoder_loader.py"
+      ]
     }
   ],
   "inspired": [
@@ -1010,6 +1101,35 @@
       "license": "MIT",
       "local_changes": [
         "EmbeddingGemma 2 text tower (bidirectional, projection-only per-layer embeddings, scale 1.0, local/global head sizes) written from the Hugging Face transformers embedding_gemma2 architecture (Apache-2.0, transformers 5.19); the vision and audio towers are imported from mlx-vlm gemma4, not copied; sentence-transformers prompts and pooling follow the model card"
+      ]
+    },
+    {
+      "kind": "inspired",
+      "path": "python/yunshu_gateway/routers/decisions.py",
+      "repo": "https://github.com/jundot/omlx",
+      "clone": "reference/omlx",
+      "upstream_paths": [
+        "omlx/api/systemone_models.py"
+      ],
+      "commit": "a98d8c8c",
+      "license": "Apache-2.0",
+      "local_changes": [
+        "only the public design of oMLX PR #4315 (a /v1/systemone route next to a decision engine for Clef) informed this; its code was NOT read. License checked: Apache-2.0, same as the oMLX files already vendored. Wire formats come from openai-python 3.26 types and TypeSafe's published System One docs"
+      ]
+    },
+    {
+      "kind": "inspired",
+      "path": "scripts/research/priorfix_mflux_reference.py",
+      "repo": "https://github.com/mflux-community/mflux",
+      "clone": "reference/mflux",
+      "commit": "465df30a3965b38c9c64fa853e26df140ddd5c55",
+      "license": "MIT",
+      "upstream_paths": [
+        "src/mflux/models/common/weights/loading/weight_loader.py",
+        "src/mflux/models/z_image/z_image_initializer.py"
+      ],
+      "local_changes": [
+        "Probe-only explicit affine4 diffusers bridge through unchanged upstream raw cache, mapper and applier; floating reference arithmetic, no source copied or global monkeypatch."
       ]
     }
   ],
@@ -2245,6 +2365,49 @@
       ],
       "why": "grammar / JSON-schema engine we depend on",
       "commit": "e7c69004"
+    },
+    {
+      "repo": "https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash-0731",
+      "clone": "reference/deepseek-v4-flash-0731",
+      "commit": "7872f01b1d1fe23eabc4c98b48bffcef5a386062",
+      "globs": [
+        "encoding/*.py",
+        "tokenizer_config.json",
+        "LICENSE"
+      ],
+      "why": "Official V4 prompt and DSML encoding; source fetched via pinned HF revision, weights are not cloned"
+    },
+    {
+      "repo": "https://huggingface.co/Cloudflare/clef",
+      "clone": "reference/clef",
+      "globs": [
+        "joint_schema_model.py",
+        "joint_head_config.json"
+      ],
+      "why": "Clef decision model reference implementation and head layout we serve (decision_engine.py); a changed head or encoding changes every probability",
+      "commit": "2f3de3dd85f379784083b0814d997ab627200f0c",
+      "reviewed_date": "2026-10-07"
+    },
+    {
+      "repo": "https://huggingface.co/mlx-community/Qwen3-Reranker-0.6B-4bit",
+      "clone": "reference/Qwen3-Reranker-0.6B-4bit",
+      "globs": [
+        "chat_template.jinja"
+      ],
+      "why": "Published role-template encoding is the independent Qwen reranker input-ID oracle; a changed template can discard query/document inputs.",
+      "commit": "5f324548f1d20c2b5a450f126fc6ef2fb1126524",
+      "reviewed_date": "2026-10-08"
+    },
+    {
+      "repo": "https://github.com/mflux-community/mflux",
+      "clone": "reference/mflux",
+      "globs": [
+        "src/mflux/models/common/weights/loading/*.py",
+        "src/mflux/models/z_image/**/*.py"
+      ],
+      "why": "Independent Z-Image parity bridge depends on unchanged HF raw cache, mapper and applier APIs; watch native quantized-format support and arithmetic drift.",
+      "commit": "465df30a3965b38c9c64fa853e26df140ddd5c55",
+      "reviewed_date": "2026-10-08"
     }
   ],
   "packages": [
@@ -2253,7 +2416,8 @@
     "mlx-vlm",
     "mlx-metal",
     "transformers",
-    "llguidance"
+    "llguidance",
+    "trafilatura"
   ],
   "watch_excluded": {
     "reference/ACE-Step-1.5": "multimodal generation (image / video / audio synthesis) is parked; no LLM/VLM decode, TTFT or cache technique to learn",
@@ -2291,7 +2455,6 @@
     "reference/mlx-gen": "multimodal generation (image / video / audio synthesis) is parked; no LLM/VLM decode, TTFT or cache technique to learn",
     "reference/mlx-h3": "multimodal generation (image / video / audio synthesis) is parked; no LLM/VLM decode, TTFT or cache technique to learn",
     "reference/mlx-video": "multimodal generation (image / video / audio synthesis) is parked; no LLM/VLM decode, TTFT or cache technique to learn",
-    "reference/mflux": "multimodal generation (image / video / audio synthesis) is parked; no LLM/VLM decode, TTFT or cache technique to learn",
     "reference/mflux-multimodal": "multimodal generation (image / video / audio synthesis) is parked; no LLM/VLM decode, TTFT or cache technique to learn",
     "reference/stable-audio-tools": "multimodal generation (image / video / audio synthesis) is parked; no LLM/VLM decode, TTFT or cache technique to learn",
     "reference/stable-diffusion.cpp": "multimodal generation (image / video / audio synthesis) is parked; no LLM/VLM decode, TTFT or cache technique to learn",
@@ -2318,5 +2481,286 @@
     "reference/mlx-examples": "superseded or covered elsewhere (mlx-examples -> mlx-lm; our own fork; hot-swap multimodal server)",
     "reference/mlx-vlm-yunshu": "superseded or covered elsewhere (mlx-examples -> mlx-lm; our own fork; hot-swap multimodal server)",
     "reference/mlx-serve-multimodal": "superseded or covered elsewhere (mlx-examples -> mlx-lm; our own fork; hot-swap multimodal server)"
-  }
+  },
+  "prior_art": [
+    {
+      "url": "https://huggingface.co/aac6fef/laya-mlx",
+      "kind": "discovery-only",
+      "license": "apache-2.0",
+      "revision": "20aed815fc6acde75733882e7ec0e3f28aeb9717",
+      "reviewed_date": "2026-10-08",
+      "owner": "decisions2",
+      "action": "Published format loading and runtime parity pending; not adopted or qualified."
+    },
+    {
+      "url": "https://huggingface.co/aac6fef/laya-typed-decisions-mlx",
+      "kind": "discovery-only",
+      "license": "apache-2.0",
+      "revision": "f9e501c2080cc57c13d6887820329758f5351125",
+      "reviewed_date": "2026-10-08",
+      "owner": "decisions2",
+      "action": "Published format loading and runtime parity pending; not adopted or qualified."
+    },
+    {
+      "url": "https://huggingface.co/aac6fef/laya-multilingual-mlx",
+      "kind": "discovery-only",
+      "license": "apache-2.0",
+      "revision": "f2b4faf51023039425946074e2cf1361d2db11d5",
+      "reviewed_date": "2026-10-08",
+      "owner": "decisions2",
+      "action": "Published format loading and runtime parity pending; not adopted or qualified."
+    },
+    {
+      "url": "https://huggingface.co/millat/laya-mlx",
+      "kind": "discovery-only",
+      "license": "apache-2.0",
+      "revision": "90f2daef06f75dbcb186d46726a11ef21b6e4365",
+      "reviewed_date": "2026-10-08",
+      "owner": "decisions2",
+      "action": "Published format loading and runtime parity pending; not adopted or qualified."
+    },
+    {
+      "url": "https://huggingface.co/sjoerdbodbijl/laya-mlx",
+      "kind": "discovery-only",
+      "license": "apache-2.0",
+      "revision": "a3da39702854641289479310798b0d4f0fef09a4",
+      "reviewed_date": "2026-10-08",
+      "owner": "decisions2",
+      "action": "Published format loading and runtime parity pending; not adopted or qualified."
+    },
+    {
+      "url": "https://huggingface.co/sahilchachra/Laya-English-MXFP4",
+      "kind": "discovery-only",
+      "license": "unverified",
+      "revision": "8aa0c4846d2afded56b4a3fdbc39bc03aaa5754c",
+      "reviewed_date": "2026-10-08",
+      "owner": "decisions2",
+      "action": "Published format loading and runtime parity pending; not adopted or qualified."
+    },
+    {
+      "url": "https://huggingface.co/mlx-community/embeddinggemma-2-4bit",
+      "kind": "discovery-only",
+      "license": "apache-2.0",
+      "revision": "8ab839e127cb8cb305edd71fb7a02c82f2d49ab3",
+      "reviewed_date": "2026-10-08",
+      "owner": "priorart",
+      "action": "Published format loading and runtime parity pending; not adopted or qualified."
+    },
+    {
+      "url": "https://huggingface.co/mlx-community/clef-4bit",
+      "kind": "discovery-only",
+      "license": "apache-2.0",
+      "revision": "5c646a43ed30b5d79822b16e11c6b3d621800b94",
+      "reviewed_date": "2026-10-08",
+      "owner": "decisions2",
+      "action": "Published format loading and runtime parity pending; not adopted or qualified."
+    },
+    {
+      "url": "https://huggingface.co/openjev/openjev-MLX",
+      "kind": "discovery-only",
+      "license": "cc-by-nc-4.0",
+      "revision": "a9dcc20aa827a6c7eae478f6ebb3b255bb135451",
+      "reviewed_date": "2026-10-08",
+      "owner": "decisions2",
+      "action": "Published format loading and runtime parity pending; not adopted or qualified."
+    },
+    {
+      "url": "https://huggingface.co/DJLougen/d1-3B-MLX-8bit",
+      "kind": "discovery-only",
+      "license": "other",
+      "revision": "0260d8283545180e983346b762810d66074a7147",
+      "reviewed_date": "2026-10-08",
+      "owner": "decisions2",
+      "action": "Published format loading and runtime parity pending; not adopted or qualified."
+    },
+    {
+      "url": "https://github.com/Blaizzy/mlx-vlm/tree/3d87e88402f307efbf68e568971aa887ee7d9ed0",
+      "kind": "discovery-only",
+      "license": "MIT",
+      "revision": "3d87e88402f307efbf68e568971aa887ee7d9ed0",
+      "owner": "priorart/lead",
+      "reviewed_date": "2026-10-08",
+      "action": "EmbeddingGemma2 embedding_loader.load_embedding_model adoption/parity candidate; published quantized formats not yet qualified."
+    },
+    {
+      "url": "https://github.com/aperepel/mlx-rerank",
+      "revision": "cfe20b0b0e2505240be91dbcf6e5575b8a8d7388",
+      "license": "unreported",
+      "kind": "discovery-only",
+      "owner": "priorfix",
+      "reviewed_date": "2026-10-08",
+      "action": "Qwen parity comparator only; no source copied. Template differs from official input recipe."
+    },
+    {
+      "url": "https://github.com/jak-pan/mlx-rerank",
+      "revision": "e278e8cbe13d5ad1770d67b5b562391d0fe68eec",
+      "license": "Apache-2.0",
+      "kind": "discovery-only",
+      "owner": "priorfix",
+      "reviewed_date": "2026-10-08",
+      "action": "Rust KalM runtime; not a Qwen3 parity oracle."
+    },
+    {
+      "url": "https://github.com/mflux-community/mflux",
+      "revision": "465df30a3965b38c9c64fa853e26df140ddd5c55",
+      "license": "MIT",
+      "kind": "discovery-only",
+      "owner": "priorfix",
+      "reviewed_date": "2026-10-08",
+      "action": "Native mflux HF mapping drops packed diffusers scales/biases. Probe-only explicit CPU-tested affine4 decode bridge is registered under inspired; results disclose floating reference arithmetic. No serving delegation or lossless/default claim."
+    },
+    {
+      "url": "https://github.com/IonDen/mlx-teacache",
+      "revision": "bb5cb625d90c06a5502aa51c8641c853c01cb57c",
+      "license": "Apache-2.0",
+      "kind": "discovery-only",
+      "owner": "priorfix",
+      "reviewed_date": "2026-10-08",
+      "action": "Discovery only; cached approximate diffusion needs separate opt-in quality qualification."
+    },
+    {
+      "url": "https://huggingface.co/mlx-community/Qwen3-VL-Embedding-2B-4bit",
+      "revision": "c713a965783416b9467b419f2d14ca6445847455",
+      "license": "Apache-2.0",
+      "kind": "discovery-only",
+      "owner": "priorfix",
+      "reviewed_date": "2026-10-08",
+      "action": "Published load and model.process parity; GPL mlx-embeddings used as comparator/dependency, no code copied."
+    },
+    {
+      "url": "https://huggingface.co/mlx-community/Qwen3-VL-Reranker-2B-4bit",
+      "revision": "374a7dc08e7c3b553c8b2730a425e53c7a926510",
+      "license": "Apache-2.0",
+      "kind": "discovery-only",
+      "owner": "priorfix",
+      "reviewed_date": "2026-10-08",
+      "action": "Published load and model.process parity pending."
+    },
+    {
+      "url": "https://huggingface.co/mlx-community/jina-reranker-v3-4bit-mxfp4",
+      "revision": "00ce276e691f7f8041b397131c77f30a3e894d12",
+      "license": "CC-BY-NC-4.0",
+      "kind": "discovery-only",
+      "owner": "priorfix",
+      "reviewed_date": "2026-10-08",
+      "action": "JinaForRanking custom head: explicitly unsupported; must not route to Qwen yes/no. Generic quantized BERT-family classifier heads supported separately."
+    },
+    {
+      "url": "https://huggingface.co/soichisumi/bge-reranker-v2-m3-mlx-affine8",
+      "revision": "512d2c5984b21da2b134c7f169a9f4176735287c",
+      "license": "Apache-2.0",
+      "kind": "discovery-only",
+      "owner": "priorfix",
+      "reviewed_date": "2026-10-08",
+      "action": "Published bare backbone namespace and quantized trained head; all BERT/RoBERTa/XLM-RoBERTa label counts delegate to maintained MIT mlx-vlm encoder loader/SequenceClassificationModel. GPU parity pending."
+    },
+    {
+      "url": "https://github.com/Blaizzy/mlx-vlm/blob/3d87e88402f307efbf68e568971aa887ee7d9ed0/mlx_vlm/encoder_loader.py",
+      "revision": "3d87e88402f307efbf68e568971aa887ee7d9ed0",
+      "license": "MIT",
+      "kind": "discovery-only",
+      "owner": "priorfix",
+      "reviewed_date": "2026-10-08",
+      "action": "Imported maintained SequenceClassificationModel loader; replaced local classifier reconstruction and quantization. CPU Torch fixtures pass for all three families / 1 and 2 labels; published BGE M5 pending."
+    }
+  ],
+  "websearch_prior_art": [
+    {
+      "repo": "https://github.com/adbar/trafilatura",
+      "license": "Apache-2.0 (2.1.0)",
+      "reviewed_date": "2026-10-08",
+      "use": "Declared dependency; sanitized HTML extraction; existing heading/code and hidden-content fixtures."
+    },
+    {
+      "repo": "https://github.com/searxng/searxng",
+      "license": "AGPL-3.0-or-later",
+      "reviewed_date": "2026-10-08",
+      "use": "External HTTP JSON adapter only; fixture parser/ranking tests; no copied source."
+    },
+    {
+      "repo": "https://github.com/cedarsaam/agent-search",
+      "reviewed_date": "2026-10-08",
+      "use": "Architecture comparison: SearXNG + cited retrieval + Tavily/MCP surface; no copied source; license not relied on."
+    },
+    {
+      "repo": "https://github.com/modelcontextprotocol/python-sdk",
+      "reviewed_date": "2026-10-08",
+      "use": "Installed SDK compatibility probes; no copied source."
+    }
+  ],
+  "cli_prior_art": [
+    {
+      "url": "https://docs.ollama.com/cli",
+      "reviewed_date": "2026-10-08",
+      "owner": "cliux",
+      "use": "Explicit pull/list/rm and separate server lifecycle; UX comparison only, no copied source."
+    },
+    {
+      "url": "https://lmstudio.ai/docs/cli",
+      "reviewed_date": "2026-10-08",
+      "owner": "cliux",
+      "use": "Model acquisition/select and load lifecycle; UX comparison only, no copied source."
+    },
+    {
+      "url": "https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md",
+      "reviewed_date": "2026-10-08",
+      "owner": "cliux",
+      "use": "HF repository or local checkpoint server startup; UX comparison only, no copied source."
+    },
+    {
+      "url": "https://github.com/ml-explore/mlx-lm/blob/main/mlx_lm/SERVER.md",
+      "reviewed_date": "2026-10-08",
+      "owner": "cliux",
+      "use": "Explicit MLX repository server startup; UX comparison only, no copied source."
+    },
+    {
+      "url": "https://docs.vllm.ai/en/latest/cli/",
+      "reviewed_date": "2026-10-08",
+      "owner": "cliux",
+      "use": "serve, chat, complete and benchmark command organization; UX comparison only, no copied source."
+    }
+  ],
+  "respfeat_prior_art": [
+    {
+      "url": "https://github.com/openai/openai-python",
+      "license": "Apache-2.0",
+      "reviewed_date": "2026-10-08",
+      "use": "Installed 3.26.0 computer actions / calls / voice SDK type contracts; independent adapters, no copied source."
+    },
+    {
+      "url": "https://github.com/anthropics/anthropic-sdk-python",
+      "license": "MIT",
+      "reviewed_date": "2026-10-08",
+      "use": "Installed 1.11.0 citations_delta SDK contract; independent bounded incremental parser."
+    },
+    {
+      "url": "https://github.com/aiortc/aiortc",
+      "license": "BSD-3-Clause",
+      "revision": "1.15.0",
+      "reviewed_date": "2026-10-08",
+      "use": "Optional declared WebRTC dependency, independent RealtimeSession bridge. macOS arm64 PyAV 17.1 wheel ~18 MB, aiortc wheel 93.7 KB; acceptable as opt-in."
+    },
+    {
+      "url": "https://github.com/realtime-ai/openai-realtime-webrtc-python",
+      "reviewed_date": "2026-10-08",
+      "use": "Discovery-only external client architecture; no source adopted and no license relied on."
+    },
+    {
+      "url": "https://github.com/Blaizzy/mlx-audio/blob/main/docs/guides/voice-cloning.md",
+      "license": "MIT",
+      "reviewed_date": "2026-10-08",
+      "use": "Existing reference-audio runtime contract: Qwen3-TTS Base needs transcript; CustomVoice/VoiceDesign ignore ref_audio. Reject unsupported clone paths, no copied code."
+    },
+    {
+      "url": "https://huggingface.co/mlx-community/Qwen3-TTS-12Hz-1.7B-Base-bf16",
+      "license": "Apache-2.0",
+      "reviewed_date": "2026-10-08",
+      "use": "Discovery-only published MLX cloning checkpoint; not downloaded, no GPU TTS parity claim in CPU-only respfeat."
+    },
+    {
+      "url": "https://github.com/lablup/mlxcel/blob/main/docs/responses-api.md",
+      "reviewed_date": "2026-10-08",
+      "use": "Discovery-only Responses subset comparison; built-in tools unsupported there, no adapter code adopted."
+    }
+  ]
 }

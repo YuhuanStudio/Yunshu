@@ -63,7 +63,13 @@ class _ErrorFormatter:
         # MCP is JSON-RPC — a middleware-level auth/rate-limit denial on /v1/mcp
         # must return a JSON-RPC 2.0 error object, not the OpenAI envelope a JSON-RPC client
         # can't parse. id is null (no parsed body).
-        if path == "/v1/mcp":
+        if path.startswith("/tavily/") and path != "/tavily/mcp":
+            return JSONResponse(
+                status_code=status_code,
+                content={"detail": {"error": message}},
+                headers=headers,
+            )
+        if path in ("/v1/mcp", "/tavily/mcp"):
             return JSONResponse(
                 status_code=status_code,
                 content={
@@ -185,6 +191,20 @@ class AuthMiddleware(BaseHTTPMiddleware):
         # Anthropic SDKs send the key as x-api-key instead of a bearer token.
         api_key = request.headers.get("x-api-key", "")
 
+        if (
+            path.startswith("/tavily/")
+            and not auth
+            and not api_key
+            and request.method == "POST"
+        ):
+            try:
+                body = await request.json()
+                api_key = body.get("api_key", "") if isinstance(body, dict) else ""
+                if not isinstance(api_key, str):
+                    api_key = ""
+            except (ValueError, TypeError):
+                pass
+
         if auth.startswith("Bearer "):
             token = auth[7:]
         elif api_key:
@@ -193,6 +213,12 @@ class AuthMiddleware(BaseHTTPMiddleware):
             return _ErrorFormatter.auth_error(
                 request, "Missing or invalid Authorization header"
             )
+
+        if path == "/v1/realtime/calls" and request.method == "POST":
+            from ..realtime_secrets import lookup
+
+            if lookup(token) is not None:
+                return await call_next(request)
 
         # Static token auth (constant-time comparison). The single consumer
         # authenticates with the one configured bearer token.

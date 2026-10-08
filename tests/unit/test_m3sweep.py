@@ -361,3 +361,9 @@ def test_error_shape_helpers():
         except rc.Fail:
             continue
         raise AssertionError(f"accepted {fam} {r.text}")
+
+
+def test_missing_base_dependency_triggers_env_sync():
+    assert jobs.lock_mismatches(
+        {"pypdf": "6.19.0", "optional": "1"}, {}, {"pypdf"}
+    ) == {"pypdf": ("6.19.0", None)}

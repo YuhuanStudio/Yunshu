@@ -8,12 +8,13 @@ comment. Summary of upstreams and licenses:
 
 | Upstream | License | Used as |
 |---|---|---|
-| jundot/omlx | Apache-2.0 | vendored `kernels/omlx/`; derived `ragged_attention.py` tile kernel, `mtp_patch.py`; inspired `spec_prefill.py`, `lane_layers.py`, `model_settings.py`, `mrope.py`, `mlx_executor.py`, `prefill_progress.py`, `yunshu_kv/mlx_cache.py`; derived `process_memory_enforcer.py` |
+| jundot/omlx | Apache-2.0 | vendored `kernels/omlx/`; derived `ragged_attention.py` tile kernel, `mtp_patch.py`; inspired `spec_prefill.py`, `routers/decisions.py` (route design only), `lane_layers.py`, `model_settings.py`, `mrope.py`, `mlx_executor.py`, `prefill_progress.py`, `yunshu_kv/mlx_cache.py`; derived `process_memory_enforcer.py` |
 | ashhart/TensorFold | MIT | vendored `kernels/tensorfold/`; derived `lane_linear.py`, `int_code_linear.py`, `round_driver/allocate.py`, `copy_drafter.py`; inspired draft vocabulary, DFlash/tree drafting, tree verify, round driver, ordered chunk merge |
 | Blaizzy/mlx-vlm | MIT | patched (speculative verifier, DFlash/MTP rounds, batch generator, audio patches, APC checkpoint policy and lookup provenance); derived `dflash_context.py`, `dflash_copy.py`, `mtp_lane.py`, `mtp_tree.py`, `round_driver/mtp.py`; tool-format registry, DFlash chain depth, structured-output wiring |
 | ml-explore/mlx-lm | MIT | patched Qwen3.5 GatedDeltaNet (`n_confirmed_patch.py`); tool parsers; speculative verification (`spec_draft_verifier.py`), sampler order (`batched_engine.py`) |
 | ml-explore/mlx | MIT | patched `nn.QuantizedLinear.__call__` for batch-invariant decode; derived native NAX prefill loader (`nax_prefill.py`) |
 | vllm-project/vllm, vllm-omni | Apache-2.0 | derived `gemma4_assistant.py`; inspired Qwen3 reasoning ends at a tool-call marker (`vlm_engine.py`), `structured_outputs` request field and entrypoint request-validation / route checks (`schemas/structured_outputs.py`, `scripts/research/route_checks_vllm.py`), n-gram / suffix proposers, block pool, mRoPE state, TeaCache |
+| Cloudflare/clef (model + reference `joint_schema_model.py`) | Apache-2.0 | derived `decision_engine.py` (joint schema head and record encoding re-implemented in MLX) |
 | huggingface/transformers | Apache-2.0 | inspired EmbeddingGemma 2 text tower (`embedding_gemma2.py`; the vision / audio towers are imported from mlx-vlm gemma4) |
 | ggml-org/llama.cpp | MIT | inspired n-gram hash pool |
 | sgl-project/sglang | Apache-2.0 | inspired radix-tree prefix matching (`kv_optimizations.py`) |
@@ -85,6 +86,12 @@ the call body) and runs it with llguidance's token-mask matcher and MLX bitmask 
 Used as a library, not copied. Copyright (c) Microsoft Corporation, MIT license.
 https://github.com/guidance-ai/llguidance
 
+## Trafilatura
+
+Web research uses the unmodified Python dependency trafilatura 2.1.0, licensed under
+Apache-2.0. Source and license: https://github.com/adbar/trafilatura/tree/v2.1.0 .
+No source is vendored. Earlier versions before 1.8 are not used.
+
 ## Yunshu Console
 
 The console imports the pinned YunUI package in
@@ -97,3 +104,23 @@ The build ships YunUI's license, upstream notices and retained Beautiful UI MIT
 text under `console_static/licenses/yunui/`; Vite generates the bundled dependency
 license catalogue at `console_static/licenses/bundled-dependencies.md`. The local
 Geist and JetBrains Mono font assets carry their OFL texts under `console_static/fonts/`.
+
+## aiortc — optional WebRTC dependency
+
+The `webrtc` extra uses unmodified aiortc (BSD-3-Clause) and PyAV (BSD-3-Clause).
+Their source and binaries are not vendored in Yunshu. The reviewed macOS arm64
+PyAV 17.1 wheel links shared FFmpeg libraries whose `avcodec_license()` reports
+"LGPL version 3 or later". FFmpeg and codec licensing remains part of the separate
+installed dependency distribution; Yunshu does not bundle or relink those binaries.
+Sources and dependency licenses: https://github.com/aiortc/aiortc and
+https://github.com/PyAV-Org/PyAV . The SDK protocol adapters are independent code
+checked against openai-python (Apache-2.0) and anthropic-sdk-python (MIT).
+
+## mflux — independent image reference probe
+
+The priorfix_mflux_reference probe uses the unchanged loader cache, HF mapper
+and weight applier APIs of mflux-community/mflux (MIT, reviewed commit
+465df30a3965b38c9c64fa853e26df140ddd5c55). The probe decodes downloaded diffusers
+affine4 tensors before mapping; its reference uses floating arithmetic. No mflux
+source is copied and the serving engine does not import this bridge.
+https://github.com/mflux-community/mflux

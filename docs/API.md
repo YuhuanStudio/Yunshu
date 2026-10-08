@@ -15,6 +15,9 @@ route matrix includes Files, Batches, Conversations, compaction and WebSocket de
 | Method | Path | Notes |
 |---|---|---|
 | POST | `/v1/chat/completions` | Chat. Tool-calling, JSON-schema/grammar (`response_format`), streaming, `logprobs`. Plus extras: `top_n_sigma`, `min_p`, `xtc_probability`/`xtc_threshold`, `spec_decode`. |
+| GET/POST/DELETE | `/v1/chat/completions/{id}` | Retrieve, update metadata or delete a completion created with `store: true`; list at `GET /v1/chat/completions`, input messages at `GET /v1/chat/completions/{id}/messages`. |
+| POST | `/v1/evals` | [Local Evals](guides/EVALS.md): definitions, runs, cancellation and output items. |
+| POST | `/v1/realtime/client_secrets` | Ephemeral keys for the Realtime WebSocket; beta session routes are also served. Transcription-only configuration is echoed but not executed; transcription secrets cannot create model responses. |
 | POST | `/v1/completions` | Legacy text completion. |
 | POST | `/v1/responses` | Responses API (+ `GET/POST /v1/responses/{id}`, `/cancel`, `DELETE`). |
 | POST | `/v1/embeddings` | Text **and multimodal** embeddings — see [below](#post-v1embeddings-multimodal). |
@@ -28,7 +31,8 @@ route matrix includes Files, Batches, Conversations, compaction and WebSocket de
 ## Ollama-compatible
 
 `/api/chat`, `/api/generate`, `/api/embed`, `/api/tags`, `/api/show`, `/api/ps`, `/api/version` (NDJSON streaming),
-verified with the `ollama` SDK. `pull` / `create` / `copy` / `delete` answer 501.
+Native MLX model `pull`, alias `copy` / `create`, and `delete` are supported; registry
+upload (`push`) remains unsupported. GGUF imports and arbitrary Modelfiles are rejected.
 
 ## Anthropic-compatible
 
@@ -65,6 +69,33 @@ otherwise an ASR→LLM→TTS cascade. Multi-turn conversation context is preserv
 Tool-calling works on **both** paths — a tool turn emits `function_call` items and the
 spoken JSON is suppressed (the voice doesn't read the tool call aloud).
 See [examples/talk.py](../examples/talk.py) for a live mic↔speaker client.
+
+### POST `/v1/decisions` — typed decisions (OpenAI Decisions API)
+
+Answers user-defined questions about shared evidence with probabilities, not prose; one forward pass of a
+decision model (Cloudflare Clef in MLX format), nothing is generated. Same shape as `client.decisions.create(...)`
+in the `openai` SDK (3.26+).
+
+```python
+d = client.decisions.create(
+    model="Clef-MLX-4bit",
+    input="The forecast says heavy rain all day.",
+    questions=[
+        {"type": "predicate", "instructions": "Is it raining?", "name": "rain"},
+        {"type": "choice", "instructions": "Pick the activity.", "choices": [
+            {"value": "hike", "description": "outdoors"}, {"value": "museum", "description": "indoors"}]},
+        {"type": "score", "instructions": "How wet?", "levels": [{"label": "dry"}, {"label": "wet"}]},
+    ],
+)
+```
+
+`answers` come back in question order: `predicate` (`probability`), `choice` (`choice`, `confidence`, per-value
+`probabilities`; values keep their JSON type) and `score` (`score`, the probability-weighted level index, plus per-level
+`probabilities`). A question whose logits are not finite is answered `{"type": "refusal"}`. `input` may hold inline
+`input_image` parts (base64 data URLs only). The model sees choices sorted by value, so the order you send them in does
+not move the probabilities. The input (state, images and schema) is limited to 16384 tokens; longer is a 400.
+`POST /v1/systemone` takes the TypeSafe Jev / System One wire (`state`, map-keyed `questions` with `noul` / `choice` /
+`score` and `criteria`) on the same engine.
 
 ### POST `/v1/rerank` — reranking
 
@@ -124,3 +155,8 @@ mounted with `YUNSHU_DEBUG_ROUTES=1`.
 
 Health: `GET /health`. Prometheus metrics: `GET /metrics`. Endpoint shapes are verified against the
 routers in `python/yunshu_gateway/routers/`.
+
+## Web retrieval
+
+Search and fetch server tools are described in [Web search](guides/WEB_SEARCH.md).
+The Tavily-compatible API has its own `/tavily` base (no `/v1`); see [Tavily](guides/TAVILY.md).

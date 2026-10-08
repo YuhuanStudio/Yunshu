@@ -1,6 +1,8 @@
 import importlib.util
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -333,3 +335,137 @@ def test_port_bindable_accepts_time_wait_rejects_listener():
         live.bind(("127.0.0.1", 0))
         live.listen(1)
         assert not cs.port_bindable(live.getsockname()[1])
+
+
+class _FakeProc:
+    def __init__(self, rc):
+        self._rc = rc
+        self.returncode = rc
+
+    def poll(self):
+        return self._rc
+
+
+def test_server_retries_next_port_after_losing_a_bind_race(tmp_path, monkeypatch):
+    """2026-10-07 release gate: a preempted gpuq job's server bound 18990 after our probe found it
+    free; ours exited with 'address already in use' and the stage failed. It must move on."""
+    launches = []
+    ports = iter([18990, 18991])
+    monkeypatch.setattr(cs, "free_port", lambda skip=frozenset(): next(ports))
+
+    def fake_popen(cmd, stdout, **kw):
+        port = int(cmd[cmd.index("--port") + 1])
+        launches.append(port)
+        if port == 18990:
+            stdout.write(b"ERROR: [Errno 48] address already in use\n")
+            return _FakeProc(3)
+        return _FakeProc(None)
+
+    monkeypatch.setattr(cs.subprocess, "Popen", fake_popen)
+
+    class _Resp:
+        def __init__(self, body):
+            self.body = body
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self):
+            return self.body
+
+    def fake_urlopen(req, timeout=3):
+        url = req if isinstance(req, str) else req.full_url
+        assert ":18991/" in url, url
+        if url.endswith("/health/ready"):
+            return _Resp(b'{"ready": true}')
+        return _Resp(b'{"data": [{"id": "m"}]}')
+
+    monkeypatch.setattr(cs.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(cs.json, "load", lambda r: __import__("json").loads(r.read()))
+    srv = cs.Srv("/m", None, tmp_path / "home", tmp_path / "srv.log")
+    srv.wait_ready(timeout=5)
+    assert launches == [18990, 18991]
+    assert srv.port == 18991 and srv.model_id == "m"
+
+
+def test_server_does_not_retry_other_exits(tmp_path, monkeypatch):
+    import pytest
+
+    monkeypatch.setattr(cs, "free_port", lambda skip=frozenset(): 18990)
+    monkeypatch.setattr(
+        cs.subprocess,
+        "Popen",
+        lambda cmd, stdout, **kw: (stdout.write(b"boom\n"), _FakeProc(1))[1],
+    )
+    srv = cs.Srv("/m", None, tmp_path / "home", tmp_path / "srv.log")
+    with pytest.raises(RuntimeError, match="server exited rc=1"):
+        srv.wait_ready(timeout=5)
+
+
+@pytest.mark.parametrize(
+    "historical_pause,ready", [(0.0, True), (100.0, True), (0.0, False)]
+)
+def test_readiness_excludes_gpuq_preemption(
+    tmp_path, monkeypatch, historical_pause, ready
+):
+    from types import SimpleNamespace
+
+    now = [0.0]
+    calls = []
+
+    def sleep(seconds):
+        now[0] += seconds + (300 if not now[0] else 0)
+
+    monkeypatch.setattr(
+        cs, "time", SimpleNamespace(monotonic=lambda: now[0], sleep=sleep)
+    )
+    monkeypatch.setattr(
+        cs,
+        "total_paused",
+        lambda: historical_pause + (300 if now[0] else 0),
+        raising=False,
+    )
+
+    class Resp:
+        def __init__(self, body):
+            self.body = body
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            return self.body
+
+    def urlopen(url, timeout):
+        url = url if isinstance(url, str) else url.full_url
+        calls.append(url)
+        if url.endswith("/health/ready"):
+            return Resp(b'{"ready": true}' if now[0] and ready else b'{"ready": false}')
+        return Resp(b'{"data": [{"id": "loaded"}]}')
+
+    monkeypatch.setattr(cs.urllib.request, "urlopen", urlopen)
+    monkeypatch.setattr(cs.json, "load", lambda r: __import__("json").loads(r.read()))
+    srv = cs.Srv.__new__(cs.Srv)
+    srv.proc, srv.url, srv.token = _FakeProc(None), "http://fake", None
+    srv.model_path = "/missing"
+    srv.log_tail = lambda *args: ""
+    if ready:
+        srv.wait_ready(timeout=5)
+        assert srv.model_id == "loaded" and len(calls) == 4
+    else:
+        with pytest.raises(RuntimeError, match="not ready"):
+            srv.wait_ready(timeout=5)
+        assert len(calls) == 6 and now[0] == 306
+
+
+def test_readiness_rejects_unreadable_pause_history(monkeypatch):
+    monkeypatch.setattr(cs, "total_paused", lambda: float("nan"), raising=False)
+    srv = cs.Srv.__new__(cs.Srv)
+    with pytest.raises(RuntimeError, match="pause"):
+        srv.wait_ready(timeout=5)

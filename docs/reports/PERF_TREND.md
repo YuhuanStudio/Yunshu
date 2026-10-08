@@ -1208,3 +1208,51 @@ yv memory (27B, 96K turn-1/2): MLX peak 44.99 -> 45.28 GiB (+0.29); idle footpri
 128K session (127K tokens, 8 turns of ~16K; branches at 50% and 25%), 20 ms timeline, base -> cand: branch at 63.7K cached 62 -> 63650 (ideal 63651), TTFT 77.9 -> 0.62 s; branch at 31.9K cached 62 -> 31858, TTFT 34.2 -> 0.47 s; linear follow-up 127221 cached, 1.41 -> 0.92 s. Footprint peak over the session 54.5 -> 56.1 GiB (+1.6), MLX peak 48.16 -> 49.17 (+1.0); APC resident (honest) 15.95 -> 16.95 GiB at the last build turn, idle ~+0.4 GiB.
 161K session (8 turns of 20K tokens), 3 branches: branch at 80.5K cached 62 -> 80540, TTFT 105 -> 0.78 s; at 40.3K 62 -> 40302, 44.2 -> 0.42 s; MLX peak 64.9 -> 67.0 GiB (+2.1), idle footprint 35.06 -> 35.50 GiB.
 Cost per anchor: ~0.28 GiB of recurrent state that cannot be shared (resident grows ~0.29 GiB per retained anchor, ~3 anchors at 128K); the 1 GiB anchor budget is not binding there.
+
+### 2026-10-07 longgap: long-context gap to TensorFold 0.6.1 (32K/64K/128K, 2048-token replies) and the tree-commit fix
+
+Same checkpoint (Qwen3.8-27B-oQ4e-mtp), same prompts and `--long-ask`, greedy, TF 0.6.1 with DFlash2, Yunshu main 00d7cf3d (DFlash chain beyond 10240 keys), 2 reps per cell, one server per job, `tfbench` long cells. Decode tok/s is the median of the cold and warm requests; TTFT gaps are TF/Yunshu (>100% = Yunshu faster). Code outputs of the two engines diverge after ~545 characters (TF's is more compressible, 0.34 vs 0.388), so code tok/s ratios carry a content effect; prose and ms/round are the cleaner signals.
+
+| cell | decode Yunshu / TF tok/s | cold TTFT (TF/Y) | warm TTFT Yunshu / TF s | follow-up TTFT (TF/Y) |
+|---|---:|---:|---:|---:|
+| 32K code | 89.4 / 143.5 (62%) | 114% | 0.179 / 0.179 | 101% |
+| 32K prose | 59.2 / 74.7 (79%) | 114% | 0.178 / 0.163 | 101% |
+| 64K code | 105.6 / 94.3 (112%) | 118% | 0.377 / 0.273 | 105% |
+| 64K prose | 48.6 / 56.7 (86%) | 119% | 0.376 / 0.254 | 105% |
+| 128K code | 69.6 / 63.9 (109%) | 138% | 0.599 / 0.450 | 124% |
+| 128K prose | 40.9 / 46.3 (88%) | 140% | 0.621 / 0.420 | 124% |
+
+Round anatomy (ms/round, commits/round): Yunshu chain 53.8/4.81 (32K code), 52.8/3.13 (32K prose), 63.3/6.68, 58.5/2.84 (64K), 73.5/5.11, 70.5/2.88 (128K); TF (tree, ~16-18 rows) 60.0/8.66, 56.8/4.26, 68.8/6.52, 65.5/3.72, 87.6/5.61, 83.6/3.88. Our rounds are shorter; TF commits more per round. A chain deeper than DFlash2's block (YUNSHU_MTP_BLOCK_SIZE 10, 12) is slower (32K code 80 vs 89 tok/s, 64K code 94-99 vs 106).
+Roofline: weights 15 GB + KV (65 KB/token: 2.15 GB at 32K, 8.6 GB at 128K) at 614 GB/s gives a 28 ms (32K) to 38 ms (128K) forward floor; both engines run 54-91 ms rounds.
+
+Mechanism. `dflash_fast.py` switched the fast tree off above 10240 keys and after 256 generated tokens. Forced on, the tree was token-identical to the chain (same digest, 7950-char output) but not faster: 69.7 ms/round at 32K vs 53.8. Ablation (`probe_ctx_scaling.py`): with attention removed the tree forward is flat in context (35.7 ms at 8K, 36.1 ms at 64K), and `tree_commit` with a non-prefix path costs 3.4 / 9.2 / 16.0 ms at 8K / 32K / 64K versus 1.3 ms for a prefix path. The accepted-row compaction `c.keys[..., a:b, :] = mx.take(c.keys, ...)` kept the pre-write buffer referenced by the pending gather, so MLX copied the whole K/V buffer of all 16 attention layers every round (the 10240 limit was measured while this copy existed). Tree attention itself (16 layers, 16 rows) is 3.3 / 9.8 / 17.9 ms at 8K / 32K / 64K vs 1.8 / 5.7 / 11.0 ms for the 8-row tile kernel, bit-equal at every length tested up to 131072.
+
+Fix (f271d284): `tree_verify.compact_kv` evaluates the gathers before the writes, so the write updates the buffer in place (commit_compact 9.2 -> 1.9 ms at 32K, 16.4 -> 2.4 ms at 64K); `CONTEXT_LIMIT` 262144 and `GENERATED_LIMIT` unbounded. Lossless: arithmetic unchanged, tree == chain digest. Unit test `tests/unit/test_tree_commit_compact.py`.
+
+| cell | main tok/s | candidate tok/s | change | ms/round main -> cand | commits/round main -> cand | TF tok/s | cand / TF |
+|---|---:|---:|---:|---|---|---:|---:|
+| 32K code | 89.4 | 95.3 | +6.6% | 53.8 -> 58.4 | 4.81 -> 5.60 | 143.5 | 66% |
+| 32K prose | 59.2 | 64.4 | +8.8% | 52.8 -> 58.1 | 3.13 -> 3.72 | 74.7 | 86% |
+| 64K code | 105.6 | 118.9 | +12.6% | 63.3 -> 66.4 | 6.68 -> 7.89 | 94.3 | 126% |
+| 64K prose | 48.6 | 48.9 | +0.7% | 58.5 -> 67.7 | 2.84 -> 3.29 | 56.7 | 86% |
+| 128K code | 69.6 | 70.0 | +0.6% | 73.5 -> 91.0 | 5.11 -> 6.27 | 63.9 | 110% |
+| 128K prose | 40.9 | 41.7 | +1.8% | 70.5 -> 79.4 | 2.88 -> 3.31 | 46.3 | 90% |
+
+Cold, warm and follow-up TTFT are unchanged (within noise). Remaining gaps: prose decode 86-89% of TF at 32K-128K (tree round still +5-17 ms over the chain; the 16-row tree attention reads the prefix at 0.27 ms per K keys against a 0.1 ms floor, and TF commits ~15% more per round on prose), warm TTFT 62-71% of TF at 64K-128K (0.1-0.2 s absolute; linear in context, probably the APC restore; not investigated).
+
+
+## 2026-10-08 release gate v0.1.4 (long suite vs v0.1.3, M5 Max, Qwen3.8-27B-oQ4e-mtp, default settings)
+
+Candidate 5ca1fd1d (the tag adds an MCP 204 fix and test-only commits; engine code identical in the gated paths). Second full pass (a2 cells) after a preflight environment failure; verdict PASS.
+
+```
+verify gate-long-5ca1fd1d: base 5062366e3c60 vs cand 5ca1fd1db5a7-d1dfc8083 on /Volumes/P5Plus/models/Jundot/Qwen3.8-27B-oQ4e-mtp, suite long -> PASS
+  preflight: PASS - 438 changed files, 565 related test files, pytest rc 0
+  identity: PASS - base_vs_cand 18 cells, 0 mismatches; spec_on_vs_off 18 cells, 0 mismatches
+  apc: PASS - 6 cold/warm pairs, hits 32812,32811,65580,65580,131110,131112
+  speed: PASS - code@32768 decode_tps 90.25->98.6 (+9.2%, noise +-0.9%, reps [10.19, 8.31]); code@32768 cold_ttft_s 36.929->34.428 (-6.8%, noise +-0.0%, reps [-6.77, -6.78]); code@32768 followup_ttft_s 3.209->3.138 (-2.2%, noise +-0.1%, reps [-2.3, -2.15]); code@32768 warm_ttft_s 0.271->0.269 (-0.9%, noise +-13.9%, reps [-13.07, 14.83]); prose@32768 decode_tps 59.5->64.6 (+8.6%, noise +-1.5%, reps [10.08, 7.06]); prose@32768 cold_ttft_s 36.897->34.389 (-6.8%, noise +-0.0%, reps [-6.82, -6.78]); prose@32768 followup_ttft_s 3.199->3.126 (-2.3%, noise +-0.1%, reps [-2.19, -2.35]); prose@32768 warm_ttft_s 0.232->0.167 (-28.2%, noise +-2.1%, reps [-30.29, -26.01]); code@65536 decode_tps 104.7->120.45 (+15.0%, noise +-0.8%, reps [15.87, 14.22]); code@65536 cold_ttft_s 84.02->78.953 (-6.0%, noise +-0.0%, reps [-6.02, -6.04]); code@65536 followup_ttft_s 4.177->4.033 (-3.5%, noise +-0.1%, reps [-3.38, -3.51]); code@65536 warm_ttft_s 0.495->0.309 (-37.5%, noise +-0.8%, reps [-36.71, -38.23]); prose@65536 decode_tps 48.15->50.95 (+5.8%, noise +-1.9%, reps [3.95, 7.68]); prose@65536 cold_ttft_s 84.011->78.994 (-6.0%, noise +-0.1%, reps [-5.89, -6.05]); prose@65536 followup_ttft_s 4.166->4.038 (-3.1%, noise +-0.2%, reps [-2.89, -3.26]); prose@65536 warm_ttft_s 0.399->0.31 (-22.2%, noise +-2.2%, reps [-24.38, -20.0]); code@131072 decode_tps 68.2->72.5 (+6.3%, noise +-1.5%, reps [4.84, 7.77]); code@131072 cold_ttft_s 209.536->199.367 (-4.8%, noise +-0.0%, reps [-4.83, -4.87]); code@131072 followup_ttft_s 6.421->6.187 (-3.7%, noise +-0.2%, reps [-3.82, -3.5]); code@131072 warm_ttft_s 0.833->0.612 (-26.6%, noise +-3.5%, reps [-22.97, -30.01]); prose@131072 decode_tps 40.4->42.15 (+4.3%, noise +-1.6%, reps [5.94, 2.72]); prose@131072 cold_ttft_s 209.519->199.399 (-4.8%, noise +-0.0%, reps [-4.86, -4.81]); prose@131072 followup_ttft_s 6.413->6.175 (-3.7%, noise +-0.4%, reps [-4.07, -3.35]); prose@131072 warm_ttft_s 0.785->0.597 (-23.9%, noise +-3.4%, reps [-27.14, -20.35])
+  memory: PASS - peak 75.346->56.668 GiB; idle 55.249->34.288 GiB; held 34.738->31.392 GiB
+  longqa: PASS - base 30/30 cand 30/30 per ctx {32768: [10, 10, 10], 65536: [10, 10, 10], 131072: [10, 10, 10]}
+  conc: PASS - base ttft [5.151, 4.726] dec [20.9, 20.7]; base ttft [6.386, 11.634] dec [18.6, 20.5]; base ttft [9.47, 5.048] dec [20.3, 18.7]; cand ttft [5.112, 2.462] dec [21.0, 20.0]; cand ttft [6.071, 13.436] dec [18.8, 20.7]; cand ttft [10.761, 5.197] dec [16.5, 15.3]
+```
+yv verdict for the tree-commit fix (`yv ab --base main@50b6d3e3 --cand longgap@638bcfd1 --suite long`, run longgap-tree3): PASS. Identity 18 base-vs-candidate and 18 spec-on-vs-off cells, 0 mismatches; APC hits at 32K/64K/128K; longqa 30/30 vs 30/30; memory peak 56.605 -> 56.643 GiB; conc neutral. Speed (decode tok/s base -> cand): code@32K 88.65 -> 97.55 (+10.3%), prose@32K 59.3 -> 64.0 (+7.9%), code@64K 97.4 -> 118.7 (+21.9%, noise +-9.3%), prose@64K 48.15 -> 51.85 (+7.7%), prose@128K 40.05 -> 41.55 (+4.1%), code@128K 68.3 -> 63.95 (-6.4%, noise +-10.8%, reps +4.4/-17.3; the tfbench A/B above shows 69.6 -> 70.0, so 128K code is unresolved noise, not a measured gain or loss). TTFT neutral after confirmation reps (two initial flags, follow-up code@32K +3.1% and warm prose@128K +4.7%, were confirmed neutral). Two earlier yv runs (longgap-tree: base and cand were the same commit; longgap-tree2: infrastructure failures, no free port / server exit) are not evidence.
