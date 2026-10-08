@@ -72,10 +72,15 @@ class HostSampler:
     def start(self) -> None:
         if self._thread is not None:
             return
-        self._thread = threading.Thread(
-            target=self._run, name="yunshu-host-telemetry", daemon=True
-        )
-        self._thread.start()
+        try:
+            self._thread = threading.Thread(
+                target=self._run, name="yunshu-host-telemetry", daemon=True
+            )
+            self._thread.start()
+        except Exception as exc:
+            self._thread = None
+            with self._lock:
+                self._snapshot = unknown(f"sampler worker could not start: {exc}")
 
     def close(self) -> None:
         self._stop.set()

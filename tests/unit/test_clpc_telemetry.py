@@ -247,3 +247,35 @@ def test_matching_error_consumes_dictionary_and_cleans_cf_temporaries(
     with pytest.raises(RuntimeError, match="lookup failed: 5"):
         clpc.augment(desired, "27.0.1")
     assert set(cf.released) == set(cf.objects) - before
+
+
+def test_unknown_os_never_trusts_legacy_cpu_ane_and_constructor_cleans(
+    native, monkeypatch
+):
+    cf = native
+    observed = []
+
+    def augment(desired, version):
+        observed.append(version)
+        raise RuntimeError("unknown OS catalog")
+
+    def subscription(_, desired, subbed, *args):
+        c.cast(subbed, c.POINTER(apple._vp)).contents.value = cf.create({})
+        return cf.create({})
+
+    ior = SimpleNamespace(
+        IOReportCopyChannelsInGroup=lambda *a: cf.create({}),
+        IOReportMergeChannels=lambda *a: None,
+        IOReportCreateSubscription=subscription,
+        IOReportCreateSamples=lambda *a: cf.create({}),
+    )
+    monkeypatch.setattr(apple, "_LIBS", (cf, None, ior))
+    monkeypatch.setattr(apple.platform, "mac_ver", lambda: ("", (), ""))
+    monkeypatch.setattr(clpc, "augment", augment)
+    energy = apple.EnergySampler()
+    assert energy._untrusted_energy_model is True
+    assert energy._clpc_reason == "unknown OS catalog"
+    assert observed == [""]
+    energy.close()
+    energy.close()
+    assert sorted(cf.released) == sorted(cf.objects)

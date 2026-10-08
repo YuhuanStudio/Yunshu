@@ -302,9 +302,9 @@ class EnergySampler:
                 "CFDictionaryCreateMutableCopy",
             )
             version = platform.mac_ver()[0]
-            self._untrusted_energy_model = bool(
-                version and int(version.split(".")[0]) >= 27
-            )
+            self._untrusted_energy_model = (not version) or int(
+                version.split(".")[0]
+            ) >= 27
             if self._untrusted_energy_model:
                 from .clpc import augment
 

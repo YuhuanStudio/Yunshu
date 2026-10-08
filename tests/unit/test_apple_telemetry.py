@@ -284,3 +284,19 @@ def test_invalid_gpu_residency_is_unknown_with_reason(states):
     assert gpu["frequency_mhz"] is None and gpu["active_ratio"] is None
     assert gpu["reason"]
     assert host.snapshot()["watts"]["gpu"] == 10
+
+
+def test_thread_start_failure_never_prevents_gateway_start(monkeypatch):
+    class Thread:
+        def __init__(self, **kwargs):
+            pass
+
+        def start(self):
+            raise RuntimeError("thread resources exhausted")
+
+    monkeypatch.setattr(sampler.threading, "Thread", Thread)
+    host = sampler.HostSampler()
+    host.start()
+    assert host.snapshot()["state"] == "unknown"
+    assert "thread resources exhausted" in host.snapshot()["reason"]
+    host.close()
