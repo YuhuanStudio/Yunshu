@@ -39,8 +39,8 @@ def current_origins() -> list[str]:
 
 
 def credentials_allowed(origins: list[str]) -> bool:
-    """Credentials are never combined with the wildcard (browsers reject it)."""
-    return origins != ["*"]
+    """Credentials are never combined with the wildcard, alone or mixed into a list (browsers reject it)."""
+    return "*" not in origins
 
 
 class LiveCORSMiddleware(CORSMiddleware):
