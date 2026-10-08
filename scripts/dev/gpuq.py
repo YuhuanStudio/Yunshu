@@ -995,6 +995,11 @@ def _priority_step(pauser: Pauser, gate: ServingGate, now: float) -> bool:
     # aged job must not hold the GPU for hours while interactive work queues).
     if pauser.job.get("priority", 0) >= 0:
         return False  # only backlog (raw p<=-1) work is ever paused for priority
+    if pauser.job.get("interleaved"):
+        # An interleaved short job was started instead of the waiting long job and
+        # is bounded by the short timeout: pausing it for that same job would leave
+        # the GPU idle with the short job resident and the long job not yet admitted.
+        return False
     if pauser.job.get("requeued_as"):
         return False  # being stopped for a requeue: the cancel path finishes it
     if _draining():
