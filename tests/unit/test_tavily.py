@@ -305,6 +305,36 @@ async def test_research_async_registry_schema_sse_failure_and_queue(srv):
     await srv.close()
 
 
+@pytest.mark.parametrize("advanced", [False, True])
+async def test_structured_generation_receives_schema_descriptions(srv, advanced):
+    schema = {
+        "type": "object",
+        "properties": {
+            "answer": {"type": "string", "description": "One short weather sentence"}
+        },
+        "required": ["answer"],
+    }
+    await srv.generate("Paris weather", [], schema=schema, advanced=advanced)
+    _, (system, user, passed_schema, _) = srv.calls[-1]
+    assert json.loads(user)["output_schema"] == schema
+    assert "complete JSON" in system and "property descriptions" in system
+    assert "untrusted" in system
+    assert passed_schema == schema
+
+
+async def test_truncated_structured_generation_is_not_repaired(srv):
+    async def incomplete(*args):
+        return '{"answer": "unfinished'
+
+    srv.generator = incomplete
+    with pytest.raises(tavily.TavilyError, match="output_schema"):
+        await srv.generate(
+            "Paris weather",
+            [],
+            schema={"type": "object", "properties": {"answer": {"type": "string"}}},
+        )
+
+
 def test_research_poll_and_mcp(client):
     assert client.get("/tavily/research/missing").status_code == 404
     init = client.post(
