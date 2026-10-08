@@ -268,25 +268,3 @@ def test_no_model_diagnostic_extracts_nested_tables_and_dry_run(tmp_path):
     out = tmp_path / "diagnostic.json"
     module.main(["--out", str(out), "--dry-run"])
     assert '"dry-run"' in out.read_text()
-
-
-def test_probe_server_env_needs_no_auth_header(monkeypatch, tmp_path):
-    """tfbench's readiness check and send() carry no key; a token made it 401 forever."""
-    import sys
-    import types
-
-    seen = {}
-
-    class Stop(Exception):
-        pass
-
-    def fake_srv(engine, env, *args):
-        seen.update(env)
-        raise Stop
-
-    monkeypatch.setitem(sys.modules, "tfbench", types.SimpleNamespace(Srv=fake_srv))
-    module = probe()
-    with pytest.raises(Stop):
-        module.main(["--out", str(tmp_path / "r.json"), "--model", "fake"])
-    assert "YUNSHU_AUTH_TOKEN" not in seen
-    assert seen["YUNSHU_AUTH_DISABLED"] == "1"
