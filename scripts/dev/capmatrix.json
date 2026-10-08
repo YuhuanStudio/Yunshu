@@ -895,14 +895,14 @@
         "country": {
          "type": "string"
         },
-        "population_millions": {
-         "type": "integer"
+        "is_capital": {
+         "type": "boolean"
         }
        },
        "required": [
         "city",
         "country",
-        "population_millions"
+        "is_capital"
        ],
        "additionalProperties": false
       }
@@ -918,7 +918,7 @@
      "value": [
       "city",
       "country",
-      "population_millions"
+      "is_capital"
      ]
     }
    ],
@@ -958,14 +958,14 @@
         "country": {
          "type": "string"
         },
-        "population_millions": {
-         "type": "integer"
+        "is_capital": {
+         "type": "boolean"
         }
        },
        "required": [
         "city",
         "country",
-        "population_millions"
+        "is_capital"
        ],
        "additionalProperties": false
       }
@@ -981,7 +981,7 @@
      "value": [
       "city",
       "country",
-      "population_millions"
+      "is_capital"
      ]
     },
     {
@@ -1678,8 +1678,8 @@
    ],
    "path": "/v1/messages",
    "body": {
-    "max_tokens": 2000,
-    "temperature": 1,
+    "max_tokens": 3000,
+    "temperature": 0,
     "thinking": {
      "type": "enabled",
      "budget_tokens": 1024

@@ -381,6 +381,19 @@ def s_long(cl, row):
     ).lower(), {"prompt_tokens": pt, "text": _text(r)[:60]}
 
 
+_NOISE = {
+    "events",
+    "usage",
+    "tools",
+    "instructions",
+    "id",
+    "object",
+    "created",
+    "temperature",
+    "top_p",
+    "model",
+    "output_text",
+}
 SCRIPTS = {"seed": s_seed, "cancel": s_cancel, "cache": s_cache, "long": s_long}
 
 
@@ -433,10 +446,10 @@ def run_row(cl, row):
             fails.append(
                 "response: "
                 + json.dumps(
-                    {k: resp[k] for k in resp if k not in ("events", "usage")},
+                    {k: resp[k] for k in resp if k not in _NOISE},
                     ensure_ascii=False,
                     default=str,
-                )[:600]
+                )[:1200]
             )
         return {"status": "fail" if fails else "pass", "detail": fails or "ok"}
     except Exception as e:  # noqa: BLE001 - any exception is a failed row, never a skip

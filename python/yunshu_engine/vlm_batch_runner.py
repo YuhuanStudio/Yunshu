@@ -79,6 +79,7 @@ class RunStats:
     first_token_s: float = 0.0
     generated: int = 0
     finish_reason: str | None = None
+    stop_string_hit: bool = False  # a user stop string (not EOS) ended the request
     used_apc: bool = False
     used_draft: bool = False
     # Per-token {"token_id", "logprob", "top_logprobs": [...]} when requested.
