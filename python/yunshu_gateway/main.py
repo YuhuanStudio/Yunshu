@@ -1006,6 +1006,9 @@ def create_app() -> FastAPI:
     from .x_yunshu import YunshuExtensionsMiddleware
 
     app.add_middleware(YunshuExtensionsMiddleware)
+    from .resident_activity import ResidentActivityMiddleware
+
+    app.add_middleware(ResidentActivityMiddleware)
     # Every request/WS holds a lease on each model it acquires until it ends, so
     # unload / TTL / eviction cannot pull it mid-response (wraps everything but the
     # metrics + disconnect layers, which hold no engine).

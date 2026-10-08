@@ -190,7 +190,7 @@ class ServingGate:
 
     @property
     def enabled(self) -> bool:
-        return bool(self.cfg.get("urls"))
+        return bool(self.cfg.get("urls") or self.cfg.get("activity_files"))
 
     @property
     def poll_s(self) -> float:
@@ -215,11 +215,34 @@ class ServingGate:
         busy = False
         for url in self.cfg.get("urls", []):
             busy = self.fetch(url, key) or busy
+        for filename in self.cfg.get("activity_files", []):
+            try:
+                activity = json.loads(Path(filename).read_text())
+                busy = int(activity["active"]) > 0 or busy
+                if activity.get("schema") != 1:
+                    busy = True
+            except (OSError, ValueError, KeyError, TypeError):
+                busy = True  # missing / corrupt local handshake fails closed
         if busy:
             self.idle_since = None
         elif self.idle_since is None:
             self.idle_since = now
         return busy
+
+    def acknowledge(self, safe: bool) -> None:
+        """Fresh ticket acknowledgement, only after research is observed stopped."""
+        if not safe:
+            return
+        for filename in self.cfg.get("activity_files", []):
+            try:
+                activity = json.loads(Path(filename).read_text())
+                if activity.get("schema") != 1 or not activity.get("ticket"):
+                    continue
+                _write(Path(str(filename) + ".ack"), {
+                    "ticket": activity["ticket"], "safe": True, "updated": _now()
+                })
+            except (OSError, ValueError, TypeError):
+                pass
 
     @property
     def busy(self) -> bool:
@@ -276,8 +299,8 @@ def mem_blocked(job: dict, gate: ServingGate, free=free_memory_gb) -> bool:
     if need <= 0:
         return False
     avail = free()
-    if avail is None:  # cannot measure: do not wedge the queue
-        return False
+    if avail is None:  # local co-serving requires known headroom
+        return bool(gate.cfg.get("activity_files"))
     return avail - need < gate.reserve_gb
 
 
@@ -489,6 +512,18 @@ class Pauser:
         self._signal(signal.SIGCONT)
         self._save()
 
+    def stopped(self) -> bool:
+        """All known process-group members stopped; unknown state never acknowledges."""
+        try:
+            import psutil
+
+            pid = self.job["pid"]
+            members = [p for p in psutil.process_iter() if os.getpgid(p.pid) == pid]
+            return bool(members) and all(p.status() in (psutil.STATUS_STOPPED, psutil.STATUS_ZOMBIE)
+                                         for p in members)
+        except Exception:  # unknown process state fails closed
+            return False
+
     def step(self, gate: ServingGate, serving_ok: bool, now: float) -> None:
         """Stop on production traffic; continue after the idle-resume window."""
         if serving_ok or not gate.enabled:
@@ -498,6 +533,8 @@ class Pauser:
                 self.resume(now)
         elif gate.busy:
             self.pause(now)
+        if self.paused:
+            gate.acknowledge(self.stopped())
 
 
 # ---------------------------------------------------------------- queue
@@ -1066,6 +1103,8 @@ def _priority_step(pauser: Pauser, gate: ServingGate, now: float) -> bool:
     Returns True while priority work still owns the pause. The nested runner
     cannot preempt again (its priority is >=0), so at most two jobs are resident.
     """
+    if gate.busy:
+        return False  # resident requests outrank every research priority
     # A backlog job that aged into the interactive level (waited AGE_S) gets a
     # guaranteed AGED_SLICE_S of running since it last started or resumed, so it
     # makes progress; after that it yields to p0 work like any backlog job (a long
@@ -1625,6 +1664,7 @@ def daemon() -> None:
         workers = {lane: t for lane, t in workers.items() if t.is_alive()}
         if gate.enabled and "m5" not in workers:
             gate.poll()
+            gate.acknowledge(True)
         for j in _jobs():
             if j["state"] == "pending" and j.get("cancel"):
                 _release_quiet_hold(j, _now())

@@ -268,6 +268,8 @@ internal ones, `--json` prints JSON, `--config FILE` includes a config file.
 | `YUNSHU_LOG_ROTATE_HOURS` | float | 24.0 | Service log: also rotate when this many hours passed since the last rotation; 0 turns time rotation off. |
 | `YUNSHU_LOG_KEEP` | int | 7 | Service log: rotated (gzip, secrets redacted) files kept. |
 | `YUNSHU_LOG_RETENTION_DAYS` | float | 14.0 | Service log: delete rotated files older than this many days; 0 keeps them until YUNSHU_LOG_KEEP prunes them. |
+| `YUNSHU_RESEARCH_ACTIVITY_FILE` | path | unset | Opt-in local gpuq pause handshake file. Configure the same file in gpuq serving.json activity_files. No request content is written. Requests wait for a fresh safe acknowledgement before inference; timeout returns 503. |
+| `YUNSHU_RESEARCH_PAUSE_TIMEOUT_S` | float | 2.0 | Maximum pre-admission wait for gpuq pause acknowledgement in seconds. |
 | `YUNSHU_SERVE_LOG` | bool | off | Write one numbers-only JSON line per finished generation request (timings, token counts, speculative acceptance, cache tier, concurrency, arm, build) to a local, size-capped, rotated file. Never prompts, outputs or token ids. Off by default; nothing leaves the machine. |
 | `YUNSHU_SERVE_LOG_DIR` | path | unset | Directory of the serve log. Unset: ~/.yunshu/logs. |
 | `YUNSHU_SERVE_LOG_MAX_MB` | float | 4.0 | Serve log: rotate at this size in MiB; with YUNSHU_SERVE_LOG_KEEP the directory is capped at max * (keep + 1). |
