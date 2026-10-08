@@ -1,4 +1,6 @@
-import { Progress, SegmentedBar, StatusIndicator } from "@yuhuanowo/yunui";
+import { PrefillBar } from "./PrefillBar";
+import { prefillSplit } from "./prefill-split";
+import { SegmentedBar, StatusIndicator } from "@yuhuanowo/yunui";
 import { t } from "./i18n/index.ts";
 import type { EngineHistoryPoint } from "./useEngine";
 import { number, phaseDot, Readout } from "./ui";
@@ -77,11 +79,8 @@ export const isLive = (phase: string) =>
 
 /** Prefill progress in percent, from what the API actually reports. */
 export function prefillPercent(row: Row): number | null {
-  if (row.percent != null) return Math.max(0, Math.min(100, row.percent));
-  const prompt = row.prompt_tokens ?? 0;
-  return prompt > 0 && row.processed_tokens != null
-    ? Math.max(0, Math.min(100, (row.processed_tokens / prompt) * 100))
-    : null;
+  // Progress of the part that has to be computed: a cache hit is not progress.
+  return prefillSplit(row)?.percentOfComputed ?? null;
 }
 
 /** Distinct finished requests in the sampled history, oldest first (dedup by id). */
@@ -252,7 +251,7 @@ export function PrefillMeter({ row }: { row: Row }) {
           )}
         </span>
       </div>
-      <Progress value={percent} label={t("requests.trace.prefillProgress")} />
+      <PrefillBar row={row} height={6} caption />
     </div>
   );
 }

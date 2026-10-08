@@ -22,6 +22,8 @@ export interface FooterPill {
   help: string;
   /** Realistic width of the value in `ch`, so changing digits never move neighbours. */
   minCh?: number;
+  /** A live number that glides between samples; when set the band draws it instead of `value`. */
+  tween?: { value: number; digits: number; suffix: string };
 }
 
 const finite = (v: unknown): v is number =>
@@ -195,6 +197,10 @@ export function footerPills(input: FooterInput): FooterPill[] {
   }
   const a = activity(status);
   let value: string | undefined;
+  const tween =
+    a.phase === "decode" && a.decodeNow != null
+      ? { value: a.decodeNow, digits: 0, suffix: " tok/s" } // i18n-ignore
+      : undefined;
   if (a.phase === "decode")
     value = a.decodeNow != null ? `${n(a.decodeNow)} tok/s` : "—";
   else if (a.phase === "prefill")
@@ -222,6 +228,7 @@ export function footerPills(input: FooterInput): FooterPill[] {
           : "warning",
     dot: a.phase !== "idle" || !!loadingModel,
     minCh: a.phase === "decode" ? 9 : a.phase === "prefill" ? 4 : undefined,
+    tween,
     help:
       a.phase === "idle"
         ? t("shell.footer.now.help.idle")

@@ -27,7 +27,6 @@ const overview: Shape<typeof zh> = {
   "activity.rowActive": "活动请求",
   "speed.live": "实时合计",
   "speed.window": "近 {s} 秒均值",
-  "lane.prefill": "预填充 {pct}%",
   "lane.prefixHit": "前缀命中 {cached} / {prompt} token",
   "page.title": "引擎总览",
   "page.descConnect": "模型、请求与性能，都从你的本机引擎开始。",
@@ -281,5 +280,9 @@ const overview: Shape<typeof zh> = {
   "host.interval": "采样间隔",
   "host.sampledAt": "最近采样",
   "host.honesty": "功耗是区间能量除以时间；合计是各通道相加，不是插座功率。GPU 活跃比例是时间比例，不是 shader 占用率。热限制与压力是操作系统的上报，不是温度阈值。",
+  "prefill.cached": "缓存命中 {n} tokens",
+  "prefill.computed": "已计算 {n} tokens",
+  "prefill.value": "缓存 {cached} + 已计算 {done} / 共 {prompt} tokens",
+  "prefill.valueNoCache": "已计算 {done} / 共 {prompt} tokens",
 };
 export default overview;

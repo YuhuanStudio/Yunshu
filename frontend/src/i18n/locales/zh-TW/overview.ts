@@ -24,7 +24,6 @@ const overview = {
   "activity.rowActive": "活動請求",
   "speed.live": "即時合計",
   "speed.window": "近 {s} 秒均值",
-  "lane.prefill": "預填 {pct}%",
   "lane.prefixHit": "前綴命中 {cached} / {prompt} token",
   "page.title": "引擎總覽",
   "page.descConnect": "模型、請求與效能，都從你的本機引擎開始。",
@@ -279,5 +278,9 @@ const overview = {
   "host.interval": "取樣間隔",
   "host.sampledAt": "最近取樣",
   "host.honesty": "功耗是區間能量除以時間；合計是各通道相加，不是插座功率。GPU 活躍比例是時間比例，不是 shader 佔用率。熱限制與壓力是作業系統的回報，不是溫度門檻。",
+  "prefill.cached": "快取命中 {n} tokens",
+  "prefill.computed": "已計算 {n} tokens",
+  "prefill.value": "快取 {cached} + 已計算 {done} / 共 {prompt} tokens",
+  "prefill.valueNoCache": "已計算 {done} / 共 {prompt} tokens",
 };
 export default overview;

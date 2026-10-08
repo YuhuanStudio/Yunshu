@@ -321,11 +321,19 @@ def progress_payload(info: RequestInfo) -> dict:
         out["queue_est_wait_ms"] = wait_ms
     elif st.phase == "prefill":
         done, total = st.prefill_done, max(st.prefill_total, 1)
-        out["processed_tokens"] = done + st.cached_tokens
-        out["percent"] = round(100.0 * done / total, 1)
-        rate = _prefill_rate(info, done, now)
-        out["tokens_per_second"] = round(rate, 1) if rate else None
-        out["eta_s"] = round((total - done) / rate, 1) if rate else None
+        if not getattr(st, "prefill_known", True):
+            # The cache hit is not known yet, so any share of the prompt would be wrong and then jump:
+            # report no progress rather than a number that is about to change.
+            out["percent"] = None
+            out["processed_tokens"] = None
+            out["tokens_per_second"] = None
+            out["eta_s"] = None
+        else:
+            out["processed_tokens"] = done + st.cached_tokens
+            out["percent"] = round(100.0 * done / total, 1)
+            rate = _prefill_rate(info, done, now)
+            out["tokens_per_second"] = round(rate, 1) if rate else None
+            out["eta_s"] = round((total - done) / rate, 1) if rate else None
     else:
         out["completion_tokens"] = st.generated
         if st.phase == "decode" and st.t_first and st.t_last > st.t_first:

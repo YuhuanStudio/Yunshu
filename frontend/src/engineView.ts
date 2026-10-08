@@ -1,4 +1,5 @@
 import type { EngineStatus, RequestRow } from "./api";
+import { prefillSplit } from "./prefill-split.ts";
 import { t } from "./i18n/index.ts";
 import { fixed, number } from "./i18n/format.ts";
 
@@ -57,11 +58,8 @@ const isPrefillRow = (row: RequestRow) =>
   row.phase === "prefill" || row.phase === "starting";
 
 export function prefillPercent(row: RequestRow): number | null {
-  if (finite(row.percent)) return row.percent;
-  const prompt = row.prompt_tokens ?? 0;
-  return prompt > 0 && finite(row.processed_tokens)
-    ? (row.processed_tokens / prompt) * 100
-    : null;
+  // Progress of the part that has to be computed; the cache hit is separate (prefill-split.ts).
+  return prefillSplit(row)?.percentOfComputed ?? null;
 }
 
 export interface Activity {
@@ -98,13 +96,17 @@ export function activity(status: EngineStatus): Activity {
   if (nDecode > 0) lit.push("decode");
   if (!lit.length) lit.push("idle");
   // A prompt being read leads: it is what delays the first token.
-  const phase: ActivityPhase = lit.includes("prefill")
+  const rawPhase: ActivityPhase = lit.includes("prefill")
     ? "prefill"
     : lit.includes("decode")
       ? "decode"
       : lit.includes("queued")
         ? "queued"
         : "idle";
+  // The console's steady phase (a brief prefill between two decodes, or the gap between two requests,
+  // does not flash) replaces the latest sample's when the status comes from useEngine.
+  const steady = status.console_live;
+  const phase: ActivityPhase = steady ? steady.phase : rawPhase;
   return {
     phase,
     lit,
@@ -112,9 +114,11 @@ export function activity(status: EngineStatus): Activity {
     prefilling,
     preparing: prefilling?.phase === "starting",
     progress: prefilling ? prefillPercent(prefilling) : null,
-    decodeNow: finite(status.throughput.live_decode_tps)
-      ? status.throughput.live_decode_tps
-      : null,
+    decodeNow: steady
+      ? steady.tps
+      : finite(status.throughput.live_decode_tps)
+        ? status.throughput.live_decode_tps
+        : null,
     generated: finite(decoding?.completion_tokens)
       ? decoding!.completion_tokens!
       : null,

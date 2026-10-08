@@ -152,6 +152,20 @@ const adapters = {
     return fn;
   },
 };
+/**
+ * A new page starts at its top. The scroller outlives the route (React keeps it, hidden, while a lazy
+ * page loads, and the browser then restores its old offset), so the reset happens when the new page's own
+ * container mounts, once the scroller is shown again.
+ */
+function startAtTop(el: HTMLElement | null) {
+  const scroller = el?.parentElement;
+  if (!scroller) return;
+  scroller.scrollTop = 0;
+  requestAnimationFrame(() => {
+    scroller.scrollTop = 0;
+  });
+}
+
 export default function App() {
   const locale = useLocale();
   const [{ page, sub }, setRoute] = useState(route),
@@ -796,6 +810,7 @@ export default function App() {
                     >
                       <div
                         key={page}
+                        ref={startAtTop}
                         className="yunui-fade-in mx-auto w-full max-w-7xl"
                       >
                         {page === "diagnostics" && (

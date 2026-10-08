@@ -1,4 +1,6 @@
 import { useState } from "react";
+import { LiveNumber } from "./LiveNumber";
+import { PrefillBar } from "./PrefillBar";
 import { gbTotalText, memoryPairText } from "./byte-format";
 import { ChevronDown } from "lucide-react";
 import { useMinWidth } from "./ui";
@@ -139,7 +141,7 @@ export function StatusIslandContent({
               className="min-w-[7ch] text-[22px] font-semibold leading-none tabular-nums text-foreground"
               data-testid="island-tps"
             >
-              {number(a.decodeNow, 0)}
+              <LiveNumber value={a.decodeNow} />
               <span className="text-xs font-normal text-muted-foreground">
                 tok/s
               </span>
@@ -172,18 +174,7 @@ export function StatusIslandContent({
         </div>
         {a.phase === "prefill" && (
           <div className="mt-1.5" data-testid="island-prefill">
-            <SegmentMeter
-              value={(a.progress ?? 0) / 100}
-              label={t("shell.island.live.prefillPlain")}
-              valueText={
-                a.progress != null ? `${number(a.progress, 0)}%` : undefined
-              }
-              segments={32}
-              warnAt={null}
-              dangerAt={null}
-              tone="neutral"
-              trackColor="color-mix(in srgb, var(--text-primary) 14%, transparent)"
-            />
+            <PrefillBar row={a.prefilling ?? {}} height={6} caption />
             <div className="mt-1 text-xs tabular-nums text-muted-foreground">
               {a.progress != null
                 ? t("shell.island.live.prefill", { pct: number(a.progress, 0) })

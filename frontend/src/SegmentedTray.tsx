@@ -39,7 +39,7 @@ export function SegmentedTray<T extends string = string>({
         indicator
         aria-label={ariaLabel}
         className={cn(
-          "h-8 flex-wrap gap-0.5 rounded-lg bg-(--tray-track) p-0.5",
+          "h-8 flex-wrap gap-0.5 rounded-lg bg-(--tray-track) p-0.5 max-sm:h-10",
           fillOnPhone && "max-sm:w-full",
         )}
       >
@@ -48,7 +48,7 @@ export function SegmentedTray<T extends string = string>({
             key={v}
             value={v}
             className={cn(
-              "h-7 gap-1.5 rounded-md px-2.5 py-0 text-xs",
+              "h-7 gap-1.5 rounded-md px-2.5 py-0 text-xs max-sm:h-9",
               fillOnPhone && "max-sm:flex-1",
               "data-[state=active]:bg-transparent data-[state=active]:text-foreground data-[state=active]:shadow-none",
               "data-[state=inactive]:text-muted-foreground",

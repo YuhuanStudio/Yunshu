@@ -27,7 +27,6 @@ const overview: Shape<typeof zh> = {
   "activity.rowActive": "Active requests",
   "speed.live": "Live total",
   "speed.window": "{s}s mean",
-  "lane.prefill": "Prefill {pct}%",
   "lane.prefixHit": "Prefix hit {cached} / {prompt} tokens",
   "page.title": "Engine overview",
   "page.descConnect":
@@ -296,5 +295,9 @@ const overview: Shape<typeof zh> = {
   "host.interval": "Sample interval",
   "host.sampledAt": "Last sample",
   "host.honesty": "Power is interval energy over time; the total is the sum of the channels, not wall power. GPU active share is a time fraction, not shader occupancy. Thermal limit and pressure are the OS's report, not a temperature threshold.",
+  "prefill.cached": "Cache hit {n} tokens",
+  "prefill.computed": "Computed {n} tokens",
+  "prefill.value": "{cached} cached + {done} computed of {prompt} tokens",
+  "prefill.valueNoCache": "{done} computed of {prompt} tokens",
 };
 export default overview;

@@ -20,6 +20,7 @@ const StatusIslandContent = lazy(() =>
     default: m.StatusIslandContent,
   })),
 );
+import { LiveNumber } from "./LiveNumber";
 import { useHostTelemetry } from "./host-hook";
 
 /**
@@ -103,7 +104,19 @@ export function FooterStatus({
                 <StatusPill
                   key={p.key}
                   label={p.label}
-                  value={p.value}
+                  value={
+                    p.tween ? (
+                      <>
+                        <LiveNumber
+                          value={p.tween.value}
+                          digits={p.tween.digits}
+                        />
+                        {p.tween.suffix}
+                      </>
+                    ) : (
+                      p.value
+                    )
+                  }
                   valueMinCh={p.minCh}
                   tone={p.tone}
                   dot={p.dot}

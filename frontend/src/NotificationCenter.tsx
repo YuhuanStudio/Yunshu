@@ -50,7 +50,7 @@ export function NotificationCenter() {
           <span
             aria-hidden="true"
             data-testid="bell-badge"
-            className={`pointer-events-none absolute -right-0.5 -top-0.5 z-10 flex h-4 min-w-4 items-center justify-center rounded-full bg-(--error) px-1 text-[10px] font-bold text-pure-white ${unread ? "" : "invisible"}`}
+            className={`pointer-events-none absolute -right-0.5 -top-0.5 z-10 flex h-4 w-5 items-center justify-center rounded-full bg-(--error) text-[10px] tabular-nums font-bold text-pure-white ${unread ? "" : "invisible"}`}
           >
             {unread > 9 ? "9+" : unread || 0}
           </span>

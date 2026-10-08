@@ -529,3 +529,29 @@ def test_ledger_reports_binary_gb_with_exact_bytes(monkeypatch):
     out: dict = {}
     memory_ledger.put(out, "x", None)
     assert out == {"x_gb": None, "x_bytes": None}
+
+
+def test_prefill_progress_waits_for_the_cache_hit_instead_of_jumping():
+    """Until the cache hit is known the prompt is counted whole, so a percentage would start low and
+    jump when the hit arrives; the payload then carries no progress rather than a wrong one."""
+    from yunshu_engine.vlm_batch_runner import RunStats
+
+    info = x_yunshu.RequestInfo(
+        request_id="p1", method="POST", path="/v1/chat/completions"
+    )
+    st = RunStats(prompt_tokens=10_000)
+    now = time.perf_counter()
+    st.t_submit = st.t_admit = now - 1
+    st.prefill_total, st.prefill_done = 10_000, 500
+    st.prefill_known = False
+    info.gen = SimpleNamespace(stats=st)
+    p = x_yunshu.progress_payload(info)
+    assert p["phase"] == "prefill"
+    assert p["percent"] is None and p["processed_tokens"] is None and p["eta_s"] is None
+    assert p["prompt_tokens"] == 10_000
+    # The hit arrives: 8,000 cached, 2,000 to compute, 500 done.
+    st.cached_tokens, st.prefill_total, st.prefill_known = 8_000, 2_000, True
+    p = x_yunshu.progress_payload(info)
+    assert p["cached_tokens"] == 8_000
+    assert p["percent"] == 25.0
+    assert p["processed_tokens"] == 8_500

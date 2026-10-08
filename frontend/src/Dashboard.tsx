@@ -1,4 +1,5 @@
 import { gbTotalText } from "./byte-format";
+import { PrefillBar } from "./PrefillBar";
 import { SegmentedTray } from "./SegmentedTray";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import {
@@ -6,7 +7,6 @@ import {
   Button,
   Card,
   EmptyState,
-  Progress,
   ScrollFade,
   SegmentedBar,
   Skeleton,
@@ -186,11 +186,7 @@ function RequestLane({ row }: { row: RequestRow }) {
       </div>
       {progress != null ? (
         <div className="col-span-2 flex h-4 items-center">
-          <Progress
-            className="h-1 w-full"
-            value={Math.max(0, Math.min(100, progress))}
-            label={t("overview.lane.prefill", { pct: number(progress, 0) })}
-          />
+          <PrefillBar row={row} className="h-1" caption />
         </div>
       ) : phase !== "prefill" && cached > 0 && prompt > 0 ? (
         <p className="col-span-2 truncate text-xs text-muted-foreground">

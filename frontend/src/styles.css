@@ -231,3 +231,14 @@ h1[tabindex="-1"]:focus-visible {
   /* Two lines reserved, so a sub-line that wraps for one reading never moves the row below. */
   min-height: 2lh;
 }
+
+/* No pull-to-refresh and no rubber-band on the page itself: the console scrolls inside its own
+   scroller, so a drag that reaches the document is never a scroll the user wanted. The page scroller
+   keeps its own overscroll inside, and a floating panel contains the touches it receives. */
+html,
+body {
+  overscroll-behavior: none;
+}
+[data-testid="page-scroll"] {
+  overscroll-behavior-y: contain;
+}

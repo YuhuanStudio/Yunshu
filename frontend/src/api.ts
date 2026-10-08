@@ -100,6 +100,14 @@ export interface EngineStatus {
   last: EngineLastRequest | null;
   throughput: EngineThroughput;
   gpu?: Record<string, unknown>;
+  /**
+   * Added by the console (never by the engine): the steady phase and smoothed decode speed to display
+   * (phase-stability.ts). `activity()` prefers it over what the latest sample alone says.
+   */
+  console_live?: {
+    phase: "idle" | "queued" | "prefill" | "decode";
+    tps: number | null;
+  };
   [key: string]: unknown;
 }
 
