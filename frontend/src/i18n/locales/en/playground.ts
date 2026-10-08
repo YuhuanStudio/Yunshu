@@ -151,7 +151,7 @@ const playground: Shape<typeof zh> = {
   "library.transfer.undo": "Undo import",
   "library.transfer.rejected": "That file is not a Playground export, or its version does not match.",
   "library.transfer.file": "Import file",
-  "tools.open": "Tools and structured output",
+  "tools.open": "Tools",
   "tools.title": "Tool-call and structured-output tester",
   "tools.desc": "Check first, then send with the selected model: does the engine call a tool, and do the arguments follow the schema you wrote?",
   "tools.tab.tools": "Tool calls",

@@ -136,7 +136,7 @@ const playground = {
   "library.transfer.undo": "復原匯入",
   "library.transfer.rejected": "這個檔案不是推理測試的匯出檔，或版本不符。",
   "library.transfer.file": "匯入檔案",
-  "tools.open": "工具與結構化輸出",
+  "tools.open": "工具測試",
   "tools.title": "工具呼叫與結構化輸出測試",
   "tools.desc": "用目前選的模型先檢查、再送出：看引擎有沒有呼叫工具、參數是否符合你寫的 schema。",
   "tools.tab.tools": "工具呼叫",

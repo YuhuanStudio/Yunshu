@@ -303,7 +303,7 @@ test("tools tester: invalid definitions block the send with a reason; a tool rou
   });
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/console/#/playground", { waitUntil: "domcontentloaded" });
-  await page.getByRole("button", { name: "工具與結構化輸出" }).click();
+  await page.getByRole("button", { name: "工具測試" }).click();
   const dialog = page.getByTestId("tools-tester");
   await dialog.getByLabel("工具定義 (JSON)").fill("[");
   await expect(dialog.getByTestId("defs-status")).toContainText("不是合法 JSON");
@@ -356,7 +356,7 @@ test("structured output tester tells JSON from schema violations", async ({
     });
   });
   await page.goto("/console/#/playground", { waitUntil: "domcontentloaded" });
-  await page.getByRole("button", { name: "工具與結構化輸出" }).click();
+  await page.getByRole("button", { name: "工具測試" }).click();
   const dialog = page.getByTestId("tools-tester");
   await dialog.getByRole("tab", { name: "結構化輸出" }).click();
   await dialog.getByRole("button", { name: "送出", exact: true }).click();

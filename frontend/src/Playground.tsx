@@ -858,7 +858,7 @@ export function Playground({
         }
         actions={
           <>
-            <div className="flex items-center gap-1">
+            <div className="flex flex-wrap items-center gap-1">
               <Button
                 size="sm"
                 variant="ghost"

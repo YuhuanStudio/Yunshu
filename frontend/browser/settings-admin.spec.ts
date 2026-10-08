@@ -574,7 +574,7 @@ test("phone settings: section picker is a Select under the standard header", asy
   await expect(nav.locator('[data-variant="tray"]')).toHaveCount(0);
 });
 
-test("phone settings: no rules between rows, no duplicated section title, no 8000 in the address help", async ({
+test("phone settings: no rules between rows, no duplicated section title, the address help states the default port 8000", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 402, height: 874 });
@@ -586,7 +586,7 @@ test("phone settings: no rules between rows, no duplicated section title, no 800
   await expect(trigger).not.toHaveText("引擎連線");
   const card = page.locator("#settings-connection");
   await expect(card).toContainText("服務位址");
-  await expect(card).not.toContainText("8000");
+  await expect(card).toContainText("8000");
   const rules = await card.evaluate((el) => {
     const out: string[] = [];
     for (const row of el.querySelectorAll("[data-testid=stack-row]")) {
