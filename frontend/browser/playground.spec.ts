@@ -359,7 +359,13 @@ async function openPlayground(
   // the shell mid-fill is a race the test creates.
   await expect(page.getByTestId("live-phase")).toContainText("未授權");
   await page.getByRole("button", { name: /^開啟設定/ }).click();
-  await page.getByLabel("存取權杖").fill(api.token);
+  // The settings page is still hydrating its lazy sections right after navigation, and a controlled
+  // field can drop a value typed in that window: type again until it sticks.
+  const field = page.getByLabel("存取權杖");
+  await expect(async () => {
+    await field.fill(api.token);
+    expect(await field.inputValue()).toBe(api.token);
+  }).toPass();
   await page.getByRole("button", { name: "儲存並連線", exact: true }).click();
   // Wait for the engine to accept the token before leaving: navigating while the first
   // authorised poll is in flight is a race the test, not the user, creates.
