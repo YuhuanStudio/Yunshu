@@ -339,3 +339,13 @@ def test_native_capture_clock_is_not_shifted_by_parser_work(monkeypatch):
     assert result.t_end == 12.0 and result.seconds == 2.0
     assert energy._t == 12.0
     energy.close()
+
+
+def test_m5_reserved_zero_residency_states_do_not_hide_known_clocks():
+    # M5 diagnostic job1008-125716: P1..P15, pmgr has13 active frequencies.
+    clocks = [338, 486, 636, 796, 888, 988, 1084, 1182, 1278, 1374, 1470, 1578, 1620]
+    states = [("OFF", 100), ("P1", 200), *[(f"P{i}", 0) for i in range(2, 16)]]
+    assert sampler.frequency(states, clocks) == (338, None)
+    states[-1] = ("P15", 1)
+    mhz, reason = sampler.frequency(states, clocks)
+    assert mhz is None and "no qualified frequency" in reason

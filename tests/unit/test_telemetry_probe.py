@@ -216,3 +216,31 @@ def test_overhead_suite_tracks_long_cells_without_raising_priority():
     assert policy["reps"] == 3 and policy["speed_tol_pct"] == 0
     assert policy["split_cells"] is True and policy["kinds"] == ["prose"]
     assert policy["stages"][:3] == ["preflight", "telemetry-tiny", "telemetry"]
+
+
+def test_no_model_diagnostic_extracts_nested_tables_and_dry_run(tmp_path):
+    import struct
+
+    path = (
+        Path(__file__).resolve().parents[2] / "scripts/research/telemetry_channels.py"
+    )
+    spec = importlib.util.spec_from_file_location("telemetry_channels", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    nodes = [
+        {
+            "IORegistryEntryName": "pmgr",
+            "IORegistryEntryChildren": [
+                {
+                    "IORegistryEntryName": "pmgr-child",
+                    "voltage-states9": struct.pack("<II", 900000000, 1),
+                }
+            ],
+        }
+    ]
+    assert module.pmgr_tables(nodes) == [
+        {"name": "pmgr-child", "pairs": [(900000000, 1)]}
+    ]
+    out = tmp_path / "diagnostic.json"
+    module.main(["--out", str(out), "--dry-run"])
+    assert '"dry-run"' in out.read_text()

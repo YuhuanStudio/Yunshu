@@ -30,13 +30,23 @@ def frequency(states: list, table: list[int]) -> tuple[float | None, str | None]
     indices = sorted(
         int(n[1:]) for n, _ in states if n and n.startswith("P") and n[1:].isdigit()
     )
+    mapped = set(range(1, len(table) + 1))
     if (
-        not indices
-        or indices != list(range(1, len(table) + 1))
-        or not table
+        not table
         or table != sorted(table)
+        or any(mhz <= 0 for mhz in table)
+        or len(indices) != len(set(indices))
+        or not mapped.issubset(indices)
     ):
         return None, "GPU DVFS table does not match residency states"
+    # M5 exposes reserved P14/P15 entries even with only 13 physical clocks.
+    # Zero-residency entries contribute no time; never guess an occupied clock.
+    if any(
+        int(name[1:]) not in mapped and residency > 0
+        for name, residency in states
+        if name.startswith("P") and name[1:].isdigit()
+    ):
+        return None, "active GPU state has no qualified frequency"
     active = [
         (int(n[1:]), r)
         for n, r in states
