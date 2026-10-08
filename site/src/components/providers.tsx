@@ -6,12 +6,10 @@ import { YunUIProvider } from "@yuhuanowo/yunui/adapters";
 import NextLink from "next/link";
 import { useRouter as useNextRouter } from "next/navigation";
 import type { ComponentProps, ReactNode } from "react";
-import { LANGS, LANG_NAMES, type Lang } from "@/lib/i18n";
-import { MESSAGES } from "@/lib/messages";
+import type { I18nProviderProps } from "fumadocs-ui/contexts/i18n";
 import { BASE_PATH } from "@/lib/site";
 
-export function Providers({ lang, children }: { lang: Lang; children: ReactNode }) {
-  const m = MESSAGES[lang];
+export function Providers({ i18n, children }: { i18n: Omit<I18nProviderProps, "children" | "onLocaleChange">; children: ReactNode }) {
   return (
     <ThemeProvider
       attribute="class"
@@ -25,17 +23,7 @@ export function Providers({ lang, children }: { lang: Lang; children: ReactNode 
         theme={{ enabled: false }}
         search={{ options: { type: "static", api: `${BASE_PATH}/api/search` } }}
         i18n={{
-          locale: lang,
-          locales: LANGS.map((l) => ({ locale: l, name: LANG_NAMES[l] })),
-          translations: {
-            search: m.search,
-            searchNoResult: m.searchNoResult,
-            toc: m.toc,
-            nextPage: m.next,
-            previousPage: m.previous,
-            chooseTheme: m.theme,
-            chooseLanguage: m.language,
-          },
+          ...i18n,
           onLocaleChange(next: string) {
             try {
               localStorage.setItem("yunshu-docs-lang", next);

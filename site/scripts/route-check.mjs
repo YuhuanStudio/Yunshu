@@ -55,7 +55,10 @@ export function checkContent() {
   for (const file of walk(CONTENT)) {
     const text = readFileSync(file, "utf8");
     for (const { method, path } of findRouteMentions(text)) {
-      const ok = routes.some((r) => (method ? r.method === method : true) && r.re.test(path));
+      const ok =
+        routes.some((r) => (method ? r.method === method : true) && r.re.test(path)) ||
+        // a bare base URL such as http://localhost:8000/v1 is a prefix of served routes
+        (!method && routes.some((r) => r.path.startsWith(path + "/")));
       if (!ok) bad.push(`${relative(CONTENT, file)}: ${method ?? "URL"} ${path}`);
     }
   }

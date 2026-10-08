@@ -1,0 +1,160 @@
+---
+title: 網路搜尋與擷取
+description: 伺服器端的 web_search 與 web_fetch 工具、背後的搜尋來源、控制它們的設定，以及哪些資料會離開你的機器。
+---
+
+程式代理與 SDK 用戶端可以在模型生成的過程中，請 Yunshu 搜尋網路或擷取網頁。伺服器負責執行工具、把結果餵回模型，並以請求所使用的 API 方言格式，連同工具區塊與引用一併回傳答案。
+
+| 方言 | 工具類型 | 說明 |
+|---|---|---|
+| Anthropic Messages（`POST /v1/messages`） | `web_search_*`（例如 `web_search_20250305`）、`web_fetch_*`（例如 `web_fetch_20250910`） | 結果以 `server_tool_use` 與 `web_search_tool_result` / `web_fetch_tool_result` 區塊回傳；文字區塊帶有 `web_search_result_location` 引用 |
+| OpenAI Responses（`POST /v1/responses`） | `web_search`、`web_search_preview` | 結果以 `web_search_call` items 回傳；`open_page` 與 `find_in_page` 動作可用於搜尋已取得的頁面。`web_fetch` 不是 Responses 的工具 |
+
+請求與回應的格式見[伺服器工具](/docs/api/server-tools)；哪些代理會用到這些工具見[程式代理與 SDK](/docs/guides/agents)。
+
+<Callout type="warn">
+網路搜尋不是離線推論。使用預設設定時，**查詢文字與你的 IP 位址會離開這台機器**，送往 DuckDuckGo、Wikipedia 以及你設定的任何搜尋來源。查詢由模型產生，可能包含對話中的內容；被擷取的 URL 對來源網站是可見的。對話歷史與用戶端憑證不會被轉送，供應商的 key 只會送給該供應商自己的搜尋 API。若要完全留在本機，請設定 `YUNSHU_WEB_SEARCH_PROVIDER=none`。
+</Callout>
+
+## 選擇搜尋來源
+
+`YUNSHU_WEB_SEARCH_PROVIDER` 選擇後端，預設為 `auto`。
+
+| 值 | 行為 |
+|---|---|
+| `auto` | 同時執行免金鑰來源（DuckDuckGo HTML 與 Wikipedia）以及所有已設定憑證的來源。結果會去重並以 reciprocal-rank fusion 融合；每個來源都有健康度退避，失敗的來源不會一直拖慢查詢 |
+| `none` | 停用伺服器端搜尋。宣告了搜尋工具的請求會得到 `unavailable` 工具錯誤 |
+| `searxng`、`brave`、`tavily`、`exa`、`serper`、`perplexity`、`mojeek`、`marginalia`、`ddg_html`、`wikipedia`、`mwmbl` | 只使用指定的來源 |
+
+DuckDuckGo HTML 屬於盡力而為：它可能封鎖自動化查詢。`YUNSHU_WEB_KEYLESS=0` 會關閉免金鑰來源（DuckDuckGo 與 Wikipedia），只剩下你設定的來源。
+
+```bash
+# 預設：免金鑰來源加上已設定的來源
+yunshu serve -m <model> --set web_search_provider=auto
+
+# 全部留在本機
+yunshu serve -m <model> --set web_search_provider=none
+
+# 加入一個需要金鑰的來源
+export YUNSHU_BRAVE_API_KEY=...
+yunshu serve -m <model>
+```
+
+### 搜尋來源設定
+
+以下設定都已登錄在設定註冊表中，完整列表見[設定](/docs/guides/configuration)。
+
+| 設定 | 預設 | 說明 |
+|---|---|---|
+| `YUNSHU_WEB_SEARCH_PROVIDER` | `auto` | 來源選擇，見上表 |
+| `YUNSHU_WEB_SEARCH_RESULTS` | `5` | 每次 `web_search` 呼叫回傳的結果數 |
+| `YUNSHU_WEB_SEARCH_PROVIDER_TIMEOUT` | `1.0` | metasearch 中每個來源的期限（秒），避免慢的來源拖住整個查詢 |
+| `YUNSHU_WEB_KEYLESS` | 開 | 允許免金鑰的 DuckDuckGo 與 Wikipedia |
+| `YUNSHU_SEARXNG_URL` | 未設定 | 你自己的 SearXNG 實例網址（需啟用 JSON 輸出）。選用：內建 metasearch 不需要 SearXNG |
+| `YUNSHU_BRAVE_API_KEY`、`YUNSHU_TAVILY_API_KEY`、`YUNSHU_EXA_API_KEY`、`YUNSHU_SERPER_API_KEY`、`YUNSHU_PERPLEXITY_API_KEY`、`YUNSHU_MOJEEK_API_KEY`、`YUNSHU_MARGINALIA_API_KEY` | 未設定 | 託管搜尋 API 的憑證。設定後該來源會加入 `auto` |
+| `YUNSHU_WEB_MWMBL` | 關 | 選擇加入 Mwmbl small-web 索引。其資料採 CC-BY-NC-SA 4.0（非商業、需標示來源、相同方式分享）。明確選擇 `mwmbl` 也視為加入 |
+| `YUNSHU_WEB_SEARCH_HEALTH_FILE` | `~/.yunshu/cache/websearch-health.json` | 來源健康度的小型快照，不儲存查詢文字，也不儲存結果頁面 |
+| `YUNSHU_WEB_RESEARCH` | 關 | 以來源網頁的摘錄豐富化搜尋摘要（會額外擷取頁面：這些 URL 同樣會離開本機） |
+| `YUNSHU_WEB_RESEARCH_BUDGET` | `4.0` | 豐富化的整體期限（秒，最多 4） |
+| `YUNSHU_WEB_RESEARCH_PAGES` | `6` | 每次豐富化的來源頁面數（最多 6） |
+| `YUNSHU_WEB_RESEARCH_MODEL` | 未設定 | 已載入的本機 embedding 模型 id，用來重新排序摘錄。它不會自行載入模型；未設定時只用 BM25 排序 |
+| `YUNSHU_SERVER_TOOL_MAX_ITERATIONS` | `8` | 單一請求最多可進行的「生成、執行工具、繼續」輪數 |
+
+`yunshu config` 會顯示目前生效的值與最近一次來源健康度快照。
+
+## 擷取網頁
+
+`web_fetch` 會下載一個 URL，並把萃取出的文字交給模型。它不需要搜尋來源，預設開啟。
+
+| 設定 | 預設 | 說明 |
+|---|---|---|
+| `YUNSHU_WEB_FETCH` | 開 | 提供 `web_fetch` 工具。關閉後請求會得到 `unavailable` 錯誤 |
+| `YUNSHU_WEB_FETCH_ALLOW_PRIVATE` | 關 | 允許連到私有、loopback 與 link-local 位址。除非確實需要，請保持關閉 |
+| `YUNSHU_WEB_FETCH_MAX_BYTES` | `2000000` | 下載的回應本文上限 |
+| `YUNSHU_WEB_FETCH_TIMEOUT` | `20.0` | 等待頁面的秒數 |
+| `YUNSHU_WEB_FETCH_MAX_TEXT_CHARS` | `40000` | 交給模型的萃取文字會截到這個長度（請求中的 `max_content_tokens` 可以再調低） |
+
+### 網路安全規則
+
+擷取要跟隨哪些 URL 是由模型決定的，而透過提示注入，也可能由它讀過的任何網頁決定。因此 Yunshu 對所有對外擷取（`web_fetch`、MCP connector 與 VLM 媒體下載）套用同一套網路政策：
+
+- 只接受 `http` 與 `https` URL。含有內嵌帳密、控制字元或空白、缺少主機名稱或連接埠超出範圍的 URL 會被拒絕。
+- 先解析主機名稱，再檢查**解析後的位址**。loopback、私有、link-local（包含雲端 metadata 位址）、carrier-grade NAT、multicast、保留與未指定位址一律拒絕，這些位址的 IPv4-mapped IPv6 形式也一樣。連線之後會固定到通過檢查的位址，因此檢查與連線之間 DNS 答案改變也無法繞過。
+- 重新導向逐跳跟隨（最多 5 次），每一跳都經過同樣的檢查。
+- 憑證綁定在接收它的來源（origin）。重新導向改變 origin 時，Authorization、API key 與 cookie 標頭會被丟棄。
+- 下載受 `YUNSHU_WEB_FETCH_MAX_BYTES` 與 `YUNSHU_WEB_FETCH_TIMEOUT` 限制。只接受文字類內容型別（text、JSON、XML、XHTML、JavaScript），其他型別會回傳 `unsupported_content_type`。
+
+MCP connector 有自己的開關：`YUNSHU_MCP_CONNECTOR_ALLOW_PRIVATE` 預設開啟，因為本機工具伺服器是最常見的情況。見[伺服器工具](/docs/api/server-tools)。
+
+被擷取的頁面一律視為不可信資料。研究豐富化會移除隱藏元素與不可見的控制字元，並把疑似指令的文字計入指標，但這些過濾並不保證能抵擋提示注入。
+
+## 工具錯誤
+
+搜尋或擷取失敗不會讓請求失敗。模型會收到帶有錯誤碼的工具結果，並可以繼續。搜尋錯誤碼沿用 Anthropic 的 `web_search_tool_result_error`：`too_many_requests`、`invalid_input`、`max_uses_exceeded`、`query_too_long` 與 `unavailable`。擷取錯誤碼沿用 `web_fetch_tool_result_error`：`invalid_tool_input`、`url_too_long`、`url_not_allowed`、`url_not_accessible`、`too_many_requests`、`unsupported_content_type`、`max_uses_exceeded` 與 `unavailable`。搜尋被停用時，錯誤訊息會提示該開啟哪個設定。
+
+## 本機 Tavily 相容 API
+
+Yunshu 也在 `/tavily` 下掛載一組本機的 Tavily 風格檢索 API，供以 Tavily SDK 撰寫的用戶端使用。它與上述模型工具是不同的介面，但使用相同的搜尋來源。
+
+| 路由 | 用途 |
+|---|---|
+| `POST /tavily/search` | 搜尋，可選擇由所服務的聊天模型產生答案 |
+| `POST /tavily/extract` | 萃取頁面內容 |
+| `POST /tavily/crawl`、`POST /tavily/map` | 爬取網站或列出連結（廣度優先，遵守 robots 規則與主機禮貌間隔） |
+| `POST /tavily/research`、`GET /tavily/research/{request_id}` | 啟動研究任務並輪詢結果 |
+| `POST /tavily/feedback`、`POST /tavily/logs` | 提交回饋與紀錄 |
+| `GET /tavily/usage`、`GET /tavily/providers` | 本機用量估計與即時來源健康度 |
+| `POST /tavily/mcp` | 原生的無狀態 MCP 端點 |
+
+請把 SDK 指向這個前綴；這組 API 沒有 `/v1`：
+
+<Tabs items={["Python", "JavaScript"]}>
+<Tab value="Python">
+
+```python
+from tavily import TavilyClient
+
+client = TavilyClient(api_key="tvly-local", api_base_url="http://localhost:8000/tavily")
+print(client.search("MLX inference"))
+```
+
+</Tab>
+<Tab value="JavaScript">
+
+```ts
+import { tavily } from "@tavily/core";
+
+const client = tavily({ apiKey: "tvly-local", apiBaseURL: "http://localhost:8000/tavily" });
+const result = await client.search("MLX inference");
+```
+
+</Tab>
+</Tabs>
+
+需要知道的事：
+
+- 這是本機實作。Tavily 的點數計費與專有的排序、研究行為都沒有重現；回應中的 credits 只是參考用的估計值。
+- 一般搜尋使用詞彙式排序與去重，不呼叫模型。答案或研究報告才會使用所服務的聊天模型，而且只在你要求時才使用。
+- `YUNSHU_TAVILY_API_KEY` 是把託管的 Tavily 服務設為其中一個搜尋來源，與你的用戶端送到這個本機 API 的 key 無關。
+- 設定了 `YUNSHU_AUTH_TOKEN` 時，請把它當作 key 送出；沒有設定 token 時，套用一般的本機開放政策。
+- 上游的 `tavily-mcp` 套件把 base URL 寫死，無法改指向 Yunshu；請改用原生的 `POST /tavily/mcp` 端點。
+- 對 JavaScript 密集的頁面，extract、crawl 與 map 的 Chromium 渲染為選用且預設關閉（`YUNSHU_WEB_RENDER`），需要 `web-render` extra 與已安裝的瀏覽器。
+
+## 支援狀況
+
+| 功能 | 狀態 |
+|---|---|
+| Messages `web_search_*` 伺服器工具與引用 | <Support status="supported">支援</Support> |
+| Messages `web_fetch_*` 伺服器工具 | <Support status="supported">支援</Support> |
+| Responses `web_search` / `web_search_preview`、`open_page`、`find_in_page` | <Support status="supported">支援</Support> |
+| Responses `web_fetch` 工具 | <Support status="unsupported">不是 Responses 的工具</Support> |
+| 網域過濾（`allowed_domains`、`blocked_domains`） | <Support status="partial">由伺服器套用在結果上；Responses 支援 `allowed_domains`</Support> |
+| 離線搜尋 | <Support status="unsupported">搜尋一定需要網路；要停用請用 `none`</Support> |
+| Tavily API 的圖片搜尋 | <Support status="partial">只能透過已設定的 SearXNG 或 Brave 來源</Support> |
+
+## 相關頁面
+
+- [伺服器工具](/docs/api/server-tools)
+- [程式代理與 SDK](/docs/guides/agents)
+- [設定](/docs/guides/configuration)
+- [Messages](/docs/api/messages) 與 [Responses](/docs/api/responses)

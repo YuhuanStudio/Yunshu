@@ -4,7 +4,7 @@
 // light/dark/system; YunUI also ships `true-black`.
 import { useTheme } from "next-themes";
 import { Sun, Moon, Airplay, Droplet } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useSyncExternalStore } from "react";
 
 const themes = [
   { value: "light", icon: Sun },
@@ -15,8 +15,11 @@ const themes = [
 
 export function ThemeToggle() {
   const { theme, setTheme } = useTheme();
-  const [mounted, setMounted] = useState(false);
-  useEffect(() => setMounted(true), []);
+  const mounted = useSyncExternalStore(
+    () => () => {},
+    () => true,
+    () => false,
+  );
   const current = mounted ? theme : null;
 
   return (

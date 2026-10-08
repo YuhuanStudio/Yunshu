@@ -1,0 +1,279 @@
+---
+title: 编程代理与 SDK
+description: 以启动器或手动配置，让 Claude Code、Codex、opencode、Pi 与官方 OpenAI、Anthropic SDK 连到本机的 Yunshu 服务器。
+---
+
+Yunshu 在 `/v1` 下提供 OpenAI API，并在 `/v1/messages` 提供 Anthropic Messages API，因此任何能配置 base URL 的编程代理或 SDK 都可以直接使用。对 Claude Code、Codex、opencode 与 Pi，`yunshu launch` 还多做一步：它会从服务器读取模型卡，把代理原本只能猜的数值（context window、输出上限、推理等级、是否支持视觉）直接交给代理。
+
+| | 值 |
+|---|---|
+| OpenAI base URL | `http://localhost:8000/v1` |
+| Anthropic base URL | `http://localhost:8000`（SDK 会自行加上 `/v1/messages`） |
+| API key | 任意占位字符串。只有服务器以 `YUNSHU_AUTH_TOKEN`（或 `--auth-token`）启动时才会检查 |
+| 模型名称 | 单模型模式下名称仅供参考，`local` 即可。多模型模式请使用 `GET /v1/models` 返回的 id |
+
+设置 token 后，服务器接受 `Authorization: Bearer <token>`（OpenAI 客户端）或 `x-api-key: <token>`（Anthropic 客户端）。
+
+## 以 launch 启动代理
+
+先启动服务器（`yunshu serve -m <model>`，见[快速开始](/docs/getting-started/quickstart)），然后：
+
+```bash
+yunshu launch list                      # 列出已安装的工具
+yunshu launch claude                    # Claude Code
+yunshu launch codex                     # Codex CLI
+yunshu launch opencode                  # opencode
+yunshu launch pi                        # Pi
+yunshu launch codex --dry-run           # 只印出配置，不写入任何文件
+```
+
+| 选项 | 说明 |
+|---|---|
+| `--model`, `-m` | 要使用的模型 id。缺省：`GET /v1/models` 中第一个看起来像已知聊天模型家族的模型，否则取列表第一个 |
+| `--url`, `-u` | 服务器网址。缺省 `http://localhost:8000`，或环境变量 `YUNSHU_GATEWAY_URL` |
+| `--api-key`, `-k` | 交给工具的 API key |
+| `--effort` | 仅 Claude Code：配置 `CLAUDE_CODE_EFFORT_LEVEL` |
+| `--statusline` / `--no-statusline` | 仅 Claude Code：加入（缺省）或略过 Yunshu 状态栏 |
+| `--dry-run` | 印出将写入或导出的内容后结束 |
+
+启动器会先检查 `GET /health`，没有服务器回应时会给出提示并结束。工具未安装时也会失败（`--dry-run` 不检查这点）。
+
+### 各工具会配置什么
+
+<Tabs items={["Claude Code", "Codex", "opencode", "Pi"]}>
+<Tab value="Claude Code">
+
+只使用环境变量，不会写入 `~/.claude` 下的任何文件。
+
+| 变量 | 值 |
+|---|---|
+| `ANTHROPIC_BASE_URL` | 服务器网址，不含 `/v1` |
+| `ANTHROPIC_AUTH_TOKEN` | API key；未指定时为 `yunshu`（使用 bearer token，而不是 `ANTHROPIC_API_KEY`） |
+| `ANTHROPIC_MODEL`、`ANTHROPIC_SMALL_FAST_MODEL`、`ANTHROPIC_DEFAULT_OPUS_MODEL`、`ANTHROPIC_DEFAULT_SONNET_MODEL`、`ANTHROPIC_DEFAULT_HAIKU_MODEL`、`CLAUDE_CODE_SUBAGENT_MODEL` | 所服务的模型 id，让所有别名与子代理都对应到它 |
+| `CLAUDE_CODE_MAX_CONTEXT_TOKENS` | 模型真实的 context window（Claude Code 对不认识的模型 id 会假设 200K） |
+| `CLAUDE_CODE_MAX_OUTPUT_TOKENS` | 模型的输出上限，最多 32000 |
+| `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY` | `1`：`/model` 会列出 `GET /v1/models` 的模型 |
+| `DISABLE_TELEMETRY`、`DISABLE_ERROR_REPORTING`、`DISABLE_AUTOUPDATER` | `1` |
+| `CLAUDE_CODE_EFFORT_LEVEL` | 仅在使用 `--effort` 时配置 |
+
+启动前，启动器会从环境中移除 `ANTHROPIC_API_KEY`、`CLAUDE_CODE_USE_BEDROCK` 与 `CLAUDE_CODE_USE_VERTEX`，避免残留的配置把请求送到别处。
+
+它也会以 `--settings` 传入一个运行 `yunshu statusline` 的状态栏（预填进度、解码速度、最近一次缓存命中、context 使用量）。如果你自己的 Claude Code `settings.json` 已经定义了 `statusLine`，或使用 `--no-statusline`，就不会加入。
+
+</Tab>
+<Tab value="Codex">
+
+写入两个文件；既有的 `config.toml` 会先备份成同目录下带时间戳记的 `.<timestamp>.bak`。
+
+- `~/.codex/config.toml`：配置 `model`、`model_provider = "yunshu"`、`model_catalog_json`、`model_context_window`、`model_auto_compact_token_limit`（窗口的 85%）、`web_search`，推理模型另有 `model_reasoning_summary = "auto"`。并加入 `[model_providers.yunshu]` 表，内含 `base_url = "<server>/v1"`、`env_key = "YUNSHU_API_KEY"` 与 `wire_api = "responses"`。文件中的其他配置与表会保留。
+- `~/.codex/yunshu-models.json`：模型目录项目，包含真实的 context window、聊天模板接受的推理等级、输入模态，以及精简的 `base_instructions`。Codex 不会向自定义供应商获取模型中继数据；没有目录时会印出「Model metadata not found」，也不会提交推理强度。
+
+模型卡报告可使用服务器端网络搜索时，`web_search` 为 `"live"`，否则为 `"disabled"`。启动器会导出 `YUNSHU_API_KEY`（API key，或 `yunshu`），再运行 `codex -m <model>`。
+
+</Tab>
+<Tab value="opencode">
+
+更新 `~/.config/opencode/opencode.json`（会保留一份带时间戳记的 `.bak`），加入 `provider.yunshu` 项目与 `"model": "yunshu/<id>"`。供应商使用 `@ai-sdk/openai-compatible`，`baseURL` 为 `<server>/v1`，模型项目带有 `tool_call`、`reasoning`、`limit.context`、`limit.output` 与 `modalities`。opencode 不会向自定义供应商获取 `/models`，所以 context 百分比与压缩时机就由这些上限决定。
+
+</Tab>
+<Tab value="Pi">
+
+更新 `~/.pi/agent/models.json`（供应商 `yunshu`、`api: "openai-completions"`、`baseUrl` 为 `<server>/v1`）与 `~/.pi/agent/settings.json`（`defaultProvider`、`defaultModel`），然后运行 `pi --model yunshu/<model>`。与其他三者不同，Pi 的项目不会带入模型卡的 context 与输出上限。
+
+</Tab>
+</Tabs>
+
+## 手动配置
+
+不想让启动器改动你的配置时，可以自行配置。
+
+<Tabs items={["Claude Code", "Codex", "opencode"]}>
+<Tab value="Claude Code">
+
+```bash
+export ANTHROPIC_BASE_URL=http://localhost:8000
+export ANTHROPIC_AUTH_TOKEN=sk-local
+export ANTHROPIC_MODEL=local
+export ANTHROPIC_SMALL_FAST_MODEL=local
+export CLAUDE_CODE_MAX_CONTEXT_TOKENS=131072   # 你的模型真实窗口
+claude
+```
+
+</Tab>
+<Tab value="Codex">
+
+```toml
+# ~/.codex/config.toml
+model = "local"
+model_provider = "yunshu"
+model_context_window = 131072
+
+[model_providers.yunshu]
+name = "Yunshu"
+base_url = "http://localhost:8000/v1"
+env_key = "YUNSHU_API_KEY"
+wire_api = "responses"
+```
+
+```bash
+export YUNSHU_API_KEY=sk-local
+codex
+```
+
+没有 `model_catalog_json` 时 Codex 不认识这个模型：会出现「Model metadata not found」，也没有推理强度可选。
+
+</Tab>
+<Tab value="opencode">
+
+```json
+{
+  "provider": {
+    "yunshu": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Yunshu",
+      "options": { "baseURL": "http://localhost:8000/v1", "apiKey": "sk-local" },
+      "models": {
+        "local": {
+          "name": "local",
+          "tool_call": true,
+          "reasoning": false,
+          "limit": { "context": 131072, "output": 32768 },
+          "modalities": { "input": ["text"], "output": ["text"] }
+        }
+      }
+    }
+  },
+  "model": "yunshu/local"
+}
+```
+
+</Tab>
+</Tabs>
+
+其他兼容 OpenAI 的工具只要有 base URL 与 key 就能使用：Cline 与 Roo Code（供应商选「OpenAI Compatible」，base URL 为 `http://localhost:8000/v1`）、Continue（`provider: openai`、`apiBase: http://localhost:8000/v1`）以及 Open WebUI（Settings、Connections、OpenAI API）。这些只是配置指引，并不像上述三个代理一样每个版本都做测试。
+
+## 各代理使用哪些端点
+
+下表是代理对自定义供应商发出的调用，以及 Yunshu 如何回应。
+
+| 代理 | 请求 | Yunshu |
+|---|---|---|
+| Claude Code | 每一轮 `POST /v1/messages`，`stream: true`，带有 `anthropic-beta` 标头、system 区块上的 `cache_control`、`thinking` 与 `output_config.effort` | 支持。beta 标头一律不会被拒绝 |
+| Claude Code | `POST /v1/messages/count_tokens`（`/context`） | 支持：计算 system、messages 与 tools |
+| Claude Code | `GET /v1/models`（打开 discovery 后用来填 `/model`） | 支持，返回 `max_input_tokens`、`max_tokens` 与 `capabilities` |
+| Claude Code | 带有 `web_search_20250305` 工具的 `POST /v1/messages` | 由服务器端运行，见[网络搜索与抓取](/docs/guides/web-search) |
+| Claude Code | 小模型调用（标题、摘要）与子代理 | 一般的 `POST /v1/messages` 调用 |
+| Codex | `POST /v1/responses`，`stream: true`、`store: false`，带有 function、namespace 与 `web_search` 工具、`reasoning`、`include` | 支持 |
+| Codex | `WS /v1/responses`（只在供应商配置 `supports_websockets` 时使用；启动器不会配置） | 支持 |
+| Codex | 压缩（compaction） | 不带工具的一般 `POST /v1/responses` 调用 |
+| opencode | `POST /v1/chat/completions`，带 `stream_options.include_usage`、较大的 `max_tokens`、function 工具；产生标题时使用 `reasoning_effort: "low"` | 支持 |
+
+在代理中配置的 MCP 服务器属于客户端：代理自己连接，并把它们的工具当作一般 function tool 传给模型，因此 Yunshu 只需要能正常运作的工具调用。Claude Code 的 WebFetch 同样在客户端运行。服务器端的 MCP connector（Messages 的 `mcp_servers`、Responses 的 `{type: mcp}` 工具）是另一项功能，见[服务器工具](/docs/api/server-tools)。
+
+## 哪些可用、哪些不可用
+
+| 功能 | Claude Code | Codex | opencode | 状态 |
+|---|---|---|---|---|
+| 流式、工具调用 | 是 | 是 | 是 | <Support status="supported">支持</Support> |
+| 对话中途的 system 或 developer 备注 | 是 | 是（`developer` items） | 未使用 | <Support status="supported">支持</Support> |
+| 推理强度控制 | `output_config.effort` 对应到聊天模板的 `reasoning_effort` | 通过目录中的等级提交 `reasoning.effort` | `reasoning_effort` | <Support status="supported">支持</Support> |
+| 网络搜索 | 服务器端 `web_search` | 服务器端 `web_search` | 未使用（客户端工具） | 有可用搜索来源时<Support status="supported">支持</Support> |
+| 网页抓取 | CLI 在客户端运行 | 未使用 | 未使用 | SDK 用户可用服务器端 `web_fetch` 工具 |
+| MCP | 客户端 | 客户端 | 客户端 | 以一般工具调用的形式<Support status="supported">支持</Support> |
+| 图片输入 | 是（`Read` 一张 PNG） | `exec` 模式未使用 | 未使用 | <Support status="partial">需要视觉模型</Support> |
+| 模型菜单与 context window | 来自 `/v1/models` 与启动环境 | 来自模型目录 | 来自 `limit` | 使用 `yunshu launch` 时<Support status="supported">支持</Support> |
+| 在 UI 显示引擎即时状态 | `yunshu statusline` | 无 | 无 | <Support status="extension">仅 Claude Code</Support> |
+| 费用显示 | 对不认识的模型会显示自行估算的数字；实际上不会计费 | 不适用 | 不适用 | <Support status="unsupported">无法由服务器端修正</Support> |
+| 速率限制标头 | 不提交：Yunshu 没有配额 | 不提交 | 不提交 | <Support status="unsupported">未提供</Support> |
+
+其他需要知道的事：
+
+- 流式开始后发生的失败，会以流式内的错误报告（Messages 为 SSE `error` 事件，Responses 为 `response.failed`，chat 为错误 chunk），而不是一个空的成功回应。
+- 明确的 `cache_control` 标记只是提示。如果聊天模板丢掉了标记（Qwen 模板会移除先前回合的推理内容），请求会在没有明确检查点的情况下照常处理，而不会失败。见[提示词缓存](/docs/guides/prompt-caching)。
+- `temperature`、`max_tokens`、`stream` 等字段的 JSON `null` 视为「未配置」并被接受，因为有数个 SDK 会提交 `null`。
+- Responses 流式会以 `data: [DONE]` 结尾，这一点与真正的 API 不同。官方 SDK 与 Codex 遇到它都会正常停止。
+- 请求模型已知的缺口：已弃用的 chat `functions` / `function_call` 字段、chat 中的 custom tools、Responses 的 `prompt` 范本，以及没有 `input` 的 Responses 请求。
+- Claude Code 的 `/model` 仍会列出它内置的模型列，那是客户端自己的目录。它实际使用的 context window 是真实值（可用 `/context` 确认）。
+- 代理每一轮都会提交大量重复的长提示。Yunshu 的前缀缓存会重用共同的部分，所以第一轮之后只需预填添加的 token。
+
+## SDK 配置
+
+以下四段范例都使用占位 key。若同时服务多个模型，请把 `local` 换成模型 id。
+
+<Tabs items={["OpenAI Python", "OpenAI JavaScript", "Anthropic Python", "Anthropic JavaScript"]}>
+<Tab value="OpenAI Python">
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="http://localhost:8000/v1", api_key="sk-local")
+
+resp = client.chat.completions.create(
+    model="local",
+    messages=[{"role": "user", "content": "Explain MLX in one sentence."}],
+    extra_body={"reasoning_effort": "medium"},  # 交给支持它的模板
+)
+print(resp.choices[0].message.content)
+```
+
+</Tab>
+<Tab value="OpenAI JavaScript">
+
+```ts
+import OpenAI from "openai";
+
+const client = new OpenAI({ baseURL: "http://localhost:8000/v1", apiKey: "sk-local" });
+
+const resp = await client.chat.completions.create({
+  model: "local",
+  messages: [{ role: "user", content: "Hello" }],
+});
+console.log(resp.choices[0].message.content);
+```
+
+</Tab>
+<Tab value="Anthropic Python">
+
+```python
+import anthropic
+
+client = anthropic.Anthropic(base_url="http://localhost:8000", api_key="sk-local")
+
+msg = client.messages.create(
+    model="local",
+    max_tokens=512,
+    messages=[{"role": "user", "content": "Hello"}],
+)
+print(msg.content[-1].text)
+```
+
+</Tab>
+<Tab value="Anthropic JavaScript">
+
+```ts
+import Anthropic from "@anthropic-ai/sdk";
+
+const client = new Anthropic({ baseURL: "http://localhost:8000", apiKey: "sk-local" });
+
+const msg = await client.messages.create({
+  model: "local",
+  max_tokens: 512,
+  messages: [{ role: "user", content: "Hello" }],
+});
+console.log(msg.content);
+```
+
+</Tab>
+</Tabs>
+
+OpenAI SDK 的 base URL 以 `/v1` 结尾；Anthropic SDK 的则不含 `/v1`。流式（`stream=True`）、工具、`response_format`、`stop`、`logprobs` 与 `seed` 都可通过官方 SDK 使用。推理模型的思考内容会与答案分开流式（chat 为 `delta.reasoning_content`）。
+
+若要从其他机器或容器连接，请以 `--host 0.0.0.0 --auth-token <secret>` 启动服务器，并把该密码当作 key。缺省绑定地址是 `127.0.0.1`。
+
+## 相关页面
+
+- [Chat Completions](/docs/api/chat-completions)、[Responses](/docs/api/responses) 与 [Messages](/docs/api/messages)
+- [网络搜索与抓取](/docs/guides/web-search)
+- [提示词缓存](/docs/guides/prompt-caching)
+- [CLI 参考](/docs/guides/cli)
+- [疑难排解](/docs/guides/troubleshooting)

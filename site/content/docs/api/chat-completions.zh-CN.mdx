@@ -1,0 +1,433 @@
+---
+title: Chat completions
+description: OpenAI Chat Completions 端点，支持 tools、结构化输出、logprobs、推理、图片/音频/视频输入与流式，并附上旧版文本补全端点。
+---
+
+`POST /v1/chat/completions` 遵循 OpenAI Chat Completions 格式，因此官方 `openai` SDK、LangChain、LiteLLM 与多数 agent 工具只要改 base URL 就能使用。纯文本的 `mlx-lm` 模型与视觉语言的 `mlx-vlm` 模型由同一个路由提供；请求中只要含有图片、音频或视频块，就会被路由到 VLM。`POST /v1/completions` 是旧版的“给提示词、返回文本”端点，说明放在本页最后。
+
+<Endpoint method="POST" path="/v1/chat/completions" />
+<Endpoint method="POST" path="/v1/completions" />
+
+<Callout type="info">
+只有在设置 `YUNSHU_AUTH_TOKEN` 时才会强制认证，请见 [API 概览](/docs/api/overview)。单模型模式下 `model` 的值仅供参考；多模型模式下它用来选择模型。
+</Callout>
+
+## 请求
+
+未知的顶层字段会被忽略，所以客户端可以继续发送 Yunshu 用不到的 OpenAI 字段（`service_tier`、`modalities`、`prediction`、`web_search_options`、`safety_identifier` 等）。任何可选字段若为 JSON `null`，视为“未设置”并应用默认值。负的 `top_k`（vLLM 表示“禁用”的写法）会变成 `0`。
+
+### 核心字段
+
+| 参数 | 类型 | 必填 | 说明 | 状态 |
+| --- | --- | --- | --- | --- |
+| `model` | string | 是 | 模型 id。单模型模式下仅供参考。 | 支持 |
+| `messages` | array | 是 | 对话内容。至少要有一条内容不为空的 `user` 消息。见[消息](#消息)。 | 支持 |
+| `stream` | boolean | 否 | 使用 Server-Sent Events。默认 `false`。 | 支持 |
+| `stream_options` | object | 否 | 仅能配合 `stream: true`。`include_usage` 会在最后加一个 usage 块；`continuous_usage_stats`（vLLM 扩展）会在每个块都附上累计的 `usage`。 | 支持 |
+| `max_tokens` | integer | 否 | 生成长度上限，`0` 至 `1048576`。默认为 `YUNSHU_DEFAULT_MAX_TOKENS` 配置值（32768）。上下文预算仍会对它做限缩，见 `x_yunshu.budget`。 | 支持 |
+| `max_completion_tokens` | integer | 否 | OpenAI 较新的名称。两者同时设置时以它为准。 | 支持 |
+| `n` | integer | 否 | 返回的选项数，`1` 至 `128`。不可与 `stream: true` 并用。 | 支持 |
+| `stop` | string 或 array | 否 | 最多 16 个停止序列。空字符串会被丢弃。 | 支持 |
+| `user` | string | 否 | 只会连同请求 ID 写入日志，没有其他作用。 | 接受但忽略 |
+| `store` | boolean | 否 | 保留完成的 completion 供日后查询。见[已存储的 completions](/docs/api/stored-completions)。 | 支持 |
+| `metadata` | object | 否 | 最多 16 组字符串键值；`store` 为 true 时会连同 completion 一起存储。 | 支持 |
+| `keep_alive` | string 或 number | 否 | Ollama 风格的常驻提示（`"5m"`、`300`、`-1`、`0`）。在多模型模式下生效。 | 扩展 |
+| `timeout` | number | 否 | 秒数，`1` 至 `600`。时间到时结束生成，返回部分结果与 `finish_reason: "length"`。 | 扩展 |
+
+### 采样
+
+| 参数 | 类型 | 默认 | 说明 | 状态 |
+| --- | --- | --- | --- | --- |
+| `temperature` | number | `0.7` | `0` 至 `2`。注意默认值与 OpenAI 的 `1.0` 不同。 | 支持 |
+| `top_p` | number | `1.0` | `0` 至 `1`。 | 支持 |
+| `top_k` | integer | `0` | `0` 表示禁用。 | 支持 |
+| `min_p` | number | `0.0` | `0` 至 `1`。 | 支持 |
+| `repetition_penalty` | number | `1.0` | `0` 至 `2`。 | 支持 |
+| `frequency_penalty` | number | `0.0` | `-2` 至 `2`。 | 支持 |
+| `presence_penalty` | number | `0.0` | `-2` 至 `2`。 | 支持 |
+| `logit_bias` | object | 无 | token id 到偏移量的映射，每个值介于 `-100` 至 `100`。键为字符串形式的 token id。 | 支持 |
+| `seed` | integer | 无 | 64 位有符号整数。让采样可复现。 | 支持 |
+| `top_n_sigma` | number | `0.0` | `0` 至 `10`。只保留 logit 落在最大值 n 个标准差内的 token；`0` 为关闭。 | 扩展 |
+| `xtc_probability`、`xtc_threshold` | number | `0.0` | XTC 采样器。概率 `0` 至 `1`，阈值 `0` 至 `0.5`。 | 扩展 |
+| `min_tokens` | integer | `0` | 在累积到这么多 token 之前，屏蔽结束符。 | 扩展 |
+| `ignore_eos` | boolean | `false` | 越过结束符继续生成，直到 `max_tokens`。 | 扩展 |
+| `suppress_tokens` | array of integer | 无 | 永远不会被生成的 token id。 | 扩展 |
+| `stop_token_ids` | array of integer | 无 | 最多 16 个会结束生成的 token id。 | 扩展 |
+| `spec_decode` | boolean | `false` | 要求此请求使用推测解码。只有在模型与路径具备 drafter 时才生效，否则忽略。 | 部分支持 |
+| `priority` | integer | `0` | `0` 至 `100`。以请求优先级的形式转交给引擎。 | 部分支持 |
+| `lora_adapter` | string | 无 | 此请求使用的 LoRA adapter id。仅限文本模型；VLM 会返回 `400`。 | 部分支持 |
+| `logits_processors` | array | 无 | 自定义 logits processor。VLM 会返回 `400`。 | 部分支持 |
+
+### 消息
+
+每条消息的 `role` 为 `system`、`developer`、`user`、`assistant`、`tool` 或 `function`，其他角色都是 `400`。
+
+| 字段 | 类型 | 说明 | 状态 |
+| --- | --- | --- | --- |
+| `content` | string、array 或 null | 文本，或内容块的数组。`system`、`developer` 与 `user` 消息不接受仅含空白的文本与空数组。 | 支持 |
+| `tool_calls` | array | 用于 `assistant` 消息：模型先前发出的调用，含 `id`、`type` 与 `function.name` / `function.arguments`。 | 支持 |
+| `tool_call_id` | string | `tool` 消息必填。 | 支持 |
+| `name` | string | `tool` 消息上的函数名称。 | 支持 |
+| `reasoning_content` 或 `reasoning` | string | `assistant` 消息中先前的推理内容，会交给聊天模板。 | 扩展 |
+
+内容块：
+
+| 块 `type` | 结构 | 说明 |
+| --- | --- | --- |
+| `text` | `{"type": "text", "text": "..."}` | 可带 `prompt_cache_breakpoint` 对象，见[提示词缓存](/docs/guides/prompt-caching)。 |
+| `image_url` | `{"type": "image_url", "image_url": {"url": "..."}}` | 支持 `http`、`https` 与 `data:` URL。`file://` URL 以及指向 loopback、私有或 link-local 主机的 URL 会被以 `400` 拒绝。`detail` 会被接受但仅供参考，像素预算由模型的 processor 决定。`image` 与 `image_data` 块会被规范化成这个结构。 |
+| `input_audio` | `{"type": "input_audio", "input_audio": {"data": "<base64>", "format": "wav"}}` | 路由到接受音频输入的模型。 |
+| `audio_url` | `{"type": "audio_url", "audio_url": {"url": "..."}}` | 同上。 |
+| `video_url`、`video_file` | OpenAI 风格的视频块 | 路由到接受视频输入的模型。 |
+
+模型若不接受某个块的模态，会返回 `400` 并指出该块，例如 `messages.content[type=image_url]: this model accepts text input, not image`。带有媒体的请求若指向不是视觉语言模型的模型，同样返回 `400`。
+
+### Tools
+
+| 参数 | 类型 | 说明 | 状态 |
+| --- | --- | --- | --- |
+| `tools` | array | 函数工具：`{"type": "function", "function": {"name", "description", "parameters"}}`。 | 支持 |
+| `tool_choice` | string 或 object | `auto`、`none`、`required`，或 `{"type": "function", "function": {"name": "..."}}`。`required` 与指定函数都需要非空的 `tools`，且名称必须在 `tools` 内。`allowed_tools` 形式会被折叠成 `tools` 加上模式。 | 支持 |
+| `parallel_tool_calls` | boolean | 默认 `true`。设为 `false` 时最多返回一个调用。 | 支持 |
+
+模型的聊天模板若原生支持 tools，Yunshu 会把 tools 交给模板；否则会注入一段工具提示并从输出解析调用。模型卡上的 `yunshu.contract.tools.mode` 会告诉你是哪一种（`template` 或 `prompt`）。调用会出现在 `message.tool_calls`，并带 `finish_reason: "tool_calls"`。生成之后，服务器会强制执行 `tool_choice: "none"`（不返回任何调用）、指定函数（丢弃其他函数的调用）以及 `parallel_tool_calls: false`（只保留第一个调用）。模型没有发出的调用不会被凭空捏造。字符串类型的参数值会按你 `parameters` 模式中的类型转换。在 VLM 上，tools 不能与 `response_format` 或 `grammar` 并用，否则返回 `400`。
+
+### 结构化输出
+
+| 参数 | 说明 | 状态 |
+| --- | --- | --- |
+| `response_format` | `{"type": "text"}`、`{"type": "json_object"}` 或 `{"type": "json_schema", "json_schema": {"name", "schema", "strict"}}`。`json_schema` 必须提供 `json_schema` 对象。`strict: true` 时，对象模式会加上 `additionalProperties: false`。其他 `type` 一律 `400`。 | 支持 |
+| `grammar` | 原生约束：`{"type": "json", "schema": {...}}`、`{"type": "regex", "pattern": "..."}`、`{"type": "choice", "choices": [...]}` 或 `{"type": "cfg", "grammar": "..."}`。优先于 `response_format`。 | 扩展 |
+| `guided_json`、`guided_regex`、`guided_choice`、`guided_grammar` | 同样约束的 vLLM 写法。`guided_regex` 上限 2048 字符，`guided_grammar` 上限 32768。 | 扩展 |
+| `structured_outputs` | vLLM 对象，恰好带 `json`、`regex`、`choice`、`grammar`、`json_object` 其中一个。不支持 `structural_tag`。 | 扩展 |
+
+约束式解码会屏蔽 logits，因此从第一个 token 起就能生成符合模式的输出。引擎无法编译的 schema 或 pattern 会返回 `400`。见[结构化输出](/docs/guides/structured-output)。
+
+### 推理
+
+| 参数 | 说明 | 状态 |
+| --- | --- | --- |
+| `enable_thinking` | 开启或关闭模型的思考模式。也会读取 `chat_template_kwargs.enable_thinking`。 | 支持 |
+| `reasoning_effort` | 推理强度。也会读取 `chat_template_kwargs.reasoning_effort`。超出模板自身列表的值会被映射（在使用 `xhigh` 的模板上，`high` 会变成 `xhigh`）。对没有推理模式的模型会被接受但没有作用。 | 支持 |
+| `thinking_budget` | 思考 token 上限，`1` 至 `32768`。 | 扩展 |
+| `chat_template_kwargs` | 传给聊天模板的额外变量。 | 支持 |
+
+推理文本会放在 `message.reasoning_content`，与 `content` 分开。推理 token 也算在 `completion_tokens` 内，`usage.completion_tokens_details.reasoning_tokens` 则说明其中有多少。
+
+### Logprobs
+
+| 参数 | 类型 | 说明 | 状态 |
+| --- | --- | --- | --- |
+| `logprobs` | boolean | 在 `choices[].logprobs.content` 返回每个 token 的对数概率。 | 支持 |
+| `top_logprobs` | integer | 每个 token 的候选数，`0` 至 `20`。需要 `logprobs: true`。 | 支持 |
+| `prompt_logprobs` | integer | 提示词各 token 的 logprobs，返回在 `choices[].prompt_logprobs`。 | 扩展 |
+
+### 缓存
+
+| 参数 | 说明 | 状态 |
+| --- | --- | --- |
+| `prompt_cache_key`、`prompt_cache_retention`、`prompt_cache_options` | OpenAI 的提示词缓存提示。在视觉语言路径上使用；纯文本模型会接受但忽略，因为它们的前缀缓存是自动的。 | 部分支持 |
+
+## 示例
+
+<Tabs items={["curl", "Python", "JavaScript"]}>
+<Tab value="curl">
+
+```bash
+curl http://localhost:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-local" \
+  -d '{
+    "model": "local",
+    "messages": [
+      {"role": "system", "content": "You are concise."},
+      {"role": "user", "content": "Name three prime numbers."}
+    ],
+    "max_tokens": 64
+  }'
+```
+
+</Tab>
+<Tab value="Python">
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="http://localhost:8000/v1", api_key="sk-local")
+
+resp = client.chat.completions.create(
+    model="local",
+    messages=[
+        {"role": "system", "content": "You are concise."},
+        {"role": "user", "content": "Name three prime numbers."},
+    ],
+    max_tokens=64,
+)
+print(resp.choices[0].message.content)
+print(resp.usage.prompt_tokens, resp.usage.completion_tokens)
+```
+
+</Tab>
+<Tab value="JavaScript">
+
+```ts
+import OpenAI from "openai";
+
+const client = new OpenAI({ baseURL: "http://localhost:8000/v1", apiKey: "sk-local" });
+
+const resp = await client.chat.completions.create({
+  model: "local",
+  messages: [
+    { role: "system", content: "You are concise." },
+    { role: "user", content: "Name three prime numbers." },
+  ],
+  max_tokens: 64,
+});
+console.log(resp.choices[0].message.content);
+```
+
+</Tab>
+</Tabs>
+
+### 流式
+
+<Tabs items={["curl", "Python"]}>
+<Tab value="curl">
+
+```bash
+curl -N http://localhost:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "local",
+    "stream": true,
+    "stream_options": {"include_usage": true},
+    "messages": [{"role": "user", "content": "Write a haiku about autumn."}]
+  }'
+```
+
+</Tab>
+<Tab value="Python">
+
+```python
+stream = client.chat.completions.create(
+    model="local",
+    messages=[{"role": "user", "content": "Write a haiku about autumn."}],
+    stream=True,
+    stream_options={"include_usage": True},
+)
+for chunk in stream:
+    if chunk.choices:
+        delta = chunk.choices[0].delta
+        print(delta.content or "", end="", flush=True)
+    elif chunk.usage:
+        print("\n", chunk.usage.total_tokens, "tokens")
+```
+
+</Tab>
+</Tabs>
+
+### 工具调用
+
+```python
+tools = [{
+    "type": "function",
+    "function": {
+        "name": "get_weather",
+        "description": "Current weather for a city",
+        "parameters": {
+            "type": "object",
+            "properties": {"city": {"type": "string"}},
+            "required": ["city"],
+        },
+    },
+}]
+
+messages = [{"role": "user", "content": "What is the weather in Taipei?"}]
+first = client.chat.completions.create(model="local", messages=messages, tools=tools)
+call = first.choices[0].message.tool_calls[0]
+print(call.function.name, call.function.arguments)
+
+messages.append(first.choices[0].message.model_dump(exclude_none=True))
+messages.append({"role": "tool", "tool_call_id": call.id, "content": '{"temp_c": 24}'})
+final = client.chat.completions.create(model="local", messages=messages, tools=tools)
+print(final.choices[0].message.content)
+```
+
+### JSON schema 输出
+
+```python
+resp = client.chat.completions.create(
+    model="local",
+    messages=[{"role": "user", "content": "Extract: Ada Lovelace, born 1815."}],
+    response_format={
+        "type": "json_schema",
+        "json_schema": {
+            "name": "person",
+            "strict": True,
+            "schema": {
+                "type": "object",
+                "properties": {"name": {"type": "string"}, "born": {"type": "integer"}},
+                "required": ["name", "born"],
+            },
+        },
+    },
+)
+print(resp.choices[0].message.content)
+```
+
+### 图片输入
+
+请使用视觉语言模型，例如 Qwen3.5 VLM 检查点。
+
+```python
+resp = client.chat.completions.create(
+    model="local",
+    messages=[{
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "What is in this picture?"},
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,iVBORw0KGgo..."}},
+        ],
+    }],
+)
+```
+
+### 推理
+
+```python
+resp = client.chat.completions.create(
+    model="local",
+    messages=[{"role": "user", "content": "Is 391 prime?"}],
+    extra_body={"enable_thinking": True},
+)
+msg = resp.choices[0].message
+print(getattr(msg, "reasoning_content", None))
+print(msg.content)
+print(resp.usage.completion_tokens_details.reasoning_tokens)
+```
+
+## 响应
+
+```json
+{
+  "id": "chatcmpl-9f2c4e1ab07d4c3e8a51b2c6",
+  "object": "chat.completion",
+  "created": 1760000000,
+  "model": "local",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "2, 3 and 5.",
+        "reasoning_content": null
+      },
+      "finish_reason": "stop"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 24,
+    "completion_tokens": 9,
+    "total_tokens": 33,
+    "completion_tokens_details": { "reasoning_tokens": 0 },
+    "prompt_tokens_details": { "cached_tokens": 0 }
+  },
+  "x_yunshu": { "request_id": "req_0f3a9c2d4b7e41a6b8c1d2e3", "ttft_ms": 84.2, "decode_tps": 61.3 }
+}
+```
+
+- `reasoning_content` 只在模型产生了推理时才会出现。模型调用工具时，`tool_calls` 会取代或伴随 `content`；每个调用都有 `id`（`call_...`）、`type: "function"` 与 `function.name` / `function.arguments`（JSON 字符串）。
+- `finish_reason` 为 `stop`、`length` 或 `tool_calls`。内部原因会被映射：取消或错误映射为 `stop`，超时或内存上限映射为 `length`。
+- `usage.completion_tokens` 已经包含推理 token；`reasoning_tokens` 与 `cached_tokens` 是各自总数内的细项，不会另外相加。`cached_tokens` 是由前缀缓存提供的提示词前缀长度。
+- `choices[].logprobs.content[]` 的每一项为 `{token, logprob, bytes, top_logprobs: [{token, logprob, bytes}]}`。
+- `x_yunshu` 是 [API 概览](/docs/api/overview)中说明的 Yunshu 扩展。当返回的工具调用对应到已配置的 MCP 客户端的工具，并由网关代为执行时，会出现 `mcp_tool_results`。
+- `max_tokens: 0` 会立即返回空消息、`finish_reason: "length"` 与提示词的 token 数。
+- 若 VLM 的结构化输出结果仍未通过校验，会返回 `422` 并附上 `x_yunshu.validation`。
+
+## 流式
+
+设置 `stream: true` 后，响应为 `text/event-stream`。每个事件是 `data: <json>` 加一个空行。
+
+1. 第一个块带 `delta: {"role": "assistant", "content": null}`。
+2. 内容块带 `delta.content`。推理会先以 `delta.reasoning_content` 发送，接着才是回答。
+3. 工具调用以 `delta.tool_calls` 流式发送：先是一个带 `index`、`id`、`type` 与 `function.name` 的块，再来是同一个 `index` 的 `function.arguments` 片段。
+4. 带有 `finish_reason` 与空 delta 的块结束该选项。
+5. 有 `stream_options.include_usage` 时，之后还有一个 `choices: []` 的块，内含 `usage` 对象与 `x_yunshu` 统计。
+6. `data: [DONE]` 结束流。
+
+块的 `object` 为 `chat.completion.chunk`。块之间服务器可能发送 SSE 注释行（`: keep-alive`，以及长提示词 prefill 期间的 `: yunshu-progress {...}`），SSE 解析器会忽略注释。如果流开始后生成失败，流会发送单个 `data: {"error": {...}}` 事件，然后是 `[DONE]`。
+
+## 错误
+
+| 状态码 | 时机 |
+| --- | --- |
+| 400 | 结构或数值校验失败（`code: validation_error`，`param` 指出字段）、模型不支持的功能、无效的图片 URL、提示词超出上下文窗口、格式错误的 `response_format` 或 `grammar`。 |
+| 401 | 已配置 token，但缺少或不正确。 |
+| 404 | 多模型模式下未知的模型。 |
+| 429 | 队列已满，带 `Retry-After`。 |
+| 500 | 引擎失败（`server_error`）。 |
+| 503 | 没有加载任何模型、模型仍在加载，或有其他请求运行时内存吃紧。 |
+| 504 | 超过 `X-Yunshu-Deadline-Ms` 的期限。 |
+| 507 | GPU 内存不足（`type: memory_error`）。 |
+
+## 支持情况
+
+| 功能 | 状态 |
+| --- | --- |
+| 文本、system、developer、tool 消息 | <Support status="supported">支持</Support> |
+| 图片输入 | <Support status="supported">视觉语言模型</Support> |
+| 音频与视频输入块 | <Support status="partial">接受它们的模型</Support> |
+| 流式、`stream_options.include_usage` | <Support status="supported">支持</Support> |
+| `n` 大于 1 | <Support status="partial">仅限非流式</Support> |
+| Function tools、`tool_choice`、`parallel_tool_calls` | <Support status="supported">支持</Support> |
+| `response_format` 的 `json_object` 与 `json_schema` | <Support status="supported">约束式解码</Support> |
+| `logprobs`、`top_logprobs` | <Support status="supported">最多 20 个候选</Support> |
+| `reasoning_effort`、`enable_thinking`、`reasoning_content` | <Support status="supported">具推理模式的模型</Support> |
+| `store`、`metadata` | <Support status="supported">见已存储的 completions</Support> |
+| `user`、`service_tier`、`modalities`、`prediction` | <Support status="unsupported">接受但忽略</Support> |
+| 音频输出（`audio` 请求字段） | <Support status="unsupported">暂不支持；请使用音频路由</Support> |
+| VLM 上的 LoRA 与自定义 logits processor | <Support status="unsupported">400</Support> |
+
+## 旧版文本补全
+
+`POST /v1/completions` 接受原始提示词并返回文本，不应用聊天模板。它支持与 chat 路由相同的采样参数，以及 `stream`、`stream_options`、`stop`、`seed`、`logit_bias`、`response_format`、`grammar` / `guided_*` 约束、`logprobs`、`n`、`echo` 与 `best_of`。这里没有推理与工具相关参数。
+
+| 参数 | 类型 | 说明 | 状态 |
+| --- | --- | --- | --- |
+| `model` | string | 模型 id。 | 支持 |
+| `prompt` | string、字符串数组、token id 数组，或 token id 数组的数组 | 必填。字符串数组或 token id 数组的数组会依次为每个提示词生成选项。有多个提示词时不可使用 `stream: true`。 | 支持 |
+| `max_tokens` | integer | 默认 `128`，上限 `1048576`。也接受 `max_completion_tokens`。 | 支持 |
+| `echo` | boolean | 把提示词放在返回文本之前。配合 `logprobs` 时，提示词 token 也会有 logprobs（限单个字符串提示词）。 | 支持 |
+| `logprobs` | integer | `0` 至 `5`。响应使用旧版的 `tokens`、`token_logprobs`、`top_logprobs`、`text_offset` 数组。 | 支持 |
+| `best_of` | integer | 为每个提示词生成这么多候选，返回平均 logprob 最佳的 `n` 个。必须不小于 `n`；不可配合流式或多个提示词。所有候选都计入 `usage`。 | 支持 |
+| `n` | integer | `1` 至 `128`。不可与 `stream: true` 并用。 | 支持 |
+| `suffix` | string | 会被接受。这里没有 fill-in-the-middle 模板，所以不会被使用，也不会附加到文本后面。 | 接受但忽略 |
+| `stop`、`seed`、`temperature`、`top_p`、`top_k`、`min_p`、各种 penalty、`logit_bias`、`stream_options` | | 与 chat 路由相同。 | 支持 |
+
+```bash
+curl http://localhost:8000/v1/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model": "local", "prompt": "The capital of France is", "max_tokens": 8, "temperature": 0}'
+```
+
+```json
+{
+  "id": "cmpl-3b7d1c0e5a9f4d2e8c61a0b7",
+  "object": "text_completion",
+  "created": 1760000000,
+  "model": "local",
+  "choices": [{ "index": 0, "text": " Paris.", "finish_reason": "stop" }],
+  "usage": { "prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8 }
+}
+```
+
+流式使用 `object: "text_completion"` 的块与 `choices[].text`，之后是可选的 usage 块与 `[DONE]`。错误格式与 chat 路由相同。这里也会强制执行模型的能力契约（对不生成文本的模型使用 `response_format`、`grammar` 与 `logprobs` 会返回 `400`）。
+
+## 相关页面
+
+- [已存储的 completions](/docs/api/stored-completions)
+- [Responses](/docs/api/responses)
+- [结构化输出](/docs/guides/structured-output)
+- [提示词缓存](/docs/guides/prompt-caching)
+- [模型与能力契约](/docs/api/models)
+- [扩展功能](/docs/api/extensions)

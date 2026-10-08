@@ -1,0 +1,212 @@
+---
+title: Images and OCR
+description: OpenAI-style image generation, edits and variations from a local diffusion model, plus a Yunshu OCR endpoint for extracting text from images.
+---
+
+This page covers two groups of routes. The image routes follow the OpenAI `/v1/images/*` dialect and run a local Z-Image style diffusion pipeline. `POST /v1/ocr` is a Yunshu route (not part of the OpenAI API) that turns an uploaded image into text with an OCR model or any loaded vision-language model.
+
+<Endpoint method="POST" path="/v1/images/generations" />
+<Endpoint method="POST" path="/v1/images/generations/stream" />
+<Endpoint method="POST" path="/v1/images/edits" />
+<Endpoint method="POST" path="/v1/images/variations" />
+<Endpoint method="POST" path="/v1/ocr" />
+
+<Callout type="info">
+Authentication is only enforced when `YUNSHU_AUTH_TOKEN` is set. Image generation needs an image model to be loaded (see [Models](/docs/getting-started/models)); the optional `generation` extra provides the extra dependencies.
+</Callout>
+
+## Image generation
+
+`POST /v1/images/generations` takes a JSON body.
+
+| Parameter | Type | Required | Description | Status |
+| --- | --- | --- | --- | --- |
+| `prompt` | string | yes | Text prompt. Must not be blank. | supported |
+| `model` | string | no | Image model id. Default `Z-Image-Turbo-MLX-4bit`. If it does not match a loaded image model but exactly one image model is loaded, that one is used. | supported |
+| `n` | integer | no | 1 to 10, default 1. Images are generated one after another. | supported |
+| `size` | string | no | `WIDTHxHEIGHT`, default `1024x1024`. Both sides must be between 64 and 2048 and multiples of 64. | supported |
+| `response_format` | string | no | `b64_json` (default) or `url`. | supported |
+| `num_inference_steps` | integer | no | 1 to 100, default 4 (tuned for Turbo models). | extension |
+| `seed` | integer | no | Image `i` uses `seed + i`. Without a seed each image gets a fresh random seed. | extension |
+| `control_image` | string | no | Base64 image (a `data:` URL prefix is allowed) used as a control signal. | extension |
+| `control_scale` | number | no | 0 to 2, default 0.8. Only used with `control_image`. | extension |
+| `preview_interval` | integer | no | Streaming route only: emit a decoded preview every N steps (0 = off). | extension |
+| `quality`, `style`, `background`, `output_format`, `moderation` | | no | OpenAI fields that are not part of the schema; ignored. | accepted and ignored |
+
+The response is always PNG data:
+
+```json
+{
+  "created": 1767225600,
+  "data": [
+    { "b64_json": "iVBORw0KGgo..." }
+  ]
+}
+```
+
+With `response_format: "url"`, each item has `url` set to a `data:image/png;base64,...` URI (plus `b64_json`). Yunshu does not host generated files, so `url` is never an http link.
+
+### Streaming generation
+
+`POST /v1/images/generations/stream` takes the same body and returns `text/event-stream`. Each event is a `data:` line with a JSON object and no `event:` name:
+
+| Event shape | Meaning |
+| --- | --- |
+| `{"step", "total_steps", "progress", "is_final": false}` | Denoising progress. |
+| `{"step", "total_steps", "progress", "image", "is_final": false, "is_preview": true}` | Progress with a base64 PNG preview (only when `preview_interval` is above 0). |
+| `{"step", "progress": 1.0, "image", "is_final": true}` | Final image as base64 PNG. Followed by `data: [DONE]`. |
+| `{"type": "cancelled"}` | Request cancelled (for example by `POST /v1/cancel`), followed by `[DONE]`. |
+| `{"error": {"message", "type"}}` | Failure after the stream started, followed by `[DONE]`. |
+
+The streaming route produces a single image; `n` and `control_image` are not used by it.
+
+## Edits and variations
+
+`POST /v1/images/edits` and `POST /v1/images/variations` accept either `multipart/form-data` (what the OpenAI SDKs send: an `image` file plus text fields) or JSON with a base64 `image`. Only the first `image` file is read; a `mask` or additional files are ignored. Images larger than 25 MB return `413`.
+
+| Parameter | Type | Required | Description | Status |
+| --- | --- | --- | --- | --- |
+| `image` | file or base64 string | yes | Source image. | supported |
+| `prompt` | string | edits: yes | Edit instruction. Variations have no `prompt` field (any value is ignored). | supported |
+| `model` | string | no | As for generations. | supported |
+| `n` | integer | no | 1 to 10, default 1. | supported |
+| `size` | string | no | As for generations. | supported |
+| `response_format` | string | no | `b64_json` (default) or `url` (a data URI, without `b64_json`). | supported |
+| `num_inference_steps`, `seed` | | no | As for generations. | extension |
+| `denoise_strength` | number | no | 0 to 1. How much of the source is re-denoised: default 0.8 for edits, 0.45 for variations. | extension |
+| `mask` | file | no | Inpainting mask. | accepted and ignored |
+
+Edits are image-to-image: the source image is the starting point and `denoise_strength` sets how far the result may move away from it. There is no mask-based inpainting on these routes.
+
+## OCR
+
+`POST /v1/ocr` takes `multipart/form-data`.
+
+| Parameter | Type | Required | Description |
+| --- | --- | --- | --- |
+| `file` | file | yes | Image, at most 10 MB. PNG, JPEG, WebP, TIFF and BMP are read; the file is verified with Pillow and a non-image returns `400`. |
+| `model` | string | no | OCR or VLM model id. Empty means the first loaded OCR engine. |
+| `task` | string | no | `text` (default), `formula` or `table`. |
+| `language` | string | no | A hint that steers the output language. No language detection is performed. |
+
+Engine selection: a loaded OCR-type model (for example a GLM-OCR checkpoint) is used first. If there is none, the request falls back to a loaded vision-language model with a text-recognition prompt. With neither, the server returns `503`.
+
+```json
+{
+  "text": "Invoice 2026-001\nTotal: 120.00",
+  "model": "mlx-community/GLM-OCR-bf16",
+  "confidence": 0.0,
+  "language": null,
+  "task": "text",
+  "prompt_tokens": 312,
+  "completion_tokens": 18,
+  "usage": {
+    "prompt_tokens": 312,
+    "completion_tokens": 18,
+    "total_tokens": 330,
+    "image_tokens": 290
+  }
+}
+```
+
+`confidence` is `null` on the VLM fallback and whatever the OCR engine reports otherwise; treat it as informational. `language` echoes your hint.
+
+## Examples
+
+<Tabs items={["curl", "Python", "JavaScript"]}>
+<Tab value="curl">
+
+```bash
+curl http://localhost:8000/v1/images/generations \
+  -H "Content-Type: application/json" \
+  -d '{"model": "Z-Image-Turbo-MLX-4bit", "prompt": "a red bicycle in the rain", "size": "1024x1024", "seed": 7}' \
+  | python3 -c "import sys,json,base64; open('out.png','wb').write(base64.b64decode(json.load(sys.stdin)['data'][0]['b64_json']))"
+
+curl http://localhost:8000/v1/images/edits \
+  -F image=@out.png \
+  -F prompt="make it night" \
+  -F denoise_strength=0.6
+
+curl http://localhost:8000/v1/ocr -F file=@receipt.png -F task=text
+```
+
+</Tab>
+<Tab value="Python">
+
+```python
+import base64
+from openai import OpenAI
+
+client = OpenAI(base_url="http://localhost:8000/v1", api_key="not-needed")
+
+img = client.images.generate(
+    model="Z-Image-Turbo-MLX-4bit",
+    prompt="a red bicycle in the rain",
+    size="1024x1024",
+    response_format="b64_json",
+)
+with open("out.png", "wb") as f:
+    f.write(base64.b64decode(img.data[0].b64_json))
+
+with open("out.png", "rb") as f:
+    edited = client.images.edit(
+        model="Z-Image-Turbo-MLX-4bit",
+        image=f,
+        prompt="make it night",
+        response_format="b64_json",
+    )
+```
+
+</Tab>
+<Tab value="JavaScript">
+
+```ts
+import OpenAI from "openai";
+import fs from "node:fs";
+
+const client = new OpenAI({ baseURL: "http://localhost:8000/v1", apiKey: "not-needed" });
+
+const img = await client.images.generate({
+  model: "Z-Image-Turbo-MLX-4bit",
+  prompt: "a red bicycle in the rain",
+  size: "1024x1024",
+  response_format: "b64_json",
+});
+fs.writeFileSync("out.png", Buffer.from(img.data[0].b64_json!, "base64"));
+```
+
+</Tab>
+</Tabs>
+
+## Errors
+
+Errors use the OpenAI envelope `{"error": {"message", "type", "param", "code"}}`.
+
+| Status | When |
+| --- | --- |
+| `400` | Blank `prompt` or `image`, `size` not parseable or not a multiple of 64 in 64 to 2048, invalid `response_format`, invalid base64, non-image OCR upload. |
+| `404` | No image generation model matches `model`, or the model is of a different modality. |
+| `413` | Image upload over 25 MB (OCR: over 10 MB). |
+| `501` | Generations only: the loaded image model uses a layout the pipeline cannot run (flat Lance/Wan style checkpoints). Edits and variations report this case as `500`. |
+| `503` | OCR: no OCR or vision-language model is loaded. |
+| `507` | Out of GPU memory. |
+| `500` | Generation, edit, variation or OCR failed. |
+
+## Support
+
+| Feature | Status |
+| --- | --- |
+| Text-to-image, `b64_json` and data-URI `url` | <Support status="supported">supported</Support> |
+| Streaming progress and previews | <Support status="extension">Yunshu extension</Support> |
+| Image edits and variations (image-to-image) | <Support status="partial">no mask inpainting</Support> |
+| Hosted `url` links | <Support status="unsupported">data URIs only</Support> |
+| Control image guidance | <Support status="extension">Yunshu extension</Support> |
+| `gpt-image-1` options (`quality`, `background`, `output_format`) | <Support status="unsupported">ignored</Support> |
+| Lance/Wan style image checkpoints | <Support status="unsupported">501</Support> |
+| OCR with OCR models or VLM fallback | <Support status="supported">supported</Support> |
+
+## Related
+
+- [Models](/docs/getting-started/models) for loading image and OCR models.
+- [Chat completions](/docs/api/chat-completions) for sending images to a vision-language model instead.
+- [Extensions](/docs/api/extensions) for cancelling running requests.

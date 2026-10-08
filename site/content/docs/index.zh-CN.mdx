@@ -1,0 +1,54 @@
+---
+title: 简介
+description: Yunshu 是面向 Apple Silicon 的本地 LLM 与 VLM 推理引擎，以单一进程提供兼容 OpenAI 与 Anthropic 的 API。
+---
+
+Yunshu 是为 Apple Silicon Mac 设计的单机推理引擎。单个进程通过 Apple 的 MLX 技术栈（`mlx-lm`、`mlx-vlm`、`mlx-audio`）加载模型，并在你自己的机器上提供兼容 OpenAI 与 Anthropic 的 HTTP 端点。除非你自行配置，否则数据不会离开这台 Mac。
+
+重点在大语言模型与视觉语言模型：解码速度、首个 token 的延迟（冷启动与前缀缓存命中两种情况）、前缀复用，以及完整的请求功能，例如工具调用、JSON schema 输出、停止序列、logprobs、推理内容输出与请求取消。其他模态（语音识别与合成、嵌入、图像生成）则作为额外支持的能力提供。
+
+## 你会得到什么
+
+- 兼容 OpenAI 的路由，例如 `POST /v1/chat/completions` 与 `POST /v1/responses`，以及 Anthropic 路由 `POST /v1/messages`。参见 [API 概览](/docs/api/overview)。
+- 命令行工具 `yunshu`，用于安装、检查、启动，以及将引擎作为登录服务运行。参见 [CLI 参考](/docs/guides/cli)。
+- 由网关提供的网页控制台，可查看状态、模型、请求并使用 Playground。参见[控制台](/docs/getting-started/console)。
+- 带有可选 SSD 层的前缀缓存、Qwen3.5 系列的推测式解码，以及针对 JSON schema 与语法的受限解码。
+
+## 服务的工作方式
+
+Yunshu 会根据你加载的模型选择服务路径。所有 GPU 工作都在单个 MLX 线程上进行。
+
+| 模型 | 服务路径 |
+|---|---|
+| 任何 `mlx-vlm` 模型（视觉语言模型，以及 Qwen3.5 / 3.6 / 3.8 系列） | VLM batch runner：连续批处理、每个请求独立采样、自动前缀缓存，并支持图片、音频与视频输入。 |
+| Qwen3.5 系列模型 | 同一个 runner，另外在单请求通道中使用推测式解码（MTP 或匹配的 drafter）。 |
+| 纯文本 `mlx-lm` 模型 | 单请求的快速路径。并发的请求会依次处理。 |
+
+各路径的细节参见[模型支持](/docs/guides/model-support)。
+
+## Yunshu 不是什么
+
+Yunshu 只服务一台机器。它没有多节点或分布式模式，也不以多租户批处理吞吐量最大化为目标。认证机制是单一的可选 bearer token（`YUNSHU_AUTH_TOKEN`）。
+
+## 文档的组织方式
+
+<Cards>
+  <Card title="开始使用" href="/docs/getting-started/install">
+    安装 Yunshu、启动第一个模型、管理模型文件、作为登录服务运行，以及打开控制台。
+  </Card>
+  <Card title="API 参考" href="/docs/api/overview">
+    服务器注册的每一条路由，包含参数、示例、流式事件、错误，以及每项功能的支持状态。
+  </Card>
+  <Card title="指南" href="/docs/guides/cli">
+    CLI 参考、配置、模型支持与故障排查，以及智能体、网络搜索、提示缓存与结构化输出的指南。
+  </Card>
+  <Card title="开发者" href="/docs/developers/architecture">
+    架构、贡献方式、验证、发布门禁与上游跟踪。
+  </Card>
+</Cards>
+
+如果你是第一次使用，请依次阅读[安装](/docs/getting-started/install)与[快速开始](/docs/getting-started/quickstart)。
+
+<Callout type="info">
+API 参考中的每项功能都会标注为支持、部分支持、接受但忽略，或暂不支持。服务器接受但不会实际处理的参数，会明确标注，而不会被写成可用。
+</Callout>

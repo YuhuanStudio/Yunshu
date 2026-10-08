@@ -3,7 +3,7 @@ import { DocsPage, DocsBody, DocsDescription, DocsTitle } from "fumadocs-ui/layo
 import { notFound } from "next/navigation";
 import type { Metadata } from "next";
 import { getMDXComponents } from "../../../../../mdx-components";
-import { createLink } from "@/components/localized-link";
+import { createCard, createLink } from "@/components/localized-link";
 import { Feedback } from "@/components/feedback";
 import { PageActions } from "@/components/page-actions";
 import { isLang } from "@/lib/i18n";
@@ -19,7 +19,7 @@ export default async function Page(props: { params: Promise<{ lang: string; slug
   if (!page) notFound();
   const m = MESSAGES[lang];
   const Mdx = page.data.body;
-  const mdUrl = asset(`/${lang}/llms.mdx/${(slug ?? []).join("/")}`.replace(/\/$/, ""));
+  const mdUrl = asset(`/${lang}/raw/${slug?.length ? slug.join("/") : "index"}`);
 
   return (
     <DocsPage toc={page.data.toc} full={page.data.full} tableOfContent={{ style: "clerk", single: false }}>
@@ -31,9 +31,9 @@ export default async function Page(props: { params: Promise<{ lang: string; slug
         githubUrl={`${REPO}/blob/main/site/content/docs/${page.path}`}
       />
       <DocsBody>
-        <Mdx components={getMDXComponents({ a: createLink(lang) })} />
+        <Mdx components={getMDXComponents({ a: createLink(lang), Card: createCard(lang) })} />
       </DocsBody>
-      <Feedback messages={m} path={`/${lang}${page.url.replace(/^\/[^/]+/, "")}`} />
+      <Feedback messages={m} path={page.url} />
     </DocsPage>
   );
 }

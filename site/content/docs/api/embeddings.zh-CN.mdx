@@ -1,0 +1,194 @@
+---
+title: Embeddings
+description: OpenAI embeddings 端点，支持文本与多模态 embedding 模型，另有返回原始池化向量的 vLLM 风格 pooling 端点。
+---
+
+`POST /v1/embeddings` 遵循 OpenAI embeddings 格式：发送文本（或 token id），每个输入得到一个向量。配合多模态 embedding 检查点时，同一个路由也能嵌入图片、音频与视频。`POST /v1/pooling` 是 vLLM 风格的配套端点，返回未归一化的池化隐藏状态。
+
+Embedding 模型与聊天模型是不同的检查点。多模型模式下在 `model` 填入 embedder 的名称；单模型模式下，加载的模型本身就必须是 embedder。`GET /v1/models` 会显示 `yunshu.kind: "embedding"`，向量维度则在 `yunshu.embeddings` 下。
+
+<Endpoint method="POST" path="/v1/embeddings" />
+<Endpoint method="POST" path="/v1/pooling" />
+
+<Callout type="info">
+只有在设置 `YUNSHU_AUTH_TOKEN` 时才会强制认证。见 [API 概览](/docs/api/overview)。
+</Callout>
+
+## 请求
+
+| 参数 | 类型 | 必填 | 说明 | 状态 |
+| --- | --- | --- | --- | --- |
+| `model` | string | 是 | Embedding 模型 id。 | 支持 |
+| `input` | string、字符串数组、整数数组、整数数组的数组，或对象数组 | 是（或用 `messages`） | 要嵌入的文本。字符串数组会逐一嵌入。整数数组是以 token id 表示的一段文本；整数数组的数组则是多段文本。对象（`{"text": ..., "image": ...}`）用于多模态 embedder。 | 支持 |
+| `messages` | array | 否 | vLLM 风格的聊天消息，内含文本、`image_url`、`input_audio`、`audio_url` 或 `video` 块，会被转成单个多模态条目。请用它代替 `input`，不可同时使用。 | 扩展 |
+| `encoding_format` | string | 否 | `float`（默认）或 `base64`（little-endian float32 打包后再做 base64）。 | 支持 |
+| `dimensions` | integer | 否 | `1` 至 `8192`。把向量截成前面这么多个值并重新归一化（Matryoshka 风格）。要求的维度超过模型原生维度会返回 `400`。 | 支持 |
+| `pooling_type` | string | 否 | `MEAN`、`CLS` 或 `LAST`（不区分大小写）。覆盖模型自身的池化方式。适用于可池化的文本模型；结果会做 L2 归一化。 | 扩展 |
+| `instruction` | string | 否 | 文本模型：以 `instruction`、换行、再接文本的形式加在每个输入前面。多模态模型：作为 embedder 的指令传入。 | 扩展 |
+| `task` | string | 否 | 仅限多模态 embedder：embedder 的任务名称。未知的任务会返回 `400`。 | 扩展 |
+| `user` | string | 否 | 为了兼容而接受。 | 接受但忽略 |
+
+限制：每个请求最多 2048 个输入，每段文本最多 65536 字符。列表必须同质（全是字符串、全是 token id，或全是 token id 列表）。空字符串与仅含空白的输入会被拒绝。
+
+除非模型另有返回，向量会做 L2 归一化；非有限值会被换成 `0`。
+
+## 示例
+
+<Tabs items={["curl", "Python", "JavaScript"]}>
+<Tab value="curl">
+
+```bash
+curl http://localhost:8000/v1/embeddings \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-local" \
+  -d '{
+    "model": "Qwen/Qwen3-Embedding-0.6B",
+    "input": ["How do I reset my password?", "Password reset steps"],
+    "dimensions": 256
+  }'
+```
+
+</Tab>
+<Tab value="Python">
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="http://localhost:8000/v1", api_key="sk-local")
+
+resp = client.embeddings.create(
+    model="Qwen/Qwen3-Embedding-0.6B",
+    input=["How do I reset my password?", "Password reset steps"],
+    dimensions=256,
+)
+a, b = (d.embedding for d in resp.data)
+print(len(a), sum(x * y for x, y in zip(a, b)))  # cosine, since vectors are unit length
+print(resp.usage.total_tokens)
+```
+
+</Tab>
+<Tab value="JavaScript">
+
+```ts
+import OpenAI from "openai";
+
+const client = new OpenAI({ baseURL: "http://localhost:8000/v1", apiKey: "sk-local" });
+
+const resp = await client.embeddings.create({
+  model: "Qwen/Qwen3-Embedding-0.6B",
+  input: ["How do I reset my password?", "Password reset steps"],
+  dimensions: 256,
+});
+console.log(resp.data[0].embedding.length);
+```
+
+</Tab>
+</Tabs>
+
+### 多模态输入
+
+使用多模态 embedding 模型时，每个 `input` 条目是字符串，或是带有 `text`、`image`、`audio`、`video` 键的对象（至少要有一个）。图片可以是 URL 或 data URI。
+
+```bash
+curl http://localhost:8000/v1/embeddings \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "Qwen3-VL-Embedding",
+    "input": [
+      {"text": "a red bicycle"},
+      {"image": "data:image/png;base64,iVBORw0KGgo..."},
+      {"text": "a red bicycle", "image": "https://example.com/bike.jpg"}
+    ]
+  }'
+```
+
+聊天消息的写法则是把媒体按顺序放进同一个条目：
+
+```json
+{
+  "model": "Qwen3-VL-Embedding",
+  "messages": [
+    {"role": "user", "content": [
+      {"type": "text", "text": "a red bicycle"},
+      {"type": "image_url", "image_url": {"url": "https://example.com/bike.jpg"}}
+    ]}
+  ]
+}
+```
+
+纯文本的 embedding 模型收到对象条目与 `messages` 时，会返回 `400`。
+
+## 响应
+
+```json
+{
+  "object": "list",
+  "data": [
+    { "object": "embedding", "index": 0, "embedding": [0.0123, -0.0456, 0.0789] },
+    { "object": "embedding", "index": 1, "embedding": [0.0101, -0.0399, 0.0812] }
+  ],
+  "model": "Qwen/Qwen3-Embedding-0.6B",
+  "usage": { "prompt_tokens": 11, "total_tokens": 11 }
+}
+```
+
+上面的向量已缩短；实际向量长度是模型的完整维度（或 `dimensions`）。设置 `encoding_format: "base64"` 时，`embedding` 是 base64 字符串而不是数组。文本模型的 `usage` 统计输入 token 数，不含特殊 token。多模态模型则是 embedder 报告的 token 数，没有报告时为条目数。
+
+## Pooling
+
+`POST /v1/pooling` 返回每个输入的池化隐藏状态，不做归一化，供需要自行后处理的工具使用。
+
+| 参数 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `model` | string | 是 | Embedding 模型 id。 |
+| `input` | string 或字符串数组 | 是 | 最多 2048 段文本，每段最多 8192 字符。 |
+| `pooling_type` | string | 否 | `CLS`（默认）、`MEAN` 或 `LAST`。 |
+| `encoding_format` | string | 否 | `float`（默认）或 `base64`。 |
+
+```bash
+curl http://localhost:8000/v1/pooling \
+  -H "Content-Type: application/json" \
+  -d '{"model": "Qwen/Qwen3-Embedding-0.6B", "input": "hello", "pooling_type": "LAST"}'
+```
+
+```json
+{
+  "object": "list",
+  "data": [{ "object": "pooling", "index": 0, "data": [0.52, -1.31, 0.07] }],
+  "model": "Qwen/Qwen3-Embedding-0.6B",
+  "usage": { "prompt_tokens": 2, "total_tokens": 2 }
+}
+```
+
+多模态 embedding 模型不由 `POST /v1/pooling` 提供（`400`），请改用 `POST /v1/embeddings`。无法产生 embedding 的模型（例如混合架构的聊天模型）会返回 `400`，并在消息中说明。
+
+## 错误
+
+| 状态码 | 时机 |
+| --- | --- |
+| 400 | 校验失败（空输入、列表类型混用、`encoding_format` 或 `pooling_type` 超出范围、输入过多、`dimensions` 超过原生维度）；对纯文本 embedder 发送媒体；不正确的 `task`。 |
+| 401 | 已配置 token，但缺少或不正确。 |
+| 404 | 找不到该 embedding 模型。 |
+| 422 | 列表中有空条目，或 token id 列表含有非整数。 |
+| 507 | GPU 内存不足。 |
+| 500 | Embedding 生成失败（`server_error`）。 |
+
+## 支持情况
+
+| 功能 | 状态 |
+| --- | --- |
+| 字符串、字符串数组与 token id 输入 | <Support status="supported">支持</Support> |
+| `encoding_format` 的 `float` 与 `base64` | <Support status="supported">支持</Support> |
+| `dimensions`（截断并重新归一化） | <Support status="supported">支持</Support> |
+| 多模态输入（图片、音频、视频） | <Support status="partial">仅限多模态 embedding 模型</Support> |
+| `pooling_type`、`instruction`、`task`、`messages` | <Support status="extension">扩展</Support> |
+| 把聊天模型当 embedder 使用 | <Support status="partial">会退回使用平均池化的隐藏状态，这并非为检索训练；请改为加载 embedding 检查点</Support> |
+| `user` | <Support status="unsupported">接受但忽略</Support> |
+| 在 Neural Engine 上计算 embedding | <Support status="partial">以 `YUNSHU_ANE_EMBEDDINGS` 选择启用，仅适用于配置的 embedding 模型；见[配置](/docs/guides/configuration)</Support> |
+
+## 相关页面
+
+- [Rerank 与评分](/docs/api/rerank)
+- [模型](/docs/api/models)
+- [模型支持](/docs/guides/model-support)
+- [Ollama 兼容层](/docs/api/ollama)
