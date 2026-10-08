@@ -133,14 +133,14 @@ def run_long_stage(a, gq, log, runs, repo, priority) -> tuple[bool, list, str]:
 
     commit = git("rev-parse", "HEAD", cwd=repo)
     ns = argparse.Namespace(
-        base=a["base"], cand=str(repo), env=[], cand_env=[], base_env=[],
-        suite=LONG_SUITE, label=f"gate-long-{commit[:8]}", model=a["model"],
+        base=git("rev-parse", a["base"] + "^{commit}", cwd=repo), cand=commit, env=[], cand_env=[], base_env=[],
+        suite=LONG_SUITE, label=f"{os.environ.get('YV_LABEL_PREFIX', os.environ.get('GPUQ_OWNER', 'infra'))}-gate-long-{commit[:8]}", model=a["model"],
         model_name="", engaged=[], ctx=None, reps=None, mmlu_n=None, mem_sizes=None,
         mem_reps=None, speed_tol=None, spec_off=None, no_apc_hit_required=False,
         mem_gb=0, priority=priority,
     )  # fmt: skip
     rc = runner.run_ab(ns, gq=gq, log=log, runs=runs)
-    cand = resolve_arm("cand", str(repo))
+    cand = resolve_arm("cand", commit)
     vp = runner.run_dir_for(ns.label, cand, runs) / "verdict.json"
     try:
         v = json.loads(vp.read_text())
@@ -267,7 +267,7 @@ def run_gate(
             "zsh",
             str(repo / "scripts/release/gate.sh"),
         ]
-        label = f"infra-gate-{commit[:8]}-{name}-{int(now()) % 100000}"
+        label = f"{os.environ.get('YV_LABEL_PREFIX', os.environ.get('GPUQ_OWNER', 'infra'))}-gate-{commit[:8]}-{name}-{int(now()) % 100000}"
         jid = gq.submit(
             label,
             argv,

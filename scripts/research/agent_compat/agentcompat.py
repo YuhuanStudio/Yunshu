@@ -20,7 +20,6 @@ import argparse
 import contextlib
 import json
 import os
-import re
 import signal
 import socket
 import subprocess
@@ -33,7 +32,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[2]
-GPUQ = REPO / "scripts" / "dev" / "gpuq"
+GPUQ = Path(os.environ.get("YV_GPUQ", str(REPO / "scripts/dev/gpuq")))
 PY = os.environ.get(
     "AGENTCOMPAT_PYTHON", "/Users/yuhuan/Documents/YuhuanStudio/Yunshu/.venv/bin/python"
 )
@@ -240,6 +239,10 @@ def server_identity_ready(identity: str) -> bool:
         return False
 
 
+LABEL_PREFIX = "agentcompat"
+PRIORITY = -1
+
+
 def with_m3_server(out: Path, tag: str, model: str, minutes: float, work) -> dict:
     """One bounded M3 serve job (<= ~20 min) behind an ssh -L forward; `work(url, tunnel)` runs the M5-side clients."""
     sha = run(
@@ -255,10 +258,12 @@ def with_m3_server(out: Path, tag: str, model: str, minutes: float, work) -> dic
         [
             str(GPUQ),
             "submit",
+            "--priority",
+            str(PRIORITY),
             "--device",
             "m3",
             "--label",
-            f"agentcompat-{tag}-{sha}-{int(time.time()) % 100000}",
+            f"{LABEL_PREFIX}-{tag}-{sha}-{int(time.time()) % 100000}",
             "--mem-gb",
             "9",
             "--timeout",
@@ -452,7 +457,10 @@ def stage_m3(out: Path, model: str, minutes: float, scenarios: str) -> dict:
 
 
 def main(argv=None) -> int:
+    global LABEL_PREFIX, PRIORITY
     ap = argparse.ArgumentParser()
+    ap.add_argument("--label-prefix", default="agentcompat")
+    ap.add_argument("--priority", type=int, default=-1)
     ap.add_argument("--stages", default="census,m3")
     ap.add_argument("--model", default="Qwen3.5-9B-MLX-4bit")
     ap.add_argument(
@@ -464,6 +472,7 @@ def main(argv=None) -> int:
     ap.add_argument("--scenarios", default=E2E_SCENARIOS)
     ap.add_argument("--out", default="")
     a = ap.parse_args(argv)
+    LABEL_PREFIX, PRIORITY = a.label_prefix, a.priority
     sha = run(
         ["git", "-C", str(REPO), "rev-parse", "--short", "HEAD"], capture_output=True
     ).stdout.strip()
