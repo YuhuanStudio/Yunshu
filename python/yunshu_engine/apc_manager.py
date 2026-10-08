@@ -1980,8 +1980,8 @@ class YunshuAPCManager(APCManager):
     def _skip_media_restore(self, token_ids, args, kwargs):
         """Inspect HOT metadata before upstream allocates/copies the restore.
 
-        Explicit checkpoint policies do not set _MEDIA_COST. Unknown or trimmed
-        layouts retain the existing lookup path rather than guessing their bytes.
+        Explicit checkpoint policies do not set _MEDIA_COST. Use upstream's
+        matching rule: dense entries can restore a shorter shared block prefix.
         """
         from mlx_vlm.apc import _cache_nbytes
 
@@ -1991,17 +1991,25 @@ class YunshuAPCManager(APCManager):
         minimum = kwargs.get("min_prefix_tokens", args[2] if len(args) > 2 else 0)
         maximum = min(len(tokens) - 1, maximum or len(tokens) - 1)
         with self.lock:
-            candidates = [
-                e
-                for e in self._exact_cache.values()
-                if e.extra_hash == extra
-                and minimum < len(e.token_ids) <= maximum
-                and tokens[: len(e.token_ids)] == e.token_ids
-            ]
-            entry = max(candidates, key=lambda e: len(e.token_ids), default=None)
-            if entry is None:
+            candidates = []
+            for e in self._exact_cache.values():
+                if e.extra_hash != extra:
+                    continue
+                n = _upstream_apc._checkpoint_match_len(
+                    tokens,
+                    e.token_ids,
+                    maximum,
+                    self.block_size,
+                    _upstream_apc._dense_checkpoint_trimmable(
+                        e.prompt_cache, len(e.token_ids)
+                    ),
+                )
+                if n > minimum:
+                    candidates.append((n, e))
+            best = max(candidates, key=lambda pair: pair[0], default=None)
+            if best is None:
                 return False
-            n = len(entry.token_ids)
+            n, entry = best
             size = _cache_nbytes(entry.prompt_cache)
         return not self.media_restore_cost.worth(size, n, len(tokens) - n)
 

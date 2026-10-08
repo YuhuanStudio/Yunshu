@@ -855,3 +855,26 @@ def test_media_cost_rejects_before_clone_and_leaves_text_lookup_unchanged(monkey
     assert len(calls) == 1
     # The context must be reset; direct/text callers retain normal admission.
     assert m.lookup_exact_cache(ids + [200] * 31, extra_hash=123)[1] == 107
+
+
+def test_media_cost_accounts_for_trimmed_dense_followup():
+    from types import SimpleNamespace
+
+    m = _mgr()
+    c = m.coordinator(SimpleNamespace(make_cache=lambda: [KVCache()]))
+    c.media_checkpoint = True
+    ids = list(range(109))
+    m.store_exact_cache(ids[:108], [_cache(108)[1]], extra_hash=123)
+    follow = ids[:96] + [200] * 35
+    # This is a real dense hit, even though the stored 108-token prompt is
+    # not itself a prefix of the follow-up (the trailing template changed).
+    assert m.lookup_exact_cache(follow, extra_hash=123)[1] == 96
+    m.media_restore_cost.observe(109, 0, 0.06)
+    m.media_restore_cost.observe(109, 108, 0.015)
+    args = dict(
+        safe_lookup_min=0,
+        suffix_is_text_only=lambda n: True,
+        prefix_has_media=lambda n: True,
+    )
+    assert c.lookup(follow, extra_hash=123, **args) is None
+    assert m.media_restore_cost.skips == 1
