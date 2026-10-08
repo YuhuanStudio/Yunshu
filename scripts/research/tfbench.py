@@ -367,6 +367,45 @@ def req(model, text, mt, seed=None, extra=None, temp=0):
     return b
 
 
+def rehearsal_prefix(rendered, marker="<|im_start|>user"):
+    """The next turn's shared prefix: the rendered conversation up to its last user header."""
+    cut = rendered.rfind(marker)
+    if cut <= 0:
+        raise ValueError(f"marker {marker!r} not found in the rendered next turn")
+    return rendered[:cut]
+
+
+def _post_json(url, path, body, timeout=600):
+    req = urllib.request.Request(
+        url + path,
+        json.dumps(body).encode(),
+        {"Content-Type": "application/json", "Authorization": "Bearer k"},
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return json.loads(r.read())
+
+
+def rehearse(s, b):
+    """Prefill the assistant reply the way the next turn will (opt-in pilot, --rehearse)."""
+    kw = b.get("chat_template_kwargs")
+    rendered = _post_json(
+        s.url,
+        "/apply-template",
+        {"model": s.model, "messages": b["messages"], "chat_template_kwargs": kw},
+    )["prompt"]
+    prefix = rehearsal_prefix(rendered)
+    t0 = time.perf_counter()
+    r = _post_json(
+        s.url,
+        "/v1/completions",
+        {"model": s.model, "prompt": prefix, "max_tokens": 1, "temperature": 0},
+    )
+    return {
+        "rehearsal_s": round(time.perf_counter() - t0, 3),
+        "rehearsal_usage": r.get("usage"),
+    }
+
+
 def emit(out, **kw):
     print(
         json.dumps({k: v for k, v in kw.items() if k not in ("text", "cmd", "env")})[
@@ -428,7 +467,11 @@ def part_decode(s, out, a):
                             "content": "Continue with the next part, at the same length.",
                         },
                     ]
+                extra_rec = {}
+                if phase == "turn2" and a.rehearse:
+                    extra_rec = rehearse(s, b)
                 r = send(s.url, b)
+                r.update(extra_rec)
                 if not a.smoke:
                     check_decode_len(r, want, f"decode {kind}-{ctx} {phase}")
                 if phase == "cold":
@@ -671,6 +714,11 @@ def parse_args(argv=None):
         type=int,
         default=256,
         help="reply length of decode cells; a cell that does not end finish=length at exactly N is an error",
+    )
+    ap.add_argument(
+        "--rehearse",
+        action="store_true",
+        help="before turn2, prefill the rendered assistant reply (next-turn rehearsal pilot)",
     )
     ap.add_argument("--dry-run", action="store_true")
     args = list(sys.argv[1:] if argv is None else argv)

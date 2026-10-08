@@ -236,6 +236,11 @@ def main():
         help="self-contained tiny-model pilot (not a timing corpus)",
     )
     ap.add_argument("--env", action="append", default=[], help="server environment K=V")
+    ap.add_argument(
+        "--rehearse",
+        action="store_true",
+        help="before the follow-up, prefill the rendered assistant reply (next-turn rehearsal)",
+    )
     a = ap.parse_args()
     if a.no_stacks and not a.calls:
         ap.error("--no-stacks requires --calls")
@@ -296,6 +301,10 @@ def main():
                         "content": "Continue with the next part, at the same length.",
                     },
                 ]
+            rehearsal = {}
+            if phase == "followup" and a.rehearse:
+                rehearsal = tfbench.rehearse(s, body)
+                print(f"rehearsal: {rehearsal}", flush=True)
             t0 = time.perf_counter()
             trace_id = f"ttft-{os.getpid()}-{i}"
             r = tfbench.send(s.url, body, capture_timestamps=True, trace_id=trace_id)
@@ -317,6 +326,7 @@ def main():
                     finished=finished_at,
                     client_prepare_ms=(sent_at - t0) * 1000,
                     trace_id=trace_id,
+                    **rehearsal,
                     **r,
                 )
             )
