@@ -37,7 +37,7 @@ const pressureKey: Record<string, string> = {
   warning: "warn",
   critical: "critical",
 };
-const pressureText = (level: string) =>
+export const pressureText = (level: string) =>
   pressureKey[level]
     ? tr(`shell.footer.pressure.${pressureKey[level]}`)
     : level;

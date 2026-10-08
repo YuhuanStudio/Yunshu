@@ -232,13 +232,16 @@ for (const name of PAGES) {
   });
 }
 
-test("footer sheet shows the full pills on tap", async ({ page }) => {
+test("footer island opens on tap and is not a full-height sheet", async ({ page }) => {
   await install(page);
   await page.goto("/console/#/overview");
   await page.getByTestId("footer-compact").click();
-  await expect(
-    page.getByRole("dialog").locator("ul[aria-label]"),
-  ).toBeVisible();
+  const island = page.getByRole("dialog", { name: "引擎狀態" });
+  await expect(island).toBeVisible();
+  const box = await island.boundingBox();
+  const vp = page.viewportSize()!;
+  expect(box!.height).toBeLessThan(vp.height * 0.75);
+  expect(box!.x).toBeGreaterThanOrEqual(11);
 });
 
 test("safe areas: the viewport covers the notch and bars pad for it", async ({
