@@ -52,8 +52,15 @@ def _wrap(fn):
     return inner
 os.stat, os.lstat = _wrap(_stat), _wrap(_lstat)
 PYEOF
-sandbox-exec -f "$PROFILE" env -u YV_PY -u YV_ROOT -u YUNSHU_MAIN PYTHONPATH="$CIHOME/shim" TMPDIR="$CIHOME/tmp" HOME="$CIHOME" \
-  "$WORK/.venv/bin/python" -m pytest tests/unit -q --tb=short -p no:cacheprovider
+# The sandboxed suite writes its output inside $WORK: if the caller redirected stdout to a denied
+# path (e.g. a log on /Volumes/P5Plus), every write would fail and pytest would exit 120 silently.
+set +e
+sandbox-exec -f "$PROFILE" env -u YV_PY -u YV_ROOT -u YUNSHU_MAIN -u VIRTUAL_ENV PYTHONPATH="$CIHOME/shim" TMPDIR="$CIHOME/tmp" HOME="$CIHOME" \
+  "$WORK/.venv/bin/python" -m pytest tests/unit -q --tb=short -p no:cacheprovider > "$WORK/pytest.log" 2>&1
+rc=$?
+set -e
+cat "$WORK/pytest.log"
+[ "$rc" -eq 0 ] || { echo "ci-local: FAIL (pytest rc $rc) $SHA"; exit "$rc"; }
 uv build -q
 uvx -q twine check dist/*
 echo "ci-local: PASS $SHA ($WORK)"
