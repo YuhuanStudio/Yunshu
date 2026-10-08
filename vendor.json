@@ -218,7 +218,8 @@
       "license": "MIT",
       "kind": "vendored",
       "local_changes": [
-        "Absolute imports for installed mlx-vlm shared components; formatting."
+        "Absolute imports for installed mlx-vlm shared components; formatting.",
+        "Assert dataclass post-init initialization for static type checking."
       ]
     },
     {

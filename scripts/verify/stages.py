@@ -1124,6 +1124,17 @@ def stage_priorart(ctx: Ctx) -> StageResult:
         prefix = str(ctx.cand.path / "python")
         if kind == "diffusion":
             prefix += ":/Volumes/P5Plus/yunshu-build/codex/priorfix/mflux-deps"
+        extra = []
+        if kind == "retrieval":
+            import urllib.request
+
+            reference = ctx.run.path / "aperepel-cfe20b0-server.py"
+            if not reference.exists():
+                url = "https://raw.githubusercontent.com/aperepel/mlx-rerank/cfe20b0b0e2505240be91dbcf6e5575b8a8d7388/server.py"
+                with urllib.request.urlopen(url, timeout=30) as response:
+                    reference.write_bytes(response.read())
+            compile(reference.read_text(), str(reference), "exec")
+            extra = ["--rerank-reference", str(reference)]
         cell = Cell(
             "priorart",
             kind,
@@ -1135,6 +1146,7 @@ def stage_priorart(ctx: Ctx) -> StageResult:
                 str(ctx.cand.path / "scripts/research/priorfix_runtime_parity.py"),
                 "--kind",
                 kind,
+                *extra,
                 "--out",
                 "{out}",
             ],

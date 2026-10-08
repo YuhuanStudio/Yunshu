@@ -15,6 +15,7 @@ def parser():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--kind", required=True, choices=["retrieval", "omni", "diffusion"])
     p.add_argument("--out", required=True)
+    p.add_argument("--rerank-reference")
     p.add_argument("--dry-run", action="store_true")
     return p
 
@@ -67,7 +68,7 @@ def omni():
     }
 
 
-def retrieval():
+def retrieval(reference):
     import asyncio
     from importlib.util import module_from_spec, spec_from_file_location
 
@@ -84,7 +85,7 @@ def retrieval():
     tok = AutoTokenizer.from_pretrained(path)
     spec = spec_from_file_location(
         "aperepel_reference",
-        "/Users/yuhuan/Documents/YuhuanStudio/Yunshu-wt-priorfix/docs/research/priorfix/aperepel_server.py",
+        reference,
     )
     upstream = module_from_spec(spec)
     spec.loader.exec_module(upstream)
@@ -123,7 +124,8 @@ def retrieval():
                 "upstream_score": score,
             }
         )
-    del model, upstream
+    model = None
+    upstream._model = None
     mx.clear_cache()
     media = make_media("/Volumes/P5Plus/yunshu-build/codex/priorfix/vl-media")
 
@@ -244,7 +246,11 @@ def main():
     if args.dry_run:
         print(json.dumps({"dry_run": True, "kind": args.kind}))
         return 0
-    result = globals()[args.kind]()
+    result = (
+        retrieval(args.rerank_reference)
+        if args.kind == "retrieval"
+        else globals()[args.kind]()
+    )
     result.update(complete=True, device="M5")
     Path(args.out).write_text(json.dumps(result) + "\n")
     print(json.dumps(result))

@@ -27,6 +27,9 @@ class RotaryEmbedding(nn.Module):
 class Attention(nn.Module):
     def __init__(self, config: TextConfig, layer_idx: int):
         super().__init__()
+        assert config.per_layer_config is not None
+        assert config.layer_types is not None
+        assert config.rope_parameters is not None
         overrides = config.per_layer_config.get(f"{layer_idx:02d}", {})
         self.head_dim = overrides.get("head_dim", config.head_dim)
         self.num_heads = overrides.get(
@@ -175,6 +178,7 @@ class TextModel(nn.Module):
         )
 
     def __call__(self, inputs_embeds, attention_mask, position_ids=None):
+        assert self.config.layer_types is not None
         length = inputs_embeds.shape[1]
         full_mask = attention_mask[:, None, None, :].astype(mx.bool_)
         positions = mx.arange(length)
