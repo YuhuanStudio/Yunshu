@@ -333,6 +333,9 @@ def test_dry_run_plans_every_job_without_submitting(capsys, monkeypatch):
         return real(*a, **k)
 
     monkeypatch.setattr(bs.subprocess, "run", refuse)
+    # Planning must not depend on this machine's engine installs (model dirs under
+    # ~/Library, reference clones): CI runners have none and the local CI sandbox denies them.
+    monkeypatch.setattr(be, "missing_paths", lambda engine: [])
     assert bs.main(["plan", "--dry-run"]) == 0
     out = capsys.readouterr().out
     print(out)
