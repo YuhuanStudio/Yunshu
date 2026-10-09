@@ -166,7 +166,7 @@ def main(argv=None):
 
     log = open(os.path.splitext(a.out)[0] + f".{a.arm}.server.log", "w")  # noqa: SIM115
     cmd = server_cmd(a.arm, a.model, a.port, a.tf_arg)
-    emit({"kind": "launch", "arm": a.arm, "cmd": cmd})
+    emit({"kind": "launch", "arm": a.arm, "cmd": cmd, "env_overrides": a.env})
     proc = subprocess.Popen(
         cmd,
         cwd=a.tree,

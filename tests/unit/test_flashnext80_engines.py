@@ -33,3 +33,26 @@ def test_rate_and_cmd():
     assert "--no-drafts" not in fe.server_cmd("tf-mtp", "/m", 1, ["--ple-on-ssd"])
     assert fe.arm_env("yunshu-mtp", [])["YUNSHU_VLM_DRAFT"] == "mtp"
     assert fe.arm_env("yunshu-off", [])["YUNSHU_VLM_DRAFT"] == "off"
+
+
+def test_cli_parses_dash_values():
+    import argparse  # noqa: F401
+
+    ap_args = [
+        "--arm",
+        "tf-nodraft",
+        "--model",
+        "/m",
+        "--out",
+        "/o",
+        "--tf-arg=--ple-on-ssd",
+        "--env=A=B",
+    ]
+    import contextlib
+    import io
+
+    with contextlib.redirect_stdout(io.StringIO()):
+        try:
+            fe.main(ap_args + ["--help"])
+        except SystemExit as e:
+            assert e.code == 0
