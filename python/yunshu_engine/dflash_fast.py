@@ -16,6 +16,21 @@ from .dflash_plan import live_bound
 
 logger = logging.getLogger(__name__)
 
+
+def observe_budget(budget, copied, n, landed, ms, *, first=False) -> bool:
+    """Feed a round to the cost-aware node budget, unless it was a copy round.
+
+    A copy round runs no drafter (about 10 ms of GPU work less) and its accepted path is a
+    copied chain, not ranks of the draft tree. Recorded under its length ``n`` it made a
+    short budget look ~10 ms cheaper than it is (a 5-row cycle read 41 ms against 50-56 ms
+    for tree rounds of 3 and 6+ rows) and trained the per-rank landing estimates on chain
+    positions."""
+    if copied:
+        return False
+    budget.observe(n, landed, ms, first=first)
+    return True
+
+
 _KERNELS: dict[str, Any] = {}
 
 # The fast tree used to stop at 10240 live keys and 256 generated tokens. Those
@@ -538,7 +553,9 @@ def rounds(
                     prof["draft"] += (t_drafted - started) * 1000
                     prof["verify"] += (t_verified - t_drafted) * 1000
                     prof["commit"] += (t_done - t_verified) * 1000
-                budget.observe(
+                observe_budget(
+                    budget,
+                    copied,
                     n,
                     landed,
                     (t_done - started) * 1000,
