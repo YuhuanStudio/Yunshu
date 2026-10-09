@@ -1,4 +1,7 @@
 import { gbTotalText } from "./byte-format";
+import { LiveNumber } from "./LiveNumber";
+import { rangeSeconds, useRangeHistory } from "./useRangeHistory";
+import { useLinger } from "./motion/linger";
 import { PrefillBar } from "./PrefillBar";
 import { SegmentedTray } from "./SegmentedTray";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
@@ -132,7 +135,7 @@ const rateSeries = () => {
 };
 const formatNumber = (value: number) => number(value);
 const formatCount = (value: number) => number(value, 0);
-function RequestLane({ row }: { row: RequestRow }) {
+function RequestLane({ row, leaving }: { row: RequestRow; leaving?: boolean }) {
   useLocale();
   const phase = String(row.phase);
   const prompt = row.prompt_tokens ?? 0,
@@ -145,57 +148,74 @@ function RequestLane({ row }: { row: RequestRow }) {
           : null))
       : null;
   return (
-    <li className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-1 py-3">
-      <div className="flex min-w-0 items-center gap-2.5">
-        <StatusIndicator className="shrink-0" status={phaseDot(phase)} />
-        <Slot ch={7} className="shrink-0 text-sm font-medium">
-          {/* i18n-keys: overview.phase. */}
-          {has(`overview.phase.${phase}`)
-            ? tr(`overview.phase.${phase}`)
-            : phase}
-        </Slot>
-        <span
-          title={row.request_id}
-          className="min-w-0 max-w-[9rem] shrink truncate font-mono text-xs text-muted-foreground"
-        >
-          {row.request_id}
-        </span>
-        {row.model && (
-          <span
-            title={row.model}
-            className="hidden min-w-0 flex-1 truncate text-xs text-muted-foreground sm:inline"
-          >
-            · {modelLabel(row.model)}
-          </span>
-        )}
-      </div>
-      <div className="flex shrink-0 items-center gap-4 text-xs tabular-nums text-muted-foreground">
-        <Slot ch={9} align="right">
-          {phase === "decode"
-            ? `${number(row.completion_tokens, 0)} tok`
-            : `${number(prompt, 0)} tok`}
-        </Slot>
-        <Slot ch={12} align="right" className="text-foreground">
-          {row.tokens_per_second == null
-            ? "—"
-            : `${fixed(row.tokens_per_second)} tok/s`}
-        </Slot>
-        <Slot ch={7} align="right">
-          {elapsed(row.elapsed_s)}
-        </Slot>
-      </div>
-      {progress != null ? (
-        <div className="col-span-2 flex h-4 items-center">
-          <PrefillBar row={row} className="h-1" caption />
+    <li
+      className="live-row"
+      data-leaving={leaving ? "" : undefined}
+      aria-hidden={leaving ? true : undefined}
+    >
+      <div className="live-row-inner">
+        <div className="live-appear grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-1 py-3">
+          <div className="flex min-w-0 items-center gap-2.5">
+            <StatusIndicator className="shrink-0" status={phaseDot(phase)} />
+            <Slot ch={7} className="shrink-0 text-sm font-medium">
+              {/* i18n-keys: overview.phase. */}
+              {has(`overview.phase.${phase}`)
+                ? tr(`overview.phase.${phase}`)
+                : phase}
+            </Slot>
+            <span
+              title={row.request_id}
+              className="min-w-0 max-w-[9rem] shrink truncate font-mono text-xs text-muted-foreground"
+            >
+              {row.request_id}
+            </span>
+            {row.model && (
+              <span
+                title={row.model}
+                className="hidden min-w-0 flex-1 truncate text-xs text-muted-foreground sm:inline"
+              >
+                · {modelLabel(row.model)}
+              </span>
+            )}
+          </div>
+          <div className="flex shrink-0 items-center gap-4 text-xs tabular-nums text-muted-foreground">
+            <Slot ch={9} align="right">
+              {phase === "decode" ? (
+                <LiveNumber
+                  value={row.completion_tokens ?? null}
+                  jumpKey={row.request_id}
+                />
+              ) : (
+                number(prompt, 0)
+              )}{" "}
+              tok
+            </Slot>
+            <Slot ch={12} align="right" className="text-foreground">
+              <LiveNumber
+                value={row.tokens_per_second ?? null}
+                format={(v) => fixed(v)}
+                jumpKey={row.request_id + phase}
+              />
+              {row.tokens_per_second == null ? "" : " tok/s"}
+            </Slot>
+            <Slot ch={7} align="right">
+              {elapsed(row.elapsed_s)}
+            </Slot>
+          </div>
+          {progress != null ? (
+            <div className="col-span-2 flex h-4 items-center">
+              <PrefillBar row={row} className="h-1" caption />
+            </div>
+          ) : phase !== "prefill" && cached > 0 && prompt > 0 ? (
+            <p className="col-span-2 truncate text-xs text-muted-foreground">
+              {t("overview.lane.prefixHit", {
+                cached: number(cached, 0),
+                prompt: number(prompt, 0),
+              })}
+            </p>
+          ) : null}
         </div>
-      ) : phase !== "prefill" && cached > 0 && prompt > 0 ? (
-        <p className="col-span-2 truncate text-xs text-muted-foreground">
-          {t("overview.lane.prefixHit", {
-            cached: number(cached, 0),
-            prompt: number(prompt, 0),
-          })}
-        </p>
-      ) : null}
+      </div>
     </li>
   );
 }
@@ -220,10 +240,12 @@ function QuickAction({
   onClick: () => void;
 }) {
   return (
-    <Card className="min-w-0 p-1">
+    // One outline: the row fills the card (no inner rounded fill inside the card's own border), the
+    // focus ring is the card's, and a press nudges the whole card.
+    <Card className="min-w-0 overflow-hidden p-0 transition-[box-shadow,transform] duration-[150ms] ease-out has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-(--border-strong) active:scale-[0.99] motion-reduce:transition-none motion-reduce:active:scale-100">
       <HoverRow
         onClick={onClick}
-        className="flex w-full items-center gap-3 px-3 py-3 text-left"
+        className="flex w-full items-center gap-3 rounded-none px-4 py-4 text-left focus-visible:ring-0"
       >
         <span className="text-muted-foreground">{icon}</span>
         <span className="min-w-0 flex-1">
@@ -261,13 +283,24 @@ export function Dashboard({
   const stale = engine.phase === "offline" && status != null;
   const dim = stale ? "opacity-60" : "";
   const end = engine.updatedAt ?? Date.now(),
-    start = end - (range === "5m" ? 300 : range === "15m" ? 900 : 3600) * 1000;
+    start = end - rangeSeconds(range) * 1000;
   // Charts read the slim series (engine history first, then live polls). The
   // window is a binary-search slice and the chart gets at most 300 rows.
-  const points = useMemo(
+  // Up to an hour the live series (backfilled from the console's history on open) is the source;
+  // 6 h to 30 d come straight from the recorded history, gaps included.
+  const longRange = useRangeHistory(
+    connection,
+    range,
+    engine.status?.console_process === true,
+  );
+  const livePoints = useMemo(
     () => windowPoints(engine.series, start, end),
     [engine.series, start, end],
   );
+  const points = longRange.active ? longRange.points : livePoints;
+  const rangeMs = rangeSeconds(range) * 1000;
+  // A line breaks where samples are further apart than a few of this range's own steps.
+  const rangeGapMs = Math.max(12_000, (longRange.resolutionS ?? 0) * 3_000);
   const data = useMemo(() => chartRows(points), [points]);
   const heroPoints = useMemo(
     () => windowPoints(engine.series, end - 300_000, end),
@@ -286,6 +319,7 @@ export function Dashboard({
       ? null
       : (points.find((sample) => sample.at === activeX) ?? null);
   const items = status?.requests.items ?? [];
+  const lanes = useLinger(items, (r) => r.request_id);
   const few = items.length <= 2;
   const hostState = useHostTelemetry(connection, online);
   const hostShown =
@@ -541,7 +575,14 @@ export function Dashboard({
             valueFirst
             icon={HardDrive}
             label={t("overview.stats.metal")}
-            value={<StatValue text={`${number(memory?.active_gb)} GB`} />}
+            value={
+              <>
+                <LiveNumber value={memory?.active_gb ?? null} digits={1} />
+                <span className="ml-1 text-xs font-normal text-muted-foreground">
+                  GB
+                </span>
+              </>
+            }
             subtext={t("overview.stats.metalSub", {
               total: number(memory?.total_gb),
               peak: number(memory?.peak_gb),
@@ -648,6 +689,7 @@ export function Dashboard({
                 formatX={clock}
                 formatY={formatNumber}
                 maxGap={12000}
+                liveWindowMs={300_000}
               />
             </div>
           </div>
@@ -679,8 +721,8 @@ export function Dashboard({
               </div>
             </div>
             <ul className={`divide-y divide-border/60 ${few ? "" : "flex-1"}`}>
-              {items.slice(0, 5).map((row) => (
-                <RequestLane key={row.request_id} row={row} />
+              {lanes.slice(0, 5).map(({ row, leaving }) => (
+                <RequestLane key={row.request_id} row={row} leaving={leaving} />
               ))}
             </ul>
             <TotalsLine totals={totals} />
@@ -746,9 +788,12 @@ export function Dashboard({
                   value={range}
                   onChange={chooseRange}
                   options={[
-                    { value: "5m", label: t("overview.perf.range5m") },
                     { value: "15m", label: t("overview.perf.range15m") },
                     { value: "1h", label: t("overview.perf.range1h") },
+                    { value: "6h", label: t("overview.perf.range6h") },
+                    { value: "24h", label: t("overview.perf.range24h") },
+                    { value: "7d", label: t("overview.perf.range7d") },
+                    { value: "30d", label: t("overview.perf.range30d") },
                   ]}
                 />
                 <Button
@@ -797,7 +842,8 @@ export function Dashboard({
                 ariaLabel={t("overview.throughput.aria")}
                 formatX={clock}
                 formatY={formatNumber}
-                maxGap={12000}
+                maxGap={rangeGapMs}
+                liveWindowMs={longRange.active ? undefined : rangeMs}
                 activeX={activeX}
                 onActiveXChange={setActiveX}
               />
@@ -930,7 +976,8 @@ export function Dashboard({
                 ariaLabel={t("overview.memory.aria")}
                 formatX={clock}
                 formatY={formatNumber}
-                maxGap={12000}
+                maxGap={rangeGapMs}
+                liveWindowMs={longRange.active ? undefined : rangeMs}
                 activeX={activeX}
                 onActiveXChange={setActiveX}
               />

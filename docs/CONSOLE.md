@@ -2,8 +2,9 @@
 
 A local web console for the engine: see what every request is doing, manage models, the prefix cache, keys
 and settings, and try a model, without leaving the browser. It is a YunUI-based single-page app served by
-the same process at `/console/`. It is an operator tool for one machine, not a chat product, and it does not
-start or stop the engine process.
+its own light process (`yunshu console`, see [The console process](#the-console-process)), so it stays usable
+and keeps recording while the engine restarts or crashes. It is an operator tool for one machine, not a chat
+product, and it does not start or stop the engine process.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="images/console/en/overview-dark.webp">
@@ -13,16 +14,76 @@ start or stop the engine process.
 ## Open it
 
 ```bash
-yunshu serve -m <model>
-open http://127.0.0.1:8000/console/
+yunshu serve -m <model>        # the engine on :8000, the console process next to it on :8100
+open http://127.0.0.1:8100/console/
 ```
 
 The console ships inside the `yunshu` wheel (`yunshu_gateway/console_static/`), so a pip, uv tool or
-Homebrew install serves it at `/console/` with no build step.
+Homebrew install serves it with no build step. `http://127.0.0.1:8000/console/` (the engine) still works for
+one release as a redirect to the console process, and says how to start it when nothing answers there.
 
 The static shell is public so you can enter a token; inference, model operations, keys and settings keep
 their normal authorization ([Authentication](guides/AUTH_AND_KEYS.md)). If `YUNSHU_AUTH_TOKEN` is set, enter
 it in Settings: it stays in page memory unless you choose to remember it on this device.
+
+## The console process
+
+`yunshu console` is a separate, light process. It never imports MLX, mlx-lm or mlx-vlm (a unit test asserts
+that in a fresh interpreter) and idles at about 70 MiB of resident memory, so it starts instantly and an
+engine crash cannot reach it. It does four things:
+
+- **Serves** the web console and the docs (`/console/`).
+- **Proxies** the engine API on one origin: every request the console makes goes to this process, which
+  forwards it unchanged (methods, bodies, `Authorization` and `x-api-key`, SSE streams, WebSockets). When the
+  engine is not reachable it answers `502` with `engine_unreachable` at once instead of hanging.
+- **Records** the history. Once a second it reads the engine's cheap endpoints (`/v1/yunshu/status`, finished
+  requests by cursor `/v1/yunshu/requests/recent?after_seq=`, and every five seconds the host telemetry), the
+  same reads the console page makes, and writes them to `~/.yunshu/console-history.sqlite` (WAL, batched every
+  ten seconds): 1 s resolution for the last hour, 10 s for 24 hours, 1 minute for 30 days
+  (`YUNSHU_CONSOLE_RETENTION_DAYS`), plus the request log (id, model, route, status, timestamps, token counts,
+  cached tokens, TTFT, decode speed, finish reason; metadata only, never prompts or outputs). The file is
+  capped (`YUNSHU_CONSOLE_DB_MAX_MB`, 64 MiB) and keeps the newest rows. The request cursor is
+  `(boot_id, seq)`: none is skipped or repeated across polls, an engine restart or a console restart.
+- **Remembers outages.** While the engine does not answer, no rows are written: that span *is* the gap, and
+  it is reported as a gap, never interpolated. Events say why: engine unreachable / reachable again (and for
+  how long), engine restarted, a model loaded or unloaded, a model that failed to load (with its message).
+
+The history is served by the console process itself, so it works while the engine is down:
+`GET /v1/yunshu/metrics/history?since=&until=&step=` (columnar rows, `gaps` and `events`; the finest table that
+covers `since` and is no finer than `step`), `GET /v1/yunshu/requests/history?limit=&before=` (newest first, a
+cursor) and `GET /v1/yunshu/console` (the process's own view of the engine). Access follows the engine's rule:
+open on a default local setup, otherwise the token or an API key (the console process shares the engine's
+settings and key file).
+
+**Ports.** The engine stays on 8000. The console defaults to **8100**: next to the engine's number but clear
+of it and of the usual dev servers (3000, 5173, 8080, 8888) and the 18990-18999 range agents use. Change it with
+`--console-port` or `YUNSHU_CONSOLE_PORT`.
+
+**Starting it.**
+
+| How | What runs |
+|---|---|
+| `yunshu serve -m <model>` | the engine, and the console process as a sibling (`--no-console` to skip, `--console-port` to move it). If a console already answers on that port, such as the service's, none is started. The sibling exits with the engine. |
+| `yunshu console --engine URL` | the console process alone: watch an engine on another machine or on the LAN (`--engine-token` when it needs one; `--host 0.0.0.0` to serve the network, with a token set). |
+| `yunshu service install` | two launchd jobs: the engine, and the console as its own job (always kept alive), so recording continues while the engine restarts. `--no-console` installs the engine only; `yunshu service logs --console` shows its log. |
+
+**When the engine is down** the console says so ("engine offline since 18:02:11, retrying in 4 s"; retries back
+off with jitter up to about ten seconds and run at once when the tab regains focus or the network returns),
+every monitoring page keeps its last data, dimmed and marked stale, and the docs and settings are unaffected.
+If the gateway is up but the model failed to load, the page shows the error and keeps Load model usable. A
+page that throws is contained by a per-page error boundary. When the engine returns, the live feed resumes and
+the stretch that was missed is filled from the recorded history.
+
+## Docs inside the console
+
+The 文件 / Docs section renders the user documentation (getting started, API reference, guides,
+developer pages) from `frontend/docs/` (MDX in English, 繁體中文 and 简体中文), compiled into the
+console build, so it works offline and matches the installed version. `⌘K` searches it; the API,
+Settings and Keys pages link to the page that explains them. These MDX pages are the source of
+the user-facing guides; the same-named files in `docs/guides/` are their GitHub-facing counterparts
+(each names its MDX page), and the configuration reference is generated from the settings registry
+(`frontend/scripts/gen_docs_config.py`). Checks: `pnpm test` (links and heading anchors),
+`tests/unit/test_docs_routes.py` (every route named in the docs is registered; generated pages are current).
 
 ## Status island
 
@@ -158,8 +219,8 @@ never as zero.
 
 ## Developing the console
 
-The source is in `frontend/` (Node.js 22.18+, pnpm 11.19.0). A source checkout needs `pnpm install --frozen-lockfile && pnpm build` once to write `console_static/` (a built wheel already contains it); without it `/console/` returns an actionable 404 and the API is unaffected. Run `pnpm dev` in `frontend/` and open `http://127.0.0.1:3971/console/`. Vite proxies the
-engine API to `http://127.0.0.1:8000`, or set another server URL in Settings (cross-origin access needs CORS
+The source is in `frontend/` (Node.js 22.18+, pnpm 11.19.0). A source checkout needs `pnpm install --frozen-lockfile && pnpm build` once to write `console_static/` (a built wheel already contains it); without it `/console/` returns an actionable 404 and the API is unaffected. With the engine and its console process running, run `pnpm dev` in `frontend/` and open `http://127.0.0.1:3971/console/`. Vite proxies the
+API and the history endpoints to the console process on `http://127.0.0.1:8100` (`VITE_CONSOLE_PROXY` points it elsewhere), or set another server URL in Settings (cross-origin access needs CORS
 configured, see [Authentication](guides/AUTH_AND_KEYS.md#cors)).
 
 ## Metric meanings

@@ -55,6 +55,7 @@ Yunshu is a flat monorepo (no `yunshu/` subdir):
 | L4 | `python/yunshu_engine/` | Inference engine (text + vision + audio + image) |
 | L5 | `python/yunshu_kv/` | KV prefix cache |
 | CLI | `python/yunshu_cli/` | `yunshu serve / chat / model / ...` |
+| Console | `frontend/` | Web console and its docs section (`frontend/docs/`, MDX in en, zh-TW and zh-CN) |
 
 > **Note:** `python/yunshu_engine/` is being actively refactored by the owner. If your change is
 > engine-side, coordinate before opening a large PR.
@@ -113,11 +114,15 @@ Triage uses the [label vocabulary](.github/LABELS.md).
 `scripts/dev/ci-local <commit-sha>` reproduces release build-and-check in a clean
 Python 3.13 checkout: lint/format/mypy, frontend type/tests/build and YunUI checks, sandboxed unit tests, package build, twine validation
 and wheel-install smoke. It is CPU only. Use `nice -n 15` for heavy test/build
-commands on a shared benchmark Mac. Focused public-doc checks are:
+commands on a shared benchmark Mac. The user docs live in the console (`frontend/docs/`);
+`docs/*.md` stay the GitHub-facing reference. Focused public-doc checks are:
 
 ```bash
 nice -n 15 uv run pytest tests/unit/test_public_docs.py tests/unit/test_doc_source_consistency.py -q
 uv run python scripts/gen_config_docs.py --check
+PYTHONPATH=python uv run python frontend/scripts/gen_docs_config.py   # regenerate the console's configuration pages
+nice -n 15 uv run pytest tests/unit/test_docs_routes.py -q   # docs name only routes the server registers
+(cd frontend && pnpm test)   # includes the docs link and heading-anchor check
 uv run python scripts/dev/api_coverage.py
 ```
 

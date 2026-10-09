@@ -1,0 +1,76 @@
+---
+title: Console
+description: The web console the Yunshu server hosts for watching the engine, managing models and keys, reading logs, trying the API and reading these docs.
+---
+
+The console is a web application served by its own light process (`yunshu console`, port 8100), apart from the engine. That process serves the console and these docs, passes the console's API calls on to the engine, and records the history, so the console stays usable and keeps recording while the engine restarts or crashes. It is a view onto one engine: live status, requests, models, caches, logs, API keys, settings and this documentation. It does not start the engine and it is not a chat product.
+
+<Callout type="info">
+The console speaks Traditional Chinese, Simplified Chinese and English. It follows your browser's language and the choice is kept in the browser; switch it from the language button in the top bar. This documentation follows the same choice.
+</Callout>
+
+## Open the console
+
+Start the server as usual: `yunshu serve` starts the console process next to the engine. Open `/console/` on the console's port, `http://127.0.0.1:8100/console/` by default (the engine keeps 8000). `--no-console` skips it, `--console-port` moves it, and `yunshu console --engine http://host:8000` runs it alone, for example against an engine on another machine. `yunshu service install` runs it as its own launchd job, so it keeps serving and recording while the engine restarts. The old `http://127.0.0.1:8000/console/` still works for one release as a redirect to the console process.
+
+The static pages are public so that you can enter a token in the browser. Every API call the console makes still follows the normal authentication rules. Reading status, history, requests, models and cache views needs no token on a default local server. Management pages (API keys, logs, service, CORS) need the admin token, and show a notice with a link to Settings when it is missing. Enter `YUNSHU_AUTH_TOKEN` or an admin key in Settings; by default it stays in page memory only and is cleared when you reload.
+
+If `/console/` answers 404 with the text "Yunshu Console is not built", the installed package does not contain the console build. The API is not affected. A source checkout builds the console with Node.js 22.18 or newer and pnpm:
+
+```bash
+cd frontend
+pnpm install --frozen-lockfile
+pnpm build
+```
+
+The build is written to `python/yunshu_gateway/console_static`, which the console process serves.
+
+## Pages
+
+| Page | What it does |
+|---|---|
+| Overview | Live engine state: phase (queued, prefill, decode), throughput, memory, caches, active requests. Updates about four times a second while a request runs and calmly when idle. |
+| Requests | Live and finished requests with phase timelines, token and cache details, filtering, CSV export and per-request cancel. |
+| Logs | The server log ring with level and text filters and a live tail. |
+| Diagnostics | Health checks, host readouts, a support-bundle preview and raw diagnostic data. |
+| Models | Loaded and available models with memory figures; load, unload, warm up, fit checks and idle retention. |
+| Downloads | Download models from Hugging Face with progress, disk-space check and cancel. |
+| Cache | Prefix-cache tiers (memory, warm, SSD) with entries, lifecycle events and clear actions. |
+| Playground | Streaming chat with generation settings, tools, images, token confidence and generated code snippets. |
+| API access | Connection snippets for your server and a catalogue of the routes it registers. |
+| Docs | These pages, searchable from the command palette. |
+| Keys | Named API keys with scopes, expiry and rolling-day quotas, and per-key usage. |
+| Settings | Server address and token, theme and language, every engine setting with its source, CORS and service restart. |
+
+## History and what happens when the engine is down
+
+The console process reads the engine once a second and keeps the history in `~/.yunshu/console-history.sqlite`: 1 s resolution for the last hour, 10 s for 24 hours, 1 minute for 30 days, plus the finished-request log (numbers only, never prompts or outputs). On open, the charts (15 minutes to 30 days) and the request list backfill from it, then the live feed continues. While the engine is unreachable nothing is recorded, so the span shows as a gap and an event ("engine unreachable", "engine reachable again", "engine restarted", "model failed to load"), never as a line drawn across it.
+
+When the engine does not answer, the console says "engine offline since 18:02:11, retrying in 4 s" and keeps retrying (backing off to about ten seconds, and at once when you return to the tab or the network comes back). Pages that show engine data keep their last data, dimmed and marked stale; the docs and Settings are unaffected. If the engine is up but the model failed to load, the page shows the error and Load model stays usable. A page that fails does not take the console down.
+
+## Status and the status band
+
+The band at the bottom of every page shows the engine state, the loaded model and memory. Click it (or the compact pill on a phone) to open the status island: live phase, throughput, memory by owner and the host. Values the server did not report are shown as unavailable, not as zero.
+
+If a refresh fails the console keeps the last numbers and says so; when the engine cannot be reached it shows an offline banner with Retry and Connection settings.
+
+## Command palette
+
+Press `⌘K` (`Ctrl K` on other systems) to open the command palette. It jumps to pages, runs actions such as loading a model or clearing a cache, switches language, and searches these docs: type two or more characters and matching pages and sections appear under Docs. `?` lists the keyboard shortcuts.
+
+## Connection settings
+
+By default the console talks to the same origin that served it. In Settings you can point it at another Yunshu server; that server must then allow the console's origin through its CORS configuration (`YUNSHU_CORS_ORIGINS`, editable in Settings when you have the admin token). Only the server address, theme and language are saved in the browser; the token is saved only if you ask for it.
+
+## What the console does not do
+
+- It is not a multi-user control plane: keys carry scopes and quotas for one local server, nothing more.
+- It keeps no durable chat history; the playground library is stored in your browser only.
+- Prompts and responses are never stored by the console's request views, only metadata.
+
+## Related
+
+- [Quickstart](/docs/getting-started/quickstart)
+- [Configuration](/docs/guides/configuration)
+- [Operations API](/docs/api/operations)
+- [Models API](/docs/api/models)

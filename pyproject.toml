@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["python/yunshu_gateway", "python/yunshu_control", "python/yunshu_engine", "python/yunshu_kv", "python/yunshu_cli", "python/yunshu_client"]
+packages = ["python/yunshu_gateway", "python/yunshu_control", "python/yunshu_engine", "python/yunshu_kv", "python/yunshu_cli", "python/yunshu_console", "python/yunshu_client"]
 # The frontend build writes this ignored/generated directory immediately before
 # packaging. Include it in the wheel when present without requiring inference.
 artifacts = ["python/yunshu_gateway/console_static/**"]
@@ -37,8 +37,6 @@ exclude = [
     "frontend/evidence/",
     "frontend/evidence/**",
     "frontend/*.tsbuildinfo",
-    "site/",
-    "site/**",
 ]
 
 [project]
@@ -74,9 +72,8 @@ classifiers = [
 # install stays light on machines that only need text.
 dependencies = [
     # ── Apple ML Stack (text path only) ──
-    # Capped until our row-exact qmv copies (kernels/omlx/row_exact_qmv.py, moe_verify_gather.py,
-    # kernels/verify_select.py) are re-transcribed: mlx f8aaf49d (after 0.32.3) changes qmv's
-    # load_vector accumulation, so spec-on would drift from spec-off.
+    # qmv copies select version-matched arithmetic for mlx f8aaf49d (0.32.4).
+    # Retain the cap until the source-built 0.32.4 passes M5 long identity.
     "mlx>=0.32.3,<0.32.4",
     "mlx-lm>=0.32.0",
     # ── Model / Tokenizer ──

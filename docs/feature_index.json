@@ -256,6 +256,14 @@
       "status": "stable"
     },
     {
+      "id": "console-process",
+      "group": "ops",
+      "title": "Console process and recorded history",
+      "summary": "the console runs apart from the engine (yunshu console, port 8100, no MLX): usable while the engine is down, 1 s / 10 s / 1 min history for 30 days and a metadata-only request log, outages kept as gaps",
+      "doc": "docs/CONSOLE.md",
+      "status": "stable"
+    },
+    {
       "id": "api-keys",
       "group": "ops",
       "title": "API keys and quotas",

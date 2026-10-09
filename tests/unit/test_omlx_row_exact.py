@@ -35,7 +35,10 @@ def _qlinear(k, n, bits, seed):
 )
 def test_qmv_fast_layout_rule(k, n, bits, expected):
     from yunshu_engine.kernels.omlx.moe_verify_gather import qmv_fast_layout
+    from yunshu_engine.kernels.qmv_compat import FLOAT_SUMS
 
+    if n % 8 and FLOAT_SUMS:
+        expected = True
     assert qmv_fast_layout(k, n, bits) is expected
 
 
@@ -115,3 +118,15 @@ def test_non_row_exact_verify_attention_vs_serial_decode():
             )
             mismatches[(name, kv_len)] = bad
     print("non-row-exact verify rows != serial decode:", mismatches)
+
+
+@pytest.mark.parametrize("bits", [4, 5, 6, 8])
+@pytest.mark.parametrize("n", [1, 3, 7, 9, 12])
+def test_partial_fast_row_exact_matches_stock(bits, n):
+    from yunshu_engine.kernels.omlx import row_exact_qmv
+
+    lin = _qlinear(1024, n, bits, seed=bits * 100 + n)
+    x = mx.random.normal((1, 3, 1024)).astype(mx.bfloat16)
+    out = row_exact_qmv.quantized_linear(lin, x)
+    for r in range(3):
+        assert mx.array_equal(out[:, r : r + 1], lin(x[:, r : r + 1])).item()

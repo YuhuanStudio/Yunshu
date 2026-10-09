@@ -1,0 +1,337 @@
+---
+title: Configuration
+description: Every YUNSHU_* setting, its type and default, generated from the settings registry.
+---
+
+Every Yunshu setting is a `YUNSHU_*` name registered in
+`python/yunshu_engine/settings.py`, with one type, one default and one parse
+rule. Nothing else reads `YUNSHU_*` environment variables.
+
+## Where values come from
+
+Highest precedence first:
+
+1. `yunshu serve` flags and `--set KEY=VALUE` (repeatable; `KEY` with or
+   without the `YUNSHU_` prefix, e.g. `--set mtp_block_size=4`),
+2. the process environment,
+3. a TOML config file: `yunshu serve --config yunshu.toml` or
+   `YUNSHU_CONFIG=yunshu.toml`,
+4. the default listed below.
+
+The config file holds `KEY = value` pairs, flat or grouped under any tables
+(table names are ignored; keys may be short or full names):
+
+```toml
+model = "~/models/Qwen3.8-27B-4bit"
+
+[server]
+default_max_tokens = 1024
+
+[voice]
+YUNSHU_REALTIME_SILENCE_MS = 400
+```
+
+Booleans accept `1/true/yes/on` and `0/false/no/off`. A value that does not
+parse is a startup error listing every bad setting. A `YUNSHU_*` name that is
+not registered is ignored with a warning naming the closest registered
+setting.
+
+`yunshu config` prints the effective value of every stable setting and its
+source (`cli`, `env`, `file`, `default`); `--all` adds experimental and
+internal ones, `--json` prints JSON, `--config FILE` includes a config file.
+
+## When a change applies
+
+Each setting is classified from where the code reads it (`Applies` column):
+
+- **live**: re-read on every use; a change applies at once.
+- **reload**: read when a model, runner or connection is built; applies on the
+  next model load.
+- **restart**: read once at startup; applies after a restart.
+
+The console writes settings with `PATCH /v1/yunshu/config`, which saves to the
+config file and answers `applied` / `needs_reload` / `needs_restart` per
+setting. A `YUNSHU_*` environment variable or `--set` value set at launch
+still wins at runtime (reported as `overridden`).
+
+## Stability
+
+- **stable**: supported deployment settings.
+- **experimental**: temporary. Each names the measurement that decides it and
+  when it was added; once measured, the winner becomes the default and the
+  flag and losing code path are deleted. At most 8 exist at a time.
+- **internal**: debugging aids.
+
+The descriptions below come straight from the settings registry and are in English in every language.
+
+## Stable settings
+
+### model
+
+| Setting | Type | Default | Applies | Description |
+|---|---|---|---|---|
+| `YUNSHU_MODEL` | path | unset | restart | Model path or Hugging Face id served in single-model mode; every requested model name maps to it. |
+| `YUNSHU_MULTI_MODEL` | bool | off | restart | Multi-model mode: discover models under YUNSHU_MODELS_DIR and load them on demand. Ignored when YUNSHU_MODEL is set. |
+| `YUNSHU_MODELS_DIR` | path | unset | restart | Directory of model folders for multi-model mode (each folder name is a model id). Unset: ~/.yunshu/models (also where `yunshu pull` downloads to). |
+| `YUNSHU_HF_CACHE_MODELS` | bool | on | live | Multi-model mode: also offer models already in the Hugging Face cache (the models directory wins on name clashes). `yunshu serve -m org/name` uses a cached copy either way. |
+| `YUNSHU_MODEL_TTL_SECONDS` | float | unset | restart | Multi-model mode: unload a model idle for this many seconds. Unset: never. |
+| `YUNSHU_ALLOW_AUTO_LOAD` | bool | off | live | Multi-model mode: let audio requests load a model that is not loaded yet (otherwise they are rejected). |
+| `YUNSHU_MAX_LORAS` | int | 4 | reload | Maximum LoRA adapters kept loaded (text models). |
+| `YUNSHU_TRUST_REMOTE_CODE` | bool | off | reload | Allow Hugging Face tokenizers/processors that need trust_remote_code. |
+| `YUNSHU_WARM_PROMPTS` | str | unset | reload | Prompts prefilled at startup to warm the prefix cache: '\|\|'-separated text or file paths. |
+
+### server
+
+| Setting | Type | Default | Applies | Description |
+|---|---|---|---|---|
+| `YUNSHU_CONFIG` | path | unset | restart | TOML config file with YUNSHU_* settings (lower precedence than the environment). |
+| `YUNSHU_MAX_CONCURRENT` | int | unset | restart | Cap on concurrently admitted requests. Unset: adaptive (starts at 8). |
+| `YUNSHU_UNCACHED_SCHEDULING` | bool | on | reload | Order VLM canonical prefill atoms by estimated uncached RAM-prefix work and wait time, protect interactive prefills after one overtaking atom, age waiters after 10 seconds, and reserve up to 75 ms of measured decode time between prefill atoms; finish an interactive request's last 2048-token window and deliver its first token before repaying decode debt. No token spans change; SSD-only hits are conservatively estimated cold. Defaults on only with engaged qualified batch-invariant kernels; other backends keep FIFO unless explicitly enabled. Disable to restore upstream ordering. |
+| `YUNSHU_AUXILIARY_SCHEDULING` | bool | on | reload | Deprioritize captured opencode title requests: interactive VLM jobs run first; auxiliary rows pause between GPU slices and never read or write APC. Unknown fingerprints keep normal scheduling. Defaults on only with engaged qualified batch-invariant kernels; other backends require explicit opt-in. Disable to restore ordinary scheduling. In-flight GPU operations cannot be interrupted. |
+| `YUNSHU_QUEUE_LIMIT` | int | 64 | live | Generation requests (chat, completions, messages, responses) in flight at once, running and waiting together. The next one is refused at once with 429, `Retry-After` and the queue depth in `error.x_yunshu` instead of waiting without bound. 0 = no limit. |
+| `YUNSHU_MEMORY_PRESSURE_REJECT` | float | 0.95 | live | Share of the Metal working set (MLX active memory / recommended working set) above which, while other requests are running, a new generation request is refused with 503 and `Retry-After` (it would OOM the process). An idle server never refuses. 0 = off. |
+| `YUNSHU_COMPLETION_BATCH_SIZE` | int | 32 | restart | Text engine: maximum sequences decoded together. |
+| `YUNSHU_DEFAULT_MAX_TOKENS` | int | 32768 | reload | Completion length when a chat / responses request omits max_tokens (OpenAI: up to the context window); the context budget still clamps it. |
+| `YUNSHU_MAX_PREFILL_TOKENS` | int | 0 | live | Reject prompts longer than this many tokens (0: no limit beyond the model context). |
+| `YUNSHU_STARTUP_TIMEOUT` | float | 300.0 | restart | Seconds to wait for the model to load before startup fails. |
+| `YUNSHU_DRAIN_TIMEOUT` | float | 30.0 | restart | Seconds to wait for in-flight requests on shutdown. |
+| `YUNSHU_KEEP_ALIVE_TIMEOUT` | int | 5 | restart | Seconds an idle HTTP connection stays open. |
+| `YUNSHU_UDS` | path | unset | restart | Serve on this Unix domain socket instead of a TCP port (same app; curl --unix-socket, httpx uds=). |
+| `YUNSHU_WS_MAX_INFLIGHT` | int | 16 | live | Text WebSocket (/v1/stream, wss /v1/responses): maximum concurrent requests per connection. |
+| `YUNSHU_WS_PING_INTERVAL` | float | 15.0 | live | Text WebSocket: seconds between server heartbeat pings (0 disables). |
+| `YUNSHU_WS_SEND_QUEUE` | int | 256 | live | Text WebSocket: outbound events buffered per connection before generation is paused (backpressure). |
+| `YUNSHU_MAX_REQUEST_SIZE` | int | 10485760 (10 MiB) | restart | Maximum request body size in bytes. |
+| `YUNSHU_PROGRESS_INTERVAL_S` | float | 2.0 | live | Streaming chat/completions: seconds between `: yunshu-progress` SSE comments (queue / prefill progress, ETA) before the first token; 0 turns them off. Strict SSE clients ignore comment lines. |
+| `YUNSHU_SLOW_REQUEST_THRESHOLD` | float | 30.0 | restart | Log a warning for requests slower than this many seconds. |
+| `YUNSHU_CORS_ORIGINS` | str | http://localhost:3000,http://localhost:8000 | live | Comma-separated allowed CORS origins ('*' for any). Also checked for the Realtime WebSocket Origin header. |
+| `YUNSHU_RESPONSE_CACHE` | bool | off | restart | Cache identical non-streaming responses in memory. |
+| `YUNSHU_BATCH_MAX_ITEMS` | int | 500 | live | Batch API: maximum requests per batch. |
+| `YUNSHU_BATCH_TIMEOUT` | float | 300.0 | live | Batch API: default per-batch timeout in seconds. |
+| `YUNSHU_ALLOW_LOCAL_FILES` | bool | off | live | Allow requests to reference any local file path (default: only under YUNSHU_MEDIA_DIR). |
+| `YUNSHU_MEDIA_DIR` | path | unset | live | Directory local media paths must live under. Unset: $TMPDIR/yunshu_media. |
+| `YUNSHU_FILES_DIR` | path | unset | live | Directory of the local Files / Batch API store. Unset: ~/.yunshu/files. |
+| `YUNSHU_FILES_MAX_BYTES` | int | 536870912 (512 MiB) | live | Files API: maximum size of one uploaded file in bytes (default 512 MB). |
+| `YUNSHU_FILES_TTL_DAYS` | float | unset | live | Files API: delete uploaded files after this many days. Unset: keep forever. |
+| `YUNSHU_FILES_MAX_TOTAL_BYTES` | int | 0 | live | Files API: total bytes the store may hold; an upload that would exceed it fails with 413 storage_quota_exceeded (expired files are reaped first). 0: unlimited. |
+| `YUNSHU_EVALS_DIR` | path | unset | restart | Directory of the local Evals API JSON store. Unset: ~/.yunshu/evals. |
+| `YUNSHU_CONVERSATIONS_DIR` | path | unset | live | Directory of the Conversations API store (JSON, one file per conversation). Unset: ~/.yunshu/conversations. |
+| `YUNSHU_CHAT_COMPLETIONS_DIR` | path | unset | restart | Directory of stored chat completions (store=true; JSON, one file per completion). Unset: ~/.yunshu/chat_completions. |
+| `YUNSHU_CHAT_COMPLETIONS_MAX` | int | 5000 | restart | Stored chat completions kept; the oldest are evicted past this count. |
+| `YUNSHU_CONVERSATION_MAX_ITEMS` | int | 10000 | live | Conversations API: maximum number of items one conversation may hold. |
+| `YUNSHU_COMPACT_MAX_TOKENS` | int | 2048 | live | Responses compaction: maximum tokens of the model-written summary. |
+
+### auth
+
+| Setting | Type | Default | Applies | Description |
+|---|---|---|---|---|
+| `YUNSHU_AUTH_TOKEN` | str | unset | live | Bearer token. When set, every request except health/version/docs needs it; unset: inference is open and operational endpoints are denied. |
+| `YUNSHU_AUTH_DISABLED` | bool | off | live | Disable auth entirely (operational endpoints open too). Local development only. |
+| `YUNSHU_ACTOR_IDENTITY` | str | owner | live | Identity recorded for authenticated requests in the audit log. |
+| `YUNSHU_RATE_LIMIT_RPM` | int | 0 | restart | Per-client request rate limit in requests per minute; 0 (default) turns rate limiting off. A local single-user engine has no need for it; set it when the server is exposed to other machines. |
+| `YUNSHU_TRUSTED_PROXIES` | list | unset | restart | Comma-separated proxy IPs whose X-Forwarded-For header is trusted. |
+
+### memory
+
+| Setting | Type | Default | Applies | Description |
+|---|---|---|---|---|
+| `YUNSHU_FOOTPRINT_SAMPLE_MS` | int | 0 | restart | Sample this process's phys_footprint every N ms on a background thread and export the peak as yunshu_process_footprint_bytes on /metrics (the memory benchmarks set 20). 0 (default) = off. |
+| `YUNSHU_MAX_MEMORY_GB` | gb | unset | restart | Multi-model mode memory ceiling in GiB, e.g. '48' or '48GB'; 'disabled' turns the enforcer off. Unset: 80% of unified memory. |
+| `YUNSHU_PREFILL_STEP_SIZE` | int | 2048 | live | Text engine: prompt tokens per prefill forward pass; lower it to cap the prefill activation peak on small-memory machines. |
+| `YUNSHU_MEM_PRESSURE_THRESHOLD` | float | 85.0 | reload | Text engine: evict prefix-cache entries above this memory use (percent, or a fraction &lt;= 1). |
+
+### cache
+
+| Setting | Type | Default | Applies | Description |
+|---|---|---|---|---|
+| `YUNSHU_PREFIX_MAX_ENTRIES` | int | 64 | reload | Text engine: prefix KV cache entries. |
+| `YUNSHU_PREFIX_HOT_LIMIT` | int | 0 | reload | Text engine: keep only this many prefix KV entries full precision and store older ones 4-bit in RAM (lossy on reuse; memory vs quality). 0 = every entry full precision. |
+| `YUNSHU_SSD_CACHE` | bool | off | reload | Text engine: persist prefix KV to SSD. |
+| `YUNSHU_SSD_CACHE_DIR` | path | ~/.cache/yunshu/kv-ssd | reload | Text engine: SSD prefix-cache directory. |
+| `YUNSHU_SSD_CACHE_PRECISION` | `native` \| `int8` | native | reload | Text engine: SSD prefix-cache storage precision: 'native' (KV and recurrent state stored bit-exact; lossless) or 'int8' (per-tensor int8, about half the disk bytes of bf16; lossy on reuse; memory vs quality). |
+| `YUNSHU_SSD_CACHE_PREFILL_CEIL_TPS` | float | 20000.0 | reload | Text engine: skip an SSD prefix restore when the model's observed prefill speed exceeds this (tokens/s): re-prefilling is then as fast as reading the KV back. |
+| `YUNSHU_SSD_CACHE_MAX_GB` | float | 10.0 | reload | Text engine: SSD prefix-cache size cap in GiB, one budget for the whole directory (all models together). |
+| `YUNSHU_CACHE_RESERVE_PCT` | float | 10.0 | live | SSD prefix caches (APC and text): free space, as a percentage of the volume, that no cache write may eat into. The reserve is max(this percentage, YUNSHU_CACHE_RESERVE_GB); the effective cap of a cache root is also limited to what the reserve leaves it. |
+| `YUNSHU_CACHE_RESERVE_GB` | float | 20.0 | live | SSD prefix caches (APC and text): minimum free space in GiB left on the volume (see YUNSHU_CACHE_RESERVE_PCT). A write that would leave less is dropped and spilling pauses until space is back. |
+| `YUNSHU_CACHE_STALE_DAYS` | float | 7.0 | live | SSD prefix caches (APC and text): a checkpoint namespace not used for this many days, or whose checkpoint no longer exists or has changed, is removed before anything else is evicted (0 = never by age). |
+| `YUNSHU_KV_QUANT_BITS` | `auto` \| `off` \| `2` \| `3` \| `4` \| `8` | off | reload | Text engine KV cache quantization (lossy; memory vs quality): 'off' (lossless), 'auto' (8-bit once the KV cache would exceed ~2 GiB), or 2/3/4/8 bits always. |
+
+### vlm-runner
+
+| Setting | Type | Default | Applies | Description |
+|---|---|---|---|---|
+| `YUNSHU_VLM_APC_MEMORY_GB` | float | unset | reload | VLM runner prefix cache (APC) RAM budget in GiB; 0 disables the prefix cache. Unset: half of the memory left after the model weights and an OS / activation reserve (a quarter of the machine, 4 to 16 GiB), at most a quarter of the machine and 32 GiB, and 0 (off) when under 1 GiB would be left (128 GB machine, 27B model: 32; 8 GB machine, 4B model: 0). A 27B checkpoint costs about 130 KiB per cached token. |
+| `YUNSHU_VLM_APC_DISK` | bool | on | reload | APC SSD tier: prefix checkpoints that RAM evicts (and, at shutdown, those still resident) are written to disk and read back instead of re-prefilling (bit-exact states, lossless; a 27B checkpoint reloads about 20x faster than it prefills). Set 0 to keep the prefix cache in RAM only. |
+| `YUNSHU_VLM_APC_DISK_DIR` | path | unset | reload | Directory of the APC SSD tier. Unset: ~/.yunshu/cache/apc (internal disk). Put it on a fast volume to keep the internal disk clean. |
+| `YUNSHU_KV_PRECISION` | `bf16` \| `int8` | bf16 | reload | KV cache precision of the Qwen3.5-family runner's shared decode batch: 'bf16' (lossless) or 'int8' (int8 codes + one fp16 scale per 32-dim group: ~0.53x the KV memory and read bandwidth for a small attention error; memory vs quality). A lone request and the speculative lane stay bf16. Applies to models with Qwen3.5-family attention (the ragged KV layout). |
+| `YUNSHU_VLM_APC_DISK_GB` | float | unset | reload | Size cap of the APC SSD tier in GiB, one budget for the whole directory (every checkpoint namespace together; least recently used files go first across namespaces; 0 = no configured cap, the free-space reserve still applies). Unset: a quarter of the volume, at most 64 GiB (a 128 GB disk: 32). A 27B checkpoint costs about 130 KiB per token, so 64 GiB holds about 500K tokens. |
+| `YUNSHU_PREFILL_MATMUL` | `stock` \| `lane` | stock | reload | Qwen3.5-family VLM runner on M5-class GPUs: matmul of prefill chunks (more than 512 rows; shorter calls, such as the new tokens of a cached-prefix turn, keep the lane kernel because untiling the weight costs about 0.16 s per call). 'stock' runs MLX's quantized matmul on the weight untiled per call (cold 27B prefill about 25% faster; a chunk's bits then depend on its row count, as in stock mlx-lm; decode and verify rows keep the row-invariant lane kernel, so speculative on == off); 'lane' keeps the row-invariant lane kernel for every row count (a prompt's bits never depend on how it was chunked). Part of every APC key and SSD namespace. |
+| `YUNSHU_PREFILL_BUFFER_CACHE_GB` | float | unset | reload | VLM runner: GiB of MLX's freed-buffer cache kept across prefill steps. Unset: 5% of physical RAM, at most 6 GiB (128 GiB: 6; 8 GiB: 0.4). Uses MLX's cache limit to reclaim excess freed memory on the next allocation without clearing every reusable bucket; freed buffers may transiently exceed the limit until that allocation. Keeps long-prefix restore buffers warm across requests. 0 = upstream clear after every chunk. Allocator only; output unchanged. |
+| `YUNSHU_PREFILL_GDN` | `chunked` \| `step` | chunked | reload | Qwen3.5-family VLM runner: GatedDeltaNet core of prefill chunks of 64 or more tokens. 'chunked' runs MLX's mx.fast.gated_delta_update (2.7x faster per layer than the step kernel; outputs within bf16 rounding of it, so cold prefill bits differ from 'step'); 'step' keeps mlx-vlm's per-token kernel. Part of every APC key and SSD namespace; decode, verify and the round driver always use the step kernels. |
+| `YUNSHU_VLM_APC_DISK_TIERS` | str | unset | reload | Further APC storage tiers below the SSD directory, comma-separated, each 'PATH[@GiB]' (an external SSD, an HDD, a NAS mount). Each volume is profiled at startup (sequential read / write bandwidth and latency, cached per mount for a day) and the tiers are ordered by measured read speed. Checkpoints the SSD tier evicts move down in the background instead of being deleted; a tier is used for a hit only when restoring from it beats re-prefilling (measured bandwidth against the observed prefill speed). A tier that is not mounted is skipped; when it returns its files are validated again. Each tier has its own cap (default: a quarter of its volume, at most 64 GiB) and free-space reserve. Lossless; unset: SSD only. |
+| `YUNSHU_VLM_APC_DISK_ENCODING` | `auto` \| `raw` \| `zstd` | auto | reload | How the lower APC storage tiers (YUNSHU_VLM_APC_DISK_TIERS) hold a checkpoint: 'raw' (a copy of the SSD file), 'zstd' (lossless: byte-plane shuffle of bf16 tensors + zstd; decoded on restore), 'auto' (zstd only when the measured gain in effective read bandwidth, ratio against decode cost, beats raw on that device: slow disks and network shares, not fast SSDs). Never lossy. |
+| `YUNSHU_VLM_APC_WARM` | `off` \| `lossless` \| `int8` \| `int4` | off | reload | APC WARM tier: what happens to a prefix checkpoint that leaves the RAM tier (HOT, ready-to-use arrays) before it goes to SSD. 'off': straight to SSD. 'lossless': kept in RAM compressed (zstd after a byte-plane shuffle; bit-exact, a WARM hit equals a HOT hit token for token; costs CPU for compression and a decode on hit). 'int8' / 'int4': attention K/V kept in RAM as affine group-quantized codes (LOSSY: a hit restores dequantized K/V, so output can differ from a cold prefill; the SSD tier keeps exact states in these modes). The WARM tier takes YUNSHU_VLM_APC_WARM_SHARE of the APC RAM budget. |
+| `YUNSHU_VLM_APC_WARM_SHARE` | float | 0.4 | reload | Share of the APC RAM budget (YUNSHU_VLM_APC_MEMORY_GB) that the WARM tier takes when YUNSHU_VLM_APC_WARM is on; the HOT tier keeps the rest. One budget, split: total APC RAM does not grow. |
+| `YUNSHU_VLM_MAX_IMAGE_BYTES` | int | 26214400 (25 MiB) | live | Largest image a request may reference by URL, in bytes. |
+| `YUNSHU_VLM_MAX_VIDEO_BYTES` | int | 104857600 (100 MiB) | restart | Largest video a request may reference by URL, in bytes. |
+| `YUNSHU_VLM_INSECURE_SSL` | bool | off | live | Retry image downloads without TLS verification when verification fails. |
+| `YUNSHU_ROUND_PREFILL_CHUNK` | int | 512 | reload | Round driver: prompt tokens per prefill span. A decoding request only steps between prefill forwards, so smaller spans keep it running next to a long prompt (Qwen3.8-27B, M5 Max, one MTP row beside an 8K prompt: 512 -&gt; 6 tok/s, 128 -&gt; 24 tok/s, ~20% lower prefill speed). Atoms are fixed per prompt (idle steps merge consecutive full atoms without changing any bit), so output stays independent of what else is running; prompts prefilled with different chunk sizes are each self-consistent but not bit-identical to each other. |
+
+### speculative
+
+| Setting | Type | Default | Applies | Description |
+|---|---|---|---|---|
+| `YUNSHU_MTP` | bool | on | reload | Qwen3.5-family VLMs: draft with the checkpoint's MTP head (batch-invariant, spec on == spec off). |
+| `YUNSHU_VLM_DRAFT` | path | unset | reload | Qwen3.5-family VLMs: speculative draft override. A DFlash drafter directory; 'mtp' forces the checkpoint MTP head; 'off' disables drafting. Unset: a DFlash2 drafter matching the model is used automatically when it is in the models dir or the Hugging Face cache, else the MTP head (batch-invariant verify, spec on == spec off). |
+| `YUNSHU_MTP_BLOCK_SIZE` | int | unset | reload | Draft block size (DFlash: the ceiling its acceptance-driven depth stays under). Unset: 6 for MTP, the drafter's trained block for DFlash. |
+| `YUNSHU_SPEC_COPY_ROWS` | int | 16 | reload | Qwen3.5-family single-request speculative lane: verify rows a prompt-copy round may use (copy drafts = rows - 1). A copy round proposes the continuation of the longest earlier occurrence of the current tail in the request's full prompt plus its generated text, and the same verify checks it, so output is unchanged (greedy: identical to plain decode; sampled: keyed-sampler exact); agent / code-editing and multi-turn traffic that quotes its context commits several times more tokens per round. Qualified dense DFlash2 greedy requests use their trained model block plus copied runs; sampled and unsupported requests retain the original depth controller. The default is 16 rows, capped to the backend's certified width (32 for dense lane projections with compatible tile attention, 8 otherwise). 0 turns copy rounds off. |
+| `YUNSHU_DRAFT_BITS` | int | 8 | reload | Qwen3.5-family DFlash drafter weight bits: 8 (default), 4, or 0 to keep the shipped bf16. Drafts are verified by the target, so output is token-identical for every value; fewer bits cut the drafter's bytes per round but can lower acceptance (27B on M5: 4-bit +4% to +8% decode at 1K-8K, -7% on 32K code). |
+| `YUNSHU_SPEC_TREE` | `off` \| `tree` \| `auto` | auto | reload | Qwen3.5-family single-request speculative lane: off keeps trained chain + copy; tree forces the draft-tree verifier; auto uses the certified M5 Q4 DFlash2 fast tree for eligible greedy requests within its live-context safety bounds, including long contexts, retaining chain + copy elsewhere. Greedy tokens remain identical to plain decode. |
+| `YUNSHU_NGRAM_DEFAULT` | bool | off | reload | Text models: lossless n-gram speculation on greedy requests by default (per-request spec_decode also enables it). Wins on repetitive output. |
+| `YUNSHU_SPEC_PROPOSER` | `ngram` \| `suffix` | ngram | reload | Text models: speculative proposer family for n-gram speculation. |
+| `YUNSHU_GEMMA4_ASSISTANT` | path | unset | reload | Text Gemma-4 models: assistant drafter directory (KV-shared speculative drafter). |
+
+### text-engine
+
+| Setting | Type | Default | Applies | Description |
+|---|---|---|---|---|
+| `YUNSHU_GPU_SAMPLER` | bool | off | live | Text models: on-GPU Gumbel-max sampling (no per-token GPU-&gt;CPU sync). |
+| `YUNSHU_JUMP_FORWARD` | bool | off | live | Text models: emit grammar-forced structural tokens of JSON-schema output without a forward pass. |
+| `YUNSHU_JSON_SCHEMA_ENGINE` | `llguidance` \| `inhouse` | llguidance | live | Engine that masks JSON-schema / json_object constrained decoding: 'llguidance' (per-token mask about 0.25 ms median on a 248K vocabulary; properties in schema order, forced literals in canonical tokenization) or 'inhouse' (the Python state machine, about 3 ms median; any property order). A schema llguidance cannot compile falls back to the in-house engine when that supports it. |
+| `YUNSHU_GRAMMAR_BITMASK` | bool | off | live | Constrained decoding with the xgrammar-style bitmask engine instead of the allowlist sampler. |
+| `YUNSHU_QUANT_MODE` | `''` \| `mxfp4` \| `nvfp4` \| `mxfp8` \| `affine` | unset | reload | Quantize weights in memory at load (lossy; memory vs quality): mxfp4, nvfp4, mxfp8 or affine ('' keeps the checkpoint). |
+| `YUNSHU_QUANT_CONFIG` | str | unset | reload | Bits/group for affine in-memory quantization: JSON (&#123;"bits":4,"group_size":64&#125;) or 'bits' / 'bits,group'. |
+
+### voice
+
+| Setting | Type | Default | Applies | Description |
+|---|---|---|---|---|
+| `YUNSHU_REALTIME_OMNI` | `auto` \| `on` \| `off` \| `1` \| `0` \| `true` \| `false` \| `yes` \| `no` | auto | restart | Native Qwen3-Omni speech on the Realtime socket: 'auto' when a speakable model is served, 'on', or 'off' (ASR -&gt; LLM -&gt; TTS cascade). |
+| `YUNSHU_OMNI_MODEL` | path | unset | restart | Voice path model when it differs from the served model (an omni served model is reused automatically). |
+| `YUNSHU_OMNI_PRELOAD` | bool | on | restart | Warm the omni model at boot so the first voice request is not cold. |
+| `YUNSHU_OMNI_THINKER_MAX` | int | 256 | reload | Maximum tokens the omni Thinker writes per voice turn (the spoken reply's length cap). |
+| `YUNSHU_OMNI_PERSONA` | str | unset | live | Realtime system persona when the request has none; empty string disables it. Unset: a built-in concise spoken style. |
+| `YUNSHU_REALTIME_SILENCE_MS` | int | 500 | live | Server VAD: pause before the model answers, in ms. |
+| `YUNSHU_REALTIME_BARGE_IN_MS` | int | 120 | live | Sustained speech needed to interrupt the model mid-reply, in ms. |
+| `YUNSHU_REALTIME_VAD_THRESHOLD` | float | 0.5 | live | Server VAD speech-detection threshold. |
+| `YUNSHU_REALTIME_PREFIX_PADDING_MS` | int | 300 | live | Server VAD: audio kept before detected speech, in ms. |
+| `YUNSHU_REALTIME_VAD` | `energy` \| `silero` | energy | live | Server VAD implementation: 'energy' or 'silero'. |
+| `YUNSHU_REALTIME_VAD_MODEL` | str | mlx-community/silero-vad | live | Silero VAD model id when YUNSHU_REALTIME_VAD=silero. |
+| `YUNSHU_REALTIME_MAX_INPUT_AUDIO_BYTES` | int | 10485760 (10 MiB) | live | Realtime: largest buffered input audio, in bytes. |
+| `YUNSHU_REALTIME_MAX_CONVERSATION_ITEMS` | int | 1000 | live | Realtime: conversation items kept per session. |
+
+### image-video
+
+| Setting | Type | Default | Applies | Description |
+|---|---|---|---|---|
+| `YUNSHU_DIFFUSION_SCHEDULER` | `''` \| `ddim` \| `dpm_plus_plus` \| `euler` \| `euler_ancestral` \| `lms` | unset | reload | Image generation sampler override ('' uses the pipeline's own). |
+
+### embeddings
+
+| Setting | Type | Default | Applies | Description |
+|---|---|---|---|---|
+| `YUNSHU_ANE_EMBEDDINGS` | bool | off | live | Compute embeddings on the Apple Neural Engine via CoreML when available. |
+| `YUNSHU_ANE_EMBEDDING_MODEL` | str | intfloat/e5-small-v2 | live | Embedding model used on the ANE path. |
+
+### mcp
+
+| Setting | Type | Default | Applies | Description |
+|---|---|---|---|---|
+| `YUNSHU_MCP_CONFIG` | path | unset | restart | MCP client config file (JSON/YAML) listing tool servers. |
+| `YUNSHU_MCP_SERVERS` | json | unset | restart | MCP tool servers as a JSON array (alternative to YUNSHU_MCP_CONFIG). |
+
+### server-tools
+
+| Setting | Type | Default | Applies | Description |
+|---|---|---|---|---|
+| `YUNSHU_WEB_SEARCH_PROVIDER` | `auto` \| `none` \| `searxng` \| `brave` \| `tavily` \| `exa` \| `serper` \| `perplexity` \| `ddg_html` \| `wikipedia` \| `mwmbl` \| `mojeek` \| `marginalia` | auto | live | Search backend. Auto runs lightweight DDG, Wikipedia and configured keyed providers (Mwmbl is an explicit noncommercial opt-in) in parallel with health backoff and RRF. SearXNG is optional. Queries leave the machine; none disables search. |
+| `YUNSHU_WEB_SEARCH_PROVIDER_TIMEOUT` | float | 1.0 | restart | Per-provider metasearch deadline in seconds; slow providers cannot block the whole query. |
+| `YUNSHU_WEB_SEARCH_HEALTH_FILE` | path | ~/.yunshu/cache/websearch-health.json | restart | Small query-free provider health snapshot read by yunshu config. No SERPs or credentials are stored. |
+| `YUNSHU_WEB_MWMBL` | bool | off | restart | Opt in to Mwmbl's open small-web index in auto metasearch. Dataset is CC-BY-NC-SA 4.0 (noncommercial, attribution/share-alike); code is not vendored. Explicit provider=mwmbl also opts in. |
+| `YUNSHU_WEB_KEYLESS` | bool | on | restart | Allow keyless DuckDuckGo (best effort; may block) and Wikipedia. Query text and IP leave the machine. |
+| `YUNSHU_MOJEEK_API_KEY` | str | unset | restart | Mojeek independent-index API key. Configured keys participate in auto metasearch. |
+| `YUNSHU_MARGINALIA_API_KEY` | str | unset | restart | Explicit opt-in to Marginalia small-web search. Noncommercial/public API data is CC-BY-NC-SA 4.0; commercial keys have separate terms. No implicit public key. |
+| `YUNSHU_SERPER_API_KEY` | str | unset | restart | Serper Google SERP API key. |
+| `YUNSHU_PERPLEXITY_API_KEY` | str | unset | restart | Perplexity Search API key (raw results, not Sonar). |
+| `YUNSHU_WEB_RESEARCH` | bool | off | restart | Enrich search snippets with origin pages, untrusted excerpts and local ranking. Stable opt-in pending quality evaluation; fetched URLs leave the machine. |
+| `YUNSHU_WEB_RENDER` | bool | off | restart | Optional local Chromium fallback for short JavaScript shells in advanced Tavily extract/crawl/map. Requires the web-render extra and an installed Playwright Chromium; same-origin GET resources only, no cookies. Never downloads a browser automatically. |
+| `YUNSHU_WEB_RESEARCH_BUDGET` | float | 4.0 | restart | Overall enrichment deadline in seconds (maximum 4). |
+| `YUNSHU_WEB_RESEARCH_PAGES` | int | 6 | restart | Maximum origin pages per enrichment (capped at 6). |
+| `YUNSHU_WEB_RESEARCH_MODEL` | str | unset | restart | Already-loaded local embedding model ID. Never loads a model; absent/unavailable uses BM25 only. Qwen3-Embedding-0.6B is recommended. |
+| `YUNSHU_SEARXNG_URL` | str | unset | live | Base URL of a self-hosted SearXNG instance (JSON output enabled), e.g. http://127.0.0.1:8080. Optional only; built-in metasearch needs no SearXNG setup. |
+| `YUNSHU_BRAVE_API_KEY` | str | unset | live | Brave Search API key. |
+| `YUNSHU_TAVILY_API_KEY` | str | unset | live | Tavily API key. |
+| `YUNSHU_EXA_API_KEY` | str | unset | live | Exa API key. |
+| `YUNSHU_WEB_SEARCH_RESULTS` | int | 5 | live | Results returned per web_search call. |
+| `YUNSHU_WEB_FETCH` | bool | on | live | Serve the server-side web_fetch tool (needs no provider). Off: web_fetch requests get an 'unavailable' error. |
+| `YUNSHU_WEB_FETCH_ALLOW_PRIVATE` | bool | off | live | Let web_fetch reach private, loopback and link-local addresses. Off (default) blocks them (SSRF protection), including after redirects and DNS resolution. |
+| `YUNSHU_WEB_FETCH_MAX_BYTES` | int | 2000000 | live | Largest response body web_fetch downloads. |
+| `YUNSHU_WEB_FETCH_TIMEOUT` | float | 20.0 | live | Seconds web_fetch waits for a page. |
+| `YUNSHU_WEB_FETCH_MAX_TEXT_CHARS` | int | 40000 | live | Extracted page text handed to the model is cut to this many characters (a request's max_content_tokens can lower it). |
+| `YUNSHU_MCP_CONNECTOR` | bool | on | live | Serve the MCP connector: Anthropic mcp_servers and OpenAI Responses &#123;type: mcp&#125; tools are executed by this server, which connects to the named MCP servers over streamable HTTP / SSE. |
+| `YUNSHU_MCP_CONNECTOR_ALLOW_PRIVATE` | bool | on | live | Let the MCP connector reach private and loopback MCP servers (local tool servers are the common case). Off: only public addresses. |
+| `YUNSHU_MCP_CONNECTOR_TIMEOUT` | float | 30.0 | live | Seconds an MCP connector call (initialize, tools/list, tools/call) may take, DNS included. |
+| `YUNSHU_MCP_CONNECTOR_MAX_BYTES` | int | 8388608 (8 MiB) | live | Largest single reply (JSON body, or one SSE event) an MCP connector server may send, after decompression. |
+| `YUNSHU_SERVER_TOOL_MAX_ITERATIONS` | int | 8 | live | Most generate, run-tool, continue rounds one request may take. |
+| `YUNSHU_MODEL_ALIASES` | json | unset | live | Multi-model mode: map the model names agents ask for (claude-sonnet-4-5, opus, gpt-5) onto a served model, as a JSON object &#123;pattern: served model id&#125;; patterns are exact names, prefix* or * (first match wins; a real model name always wins). Single-model mode answers to every name already. |
+
+### observability
+
+| Setting | Type | Default | Applies | Description |
+|---|---|---|---|---|
+| `YUNSHU_DEBUG_ROUTES` | bool | off | restart | Mount the /debug/* diagnostic routes (engine, system, kv-cache, spec-decode, ...). They need the auth token or YUNSHU_AUTH_DISABLED. /metrics is always mounted. |
+| `YUNSHU_LOG_LEVEL` | `DEBUG` \| `INFO` \| `WARNING` \| `ERROR` | INFO | restart | Log level for Yunshu's loggers (third-party loggers stay at WARNING). |
+| `YUNSHU_TELEMETRY` | `on` \| `off` | off | restart | Unprivileged Apple power/GPU/temperature sampler (on/off); off by default (the 27B A/B showed a small, consistent follow-up TTFT cost when on); 1 Hz when on, restart required. |
+| `YUNSHU_TELEMETRY_INTERVAL_S` | float | 1.0 | restart | Host telemetry sampling interval in seconds (restart required). |
+| `YUNSHU_AUDIT_LOG_FILE` | path | unset | restart | Also write the audit log to this file. |
+| `YUNSHU_LOG_MAX_MB` | float | 50.0 | live | Service log (launchd): rotate the log file at this size in MiB; 0 turns size rotation off. |
+| `YUNSHU_LOG_ROTATE_HOURS` | float | 24.0 | live | Service log: also rotate when this many hours passed since the last rotation; 0 turns time rotation off. |
+| `YUNSHU_LOG_KEEP` | int | 7 | live | Service log: rotated (gzip, secrets redacted) files kept. |
+| `YUNSHU_LOG_RETENTION_DAYS` | float | 14.0 | live | Service log: delete rotated files older than this many days; 0 keeps them until YUNSHU_LOG_KEEP prunes them. |
+| `YUNSHU_SERVE_LOG` | bool | off | live | Write one numbers-only JSON line per finished generation request (timings, token counts, speculative acceptance, cache tier, concurrency, arm, build) to a local, size-capped, rotated file. Never prompts, outputs or token ids. Off by default; nothing leaves the machine. |
+| `YUNSHU_SERVE_LOG_DIR` | path | unset | live | Directory of the serve log. Unset: ~/.yunshu/logs. |
+| `YUNSHU_SERVE_LOG_MAX_MB` | float | 4.0 | live | Serve log: rotate at this size in MiB; with YUNSHU_SERVE_LOG_KEEP the directory is capped at max * (keep + 1). |
+| `YUNSHU_SERVE_LOG_RETENTION_DAYS` | int | 30 | live | History API metadata retention window in days; 0 disables age filtering. File storage remains bounded by SERVE_LOG_MAX_MB and SERVE_LOG_KEEP. |
+| `YUNSHU_SERVE_LOG_KEEP` | int | 4 | live | Serve log: rotated files kept. |
+| `YUNSHU_HISTORY_INTERVAL_S` | float | 5.0 | restart | Console history: seconds between samples of the in-memory ring behind GET /v1/yunshu/history (throughput, request counts, memory, TTFT percentiles); 0 turns the sampler off. The ring is fixed-size and never grows: 12 columns, 4 bytes each (timestamp 8), per slot. |
+| `YUNSHU_HISTORY_HOURS` | float | 12.0 | restart | Console history: hours the history ring keeps (capacity = hours * 3600 / YUNSHU_HISTORY_INTERVAL_S slots, preallocated; 12 h at 5 s is 8,640 slots, about 0.4 MiB). |
+| `YUNSHU_ARM` | str | unset | live | Label recorded in the serve log for the configuration arm this server runs (for offline A/B analysis); it changes no behaviour. |
+
+### console
+
+| Setting | Type | Default | Applies | Description |
+|---|---|---|---|---|
+| `YUNSHU_CONSOLE` | bool | on | restart | `yunshu serve` also starts the console process (the web console, the docs, and the metrics history recorder) as a sibling on YUNSHU_CONSOLE_PORT. The console is its own light process that never loads MLX: it keeps running and recording while the engine restarts or crashes, and an engine fault cannot take it down. `--no-console` turns it off; `yunshu console` runs it on its own. |
+| `YUNSHU_CONSOLE_PORT` | int | 8100 | restart | Port of the console process (the web console at /console/, its reverse proxy to the engine API, and the history endpoints). 8100 stays clear of the engine's 8000 and of the usual dev servers (3000, 5173, 8080, 8888). |
+| `YUNSHU_CONSOLE_HOST` | str | unset | restart | Bind host of the console process. Unset: the engine's own host for the sibling, 127.0.0.1 for a standalone `yunshu console`. |
+| `YUNSHU_CONSOLE_ENGINE` | str | unset | restart | Engine URL the console process watches and proxies to. Unset: the engine that started it, else http://127.0.0.1:8000. Point it at a LAN or remote engine to watch that one. |
+| `YUNSHU_CONSOLE_ENGINE_TOKEN` | str | unset | restart | Bearer token the console process uses to read the engine while it records history. Unset: YUNSHU_AUTH_TOKEN. The browser's own token is passed through to the engine unchanged. |
+| `YUNSHU_CONSOLE_POLL_S` | float | 1.0 | restart | Seconds between the console process's reads of the engine (status and finished requests, the same cheap endpoints the console page uses). 1 s gives the 1 s history resolution. |
+| `YUNSHU_CONSOLE_HISTORY` | bool | on | restart | Record the metrics history (1 s for 1 h, 10 s for 24 h, 1 min for the retention) and the request log (metadata only, never prompts or outputs) to ~/.yunshu/console-history.sqlite, with engine outages kept as explicit gaps and events. Off keeps the console live-only. |
+| `YUNSHU_CONSOLE_DB` | path | unset | restart | Where the console process keeps its history (SQLite, WAL). Unset: ~/.yunshu/console-history.sqlite. |
+| `YUNSHU_CONSOLE_RETENTION_DAYS` | float | 30.0 | restart | Days the console keeps 1-minute history rows, the request log and the engine events. |
+| `YUNSHU_CONSOLE_DB_MAX_MB` | float | 64.0 | restart | Size cap of the console history file in MiB: when exceeded, the oldest request rows and then the oldest 1-minute rows are dropped. |
+
+### cli
+
+| Setting | Type | Default | Applies | Description |
+|---|---|---|---|---|
+| `YUNSHU_GATEWAY_URL` | str | http://localhost:8000 | live | Server URL used by the yunshu CLI client commands. |
+| `YUNSHU_HF_ENDPOINT` | str | unset | restart | Hugging Face Hub endpoint for `yunshu serve` (exported as HF_ENDPOINT). |
+
+## Experimental settings
+
+| Setting | Type | Default | Applies | Description | Decided by | Added |
+|---|---|---|---|---|---|---|
+| `YUNSHU_TOOL_GRAMMAR` | bool | off | live | Tool-call constrained decoding (structural tags): free text until the model emits the tool-call start marker, then the call body is masked to the exact call grammar of this request's tools (tool name, that tool's parameter keys, schema-typed values, correct closing); a forced tool_choice (required / any / a named tool) starts constrained. A forced tool_choice is always constrained, whatever this flag says (OpenAI and Anthropic both guarantee the call); the flag governs only auto. Lossless for a call the model would have written validly. Off: auto-choice tool calls are decoded unconstrained and repaired after the fact. | malformed / dropped tool calls with vs without the grammar on the agentic matrix (Claude Code, Codex, opencode; greedy and sampled) against the call-decode cost (27B replays: lossless 12/12, 0 malformed both ways, call decode -0..10%); forced tool_choice already ships always-on (guarantee, M3 sweep); for auto: on only if it removes failures the repair does not | 2026-10-01 |
+| `YUNSHU_ROUND_DRIVER` | bool | off | reload | Dense Qwen3.5-family VLMs: Yunshu's round driver serves text requests (packed forwards over every decoding row's window, alternating with prefill steps that batch several prompts' fixed chunks; row-invariant lane projections; MTP drafts for every row with cost-aware per-row depth; sampled rows draw with the position-keyed sampler; see docs/guides/ROUND_DRIVER.md). Off: upstream BatchGenerator shared batch + single-request speculative lane. APC prefix reuse (exact hybrid checkpoints) runs in the driver; image prompts, int8 KV and MoE stay on the upstream path either way. | needs single-request greedy decode &gt;= the default lane (2026-10-01: 10-40% behind; serial draft chain + verify, overlap them), sampled-row seed + digest identity vs keyed serial on 27B, then 27B idle GPU, off vs on: sweep_round_driver.py parity, bench_batch_spec-style rows 1/2/4/8, probe_concurrency, bench_engine_matrix, bench_context_batch b1-b8 + 32K/131K, bench_mixed_load 16K/32K, MMLU-Pro 300 b8 (scripts/research/validate_round_driver.sh); if it wins it becomes the path (with APC / images moved) and this flag, the upstream shared batch and the spec lane are deleted | 2026-09-29 |
+| `YUNSHU_MTP_ROW_EXACT` | bool | off | reload | Qwen3.5-family runner: oMLX row-exact verify (verify rows bit-identical to one-row decode) instead of batch-invariant kernels. | sweep_mtp_depth parity at long contexts vs decode tok/s (currently 30-50% slower than batch-invariant) | 2026-09-28 |
+| `YUNSHU_ENGINE_LOOP` | bool | off | reload | Text models: EngineCore continuous-batching loop instead of the single-request fast path. | unify text-only models onto the batch runner vs keeping this loop (concurrency probe on a text model) | 2026-06-30 |
+| `YUNSHU_OVERLAP` | `''` \| `cpu_gpu` \| `two_batch` | unset | reload | Text engine loop: overlap CPU and GPU work ('cpu_gpu') or split a batch into two overlapping halves ('two_batch'). | concurrency probe tok/s on a text model with the engine loop; deleted with the loop if text models move to the runner | 2026-06-30 |
+| `YUNSHU_SPEC_UNVERIFIED` | `''` \| `eagle` | unset | reload | Text models: explicitly enable the unverified external mlx-lm draft experiment. 'eagle' is the historical route name; an ordinary LM draft works, no trained EAGLE head is required. Greedy, non-streaming ordinary requests with default sampling/penalties only; schema, custom processors, stop strings, thinking budgets, LoRA and token-mask options keep the regular fast path. Native MTP/DFlash belongs to the VLM runner. | ordinary text target/draft pair: greedy token identity vs plain decode and at least 3 interleaved speed runs; retire both external-draft settings if no lossless win | 2026-09-28 |
+| `YUNSHU_DRAFT_MODEL` | path | unset | reload | External mlx-lm draft checkpoint for YUNSHU_SPEC_UNVERIFIED=eagle (ordinary LM draft, not a trained EAGLE head). | goes with YUNSHU_SPEC_UNVERIFIED; generic LM path is reachable without an EAGLE checkpoint | 2026-09-28 |
+
+## Internal settings
+
+| Setting | Type | Default | Applies | Description |
+|---|---|---|---|---|
+| `YUNSHU_DEBUG_STREAM_CAPTURE` | path | unset | live | Debugging aid: append one JSON line per VLM-runner generation to this file with the generated token ids, the text pieces the engine handed to the gateway and their joined text, so a delivered answer can be compared with what was generated (soak invariant check). Off when unset. |

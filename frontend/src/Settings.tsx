@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { DocLink } from "./docs/DocLink";
 import {
   Button,
   Input,
@@ -129,6 +130,7 @@ export function Settings({
         title={t("settings.title")}
         description={t("settings.description")}
       />
+      <DocLink slug="guides/configuration" label={t("docs.link.settings")} />
       <nav aria-label={t("settings.nav.label")} data-testid="settings-nav">
         {wide ? (
           <SegmentedSelect

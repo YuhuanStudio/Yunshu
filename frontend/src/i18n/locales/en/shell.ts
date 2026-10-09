@@ -132,6 +132,8 @@ const shell: Shape<typeof zh> = {
   "page.logs": "Logs",
   "page.downloads": "Downloads",
   "page.cache": "Cache",
+  "page.docs": "Docs",
+  "cmd.docs": "Docs",
   "page.keys": "Keys",
   "nav.section.manage": "Manage",
   "footer.memory.source": " Source: engine status, every 3 s.",
@@ -180,14 +182,16 @@ const shell: Shape<typeof zh> = {
   "island.live.counts": "{active} active · {queued} queued",
   "island.live.prefill": "Prefill {pct}%",
   "island.live.prefillPlain": "Prefilling",
-  "island.live.spark": "Live total decode speed, last 60 s, one point per status update",
+  "island.live.spark":
+    "Live total decode speed, last 60 s, one point per status update",
   "island.live.sparkNote": "Last 60 s",
   "island.mem.title": "Metal memory",
   "island.mem.meter": "Metal memory in use",
   "island.mem.pressure": "Memory pressure",
   "island.mem.swap": "Swap",
   "island.mem.reserve": "Reserve pool",
-  "island.mem.reserveTip": "Memory Metal has reserved from the system and is not using right now; it is reused and released under pressure.",
+  "island.mem.reserveTip":
+    "Memory Metal has reserved from the system and is not using right now; it is reused and released under pressure.",
   "island.host.busy": "GPU busy",
   "island.host.power": "GPU / total power",
   "island.nav.requests": "Requests",
@@ -196,5 +200,13 @@ const shell: Shape<typeof zh> = {
   "island.nav.modelsLoaded": "{n} loaded",
   "island.nav.diagnostics": "Diagnostics",
   "island.nav.logs": "Logs",
+  "stale.note":
+    "This page needs the engine; it shows the last data from {age} ago and updates itself when the engine is back.",
+  "loadError.title": "The model failed to load",
+  "loadError.action": "Load another model",
+  "boundary.title": "This page hit an error",
+  "boundary.body": "Other pages are not affected. Retry, or open the docs.",
+  "boundary.retry": "Retry",
+  "boundary.docs": "Open the docs",
 };
 export default shell;

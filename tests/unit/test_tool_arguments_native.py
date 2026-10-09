@@ -309,3 +309,18 @@ def test_streamed_xml_call_starts_with_id_and_name():
     start = next(o.tool_call_start for o in outs if o.tool_call_start)
     call = next(o.tool_call for o in outs if o.tool_call)
     assert start.name == "get_weather" and start.id == call.id
+
+
+@pytest.mark.parametrize("raw", ["NaN", "Infinity", "-Infinity", "1e999", "-1e999"])
+def test_nonfinite_numeric_text_stays_literal(raw):
+    assert _coerce({"n": raw}) == {"n": raw}
+
+
+@pytest.mark.parametrize("kind,raw", [("array", "[NaN]"), ("object", '{"x":1e999}')])
+@pytest.mark.parametrize("typed", [True, False])
+def test_nonfinite_container_text_stays_literal(kind, raw, typed):
+    schemas = {"f": {"properties": {"v": {"type": kind} if typed else {}}}}
+    original = json.dumps({"v": raw})
+    assert (
+        coerce_tool_arguments("f", original, schemas, raw_text_values=True) == original
+    )

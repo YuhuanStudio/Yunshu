@@ -268,3 +268,10 @@ def test_no_model_diagnostic_extracts_nested_tables_and_dry_run(tmp_path):
     out = tmp_path / "diagnostic.json"
     module.main(["--out", str(out), "--dry-run"])
     assert '"dry-run"' in out.read_text()
+
+
+def test_host_telemetry_is_opt_in():
+    """The 27B A/B showed a small follow-up TTFT cost with the sampler on."""
+    from yunshu_engine import settings
+
+    assert settings.get("YUNSHU_TELEMETRY") == "off"

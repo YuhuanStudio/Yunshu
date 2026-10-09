@@ -125,6 +125,8 @@ const shell = {
   "page.logs": "日誌",
   "page.downloads": "下載",
   "page.cache": "快取",
+  "page.docs": "文件",
+  "cmd.docs": "文件",
   "page.keys": "金鑰",
   "nav.section.manage": "管理",
   "footer.memory.source": "資料來源：引擎狀態，每 3 秒更新。",
@@ -179,7 +181,8 @@ const shell = {
   "island.mem.pressure": "記憶體壓力",
   "island.mem.swap": "交換",
   "island.mem.reserve": "保留池",
-  "island.mem.reserveTip": "Metal 已向系統保留、目前閒置的記憶體，可重用，也會在壓力大時釋放。",
+  "island.mem.reserveTip":
+    "Metal 已向系統保留、目前閒置的記憶體，可重用，也會在壓力大時釋放。",
   "island.host.busy": "GPU 忙碌",
   "island.host.power": "GPU / 合計功耗",
   "island.nav.requests": "請求",
@@ -188,5 +191,13 @@ const shell = {
   "island.nav.modelsLoaded": "{n} 個已載入",
   "island.nav.diagnostics": "診斷",
   "island.nav.logs": "日誌",
+  "stale.note":
+    "此頁需要引擎；現在顯示的是 {age}前的最後資料，引擎回來後會自動更新。",
+  "loadError.title": "模型載入失敗",
+  "loadError.action": "載入其他模型",
+  "boundary.title": "這個頁面發生錯誤",
+  "boundary.body": "其他頁面不受影響。可以重試，或到文件查看說明。",
+  "boundary.retry": "重試",
+  "boundary.docs": "開啟文件",
 };
 export default shell;

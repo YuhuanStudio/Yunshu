@@ -8,6 +8,7 @@ STAGES = (
     "telemetry-tiny",
     "telemetry",
     "smoke",
+    "toolparse",
     "identity",
     "apc",
     "quality",
@@ -53,6 +54,7 @@ LADDER = tuple(
         "evals",
         "tavily",
         "searchrank",
+        "toolparse",
     )
 )
 

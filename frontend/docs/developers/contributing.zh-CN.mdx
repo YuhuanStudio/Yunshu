@@ -1,0 +1,138 @@
+---
+title: 贡献指南
+description: 创建开发环境、运行 lint 与测试、遵守配置注册表规则，并提交 pull request。
+---
+
+Yunshu 的源代码在 [github.com/YuhuanStudio/Yunshu](https://github.com/YuhuanStudio/Yunshu)，采用 Apache 2.0 授权。你提交的贡献即表示同意以相同方式授权。本页说明日常的工作流程；仓库中的 `CONTRIBUTING.md` 与 `AGENTS.md` 是同样规则的精简版。
+
+## 前提条件
+
+- 搭载 Apple Silicon 的 Mac，以及原生 arm64 的 Python。Yunshu 需要 macOS。
+- Python 3.13 或更新版本。
+- [uv](https://github.com/astral-sh/uv)，这是本项目唯一使用的 Python 套件管理器。
+- [just](https://github.com/casey/just) 作为命令运行器（`brew install just`）。
+
+## 创建环境
+
+```bash
+git clone https://github.com/YuhuanStudio/Yunshu.git
+cd Yunshu
+just setup
+```
+
+`just setup` 会运行 `uv sync --all-extras --dev`。若想要较轻量的环境，只安装需要的 extra：
+
+```bash
+uv sync --extra vision        # mlx-vlm：VLM、OCR、Qwen3.5 家族
+uv sync --extra audio         # mlx-audio：ASR、TTS 与 Realtime 语音串接
+uv sync --extra omni          # mlx-vlm + torch：原生 Qwen3-Omni 语音对语音
+uv sync --extra generation    # 图像生成
+uv sync --extra embeddings    # /v1/embeddings 与 /v1/rerank
+```
+
+以本机 MLX 模型启动开发服务器：
+
+```bash
+YUNSHU_MODEL=/path/to/mlx-model just dev    # 在 127.0.0.1:8000 启动 uvicorn
+just dev-multi                              # 多模型模式，模型放在 ./models
+```
+
+## 开发循环
+
+| 命令 | 作用 |
+|---|---|
+| `just lint` | 对 `python/` 与 `tests/` 运行 `ruff check`，并运行 mypy 基准检查 |
+| `just format` | 对 `python/` 与 `tests/` 运行 `ruff format` |
+| `just test-unit` | 单元测试（`tests/`，排除集成测试）；不需要任何模型 |
+| `just test` | 目前与上面相同，运行单元测试 |
+| `just test-integration` | 集成测试，需要真实模型或运行中的服务（需主动运行） |
+| `just test-single tests/unit/test_foo.py` | 只跑一个文件 |
+
+单一测试也可以用 `uv run pytest tests/unit/test_foo.py -q` 运行。pytest 配置在 `pyproject.toml`：严格的 `xfail`、asyncio auto 模式，以及 `gpu`、`integration`、`slow` 三个标记。
+
+程序风格：Python 3.13，以 ruff 格式化，行宽 88，lint 规则为 `E, F, W, I, N, UP, B, SIM`，以 `just lint` 为准。注解应说明「为什么」（隐藏的限制、细微的不变式、变通办法），而不是重述代码。
+
+## 仓库结构
+
+| 路径 | 内容 |
+|---|---|
+| `python/yunshu_gateway/` | FastAPI gateway：路由、schema、middleware、服务器端工具 |
+| `python/yunshu_engine/` | 推论引擎：服务路径、采样、推测解码、前缀缓存、kernel、配置注册表 |
+| `python/yunshu_kv/` | KV 缓存建构组件 |
+| `python/yunshu_cli/` | `yunshu` CLI |
+| `python/yunshu_control/` | 稽核日志与 token 计数 |
+| `tests/` | `unit/`、`integration/` 与 `e2e/` 测试 |
+| `scripts/` | 工具：`gen_config_docs.py`、`dev/`（验证与发布辅助）、`vendor/`、`release/` |
+| `docs/` | 参考指南 |
+| `frontend/` | Web 控制台，也包含这份文档（`frontend/docs/`，三种语言的 MDX） |
+
+各套件如何组合见[架构](/docs/developers/architecture)。Metal kernel 在运行期编译（`mx.fast.metal_kernel`），所以没有独立的 kernel 构建步骤。
+
+## 配置注册表规则
+
+每个 `YUNSHU_*` 配置都登录在 `python/yunshu_engine/settings.py`，并以 `settings.get(...)` 或其类型化的 getter 读取。代码绝不对 `YUNSHU_*` 名称使用 `os.environ` 或 `getenv`；单元测试会强制检查这一点。
+
+添加配置的步骤：
+
+1. 在 `settings.py` 加一行 `_add(...)`，包含名称、类型、默认值、一行说明与分类。
+2. 在使用的地方以 `settings.get("YUNSHU_NAME")` 读取。
+3. 重新产生参考文档并一并提交：
+
+   ```bash
+   uv run python scripts/gen_config_docs.py
+   uv run python scripts/gen_config_docs.py --check    # 检查文档是否为最新（CI 风格）
+   ```
+
+4. 若该配置改变了默认值、API 或 CLI 行为，请记在 `CHANGELOG.md` 的 Unreleased 区段，用户需要动作时附上迁移步骤。
+
+值的解析优先级由高到低为：`yunshu serve --set KEY=VALUE` 与具类型的 `serve` 旗标、进程环境变量、配置档（`~/.yunshu/config.toml`，由 `yunshu config set` 写入），最后是登录的默认值。`yunshu config` 会印出生效的值与其来源。
+
+### 实验性旗标是暂时的
+
+配置可以标记为 `stability="experimental"`。每一个都必须写明将用哪项量测来决定它（`decide=`）与加入时间（`added=`），而且同时最多只能有八个。量测完成后，胜出的做法成为缺省，旗标与落败的程序路径一并删除。只有**无损**的优化（版面配置、kernel、调度器，也就是不改变输出的改动）可以这样取代缺省；若选择退出的开关确有价值，可以保留。**有损**的选项（KV int8、权重量化，以及任何改变输出质量的做法）是缺省为无损的稳定用户选项，单靠基准测试不会让它们成为缺省。
+
+## 热路径的改动
+
+性能工作以端到端结果判断。单独更快的 kernel 并不足够：改动热路径时，需要同一个检查点上的输出比较（token 完全相同，或在明确说明的容差内），以及对首 token 延迟、解码速度或前缀重用的实测影响。工具说明见[验证](/docs/developers/verification)。
+
+## Commit 与 pull request
+
+Commit 消息遵循 [Conventional Commits](https://www.conventionalcommits.org/)：
+
+```text
+feat(cli): add `yunshu pull` subcommand
+fix(gateway): correct streaming SSE keepalive interval
+docs(readme): clarify non-goals
+```
+
+对 `main` 开 pull request，说明改了什么与原因，并附上 `just test-unit` 的输出。只有改动触及热路径时才需要附基准比较。审查的期望：
+
+- 让改动保持聚焦，并描述用户可见的前后差异。
+- 修 bug 需要一个没有修正就会失败的回归测试。
+- 记录你运行了什么，以及哪些没有验证。纯文档的改动不需要模型基准。
+- 揭露是否使用 AI 协助，并自行查看结果，包括来源与授权声明。
+- 大型架构变更请先走简短的 RFC。
+
+## 公开文档检查
+
+改动已记载的行为时，下列检查能让文档与代码保持一致：
+
+```bash
+uv run pytest tests/unit/test_public_docs.py tests/unit/test_doc_source_consistency.py -q
+uv run python scripts/gen_config_docs.py --check
+uv run python scripts/dev/api_coverage.py
+```
+
+`scripts/dev/ci-local <commit-sha>` 会在干净的 Python 3.13 checkout 中重现发布的构建检查，不使用任何模型：lint、格式、mypy、单元测试、套件构建、`twine` 验证与 wheel 安装冒烟测试。
+
+## 范围
+
+Yunshu 是单节点推论引擎。分布式或多节点服务，以及多租户控制平面，不在范围内。单节点的解码与优化工作（推测解码、受限解码、量化、缓存、kernel）在范围内且欢迎参与，让真实客户端的行为与对照厂商 API 时一致的兼容性工作也是。
+
+## 相关页面
+
+- [架构](/docs/developers/architecture)
+- [验证](/docs/developers/verification)
+- [发布关卡](/docs/developers/release-gate)
+- [上游追踪](/docs/developers/upstream-tracking)
+- [配置](/docs/guides/configuration)

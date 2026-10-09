@@ -69,21 +69,3 @@ dist:
 # What changed upstream for vendored kernels, watched repos and pinned packages
 vendor-check *args:
     uv run python scripts/vendor/check_upstream.py {{args}}
-
-# ── Docs site (site/: Next.js + fumadocs, static export) ──
-
-# Regenerate the pages built from code: the OpenAPI/route dump and the configuration guide
-docs-gen:
-    uv run python site/scripts/dump_openapi.py
-    uv run python site/scripts/gen_content.py
-
-docs-install:
-    cd site && pnpm install --frozen-lockfile
-
-# Dev server on :3991 (LAN-visible)
-docs-dev: docs-gen
-    cd site && pnpm install --frozen-lockfile && pnpm exec next dev -H 0.0.0.0 -p 3991
-
-# Static export to site/out, then typecheck, route test and link check
-docs-build: docs-gen
-    cd site && pnpm install --frozen-lockfile && pnpm run typecheck && pnpm exec next build && pnpm test && pnpm run check:links

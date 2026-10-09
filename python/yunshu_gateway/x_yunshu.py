@@ -176,9 +176,15 @@ class RequestInfo:
         return self.gen.stats if self.gen is not None else None
 
 
+# Identifies this process: a reader that follows the finished-request ring by sequence number
+# (the console process) starts over when it changes, so a restart never makes it skip or repeat.
+BOOT_ID = uuid.uuid4().hex[:12]
+
+
 class _Registry:
     def __init__(self) -> None:
         self._lock = threading.Lock()
+        self._seq = 0
         self._active: dict[str, RequestInfo] = {}
         self._recent: collections.deque[dict] = collections.deque(maxlen=512)
 
@@ -207,7 +213,14 @@ class _Registry:
 
     def record_done(self, entry: dict) -> None:
         with self._lock:
+            self._seq += 1
+            entry["seq"] = self._seq
             self._recent.append(entry)
+
+    @property
+    def latest_seq(self) -> int:
+        with self._lock:
+            return self._seq
 
     def recent(self, window_s: float) -> list[dict]:
         cutoff = time.time() - window_s
@@ -219,14 +232,34 @@ class _Registry:
             return dict(self._recent[-1]) if self._recent else None
 
     def recent_entries(
-        self, limit: int = 100, model: str | None = None, since: float | None = None
+        self,
+        limit: int = 100,
+        model: str | None = None,
+        since: float | None = None,
+        after_seq: int | None = None,
     ) -> list[dict]:
         """Newest-first copies of the finished-request ring, at most ``limit``, optionally
-        for one model and finished after the epoch ``since``."""
+        for one model, finished after the epoch ``since`` and with a sequence number above
+        ``after_seq`` (the cursor of a reader that follows the ring)."""
+        return self.recent_cursor(limit, model, since, after_seq)[0]
+
+    def recent_cursor(
+        self,
+        limit: int = 100,
+        model: str | None = None,
+        since: float | None = None,
+        after_seq: int | None = None,
+    ) -> tuple[list[dict], int]:
+        """``recent_entries`` plus the newest sequence number, both from one lock hold: a
+        request finishing meanwhile is in neither or in both, so a reader that keeps the
+        returned number as its next ``after_seq`` neither skips nor repeats one."""
         with self._lock:
             rows = list(self._recent)
+            latest = self._seq
         out: list[dict] = []
         for e in reversed(rows):
+            if after_seq is not None and e.get("seq", 0) <= after_seq:
+                break  # sequence numbers rise with the ring
             if since is not None and e["t"] <= since:
                 break  # the ring is in finish order
             if model is not None and e.get("model") != model:
@@ -234,7 +267,7 @@ class _Registry:
             out.append(dict(e))
             if len(out) >= limit:
                 break
-        return out
+        return out, latest
 
     def clear(self) -> None:
         with self._lock:

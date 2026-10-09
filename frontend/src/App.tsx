@@ -43,12 +43,18 @@ import {
   Stethoscope,
   Sun,
   X,
+  BookOpen,
 } from "lucide-react";
 import { useEngine } from "./useEngine";
 import { LivePill } from "./LivePill";
 import { tabTitle } from "./engineView";
 import type { Connection } from "./api";
 import { FooterStatus } from "./FooterStatus";
+import { searchDocs } from "./docs/search.ts";
+import { docHref } from "./docs/links.ts";
+import { useDocTitle } from "./docs/title-store.ts";
+import type { SearchHit } from "./docs/types.ts";
+import { PageBoundary } from "./PageBoundary";
 import { LanguageSwitch } from "./LanguageSwitch";
 import {
   LOCALES,
@@ -59,7 +65,16 @@ import {
   tr,
   useLocale,
 } from "./i18n/index.ts";
-import { ConnectionState, fixed, modelLabel, sizeGb, useMinWidth } from "./ui";
+import {
+  ConnectionState,
+  OfflineLine,
+  elapsed,
+  fixed,
+  modelLabel,
+  sizeGb,
+  useMinWidth,
+  useNow,
+} from "./ui";
 import { NotificationCenter } from "./NotificationCenter";
 import { ShortcutsSheet } from "./Shortcuts";
 import { SignalsProvider, useShellSignals } from "./signals";
@@ -98,6 +113,7 @@ const Playground = lazy(() =>
 const Downloads = lazy(() => import("./Downloads"));
 const Cache = lazy(() => import("./Cache"));
 const Keys = lazy(() => import("./Keys"));
+const Docs = lazy(() => import("./Docs"));
 const Logs = lazy(() => import("./Logs"));
 // i18n-keys: shell.page.
 const pageTitle = (page: string) => tr(`shell.page.${page}`);
@@ -166,8 +182,30 @@ function startAtTop(el: HTMLElement | null) {
   });
 }
 
+/** Pages that need the engine to be useful: offline they say so and show the last data they have. */
+const ENGINE_PAGES = new Set<string>([
+  "overview",
+  "requests",
+  "models",
+  "downloads",
+  "cache",
+  "diagnostics",
+  "logs",
+  "keys",
+  "playground",
+]);
+/** The pages that are only numbers from the engine: dimmed while those numbers are stale (the overview dims itself). */
+const DIM_PAGES = new Set<string>([
+  "requests",
+  "models",
+  "cache",
+  "diagnostics",
+  "downloads",
+]);
+
 export default function App() {
   const locale = useLocale();
+  const docTitle = useDocTitle();
   const [{ page, sub }, setRoute] = useState(route),
     [menu, setMenu] = useState(false),
     [collapsed, setCollapsed] = useState(() => {
@@ -196,6 +234,7 @@ export default function App() {
     ),
     [testModel, setTestModel] = useState("");
   const engine = useEngine(connection);
+  const staleNow = useNow(engine.phase === "offline");
   const signals = useShellSignals(engine, connection);
   // Phones (< 640px): the top bar is the hamburger and the title only; search and the bell
   // live in the menu sheet, and the hamburger carries a dot while something is unread.
@@ -358,11 +397,40 @@ export default function App() {
     },
   ];
   const q = query.trim().toLowerCase();
-  const shown = q
-    ? commands.filter((c) =>
-        `${c.title} ${c.description ?? ""} ${c.id}`.toLowerCase().includes(q),
-      )
-    : commands;
+  // Docs search: the per-locale text index loads on the first query typed in the palette.
+  const [docHits, setDocHits] = useState<SearchHit[]>([]);
+  useEffect(() => {
+    if (!palette || q.length < 2) {
+      setDocHits([]);
+      return;
+    }
+    let live = true;
+    import("./docs/data.ts")
+      .then((m) => m.loadSearch(locale))
+      .then(
+        (entries) => live && setDocHits(searchDocs(entries, q)),
+        () => live && setDocHits([]),
+      );
+    return () => {
+      live = false;
+    };
+  }, [palette, q, locale]);
+  const docItems: CommandPaletteItem[] = docHits.map((h) => ({
+    id: "doc:" + h.slug + (h.heading ? "#" + h.heading.id : ""),
+    title: h.heading ? `${h.title} › ${h.heading.text}` : h.title,
+    description: h.snippet,
+    icon: <BookOpen size={14} />,
+    group: t("shell.cmd.docs"),
+    onSelect: () => go(docHref(h.slug, h.heading?.id)),
+  }));
+  const shown = [
+    ...(q
+      ? commands.filter((c) =>
+          `${c.title} ${c.description ?? ""} ${c.id}`.toLowerCase().includes(q),
+        )
+      : commands),
+    ...docItems,
+  ];
   useEffect(() => {
     const fn = () => {
       setRoute(route());
@@ -530,6 +598,11 @@ export default function App() {
                     icon: MessageSquare,
                   },
                   { label: t("shell.page.api"), href: "/api", icon: Code2 },
+                  {
+                    label: t("shell.page.docs"),
+                    href: "/docs",
+                    icon: BookOpen,
+                  },
                 ],
               },
               {
@@ -692,7 +765,9 @@ export default function App() {
                   <BreadcrumbSeparator />
                   <BreadcrumbItem className="min-w-0">
                     {sub ? (
-                      <BreadcrumbLink href="#/models">
+                      <BreadcrumbLink
+                        href={page === "docs" ? "#/docs" : "#/models"}
+                      >
                         {pageTitle(page)}
                       </BreadcrumbLink>
                     ) : (
@@ -706,7 +781,9 @@ export default function App() {
                       <BreadcrumbSeparator />
                       <BreadcrumbItem className="min-w-0">
                         <BreadcrumbPage className="truncate">
-                          {modelLabel(sub)}
+                          {page === "docs"
+                            ? (docTitle ?? "…")
+                            : modelLabel(sub)}
                         </BreadcrumbPage>
                       </BreadcrumbItem>
                     </>
@@ -796,84 +873,145 @@ export default function App() {
                     />
                   </div>
                 }
-                <Suspense fallback={<PageFallback />}>
-                  {page === "playground" ? (
-                    <Playground
-                      connection={connection}
-                      engine={engine}
-                      initialModel={testModel}
+                <OfflineLine engine={engine} />
+                {engine.phase === "online" && engine.status?.load_error && (
+                  <div
+                    className="mx-auto w-full max-w-7xl shrink-0 px-4 pt-4 lg:px-6"
+                    data-testid="load-error"
+                  >
+                    <Banner
+                      tone="warning"
+                      title={t("shell.loadError.title")}
+                      description={engine.status.load_error}
+                      actions={
+                        page === "models" ? undefined : (
+                          <Button
+                            size="sm"
+                            variant="secondary"
+                            onClick={() =>
+                              go(routeHref("models", { action: "load" }))
+                            }
+                          >
+                            {t("shell.loadError.action")}
+                          </Button>
+                        )
+                      }
                     />
-                  ) : (
-                    <ScrollFade
-                      data-testid="page-scroll"
-                      className="relative min-h-0 flex-1 overflow-y-scroll p-4 pb-6 [scrollbar-gutter:stable] lg:p-6"
+                  </div>
+                )}
+                {engine.phase === "offline" &&
+                  engine.status != null &&
+                  ENGINE_PAGES.has(page) && (
+                    <p
+                      className="mx-auto w-full max-w-7xl shrink-0 px-4 pt-2 text-xs text-muted-foreground lg:px-6"
+                      data-testid="engine-needed"
+                      role="status"
                     >
-                      <div
-                        key={page}
-                        ref={startAtTop}
-                        className="yunui-fade-in mx-auto w-full max-w-7xl"
-                      >
-                        {page === "diagnostics" && (
-                          <Diagnostics
-                            connection={connection}
-                            engine={engine}
-                          />
-                        )}
-                        {page === "overview" && (
-                          <Dashboard
-                            engine={engine}
-                            connection={connection}
-                            navigate={navigate}
-                          />
-                        )}
-                        {page === "models" && (
-                          <Models
-                            engine={engine}
-                            connection={connection}
-                            perform={perform}
-                            busy={busy}
-                            selected={sub}
-                            open={(id) => navigate("models", id)}
-                            test={(id) => {
-                              setTestModel(id);
-                              navigate("playground");
-                            }}
-                          />
-                        )}
-                        {page === "requests" && (
-                          <Requests
-                            engine={engine}
-                            connection={connection}
-                            perform={perform}
-                            busy={busy}
-                          />
-                        )}
-                        {page === "settings" && (
-                          <Settings
-                            connection={connection}
-                            save={save}
-                            dark={dark}
-                            setDark={setDark}
-                            disabled={!!busy}
-                            engine={engine}
-                            perform={perform}
-                          />
-                        )}
-                        {page === "api" && (
-                          <ApiView connection={connection} engine={engine} />
-                        )}
-                        {page === "logs" && <Logs connection={connection} />}
-                        {page === "keys" && <Keys connection={connection} />}
-                        {page === "cache" && (
-                          <Cache connection={connection} engine={engine} />
-                        )}
-                        {page === "downloads" && (
-                          <Downloads connection={connection} engine={engine} />
-                        )}
-                      </div>
-                    </ScrollFade>
+                      {t("shell.stale.note", {
+                        age: elapsed(
+                          Math.max(
+                            0,
+                            (staleNow - (engine.updatedAt ?? staleNow)) / 1000,
+                          ),
+                        ),
+                      })}
+                    </p>
                   )}
-                </Suspense>
+                <PageBoundary page={page} onDocs={() => navigate("docs")}>
+                  <Suspense fallback={<PageFallback />}>
+                    {page === "playground" ? (
+                      <Playground
+                        connection={connection}
+                        engine={engine}
+                        initialModel={testModel}
+                      />
+                    ) : (
+                      <ScrollFade
+                        data-testid="page-scroll"
+                        className="relative min-h-0 flex-1 overflow-y-scroll p-4 pb-6 [scrollbar-gutter:stable] lg:p-6"
+                      >
+                        <div
+                          key={page}
+                          ref={startAtTop}
+                          data-stale={
+                            engine.phase === "offline" && DIM_PAGES.has(page)
+                              ? ""
+                              : undefined
+                          }
+                          className={`yunui-fade-in mx-auto w-full max-w-7xl ${
+                            engine.phase === "offline" &&
+                            engine.status != null &&
+                            DIM_PAGES.has(page)
+                              ? "opacity-60"
+                              : ""
+                          }`}
+                        >
+                          {page === "diagnostics" && (
+                            <Diagnostics
+                              connection={connection}
+                              engine={engine}
+                            />
+                          )}
+                          {page === "overview" && (
+                            <Dashboard
+                              engine={engine}
+                              connection={connection}
+                              navigate={navigate}
+                            />
+                          )}
+                          {page === "models" && (
+                            <Models
+                              engine={engine}
+                              connection={connection}
+                              perform={perform}
+                              busy={busy}
+                              selected={sub}
+                              open={(id) => navigate("models", id)}
+                              test={(id) => {
+                                setTestModel(id);
+                                navigate("playground");
+                              }}
+                            />
+                          )}
+                          {page === "requests" && (
+                            <Requests
+                              engine={engine}
+                              connection={connection}
+                              perform={perform}
+                              busy={busy}
+                            />
+                          )}
+                          {page === "settings" && (
+                            <Settings
+                              connection={connection}
+                              save={save}
+                              dark={dark}
+                              setDark={setDark}
+                              disabled={!!busy}
+                              engine={engine}
+                              perform={perform}
+                            />
+                          )}
+                          {page === "api" && (
+                            <ApiView connection={connection} engine={engine} />
+                          )}
+                          {page === "logs" && <Logs connection={connection} />}
+                          {page === "keys" && <Keys connection={connection} />}
+                          {page === "docs" && <Docs sub={sub} />}
+                          {page === "cache" && (
+                            <Cache connection={connection} engine={engine} />
+                          )}
+                          {page === "downloads" && (
+                            <Downloads
+                              connection={connection}
+                              engine={engine}
+                            />
+                          )}
+                        </div>
+                      </ScrollFade>
+                    )}
+                  </Suspense>
+                </PageBoundary>
               </div>
             </main>
             <footer className="safe-bottom shrink-0" data-testid="status-band">

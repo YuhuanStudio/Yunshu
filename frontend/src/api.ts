@@ -108,6 +108,8 @@ export interface EngineStatus {
     phase: "idle" | "queued" | "prefill" | "decode";
     tps: number | null;
   };
+  /** True when the answer came through the console process (it keeps history and has /yunshu/metrics/history). */
+  console_process?: boolean;
   [key: string]: unknown;
 }
 
@@ -128,6 +130,8 @@ export interface RequestOptions {
   form?: FormData;
   /** Query parameters, kept apart from the path so the path stays validated. */
   search?: Readonly<Record<string, string>>;
+  /** Receives the response headers of a successful call (e.g. to learn the answer came from the console process). */
+  onHeaders?: (headers: Headers) => void;
 }
 
 export class ApiError extends Error {
@@ -282,6 +286,7 @@ export async function requestJson<T>(
         detail,
       );
     }
+    options.onHeaders?.(response.headers);
     return payload as T;
   } catch (error) {
     if (error instanceof ApiError) throw error;
@@ -600,9 +605,17 @@ export async function fetchStatus(
   connection: Connection,
   options: Pick<RequestOptions, "signal" | "timeoutMs"> = {},
 ): Promise<EngineStatus> {
-  return parseEngineStatus(
-    await requestJson<unknown>(connection, "/yunshu/status", options),
+  let viaConsole = false;
+  const status = parseEngineStatus(
+    await requestJson<unknown>(connection, "/yunshu/status", {
+      ...options,
+      onHeaders: (h) => {
+        viaConsole = h.get("x-yunshu-console") === "1";
+      },
+    }),
   );
+  // The console process stamps its answers: only then are its history endpoints there to ask.
+  return viaConsole ? { ...status, console_process: true } : status;
 }
 
 export async function getModel(

@@ -145,6 +145,11 @@ def test_documented_endpoints_exist(path, routes):
             "/api/v1/gw/monitoring/prometheus": "Was",
         },
         "PROMPT_CACHING_APIS.md": {"/v1/cachedContents": "no longer offers"},
+        # Answered by the console process (yunshu console), not by the engine's own app.
+        "CONSOLE.md": {
+            "/v1/yunshu/console": "console process",
+            "/v1/yunshu/metrics/history": "console process",
+        },
     }.get(path.name, {})
     mentions = endpoint_mentions(text)
     for endpoint, explanation in exceptions.items():

@@ -82,9 +82,12 @@ const overview: Shape<typeof zh> = {
   "quick.diag.caption": "检查服务与环境",
   "perf.title": "性能观测",
   "perf.range": "观测时间范围",
-  "perf.range5m": "5 分钟",
   "perf.range15m": "15 分钟",
   "perf.range1h": "1 小时",
+  "perf.range6h": "6 小时",
+  "perf.range24h": "24 小时",
+  "perf.range7d": "7 天",
+  "perf.range30d": "30 天",
   "perf.export": "导出观测",
   "perf.noteEngine": "含引擎端历史（自 {t}） · {n} 条 · 中断期间不补数据",
   "perf.noteLocal":
@@ -246,7 +249,8 @@ const overview: Shape<typeof zh> = {
   "host.age": "采样于 {n} 秒前",
   "host.stale": "数据已 {n} 秒没有更新",
   "host.noSample": "暂无采样",
-  "host.sourceTip": "引擎每秒在本机采样（IOReport 与 HID 传感器，不需要 root），不是整机电表读数。",
+  "host.sourceTip":
+    "引擎每秒在本机采样（IOReport 与 HID 传感器，不需要 root），不是整机电表读数。",
   "host.unknownTip": "引擎没有上报这个值，展开“详细信息”可看原因。",
   "host.unavailable": "这台机器当前没有可用的遥测。",
   "host.reasonPrefix": "原因：",
@@ -279,7 +283,8 @@ const overview: Shape<typeof zh> = {
   "host.sourceBatteryPct": "电池 {pct}%",
   "host.interval": "采样间隔",
   "host.sampledAt": "最近采样",
-  "host.honesty": "功耗是区间能量除以时间；合计是各通道相加，不是插座功率。GPU 活跃比例是时间比例，不是 shader 占用率。热限制与压力是操作系统的上报，不是温度阈值。",
+  "host.honesty":
+    "功耗是区间能量除以时间；合计是各通道相加，不是插座功率。GPU 活跃比例是时间比例，不是 shader 占用率。热限制与压力是操作系统的上报，不是温度阈值。",
   "prefill.cached": "缓存命中 {n} tokens",
   "prefill.computed": "已计算 {n} tokens",
   "prefill.value": "缓存 {cached} + 已计算 {done} / 共 {prompt} tokens",

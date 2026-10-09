@@ -1,5 +1,7 @@
 # Verifying a change: `yv`
 
+> The console's Docs section carries this guide in English, 繁體中文 and 简体中文 ([`frontend/docs/developers/verification.mdx`](../../frontend/docs/developers/verification.mdx)); this file is its GitHub-facing counterpart.
+
 `scripts/dev/yv` runs the standard verification of a candidate change end to end and returns one
 verdict. Use it instead of writing a measurement script: it builds pinned trees for both arms,
 submits every GPU job to gpuq itself with sane memory / timeout / `--quiet` settings, stops at
@@ -12,6 +14,7 @@ scripts/dev/yv status <run>      # state of a run (directory or name under .../v
 scripts/dev/yv wait <run>        # block until the verdict; exit code = the verdict's
 scripts/dev/yv suites            # list suites
 scripts/dev/yv gate              # release gate with per-stage persistence
+scripts/dev/yv gate --ref COMMIT_SHA --label-prefix worker --root /Volumes/P5Plus/yunshu-build/gate-worker --stages install,serve-27b,families
 scripts/dev/yv ab --base <base-sha> --cand <candidate-sha> --suite preflight --label docs-check  # CPU only
 ```
 
@@ -83,7 +86,7 @@ changes.
 ## `yv gate`
 
 Runs `scripts/release/gate.sh` one stage per gpuq job (`install`, `serve-27b`, `families`,
-`soak-mmlu`, `soak-realistic`, `agent-sessions`; port 18993) plus the `long` stage (`yv ab --suite long`, cand = HEAD, base = last `v*` tag; verdict judged fail-closed) and records each in `runs/gate-<commit>/`. A stage
+`soak-mmlu`, `soak-realistic`, `agent-sessions`; port 18993) plus the `long` stage (`yv ab --suite long`, cand = HEAD, base = last `v*` tag; verdict judged fail-closed) and records each in `runs/gate-<commit>/`. `--ref COMMIT_SHA` builds a clean pinned tree; `--label-prefix worker` attributes every GPU job to that worker. `--root PATH` isolates installed tools and caches from other workers. Marked `.yv-own-venv` trees use their own interpreter, and installed wheel RECORD fingerprints invalidate old evidence when an environment changes. `YV_MAX_PENDING` limits a runner to 1–6 queued cells (default 6); use 2 when running several verdicts together. The `serve-27b` timing stage requests quiet admission. A stage
 passes when its check rows have no FAIL or CONTENDED, at least one PASS, and the job exited 0.
 A rerun on the same commit skips passed stages (`--fresh` reruns all); `install` reruns if
 `$GATE_ROOT` holds another commit's install.

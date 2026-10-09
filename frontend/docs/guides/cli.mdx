@@ -1,0 +1,281 @@
+---
+title: CLI reference
+description: Every yunshu command, subcommand and option, with the global flags, JSON mode and exit codes.
+---
+
+The `yunshu` command starts and manages the server, and also works as a client for a running server. Run `yunshu --help` or `yunshu <command> --help` for the live help text; this page lists what each command does and the options it accepts.
+
+## Global options
+
+Global options go before the command name.
+
+| Option | Meaning |
+|---|---|
+| `--url`, `-u` | Server URL used by commands that talk to a server. Default `http://localhost:8000`. Also read from the environment variable `YUNSHU_GATEWAY_URL`. |
+| `--json` | Machine-readable output. A finite command prints one JSON result on stdout and sends progress and tables to stderr. Failures print `{"error": "..."}` and exit non-zero. |
+| `--version`, `-V` | Print the version and exit. |
+
+```bash
+yunshu --json model list
+yunshu --url http://localhost:8001 --json complete "Hello"
+```
+
+In `--json` mode, usage errors (an unknown option, a missing argument) are also reported as a JSON error object on stdout. Exit codes are not uniform: 2 is used for input and connectivity errors, 1 for failed operations. `yunshu doctor` exits 1 when a check fails.
+
+Commands that call a server send `Authorization: Bearer <token>` when `YUNSHU_AUTH_TOKEN` is set in the CLI's own environment or config file.
+
+## Command overview
+
+| Group | Commands |
+|---|---|
+| Get started | `setup`, `doctor`, `pull`, `serve`, `service`, `chat`, `completion` |
+| Server and models | `model` (alias `models`), `config`, `status`, `top`, `launch`, `cache` |
+| Evaluate and diagnose | `statusline`, `eval`, `bench`, `diagnose` |
+| Inference (calls a running server) | `complete`, `embed`, `tokenize`, `detokenize`, `rerank`, `classify`, `score`, `transcribe`, `speak`, `ocr`, `image`, `image-edit`, `image-variations`, `voices`, `cancel` |
+
+## Get started
+
+### `yunshu setup`
+
+Choose a complete local model (from the models directory and the Hugging Face cache) or enter a Hugging Face MLX repository to download, then print the `yunshu serve` command to run. It does not start a server. It needs an interactive terminal; in `--json` mode or without a terminal it exits with an error listing the models it found and the next steps.
+
+### `yunshu doctor`
+
+Checks that this Mac can run Yunshu and prints a fix for each problem. See [Install](/docs/getting-started/install) for what it covers.
+
+| Option | Meaning |
+|---|---|
+| `--model`, `-m` | Also check this model (path or repo id). Default: the `YUNSHU_MODEL` setting. |
+| `--host` | Host you will serve on (for the port check). Default `127.0.0.1`. |
+| `--port`, `-p` | Port you will serve on. Default `8000`. |
+| `--no-metal` | Skip importing MLX and the GPU probe. |
+
+Exit status is 1 when any check fails. `--json` returns `{version, ok, checks}`.
+
+### `yunshu pull REPO_ID`
+
+Download a Hugging Face model into the models directory. Also available as `yunshu model pull`.
+
+| Option | Meaning |
+|---|---|
+| `--dir`, `-d` | Download under this directory. |
+| `--revision`, `-r` | Branch, tag or commit. |
+| `--force` | Download even if the model is already on disk (fetches missing or changed files only). |
+
+See [Models](/docs/getting-started/models).
+
+### `yunshu serve [MODEL]`
+
+Start the inference server. The model may be given as the positional argument or with `--model`; giving two different values is an error. With neither a model nor a models directory configured, an interactive terminal prompts for a model; otherwise the command fails with next steps. A reference that matches a model in the models directory or the Hugging Face cache serves that local copy instead of downloading.
+
+| Option | Meaning |
+|---|---|
+| `--model`, `-m` | Model path or Hugging Face id (single-model mode). |
+| `--models-dir`, `-d` | Directory to scan for models (multi-model mode). |
+| `--host`, `-h` | Bind host. Default `127.0.0.1`. A non-local host without a token prints a warning. |
+| `--port`, `-p` | Bind port. Default `8000`. |
+| `--uds` | Serve on this Unix domain socket instead of TCP; `--host` and `--port` are ignored. |
+| `--workers`, `-w` | Number of worker processes. Default `1`. |
+| `--max-memory` | Maximum GPU memory for models, for example `32GB`, or `disabled`. |
+| `--completion-batch` | Completion batch size (setting `YUNSHU_COMPLETION_BATCH_SIZE`). |
+| `--max-concurrent` | Maximum concurrent requests (setting `YUNSHU_MAX_CONCURRENT`). |
+| `--auth-token` | Bearer token required on requests (setting `YUNSHU_AUTH_TOKEN`). |
+| `--mcp-config` | Path to an MCP configuration file. |
+| `--hf-endpoint` | Custom Hugging Face Hub endpoint. |
+| `--http-proxy`, `--https-proxy`, `--no-proxy` | Proxy settings for downloads. |
+| `--log-level` | `trace`, `debug`, `info`, `warning` or `error`. Default `info`. |
+| `--startup-timeout` | Maximum seconds to wait for model loading. |
+| `--slow-request-threshold` | Log a warning for requests slower than this many seconds. |
+| `--drain-timeout` | Seconds to let in-flight requests finish on shutdown. |
+| `--keep-alive-timeout` | Seconds to keep idle connections open (0 disables). |
+| `--max-request-size` | Maximum request body size in bytes. |
+| `--server-header` | Send `Server: Yunshu` in responses. |
+| `--reload` | Auto-reload for development. |
+| `--no-console` | Do not start the console process next to the engine. |
+| `--console-port` | Port of the console process. Default `8100` (`YUNSHU_CONSOLE_PORT`). |
+| `--config`, `-c` | TOML file of `YUNSHU_*` settings. |
+| `--set KEY=VALUE` | Override any setting; the `YUNSHU_` prefix is optional. Repeatable. An unknown name is an error with the closest matches. |
+
+Flags and `--set` have the highest precedence, above the environment and config file. Before loading, `serve` checks that the address can be bound and runs the same model check as `doctor`; a model that cannot load still lets the server start, and `GET /health/ready` reports why. With `--json`, a `starting` event is printed first and the process keeps running; readiness comes from `GET /health/ready`, not from that event. See [Configuration](/docs/guides/configuration) for every setting.
+
+### `yunshu console`
+
+Run the console process on its own: the web console and docs, a reverse proxy to the engine API, and the recorded history. It never loads MLX. `yunshu serve` starts one next to the engine; run this to watch an engine on another machine or to keep one running by hand.
+
+| Option | Meaning |
+|---|---|
+| `--engine`, `-e` | Engine URL to watch and proxy to. Default `http://127.0.0.1:8000` (`YUNSHU_CONSOLE_ENGINE`). |
+| `--host`, `-h` | Bind host. Default `127.0.0.1`. |
+| `--port`, `-p` | Bind port. Default `8100`. |
+| `--engine-token` | Bearer token for reading the engine (`YUNSHU_CONSOLE_ENGINE_TOKEN`, else `YUNSHU_AUTH_TOKEN`). |
+| `--config`, `-c` | TOML file of `YUNSHU_*` settings. |
+| `--no-history` | Do not record the metrics history or request log. |
+
+### `yunshu service`
+
+Run Yunshu at login with launchd, as two jobs: the engine and the console process (so the console keeps recording while the engine restarts). Subcommands: `install`, `uninstall`, `start`, `stop`, `restart`, `status`, `logs`, `rotate-logs`. Full options are on the [Service](/docs/getting-started/service) page.
+
+### `yunshu chat`
+
+Interactive terminal chat with a running server. Not available with `--json`.
+
+| Option | Meaning |
+|---|---|
+| `--model`, `-m` | Model name. Default: the first model the server lists, preferring known chat families. |
+| `--url`, `-u` | Server URL. Default `http://localhost:8000`. |
+| `--system`, `-s` | System prompt. |
+| `--temperature`, `-t` | Sampling temperature. Default `0.7`. |
+| `--max-tokens` | Maximum output tokens. Default `2048`. |
+| `--thinking` | Enable thinking mode. |
+| `--no-stream` | Disable streaming. |
+
+In the session: `/clear`, `/thinking`, `/model <name>`, `/help`, `/quit` (also `/exit`, `/q`).
+
+### `yunshu completion SHELL`
+
+Print a shell completion script for `zsh`, `bash` or `fish`. It does not edit your shell files.
+
+```bash
+mkdir -p ~/.zfunc
+yunshu completion zsh > ~/.zfunc/_yunshu     # add ~/.zfunc to fpath before compinit
+yunshu completion bash > ~/.yunshu-completion.bash
+yunshu completion fish > ~/.config/fish/completions/yunshu.fish
+```
+
+## Server and models
+
+### `yunshu model` (alias `models`)
+
+| Subcommand | Purpose |
+|---|---|
+| `list` | List models on disk, or on a server with `--url`. Options: `--dir`/`-d`, `--hf-cache`/`--no-hf-cache`, `--url`/`-u`. |
+| `pull REPO_ID` | Same as `yunshu pull`. |
+| `info MODEL` (alias `show`) | Show type, size, file count and key `config.json` fields for a model name or path. |
+| `rm MODEL` | Remove a downloaded model by exact name. `--yes`/`-y` skips confirmation (required with `--json`). |
+| `load MODEL` | Load a model on the running server (`POST /v1/models/load`). |
+| `unload MODEL` | Unload a model from the running server (`POST /v1/models/unload/{model_id}`). |
+| `benchmark MODEL` | Run a local generation benchmark in-process (loads the model with mlx-lm, so it is for text models; it uses the GPU). Options: `--prompt-tokens` (128), `--max-tokens` (256), `--runs`/`-n` (3), `--warmup` (1). |
+
+`load` and `unload` accept `--url`/`-u`.
+
+### `yunshu config`
+
+Show every stable setting with its effective value and source (`cli`, `env`, `file` or `default`), plus warnings and web search provider health.
+
+| Option | Meaning |
+|---|---|
+| `--all`, `-a` | Include experimental and internal settings. |
+| `--json` | Print JSON. |
+| `--config`, `-c` | Also read this TOML file. |
+
+Subcommands:
+
+| Subcommand | Purpose |
+|---|---|
+| `config set KEY VALUE` | Save a setting in `~/.yunshu/config.toml` (or the file given with `--config`/`-c`). The key may omit `YUNSHU_`; values are validated. Path settings are stored as absolute paths. |
+| `config unset KEY` | Remove a setting from the file. |
+| `config path` | Print the user config file location. |
+
+### `yunshu status`
+
+Show server health, GPU and memory use, request counters and the models the server lists. Option: `--url`/`-u`. It exits with an error if the server cannot be reached.
+
+### `yunshu top`
+
+Like `status`, refreshed on a loop. Options: `--url`/`-u`, `--once` (print one snapshot and exit), `--interval` (seconds, default `2.0`, minimum `0.5`). With `--json` it returns one snapshot.
+
+### `yunshu launch [TOOL]`
+
+Configure an external coding tool for your server and start it. `TOOL` is `claude`, `codex`, `opencode`, `pi`, or `list` (the default) to show the tools and whether they are installed.
+
+| Option | Meaning |
+|---|---|
+| `--model`, `-m` | Model to use. Default: the model the server serves. |
+| `--url`, `-u` | Server URL. |
+| `--api-key`, `-k` | API key to hand to the tool. |
+| `--effort` | Claude Code reasoning effort (`low`, `medium`, `high`, ...). |
+| `--statusline` / `--no-statusline` | Claude Code: show live engine state in its status line (default on) unless you already have your own. |
+| `--dry-run` | Print the configuration instead of writing it and launching the tool. |
+
+### `yunshu cache`
+
+Inspect and clean the SSD prefix caches (only the ones that are enabled).
+
+| Subcommand | Purpose |
+|---|---|
+| `status` | Size, cap and problems of each cache. Changes nothing. |
+| `gc` | Find truncated, corrupt and old-format entries and orphaned temp files, stale namespaces, and entries over the size cap. Reports only, unless `--apply` is given. |
+
+## Evaluate and diagnose
+
+### `yunshu diagnose`
+
+| Subcommand | Purpose |
+|---|---|
+| `gpu` | GPU and Metal capability details (uses MLX locally). |
+| `server` | Check a running server's health and stats. Option: `--url`/`-u`. |
+| `bundle` | Write a local diagnostics file: version, platform, package versions, settings with secrets redacted, the doctor checks, SSD cache state and recent error lines from the service log. It never includes prompts, completions or model weights and is never uploaded. Options: `--output`/`-o` (default `./yunshu-diagnostics-<time>.json`), `--host`, `--port`/`-p`. |
+
+### `yunshu eval BENCHMARK`
+
+Run an accuracy benchmark against a running server. `BENCHMARK` is one of `mmlu`, `gsm8k`, `hellaswag`, `truthfulqa`, `humaneval`, `arc`, `piqa`, or `all` to run each, or `list` (the default) to show them.
+
+| Option | Meaning |
+|---|---|
+| `--url`, `-u` | Server URL. |
+| `--model`, `-m` | Model to evaluate. |
+| `--sample`, `-n` | Sample size (0 means the full dataset). |
+| `--quick`, `-q` | Quick run with 50 samples. |
+
+### `yunshu bench`
+
+| Subcommand | Purpose |
+|---|---|
+| `roofline` | Matrix-multiply roofline on the local GPU. Options: `--min` (64), `--max` (8192), `--dtype` (`float16`), `--steps` (8). |
+| `memory` | Show the Apple Silicon memory layout and MLX allocation. |
+| `inference` | Local in-process generation benchmark. Options: `--model`/`-m` (path), `--prompt-len`, `--max-tokens`, `--requests`/`-n`, `--batch`/`-b`, `--warmup`. |
+| `latency` | Latency against a running server. Options: `--url`/`-u`, `--model`/`-m`, `--prompt` (32 tokens), `--max-tokens` (64), `--requests`/`-n` (10). |
+| `throughput` | Throughput against a running server. Options: `--url`/`-u`, `--model`/`-m`, `--concurrency`/`-c` (4), `--requests`/`-n` (20), `--max-tokens` (128). |
+
+`roofline`, `memory` and `inference` run MLX locally and use the GPU; do not run them while a server is busy with real work.
+
+### `yunshu statusline`
+
+Print one line of engine status for a coding-agent status line: prefill progress, decode speed and prefix-cache hit of the request in flight, read from `GET /v1/yunshu/status`. When piped it reads Claude Code's session JSON on stdin. An unreachable server prints a short marker rather than failing. Options: `--url`/`-u`, `--api-key`/`-k` (or `YUNSHU_API_KEY`).
+
+## Inference commands
+
+These send one request to a running server (`--url`/`-u`, default `http://localhost:8000`). They are non-interactive and work with `--json`. The `--model`/`-m` option defaults to `local`, which is accepted in single-model mode.
+
+| Command | Request | Notes |
+|---|---|---|
+| `complete PROMPT` | `POST /v1/chat/completions` | Options: `--max-tokens` (256), `--temperature`/`-t` (0.7), `--system`/`-s`. |
+| `embed TEXT` | `POST /v1/embeddings` | Prints the dimension and the first values; `--json` returns the full vector. |
+| `tokenize TEXT` | `POST /v1/tokenize` | Prints the token count; `--ids` returns the token ids. |
+| `detokenize TOKEN...` | `POST /v1/detokenize` | Token ids to text. |
+| `rerank QUERY DOC...` | `POST /v1/rerank` | `--top-n` limits results (0 returns all). |
+| `classify TEXT LABEL...` | `POST /v1/classify` | Zero-shot classification over the given labels. |
+| `score TEXT1 TEXT2` | `POST /v1/score` | `--type` is `cosine` (default), `dot` or `euclidean`. |
+| `transcribe FILE` | `POST /v1/audio/transcriptions` | `--language`/`-l`; `--translate` uses `POST /v1/audio/translations`. |
+| `speak TEXT` | `POST /v1/audio/speech` | Required `--out`/`-o` (.wav or .mp3); `--voice` (default `ethan`). |
+| `voices` | `GET /v1/audio/voices` | Lists voices for `speak`. |
+| `ocr FILE` | `POST /v1/ocr` | Extracts text from an image file. |
+| `image PROMPT` | `POST /v1/images/generations` | Required `--out`/`-o`; `--model`/`-m` (default `Z-Image-Turbo-MLX-4bit`), `--size` (`1024x1024`), `--steps` (4). |
+| `image-edit FILE PROMPT` | `POST /v1/images/edits` | Required `--out`/`-o`; `--model`/`-m`, `--steps`, `--strength` (0.8). |
+| `image-variations FILE` | `POST /v1/images/variations` | Required `--out`/`-o`; `--model`/`-m`, `--steps`. |
+| `cancel [REQUEST_ID]` | `POST /v1/cancel` | Cancel one generation, or all with `--all`. |
+
+```bash
+yunshu complete "Explain unified memory in one sentence." --max-tokens 80
+yunshu tokenize "hello world" --ids
+yunshu rerank "apple pie recipe" "How to bake a pie" "Stock prices today"
+yunshu speak "Hello from Yunshu" --out hello.wav
+```
+
+Whether a request succeeds depends on the loaded model and installed extras; see [Model support](/docs/guides/model-support).
+
+## Related
+
+- [Quickstart](/docs/getting-started/quickstart)
+- [Configuration](/docs/guides/configuration)
+- [Troubleshooting](/docs/guides/troubleshooting)

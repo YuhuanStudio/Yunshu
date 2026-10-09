@@ -85,9 +85,12 @@ const overview: Shape<typeof zh> = {
   "quick.diag.caption": "Check the server and environment",
   "perf.title": "Performance",
   "perf.range": "Time range",
-  "perf.range5m": "5 min",
   "perf.range15m": "15 min",
   "perf.range1h": "1 hour",
+  "perf.range6h": "6 hours",
+  "perf.range24h": "24 hours",
+  "perf.range7d": "7 days",
+  "perf.range30d": "30 days",
   "perf.export": "Export",
   "perf.noteEngine":
     "Includes engine history (since {t}) · {n, plural, one {# sample} other {# samples}} · gaps are not filled",
@@ -261,8 +264,10 @@ const overview: Shape<typeof zh> = {
   "host.age": "Sampled {n}s ago",
   "host.stale": "No update for {n}s",
   "host.noSample": "No sample yet",
-  "host.sourceTip": "The engine samples once a second on this machine (IOReport and HID sensors, no root). It is not a wall-socket reading.",
-  "host.unknownTip": "The engine did not report this value; open Details for the reason.",
+  "host.sourceTip":
+    "The engine samples once a second on this machine (IOReport and HID sensors, no root). It is not a wall-socket reading.",
+  "host.unknownTip":
+    "The engine did not report this value; open Details for the reason.",
   "host.unavailable": "Telemetry is not available on this machine right now.",
   "host.reasonPrefix": "Reason: ",
   "host.gpuPower": "GPU power",
@@ -294,7 +299,8 @@ const overview: Shape<typeof zh> = {
   "host.sourceBatteryPct": "Battery {pct}%",
   "host.interval": "Sample interval",
   "host.sampledAt": "Last sample",
-  "host.honesty": "Power is interval energy over time; the total is the sum of the channels, not wall power. GPU active share is a time fraction, not shader occupancy. Thermal limit and pressure are the OS's report, not a temperature threshold.",
+  "host.honesty":
+    "Power is interval energy over time; the total is the sum of the channels, not wall power. GPU active share is a time fraction, not shader occupancy. Thermal limit and pressure are the OS's report, not a temperature threshold.",
   "prefill.cached": "Cache hit {n} tokens",
   "prefill.computed": "Computed {n} tokens",
   "prefill.value": "{cached} cached + {done} computed of {prompt} tokens",

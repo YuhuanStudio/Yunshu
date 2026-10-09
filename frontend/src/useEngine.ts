@@ -13,9 +13,15 @@ import {
   type EngineStatus,
 } from "./api";
 import type { ObservedRequest } from "./analytics";
-import { fetchServerHistory } from "./history-api";
+import {
+  fetchConsoleState,
+  fetchMetricsHistory,
+  fetchServerHistory,
+} from "./history-api";
+import { retryDelayMs } from "./backoff";
 import {
   gapPoint,
+  mergeBackfill,
   mergeSeries,
   pointFromStatus,
   type SeriesPoint,
@@ -44,6 +50,12 @@ export interface UseEngineResult {
   historyFrom: number | null;
   /** One or two polls failed in a row: the page shows the last good numbers and says so. */
   retrying: boolean;
+  /** Epoch ms of the first failed poll of the current outage, or null while the engine answers. */
+  offlineSince: number | null;
+  /** Epoch ms of the next scheduled attempt while the engine is unreachable (null otherwise). */
+  nextRetryAt: number | null;
+  /** Consecutive failed polls in the current outage. */
+  failures: number;
   /** The phase to show: forward moves at once, steps back (a brief prefill, a gap) must hold. */
   livePhase: ActivityPhase;
   /** Live decode tok/s smoothed over about a second; null when nothing is decoding. */
@@ -84,6 +96,8 @@ interface EngineViewState {
   historyFrom: number | null;
   /** A poll failed but fewer than OFFLINE_AFTER_FAILURES in a row: the numbers are the last good ones. */
   retrying: boolean;
+  offlineSince: number | null;
+  failures: number;
 }
 
 /** The series with an outage marker at its end, unless it already ends in one. */
@@ -105,6 +119,8 @@ function initialState(connectionKey: symbol): EngineViewState {
     finished: [],
     historyFrom: null,
     retrying: false,
+    offlineSince: null,
+    failures: 0,
   };
 }
 
@@ -133,6 +149,13 @@ export function useEngine(connection: Connection): UseEngineResult {
   const [polling, setPolling] = useState(true);
   const generationRef = useRef(0);
   const failuresRef = useRef(0);
+  /** Start of the current outage (first failed poll); null while the engine answers. */
+  const failStartRef = useRef<number | null>(null);
+  /** The newest live sample the console holds, for the reconnect backfill. */
+  const lastLiveRef = useRef(0);
+  /** The engine's answers came through the console process (it can say when the engine went away). */
+  const consoleSeenRef = useRef(false);
+  const [nextRetryAt, setNextRetryAt] = useState<number | null>(null);
   /** The connection whose engine-side history was already requested. */
   const historyAskedRef = useRef<symbol | null>(null);
   const activeControllerRef = useRef<AbortController | null>(null);
@@ -162,6 +185,9 @@ export function useEngine(connection: Connection): UseEngineResult {
     inFlightRef.current = null;
     // Failures counted against the previous service say nothing about this one.
     failuresRef.current = 0;
+    failStartRef.current = null;
+    lastLiveRef.current = 0;
+    setNextRetryAt(null);
     // Smoothing carries nothing over from another service.
     stableRef.current = initialStablePhase("idle");
     emaRef.current = { v: null, at: 0 };
@@ -201,7 +227,14 @@ export function useEngine(connection: Connection): UseEngineResult {
           )
             return;
           const at = Date.now();
+          if (status.console_process) consoleSeenRef.current = true;
+          // The engine answers again after an outage: what happened meanwhile comes from its history.
+          const recoveredFrom = failStartRef.current;
+          const lastSeen = lastLiveRef.current;
           failuresRef.current = 0;
+          failStartRef.current = null;
+          lastLiveRef.current = at;
+          setNextRetryAt(null);
           // Steady phase and smoothed speed, from the freshest sample (see phase-stability.ts).
           const raw = activity(status);
           if (raw.phase !== "idle") lastBusyRef.current = at;
@@ -283,19 +316,16 @@ export function useEngine(connection: Connection): UseEngineResult {
                 : known,
               historyFrom: restarted ? null : previous.historyFrom,
               retrying: false,
+              offlineSince: null,
+              failures: 0,
             };
           });
-          // Backfill the charts from the engine's own history, once per
-          // connection (and again after an engine restart). A server without
-          // the route just means the charts start from live polls.
-          if (historyAskedRef.current !== connectionKey) {
-            historyAskedRef.current = connectionKey;
-            void fetchServerHistory(apiConnection, {
+          if (recoveredFrom != null && lastSeen > 0 && status.console_process) {
+            // Reconnect: fill the stretch the console missed from the persistent history.
+            void fetchMetricsHistory(apiConnection, {
               signal: controller.signal,
-              // A newer engine sends exact bytes in /status and binary GB everywhere.
-              binary:
-                (status.memory as { total_bytes?: unknown }).total_bytes !=
-                null,
+              since: Math.max(0, lastSeen - 5_000),
+              step: 2.5,
             }).then(
               (loaded) => {
                 if (!loaded || generation !== generationRef.current) return;
@@ -304,11 +334,54 @@ export function useEngine(connection: Connection): UseEngineResult {
                     ? current
                     : {
                         ...current,
-                        series: mergeSeries(
+                        series: mergeBackfill(
+                          current.series,
                           loaded.points,
+                          loaded.gaps,
+                        ).slice(-MAX_SERIES_POINTS),
+                      },
+                );
+              },
+              () => undefined,
+            );
+          }
+          // Backfill the charts from the engine's own history, once per
+          // connection (and again after an engine restart). A server without
+          // the route just means the charts start from live polls.
+          if (historyAskedRef.current !== connectionKey) {
+            historyAskedRef.current = connectionKey;
+            const asked = at;
+            void (async () => {
+              // The console process's recorded history first (it was recording while nobody was
+              // looking); the in-memory ring of an engine without one is the fallback.
+              const recorded = status.console_process
+                ? await fetchMetricsHistory(apiConnection, {
+                    signal: controller.signal,
+                    since: asked - 3_600_000,
+                    step: 2.5,
+                  })
+                : null;
+              if (recorded) return recorded;
+              return fetchServerHistory(apiConnection, {
+                signal: controller.signal,
+                // A newer engine sends exact bytes in /status and binary GB everywhere.
+                binary:
+                  (status.memory as { total_bytes?: unknown }).total_bytes !=
+                  null,
+              });
+            })().then(
+              (loaded) => {
+                if (!loaded || generation !== generationRef.current) return;
+                setState((current) =>
+                  current.connectionKey !== connectionKey
+                    ? current
+                    : {
+                        ...current,
+                        series: mergeBackfill(
                           current.series.filter((p) => !p.backfilled),
-                          Date.now(),
-                        ),
+                          loaded.points,
+                          loaded.gaps,
+                        ).slice(-MAX_SERIES_POINTS),
                         historyFrom: loaded.points[0].at,
                       },
                 );
@@ -327,6 +400,28 @@ export function useEngine(connection: Connection): UseEngineResult {
           const refused = apiError?.status === 401 || apiError?.status === 403;
           if (refused) setPolling(false);
           failuresRef.current += 1;
+          if (failStartRef.current == null) {
+            failStartRef.current = Date.now();
+            // The console process has watched the engine all along: it knows when it went away.
+            void (
+              consoleSeenRef.current
+                ? fetchConsoleState(apiConnection)
+                : Promise.resolve(null)
+            ).then((c) => {
+              if (c?.up === false && c.since != null && c.since < Date.now()) {
+                failStartRef.current = Math.min(
+                  failStartRef.current ?? c.since,
+                  c.since,
+                );
+                setState((current) =>
+                  current.connectionKey === connectionKey &&
+                  current.phase === "offline"
+                    ? { ...current, offlineSince: failStartRef.current }
+                    : current,
+                );
+              }
+            });
+          }
           // A restart or one slow poll must not flash the offline banner.
           if (!refused && failuresRef.current < OFFLINE_AFTER_FAILURES) {
             // Keep the last numbers, but say so: they are no longer live.
@@ -346,6 +441,8 @@ export function useEngine(connection: Connection): UseEngineResult {
               ...previous,
               series: withGap(previous.series, Date.now()),
               connectionKey,
+              offlineSince: failStartRef.current,
+              failures: failuresRef.current,
               phase:
                 apiError?.status === 401 || apiError?.status === 403
                   ? "unauthorized"
@@ -383,12 +480,17 @@ export function useEngine(connection: Connection): UseEngineResult {
       clearTimer();
       if (!disposed && document.visibilityState === "visible") {
         const busy = Date.now() - lastBusyRef.current < BUSY_LINGER_MS;
-        timer = setTimeout(
-          () => {
-            void poll();
-          },
-          busy ? BUSY_POLL_INTERVAL_MS : POLL_INTERVAL_MS,
-        );
+        // While the engine is unreachable: exponential backoff with jitter, capped near 10 s.
+        const down = failuresRef.current > 0;
+        const delay = down
+          ? retryDelayMs(failuresRef.current)
+          : busy
+            ? BUSY_POLL_INTERVAL_MS
+            : POLL_INTERVAL_MS;
+        setNextRetryAt(down ? Date.now() + delay : null);
+        timer = setTimeout(() => {
+          void poll();
+        }, delay);
       }
     };
     const poll = async () => {
@@ -400,13 +502,24 @@ export function useEngine(connection: Connection): UseEngineResult {
       if (document.visibilityState === "visible") void poll();
       else clearTimer();
     };
+    // Back on the network, or back in this tab: try at once instead of waiting out the backoff.
+    const retryNow = () => {
+      if (failuresRef.current > 0 && document.visibilityState === "visible") {
+        clearTimer();
+        void poll();
+      }
+    };
 
     document.addEventListener("visibilitychange", onVisibilityChange);
+    addEventListener("online", retryNow);
+    addEventListener("focus", retryNow);
     if (document.visibilityState === "visible") void poll();
     return () => {
       disposed = true;
       clearTimer();
       document.removeEventListener("visibilitychange", onVisibilityChange);
+      removeEventListener("online", retryNow);
+      removeEventListener("focus", retryNow);
     };
   }, [polling, refresh]);
 
@@ -440,6 +553,9 @@ export function useEngine(connection: Connection): UseEngineResult {
     livePhase: live.phase,
     liveDecodeTps: live.tps,
     retrying: stateForConnection.retrying,
+    offlineSince: stateForConnection.offlineSince,
+    nextRetryAt: stateForConnection.phase === "offline" ? nextRetryAt : null,
+    failures: stateForConnection.failures,
     refresh: manualRefresh,
     polling,
     setPolling,
