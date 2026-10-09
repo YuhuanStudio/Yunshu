@@ -97,6 +97,9 @@ class RunStats:
     t_last: float = 0.0  # latest generated token
     prefill_done: int = 0  # prompt tokens computed so far (cache hits excluded)
     prefill_total: int = 0  # prompt tokens to compute (cache hits excluded)
+    # False from admission until the cache hit is known: before that ``prefill_total`` is the whole
+    # prompt, so a percentage computed from it would start wrong and then jump when the hit arrives.
+    prefill_known: bool = True
     spec_mode: str | None = None  # "mtp" / "dflash" while a drafter is in use
     spec_drafted: int = 0
     spec_accepted: int = 0
@@ -786,6 +789,9 @@ class VLMBatchRunner:
 
         job.stats.t_admit = time.perf_counter()
         job.stats.prefill_total = len(job.ids)
+        job.stats.prefill_known = (
+            False  # the upstream path learns its cache hit on the first step
+        )
 
         if job.guide is not None:
             lane = (
@@ -991,6 +997,7 @@ class VLMBatchRunner:
         hit = int(hit or 0)
         job.stats.cached_tokens = hit
         job.stats.prefill_total = len(job.ids) - hit
+        job.stats.prefill_known = True
         job.stats.used_apc = use_apc
         job.stats.used_draft = bool(job.allow_draft and driver.head is not None)
         if job.stats.used_draft:
@@ -1269,6 +1276,7 @@ class VLMBatchRunner:
             job = group.jobs.get(getattr(progress, "uid", None))
             if job is not None:
                 job.stats.cached_tokens = int(getattr(progress, "cached_tokens", 0))
+                job.stats.prefill_known = True
                 self._note_cache(job)
         finished = []
         for response in responses:
@@ -1381,6 +1389,7 @@ class VLMBatchRunner:
                         job.stats.cached_tokens = max(job.stats.cached_tokens, hit)
                     job.stats.prefill_total = max(len(job.ids) - hit, done + rest)
                     job.stats.prefill_done = min(done, job.stats.prefill_total)
+                    job.stats.prefill_known = True
                 return
             waiting = {s[0] for s in getattr(gen, "_unprocessed_sequences", [])}
             # Suspended canonical atoms live in the runner, not the generator.

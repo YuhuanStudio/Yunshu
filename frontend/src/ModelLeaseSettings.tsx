@@ -1,15 +1,17 @@
+import { t } from "./i18n/index.ts";
 import { useEffect, useState } from "react";
 import {
   Button,
-  Card,
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
 } from "@yuhuanowo/yunui";
+import { SettingRow } from "@yuhuanowo/yunui/patterns";
 import { warmupModel, type Connection } from "./api";
-import { modelLabel, type Engine } from "./ui";
+import { MemoryStick } from "lucide-react";
+import { SectionCard, modelLabel, type Engine } from "./ui";
 import type { Perform } from "./Models";
 export function ModelLeaseSettings({
   connection,
@@ -32,43 +34,59 @@ export function ModelLeaseSettings({
       setModel(eligible[0]?.id ?? "");
   }, [engine.status?.models, model]);
   return (
-    <Card className="space-y-4 p-5">
+    <SectionCard
+      icon={MemoryStick}
+      title={t("models.lease.title")}
+      description={t("models.lease.description")}
+      bodyClassName="px-4 pb-4"
+    >
+      <SettingRow
+        divider={false}
+        title={t("models.lease.model")}
+        description={t("models.lease.modelHint")}
+        control={
+          <Select value={model || undefined} onValueChange={setModel}>
+            <SelectTrigger
+              aria-label={t("models.lease.modelAria")}
+              className="w-full sm:w-64"
+            >
+              <SelectValue placeholder={t("models.lease.modelPlaceholder")} />
+            </SelectTrigger>
+            <SelectContent>
+              {eligible.map((item) => (
+                <SelectItem key={item.id} value={item.id}>
+                  {modelLabel(item.id)}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        }
+      />
+      <SettingRow
+        divider={false}
+        title={t("models.lease.idle")}
+        description={t("models.lease.idleHint")}
+        control={
+          <Select value={keepAlive} onValueChange={setKeepAlive}>
+            <SelectTrigger aria-label={t("models.lease.idle")} className="w-40">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {[
+                ["5m", t("models.lease.5m")],
+                ["15m", t("models.lease.15m")],
+                ["1h", t("models.lease.1h")],
+                ["-1", t("models.lease.forever")],
+              ].map(([value, label]) => (
+                <SelectItem key={value} value={value}>
+                  {label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        }
+      />
       <div>
-        <h2 className="text-sm font-semibold">模型保留時間</h2>
-        <p className="mt-1 text-xs leading-5 text-muted-foreground">
-          透過模型預熱介面更新閒置保留時間，並執行一次短預熱。固定保留的單模型不適用。
-        </p>
-      </div>
-      <div className="flex flex-wrap gap-3">
-        <Select value={model || undefined} onValueChange={setModel}>
-          <SelectTrigger aria-label="保留時間的模型" className="w-64">
-            <SelectValue placeholder="選擇非固定模型" />
-          </SelectTrigger>
-          <SelectContent>
-            {eligible.map((item) => (
-              <SelectItem key={item.id} value={item.id}>
-                {modelLabel(item.id)}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <Select value={keepAlive} onValueChange={setKeepAlive}>
-          <SelectTrigger aria-label="閒置保留時間" className="w-40">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {[
-              ["5m", "5 分鐘"],
-              ["15m", "15 分鐘"],
-              ["1h", "1 小時"],
-              ["-1", "持續保留"],
-            ].map(([value, label]) => (
-              <SelectItem key={value} value={value}>
-                {label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
         <Button
           disabled={!model || busy || engine.phase !== "online"}
           onClick={() =>
@@ -81,14 +99,14 @@ export function ModelLeaseSettings({
             )
           }
         >
-          套用並預熱
+          {t("models.lease.apply")}
         </Button>
       </div>
       {!eligible.length && (
         <p className="text-xs text-muted-foreground">
-          目前沒有可調整的模型。需由多模型服務註冊非固定模型。
+          {t("models.lease.none")}
         </p>
       )}
-    </Card>
+    </SectionCard>
   );
 }

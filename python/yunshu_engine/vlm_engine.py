@@ -3904,6 +3904,18 @@ class VLMEngine:
             logger.debug("APC snapshot unavailable", exc_info=True)
             return None
 
+    def apc_overview(self, max_entries: int = 200) -> dict | None:
+        """Tiers, lookup counters and capped entry metadata (cache browser); None if APC is off."""
+        apc = self._apc_backend
+        fn = getattr(apc, "cache_overview", None)
+        return fn(max_entries) if callable(fn) else None
+
+    def apc_clear(self, tier: str) -> dict | None:
+        """Drop one APC tier (``ram`` / ``warm`` / ``ssd``); None when the cache is off."""
+        apc = self._apc_backend
+        fn = getattr(apc, "clear_tier", None)
+        return fn(tier) if callable(fn) else None
+
     def busy_snapshot(self) -> dict | None:
         """GPU-busy accounting of the batch runner (None before a model is loaded)."""
         runner = self._batch_runner

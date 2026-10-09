@@ -25,7 +25,7 @@
 }
 body {
   margin: 0;
-  background: var(--bg-base);
+  background: var(--bg-window);
   color: var(--text-primary);
   font-family: var(--font-sans);
 }
@@ -34,4 +34,211 @@ body {
 }
 ::selection {
   background: var(--accent-muted);
+}
+
+/* Numbers in tables and definition lists never change width as values update. */
+td,
+th,
+dd,
+output {
+  font-variant-numeric: tabular-nums;
+}
+
+/*
+ * Type scale (YunDesign): the whole console uses eight styles, each size / weight / line-height.
+ *   12/400/16 caption     12/500/16 label     12/400/16 mono (ids, code)
+ *   13/400/20 body        13/500/20 button    14/600/20 section heading
+ *   20/600/28 page title  22/600/28 stat value
+ * Wrapper classes (text-sm, font-medium, leading-snug ...) cannot add a ninth: every element's
+ * line-height snaps to the 4px grid (round(1.45em): 12 -> 16, 13 -> 20, 14 -> 20, 20 -> 28) and the
+ * named classes below pin theirs. Unlayered on purpose, so it beats the utilities layer.
+ */
+:where([data-yunui-density="compact"]) * {
+  line-height: round(nearest, 1.45em, 4px);
+}
+[data-yunui-density="compact"] .text-caption,
+[data-yunui-density="compact"] .text-label,
+[data-yunui-density="compact"] .yunui-table .yunui-th {
+  line-height: 16px;
+}
+[data-yunui-density="compact"] .text-body,
+[data-yunui-density="compact"] .yunui-table,
+[data-yunui-density="compact"] .nav-item,
+[data-yunui-density="compact"] .nav-tab {
+  line-height: 20px;
+}
+/* Buttons follow their own size: 13 -> 20, 12 -> 16. */
+[data-yunui-density="compact"] .btn {
+  line-height: round(nearest, 1.45em, 4px);
+}
+[data-yunui-density="compact"] .heading-md,
+[data-yunui-density="compact"] .yunui-section-title,
+[data-yunui-density="compact"] .yunui-card-title {
+  line-height: 20px;
+}
+:where(.font-mono, code, kbd, samp, pre, pre *) {
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 16px;
+}
+[data-yunui-density="compact"] .nav-section,
+.text-xs.font-medium {
+  font-weight: 400;
+}
+.nav-item,
+.btn,
+.nav-tab {
+  font-size: 13px;
+  font-weight: 500;
+}
+/* Page title 20/600/28; stat value 22/600/28. Descendants keep the pinned line-height. */
+.text-2xl *,
+.text-3xl *,
+:where([data-yunui-density="compact"]) .yunui-stat-value *,
+:where([data-yunui-density="compact"]) .heading-xl * {
+  line-height: inherit;
+}
+/* ...except where a descendant sets its own size: that size's line-height wins again. */
+.text-xs {
+  line-height: 16px;
+}
+.text-sm,
+.text-base {
+  line-height: 20px;
+}
+[data-yunui-density="compact"] .heading-xl {
+  font-size: 20px;
+  line-height: 28px;
+}
+.text-3xl,
+.text-2xl,
+[data-yunui-density="compact"] .yunui-stat-value {
+  font-size: 22px;
+  line-height: 28px;
+}
+.text-base.font-semibold,
+.text-lg.font-semibold {
+  font-size: 14px;
+}
+
+/* Skip link: first in the tab order, visible only while focused. */
+.skip-link {
+  position: fixed;
+  left: 12px;
+  top: 12px;
+  z-index: 100;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: var(--bg-card);
+  color: var(--text-primary);
+  border: 1px solid var(--border-hairline);
+  font-size: 13px;
+  font-weight: 500;
+  transform: translateY(-200%);
+}
+.skip-link:focus-visible {
+  transform: none;
+}
+
+/* A visible keyboard ring that wrapper classes (pill buttons, cards) cannot remove. Text fields that
+   live inside a host which draws its own focus state (the command palette, the chat composer) and
+   list options (which highlight their row) are left out: a square ring inside a rounded card clashes. */
+:where(a, button, select, summary, [role="button"], [tabindex]):not(
+    [role="option"],
+    [role="menuitem"]
+  ):focus-visible,
+:where(input, textarea):not([role="combobox"], [data-yunui="chat-composer"] *):focus-visible {
+  outline: 2px solid var(--text-primary);
+  outline-offset: 2px;
+}
+
+/* Tray (segmented) control: a recessed track with a raised selected segment, legible in both themes. */
+:root {
+  --tray-track: var(--bg-elevated);
+  --tray-selected: var(--bg-card);
+  --tray-selected-ring: var(--border-subtle);
+}
+.dark {
+  --tray-track: color-mix(in srgb, var(--bg-base) 55%, var(--bg-elevated));
+  --tray-selected: color-mix(
+    in srgb,
+    var(--text-primary) 13%,
+    var(--bg-elevated)
+  );
+  --tray-selected-ring: var(--border-default);
+}
+
+/* The engine pill carries a model name, which is prose, not a measurement: sans, not mono. */
+.pill-sans .font-mono {
+  font-family: var(--font-sans);
+}
+
+/* Safe areas (viewport-fit=cover): nothing sits under the Dynamic Island or the home indicator. */
+.safe-top-4 {
+  padding-top: max(1rem, env(safe-area-inset-top));
+}
+.safe-top-5 {
+  padding-top: max(1.25rem, env(safe-area-inset-top));
+}
+.safe-bottom {
+  padding-bottom: env(safe-area-inset-bottom);
+}
+.safe-x {
+  padding-left: max(1rem, env(safe-area-inset-left));
+  padding-right: max(1rem, env(safe-area-inset-right));
+}
+@media (min-width: 1024px) {
+  .safe-x {
+    padding-left: max(1.5rem, env(safe-area-inset-left));
+    padding-right: max(1.5rem, env(safe-area-inset-right));
+  }
+}
+/* A heading that receives focus after navigation is a landmark, not a control: no ring. */
+h1[tabindex="-1"]:focus,
+h1[tabindex="-1"]:focus-visible {
+  outline: none;
+}
+
+/* Phone: stat cards are compact 2-up tiles (icon, number, label); the sub-lines live in the strip and on Requests. */
+@media (max-width: 639px) {
+  [data-stat-grid] .card {
+    padding: 0.75rem;
+  }
+  [data-stat-grid] .yunui-stat-toprow {
+    display: none;
+  }
+  [data-stat-grid] .yunui-stat-icon {
+    width: 28px;
+    height: 28px;
+    border-radius: 8px;
+  }
+  [data-stat-grid] .yunui-stat-sub {
+    display: none;
+  }
+}
+
+/* One stat value size app-wide (the YunDesign 22). */
+.yunui-stat-value {
+  font-size: 1.375rem;
+  line-height: 28px;
+}
+
+/* Stat sub-lines wrap instead of ending in an ellipsis: the copy is short enough, and a clipped number is worse than a second line. */
+[data-yunui-density="compact"] [data-stat-grid] .yunui-stat-sub {
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+  /* Two lines reserved, so a sub-line that wraps for one reading never moves the row below. */
+  min-height: 2lh;
+}
+
+/* No pull-to-refresh and no rubber-band on the page itself: the console scrolls inside its own
+   scroller, so a drag that reaches the document is never a scroll the user wanted. The page scroller
+   keeps its own overscroll inside, and a floating panel contains the touches it receives. */
+html,
+body {
+  overscroll-behavior: none;
+}
+[data-testid="page-scroll"] {
+  overscroll-behavior-y: contain;
 }

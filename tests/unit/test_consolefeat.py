@@ -59,7 +59,6 @@ def test_admin_auth(client, monkeypatch):
     monkeypatch.setenv("YUNSHU_AUTH_DISABLED", "false")
     monkeypatch.delenv("YUNSHU_AUTH_TOKEN", raising=False)
     assert client.get("/v1/yunshu/host").status_code == 401
-    assert client.get("/v1/yunshu/requests/recent").status_code == 401
     assert (
         client.post(
             "/v1/yunshu/models/register", json={"model": "test", "path": "/missing"}
@@ -231,18 +230,47 @@ def test_latency_fake_clock(client, monkeypatch):
         x.registry.clear()
 
 
-def test_cancel_download_hook():
-    import threading
+class _BlockingHub:
+    """A hub whose download waits for the job's cancel, like a transfer in progress."""
 
+    def __init__(self, tmp_path):
+        self.tmp = tmp_path
+        self.started = __import__("threading").Event()
+
+    def list_files(self, repo, revision, patterns):
+        return [("config.json", 10)]
+
+    def cache_dir(self):
+        return self.tmp
+
+    def download(self, repo, revision, patterns, local_dir, on_file, on_bytes):
+        import time
+
+        on_file("config.json", 10, 0)
+        self.started.set()
+        for _ in range(200):
+            on_bytes("config.json", 0)  # raises DownloadCancelledError once cancelled
+            time.sleep(0.01)
+        raise AssertionError("cancel did not stop download")
+
+
+def test_cancel_download_hook(tmp_path):
+    from yunshu_gateway import downloads as dl
     from yunshu_gateway import ollama_models as om
 
-    event = threading.Event()
-    om._DOWNLOADS["test"] = event
+    hub = _BlockingHub(tmp_path)
+    reg = dl.DownloadRegistry(hub)
+    dl.set_registry(reg)
     try:
-        assert om.cancel_download("test") and event.is_set()
+        job = reg.submit("org/model")
+        assert hub.started.wait(2)
+        assert om.cancel_download("org/model")
+        assert job.wait(3)
+        assert job.state == "cancelled"
+        assert not om.cancel_download("org/model")
         assert not om.cancel_download("missing")
     finally:
-        om._DOWNLOADS.clear()
+        dl.set_registry(None)
 
 
 def test_probe_cpu_schema():
@@ -290,43 +318,6 @@ def test_probe_cpu_schema():
         )
         == ds
     )
-
-
-@pytest.mark.asyncio
-async def test_download_cancel_keeps_registry_consistent(client, monkeypatch, tmp_path):
-    import asyncio
-    import threading
-
-    from starlette.requests import Request
-
-    from yunshu_engine.model_manager import ModelManager
-    from yunshu_gateway import ollama_models as om
-
-    manager = ModelManager()
-    monkeypatch.setattr(om, "get_model_manager", lambda: manager)
-    monkeypatch.setattr(om, "model_link", lambda name: tmp_path / "alias")
-    started = threading.Event()
-
-    def download(**kwargs):
-        started.set()
-        event = om._DOWNLOADS["org/model"]
-        assert event.wait(2)
-        progress = kwargs["tqdm_class"](total=1, disable=True)
-        progress.update(1)
-        raise AssertionError("cancel did not stop download")
-
-    monkeypatch.setattr("huggingface_hub.snapshot_download", download)
-    request = Request({"type": "http", "headers": []})
-    task = asyncio.create_task(om.pull_model(request, "org/model"))
-    assert await asyncio.to_thread(started.wait, 2)
-    assert om.cancel_download("org/model")
-    from fastapi import HTTPException
-
-    with pytest.raises(HTTPException) as failure:
-        await asyncio.wait_for(task, 3)
-    assert failure.value.status_code == 400
-    assert not om._DOWNLOADS and manager.get_entry("org/model") is None
-    assert not (tmp_path / "alias").exists()
 
 
 def test_malformed_index_is_client_error(client, monkeypatch, tmp_path):

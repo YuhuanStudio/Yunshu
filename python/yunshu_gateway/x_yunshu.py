@@ -168,6 +168,7 @@ class RequestInfo:
     # The token budget when the prompt left less room than max_tokens asked for
     # (``token_budget.TokenBudget.report``); None when the request fit.
     budget: dict | None = None
+    api_key_id: str | None = None  # the stored API key that made the request, if any
     _rate: tuple[float, int, float] | None = None  # (t, processed, ema tokens/s)
 
     @property
@@ -216,6 +217,24 @@ class _Registry:
     def last(self) -> dict | None:
         with self._lock:
             return dict(self._recent[-1]) if self._recent else None
+
+    def recent_entries(
+        self, limit: int = 100, model: str | None = None, since: float | None = None
+    ) -> list[dict]:
+        """Newest-first copies of the finished-request ring, at most ``limit``, optionally
+        for one model and finished after the epoch ``since``."""
+        with self._lock:
+            rows = list(self._recent)
+        out: list[dict] = []
+        for e in reversed(rows):
+            if since is not None and e["t"] <= since:
+                break  # the ring is in finish order
+            if model is not None and e.get("model") != model:
+                continue
+            out.append(dict(e))
+            if len(out) >= limit:
+                break
+        return out
 
     def clear(self) -> None:
         with self._lock:
@@ -293,6 +312,8 @@ def progress_payload(info: RequestInfo) -> dict:
             out["queue_est_wait_ms"] = wait_ms
         return out
     out["phase"] = st.phase
+    out["t0_wall"] = round(info.arrived_wall, 3)
+    out["offsets_ms"] = phase_offsets_ms(info)
     out["prompt_tokens"] = st.prompt_tokens or (st.prefill_total + st.cached_tokens)
     out["cached_tokens"] = st.cached_tokens
     if st.cache_tier:
@@ -303,13 +324,26 @@ def progress_payload(info: RequestInfo) -> dict:
         out["queue_est_wait_ms"] = wait_ms
     elif st.phase == "prefill":
         done, total = st.prefill_done, max(st.prefill_total, 1)
-        out["processed_tokens"] = done + st.cached_tokens
-        out["percent"] = round(100.0 * done / total, 1)
-        rate = _prefill_rate(info, done, now)
-        out["tokens_per_second"] = round(rate, 1) if rate else None
-        out["eta_s"] = round((total - done) / rate, 1) if rate else None
+        if not getattr(st, "prefill_known", True):
+            # The cache hit is not known yet, so any share of the prompt would be wrong and then jump:
+            # report no progress rather than a number that is about to change.
+            out["percent"] = None
+            out["processed_tokens"] = None
+            out["tokens_per_second"] = None
+            out["eta_s"] = None
+        else:
+            out["processed_tokens"] = done + st.cached_tokens
+            out["percent"] = round(100.0 * done / total, 1)
+            rate = _prefill_rate(info, done, now)
+            out["tokens_per_second"] = round(rate, 1) if rate else None
+            out["eta_s"] = round((total - done) / rate, 1) if rate else None
     else:
         out["completion_tokens"] = st.generated
+        if st.phase == "decode" and st.t_first and st.t_last > st.t_first:
+            # Same formula as the live aggregate in /v1/yunshu/status.
+            out["tokens_per_second"] = round(
+                (st.generated - 1) / (st.t_last - st.t_first), 1
+            )
     return out
 
 
@@ -343,6 +377,31 @@ def progress_comment(info: RequestInfo) -> bytes:
 
 def _ms(seconds: float | None) -> float | None:
     return None if seconds is None else round(seconds * 1000.0, 1)
+
+
+def phase_offsets_ms(info: RequestInfo, t_first: float | None = None) -> dict:
+    """Phase timestamps as milliseconds after the request arrived (``arrive`` is 0 by
+    definition): left the queue and started prefill (``admit``), first and latest generated
+    token, done. A phase not reached yet is None. One monotonic clock, so the lanes of a
+    timeline line up exactly; ``t0_wall`` (epoch seconds) anchors them to the wall clock."""
+    st = info.stats
+    t0 = info.arrived
+
+    def off(t: float | None) -> float | None:
+        if not t or t < t0:
+            return None
+        return round((t - t0) * 1000.0, 1)
+
+    st_first = getattr(st, "t_first", 0.0) or 0.0
+    if t_first is None:
+        t_first = st_first or info.t_first_chunk
+    return {
+        "arrive": 0.0,
+        "admit": off(getattr(st, "t_admit", None)),
+        "first_token": off(t_first),
+        "last_token": off(getattr(st, "t_last", None) if st_first else None),
+        "done": off(info.t_done),
+    }
 
 
 def latency_breakdown(info: RequestInfo) -> dict:
@@ -505,6 +564,13 @@ def build_stats(info: RequestInfo, usage: dict | None = None) -> dict:
         "decode_ms": _ms(decode_s),
         "decode_tps": decode_tps,
         "total_ms": _ms(end - info.arrived),
+        "t0_wall": round(info.arrived_wall, 3),
+        "offsets_ms": {
+            **phase_offsets_ms(info, t_first),
+            # build_stats runs before t_done is stamped on some paths: ``end`` is the same
+            # instant ``total_ms`` measures.
+            "done": _ms(end - info.arrived),
+        },
         "speculative": spec,
         # llama.cpp `timings` field names, for tools that already read them.
         "timings": {
@@ -591,7 +657,7 @@ def record_done(info: RequestInfo, stats: dict) -> None:
         {
             "t": time.time(),
             "request_id": info.request_id,
-            "model": stats.get("model"),
+            "model": getattr(info.gen, "model", None) or info.model,
             "speculative": stats.get("speculative"),
             "cache": stats.get("cache"),
             "structured_output": stats.get("structured_output"),
@@ -602,13 +668,32 @@ def record_done(info: RequestInfo, stats: dict) -> None:
             "prefill_tps": stats.get("prefill_tps"),
             "decode_tps": stats.get("decode_tps"),
             "ttft_ms": stats.get("ttft_ms"),
+            # Console finished-request ring (GET /v1/yunshu/requests/recent): numbers and
+            # enums only, never prompt text.
+            "path": info.path,
+            "status": info.status or None,
+            "finish_reason": getattr(
+                getattr(info.gen, "stats", None), "finish_reason", None
+            ),
+            "stream": info.stream,
+            "t0_wall": stats.get("t0_wall"),
+            "offsets_ms": stats.get("offsets_ms"),
+            "queue_wait_ms": stats.get("queue_wait_ms"),
+            "cancelled": bool(stats.get("cancelled")),
             "latency": stats.get("latency"),
             "energy": stats.get("energy"),
-            "status": info.status,
-            "stream": info.stream,
-            "path": info.path,
         }
     )
+    if info.api_key_id:  # the one place tokens are counted per key
+        with contextlib.suppress(Exception):
+            from .api_keys import get_store
+
+            get_store().account(
+                info.api_key_id,
+                int(stats.get("prompt_tokens") or 0),
+                int(stats.get("completion_tokens") or 0),
+                int(stats.get("cached_tokens") or 0),
+            )
     with contextlib.suppress(Exception):
         from . import serve_log
 
@@ -670,6 +755,12 @@ class YunshuExtensionsMiddleware:
             await self._serve(scope, receive, send, info, tracked)
         finally:
             info.t_done = time.perf_counter()
+            info.api_key_id = (scope.get("state") or {}).get("api_key_id")
+            if info.api_key_id and info.status >= 400:
+                with contextlib.suppress(Exception):
+                    from .api_keys import get_store
+
+                    get_store().account(info.api_key_id, error=True)
             if tracked:
                 registry.remove(info)
                 if info.status == 200 and path in STATS_PATHS:

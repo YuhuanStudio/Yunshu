@@ -1,6 +1,5 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import {
-  Badge,
   BarChart,
   Button,
   Card,
@@ -13,19 +12,131 @@ import {
   Td,
   Th,
   Thead,
+  TimeSeriesChart,
   Tr,
 } from "@yuhuanowo/yunui";
+import type { ComponentProps, CSSProperties } from "react";
 import { ArrowRight } from "lucide-react";
 import {
+  MIN_PERCENTILE_SAMPLES,
   activityHeatmap,
   latencyDistribution,
-  observedRequests,
-  percentile,
+  percentileWhenEnough,
   phaseDistribution,
   type LatencyBucket,
+  type ObservedRequest,
 } from "./analytics";
-import { clock, elapsed, number, type Engine } from "./ui";
-import type { EngineHistoryPoint } from "./useEngine";
+import { t, useLocale } from "./i18n/index.ts";
+import type { SeriesPoint } from "./series";
+import { clock, elapsed, number, Slot, type Engine } from "./ui";
+
+type ChartProps = ComponentProps<typeof TimeSeriesChart>;
+
+/**
+ * The console's time-series chart. The library draws a dashed box (min 180px)
+ * when the visible series have no finite value yet, which is exactly what a
+ * long prefill looks like. Here that state becomes one calm muted caption at
+ * the chart's own height: no border, nothing shifting. "Collecting" while the
+ * engine is busy (values are on their way), "idle" when nothing is running.
+ */
+export function SeriesChart({
+  busy,
+  height = 180,
+  className,
+  ...rest
+}: Omit<
+  ChartProps,
+  | "emptyLabel"
+  | "unavailableLabel"
+  | "missingValueLabel"
+  | "hiddenLabel"
+  | "legendLabel"
+  | "keyboardHint"
+  | "collectingLabel"
+  | "minSamples"
+  | "height"
+> & { busy: boolean; height?: number }) {
+  useLocale();
+  // No sample has a value yet: say so calmly, at a reduced height, instead of an empty plot with a readout row.
+  const hasValues = rest.data.some((p) =>
+    rest.series.some((d) => {
+      const v = p.values[d.key];
+      return typeof v === "number" && Number.isFinite(v) && v !== 0;
+    }),
+  );
+  if (rest.data.length > 0 && !hasValues)
+    return (
+      <div
+        role="status"
+        aria-label={rest.ariaLabel}
+        className={className}
+        data-testid="series-idle"
+      >
+        <EmptyState
+          size="inline"
+          title={
+            busy ? t("overview.chart.collecting") : t("overview.chart.idle")
+          }
+        />
+      </div>
+    );
+  return (
+    <div
+      className={`[&_div[role=status]]:h-(--series-h) [&_div[role=status]]:min-h-0 [&_div[role=status]]:rounded-none [&_div[role=status]]:border-0 [&_div[role=status]]:text-xs ${className ?? ""}`}
+      style={{ "--series-h": `${height}px` } as CSSProperties}
+    >
+      <TimeSeriesChart
+        {...rest}
+        height={height}
+        minSamples={5}
+        showReadout={false}
+        emptyLabel={t("overview.chart.empty")}
+        unavailableLabel={
+          busy ? t("overview.chart.collecting") : t("overview.chart.idle")
+        }
+        missingValueLabel={t("overview.chart.missing")}
+        hiddenLabel={t("overview.chart.hidden")}
+        legendLabel={t("overview.chart.legend")}
+        keyboardHint={t("overview.chart.keyboardHint")}
+        collectingLabel={(have, need) =>
+          t("overview.chart.collectingSamples", { have, need })
+        }
+      />
+    </div>
+  );
+}
+
+/** The one header every chart card shares: title and caption left, one control right. */
+export function ChartCard({
+  title,
+  description,
+  action,
+  children,
+  className,
+  "data-testid": testId,
+}: {
+  title: ReactNode;
+  description?: ReactNode;
+  action?: ReactNode;
+  children: ReactNode;
+  className?: string;
+  "data-testid"?: string;
+}) {
+  return (
+    <Card className={"min-w-0 p-4 " + (className ?? "")} data-testid={testId}>
+      <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h2 className="heading-md">{title}</h2>
+          {description && (
+            <p className="mt-1 text-xs text-muted-foreground">{description}</p>
+          )}
+        </div>
+        {action && <div className="shrink-0">{action}</div>}
+      </div>
+      {children}
+    </Card>
+  );
+}
 
 export function PhasePanel({
   engine,
@@ -34,33 +145,41 @@ export function PhasePanel({
   engine: Engine;
   navigate: (page: string) => void;
 }) {
+  useLocale();
   const [phase, setPhase] = useState<string | null>(null);
   const data = phaseDistribution(engine.status);
   const active = engine.status?.requests.items ?? [];
   const selected = phase ? active.filter((row) => row.phase === phase) : active;
   return (
-    <Card className="min-w-0 p-5 sm:p-6" data-testid="phase-panel">
-      <div className="mb-5 flex items-center justify-between gap-3">
-        <div>
-          <h2 className="heading-md">請求階段分布</h2>
-          <p className="mt-1 text-xs text-muted-foreground">
-            點選圖例，查看目前正在處理的工作
-          </p>
-        </div>
-        <Badge variant="outline">即時</Badge>
-      </div>
+    <ChartCard
+      data-testid="phase-panel"
+      title={t("overview.phasePanel.title")}
+      description={t("overview.phasePanel.desc")}
+      action={
+        <span className="text-xs text-muted-foreground">
+          {t("overview.phasePanel.live")}
+        </span>
+      }
+    >
       <DonutChart
+        monochrome
         data={data}
         size={154}
-        ariaLabel="目前請求階段"
-        emptyLabel={engine.status ? "目前沒有活動請求" : "尚未取得請求"}
-        unavailableLabel="未回報"
+        ariaLabel={t("overview.phasePanel.aria")}
+        emptyLabel={
+          engine.status
+            ? t("overview.phasePanel.empty")
+            : t("overview.phasePanel.noStatus")
+        }
+        unavailableLabel={t("overview.chart.missing")}
         center={
           <div>
-            <strong className="block text-2xl">
+            <strong className="block text-2xl font-semibold tabular-nums">
               {number(engine.status?.requests.active, 0)}
             </strong>
-            <span className="text-[10px] text-muted-foreground">活動請求</span>
+            <span className="text-xs text-muted-foreground">
+              {t("overview.phasePanel.center")}
+            </span>
           </div>
         }
         onSelect={(datum) =>
@@ -74,26 +193,30 @@ export function PhasePanel({
           className="mt-3"
           onClick={() => setPhase(null)}
         >
-          清除階段篩選
+          {t("overview.phasePanel.clear")}
         </Button>
       )}
-      <div className="mt-4 divide-y divide-border/60 border-t border-border/60">
+      <div className="mt-4 min-h-[7.5rem] divide-y divide-border/60">
         {selected.slice(0, 3).map((row) => (
           <div
             key={row.request_id}
             className="flex justify-between gap-3 py-2.5 text-xs"
           >
             <span className="min-w-0 truncate font-mono">{row.request_id}</span>
-            <span className="shrink-0 text-muted-foreground">
+            <Slot
+              ch={7}
+              align="right"
+              className="shrink-0 text-muted-foreground"
+            >
               {elapsed(row.elapsed_s)}
-            </span>
+            </Slot>
           </div>
         ))}
         {!selected.length && (
           <p className="py-3 text-xs text-muted-foreground">
             {engine.status
-              ? "目前沒有符合這個階段的請求"
-              : "連線後顯示工作清單"}
+              ? t("overview.phasePanel.noMatch")
+              : t("overview.phasePanel.connectFirst")}
           </p>
         )}
       </div>
@@ -103,107 +226,109 @@ export function PhasePanel({
         className="mt-2"
         onClick={() => navigate("requests")}
       >
-        開啟請求工作區
+        {t("overview.phasePanel.open")}
         <ArrowRight size={13} />
       </Button>
-    </Card>
+    </ChartCard>
   );
 }
 
 export function LatencyPanel({
-  history,
+  records,
 }: {
-  history: readonly EngineHistoryPoint[];
+  records: readonly ObservedRequest[];
 }) {
-  const records = useMemo(() => observedRequests(history), [history]);
+  useLocale();
   const bins = useMemo(() => latencyDistribution(records), [records]);
   const [selection, setSelection] = useState<LatencyBucket | null>(null);
   const valid = records.filter(
     (row) =>
       row.ttft_ms != null && Number.isFinite(row.ttft_ms) && row.ttft_ms >= 0,
   );
+  const ttfts = valid.map((row) => row.ttft_ms);
+  // Percentiles from a handful of samples are noise: below the minimum, only
+  // the latest request is shown, labelled as such.
+  const p50 = percentileWhenEnough(ttfts, 0.5);
+  const p95 = percentileWhenEnough(ttfts, 0.95);
+  const latest = valid.length ? valid[valid.length - 1].ttft_ms : null;
   const selected = selection
     ? valid.filter(
         (row) => row.ttft_ms! >= selection.min && row.ttft_ms! < selection.max,
       )
     : [];
   return (
-    <Card className="min-w-0 p-5 sm:p-6" data-testid="latency-panel">
-      <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h2 className="heading-md">首 Token 延遲分布</h2>
-          <p className="mt-1 text-xs text-muted-foreground">
-            點選長條查看請求 · 單位 ms
-          </p>
-        </div>
-        <Badge variant="outline">{valid.length} 筆已觀測</Badge>
+    <ChartCard
+      data-testid="latency-panel"
+      title={t("overview.latency.title")}
+      description={t("overview.latency.desc")}
+      action={
+        <span className="text-xs tabular-nums text-muted-foreground">
+          {t("overview.latency.observed", { n: valid.length })}
+        </span>
+      }
+    >
+      <div className="mb-4 flex gap-6" data-testid="latency-figures">
+        {[
+          [t("overview.latency.latest"), latest, "latency-last"],
+          ["P50", p50, "latency-p50"],
+          ["P95", p95, "latency-p95"],
+        ].map(([label, value, id]) => (
+          <div key={id as string} data-testid={id as string}>
+            <p className="text-xs text-muted-foreground">{label}</p>
+            <p className="mt-1 text-2xl font-semibold tabular-nums">
+              {number(value as number | null, 0)}{" "}
+              <span className="text-xs font-normal">ms</span>
+            </p>
+          </div>
+        ))}
       </div>
-      <div className="mb-4 flex gap-6">
-        <div>
-          <p className="text-[10px] text-muted-foreground">P50</p>
-          <p className="mt-1 font-mono text-lg">
-            {number(
-              percentile(
-                valid.map((row) => row.ttft_ms),
-                0.5,
-              ),
-              0,
-            )}{" "}
-            <span className="text-xs">ms</span>
-          </p>
-        </div>
-        <div>
-          <p className="text-[10px] text-muted-foreground">P95</p>
-          <p className="mt-1 font-mono text-lg">
-            {number(
-              percentile(
-                valid.map((row) => row.ttft_ms),
-                0.95,
-              ),
-              0,
-            )}{" "}
-            <span className="text-xs">ms</span>
-          </p>
-        </div>
-      </div>
+      {valid.length < MIN_PERCENTILE_SAMPLES && (
+        <p className="-mt-2 mb-3 text-xs text-muted-foreground">
+          {t("overview.latency.minNote", {
+            n: valid.length,
+            min: MIN_PERCENTILE_SAMPLES,
+          })}
+        </p>
+      )}
       <BarChart
-        data={bins.map((bin) => ({ ...bin, tone: "info" as const }))}
+        data={bins.map((bin) => ({ ...bin, tone: "neutral" as const }))}
         height={185}
-        ariaLabel="已觀測首 Token 延遲分布"
-        emptyLabel="尚未觀測到帶有延遲資料的請求"
-        unavailableLabel="未回報"
-        formatValue={(v) => `${v} 筆`}
+        ariaLabel={t("overview.latency.aria")}
+        emptyLabel={t("overview.latency.empty")}
+        unavailableLabel={t("overview.chart.missing")}
+        formatValue={(v) => t("overview.latency.count", { n: v })}
         onSelect={(datum) =>
           setSelection(bins.find((bin) => bin.id === datum.id) ?? null)
         }
       />
-      <p className="mt-4 text-[11px] leading-5 text-muted-foreground">
-        採樣只能取得服務最新一筆結束記錄；已按 request ID
-        去重，這不是完整流量的延遲統計。
+      <p className="mt-4 text-xs leading-5 text-muted-foreground">
+        {t("overview.latency.note")}
       </p>
       <Sheet
         open={!!selection}
         onClose={() => setSelection(null)}
-        title={`延遲 ${selection?.label ?? ""} ms`}
-        closeLabel="關閉延遲明細"
+        title={t("overview.latency.sheetTitle", {
+          label: selection?.label ?? "",
+        })}
+        closeLabel={t("overview.latency.close")}
       >
         <p className="mb-4 text-xs text-muted-foreground">
-          目前觀測範圍內，共 {selected.length} 筆請求。
+          {t("overview.latency.sheetCount", { n: selected.length })}
         </p>
         {selected.length ? (
-          <Table scrollLabel="延遲區間請求">
+          <Table scrollLabel={t("overview.latency.tableLabel")}>
             <Thead>
               <Tr>
-                <Th>Request</Th>
+                <Th>{t("overview.latency.colRequest")}</Th>
                 <Th>TTFT</Th>
-                <Th>重用 tokens</Th>
+                <Th>{t("overview.latency.colCached")}</Th>
               </Tr>
             </Thead>
             <Tbody>
               {selected.map((row) => (
                 <Tr key={row.request_id}>
                   <Td>
-                    <span className="block max-w-36 truncate font-mono text-[11px]">
+                    <span className="block max-w-36 truncate font-mono text-xs">
                       {row.request_id}
                     </span>
                   </Td>
@@ -215,12 +340,13 @@ export function LatencyPanel({
           </Table>
         ) : (
           <EmptyState
-            title="這個區間沒有觀測記錄"
-            description="可關閉面板，選擇另一個延遲區間。"
+            size="inline"
+            title={t("overview.latency.emptyTitle")}
+            description={t("overview.latency.emptyDesc")}
           />
         )}
       </Sheet>
-    </Card>
+    </ChartCard>
   );
 }
 
@@ -230,14 +356,17 @@ export function ActivityPanel({
   end,
   onSelectTime,
 }: {
-  history: readonly EngineHistoryPoint[];
+  history: readonly SeriesPoint[];
   start: number;
   end: number;
   onSelectTime: (at: number | null) => void;
 }) {
+  const locale = useLocale();
   const heat = useMemo(
     () => activityHeatmap(history, start, end),
-    [history, start, end],
+    // locale: the row names are translated inside.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [history, start, end, locale],
   );
   const [selection, setSelection] = useState<{
     row: number;
@@ -254,52 +383,56 @@ export function ActivityPanel({
             ? heat.ends[column]
             : heat.ends[column] - 1),
     );
-    const value = (sample: EngineHistoryPoint) =>
+    const value = (sample: SeriesPoint) =>
       [
-        sample.status.requests.active,
-        sample.status.requests.queued,
-        sample.status.requests.prefill,
-        sample.status.requests.decode,
-      ][row];
-    const peak = candidates.reduce<EngineHistoryPoint | null>(
+        sample.active,
+        sample.queued,
+        sample.prefillRequests,
+        sample.decodeRequests,
+      ][row] ?? -1;
+    const peak = candidates.reduce<SeriesPoint | null>(
       (best, next) => (!best || value(next) > value(best) ? next : best),
       null,
     );
     onSelectTime(peak?.at ?? null);
   };
   return (
-    <Card className="min-w-0 p-5 sm:p-6" data-testid="activity-panel">
-      <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h2 className="heading-md">請求活動熱圖</h2>
-          <p className="mt-1 text-xs text-muted-foreground">
-            每個區間的已採樣峰值 · 點選格子，聯動時序圖游標
-          </p>
-        </div>
-        <Badge variant="outline">{history.length} 次採樣</Badge>
-      </div>
+    <ChartCard
+      data-testid="activity-panel"
+      title={t("overview.heat.title")}
+      description={t("overview.heat.desc")}
+      action={
+        <span className="text-xs text-muted-foreground">
+          <Slot ch={10} align="right">
+            {t("overview.heat.samples", { n: history.length })}
+          </Slot>
+        </span>
+      }
+    >
       <Heatmap
         rows={heat.rows}
         columns={columns}
         data={heat.data}
-        ariaLabel="請求階段活動熱圖"
+        ariaLabel={t("overview.heat.aria")}
         unavailableLabel="—"
-        emptyLabel="沒有採樣"
-        tone="info"
+        emptyLabel={t("overview.heat.empty")}
+        tone="neutral"
         formatValue={(v) => String(v)}
         onSelect={select}
       />
       <div className="mt-4 flex flex-wrap items-center justify-between gap-3 text-xs text-muted-foreground">
-        <p>0 代表已觀測到閒置；— 代表沒有採樣。色階表示區間峰值。</p>
+        <p>{t("overview.heat.legend")}</p>
         {selection && (
           <p role="status">
-            {clock(heat.starts[selection.column])}–
-            {clock(heat.ends[selection.column])} ·{" "}
-            {heat.coverage[selection.column]} 次觀測 · 峰值{" "}
-            {number(heat.data[selection.row][selection.column], 0)}
+            {t("overview.heat.selection", {
+              from: clock(heat.starts[selection.column]),
+              to: clock(heat.ends[selection.column]),
+              n: heat.coverage[selection.column],
+              peak: number(heat.data[selection.row][selection.column], 0),
+            })}
           </p>
         )}
       </div>
-    </Card>
+    </ChartCard>
   );
 }
