@@ -63,10 +63,20 @@ class Timers:
     def __init__(self):
         self.totals: dict[str, float] = {}
         self.calls: dict[str, int] = {}
+        self.notes: dict[str, str] = {}
 
     def wrap(self, label, fn):
         @functools.wraps(fn)
         def inner(*a, **kw):
+            if label == "checkpoint.store":
+                # why the capture can/cannot be deferred past the first token
+                cache = kw.get("prompt_cache", a[2] if len(a) > 2 else ())
+                self.notes["checkpoint_cache_types"] = ",".join(
+                    sorted({type(c).__name__ for c in cache})
+                )
+                self.notes["defer_flag"] = str(
+                    getattr(a[0], "defer_checkpoint_stores", None)
+                )
             t = time.perf_counter()
             try:
                 return fn(*a, **kw)
@@ -150,6 +160,7 @@ async def run(a):
                 event="media_cold_profile",
                 complete=True,
                 model=a.model,
+                notes=timers.notes,
                 installed=done,
                 missing=missing,
                 rows=rows,

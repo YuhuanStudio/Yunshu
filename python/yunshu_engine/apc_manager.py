@@ -922,7 +922,13 @@ class _Coordinator(APCCoordinator):
             return False  # deterministic forward boundary, not an extra snapshot
         from mlx_vlm.apc import _cache_nbytes
         from mlx_vlm.apc_adapters import clone_cache_entry
-        from mlx_vlm.models.cache import ArraysCache, BatchKVCache, KVCache
+        from mlx_vlm.models.cache import (
+            ArraysCache,
+            BatchKVCache,
+            BatchRotatingKVCache,
+            KVCache,
+            RotatingKVCache,
+        )
 
         # Multi-row extraction and custom contracts stay on the upstream path.
         # Native single-row caches (including the spec lane's BatchKVCache) only
@@ -934,8 +940,11 @@ class _Coordinator(APCCoordinator):
             and batch_idx in (None, 0)
             and bool(prompt_cache)
             and all(
-                type(c) in (ArraysCache, KVCache)
-                or (type(c) is BatchKVCache and c.is_single_row())
+                type(c) in (ArraysCache, KVCache, RotatingKVCache)
+                or (
+                    type(c) in (BatchKVCache, BatchRotatingKVCache)
+                    and c.is_single_row()
+                )
                 for c in prompt_cache
             )
         )
