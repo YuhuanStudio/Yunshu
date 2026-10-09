@@ -166,7 +166,7 @@ async def run(args):
     prof.disable()
     st = pstats.Stats(prof)
     rows = []
-    for (fn, line, name), (cc, nc, tt, ct, _callers) in st.stats.items():
+    for (fn, line, name), (_cc, nc, tt, ct, _callers) in st.stats.items():
         rows.append((tt, ct, nc, f"{Path(fn).name}:{line}:{name}"))
     rows.sort(reverse=True)
     emit(

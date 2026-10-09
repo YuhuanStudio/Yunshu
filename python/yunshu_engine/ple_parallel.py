@@ -11,6 +11,8 @@ returned arrays, the row cache and every counter are identical to upstream's; on
 which the reads happen differs. The interleaved layout and any other layout keep upstream's code.
 """
 
+# Patches upstream (MIT): mlx-vlm qwen4_exp/ple_storage.py QuantizedMMapNGramEmbedding._read_rows
+# (tracked in vendor.json; Blaizzy/mlx-vlm).
 from __future__ import annotations
 
 import os
