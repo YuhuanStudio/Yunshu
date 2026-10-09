@@ -59,3 +59,26 @@ def test_capture_stores_window_at_checkpoint(monkeypatch):
     assert w.get(w.key_for(7, [1, 2])) == ["k4"]
     w._STATE["current"] = _batch(0, [1, 2], chunks=[["a"]], kwargs=False)
     assert w.capture([1, 3], 7) is False
+
+
+def test_window_capture_never_blocks_the_prefill_step(monkeypatch):
+    import sys
+    import types
+
+    calls = []
+
+    class A:
+        def __init__(self, n):
+            self.shape, self.nbytes = (1, n, 4), n * 8
+
+        def __getitem__(self, _):
+            return A(2)
+
+    stub = types.ModuleType("mlx.core")
+    stub.concatenate = lambda parts, axis: A(sum(p.shape[1] for p in parts))
+    stub.async_eval = lambda x: calls.append("async")
+    stub.eval = lambda x: calls.append("eval")
+    stub.contiguous = lambda x: calls.append("contiguous") or x
+    monkeypatch.setitem(sys.modules, "mlx.core", stub)
+    layers, nbytes = w.window_from_chunks([[A(3)], [A(4)]], keep=2)
+    assert calls == ["async"] and nbytes == 16

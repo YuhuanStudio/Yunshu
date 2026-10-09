@@ -88,8 +88,8 @@ def window_from_chunks(chunks: list, keep: int) -> tuple[list, int] | None:
     layers = [mx.concatenate(parts, axis=1) for parts in zip(*chunks, strict=True)]
     if int(layers[0].shape[1]) > keep:
         layers = [x[:, -keep:] for x in layers]
-    layers = [mx.contiguous(x) for x in layers]
-    mx.eval(layers)
+    # Never block here: this runs inside the prefill step, ahead of the first token.
+    mx.async_eval(layers)
     return layers, sum(int(x.nbytes) for x in layers)
 
 
