@@ -228,6 +228,7 @@ def main(argv=None):
                         "ttft_s": res["ttft_s"],
                         "decode_tok_s": rate,
                         "tokens": n,
+                        "text_head": res["text"][:160],
                         "spec": res["spec"],
                         "digest": hashlib.sha256(res["text"].encode()).hexdigest()[:16],
                         "steady_delta_gb": round(

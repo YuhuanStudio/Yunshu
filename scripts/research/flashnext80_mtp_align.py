@@ -58,6 +58,27 @@ async def run(args):
         emit({"complete": False, "reason": "no drafter was loaded"})
         return 1
     model = engine._model
+    chunks = []
+    async for o in engine.generate_stream(
+        messages=[
+            {
+                "role": "user",
+                "content": "What is the capital of France? Answer in one word.",
+            }
+        ],
+        max_tokens=24,
+        temperature=0,
+        enable_thinking=False,
+    ):
+        chunks.append(o.new_text)
+    emit({"kind": "generate", "text": "".join(chunks)})
+    emit(
+        {
+            "kind": "mode",
+            "training": bool(model.training),
+            "lm_training": bool(model.language_model.training),
+        }
+    )
     lm = model.language_model
     tok = (
         engine._tokenizer
@@ -65,6 +86,7 @@ async def run(args):
         else engine._processor.tokenizer
     )
     ids = tok.encode(TEXT)[: args.tokens]
+    model.eval()
     x = mx.array([ids])
     cache = lm.make_cache()
     res = lm(x, cache=cache, return_hidden=True)
@@ -74,6 +96,24 @@ async def run(args):
     n = len(ids)
     target_next = mx.argmax(logits[0, :-1], axis=-1).tolist()
     tgt_acc = sum(int(target_next[i] == ids[i + 1]) for i in range(n - 1)) / (n - 1)
+    plain = lm(x, cache=lm.make_cache())
+    pl = plain.logits
+    mx.eval(pl)
+    plain_next = mx.argmax(pl[0, :-1], axis=-1).tolist()
+    emit(
+        {
+            "kind": "target_plain",
+            "acc": round(
+                sum(int(plain_next[i] == ids[i + 1]) for i in range(n - 1)) / (n - 1), 4
+            ),
+            "logits_shape": list(pl.shape),
+            "finite": bool(mx.all(mx.isfinite(pl)).item()),
+            "same_as_hidden_call": bool(mx.array_equal(pl, logits).item()),
+            "first_pred": plain_next[:8],
+            "first_gold": ids[1:9],
+            "decoded": tok.decode(plain_next[:24]),
+        }
+    )
     emit(
         {
             "kind": "target",
