@@ -114,10 +114,12 @@ def row_from_status(status: dict, window: list[dict]) -> dict[str, float | None]
         if i.get("phase") == "prefill"
         and (v := _num(i.get("tokens_per_second"))) is not None
     ]
+    # One rule for idle: while the engine answers, the aggregate rate is 0 when nothing is decoding
+    # (or prefilling), a measurement, never "unknown". A gap means the engine did not answer.
     row["decode_tps"] = (
-        live if live is not None else (round(sum(decode), 1) if decode else None)
+        live if live is not None else (round(sum(decode), 1) if decode else 0.0)
     )
-    row["prefill_tps"] = round(sum(prefill), 1) if prefill else None
+    row["prefill_tps"] = round(sum(prefill), 1) if prefill else 0.0
     ttfts = [t for e in window if (t := _num(e.get("ttft_ms"))) is not None]
     row["ttft_p50_ms"] = percentile(ttfts, 0.5)
     row["ttft_p95_ms"] = percentile(ttfts, 0.95)

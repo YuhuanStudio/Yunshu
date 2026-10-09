@@ -2,7 +2,6 @@ import { gbTotalText } from "./byte-format";
 import { LiveNumber } from "./LiveNumber";
 import { rangeSeconds, useRangeHistory } from "./useRangeHistory";
 import { useLinger } from "./motion/linger";
-import { LiveScroll } from "./motion/LiveScroll";
 import { PrefillBar } from "./PrefillBar";
 import { SegmentedTray } from "./SegmentedTray";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
@@ -241,10 +240,12 @@ function QuickAction({
   onClick: () => void;
 }) {
   return (
-    <Card className="min-w-0 p-1">
+    // One outline: the row fills the card (no inner rounded fill inside the card's own border), the
+    // focus ring is the card's, and a press nudges the whole card.
+    <Card className="min-w-0 overflow-hidden p-0 transition-[box-shadow,transform] duration-[150ms] ease-out has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-(--border-strong) active:scale-[0.99] motion-reduce:transition-none motion-reduce:active:scale-100">
       <HoverRow
         onClick={onClick}
-        className="flex w-full items-center gap-3 px-3 py-3 text-left"
+        className="flex w-full items-center gap-3 rounded-none px-4 py-4 text-left focus-visible:ring-0"
       >
         <span className="text-muted-foreground">{icon}</span>
         <span className="min-w-0 flex-1">
@@ -297,6 +298,7 @@ export function Dashboard({
     [engine.series, start, end],
   );
   const points = longRange.active ? longRange.points : livePoints;
+  const rangeMs = rangeSeconds(range) * 1000;
   // A line breaks where samples are further apart than a few of this range's own steps.
   const rangeGapMs = Math.max(12_000, (longRange.resolutionS ?? 0) * 3_000);
   const data = useMemo(() => chartRows(points), [points]);
@@ -343,8 +345,6 @@ export function Dashboard({
       : null;
   const heroData = useMemo(() => chartRows(heroPoints), [heroPoints]);
   // Idle sparkline only when the last five minutes actually carried decode traffic.
-  const heroSpan =
-    heroData.length > 1 ? heroData[heroData.length - 1].x - heroData[0].x : 0;
   const recent = heroData.some((p) => {
     const v = p.values.decode;
     return typeof v === "number" && Number.isFinite(v) && v !== 0;
@@ -675,23 +675,22 @@ export function Dashboard({
                   ]}
                 />
               </div>
-              <LiveScroll spanMs={heroSpan} newestAt={heroData.at(-1)?.x ?? 0}>
-                <SeriesChart
-                  busy={busy}
-                  className="mt-3"
-                  data={heroData}
-                  series={rates[heroMetric as "decode" | "prefill"]}
-                  height={150}
-                  ariaLabel={
-                    heroMetric === "decode"
-                      ? t("overview.hero.ariaDecode")
-                      : t("overview.hero.ariaPrefill")
-                  }
-                  formatX={clock}
-                  formatY={formatNumber}
-                  maxGap={12000}
-                />
-              </LiveScroll>
+              <SeriesChart
+                busy={busy}
+                className="mt-3"
+                data={heroData}
+                series={rates[heroMetric as "decode" | "prefill"]}
+                height={150}
+                ariaLabel={
+                  heroMetric === "decode"
+                    ? t("overview.hero.ariaDecode")
+                    : t("overview.hero.ariaPrefill")
+                }
+                formatX={clock}
+                formatY={formatNumber}
+                maxGap={12000}
+                liveWindowMs={300_000}
+              />
             </div>
           </div>
           <div
@@ -844,6 +843,7 @@ export function Dashboard({
                 formatX={clock}
                 formatY={formatNumber}
                 maxGap={rangeGapMs}
+                liveWindowMs={longRange.active ? undefined : rangeMs}
                 activeX={activeX}
                 onActiveXChange={setActiveX}
               />
@@ -977,6 +977,7 @@ export function Dashboard({
                 formatX={clock}
                 formatY={formatNumber}
                 maxGap={rangeGapMs}
+                liveWindowMs={longRange.active ? undefined : rangeMs}
                 activeX={activeX}
                 onActiveXChange={setActiveX}
               />

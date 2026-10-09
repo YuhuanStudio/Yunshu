@@ -66,8 +66,12 @@ export function livePrefillTps(status: EngineStatus): number | null {
 export function pointFromStatus(at: number, status: EngineStatus): SeriesPoint {
   return {
     at,
-    decode: finite(status.throughput.live_decode_tps),
-    prefill: livePrefillTps(status),
+    // Idle is a measurement: nothing decoding is 0 tok/s, not "unknown" (a gap is the engine not answering).
+    decode:
+      finite(status.throughput.live_decode_tps) ??
+      (status.requests.decode === 0 ? 0 : null),
+    prefill:
+      livePrefillTps(status) ?? (status.requests.prefill === 0 ? 0 : null),
     active: status.requests.active,
     queued: status.requests.queued,
     prefillRequests: status.requests.prefill,

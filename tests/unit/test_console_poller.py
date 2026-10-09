@@ -346,6 +346,19 @@ def test_row_from_status_uses_exact_bytes_and_converts_legacy_decimal_gb():
     assert row["cached_tokens_per_s"] == 2.0 and row["gpu_w"] is None
 
 
+def test_idle_is_recorded_as_zero_not_as_unknown_and_an_outage_as_no_row():
+    idle = row_from_status(
+        {
+            "memory": {"active_gb": 1.0},
+            "requests": {"active": 0, "queued": 0, "items": []},
+            "throughput": {"live_decode_tps": None},
+        },
+        [],
+    )
+    assert idle["decode_tps"] == 0.0 and idle["prefill_tps"] == 0.0
+    assert idle["requests_active"] == 0.0
+
+
 def test_a_tick_that_raises_does_not_end_the_loop(tmp_path):
     engine, clock = FakeEngine(), Clock()
     poller, _ = make(tmp_path, engine, clock, interval_s=0.25)

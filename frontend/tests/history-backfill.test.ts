@@ -93,3 +93,27 @@ test("merge: nothing recorded leaves the live series alone", () => {
   const live = [pt(1_000, 1), pt(3_500, 2)];
   assert.deepEqual(mergeBackfill(live, []), live);
 });
+
+test("idle is a measurement: a recorded sample with request counts and no rate is 0, a gap is not", () => {
+  const h = parseServerHistory(
+    {
+      series: {
+        t: [1, 2, 3],
+        decode_tps: [null, 40, null],
+        prefill_tps: [null, null, null],
+        requests_active: [0, 1, null],
+      },
+      gaps: [],
+    },
+    true,
+  );
+  assert.ok(h);
+  assert.deepEqual(
+    h.points.map((p) => p.decode),
+    [0, 40, null],
+  );
+  assert.deepEqual(
+    h.points.map((p) => p.prefill),
+    [0, 0, null],
+  );
+});

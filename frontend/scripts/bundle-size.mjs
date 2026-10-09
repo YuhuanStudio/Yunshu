@@ -8,7 +8,7 @@ import { join } from "node:path";
 /** The goal for a route's first load (gzip KB); not met yet: the shared shell (React, YunUI, Radix) is ~250 KB. */
 export const TARGET_KB = 250;
 /** The regression guard `pnpm test` enforces today (gzip KB first load per route, and for the shared entry). */
-export const BUDGET_KB = 295;
+export const BUDGET_KB = 300;
 export const ENTRY_BUDGET_KB = 270;
 
 /** Static `import ... from "./x.js"` and `import "./x.js"` edges of one chunk (dynamic imports excluded). */

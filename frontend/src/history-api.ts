@@ -54,8 +54,9 @@ export function parseServerHistory(
     previous = at;
     points.push({
       at,
-      decode: num(decode[i]),
-      prefill: num(prefill[i]),
+      // a sample that has request counts was taken while the engine answered: no rate then is 0
+      decode: num(decode[i]) ?? (num(active[i]) != null ? 0 : null),
+      prefill: num(prefill[i]) ?? (num(active[i]) != null ? 0 : null),
       active: num(active[i]),
       queued: num(queued[i]),
       prefillRequests: null,
