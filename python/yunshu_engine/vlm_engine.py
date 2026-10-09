@@ -913,6 +913,7 @@ class VLMEngine:
             )
             self._track_pipeline(kwargs, messages, image_paths, audio_paths)
             self._check_request_supported(image_paths, audio_paths, kwargs)
+            await self._settle_rehearsal_early(messages, _enable_thinking, tpl_extra)
 
             _runner_extras: dict = {}
             runner_params = self._runner_kwargs(
@@ -1114,6 +1115,7 @@ class VLMEngine:
         )
         self._track_pipeline(kwargs, messages, image_paths, audio_paths)
         self._check_request_supported(image_paths, audio_paths, kwargs)
+        await self._settle_rehearsal_early(messages, enable_thinking, tpl_extra)
 
         import uuid
 
@@ -1400,6 +1402,53 @@ class VLMEngine:
         ev = getattr(self, "_rehearsal_cancel", None)
         if ev is not None:
             ev.set()
+
+    def _peek_prompt_ids(
+        self, messages: list[dict], enable_thinking: bool | None, tpl_extra: dict | None
+    ) -> list[int]:
+        """Token ids of a request's prompt without touching MLX (any thread)."""
+        text = self._format_prompt(
+            messages, enable_thinking=enable_thinking, template_extra=tpl_extra
+        )
+        bos = getattr(self._tokenizer, "bos_token", None)
+        add_special = not (isinstance(bos, str) and bos and text.startswith(bos))
+        return list(
+            self._text_prompt_cache.prefix_tokens.encode(
+                self._tokenizer, text, add_special_tokens=add_special
+            )
+        )
+
+    async def _settle_rehearsal_early(
+        self, messages: list[dict], enable_thinking: bool | None, tpl_extra: dict | None
+    ) -> None:
+        """A request arrived: adopt or cancel the running rehearsal BEFORE queueing behind it.
+
+        The request's own tokenization runs on the single MLX executor, which is busy with the
+        rehearsal's prefill; deciding there would only cancel after the atom. Decide here, from
+        the event loop, with a token peek that needs no MLX."""
+        state = getattr(self, "_rehearsal_state", None)
+        if state is None:
+            return
+        has_media = any(
+            isinstance(m.get("content"), list)
+            and any(
+                isinstance(p, dict) and p.get("type") not in (None, "text")
+                for p in m["content"]
+            )
+            for m in messages
+        )
+        if has_media:
+            state.cancel_event.set()
+            return
+        try:
+            ids = await asyncio.get_running_loop().run_in_executor(
+                None, self._peek_prompt_ids, messages, enable_thinking, tpl_extra
+            )
+        except Exception:
+            logger.debug("rehearsal peek failed; cancelling", exc_info=True)
+            state.cancel_event.set()
+            return
+        self._settle_rehearsal(ids)
 
     def _settle_rehearsal(self, ids: list[int]) -> None:
         """A real request's prompt is known: adopt the running rehearsal or cancel it."""

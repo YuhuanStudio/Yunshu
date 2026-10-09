@@ -348,3 +348,66 @@ def test_rehearsal_cancel_event_is_preemptible(monkeypatch):
         await eng._rehearsal_task
 
     asyncio.run(main())
+
+
+def _early(eng, messages, ids=None, fail=False):
+    def peek(m, t, e):
+        if fail:
+            raise RuntimeError("tokenizer")
+        return ids
+
+    eng._peek_prompt_ids = peek
+    asyncio.run(eng._settle_rehearsal_early(messages, None, None))
+
+
+def test_early_settle_cancels_a_diverging_request_before_the_executor(monkeypatch):
+    eng, _ = _engine(monkeypatch)
+    ev = threading.Event()
+    st = next_turn.RehearsalState(ev)
+    st.set_ids([9, 1, 3])
+    st.submit()
+    eng._rehearsal_state = st
+    _early(eng, [{"role": "user", "content": "other"}], ids=[9, 2, 2])
+    assert ev.is_set()
+
+
+def test_early_settle_adopts_the_follow_up(monkeypatch):
+    eng, _ = _engine(monkeypatch)
+    ev = threading.Event()
+    st = next_turn.RehearsalState(ev)
+    st.set_ids([9, 1, 3])
+    st.submit()
+    eng._rehearsal_state = st
+    _early(eng, [{"role": "user", "content": "q"}], ids=[9, 1, 3, 5, 6])
+    assert not ev.is_set()
+
+
+def test_early_settle_fails_closed_on_media_and_peek_errors(monkeypatch):
+    for kw, msgs in (
+        (
+            {"ids": [9, 1, 3, 5]},
+            [{"role": "user", "content": [{"type": "image_url", "image_url": {}}]}],
+        ),
+        ({"fail": True}, [{"role": "user", "content": "q"}]),
+    ):
+        eng, _ = _engine(monkeypatch)
+        ev = threading.Event()
+        st = next_turn.RehearsalState(ev)
+        st.set_ids([9, 1, 3])
+        st.submit()
+        eng._rehearsal_state = st
+        _early(eng, msgs, **kw)
+        assert ev.is_set()
+
+
+def test_early_settle_is_free_without_a_rehearsal(monkeypatch):
+    eng, _ = _engine(monkeypatch)
+    eng._rehearsal_state = None
+
+    def boom(*a):
+        raise AssertionError("must not tokenize when no rehearsal runs")
+
+    eng._peek_prompt_ids = boom
+    asyncio.run(
+        eng._settle_rehearsal_early([{"role": "user", "content": "q"}], None, None)
+    )
