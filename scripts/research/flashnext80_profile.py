@@ -152,6 +152,21 @@ async def run(args):
         results[tag] = row
         emit(row)
 
+    # No per-layer async_eval: build = pure Python/C++ graph tracing, eval = encode + GPU execution.
+    original_async = mx.async_eval
+    mx.async_eval = lambda *a, **k: None
+    try:
+        b, e = serial()
+    finally:
+        mx.async_eval = original_async
+    split = {
+        "kind": "trace_vs_gpu",
+        "trace_ms": summarize(b),
+        "eval_ms": summarize(e),
+        "note": "async_eval per layer disabled; trace_ms is host-only tracing, eval_ms is encode + GPU",
+    }
+    emit(split)
+
     # cProfile over a few serial steps: where does host time go, and how often does a step sync?
     import cProfile
     import pstats
