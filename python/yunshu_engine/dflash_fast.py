@@ -568,6 +568,17 @@ def rounds(
                 prof["verify"] / r,
                 prof["commit"] / r,
             )
+            from . import tree_verify as _tv
+
+            if _tv.PROFILE.get("rounds"):
+                n = _tv.PROFILE.pop("rounds")
+                logger.info(
+                    "Tree verify stage profile (%d rounds, ms/round): %s",
+                    n,
+                    {k: round(v / n, 2) for k, v in sorted(_tv.PROFILE.items())},
+                )
+                _tv.PROFILE.clear()
+                _tv.PROFILE["rounds"] = 0
             logger.info(
                 "DFlash budget state: p=%s cycle_ms=%s",
                 [round(x, 2) for x in budget.p],

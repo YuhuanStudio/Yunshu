@@ -79,6 +79,9 @@ def test_window_capture_never_blocks_the_prefill_step(monkeypatch):
     stub.async_eval = lambda x: calls.append("async")
     stub.eval = lambda x: calls.append("eval")
     stub.contiguous = lambda x: calls.append("contiguous") or x
+    import mlx
+
     monkeypatch.setitem(sys.modules, "mlx.core", stub)
+    monkeypatch.setattr(mlx, "core", stub)
     layers, nbytes = w.window_from_chunks([[A(3)], [A(4)]], keep=2)
     assert calls == ["async"] and nbytes == 16
