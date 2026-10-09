@@ -158,10 +158,9 @@ print(msg.content[0].text)
 ### 本地 console
 
 位於 `/console/` 的本地網頁 console 顯示引擎正在做什麼並可管理它，支援英文、繁體中文與簡體中文。
-它由原始碼編譯（如下），並由同一個行程提供：
+它內建於 `yunshu` 套件（pip、uv tool、Homebrew 安裝皆有），不需另外編譯：
 
 ```bash
-cd frontend && pnpm install --frozen-lockfile && pnpm build && cd ..
 yunshu serve -m <model>
 open http://127.0.0.1:8000/console/
 ```
@@ -213,6 +212,8 @@ git clone https://github.com/YuhuanStudio/Yunshu.git && cd Yunshu
 uv sync --extra vision
 uv run yunshu serve -m <model>
 ```
+
+要開發 console 本身，在 `frontend/` 執行 `pnpm install && pnpm dev`（見 [console 說明](docs/CONSOLE.md#developing-the-console)）。
 
 ## 運作方式
 

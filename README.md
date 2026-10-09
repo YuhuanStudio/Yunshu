@@ -164,11 +164,10 @@ Models live in `~/.yunshu/models` (`yunshu config set models_dir PATH` selects t
 ### Local console
 
 The local web console at `/console/` shows what the engine is doing and manages it, in English,
-Traditional Chinese or Simplified Chinese. It is built from the source checkout (below) and served by the
-same process:
+Traditional Chinese or Simplified Chinese. It ships inside the `yunshu` package (pip, uv tool and
+Homebrew installs alike), so there is nothing to build:
 
 ```bash
-cd frontend && pnpm install --frozen-lockfile && pnpm build && cd ..
 yunshu serve -m <model>
 open http://127.0.0.1:8000/console/
 ```
@@ -224,6 +223,8 @@ git clone https://github.com/YuhuanStudio/Yunshu.git && cd Yunshu
 uv sync --extra vision
 uv run yunshu serve -m <model>
 ```
+
+To work on the console itself, run `pnpm install && pnpm dev` in `frontend/` (see the [console guide](docs/CONSOLE.md#developing-the-console)).
 
 ## How it works
 

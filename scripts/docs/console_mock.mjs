@@ -11,8 +11,8 @@ export const statusBody = (o = {}) => ({
   ],
   memory: { active_gb: 24.9, cache_gb: 2.25, peak_gb: 34.2, total_gb: 137.438953472 },
   requests: { active: 0, queued: 0, prefill: 0, decode: 0, items: [] },
-  last: { request_id: "req_25ab1b3f793ab", prompt_tokens: 53, completion_tokens: 300, cached_tokens: 52, prefill_tps: 954.8, decode_tps: 35.1, ttft_ms: 344, t: T - 60 },
-  throughput: { window_s: 60, requests: 1, prompt_tokens: 53, completion_tokens: 300, live_decode_tps: null, mean_prefill_tps: 900, mean_decode_tps: 35.1 },
+  last: { request_id: "req_c41d9e07a2b6f", prompt_tokens: 9800, completion_tokens: 412, cached_tokens: 9400, prefill_tps: 884.2, decode_tps: 58.9, ttft_ms: 344, t: T - 60 },
+  throughput: { window_s: 60, requests: 1, prompt_tokens: 9800, completion_tokens: 412, live_decode_tps: null, mean_prefill_tps: 900, mean_decode_tps: 58.9 },
   ...o,
 });
 const key = (id, name, over = {}) => ({ id, name, prefix: "ysk-" + id.slice(-4), created: 1790000000, enabled: true, scopes: ["infer"], expires: null, expired: false,
@@ -38,7 +38,7 @@ export function install(ctx, mode = {}) {
   const logs = Array.from({ length: 90 }, (_, i) => ({ id: i + 1, t: nowS - (90 - i) * 7, level: i === 37 ? "WARNING" : "INFO", logger: i % 3 ? "uvicorn.access" : "yunshu.engine", msg: i === 37 ? "memory pressure normal, swap 0 B" : MSG[i % MSG.length] }));
   return ctx.route("**/v1/**", (route) => {
     const req = route.request(); const url = new URL(req.url()); const p = url.pathname; const m = req.method();
-    const json = (b, code = 200) => route.fulfill({ status: code, contentType: "application/json", body: JSON.stringify(b) });
+    const json = (b, code = 200) => route.fulfill({ status: code, headers: { "access-control-allow-origin": "*", "access-control-allow-headers": "*", "access-control-allow-methods": "*" }, contentType: "application/json", body: JSON.stringify(b) });
     if (p === "/v1/yunshu/status") { if (mode.offline) return json({ detail: "bad gateway" }, 502); if (mode.unauth) return json({ detail: "Unauthorized" }, 401); const s = mode.status?.(); if (s?.code) return json({ detail: "boom" }, s.code); return json(s ?? statusBody()); }
     if (p === "/v1/models") return json({ object: "list", data: statusBody().models.map((x) => ({ id: x.id })) });
     if (p === "/v1/yunshu/memory") return json({ object: "yunshu.memory", total_gb: 137.438953472, free_gb: 100, host: { pressure_level: "normal", swap_used_gb: 0, swap_total_gb: 0, wired_limit_gb: 100 }, mlx: { active_gb: 24.9, cache_gb: 2.25, peak_gb: 34.2, recommended_working_set_gb: 100 }, owners: [{ kind: "weights", id: "Qwen3.8-27B", bytes: 16.9e9, gb: 16.9, reclaimable: false, estimated: false, source: "p" }, { kind: "apc_ram", id: null, bytes: 2.4e9, gb: 2.4, reclaimable: true, estimated: false, source: "p" }], attribution_overshoot_gb: null, limits: { apc_max_gb: 8, apc_warm_max_gb: 4, guard_margin_pct: 10 } });

@@ -17,15 +17,8 @@ yunshu serve -m <model>
 open http://127.0.0.1:8000/console/
 ```
 
-The console is built from source (`frontend/`, Node.js 22.18+ and pnpm 11.19.0). The build writes
-`python/yunshu_gateway/console_static/`, which a wheel includes only when it was built first. Without a
-build, `/console/` returns an actionable 404 and the API is unaffected.
-
-```bash
-cd frontend
-pnpm install --frozen-lockfile
-pnpm build
-```
+The console ships inside the `yunshu` wheel (`yunshu_gateway/console_static/`), so a pip, uv tool or
+Homebrew install serves it at `/console/` with no build step.
 
 The static shell is public so you can enter a token; inference, model operations, keys and settings keep
 their normal authorization ([Authentication](guides/AUTH_AND_KEYS.md)). If `YUNSHU_AUTH_TOKEN` is set, enter
@@ -163,7 +156,9 @@ load, unload, warmup and download routes, and the authenticated `/debug/*` diagn
 [API surface](guides/API_SURFACE.md#single-operator-console-backend). Missing data is shown as unavailable,
 never as zero.
 
-Development: run `pnpm dev` in `frontend/` and open `http://127.0.0.1:3971/console/`. Vite proxies the
+## Developing the console
+
+The source is in `frontend/` (Node.js 22.18+, pnpm 11.19.0). A source checkout needs `pnpm install --frozen-lockfile && pnpm build` once to write `console_static/` (a built wheel already contains it); without it `/console/` returns an actionable 404 and the API is unaffected. Run `pnpm dev` in `frontend/` and open `http://127.0.0.1:3971/console/`. Vite proxies the
 engine API to `http://127.0.0.1:8000`, or set another server URL in Settings (cross-origin access needs CORS
 configured, see [Authentication](guides/AUTH_AND_KEYS.md#cors)).
 
@@ -196,7 +191,7 @@ cd ..
 uv run pytest tests/unit/test_console_ui.py -q
 ```
 
-Build the console before building a wheel. Hatch includes generated `console_static`
+Build the console before building a wheel; the release workflow checks that `index.html` is in it. Hatch includes generated `console_static`
 assets when present; source distributions include the frontend and pinned YunUI
 package under `frontend/vendor/`. That package contains the approved YunUI code
 without requiring a sibling checkout or an npm release; provenance and checksum are
