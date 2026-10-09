@@ -3,3 +3,6 @@ node_modules/
 evidence/
 playwright-report/
 test-results/
+
+# Dumped from the live gateway by scripts/dump_routes.py (docs route check).
+generated/

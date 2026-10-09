@@ -24,6 +24,17 @@ The static shell is public so you can enter a token; inference, model operations
 their normal authorization ([Authentication](guides/AUTH_AND_KEYS.md)). If `YUNSHU_AUTH_TOKEN` is set, enter
 it in Settings: it stays in page memory unless you choose to remember it on this device.
 
+## Docs inside the console
+
+The 文件 / Docs section renders the user documentation (getting started, API reference, guides,
+developer pages) from `frontend/docs/` (MDX in English, 繁體中文 and 简体中文), compiled into the
+console build, so it works offline and matches the installed version. `⌘K` searches it; the API,
+Settings and Keys pages link to the page that explains them. These MDX pages are the source of
+the user-facing guides; the same-named files in `docs/guides/` are their GitHub-facing counterparts
+(each names its MDX page), and the configuration reference is generated from the settings registry
+(`frontend/scripts/gen_docs_config.py`). Checks: `pnpm test` (links and heading anchors),
+`tests/unit/test_docs_routes.py` (every route named in the docs is registered; generated pages are current).
+
 ## Status island
 
 A floating pill at the bottom of every page shows the live engine state: running model, memory, prefill or

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { DocLink } from "./docs/DocLink";
 import {
   Select,
   SelectContent,
@@ -76,6 +77,7 @@ export function ApiView({
         title={t("api.page.title")}
         description={t("api.page.description")}
       />
+      <DocLink slug="api/overview" label={t("docs.link.api")} />
       <SectionCard
         icon={Globe}
         title={t("api.address.title")}

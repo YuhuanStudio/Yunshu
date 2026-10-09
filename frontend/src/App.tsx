@@ -43,12 +43,17 @@ import {
   Stethoscope,
   Sun,
   X,
+  BookOpen,
 } from "lucide-react";
 import { useEngine } from "./useEngine";
 import { LivePill } from "./LivePill";
 import { tabTitle } from "./engineView";
 import type { Connection } from "./api";
 import { FooterStatus } from "./FooterStatus";
+import { searchDocs } from "./docs/search.ts";
+import { docHref } from "./docs/links.ts";
+import { useDocTitle } from "./docs/title-store.ts";
+import type { SearchHit } from "./docs/types.ts";
 import { LanguageSwitch } from "./LanguageSwitch";
 import {
   LOCALES,
@@ -98,6 +103,7 @@ const Playground = lazy(() =>
 const Downloads = lazy(() => import("./Downloads"));
 const Cache = lazy(() => import("./Cache"));
 const Keys = lazy(() => import("./Keys"));
+const Docs = lazy(() => import("./Docs"));
 const Logs = lazy(() => import("./Logs"));
 // i18n-keys: shell.page.
 const pageTitle = (page: string) => tr(`shell.page.${page}`);
@@ -168,6 +174,7 @@ function startAtTop(el: HTMLElement | null) {
 
 export default function App() {
   const locale = useLocale();
+  const docTitle = useDocTitle();
   const [{ page, sub }, setRoute] = useState(route),
     [menu, setMenu] = useState(false),
     [collapsed, setCollapsed] = useState(() => {
@@ -358,11 +365,40 @@ export default function App() {
     },
   ];
   const q = query.trim().toLowerCase();
-  const shown = q
-    ? commands.filter((c) =>
-        `${c.title} ${c.description ?? ""} ${c.id}`.toLowerCase().includes(q),
-      )
-    : commands;
+  // Docs search: the per-locale text index loads on the first query typed in the palette.
+  const [docHits, setDocHits] = useState<SearchHit[]>([]);
+  useEffect(() => {
+    if (!palette || q.length < 2) {
+      setDocHits([]);
+      return;
+    }
+    let live = true;
+    import("./docs/data.ts")
+      .then((m) => m.loadSearch(locale))
+      .then(
+        (entries) => live && setDocHits(searchDocs(entries, q)),
+        () => live && setDocHits([]),
+      );
+    return () => {
+      live = false;
+    };
+  }, [palette, q, locale]);
+  const docItems: CommandPaletteItem[] = docHits.map((h) => ({
+    id: "doc:" + h.slug + (h.heading ? "#" + h.heading.id : ""),
+    title: h.heading ? `${h.title} › ${h.heading.text}` : h.title,
+    description: h.snippet,
+    icon: <BookOpen size={14} />,
+    group: t("shell.cmd.docs"),
+    onSelect: () => go(docHref(h.slug, h.heading?.id)),
+  }));
+  const shown = [
+    ...(q
+      ? commands.filter((c) =>
+          `${c.title} ${c.description ?? ""} ${c.id}`.toLowerCase().includes(q),
+        )
+      : commands),
+    ...docItems,
+  ];
   useEffect(() => {
     const fn = () => {
       setRoute(route());
@@ -530,6 +566,11 @@ export default function App() {
                     icon: MessageSquare,
                   },
                   { label: t("shell.page.api"), href: "/api", icon: Code2 },
+                  {
+                    label: t("shell.page.docs"),
+                    href: "/docs",
+                    icon: BookOpen,
+                  },
                 ],
               },
               {
@@ -692,7 +733,9 @@ export default function App() {
                   <BreadcrumbSeparator />
                   <BreadcrumbItem className="min-w-0">
                     {sub ? (
-                      <BreadcrumbLink href="#/models">
+                      <BreadcrumbLink
+                        href={page === "docs" ? "#/docs" : "#/models"}
+                      >
                         {pageTitle(page)}
                       </BreadcrumbLink>
                     ) : (
@@ -706,7 +749,9 @@ export default function App() {
                       <BreadcrumbSeparator />
                       <BreadcrumbItem className="min-w-0">
                         <BreadcrumbPage className="truncate">
-                          {modelLabel(sub)}
+                          {page === "docs"
+                            ? (docTitle ?? "…")
+                            : modelLabel(sub)}
                         </BreadcrumbPage>
                       </BreadcrumbItem>
                     </>
@@ -864,6 +909,7 @@ export default function App() {
                         )}
                         {page === "logs" && <Logs connection={connection} />}
                         {page === "keys" && <Keys connection={connection} />}
+                        {page === "docs" && <Docs sub={sub} />}
                         {page === "cache" && (
                           <Cache connection={connection} engine={engine} />
                         )}

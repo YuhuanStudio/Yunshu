@@ -2,6 +2,7 @@ import api from "./api.ts";
 import common from "./common.ts";
 import cache from "./cache.ts";
 import diagnostics from "./diagnostics.ts";
+import docs from "./docs.ts";
 import downloads from "./downloads.ts";
 import errors from "./errors.ts";
 import keys from "./keys.ts";
@@ -22,6 +23,7 @@ export default {
   requests,
   models,
   downloads,
+  docs,
   cache,
   playground,
   diagnostics,

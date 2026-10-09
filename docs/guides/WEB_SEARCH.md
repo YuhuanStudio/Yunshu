@@ -1,5 +1,7 @@
 # Web search and fetch
 
+> The console's Docs section carries this guide in English, 繁體中文 and 简体中文 ([`frontend/docs/guides/web-search.mdx`](../../frontend/docs/guides/web-search.mdx)); this file is its GitHub-facing counterpart.
+
 Coding agents can request server-side search through Responses `web_search` /
 `web_search_preview` or Anthropic `web_search_20250305`. Anthropic also supports
 `web_fetch_20250910`. Results use their dialect's tool-result and citation structures.

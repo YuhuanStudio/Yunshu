@@ -1,0 +1,70 @@
+---
+title: Console
+description: The web console the Yunshu server hosts for watching the engine, managing models and keys, reading logs, trying the API and reading these docs.
+---
+
+The console is a web application served by the Yunshu gateway itself, from the same address and port as the API. It is a view onto one running engine: live status, requests, models, caches, logs, API keys, settings and this documentation. It does not start the Yunshu process and it is not a chat product.
+
+<Callout type="info">
+The console speaks Traditional Chinese, Simplified Chinese and English. It follows your browser's language and the choice is kept in the browser; switch it from the language button in the top bar. This documentation follows the same choice.
+</Callout>
+
+## Open the console
+
+Start the server as usual, then open `/console/` on the server's address in a browser. With the default host and port that is `http://127.0.0.1:8000/console/`.
+
+The static pages are public so that you can enter a token in the browser. Every API call the console makes still follows the normal authentication rules. Reading status, history, requests, models and cache views needs no token on a default local server. Management pages (API keys, logs, service, CORS) need the admin token, and show a notice with a link to Settings when it is missing. Enter `YUNSHU_AUTH_TOKEN` or an admin key in Settings; by default it stays in page memory only and is cleared when you reload.
+
+If `/console/` answers 404 with the text "Yunshu Console is not built", the installed package does not contain the console build. The API is not affected. A source checkout builds the console with Node.js 22.18 or newer and pnpm:
+
+```bash
+cd frontend
+pnpm install --frozen-lockfile
+pnpm build
+```
+
+The build is written to `python/yunshu_gateway/console_static`, which the gateway serves.
+
+## Pages
+
+| Page | What it does |
+|---|---|
+| Overview | Live engine state: phase (queued, prefill, decode), throughput, memory, caches, active requests. Updates about four times a second while a request runs and calmly when idle. |
+| Requests | Live and finished requests with phase timelines, token and cache details, filtering, CSV export and per-request cancel. |
+| Logs | The server log ring with level and text filters and a live tail. |
+| Diagnostics | Health checks, host readouts, a support-bundle preview and raw diagnostic data. |
+| Models | Loaded and available models with memory figures; load, unload, warm up, fit checks and idle retention. |
+| Downloads | Download models from Hugging Face with progress, disk-space check and cancel. |
+| Cache | Prefix-cache tiers (memory, warm, SSD) with entries, lifecycle events and clear actions. |
+| Playground | Streaming chat with generation settings, tools, images, token confidence and generated code snippets. |
+| API access | Connection snippets for your server and a catalogue of the routes it registers. |
+| Docs | These pages, searchable from the command palette. |
+| Keys | Named API keys with scopes, expiry and rolling-day quotas, and per-key usage. |
+| Settings | Server address and token, theme and language, every engine setting with its source, CORS and service restart. |
+
+## Status and the status band
+
+The band at the bottom of every page shows the engine state, the loaded model and memory. Click it (or the compact pill on a phone) to open the status island: live phase, throughput, memory by owner and the host. Values the server did not report are shown as unavailable, not as zero.
+
+If a refresh fails the console keeps the last numbers and says so; when the engine cannot be reached it shows an offline banner with Retry and Connection settings.
+
+## Command palette
+
+Press `⌘K` (`Ctrl K` on other systems) to open the command palette. It jumps to pages, runs actions such as loading a model or clearing a cache, switches language, and searches these docs: type two or more characters and matching pages and sections appear under Docs. `?` lists the keyboard shortcuts.
+
+## Connection settings
+
+By default the console talks to the same origin that served it. In Settings you can point it at another Yunshu server; that server must then allow the console's origin through its CORS configuration (`YUNSHU_CORS_ORIGINS`, editable in Settings when you have the admin token). Only the server address, theme and language are saved in the browser; the token is saved only if you ask for it.
+
+## What the console does not do
+
+- It is not a multi-user control plane: keys carry scopes and quotas for one local server, nothing more.
+- It keeps no durable chat history; the playground library is stored in your browser only.
+- Prompts and responses are never stored by the console's request views, only metadata.
+
+## Related
+
+- [Quickstart](/docs/getting-started/quickstart)
+- [Configuration](/docs/guides/configuration)
+- [Operations API](/docs/api/operations)
+- [Models API](/docs/api/models)

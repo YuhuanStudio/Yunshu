@@ -1,5 +1,7 @@
 # Verifying a change: `yv`
 
+> The console's Docs section carries this guide in English, 繁體中文 and 简体中文 ([`frontend/docs/developers/verification.mdx`](../../frontend/docs/developers/verification.mdx)); this file is its GitHub-facing counterpart.
+
 `scripts/dev/yv` runs the standard verification of a candidate change end to end and returns one
 verdict. Use it instead of writing a measurement script: it builds pinned trees for both arms,
 submits every GPU job to gpuq itself with sane memory / timeout / `--quiet` settings, stops at

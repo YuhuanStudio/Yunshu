@@ -1,5 +1,7 @@
 # Tracking upstream code
 
+> The console's Docs section carries this guide in English, 繁體中文 and 简体中文 ([`frontend/docs/developers/upstream-tracking.mdx`](../../frontend/docs/developers/upstream-tracking.mdx)); this file is its GitHub-facing counterpart.
+
 Yunshu builds on other projects. `vendor.json` records every place it does, so upstream changes can be followed.
 
 | kind | meaning | sync |

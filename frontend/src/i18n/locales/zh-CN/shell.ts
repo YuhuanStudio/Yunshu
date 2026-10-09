@@ -127,6 +127,8 @@ const shell: Shape<typeof zh> = {
   "page.logs": "日志",
   "page.downloads": "下载",
   "page.cache": "缓存",
+  "page.docs": "文档",
+  "cmd.docs": "文档",
   "page.keys": "密钥",
   "nav.section.manage": "管理",
   "footer.memory.source": "数据来源：引擎状态，每 3 秒更新。",
@@ -181,7 +183,8 @@ const shell: Shape<typeof zh> = {
   "island.mem.pressure": "内存压力",
   "island.mem.swap": "交换",
   "island.mem.reserve": "保留池",
-  "island.mem.reserveTip": "Metal 已向系统保留、当前空闲的内存，可复用，压力大时也会释放。",
+  "island.mem.reserveTip":
+    "Metal 已向系统保留、当前空闲的内存，可复用，压力大时也会释放。",
   "island.host.busy": "GPU 忙碌",
   "island.host.power": "GPU / 合计功耗",
   "island.nav.requests": "请求",
