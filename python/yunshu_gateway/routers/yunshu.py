@@ -42,6 +42,7 @@ from ..console_contracts import (
 )
 from ..engine import get_display_model_id, get_engine, get_model_manager
 from ..x_yunshu import (
+    BOOT_ID,
     parse_keep_alive,
     progress_payload,
     recent_rates,
@@ -216,6 +217,7 @@ async def status(request: Request) -> dict:
         "version": yunshu_version(),
         "state": str(getattr(state, "value", state)),
         "uptime_s": round(time.monotonic() - _STARTED, 1),
+        "pid": os.getpid(),
         "load_error": getattr(request.app.state, "load_error", None),
         "models": _models(),
         "memory": _memory(),
@@ -246,14 +248,26 @@ async def recent_requests(
     limit: int = 100,
     model: str | None = None,
     since: float | None = None,
+    after_seq: int | None = Query(None, ge=0),
 ) -> dict:
     """Finished requests, newest first (the 512-entry ring), each with ``offsets_ms``: the
     phase timestamps (arrive, admit, first token, last token, done) in ms after arrival."""
     _check_permission(request, "can_infer")
     if not 1 <= limit <= 512:
         raise HTTPException(400, "limit must be between 1 and 512")
-    rows = registry.recent_entries(limit=limit, model=model, since=since)
-    return {"object": "list", "data": rows, "count": len(rows), "capacity": 512}
+    rows, latest = registry.recent_cursor(
+        limit=limit, model=model, since=since, after_seq=after_seq
+    )
+    return {
+        "object": "list",
+        "data": rows,
+        "count": len(rows),
+        "capacity": 512,
+        # The cursor: a reader keeps ``latest_seq`` and asks for ``after_seq`` next time;
+        # a changed ``boot_id`` means the engine restarted and the sequence started over.
+        "boot_id": BOOT_ID,
+        "latest_seq": latest,
+    }
 
 
 @router.get("/yunshu/history")

@@ -294,5 +294,23 @@ const settingdesc = {
   YUNSHU_TELEMETRY_INTERVAL_S: "主機遙測取樣間隔（秒）；需重新啟動。",
   YUNSHU_SERVE_LOG_RETENTION_DAYS:
     "歷史 API 中繼資料的保留天數；0 代表不依時間過濾。",
+  YUNSHU_CONSOLE:
+    "`yunshu serve` 同時以並行程序啟動主控台程序（網頁主控台、文件、歷史紀錄器）。它不載入 MLX，引擎重新啟動或當機時仍持續運作。`--no-console` 可關閉。",
+  YUNSHU_CONSOLE_PORT:
+    "主控台程序的連接埠。8100 避開引擎的 8000 與常見的開發伺服器。",
+  YUNSHU_CONSOLE_HOST:
+    "主控台程序的綁定主機。未設定時：並行啟動沿用引擎的主機，單獨執行為 127.0.0.1。",
+  YUNSHU_CONSOLE_ENGINE:
+    "主控台程序監看並轉送請求的引擎網址。未設定時：啟動它的引擎，否則為 http://127.0.0.1:8000。",
+  YUNSHU_CONSOLE_ENGINE_TOKEN:
+    "主控台程序記錄歷史時讀取引擎所用的 Bearer 權杖。未設定時使用 YUNSHU_AUTH_TOKEN。",
+  YUNSHU_CONSOLE_POLL_S:
+    "主控台程序讀取引擎的間隔（秒）；1 秒對應 1 秒的歷史解析度。",
+  YUNSHU_CONSOLE_HISTORY:
+    "把指標歷史與請求紀錄（僅中繼資料）寫入 ~/.yunshu/console-history.sqlite，引擎離線期間保留為缺口與事件。",
+  YUNSHU_CONSOLE_RETENTION_DAYS:
+    "主控台保留 1 分鐘歷史、請求紀錄與引擎事件的天數。",
+  YUNSHU_CONSOLE_DB_MAX_MB:
+    "主控台歷史檔案的大小上限（MiB）；超過時刪除最舊的資料。",
 };
 export default settingdesc;
