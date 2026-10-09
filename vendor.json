@@ -2411,8 +2411,8 @@
       "why": "MLX serving engine: tools, caching, agent runtime",
       "commit": "082d72230417bcc5a24ff16e44d70c62a8c09049",
       "reviewed_date": "2026-10-09",
-      "reviewed_commit": "45842692b6198c7f4a2b7e543e218e9f7752a6c3",
-      "review_reason": "Reviewed upstream subjects: feat(cli): support cache-only model loading (#4387); Lock automatic prefix cache persistence across servers (#4381); feat(scheduler): bound a streaming request's stall while another prompt prefills (#4338); fix(agents): support OpenCode 2.x provider and service flow (#4380); feat(system-one): serve Cloudflare Clef on native MLX (#4365); feat(scheduler): wait for a running prefill of the same prompt prefix (#4345); +3 more. Independent local code retained; no port in this sync."
+      "reviewed_commit": "837d6d6234936f6886caf1edff9f5d01eaee1330",
+      "review_reason": "Reviewed upstream subjects: feat(system-one): serve OpenJev typed decisions on native MLX (#4374). Independent local code retained; no port in this sync."
     },
     {
       "repo": "https://github.com/waybarrios/vllm-mlx",
