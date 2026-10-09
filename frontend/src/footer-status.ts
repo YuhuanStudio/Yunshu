@@ -252,7 +252,7 @@ export function footerPills(input: FooterInput): FooterPill[] {
         : t("shell.footer.load.active", { active: a.counts.active }),
     tone: "neutral",
     dot: false,
-    minCh: 16,
+    minCh: 14,
     help: t("shell.footer.load.help", {
       active: a.counts.active,
       queued: a.counts.queued,
@@ -264,8 +264,8 @@ export function footerPills(input: FooterInput): FooterPill[] {
       key: "swap",
       label: t("shell.footer.swap.label"),
       value: `${n(swap, 1)} GB`,
-      tone: "warning",
-      dot: true,
+      tone: "neutral",
+      dot: false,
       help: t("shell.footer.swap.help"),
     });
   if (input.gpuBusy != null)

@@ -20,6 +20,26 @@ export const PAGES = [
 ] as const;
 export type Page = (typeof PAGES)[number];
 
+/**
+ * The console has six top-level pages. The rest are tabs of one of them and keep their own address,
+ * so `#/downloads`, `#/logs`, `#/keys` ... still open (the old links keep working) and show their
+ * parent's tab strip with the right tab selected.
+ */
+export const TABS: Partial<Record<Page, readonly Page[]>> = {
+  models: ["models", "downloads", "cache"],
+  diagnostics: ["diagnostics", "logs"],
+  settings: ["settings", "keys", "api"],
+};
+export const PARENT: Partial<Record<Page, Page>> = {
+  downloads: "models",
+  cache: "models",
+  logs: "diagnostics",
+  keys: "settings",
+  api: "settings",
+};
+/** The sidebar entry a page belongs to. */
+export const topPage = (page: Page): Page => PARENT[page] ?? page;
+
 export interface Route {
   page: Page;
   /** The part after the page (`#/models/<id>`, `#/docs/api/audio`), decoded; Models and Docs use it. */

@@ -3,6 +3,7 @@ import { LiveNumber } from "./LiveNumber";
 import { rangeSeconds, useRangeHistory } from "./useRangeHistory";
 import { PrefillBar } from "./PrefillBar";
 import { SegmentedTray } from "./SegmentedTray";
+import { useFlip } from "./motion/flip";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   AnimatedNumber,
@@ -48,13 +49,7 @@ import {
   StatCard,
   StatGrid,
 } from "@yuhuanowo/yunui/patterns";
-import {
-  ActivityPanel,
-  ChartCard,
-  LatencyPanel,
-  PhasePanel,
-  SeriesChart,
-} from "./AnalyticsPanels";
+import { ChartCard, SeriesChart } from "./AnalyticsPanels";
 import { has, t, tr, useLocale } from "./i18n/index.ts";
 import { observationCsv } from "./analytics";
 import { chartRows, windowPoints } from "./series";
@@ -139,40 +134,38 @@ const LANES_SHOWN = 5;
 const LANE_AREA_PX = LANES_SHOWN * 65;
 
 /**
- * Fixed lane slots. A request takes the first free slot when it appears and keeps it until it ends
- * (it fades there for `ms`, then the slot is free again): rows never shift because another changed.
+ * The lane list in start order with room for `n`: a request joins at the end, an ended one fades in
+ * place for `ms` and is then removed, and the rows below glide up (FLIP, see useFlip). The area is
+ * always `n` rows tall, so nothing around it moves, and a lone request is always the first row.
  */
-type LaneSlot = { row: RequestRow; until: number } | null;
+type LaneSlot = { row: RequestRow; until: number };
 function useLaneSlots(
   rows: readonly RequestRow[],
   n: number,
   ms = 340,
 ): ({ row: RequestRow; leaving: boolean } | null)[] {
   const [, bump] = useState(0);
-  const slots = useRef<LaneSlot[]>(Array.from({ length: n }, () => null));
+  const list = useRef<LaneSlot[]>([]);
   const now = Date.now();
   const byId = new Map(rows.map((r) => [r.request_id, r]));
-  const s = slots.current;
-  for (let i = 0; i < n; i++) {
-    const cur = s[i];
-    if (!cur) continue;
+  list.current = list.current.flatMap((cur) => {
     const fresh = byId.get(cur.row.request_id);
-    if (fresh) s[i] = { row: fresh, until: 0 };
-    else if (cur.until === 0) {
-      s[i] = { row: cur.row, until: now + ms };
+    if (fresh) return [{ row: fresh, until: 0 }];
+    if (cur.until === 0) {
       setTimeout(() => bump((x) => x + 1), ms + 20);
-    } else if (cur.until <= now) s[i] = null;
-  }
-  const placed = new Set(s.map((x) => x?.row.request_id));
+      return [{ row: cur.row, until: now + ms }];
+    }
+    return cur.until > now ? [cur] : [];
+  });
+  const placed = new Set(list.current.map((x) => x.row.request_id));
   const waiting = rows
     .filter((r) => !placed.has(r.request_id))
     .sort((a, b) => b.elapsed_s - a.elapsed_s);
-  for (const r of waiting) {
-    const free = s.findIndex((x) => x === null);
-    if (free < 0) break;
-    s[free] = { row: r, until: 0 };
-  }
-  return s.map((x) => (x ? { row: x.row, leaving: x.until > 0 } : null));
+  for (const r of waiting) list.current.push({ row: r, until: 0 });
+  const shown = list.current
+    .slice(0, n)
+    .map((x) => ({ row: x.row, leaving: x.until > 0 }));
+  return [...shown, ...Array.from({ length: n - shown.length }, () => null)];
 }
 
 function RequestLane({ row, leaving }: { row: RequestRow; leaving?: boolean }) {
@@ -190,6 +183,7 @@ function RequestLane({ row, leaving }: { row: RequestRow; leaving?: boolean }) {
   return (
     <li
       className="live-slot h-16"
+      data-flip={row.request_id}
       data-leaving={leaving ? "" : undefined}
       aria-hidden={leaving ? true : undefined}
     >
@@ -320,6 +314,7 @@ export function Dashboard({
   const [range, setRange] = useState("15m"),
     [metric, setMetric] = useState("decode"),
     [heroMetric, setHeroMetric] = useState("decode"),
+    [heroWindow, setHeroWindow] = useState("60"),
     [table, setTable] = useState(false),
     [activeX, setActiveX] = useState<number | null>(null),
     [copied, setCopied] = useState<string | null>(null);
@@ -367,6 +362,8 @@ export function Dashboard({
       : (points.find((sample) => sample.at === activeX) ?? null);
   const items = status?.requests.items ?? [];
   const lanes = useLaneSlots(items, LANES_SHOWN);
+  const laneRef = useRef<HTMLUListElement>(null);
+  useFlip(laneRef);
   const hostState = useHostTelemetry(connection, online);
   const hostShown =
     !!hostState.host &&
@@ -587,13 +584,17 @@ export function Dashboard({
             icon={Timer}
             label={t("overview.stats.ttft")}
             value={
-              <StatValue
-                text={last?.ttft_ms == null ? "—" : formatMs(last.ttft_ms)}
-              />
+              <span title={t("overview.tip.ttft")}>
+                <StatValue
+                  text={last?.ttft_ms == null ? "—" : formatMs(last.ttft_ms)}
+                />
+              </span>
             }
             subtext={
               last
-                ? t("overview.stats.latestAt", { t: clock(last.t * 1000) })
+                ? t("overview.stats.latestAge", {
+                    age: elapsed(Math.max(0, Date.now() / 1000 - last.t)),
+                  })
                 : t("overview.stats.noFinished")
             }
           />
@@ -602,7 +603,11 @@ export function Dashboard({
             valueFirst
             icon={Gauge}
             label={t("overview.stats.prefixRate")}
-            value={cache == null ? "—" : `${number(cache, 0)}%`}
+            value={
+              <span title={t("overview.tip.hit")}>
+                {cache == null ? "—" : `${number(cache, 0)}%`}
+              </span>
+            }
             subtext={
               cache == null
                 ? t("overview.stats.noFinished")
@@ -622,14 +627,14 @@ export function Dashboard({
             icon={HardDrive}
             label={t("overview.stats.metal")}
             value={
-              <>
+              <span title={t("overview.tip.metal")}>
                 <Slot ch={5}>
                   <LiveNumber value={memory?.active_gb ?? null} digits={1} />
                 </Slot>
                 <span className="ml-1 text-xs font-normal text-muted-foreground">
                   GB
                 </span>
-              </>
+              </span>
             }
             subtext={t("overview.stats.metalSub", {
               total: number(memory?.total_gb),
@@ -646,21 +651,32 @@ export function Dashboard({
       >
         <div className="flex min-w-0 flex-col justify-between gap-5 p-4 max-lg:order-2">
           <div className="min-w-0">
-            <div className="flex items-center justify-between gap-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
               <p className="text-xs text-muted-foreground">
                 {heroMetric === "decode"
                   ? t("overview.hero.decode")
                   : t("overview.hero.prefill")}
               </p>
-              <SegmentedTray
-                aria-label={t("overview.hero.metric")}
-                value={heroMetric}
-                onChange={setHeroMetric}
-                options={[
-                  { value: "decode", label: t("overview.series.decode") },
-                  { value: "prefill", label: t("overview.series.prefill") },
-                ]}
-              />
+              <div className="flex items-center gap-2">
+                <SegmentedTray
+                  aria-label={t("overview.hero.window")}
+                  value={heroWindow}
+                  onChange={setHeroWindow}
+                  options={[
+                    { value: "60", label: t("overview.hero.window60") },
+                    { value: "300", label: t("overview.hero.window300") },
+                  ]}
+                />
+                <SegmentedTray
+                  aria-label={t("overview.hero.metric")}
+                  value={heroMetric}
+                  onChange={setHeroMetric}
+                  options={[
+                    { value: "decode", label: t("overview.series.decode") },
+                    { value: "prefill", label: t("overview.series.prefill") },
+                  ]}
+                />
+              </div>
             </div>
             <SeriesChart
               busy={busy}
@@ -677,7 +693,7 @@ export function Dashboard({
               formatX={clock}
               formatY={formatNumber}
               maxGap={12000}
-              liveWindowMs={300_000}
+              liveWindowMs={Number(heroWindow) * 1000}
             />
           </div>
         </div>
@@ -708,7 +724,11 @@ export function Dashboard({
           </div>
           {/* Five rows of reserved space: requests come and go inside it, nothing below moves. */}
           <div className="relative flex-1" style={{ minHeight: LANE_AREA_PX }}>
-            <ul className="divide-y divide-border/60">
+            <ul
+              className="divide-y divide-border/60"
+              data-live-list=""
+              ref={laneRef}
+            >
               {lanes.map((lane, i) =>
                 lane ? (
                   <RequestLane
@@ -1012,16 +1032,6 @@ export function Dashboard({
               </Button>
             </div>
           )}
-          <div className="grid min-w-0 gap-5 xl:grid-cols-2">
-            <LatencyPanel records={observed} />
-            <PhasePanel engine={engine} navigate={navigate} />
-          </div>
-          <ActivityPanel
-            history={points}
-            start={start}
-            end={end}
-            onSelectTime={setActiveX}
-          />
           <ChartCard
             title={t("overview.concurrency.title")}
             description={t("overview.concurrency.desc")}

@@ -381,7 +381,8 @@ test("status band: separate bordered capsule pills, no full-width bar, no hairli
   expect(engine.dot).toBe(m.success);
   expect(engine.dotSize).toBeCloseTo(6, 0);
   // No reserved gap: the pills end where their content ends, far short of the bar's full width.
-  expect(m.pillsRight).toBeLessThan(1000);
+  // the pills reserve their widths (nothing moves when numbers change), so the band is a little wider
+  expect(m.pillsRight).toBeLessThan(1100);
 });
 
 test("no chart carries the always-on mono readout row under its plot", async ({

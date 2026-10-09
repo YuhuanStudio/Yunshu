@@ -23,6 +23,8 @@ const shell: Shape<typeof zh> = {
   "engine.headline.shortStarting": "Starting",
   "engine.headline.shortPrefill": "Prefill",
   "engine.headline.prefillNoSpeed": "In prefill, no speed reported yet",
+  "engine.headline.prefillCached":
+    "The last request hit the cache: no real prefill",
   "engine.headline.idle": "Idle",
   "engine.headline.none": "No finished requests yet",
   "engine.live.offline": "Offline",
@@ -72,6 +74,7 @@ const shell: Shape<typeof zh> = {
   "footer.load.help": "{active} running, {queued} queued.",
   "footer.sentenceEnd": ".",
   "nav.skip": "Skip to main content",
+  "nav.tabs": "Tabs",
   "nav.ariaLabel": "Console navigation",
   "nav.close": "Close navigation",
   "nav.open": "Open navigation",

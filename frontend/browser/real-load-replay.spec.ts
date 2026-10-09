@@ -20,18 +20,23 @@ interface Line {
   status?: Record<string, unknown>;
   requests?: Record<string, unknown>[];
 }
-const LINES: Line[] = gunzipSync(
-  readFileSync(new URL("./fixtures/real-load.jsonl.gz", import.meta.url)),
-)
-  .toString()
-  .trim()
-  .split("\n")
-  .map((l) => JSON.parse(l));
-const STATUS = LINES.filter((l) => l.status);
+const load = (name: string): Line[] =>
+  gunzipSync(readFileSync(new URL(`./fixtures/${name}`, import.meta.url)))
+    .toString()
+    .trim()
+    .split("\n")
+    .map((l) => JSON.parse(l));
+// "burst": 11 concurrent requests, prefill and decode; "single": one request decoding for 40 s.
+const FIXTURES = {
+  burst: load("real-load.jsonl.gz"),
+  single: load("real-load-single.jsonl.gz"),
+};
 const SPEED = 3;
 const SECONDS = 20;
 
-async function replay(page: Page) {
+async function replay(page: Page, kind: keyof typeof FIXTURES = "burst") {
+  const LINES = FIXTURES[kind];
+  const STATUS = LINES.filter((l) => l.status);
   const t0 = Date.now();
   const at = () => ((Date.now() - t0) / 1000) * SPEED;
   await page.addInitScript(() =>
@@ -73,17 +78,47 @@ for (const [name, project] of [
   ["ipad", (({ defaultBrowserType: _, ...d }) => d)(devices["iPad Pro 11"])],
   ["iphone", (({ defaultBrowserType: _, ...d }) => d)(devices["iPhone 15"])],
 ] as const) {
-  for (const route of ["overview", "requests"]) {
-    test(`${name} ${route}: real load does not move the page`, async ({
+  for (const [route, kind] of [
+    ["overview", "burst"],
+    ["requests", "burst"],
+    ["overview", "single"],
+  ] as const) {
+    test(`${name} ${route} (${kind}): real load does not move the page`, async ({
       browser,
     }) => {
       const ctx = await browser.newContext(project);
       const page = await ctx.newPage();
-      await replay(page);
+      await replay(page, kind);
       await page.goto(`/console/#/${route}`, { waitUntil: "domcontentloaded" });
       await page.waitForTimeout(4500); // first paint and first host sample are not "load"
       await page.evaluate(() => window.__review.reset());
-      await page.waitForTimeout(SECONDS * 1000);
+      // The live card's count and its rows must agree: "n active" with an empty row area is a defect.
+      const empty: string[] = [];
+      let streak = 0;
+      for (let i = 0; i < SECONDS * 2; i++) {
+        await page.waitForTimeout(500);
+        if (route !== "overview") continue;
+        const seen = await page.evaluate(() => {
+          const h = document.querySelector('[data-testid="live-panel"] h2');
+          const n = Number(/\d+/.exec(h?.textContent ?? "")?.[0] ?? 0);
+          const rows = [
+            ...document.querySelectorAll(
+              '[data-testid="live-panel"] li.live-slot .live-row-inner',
+            ),
+          ].filter((e) => {
+            const r = e.getBoundingClientRect();
+            return r.height > 10 && Number(getComputedStyle(e).opacity) > 0.5;
+          }).length;
+          const first = document.querySelector(
+            '[data-testid="live-panel"] li:first-child .live-row-inner',
+          );
+          return { n, rows, first: !!first };
+        });
+        streak =
+          seen.n > 0 && (seen.rows === 0 || !seen.first) ? streak + 1 : 0;
+        if (streak >= 2) empty.push(`t=${i / 2}s n=${seen.n} rows=0`);
+      }
+      expect(empty, "active requests but no visible lane row").toEqual([]);
       const rec = await page.evaluate(() => window.__review.stop());
       const s = summarize(rec.entries, rec.frames);
       if (process.env.REPLAY_RESULTS)

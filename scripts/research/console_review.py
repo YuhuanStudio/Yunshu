@@ -197,8 +197,22 @@ def _request(base: str, model: str, a: Action, results: list[dict]) -> None:
             "events": events,
             "s": round(time.time() - t0, 2),
             "ok": ok,
+            # what the engine was asked for, without the text: lets the reader check that no
+            # sampling parameter (temperature, presence_penalty, ...) switched speculation off
+            "params": {
+                **{k: v for k, v in body.items() if k not in ("messages", "tools")},
+                "has_tools": "tools" in body,
+            },
         }
     )
+
+
+def _last_request(engine: str) -> dict:
+    """The engine's own record of its last request (speculative mode, rates), for the summary."""
+    try:
+        return strip_meta(_get(f"{engine}/v1/yunshu/status").get("last") or {})
+    except Exception as exc:  # noqa: BLE001
+        return {"error": repr(exc)[:100]}
 
 
 def _get(url: str, timeout: float = 5.0):
@@ -393,6 +407,21 @@ def main(argv: list[str] | None = None) -> int:
             "bad": bad,
             "failed_on_purpose": fails,
             "capture_rc": [c.returncode for c in caps],
+            "request_params_by_kind": {
+                k: sorted(
+                    {
+                        json.dumps(r["params"], sort_keys=True)
+                        for r in results
+                        if r["kind"] == k and "params" in r
+                    }
+                )
+                for k in sorted({r["kind"] for r in results})
+            },
+            "per_request": [
+                {x: r.get(x) for x in ("kind", "status", "events", "s")}
+                for r in results
+            ],
+            "engine_last": _last_request(engine),
         }
         (out / "summary.json").write_text(json.dumps(summary, indent=1))
         print(json.dumps(summary, indent=1))

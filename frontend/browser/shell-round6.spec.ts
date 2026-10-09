@@ -245,20 +245,27 @@ test("? opens the shortcuts sheet and g then r goes to requests", async ({
   await expect(page).toHaveURL(/#\/requests/);
 });
 
-test("the sidebar has the four groups and the new pages", async ({ page }) => {
+test("the sidebar has the four groups; downloads, cache, logs and keys are tabs", async ({
+  page,
+}) => {
   await install(page, world());
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/console/#/overview");
   const nav = page.getByRole("navigation", { name: "控制台導覽" });
   for (const group of ["監控", "模型", "開發", "管理"])
     await expect(nav.getByText(group, { exact: true })).toBeVisible();
-  for (const [label, hash] of [
-    ["日誌", "logs"],
-    ["下載", "downloads"],
-    ["快取", "cache"],
-    ["金鑰", "keys"],
+  for (const [from, label, hash] of [
+    ["models", "下載", "downloads"],
+    ["models", "快取", "cache"],
+    ["diagnostics", "日誌", "logs"],
+    ["settings", "金鑰", "keys"],
+    ["settings", "API 接入", "api"],
   ] as const) {
-    await nav.getByRole("link", { name: label, exact: true }).click();
+    await page.goto(`/console/#/${from}`);
+    await page
+      .getByTestId("page-tabs")
+      .getByText(label, { exact: true })
+      .click();
     await expect(page).toHaveURL(new RegExp(`#/${hash}`));
   }
 });

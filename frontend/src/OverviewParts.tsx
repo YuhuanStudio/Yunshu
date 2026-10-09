@@ -167,8 +167,9 @@ export function SpeedPair({ status }: { status: EngineStatus }) {
     headline: Headline,
     windowMean: number | null,
     testId: string,
+    tip: string,
   ) => (
-    <div className="contents" data-testid={testId}>
+    <div className="contents" data-testid={testId} title={tip}>
       <StatCard
         compact
         valueFirst
@@ -196,16 +197,23 @@ export function SpeedPair({ status }: { status: EngineStatus }) {
               title={headline.note || undefined}
             >
               {headline.label}
+              {headline.kind === "last" && status.last
+                ? ` · ${t("overview.stats.ageShort", { age: elapsed(Math.max(0, Date.now() / 1000 - status.last.t)) })}`
+                : ""}
               {headline.note &&
               headline.kind !== "live" &&
               (headline.kind !== "last" || status.requests.active > 0)
                 ? ` · ${headline.short ?? headline.note}`
                 : ""}
             </span>
-            {" · "}
-            <span className="whitespace-nowrap">
-              {windowText} {windowMean == null ? "—" : fixed(windowMean)}
-            </span>
+            {testId === "speed-decode" && (
+              <>
+                {" · "}
+                <span className="whitespace-nowrap">
+                  {windowText} {windowMean == null ? "—" : fixed(windowMean)}
+                </span>
+              </>
+            )}
           </>
         }
       />
@@ -219,13 +227,15 @@ export function SpeedPair({ status }: { status: EngineStatus }) {
         decode,
         f.windowMean,
         "speed-decode",
+        t("overview.tip.decode"),
       )}
       {card(
         t("overview.speed.prefillTitle"),
         BookOpenText,
         prefill,
-        status.throughput.mean_prefill_tps,
+        null,
         "speed-prefill",
+        t("overview.tip.prefill"),
       )}
     </div>
   );
