@@ -45,13 +45,23 @@ ENV = dict(
 # without ever reaching the summed-CPU threshold.
 FOREIGN_MODEL_PATTERNS = (
     r"\byunshu(_cli)?\b.*\bserve\b",
-    r"-m\s+yunshu_cli\b",
     r"\buvicorn\b.*\byunshu_gateway\b",
     r"\bmlx_lm[./ ](server|generate)\b",
     r"\bmlx_vlm\b",
     r"\bmlx_audio\b",
 )
 _GPUQ_CMD = re.compile(r"(^|[/\s])gpuq(\.py)?(\s|$)")
+# scripts/dev/ci-local runs the unit suite from a fresh clone under /tmp/ycl-<sha>: CPU only
+# (the sandbox has no models), so its CLI and server-test processes are never GPU users.
+_CI_SANDBOX = re.compile(r"(^|\s)/(private/)?tmp/ycl-[0-9a-f]+/")
+
+
+def is_foreign_model_cmd(cmd, patterns):
+    """True when `cmd` looks like a model runtime that can use the GPU. Plain `yunshu` CLI
+    calls (config, model info, top) are not: only `serve` loads a model in-process."""
+    if _CI_SANDBOX.search(cmd):
+        return False
+    return any(rx.search(cmd) for rx in patterns)
 
 
 def foreign_model_patterns(env=None):
@@ -212,7 +222,7 @@ class CpuSampler:
                 continue
             if p == os.getpid() or _GPUQ_CMD.search(cmd.split(" -- ")[0]):
                 continue
-            if any(rx.search(cmd) for rx in patterns):
+            if is_foreign_model_cmd(cmd, patterns):
                 found.append(
                     dict(pid=p, cmd=cmd[:120], cpu_pct=round(pcts.get(p, 0.0), 2))
                 )
