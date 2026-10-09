@@ -600,9 +600,6 @@ class VLMEngine:
         from . import ple_parallel
 
         ple_parallel.install(int(settings.get("YUNSHU_PLE_READ_THREADS")))
-        from . import const_cache
-
-        const_cache.install()
 
         model_config = model_class.ModelConfig.from_dict(config)
         modules = ["text", "vision", "perceiver", "projector", "audio"]
