@@ -387,6 +387,10 @@ def rounds(
     target_ids = list(draft.config.target_layer_ids)
     draft_cache = draft.reset(model)
     budget = NodeBudget(15, prior=dt.PRIOR)
+    from . import settings
+
+    pin = settings.get("YUNSHU_SPEC_NODES")
+    prof = {"rounds": 0, "draft": 0.0, "verify": 0.0, "commit": 0.0, "nodes": 0}
     context = mtp_lane._STATE["context"]
     copy_rows = mtp_lane.copy_rows_for_model(lm)
     copy = CopyDrafter(max_draft=copy_rows - 1) if copy_rows >= 3 else None
@@ -440,6 +444,8 @@ def rounds(
                     else max_tokens - emitted
                 )
                 n = budget.choose(max(0, room - 1))
+                if pin is not None:
+                    n = min(pin, max(0, room - 1))
                 copied = (
                     copy.draft(min(copy.max_draft, room - 1))
                     if copy is not None
@@ -473,6 +479,7 @@ def rounds(
                     parents = mx.array([-1], dtype=mx.int32)
                     shape = FastShape(parents, 0, is_chain=True)
                     window = mx.array([[bonus]], dtype=token_dtype)
+                t_drafted = time.perf_counter()
                 result = tv.tree_forward(
                     lm, window, shape, cache, target_ids, verifier=verifier
                 )
@@ -490,6 +497,7 @@ def rounds(
                 except BaseException:
                     tv.tree_abort(cache, result)
                     raise
+                t_verified = time.perf_counter()
                 path = dt.walk(window_ids, parent_ids, target_ids_row)
                 new_tokens = [window_ids[row] for row in path[1:]] + [
                     target_ids_row[path[-1]]
@@ -518,10 +526,17 @@ def rounds(
                 landed = [row - 1 for row in path[1:]]
                 if ranks is not None:
                     landed = remap_landed(landed, ranks)
+                t_done = time.perf_counter()
+                if emitted > 1:
+                    prof["rounds"] += 1
+                    prof["nodes"] += n
+                    prof["draft"] += (t_drafted - started) * 1000
+                    prof["verify"] += (t_verified - t_drafted) * 1000
+                    prof["commit"] += (t_done - t_verified) * 1000
                 budget.observe(
                     n,
                     landed,
-                    (time.perf_counter() - started) * 1000,
+                    (t_done - started) * 1000,
                     first=emitted == 1,
                 )
                 bonus = new_tokens[-1]
@@ -543,6 +558,16 @@ def rounds(
                 if emitted >= max_tokens:
                     return
     finally:
+        if prof["rounds"]:
+            r = prof["rounds"]
+            logger.info(
+                "DFlash round profile: %d rounds, %.1f nodes/round, draft %.2f ms, verify %.2f ms, commit+host %.2f ms",
+                r,
+                prof["nodes"] / r,
+                prof["draft"] / r,
+                prof["verify"] / r,
+                prof["commit"] / r,
+            )
         private.bind(False)
         hidden = None
         draft_cache = None
