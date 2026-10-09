@@ -97,7 +97,13 @@ export function SeriesChart({
   const live = liveWindowMs
     ? {
         xDomain: [newest - liveWindowMs, newest] as const,
-        xTicks: timeTicks(newest - liveWindowMs, newest, 4),
+        // A label that would touch either edge is nudged inward by the chart (a jump of its own): it
+        // appears once it is clear of the right edge and goes before it reaches the left one.
+        xTicks: timeTicks(newest - liveWindowMs, newest, 3).filter(
+          (t) =>
+            t <= newest - liveWindowMs * 0.1 &&
+            t >= newest - liveWindowMs * 0.9,
+        ),
         yMax,
       }
     : null;
