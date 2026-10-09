@@ -614,7 +614,24 @@ def ngram_repeat(text, n=4):
     return round(1 - len(set(grams)) / len(grams), 4)
 
 
+ALL_PHASES = ("cold", "warm", "turn2", "specoff")
+
+
+def parse_phases(text):
+    """Selected decode phases; turn2 replays the cold reply, so it needs cold."""
+    phases = [p.strip() for p in str(text).split(",") if p.strip()]
+    bad = [p for p in phases if p not in ALL_PHASES]
+    if bad or not phases:
+        raise SystemExit(
+            f"--phases: unknown or empty selection {text!r} (use {ALL_PHASES})"
+        )
+    if "turn2" in phases and "cold" not in phases:
+        raise SystemExit("--phases: turn2 needs cold (it continues the cold reply)")
+    return set(phases)
+
+
 def part_decode(s, out, a):
+    phases = parse_phases(a.phases)
     n_dec = int(a.decode_tokens)
     ctxs = [512] if a.smoke else a.only_ctx or [1024, 8192, 32768]
     for ctx in ctxs:
@@ -625,7 +642,7 @@ def part_decode(s, out, a):
                 else decode_prompt(kind, ctx, a.long_ask)
             )
             reply = ""
-            for phase in ("cold", "warm", "turn2"):
+            for phase in [p for p in ("cold", "warm", "turn2") if p in phases]:
                 want = (a.turn2_tokens or n_dec) if phase == "turn2" else n_dec
                 b = req(s.model, text, 16 if a.smoke else want)
                 if phase == "turn2":
@@ -658,6 +675,7 @@ def part_decode(s, out, a):
                 a.engine in bench_engines.TF_ENGINES
                 and ctx == 1024
                 and os.environ.get("TFB_EXACT_PROMPTS") != "1"
+                and "specoff" in phases
             ):
                 r = send(s.url, req(s.model, text, n_dec, extra={"draft": False}))
                 r["text"] = r.pop("_text")
@@ -934,6 +952,12 @@ def parse_args(argv=None):
         type=float,
         default=30.0,
         help="pause before the idle footprint sample",
+    )
+    ap.add_argument(
+        "--phases",
+        default=",".join(ALL_PHASES),
+        help="decode phases to run (comma list of cold,warm,turn2,specoff); the checks stay "
+        "fail-closed for every selected phase",
     )
     ap.add_argument("--dry-run", action="store_true")
     args = list(sys.argv[1:] if argv is None else argv)
