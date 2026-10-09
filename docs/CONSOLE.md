@@ -220,7 +220,7 @@ never as zero.
 ## Developing the console
 
 The source is in `frontend/` (Node.js 22.18+, pnpm 11.19.0). A source checkout needs `pnpm install --frozen-lockfile && pnpm build` once to write `console_static/` (a built wheel already contains it); without it `/console/` returns an actionable 404 and the API is unaffected. With the engine and its console process running, run `pnpm dev` in `frontend/` and open `http://127.0.0.1:3971/console/`. Vite proxies the
-API and the history endpoints to the console process on `http://127.0.0.1:8100` (`YUNSHU_CONSOLE_DEV_PROXY` points it elsewhere), or set another server URL in Settings (cross-origin access needs CORS
+API and the history endpoints to the console process on `http://127.0.0.1:8100` (`VITE_CONSOLE_PROXY` points it elsewhere), or set another server URL in Settings (cross-origin access needs CORS
 configured, see [Authentication](guides/AUTH_AND_KEYS.md#cors)).
 
 ## Metric meanings
