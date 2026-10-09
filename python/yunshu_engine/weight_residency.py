@@ -41,3 +41,22 @@ def ple_lookup_stats() -> dict[str, Any]:
         out["elapsed_seconds"] += st.elapsed_seconds
     out["engaged"] = out["tables"] > 0 and out["lookups"] > 0
     return out
+
+
+_VISION_PREFIXES = ("vision_tower.", "visual.", "vision_model.", "model.visual.")
+
+
+def eval_set(
+    flat_params: list[tuple[str, Any]],
+    total_ram_bytes: int,
+    tight_fraction: float = 0.45,
+):
+    """Arrays to materialize at load.  When the weights take more than ``tight_fraction`` of RAM, the vision
+    tower (0.9 GB on Flash-Next) stays a lazy file-backed array until the first image request evaluates it, so
+    a text-only session never holds it.  Output is unchanged.  Returns (arrays_to_eval, lazy_names)."""
+    total = sum(int(getattr(v, "nbytes", 0)) for _, v in flat_params)
+    if not total_ram_bytes or total <= tight_fraction * total_ram_bytes:
+        return [v for _, v in flat_params], []
+    keep = [(k, v) for k, v in flat_params if not k.startswith(_VISION_PREFIXES)]
+    lazy = [k for k, _ in flat_params if k.startswith(_VISION_PREFIXES)]
+    return [v for _, v in keep], lazy

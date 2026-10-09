@@ -716,7 +716,18 @@ class VLMEngine:
                     n_scaled,
                     sorted(set(ple_table_scales.values())),
                 )
-        mx.eval(model.parameters())
+        from .apc_manager import total_memory_bytes
+        from .weight_residency import eval_set
+
+        to_eval, lazy_names = eval_set(
+            flatten_tree(model.parameters()), total_memory_bytes()
+        )
+        mx.eval(to_eval)
+        if lazy_names:
+            logger.info(
+                "weights take most of RAM: %d vision tensors stay lazy until an image request",
+                len(lazy_names),
+            )
         model.eval()
         return model
 

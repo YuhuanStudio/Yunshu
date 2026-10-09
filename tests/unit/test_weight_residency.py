@@ -26,3 +26,16 @@ def test_sums_tables(monkeypatch):
     out = wr.ple_lookup_stats()
     assert out["lookups"] == 4 and out["rows"] == 8 and out["bytes_read"] == 400
     assert out["elapsed_seconds"] == 1.0 and out["engaged"] is True
+
+
+def test_eval_set_keeps_vision_lazy_only_when_tight():
+    from types import SimpleNamespace as NS
+
+    flat = [
+        ("language_model.model.layers.0.w", NS(nbytes=60)),
+        ("vision_tower.blocks.0.w", NS(nbytes=10)),
+    ]
+    arrays, lazy = wr.eval_set(flat, total_ram_bytes=100)
+    assert len(arrays) == 1 and lazy == ["vision_tower.blocks.0.w"]
+    arrays, lazy = wr.eval_set(flat, total_ram_bytes=1000)
+    assert len(arrays) == 2 and lazy == []

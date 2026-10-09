@@ -29,6 +29,26 @@ from process_memory import system_used_bytes  # noqa: E402
 GB = 1e9
 
 
+def red_png_data_url(size=112):
+    """A solid red PNG as a data URL (no imaging dependency)."""
+    import base64
+    import struct
+    import zlib
+
+    def chunk(kind, data):
+        body = kind + data
+        return struct.pack(">I", len(data)) + body + struct.pack(">I", zlib.crc32(body))
+
+    raw = b"".join(b"\x00" + b"\xff\x00\x00" * size for _ in range(size))
+    png = (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", struct.pack(">IIBBBBB", size, size, 8, 2, 0, 0, 0))
+        + chunk(b"IDAT", zlib.compress(raw))
+        + chunk(b"IEND", b"")
+    )
+    return "data:image/png;base64," + base64.b64encode(png).decode()
+
+
 def http_json(url, body=None, timeout=1800):
     req = urllib.request.Request(
         url,
@@ -76,6 +96,9 @@ def build_parser():
     ap.add_argument("--sizes", type=int, nargs="+", default=[1024, 8192])
     ap.add_argument("--max-tokens", type=int, default=64)
     ap.add_argument("--env", action="append", default=[])
+    ap.add_argument(
+        "--image", action="store_true", help="finish with one image request"
+    )
     ap.add_argument("--require-ple", action="store_true")
     ap.add_argument("--require-spec", action="store_true")
     ap.add_argument("--out", required=True)
@@ -181,6 +204,7 @@ def main(argv=None):
                     "usage": d.get("usage"),
                     "x_yunshu": d.get("x_yunshu"),
                     "tokens": d.get("usage", {}).get("completion_tokens", 0),
+                    "text_head": text[:200],
                     "digest": hashlib.sha256(text.encode()).hexdigest()[:16],
                     "steady_delta_gb": round((system_used_bytes() - baseline) / GB, 3),
                     "peak_delta_gb": round((peak[0] - baseline) / GB, 3),
@@ -195,6 +219,17 @@ def main(argv=None):
             request(
                 f"{size}-warm", q
             )  # same prompt: APC hit, digest must equal the cold one
+        if a.image:
+            request(
+                "image",
+                [
+                    {"type": "image_url", "image_url": {"url": red_png_data_url()}},
+                    {
+                        "type": "text",
+                        "text": "What single color is this image? One word.",
+                    },
+                ],
+            )
         time.sleep(20)
         emit(
             {
