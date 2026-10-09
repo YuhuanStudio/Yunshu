@@ -62,7 +62,7 @@ No new decode or TTFT claim is made for this cycle here. Historical measurements
 
 - Console backend: VLM speculative acceptance by draft depth, resident APC entries and bounded lifecycle events, metadata-only serve-log history with cursor pages, CLI diagnostics bundle download/manifest, actual structured-decoding enforcement reports, and advisory model unload/load impact.
 - OpenAI Evals API: 12 CRUD/run/output-item endpoints, atomic local persistence, cancellable background runs through normal chat inference, JSONL/file/stored-completion sources, lexical similarity and local score/label graders.
-- Add optional unprivileged Apple IOReport/HID host telemetry, request GPU+DRAM energy estimates, Prometheus gauges/counter, `yunshu top`, and tfbench/yv efficiency fields. Handle qualified macOS 27 CLPC counters and Max ANE/MTR sensor names. The 1 Hz default is subject to M5 overhead verification before handoff.
+- Add optional unprivileged Apple IOReport/HID host telemetry, request GPU+DRAM energy estimates, Prometheus gauges/counter, `yunshu top`, and tfbench/yv efficiency fields. Handle qualified macOS 27 CLPC counters and Max ANE/MTR sensor names. Off by default (opt in with `YUNSHU_TELEMETRY=on`): the 27B A/B found a small follow-up TTFT cost when on.
 - Add authenticated console model load/download cancellation and validated local/HF snapshot registration without loading or copying weights.
 - Expose cached CPU-only thermal, power, OS memory pressure and swap telemetry with explicit unknown reasons.
 - Record per-request latency milestones in `x_yunshu` and expose them through recent request metadata.
