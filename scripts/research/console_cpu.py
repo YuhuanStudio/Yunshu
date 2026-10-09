@@ -68,6 +68,10 @@ def sampler(pid: int, minutes: float, every: float = 5.0) -> list[dict]:
             }
         )
         last_cpu, last_t = cpu, now
+        print(
+            f"sample pid={pid} cpu={out[-1]['cpu']:.2f}% rss={out[-1]['rss_mib']} MiB",
+            flush=True,
+        )  # keeps the job log alive
     return out
 
 
