@@ -1035,6 +1035,9 @@ class VLMEngine:
                 "completion_tokens": completion_token_count,
                 "cached_tokens": cached_token_count,
                 "logprobs": _runner_extras.get("logprobs"),
+                "stopped_by_stop_sequence": bool(
+                    _runner_extras.get("stopped_by_stop_sequence")
+                ),
             }
         finally:
             with self._active_count_lock:
@@ -2343,6 +2346,7 @@ class VLMEngine:
             if stop_strings and not in_think:
                 text = holdback.feed(segment)
                 if holdback.contains_stop():
+                    stats.stop_string_hit = True
                     yield (
                         text + holdback.take_stopped(),
                         token,
@@ -2654,6 +2658,7 @@ class VLMEngine:
             parts = ["<think>", *reasoning, "</think>", *parts]
         if extras is not None:
             extras["prompt_tokens"] = stats.prompt_tokens
+            extras["stopped_by_stop_sequence"] = stats.stop_string_hit
             if params.get("logprobs"):
                 extras["logprobs"] = lps
         if finish == "cancel":
@@ -2706,6 +2711,9 @@ class VLMEngine:
                         reasoning_tokens=thinking,
                         ttft_ms=round(stats.first_token_s * 1000, 1) if first else 0.0,
                         logprobs=[lp] if lp is not None else None,
+                        stopped_by_stop_sequence=bool(
+                            reason == "stop" and stats.stop_string_hit
+                        ),
                     )
                 )
                 if not ok or reason is not None:
@@ -3895,6 +3903,18 @@ class VLMEngine:
         except Exception:
             logger.debug("APC snapshot unavailable", exc_info=True)
             return None
+
+    def apc_overview(self, max_entries: int = 200) -> dict | None:
+        """Tiers, lookup counters and capped entry metadata (cache browser); None if APC is off."""
+        apc = self._apc_backend
+        fn = getattr(apc, "cache_overview", None)
+        return fn(max_entries) if callable(fn) else None
+
+    def apc_clear(self, tier: str) -> dict | None:
+        """Drop one APC tier (``ram`` / ``warm`` / ``ssd``); None when the cache is off."""
+        apc = self._apc_backend
+        fn = getattr(apc, "clear_tier", None)
+        return fn(tier) if callable(fn) else None
 
     def busy_snapshot(self) -> dict | None:
         """GPU-busy accounting of the batch runner (None before a model is loaded)."""

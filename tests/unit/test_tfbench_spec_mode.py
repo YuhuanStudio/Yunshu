@@ -63,6 +63,7 @@ def test_server_launch_checks_fresh_log_and_cleans_up(monkeypatch, tmp_path, act
 
     monkeypatch.setattr(tfbench, "OUT", tmp_path)
     monkeypatch.setattr(tfbench, "free_port", lambda: 18999)
+    monkeypatch.setattr(tfbench, "owns_listener", lambda *args: True)
     log = tmp_path / "out/server-repeat.log"
     log.parent.mkdir()
     log.write_text("VLM batch runner: apc=off draft=dflash block=8\n")
@@ -190,6 +191,7 @@ def test_cpu_preflight_checks_legacy_tag_without_starting_server(
 def test_fatal_startup_does_not_spend_queue_time_polling(monkeypatch, tmp_path):
     monkeypatch.setattr(tfbench, "OUT", tmp_path)
     monkeypatch.setattr(tfbench, "free_port", lambda: 18999)
+    monkeypatch.setattr(tfbench, "owns_listener", lambda *args: True)
 
     class Proc:
         def poll(self):

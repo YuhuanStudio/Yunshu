@@ -22,6 +22,7 @@ DOCS = (
 HEADINGS = [
     ("Yunshu", "Yunshu", "Yunshu"),
     ("Highlights", "亮點", "亮点"),
+    ("Capabilities", "能力總覽", "能力总览"),
     ("Quickstart", "快速開始", "快速开始"),
     ("Local console", "本地 console", "本地 console"),
     ("Qwen3.8-27B", "Qwen3.8-27B", "Qwen3.8-27B"),
@@ -31,6 +32,7 @@ HEADINGS = [
     ("Prefix cache (APC)", "前綴快取（APC）", "前缀缓存（APC）"),
     ("Structured output", "結構化輸出", "结构化输出"),
     ("API compatibility", "API 相容性", "API 兼容性"),
+    ("Typed decisions", "型別化決策", "类型化决策"),
     ("Coding agents", "程式碼 agent", "编程 agent"),
     ("Performance", "效能", "性能"),
     ("Models", "模型", "模型"),

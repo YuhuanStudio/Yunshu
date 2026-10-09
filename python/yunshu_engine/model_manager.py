@@ -1071,6 +1071,93 @@ class ModelManager:
                 )
             self._eviction_stats["budget_evictions"] += 1
 
+    def fit_check(self, model_id: str) -> dict:
+        """Dry run of the load-time memory check (``load_model`` + ``_ensure_memory_available``).
+
+        Same arithmetic, nothing mutated: weights estimate plus the KV reserve against the
+        budget minus what is loaded; if that does not fit, LRU victims (the ones the real
+        path may evict: loaded, unpinned, not leased, provably idle) are added up in the
+        order the load would evict them. Verdicts: ``fits`` (room left over), ``tight``
+        (fits with under 5% of the budget spare, or only after evicting), ``wont_fit``.
+        Raises KeyError for an unknown model.
+        """
+        entry = self._entries[model_id]
+        required = int(entry.estimated_bytes)
+        kv = (
+            0
+            if entry.model_type in (ModelType.TTS, ModelType.ASR)
+            else int(required * self.kv_reserve_ratio)
+        )
+        needed = required + kv
+        with self._sync_lock:
+            used = int(self._current_memory_bytes)
+        out: dict = {
+            "model": model_id,
+            "weights_bytes": required,
+            "kv_reserve_bytes": kv,
+            "needed_bytes": needed,
+            "budget_bytes": self.max_memory_bytes,
+            "used_bytes": used,
+            "free_bytes": None,
+            "would_evict": [],
+            "loaded": bool(entry.is_loaded),
+            "basis": {
+                "estimated": True,
+                "kv": f"reserve ratio {self.kv_reserve_ratio:g} of weights",
+            },
+        }
+        if entry.is_loaded:
+            out["verdict"] = "fits"
+            out["reason"] = "already loaded"
+            return out
+        if self.max_memory_bytes is None:
+            out["verdict"] = "fits"
+            out["reason"] = "no memory budget configured"
+            return out
+        budget = int(self.max_memory_bytes)
+        free = budget - used
+        out["free_bytes"] = free
+        if needed <= free:
+            spare = free - needed
+            out["verdict"] = "tight" if spare < budget * 0.05 else "fits"
+            out["reason"] = "fits without evicting"
+            return out
+        evict: list[str] = []
+        victims = sorted(
+            (
+                e
+                for e in self._entries.values()
+                if e.is_loaded
+                and not e.is_pinned
+                and not e.is_loading
+                and e.model_id != model_id
+                and not self._held(e)
+                and callable(getattr(e.engine, "has_active_requests", None))
+            ),
+            key=lambda e: e.last_access,
+        )
+        for v in victims:
+            try:
+                if v.engine.has_active_requests():
+                    continue
+            except Exception:  # noqa: BLE001 - cannot prove idle: the load would skip it
+                continue
+            evict.append(v.model_id)
+            free += int(v.estimated_bytes)
+            if needed <= free:
+                out["would_evict"] = evict
+                out["free_bytes_after_evict"] = free
+                out["verdict"] = "tight"
+                out["reason"] = "fits only after evicting " + ", ".join(evict)
+                return out
+        out["would_evict"] = []
+        out["verdict"] = "wont_fit"
+        out["reason"] = (
+            f"needs {needed / 1e9:.1f} GB, at most {free / 1e9:.1f} GB can be freed "
+            f"of a {budget / 1e9:.1f} GB budget"
+        )
+        return out
+
     async def _ensure_model_slot_available(self) -> None:
         """Evict LRU models until under max_models limit.
 

@@ -13,7 +13,6 @@ logger = logging.getLogger(__name__)
 
 from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
@@ -163,6 +162,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     from yunshu_engine import footprint_sampler
 
     footprint_sampler.start_from_settings()
+
+    from . import history as _history
+
+    _history.start_from_settings()
 
     # ── Startup validation ──
     env_warnings = _validate_settings()
@@ -395,6 +398,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         except Exception:
             logger.debug("Memory enforcer stop failed", exc_info=True)
         _memory_enforcer = None
+
+    await _history.stop()
 
     # Cancel any remaining background tasks
     for task in _background_tasks:
@@ -709,14 +714,9 @@ def create_app() -> FastAPI:
             },
         )
 
-    # CORS: configurable via YUNSHU_CORS_ORIGINS (comma-separated).
-    # Defaults to ["*"] in dev, should be restricted in production.
-    # Note: allow_credentials=True is invalid with allow_origins=["*"] per CORS spec;
-    # browsers will reject the response. Use specific origins in production.
-    cors_origins_str = settings.get("YUNSHU_CORS_ORIGINS")
-    cors_origins = [o.strip() for o in cors_origins_str.split(",") if o.strip()]
-    allow_credentials = "*" not in cors_origins
-    if "*" in cors_origins:
+    # CORS: YUNSHU_CORS_ORIGINS (comma-separated), re-read live; a wildcard
+    # never carries credentials (see middleware/live_cors.py).
+    if settings.get("YUNSHU_CORS_ORIGINS").strip() == "*":
         logger.warning(
             "CORS: allow_origins=['*'] — set YUNSHU_CORS_ORIGINS for production"
         )
@@ -726,26 +726,10 @@ def create_app() -> FastAPI:
 
     app.add_middleware(SurrogateGuardMiddleware)
     app.add_middleware(ToolReasoningMiddleware)
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=cors_origins,
-        allow_credentials=allow_credentials,
-        allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
-        allow_headers=[
-            "Authorization",
-            "Content-Type",
-            "Accept",
-            "X-Request-ID",
-            # Anthropic SDK headers
-            "anthropic-version",
-            "anthropic-beta",
-            "x-api-key",
-            # OpenAI SDK headers
-            "OpenAI-Organization",
-            "OpenAI-Beta",
-        ],
-        max_age=3600,  # Cache preflight for 1 hour to reduce OPTIONS overhead
-    )
+    from .middleware.live_cors import LiveCORSMiddleware
+
+    # Follows YUNSHU_CORS_ORIGINS live (PATCH /v1/yunshu/cors).
+    app.add_middleware(LiveCORSMiddleware)
 
     # Gateway middleware (order: outermost first)
     from .middleware.auth import AuthMiddleware
@@ -1145,6 +1129,17 @@ def create_app() -> FastAPI:
     from .routers import yunshu as yunshu_mod
 
     app.include_router(yunshu_mod.router, prefix="/v1")  # status, requests, warmup
+    from .routers import admin_routes as admin_routes_mod
+
+    admin_routes_mod.register(app)  # downloads, local models, fit, cache, logs, bundle
+    from .routers import admin_keys as admin_keys_mod
+
+    app.include_router(admin_keys_mod.router, prefix="/v1")  # API keys + usage
+    from .routers import admin_settings as admin_settings_mod
+
+    app.include_router(
+        admin_settings_mod.router, prefix="/v1"
+    )  # config PATCH, service, CORS
     app.include_router(ocr_mod.router)
     app.include_router(realtime.router)
     from . import realtime_webrtc

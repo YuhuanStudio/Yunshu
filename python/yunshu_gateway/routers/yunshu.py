@@ -4,6 +4,10 @@
 - ``GET /v1/requests``           in-flight requests with phase and prefill progress
 - ``GET /v1/requests/{id}``      one request (poll this for a non-streaming long prefill)
 - ``DELETE /v1/requests/{id}``   cancel by the ``X-Request-Id`` the client sent (or the completion id)
+- ``GET /v1/yunshu/requests/recent``  finished requests with phase timestamps (``offsets_ms``)
+- ``GET /v1/yunshu/history``     server-side ring of throughput / counts / memory (charts survive reload)
+- ``GET /v1/yunshu/memory``      the unified-memory ledger by owner, with OS pressure and swap
+- ``GET /v1/yunshu/config``      effective settings and where each value came from (secrets masked)
 - ``POST /v1/yunshu/warmup``     load a model, compile its kernels and (optionally) prefill a
                                  prompt so the first real request is warm; sets ``keep_alive``
 
@@ -16,10 +20,11 @@ from __future__ import annotations
 import logging
 import os
 import time
-from typing import Any
+from pathlib import Path
+from typing import Any, Literal
 
 import httpx
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
 from yunshu_engine.request_tracker import get_request_tracker
@@ -71,6 +76,25 @@ def _memory() -> dict[str, Any]:
     return out
 
 
+_WEIGHT_GB: dict[str, float | None] = {}
+
+
+def _weights_gb(model_path: str | None) -> float | None:
+    """On-disk safetensors size of a checkpoint in GB, stat'ed once per path."""
+    if not model_path:
+        return None
+    if model_path not in _WEIGHT_GB:
+        total = 0
+        try:
+            total = sum(
+                f.stat().st_size for f in Path(model_path).rglob("*.safetensors")
+            )
+        except OSError:
+            total = 0
+        _WEIGHT_GB[model_path] = round(total / 1e9, 1) if total else None
+    return _WEIGHT_GB[model_path]
+
+
 def _models() -> list[dict[str, Any]]:
     manager = get_model_manager()
     rows: list[dict[str, Any]] = []
@@ -113,6 +137,7 @@ def _models() -> list[dict[str, Any]]:
                 "loaded": bool(getattr(engine, "is_loaded", False)),
                 "loading": False,
                 "pinned": True,  # single-model mode never frees its model
+                "size_gb": _weights_gb(getattr(engine, "_model_path", None)),
                 "keep_alive_s": None,
                 "expires_in_s": None,
             }
@@ -212,6 +237,90 @@ async def status(request: Request) -> dict:
             "mean_prefill_tps": rates["prefill_tps"],
             "mean_decode_tps": rates["decode_tps"],
         },
+    }
+
+
+@router.get("/yunshu/requests/recent")
+async def recent_requests(
+    request: Request,
+    limit: int = 100,
+    model: str | None = None,
+    since: float | None = None,
+) -> dict:
+    """Finished requests, newest first (the 512-entry ring), each with ``offsets_ms``: the
+    phase timestamps (arrive, admit, first token, last token, done) in ms after arrival."""
+    _check_permission(request, "can_infer")
+    if not 1 <= limit <= 512:
+        raise HTTPException(400, "limit must be between 1 and 512")
+    rows = registry.recent_entries(limit=limit, model=model, since=since)
+    return {"object": "list", "data": rows, "count": len(rows), "capacity": 512}
+
+
+@router.get("/yunshu/history")
+async def history(
+    request: Request,
+    since: float | None = None,
+    step: float | None = Query(None, ge=0),
+) -> dict:
+    """Columnar samples (``t`` epoch seconds plus one array per field), oldest first. ``since``
+    keeps rows newer than that epoch; ``step`` averages them into buckets of that many seconds."""
+    _check_permission(request, "can_infer")
+    from .. import history as _history
+
+    sampler = _history.get()
+    if sampler is None:
+        return {
+            "object": "yunshu.history",
+            "enabled": False,
+            "interval_s": None,
+            "ring": {"capacity": 0, "rows": 0, "bytes": 0},
+            "fields": list(_history.FIELDS),
+            "series": {"t": [], **{f: [] for f in _history.FIELDS}},
+        }
+    return {"enabled": True, **sampler.payload(since, step)}
+
+
+@router.get("/yunshu/memory")
+async def memory_ledger(request: Request) -> dict:
+    """Unified memory by owner (weights, prefix cache, MLX cache, residual), peak, limits and
+    OS pressure / swap. Every figure comes from a counter; unknown is null."""
+    _check_permission(request, "can_infer")
+    from .. import memory_ledger as _ledger
+
+    return _ledger.collect(get_model_manager(), get_engine(), get_display_model_id())
+
+
+@router.get("/yunshu/config")
+async def effective_config(
+    request: Request, include: Literal["stable", "all"] = "stable"
+) -> dict:
+    """Every setting with its effective value, default and source (cli / env / file /
+    default), as ``yunshu config`` shows them. Secrets are masked."""
+    _check_permission(request, "can_infer")
+    from yunshu_engine import settings as _settings
+
+    levels = (
+        ("stable",) if include == "stable" else ("stable", "experimental", "internal")
+    )
+    rows = _settings.effective(levels)
+    for r in rows:
+        r["description"] = (r["description"] or "")[:240]
+        if _settings.REGISTRY[r["name"]].secret:
+            r["default"] = None if r["default"] is None else "***"
+    try:
+        warnings = _settings.validate(warn=False)
+    except _settings.SettingError as exc:
+        warnings = [str(exc)]
+    experimental = [
+        s for s in _settings.REGISTRY.values() if s.stability == "experimental"
+    ]
+    return {
+        "object": "yunshu.config",
+        "include": include,
+        "settings": rows,
+        "warnings": warnings,
+        "experimental_count": len(experimental),
+        "experimental_max": _settings.MAX_EXPERIMENTAL,
     }
 
 
@@ -503,16 +612,6 @@ async def cancel_model_operation(req: CancelModelRequest, request: Request) -> d
     }
 
 
-@router.get("/yunshu/requests/recent")
-async def recent_requests(request: Request, limit: int = 50) -> dict:
-    """Recent completed request metadata and latency breakdown; no prompts or responses stored."""
-    _check_permission(request, "can_manage_models")
-    if not 1 <= limit <= 512:
-        raise HTTPException(400, "limit must be between 1 and 512")
-    rows = registry.recent(float("inf"))[-limit:]
-    return {"object": "list", "data": list(reversed(rows)), "count": len(rows)}
-
-
 @router.get("/yunshu/requests/history", response_model=HistoryPage)
 async def request_history(
     request: Request, limit: int = 50, before: str | None = None
@@ -591,27 +690,6 @@ async def support_bundle_manifest(request: Request) -> dict:
     return bundle_manifest()
 
 
-@router.get("/yunshu/bundle", response_model=DiagnosticsBundle)
-async def support_bundle(request: Request):
-    """Download the CLI diagnostics bundle; nothing is uploaded."""
-    import asyncio
-
-    from fastapi.responses import JSONResponse
-
-    from yunshu_cli.bundle import build
-
-    _check_permission(request, "can_manage_models")
-    host, port = request.scope.get("server") or ("127.0.0.1", 8000)
-    data = await asyncio.to_thread(build, host=host, port=port)
-    return JSONResponse(
-        data,
-        headers={
-            "Content-Disposition": 'attachment; filename="yunshu-diagnostics.json"',
-            "Cache-Control": "no-store",
-        },
-    )
-
-
 async def _cache_data() -> dict:
     import asyncio
 
@@ -642,6 +720,40 @@ async def _cache_data() -> dict:
         }
 
     return await asyncio.get_running_loop().run_in_executor(get_mlx_executor(), collect)
+
+
+@router.get("/yunshu/models/impact", response_model=ModelImpact)
+async def model_impact(request: Request, model: str) -> dict:
+    """Advisory load eviction preview and actual non-forced unload policy."""
+    _check_permission(request, "can_manage_models")
+    manager = get_model_manager()
+    if manager is None:
+        raise HTTPException(409, "Model management requires multi-model mode")
+    try:
+        return manager.console_impact(model)
+    except KeyError:
+        raise HTTPException(404, "Model not found") from None
+
+
+@router.get("/yunshu/bundle", response_model=DiagnosticsBundle)
+async def support_bundle(request: Request):
+    """Download the CLI diagnostics bundle; nothing is uploaded."""
+    import asyncio
+
+    from fastapi.responses import JSONResponse
+
+    from yunshu_cli.bundle import build
+
+    _check_permission(request, "can_manage_models")
+    host, port = request.scope.get("server") or ("127.0.0.1", 8000)
+    data = await asyncio.to_thread(build, host=host, port=port)
+    return JSONResponse(
+        data,
+        headers={
+            "Content-Disposition": 'attachment; filename="yunshu-diagnostics.json"',
+            "Cache-Control": "no-store",
+        },
+    )
 
 
 @router.get("/yunshu/cache", response_model=CacheView)
@@ -696,16 +808,3 @@ async def clear_cache(request: Request) -> dict:
         }
 
     return await asyncio.get_running_loop().run_in_executor(get_mlx_executor(), clear)
-
-
-@router.get("/yunshu/models/impact", response_model=ModelImpact)
-async def model_impact(request: Request, model: str) -> dict:
-    """Advisory load eviction preview and actual non-forced unload policy."""
-    _check_permission(request, "can_manage_models")
-    manager = get_model_manager()
-    if manager is None:
-        raise HTTPException(409, "Model management requires multi-model mode")
-    try:
-        return manager.console_impact(model)
-    except KeyError:
-        raise HTTPException(404, "Model not found") from None

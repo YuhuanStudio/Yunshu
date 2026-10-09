@@ -1,0 +1,972 @@
+import {
+  expect,
+  test,
+  type Locator,
+  type Page,
+  type Route,
+} from "@playwright/test";
+
+type ModelFixture = {
+  id: string;
+  type: string;
+  loaded: boolean;
+  loading: boolean;
+  pinned: boolean;
+  size_gb: number;
+  idle_s: number | null;
+  keep_alive_s: number | null;
+  expires_in_s: number | null;
+};
+type RequestFixture = {
+  request_id: string;
+  elapsed_s: number;
+  phase: string;
+  model: string;
+  prompt_tokens: number;
+  cached_tokens: number;
+  completion_tokens: number;
+  tokens_per_second: number;
+  percent?: number;
+};
+
+/** Engine routes the console treats as optional (history, memory ledger, effective config, recent requests). */
+const OPTIONAL_ROUTE =
+  /\/v1\/yunshu\/(history|memory|config|downloads|service|cors|keys|requests\/recent)(\?|$)/;
+
+function createApiFixture() {
+  const token = "playwright-only-token";
+  const models: ModelFixture[] = [
+    {
+      id: "Qwen3.8-27B",
+      type: "LLM",
+      loaded: true,
+      loading: false,
+      pinned: true,
+      size_gb: 17.6,
+      idle_s: 0,
+      keep_alive_s: null,
+      expires_in_s: null,
+    },
+    {
+      id: "Qwen3.5-9B",
+      type: "LLM",
+      loaded: true,
+      loading: false,
+      pinned: false,
+      size_gb: 5.8,
+      idle_s: null,
+      keep_alive_s: 600,
+      expires_in_s: null,
+    },
+  ];
+  let requests: RequestFixture[] = [
+    {
+      request_id: "qa-active-1",
+      elapsed_s: 2.4,
+      phase: "decode",
+      model: "Qwen3.8-27B",
+      prompt_tokens: 128,
+      cached_tokens: 64,
+      completion_tokens: 12,
+      tokens_per_second: 35.5,
+    },
+  ];
+  const statusCalls: Array<{ sourcePath: string; sample: number }> = [];
+  const apiCalls: Array<{
+    method: string;
+    path: string;
+    sourcePath: string;
+    authorized: boolean;
+  }> = [];
+  const expectedResponses: Array<{
+    status: number;
+    method: string;
+    sourcePath: string;
+  }> = [];
+  let failNextLoad401 = false;
+  let conflictNextUnloadId: string | null = null;
+  let warmupCount = 0;
+  let cancelCount = 0;
+
+  const json = (route: Route, payload: unknown, status = 200) =>
+    route.fulfill({
+      status,
+      contentType: "application/json",
+      body: JSON.stringify(payload),
+    });
+  const statusBody = (sourcePath: string) => {
+    const sample =
+      statusCalls.filter((call) => call.sourcePath === sourcePath).length + 1;
+    statusCalls.push({ sourcePath, sample });
+    const count = (phase: string) =>
+      requests.filter((row) => row.phase === phase).length;
+    return {
+      object: "yunshu.status",
+      version: "playwright-fixture",
+      state: "running",
+      uptime_s: 3_600 + sample,
+      load_error: null,
+      models: models.map((model) => ({ ...model })),
+      memory: {
+        active_gb: 18 + sample / 10,
+        cache_gb: 2.1,
+        peak_gb: 20.5,
+        total_gb: 64,
+        pressure: 0.3,
+      },
+      requests: {
+        active: requests.length,
+        queued: count("queued"),
+        prefill: count("prefill"),
+        decode: count("decode"),
+        items: requests.map((row) => ({ ...row })),
+      },
+      last: {
+        request_id: "qa-last-1",
+        prompt_tokens: 1_024,
+        completion_tokens: 256,
+        cached_tokens: 512,
+        prefill_tps: 810 + sample,
+        decode_tps: 41 + sample / 10,
+        ttft_ms: 620,
+        t: 1_710_000_000 + sample,
+      },
+      throughput: {
+        window_s: 60,
+        requests: 8 + sample,
+        prompt_tokens: 8_400 + sample * 10,
+        completion_tokens: 1_200 + sample * 3,
+        live_decode_tps: 34 + sample / 10,
+        mean_prefill_tps: 780 + sample,
+        mean_decode_tps: 39 + sample / 10,
+      },
+    };
+  };
+
+  async function routeApi(route: Route) {
+    const request = route.request();
+    const url = new URL(request.url());
+    const marker = url.pathname.lastIndexOf("/v1/");
+    const path = marker >= 0 ? url.pathname.slice(marker + 3) : url.pathname;
+    const method = request.method();
+    const authorized =
+      (request.headers()["authorization"] ?? "") === `Bearer ${token}`;
+    apiCalls.push({ method, path, sourcePath: url.pathname, authorized });
+
+    if (!authorized) {
+      expectedResponses.push({ status: 401, method, sourcePath: url.pathname });
+      return json(
+        route,
+        { detail: "The Playwright auth fixture requires a bearer token." },
+        401,
+      );
+    }
+    if (method === "GET" && path === "/yunshu/status")
+      return json(route, statusBody(url.pathname));
+    if (method === "GET" && path.startsWith("/models/")) {
+      const id = decodeURIComponent(path.slice("/models/".length));
+      const model = models.find((item) => item.id === id);
+      return model
+        ? json(route, {
+            ...model,
+            card: { capabilities: ["text"], fixture: true },
+          })
+        : json(route, { detail: `Unknown model ${id}` }, 404);
+    }
+    if (method === "POST" && path === "/models/load") {
+      const input = JSON.parse(request.postData() ?? "{}");
+      if (failNextLoad401) {
+        failNextLoad401 = false;
+        expectedResponses.push({
+          status: 401,
+          method,
+          sourcePath: url.pathname,
+        });
+        return json(route, { detail: "Fixture rejected model load." }, 401);
+      }
+      const model = models.find((item) => item.id === input.model);
+      if (!model)
+        return json(route, { detail: `Unknown model ${input.model}` }, 404);
+      model.loaded = true;
+      return json(route, { status: "loaded", model: model.id });
+    }
+    if (method === "POST" && path.startsWith("/models/unload/")) {
+      const id = decodeURIComponent(path.slice("/models/unload/".length));
+      if (conflictNextUnloadId === id) {
+        conflictNextUnloadId = null;
+        expectedResponses.push({
+          status: 409,
+          method,
+          sourcePath: url.pathname,
+        });
+        return json(
+          route,
+          { detail: `Model ${id} has an active Playwright fixture request.` },
+          409,
+        );
+      }
+      const model = models.find((item) => item.id === id);
+      if (!model) return json(route, { detail: `Unknown model ${id}` }, 404);
+      if (model.pinned)
+        return json(
+          route,
+          { detail: "The fixture's single-model entry remains pinned." },
+          409,
+        );
+      model.loaded = false;
+      return json(route, { status: "unloaded", model: id });
+    }
+    if (method === "POST" && path === "/yunshu/warmup") {
+      warmupCount += 1;
+      const input = JSON.parse(request.postData() ?? "{}");
+      return json(route, {
+        object: "yunshu.warmup",
+        model: input.model,
+        generated: false,
+        warmup_ms: 12,
+        fixture: true,
+      });
+    }
+    if (method === "DELETE" && path.startsWith("/requests/")) {
+      const id = decodeURIComponent(path.slice("/requests/".length));
+      cancelCount += 1;
+      requests = requests.filter((row) => row.request_id !== id);
+      return json(route, {
+        object: "yunshu.request",
+        id,
+        status: "cancelling",
+        fixture: true,
+      });
+    }
+    if (method === "GET" && OPTIONAL_ROUTE.test(url.pathname))
+      return json(route, { detail: "Not available on this fixture." }, 404);
+    return json(
+      route,
+      { detail: `Unhandled Playwright fixture route: ${method} ${path}` },
+      404,
+    );
+  }
+
+  return {
+    token,
+    models,
+    statusCalls,
+    apiCalls,
+    expectedResponses,
+    attach: (page: Page) => page.route("**/v1/**", routeApi),
+    requireNextLoad401: () => {
+      failNextLoad401 = true;
+    },
+    conflictNextUnload: (id: string) => {
+      conflictNextUnloadId = id;
+    },
+    get warmupCount() {
+      return warmupCount;
+    },
+    get cancelCount() {
+      return cancelCount;
+    },
+  };
+}
+
+async function installCompareSse(page: Page) {
+  await page.addInitScript(() => {
+    const state = ((
+      window as unknown as {
+        __cmp?: {
+          calls: Array<{ model: string; temperature: number }>;
+          active: number;
+          maxActive: number;
+        };
+      }
+    ).__cmp = { calls: [], active: 0, maxActive: 0 });
+    const nativeFetch = window.fetch.bind(window);
+    const encoder = new TextEncoder();
+    const event = (data: unknown) => `data: ${JSON.stringify(data)}\n\n`;
+    window.fetch = async (input, init = {}) => {
+      const rawUrl =
+        typeof input === "string"
+          ? input
+          : input instanceof URL
+            ? input.toString()
+            : input.url;
+      const url = new URL(rawUrl, location.href);
+      if (!url.pathname.endsWith("/v1/chat/completions"))
+        return nativeFetch(input, init);
+      const payload = JSON.parse(String(init.body ?? "{}"));
+      state.calls.push({
+        model: payload.model,
+        temperature: payload.temperature,
+      });
+      state.active += 1;
+      state.maxActive = Math.max(state.maxActive, state.active);
+      const big = payload.model === "Qwen3.8-27B";
+      const diverge = String(payload.messages?.at(-1)?.content ?? "").includes(
+        "DIVERGE",
+      );
+      const text =
+        big || !diverge
+          ? ["The answer ", "is four."]
+          : ["The answer ", "is five."];
+      return new Response(
+        new ReadableStream({
+          async start(controller) {
+            const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+            await wait(big ? 60 : 120);
+            for (const piece of text) {
+              controller.enqueue(
+                encoder.encode(
+                  event({ choices: [{ delta: { content: piece } }] }),
+                ),
+              );
+              await wait(40);
+            }
+            controller.enqueue(
+              encoder.encode(
+                event({ choices: [{ delta: {}, finish_reason: "stop" }] }),
+              ),
+            );
+            controller.enqueue(
+              encoder.encode(
+                event({
+                  choices: [],
+                  usage: {
+                    prompt_tokens: 1024,
+                    completion_tokens: 20,
+                    prompt_tokens_details: { cached_tokens: 512 },
+                  },
+                }),
+              ),
+            );
+            controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+            controller.close();
+            state.active -= 1;
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "text/event-stream" } },
+      );
+    };
+  });
+}
+
+async function openPlayground(
+  page: Page,
+  api: ReturnType<typeof createApiFixture>,
+) {
+  await installCompareSse(page);
+  await page.goto("/console/");
+  // Let the first (unauthorised) poll settle before typing the token; a late 401 re-rendering
+  // the shell mid-fill is a race the test creates.
+  await expect(page.getByTestId("live-phase")).toContainText("未授權");
+  await page.getByRole("button", { name: /^開啟設定/ }).click();
+  // The settings page is still hydrating its lazy sections right after navigation, and a controlled
+  // field can drop a value typed in that window: type again until it sticks.
+  const field = page.getByLabel("存取權杖");
+  await expect(async () => {
+    await field.fill(api.token);
+    expect(await field.inputValue()).toBe(api.token);
+  }).toPass();
+  await page.getByRole("button", { name: "儲存並連線", exact: true }).click();
+  // Wait for the engine to accept the token before leaving: navigating while the first
+  // authorised poll is in flight is a race the test, not the user, creates.
+  await expect(page.getByTestId("live-phase")).not.toContainText(
+    /未授權|離線|連線中/,
+  );
+  await page.getByRole("link", { name: "推理測試", exact: true }).click();
+  return page.getByTestId("playground");
+}
+
+/** The API format is a compact select (Chat Completions, Responses, Anthropic Messages). */
+async function pickDialect(page: Page, playground: Locator, label: string) {
+  await playground
+    .getByRole("group", { name: "API 格式" })
+    .getByRole("button")
+    .click();
+  await page.getByRole("option", { name: label, exact: true }).click();
+}
+
+async function installDiagnostics(
+  page: Page,
+  expected: Array<{ status: number; method: string; sourcePath: string }>,
+  label: string,
+) {
+  const unexpectedConsole: string[] = [];
+  const unexpectedHttp: string[] = [];
+  const failures: string[] = [];
+  const external: string[] = [];
+  const pageErrors: string[] = [];
+  page.on("pageerror", (error) => pageErrors.push(error.message));
+  page.on("console", (message) => {
+    if (message.type() !== "error") return;
+    if (/status of 401|status of 409/.test(message.text())) return;
+    // Optional engine routes answer 404 on an older server.
+    if (
+      /status of 404/.test(message.text()) &&
+      OPTIONAL_ROUTE.test(message.location().url)
+    )
+      return;
+    unexpectedConsole.push(`${message.text()} ${message.location().url}`);
+  });
+  page.on("requestfailed", (request) => {
+    const path = new URL(request.url()).pathname;
+    if (
+      /ERR_ABORTED|cancelled/i.test(request.failure()?.errorText ?? "") &&
+      (path.endsWith("/v1/yunshu/status") || OPTIONAL_ROUTE.test(path))
+    )
+      return;
+    failures.push(`${request.url()} ${request.failure()?.errorText}`);
+  });
+  page.on("request", (request) => {
+    if (
+      new URL(request.url()).origin !==
+      new URL(process.env.PLAYWRIGHT_BASE_URL ?? "http://127.0.0.1:3971").origin
+    )
+      external.push(request.url());
+  });
+  page.on("response", (response) => {
+    if (response.status() < 400) return;
+    if (OPTIONAL_ROUTE.test(new URL(response.url()).pathname)) return;
+    const index = expected.findIndex(
+      (item) =>
+        item.status === response.status() &&
+        item.method === response.request().method() &&
+        item.sourcePath === new URL(response.url()).pathname,
+    );
+    if (index >= 0) expected.splice(index, 1);
+    else unexpectedHttp.push(`${response.status()} ${response.url()}`);
+  });
+  return async () => {
+    expect(pageErrors, `${label} page errors`).toEqual([]);
+    expect(unexpectedConsole, `${label} unexpected console errors`).toEqual([]);
+    expect(failures, `${label} request failures`).toEqual([]);
+    expect(external, `${label} external requests`).toEqual([]);
+    expect(unexpectedHttp, `${label} unexpected HTTP errors`).toEqual([]);
+    // React StrictMode can abort the first unauthenticated status request after
+    // the route handler records its fixture response but before response delivery.
+    // Authentication is separately asserted through the visible unauthorized UI.
+    const remaining = expected.filter(
+      (item) =>
+        !(
+          item.status === 401 &&
+          item.method === "GET" &&
+          (item.sourcePath.endsWith("/v1/yunshu/status") ||
+            OPTIONAL_ROUTE.test(item.sourcePath))
+        ),
+    );
+    expect(remaining, `${label} unobserved operation error responses`).toEqual(
+      [],
+    );
+  };
+}
+
+test("chat reply shows per-reply stats with TTFT and cache badge", async ({
+  page,
+}) => {
+  const api = createApiFixture();
+  await api.attach(page);
+  const verifyClean = await installDiagnostics(
+    page,
+    api.expectedResponses,
+    "stats",
+  );
+  const playground = await openPlayground(page, api);
+  await playground.locator("textarea").first().fill("stats please");
+  await page.getByRole("button", { name: "傳送測試", exact: true }).click();
+  await expect(playground).toContainText("is four.");
+  const stats = playground.getByTestId("reply-stats");
+  await expect(stats).toContainText("20");
+  await expect(stats).toContainText("tok/s");
+  await expect(stats).toContainText(/首 token 延遲 \d/);
+  await expect(stats).toContainText("512 / 1.02K 前綴命中");
+  await verifyClean();
+});
+
+test("compare mode runs sequentially and reports identical greedy output", async ({
+  page,
+}) => {
+  const api = createApiFixture();
+  await api.attach(page);
+  const verifyClean = await installDiagnostics(
+    page,
+    api.expectedResponses,
+    "compare",
+  );
+  const playground = await openPlayground(page, api);
+  await page.getByRole("tab", { name: "比較", exact: true }).click();
+  await playground.getByRole("tab", { name: "貪婪 T=0" }).nth(0).click();
+  await playground.getByRole("tab", { name: "貪婪 T=0" }).nth(1).click();
+  await playground.locator("textarea").first().fill("same prompt");
+  await page.getByRole("button", { name: "傳送測試", exact: true }).click();
+  const delta = playground.getByTestId("compare-delta");
+  await expect(delta).toContainText("輸出完全一致");
+  await expect(delta).toContainText("Δ tok/s");
+  await expect(delta).toContainText("Δ 首 token 延遲");
+  await expect(playground.getByTestId("compare-col-a")).toContainText(
+    "is four.",
+  );
+  await expect(playground.getByTestId("compare-col-b")).toContainText(
+    "512 / 1.02K 前綴命中",
+  );
+  const cmp = await page.evaluate(
+    () =>
+      (
+        window as unknown as {
+          __cmp: {
+            calls: Array<{ model: string; temperature: number }>;
+            maxActive: number;
+          };
+        }
+      ).__cmp,
+  );
+  expect(cmp.maxActive).toBe(1);
+  expect(cmp.calls.map((c) => c.model)).toEqual(["Qwen3.8-27B", "Qwen3.5-9B"]);
+  expect(cmp.calls.map((c) => c.temperature)).toEqual([0, 0]);
+  await verifyClean();
+});
+
+test("compare mode shows the first divergence offset and never claims identity", async ({
+  page,
+}) => {
+  const api = createApiFixture();
+  await api.attach(page);
+  const verifyClean = await installDiagnostics(
+    page,
+    api.expectedResponses,
+    "diverge",
+  );
+  const playground = await openPlayground(page, api);
+  await page.getByRole("tab", { name: "比較", exact: true }).click();
+  await playground.getByRole("tab", { name: "貪婪 T=0" }).nth(0).click();
+  await playground.getByRole("tab", { name: "貪婪 T=0" }).nth(1).click();
+  await playground.locator("textarea").first().fill("DIVERGE now");
+  await page.getByRole("button", { name: "傳送測試", exact: true }).click();
+  const delta = playground.getByTestId("compare-delta");
+  await expect(delta).toContainText("首次分歧於字元偏移 15");
+  await expect(delta).not.toContainText("輸出完全一致");
+  await verifyClean();
+});
+
+test("compare mode with sampling does not claim determinism", async ({
+  page,
+}) => {
+  const api = createApiFixture();
+  await api.attach(page);
+  const verifyClean = await installDiagnostics(
+    page,
+    api.expectedResponses,
+    "sampled",
+  );
+  const playground = await openPlayground(page, api);
+  await page.getByRole("tab", { name: "比較", exact: true }).click();
+  await playground.locator("textarea").first().fill("same prompt");
+  await page.getByRole("button", { name: "傳送測試", exact: true }).click();
+  const delta = playground.getByTestId("compare-delta");
+  await expect(delta).toContainText("文字相同（取樣非貪婪");
+  await expect(delta).not.toContainText("輸出完全一致");
+  await verifyClean();
+});
+
+type Captured = { url: string; headers: Record<string, string>; body: any };
+
+/** Mock one dialect's endpoint with a real-shaped SSE stream; returns what the page sent. */
+async function mockDialect(
+  page: Page,
+  path: "/v1/responses" | "/v1/messages",
+): Promise<Captured[]> {
+  const captured: Captured[] = [];
+  const sse = (events: Array<[string, unknown]>) =>
+    events
+      .map(
+        ([name, data]) => `event: ${name}\ndata: ${JSON.stringify(data)}\n\n`,
+      )
+      .join("");
+  const body =
+    path === "/v1/responses"
+      ? sse([
+          [
+            "response.reasoning_summary_text.delta",
+            {
+              type: "response.reasoning_summary_text.delta",
+              delta: "thinking it over",
+            },
+          ],
+          [
+            "response.output_text.delta",
+            { type: "response.output_text.delta", delta: "Responses says " },
+          ],
+          [
+            "response.output_text.delta",
+            { type: "response.output_text.delta", delta: "hello." },
+          ],
+          [
+            "response.completed",
+            {
+              type: "response.completed",
+              response: {
+                usage: {
+                  input_tokens: 1024,
+                  output_tokens: 20,
+                  input_tokens_details: { cached_tokens: 512 },
+                  x_yunshu: { ttft_ms: 80 },
+                },
+              },
+            },
+          ],
+        ])
+      : sse([
+          [
+            "message_start",
+            {
+              type: "message_start",
+              message: {
+                usage: {
+                  input_tokens: 512,
+                  cache_read_input_tokens: 512,
+                  output_tokens: 1,
+                },
+              },
+            },
+          ],
+          [
+            "content_block_delta",
+            {
+              type: "content_block_delta",
+              index: 0,
+              delta: { type: "thinking_delta", thinking: "thinking it over" },
+            },
+          ],
+          [
+            "content_block_delta",
+            {
+              type: "content_block_delta",
+              index: 1,
+              delta: { type: "text_delta", text: "Messages says " },
+            },
+          ],
+          [
+            "content_block_delta",
+            {
+              type: "content_block_delta",
+              index: 1,
+              delta: { type: "text_delta", text: "hello." },
+            },
+          ],
+          [
+            "message_delta",
+            {
+              type: "message_delta",
+              delta: { stop_reason: "end_turn" },
+              usage: { output_tokens: 20, x_yunshu: { ttft_ms: 80 } },
+            },
+          ],
+          ["message_stop", { type: "message_stop" }],
+        ]);
+  await page.route(`**${path}`, async (route) => {
+    const request = route.request();
+    captured.push({
+      url: request.url(),
+      headers: request.headers(),
+      body: JSON.parse(request.postData() ?? "{}"),
+    });
+    await route.fulfill({
+      status: 200,
+      headers: { "Content-Type": "text/event-stream" },
+      body,
+    });
+  });
+  return captured;
+}
+
+for (const [dialect, label, path, text] of [
+  ["responses", "Responses", "/v1/responses", "Responses says hello."],
+  ["messages", "Anthropic Messages", "/v1/messages", "Messages says hello."],
+] as const) {
+  test(`${dialect} dialect streams from its own endpoint with stats`, async ({
+    page,
+  }) => {
+    const api = createApiFixture();
+    await api.attach(page);
+    const verifyClean = await installDiagnostics(
+      page,
+      api.expectedResponses,
+      dialect,
+    );
+    const playground = await openPlayground(page, api);
+    const captured = await mockDialect(page, path);
+    await pickDialect(page, playground, label);
+    await playground.locator("textarea").first().fill("dialect check");
+    await page.getByRole("button", { name: "傳送測試", exact: true }).click();
+    await expect(playground).toContainText(text);
+    await expect(playground).toContainText("thinking it over");
+    const stats = playground.getByTestId("reply-stats");
+    await expect(stats).toContainText("tok/s");
+    await expect(stats).toContainText("512");
+    await expect(stats).toContainText("首 token 延遲 80");
+    expect(captured).toHaveLength(1);
+    expect(captured[0].url.endsWith(path)).toBe(true);
+    expect(captured[0].headers["authorization"]).toBe(`Bearer ${api.token}`);
+    expect(captured[0].body.model).toBe("Qwen3.8-27B");
+    expect(captured[0].body.stream).toBe(true);
+    if (dialect === "responses") {
+      expect(captured[0].body.max_output_tokens).toBe(512);
+      expect(JSON.stringify(captured[0].body.input)).toContain("dialect check");
+      expect(captured[0].body.messages).toBeUndefined();
+    } else {
+      expect(captured[0].body.max_tokens).toBe(512);
+      expect(captured[0].body.messages[0]).toEqual({
+        role: "user",
+        content: "dialect check",
+      });
+      expect(captured[0].body.input).toBeUndefined();
+    }
+    await verifyClean();
+  });
+}
+
+test("view code reproduces the current request in curl, Python and JavaScript", async ({
+  page,
+}) => {
+  const api = createApiFixture();
+  await api.attach(page);
+  const verifyClean = await installDiagnostics(
+    page,
+    api.expectedResponses,
+    "code",
+  );
+  const playground = await openPlayground(page, api);
+  await pickDialect(page, playground, "Responses");
+  await playground.locator("textarea").first().fill("show me the code");
+  await playground.getByRole("button", { name: "檢視程式碼" }).click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toContainText("Responses");
+  const curl = dialog.getByTestId("code-curl");
+  await expect(curl).toContainText("/v1/responses");
+  await expect(curl).toContainText("Qwen3.8-27B");
+  await expect(curl).toContainText("show me the code");
+  await expect(curl).toContainText("max_output_tokens");
+  await expect(curl).not.toContainText(api.token);
+  // CodeBlock must keep one line per source line (it flattened in the patterns build).
+  await expect
+    .poll(
+      async () =>
+        (await curl.locator("code, pre").first().innerText()).split("\n")
+          .length,
+    )
+    .toBeGreaterThan(5);
+  await dialog.getByRole("tab", { name: "Python" }).click();
+  // Long snippets open fully (CodeBlock defaultExpanded): the whole request is readable at once.
+  await expect(dialog.getByRole("button", { name: /顯示全部/ })).toHaveCount(0);
+  await expect(dialog.getByTestId("code-python")).toContainText(
+    "requests.post",
+  );
+  await expect(dialog.getByTestId("code-python")).toContainText(
+    "/v1/responses",
+  );
+  await dialog.getByRole("tab", { name: "JavaScript" }).click();
+  await expect(dialog.getByTestId("code-javascript")).toContainText(
+    "await fetch",
+  );
+  await page.keyboard.press("Escape");
+  await expect(dialog).toBeHidden();
+  await pickDialect(page, playground, "Anthropic Messages");
+  await playground.getByRole("button", { name: "檢視程式碼" }).click();
+  await expect(
+    page.getByRole("dialog").getByTestId("code-javascript"),
+  ).toContainText("/v1/messages");
+  await verifyClean();
+});
+
+test("model picker lists models with a vision filter and selects by id", async ({
+  page,
+}) => {
+  const api = createApiFixture();
+  await api.attach(page);
+  const verifyClean = await installDiagnostics(
+    page,
+    api.expectedResponses,
+    "picker",
+  );
+  const playground = await openPlayground(page, api);
+  await playground
+    .getByRole("group", { name: "測試模型" })
+    .getByRole("button")
+    .first()
+    .click();
+  await expect(page.getByText("Qwen3.5-9B").first()).toBeVisible();
+  await page.keyboard.press("Escape");
+  await verifyClean();
+});
+
+test("presets: built-in applies, a saved preset persists per service address and can be deleted", async ({
+  page,
+}) => {
+  const api = createApiFixture();
+  await api.attach(page);
+  const playground = await openPlayground(page, api);
+  await page.getByRole("button", { name: "預設與紀錄" }).click();
+  const library = page.getByTestId("playground-library");
+  await library.getByRole("button", { name: "套用" }).first().click();
+  await expect(page.getByText(/已套用預設「精確」/).first()).toBeVisible();
+  // Save the current settings under a name.
+  await page.getByRole("button", { name: "預設與紀錄" }).click();
+  await library.getByLabel("預設名稱").fill("我的預設");
+  await library.getByRole("button", { name: "儲存目前設定" }).click();
+  await expect(library.getByTestId("saved-preset")).toContainText("我的預設");
+  // The library lives in IndexedDB (no 5 MB cap), keyed by service address; never the token.
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          new Promise<string>((resolve) => {
+            const open = indexedDB.open("yunshu-playground", 1);
+            open.onsuccess = () => {
+              const db = open.result;
+              const r = db
+                .transaction("library")
+                .objectStore("library")
+                .getAll();
+              r.onsuccess = () => {
+                db.close();
+                resolve(JSON.stringify(r.result));
+              };
+              r.onerror = () => resolve("");
+            };
+            open.onerror = () => resolve("");
+          }),
+      ),
+    )
+    .toContain("我的預設");
+  const stored = await page.evaluate(
+    () =>
+      new Promise<string>((resolve) => {
+        const open = indexedDB.open("yunshu-playground", 1);
+        open.onsuccess = () => {
+          const db = open.result;
+          const r = db.transaction("library").objectStore("library").getAll();
+          r.onsuccess = () => {
+            db.close();
+            resolve(JSON.stringify(r.result));
+          };
+        };
+      }),
+  );
+  expect(stored).not.toContain(api.token);
+  await page.reload();
+  await page.getByRole("link", { name: "推理測試", exact: true }).click();
+  await page.getByRole("button", { name: "預設與紀錄" }).click();
+  await expect(library.getByTestId("saved-preset")).toContainText("我的預設");
+  await library.getByRole("button", { name: "刪除預設 我的預設" }).click();
+  await expect(library.getByTestId("saved-preset")).toHaveCount(0);
+  await expect(playground).toBeVisible();
+});
+
+test("history: a finished chat is kept locally, resumes after a new test, deletes and clears", async ({
+  page,
+}) => {
+  const api = createApiFixture();
+  await api.attach(page);
+  const playground = await openPlayground(page, api);
+  await playground.locator("textarea").first().fill("remember this chat");
+  await page.getByRole("button", { name: "傳送測試", exact: true }).click();
+  await expect(playground).toContainText("is four.");
+  await page.getByRole("button", { name: "新測試" }).click();
+  await expect(playground).not.toContainText("is four.");
+  await page.getByRole("button", { name: "預設與紀錄" }).click();
+  const library = page.getByTestId("playground-library");
+  await library.getByRole("tab", { name: "紀錄" }).click();
+  const list = library.getByTestId("history-list");
+  await expect(list).toContainText("remember this chat");
+  await list.getByRole("button", { name: "繼續" }).click();
+  await expect(playground).toContainText("is four.");
+  await page.getByRole("button", { name: "預設與紀錄" }).click();
+  await library.getByRole("tab", { name: "紀錄" }).click();
+  await library.getByRole("button", { name: /^刪除紀錄/ }).click();
+  await expect(library).toContainText("尚無紀錄");
+});
+
+test("storage that throws never breaks the playground", async ({ page }) => {
+  const api = createApiFixture();
+  await api.attach(page);
+  // Storage is broken from the first script on, not patched after the app has started. Patching the
+  // factory's `open` after load was racy: WebKit keeps IndexedDB data between tests of one worker, so
+  // a database an earlier test created made the late patch miss the app's write and the "browser
+  // refused to save" notice never came.
+  await page.addInitScript(() => {
+    Storage.prototype.setItem = () => {
+      throw new Error("quota");
+    };
+    Object.defineProperty(window, "indexedDB", {
+      configurable: true,
+      value: {
+        open: () => {
+          throw new Error("blocked");
+        },
+      },
+    });
+  });
+  const playground = await openPlayground(page, api);
+  await playground.locator("textarea").first().fill("no storage");
+  await page.getByRole("button", { name: "傳送測試", exact: true }).click();
+  await expect(playground).toContainText("is four.");
+  await page.getByRole("button", { name: "預設與紀錄" }).click();
+  await expect(page.getByTestId("playground-library")).toContainText(
+    "瀏覽器拒絕儲存",
+  );
+});
+
+test("library: rename and overwrite a preset, branch a conversation, export and import with undo", async ({
+  page,
+}) => {
+  const api = createApiFixture();
+  await api.attach(page);
+  const playground = await openPlayground(page, api);
+  await playground.locator("textarea").first().fill("branch me");
+  await page.getByRole("button", { name: "傳送測試", exact: true }).click();
+  await expect(playground).toContainText("is four.");
+  await page.getByRole("button", { name: "預設與紀錄" }).click();
+  const library = page.getByTestId("playground-library");
+  // Preset: save, rename, overwrite.
+  await library.getByLabel("預設名稱").fill("原名");
+  await library.getByRole("button", { name: "儲存目前設定" }).click();
+  await library.getByRole("button", { name: "編輯預設 原名" }).click();
+  const editor = library.getByTestId("preset-editor");
+  await editor.getByLabel("預設名稱").fill("新名");
+  await editor.getByRole("button", { name: "儲存名稱" }).click();
+  await expect(library.getByTestId("saved-preset")).toContainText("新名");
+  await library.getByRole("button", { name: "編輯預設 新名" }).click();
+  await library
+    .getByTestId("preset-editor")
+    .getByRole("button", { name: "以目前設定覆寫" })
+    .click();
+  await expect(library.getByTestId("saved-preset")).toContainText("新名");
+  // History: branch makes a second entry.
+  await library.getByRole("tab", { name: "紀錄" }).click();
+  await expect(library.getByTestId("history-list").locator("li")).toHaveCount(
+    1,
+  );
+  await library.getByRole("button", { name: /^從 .* 建立分支$/ }).click();
+  await library
+    .getByTestId("branch-editor")
+    .getByRole("button", { name: "建立分支", exact: true })
+    .click();
+  await expect(library.getByTestId("history-list").locator("li")).toHaveCount(
+    2,
+  );
+  await expect(library.getByTestId("history-list")).toContainText("（分支）");
+  // Export, then import a wrong file (refused) and a good one (merged, undoable).
+  const download = page.waitForEvent("download");
+  await library.getByRole("button", { name: "匯出" }).click();
+  const file = await download;
+  const path = await file.path();
+  expect(path).toBeTruthy();
+  await library.locator('input[type="file"]').setInputFiles({
+    name: "bad.json",
+    mimeType: "application/json",
+    buffer: Buffer.from('{"schema":9}'),
+  });
+  await expect(page.getByText("不是推理測試的匯出檔").first()).toBeVisible();
+  await library.locator('input[type="file"]').setInputFiles(path!);
+  await expect(
+    page.getByText(/已匯入 1 個預設、2 則紀錄/).first(),
+  ).toBeVisible();
+});

@@ -10,9 +10,18 @@ from yunshu_gateway.main import create_app
 def test_mixed_wildcard_cors_disables_credentials(monkeypatch):
     monkeypatch.setenv("YUNSHU_CORS_ORIGINS", " https://client.example, * ")
     app = create_app()
-    cors = next(m for m in app.user_middleware if m.cls.__name__ == "CORSMiddleware")
-    assert cors.kwargs["allow_origins"] == ["https://client.example", "*"]
-    assert cors.kwargs["allow_credentials"] is False
+    # The console edits CORS live, so the app registers the live variant of the middleware.
+    assert any(m.cls.__name__ == "LiveCORSMiddleware" for m in app.user_middleware)
+    from yunshu_gateway.middleware.live_cors import (
+        LiveCORSMiddleware,
+        credentials_allowed,
+        current_origins,
+    )
+
+    assert current_origins() == ["https://client.example", "*"]
+    assert credentials_allowed(current_origins()) is False
+    live = LiveCORSMiddleware(app=lambda *a: None)
+    assert "Access-Control-Allow-Credentials" not in live.simple_headers
 
 
 @pytest.mark.parametrize("cross_origin", [True, False])

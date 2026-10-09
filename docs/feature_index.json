@@ -1,0 +1,331 @@
+{
+  "groups": {
+    "inference": "Inference",
+    "apis": "APIs",
+    "agents": "Agents & tools",
+    "multimodal": "Multimodal",
+    "ops": "Operations & console"
+  },
+  "features": [
+    {
+      "id": "speculative-decoding",
+      "group": "inference",
+      "title": "Lossless speculative decoding",
+      "summary": "DFlash2, MTP and prompt-copy drafting with batch-invariant kernels; greedy output equals speculation off",
+      "doc": "docs/guides/INFERENCE.md",
+      "status": "stable"
+    },
+    {
+      "id": "text-speculation",
+      "group": "inference",
+      "title": "Text-model speculation",
+      "summary": "n-gram / suffix and Gemma 4 assistant drafting for mlx-lm models (external-draft experiments stay experimental)",
+      "doc": "docs/guides/INFERENCE.md",
+      "status": "stable"
+    },
+    {
+      "id": "prefix-cache",
+      "group": "inference",
+      "title": "Prefix cache (APC)",
+      "summary": "exact hybrid checkpoints in RAM, SSD and optional storage tiers; image and audio keys",
+      "doc": "docs/guides/KV_CACHE_MATRIX.md",
+      "status": "stable"
+    },
+    {
+      "id": "constrained-decoding",
+      "group": "inference",
+      "title": "Structured output",
+      "summary": "JSON schema, regex, choice and grammar enforced during decoding, including tool arguments",
+      "doc": "docs/guides/INFERENCE.md",
+      "status": "stable"
+    },
+    {
+      "id": "lossy-memory",
+      "group": "inference",
+      "title": "Lossy memory options",
+      "summary": "int8 KV, compressed WARM tier and load-time quantization; off by default",
+      "doc": "docs/guides/INFERENCE.md",
+      "status": "stable"
+    },
+    {
+      "id": "large-moe",
+      "group": "inference",
+      "title": "Large MoE loading (partial)",
+      "summary": "bits and group size derived from tensor shapes for community DeepSeek-V4-Flash packs; fit check before loading",
+      "doc": "docs/guides/INFERENCE.md",
+      "status": "partial"
+    },
+    {
+      "id": "round-driver",
+      "group": "inference",
+      "title": "Round driver (experimental)",
+      "summary": "own speculative round driver for dense Qwen3.5-family models",
+      "doc": "docs/guides/ROUND_DRIVER.md",
+      "status": "experimental"
+    },
+    {
+      "id": "model-support",
+      "group": "inference",
+      "title": "Model support",
+      "summary": "what is tuned, generic and validated, per family",
+      "doc": "docs/guides/MODEL_SUPPORT.md",
+      "status": "stable"
+    },
+    {
+      "id": "openai",
+      "group": "apis",
+      "title": "OpenAI API",
+      "summary": "Chat, Completions, Responses (HTTP and WebSocket), Embeddings, Models, Files, Batches, Conversations",
+      "doc": "docs/guides/API_SURFACE.md",
+      "status": "stable"
+    },
+    {
+      "id": "anthropic",
+      "group": "apis",
+      "title": "Anthropic API",
+      "summary": "Messages, count_tokens, batches, thinking, tools, cache_control, documents and citations",
+      "doc": "docs/guides/API_SURFACE.md",
+      "status": "stable"
+    },
+    {
+      "id": "ollama",
+      "group": "apis",
+      "title": "Ollama API",
+      "summary": "/api/chat, /api/generate and native model management (pull, copy, delete, show)",
+      "doc": "docs/guides/API_SURFACE.md",
+      "status": "stable"
+    },
+    {
+      "id": "responses-extras",
+      "group": "apis",
+      "title": "Responses extras",
+      "summary": "client-executed computer tool, conversations, compaction, previous_response_id",
+      "doc": "docs/guides/API_SURFACE.md",
+      "status": "stable"
+    },
+    {
+      "id": "stored-completions",
+      "group": "apis",
+      "title": "Stored chat completions",
+      "summary": "store: true, then list, retrieve, update, delete and list messages",
+      "doc": "docs/guides/API_SURFACE.md",
+      "status": "stable"
+    },
+    {
+      "id": "evals",
+      "group": "apis",
+      "title": "Evals",
+      "summary": "OpenAI Evals API with string-check, similarity and local model graders",
+      "doc": "docs/guides/EVALS.md",
+      "status": "stable"
+    },
+    {
+      "id": "decisions",
+      "group": "apis",
+      "title": "Typed decisions",
+      "summary": "yes/no, choice and score answers with probabilities in one forward pass, no text generation",
+      "doc": "docs/guides/DECISIONS.md",
+      "status": "stable"
+    },
+    {
+      "id": "batches-files",
+      "group": "apis",
+      "title": "Batches, Files and tokenizer",
+      "summary": "OpenAI and Anthropic batches, Files API, tokenize / detokenize / apply-template / props",
+      "doc": "docs/guides/API_SURFACE.md",
+      "status": "stable"
+    },
+    {
+      "id": "transports",
+      "group": "apis",
+      "title": "Transports",
+      "summary": "SSE, WebSocket streams, Unix socket, HTTP/2, optional WebRTC",
+      "doc": "docs/guides/TRANSPORTS.md",
+      "status": "stable"
+    },
+    {
+      "id": "extensions",
+      "group": "apis",
+      "title": "Yunshu extensions",
+      "summary": "request ids, live phases, prefill progress, cancel, deadlines, x_yunshu stats, warmup, memory units",
+      "doc": "docs/guides/API_EXTENSIONS.md",
+      "status": "stable"
+    },
+    {
+      "id": "prompt-caching",
+      "group": "apis",
+      "title": "Prompt-caching APIs",
+      "summary": "cache_control and cached-token accounting across the three dialects",
+      "doc": "docs/guides/PROMPT_CACHING_APIS.md",
+      "status": "stable"
+    },
+    {
+      "id": "coding-agents",
+      "group": "agents",
+      "title": "Coding agents",
+      "summary": "Claude Code, Codex and opencode through their own APIs; `yunshu launch`",
+      "doc": "docs/guides/AGENT_COMPAT.md",
+      "status": "stable"
+    },
+    {
+      "id": "web-search",
+      "group": "agents",
+      "title": "Web search and fetch",
+      "summary": "server-side web_search / web_fetch with citations; DuckDuckGo, Wikipedia, SearXNG, Tavily, Serper, Perplexity",
+      "doc": "docs/guides/WEB_SEARCH.md",
+      "status": "stable"
+    },
+    {
+      "id": "tavily-api",
+      "group": "agents",
+      "title": "Tavily-compatible API",
+      "summary": "search, extract, crawl, map, research and MCP, with provider health backoff",
+      "doc": "docs/guides/TAVILY.md",
+      "status": "stable"
+    },
+    {
+      "id": "mcp",
+      "group": "agents",
+      "title": "MCP",
+      "summary": "native MCP endpoint, and remote MCP servers named in a request",
+      "doc": "docs/guides/API_SURFACE.md",
+      "status": "stable"
+    },
+    {
+      "id": "clients",
+      "group": "agents",
+      "title": "Client setup",
+      "summary": "curl, OpenAI and Anthropic SDKs, Open WebUI",
+      "doc": "docs/guides/CLIENTS.md",
+      "status": "stable"
+    },
+    {
+      "id": "vision-input",
+      "group": "multimodal",
+      "title": "Image, audio and video input",
+      "summary": "mlx-vlm models take media in Chat, Responses and Messages; media enters the cache key",
+      "doc": "docs/guides/MULTIMODAL.md",
+      "status": "stable"
+    },
+    {
+      "id": "omni",
+      "group": "multimodal",
+      "title": "Speech-to-speech (partial)",
+      "summary": "Qwen3-Omni native speech; a repeated image does not yet hit the cache",
+      "doc": "docs/guides/MULTIMODAL.md",
+      "status": "partial"
+    },
+    {
+      "id": "realtime",
+      "group": "multimodal",
+      "title": "Realtime voice",
+      "summary": "WebSocket and optional WebRTC, server VAD, barge-in, ephemeral client secrets, local voices",
+      "doc": "docs/guides/MULTIMODAL.md",
+      "status": "stable"
+    },
+    {
+      "id": "asr-tts",
+      "group": "multimodal",
+      "title": "Speech to text, text to speech",
+      "summary": "transcriptions, translations, speech and voices",
+      "doc": "docs/guides/MULTIMODAL.md",
+      "status": "stable"
+    },
+    {
+      "id": "ocr-images",
+      "group": "multimodal",
+      "title": "OCR and image generation",
+      "summary": "GLM-OCR text extraction; image generations, edits and variations",
+      "doc": "docs/guides/MULTIMODAL.md",
+      "status": "stable"
+    },
+    {
+      "id": "embeddings-rerank",
+      "group": "multimodal",
+      "title": "Embeddings, rerank, score, classify",
+      "summary": "text and multimodal embeddings, cross-encoder rerank, trained classification heads",
+      "doc": "docs/guides/MULTIMODAL.md",
+      "status": "stable"
+    },
+    {
+      "id": "console",
+      "group": "ops",
+      "title": "Web console",
+      "summary": "live request phases, history, logs, models, downloads, cache, playground, keys, settings, status island",
+      "doc": "docs/CONSOLE.md",
+      "status": "stable"
+    },
+    {
+      "id": "api-keys",
+      "group": "ops",
+      "title": "API keys and quotas",
+      "summary": "several keys with scopes, expiry, per-key usage and daily quotas",
+      "doc": "docs/guides/AUTH_AND_KEYS.md",
+      "status": "stable"
+    },
+    {
+      "id": "settings-cors",
+      "group": "ops",
+      "title": "Settings and CORS editor",
+      "summary": "write engine settings (restart-required ones prompt) and edit CORS from the console or API",
+      "doc": "docs/guides/AUTH_AND_KEYS.md",
+      "status": "stable"
+    },
+    {
+      "id": "host-telemetry",
+      "group": "ops",
+      "title": "Host telemetry",
+      "summary": "power, GPU clock, temperatures, thermal and memory pressure, per-request energy estimate, Prometheus",
+      "doc": "docs/guides/TELEMETRY.md",
+      "status": "stable"
+    },
+    {
+      "id": "cli",
+      "group": "ops",
+      "title": "Command line",
+      "summary": "setup, doctor, models list/pull/rm/show, top, service, completions and inference commands",
+      "doc": "docs/guides/CLI.md",
+      "status": "stable"
+    },
+    {
+      "id": "service",
+      "group": "ops",
+      "title": "Login service",
+      "summary": "launchd agent, restart and logs",
+      "doc": "docs/guides/SERVICE.md",
+      "status": "stable"
+    },
+    {
+      "id": "configuration",
+      "group": "ops",
+      "title": "Configuration",
+      "summary": "one settings registry: environment, TOML file or `--set`",
+      "doc": "docs/CONFIGURATION.md",
+      "status": "stable"
+    },
+    {
+      "id": "security",
+      "group": "ops",
+      "title": "Security",
+      "summary": "auth token, CORS credentials rule, redirect header stripping, secret redaction, SSRF guard",
+      "doc": "docs/guides/AUTH_AND_KEYS.md",
+      "status": "stable"
+    },
+    {
+      "id": "first-run",
+      "group": "ops",
+      "title": "First run and troubleshooting",
+      "summary": "install, choose a model, readiness checks, fixes",
+      "doc": "docs/guides/FIRST_RUN.md",
+      "status": "stable"
+    },
+    {
+      "id": "benchmarks",
+      "group": "ops",
+      "title": "Benchmarks and accuracy",
+      "summary": "where each number comes from, how to reproduce it, accuracy gates",
+      "doc": "docs/BENCHMARKS.md",
+      "status": "stable"
+    }
+  ]
+}

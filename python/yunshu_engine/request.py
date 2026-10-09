@@ -129,6 +129,8 @@ class RequestOutput:
     error: str | None = None
     cached_tokens: int = 0
     ttft_ms: float = 0.0
+    # True only when a user stop string fired (not EOS); Anthropic needs stop_sequence vs end_turn.
+    stopped_by_stop_sequence: bool = False
 
     # Chunked prefill progress
     # Tuple of (processed_tokens, total_tokens) for chunked prefill progress reporting.

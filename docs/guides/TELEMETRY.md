@@ -3,7 +3,7 @@
 `YUNSHU_TELEMETRY=on` enables a local 1 Hz background sampler. It requires no root,
 never imports MLX, and makes native calls only on `yunshu-host-telemetry`, outside
 the inference executor. `YUNSHU_TELEMETRY_INTERVAL_S` changes the interval; restart
-the server after changing either setting. Default is on; it is accepted only after the M5 overhead gate. No samples leave the machine.
+the server after changing either setting. Default is off: the M5 27B A/B (1K and 32K, 5 reps) showed identical decode speed within noise but a small, consistent follow-up TTFT cost at 1K prose (+1.8%, about 11 ms) and a borderline -0.4% decode at 32K code, so it is opt-in. No samples leave the machine.
 
 The implementation derives IOReport and HID access from
 [pierre427/mlx2](https://github.com/pierre427/mlx2), Apache-2.0, revision
