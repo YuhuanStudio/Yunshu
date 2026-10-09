@@ -40,6 +40,8 @@ def parse_sse_line(line: bytes):
         d = json.loads(payload)
     except ValueError:
         return None
+    if d.get("x_yunshu"):
+        return ("x", (d["x_yunshu"] or {}).get("speculative"))
     if d.get("usage") and not d.get("choices"):
         return ("usage", d["usage"])
     ch = (d.get("choices") or [{}])[0]
@@ -67,6 +69,7 @@ def stream_request(url, content, max_tokens):
     deltas = 0
     text = []
     usage = None
+    spec = None
     with urllib.request.urlopen(req, timeout=1800) as r:
         for raw in r:
             ev = parse_sse_line(raw)
@@ -81,6 +84,8 @@ def stream_request(url, content, max_tokens):
                 text.append(val)
             elif kind == "usage":
                 usage = val
+            elif kind == "x":
+                spec = val
             else:
                 break
     return {
@@ -88,6 +93,7 @@ def stream_request(url, content, max_tokens):
         "decode_s": None if first is None else last - first,
         "deltas": deltas,
         "usage": usage,
+        "spec": spec,
         "text": "".join(text),
     }
 
@@ -141,10 +147,13 @@ def main(argv=None):
     ap.add_argument("--tf-arg", action="append", default=[])
     ap.add_argument("--env", action="append", default=[])
     ap.add_argument("--tree", default=os.getcwd())
+    ap.add_argument("--apc-gb", default="1")
     ap.add_argument("--out", required=True)
     a = ap.parse_args(argv)
     env = arm_env(a.arm, a.env)
     env["PYTHONPATH"] = os.path.join(a.tree, "python")
+    if a.arm.startswith("yunshu"):
+        env.setdefault("YUNSHU_VLM_APC_MEMORY_GB", a.apc_gb)
     baseline = system_used_bytes()
     rows = []
     out = open(a.out, "w")  # noqa: SIM115
@@ -219,6 +228,7 @@ def main(argv=None):
                         "ttft_s": res["ttft_s"],
                         "decode_tok_s": rate,
                         "tokens": n,
+                        "spec": res["spec"],
                         "digest": hashlib.sha256(res["text"].encode()).hexdigest()[:16],
                         "steady_delta_gb": round(
                             (system_used_bytes() - baseline) / GB, 2

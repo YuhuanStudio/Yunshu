@@ -9,7 +9,7 @@ def req(tokens=3, rounds=0, engaged=True):
     return {
         "kind": "request",
         "tokens": tokens,
-        "x_yunshu": {"spec_rounds": rounds},
+        "x_yunshu": {"speculative": {"rounds": rounds}},
         "ple": {"engaged": engaged},
         "peak_delta_gb": 70.0,
         "steady_delta_gb": 69.0,

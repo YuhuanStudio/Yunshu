@@ -51,7 +51,8 @@ def verdict(rows, require_ple, require_spec):
         if not ple or not ple[-1].get("engaged"):
             reasons.append("PLE-on-SSD counters did not move")
     if require_spec and not any(
-        (r.get("x_yunshu") or {}).get("spec_rounds", 0) > 0 for r in reqs
+        ((r.get("x_yunshu") or {}).get("speculative") or {}).get("rounds", 0) > 0
+        for r in reqs
     ):
         reasons.append("MTP engaged zero verify rounds")
     return reasons
@@ -160,7 +161,10 @@ def main(argv=None):
                     "temperature": 0,
                 },
             )
-            text = d["choices"][0]["message"].get("content") or ""
+            m = d["choices"][0]["message"]
+            text = (m.get("reasoning_content") or m.get("reasoning") or "") + (
+                m.get("content") or ""
+            )
             try:
                 ple = http_json(url + "/debug/weight-residency", timeout=30)
             except Exception as exc:  # noqa: BLE001
