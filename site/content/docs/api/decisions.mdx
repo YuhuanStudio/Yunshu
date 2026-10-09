@@ -1,0 +1,197 @@
+---
+title: Decisions
+description: Typed questions (yes/no, pick one, ordinal score) answered with probabilities from a decision-head model in a single forward pass, with no generated text.
+---
+
+A decision model answers structured questions about some input without writing any text. You send an input and a list of typed questions. The model reads the input and the question schema once, and returns a probability for each answer. This is different from chat completion and from JSON-schema constrained decoding: nothing is generated, so output tokens are always zero and latency is one prefill.
+
+Use it for routing, classification, guardrail checks and scoring, where you want calibrated probabilities rather than a sampled answer.
+
+<Endpoint method="POST" path="/v1/decisions" />
+
+`POST /v1/systemone` is a second wire format for the same engine, described under [Extensions](/docs/api/extensions).
+
+<Callout type="info">
+Authentication is only enforced when `YUNSHU_AUTH_TOKEN` is set. The route is stateless and non-streaming.
+</Callout>
+
+## Decision models
+
+The route needs a decision checkpoint, which is a backbone plus a trained decision head. Yunshu loads the Cloudflare Clef joint schema head in MLX format, including Clef-flash. The checkpoint is detected from its files; if you load one, it is classified as a decision model instead of a chat model.
+
+```bash
+yunshu pull abenzerps/Clef-MLX
+yunshu serve -m abenzerps/Clef-MLX
+```
+
+Other decision-head families are not supported, and a checkpoint with an unknown head fails to load. Asking a chat model for a decision returns `400`. Images require a vision-capable checkpoint (the `vision` extra); on a text-only checkpoint, requests with images return `400`.
+
+## Request
+
+| Parameter | Type | Required | Description | Status |
+| --- | --- | --- | --- | --- |
+| `model` | string | yes | Decision model id (single-model mode: the served model). | supported |
+| `input` | string or array | yes | Text, or user messages. See below. | supported |
+| `questions` | array | yes | 1 to 128 questions. Answers come back in the same order. | supported |
+| `safety_identifier` | string | no | Up to 64 characters. | accepted and ignored |
+
+Unknown top-level keys are ignored, so SDK `extra_body` fields do not break the call. Question objects are strict: unknown keys inside a question or message are rejected with `400`.
+
+### Input
+
+A string, or an array of messages `{"role": "user", "content": ...}` where `content` is a string or a list of parts:
+
+| Part | Fields | Notes |
+| --- | --- | --- |
+| `input_text` | `text` | Texts are joined with newlines. |
+| `input_image` | `image_url`, optional `detail` | Must be an inline `data:image/...;base64,...` URL. External URLs and file ids are rejected. At most 128 images. |
+
+The text may be at most 1,000,000 characters, and the combined input and schema length must fit in 16,384 tokens. Overflow is rejected, not truncated. Only the `user` role is allowed.
+
+### Questions
+
+| `type` | Fields | Answer |
+| --- | --- | --- |
+| `predicate` | `instructions`, optional `name` | A yes/no probability. |
+| `choice` | `instructions`, `choices` (2 to 64 of `{"value", "description"?}`), optional `name` | The most likely `value`, its confidence, and all probabilities. `value` is a string or boolean and must be distinct (the boolean `true` collides with the string `"true"`). |
+| `score` | `instructions`, `levels` (2 to 64 of `{"label", "description"?}`), optional `name` | The expected zero-based level index, confidence and per-level probabilities. The head reads the level `description` (the `label` when there is none), and labels must be distinct. |
+
+Names, when given, must be unique.
+
+## Response
+
+```json
+{
+  "answers": [
+    {
+      "type": "choice",
+      "name": "route",
+      "choice": "support",
+      "confidence": 0.93,
+      "probabilities": [
+        { "value": "support", "probability": 0.93 },
+        { "value": "sales", "probability": 0.07 }
+      ]
+    },
+    { "type": "predicate", "name": "urgent", "probability": 0.81 },
+    {
+      "type": "score",
+      "name": "sentiment",
+      "score": 0.22,
+      "confidence": 0.78,
+      "probabilities": [
+        { "label": "negative", "value": 0, "probability": 0.78 },
+        { "label": "positive", "value": 1, "probability": 0.22 }
+      ]
+    }
+  ],
+  "model": "abenzerps/Clef-MLX",
+  "usage": {
+    "input_tokens": 142,
+    "input_tokens_details": { "cached_tokens": 0, "cache_write_tokens": 0 },
+    "output_tokens": 0,
+    "output_tokens_details": { "reasoning_tokens": 0 },
+    "total_tokens": 142
+  }
+}
+```
+
+If the head returns a non-finite result for a question, that answer is `{"type": "refusal", "name": ...}`. A probability is never made up. `usage.input_tokens` is the prefill length; `cached_tokens` is always 0.
+
+## Examples
+
+<Tabs items={["curl", "Python", "JavaScript"]}>
+<Tab value="curl">
+
+```bash
+curl http://localhost:8000/v1/decisions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "abenzerps/Clef-MLX",
+    "input": "The customer asks for a refund after a broken delivery.",
+    "questions": [
+      {"type": "choice", "name": "route", "instructions": "Choose the support team.",
+       "choices": [{"value": "support"}, {"value": "sales"}]},
+      {"type": "predicate", "name": "urgent", "instructions": "Is this urgent?"}
+    ]
+  }'
+```
+
+</Tab>
+<Tab value="Python">
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="http://localhost:8000/v1", api_key="not-needed")
+
+decision = client.decisions.create(
+    model="abenzerps/Clef-MLX",
+    input="The customer asks for a refund after a broken delivery.",
+    questions=[
+        {
+            "type": "choice",
+            "name": "route",
+            "instructions": "Choose the support team.",
+            "choices": [{"value": "support"}, {"value": "sales"}],
+        }
+    ],
+)
+print(decision.answers)
+```
+
+The `decisions` resource needs a recent `openai` SDK. With an older SDK, post the same JSON body with `httpx` or `requests`.
+
+</Tab>
+<Tab value="JavaScript">
+
+```ts
+const res = await fetch("http://localhost:8000/v1/decisions", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({
+    model: "abenzerps/Clef-MLX",
+    input: "The customer asks for a refund after a broken delivery.",
+    questions: [
+      {
+        type: "choice",
+        name: "route",
+        instructions: "Choose the support team.",
+        choices: [{ value: "support" }, { value: "sales" }],
+      },
+    ],
+  }),
+});
+console.log((await res.json()).answers);
+```
+
+</Tab>
+</Tabs>
+
+## Errors
+
+Errors use the OpenAI envelope `{"error": {"message", "type", "param", "code"}}`.
+
+| Status | When |
+| --- | --- |
+| `400` | Invalid JSON or schema, empty input, duplicate names or choices, fewer than 2 choices or levels, external image URL, images sent to a text-only checkpoint, the model is not a decision model, input over 16,384 tokens. |
+| `404` | The model is not found or not loaded. |
+| `507` | Out of GPU memory. |
+| `500` | The decision failed. |
+
+## Support
+
+| Feature | Status |
+| --- | --- |
+| Predicate, choice and score questions | <Support status="supported">supported</Support> |
+| Image input (inline base64) | <Support status="partial">vision-capable checkpoints only</Support> |
+| Cloudflare Clef checkpoints in MLX format | <Support status="supported">supported</Support> |
+| Other decision-head families | <Support status="unsupported">fail to load</Support> |
+| Streaming, prompt caching, stored state | <Support status="unsupported">stateless, one forward pass</Support> |
+| `safety_identifier` | <Support status="unsupported">accepted and ignored</Support> |
+
+## Related
+
+- [Extensions](/docs/api/extensions) for the System One wire format on `POST /v1/systemone`.
+- [Structured output](/docs/guides/structured-output) when you need generated text that follows a JSON schema instead.
+- [Models](/docs/getting-started/models) for loading checkpoints.

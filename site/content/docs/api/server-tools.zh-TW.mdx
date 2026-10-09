@@ -1,0 +1,217 @@
+---
+title: 伺服器端工具
+description: 網路搜尋、網頁擷取與 MCP 連接器，由 Yunshu 在產生迴圈內為 Anthropic Messages 與 OpenAI Responses 請求執行。
+---
+
+Anthropic 與 OpenAI 的 API 中，有些工具是由伺服器執行，而不是由你的用戶端執行。Yunshu 支援其中三種：網路搜尋、網頁擷取（僅 Anthropic），以及呼叫遠端 MCP 伺服器的連接器。請求宣告了其中之一時，Yunshu 會在單一請求內跑一個迴圈：模型產生內容、呼叫伺服器端工具、Yunshu 執行它（非同步、在模型執行緒之外、有逾時限制）、附加結果，再繼續產生，直到模型不再呼叫伺服器端工具為止。你拿到的是一個回應，其內容會交錯排列工具區塊與最終文字。每一輪都會重送相同的對話加上新的回合，所以前綴快取會提供共用的前綴，續接時只需要預填新增的 token。
+
+| 工具 | Anthropic Messages | OpenAI Responses |
+| --- | --- | --- |
+| 網路搜尋 | `web_search_20250305` | `web_search`、`web_search_preview` |
+| 網頁擷取 | `web_fetch_20250910` | API 中沒有 |
+| MCP 連接器 | `mcp_servers` + `mcp_toolset` | `{"type": "mcp"}` |
+
+路由是 [`POST /v1/messages`](/docs/api/messages) 與 [`POST /v1/responses`](/docs/api/responses)，沒有獨立的端點。
+
+<Callout type="warn">
+使用預設提供者的網路搜尋，會把你的查詢文字（以及你的 IP 位址）送到第三方搜尋服務。只有在請求宣告了網路搜尋工具、而且模型呼叫它時才會送出。設定 `YUNSHU_WEB_SEARCH_PROVIDER=none` 可完全停用搜尋。見[網路搜尋](/docs/guides/web-search)。
+</Callout>
+
+## 設定
+
+伺服器端工具由伺服器的設定控制（見[設定](/docs/guides/configuration)）；請求只負責宣告工具。
+
+| 設定 | 預設 | 意義 |
+| --- | --- | --- |
+| `YUNSHU_WEB_SEARCH_PROVIDER` | `auto` | 搜尋後端：`auto`、`none`、`searxng`、`brave`、`tavily`、`exa`、`serper`、`perplexity`、`ddg_html`、`wikipedia`、`mwmbl`、`mojeek`、`marginalia`。`auto` 會並行查詢多個輕量與已設定的提供者並合併結果；`none` 停用搜尋。 |
+| `YUNSHU_WEB_KEYLESS` | 開啟 | 在 `auto` 模式下允許免金鑰的 DuckDuckGo（盡力而為，可能被封鎖）與 Wikipedia。 |
+| `YUNSHU_SEARXNG_URL` | 未設定 | 自行架設的 SearXNG 基底 URL（需啟用 JSON 輸出）。選用。 |
+| `YUNSHU_BRAVE_API_KEY`、`YUNSHU_TAVILY_API_KEY`、`YUNSHU_EXA_API_KEY`、`YUNSHU_SERPER_API_KEY`、`YUNSHU_PERPLEXITY_API_KEY`、`YUNSHU_MOJEEK_API_KEY`、`YUNSHU_MARGINALIA_API_KEY` | 未設定 | 需要金鑰的提供者所用的金鑰。設定後會加入 `auto`。 |
+| `YUNSHU_WEB_SEARCH_RESULTS` | 5 | 每次搜尋呼叫回傳的結果數。 |
+| `YUNSHU_WEB_SEARCH_PROVIDER_TIMEOUT` | 1.0 秒 | `auto` 模式下每個提供者的期限。 |
+| `YUNSHU_WEB_RESEARCH` | 關閉 | 用來源頁面的摘錄豐富化搜尋摘要（被擷取的 URL 會離開本機）。 |
+| `YUNSHU_WEB_FETCH` | 開啟 | 提供 `web_fetch`。關閉時，網頁擷取請求會得到 `unavailable` 錯誤。 |
+| `YUNSHU_WEB_FETCH_ALLOW_PRIVATE` | 關閉 | 讓 `web_fetch` 可以連到私有、loopback 與 link-local 位址。 |
+| `YUNSHU_WEB_FETCH_MAX_BYTES` | 2000000 | 下載本文大小上限。 |
+| `YUNSHU_WEB_FETCH_TIMEOUT` | 20 秒 | 每個頁面的期限。 |
+| `YUNSHU_WEB_FETCH_MAX_TEXT_CHARS` | 40000 | 交給模型的擷取文字會截到此長度。 |
+| `YUNSHU_MCP_CONNECTOR` | 開啟 | 提供 MCP 連接器。 |
+| `YUNSHU_MCP_CONNECTOR_ALLOW_PRIVATE` | 開啟 | 讓連接器可以連到私有與 loopback 的 MCP 伺服器（本機工具伺服器是常見情境）。關閉後只允許公開位址。 |
+| `YUNSHU_MCP_CONNECTOR_TIMEOUT` | 30 秒 | 每次呼叫（initialize、`tools/list`、`tools/call`）。 |
+| `YUNSHU_MCP_CONNECTOR_MAX_BYTES` | 8 MiB | MCP 伺服器單一回覆的大小上限。 |
+| `YUNSHU_SERVER_TOOL_MAX_ITERATIONS` | 8 | 單一請求中「產生、執行、繼續」的最大輪數。 |
+
+沒有可用的搜尋提供者時，搜尋請求不會讓整個呼叫失敗：工具結果會帶 `unavailable` 錯誤，回應的 `x_yunshu.server_tools` 物件會附上設定提示。`GET /v1/models` 會在 `yunshu.server_tools` 下顯示各工具目前的狀態（`web_search.available` 與提供者、`web_fetch.available`、`mcp_connector.available`）。
+
+## Anthropic Messages
+
+### 網路搜尋
+
+在 `tools` 中宣告：
+
+```json
+{ "type": "web_search_20250305", "name": "web_search", "max_uses": 3, "allowed_domains": ["docs.python.org"], "user_location": {"type": "approximate", "country": "TW"} }
+```
+
+| 欄位 | 狀態 | 說明 |
+| --- | --- | --- |
+| `max_uses` | 支援 | 單一請求中達到此呼叫次數後，後續呼叫會得到 `max_uses_exceeded` 錯誤結果。 |
+| `allowed_domains`、`blocked_domains` | 支援 | 依網域過濾結果（網域也會比對其子網域）。 |
+| `user_location` | 支援 | 作為位置提示傳給搜尋提供者。 |
+| `cache_control`、`allowed_callers`、`defer_loading` | 接受但忽略 | |
+
+回應內容會交錯出現下列區塊：
+
+```json
+[
+  { "type": "server_tool_use", "id": "srvtoolu_...", "name": "web_search", "input": { "query": "python 3.13 release date" } },
+  {
+    "type": "web_search_tool_result",
+    "tool_use_id": "srvtoolu_...",
+    "content": [
+      { "type": "web_search_result", "url": "https://...", "title": "...", "encrypted_content": "...", "page_age": null }
+    ]
+  },
+  {
+    "type": "text",
+    "text": "Python 3.13 was released in October 2024 [1].",
+    "citations": [
+      { "type": "web_search_result_location", "url": "https://...", "title": "...", "encrypted_index": "...", "cited_text": "..." }
+    ]
+  }
+]
+```
+
+搜尋失敗時回傳 `content: {"type": "web_search_tool_result_error", "error_code": "..."}`，錯誤碼有 `unavailable`、`max_uses_exceeded`、`too_many_requests`、`invalid_input`、`query_too_long`（查詢超過 400 個字元）。`usage.server_tool_use.web_search_requests` 記錄呼叫次數。
+
+### 網頁擷取
+
+```json
+{ "type": "web_fetch_20250910", "name": "web_fetch", "max_uses": 5, "allowed_domains": ["example.com"], "max_content_tokens": 20000 }
+```
+
+支援 `max_uses`、`allowed_domains`、`blocked_domains` 與 `max_content_tokens`（把文字上限降到約每個 token 四個字元）。結果區塊：
+
+```json
+{
+  "type": "web_fetch_tool_result",
+  "tool_use_id": "srvtoolu_...",
+  "content": {
+    "type": "web_fetch_result",
+    "url": "https://example.com/",
+    "retrieved_at": "2026-01-01T00:00:00Z",
+    "content": {
+      "type": "document",
+      "title": "Example Domain",
+      "citations": { "enabled": false },
+      "source": { "type": "text", "media_type": "text/markdown", "data": "..." }
+    }
+  }
+}
+```
+
+HTML 會轉成 Markdown；text、JSON 與 XML 類型以文字回傳。其他內容類型（包含 PDF 與圖片）會以 `unsupported_content_type` 失敗。錯誤以 `web_fetch_tool_result_error` 回傳，`error_code` 為 `url_not_allowed`、`url_not_accessible`、`unsupported_content_type`、`url_too_long`（URL 超過 250 個字元）、`invalid_tool_input`、`too_many_requests`、`max_uses_exceeded` 或 `unavailable`。`usage.server_tool_use.web_fetch_requests` 記錄呼叫次數。擷取的內容不可被引用：結果文件的 `citations.enabled` 為 false。
+
+### 引用
+
+文字區塊上的引用，是根據模型在它所用結果旁邊寫的 `[n]` 標記建立的。每一筆是 `web_search_result_location`，帶有該結果的 `url` 與 `title`、取自最相符段落或摘要的最多 150 字元 `cited_text`，以及 `encrypted_index`。`encrypted_content` 與 `encrypted_index` 是不透明的封裝，讓後續請求可以重放這些結果；本機伺服器沒有需要對自己的用戶端隱藏的東西，所以它們並未加密。`page_age` 取決於提供者回傳什麼，常常是 `null`。模型是否會寫 `[n]` 標記取決於模型，小模型可能根據搜尋結果回答，卻沒有產生引用。文件引用是另一項功能，見 [Messages](/docs/api/messages)。
+
+### pause_turn
+
+迴圈達到 `YUNSHU_SERVER_TOOL_MAX_ITERATIONS` 輪、模型仍在呼叫伺服器端工具時，訊息會以 `stop_reason: "pause_turn"` 結束。把回應內容當作助理回合送回去，就能繼續。
+
+### MCP 連接器
+
+在頂層 `mcp_servers` 宣告遠端 MCP 伺服器，並可在 `tools` 中為每個伺服器加一筆 `mcp_toolset`：
+
+```json
+{
+  "mcp_servers": [
+    { "type": "url", "name": "docs", "url": "https://mcp.example.com/mcp", "authorization_token": "secret" }
+  ],
+  "tools": [
+    { "type": "mcp_toolset", "mcp_server_name": "docs", "default_config": { "enabled": true }, "configs": { "dangerous_tool": { "enabled": false } } }
+  ]
+}
+```
+
+| 欄位 | 狀態 | 說明 |
+| --- | --- | --- |
+| `mcp_servers[].name`、`url` | 支援 | 兩者皆必填。 |
+| `mcp_servers[].authorization_token` | 支援 | 以 bearer token 送出。 |
+| `mcp_servers[].headers` | 擴充 | 額外的請求標頭。 |
+| `mcp_servers[].tool_configuration` | 支援 | 較早的 beta 寫法：`enabled` 與 `allowed_tools`。 |
+| `mcp_toolset.default_config.enabled`、`configs.{tool}.enabled` | 支援 | 啟用或停用個別工具。 |
+| toolset 中的 `defer_loading`、`cache_control` | 接受但忽略 | |
+
+閘道在請求開始時連線（Streamable HTTP，失敗時退回較舊的 HTTP+SSE 傳輸），列出工具，並把啟用的工具以 `<server>__<tool>` 的名稱呈現給模型。工具呼叫會產生 `mcp_tool_use`（含 `server_name`）與 `mcp_tool_result`（含 `is_error` 與文字 `content`）。工具結果會截到 100000 個字元。同一回合中的呼叫並行執行。沒有核准步驟。無法連線的伺服器會得到 `400 invalid_request_error`。
+
+## OpenAI Responses
+
+### 網路搜尋
+
+```json
+{ "type": "web_search", "filters": { "allowed_domains": ["docs.python.org"] }, "user_location": {"type": "approximate", "country": "TW"}, "search_context_size": "medium" }
+```
+
+支援 `filters.allowed_domains` 與 `user_location`；`search_context_size` 會被接受，但沒有作用。模型也可以開啟頁面並在其中搜尋（`open_page` 與 `find_in_page` 動作）。輸出包含一個 `web_search_call` 項目（`action` 含 `type`、`query`；`status` 為 `completed` 或 `failed`），接著是一個 `message`，其 `output_text` 帶有 `url_citation` 註解（`start_index`、`end_index`、`url`、`title`），由模型的 `[n]` 標記建立。加上 `include: ["web_search_call.action.sources"]` 可在 `action.sources` 列出結果 URL。`max_tool_calls` 限制搜尋次數；超過上限的呼叫會失敗，並把訊息交給模型。
+
+### mcp 工具
+
+```json
+{
+  "type": "mcp",
+  "server_label": "docs",
+  "server_url": "https://mcp.example.com/mcp",
+  "authorization": "secret",
+  "allowed_tools": ["search"],
+  "require_approval": "never"
+}
+```
+
+| 欄位 | 狀態 | 說明 |
+| --- | --- | --- |
+| `server_label`、`server_url` | 支援 | 兩者皆必填（否則 `400`）。 |
+| `authorization`、`headers` | 支援 | MCP 伺服器的憑證；不會在回應的 `tools` 中回顯。 |
+| `allowed_tools` | 支援 | 名稱清單，或 `{"tool_names": [...]}`。 |
+| `require_approval` | 支援 | `"never"` 會立即執行工具。預設值（`"always"`），或列出 `never.tool_names` 的物件，會讓模型的呼叫停在 `mcp_approval_request` 項目；在下一個請求（搭配 `previous_response_id`）送出 `mcp_approval_response` 項目（`approval_request_id`、`approve`、`reason`）來執行或拒絕。 |
+| `connector_id` | 尚未支援 | OpenAI 託管的連接器會得到 `400`（`unsupported_connector`）；請改傳伺服器 URL。 |
+
+某個伺服器的第一個回應會包含 `mcp_list_tools` 項目；之後帶有該項目的請求（或含有它的已儲存回應）會略過列出步驟。呼叫以 `mcp_call` 項目呈現，含 `arguments`、`output`、`error` 與 `approval_request_id`。無法連線的伺服器會得到 `424`，code 為 `external_connector_error`。
+
+## 網路安全
+
+- `web_fetch` 會自行解析主機名稱，在連線前以及每一次重新導向時（最多 5 次，每次都重新驗證）拒絕私有、loopback 與 link-local 位址，包含雲端中繼資料位址。連線會固定在驗證過的位址，因此檢查與請求之間 DNS 回答不會改變。不會送出 cookie。`YUNSHU_WEB_FETCH_ALLOW_PRIVATE=1` 可解除限制。
+- Messages 上的圖片與 PDF `url` 來源以相同方式檢查。
+- MCP 連接器預設是例外：它可以連到私有與 loopback 伺服器（`YUNSHU_MCP_CONNECTOR_ALLOW_PRIVATE`），因為本機工具伺服器是正常情境。如果不受信任的用戶端能連到你的伺服器，請關閉它。
+- 搜尋查詢與擷取的頁面都是由模型控制的輸入。擷取的文字會以工具輸出的形式進入模型，所以頁面可能試圖左右模型；請把伺服器端工具當作任何會讀取開放網路的工具來對待。
+
+## 限制與尚未支援的部分
+
+- 程式碼執行、託管的記憶工具、檔案搜尋、圖片生成與 OpenAI 託管連接器皆無法使用。
+- `web_fetch` 不讀取 PDF 或圖片，也無法執行 JavaScript。
+- 網路搜尋品質取決於你設定的提供者；免金鑰的預設值是盡力而為。
+- Responses API 沒有網頁擷取工具；請使用 `mcp` 的 fetch 伺服器，或改走 Anthropic 路由。
+- 同一個 Responses 請求中，伺服器端工具不能與 `custom`、`local_shell`、`tool_search` 或 `computer` 工具混用（`400`）。一般的函式工具可以與伺服器端工具並用；函式呼叫會回傳給你的用戶端。
+- Responses 請求中，`background: true` 不能與 `web_search` 或 `mcp` 並用（`400`）。
+
+## 支援狀況
+
+| 功能 | 狀態 |
+| --- | --- |
+| Anthropic `web_search_20250305` | <Support status="supported">支援</Support> |
+| Anthropic `web_fetch_20250910` | <Support status="supported">支援（文字、HTML）</Support> |
+| Anthropic `mcp_servers` + `mcp_toolset` | <Support status="supported">支援</Support> |
+| Responses `web_search` / `web_search_preview` | <Support status="supported">支援</Support> |
+| Responses `mcp` 工具、核准 | <Support status="supported">支援</Support> |
+| Responses `connector_id` 連接器 | <Support status="unsupported">尚未支援</Support> |
+| 長迴圈的 `pause_turn` | <Support status="supported">僅 Anthropic</Support> |
+| 網頁擷取的引用、PDF 擷取 | <Support status="unsupported">尚未支援</Support> |
+
+## 相關頁面
+
+- [Messages](/docs/api/messages)
+- [Responses](/docs/api/responses)
+- [網路搜尋指南](/docs/guides/web-search)
+- [設定](/docs/guides/configuration)
+- [代理程式](/docs/guides/agents)

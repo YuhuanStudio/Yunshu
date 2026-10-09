@@ -1,0 +1,180 @@
+---
+title: Ollama
+description: 與 Ollama 相容的 /api 路由，讓 Ollama 用戶端與 SDK 能直接連到 Yunshu，並精確列出哪些是真實支援、哪些不是。
+---
+
+Yunshu 在 `/api` 下提供 Ollama 原生 API，因此為 Ollama 寫的工具（官方 `ollama` Python 與 JavaScript 函式庫、Open WebUI、Continue 等）不必修改就能指向這個伺服器。這些路由是一層很薄的轉換：每個 `/api/chat`、`/api/generate`、`/api/embed` 或 `/api/embeddings` 請求都會轉成對應的 OpenAI 請求，再送回同一個伺服器，所以模型路由、驗證、前綴快取、工具呼叫與受限解碼的行為，與 OpenAI 路由完全一樣。
+
+<Endpoint method="POST" path="/api/chat" />
+<Endpoint method="POST" path="/api/generate" />
+<Endpoint method="POST" path="/api/embed" />
+<Endpoint method="POST" path="/api/embeddings" />
+<Endpoint method="GET" path="/api/tags" />
+<Endpoint method="POST" path="/api/show" />
+<Endpoint method="GET" path="/api/ps" />
+<Endpoint method="GET" path="/api/version" />
+<Endpoint method="POST" path="/api/pull" />
+<Endpoint method="POST" path="/api/create" />
+<Endpoint method="POST" path="/api/copy" />
+<Endpoint method="DELETE" path="/api/delete" />
+<Endpoint method="POST" path="/api/push" />
+
+<Callout type="info">
+預設連接埠是 8000，不是 Ollama 的 11434，所以請明確設定主機（例如 `http://localhost:8000`）。只有在設定了 `YUNSHU_AUTH_TOKEN` 時才會強制驗證；`Authorization` 標頭會轉送到內部請求。錯誤使用 Ollama 的格式 `{"error": "message"}`，HTTP 狀態碼為底層失敗的狀態碼。模型名稱以 Yunshu 的名稱為準：`:latest` 後綴會被接受並忽略，回應會原樣帶回你送出的名稱。
+</Callout>
+
+## 哪些是真實的
+
+| 路由 | 狀態 | 行為 |
+| --- | --- | --- |
+| `POST /api/chat` | <Support status="supported">真實支援</Support> | 以 `messages`、`tools`、`format`、`options`、`think`、圖片進行聊天。預設以 NDJSON 串流。 |
+| `POST /api/generate` | <Support status="supported">真實支援</Support> | 單一提示，可帶 `system` 與 `images`。空提示會回傳 `{"done": true, "done_reason": "load"}`，不會產生內容。 |
+| `POST /api/embed` | <Support status="supported">真實支援</Support> | `input` 為字串或清單；可帶 `dimensions`。 |
+| `POST /api/embeddings` | <Support status="supported">真實支援</Support> | 舊版的單一提示寫法。 |
+| `GET /api/tags` | <Support status="supported">真實支援</Support> | 列出 Yunshu 提供的模型。 |
+| `POST /api/show` | <Support status="supported">真實支援</Support> | 以 Ollama 格式回傳模型資訊卡。 |
+| `GET /api/ps` | <Support status="supported">真實支援</Support> | 目前已載入的模型。 |
+| `GET /api/version` | <Support status="supported">真實支援</Support> | Yunshu 的版本。 |
+| `POST /api/pull` | <Support status="partial">僅限 Hugging Face 儲存庫，需多模型模式</Support> | 下載原生 MLX 儲存庫。 |
+| `POST /api/create` | <Support status="partial">只能為現有模型命名</Support> | `from` 加上名稱；不支援 Modelfile 功能。 |
+| `POST /api/copy` | <Support status="partial">別名，不複製權重</Support> | 建立指向同一份權重的符號連結名稱。 |
+| `DELETE /api/delete` | <Support status="partial">需多模型模式，僅限模型目錄內</Support> | 移除別名，或移除模型目錄內的檢查點。 |
+| `POST /api/push` | <Support status="unsupported">尚未支援</Support> | 一律回傳 `501`。 |
+
+Ollama 的 blob 上傳與存在檢查路由完全不提供。Ollama 的 OpenAI 相容 `/v1` 路由就是 Yunshu 自己的 OpenAI 路由，見 [Chat Completions](/docs/api/chat-completions)。
+
+## 聊天與產生
+
+兩個路由都接受下列欄位。
+
+| 欄位 | 路由 | 狀態 | 行為 |
+| --- | --- | --- | --- |
+| `model` | 兩者 | 支援 | 必填。單模型模式會以任何名稱提供已載入的模型。 |
+| `messages` | chat | 支援 | 必填，`{role, content, images, tool_calls, tool_name}` 陣列。 |
+| `prompt`、`system`、`images` | generate | 支援 | `system` 會變成系統訊息；`images` 為 base64 字串。 |
+| `stream` | 兩者 | 支援 | 預設 `true`（NDJSON，`application/x-ndjson`）。`false` 則回傳單一 JSON 物件。 |
+| `format` | 兩者 | 支援 | `"json"` 或 JSON schema 物件；以受限解碼落實。 |
+| `tools` | 兩者 | 支援 | Ollama／OpenAI 格式的函式工具。呼叫會出現在 `message.tool_calls`，`arguments` 為物件。 |
+| `think` | 兩者 | 支援 | `true`／`false` 切換思考；`"low"`、`"medium"`、`"high"` 設定推理強度。推理內容放在 `message.thinking`（chat）或 `thinking`（generate）。 |
+| `options.temperature`、`top_p`、`top_k`、`min_p`、`seed`、`presence_penalty`、`frequency_penalty` | 兩者 | 支援 | 傳給引擎。 |
+| `options.repeat_penalty` | 兩者 | 支援 | 對應到 `repetition_penalty`。 |
+| `options.num_predict` | 兩者 | 支援 | 正數即為 token 上限。`-1`、`-2` 或省略時使用 8192。 |
+| `options.stop` | 兩者 | 支援 | 字串或清單。 |
+| `options.num_ctx`、`num_batch`、`num_gpu`、`mirostat*`、`typical_p`、`penalize_newline`、`use_mmap` 與其他執行器選項 | 兩者 | 接受但忽略 | 上下文大小是已載入模型本身的屬性。 |
+| `keep_alive` | 兩者 | 接受但忽略 | 模型的存續由 Yunshu 管理，不是依個別請求。 |
+| `template`、`raw`、`context`、`suffix`、`truncate` | generate／chat | 接受但忽略 | 提示範本一律使用模型自己的聊天範本。 |
+
+訊息中的 `images` 是 base64 字串（資料會包成 PNG data URL），需要視覺語言模型。
+
+## 範例
+
+<Tabs items={["curl", "Python"]}>
+<Tab value="curl">
+
+```bash
+curl http://localhost:8000/api/chat -d '{
+  "model": "local",
+  "messages": [{"role": "user", "content": "Why is the sky blue?"}],
+  "stream": false
+}'
+```
+
+</Tab>
+<Tab value="Python">
+
+```python
+from ollama import Client
+
+client = Client(host="http://localhost:8000")
+
+reply = client.chat(
+    model="local",
+    messages=[{"role": "user", "content": "Why is the sky blue?"}],
+)
+print(reply["message"]["content"])
+
+for part in client.generate(model="local", prompt="Write a haiku.", stream=True):
+    print(part["response"], end="")
+
+print(client.embed(model="local-embedding", input=["hello", "world"])["embeddings"][0][:4])
+```
+
+</Tab>
+</Tabs>
+
+### 結構化輸出
+
+```bash
+curl http://localhost:8000/api/chat -d '{
+  "model": "local",
+  "stream": false,
+  "messages": [{"role": "user", "content": "Ada Lovelace was born in 1815."}],
+  "format": {"type": "object", "properties": {"name": {"type": "string"}, "born": {"type": "integer"}}, "required": ["name", "born"]}
+}'
+```
+
+## 回應
+
+非串流的 `/api/chat`：
+
+```json
+{
+  "model": "local",
+  "created_at": "2026-01-01T12:00:00.000000Z",
+  "message": { "role": "assistant", "content": "Sunlight scatters off air molecules." },
+  "done": true,
+  "done_reason": "stop",
+  "total_duration": 812000000,
+  "load_duration": 0,
+  "prompt_eval_count": 24,
+  "prompt_eval_duration": 120000000,
+  "eval_count": 8,
+  "eval_duration": 690000000
+}
+```
+
+`/api/generate` 回傳 `response` 而不是 `message`。`done_reason` 為 `stop` 或 `length`（工具呼叫以 `stop` 結束）。時間單位為奈秒；引擎回報自己的計時時就用它，否則由閘道量測。除非引擎回報載入時間，否則 `load_duration` 為 0。
+
+## 串流
+
+`stream` 為 true（預設）時，回應是 NDJSON，每行一個 JSON 物件：重複的 `done: false` 區塊帶有 `message.content`（或 `response`），模型有推理時還有 `message.thinking`，最後是一個 `done: true` 的物件，含 `done_reason`、計時欄位與任何 `message.tool_calls`。工具呼叫在最後一個物件一次送達，不會逐段送出。串流開始後的失敗，是單獨一行 `{"error": "..."}`，之後不會有 `done: true` 那一行。
+
+## 模型與嵌入
+
+- `GET /api/tags` 回傳 `{"models": [{name, model, modified_at, size, digest, details}]}`。`size` 在已知時取自模型資訊卡的權重大小。`digest` 是模型 id 的雜湊，不是檔案內容的雜湊。
+- `POST /api/show` 接受 `model`（或 `name`），以 Ollama 格式回傳模型資訊卡（`details`、`model_info`、`capabilities`、`modelfile`、`parameters`、`template`、`modified_at`）。未知的模型是 `404`。
+- `GET /api/ps` 回傳已載入的模型，`expires_at` 一律是 `0001-01-01T00:00:00Z`（不會到期）。
+- `POST /api/embed` 回傳 `{"model", "embeddings": [[...]], "total_duration", "load_duration", "prompt_eval_count"}`；`POST /api/embeddings` 回傳 `{"embedding": [...]}`。兩者都需要嵌入模型，且與[嵌入](/docs/api/embeddings)使用同一個引擎。
+
+## 模型管理
+
+這些路由只在多模型模式（`yunshu serve --models-dir`）下運作，並需要與載入、卸載模型相同的權限；單模型模式下會回應 `400`。
+
+- `POST /api/pull` 搭配 `{"model": "org/name"}`，會下載內含原生 safetensors 權重的 Hugging Face 儲存庫並註冊。已註冊的名稱會立即回傳成功。Ollama 登錄庫的名稱（`library/llama3:8b`）與 GGUF 儲存庫會被拒絕（`400`）。回覆是單獨一行 `{"status": "success"}`（`"stream": false` 時為 JSON）；沒有進度事件。
+- `POST /api/create` 只接受 `{"model": "new-name", "from": "existing-model"}`，建立持久的別名。`files`、`adapters`、`quantize`、`parameters`、`template`、`system`、`messages` 欄位會被拒絕（`400`）。
+- `POST /api/copy` 搭配 `source` 與 `destination`，建立指向同一份權重的符號連結別名。目的地已存在是 `409`。
+- `DELETE /api/delete` 搭配 `model`，會卸載並移除別名，或刪除模型目錄內的檢查點目錄。模型目錄外的檢查點會被拒絕（`400`），仍有別名指向的檢查點是 `409`，使用中的模型是 `409`。
+- `POST /api/push` 一律回傳 `501`，訊息說明不支援登錄庫上傳。
+
+## 錯誤
+
+`{"error": "message"}`，附上失敗的狀態碼：本文錯誤或缺少 `model`、`messages` 為 `400`，驗證與權限為 `401`／`403`，未知模型為 `404`，模型管理衝突為 `409`，`/api/push` 為 `501`，產生錯誤則沿用上游狀態（例如提示超出上下文視窗為 `400`）。
+
+## 支援狀況
+
+| 功能 | 狀態 |
+| --- | --- |
+| 聊天、產生、NDJSON 串流 | <Support status="supported">支援</Support> |
+| 工具、結構化 `format`、`think`、圖片 | <Support status="supported">支援</Support> |
+| 嵌入（`/api/embed`、`/api/embeddings`） | <Support status="supported">支援</Support> |
+| Tags、show、ps、version | <Support status="supported">支援</Support> |
+| Pull、create、copy、delete | <Support status="partial">僅限原生 MLX 儲存庫與別名</Support> |
+| `num_ctx`、`keep_alive`、Modelfile `template` 等執行器選項 | <Support status="partial">接受但忽略</Support> |
+| 登錄庫上傳（`/api/push`）、GGUF 匯入、blobs | <Support status="unsupported">尚未支援</Support> |
+
+## 相關頁面
+
+- [Chat Completions](/docs/api/chat-completions)
+- [嵌入](/docs/api/embeddings)
+- [模型](/docs/api/models)
+- [模型支援](/docs/guides/model-support)

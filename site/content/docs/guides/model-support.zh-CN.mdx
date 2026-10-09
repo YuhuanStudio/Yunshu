@@ -1,0 +1,73 @@
+---
+title: 模型支持
+description: Yunshu 支持哪些模型系列和模态，以及每一种使用哪条服务路径和可选的额外依赖。
+---
+
+Yunshu 加载 MLX 检查点。它会根据文件夹中的文件和 `config.json` 检测模型种类，再为它选择引擎。上游（`mlx-lm`、`mlx-vlm` 或 `mlx-audio`）能加载某个模型，并不代表 Yunshu 的每个端点和功能都已针对该模型验证。`GET /v1/models` 为每个模型返回的模型卡（位于每个条目的 `yunshu` 字段）描述了已加载模型能做什么；在依赖工具调用、结构化输出、logprobs 或媒体输入之前，请先查看它。
+
+## 支持层级
+
+| 层级 | 模型 | 含义 |
+|---|---|---|
+| 完整调优 | Qwen3.8-27B（第一个完整调优的检查点） | 推测式解码、前缀复用和批次不变（batch-invariant）解码路径都是针对它开发和测量的。 |
+| 第一级 | Qwen3.5 系列（`qwen3_5`、`qwen3_6`、`qwen3_5_moe` 模型类型） | 推测式解码（MTP 或匹配的 drafter）和前缀缓存。 |
+| 通用文本 | 其他 `mlx-lm` 模型 | 由文本快速路径服务。上限取决于上游支持。 |
+| 通用视觉语言 | 其他 `mlx-vlm` 模型 | 由 VLM batch runner 服务。适用各模型特有的媒体、模板和能力限制。 |
+| 其他模态 | 语音、嵌入、排序、OCR、图像生成 | 通过各自的引擎和可选额外依赖提供；见下文。 |
+
+## 服务路径
+
+| 路径 | 适用对象 | 行为 |
+|---|---|---|
+| VLM batch runner | 所有经由 `mlx-vlm` 服务的模型，包括以 `vision` 额外依赖加载的 Qwen3.5 / 3.6 / 3.8 系列 | 连续批处理，每个请求独立采样。一次只预填一个请求。对不使用滑动窗口缓存的模型系列提供自动前缀缓存，键值也包含图片和音频特征，并可选用 SSD 层。接受图片、音频和视频输入。 |
+| 推测式通道（仅 Qwen3.5 系列） | `qwen3_5`、`qwen3_6`、`qwen3_5_moe` | 在单请求通道中进行 MTP 或 DFlash 草稿生成，使用批次不变的解码与验证内核，使开启草稿的输出与关闭草稿时相同。由 `YUNSHU_MTP`（默认开启）和 `YUNSHU_VLM_DRAFT` 控制。并发请求目前不会一起进行草稿生成。 |
+| 文本快速路径 | 纯文本 `mlx-lm` 模型 | 通过 `mlx-lm` 一次处理一个请求；并发的请求会依次处理。 |
+
+VLM 路径的限制：视觉语言模型会拒绝 LoRA adapter 和自定义 logits processor。Qwen3.5 系列模型将使用哪条推测路径，可由 `yunshu doctor -m <model>` 的 `speculative` 行和启动日志得知。
+
+## 模态与对应的路由
+
+检测是针对模型文件夹进行。“额外依赖”列指的是[安装](/docs/getting-started/install)中该引擎所需的可选额外依赖。
+
+| 模型种类 | 检测到的类型示例 | 路由 | 额外依赖 | 状态 |
+|---|---|---|---|---|
+| 文本 LLM | 任何 `mlx-lm` 模型类型 | `POST /v1/chat/completions`、`POST /v1/completions`、`POST /v1/responses`、`POST /v1/messages` | 无 | <Support status="supported">支持</Support> |
+| 视觉语言 | 具有 `vision_config` 的模型，例如 Qwen-VL、Pixtral、Mistral 3 和 Qwen3.5 系列 | 相同的对话路由，并可带入图片 | `vision` | <Support status="supported">支持</Support> |
+| 语音转文字 | `whisper`、`qwen3_asr`、`parakeet`、`qwen2_audio` | `POST /v1/audio/transcriptions`、`POST /v1/audio/translations` | `audio` | <Support status="supported">支持</Support> |
+| 文字转语音 | `qwen3_tts`、`kokoro`、`chatterbox` | `POST /v1/audio/speech` | `audio` | <Support status="supported">支持</Support> |
+| 原生语音到语音 | Qwen3-Omni（具有 Talker 的模型） | `POST /v1/omni/speech/stream`，以及 Realtime socket | `omni` | <Support status="partial">部分支持</Support> |
+| OCR | 类型或名称含 `ocr` 的模型 | `POST /v1/ocr` | `vision` | <Support status="supported">支持</Support> |
+| 嵌入 | `mlx-embeddings` 模型、EmbeddingGemma 2、Qwen3-VL-Embedding | `POST /v1/embeddings` | `embeddings` | <Support status="supported">支持</Support> |
+| 重排序与评分 | Cross-encoder 重排序模型、序列分类头 | `POST /v1/rerank`、`POST /v1/classify`、`POST /v1/score` | 视模型而定（`embeddings` 或 `vision`） | <Support status="supported">支持</Support> |
+| 图像生成 | `flux`、`sd3`、`sdxl`、`z_image` | `POST /v1/images/generations`、`POST /v1/images/edits`、`POST /v1/images/variations` | `generation` | <Support status="supported">支持</Support> |
+| 类型化决策 | Clef / Clef-flash 联合 schema 头 | `POST /v1/decisions` | `vision` | <Support status="partial">部分支持</Support> |
+| 视频生成 | Wan、LTX 等 | 无 | | <Support status="unsupported">暂不支持</Support> |
+| 独立的语音到语音 | 语音转换、语音增强模型 | 无 | | <Support status="unsupported">暂不支持</Support> |
+
+关于部分支持的行：
+
+- **原生语音到语音**在所服务的模型具有 Talker（Qwen3-Omni）时工作。语音路径会复用已加载的模型，而不会另外加载第二份。对其他模型，或设置 `YUNSHU_REALTIME_OMNI=off` 时会关闭，此时 Realtime 会退回“语音转文字、再交给 LLM、再文字转语音”的串联流程。大型 Omni 检查点需要大量统一内存。
+- **类型化决策**只接受 Clef 联合 schema 头。其他决策头系列会被拒绝，把对话模型发送到决策路由会返回错误。
+
+被检测为视频或独立语音到语音的模型会加载失败并附上说明，同时列出支持的种类为图像、音频和 LLM 模型。缺少额外依赖时，相关路由会报告缺少的依赖，而不是返回占位输出（例如没有 `generation` 额外依赖时，`POST /v1/images/generations` 会返回 503）。
+
+## 单模型与多模型服务
+
+`yunshu serve -m <model>` 服务单个模型，并把请求的 `model` 字段视为参考用途。`yunshu serve --models-dir <dir>` 会注册它找到的所有模型并按需加载；每个模型的引擎类型（文本、视觉、音频、图像、决策）按上述检测结果决定。参见[模型](/docs/getting-started/models)。
+
+## 验证模型
+
+在依赖某个检查点之前，请先检查：
+
+1. `yunshu doctor -m <model>` 检查文件夹是否完整、内存是否放得下。
+2. 在 `GET /v1/models` 中查看该模型条目的能力。
+3. 针对你依赖的每项功能（工具调用、JSON schema、流式、停止序列、logprobs、取消），对运行中的服务器发送请求实测。
+
+此表描述的是代码所处理的范围，并不保证某个系列的每个检查点都能配合每项功能工作。
+
+## 相关页面
+
+- [结构化输出](/docs/guides/structured-output)
+- [提示缓存](/docs/guides/prompt-caching)
+- [CLI 参考](/docs/guides/cli)
+- [故障排查](/docs/guides/troubleshooting)

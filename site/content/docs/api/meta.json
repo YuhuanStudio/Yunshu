@@ -1,0 +1,26 @@
+{
+ "title": "API reference",
+ "pages": [
+  "overview",
+  "chat-completions",
+  "stored-completions",
+  "responses",
+  "messages",
+  "server-tools",
+  "embeddings",
+  "rerank",
+  "tokenization",
+  "audio",
+  "images",
+  "models",
+  "files",
+  "batches",
+  "evals",
+  "realtime",
+  "ollama",
+  "mcp",
+  "decisions",
+  "extensions",
+  "operations"
+ ]
+}

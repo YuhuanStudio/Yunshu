@@ -1,0 +1,20 @@
+@import url("https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap");
+@import "tailwindcss";
+@import "fumadocs-ui/css/neutral.css";
+@import "fumadocs-ui/css/preset.css";
+@import "@yuhuanowo/yunui/css";
+@import "@yuhuanowo/yunui/content.css";
+@import "katex/dist/katex.min.css";
+
+/* Tailwind v4 must scan YunUI's compiled components so their utility classes are generated. */
+@source "../../node_modules/@yuhuanowo/yunui/dist/**/*.js";
+
+/* fumadocs' muted ink measures 4.12:1 in light mode; one step darker clears AA. */
+:root:not(.dark) {
+  --color-fd-muted-foreground: #525252;
+}
+
+/* Inline code may wrap on phones instead of being clipped at the column edge. */
+:not(pre) > code {
+  overflow-wrap: anywhere;
+}

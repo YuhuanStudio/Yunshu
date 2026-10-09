@@ -37,6 +37,8 @@ exclude = [
     "frontend/evidence/",
     "frontend/evidence/**",
     "frontend/*.tsbuildinfo",
+    "site/",
+    "site/**",
 ]
 
 [project]

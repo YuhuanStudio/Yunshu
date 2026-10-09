@@ -1,0 +1,344 @@
+---
+title: 結構化輸出與工具呼叫
+description: 把生成限制為 JSON schema、正規表示式、選項清單或文法，並透過 tool_choice 與平行呼叫使用工具，涵蓋 chat、Responses、Messages 與 Ollama 路由。
+---
+
+Yunshu 能在解碼的過程中，強制模型的輸出符合指定的形狀。限制是逐 token 套用的，所以結果一定符合，而不是靠提示詞拜託模型、再祈禱剖析器能處理。工具呼叫也建立在同一套機制上。
+
+受限解碼適用於文字模型與視覺語言模型。不會生成文字的模型（embedding、ASR、圖像模型）收到限制欄位時，會回傳指出欄位名稱的 `400`。`GET /v1/models` 每個項目的 `yunshu` 物件，會在 `contract.structured_output` 與 `contract.tools` 底下列出該模型接受什麼。
+
+## 輸出限制
+
+| 限制 | Chat Completions | Responses | Messages | Ollama |
+|---|---|---|---|---|
+| JSON 物件 | `response_format: {"type": "json_object"}` | `text.format: {"type": "json_object"}` | `response_format`（Yunshu 擴充） | `format: "json"` |
+| JSON schema | `response_format: {"type": "json_schema", ...}` | `text.format: {"type": "json_schema", ...}` | `output_config.format` 或 `output_format` | `format: {<schema>}` |
+| 正規表示式 | `grammar: {"type": "regex", "pattern": ...}` | `grammar` | `grammar` | 無 |
+| 選項（choice） | `grammar: {"type": "choice", "choices": [...]}` | `grammar` | `grammar` | 無 |
+| 上下文無關文法 | `grammar: {"type": "cfg", "grammar": "<lark>"}` | `grammar` | `grammar` | 無 |
+
+`grammar` 欄位與 vLLM 風格的別名是 Yunshu 與 vLLM 相容用的擴充。凡是接受別名的地方，別名都會折疊成同一個限制：
+
+- `POST /v1/chat/completions` 與 `POST /v1/completions` 上的 `guided_json`、`guided_regex`、`guided_choice` 與 `guided_grammar`。
+- `structured_outputs`（vLLM 的欄位），必須恰好給定 `json`、`regex`、`choice`、`grammar` 或 `json_object` 其中之一，可用於 chat、completions、Responses 與 Messages 路由。不支援 `structural_tag`。
+- 你以原生欄位設定的值優先於別名。`grammar` 也接受 `{"type": "json", "schema": {...}}`。
+
+<Callout type="info">
+不支援或無效的限制會在生成開始前就回傳 `400`：無法編譯的正規表示式、格式錯誤的文法，或兩個引擎都無法強制的 schema 語法。Yunshu 不會默默地對著近似版本生成。
+</Callout>
+
+### 用 OpenAI SDK 指定 JSON schema
+
+<Tabs items={["Python", "JavaScript", "curl"]}>
+<Tab value="Python">
+
+```python
+import json
+from openai import OpenAI
+
+client = OpenAI(base_url="http://localhost:8000/v1", api_key="sk-local")
+
+schema = {
+    "type": "object",
+    "properties": {
+        "city": {"type": "string"},
+        "population": {"type": "integer"},
+        "tags": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": ["city", "population", "tags"],
+    "additionalProperties": False,
+}
+
+r = client.chat.completions.create(
+    model="local",
+    messages=[{"role": "user", "content": "Give me facts about Taipei."}],
+    response_format={
+        "type": "json_schema",
+        "json_schema": {"name": "city_facts", "schema": schema, "strict": True},
+    },
+)
+print(json.loads(r.choices[0].message.content))
+```
+
+</Tab>
+<Tab value="JavaScript">
+
+```ts
+import OpenAI from "openai";
+
+const client = new OpenAI({ baseURL: "http://localhost:8000/v1", apiKey: "sk-local" });
+
+const r = await client.chat.completions.create({
+  model: "local",
+  messages: [{ role: "user", content: "Give me facts about Taipei." }],
+  response_format: {
+    type: "json_schema",
+    json_schema: {
+      name: "city_facts",
+      strict: true,
+      schema: {
+        type: "object",
+        properties: { city: { type: "string" }, population: { type: "integer" } },
+        required: ["city", "population"],
+        additionalProperties: false,
+      },
+    },
+  },
+});
+console.log(JSON.parse(r.choices[0].message.content ?? "{}"));
+```
+
+</Tab>
+<Tab value="curl">
+
+```bash
+curl http://localhost:8000/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "model": "local",
+    "messages": [{"role": "user", "content": "Give me facts about Taipei."}],
+    "response_format": {
+      "type": "json_schema",
+      "json_schema": {
+        "name": "city_facts",
+        "strict": true,
+        "schema": {
+          "type": "object",
+          "properties": {"city": {"type": "string"}, "population": {"type": "integer"}},
+          "required": ["city", "population"],
+          "additionalProperties": false
+        }
+      }
+    }
+  }'
+```
+
+</Tab>
+</Tabs>
+
+當 `type` 為 `json_schema` 時，`response_format.json_schema.schema` 是必要的；缺少 schema 會得到 `400`。Responses 的寫法是把同一個 schema 放在 `text.format` 底下：
+
+```python
+r = client.responses.create(
+    model="local",
+    input="Give me facts about Taipei.",
+    text={
+        "format": {
+            "type": "json_schema",
+            "name": "city_facts",
+            "schema": schema,
+            "strict": True,
+        }
+    },
+)
+print(r.output_text)
+```
+
+### 正規表示式、選項與文法
+
+使用 OpenAI SDK 時，透過 `extra_body` 傳入 `grammar`：
+
+```python
+# 一個格式固定的電話號碼
+r = client.chat.completions.create(
+    model="local",
+    messages=[{"role": "user", "content": "Invent a phone number."}],
+    extra_body={"grammar": {"type": "regex", "pattern": r"\+886-9[0-9]{2}-[0-9]{3}-[0-9]{3}"}},
+)
+
+# 固定集合中的其中一個標籤
+r = client.chat.completions.create(
+    model="local",
+    messages=[{"role": "user", "content": "Sentiment of: I love it."}],
+    extra_body={"grammar": {"type": "choice", "choices": ["positive", "negative", "neutral"]}},
+)
+
+# Lark 語法的上下文無關文法
+r = client.chat.completions.create(
+    model="local",
+    messages=[{"role": "user", "content": "Answer yes or no."}],
+    extra_body={"grammar": {"type": "cfg", "grammar": 'start: "yes" | "no"'}},
+)
+```
+
+`guided_regex` 長度上限為 2048 個字元，`guided_grammar` 為 32768。
+
+### Messages 與 Ollama
+
+在 `POST /v1/messages` 上，結構化輸出使用 Anthropic 的欄位（也接受較舊的 beta `output_format`）：
+
+```python
+import anthropic
+
+client = anthropic.Anthropic(base_url="http://localhost:8000", api_key="sk-local")
+
+msg = client.messages.create(
+    model="local",
+    max_tokens=512,
+    messages=[{"role": "user", "content": "Give me facts about Taipei."}],
+    extra_body={"output_config": {"format": {"type": "json_schema", "schema": schema}}},
+)
+print(msg.content[-1].text)
+```
+
+在 `POST /api/chat` 與 `POST /api/generate` 上，`format` 可以是 `"json"`，或是 JSON schema 物件（以 strict 處理）。
+
+### 限制如何被強制
+
+JSON schema 與 `json_object` 限制由兩個引擎之一強制執行。`YUNSHU_JSON_SCHEMA_ENGINE` 決定優先使用哪一個（預設 `llguidance`，會依 schema 順序輸出屬性；或 `inhouse`）。優先引擎無法編譯的 schema，若另一個引擎支援就會改由它處理。正規表示式與 choice 限制由內建引擎編譯；上下文無關文法（Lark 語法）需要 `llguidance`，`contract.structured_output.grammar` 會回報是否可用。
+
+有兩個選用的效能設定（預設都關閉）適用於文字引擎：`YUNSHU_GRAMMAR_BITMASK` 把預設的 allowlist 取樣器換成 xgrammar 風格的 bitmask 引擎；`YUNSHU_JUMP_FORWARD` 則在 schema 已經決定了下一段內容時，不執行前向傳遞就直接輸出那些 token。
+
+## 工具呼叫
+
+工具依各方言的定義宣告：chat 用 `tools[].function`，Responses 用 `type: "function"` 的 `tools`，Messages 用 `tools[].input_schema`，`POST /api/chat` 則用 `tools`。
+
+### 兩種模式：template 與 prompt
+
+工具如何送到模型，取決於它的聊天模板；`GET /v1/models` 中的 `contract.tools.mode` 會告訴你目前是哪一種。
+
+| 模式 | 條件 | 做法 |
+|---|---|---|
+| `template` | 聊天模板原生支援工具 | 工具由模型自己的模板以它自己的工具格式與特殊 token 渲染，模型輸出的工具呼叫再被剖析回結構化的呼叫 |
+| `prompt` | 模板沒有工具支援 | 把工具定義注入提示詞，再從生成的文字中擷取呼叫 |
+
+有 `template` 時，遵循度與剖析成功率較好。兩種模式回傳相同的回應形狀。`contract.tools.parallel` 表示模板是否能在同一個 assistant 回合帶多個呼叫。
+
+### `tool_choice`
+
+| 意圖 | Chat | Responses | Messages |
+|---|---|---|---|
+| 由模型決定 | `"auto"`（預設） | `"auto"` | `{"type": "auto"}` |
+| 不使用工具 | `"none"` | `"none"` | `{"type": "none"}` |
+| 必須呼叫某個工具 | `"required"` | `"required"` | `{"type": "any"}` |
+| 必須呼叫指定工具 | `{"type": "function", "function": {"name": "..."}}` | `{"type": "function", "name": "..."}` | `{"type": "tool", "name": "..."}` |
+
+`tool_choice` 為 `required` 或指定函式時，`tools` 不能是空的，而且指定的函式必須是已宣告的工具之一，否則請求會得到 `400`。`allowed_tools` 形式在 chat 與 Responses 路由中會折疊成 `tools` 加上一個模式。強制的選擇一律由受限解碼來保證，所以呼叫一定存在、一定指向正確的工具，且參數符合它的 schema。`auto` 的呼叫則是自由解碼，事後再修復；實驗性設定 `YUNSHU_TOOL_GRAMMAR` 可把受限解碼延伸到 `auto`，預設關閉。
+
+### 平行工具呼叫
+
+模板支援時（`contract.tools.parallel`），模型可以在一個回合發出多個呼叫。設定 `parallel_tool_calls: false`（chat 與 Responses），或在 Messages 的 `tool_choice` 內設定 `disable_parallel_tool_use: true`，就只保留第一個呼叫。在 Responses 上，`max_tool_calls` 可限制總數。
+
+### 工具呼叫的完整往返
+
+```python
+import json
+from openai import OpenAI
+
+client = OpenAI(base_url="http://localhost:8000/v1", api_key="sk-local")
+
+tools = [{
+    "type": "function",
+    "function": {
+        "name": "get_weather",
+        "description": "Current weather for a city",
+        "parameters": {
+            "type": "object",
+            "properties": {"city": {"type": "string"}},
+            "required": ["city"],
+        },
+    },
+}]
+
+messages = [{"role": "user", "content": "What is the weather in Taipei and Tokyo?"}]
+first = client.chat.completions.create(
+    model="local", messages=messages, tools=tools, tool_choice="auto"
+)
+call_message = first.choices[0].message
+messages.append(call_message)
+
+for call in call_message.tool_calls or []:
+    args = json.loads(call.function.arguments)
+    messages.append({
+        "role": "tool",
+        "tool_call_id": call.id,
+        "content": json.dumps({"city": args["city"], "temp_c": 24}),
+    })
+
+final = client.chat.completions.create(model="local", messages=messages, tools=tools)
+print(final.choices[0].message.content)
+```
+
+模型呼叫工具時，chat 的 `finish_reason` 為 `tool_calls`，Messages 的 `stop_reason` 為 `tool_use`。串流時，呼叫會以增量 delta 送出。
+
+### 各路由上的同一個呼叫
+
+<Tabs items={["Chat", "Responses", "Messages", "Ollama"]}>
+<Tab value="Chat">
+
+```json
+{
+  "model": "local",
+  "messages": [{"role": "user", "content": "Weather in Taipei?"}],
+  "tools": [{"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]}}}],
+  "tool_choice": {"type": "function", "function": {"name": "get_weather"}},
+  "parallel_tool_calls": false
+}
+```
+
+</Tab>
+<Tab value="Responses">
+
+```json
+{
+  "model": "local",
+  "input": "Weather in Taipei?",
+  "tools": [{"type": "function", "name": "get_weather", "parameters": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]}}],
+  "tool_choice": {"type": "function", "name": "get_weather"},
+  "parallel_tool_calls": false
+}
+```
+
+</Tab>
+<Tab value="Messages">
+
+```json
+{
+  "model": "local",
+  "max_tokens": 512,
+  "messages": [{"role": "user", "content": "Weather in Taipei?"}],
+  "tools": [{"name": "get_weather", "input_schema": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]}}],
+  "tool_choice": {"type": "tool", "name": "get_weather", "disable_parallel_tool_use": true}
+}
+```
+
+</Tab>
+<Tab value="Ollama">
+
+```json
+{
+  "model": "local",
+  "messages": [{"role": "user", "content": "Weather in Taipei?"}],
+  "tools": [{"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]}}}],
+  "stream": false
+}
+```
+
+Ollama 沒有 `tool_choice` 欄位；工具參數以物件回傳，而不是字串。
+
+</Tab>
+</Tabs>
+
+## 支援狀況
+
+| 功能 | 狀態 |
+|---|---|
+| chat、Responses、Messages、Ollama 上的 `json_object` 與 `json_schema` | <Support status="supported">支援</Support> |
+| 透過 `grammar` 使用 `regex`、`choice` | <Support status="supported">chat、completions、Responses、Messages</Support> |
+| 上下文無關文法（Lark） | <Support status="partial">需要 `llguidance`；請查看 `contract.structured_output.grammar`</Support> |
+| `guided_*` 別名 | <Support status="extension">chat 與 completions</Support> |
+| `structured_outputs`（vLLM） | <Support status="extension">四條生成路由；不支援 `structural_tag`</Support> |
+| 對非文字模型使用限制 | <Support status="unsupported">`400`</Support> |
+| `tool_choice` 的 `auto`、`none`、`required`、指定函式 | <Support status="supported">支援</Support> |
+| 強制 `tool_choice` 的保證 | <Support status="supported">受限解碼</Support> |
+| 以工具文法解碼 `auto` | <Support status="partial">僅在實驗性設定開啟時，預設關閉</Support> |
+| `parallel_tool_calls: false` | <Support status="supported">只保留第一個呼叫</Support> |
+| chat 的 `functions` / `function_call`（已棄用） | <Support status="unsupported">尚未支援</Support> |
+| chat 中的 custom（非 function）工具 | <Support status="unsupported">尚未支援</Support> |
+
+## 相關頁面
+
+- [Chat Completions](/docs/api/chat-completions)、[Responses](/docs/api/responses)、[Messages](/docs/api/messages) 與 [Ollama](/docs/api/ollama)
+- [模型支援](/docs/guides/model-support)
+- [程式代理與 SDK](/docs/guides/agents)
+- [架構](/docs/developers/architecture)

@@ -1,0 +1,13 @@
+{
+ "title": "Guides",
+ "pages": [
+  "agents",
+  "web-search",
+  "prompt-caching",
+  "structured-output",
+  "cli",
+  "configuration",
+  "model-support",
+  "troubleshooting"
+ ]
+}

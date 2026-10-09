@@ -9,7 +9,7 @@ Release steps: [RELEASING.md](RELEASING.md).
 
 The 0.1.5 cycle adds local decision models, repeatable evaluations and broader coding-agent
 and web-retrieval compatibility to the `yunshu` package. These changes are merged on main;
-0.1.4 remains the published version. This draft does not include unmerged model-head or console redesign work.
+0.1.4 remains the published version.
 
 ### Highlights
 
@@ -47,6 +47,13 @@ No new decode or TTFT claim is made for this cycle here. Historical measurements
 
 ### Added
 
+- Console backend: VLM speculative acceptance by draft depth, resident APC entries and bounded lifecycle events, metadata-only serve-log history with cursor pages, CLI diagnostics bundle download/manifest, actual structured-decoding enforcement reports, and advisory model unload/load impact.
+- OpenAI Evals API: 12 CRUD/run/output-item endpoints, atomic local persistence, cancellable background runs through normal chat inference, JSONL/file/stored-completion sources, lexical similarity and local score/label graders.
+- Add optional unprivileged Apple IOReport/HID host telemetry, request GPU+DRAM energy estimates, Prometheus gauges/counter, `yunshu top`, and tfbench/yv efficiency fields. Handle qualified macOS 27 CLPC counters and Max ANE/MTR sensor names. The 1 Hz default is subject to M5 overhead verification before handoff.
+- Add authenticated console model load/download cancellation and validated local/HF snapshot registration without loading or copying weights.
+- Expose cached CPU-only thermal, power, OS memory pressure and swap telemetry with explicit unknown reasons.
+- Record per-request latency milestones in `x_yunshu` and expose them through recent request metadata.
+
 - Client-executed Responses computer actions and screenshot round trips.
 - Incremental Anthropic document citation streaming with checked source ranges.
 - Optional WebRTC Realtime transport (`yunshu[webrtc]`) and local audio-sample voice enrollment for reference-audio TTS models.
@@ -77,6 +84,7 @@ No new decode or TTFT claim is made for this cycle here. Historical measurements
 
 ### Changed
 
+- Documentation coverage: a capability overview table in all three READMEs (generated from `docs/feature_index.json`, checked by a unit test), the console guide rewritten page by page with screenshots, and new guides for [inference features](docs/guides/INFERENCE.md), [multimodal endpoints](docs/guides/MULTIMODAL.md) and [authentication, keys, settings and CORS](docs/guides/AUTH_AND_KEYS.md).
 - gpuq admits declared short verification jobs between long cells without preemption, with a bounded
   time budget; `--gate` takes precedence over same-priority backlog. Foreign CPU contention is measured,
   parsed job records are cached, and non-quiet filler work can run while quiet work waits for CPU admission.

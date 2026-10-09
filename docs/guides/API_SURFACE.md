@@ -237,8 +237,33 @@ Additive and namespaced; the SDKs above ignore all of it. Design and rationale:
 | `X-Request-Id` request header, echoed on every response (errors too) | added | Accepted when 1-128 chars of `[A-Za-z0-9._:-]`, else generated (`req_...`). | real 2026-10-06: used by the `routes` cancel check (the id addresses the live request) |
 | `GET /v1/yunshu/status` | added | Version, state, uptime, models (loaded, keep-alive, expires), memory, active requests by phase, recent throughput, the last finished request (`last`: cache hit, TTFT, decode speed; `yunshu statusline` shows it in Claude Code). | real 2026-10-06: `routes` |
 | `GET /v1/requests`, `GET /v1/requests/{id}` | added | Live phase (`queued` / `prefill` with tokens, %, ETA / `decode`) of in-flight requests; poll it for a non-streaming long prefill. | real 2026-10-06: `routes` (live request found by id while streaming, 404 afterwards) |
+| `GET /v1/yunshu/requests/recent?limit=&model=&since=` | added | The finished-request ring (512), newest first: path, model, finish reason, queue wait, TTFT, token counts, prefill / decode speed, cache tier and reload time, speculative stats, cancelled, and `offsets_ms` (arrive, admit, first token, last token, done, in ms after arrival; null for a phase not reached) with `t0_wall`. Numbers and enums only, never prompt text. The same `t0_wall` / `offsets_ms` are in `x_yunshu` and the live progress object. | unit-tested; real-server check `console_data` added, not yet run |
+| `GET /v1/yunshu/history?since=&step=` | added | Columnar samples (`t` plus one array per field: active / cache / footprint GB, pressure, active and queued requests, decode / prefill tok/s, TTFT p50 / p95, prompt / completion tok/s) from a preallocated in-memory ring, 12 h at 5 s (`YUNSHU_HISTORY_HOURS`, `YUNSHU_HISTORY_INTERVAL_S`; 0.46 MiB fixed). `step` averages into buckets. Not persisted; `enabled: false` when the sampler is off. | unit-tested; real-server check `console_data` added, not yet run |
+| `GET /v1/yunshu/memory` | added | Unified-memory ledger: `owners[]` (weights per loaded model, prefix cache RAM and warm tier, MLX cache, live KV, residual `other`) with `bytes`, `reclaimable`, `estimated`, `source`; MLX active / cache / peak / recommended working set, process footprint, host pressure level / swap / wired limit, limits, free. Every figure from a counter; unknown is null (live KV is null until it is counted). | unit-tested; real-server check `console_data` added, not yet run |
+| `GET /v1/yunshu/config?include=stable\|all` | added | Effective settings (`yunshu config` as JSON): value, default, source (cli / env / file / default), category, stability, type, choices, description (240 chars), warnings, experimental count / max. Secrets are `***`. Each row also has `applies` (`live` / `reload` / `restart`), `minimum` and `secret`. | unit-tested; real-server check `console_data` added, not yet run |
+| `PATCH /v1/yunshu/config` | added | Body `{settings: {NAME: value or null}, confirm_experimental?, dry_run?}`. Validates type, choices and minimum (422 `errors` per name, nothing written on any error); experimental / internal names need `confirm_experimental` (400). Saves to the config file in use (else `~/.yunshu/config.toml`); `null` resets. Per setting: `status` = `applied` (live) / `needs_reload` / `needs_restart` / `overridden` (env or `--set` wins at runtime), plus `restart_required`, `restart` hint. Secrets are write-only (no value echoed). `YUNSHU_CONFIG` is read-only here. Needs the `admin` permission. | unit-tested; no real-server check (mutates the operator's config) |
+| `GET /v1/yunshu/service` | added | launchd agent: `label`, `plist`, `installed`, `loaded`, `pid`, `state`, `last_exit_code`, `log`, `under_launchd` (this process is the agent's pid), `version`, `uptime_s`, CLI equivalents. `admin`. | unit-tested (launchctl mocked) |
+| `POST /v1/yunshu/service/restart` | added | Body `{confirm: true}`. Only when this server runs under the `yunshu service` agent: answers 202, waits for in-flight requests up to `YUNSHU_DRAIN_TIMEOUT`, then `launchctl kickstart -k`. Otherwise 409 `not_under_launchd` with the manual command. `admin`. CLI: `yunshu service restart`. | unit-tested (launchctl mocked) |
+| `GET /v1/yunshu/cors`, `PATCH /v1/yunshu/cors` | added | Allowed origins (`origins`, `wildcard`, `credentials`, `source`, `warnings`, `request_origin_allowed`). PATCH `{origins, allow_any_origin?}`: URL origins only (`scheme://host[:port]`, no path), at most 50, `null` resets; `*` needs `allow_any_origin` and is never combined with other origins or credentials, and warns loudly. Applies live (the CORS middleware re-reads `YUNSHU_CORS_ORIGINS`); an env value still wins. Bind address / LAN exposure stay read-only. `admin`. | unit-tested |
 | `DELETE /v1/requests/{id}` | added | Cancel by the client's `X-Request-Id` (or the completion id). `POST /v1/cancel {request_id}` accepts the same ids. | real 2026-10-06: `routes` (cancels a live stream) |
 | `POST /v1/yunshu/warmup` | added | Load the model, run a 1-token generation, optionally prefill `prompt` / `messages` into the prefix cache; takes `keep_alive`. | real 2026-10-06: `routes` |
+| `GET /v1/yunshu/keys` | added | Stored API keys (admin scope): `id`, `name`, `prefix` (first characters, display only), `created`, `last_used`, `enabled`, `scopes` (`infer`, `admin`; admin implies infer), `expires` (epoch or null), `quotas` (`requests_per_day`, `tokens_per_day`, `max_concurrent`; null = unlimited) and the live rolling-24h `window` (requests, tokens, inflight). Never the secret or hash. | unit-tested; real-server check `api_keys` added, not yet run |
+| `POST /v1/yunshu/keys` | added | Create a key from `{name, scopes?, quotas?, expires?}`. 201 with the key object plus `secret` (`ysk-...`), shown once; only its SHA-256 is stored in `~/.yunshu/keys.json` (0600). Any stored key turns auth on, like `YUNSHU_AUTH_TOKEN`, which stays a full admin key. | unit-tested; real-server check `api_keys` added, not yet run |
+| `PATCH /v1/yunshu/keys/{key_id}` | added | Change `name`, `enabled`, `scopes`, `quotas` (merged), `expires`. 400 on unknown fields, 404 on an unknown id. | unit-tested; real-server check `api_keys` added, not yet run |
+| `DELETE /v1/yunshu/keys/{key_id}` | added | Remove a key and its usage. | unit-tested; real-server check `api_keys` added, not yet run |
+| `POST /v1/yunshu/keys/{key_id}/rotate` | added | New secret for the same id (returned once); the old one stops working at once. | unit-tested; real-server check `api_keys` added, not yet run |
+| `GET /v1/yunshu/usage?key=&since=&group=day\|key\|total` | added | Per-key usage by UTC day: `requests`, `prompt_tokens`, `completion_tokens`, `cached_tokens`, `errors` (status >= 400). `since` is `YYYY-MM-DD` or `7d`. Tokens are counted once, from the finished-request record. Admin scope. | unit-tested; real-server check `api_keys` added, not yet run |
+| `POST /v1/yunshu/downloads` | added | Body `{repo, revision?, allow_patterns?}` (`org/name`). Lists the repo's files first, refuses with 507 `{message, needed_bytes, free_bytes, path}` when the disk cannot hold the remainder (plus 5%, at least 256 MB), 502 when the hub cannot be read, then queues the download into `<models dir>/<org>/<name>` (the `yunshu pull` layout) and answers 202 with the job. One download runs at a time, the rest queue; the same request while one is active returns that job; a model already complete on disk answers a finished job with `already_present`. Resume: the hub's `.incomplete` files stay after a cancel or failure, so posting again continues. On success the folder is checked (weights complete) and registered with the model manager. `admin`. | unit-tested with a fake hub; no real-server check (downloads from the network) |
+| `GET /v1/yunshu/downloads`, `GET /v1/yunshu/downloads/{id}` | added | Job: `id`, `repo`, `revision`, `state` (`queued` / `running` / `done` / `failed` / `cancelled`), `error`, `path`, `bytes_total` and `bytes_done` (real bytes from the hub's progress bars), `files_total`, `files_done`, `active_files`, `rate_bps` (last 10 s), `eta_s`, timestamps, `registered`, `already_present`. The list adds `active`, `free_bytes` and `models_dir` and is small (no per-file array, 50 finished jobs kept); `{id}` adds `files[]` (name, bytes). | unit-tested with a fake hub |
+| `DELETE /v1/yunshu/downloads/{id}` | added | Cancel a queued or running download (the transfer stops at the next progress tick; partial files stay for resume). Returns the job. `admin`. | unit-tested with a fake hub |
+| `POST /api/pull` (Ollama) | extended | Streams by default like Ollama: `pulling manifest`, then `{status: "pulling <id>", digest, total, completed}` lines (one aggregate layer, real bytes), then `success`; failures (also out of disk) are a final `{error}` line. `stream: false` blocks and answers `{status: "success"}`. Backed by the same registry, so the job is visible and cancellable under `/v1/yunshu/downloads`; a client disconnect does not cancel it. | unit-tested with a fake hub |
+| `GET /v1/yunshu/models/local?refresh=` | added | Every model on disk, registered or not (models dir and Hugging Face cache): `id`, `path`, `source`, `size_bytes`, `model_type`, `kind`, `architecture`, `family`, `parameters`, `quantization {bits, group_size}`, `context_length`, `capabilities[]` (from the model card), `complete` and `complete_reason`, `registered_as`, `loaded`; plus `total_bytes`, `models_dir`, `free_bytes`. Directory sizes are cached for 15 s (`refresh=true` rescans). | unit-tested |
+| `POST /v1/yunshu/models/{id}/reload` | added | Admin only. Unloads and loads the same model so settings that `PATCH /v1/yunshu/config` reports as `needs_reload` take effect (multi-model mode; a single-engine server answers 400 and restarts instead). Body `{force?: bool}`: refuses with 409 while the model has running requests or leases, unless `force` (running requests are torn down). Answers `{status: reloaded, model, was_loaded, forced, elapsed_s}`; 404 unknown model, 409 while a load/unload of it is in flight, 500 if the load after the unload fails (the model then stays unloaded). | unit-tested, real-server check |
+| `GET /v1/yunshu/models/{id}/fit` | added | Dry run of the load-time memory check (multi-model mode): `weights_bytes`, `kv_reserve_bytes`, `needed_bytes`, `budget_bytes`, `used_bytes`, `free_bytes`, `would_evict[]` (LRU order, only models the load itself may evict), `verdict` = `fits` / `tight` (fits with under 5% of the budget spare, or only after evicting) / `wont_fit`, `reason`, `basis.estimated`. Nothing is mutated; the verdict agrees with `_ensure_memory_available`. | unit-tested against the real manager |
+| `GET /v1/yunshu/cache/tiers?entries=` | added | Prefix-cache view per loaded VLM-runner model: `tiers[]` (`ram` / `warm` / `ssd`: `used_bytes`, `cap_bytes`, `entries`, `hits`; SSD adds `hit_bytes`, `read_bps`, `effective_read_bps`, `cost_rejected`, `path`), `lookups {hit, miss, by_tier}` and `entries[]` capped at 200 (`key` = 8-hex hash label, `tokens`, `bytes`, `tier`, `lru_rank` (0 = newest), `hits`, `last_hit_age_s`; never token ids or text). Hit counts are an accounting side table (4,096 boundaries, O(1) per lookup) and never feed a lookup. | unit-tested on the real cache manager |
+| `POST /v1/yunshu/cache/tiers/clear` | added | Body `{tier?: ram\|warm\|ssd, model?}` (no body: every tier of every model). Drops the entries (RAM entries are dropped, not demoted), runs on the MLX thread, keeps the counters, returns `cleared[]` and `freed_bytes`. `admin`. | unit-tested on the real cache manager |
+| `GET /v1/yunshu/logs?level=&since=&since_id=&q=&limit=` | added | Newest `limit` (max 2,000) of an in-memory ring of 2,000 server log records, oldest first: `records[] {id, t, level, logger, msg}`, `next_id` (cursor for `since_id`), `dropped`, `capacity`. Messages are redacted when emitted (credentials, tokens, echoed request payload fragments), cut at 2 KB, and exceptions show only their type. `admin`. | unit-tested |
+| `GET /v1/yunshu/logs/stream?level=&q=&since_id=` | added | The same records as server-sent events (`id:` = record id), from the tail, with a keepalive comment every 15 s. `admin`. | unit-tested on the generator |
 | `keep_alive` on `/v1/chat/completions` and `/v1/completions` | added | Ollama semantics (`"5m"`, `300`, `-1`, `0`); multi-model mode frees the model after that idle time. Single-model mode never frees its model. | unit |
 | `: yunshu-progress {...}` SSE comment (streaming chat / completions) | added | Every `YUNSHU_PROGRESS_INTERVAL_S` (default 2 s) before the first token: phase, prompt / processed tokens, %, tokens/s, ETA, queue position. | unit |
 | `x_yunshu` object: chat / completions JSON body, streaming usage chunk (or `: yunshu-stats` comment without `include_usage`); inside `usage` on Messages and Responses | added | TTFT, queue wait, prefill / decode tokens/s, cached tokens, speculative mode and acceptance, llama.cpp-style `timings`. `null` when unknown. | unit; `wire` reads usage only |
@@ -471,6 +496,73 @@ Runs accept `jsonl` and `completions` data sources, with inline `file_content`, 
 Supported graders: `string_check` (`eq`, `ne`, substring `like`/case-insensitive `ilike`), `text_similarity`, `score_model`, and `label_model`. Similarity is model-free: token-frequency cosine, character SequenceMatcher fuzzy match, effective-order sentence BLEU without smoothing, GLEU, ROUGE n-gram F1 (1–5), ROUGE-L F1, and exact-token METEOR with fragmentation penalty on both candidate and reference alignments (no stemming/synonym corpus). Lexical metrics return 0 for empty token inputs or unavailable n-grams; character fuzzy match preserves its raw-string equality/whitespace behavior. Scores use a caller-supplied pass threshold; local model graders request schema-constrained JSON through `/v1/chat/completions`. SDK Evals text/image/audio content blocks are normalized to the ordinary chat wire format. Python graders and Responses sampling sources return 400 as unsupported.
 
 State uses atomic JSON replacement under `YUNSHU_EVALS_DIR` (default `~/.yunshu/evals`). Source rows and grader definitions are snapshotted per run; credentials stay in memory. Pure lexical grading uses one dedicated CPU worker with cooperative cancellation, keeping metadata and cancel routes available during long comparisons. Cancellation interrupts CPU grading and the active normal request, preserving completed items. Deleted evals cascade to their runs; parent checks and progress writes are serialized with deletion, and recovery removes orphan children after an interrupted cascade. Interrupted runs become `failed` on server restart; they are not automatically replayed. Reports are available through output-item routes (`report_url` is empty; no hosted dashboard). Maximum 10,000 rows per run; list pages accept 1–100 items with cursor/order/status filtering.
+### Single-operator console backend
+
+All five routes below use the model-management admin authentication contract:
+set `YUNSHU_AUTH_TOKEN` and present it as Bearer / `x-api-key`, or explicitly opt
+into `YUNSHU_AUTH_DISABLED`. Unconfigured admin access is denied.
+
+| Route | Contract |
+|---|---|
+| `GET /v1/yunshu/host` | CPU-only `pmset -g therm`, `pmset -g batt`, OS memory pressure and memory/swap bytes. Cached 15 s; failed probes return `state: unknown` and `reason`. No root required. |
+| `POST /v1/yunshu/models/register` | `{model, path}`: validate local config/model type and complete safetensors shards; register without loading or copying. Accepts an HF cache snapshot directory, including shard symlinks into `blobs/`; index filenames must be relative and cannot contain `..`. Requires multi-model mode; registration lasts for this process. Duplicate id: 409; invalid checkpoint: 400. |
+| `DELETE /v1/yunshu/models/register/{model_id}` | Remove only an unloaded, non-loading registration (409 otherwise). Does not delete checkpoint files or HF cache. |
+| `POST /v1/yunshu/models/cancel` | `{model}`: mark an active load and/or HF pull for cooperative cancellation. 202-style `status: cancelling` response (HTTP 200); poll status until loading clears. MLX work already executing is safely drained, then stopped and discarded, never handed to waiters. HF partial files remain resumable. No active operation: 404. |
+| `GET /v1/yunshu/requests/recent?limit=50` | Latest completed successful requests, newest first (limit 1–512), including `latency`. In-memory bounded metadata only; no prompt/response bodies. |
+
+`x_yunshu.latency` and recent rows expose `milestones_ms` relative to gateway
+receive, and `durations_ms` for model lease, gateway admission, engine queue,
+template/tokenize (including media preparation on VLM), APC lookup/restore,
+prefill, first decode and SSE first flush. All use the same monotonic
+`perf_counter` clock. Missing or fused stages are `null`, not invented zeroes.
+The first-flush boundary is completion of ASGI `send` for the first content event,
+not network delivery at the client. Engine prefill completion is a host callback
+boundary, not a GPU profiler measurement; upstream may fuse its last forward
+with first-token sampling. Gateway admission precedes model acquisition; runner
+admission follows templating, so these milestones describe actual execution order.
+
+Real-server coverage is registered in `scripts/research/route_checks.py`;
+`yv ab --base BASE_SHA --cand CAND_SHA --suite console --model PATH --label
+consolefeat-TOPIC --priority -1` runs the small-model cancellation, registration,
+host and SSE-latency probe on the pinned candidate.
+
+### Host power and request energy
+
+`GET /v1/yunshu/host` preserves consolefeat host fields and adds cached `telemetry`
+(CPU/GPU/ANE/DRAM/package watts, active GPU MHz/ratio, die temperatures, explicit
+unknown reasons), under the same console admin permission. `x_yunshu.energy` and
+`GET /v1/yunshu/requests/recent` expose GPU+DRAM phase-window estimates. See
+[TELEMETRY.md](TELEMETRY.md) for the exact schema, cache ages, and concurrency limits.
+
+### Console round 10 backend data
+
+All routes require the same admin authentication as model management. OpenAPI lists
+the routes and query parameters. M5 Qwen3.5-0.8B-MLX-bf16 pilot (2026-10-08, `1159a343`) passed all six console checks via job `1008-142909-00-consolegaps-tiny-pilot-1008-console-cand-a1-44f5`: entries/events, schema enforcement, bundle/manifest, impact, clear and history after restart. A second M5 served check at `e9ddd468` also passed all six checks (`1008-145849-00-consolegaps-tiny-final-1008-console-cand-a1-5911`); the final worker report carries merge-gate evidence.
+
+| Route | Behavior |
+|---|---|
+| `GET /v1/yunshu/spec-decode` | Process-lifetime VLM MTP/DFlash counters and drafted/accepted tokens per zero-based draft depth; tree siblings share the depth denominator. Prometheus `yunshu_spec_decode_*_total`, labelled by engine/mode/position, uses the same totals. |
+| `GET /v1/yunshu/cache` | APC entries: model, namespace, tokens, logical/attributed physical bytes, tier, last hit and process hits. Up to 512 lifecycle events, reason and originating request ID when known. Read-side snapshots run on the existing MLX executor. |
+| `POST /v1/yunshu/cache/clear` | Refuses if any loaded engine cannot be proven idle (409). Clears resident APC, including pending WARM encode results; keeps SSD files and WARM configuration. Scope is explicitly `resident_apc`. |
+| `GET /v1/yunshu/requests/history?limit=50&before=CURSOR` | Newest-first rotated serve-log metadata; limit 1–512, opaque exclusive cursor. Disabled log returns `enabled:false`. Unknown old measurements remain null. `YUNSHU_SERVE_LOG_RETENTION_DAYS` filters aged records; MAX_MB/KEEP bound stored bytes. No prompt/output/token IDs. |
+| `GET /v1/yunshu/bundle/manifest` | Exact top-level fields included by `yunshu_cli.bundle.build`, redaction/exclusion policy and line caps. |
+| `GET /v1/yunshu/bundle` | JSON attachment from the CLI diagnostics builder; no upload. |
+| `GET /v1/yunshu/models/impact?model=ID` | Non-forced unload rejects in-flight requests (does not wait or interrupt). Advisory pre-load budget/slot LRU eviction list; post-load pressure is rechecked separately. Multi-model mode required. |
+
+Recent rows now carry `model`, `speculative` (rounds and per-depth counts), cache
+provenance and `structured_output`. Response `x_yunshu.structured_output` reports
+`requested`, `enforced`, `engine`, `grammar_backend` and a reason. Enforcement means
+the actual constraint was installed; output JSON validation remains a client task,
+and a response cut short by max_tokens can be incomplete. No constraint setup
+failure is represented as enforced. Status request rows always include `model`
+(null only before the requested model has been attributed).
+
+Cache physical bytes mean attributed array/storage bytes, not allocator footprint.
+SSD file physical bytes include headers; primary logical bytes are tensor payload size, lower-tier logical bytes are restored raw-file size. `device` names a configured lower tier; unknown metadata is null. Entry hit
+counts are bounded process metadata and restart at zero. Events are bounded and
+may omit earlier lifecycle changes; a null request ID denotes an unattributed
+background/legacy operation. Persistent history cursors are exclusive; concurrent
+rotation can omit a row that leaves retention while paging.
 
 ### Agent-client additions (2026-10-07)
 
@@ -545,3 +637,7 @@ with exact integer `*_bytes` siblings. This includes status memory, model `size_
 `size_bytes`, model-pool memory, hardware info and trace host statistics.
 A 128 GB Mac reports `total_gb: 128.0`; earlier decimal values were about 7% higher.
 Prometheus memory metrics remain in bytes. See [API extensions](API_EXTENSIONS.md#memory-units).
+
+### API keys and quotas
+
+A key is presented like the token (`Authorization: Bearer ysk-...` or `x-api-key`). Over a quota the answer is 429 in the route's own error dialect (OpenAI `rate_limit_error`, Anthropic `rate_limit_error`, JSON-RPC for `/v1/mcp`) with `Retry-After` and `code` `requests_per_day_exceeded`, `tokens_per_day_exceeded` or `max_concurrent_exceeded`. The day is a rolling 24 h window in 5-minute buckets; token usage is counted when a request finishes, so a token quota stops the next request after it is crossed. A disabled, expired or unknown key is 401; an `infer` key on an admin route is 403. The realtime WebSocket accepts keys (infer or admin scope) but does not count against quotas.

@@ -284,6 +284,11 @@ class Gpuq:
             "--priority",
             str(priority),
         ]
+        if timeout_min <= 10:
+            # Preserve the declared short lane even when learned_timeout would
+            # otherwise inflate this wrapper beyond ten minutes. gpuq --short
+            # enforces the lane cap and kills an overrun.
+            cmd.append("--short")
         if quiet:
             cmd.append("--quiet")
         if device:

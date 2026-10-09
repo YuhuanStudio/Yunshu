@@ -4,6 +4,9 @@ from __future__ import annotations
 
 STAGES = (
     "preflight",
+    "console",
+    "telemetry-tiny",
+    "telemetry",
     "smoke",
     "identity",
     "apc",
@@ -18,6 +21,7 @@ STAGES = (
     "respfeat",
     "websearch",
     "rerank",
+    "snapshot",
     "embedding",
     "priorart",
     "evals",
@@ -35,8 +39,12 @@ LADDER = tuple(
         "longqa",
         "conc",
         "multimodal",
+        "snapshot",
         "modelprobe",
         "client_compat",
+        "console",
+        "telemetry",
+        "telemetry-tiny",
         "respfeat",
         "websearch",
         "rerank",
@@ -50,6 +58,7 @@ LADDER = tuple(
 
 # Every key is a default; the CLI can override ctx / reps / mmlu_n / mem_sizes.
 SUITES = {
+    "snapshot": {"stages": ["snapshot"]},
     "respfeat": {"stages": ["preflight", "respfeat"]},
     "priorart": {"stages": ["preflight", "priorart"]},
     "embedding": {"stages": ["preflight", "embedding"]},
@@ -67,6 +76,35 @@ SUITES = {
         "ctx": [46, 32768],
         "reps": 3,
         "media_quality_items": 200,
+    },
+    "console": {"stages": ["console"]},
+    "console-identity": {
+        # Full unit + ci-local are external merge gates; avoid a third overlapping
+        # broad CPU suite before these short GPU-only correctness wrappers.
+        "stages": ["identity", "apc"],
+        "ctx": [1024, 32768],
+        "spec_off": True,
+        "decode_tokens": 256,
+        "identity_timeout_min": 10,
+        "require_spec_depth": True,
+    },
+    "telemetry": {"stages": ["telemetry"]},
+    "telemetry-tiny": {"stages": ["telemetry-tiny"]},
+    "telemetry-overhead": {
+        "stages": [
+            "preflight",
+            "telemetry-tiny",
+            "telemetry",
+            "smoke",
+            "identity",
+            "apc",
+            "speed",
+        ],
+        "ctx": [1024, 32768],
+        "kinds": ["prose"],
+        "reps": 3,
+        "split_cells": True,
+        "speed_tol_pct": 0.0,
     },
     "rerank": {"stages": ["preflight", "rerank"]},
     # decode-path change (kernels, spec decode, sampler): identity incl. spec on == off, speed

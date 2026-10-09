@@ -32,7 +32,7 @@ METRICS = {
 # Items with a source outside the snapshot cells (see extra_items); engines that can be measured per item.
 EXTRA_MEASURABLE = {
     'conc8_agg_tps': 'engines with part=conc rows in snapshot cells (tfbench --part conc; llamacpp, splash, yunshu so far)',
-    'capability_matrix': 'yunshu-new only (agentcompat/release gate); no rival capability probe exists',
+    'capability_matrix': 'capmatrix verdict per engine (yunshu, llamacpp, mlxlm, omlx, splash where they expose the API)',
     'accuracy_mmlu_pro': 'yunshu-new vs stock mlx-vlm server (same checkpoint, paired_eval); other rivals have no harness',
     'agentic_pass': 'yunshu and tensorfold (run_agentic --serve); other rivals have no agent harness',
 }
@@ -254,22 +254,37 @@ def _extra(item, status, reason, **kw):
     return {'item': item, 'status': status, 'reason': reason, 'measurable_engines': EXTRA_MEASURABLE[item], **kw}
 
 
-def capability_item(agentcompat_dir):
-    """Ours-only: newest agentcompat verdict.json, one check per stage. Passes only at the decision's 34/34."""
-    f = _latest(Path(agentcompat_dir).glob('*/verdict.json')) if agentcompat_dir else None
+def capability_item(capmatrix_dir):
+    """Newest complete 27B capmatrix verdict (scripts/dev/capmatrix, dirs `27b*`); ours decides the status, rivals are listed.
+
+    parity = Yunshu passes every applicable row and at least CAPABILITY_TARGET rows applied; gap = any failed row;
+    unknown = no verdict, unreadable, incomplete (some row never ran) or fewer applicable rows than the target."""
+    d = Path(capmatrix_dir) if capmatrix_dir else None
+    f = _latest(d.glob('27b*/verdict-yunshu.json')) if d else None
     if f is None:
-        return _extra('capability_matrix', 'unknown', 'no agentcompat verdict found')
+        return _extra('capability_matrix', 'unknown', 'no 27B capmatrix verdict found')
     try:
-        stages = json.loads(f.read_text())['stages']
-        oks = [bool(v['ok']) for v in stages.values()]
+        v = json.loads(f.read_text())
+        counts, applicable, complete = v['counts'], v['applicable'], bool(v['complete'])
+        bad = counts['fail'] + counts['error']
     except (OSError, ValueError, KeyError, TypeError):
         return _extra('capability_matrix', 'unknown', f'unreadable verdict {f}')
-    passed, total = sum(oks), len(oks)
-    if total < CAPABILITY_TARGET and passed == total:
-        return _extra('capability_matrix', 'unknown', f'{passed}/{total} checks pass but the decision needs a {CAPABILITY_TARGET}-check matrix',
-                      passed=passed, total=total, source=str(f))
-    status = 'parity' if passed == total else 'gap'
-    return _extra('capability_matrix', status, f'{passed}/{total}', passed=passed, total=total, source=str(f))
+    rivals = {}
+    for g in f.parent.glob('verdict-*.json'):
+        try:
+            r = json.loads(g.read_text())
+            if r.get('engine') != 'yunshu':
+                rivals[r['engine']] = f"{r['counts']['pass']}/{r['applicable']}" + ('' if r.get('complete') else ' incomplete')
+        except (OSError, ValueError, KeyError, TypeError):
+            rivals[g.stem] = 'unreadable'
+    info = {'passed': counts['pass'], 'total': applicable, 'rivals': rivals, 'source': str(f)}
+    if not complete:
+        return _extra('capability_matrix', 'unknown', 'verdict incomplete (a row never ran)', **info)
+    if bad:
+        return _extra('capability_matrix', 'gap', f"{counts['pass']}/{applicable}, {bad} failing row(s)", **info)
+    if applicable < CAPABILITY_TARGET:
+        return _extra('capability_matrix', 'unknown', f'{applicable} applicable rows < {CAPABILITY_TARGET}', **info)
+    return _extra('capability_matrix', 'parity', f'{counts["pass"]}/{applicable}', **info)
 
 
 def accuracy_item(paired_dir, bench='mmlu_pro', ours='default', ref='ref'):
@@ -314,11 +329,11 @@ def agentic_item(agentbench_dir):
                   verdict=v['verdict'], sha=v.get('sha'), pass_runs=cur, source=str(f))
 
 
-def extra_items(agentcompat_dir=None, paired_dir=None, agentbench_dir=None):
-    return [capability_item(agentcompat_dir), accuracy_item(paired_dir), agentic_item(agentbench_dir)]
+def extra_items(capmatrix_dir=None, paired_dir=None, agentbench_dir=None):
+    return [capability_item(capmatrix_dir), accuracy_item(paired_dir), agentic_item(agentbench_dir)]
 
 
-def build(runs, jobs, models=(MODEL,), agentcompat_dir=None, paired_dir=None, agentbench_dir=None):
+def build(runs, jobs, models=(MODEL,), capmatrix_dir=None, paired_dir=None, agentbench_dir=None):
     cells, rejected, sources = load_cells(runs, jobs)
     flagged = []
     samples = samples_from(cells, flagged)
@@ -363,7 +378,7 @@ def build(runs, jobs, models=(MODEL,), agentcompat_dir=None, paired_dir=None, ag
                 with_data += 1
                 best_ours += item['provisional']['best_engine'] == 'yunshu-new'
         items.append(item)
-    extra = extra_items(agentcompat_dir, paired_dir, agentbench_dir)
+    extra = extra_items(capmatrix_dir, paired_dir, agentbench_dir)
     n = sum(i['status'] == 'parity' for i in items)
     unknown = [f"{i['model']}/{i['ctx']}/{i['kind']}/{i['metric']}" for i in items if i['status'] == 'unknown']
     groups = defaultdict(list)
@@ -424,12 +439,12 @@ def main():
     ap.add_argument('--jobs', type=Path, default=Path('/Volumes/P5Plus/yunshu-gpuq/jobs'))
     ap.add_argument('--out', type=Path, default=Path(__file__).resolve().parents[2] / 'docs/research/parityboard')
     ap.add_argument('--model', action='append')
-    ap.add_argument('--agentcompat', type=Path, default=Path('/Volumes/P5Plus/yunshu-build/agentcompat'))
+    ap.add_argument('--capmatrix', type=Path, default=Path('/Volumes/P5Plus/yunshu-build/capmatrix'))
     ap.add_argument('--paired', type=Path, default=Path('/Volumes/P5Plus/yunshu-test-cache/paired-eval'))
     ap.add_argument('--agentbench', type=Path, default=Path('/Volumes/P5Plus/yunshu-build/agentbench/runs'))
     args = ap.parse_args()
     board = build(args.runs.glob('snapshot014-*'), args.jobs, args.model or (MODEL,),
-                  args.agentcompat, args.paired, args.agentbench)
+                  args.capmatrix, args.paired, args.agentbench)
     args.out.mkdir(parents=True, exist_ok=True)
     (args.out / 'board.json').write_text(json.dumps(board, indent=2, ensure_ascii=False) + '\n')
     (args.out / 'BOARD.md').write_text(markdown(board))

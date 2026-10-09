@@ -1,0 +1,73 @@
+---
+title: 模型支援
+description: Yunshu 支援哪些模型系列與模態，以及每一種使用哪條服務路徑與選用的額外套件。
+---
+
+Yunshu 載入 MLX 檢查點。它會根據資料夾中的檔案與 `config.json` 偵測模型種類，再為它選擇引擎。上游（`mlx-lm`、`mlx-vlm` 或 `mlx-audio`）能載入某個模型，並不代表 Yunshu 的每個端點與功能都已針對該模型驗證。`GET /v1/models` 為每個模型回傳的模型卡（位於每個項目的 `yunshu` 欄位）描述了已載入模型能做什麼；在依賴工具呼叫、結構化輸出、logprobs 或媒體輸入之前，請先查看它。
+
+## 支援層級
+
+| 層級 | 模型 | 意義 |
+|---|---|---|
+| 完整調校 | Qwen3.8-27B（第一個完整調校的檢查點） | 推測式解碼、前綴重用與批次不變（batch-invariant）解碼路徑都是針對它開發與量測。 |
+| 第一級 | Qwen3.5 系列（`qwen3_5`、`qwen3_6`、`qwen3_5_moe` 模型類型） | 推測式解碼（MTP 或相符的 drafter）與前綴快取。 |
+| 通用文字 | 其他 `mlx-lm` 模型 | 由文字快速路徑服務。上限取決於上游支援。 |
+| 通用視覺語言 | 其他 `mlx-vlm` 模型 | 由 VLM batch runner 服務。適用各模型特有的媒體、模板與能力限制。 |
+| 其他模態 | 語音、嵌入、排序、OCR、影像生成 | 透過各自的引擎與選用額外套件提供；見下文。 |
+
+## 服務路徑
+
+| 路徑 | 適用對象 | 行為 |
+|---|---|---|
+| VLM batch runner | 所有經由 `mlx-vlm` 服務的模型，包括以 `vision` 額外套件載入的 Qwen3.5 / 3.6 / 3.8 系列 | 連續批次處理，每個請求獨立取樣。一次只預填一個請求。對不使用滑動視窗快取的模型系列提供自動前綴快取，鍵值也包含圖片與音訊特徵，並可選用 SSD 層。接受圖片、音訊與影片輸入。 |
+| 推測式通道（僅 Qwen3.5 系列） | `qwen3_5`、`qwen3_6`、`qwen3_5_moe` | 在單一請求通道中進行 MTP 或 DFlash 草稿生成，使用批次不變的解碼與驗證核心，使開啟草稿的輸出與關閉草稿時相同。由 `YUNSHU_MTP`（預設開啟）與 `YUNSHU_VLM_DRAFT` 控制。並行請求目前不會一起進行草稿生成。 |
+| 文字快速路徑 | 純文字 `mlx-lm` 模型 | 透過 `mlx-lm` 一次處理一個請求；並行的請求會依序處理。 |
+
+VLM 路徑的限制：視覺語言模型會拒絕 LoRA adapter 與自訂 logits processor。Qwen3.5 系列模型將使用哪一條推測路徑，可由 `yunshu doctor -m <model>` 的 `speculative` 列與啟動記錄得知。
+
+## 模態與對應的路由
+
+偵測是針對模型資料夾進行。「額外套件」欄指的是[安裝](/docs/getting-started/install)中該引擎所需的選用額外套件。
+
+| 模型種類 | 偵測到的類型範例 | 路由 | 額外套件 | 狀態 |
+|---|---|---|---|---|
+| 文字 LLM | 任何 `mlx-lm` 模型類型 | `POST /v1/chat/completions`、`POST /v1/completions`、`POST /v1/responses`、`POST /v1/messages` | 無 | <Support status="supported">支援</Support> |
+| 視覺語言 | 具有 `vision_config` 的模型，例如 Qwen-VL、Pixtral、Mistral 3 與 Qwen3.5 系列 | 相同的對話路由，並可帶入圖片 | `vision` | <Support status="supported">支援</Support> |
+| 語音轉文字 | `whisper`、`qwen3_asr`、`parakeet`、`qwen2_audio` | `POST /v1/audio/transcriptions`、`POST /v1/audio/translations` | `audio` | <Support status="supported">支援</Support> |
+| 文字轉語音 | `qwen3_tts`、`kokoro`、`chatterbox` | `POST /v1/audio/speech` | `audio` | <Support status="supported">支援</Support> |
+| 原生語音對語音 | Qwen3-Omni（具有 Talker 的模型） | `POST /v1/omni/speech/stream`，以及 Realtime socket | `omni` | <Support status="partial">部分支援</Support> |
+| OCR | 類型或名稱含 `ocr` 的模型 | `POST /v1/ocr` | `vision` | <Support status="supported">支援</Support> |
+| 嵌入 | `mlx-embeddings` 模型、EmbeddingGemma 2、Qwen3-VL-Embedding | `POST /v1/embeddings` | `embeddings` | <Support status="supported">支援</Support> |
+| 重排序與評分 | Cross-encoder 重排序模型、序列分類頭 | `POST /v1/rerank`、`POST /v1/classify`、`POST /v1/score` | 視模型而定（`embeddings` 或 `vision`） | <Support status="supported">支援</Support> |
+| 影像生成 | `flux`、`sd3`、`sdxl`、`z_image` | `POST /v1/images/generations`、`POST /v1/images/edits`、`POST /v1/images/variations` | `generation` | <Support status="supported">支援</Support> |
+| 型別化決策 | Clef / Clef-flash 聯合 schema 頭 | `POST /v1/decisions` | `vision` | <Support status="partial">部分支援</Support> |
+| 影片生成 | Wan、LTX 等 | 無 | | <Support status="unsupported">尚未支援</Support> |
+| 獨立的語音對語音 | 語音轉換、語音增強模型 | 無 | | <Support status="unsupported">尚未支援</Support> |
+
+關於部分支援的列：
+
+- **原生語音對語音**在所服務的模型具有 Talker（Qwen3-Omni）時運作。語音路徑會重用已載入的模型，而不會另外載入第二份。對其他模型，或設定 `YUNSHU_REALTIME_OMNI=off` 時會關閉，此時 Realtime 會退回「語音轉文字、再交給 LLM、再文字轉語音」的串接流程。大型 Omni 檢查點需要大量統一記憶體。
+- **型別化決策**只接受 Clef 聯合 schema 頭。其他決策頭系列會被拒絕，把對話模型送到決策路由會回傳錯誤。
+
+被偵測為影片或獨立語音對語音的模型會載入失敗並附上說明，同時列出支援的種類為影像、音訊與 LLM 模型。缺少額外套件時，相關路由會回報缺少的相依套件，而不是回傳佔位輸出（例如沒有 `generation` 額外套件時，`POST /v1/images/generations` 會回傳 503）。
+
+## 單一模型與多模型服務
+
+`yunshu serve -m <model>` 服務單一模型，並把請求的 `model` 欄位視為參考用途。`yunshu serve --models-dir <dir>` 會登錄它找到的所有模型並依需求載入；每個模型的引擎類型（文字、視覺、音訊、影像、決策）依上述偵測結果決定。請見[模型](/docs/getting-started/models)。
+
+## 驗證模型
+
+在依賴某個檢查點之前，請先檢查：
+
+1. `yunshu doctor -m <model>` 檢查資料夾是否完整、記憶體是否放得下。
+2. 在 `GET /v1/models` 中查看該模型項目的能力。
+3. 針對你依賴的每項功能（工具呼叫、JSON schema、串流、停止序列、logprobs、取消），對執行中的伺服器送出請求實測。
+
+此表描述的是程式碼所處理的範圍，並不保證某個系列的每個檢查點都能搭配每項功能運作。
+
+## 相關頁面
+
+- [結構化輸出](/docs/guides/structured-output)
+- [提示快取](/docs/guides/prompt-caching)
+- [CLI 參考](/docs/guides/cli)
+- [疑難排解](/docs/guides/troubleshooting)

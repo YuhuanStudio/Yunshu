@@ -1,0 +1,193 @@
+---
+title: Prompt caching
+description: How Yunshu reuses the KV cache of a shared prompt prefix, how cache hits show up in usage, and which options control memory, SSD storage and precision.
+---
+
+Agent and chat traffic repeats itself: every turn resends the system prompt, the tool list and the whole conversation so far. Yunshu keeps the attention state (the KV cache) of earlier prompts and, when a new prompt starts with the same tokens, skips the prefill for that part and only processes the new tokens. This lowers time to first token on every turn after the first, and it needs no client changes.
+
+Reuse is **automatic**. The dialect-specific fields below (`cache_control`, `prompt_cache_breakpoint`) are hints and reporting controls on top of the same cache; they are never required.
+
+## How the cache works
+
+There are two serving paths and each has its own prefix cache.
+
+| Serving path | Serves | Prefix cache | Notes |
+|---|---|---|---|
+| VLM batch runner | every `mlx-vlm` model, including the Qwen3.5 family | APC (automatic prefix cache) with exact checkpoints | keyed by the prompt tokens and, for vision and audio input, by the media content. On by default with a RAM budget and an SSD tier |
+| Text fast path | text-only `mlx-lm` models | `KVPrefixCache` | RAM entries, with an optional SSD tier that is off by default |
+
+A hit requires the new prompt to begin with exactly the cached tokens. Changing anything early in the prompt (for example a system reminder that varies per turn) moves everything after it and reduces reuse. For models with recurrent layers (the Qwen3.5 family mixes attention with GatedDeltaNet layers), the VLM runner stores exact checkpoints that hold both the attention KV and the recurrent state at one token position, so a hit restores precisely the state a cold prefill would have produced.
+
+The VLM runner keeps a checkpoint for the end of the system turn (system prompt plus tool list) in addition to checkpoints for the conversation, so a new session that starts with the same system prompt and tools reuses that head. When a conversation grows, the newer checkpoint replaces earlier ones that are prefixes of it, so a long session holds one copy rather than one per turn.
+
+## See cache hits in usage
+
+The standard usage fields of each dialect report how many prompt tokens came from the cache.
+
+| API | Field |
+|---|---|
+| Chat Completions | `usage.prompt_tokens_details.cached_tokens` |
+| Responses | `usage.input_tokens_details.cached_tokens` |
+| Messages | `usage.cache_read_input_tokens` (tokens served from the cache) and `usage.cache_creation_input_tokens` (the cacheable prefix written this turn). `input_tokens` is the remainder, so the three add up to the prompt size |
+
+For streams, the same fields arrive in the usage chunk (chat, with `stream_options: {"include_usage": true}`), the `response.completed` event (Responses) and the Messages usage events.
+
+```json
+{
+  "usage": {
+    "prompt_tokens": 3273,
+    "completion_tokens": 120,
+    "total_tokens": 3393,
+    "prompt_tokens_details": { "cached_tokens": 3264 }
+  }
+}
+```
+
+Yunshu also adds an `x_yunshu` object (and `X-Yunshu-Cached-Tokens`, `X-Yunshu-Cache-Tier` and `X-Yunshu-Cache-Reload-Ms` headers on non-streaming responses) that says which tier served the hit. These are additive fields; SDKs ignore them.
+
+```json
+"x_yunshu": {
+  "cached_tokens": 13867,
+  "cache": { "tier": "ram", "cached_tokens": 13867, "reload_ms": 41.2 }
+}
+```
+
+`tier` is `ram`, `warm`, `ssd` or `none`. `reload_ms` is the time the lookup took, including reading from SSD. With more than one storage tier configured, an `ssd` hit also carries `device`. Fields are `null` when unknown.
+
+### Check it with the OpenAI SDK
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="http://localhost:8000/v1", api_key="sk-local")
+
+long_context = "You are a careful assistant. " + "Reference text. " * 600
+for question in ["What is this about?", "Summarize it in one line."]:
+    r = client.chat.completions.create(
+        model="local",
+        messages=[
+            {"role": "system", "content": long_context},
+            {"role": "user", "content": question},
+        ],
+        max_tokens=64,
+    )
+    print(r.usage.prompt_tokens, r.usage.prompt_tokens_details.cached_tokens)
+```
+
+The first call reports a small or zero `cached_tokens`; the second reports most of the prompt.
+
+## Request fields
+
+### Anthropic `cache_control`
+
+On `POST /v1/messages`, `cache_control: {"type": "ephemeral"}` marks a cache breakpoint on a system block, a message content block or a tool, and a top-level `cache_control` is accepted as an automatic marker. `ttl` may be `"5m"` (default) or `"1h"`; at most four breakpoints are supported.
+
+```python
+import anthropic
+
+client = anthropic.Anthropic(base_url="http://localhost:8000", api_key="sk-local")
+
+msg = client.messages.create(
+    model="local",
+    max_tokens=128,
+    system=[
+        {"type": "text", "text": "<long reference document>", "cache_control": {"type": "ephemeral"}},
+    ],
+    messages=[{"role": "user", "content": "Question about the document."}],
+)
+print(msg.usage.cache_creation_input_tokens, msg.usage.cache_read_input_tokens)
+```
+
+Behavior to know:
+
+- Markers are hints. A request is never rejected because of one. If the model's chat template drops or repeats a marker (Qwen templates remove the reasoning of earlier turns, so a marker on a thinking block disappears), the request is served without explicit checkpoints and the server log names the reason.
+- On the VLM runner, markers are mapped through the actual chat template, including native tool definitions, and `cache_creation_input_tokens` and `cache_read_input_tokens` report real checkpoint writes and reads.
+- On the text fast path, only markers on `system` blocks are read. A marker on a message block is not detected there, so `cache_creation_input_tokens` and `cache_read_input_tokens` stay 0 for it, although the prefix cache still reuses the prefix automatically.
+
+### OpenAI `prompt_cache_*`
+
+The OpenAI-style fields are accepted on Chat Completions and Responses.
+
+| Field | Behavior |
+|---|---|
+| `prompt_cache_key` | <Support status="partial">accepted and passed through; it does not route or partition the cache. Reuse is decided by the prompt tokens alone</Support> |
+| `prompt_cache_retention` | <Support status="partial">accepted; on the VLM runner it supplies the default `ttl` for `prompt_cache_options`</Support> |
+| `prompt_cache_options` | <Support status="supported">VLM runner:</Support> `{"mode": "implicit" \| "explicit", "ttl": "30m" \| "24h" \| "in_memory"}`. Without it, the default automatic reuse applies |
+| `prompt_cache_breakpoint` on a text content part | <Support status="supported">VLM runner:</Support> an explicit breakpoint at the end of that part. It must be on a text part |
+
+On the text fast path these fields are accepted and have no effect beyond the automatic prefix reuse.
+
+## Which models are excluded
+
+Prefix reuse needs a cache that can be checkpointed at a prefix boundary. **Models with sliding-window attention layers** (rotating KV caches) cannot, so the VLM runner serves them without a prefix cache and `GET /v1/models` reports `prefix_cache.supported: false` with the reason under the `yunshu` key of the model entry. On the text fast path, models whose cache is hybrid/recurrent or sliding-window cannot reuse a stored prefix either. Models without these layers, and the hybrid Qwen3.5 family on the VLM runner, are supported.
+
+## Memory and storage options
+
+All settings are in the settings registry; see [Configuration](/docs/guides/configuration) for the full list.
+
+### VLM runner (APC)
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `YUNSHU_VLM_APC_MEMORY_GB` | auto | RAM budget in GiB; `0` disables the prefix cache. Unset: half the memory left after the weights and an OS reserve, capped at a quarter of the machine and 32 GiB, and off when less than 1 GiB would remain |
+| `YUNSHU_VLM_APC_DISK` | on | SSD tier: checkpoints that RAM evicts (and those still resident at shutdown) are written to disk and read back instead of recomputed. Bit-exact and lossless; the cache survives a restart. Set to `0` for RAM only |
+| `YUNSHU_VLM_APC_DISK_DIR` | `~/.yunshu/cache/apc` | where the SSD tier lives; point it at a fast volume to keep the internal disk clean |
+| `YUNSHU_VLM_APC_DISK_GB` | auto | size cap of the SSD tier for the whole directory (unset: a quarter of the volume, at most 64 GiB) |
+| `YUNSHU_VLM_APC_DISK_TIERS` | unset | further storage tiers below the SSD directory (an external SSD, an HDD, a NAS mount), each `PATH[@GiB]`; volumes are profiled at startup and ordered by measured read speed |
+| `YUNSHU_VLM_APC_WARM` | `off` | an extra RAM tier for evicted checkpoints: `lossless` (compressed, bit-exact) or the lossy `int8` / `int4` |
+| `YUNSHU_CACHE_RESERVE_PCT`, `YUNSHU_CACHE_RESERVE_GB` | `10`, `20` | free space on the volume that no cache write may use |
+| `YUNSHU_CACHE_STALE_DAYS` | `7` | namespaces unused this long, or whose model changed, are removed first |
+
+SSD states are namespaced by the checkpoint's weights, so replacing a model in place never reads stale states.
+
+### Text fast path (`KVPrefixCache`)
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `YUNSHU_PREFIX_MAX_ENTRIES` | `64` | number of prefix entries kept |
+| `YUNSHU_SSD_CACHE` | off | persist prefix KV to SSD |
+| `YUNSHU_SSD_CACHE_DIR` | `~/.cache/yunshu/kv-ssd` | SSD directory |
+| `YUNSHU_SSD_CACHE_MAX_GB` | `10` | size cap for the directory |
+| `YUNSHU_SSD_CACHE_PREFILL_CEIL_TPS` | `20000` | skip an SSD restore when the model prefills faster than this, because recomputing is then as fast as reading |
+
+### Manage the SSD caches
+
+```bash
+yunshu cache status        # size, cap and problems of each SSD cache
+yunshu cache gc            # dry run: report stale or corrupt entries
+yunshu cache gc --apply    # delete them and trim to the size cap
+```
+
+`yunshu doctor` also prints the cache directory, its size and the free space.
+
+## Lossless by default, lossy by choice
+
+Reuse of an exact checkpoint, from RAM or from SSD, gives the same state a cold prefill would. The options below trade output quality for memory. They are user options with a lossless default, and nothing enables them for you.
+
+| Setting | Effect |
+|---|---|
+| `YUNSHU_KV_QUANT_BITS` | text engine: quantize the KV cache to 2, 3, 4 or 8 bits (`auto` switches to 8-bit once the cache would exceed about 2 GiB). Default `off` |
+| `YUNSHU_KV_PRECISION` | Qwen3.5-family runner: `int8` stores the KV of the shared decode batch as int8 codes with a per-group scale, about half the memory and read bandwidth. Default `bf16`. A lone request and the speculative lane stay bf16 |
+| `YUNSHU_VLM_APC_WARM` = `int8` or `int4` | keep evicted checkpoints quantized in RAM; a hit restores dequantized K/V, so output can differ from a cold prefill. The SSD tier keeps exact states |
+| `YUNSHU_PREFIX_HOT_LIMIT` | text engine: keep only this many entries at full precision and store older ones in 4-bit (default `0`: all full precision) |
+| `YUNSHU_SSD_CACHE_PRECISION` = `int8` | text engine: store SSD entries as int8, about half the bytes. Default `native` (bit-exact) |
+
+## Support
+
+| Capability | Status |
+|---|---|
+| Automatic prefix reuse (VLM runner and text fast path) | <Support status="supported">supported</Support> |
+| `cached_tokens` and `cache_read_input_tokens` in usage | <Support status="supported">supported</Support> |
+| `cache_control` on `system` blocks | <Support status="supported">supported</Support> |
+| `cache_control` on message blocks and tools | <Support status="partial">VLM runner only; ignored for accounting on the text fast path</Support> |
+| `prompt_cache_key` | <Support status="partial">accepted, no effect</Support> |
+| `prompt_cache_options`, `prompt_cache_breakpoint` | <Support status="partial">VLM runner only</Support> |
+| Prefix cache for sliding-window models | <Support status="unsupported">not supported</Support> |
+| Named cached-content objects (Gemini-style `cachedContents`) | <Support status="unsupported">not provided</Support> |
+
+## Related
+
+- [Messages](/docs/api/messages), [Chat Completions](/docs/api/chat-completions) and [Responses](/docs/api/responses)
+- [Architecture](/docs/developers/architecture)
+- [Configuration](/docs/guides/configuration)
+- [Model support](/docs/guides/model-support)

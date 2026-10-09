@@ -1,0 +1,139 @@
+---
+title: Contributing
+description: Set up a development checkout, run lint and tests, follow the settings registry rule, and open a pull request.
+---
+
+Yunshu lives at [github.com/YuhuanStudio/Yunshu](https://github.com/YuhuanStudio/Yunshu) and is licensed under Apache 2.0. By contributing you agree that your contributions are licensed the same way. This page covers the working loop; the repository's `CONTRIBUTING.md` and `AGENTS.md` are the short versions of the same rules.
+
+## Prerequisites
+
+- A Mac with Apple Silicon and a native arm64 Python. Yunshu requires macOS.
+- Python 3.13 or newer.
+- [uv](https://github.com/astral-sh/uv), the only Python package manager the project uses.
+- [just](https://github.com/casey/just) as the command runner (`brew install just`).
+
+## Set up
+
+```bash
+git clone https://github.com/YuhuanStudio/Yunshu.git
+cd Yunshu
+just setup
+```
+
+`just setup` runs `uv sync --all-extras --dev`. For a lighter checkout, install only the extras you need:
+
+```bash
+uv sync --extra vision        # mlx-vlm: VLMs, OCR, the Qwen3.5 family
+uv sync --extra audio         # mlx-audio: ASR, TTS and the Realtime voice cascade
+uv sync --extra omni          # mlx-vlm + torch: native Qwen3-Omni speech-to-speech
+uv sync --extra generation    # image generation
+uv sync --extra embeddings    # /v1/embeddings and /v1/rerank
+```
+
+Start a development server against a local MLX model:
+
+```bash
+YUNSHU_MODEL=/path/to/mlx-model just dev    # uvicorn on 127.0.0.1:8000
+just dev-multi                              # multi-model mode, models in ./models
+```
+
+## The development loop
+
+| Command | What it does |
+|---|---|
+| `just lint` | `ruff check` on `python/` and `tests/`, plus the mypy baseline gate |
+| `just format` | `ruff format` on `python/` and `tests/` |
+| `just test-unit` | the unit suite (`tests/`, integration tests excluded); needs no models |
+| `just test` | currently the same unit suite |
+| `just test-integration` | integration tests, which need real models or running services (opt-in) |
+| `just test-single tests/unit/test_foo.py` | one file |
+
+A single test also runs with `uv run pytest tests/unit/test_foo.py -q`. The pytest configuration lives in `pyproject.toml`: strict `xfail`, asyncio auto mode, and the markers `gpu`, `integration` and `slow`.
+
+Code style: Python 3.13, ruff-formatted with an 88-column line length and the lint rules `E, F, W, I, N, UP, B, SIM`. `just lint` is authoritative. Comments should explain the why (a hidden constraint, a subtle invariant, a workaround), not restate the code.
+
+## Repository layout
+
+| Path | Contents |
+|---|---|
+| `python/yunshu_gateway/` | FastAPI gateway: routers, schemas, middleware, server-side tools |
+| `python/yunshu_engine/` | inference engine: serving paths, sampling, speculative decoding, prefix caches, kernels, the settings registry |
+| `python/yunshu_kv/` | KV cache building blocks |
+| `python/yunshu_cli/` | the `yunshu` CLI |
+| `python/yunshu_control/` | audit log and token counter |
+| `tests/` | `unit/`, `integration/` and `e2e/` tests |
+| `scripts/` | tooling: `gen_config_docs.py`, `dev/` (verification and release helpers), `vendor/`, `release/` |
+| `docs/` | reference guides |
+| `frontend/` | the web console |
+| `site/` | this documentation site |
+
+[Architecture](/docs/developers/architecture) explains how the packages fit together. The Metal kernels compile at runtime (`mx.fast.metal_kernel`), so there is no separate kernel build step.
+
+## The settings registry rule
+
+Every `YUNSHU_*` setting is registered in `python/yunshu_engine/settings.py` and read with `settings.get(...)` or one of its typed getters. Code never reads `os.environ` or `getenv` for a `YUNSHU_*` name; a unit test enforces this.
+
+Adding a setting:
+
+1. Add one `_add(...)` line to `settings.py` with the name, type, default, a one-line description and a category.
+2. Read it through `settings.get("YUNSHU_NAME")` where it is used.
+3. Regenerate the reference and commit the result:
+
+   ```bash
+   uv run python scripts/gen_config_docs.py
+   uv run python scripts/gen_config_docs.py --check    # CI-style check that it is current
+   ```
+
+4. If the setting changes a default, an API or a CLI behavior, note it in the Unreleased section of `CHANGELOG.md`, with migration steps when users must act.
+
+Values resolve, highest precedence first, from `yunshu serve --set KEY=VALUE` and the typed `serve` flags, then the process environment, then the config file (`~/.yunshu/config.toml`, written by `yunshu config set`), then the registered default. `yunshu config` prints the effective value and where it came from.
+
+### Experimental flags are temporary
+
+A setting can be marked `stability="experimental"`. Each one must name the measurement that will decide it (`decide=`) and when it was added (`added=`), and at most eight may exist at once. Once measured, the winner becomes the default and both the flag and the losing code path are deleted. Only **lossless** optimizations (layouts, kernels, schedulers, anything that leaves output unchanged) may replace a default this way; an opt-out can stay when it has real value. **Lossy** options (KV int8, weight quantization, anything that changes output quality) are stable user options with a lossless default, and a benchmark alone never makes them the default.
+
+## Hot-path changes
+
+Performance work is judged end to end. A faster isolated kernel is not enough: a change to the hot path needs a same-checkpoint comparison of output (token-identical, or within a stated tolerance) and of the measured effect on time to first token, decode speed or prefix reuse. [Verification](/docs/developers/verification) describes the tooling.
+
+## Commits and pull requests
+
+Commit messages follow [Conventional Commits](https://www.conventionalcommits.org/):
+
+```text
+feat(cli): add `yunshu pull` subcommand
+fix(gateway): correct streaming SSE keepalive interval
+docs(readme): clarify non-goals
+```
+
+Open a pull request against `main` that says what changed and why, with the output of `just test-unit`. Include a benchmark comparison only when the change touches the hot path. Review expectations:
+
+- Keep changes focused and describe the user-visible before and after.
+- A bug fix needs a regression test that fails without the fix.
+- Record what you ran and anything you did not verify. Documentation-only changes do not need model benchmarks.
+- Disclose AI assistance and review the result yourself, including sources and license notices.
+- Large architecture changes go through a short RFC first.
+
+## Public documentation checks
+
+If you change documented behavior, these checks keep the docs and the code in agreement:
+
+```bash
+uv run pytest tests/unit/test_public_docs.py tests/unit/test_doc_source_consistency.py -q
+uv run python scripts/gen_config_docs.py --check
+uv run python scripts/dev/api_coverage.py
+```
+
+`scripts/dev/ci-local <commit-sha>` reproduces the release build checks in a clean Python 3.13 checkout without using a model: lint, format, mypy, the unit tests, the package build, `twine` validation and a wheel-install smoke test.
+
+## Scope
+
+Yunshu is a single-node inference engine. Distributed or multi-node serving and a multi-tenant control plane are out of scope. Single-node decoding and optimization work (speculative decoding, constrained decoding, quantization, caching, kernels) is in scope and welcome, as is compatibility work that makes real clients behave as they do against the vendor APIs.
+
+## Related
+
+- [Architecture](/docs/developers/architecture)
+- [Verification](/docs/developers/verification)
+- [Release gate](/docs/developers/release-gate)
+- [Upstream tracking](/docs/developers/upstream-tracking)
+- [Configuration](/docs/guides/configuration)

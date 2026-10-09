@@ -18,6 +18,12 @@ paid for. The first fully tuned model is **Qwen3.8-27B**.
 
 ---
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/console/en/overview-dark.webp">
+  <img src="docs/images/console/en/overview-light.webp" alt="Yunshu console overview: live request phases, tok/s, prefix-cache hits">
+</picture>
+
+
 ## Highlights
 
 - **Lossless speculative decoding** — DFlash2 or MTP drafting with batch-invariant kernels: greedy
@@ -26,10 +32,93 @@ paid for. The first fully tuned model is **Qwen3.8-27B**.
   and on SSD, surviving restarts; optional extra storage tiers.
 - **The full API on the fast path** — tools, JSON schema, stop, logprobs, reasoning, cancellation,
   across OpenAI Chat / Responses, Anthropic Messages and Ollama.
+- **Typed decisions** — `/v1/decisions` answers yes/no, choice and score questions with calibrated
+  probabilities in one forward pass of a decision checkpoint, without generating text.
 - **Native coding-agent support** — Claude Code, Codex and opencode work through their own APIs,
   including server-side web search / fetch and MCP.
 - **Lossless by default** — anything that can change output is an explicit setting.
-- **Local and private** — no telemetry; diagnostics never contain prompts.
+- **Local and private** — no usage analytics; diagnostics never contain prompts.
+- **A real console** — a local web console with live request phases (queued, prefill with cache-hit
+  segments, decode), request history, logs, models, cache, a playground, API keys with per-key quotas,
+  settings (including a CORS editor) and host power / clock / temperature, plus a floating status
+  island. [Console guide](docs/CONSOLE.md).
+- **Web search with citations** — server-side `web_search` / `web_fetch` for Claude Code, Codex and the
+  APIs, six providers (DuckDuckGo, Wikipedia, SearXNG, Tavily, Serper, Perplexity), a Tavily-compatible
+  API and optional research enrichment. [Guide](docs/guides/WEB_SEARCH.md).
+- **Evals and stored completions** — `store: true` keeps chat completions locally and the OpenAI Evals
+  API grades them with local graders. [Guide](docs/guides/EVALS.md).
+- **Host telemetry** — power, GPU clock, temperatures, thermal and memory pressure, and a per-request
+  energy estimate, unprivileged and local. [Guide](docs/guides/TELEMETRY.md).
+- **Multiple API keys** — scopes, expiry and daily quotas per key. [Guide](docs/guides/AUTH_AND_KEYS.md).
+
+## Capabilities
+
+Everything Yunshu serves, grouped. Each row links to the guide with an example and the limits; items marked partial or experimental say so. The same list is machine-readable in [`docs/feature_index.json`](docs/feature_index.json).
+
+**Inference**
+
+| Capability | What it does |
+|---|---|
+| [Lossless speculative decoding](docs/guides/INFERENCE.md) | DFlash2, MTP and prompt-copy drafting with batch-invariant kernels; greedy output equals speculation off |
+| [Text-model speculation](docs/guides/INFERENCE.md) | n-gram / suffix and Gemma 4 assistant drafting for mlx-lm models (external-draft experiments stay experimental) |
+| [Prefix cache (APC)](docs/guides/KV_CACHE_MATRIX.md) | exact hybrid checkpoints in RAM, SSD and optional storage tiers; image and audio keys |
+| [Structured output](docs/guides/INFERENCE.md) | JSON schema, regex, choice and grammar enforced during decoding, including tool arguments |
+| [Lossy memory options](docs/guides/INFERENCE.md) | int8 KV, compressed WARM tier and load-time quantization; off by default |
+| [Large MoE loading (partial)](docs/guides/INFERENCE.md) | bits and group size derived from tensor shapes for community DeepSeek-V4-Flash packs; fit check before loading |
+| [Round driver (experimental)](docs/guides/ROUND_DRIVER.md) | own speculative round driver for dense Qwen3.5-family models |
+| [Model support](docs/guides/MODEL_SUPPORT.md) | what is tuned, generic and validated, per family |
+
+**APIs**
+
+| Capability | What it does |
+|---|---|
+| [OpenAI API](docs/guides/API_SURFACE.md) | Chat, Completions, Responses (HTTP and WebSocket), Embeddings, Models, Files, Batches, Conversations |
+| [Anthropic API](docs/guides/API_SURFACE.md) | Messages, count_tokens, batches, thinking, tools, cache_control, documents and citations |
+| [Ollama API](docs/guides/API_SURFACE.md) | /api/chat, /api/generate and native model management (pull, copy, delete, show) |
+| [Responses extras](docs/guides/API_SURFACE.md) | client-executed computer tool, conversations, compaction, previous_response_id |
+| [Stored chat completions](docs/guides/API_SURFACE.md) | store: true, then list, retrieve, update, delete and list messages |
+| [Evals](docs/guides/EVALS.md) | OpenAI Evals API with string-check, similarity and local model graders |
+| [Typed decisions](docs/guides/DECISIONS.md) | yes/no, choice and score answers with probabilities in one forward pass, no text generation |
+| [Batches, Files and tokenizer](docs/guides/API_SURFACE.md) | OpenAI and Anthropic batches, Files API, tokenize / detokenize / apply-template / props |
+| [Transports](docs/guides/TRANSPORTS.md) | SSE, WebSocket streams, Unix socket, HTTP/2, optional WebRTC |
+| [Yunshu extensions](docs/guides/API_EXTENSIONS.md) | request ids, live phases, prefill progress, cancel, deadlines, x_yunshu stats, warmup, memory units |
+| [Prompt-caching APIs](docs/guides/PROMPT_CACHING_APIS.md) | cache_control and cached-token accounting across the three dialects |
+
+**Agents & tools**
+
+| Capability | What it does |
+|---|---|
+| [Coding agents](docs/guides/AGENT_COMPAT.md) | Claude Code, Codex and opencode through their own APIs; `yunshu launch` |
+| [Web search and fetch](docs/guides/WEB_SEARCH.md) | server-side web_search / web_fetch with citations; DuckDuckGo, Wikipedia, SearXNG, Tavily, Serper, Perplexity |
+| [Tavily-compatible API](docs/guides/TAVILY.md) | search, extract, crawl, map, research and MCP, with provider health backoff |
+| [MCP](docs/guides/API_SURFACE.md) | native MCP endpoint, and remote MCP servers named in a request |
+| [Client setup](docs/guides/CLIENTS.md) | curl, OpenAI and Anthropic SDKs, Open WebUI |
+
+**Multimodal**
+
+| Capability | What it does |
+|---|---|
+| [Image, audio and video input](docs/guides/MULTIMODAL.md) | mlx-vlm models take media in Chat, Responses and Messages; media enters the cache key |
+| [Speech-to-speech (partial)](docs/guides/MULTIMODAL.md) | Qwen3-Omni native speech; a repeated image does not yet hit the cache |
+| [Realtime voice](docs/guides/MULTIMODAL.md) | WebSocket and optional WebRTC, server VAD, barge-in, ephemeral client secrets, local voices |
+| [Speech to text, text to speech](docs/guides/MULTIMODAL.md) | transcriptions, translations, speech and voices |
+| [OCR and image generation](docs/guides/MULTIMODAL.md) | GLM-OCR text extraction; image generations, edits and variations |
+| [Embeddings, rerank, score, classify](docs/guides/MULTIMODAL.md) | text and multimodal embeddings, cross-encoder rerank, trained classification heads |
+
+**Operations & console**
+
+| Capability | What it does |
+|---|---|
+| [Web console](docs/CONSOLE.md) | live request phases, history, logs, models, downloads, cache, playground, keys, settings, status island |
+| [API keys and quotas](docs/guides/AUTH_AND_KEYS.md) | several keys with scopes, expiry, per-key usage and daily quotas |
+| [Settings and CORS editor](docs/guides/AUTH_AND_KEYS.md) | write engine settings (restart-required ones prompt) and edit CORS from the console or API |
+| [Host telemetry](docs/guides/TELEMETRY.md) | power, GPU clock, temperatures, thermal and memory pressure, per-request energy estimate, Prometheus |
+| [Command line](docs/guides/CLI.md) | setup, doctor, models list/pull/rm/show, top, service, completions and inference commands |
+| [Login service](docs/guides/SERVICE.md) | launchd agent, restart and logs |
+| [Configuration](docs/CONFIGURATION.md) | one settings registry: environment, TOML file or `--set` |
+| [Security](docs/guides/AUTH_AND_KEYS.md) | auth token, CORS credentials rule, redirect header stripping, secret redaction, SSRF guard |
+| [First run and troubleshooting](docs/guides/FIRST_RUN.md) | install, choose a model, readiness checks, fixes |
+| [Benchmarks and accuracy](docs/BENCHMARKS.md) | where each number comes from, how to reproduce it, accuracy gates |
 
 ## Quickstart
 
@@ -38,7 +127,7 @@ For model selection, external storage, readiness checks and upgrades, follow the
 Apple Silicon, macOS 14+, Python 3.13+ and [uv](https://docs.astral.sh/uv/).
 
 ```bash
-uv tool install --python 3.13 "yunshu[vision]"
+uv tool install --python 3.13 "yunshu[vision]"      # or: brew install yuhuanstudio/tap/yunshu
 yunshu doctor                                   # checks this Mac and says how to fix problems
 yunshu pull mlx-community/Qwen3.5-9B-MLX-4bit
 yunshu serve -m mlx-community/Qwen3.5-9B-MLX-4bit
@@ -74,18 +163,46 @@ Models live in `~/.yunshu/models` (`yunshu config set models_dir PATH` selects t
 
 ### Local console
 
-The source checkout includes a YunUI-based engine console at `/console/`: live
-status and resource charts, model operations, request inspection/cancellation, and
-a streaming diagnostic playground. Build it, then use your normal Yunshu server:
+The local web console at `/console/` shows what the engine is doing and manages it, in English,
+Traditional Chinese or Simplified Chinese. It ships inside the `yunshu` package (pip, uv tool and
+Homebrew installs alike), so there is nothing to build:
 
 ```bash
-cd frontend
-pnpm install --frozen-lockfile
-pnpm build
+yunshu serve -m <model>
+open http://127.0.0.1:8000/console/
 ```
 
-See the
-[console guide](docs/CONSOLE.md) for development, authentication and metric scope.
+- **Overview** — live request phases, prefill and decode tok/s, prefix-cache hit segments inside the
+  prefill bar, time to first token, Metal memory, host power, clock and temperature.
+- **Requests** and **Logs** — latency distribution (cold and warm), speculative acceptance, request
+  history, cancel; a redacted live log with search and download.
+- **Diagnostics** — resource readouts, health checks, a Realtime probe and the support bundle.
+- **Models**, **Downloads**, **Cache** — load, unload, warm up and fit-check models, pull from Hugging
+  Face with progress, and inspect or clear the RAM / WARM / SSD prefix-cache tiers.
+- **Playground** and **API access** — stream a chat with reasoning, compare, view the code; paste-ready
+  setup for Claude Code, Codex, opencode, the SDKs and curl.
+- **Keys** and **Settings** — API keys with quotas and usage, every engine setting (restart-required
+  ones prompt), and a CORS editor.
+- A floating **status island** follows you across pages, and the layout works on a phone.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/console/en/requests-dark.webp">
+  <img src="docs/images/console/en/requests-light.webp" alt="Requests and latency distribution">
+</picture>
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/console/en/playground-dark.webp">
+  <img src="docs/images/console/en/playground-light.webp" alt="Playground streaming a reply">
+</picture>
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/console/en/keys-dark.webp">
+  <img src="docs/images/console/en/keys-light.webp" alt="API keys with quotas and usage">
+</picture>
+
+<img src="docs/images/console/en/mobile-overview-dark.webp" alt="Console on a phone" width="260">
+
+Full page-by-page tour with screenshots: [Console guide](docs/CONSOLE.md).
 
 ### Qwen3.8-27B
 
@@ -106,6 +223,8 @@ git clone https://github.com/YuhuanStudio/Yunshu.git && cd Yunshu
 uv sync --extra vision
 uv run yunshu serve -m <model>
 ```
+
+To work on the console itself, run `pnpm install && pnpm dev` in `frontend/` (see the [console guide](docs/CONSOLE.md#developing-the-console)).
 
 ## How it works
 
@@ -183,7 +302,25 @@ usage, and cached-token counts in `usage`. Errors use each API's own error shape
 namespaced (`x_yunshu`, `X-Yunshu-*`), so the official SDKs ignore them. The full matrix, with how
 each row was verified, is in [API surface](docs/guides/API_SURFACE.md).
 
-Local decisions (`/v1/decisions`, `/v1/systemone`), stored chat completions, Evals (`/v1/evals`) and Realtime client secrets are available on main for the 0.1.5 cycle. Decisions require a supported decision checkpoint; they do not use the chat decoder.
+### Typed decisions
+
+`POST /v1/decisions` (and the System One wire format, `/v1/systemone`) asks a decision checkpoint
+predicate, choice and ordinal-score questions about text or images. One forward pass returns typed
+answers with probabilities; no tokens are generated, and a non-finite result is a refusal, never a
+made-up probability. Supported today: Cloudflare Clef / Clef-flash MLX checkpoints. Other decision-head
+families (OpenJev, Laya, D1) are not loaded yet.
+
+```python
+decision = client.decisions.create(
+    model="abenzerps/Clef-MLX",
+    input="The customer asks for a refund after a broken delivery.",
+    questions=[{"type": "choice", "name": "route", "instructions": "Choose the support team.",
+                "choices": [{"value": "support"}, {"value": "sales"}]}],
+)
+print(decision.answers)  # typed value, confidence, every option's probability
+```
+
+Also new on main for 0.1.5: stored chat completions, Evals (`/v1/evals`) and Realtime client secrets.
 
 [Decisions](docs/guides/DECISIONS.md), [Evals](docs/guides/EVALS.md), [web search](docs/guides/WEB_SEARCH.md) and [Tavily API](docs/guides/TAVILY.md)
 
@@ -221,6 +358,7 @@ comparison tables are in [docs/BENCHMARKS.md](docs/BENCHMARKS.md).
 | Decode, short code prompt | ~110 tok/s (DFlash2) | ~140 tok/s (DFlash2) |
 | JSON-schema / tool-call output, warm | 111 / 78 tok/s (speculative decoding stays on) | — |
 
+Snapshot of main on 2026-10-02/03 (unreleased after v0.1.4; the table's TensorFold column is the 2026-10-02 same-window run); a fresh same-window 0.1.4 comparison is pending.
 TensorFold is still faster at single-request decode and at 32K follow-up turns; closing those gaps is the
 main ongoing work. Structured output keeps speculative decoding (23 tok/s without it).
 Speculation never changes Yunshu's greedy output. Accuracy against the stock MLX path is checked at
@@ -258,6 +396,7 @@ it actually supports.
 | `yunshu launch` / `yunshu statusline` | start a coding agent wired to Yunshu; live engine status line |
 | `yunshu chat`, `complete`, `embed`, `transcribe`, `speak`, `ocr`, `image` | use a running server from the terminal |
 | `yunshu status`, `cancel` | server state, cancel an in-flight request |
+| `yunshu top` | (0.1.5) live view of server health, memory, engine and models (`--json` for one snapshot) |
 | `yunshu config` | effective settings and where each came from |
 | `yunshu cache status` / `gc` | inspect and clean the SSD prefix caches |
 | `yunshu bench`, `eval`, `diagnose` | benchmarks, accuracy evals, system diagnostics |
@@ -283,17 +422,20 @@ All settings: [Configuration](docs/CONFIGURATION.md).
 
 ## Docs
 
-- [CLI](docs/guides/CLI.md) — first run, models, launchd, JSON and shell completion
+- [Console](docs/CONSOLE.md) — every page, with screenshots; [CLI](docs/guides/CLI.md) — first run, models, launchd, JSON and shell completion
+- [Inference features](docs/guides/INFERENCE.md), [Multimodal endpoints](docs/guides/MULTIMODAL.md), [Model support](docs/guides/MODEL_SUPPORT.md)
 - [Clients](docs/guides/CLIENTS.md) — curl, OpenAI / Anthropic SDKs, Open WebUI, agents
-- [API surface](docs/guides/API_SURFACE.md) and [API reference](docs/API.md)
+- [API surface](docs/guides/API_SURFACE.md), [API extensions](docs/guides/API_EXTENSIONS.md), [API reference](docs/API.md), [Transports](docs/guides/TRANSPORTS.md)
+- [Decisions](docs/guides/DECISIONS.md), [Evals](docs/guides/EVALS.md), [Web search](docs/guides/WEB_SEARCH.md), [Tavily API](docs/guides/TAVILY.md)
 - [Agent compatibility](docs/guides/AGENT_COMPAT.md)
+- [Authentication, keys, settings and CORS](docs/guides/AUTH_AND_KEYS.md), [Telemetry](docs/guides/TELEMETRY.md)
 - [KV cache tiers](docs/guides/KV_CACHE_MATRIX.md) and [prompt-caching APIs](docs/guides/PROMPT_CACHING_APIS.md)
 - [Benchmarks](docs/BENCHMARKS.md) and [Accuracy](docs/guides/ACCURACY.md)
-- [Service](docs/guides/SERVICE.md), [Troubleshooting](docs/guides/TROUBLESHOOTING.md), [Changelog](CHANGELOG.md)
+- [First run](docs/guides/FIRST_RUN.md), [Service](docs/guides/SERVICE.md), [Troubleshooting](docs/guides/TROUBLESHOOTING.md), [Configuration](docs/CONFIGURATION.md), [Changelog](CHANGELOG.md)
 
 ## Privacy
 
-No telemetry, usage analytics or crash reports. Yunshu connects out only to download models, to
+No usage analytics or crash reports are sent. Host telemetry (power, thermal, memory) is sampled locally for the console and never leaves the machine ([guide](docs/guides/TELEMETRY.md)). Yunshu connects out only to download models, to
 web-search / MCP providers you configure, and for web fetches a request asks for.
 
 ## Built on and license
