@@ -17,6 +17,12 @@
 
 ---
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/console/zh-TW/overview-dark.webp">
+  <img src="docs/images/console/zh-TW/overview-light.webp" alt="Yunshu console 總覽：即時請求階段、tok/s、前綴快取命中">
+</picture>
+
+
 ## 亮點
 
 - **無損推測解碼**：DFlash2 或 MTP 草稿，搭配不隨批次改變的 kernel，開啟推測解碼時的貪婪輸出
@@ -31,6 +37,83 @@
   搜尋／抓取與 MCP。
 - **預設無損**：任何可能改變輸出的東西都是要自己開的設定。
 - **本地且私密**：不傳送使用統計；診斷資料不含 prompt。
+- **完整的 console**：本地網頁 console，有即時請求階段（排隊、含快取命中區段的 prefill、decode）、請求歷史、
+  日誌、模型、快取、推理測試、含每把金鑰配額的 API 金鑰、設定（含 CORS 編輯器）與主機功耗／時脈／溫度，
+  另有浮動的狀態島。[Console 說明](docs/CONSOLE.md)。
+- **帶引用的網頁搜尋**：伺服器端 `web_search` / `web_fetch`，供 Claude Code、Codex 與各 API 使用；六個來源
+  （DuckDuckGo、Wikipedia、SearXNG、Tavily、Serper、Perplexity）、Tavily 相容 API 與可選的研究加強。[說明](docs/guides/WEB_SEARCH.md)。
+- **Evals 與已儲存的 completions**：`store: true` 在本機保存 chat completions，OpenAI Evals API 以本機評分器評分。[說明](docs/guides/EVALS.md)。
+- **主機遙測**：功耗、GPU 時脈、溫度、散熱與記憶體壓力，以及每個請求的能耗估計，免特權且只在本機。[說明](docs/guides/TELEMETRY.md)。
+- **多把 API 金鑰**：每把有權限、到期與每日配額。[說明](docs/guides/AUTH_AND_KEYS.md)。
+
+## 能力總覽
+
+Yunshu 提供的所有能力，分組列出。每一列連到有範例與限制的說明；部分支援或實驗中的項目都會標明。同一份清單也以機器可讀形式放在 [`docs/feature_index.json`](docs/feature_index.json)。
+
+**推論**
+
+| 能力 | 內容 |
+|---|---|
+| [無損推測解碼](docs/guides/INFERENCE.md) | DFlash2、MTP 與 prompt-copy 草稿，搭配批次不變 kernel；貪婪輸出與關閉推測時相同 |
+| [文字模型推測](docs/guides/INFERENCE.md) | mlx-lm 模型的 n-gram / suffix 與 Gemma 4 assistant 草稿（外部草稿模型仍為實驗） |
+| [前綴快取（APC）](docs/guides/KV_CACHE_MATRIX.md) | 混合模型的精確 checkpoint，位於 RAM、SSD 與可選儲存層；圖片與音訊鍵 |
+| [結構化輸出](docs/guides/INFERENCE.md) | JSON schema、regex、選項與文法在解碼時強制，含工具參數 |
+| [有損記憶體選項](docs/guides/INFERENCE.md) | int8 KV、壓縮 WARM 層與載入時量化；預設關閉 |
+| [大型 MoE 載入（部分）](docs/guides/INFERENCE.md) | 社群 DeepSeek-V4-Flash 權重包的位元與 group size 由張量形狀推得；載入前有容納檢查 |
+| [Round driver（實驗）](docs/guides/ROUND_DRIVER.md) | 稠密 Qwen3.5 系列模型的自有推測回合驅動 |
+| [模型支援](docs/guides/MODEL_SUPPORT.md) | 各系列哪些是調校、通用與已驗證 |
+
+**API**
+
+| 能力 | 內容 |
+|---|---|
+| [OpenAI API](docs/guides/API_SURFACE.md) | Chat、Completions、Responses（HTTP 與 WebSocket）、Embeddings、Models、Files、Batches、Conversations |
+| [Anthropic API](docs/guides/API_SURFACE.md) | Messages、count_tokens、batches、thinking、工具、cache_control、文件與引用 |
+| [Ollama API](docs/guides/API_SURFACE.md) | /api/chat、/api/generate 與原生模型管理（pull、copy、delete、show） |
+| [Responses 延伸](docs/guides/API_SURFACE.md) | 用戶端執行的 computer 工具、conversations、壓縮、previous_response_id |
+| [已儲存的 chat completions](docs/guides/API_SURFACE.md) | store: true 後可列出、取得、更新、刪除並列出訊息 |
+| [Evals](docs/guides/EVALS.md) | OpenAI Evals API，含字串比對、相似度與本機模型評分器 |
+| [型別化決策](docs/guides/DECISIONS.md) | 一次前向傳遞給出是非、選擇與分數答案及機率，不生成文字 |
+| [Batches、Files 與 tokenizer](docs/guides/API_SURFACE.md) | OpenAI 與 Anthropic batches、Files API、tokenize / detokenize / apply-template / props |
+| [傳輸方式](docs/guides/TRANSPORTS.md) | SSE、WebSocket 串流、Unix socket、HTTP/2、可選 WebRTC |
+| [Yunshu 延伸](docs/guides/API_EXTENSIONS.md) | 請求 id、即時階段、prefill 進度、取消、期限、x_yunshu 統計、warmup、記憶體單位 |
+| [Prompt caching API](docs/guides/PROMPT_CACHING_APIS.md) | 三種方言的 cache_control 與快取 token 計數 |
+
+**Agent 與工具**
+
+| 能力 | 內容 |
+|---|---|
+| [程式碼 agent](docs/guides/AGENT_COMPAT.md) | Claude Code、Codex、opencode 透過各自的 API 運作；`yunshu launch` |
+| [網頁搜尋與擷取](docs/guides/WEB_SEARCH.md) | 伺服器端 web_search / web_fetch 與引用；DuckDuckGo、Wikipedia、SearXNG、Tavily、Serper、Perplexity |
+| [Tavily 相容 API](docs/guides/TAVILY.md) | search、extract、crawl、map、research 與 MCP，含 provider 健康退避 |
+| [MCP](docs/guides/API_SURFACE.md) | 原生 MCP 端點，以及請求中指定的遠端 MCP server |
+| [用戶端設定](docs/guides/CLIENTS.md) | curl、OpenAI 與 Anthropic SDK、Open WebUI |
+
+**多模態**
+
+| 能力 | 內容 |
+|---|---|
+| [圖片、音訊與影片輸入](docs/guides/MULTIMODAL.md) | mlx-vlm 模型在 Chat、Responses、Messages 接受媒體；媒體進入快取鍵 |
+| [語音對語音（部分）](docs/guides/MULTIMODAL.md) | Qwen3-Omni 原生語音；重複圖片尚未命中快取 |
+| [Realtime 語音](docs/guides/MULTIMODAL.md) | WebSocket 與可選 WebRTC、伺服器 VAD、打斷、短期 client secret、本機聲音 |
+| [語音轉文字與文字轉語音](docs/guides/MULTIMODAL.md) | transcriptions、translations、speech 與 voices |
+| [OCR 與圖像生成](docs/guides/MULTIMODAL.md) | GLM-OCR 文字擷取；圖像 generations、edits、variations |
+| [Embeddings、rerank、score、classify](docs/guides/MULTIMODAL.md) | 文字與多模態 embeddings、cross-encoder rerank、訓練過的分類頭 |
+
+**營運與 console**
+
+| 能力 | 內容 |
+|---|---|
+| [網頁 console](docs/CONSOLE.md) | 即時請求階段、歷史、日誌、模型、下載、快取、測試、金鑰、設定、狀態島 |
+| [API 金鑰與配額](docs/guides/AUTH_AND_KEYS.md) | 多把金鑰，含權限、到期、每鑰用量與每日配額 |
+| [設定寫入與 CORS 編輯](docs/guides/AUTH_AND_KEYS.md) | 從 console 或 API 寫入引擎設定（需重啟者會提示）並編輯 CORS |
+| [主機遙測](docs/guides/TELEMETRY.md) | 功耗、GPU 時脈、溫度、散熱與記憶體壓力、每請求能耗估計、Prometheus |
+| [命令列](docs/guides/CLI.md) | setup、doctor、models list/pull/rm/show、top、service、補全與推論指令 |
+| [登入服務](docs/guides/SERVICE.md) | launchd agent、重啟與日誌 |
+| [設定](docs/CONFIGURATION.md) | 單一設定登錄表：環境變數、TOML 檔或 `--set` |
+| [安全](docs/guides/AUTH_AND_KEYS.md) | 驗證 token、CORS 憑證規則、轉址時移除標頭、機密遮蔽、SSRF 防護 |
+| [首次執行與疑難排解](docs/guides/FIRST_RUN.md) | 安裝、選擇模型、就緒檢查與修復 |
+| [效能基準與準確度](docs/BENCHMARKS.md) | 每個數字的來源、重現方式與準確度檢查 |
 
 ## 快速開始
 
@@ -74,15 +157,42 @@ print(msg.content[0].text)
 
 ### 本地 console
 
-原始碼包含 YunUI 引擎 console，入口為 `/console/`，提供狀態、資源圖表、模型操作、請求檢視／取消與串流診斷。
+位於 `/console/` 的本地網頁 console 顯示引擎正在做什麼並可管理它，支援英文、繁體中文與簡體中文。
+它內建於 `yunshu` 套件（pip、uv tool、Homebrew 安裝皆有），不需另外編譯：
 
 ```bash
-cd frontend
-pnpm install --frozen-lockfile
-pnpm build
+yunshu serve -m <model>
+open http://127.0.0.1:8000/console/
 ```
 
-[Console](docs/CONSOLE.md)
+- **總覽**：即時請求階段、prefill 與 decode tok/s、prefill 條內的前綴快取命中區段、首 token 延遲、Metal 記憶體、
+  主機功耗、時脈與溫度。
+- **請求**與**日誌**：延遲分布（冷／暖）、推測接受率、請求歷史、取消；已遮蔽憑證的即時日誌，可搜尋與下載。
+- **診斷**：資源讀數、健康檢查、Realtime 連線測試與支援包。
+- **模型**、**下載**、**快取**：載入、卸載、預熱與容納檢查；從 Hugging Face 下載並顯示進度；檢視或清除
+  RAM／WARM／SSD 前綴快取層。
+- **推理測試**與 **API 接入**：串流對話（含推理）、比較、檢視程式碼；Claude Code、Codex、opencode、SDK 與 curl 的可貼上設定。
+- **金鑰**與**設定**：含配額與用量的 API 金鑰、所有引擎設定（需重啟者會提示）與 CORS 編輯器。
+- 浮動的**狀態島**跟著你切換頁面，版面也適用於手機。
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/console/zh-TW/requests-dark.webp">
+  <img src="docs/images/console/zh-TW/requests-light.webp" alt="Requests and latency distribution">
+</picture>
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/console/zh-TW/playground-dark.webp">
+  <img src="docs/images/console/zh-TW/playground-light.webp" alt="Playground streaming a reply">
+</picture>
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/console/zh-TW/keys-dark.webp">
+  <img src="docs/images/console/zh-TW/keys-light.webp" alt="API keys with quotas and usage">
+</picture>
+
+<img src="docs/images/console/zh-TW/mobile-overview-dark.webp" alt="Console on a phone" width="260">
+
+含截圖的逐頁導覽：[Console 說明](docs/CONSOLE.md)。
 
 ### Qwen3.8-27B
 
@@ -102,6 +212,8 @@ git clone https://github.com/YuhuanStudio/Yunshu.git && cd Yunshu
 uv sync --extra vision
 uv run yunshu serve -m <model>
 ```
+
+要開發 console 本身，在 `frontend/` 執行 `pnpm install && pnpm dev`（見 [console 說明](docs/CONSOLE.md#developing-the-console)）。
 
 ## 運作方式
 
@@ -282,14 +394,16 @@ Yunshu 的貪婪輸出。相對於原版 MLX 路徑的準確度，分三個層�
 
 ## 文件
 
-- [CLI](docs/guides/CLI.md)：命令列：首次啟動、模型、launchd、JSON 與 shell completion
-
+- [Console](docs/CONSOLE.md)：每個頁面與截圖；[CLI](docs/guides/CLI.md)：首次啟動、模型、launchd、JSON 與 shell completion
+- [推論功能](docs/guides/INFERENCE.md)、[多模態端點](docs/guides/MULTIMODAL.md)、[模型支援](docs/guides/MODEL_SUPPORT.md)
 - [客戶端](docs/guides/CLIENTS.md)：curl、OpenAI / Anthropic SDK、Open WebUI、agent
-- [API surface](docs/guides/API_SURFACE.md) 與 [API 參考](docs/API.md)
+- [API surface](docs/guides/API_SURFACE.md)、[API 延伸](docs/guides/API_EXTENSIONS.md)、[API 參考](docs/API.md)、[傳輸方式](docs/guides/TRANSPORTS.md)
+- [決策](docs/guides/DECISIONS.md)、[Evals](docs/guides/EVALS.md)、[網頁搜尋](docs/guides/WEB_SEARCH.md)、[Tavily API](docs/guides/TAVILY.md)
 - [Agent 相容性](docs/guides/AGENT_COMPAT.md)
+- [驗證、金鑰、設定與 CORS](docs/guides/AUTH_AND_KEYS.md)、[遙測](docs/guides/TELEMETRY.md)
 - [KV 快取分層](docs/guides/KV_CACHE_MATRIX.md) 與 [prompt caching API](docs/guides/PROMPT_CACHING_APIS.md)
 - [效能測試](docs/BENCHMARKS.md) 與 [準確度](docs/guides/ACCURACY.md)
-- [背景服務](docs/guides/SERVICE.md)、[疑難排解](docs/guides/TROUBLESHOOTING.md)、[變更紀錄](CHANGELOG.md)
+- [首次執行](docs/guides/FIRST_RUN.md)、[背景服務](docs/guides/SERVICE.md)、[疑難排解](docs/guides/TROUBLESHOOTING.md)、[設定](docs/CONFIGURATION.md)、[變更紀錄](CHANGELOG.md)
 
 ## 隱私
 
