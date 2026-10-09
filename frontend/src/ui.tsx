@@ -130,16 +130,32 @@ export function ConnectionState({
   onToken?: (token: string, remember: boolean) => void;
 }) {
   const offline = engine.phase === "offline";
-  const now = useNow(offline && engine.updatedAt != null);
+  const now = useNow(offline);
   if (engine.phase === "online") return null;
   const cause = offlineCause(engine.phase, engine.errorStatus);
   const description = [
     cause.hint,
-    offline ? t("common.autoRetry") : "",
-    offline && engine.updatedAt
-      ? t("common.offlineFor", {
-          t: elapsed(Math.max(0, (now - engine.updatedAt) / 1000)),
+    // A reachable gateway that answers with an error says what it said.
+    offline && engine.errorStatus != null && engine.error
+      ? t("common.engineMessage", { message: engine.error })
+      : "",
+    offline && (engine.offlineSince ?? engine.updatedAt)
+      ? t("common.offlineSince", {
+          time: clock(engine.offlineSince ?? engine.updatedAt ?? now),
+          t: elapsed(
+            Math.max(
+              0,
+              (now - (engine.offlineSince ?? engine.updatedAt ?? now)) / 1000,
+            ),
+          ),
         })
+      : "",
+    offline && engine.nextRetryAt != null
+      ? engine.nextRetryAt - now > 500
+        ? t("common.retryIn", {
+            s: Math.max(1, Math.ceil((engine.nextRetryAt - now) / 1000)),
+          })
+        : t("common.retryNow")
       : "",
     engine.updatedAt
       ? t("common.lastOk", { time: clock(engine.updatedAt) })

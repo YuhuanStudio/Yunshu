@@ -5,6 +5,8 @@ import type { SeriesPoint } from "./series.ts";
 export interface ServerHistory {
   points: SeriesPoint[];
   intervalS: number | null;
+  /** Spans (epoch ms) with no samples at all: the engine process was not running. */
+  gaps: [number, number][];
 }
 
 const num = (v: unknown): number | null =>
@@ -63,7 +65,21 @@ export function parseServerHistory(
       backfilled: true,
     });
   }
-  return points.length ? { points, intervalS: num(body.interval_s) } : null;
+  const gaps: [number, number][] = [];
+  if (Array.isArray(body.gaps))
+    for (const g of body.gaps as unknown[]) {
+      if (!Array.isArray(g)) continue;
+      const a = num(g[0]);
+      const b = num(g[1]);
+      if (a != null && b != null && b > a) gaps.push([a * 1000, b * 1000]);
+    }
+  return points.length
+    ? {
+        points,
+        intervalS: num(body.resolution_s) ?? num(body.interval_s),
+        gaps,
+      }
+    : null;
 }
 
 /** The engine's own history for the last hour; null when the server has none. */
@@ -84,6 +100,42 @@ export async function fetchServerHistory(
       search: { since: String(now / 1000 - (options.windowS ?? 3600)) },
     });
     return parseServerHistory(payload, options.binary);
+  } catch (error) {
+    if (options.signal?.aborted) throw error;
+    return null;
+  }
+}
+
+/**
+ * The persistent history (`GET /v1/yunshu/metrics/history`): recorded from startup whether or not
+ * the console was open, 1 s for the last hour, 10 s for 24 h, 1 min beyond. Null when the server
+ * does not have the route (an older engine), so the caller can fall back to the in-memory ring.
+ */
+export async function fetchMetricsHistory(
+  connection: Connection,
+  options: {
+    signal?: AbortSignal;
+    since: number;
+    until?: number;
+    step?: number;
+  },
+): Promise<ServerHistory | null> {
+  try {
+    const search: Record<string, string> = {
+      since: String(options.since / 1000),
+    };
+    if (options.until != null) search.until = String(options.until / 1000);
+    if (options.step != null) search.step = String(options.step);
+    const payload = await requestJson<unknown>(
+      connection,
+      "/yunshu/metrics/history",
+      {
+        signal: options.signal,
+        timeoutMs: 15_000,
+        search,
+      },
+    );
+    return parseServerHistory(payload, true);
   } catch (error) {
     if (options.signal?.aborted) throw error;
     return null;

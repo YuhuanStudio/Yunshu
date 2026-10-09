@@ -92,6 +92,37 @@ export function mergeSeries(
   return older.length ? [...older, ...live] : [...live];
 }
 
+/**
+ * Fill what the live feed did not see with the server's recorded history. Live points are authoritative
+ * where they exist (a recorded point within `tolerance` ms of a live one is dropped); everywhere else the
+ * recorded points are used, so a stretch the console missed (it was closed, or the engine was down and
+ * came back) is filled in. `gaps` are spans the server has no samples for (the engine was not running):
+ * each becomes an outage marker, so the line breaks there instead of running through it.
+ */
+export function mergeBackfill(
+  live: readonly SeriesPoint[],
+  recorded: readonly SeriesPoint[],
+  gaps: readonly (readonly [number, number])[] = [],
+  tolerance = 1_500,
+): SeriesPoint[] {
+  const liveReal = live.filter((p) => !p.gap);
+  const out: SeriesPoint[] = [...live];
+  let j = 0;
+  for (const p of recorded) {
+    while (j < liveReal.length && liveReal[j].at < p.at - tolerance) j++;
+    const near =
+      j < liveReal.length && Math.abs(liveReal[j].at - p.at) <= tolerance;
+    if (!near) out.push({ ...p, backfilled: true });
+  }
+  for (const [from] of gaps) {
+    if (!out.some((p) => p.gap && Math.abs(p.at - from) < 1_000))
+      out.push(gapPoint(from));
+  }
+  out.sort((a, b) => a.at - b.at || Number(!!a.gap) - Number(!!b.gap));
+  // two markers in a row say the same thing
+  return out.filter((p, i) => !(p.gap && out[i - 1]?.gap));
+}
+
 /** Index of the first point with `at >= t` (points are sorted by `at`). */
 export function lowerBound(points: readonly SeriesPoint[], t: number): number {
   let lo = 0;

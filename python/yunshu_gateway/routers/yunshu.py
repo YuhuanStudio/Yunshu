@@ -612,86 +612,20 @@ async def cancel_model_operation(req: CancelModelRequest, request: Request) -> d
     }
 
 
-@router.get("/yunshu/metrics/history")
-async def metrics_history(
-    request: Request,
-    since: float | None = None,
-    until: float | None = None,
-    step: float | None = Query(None, ge=0),
-) -> dict:
-    """Persistent metrics history, recorded from startup whether or not anyone is watching.
-
-    ``since`` / ``until`` are epoch seconds (default: the last 15 minutes); ``step`` asks for
-    buckets of that many seconds (the finest stored resolution that covers ``since`` is used:
-    1 s for the last hour, 10 s for 24 h, 1 min beyond). Spans with no samples (the process was
-    not running) come back in ``gaps`` and are never interpolated.
-    """
-    import asyncio
-
-    from .. import history as _history
-
-    _check_permission(request, "can_infer")
-    if since is not None and until is not None and until <= since:
-        raise HTTPException(400, "until must be after since")
-    store = _history.store()
-    if store is None:
-        # Store switched off: serve what the in-memory ring has, so the console still works.
-        sampler = _history.get()
-        if sampler is None:
-            return {
-                "object": "yunshu.metrics_history",
-                "enabled": False,
-                "tier": None,
-                "resolution_s": None,
-                "fields": list(_history.FIELDS),
-                "series": {"t": [], **{f: [] for f in _history.FIELDS}},
-                "gaps": [],
-            }
-        payload = sampler.payload(since, step)
-        return {
-            "object": "yunshu.metrics_history",
-            "enabled": True,
-            "tier": "ring",
-            "resolution_s": payload["step_s"],
-            "fields": payload["fields"],
-            "series": payload["series"],
-            "gaps": [],
-        }
-    return {
-        "enabled": True,
-        **await asyncio.to_thread(store.read, since, until, step),
-    }
-
-
 @router.get("/yunshu/requests/history", response_model=HistoryPage)
 async def request_history(
-    request: Request,
-    limit: int = 50,
-    before: str | None = None,
-    model: str | None = None,
+    request: Request, limit: int = 50, before: str | None = None
 ) -> dict:
-    """Metadata-only cursor pages over finished requests, newest first.
-
-    Served from the persistent history (recorded from startup, survives restarts); with the store
-    switched off it falls back to the opt-in, rotated serve log.
-    """
+    """Metadata-only cursor pages over the opt-in, rotated serve log."""
     import asyncio
 
     from yunshu_engine import settings
 
-    from .. import history as _history
     from ..serve_log import get_log
 
-    _check_permission(request, "can_infer")
+    _check_permission(request, "can_manage_models")
     if not 1 <= limit <= 512:
         raise HTTPException(400, "limit must be between 1 and 512")
-    store = _history.store()
-    if store is not None:
-        try:
-            page = await asyncio.to_thread(store.requests_page, limit, before, model)
-        except ValueError as exc:
-            raise HTTPException(400, str(exc)) from None
-        return {"object": "list", "enabled": True, **page}
     log = get_log()
     if log is None:
         return {

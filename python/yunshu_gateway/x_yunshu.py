@@ -647,46 +647,6 @@ def queue_headers(info: RequestInfo) -> list[tuple[bytes, bytes]]:
     ]
 
 
-def _persist_request(info: RequestInfo, stats: dict) -> None:
-    """Hand the finished request's metadata to the persistent history (never prompts or outputs)."""
-    from . import history as _history
-
-    store = _history.store()
-    if store is None:
-        return
-    key_name = None
-    if info.api_key_id:
-        from .api_keys import get_store
-
-        rec = get_store()._keys.get(info.api_key_id)
-        key_name = getattr(rec, "name", None)
-    t_end = time.time()
-    t0 = stats.get("t0_wall")
-    store.add_request(
-        {
-            "request_id": info.request_id,
-            "t": t_end,
-            "t_start": t0 if isinstance(t0, (int, float)) else None,
-            "model": getattr(info.gen, "model", None) or info.model,
-            "path": info.path,
-            "stream": info.stream,
-            "status": info.status or None,
-            "finish_reason": getattr(
-                getattr(info.gen, "stats", None), "finish_reason", None
-            ),
-            "prompt_tokens": stats.get("prompt_tokens"),
-            "completion_tokens": stats.get("completion_tokens"),
-            "cached_tokens": stats.get("cached_tokens"),
-            "prefill_tps": stats.get("prefill_tps"),
-            "decode_tps": stats.get("decode_tps"),
-            "ttft_ms": stats.get("ttft_ms"),
-            "queue_wait_ms": stats.get("queue_wait_ms"),
-            "key_name": key_name,
-            "cancelled": bool(stats.get("cancelled")),
-        }
-    )
-
-
 def record_done(info: RequestInfo, stats: dict) -> None:
     from yunshu_engine.telemetry.sampler import get as get_telemetry
 
@@ -724,8 +684,6 @@ def record_done(info: RequestInfo, stats: dict) -> None:
             "energy": stats.get("energy"),
         }
     )
-    with contextlib.suppress(Exception):
-        _persist_request(info, stats)
     if info.api_key_id:  # the one place tokens are counted per key
         with contextlib.suppress(Exception):
             from .api_keys import get_store

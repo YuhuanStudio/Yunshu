@@ -36,15 +36,6 @@ FIELDS = (
     "ttft_p95_ms",
     "prompt_tokens_per_s",
     "completion_tokens_per_s",
-    "peak_gb",
-    "rss_gb",
-    "cached_tokens_per_s",
-    # host telemetry (only while YUNSHU_TELEMETRY is on; null otherwise)
-    "gpu_w",
-    "package_w",
-    "gpu_mhz",
-    "gpu_active",
-    "die_c",
 )
 _NAN = float("nan")
 
@@ -128,8 +119,6 @@ def sample_row() -> dict[str, float | None]:
     mlx = ml.mlx_counters()
     row["active_gb"] = ml.gb(mlx["active"])
     row["cache_gb"] = ml.gb(mlx["cache"])
-    row["peak_gb"] = ml.gb(mlx["peak"])
-    row["rss_gb"] = _rss_gb()
     foot = ml.process_footprint()["footprint"]
     row["footprint_gb"] = ml.gb(foot)
     total = ml.host()["total_gb"]
@@ -173,57 +162,11 @@ def sample_row() -> dict[str, float | None]:
     row["completion_tokens_per_s"] = (
         round(sum(e["completion_tokens"] for e in window) / 60.0, 2) if window else None
     )
-    row["cached_tokens_per_s"] = (
-        round(sum(e.get("cached_tokens") or 0 for e in window) / 60.0, 2)
-        if window
-        else None
-    )
-    row.update(_telemetry_fields())
     return row
 
 
-def _rss_gb() -> float | None:
-    """Resident set size of this process: one cheap syscall, no engine involved."""
-    try:
-        import psutil
-
-        return round(psutil.Process().memory_info().rss / 1e9, 3)
-    except Exception:
-        return None
-
-
-def _telemetry_fields() -> dict[str, float | None]:
-    """The host sampler's latest reading (it samples on its own thread); nulls when it is off."""
-    out: dict[str, float | None] = dict.fromkeys(
-        ("gpu_w", "package_w", "gpu_mhz", "gpu_active", "die_c")
-    )
-    try:
-        from yunshu_engine.telemetry import sampler as host
-
-        service = host.get()
-        if service is None:
-            return out
-        snap = service.snapshot()
-        watts = snap.get("watts") or {}
-        gpu = snap.get("gpu") or {}
-        temp = snap.get("temperature") or {}
-        for key, value in (
-            ("gpu_w", watts.get("gpu")),
-            ("package_w", watts.get("package")),
-            ("gpu_mhz", gpu.get("frequency_mhz")),
-            ("gpu_active", gpu.get("active_ratio")),
-            ("die_c", temp.get("die_max_c")),
-        ):
-            if isinstance(value, (int, float)) and math.isfinite(value):
-                out[key] = round(float(value), 3)
-    except Exception:
-        logger.debug("telemetry fields unavailable", exc_info=True)
-    return out
-
-
 class Sampler:
-    def __init__(self, interval_s: float, hours: float, store: Any = None):
-        self.store = store
+    def __init__(self, interval_s: float, hours: float):
         self.interval_s = float(interval_s)
         self.ring = HistoryRing(math.ceil(hours * 3600.0 / self.interval_s))
         self.errors = 0
@@ -234,10 +177,7 @@ class Sampler:
         """Append one row; a failing collector costs that sample, never the loop."""
         t = time.time() if now is None else now
         try:
-            row = sample_row()
-            self.ring.append(t, row)
-            if self.store is not None:
-                self.store.add_sample(t, row)
+            self.ring.append(t, sample_row())
         except Exception as exc:
             self.errors += 1
             self.last_error = f"{type(exc).__name__}: {exc}"
@@ -295,7 +235,7 @@ def start_from_settings() -> Sampler | None:
     if interval <= 0 or hours <= 0:
         return None
     if _SAMPLER is None:
-        _SAMPLER = Sampler(interval, hours, open_store())
+        _SAMPLER = Sampler(interval, hours)
     _SAMPLER.start()
     return _SAMPLER
 
@@ -305,46 +245,3 @@ async def stop() -> None:
     s, _SAMPLER = _SAMPLER, None
     if s is not None:
         await s.stop()
-    close_store()
-
-
-_STORE: Any = None
-
-
-def store() -> Any:
-    """The persistent history store, or None when it is off (``YUNSHU_HISTORY_STORE``)."""
-    return _STORE
-
-
-def open_store() -> Any:
-    """Open (once) the SQLite store from settings and start its writer thread."""
-    global _STORE
-    from yunshu_engine import paths, settings
-
-    if _STORE is not None:
-        return _STORE
-    if not settings.get("YUNSHU_HISTORY_STORE"):
-        return None
-    try:
-        from .history_store import HistoryStore
-
-        _STORE = HistoryStore(
-            paths.home() / "history.sqlite",
-            FIELDS,
-            retention_days=float(settings.get("YUNSHU_HISTORY_RETENTION_DAYS") or 30),
-            max_bytes=int(
-                float(settings.get("YUNSHU_HISTORY_DB_MAX_MB") or 64) * 1048576
-            ),
-        )
-        _STORE.start()
-    except Exception:  # a broken disk must not stop the server
-        logger.warning("history store unavailable", exc_info=True)
-        _STORE = None
-    return _STORE
-
-
-def close_store() -> None:
-    global _STORE
-    s, _STORE = _STORE, None
-    if s is not None:
-        s.close()

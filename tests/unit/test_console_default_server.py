@@ -51,12 +51,3 @@ def test_management_reads_ask_for_a_token(default_server, path):
 def test_bad_recent_limit_is_a_400(default_server):
     assert default_server.get("/v1/yunshu/requests/recent?limit=0").status_code == 400
     assert default_server.get("/v1/yunshu/requests/recent?limit=513").status_code == 400
-
-
-def test_history_endpoints_read_without_a_token(default_server):
-    assert default_server.get("/v1/yunshu/metrics/history").status_code == 200
-    assert default_server.get("/v1/yunshu/requests/history").status_code == 200
-    assert (
-        default_server.get("/v1/yunshu/metrics/history?since=5&until=2").status_code
-        == 400
-    )
