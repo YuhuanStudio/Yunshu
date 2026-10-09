@@ -1,16 +1,14 @@
-"""The optional console mount is static-only and does not start inference."""
+"""The console process serves the built console as a same-origin static app (no inference, no mlx)."""
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from yunshu_engine import settings
-from yunshu_gateway.console_ui import mount_console_ui
-from yunshu_gateway.middleware.auth import AuthMiddleware
+from yunshu_console.app import ConsoleStaticFiles
 
 
 def _console_app(static_dir):
     app = FastAPI()
-    mount_console_ui(app, static_dir=static_dir)
+    app.mount("/console", ConsoleStaticFiles(static_dir), name="console")
     return app
 
 
@@ -61,37 +59,13 @@ def test_console_static_files_cannot_escape_build_root(tmp_path):
     assert client.get("/console/assets/%2e%2e/%2e%2e/private.txt").status_code == 404
 
 
-def test_console_shell_is_public_but_neighboring_and_api_paths_keep_auth(
-    monkeypatch, tmp_path
-):
+def test_the_shell_is_revalidated_and_hashed_assets_are_not(tmp_path):
     console = tmp_path / "console_static"
-    console.mkdir()
-    (console / "index.html").write_text("console", encoding="utf-8")
-
-    monkeypatch.setattr(settings, "get_bool", lambda key: False)
-    monkeypatch.setattr(
-        settings,
-        "get",
-        lambda key: "console-test-secret" if key == "YUNSHU_AUTH_TOKEN" else None,
+    (console / "assets").mkdir(parents=True)
+    (console / "index.html").write_text("ok", encoding="utf-8")
+    (console / "assets" / "app-a1b2.js").write_text("1", encoding="utf-8")
+    client = TestClient(_console_app(console))
+    assert client.get("/console/").headers["cache-control"] == "no-cache"
+    assert "no-cache" not in client.get("/console/assets/app-a1b2.js").headers.get(
+        "cache-control", ""
     )
-    app = FastAPI()
-    app.add_middleware(AuthMiddleware)
-    mount_console_ui(app, static_dir=console)
-
-    @app.get("/consoleX")
-    async def console_neighbor():
-        return {"ok": True}
-
-    @app.get("/v1/private-test")
-    async def private_api():
-        return {"ok": True}
-
-    client = TestClient(app)
-
-    assert client.get("/console/").status_code == 200
-    assert client.get("/consoleX").status_code == 401
-    assert client.get("/v1/private-test").status_code == 401
-    authorized = client.get(
-        "/v1/private-test", headers={"Authorization": "Bearer console-test-secret"}
-    )
-    assert authorized.status_code == 200

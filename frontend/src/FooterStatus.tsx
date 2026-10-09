@@ -7,7 +7,7 @@ import {
 } from "@yuhuanowo/yunui/patterns";
 import { ChevronUp } from "lucide-react";
 import type { Connection } from "./api";
-import { useMinWidth, type Engine } from "./ui";
+import { Slot, useMinWidth, type Engine } from "./ui";
 import { footerPills, gpuBusyFraction, type FooterPill } from "./footer-status";
 import { t } from "./i18n/index.ts";
 import { useSignals } from "./signals";
@@ -103,7 +103,9 @@ export function FooterStatus({
               {pills.map((p) => (
                 <StatusPill
                   key={p.key}
-                  label={p.label}
+                  label={
+                    p.key === "now" ? <Slot ch={7}>{p.label}</Slot> : p.label
+                  }
                   value={
                     p.tween ? (
                       <>

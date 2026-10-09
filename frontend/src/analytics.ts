@@ -91,19 +91,37 @@ export function percentileWhenEnough(
   return n >= MIN_PERCENTILE_SAMPLES ? percentile(values, p) : null;
 }
 
-export function phaseDistribution(status: EngineStatus | null) {
+const PHASE_ORDER = ["queued", "starting", "prefill", "decode"];
+
+/**
+ * `steady` keeps one entry for each of queued / prefill / decode (at 0 when none) as soon as any
+ * request is active, so a legend never loses a line above the others while counts change.
+ */
+export function phaseDistribution(
+  status: EngineStatus | null,
+  { steady = false }: { steady?: boolean } = {},
+) {
   if (!status) return [];
   const counts = new Map<string, number>();
+  if (steady && status.requests.items.length)
+    for (const id of ["queued", "prefill", "decode"]) counts.set(id, 0);
   for (const item of status.requests.items)
     counts.set(item.phase, (counts.get(item.phase) ?? 0) + 1);
-  return [...counts].map(([id, value]) => ({
-    id,
-    value,
-    label: phaseName(id),
-    tone: Object.hasOwn(phaseTones, id)
-      ? phaseTones[id as keyof typeof phaseTones]
-      : ("neutral" as const),
-  }));
+  // A fixed order (the pipeline's own), so a legend entry keeps its place while the counts change.
+  const rank = (id: string) => {
+    const i = PHASE_ORDER.indexOf(id);
+    return i < 0 ? PHASE_ORDER.length : i;
+  };
+  return [...counts]
+    .sort(([a], [b]) => rank(a) - rank(b) || a.localeCompare(b))
+    .map(([id, value]) => ({
+      id,
+      value,
+      label: phaseName(id),
+      tone: Object.hasOwn(phaseTones, id)
+        ? phaseTones[id as keyof typeof phaseTones]
+        : ("neutral" as const),
+    }));
 }
 
 /** Per-bucket peak of actual samples, not requests-per-period or interpolated traffic. */

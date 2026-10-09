@@ -310,13 +310,14 @@ def check_watch(watch, vendored_paths: set, pins: dict) -> int:
             continue
         ref = upstream_ref(clone)
         since = w.get("commit") or pins.get(w["clone"])
-        if w.get("pin_package"):
+        if w.get("pin_package") and not w.get("reviewed_commit"):
             # Compare against the release we actually run (tag v<installed>).
             try:
                 tag = "v" + importlib.metadata.version(w["pin_package"])
                 since = git(clone, "rev-parse", "--verify", "-q", tag) and tag or since
             except importlib.metadata.PackageNotFoundError:
                 pass
+        since = w.get("reviewed_commit") or since
         if since and not git(clone, "rev-parse", "--verify", "-q", since):
             since = None
         since = since or git(clone, "rev-parse", "HEAD")
@@ -342,7 +343,49 @@ def check_watch(watch, vendored_paths: set, pins: dict) -> int:
     return news
 
 
-def check_packages(packages) -> int:
+def reviewed_package_blockers(
+    name: str, installed: str, latest: str, reviews: dict, declared: str = ""
+) -> list[str]:
+    """A review expires when either version or the installed constraints change."""
+    from packaging.requirements import Requirement
+    from packaging.version import Version
+
+    review = reviews.get(name, {})
+    if (
+        review.get("installed_version") != installed
+        or review.get("latest_version") != latest
+        or not review.get("reason")
+    ):
+        return []
+    blockers = []
+    for owner in review.get("blocked_by", []):
+        if owner == "pyproject":
+            # A deliberate pin of our own: expires when the pin or either version moves.
+            from packaging.specifiers import SpecifierSet
+
+            for raw in filter(None, (s.strip() for s in declared.split(","))):
+                spec = SpecifierSet(raw)
+                if Version(installed) in spec and Version(latest) not in spec:
+                    blockers.append(f"pyproject: {raw}")
+            continue
+        try:
+            requirements = importlib.metadata.requires(owner) or []
+        except importlib.metadata.PackageNotFoundError:
+            continue
+        for raw in requirements:
+            req = Requirement(raw)
+            normalized = re.sub(r"[-_.]+", "-", req.name).lower()
+            if normalized != name or (req.marker and not req.marker.evaluate()):
+                continue
+            if (
+                Version(installed) in req.specifier
+                and Version(latest) not in req.specifier
+            ):
+                blockers.append(f"{owner}: {req}")
+    return blockers
+
+
+def check_packages(packages, reviews: dict | None = None) -> int:
     """``packages``: names, or ``{name: [declared specifiers]}``."""
     behind = 0
     for name in packages:
@@ -359,7 +402,14 @@ def check_packages(packages) -> int:
         except Exception:  # noqa: BLE001
             latest = "?"
         flag = "" if latest in ("?", installed) else "  <- newer on PyPI"
-        behind += bool(flag)
+        blockers = (
+            reviewed_package_blockers(name, installed, latest, reviews or {}, declared)
+            if flag
+            else []
+        )
+        if blockers:
+            flag = "  <- reviewed, blocked by " + "; ".join(blockers)
+        behind += bool(flag) and not bool(blockers)
         decl = f" (pyproject: {declared})" if declared else ""
         print(f"- {name}: installed {installed}, PyPI {latest}{flag}{decl}")
     return behind
@@ -409,14 +459,16 @@ def main():
     print("\n## Watched upstream paths")
     pins = {e["clone"]: e["commit"] for e in manifest["vendored"]}
     vendored_paths = {e["upstream_path"] for e in manifest["vendored"]}
-    check_watch(manifest["watch"], vendored_paths, pins)
+    behind += check_watch(manifest["watch"], vendored_paths, pins)
     print(
         "\n## Packages (pyproject.toml, every extra and group, plus vendor.json extras)"
     )
     declared = pyproject_packages(ROOT / "pyproject.toml")
     for extra in manifest["packages"]:
         declared.setdefault(re.sub(r"[-_.]+", "-", extra).lower(), [])
-    pkgs = check_packages(dict(sorted(declared.items())))
+    pkgs = check_packages(
+        dict(sorted(declared.items())), manifest.get("package_reviews", {})
+    )
     print("\n## Self-checks")
     bad = unregistered_headers(ROOT, manifest)
     for f in bad:

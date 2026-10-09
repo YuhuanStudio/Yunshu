@@ -18,6 +18,7 @@ const shell = {
   "engine.headline.shortStarting": "準備中",
   "engine.headline.shortPrefill": "預填中",
   "engine.headline.prefillNoSpeed": "預填中，尚未回報速度",
+  "engine.headline.prefillCached": "最近一筆命中快取，沒有實際預填",
   "engine.headline.idle": "閒置",
   "engine.headline.none": "尚無完成請求",
   "engine.live.offline": "離線",
@@ -65,6 +66,7 @@ const shell = {
   "footer.load.help": "進行中 {active} 個，排隊 {queued} 個。",
   "footer.sentenceEnd": "。",
   "nav.skip": "跳到主要內容",
+  "nav.tabs": "分頁",
   "nav.ariaLabel": "控制台導覽",
   "nav.close": "關閉導覽",
   "nav.open": "開啟導覽",
@@ -191,5 +193,13 @@ const shell = {
   "island.nav.modelsLoaded": "{n} 個已載入",
   "island.nav.diagnostics": "診斷",
   "island.nav.logs": "日誌",
+  "stale.note":
+    "此頁需要引擎；現在顯示的是 {age}前的最後資料，引擎回來後會自動更新。",
+  "loadError.title": "模型載入失敗",
+  "loadError.action": "載入其他模型",
+  "boundary.title": "這個頁面發生錯誤",
+  "boundary.body": "其他頁面不受影響。可以重試，或到文件查看說明。",
+  "boundary.retry": "重試",
+  "boundary.docs": "開啟文件",
 };
 export default shell;

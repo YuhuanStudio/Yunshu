@@ -393,7 +393,7 @@ test.describe("requests page finished-request ring", () => {
   }) => {
     const { requests } = await withRing(page);
     const footer = requests.getByTestId("requests-footer");
-    await expect(footer).toContainText("伺服器保留最近 512 筆");
+    await expect(footer).toContainText("引擎保留最近 512 筆");
     await expect(footer).toContainText(/自 \d{2}:\d{2} 起 120 筆請求/);
     await expect(footer).toContainText(
       "讀取 480,000 個 prompt token（重用 120,000）",

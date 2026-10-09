@@ -240,89 +240,19 @@ test.describe("analytics dashboard contracts", () => {
       memory.locator('[data-yunui="time-series-chart"]'),
     ).toHaveAttribute("data-active-x", selectedX!);
 
-    await overview.getByRole("tab", { name: "5 分鐘", exact: true }).click();
+    await overview.getByRole("tab", { name: "15 分鐘", exact: true }).click();
     const downloadPromise = page.waitForEvent("download");
     await overview
       .getByRole("button", { name: "匯出觀測", exact: true })
       .click();
     const download = await downloadPromise;
-    expect(download.suggestedFilename()).toBe("yunshu-observations-5m.csv");
+    expect(download.suggestedFilename()).toBe("yunshu-observations-15m.csv");
     const path = await download.path();
     expect(path).not.toBeNull();
     const csv = await readFile(path!, "utf8");
     expect(csv.charCodeAt(0)).toBe(0xfeff);
-    expect(csv.trimEnd().split(/\r?\n/)).toHaveLength(4); // header plus the three samples in the selected five-minute window
+    expect(csv.trimEnd().split(/\r?\n/)).toHaveLength(7); // header plus the six samples in the selected fifteen-minute window
     expect(csv).toContain('"mean_decode_tps_window"');
-    expect(fixture.unexpected).toEqual([]);
-    expect(pageErrors).toEqual([]);
-  });
-
-  test("filters request phases, synchronizes heatmap selections, and restores focus from latency details", async ({
-    page,
-  }) => {
-    const { fixture, pageErrors } = await openDashboard(page, false, false);
-    await expect(
-      page.getByText(
-        "本頁開啟後採樣（此引擎沒有提供歷史） · 1 筆 · 中斷期間不補資料",
-        {
-          exact: true,
-        },
-      ),
-    ).toBeVisible();
-    await collectSixSamples(page, fixture, false);
-
-    const phase = page.getByTestId("phase-panel");
-    await phase.getByRole("button", { name: /預填/ }).click();
-    await expect(
-      phase.getByText("qa-prefill-01", { exact: true }),
-    ).toBeVisible();
-    await expect(phase.getByText("qa-decode-01", { exact: true })).toHaveCount(
-      0,
-    );
-    await phase
-      .getByRole("button", { name: "清除階段篩選", exact: true })
-      .click();
-    await expect(
-      phase.getByText("qa-decode-01", { exact: true }),
-    ).toBeVisible();
-
-    const activity = page.getByTestId("activity-panel");
-    const grid = activity.getByRole("grid", { name: "請求階段活動熱圖" });
-    const cells = grid.getByRole("gridcell");
-    await expect(cells).toHaveCount(48);
-    await cells.nth(0).focus();
-    await page.keyboard.press("ArrowRight");
-    await expect(cells.nth(1)).toBeFocused();
-    await page.keyboard.press("Enter");
-    await expect(activity.getByRole("status")).toBeVisible();
-
-    // The final cell is the latest Decode bucket, which has a real fixture sample.
-    await cells.last().click();
-    const throughputChart = page
-      .getByTestId("throughput-panel")
-      .locator('[data-yunui="time-series-chart"]');
-    const memoryChart = page
-      .getByTestId("memory-panel")
-      .locator('[data-yunui="time-series-chart"]');
-    await expect(throughputChart).toHaveAttribute("data-active-x", /\d+/);
-    await expect(memoryChart).toHaveAttribute(
-      "data-active-x",
-      (await throughputChart.getAttribute("data-active-x")) ?? "",
-    );
-
-    const latency = page.getByTestId("latency-panel");
-    const firstBucket = latency.getByRole("button").first();
-    await expect(firstBucket).toHaveAttribute("aria-label", /<250/);
-    await firstBucket.focus();
-    await firstBucket.click();
-    const dialog = page.getByRole("dialog");
-    await expect(dialog).toBeVisible();
-    await expect(dialog).toContainText("延遲 <250 ms");
-    await page.keyboard.press("Escape");
-    await expect(dialog).toHaveCount(0);
-    await expect(firstBucket).toBeFocused();
-
-    expect(fixture.calls()).toBeGreaterThanOrEqual(6);
     expect(fixture.unexpected).toEqual([]);
     expect(pageErrors).toEqual([]);
   });

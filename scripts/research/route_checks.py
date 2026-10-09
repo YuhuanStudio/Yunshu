@@ -64,6 +64,9 @@ EXEMPT: dict[str, str] = {
     "POST /api/push": "documented 501 by design: nothing to push to",
     "POST /v1/decisions": "needs a decision checkpoint (Cloudflare Clef); verified by the decisions-* gpuq jobs (scripts/research/decisions_verify.py), unit-tested with a fake engine and the openai 3.26 client",
     "POST /v1/systemone": "same engine and checkpoint as /v1/decisions (TypeSafe Jev wire); see decisions_verify.py",
+    "GET /console": "deprecated pointer to the console process (redirect or how-to page); tests/unit/test_console_pointer.py, and scripts/research/console_real_server.py checks the process itself",
+    "GET /console/": "same pointer as GET /console",
+    "GET /console/{rest:path}": "same pointer as GET /console",
 }
 
 

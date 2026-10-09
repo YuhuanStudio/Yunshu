@@ -211,6 +211,9 @@ export function decodeHeadline(status: EngineStatus): Headline {
       };
 }
 
+/** Fewer computed prompt tokens than this is not a prefill worth a speed. */
+const MIN_REAL_PREFILL_TOKENS = 256;
+
 /** Prefill headline, same rules as decode. */
 export function prefillHeadline(
   status: EngineStatus,
@@ -224,9 +227,13 @@ export function prefillHeadline(
       label: speedTerms.live,
       note: t("shell.engine.headline.prefilling", { count: a.counts.prefill }),
     };
-  const last = finite(status.last?.prefill_tps)
-    ? status.last!.prefill_tps
-    : null;
+  // A request whose prompt was (nearly) all served from the prefix cache computed almost nothing:
+  // its tok/s is a number near zero that says nothing about prefill speed, so it is not a speed.
+  const computed =
+    (status.last?.prompt_tokens ?? 0) - (status.last?.cached_tokens ?? 0);
+  const real = computed >= MIN_REAL_PREFILL_TOKENS;
+  const last =
+    real && finite(status.last?.prefill_tps) ? status.last!.prefill_tps : null;
   if (a.counts.prefill > 0)
     return {
       kind: last != null ? "last" : "none",
@@ -245,7 +252,9 @@ export function prefillHeadline(
         kind: "none",
         value: null,
         label: speedTerms.last,
-        note: t("shell.engine.headline.none"),
+        note: status.last
+          ? t("shell.engine.headline.prefillCached")
+          : t("shell.engine.headline.none"),
       };
 }
 

@@ -110,6 +110,7 @@ Everything Yunshu serves, grouped. Each row links to the guide with an example a
 | Capability | What it does |
 |---|---|
 | [Web console](docs/CONSOLE.md) | live request phases, history, logs, models, downloads, cache, playground, keys, settings, status island |
+| [Console process](docs/CONSOLE.md) | the console runs apart from the engine (port 8100): usable while the engine is down, recorded history and request log, outage gaps |
 | [API keys and quotas](docs/guides/AUTH_AND_KEYS.md) | several keys with scopes, expiry, per-key usage and daily quotas |
 | [Settings and CORS editor](docs/guides/AUTH_AND_KEYS.md) | write engine settings (restart-required ones prompt) and edit CORS from the console or API |
 | [Host telemetry](docs/guides/TELEMETRY.md) | power, GPU clock, temperatures, thermal and memory pressure, per-request energy estimate, Prometheus |
@@ -163,13 +164,17 @@ Models live in `~/.yunshu/models` (`yunshu config set models_dir PATH` selects t
 
 ### Local console
 
-The local web console at `/console/` shows what the engine is doing and manages it, in English,
-Traditional Chinese or Simplified Chinese. It ships inside the `yunshu` package (pip, uv tool and
-Homebrew installs alike), so there is nothing to build:
+The local web console shows what the engine is doing and manages it, in English, Traditional Chinese
+or Simplified Chinese. It runs as its own light process (`yunshu console`; it never loads MLX) that
+`yunshu serve` starts next to the engine, on port 8100. It serves the console and the docs, proxies the
+engine API on one origin, and records the history, so it stays usable, and keeps recording, while the
+engine restarts or crashes. It ships inside the `yunshu` package (pip, uv tool and Homebrew installs
+alike), so there is nothing to build:
 
 ```bash
 yunshu serve -m <model>
-open http://127.0.0.1:8000/console/
+open http://127.0.0.1:8100/console/
+yunshu console --engine http://mac-studio.local:8000
 ```
 
 - **Overview** — live request phases, prefill and decode tok/s, prefix-cache hit segments inside the
@@ -183,6 +188,11 @@ open http://127.0.0.1:8000/console/
   setup for Claude Code, Codex, opencode, the SDKs and curl.
 - **Keys** and **Settings** — API keys with quotas and usage, every engine setting (restart-required
   ones prompt), and a CORS editor.
+- **History that outlives the engine** — the console process samples the engine once a second (1 s
+  resolution for an hour, 10 s for a day, 1 min for 30 days) and keeps the request log (metadata only), so
+  charts and request lists backfill on open, engine outages show as gaps, and nothing depends on a browser
+  having been open. When the engine is down the console says so, keeps the docs, settings and last data,
+  and reconnects by itself.
 - A floating **status island** follows you across pages, and the layout works on a phone.
 
 <picture>

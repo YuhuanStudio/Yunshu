@@ -91,14 +91,29 @@ yunshu --url http://localhost:8001 --json complete "Hello"
 | `--max-request-size` | 請求本文大小上限（位元組）。 |
 | `--server-header` | 在回應中送出 `Server: Yunshu`。 |
 | `--reload` | 開發用的自動重新載入。 |
+| `--no-console` | 不在引擎旁邊啟動主控台程序。 |
+| `--console-port` | 主控台程序的連接埠。預設 `8100`（`YUNSHU_CONSOLE_PORT`）。 |
 | `--config`、`-c` | 含 `YUNSHU_*` 設定的 TOML 檔案。 |
 | `--set KEY=VALUE` | 覆寫任一設定；`YUNSHU_` 前綴可省略，可重複使用。未知的名稱會報錯並列出最接近的名稱。 |
 
 旗標與 `--set` 的優先順序最高，高於環境變數與設定檔。載入之前，`serve` 會確認位址可以綁定，並執行與 `doctor` 相同的模型檢查；無法載入的模型仍會讓伺服器啟動，由 `GET /health/ready` 回報原因。使用 `--json` 時會先印出 `starting` 事件，之後行程持續執行；就緒狀態請看 `GET /health/ready`，而不是這個事件。所有設定請見[設定](/docs/guides/configuration)。
 
+### `yunshu console`
+
+單獨執行主控台程序：網頁主控台與文件、轉送引擎 API 的反向代理，以及記錄下來的歷史。它不載入 MLX。`yunshu serve` 會在引擎旁邊啟動一個；要監看另一台機器上的引擎，或想手動讓它持續執行時，就用這個指令。
+
+| 選項 | 說明 |
+|---|---|
+| `--engine`、`-e` | 要監看並轉送的引擎網址。預設 `http://127.0.0.1:8000`（`YUNSHU_CONSOLE_ENGINE`）。 |
+| `--host`、`-h` | 綁定主機。預設 `127.0.0.1`。 |
+| `--port`、`-p` | 綁定連接埠。預設 `8100`。 |
+| `--engine-token` | 讀取引擎所用的 Bearer 權杖（`YUNSHU_CONSOLE_ENGINE_TOKEN`，否則 `YUNSHU_AUTH_TOKEN`）。 |
+| `--config`、`-c` | `YUNSHU_*` 設定的 TOML 檔。 |
+| `--no-history` | 不記錄指標歷史與請求紀錄。 |
+
 ### `yunshu service`
 
-以 launchd 在登入時執行 Yunshu。子指令：`install`、`uninstall`、`start`、`stop`、`restart`、`status`、`logs`、`rotate-logs`。完整選項請見[服務](/docs/getting-started/service)頁面。
+以 launchd 在登入時執行 Yunshu，分成兩個 job：引擎與主控台程序（引擎重新啟動時主控台仍持續記錄）。子指令：`install`、`uninstall`、`start`、`stop`、`restart`、`status`、`logs`、`rotate-logs`。完整選項請見[服務](/docs/getting-started/service)頁面。
 
 ### `yunshu chat`
 

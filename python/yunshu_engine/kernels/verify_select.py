@@ -26,6 +26,8 @@ from __future__ import annotations
 
 import mlx.core as mx
 
+from .qmv_compat import FLOAT_SUMS, stock_load_vector
+
 MIN_STREAMED_ROWS_5BIT = 5
 
 # mlx-vlm's streamed verify kernel with the 5-bit weight read fixed: upstream
@@ -103,7 +105,9 @@ def streamed_fixed_kernel(qv, bits, group_size, dtype, verify_t, k_size, n_size)
             ),
             input_names=["x", "w", "scales", "biases"],
             output_names=["y"],
-            header=qv._target_verify_qlinear_header(bits, group_size, 1),
+            header=stock_load_vector(
+                qv._target_verify_qlinear_header(bits, group_size, 1)
+            ),
             source=_STREAMED_FIXED_SOURCE,
         )
     return _KERNELS[key]
@@ -135,6 +139,17 @@ def streamed_fixed(qv, linear, x: mx.array) -> mx.array:
 def install() -> bool:
     from mlx_vlm.models import quantized_verifier as qv
     from mlx_vlm.speculative.ops import linear as ops
+
+    # Upstream also supplies the 4-bit/base/grouped verify kernels. Sync their
+    # shared header before any factory populates its kernel cache.
+    factory = qv._target_verify_qlinear_header
+    if FLOAT_SUMS and not getattr(factory, "_yunshu_float_sums", False):
+
+        def header(*args, **kwargs):
+            return stock_load_vector(factory(*args, **kwargs))
+
+        header._yunshu_float_sums = True  # type: ignore[attr-defined]
+        qv._target_verify_qlinear_header = header
 
     single = qv.optimized_affine_linear
     grouped = qv.optimized_affine_linears
@@ -295,7 +310,9 @@ def unpacked_kernel(qv, bits, group_size, dtype, verify_t, k_size, n_size, rps=4
             ),
             input_names=["x", "w", "scales", "biases"],
             output_names=["y"],
-            header=qv._target_verify_qlinear_header(bits, group_size, rps),
+            header=stock_load_vector(
+                qv._target_verify_qlinear_header(bits, group_size, rps)
+            ),
             source=_UNPACKED_SOURCE,
         )
     return _KERNELS[key]

@@ -1,3 +1,4 @@
+import { SegmentedTray } from "./SegmentedTray";
 import { gbTotalText } from "./byte-format";
 import { Suspense, lazy, useEffect, useRef, useState } from "react";
 import {
@@ -54,6 +55,7 @@ import { searchDocs } from "./docs/search.ts";
 import { docHref } from "./docs/links.ts";
 import { useDocTitle } from "./docs/title-store.ts";
 import type { SearchHit } from "./docs/types.ts";
+import { PageBoundary } from "./PageBoundary";
 import { LanguageSwitch } from "./LanguageSwitch";
 import {
   LOCALES,
@@ -64,7 +66,16 @@ import {
   tr,
   useLocale,
 } from "./i18n/index.ts";
-import { ConnectionState, fixed, modelLabel, sizeGb, useMinWidth } from "./ui";
+import {
+  ConnectionState,
+  OfflineLine,
+  elapsed,
+  fixed,
+  modelLabel,
+  sizeGb,
+  useMinWidth,
+  useNow,
+} from "./ui";
 import { NotificationCenter } from "./NotificationCenter";
 import { ShortcutsSheet } from "./Shortcuts";
 import { SignalsProvider, useShellSignals } from "./signals";
@@ -72,6 +83,8 @@ import { setRememberedToken, rememberedToken } from "./token-store";
 import {
   CHORDS,
   PAGES,
+  TABS,
+  topPage,
   VERBS,
   isTypingTarget,
   parseRoute,
@@ -172,6 +185,54 @@ function startAtTop(el: HTMLElement | null) {
   });
 }
 
+/** Pages that need the engine to be useful: offline they say so and show the last data they have. */
+const ENGINE_PAGES = new Set<string>([
+  "overview",
+  "requests",
+  "models",
+  "downloads",
+  "cache",
+  "diagnostics",
+  "logs",
+  "keys",
+  "playground",
+]);
+/** The pages that are only numbers from the engine: dimmed while those numbers are stale (the overview dims itself). */
+const DIM_PAGES = new Set<string>([
+  "requests",
+  "models",
+  "cache",
+  "diagnostics",
+  "downloads",
+]);
+
+/** The tab strip of a page that has tabs (models, diagnostics, settings and the pages that live in them). */
+function PageTabs({
+  page,
+  navigate,
+}: {
+  page: Page;
+  navigate: (page: string) => void;
+}) {
+  useLocale();
+  const tabs = TABS[topPage(page)];
+  if (!tabs) return null;
+  return (
+    <div className="mb-4" data-testid="page-tabs">
+      <SegmentedTray
+        aria-label={t("shell.nav.tabs")}
+        value={page}
+        onChange={(v) => navigate(v)}
+        options={tabs.map((id) => ({
+          value: id,
+          // i18n-keys: shell.page.
+          label: tr(`shell.page.${id}`),
+        }))}
+      />
+    </div>
+  );
+}
+
 export default function App() {
   const locale = useLocale();
   const docTitle = useDocTitle();
@@ -203,6 +264,7 @@ export default function App() {
     ),
     [testModel, setTestModel] = useState("");
   const engine = useEngine(connection);
+  const staleNow = useNow(engine.phase === "offline");
   const signals = useShellSignals(engine, connection);
   // Phones (< 640px): the top bar is the hamburger and the title only; search and the bell
   // live in the menu sheet, and the hamburger carries a dot while something is unread.
@@ -479,7 +541,7 @@ export default function App() {
           <Sidebar
             appName="Yunshu"
             ariaLabel={t("shell.nav.ariaLabel")}
-            currentPath={"/" + page}
+            currentPath={"/" + topPage(page)}
             isOpen={menu}
             onClose={() => setMenu(false)}
             closeLabel={t("shell.nav.close")}
@@ -530,11 +592,6 @@ export default function App() {
                     icon: Activity,
                   },
                   {
-                    label: t("shell.page.logs"),
-                    href: "/logs",
-                    icon: ScrollText,
-                  },
-                  {
                     label: t("shell.page.diagnostics"),
                     href: "/diagnostics",
                     icon: Stethoscope,
@@ -545,16 +602,6 @@ export default function App() {
                 title: t("shell.nav.section.models"),
                 items: [
                   { label: t("shell.page.models"), href: "/models", icon: Box },
-                  {
-                    label: t("shell.page.downloads"),
-                    href: "/downloads",
-                    icon: Download,
-                  },
-                  {
-                    label: t("shell.page.cache"),
-                    href: "/cache",
-                    icon: Database,
-                  },
                 ],
               },
               {
@@ -565,22 +612,21 @@ export default function App() {
                     href: "/playground",
                     icon: MessageSquare,
                   },
-                  { label: t("shell.page.api"), href: "/api", icon: Code2 },
-                  {
-                    label: t("shell.page.docs"),
-                    href: "/docs",
-                    icon: BookOpen,
-                  },
+                  // wide screens have the docs link in the top bar
+                  ...(wide
+                    ? []
+                    : [
+                        {
+                          label: t("shell.page.docs"),
+                          href: "/docs",
+                          icon: BookOpen,
+                        },
+                      ]),
                 ],
               },
               {
                 title: t("shell.nav.section.manage"),
                 items: [
-                  {
-                    label: t("shell.page.keys"),
-                    href: "/keys",
-                    icon: KeyRound,
-                  },
                   {
                     label: t("shell.page.settings"),
                     href: "/settings",
@@ -767,6 +813,18 @@ export default function App() {
               {wide && (
                 <div className="ml-auto flex shrink-0 items-center gap-1.5">
                   <LivePill phase={engine.phase} status={engine.status} />
+                  <Button
+                    variant="ghost"
+                    type="button"
+                    onClick={() => navigate("docs")}
+                    data-testid="docs-link"
+                    className={`card inline-flex h-8 items-center gap-1.5 rounded-full px-3 py-0 text-xs transition-colors hover:text-foreground ${page === "docs" ? "text-foreground" : "text-muted-foreground"}`}
+                  >
+                    <BookOpen size={13} />
+                    <span className="max-xl:sr-only">
+                      {t("shell.page.docs")}
+                    </span>
+                  </Button>
                   <NotificationCenter />
                   <Button
                     variant="ghost"
@@ -841,85 +899,146 @@ export default function App() {
                     />
                   </div>
                 }
-                <Suspense fallback={<PageFallback />}>
-                  {page === "playground" ? (
-                    <Playground
-                      connection={connection}
-                      engine={engine}
-                      initialModel={testModel}
+                <OfflineLine engine={engine} />
+                {engine.phase === "online" && engine.status?.load_error && (
+                  <div
+                    className="mx-auto w-full max-w-7xl shrink-0 px-4 pt-4 lg:px-6"
+                    data-testid="load-error"
+                  >
+                    <Banner
+                      tone="warning"
+                      title={t("shell.loadError.title")}
+                      description={engine.status.load_error}
+                      actions={
+                        page === "models" ? undefined : (
+                          <Button
+                            size="sm"
+                            variant="secondary"
+                            onClick={() =>
+                              go(routeHref("models", { action: "load" }))
+                            }
+                          >
+                            {t("shell.loadError.action")}
+                          </Button>
+                        )
+                      }
                     />
-                  ) : (
-                    <ScrollFade
-                      data-testid="page-scroll"
-                      className="relative min-h-0 flex-1 overflow-y-scroll p-4 pb-6 [scrollbar-gutter:stable] lg:p-6"
+                  </div>
+                )}
+                {engine.phase === "offline" &&
+                  engine.status != null &&
+                  ENGINE_PAGES.has(page) && (
+                    <p
+                      className="mx-auto w-full max-w-7xl shrink-0 px-4 pt-2 text-xs text-muted-foreground lg:px-6"
+                      data-testid="engine-needed"
+                      role="status"
                     >
-                      <div
-                        key={page}
-                        ref={startAtTop}
-                        className="yunui-fade-in mx-auto w-full max-w-7xl"
-                      >
-                        {page === "diagnostics" && (
-                          <Diagnostics
-                            connection={connection}
-                            engine={engine}
-                          />
-                        )}
-                        {page === "overview" && (
-                          <Dashboard
-                            engine={engine}
-                            connection={connection}
-                            navigate={navigate}
-                          />
-                        )}
-                        {page === "models" && (
-                          <Models
-                            engine={engine}
-                            connection={connection}
-                            perform={perform}
-                            busy={busy}
-                            selected={sub}
-                            open={(id) => navigate("models", id)}
-                            test={(id) => {
-                              setTestModel(id);
-                              navigate("playground");
-                            }}
-                          />
-                        )}
-                        {page === "requests" && (
-                          <Requests
-                            engine={engine}
-                            connection={connection}
-                            perform={perform}
-                            busy={busy}
-                          />
-                        )}
-                        {page === "settings" && (
-                          <Settings
-                            connection={connection}
-                            save={save}
-                            dark={dark}
-                            setDark={setDark}
-                            disabled={!!busy}
-                            engine={engine}
-                            perform={perform}
-                          />
-                        )}
-                        {page === "api" && (
-                          <ApiView connection={connection} engine={engine} />
-                        )}
-                        {page === "logs" && <Logs connection={connection} />}
-                        {page === "keys" && <Keys connection={connection} />}
-                        {page === "docs" && <Docs sub={sub} />}
-                        {page === "cache" && (
-                          <Cache connection={connection} engine={engine} />
-                        )}
-                        {page === "downloads" && (
-                          <Downloads connection={connection} engine={engine} />
-                        )}
-                      </div>
-                    </ScrollFade>
+                      {t("shell.stale.note", {
+                        age: elapsed(
+                          Math.max(
+                            0,
+                            (staleNow - (engine.updatedAt ?? staleNow)) / 1000,
+                          ),
+                        ),
+                      })}
+                    </p>
                   )}
-                </Suspense>
+                <PageBoundary page={page} onDocs={() => navigate("docs")}>
+                  <Suspense fallback={<PageFallback />}>
+                    {page === "playground" ? (
+                      <Playground
+                        connection={connection}
+                        engine={engine}
+                        initialModel={testModel}
+                      />
+                    ) : (
+                      <ScrollFade
+                        data-testid="page-scroll"
+                        className="relative min-h-0 flex-1 overflow-y-scroll p-4 pb-6 [scrollbar-gutter:stable] lg:p-6"
+                      >
+                        <div
+                          key={page}
+                          ref={startAtTop}
+                          data-stale={
+                            engine.phase === "offline" && DIM_PAGES.has(page)
+                              ? ""
+                              : undefined
+                          }
+                          className={`yunui-fade-in mx-auto w-full max-w-7xl ${
+                            engine.phase === "offline" &&
+                            engine.status != null &&
+                            DIM_PAGES.has(page)
+                              ? "opacity-60"
+                              : ""
+                          }`}
+                        >
+                          <PageTabs page={page} navigate={navigate} />
+                          {page === "diagnostics" && (
+                            <Diagnostics
+                              connection={connection}
+                              engine={engine}
+                            />
+                          )}
+                          {page === "overview" && (
+                            <Dashboard
+                              engine={engine}
+                              connection={connection}
+                              navigate={navigate}
+                            />
+                          )}
+                          {page === "models" && (
+                            <Models
+                              engine={engine}
+                              connection={connection}
+                              perform={perform}
+                              busy={busy}
+                              selected={sub}
+                              open={(id) => navigate("models", id)}
+                              test={(id) => {
+                                setTestModel(id);
+                                navigate("playground");
+                              }}
+                            />
+                          )}
+                          {page === "requests" && (
+                            <Requests
+                              engine={engine}
+                              connection={connection}
+                              perform={perform}
+                              busy={busy}
+                            />
+                          )}
+                          {page === "settings" && (
+                            <Settings
+                              connection={connection}
+                              save={save}
+                              dark={dark}
+                              setDark={setDark}
+                              disabled={!!busy}
+                              engine={engine}
+                              perform={perform}
+                            />
+                          )}
+                          {page === "api" && (
+                            <ApiView connection={connection} engine={engine} />
+                          )}
+                          {page === "logs" && <Logs connection={connection} />}
+                          {page === "keys" && <Keys connection={connection} />}
+                          {page === "docs" && <Docs sub={sub} />}
+                          {page === "cache" && (
+                            <Cache connection={connection} engine={engine} />
+                          )}
+                          {page === "downloads" && (
+                            <Downloads
+                              connection={connection}
+                              engine={engine}
+                            />
+                          )}
+                        </div>
+                      </ScrollFade>
+                    )}
+                  </Suspense>
+                </PageBoundary>
               </div>
             </main>
             <footer className="safe-bottom shrink-0" data-testid="status-band">

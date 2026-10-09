@@ -278,7 +278,7 @@ still wins at runtime (reported as `overridden`).
 |---|---|---|---|---|
 | `YUNSHU_DEBUG_ROUTES` | bool | off | restart | Mount the /debug/* diagnostic routes (engine, system, kv-cache, spec-decode, ...). They need the auth token or YUNSHU_AUTH_DISABLED. /metrics is always mounted. |
 | `YUNSHU_LOG_LEVEL` | `DEBUG` \| `INFO` \| `WARNING` \| `ERROR` | INFO | restart | Log level for Yunshu's loggers (third-party loggers stay at WARNING). |
-| `YUNSHU_TELEMETRY` | `on` \| `off` | on | restart | Unprivileged Apple power/GPU/temperature sampler (on/off); 1 Hz by default, restart required. |
+| `YUNSHU_TELEMETRY` | `on` \| `off` | off | restart | Unprivileged Apple power/GPU/temperature sampler (on/off); off by default (the 27B A/B showed a small, consistent follow-up TTFT cost when on); 1 Hz when on, restart required. |
 | `YUNSHU_TELEMETRY_INTERVAL_S` | float | 1.0 | restart | Host telemetry sampling interval in seconds (restart required). |
 | `YUNSHU_AUDIT_LOG_FILE` | path | unset | restart | Also write the audit log to this file. |
 | `YUNSHU_LOG_MAX_MB` | float | 50.0 | live | Service log (launchd): rotate the log file at this size in MiB; 0 turns size rotation off. |
@@ -293,6 +293,21 @@ still wins at runtime (reported as `overridden`).
 | `YUNSHU_HISTORY_INTERVAL_S` | float | 5.0 | restart | Console history: seconds between samples of the in-memory ring behind GET /v1/yunshu/history (throughput, request counts, memory, TTFT percentiles); 0 turns the sampler off. The ring is fixed-size and never grows: 12 columns, 4 bytes each (timestamp 8), per slot. |
 | `YUNSHU_HISTORY_HOURS` | float | 12.0 | restart | Console history: hours the history ring keeps (capacity = hours * 3600 / YUNSHU_HISTORY_INTERVAL_S slots, preallocated; 12 h at 5 s is 8,640 slots, about 0.4 MiB). |
 | `YUNSHU_ARM` | str | unset | live | Label recorded in the serve log for the configuration arm this server runs (for offline A/B analysis); it changes no behaviour. |
+
+### console
+
+| Setting | Type | Default | Applies | Description |
+|---|---|---|---|---|
+| `YUNSHU_CONSOLE` | bool | on | restart | `yunshu serve` also starts the console process (the web console, the docs, and the metrics history recorder) as a sibling on YUNSHU_CONSOLE_PORT. The console is its own light process that never loads MLX: it keeps running and recording while the engine restarts or crashes, and an engine fault cannot take it down. `--no-console` turns it off; `yunshu console` runs it on its own. |
+| `YUNSHU_CONSOLE_PORT` | int | 8100 | restart | Port of the console process (the web console at /console/, its reverse proxy to the engine API, and the history endpoints). 8100 stays clear of the engine's 8000 and of the usual dev servers (3000, 5173, 8080, 8888). |
+| `YUNSHU_CONSOLE_HOST` | str | unset | restart | Bind host of the console process. Unset: the engine's own host for the sibling, 127.0.0.1 for a standalone `yunshu console`. |
+| `YUNSHU_CONSOLE_ENGINE` | str | unset | restart | Engine URL the console process watches and proxies to. Unset: the engine that started it, else http://127.0.0.1:8000. Point it at a LAN or remote engine to watch that one. |
+| `YUNSHU_CONSOLE_ENGINE_TOKEN` | str | unset | restart | Bearer token the console process uses to read the engine while it records history. Unset: YUNSHU_AUTH_TOKEN. The browser's own token is passed through to the engine unchanged. |
+| `YUNSHU_CONSOLE_POLL_S` | float | 1.0 | restart | Seconds between the console process's reads of the engine (status and finished requests, the same cheap endpoints the console page uses). 1 s gives the 1 s history resolution. |
+| `YUNSHU_CONSOLE_HISTORY` | bool | on | restart | Record the metrics history (1 s for 1 h, 10 s for 24 h, 1 min for the retention) and the request log (metadata only, never prompts or outputs) to ~/.yunshu/console-history.sqlite, with engine outages kept as explicit gaps and events. Off keeps the console live-only. |
+| `YUNSHU_CONSOLE_DB` | path | unset | restart | Where the console process keeps its history (SQLite, WAL). Unset: ~/.yunshu/console-history.sqlite. |
+| `YUNSHU_CONSOLE_RETENTION_DAYS` | float | 30.0 | restart | Days the console keeps 1-minute history rows, the request log and the engine events. |
+| `YUNSHU_CONSOLE_DB_MAX_MB` | float | 64.0 | restart | Size cap of the console history file in MiB: when exceeded, the oldest request rows and then the oldest 1-minute rows are dropped. |
 
 ### cli
 

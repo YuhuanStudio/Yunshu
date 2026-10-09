@@ -21,6 +21,7 @@ const shell: Shape<typeof zh> = {
   "engine.headline.shortStarting": "准备中",
   "engine.headline.shortPrefill": "预填充中",
   "engine.headline.prefillNoSpeed": "预填充中，尚未报告速度",
+  "engine.headline.prefillCached": "最近一笔命中缓存，没有实际预填",
   "engine.headline.idle": "空闲",
   "engine.headline.none": "暂无已完成的请求",
   "engine.live.offline": "离线",
@@ -67,6 +68,7 @@ const shell: Shape<typeof zh> = {
   "footer.load.help": "进行中 {active} 个，排队 {queued} 个。",
   "footer.sentenceEnd": "。",
   "nav.skip": "跳到主要内容",
+  "nav.tabs": "分页",
   "nav.ariaLabel": "控制台导航",
   "nav.close": "关闭导航",
   "nav.open": "打开导航",
@@ -193,5 +195,13 @@ const shell: Shape<typeof zh> = {
   "island.nav.modelsLoaded": "{n} 个已加载",
   "island.nav.diagnostics": "诊断",
   "island.nav.logs": "日志",
+  "stale.note":
+    "此页需要引擎；现在显示的是 {age}前的最后数据，引擎恢复后会自动更新。",
+  "loadError.title": "模型加载失败",
+  "loadError.action": "加载其他模型",
+  "boundary.title": "这个页面发生错误",
+  "boundary.body": "其他页面不受影响。可以重试，或到文档查看说明。",
+  "boundary.retry": "重试",
+  "boundary.docs": "打开文档",
 };
 export default shell;

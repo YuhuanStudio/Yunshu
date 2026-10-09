@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useFlip } from "./motion/flip";
 import { t } from "./i18n/index.ts";
 import {
   Button,
@@ -72,40 +73,51 @@ function EntriesTable({
     [entries],
   );
   const shown = all ? sorted : sorted.slice(0, SHOWN);
+  const listRef = useRef<HTMLDivElement>(null);
+  useFlip(listRef);
   if (!entries.length)
     return (
       <p className="text-sm text-muted-foreground">{t("cache.entries.none")}</p>
     );
   return (
     <div className="space-y-2">
-      <Table scrollLabel={t("cache.entries.title")} className="min-w-[560px]">
-        <Thead>
-          <Tr>
-            <Th>{t("cache.entries.key")}</Th>
-            <Th>{t("cache.entries.tier")}</Th>
-            <Th className="text-right">{t("cache.entries.tokens")}</Th>
-            <Th className="text-right">{t("cache.entries.bytes")}</Th>
-            <Th className="text-right">{t("cache.entries.hits")}</Th>
-            <Th className="text-right">{t("cache.entries.lastHit")}</Th>
-          </Tr>
-        </Thead>
-        <Tbody>
-          {shown.map((e) => (
-            <Tr key={`${e.tier}:${e.key}`} data-testid="cache-entry">
-              <Td className="font-mono text-xs">{e.key}</Td>
-              <Td>{tierLabel(e.tier)}</Td>
-              <Td className="text-right tabular-nums">{number(e.tokens, 0)}</Td>
-              <Td className="text-right">
-                <ByteValue bytes={e.bytes} />
-              </Td>
-              <Td className="text-right tabular-nums">{number(e.hits, 0)}</Td>
-              <Td className="text-right tabular-nums text-muted-foreground">
-                {e.lastHitAgeS == null ? "—" : relative(e.lastHitAgeS)}
-              </Td>
+      {/* Entries come and go and re-sort as the cache fills: room for eight rows is kept, and rows glide. */}
+      <div className="min-h-[19rem]" data-live-list="" ref={listRef}>
+        <Table scrollLabel={t("cache.entries.title")} className="min-w-[560px]">
+          <Thead>
+            <Tr>
+              <Th>{t("cache.entries.key")}</Th>
+              <Th>{t("cache.entries.tier")}</Th>
+              <Th className="text-right">{t("cache.entries.tokens")}</Th>
+              <Th className="text-right">{t("cache.entries.bytes")}</Th>
+              <Th className="text-right">{t("cache.entries.hits")}</Th>
+              <Th className="text-right">{t("cache.entries.lastHit")}</Th>
             </Tr>
-          ))}
-        </Tbody>
-      </Table>
+          </Thead>
+          <Tbody>
+            {shown.map((e) => (
+              <Tr
+                key={`${e.tier}:${e.key}`}
+                data-flip={`${e.tier}:${e.key}`}
+                data-testid="cache-entry"
+              >
+                <Td className="font-mono text-xs">{e.key}</Td>
+                <Td>{tierLabel(e.tier)}</Td>
+                <Td className="text-right tabular-nums">
+                  {number(e.tokens, 0)}
+                </Td>
+                <Td className="text-right">
+                  <ByteValue bytes={e.bytes} />
+                </Td>
+                <Td className="text-right tabular-nums">{number(e.hits, 0)}</Td>
+                <Td className="text-right tabular-nums text-muted-foreground">
+                  {e.lastHitAgeS == null ? "—" : relative(e.lastHitAgeS)}
+                </Td>
+              </Tr>
+            ))}
+          </Tbody>
+        </Table>
+      </div>
       <p className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
         <span>
           {t("cache.entries.shown", {

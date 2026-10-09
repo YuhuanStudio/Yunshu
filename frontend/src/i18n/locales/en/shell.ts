@@ -23,6 +23,8 @@ const shell: Shape<typeof zh> = {
   "engine.headline.shortStarting": "Starting",
   "engine.headline.shortPrefill": "Prefill",
   "engine.headline.prefillNoSpeed": "In prefill, no speed reported yet",
+  "engine.headline.prefillCached":
+    "The last request hit the cache: no real prefill",
   "engine.headline.idle": "Idle",
   "engine.headline.none": "No finished requests yet",
   "engine.live.offline": "Offline",
@@ -72,6 +74,7 @@ const shell: Shape<typeof zh> = {
   "footer.load.help": "{active} running, {queued} queued.",
   "footer.sentenceEnd": ".",
   "nav.skip": "Skip to main content",
+  "nav.tabs": "Tabs",
   "nav.ariaLabel": "Console navigation",
   "nav.close": "Close navigation",
   "nav.open": "Open navigation",
@@ -200,5 +203,13 @@ const shell: Shape<typeof zh> = {
   "island.nav.modelsLoaded": "{n} loaded",
   "island.nav.diagnostics": "Diagnostics",
   "island.nav.logs": "Logs",
+  "stale.note":
+    "This page needs the engine; it shows the last data from {age} ago and updates itself when the engine is back.",
+  "loadError.title": "The model failed to load",
+  "loadError.action": "Load another model",
+  "boundary.title": "This page hit an error",
+  "boundary.body": "Other pages are not affected. Retry, or open the docs.",
+  "boundary.retry": "Retry",
+  "boundary.docs": "Open the docs",
 };
 export default shell;

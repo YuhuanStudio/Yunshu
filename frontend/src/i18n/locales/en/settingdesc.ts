@@ -314,5 +314,25 @@ const settingdesc = {
     "Host telemetry sampling interval in seconds (restart required).",
   YUNSHU_SERVE_LOG_RETENTION_DAYS:
     "History API metadata retention window in days; 0 disables age filtering.",
+  YUNSHU_CONSOLE:
+    "`yunshu serve` also starts the console process (web console, docs, history recorder) as a sibling. It never loads MLX and keeps running when the engine restarts or crashes. `--no-console` turns it off.",
+  YUNSHU_CONSOLE_PORT:
+    "Port of the console process. 8100 stays clear of the engine's 8000 and of common dev servers.",
+  YUNSHU_CONSOLE_HOST:
+    "Bind host of the console process. Unset: the engine's host for the sibling, 127.0.0.1 standalone.",
+  YUNSHU_CONSOLE_ENGINE:
+    "Engine URL the console process watches and proxies to. Unset: the engine that started it, else http://127.0.0.1:8000.",
+  YUNSHU_CONSOLE_ENGINE_TOKEN:
+    "Bearer token the console process uses to read the engine while recording history. Unset: YUNSHU_AUTH_TOKEN.",
+  YUNSHU_CONSOLE_POLL_S:
+    "Seconds between the console process's reads of the engine; 1 s gives the 1 s history resolution.",
+  YUNSHU_CONSOLE_HISTORY:
+    "Record metrics history and the request log (metadata only) to ~/.yunshu/console-history.sqlite, with engine outages kept as gaps and events.",
+  YUNSHU_CONSOLE_RETENTION_DAYS:
+    "Days the console keeps 1-minute history, the request log and engine events.",
+  YUNSHU_CONSOLE_DB_MAX_MB:
+    "Size cap of the console history file in MiB; the oldest rows are dropped when it is exceeded.",
+  YUNSHU_CONSOLE_DB:
+    "Where the console process keeps its history (SQLite). Unset: ~/.yunshu/console-history.sqlite.",
 };
 export default settingdesc;

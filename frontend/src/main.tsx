@@ -14,3 +14,4 @@ void initI18n().then(() =>
     </StrictMode>,
   ),
 );
+

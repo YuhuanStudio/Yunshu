@@ -37,7 +37,7 @@ yunshu service install -m mlx-community/Qwen3.5-9B-MLX-4bit
 
 你必須指明要服務什麼：傳入 `--model` 或 `--models-dir`，或已設定 `YUNSHU_MODEL`。`install` 會拒絕未通過 `yunshu doctor -m` 同一套模型檢查的模型（例如路徑不存在或下載不完整）。若已安裝 agent，除非加上 `--force`，否則 `install` 會報錯停止。
 
-agent 使用執行 `install` 的那個安裝環境所用的 Python 來執行 `python -m yunshu_cli serve ...`。在同一個環境升級 Yunshu 之後，請執行 `yunshu service restart`。若換到不同的環境，請重新執行 `yunshu service install --force ...`。
+`install` 會寫入兩個 agent：引擎，以及獨立 job 的主控台程序（`com.yuhuanstudio.yunshu.console`，停止時一律重新啟動），所以引擎重新啟動或當機時，主控台仍持續服務與記錄。`--no-console` 只安裝引擎、`--console-port` 更換主控台連接埠（預設 8100），`yunshu service logs --console` 讀取它的記錄檔，`yunshu service restart` 只重新啟動引擎。引擎 agent 使用執行 `install` 的那個安裝環境所用的 Python 來執行 `python -m yunshu_cli serve --no-console ...`。在同一個環境升級 Yunshu 之後，請執行 `yunshu service restart`。若換到不同的環境，請重新執行 `yunshu service install --force ...`。
 
 ```bash
 yunshu service install -m mlx-community/Qwen3.5-9B-MLX-4bit --dry-run   # 先檢視

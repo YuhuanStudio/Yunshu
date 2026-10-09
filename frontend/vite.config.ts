@@ -32,8 +32,10 @@ const docsIndex = () => ({
       server.ws.send({ type: "full-reload" });
   },
 });
-// Dev proxy target: the engine to develop against (YUNSHU_CONSOLE_ENGINE), else the CLI default.
-const engine = process.env.YUNSHU_CONSOLE_ENGINE ?? "http://127.0.0.1:8000";
+// Dev proxy target: the console process (`yunshu console`, which proxies the engine API and serves the
+// history), else its default port. VITE_CONSOLE_PROXY=http://127.0.0.1:8000 points it at an engine
+// directly (no recorded history then).
+const engine = process.env.VITE_CONSOLE_PROXY ?? "http://127.0.0.1:8100";
 export default defineConfig({
   plugins: [
     docsIndex(),

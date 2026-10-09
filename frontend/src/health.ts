@@ -8,7 +8,8 @@ import type { EngineConnectionPhase } from "./useEngine.ts";
  * Thresholds (each is "watch at or above A, bad at or above B"):
  *   memory in use      active / total Metal memory      80 %      92 %
  *                      (the host's own pressure level `warn` / `critical` counts too)
- *   swap used          host swap, GB                    0.05 GB   2 GB
+ *   swap growth        host swap growth over the last 5 min, GB   0.5 GB   2 GB
+ *                      (absolute swap is not a fault: macOS keeps old swap around)
  *   queue depth        requests waiting                 4         8
  *   oldest wait        longest-waiting queued request   10 s      30 s
  *   error rate         failed share of finished         5 %       20 %
@@ -20,7 +21,7 @@ import type { EngineConnectionPhase } from "./useEngine.ts";
  */
 export const HEALTH = {
   memory: { watch: 0.8, bad: 0.92 },
-  swapGb: { watch: 0.05, bad: 2 },
+  swapGrowthGb: { watch: 0.5, bad: 2 },
   queueDepth: { watch: 4, bad: 8 },
   oldestWaitS: { watch: 10, bad: 30 },
   errorRate: { watch: 0.05, bad: 0.2, minRequests: 10 },
@@ -64,6 +65,8 @@ export interface HealthInput {
   ledger?: {
     pressureLevel: string | null;
     swapUsedGb: number | null;
+    /** How much swap grew over the window (null until the console has watched for a while). */
+    swapGrowthGb?: number | null;
   } | null;
   finished?: readonly FinishedFact[];
   now: number;
@@ -100,10 +103,10 @@ export function healthVerdict(input: HealthInput): Verdict {
     const level = input.ledger?.pressureLevel;
     if (level === "critical") add("pressure", "bad");
     else if (level === "warn" || level === "warning") add("pressure", "watch");
-    const swap = input.ledger?.swapUsedGb;
-    if (finite(swap))
-      add("swap", grade(swap, HEALTH.swapGb), {
-        gb: Math.round(swap * 10) / 10,
+    const growth = input.ledger?.swapGrowthGb;
+    if (finite(growth))
+      add("swap", grade(growth, HEALTH.swapGrowthGb), {
+        gb: Math.round(growth * 10) / 10,
       });
     const queued = status.requests.items.filter((r) => r.phase === "queued");
     const depth = Math.max(status.requests.queued, queued.length);
