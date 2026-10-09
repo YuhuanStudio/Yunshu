@@ -97,6 +97,7 @@ No new decode or TTFT claim is made for this cycle here. Historical measurements
 
 ### Changed
 
+- Refresh the dependency lock for the next cycle (including Anthropic 1.12 and FastAPI 0.143.0) and review upstream changes. MLX stays below 0.32.4 pending version-matched kernel validation.
 - Documentation coverage: a capability overview table in all three READMEs (generated from `docs/feature_index.json`, checked by a unit test), the console guide rewritten page by page with screenshots, and new guides for [inference features](docs/guides/INFERENCE.md), [multimodal endpoints](docs/guides/MULTIMODAL.md) and [authentication, keys, settings and CORS](docs/guides/AUTH_AND_KEYS.md).
 - gpuq admits declared short verification jobs between long cells without preemption, with a bounded
   time budget; `--gate` takes precedence over same-priority backlog. Foreign CPU contention is measured,
@@ -110,6 +111,7 @@ No new decode or TTFT claim is made for this cycle here. Historical measurements
 
 ### Fixed
 
+- Untyped XML tool arguments containing JSON objects or arrays reach clients as containers; scalar text and declared string unions keep their existing types. Numeric or nested container text containing non-finite values stays literal instead of emitting invalid JSON.
 - GPU guard blocks broad `pkill` commands that could terminate another worker or user process.
 
 - EmbeddingGemma 2 loading retains every weight shard instead of keeping only the last shard.

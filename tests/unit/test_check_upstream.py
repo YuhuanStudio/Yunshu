@@ -195,3 +195,106 @@ def test_review_does_not_rewrite_provenance_or_hide_future_changes(
     source.write_text("x = 3\n")
     _git(repo, "commit", "-qam", "future change must be reported")
     assert check() == 1
+
+
+def test_package_watch_uses_reviewed_sha_without_erasing_release_pin(
+    monkeypatch, tmp_path
+):
+    calls = []
+    monkeypatch.setattr(cu, "clone_dir", lambda _: tmp_path)
+    monkeypatch.setattr(cu, "upstream_ref", lambda _: "HEAD")
+    monkeypatch.setattr(cu.importlib.metadata, "version", lambda _: "1.0")
+
+    def git(_, *args):
+        calls.append(args)
+        if args[0] == "rev-parse":
+            return "exists"
+        if args[0] == "ls-tree":
+            return "pkg/a.py"
+        return ""
+
+    monkeypatch.setattr(cu, "git", git)
+    watch = dict(
+        repo="example",
+        clone="reference/x",
+        globs=["pkg/*"],
+        why="test",
+        commit="release-base",
+        pin_package="x",
+        reviewed_commit="reviewed-sha",
+        review_reason="Reviewed unreleased changes; retained released dependency.",
+    )
+    assert cu.check_watch([watch], set(), {}) == 0
+    assert any("reviewed-sha..HEAD" in args for args in calls)
+    assert watch["commit"] == "release-base"
+
+
+def test_main_fails_for_unreviewed_watch_changes(monkeypatch):
+    monkeypatch.setattr(cu, "check_patches", lambda *a, **kw: 0)
+    monkeypatch.setattr(cu, "check_vendored", lambda *a: 0)
+    monkeypatch.setattr(cu, "check_history", lambda *a: 0)
+    monkeypatch.setattr(cu, "check_watch", lambda *a: 1)
+    monkeypatch.setattr(cu, "check_packages", lambda *a, **kw: 0)
+    monkeypatch.setattr(cu, "unregistered_headers", lambda *a: [])
+    monkeypatch.setattr(cu, "unclassified_clones", lambda *a: [])
+    monkeypatch.setattr("sys.argv", ["check_upstream", "--no-fetch"])
+    with pytest.raises(SystemExit) as got:
+        cu.main()
+    assert got.value.code == 1
+
+
+@pytest.mark.parametrize(
+    "latest,blocked", [("2.1.1", True), ("2.1.2", True), ("2.1.1", False)]
+)
+def test_package_review_only_covers_exact_version_with_live_blocker(
+    monkeypatch, latest, blocked
+):
+    import io
+
+    monkeypatch.setattr(cu.importlib.metadata, "version", lambda _: "1.33.0")
+    monkeypatch.setattr(
+        cu.importlib.metadata,
+        "requires",
+        lambda _: ["huggingface-hub<2"] if blocked else ["huggingface-hub>=1"],
+    )
+    monkeypatch.setattr(
+        cu.urllib.request,
+        "urlopen",
+        lambda *a, **kw: io.BytesIO(json.dumps({"info": {"version": latest}}).encode()),
+    )
+    reviews = {
+        "huggingface-hub": {
+            "installed_version": "1.33.0",
+            "latest_version": "2.1.1",
+            "blocked_by": ["tokenizers"],
+            "reason": "Current tokenizer requires hub<2.",
+        }
+    }
+    assert cu.check_packages({"huggingface-hub": [">=1"]}, reviews) == (
+        0 if latest == "2.1.1" and blocked else 1
+    )
+
+
+@pytest.mark.parametrize(
+    ("installed", "latest", "spec", "expected"),
+    [
+        ("2.1.0", "2.3.1", "==2.1.0", ["pyproject: ==2.1.0"]),
+        ("2.1.0", "2.3.1", ">=2.1.0", []),  # pin lifted: the review no longer applies
+        ("2.1.0", "2.4.0", "==2.1.0", []),  # newer release than the one reviewed
+    ],
+)
+def test_package_review_covers_a_deliberate_pyproject_pin(
+    installed, latest, spec, expected
+):
+    reviews = {
+        "trafilatura": {
+            "installed_version": "2.1.0",
+            "latest_version": "2.3.1",
+            "blocked_by": ["pyproject"],
+            "reason": "2.3.1 escapes underscores in extracted markdown.",
+        }
+    }
+    assert (
+        cu.reviewed_package_blockers("trafilatura", installed, latest, reviews, spec)
+        == expected
+    )
