@@ -234,7 +234,7 @@ test("killing the engine mid-session: the console stays usable, says so, and kee
   await killAndWait(engineProc);
 
   // the offline state: since when, and when the next try is
-  const banner = page.getByRole("status").filter({ hasText: /離線/ }).first();
+  const banner = page.getByTestId("offline-line");
   await expect(banner).toBeVisible({ timeout: 20_000 });
   await expect(banner).toContainText(/自 \d{1,2}:\d{2}:\d{2} 離線/);
   await expect(banner).toContainText(/秒後重試|正在重試/);
@@ -265,9 +265,9 @@ test("restarting the engine: the session reconnects, the data resumes and the ga
   page,
 }) => {
   await open(page, "overview");
-  await expect(
-    page.getByRole("status").filter({ hasText: /離線/ }).first(),
-  ).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByTestId("offline-line")).toBeVisible({
+    timeout: 20_000,
+  });
   const downAt = Date.now() / 1000;
   await new Promise((r) => setTimeout(r, 2500));
   engineProc = start([join(__dirname, "support/fake_engine.py"), String(E)]);
@@ -278,9 +278,9 @@ test("restarting the engine: the session reconnects, the data resumes and the ga
   await json(`${engineUrl()}/__busy/1`, { method: "POST" });
 
   // the page reconnects by itself: the banner goes, live numbers come back
-  await expect(
-    page.getByRole("status").filter({ hasText: /離線/ }),
-  ).toHaveCount(0, { timeout: 30_000 });
+  await expect(page.getByTestId("offline-line")).toHaveCount(0, {
+    timeout: 30_000,
+  });
   await expect(page.getByTestId("engine-needed")).toHaveCount(0);
 
   const m = await until("the recorded history with its gap", async () => {

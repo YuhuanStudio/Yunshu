@@ -135,27 +135,14 @@ export function ConnectionState({
   const cause = offlineCause(engine.phase, engine.errorStatus);
   const description = [
     cause.hint,
-    // A reachable gateway that answers with an error says what it said.
-    offline && engine.errorStatus != null && engine.error
+    // A reachable gateway that answers with an error says what it said (a 502 / 504 is the console
+    // process or a proxy saying the engine is not there: that is "offline", not an engine message).
+    offline &&
+    engine.errorStatus != null &&
+    engine.errorStatus !== 502 &&
+    engine.errorStatus !== 504 &&
+    engine.error
       ? t("common.engineMessage", { message: engine.error })
-      : "",
-    offline && (engine.offlineSince ?? engine.updatedAt)
-      ? t("common.offlineSince", {
-          time: clock(engine.offlineSince ?? engine.updatedAt ?? now),
-          t: elapsed(
-            Math.max(
-              0,
-              (now - (engine.offlineSince ?? engine.updatedAt ?? now)) / 1000,
-            ),
-          ),
-        })
-      : "",
-    offline && engine.nextRetryAt != null
-      ? engine.nextRetryAt - now > 500
-        ? t("common.retryIn", {
-            s: Math.max(1, Math.ceil((engine.nextRetryAt - now) / 1000)),
-          })
-        : t("common.retryNow")
       : "",
     engine.updatedAt
       ? t("common.lastOk", { time: clock(engine.updatedAt) })
@@ -188,6 +175,41 @@ export function ConnectionState({
         }
       />
     </div>
+  );
+}
+
+/**
+ * One line that always says the offline facts: since when, for how long, and when the next try is.
+ * The banner's description is hidden on a phone, so this line is the one that is always there.
+ */
+export function OfflineLine({ engine }: { engine: Engine }) {
+  const offline = engine.phase === "offline";
+  const now = useNow(offline);
+  if (!offline) return null;
+  const since = engine.offlineSince ?? engine.updatedAt ?? now;
+  const text = [
+    t("common.offlineSince", {
+      time: clock(since),
+      t: elapsed(Math.max(0, (now - since) / 1000)),
+    }),
+    engine.nextRetryAt != null
+      ? engine.nextRetryAt - now > 500
+        ? t("common.retryIn", {
+            s: Math.max(1, Math.ceil((engine.nextRetryAt - now) / 1000)),
+          })
+        : t("common.retryNow")
+      : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+  return (
+    <p
+      className="mx-auto w-full max-w-7xl shrink-0 px-4 pt-2 text-xs font-medium text-warning lg:px-6"
+      data-testid="offline-line"
+      role="status"
+    >
+      {text}
+    </p>
   );
 }
 

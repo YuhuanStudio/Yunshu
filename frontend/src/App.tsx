@@ -67,6 +67,7 @@ import {
 } from "./i18n/index.ts";
 import {
   ConnectionState,
+  OfflineLine,
   elapsed,
   fixed,
   modelLabel,
@@ -872,6 +873,7 @@ export default function App() {
                     />
                   </div>
                 }
+                <OfflineLine engine={engine} />
                 {engine.phase === "online" && engine.status?.load_error && (
                   <div
                     className="mx-auto w-full max-w-7xl shrink-0 px-4 pt-4 lg:px-6"
