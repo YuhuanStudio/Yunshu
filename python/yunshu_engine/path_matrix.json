@@ -2062,6 +2062,7 @@
   "python/yunshu_engine/spec_proposer.py": "Proposer interface reached only by string from scheduler_mixins."
  },
  "modules_other": {
+  "python/yunshu_engine/apc_restore_cost.py": "media checkpoint restore admission (APC media path; cost model only, decides reuse not numerics)",
   "python/yunshu_engine/dflash_context.py": "DFlash prefill capture and context window (part of dflash path)",
   "python/yunshu_engine/dflash_fast.py": "DFlash fast tree (tree_drafts)",
   "python/yunshu_engine/dflash_plan.py": "DFlash fast tree plan (tree_drafts)",
