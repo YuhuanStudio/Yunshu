@@ -124,6 +124,11 @@ def seed(batch) -> bool:
         return False
     sp.chunks = [list(layers)]
     _STATS["seeded"] += 1
+    logger.info(
+        "DFlash drafter window restored from APC hit: %d positions (prefix %d)",
+        int(layers[0].shape[1]),
+        prefix,
+    )
     return True
 
 

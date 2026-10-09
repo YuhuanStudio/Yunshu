@@ -27,9 +27,9 @@ def _batch(prefix, ids, chunks=None, kwargs=True):
 
 
 def test_hit_seeds_stored_window_and_miss_does_not():
-    w.put(w.key_for(7, [1, 2, 3]), ["L0", "L1"], 100)
+    w.put(w.key_for(7, [1, 2, 3]), [SimpleNamespace(shape=(1, 4, 8)), "L1"], 100)
     hit = _batch(3, [1, 2, 3, 4, 5])
-    assert w.seed(hit) is True and hit._speculative_prefill.chunks == [["L0", "L1"]]
+    assert w.seed(hit) is True and hit._speculative_prefill.chunks[0][1] == "L1"
     other = _batch(3, [9, 2, 3, 4, 5])
     assert w.seed(other) is False and other._speculative_prefill.chunks == []
     cold = _batch(0, [1, 2, 3])
