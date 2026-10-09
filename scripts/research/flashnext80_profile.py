@@ -209,6 +209,47 @@ async def run(args):
         }
     )
 
+    # Who builds the small kernels?  Count mx.arange / mx.zeros / mx.full / mx.concatenate callers in one step.
+    import traceback
+    from collections import Counter
+
+    const_cache.uninstall()
+    callers = Counter()
+    wrapped = {}
+    for fname in (
+        "arange",
+        "zeros",
+        "full",
+        "ones",
+        "concatenate",
+        "stack",
+        "where",
+        "broadcast_to",
+    ):
+        fn = getattr(mx, fname)
+        wrapped[fname] = fn
+
+        def make(fn=fn, fname=fname):
+            def inner(*a, **k):
+                fr = traceback.extract_stack(limit=3)[0]
+                callers[
+                    f"{fname}  {Path(fr.filename).parent.name}/{Path(fr.filename).name}:{fr.lineno}"
+                ] += 1
+                return fn(*a, **k)
+
+            return inner
+
+        setattr(mx, fname, make())
+    try:
+        mx.async_eval = lambda *a, **k: None
+        yy = step(y0)
+        mx.eval(yy)
+    finally:
+        mx.async_eval = original_async
+        for fname, fn in wrapped.items():
+            setattr(mx, fname, fn)
+    emit({"kind": "callers", "top": callers.most_common(40)})
+
     # cProfile over a few serial steps: where does host time go, and how often does a step sync?
     import cProfile
     import pstats
