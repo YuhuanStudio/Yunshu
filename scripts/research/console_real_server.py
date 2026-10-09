@@ -19,6 +19,7 @@ first failed check and kills every process it started, whatever happens.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import signal
@@ -90,6 +91,58 @@ def evaluate(
     if (after_kill.get("history_rows") or 0) < n_requests:
         bad.append("history stopped answering after the engine died")
     return bad
+
+
+def alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def descendants(pid: int) -> list[int]:
+    """Direct and nested children (pgrep -P), so a console sibling is found even if the group is gone."""
+    out: list[int] = []
+    todo = [pid]
+    while todo:
+        run = subprocess.run(
+            ["pgrep", "-P", str(todo.pop())], capture_output=True, text=True
+        )
+        for tok in run.stdout.split():
+            if tok.isdigit():
+                out.append(int(tok))
+                todo.append(int(tok))
+    return out
+
+
+def stop_tree(proc: subprocess.Popen, grace: float = 8.0) -> None:
+    """End the engine and everything it started, whatever state they are in.
+
+    killpg can raise ProcessLookupError (the group is gone) or PermissionError (macOS: the group
+    leader already exited and the group holds only exiting processes). Neither is taken as "all
+    dead": the child pids are polled until they really are, then killed one by one.
+    """
+    kids = descendants(proc.pid)
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        try:
+            os.killpg(proc.pid, sig)
+        except (ProcessLookupError, PermissionError):
+            for pid in [proc.pid, *kids]:
+                with contextlib.suppress(ProcessLookupError, PermissionError):
+                    os.kill(pid, sig)
+        deadline = time.time() + (grace if sig == signal.SIGTERM else 5.0)
+        while time.time() < deadline:
+            if proc.poll() is not None and not any(alive(k) for k in kids):
+                return
+            time.sleep(0.2)
+    try:
+        proc.kill()
+        proc.wait(timeout=5)
+    except (ProcessLookupError, subprocess.TimeoutExpired):
+        pass
 
 
 def rss_mib(pid: int) -> float | None:
@@ -264,12 +317,7 @@ def main(argv: list[str] | None = None) -> int:
         print("PASS console process real-server check")
         return 0
     finally:
-        for sig in (signal.SIGTERM, signal.SIGKILL):
-            try:
-                os.killpg(proc.pid, sig)
-            except ProcessLookupError:
-                break
-            time.sleep(1.5)
+        stop_tree(proc)
         log.close()
 
 

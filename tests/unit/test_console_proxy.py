@@ -430,3 +430,44 @@ def test_every_answer_is_stamped_as_coming_through_the_console_process():
 
     for response in asyncio.run(go()):
         assert response.headers["x-yunshu-console"] == "1"
+
+
+def test_settings_writes_and_the_restart_call_go_through_the_proxy_unchanged():
+    """PATCH /v1/yunshu/config, PATCH /v1/yunshu/cors and POST /v1/yunshu/service/restart reach the
+    engine with their method, JSON body and credentials, and its status and body come back."""
+    engine, log = fake_engine()
+    seen: list[tuple] = []
+
+    @engine.patch("/v1/yunshu/config")
+    async def patch_config(request: Request):
+        seen.append(
+            ("PATCH", await request.json(), request.headers.get("authorization"))
+        )
+        return JSONResponse({"applied": ["YUNSHU_LOG_LEVEL"], "restart_required": []})
+
+    @engine.post("/v1/yunshu/service/restart", status_code=202)
+    async def restart(request: Request):
+        seen.append(("POST", await request.json(), request.headers.get("x-api-key")))
+        return {"restarting": True}
+
+    async def go():
+        async with asgi(console_over(engine)) as c:
+            a = await c.patch(
+                "/v1/yunshu/config",
+                json={"set": {"YUNSHU_LOG_LEVEL": "DEBUG"}},
+                headers={"Authorization": "Bearer admin"},
+            )
+            b = await c.post(
+                "/v1/yunshu/service/restart",
+                json={"grace_s": 5},
+                headers={"x-api-key": "k"},
+            )
+            return a, b
+
+    a, b = asyncio.run(go())
+    assert a.status_code == 200 and a.json()["applied"] == ["YUNSHU_LOG_LEVEL"]
+    assert b.status_code == 202 and b.json() == {"restarting": True}
+    assert seen == [
+        ("PATCH", {"set": {"YUNSHU_LOG_LEVEL": "DEBUG"}}, "Bearer admin"),
+        ("POST", {"grace_s": 5}, "k"),
+    ]

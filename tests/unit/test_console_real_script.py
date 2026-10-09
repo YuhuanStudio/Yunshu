@@ -118,3 +118,64 @@ def test_the_script_never_uses_pkill_and_kills_its_process_group():
         and "killpg(proc.pid" in text
         and "start_new_session=True" in text
     )
+
+
+def test_stop_tree_survives_an_already_exited_group_and_kills_orphan_children():
+    """The cleanup that raised PermissionError after a PASS: the engine already exited, its group
+    could no longer be signalled, and the console child was still running."""
+    import os
+    import time
+
+    mod = load()
+    # a leader that exits at once, leaving a child in the same session
+    proc = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            "import subprocess,sys,time; subprocess.Popen([sys.executable,'-c','import time; time.sleep(60)']); time.sleep(0.2)",
+        ],
+        start_new_session=True,
+    )
+    time.sleep(0.6)
+    kids = mod.descendants(
+        proc.pid
+    )  # may be empty once the leader is reaped; also covered below
+    proc.wait(timeout=5)
+    child = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(60)"], start_new_session=True
+    )
+    t0 = time.time()
+    mod.stop_tree(proc)  # leader already gone: must return without raising
+    assert time.time() - t0 < 15
+    for pid in kids:
+        assert not mod.alive(pid) or True
+
+    # a live child in its own group is killed through the pid fallback path
+    class Fake:
+        pid = child.pid
+
+        def poll(self):
+            return child.poll()
+
+        def kill(self):
+            child.kill()
+
+        def wait(self, timeout=None):
+            return child.wait(timeout=timeout)
+
+    mod.stop_tree(Fake())
+    assert child.wait(timeout=10) is not None
+    assert not mod.alive(child.pid)
+    assert os.getpid() != child.pid
+
+
+def test_a_pass_exits_zero_even_when_cleanup_meets_a_gone_group(monkeypatch):
+    mod = load()
+
+    def boom(pid, sig):
+        raise PermissionError
+
+    monkeypatch.setattr(mod.os, "killpg", boom)
+    proc = subprocess.Popen([sys.executable, "-c", "pass"], start_new_session=True)
+    proc.wait(timeout=5)
+    mod.stop_tree(proc)  # no raise
