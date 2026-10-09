@@ -1,4 +1,7 @@
 import { gbTotalText } from "./byte-format";
+import { LiveNumber } from "./LiveNumber";
+import { useLinger } from "./motion/linger";
+import { LiveScroll } from "./motion/LiveScroll";
 import { PrefillBar } from "./PrefillBar";
 import { SegmentedTray } from "./SegmentedTray";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
@@ -132,7 +135,7 @@ const rateSeries = () => {
 };
 const formatNumber = (value: number) => number(value);
 const formatCount = (value: number) => number(value, 0);
-function RequestLane({ row }: { row: RequestRow }) {
+function RequestLane({ row, leaving }: { row: RequestRow; leaving?: boolean }) {
   useLocale();
   const phase = String(row.phase);
   const prompt = row.prompt_tokens ?? 0,
@@ -145,57 +148,74 @@ function RequestLane({ row }: { row: RequestRow }) {
           : null))
       : null;
   return (
-    <li className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-1 py-3">
-      <div className="flex min-w-0 items-center gap-2.5">
-        <StatusIndicator className="shrink-0" status={phaseDot(phase)} />
-        <Slot ch={7} className="shrink-0 text-sm font-medium">
-          {/* i18n-keys: overview.phase. */}
-          {has(`overview.phase.${phase}`)
-            ? tr(`overview.phase.${phase}`)
-            : phase}
-        </Slot>
-        <span
-          title={row.request_id}
-          className="min-w-0 max-w-[9rem] shrink truncate font-mono text-xs text-muted-foreground"
-        >
-          {row.request_id}
-        </span>
-        {row.model && (
-          <span
-            title={row.model}
-            className="hidden min-w-0 flex-1 truncate text-xs text-muted-foreground sm:inline"
-          >
-            · {modelLabel(row.model)}
-          </span>
-        )}
-      </div>
-      <div className="flex shrink-0 items-center gap-4 text-xs tabular-nums text-muted-foreground">
-        <Slot ch={9} align="right">
-          {phase === "decode"
-            ? `${number(row.completion_tokens, 0)} tok`
-            : `${number(prompt, 0)} tok`}
-        </Slot>
-        <Slot ch={12} align="right" className="text-foreground">
-          {row.tokens_per_second == null
-            ? "—"
-            : `${fixed(row.tokens_per_second)} tok/s`}
-        </Slot>
-        <Slot ch={7} align="right">
-          {elapsed(row.elapsed_s)}
-        </Slot>
-      </div>
-      {progress != null ? (
-        <div className="col-span-2 flex h-4 items-center">
-          <PrefillBar row={row} className="h-1" caption />
+    <li
+      className="live-row"
+      data-leaving={leaving ? "" : undefined}
+      aria-hidden={leaving ? true : undefined}
+    >
+      <div className="live-row-inner">
+        <div className="live-appear grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-1 py-3">
+          <div className="flex min-w-0 items-center gap-2.5">
+            <StatusIndicator className="shrink-0" status={phaseDot(phase)} />
+            <Slot ch={7} className="shrink-0 text-sm font-medium">
+              {/* i18n-keys: overview.phase. */}
+              {has(`overview.phase.${phase}`)
+                ? tr(`overview.phase.${phase}`)
+                : phase}
+            </Slot>
+            <span
+              title={row.request_id}
+              className="min-w-0 max-w-[9rem] shrink truncate font-mono text-xs text-muted-foreground"
+            >
+              {row.request_id}
+            </span>
+            {row.model && (
+              <span
+                title={row.model}
+                className="hidden min-w-0 flex-1 truncate text-xs text-muted-foreground sm:inline"
+              >
+                · {modelLabel(row.model)}
+              </span>
+            )}
+          </div>
+          <div className="flex shrink-0 items-center gap-4 text-xs tabular-nums text-muted-foreground">
+            <Slot ch={9} align="right">
+              {phase === "decode" ? (
+                <LiveNumber
+                  value={row.completion_tokens ?? null}
+                  jumpKey={row.request_id}
+                />
+              ) : (
+                number(prompt, 0)
+              )}{" "}
+              tok
+            </Slot>
+            <Slot ch={12} align="right" className="text-foreground">
+              <LiveNumber
+                value={row.tokens_per_second ?? null}
+                format={(v) => fixed(v)}
+                jumpKey={row.request_id + phase}
+              />
+              {row.tokens_per_second == null ? "" : " tok/s"}
+            </Slot>
+            <Slot ch={7} align="right">
+              {elapsed(row.elapsed_s)}
+            </Slot>
+          </div>
+          {progress != null ? (
+            <div className="col-span-2 flex h-4 items-center">
+              <PrefillBar row={row} className="h-1" caption />
+            </div>
+          ) : phase !== "prefill" && cached > 0 && prompt > 0 ? (
+            <p className="col-span-2 truncate text-xs text-muted-foreground">
+              {t("overview.lane.prefixHit", {
+                cached: number(cached, 0),
+                prompt: number(prompt, 0),
+              })}
+            </p>
+          ) : null}
         </div>
-      ) : phase !== "prefill" && cached > 0 && prompt > 0 ? (
-        <p className="col-span-2 truncate text-xs text-muted-foreground">
-          {t("overview.lane.prefixHit", {
-            cached: number(cached, 0),
-            prompt: number(prompt, 0),
-          })}
-        </p>
-      ) : null}
+      </div>
     </li>
   );
 }
@@ -286,6 +306,7 @@ export function Dashboard({
       ? null
       : (points.find((sample) => sample.at === activeX) ?? null);
   const items = status?.requests.items ?? [];
+  const lanes = useLinger(items, (r) => r.request_id);
   const few = items.length <= 2;
   const hostState = useHostTelemetry(connection, online);
   const hostShown =
@@ -311,6 +332,8 @@ export function Dashboard({
       : null;
   const heroData = useMemo(() => chartRows(heroPoints), [heroPoints]);
   // Idle sparkline only when the last five minutes actually carried decode traffic.
+  const heroSpan =
+    heroData.length > 1 ? heroData[heroData.length - 1].x - heroData[0].x : 0;
   const recent = heroData.some((p) => {
     const v = p.values.decode;
     return typeof v === "number" && Number.isFinite(v) && v !== 0;
@@ -541,7 +564,14 @@ export function Dashboard({
             valueFirst
             icon={HardDrive}
             label={t("overview.stats.metal")}
-            value={<StatValue text={`${number(memory?.active_gb)} GB`} />}
+            value={
+              <>
+                <LiveNumber value={memory?.active_gb ?? null} digits={1} />
+                <span className="ml-1 text-xs font-normal text-muted-foreground">
+                  GB
+                </span>
+              </>
+            }
             subtext={t("overview.stats.metalSub", {
               total: number(memory?.total_gb),
               peak: number(memory?.peak_gb),
@@ -634,21 +664,23 @@ export function Dashboard({
                   ]}
                 />
               </div>
-              <SeriesChart
-                busy={busy}
-                className="mt-3"
-                data={heroData}
-                series={rates[heroMetric as "decode" | "prefill"]}
-                height={150}
-                ariaLabel={
-                  heroMetric === "decode"
-                    ? t("overview.hero.ariaDecode")
-                    : t("overview.hero.ariaPrefill")
-                }
-                formatX={clock}
-                formatY={formatNumber}
-                maxGap={12000}
-              />
+              <LiveScroll spanMs={heroSpan} newestAt={heroData.at(-1)?.x ?? 0}>
+                <SeriesChart
+                  busy={busy}
+                  className="mt-3"
+                  data={heroData}
+                  series={rates[heroMetric as "decode" | "prefill"]}
+                  height={150}
+                  ariaLabel={
+                    heroMetric === "decode"
+                      ? t("overview.hero.ariaDecode")
+                      : t("overview.hero.ariaPrefill")
+                  }
+                  formatX={clock}
+                  formatY={formatNumber}
+                  maxGap={12000}
+                />
+              </LiveScroll>
             </div>
           </div>
           <div
@@ -679,8 +711,8 @@ export function Dashboard({
               </div>
             </div>
             <ul className={`divide-y divide-border/60 ${few ? "" : "flex-1"}`}>
-              {items.slice(0, 5).map((row) => (
-                <RequestLane key={row.request_id} row={row} />
+              {lanes.slice(0, 5).map(({ row, leaving }) => (
+                <RequestLane key={row.request_id} row={row} leaving={leaving} />
               ))}
             </ul>
             <TotalsLine totals={totals} />

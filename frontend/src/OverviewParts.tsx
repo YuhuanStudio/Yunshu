@@ -19,6 +19,7 @@ import {
   type Headline,
   type Totals,
 } from "./engineView";
+import { LiveNumber } from "./LiveNumber";
 import { livePrefillTps } from "./series";
 import { t, tr, useLocale } from "./i18n/index.ts";
 import { clock, elapsed, fixed, number, Slot, useMinWidth } from "./ui";
@@ -175,7 +176,11 @@ export function SpeedPair({ status }: { status: EngineStatus }) {
         label={term}
         value={
           <>
-            {headline.value == null ? "—" : fixed(headline.value)}
+            <LiveNumber
+              value={headline.value}
+              format={(v) => fixed(v)}
+              jumpKey={headline.kind}
+            />
             <span className="ml-1 text-xs font-normal text-muted-foreground">
               tok/s
             </span>

@@ -242,3 +242,88 @@ body {
 [data-testid="page-scroll"] {
   overscroll-behavior-y: contain;
 }
+
+/* Live data: the newest sparkline segment fades in; none of it under reduced motion. */
+@keyframes live-point-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.live-point-in {
+  animation: live-point-in 200ms ease-out both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .live-point-in {
+    animation: none;
+  }
+}
+
+/* Presence: elements that come and go in the live feed fade (and rise 4 px) instead of popping. */
+@keyframes live-presence-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+@keyframes live-presence-out {
+  to {
+    opacity: 0;
+  }
+}
+.live-presence[data-state="open"] {
+  animation: live-presence-in var(--live-ms, 160ms) ease-out both;
+}
+.live-presence[data-state="closing"] {
+  animation: live-presence-out var(--live-ms, 160ms) ease-in both;
+  pointer-events: none;
+}
+.live-appear {
+  animation: live-presence-in 180ms ease-out both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .live-presence,
+  .live-appear {
+    animation: none !important;
+  }
+}
+
+/* A live request row that ends fades out (180 ms) and only then collapses (160 ms): no jump. */
+.live-row {
+  display: grid;
+  grid-template-rows: 1fr;
+}
+.live-row > .live-row-inner {
+  min-height: 0;
+  overflow: hidden;
+}
+.live-row[data-leaving] {
+  animation: live-row-collapse 160ms ease-in 180ms forwards;
+  pointer-events: none;
+}
+.live-row[data-leaving] > .live-row-inner {
+  animation: live-presence-out 180ms ease-in forwards;
+}
+@keyframes live-row-collapse {
+  to {
+    grid-template-rows: 0fr;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .live-row[data-leaving],
+  .live-row[data-leaving] > .live-row-inner {
+    animation: none;
+  }
+}
+
+/* LiveScroll: the series layer of a time-series chart slides with the clock between samples. */
+.live-scroll svg [clip-path] > * {
+  transform: translateX(calc(var(--live-shift, 0) * -1px));
+}
+@media (prefers-reduced-motion: reduce) {
+  .live-scroll svg [clip-path] > * {
+    transform: none;
+  }
+}

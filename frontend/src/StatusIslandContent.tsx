@@ -10,7 +10,6 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
   SegmentMeter,
-  Sparkline,
   StatusIndicator,
 } from "@yuhuanowo/yunui";
 import {
@@ -32,7 +31,14 @@ import {
 import { offlineCause } from "./errors";
 import { t } from "./i18n/index.ts";
 import { fixed, number } from "./i18n/format.ts";
-import { decodeSparkline, modelKind, shortModelName } from "./status-island";
+import {
+  SPARK_WINDOW_MS,
+  decodeSparkPoints,
+  modelKind,
+  shortModelName,
+} from "./status-island";
+import { Presence } from "./motion/Presence";
+import { LiveSparkline } from "./motion/LiveSparkline";
 import { routeHref } from "./route";
 import type { Engine } from "./ui";
 
@@ -93,7 +99,7 @@ export function StatusIslandContent({
   const loaded = status.models.filter((m) => m.loaded);
   const first = loaded[0];
   const a = activity(status);
-  const spark = decodeSparkline(engine.series);
+  const spark = decodeSparkPoints(engine.series);
   const mem = status.memory;
   const total = finite(mem.total_gb) ? mem.total_gb : ledger?.total_gb;
   const active = finite(mem.active_gb) ? mem.active_gb : ledger?.mlx.active_gb;
@@ -151,8 +157,9 @@ export function StatusIslandContent({
                 className="min-w-0 flex-1"
                 title={t("shell.island.live.sparkNote")}
               >
-                <Sparkline
-                  data={spark}
+                <LiveSparkline
+                  points={spark}
+                  windowMs={SPARK_WINDOW_MS}
                   width={160}
                   height={32}
                   tone="neutral"
@@ -172,7 +179,7 @@ export function StatusIslandContent({
             queued: a.counts.queued,
           })}
         </div>
-        {a.phase === "prefill" && (
+        <Presence show={a.phase === "prefill"}>
           <div className="mt-1.5" data-testid="island-prefill">
             <PrefillBar row={a.prefilling ?? {}} height={6} caption />
             <div className="mt-1 text-xs tabular-nums text-muted-foreground">
@@ -181,7 +188,7 @@ export function StatusIslandContent({
                 : t("shell.island.live.prefillPlain")}
             </div>
           </div>
-        )}
+        </Presence>
       </StatusIslandCard>
 
       {usage != null && finite(active) && finite(total) && (
@@ -189,7 +196,7 @@ export function StatusIslandContent({
           title={t("shell.island.mem.title")}
           note={
             <span>
-              {fixed(active, 1)} / {gbTotalText(total)}
+              <LiveNumber value={active} digits={1} /> / {gbTotalText(total)}
               <span className="text-xs">GB</span>
             </span>
           }
