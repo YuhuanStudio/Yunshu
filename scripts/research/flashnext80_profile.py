@@ -178,7 +178,9 @@ async def run(args):
         mx.async_eval = original_async
     import re
 
-    labels = re.findall(r'label="([^"]+)"', dot_path.read_text())
+    text = dot_path.read_text()
+    # nodes look like `1234 [label="Add"];` or `... [label = "Add"]`; edges contain "->"
+    labels = re.findall(r'\[\s*label\s*=\s*"([^"]+)"', text)
     hist = defaultdict(int)
     for label in labels:
         hist[label.split()[0] if label.split() else label] += 1
@@ -189,7 +191,6 @@ async def run(args):
             "top_primitives": sorted(hist.items(), key=lambda kv: -kv[1])[:25],
         }
     )
-    dot_path.unlink()
 
     # cProfile over a few serial steps: where does host time go, and how often does a step sync?
     import cProfile
