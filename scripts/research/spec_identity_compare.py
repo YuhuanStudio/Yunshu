@@ -39,6 +39,10 @@ def compare(on: dict, off: dict) -> list[str]:
             problems.append(f"{key}: texts differ at char {i}")
         if on[key]["drafted"] <= 0:
             problems.append(f"{key}: speculative lane never engaged (drafted=0)")
+    for ctx, kind in sorted({(c, k) for c, k, _ in on}):
+        cold, warm = on.get((ctx, kind, "cold")), on.get((ctx, kind, "warm"))
+        if cold and warm and cold["text"] != warm["text"]:
+            problems.append(f"{(ctx, kind)}: APC hit (warm) differs from miss (cold)")
     return problems
 
 

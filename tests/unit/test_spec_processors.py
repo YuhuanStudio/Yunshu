@@ -65,3 +65,17 @@ def test_only_pure_processors_keep_the_speculative_lane():
             return logits
 
     assert not spec_safe_processors([Stateful()])
+
+
+def test_processor_window_commits_history_and_counts():
+    from yunshu_engine.constrained_spec import ProcessorWindow, SpecRequest
+
+    request = SpecRequest()
+    request.context = [1, 2, 3]
+    mask = TokenMaskProcessor(eos_ids=[2], min_tokens=3)
+    request.processors = [mask]
+    window = ProcessorWindow.for_request(request, 9)
+    assert window.history == [1, 2, 3, 9]  # serial context ends with the bonus token
+    window.commit([4, 5])
+    assert window.history == [1, 2, 3, 9, 4, 5] and mask._generated == 2
+    assert ProcessorWindow.for_request(SpecRequest(), 9) is None

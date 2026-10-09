@@ -111,6 +111,8 @@ No new decode or TTFT claim is made for this cycle here. Historical measurements
 
 ### Fixed
 
+- Repetition, presence and frequency penalties no longer depend on the prefix cache: after an APC hit the penalty context was only the uncached suffix, so the same request answered differently on a hit than on a miss. The context is now the whole prompt either way. Outputs of requests that use these penalties change relative to earlier builds (a bug fix).
+- Requests with penalties, `logit_bias`, `min_tokens` or suppress tokens keep speculative decoding on the DFlash chain and the MTP lane instead of silently turning it off; tokens are identical with speculation on and off.
 - Untyped XML tool arguments containing JSON objects or arrays reach clients as containers; scalar text and declared string unions keep their existing types. Numeric or nested container text containing non-finite values stays literal instead of emitting invalid JSON.
 - GPU guard blocks broad `pkill` commands that could terminate another worker or user process.
 

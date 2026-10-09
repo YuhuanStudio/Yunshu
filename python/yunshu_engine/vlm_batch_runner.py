@@ -341,6 +341,9 @@ class VLMBatchRunner:
         self.apc_semantic_hash = apc_semantic_hash
         self.drafter = drafter
         self.draft_kind = draft_kind
+        from . import penalty_context
+
+        penalty_context.install()  # penalty context = the full prompt on an APC hit too
         self.draft_block_size = draft_block_size
         # Callable(input_ids) -> bool: skip APC when its checkpoints cannot fit,
         # so a cold request does not pay APC bookkeeping for nothing.
@@ -528,7 +531,7 @@ class VLMBatchRunner:
             and keyed_ok
             and (
                 not processors
-                or (self.draft_kind == "dflash" and spec_safe_processors(processors))
+                or (self._lane_takes_processors() and spec_safe_processors(processors))
             )
             and (not logprobs or self._lane_takes_guide(None))
             and thinking_budget is None
@@ -619,6 +622,15 @@ class VLMBatchRunner:
             # A consumer that stops early (stop string, max length reached on
             # its side, disconnect) releases its row at the next slice.
             job.abandoned = True
+
+    def _lane_takes_processors(self) -> bool:
+        """The DFlash chain and the MTP lane verify a request with logits processors under
+        serial arithmetic (constrained_spec.ProcessorWindow)."""
+        from . import mtp_lane
+
+        return self.draft_kind == "dflash" or (
+            self.draft_kind == "mtp" and mtp_lane.can_guide(self.drafter)
+        )
 
     def _lane_takes_guide(self, guide: Any) -> bool:
         """Whether the lane has exact target-row masks and probability readout."""

@@ -502,19 +502,25 @@
   },
   "penalties_in_spec": {
    "module": "python/yunshu_engine/vlm_batch_runner.py",
-   "what": "repetition/presence/frequency penalty, logit_bias, min_tokens, suppress, ignore_eos, top_n_sigma while drafting",
+   "what": "repetition/presence/frequency penalty, logit_bias, min_tokens, suppress, ignore_eos while drafting (ProcessorWindow: per-row processors in a serial-arithmetic verify window)",
    "cells": {
     "mtp": {
-     "s": "missing",
-     "why": "any logits processor sets use_draft False (iter_tokens: 'not processors'); Qwen's recommended presence_penalty therefore turns spec off",
-     "owner": "decode16",
-     "impact": "high"
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/mtp_lane.py",
+       "ProcessorWindow"
+      ]
+     ]
     },
     "dflash": {
-     "s": "missing",
-     "why": "same gate as MTP",
-     "owner": "decode16",
-     "impact": "high"
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/constrained_spec.py",
+       "class ProcessorWindow"
+      ]
+     ]
     },
     "driver": {
      "s": "missing",
@@ -1759,19 +1765,6 @@
  },
  "exclusions": [
   {
-   "id": "penalties-off-spec",
-   "a": "logits processors (penalties, logit_bias, min_tokens, suppress, top_n_sigma)",
-   "b": "speculative decoding (lane and driver)",
-   "kind": "unimplemented",
-   "ev": [
-    [
-     "python/yunshu_engine/vlm_batch_runner.py",
-     "and not processors"
-    ]
-   ],
-   "why": "A penalty is a function of the committed history; a verify window can apply it row by row with cumulative counts through the draft tokens. Nothing fundamental."
-  },
-  {
    "id": "thinking-budget-off-spec",
    "a": "thinking_budget",
    "b": "speculative lane",
@@ -1926,6 +1919,23 @@
     ]
    ],
    "why": "'auto' certifies only the DFlash2 Q4 fast tree; MTP has tree code that needs explicit 'tree'."
+  },
+  {
+   "id": "penalties-tree-verify",
+   "a": "logits processors (penalties, logit_bias, min_tokens, suppress)",
+   "b": "tree verify (DFlash fast tree, MTP tree)",
+   "kind": "fundamental",
+   "ev": [
+    [
+     "python/yunshu_engine/constrained_spec.py",
+     "class ProcessorWindow"
+    ],
+    [
+     "python/yunshu_engine/mtp_lane.py",
+     "_request_has_processors"
+    ]
+   ],
+   "why": "Tree verify kernels are batch-invariant (the argmax equals serial decode) but not serial-arithmetic: non-winning logits can differ in low bits. A penalty moves the winner, so a near tie could flip against serial decode. A request with processors is therefore verified by the chain under exact_verify; the tree paths stay for unprocessed greedy requests."
   }
  ],
  "duplicates": [
@@ -2129,7 +2139,8 @@
   "python/yunshu_engine/mtp_decoder.py": "orphan (see orphans)",
   "python/yunshu_engine/spec_interface.py": "orphan (see orphans)",
   "python/yunshu_engine/spec_proposer.py": "orphan (see orphans)",
-  "python/yunshu_engine/dflash_apc_window.py": "DFlash drafter context window kept beside APC checkpoints (dflash path; apc_prefix_cache)"
+  "python/yunshu_engine/dflash_apc_window.py": "DFlash drafter context window kept beside APC checkpoints (dflash path; apc_prefix_cache)",
+  "python/yunshu_engine/penalty_context.py": "Penalty context = full prompt on an APC hit (hit == miss; part of penalties_in_spec / apc)"
  },
  "settings": {
   "YUNSHU_MTP": "draft_family_coverage",
@@ -2189,7 +2200,7 @@
   "YUNSHU_VLM_APC_DRAFT_WINDOW_GB": "apc_prefix_cache",
   "YUNSHU_DEBUG_TREE_PROFILE": "tree_drafts"
  },
- "gap_budget": 59,
+ "gap_budget": 57,
  "settings_categories": [
   "speculative",
   "vlm-runner",

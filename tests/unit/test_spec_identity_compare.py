@@ -24,3 +24,10 @@ def test_text_mismatch_and_unengaged_lane_both_fail():
     )
     assert "never engaged" in m.compare({k: _cell("abc", 0)}, {k: _cell("abc", 0)})[0]
     assert m.compare({}, {}) != []
+
+
+def test_apc_hit_must_equal_miss():
+    cold, warm = (1024, "prose", "cold"), (1024, "prose", "warm")
+    on = {cold: _cell("abc", 5), warm: _cell("abd", 5)}
+    off = {cold: _cell("abc", 0), warm: _cell("abd", 0)}
+    assert any("APC hit" in p for p in m.compare(on, off))

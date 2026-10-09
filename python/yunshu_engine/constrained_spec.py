@@ -323,6 +323,41 @@ def apply_row_processors(processors, logits, context, drafted, calls):
     return mx.stack(rows, axis=1)
 
 
+class ProcessorWindow:
+    """One request's logits processors over a chain of verify windows (shared by the DFlash
+    chain and the MTP lane).
+
+    ``history`` is the serial path's token context ending at the window's bonus token. The
+    tree verify paths do not use it: their kernels are batch-invariant but not
+    serial-arithmetic, and a penalty can turn a low-bit difference of a non-winning logit
+    into a different argmax, so a request with processors is verified by the chain under
+    ``exact_verify`` (see path_matrix.json, penalties-tree-verify).
+    """
+
+    def __init__(self, request, bonus: int):
+        self.processors = list(request.processors)
+        self.history = list(request.context or []) + [int(bonus)]
+
+    @classmethod
+    def for_request(cls, request, bonus: int):
+        return (
+            cls(request, bonus) if request is not None and request.processors else None
+        )
+
+    def apply(self, logits, drafted, emitted: int):
+        """``logits`` ``[1, T, V]`` of the window ``[bonus, *drafted]``; ``emitted`` tokens
+        have been generated, the first of which came from the prefill."""
+        return apply_row_processors(
+            self.processors, logits, self.history, drafted, emitted - 1
+        )
+
+    def commit(self, tokens) -> None:
+        self.history.extend(int(t) for t in tokens)
+        for proc in self.processors:
+            if hasattr(proc, "advance"):
+                proc.advance(len(tokens))
+
+
 def target_rows(logits, masks, emitted, keyed, request=None):
     if masks is not None:
         logits = apply_bitmask(logits, masks)
@@ -437,8 +472,7 @@ def dflash_rounds(model, draft_model, prompt_cache, hidden, *, request, **kw):
     emitted = 1
     if guide is not None:
         guide.feed(bonus)
-    processors = list(request.processors)
-    history = list(request.context or []) + [bonus] if processors else []
+    window_procs = ProcessorWindow.for_request(request, bonus)
     copy = None
     context = mtp_lane._STATE["context"]
     rows = mtp_lane._STATE["copy_rows"]
@@ -487,10 +521,8 @@ def dflash_rounds(model, draft_model, prompt_cache, hidden, *, request, **kw):
                     inputs, prompt_cache, list(draft_model.config.target_layer_ids)
                 )
                 logits = lm.speculative_logits_from_hidden(final)
-            if processors:
-                logits = apply_row_processors(
-                    processors, logits, history, drafted, emitted - 1
-                )
+            if window_procs is not None:
+                logits = window_procs.apply(logits, drafted, emitted)
             targets, probs = target_rows(logits, masks, emitted, keyed, request)
             hidden = mx.concatenate(captured, axis=-1)
             mx.async_eval(targets, hidden)
@@ -505,11 +537,8 @@ def dflash_rounds(model, draft_model, prompt_cache, hidden, *, request, **kw):
                     tokens = tokens[:kept]
                     accepted = kept - 1
             _record_speculative_round(draft_model, accepted, bs - 1)
-            if processors:
-                history.extend(tokens)
-                for proc in processors:
-                    if hasattr(proc, "advance"):
-                        proc.advance(len(tokens))
+            if window_procs is not None:
+                window_procs.commit(tokens)
             reports = request.reports(probs, tokens)
             hidden = hidden[:, : accepted + 1, :]
             commit_speculative_round(lm, prompt_cache, states, accepted, bs)
