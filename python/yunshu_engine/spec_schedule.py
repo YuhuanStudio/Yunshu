@@ -20,7 +20,10 @@ the table follows the context length.
 
 from __future__ import annotations
 
-EMA = 0.2  # weight of the newest round in the node-landing estimates
+EMA = 0.03  # floor on the weight of the newest round in the node-landing estimates
+PRIOR_WEIGHT = (
+    8.0  # pseudo-rounds the prior counts for; a rank's weight is 1 / (rounds + this)
+)
 SAMPLES = 8  # cycle-time samples kept per budget
 PROBE = 6  # rounds spent alternating the full and half budget to read the row cost
 REPROBE_EVERY = 64  # rounds between probes once settled
@@ -41,6 +44,7 @@ class NodeBudget:
         prior = list(prior or [])
         # per-node landing probability: the prior, decaying for unlisted nodes
         self.p = [float(prior[i]) if i < len(prior) else 0.05 for i in range(self.size)]
+        self.seen = [0] * self.size
         self.samples: dict[int, list[float]] = {}
         self._prior_cost = (plain_ms, row_ms, draft_ms)
         self.rounds = 0
@@ -78,8 +82,27 @@ class NodeBudget:
             return max(1.0, med - draft - slope * lo)
         return med + slope * (n - lo)
 
+    def smoothed(self) -> list[float]:
+        """Landing probabilities made non-increasing in rank (pool adjacent violators).
+
+        Nodes are ordered best first, so rank ``i`` cannot land more often than rank
+        ``i - 1``. The raw per-rank EMAs are noisy and read 0.0 after a few misses on the
+        rarely verified tail; pooling keeps the tail's real total, which is what decides
+        whether a wider round pays when the row cost is nearly flat."""
+        blocks: list[list[float]] = []  # [mean, count]
+        for value in self.p:
+            blocks.append([value, 1.0])
+            while len(blocks) > 1 and blocks[-2][0] < blocks[-1][0]:
+                v2, w2 = blocks.pop()
+                v1, w1 = blocks.pop()
+                blocks.append([(v1 * w1 + v2 * w2) / (w1 + w2), w1 + w2])
+        out: list[float] = []
+        for mean, count in blocks:
+            out.extend([mean] * int(count))
+        return out
+
     def expected_tokens(self, n: int) -> float:
-        return 1.0 + sum(self.p[:n])
+        return 1.0 + sum(self.smoothed()[:n])
 
     def best(self) -> int:
         """The budget with the most expected tokens per ms, or the full one unless
@@ -112,7 +135,9 @@ class NodeBudget:
         self.rounds += 1
         landed = set(landed_nodes)
         for i in range(min(n, self.size)):
-            self.p[i] += EMA * ((1.0 if i in landed else 0.0) - self.p[i])
+            weight = max(EMA, 1.0 / (self.seen[i] + PRIOR_WEIGHT))
+            self.seen[i] += 1
+            self.p[i] += weight * ((1.0 if i in landed else 0.0) - self.p[i])
         if first:
             return  # the first round carries the prefill-to-decode switch
         bucket = self.samples.setdefault(n, [])
