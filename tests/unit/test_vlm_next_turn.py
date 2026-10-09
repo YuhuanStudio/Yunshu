@@ -32,6 +32,9 @@ class _Arr:
 
 
 def _engine(monkeypatch, *, on=True):
+    from yunshu_engine.kernels import preempt
+
+    monkeypatch.setattr(preempt, "supported", lambda: True)
     pass
     eng = object.__new__(vlm_engine.VLMEngine)
     eng._rehearsal_cancel = None
@@ -320,3 +323,28 @@ def test_extends_and_state_rules():
     st.set_ids([1, 2, 3])
     assert st.arrive([1, 2, 3, 4]) == "cancel"  # not submitted yet: no work to adopt
     assert ev.is_set() and not st.submit()
+
+
+def test_unsupported_family_never_rehearses(monkeypatch):
+    from yunshu_engine.kernels import preempt
+
+    eng, calls = _engine(monkeypatch)
+    monkeypatch.setattr(preempt, "supported", lambda: False)
+
+    async def main():
+        _go(eng)
+        assert eng._rehearsal_task is None
+
+    asyncio.run(main())
+    assert calls == []
+
+
+def test_rehearsal_cancel_event_is_preemptible(monkeypatch):
+    eng, calls = _engine(monkeypatch)
+
+    async def main():
+        _go(eng)
+        assert eng._rehearsal_cancel.preemptible is True
+        await eng._rehearsal_task
+
+    asyncio.run(main())

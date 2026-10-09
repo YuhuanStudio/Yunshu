@@ -1436,6 +1436,13 @@ class VLMEngine:
             logger.debug("next-turn rehearsal ineligible: %s", reason)
             next_turn.record("ineligible")
             return
+        from .kernels import preempt
+
+        if not preempt.supported():
+            # a diverging request would wait for the whole 2048-token atom
+            logger.debug("next-turn rehearsal ineligible: prefill is not preemptible")
+            next_turn.record("ineligible")
+            return
         if self._active_count > 1 or self._batch_runner is None:
             logger.debug("next-turn rehearsal ineligible: engine busy")
             next_turn.record("ineligible")
@@ -1443,6 +1450,7 @@ class VLMEngine:
         # created here, not in the task: a request arriving before the task first runs must
         # still be able to cancel it
         ev = threading.Event()
+        ev.preemptible = True  # type: ignore[attr-defined]  # read by the runner (kernels/preempt)
         self._rehearsal_cancel = ev
         state = next_turn.RehearsalState(ev)
         self._rehearsal_state = state
@@ -2117,6 +2125,9 @@ class VLMEngine:
 
             singleton_cache.install()
             cache_restore.install()
+            from .kernels import preempt
+
+            preempt.install()
         cache_gib = settings.get("YUNSHU_PREFILL_BUFFER_CACHE_GB")
         if cache_gib is None:
             from .apc_manager import total_memory_bytes

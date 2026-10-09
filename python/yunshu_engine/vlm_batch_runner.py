@@ -37,6 +37,7 @@ import numpy as np
 
 from . import keyed_sampling, settings
 from .idle_memory import IdleMemory
+from .kernels.preempt import PreemptedError as _Preempted
 from .keyed_sampling import top_k_filter, top_p_filter
 from .serving.busy_time import BusyMeter
 from .serving.work_scheduler import (
@@ -51,6 +52,7 @@ from .serving.work_scheduler import (
 )
 
 logger = logging.getLogger(__name__)
+
 
 # Upstream prefill default; APC checkpoints land on these chunk boundaries and
 # cancellation is honoured between chunks (~2 s at 2K tokens on a 27B model).
@@ -1095,6 +1097,19 @@ class VLMBatchRunner:
                     group.gen.remove(uid)
                 self._finish(group, uid, "cancel" if cancelled else None)
 
+    @staticmethod
+    def _next_preemptible(group):
+        """``group.gen.next()``; a lone job whose cancel event is marked ``preemptible`` (the
+        next-turn rehearsal) may be stopped between decoder-layer groups (kernels/preempt.py)."""
+        jobs = list(group.jobs.values())
+        if len(jobs) == 1 and getattr(jobs[0].cancel_event, "preemptible", False):
+            from .kernels import preempt
+
+            if preempt.supported():
+                with preempt.scope(jobs[0].cancel_event):
+                    return group.gen.next()
+        return group.gen.next()
+
     def _step_group(self, group: _Group, *, decode_only: bool = False) -> None:
         from .kernels import batch_invariant
 
@@ -1216,11 +1231,18 @@ class VLMBatchRunner:
                 finally:
                     group.gen.completion_batch_size = capacity
             else:
-                prompt_progress, responses = group.gen.next()
+                prompt_progress, responses = self._next_preemptible(group)
             if group.spec and (job.guide is not None or job.logprobs):
                 from .constrained_spec import finish_serial_prefill
 
                 finish_serial_prefill(group.gen)
+        except _Preempted:
+            # A background rehearsal was cancelled inside a prefill atom. Nothing of the partial
+            # atom was stored; the cancel flag makes the next slice drop the job and its cache.
+            discard = getattr(apc, "discard_deferred_checkpoints", None)
+            if discard is not None:
+                discard()
+            return
         except BaseException:
             discard = getattr(apc, "discard_deferred_checkpoints", None)
             if discard is not None:

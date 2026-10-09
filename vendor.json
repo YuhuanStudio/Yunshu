@@ -2061,6 +2061,21 @@
       "why": "native APC restore uses independent copy-on-write handles before direct capacity reservation; stores and custom caches keep upstream detached snapshots",
       "source_sha256": "2f92c734175d88d663e5c687a47fd71c9ea2c741bb0fb94f9231145603f9e4d8",
       "installed_version": "0.7.6"
+    },
+    {
+      "kind": "patches",
+      "path": "python/yunshu_engine/kernels/preempt.py",
+      "repo": "https://github.com/Blaizzy/mlx-vlm",
+      "clone": "reference/mlx-vlm",
+      "package": "mlx-vlm",
+      "module": "mlx_vlm.models.qwen3_5.language",
+      "symbol": "Qwen3_5DecoderLayer.__call__",
+      "signature": "(self, x: mx.array, mask: Optional[mx.array]=None, cache: Optional[Any]=None, position_ids: Optional[mx.array]=None, position_embeddings: Optional[tuple[mx.array, mx.array]]=None)",
+      "license": "MIT",
+      "commit": "v0.7.3",
+      "why": "preemptible prefill: evaluate every few layers so a background rehearsal can stop inside a prefill atom",
+      "source_sha256": "88aba0b13d9e64c327ad86d76380324beb20099c179472dcba1a2f2742b09c1e",
+      "installed_version": "0.7.6"
     }
   ],
   "watch": [
