@@ -92,5 +92,9 @@ def test_exempt_list_is_only_the_documented_501():
         "POST /api/push",
         "POST /v1/decisions",
         "POST /v1/systemone",
+        # the deprecated /console/ pointer on the engine (the console is its own process now)
+        "GET /console",
+        "GET /console/",
+        "GET /console/{rest:path}",
     }
     assert all(reason.strip() for reason in rc.EXEMPT.values())
