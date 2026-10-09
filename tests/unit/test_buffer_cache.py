@@ -74,7 +74,9 @@ def test_tight_weights_get_small_pool():
     assert buffer_cache.auto_limit_gib_for_weights(total, 70 * gib) == 0.5
     assert buffer_cache.auto_limit_gib_for_weights(total, 16 * gib) == 6.0
     assert buffer_cache.auto_limit_gib_for_weights(total, None) == 6.0
-    assert buffer_cache.auto_limit_gib_for_weights(8 * gib, 7 * gib) == pytest.approx(0.4)
+    assert buffer_cache.auto_limit_gib_for_weights(8 * gib, 7 * gib) == pytest.approx(
+        0.4
+    )
 
 
 def test_ceiling_decides_when_set():
