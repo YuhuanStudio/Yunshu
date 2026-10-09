@@ -131,7 +131,9 @@ async def run(a):
     out = Path(a.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     msg = m.messages(a.size, tokenizer=engine._tokenizer)
+    timers.reset()
     first = await m.probe(engine, msg, cold=True)
+    first_stages = timers.snapshot_ms()
     follow = msg + [
         {"role": "assistant", "content": first["text"]},
         {"role": "user", "content": "What colour did you see? Answer with one word."},
@@ -161,6 +163,9 @@ async def run(a):
                 complete=True,
                 model=a.model,
                 notes=timers.notes,
+                first_request=dict(
+                    ttft_ms=round(first["ttft_s"] * 1000, 2), stages_ms=first_stages
+                ),
                 installed=done,
                 missing=missing,
                 rows=rows,
