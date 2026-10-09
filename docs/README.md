@@ -23,6 +23,8 @@ label later main measurements as unreleased. Start at the top-level [README](../
 - [guides/EVALS.md](guides/EVALS.md): local eval definitions, runs and graders
 - [guides/WEB_SEARCH.md](guides/WEB_SEARCH.md): search/fetch configuration and privacy
 - [guides/TAVILY.md](guides/TAVILY.md): Tavily-compatible retrieval and research
+- [guides/TELEMETRY.md](guides/TELEMETRY.md): local host power/thermal/memory sampling
+- [guides/API_SURFACE.md](guides/API_SURFACE.md) and [guides/API_EXTENSIONS.md](guides/API_EXTENSIONS.md): per-route coverage and Yunshu extensions
 - [CONSOLE.md](CONSOLE.md): build and use the source console
 - [API.md](API.md): endpoints
 - [CONFIGURATION.md](CONFIGURATION.md): every `YUNSHU_*` setting (generated)
@@ -35,7 +37,8 @@ label later main measurements as unreleased. Start at the top-level [README](../
 
 - [Contributing](../CONTRIBUTING.md) and [security/privacy](../SECURITY.md)
 - [Roadmap and RFC process](ROADMAP.md)
-- [Hardware validation plan](guides/HARDWARE_VALIDATION.md)
+- [Hardware validation plan](guides/HARDWARE_VALIDATION.md) and [M5 Max notes](guides/M5MAX_HARDWARE.md)
+- [Auxiliary scheduling](guides/AUXILIARY_SCHEDULING.md) and [upstream tracking](guides/UPSTREAM_TRACKING.md)
 
 [RELEASING.md](../RELEASING.md) (cutting a release),
 [guides/RELEASE_GATE.md](guides/RELEASE_GATE.md) (the end-to-end acceptance run a release must pass) and
