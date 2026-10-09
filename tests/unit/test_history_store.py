@@ -162,9 +162,25 @@ def test_requests_hold_metadata_only(tmp_path):
     )
     assert row is not None
     assert set(row) == set(
-        "request_id t t_start model path stream status finish_reason prompt_tokens "
-        "completion_tokens cached_tokens prefill_tps decode_tps ttft_ms queue_wait_ms "
-        "key_name cancelled".split()
+        [
+            "request_id",
+            "t",
+            "t_start",
+            "model",
+            "path",
+            "stream",
+            "status",
+            "finish_reason",
+            "prompt_tokens",
+            "completion_tokens",
+            "cached_tokens",
+            "prefill_tps",
+            "decode_tps",
+            "ttft_ms",
+            "queue_wait_ms",
+            "key_name",
+            "cancelled",
+        ]
     )
     s = mk(tmp_path)
     s.add_request(row)
