@@ -17,6 +17,12 @@
 
 ---
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/console/zh-CN/overview-dark.webp">
+  <img src="docs/images/console/zh-CN/overview-light.webp" alt="Yunshu console 总览：实时请求阶段、tok/s、前缀缓存命中">
+</picture>
+
+
 ## 亮点
 
 - **无损推测解码**：DFlash2 或 MTP 草稿，搭配不随批次改变的 kernel，打开推测解码时的贪婪输出
@@ -31,6 +37,83 @@
   搜索／抓取与 MCP。
 - **默认无损**：任何可能改变输出的东西都是要自己开的设置。
 - **本地且私密**：不发送使用统计；诊断数据不含 prompt。
+- **完整的 console**：本地网页 console，有实时请求阶段（排队、含缓存命中区段的 prefill、decode）、请求历史、
+  日志、模型、缓存、推理测试、含每把密钥配额的 API 密钥、设置（含 CORS 编辑器）与主机功耗／时钟／温度，
+  另有浮动的状态岛。[Console 说明](docs/CONSOLE.md)。
+- **带引用的网页搜索**：服务器端 `web_search` / `web_fetch`，供 Claude Code、Codex 与各 API 使用；六个来源
+  （DuckDuckGo、Wikipedia、SearXNG、Tavily、Serper、Perplexity）、Tavily 兼容 API 与可选的研究增强。[说明](docs/guides/WEB_SEARCH.md)。
+- **Evals 与已存储的 completions**：`store: true` 在本机保存 chat completions，OpenAI Evals API 以本机评分器评分。[说明](docs/guides/EVALS.md)。
+- **主机遥测**：功耗、GPU 时钟、温度、散热与内存压力，以及每个请求的能耗估计，免特权且只在本机。[说明](docs/guides/TELEMETRY.md)。
+- **多把 API 密钥**：每把有权限、到期与每日配额。[说明](docs/guides/AUTH_AND_KEYS.md)。
+
+## 能力总览
+
+Yunshu 提供的所有能力，分组列出。每一行链接到有示例与限制的说明；部分支持或实验中的项目都会标明。同一份清单也以机器可读形式放在 [`docs/feature_index.json`](docs/feature_index.json)。
+
+**推理**
+
+| 能力 | 内容 |
+|---|---|
+| [无损推测解码](docs/guides/INFERENCE.md) | DFlash2、MTP 与 prompt-copy 草稿，搭配批次不变 kernel；贪婪输出与关闭推测时相同 |
+| [文字模型推测](docs/guides/INFERENCE.md) | mlx-lm 模型的 n-gram / suffix 与 Gemma 4 assistant 草稿（外部草稿模型仍为实验） |
+| [前缀缓存（APC）](docs/guides/KV_CACHE_MATRIX.md) | 混合模型的精确 checkpoint，位于 RAM、SSD 与可选存储层；图片与音频键 |
+| [结构化输出](docs/guides/INFERENCE.md) | JSON schema、regex、选项与文法在解码时强制，含工具参数 |
+| [有损内存选项](docs/guides/INFERENCE.md) | int8 KV、压缩 WARM 层与载入时量化；默认关闭 |
+| [大型 MoE 加载（部分）](docs/guides/INFERENCE.md) | 社区 DeepSeek-V4-Flash 权重包的位数与 group size 由张量形状推得；加载前有容纳检查 |
+| [Round driver（实验）](docs/guides/ROUND_DRIVER.md) | 稠密 Qwen3.5 系列模型的自有推测回合驱动 |
+| [模型支持](docs/guides/MODEL_SUPPORT.md) | 各系列哪些是调校、通用与已验证 |
+
+**API**
+
+| 能力 | 内容 |
+|---|---|
+| [OpenAI API](docs/guides/API_SURFACE.md) | Chat、Completions、Responses（HTTP 与 WebSocket）、Embeddings、Models、Files、Batches、Conversations |
+| [Anthropic API](docs/guides/API_SURFACE.md) | Messages、count_tokens、batches、thinking、工具、cache_control、文档与引用 |
+| [Ollama API](docs/guides/API_SURFACE.md) | /api/chat、/api/generate 与原生模型管理（pull、copy、delete、show） |
+| [Responses 扩展](docs/guides/API_SURFACE.md) | 客户端执行的 computer 工具、conversations、压缩、previous_response_id |
+| [已存储的 chat completions](docs/guides/API_SURFACE.md) | store: true 后可列出、获取、更新、删除并列出消息 |
+| [Evals](docs/guides/EVALS.md) | OpenAI Evals API，含字符串比对、相似度与本机模型评分器 |
+| [类型化决策](docs/guides/DECISIONS.md) | 一次前向传递给出是非、选择与分数答案及概率，不生成文本 |
+| [Batches、Files 与 tokenizer](docs/guides/API_SURFACE.md) | OpenAI 与 Anthropic batches、Files API、tokenize / detokenize / apply-template / props |
+| [传输方式](docs/guides/TRANSPORTS.md) | SSE、WebSocket 流、Unix socket、HTTP/2、可选 WebRTC |
+| [Yunshu 扩展](docs/guides/API_EXTENSIONS.md) | 请求 id、实时阶段、prefill 进度、取消、期限、x_yunshu 统计、warmup、内存单位 |
+| [Prompt caching API](docs/guides/PROMPT_CACHING_APIS.md) | 三种方言的 cache_control 与缓存 token 计数 |
+
+**Agent 与工具**
+
+| 能力 | 内容 |
+|---|---|
+| [编程 agent](docs/guides/AGENT_COMPAT.md) | Claude Code、Codex、opencode 通过各自的 API 运作；`yunshu launch` |
+| [网页搜索与抓取](docs/guides/WEB_SEARCH.md) | 服务器端 web_search / web_fetch 与引用；DuckDuckGo、Wikipedia、SearXNG、Tavily、Serper、Perplexity |
+| [Tavily 兼容 API](docs/guides/TAVILY.md) | search、extract、crawl、map、research 与 MCP，含 provider 健康退避 |
+| [MCP](docs/guides/API_SURFACE.md) | 原生 MCP 端点，以及请求中指定的远端 MCP server |
+| [客户端设置](docs/guides/CLIENTS.md) | curl、OpenAI 与 Anthropic SDK、Open WebUI |
+
+**多模态**
+
+| 能力 | 内容 |
+|---|---|
+| [图片、音频与视频输入](docs/guides/MULTIMODAL.md) | mlx-vlm 模型在 Chat、Responses、Messages 接受媒体；媒体进入缓存键 |
+| [语音对语音（部分）](docs/guides/MULTIMODAL.md) | Qwen3-Omni 原生语音；重复图片尚未命中缓存 |
+| [Realtime 语音](docs/guides/MULTIMODAL.md) | WebSocket 与可选 WebRTC、服务器 VAD、打断、短期 client secret、本机声音 |
+| [语音转文字与文字转语音](docs/guides/MULTIMODAL.md) | transcriptions、translations、speech 与 voices |
+| [OCR 与图像生成](docs/guides/MULTIMODAL.md) | GLM-OCR 文字提取；图像 generations、edits、variations |
+| [Embeddings、rerank、score、classify](docs/guides/MULTIMODAL.md) | 文字与多模态 embeddings、cross-encoder rerank、训练过的分类头 |
+
+**运维与 console**
+
+| 能力 | 内容 |
+|---|---|
+| [网页 console](docs/CONSOLE.md) | 实时请求阶段、历史、日志、模型、下载、缓存、测试、密钥、设置、状态岛 |
+| [API 密钥与配额](docs/guides/AUTH_AND_KEYS.md) | 多把密钥，含权限、到期、每钥用量与每日配额 |
+| [设置写入与 CORS 编辑](docs/guides/AUTH_AND_KEYS.md) | 从 console 或 API 写入引擎设置（需重启者会提示）并编辑 CORS |
+| [主机遥测](docs/guides/TELEMETRY.md) | 功耗、GPU 时钟、温度、散热与内存压力、每请求能耗估计、Prometheus |
+| [命令行](docs/guides/CLI.md) | setup、doctor、models list/pull/rm/show、top、service、补全与推理命令 |
+| [登录服务](docs/guides/SERVICE.md) | launchd agent、重启与日志 |
+| [设置](docs/CONFIGURATION.md) | 单一设置登记表：环境变量、TOML 文件或 `--set` |
+| [安全](docs/guides/AUTH_AND_KEYS.md) | 验证 token、CORS 凭证规则、转址时移除标头、机密遮蔽、SSRF 防护 |
+| [首次运行与故障排查](docs/guides/FIRST_RUN.md) | 安装、选择模型、就绪检查与修复 |
+| [性能基准与准确度](docs/BENCHMARKS.md) | 每个数字的来源、复现方式与准确度检查 |
 
 ## 快速开始
 
@@ -74,15 +157,43 @@ print(msg.content[0].text)
 
 ### 本地 console
 
-源代码包含 YunUI 引擎 console，入口为 `/console/`，提供状态、资源图表、模型操作、请求查看／取消与流式诊断。
+位于 `/console/` 的本地网页 console 显示引擎正在做什么并可管理它，支持英文、繁体中文与简体中文。
+它由原代码编译（如下），并由同一个进程提供：
 
 ```bash
-cd frontend
-pnpm install --frozen-lockfile
-pnpm build
+cd frontend && pnpm install --frozen-lockfile && pnpm build && cd ..
+yunshu serve -m <model>
+open http://127.0.0.1:8000/console/
 ```
 
-[Console](docs/CONSOLE.md)
+- **总览**：实时请求阶段、prefill 与 decode tok/s、prefill 条内的前缀缓存命中区段、首 token 延迟、Metal 内存、
+  主机功耗、时钟与温度。
+- **请求**与**日志**：延迟分布（冷／暖）、推测接受率、请求历史、取消；已遮蔽凭证的实时日志，可搜索与下载。
+- **诊断**：资源读数、健康检查、Realtime 连接测试与支持包。
+- **模型**、**下载**、**缓存**：加载、卸载、预热与容纳检查；从 Hugging Face 下载并显示进度；查看或清除
+  RAM／WARM／SSD 前缀缓存层。
+- **推理测试**与 **API 接入**：流式对话（含推理）、比较、查看代码；Claude Code、Codex、opencode、SDK 与 curl 的可粘贴设置。
+- **密钥**与**设置**：含配额与用量的 API 密钥、所有引擎设置（需重启者会提示）与 CORS 编辑器。
+- 浮动的**状态岛**跟着你切换页面，布局也适用于手机。
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/console/zh-CN/requests-dark.webp">
+  <img src="docs/images/console/zh-CN/requests-light.webp" alt="Requests and latency distribution">
+</picture>
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/console/zh-CN/playground-dark.webp">
+  <img src="docs/images/console/zh-CN/playground-light.webp" alt="Playground streaming a reply">
+</picture>
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/console/zh-CN/keys-dark.webp">
+  <img src="docs/images/console/zh-CN/keys-light.webp" alt="API keys with quotas and usage">
+</picture>
+
+<img src="docs/images/console/zh-CN/mobile-overview-dark.webp" alt="Console on a phone" width="260">
+
+含截图的逐页导览：[Console 说明](docs/CONSOLE.md)。
 
 ### Qwen3.8-27B
 
@@ -281,14 +392,16 @@ Yunshu 的贪婪输出。相对于原版 MLX 路径的准确度，分三个层�
 
 ## 文档
 
-- [CLI](docs/guides/CLI.md)：命令行：首次启动、模型、launchd、JSON 与 shell completion
-
+- [Console](docs/CONSOLE.md)：每个页面与截图；[CLI](docs/guides/CLI.md)：首次启动、模型、launchd、JSON 与 shell completion
+- [推理功能](docs/guides/INFERENCE.md)、[多模态端点](docs/guides/MULTIMODAL.md)、[模型支持](docs/guides/MODEL_SUPPORT.md)
 - [客户端](docs/guides/CLIENTS.md)：curl、OpenAI / Anthropic SDK、Open WebUI、agent
-- [API surface](docs/guides/API_SURFACE.md) 与 [API 参考](docs/API.md)
+- [API surface](docs/guides/API_SURFACE.md)、[API 扩展](docs/guides/API_EXTENSIONS.md)、[API 参考](docs/API.md)、[传输方式](docs/guides/TRANSPORTS.md)
+- [决策](docs/guides/DECISIONS.md)、[Evals](docs/guides/EVALS.md)、[网页搜索](docs/guides/WEB_SEARCH.md)、[Tavily API](docs/guides/TAVILY.md)
 - [Agent 兼容性](docs/guides/AGENT_COMPAT.md)
+- [验证、密钥、设置与 CORS](docs/guides/AUTH_AND_KEYS.md)、[遥测](docs/guides/TELEMETRY.md)
 - [KV 缓存分层](docs/guides/KV_CACHE_MATRIX.md) 与 [prompt caching API](docs/guides/PROMPT_CACHING_APIS.md)
 - [性能测试](docs/BENCHMARKS.md) 与 [准确度](docs/guides/ACCURACY.md)
-- [背景服务](docs/guides/SERVICE.md)、[疑难排解](docs/guides/TROUBLESHOOTING.md)、[变更纪录](CHANGELOG.md)
+- [首次运行](docs/guides/FIRST_RUN.md)、[后台服务](docs/guides/SERVICE.md)、[故障排查](docs/guides/TROUBLESHOOTING.md)、[设置](docs/CONFIGURATION.md)、[变更记录](CHANGELOG.md)
 
 ## 隐私
 

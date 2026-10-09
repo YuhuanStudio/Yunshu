@@ -22,6 +22,7 @@ DOCS = (
 HEADINGS = [
     ("Yunshu", "Yunshu", "Yunshu"),
     ("Highlights", "亮點", "亮点"),
+    ("Capabilities", "能力總覽", "能力总览"),
     ("Quickstart", "快速開始", "快速开始"),
     ("Local console", "本地 console", "本地 console"),
     ("Qwen3.8-27B", "Qwen3.8-27B", "Qwen3.8-27B"),

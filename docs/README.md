@@ -19,13 +19,17 @@ label later main measurements as unreleased. Start at the top-level [README](../
   WebUI
 - [guides/SERVICE.md](guides/SERVICE.md): running in the background (launchd), uninstalling
 - [guides/TROUBLESHOOTING.md](guides/TROUBLESHOOTING.md)
+- [guides/INFERENCE.md](guides/INFERENCE.md): speculative decoding, prefix cache, structured output, lossy memory options, large MoE
+- [guides/MULTIMODAL.md](guides/MULTIMODAL.md): media input, speech, Realtime, OCR, images, embeddings, rerank
+- [guides/AUTH_AND_KEYS.md](guides/AUTH_AND_KEYS.md): token, API keys and quotas, settings writes, CORS, protections
 - [guides/DECISIONS.md](guides/DECISIONS.md): typed decisions and supported checkpoints
 - [guides/EVALS.md](guides/EVALS.md): local eval definitions, runs and graders
 - [guides/WEB_SEARCH.md](guides/WEB_SEARCH.md): search/fetch configuration and privacy
 - [guides/TAVILY.md](guides/TAVILY.md): Tavily-compatible retrieval and research
 - [guides/TELEMETRY.md](guides/TELEMETRY.md): local host power/thermal/memory sampling
 - [guides/API_SURFACE.md](guides/API_SURFACE.md) and [guides/API_EXTENSIONS.md](guides/API_EXTENSIONS.md): per-route coverage and Yunshu extensions
-- [CONSOLE.md](CONSOLE.md): build and use the source console
+- [CONSOLE.md](CONSOLE.md): the web console, page by page with screenshots
+- [feature_index.json](feature_index.json): every feature with its guide (machine-readable)
 - [API.md](API.md): endpoints
 - [CONFIGURATION.md](CONFIGURATION.md): every `YUNSHU_*` setting (generated)
 - [guides/ACCURACY.md](guides/ACCURACY.md): distribution, greedy and paired task evidence

@@ -9,7 +9,7 @@ Release steps: [RELEASING.md](RELEASING.md).
 
 The 0.1.5 cycle adds local decision models, repeatable evaluations and broader coding-agent
 and web-retrieval compatibility to the `yunshu` package. These changes are merged on main;
-0.1.4 remains the published version. This draft does not include unmerged model-head or console redesign work.
+0.1.4 remains the published version.
 
 ### Highlights
 
@@ -84,6 +84,7 @@ No new decode or TTFT claim is made for this cycle here. Historical measurements
 
 ### Changed
 
+- Documentation coverage: a capability overview table in all three READMEs (generated from `docs/feature_index.json`, checked by a unit test), the console guide rewritten page by page with screenshots, and new guides for [inference features](docs/guides/INFERENCE.md), [multimodal endpoints](docs/guides/MULTIMODAL.md) and [authentication, keys, settings and CORS](docs/guides/AUTH_AND_KEYS.md).
 - gpuq admits declared short verification jobs between long cells without preemption, with a bounded
   time budget; `--gate` takes precedence over same-priority backlog. Foreign CPU contention is measured,
   parsed job records are cached, and non-quiet filler work can run while quiet work waits for CPU admission.
