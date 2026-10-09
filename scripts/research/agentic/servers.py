@@ -25,7 +25,9 @@ YUNSHU_MAIN = Path(
     os.environ.get("YUNSHU_MAIN", "/Users/yuhuan/Documents/YuhuanStudio/Yunshu")
 )
 YUNSHU_BIN = YUNSHU_MAIN / ".venv" / "bin" / "yunshu"
-TF_BIN = "/Volumes/P5Plus/yunshu-test-envs/tensorfold/bin/tensorfold"
+TF_BIN = os.environ.get(
+    "AGENTIC_TF_BIN", "/Volumes/P5Plus/yunshu-test-envs/tensorfold/bin/tensorfold"
+)
 TF_DRAFTER = "/Volumes/P5Plus/models/incoai/Qwen3.8-27B-DFlash2"
 SERVER_HOME = Path("/Volumes/P5Plus/yunshu-build/agentic/server-home")
 
@@ -140,6 +142,7 @@ class Server:
         )  # a python/ dir to run instead of the checkout
         if src and self.kind == "yunshu":
             env["PYTHONPATH"] = src + os.pathsep + env.get("PYTHONPATH", "")
+        self.link_models(env)
         self.log.parent.mkdir(parents=True, exist_ok=True)
         try:
             with self.log.open("ab") as log_file:
@@ -171,6 +174,29 @@ class Server:
             self.kill()
             raise
 
+    def link_models(self, env: dict) -> None:
+        """AGENTIC_YUNSHU_DRAFTER=<dir>: put the drafter where a user who ran ``yunshu pull`` has it
+        (``$HOME/.yunshu/models/<org>/<name>``) so Yunshu's own discovery finds it. The isolated HOME
+        otherwise hides it and the server silently runs MTP."""
+        drafter = os.environ.get("AGENTIC_YUNSHU_DRAFTER")
+        if not drafter or self.kind != "yunshu":
+            return
+        link = Path(env["HOME"]) / ".yunshu" / "models" / "incoai" / Path(drafter).name
+        link.parent.mkdir(parents=True, exist_ok=True)
+        if link.is_symlink() or link.exists():
+            link.unlink()
+        link.symlink_to(drafter)
+
+    def engaged_spec_mode(self) -> str | None:
+        """The draft mode the Yunshu runner reports in its log (None: no evidence)."""
+        import re
+
+        try:
+            text = self.log.read_text(errors="replace")
+        except OSError:
+            return None
+        modes = re.findall(r"VLM batch runner: [^\n]*?draft=(dflash|mtp|off)\b", text)
+        return modes[-1] if modes else None
     def log_tail(self, n: int = 30) -> str:
         try:
             return "".join(self.log.read_text(errors="replace").splitlines(True)[-n:])

@@ -20,6 +20,7 @@ STAGES = (
     "respfeat",
     "websearch",
     "rerank",
+    "snapshot",
     "embedding",
     "priorart",
     "evals",
@@ -36,6 +37,7 @@ LADDER = tuple(
     not in (
         "longqa",
         "conc",
+        "snapshot",
         "modelprobe",
         "client_compat",
         "console",
@@ -54,6 +56,7 @@ LADDER = tuple(
 
 # Every key is a default; the CLI can override ctx / reps / mmlu_n / mem_sizes.
 SUITES = {
+    "snapshot": {"stages": ["snapshot"]},
     "respfeat": {"stages": ["preflight", "respfeat"]},
     "priorart": {"stages": ["preflight", "priorart"]},
     "embedding": {"stages": ["preflight", "embedding"]},

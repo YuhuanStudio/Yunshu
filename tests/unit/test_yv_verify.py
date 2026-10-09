@@ -177,6 +177,7 @@ def test_full_suite_has_every_stage():
     assert set(suites.STAGES) - set(suites.LADDER) == {
         "longqa",
         "conc",
+        "snapshot",
         "modelprobe",
         "client_compat",
         "respfeat",

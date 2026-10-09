@@ -26,6 +26,7 @@ from .core import (
 )
 from .core import sha as _sha
 from .execute import Cell, Executor
+from .snapshot import stage_snapshot
 
 TFBENCH = REPO / "scripts/research/tfbench.py"
 MEMORY_AB = REPO / "scripts/research/memory_ab.py"
@@ -1702,6 +1703,7 @@ def stage_telemetry(ctx: Ctx, *, pilot: bool = False) -> StageResult:
 
 
 STAGE_FUNCS = {
+    "snapshot": stage_snapshot,
     "console": stage_console,
     "telemetry": stage_telemetry,
     "telemetry-tiny": lambda ctx: stage_telemetry(ctx, pilot=True),
