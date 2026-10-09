@@ -599,10 +599,10 @@ def part_arrive(s, out, a):
         time.sleep(a.arrive_settle)
     a.require_engaged = True
     done = check_rehearsal_engaged(s, a)
-    req = urllib.request.Request(
+    metrics_req = urllib.request.Request(
         s.url + "/metrics", headers={"Authorization": "Bearer k"}
     )
-    with urllib.request.urlopen(req, timeout=30) as r:
+    with urllib.request.urlopen(metrics_req, timeout=30) as r:
         preempted = rehearsal_count(r.read().decode(), "preempted")
     emit(
         out,

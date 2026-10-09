@@ -132,3 +132,68 @@ def test_arrive_requires_engagement_even_without_think_time(monkeypatch):
     a = type("A", (), {"think_s": 0.0, "require_engaged": True})
     with pytest.raises(RuntimeError, match="never engaged"):
         tfbench.check_rehearsal_engaged(_srv({"YUNSHU_NEXT_TURN_PREFILL": "exact"}), a)
+
+
+def test_part_arrive_runs_end_to_end_against_a_fake_server(monkeypatch, tmp_path):
+    import io
+    import json as _json
+
+    sent = []
+
+    def fake_send(url, body, *a, **k):
+        sent.append(body)
+        n = body.get("max_tokens", 0)
+        return {
+            "ttft_s": 0.1,
+            "_text": "word " * n,
+            "cached": 1,
+            "pt": 2,
+            "ct": n,
+            "finish": "length",
+        }
+
+    monkeypatch.setattr(tfbench, "send", fake_send)
+    monkeypatch.setattr(tfbench, "load_prompt", lambda name: "prompt")
+    monkeypatch.setattr(tfbench, "check_decode_len", lambda *a, **k: None)
+    monkeypatch.setattr(tfbench.time, "sleep", lambda s: None)
+    metrics = (
+        'yunshu_next_turn_rehearsals_total{outcome="completed"} 3\n'
+        'yunshu_next_turn_rehearsals_total{outcome="preempted"} 2\n'
+    )
+    monkeypatch.setattr(
+        tfbench.urllib.request, "urlopen", lambda *a, **k: io.BytesIO(metrics.encode())
+    )
+    s = type(
+        "S",
+        (),
+        {
+            "url": "http://x",
+            "model": "m",
+            "extra_env": {"YUNSHU_NEXT_TURN_PREFILL": "exact"},
+        },
+    )
+    for mode in ("diverge", "adopt"):
+        a = tfbench.parse_args(
+            [
+                "--engine",
+                "yunshu",
+                "--part",
+                "arrive",
+                "--out",
+                "x",
+                "--arrive-mode",
+                mode,
+                "--arrive-n",
+                "2",
+                "--decode-tokens",
+                "5",
+            ]
+        )
+        out = tmp_path / f"{mode}.jsonl"
+        with open(out, "w") as fh:
+            tfbench.part_arrive(s, fh, a)
+        rows = [_json.loads(line) for line in out.read_text().splitlines()]
+        summary = rows[-1]
+        assert summary["role"] == "summary" and summary["preempted"] == 2
+        assert summary["rehearsals_completed"] == 3
+        assert [r["role"] for r in rows].count("trial") == 3  # 2 offsets + the control
