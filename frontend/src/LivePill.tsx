@@ -1,5 +1,6 @@
 import { StatusIndicator } from "@yuhuanowo/yunui";
 import type { EngineStatus } from "./api";
+import { Slot } from "./ui";
 import { livePill } from "./engineView";
 import type { EngineConnectionPhase } from "./useEngine";
 
@@ -26,9 +27,11 @@ export function LivePill({
       <StatusIndicator status={pill.tone} />
       <span className="leading-4 text-foreground">{pill.phase}</span>
       {pill.detail && (
-        <span className="hidden leading-4 tabular-nums sm:inline">
+        // Wide enough for the longest "prefill 100% · decode 123.4 tok/s": the pill keeps its width
+        // while the numbers change.
+        <Slot ch={32} className="hidden leading-4 sm:inline-block">
           {pill.detail}
-        </span>
+        </Slot>
       )}
     </span>
   );

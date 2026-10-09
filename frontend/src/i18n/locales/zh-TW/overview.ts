@@ -2,6 +2,7 @@ const overview = {
   "chart.empty": "等待第一筆採樣",
   "chart.collecting": "資料收集中",
   "chart.idle": "閒置中",
+  "chart.quiet": "這段時間沒有解碼活動",
   "chart.missing": "未回報",
   "chart.hidden": "序列已隱藏，可點選圖例重新顯示",
   "chart.legend": "顯示或隱藏序列",

@@ -171,12 +171,10 @@ test("idle overview: no giant empty cards, and Idle is said once outside the sta
   await page.goto("/console/#/overview", { waitUntil: "domcontentloaded" });
   await page.getByTestId("live-panel").waitFor();
   await page.waitForTimeout(1000);
-  // The idle live card is one compact card, not a half-empty chart plus list.
+  // The live card keeps one size idle or busy (five lane slots are reserved so nothing moves when
+  // requests arrive), so it is bounded rather than collapsed.
   const live = await page.getByTestId("live-panel").boundingBox();
-  expect(live!.height).toBeLessThan(220);
-  expect(await page.getByTestId("live-panel").getAttribute("data-idle")).toBe(
-    "true",
-  );
+  expect(live!.height).toBeLessThan(480);
   // The status block, stat cards and live card never say the idle word (the top pill and the band do).
   for (const id of ["state-strip", "overview-stats", "live-panel"])
     expect(await page.getByTestId(id).innerText(), id).not.toContain("閒置");

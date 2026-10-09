@@ -165,7 +165,7 @@ def _request(base: str, model: str, a: Action, results: list[dict]) -> None:
         msgs = [{"role": "user", "content": "Count slowly from 1 to 500."}]
         body["max_tokens"] = 500
     elif a.kind == "fail":
-        body["model"] = "no-such-model"
+        msgs = []  # an empty conversation is refused with a 4xx by every OpenAI-compatible server
     body["messages"] = msgs
     t0 = time.time()
     status, events, ok = 0, 0, False

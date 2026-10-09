@@ -490,11 +490,16 @@ export function StatValue({ text, unit }: { text: string; unit?: string }) {
   const m = unit ? null : /^(-?[\d.,]+)\s+(\S+)$/.exec(text);
   const value = m ? m[1] : text;
   const u = unit ?? m?.[2];
-  if (!u || value === "—") return <>{value}</>;
-  if (u === "%") return <>{value}%</>;
+  // The figure always has the same box (a reserved width, tabular digits), so the unit beside it
+  // and the value after "—" do not move when the number changes length.
+  const figure = (
+    <span className="inline-block min-w-[7ch] tabular-nums">{value}</span>
+  );
+  if (!u || value === "—") return figure;
+  if (u === "%") return <>{figure}%</>;
   return (
     <>
-      {value}
+      {figure}
       <span className="ml-1 text-xs font-normal text-muted-foreground">
         {u}
       </span>

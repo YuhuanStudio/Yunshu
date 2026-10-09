@@ -147,7 +147,10 @@ output {
     [role="option"],
     [role="menuitem"]
   ):focus-visible,
-:where(input, textarea):not([role="combobox"], [data-yunui="chat-composer"] *):focus-visible {
+:where(input, textarea):not(
+    [role="combobox"],
+    [data-yunui="chat-composer"] *
+  ):focus-visible {
   outline: 2px solid var(--text-primary);
   outline-offset: 2px;
 }
@@ -318,6 +321,16 @@ body {
   }
 }
 
+/* A lane slot keeps its place; an ended request fades out in it and the slot is empty afterwards. */
+.live-slot[data-leaving] > .live-row-inner {
+  animation: live-presence-out 180ms ease-in forwards;
+}
+@media (prefers-reduced-motion: reduce) {
+  .live-slot[data-leaving] > .live-row-inner {
+    animation: none;
+  }
+}
+
 /* LiveScroll: the series layer of a time-series chart slides with the clock between samples. */
 .live-scroll svg [clip-path] > *,
 .live-scroll svg g:has(> text[data-axis="x"]) {
@@ -328,4 +341,9 @@ body {
   .live-scroll svg g:has(> text[data-axis="x"]) {
     transform: none;
   }
+}
+
+/* A stat card's meta line keeps two lines of room: it may wrap, the card does not change height. */
+[data-stat-grid] .yunui-stat-sub {
+  min-height: 2lh;
 }

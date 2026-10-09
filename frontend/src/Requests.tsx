@@ -6,6 +6,7 @@ import { SpeculationPanel } from "./SpeculationPanel";
 import { useRequestArchive } from "./useRequestArchive";
 import { ArchiveControls } from "./ArchiveControls";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useFlip } from "./motion/flip";
 import {
   CustomSelect,
   Button,
@@ -330,6 +331,8 @@ export function Requests({
         });
   const matched = useMemo(() => sortRows(bySpeed, sort), [bySpeed, sort]);
   const shown = matched.slice(0, limit);
+  const listRef = useRef<HTMLDivElement>(null);
+  useFlip(listRef);
   const fresh = useFreshIds(shown.map((r) => r.id));
   const restore = (e: Event) => {
     if (opener.current?.isConnected) {
@@ -647,7 +650,6 @@ export function Requests({
     </div>
   ) : null;
   // The trend slot is reserved only once some tile has a trend to draw; before that the cards stay compact.
-  const anySpark = tiles.some((tile) => hasTrend(tile.data));
   return (
     <DashboardPage width="7xl" data-testid="requests">
       <PageHeader
@@ -680,11 +682,11 @@ export function Requests({
               trend={tile.trend ?? undefined}
               subtext={
                 <span className="block min-w-0 space-y-1 sm:space-y-2">
-                  <span className="block whitespace-normal">{tile.hint}</span>
+                  <span className="block min-h-8 whitespace-normal">
+                    {tile.hint}
+                  </span>
                   {/* The trend slot keeps its height before and after samples arrive; only the line waits for data. */}
-                  <span
-                    className={`hidden sm:block ${anySpark ? "h-7" : "sm:hidden"}`}
-                  >
+                  <span className="hidden h-7 sm:block">
                     {spark && (
                       <Sparkline
                         data={tile.data.slice(-60)}
@@ -702,10 +704,6 @@ export function Requests({
           );
         })}
       </StatGrid>
-      {recent.supported && <LatencyDistribution rows={finished} />}
-      {recent.supported && (
-        <SpeculationPanel rows={finished} connection={connection} />
-      )}
       <div className="flex flex-wrap justify-between gap-3">
         <div className="w-full sm:w-auto sm:max-w-xs">
           <Input
@@ -798,9 +796,12 @@ export function Requests({
         list={
           <div className="space-y-5">
             <Card className="overflow-hidden">
-              <div className="min-h-24">
+              <div className="min-h-[42rem]" data-live-list="" ref={listRef}>
                 <TooltipProvider delayDuration={200}>
-                  <Table scrollLabel={t("requests.list.tableLabel")}>
+                  <Table
+                    className="md:min-w-[840px] md:table-fixed"
+                    scrollLabel={t("requests.list.tableLabel")}
+                  >
                     <Thead>
                       <Tr>
                         <SortTh
@@ -870,6 +871,7 @@ export function Requests({
                         return (
                           <Tr
                             key={row.id}
+                            data-flip={row.id}
                             className={
                               [
                                 detail?.id === row.id ? "bg-accent-subtle" : "",
@@ -1154,6 +1156,11 @@ export function Requests({
           ) : null
         }
       />
+      {/* Under the list: these panels appear and grow as requests finish, and nothing above them moves. */}
+      {recent.supported && <LatencyDistribution rows={finished} />}
+      {recent.supported && (
+        <SpeculationPanel rows={finished} connection={connection} />
+      )}
       {!xl && (
         <Sheet
           open={!!detail}

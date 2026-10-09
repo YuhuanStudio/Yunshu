@@ -1,10 +1,9 @@
 import { gbTotalText } from "./byte-format";
 import { LiveNumber } from "./LiveNumber";
 import { rangeSeconds, useRangeHistory } from "./useRangeHistory";
-import { useLinger } from "./motion/linger";
 import { PrefillBar } from "./PrefillBar";
 import { SegmentedTray } from "./SegmentedTray";
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   AnimatedNumber,
   Button,
@@ -135,6 +134,47 @@ const rateSeries = () => {
 };
 const formatNumber = (value: number) => number(value);
 const formatCount = (value: number) => number(value, 0);
+const LANES_SHOWN = 5;
+/** Five lane rows of 4 rem each (+1 px divider). The room is always there. */
+const LANE_AREA_PX = LANES_SHOWN * 65;
+
+/**
+ * Fixed lane slots. A request takes the first free slot when it appears and keeps it until it ends
+ * (it fades there for `ms`, then the slot is free again): rows never shift because another changed.
+ */
+type LaneSlot = { row: RequestRow; until: number } | null;
+function useLaneSlots(
+  rows: readonly RequestRow[],
+  n: number,
+  ms = 340,
+): ({ row: RequestRow; leaving: boolean } | null)[] {
+  const [, bump] = useState(0);
+  const slots = useRef<LaneSlot[]>(Array.from({ length: n }, () => null));
+  const now = Date.now();
+  const byId = new Map(rows.map((r) => [r.request_id, r]));
+  const s = slots.current;
+  for (let i = 0; i < n; i++) {
+    const cur = s[i];
+    if (!cur) continue;
+    const fresh = byId.get(cur.row.request_id);
+    if (fresh) s[i] = { row: fresh, until: 0 };
+    else if (cur.until === 0) {
+      s[i] = { row: cur.row, until: now + ms };
+      setTimeout(() => bump((x) => x + 1), ms + 20);
+    } else if (cur.until <= now) s[i] = null;
+  }
+  const placed = new Set(s.map((x) => x?.row.request_id));
+  const waiting = rows
+    .filter((r) => !placed.has(r.request_id))
+    .sort((a, b) => b.elapsed_s - a.elapsed_s);
+  for (const r of waiting) {
+    const free = s.findIndex((x) => x === null);
+    if (free < 0) break;
+    s[free] = { row: r, until: 0 };
+  }
+  return s.map((x) => (x ? { row: x.row, leaving: x.until > 0 } : null));
+}
+
 function RequestLane({ row, leaving }: { row: RequestRow; leaving?: boolean }) {
   useLocale();
   const phase = String(row.phase);
@@ -149,12 +189,12 @@ function RequestLane({ row, leaving }: { row: RequestRow; leaving?: boolean }) {
       : null;
   return (
     <li
-      className="live-row"
+      className="live-slot h-16"
       data-leaving={leaving ? "" : undefined}
       aria-hidden={leaving ? true : undefined}
     >
       <div className="live-row-inner">
-        <div className="live-appear grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-1 py-3">
+        <div className="live-appear grid h-16 grid-cols-[minmax(0,1fr)_auto] grid-rows-[1.25rem_1rem] content-center items-center gap-x-4 gap-y-1">
           <div className="flex min-w-0 items-center gap-2.5">
             <StatusIndicator className="shrink-0" status={phaseDot(phase)} />
             <Slot ch={7} className="shrink-0 text-sm font-medium">
@@ -203,8 +243,13 @@ function RequestLane({ row, leaving }: { row: RequestRow; leaving?: boolean }) {
             </Slot>
           </div>
           {progress != null ? (
-            <div className="col-span-2 flex h-4 items-center">
-              <PrefillBar row={row} className="h-1" caption />
+            <div className="col-span-2 flex h-4 items-center gap-3">
+              <PrefillBar row={row} className="h-1 min-w-0 flex-1" />
+              {cached > 0 && (
+                <span className="shrink-0 whitespace-nowrap text-xs text-muted-foreground">
+                  {t("overview.prefill.cached", { n: number(cached, 0) })}
+                </span>
+              )}
             </div>
           ) : phase !== "prefill" && cached > 0 && prompt > 0 ? (
             <p className="col-span-2 truncate text-xs text-muted-foreground">
@@ -213,7 +258,9 @@ function RequestLane({ row, leaving }: { row: RequestRow; leaving?: boolean }) {
                 prompt: number(prompt, 0),
               })}
             </p>
-          ) : null}
+          ) : (
+            <div className="col-span-2 h-4" />
+          )}
         </div>
       </div>
     </li>
@@ -319,8 +366,7 @@ export function Dashboard({
       ? null
       : (points.find((sample) => sample.at === activeX) ?? null);
   const items = status?.requests.items ?? [];
-  const lanes = useLinger(items, (r) => r.request_id);
-  const few = items.length <= 2;
+  const lanes = useLaneSlots(items, LANES_SHOWN);
   const hostState = useHostTelemetry(connection, online);
   const hostShown =
     !!hostState.host &&
@@ -577,7 +623,9 @@ export function Dashboard({
             label={t("overview.stats.metal")}
             value={
               <>
-                <LiveNumber value={memory?.active_gb ?? null} digits={1} />
+                <Slot ch={5}>
+                  <LiveNumber value={memory?.active_gb ?? null} digits={1} />
+                </Slot>
                 <span className="ml-1 text-xs font-normal text-muted-foreground">
                   GB
                 </span>
@@ -592,12 +640,48 @@ export function Dashboard({
       )}
 
       {/* Live: what the engine is doing right now. Idle collapses to one compact card. */}
-      {items.length === 0 && !busy ? (
-        <Card
-          className={`flex min-w-0 flex-col gap-3 p-4 ${dim}`}
-          data-testid="live-panel"
-          data-idle="true"
-        >
+      <Card
+        className={`grid min-w-0 overflow-hidden p-0 lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)] ${dim}`}
+        data-testid="live-panel"
+      >
+        <div className="flex min-w-0 flex-col justify-between gap-5 p-4 max-lg:order-2">
+          <div className="min-w-0">
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-xs text-muted-foreground">
+                {heroMetric === "decode"
+                  ? t("overview.hero.decode")
+                  : t("overview.hero.prefill")}
+              </p>
+              <SegmentedTray
+                aria-label={t("overview.hero.metric")}
+                value={heroMetric}
+                onChange={setHeroMetric}
+                options={[
+                  { value: "decode", label: t("overview.series.decode") },
+                  { value: "prefill", label: t("overview.series.prefill") },
+                ]}
+              />
+            </div>
+            <SeriesChart
+              busy={busy}
+              className="mt-3"
+              data={heroData}
+              series={rates[heroMetric as "decode" | "prefill"]}
+              height={150}
+              idleLabel={t("overview.chart.quiet")}
+              ariaLabel={
+                heroMetric === "decode"
+                  ? t("overview.hero.ariaDecode")
+                  : t("overview.hero.ariaPrefill")
+              }
+              formatX={clock}
+              formatY={formatNumber}
+              maxGap={12000}
+              liveWindowMs={300_000}
+            />
+          </div>
+        </div>
+        <div className="flex min-w-0 flex-col gap-3 p-4 max-lg:order-1">
           <div className="flex items-center justify-between gap-3">
             <h2 className="yunui-section-title text-base font-semibold">
               {t("overview.active.title")}
@@ -606,12 +690,12 @@ export function Dashboard({
               </span>
             </h2>
             <div className="flex items-center gap-3 text-xs text-muted-foreground">
-              <span className="max-sm:hidden">
+              <Slot ch={14} align="right">
                 {t("overview.active.window", {
                   s: number(status?.throughput.window_s ?? 60, 0),
                   n: number(status?.throughput.requests, 0),
                 })}
-              </span>
+              </Slot>
               <Button
                 size="sm"
                 variant="ghost"
@@ -622,113 +706,34 @@ export function Dashboard({
               </Button>
             </div>
           </div>
-          <p className="text-xs text-muted-foreground">
-            {memory?.cache_gb
-              ? t("overview.active.idleDescPool", {
-                  gb: number(memory.cache_gb),
-                })
-              : t("overview.active.idleDesc")}
-          </p>
-          {recent && (
-            <div className="min-w-0" data-testid="live-spark">
-              <p className="text-xs text-muted-foreground">
-                {t("overview.hero.decode")}
-              </p>
-              <SeriesChart
-                busy={busy}
-                className="mt-2"
-                data={heroData}
-                series={rates.decode}
-                height={72}
-                ariaLabel={t("overview.hero.ariaDecode")}
-                formatX={clock}
-                formatY={formatNumber}
-                maxGap={12000}
-              />
-            </div>
-          )}
-          <TotalsLine totals={totals} />
-        </Card>
-      ) : (
-        <Card
-          className={`grid min-w-0 overflow-hidden p-0 ${few ? "" : "lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)]"} ${dim}`}
-          data-testid="live-panel"
-          data-layout={few ? "stacked" : "split"}
-        >
-          <div
-            className={`flex min-w-0 flex-col justify-between gap-5 p-4 ${few ? "order-2 pt-0" : "max-lg:order-2"}`}
-          >
-            <div className="min-w-0">
-              <div className="flex items-center justify-between gap-3">
-                <p className="text-xs text-muted-foreground">
-                  {heroMetric === "decode"
-                    ? t("overview.hero.decode")
-                    : t("overview.hero.prefill")}
-                </p>
-                <SegmentedTray
-                  aria-label={t("overview.hero.metric")}
-                  value={heroMetric}
-                  onChange={setHeroMetric}
-                  options={[
-                    { value: "decode", label: t("overview.series.decode") },
-                    { value: "prefill", label: t("overview.series.prefill") },
-                  ]}
-                />
-              </div>
-              <SeriesChart
-                busy={busy}
-                className="mt-3"
-                data={heroData}
-                series={rates[heroMetric as "decode" | "prefill"]}
-                height={150}
-                ariaLabel={
-                  heroMetric === "decode"
-                    ? t("overview.hero.ariaDecode")
-                    : t("overview.hero.ariaPrefill")
-                }
-                formatX={clock}
-                formatY={formatNumber}
-                maxGap={12000}
-                liveWindowMs={300_000}
-              />
-            </div>
-          </div>
-          <div
-            className={`flex min-w-0 flex-col gap-3 p-4 ${few ? "order-1" : "max-lg:order-1"}`}
-          >
-            <div className="flex items-center justify-between gap-3">
-              <h2 className="yunui-section-title text-base font-semibold">
-                {t("overview.active.title")}
-                <span className="ml-2 text-muted-foreground tabular-nums">
-                  {number(status?.requests.active, 0)}
-                </span>
-              </h2>
-              <div className="flex items-center gap-3 text-xs text-muted-foreground">
-                <Slot ch={14} align="right">
-                  {t("overview.active.window", {
-                    s: number(status?.throughput.window_s ?? 60, 0),
-                    n: number(status?.throughput.requests, 0),
-                  })}
-                </Slot>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => navigate("requests")}
-                >
-                  {t("overview.active.all")}
-                  <ArrowRight size={13} />
-                </Button>
-              </div>
-            </div>
-            <ul className={`divide-y divide-border/60 ${few ? "" : "flex-1"}`}>
-              {lanes.slice(0, 5).map(({ row, leaving }) => (
-                <RequestLane key={row.request_id} row={row} leaving={leaving} />
-              ))}
+          {/* Five rows of reserved space: requests come and go inside it, nothing below moves. */}
+          <div className="relative flex-1" style={{ minHeight: LANE_AREA_PX }}>
+            <ul className="divide-y divide-border/60">
+              {lanes.map((lane, i) =>
+                lane ? (
+                  <RequestLane
+                    key={`slot-${i}`}
+                    row={lane.row}
+                    leaving={lane.leaving}
+                  />
+                ) : (
+                  <li key={`slot-${i}`} className="h-16" aria-hidden />
+                ),
+              )}
             </ul>
-            <TotalsLine totals={totals} />
+            {lanes.every((l) => !l) && (
+              <p className="absolute inset-x-0 top-0 py-3 text-xs text-muted-foreground">
+                {memory?.cache_gb
+                  ? t("overview.active.idleDescPool", {
+                      gb: number(memory.cache_gb),
+                    })
+                  : t("overview.active.idleDesc")}
+              </p>
+            )}
           </div>
-        </Card>
-      )}
+          <TotalsLine totals={totals} />
+        </div>
+      </Card>
 
       {hostShown && (
         <FoldSection title={t("overview.host.title")}>
@@ -906,39 +911,41 @@ export function Dashboard({
                   })}
                 </span>
               </p>
-              <SegmentedBar
-                className="mt-4"
-                height={10}
-                total={memory?.total_gb ?? undefined}
-                label={t("overview.memory.barLabel", {
-                  active: number(memory?.active_gb),
-                  pool: number(memory?.cache_gb),
-                })}
-                segments={[
-                  {
-                    value: memory?.active_gb ?? 0,
-                    tone: "accent",
-                    label: t("overview.series.active"),
-                  },
-                  {
-                    value: memory?.cache_gb ?? 0,
-                    tone: "neutral",
-                    label: t("overview.series.pool"),
-                  },
-                ]}
-                marks={
-                  memory?.peak_gb
-                    ? [
-                        {
-                          value: memory.peak_gb,
-                          label: t("overview.memory.peakMark"),
-                        },
-                      ]
-                    : undefined
-                }
-                legend
-                formatValue={(v) => `${number(v)} GB`}
-              />
+              {/* the legend wraps to a second line when the numbers get wider: both lines are reserved */}
+              <div className="mt-4 min-h-[54px]">
+                <SegmentedBar
+                  height={10}
+                  total={memory?.total_gb ?? undefined}
+                  label={t("overview.memory.barLabel", {
+                    active: number(memory?.active_gb),
+                    pool: number(memory?.cache_gb),
+                  })}
+                  segments={[
+                    {
+                      value: memory?.active_gb ?? 0,
+                      tone: "accent",
+                      label: t("overview.series.active"),
+                    },
+                    {
+                      value: memory?.cache_gb ?? 0,
+                      tone: "neutral",
+                      label: t("overview.series.pool"),
+                    },
+                  ]}
+                  marks={
+                    memory?.peak_gb
+                      ? [
+                          {
+                            value: memory.peak_gb,
+                            label: t("overview.memory.peakMark"),
+                          },
+                        ]
+                      : undefined
+                  }
+                  legend
+                  formatValue={(v) => `${number(v)} GB`}
+                />
+              </div>
               <DetailList className="mt-4">
                 <DetailRow
                   label={t("overview.memory.peak")}

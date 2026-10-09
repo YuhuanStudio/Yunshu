@@ -73,11 +73,15 @@ function useGlide(target: number, ms = 280): number {
   return value;
 }
 
+/** The time axis and its padding under the plot: the idle placeholder reserves them so the chart replaces it without a jump. */
+const CHART_AXIS_PX = 36;
+
 export function SeriesChart({
   busy,
   height = 180,
   className,
   liveWindowMs,
+  idleLabel,
   ...rest
 }: Omit<
   ChartProps,
@@ -93,6 +97,8 @@ export function SeriesChart({
 > & {
   busy: boolean;
   height?: number;
+  /** What the placeholder says when no sample has a value (defaults to the page's idle wording). */
+  idleLabel?: string;
   /**
    * Makes the chart a live one: the x axis is the last `liveWindowMs` up to the newest sample (so a
    * point's position depends on its own time only and the series slides with the clock between
@@ -133,13 +139,16 @@ export function SeriesChart({
       <div
         role="status"
         aria-label={rest.ariaLabel}
-        className={className}
+        className={`flex items-center justify-center ${className ?? ""}`}
+        style={{ height: height + CHART_AXIS_PX }}
         data-testid="series-idle"
       >
         <EmptyState
           size="inline"
           title={
-            busy ? t("overview.chart.collecting") : t("overview.chart.idle")
+            busy
+              ? t("overview.chart.collecting")
+              : (idleLabel ?? t("overview.chart.idle"))
           }
         />
       </div>
@@ -235,7 +244,7 @@ export function PhasePanel({
 }) {
   useLocale();
   const [phase, setPhase] = useState<string | null>(null);
-  const data = phaseDistribution(engine.status);
+  const data = phaseDistribution(engine.status, { steady: true });
   const active = engine.status?.requests.items ?? [];
   const selected = phase ? active.filter((row) => row.phase === phase) : active;
   return (
@@ -361,7 +370,11 @@ export function LatencyPanel({
           ["P50", p50, "latency-p50"],
           ["P95", p95, "latency-p95"],
         ].map(([label, value, id]) => (
-          <div key={id as string} data-testid={id as string}>
+          <div
+            key={id as string}
+            className="min-w-32"
+            data-testid={id as string}
+          >
             <p className="text-xs text-muted-foreground">{label}</p>
             <p className="mt-1 text-2xl font-semibold tabular-nums">
               {number(value as number | null, 0)}{" "}

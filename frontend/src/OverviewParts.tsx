@@ -126,7 +126,7 @@ export function StateStrip({
               >
                 <StatusIndicator status={dot(id, lit)} />
                 {tr(`overview.phase.${id}`)}
-                <Slot ch={1} align="right" className="tabular-nums">
+                <Slot ch={2} align="right" className="tabular-nums">
                   {lit ? countOf(id) : ""}
                 </Slot>
               </li>
@@ -134,7 +134,7 @@ export function StateStrip({
           })}
         </ul>
         <p
-          className="min-h-6 min-w-0 flex-1 truncate text-sm tabular-nums max-sm:h-auto max-sm:basis-full max-sm:whitespace-normal"
+          className="min-h-6 min-w-0 flex-1 truncate text-sm tabular-nums max-sm:h-auto max-sm:min-h-10 max-sm:basis-full max-sm:whitespace-normal max-sm:[display:-webkit-box] max-sm:[-webkit-box-orient:vertical] max-sm:[-webkit-line-clamp:2]"
           data-testid="state-strip-detail"
         >
           {left}
@@ -176,11 +176,13 @@ export function SpeedPair({ status }: { status: EngineStatus }) {
         label={term}
         value={
           <>
-            <LiveNumber
-              value={headline.value}
-              format={(v) => fixed(v)}
-              jumpKey={headline.kind}
-            />
+            <Slot ch={7}>
+              <LiveNumber
+                value={headline.value}
+                format={(v) => fixed(v)}
+                jumpKey={headline.kind}
+              />
+            </Slot>
             <span className="ml-1 text-xs font-normal text-muted-foreground">
               tok/s
             </span>
@@ -318,7 +320,7 @@ export function HealthLine({
       role="status"
       data-testid="health-verdict"
       data-level={checking ? "checking" : level}
-      className="flex min-h-8 flex-wrap items-center gap-x-3 gap-y-1 text-sm"
+      className="flex min-h-8 min-w-0 flex-nowrap items-center gap-x-3 text-sm"
     >
       <StatusIndicator
         status={
@@ -337,9 +339,19 @@ export function HealthLine({
         {/* i18n-keys: overview.health. */}
         {checking ? "—" : tr(`overview.health.${level}`)}
       </span>
-      <span className="min-w-0 text-muted-foreground">{text}</span>
+      <span
+        className="min-w-0 flex-1 truncate text-muted-foreground"
+        title={text}
+      >
+        {text}
+      </span>
       {!checking && level !== "ok" && target && (
-        <Button size="sm" variant="ghost" onClick={() => navigate(target)}>
+        <Button
+          className="shrink-0"
+          size="sm"
+          variant="ghost"
+          onClick={() => navigate(target)}
+        >
           {t("overview.health.open")}
           <ArrowRight size={13} />
         </Button>

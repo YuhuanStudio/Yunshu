@@ -5,6 +5,7 @@ const overview: Shape<typeof zh> = {
   "chart.empty": "Waiting for the first sample",
   "chart.collecting": "Collecting data…",
   "chart.idle": "Idle",
+  "chart.quiet": "No decoding in this window",
   "chart.missing": "Not reported",
   "chart.hidden": "Series hidden. Select the legend to show it again",
   "chart.legend": "Show or hide series",

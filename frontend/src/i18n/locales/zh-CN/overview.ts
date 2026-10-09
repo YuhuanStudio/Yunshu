@@ -5,6 +5,7 @@ const overview: Shape<typeof zh> = {
   "chart.empty": "等待第一条采样",
   "chart.collecting": "数据收集中",
   "chart.idle": "空闲中",
+  "chart.quiet": "这段时间没有解码活动",
   "chart.missing": "未上报",
   "chart.hidden": "序列已隐藏，可点击图例重新显示",
   "chart.legend": "显示或隐藏序列",

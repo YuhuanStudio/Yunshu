@@ -36,7 +36,7 @@ test("CLS ignores shifts that follow user input", () => {
   );
 });
 
-test("a row pushed down or a card that grew is a move; scrolling is not", () => {
+test("a row pushed down is a move; a card that only grew, and scrolling, are not", () => {
   const frames = [
     frame(0, 0, { 1: { top: 100, height: 40 }, 2: { top: 140, height: 40 } }),
     frame(250, 0, { 1: { top: 100, height: 40 }, 2: { top: 180, height: 40 } }), // pushed down by 40
@@ -46,10 +46,7 @@ test("a row pushed down or a card that grew is a move; scrolling is not", () => 
   const d = boxDeltas(frames);
   assert.deepEqual(
     d.map((x) => [x.id, x.dTop, x.dH]),
-    [
-      ["2", 40, 0],
-      ["1", 0, 20],
-    ],
+    [["2", 40, 0]],
   );
 });
 
@@ -66,9 +63,9 @@ test("sub-pixel noise and elements that appear or vanish are not moves", () => {
 
 test("top movers rank by total movement and carry the element's key", () => {
   const d = [
-    { t: 1, id: "a", key: "row", dTop: 40, dH: 0, dW: 0 },
-    { t: 2, id: "b", key: "num", dTop: 0, dH: 0, dW: 3 },
-    { t: 3, id: "a", key: "row", dTop: 20, dH: 0, dW: 0 },
+    { t: 1, id: "a", key: "row", dTop: 40, dH: 0, dLeft: 0 },
+    { t: 2, id: "b", key: "num", dTop: 0, dH: 0, dLeft: 3 },
+    { t: 3, id: "a", key: "row", dTop: 20, dH: 0, dLeft: 0 },
   ];
   assert.deepEqual(topMovers(d, 2), [
     { key: "row", moves: 2, total: 60 },
