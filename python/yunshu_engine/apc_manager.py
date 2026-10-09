@@ -859,6 +859,12 @@ class _Coordinator(APCCoordinator):
                 "_console_generations", {}
             ).get(getattr(self, "_request_generation", None))
         tokens = tuple(token_ids)
+        try:
+            from . import dflash_apc_window
+
+            dflash_apc_window.capture(tokens, extra_hash)
+        except Exception:  # the drafter window is an optimisation only
+            logger.debug("drafter window capture failed", exc_info=True)
         full_ids = getattr(self, "_current_ids", tokens)
         policy = self.request(full_ids)
         signature = ()
