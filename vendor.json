@@ -383,7 +383,10 @@
       ],
       "commit": "924707f1",
       "license": "Apache-2.0",
-      "why": "port of Gemma4MTPMaskedEmbedder to MLX"
+      "why": "port of Gemma4MTPMaskedEmbedder to MLX",
+      "reviewed_commit": "2c99ee9333821030daf84718b2a76ea28d94ba3c",
+      "reviewed_date": "2026-10-09",
+      "review_reason": "Reviewed upstream subjects: [Chore] Remove vendored code made redundant by Transformers 5.16.1 (#60623). Candidate logged for the backlog: d8fa463e hybrid Mamba prefix-cache boundary fix, compare with the local exact hybrid checkpoint boundaries. Other commits are server-scale frontend work."
     },
     {
       "kind": "derived",
@@ -2355,8 +2358,8 @@
       "why": "n-gram / suffix / MTP proposers, block pool, mRoPE",
       "commit": "3ca00a8261c7790ba7487e2001ab9004ad8065f2",
       "reviewed_date": "2026-10-09",
-      "reviewed_commit": "18c19eaf239f09bc2543637c73f3b2d05f9bf5c5",
-      "review_reason": "Reviewed upstream subjects: [Bugfix][Prefix caching] Fix inconsistent hybrid Mamba prefix cache boundaries (#60533). Candidate logged for the backlog: d8fa463e hybrid Mamba prefix-cache boundary fix, compare with the local exact hybrid checkpoint boundaries. Other commits are server-scale frontend work."
+      "reviewed_commit": "2c99ee9333821030daf84718b2a76ea28d94ba3c",
+      "review_reason": "Reviewed upstream subjects: [Chore] Remove vendored code made redundant by Transformers 5.16.1 (#60623). Candidate logged for the backlog: d8fa463e hybrid Mamba prefix-cache boundary fix, compare with the local exact hybrid checkpoint boundaries. Other commits are server-scale frontend work."
     },
     {
       "repo": "https://github.com/ggml-org/llama.cpp",
