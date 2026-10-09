@@ -1242,6 +1242,7 @@ class VLMBatchRunner:
             discard = getattr(apc, "discard_deferred_checkpoints", None)
             if discard is not None:
                 discard()
+            logger.info("background prefill preempted inside an atom (request arrived)")
             return
         except BaseException:
             discard = getattr(apc, "discard_deferred_checkpoints", None)
