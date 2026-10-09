@@ -48,7 +48,7 @@ async function install(page: Page, calls: string[]) {
         },
       });
     if (path === "/v1/models/load") return json(200, { status: "loaded" });
-    if (path === "/v1/yunshu/cache")
+    if (path === "/v1/yunshu/cache/tiers")
       return json(200, {
         enabled: true,
         caches: [
@@ -116,7 +116,7 @@ test("clear cache opens the confirm dialog for the first clearable tier", async 
   await install(page, calls);
   await page.goto("/console/#/cache?action=clear");
   await expect(page.getByRole("dialog")).toBeVisible();
-  expect(calls).not.toContain("POST /v1/yunshu/cache/clear");
+  expect(calls).not.toContain("POST /v1/yunshu/cache/tiers/clear");
   expect(page.url()).not.toContain("action=");
 });
 

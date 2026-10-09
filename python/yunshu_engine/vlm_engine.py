@@ -924,12 +924,19 @@ class VLMEngine:
                 kwargs=kwargs,
             )
 
+            from .request_tracker import current_request_info
+
+            _latency_info = current_request_info.get()
+
             def _prepare():
                 # Templating + media encoding on the MLX thread; generation is
                 # then consumed off it (the runner's driver needs that thread).
+                _marks = getattr(_latency_info, "latency_marks", {})
+                _marks["template_start"] = time.perf_counter()
                 ids, pkw, salt = self._runner_input(
                     messages, image_paths, audio_paths, _enable_thinking, tpl_extra
                 )
+                _marks["template_end"] = time.perf_counter()
                 return _RunnerCall(
                     self._generate_vlm_runner_text,
                     ids,
@@ -1028,6 +1035,9 @@ class VLMEngine:
                 "completion_tokens": completion_token_count,
                 "cached_tokens": cached_token_count,
                 "logprobs": _runner_extras.get("logprobs"),
+                "stopped_by_stop_sequence": bool(
+                    _runner_extras.get("stopped_by_stop_sequence")
+                ),
             }
         finally:
             with self._active_count_lock:
@@ -1162,10 +1172,17 @@ class VLMEngine:
             },
         )
 
+        from .request_tracker import current_request_info
+
+        _latency_info = current_request_info.get()
+
         def _prepare():
+            _marks = getattr(_latency_info, "latency_marks", {})
+            _marks["template_start"] = time.perf_counter()
             ids, pkw, salt = self._runner_input(
                 messages, image_paths, audio_paths, enable_thinking, tpl_extra
             )
+            _marks["template_end"] = time.perf_counter()
             return _RunnerCall(
                 self._stream_vlm_runner_text,
                 ids,
@@ -2211,6 +2228,14 @@ class VLMEngine:
                 TokenMaskProcessor(eos_ids=list(self._get_eos_ids()), **mask_kw)
             )
         constraint = self._build_text_constraint(json_schema)
+        from .structured_report import backend_name, report
+
+        stats.structured_output = report(
+            "mlx-vlm",
+            json_schema,
+            backend_name(constraint),
+            enforced=constraint is not None,
+        )
         constraint_guide = None
         if constraint is not None:
             from .constrained_spec import ConstraintGuide
@@ -2321,6 +2346,7 @@ class VLMEngine:
             if stop_strings and not in_think:
                 text = holdback.feed(segment)
                 if holdback.contains_stop():
+                    stats.stop_string_hit = True
                     yield (
                         text + holdback.take_stopped(),
                         token,
@@ -2632,6 +2658,7 @@ class VLMEngine:
             parts = ["<think>", *reasoning, "</think>", *parts]
         if extras is not None:
             extras["prompt_tokens"] = stats.prompt_tokens
+            extras["stopped_by_stop_sequence"] = stats.stop_string_hit
             if params.get("logprobs"):
                 extras["logprobs"] = lps
         if finish == "cancel":
@@ -2684,6 +2711,9 @@ class VLMEngine:
                         reasoning_tokens=thinking,
                         ttft_ms=round(stats.first_token_s * 1000, 1) if first else 0.0,
                         logprobs=[lp] if lp is not None else None,
+                        stopped_by_stop_sequence=bool(
+                            reason == "stop" and stats.stop_string_hit
+                        ),
                     )
                 )
                 if not ok or reason is not None:

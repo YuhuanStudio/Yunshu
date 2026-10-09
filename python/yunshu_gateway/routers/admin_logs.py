@@ -1,11 +1,10 @@
-"""Server logs and the diagnostics bundle for the console.
+"""Server logs for the console.
 
 - ``GET /v1/yunshu/logs?level=&since=&since_id=&q=&limit=``  recent records from an
   in-memory ring (2,000 records, redacted when emitted)
 - ``GET /v1/yunshu/logs/stream``  the same as server-sent events (live tail)
-- ``GET /v1/yunshu/bundle``       the ``yunshu bundle`` diagnostics JSON as a download
 
-Logs and the bundle can hold paths and error text, so they need the ``admin`` permission.
+Logs can hold paths and error text, so they need the ``admin`` permission.
 """
 
 from __future__ import annotations
@@ -16,7 +15,7 @@ import time
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import StreamingResponse
 
 from .. import log_ring
 from .models import _check_permission
@@ -83,22 +82,4 @@ async def logs_stream(
         events(),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
-
-
-@router.get("/yunshu/bundle")
-async def bundle(request: Request) -> JSONResponse:
-    _check_permission(request, "admin")
-    from yunshu_cli import bundle as cli_bundle
-
-    host = request.url.hostname or "127.0.0.1"
-    port = request.url.port or 8000
-    data = await asyncio.to_thread(cli_bundle.build, host=host, port=port)
-    stamp = time.strftime("%Y%m%d-%H%M%S")
-    return JSONResponse(
-        data,
-        headers={
-            "Content-Disposition": f'attachment; filename="yunshu-bundle-{stamp}.json"',
-            "Cache-Control": "no-store",
-        },
     )

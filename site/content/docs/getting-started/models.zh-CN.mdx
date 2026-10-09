@@ -1,0 +1,100 @@
+---
+title: 模型
+description: Yunshu 在哪里存放和查找模型、如何下载、列出和删除模型，以及如何从同一个目录服务多个模型。
+---
+
+Yunshu 加载 MLX 格式的检查点。一个模型就是含有 `config.json` 与 `*.safetensors` 权重的文件夹（或含有 `model_index.json` 的 diffusers pipeline）。
+
+## 模型存放位置
+
+Yunshu 会在两个地方查找模型。
+
+| 位置 | 默认值 | 说明 |
+|---|---|---|
+| 模型目录 | `~/.yunshu/models` | `yunshu pull` 写入的位置。模型以 `<org>/<name>` 存放，例如 `~/.yunshu/models/mlx-community/Qwen3.5-0.8B-MLX-bf16`。扫描时也会读取直接放在目录下的文件夹。 |
+| Hugging Face 缓存 | Hugging Face 自己的缓存位置（`HF_HOME`、`HF_HUB_CACHE`） | 含有配置文件与权重的快照会被发现并原地复用，不会复制。 |
+
+把模型引用传给 `yunshu serve -m` 时，Yunshu 在考虑下载之前会依次解析：已有的路径、模型目录下的名称（`name` 或 `org/name`），再来是已在 Hugging Face 缓存中的 repo id。都找不到时，加载器会把该引用当作 Hugging Face repo id。
+
+### 更改模型目录
+
+用 `yunshu config set` 设置 `models_dir`（即配置项 `YUNSHU_MODELS_DIR`）：
+
+```bash
+yunshu config set models_dir /path/to/models
+yunshu config path          # 显示写入的文件：~/.yunshu/config.toml
+```
+
+这会改变之后 `yunshu pull` 的下载位置，以及多模型模式下服务器的扫描位置；不会移动你已下载的模型。键名可以带或不带 `YUNSHU_` 前缀，路径值会以绝对路径保存。同名的环境变量优先于配置文件，此时 `yunshu config set` 会打印提示。用 `yunshu config unset models_dir` 可移除该设置。`yunshu config` 会显示每个设置的有效值与来源，参见[配置](/docs/guides/configuration)。
+
+## 列出模型
+
+```bash
+yunshu model list                     # 模型目录 + Hugging Face 缓存
+yunshu model list --no-hf-cache       # 只看模型目录
+yunshu model list --dir /path/to/dir  # 扫描其他目录
+yunshu model list --url http://localhost:8000   # 改为询问运行中的服务器
+yunshu --json model list
+```
+
+对于磁盘上的每个模型，表格会显示名称、检测到的类型、大小，以及位于模型目录还是 Hugging Face 缓存。使用 `--url` 时，命令会调用服务器的 `GET /v1/models`，并列出服务器报告的内容。`yunshu models` 是 `yunshu model` 的别名。
+
+## 下载模型
+
+```bash
+yunshu pull mlx-community/Qwen3.5-9B-MLX-4bit
+yunshu pull mlx-community/Qwen3.5-9B-MLX-4bit --revision main
+yunshu pull mlx-community/Qwen3.5-9B-MLX-4bit --dir /path/to/models
+```
+
+| 选项 | 说明 |
+|---|---|
+| `--dir`、`-d` | 下载到此目录，而非默认的模型目录。 |
+| `--revision`、`-r` | 要解析的分支、标签或 commit。即使模型已存在也会解析。 |
+| `--force` | 即使模型已在磁盘上也下载。只会获取缺少或已变更的文件，不会删除任何东西。 |
+
+参数必须是 `org/name` 格式的 Hugging Face repo id。若模型目录或 Hugging Face 缓存中已有完整副本，`yunshu pull` 会告知并且不再下载。中断的下载只要再运行同一条命令就会续传。`yunshu model pull` 是同一条命令。该命令不会替你挑选模型。
+
+可用 `yunshu doctor -m <model>` 检查下载结果，它会报告缺少的权重分片，以及模型是否放得进内存。
+
+## 查看与删除
+
+```bash
+yunshu model info mlx-community/Qwen3.5-9B-MLX-4bit   # 别名：model show
+yunshu model rm mlx-community/Qwen3.5-9B-MLX-4bit --yes
+```
+
+`model info` 会显示模型的类型、大小、文件数量，以及 `config.json` 中的主要架构与量化字段。`model rm` 按完整名称从模型目录删除模型；未加 `--yes` 时会要求确认，而在 `--json` 模式下必须加 `--yes`。位于 Hugging Face 缓存的模型、符号链接的模型，以及模型目录之外的模型都不会被删除，请在来源处管理。删除文件前，请先从运行中的服务器卸载该模型。
+
+## 服务单个或多个模型
+
+**单模型模式。** 指定 `--model`（或把模型作为第一个参数）。无论请求发送的 `model` 名称是什么，所有请求都对应到该模型。
+
+```bash
+yunshu serve -m mlx-community/Qwen3.5-9B-MLX-4bit
+yunshu serve ~/.yunshu/models/mlx-community/Qwen3.5-9B-MLX-4bit
+```
+
+**多模型模式。** 指定 `--models-dir`（或 `-d`），服务目录中找到的模型。模型在启动时注册，并在请求指名时才按需加载。`GET /v1/models` 会列出可用的 id。
+
+```bash
+yunshu serve --models-dir ~/.yunshu/models
+yunshu model list --url http://localhost:8000
+```
+
+已注册模型但尚未加载任何模型的服务器，`GET /health/ready` 仍会报告就绪。请求的 `model` 字段必须是列出的 id 之一。
+
+### 在运行中的服务器加载与卸载
+
+```bash
+yunshu model load mlx-community/Qwen3.5-9B-MLX-4bit
+yunshu model unload mlx-community/Qwen3.5-9B-MLX-4bit
+```
+
+这些命令会调用 `POST /v1/models/load` 与 `POST /v1/models/unload/{model_id}`。它们属于操作性端点：未设置 `YUNSHU_AUTH_TOKEN` 时会被拒绝，因此请在服务器设置 token，并在运行 CLI 的 shell 中导出相同的值。参见[模型 API](/docs/api/models)。
+
+## 相关页面
+
+- [快速开始](/docs/getting-started/quickstart)
+- [模型支持](/docs/guides/model-support)：支持哪些模型系列与类型。
+- [CLI 参考](/docs/guides/cli)

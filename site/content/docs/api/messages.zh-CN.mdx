@@ -1,0 +1,332 @@
+---
+title: Messages
+description: Anthropic Messages API，支持工具、思考、图片、含引用的文档、token 计数与消息批量。
+---
+
+Yunshu 在 `POST /v1/messages`（也可用 `POST /messages`）提供 Anthropic Messages API，在 `POST /v1/messages/count_tokens` 提供 token 计数，并在 `/v1/messages/batches` 提供 Message Batches。官方 `anthropic` Python 与 TypeScript SDK 只要把 `base_url` 指向服务器根路径（不加 `/v1`）即可使用。Claude Code 等使用 Anthropic 规格的智能体也是以同样方式连接（见[智能体](/docs/guides/agents)）。
+
+请求会被转换成与 [Chat Completions](/docs/api/chat-completions) 相同的引擎路径，因此本机模型、前缀缓存与受限解码都是共用的。服务器端工具（`web_search_20250305`、`web_fetch_20250910`、MCP 连接器）请见[服务器端工具](/docs/api/server-tools)。
+
+<Endpoint method="POST" path="/v1/messages" />
+<Endpoint method="POST" path="/messages" />
+<Endpoint method="POST" path="/v1/messages/count_tokens" />
+<Endpoint method="POST" path="/messages/count_tokens" />
+<Endpoint method="POST" path="/v1/messages/batches" />
+<Endpoint method="GET" path="/v1/messages/batches" />
+<Endpoint method="GET" path="/v1/messages/batches/{batch_id}" />
+<Endpoint method="POST" path="/v1/messages/batches/{batch_id}/cancel" />
+<Endpoint method="DELETE" path="/v1/messages/batches/{batch_id}" />
+<Endpoint method="GET" path="/v1/messages/batches/{batch_id}/results" />
+
+<Callout type="info">
+只有在配置了 `YUNSHU_AUTH_TOKEN` 时才会强制验证。Anthropic SDK 以 `x-api-key` 发送密钥，服务器接受它来取代 `Authorization: Bearer`。单模型模式下 `model` 字段仅供参考：已加载的模型会响应任何名称（例如 `claude-sonnet-4-5`），响应中会原样带回你发送的名称。多模型模式下，可用 `YUNSHU_MODEL_ALIASES` 把这类名称对应到实际提供的模型。
+</Callout>
+
+## 标头
+
+| 标头 | 行为 |
+| --- | --- |
+| `x-api-key` | 配置了 `YUNSHU_AUTH_TOKEN` 时，视为 bearer token。 |
+| `Authorization: Bearer ...` | 同样接受。 |
+| `anthropic-version` | 任何客户端都接受；不验证其值，也不会改变行为。 |
+| `anthropic-beta` | 接受，但不必要。MCP 连接器、结构化输出、Files API 等 beta 功能由请求正文驱动，而不是这个标头。 |
+
+## 请求
+
+### 内核字段
+
+| 参数 | 类型 | 必填 | 说明 | 状态 |
+| --- | --- | --- | --- | --- |
+| `model` | string | 是 | 模型 id；单模型模式下仅供参考。 | 支持 |
+| `messages` | array | 是 | 非空的 `{role, content}` 列表。`content` 是字符串或区块列表。位于开头或对话中的 `system` 角色条目会被提升到系统提示。 | 支持 |
+| `max_tokens` | integer | 否 | 1 到 1048576。Anthropic API 要求必填；Yunshu 省略时退回 1024。 | 支持 |
+| `system` | string 或文本区块数组 | 否 | 系统提示。区块可带 `cache_control`。 | 支持 |
+| `temperature` | number | 否 | 0 到 2。省略时默认 0.7。 | 支持 |
+| `top_p`、`top_k` | number、integer | 否 | `top_p` 为 0 到 1（默认 1.0）；`top_k` 为 0 表示禁用。 | 支持 |
+| `stop_sequences` | array of string | 否 | 最多 16 个非空字符串。命中时回合结束，`stop_reason` 为 `"stop_sequence"`，命中的字符串放在 `stop_sequence`。 | 支持 |
+| `stream` | boolean | 否 | Server-Sent Events。 | 支持 |
+| `metadata` | object | 否 | 接受。 | 接受但忽略 |
+| `service_tier`、`container` | string、object | 否 | 接受，让 SDK 的请求能通过验证。 | 接受但忽略 |
+| `context_management` | object | 否 | 接受（Claude Code 会发送）。不会进行任何上下文编辑。 | 接受但忽略 |
+
+### 思考
+
+| 参数 | 说明 | 状态 |
+| --- | --- | --- |
+| `thinking: {"type": "enabled", "budget_tokens": N}` | 打开思考并配置预算。`budget_tokens` 必须是小于 `max_tokens` 的正整数，否则 `400`。推理内容以 `thinking` 内容区块返回。 | 支持 |
+| `thinking: {"type": "disabled"}` | 关闭思考。 | 支持 |
+| `thinking: {"type": "adaptive"}` | 沿用模型模板的默认。 | 支持 |
+| `output_config.effort` | 对应到模板的推理强度。`reasoning_effort` 是 Yunshu 的写法。 | 支持 |
+
+思考能力取决于加载的模型。对于聊天模板本身不会思考的模型，`enabled` 会加入一段要求用 `<think>` 标签包住推理的指示，并限制回复开头照做，因此仍会返回 `thinking` 区块。强制的 `tool_choice`（`any` 或 `tool`）会关闭思考，因为 Anthropic 也不允许两者并用。思考区块的 `signature` 为空字符串；没有 redacted thinking 区块。
+
+### 工具
+
+| 参数 | 类型 | 说明 | 状态 |
+| --- | --- | --- | --- |
+| `tools` | array | 自订工具 `{name, description, input_schema}`。 | 支持 |
+| `tool_choice` | object 或 string | `{"type": "auto"}`、`{"type": "any"}`、`{"type": "tool", "name": "..."}`、`{"type": "none"}`。`disable_parallel_tool_use: true` 会把回复限制为一次调用。强制选择通过受限解码落实；调用了非指定工具的结果会被丢弃。 | 支持 |
+| `tools[].cache_control` | object | 参与缓存计算（见下）。 | 支持 |
+| `bash_*`、`text_editor_*`、`memory_*`、`computer_*` 等类型工具 | object | 只以 `type` 与 `name` 声明。Yunshu 会补上文档记载的 `input_schema`，让本机模型能生成有效的 `tool_use`；由你的客户端执行工具并送回 `tool_result`。`computer_*` 支持 `display_width_px`、`display_height_px`、`display_number` 与 `enable_zoom`。较新的 `computer_toolset_20260801` 协定尚未实作。 | 部分支持 |
+| `web_search_*`、`web_fetch_*`、`mcp_toolset` 与顶层 `mcp_servers` | array | 由服务器执行。见[服务器端工具](/docs/api/server-tools)。 | 支持 |
+| `code_execution_*` 与其他托管工具 | | 无法使用。 | 暂不支持 |
+
+客户端工具的结果与官方 API 一样，以用户消息中的 `tool_result` 区块送回。`tool_result` 可包含文本与图片区块。
+
+### 内容区块
+
+| 区块 | 说明 | 状态 |
+| --- | --- | --- |
+| `text` | 纯文本，可带 `cache_control`。 | 支持 |
+| `image` | `source` 类型为 `base64`（png、jpeg、gif、webp）、`url`（会依 SSRF 规则检查；私有地址与非 HTTP(S) 的 URL 是 `400`）或 `file`（[文件](/docs/api/files) id）。需要视觉语言模型；纯文本模型会回 `400`。 | 支持 |
+| `document` | `source` 类型为 `text`（`text/plain`）、`content`（文本与图片区块）、`base64` PDF（最大 32 MiB、100 页、不得加密）、`url`（PDF；会挡掉私有地址）或 `file`。支持 `title`、`context` 与 `citations: {"enabled": true}`。会读取文本层；视觉模型还会收到页面图像，只有图像的 PDF 需要视觉模型。提取出的文本上限为 200 万字符。 | 支持 |
+| `tool_use`、`tool_result` | 客户端工具往返。 | 支持 |
+| `thinking` | 推理模型会返回；也接受放回助理回合。 | 支持 |
+| `server_tool_use`、`web_search_tool_result`、`web_fetch_tool_result`、`mcp_tool_use`、`mcp_tool_result` | 由服务器端工具返回；也接受放回历史。 | 支持 |
+| `search_result`、`container_upload`、`redacted_thinking` | 不会解读。 | 暂不支持 |
+
+#### 引用
+
+`document` 区块设了 `citations: {"enabled": true}` 时，模型会看到附有精确字符偏移的文档，并被要求标记来源。标记会对照真实文档验证，再转成公开格式：`char_location`（文本）、`page_location`（PDF）或 `content_block_location`（content 文档），各自带 `cited_text`、`document_index` 与 `document_title`。标记超出文档范围，或引用了未启用引用的文档时，请求会以 `502` 失败（流式时为 SSE `error` 事件），而不是返回捏造的引用。流式中，引用以 `citations_delta` 事件送达。引用品质取决于本机模型是否遵循标记指示。
+
+### 结构化输出与引擎控制
+
+| 参数 | 说明 | 状态 |
+| --- | --- | --- |
+| `output_config.format` / `output_format` | `{"type": "json_schema", "schema": {...}}` 把解码限制在该 schema。 | 支持 |
+| `cache_control`（顶层、区块层级） | 标记前缀缓存断点（见下）。 | 支持 |
+| `json_schema`、`response_format`、`grammar` | Yunshu 的受限解码扩展（`json_object`、`json_schema`；`regex`、`choice`、`cfg` 语法）。 | 扩展 |
+| `min_p`、`repetition_penalty`、`frequency_penalty`、`presence_penalty`、`logit_bias`、`seed`、`stop_token_ids`、`min_tokens`、`ignore_eos`、`suppress_tokens`、`xtc_probability`、`xtc_threshold`、`logprobs`、`top_logprobs`、`lora_adapter`、`spec_decode`、`priority`、`timeout` | 与其他路由共用的引擎控制。 | 扩展 |
+
+### 提示缓存
+
+在系统区块、消息、工具定义或文档上加 `cache_control: {"type": "ephemeral"}`，可标记缓存断点。Yunshu 的前缀缓存是自动的；这些提示告诉它持久断点在哪里。用量会报告拆分：`cache_read_input_tokens` 是重用的前缀，`cache_creation_input_tokens` 是这个回合写入的可缓存前缀（到最后一个断点为止），`input_tokens` 是其余部分，三者相加等于提示长度。见[提示缓存](/docs/guides/prompt-caching)。
+
+## 示例
+
+<Tabs items={["curl", "Python", "TypeScript"]}>
+<Tab value="curl">
+
+```bash
+curl http://localhost:8000/v1/messages \
+  -H "Content-Type: application/json" \
+  -H "x-api-key: sk-local" \
+  -H "anthropic-version: 2023-06-01" \
+  -d '{
+    "model": "local",
+    "max_tokens": 256,
+    "system": "You are concise.",
+    "messages": [{"role": "user", "content": "Name three primary colors."}]
+  }'
+```
+
+</Tab>
+<Tab value="Python">
+
+```python
+import anthropic
+
+client = anthropic.Anthropic(base_url="http://localhost:8000", api_key="sk-local")
+
+message = client.messages.create(
+    model="local",
+    max_tokens=256,
+    messages=[{"role": "user", "content": "Name three primary colors."}],
+)
+print(message.content[0].text)
+print(message.usage.input_tokens, message.usage.output_tokens)
+```
+
+</Tab>
+<Tab value="TypeScript">
+
+```ts
+import Anthropic from "@anthropic-ai/sdk";
+
+const client = new Anthropic({ baseURL: "http://localhost:8000", apiKey: "sk-local" });
+
+const stream = client.messages.stream({
+  model: "local",
+  max_tokens: 256,
+  messages: [{ role: "user", content: "Write a haiku about rain." }],
+});
+stream.on("text", (t) => process.stdout.write(t));
+const final = await stream.finalMessage();
+console.log(final.stop_reason);
+```
+
+</Tab>
+</Tabs>
+
+### 工具使用
+
+```python
+tools = [{
+    "name": "get_weather",
+    "description": "Current weather for a city",
+    "input_schema": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]},
+}]
+msgs = [{"role": "user", "content": "Weather in Taipei?"}]
+r1 = client.messages.create(model="local", max_tokens=512, tools=tools, messages=msgs)
+use = next(b for b in r1.content if b.type == "tool_use")
+msgs += [
+    {"role": "assistant", "content": r1.content},
+    {"role": "user", "content": [{"type": "tool_result", "tool_use_id": use.id, "content": "24 C, clear"}]},
+]
+r2 = client.messages.create(model="local", max_tokens=512, tools=tools, messages=msgs)
+print(r2.content[0].text)
+```
+
+### 图片
+
+```python
+import base64
+
+data = base64.b64encode(open("photo.png", "rb").read()).decode()
+r = client.messages.create(
+    model="local",
+    max_tokens=200,
+    messages=[{
+        "role": "user",
+        "content": [
+            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": data}},
+            {"type": "text", "text": "What is in this picture?"},
+        ],
+    }],
+)
+```
+
+### 含引用的文档
+
+```python
+r = client.messages.create(
+    model="local",
+    max_tokens=300,
+    messages=[{
+        "role": "user",
+        "content": [
+            {
+                "type": "document",
+                "source": {"type": "text", "media_type": "text/plain", "data": "The moon orbits Earth every 27.3 days."},
+                "title": "Moon facts",
+                "citations": {"enabled": True},
+            },
+            {"type": "text", "text": "How long is the moon's orbit?"},
+        ],
+    }],
+)
+for block in r.content:
+    print(block.text, getattr(block, "citations", None))
+```
+
+### 思考
+
+```python
+r = client.messages.create(
+    model="local",
+    max_tokens=2048,
+    thinking={"type": "enabled", "budget_tokens": 1024},
+    messages=[{"role": "user", "content": "Is 91 prime?"}],
+)
+for block in r.content:
+    print(block.type)  # thinking, then text
+```
+
+### 计算 token
+
+```python
+n = client.messages.count_tokens(
+    model="local",
+    messages=[{"role": "user", "content": "Hello"}],
+)
+print(n.input_tokens)
+```
+
+## 响应
+
+```json
+{
+  "id": "msg_4f1c2a7e9b3d4c5a6e7f8091",
+  "type": "message",
+  "role": "assistant",
+  "model": "local",
+  "content": [
+    { "type": "text", "text": "Red, yellow and blue." }
+  ],
+  "stop_reason": "end_turn",
+  "stop_sequence": null,
+  "usage": {
+    "input_tokens": 21,
+    "output_tokens": 8,
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0
+  }
+}
+```
+
+`stop_reason` 为 `end_turn`、`max_tokens`（生成因超时或内存保护而中断时也用这个值）、`stop_sequence`、`tool_use`，或 `pause_turn`（服务器端工具循环达到迭代上限；见[服务器端工具](/docs/api/server-tools)）。模型有推理时，会有 `usage.output_tokens_details.reasoning_tokens`。服务器端工具请求另有 `usage.server_tool_use`。
+
+### 计算 token
+
+`POST /v1/messages/count_tokens` 接受与 `POST /v1/messages` 相同的正文，返回 `{"input_tokens": N}`。它的提示渲染方式与生成时相同（系统提示含被提升的 `system` 消息、工具、思考指示、文档、文件），并通过聊天模板计算，因此数字会与实际调用的 `input_tokens` 一致。每张图片以固定估计值 576 个 token 计算。
+
+### 消息批量
+
+批量由背景工作进程执行，该进程通过 loopback 调用本服务器，并在重启后恢复。`POST /v1/messages/batches` 接受 `{"requests": [{"custom_id", "params"}]}`，其中 `params` 是一般的 Messages 正文（`model`、`max_tokens`、`messages` 必填）；`custom_id` 必须符合 `^[a-zA-Z0-9_-]{1,64}$` 且不得重复，最多 100000 个请求。批量对象的 `type` 为 `message_batch`，并有 `processing_status`（`in_progress`、`canceling`、`ended`）、`request_counts`、时间戳与 `results_url`。列表可用 `limit`（1-1000）、`after_id`、`before_id`。结果（`GET .../results`）为 JSONL，批量结束后才能取得（之前是 `409`）。取消已结束的批量，或删除仍在处理的批量，都是 `400`。OpenAI 风格的批量 API 见[批量](/docs/api/batches)。
+
+## 流式
+
+`stream: true` 时，服务器依 Anthropic 的顺序发送 Server-Sent Events：
+
+1. `message_start`（`content` 为空的消息，以及提示的 `usage`）
+2. 每个区块：`content_block_start`、一个以上的 `content_block_delta`、`content_block_stop`。delta 类型有 `thinking_delta`（思考区块先出现）、`text_delta`、`input_json_delta`（工具参数，以部分 JSON 流式）与 `citations_delta`（含引用的文档、服务器端工具结果）。
+3. `message_delta`，含 `delta.stop_reason`、`delta.stop_sequence` 与累计的 `usage`
+4. `message_stop`
+
+长提示预填充期间会发送 `: keep-alive` 注释行，让读取超时较短的客户端保持连接。流式开始后的失败是单一的 `event: error`，内容为 `{"type": "error", "error": {"type", "message"}}`，之后不会再有 `message_delta` 或 `message_stop`。中断连接会取消生成。
+
+## 错误
+
+错误使用 Anthropic 的格式；这些路径上由验证与限流层生成的拒绝也是如此：
+
+```json
+{ "type": "error", "error": { "type": "invalid_request_error", "message": "messages: field is required and cannot be empty" } }
+```
+
+| 状态 | `error.type` | 原因 |
+| --- | --- | --- |
+| `400` | `invalid_request_error` | 正文无效（`messages` 为空、`thinking.budget_tokens` 不小于 `max_tokens`、`stop_sequences` 超过 16 个）、提示超出上下文窗口、把图片送给纯文本模型、被挡掉的 URL、无法读取的文档、模型不支持所要求的功能。 |
+| `401` | `authentication_error` | 配置了 `YUNSHU_AUTH_TOKEN` 时，密钥缺少或错误。 |
+| `403` | `permission_error` | 密钥没有该模型的权限。 |
+| `404` | `not_found_error` | 多模型模式下未知的模型，或未知的文件 id、批量 id。 |
+| `413` | `request_too_large` | 提示太大无法预填充，或文档过大。 |
+| `429` | `rate_limit_error` | 触发了已配置的限制。 |
+| `500` | `api_error` | 内部错误。 |
+| `502` | `api_error` | 模型生成的文档引用未通过验证。 |
+| `503` / `529` | `overloaded_error` | 没有加载模型，或服务器已满载。 |
+
+## 支持状况
+
+| 功能 | 状态 |
+| --- | --- |
+| Messages，流式与非流式 | <Support status="supported">支持</Support> |
+| `count_tokens` | <Support status="supported">支持</Support> |
+| 消息批量 | <Support status="supported">支持</Support> |
+| 工具、`tool_choice`、平行工具调用控制 | <Support status="supported">支持</Support> |
+| `bash`、`text_editor`、`memory`、`computer` 客户端工具 | <Support status="partial">提供 schema；由客户端执行</Support> |
+| `thinking` enabled、disabled、adaptive | <Support status="supported">支持</Support> |
+| 图片（base64、url、file） | <Support status="supported">支持（需视觉模型）</Support> |
+| 文档与引用 | <Support status="supported">支持</Support> |
+| 服务器端工具：网络搜索、网页抓取、MCP 连接器 | <Support status="supported">支持</Support> |
+| `cache_control` | <Support status="partial">提示与计算；缓存本身是自动的</Support> |
+| `metadata`、`service_tier`、`container`、`context_management` | <Support status="partial">接受但忽略</Support> |
+| 代码执行、托管的记忆工具、`search_result` 区块、签名或 redacted thinking | <Support status="unsupported">暂不支持</Support> |
+
+## 相关页面
+
+- [服务器端工具](/docs/api/server-tools)
+- [Chat Completions](/docs/api/chat-completions)
+- [文件](/docs/api/files)
+- [批量](/docs/api/batches)
+- [智能体](/docs/guides/agents)
+- [提示缓存](/docs/guides/prompt-caching)

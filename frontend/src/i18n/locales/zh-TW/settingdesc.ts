@@ -289,5 +289,10 @@ const settingdesc = {
   YUNSHU_WEB_RESEARCH_PAGES: "每次補強最多取用的來源頁面數（上限 6）。",
   YUNSHU_WEB_RESEARCH_MODEL:
     "已載入的本機嵌入模型 id；不會自動載入模型，沒有或不可用時只用 BM25。建議 Qwen3-Embedding-0.6B。",
+  YUNSHU_TELEMETRY:
+    "免權限的 Apple 功耗、GPU 與溫度取樣器（`on` 或 `off`）；需重新啟動。",
+  YUNSHU_TELEMETRY_INTERVAL_S: "主機遙測取樣間隔（秒）；需重新啟動。",
+  YUNSHU_SERVE_LOG_RETENTION_DAYS:
+    "歷史 API 中繼資料的保留天數；0 代表不依時間過濾。",
 };
 export default settingdesc;

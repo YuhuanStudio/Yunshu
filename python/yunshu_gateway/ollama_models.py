@@ -21,6 +21,18 @@ _LOCK = asyncio.Lock()
 _PREFIX = ".ollama--"
 
 
+def cancel_download(name: str) -> bool:
+    """Cancel the active registry download for this repository; False when none runs."""
+    from . import downloads
+
+    hit = False
+    for job in downloads.get_registry().jobs():
+        if job.repo == name and job.state in downloads.ACTIVE:
+            downloads.get_registry().cancel(job.id)
+            hit = True
+    return hit
+
+
 def model_link(name: str) -> Path:
     if (
         not isinstance(name, str)

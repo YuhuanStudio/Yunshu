@@ -308,5 +308,11 @@ const settingdesc = {
     "Most origin pages used per enrichment (capped at 6).",
   YUNSHU_WEB_RESEARCH_MODEL:
     "Id of an already-loaded local embedding model; it never loads one, and without it ranking is BM25 only. Qwen3-Embedding-0.6B is recommended.",
+  YUNSHU_TELEMETRY:
+    "Unprivileged Apple power, GPU and temperature sampler (`on` or `off`); restart required.",
+  YUNSHU_TELEMETRY_INTERVAL_S:
+    "Host telemetry sampling interval in seconds (restart required).",
+  YUNSHU_SERVE_LOG_RETENTION_DAYS:
+    "History API metadata retention window in days; 0 disables age filtering.",
 };
 export default settingdesc;

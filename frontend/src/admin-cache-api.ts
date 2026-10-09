@@ -86,7 +86,7 @@ export function parseCache(raw: unknown): CacheOverview {
 export const getCache = (c: Connection, signal?: AbortSignal) =>
   orUnsupported(async () =>
     parseCache(
-      await requestJson<unknown>(c, "/yunshu/cache", {
+      await requestJson<unknown>(c, "/yunshu/cache/tiers", {
         signal,
         search: { entries: "200" },
       }),
@@ -99,7 +99,7 @@ export async function clearCache(
   body: { tier: CacheTierName | null; model: string | null },
 ): Promise<ClearResult> {
   const r = rec(
-    await requestJson<unknown>(c, "/yunshu/cache/clear", {
+    await requestJson<unknown>(c, "/yunshu/cache/tiers/clear", {
       method: "POST",
       body: { tier: body.tier, model: body.model },
       timeoutMs: 60_000,

@@ -291,6 +291,8 @@ _add("YUNSHU_MODEL_ALIASES", "json", None, "Multi-model mode: map the model name
 
 # ── observability ──────────────────────────────────────────────────────
 _add("YUNSHU_LOG_LEVEL", "enum", "INFO", "Log level for Yunshu's loggers (third-party loggers stay at WARNING).", "observability", choices=("DEBUG", "INFO", "WARNING", "ERROR"))
+_add("YUNSHU_TELEMETRY", "enum", "on", "Unprivileged Apple power/GPU/temperature sampler (on/off); 1 Hz by default, restart required.", "observability", choices=("on", "off"))
+_add("YUNSHU_TELEMETRY_INTERVAL_S", "float", 1.0, "Host telemetry sampling interval in seconds (restart required).", "observability", minimum=0.1)
 _add("YUNSHU_AUDIT_LOG_FILE", "path", None, "Also write the audit log to this file.", "observability")
 _add("YUNSHU_LOG_MAX_MB", "float", 50.0, "Service log (launchd): rotate the log file at this size in MiB; 0 turns size rotation off.", "observability", minimum=0.0)
 _add("YUNSHU_LOG_ROTATE_HOURS", "float", 24.0, "Service log: also rotate when this many hours passed since the last rotation; 0 turns time rotation off.", "observability", minimum=0.0)
@@ -299,6 +301,7 @@ _add("YUNSHU_LOG_RETENTION_DAYS", "float", 14.0, "Service log: delete rotated fi
 _add("YUNSHU_SERVE_LOG", "bool", False, "Write one numbers-only JSON line per finished generation request (timings, token counts, speculative acceptance, cache tier, concurrency, arm, build) to a local, size-capped, rotated file. Never prompts, outputs or token ids. Off by default; nothing leaves the machine.", "observability")
 _add("YUNSHU_SERVE_LOG_DIR", "path", None, "Directory of the serve log. Unset: ~/.yunshu/logs.", "observability")
 _add("YUNSHU_SERVE_LOG_MAX_MB", "float", 4.0, "Serve log: rotate at this size in MiB; with YUNSHU_SERVE_LOG_KEEP the directory is capped at max * (keep + 1).", "observability", minimum=0.01)
+_add("YUNSHU_SERVE_LOG_RETENTION_DAYS", "int", 30, "History API metadata retention window in days; 0 disables age filtering. File storage remains bounded by SERVE_LOG_MAX_MB and SERVE_LOG_KEEP.", "observability", minimum=0)
 _add("YUNSHU_SERVE_LOG_KEEP", "int", 4, "Serve log: rotated files kept.", "observability", minimum=0)
 _add("YUNSHU_HISTORY_INTERVAL_S", "float", 5.0, "Console history: seconds between samples of the in-memory ring behind GET /v1/yunshu/history (throughput, request counts, memory, TTFT percentiles); 0 turns the sampler off. The ring is fixed-size and never grows: 12 columns, 4 bytes each (timestamp 8), per slot.", "observability", minimum=0.0)
 _add("YUNSHU_HISTORY_HOURS", "float", 12.0, "Console history: hours the history ring keeps (capacity = hours * 3600 / YUNSHU_HISTORY_INTERVAL_S slots, preallocated; 12 h at 5 s is 8,640 slots, about 0.4 MiB).", "observability", minimum=0.0)
@@ -394,6 +397,7 @@ _LIVE = frozenset(
         "YUNSHU_SERVE_LOG_DIR",
         "YUNSHU_SERVE_LOG_MAX_MB",
         "YUNSHU_SERVE_LOG_KEEP",
+        "YUNSHU_SERVE_LOG_RETENTION_DAYS",
         "YUNSHU_ARM",
         "YUNSHU_GATEWAY_URL",
     }
@@ -479,6 +483,8 @@ _RESTART = frozenset(
         "YUNSHU_AUDIT_LOG_FILE",
         "YUNSHU_HISTORY_INTERVAL_S",
         "YUNSHU_HISTORY_HOURS",
+        "YUNSHU_TELEMETRY",
+        "YUNSHU_TELEMETRY_INTERVAL_S",
         "YUNSHU_HF_ENDPOINT",
         "YUNSHU_EVALS_DIR",
         "YUNSHU_CHAT_COMPLETIONS_DIR",

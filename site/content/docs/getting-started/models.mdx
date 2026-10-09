@@ -1,0 +1,100 @@
+---
+title: Models
+description: Where Yunshu keeps and finds models, how to download, list and remove them, and how to serve several models from one directory.
+---
+
+Yunshu loads MLX-format checkpoints. A model is a folder with a `config.json` and `*.safetensors` weights (or a diffusers pipeline with `model_index.json`).
+
+## Where models live
+
+Yunshu looks in two places.
+
+| Location | Default | Notes |
+|---|---|---|
+| Models directory | `~/.yunshu/models` | Where `yunshu pull` writes. A model is stored as `<org>/<name>`, for example `~/.yunshu/models/mlx-community/Qwen3.5-0.8B-MLX-bf16`. The scanner also reads folders placed directly in the directory. |
+| Hugging Face cache | Hugging Face's own cache location (`HF_HOME`, `HF_HUB_CACHE`) | Snapshots that have a config and weights are discovered and reused in place; they are not copied. |
+
+When you pass a model reference to `yunshu serve -m`, Yunshu resolves it in this order before it considers downloading: an existing path, a name under the models directory (`name` or `org/name`), then a repo id that is already in the Hugging Face cache. If none matches, the loader treats the reference as a Hugging Face repo id.
+
+### Change the models directory
+
+Set `models_dir` (the setting `YUNSHU_MODELS_DIR`) with `yunshu config set`:
+
+```bash
+yunshu config set models_dir /path/to/models
+yunshu config path          # prints the file it wrote: ~/.yunshu/config.toml
+```
+
+This changes where future `yunshu pull` downloads go and where the server scans in multi-model mode. It does not move models you already downloaded. The key may be written with or without the `YUNSHU_` prefix, and a path value is stored as an absolute path. An environment variable of the same name takes precedence over the config file, and `yunshu config set` prints a note when that is the case. Remove the setting with `yunshu config unset models_dir`. `yunshu config` shows every effective value with its source; see [Configuration](/docs/guides/configuration).
+
+## List models
+
+```bash
+yunshu model list                     # models directory + Hugging Face cache
+yunshu model list --no-hf-cache       # models directory only
+yunshu model list --dir /path/to/dir  # scan a different directory
+yunshu model list --url http://localhost:8000   # ask a running server instead
+yunshu --json model list
+```
+
+For each model on disk the table shows the name, detected type, size, and whether it is in the models directory or the Hugging Face cache. With `--url`, the command calls `GET /v1/models` on the server and lists what the server reports. `yunshu models` is an alias of `yunshu model`.
+
+## Download a model
+
+```bash
+yunshu pull mlx-community/Qwen3.5-9B-MLX-4bit
+yunshu pull mlx-community/Qwen3.5-9B-MLX-4bit --revision main
+yunshu pull mlx-community/Qwen3.5-9B-MLX-4bit --dir /path/to/models
+```
+
+| Option | Meaning |
+|---|---|
+| `--dir`, `-d` | Download under this directory instead of the models directory. |
+| `--revision`, `-r` | Branch, tag or commit to resolve. Resolved even if the model is already present. |
+| `--force` | Download even if the model is already on disk. Only missing or changed files are fetched; nothing is deleted. |
+
+The argument must be a Hugging Face repo id of the form `org/name`. If a complete copy already exists in the models directory or the Hugging Face cache, `yunshu pull` reports that and does not download again. An interrupted download is resumed by running the same command. `yunshu model pull` is the same command. The command never chooses a model for you.
+
+Check a download with `yunshu doctor -m <model>`, which reports missing weight shards and whether the model fits in memory.
+
+## Inspect and remove
+
+```bash
+yunshu model info mlx-community/Qwen3.5-9B-MLX-4bit   # alias: model show
+yunshu model rm mlx-community/Qwen3.5-9B-MLX-4bit --yes
+```
+
+`model info` prints the model's type, size, file count, and key architecture and quantization fields from `config.json`. `model rm` removes a model by its exact name from the models directory. It asks for confirmation unless `--yes` is given, and in `--json` mode `--yes` is required. Models in the Hugging Face cache, symlinked models and models outside the models directory are never removed; manage those at their source. Unload a model from a running server before removing its files.
+
+## Serve one model or many
+
+**Single-model mode.** Give `--model` (or the model as the first argument). Every request maps to that model regardless of the `model` name it sends.
+
+```bash
+yunshu serve -m mlx-community/Qwen3.5-9B-MLX-4bit
+yunshu serve ~/.yunshu/models/mlx-community/Qwen3.5-9B-MLX-4bit
+```
+
+**Multi-model mode.** Give `--models-dir` (or `-d`) to serve the models found in a directory. Models are registered at startup and loaded on demand, when a request names them. `GET /v1/models` lists the ids to use.
+
+```bash
+yunshu serve --models-dir ~/.yunshu/models
+yunshu model list --url http://localhost:8000
+```
+
+A server with registered models and nothing loaded yet is reported as ready by `GET /health/ready`. The `model` field of a request must be one of the listed ids.
+
+### Load and unload on a running server
+
+```bash
+yunshu model load mlx-community/Qwen3.5-9B-MLX-4bit
+yunshu model unload mlx-community/Qwen3.5-9B-MLX-4bit
+```
+
+These call `POST /v1/models/load` and `POST /v1/models/unload/{model_id}`. They are operational endpoints: when `YUNSHU_AUTH_TOKEN` is not set they are denied, so set a token on the server and export the same value in the shell where you run the CLI. See the [models API](/docs/api/models).
+
+## Related
+
+- [Quickstart](/docs/getting-started/quickstart)
+- [Model support](/docs/guides/model-support): which model families and types are supported.
+- [CLI reference](/docs/guides/cli)

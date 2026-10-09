@@ -1,0 +1,414 @@
+---
+title: Responses
+description: OpenAI Responses API，支援儲存回應、背景模式、對話、壓縮、用戶端工具與 WebSocket 模式。
+---
+
+Yunshu 在 `POST /v1/responses` 提供 OpenAI Responses API，以及周邊路由：取回、刪除、取消、列出輸入項目、計算輸入 token、壓縮對話，還有 Conversations API。同一個路徑也提供 WebSocket 模式。官方 `openai` SDK 不需修改即可使用（`client.responses.create`、`.retrieve`、`.delete`、`.cancel`、`.input_items.list`、`.compact`、`.input_tokens.count`、`.connect`、`client.conversations.*`）。
+
+每個請求都會轉換成與 [Chat Completions](/docs/api/chat-completions) 相同的引擎路徑，因此取樣、受限解碼、前綴快取、視覺輸入與工具呼叫的行為一致。網路搜尋與 `mcp` 工具由伺服器執行，詳見[伺服器端工具](/docs/api/server-tools)。
+
+<Endpoint method="POST" path="/v1/responses" />
+<Endpoint method="GET" path="/v1/responses/{response_id}" />
+<Endpoint method="DELETE" path="/v1/responses/{response_id}" />
+<Endpoint method="POST" path="/v1/responses/{response_id}/cancel" />
+<Endpoint method="GET" path="/v1/responses/{response_id}/input_items" />
+<Endpoint method="POST" path="/v1/responses/input_tokens" />
+<Endpoint method="POST" path="/v1/responses/compact" />
+<Endpoint method="WS" path="/v1/responses" />
+<Endpoint method="POST" path="/v1/conversations" />
+<Endpoint method="GET" path="/v1/conversations/{conversation_id}" />
+<Endpoint method="POST" path="/v1/conversations/{conversation_id}" />
+<Endpoint method="DELETE" path="/v1/conversations/{conversation_id}" />
+<Endpoint method="POST" path="/v1/conversations/{conversation_id}/items" />
+<Endpoint method="GET" path="/v1/conversations/{conversation_id}/items" />
+<Endpoint method="GET" path="/v1/conversations/{conversation_id}/items/{item_id}" />
+<Endpoint method="DELETE" path="/v1/conversations/{conversation_id}/items/{item_id}" />
+
+<Callout type="info">
+只有在設定了 `YUNSHU_AUTH_TOKEN` 時才會強制驗證。單模型模式下 `model` 欄位僅供參考：已載入的模型會回應任何名稱，回應中會原樣帶回你送出的名稱。多模型模式下，未知的模型會得到 `404`。
+</Callout>
+
+## 請求
+
+`POST /v1/responses` 接收 JSON 本文。
+
+### 輸入與狀態
+
+| 參數 | 型別 | 必填 | 說明 | 狀態 |
+| --- | --- | --- | --- | --- |
+| `model` | string | 是 | 模型 id。空字串會被拒絕。 | 支援 |
+| `input` | string 或項目陣列 | 是 | 純字串，或下列項目：`message`（角色 `user`、`assistant`、`system`、`developer`；`developer` 視同 `system`）、`function_call`、`function_call_output`、`reasoning`、`custom_tool_call`、`custom_tool_call_output`、`local_shell_call`、`local_shell_call_output`、`tool_search_call`、`tool_search_output`、`computer_call`、`computer_call_output`、`web_search_call`、`mcp_call`、`mcp_list_tools`、`mcp_approval_request`、`mcp_approval_response`、`compaction`、`item_reference`。內容部分：`input_text`、`input_image`、`input_file`、`input_audio`。空字串與空陣列會被拒絕（`generate: false` 除外）。 | 支援 |
+| `instructions` | string | 否 | 這次請求的系統提示。不會透過 `previous_response_id` 延續。 | 支援 |
+| `previous_response_id` | string | 否 | 從已儲存的回應繼續。先前的回合會重播進提示中，最多往回追 16 層。未知、未儲存或不屬於你的 id 不會報錯：串接就在該處停止，請求會在沒有那段歷史的情況下執行。 | 支援 |
+| `conversation` | string 或 object | 否 | 對話 id（或 `{"id": ...}`）。對話項目會加在 `input` 前面，回應結束時這一回合會附加到對話中。不可與 `previous_response_id` 同時使用（`400`）。 | 支援 |
+| `context_management` | array | 否 | `[{"type": "compaction", "compact_threshold": N}]`：輸入超過 N 個 token 時先壓縮。 | 支援 |
+| `store` | boolean | 否 | 預設 `true`，與官方 API 相同。已儲存的回應可以取回、刪除、取消、串接與列出。 | 支援 |
+| `background` | boolean | 否 | 立即回傳 `queued` 回應，並在背景產生。`stream` 為 `true` 時會被忽略（照常串流）。不能與 `web_search` 或 `mcp` 工具並用（`400`）。 | 支援 |
+| `truncation` | `auto` 或 `disabled` | 否 | `auto`：提示超過上下文視窗時丟棄最舊的非系統訊息，並在 `x_yunshu.context_policy` 回報移除了什麼。`disabled`（預設）則回傳 `400`。 | 支援 |
+| `generate` | boolean | 否 | `false` 只把提示前綴預先填入快取，回傳回應 id 但不產生輸出（Codex 使用的 WebSocket 預熱）。 | 支援 |
+| `metadata` | object | 否 | 最多 16 組；會在回應中原樣帶回。 | 支援 |
+| `include` | array of string | 否 | `reasoning.encrypted_content` 會在推理項目加上不透明的 `encrypted_content`；`web_search_call.action.sources` 會列出搜尋來源。其他值會被接受但沒有作用。 | 部分支援 |
+| `max_tool_calls` | integer | 否 | 限制單一回應的伺服器端工具呼叫次數（網路搜尋與 `mcp`）。 | 支援 |
+| `prompt_cache_key`、`prompt_cache_retention`、`prompt_cache_options`、`safety_identifier`、`service_tier`、`client_metadata`、`user` | 各種 | 否 | 接受，並在 Response 物件有對應欄位時帶回。不會改變行為；前綴快取是自動的。 | 接受但忽略 |
+
+### 產生
+
+| 參數 | 型別 | 必填 | 說明 | 狀態 |
+| --- | --- | --- | --- | --- |
+| `max_output_tokens` | integer | 否 | 1 到 1048576。預設為伺服器設定 `YUNSHU_DEFAULT_MAX_TOKENS`。也接受別名 `max_completion_tokens`。 | 支援 |
+| `temperature` | number | 否 | 0 到 2，預設 1.0。 | 支援 |
+| `top_p` | number | 否 | 0 到 1，預設 1.0。 | 支援 |
+| `top_k`、`min_p`、`top_n_sigma`、`repetition_penalty`、`frequency_penalty`、`presence_penalty`、`xtc_probability`、`xtc_threshold` | number | 否 | 額外的取樣控制，範圍與 Chat Completions 相同。 | 擴充 |
+| `seed` | integer | 否 | 決定性取樣的種子。 | 支援 |
+| `stop`、`stop_token_ids` | array | 否 | 最多 16 個非空停止字串（可傳單一字串）。 | 擴充 |
+| `min_tokens`、`ignore_eos`、`suppress_tokens`、`logit_bias`、`logprobs`、`top_logprobs`、`n` | 各種 | 否 | 傳給引擎。`logit_bias` 的值必須是有限數且介於 -100 到 100。`stream: true` 時不接受大於 1 的 `n`。 | 擴充 |
+| `reasoning` | object | 否 | `{"effort": "low\|medium\|high"}` 對應到範本的推理強度。不會讀取 `summary`。 | 部分支援 |
+| `reasoning_effort`、`enable_thinking`、`thinking_budget` | 各種 | 否 | `reasoning` 的扁平等效欄位。 | 擴充 |
+| `text` | object | 否 | `text.format` 為 `json_schema` 或 `json_object` 時會變成受限解碼；預設為 `text`。 | 支援 |
+| `response_format`、`grammar` | object | 否 | Chat 風格的結構化輸出與文法限制（`json`、`regex`、`choice`、`cfg`）。 | 擴充 |
+| `stream` | boolean | 否 | Server-Sent Events。 | 支援 |
+| `stream_options` | object | 否 | 接受。用量一律出現在最後的事件中。 | 接受但忽略 |
+| `timeout`、`priority`、`lora_adapter`、`spec_decode` | 各種 | 否 | 與其他路由共用的引擎控制。視覺語言模型會拒絕 `lora_adapter` 與自訂 `logits_processors`。 | 擴充 |
+
+### 工具
+
+| 參數 | 型別 | 必填 | 說明 | 狀態 |
+| --- | --- | --- | --- | --- |
+| `tools` | array | 否 | 見下方的工具類型。 | 部分支援 |
+| `tool_choice` | string 或 object | 否 | `auto`、`none`、`required`、指定函式（`{"type": "function", "name": "..."}`），或 `allowed_tools` 物件（會併入工具清單）。強制選擇會在串流開始前檢查。 | 支援 |
+| `parallel_tool_calls` | boolean | 否 | 預設 `true`。 | 支援 |
+
+支援的工具類型：
+
+| `type` | 由誰執行 | 狀態 |
+| --- | --- | --- |
+| `function` | 你的用戶端。模型的呼叫以 `function_call` 項目回傳。 | 支援 |
+| `namespace` | 你的用戶端。子工具會攤平給模型，回傳的呼叫保留 namespace。跨 namespace 的重複名稱是 `400`。 | 支援 |
+| `custom` | 你的用戶端。以 `custom_tool_call` 回傳，`input` 為純文字。支援 text 格式，以及 `syntax` 為 `regex` 或 `lark` 的 `grammar` 格式（受限解碼）。 | 支援 |
+| `local_shell` | 你的用戶端。以 `local_shell_call` 回傳。 | 支援 |
+| `tool_search` | 你的用戶端，且只接受 `execution: "client"`。`defer_loading` 的工具會一直隱藏，直到 `tool_search_output` 載入它們。託管式的 tool search 是 `400`。 | 部分支援 |
+| `computer` | 你的用戶端。見下方說明。 | 部分支援 |
+| `web_search`、`web_search_preview` | 伺服器。見[伺服器端工具](/docs/api/server-tools)。 | 支援 |
+| `mcp` | 伺服器連線到你指定的 MCP 伺服器。見[伺服器端工具](/docs/api/server-tools)。 | 部分支援 |
+| `file_search`、`code_interpreter`、`image_generation` 等託管工具 | 無法使用。 | 尚未支援 |
+
+用戶端工具（`custom`、`local_shell`、`tool_search`、`computer`）不能與 `web_search` 或 `mcp` 在同一個請求中並用（`400`）。
+
+#### computer 工具
+
+`tools: [{"type": "computer"}]` 支援作為由用戶端執行的工具。閘道會把它轉成一個函式，引數是有順序的 `actions` 陣列，並回傳含 `actions` 的 `computer_call` 項目（每個動作為 `click`、`double_click`、`drag`、`move`、`scroll`、`keypress`、`type`、`wait`、`screenshot` 之一）。`pending_safety_checks` 一律為空。
+
+Yunshu 不會執行任何電腦動作。由你的用戶端執行動作、截圖，再以 `computer_call_output` 項目送回，其 `output` 為 `{"type": "computer_screenshot", "image_url": "..."}` 或 `{"file_id": "..."}`；模型需要具備視覺輸入才能讀懂截圖。沒有 `computer_screenshot` 的 `computer_call_output` 是 `400`。這是本機模型，並未像託管的電腦操作模型那樣專門訓練過，動作品質取決於你載入的模型。
+
+## 範例
+
+<Tabs items={["curl", "Python", "JavaScript"]}>
+<Tab value="curl">
+
+```bash
+curl http://localhost:8000/v1/responses \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-local" \
+  -d '{
+    "model": "local",
+    "instructions": "Answer in one sentence.",
+    "input": "Why is the sky blue?",
+    "max_output_tokens": 200
+  }'
+```
+
+</Tab>
+<Tab value="Python">
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="http://localhost:8000/v1", api_key="sk-local")
+
+first = client.responses.create(
+    model="local",
+    input="My name is Mei. Remember it.",
+)
+second = client.responses.create(
+    model="local",
+    previous_response_id=first.id,
+    input="What is my name?",
+)
+print(second.output_text)
+```
+
+</Tab>
+<Tab value="JavaScript">
+
+```ts
+import OpenAI from "openai";
+
+const client = new OpenAI({ baseURL: "http://localhost:8000/v1", apiKey: "sk-local" });
+
+const stream = await client.responses.create({
+  model: "local",
+  input: "Write a haiku about autumn.",
+  stream: true,
+});
+for await (const event of stream) {
+  if (event.type === "response.output_text.delta") process.stdout.write(event.delta);
+}
+```
+
+</Tab>
+</Tabs>
+
+### 結構化輸出
+
+```python
+resp = client.responses.create(
+    model="local",
+    input="Extract: Ada Lovelace, born 1815.",
+    text={
+        "format": {
+            "type": "json_schema",
+            "name": "person",
+            "strict": True,
+            "schema": {
+                "type": "object",
+                "properties": {"name": {"type": "string"}, "born": {"type": "integer"}},
+                "required": ["name", "born"],
+                "additionalProperties": False,
+            },
+        }
+    },
+)
+print(resp.output_text)
+```
+
+### 函式工具迴圈
+
+```python
+tools = [{
+    "type": "function",
+    "name": "get_weather",
+    "description": "Current weather for a city",
+    "parameters": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]},
+}]
+r1 = client.responses.create(model="local", input="Weather in Taipei?", tools=tools)
+call = next(i for i in r1.output if i.type == "function_call")
+r2 = client.responses.create(
+    model="local",
+    previous_response_id=r1.id,
+    tools=tools,
+    input=[{"type": "function_call_output", "call_id": call.call_id, "output": '{"temp_c": 24}'}],
+)
+print(r2.output_text)
+```
+
+### 背景模式
+
+```python
+job = client.responses.create(model="local", input="Write a long story.", background=True)
+print(job.status)  # queued
+done = client.responses.retrieve(job.id)       # 輪詢，直到狀態不再是 queued / in_progress
+client.responses.cancel(job.id)                # 或取消
+```
+
+回應仍在 `queued` 時送來的取消，會在開始產生之前就被處理。背景回應不會串流；背景產生失敗時，儲存的狀態會變成 `failed`，`error.code` 為 `internal_error`。
+
+## 回應
+
+```json
+{
+  "id": "resp-3f2a9c1d5b7e4a60c8d19e22",
+  "object": "response",
+  "created_at": 1760000000,
+  "completed_at": 1760000002,
+  "status": "completed",
+  "model": "local",
+  "output": [
+    {
+      "type": "message",
+      "id": "msg-0d4c7e9a1b2f3c4d5e6f7a8b",
+      "role": "assistant",
+      "status": "completed",
+      "content": [
+        { "type": "output_text", "text": "Sunlight scatters off air molecules, and blue scatters most.", "annotations": [] }
+      ]
+    }
+  ],
+  "usage": {
+    "input_tokens": 28,
+    "output_tokens": 14,
+    "total_tokens": 42,
+    "input_tokens_details": { "cached_tokens": 0, "cache_write_tokens": 0 },
+    "output_tokens_details": { "reasoning_tokens": 0 }
+  },
+  "instructions": "Answer in one sentence.",
+  "tool_choice": "auto",
+  "parallel_tool_calls": true,
+  "store": true,
+  "background": false,
+  "truncation": "disabled",
+  "previous_response_id": null,
+  "metadata": null
+}
+```
+
+物件中也會帶回請求設定（`temperature`、`top_p`、`max_output_tokens`、`tools`、`text`、`reasoning`、`service_tier` 等）。模型有推理時，`output` 最前面會有一個 `reasoning` 項目，其 `summary` 的類型為 `summary_text`。工具呼叫以 `function_call` 項目呈現，含 `call_id`、`name` 與 `arguments`。因 token 上限被截斷的回應，`status` 為 `incomplete`，並有 `incomplete_details.reason`。Yunshu 另外加上 `x_yunshu` 物件（計時、快取與推測解碼統計；有回合被丟棄時還有 `context_policy`），詳見[擴充功能](/docs/api/extensions)。
+
+### 取回、刪除、取消
+
+- `GET /v1/responses/{response_id}` 回傳已儲存的回應，找不到則回傳 `404`，code 為 `response_not_found`。
+- `DELETE /v1/responses/{response_id}` 回傳 `{"id": "...", "object": "response.deleted", "deleted": true}`。
+- `POST /v1/responses/{response_id}/cancel` 停止進行中的產生。對於已儲存且為 `queued` 或 `in_progress` 的回應，會儲存並回傳 `status: "cancelled"`；對已完成的回應則原樣回傳；未知的 id 回傳 `404`。
+
+已儲存的回應存放在伺服器行程的記憶體中（保留最近 1024 筆），重新啟動後會消失。回應只對建立它的呼叫者可見。
+
+### 列出輸入項目
+
+`GET /v1/responses/{response_id}/input_items` 以 Responses 項目回傳該請求自己的輸入（含 `input_text` 或 `input_image` 部分的 `message`、`function_call`、`function_call_output`）。`instructions` 與系統、開發者訊息不會列出，透過 `previous_response_id` 取得的歷史屬於先前的回應。
+
+| 查詢參數 | 說明 |
+| --- | --- |
+| `limit` | 1 到 100，預設 20。 |
+| `order` | `desc`（預設）或 `asc`。 |
+| `after`、`before` | 以項目 id 作為游標。未知的游標是 `404`，code 為 `item_not_found`。 |
+
+結果為 `{"object": "list", "data": [...], "first_id", "last_id", "has_more"}`。
+
+### 計算輸入 token
+
+`POST /v1/responses/input_tokens` 接受與 `POST /v1/responses` 相同的本文（`model` 仍為必填），回傳：
+
+```json
+{ "object": "response.input_tokens", "input_tokens": 28 }
+```
+
+提示的建立方式與產生時相同（指示、項目、對話、壓縮項目、`previous_response_id` 串接、工具），並透過聊天範本轉譯，因此數字會等於同一請求的 `usage.input_tokens`。不計入伺服器端工具定義（`web_search`、`mcp`），也不會執行自動壓縮。
+
+### 壓縮
+
+`POST /v1/responses/compact` 壓縮一段對話。它接受 `model`，以及 `input`（字串或項目）和（或）`previous_response_id`，另有選用的 `instructions` 與 `tools`。所有使用者與開發者訊息都原文保留；其餘部分由一個不透明的 `compaction` 項目取代，裡面包著模型寫的摘要（最多 `YUNSHU_COMPACT_MAX_TOKENS` 個 token，預設 2048）。歷史太長、放不進上下文視窗時，會分多次摘要。
+
+```json
+{
+  "id": "resp_9a8b7c6d5e4f3a2b1c0d9e8f",
+  "object": "response.compaction",
+  "created_at": 1760000000,
+  "output": [
+    { "type": "message", "role": "user", "content": [{ "type": "input_text", "text": "..." }] },
+    { "type": "compaction", "id": "cmp_0123456789abcdef01234567", "encrypted_content": "..." }
+  ],
+  "usage": { "input_tokens": 1200, "output_tokens": 180, "total_tokens": 1380 }
+}
+```
+
+下一個請求把 `output` 當作 `input` 傳回去即可。`encrypted_content` 是摘要的 base64 封裝，並非加密；它只是讓用戶端把該項目當成不透明資料處理。
+
+## 對話
+
+Conversations API 把項目存放在伺服器端，讓你用 `conversation` 重複使用，而不必每次重送歷史。每個對話是 `YUNSHU_CONVERSATIONS_DIR`（預設 `~/.yunshu/conversations`）下的一個 JSON 檔，因此對話在重新啟動後仍會保留。
+
+| 路由 | 說明 |
+| --- | --- |
+| `POST /v1/conversations` | 本文 `{"items": [...], "metadata": {...}}`，兩者皆可省略。每次呼叫最多 20 個項目、16 個 metadata 鍵。回傳 `{"id": "conv_...", "object": "conversation", "created_at", "metadata"}`。 |
+| `GET /v1/conversations/{conversation_id}` | 取回。 |
+| `POST /v1/conversations/{conversation_id}` | 取代 `metadata`（本文必填）。 |
+| `DELETE /v1/conversations/{conversation_id}` | 回傳 `{"id", "object": "conversation.deleted", "deleted": true}`。 |
+| `POST /v1/conversations/{conversation_id}/items` | 本文 `{"items": [...]}`（必填），每次最多 20 個。回傳清單。 |
+| `GET /v1/conversations/{conversation_id}/items` | `limit` 1-100（預設 20）、`order` 為 `desc`（預設）或 `asc`、`after` 游標。 |
+| `GET /v1/conversations/{conversation_id}/items/{item_id}` | 取回單一項目。 |
+| `DELETE /v1/conversations/{conversation_id}/items/{item_id}` | 移除單一項目。 |
+
+```python
+conv = client.conversations.create()
+client.responses.create(model="local", conversation=conv.id, input="I like green tea.")
+r = client.responses.create(model="local", conversation=conv.id, input="What do I like?")
+print(r.output_text)
+```
+
+錯誤使用 OpenAI 格式，code 包含 `conversation_not_found`、`item_not_found`、`invalid_json`、`missing_required_parameter` 與 `insufficient_storage`（`507`，磁碟已滿）。
+
+## 串流
+
+`stream: true` 時，回應為 Server-Sent Events：每則訊息的 `event:` 行等於其 JSON `data:` 的 `type`，並帶有遞增的 `sequence_number`。串流以 `data: [DONE]` 結束。長提示在預填階段時可能出現註解行（`: keep-alive`）。
+
+一般產生依序送出：
+
+1. `response.created`、`response.in_progress`
+2. 有推理時：`response.output_item.added`（`reasoning` 項目）、`response.reasoning_summary_part.added`、`response.reasoning_summary_text.delta`、`response.reasoning_summary_text.done`、`response.reasoning_summary_part.done`、`response.output_item.done`
+3. 訊息：`response.output_item.added`、`response.content_part.added`、重複的 `response.output_text.delta`、`response.output_text.done`、`response.content_part.done`、`response.output_item.done`
+4. 每個函式呼叫：`response.output_item.added`（已帶有 `call_id`、`name`、`arguments`）、`response.function_call_arguments.done`、`response.output_item.done`。函式呼叫是整個一次送出，不會以引數 delta 分段。
+5. 結尾事件：`response.completed`、`response.incomplete`（token 上限、逾時或取消）或 `response.failed`
+
+視請求而定的其他事件：
+
+| 事件 | 時機 |
+| --- | --- |
+| `response.custom_tool_call_input.delta`、`response.custom_tool_call_input.done` | `custom` 工具呼叫。 |
+| `response.output_text.annotation.added` | 網路搜尋的 URL 引用。 |
+| `response.web_search_call.in_progress`、`.searching`、`.completed` | 伺服器端網路搜尋。 |
+| `response.mcp_list_tools.in_progress`、`.completed` | `mcp` 工具列出了某個伺服器的工具。 |
+| `response.mcp_call.in_progress`、`response.mcp_call_arguments.delta`、`response.mcp_call_arguments.done`、`response.mcp_call.completed`、`response.mcp_call.failed` | 伺服器端的 `mcp` 呼叫。 |
+
+串流開始後發生的錯誤，會是同一條串流上的結尾 `response.failed` 事件（不會再送出第二個 HTTP 回應）；`stream: true` 時遇到未知模型，也是以 code 為 `model_not_found` 的 `response.failed` 回報。
+
+## WebSocket 模式
+
+`WS /v1/responses` 使用 OpenAI 的 Responses WebSocket 模式（SDK 中的 `client.responses.connect()`）。來源（Origin）與 token 檢查在升級之前進行；設定了 `YUNSHU_AUTH_TOKEN` 時，請以 `Authorization: Bearer ...`、`x-api-key` 或 `token` 查詢參數送出 token。
+
+用戶端訊息（JSON 文字訊框）：
+
+| 訊息 | 說明 |
+| --- | --- |
+| `{"type": "response.create", ...body}` | 本文欄位與 `POST /v1/responses` 相同；`stream` 會被強制開啟。選用的 `stream_id` 會把請求放進同一條通道（通道內先進先出，不同通道並行；最多 32 條），選用的 `client_request_id` 為請求命名。 |
+| `{"type": "response.cancel", "id": "..."}` | 依 `client_request_id` 或 `stream_id` 取消。沒有 id 時會取消此連線上所有進行中的請求。未知的 id 會回傳 `404` 錯誤訊息。 |
+| `{"type": "ping"}` | 以 `{"type": "pong"}` 回應。 |
+
+伺服器送出與 SSE 串流相同的 `response.*` 事件，每個訊框一個 JSON 物件。不屬於某個回應的失敗，以 `{"type": "error", "status": 400, "error": {"message", "type"}}` 送達：JSON 無效、未知的訊息類型、重複的進行中請求 id（`409`），或同時請求過多（`429`，每個連線預設 16 個，設定為 `YUNSHU_WS_MAX_INFLIGHT`）。對外事件依連線緩衝（`YUNSHU_WS_SEND_QUEUE`）；讀取過慢的用戶端會讓產生暫停，而不是讓緩衝區無限增長。關閉連線會取消其進行中的請求。
+
+```python
+with client.responses.connect() as conn:
+    conn.response.create(model="local", input="Say hi.")
+    for event in conn:
+        if event.type == "response.output_text.delta":
+            print(event.delta, end="")
+        if event.type in ("response.completed", "response.failed"):
+            break
+```
+
+## 錯誤
+
+錯誤使用 OpenAI 格式 `{"error": {"message", "type", "param", "code"}}`。
+
+| 狀態 | 原因 |
+| --- | --- |
+| `400` | 本文或欄位無效（`input` 為空、`stop` 超過 16 個、`logit_bias` 超出範圍、`metadata` 超過 16 組）、`truncation` 為 disabled 時提示超出上下文視窗（`context_length_exceeded`）、模型不支援所要求的功能、`conversation` 與 `previous_response_id` 並用、不支援的工具組合、格式錯誤的 `computer_call_output`。 |
+| `401` / `403` | 缺少或錯誤的 token；金鑰沒有該模型的權限。 |
+| `404` | 未知的模型（多模型模式）、未知的回應（`response_not_found`）或檔案參照。 |
+| `413` | 提示太大，記憶體無法預填。 |
+| `424` | 無法連線到 `mcp` 工具伺服器（`external_connector_error`）。 |
+| `502` | 模型為用戶端工具產生了格式錯誤的引數，例如無效的 `computer` 動作。 |
+| `503` | 沒有載入任何模型。 |
+
+## 支援狀況
+
+| 功能 | 狀態 |
+| --- | --- |
+| `POST /v1/responses`，串流與非串流 | <Support status="supported">支援</Support> |
+| 取回、刪除、取消、輸入項目、輸入 token、壓縮 | <Support status="supported">支援</Support> |
+| `previous_response_id` 串接、`store` | <Support status="supported">支援（存於記憶體，重新啟動後消失）</Support> |
+| 背景模式 | <Support status="partial">部分支援（背景回應不串流）</Support> |
+| Conversations API | <Support status="supported">支援（持久化）</Support> |
+| `text.format` json_schema 與 json_object | <Support status="supported">支援</Support> |
+| function、namespace、custom、local_shell、用戶端 tool_search | <Support status="supported">支援</Support> |
+| `computer` 工具 | <Support status="partial">由用戶端執行；伺服器從不執行動作</Support> |
+| `web_search`、`mcp` | <Support status="supported">支援，由伺服器執行</Support> |
+| `reasoning.summary` 產生、託管式 `tool_search`、`file_search`、`code_interpreter`、`image_generation` | <Support status="unsupported">尚未支援</Support> |
+| 恢復背景串流 | <Support status="unsupported">尚未支援</Support> |
+| WebSocket 模式 | <Support status="supported">支援</Support> |
+
+## 相關頁面
+
+- [Chat Completions](/docs/api/chat-completions)
+- [伺服器端工具](/docs/api/server-tools)
+- [結構化輸出](/docs/guides/structured-output)
+- [提示快取](/docs/guides/prompt-caching)
+- [擴充功能](/docs/api/extensions)

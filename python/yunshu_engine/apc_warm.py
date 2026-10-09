@@ -613,6 +613,18 @@ class WarmTier:
             else 0.0,
         }
 
+    def clear(self) -> None:
+        """Discard resident entries and pending encode results; keep workers usable."""
+        with self._lock:
+            for inf in self._inflight.values():
+                inf.cancelled = True
+                inf.future.cancel()
+            self._inflight.clear()
+        self.entries.clear()
+        self._overflow.clear()
+        self._failed.clear()
+        self.bytes = 0
+
     def close(self) -> None:
         self._worker.shutdown(wait=True, cancel_futures=False)
         self._chunk_pool.shutdown(wait=True)

@@ -1,0 +1,92 @@
+---
+title: 安装
+description: 通过 uv、pip 或 Homebrew 从 PyPI 安装 Yunshu，并用 yunshu doctor 检查安装状态。
+---
+
+## 系统要求
+
+| 要求 | 说明 |
+|---|---|
+| 硬件 | 搭载 Apple Silicon（arm64）的 Mac。MLX 无法在 Intel Mac 或通过 Rosetta 运行的 Python 上工作。 |
+| macOS | 14（Sonoma）或更新版本。版本较旧时 `yunshu doctor` 会判定为失败。 |
+| Python | 3.13 或更新版本。`uv tool install` 可以为你获取由 uv 管理的 3.13。 |
+| 内存 | 统一内存需容纳模型权重与 KV 缓存。模型放不下时，`yunshu doctor -m <model>` 会给出警告。 |
+
+## 使用 uv 安装（推荐）
+
+先安装 [uv](https://docs.astral.sh/uv/getting-started/installation/)，再从 [PyPI](https://pypi.org/project/yunshu) 安装软件包：
+
+```bash
+uv tool install "yunshu[vision]" --python 3.13
+yunshu --version
+```
+
+`vision` 额外依赖会安装 `mlx-vlm`。Qwen3.5 / 3.6 / 3.8 系列和所有视觉语言模型都需要它；这些模型的纯文本请求也由它处理。不带额外依赖的基础安装只能服务纯文本的 `mlx-lm` 模型。
+
+之后要升级：
+
+```bash
+uv tool upgrade yunshu
+```
+
+## 使用 pip 安装
+
+```bash
+python3.13 -m venv ~/yunshu-env
+source ~/yunshu-env/bin/activate
+pip install "yunshu[vision]"
+```
+
+## 使用 Homebrew 安装
+
+Yunshu 发布在共享的 tap `YuhuanStudio/homebrew-tap` 中：
+
+```bash
+brew install yuhuanstudio/tap/yunshu
+```
+
+该 formula 会创建 Python 3.13 虚拟环境，并安装带有 `vision` 额外依赖的 Yunshu。它需要 Apple Silicon 与 macOS Sonoma 或更新版本。formula 没有定义 Homebrew service；若要在后台运行，请使用 [`yunshu service`](/docs/getting-started/service)，所有安装方式都是同一套做法。
+
+## 可选的额外依赖
+
+额外依赖按名称安装，例如 `uv tool install "yunshu[vision,audio]" --python 3.13`。
+
+| 额外依赖 | 新增内容 | 用途 |
+|---|---|---|
+| `vision` | `mlx-vlm`、Pillow | Qwen3.5 / 3.6 / 3.8 与其他视觉语言模型、图片与视频输入 |
+| `audio` | `mlx-audio` | 语音转文字、文字转语音，以及 Realtime 语音 WebSocket |
+| `omni` | `mlx-vlm`、torch、torchvision、Pillow | 使用 Qwen3-Omni 的原生语音到语音 |
+| `embeddings` | `mlx-embeddings` | `POST /v1/embeddings` |
+| `generation` | diffusers、torch、torchvision、Pillow | 图像生成。未安装时 `POST /v1/images/generations` 会返回 503。 |
+| `compression` | zstandard、lz4 | 前缀缓存 SSD 层的可选压缩编码 |
+| `webrtc` | aiortc | 通过 WebRTC 使用 Realtime（`POST /v1/realtime/calls`） |
+| `web-render` | playwright | 网页抓取的浏览器渲染（需另外安装浏览器） |
+| `all` | `vision`、`audio`、`omni`、`embeddings`、`generation`、`compression` | 以上所有模态 |
+
+## 检查安装
+
+```bash
+yunshu doctor
+```
+
+`yunshu doctor` 会检查平台（Apple Silicon、macOS 版本、是否通过 Rosetta）、Python、MLX 与 Metal、内存、已安装的软件包版本与额外依赖、你的配置、模型目录与未完成的下载、可用磁盘空间、缓存完整性、你打算使用的端口，以及是否已安装登录服务。每个问题都会附上建议的修复方式。有问题导致无法启动时，命令会以状态码 1 退出。
+
+加上 `-m <model>` 可一并检查模型（路径或 Hugging Face repo id）是否存在、是否完整、内存是否放得下；对 Qwen3.5 系列模型，还会显示将使用哪种推测式解码路径。`--no-metal` 会跳过导入 MLX；这项检查无法证明 Metal 或检查点确实可用。
+
+```bash
+yunshu doctor -m mlx-community/Qwen3.5-0.8B-MLX-bf16
+yunshu --json doctor --no-metal
+```
+
+## 卸载
+
+```bash
+yunshu service uninstall      # 仅在你安装过登录服务时需要
+uv tool uninstall yunshu      # 或：brew uninstall yunshu、pip uninstall yunshu
+```
+
+下载的模型位于 `~/.yunshu/models`，不会被移除。完整的清理清单参见[服务](/docs/getting-started/service)。
+
+## 下一步
+
+继续阅读[快速开始](/docs/getting-started/quickstart)。若安装失败，参见[故障排查](/docs/guides/troubleshooting)。

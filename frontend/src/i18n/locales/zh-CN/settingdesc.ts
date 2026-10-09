@@ -289,5 +289,10 @@ const settingdesc = {
   YUNSHU_WEB_RESEARCH_PAGES: "每次补强最多取用的来源页面数（上限 6）。",
   YUNSHU_WEB_RESEARCH_MODEL:
     "已加载的本地嵌入模型 id；不会自动加载模型，没有或不可用时只用 BM25。建议 Qwen3-Embedding-0.6B。",
+  YUNSHU_TELEMETRY:
+    "免权限的 Apple 功耗、GPU 与温度采样器（`on` 或 `off`）；需重启。",
+  YUNSHU_TELEMETRY_INTERVAL_S: "主机遥测采样间隔（秒）；需重启。",
+  YUNSHU_SERVE_LOG_RETENTION_DAYS:
+    "历史 API 元数据的保留天数；0 表示不按时间过滤。",
 };
 export default settingdesc;

@@ -1060,3 +1060,45 @@ class TestAnthropicStreamingStopSequence:
         assert "event: error" not in resp.text
         assert '"stop_reason": "stop_sequence"' in resp.text
         assert '"stop_sequence": "5"' in resp.text
+
+
+def test_dict_result_with_stop_string_reports_stop_sequence():
+    """A VLMEngine-style dict result (stop string trimmed, flag set) reports stop_reason
+    stop_sequence. The detection read getattr(result, ...) on the dict, so it saw nothing."""
+    from yunshu_gateway.engine import set_engine
+
+    class FakeVLM:
+        is_loaded = True
+        model_name = "claude-3"
+        model_type = "vlm"
+
+        async def generate(self, *args, **kwargs):
+            return {
+                "text": "1 2 3 4 ",
+                "finish_reason": "stop",
+                "prompt_tokens": 3,
+                "completion_tokens": 4,
+                "stopped_by_stop_sequence": True,
+            }
+
+        def __getattr__(self, name):
+            raise AttributeError(name)
+
+    os.environ["YUNSHU_AUTH_DISABLED"] = "true"
+    set_engine(FakeVLM())
+    try:
+        r = _client().post(
+            "/v1/messages",
+            json={
+                "model": "claude-3",
+                "messages": [{"role": "user", "content": "count"}],
+                "max_tokens": 20,
+                "stop_sequences": ["5"],
+            },
+        )
+    finally:
+        set_engine(None)
+        os.environ.pop("YUNSHU_AUTH_DISABLED", None)
+    assert r.status_code == 200, r.text
+    assert r.json()["stop_reason"] == "stop_sequence"
+    assert r.json()["stop_sequence"] == "5"

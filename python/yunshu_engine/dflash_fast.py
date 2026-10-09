@@ -369,7 +369,6 @@ def rounds(
     import time
 
     from mlx_vlm.models.qwen3_5 import language as q35
-    from mlx_vlm.speculative.common import _record_speculative_round
 
     from . import dflash_tree as dt
     from . import mtp_lane
@@ -377,6 +376,7 @@ def rounds(
     from .dflash_context import context_window
     from .dflash_plan import FastShape, remap_landed, reorder, search_tree
     from .kernels import lane_linear
+    from .spec_metrics import record as _record_speculative_round
     from .spec_schedule import NodeBudget
 
     lm = getattr(model, "language_model", model)
@@ -486,7 +486,9 @@ def rounds(
                     target_ids_row[path[-1]]
                 ]
                 if n:
-                    _record_speculative_round(draft, len(path) - 1, n)
+                    _record_speculative_round(
+                        draft, len(path) - 1, n, parents=parent_ids
+                    )
                 tv.tree_commit(lm, cache, result, path)
                 captured = mx.concatenate(result.captured, axis=-1)[
                     :, mx.array(path, dtype=mx.int32)

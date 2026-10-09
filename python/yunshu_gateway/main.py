@@ -334,7 +334,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     from . import evals_runner
 
     evals_runner.recover()
-    yield
+    from yunshu_engine.telemetry import sampler as host_sampler
+
+    host_sampler.start()
+    try:
+        yield
+    finally:
+        await asyncio.to_thread(host_sampler.stop)
 
     await evals_runner.stop()
     try:

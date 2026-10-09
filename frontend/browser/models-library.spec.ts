@@ -360,9 +360,9 @@ async function install(page: Page, w: World) {
       );
       return w.fit[id] ? json(200, w.fit[id]) : nf();
     }
-    if (path === "/v1/yunshu/cache" && method === "GET")
+    if (path === "/v1/yunshu/cache/tiers" && method === "GET")
       return w.support.cache ? json(200, w.cache) : nf();
-    if (path === "/v1/yunshu/cache/clear") {
+    if (path === "/v1/yunshu/cache/tiers/clear") {
       if (!w.support.cache) return nf();
       const body = JSON.parse(req.postData() ?? "{}");
       return json(200, {
@@ -667,7 +667,7 @@ test.describe("cache", () => {
       .filter({ hasText: "記憶體層" })
       .getByRole("button", { name: "清除" })
       .click();
-    expect(w.calls).not.toContain("POST /v1/yunshu/cache/clear");
+    expect(w.calls).not.toContain("POST /v1/yunshu/cache/tiers/clear");
     await page
       .getByRole("dialog")
       .getByRole("button", { name: "清除", exact: true })

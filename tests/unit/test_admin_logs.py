@@ -160,51 +160,8 @@ def test_sse_route_headers_and_bad_level(client):
     assert c.get("/v1/yunshu/logs/stream?level=loud").status_code == 400
 
 
-def test_bundle_downloads_the_cli_bundle_redacted(client, monkeypatch):
-    c, _ = client
-    from yunshu_cli import bundle as cli_bundle
-
-    seen = {}
-
-    def fake_build(*, host, port):
-        seen.update(host=host, port=port)
-        return {
-            "version": "9.9",
-            "errors": {
-                "lines": [cli_bundle.scrub_line("Bearer sk-abcdefghijklmnop1234 x")]
-            },
-        }
-
-    monkeypatch.setattr(cli_bundle, "build", fake_build)
-    r = c.get("/v1/yunshu/bundle")
-    assert r.status_code == 200
-    assert 'attachment; filename="yunshu-bundle-' in r.headers["content-disposition"]
-    assert r.headers["content-type"].startswith("application/json")
-    assert r.json()["version"] == "9.9" and "sk-abcdef" not in r.text
-    assert seen["host"] and seen["port"]
-
-
-def test_bundle_is_the_same_content_as_the_cli(client, monkeypatch, tmp_path):
-    """The route must not invent its own shape: keys equal ``yunshu bundle``'s."""
-    c, _ = client
-    from yunshu_cli import bundle as cli_bundle
-
-    monkeypatch.setattr(cli_bundle.paths, "log_dir", lambda: tmp_path)
-    import importlib
-
-    doctor = importlib.import_module("yunshu_cli.doctor")
-
-    monkeypatch.setattr(doctor, "run_checks", lambda *a, **k: [])
-    monkeypatch.setattr("yunshu_cli.cache._run", lambda apply=False: [])
-    via_route = c.get("/v1/yunshu/bundle").json()
-    direct = cli_bundle.build()
-    assert set(via_route) == set(direct)
-
-
-@pytest.mark.parametrize(
-    "path", ["/v1/yunshu/logs", "/v1/yunshu/logs/stream", "/v1/yunshu/bundle"]
-)
-def test_logs_and_bundle_need_admin(path, monkeypatch):
+@pytest.mark.parametrize("path", ["/v1/yunshu/logs", "/v1/yunshu/logs/stream"])
+def test_logs_need_admin(path, monkeypatch):
     monkeypatch.delenv("YUNSHU_AUTH_DISABLED", raising=False)
     monkeypatch.delenv("YUNSHU_AUTH_TOKEN", raising=False)
     app = FastAPI()

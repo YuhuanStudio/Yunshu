@@ -117,7 +117,7 @@ async def test_recent_endpoint_shape_whitelist_order_limit():
         since = r["data"][1]["t"]
         news = (await c.get(f"/v1/yunshu/requests/recent?since={since}")).json()
         assert [e["request_id"] for e in news["data"]] == ["c"]
-        assert (await c.get("/v1/yunshu/requests/recent?limit=0")).status_code == 422
+        assert (await c.get("/v1/yunshu/requests/recent?limit=0")).status_code == 400
 
 
 # ── B2 ──────────────────────────────────────────────────────────────────

@@ -1,12 +1,13 @@
 """Prefix-cache (APC) management for the console.
 
-- ``GET  /v1/yunshu/cache``        tiers (RAM / WARM / SSD): bytes, entries, hits; lookup
+- ``GET  /v1/yunshu/cache/tiers``  tiers (RAM / WARM / SSD): bytes, entries, hits; lookup
                                    counters; entry metadata capped at 200 (hash label,
                                    token count, bytes, tier, LRU rank, hits; never text)
-- ``POST /v1/yunshu/cache/clear``  ``{"tier": "ram"|"warm"|"ssd"|null, "model": id|null}``
+- ``POST /v1/yunshu/cache/tiers/clear``  ``{"tier": "ram"|"warm"|"ssd"|null, "model": id|null}``
                                    drop a tier (all tiers when omitted), report bytes freed
 
-Accounting and eviction only: lookups, keys and token identity are untouched. Reads follow
+(``/v1/yunshu/cache`` and ``/cache/clear`` are the entry-lifecycle view and the resident-APC
+clear in ``yunshu.py``.) Accounting and eviction only: lookups, keys and token identity are untouched. Reads follow
 the inference endpoints' access; clearing needs the ``admin`` permission.
 """
 
@@ -52,7 +53,7 @@ def _engines() -> list[tuple[str, Any]]:
     return out
 
 
-@router.get("/yunshu/cache")
+@router.get("/yunshu/cache/tiers")
 async def cache_overview(
     request: Request,
     entries: int = Query(MAX_ENTRIES, ge=0, le=MAX_ENTRIES),
@@ -71,7 +72,7 @@ async def cache_overview(
     return {"caches": caches, "enabled": bool(caches)}
 
 
-@router.post("/yunshu/cache/clear")
+@router.post("/yunshu/cache/tiers/clear")
 async def clear_cache(
     request: Request, body: ClearRequest | None = None
 ) -> dict[str, Any]:

@@ -196,27 +196,34 @@ def test_cache_route_reports_tiers_and_entries(client):
     c, apc, _ = client
     _store(apc, _ids(1))
     apc.lookup_exact_cache(_ids(1) + [1])
-    j = c.get("/v1/yunshu/cache").json()
+    j = c.get("/v1/yunshu/cache/tiers").json()
     assert j["enabled"] is True and j["caches"][0]["model"] == "m1"
     cache = j["caches"][0]
     assert cache["tiers"][0]["name"] == "ram" and cache["entries"][0]["hits"] == 1
-    assert c.get("/v1/yunshu/cache?entries=0").json()["caches"][0]["entries"] == []
-    assert c.get("/v1/yunshu/cache?entries=9999").status_code == 422
+    assert (
+        c.get("/v1/yunshu/cache/tiers?entries=0").json()["caches"][0]["entries"] == []
+    )
+    assert c.get("/v1/yunshu/cache/tiers?entries=9999").status_code == 422
 
 
 def test_clear_route_runs_on_the_mlx_thread_and_reports_freed_bytes(client):
     c, apc, eng = client
     _store(apc, _ids(1))
-    r = c.post("/v1/yunshu/cache/clear", json={"tier": "ram"})
+    r = c.post("/v1/yunshu/cache/tiers/clear", json={"tier": "ram"})
     assert r.status_code == 200
     j = r.json()
     assert j["freed_bytes"] > 0 and j["cleared"][0]["tier"] == "ram"
     assert eng.thread and eng.thread != "MainThread"
     assert apc.cache_overview()["tiers"][0]["entries"] == 0
-    assert c.post("/v1/yunshu/cache/clear", json={"tier": "gpu"}).status_code == 422
-    assert c.post("/v1/yunshu/cache/clear", json={"model": "nope"}).status_code == 404
+    assert (
+        c.post("/v1/yunshu/cache/tiers/clear", json={"tier": "gpu"}).status_code == 422
+    )
+    assert (
+        c.post("/v1/yunshu/cache/tiers/clear", json={"model": "nope"}).status_code
+        == 404
+    )
     # no body clears every tier
-    assert c.post("/v1/yunshu/cache/clear").status_code == 200
+    assert c.post("/v1/yunshu/cache/tiers/clear").status_code == 200
 
 
 def test_cache_routes_without_a_prefix_cache(monkeypatch):
@@ -234,7 +241,7 @@ def test_cache_routes_without_a_prefix_cache(monkeypatch):
     )
     app = FastAPI()
     app.include_router(admin_cache.router, prefix="/v1")
-    j = TestClient(app).get("/v1/yunshu/cache").json()
+    j = TestClient(app).get("/v1/yunshu/cache/tiers").json()
     assert j == {"caches": [], "enabled": False}
 
 
@@ -244,5 +251,5 @@ def test_clear_needs_admin(monkeypatch):
     app = FastAPI()
     app.include_router(admin_cache.router, prefix="/v1")
     c = TestClient(app)
-    assert c.post("/v1/yunshu/cache/clear", json={}).status_code == 401
-    assert c.get("/v1/yunshu/cache").status_code == 200
+    assert c.post("/v1/yunshu/cache/tiers/clear", json={}).status_code == 401
+    assert c.get("/v1/yunshu/cache/tiers").status_code == 200
