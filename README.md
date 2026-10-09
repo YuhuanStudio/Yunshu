@@ -29,7 +29,7 @@ paid for. The first fully tuned model is **Qwen3.8-27B**.
 - **Native coding-agent support** — Claude Code, Codex and opencode work through their own APIs,
   including server-side web search / fetch and MCP.
 - **Lossless by default** — anything that can change output is an explicit setting.
-- **Local and private** — no telemetry; diagnostics never contain prompts.
+- **Local and private** — no usage analytics; diagnostics never contain prompts.
 
 ## Quickstart
 
@@ -38,7 +38,7 @@ For model selection, external storage, readiness checks and upgrades, follow the
 Apple Silicon, macOS 14+, Python 3.13+ and [uv](https://docs.astral.sh/uv/).
 
 ```bash
-uv tool install --python 3.13 "yunshu[vision]"
+uv tool install --python 3.13 "yunshu[vision]"      # or: brew install yuhuanstudio/tap/yunshu
 yunshu doctor                                   # checks this Mac and says how to fix problems
 yunshu pull mlx-community/Qwen3.5-9B-MLX-4bit
 yunshu serve -m mlx-community/Qwen3.5-9B-MLX-4bit
@@ -221,6 +221,7 @@ comparison tables are in [docs/BENCHMARKS.md](docs/BENCHMARKS.md).
 | Decode, short code prompt | ~110 tok/s (DFlash2) | ~140 tok/s (DFlash2) |
 | JSON-schema / tool-call output, warm | 111 / 78 tok/s (speculative decoding stays on) | — |
 
+Snapshot of main on 2026-10-02/03 (unreleased after v0.1.4; the table's TensorFold column is the 2026-10-02 same-window run); a fresh same-window 0.1.4 comparison is pending.
 TensorFold is still faster at single-request decode and at 32K follow-up turns; closing those gaps is the
 main ongoing work. Structured output keeps speculative decoding (23 tok/s without it).
 Speculation never changes Yunshu's greedy output. Accuracy against the stock MLX path is checked at
@@ -258,6 +259,7 @@ it actually supports.
 | `yunshu launch` / `yunshu statusline` | start a coding agent wired to Yunshu; live engine status line |
 | `yunshu chat`, `complete`, `embed`, `transcribe`, `speak`, `ocr`, `image` | use a running server from the terminal |
 | `yunshu status`, `cancel` | server state, cancel an in-flight request |
+| `yunshu top` | (0.1.5) live view of server health, memory, engine and models (`--json` for one snapshot) |
 | `yunshu config` | effective settings and where each came from |
 | `yunshu cache status` / `gc` | inspect and clean the SSD prefix caches |
 | `yunshu bench`, `eval`, `diagnose` | benchmarks, accuracy evals, system diagnostics |
@@ -293,7 +295,7 @@ All settings: [Configuration](docs/CONFIGURATION.md).
 
 ## Privacy
 
-No telemetry, usage analytics or crash reports. Yunshu connects out only to download models, to
+No usage analytics or crash reports are sent. Host telemetry (power, thermal, memory) is sampled locally for the console and never leaves the machine ([guide](docs/guides/TELEMETRY.md)). Yunshu connects out only to download models, to
 web-search / MCP providers you configure, and for web fetches a request asks for.
 
 ## Built on and license

@@ -28,7 +28,7 @@
 - **原生支援程式碼 agent**：Claude Code、Codex、opencode 透過各自的 API 運作，含伺服器端網頁
   搜尋／抓取與 MCP。
 - **預設無損**：任何可能改變輸出的東西都是要自己開的設定。
-- **本地且私密**：不收集遙測；診斷資料不含 prompt。
+- **本地且私密**：不傳送使用統計；診斷資料不含 prompt。
 
 ## 快速開始
 
@@ -37,7 +37,7 @@
 需要 Apple Silicon、macOS 14 以上、Python 3.13 以上與 [uv](https://docs.astral.sh/uv/)。
 
 ```bash
-uv tool install --python 3.13 "yunshu[vision]"
+uv tool install --python 3.13 "yunshu[vision]"      # 或：brew install yuhuanstudio/tap/yunshu
 yunshu doctor                                   # checks this Mac and says how to fix problems
 yunshu pull mlx-community/Qwen3.5-9B-MLX-4bit
 yunshu serve -m mlx-community/Qwen3.5-9B-MLX-4bit
@@ -203,6 +203,7 @@ Qwen3.8-27B（oQ4e），M5 Max 128 GB，單一請求，貪婪解碼。方法、�
 | 解碼，短程式碼 prompt | 約 110 tok/s（DFlash2） | 約 140 tok/s（DFlash2） |
 | JSON schema / 工具呼叫輸出，warm | 111 / 78 tok/s（推測解碼照常啟用） | — |
 
+2026-10-02/03 的 main 快照（v0.1.4 之後尚未發佈；表中 TensorFold 欄為 2026-10-02 同窗口量測），新的 0.1.4 同窗口比較待測。
 目前 TensorFold 的單請求解碼與 32K 後續回合仍較快，縮小這些差距是正在進行的主要工作。結構化輸出也照常使用推測解碼（不用時為 23 tok/s）。推測解碼永遠不會改變
 Yunshu 的貪婪輸出。相對於原版 MLX 路徑的準確度，分三個層次檢查（logit 對齊、貪婪分歧、成對下游評測），
 見 [準確度](docs/guides/ACCURACY.md)。
@@ -237,6 +238,7 @@ Yunshu 的貪婪輸出。相對於原版 MLX 路徑的準確度，分三個層�
 | `yunshu launch` / `yunshu statusline` | 啟動接好 Yunshu 的程式碼 agent；引擎即時狀態列 |
 | `yunshu chat`、`complete`、`embed`、`transcribe`、`speak`、`ocr`、`image` | 在終端機使用執行中的伺服器 |
 | `yunshu status`、`cancel` | 伺服器狀態、取消進行中的請求 |
+| `yunshu top` | （0.1.5）即時檢視伺服器健康、記憶體、引擎與模型（`--json` 輸出單次快照） |
 | `yunshu config` | 實際生效的設定與來源 |
 | `yunshu cache status` / `gc` | 檢視與清理 SSD 前綴快取 |
 | `yunshu bench`、`eval`、`diagnose` | 效能測試、準確度評測、系統診斷 |
@@ -272,7 +274,7 @@ Yunshu 的貪婪輸出。相對於原版 MLX 路徑的準確度，分三個層�
 
 ## 隱私
 
-不收集遙測、使用統計或當機報告。Yunshu 只在下載模型、連到你設定的網頁搜尋／MCP 服務，以及請求
+不傳送使用統計或當機報告。主機遙測（功耗、溫度、記憶體）只在本機取樣供主控台使用，不會離開這台機器（[說明](docs/guides/TELEMETRY.md)）。Yunshu 只在下載模型、連到你設定的網頁搜尋／MCP 服務，以及請求
 要求抓取網頁時才對外連線。
 
 ## 基礎與授權

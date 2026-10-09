@@ -28,7 +28,7 @@
 - **原生支持编程 agent**：Claude Code、Codex、opencode 通过各自的 API 运作，含服务器端网页
   搜索／抓取与 MCP。
 - **默认无损**：任何可能改变输出的东西都是要自己开的设置。
-- **本地且私密**：不收集遥测；诊断数据不含 prompt。
+- **本地且私密**：不发送使用统计；诊断数据不含 prompt。
 
 ## 快速开始
 
@@ -37,7 +37,7 @@
 需要 Apple Silicon、macOS 14 以上、Python 3.13 以上与 [uv](https://docs.astral.sh/uv/)。
 
 ```bash
-uv tool install --python 3.13 "yunshu[vision]"
+uv tool install --python 3.13 "yunshu[vision]"      # 或：brew install yuhuanstudio/tap/yunshu
 yunshu doctor                                   # checks this Mac and says how to fix problems
 yunshu pull mlx-community/Qwen3.5-9B-MLX-4bit
 yunshu serve -m mlx-community/Qwen3.5-9B-MLX-4bit
@@ -237,6 +237,7 @@ Yunshu 的贪婪输出。相对于原版 MLX 路径的准确度，分三个层�
 | `yunshu launch` / `yunshu statusline` | 启动接好 Yunshu 的编程 agent；引擎即时状态栏 |
 | `yunshu chat`、`complete`、`embed`、`transcribe`、`speak`、`ocr`、`image` | 在终端机使用运行中的服务器 |
 | `yunshu status`、`cancel` | 服务器状态、取消进行中的请求 |
+| `yunshu top` | （0.1.5）实时查看服务器健康、内存、引擎与模型（`--json` 输出单次快照） |
 | `yunshu config` | 实际生效的设置与来源 |
 | `yunshu cache status` / `gc` | 查看与清理 SSD 前缀缓存 |
 | `yunshu bench`、`eval`、`diagnose` | 性能测试、准确度评测、系统诊断 |
@@ -272,7 +273,7 @@ Yunshu 的贪婪输出。相对于原版 MLX 路径的准确度，分三个层�
 
 ## 隐私
 
-不收集遥测、使用统计或当机报告。Yunshu 只在下载模型、连到你设置的网页搜索／MCP 服务，以及请求
+不发送使用统计或崩溃报告。主机遥测（功耗、温度、内存）只在本机采样供控制台使用，不会离开这台机器（[说明](docs/guides/TELEMETRY.md)）。Yunshu 只在下载模型、连到你设置的网页搜索／MCP 服务，以及请求
 要求抓取网页时才对外连接。
 
 ## 基础与授权
