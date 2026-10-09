@@ -300,6 +300,7 @@ export default function Logs({ connection }: { connection: Connection }) {
           data-testid="logs-unavailable"
           title={t(`logs.state.${kind}Title`)}
           description={t(`logs.state.${kind}Body`)}
+          toSettings={kind === "denied"}
         />
       </DashboardPage>
     );

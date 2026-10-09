@@ -196,6 +196,10 @@ test.describe("logs page", () => {
       const m = await mock(p, { logs: mode });
       await p.goto(LOGS_URL);
       await expect(p.getByText(text)).toBeVisible();
+      // A missing token is fixed in Settings: the notice links there (and only then).
+      await expect(p.getByTestId("unavailable-to-settings")).toHaveCount(
+        mode === 403 ? 1 : 0,
+      );
       expect(m.pageErrors).toEqual([]);
       await p.close();
     }

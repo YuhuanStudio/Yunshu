@@ -249,7 +249,7 @@ async def recent_requests(
 ) -> dict:
     """Finished requests, newest first (the 512-entry ring), each with ``offsets_ms``: the
     phase timestamps (arrive, admit, first token, last token, done) in ms after arrival."""
-    _check_permission(request, "can_manage_models")
+    _check_permission(request, "can_infer")
     if not 1 <= limit <= 512:
         raise HTTPException(400, "limit must be between 1 and 512")
     rows = registry.recent_entries(limit=limit, model=model, since=since)

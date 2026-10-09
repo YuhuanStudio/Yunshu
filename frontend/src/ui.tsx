@@ -414,10 +414,13 @@ export function UnavailableNotice({
   title,
   description,
   "data-testid": testId,
+  toSettings,
 }: {
   title: string;
   description: string;
   "data-testid"?: string;
+  /** Add a link to the connection settings (the token lives there). */
+  toSettings?: boolean;
 }) {
   return (
     <Alert
@@ -427,6 +430,15 @@ export function UnavailableNotice({
       className="max-w-3xl"
     >
       {description}
+      {toSettings && (
+        <a
+          href="#/settings"
+          className="mt-2 block w-fit text-sm font-medium underline underline-offset-4"
+          data-testid="unavailable-to-settings"
+        >
+          {t("common.configure")}
+        </a>
+      )}
     </Alert>
   );
 }

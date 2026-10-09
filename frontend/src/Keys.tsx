@@ -161,6 +161,7 @@ export default function Keys({ connection }: { connection: Connection }) {
         <UnavailableNotice
           title={t(`keys.unavailable.${phase}.title`)}
           description={t(`keys.unavailable.${phase}.description`)}
+          toSettings={phase === "denied"}
         />
       )}
       {created && (

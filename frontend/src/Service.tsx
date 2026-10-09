@@ -145,6 +145,7 @@ function Unavailable({ kind }: { kind: "unsupported" | "denied" | "error" }) {
     <UnavailableNotice
       title={t(`service.unavailable.${kind}.title`)}
       description={t(`service.unavailable.${kind}.description`)}
+      toSettings={kind === "denied"}
     />
   );
 }
