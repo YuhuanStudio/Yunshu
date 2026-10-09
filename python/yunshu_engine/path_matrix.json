@@ -1755,6 +1755,45 @@
      "why": "legacy loop is not grown (CLAUDE.md); decision is its removal"
     }
    }
+  },
+  "ple_ssd_rows": {
+   "module": "python/yunshu_engine/ple_parallel.py",
+   "what": "Per-layer n-gram embedding rows read from SSD in parallel (byte-identical to upstream), with the pack table scale applied",
+   "cells": {
+    "mtp": {
+     "s": "na",
+     "why": "PLE tables exist only in qwen4_exp (Flash-Next), which is served on the generic runner"
+    },
+    "dflash": {
+     "s": "na",
+     "why": "PLE tables exist only in qwen4_exp (Flash-Next), which is served on the generic runner"
+    },
+    "driver": {
+     "s": "na",
+     "why": "PLE tables exist only in qwen4_exp (Flash-Next), which is served on the generic runner"
+    },
+    "batch": {
+     "s": "na",
+     "why": "PLE tables exist only in qwen4_exp (Flash-Next), which is served on the generic runner"
+    },
+    "generic": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/vlm_engine.py",
+       "ple_parallel.install("
+      ]
+     ]
+    },
+    "text": {
+     "s": "na",
+     "why": "PLE tables exist only in qwen4_exp (Flash-Next), which is served on the generic runner"
+    },
+    "loop": {
+     "s": "na",
+     "why": "PLE tables exist only in qwen4_exp (Flash-Next), which is served on the generic runner"
+    }
+   }
   }
  },
  "exclusions": [
@@ -2183,7 +2222,8 @@
   "YUNSHU_CACHE_RESERVE_GB": "apc_prefix_cache",
   "YUNSHU_CACHE_STALE_DAYS": "apc_prefix_cache",
   "YUNSHU_FOOTPRINT_SAMPLE_MS": "idle_memory_return",
-  "YUNSHU_MAX_MEMORY_GB": "idle_memory_return"
+  "YUNSHU_MAX_MEMORY_GB": "idle_memory_return",
+  "YUNSHU_PLE_READ_THREADS": "ple_ssd_rows"
  },
  "gap_budget": 59,
  "settings_categories": [
