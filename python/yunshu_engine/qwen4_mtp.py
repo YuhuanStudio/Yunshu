@@ -70,10 +70,9 @@ def configure_lane(lm: Any, drafter: Any, block: int | None) -> tuple[dict, int 
     supports = getattr(lm, "_supports_batch_invariant_decode", None)
     if not callable(supports) or not supports():
         raise RuntimeError("Qwen4 target cannot use batch-invariant plain decode")
-    from .qwen4_draft_policy import install
-
-    install()
-    # Block includes the target seed: four rows propose three draft tokens.
+    # Block includes the target seed: two rows propose one draft token.  Measured on Flash-Next oQ4e
+    # (docs/research/flashnext80/PLAN.md): the first draft is accepted 70-81% of the time, later ones 22-48%,
+    # and every extra verify row reads more distinct experts, so block 2 decodes fastest at 1K and 8K.
     return {"qwen4_native": True}, (
-        4 if block is None and drafter is not None else block
+        2 if block is None and drafter is not None else block
     )

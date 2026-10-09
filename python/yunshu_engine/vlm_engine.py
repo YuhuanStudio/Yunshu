@@ -1951,9 +1951,16 @@ class VLMEngine:
             cache_restore.install()
         cache_gib = settings.get("YUNSHU_PREFILL_BUFFER_CACHE_GB")
         if cache_gib is None:
+            import mlx.core as _mx
+
             from .apc_manager import total_memory_bytes
 
-            cache_gib = buffer_cache.auto_limit_gib(total_memory_bytes())
+            ceiling = settings.get("YUNSHU_MAX_MEMORY_GB")
+            cache_gib = buffer_cache.auto_limit_gib_for_weights(
+                total_memory_bytes(),
+                _mx.get_active_memory(),
+                int(float(ceiling) * (1 << 30)) if ceiling else None,
+            )
         buffer_cache.install(float(cache_gib))
         budget = self._apc_memory_gb()
         if self._apc_backend is None and budget > 0:

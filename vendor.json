@@ -1208,20 +1208,6 @@
       "upstream_paths": [
         "mlx_vlm/speculative/drafters/qwen4_exp_mtp/qwen4_exp_mtp.py"
       ]
-    },
-    {
-      "path": "python/yunshu_engine/qwen4_draft_policy.py",
-      "repo": "https://github.com/Blaizzy/mlx-vlm",
-      "clone": "reference/mlx-vlm",
-      "commit": "92b31ad308b651a7c1e22d0c58bcdc35c3807750",
-      "kind": "inspired",
-      "license": "MIT",
-      "local_changes": [
-        "Single greedy row rewrite of _mtp_rounds_batch with a variable draft length: the head's chain stops when its top-1 probability falls below YUNSHU_QWEN4_DRAFT_MIN_PROB (idea from Strata's draft policy; no Strata code used)."
-      ],
-      "upstream_paths": [
-        "mlx_vlm/speculative/mtp.py"
-      ]
     }
   ],
   "patches": [

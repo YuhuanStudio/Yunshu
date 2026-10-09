@@ -149,9 +149,6 @@ SOFTWARE.
 Qwen4Exp MTP head and family-specific verifier directly (Blaizzy/mlx-vlm).
 Prior art and reviewed revisions are recorded in `vendor.json`; no TensorFold
 or Strata implementation was copied into this integration.
-`python/yunshu_engine/qwen4_draft_policy.py` is a single-row rewrite of mlx-vlm's
-`_mtp_rounds_batch` (MIT) with a confidence-gated draft length; the gating idea
-follows Strata's published draft policy (no Strata code used).
 `python/yunshu_engine/ple_parallel.py` replaces mlx-vlm's (MIT)
 `QuantizedMMapNGramEmbedding._read_rows` with a parallel `pread` version that returns
 the same bytes (monkeypatch recorded in `vendor.json`).
