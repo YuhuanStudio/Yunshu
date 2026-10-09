@@ -568,6 +568,14 @@ def rounds(
                 prof["verify"] / r,
                 prof["commit"] / r,
             )
+            logger.info(
+                "DFlash budget state: p=%s cycle_ms=%s",
+                [round(x, 2) for x in budget.p],
+                {
+                    n: round(budget._median(v), 1)
+                    for n, v in sorted(budget.samples.items())
+                },
+            )
         private.bind(False)
         hidden = None
         draft_cache = None
