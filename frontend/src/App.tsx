@@ -1,3 +1,4 @@
+import { SegmentedTray } from "./SegmentedTray";
 import { gbTotalText } from "./byte-format";
 import { Suspense, lazy, useEffect, useRef, useState } from "react";
 import {
@@ -82,6 +83,8 @@ import { setRememberedToken, rememberedToken } from "./token-store";
 import {
   CHORDS,
   PAGES,
+  TABS,
+  topPage,
   VERBS,
   isTypingTarget,
   parseRoute,
@@ -202,6 +205,33 @@ const DIM_PAGES = new Set<string>([
   "diagnostics",
   "downloads",
 ]);
+
+/** The tab strip of a page that has tabs (models, diagnostics, settings and the pages that live in them). */
+function PageTabs({
+  page,
+  navigate,
+}: {
+  page: Page;
+  navigate: (page: string) => void;
+}) {
+  useLocale();
+  const tabs = TABS[topPage(page)];
+  if (!tabs) return null;
+  return (
+    <div className="mb-4" data-testid="page-tabs">
+      <SegmentedTray
+        aria-label={t("shell.nav.tabs")}
+        value={page}
+        onChange={(v) => navigate(v)}
+        options={tabs.map((id) => ({
+          value: id,
+          // i18n-keys: shell.page.
+          label: tr(`shell.page.${id}`),
+        }))}
+      />
+    </div>
+  );
+}
 
 export default function App() {
   const locale = useLocale();
@@ -511,7 +541,7 @@ export default function App() {
           <Sidebar
             appName="Yunshu"
             ariaLabel={t("shell.nav.ariaLabel")}
-            currentPath={"/" + page}
+            currentPath={"/" + topPage(page)}
             isOpen={menu}
             onClose={() => setMenu(false)}
             closeLabel={t("shell.nav.close")}
@@ -562,11 +592,6 @@ export default function App() {
                     icon: Activity,
                   },
                   {
-                    label: t("shell.page.logs"),
-                    href: "/logs",
-                    icon: ScrollText,
-                  },
-                  {
                     label: t("shell.page.diagnostics"),
                     href: "/diagnostics",
                     icon: Stethoscope,
@@ -577,16 +602,6 @@ export default function App() {
                 title: t("shell.nav.section.models"),
                 items: [
                   { label: t("shell.page.models"), href: "/models", icon: Box },
-                  {
-                    label: t("shell.page.downloads"),
-                    href: "/downloads",
-                    icon: Download,
-                  },
-                  {
-                    label: t("shell.page.cache"),
-                    href: "/cache",
-                    icon: Database,
-                  },
                 ],
               },
               {
@@ -597,22 +612,21 @@ export default function App() {
                     href: "/playground",
                     icon: MessageSquare,
                   },
-                  { label: t("shell.page.api"), href: "/api", icon: Code2 },
-                  {
-                    label: t("shell.page.docs"),
-                    href: "/docs",
-                    icon: BookOpen,
-                  },
+                  // wide screens have the docs link in the top bar
+                  ...(wide
+                    ? []
+                    : [
+                        {
+                          label: t("shell.page.docs"),
+                          href: "/docs",
+                          icon: BookOpen,
+                        },
+                      ]),
                 ],
               },
               {
                 title: t("shell.nav.section.manage"),
                 items: [
-                  {
-                    label: t("shell.page.keys"),
-                    href: "/keys",
-                    icon: KeyRound,
-                  },
                   {
                     label: t("shell.page.settings"),
                     href: "/settings",
@@ -799,6 +813,18 @@ export default function App() {
               {wide && (
                 <div className="ml-auto flex shrink-0 items-center gap-1.5">
                   <LivePill phase={engine.phase} status={engine.status} />
+                  <Button
+                    variant="ghost"
+                    type="button"
+                    onClick={() => navigate("docs")}
+                    data-testid="docs-link"
+                    className={`card inline-flex h-8 items-center gap-1.5 rounded-full px-3 py-0 text-xs transition-colors hover:text-foreground ${page === "docs" ? "text-foreground" : "text-muted-foreground"}`}
+                  >
+                    <BookOpen size={13} />
+                    <span className="max-xl:sr-only">
+                      {t("shell.page.docs")}
+                    </span>
+                  </Button>
                   <NotificationCenter />
                   <Button
                     variant="ghost"
@@ -946,6 +972,7 @@ export default function App() {
                               : ""
                           }`}
                         >
+                          <PageTabs page={page} navigate={navigate} />
                           {page === "diagnostics" && (
                             <Diagnostics
                               connection={connection}

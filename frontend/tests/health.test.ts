@@ -42,7 +42,11 @@ const run = (
   over: Parameters<typeof mk>[0] = {},
   extra: {
     finished?: FinishedFact[];
-    ledger?: { pressureLevel: string | null; swapUsedGb: number | null };
+    ledger?: {
+      pressureLevel: string | null;
+      swapUsedGb: number | null;
+      swapGrowthGb?: number | null;
+    };
   } = {},
 ) => healthVerdict({ phase: "online", status: mk(over), now: NOW, ...extra });
 const codes = (v: ReturnType<typeof run>) => v.reasons.map((r) => r.code);
@@ -123,7 +127,20 @@ test("swap and host pressure", () => {
     "watch",
   );
   assert.equal(
-    run({}, { ledger: { pressureLevel: null, swapUsedGb: 3.2 } }).level,
+    run({}, { ledger: { pressureLevel: null, swapUsedGb: 9.4 } }).level,
+    "ok",
+  ); // a steady 9.4 GB of old swap is not a fault
+  assert.equal(
+    run(
+      {},
+      {
+        ledger: {
+          pressureLevel: null,
+          swapUsedGb: 9.4,
+          swapGrowthGb: 3.2,
+        },
+      },
+    ).level,
     "bad",
   );
 });

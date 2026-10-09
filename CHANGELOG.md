@@ -111,6 +111,7 @@ No new decode or TTFT claim is made for this cycle here. Historical measurements
 
 ### Fixed
 
+- The web console no longer jumps while a busy engine streams updates: the overview's live card keeps one size with five fixed request slots, placeholders match the charts that replace them, numbers and wrapping labels reserve their width, request rows slide into place instead of pushing, and panels that appear with data sit under the list. Measured on a replay of a real 27B load: layout shift 0.05-0.54 down to 0.001-0.005, moving boxes 32-130 down to 0.
 - Untyped XML tool arguments containing JSON objects or arrays reach clients as containers; scalar text and declared string unions keep their existing types. Numeric or nested container text containing non-finite values stays literal instead of emitting invalid JSON.
 - GPU guard blocks broad `pkill` commands that could terminate another worker or user process.
 

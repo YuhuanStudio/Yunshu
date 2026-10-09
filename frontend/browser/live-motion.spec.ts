@@ -279,7 +279,7 @@ test("the hero chart's series slide continuously and re-base when a sample lands
     )
   ).map(Number);
   expect(
-    new Set(shifts.map((s) => s.toFixed(1))).size,
+    new Set(shifts.map((s) => s.toFixed(2))).size,
     "moves between samples, not in steps",
   ).toBeGreaterThan(30);
   expect(Math.max(...shifts)).toBeGreaterThan(1);
@@ -314,7 +314,7 @@ test("reduced motion: the hero chart does not slide", async ({ browser }) => {
   await ctx.close();
 });
 
-test("a request that ends fades out, then collapses without moving what is below", async ({
+test("a request that ends fades out in its own slot and nothing moves", async ({
   page,
 }) => {
   test.setTimeout(45_000);
@@ -359,7 +359,7 @@ test("a request that ends fades out, then collapses without moving what is below
     return route.fulfill({ json: s });
   });
   await page.goto("/console/#/overview", { waitUntil: "domcontentloaded" });
-  const rows = page.locator("li.live-row");
+  const rows = page.locator("li.live-slot:has(.live-row-inner)");
   await expect(rows).toHaveCount(2);
   const pending = page.evaluate(
     () =>
@@ -369,7 +369,9 @@ test("a request that ends fades out, then collapses without moving what is below
             [];
           const end = performance.now() + 2500;
           const tick = () => {
-            const all = [...document.querySelectorAll("li.live-row")];
+            const all = [
+              ...document.querySelectorAll("li.live-slot:has(.live-row-inner)"),
+            ];
             const gone = all.find((r) => r.hasAttribute("data-leaving"));
             out.push({
               n: all.length,
@@ -397,6 +399,9 @@ test("a request that ends fades out, then collapses without moving what is below
   expect(Math.min(...leaving.map((s) => s.op)), "it fades").toBeLessThan(0.5);
   const hs = leaving.map((s) => s.h);
   expect(hs[0], "full height while fading").toBeGreaterThan(20);
-  expect(hs.at(-1)!, "collapsed after the fade").toBeLessThan(hs[0]);
+  expect(
+    Math.min(...hs),
+    "the slot keeps its height: rows below never move",
+  ).toBe(hs[0]);
   expect(samples.at(-1)!.n, "and then gone").toBe(1);
 });

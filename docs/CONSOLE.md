@@ -99,6 +99,11 @@ collapses to a single compact pill.
 
 ## Pages
 
+The console has six pages, plus the docs link in the top bar: **Overview**, **Requests**, **Models** (tabs
+Models, Downloads, Cache), **Playground**, **Diagnostics** (tabs Diagnostics, Logs) and **Settings** (tabs
+Settings, Keys, API). A tab keeps its own address, so `#/downloads`, `#/cache`, `#/logs`, `#/keys` and `#/api`
+still open and show the right tab. The sections below describe each tab.
+
 ### Engine overview
 
 One screen for how the Mac is handling inference right now: a health banner (memory, queue, error rate), live **request phases** (queued, prefill, decode) with a prefill progress bar whose **cache-hit segment** shows how many prompt tokens came from the prefix cache, decode and prefill tok/s, time to first token, prefix hit rate, Metal memory, and throughput charts. A host panel adds power, GPU clock and die temperature when host telemetry is available ([Telemetry](guides/TELEMETRY.md)). It samples every few seconds while the page is visible; Pause and Refresh are in the header.

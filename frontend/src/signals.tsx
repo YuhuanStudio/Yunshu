@@ -128,6 +128,20 @@ function readStored(c: Connection): NotifRecord[] {
   }
 }
 
+/** Growth of a rising-and-falling reading over the last `windowMs`: latest minus the lowest seen in it. */
+function useGrowth(value: number | null | undefined, windowMs = 5 * 60_000) {
+  const seen = useRef<{ t: number; v: number }[]>([]);
+  if (typeof value === "number" && Number.isFinite(value)) {
+    const now = Date.now();
+    const last = seen.current.at(-1);
+    if (!last || last.v !== value || now - last.t > 5000)
+      seen.current.push({ t: now, v: value });
+    seen.current = seen.current.filter((p) => p.t >= now - windowMs);
+  }
+  if (!seen.current.length || typeof value !== "number") return null;
+  return Math.max(0, value - Math.min(...seen.current.map((p) => p.v)));
+}
+
 export function useShellSignals(
   engine: Engine,
   connection: Connection,
@@ -139,6 +153,7 @@ export function useShellSignals(
     online ? engine.status?.last?.request_id : null,
   );
   const downloads = useDownloadFacts(connection, online);
+  const swapGrowth = useGrowth(ledger?.host.swap_used_gb);
   const facts = useMemo(() => factsFromRows(recent.rows), [recent.rows]);
   const verdict = useMemo(
     () =>
@@ -149,12 +164,13 @@ export function useShellSignals(
           ? {
               pressureLevel: ledger.host.pressure_level,
               swapUsedGb: ledger.host.swap_used_gb,
+              swapGrowthGb: swapGrowth,
             }
           : null,
         finished: facts,
         now: Date.now(),
       }),
-    [engine.phase, engine.status, ledger, facts],
+    [engine.phase, engine.status, ledger, facts, swapGrowth],
   );
 
   // The list belongs to one connection identity: switching address or token shows that

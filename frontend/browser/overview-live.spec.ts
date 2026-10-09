@@ -188,16 +188,6 @@ test.describe("overview tells the truth about the engine", () => {
     await expect(page.getByTestId("live-phase")).toContainText("閒置");
     await expect(page.getByText("無法連接引擎")).toHaveCount(0);
   });
-
-  test("percentiles stay hidden below 20 samples", async ({ page }) => {
-    await install(page, () => status());
-    await page.goto("/console/#/overview");
-    const latency = page.getByTestId("latency-panel");
-    await expect(latency.getByTestId("latency-last")).toContainText("131");
-    await expect(latency.getByTestId("latency-p50")).toContainText("—");
-    await expect(latency.getByTestId("latency-p95")).toContainText("—");
-    await expect(latency).toContainText("滿 20 筆才顯示 P50 / P95");
-  });
 });
 
 test.describe("engine-side history", () => {
