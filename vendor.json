@@ -1250,6 +1250,20 @@
       ]
     },
     {
+      "path": "python/yunshu_engine/qwen4_mtp.py",
+      "repo": "https://github.com/Blaizzy/mlx-vlm",
+      "clone": "reference/mlx-vlm",
+      "commit": "92b31ad308b651a7c1e22d0c58bcdc35c3807750",
+      "kind": "inspired",
+      "license": "MIT",
+      "local_changes": [
+        "Use upstream native HC/QSA head directly; retain weights separately before target sanitize; strict native head load; Qwen3.5 patches excluded."
+      ],
+      "upstream_paths": [
+        "mlx_vlm/speculative/drafters/qwen4_exp_mtp/qwen4_exp_mtp.py"
+      ]
+    },
+    {
       "path": "python/yunshu_engine/tool_arguments.py",
       "repo": "https://github.com/ml-explore/mlx-lm",
       "clone": "reference/mlx-lm",
@@ -2269,6 +2283,36 @@
       "why": "Preserve upstream lifetime counters while adding host-only per-depth request and aggregate counters; tree paths provide explicit parent topology.",
       "source_sha256": "d76e582c8fa642340c47bb269e78f3d3415df1b9ad3fc49a886ac5a20233883c",
       "installed_version": "0.7.6"
+    },
+    {
+      "kind": "patches",
+      "path": "python/yunshu_engine/ple_parallel.py",
+      "repo": "https://github.com/Blaizzy/mlx-vlm",
+      "clone": "reference/mlx-vlm",
+      "package": "mlx-vlm",
+      "module": "mlx_vlm.models.qwen4_exp.ple_storage",
+      "symbol": "QuantizedMMapNGramEmbedding._read_rows",
+      "signature": "(self, row_ids)",
+      "license": "MIT",
+      "commit": "v0.7.6",
+      "why": "Read the 48 per-token PLE rows with parallel pread instead of serial memmap fancy-index page faults; returned arrays, row cache and counters are byte-identical (tests/unit/test_ple_parallel.py).",
+      "source_sha256": "4a31310895b56550eb8772abe8380dbc4b5a00895fd2b5945e3d1a8541e29b98",
+      "installed_version": "0.7.6"
+    },
+    {
+      "kind": "patches",
+      "path": "python/yunshu_engine/ple_scale.py",
+      "repo": "https://github.com/Blaizzy/mlx-vlm",
+      "clone": "reference/mlx-vlm",
+      "package": "mlx-vlm",
+      "module": "mlx_vlm.models.qwen4_exp.language",
+      "symbol": "Qwen4ExpNGramEmbedding.__call__",
+      "signature": "(self, input_ids: mx.array, cache: Optional[ArraysCache])",
+      "license": "MIT",
+      "commit": "v0.7.6",
+      "why": "Packs such as Jundot oQ4e ship the PLE table's magnitude as ngram_embedding.weight_scale (0.0002); upstream drops that tensor so PLE rows are ~5000x too large. Rows are scaled in float32 and rounded once to bf16 after the table lookup.",
+      "source_sha256": "9abc42a47687e91f8ee80ae7e59fdd34a86ec46b926ac677e081bf0e58b534cf",
+      "installed_version": "0.7.6"
     }
   ],
   "watch": [
@@ -2907,6 +2951,24 @@
       "owner": "priorfix",
       "reviewed_date": "2026-10-08",
       "action": "Imported maintained SequenceClassificationModel loader; replaced local classifier reconstruction and quantization. CPU Torch fixtures pass for all three families / 1 and 2 labels; published BGE M5 pending."
+    },
+    {
+      "id": "qwen4-native-mtp",
+      "owner": "flashnextmtp",
+      "repo": "https://github.com/ashhart/TensorFold",
+      "revision": "60656c6",
+      "license": "Apache-2.0 (current repository); check historical Python notices before porting",
+      "paths": [
+        "src/tensorfold/families/qwen4_exp/mtp.py",
+        "src/tensorfold/families/qwen4_exp/mtp_chain.py"
+      ],
+      "status": "studied; no code copied; current f8fe17d removed Python family, native Zig runtime remains",
+      "checkpoints": [
+        "TensorFold/Qwen3.8-Flash-Next-MLX-oQ3-MTP",
+        "TensorFold/Qwen3.8-Flash-Next-MLX-oQ2-MTP",
+        "Jundot/Qwen3.8-Flash-Next-oQ4e-mtp"
+      ],
+      "pending": "M5 same-checkpoint reference parity and long identity/speed; no qualification claimed"
     }
   ],
   "websearch_prior_art": [

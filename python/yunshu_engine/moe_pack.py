@@ -51,7 +51,9 @@ def infer_quantization(
     return None
 
 
-def quantization_matches(declared: dict | None, derived: dict) -> bool:
+def quantization_matches(
+    declared: dict[str, object] | None, derived: dict[str, object]
+) -> bool:
     if not declared:
         return False
     return cast(

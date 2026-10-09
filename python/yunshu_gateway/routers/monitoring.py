@@ -1128,6 +1128,15 @@ async def memory_census(request: Request, min_mib: float = 64.0) -> dict[str, An
     return census(min_mib=min_mib)
 
 
+@router.get("/weight-residency")
+async def weight_residency(request: Request) -> dict[str, Any]:
+    """Counters of weights that live on SSD (qwen4_exp PLE row lookups)."""
+    _check_permission(request)
+    from yunshu_engine.weight_residency import ple_lookup_stats
+
+    return ple_lookup_stats()
+
+
 @router.get("/ssd-cache")
 async def ssd_cache_stats(request: Request) -> dict[str, Any]:
     """SSD KV cache statistics across all loaded engines."""

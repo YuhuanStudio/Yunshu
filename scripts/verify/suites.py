@@ -27,6 +27,7 @@ STAGES = (
     "evals",
     "tavily",
     "searchrank",
+    "qwen4_mtp",
 )
 
 # `full` and `tiny` climb the original seven; the long stages (needle retrieval, concurrent
@@ -53,12 +54,14 @@ LADDER = tuple(
         "tavily",
         "searchrank",
         "toolparse",
+        "qwen4_mtp",
     )
 )
 
 # Every key is a default; the CLI can override ctx / reps / mmlu_n / mem_sizes.
 SUITES = {
     "snapshot": {"stages": ["snapshot"]},
+    "qwen4_mtp": {"stages": ["preflight", "qwen4_mtp"]},
     "respfeat": {"stages": ["preflight", "respfeat"]},
     "priorart": {"stages": ["preflight", "priorart"]},
     "embedding": {"stages": ["preflight", "embedding"]},

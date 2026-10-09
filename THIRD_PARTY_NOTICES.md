@@ -143,6 +143,17 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
+### Qwen4 native MTP integration
+
+`python/yunshu_engine/qwen4_mtp.py` uses the MIT-licensed mlx-vlm
+Qwen4Exp MTP head and family-specific verifier directly (Blaizzy/mlx-vlm).
+Prior art and reviewed revisions are recorded in `vendor.json`; no TensorFold
+or Strata implementation was copied into this integration.
+`python/yunshu_engine/ple_parallel.py` replaces mlx-vlm's (MIT)
+`QuantizedMMapNGramEmbedding._read_rows` with a parallel `pread` version that returns
+the same bytes (monkeypatch recorded in `vendor.json`).
+`python/yunshu_engine/ple_scale.py` applies the per-table `ngram_embedding.weight_scale` that mlx-vlm
+drops (rows scaled in float32, rounded once to bf16; recorded in `vendor.json`).
 
 ## aiortc — optional WebRTC dependency
 

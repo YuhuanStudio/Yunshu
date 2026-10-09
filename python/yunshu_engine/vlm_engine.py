@@ -581,6 +581,11 @@ class VLMEngine:
         weights = {}
         for wf in weight_files:
             weights.update(mx.load(wf))
+        ple_table_scales = {}
+        if config.get("model_type") == "qwen4_exp":
+            from .ple_scale import collect_table_scales
+
+            ple_table_scales = collect_table_scales(weights)
 
         reason = unsupported_pack_reason(config, weights)
         if reason:
@@ -592,6 +597,9 @@ class VLMEngine:
         config.setdefault("vision_config", {})
         config.setdefault("audio_config", {})
         resolve_external_ple_manifest(config, model_path)
+        from . import ple_parallel
+
+        ple_parallel.install(int(settings.get("YUNSHU_PLE_READ_THREADS")))
 
         model_config = model_class.ModelConfig.from_dict(config)
         modules = ["text", "vision", "perceiver", "projector", "audio"]
@@ -600,7 +608,18 @@ class VLMEngine:
             model_config.model_path = str(model_path)
 
         model = model_class.Model(model_config)
-        weights = _prepare_vlm_weights(model, model_class, model_config, weights)
+        if config.get("model_type") == "qwen4_exp":
+            from .model_patches import sanitize_qwen4_checkpoint
+
+            weights, self._qwen4_mtp_weights = sanitize_qwen4_checkpoint(
+                model,
+                weights,
+                prepare=lambda w: _prepare_vlm_weights(
+                    model, model_class, model_config, w
+                ),
+            )
+        else:
+            weights = _prepare_vlm_weights(model, model_class, model_config, weights)
 
         # Apply quantization BEFORE filtering — the predicate needs to see
         # `.scales` keys to decide which modules to quantize. If we filter
@@ -687,7 +706,28 @@ class VLMEngine:
             weights = {k: v for k, v in weights.items() if k in model_params}
 
         model.load_weights(list(weights.items()))
-        mx.eval(model.parameters())
+        if ple_table_scales:
+            from .ple_scale import apply_table_scales
+
+            n_scaled = apply_table_scales(model.language_model, ple_table_scales)
+            if n_scaled:
+                logger.info(
+                    "Qwen4 PLE: %d n-gram table(s) scaled by %s",
+                    n_scaled,
+                    sorted(set(ple_table_scales.values())),
+                )
+        from .apc_manager import total_memory_bytes
+        from .weight_residency import eval_set
+
+        to_eval, lazy_names = eval_set(
+            flatten_tree(model.parameters()), total_memory_bytes()
+        )
+        mx.eval(to_eval)
+        if lazy_names:
+            logger.info(
+                "weights take most of RAM: %d vision tensors stay lazy until an image request",
+                len(lazy_names),
+            )
         model.eval()
         return model
 
@@ -1391,7 +1431,7 @@ class VLMEngine:
 
     # Checkpoints whose speculative decoding (MTP / DFlash draft, verify and
     # batch-invariant kernels) is validated. Every family uses the runner.
-    _SPEC_MODEL_TYPES = ("qwen3_5", "qwen3_6", "qwen3_5_moe")
+    _SPEC_MODEL_TYPES = ("qwen3_5", "qwen3_6", "qwen3_5_moe", "qwen4_exp")
 
     def _apc_memory_gb(self) -> float:
         """APC RAM budget in GiB: ``YUNSHU_VLM_APC_MEMORY_GB``, else sized from the
@@ -1709,7 +1749,8 @@ class VLMEngine:
 
         spec_family = self._config.get("model_type") in self._SPEC_MODEL_TYPES
         lm = self._model.language_model
-        use_driver = self._round_driver_wanted(lm)
+        qwen4 = self._config.get("model_type") == "qwen4_exp"
+        use_driver = not qwen4 and self._round_driver_wanted(lm)
         driver_lanes = 0
         if use_driver:
             # Row-invariant lane projections everywhere (before any verify
@@ -1782,13 +1823,26 @@ class VLMEngine:
             from .mlxvlm_mtp import _load_drafter_in_memory
 
             if is_mtp_capable(model_path):
-                drafter = _load_drafter_in_memory(model_path)
+                if qwen4:
+                    from .qwen4_mtp import load_native_head
+
+                    drafter = load_native_head(
+                        self._config, getattr(self, "_qwen4_mtp_weights", None)
+                    )
+                    self._qwen4_mtp_weights = None
+                else:
+                    drafter = _load_drafter_in_memory(model_path)
                 validate_drafter_compatibility(self._model, drafter, "mtp")
         block = settings.get("YUNSHU_MTP_BLOCK_SIZE")
         kernels = None
         # Spec off on a spec family still runs the lane's plain-decode arithmetic
         # (invariant kernels), so spec on == spec off token-for-token.
-        if drafter is not None or (spec_family and not use_driver):
+        if qwen4:
+            from .qwen4_mtp import configure_lane
+
+            kernels, block = configure_lane(lm, drafter, block)
+            self._qwen4_mtp_weights = None
+        if not qwen4 and (drafter is not None or (spec_family and not use_driver)):
             from .kernels.omlx import apply as apply_verify_kernels
 
             # Experimental alternative (YUNSHU_MTP_ROW_EXACT): upstream oMLX
@@ -1901,16 +1955,23 @@ class VLMEngine:
         )
         from .kernels import buffer_cache
 
-        if spec_family:
+        if spec_family and not qwen4:
             from .kernels import cache_restore, singleton_cache
 
             singleton_cache.install()
             cache_restore.install()
         cache_gib = settings.get("YUNSHU_PREFILL_BUFFER_CACHE_GB")
         if cache_gib is None:
+            import mlx.core as _mx
+
             from .apc_manager import total_memory_bytes
 
-            cache_gib = buffer_cache.auto_limit_gib(total_memory_bytes())
+            ceiling = settings.get("YUNSHU_MAX_MEMORY_GB")
+            cache_gib = buffer_cache.auto_limit_gib_for_weights(
+                total_memory_bytes(),
+                _mx.get_active_memory(),
+                int(float(ceiling) * (1 << 30)) if ceiling else None,
+            )
         buffer_cache.install(float(cache_gib))
         budget = self._apc_memory_gb()
         if self._apc_backend is None and budget > 0:
@@ -1996,7 +2057,7 @@ class VLMEngine:
                     if dflash_fast.supported(lm, drafter):
                         dflash_fast.prepare(drafter)
                         kernels["dflash_fast"] = "short-context"
-        if drafter is not None:
+        if drafter is not None and not qwen4:
             # Tree drafts through the tree verify (single greedy row,
             # batch-invariant kernels only; every other round keeps the loop).
             if settings.get("YUNSHU_SPEC_TREE") == "tree":
@@ -2027,7 +2088,7 @@ class VLMEngine:
         precision = settings.get("YUNSHU_KV_PRECISION")
         from .kernels import ragged_kv
 
-        if ragged_kv.supports(self._model.language_model):
+        if not qwen4 and ragged_kv.supports(self._model.language_model):
             ragged_kv.install()
             ragged_kv.enable(None)  # the runner sets the format while it steps
             runner.ragged_kv = precision
