@@ -413,7 +413,7 @@ class VLMBatchRunner:
 
             proc = self.processor
             parts = []
-            for obj in (proc, getattr(proc, "image_processor", None)):
+            for obj in (getattr(proc, "image_processor", None) or proc,):
                 if obj is not None and hasattr(obj, "to_dict"):
                     parts.append(obj.to_dict())
             if parts:
@@ -426,10 +426,11 @@ class VLMBatchRunner:
         return fp
 
     def _source_image_key_async(self, image_paths, image_token_index):
-        """Future of an exact digest of (processor config, image file bytes) or None."""
-        fp = self._processor_fingerprint()
-        if fp is None:
-            return None
+        """Future of an exact digest of (processor config, image file bytes) or None.
+
+        The processor fingerprint is also built on the worker thread, so a first
+        request never serializes the processor config on the MLX thread.
+        """
         pool = getattr(self, "_key_pool", None)
         if pool is None:
             from concurrent.futures import ThreadPoolExecutor
@@ -437,9 +438,14 @@ class VLMBatchRunner:
             pool = self._key_pool = ThreadPoolExecutor(
                 1, thread_name_prefix="media-key"
             )
-        return pool.submit(
-            _source_image_digest, tuple(image_paths), fp, image_token_index
-        )
+
+        def job():
+            fp = self._processor_fingerprint()
+            if fp is None:
+                return None
+            return _source_image_digest(tuple(image_paths), fp, image_token_index)
+
+        return pool.submit(job)
 
     @staticmethod
     def _image_hash(_apc, pixel_values, source_key) -> int:
