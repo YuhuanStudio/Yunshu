@@ -192,6 +192,7 @@ def test_full_suite_has_every_stage():
         "tavily",
         "searchrank",
         "toolparse",
+        "qwen4_mtp",
     }
 
 
@@ -1193,3 +1194,28 @@ def test_client_compat_pilot_is_pinned_and_stops_before_second_model(
     assert not result.passed and len(calls) == 1
     assert calls[0].cwd == world.repo and calls[0].device == "m3"
     assert "--tree-sha" in calls[0].argv and "Qwen3.5-0.8B" in " ".join(calls[0].argv)
+
+
+def test_qwen4_tiny_verdict_rejects_incomplete_or_unengaged_evidence(tmp_path):
+    evidence = tmp_path / "native.jsonl"
+    checks = [{"check": f"spec-depth-{d}", "passed": True} for d in (2, 3, 4)]
+    checks += [{"check": f"rollback-{k}", "passed": True} for k in (1, 2, 3, 4)]
+    good = {
+        "complete": True,
+        "passed": True,
+        "device": "m5",
+        "engaged": "qwen4-native",
+        "checks": checks,
+    }
+    evidence.write_text(json.dumps(good) + "\n")
+    assert stages._qwen4_mtp_valid(evidence)[0]
+    for bad in (
+        {"complete": False},
+        {"dry_run": True},
+        {"device": "m3"},
+        {"engaged": "off"},
+        {"checks": checks[:-1]},
+        {"checks": [dict(c, passed=False) for c in checks]},
+    ):
+        evidence.write_text(json.dumps({**good, **bad}) + "\n")
+        assert not stages._qwen4_mtp_valid(evidence)[0]

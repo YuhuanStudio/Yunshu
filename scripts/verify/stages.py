@@ -1643,6 +1643,57 @@ def stage_console(ctx: Ctx) -> StageResult:
             "console", result.ok, [] if result.ok else [result.reason], numbers
         ),
     )
+def _qwen4_mtp_valid(path):
+    rows = read_jsonl(path)
+    if not rows or rows[-1].get("complete") is not True:
+        return False, "missing final Qwen4 complete record"
+    final = rows[-1]
+    checks = final.get("checks", [])
+    expected = {f"spec-depth-{d}" for d in (2, 3, 4)} | {
+        f"rollback-{k}" for k in (1, 2, 3, 4)
+    }
+    if (
+        final.get("passed") is not True
+        or final.get("dry_run")
+        or final.get("device") != "m5"
+        or final.get("engaged") != "qwen4-native"
+        or {check.get("check") for check in checks} != expected
+        or len(checks) != len(expected)
+        or any(check.get("passed") is not True for check in checks)
+    ):
+        return False, "missing or failed native Qwen4 identity/rollback evidence"
+    return True, ""
+
+
+def stage_qwen4_mtp(ctx: Ctx) -> StageResult:
+    """Tiny native HC/QSA/GDN parity before any full checkpoint download."""
+    tree = ctx.cand.path
+    cell = Cell(
+        "qwen4_mtp",
+        "tiny-native",
+        [
+            "env",
+            f"PYTHONPATH={tree / 'python'}",
+            ctx.py,
+            str(tree / "scripts/research/qwen4_mtp_probe.py"),
+            "--out",
+            "{out}",
+        ],
+        mem_gb=3,
+        timeout_min=8,
+        priority=-1,
+        device="m5",
+        retries=0,
+        validate=_qwen4_mtp_valid,
+    )
+    results = ctx.exe.run_cells([cell])
+    reasons = _failed_cells(results)
+    numbers = {}
+    if not reasons:
+        numbers = read_jsonl(results["tiny-native"].evidence)[-1]
+        if not numbers.get("passed") or numbers.get("dry_run"):
+            reasons.append("Qwen4 native tiny identity/rollback failed")
+    return _finish(ctx, StageResult("qwen4_mtp", not reasons, reasons, numbers))
 
 
 def stage_respfeat(ctx: Ctx) -> StageResult:
@@ -1759,6 +1810,7 @@ STAGE_FUNCS = {
     "console": stage_console,
     "telemetry": stage_telemetry,
     "telemetry-tiny": lambda ctx: stage_telemetry(ctx, pilot=True),
+    "qwen4_mtp": stage_qwen4_mtp,
     "respfeat": stage_respfeat,
     "priorart": stage_priorart,
     "embedding": stage_embedding,

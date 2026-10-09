@@ -1194,6 +1194,34 @@
       "local_changes": [
         "Probe-only explicit affine4 diffusers bridge through unchanged upstream raw cache, mapper and applier; floating reference arithmetic, no source copied or global monkeypatch."
       ]
+    },
+    {
+      "path": "python/yunshu_engine/qwen4_mtp.py",
+      "repo": "https://github.com/Blaizzy/mlx-vlm",
+      "clone": "reference/mlx-vlm",
+      "commit": "92b31ad308b651a7c1e22d0c58bcdc35c3807750",
+      "kind": "inspired",
+      "license": "MIT",
+      "local_changes": [
+        "Use upstream native HC/QSA head directly; retain weights separately before target sanitize; strict native head load; Qwen3.5 patches excluded."
+      ],
+      "upstream_paths": [
+        "mlx_vlm/speculative/drafters/qwen4_exp_mtp/qwen4_exp_mtp.py"
+      ]
+    },
+    {
+      "path": "python/yunshu_engine/qwen4_draft_policy.py",
+      "repo": "https://github.com/Blaizzy/mlx-vlm",
+      "clone": "reference/mlx-vlm",
+      "commit": "92b31ad308b651a7c1e22d0c58bcdc35c3807750",
+      "kind": "inspired",
+      "license": "MIT",
+      "local_changes": [
+        "Single greedy row rewrite of _mtp_rounds_batch with a variable draft length: the head's chain stops when its top-1 probability falls below YUNSHU_QWEN4_DRAFT_MIN_PROB (idea from Strata's draft policy; no Strata code used)."
+      ],
+      "upstream_paths": [
+        "mlx_vlm/speculative/mtp.py"
+      ]
     }
   ],
   "patches": [
@@ -2806,6 +2834,24 @@
       "owner": "priorfix",
       "reviewed_date": "2026-10-08",
       "action": "Imported maintained SequenceClassificationModel loader; replaced local classifier reconstruction and quantization. CPU Torch fixtures pass for all three families / 1 and 2 labels; published BGE M5 pending."
+    },
+    {
+      "id": "qwen4-native-mtp",
+      "owner": "flashnextmtp",
+      "repo": "https://github.com/ashhart/TensorFold",
+      "revision": "60656c6",
+      "license": "Apache-2.0 (current repository); check historical Python notices before porting",
+      "paths": [
+        "src/tensorfold/families/qwen4_exp/mtp.py",
+        "src/tensorfold/families/qwen4_exp/mtp_chain.py"
+      ],
+      "status": "studied; no code copied; current f8fe17d removed Python family, native Zig runtime remains",
+      "checkpoints": [
+        "TensorFold/Qwen3.8-Flash-Next-MLX-oQ3-MTP",
+        "TensorFold/Qwen3.8-Flash-Next-MLX-oQ2-MTP",
+        "Jundot/Qwen3.8-Flash-Next-oQ4e-mtp"
+      ],
+      "pending": "M5 same-checkpoint reference parity and long identity/speed; no qualification claimed"
     }
   ],
   "websearch_prior_art": [
