@@ -152,7 +152,15 @@ def test_ring_since_and_step():
 def test_ring_capacity_from_hours_and_interval():
     s = history.Sampler(5.0, 12.0)
     assert s.ring.capacity == 8640
-    assert s.ring.nbytes == 8640 * 56 < 512 * 1024
+    assert s.ring.nbytes == 8640 * (8 + 4 * len(history.FIELDS)) < 1024 * 1024
+
+
+def test_defaults_sample_once_a_second_into_an_hour_ring():
+    from yunshu_engine import settings
+
+    assert settings.get("YUNSHU_HISTORY_INTERVAL_S") == 1.0
+    assert settings.get("YUNSHU_HISTORY_HOURS") == 1.0
+    assert settings.get("YUNSHU_HISTORY_STORE") is True
 
 
 def test_sampler_survives_a_collector_that_raises(monkeypatch):

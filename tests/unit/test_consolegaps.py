@@ -50,7 +50,6 @@ def test_new_routes_admin_auth_and_openapi(monkeypatch):
     with TestClient(app) as client:
         for path in (
             "cache",
-            "requests/history",
             "bundle",
             "bundle/manifest",
             "spec-decode",

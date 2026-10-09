@@ -85,12 +85,18 @@ class RequestMetadata(BaseModel):
     prefill_tps: float | None
     decode_tps: float | None
     ttft_ms: float | None
-    latency: dict | None
-    energy: dict | None
-    speculative: dict | None
-    cache: dict | None
+    latency: dict | None = None
+    energy: dict | None = None
+    speculative: dict | None = None
+    cache: dict | None = None
     structured_output: dict | None = None
     reasons: dict | None = None
+    # from the persistent history (absent in serve-log rows)
+    t_start: float | None = None
+    finish_reason: str | None = None
+    queue_wait_ms: float | None = None
+    key_name: str | None = None
+    cancelled: bool | None = None
 
 
 class HistoryPage(BaseModel):

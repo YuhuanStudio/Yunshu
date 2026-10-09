@@ -289,8 +289,11 @@ still wins at runtime (reported as `overridden`).
 | `YUNSHU_SERVE_LOG_MAX_MB` | float | 4.0 | live | Serve log: rotate at this size in MiB; with YUNSHU_SERVE_LOG_KEEP the directory is capped at max * (keep + 1). |
 | `YUNSHU_SERVE_LOG_RETENTION_DAYS` | int | 30 | live | History API metadata retention window in days; 0 disables age filtering. File storage remains bounded by SERVE_LOG_MAX_MB and SERVE_LOG_KEEP. |
 | `YUNSHU_SERVE_LOG_KEEP` | int | 4 | live | Serve log: rotated files kept. |
-| `YUNSHU_HISTORY_INTERVAL_S` | float | 5.0 | restart | Console history: seconds between samples of the in-memory ring behind GET /v1/yunshu/history (throughput, request counts, memory, TTFT percentiles); 0 turns the sampler off. The ring is fixed-size and never grows: 12 columns, 4 bytes each (timestamp 8), per slot. |
-| `YUNSHU_HISTORY_HOURS` | float | 12.0 | restart | Console history: hours the history ring keeps (capacity = hours * 3600 / YUNSHU_HISTORY_INTERVAL_S slots, preallocated; 12 h at 5 s is 8,640 slots, about 0.4 MiB). |
+| `YUNSHU_HISTORY_INTERVAL_S` | float | 1.0 | restart | Console history: seconds between samples of the in-memory ring behind GET /v1/yunshu/history (throughput, request counts, memory, TTFT percentiles, host telemetry); 0 turns the sampler off. One second by default: it only reads in-process counters. The ring is fixed-size and never grows: 12 columns, 4 bytes each (timestamp 8), per slot. |
+| `YUNSHU_HISTORY_HOURS` | float | 1.0 | restart | Console history: hours the in-memory ring keeps (capacity = hours * 3600 / YUNSHU_HISTORY_INTERVAL_S slots, preallocated; 1 h at 1 s is 3,600 slots, about 0.3 MiB). Longer ranges come from the persistent store. |
+| `YUNSHU_HISTORY_STORE` | bool | on | restart | Record the metrics history (1 s for 1 h, 10 s for 24 h, 1 min for the retention) and the request log (metadata only, never prompts or outputs) to ~/.yunshu/history.sqlite from startup, whether or not the console is open, so GET /v1/yunshu/metrics/history and /v1/yunshu/requests/history survive restarts. Off keeps the in-memory ring only. |
+| `YUNSHU_HISTORY_RETENTION_DAYS` | float | 30.0 | restart | Days the persistent history keeps 1-minute rows and the request log. |
+| `YUNSHU_HISTORY_DB_MAX_MB` | float | 64.0 | restart | Size cap of the persistent history file in MiB: when exceeded, the oldest request rows and then the oldest 1-minute rows are dropped. |
 | `YUNSHU_ARM` | str | unset | live | Label recorded in the serve log for the configuration arm this server runs (for offline A/B analysis); it changes no behaviour. |
 
 ### cli

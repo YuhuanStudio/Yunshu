@@ -303,8 +303,11 @@ _add("YUNSHU_SERVE_LOG_DIR", "path", None, "Directory of the serve log. Unset: ~
 _add("YUNSHU_SERVE_LOG_MAX_MB", "float", 4.0, "Serve log: rotate at this size in MiB; with YUNSHU_SERVE_LOG_KEEP the directory is capped at max * (keep + 1).", "observability", minimum=0.01)
 _add("YUNSHU_SERVE_LOG_RETENTION_DAYS", "int", 30, "History API metadata retention window in days; 0 disables age filtering. File storage remains bounded by SERVE_LOG_MAX_MB and SERVE_LOG_KEEP.", "observability", minimum=0)
 _add("YUNSHU_SERVE_LOG_KEEP", "int", 4, "Serve log: rotated files kept.", "observability", minimum=0)
-_add("YUNSHU_HISTORY_INTERVAL_S", "float", 5.0, "Console history: seconds between samples of the in-memory ring behind GET /v1/yunshu/history (throughput, request counts, memory, TTFT percentiles); 0 turns the sampler off. The ring is fixed-size and never grows: 12 columns, 4 bytes each (timestamp 8), per slot.", "observability", minimum=0.0)
-_add("YUNSHU_HISTORY_HOURS", "float", 12.0, "Console history: hours the history ring keeps (capacity = hours * 3600 / YUNSHU_HISTORY_INTERVAL_S slots, preallocated; 12 h at 5 s is 8,640 slots, about 0.4 MiB).", "observability", minimum=0.0)
+_add("YUNSHU_HISTORY_INTERVAL_S", "float", 1.0, "Console history: seconds between samples of the in-memory ring behind GET /v1/yunshu/history (throughput, request counts, memory, TTFT percentiles, host telemetry); 0 turns the sampler off. One second by default: it only reads in-process counters. The ring is fixed-size and never grows: 12 columns, 4 bytes each (timestamp 8), per slot.", "observability", minimum=0.0)
+_add("YUNSHU_HISTORY_HOURS", "float", 1.0, "Console history: hours the in-memory ring keeps (capacity = hours * 3600 / YUNSHU_HISTORY_INTERVAL_S slots, preallocated; 1 h at 1 s is 3,600 slots, about 0.3 MiB). Longer ranges come from the persistent store.", "observability", minimum=0.0)
+_add("YUNSHU_HISTORY_STORE", "bool", True, "Record the metrics history (1 s for 1 h, 10 s for 24 h, 1 min for the retention) and the request log (metadata only, never prompts or outputs) to ~/.yunshu/history.sqlite from startup, whether or not the console is open, so GET /v1/yunshu/metrics/history and /v1/yunshu/requests/history survive restarts. Off keeps the in-memory ring only.", "observability")
+_add("YUNSHU_HISTORY_RETENTION_DAYS", "float", 30.0, "Days the persistent history keeps 1-minute rows and the request log.", "observability", minimum=1.0)
+_add("YUNSHU_HISTORY_DB_MAX_MB", "float", 64.0, "Size cap of the persistent history file in MiB: when exceeded, the oldest request rows and then the oldest 1-minute rows are dropped.", "observability", minimum=1.0)
 _add("YUNSHU_ARM", "str", None, "Label recorded in the serve log for the configuration arm this server runs (for offline A/B analysis); it changes no behaviour.", "observability")
 
 # ── CLI ────────────────────────────────────────────────────────────────
@@ -483,6 +486,9 @@ _RESTART = frozenset(
         "YUNSHU_AUDIT_LOG_FILE",
         "YUNSHU_HISTORY_INTERVAL_S",
         "YUNSHU_HISTORY_HOURS",
+        "YUNSHU_HISTORY_STORE",
+        "YUNSHU_HISTORY_RETENTION_DAYS",
+        "YUNSHU_HISTORY_DB_MAX_MB",
         "YUNSHU_TELEMETRY",
         "YUNSHU_TELEMETRY_INTERVAL_S",
         "YUNSHU_HF_ENDPOINT",
