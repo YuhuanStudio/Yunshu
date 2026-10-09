@@ -26,6 +26,8 @@ paid for. The first fully tuned model is **Qwen3.8-27B**.
   and on SSD, surviving restarts; optional extra storage tiers.
 - **The full API on the fast path** — tools, JSON schema, stop, logprobs, reasoning, cancellation,
   across OpenAI Chat / Responses, Anthropic Messages and Ollama.
+- **Typed decisions** — `/v1/decisions` answers yes/no, choice and score questions with calibrated
+  probabilities in one forward pass of a decision checkpoint, without generating text.
 - **Native coding-agent support** — Claude Code, Codex and opencode work through their own APIs,
   including server-side web search / fetch and MCP.
 - **Lossless by default** — anything that can change output is an explicit setting.
@@ -183,7 +185,25 @@ usage, and cached-token counts in `usage`. Errors use each API's own error shape
 namespaced (`x_yunshu`, `X-Yunshu-*`), so the official SDKs ignore them. The full matrix, with how
 each row was verified, is in [API surface](docs/guides/API_SURFACE.md).
 
-Local decisions (`/v1/decisions`, `/v1/systemone`), stored chat completions, Evals (`/v1/evals`) and Realtime client secrets are available on main for the 0.1.5 cycle. Decisions require a supported decision checkpoint; they do not use the chat decoder.
+### Typed decisions
+
+`POST /v1/decisions` (and the System One wire format, `/v1/systemone`) asks a decision checkpoint
+predicate, choice and ordinal-score questions about text or images. One forward pass returns typed
+answers with probabilities; no tokens are generated, and a non-finite result is a refusal, never a
+made-up probability. Supported today: Cloudflare Clef / Clef-flash MLX checkpoints. Other decision-head
+families (OpenJev, Laya, D1) are not loaded yet.
+
+```python
+decision = client.decisions.create(
+    model="abenzerps/Clef-MLX",
+    input="The customer asks for a refund after a broken delivery.",
+    questions=[{"type": "choice", "name": "route", "instructions": "Choose the support team.",
+                "choices": [{"value": "support"}, {"value": "sales"}]}],
+)
+print(decision.answers)  # typed value, confidence, every option's probability
+```
+
+Also new on main for 0.1.5: stored chat completions, Evals (`/v1/evals`) and Realtime client secrets.
 
 [Decisions](docs/guides/DECISIONS.md), [Evals](docs/guides/EVALS.md), [web search](docs/guides/WEB_SEARCH.md) and [Tavily API](docs/guides/TAVILY.md)
 

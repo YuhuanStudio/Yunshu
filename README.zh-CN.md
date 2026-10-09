@@ -25,6 +25,8 @@
   重开后仍在；可再加存储层。
 - **快速路径上的完整 API**：工具调用、JSON schema、停止序列、logprobs、推理、取消，涵盖 OpenAI
   Chat / Responses、Anthropic Messages 与 Ollama。
+- **类型化决策**：`/v1/decisions` 用决策 checkpoint 一次前向传递回答是非、选择与分级问题，
+  附校准过的概率，不生成文本。
 - **原生支持编程 agent**：Claude Code、Codex、opencode 通过各自的 API 运作，含服务器端网页
   搜索／抓取与 MCP。
 - **默认无损**：任何可能改变输出的东西都是要自己开的设置。
@@ -168,7 +170,24 @@ strict `json_schema`）、`stop`、`logprobs` / `top_logprobs`（流式输出也
 错误使用各 API 自己的格式。扩充字段都有命名空间（`x_yunshu`、`X-Yunshu-*`），官方 SDK 会忽略。
 完整矩阵与每一列的验证方式见 [API surface](docs/guides/API_SURFACE.md)。
 
-main 的 0.1.5 周期已提供本地决策（`/v1/decisions`、`/v1/systemone`）、存储聊天响应、Evals（`/v1/evals`）与 Realtime client secrets。决策需要支持的决策 checkpoint，不使用聊天解码器。
+### 类型化决策
+
+`POST /v1/decisions`（以及 System One 格式 `/v1/systemone`）让决策 checkpoint 针对文本或图片回答
+是非（predicate）、选择（choice）与分级（score）问题。一次前向传递就返回带概率的类型化答案，
+不生成任何 token；数值异常时返回拒答，绝不捏造概率。目前支持 Cloudflare Clef / Clef-flash 的 MLX
+checkpoint；OpenJev、Laya、D1 等其他决策头尚未支持。
+
+```python
+decision = client.decisions.create(
+    model="abenzerps/Clef-MLX",
+    input="The customer asks for a refund after a broken delivery.",
+    questions=[{"type": "choice", "name": "route", "instructions": "Choose the support team.",
+                "choices": [{"value": "support"}, {"value": "sales"}]}],
+)
+print(decision.answers)  # typed value, confidence, every option's probability
+```
+
+0.1.5 在 main 上另外新增：存储聊天响应、Evals（`/v1/evals`）与 Realtime client secrets。
 
 [决策](docs/guides/DECISIONS.md)、[Evals](docs/guides/EVALS.md)、[网页搜索](docs/guides/WEB_SEARCH.md)与 [Tavily API](docs/guides/TAVILY.md)
 
