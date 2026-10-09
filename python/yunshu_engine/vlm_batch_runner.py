@@ -193,6 +193,20 @@ def build_sampler(temperature: float, top_p: float, top_k: int, min_p: float):
     )
 
 
+def spec_safe_processors(processors) -> bool:
+    """Every processor can be applied per row of a speculative window: mlx-lm's stateless
+    penalty / logit-bias closures and the pure token mask. Anything else keeps the request
+    off the speculative lane."""
+    for p in processors:
+        if isinstance(p, TokenMaskProcessor):
+            continue
+        if hasattr(p, "process_last_token"):
+            return False
+        if not getattr(p, "__module__", "").startswith("mlx_lm.sample_utils"):
+            return False
+    return True
+
+
 def build_penalty_processors(
     repetition_penalty: float,
     frequency_penalty: float,
@@ -253,13 +267,14 @@ class TokenMaskProcessor:
     def _block(self, ids: mx.array, vocab: int) -> mx.array:
         return mx.zeros((vocab,), dtype=mx.bool_).at[ids].add(True)
 
-    def _mask(self, logits: mx.array) -> mx.array:
+    def _mask(self, logits: mx.array, generated: int | None = None) -> mx.array:
         # Functional (never writes into the caller's logits).
+        generated = self._generated if generated is None else generated
         neg = mx.array(float("-inf"), logits.dtype)
         vocab = logits.shape[-1]
         if self._suppress.size:
             logits = mx.where(self._block(self._suppress, vocab), neg, logits)
-        if self._eos.size and (self._ignore_eos or self._generated < self._min_tokens):
+        if self._eos.size and (self._ignore_eos or generated < self._min_tokens):
             logits = mx.where(self._block(self._eos, vocab), neg, logits)
         if self._n_sigma > 0:
             top = mx.max(logits, axis=-1, keepdims=True)
@@ -274,6 +289,14 @@ class TokenMaskProcessor:
     def process_last_token(self, token: int, logits: mx.array) -> mx.array:
         self._generated += 1
         return self._mask(logits)
+
+    def pure_at(self, generated: int, logits: mx.array) -> mx.array:
+        """The mask after ``generated`` ``process_last_token`` calls, without counting (a
+        speculative window applies it to every row, then ``advance`` by what committed)."""
+        return self._mask(logits, generated)
+
+    def advance(self, n: int) -> None:
+        self._generated += int(n)
 
 
 class VLMBatchRunner:
@@ -503,11 +526,15 @@ class VLMBatchRunner:
             allow_draft
             and self.drafter is not None
             and keyed_ok
-            and not processors
+            and (
+                not processors
+                or (self.draft_kind == "dflash" and spec_safe_processors(processors))
+            )
             and (not logprobs or self._lane_takes_guide(None))
             and thinking_budget is None
             and (guide is None or self._lane_takes_guide(guide))
         )
+        spec_procs = list(processors) if use_draft else []
         if logprobs:
             processors.append(Fp32LogitsProcessor())
         budget = None
@@ -544,6 +571,7 @@ class VLMBatchRunner:
             logprobs=bool(logprobs),
             top_logprobs=int(top_logprobs or 0) if logprobs else 0,
             processors=processors,
+            spec_procs=spec_procs,
             guide=guide,
             prompt_kwargs=prompt_kwargs,
             salt=apc_semantic_hash,
@@ -850,6 +878,7 @@ class VLMBatchRunner:
             install()
             job.spec_request = SpecRequest(job.logprobs, job.top_logprobs)
             job.spec_request.guide = job.guide
+            job.spec_request.processors = list(job.spec_procs)
             job.processors.append(job.spec_request)
             logger.info(
                 "Exact speculative request engaged: %s constrained=%s logprobs=%s",
@@ -2189,6 +2218,7 @@ class _Job:
     allow_draft: bool = False
     guide: Any = None
     spec_request: Any = None
+    spec_procs: list = field(default_factory=list)
     keyed: Any = (
         None  # KeyedSampler of a sampled request served by the speculative lane
     )

@@ -644,7 +644,12 @@ def part_decode(s, out, a):
             reply = ""
             for phase in [p for p in ("cold", "warm", "turn2") if p in phases]:
                 want = (a.turn2_tokens or n_dec) if phase == "turn2" else n_dec
-                b = req(s.model, text, 16 if a.smoke else want)
+                b = req(
+                    s.model,
+                    text,
+                    16 if a.smoke else want,
+                    extra=json.loads(a.request_extra) if a.request_extra else None,
+                )
                 if phase == "turn2":
                     b["messages"] += [
                         {"role": "assistant", "content": reply},
@@ -952,6 +957,11 @@ def parse_args(argv=None):
         type=float,
         default=30.0,
         help="pause before the idle footprint sample",
+    )
+    ap.add_argument(
+        "--request-extra",
+        default="",
+        help="JSON object merged into every decode request body (e.g. penalties)",
     )
     ap.add_argument(
         "--phases",
