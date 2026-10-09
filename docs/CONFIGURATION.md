@@ -171,6 +171,7 @@ still wins at runtime (reported as `overridden`).
 | `YUNSHU_VLM_MAX_IMAGE_BYTES` | int | 26214400 (25 MiB) | live | Largest image a request may reference by URL, in bytes. |
 | `YUNSHU_VLM_MAX_VIDEO_BYTES` | int | 104857600 (100 MiB) | restart | Largest video a request may reference by URL, in bytes. |
 | `YUNSHU_VLM_INSECURE_SSL` | bool | off | live | Retry image downloads without TLS verification when verification fails. |
+| `YUNSHU_PLE_READ_THREADS` | int | 16 | reload | Qwen3.8-Flash-Next (qwen4_exp) with the n-gram embedding (PLE) read from SSD: threads that read a token's PLE rows in parallel. A token needs 48 random row reads (16 heads x weight/scales/biases); upstream reads them one after another (about 7 ms per token on fresh text, hidden only when a prompt repeats and hits the row cache). The rows returned are byte-identical to the serial read, so output is unchanged. 0 = upstream serial reads. |
 | `YUNSHU_ROUND_PREFILL_CHUNK` | int | 512 | reload | Round driver: prompt tokens per prefill span. A decoding request only steps between prefill forwards, so smaller spans keep it running next to a long prompt (Qwen3.8-27B, M5 Max, one MTP row beside an 8K prompt: 512 -> 6 tok/s, 128 -> 24 tok/s, ~20% lower prefill speed). Atoms are fixed per prompt (idle steps merge consecutive full atoms without changing any bit), so output stays independent of what else is running; prompts prefilled with different chunk sizes are each self-consistent but not bit-identical to each other. |
 
 ### speculative

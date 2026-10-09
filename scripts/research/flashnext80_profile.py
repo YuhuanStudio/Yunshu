@@ -152,6 +152,46 @@ async def run(args):
         results[tag] = row
         emit(row)
 
+    # cProfile over a few serial steps: where does host time go, and how often does a step sync?
+    import cProfile
+    import pstats
+
+    prof = cProfile.Profile()
+    y = y0
+    n_prof = 8
+    prof.enable()
+    for _ in range(n_prof):
+        y = step(y)
+        mx.eval(y)
+    prof.disable()
+    st = pstats.Stats(prof)
+    rows = []
+    for (fn, line, name), (cc, nc, tt, ct, _callers) in st.stats.items():
+        rows.append((tt, ct, nc, f"{Path(fn).name}:{line}:{name}"))
+    rows.sort(reverse=True)
+    emit(
+        {
+            "kind": "cprofile",
+            "steps": n_prof,
+            "top_by_tottime": [
+                {
+                    "fn": f,
+                    "tottime_ms_per_step": round(t * 1e3 / n_prof, 3),
+                    "calls_per_step": round(n / n_prof, 1),
+                }
+                for t, _ct, n, f in rows[:30]
+            ],
+            "sync_calls_per_step": {
+                f: round(n / n_prof, 1)
+                for _t, _ct, n, f in rows
+                if any(
+                    k in f
+                    for k in ("eval", "tolist", "item", "synchronize", "__array__")
+                )
+            },
+        }
+    )
+
     # per-block timing, eval after every block
     acc = defaultdict(list)
 

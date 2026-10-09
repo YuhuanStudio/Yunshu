@@ -2229,6 +2229,21 @@
       "why": "Preserve upstream lifetime counters while adding host-only per-depth request and aggregate counters; tree paths provide explicit parent topology.",
       "source_sha256": "d76e582c8fa642340c47bb269e78f3d3415df1b9ad3fc49a886ac5a20233883c",
       "installed_version": "0.7.6"
+    },
+    {
+      "kind": "patches",
+      "path": "python/yunshu_engine/ple_parallel.py",
+      "repo": "https://github.com/Blaizzy/mlx-vlm",
+      "clone": "reference/mlx-vlm",
+      "package": "mlx-vlm",
+      "module": "mlx_vlm.models.qwen4_exp.ple_storage",
+      "symbol": "QuantizedMMapNGramEmbedding._read_rows",
+      "signature": "(self, row_ids)",
+      "license": "MIT",
+      "commit": "v0.7.6",
+      "why": "Read the 48 per-token PLE rows with parallel pread instead of serial memmap fancy-index page faults; returned arrays, row cache and counters are byte-identical (tests/unit/test_ple_parallel.py).",
+      "source_sha256": "4a31310895b56550eb8772abe8380dbc4b5a00895fd2b5945e3d1a8541e29b98",
+      "installed_version": "0.7.6"
     }
   ],
   "watch": [

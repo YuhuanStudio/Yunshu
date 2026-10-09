@@ -592,6 +592,9 @@ class VLMEngine:
         config.setdefault("vision_config", {})
         config.setdefault("audio_config", {})
         resolve_external_ple_manifest(config, model_path)
+        from . import ple_parallel
+
+        ple_parallel.install(int(settings.get("YUNSHU_PLE_READ_THREADS")))
 
         model_config = model_class.ModelConfig.from_dict(config)
         modules = ["text", "vision", "perceiver", "projector", "audio"]
