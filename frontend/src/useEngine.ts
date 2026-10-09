@@ -13,7 +13,11 @@ import {
   type EngineStatus,
 } from "./api";
 import type { ObservedRequest } from "./analytics";
-import { fetchMetricsHistory, fetchServerHistory } from "./history-api";
+import {
+  fetchConsoleState,
+  fetchMetricsHistory,
+  fetchServerHistory,
+} from "./history-api";
 import { retryDelayMs } from "./backoff";
 import {
   gapPoint,
@@ -391,7 +395,24 @@ export function useEngine(connection: Connection): UseEngineResult {
           const refused = apiError?.status === 401 || apiError?.status === 403;
           if (refused) setPolling(false);
           failuresRef.current += 1;
-          if (failStartRef.current == null) failStartRef.current = Date.now();
+          if (failStartRef.current == null) {
+            failStartRef.current = Date.now();
+            // The console process has watched the engine all along: it knows when it went away.
+            void fetchConsoleState(apiConnection).then((c) => {
+              if (c?.up === false && c.since != null && c.since < Date.now()) {
+                failStartRef.current = Math.min(
+                  failStartRef.current ?? c.since,
+                  c.since,
+                );
+                setState((current) =>
+                  current.connectionKey === connectionKey &&
+                  current.phase === "offline"
+                    ? { ...current, offlineSince: failStartRef.current }
+                    : current,
+                );
+              }
+            });
+          }
           // A restart or one slow poll must not flash the offline banner.
           if (!refused && failuresRef.current < OFFLINE_AFTER_FAILURES) {
             // Keep the last numbers, but say so: they are no longer live.

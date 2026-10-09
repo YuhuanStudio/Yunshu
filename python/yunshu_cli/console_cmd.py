@@ -8,12 +8,8 @@ restarts. See docs/CONSOLE.md.
 
 from __future__ import annotations
 
-import socket
-
 import typer
 from rich.console import Console
-
-from yunshu_engine import settings
 
 console = Console()
 DEFAULT_ENGINE = "http://127.0.0.1:8000"
@@ -21,12 +17,9 @@ DEFAULT_ENGINE = "http://127.0.0.1:8000"
 
 def console_port_busy(host: str, port: int) -> bool:
     """True when something already listens there (e.g. the service's console job)."""
-    probe = "127.0.0.1" if host in ("0.0.0.0", "") else host
-    try:
-        with socket.create_connection((probe, port), timeout=0.4):
-            return True
-    except OSError:
-        return False
+    from yunshu_console.cli import port_busy
+
+    return port_busy(host, port)
 
 
 def console_command(
@@ -48,6 +41,15 @@ def console_command(
         help="Bearer token for reading the engine (default YUNSHU_CONSOLE_ENGINE_TOKEN, "
         "else YUNSHU_AUTH_TOKEN).",
     ),
+    config: str | None = typer.Option(
+        None,
+        "--config",
+        "-c",
+        help="TOML file of YUNSHU_* settings (same file as the engine's).",
+    ),
+    static_dir: str | None = typer.Option(
+        None, "--static-dir", help="Serve this console build (development, tests)."
+    ),
     no_history: bool = typer.Option(
         False, "--no-history", help="Do not record the metrics history or request log."
     ),
@@ -55,22 +57,19 @@ def console_command(
 ) -> None:
     """Run the console process: the web console and docs on one port, a reverse proxy to the
     engine API, and the recorded history that survives engine restarts."""
-    import uvicorn
+    import argparse
 
-    if engine:
-        settings.set_override("YUNSHU_CONSOLE_ENGINE", engine)
-    if engine_token:
-        settings.set_override("YUNSHU_CONSOLE_ENGINE_TOKEN", engine_token)
-    if no_history:
-        settings.set_override("YUNSHU_CONSOLE_HISTORY", False)
-    bind_host = host or settings.get("YUNSHU_CONSOLE_HOST") or "127.0.0.1"
-    bind_port = int(port or settings.get("YUNSHU_CONSOLE_PORT") or 8100)
-    from yunshu_console.app import build_from_settings
+    from yunshu_console.cli import run
 
-    app = build_from_settings(engine)
-    shown = "127.0.0.1" if bind_host == "0.0.0.0" else bind_host
-    console.print(
-        f"[bold]Yunshu console[/] http://{shown}:{bind_port}/console/  ->  engine "
-        f"{app.state.engine_url}"
+    run(
+        argparse.Namespace(
+            engine=engine,
+            host=host,
+            port=port,
+            engine_token=engine_token,
+            config=config,
+            no_history=no_history,
+            static_dir=static_dir,
+            log_level=log_level,
+        )
     )
-    uvicorn.run(app, host=bind_host, port=bind_port, log_level=log_level)

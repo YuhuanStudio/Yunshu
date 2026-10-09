@@ -1,5 +1,6 @@
 import { gbTotalText } from "./byte-format";
 import { LiveNumber } from "./LiveNumber";
+import { rangeSeconds, useRangeHistory } from "./useRangeHistory";
 import { useLinger } from "./motion/linger";
 import { LiveScroll } from "./motion/LiveScroll";
 import { PrefillBar } from "./PrefillBar";
@@ -281,13 +282,19 @@ export function Dashboard({
   const stale = engine.phase === "offline" && status != null;
   const dim = stale ? "opacity-60" : "";
   const end = engine.updatedAt ?? Date.now(),
-    start = end - (range === "5m" ? 300 : range === "15m" ? 900 : 3600) * 1000;
+    start = end - rangeSeconds(range) * 1000;
   // Charts read the slim series (engine history first, then live polls). The
   // window is a binary-search slice and the chart gets at most 300 rows.
-  const points = useMemo(
+  // Up to an hour the live series (backfilled from the console's history on open) is the source;
+  // 6 h to 30 d come straight from the recorded history, gaps included.
+  const longRange = useRangeHistory(connection, range, null);
+  const livePoints = useMemo(
     () => windowPoints(engine.series, start, end),
     [engine.series, start, end],
   );
+  const points = longRange.active ? longRange.points : livePoints;
+  // A line breaks where samples are further apart than a few of this range's own steps.
+  const rangeGapMs = Math.max(12_000, (longRange.resolutionS ?? 0) * 3_000);
   const data = useMemo(() => chartRows(points), [points]);
   const heroPoints = useMemo(
     () => windowPoints(engine.series, end - 300_000, end),
@@ -778,9 +785,12 @@ export function Dashboard({
                   value={range}
                   onChange={chooseRange}
                   options={[
-                    { value: "5m", label: t("overview.perf.range5m") },
                     { value: "15m", label: t("overview.perf.range15m") },
                     { value: "1h", label: t("overview.perf.range1h") },
+                    { value: "6h", label: t("overview.perf.range6h") },
+                    { value: "24h", label: t("overview.perf.range24h") },
+                    { value: "7d", label: t("overview.perf.range7d") },
+                    { value: "30d", label: t("overview.perf.range30d") },
                   ]}
                 />
                 <Button
@@ -829,7 +839,7 @@ export function Dashboard({
                 ariaLabel={t("overview.throughput.aria")}
                 formatX={clock}
                 formatY={formatNumber}
-                maxGap={12000}
+                maxGap={rangeGapMs}
                 activeX={activeX}
                 onActiveXChange={setActiveX}
               />
@@ -962,7 +972,7 @@ export function Dashboard({
                 ariaLabel={t("overview.memory.aria")}
                 formatX={clock}
                 formatY={formatNumber}
-                maxGap={12000}
+                maxGap={rangeGapMs}
                 activeX={activeX}
                 onActiveXChange={setActiveX}
               />

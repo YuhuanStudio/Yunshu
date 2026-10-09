@@ -200,5 +200,13 @@ const shell: Shape<typeof zh> = {
   "island.nav.modelsLoaded": "{n} loaded",
   "island.nav.diagnostics": "Diagnostics",
   "island.nav.logs": "Logs",
+  "stale.note":
+    "This page needs the engine; it shows the last data from {age} ago and updates itself when the engine is back.",
+  "loadError.title": "The model failed to load",
+  "loadError.action": "Load another model",
+  "boundary.title": "This page hit an error",
+  "boundary.body": "Other pages are not affected. Retry, or open the docs.",
+  "boundary.retry": "Retry",
+  "boundary.docs": "Open the docs",
 };
 export default shell;

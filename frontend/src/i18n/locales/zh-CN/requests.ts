@@ -136,7 +136,7 @@ const requests: Shape<typeof zh> = {
   "footer.since":
     "自 {time} 起 {count} 条请求，读取 {prompt} 个 prompt token（复用 {cached}）",
   "footer.ring":
-    "服务器保留最近 {capacity} 条；重启后清空。记录只含统计，不含 prompt 与输出文本。",
+    "引擎保留最近 {capacity} 条；更早的来自控制台进程的记录，引擎重启或离线也不中断。记录只含统计，不含 prompt 与输出文字。",
   "footer.unsupported":
     "此引擎版本没有提供完成记录，“已结束”只含本页采样到的最近请求",
   "footer.unsupportedDetail":
@@ -195,7 +195,8 @@ const requests: Shape<typeof zh> = {
   "waterfall.empty": "引擎没有上报任何带时间点的阶段。",
   "waterfall.unreported": "未上报：{stages}",
   "waterfall.sep": "、",
-  "waterfall.note": "时间以网关收到请求为 0。预填结束是主机回调的边界，不是 GPU 剖析；模板与分词含图像等媒体预处理；融合或未观测的阶段不补 0。首次发送指服务端发送完成，不代表客户端已收到。",
+  "waterfall.note":
+    "时间以网关收到请求为 0。预填结束是主机回调的边界，不是 GPU 剖析；模板与分词含图像等媒体预处理；融合或未观测的阶段不补 0。首次发送指服务端发送完成，不代表客户端已收到。",
   "waterfall.stage.model_lease": "模型租用",
   "waterfall.stage.gateway_admit": "网关准入",
   "waterfall.stage.engine_queue": "引擎排队",
@@ -206,7 +207,8 @@ const requests: Shape<typeof zh> = {
   "waterfall.stage.sse_first_flush": "首次发送",
   "energy.title": "主机能耗",
   "energy.estimate": "估算",
-  "energy.tip": "这是请求时间窗内 GPU 与 DRAM 的主机能量估算，包含其他程序与待机功耗；同时进行的请求共用同一段能量，不是这个请求独占的功率，也不是电池消耗。",
+  "energy.tip":
+    "这是请求时间窗内 GPU 与 DRAM 的主机能量估算，包含其他程序与待机功耗；同时进行的请求共用同一段能量，不是这个请求独占的功率，也不是电池消耗。",
   "energy.prefill": "预填充",
   "energy.decode": "解码",
   "energy.none": "这笔请求没有能耗估算。",
@@ -234,7 +236,8 @@ const requests: Shape<typeof zh> = {
   "dist.col.group": "分组",
   "dist.col.n": "笔数",
   "dist.tooFew": "样本少于 {min} 笔，不显示百分位",
-  "dist.note": "每组至少 {min} 笔才显示 P50 / P90；失败的请求不计入首 token。这是服务端近期记录的实测值，不是请求速率的平均。",
+  "dist.note":
+    "每组至少 {min} 笔才显示 P50 / P90；失败的请求不计入首 token。这是服务端近期记录的实测值，不是请求速率的平均。",
   "dist.unplaced": "另有 {n} 笔无法归入此分组（缺少输入或命中 token 数）。",
   "dist.aria": "延迟分布直方图，横轴为延迟区间，纵轴为请求数",
   "dist.tableAria": "各组延迟百分位",
@@ -245,28 +248,35 @@ const requests: Shape<typeof zh> = {
   "spec.col.accept": "接受率",
   "spec.col.tokens": "接受／草稿 token",
   "spec.col.rounds": "轮数",
-  "spec.acceptHelp": "接受 token 总数 ÷ 草稿 token 总数，只计上报了两项计数的请求。",
+  "spec.acceptHelp":
+    "接受 token 总数 ÷ 草稿 token 总数，只计上报了两项计数的请求。",
   "spec.plain": "{n} 笔没有推测解码记录（普通解码，或引擎未上报）。",
   "spec.unattributed": "{n} 笔只上报了模式、没有计数，未计入接受率。",
-  "spec.depth": "各深度的接受率：引擎目前只上报每笔请求的合计，所以不绘制分深度图。",
+  "spec.depth":
+    "各深度的接受率：引擎目前只上报每笔请求的合计，所以不绘制分深度图。",
   "spec.none": "这些请求都没有推测解码记录；配置了推测解码不代表这几笔用到了。",
   "spec.copy": "含 {rounds} 轮复制草稿（{tokens} token）",
   "spec.counters.title": "引擎累计计数器",
-  "spec.counters.desc": "自引擎启动起的合计，来自 /debug/spec-decode；与上表的近期请求是两个不同的范围。",
+  "spec.counters.desc":
+    "自引擎启动起的合计，来自 /debug/spec-decode；与上表的近期请求是两个不同的范围。",
   "spec.counters.model": "模型",
   "spec.counters.cycles": "MTP 周期",
   "spec.counters.accepts": "接受",
   "spec.counters.rejects": "拒绝",
   "spec.counters.adaptive": "自适应草稿",
   "spec.counters.adaptiveValue": "{accepted} / {drafted} token · K={k}",
-  "spec.counters.unavailable": "引擎累计计数器：这个引擎没有提供（/debug 关闭，或此引擎不上报推测解码计数）。",
+  "spec.counters.unavailable":
+    "引擎累计计数器：这个引擎没有提供（/debug 关闭，或此引擎不上报推测解码计数）。",
   "archive.label": "在此浏览器保存请求记录",
-  "archive.help": "引擎只在内存保留最近 {capacity} 条，重启后清空。开启后，此浏览器会另存已结束请求的数字记录（不含提示词与回复），最多 {rows} 条、{days} 天；默认关闭。",
+  "archive.help":
+    "引擎只在内存保留最近 {capacity} 条，重启后清空。开启后，此浏览器会另存已结束请求的数字记录（不含提示词与回复），最多 {rows} 条、{days} 天；默认关闭。",
   "archive.count": "另有 {n} 条只保存在浏览器",
   "archive.export": "导出当前列表 (JSON)",
   "archive.exportDisabled": "当前列表没有可导出的请求。",
   "archive.clear": "清除浏览器记录",
-  "archive.unavailable": "此浏览器不允许存储（隐私模式或已屏蔽网站数据），记录不会保留。",
-  "archive.engineGap": "引擎有可选的 serve log（YUNSHU_SERVE_LOG）可跨重启保存，但目前没有读取它的接口，所以这里看不到。",
+  "archive.unavailable":
+    "此浏览器不允许存储（隐私模式或已屏蔽网站数据），记录不会保留。",
+  "archive.engineGap":
+    "控制台进程（与引擎分开运行）持续记录已结束请求的数字，连引擎离线或重启的时段也不中断，所以这里会列出你没开着页面时完成的请求。",
 };
 export default requests;

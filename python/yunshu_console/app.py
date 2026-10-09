@@ -400,7 +400,9 @@ def open_store(path: Path | None = None) -> HistoryStore | None:
         return None
 
 
-def build_from_settings(engine_url: str | None = None) -> FastAPI:
+def build_from_settings(
+    engine_url: str | None = None, static_dir: str | Path | None = None
+) -> FastAPI:
     """The app as ``yunshu console`` runs it: settings decide the engine, token, store and cadence."""
     from yunshu_engine import settings
 
@@ -415,7 +417,12 @@ def build_from_settings(engine_url: str | None = None) -> FastAPI:
         token=token,
         interval_s=float(settings.get("YUNSHU_CONSOLE_POLL_S") or 1.0),
     )
-    return create_app(url, store=store, poller=poller)
+    return create_app(
+        url,
+        store=store,
+        poller=poller,
+        static_dir=Path(static_dir) if static_dir else None,
+    )
 
 
 __all__ = [

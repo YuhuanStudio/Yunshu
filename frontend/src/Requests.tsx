@@ -447,7 +447,10 @@ export function Requests({
     (detail &&
       finished.find(
         (r) =>
-          r.id === detail.id && (r.source === "ring" || r.source === "archive"),
+          r.id === detail.id &&
+          (r.source === "ring" ||
+            r.source === "archive" ||
+            r.source === "history"),
       )) ||
     detail;
   const done = view?.phase === "complete";

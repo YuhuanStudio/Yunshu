@@ -422,8 +422,7 @@ def _start_console_sibling(host: str, port: int) -> None:
     args = [
         sys.executable,
         "-m",
-        "yunshu_cli",
-        "console",
+        "yunshu_console",
         "--engine",
         engine,
         "--host",

@@ -141,3 +141,36 @@ export async function fetchMetricsHistory(
     return null;
   }
 }
+
+/** What the console process says about its own view of the engine (`GET /v1/yunshu/console`). */
+export interface ConsoleState {
+  recording: boolean;
+  up: boolean | null;
+  /** Epoch ms when the engine's current state (up or down) began. */
+  since: number | null;
+  lastError: string | null;
+}
+
+export async function fetchConsoleState(
+  connection: Connection,
+  signal?: AbortSignal,
+): Promise<ConsoleState | null> {
+  try {
+    const body = (await requestJson<Record<string, unknown>>(
+      connection,
+      "/yunshu/console",
+      { signal, timeoutMs: 3_000 },
+    )) as Record<string, unknown>;
+    if (body.object !== "yunshu.console") return null;
+    const since = num(body.since);
+    return {
+      recording: body.recording === true,
+      up: typeof body.up === "boolean" ? body.up : null,
+      since: since == null ? null : since * 1000,
+      lastError: typeof body.last_error === "string" ? body.last_error : null,
+    };
+  } catch {
+    // Not served by a console process (the engine directly), or unreachable: nothing to add.
+    return null;
+  }
+}

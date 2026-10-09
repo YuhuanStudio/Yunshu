@@ -191,5 +191,13 @@ const shell = {
   "island.nav.modelsLoaded": "{n} 個已載入",
   "island.nav.diagnostics": "診斷",
   "island.nav.logs": "日誌",
+  "stale.note":
+    "此頁需要引擎；現在顯示的是 {age}前的最後資料，引擎回來後會自動更新。",
+  "loadError.title": "模型載入失敗",
+  "loadError.action": "載入其他模型",
+  "boundary.title": "這個頁面發生錯誤",
+  "boundary.body": "其他頁面不受影響。可以重試，或到文件查看說明。",
+  "boundary.retry": "重試",
+  "boundary.docs": "開啟文件",
 };
 export default shell;

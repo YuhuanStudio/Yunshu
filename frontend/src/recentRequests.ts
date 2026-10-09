@@ -79,6 +79,12 @@ export function recentToRow(e: RecentEntry): Row {
   };
 }
 
+/** A row read back from the console process's recorded log: metadata only, older than the ring may reach. */
+export const historyToRow = (e: RecentEntry): Row => ({
+  ...recentToRow(e),
+  source: "history",
+});
+
 export type Recent = {
   /** null until the first answer; false when the endpoint is missing (older server). */
   supported: boolean | null;
@@ -105,6 +111,37 @@ async function getRecent(connection: Connection, signal: AbortSignal) {
   return (await response.json()) as { data?: RecentEntry[]; capacity?: number };
 }
 
+/** Pages of `GET /v1/yunshu/requests/history` (the console process's recorded log), newest first. */
+async function getHistory(
+  connection: Connection,
+  signal: AbortSignal,
+  pages = 2,
+): Promise<RecentEntry[]> {
+  const out: RecentEntry[] = [];
+  let before: string | null = null;
+  for (let i = 0; i < pages; i++) {
+    const url = new URL(connection.baseUrl.trim());
+    const path = url.pathname.replace(/\/+$/, "");
+    url.pathname = `${path.endsWith("/v1") ? path : `${path}/v1`}/yunshu/requests/history`;
+    url.search = `?limit=512${before ? `&before=${encodeURIComponent(before)}` : ""}`;
+    url.hash = "";
+    const headers = new Headers({ Accept: "application/json" });
+    if (connection.token.trim())
+      headers.set("Authorization", `Bearer ${connection.token.trim()}`);
+    const response = await fetch(url, { headers, signal });
+    if (!response.ok)
+      throw new ApiError(`HTTP ${response.status}`, response.status);
+    const body = (await response.json()) as {
+      data?: RecentEntry[];
+      next_cursor?: string | null;
+    };
+    if (Array.isArray(body.data)) out.push(...body.data);
+    before = body.next_cursor ?? null;
+    if (!before) break;
+  }
+  return out;
+}
+
 /**
  * Finished requests from the server ring. Refetches every 5 s while the tab is visible and
  * whenever `signal` (the latest finished id seen in status) changes. A 404 means an older
@@ -125,6 +162,7 @@ export function useRecentRequests(
   );
   const missing = useRef(false);
   const kick = useRef<(() => void) | null>(null);
+  const historyRef = useRef<Row[]>([]);
   useEffect(() => {
     missing.current = false;
     const controller = new AbortController();
@@ -141,9 +179,12 @@ export function useRecentRequests(
         const body = await getRecent(connection, controller.signal);
         if (controller.signal.aborted) return;
         const data = Array.isArray(body.data) ? body.data : [];
+        const ring = data.filter((e) => e?.request_id).map(recentToRow);
+        const ids = new Set(ring.map((r) => r.id));
         setState({
           supported: true,
-          rows: data.filter((e) => e?.request_id).map(recentToRow),
+          // the recorded log fills in what finished before the ring (or before this page opened)
+          rows: [...ring, ...historyRef.current.filter((r) => !ids.has(r.id))],
           capacity: body.capacity ?? 512,
           error: null,
         });
@@ -170,6 +211,17 @@ export function useRecentRequests(
       if (timer) clearTimeout(timer);
       void load();
     };
+    // Once per connection: what the console process recorded while nobody was looking.
+    getHistory(connection, controller.signal).then(
+      (entries) => {
+        if (controller.signal.aborted) return;
+        historyRef.current = entries
+          .filter((e) => e?.request_id)
+          .map(historyToRow);
+        kick.current?.();
+      },
+      () => undefined,
+    );
     void load();
     return () => {
       controller.abort();

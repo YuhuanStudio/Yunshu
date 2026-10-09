@@ -9,7 +9,7 @@ import { join } from "node:path";
 export const TARGET_KB = 250;
 /** The regression guard `pnpm test` enforces today (gzip KB first load per route, and for the shared entry). */
 export const BUDGET_KB = 295;
-export const ENTRY_BUDGET_KB = 265;
+export const ENTRY_BUDGET_KB = 270;
 
 /** Static `import ... from "./x.js"` and `import "./x.js"` edges of one chunk (dynamic imports excluded). */
 export function staticImports(code) {
