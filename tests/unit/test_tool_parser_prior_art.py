@@ -41,12 +41,11 @@ def _find_ref() -> Path | None:
 
 REF = _find_ref()
 
-pytestmark = pytest.mark.skipif(
-    not REF.is_dir(), reason="reference/mlx-lm clone missing"
-)
+pytestmark = pytest.mark.skipif(REF is None, reason="reference/mlx-lm clone missing")
 
 
 def _ref(name):
+    assert REF is not None
     spec = importlib.util.spec_from_file_location(f"_ref_{name}", REF / f"{name}.py")
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
