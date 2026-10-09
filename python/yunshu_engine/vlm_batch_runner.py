@@ -1236,13 +1236,20 @@ class VLMBatchRunner:
                 from .constrained_spec import finish_serial_prefill
 
                 finish_serial_prefill(group.gen)
-        except _Preempted:
+        except _Preempted as stop:
             # A background rehearsal was cancelled inside a prefill atom. Nothing of the partial
             # atom was stored; the cancel flag makes the next slice drop the job and its cache.
             discard = getattr(apc, "discard_deferred_checkpoints", None)
             if discard is not None:
                 discard()
-            logger.info("background prefill preempted inside an atom (request arrived)")
+            logger.info(
+                "background prefill preempted at layer group %d (after %d layers)",
+                stop.group,
+                stop.layers,
+            )
+            from . import next_turn
+
+            next_turn.record("preempted")
             return
         except BaseException:
             discard = getattr(apc, "discard_deferred_checkpoints", None)

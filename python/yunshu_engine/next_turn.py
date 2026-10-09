@@ -71,7 +71,7 @@ def cut_before_user_turn(
     return list(ids[:cut])
 
 
-OUTCOMES = ("started", "completed", "cancelled", "ineligible")
+OUTCOMES = ("started", "completed", "cancelled", "ineligible", "preempted")
 _lock = threading.Lock()
 _counts: dict[str, int] = dict.fromkeys(OUTCOMES, 0)
 _tokens = 0

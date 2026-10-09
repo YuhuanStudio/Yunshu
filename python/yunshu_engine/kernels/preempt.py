@@ -29,6 +29,11 @@ EVERY_LAYERS = 4
 class PreemptedError(Exception):
     """The preemptible request was cancelled in the middle of a prefill atom."""
 
+    def __init__(self, layers: int = 0, group: int = 0):
+        super().__init__(f"preempted after {layers} layers (group {group})")
+        self.layers = layers
+        self.group = group
+
 
 @dataclass
 class _Scope:
@@ -63,7 +68,7 @@ def after_layer(out: Any) -> None:
     mx.eval(out)
     state.evals += 1
     if state.cancel_event.is_set():
-        raise PreemptedError()
+        raise PreemptedError(state.layers, state.evals)
 
 
 def wrap(original):

@@ -439,7 +439,7 @@ class PrometheusMetrics:
         # Next-turn rehearsal engagement (YUNSHU_NEXT_TURN_PREFILL)
         self._counters["next_turn_rehearsals"] = _Counter(
             "yunshu_next_turn_rehearsals_total",
-            "Next-turn rehearsals by outcome (started, completed, cancelled, ineligible)",
+            "Next-turn rehearsals by outcome (started, completed, cancelled, ineligible, preempted inside a prefill atom)",
         )
         self._counters["next_turn_rehearsed_tokens"] = _Counter(
             "yunshu_next_turn_rehearsed_tokens_total",

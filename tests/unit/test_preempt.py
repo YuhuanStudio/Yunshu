@@ -116,3 +116,11 @@ def test_runner_scopes_only_a_lone_preemptible_job(monkeypatch):
         SimpleNamespace(gen=Gen(), jobs={1: rehearsal, 2: plain})
     )
     assert seen[-1] is None
+
+
+def test_preempted_error_reports_the_layer_group():
+    ev = threading.Event()
+    ev.set()
+    with preempt.scope(ev, every=4), pytest.raises(preempt.PreemptedError) as info:
+        _run(_wrapped_layers(16), mx.zeros((1,)))
+    assert (info.value.layers, info.value.group) == (4, 1)

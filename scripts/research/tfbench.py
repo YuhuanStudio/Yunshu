@@ -385,14 +385,18 @@ def _post_json(url, path, body, timeout=600):
         return json.loads(r.read())
 
 
-def completed_rehearsals(metrics_text):
-    """Value of yunshu_next_turn_rehearsals_total{outcome="completed"} (0 when absent)."""
+def rehearsal_count(metrics_text, outcome):
+    """Value of yunshu_next_turn_rehearsals_total{outcome=...} (0 when absent)."""
     for line in metrics_text.splitlines():
         if line.startswith("yunshu_next_turn_rehearsals_total{") and (
-            'outcome="completed"' in line
+            f'outcome="{outcome}"' in line
         ):
             return int(float(line.rsplit(" ", 1)[1]))
     return 0
+
+
+def completed_rehearsals(metrics_text):
+    return rehearsal_count(metrics_text, "completed")
 
 
 def check_rehearsal_engaged(s, a):
@@ -595,6 +599,11 @@ def part_arrive(s, out, a):
         time.sleep(a.arrive_settle)
     a.require_engaged = True
     done = check_rehearsal_engaged(s, a)
+    req = urllib.request.Request(
+        s.url + "/metrics", headers={"Authorization": "Bearer k"}
+    )
+    with urllib.request.urlopen(req, timeout=30) as r:
+        preempted = rehearsal_count(r.read().decode(), "preempted")
     emit(
         out,
         part="arrive",
@@ -603,6 +612,7 @@ def part_arrive(s, out, a):
         mode=a.arrive_mode,
         role="summary",
         rehearsals_completed=done,
+        preempted=preempted,
     )
 
 
