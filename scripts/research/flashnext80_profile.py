@@ -167,6 +167,30 @@ async def run(args):
     }
     emit(split)
 
+    # Graph census of one decode step: number of primitives by type (async_eval off, nothing evaluated).
+    mx.async_eval = lambda *a, **k: None
+    try:
+        dot_path = args.out.with_suffix(".dot")
+        y = step(y0)
+        mx.export_to_dot(str(dot_path), y)
+        mx.eval(y)
+    finally:
+        mx.async_eval = original_async
+    import re
+
+    labels = re.findall(r'label="([^"]+)"', dot_path.read_text())
+    hist = defaultdict(int)
+    for label in labels:
+        hist[label.split()[0] if label.split() else label] += 1
+    emit(
+        {
+            "kind": "graph",
+            "nodes": len(labels),
+            "top_primitives": sorted(hist.items(), key=lambda kv: -kv[1])[:25],
+        }
+    )
+    dot_path.unlink()
+
     # cProfile over a few serial steps: where does host time go, and how often does a step sync?
     import cProfile
     import pstats
