@@ -132,7 +132,7 @@ def arm_env(arm, extra):
     return env
 
 
-def main(argv=None):
+def build_parser():
     ap = argparse.ArgumentParser()
     ap.add_argument(
         "--arm",
@@ -149,7 +149,11 @@ def main(argv=None):
     ap.add_argument("--tree", default=os.getcwd())
     ap.add_argument("--apc-gb", default="1")
     ap.add_argument("--out", required=True)
-    a = ap.parse_args(argv)
+    return ap
+
+
+def main(argv=None):
+    a = build_parser().parse_args(argv)
     env = arm_env(a.arm, a.env)
     env["PYTHONPATH"] = os.path.join(a.tree, "python")
     if a.arm.startswith("yunshu"):

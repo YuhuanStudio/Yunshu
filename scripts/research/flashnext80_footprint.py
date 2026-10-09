@@ -68,7 +68,7 @@ def summarize(rows, baseline):
     }
 
 
-def main(argv=None):
+def build_parser():
     ap = argparse.ArgumentParser()
     ap.add_argument("--tree", required=True)
     ap.add_argument("--model", required=True)
@@ -79,7 +79,11 @@ def main(argv=None):
     ap.add_argument("--require-ple", action="store_true")
     ap.add_argument("--require-spec", action="store_true")
     ap.add_argument("--out", required=True)
-    a = ap.parse_args(argv)
+    return ap
+
+
+def main(argv=None):
+    a = build_parser().parse_args(argv)
     env = dict(
         os.environ,
         PYTHONPATH=os.path.join(a.tree, "python"),

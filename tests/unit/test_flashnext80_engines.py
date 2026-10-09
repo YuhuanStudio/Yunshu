@@ -56,3 +56,24 @@ def test_cli_parses_dash_values():
             fe.main(ap_args + ["--help"])
         except SystemExit as e:
             assert e.code == 0
+
+
+def test_gpu_command_lines_parse():
+    a = fe.build_parser().parse_args(
+        [
+            "--arm",
+            "tf-nodraft",
+            "--model",
+            "/m",
+            "--ctx",
+            "1024",
+            "8192",
+            "--reps",
+            "1",
+            "--tf-arg=--ple-on-ssd",
+            "--env=TENSORFOLD_MEMORY_LIMIT_GB=107",
+            "--out",
+            "/o",
+        ]
+    )
+    assert a.tf_arg == ["--ple-on-ssd"] and a.env == ["TENSORFOLD_MEMORY_LIMIT_GB=107"]
