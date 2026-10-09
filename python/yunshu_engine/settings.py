@@ -93,6 +93,7 @@ CATEGORIES = (
     "mcp",
     "server-tools",
     "observability",
+    "console",
     "cli",
 )
 
@@ -303,6 +304,16 @@ _add("YUNSHU_SERVE_LOG_DIR", "path", None, "Directory of the serve log. Unset: ~
 _add("YUNSHU_SERVE_LOG_MAX_MB", "float", 4.0, "Serve log: rotate at this size in MiB; with YUNSHU_SERVE_LOG_KEEP the directory is capped at max * (keep + 1).", "observability", minimum=0.01)
 _add("YUNSHU_SERVE_LOG_RETENTION_DAYS", "int", 30, "History API metadata retention window in days; 0 disables age filtering. File storage remains bounded by SERVE_LOG_MAX_MB and SERVE_LOG_KEEP.", "observability", minimum=0)
 _add("YUNSHU_SERVE_LOG_KEEP", "int", 4, "Serve log: rotated files kept.", "observability", minimum=0)
+_add("YUNSHU_CONSOLE", "bool", True, "`yunshu serve` also starts the console process (the web console, the docs, and the metrics history recorder) as a sibling on YUNSHU_CONSOLE_PORT. The console is its own light process that never loads MLX: it keeps running and recording while the engine restarts or crashes, and an engine fault cannot take it down. `--no-console` turns it off; `yunshu console` runs it on its own.", "console")
+_add("YUNSHU_CONSOLE_PORT", "int", 8100, "Port of the console process (the web console at /console/, its reverse proxy to the engine API, and the history endpoints). 8100 stays clear of the engine's 8000 and of the usual dev servers (3000, 5173, 8080, 8888).", "console", minimum=1)
+_add("YUNSHU_CONSOLE_HOST", "str", None, "Bind host of the console process. Unset: the engine's own host for the sibling, 127.0.0.1 for a standalone `yunshu console`.", "console")
+_add("YUNSHU_CONSOLE_ENGINE", "str", None, "Engine URL the console process watches and proxies to. Unset: the engine that started it, else http://127.0.0.1:8000. Point it at a LAN or remote engine to watch that one.", "console")
+_add("YUNSHU_CONSOLE_ENGINE_TOKEN", "str", None, "Bearer token the console process uses to read the engine while it records history. Unset: YUNSHU_AUTH_TOKEN. The browser's own token is passed through to the engine unchanged.", "console", secret=True)
+_add("YUNSHU_CONSOLE_POLL_S", "float", 1.0, "Seconds between the console process's reads of the engine (status and finished requests, the same cheap endpoints the console page uses). 1 s gives the 1 s history resolution.", "console", minimum=0.25)
+_add("YUNSHU_CONSOLE_HISTORY", "bool", True, "Record the metrics history (1 s for 1 h, 10 s for 24 h, 1 min for the retention) and the request log (metadata only, never prompts or outputs) to ~/.yunshu/console-history.sqlite, with engine outages kept as explicit gaps and events. Off keeps the console live-only.", "console")
+_add("YUNSHU_CONSOLE_DB", "path", None, "Where the console process keeps its history (SQLite, WAL). Unset: ~/.yunshu/console-history.sqlite.", "console")
+_add("YUNSHU_CONSOLE_RETENTION_DAYS", "float", 30.0, "Days the console keeps 1-minute history rows, the request log and the engine events.", "console", minimum=1.0)
+_add("YUNSHU_CONSOLE_DB_MAX_MB", "float", 64.0, "Size cap of the console history file in MiB: when exceeded, the oldest request rows and then the oldest 1-minute rows are dropped.", "console", minimum=1.0)
 _add("YUNSHU_HISTORY_INTERVAL_S", "float", 5.0, "Console history: seconds between samples of the in-memory ring behind GET /v1/yunshu/history (throughput, request counts, memory, TTFT percentiles); 0 turns the sampler off. The ring is fixed-size and never grows: 12 columns, 4 bytes each (timestamp 8), per slot.", "observability", minimum=0.0)
 _add("YUNSHU_HISTORY_HOURS", "float", 12.0, "Console history: hours the history ring keeps (capacity = hours * 3600 / YUNSHU_HISTORY_INTERVAL_S slots, preallocated; 12 h at 5 s is 8,640 slots, about 0.4 MiB).", "observability", minimum=0.0)
 _add("YUNSHU_ARM", "str", None, "Label recorded in the serve log for the configuration arm this server runs (for offline A/B analysis); it changes no behaviour.", "observability")
@@ -483,6 +494,16 @@ _RESTART = frozenset(
         "YUNSHU_AUDIT_LOG_FILE",
         "YUNSHU_HISTORY_INTERVAL_S",
         "YUNSHU_HISTORY_HOURS",
+        "YUNSHU_CONSOLE",
+        "YUNSHU_CONSOLE_PORT",
+        "YUNSHU_CONSOLE_HOST",
+        "YUNSHU_CONSOLE_ENGINE",
+        "YUNSHU_CONSOLE_ENGINE_TOKEN",
+        "YUNSHU_CONSOLE_POLL_S",
+        "YUNSHU_CONSOLE_HISTORY",
+        "YUNSHU_CONSOLE_DB",
+        "YUNSHU_CONSOLE_RETENTION_DAYS",
+        "YUNSHU_CONSOLE_DB_MAX_MB",
         "YUNSHU_TELEMETRY",
         "YUNSHU_TELEMETRY_INTERVAL_S",
         "YUNSHU_HF_ENDPOINT",

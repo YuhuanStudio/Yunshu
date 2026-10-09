@@ -133,7 +133,7 @@ const requests = {
   "footer.since":
     "自 {time} 起 {count} 筆請求，讀取 {prompt} 個 prompt token（重用 {cached}）",
   "footer.ring":
-    "伺服器保留最近 {capacity} 筆；重新啟動後清空。記錄只含統計，不含 prompt 與輸出文字。",
+    "引擎保留最近 {capacity} 筆；更早的來自控制台程序的紀錄，引擎重新啟動或離線也不中斷。記錄只含統計，不含 prompt 與輸出文字。",
   "footer.unsupported":
     "此引擎版本沒有提供完成記錄，「已結束」只含本頁採樣到的最近請求",
   "footer.unsupportedDetail":
@@ -192,7 +192,8 @@ const requests = {
   "waterfall.empty": "引擎沒有回報任何有時間點的階段。",
   "waterfall.unreported": "未回報：{stages}",
   "waterfall.sep": "、",
-  "waterfall.note": "時間以閘道收到請求為 0。預填結束是主機回呼的邊界，不是 GPU 剖析；模板與分詞含影像等媒體前處理；融合或未觀測的階段不補 0。首次送出指伺服器送出完成，不代表用戶端已收到。",
+  "waterfall.note":
+    "時間以閘道收到請求為 0。預填結束是主機回呼的邊界，不是 GPU 剖析；模板與分詞含影像等媒體前處理；融合或未觀測的階段不補 0。首次送出指伺服器送出完成，不代表用戶端已收到。",
   "waterfall.stage.model_lease": "模型租用",
   "waterfall.stage.gateway_admit": "閘道准入",
   "waterfall.stage.engine_queue": "引擎排隊",
@@ -203,7 +204,8 @@ const requests = {
   "waterfall.stage.sse_first_flush": "首次送出",
   "energy.title": "主機能耗",
   "energy.estimate": "估算",
-  "energy.tip": "這是請求時間窗內 GPU 與 DRAM 的主機能量估算，包含其他程式與待機功耗；同時進行的請求共用同一段能量，不是這個請求獨佔的功率，也不是電池消耗。",
+  "energy.tip":
+    "這是請求時間窗內 GPU 與 DRAM 的主機能量估算，包含其他程式與待機功耗；同時進行的請求共用同一段能量，不是這個請求獨佔的功率，也不是電池消耗。",
   "energy.prefill": "預填",
   "energy.decode": "解碼",
   "energy.none": "這筆請求沒有能耗估算。",
@@ -231,7 +233,8 @@ const requests = {
   "dist.col.group": "組別",
   "dist.col.n": "筆數",
   "dist.tooFew": "樣本少於 {min} 筆，不顯示百分位",
-  "dist.note": "每組至少 {min} 筆才顯示 P50 / P90；失敗的請求不計入首 token。這是伺服器近期紀錄的實測值，不是請求速率的平均。",
+  "dist.note":
+    "每組至少 {min} 筆才顯示 P50 / P90；失敗的請求不計入首 token。這是伺服器近期紀錄的實測值，不是請求速率的平均。",
   "dist.unplaced": "另有 {n} 筆無法歸入此分組（缺少輸入或命中 token 數）。",
   "dist.aria": "延遲分布直方圖，橫軸為延遲區間，縱軸為請求數",
   "dist.tableAria": "各組延遲百分位",
@@ -242,28 +245,35 @@ const requests = {
   "spec.col.accept": "接受率",
   "spec.col.tokens": "接受／草稿 token",
   "spec.col.rounds": "輪數",
-  "spec.acceptHelp": "接受 token 總數 ÷ 草稿 token 總數，只計有回報兩項計數的請求。",
+  "spec.acceptHelp":
+    "接受 token 總數 ÷ 草稿 token 總數，只計有回報兩項計數的請求。",
   "spec.plain": "{n} 筆沒有推測解碼紀錄（普通解碼，或引擎未回報）。",
   "spec.unattributed": "{n} 筆只回報了模式、沒有計數，未計入接受率。",
-  "spec.depth": "每個深度的接受率：引擎目前只回報每筆請求的合計，所以不繪製分深度圖。",
+  "spec.depth":
+    "每個深度的接受率：引擎目前只回報每筆請求的合計，所以不繪製分深度圖。",
   "spec.none": "這些請求都沒有推測解碼紀錄；設定的推測解碼不代表這幾筆有用到。",
   "spec.copy": "含 {rounds} 輪複製草稿（{tokens} token）",
   "spec.counters.title": "引擎累計計數器",
-  "spec.counters.desc": "自引擎啟動起的合計，來自 /debug/spec-decode；與上表的近期請求是兩個不同的範圍。",
+  "spec.counters.desc":
+    "自引擎啟動起的合計，來自 /debug/spec-decode；與上表的近期請求是兩個不同的範圍。",
   "spec.counters.model": "模型",
   "spec.counters.cycles": "MTP 週期",
   "spec.counters.accepts": "接受",
   "spec.counters.rejects": "拒絕",
   "spec.counters.adaptive": "自適應草稿",
   "spec.counters.adaptiveValue": "{accepted} / {drafted} token · K={k}",
-  "spec.counters.unavailable": "引擎累計計數器：這個引擎沒有提供（/debug 關閉，或此引擎不回報推測解碼計數）。",
+  "spec.counters.unavailable":
+    "引擎累計計數器：這個引擎沒有提供（/debug 關閉，或此引擎不回報推測解碼計數）。",
   "archive.label": "在這個瀏覽器保存請求紀錄",
-  "archive.help": "引擎只在記憶體保留最近 {capacity} 筆，重新啟動就清空。開啟後，這個瀏覽器會另存已結束請求的數字紀錄（不含提示詞與回覆），最多 {rows} 筆、{days} 天；預設關閉。",
+  "archive.help":
+    "引擎只在記憶體保留最近 {capacity} 筆，重新啟動就清空。開啟後，這個瀏覽器會另存已結束請求的數字紀錄（不含提示詞與回覆），最多 {rows} 筆、{days} 天；預設關閉。",
   "archive.count": "另有 {n} 筆只在瀏覽器保存",
   "archive.export": "匯出目前列表 (JSON)",
   "archive.exportDisabled": "目前列表沒有可匯出的請求。",
   "archive.clear": "清除瀏覽器紀錄",
-  "archive.unavailable": "這個瀏覽器不允許儲存（私密模式或已封鎖網站資料），紀錄不會保留。",
-  "archive.engineGap": "引擎有選用的 serve log（YUNSHU_SERVE_LOG）可跨重啟保存，但目前沒有讀取它的介面，所以這裡看不到。",
+  "archive.unavailable":
+    "這個瀏覽器不允許儲存（私密模式或已封鎖網站資料），紀錄不會保留。",
+  "archive.engineGap":
+    "控制台程序（與引擎分開執行）持續記錄已結束請求的數字，連引擎離線或重新啟動的時段也不中斷，所以這裡會列出你沒開著頁面時完成的請求。",
 };
 export default requests;

@@ -293,7 +293,7 @@ export default function Docs({ sub }: { sub: string | null }) {
                 <li key={h.id}>
                   <a
                     href={docHref(slug, h.id)}
-                    className={`block py-0.5 text-sm text-muted-foreground hover:text-foreground ${h.level === 3 ? "pl-6" : "pl-3"}`}
+                    className={`block py-0.5 text-sm text-muted-foreground transition-colors duration-[120ms] ease-out hover:text-foreground motion-reduce:transition-none ${h.level === 3 ? "pl-6" : "pl-3"}`}
                   >
                     {h.text}
                   </a>

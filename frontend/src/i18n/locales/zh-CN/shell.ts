@@ -193,5 +193,13 @@ const shell: Shape<typeof zh> = {
   "island.nav.modelsLoaded": "{n} 个已加载",
   "island.nav.diagnostics": "诊断",
   "island.nav.logs": "日志",
+  "stale.note":
+    "此页需要引擎；现在显示的是 {age}前的最后数据，引擎恢复后会自动更新。",
+  "loadError.title": "模型加载失败",
+  "loadError.action": "加载其他模型",
+  "boundary.title": "这个页面发生错误",
+  "boundary.body": "其他页面不受影响。可以重试，或到文档查看说明。",
+  "boundary.retry": "重试",
+  "boundary.docs": "打开文档",
 };
 export default shell;

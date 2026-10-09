@@ -6,7 +6,8 @@ launchd service agree:
 - models: ``YUNSHU_MODELS_DIR``, else ``~/.yunshu/models``
 - APC SSD tier: ``YUNSHU_VLM_APC_DISK_DIR``, else ``~/.yunshu/cache/apc``
 - service logs: ``~/Library/Logs/Yunshu``
-- launchd agent: ``~/Library/LaunchAgents/<SERVICE_LABEL>.plist``
+- launchd agents: ``~/Library/LaunchAgents/<SERVICE_LABEL>.plist`` (the engine) and
+  ``<CONSOLE_SERVICE_LABEL>.plist`` (the console process)
 """
 
 from __future__ import annotations
@@ -16,6 +17,8 @@ from pathlib import Path
 from . import settings
 
 SERVICE_LABEL = "com.yuhuanstudio.yunshu"
+# The console runs as its own launchd job, so it keeps recording while the engine restarts.
+CONSOLE_SERVICE_LABEL = "com.yuhuanstudio.yunshu.console"
 
 
 def home() -> Path:
@@ -41,6 +44,10 @@ def apc_dir() -> Path | None:
 
 def log_dir() -> Path:
     return Path.home() / "Library" / "Logs" / "Yunshu"
+
+
+def console_launch_agent_plist() -> Path:
+    return Path.home() / "Library" / "LaunchAgents" / f"{CONSOLE_SERVICE_LABEL}.plist"
 
 
 def launch_agent_plist() -> Path:

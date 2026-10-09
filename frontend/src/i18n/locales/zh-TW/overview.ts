@@ -79,9 +79,12 @@ const overview = {
   "quick.diag.caption": "檢查服務與環境",
   "perf.title": "效能觀測",
   "perf.range": "觀測時間範圍",
-  "perf.range5m": "5 分鐘",
   "perf.range15m": "15 分鐘",
   "perf.range1h": "1 小時",
+  "perf.range6h": "6 小時",
+  "perf.range24h": "24 小時",
+  "perf.range7d": "7 天",
+  "perf.range30d": "30 天",
   "perf.export": "匯出觀測",
   "perf.noteEngine": "含引擎端歷史（自 {t}） · {n} 筆 · 中斷期間不補資料",
   "perf.noteLocal":
@@ -244,7 +247,8 @@ const overview = {
   "host.age": "取樣於 {n} 秒前",
   "host.stale": "資料已 {n} 秒沒有更新",
   "host.noSample": "尚無取樣",
-  "host.sourceTip": "引擎每秒在本機取樣（IOReport 與 HID 感測器，不需要 root），不是整機電表讀數。",
+  "host.sourceTip":
+    "引擎每秒在本機取樣（IOReport 與 HID 感測器，不需要 root），不是整機電表讀數。",
   "host.unknownTip": "引擎沒有回報這個值，展開「詳細資訊」可看原因。",
   "host.unavailable": "這台機器目前沒有可用的遙測。",
   "host.reasonPrefix": "原因：",
@@ -277,7 +281,8 @@ const overview = {
   "host.sourceBatteryPct": "電池 {pct}%",
   "host.interval": "取樣間隔",
   "host.sampledAt": "最近取樣",
-  "host.honesty": "功耗是區間能量除以時間；合計是各通道相加，不是插座功率。GPU 活躍比例是時間比例，不是 shader 佔用率。熱限制與壓力是作業系統的回報，不是溫度門檻。",
+  "host.honesty":
+    "功耗是區間能量除以時間；合計是各通道相加，不是插座功率。GPU 活躍比例是時間比例，不是 shader 佔用率。熱限制與壓力是作業系統的回報，不是溫度門檻。",
   "prefill.cached": "快取命中 {n} tokens",
   "prefill.computed": "已計算 {n} tokens",
   "prefill.value": "快取 {cached} + 已計算 {done} / 共 {prompt} tokens",

@@ -141,7 +141,7 @@ const requests: Shape<typeof zh> = {
   "footer.since":
     "Since {time}: {count} requests, {prompt} prompt tokens read ({cached} reused)",
   "footer.ring":
-    "The server keeps the latest {capacity} requests and clears them on restart. Records hold statistics only, never prompt or output text.",
+    "The engine keeps the last {capacity}; older ones come from the console process's record, which carries on while the engine restarts or is offline. Statistics only, never prompts or outputs.",
   "footer.unsupported":
     "This engine does not provide finished records; Finished shows only requests sampled on this page",
   "footer.unsupportedDetail":
@@ -199,12 +199,15 @@ const requests: Shape<typeof zh> = {
   "list.clockTitle": "{relative}  {date}",
   "waterfall.title": "Stage latency",
   "waterfall.label": "Stage latency of request {id}",
-  "waterfall.unsupported": "This engine does not report stage latency yet (needs a newer engine).",
-  "waterfall.missing": "This request is not in the engine's recent list, so it has no stage latency.",
+  "waterfall.unsupported":
+    "This engine does not report stage latency yet (needs a newer engine).",
+  "waterfall.missing":
+    "This request is not in the engine's recent list, so it has no stage latency.",
   "waterfall.empty": "The engine reported no stage with a timestamp.",
   "waterfall.unreported": "Not reported: {stages}",
   "waterfall.sep": ", ",
-  "waterfall.note": "Time zero is gateway receive. Prefill end is a host callback boundary, not a GPU profile; template and tokenize include media preparation; fused or unobserved stages are not filled with 0. First flush is the server finishing the send, not the client receiving it.",
+  "waterfall.note":
+    "Time zero is gateway receive. Prefill end is a host callback boundary, not a GPU profile; template and tokenize include media preparation; fused or unobserved stages are not filled with 0. First flush is the server finishing the send, not the client receiving it.",
   "waterfall.stage.model_lease": "Model lease",
   "waterfall.stage.gateway_admit": "Gateway admit",
   "waterfall.stage.engine_queue": "Engine queue",
@@ -215,7 +218,8 @@ const requests: Shape<typeof zh> = {
   "waterfall.stage.sse_first_flush": "First flush",
   "energy.title": "Host energy",
   "energy.estimate": "Estimate",
-  "energy.tip": "An estimate of GPU + DRAM host energy over this request's time window. It includes other programs and idle power, concurrent requests share it, and it is neither this request's exclusive power nor battery use.",
+  "energy.tip":
+    "An estimate of GPU + DRAM host energy over this request's time window. It includes other programs and idle power, concurrent requests share it, and it is neither this request's exclusive power nor battery use.",
   "energy.prefill": "Prefill",
   "energy.decode": "Decode",
   "energy.none": "This request has no energy estimate.",
@@ -243,39 +247,53 @@ const requests: Shape<typeof zh> = {
   "dist.col.group": "Group",
   "dist.col.n": "Requests",
   "dist.tooFew": "Fewer than {min} samples, so no percentile",
-  "dist.note": "A group shows P50 / P90 only from {min} requests; failed requests do not count toward first token. These are measured values from the server's recent list, not a rate average.",
-  "dist.unplaced": "{n} more could not be placed in this split (input or cached token count missing).",
-  "dist.aria": "Latency histogram: latency range on the x axis, request count on the y axis",
+  "dist.note":
+    "A group shows P50 / P90 only from {min} requests; failed requests do not count toward first token. These are measured values from the server's recent list, not a rate average.",
+  "dist.unplaced":
+    "{n} more could not be placed in this split (input or cached token count missing).",
+  "dist.aria":
+    "Latency histogram: latency range on the x axis, request count on the y axis",
   "dist.tableAria": "Latency percentiles per group",
   "spec.title": "Speculative decoding",
-  "spec.desc": "{engaged} of the last {n} finished requests reported speculation.",
+  "spec.desc":
+    "{engaged} of the last {n} finished requests reported speculation.",
   "spec.col.mode": "Mode",
   "spec.col.requests": "Requests",
   "spec.col.accept": "Acceptance",
   "spec.col.tokens": "Accepted / drafted tokens",
   "spec.col.rounds": "Rounds",
-  "spec.acceptHelp": "Total accepted tokens divided by total drafted tokens, over requests that reported both counters.",
-  "spec.plain": "{n} had no speculation record (plain decode, or the engine did not say).",
-  "spec.unattributed": "{n} reported a mode but no counters and are left out of the rate.",
-  "spec.depth": "Per-depth acceptance: the engine reports only per-request totals today, so no per-depth chart is drawn.",
-  "spec.none": "None of these requests has a speculation record; a configured mode does not mean these used it.",
+  "spec.acceptHelp":
+    "Total accepted tokens divided by total drafted tokens, over requests that reported both counters.",
+  "spec.plain":
+    "{n} had no speculation record (plain decode, or the engine did not say).",
+  "spec.unattributed":
+    "{n} reported a mode but no counters and are left out of the rate.",
+  "spec.depth":
+    "Per-depth acceptance: the engine reports only per-request totals today, so no per-depth chart is drawn.",
+  "spec.none":
+    "None of these requests has a speculation record; a configured mode does not mean these used it.",
   "spec.copy": "includes {rounds} copy-draft rounds ({tokens} tokens)",
   "spec.counters.title": "Engine counters",
-  "spec.counters.desc": "Totals since the engine started, from /debug/spec-decode; a different scope from the recent requests above.",
+  "spec.counters.desc":
+    "Totals since the engine started, from /debug/spec-decode; a different scope from the recent requests above.",
   "spec.counters.model": "Model",
   "spec.counters.cycles": "MTP cycles",
   "spec.counters.accepts": "Accepted",
   "spec.counters.rejects": "Rejected",
   "spec.counters.adaptive": "Adaptive draft",
   "spec.counters.adaptiveValue": "{accepted} / {drafted} tokens · K={k}",
-  "spec.counters.unavailable": "Engine counters: this engine does not provide them (/debug is off, or it does not report speculation counters).",
+  "spec.counters.unavailable":
+    "Engine counters: this engine does not provide them (/debug is off, or it does not report speculation counters).",
   "archive.label": "Keep request history in this browser",
-  "archive.help": "The engine keeps only the last {capacity} in memory and forgets them on restart. When on, this browser also stores the numeric record of finished requests (no prompts or replies), up to {rows} rows and {days} days; off by default.",
+  "archive.help":
+    "The engine keeps only the last {capacity} in memory and forgets them on restart. When on, this browser also stores the numeric record of finished requests (no prompts or replies), up to {rows} rows and {days} days; off by default.",
   "archive.count": "{n} more kept only in this browser",
   "archive.export": "Export current list (JSON)",
   "archive.exportDisabled": "The current list has no requests to export.",
   "archive.clear": "Clear browser history",
-  "archive.unavailable": "This browser blocks storage (private mode or blocked site data), so nothing is kept.",
-  "archive.engineGap": "The engine has an optional serve log (YUNSHU_SERVE_LOG) that survives restarts, but no route reads it yet, so it is not shown here.",
+  "archive.unavailable":
+    "This browser blocks storage (private mode or blocked site data), so nothing is kept.",
+  "archive.engineGap":
+    "The console process (separate from the engine) records finished requests' numbers all the time, engine outages and restarts included, so requests that finished while no page was open are listed here.",
 };
 export default requests;

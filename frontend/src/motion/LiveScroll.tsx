@@ -9,12 +9,13 @@ import { reducedMotion, ticker } from "./ticker.ts";
  * re-bases by that step) the picture is already where the chart puts it: the motion is continuous
  * and the data is untouched. Only the series layer (the clipped group) moves; axes and grid stay.
  * `spanMs` is the chart's x extent (newest minus oldest sample), `newestAt` the newest sample's time.
- * The slide is capped at `maxMs`, so a stalled feed stops instead of sliding the plot away.
+ * The slide is a pure function of time (capped only at the plot width): a late sample re-bases by exactly
+ * the distance already slid, so it never jumps.
  */
 export function LiveScroll({
   spanMs,
   newestAt,
-  maxMs = 3000,
+  maxMs = Infinity,
   className,
   children,
 }: {
@@ -36,7 +37,10 @@ export function LiveScroll({
       const rect = el.querySelector("clipPath rect");
       const w = Number(rect?.getAttribute("width") ?? 0);
       const age = Math.min(maxMs, Math.max(0, now - born));
-      el.style.setProperty("--live-shift", ((age / spanMs) * w).toFixed(2));
+      el.style.setProperty(
+        "--live-shift",
+        Math.min(w, (age / spanMs) * w).toFixed(2),
+      );
     });
   }, [spanMs, newestAt, maxMs]);
 

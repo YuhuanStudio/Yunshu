@@ -91,14 +91,29 @@ Start the inference server. The model may be given as the positional argument or
 | `--max-request-size` | Maximum request body size in bytes. |
 | `--server-header` | Send `Server: Yunshu` in responses. |
 | `--reload` | Auto-reload for development. |
+| `--no-console` | Do not start the console process next to the engine. |
+| `--console-port` | Port of the console process. Default `8100` (`YUNSHU_CONSOLE_PORT`). |
 | `--config`, `-c` | TOML file of `YUNSHU_*` settings. |
 | `--set KEY=VALUE` | Override any setting; the `YUNSHU_` prefix is optional. Repeatable. An unknown name is an error with the closest matches. |
 
 Flags and `--set` have the highest precedence, above the environment and config file. Before loading, `serve` checks that the address can be bound and runs the same model check as `doctor`; a model that cannot load still lets the server start, and `GET /health/ready` reports why. With `--json`, a `starting` event is printed first and the process keeps running; readiness comes from `GET /health/ready`, not from that event. See [Configuration](/docs/guides/configuration) for every setting.
 
+### `yunshu console`
+
+Run the console process on its own: the web console and docs, a reverse proxy to the engine API, and the recorded history. It never loads MLX. `yunshu serve` starts one next to the engine; run this to watch an engine on another machine or to keep one running by hand.
+
+| Option | Meaning |
+|---|---|
+| `--engine`, `-e` | Engine URL to watch and proxy to. Default `http://127.0.0.1:8000` (`YUNSHU_CONSOLE_ENGINE`). |
+| `--host`, `-h` | Bind host. Default `127.0.0.1`. |
+| `--port`, `-p` | Bind port. Default `8100`. |
+| `--engine-token` | Bearer token for reading the engine (`YUNSHU_CONSOLE_ENGINE_TOKEN`, else `YUNSHU_AUTH_TOKEN`). |
+| `--config`, `-c` | TOML file of `YUNSHU_*` settings. |
+| `--no-history` | Do not record the metrics history or request log. |
+
 ### `yunshu service`
 
-Run Yunshu at login with launchd. Subcommands: `install`, `uninstall`, `start`, `stop`, `restart`, `status`, `logs`, `rotate-logs`. Full options are on the [Service](/docs/getting-started/service) page.
+Run Yunshu at login with launchd, as two jobs: the engine and the console process (so the console keeps recording while the engine restarts). Subcommands: `install`, `uninstall`, `start`, `stop`, `restart`, `status`, `logs`, `rotate-logs`. Full options are on the [Service](/docs/getting-started/service) page.
 
 ### `yunshu chat`
 

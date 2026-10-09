@@ -319,11 +319,13 @@ body {
 }
 
 /* LiveScroll: the series layer of a time-series chart slides with the clock between samples. */
-.live-scroll svg [clip-path] > * {
+.live-scroll svg [clip-path] > *,
+.live-scroll svg g:has(> text[data-axis="x"]) {
   transform: translateX(calc(var(--live-shift, 0) * -1px));
 }
 @media (prefers-reduced-motion: reduce) {
-  .live-scroll svg [clip-path] > * {
+  .live-scroll svg [clip-path] > *,
+  .live-scroll svg g:has(> text[data-axis="x"]) {
     transform: none;
   }
 }

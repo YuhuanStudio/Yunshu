@@ -3,7 +3,7 @@ import { LiveNumber } from "./LiveNumber";
 import { PrefillBar } from "./PrefillBar";
 import { gbTotalText, memoryPairText } from "./byte-format";
 import { ChevronDown } from "lucide-react";
-import { useMinWidth } from "./ui";
+import { clock, elapsed, useMinWidth } from "./ui";
 import {
   Button,
   Collapsible,
@@ -89,7 +89,31 @@ export function StatusIslandContent({
         <StatusIslandHeader
           indicator={<StatusIndicator status={dot} />}
           title={word}
-          subtitle={engine.phase === "offline" ? cause.short : undefined}
+          subtitle={
+            engine.phase === "offline"
+              ? [
+                  cause.short,
+                  engine.offlineSince
+                    ? t("common.offlineSince", {
+                        time: clock(engine.offlineSince),
+                        t: elapsed(
+                          Math.max(0, (now - engine.offlineSince) / 1000),
+                        ),
+                      })
+                    : "",
+                  engine.nextRetryAt != null && engine.nextRetryAt - now > 500
+                    ? t("common.retryIn", {
+                        s: Math.max(
+                          1,
+                          Math.ceil((engine.nextRetryAt - now) / 1000),
+                        ),
+                      })
+                    : "",
+                ]
+                  .filter(Boolean)
+                  .join(" · ")
+              : undefined
+          }
         />
         <Nav online={false} active={0} loaded={0} />
       </>

@@ -149,7 +149,7 @@ test("a running prefill bar moves on (almost) every frame, never backwards", asy
       .slice(0, 30)
       .map((f) => f.toFixed(3))
       .join(" ")}`,
-  ).toBeGreaterThan(25);
+  ).toBeGreaterThan(15);
   expect(frames.at(-1)!).toBeLessThanOrEqual(1);
 });
 

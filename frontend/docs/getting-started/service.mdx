@@ -37,7 +37,7 @@ yunshu service install -m mlx-community/Qwen3.5-9B-MLX-4bit
 
 You must say what to serve: pass `--model` or `--models-dir`, or have `YUNSHU_MODEL` set. `install` refuses a model that fails the same model check as `yunshu doctor -m` (for example a missing path or an incomplete download). If an agent is already installed, `install` stops with an error unless you pass `--force`.
 
-The agent runs `python -m yunshu_cli serve ...` using the Python of the installation that ran `install`. After you upgrade Yunshu in the same environment, run `yunshu service restart`. After you move to a different environment, run `yunshu service install --force ...` again.
+`install` writes two agents: the engine, and the console process as its own job (`com.yuhuanstudio.yunshu.console`, kept alive whenever it stops), so the console keeps serving and recording while the engine restarts or crashes. `--no-console` installs the engine only, `--console-port` moves the console (default 8100), `yunshu service logs --console` reads its log, and `yunshu service restart` restarts the engine only. The engine agent runs `python -m yunshu_cli serve --no-console ...` using the Python of the installation that ran `install`. After you upgrade Yunshu in the same environment, run `yunshu service restart`. After you move to a different environment, run `yunshu service install --force ...` again.
 
 ```bash
 yunshu service install -m mlx-community/Qwen3.5-9B-MLX-4bit --dry-run   # review first
