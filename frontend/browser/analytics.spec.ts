@@ -97,7 +97,13 @@ function installStatusFixture(page: Page, holdFirst = false) {
   const routeHandler = async (route: Route) => {
     const url = new URL(route.request().url());
     if (url.pathname !== "/v1/yunshu/status") {
-      unexpected.push(`${route.request().method()} ${url.pathname}`);
+      // Engine history and the memory ledger are optional; these fixtures model an older server.
+      if (
+        !/^\/v1\/yunshu\/(history|memory|downloads|host|requests\/recent)$/.test(
+          url.pathname,
+        )
+      )
+        unexpected.push(`${route.request().method()} ${url.pathname}`);
       await route.fulfill({
         status: 404,
         contentType: "application/json",
@@ -151,7 +157,10 @@ async function collectSixSamples(
   virtualTime = true,
 ) {
   await expect(
-    page.getByText("本頁開啟後採樣 · 1 筆 · 中斷期間不補資料", { exact: true }),
+    page.getByText(
+      "本頁開啟後採樣（此引擎沒有提供歷史） · 1 筆 · 中斷期間不補資料",
+      { exact: true },
+    ),
   ).toBeVisible();
   await page.getByRole("button", { name: "暫停更新" }).click();
   await expect(page.getByRole("button", { name: "恢復更新" })).toBeVisible();
@@ -164,9 +173,12 @@ async function collectSixSamples(
     await page.getByRole("button", { name: "更新", exact: true }).click();
     await expect.poll(fixture.calls).toBe(expectedCalls);
     await expect(
-      page.getByText(`本頁開啟後採樣 · ${sample} 筆 · 中斷期間不補資料`, {
-        exact: true,
-      }),
+      page.getByText(
+        `本頁開啟後採樣（此引擎沒有提供歷史） · ${sample} 筆 · 中斷期間不補資料`,
+        {
+          exact: true,
+        },
+      ),
     ).toBeVisible();
   }
 }
@@ -191,16 +203,16 @@ test.describe("analytics dashboard contracts", () => {
     fixture.releaseFirst();
     await collectSixSamples(page, fixture);
 
-    await throughput.getByRole("button", { name: "比較", exact: true }).click();
+    await throughput.getByRole("tab", { name: "比較", exact: true }).click();
     const seriesGroup = throughput.getByRole("group", {
       name: "吞吐速度時序圖，單位 tok/s 顯示或隱藏序列",
     });
     const decode = seriesGroup.getByRole("button", {
-      name: "Decode 平均",
+      name: "解碼 即時合計",
       exact: true,
     });
     const prefill = seriesGroup.getByRole("button", {
-      name: "Prefill 平均",
+      name: "預填 即時合計",
       exact: true,
     });
     await expect(decode).toHaveAttribute("aria-pressed", "true");
@@ -228,7 +240,7 @@ test.describe("analytics dashboard contracts", () => {
       memory.locator('[data-yunui="time-series-chart"]'),
     ).toHaveAttribute("data-active-x", selectedX!);
 
-    await overview.getByRole("button", { name: "5 分鐘", exact: true }).click();
+    await overview.getByRole("tab", { name: "5 分鐘", exact: true }).click();
     const downloadPromise = page.waitForEvent("download");
     await overview
       .getByRole("button", { name: "匯出觀測", exact: true })
@@ -240,7 +252,7 @@ test.describe("analytics dashboard contracts", () => {
     const csv = await readFile(path!, "utf8");
     expect(csv.charCodeAt(0)).toBe(0xfeff);
     expect(csv.trimEnd().split(/\r?\n/)).toHaveLength(4); // header plus the three samples in the selected five-minute window
-    expect(csv).toContain('"mean_decode_tps_300s"');
+    expect(csv).toContain('"mean_decode_tps_window"');
     expect(fixture.unexpected).toEqual([]);
     expect(pageErrors).toEqual([]);
   });
@@ -250,14 +262,17 @@ test.describe("analytics dashboard contracts", () => {
   }) => {
     const { fixture, pageErrors } = await openDashboard(page, false, false);
     await expect(
-      page.getByText("本頁開啟後採樣 · 1 筆 · 中斷期間不補資料", {
-        exact: true,
-      }),
+      page.getByText(
+        "本頁開啟後採樣（此引擎沒有提供歷史） · 1 筆 · 中斷期間不補資料",
+        {
+          exact: true,
+        },
+      ),
     ).toBeVisible();
     await collectSixSamples(page, fixture, false);
 
     const phase = page.getByTestId("phase-panel");
-    await phase.getByRole("button", { name: /Prefill/ }).click();
+    await phase.getByRole("button", { name: /預填/ }).click();
     await expect(
       phase.getByText("qa-prefill-01", { exact: true }),
     ).toBeVisible();

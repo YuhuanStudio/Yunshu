@@ -1,0 +1,209 @@
+---
+title: 运维
+description: 健康检查探针、Prometheus 指标、即时请求查看与取消、服务器属性、交互式文档、速率限制与日志。
+---
+
+这些路由是为了把 Yunshu 当作服务运行而准备的：给服务管理员或负载平衡器用的探针、Prometheus 端点、进行中请求的即时查看，以及 OpenAPI 文档。更完整的状态对象请见[扩展](/docs/api/extensions)中的 `GET /v1/yunshu/status`。
+
+<Endpoint method="GET" path="/health" />
+<Endpoint method="GET" path="/health/live" />
+<Endpoint method="GET" path="/health/ready" />
+<Endpoint method="GET" path="/metrics" />
+<Endpoint method="GET" path="/v1/requests" />
+<Endpoint method="GET" path="/v1/requests/{request_id}" />
+<Endpoint method="DELETE" path="/v1/requests/{request_id}" />
+<Endpoint method="GET" path="/props" />
+<Endpoint method="GET" path="/v1/props" />
+<Endpoint method="GET" path="/version" />
+<Endpoint method="GET" path="/docs" />
+<Endpoint method="GET" path="/openapi.json" />
+
+## 哪些路由需要 token
+
+只有在配置了 `YUNSHU_AUTH_TOKEN` 时才会强制验证。配置后，下列路径仍然公开，让探针与文档可以继续运作：`/health`、`/health/live`、`/health/ready`、`/version`、`/docs`、`/redoc`、`/openapi.json`、`/` 与控制台的静态资源。其余一切，包含 `/metrics`、`/props` 与请求相关路由，都需要 `Authorization: Bearer <token>` 或 `x-api-key`。
+
+## 健康检查探针
+
+| 路由 | 用途 | 响应 |
+| --- | --- | --- |
+| `GET /health` | 精简的存活摘要。进程能响应时一律 `200`。 | `{"status": "ok", "engine": {"loaded": bool}, "server_state": "running", "uptime_seconds": 12.3}` |
+| `GET /health/live` | 存活探针。 | `{"alive": true, "state": "running"}` |
+| `GET /health/ready` | 就绪探针。就绪时 `200`，未就绪时 `503`。 | `{"ready": bool, "checks": {...}}` |
+
+`server_state` 与 `state` 的值为 `running`、`shutdown_requested` 或 `shutting_down`。这些端点是公开的，所以刻意不返回模型名称、队列深度或内存数字。
+
+符合下列任一情况时，`GET /health/ready` 返回 `503`：
+
+- 服务器正在为关闭而排空请求（`checks.not_shutting_down` 为 `false`），
+- 没有加载任何模型，也无法按需加载（`checks.model_loaded` 为 `false`），
+- Metal 内存用量达到或超过系统内存的 95%（`checks.gpu_memory_ok` 为 `false`）。
+
+多模型模式下，已注册但尚未加载的模型视为就绪，因为请求会按需加载它们；`checks.models_registered` 会报告注册的数量。如果没有加载模型是因为加载失败，响应正文会带有含加载错误的 `reason`。
+
+```json
+{ "ready": true, "checks": { "not_shutting_down": true, "model_loaded": true, "gpu_memory_ok": true } }
+```
+
+存活检查请用 `GET /health/live`，就绪检查请用 `GET /health/ready`。
+
+## Prometheus 指标
+
+`GET /metrics` 返回 Prometheus 文本格式。它永远挂载，若配置了 bearer token 就需要验证，所以请在 Prometheus 的抓取工作中配置 bearer 验证。指标使用 `yunshu_` 前缀：
+
+| 指标家族 | 内容 |
+| --- | --- |
+| `yunshu_request_total`、`yunshu_request_duration_seconds` | 依 method、status 与端点分组的 HTTP 请求数；请求延迟直方图。 |
+| `yunshu_gateway_active_requests` | 目前进行中的推理请求数。 |
+| `yunshu_tokens_generated_total`、`yunshu_ttft_seconds`、`yunshu_itl_seconds`、`yunshu_inference_duration_seconds`、`yunshu_prefill_duration_seconds` | 生成 token 数、首 token 延迟、token 间延迟，以及推理与 prefill 时间直方图。 |
+| `yunshu_itl_p50_ms`、`yunshu_itl_p99_ms`、`yunshu_step_duration_ms`、`yunshu_compute_utilization_pct` | 延迟百分位数与步骤耗时的 gauge。 |
+| `yunshu_kv_cache_*`、`yunshu_kv_prefix_cache_*`、`yunshu_radix_*` | KV 块使用量、前缀缓存项目数、命中、未命中与逐出。 |
+| `yunshu_apc_*` | VLM runner 的自动前缀缓存：RAM 与 SSD 层、各层查找、命中的 token 数、逐出、WARM 层字节数与压缩比。 |
+| `yunshu_spec_*`、`yunshu_mtp_*` | 推测解码：草稿与被接受的 token 数、接受率、MTP 周期、n-gram 提案。带有 `model_id` 标签。 |
+| `yunshu_gpu_busy_seconds_total`、`yunshu_round_driver_busy_seconds_total` | 累计的 GPU 忙碌秒数；一段时间内的闲置比例等于 1 减去第一个指标的变化率。 |
+| `yunshu_scheduler_*`、`yunshu_chunked_prefill_*`、`yunshu_attention_eviction_*` | batched 引擎的调度器与 prefill gauge。 |
+| `yunshu_model_warmup_*`、`yunshu_lora_*`、`yunshu_response_cache_*` | 预热次数、LoRA adapter 记帐、响应缓存的命中与未命中。 |
+
+哪些家族有数据取决于所用的引擎与功能；没用到的家族会维持零。指标中的内存数字单位为字节。
+
+## 查看与取消请求
+
+每个请求都有 id（你的 `X-Request-Id` 或产生的值，见[扩展](/docs/api/extensions)）。以下路由以该 id 运作。
+
+`GET /v1/requests` 列出进行中的请求：
+
+```json
+{
+  "object": "list",
+  "count": 1,
+  "data": [
+    {
+      "request_id": "job-8",
+      "elapsed_s": 8.12,
+      "phase": "prefill",
+      "prompt_tokens": 93268,
+      "cached_tokens": 0,
+      "processed_tokens": 92160,
+      "percent": 98.8,
+      "tokens_per_second": 8125.3,
+      "eta_s": 0.1,
+      "path": "/v1/chat/completions",
+      "stream": true,
+      "model": "local",
+      "engine_request_id": "chatcmpl-...",
+      "cancelled": false
+    }
+  ]
+}
+```
+
+`phase` 为 `starting`、`queued`、`prefill` 或 `decode`。排队中的请求会显示 `queue_position` 与 `queue_est_wait_ms`；解码中的请求会显示 `completion_tokens`。没有经过受追踪的 HTTP 路径的生成（例如批量工作）会以 phase `running` 出现。
+
+`GET /v1/requests/{request_id}` 以 `{"object": "yunshu.request", ...}` 返回单一请求，字段相同；id 不存在或已完成则返回 `404`。要追踪长时间的非流式 prefill，请轮询这个路由。
+
+`DELETE /v1/requests/{request_id}` 依客户端请求 id 或 completion id 取消。返回 `{"object": "yunshu.request", "id": ..., "status": "cancelled"}`；若请求已受理但尚未交给引擎，则为 `"cancelling"`（一注册就会被取消）。未知的 id 返回 `404`。`POST /v1/cancel` 以正文做同样的事，见[扩展](/docs/api/extensions)。
+
+## 服务器属性
+
+`GET /props` 与 `GET /v1/props`（同一个处理函数）返回 llama.cpp 风格的所服务模型属性，给会探测这些属性的工具：
+
+```json
+{
+  "default_generation_settings": { "n_ctx": 32768 },
+  "model_path": "mlx-community/Qwen3.5-0.8B-MLX-bf16",
+  "chat_template": "{% ... %}",
+  "total_slots": 1
+}
+```
+
+它只报告单一所服务的模型；没有加载模型，或在多模型模式下没有单一所服务的引擎时，返回 `503`。要取得各模型的详细信息，请用 `GET /v1/models`，见[模型](/docs/api/models)。
+
+`GET /version` 返回 `{"version", "service": "yunshu", "description"}`。
+
+## 交互式文档
+
+`GET /docs` 提供 Swagger UI，`GET /redoc` 提供 ReDoc，`GET /openapi.json` 提供所有已注册路由的 OpenAPI 文档。即使配置了 token，这三者也都是公开的。
+
+## 兼容 Tavily 的路由
+
+在 `/tavily` 之下，Yunshu 以自己的搜索与截取层提供 Tavily REST API 的本地实现：`POST /tavily/search`、`POST /tavily/extract`、`POST /tavily/crawl`、`POST /tavily/map`、`POST /tavily/research`、`GET /tavily/research/{request_id}`、`POST /tavily/feedback`、`POST /tavily/logs`、`GET /tavily/usage`、`GET /tavily/providers`，以及 MCP 端点 `POST /tavily/mcp`。这些路径没有 `/v1`，错误格式为 `{"detail": {"error": "..."}}`。配置了 token 时，Tavily 客户端可以用 bearer token，或在请求正文中以 `api_key` 传入。这里不计费：`GET /tavily/usage` 报告的 credits 一律为零。供应商与配置请见[网页搜索指南](/docs/guides/web-search)。
+
+## 速率限制与受理控制
+
+- **依 IP 的速率限制。** 默认关闭。把 `YUNSHU_RATE_LIMIT_RPM` 设为正数，就会对每个客户端 IP 激活 token bucket（每分钟请求数，突发量等于上限）。超过时返回 `429` 与 `Retry-After`，格式符合该路由的错误格式。健康检查、文档与 `/metrics` 不受限，CORS preflight 也不受限。只有列在 `YUNSHU_TRUSTED_PROXIES` 的代理才会采信 `X-Forwarded-For`。
+- **受理控制。** 对生成路由一律激活。`YUNSHU_QUEUE_LIMIT`（默认 64）限制进行中的请求数，超过时返回 `429`；内存压力过高且仍有其他请求在运行时返回 `503`。两者都带有 `Retry-After`。见[扩展](/docs/api/extensions)。
+- **Deadline。** 请求标头 `X-Yunshu-Deadline-Ms` 限制一个请求能等待与运行的时间。
+
+## 日志
+
+每个请求都会记录其请求 id、method、路径、状态码与延迟，并在 `X-Request-ID` 响应标头中返回该 id。成功的请求以 debug 级别记录，`4xx` 为 warning，`5xx` 为 error，所以默认的 `INFO` 级别只会显示有问题的请求；配置 `YUNSHU_LOG_LEVEL=DEBUG` 可看到每一个请求。耗时超过 `YUNSHU_SLOW_REQUEST_THRESHOLD` 秒（默认 30）的请求会记录 `SLOW_REQUEST` 警告，统一内存用量超过 85% 时会记录 `MEMORY_PRESSURE` 警告。健康检查、文档与 `/metrics` 的请求不会被记录。以 launchd 服务运行时，服务日志会轮替并压缩，且会屏蔽机密，见[服务](/docs/getting-started/service)。
+
+`/debug` 之下另有额外的查看路由，但只有在 `YUNSHU_DEBUG_ROUTES=1` 时才会挂载，且需要 token 或 `YUNSHU_AUTH_DISABLED`。它们是诊断辅助，不是稳定的 API。
+
+## 范例
+
+<Tabs items={["curl", "Python", "JavaScript"]}>
+<Tab value="curl">
+
+```bash
+curl -i http://localhost:8000/health/ready
+curl -s http://localhost:8000/metrics | head
+curl -s http://localhost:8000/v1/requests
+curl -X DELETE http://localhost:8000/v1/requests/job-8
+```
+
+</Tab>
+<Tab value="Python">
+
+```python
+import httpx
+
+base = "http://localhost:8000"
+ready = httpx.get(f"{base}/health/ready")
+print(ready.status_code, ready.json())
+
+for r in httpx.get(f"{base}/v1/requests").json()["data"]:
+    print(r["request_id"], r["phase"], r.get("percent"))
+```
+
+</Tab>
+<Tab value="JavaScript">
+
+```ts
+const base = "http://localhost:8000";
+const ready = await fetch(`${base}/health/ready`);
+console.log(ready.status, await ready.json());
+
+const { data } = await (await fetch(`${base}/v1/requests`)).json();
+for (const r of data) console.log(r.request_id, r.phase, r.percent);
+```
+
+</Tab>
+</Tabs>
+
+## 错误
+
+| 状态码 | 情况 |
+| --- | --- |
+| `401` | 已配置 token，路由不是公开的，而请求没有有效的 token。 |
+| `404` | 请求 id 不存在。 |
+| `429` | 速率限制（激活时）或队列上限。 |
+| `503` | 就绪检查失败、因内存压力而拒绝，或没有单一模型加载时调用 `GET /props`。 |
+
+## 支持状况
+
+| 功能 | 状态 |
+| --- | --- |
+| 存活、就绪与精简健康检查 | <Support status="supported">支持</Support> |
+| Prometheus `/metrics` | <Support status="supported">支持</Support> |
+| 请求列表、轮询与取消 | <Support status="extension">Yunshu 扩展</Support> |
+| `/props` | <Support status="partial">精简的 llama.cpp 风格子集，单一模型</Support> |
+| 依 IP 的速率限制 | <Support status="partial">除非配置 `YUNSHU_RATE_LIMIT_RPM`，否则关闭</Support> |
+| slot 管理路由（`/slots`） | <Support status="unsupported">未提供</Support> |
+| Tavily credits 计费 | <Support status="unsupported">本地实现，不计费</Support> |
+
+## 相关页面
+
+- [扩展](/docs/api/extensions)：`GET /v1/yunshu/status`、预热与请求 id。
+- [服务](/docs/getting-started/service)：以 launchd 运行。
+- [故障排除](/docs/guides/troubleshooting)：探针失败时该检查什么。
+- [网页搜索指南](/docs/guides/web-search)：兼容 Tavily 的路由。

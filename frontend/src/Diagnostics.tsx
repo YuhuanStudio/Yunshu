@@ -1,10 +1,12 @@
+import { memoryPairText } from "./byte-format";
 import { useEffect, useState } from "react";
 import {
-  Badge,
   Button,
   Card,
   EmptyState,
   NavTabs,
+  SegmentedBar,
+  StatusIndicator,
   Table,
   Tbody,
   Td,
@@ -12,37 +14,69 @@ import {
   Thead,
   Tr,
 } from "@yuhuanowo/yunui";
-import { CodeBlock, PageHeader, StatCard } from "@yuhuanowo/yunui/patterns";
-import { Activity, Cpu, Database, RefreshCw, Server } from "lucide-react";
-import { ApiError, type Connection } from "./api";
+import { CodeBlock } from "./LazyCodeBlock";
+import {
+  DashboardPage,
+  DetailList,
+  DetailRow,
+  PageHeader,
+  SectionRow,
+  StatCard,
+  StatGrid,
+} from "@yuhuanowo/yunui/patterns";
+import {
+  Activity,
+  Check,
+  Download,
+  ScrollText,
+  Copy,
+  Cpu,
+  Database,
+  HeartPulse,
+  Layers,
+  MemoryStick,
+  RefreshCw,
+  Server,
+  Timer,
+  type LucideIcon,
+} from "lucide-react";
+import { ApiError, type Connection, type EngineStatus } from "./api";
 import { requestServerJson } from "./management-api";
-import { clock, number } from "./ui";
+import { downloadBundle } from "./admin-logs-api";
+import { detailText } from "./errors.ts";
+import { ErrorNote } from "./error-note";
+import { RealtimeHealth } from "./RealtimeHealth";
+import { SupportBundlePreview } from "./SupportBundlePreview";
+import { has, t, tr } from "./i18n/index.ts";
+import { list } from "./i18n/format.ts";
+import { SectionCard, clock, elapsed, number, type Engine } from "./ui";
 const groups = {
   system: [
-    { key: "system", title: "主機資源", path: "/debug/system" },
-    { key: "engine", title: "引擎計數", path: "/debug/engine" },
+    { key: "system", path: "/debug/system" },
+    { key: "engine", path: "/debug/engine" },
   ],
-  requests: [{ key: "requests", title: "請求與延遲", path: "/debug/requests" }],
+  requests: [{ key: "requests", path: "/debug/requests" }],
   cache: [
-    { key: "kv", title: "KV 前綴快取", path: "/debug/kv-cache" },
-    { key: "ssd", title: "SSD 快取", path: "/debug/ssd-cache" },
+    { key: "kv", path: "/debug/kv-cache" },
+    { key: "ssd", path: "/debug/ssd-cache" },
   ],
   decode: [
-    { key: "spec", title: "推測解碼", path: "/debug/spec-decode" },
-    { key: "perModel", title: "逐模型運行情況", path: "/debug/per-model" },
+    { key: "spec", path: "/debug/spec-decode" },
+    { key: "perModel", path: "/debug/per-model" },
   ],
   memory: [
-    { key: "guard", title: "記憶體保護", path: "/debug/memory-guard" },
-    { key: "census", title: "配置明細", path: "/debug/memory-census" },
+    { key: "guard", path: "/debug/memory-guard" },
+    { key: "census", path: "/debug/memory-census" },
   ],
 } as const;
 type Group = keyof typeof groups;
+const groupTitle = (key: string) => tr(`diagnostics.group.${key}`);
 type Result = {
   key: string;
-  title: string;
   path: string;
   data?: unknown;
   error?: string;
+  detail?: string;
   status?: number;
 };
 function at(value: unknown, ...keys: string[]): unknown {
@@ -56,14 +90,227 @@ function at(value: unknown, ...keys: string[]): unknown {
 }
 const metric = (value: unknown) =>
   typeof value === "number" && Number.isFinite(value) ? value : undefined;
-export function Diagnostics({ connection }: { connection: Connection }) {
+const gb = (value: unknown) => {
+  const n = metric(value);
+  return n == null ? undefined : n / 2 ** 30;
+};
+type Health = {
+  key: string;
+  name: string;
+  status: "online" | "offline" | "away" | "neutral";
+  value: string;
+  hint: string;
+  /** Real proportion behind the row (loaded / registered, active / total, CPU %), when there is one. */
+  bar?: {
+    value: number;
+    total: number;
+    tone: "accent" | "warning";
+  };
+};
+const stateLabel = (state: string) =>
+  has(`diagnostics.state.${state}`) ? tr(`diagnostics.state.${state}`) : state;
+const groupIcon: Record<Group, LucideIcon> = {
+  system: Server,
+  requests: Timer,
+  cache: Layers,
+  decode: Cpu,
+  memory: MemoryStick,
+};
+/** Health checks derived only from /yunshu/status and the /debug/system reply. */
+export function healthChecks(
+  status: EngineStatus | null,
+  system: unknown,
+  systemState: "ok" | "disabled" | "error" | "pending",
+  systemReason?: string | null,
+): Health[] {
+  const rows: Health[] = [];
+  if (!status) {
+    rows.push({
+      key: "engine",
+      name: t("diagnostics.health.engine.name"),
+      status: "offline",
+      value: t("diagnostics.health.engine.unreadable"),
+      hint: t("diagnostics.health.engine.unreachableHint"),
+    });
+  } else {
+    const running = ["running", "ready"].includes(status.state);
+    rows.push({
+      key: "engine",
+      name: t("diagnostics.health.engine.name"),
+      status: status.load_error ? "offline" : running ? "online" : "away",
+      value: stateLabel(status.state),
+      hint:
+        status.load_error ??
+        t("diagnostics.health.engine.versionHint", {
+          version: status.version,
+          uptime: elapsed(status.uptime_s),
+        }),
+    });
+    const loaded = status.models.filter((m) => m.loaded).length;
+    rows.push({
+      key: "models",
+      name: t("diagnostics.health.models.name"),
+      status: loaded > 0 ? "online" : "neutral",
+      value: `${loaded} / ${status.models.length}`,
+      hint:
+        loaded > 0
+          ? t("diagnostics.health.models.hintLoaded")
+          : t("diagnostics.health.models.hintNone"),
+    });
+    const active = status.memory.active_gb,
+      total = status.memory.total_gb;
+    const ratio = active != null && total ? active / total : undefined;
+    rows.push({
+      key: "memory",
+      name: t("diagnostics.health.memory.name"),
+      status: ratio == null ? "neutral" : ratio > 0.9 ? "away" : "online",
+      bar:
+        ratio == null || !total
+          ? undefined
+          : {
+              value: active ?? 0,
+              total,
+              tone: ratio > 0.9 ? "warning" : "accent",
+            },
+      value: active != null && total ? memoryPairText(active, total) : "—",
+      hint:
+        ratio != null && ratio > 0.9
+          ? t("diagnostics.health.memory.hintHigh")
+          : t("diagnostics.health.memory.hintOk"),
+    });
+    rows.push({
+      key: "queue",
+      name: t("diagnostics.health.queue.name"),
+      status: status.requests.queued > 0 ? "away" : "online",
+      value: t("diagnostics.health.queue.value", {
+        active: number(status.requests.active, 0),
+        queued: number(status.requests.queued, 0),
+      }),
+      hint:
+        status.requests.queued > 0
+          ? t("diagnostics.health.queue.hintQueued")
+          : t("diagnostics.health.queue.hintNone"),
+    });
+    const tps =
+      status.throughput.live_decode_tps ?? status.throughput.mean_decode_tps;
+    rows.push({
+      key: "throughput",
+      name: t("diagnostics.health.throughput.name"),
+      status: tps == null ? "neutral" : "online",
+      value: tps == null ? "—" : `${number(tps)} tok/s`,
+      hint: t("diagnostics.health.throughput.hint", {
+        window: number(status.throughput.window_s, 0),
+        count: status.throughput.requests,
+      }),
+    });
+  }
+  // A /debug that is switched off is a setting, not a fault: its own card explains it, so no row and no verdict.
+  if (systemState !== "disabled")
+    rows.push({
+      key: "debug",
+      name: t("diagnostics.health.debug.name"),
+      status: systemState === "ok" ? "online" : "neutral",
+      value:
+        systemState === "ok"
+          ? t("diagnostics.health.debug.ok")
+          : systemState === "pending"
+            ? t("diagnostics.health.debug.pending")
+            : t("diagnostics.health.debug.failed"),
+      hint:
+        systemState === "error"
+          ? t("diagnostics.health.debug.hintError") +
+            (systemReason ? ` (${systemReason})` : "")
+          : t("diagnostics.health.debug.hintOk"),
+    });
+  const cpu = metric(at(system, "cpu", "percent"));
+  if (cpu != null)
+    rows.push({
+      key: "cpu",
+      name: t("diagnostics.health.cpu.name"),
+      status: cpu > 90 ? "away" : "online",
+      value: `${number(cpu)}%`,
+      bar: { value: cpu, total: 100, tone: cpu > 90 ? "warning" : "accent" },
+      hint: t("diagnostics.health.cpu.hint", {
+        n: metric(at(system, "cpu", "logical_cores")) ?? 0,
+      }),
+    });
+  return rows;
+}
+export type Verdict = {
+  level: "ok" | "attention" | "abnormal";
+  /** The checks behind a non-healthy verdict, worst first. */
+  reasons: Health[];
+};
+/**
+ * One verdict over the health rows: any offline row is 異常, any away row 注意, else 健康.
+ * A disabled /debug surface is a setting, not a fault, so it never counts.
+ */
+export function healthVerdict(
+  checks: Health[],
+  _systemState?: "ok" | "disabled" | "error" | "pending",
+): Verdict {
+  // An unreadable /debug (a read-only proxy, a missing scope) is not evidence the engine is unhealthy.
+  const counted = checks.filter((c) => c.key !== "debug");
+  const bad = counted.filter((c) => c.status === "offline"),
+    warn = counted.filter((c) => c.status === "away");
+  return bad.length
+    ? { level: "abnormal", reasons: [...bad, ...warn] }
+    : warn.length
+      ? { level: "attention", reasons: warn }
+      : { level: "ok", reasons: [] };
+}
+export function Diagnostics({
+  connection,
+  engine,
+}: {
+  connection: Connection;
+  engine: Engine;
+}) {
+  const status = engine.status;
   const [group, setGroup] = useState<Group>("system"),
     [refresh, setRefresh] = useState(0),
     [results, setResults] = useState<Result[]>([]),
     [loading, setLoading] = useState(false),
     [updated, setUpdated] = useState<number | null>(null),
-    [expanded, setExpanded] = useState<Record<string, boolean>>({});
+    [expanded, setExpanded] = useState<Record<string, boolean>>({}),
+    [overviewSystem, setOverviewSystem] = useState<unknown>(undefined),
+    [systemState, setSystemState] = useState<
+      "ok" | "disabled" | "error" | "pending"
+    >("pending"),
+    [systemReason, setSystemReason] = useState<string | null>(null),
+    [copied, setCopied] = useState<"idle" | "done" | "failed">("idle"),
+    [bundle, setBundle] = useState<{
+      state: "idle" | "busy" | "done" | "missing" | "denied" | "failed";
+      name?: string;
+    }>({ state: "idle" });
   useEffect(() => {
+    const controller = new AbortController();
+    setSystemState("pending");
+    void requestServerJson(connection, "/debug/system", {
+      signal: controller.signal,
+    })
+      .then((data) => {
+        if (controller.signal.aborted) return;
+        setOverviewSystem(data);
+        setSystemState("ok");
+      })
+      .catch((e) => {
+        if (controller.signal.aborted) return;
+        setOverviewSystem(undefined);
+        setSystemReason(e instanceof ApiError ? `HTTP ${e.status}` : null);
+        setSystemState(
+          e instanceof ApiError && e.status === 404 ? "disabled" : "error",
+        );
+      });
+    return () => controller.abort();
+  }, [connection.baseUrl, connection.token, refresh]);
+  useEffect(() => {
+    if (systemState === "pending") return;
+    if (systemState === "disabled") {
+      setLoading(false);
+      setResults([]);
+      return;
+    }
     const controller = new AbortController();
     setLoading(true);
     setResults([]);
@@ -86,7 +333,9 @@ export function Diagnostics({ connection }: { connection: Connection }) {
         } catch (e) {
           return {
             ...endpoint,
-            error: e instanceof Error ? e.message : "無法取得資料",
+            error:
+              e instanceof Error ? e.message : t("diagnostics.row.fetchFailed"),
+            detail: detailText(e),
             status: e instanceof ApiError ? e.status : undefined,
           } as Result;
         }
@@ -99,275 +348,497 @@ export function Diagnostics({ connection }: { connection: Connection }) {
       }
     });
     return () => controller.abort();
-  }, [connection.baseUrl, connection.token, group, refresh]);
-  const system = results.find((r) => r.key === "system")?.data,
-    engine = results.find((r) => r.key === "engine")?.data,
+  }, [connection.baseUrl, connection.token, group, refresh, systemState]);
+  const system = overviewSystem,
+    engineCounters = results.find((r) => r.key === "engine")?.data,
     request = results.find((r) => r.key === "requests")?.data;
-  const unavailable =
-    results.length > 0 && results.every((row) => row.status === 404);
+  const checks = healthChecks(status, system, systemState, systemReason);
+  const verdict = healthVerdict(checks, systemState);
+  async function saveBundle() {
+    setBundle({ state: "busy" });
+    try {
+      const name = await downloadBundle(connection);
+      setBundle({ state: "done", name });
+    } catch (e) {
+      const code = e instanceof ApiError ? e.status : undefined;
+      setBundle({
+        state:
+          code === 404 || code === 405
+            ? "missing"
+            : code === 401 || code === 403
+              ? "denied"
+              : "failed",
+      });
+    }
+  }
+  async function copyBundle() {
+    const bundle = JSON.stringify(
+      {
+        generated_at: new Date().toISOString(),
+        service: connection.baseUrl,
+        status,
+        debug_system: system ?? null,
+        group,
+        endpoints: results.map(({ key, path, data, error, status: code }) => ({
+          key,
+          path,
+          http_status: code ?? null,
+          error: error ?? null,
+          data: data ?? null,
+        })),
+      },
+      null,
+      2,
+    );
+    try {
+      await navigator.clipboard.writeText(bundle);
+      setCopied("done");
+    } catch {
+      setCopied("failed");
+    }
+    setTimeout(() => setCopied("idle"), 2500);
+  }
+  const debugOff = systemState === "disabled";
+  const hasSystem = system !== undefined;
   return (
-    <section className="w-full max-w-5xl space-y-6" data-testid="diagnostics">
+    <DashboardPage data-testid="diagnostics">
       <PageHeader
-        title="引擎診斷"
-        description="直接讀取服務的資源、請求、快取與解碼狀態。"
+        title={t("diagnostics.page.title")}
+        description={t("diagnostics.page.description")}
         actions={
-          <Button
-            size="sm"
-            variant="secondary"
-            disabled={loading}
-            onClick={() => setRefresh((n) => n + 1)}
-          >
-            <RefreshCw size={13} />
-            {loading ? "讀取中" : "重新讀取"}
-          </Button>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              size="sm"
+              variant="secondary"
+              disabled={loading}
+              onClick={() => void copyBundle()}
+            >
+              {copied === "done" ? <Check size={13} /> : <Copy size={13} />}
+              {copied === "done"
+                ? t("diagnostics.action.copied")
+                : copied === "failed"
+                  ? t("diagnostics.action.copyFailed")
+                  : t("diagnostics.action.copy")}
+            </Button>
+            <Button
+              size="sm"
+              variant="secondary"
+              disabled={bundle.state === "busy"}
+              onClick={() => void saveBundle()}
+            >
+              <Download size={13} />
+              {bundle.state === "busy"
+                ? t("diagnostics.action.bundling")
+                : t("diagnostics.action.bundle")}
+            </Button>
+            <Button
+              size="sm"
+              variant="secondary"
+              disabled={loading}
+              onClick={() => {
+                void engine.refresh();
+                setRefresh((n) => n + 1);
+              }}
+            >
+              <RefreshCw size={13} />
+              {loading
+                ? t("diagnostics.action.refreshing")
+                : t("diagnostics.action.refresh")}
+            </Button>
+          </div>
         }
       />
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <NavTabs
-          ariaLabel="診斷類別"
-          activeKey={group}
-          onChange={(value) => setGroup(value as Group)}
-          tabs={[
-            {
-              key: "system",
-              label: (
-                <>
-                  <Server size={14} />
-                  主機與引擎
-                </>
-              ),
-            },
-            {
-              key: "requests",
-              label: (
-                <>
-                  <Activity size={14} />
-                  請求
-                </>
-              ),
-            },
-            {
-              key: "cache",
-              label: (
-                <>
-                  <Database size={14} />
-                  快取
-                </>
-              ),
-            },
-            {
-              key: "decode",
-              label: (
-                <>
-                  <Cpu size={14} />
-                  解碼
-                </>
-              ),
-            },
-            {
-              key: "memory",
-              label: (
-                <>
-                  <Database size={14} />
-                  記憶體
-                </>
-              ),
-            },
-          ]}
-        />
-
-        <p className="text-xs text-muted-foreground">
-          {updated ? `讀取於 ${clock(updated)}` : "尚未取得資料"} · 手動更新
+      <RealtimeHealth connection={connection} />
+      <SupportBundlePreview endpoints={results.map((r) => r.path)} />
+      {bundle.state !== "idle" && bundle.state !== "busy" && (
+        <p
+          role="status"
+          data-testid="bundle-note"
+          className={`text-xs ${bundle.state === "done" ? "text-muted-foreground" : "text-warning"}`}
+        >
+          {bundle.state === "done"
+            ? t("diagnostics.bundle.done", { name: bundle.name ?? "" })
+            : bundle.state === "missing"
+              ? t("diagnostics.bundle.missing")
+              : bundle.state === "denied"
+                ? t("diagnostics.bundle.denied")
+                : t("diagnostics.bundle.failed")}
         </p>
-      </div>
-      {loading && (
-        <Card className="p-6 text-sm text-muted-foreground" role="status">
-          正在讀取 {groups[group].map((item) => item.title).join("、")}…
-        </Card>
       )}
-      {unavailable && (
-        <Card className="p-5">
-          <EmptyState
-            icon={<Server size={24} />}
-            title="此服務未啟用診斷介面"
-            description="需要在引擎啟動設定啟用 YUNSHU_DEBUG_ROUTES，並使用有效的存取權杖。控制台不會自行變更服務設定。"
-          />
-        </Card>
-      )}
-      {group === "system" &&
-        !loading &&
-        (system !== undefined || engine !== undefined) && (
-          <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+      {/* Without /debug there is one tile at most; that figure is already a health row. */}
+      {hasSystem && (
+        <StatGrid data-stat-grid="" data-testid="resource-readouts">
+          {hasSystem && (
             <StatCard
               compact
               icon={Cpu}
               label="CPU"
               value={`${number(metric(at(system, "cpu", "percent")))}%`}
-              subtext={`${number(metric(at(system, "cpu", "logical_cores")), 0)} 個邏輯核心`}
+              subtext={t("diagnostics.stat.cpuCores", {
+                n: metric(at(system, "cpu", "logical_cores")) ?? 0,
+              })}
             />
+          )}
+          {hasSystem && (
             <StatCard
               compact
               icon={Activity}
-              label="系統記憶體"
+              label={t("diagnostics.stat.unifiedMemory")}
               value={`${number(metric(at(system, "memory", "percent")))}%`}
-              subtext={`${number(metric(at(system, "memory", "used_bytes")) == null ? undefined : Number(at(system, "memory", "used_bytes")) / 1e9)} GB 已使用`}
+              subtext={t("diagnostics.stat.memoryUsed", {
+                value: number(gb(at(system, "memory", "used_bytes"))),
+              })}
             />
-            <StatCard
-              compact
-              icon={Database}
-              label="MLX 活躍配置"
-              value={`${number(metric(at(system, "gpu", "active_bytes")) == null ? undefined : Number(at(system, "gpu", "active_bytes")) / 1e9)} GB`}
-              subtext="程序配置量，不是 GPU 使用率"
-            />
+          )}
+          <StatCard
+            compact
+            icon={Database}
+            label={t("diagnostics.stat.metalActive")}
+            value={`${number(status?.memory.active_gb ?? gb(at(system, "gpu", "active_bytes")))} GB`}
+            subtext={t("diagnostics.stat.metalPeak", {
+              value: number(status?.memory.peak_gb),
+            })}
+          />
+          {engineCounters !== undefined && (
             <StatCard
               compact
               icon={Server}
-              label="已處理請求"
-              value={number(metric(at(engine, "requests_processed")), 0)}
-              subtext="服務計數器"
-            />
-          </div>
-        )}
-      {group === "requests" && request !== undefined && (
-        <Card className="p-5">
-          <h2 className="mb-4 text-sm font-semibold">服務延遲百分位數</h2>
-          <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-            {["p50", "p90", "p95", "p99"].map((key) => (
-              <div key={key}>
-                <p className="text-xs uppercase text-muted-foreground">{key}</p>
-                <p className="mt-2 font-mono text-xl">
-                  {number(metric(at(request, "latency_percentiles", key)))}{" "}
-                  <span className="text-xs">ms</span>
-                </p>
-              </div>
-            ))}
-          </div>
-          <p className="mt-4 text-xs text-muted-foreground">
-            後端近 60 秒 HTTP 請求耗時統計，與首頁的已觀測 TTFT 分布不同。
-          </p>
-        </Card>
-      )}
-      {results.map((row) => (
-        <Card key={row.key} className="min-w-0 space-y-4 p-5">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div>
-              <h2 className="text-sm font-semibold">{row.title}</h2>
-              <p className="mt-1 font-mono text-[10px] text-muted-foreground">
-                {row.path}
-              </p>
-            </div>
-            <Badge variant={row.error ? "warning" : "success"}>
-              {row.error
-                ? row.status === 404
-                  ? "未啟用"
-                  : row.status === 401 || row.status === 403
-                    ? "需要授權"
-                    : "讀取失敗"
-                : "已讀取"}
-            </Badge>
-          </div>
-          {row.error ? (
-            <p role="status" className="text-sm text-muted-foreground">
-              {row.error}
-            </p>
-          ) : (
-            <>
-              <div className="flex flex-wrap gap-x-6 gap-y-2">
-                {Object.entries(
-                  row.data && typeof row.data === "object" ? row.data : {},
-                )
-                  .filter(
-                    ([, value]) =>
-                      typeof value === "number" ||
-                      typeof value === "boolean" ||
-                      typeof value === "string",
-                  )
-                  .slice(0, 12)
-                  .map(([key, value]) => (
-                    <div key={key} className="min-w-0 text-xs">
-                      <span className="text-muted-foreground">{key} </span>
-                      <span className="break-all font-mono">
-                        {typeof value === "number"
-                          ? number(value, 2)
-                          : String(value)}
-                      </span>
-                    </div>
-                  ))}
-              </div>
-              {Array.isArray(at(row.data, "caches")) && (
-                <Table scrollLabel="模型快取診斷">
-                  <Thead>
-                    <Tr>
-                      <Th>模型</Th>
-                      <Th>前綴命中</Th>
-                      <Th>Resident</Th>
-                      <Th>SSD</Th>
-                    </Tr>
-                  </Thead>
-                  <Tbody>
-                    {(at(row.data, "caches") as unknown[]).map(
-                      (cache, index) => (
-                        <Tr key={index}>
-                          <Td>
-                            <span className="block max-w-44 truncate text-xs">
-                              {String(at(cache, "model_id") ?? "—")}
-                            </span>
-                          </Td>
-                          <Td>
-                            {number(
-                              metric(at(cache, "apc", "token_hit_rate")) == null
-                                ? undefined
-                                : Number(at(cache, "apc", "token_hit_rate")) *
-                                    100,
-                            )}
-                            %
-                          </Td>
-                          <Td>
-                            {number(
-                              metric(at(cache, "apc", "resident_bytes")) == null
-                                ? undefined
-                                : Number(at(cache, "apc", "resident_bytes")) /
-                                    1e6,
-                            )}{" "}
-                            MB
-                          </Td>
-                          <Td>
-                            {number(
-                              metric(at(cache, "apc", "disk_bytes")) == null
-                                ? undefined
-                                : Number(at(cache, "apc", "disk_bytes")) / 1e6,
-                            )}{" "}
-                            MB
-                          </Td>
-                        </Tr>
-                      ),
-                    )}
-                  </Tbody>
-                </Table>
+              label={t("diagnostics.stat.requestsProcessed")}
+              value={number(
+                metric(at(engineCounters, "requests_processed")),
+                0,
               )}
-              <Button
-                size="sm"
-                variant="ghost"
-                aria-expanded={!!expanded[row.key]}
-                onClick={() =>
-                  setExpanded((current) => ({
-                    ...current,
-                    [row.key]: !current[row.key],
-                  }))
-                }
+              subtext={t("diagnostics.stat.engineCounter")}
+            />
+          )}
+        </StatGrid>
+      )}
+      <SectionCard
+        icon={HeartPulse}
+        title={t("diagnostics.health.title")}
+        description={t("diagnostics.health.description")}
+        data-testid="health-checks"
+        action={
+          <div
+            className="flex items-center gap-2"
+            data-testid="health-verdict"
+            data-level={verdict.level}
+          >
+            <StatusIndicator
+              status={
+                verdict.level === "ok"
+                  ? "online"
+                  : verdict.level === "attention"
+                    ? "away"
+                    : "offline"
+              }
+            >
+              <span
+                className={`text-xs font-medium ${verdict.level === "abnormal" ? "text-error" : "text-foreground"}`}
               >
-                {expanded[row.key] ? "收合原始資料" : "查看完整診斷資料"}
-              </Button>
-              {expanded[row.key] && (
-                <CodeBlock
-                  language="json"
-                  code={JSON.stringify(row.data, null, 2) ?? "null"}
+                {t(
+                  verdict.level === "ok"
+                    ? "diagnostics.verdict.ok"
+                    : verdict.level === "attention"
+                      ? "diagnostics.verdict.attention"
+                      : "diagnostics.verdict.abnormal",
+                )}
+              </span>
+            </StatusIndicator>
+            {/* The slot keeps its box while the verdict flips, so polling never moves the header. */}
+            <Button
+              size="sm"
+              variant="ghost"
+              asChild
+              className={verdict.level === "ok" ? "invisible" : undefined}
+            >
+              <a
+                href="#/logs"
+                tabIndex={verdict.level === "ok" ? -1 : undefined}
+                aria-hidden={verdict.level === "ok" ? true : undefined}
+              >
+                <ScrollText size={14} />
+                {t("diagnostics.verdict.logs")}
+              </a>
+            </Button>
+          </div>
+        }
+      >
+        <ul className="-my-2">
+          {checks.map((check) => (
+            <li key={check.key} className="py-3">
+              <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-1">
+                <div className="min-w-0">
+                  <StatusIndicator status={check.status}>
+                    <span className="text-sm font-medium text-foreground">
+                      {check.name}
+                    </span>
+                  </StatusIndicator>
+                  <p className="mt-0.5 pl-4 text-xs text-muted-foreground">
+                    {check.hint}
+                  </p>
+                </div>
+                <span className="min-w-28 text-right text-sm tabular-nums">
+                  {check.value}
+                </span>
+              </div>
+              {check.bar && (
+                <SegmentedBar
+                  className="mt-2 pl-4"
+                  height={6}
+                  total={check.bar.total}
+                  segments={[{ value: check.bar.value, tone: check.bar.tone }]}
+                  label={`${check.name}: ${check.value}`}
                 />
               )}
-            </>
+            </li>
+          ))}
+        </ul>
+      </SectionCard>
+      {debugOff && (
+        <SectionCard
+          icon={Server}
+          title={t("diagnostics.off.title")}
+          description={t("diagnostics.off.description")}
+          data-testid="debug-disabled"
+        >
+          <p className="text-sm text-muted-foreground">
+            {t("diagnostics.off.body", {
+              flag: "YUNSHU_DEBUG_ROUTES=1",
+              authFlag: "YUNSHU_AUTH_DISABLED",
+            })}
+          </p>
+        </SectionCard>
+      )}
+      {!debugOff && (
+        <>
+          <SectionRow
+            title={t("diagnostics.items.title")}
+            action={
+              <p className="text-xs text-muted-foreground">
+                {updated
+                  ? t("diagnostics.items.updated", { time: clock(updated) })
+                  : t("diagnostics.items.notLoaded")}
+              </p>
+            }
+          />
+          <div>
+            <NavTabs
+              ariaLabel={t("diagnostics.tabs.aria")}
+              activeKey={group}
+              onChange={(value) => setGroup(value as Group)}
+              tabs={[
+                {
+                  key: "system",
+                  label: (
+                    <>
+                      <Server size={14} />
+                      {t("diagnostics.tabs.system")}
+                    </>
+                  ),
+                },
+                {
+                  key: "requests",
+                  label: (
+                    <>
+                      <Activity size={14} />
+                      {t("diagnostics.tabs.requests")}
+                    </>
+                  ),
+                },
+                {
+                  key: "cache",
+                  label: (
+                    <>
+                      <Database size={14} />
+                      {t("diagnostics.tabs.cache")}
+                    </>
+                  ),
+                },
+                {
+                  key: "decode",
+                  label: (
+                    <>
+                      <Cpu size={14} />
+                      {t("diagnostics.tabs.decode")}
+                    </>
+                  ),
+                },
+                {
+                  key: "memory",
+                  label: (
+                    <>
+                      <Database size={14} />
+                      {t("diagnostics.tabs.memory")}
+                    </>
+                  ),
+                },
+              ]}
+            />
+          </div>
+          {loading && (
+            <Card className="p-4 text-sm text-muted-foreground" role="status">
+              {t("diagnostics.loading", {
+                items: list(groups[group].map((item) => groupTitle(item.key))),
+              })}
+            </Card>
           )}
-        </Card>
-      ))}
-    </section>
+          {group === "requests" && request !== undefined && (
+            <SectionCard
+              icon={Timer}
+              title={t("diagnostics.latency.title")}
+              description={t("diagnostics.latency.description")}
+            >
+              <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+                {["p50", "p90", "p95", "p99"].map((key) => (
+                  <div key={key}>
+                    <p className="text-xs text-muted-foreground">{key}</p>
+                    <p className="mt-2 text-2xl font-semibold tabular-nums">
+                      {number(metric(at(request, "latency_percentiles", key)))}{" "}
+                      <span className="text-xs">ms</span>
+                    </p>
+                  </div>
+                ))}
+              </div>
+            </SectionCard>
+          )}
+          {results.map((row) => (
+            <SectionCard
+              key={row.key}
+              icon={groupIcon[group]}
+              title={groupTitle(row.key)}
+              description={<span className="font-mono">{row.path}</span>}
+              className="min-w-0"
+              action={
+                <StatusIndicator
+                  className="gap-1.5 text-xs text-muted-foreground"
+                  status={row.error ? "away" : "online"}
+                >
+                  {row.error
+                    ? row.status === 404
+                      ? t("diagnostics.row.disabled")
+                      : row.status === 401 || row.status === 403
+                        ? t("diagnostics.row.unauthorized")
+                        : t("diagnostics.row.failed")
+                    : t("diagnostics.row.ok")}
+                </StatusIndicator>
+              }
+            >
+              {row.error ? (
+                <ErrorNote
+                  tone="muted"
+                  message={row.error}
+                  detail={row.detail}
+                  className="text-sm"
+                />
+              ) : (
+                <div className="space-y-4">
+                  <DetailList className="grid gap-x-8 gap-y-2 sm:grid-cols-2">
+                    {Object.entries(
+                      row.data && typeof row.data === "object" ? row.data : {},
+                    )
+                      .filter(
+                        ([, value]) =>
+                          typeof value === "number" ||
+                          typeof value === "boolean" ||
+                          typeof value === "string",
+                      )
+                      .slice(0, 12)
+                      .map(([key, value]) => (
+                        <DetailRow
+                          key={key}
+                          label={key}
+                          value={
+                            typeof value === "number"
+                              ? number(value, 2)
+                              : String(value)
+                          }
+                        />
+                      ))}
+                  </DetailList>
+                  {Array.isArray(at(row.data, "caches")) && (
+                    <Table scrollLabel={t("diagnostics.cache.scroll")}>
+                      <Thead>
+                        <Tr>
+                          <Th>{t("diagnostics.cache.model")}</Th>
+                          <Th>{t("diagnostics.cache.prefixHit")}</Th>
+                          <Th>{t("diagnostics.cache.resident")}</Th>
+                          <Th>SSD</Th>
+                        </Tr>
+                      </Thead>
+                      <Tbody>
+                        {(at(row.data, "caches") as unknown[]).map(
+                          (cache, index) => (
+                            <Tr key={index}>
+                              <Td>
+                                <span className="block max-w-44 truncate text-xs">
+                                  {String(at(cache, "model_id") ?? "—")}
+                                </span>
+                              </Td>
+                              <Td>
+                                {number(
+                                  metric(at(cache, "apc", "token_hit_rate")) ==
+                                    null
+                                    ? undefined
+                                    : Number(
+                                        at(cache, "apc", "token_hit_rate"),
+                                      ) * 100,
+                                )}
+                                %
+                              </Td>
+                              <Td>
+                                {number(
+                                  metric(at(cache, "apc", "resident_bytes")) ==
+                                    null
+                                    ? undefined
+                                    : Number(
+                                        at(cache, "apc", "resident_bytes"),
+                                      ) /
+                                        2 ** 20,
+                                )}{" "}
+                                MB
+                              </Td>
+                              <Td>
+                                {number(
+                                  metric(at(cache, "apc", "disk_bytes")) == null
+                                    ? undefined
+                                    : Number(at(cache, "apc", "disk_bytes")) /
+                                        2 ** 20,
+                                )}{" "}
+                                MB
+                              </Td>
+                            </Tr>
+                          ),
+                        )}
+                      </Tbody>
+                    </Table>
+                  )}
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    aria-expanded={!!expanded[row.key]}
+                    onClick={() =>
+                      setExpanded((current) => ({
+                        ...current,
+                        [row.key]: !current[row.key],
+                      }))
+                    }
+                  >
+                    {expanded[row.key]
+                      ? t("diagnostics.raw.hide")
+                      : t("diagnostics.raw.show")}
+                  </Button>
+                  {expanded[row.key] && (
+                    <CodeBlock language="json">
+                      {JSON.stringify(row.data, null, 2) ?? "null"}
+                    </CodeBlock>
+                  )}
+                </div>
+              )}
+            </SectionCard>
+          ))}
+        </>
+      )}
+    </DashboardPage>
   );
 }

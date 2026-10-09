@@ -98,6 +98,10 @@ class Ctx:
     notes: dict = field(default_factory=dict)
     mm_models: list = field(default_factory=list)  # multi-model server: model ids
     log_tail: Any = None  # callable(n) -> the server log's last n lines
+    home: str = (
+        ""  # the server's throwaway HOME: config, keys and the launchd plist path
+    )
+    online: bool = False  # the server may reach the Hugging Face Hub
     shared: dict = field(
         default_factory=dict
     )  # kept across the servers of one job (TTS -> ASR)
@@ -261,6 +265,65 @@ def _auth(c: Ctx):
 
 
 @check(
+    "api_keys",
+    "GET /v1/yunshu/keys",
+    "POST /v1/yunshu/keys",
+    "PATCH /v1/yunshu/keys/{key_id}",
+    "DELETE /v1/yunshu/keys/{key_id}",
+    "POST /v1/yunshu/keys/{key_id}/rotate",
+    "GET /v1/yunshu/usage",
+    served=True,
+)
+def _api_keys(c: Ctx):
+    r = c.req(
+        "POST",
+        "/v1/yunshu/keys",
+        json={"name": "route-check", "quotas": {"requests_per_day": 1000}},
+    )
+    expect(
+        r.status_code == 201 and r.json().get("secret", "").startswith("ysk-"),
+        f"create {r.status_code} {r.text[:120]}",
+    )
+    kid, secret = r.json()["id"], r.json()["secret"]
+    try:
+        ls = c.req("GET", "/v1/yunshu/keys").json()
+        expect(
+            any(k["id"] == kid and "hash" not in k for k in ls["data"]),
+            "listed, no hash",
+        )
+        h = {"Authorization": f"Bearer {secret}"}
+        m = c.http.get("/v1/models", headers=h)
+        expect(m.status_code == 200, f"new key serves /v1/models -> {m.status_code}")
+        a = c.http.get("/v1/yunshu/keys", headers=h)
+        expect(a.status_code == 403, f"infer key on admin route -> {a.status_code}")
+        r = c.req("PATCH", f"/v1/yunshu/keys/{kid}", json={"enabled": False})
+        expect(
+            r.status_code == 200 and r.json()["enabled"] is False,
+            f"patch {r.text[:100]}",
+        )
+        expect(
+            c.http.get("/v1/models", headers=h).status_code == 401,
+            "disabled key -> 401",
+        )
+        c.req("PATCH", f"/v1/yunshu/keys/{kid}", json={"enabled": True})
+        r = c.req("POST", f"/v1/yunshu/keys/{kid}/rotate")
+        expect(
+            r.status_code == 200 and r.json()["secret"] != secret,
+            f"rotate {r.text[:100]}",
+        )
+        expect(
+            c.http.get("/v1/models", headers=h).status_code == 401, "old secret -> 401"
+        )
+        u = c.req("GET", f"/v1/yunshu/usage?key={kid}")
+        expect(u.status_code == 200 and u.json()["data"], f"usage {u.text[:120]}")
+    finally:
+        d = c.req("DELETE", f"/v1/yunshu/keys/{kid}")
+    expect(
+        d.status_code == 200 and d.json()["deleted"] is True, f"delete {d.status_code}"
+    )
+
+
+@check(
     "operations",
     "GET /v1/yunshu/status",
     "GET /v1/active-generations",
@@ -299,6 +362,378 @@ def _operations(c: Ctx):
         "POST", "/v1/yunshu/warmup", json={"model": c.model, "prompt": "Hello, world."}
     )
     expect(w.status_code == 200, f"warmup {w.status_code} {w.text[:200]}")
+
+
+@check(
+    "console_data",
+    "GET /v1/yunshu/requests/recent",
+    "GET /v1/yunshu/history",
+    "GET /v1/yunshu/memory",
+    "GET /v1/yunshu/config",
+    served=True,
+)
+def _console_data(c: Ctx):
+    """The console's data routes, after the warmup above has produced a finished request:
+    phase timestamps are ordered, the ledger names a weights owner, the config masks secrets."""
+    r = c.req("GET", "/v1/yunshu/requests/recent?limit=5")
+    expect(r.status_code == 200, f"recent {r.status_code} {r.text[:100]}")
+    rows = r.json().get("data") or []
+    expect(rows, "recent: no finished request after the warmup generation")
+    off = rows[0].get("offsets_ms") or {}
+    marks = [
+        off.get(k) for k in ("arrive", "admit", "first_token", "last_token", "done")
+    ]
+    seen = [m for m in marks if m is not None]
+    expect(len(seen) >= 3 and seen == sorted(seen), f"offsets_ms not ordered: {off}")
+    h = c.req("GET", "/v1/yunshu/history")
+    expect(h.status_code == 200, f"history {h.status_code}")
+    hj = h.json()
+    expect("series" in hj and "t" in hj["series"], f"history shape {list(hj)}")
+    m = c.req("GET", "/v1/yunshu/memory")
+    expect(m.status_code == 200, f"memory {m.status_code}")
+    owners = m.json().get("owners") or []
+    expect(
+        any(o["kind"] == "weights" and o["bytes"] for o in owners),
+        f"memory: no weights owner with bytes: {owners}",
+    )
+    cf = c.req("GET", "/v1/yunshu/config")
+    expect(cf.status_code == 200, f"config {cf.status_code}")
+    rows = cf.json().get("settings") or []
+    expect(rows and all("source" in r for r in rows), "config rows without a source")
+    expect(
+        not any(
+            r["name"] == "YUNSHU_AUTH_TOKEN" and r["value"] not in (None, "***")
+            for r in rows
+        ),
+        "config leaked the auth token",
+    )
+
+
+@check(
+    "console_manage",
+    "GET /v1/yunshu/models/local",
+    "GET /v1/yunshu/cache/tiers",
+    "POST /v1/yunshu/cache/tiers/clear",
+    "GET /v1/yunshu/logs",
+    "GET /v1/yunshu/logs/stream",
+    "GET /v1/yunshu/bundle",
+    served=True,
+)
+def _console_manage(c: Ctx):
+    """Model inventory, cache tiers and clear, the log ring (with a line the server just wrote),
+    its SSE tail and the diagnostics bundle, against a server that has served requests."""
+    r = c.req("GET", "/v1/yunshu/models/local?refresh=true")
+    expect(r.status_code == 200, f"models/local {r.status_code} {r.text[:100]}")
+    models = r.json().get("models") or []
+    expect(models, "models/local lists no model on disk")
+    expect(
+        all(
+            m["size_bytes"] > 0 and m["complete"] is True for m in models if m["loaded"]
+        ),
+        f"a loaded model without size or marked incomplete: {models[:2]}",
+    )
+    expect(any(m["loaded"] for m in models), "models/local: nothing marked loaded")
+    ch = c.req("GET", "/v1/yunshu/cache/tiers")
+    expect(ch.status_code == 200, f"cache {ch.status_code} {ch.text[:100]}")
+    cj = ch.json()
+    if c.kind == "vlm":
+        expect(cj["enabled"] and cj["caches"], f"cache: VLM runner reports none: {cj}")
+        tiers = {t["name"] for t in cj["caches"][0]["tiers"]}
+        expect("ram" in tiers, f"cache tiers {tiers}")
+        blob = json.dumps(cj)
+        expect("prompt" not in blob and "content" not in blob, "cache view names text")
+        r = c.req("POST", "/v1/yunshu/cache/tiers/clear", json={"tier": "ram"})
+        expect(r.status_code == 200, f"cache/clear {r.status_code} {r.text[:100]}")
+        expect(r.json()["freed_bytes"] >= 0, f"cache/clear {r.json()}")
+    else:
+        c.unserved()  # the text fast path has no prefix cache to list
+    lg = c.req("GET", "/v1/yunshu/logs?limit=50")
+    expect(lg.status_code == 200, f"logs {lg.status_code} {lg.text[:100]}")
+    lj = lg.json()
+    expect(
+        {"records", "next_id", "dropped"} <= set(lj) and lj["records"],
+        f"logs: empty ring on a server that has been running: {list(lj)}",
+    )
+    expect(
+        not any(c.token and c.token in r["msg"] for r in lj["records"]),
+        "logs leaked the token",
+    )
+    with c.http.stream(
+        "GET", "/v1/yunshu/logs/stream?level=warning", headers=c.auth(), timeout=10
+    ) as st:
+        expect(st.status_code == 200, f"logs/stream {st.status_code}")
+        expect(
+            st.headers.get("content-type", "").startswith("text/event-stream"),
+            f"logs/stream type {st.headers.get('content-type')}",
+        )
+    b = c.req("GET", "/v1/yunshu/bundle", timeout=120)
+    expect(b.status_code == 200, f"bundle {b.status_code} {b.text[:100]}")
+    expect(
+        "attachment" in b.headers.get("content-disposition", ""), "bundle: no filename"
+    )
+    bj = b.json()
+    expect(
+        {"version", "packages", "settings_changed", "doctor"} <= set(bj),
+        f"bundle keys {list(bj)}",
+    )
+    expect(not (c.token and c.token in b.text), "bundle leaked the token")
+
+
+@check(
+    "console_downloads",
+    "POST /v1/yunshu/downloads",
+    "GET /v1/yunshu/downloads",
+    "GET /v1/yunshu/downloads/{job_id}",
+    "DELETE /v1/yunshu/downloads/{job_id}",
+    served=True,
+)
+def _console_downloads(c: Ctx):
+    """A real, tiny download (one README, no model files, so nothing is registered): progress
+    reaches done with real byte counts, the list and detail agree, cancelling a finished job
+    is a no-op that returns it."""
+    if not c.online:
+        # A real network call (one README from the Hugging Face Hub). With
+        # YUNSHU_ROUTES_OFFLINE=1 the server runs with HF_HUB_OFFLINE=1: the check skips and
+        # the download routes are reported unverified, never silently passed.
+        skip("offline run (YUNSHU_ROUTES_OFFLINE=1): no Hugging Face Hub access")
+    r = c.req(
+        "POST",
+        "/v1/yunshu/downloads",
+        json={
+            "repo": "mlx-community/Qwen2.5-0.5B-Instruct-4bit",
+            "allow_patterns": ["README.md"],
+        },
+    )
+    expect(r.status_code == 202, f"POST downloads {r.status_code} {r.text[:200]}")
+    job = r.json()
+    t0 = time.time()
+    while time.time() - t0 < 120 and job["state"] in ("queued", "running"):
+        time.sleep(1)
+        job = c.req("GET", f"/v1/yunshu/downloads/{job['id']}").json()
+    if job["state"] == "error" and re.search(
+        r"connect|resolve|network|timed? ?out|offline|unreachable",
+        str(job.get("error")),
+        re.I,
+    ):
+        skip(f"Hugging Face Hub unreachable from this machine: {job.get('error')}")
+    expect(job["state"] == "done", f"download ended {job['state']}: {job.get('error')}")
+    expect(job["bytes_total"] > 0 and job["bytes_done"] == job["bytes_total"], f"{job}")
+    expect(job["files"] and job["files"][0]["name"] == "README.md", f"files {job}")
+    ls = c.req("GET", "/v1/yunshu/downloads").json()
+    expect(
+        any(d["id"] == job["id"] and d["state"] == "done" for d in ls["downloads"]),
+        "list lacks the finished job",
+    )
+    expect(ls["free_bytes"], "list: no free-space figure")
+    d = c.req("DELETE", f"/v1/yunshu/downloads/{job['id']}")
+    expect(
+        d.status_code == 200 and d.json()["state"] == "done",
+        f"{d.status_code} {d.text[:100]}",
+    )
+
+
+@check(
+    "console_fit",
+    "GET /v1/yunshu/models/{model_id:path}/fit",
+    needs="multi",
+    served=True,
+)
+def _console_fit(c: Ctx):
+    expect(c.mm_models, "multi-model server lists no model")
+    r = c.req("GET", f"/v1/yunshu/models/{c.mm_models[0]}/fit")
+    expect(r.status_code == 200, f"fit {r.status_code} {r.text[:100]}")
+    j = r.json()
+    expect(j["verdict"] in ("fits", "tight", "wont_fit"), f"fit verdict {j}")
+    expect(j["needed_bytes"] > 0 and j["weights_bytes"] > 0, f"fit sizes {j}")
+
+
+@check(
+    "console_reload",
+    "POST /v1/yunshu/models/{model_id:path}/reload",
+    needs="multi",
+    served=True,
+)
+def _console_reload(c: Ctx):
+    """Reload a model on the multi-model server: an idle model unloads and loads again and still
+    answers; an unknown id is a 404; the route is admin-only."""
+    expect(c.mm_models, "multi-model server lists no model")
+    mid = c.mm_models[0]
+    path = f"/v1/yunshu/models/{mid}/reload"
+    expect(c.http.post(path).status_code == 401, "reload without the token must be 401")
+    r = c.req("POST", path, json={})
+    expect(r.status_code == 200, f"reload {r.status_code} {r.text[:200]}")
+    j = r.json()
+    expect(j["status"] == "reloaded" and j["model"] == mid, f"reload body {j}")
+    r2 = c.req("POST", path, json={})  # now surely loaded: unload + load for real
+    expect(
+        r2.status_code == 200 and r2.json()["was_loaded"] is True, f"{r2.text[:200]}"
+    )
+    a = c.req(
+        "POST",
+        "/v1/chat/completions",
+        json={
+            "model": mid,
+            "messages": [{"role": "user", "content": "Say hi."}],
+            "max_tokens": 8,
+        },
+    )
+    expect(a.status_code == 200, f"chat after reload {a.status_code} {a.text[:150]}")
+    msg = a.json()["choices"][0]["message"]
+    expect(
+        msg.get("content") or msg.get("reasoning_content"),
+        "chat after reload returned nothing",
+    )
+    gone = c.req("POST", "/v1/yunshu/models/no-such-org/no-such-model/reload")
+    expect(gone.status_code == 404, f"unknown model -> {gone.status_code}")
+
+
+@check(
+    "console_admin_config",
+    "PATCH /v1/yunshu/config",
+    "GET /v1/yunshu/cors",
+    "PATCH /v1/yunshu/cors",
+    "GET /v1/yunshu/service",
+    "POST /v1/yunshu/service/restart",
+    served=True,
+)
+def _console_admin_config(c: Ctx):
+    """Settings writes, CORS origins and the service routes against the throwaway HOME the check
+    server runs with (config file `<HOME>/.yunshu/config.toml`). Nothing here touches the
+    operator's real config or launchd: the first step refuses to go on unless the server's
+    launchd plist path lies under that throwaway HOME, and the restart is only ever POSTed to a
+    server that is not the launchd job, where it must answer 409."""
+    from pathlib import Path
+
+    expect(c.home, "the check server's throwaway HOME is unknown")
+    home = Path(c.home).resolve()
+    sv = c.req("GET", "/v1/yunshu/service")
+    expect(sv.status_code == 200, f"service {sv.status_code} {sv.text[:100]}")
+    svj = sv.json()
+    expect(
+        home in Path(svj["plist"]).resolve().parents,
+        f"server is not on the throwaway HOME ({svj['plist']} vs {home}): refusing to write",
+    )
+    expect(svj["under_launchd"] is False, f"check server is under launchd: {svj}")
+    expect(svj["pid_self"] and svj["version"], f"service view {svj}")
+    cfg = home / ".yunshu" / "config.toml"
+    live, reload_, restart = (
+        "YUNSHU_BATCH_MAX_ITEMS",
+        "YUNSHU_PREFIX_MAX_ENTRIES",
+        "YUNSHU_KEEP_ALIVE_TIMEOUT",
+    )
+    try:
+        r = c.req(
+            "PATCH",
+            "/v1/yunshu/config",
+            json={"settings": {live: 321}, "dry_run": True},
+        )
+        expect(r.status_code == 200, f"dry run {r.status_code} {r.text[:150]}")
+        expect(
+            not cfg.exists() or live not in cfg.read_text(), "dry run wrote the file"
+        )
+        r = c.req(
+            "PATCH",
+            "/v1/yunshu/config",
+            json={"settings": {live: 321, reload_: 65, restart: 6}},
+        )
+        expect(r.status_code == 200, f"patch {r.status_code} {r.text[:200]}")
+        j = r.json()
+        res = j["results"]
+        expect(res[live]["status"] == "applied" and res[live]["value"] == 321, f"{res}")
+        expect(res[reload_]["status"] == "needs_reload", f"{res[reload_]}")
+        expect(res[restart]["status"] == "needs_restart", f"{res[restart]}")
+        expect(j["reload_required"] and j["restart_required"], f"flags {j}")
+        expect(
+            j["restart"]["available"] is False and j["restart"]["manual"],
+            f"restart hint {j['restart']}",
+        )
+        expect(
+            Path(j["saved_to"]).resolve() == cfg.resolve(),
+            f"wrote {j['saved_to']}, want {cfg}",
+        )
+        text = cfg.read_text()
+        expect(
+            live in text and "321" in text and reload_ in text, "file lacks the values"
+        )
+        rows = {
+            x["name"]: x
+            for x in c.req("GET", "/v1/yunshu/config?include=all").json()["settings"]
+        }
+        expect(
+            rows[live]["source"] == "file" and str(rows[live]["value"]) == "321",
+            f"GET config after PATCH: {rows[live]}",
+        )
+        bad = c.req("PATCH", "/v1/yunshu/config", json={"settings": {live: "abc"}})
+        expect(bad.status_code == 422, f"bad value -> {bad.status_code}")
+        expect(live in bad.text, f"422 does not name the setting: {bad.text[:150]}")
+        unk = c.req("PATCH", "/v1/yunshu/config", json={"settings": {"YUNSHU_NOPE": 1}})
+        expect(unk.status_code == 422, f"unknown setting -> {unk.status_code}")
+
+        # CORS: validated, written to the same file, applied to the very next request
+        g = c.req("GET", "/v1/yunshu/cors")
+        expect(g.status_code == 200 and g.json()["applies"] == "live", g.text[:150])
+        origin = "http://console.example.test:5173"
+        w = c.req("PATCH", "/v1/yunshu/cors", json={"origins": [origin]})
+        expect(w.status_code == 200, f"cors patch {w.status_code} {w.text[:150]}")
+        expect(w.json()["origins"] == [origin], f"cors view {w.json()}")
+        pre = c.http.options(
+            "/v1/models",
+            headers={
+                "Origin": origin,
+                "Access-Control-Request-Method": "GET",
+                "Access-Control-Request-Headers": "authorization",
+            },
+        )
+        expect(
+            pre.headers.get("access-control-allow-origin") == origin,
+            f"live CORS: preflight not allowed after PATCH: {pre.status_code} {dict(pre.headers)}",
+        )
+        other = c.http.options(
+            "/v1/models",
+            headers={
+                "Origin": "http://evil.example.test",
+                "Access-Control-Request-Method": "GET",
+            },
+        )
+        expect(
+            other.headers.get("access-control-allow-origin") is None,
+            "an origin that was not allowed got an allow-origin header",
+        )
+        wild = c.req("PATCH", "/v1/yunshu/cors", json={"origins": ["*"]})
+        expect(wild.status_code == 400, f"'*' without confirm -> {wild.status_code}")
+        badc = c.req("PATCH", "/v1/yunshu/cors", json={"origins": ["not a url"]})
+        expect(badc.status_code == 422, f"bad origin -> {badc.status_code}")
+        rs = c.req("PATCH", "/v1/yunshu/cors", json={"origins": None})
+        expect(rs.status_code == 200, f"cors reset {rs.status_code}")
+        post = c.http.options(
+            "/v1/models",
+            headers={"Origin": origin, "Access-Control-Request-Method": "GET"},
+        )
+        expect(
+            post.headers.get("access-control-allow-origin") != origin,
+            "reset CORS still allows the old origin",
+        )
+
+        # service restart: this server is not the launchd job, so it must refuse, not restart
+        rr = c.req("POST", "/v1/yunshu/service/restart", json={"confirm": True})
+        expect(rr.status_code == 409, f"restart off launchd -> {rr.status_code}")
+        expect(
+            "not_under_launchd" in rr.text and "manual" in rr.text,
+            f"restart refusal body {rr.text[:200]}",
+        )
+        expect(c.http.get("/health/live").status_code == 200, "server went down")
+    finally:  # leave the throwaway config as found
+        c.req(
+            "PATCH",
+            "/v1/yunshu/config",
+            json={"settings": {live: None, reload_: None, restart: None}},
+        )
+        c.req("PATCH", "/v1/yunshu/cors", json={"origins": None})
+    after = cfg.read_text() if cfg.exists() else ""
+    expect(
+        not any(k in after for k in (live, reload_, restart, "YUNSHU_CORS_ORIGINS")),
+        f"config file not restored: {after[:200]}",
+    )
 
 
 @check(
@@ -2678,3 +3113,197 @@ def evals_check(c: Ctx):
         }
     finally:
         expect(sdk.evals.delete(ev.id).deleted, "delete eval")
+
+
+@check(
+    "console_host_latency",
+    "GET /v1/yunshu/host",
+    "GET /v1/yunshu/requests/recent",
+    served=True,
+    needs="multi",
+)
+def console_host_latency(c):
+    host = c.http.get("/v1/yunshu/host")
+    expect(host.status_code == 200, host.text)
+    data = host.json()
+    c.notes["host"] = data
+    for key in ("thermal", "power", "memory_pressure"):
+        expect("state" in data[key], f"{key}: missing state")
+        if data[key]["state"] == "unknown":
+            expect(bool(data[key].get("reason")), f"{key}: missing reason")
+    recent = c.http.get("/v1/yunshu/requests/recent")
+    expect(recent.status_code == 200, recent.text)
+    expect(isinstance(recent.json()["data"], list), "recent data must be a list")
+
+
+@check(
+    "console_registration_cancel",
+    "POST /v1/yunshu/models/register",
+    "DELETE /v1/yunshu/models/register/{model_id:path}",
+    "POST /v1/yunshu/models/cancel",
+    served=True,
+    needs="multi",
+)
+def console_registration_cancel(c):
+    """The console probe supplies a real local checkpoint; cancellation must actually engage."""
+    import concurrent.futures
+
+    model_path = c.notes.get("console_model_path")
+    if not model_path:
+        skip("consolefeat_routes supplies the real checkpoint path")
+    hf_snapshot = c.notes.get("console_hf_snapshot")
+    if hf_snapshot:
+        r = c.http.post(
+            "/v1/yunshu/models/register",
+            json={"model": "consolefeat-hf", "path": hf_snapshot},
+        )
+        expect(r.status_code == 200 and r.json()["loaded"] is False, r.text)
+        expect(
+            c.http.delete("/v1/yunshu/models/register/consolefeat-hf").status_code
+            == 200,
+            "HF snapshot unregister failed",
+        )
+        c.notes["hf_snapshot_registration"] = "PASS"
+    model = "consolefeat-local"
+    r = c.http.post(
+        "/v1/yunshu/models/register", json={"model": model, "path": model_path}
+    )
+    expect(r.status_code == 200 and r.json()["loaded"] is False, r.text)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(c.http.post, "/v1/models/load", json={"model": model})
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline:
+            status = c.http.get("/v1/yunshu/status").json()
+            if any(m["id"] == model and m["loading"] for m in status["models"]):
+                break
+            expect(not future.done(), "load completed before cancel was observed")
+            time.sleep(0.01)
+        else:
+            raise Fail("load never entered loading state")
+        cancel = c.http.post("/v1/yunshu/models/cancel", json={"model": model})
+        expect(cancel.status_code == 200 and cancel.json()["load"], cancel.text)
+        loaded = future.result(timeout=180)
+        expect(
+            loaded.status_code == 400 and "cancel" in loaded.text.lower(), loaded.text
+        )
+    status = c.http.get("/v1/yunshu/status").json()
+    row = next(m for m in status["models"] if m["id"] == model)
+    expect(not row["loaded"] and not row["loading"], "cancel left model loaded/loading")
+    r = c.http.delete("/v1/yunshu/models/register/" + model)
+    expect(r.status_code == 200, r.text)
+    c.notes["cancel_load_status"] = loaded.status_code
+
+
+@check(
+    "console_backend_gaps",
+    "GET /v1/yunshu/cache",
+    "POST /v1/yunshu/cache/clear",
+    "GET /v1/yunshu/requests/history",
+    "GET /v1/yunshu/spec-decode",
+    "GET /v1/yunshu/bundle",
+    "GET /v1/yunshu/bundle/manifest",
+    "GET /v1/yunshu/models/impact",
+    served=True,
+    needs="multi",
+)
+def console_backend_gaps(c):
+    body = {
+        "model": c.model,
+        "messages": [
+            {
+                "role": "user",
+                "content": "context " * 600 + "\nReturn an object with ok=true.",
+            }
+        ],
+        "temperature": 0,
+        "max_tokens": 64,
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "receipt",
+                "strict": True,
+                "schema": {
+                    "type": "object",
+                    "properties": {"ok": {"type": "boolean", "const": True}},
+                    "required": ["ok"],
+                    "additionalProperties": False,
+                },
+            },
+        },
+    }
+    response = c.http.post(
+        "/v1/chat/completions",
+        json=body,
+        headers={"X-Request-Id": "consolegaps-schema"},
+    )
+    expect(response.status_code == 200, response.text)
+    content = response.json()["choices"][0]["message"]["content"]
+    expect(
+        json.loads(content).get("ok") is True, "schema-constrained content is invalid"
+    )
+    stats = response.json()["x_yunshu"]
+    expect(stats["model"] == c.model, "request model alias not attributed")
+    expect(
+        stats["structured_output"]["enforced"] is True,
+        "schema enforcement not reported",
+    )
+    expect(
+        bool(stats["structured_output"]["grammar_backend"]), "grammar backend absent"
+    )
+    cache = c.http.get("/v1/yunshu/cache")
+    expect(cache.status_code == 200, cache.text)
+    expect(cache.json()["data"], "real prefill produced no cache entries")
+    for entry in cache.json()["data"]:
+        expect(
+            all(
+                k in entry
+                for k in (
+                    "namespace",
+                    "tokens",
+                    "bytes_logical",
+                    "bytes_physical",
+                    "tier",
+                    "last_hit",
+                    "hits",
+                )
+            ),
+            "cache entry contract",
+        )
+    expect(
+        any(
+            event["request_id"] == "consolegaps-schema"
+            for event in cache.json()["events"]
+        ),
+        "cache event lacks request link",
+    )
+    for path in ("spec-decode", "bundle/manifest", "bundle"):
+        result = c.http.get("/v1/yunshu/" + path)
+        expect(result.status_code == 200, result.text)
+    manifest = c.http.get("/v1/yunshu/bundle/manifest").json()
+    bundle = c.http.get("/v1/yunshu/bundle").json()
+    expect(set(manifest["included"]) == set(bundle), "CLI bundle manifest mismatched")
+    impact = c.http.get("/v1/yunshu/models/impact", params={"model": c.model})
+    expect(
+        impact.status_code == 200
+        and impact.json()["unload"]["in_flight_policy"] == "reject",
+        impact.text,
+    )
+    history = c.http.get("/v1/yunshu/requests/history", params={"limit": 1})
+    expect(history.status_code == 200 and history.json()["enabled"], history.text)
+    expect(
+        history.json()["data"][0]["request_id"] == "consolegaps-schema",
+        "persisted metadata missing",
+    )
+    expect("context context" not in history.text, "history leaked prompt")
+    cleared = c.http.post("/v1/yunshu/cache/clear")
+    expect(cleared.status_code == 200, cleared.text)
+    expect(
+        c.http.get("/v1/yunshu/cache").json()["data"] == [],
+        "resident clear did not clear",
+    )
+    c.notes["consolegaps"] = {
+        "cache_entries": len(cache.json()["data"]),
+        "cache_events": len(cache.json()["events"]),
+        "structured_output": stats["structured_output"],
+        "speculative": stats["speculative"],
+    }

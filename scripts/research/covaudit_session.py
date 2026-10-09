@@ -374,6 +374,7 @@ class Srv:
         sets=(),
         models_dir: str | None = None,
         token: str | None = None,
+        online: bool = False,
     ):
         """`models_dir` serves in multi-model mode (`--models-dir`; `model` then only sizes the
         load-time budget); `token` is the bearer token the readiness probe presents."""
@@ -388,7 +389,16 @@ class Srv:
             if not k.startswith(("ANTHROPIC_", "OPENAI_", "CLAUDE", "CODEX"))
         }
         home.mkdir(parents=True, exist_ok=True)
-        env.update(HOME=str(home), HF_HUB_OFFLINE="1", NO_PROXY="127.0.0.1")
+        self.home = home
+        # HOME is a throwaway: ~/.yunshu (config, keys, models) and the launchd plist path live
+        # under it, never under the operator's real home. An inherited YUNSHU_CONFIG would point
+        # the config writers back at a real file, so it is dropped.
+        env.pop("YUNSHU_CONFIG", None)
+        env.update(HOME=str(home), NO_PROXY="127.0.0.1")
+        if online:  # route checks that need the real Hub (the download manager)
+            env.pop("HF_HUB_OFFLINE", None)
+        else:
+            env["HF_HUB_OFFLINE"] = "1"
         if src:
             env["PYTHONPATH"] = src + os.pathsep + env.get("PYTHONPATH", "")
         self._env = env

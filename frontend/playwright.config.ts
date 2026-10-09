@@ -6,6 +6,8 @@ export default defineConfig({
   workers: 1,
   use: {
     baseURL: process.env.PLAYWRIGHT_BASE_URL ?? "http://127.0.0.1:3971",
+    // The default language is zh-TW; specs read its wording unless they set another locale.
+    locale: "zh-TW",
     trace: "retain-on-failure",
   },
   projects: [

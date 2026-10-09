@@ -1,0 +1,253 @@
+---
+title: Models
+description: List and inspect served models with cards that speak the OpenAI, Anthropic, OpenRouter, vLLM and LM Studio dialects at once, and load or unload models in multi-model mode.
+---
+
+`GET /v1/models` returns the models this server can serve. Each item is a model card derived from the checkpoint files on disk (config, chat template, safetensors headers), so the answer states what the loaded weights can do rather than what a name suggests. One item carries the field names of several ecosystems at the same time, so the OpenAI, Anthropic, OpenRouter, vLLM and LM Studio clients all find what they look for. Yunshu's own detail sits under a single `yunshu` key.
+
+<Endpoint method="GET" path="/v1/models" />
+<Endpoint method="GET" path="/v1/models/{model_id}" />
+<Endpoint method="POST" path="/v1/models/load" />
+<Endpoint method="POST" path="/v1/models/unload/{model_id}" />
+
+<Callout type="info">
+Authentication is only enforced when `YUNSHU_AUTH_TOKEN` is set. Listing and retrieving models are open without a token. Loading and unloading are operational routes: they need a configured token (or `YUNSHU_AUTH_DISABLED=true`); see [Load and unload](#load-and-unload).
+</Callout>
+
+## List models
+
+`GET /v1/models` has no parameters. The response is a list object that satisfies both the OpenAI and the Anthropic SDK list types.
+
+<Tabs items={["curl", "Python", "JavaScript"]}>
+<Tab value="curl">
+
+```bash
+curl http://localhost:8000/v1/models -H "Authorization: Bearer sk-local"
+```
+
+</Tab>
+<Tab value="Python">
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="http://localhost:8000/v1", api_key="sk-local")
+for m in client.models.list():
+    print(m.id)
+
+import anthropic
+
+a = anthropic.Anthropic(base_url="http://localhost:8000", api_key="sk-local")
+for m in a.models.list():
+    print(m.id, m.display_name, m.max_input_tokens)
+```
+
+</Tab>
+<Tab value="JavaScript">
+
+```ts
+import OpenAI from "openai";
+
+const client = new OpenAI({ baseURL: "http://localhost:8000/v1", apiKey: "sk-local" });
+const models = await client.models.list();
+for (const m of models.data) console.log(m.id);
+```
+
+</Tab>
+</Tabs>
+
+An abbreviated item:
+
+```json
+{
+  "object": "list",
+  "data": [
+    {
+      "id": "mlx-community/Qwen3.5-0.8B-MLX-bf16",
+      "object": "model",
+      "created": 1760000000,
+      "owned_by": "yunshu",
+      "type": "model",
+      "display_name": "Qwen3.5-0.8B-MLX-bf16",
+      "created_at": "2025-10-09T08:53:20Z",
+      "max_input_tokens": 262144,
+      "max_tokens": 131072,
+      "capabilities": {
+        "thinking": { "supported": true, "types": { "adaptive": { "supported": false }, "enabled": { "supported": true } } },
+        "image_input": { "supported": true },
+        "structured_outputs": { "supported": true },
+        "vision": true,
+        "tools": true
+      },
+      "context_length": 262144,
+      "max_model_len": 262144,
+      "task": "generate",
+      "state": "loaded",
+      "compatibility_type": "mlx",
+      "yunshu": {
+        "kind": "vlm",
+        "family": "qwen3_5",
+        "input_modalities": ["text", "image"],
+        "output_modalities": ["text"],
+        "contract": { "unsupported_fields": "400" }
+      }
+    }
+  ],
+  "has_more": false,
+  "first_id": "mlx-community/Qwen3.5-0.8B-MLX-bf16",
+  "last_id": "mlx-community/Qwen3.5-0.8B-MLX-bf16"
+}
+```
+
+The values are illustrative and many fields are omitted; a real item has every field listed below. In multi-model mode the list contains every registered model, loaded or not. In single-model mode it contains the one loaded model. There is no pagination: `has_more` is always `false`.
+
+### What an item contains
+
+| Dialect | Fields |
+| --- | --- |
+| OpenAI | `id`, `object` (`"model"`), `created`, `owned_by` (`"yunshu"`) |
+| Anthropic | `type` (`"model"`), `display_name`, `created_at`, `max_input_tokens`, `max_tokens`, `capabilities` |
+| OpenRouter | `name`, `canonical_slug`, `description`, `context_length`, `architecture` (`modality`, `input_modalities`, `output_modalities`, `tokenizer`), `pricing` (all `"0"`), `top_provider`, `supported_parameters`, `default_parameters` |
+| vLLM | `root`, `parent`, `max_model_len`, `task` (`generate`, `embed`, `score`, `transcription`, `speech`, `image_generation`, `ocr`) |
+| LM Studio | `arch`, `quantization`, `state` (`loaded` or `not-loaded`), `max_context_length`, `publisher`, `compatibility_type` (`"mlx"`), `model_type` |
+| Yunshu | `yunshu`: the full card, described below |
+
+The Anthropic `capabilities` object has every key the Anthropic SDK model requires (`batch`, `citations`, `code_execution`, `context_management`, `effort`, `image_input`, `pdf_input`, `structured_outputs`, `thinking`) with `supported` flags that come from the card. Flat booleans used by LM Studio and vLLM clients (`vision`, `trained_for_tool_use`, `tools`, `function_calling`, `reasoning`, `embedding`) ride inside the same object.
+
+### The `yunshu` card
+
+| Field | Meaning |
+| --- | --- |
+| `kind` | `chat`, `vlm`, `omni`, `embedding`, `reranker`, `classifier`, `decision`, `asr`, `tts`, `sts`, `image`, `ocr` or `video`. |
+| `family`, `architecture`, `parameters` | Model family, architecture class and parameter count read from the checkpoint. |
+| `quantization` | Bit width, group size and mode, with per-layer groups for mixed-precision checkpoints. |
+| `input_modalities`, `output_modalities` | Subsets of `text`, `image`, `video`, `audio`, `embedding`, `score`, `decision`. |
+| `context` | `length` and how it was derived. `max_output_tokens` is the advertised output limit. |
+| `reasoning` | Whether the model has a thinking mode, the toggle, default state, effort levels and aliases. |
+| `tools`, `structured_output`, `logprobs` | Tool-calling support and modes, supported constraint types, the largest `top_logprobs`. |
+| `embeddings` | Vector size, pooling and normalization for embedding models. |
+| `audio`, `image` | Modality-specific details for speech and image models. |
+| `speculative` | The speculative-decoding method the model has (for example `mtp`) and whether it is lossless. |
+| `prefix_cache` | Whether the prefix cache serves this model and what kind. |
+| `state`, `memory` | Loaded, loading, pinned, error; weight bytes and estimated memory. |
+| `api` | Which routes and wire formats serve this model. |
+| `supported_parameters` | The request fields the chat routes accept for this model. |
+| `generation_defaults` | Sampling defaults from the checkpoint's `generation_config.json`. |
+| `contract` | The capability contract, below. |
+| `capability_tags` | Flat tags such as `chat`, `tools`, `vision`, `thinking`. |
+| `server_tools` | For text-like models: which gateway-run tools (web search provider, MCP connector) are configured. |
+
+Anonymous callers never see file system paths or residency. A request that presents the configured `YUNSHU_AUTH_TOKEN` also gets `loaded`, `size_gb`, `size_bytes` and `stats` on each item, `yunshu.path`, and a top-level `registry` object with model manager counters. Without a configured token everyone is anonymous.
+
+## Retrieve a model
+
+`GET /v1/models/{model_id}` returns one item in the same shape. The id may contain slashes (`mlx-community/Qwen3.5-0.8B-MLX-bf16`) and is resolved like inference does: exact id, alias, case-insensitive match. An unknown id is a `404`:
+
+```json
+{
+  "error": {
+    "message": "Model 'nope' not found",
+    "type": "invalid_request_error",
+    "param": null,
+    "code": "model_not_found"
+  }
+}
+```
+
+This route returns `404` for an id the server does not list even in single-model mode, where generation routes accept any name.
+
+## The capability contract
+
+Every card has a `yunshu.contract` object, and every generation route enforces the same object, so the list tells you exactly what a request may use.
+
+| Key | States |
+| --- | --- |
+| `tools` | `supported`; `mode` (`template` when the chat template renders tools, `prompt` when Yunshu injects a tool prompt); `parallel`; accepted `tool_choice` values. |
+| `structured_output` | `json_object`; `json_schema` with its engines (`in-house`, plus `llguidance` for schemas outside the in-house subset); `regex`; `choice`; `grammar` (Lark syntax, via `llguidance`). |
+| `logprobs`, `reasoning` | Support, the largest `top_logprobs`, effort levels. |
+| `media` | Input and output modalities beyond text. |
+| `speculative` | `mode` (`mtp`, `dflash2` or `none`) and `lossless`. |
+| `cache_tiers` | `ram`, and `ssd` when that tier is enabled. |
+| `context` | Window length and maximum output tokens. |
+| `unsupported_fields` | Always `"400"`. |
+
+A request that uses what the contract rules out gets a `400` that names the field, in the error shape of the dialect:
+
+- an `image`, `audio` or `video` content part on a model that does not accept that input;
+- `tools`, `tool_choice`, `response_format`, `grammar`, the `guided_*` fields or `logprobs` on a model that does not generate text (embedding, reranker, speech, image models).
+
+`reasoning_effort` and `thinking_budget` on a model without a reasoning mode are deliberately accepted and have no effect, because coding agents send an effort on every request. A checkpoint whose config cannot be read has no contract and is not gated.
+
+## Load and unload
+
+<Callout type="warn">
+These routes change what is in memory. They need authentication: with no `YUNSHU_AUTH_TOKEN` set (and `YUNSHU_AUTH_DISABLED` not true) they answer `401` with `No authentication configured. Set YUNSHU_AUTH_TOKEN or YUNSHU_AUTH_DISABLED=true.` With a token set, send it as for any route.
+</Callout>
+
+### Load a model
+
+`POST /v1/models/load` loads a model and starts its engine.
+
+| Parameter | Type | Required | Description | Status |
+| --- | --- | --- | --- | --- |
+| `model` | string | yes | Model id as registered in the model manager. `model_id` is accepted as an alias; `model` wins when both are sent. | supported |
+| `pin` | boolean | no | Default `false`. | accepted and ignored |
+
+```bash
+curl -X POST http://localhost:8000/v1/models/load \
+  -H "Authorization: Bearer $YUNSHU_AUTH_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"model": "mlx-community/Qwen3.5-0.8B-MLX-bf16"}'
+```
+
+```json
+{ "status": "loaded", "model": "mlx-community/Qwen3.5-0.8B-MLX-bf16" }
+```
+
+In multi-model mode the model must be registered (found under `YUNSHU_MODELS_DIR`), else `404`. Without a model manager the route loads the given path into the single engine; a batched engine refuses (`400`).
+
+### Unload a model
+
+`POST /v1/models/unload/{model_id}` releases a model's memory. It works in multi-model mode only (`400` otherwise). The id is resolved through aliases and case like inference does.
+
+```bash
+curl -X POST http://localhost:8000/v1/models/unload/mlx-community/Qwen3.5-0.8B-MLX-bf16 \
+  -H "Authorization: Bearer $YUNSHU_AUTH_TOKEN"
+```
+
+```json
+{ "status": "unloaded", "model": "mlx-community/Qwen3.5-0.8B-MLX-bf16" }
+```
+
+A model with requests in flight is not unloaded (`409`), so a running generation is never torn down.
+
+### Errors
+
+| Status | When |
+| --- | --- |
+| 400 | Empty `model`; load failed with a model-specific reason (the message says why); single-engine load on a batched engine; unload outside multi-model mode. |
+| 401 | No token configured, or the token is missing or wrong. |
+| 404 | Unknown model (`GET`, unload) or a model that is not registered (load). |
+| 409 | The same model is already being loaded or unloaded; unload while requests are active, or the model became active during the unload. |
+| 500 | Load failed for an unexpected reason (`Model loading failed`). |
+| 503 | The engine is not initialized. |
+
+## Support
+
+| Feature | Status |
+| --- | --- |
+| `GET /v1/models` in OpenAI and Anthropic list shapes | <Support status="supported">supported</Support> |
+| OpenRouter, vLLM, LM Studio metadata on every item | <Support status="supported">supported</Support> |
+| Pagination parameters (`limit`, `after`) | <Support status="unsupported">not supported; the full list is returned</Support> |
+| Capability contract enforced on generation routes | <Support status="supported">supported</Support> |
+| Model load and unload | <Support status="supported">authenticated, multi-model mode for unload</Support> |
+| `pin` on load | <Support status="unsupported">accepted and ignored</Support> |
+| Deleting a model from disk through the API | <Support status="unsupported">not on these routes; see the Ollama layer or the CLI</Support> |
+
+## Related
+
+- [API overview](/docs/api/overview)
+- [Chat completions](/docs/api/chat-completions)
+- [Model support](/docs/guides/model-support)
+- [Models getting started](/docs/getting-started/models)
+- [Ollama layer](/docs/api/ollama)

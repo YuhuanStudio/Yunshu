@@ -1,0 +1,78 @@
+---
+title: Upstream tracking
+description: How Yunshu records code it took from other projects in vendor.json, the four kinds of dependency on upstream, and how just vendor-check reports what changed.
+---
+
+Yunshu builds on MLX, `mlx-lm`, `mlx-vlm` and ideas from several other open-source projects. Every place where it copies, rewrites, reimplements or monkeypatches upstream code is recorded in `vendor.json`, so upstream changes and fixes can be followed and licenses are honored. `THIRD_PARTY_NOTICES.md` carries the matching license texts and ships inside the wheel and sdist.
+
+## The four kinds
+
+Each entry lists the upstream `repo`, the `clone` (a checkout under `reference/`, which is git-ignored), the `commit` (the upstream commit or release tag the local code is based on), the `license` and the local `path`.
+
+| Kind | Meaning | How to sync |
+|---|---|---|
+| `vendored` | A file copied from upstream. `local_changes` lists the deliberate edits | Re-copy the file and re-apply `local_changes` |
+| `derived` | Rewritten from specific upstream files (`upstream_paths`) | Read the upstream diff and port what matters |
+| `inspired` | The same algorithm or design, as independent code | Read the upstream diff for ideas or bug fixes |
+| `patches` | A monkeypatch of an upstream symbol, described by `module`, `symbol`, `signature` and `source_sha256` | Re-check the replacement against the new upstream source |
+
+Every source file that falls into one of these kinds starts with an `# Upstream (kind): repo (license) paths @ commit` comment (patches use `# Patches upstream ...`). The self-check described below fails when such a header exists without a manifest entry.
+
+The manifest has more sections than the four kinds:
+
+- `watch`: reference clones that are followed for ideas or fixes, with the file globs that matter and the commit reviewed up to.
+- `watch_excluded`: every other clone under `reference/`, with the reason it is not followed.
+- `packages`: extra package pins on top of what `pyproject.toml` declares.
+- `prior_art` and the other `*_prior_art` lists: discovery-only candidates with their own licenses and revisions. These are notes about what exists elsewhere; they are not adopted code, qualified loaders or parity claims.
+
+## Run the check
+
+```bash
+just vendor-check                                          # fetch the clones, then report
+uv run python scripts/vendor/check_upstream.py --no-fetch  # offline: report from what is already cloned
+```
+
+The report has sections for patched symbols, vendored files, derived entries, inspired entries, watched paths, packages and self-checks.
+
+| Exit code | Meaning |
+|---|---|
+| `0` | clean |
+| `1` | something is behind upstream (new commits on a tracked path, or a newer package release) |
+| `2` | a patched symbol changed or is missing, or a self-check failed |
+
+### What is watched
+
+- **Patched symbols** are hashed from the installed package (normalized AST source). `UPSTREAM SOURCE CHANGED` means the code that our replacement wraps or copies has changed. Read the new source, update the replacement in `python/yunshu_engine/`, run the tests and the parity checks, then record the new hash:
+
+  ```bash
+  uv run python scripts/vendor/check_upstream.py --update-hashes
+  ```
+
+- **Watched repos** list the upstream commits that touch the configured globs since the reviewed commit, and files added upstream that match them. Repos pinned to an installed package are compared against that release's tag. After reading the report, move the `commit` forward.
+- **Packages** are read from `pyproject.toml` (base dependencies, every extra and every dependency group). The report shows the installed version, the latest on PyPI and the declared specifier, so a new dependency cannot be missed.
+- **Self-check**: a file under `python/` whose first lines say `# Upstream`, or "ported from", "adapted from", "studied from" or "Inspired by", must be in `vendor.json`. A clone under `reference/` that is in neither `watch` nor `watch_excluded` also fails, so a new clone cannot go unclassified.
+
+## Sync a derived or inspired entry
+
+1. `just vendor-check` lists the upstream commits on the entry's paths since its last reviewed commit (or `commit`, before the first review).
+2. Read them, for example with `git -C reference/<clone> show <sha>`, and port what applies.
+3. When you re-copy a file, set `commit` to the new upstream source. When you deliberately keep the local implementation, keep `commit` as its provenance and add `reviewed_commit`, `reviewed_date` and `review_reason`, explaining which upstream changes are already covered, not applicable, or need their own correctness and performance gate. The next check still reports changes after that review, and local differences are always compared with the originally copied source.
+
+Ports that touch a kernel or a decode path follow the usual evidence rule: a same-checkpoint comparison with identical (or tolerance-checked) output and a measured end-to-end effect, see [Verification](/docs/developers/verification).
+
+## Add a new one
+
+1. Add the entry to the right list in `vendor.json`. For a patch, run `--update-hashes` to record the hash.
+2. Start the source file with the `# Upstream (kind): repo (license) paths @ commit` comment.
+3. Add the upstream's license to `THIRD_PARTY_NOTICES.md`.
+4. If the clone is missing, clone the repo into `reference/<name>` (`reference/` is git-ignored).
+
+## Third-party notices
+
+`THIRD_PARTY_NOTICES.md` summarizes each upstream, its license and how Yunshu uses it (vendored kernels, derived modules, inspired code, patches), then reproduces the license text for each. The upstreams include `mlx`, `mlx-lm` and `mlx-vlm` (MIT), oMLX, vLLM, sglang and others under Apache-2.0, and llama.cpp (MIT). When you add a dependency on someone else's code, the notice file is part of the change, not a follow-up.
+
+## Related
+
+- [Architecture](/docs/developers/architecture)
+- [Verification](/docs/developers/verification)
+- [Contributing](/docs/developers/contributing)

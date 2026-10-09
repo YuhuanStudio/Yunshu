@@ -168,6 +168,19 @@ def line_rows(
     return rows
 
 
+def parity_verdict(repo: Path) -> str:
+    """Read the board without converting missing/stale evidence into a success."""
+    path = repo / "docs/research/parityboard/board.json"
+    try:
+        board = json.loads(path.read_text())
+        n, total, missing = board["parity"], board["total"], board["missing"]
+        if type(n) is not int or type(total) is not int or not 0 <= n <= total or total == 0 or not isinstance(missing, list):
+            raise ValueError("invalid counts")
+        return f"parity: {n}/{total} items, missing: {len(missing)} (board snapshot; rerun scripts/dev/parityboard to refresh)"
+    except (OSError, ValueError, KeyError, TypeError):
+        return "parity: unknown, missing: board unavailable or invalid"
+
+
 def lines_block(repo: Path, codex: Path, jobs_dir: Path, main: str, now: float) -> str:
     stamp = int(now // 60 * 60)
     iso = datetime.fromtimestamp(stamp).strftime("%Y-%m-%d %H:%M")
@@ -175,6 +188,8 @@ def lines_block(repo: Path, codex: Path, jobs_dir: Path, main: str, now: float) 
         f"<!-- auto:stamp {stamp} -->",
         f"自動產生 {iso}（`scripts/dev/research_index.py`；不要手改此區）。"
         f"ahead/behind 相對 {main}；q = gpuq 佇列（running/queued）。",
+        "",
+        parity_verdict(repo),
         "",
         "| 線 (branch) | +ahead/-behind | 狀態 | worker | gpuq | 最後 commit | 報告 |",
         "|---|---|---|---|---|---|---|",

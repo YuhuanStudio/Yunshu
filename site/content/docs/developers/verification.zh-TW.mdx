@@ -1,0 +1,115 @@
+---
+title: 驗證
+description: Yunshu 如何用 yv 驗證工具確認一項最佳化是無損且沒有變慢，以及如何與原生 MLX 比較準確度。
+---
+
+Yunshu 只接受有證據的最佳化：輸出必須相同（或在明確說明的容差內）、新路徑必須確實有執行，而且量測到的效果必須是真的。本頁說明產生這些證據的工具與其採用的規則，對象是修改解碼、預填、快取或排程路徑的貢獻者。
+
+## 必須成立的條件
+
+| 要求 | 意義 |
+|---|---|
+| **Token 完全相同** | 無損的改動不會改變貪婪輸出：在同一個檢查點上，候選版本產生的 token 與基準 commit 相同。對推測解碼而言，開啟草擬的輸出必須等於關閉草擬的輸出 |
+| **確實啟用** | 新路徑必須被證明有在執行（計數器、日誌或回應欄位），不能只是假設。兩次其實都走舊路徑的比較什麼也證明不了 |
+| **快取精確** | 由前綴快取服務的請求必須等於同一請求冷啟動的結果，並且要回報 `cached_tokens > 0` |
+| **無退步** | 解碼速度、首 token 延遲與記憶體不得在量測雜訊之外變差 |
+| **失敗即關閉（fail closed）** | 沒有證據就不算通過。不完整的執行、遺失的結果或提早結束的工作都是失敗，絕不當作略過 |
+
+有損的選項（KV int8、權重量化，以及任何改變輸出品質的做法）是預設為無損的使用者設定，不會因為基準測試而被採用。見[貢獻指南](/docs/developers/contributing)。
+
+## `yv` 工具
+
+`scripts/dev/yv` 會對候選改動執行標準驗證並回傳單一結論。請用它，不要自己寫一次性的量測腳本。它會為兩個比較對象各建一棵固定版本的樹、依序執行各階段、在第一個失敗處停止、記住已完成的部分，並寫出 `verdict.json` 與 `verdict.md`。
+
+```bash
+scripts/dev/yv ab --base <base-sha> --cand <candidate-sha> --suite decode --label my-change
+scripts/dev/yv ab --base <base-sha> --cand <candidate-sha> --suite prefill \
+  --cand-env YUNSHU_VLM_DRAFT=mtp --label my-change-mtp --detach
+scripts/dev/yv status <run>      # 查看某次執行的狀態
+scripts/dev/yv wait <run>        # 阻塞直到有結論
+scripts/dev/yv suites            # 列出 suite
+scripts/dev/yv gate              # 發版關卡，逐階段保存結果
+```
+
+結束碼 `0` 表示所有階段通過，`1` 表示有階段失敗，`2` 表示基礎設施錯誤（工具、git 或參數不一致）。`yv ab` 會阻塞到完成；`--detach` 則立即返回。
+
+### 比較對象（arm）
+
+為了得到可審查的結論，請把兩邊都提交，並傳入完整的 commit SHA，讓基準與候選是兩個明確、有名稱的狀態。`--base` 與 `--cand` 也接受 checkout 目錄；未提交的改動會被雜湊進 arm 的鍵，所以重新續跑時不會把同一棵樹的兩種狀態混在一起。兩邊使用同一個直譯器。`--env K=V` 同時套用於兩邊，`--cand-env` 只套用於候選，`--base-env` 只套用於基準。`--model` 指定檢查點。
+
+### 階段
+
+階段依下列順序執行，並在第一個失敗處停止（除非該 suite 被標記為繼續執行）。
+
+| 階段 | 做什麼 | 通過條件 |
+|---|---|---|
+| `preflight` | 僅用 CPU。兩棵樹都能 import，並執行與差異相關的單元測試 | import 成功、測試通過 |
+| `smoke` | 兩邊都能啟動服務並回答。`--engaged SPEC` 證明候選路徑有執行：`log:REGEX`（候選伺服器日誌）、`field:KEY=REGEX`（`x_yunshu` 回應欄位）或 `spec:MODE`（使用中的推測模式） | 能回答，且每個 `--engaged` 都符合 |
+| `identity` | 在每個 suite 的 context 長度下，對固定的程式碼與散文提示詞做貪婪解碼（冷啟動、暖快取、後續回合）；對文字、推理內容、工具呼叫、結束原因與 token 數計算摘要。加上 `--spec-off` 時，關閉草擬的候選也必須等於開啟草擬的候選 | 每個格子都相等 |
+| `apc` | 暖請求（由前綴快取服務）必須等於冷請求，並回報 `cached_tokens > 0`。沒有前綴快取的路徑使用 `--no-apc-hit-required` | 命中等於未命中 |
+| `quality` | 200 題成對的 MMLU-Pro，基準與候選交錯執行 | 兩邊所有題目都有評分，且答對題數的差距在一題以內 |
+| `speed` | 解碼 tok/s、冷啟動 TTFT 與後續 TTFT，多次重複，依基準、候選、基準、候選交錯。回報中位數、成對差異與雜訊估計 | 沒有任何中位數的惡化超過 2% 與實測雜訊兩者中較大者（`--speed-tol`）；受干擾的重複會重跑一次 |
+| `memory` | 峰值記憶體、閒置後的記憶體，以及短暫後續請求後仍保留的記憶體 | 沒有任何指標比基準多出超過 3% 加 0.25 GiB |
+| `longqa` | 在 32K、64K 與 128K 提示詞中放入確定性的 key-value needle，各問一個貪婪問題 | 答對數與基準相差在一以內 |
+| `conc` | 兩個並行請求，每個都是暖的 32K 前綴加新文字 | TTFT 與每個請求的解碼速度在基準的 10% 以內 |
+
+`--spec-modes default,mtp,dflash` 會對每種推測方法各重複一次 identity 階段。
+
+### Suite
+
+| Suite | 階段與 context |
+|---|---|
+| `decode` | preflight、smoke、identity、apc、speed，1K 與 8K |
+| `prefill` | 再加上 quality，最長到 32K |
+| `scheduler` | preflight、smoke、identity、apc、quality、speed，1K 與 8K |
+| `memory` | preflight、smoke、identity、memory |
+| `quick` | 快速迭代用的階梯；合併前請執行 `full` |
+| `full` | 所有階段，1K、8K 與 32K |
+| `long` | 32K、64K 與 128K 的格子，回覆 2048 token：identity（含草擬開啟與關閉）、apc、speed、memory、longqa 與 conc；即使有階段失敗，每個階段仍會執行 |
+| `longtrend` | 主要長格子各跑一次，用於比較不同版本 |
+| `tiny` | 在小模型上執行所有階段，用來試跑工具本身 |
+
+像 `--suite smoke,identity,speed` 這樣的臨時階梯會保持標準的階段順序。可覆寫的選項：`--ctx`、`--reps`、`--mmlu-n`、`--mem-sizes`、`--mem-reps`、`--speed-tol` 與 `--spec-off`。
+
+### 續跑與結論
+
+每個階段在進行時就會寫下證據。只有當某個格子的工作乾淨結束，且紀錄以 `complete: true` 結尾時，證據才算數；提早結束的工作不留下證據，該階段就失敗。重新執行同一個指令即可續跑：已完成的格子會被重用（結論中會標示），失敗只會損失進行中的那個格子。在既有的 label 下更改基準、候選、環境、suite 或模型會被拒絕，請改用新的 label。
+
+`verdict.json` 包含 label、兩邊的 commit、環境、suite、模型、整體結果、失敗的階段，以及各階段的狀態、原因與數字。`verdict.md` 是給人閱讀的摘要。
+
+## 與原生 MLX 比較準確度
+
+與同一檢查點上的原生 MLX 或 `mlx-vlm` 是否等價，分三個層級檢查，由最便宜、最敏感的開始。300 題的基準測試約有 13 題的 95% 雜訊，單靠它看不出細微的數值漂移。
+
+| 層級 | 比較對象 | 敏感於 |
+|---|---|---|
+| 1 | 固定文字上的下一個 token 分布（teacher forcing）：KL divergence 與 top-1 一致率 | 非常小的數值漂移 |
+| 2 | 50 個固定提示詞、最多 256 token 的貪婪續寫 | 第一個不同的 token |
+| 3 | 成對的下游評測（GSM8K、IFEval、MMLU-Pro、needle 檢索、工具呼叫），逐題配對，使用 McNemar 檢定與信賴區間 | 任務層級的差異 |
+
+參考基準永遠是同一檢查點上、未載入任何 Yunshu kernel 的原生 `mlx-vlm`，而且執行時會斷言這一點。候選版本是與「原生 MLX 對自己」的差異相比：重複執行是位元精確的，所以任何非零差異都是真實的路徑差異；但只要更改批次大小或預填區塊大小，平均 KL divergence 就已經會移動約 1e-3 到 3e-3，top-1 一致率降到約 98.8%。這就是數值上合理實作的尺度。
+
+第 1 層的通過條件：
+
+- 平均 KL divergence 不超過原生對原生基準線的兩倍，中位數與第 99 百分位數也一樣；
+- top-1 一致率至少 98.4%；
+- perplexity 變化不超過 0.5%；
+- 硬性條件：使用推測解碼時，多 token 的驗證區塊必須與單 token 解碼位元相同，因此草擬開啟等於草擬關閉。
+
+第 2 層：草擬開啟與關閉時，50 個提示詞必須完全相同，且與參考基準的吻合數不得低於同一檢查點已記錄的基線。
+
+第 3 層以帶區間的成對差異回報，等價的路徑在約 200 到 300 題的成對集合上必須在一題以內一致。不會為每次改動都重跑完整基準測試。
+
+## 驗證代理與 API 行為
+
+用戶端依賴的行為是以官方工具驗證，而不是假設：
+
+- 單元測試（`tests/unit`）涵蓋請求與回應的形狀，其中一個測試會把已安裝的 `openai` 與 `anthropic` SDK 型別的每個請求參數與請求模型比對，所以新的 SDK 欄位若既不支援也沒有列為忽略，CI 就會失敗。
+- 路由覆蓋測試：當應用程式註冊了某個路由，卻沒有任何檢查或經審查的豁免提到它時就會失敗。
+- 發版關卡會用官方 SDK 透過 HTTP 驅動已安裝的建置版本；見[發版關卡](/docs/developers/release-gate)。
+
+## 相關頁面
+
+- [發版關卡](/docs/developers/release-gate)
+- [貢獻指南](/docs/developers/contributing)
+- [架構](/docs/developers/architecture)

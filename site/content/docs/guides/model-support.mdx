@@ -1,0 +1,73 @@
+---
+title: Model support
+description: Which model families and modalities Yunshu serves, and which serving path and optional extra each one uses.
+---
+
+Yunshu loads MLX checkpoints. It detects what kind of model a folder holds from its files and `config.json`, then picks an engine for it. Being loadable upstream (in `mlx-lm`, `mlx-vlm` or `mlx-audio`) does not certify every Yunshu endpoint or feature for that model. The model card that `GET /v1/models` returns for each model (under the `yunshu` field of each item) describes what the loaded model can do; check it before relying on tools, structured output, logprobs or media input.
+
+## Support tiers
+
+| Tier | Models | What it means |
+|---|---|---|
+| Tuned | Qwen3.8-27B (the first fully tuned checkpoint) | Speculative decoding, prefix reuse and the batch-invariant decode path are developed and measured on it. |
+| Tier 1 | The Qwen3.5 family (`qwen3_5`, `qwen3_6`, `qwen3_5_moe` model types) | Speculative decoding (MTP or a matching drafter) and prefix caching. |
+| Generic text | Other `mlx-lm` models | Served by the text fast path. Upstream support is the limit. |
+| Generic vision-language | Other `mlx-vlm` models | Served by the VLM batch runner. Model-specific media, template and capability limits apply. |
+| Other modalities | Speech, embeddings, ranking, OCR, image generation | Available through their own engines and optional extras; see below. |
+
+## Serving paths
+
+| Path | Used for | Behavior |
+|---|---|---|
+| VLM batch runner | Every model served through `mlx-vlm`, including the Qwen3.5 / 3.6 / 3.8 family when it is loaded with the `vision` extra | Continuous batching with per-request sampling. One request is prefilled at a time. Automatic prefix cache for families that do not use a sliding-window cache, keyed also on image and audio features, with an optional SSD tier. Accepts image, audio and video input. |
+| Speculative lane (Qwen3.5 family only) | `qwen3_5`, `qwen3_6`, `qwen3_5_moe` | MTP or DFlash drafting in a single-request lane, using batch-invariant decode and verify kernels so that output with drafting on matches output with drafting off. `YUNSHU_MTP` (default on) and `YUNSHU_VLM_DRAFT` control it. Concurrent requests are not yet drafted together. |
+| Text fast path | Text-only `mlx-lm` models | One request at a time through `mlx-lm`; concurrent requests are served one after another. |
+
+Limits of the VLM path: LoRA adapters and custom logits processors are rejected for vision-language models. Which speculative path will be used for a Qwen3.5-family model is shown by `yunshu doctor -m <model>` (the `speculative` row) and by the startup log.
+
+## Modalities and the routes that use them
+
+Detection runs on the model folder. The extra column names the optional install extra from [Install](/docs/getting-started/install) that the engine needs.
+
+| Model kind | Examples of detected types | Routes | Extra | Status |
+|---|---|---|---|---|
+| Text LLM | Any `mlx-lm` model type | `POST /v1/chat/completions`, `POST /v1/completions`, `POST /v1/responses`, `POST /v1/messages` | none | <Support status="supported">supported</Support> |
+| Vision-language | `vision_config` models such as Qwen-VL, Pixtral, Mistral 3 and the Qwen3.5 family | The same chat routes, with image parts | `vision` | <Support status="supported">supported</Support> |
+| Speech-to-text | `whisper`, `qwen3_asr`, `parakeet`, `qwen2_audio` | `POST /v1/audio/transcriptions`, `POST /v1/audio/translations` | `audio` | <Support status="supported">supported</Support> |
+| Text-to-speech | `qwen3_tts`, `kokoro`, `chatterbox` | `POST /v1/audio/speech` | `audio` | <Support status="supported">supported</Support> |
+| Native speech-to-speech | Qwen3-Omni (a model with a Talker) | `POST /v1/omni/speech/stream`, and the Realtime sockets | `omni` | <Support status="partial">partial</Support> |
+| OCR | Models whose type or name contains `ocr` | `POST /v1/ocr` | `vision` | <Support status="supported">supported</Support> |
+| Embeddings | `mlx-embeddings` models, EmbeddingGemma 2, Qwen3-VL-Embedding | `POST /v1/embeddings` | `embeddings` | <Support status="supported">supported</Support> |
+| Reranking and scoring | Cross-encoder rerankers, sequence-classification heads | `POST /v1/rerank`, `POST /v1/classify`, `POST /v1/score` | depends on the model (`embeddings` or `vision`) | <Support status="supported">supported</Support> |
+| Image generation | `flux`, `sd3`, `sdxl`, `z_image` | `POST /v1/images/generations`, `POST /v1/images/edits`, `POST /v1/images/variations` | `generation` | <Support status="supported">supported</Support> |
+| Typed decisions | Clef / Clef-flash joint schema heads | `POST /v1/decisions` | `vision` | <Support status="partial">partial</Support> |
+| Video generation | Wan, LTX and similar | none | | <Support status="unsupported">not supported</Support> |
+| Standalone speech-to-speech | Voice conversion, speech enhancement models | none | | <Support status="unsupported">not supported</Support> |
+
+Notes on the partial rows:
+
+- **Native speech-to-speech** works when the served model has a Talker (Qwen3-Omni). The voice path then reuses the already loaded model instead of loading a second copy. It is switched off for other models, or with `YUNSHU_REALTIME_OMNI=off`, in which case Realtime falls back to speech-to-text, then the LLM, then text-to-speech. Large Omni checkpoints need a lot of unified memory.
+- **Typed decisions** accept only the Clef joint schema head. Other decision-head families are rejected, and a chat model sent to the decision route returns an error.
+
+A model that is detected as video or standalone speech-to-speech fails to load with a message saying so, and image, audio and LLM models are listed as the supported kinds. When extras are missing, the related routes report the missing dependency instead of returning placeholder output (for example `POST /v1/images/generations` returns 503 without the `generation` extra).
+
+## Single-model and multi-model serving
+
+`yunshu serve -m <model>` serves one model and treats the `model` field of a request as advisory. `yunshu serve --models-dir <dir>` registers every model it finds and loads them on demand; the engine type (text, vision, audio, image, decision) is chosen per model by the detection above. See [Models](/docs/getting-started/models).
+
+## Validating a model
+
+Check a checkpoint before depending on it:
+
+1. `yunshu doctor -m <model>` checks that the folder is complete and fits in memory.
+2. Read the model's entry in `GET /v1/models` for its capabilities.
+3. Send a request for each feature you rely on (tools, JSON schema, streaming, stop sequences, logprobs, cancel) against the running server.
+
+Support in this table describes what the code handles. It is not a promise that every checkpoint of a family works with every feature.
+
+## Related
+
+- [Structured output](/docs/guides/structured-output)
+- [Prompt caching](/docs/guides/prompt-caching)
+- [CLI reference](/docs/guides/cli)
+- [Troubleshooting](/docs/guides/troubleshooting)

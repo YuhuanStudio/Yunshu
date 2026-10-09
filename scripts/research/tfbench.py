@@ -22,6 +22,8 @@ import urllib.request
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "dev"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import bench_engines  # noqa: E402
 from gpuq_contention import was_contended  # noqa: E402
 
 M = "/Volumes/P5Plus/models/Jundot/Qwen3.8-27B-oQ4e-mtp"
@@ -50,7 +52,7 @@ ROOT = Path("/Users/yuhuan/Documents/YuhuanStudio/Yunshu")
 RUNS = ROOT / "docs/research/runs/2026-09-30-agtraffic/artifacts"
 BODIES = RUNS / "cap-opencode-fix-cart-discount-r1/bodies"
 BODIES2 = RUNS / "cap-opencode-polyglot-wordy-r1/bodies"
-WORK = Path("/Volumes/P5Plus/yunshu-build/tfnew")
+WORK = Path(os.environ.get("TFB_WORK", "/Volumes/P5Plus/yunshu-build/tfnew"))
 # Server homes and logs go here (prompts stay in WORK); lets reruns keep their data apart.
 OUT = Path(os.environ.get("TFB_OUT", str(WORK)))
 
@@ -76,6 +78,46 @@ def free_port(wait_s=600.0, interval_s=5.0, sleep=None, clock=None):
         sleep(min(interval_s, left))
 
 
+def owns_listener(pid, port):
+    """A ready endpoint must belong to our process group before inference."""
+    result = subprocess.run(
+        ["lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN", "-t"],
+        capture_output=True,
+        text=True,
+        timeout=5,
+    )
+    try:
+        group = os.getpgid(pid)
+        return any(os.getpgid(int(owner)) == group for owner in result.stdout.split())
+    except (ProcessLookupError, ValueError):
+        return False
+
+
+def start_server(engine, extra_env, tag, **kwargs):
+    """Retry bind races only; model/protocol failures remain fail-fast."""
+    for attempt in range(5):
+        try:
+            return Srv(engine, extra_env, tag, **kwargs)
+        except RuntimeError:
+            log = OUT / "out" / f"server-{tag}.log"
+            text = log.read_text(errors="replace") if log.exists() else ""
+            if not any(
+                marker in text.lower()
+                for marker in (
+                    "address already in use",
+                    "errno 48",
+                    "error while attempting to bind",
+                )
+            ):
+                raise
+            log.rename(log.with_suffix(f".bind-attempt{attempt}.log"))
+            if attempt == 4:
+                raise
+            print(f"port bind race; retrying our {engine} instance", flush=True)
+            time.sleep(1)
+    raise RuntimeError("port pool remained unavailable")
+
+
 def spec_request(engine, extra_env):
     """Make the comparison independent of drafter discovery under isolated HOME."""
     if engine != "yunshu":
@@ -98,25 +140,55 @@ def engaged_spec_mode(engine, log):
     return None
 
 
+def warm_lazy_engine(engine, url, model):
+    # /v1/models is discovery-only for oMLX. Load the target/drafter before
+    # checking the engaged mode, and keep this startup request out of timing.
+    if engine in ("omlx", "llamacpp"):
+        send(url, req(model, "Write a short example and explain it.", 16), timeout=240)
+
+
 class Srv:
-    def __init__(self, engine, extra_env, tag, model=None):
+    def __init__(
+        self, engine, extra_env, tag, model=None, ctx_tokens=140000, parallel=1
+    ):
         self.engine, self.port = engine, free_port()
         self.requested_spec_mode, extra_env = spec_request(engine, extra_env)
+        self.launch = None
+        self.probe = None
+        if bench_engines.is_new_engine(engine):
+            self.requested_spec_mode = bench_engines.ENGINES[engine].expected_mode
         self.extra_env = extra_env
         self.home = OUT / "home" / tag
         shutil.rmtree(self.home, ignore_errors=True)
         self.home.mkdir(parents=True)
         self.log = OUT / "out" / f"server-{tag}.log"
         self.log.parent.mkdir(parents=True, exist_ok=True)
-        env = {
-            k: v
-            for k, v in os.environ.items()
-            if not k.startswith(("ANTHROPIC_", "OPENAI_", "CLAUDE", "CODEX", "YUNSHU_"))
-        }
+        env = bench_engines.scrubbed_env(os.environ)
         env.update(
             HOME=str(self.home), HF_HUB_OFFLINE="1", NO_PROXY="127.0.0.1", **extra_env
         )
-        if engine == "yunshu":
+        if bench_engines.is_new_engine(engine):
+            self.launch = bench_engines.build_launch(
+                engine, self.port, self.home, os.environ, ctx_tokens, parallel
+            )
+            env = dict(self.launch.env, **extra_env)
+            for path, text in self.launch.files.items():
+                Path(path).parent.mkdir(parents=True, exist_ok=True)
+                Path(path).write_text(text)
+            for link, target in self.launch.links.items():
+                Path(link).parent.mkdir(parents=True, exist_ok=True)
+                if Path(link).is_symlink() or Path(link).exists():
+                    Path(link).unlink()
+                os.symlink(target, link)
+            cmd = list(self.launch.cmd)
+            if bench_engines.ENGINES[engine].kind == "yunshu":
+                if not YUNSHU_SRC:
+                    raise RuntimeError(
+                        "TFB_YUNSHU_SRC (pinned tree python/) is required"
+                    )
+                env["PYTHONPATH"] = YUNSHU_SRC
+                cmd[0] = own_venv_bin(YUNSHU_SRC, "yunshu") or cmd[0]
+        elif engine == "yunshu":
             if YUNSHU_SRC:
                 env["PYTHONPATH"] = YUNSHU_SRC
             cmd = [
@@ -141,6 +213,9 @@ class Srv:
                 "--no-update-check",
             ]
         self.cmd = cmd
+        baseline_used = (
+            host_used_bytes()
+        )  # before launch: weights/mmap count in the delta
         with open(self.log, "wb") as server_log:
             self.proc = subprocess.Popen(
                 cmd,
@@ -150,6 +225,9 @@ class Srv:
                 start_new_session=True,
             )
         self.url = f"http://127.0.0.1:{self.port}"
+        self.mem = MemSampler(
+            getattr(self.proc, "pid", None), baseline_bytes=baseline_used
+        )
         t0 = time.time()
         while time.time() - t0 < 900:
             if self.proc.poll() is not None:
@@ -159,6 +237,9 @@ class Srv:
                 self.kill()
                 raise RuntimeError(f"server startup failed; see {self.log}")
             try:
+                if not owns_listener(self.proc.pid, self.port):
+                    time.sleep(0.2)
+                    continue
                 with urllib.request.urlopen(self.url + "/v1/models", timeout=3) as r:
                     self.model = json.load(r)["data"][0]["id"]
                     self.ready_s = time.time() - t0
@@ -169,15 +250,36 @@ class Srv:
             self.kill()
             raise RuntimeError("not ready")
         try:
+            warm_lazy_engine(self.engine, self.url, self.model)
             self.verify_spec_mode()
         except Exception:
             self.kill()
             raise
 
+    def probe_text(self):
+        path = self.launch.probe if self.launch else None
+        if not path:
+            return None
+        try:
+            with urllib.request.urlopen(self.url + path, timeout=10) as r:
+                return r.read().decode("utf-8", "replace")[:20000]
+        except Exception as e:  # noqa: BLE001
+            return f"probe failed: {e!r}"
+
     def verify_spec_mode(self):
-        self.engaged_spec_mode = engaged_spec_mode(
-            self.engine, self.log.read_text(errors="replace")
-        )
+        log = self.log.read_text(errors="replace")
+        if self.engine in bench_engines.ENGINES:
+            # registry engines: evidence from the log (and a status probe) must match the expected mode
+            self.probe = self.probe_text()
+            self.engaged_spec_mode = bench_engines.detect_mode(
+                self.engine, log, self.probe
+            )
+            if os.environ.get("TFB_SKIP_ENGAGED") == "1":
+                self.engaged_spec_mode = self.engaged_spec_mode or "unchecked"
+                return
+            bench_engines.check_engaged(self.engine, self.engaged_spec_mode)
+            return
+        self.engaged_spec_mode = engaged_spec_mode(self.engine, log)
         if os.environ.get("TFB_SKIP_ENGAGED") == "1":
             # old releases (v0.1.0) have no speculative decoding and no engagement marker
             self.engaged_spec_mode = self.engaged_spec_mode or "unchecked"
@@ -198,7 +300,10 @@ class Srv:
         # the next server of this tag starts from an emptied home anyway. Left behind, finished
         # yv runs held 362 GB of it on P5Plus (2026-10-07).
         if self.proc.poll() is not None:
-            shutil.rmtree(self.home / ".yunshu" / "cache", ignore_errors=True)
+            for sub in (".yunshu/cache", "omlx-ssd", "mtplx-cache", "omlx-base/cache"):
+                shutil.rmtree(self.home / sub, ignore_errors=True)
+        if getattr(self, "mem", None):
+            self.mem.stop()
 
 
 def send(url, body, timeout=600):
@@ -325,6 +430,18 @@ def load_prompt(name):
     return (WORK / "prompts" / f"{name}.txt").read_text()
 
 
+def decode_prompt(kind, ctx, long_ask):
+    text = load_prompt(f"{kind}-{ctx}")
+    if os.environ.get("TFB_EXACT_PROMPTS") == "1":
+        from snapshot_prompts import assert_chat_prompt
+
+        assert_chat_prompt(text, ctx)
+        if long_ask and LONG_ASK not in text:
+            raise AssertionError("exact prompt lacks LONG_ASK")
+        return text
+    return text + (LONG_ASK if long_ask else "")
+
+
 def make_prompt(kind, ntok, salt):
     files = corpus(kind)
     cpt = 4.0 if kind == "prose" else 3.2
@@ -360,7 +477,88 @@ def req(model, text, mt, seed=None, extra=None, temp=0):
     return b
 
 
+META: dict = {}  # engine / version / sha / flags / drafter / engaged spec mode / checkpoint, on every row
+
+
+def host_used_bytes():
+    """Host used memory (active+wired+compressor); None when vm_stat is unavailable."""
+    try:
+        from process_memory import system_used_bytes
+
+        return system_used_bytes()
+    except Exception:  # noqa: BLE001 - a baseline miss disables system-delta, never fakes it
+        return None
+
+
+class MemSampler:
+    """Server memory, sampled every 2 s from server start.
+
+    Headline numbers use memory_method="system-delta": host used memory (vm_stat active + wired +
+    compressor) minus a baseline taken BEFORE the server launched. Unlike per-process phys_footprint it
+    counts mmap'd file-backed weights, so engines that load weights differently are comparable. The
+    process-tree phys_footprint / RSS stay as secondary fields. Without a baseline the method falls
+    back to "process-footprint" and the parity board does not compare it."""
+
+    def __init__(self, pid, every=2.0, baseline_bytes=None, used_fn=None):
+        import threading
+
+        self.pid, self.every = pid, every
+        self.baseline_bytes = baseline_bytes
+        self._used_fn = used_fn or host_used_bytes
+        self.peak_gib = 0.0
+        self.peak_rss_gib = 0.0
+        self.last_rss_gib = None
+        self.last_gib = None
+        self.peak_footprint_gib = 0.0
+        self.last_footprint_gib = None
+        self.peak_delta_gib = 0.0
+        self.last_delta_gib = None
+        self.n = 0
+        self._stop = threading.Event()
+        self._t = threading.Thread(target=self._run, daemon=True)
+        if pid:
+            self._t.start()
+
+    @property
+    def method(self):
+        return "system-delta" if self.baseline_bytes else "process-footprint"
+
+    def sample(self):
+        try:
+            from process_memory import process_tree_memory
+
+            m = process_tree_memory(self.pid)
+            g = round(m["physical_footprint_sum_bytes"] / 2**30, 3)
+            self.last_footprint_gib = g
+            self.peak_footprint_gib = max(self.peak_footprint_gib, g)
+            rss = m.get("rss_sum_bytes")
+            if rss is not None:
+                self.last_rss_gib = round(rss / 2**30, 3)
+                self.peak_rss_gib = max(self.peak_rss_gib, self.last_rss_gib)
+            head = g
+            if self.baseline_bytes:
+                used = self._used_fn()
+                if used is not None:
+                    head = round((used - self.baseline_bytes) / 2**30, 3)
+                    self.last_delta_gib = head
+                    self.peak_delta_gib = max(self.peak_delta_gib, head)
+            self.last_gib = head
+            self.peak_gib = max(self.peak_gib, head)
+            self.n += 1
+            return head
+        except Exception:  # noqa: BLE001 - a sampling miss is not a result
+            return None
+
+    def _run(self):
+        while not self._stop.wait(self.every):
+            self.sample()
+
+    def stop(self):
+        self._stop.set()
+
+
 def emit(out, **kw):
+    kw = {**META, **kw}
     print(
         json.dumps({k: v for k, v in kw.items() if k not in ("text", "cmd", "env")})[
             :300
@@ -407,7 +605,7 @@ def part_decode(s, out, a):
             text = (
                 "Write a short example and explain it."
                 if a.smoke
-                else load_prompt(f"{kind}-{ctx}") + (LONG_ASK if a.long_ask else "")
+                else decode_prompt(kind, ctx, a.long_ask)
             )
             reply = ""
             for phase in ("cold", "warm", "turn2"):
@@ -428,8 +626,22 @@ def part_decode(s, out, a):
                     reply = r["_text"]
                 r["text"] = r.pop("_text")
                 r["rep4"] = ngram_repeat(r["text"])
-                emit(out, part="decode", ctx=ctx, kind=kind, phase=phase, **r)
-            if a.engine != "yunshu" and ctx == 1024:
+                emit(
+                    out,
+                    part="decode",
+                    ctx=ctx,
+                    kind=kind,
+                    phase=phase,
+                    reference_prompt_tokens=ctx
+                    if os.environ.get("TFB_EXACT_PROMPTS") == "1" and not a.smoke
+                    else None,
+                    **r,
+                )
+            if (
+                a.engine in bench_engines.TF_ENGINES
+                and ctx == 1024
+                and os.environ.get("TFB_EXACT_PROMPTS") != "1"
+            ):
                 r = send(s.url, req(s.model, text, n_dec, extra={"draft": False}))
                 r["text"] = r.pop("_text")
                 emit(out, part="decode", ctx=ctx, kind=kind, phase="specoff", **r)
@@ -491,7 +703,13 @@ def part_needle(s, out, a):
         for i, (nm, code) in enumerate(items):
             if not lo <= i < hi:
                 continue
-            r = send(s.url, req(s.model, hay + needle_question(nm), 16))
+            text = hay + needle_question(nm)
+            if not a.smoke and os.environ.get("TFB_EXACT_PROMPTS") == "1":
+                from snapshot_prompts import assert_chat_prompt, exact_chat_prompt
+
+                text = exact_chat_prompt(hay * 2, ctx, needle_question(nm))
+                assert_chat_prompt(text, ctx)
+            r = send(s.url, req(s.model, text, 16))
             ans = r.pop("_text")
             emit(
                 out,
@@ -562,25 +780,37 @@ def part_conc32(s, out, a):
 
 
 def part_conc(s, out, a):
-    for n in (2,) if a.smoke else (2, 4, 8):
-        for trial in range(1 if a.smoke else 2):
+    ns = [int(x) for x in (a.conc_ns or "2,4,8").split(",")]
+    for n in (2,) if a.smoke else ns:
+        for trial in range(1 if a.smoke else a.conc_trials):
             texts = [
                 "Say hello."
                 if a.smoke
                 else load_prompt(
-                    f"conc-{'prose' if (i + trial) % 2 == 0 else 'code'}-{i}"
+                    f"conc-{n}-{trial}-{'prose' if (i + trial) % 2 == 0 else 'code'}-{i}"
+                    if os.environ.get("TFB_EXACT_PROMPTS") == "1"
+                    else f"conc-{'prose' if (i + trial) % 2 == 0 else 'code'}-{i}"
                 )
                 for i in range(n)
             ]
+            if not a.smoke and os.environ.get("TFB_EXACT_PROMPTS") == "1":
+                from snapshot_prompts import assert_chat_prompt
+
+                for text in texts:
+                    assert_chat_prompt(text, 32768)
             t0 = time.perf_counter()
             with cf.ThreadPoolExecutor(n) as ex:
                 rs = list(
                     ex.map(
-                        lambda t: send(s.url, req(s.model, t, 16 if a.smoke else 256)),
+                        lambda t: send(
+                            s.url, req(s.model, t, 16 if a.smoke else a.conc_tokens)
+                        ),
                         texts,
                     )
                 )
             for r in rs:
+                if not a.smoke:
+                    check_decode_len(r, a.conc_tokens, f"conc n={n} trial={trial}")
                 r.pop("_text")
             wall = time.perf_counter() - t0
             tot = sum(r["ct"] for r in rs)
@@ -594,6 +824,9 @@ def part_conc(s, out, a):
                 agg_tps=round(tot / wall, 1),
                 per_req_dec=[r["dec_tps"] for r in rs],
                 ttfts=[r["ttft_s"] for r in rs],
+                cached=[r["cached"] for r in rs],
+                pts=[r["pt"] for r in rs],
+                cts=[r["ct"] for r in rs],
                 shas=[r["sha"] for r in rs],
             )
 
@@ -665,6 +898,26 @@ def parse_args(argv=None):
         default=256,
         help="reply length of decode cells; a cell that does not end finish=length at exactly N is an error",
     )
+    ap.add_argument(
+        "--conc-ns", default="", help="concurrency levels, e.g. 2,4 (default 2,4,8)"
+    )
+    ap.add_argument("--conc-trials", type=int, default=2)
+    ap.add_argument("--conc-tokens", type=int, default=256)
+    ap.add_argument(
+        "--ctx-tokens",
+        type=int,
+        default=140000,
+        help="context window to start engines that need one (llama.cpp -c)",
+    )
+    ap.add_argument(
+        "--parallel", type=int, default=1, help="server slots (llama.cpp -np)"
+    )
+    ap.add_argument(
+        "--idle-s",
+        type=float,
+        default=30.0,
+        help="pause before the idle footprint sample",
+    )
     ap.add_argument("--dry-run", action="store_true")
     args = list(sys.argv[1:] if argv is None else argv)
     # Tags are filename suffixes and often begin with '-'. Keep registered
@@ -686,12 +939,16 @@ def main():
         if a.part == "decode" and not a.smoke:
             for ctx in a.only_ctx or [1024, 8192, 32768]:
                 for kind in a.only_kind or ("prose", "code"):
-                    load_prompt(f"{kind}-{ctx}")
+                    decode_prompt(kind, ctx, a.long_ask)
         elif a.part in ("conc", "agent", "ca"):
             for directory in (BODIES, BODIES2):
                 if not list(directory.glob("*-req.json")):
                     raise FileNotFoundError(directory)
-        if not (Path(a.model) / "config.json").is_file():
+        if a.engine in bench_engines.ENGINES:
+            gone = bench_engines.missing_paths(a.engine)
+            if gone:
+                raise FileNotFoundError(f"{a.engine}: missing {gone}")
+        elif not (Path(a.model) / "config.json").is_file():
             raise FileNotFoundError(a.model)
         mode, selected = spec_request(a.engine, extra_env)
         print(
@@ -705,9 +962,37 @@ def main():
             )
         )
         return
-    s = Srv(a.engine, extra_env, f"{a.engine}-{a.part}-{a.rep}{a.tag}", model=a.model)
+    if (
+        a.engine in bench_engines.ENGINES
+        and bench_engines.ENGINES[a.engine].kind == "yunshu"
+    ):
+        expected = os.environ.get("TFB_EXPECT_YUNSHU_SHA")
+        if expected and bench_engines.tree_version(YUNSHU_SRC)[1] != expected:
+            raise AssertionError(
+                "Yunshu pinned tree does not match expected release SHA"
+            )
+    s = start_server(
+        a.engine,
+        extra_env,
+        f"{a.engine}-{a.part}-{a.rep}{a.tag}",
+        model=a.model,
+        ctx_tokens=a.ctx_tokens,
+        parallel=a.parallel,
+    )
     try:
         with open(a.out, "a") as out:
+            if a.engine in bench_engines.ENGINES:
+                version, sha = bench_engines.engine_version(a.engine, YUNSHU_SRC)
+                META.update(
+                    bench_engines.meta_row(
+                        a.engine,
+                        version=version,
+                        git_sha=sha,
+                        engaged=s.engaged_spec_mode,
+                        flags=(s.launch.flags if s.launch else {"drafter": D}),
+                    )
+                )
+                META["snapshot_rep"] = a.rep
             emit(
                 out,
                 part="session",
@@ -718,6 +1003,7 @@ def main():
                 env=s.extra_env,
                 requested_spec_mode=s.requested_spec_mode,
                 engaged_spec_mode=s.engaged_spec_mode,
+                engine_probe=getattr(s, "probe", None),
                 tag=a.tag,
             )
             for _ in range(2):
@@ -734,6 +1020,28 @@ def main():
                     "conc32": part_conc32,
                 }[a.part](s, out, a)
             s.verify_spec_mode()
+            mem = getattr(s, "mem", None)
+            if mem is not None:
+                time.sleep(a.idle_s)
+                idle = mem.sample()
+                peak = max(mem.peak_gib, idle or 0.0)
+                if not peak or idle is None:
+                    raise RuntimeError("memory sampling produced no data")
+                emit(
+                    out,
+                    part="memory",
+                    peak_gib=peak,
+                    idle_gib=idle,
+                    memory_method=mem.method,
+                    baseline_used_gib=round((mem.baseline_bytes or 0) / 2**30, 3),
+                    peak_footprint_gib=mem.peak_footprint_gib,
+                    idle_footprint_gib=mem.last_footprint_gib,
+                    peak_rss_gib=mem.peak_rss_gib,
+                    idle_rss_gib=mem.last_rss_gib,
+                    samples=mem.n,
+                    idle_after_s=a.idle_s,
+                    engine_probe=s.probe_text(),
+                )
             emit(
                 out,
                 part="part_done",

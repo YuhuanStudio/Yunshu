@@ -1,0 +1,201 @@
+---
+title: Batches
+description: The OpenAI Batch API, backed by a single loopback worker that replays each JSONL line against this same server and resumes after a restart.
+---
+
+`/v1/batches` follows the OpenAI Batch API. You upload a JSONL file of requests with `purpose=batch` through the [Files API](/docs/api/files), create a batch that points at it, poll until it ends, and download the output file. Anthropic message batches live on the same machinery and are documented with the [Messages](/docs/api/messages) API.
+
+<Endpoint method="POST" path="/v1/batches" />
+<Endpoint method="GET" path="/v1/batches" />
+<Endpoint method="GET" path="/v1/batches/{batch_id}" />
+<Endpoint method="POST" path="/v1/batches/{batch_id}/cancel" />
+
+<Callout type="info">
+Authentication is only enforced when `YUNSHU_AUTH_TOKEN` is set. The worker re-uses that token when it calls the server, so a batch runs with the same auth, model routing, prefix cache and tools as a normal request.
+</Callout>
+
+## How batches run
+
+- A single background worker drains queued batches one at a time, oldest first, and runs the requests inside a batch one at a time.
+- Each line is sent as an ordinary HTTP `POST` to the batch's endpoint on this server (over the same host and port the batch was created through). Interactive traffic is interleaved; the engine serializes GPU work.
+- `stream` is forced to `false` for every line.
+- Batch state is stored in the file store (`~/.yunshu/files` unless `YUNSHU_FILES_DIR` is set). After a restart the worker picks up unfinished batches and skips lines that already have a result, so a batch resumes where it stopped.
+- The completion window is fixed at 24 hours from creation. If the batch is still running after that, it ends as `expired` and the remaining lines are not run.
+
+## Create a batch
+
+| Parameter | Type | Required | Description | Status |
+| --- | --- | --- | --- | --- |
+| `input_file_id` | string | yes | A file uploaded with `purpose=batch`. | supported |
+| `endpoint` | string | yes | One of `/v1/chat/completions`, `/v1/completions`, `/v1/embeddings`, `/v1/responses`. | supported |
+| `completion_window` | string | yes | Must be `24h`. | supported |
+| `metadata` | object | no | Up to 16 keys, string values only. | supported |
+| `output_expires_after` | object | no | OpenAI field for output file expiry. | accepted and ignored |
+
+### Input file format
+
+One JSON object per line (blank lines are skipped):
+
+```json
+{"custom_id": "req-1", "method": "POST", "url": "/v1/chat/completions", "body": {"model": "local", "messages": [{"role": "user", "content": "Say hi"}], "max_tokens": 16}}
+{"custom_id": "req-2", "method": "POST", "url": "/v1/chat/completions", "body": {"model": "local", "messages": [{"role": "user", "content": "Say bye"}], "max_tokens": 16}}
+```
+
+Rules checked when the batch is created:
+
+- `custom_id` is required, a string, and unique within the file.
+- `method` must be `POST`.
+- `url` must equal the batch's `endpoint`.
+- `body` must be a JSON object and must not set `stream: true`.
+- At most 50,000 requests.
+- The file must not be empty.
+
+If any line fails validation the batch is still created, but with `status: "failed"` and an `errors` list (at most 20 entries) with `code`, `message`, `param` and `line`. Nothing runs.
+
+## Batch object
+
+```json
+{
+  "id": "batch_0a1b2c3d4e5f60718293a4b5",
+  "object": "batch",
+  "endpoint": "/v1/chat/completions",
+  "errors": null,
+  "input_file_id": "file_9f8e7d6c5b4a39281716f5e4",
+  "completion_window": "24h",
+  "status": "in_progress",
+  "output_file_id": null,
+  "error_file_id": null,
+  "created_at": 1767225600,
+  "in_progress_at": 1767225601,
+  "expires_at": 1767312000,
+  "finalizing_at": null,
+  "completed_at": null,
+  "failed_at": null,
+  "expired_at": null,
+  "cancelling_at": null,
+  "cancelled_at": null,
+  "request_counts": { "total": 2, "completed": 1, "failed": 0 },
+  "metadata": null
+}
+```
+
+Statuses: `validating`, `failed`, `in_progress`, `finalizing`, `completed`, `expired`, `cancelling`, `cancelled`. A batch whose input validated stays `validating` until the worker picks it up. The `batch-...` spelling of an id is accepted and mapped to `batch_...`.
+
+## Results
+
+When the batch ends, successful lines are written to the output file and non-2xx lines to the error file. Both are normal files in the store (purposes `batch_output` and `batch_error`); a file is only created when it has content. Fetch them with `GET /v1/files/{file_id}/content` using `output_file_id` and `error_file_id`.
+
+Each result line:
+
+```json
+{"id": "batch_req_3c1f...", "custom_id": "req-1", "response": {"status_code": 200, "request_id": "req_...", "body": {"id": "chatcmpl-...", "object": "chat.completion"}}, "error": null}
+```
+
+If a request could not be sent at all (transport failure), the line has `response: null` and `error: {"code": "request_failed", "message": ...}` and is counted as failed.
+
+## List and cancel
+
+`GET /v1/batches` takes `limit` (1 to 100, default 20) and `after` (a batch id) and returns `{"object": "list", "data", "first_id", "last_id", "has_more"}`, newest first.
+
+`POST /v1/batches/{batch_id}/cancel` moves a `validating` or `in_progress` batch to `cancelling`; the worker stops before its next line and the batch ends as `cancelled`. Cancelling an already-cancelling batch returns it unchanged. Any other state returns `409` with code `invalid_state`. Lines already completed keep their results.
+
+## Examples
+
+<Tabs items={["curl", "Python", "JavaScript"]}>
+<Tab value="curl">
+
+```bash
+curl http://localhost:8000/v1/files -F purpose=batch -F file=@requests.jsonl
+
+curl http://localhost:8000/v1/batches \
+  -H "Content-Type: application/json" \
+  -d '{"input_file_id": "file_9f8e7d6c5b4a39281716f5e4", "endpoint": "/v1/chat/completions", "completion_window": "24h"}'
+
+curl http://localhost:8000/v1/batches/batch_0a1b2c3d4e5f60718293a4b5
+curl http://localhost:8000/v1/files/file_1122334455667788990011aa/content
+```
+
+</Tab>
+<Tab value="Python">
+
+```python
+import time
+from openai import OpenAI
+
+client = OpenAI(base_url="http://localhost:8000/v1", api_key="not-needed")
+
+up = client.files.create(file=open("requests.jsonl", "rb"), purpose="batch")
+batch = client.batches.create(
+    input_file_id=up.id,
+    endpoint="/v1/chat/completions",
+    completion_window="24h",
+)
+
+while batch.status in ("validating", "in_progress", "finalizing", "cancelling"):
+    time.sleep(2)
+    batch = client.batches.retrieve(batch.id)
+
+if batch.output_file_id:
+    print(client.files.content(batch.output_file_id).text)
+```
+
+</Tab>
+<Tab value="JavaScript">
+
+```ts
+import OpenAI from "openai";
+import fs from "node:fs";
+
+const client = new OpenAI({ baseURL: "http://localhost:8000/v1", apiKey: "not-needed" });
+
+const up = await client.files.create({
+  file: fs.createReadStream("requests.jsonl"),
+  purpose: "batch",
+});
+let batch = await client.batches.create({
+  input_file_id: up.id,
+  endpoint: "/v1/chat/completions",
+  completion_window: "24h",
+});
+while (["validating", "in_progress", "finalizing", "cancelling"].includes(batch.status)) {
+  await new Promise((r) => setTimeout(r, 2000));
+  batch = await client.batches.retrieve(batch.id);
+}
+```
+
+</Tab>
+</Tabs>
+
+## Errors
+
+OpenAI dialect: `{"error": {"message", "type", "param", "code"}}`.
+
+| Status | Code | When |
+| --- | --- | --- |
+| `400` | `missing_required_parameter` | No `input_file_id`. |
+| `400` | `invalid_value` | Bad `endpoint`, `completion_window` other than `24h`, bad `metadata`, input file with a purpose other than `batch`, unknown input file. |
+| `404` | `batch_not_found` | Unknown batch id. |
+| `409` | `invalid_state` | Cancelling a finished batch. |
+
+## Anthropic message batches
+
+The Anthropic Message Batches routes (`POST /v1/messages/batches` and friends) share the same worker, store and 24 hour window, and are covered on the [Messages](/docs/api/messages) page. Differences: requests are sent inline (`requests` array with `custom_id` and `params`), at most 100,000 per batch, results are streamed as JSONL from `GET /v1/messages/batches/{batch_id}/results`, and ended batches can be deleted with `DELETE /v1/messages/batches/{batch_id}`.
+
+## Support
+
+| Feature | Status |
+| --- | --- |
+| Create, retrieve, list, cancel | <Support status="supported">supported</Support> |
+| Endpoints `/v1/chat/completions`, `/v1/completions`, `/v1/embeddings`, `/v1/responses` | <Support status="supported">supported</Support> |
+| Resume after restart | <Support status="supported">unfinished batches continue</Support> |
+| Parallel execution of lines | <Support status="unsupported">lines run one at a time</Support> |
+| Streaming lines | <Support status="unsupported">rejected at creation</Support> |
+| Completion windows other than `24h` | <Support status="unsupported">rejected</Support> |
+| Other endpoints (for example `/v1/images/generations`) | <Support status="unsupported">rejected</Support> |
+| Deleting an OpenAI batch | <Support status="unsupported">no delete route</Support> |
+
+## Related
+
+- [Files](/docs/api/files) for uploading input and downloading output.
+- [Messages](/docs/api/messages) for the Anthropic batch routes.
+- [Chat completions](/docs/api/chat-completions), [Responses](/docs/api/responses) and [Embeddings](/docs/api/embeddings) for the request bodies.

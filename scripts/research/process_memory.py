@@ -34,6 +34,36 @@ class RusageInfoV2(ctypes.Structure):
     ]
 
 
+def descendants(rows, root_pid):
+    """root_pid plus every transitive child in (pid, ppid, rss) rows."""
+    selected = {root_pid}
+    while True:
+        expanded = selected | {pid for pid, ppid, _ in rows if ppid in selected}
+        if expanded == selected:
+            return selected
+        selected = expanded
+
+
+def system_used_bytes(vm_stat_text=None):
+    """Host-level used memory (active + wired + compressor) from vm_stat. Unlike per-process phys_footprint
+    it counts mmap'd/file-backed model weights, so a delta against a pre-launch baseline is comparable
+    across engines that load weights differently."""
+    import re
+
+    text = vm_stat_text or subprocess.check_output(["vm_stat"], text=True)
+    page = int(re.search(r"page size of (\d+) bytes", text).group(1))
+
+    def pages(name):
+        return int(re.search(name + r":\s+(\d+)", text).group(1))
+
+    used = (
+        pages("Pages active")
+        + pages("Pages wired down")
+        + pages("Pages occupied by compressor")
+    )
+    return used * page
+
+
 def process_tree_memory(root_pid):
     rows = [
         list(map(int, line.split()))
@@ -41,12 +71,7 @@ def process_tree_memory(root_pid):
             ["ps", "-axo", "pid=,ppid=,rss="], text=True
         ).splitlines()
     ]
-    selected = {root_pid}
-    while True:
-        expanded = selected | {pid for pid, ppid, _ in rows if ppid in selected}
-        if expanded == selected:
-            break
-        selected = expanded
+    selected = descendants(rows, root_pid)
     lib = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
     fn = lib.proc_pid_rusage
     fn.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_void_p]

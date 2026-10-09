@@ -1,0 +1,50 @@
+import type zh from "../zh-TW/downloads.ts";
+import type { Shape } from "../../types.ts";
+
+const downloads: Shape<typeof zh> = {
+  title: "下载",
+  description: "从 Hugging Face 获取模型，完成后会出现在模型库。",
+  unsupportedTitle: "此引擎版本没有下载管理",
+  unsupportedDescription:
+    "升级引擎后即可在这里下载模型；目前请使用模型库的「导入模型」。",
+  "add.title": "新增下载",
+  "add.description": "输入仓库即可；版本和文件模式可留空，留空会获取整个模型。",
+  "add.repo": "仓库",
+  "add.repoInvalid": "格式应为 org/name。",
+  "add.revision": "版本（分支或标签）",
+  "add.patterns": "文件模式",
+  "add.patternsHint": "以逗号分隔，例如只取权重和配置文件；留空代表全部文件。",
+  "add.start": "开始下载",
+  "add.checking": "检查空间中",
+  "add.needRepo": "请先输入有效的仓库。",
+  "add.free": "模型目录可用空间",
+  "disk.title": "磁盘空间不足",
+  "disk.body":
+    "需要 {needed}，当前只剩 {free}。请清理空间，或改选更小的量化版本。",
+  details: "详细信息",
+  offlineReason: "引擎离线，暂时无法下载。",
+  busyReason: "正在提交另一项下载。",
+  "state.queued": "排队中",
+  "state.running": "下载中",
+  "state.done": "已完成",
+  "state.failed": "失败",
+  "state.cancelled": "已取消",
+  cancel: "取消",
+  resume: "继续下载",
+  openModel: "打开模型",
+  progressAria: "{repo} 下载进度",
+  rateTitle: "近几秒的平均速度",
+  eta: "剩余 {time}",
+  files: "{done} / {total} 个文件",
+  alreadyPresent: "模型已在磁盘上，没有下载任何内容。",
+  presentNow: "{repo} 已在磁盘上，无需再次下载。",
+  notRegistered: "已下载，但尚未注册；重启引擎后会自动发现。",
+  failedSummary: "下载失败，查看原因",
+  emptyTitle: "还没有下载",
+  emptyDescription: "新增的下载会在这里显示进度。",
+  loadingTitle: "读取中",
+  dir: "模型目录",
+  pollError: "暂时读不到下载状态，保留最后一次的数据。",
+};
+
+export default downloads;

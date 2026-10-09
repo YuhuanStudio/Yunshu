@@ -79,6 +79,7 @@ class RequestTracker:
             owner=owner if owner is not None else current_actor.get(),
             client_request_id=current_request_id.get(),
         )
+        gen.cancel_event.client_request_id = gen.client_request_id or request_id  # type: ignore[attr-defined]
         with self._lock:
             self._active[request_id] = gen
             if gen.client_request_id and gen.client_request_id != request_id:

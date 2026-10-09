@@ -179,6 +179,7 @@ def test_full_suite_has_every_stage():
     assert set(suites.STAGES) - set(suites.LADDER) == {
         "longqa",
         "conc",
+        "snapshot",
         "modelprobe",
         "client_compat",
         "respfeat",
@@ -187,6 +188,9 @@ def test_full_suite_has_every_stage():
         "embedding",
         "priorart",
         "evals",
+        "console",
+        "telemetry",
+        "telemetry-tiny",
         "tavily",
         "searchrank",
     }
@@ -1227,6 +1231,23 @@ def test_modelprobe_is_explicit_and_not_in_release_suites():
 def test_evals_suite_is_a_separate_correctness_probe():
     assert suites.parse_suite("evals")["stages"] == ["preflight", "evals"]
     assert "evals" in stages.STAGE_FUNCS
+
+
+def test_declared_short_timeout_preserves_gpuq_short_lane(monkeypatch):
+    from types import SimpleNamespace
+
+    calls = []
+
+    def run(argv, **kw):
+        calls.append(argv)
+        return SimpleNamespace(returncode=0, stdout="fake-job-id\n", stderr="")
+
+    monkeypatch.setattr(core, "subprocess", SimpleNamespace(run=run))
+    gq = core.Gpuq(binary="fake-gpuq")
+    gq.submit("short", ["python", "--version"], timeout_min=10, mem_gb=60, priority=-1)
+    gq.submit("long", ["python", "--version"], timeout_min=14, mem_gb=60, priority=-1)
+    assert "--short" in calls[0]
+    assert "--short" not in calls[1]
 
 
 def test_client_routes_validator_fails_closed(tmp_path):

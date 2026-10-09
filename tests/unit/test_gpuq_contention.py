@@ -863,3 +863,25 @@ def test_busy_foreign_model_blocks_quiet_admission(monkeypatch):
     for t in (102, 104):
         assert gate.blocked(job, gate.sample(t), t)  # busy server: never quiet
     assert job["quiet_since"] is None
+
+
+def test_cli_and_ci_sandbox_commands_are_not_foreign_models():
+    """2026-10-09: a 52-min snapshot cell was voided because ci-local's unit tests ran
+    `python -m yunshu_cli --json model info` (CPU only) and every yunshu_cli invocation
+    matched as a foreign model runtime. Only commands that load a model count."""
+    h = helper()
+    pats = h.foreign_model_patterns({})
+
+    def hit(cmd):
+        return h.is_foreign_model_cmd(cmd, pats)
+
+    assert not hit(
+        "/tmp/ycl-2b62cc7e/.venv/bin/python -m yunshu_cli --json model info x"
+    )
+    assert not hit("/Users/u/Yunshu/.venv/bin/python -m yunshu_cli config")
+    assert not hit(
+        "/tmp/ycl-abc/.venv/bin/python -m yunshu_cli serve -m tiny"
+    )  # CI sandbox
+    assert hit("/Users/u/Yunshu/.venv/bin/python -m yunshu_cli serve -m /models/27b")
+    assert hit("/opt/homebrew/bin/yunshu serve -m qwen")
+    assert hit("python -m mlx_lm.server --model x")

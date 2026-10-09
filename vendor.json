@@ -519,6 +519,35 @@
       "why": "serves Cloudflare Clef / Clef-flash (MLX conversions: abenzerps/Clef-MLX @ 65781a8d37979a361af4e80984142dc40b2675b6) for /v1/decisions and /v1/systemone; the model card ships joint_schema_model.py as the reference implementation"
     },
     {
+      "path": "python/yunshu_engine/telemetry/apple.py",
+      "repo": "https://github.com/pierre427/mlx2",
+      "clone": "reference/mlx2",
+      "commit": "92ada04cc7a59c3263e214b0a1127924fedd52db",
+      "license": "Apache-2.0",
+      "kind": "derived",
+      "local_changes": [
+        "Exception-safe release of HID property, event and service objects; host-only background integration with explicit unknown reasons."
+      ],
+      "upstream_paths": [
+        "src/mlx2/apple_telemetry.py"
+      ]
+    },
+    {
+      "repo": "https://github.com/vladkens/macmon",
+      "clone": "/Volumes/P5Plus/yunshu-build/reference-extra/macmon",
+      "commit": "7df49f55d9a1b9072e31fc8ba991abda84593563",
+      "license": "MIT",
+      "kind": "derived",
+      "path": "python/yunshu_engine/telemetry/clpc.py",
+      "upstream_paths": [
+        "src/clpc.rs",
+        "src/sources.rs"
+      ],
+      "local_changes": [
+        "Python ctypes descriptors with explicit CF/IOKit ownership; restrict catalog to macOS 27 and known drivers; atomically augment the existing Energy Model/GPU subscription."
+      ]
+    },
+    {
       "path": "python/yunshu_engine/embedding_gemma2_loader.py",
       "repo": "https://github.com/Blaizzy/mlx-vlm",
       "clone": "reference/mlx-vlm",
@@ -1161,6 +1190,20 @@
       "reviewed_commit": "25aebb3ee0bb052a264241953bef6820f102dd0b",
       "reviewed_date": "2026-10-08",
       "review_reason": "Retain the independently qualified local serving routes. 0eb8df1f adds verify-route introspection and changes sigmoid rounding; local GDN admission already probes its arithmetic. c82ab6dd/3f585300 widen Qwen4/MoE batching, not the 27B default. Cache/memory changes use upstream scheduler/SSD contracts. No unmeasured shape or numerical admission is broadened."
+    },
+    {
+      "repo": "https://github.com/vladkens/macmon",
+      "clone": "/Volumes/P5Plus/yunshu-build/reference-extra/macmon",
+      "commit": "7df49f55d9a1b9072e31fc8ba991abda84593563",
+      "license": "MIT",
+      "kind": "inspired",
+      "path": "python/yunshu_engine/telemetry/apple.py",
+      "upstream_paths": [
+        "src/metrics.rs"
+      ],
+      "local_changes": [
+        "Aggregate CPU/ANE/DRAM channel families; prefer qualified CLPC counters; mark potentially frozen CPU/ANE legacy counters unknown on macOS 27+; fall back to HID MTR die sensors."
+      ]
     },
     {
       "kind": "inspired",
@@ -2182,6 +2225,21 @@
       "why": "native APC restore uses independent copy-on-write handles before direct capacity reservation; stores and custom caches keep upstream detached snapshots",
       "source_sha256": "2f92c734175d88d663e5c687a47fd71c9ea2c741bb0fb94f9231145603f9e4d8",
       "installed_version": "0.7.6"
+    },
+    {
+      "kind": "patches",
+      "path": "python/yunshu_engine/spec_metrics.py",
+      "repo": "https://github.com/Blaizzy/mlx-vlm",
+      "clone": "reference/mlx-vlm",
+      "package": "mlx-vlm",
+      "module": "mlx_vlm.speculative.common",
+      "symbol": "_record_speculative_round",
+      "signature": "(draft_model: nn.Module, accepted: float, draft_count: int)",
+      "license": "MIT",
+      "commit": "v0.7.6",
+      "why": "Preserve upstream lifetime counters while adding host-only per-depth request and aggregate counters; tree paths provide explicit parent topology.",
+      "source_sha256": "d76e582c8fa642340c47bb269e78f3d3415df1b9ad3fc49a886ac5a20233883c",
+      "installed_version": "0.7.6"
     }
   ],
   "watch": [
@@ -2470,6 +2528,18 @@
       "reviewed_date": "2026-10-07"
     },
     {
+      "repo": "https://github.com/vladkens/macmon",
+      "clone": "/Volumes/P5Plus/yunshu-build/reference-extra/macmon",
+      "commit": "7df49f55d9a1b9072e31fc8ba991abda84593563",
+      "license": "MIT",
+      "globs": [
+        "src/clpc.rs",
+        "src/sources.rs",
+        "src/metrics.rs"
+      ],
+      "why": "Qualified unprivileged CLPC energy IDs and Apple telemetry compatibility; CPU/ANE legacy counters may freeze on macOS 27."
+    },
+    {
       "repo": "https://huggingface.co/mlx-community/Qwen3-Reranker-0.6B-4bit",
       "clone": "reference/Qwen3-Reranker-0.6B-4bit",
       "globs": [
@@ -2664,6 +2734,60 @@
       "owner": "priorart/lead",
       "reviewed_date": "2026-10-08",
       "action": "EmbeddingGemma2 embedding_loader.load_embedding_model adoption/parity candidate; published quantized formats not yet qualified."
+    },
+    {
+      "url": "https://docs.vllm.ai/en/latest/api/vllm/v1/spec_decode/metrics/",
+      "kind": "discovery-only",
+      "license": "Apache-2.0",
+      "revision": "documentation reviewed 2026-10-08",
+      "reviewed_date": "2026-10-08",
+      "owner": "consolegaps",
+      "action": "Counters and per-position acceptance names; independently implemented host counters."
+    },
+    {
+      "url": "https://github.com/sgl-project/sglang/blob/main/docs_new/docs/references/production_metrics.mdx",
+      "kind": "discovery-only",
+      "license": "Apache-2.0",
+      "revision": "documentation reviewed 2026-10-08",
+      "reviewed_date": "2026-10-08",
+      "owner": "consolegaps",
+      "action": "Counter denominators, cache-hit metrics; reference only."
+    },
+    {
+      "url": "https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md",
+      "kind": "discovery-only",
+      "license": "MIT",
+      "revision": "documentation reviewed 2026-10-08",
+      "reviewed_date": "2026-10-08",
+      "owner": "consolegaps",
+      "action": "Slots/cache/metrics API; reference only."
+    },
+    {
+      "url": "https://github.com/jundot/omlx/blob/main/docs/usage-analytics.md",
+      "kind": "discovery-only",
+      "license": "Apache-2.0",
+      "revision": "documentation reviewed 2026-10-08",
+      "reviewed_date": "2026-10-08",
+      "owner": "consolegaps",
+      "action": "Metadata-only persistent usage and disabled semantics; reference only."
+    },
+    {
+      "url": "https://lmstudio.ai/docs/cli/serve/log-stream",
+      "kind": "discovery-only",
+      "license": "proprietary-documentation",
+      "revision": "documentation reviewed 2026-10-08",
+      "reviewed_date": "2026-10-08",
+      "owner": "consolegaps",
+      "action": "Server log stream exposes content; Yunshu keeps metadata-only history instead."
+    },
+    {
+      "url": "https://github.com/ollama/ollama/blob/main/docs/api/usage.mdx",
+      "kind": "discovery-only",
+      "license": "MIT",
+      "revision": "documentation reviewed 2026-10-08",
+      "reviewed_date": "2026-10-08",
+      "owner": "consolegaps",
+      "action": "Per-response timing and cached-token accounting; reference only."
     },
     {
       "url": "https://github.com/aperepel/mlx-rerank",

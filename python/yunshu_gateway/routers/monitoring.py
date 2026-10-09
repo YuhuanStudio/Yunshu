@@ -877,6 +877,24 @@ async def prometheus_export(request: Request) -> str:
 
     _populate_apc_metrics(pm)
     _populate_busy_metrics(pm)
+    from yunshu_engine.spec_metrics import snapshot as spec_snapshot
+
+    for row in spec_snapshot()["data"]:
+        labels = {"mode": row["mode"], "engine": "vlm"}
+        for key in ("num_drafts", "num_draft_tokens", "num_accepted_tokens"):
+            pm.set_counter("vlm_spec_" + key, row[key], labels=labels)
+        for depth in row["per_depth"]:
+            depth_labels = {**labels, "position": str(depth["position"])}
+            pm.set_counter(
+                "vlm_spec_draft_tokens_per_position",
+                depth["drafted"],
+                labels=depth_labels,
+            )
+            pm.set_counter(
+                "vlm_spec_accepted_tokens_per_position",
+                depth["accepted"],
+                labels=depth_labels,
+            )
     return pm.generate()
 
 

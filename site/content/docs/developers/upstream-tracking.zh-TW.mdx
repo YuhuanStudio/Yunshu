@@ -1,0 +1,78 @@
+---
+title: 上游追蹤
+description: Yunshu 如何在 vendor.json 記錄取自其他專案的程式碼、四種上游依賴類型，以及 just vendor-check 如何回報上游的變動。
+---
+
+Yunshu 建立在 MLX、`mlx-lm`、`mlx-vlm` 與其他數個開源專案的想法之上。每一處複製、改寫、重新實作或 monkeypatch 上游程式碼的地方，都記錄在 `vendor.json` 中，讓上游的變動與修正可以被追蹤，授權也得到遵守。`THIRD_PARTY_NOTICES.md` 附有對應的授權全文，並隨 wheel 與 sdist 一起發布。
+
+## 四種類型
+
+每個項目都列出上游的 `repo`、`clone`（`reference/` 底下的 checkout，該目錄不納入 git）、`commit`（本地程式碼所依據的上游 commit 或發行 tag）、`license`，以及本地的 `path`。
+
+| 類型 | 意義 | 如何同步 |
+|---|---|---|
+| `vendored` | 從上游複製的檔案。`local_changes` 列出刻意做的修改 | 重新複製該檔案，再套用 `local_changes` |
+| `derived` | 依據特定上游檔案（`upstream_paths`）改寫 | 閱讀上游差異，移植重要的部分 |
+| `inspired` | 相同的演算法或設計，但是獨立撰寫的程式碼 | 閱讀上游差異，尋找想法或錯誤修正 |
+| `patches` | 對上游符號的 monkeypatch，以 `module`、`symbol`、`signature` 與 `source_sha256` 描述 | 對照新的上游原始碼，重新檢查我們的替代實作 |
+
+屬於這些類型的每個原始碼檔案，開頭都有一行 `# Upstream (kind): repo (license) paths @ commit` 註解（patch 使用 `# Patches upstream ...`）。下面說明的自我檢查，會在有這種標頭卻沒有對應清單項目時失敗。
+
+清單中除了這四種類型之外，還有其他區段：
+
+- `watch`：為了想法或修正而追蹤的參考 clone，附上重要的檔案 glob 與已審閱到的 commit。
+- `watch_excluded`：`reference/` 底下所有其他 clone，並說明為何不追蹤。
+- `packages`：在 `pyproject.toml` 宣告之外額外的套件版本。
+- `prior_art` 與其他 `*_prior_art` 清單：僅供探索的候選項目，各有自己的授權與版本。它們是關於其他地方有什麼的筆記，不是已採用的程式碼、合格的載入器，也不代表通過了對照檢驗。
+
+## 執行檢查
+
+```bash
+just vendor-check                                          # 先抓取 clone，再回報
+uv run python scripts/vendor/check_upstream.py --no-fetch  # 離線：依已有的 clone 回報
+```
+
+報告包含這些區段：被 patch 的符號、vendored 檔案、derived 項目、inspired 項目、被監看的路徑、套件，以及自我檢查。
+
+| 結束碼 | 意義 |
+|---|---|
+| `0` | 一切正常 |
+| `1` | 有項目落後上游（被追蹤的路徑有新 commit，或套件有新版） |
+| `2` | 被 patch 的符號已改變或不存在，或自我檢查失敗 |
+
+### 監看的內容
+
+- **被 patch 的符號**會從已安裝的套件計算雜湊（正規化後的 AST 原始碼）。出現 `UPSTREAM SOURCE CHANGED` 表示我們替代實作所包裝或複製的程式碼已改變。請閱讀新的原始碼，修改 `python/yunshu_engine/` 中的替代實作，執行測試與對照檢查，然後記錄新的雜湊：
+
+  ```bash
+  uv run python scripts/vendor/check_upstream.py --update-hashes
+  ```
+
+- **被監看的儲存庫**會列出自上次審閱的 commit 起，動到設定 glob 的上游 commit，以及上游新增且符合 glob 的檔案。固定到已安裝套件的儲存庫，會與該發行版的 tag 比較。讀完報告後，請把 `commit` 往前移。
+- **套件**從 `pyproject.toml` 讀取（基本相依、每個 extra 與每個 dependency group）。報告顯示已安裝的版本、PyPI 上的最新版本與宣告的版本限制，因此新的相依不會被漏掉。
+- **自我檢查**：`python/` 底下的檔案，若開頭幾行寫著 `# Upstream`，或「ported from」「adapted from」「studied from」「Inspired by」，就必須出現在 `vendor.json` 中。`reference/` 底下既不在 `watch`、也不在 `watch_excluded` 的 clone 同樣會失敗，所以新的 clone 不可能沒被分類。
+
+## 同步 derived 或 inspired 項目
+
+1. `just vendor-check` 會列出自該項目上次審閱的 commit（第一次審閱前則為 `commit`）以來，其路徑上的上游 commit。
+2. 閱讀它們，例如用 `git -C reference/<clone> show <sha>`，並移植適用的部分。
+3. 重新複製檔案時，把 `commit` 設為新的上游來源。若刻意保留本地實作，請保持 `commit` 作為其來源紀錄，並加上 `reviewed_commit`、`reviewed_date` 與 `review_reason`，說明哪些上游變動已經涵蓋、不適用，或需要自己的正確性與效能關卡。下一次檢查仍會回報該次審閱之後的變動，而本地的差異永遠與最初複製的來源比較。
+
+涉及 kernel 或解碼路徑的移植，遵循一貫的證據規則：在同一個檢查點上比較輸出（完全相同或在容差內），並量測端到端的效果，見[驗證](/docs/developers/verification)。
+
+## 新增一筆
+
+1. 把項目加進 `vendor.json` 中正確的清單。若是 patch，執行 `--update-hashes` 來記錄雜湊。
+2. 讓原始碼檔案以 `# Upstream (kind): repo (license) paths @ commit` 註解開頭。
+3. 把上游的授權加進 `THIRD_PARTY_NOTICES.md`。
+4. 若缺少 clone，請把儲存庫 clone 到 `reference/<name>`（`reference/` 不納入 git）。
+
+## 第三方聲明
+
+`THIRD_PARTY_NOTICES.md` 摘要列出每個上游、其授權，以及 Yunshu 如何使用它（vendored kernel、derived 模組、inspired 程式碼、patch），接著附上各授權全文。上游包括 `mlx`、`mlx-lm` 與 `mlx-vlm`（MIT）、oMLX、vLLM、sglang 等 Apache-2.0 專案，以及 llama.cpp（MIT）。當你加入對他人程式碼的依賴時，聲明檔案是同一次改動的一部分，而不是之後再補。
+
+## 相關頁面
+
+- [架構](/docs/developers/architecture)
+- [驗證](/docs/developers/verification)
+- [貢獻指南](/docs/developers/contributing)
