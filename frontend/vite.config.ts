@@ -1,9 +1,51 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import mdx from "@mdx-js/rollup";
+import remarkGfm from "remark-gfm";
+import remarkFrontmatter from "remark-frontmatter";
+import rehypeSlug from "rehype-slug";
+import { buildSearch, buildToc } from "./scripts/docs-index.mjs";
+
+// The 文件 section: pages are MDX compiled at build time (one lazy chunk each); the table of
+// contents and the search text come from scripts/docs-index.mjs as per-locale virtual modules,
+// loaded only when the docs or the command palette ask for them.
+const VIRTUAL = /^virtual:docs-(toc|search)-(en|zh-TW|zh-CN)$/;
+const docsIndex = () => ({
+  name: "yunshu-docs-index",
+  resolveId(id: string) {
+    return VIRTUAL.test(id) ? "\0" + id : undefined;
+  },
+  load(id: string) {
+    const m = VIRTUAL.exec(id.replace("\0", ""));
+    if (!m) return undefined;
+    const data = m[1] === "toc" ? buildToc(m[2]) : buildSearch(m[2]);
+    return `export default ${JSON.stringify(data)};`;
+  },
+  handleHotUpdate({
+    file,
+    server,
+  }: {
+    file: string;
+    server: { ws: { send: (m: object) => void } };
+  }) {
+    if (file.includes("/frontend/docs/"))
+      server.ws.send({ type: "full-reload" });
+  },
+});
 // Dev proxy target: the engine to develop against (YUNSHU_CONSOLE_ENGINE), else the CLI default.
 const engine = process.env.YUNSHU_CONSOLE_ENGINE ?? "http://127.0.0.1:8000";
 export default defineConfig({
-  plugins: [react()],
+  plugins: [
+    docsIndex(),
+    {
+      enforce: "pre",
+      ...mdx({
+        remarkPlugins: [remarkGfm, remarkFrontmatter],
+        rehypePlugins: [rehypeSlug],
+      }),
+    },
+    react({ include: /\.(mdx|tsx|ts|jsx|js)$/ }),
+  ],
   base: "/console/",
   resolve: { dedupe: ["react", "react-dom"] },
   build: {

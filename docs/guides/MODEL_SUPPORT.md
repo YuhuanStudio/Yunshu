@@ -1,5 +1,7 @@
 # Model support and validation
 
+> The console's Docs section carries this guide in English, 繁體中文 and 简体中文 ([`frontend/docs/guides/model-support.mdx`](../../frontend/docs/guides/model-support.mdx)); this file is its GitHub-facing counterpart.
+
 Yunshu loads text models through mlx-lm and vision-language models through
 mlx-vlm. Upstream loadability does not certify every Yunshu endpoint or feature.
 The server's `/v1/models` capability contract describes the loaded model; check it

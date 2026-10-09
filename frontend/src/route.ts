@@ -14,6 +14,7 @@ export const PAGES = [
   "cache",
   "playground",
   "api",
+  "docs",
   "keys",
   "settings",
 ] as const;
@@ -21,7 +22,7 @@ export type Page = (typeof PAGES)[number];
 
 export interface Route {
   page: Page;
-  /** The part after the page (`#/models/<id>`), decoded; only Models uses it. */
+  /** The part after the page (`#/models/<id>`, `#/docs/api/audio`), decoded; Models and Docs use it. */
   sub: string | null;
   query: URLSearchParams;
 }
@@ -38,7 +39,7 @@ export function parseRoute(hash: string): Route {
   let sub: string | null = null;
   try {
     sub =
-      page === "models" && rest.length
+      (page === "models" || page === "docs") && rest.length
         ? decodeURIComponent(rest.join("/"))
         : null;
   } catch {
@@ -87,6 +88,7 @@ export const CHORDS: Record<string, Page> = {
   c: "cache",
   p: "playground",
   a: "api",
+  f: "docs",
   k: "keys",
   s: "settings",
 };

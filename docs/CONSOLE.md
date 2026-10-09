@@ -28,6 +28,17 @@ Alternatively set an explicit server URL in Settings; cross-origin access then
 requires that server's normal CORS configuration. The console does not start or
 stop the engine process.
 
+## Docs inside the console
+
+The 文件 / Docs section renders the user documentation (getting started, API reference, guides,
+developer pages) from `frontend/docs/` (MDX in English, 繁體中文 and 简体中文), compiled into the
+console build, so it works offline and matches the installed version. `⌘K` searches it; the API,
+Settings and Keys pages link to the page that explains them. These MDX pages are the source of
+the user-facing guides; the same-named files in `docs/guides/` are their GitHub-facing counterparts
+(each names its MDX page), and the configuration reference is generated from the settings registry
+(`frontend/scripts/gen_docs_config.py`). Checks: `pnpm test` (links and heading anchors),
+`tests/unit/test_docs_routes.py` (every route named in the docs is registered; generated pages are current).
+
 ## What the console connects
 
 - Engine status: `GET /v1/yunshu/status`, sampled every three seconds while visible.

@@ -1,4 +1,5 @@
 import { useRouteAction } from "./useRouteAction";
+import { DocLink } from "./docs/DocLink";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   BarChart,
@@ -152,6 +153,7 @@ export default function Keys({ connection }: { connection: Connection }) {
           ) : undefined
         }
       />
+      <DocLink slug="api/overview" label={t("docs.link.keys")} />
       {phase === "loading" && (
         <p role="status" className="text-sm text-muted-foreground">
           {t("keys.loading")}

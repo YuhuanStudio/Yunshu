@@ -1,5 +1,7 @@
 # Yunshu CLI
 
+> The console's Docs section carries this guide in English, 繁體中文 and 简体中文 ([`frontend/docs/guides/cli.mdx`](../../frontend/docs/guides/cli.mdx)); this file is its GitHub-facing counterpart.
+
 Install on an Apple Silicon Mac (Python 3.13+, macOS 14+):
 
 ```sh
