@@ -1,0 +1,266 @@
+---
+title: CLI 參考
+description: 每個 yunshu 指令、子指令與選項，以及全域旗標、JSON 模式與結束代碼。
+---
+
+`yunshu` 指令用來啟動與管理伺服器，也可以作為執行中伺服器的用戶端。執行 `yunshu --help` 或 `yunshu <command> --help` 可看到即時的說明文字；本頁列出每個指令的功能與可接受的選項。
+
+## 全域選項
+
+全域選項要放在指令名稱之前。
+
+| 選項 | 說明 |
+|---|---|
+| `--url`、`-u` | 與伺服器通訊的指令所用的伺服器 URL。預設 `http://localhost:8000`。也會讀取環境變數 `YUNSHU_GATEWAY_URL`。 |
+| `--json` | 機器可讀的輸出。有限執行的指令會在 stdout 印出單一 JSON 結果，進度與表格送到 stderr。失敗時印出 `{"error": "..."}` 並以非零狀態碼結束。 |
+| `--version`、`-V` | 印出版本後結束。 |
+
+```bash
+yunshu --json model list
+yunshu --url http://localhost:8001 --json complete "Hello"
+```
+
+在 `--json` 模式下，用法錯誤（未知的選項、缺少參數）也會以 JSON 錯誤物件輸出到 stdout。結束代碼並不一致：2 用於輸入與連線錯誤，1 用於操作失敗。`yunshu doctor` 在任何檢查失敗時以 1 結束。
+
+當 CLI 自己的環境或設定檔中設定了 `YUNSHU_AUTH_TOKEN` 時，呼叫伺服器的指令會送出 `Authorization: Bearer <token>`。
+
+## 指令總覽
+
+| 分組 | 指令 |
+|---|---|
+| 開始使用 | `setup`、`doctor`、`pull`、`serve`、`service`、`chat`、`completion` |
+| 伺服器與模型 | `model`（別名 `models`）、`config`、`status`、`top`、`launch`、`cache` |
+| 評估與診斷 | `statusline`、`eval`、`bench`、`diagnose` |
+| 推論（呼叫執行中的伺服器） | `complete`、`embed`、`tokenize`、`detokenize`、`rerank`、`classify`、`score`、`transcribe`、`speak`、`ocr`、`image`、`image-edit`、`image-variations`、`voices`、`cancel` |
+
+## 開始使用
+
+### `yunshu setup`
+
+從本機的完整模型（模型目錄與 Hugging Face 快取）中選一個，或輸入要下載的 Hugging Face MLX 儲存庫，然後印出應該執行的 `yunshu serve` 指令。它不會啟動伺服器。需要互動式終端機；在 `--json` 模式或沒有終端機時，會以錯誤結束，並列出找到的模型與下一步。
+
+### `yunshu doctor`
+
+檢查這台 Mac 能否執行 Yunshu，並為每個問題印出修復方式。涵蓋的項目請見[安裝](/docs/getting-started/install)。
+
+| 選項 | 說明 |
+|---|---|
+| `--model`、`-m` | 一併檢查此模型（路徑或 repo id）。預設為 `YUNSHU_MODEL` 設定。 |
+| `--host` | 你將要服務的主機（用於連接埠檢查）。預設 `127.0.0.1`。 |
+| `--port`、`-p` | 你將要服務的連接埠。預設 `8000`。 |
+| `--no-metal` | 略過匯入 MLX 與 GPU 探測。 |
+
+任何檢查失敗時結束狀態為 1。`--json` 回傳 `{version, ok, checks}`。
+
+### `yunshu pull REPO_ID`
+
+把 Hugging Face 模型下載到模型目錄。也可使用 `yunshu model pull`。
+
+| 選項 | 說明 |
+|---|---|
+| `--dir`、`-d` | 下載到此目錄。 |
+| `--revision`、`-r` | 分支、標籤或 commit。 |
+| `--force` | 即使模型已在磁碟上也下載（只取得缺少或已變更的檔案）。 |
+
+請見[模型](/docs/getting-started/models)。
+
+### `yunshu serve [MODEL]`
+
+啟動推論伺服器。模型可以用位置參數或 `--model` 指定；兩者給了不同的值會報錯。若既沒有設定模型也沒有設定模型目錄，互動式終端機會提示你選擇模型；否則指令會失敗並提示下一步。若參照符合模型目錄或 Hugging Face 快取中的模型，會服務該本機副本而不是下載。
+
+| 選項 | 說明 |
+|---|---|
+| `--model`、`-m` | 模型路徑或 Hugging Face id（單一模型模式）。 |
+| `--models-dir`、`-d` | 要掃描模型的目錄（多模型模式）。 |
+| `--host`、`-h` | 綁定的主機。預設 `127.0.0.1`。綁定非本機主機又沒有 token 時會印出警告。 |
+| `--port`、`-p` | 綁定的連接埠。預設 `8000`。 |
+| `--uds` | 改在此 Unix domain socket 上服務而非 TCP；`--host` 與 `--port` 會被忽略。 |
+| `--workers`、`-w` | worker 行程數。預設 `1`。 |
+| `--max-memory` | 模型可用的 GPU 記憶體上限，例如 `32GB`，或 `disabled`。 |
+| `--completion-batch` | 補全批次大小（設定 `YUNSHU_COMPLETION_BATCH_SIZE`）。 |
+| `--max-concurrent` | 最大並行請求數（設定 `YUNSHU_MAX_CONCURRENT`）。 |
+| `--auth-token` | 請求必須帶上的 bearer token（設定 `YUNSHU_AUTH_TOKEN`）。 |
+| `--mcp-config` | MCP 設定檔的路徑。 |
+| `--hf-endpoint` | 自訂的 Hugging Face Hub 端點。 |
+| `--http-proxy`、`--https-proxy`、`--no-proxy` | 下載時使用的代理設定。 |
+| `--log-level` | `trace`、`debug`、`info`、`warning` 或 `error`。預設 `info`。 |
+| `--startup-timeout` | 等待模型載入的最長秒數。 |
+| `--slow-request-threshold` | 請求超過此秒數時記錄警告。 |
+| `--drain-timeout` | 關閉時讓進行中請求完成的秒數。 |
+| `--keep-alive-timeout` | 閒置連線保持開啟的秒數（0 表示停用）。 |
+| `--max-request-size` | 請求本文大小上限（位元組）。 |
+| `--server-header` | 在回應中送出 `Server: Yunshu`。 |
+| `--reload` | 開發用的自動重新載入。 |
+| `--config`、`-c` | 含 `YUNSHU_*` 設定的 TOML 檔案。 |
+| `--set KEY=VALUE` | 覆寫任一設定；`YUNSHU_` 前綴可省略，可重複使用。未知的名稱會報錯並列出最接近的名稱。 |
+
+旗標與 `--set` 的優先順序最高，高於環境變數與設定檔。載入之前，`serve` 會確認位址可以綁定，並執行與 `doctor` 相同的模型檢查；無法載入的模型仍會讓伺服器啟動，由 `GET /health/ready` 回報原因。使用 `--json` 時會先印出 `starting` 事件，之後行程持續執行；就緒狀態請看 `GET /health/ready`，而不是這個事件。所有設定請見[設定](/docs/guides/configuration)。
+
+### `yunshu service`
+
+以 launchd 在登入時執行 Yunshu。子指令：`install`、`uninstall`、`start`、`stop`、`restart`、`status`、`logs`、`rotate-logs`。完整選項請見[服務](/docs/getting-started/service)頁面。
+
+### `yunshu chat`
+
+與執行中伺服器的互動式終端機對話。不支援 `--json`。
+
+| 選項 | 說明 |
+|---|---|
+| `--model`、`-m` | 模型名稱。預設為伺服器列出的第一個模型，優先選擇已知的對話模型系列。 |
+| `--url`、`-u` | 伺服器 URL。預設 `http://localhost:8000`。 |
+| `--system`、`-s` | 系統提示詞。 |
+| `--temperature`、`-t` | 取樣溫度。預設 `0.7`。 |
+| `--max-tokens` | 最大輸出 token 數。預設 `2048`。 |
+| `--thinking` | 啟用思考模式。 |
+| `--no-stream` | 停用串流。 |
+
+對話中可用：`/clear`、`/thinking`、`/model <name>`、`/help`、`/quit`（也可用 `/exit`、`/q`）。
+
+### `yunshu completion SHELL`
+
+印出 `zsh`、`bash` 或 `fish` 的 shell 自動完成腳本。它不會修改你的 shell 檔案。
+
+```bash
+mkdir -p ~/.zfunc
+yunshu completion zsh > ~/.zfunc/_yunshu     # 在 compinit 之前把 ~/.zfunc 加入 fpath
+yunshu completion bash > ~/.yunshu-completion.bash
+yunshu completion fish > ~/.config/fish/completions/yunshu.fish
+```
+
+## 伺服器與模型
+
+### `yunshu model`（別名 `models`）
+
+| 子指令 | 用途 |
+|---|---|
+| `list` | 列出磁碟上的模型，或以 `--url` 列出伺服器上的模型。選項：`--dir`/`-d`、`--hf-cache`/`--no-hf-cache`、`--url`/`-u`。 |
+| `pull REPO_ID` | 與 `yunshu pull` 相同。 |
+| `info MODEL`（別名 `show`） | 顯示模型名稱或路徑的類型、大小、檔案數量與 `config.json` 主要欄位。 |
+| `rm MODEL` | 依完整名稱移除已下載的模型。`--yes`/`-y` 略過確認（搭配 `--json` 時必須使用）。 |
+| `load MODEL` | 在執行中的伺服器載入模型（`POST /v1/models/load`）。 |
+| `unload MODEL` | 從執行中的伺服器卸載模型（`POST /v1/models/unload/{model_id}`）。 |
+| `benchmark MODEL` | 在本機行程內執行生成效能測試（以 mlx-lm 載入模型，因此適用於文字模型；會使用 GPU）。選項：`--prompt-tokens`（128）、`--max-tokens`（256）、`--runs`/`-n`（3）、`--warmup`（1）。 |
+
+`load` 與 `unload` 接受 `--url`/`-u`。
+
+### `yunshu config`
+
+顯示每個穩定設定的有效值與來源（`cli`、`env`、`file` 或 `default`），以及警告與網路搜尋供應商的健康狀態。
+
+| 選項 | 說明 |
+|---|---|
+| `--all`、`-a` | 包含實驗性與內部設定。 |
+| `--json` | 印出 JSON。 |
+| `--config`、`-c` | 一併讀取此 TOML 檔案。 |
+
+子指令：
+
+| 子指令 | 用途 |
+|---|---|
+| `config set KEY VALUE` | 把設定存入 `~/.yunshu/config.toml`（或以 `--config`/`-c` 指定的檔案）。鍵名可省略 `YUNSHU_`；值會經過驗證。路徑類設定以絕對路徑儲存。 |
+| `config unset KEY` | 從檔案中移除設定。 |
+| `config path` | 印出使用者設定檔的位置。 |
+
+### `yunshu status`
+
+顯示伺服器健康狀態、GPU 與記憶體使用量、請求計數，以及伺服器列出的模型。選項：`--url`/`-u`。無法連線到伺服器時會以錯誤結束。
+
+### `yunshu top`
+
+與 `status` 相同，但以迴圈持續更新。選項：`--url`/`-u`、`--once`（印出一次快照後結束）、`--interval`（秒，預設 `2.0`，最小 `0.5`）。搭配 `--json` 時回傳一次快照。
+
+### `yunshu launch [TOOL]`
+
+為外部的程式碼工具設定好你的伺服器並啟動它。`TOOL` 可為 `claude`、`codex`、`opencode`、`pi`，或 `list`（預設），後者顯示這些工具及其是否已安裝。
+
+| 選項 | 說明 |
+|---|---|
+| `--model`、`-m` | 要使用的模型。預設為伺服器所服務的模型。 |
+| `--url`、`-u` | 伺服器 URL。 |
+| `--api-key`、`-k` | 交給工具的 API 金鑰。 |
+| `--effort` | Claude Code 的推理強度（`low`、`medium`、`high` 等）。 |
+| `--statusline` / `--no-statusline` | Claude Code：在狀態列顯示即時引擎狀態（預設開啟），除非你已有自己的狀態列。 |
+| `--dry-run` | 只印出設定，不寫入也不啟動工具。 |
+
+### `yunshu cache`
+
+檢視並清理 SSD 前綴快取（僅限已啟用的快取）。
+
+| 子指令 | 用途 |
+|---|---|
+| `status` | 每個快取的大小、上限與問題。不做任何變更。 |
+| `gc` | 找出被截斷、損毀與舊格式的項目、孤立的暫存檔、過期的命名空間，以及超過容量上限的項目。除非加上 `--apply`，否則只回報。 |
+
+## 評估與診斷
+
+### `yunshu diagnose`
+
+| 子指令 | 用途 |
+|---|---|
+| `gpu` | GPU 與 Metal 能力的詳細資訊（在本機使用 MLX）。 |
+| `server` | 檢查執行中伺服器的健康狀態與統計。選項：`--url`/`-u`。 |
+| `bundle` | 寫出本機診斷檔：版本、平台、套件版本、已遮蔽機密的設定、doctor 檢查結果、SSD 快取狀態，以及服務記錄中最近的錯誤行。不含提示詞、補全內容與模型權重，也不會上傳。選項：`--output`/`-o`（預設 `./yunshu-diagnostics-<time>.json`）、`--host`、`--port`/`-p`。 |
+
+### `yunshu eval BENCHMARK`
+
+對執行中的伺服器執行準確度基準測試。`BENCHMARK` 可為 `mmlu`、`gsm8k`、`hellaswag`、`truthfulqa`、`humaneval`、`arc`、`piqa`，`all` 表示全部執行，`list`（預設）則列出可用項目。
+
+| 選項 | 說明 |
+|---|---|
+| `--url`、`-u` | 伺服器 URL。 |
+| `--model`、`-m` | 要評估的模型。 |
+| `--sample`、`-n` | 取樣數量（0 表示使用完整資料集）。 |
+| `--quick`、`-q` | 以 50 筆樣本快速執行。 |
+
+### `yunshu bench`
+
+| 子指令 | 用途 |
+|---|---|
+| `roofline` | 在本機 GPU 上量測矩陣乘法 roofline。選項：`--min`（64）、`--max`（8192）、`--dtype`（`float16`）、`--steps`（8）。 |
+| `memory` | 顯示 Apple Silicon 記憶體配置與 MLX 配置量。 |
+| `inference` | 本機行程內的生成效能測試。選項：`--model`/`-m`（路徑）、`--prompt-len`、`--max-tokens`、`--requests`/`-n`、`--batch`/`-b`、`--warmup`。 |
+| `latency` | 對執行中伺服器量測延遲。選項：`--url`/`-u`、`--model`/`-m`、`--prompt`（32 token）、`--max-tokens`（64）、`--requests`/`-n`（10）。 |
+| `throughput` | 對執行中伺服器量測吞吐量。選項：`--url`/`-u`、`--model`/`-m`、`--concurrency`/`-c`（4）、`--requests`/`-n`（20）、`--max-tokens`（128）。 |
+
+`roofline`、`memory` 與 `inference` 會在本機執行 MLX 並使用 GPU；伺服器正忙於實際工作時請勿執行。
+
+### `yunshu statusline`
+
+為程式碼代理的狀態列印出單行引擎狀態：進行中請求的 prefill 進度、解碼速度與前綴快取命中，資料來自 `GET /v1/yunshu/status`。以管線輸入時，會從 stdin 讀取 Claude Code 的 session JSON。伺服器無法連線時會印出簡短標記而不是失敗。選項：`--url`/`-u`、`--api-key`/`-k`（或 `YUNSHU_API_KEY`）。
+
+## 推論指令
+
+這些指令向執行中的伺服器送出單一請求（`--url`/`-u`，預設 `http://localhost:8000`）。它們是非互動式的，可搭配 `--json`。`--model`/`-m` 預設為 `local`，在單一模型模式下可被接受。
+
+| 指令 | 請求 | 備註 |
+|---|---|---|
+| `complete PROMPT` | `POST /v1/chat/completions` | 選項：`--max-tokens`（256）、`--temperature`/`-t`（0.7）、`--system`/`-s`。 |
+| `embed TEXT` | `POST /v1/embeddings` | 印出維度與前幾個值；`--json` 回傳完整向量。 |
+| `tokenize TEXT` | `POST /v1/tokenize` | 印出 token 數；`--ids` 回傳 token id。 |
+| `detokenize TOKEN...` | `POST /v1/detokenize` | 把 token id 轉回文字。 |
+| `rerank QUERY DOC...` | `POST /v1/rerank` | `--top-n` 限制結果數量（0 表示全部）。 |
+| `classify TEXT LABEL...` | `POST /v1/classify` | 針對給定標籤的零樣本分類。 |
+| `score TEXT1 TEXT2` | `POST /v1/score` | `--type` 為 `cosine`（預設）、`dot` 或 `euclidean`。 |
+| `transcribe FILE` | `POST /v1/audio/transcriptions` | `--language`/`-l`；`--translate` 改用 `POST /v1/audio/translations`。 |
+| `speak TEXT` | `POST /v1/audio/speech` | 必須指定 `--out`/`-o`（.wav 或 .mp3）；`--voice`（預設 `ethan`）。 |
+| `voices` | `GET /v1/audio/voices` | 列出 `speak` 可用的聲音。 |
+| `ocr FILE` | `POST /v1/ocr` | 從圖片檔擷取文字。 |
+| `image PROMPT` | `POST /v1/images/generations` | 必須指定 `--out`/`-o`；`--model`/`-m`（預設 `Z-Image-Turbo-MLX-4bit`）、`--size`（`1024x1024`）、`--steps`（4）。 |
+| `image-edit FILE PROMPT` | `POST /v1/images/edits` | 必須指定 `--out`/`-o`；`--model`/`-m`、`--steps`、`--strength`（0.8）。 |
+| `image-variations FILE` | `POST /v1/images/variations` | 必須指定 `--out`/`-o`；`--model`/`-m`、`--steps`。 |
+| `cancel [REQUEST_ID]` | `POST /v1/cancel` | 取消單一生成，或以 `--all` 取消全部。 |
+
+```bash
+yunshu complete "Explain unified memory in one sentence." --max-tokens 80
+yunshu tokenize "hello world" --ids
+yunshu rerank "apple pie recipe" "How to bake a pie" "Stock prices today"
+yunshu speak "Hello from Yunshu" --out hello.wav
+```
+
+請求能否成功取決於已載入的模型與已安裝的額外套件；請見[模型支援](/docs/guides/model-support)。
+
+## 相關頁面
+
+- [快速開始](/docs/getting-started/quickstart)
+- [設定](/docs/guides/configuration)
+- [疑難排解](/docs/guides/troubleshooting)

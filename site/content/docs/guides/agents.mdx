@@ -1,0 +1,279 @@
+---
+title: Coding agents and SDKs
+description: Point Claude Code, Codex, opencode, Pi and the official OpenAI and Anthropic SDKs at a local Yunshu server, with the launcher or by hand.
+---
+
+Yunshu serves the OpenAI API under `/v1` and the Anthropic Messages API at `/v1/messages`, so any coding agent or SDK that lets you set a base URL can use it. For Claude Code, Codex, opencode and Pi, `yunshu launch` goes one step further: it reads the model card from the server and hands the agent the numbers it would otherwise guess wrong (context window, output limit, reasoning levels, vision support).
+
+| | Value |
+|---|---|
+| OpenAI base URL | `http://localhost:8000/v1` |
+| Anthropic base URL | `http://localhost:8000` (the SDK appends `/v1/messages`) |
+| API key | any placeholder. A key is checked only when the server runs with `YUNSHU_AUTH_TOKEN` (or `--auth-token`) |
+| Model name | in single-model mode the name is advisory, `local` works. In multi-model mode use an id from `GET /v1/models` |
+
+When a token is set, the server accepts it as `Authorization: Bearer <token>` (OpenAI clients) or `x-api-key: <token>` (Anthropic clients).
+
+## Launch an agent
+
+Start a server first (`yunshu serve -m <model>`, see [Quickstart](/docs/getting-started/quickstart)), then:
+
+```bash
+yunshu launch list                      # which tools are installed
+yunshu launch claude                    # Claude Code
+yunshu launch codex                     # Codex CLI
+yunshu launch opencode                  # opencode
+yunshu launch pi                        # Pi
+yunshu launch codex --dry-run           # print the configuration, write nothing
+```
+
+| Option | Meaning |
+|---|---|
+| `--model`, `-m` | model id to use. Default: the first model from `GET /v1/models` that looks like a known chat family, else the first model listed |
+| `--url`, `-u` | server URL. Default `http://localhost:8000`, or the `YUNSHU_GATEWAY_URL` environment variable |
+| `--api-key`, `-k` | API key to hand to the tool |
+| `--effort` | Claude Code only: sets `CLAUDE_CODE_EFFORT_LEVEL` |
+| `--statusline` / `--no-statusline` | Claude Code only: add (default) or skip the Yunshu status line |
+| `--dry-run` | print what would be written or exported and exit |
+
+The launcher checks `GET /health` first and exits with a hint if no server answers. It fails if the tool is not installed (`--dry-run` skips that check).
+
+### What each launcher sets
+
+<Tabs items={["Claude Code", "Codex", "opencode", "Pi"]}>
+<Tab value="Claude Code">
+
+Environment variables only. Nothing is written under `~/.claude`.
+
+| Variable | Value |
+|---|---|
+| `ANTHROPIC_BASE_URL` | the server URL, without `/v1` |
+| `ANTHROPIC_AUTH_TOKEN` | the API key, or `yunshu` when none is given (a bearer token, not `ANTHROPIC_API_KEY`) |
+| `ANTHROPIC_MODEL`, `ANTHROPIC_SMALL_FAST_MODEL`, `ANTHROPIC_DEFAULT_OPUS_MODEL`, `ANTHROPIC_DEFAULT_SONNET_MODEL`, `ANTHROPIC_DEFAULT_HAIKU_MODEL`, `CLAUDE_CODE_SUBAGENT_MODEL` | the served model id, so every alias and sub-agent resolves to it |
+| `CLAUDE_CODE_MAX_CONTEXT_TOKENS` | the model's real context window (Claude Code assumes 200K for an unknown model id) |
+| `CLAUDE_CODE_MAX_OUTPUT_TOKENS` | the model's output limit, capped at 32000 |
+| `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY` | `1`: `/model` lists the models from `GET /v1/models` |
+| `DISABLE_TELEMETRY`, `DISABLE_ERROR_REPORTING`, `DISABLE_AUTOUPDATER` | `1` |
+| `CLAUDE_CODE_EFFORT_LEVEL` | only with `--effort` |
+
+Before launching, the launcher removes `ANTHROPIC_API_KEY`, `CLAUDE_CODE_USE_BEDROCK` and `CLAUDE_CODE_USE_VERTEX` from the environment so a stray setting cannot send requests elsewhere.
+
+It also passes `--settings` with a status line that runs `yunshu statusline` (prefill progress, decode speed, last cache hit, context use). The status line is skipped when your own Claude Code `settings.json` already defines a `statusLine`, or with `--no-statusline`.
+
+</Tab>
+<Tab value="Codex">
+
+Writes two files and backs up an existing `config.toml` next to it with a `.<timestamp>.bak` suffix.
+
+- `~/.codex/config.toml`: sets `model`, `model_provider = "yunshu"`, `model_catalog_json`, `model_context_window`, `model_auto_compact_token_limit` (85% of the window), `web_search` and, for reasoning models, `model_reasoning_summary = "auto"`. It adds a `[model_providers.yunshu]` table with `base_url = "<server>/v1"`, `env_key = "YUNSHU_API_KEY"` and `wire_api = "responses"`. Other settings and tables in the file are kept.
+- `~/.codex/yunshu-models.json`: a model catalog entry with the real context window, the reasoning levels the chat template accepts, input modalities and a compact `base_instructions`. Codex never fetches model metadata from a custom provider; without the catalog it prints "Model metadata not found" and sends no reasoning effort.
+
+`web_search` is `"live"` when the model card reports server-side web search as available, otherwise `"disabled"`. The launcher exports `YUNSHU_API_KEY` (the API key, or `yunshu`) and starts `codex -m <model>`.
+
+</Tab>
+<Tab value="opencode">
+
+Updates `~/.config/opencode/opencode.json` (a timestamped `.bak` copy is kept) with a `provider.yunshu` entry and `"model": "yunshu/<id>"`. The provider uses `@ai-sdk/openai-compatible` with `baseURL` set to `<server>/v1`, and the model entry carries `tool_call`, `reasoning`, `limit.context`, `limit.output` and `modalities`. opencode does not fetch `/models` from custom providers, so these limits are what drives its context percentage and compaction.
+
+</Tab>
+<Tab value="Pi">
+
+Updates `~/.pi/agent/models.json` (provider `yunshu`, `api: "openai-completions"`, `baseUrl` `<server>/v1`) and `~/.pi/agent/settings.json` (`defaultProvider`, `defaultModel`), then starts `pi --model yunshu/<model>`. Unlike the other three, the Pi entry does not carry context or output limits from the model card.
+
+</Tab>
+</Tabs>
+
+## Manual configuration
+
+Use these when you do not want the launcher to touch your config.
+
+<Tabs items={["Claude Code", "Codex", "opencode"]}>
+<Tab value="Claude Code">
+
+```bash
+export ANTHROPIC_BASE_URL=http://localhost:8000
+export ANTHROPIC_AUTH_TOKEN=sk-local
+export ANTHROPIC_MODEL=local
+export ANTHROPIC_SMALL_FAST_MODEL=local
+export CLAUDE_CODE_MAX_CONTEXT_TOKENS=131072   # your model's real window
+claude
+```
+
+</Tab>
+<Tab value="Codex">
+
+```toml
+# ~/.codex/config.toml
+model = "local"
+model_provider = "yunshu"
+model_context_window = 131072
+
+[model_providers.yunshu]
+name = "Yunshu"
+base_url = "http://localhost:8000/v1"
+env_key = "YUNSHU_API_KEY"
+wire_api = "responses"
+```
+
+```bash
+export YUNSHU_API_KEY=sk-local
+codex
+```
+
+Without a `model_catalog_json` Codex does not know the model: expect "Model metadata not found" and no reasoning-effort choices.
+
+</Tab>
+<Tab value="opencode">
+
+```json
+{
+  "provider": {
+    "yunshu": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Yunshu",
+      "options": { "baseURL": "http://localhost:8000/v1", "apiKey": "sk-local" },
+      "models": {
+        "local": {
+          "name": "local",
+          "tool_call": true,
+          "reasoning": false,
+          "limit": { "context": 131072, "output": 32768 },
+          "modalities": { "input": ["text"], "output": ["text"] }
+        }
+      }
+    }
+  },
+  "model": "yunshu/local"
+}
+```
+
+</Tab>
+</Tabs>
+
+Other OpenAI-compatible tools work with a base URL and a key: Cline and Roo Code (provider "OpenAI Compatible", base URL `http://localhost:8000/v1`), Continue (`provider: openai`, `apiBase: http://localhost:8000/v1`) and Open WebUI (Settings, Connections, OpenAI API). These are configuration guidance; they are not tested release by release the way the three agents above are.
+
+## Which endpoints each agent uses
+
+These are the calls the agents make against a custom provider, and how Yunshu answers them.
+
+| Agent | Request | Yunshu |
+|---|---|---|
+| Claude Code | `POST /v1/messages` with `stream: true`, every turn, with `anthropic-beta` headers, `cache_control` on system blocks, `thinking` and `output_config.effort` | served. Betas are never rejected |
+| Claude Code | `POST /v1/messages/count_tokens` (`/context`) | served: counts system, messages and tools |
+| Claude Code | `GET /v1/models` (with discovery on, fills `/model`) | served, with `max_input_tokens`, `max_tokens` and `capabilities` |
+| Claude Code | `POST /v1/messages` with a `web_search_20250305` tool | executed server side, see [Web search and fetch](/docs/guides/web-search) |
+| Claude Code | small-model calls (titles, summaries) and sub-agents | ordinary `POST /v1/messages` calls |
+| Codex | `POST /v1/responses` with `stream: true`, `store: false`, function, namespace and `web_search` tools, `reasoning`, `include` | served |
+| Codex | `WS /v1/responses` (only when the provider sets `supports_websockets`; the launcher does not) | served |
+| Codex | compaction | an ordinary `POST /v1/responses` call with no tools |
+| opencode | `POST /v1/chat/completions` with `stream_options.include_usage`, a large `max_tokens`, function tools; title generation with `reasoning_effort: "low"` | served |
+
+MCP servers configured in an agent are client side: the agent connects to them and sends their tools to the model as ordinary function tools, so Yunshu only needs working tool calling. Claude Code's WebFetch is also client side. The server-side MCP connector (`mcp_servers` on Messages, `{type: mcp}` tools on Responses) is a separate feature, see [Server tools](/docs/api/server-tools).
+
+## What works and what does not
+
+| Feature | Claude Code | Codex | opencode | Status |
+|---|---|---|---|---|
+| Streaming, tool calls | yes | yes | yes | <Support status="supported">supported</Support> |
+| Mid-conversation system or developer notes | yes | yes (`developer` items) | not used | <Support status="supported">supported</Support> |
+| Effort control | `output_config.effort` is mapped to the chat template's `reasoning_effort` | `reasoning.effort` through the catalog levels | `reasoning_effort` | <Support status="supported">supported</Support> |
+| Web search | server side `web_search` | server side `web_search` | not used (client tool) | <Support status="supported">supported</Support> when a provider is available |
+| Web fetch | client side in the CLI | not used | not used | SDK users get the server-side `web_fetch` tool |
+| MCP | client side | client side | client side | <Support status="supported">supported</Support> as plain tool calling |
+| Image input | yes (a `Read` of a PNG) | not used in `exec` mode | not used | <Support status="partial">needs a vision model</Support> |
+| Model picker and context window | from `/v1/models` and the launch environment | from the catalog | from `limit` | <Support status="supported">supported</Support> with `yunshu launch` |
+| Live engine state in the UI | `yunshu statusline` | not available | not available | <Support status="extension">Claude Code only</Support> |
+| Cost display | shows made-up numbers for an unknown model; nothing is billed | not applicable | not applicable | <Support status="unsupported">cannot be corrected server side</Support> |
+| Rate-limit headers | not sent: Yunshu has no quota | not sent | not sent | <Support status="unsupported">not provided</Support> |
+
+Other things to know:
+
+- A failure after a stream has started is reported as an in-stream error (an SSE `error` event on Messages, `response.failed` on Responses, an error chunk on chat) instead of an empty successful reply.
+- Explicit `cache_control` markers are hints. If the chat template drops a marker (Qwen templates remove the reasoning of earlier turns), the request is served without explicit checkpoints instead of failing. See [Prompt caching](/docs/guides/prompt-caching).
+- A JSON `null` for `temperature`, `max_tokens`, `stream` or similar fields means "unset" and is accepted, because several SDKs send it.
+- Responses streams end with `data: [DONE]`, which the real API does not send. The official SDKs and Codex stop on it without trouble.
+- Known gaps in the request models: the deprecated chat `functions` / `function_call` fields, custom tools in chat, Responses `prompt` templates, and a Responses request with no `input`.
+- Claude Code keeps listing its built-in model rows in `/model`; those come from the client's own catalog. The context window it works with is the real one (check `/context`).
+- Agents send long prompts that repeat from turn to turn. Yunshu's prefix cache reuses the shared part, so after the first turn only the new tokens are prefilled.
+
+## SDK setup
+
+All four snippets use a placeholder key. Replace `local` with a model id if you serve several models.
+
+<Tabs items={["OpenAI Python", "OpenAI JavaScript", "Anthropic Python", "Anthropic JavaScript"]}>
+<Tab value="OpenAI Python">
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="http://localhost:8000/v1", api_key="sk-local")
+
+resp = client.chat.completions.create(
+    model="local",
+    messages=[{"role": "user", "content": "Explain MLX in one sentence."}],
+    extra_body={"reasoning_effort": "medium"},  # passed to templates that support it
+)
+print(resp.choices[0].message.content)
+```
+
+</Tab>
+<Tab value="OpenAI JavaScript">
+
+```ts
+import OpenAI from "openai";
+
+const client = new OpenAI({ baseURL: "http://localhost:8000/v1", apiKey: "sk-local" });
+
+const resp = await client.chat.completions.create({
+  model: "local",
+  messages: [{ role: "user", content: "Hello" }],
+});
+console.log(resp.choices[0].message.content);
+```
+
+</Tab>
+<Tab value="Anthropic Python">
+
+```python
+import anthropic
+
+client = anthropic.Anthropic(base_url="http://localhost:8000", api_key="sk-local")
+
+msg = client.messages.create(
+    model="local",
+    max_tokens=512,
+    messages=[{"role": "user", "content": "Hello"}],
+)
+print(msg.content[-1].text)
+```
+
+</Tab>
+<Tab value="Anthropic JavaScript">
+
+```ts
+import Anthropic from "@anthropic-ai/sdk";
+
+const client = new Anthropic({ baseURL: "http://localhost:8000", apiKey: "sk-local" });
+
+const msg = await client.messages.create({
+  model: "local",
+  max_tokens: 512,
+  messages: [{ role: "user", content: "Hello" }],
+});
+console.log(msg.content);
+```
+
+</Tab>
+</Tabs>
+
+For the OpenAI SDK the base URL ends in `/v1`; for the Anthropic SDK it does not. Streaming (`stream=True`), tools, `response_format`, `stop`, `logprobs` and `seed` work through the official SDKs. The thinking output of reasoning models is streamed separately from the answer (`delta.reasoning_content` on chat).
+
+To reach the server from another machine or a container, start it with `--host 0.0.0.0 --auth-token <secret>` and use the secret as the key. The default bind is `127.0.0.1`.
+
+## Related
+
+- [Chat Completions](/docs/api/chat-completions), [Responses](/docs/api/responses) and [Messages](/docs/api/messages)
+- [Web search and fetch](/docs/guides/web-search)
+- [Prompt caching](/docs/guides/prompt-caching)
+- [CLI reference](/docs/guides/cli)
+- [Troubleshooting](/docs/guides/troubleshooting)

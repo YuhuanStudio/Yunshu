@@ -1,0 +1,267 @@
+---
+title: Audio
+description: OpenAI-style speech-to-text, translation and text-to-speech endpoints, plus local custom voices, served by mlx-audio models.
+---
+
+The audio routes follow the OpenAI `/v1/audio/*` dialect. Transcription and translation take a multipart upload and return JSON or subtitle text. Speech synthesis takes JSON and returns encoded audio, or a Server-Sent Events stream of raw PCM chunks. Yunshu adds local custom voices (consent plus voice enrollment) on top.
+
+Audio models come from the optional `audio` extra (`pip install "yunshu[audio]"`, backed by `mlx-audio`). The model you request must be a loaded audio model of the right kind (ASR for transcription, TTS for speech); otherwise the server answers `404` with a message that names the modality mismatch.
+
+<Endpoint method="POST" path="/v1/audio/transcriptions" />
+<Endpoint method="POST" path="/v1/audio/translations" />
+<Endpoint method="POST" path="/v1/audio/speech" />
+<Endpoint method="POST" path="/v1/audio/speech/stream" />
+<Endpoint method="GET" path="/v1/audio/voices" />
+<Endpoint method="POST" path="/v1/audio/voices" />
+<Endpoint method="POST" path="/v1/audio/voice_consents" />
+
+<Callout type="info">
+Authentication is only enforced when `YUNSHU_AUTH_TOKEN` is set. When it is set, send `Authorization: Bearer <token>` (or `x-api-key`). Without a token, inference routes such as these are open on the bound address.
+</Callout>
+
+## Model selection
+
+- In single-model mode (`yunshu serve` with one model) the served model is used; the `model` field is advisory.
+- In multi-model mode the model must already be loaded, otherwise the request fails with `503` and a message pointing to `POST /v1/models/load`. Setting `YUNSHU_ALLOW_AUTO_LOAD=1` lets audio requests load a model on demand.
+- With several audio engines loaded, the engine whose id matches `model` (case-insensitive) is used.
+
+Model families recognised as ASR are `whisper`, `qwen3_asr`, `parakeet` and `qwen2_audio`; TTS families are `qwen3_tts`, `kokoro` and `chatterbox` (plus names containing `tts`). Which individual checkpoints work is decided by the installed `mlx-audio`; see [Models](/docs/getting-started/models).
+
+## Transcriptions
+
+`POST /v1/audio/transcriptions` takes `multipart/form-data`.
+
+| Parameter | Type | Required | Description | Status |
+| --- | --- | --- | --- | --- |
+| `file` | file | yes | Audio or video upload, at most 25 MB. Audio: `.wav .mp3 .ogg .flac .m4a .webm .aac`. Video: `.mp4 .mkv .avi .mov .wmv .ts .mts` (audio track is extracted with `ffmpeg`). | supported |
+| `model` | string | yes | ASR model id. Empty string is rejected with `400`. | supported |
+| `language` | string | no | Language hint passed to the model. | supported |
+| `response_format` | string | no | `json` (default), `text`, `srt`, `vtt`, `verbose_json`. Anything else returns `400`. | supported |
+| `prompt` | string | no | Text prompt passed to the model. | supported |
+| `temperature` | number | no | 0 to 1. Omitted means the model uses its own default. | supported |
+| `timestamp_granularities` | list of string | no | Pass `word` to request word timestamps. Both `timestamp_granularities` and the SDK spelling `timestamp_granularities[]` are accepted. | supported |
+
+### Response formats
+
+| `response_format` | Content-Type | Body |
+| --- | --- | --- |
+| `json` | `application/json` | `{"text", "language"}` plus `segments` and `duration` when the model produced them |
+| `verbose_json` | `application/json` | `text`, `language`, `task: "transcribe"`, `duration`, `segments` (padded to the OpenAI segment schema with neutral defaults for fields the model did not emit), and `words` when available |
+| `text` | `text/plain` | Plain transcript |
+| `srt` | `text/plain` | SubRip subtitles built from the segments |
+| `vtt` | `text/vtt` | WebVTT subtitles built from the segments |
+
+`srt` and `vtt` need segment timestamps. If the model returns no segments, the subtitle body is empty.
+
+## Translations
+
+`POST /v1/audio/translations` decodes speech into English text. It accepts `file`, `model`, `response_format` (same five values) , `prompt` and `temperature`. It has no `language` field.
+
+Translation is a Whisper capability. If neither the loaded model path nor the requested id contains `whisper`, the server returns `501`:
+
+```json
+{
+  "error": {
+    "message": "The loaded ASR model does not support translation (Whisper-only). Load a Whisper model for /v1/audio/translations, or use /v1/audio/transcriptions followed by an LLM translation step.",
+    "type": "server_error",
+    "param": null,
+    "code": null
+  }
+}
+```
+
+`json` returns `{"text": ...}`. `verbose_json` adds `task: "translate"`, `language: "english"`, `duration` and `segments`. `text`, `srt` and `vtt` return plain text bodies (`text/plain` for all three here).
+
+## Speech
+
+`POST /v1/audio/speech` accepts a JSON body (or `multipart/form-data` with the same field names). It returns the audio bytes with a `Content-Disposition: attachment; filename=speech.<ext>` header.
+
+| Parameter | Type | Required | Description | Status |
+| --- | --- | --- | --- | --- |
+| `model` | string | yes | TTS model id. | supported |
+| `input` | string | yes | Text to speak. Non-empty, at most 32768 characters. | supported |
+| `voice` | string or object | no | Voice name (default `alloy`), or `{"id": "voice_..."}` for a custom voice enrolled through `POST /v1/audio/voices`. Built-in names reported by `GET /v1/audio/voices`; the fallback list is `alloy`, `chelsie`, `ethan`, `aiden`. | supported |
+| `response_format` | string | no | `mp3`, `opus`, `aac`, `flac`, `wav`, `pcm`. The server default is `wav`; the official OpenAI SDK sends `mp3` unless you override it. `format` is accepted as an alias. | supported |
+| `speed` | number | no | 0.25 to 4.0, default 1.0. | supported |
+| `temperature` | number | no | 0 to 2. | supported |
+| `instruct` | string | no | Free-form voice description for VoiceDesign-style models. When omitted, a short description is derived from the voice name. | extension |
+| `top_k` | integer | no | Default 50. | extension |
+| `top_p` | number | no | 0 to 1, default 0.95. | extension |
+| `repetition_penalty` | number | no | 0 to 2, default 1.0. | extension |
+| `max_tokens` | integer | no | 1 to 32768, default 4096. | extension |
+| `ref_audio` | string | no | Local path of a reference recording for voice cloning. URI schemes and `..` segments are rejected; absolute paths need `YUNSHU_ALLOW_LOCAL_FILES=1`. Cannot be combined with a custom `voice`. | extension |
+| `ref_text` | string | no | Transcript of the reference recording. | extension |
+| `language` | string | no | Language code for multilingual models. | extension |
+| `seed` | integer | no | Random seed. | extension |
+| `segment_size` | integer | no | 50 to 2000, default 300. Only used by the streaming route. | extension |
+| `instructions`, `stream_format` | | no | OpenAI fields that are not part of the schema; they are ignored. | accepted and ignored |
+
+### Output formats and the ffmpeg fallback
+
+The engine produces WAV. Other formats are produced by transcoding with `ffmpeg`:
+
+| `response_format` | Content-Type | Notes |
+| --- | --- | --- |
+| `wav` | `audio/wav` | No transcoding. |
+| `pcm` | `audio/L16; rate=<sample rate>; channels=<n>` | Raw 16-bit little-endian samples with the WAV header stripped; done in Python, no `ffmpeg` needed. |
+| `mp3` | `audio/mpeg` | Needs `ffmpeg`. |
+| `opus` | `audio/ogg` | Ogg-encapsulated Opus; needs `ffmpeg` with `libopus`. |
+| `aac` | `audio/aac` | ADTS stream; needs `ffmpeg`. |
+| `flac` | `audio/flac` | Needs `ffmpeg`. |
+
+If `ffmpeg` is not on `PATH` (or the transcode fails), the server does not mislabel bytes. It returns the WAV audio as `audio/wav` with the response header `X-Yunshu-Audio-Format-Fallback: wav` and a `.wav` filename. Check that header if you depend on a compressed format. Install `ffmpeg` (for example `brew install ffmpeg`) to avoid the fallback. Video transcription also depends on `ffmpeg`; without it the request fails with `415`.
+
+## Speech streaming
+
+`POST /v1/audio/speech/stream` takes the same JSON body and responds with `text/event-stream`. Response headers include `X-Audio-Format: pcm-s16le` and `X-Sample-Rate: <rate>`. Compressed formats are not available while streaming: chunks are always raw 16-bit PCM, and `response_format` is validated but otherwise has no effect.
+
+Long input is split into segments of `segment_size` characters and synthesized one after another. Events, in order:
+
+| Event `type` | Fields | When |
+| --- | --- | --- |
+| `header` | `wav_header` (base64), `sample_rate` | First event. The WAV header declares unknown length. |
+| `audio` | `audio` (base64 PCM16), `text`, `segment` | One per audio chunk. |
+| `done` | none | After the last segment. |
+| `cancelled` | none | The request was cancelled, for example through `POST /v1/cancel`. |
+| `error` | `error.message`, `error.type` | Synthesis failed part-way. |
+
+The stream ends with `data: [DONE]` after `done` or `error`. A `cancelled` event ends the stream without `[DONE]`.
+
+## Custom voices
+
+Custom voices are local. A recording is stored in the bounded Files store, so Files quota and expiry apply to it, see [Files](/docs/api/files). Enrollment records a consent recording; it does not verify who is speaking.
+
+1. `POST /v1/audio/voice_consents` creates a consent record.
+2. `POST /v1/audio/voices` creates a voice that references the consent.
+3. Use `"voice": {"id": "voice_..."}` in a speech request.
+
+`POST /v1/audio/voice_consents` takes `multipart/form-data`:
+
+| Parameter | Type | Required | Description |
+| --- | --- | --- | --- |
+| `name` | string | yes | 1 to 256 characters. |
+| `language` | string | yes | Up to 64 characters. |
+| `recording` | file | yes | Audio, at most 10 MiB and at most 60 seconds once decoded. MIME type must be one of `audio/mpeg`, `audio/wav`, `audio/x-wav`, `audio/ogg`, `audio/aac`, `audio/flac`, `audio/webm`, `audio/mp4`. |
+
+It returns `{"object": "audio.voice_consent", "id": "cons_...", "name", "language", "created_at"}`.
+
+`POST /v1/audio/voices` takes `multipart/form-data`:
+
+| Parameter | Type | Required | Description |
+| --- | --- | --- | --- |
+| `name` | string | yes | 1 to 256 characters. |
+| `consent` | string | yes | A `cons_...` id from the previous step. |
+| `audio_sample` | file | yes | Same limits as `recording` above. |
+| `type` | string | no | Only `audio_sample` is supported. Any other value returns `400` (prompt-designed voices are not supported). |
+| `ref_text` | string | no | Transcript of the sample, up to 32768 characters. |
+
+It returns `{"object": "audio.voice", "id": "voice_...", "name", "type": "audio_sample", "created_at"}`. Enrollment decodes the sample with `soundfile` (part of the audio extra); an undecodable sample returns `400`, and a missing dependency returns `503`.
+
+Using a custom voice requires a TTS model that supports reference audio. Otherwise the speech request returns `400`. Qwen3-TTS must be a Base model and needs a transcript, from `ref_text` at enrollment or in the speech request; CustomVoice and VoiceDesign variants are rejected.
+
+`GET /v1/audio/voices` returns `{"object": "list", "data": [{"id": "alloy", "object": "voice"}, ...]}` with the built-in names of the loaded TTS model followed by the enrolled custom voices (full voice objects).
+
+## Examples
+
+<Tabs items={["curl", "Python", "JavaScript"]}>
+<Tab value="curl">
+
+```bash
+# Transcribe
+curl http://localhost:8000/v1/audio/transcriptions \
+  -F file=@meeting.wav \
+  -F model=local \
+  -F response_format=verbose_json \
+  -F "timestamp_granularities[]=word"
+
+# Speak (WAV, no ffmpeg needed)
+curl http://localhost:8000/v1/audio/speech \
+  -H "Content-Type: application/json" \
+  -d '{"model": "local", "input": "Hello from Yunshu.", "voice": "alloy", "response_format": "wav"}' \
+  -o hello.wav
+```
+
+</Tab>
+<Tab value="Python">
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="http://localhost:8000/v1", api_key="not-needed")
+
+with open("meeting.wav", "rb") as f:
+    result = client.audio.transcriptions.create(
+        model="local", file=f, response_format="verbose_json"
+    )
+print(result.text)
+
+speech = client.audio.speech.create(
+    model="local", voice="alloy", input="Hello from Yunshu.", response_format="wav"
+)
+speech.write_to_file("hello.wav")
+```
+
+</Tab>
+<Tab value="JavaScript">
+
+```ts
+import OpenAI from "openai";
+import fs from "node:fs";
+
+const client = new OpenAI({ baseURL: "http://localhost:8000/v1", apiKey: "not-needed" });
+
+const result = await client.audio.transcriptions.create({
+  model: "local",
+  file: fs.createReadStream("meeting.wav"),
+});
+console.log(result.text);
+
+const speech = await client.audio.speech.create({
+  model: "local",
+  voice: "alloy",
+  input: "Hello from Yunshu.",
+  response_format: "wav",
+});
+fs.writeFileSync("hello.wav", Buffer.from(await speech.arrayBuffer()));
+```
+
+</Tab>
+</Tabs>
+
+## Errors
+
+Errors use the OpenAI envelope `{"error": {"message", "type", "param", "code"}}`.
+
+| Status | When |
+| --- | --- |
+| `400` | Bad `response_format`, empty `model`/`input`, out-of-range number, invalid `voice` object, upload that is not decodable audio, bad custom voice or consent. |
+| `404` | No loaded model of the right modality for `model`. |
+| `413` | Upload larger than 25 MB (transcription, translation) or recording larger than 10 MiB (voices). |
+| `415` | Video upload but `ffmpeg` is missing or cannot extract audio. |
+| `501` | Translation requested on a non-Whisper ASR model. |
+| `503` | Model not loaded in multi-model mode, or `soundfile` missing for voice enrollment. |
+| `507` | Out of GPU memory. |
+| `500` | Transcription, translation or synthesis failed. |
+
+Streaming failures after the response has started arrive as an `error` event rather than an HTTP status.
+
+## Support
+
+| Feature | Status |
+| --- | --- |
+| Transcription, `json` / `text` / `srt` / `vtt` / `verbose_json` | <Support status="supported">supported</Support> |
+| Word timestamps | <Support status="partial">when the ASR model produces them</Support> |
+| Translation to English | <Support status="partial">Whisper models only; others return 501</Support> |
+| Speech `wav` and `pcm` | <Support status="supported">supported</Support> |
+| Speech `mp3`, `opus`, `aac`, `flac` | <Support status="partial">needs ffmpeg, otherwise WAV with a fallback header</Support> |
+| Compressed audio while streaming | <Support status="unsupported">raw PCM16 only</Support> |
+| Custom voices | <Support status="partial">needs a reference-audio capable TTS model</Support> |
+| Prompt-designed voices (`type` other than `audio_sample`) | <Support status="unsupported">rejected with 400</Support> |
+| `diarized_json`, `gpt-4o-transcribe` streaming events | <Support status="unsupported">not supported</Support> |
+
+## Related
+
+- [Realtime](/docs/api/realtime) for voice conversations over WebSocket.
+- [Extensions](/docs/api/extensions) for `POST /v1/omni/speech/stream`, native speech-to-speech.
+- [Files](/docs/api/files) for the store that holds enrolled voices.
+- [Models](/docs/getting-started/models) for choosing and loading audio models.

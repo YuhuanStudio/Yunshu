@@ -265,10 +265,26 @@ class EngineStreamMixin:
             )
 
         # Grammar constraint for streaming fast path
+        from .structured_report import backend_name, report
+
+        report("mlx-lm", json_schema)
         if json_schema is not None:
             try:
+                unconstrained_sampler = sampler
                 sampler = _engine._build_constrained_sampler(
                     sampler, json_schema, tokenizer
+                )
+                report(
+                    "mlx-lm",
+                    json_schema,
+                    backend_name(
+                        getattr(
+                            sampler, "constraint", getattr(sampler, "engine", sampler)
+                        )
+                    )
+                    if sampler is not unconstrained_sampler
+                    else None,
+                    enforced=sampler is not unconstrained_sampler,
                 )
             except Exception:
                 _engine.logger.warning(

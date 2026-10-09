@@ -1,0 +1,164 @@
+---
+title: Troubleshooting
+description: Fixes for common problems with installing, starting and calling Yunshu, and how to collect a diagnostics bundle.
+---
+
+Start with `yunshu doctor`. Add `-m <model>` to check a model as well. It checks the platform, MLX and Metal, memory, settings, the models directory, the port and the login service, and prints a fix for each problem. It exits with status 1 when something blocks serving.
+
+```bash
+yunshu doctor -m <model>
+yunshu --json doctor -m <model>
+```
+
+## Install
+
+<Accordions>
+<Accordion title="cannot import mlx, or Python runs under Rosetta">
+
+MLX ships arm64 wheels only, so an x86_64 Python (for example an old Homebrew under `/usr/local`) cannot load it. `yunshu doctor` reports "Python runs under Rosetta". Install a native interpreter with `uv python install 3.13`, then reinstall Yunshu with it.
+
+</Accordion>
+<Accordion title="requires-python >=3.13">
+
+Yunshu needs Python 3.13 or later. `uv tool install "yunshu[vision]" --python 3.13` fetches a uv-managed 3.13 if needed.
+
+</Accordion>
+<Accordion title="A Qwen3.5 / 3.6 / 3.8 or vision model fails to load, and doctor shows mlx-vlm not installed">
+
+Install the `vision` extra: `uv tool install "yunshu[vision]" --python 3.13`. See [Install](/docs/getting-started/install).
+
+</Accordion>
+<Accordion title="macOS version is too old">
+
+`yunshu doctor` fails the platform check below macOS 14. Update macOS; MLX needs 14 or newer.
+
+</Accordion>
+</Accordions>
+
+## Starting the server
+
+<Accordions>
+<Accordion title="Error: no such directory, or the model is not found">
+
+`yunshu serve` checks the model before loading it.
+
+- `yunshu model list` shows what is on disk (the models directory and the Hugging Face cache).
+- `yunshu pull <org/name>` downloads a model.
+- A directory that holds several models belongs in `--models-dir`, not `--model`.
+
+</Accordion>
+<Accordion title="interrupted download, or weight shards missing">
+
+Run the same `yunshu pull` again. It resumes and fetches only the missing files.
+
+</Accordion>
+<Accordion title="weights larger than memory, or a warning about the GPU working set">
+
+The model cannot fit in unified memory. Use a smaller or more quantized build, for example a 4-bit MLX conversion. When weights fit but use most of the GPU working set, the model loads but long prompts may run out of memory. macOS gives the GPU a working set somewhat below total RAM; `yunshu doctor -m <model>` prints both numbers.
+
+</Accordion>
+<Accordion title="Cannot listen on host:port, or the port is used by another program">
+
+Pick another port with `--port` (for example `--port 8001`) and use it in your clients. `yunshu serve` checks the address before loading the model and exits with an error. If the program on the port is Yunshu itself, such as the login service, `yunshu status` reports it and `yunshu doctor` says "Yunshu is already running".
+
+</Accordion>
+<Accordion title="The server starts, but GET /health/ready returns 503">
+
+When a model fails to load (wrong path, damaged weights, not enough memory) the server stays up instead of exiting, so a supervisor such as launchd does not restart-loop. The readiness probe returns 503, with a `reason` when a load error is known, and chat requests that need a model get a 503 until you fix the cause and restart. The full traceback is in the server log (the terminal, or `yunshu service logs`); look for `FATAL: model ... load failed`.
+
+```bash
+curl -i http://127.0.0.1:8000/health/ready
+```
+
+The probe also returns 503 while the server is shutting down or when GPU memory use is above 95%.
+
+</Accordion>
+<Accordion title="Which speculative path is in use?">
+
+`yunshu doctor -m <model>` prints a `speculative` row, and the startup log has a `Speculative decoding:` line. A matching DFlash2 drafter found in the models directory or the Hugging Face cache is picked up automatically. `YUNSHU_VLM_DRAFT=mtp` forces the checkpoint's MTP head, `YUNSHU_VLM_DRAFT=off` turns drafting off, and a directory path selects a specific drafter. If an automatic drafter cannot be loaded, the server logs a warning and falls back to MTP.
+
+</Accordion>
+<Accordion title="A bad setting stops startup">
+
+`yunshu config` shows every effective value and where it came from. A setting with an invalid value stops the command with an error. A misspelled `YUNSHU_*` name only produces a warning with the closest match; `--set` with an unknown name is an error.
+
+</Accordion>
+<Accordion title="Stopping the server">
+
+Ctrl-C or `kill` (SIGINT or SIGTERM) stops accepting new requests and lets running ones finish for `YUNSHU_DRAIN_TIMEOUT` seconds (default 30). After that the remaining connections are cut, their generation stops, and the server exits. A client that disconnects mid-request cancels its generation.
+
+</Accordion>
+</Accordions>
+
+## Calling the API
+
+<Accordions>
+<Accordion title="401 Missing or invalid Authorization header">
+
+The server has `YUNSHU_AUTH_TOKEN` set (for example through `--auth-token`). Send `Authorization: Bearer <token>`, or `x-api-key: <token>` from Anthropic clients. Without a token, inference is open, but model load and unload and similar operational endpoints are denied. Health, version and documentation routes never need a token.
+
+</Accordion>
+<Accordion title="A client in Docker cannot connect">
+
+By default the server listens on `127.0.0.1` only. Start it with `--host 0.0.0.0 --auth-token <secret>` and connect to `http://host.docker.internal:8000`.
+
+</Accordion>
+<Accordion title="model not found in multi-model mode">
+
+Use an id from `GET /v1/models` (`yunshu model list --url http://127.0.0.1:8000`). In single-model mode any model name works.
+
+</Accordion>
+<Accordion title="A reasoning model's answer is empty">
+
+Its tokens went to thinking. Raise `max_tokens`, lower `reasoning_effort`, or pass `chat_template_kwargs` with `enable_thinking` set to `false`.
+
+</Accordion>
+<Accordion title="A request returns 400">
+
+The response body says why. Typical causes:
+
+- `context_length_exceeded`: the prompt is longer than the model's context window. Shorten the prompt or use a model with a longer context.
+- `max_tokens` above the request validation cap (1,048,576), or above a lower limit from the model's context and output budget. The message states the numbers.
+- A JSON-schema keyword or regex construct that the engine cannot enforce (for example `uniqueItems`, `not`, `if`/`then`/`else`, `contains`). These are rejected rather than silently ignored.
+- A feature the model lacks, such as tools, images, audio or logprobs. `GET /v1/models` lists what each model supports.
+
+</Accordion>
+<Accordion title="429 Rate limit exceeded">
+
+Rate limiting is off by default. It is on only if `YUNSHU_RATE_LIMIT_RPM` is set above 0.
+
+</Accordion>
+</Accordions>
+
+## Disk and cache
+
+The prefix cache SSD tier (default `~/.yunshu/cache/apc`) has one budget per cache root and keeps a free-space reserve. When a write fails, spilling to disk pauses with one warning. `yunshu doctor` warns when the disk is short.
+
+```bash
+yunshu cache status        # entries per namespace, size and cap
+yunshu cache gc            # report what could be removed
+yunshu cache gc --apply    # remove truncated, corrupt and old-format entries, trim to the cap
+```
+
+`YUNSHU_VLM_APC_DISK=0` keeps the prefix cache in RAM only. See [Prompt caching](/docs/guides/prompt-caching).
+
+## Reporting a bug
+
+`yunshu diagnose bundle` writes a local diagnostics file with the version, platform, package versions, settings with secrets redacted, the doctor output, SSD cache state and recent error lines from the service log with their trace ids. It never contains prompts or completions and is never uploaded.
+
+```bash
+yunshu diagnose bundle -o yunshu-diagnostics.json
+```
+
+When you open an issue at [github.com/YuhuanStudio/Yunshu](https://github.com/YuhuanStudio/Yunshu/issues), include:
+
+- the output of `yunshu --json doctor -m <model>`
+- the model folder name
+- the command or request that failed
+- the last 50 or so lines of the server log
+
+## Related
+
+- [CLI reference](/docs/guides/cli)
+- [Service](/docs/getting-started/service)
+- [Configuration](/docs/guides/configuration)

@@ -158,3 +158,25 @@ def test_probe_waits_when_the_port_pool_is_busy(monkeypatch):
     with pytest.raises(RuntimeError, match="pool busy"):
         probe.available_port(18996, wait_s=5.0)
     assert sleeps == [5.0]
+
+
+def _tc(i, city="Taipei"):
+    return {
+        "id": f"c{i}",
+        "function": {"name": "weather", "arguments": json.dumps({"city": city})},
+    }
+
+
+def test_structural_tool_accepts_repeated_valid_calls_but_forced_does_not():
+    resp = {"choices": [{"message": {"tool_calls": [_tc(1), _tc(2), _tc(3)]}}]}
+    assert probe.judge("structural_tool", resp)["ok"] is True
+    with pytest.raises(ValueError):
+        probe.judge("forced", resp)
+    bad = {"choices": [{"message": {"tool_calls": [_tc(1), _tc(2, "Tokyo")]}}]}
+    with pytest.raises(ValueError):
+        probe.judge("structural_tool", bad)
+    dup = {"choices": [{"message": {"tool_calls": [_tc(1), _tc(1)]}}]}
+    with pytest.raises(ValueError):
+        probe.judge("structural_tool", dup)
+    with pytest.raises(ValueError):
+        probe.judge("structural_tool", {"choices": [{"message": {"tool_calls": []}}]})

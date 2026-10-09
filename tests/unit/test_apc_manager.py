@@ -794,3 +794,19 @@ def test_budget_sheds_the_anchor_that_owns_its_rows_not_the_whole_chain():
     m.enforce_anchor_budget()
     assert owner not in m._exact_cache
     assert all(k in m._exact_cache for k in anchors if k != owner)
+
+
+def test_console_snapshot_counts_hits_and_omits_token_content():
+    m = _mgr()
+    ids = list(range(300))
+    m.observation.request_id = "http-id"
+    m.begin_request()
+    assert m.store_exact_cache(ids, _cache(300))
+    cache, count = m.lookup_exact_cache(ids + [999])
+    assert cache is not None and count == 300
+    snap = m.console_snapshot()
+    assert snap["entries"][0]["tokens"] == 300
+    assert snap["entries"][0]["bytes_logical"] > 0
+    assert snap["entries"][0]["hits"] == 1
+    assert snap["events"][-1]["request_id"] == "http-id"
+    assert all("token_ids" not in row for row in snap["entries"])

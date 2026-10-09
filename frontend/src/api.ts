@@ -1,3 +1,6 @@
+import { readGb } from "./byte-format.ts";
+import { failureMessage, statusMessage } from "./errors.ts";
+import { t } from "./i18n/index.ts";
 /** Small, typed client for Yunshu's same-origin `/v1` control/status routes. */
 export interface Connection {
   /** Server origin or API base, with or without a trailing `/v1`. */
@@ -60,6 +63,12 @@ export interface EngineLastRequest {
   decode_tps: number | null;
   ttft_ms: number | null;
   t: number;
+  /** Speculative decoding of that request (x_yunshu.speculative), when it drafted. */
+  speculative?: {
+    mode?: string;
+    acceptance_rate?: number | null;
+    rounds?: number;
+  } | null;
   [key: string]: unknown;
 }
 
@@ -91,6 +100,14 @@ export interface EngineStatus {
   last: EngineLastRequest | null;
   throughput: EngineThroughput;
   gpu?: Record<string, unknown>;
+  /**
+   * Added by the console (never by the engine): the steady phase and smoothed decode speed to display
+   * (phase-stability.ts). `activity()` prefers it over what the latest sample alone says.
+   */
+  console_live?: {
+    phase: "idle" | "queued" | "prefill" | "decode";
+    tps: number | null;
+  };
   [key: string]: unknown;
 }
 
@@ -107,6 +124,10 @@ export interface RequestOptions {
   body?: unknown;
   signal?: AbortSignal;
   timeoutMs?: number;
+  /** A multipart body (file upload); sent as is, without a JSON content type. */
+  form?: FormData;
+  /** Query parameters, kept apart from the path so the path stays validated. */
+  search?: Readonly<Record<string, string>>;
 }
 
 export class ApiError extends Error {
@@ -143,17 +164,14 @@ function apiRoot(connection: Connection): URL {
   try {
     url = new URL(connection.baseUrl.trim());
   } catch {
-    throw new ApiError("Enter a valid Yunshu server address.");
+    throw new ApiError(t("errors.address.invalid"));
   }
   if (url.protocol !== "http:" && url.protocol !== "https:") {
-    throw new ApiError("The Yunshu address must use HTTP or HTTPS.");
+    throw new ApiError(t("errors.address.protocol"));
   }
   if (url.username || url.password)
-    throw new ApiError("Do not put credentials in the Yunshu address.");
-  if (url.search || url.hash)
-    throw new ApiError(
-      "The Yunshu address cannot include a query or fragment.",
-    );
+    throw new ApiError(t("errors.address.credentials"));
+  if (url.search || url.hash) throw new ApiError(t("errors.address.query"));
 
   const path = url.pathname.replace(/\/+$/, "");
   url.pathname = path.endsWith("/v1") ? `${path}/` : `${path}/v1/`;
@@ -169,11 +187,11 @@ function buildUrl(connection: Connection, path: string): URL {
     path.includes("?") ||
     path.includes("#")
   ) {
-    throw new ApiError("Invalid Yunshu API path.");
+    throw new ApiError(t("errors.address.path"));
   }
   const relativePath = path.replace(/^\/+/, "");
   if (relativePath.split("/").some((part) => part === ".." || part === ".")) {
-    throw new ApiError("Invalid Yunshu API path.");
+    throw new ApiError(t("errors.address.path"));
   }
   return new URL(relativePath, apiRoot(connection));
 }
@@ -181,14 +199,11 @@ function buildUrl(connection: Connection, path: string): URL {
 async function readJson(response: Response): Promise<unknown> {
   const text = await response.text();
   if (!text.trim())
-    throw new ApiError(
-      "The server returned an empty response.",
-      response.status,
-    );
+    throw new ApiError(failureMessage("empty"), response.status);
   try {
     return JSON.parse(text) as unknown;
   } catch {
-    throw new ApiError("The server returned invalid JSON.", response.status);
+    throw new ApiError(failureMessage("json"), response.status);
   }
 }
 
@@ -202,14 +217,9 @@ function publicHttpMessage(
   detail: unknown,
   statusText: string,
 ): string {
-  if (status === 401) return "Authentication failed. Check the Yunshu token.";
-  if (status === 403) return "This Yunshu operation is not permitted.";
-  if (typeof detail === "string" && detail.trim()) return detail;
-  if (Array.isArray(detail))
-    return "The server rejected the request. Check its fields and try again.";
-  return statusText
-    ? `Yunshu returned HTTP ${status}: ${statusText}`
-    : `Yunshu returned HTTP ${status}.`;
+  void detail;
+  void statusText;
+  return statusMessage(status);
 }
 
 /** Fetch and parse one JSON API response with bearer auth, timeout and public errors. */
@@ -219,6 +229,8 @@ export async function requestJson<T>(
   options: RequestOptions = {},
 ): Promise<T> {
   const url = buildUrl(connection, path);
+  for (const [k, v] of Object.entries(options.search ?? {}))
+    url.searchParams.set(k, v);
   const controller = new AbortController();
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   let didTimeout = false;
@@ -233,8 +245,10 @@ export async function requestJson<T>(
   const headers = new Headers({ Accept: "application/json" });
   if (connection.token.trim())
     headers.set("Authorization", `Bearer ${connection.token.trim()}`);
-  let body: string | undefined;
-  if (options.body !== undefined) {
+  let body: string | FormData | undefined;
+  if (options.form) {
+    body = options.form;
+  } else if (options.body !== undefined) {
     headers.set("Content-Type", "application/json");
     body = JSON.stringify(options.body);
   }
@@ -273,18 +287,12 @@ export async function requestJson<T>(
     if (error instanceof ApiError) throw error;
     if (options.signal?.aborted) throw options.signal.reason ?? error;
     if (didTimeout || controller.signal.aborted)
-      throw new ApiError(
-        "The Yunshu request timed out.",
-        undefined,
-        undefined,
-        { cause: error },
-      );
-    throw new ApiError(
-      "Could not reach the Yunshu server. Check the address and try again.",
-      undefined,
-      undefined,
-      { cause: error },
-    );
+      throw new ApiError(failureMessage("timeout"), undefined, undefined, {
+        cause: error,
+      });
+    throw new ApiError(failureMessage("network"), undefined, undefined, {
+      cause: error,
+    });
   } finally {
     globalThis.clearTimeout(timeout);
     options.signal?.removeEventListener("abort", forwardAbort);
@@ -293,13 +301,13 @@ export async function requestJson<T>(
 
 function requiredString(value: unknown, field: string): string {
   if (typeof value !== "string")
-    throw new ApiError(`The server returned an invalid ${field} field.`);
+    throw new ApiError(failureMessage("field"), undefined, field);
   return value;
 }
 
 function requiredNumber(value: unknown, field: string): number {
   if (!isFiniteNumber(value))
-    throw new ApiError(`The server returned an invalid ${field} field.`);
+    throw new ApiError(failureMessage("field"), undefined, field);
   return value;
 }
 
@@ -426,28 +434,31 @@ function validateMemory(value: Record<string, unknown>): EngineMemoryStatus {
     "total_gb",
     "pressure",
   ] as const;
+  // Memory figures are display-only: an absent or malformed one is unknown.
+  const memory: Record<string, unknown> = { ...value };
   for (const field of fields) {
-    if (value[field] !== undefined)
-      requiredNumber(value[field], `memory.${field}`);
+    if (field === "pressure") {
+      if (!isFiniteNumber(value[field])) delete memory[field];
+      continue;
+    }
+    const gb = readGb(value, field.slice(0, -3));
+    if (gb == null) delete memory[field];
+    else memory[field] = gb;
   }
-  return value as EngineMemoryStatus;
+  return memory as EngineMemoryStatus;
 }
 
 /** Validate the exact required status envelope; backend additions remain preserved. */
 export function parseEngineStatus(value: unknown): EngineStatus {
   if (!isRecord(value) || value.object !== "yunshu.status")
-    throw new ApiError(
-      "The server returned an invalid Yunshu status response.",
-    );
+    throw new ApiError(failureMessage("field"));
   if (
     !Array.isArray(value.models) ||
     !isRecord(value.memory) ||
     !isRecord(value.requests) ||
     !isRecord(value.throughput)
   ) {
-    throw new ApiError(
-      "The server returned an incomplete Yunshu status response.",
-    );
+    throw new ApiError(failureMessage("field"));
   }
   const models = value.models.map((model, index): EngineModelStatus => {
     if (!isRecord(model))
@@ -463,23 +474,31 @@ export function parseEngineStatus(value: unknown): EngineStatus {
         `The server returned invalid model state at index ${index}.`,
       );
     }
-    if (model.size_gb !== undefined)
-      requiredNumber(model.size_gb, `models[${index}].size_gb`);
-    for (const field of ["idle_s", "keep_alive_s", "expires_in_s"] as const) {
-      if (model[field] !== undefined)
-        optionalNumber(model, field, `models[${index}].${field}`);
+    // Optional display fields degrade to "unknown" (a null or malformed value
+    // is dropped), so one odd field never reads as an unreachable engine.
+    const optional: Record<string, number | null | undefined> = {};
+    for (const field of [
+      "size_gb",
+      "idle_s",
+      "keep_alive_s",
+      "expires_in_s",
+    ] as const) {
+      const raw = model[field];
+      if (raw === undefined) continue;
+      const sizeGb = field === "size_gb" ? readGb(model, "size") : null;
+      optional[field] = isFiniteNumber(raw)
+        ? field === "size_gb"
+          ? (sizeGb ?? raw)
+          : raw
+        : field === "size_gb"
+          ? undefined
+          : null;
     }
-    if (
-      model.error !== undefined &&
-      model.error !== null &&
-      typeof model.error !== "string"
-    ) {
-      throw new ApiError(
-        `The server returned an invalid model error at index ${index}.`,
-      );
-    }
+    const modelError = typeof model.error === "string" ? model.error : null;
     return {
       ...model,
+      ...optional,
+      error: modelError,
       id: requiredString(model.id, `models[${index}].id`),
       type: requiredString(model.type, `models[${index}].type`),
       loaded: model.loaded,
@@ -489,7 +508,7 @@ export function parseEngineStatus(value: unknown): EngineStatus {
   });
   const requests = value.requests;
   if (!Array.isArray(requests.items))
-    throw new ApiError("The server returned an invalid requests.items field.");
+    throw new ApiError(failureMessage("field"));
   const throughput = value.throughput;
   const memory = value.memory;
   const last = value.last;
@@ -518,7 +537,7 @@ export function parseEngineStatus(value: unknown): EngineStatus {
             t: requiredNumber(last.t, "last.t"),
           } as EngineLastRequest)
         : (() => {
-            throw new ApiError("The server returned an invalid last request.");
+            throw new ApiError(failureMessage("field"));
           })();
 
   return {
@@ -571,7 +590,7 @@ export function parseEngineStatus(value: unknown): EngineStatus {
           gpu: isRecord(value.gpu)
             ? value.gpu
             : (() => {
-                throw new ApiError("The server returned an invalid gpu field.");
+                throw new ApiError(failureMessage("field"));
               })(),
         }),
   } as EngineStatus;

@@ -1,0 +1,212 @@
+---
+title: 圖像與 OCR
+description: OpenAI 風格的本機圖像生成、編輯與變體端點，以及用來從圖片擷取文字的 Yunshu OCR 端點。
+---
+
+本頁涵蓋兩組路由。圖像路由遵循 OpenAI 的 `/v1/images/*` 規格，執行本機的 Z-Image 類擴散管線。`POST /v1/ocr` 是 Yunshu 自己的路由（不屬於 OpenAI API），會用 OCR 模型或任何已載入的視覺語言模型把上傳的圖片轉成文字。
+
+<Endpoint method="POST" path="/v1/images/generations" />
+<Endpoint method="POST" path="/v1/images/generations/stream" />
+<Endpoint method="POST" path="/v1/images/edits" />
+<Endpoint method="POST" path="/v1/images/variations" />
+<Endpoint method="POST" path="/v1/ocr" />
+
+<Callout type="info">
+只有在設定了 `YUNSHU_AUTH_TOKEN` 時才會強制驗證。圖像生成需要先載入圖像模型（見[模型](/docs/getting-started/models)）；選用的 `generation` extra 會提供額外的相依套件。
+</Callout>
+
+## 圖像生成
+
+`POST /v1/images/generations` 接收 JSON 本文。
+
+| 參數 | 型別 | 必填 | 說明 | 狀態 |
+| --- | --- | --- | --- | --- |
+| `prompt` | string | 是 | 提示詞，不可為空白。 | 支援 |
+| `model` | string | 否 | 圖像模型 id，預設 `Z-Image-Turbo-MLX-4bit`。若與已載入的圖像模型都不相符、但剛好只載入了一個圖像模型，就使用那一個。 | 支援 |
+| `n` | integer | 否 | 1 到 10，預設 1。圖片依序逐張生成。 | 支援 |
+| `size` | string | 否 | `WIDTHxHEIGHT`，預設 `1024x1024`。兩邊都必須介於 64 到 2048，且為 64 的倍數。 | 支援 |
+| `response_format` | string | 否 | `b64_json`（預設）或 `url`。 | 支援 |
+| `num_inference_steps` | integer | 否 | 1 到 100，預設 4（針對 Turbo 模型調整）。 | 擴充 |
+| `seed` | integer | 否 | 第 `i` 張使用 `seed + i`。未提供 seed 時，每張圖各自使用新的隨機 seed。 | 擴充 |
+| `control_image` | string | 否 | 作為控制訊號的 base64 圖片（可帶 `data:` URL 前綴）。 | 擴充 |
+| `control_scale` | number | 否 | 0 到 2，預設 0.8。僅在有 `control_image` 時使用。 | 擴充 |
+| `preview_interval` | integer | 否 | 僅串流路由：每 N 步輸出一張解碼後的預覽（0 表示關閉）。 | 擴充 |
+| `quality`、`style`、`background`、`output_format`、`moderation` | | 否 | 不在結構內的 OpenAI 欄位，會被忽略。 | 接受但忽略 |
+
+回應一律是 PNG 資料：
+
+```json
+{
+  "created": 1767225600,
+  "data": [
+    { "b64_json": "iVBORw0KGgo..." }
+  ]
+}
+```
+
+使用 `response_format: "url"` 時，每個項目的 `url` 是 `data:image/png;base64,...` URI（同時帶有 `b64_json`）。Yunshu 不代管生成的檔案，所以 `url` 不會是 http 連結。
+
+### 串流生成
+
+`POST /v1/images/generations/stream` 使用相同的本文，回傳 `text/event-stream`。每個事件是一行帶 JSON 物件的 `data:`，沒有 `event:` 名稱：
+
+| 事件形式 | 意義 |
+| --- | --- |
+| `{"step", "total_steps", "progress", "is_final": false}` | 去噪進度。 |
+| `{"step", "total_steps", "progress", "image", "is_final": false, "is_preview": true}` | 附帶 base64 PNG 預覽的進度（僅當 `preview_interval` 大於 0）。 |
+| `{"step", "progress": 1.0, "image", "is_final": true}` | base64 PNG 的最終圖片，之後接 `data: [DONE]`。 |
+| `{"type": "cancelled"}` | 請求被取消（例如透過 `POST /v1/cancel`），之後接 `[DONE]`。 |
+| `{"error": {"message", "type"}}` | 串流開始後發生失敗，之後接 `[DONE]`。 |
+
+串流路由只生成一張圖片，不使用 `n` 與 `control_image`。
+
+## 編輯與變體
+
+`POST /v1/images/edits` 與 `POST /v1/images/variations` 可以接收 `multipart/form-data`（OpenAI SDK 的送法：`image` 檔案加文字欄位），也可以接收含 base64 `image` 的 JSON。只會讀取第一個 `image` 檔案；`mask` 與其他檔案會被忽略。圖片超過 25 MB 會回傳 `413`。
+
+| 參數 | 型別 | 必填 | 說明 | 狀態 |
+| --- | --- | --- | --- | --- |
+| `image` | file 或 base64 string | 是 | 來源圖片。 | 支援 |
+| `prompt` | string | 編輯：是 | 編輯指示。變體沒有 `prompt` 欄位（傳了也會被忽略）。 | 支援 |
+| `model` | string | 否 | 同圖像生成。 | 支援 |
+| `n` | integer | 否 | 1 到 10，預設 1。 | 支援 |
+| `size` | string | 否 | 同圖像生成。 | 支援 |
+| `response_format` | string | 否 | `b64_json`（預設）或 `url`（data URI，不含 `b64_json`）。 | 支援 |
+| `num_inference_steps`、`seed` | | 否 | 同圖像生成。 | 擴充 |
+| `denoise_strength` | number | 否 | 0 到 1。決定結果可偏離來源圖多遠：編輯預設 0.8，變體預設 0.45。 | 擴充 |
+| `mask` | file | 否 | 局部重繪遮罩。 | 接受但忽略 |
+
+編輯是圖生圖：以來源圖片為起點，由 `denoise_strength` 決定結果可以偏離來源多少。這兩個路由沒有以遮罩為基礎的局部重繪。
+
+## OCR
+
+`POST /v1/ocr` 使用 `multipart/form-data`。
+
+| 參數 | 型別 | 必填 | 說明 |
+| --- | --- | --- | --- |
+| `file` | file | 是 | 圖片，最大 10 MB。可讀取 PNG、JPEG、WebP、TIFF、BMP；檔案會以 Pillow 驗證，不是圖片時回傳 `400`。 |
+| `model` | string | 否 | OCR 或 VLM 模型 id。留空表示使用第一個已載入的 OCR 引擎。 |
+| `task` | string | 否 | `text`（預設）、`formula` 或 `table`。 |
+| `language` | string | 否 | 引導輸出語言的提示。不會做語言偵測。 |
+
+引擎選擇：優先使用已載入的 OCR 類模型（例如 GLM-OCR checkpoint）。沒有的話，會退而使用已載入的視覺語言模型，搭配文字辨識提示詞。兩者都沒有時，伺服器回傳 `503`。
+
+```json
+{
+  "text": "Invoice 2026-001\nTotal: 120.00",
+  "model": "mlx-community/GLM-OCR-bf16",
+  "confidence": 0.0,
+  "language": null,
+  "task": "text",
+  "prompt_tokens": 312,
+  "completion_tokens": 18,
+  "usage": {
+    "prompt_tokens": 312,
+    "completion_tokens": 18,
+    "total_tokens": 330,
+    "image_tokens": 290
+  }
+}
+```
+
+走 VLM 後備時 `confidence` 為 `null`，否則是 OCR 引擎回報的值，僅供參考。`language` 會原樣回傳你給的提示。
+
+## 範例
+
+<Tabs items={["curl", "Python", "JavaScript"]}>
+<Tab value="curl">
+
+```bash
+curl http://localhost:8000/v1/images/generations \
+  -H "Content-Type: application/json" \
+  -d '{"model": "Z-Image-Turbo-MLX-4bit", "prompt": "a red bicycle in the rain", "size": "1024x1024", "seed": 7}' \
+  | python3 -c "import sys,json,base64; open('out.png','wb').write(base64.b64decode(json.load(sys.stdin)['data'][0]['b64_json']))"
+
+curl http://localhost:8000/v1/images/edits \
+  -F image=@out.png \
+  -F prompt="make it night" \
+  -F denoise_strength=0.6
+
+curl http://localhost:8000/v1/ocr -F file=@receipt.png -F task=text
+```
+
+</Tab>
+<Tab value="Python">
+
+```python
+import base64
+from openai import OpenAI
+
+client = OpenAI(base_url="http://localhost:8000/v1", api_key="not-needed")
+
+img = client.images.generate(
+    model="Z-Image-Turbo-MLX-4bit",
+    prompt="a red bicycle in the rain",
+    size="1024x1024",
+    response_format="b64_json",
+)
+with open("out.png", "wb") as f:
+    f.write(base64.b64decode(img.data[0].b64_json))
+
+with open("out.png", "rb") as f:
+    edited = client.images.edit(
+        model="Z-Image-Turbo-MLX-4bit",
+        image=f,
+        prompt="make it night",
+        response_format="b64_json",
+    )
+```
+
+</Tab>
+<Tab value="JavaScript">
+
+```ts
+import OpenAI from "openai";
+import fs from "node:fs";
+
+const client = new OpenAI({ baseURL: "http://localhost:8000/v1", apiKey: "not-needed" });
+
+const img = await client.images.generate({
+  model: "Z-Image-Turbo-MLX-4bit",
+  prompt: "a red bicycle in the rain",
+  size: "1024x1024",
+  response_format: "b64_json",
+});
+fs.writeFileSync("out.png", Buffer.from(img.data[0].b64_json!, "base64"));
+```
+
+</Tab>
+</Tabs>
+
+## 錯誤
+
+錯誤使用 OpenAI 的格式 `{"error": {"message", "type", "param", "code"}}`。
+
+| 狀態碼 | 情況 |
+| --- | --- |
+| `400` | `prompt` 或 `image` 為空白、`size` 無法解析或不是介於 64 到 2048 的 64 倍數、`response_format` 不合法、base64 無效、OCR 上傳的不是圖片。 |
+| `404` | 沒有符合 `model` 的圖像生成模型，或該模型屬於其他模態。 |
+| `413` | 圖片上傳超過 25 MB（OCR：超過 10 MB）。 |
+| `501` | 僅圖像生成：已載入的圖像模型使用管線無法執行的佈局（扁平的 Lance/Wan 類 checkpoint）。編輯與變體遇到同樣情況會回傳 `500`。 |
+| `503` | OCR：沒有載入 OCR 或視覺語言模型。 |
+| `507` | GPU 記憶體不足。 |
+| `500` | 生成、編輯、變體或 OCR 失敗。 |
+
+## 支援狀況
+
+| 功能 | 狀態 |
+| --- | --- |
+| 文生圖，`b64_json` 與 data URI 形式的 `url` | <Support status="supported">支援</Support> |
+| 串流進度與預覽 | <Support status="extension">Yunshu 擴充</Support> |
+| 圖像編輯與變體（圖生圖） | <Support status="partial">沒有遮罩局部重繪</Support> |
+| 代管的 `url` 連結 | <Support status="unsupported">僅提供 data URI</Support> |
+| 控制圖引導 | <Support status="extension">Yunshu 擴充</Support> |
+| `gpt-image-1` 選項（`quality`、`background`、`output_format`） | <Support status="unsupported">被忽略</Support> |
+| Lance/Wan 類圖像 checkpoint | <Support status="unsupported">501</Support> |
+| 使用 OCR 模型或 VLM 後備的 OCR | <Support status="supported">支援</Support> |
+
+## 相關頁面
+
+- [模型](/docs/getting-started/models)：載入圖像與 OCR 模型。
+- [Chat Completions](/docs/api/chat-completions)：改把圖片送給視覺語言模型。
+- [擴充](/docs/api/extensions)：取消執行中的請求。

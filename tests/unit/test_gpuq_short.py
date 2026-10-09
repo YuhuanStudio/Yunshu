@@ -4,6 +4,7 @@ import contextlib
 import importlib
 import json
 import os
+import signal
 import subprocess
 import sys
 import time
@@ -161,6 +162,14 @@ def test_timeout_kills_short_job_and_logs_reason(tmp_path, monkeypatch):
 
     gpuq = importlib.reload(gpuq)
     monkeypatch.setattr(gpuq, "POLL_S", 0.2)
+    # The timeout sends SIGINT first. A suite started from a background shell runs
+    # with SIGINT ignored, which `sleep` would inherit and survive until the 30 s
+    # SIGKILL fallback; the daemon resets it the same way (gpuq.py `_daemon`).
+    if signal.getsignal(signal.SIGINT) is signal.SIG_IGN:
+        signal.signal(signal.SIGINT, signal.SIG_DFL)
+        request_restore = True
+    else:
+        request_restore = False
     gpuq.JOBS.mkdir(parents=True)
     gpuq.LOGS.mkdir(parents=True)
     j = job(
@@ -179,6 +188,8 @@ def test_timeout_kills_short_job_and_logs_reason(tmp_path, monkeypatch):
     gpuq._run_one(j, path)
     assert j["state"] == "timeout" and time.time() - t0 < 20
     assert "short-lane job exceeded" in (gpuq.LOGS / "sleeper.log").read_text()
+    if request_restore:
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
 
 
 def test_end_to_end_real_daemon_start_order(tmp_path):

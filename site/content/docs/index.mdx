@@ -1,0 +1,54 @@
+---
+title: Introduction
+description: Yunshu is a local LLM and VLM inference engine for Apple Silicon that serves OpenAI- and Anthropic-compatible APIs from one process.
+---
+
+Yunshu is a single-node inference engine for Apple Silicon Macs. One process loads a model through Apple's MLX stack (`mlx-lm`, `mlx-vlm`, `mlx-audio`) and exposes OpenAI-compatible and Anthropic-compatible HTTP endpoints on your own machine. Nothing leaves the Mac unless you configure it to.
+
+The focus is large language models and vision-language models: decode speed, time to first token (cold and with a warm prefix cache), prefix reuse, and a complete set of request features such as tools, JSON schema output, stop sequences, logprobs, reasoning output and request cancellation. Other modalities (speech recognition and synthesis, embeddings, image generation) are supported as additional capabilities.
+
+## What you get
+
+- OpenAI-compatible routes such as `POST /v1/chat/completions` and `POST /v1/responses`, and the Anthropic route `POST /v1/messages`. See the [API overview](/docs/api/overview).
+- A command line (`yunshu`) for installing, checking, serving and running the engine as a login service. See the [CLI reference](/docs/guides/cli).
+- A web console served by the gateway for status, models, requests and a playground. See [Console](/docs/getting-started/console).
+- Prefix caching with an optional SSD tier, speculative decoding for the Qwen3.5 family, and constrained decoding for JSON schema and grammars.
+
+## How serving works
+
+Yunshu picks a serving path from the model that you load. All GPU work runs on one MLX thread.
+
+| Model | Serving path |
+|---|---|
+| Any `mlx-vlm` model (vision-language, and the Qwen3.5 / 3.6 / 3.8 family) | The VLM batch runner: continuous batching with per-request sampling, an automatic prefix cache, and image, audio and video input. |
+| Qwen3.5-family models | The same runner, plus speculative decoding (MTP or a matching drafter) in a single-request lane. |
+| Text-only `mlx-lm` models | A single-request fast path. Concurrent requests are served one after another. |
+
+See [Model support](/docs/guides/model-support) for the details of each path.
+
+## What Yunshu is not
+
+Yunshu serves one machine. It has no multi-node or distributed mode, and it does not aim to maximize batch throughput for many tenants. Authentication is a single optional bearer token (`YUNSHU_AUTH_TOKEN`).
+
+## How these docs are organised
+
+<Cards>
+  <Card title="Getting started" href="/docs/getting-started/install">
+    Install Yunshu, serve a first model, manage model files, run it as a login service and open the console.
+  </Card>
+  <Card title="API reference" href="/docs/api/overview">
+    Every route the server registers, with parameters, examples, streaming events, errors and a support status for each feature.
+  </Card>
+  <Card title="Guides" href="/docs/guides/cli">
+    The CLI reference, configuration, model support and troubleshooting, plus guides for agents, web search, prompt caching and structured output.
+  </Card>
+  <Card title="Developers" href="/docs/developers/architecture">
+    Architecture, contributing, verification, the release gate and upstream tracking.
+  </Card>
+</Cards>
+
+If you are new, follow [Install](/docs/getting-started/install) and then [Quickstart](/docs/getting-started/quickstart).
+
+<Callout type="info">
+Each feature in the API reference is marked as supported, partial, accepted and ignored, or not supported. A parameter that the server accepts but does not act on is labelled as such rather than described as working.
+</Callout>

@@ -1,0 +1,115 @@
+---
+title: 验证
+description: Yunshu 如何用 yv 验证工具确认一项优化是无损且没有变慢，以及如何与原生 MLX 比较准确度。
+---
+
+Yunshu 只接受有证据的优化：输出必须相同（或在明确说明的容差内）、新路径必须确实有运行，而且量测到的效果必须是真的。本页说明产生这些证据的工具与其采用的规则，对象是修改解码、预填、缓存或调度路径的贡献者。
+
+## 必须成立的条件
+
+| 要求 | 意义 |
+|---|---|
+| **Token 完全相同** | 无损的改动不会改变贪婪输出：在同一个检查点上，候选版本产生的 token 与基准 commit 相同。对推测解码而言，打开起草的输出必须等于关闭起草的输出 |
+| **确实激活** | 新路径必须被证明有在运行（计数器、日志或回应字段），不能只是假设。两次其实都走旧路径的比较什么也证明不了 |
+| **缓存精确** | 由前缀缓存服务的请求必须等于同一请求冷启动的结果，并且要报告 `cached_tokens > 0` |
+| **无退步** | 解码速度、首 token 延迟与内存不得在量测噪声之外变差 |
+| **失败即关闭（fail closed）** | 没有证据就不算通过。不完整的运行、遗失的结果或提早结束的工作都是失败，绝不当作略过 |
+
+有损的选项（KV int8、权重量化，以及任何改变输出质量的做法）是缺省为无损的用户配置，不会因为基准测试而被采用。见[贡献指南](/docs/developers/contributing)。
+
+## `yv` 工具
+
+`scripts/dev/yv` 会对候选改动运行标准验证并返回单一结论。请用它，不要自己写一次性的量测脚本。它会为两个比较对象各建一棵固定版本的树、依序运行各阶段、在第一个失败处停止、记住已完成的部分，并写出 `verdict.json` 与 `verdict.md`。
+
+```bash
+scripts/dev/yv ab --base <base-sha> --cand <candidate-sha> --suite decode --label my-change
+scripts/dev/yv ab --base <base-sha> --cand <candidate-sha> --suite prefill \
+  --cand-env YUNSHU_VLM_DRAFT=mtp --label my-change-mtp --detach
+scripts/dev/yv status <run>      # 查看某次运行的状态
+scripts/dev/yv wait <run>        # 阻塞直到有结论
+scripts/dev/yv suites            # 列出 suite
+scripts/dev/yv gate              # 发布关卡，逐阶段保存结果
+```
+
+结束码 `0` 表示所有阶段通过，`1` 表示有阶段失败，`2` 表示基础设施错误（工具、git 或参数不一致）。`yv ab` 会阻塞到完成；`--detach` 则立即返回。
+
+### 比较对象（arm）
+
+为了得到可审查的结论，请把两边都提交，并传入完整的 commit SHA，让基准与候选是两个明确、有名称的状态。`--base` 与 `--cand` 也接受 checkout 目录；未提交的改动会被哈希进 arm 的键，所以重新续跑时不会把同一棵树的两种状态混在一起。两边使用同一个解释器。`--env K=V` 同时应用于两边，`--cand-env` 只应用于候选，`--base-env` 只应用于基准。`--model` 指定检查点。
+
+### 阶段
+
+阶段依下列顺序运行，并在第一个失败处停止（除非该 suite 被标记为继续运行）。
+
+| 阶段 | 做什么 | 通过条件 |
+|---|---|---|
+| `preflight` | 仅用 CPU。两棵树都能 import，并运行与差异相关的单元测试 | import 成功、测试通过 |
+| `smoke` | 两边都能启动服务并回答。`--engaged SPEC` 证明候选路径有运行：`log:REGEX`（候选服务器日志）、`field:KEY=REGEX`（`x_yunshu` 回应字段）或 `spec:MODE`（使用中的推测模式） | 能回答，且每个 `--engaged` 都符合 |
+| `identity` | 在每个 suite 的 context 长度下，对固定的代码与散文提示词做贪婪解码（冷启动、暖缓存、后续回合）；对文本、推理内容、工具调用、结束原因与 token 数计算摘要。加上 `--spec-off` 时，关闭起草的候选也必须等于打开起草的候选 | 每个格子都相等 |
+| `apc` | 暖请求（由前缀缓存服务）必须等于冷请求，并报告 `cached_tokens > 0`。没有前缀缓存的路径使用 `--no-apc-hit-required` | 命中等于未命中 |
+| `quality` | 200 题成对的 MMLU-Pro，基准与候选交错运行 | 两边所有题目都有评分，且答对题数的差距在一题以内 |
+| `speed` | 解码 tok/s、冷启动 TTFT 与后续 TTFT，多次重复，依基准、候选、基准、候选交错。报告中位数、成对差异与噪声估计 | 没有任何中位数的恶化超过 2% 与实测噪声两者中较大者（`--speed-tol`）；受干扰的重复会重跑一次 |
+| `memory` | 峰值内存、闲置后的内存，以及短暂后续请求后仍保留的内存 | 没有任何指针比基准多出超过 3% 加 0.25 GiB |
+| `longqa` | 在 32K、64K 与 128K 提示词中放入确定性的 key-value needle，各问一个贪婪问题 | 答对数与基准相差在一以内 |
+| `conc` | 两个并行请求，每个都是暖的 32K 前缀加新文本 | TTFT 与每个请求的解码速度在基准的 10% 以内 |
+
+`--spec-modes default,mtp,dflash` 会对每种推测方法各重复一次 identity 阶段。
+
+### Suite
+
+| Suite | 阶段与 context |
+|---|---|
+| `decode` | preflight、smoke、identity、apc、speed，1K 与 8K |
+| `prefill` | 再加上 quality，最长到 32K |
+| `scheduler` | preflight、smoke、identity、apc、quality、speed，1K 与 8K |
+| `memory` | preflight、smoke、identity、memory |
+| `quick` | 快速迭代用的阶梯；合并前请运行 `full` |
+| `full` | 所有阶段，1K、8K 与 32K |
+| `long` | 32K、64K 与 128K 的格子，回复 2048 token：identity（含起草打开与关闭）、apc、speed、memory、longqa 与 conc；即使有阶段失败，每个阶段仍会运行 |
+| `longtrend` | 主要长格子各跑一次，用于比较不同版本 |
+| `tiny` | 在小模型上运行所有阶段，用来试跑工具本身 |
+
+像 `--suite smoke,identity,speed` 这样的临时阶梯会保持标准的阶段顺序。可覆写的选项：`--ctx`、`--reps`、`--mmlu-n`、`--mem-sizes`、`--mem-reps`、`--speed-tol` 与 `--spec-off`。
+
+### 续跑与结论
+
+每个阶段在进行时就会写下证据。只有当某个格子的工作干净结束，且纪录以 `complete: true` 结尾时，证据才算数；提早结束的工作不留下证据，该阶段就失败。重新运行同一个命令即可续跑：已完成的格子会被重用（结论中会标示），失败只会损失进行中的那个格子。在既有的 label 下更改基准、候选、环境、suite 或模型会被拒绝，请改用新的 label。
+
+`verdict.json` 包含 label、两边的 commit、环境、suite、模型、整体结果、失败的阶段，以及各阶段的状态、原因与数字。`verdict.md` 是给人阅读的摘要。
+
+## 与原生 MLX 比较准确度
+
+与同一检查点上的原生 MLX 或 `mlx-vlm` 是否等价，分三个层级检查，由最便宜、最敏感的开始。300 题的基准测试约有 13 题的 95% 噪声，单靠它看不出细微的数值漂移。
+
+| 层级 | 比较对象 | 敏感于 |
+|---|---|---|
+| 1 | 固定文本上的下一个 token 分布（teacher forcing）：KL divergence 与 top-1 一致率 | 非常小的数值漂移 |
+| 2 | 50 个固定提示词、最多 256 token 的贪婪续写 | 第一个不同的 token |
+| 3 | 成对的下游评测（GSM8K、IFEval、MMLU-Pro、needle 检索、工具调用），逐题配对，使用 McNemar 检定与信赖区间 | 任务层级的差异 |
+
+参考基准永远是同一检查点上、未加载任何 Yunshu kernel 的原生 `mlx-vlm`，而且运行时会断言这一点。候选版本是与「原生 MLX 对自己」的差异相比：重复运行是位精确的，所以任何非零差异都是真实的路径差异；但只要更改批量大小或预填区块大小，平均 KL divergence 就已经会移动约 1e-3 到 3e-3，top-1 一致率降到约 98.8%。这就是数值上合理实作的尺度。
+
+第 1 层的通过条件：
+
+- 平均 KL divergence 不超过原生对原生基准线的两倍，中位数与第 99 百分位数也一样；
+- top-1 一致率至少 98.4%；
+- perplexity 变化不超过 0.5%；
+- 硬性条件：使用推测解码时，多 token 的验证区块必须与单 token 解码位相同，因此起草打开等于起草关闭。
+
+第 2 层：起草打开与关闭时，50 个提示词必须完全相同，且与参考基准的吻合数不得低于同一检查点已记录的基线。
+
+第 3 层以带区间的成对差异报告，等价的路径在约 200 到 300 题的成对集合上必须在一题以内一致。不会为每次改动都重跑完整基准测试。
+
+## 验证代理与 API 行为
+
+客户端依赖的行为是以官方工具验证，而不是假设：
+
+- 单元测试（`tests/unit`）涵盖请求与回应的形状，其中一个测试会把已安装的 `openai` 与 `anthropic` SDK 类型的每个请求参数与请求模型比对，所以新的 SDK 字段若既不支持也没有列为忽略，CI 就会失败。
+- 路由覆盖测试：当应用程序注册了某个路由，却没有任何检查或经审查的豁免提到它时就会失败。
+- 发布关卡会用官方 SDK 通过 HTTP 驱动已安装的构建版本；见[发布关卡](/docs/developers/release-gate)。
+
+## 相关页面
+
+- [发布关卡](/docs/developers/release-gate)
+- [贡献指南](/docs/developers/contributing)
+- [架构](/docs/developers/architecture)

@@ -1,0 +1,180 @@
+---
+title: Ollama
+description: Ollama-compatible /api routes so Ollama clients and SDKs can talk to Yunshu, with a precise list of what is real and what is not.
+---
+
+Yunshu answers the Ollama native API under `/api`, so tools written for Ollama (the official `ollama` Python and JavaScript libraries, Open WebUI, Continue and similar) can point at the server without changes. The routes are a thin translation layer: each `/api/chat`, `/api/generate`, `/api/embed` or `/api/embeddings` request is converted to the matching OpenAI request and sent back to the same server, so model routing, authentication, the prefix cache, tool calling and constrained decoding behave exactly as on the OpenAI routes.
+
+<Endpoint method="POST" path="/api/chat" />
+<Endpoint method="POST" path="/api/generate" />
+<Endpoint method="POST" path="/api/embed" />
+<Endpoint method="POST" path="/api/embeddings" />
+<Endpoint method="GET" path="/api/tags" />
+<Endpoint method="POST" path="/api/show" />
+<Endpoint method="GET" path="/api/ps" />
+<Endpoint method="GET" path="/api/version" />
+<Endpoint method="POST" path="/api/pull" />
+<Endpoint method="POST" path="/api/create" />
+<Endpoint method="POST" path="/api/copy" />
+<Endpoint method="DELETE" path="/api/delete" />
+<Endpoint method="POST" path="/api/push" />
+
+<Callout type="info">
+The default port is 8000, not Ollama's 11434, so set the host explicitly (for example `http://localhost:8000`). Authentication is only enforced when `YUNSHU_AUTH_TOKEN` is set; the `Authorization` header is forwarded on the internal request. Errors use Ollama's shape, `{"error": "message"}`, with the HTTP status of the underlying failure. Models are named as Yunshu names them: a `:latest` suffix is accepted and ignored, and the response echoes the name you sent.
+</Callout>
+
+## What is real
+
+| Route | Status | Behavior |
+| --- | --- | --- |
+| `POST /api/chat` | <Support status="supported">real</Support> | Chat with `messages`, `tools`, `format`, `options`, `think`, images. Streams NDJSON by default. |
+| `POST /api/generate` | <Support status="supported">real</Support> | Single prompt with optional `system` and `images`. An empty prompt returns `{"done": true, "done_reason": "load"}` without generating. |
+| `POST /api/embed` | <Support status="supported">real</Support> | `input` is a string or list; optional `dimensions`. |
+| `POST /api/embeddings` | <Support status="supported">real</Support> | Legacy single-prompt form. |
+| `GET /api/tags` | <Support status="supported">real</Support> | Lists the models Yunshu serves. |
+| `POST /api/show` | <Support status="supported">real</Support> | Model card in Ollama's shape. |
+| `GET /api/ps` | <Support status="supported">real</Support> | Models currently loaded. |
+| `GET /api/version` | <Support status="supported">real</Support> | Yunshu's version. |
+| `POST /api/pull` | <Support status="partial">Hugging Face repositories only, multi-model mode</Support> | Downloads a native MLX repository. |
+| `POST /api/create` | <Support status="partial">naming an existing model only</Support> | `from` plus a name; no Modelfile features. |
+| `POST /api/copy` | <Support status="partial">alias, no duplicate weights</Support> | Creates a symlinked name. |
+| `DELETE /api/delete` | <Support status="partial">multi-model mode, models directory only</Support> | Removes an alias or a checkpoint inside the models directory. |
+| `POST /api/push` | <Support status="unsupported">not supported</Support> | Always `501`. |
+
+Ollama's blob upload and existence-check routes are not served. Ollama's OpenAI-compatible `/v1` routes are Yunshu's own OpenAI routes, see [Chat Completions](/docs/api/chat-completions).
+
+## Chat and generate
+
+Both routes accept these fields.
+
+| Field | Routes | Status | Behavior |
+| --- | --- | --- | --- |
+| `model` | both | supported | Required. Single-model mode serves the loaded model under any name. |
+| `messages` | chat | supported | Required array of `{role, content, images, tool_calls, tool_name}`. |
+| `prompt`, `system`, `images` | generate | supported | `system` becomes a system message; `images` are base64 strings. |
+| `stream` | both | supported | Default `true` (NDJSON, `application/x-ndjson`). `false` returns one JSON object. |
+| `format` | both | supported | `"json"` or a JSON schema object; enforced by constrained decoding. |
+| `tools` | both | supported | Function tools in Ollama/OpenAI form. Calls come back in `message.tool_calls` with `arguments` as an object. |
+| `think` | both | supported | `true`/`false` toggles thinking; `"low"`, `"medium"`, `"high"` set the reasoning effort. Reasoning comes back as `message.thinking` (chat) or `thinking` (generate). |
+| `options.temperature`, `top_p`, `top_k`, `min_p`, `seed`, `presence_penalty`, `frequency_penalty` | both | supported | Passed to the engine. |
+| `options.repeat_penalty` | both | supported | Mapped to `repetition_penalty`. |
+| `options.num_predict` | both | supported | Positive values are the token limit. `-1`, `-2` or omitted use 8192. |
+| `options.stop` | both | supported | String or list. |
+| `options.num_ctx`, `num_batch`, `num_gpu`, `mirostat*`, `typical_p`, `penalize_newline`, `use_mmap` and other runner options | both | accepted and ignored | The context size is a property of the loaded model. |
+| `keep_alive` | both | accepted and ignored | Model lifetime is managed by Yunshu, not per request. |
+| `template`, `raw`, `context`, `suffix`, `truncate` | generate/chat | accepted and ignored | Prompt templating always uses the model's own chat template. |
+
+Message `images` are base64 strings (data is wrapped as a PNG data URL) and need a vision-language model.
+
+## Examples
+
+<Tabs items={["curl", "Python"]}>
+<Tab value="curl">
+
+```bash
+curl http://localhost:8000/api/chat -d '{
+  "model": "local",
+  "messages": [{"role": "user", "content": "Why is the sky blue?"}],
+  "stream": false
+}'
+```
+
+</Tab>
+<Tab value="Python">
+
+```python
+from ollama import Client
+
+client = Client(host="http://localhost:8000")
+
+reply = client.chat(
+    model="local",
+    messages=[{"role": "user", "content": "Why is the sky blue?"}],
+)
+print(reply["message"]["content"])
+
+for part in client.generate(model="local", prompt="Write a haiku.", stream=True):
+    print(part["response"], end="")
+
+print(client.embed(model="local-embedding", input=["hello", "world"])["embeddings"][0][:4])
+```
+
+</Tab>
+</Tabs>
+
+### Structured output
+
+```bash
+curl http://localhost:8000/api/chat -d '{
+  "model": "local",
+  "stream": false,
+  "messages": [{"role": "user", "content": "Ada Lovelace was born in 1815."}],
+  "format": {"type": "object", "properties": {"name": {"type": "string"}, "born": {"type": "integer"}}, "required": ["name", "born"]}
+}'
+```
+
+## Response
+
+Non-streaming `/api/chat`:
+
+```json
+{
+  "model": "local",
+  "created_at": "2026-01-01T12:00:00.000000Z",
+  "message": { "role": "assistant", "content": "Sunlight scatters off air molecules." },
+  "done": true,
+  "done_reason": "stop",
+  "total_duration": 812000000,
+  "load_duration": 0,
+  "prompt_eval_count": 24,
+  "prompt_eval_duration": 120000000,
+  "eval_count": 8,
+  "eval_duration": 690000000
+}
+```
+
+`/api/generate` returns `response` instead of `message`. `done_reason` is `stop` or `length` (a tool call ends with `stop`). Durations are nanoseconds; when the engine reports its own timings they are used, otherwise they are measured at the gateway. `load_duration` is 0 unless the engine reports a load time.
+
+## Streaming
+
+With `stream` true (the default) the response is NDJSON, one JSON object per line: repeated chunks with `done: false` carrying `message.content` (or `response`) and, when the model reasons, `message.thinking`, then one final object with `done: true`, `done_reason`, the timing fields and any `message.tool_calls`. Tool calls are delivered on the last object, not incrementally. A failure after the stream has started is a single `{"error": "..."}` line and no `done: true` line.
+
+## Models and embeddings
+
+- `GET /api/tags` returns `{"models": [{name, model, modified_at, size, digest, details}]}`. `size` is the weight size from the model card when known. `digest` is a hash of the model id, not of file contents.
+- `POST /api/show` takes `model` (or `name`) and returns the model card in Ollama's shape (`details`, `model_info`, `capabilities`, `modelfile`, `parameters`, `template`, `modified_at`). An unknown model is `404`.
+- `GET /api/ps` returns loaded models with `expires_at` always `0001-01-01T00:00:00Z` (they do not expire).
+- `POST /api/embed` returns `{"model", "embeddings": [[...]], "total_duration", "load_duration", "prompt_eval_count"}`; `POST /api/embeddings` returns `{"embedding": [...]}`. Both need an embedding model and use the same engine as [Embeddings](/docs/api/embeddings).
+
+## Model management
+
+These routes only work in multi-model mode (`yunshu serve --models-dir`), and need the same permission as loading or unloading models; in single-model mode they answer `400`.
+
+- `POST /api/pull` with `{"model": "org/name"}` downloads a Hugging Face repository that holds native safetensors weights and registers it. A name that is already registered returns success at once. Ollama registry names (`library/llama3:8b`) and GGUF repositories are rejected with `400`. The reply is a single `{"status": "success"}` line (or JSON with `"stream": false`); there are no progress events.
+- `POST /api/create` accepts only `{"model": "new-name", "from": "existing-model"}` and creates a persistent alias. Fields `files`, `adapters`, `quantize`, `parameters`, `template`, `system` and `messages` are rejected with `400`.
+- `POST /api/copy` with `source` and `destination` creates an alias as a symlink to the same weights. An existing destination is `409`.
+- `DELETE /api/delete` with `model` unloads and removes the alias, or deletes a checkpoint directory inside the models directory. A checkpoint outside the models directory is refused (`400`), a checkpoint that still has aliases is `409`, and a model in use is `409`.
+- `POST /api/push` always returns `501` with the message that registry uploads are unsupported.
+
+## Errors
+
+`{"error": "message"}` with the status of the failure: `400` for a bad body or missing `model` or `messages`, `401`/`403` for authentication and permission, `404` for an unknown model, `409` for model-management conflicts, `501` for `/api/push`, and the upstream status (for example `400` for a prompt over the context window) for generation errors.
+
+## Support
+
+| Feature | Status |
+| --- | --- |
+| Chat, generate, streaming NDJSON | <Support status="supported">supported</Support> |
+| Tools, structured `format`, `think`, images | <Support status="supported">supported</Support> |
+| Embeddings (`/api/embed`, `/api/embeddings`) | <Support status="supported">supported</Support> |
+| Tags, show, ps, version | <Support status="supported">supported</Support> |
+| Pull, create, copy, delete | <Support status="partial">native MLX repositories and aliases only</Support> |
+| Runner options such as `num_ctx`, `keep_alive`, Modelfile `template` | <Support status="partial">accepted and ignored</Support> |
+| Registry upload (`/api/push`), GGUF import, blobs | <Support status="unsupported">not supported</Support> |
+
+## Related
+
+- [Chat Completions](/docs/api/chat-completions)
+- [Embeddings](/docs/api/embeddings)
+- [Models](/docs/api/models)
+- [Model support](/docs/guides/model-support)

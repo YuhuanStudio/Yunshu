@@ -1,3 +1,4 @@
+import { failureMessage, statusMessage } from "./errors.ts";
 import { ApiError, type Connection, type RequestOptions } from "./api.ts";
 
 export interface ServerRequestOptions extends RequestOptions {
@@ -55,14 +56,9 @@ function publicError(
   detail: unknown,
   statusText: string,
 ): string {
-  if (status === 401) return "Authentication failed. Check the Yunshu token.";
-  if (status === 403) return "This Yunshu operation is not permitted.";
-  if (typeof detail === "string" && detail.trim()) return detail;
-  if (Array.isArray(detail))
-    return "The server rejected the request. Check its fields and try again.";
-  return statusText
-    ? `Yunshu returned HTTP ${status}: ${statusText}`
-    : `Yunshu returned HTTP ${status}.`;
+  void detail;
+  void statusText;
+  return statusMessage(status);
 }
 
 /** Request a server-root API path (`/api/*` or `/debug/*`) with bearer auth. */
@@ -106,16 +102,10 @@ export async function requestServerJson<T = unknown>(
         payload = JSON.parse(text) as unknown;
       } catch {
         if (response.ok)
-          throw new ApiError(
-            "The server returned invalid JSON.",
-            response.status,
-          );
+          throw new ApiError(failureMessage("json"), response.status);
       }
     } else if (response.ok && !options.allowEmpty) {
-      throw new ApiError(
-        "The server returned an empty response.",
-        response.status,
-      );
+      throw new ApiError(failureMessage("empty"), response.status);
     }
     if (!response.ok) {
       const detail = detailFrom(payload);
@@ -130,18 +120,12 @@ export async function requestServerJson<T = unknown>(
     if (error instanceof ApiError) throw error;
     if (options.signal?.aborted) throw options.signal.reason ?? error;
     if (didTimeout || controller.signal.aborted)
-      throw new ApiError(
-        "The Yunshu request timed out.",
-        undefined,
-        undefined,
-        { cause: error },
-      );
-    throw new ApiError(
-      "Could not reach the Yunshu server. Check the address and try again.",
-      undefined,
-      undefined,
-      { cause: error },
-    );
+      throw new ApiError(failureMessage("timeout"), undefined, undefined, {
+        cause: error,
+      });
+    throw new ApiError(failureMessage("network"), undefined, undefined, {
+      cause: error,
+    });
   } finally {
     globalThis.clearTimeout(timeout);
     options.signal?.removeEventListener("abort", forwardAbort);

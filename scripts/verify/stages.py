@@ -26,6 +26,7 @@ from .core import (
 )
 from .core import sha as _sha
 from .execute import Cell, Executor
+from .snapshot import stage_snapshot
 
 TFBENCH = REPO / "scripts/research/tfbench.py"
 MEMORY_AB = REPO / "scripts/research/memory_ab.py"
@@ -479,7 +480,8 @@ def _identity_cells(ctx: Ctx) -> list:
                             env=ctx.arm_env(tree_arm, extra),
                         ),
                         mem_gb=ctx.mem_gb,
-                        timeout_min=_decode_est_min(
+                        timeout_min=cfg.get("identity_timeout_min")
+                        or _decode_est_min(
                             ctx,
                             ctxs,
                             len(kinds),
@@ -531,6 +533,32 @@ def _rows_for(res: dict, arm: str, mode: str) -> list:
     return out
 
 
+def _spec_depth_valid(rows: list, mode: str) -> tuple[bool, str]:
+    specs = [(row.get("xy") or {}).get("speculative") for row in rows]
+    specs = [spec for spec in specs if isinstance(spec, dict) and spec.get("drafted")]
+    if not specs:
+        return False, "no speculative draft telemetry recorded"
+    for spec in specs:
+        if spec.get("mode") != mode or not spec.get("rounds"):
+            return False, "speculative mode or rounds missing"
+        depths = spec.get("per_depth") or []
+        if not depths or any(not isinstance(row, dict) for row in depths):
+            return False, "per-depth counters missing"
+        if any(
+            row.get("position") != pos
+            or not isinstance(row.get("drafted"), int)
+            or not isinstance(row.get("accepted"), int)
+            or not 0 <= row["accepted"] <= row["drafted"]
+            for pos, row in enumerate(depths)
+        ):
+            return False, "invalid per-depth counter"
+        if sum(row["drafted"] for row in depths) != spec["drafted"] or sum(
+            row["accepted"] for row in depths
+        ) != spec.get("accepted"):
+            return False, "per-depth counters do not sum to request totals"
+    return True, ""
+
+
 def stage_identity(ctx: Ctx) -> StageResult:
     _check_prompts(ctx.suite["ctx"], ctx.suite["kinds"])
     res = ctx.exe.run_cells(_identity_cells(ctx))
@@ -540,6 +568,11 @@ def stage_identity(ctx: Ctx) -> StageResult:
         for mode in ctx.suite.get("spec_modes") or ["default"]:
             tag = "" if mode == "default" else f"[{mode}] "
             base, cand = _rows_for(res, "base", mode), _rows_for(res, "cand", mode)
+            if ctx.suite.get("require_spec_depth"):
+                depth_ok, why = _spec_depth_valid(cand, mode)
+                numbers[f"{tag}per_depth".strip()] = depth_ok
+                if not depth_ok:
+                    reasons.append(f"{tag}{why}")
             cmp_ = analyze.compare_identity(base, cand, "base", "cand")
             numbers[f"{tag}base_vs_cand".strip()] = {
                 "compared": cmp_["compared"],
@@ -1558,6 +1591,60 @@ def stage_searchrank(ctx: Ctx) -> StageResult:
     )
 
 
+def _console_validate(path):
+    rows = read_jsonl(path)
+    if not rows or not rows[-1].get("complete") or rows[-1].get("failures"):
+        return False, "console route probe incomplete or failed"
+    required = {
+        "console_registration_cancel",
+        "console_host_latency",
+        "stream_latency",
+        "single_stream_latency",
+        "console_backend_gaps",
+        "history_restart",
+    }
+    checks = rows[-1].get("checks", {})
+    # gpuq adds device / execution_device / remote_host to every record: require the
+    # four checks, each PASS, rather than an exact key set.
+    missing = sorted(k for k in required if checks.get(k) != "PASS")
+    if missing:
+        return False, "console route checks missing or failing: " + ", ".join(missing)
+    return True, ""
+
+
+def stage_console(ctx: Ctx) -> StageResult:
+    """Single-node console API correctness on a pinned candidate; no timing verdict."""
+
+    validate = _console_validate
+
+    cell = Cell(
+        "console",
+        "cand",
+        [
+            ctx.py,
+            str(ctx.cand.path / "scripts/research/consolefeat_routes.py"),
+            "--model",
+            ctx.model,
+            "--src",
+            str(ctx.cand.path / "python"),
+            "--out",
+            "{out}",
+        ],
+        mem_gb=12,
+        timeout_min=10,
+        quiet=False,
+        validate=validate,
+    )
+    result = ctx.exe.run_cells([cell])["cand"]
+    numbers = read_jsonl(result.evidence)[-1] if result.ok and result.evidence else {}
+    return _finish(
+        ctx,
+        StageResult(
+            "console", result.ok, [] if result.ok else [result.reason], numbers
+        ),
+    )
+
+
 def stage_respfeat(ctx: Ctx) -> StageResult:
     """One bounded M5 tiny server covers client-executed tools and transports."""
     import json
@@ -1613,7 +1700,65 @@ def stage_respfeat(ctx: Ctx) -> StageResult:
     )
 
 
+def stage_telemetry(ctx: Ctx, *, pilot: bool = False) -> StageResult:
+    """Unprivileged sensor plausibility + request receipt on the pinned candidate."""
+
+    def validate(path):
+        rows = read_jsonl(path)
+        if not rows or rows[-1].get("complete") is not True:
+            return False, "telemetry probe incomplete"
+        summary = rows[-1].get("summary", {})
+        if (
+            not summary.get("gpu_peak_watts")
+            or not summary.get("gpu_mhz_max")
+            or not summary.get("die_max_c")
+        ):
+            return False, "missing power, frequency or temperature evidence"
+        return True, ""
+
+    name = "telemetry-tiny" if pilot else "telemetry"
+    model = "/Volumes/P5Plus/models/Qwen3.5-0.8B-MLX-bf16" if pilot else ctx.model
+    big = False if pilot else ctx.big
+    cell = Cell(
+        name,
+        "cand",
+        [
+            "env",
+            f"TFB_YUNSHU_SRC={ctx.cand.path / 'python'}",
+            f"TFB_OUT={ctx.run.path / 'tfb' / name}",
+            ctx.py,
+            str(ctx.cand.path / "scripts/research/telemetry_probe.py"),
+            "--model",
+            model,
+            "--draft",
+            "mtp" if big else "off",
+            "--tokens",
+            "512" if big else "2048",
+            "--out",
+            "{out}",
+        ],
+        mem_gb=14 if pilot else ctx.mem_gb,
+        timeout_min=10,
+        quiet=False,
+        validate=validate,
+    )
+    result = ctx.exe.run_cells([cell])["cand"]
+    numbers = (
+        read_jsonl(result.evidence)[-1].get("summary", {})
+        if result.ok and result.evidence
+        else {}
+    )
+    return _finish(
+        ctx,
+        StageResult(name, result.ok, [] if result.ok else [result.reason], numbers),
+    )
+
+
 STAGE_FUNCS = {
+    "snapshot": stage_snapshot,
+    "console": stage_console,
+    "telemetry": stage_telemetry,
+    "telemetry-tiny": lambda ctx: stage_telemetry(ctx, pilot=True),
     "respfeat": stage_respfeat,
     "priorart": stage_priorart,
     "embedding": stage_embedding,

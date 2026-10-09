@@ -1,0 +1,194 @@
+---
+title: Embeddings
+description: The OpenAI embeddings endpoint for text and multimodal embedding models, plus the vLLM-style pooling endpoint that returns raw pooled vectors.
+---
+
+`POST /v1/embeddings` follows the OpenAI embeddings format: you send text (or token ids) and get one vector per input. With a multimodal embedding checkpoint the same route also embeds images, audio and video. `POST /v1/pooling` is the vLLM-style companion that returns pooled hidden states without normalization.
+
+Embedding models are separate checkpoints from chat models. In multi-model mode name the embedder in `model`; in single-model mode the loaded model has to be the embedder. `GET /v1/models` shows `yunshu.kind: "embedding"` and the vector size under `yunshu.embeddings`.
+
+<Endpoint method="POST" path="/v1/embeddings" />
+<Endpoint method="POST" path="/v1/pooling" />
+
+<Callout type="info">
+Authentication is only enforced when `YUNSHU_AUTH_TOKEN` is set. See [API overview](/docs/api/overview).
+</Callout>
+
+## Request
+
+| Parameter | Type | Required | Description | Status |
+| --- | --- | --- | --- | --- |
+| `model` | string | yes | Embedding model id. | supported |
+| `input` | string, array of strings, array of integers, array of integer arrays, or array of objects | yes (or `messages`) | Text to embed. A string array embeds each string. An integer array is one text given as token ids; an array of integer arrays is several. Objects (`{"text": ..., "image": ...}`) are for multimodal embedders. | supported |
+| `messages` | array | no | vLLM-style chat messages holding text, `image_url`, `input_audio`, `audio_url` or `video` parts, turned into one multimodal item. Use instead of `input`, not with it. | extension |
+| `encoding_format` | string | no | `float` (default) or `base64` (little-endian float32 packed, then base64). | supported |
+| `dimensions` | integer | no | `1` to `8192`. Truncates the vector to this many leading values and re-normalizes it (Matryoshka style). Asking for more than the model's native size is a `400`. | supported |
+| `pooling_type` | string | no | `MEAN`, `CLS` or `LAST` (case-insensitive). Overrides the model's own pooling. Applies to text models that can pool; the result is L2-normalized. | extension |
+| `instruction` | string | no | Text models: prefixed to every input as `instruction`, a newline, then the text. Multimodal models: passed to the embedder as its instruction. | extension |
+| `task` | string | no | Multimodal embedders only: the embedder's task name. An unknown task is a `400`. | extension |
+| `user` | string | no | Accepted for compatibility. | accepted and ignored |
+
+Limits: at most 2048 inputs per request and 65536 characters per text. Lists must be homogeneous (all strings, or all token ids, or all token-id lists). Empty and whitespace-only inputs are rejected.
+
+Vectors are L2-normalized unless the model returns something else; non-finite values are replaced by `0`.
+
+## Examples
+
+<Tabs items={["curl", "Python", "JavaScript"]}>
+<Tab value="curl">
+
+```bash
+curl http://localhost:8000/v1/embeddings \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-local" \
+  -d '{
+    "model": "Qwen/Qwen3-Embedding-0.6B",
+    "input": ["How do I reset my password?", "Password reset steps"],
+    "dimensions": 256
+  }'
+```
+
+</Tab>
+<Tab value="Python">
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="http://localhost:8000/v1", api_key="sk-local")
+
+resp = client.embeddings.create(
+    model="Qwen/Qwen3-Embedding-0.6B",
+    input=["How do I reset my password?", "Password reset steps"],
+    dimensions=256,
+)
+a, b = (d.embedding for d in resp.data)
+print(len(a), sum(x * y for x, y in zip(a, b)))  # cosine, since vectors are unit length
+print(resp.usage.total_tokens)
+```
+
+</Tab>
+<Tab value="JavaScript">
+
+```ts
+import OpenAI from "openai";
+
+const client = new OpenAI({ baseURL: "http://localhost:8000/v1", apiKey: "sk-local" });
+
+const resp = await client.embeddings.create({
+  model: "Qwen/Qwen3-Embedding-0.6B",
+  input: ["How do I reset my password?", "Password reset steps"],
+  dimensions: 256,
+});
+console.log(resp.data[0].embedding.length);
+```
+
+</Tab>
+</Tabs>
+
+### Multimodal input
+
+With a multimodal embedding model each `input` item is a string or an object with `text`, `image`, `audio` or `video` keys (at least one). Images are URLs or data URIs.
+
+```bash
+curl http://localhost:8000/v1/embeddings \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "Qwen3-VL-Embedding",
+    "input": [
+      {"text": "a red bicycle"},
+      {"image": "data:image/png;base64,iVBORw0KGgo..."},
+      {"text": "a red bicycle", "image": "https://example.com/bike.jpg"}
+    ]
+  }'
+```
+
+The chat-message form puts media in order inside one item:
+
+```json
+{
+  "model": "Qwen3-VL-Embedding",
+  "messages": [
+    {"role": "user", "content": [
+      {"type": "text", "text": "a red bicycle"},
+      {"type": "image_url", "image_url": {"url": "https://example.com/bike.jpg"}}
+    ]}
+  ]
+}
+```
+
+Text-only embedding models reject object items and `messages` with a `400`.
+
+## Response
+
+```json
+{
+  "object": "list",
+  "data": [
+    { "object": "embedding", "index": 0, "embedding": [0.0123, -0.0456, 0.0789] },
+    { "object": "embedding", "index": 1, "embedding": [0.0101, -0.0399, 0.0812] }
+  ],
+  "model": "Qwen/Qwen3-Embedding-0.6B",
+  "usage": { "prompt_tokens": 11, "total_tokens": 11 }
+}
+```
+
+The vectors above are shortened; real vectors have the model's full dimension (or `dimensions`). With `encoding_format: "base64"`, `embedding` is a base64 string instead of an array. For text models `usage` counts the input tokens, special tokens excluded. For multimodal models it is the token count the embedder reports, or the number of items when it does not.
+
+## Pooling
+
+`POST /v1/pooling` returns the pooled hidden state of each input, not normalized, for tools that do their own post-processing.
+
+| Parameter | Type | Required | Description |
+| --- | --- | --- | --- |
+| `model` | string | yes | Embedding model id. |
+| `input` | string or array of strings | yes | Up to 2048 texts of at most 8192 characters. |
+| `pooling_type` | string | no | `CLS` (default), `MEAN` or `LAST`. |
+| `encoding_format` | string | no | `float` (default) or `base64`. |
+
+```bash
+curl http://localhost:8000/v1/pooling \
+  -H "Content-Type: application/json" \
+  -d '{"model": "Qwen/Qwen3-Embedding-0.6B", "input": "hello", "pooling_type": "LAST"}'
+```
+
+```json
+{
+  "object": "list",
+  "data": [{ "object": "pooling", "index": 0, "data": [0.52, -1.31, 0.07] }],
+  "model": "Qwen/Qwen3-Embedding-0.6B",
+  "usage": { "prompt_tokens": 2, "total_tokens": 2 }
+}
+```
+
+Multimodal embedding models are not served by `POST /v1/pooling` (`400`); use `POST /v1/embeddings` for them. A model that cannot produce embeddings (for example a hybrid chat architecture) answers `400` with a message that says so.
+
+## Errors
+
+| Status | When |
+| --- | --- |
+| 400 | Validation failures (empty input, mixed list types, `encoding_format` or `pooling_type` out of range, too many inputs, `dimensions` over the native size); media sent to a text-only embedder; a bad `task`. |
+| 401 | Token configured and missing or wrong. |
+| 404 | The embedding model is not found. |
+| 422 | A list entry is empty, or a token-id list holds a non-integer. |
+| 507 | Out of GPU memory. |
+| 500 | Embedding generation failed (`server_error`). |
+
+## Support
+
+| Feature | Status |
+| --- | --- |
+| String, string-array and token-id input | <Support status="supported">supported</Support> |
+| `encoding_format` `float` and `base64` | <Support status="supported">supported</Support> |
+| `dimensions` (truncate and re-normalize) | <Support status="supported">supported</Support> |
+| Multimodal input (image, audio, video) | <Support status="partial">multimodal embedding models only</Support> |
+| `pooling_type`, `instruction`, `task`, `messages` | <Support status="extension">extension</Support> |
+| A chat model used as an embedder | <Support status="partial">falls back to mean-pooled hidden states, which are not trained for retrieval; load an embedding checkpoint instead</Support> |
+| `user` | <Support status="unsupported">accepted and ignored</Support> |
+| Embeddings on the Neural Engine | <Support status="partial">opt-in with `YUNSHU_ANE_EMBEDDINGS` for the configured embedding model; see [Configuration](/docs/guides/configuration)</Support> |
+
+## Related
+
+- [Rerank and scoring](/docs/api/rerank)
+- [Models](/docs/api/models)
+- [Model support](/docs/guides/model-support)
+- [Ollama layer](/docs/api/ollama)

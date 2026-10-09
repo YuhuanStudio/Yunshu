@@ -7,7 +7,8 @@ import {
   observationCsv,
   observedRequests,
   percentile,
-  timeSeries,
+  rollingMedian,
+  trendDelta,
 } from "../src/analytics.ts";
 import type { EngineStatus } from "../src/api.ts";
 const snapshot = (at: number, last: EngineStatus["last"] = null) => ({
@@ -69,20 +70,35 @@ test("latency percentiles exclude missing/invalid observations", () => {
   );
 });
 test("heatmap distinguishes observed zero, missing intervals, and bucket peaks", () => {
-  const history = [snapshot(10), snapshot(60), snapshot(65)];
-  history[1].status.requests.active = 2;
-  history[2].status.requests.active = 4;
-  const heat = activityHeatmap(history, 0, 100, 4);
+  const pt = (at: number, active: number | null) => ({
+    at,
+    decode: null,
+    prefill: null,
+    active,
+    queued: 0,
+    prefillRequests: null,
+    decodeRequests: null,
+    memActive: null,
+    memCache: null,
+  });
+  const heat = activityHeatmap([pt(10, 0), pt(60, 2), pt(65, 4)], 0, 100, 4);
   assert.deepEqual(heat.data[0], [0, null, 4, null]);
   assert.deepEqual(heat.coverage, [1, 0, 2, 0]);
+  assert.equal(
+    heat.data[2][0],
+    null,
+    "unreported per-phase counts stay unknown",
+  );
 });
-test("time series and CSV preserve unavailable values rather than fabricate zero", () => {
+test("CSV names the engine window and never says 300s", () => {
   const rows = [snapshot(1000)];
-  assert.equal(timeSeries(rows)[0].values.decode, null);
-  assert.equal(timeSeries(rows)[0].values.cache, null);
   const csv = observationCsv(rows);
-  assert.ok(csv.includes("mean_decode_tps_300s"));
-  assert.ok(csv.includes('"1970-01-01T00:00:01.000Z","","700","0","10",""'));
+  assert.ok(csv.includes("mean_decode_tps_window"));
+  assert.ok(csv.includes("window_s"));
+  assert.ok(!csv.includes("300s"));
+  assert.ok(
+    csv.includes('"1970-01-01T00:00:01.000Z","","","700","60","0","10",""'),
+  );
   assert.ok(!csv.includes("NaN"));
 });
 
@@ -100,4 +116,63 @@ test("unknown request phases cannot collide with object prototypes", () => {
       ["toString", 1, "neutral"],
     ],
   );
+});
+
+const ramp = (a: number, b: number, n = 10) => [
+  ...Array(n).fill(a),
+  ...Array(n).fill(b),
+];
+
+test("trendDelta needs enough samples on both halves and a stable base", () => {
+  assert.equal(trendDelta([10, 10]), null);
+  assert.equal(trendDelta(ramp(10, 15, 9)), null);
+  assert.equal(trendDelta(ramp(10, 10)), null);
+  assert.equal(trendDelta(ramp(0, 5)), null);
+  assert.equal(trendDelta([...ramp(10, 15).slice(0, 19), Number.NaN]), null);
+  const bursty = [
+    ...Array(5).fill(1),
+    ...Array(5).fill(100),
+    ...Array(10).fill(50),
+  ];
+  assert.equal(trendDelta(bursty), null);
+});
+
+test("trendDelta increase: +50% points up, neutral, labelled", () => {
+  const up = trendDelta(ramp(10, 15))!;
+  assert.equal(Math.round(up.value), 50);
+  assert.equal(up.direction, "up");
+  assert.equal(up.positive, true);
+  assert.equal(up.neutral, true);
+  assert.equal(up.label, "50%");
+});
+
+test("trendDelta decrease: -50% points down and never exceeds 100%", () => {
+  const down = trendDelta(ramp(10, 5))!;
+  assert.equal(Math.round(down.value), -50);
+  assert.equal(down.direction, "down");
+  assert.equal(down.positive, false);
+  assert.equal(trendDelta(ramp(10, 0.001))!.label, "100%");
+});
+
+test("trendDelta lower-is-better keeps direction apart from good/bad", () => {
+  const slower = trendDelta(ramp(100, 250), { lowerIsBetter: true })!;
+  assert.equal(slower.direction, "up");
+  assert.equal(slower.positive, false);
+  assert.equal(slower.label, ">100%");
+  const faster = trendDelta(ramp(100, 50), { lowerIsBetter: true })!;
+  assert.equal(faster.direction, "down");
+  assert.equal(faster.positive, true);
+});
+
+test("trendDelta caps large rises as >100%", () => {
+  assert.equal(trendDelta(ramp(10, 50))!.label, ">100%");
+});
+
+test("rollingMedian damps single-request spikes without inventing points", () => {
+  assert.deepEqual(
+    rollingMedian([100, 100, 900, 100, 100], 3),
+    [100, 100, 100, 100, 100],
+  );
+  assert.deepEqual(rollingMedian([1, 3], 5), [1, 2]);
+  assert.deepEqual(rollingMedian([]), []);
 });

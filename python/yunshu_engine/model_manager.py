@@ -511,6 +511,7 @@ class ModelManager:
         # Per-model loading events: concurrent requests for the same model
         # wait on this event instead of raising RuntimeError
         self._loading_events: dict[str, asyncio.Event] = {}
+        self._cancelled_loads: set[str] = set()
         self._eviction_stats: dict[str, int] = {
             "pressure_evictions": 0,
             "budget_evictions": 0,
@@ -603,12 +604,28 @@ class ModelManager:
         engine_config: EngineConfig | None = None,
     ) -> Any:
         """Hand out the engine; inside a LeaseScope the request also holds a lease."""
+        from .request_tracker import current_request_info
+
+        info = current_request_info.get()
+        marks = getattr(info, "latency_marks", None)
+        if marks is not None:
+            marks.setdefault("model_lease_start", time.perf_counter())
         engine = await self._get_engine(model_id, engine_config)
+        if marks is not None:
+            marks["model_lease"] = time.perf_counter()
         scope = _lease_scope_var.get()
         entry = self._entries.get(model_id)
         if scope is not None and entry is not None:
             scope.add(entry)  # no await between load completion and the lease
         return engine
+
+    def cancel_load(self, model_id: str) -> bool:
+        """Mark an executing load for safe disposal; never cancel its MLX executor thread."""
+        entry = self._entries.get(model_id)
+        if entry is None or not entry.is_loading:
+            return False
+        self._cancelled_loads.add(model_id)
+        return True
 
     async def _get_engine(
         self,
@@ -711,6 +728,11 @@ class ModelManager:
             try:
                 engine = await self._create_and_load_engine(entry, engine_config)
 
+                if model_id in self._cancelled_loads:
+                    await engine.stop()
+                    engine = None
+                    raise RuntimeError("Model load cancelled")
+
                 entry.engine = engine
                 entry.is_loaded = True
                 entry.is_loading = False
@@ -786,6 +808,7 @@ class ModelManager:
 
             finally:
                 # Signal any waiters that loading is done (success or failure)
+                self._cancelled_loads.discard(model_id)
                 load_event.set()
                 self._loading_events.pop(model_id, None)
 
@@ -1048,6 +1071,93 @@ class ModelManager:
                 )
             self._eviction_stats["budget_evictions"] += 1
 
+    def fit_check(self, model_id: str) -> dict:
+        """Dry run of the load-time memory check (``load_model`` + ``_ensure_memory_available``).
+
+        Same arithmetic, nothing mutated: weights estimate plus the KV reserve against the
+        budget minus what is loaded; if that does not fit, LRU victims (the ones the real
+        path may evict: loaded, unpinned, not leased, provably idle) are added up in the
+        order the load would evict them. Verdicts: ``fits`` (room left over), ``tight``
+        (fits with under 5% of the budget spare, or only after evicting), ``wont_fit``.
+        Raises KeyError for an unknown model.
+        """
+        entry = self._entries[model_id]
+        required = int(entry.estimated_bytes)
+        kv = (
+            0
+            if entry.model_type in (ModelType.TTS, ModelType.ASR)
+            else int(required * self.kv_reserve_ratio)
+        )
+        needed = required + kv
+        with self._sync_lock:
+            used = int(self._current_memory_bytes)
+        out: dict = {
+            "model": model_id,
+            "weights_bytes": required,
+            "kv_reserve_bytes": kv,
+            "needed_bytes": needed,
+            "budget_bytes": self.max_memory_bytes,
+            "used_bytes": used,
+            "free_bytes": None,
+            "would_evict": [],
+            "loaded": bool(entry.is_loaded),
+            "basis": {
+                "estimated": True,
+                "kv": f"reserve ratio {self.kv_reserve_ratio:g} of weights",
+            },
+        }
+        if entry.is_loaded:
+            out["verdict"] = "fits"
+            out["reason"] = "already loaded"
+            return out
+        if self.max_memory_bytes is None:
+            out["verdict"] = "fits"
+            out["reason"] = "no memory budget configured"
+            return out
+        budget = int(self.max_memory_bytes)
+        free = budget - used
+        out["free_bytes"] = free
+        if needed <= free:
+            spare = free - needed
+            out["verdict"] = "tight" if spare < budget * 0.05 else "fits"
+            out["reason"] = "fits without evicting"
+            return out
+        evict: list[str] = []
+        victims = sorted(
+            (
+                e
+                for e in self._entries.values()
+                if e.is_loaded
+                and not e.is_pinned
+                and not e.is_loading
+                and e.model_id != model_id
+                and not self._held(e)
+                and callable(getattr(e.engine, "has_active_requests", None))
+            ),
+            key=lambda e: e.last_access,
+        )
+        for v in victims:
+            try:
+                if v.engine.has_active_requests():
+                    continue
+            except Exception:  # noqa: BLE001 - cannot prove idle: the load would skip it
+                continue
+            evict.append(v.model_id)
+            free += int(v.estimated_bytes)
+            if needed <= free:
+                out["would_evict"] = evict
+                out["free_bytes_after_evict"] = free
+                out["verdict"] = "tight"
+                out["reason"] = "fits only after evicting " + ", ".join(evict)
+                return out
+        out["would_evict"] = []
+        out["verdict"] = "wont_fit"
+        out["reason"] = (
+            f"needs {needed / 1e9:.1f} GB, at most {free / 1e9:.1f} GB can be freed "
+            f"of a {budget / 1e9:.1f} GB budget"
+        )
+        return out
+
     async def _ensure_model_slot_available(self) -> None:
         """Evict LRU models until under max_models limit.
 
@@ -1169,8 +1279,57 @@ class ModelManager:
                 return None
             return victim.model_id
 
+    def console_impact(self, model_id: str) -> dict:
+        """Read-only advisory preview; load rechecks idleness and actual memory."""
+        entry = self._entries.get(model_id)
+        if entry is None:
+            raise KeyError(model_id)
+        needed = entry.estimated_bytes
+        if entry.model_type not in (ModelType.TTS, ModelType.ASR):
+            needed += int(needed * self.kv_reserve_ratio)
+        memory = self._current_memory_bytes
+        slots = sum(e.is_loaded for e in self._entries.values())
+        excluded = {model_id}
+        victims = []
+        while not entry.is_loaded and (
+            (
+                self.max_memory_bytes is not None
+                and memory + needed > self.max_memory_bytes
+            )
+            or (self.max_models > 0 and slots >= self.max_models)
+        ):
+            victim = self._find_lru_victim(exclude_model_id=model_id, excluded=excluded)
+            if victim is None:
+                break
+            excluded.add(victim.model_id)
+            victims.append(victim.model_id)
+            memory -= victim.estimated_bytes
+            slots -= 1
+        blocked = not entry.is_loaded and (
+            (
+                self.max_memory_bytes is not None
+                and memory + needed > self.max_memory_bytes
+            )
+            or (self.max_models > 0 and slots >= self.max_models)
+        )
+        return {
+            "object": "yunshu.model.impact",
+            "model": model_id,
+            "unload": {
+                "in_flight_policy": "reject",
+                "waits": False,
+                "interrupts": False,
+            },
+            "load": {
+                "would_evict": victims,
+                "blocked": blocked,
+                "advisory": True,
+                "post_load_pressure": "rechecked_after_load",
+            },
+        }
+
     def _find_lru_victim(
-        self, exclude_model_id: str | None = None
+        self, exclude_model_id: str | None = None, *, excluded: set[str] | None = None
     ) -> ModelEntry | None:
         """Find the least-recently-used non-pinned, loaded model.
 
@@ -1187,6 +1346,7 @@ class ModelManager:
             and not e.is_pinned
             and not e.is_loading
             and e.model_id != exclude_model_id
+            and e.model_id not in (excluded or ())
             and not self._held(e)
         ]
         # Filter out engines with active requests.

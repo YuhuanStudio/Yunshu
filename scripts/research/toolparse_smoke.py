@@ -163,9 +163,16 @@ def judge(kind: str, response: dict | str) -> dict:
             "reasoning_chars": len(message.get("reasoning_content") or ""),
             "content": content,
         }
-    if len(calls) != 1 or calls[0]["name"] != "weather" or not calls[0]["id"]:
+    # A structural tag may legitimately fire more than once (parallel calls);
+    # forced tool_choice is exactly one. Every call must be valid with its own id.
+    many = kind == "structural_tool"
+    if (not calls if many else len(calls) != 1) or any(
+        c["name"] != "weather" or not c["id"] for c in calls
+    ):
         raise ValueError("wrong tool count, name or missing id")
-    if json.loads(calls[0]["arguments"]) != {"city": "Taipei"}:
+    if len({c["id"] for c in calls}) != len(calls):
+        raise ValueError("duplicate tool call ids")
+    if any(json.loads(c["arguments"]) != {"city": "Taipei"} for c in calls):
         raise ValueError("wrong tool arguments")
     return {"kind": kind, "ok": True, "calls": calls}
 

@@ -1,0 +1,154 @@
+---
+title: Quickstart
+description: Download a model, start the server, check readiness and send a first request with curl, the OpenAI SDK or yunshu chat.
+---
+
+This page takes you from an installed `yunshu` command to a first answer. If `yunshu --version` does not work yet, start with [Install](/docs/getting-started/install).
+
+<Steps>
+<Step>
+
+### Download a model
+
+Check what is already on disk, then pull a small model for a first run:
+
+```bash
+yunshu model list
+yunshu pull mlx-community/Qwen3.5-0.8B-MLX-bf16
+```
+
+`yunshu pull` downloads into `~/.yunshu/models` (see [Models](/docs/getting-started/models)). It resumes an interrupted download and reuses a complete copy that is already in the models directory or the Hugging Face cache. The 0.8B model is meant for a smoke test; use a larger MLX checkpoint for real work.
+
+</Step>
+<Step>
+
+### Check the model, then serve it
+
+```bash
+yunshu doctor -m mlx-community/Qwen3.5-0.8B-MLX-bf16
+yunshu serve -m mlx-community/Qwen3.5-0.8B-MLX-bf16
+```
+
+The model can also be passed as the first argument (`yunshu serve mlx-community/Qwen3.5-0.8B-MLX-bf16`) or as a local directory. The server listens on `127.0.0.1:8000` by default. Keep this terminal open; stop the server with Ctrl-C.
+
+If you run `yunshu serve` with no model configured in an interactive terminal, it asks you to choose one of the models on disk or to enter a Hugging Face repository. It never downloads a model on its own. Without a terminal it exits with an error and next steps.
+
+</Step>
+<Step>
+
+### Wait until it is ready
+
+Open a second terminal:
+
+```bash
+curl --fail http://127.0.0.1:8000/health/ready
+curl --fail http://127.0.0.1:8000/v1/models
+```
+
+`GET /health/ready` returns HTTP 503 while the model is loading or if it failed to load, and 200 once the server can take requests. An open port alone does not mean the model is ready. When the load failed, the 503 body carries a `reason`.
+
+</Step>
+<Step>
+
+### Send a request
+
+In single-model mode the `model` field is advisory: any name maps to the model you started. By default no API key is required; authentication is enforced only when `YUNSHU_AUTH_TOKEN` is set.
+
+<Tabs items={["curl", "Python", "JavaScript"]}>
+<Tab value="curl">
+
+```bash
+curl --fail http://localhost:8000/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "model": "local",
+    "messages": [{"role": "user", "content": "Say hello in one sentence."}],
+    "max_tokens": 64,
+    "temperature": 0
+  }'
+```
+
+</Tab>
+<Tab value="Python">
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="http://localhost:8000/v1", api_key="not-needed")
+reply = client.chat.completions.create(
+    model="local",
+    messages=[{"role": "user", "content": "Say hello in one sentence."}],
+    max_tokens=64,
+)
+print(reply.choices[0].message.content)
+```
+
+</Tab>
+<Tab value="JavaScript">
+
+```ts
+import OpenAI from "openai";
+
+const client = new OpenAI({ baseURL: "http://localhost:8000/v1", apiKey: "not-needed" });
+const reply = await client.chat.completions.create({
+  model: "local",
+  messages: [{ role: "user", content: "Say hello in one sentence." }],
+  max_tokens: 64,
+});
+console.log(reply.choices[0].message.content);
+```
+
+</Tab>
+</Tabs>
+
+</Step>
+</Steps>
+
+OpenAI clients use the base URL `http://localhost:8000/v1`. Anthropic clients use `http://localhost:8000` without `/v1`, and call `POST /v1/messages`. See the [API overview](/docs/api/overview).
+
+## Chat in the terminal
+
+`yunshu chat` is an interactive client for a server that is already running. It does not download a model or start a server.
+
+```bash
+yunshu chat
+yunshu chat --system "Answer briefly." --temperature 0.2 --thinking
+```
+
+Inside the chat, `/clear` resets the conversation, `/thinking` toggles thinking mode, `/model <name>` switches model, `/help` lists commands, and `/quit` (or Ctrl-C) leaves. Options are listed in the [CLI reference](/docs/guides/cli).
+
+For a single non-interactive request, use `yunshu complete`:
+
+```bash
+yunshu complete "Say hello in one sentence." --max-tokens 64
+yunshu --json complete "Say hello in one sentence."
+```
+
+## When port 8000 is taken
+
+`yunshu serve` checks that it can bind the address before loading the model and stops with an error if it cannot. Pick another port and use it everywhere:
+
+```bash
+yunshu serve -m mlx-community/Qwen3.5-0.8B-MLX-bf16 --port 8001
+yunshu chat --url http://127.0.0.1:8001
+```
+
+Another process can still take the port between the check and the real bind; the final bind error is authoritative. The server listens on `127.0.0.1` only. To accept connections from other machines use `--host 0.0.0.0`, and set `--auth-token` as well; `yunshu serve` warns when you bind a non-local address without a token.
+
+## Use a coding agent
+
+`yunshu launch` writes the configuration for a coding tool and starts it against your server. Preview first:
+
+```bash
+yunshu launch claude --dry-run
+yunshu launch codex --dry-run
+yunshu launch opencode --dry-run
+```
+
+Then run the same command without `--dry-run`. Supported tools are `claude`, `codex`, `opencode` and `pi`; `yunshu launch list` shows which are installed. The launcher reads the context window, output limit, reasoning-effort levels and vision support of the served model from the server and passes them to the tool. See [Agents](/docs/guides/agents).
+
+## Next
+
+- [Models](/docs/getting-started/models): where models live and how to manage them.
+- [Service](/docs/getting-started/service): start Yunshu at login.
+- [Console](/docs/getting-started/console): a web view of the running engine.
