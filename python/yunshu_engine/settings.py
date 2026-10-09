@@ -339,6 +339,8 @@ _add("YUNSHU_HF_ENDPOINT", "str", None, "Hugging Face Hub endpoint for `yunshu s
 APPLIES_CLASSES = ("live", "reload", "restart")
 _LIVE = frozenset(
     {
+        "YUNSHU_DEBUG_TREE_PROFILE",
+        "YUNSHU_SPEC_NODES",
         "YUNSHU_AUTH_TOKEN",
         "YUNSHU_AUTH_DISABLED",
         "YUNSHU_ACTOR_IDENTITY",
@@ -469,6 +471,7 @@ _RELOAD = frozenset(
 )
 _RESTART = frozenset(
     {
+        "YUNSHU_VLM_APC_DRAFT_WINDOW_GB",
         "YUNSHU_MODEL",
         "YUNSHU_MULTI_MODEL",
         "YUNSHU_MODELS_DIR",

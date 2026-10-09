@@ -40,6 +40,15 @@ EVIDENCE = {
         ],
         "Old invariant receipts have parity and speed advantage, but current-source long-context paired decision is incomplete. Sweep now emits full-token digests and a final complete record; new job repeats 1K/8K/32K/131K code+prose with AR references.",
     ),
+    "YUNSHU_SPEC_NODES": (
+        "spec_nodes",
+        "partial",
+        [
+            "/Volumes/P5Plus/yunshu-build/decode16/depth/",
+            "/Volumes/P5Plus/yunshu-build/decode16/budget/",
+        ],
+        "Pins the DFlash fast-tree nodes per round for the depth/cost experiment against TensorFold. The cost-aware budget fix (count-based, rank-monotone landing estimates; copy rounds excluded) reached full depth on code and lifted cold decode 3-7% with identical output, so the pin has no remaining value; delete it after the final yv.",
+    ),
     "YUNSHU_ENGINE_LOOP": (
         "k02",
         "pending_owner",

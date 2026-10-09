@@ -2128,7 +2128,8 @@
   "python/yunshu_engine/mtp_patch.py": "orphan (see orphans)",
   "python/yunshu_engine/mtp_decoder.py": "orphan (see orphans)",
   "python/yunshu_engine/spec_interface.py": "orphan (see orphans)",
-  "python/yunshu_engine/spec_proposer.py": "orphan (see orphans)"
+  "python/yunshu_engine/spec_proposer.py": "orphan (see orphans)",
+  "python/yunshu_engine/dflash_apc_window.py": "DFlash drafter context window kept beside APC checkpoints (dflash path; apc_prefix_cache)"
  },
  "settings": {
   "YUNSHU_MTP": "draft_family_coverage",
@@ -2183,7 +2184,10 @@
   "YUNSHU_CACHE_RESERVE_GB": "apc_prefix_cache",
   "YUNSHU_CACHE_STALE_DAYS": "apc_prefix_cache",
   "YUNSHU_FOOTPRINT_SAMPLE_MS": "idle_memory_return",
-  "YUNSHU_MAX_MEMORY_GB": "idle_memory_return"
+  "YUNSHU_MAX_MEMORY_GB": "idle_memory_return",
+  "YUNSHU_SPEC_NODES": "cost_aware_depth",
+  "YUNSHU_VLM_APC_DRAFT_WINDOW_GB": "apc_prefix_cache",
+  "YUNSHU_DEBUG_TREE_PROFILE": "tree_drafts"
  },
  "gap_budget": 59,
  "settings_categories": [
