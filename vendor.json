@@ -1134,6 +1134,26 @@
     },
     {
       "kind": "inspired",
+      "path": "python/yunshu_engine/tool_family_parsers.py",
+      "repo": "https://github.com/vllm-project/vllm",
+      "clone": "reference/vllm",
+      "upstream_paths": [
+        "tests/tool_parsers/test_deepseekv31_tool_parser.py",
+        "tests/tool_parsers/test_deepseekv32_tool_parser.py",
+        "tests/tool_parsers/test_deepseekv4_tool_parser.py",
+        "tests/tool_parsers/test_hermes_tool_parser.py",
+        "tests/tool_parsers/test_llama3_json_tool_parser.py",
+        "tests/tool_parsers/test_pythonic_tool_parser.py",
+        "tests/tool_parsers/test_glm4_moe_tool_parser.py",
+        "tests/tool_parsers/test_glm47_moe_tool_parser.py",
+        "tests/tool_parsers/test_kimi_k2_tool_parser.py"
+      ],
+      "commit": "2342343746093e5cd33799cd60186d10c4addea9",
+      "license": "Apache-2.0",
+      "why": "Wire fixture shapes only, independently implemented readers; no parser or test code copied."
+    },
+    {
+      "kind": "inspired",
       "path": "python/yunshu_gateway/routers/decisions.py",
       "repo": "https://github.com/jundot/omlx",
       "clone": "reference/omlx",

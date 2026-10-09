@@ -191,6 +191,7 @@ def test_full_suite_has_every_stage():
         "telemetry-tiny",
         "tavily",
         "searchrank",
+        "toolparse",
     }
 
 

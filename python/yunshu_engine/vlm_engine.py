@@ -881,6 +881,8 @@ class VLMEngine:
             messages = messages or []
         if self._model is None:
             raise RuntimeError("Engine not started")
+        from .structural_tag import constrains_initial_output
+
         tpl_extra = self._request_template_extra(kwargs)
         # A timeout below must be able to stop the generation it abandons.
         if kwargs.get("cancel_event") is None:
@@ -900,7 +902,8 @@ class VLMEngine:
             video_frames = await self._extract_video_frames(messages)
             image_paths.extend(video_frames)
             _enable_thinking = self._default_enable_thinking(
-                enable_thinking, constrained=kwargs.get("json_schema") is not None
+                enable_thinking,
+                constrained=constrains_initial_output(kwargs.get("json_schema")),
             )
             self._track_pipeline(kwargs, messages, image_paths, audio_paths)
             self._check_request_supported(image_paths, audio_paths, kwargs)
@@ -1085,6 +1088,8 @@ class VLMEngine:
         if self._model is None:
             raise RuntimeError("Engine not started")
 
+        from .structural_tag import constrains_initial_output
+
         tpl_extra = self._request_template_extra(kwargs)
         if cancel_event is None:
             cancel_event = threading.Event()
@@ -1100,7 +1105,8 @@ class VLMEngine:
         image_paths.extend(video_frames)
 
         enable_thinking = self._default_enable_thinking(
-            enable_thinking, constrained=kwargs.get("json_schema") is not None
+            enable_thinking,
+            constrained=constrains_initial_output(kwargs.get("json_schema")),
         )
         self._track_pipeline(kwargs, messages, image_paths, audio_paths)
         self._check_request_supported(image_paths, audio_paths, kwargs)
@@ -2207,6 +2213,7 @@ class VLMEngine:
         ``finish_reason`` is set only on the last event: "stop" (EOS or stop
         string), "length", "budget" (thinking budget reached) or "cancel".
         """
+        from .structural_tag import constrains_initial_output
         from .text_utils import StopHoldbackBuffer
         from .vlm_batch_runner import (
             ConstraintProcessor,
@@ -2302,8 +2309,7 @@ class VLMEngine:
                 thinking_budget
                 if enable_thinking is not False
                 and think_start is not None
-                and constraint_guide
-                is None  # bare structured output: no thinking phase
+                and not constrains_initial_output(json_schema)
                 else None
             ),
             prompt_preopens_thinking=in_think,
@@ -2902,9 +2908,17 @@ class VLMEngine:
         if tools:
             extra["tools"] = tools
             kwargs["_tool_recovery_tools"] = tools
+            from .structural_tag import is_lazy_constraint
             from .tool_call_grammar import is_forced, normalize_tool_choice
 
-            if is_forced(choice) or settings.get_bool("YUNSHU_TOOL_GRAMMAR"):
+            lazy = is_lazy_constraint(kwargs.get("json_schema"))
+            if lazy and is_forced(choice):
+                raise ValueError(
+                    "structural_tag cannot be combined with forced tool_choice"
+                )
+            if is_forced(choice) or (
+                settings.get_bool("YUNSHU_TOOL_GRAMMAR") and not lazy
+            ):
                 choice = normalize_tool_choice(choice)
                 if choice != "none":
                     kwargs["_tool_spec"] = {

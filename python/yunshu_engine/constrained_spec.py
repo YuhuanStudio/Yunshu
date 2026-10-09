@@ -182,7 +182,10 @@ class ConstraintGuide:
     def feed(self, token):
         p = self.processor
         p._generated.append(int(token))
-        p._constraint.advance(p._tokenizer.decode([int(token)]))
+        if hasattr(p._constraint, "advance_token"):
+            p._constraint.advance_token(int(token))
+        else:
+            p._constraint.advance(p._tokenizer.decode([int(token)]))
         return True
 
     def advance(self, tokens):

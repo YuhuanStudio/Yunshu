@@ -838,7 +838,25 @@ class ResponsesRequest(BaseModel):
                 if isinstance(self.response_format, dict)
                 else None
             )
-            if rf_type not in ("json_object", "json_schema", "text", None):
+            if rf_type == "structural_tag":
+                from yunshu_gateway.schemas.structured_outputs import (
+                    structural_tag_grammar,
+                )
+
+                structural_tag_grammar(self.response_format)
+                from yunshu_engine.tool_call_grammar import is_forced
+
+                if self.tools and is_forced(self.tool_choice):
+                    raise ValueError(
+                        "structural_tag cannot be combined with forced tool_choice"
+                    )
+            if rf_type not in (
+                "json_object",
+                "json_schema",
+                "structural_tag",
+                "text",
+                None,
+            ):
                 raise ValueError(
                     f"response_format.type: must be 'json_object', 'json_schema', or 'text', got '{rf_type}'"
                 )
@@ -1079,6 +1097,10 @@ def _parse_response_format_unchecked(
     if rf is None:
         return None
     rf_type = rf.get("type")
+    if rf_type == "structural_tag":
+        from yunshu_gateway.schemas.structured_outputs import structural_tag_grammar
+
+        return {"type": "cfg", "grammar": structural_tag_grammar(rf)}
     if rf_type == "json_schema":
         js = rf.get("json_schema", {})
         return js.get("schema", js)
