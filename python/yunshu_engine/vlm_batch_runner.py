@@ -297,6 +297,26 @@ class TokenMaskProcessor:
         return self._mask(logits)
 
 
+def _source_image_digest(paths, fingerprint: str, image_token_index) -> int | None:
+    """Exact key: same bytes + same preprocessing config -> same key; any change differs."""
+    import hashlib
+
+    h = hashlib.blake2b(digest_size=8)
+    h.update(b"yunshu-source-image-v1")
+    for part in (fingerprint, repr(image_token_index), str(len(paths))):
+        data = part.encode()
+        h.update(len(data).to_bytes(8, "little") + data)
+    try:
+        for path in paths:
+            with open(path, "rb") as f:
+                body = f.read()
+            h.update(len(body).to_bytes(8, "little"))
+            h.update(body)
+    except OSError:
+        return None
+    return int.from_bytes(h.digest(), "little", signed=True)
+
+
 class VLMBatchRunner:
     """Owns the APC manager, the drafter and the shared batch scheduler."""
 
@@ -382,6 +402,58 @@ class VLMBatchRunner:
         self.busy_meter = BusyMeter()
         self.driver_busy_meter = BusyMeter()
 
+    def _processor_fingerprint(self) -> str | None:
+        """Everything that turns image bytes into pixel values, or None if unknown."""
+        cached = getattr(self, "_proc_fp", 0)
+        if cached != 0:
+            return cached
+        fp = None
+        try:
+            import json
+
+            proc = self.processor
+            parts = []
+            for obj in (proc, getattr(proc, "image_processor", None)):
+                if obj is not None and hasattr(obj, "to_dict"):
+                    parts.append(obj.to_dict())
+            if parts:
+                fp = type(proc).__name__ + json.dumps(
+                    parts, sort_keys=True, default=str
+                )
+        except Exception:
+            fp = None
+        self._proc_fp = fp
+        return fp
+
+    def _source_image_key_async(self, image_paths, image_token_index):
+        """Future of an exact digest of (processor config, image file bytes) or None."""
+        fp = self._processor_fingerprint()
+        if fp is None:
+            return None
+        pool = getattr(self, "_key_pool", None)
+        if pool is None:
+            from concurrent.futures import ThreadPoolExecutor
+
+            pool = self._key_pool = ThreadPoolExecutor(
+                1, thread_name_prefix="media-key"
+            )
+        return pool.submit(
+            _source_image_digest, tuple(image_paths), fp, image_token_index
+        )
+
+    @staticmethod
+    def _image_hash(_apc, pixel_values, source_key) -> int:
+        if pixel_values is None:
+            return 0
+        if source_key is not None:
+            try:
+                digest = source_key.result()
+            except Exception:
+                digest = None
+            if digest is not None:
+                return digest
+        return _apc.hash_image_payload(pixel_values=pixel_values)
+
     def prepare_media(
         self,
         prompt: str,
@@ -403,12 +475,21 @@ class VLMBatchRunner:
 
         from .mrope import clear_rope_state
 
+        # The image key hashes the source file bytes + the processor config on a
+        # CPU thread while the main thread preprocesses; hashing the processed
+        # pixel tensor costs a device sync and a ~2.6 ms host copy per request.
+        image_token_index = getattr(self.model.config, "image_token_index", None)
+        source_key = (
+            self._source_image_key_async(image_paths, image_token_index)
+            if image_paths
+            else None
+        )
         raw = prepare_inputs(
             self.processor,
             images=image_paths or None,
             audio=audio or None,
             prompts=prompt,
-            image_token_index=getattr(self.model.config, "image_token_index", None),
+            image_token_index=image_token_index,
             add_special_tokens=True,
         )
         input_ids = raw["input_ids"]
@@ -429,11 +510,7 @@ class VLMBatchRunner:
         salt = None
         if self.apc_manager is not None:
             salt = _apc.semantic_extra_hash(
-                image_hash=(
-                    _apc.hash_image_payload(pixel_values=pixel_values)
-                    if pixel_values is not None
-                    else 0
-                ),
+                image_hash=self._image_hash(_apc, pixel_values, source_key),
                 media={
                     "yunshu_media_boundary_schema": "wrapper-media-v1",
                     "audio": raw.get("input_features"),
