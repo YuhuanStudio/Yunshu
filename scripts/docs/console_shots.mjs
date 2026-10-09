@@ -7,6 +7,13 @@ const here = dirname(fileURLToPath(import.meta.url));
 const require = createRequire(join(here, "../../frontend/package.json"));
 const { webkit, chromium, devices } = require("@playwright/test");
 import { install, statusBody } from "./console_mock.mjs";
+import { readFileSync } from "node:fs";
+import { gunzipSync } from "node:zlib";
+
+// The overview and requests shots show a real moment: the status the real 27B engine reported under the
+// bursty review load (frontend/browser/fixtures/real-load.jsonl.gz, metadata only), not invented numbers.
+const REAL = gunzipSync(readFileSync(join(here, "../../frontend/browser/fixtures/real-load.jsonl.gz"))).toString().trim().split("\n").map((l) => JSON.parse(l)).filter((l) => l.status);
+const realStatus = REAL.find((l) => l.t >= 26)?.status ?? REAL.at(-1).status;
 
 const [base = "http://127.0.0.1:18991", out = "docs/images/console"] = process.argv.slice(2);
 const MODEL = "Qwen3.8-27B-oQ4e-mtp";
@@ -31,7 +38,7 @@ async function session(eng, opts, scheme) {
   const ctx = await b.newContext({ locale: process.env.LOCALE || "zh-TW", colorScheme: scheme, deviceScaleFactor: 2, ...opts });
   await ctx.addInitScript(() => localStorage.setItem("yunshu.console.url", "http://127.0.0.1:8000"));
   await ctx.route("**/openapi.json", (r) => r.fulfill({ status: 200, contentType: "application/json", body: '{"paths":{}}' }));
-  await install(ctx, { status: decode });
+  await install(ctx, { status: () => realStatus });
   await ctx.route("**/debug/**", (r) => {
     const path = new URL(r.request().url()).pathname;
     const body = path === "/debug/kv-cache" ? { caches: [{ model_id: "Qwen3.8-27B-oQ4e-mtp", apc: { entries: 14, resident_bytes: 2.4e9, warm_bytes: 0, warm_ratio: 1, disk_bytes: 1.2e10, lookups_hit: 95, lookups_miss: 25, matched_tokens: 640000, memory_evictions: 2, memory_skips: 0, warm_demotions: 0 } }] } : path === "/debug/system" ? { cpu: { percent: 14, logical_cores: 16 }, memory: { percent: 41, used_bytes: 5.6e10, total_bytes: 1.37e11 }, gpu: { active_bytes: 2.5e10 } } : {};
