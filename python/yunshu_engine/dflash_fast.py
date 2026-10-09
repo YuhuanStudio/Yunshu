@@ -390,6 +390,7 @@ def rounds(
     from . import settings
 
     pin = settings.get("YUNSHU_SPEC_NODES")
+    profile_sync = bool(settings.get("YUNSHU_DEBUG_TREE_PROFILE"))
     prof = {"rounds": 0, "draft": 0.0, "verify": 0.0, "commit": 0.0, "nodes": 0}
     context = mtp_lane._STATE["context"]
     copy_rows = mtp_lane.copy_rows_for_model(lm)
@@ -469,6 +470,10 @@ def rounds(
                     finally:
                         private.bind(False)
                     tokens, parents = search_tree(lattice, n)
+                    if profile_sync:
+                        mx.eval(
+                            tokens, parents
+                        )  # drafter GPU time lands in the draft stage
                     tokens, parents, ranks = reorder(tokens, parents)
                     window = mx.concatenate(
                         [mx.array([bonus], dtype=token_dtype), tokens]
