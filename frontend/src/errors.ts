@@ -10,6 +10,7 @@ export function statusMessage(status: number): string {
   if (status === 409) return t("errors.status.409");
   if (status === 429) return t("errors.status.429");
   if (status === 400 || status === 422) return t("errors.status.rejected");
+  if (status === 502 || status === 504) return t("errors.failure.network");
   if (status >= 500) return t("errors.status.server", { status });
   return t("errors.status.other", { status });
 }
@@ -64,13 +65,16 @@ export function offlineCause(
       short: t("errors.offline.unauthorized.short"),
       hint: t("errors.offline.unauthorized.hint"),
     };
-  if (typeof status === "number" && status >= 500)
+  // A proxy that cannot reach the engine answers 502 (refused) or 504 (timeout)
+  // itself; that is "can't reach the engine", not an engine fault.
+  const proxyDown = status === 502 || status === 504;
+  if (typeof status === "number" && status >= 500 && !proxyDown)
     return {
       title: t("errors.offline.server.title"),
       short: t("errors.offline.server.short"),
       hint: t("errors.offline.server.hint", { status }),
     };
-  if (typeof status === "number")
+  if (typeof status === "number" && !proxyDown)
     return {
       title: t("errors.offline.http.title", { status }),
       short: t("errors.offline.http.short", { status }),

@@ -248,7 +248,7 @@ function ServiceBody({
         title={t("service.row.log")}
         control={<Mono>{info.log || "—"}</Mono>}
       />
-      <div className="space-y-3 pt-4">
+      <div className="space-y-3">
         {info.underLaunchd ? (
           <>
             <RestartControl connection={connection} />
@@ -318,7 +318,7 @@ export function NetworkSection({ connection }: { connection: Connection }) {
           </StatusIndicator>
         }
       />
-      <div className="grid gap-4 pt-4 lg:grid-cols-2">
+      <div className="grid gap-4 lg:grid-cols-2">
         {(
           [
             ["service.network.cmdLocal", "127.0.0.1"],
@@ -432,7 +432,7 @@ function CorsEditor({
   }
   const forced = info.source === "env" || info.source === "cli";
   return (
-    <div className="space-y-4 pt-3" data-testid="cors-editor">
+    <div className="space-y-4" data-testid="cors-editor">
       {forced && (
         <Banner
           tone="warning"

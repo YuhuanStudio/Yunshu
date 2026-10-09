@@ -122,11 +122,17 @@ test("offline pills carry the cause; online-only pills disappear", () => {
   const down = footerPills({
     ...input(mk()),
     phase: "offline",
-    errorStatus: 502,
+    errorStatus: 500,
   });
   assert.deepEqual(keys(down), ["engine"]);
   assert.equal(down[0].label, "離線");
   assert.equal(down[0].value, "內部錯誤");
+  const proxyDown = footerPills({
+    ...input(mk()),
+    phase: "offline",
+    errorStatus: 502,
+  });
+  assert.equal(proxyDown[0].value, "無法連線");
   assert.equal(down[0].tone, "danger");
   const unauthorized = footerPills({ ...input(null), phase: "unauthorized" });
   assert.equal(unauthorized[0].label, "未授權");

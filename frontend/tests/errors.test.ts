@@ -13,6 +13,8 @@ const cases: [number, RegExp][] = [
   [429, /頻繁|忙碌/],
   [500, /引擎內部錯誤/],
   [503, /引擎內部錯誤/],
+  [502, /無法連線到引擎/],
+  [504, /無法連線到引擎/],
 ];
 
 async function withFetch(
@@ -100,4 +102,11 @@ test("network failure, bad JSON and empty body are zh-TW", async () => {
       );
     },
   );
+});
+
+test("a proxy 502/504 reads as unreachable, a real 5xx stays an engine fault", async () => {
+  const { offlineCause } = await import("../src/errors.ts");
+  assert.equal(offlineCause("offline", 502).short, "無法連線");
+  assert.equal(offlineCause("offline", 504).short, "無法連線");
+  assert.notEqual(offlineCause("offline", 500).short, "無法連線");
 });

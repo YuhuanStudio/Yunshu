@@ -206,7 +206,7 @@ export function SectionCard({
   action,
   children,
   className,
-  bodyClassName = "p-4",
+  bodyClassName = "px-4 pb-4",
   ...props
 }: {
   icon: LucideIcon;
@@ -219,7 +219,7 @@ export function SectionCard({
 } & Omit<HTMLAttributes<HTMLDivElement>, "title">) {
   return (
     <Card className={className} {...props}>
-      <div className="flex flex-wrap items-center gap-3 px-4 pt-4">
+      <div className="flex flex-wrap items-center gap-3 px-4 pb-3 pt-4">
         <span
           aria-hidden="true"
           className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-(--bg-elevated) text-muted-foreground"

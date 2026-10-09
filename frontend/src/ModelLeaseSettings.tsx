@@ -86,7 +86,7 @@ export function ModelLeaseSettings({
           </Select>
         }
       />
-      <div className="pt-4">
+      <div>
         <Button
           disabled={!model || busy || engine.phase !== "online"}
           onClick={() =>

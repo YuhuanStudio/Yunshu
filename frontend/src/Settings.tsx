@@ -97,6 +97,7 @@ export function Settings({
       ?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
   const wide = useMinWidth(1280);
+  const tablet = useMinWidth(640);
   const sections = [
     { key: "connection", label: t("settings.nav.connection"), icon: Link2 },
     { key: "appearance", label: t("settings.nav.appearance"), icon: Palette },
@@ -104,10 +105,21 @@ export function Settings({
     { key: "config", label: t("settings.nav.config"), icon: SlidersHorizontal },
     { key: "service", label: t("settings.nav.service"), icon: Server },
     { key: "network", label: t("settings.nav.network"), icon: Globe },
-    { key: "shortcuts", label: t("settings.nav.shortcuts"), icon: Keyboard },
+    ...(tablet
+      ? [
+          {
+            key: "shortcuts",
+            label: t("settings.nav.shortcuts"),
+            icon: Keyboard,
+          },
+        ]
+      : []),
   ];
+  const mac =
+    typeof navigator !== "undefined" &&
+    /Mac|iPhone|iPad/i.test(navigator.platform || navigator.userAgent);
   const shortcuts: [string, string][] = [
-    ["⌘ K / Ctrl K", t("settings.shortcuts.palette")],
+    [mac ? "⌘K" : "Ctrl K", t("settings.shortcuts.palette")],
     ["Enter", t("settings.shortcuts.send")],
     ["Esc", t("settings.shortcuts.close")],
   ];
@@ -209,7 +221,7 @@ export function Settings({
               {error}
             </p>
           )}
-          <div className="pt-4">
+          <div>
             <Button disabled={disabled} onClick={submit}>
               {t("settings.connection.save")}
             </Button>
@@ -266,35 +278,28 @@ export function Settings({
           <NetworkSection connection={connection} />
           <CorsSection connection={connection} />
         </div>
-        <SectionCard
-          id="settings-shortcuts"
-          icon={Keyboard}
-          title={t("settings.shortcuts.title")}
-          className="scroll-mt-4"
-          bodyClassName="px-4 pb-2"
-        >
-          {shortcuts.map(([keys, text]) => (
-            <StackRow
-              key={keys}
-              title={text}
-              control={
-                <span className="flex items-center gap-1">
-                  {keys.split(" ").map((k, i) =>
-                    k === "/" ? (
-                      <span key={i} className="text-xs text-muted-foreground">
-                        /
-                      </span>
-                    ) : (
-                      <Kbd key={i}>{k}</Kbd>
-                    ),
-                  )}
-                </span>
-              }
-            />
-          ))}
-        </SectionCard>
+        {tablet ? (
+          <SectionCard
+            id="settings-shortcuts"
+            icon={Keyboard}
+            title={t("settings.shortcuts.title")}
+            className="scroll-mt-4"
+            bodyClassName="px-4 pb-3"
+          >
+            <ul className="divide-y divide-border" data-testid="shortcut-list">
+              {shortcuts.map(([keys, text]) => (
+                <li
+                  key={keys}
+                  className="flex items-center justify-between gap-4 py-2 text-sm"
+                >
+                  <span className="min-w-0 truncate">{text}</span>
+                  <Kbd>{keys}</Kbd>
+                </li>
+              ))}
+            </ul>
+          </SectionCard>
+        ) : null}
       </div>
     </DashboardPage>
   );
 }
-

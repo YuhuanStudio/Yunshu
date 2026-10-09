@@ -149,7 +149,7 @@ export function FooterStatus({
     : (lead.value ?? "");
   return (
     <>
-      <div className="px-4 pb-3 pt-1">
+      <div className="flex justify-center px-4 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-1">
         <Button
           variant="outline"
           ref={(el: HTMLButtonElement | null) => {
