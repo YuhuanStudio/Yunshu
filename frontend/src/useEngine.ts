@@ -153,6 +153,8 @@ export function useEngine(connection: Connection): UseEngineResult {
   const failStartRef = useRef<number | null>(null);
   /** The newest live sample the console holds, for the reconnect backfill. */
   const lastLiveRef = useRef(0);
+  /** The engine's answers came through the console process (it can say when the engine went away). */
+  const consoleSeenRef = useRef(false);
   const [nextRetryAt, setNextRetryAt] = useState<number | null>(null);
   /** The connection whose engine-side history was already requested. */
   const historyAskedRef = useRef<symbol | null>(null);
@@ -225,6 +227,7 @@ export function useEngine(connection: Connection): UseEngineResult {
           )
             return;
           const at = Date.now();
+          if (status.console_process) consoleSeenRef.current = true;
           // The engine answers again after an outage: what happened meanwhile comes from its history.
           const recoveredFrom = failStartRef.current;
           const lastSeen = lastLiveRef.current;
@@ -317,7 +320,7 @@ export function useEngine(connection: Connection): UseEngineResult {
               failures: 0,
             };
           });
-          if (recoveredFrom != null && lastSeen > 0) {
+          if (recoveredFrom != null && lastSeen > 0 && status.console_process) {
             // Reconnect: fill the stretch the console missed from the persistent history.
             void fetchMetricsHistory(apiConnection, {
               signal: controller.signal,
@@ -349,13 +352,15 @@ export function useEngine(connection: Connection): UseEngineResult {
             historyAskedRef.current = connectionKey;
             const asked = at;
             void (async () => {
-              // The persistent history first (recorded while nobody was looking); the in-memory
-              // ring of older engines is the fallback.
-              const recorded = await fetchMetricsHistory(apiConnection, {
-                signal: controller.signal,
-                since: asked - 3_600_000,
-                step: 2.5,
-              });
+              // The console process's recorded history first (it was recording while nobody was
+              // looking); the in-memory ring of an engine without one is the fallback.
+              const recorded = status.console_process
+                ? await fetchMetricsHistory(apiConnection, {
+                    signal: controller.signal,
+                    since: asked - 3_600_000,
+                    step: 2.5,
+                  })
+                : null;
               if (recorded) return recorded;
               return fetchServerHistory(apiConnection, {
                 signal: controller.signal,
@@ -398,7 +403,11 @@ export function useEngine(connection: Connection): UseEngineResult {
           if (failStartRef.current == null) {
             failStartRef.current = Date.now();
             // The console process has watched the engine all along: it knows when it went away.
-            void fetchConsoleState(apiConnection).then((c) => {
+            void (
+              consoleSeenRef.current
+                ? fetchConsoleState(apiConnection)
+                : Promise.resolve(null)
+            ).then((c) => {
               if (c?.up === false && c.since != null && c.since < Date.now()) {
                 failStartRef.current = Math.min(
                   failStartRef.current ?? c.since,

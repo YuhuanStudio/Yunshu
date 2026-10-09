@@ -103,19 +103,21 @@ def row_from_status(status: dict, window: list[dict]) -> dict[str, float | None]
     items = reqs.get("items") or []
     live = _num((status.get("throughput") or {}).get("live_decode_tps"))
     decode = [
-        _num(i.get("tokens_per_second"))
+        v
         for i in items
-        if i.get("phase") == "decode" and _num(i.get("tokens_per_second")) is not None
+        if i.get("phase") == "decode"
+        and (v := _num(i.get("tokens_per_second"))) is not None
     ]
     prefill = [
-        _num(i.get("tokens_per_second"))
+        v
         for i in items
-        if i.get("phase") == "prefill" and _num(i.get("tokens_per_second")) is not None
+        if i.get("phase") == "prefill"
+        and (v := _num(i.get("tokens_per_second"))) is not None
     ]
     row["decode_tps"] = (
         live if live is not None else (round(sum(decode), 1) if decode else None)
-    )  # type: ignore[arg-type]
-    row["prefill_tps"] = round(sum(prefill), 1) if prefill else None  # type: ignore[arg-type]
+    )
+    row["prefill_tps"] = round(sum(prefill), 1) if prefill else None
     ttfts = [t for e in window if (t := _num(e.get("ttft_ms"))) is not None]
     row["ttft_p50_ms"] = percentile(ttfts, 0.5)
     row["ttft_p95_ms"] = percentile(ttfts, 0.95)
@@ -340,7 +342,7 @@ class Poller:
         try:
             import psutil
 
-            return round(psutil.Process(pid).memory_info().rss / GIB, 3)
+            return float(round(psutil.Process(pid).memory_info().rss / GIB, 3))
         except Exception:
             return None
 

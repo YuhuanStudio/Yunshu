@@ -13,6 +13,19 @@ and web-retrieval compatibility to the `yunshu` package. These changes are merge
 
 ### Highlights
 
+- The web console is its own light process (`yunshu console`, default port 8100, never loads MLX).
+  `yunshu serve` starts it next to the engine (`--no-console` to skip), `yunshu service install` runs it as its own
+  launchd job, and `yunshu console --engine URL` watches a remote engine. It serves the console and docs, proxies
+  the engine API (streams and WebSockets included) on one origin, and records a 1 s / 10 s / 1 min history for 30
+  days plus a metadata-only request log in SQLite, with engine outages kept as gaps and events, so the console
+  stays usable and keeps recording while the engine restarts or crashes. The engine keeps no history store and
+  gains only a cursor on its finished-request read and its pid in `/v1/yunshu/status`.
+  **Deprecation:** `/console/` on the engine now only redirects to the console process (or explains how to start
+  it); the engine no longer serves the console files, and this pointer goes away in a later release.
+  Settings: `YUNSHU_CONSOLE`, `YUNSHU_CONSOLE_PORT`, `YUNSHU_CONSOLE_HOST`, `YUNSHU_CONSOLE_ENGINE`,
+  `YUNSHU_CONSOLE_ENGINE_TOKEN`, `YUNSHU_CONSOLE_POLL_S`, `YUNSHU_CONSOLE_HISTORY`,
+  `YUNSHU_CONSOLE_RETENTION_DAYS`, `YUNSHU_CONSOLE_DB_MAX_MB`. [Console guide](docs/CONSOLE.md).
+
 - Ask typed predicate, choice and score questions with the Decisions API on Clef MLX checkpoints,
   without generating a text answer. [Guide](docs/guides/DECISIONS.md).
 - Store chat completions locally and use them in repeatable Evals runs, with cancellable sampling,

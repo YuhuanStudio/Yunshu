@@ -287,7 +287,11 @@ export function Dashboard({
   // window is a binary-search slice and the chart gets at most 300 rows.
   // Up to an hour the live series (backfilled from the console's history on open) is the source;
   // 6 h to 30 d come straight from the recorded history, gaps included.
-  const longRange = useRangeHistory(connection, range, null);
+  const longRange = useRangeHistory(
+    connection,
+    range,
+    engine.status?.console_process === true,
+  );
   const livePoints = useMemo(
     () => windowPoints(engine.series, start, end),
     [engine.series, start, end],

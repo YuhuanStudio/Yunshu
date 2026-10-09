@@ -332,5 +332,7 @@ const settingdesc = {
     "Days the console keeps 1-minute history, the request log and engine events.",
   YUNSHU_CONSOLE_DB_MAX_MB:
     "Size cap of the console history file in MiB; the oldest rows are dropped when it is exceeded.",
+  YUNSHU_CONSOLE_DB:
+    "Where the console process keeps its history (SQLite). Unset: ~/.yunshu/console-history.sqlite.",
 };
 export default settingdesc;

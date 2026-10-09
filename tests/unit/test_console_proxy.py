@@ -416,3 +416,17 @@ def test_nothing_in_the_console_process_loads_mlx(module):
         [sys.executable, "-c", code], capture_output=True, text=True, timeout=60
     )
     assert run.returncode == 0, run.stdout + run.stderr
+
+
+def test_every_answer_is_stamped_as_coming_through_the_console_process():
+    engine, _ = fake_engine()
+
+    async def go():
+        async with asgi(console_over(engine)) as c:
+            proxied = await c.get("/v1/yunshu/status")
+            local = await c.get("/v1/yunshu/metrics/history")
+            missing = await c.get("/v1/never")
+            return proxied, local, missing
+
+    for response in asyncio.run(go()):
+        assert response.headers["x-yunshu-console"] == "1"

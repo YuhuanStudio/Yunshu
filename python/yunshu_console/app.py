@@ -93,10 +93,11 @@ class ConsoleStaticFiles(StaticFiles):
 
 
 def _presented(headers) -> str | None:
-    auth = headers.get("authorization", "")
+    auth = str(headers.get("authorization", ""))
     if auth.startswith("Bearer "):
         return auth[7:]
-    return headers.get("x-api-key")
+    key = headers.get("x-api-key")
+    return str(key) if key else None
 
 
 def check_access(request: Request) -> None:
@@ -118,6 +119,30 @@ def check_access(request: Request) -> None:
                 "Invalid or missing Authorization header",
                 headers={"WWW-Authenticate": "Bearer"},
             )
+
+
+class StampConsole:
+    """Pure ASGI middleware: every answer says it came through the console process.
+
+    The web console reads that header on its status poll and only then asks for the recorded
+    history (an engine without a console process has none), so a direct engine connection makes no
+    requests that can only fail."""
+
+    def __init__(self, app) -> None:
+        self.app = app
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        async def stamped(message) -> None:
+            if message["type"] == "http.response.start":
+                message.setdefault("headers", [])
+                message["headers"] = [*message["headers"], (b"x-yunshu-console", b"1")]
+            await send(message)
+
+        await self.app(scope, receive, stamped)
 
 
 def create_app(
@@ -170,6 +195,7 @@ def create_app(
         openapi_url=None,
         lifespan=lifespan,
     )
+    app.add_middleware(StampConsole)
     app.state.store = store
     app.state.poller = poller
     app.state.http = http
@@ -326,6 +352,7 @@ def create_app(
 async def _proxy_websocket(websocket: WebSocket, engine_url: str, path: str) -> None:
     """Pipe a WebSocket both ways (the Realtime and text streaming sockets)."""
     import websockets
+    from websockets.typing import Subprotocol
 
     ws_url = engine_url.replace("http", "ws", 1) + "/" + path
     if websocket.url.query:
@@ -339,7 +366,12 @@ async def _proxy_websocket(websocket: WebSocket, engine_url: str, path: str) -> 
     }
     try:
         upstream = await websockets.connect(
-            ws_url, additional_headers=extra, subprotocols=subprotocols, max_size=None
+            ws_url,
+            additional_headers=extra,
+            subprotocols=[Subprotocol(p) for p in subprotocols]
+            if subprotocols
+            else None,
+            max_size=None,
         )
     except Exception:
         await websocket.close(code=1013)  # try again later: the engine is not reachable
@@ -387,8 +419,11 @@ def open_store(path: Path | None = None) -> HistoryStore | None:
     if not settings.get("YUNSHU_CONSOLE_HISTORY"):
         return None
     try:
+        configured = settings.get("YUNSHU_CONSOLE_DB")
         return HistoryStore(
-            path or paths.home() / "console-history.sqlite",
+            path
+            or (Path(str(configured)).expanduser() if configured else None)
+            or paths.home() / "console-history.sqlite",
             FIELDS,
             retention_days=float(settings.get("YUNSHU_CONSOLE_RETENTION_DAYS") or 30),
             max_bytes=int(

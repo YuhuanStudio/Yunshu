@@ -284,6 +284,7 @@ YUNSHU_REALTIME_SILENCE_MS = 400
 | `YUNSHU_CONSOLE_ENGINE_TOKEN` | str | unset | restart | Bearer token the console process uses to read the engine while it records history. Unset: YUNSHU_AUTH_TOKEN. The browser's own token is passed through to the engine unchanged. |
 | `YUNSHU_CONSOLE_POLL_S` | float | 1.0 | restart | Seconds between the console process's reads of the engine (status and finished requests, the same cheap endpoints the console page uses). 1 s gives the 1 s history resolution. |
 | `YUNSHU_CONSOLE_HISTORY` | bool | on | restart | Record the metrics history (1 s for 1 h, 10 s for 24 h, 1 min for the retention) and the request log (metadata only, never prompts or outputs) to ~/.yunshu/console-history.sqlite, with engine outages kept as explicit gaps and events. Off keeps the console live-only. |
+| `YUNSHU_CONSOLE_DB` | path | unset | restart | Where the console process keeps its history (SQLite, WAL). Unset: ~/.yunshu/console-history.sqlite. |
 | `YUNSHU_CONSOLE_RETENTION_DAYS` | float | 30.0 | restart | Days the console keeps 1-minute history rows, the request log and the engine events. |
 | `YUNSHU_CONSOLE_DB_MAX_MB` | float | 64.0 | restart | Size cap of the console history file in MiB: when exceeded, the oldest request rows and then the oldest 1-minute rows are dropped. |
 

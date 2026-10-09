@@ -189,6 +189,38 @@ test("metrics were recorded all along and the charts backfill from them", async 
   ).toBeVisible();
 });
 
+test("the long ranges read the recorded history from the console process", async ({
+  page,
+}) => {
+  await open(page, "overview");
+  await expect(page.getByTestId("overview-stats")).toBeVisible({
+    timeout: 15_000,
+  });
+  for (const [label, seconds] of [
+    ["6 小時", 21600],
+    ["24 小時", 86400],
+    ["7 天", 604800],
+    ["30 天", 2592000],
+  ] as const) {
+    const asked = page.waitForRequest(
+      (r) =>
+        r.url().includes("/v1/yunshu/metrics/history") &&
+        r.url().includes(`step=${Math.round((seconds / 600) * 10) / 10}`),
+    );
+    await page.getByRole("tab", { name: label, exact: true }).click();
+    const request = await asked;
+    const url = new URL(request.url());
+    expect(
+      Number(url.searchParams.get("until")) -
+        Number(url.searchParams.get("since")),
+    ).toBeCloseTo(seconds, -1);
+    await expect(
+      page.getByRole("tab", { name: label, exact: true }),
+    ).toHaveAttribute("data-state", "active");
+    await expect(page.getByTestId("throughput-panel")).toBeVisible();
+  }
+});
+
 test("killing the engine mid-session: the console stays usable, says so, and keeps recording the gap", async ({
   page,
 }) => {

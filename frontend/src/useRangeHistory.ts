@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
-import type { Connection } from "./api";
-import { fetchMetricsHistory } from "./history-api";
-import { gapPoint, type SeriesPoint } from "./series";
+import type { Connection } from "./api.ts";
+import { fetchMetricsHistory } from "./history-api.ts";
+import { gapPoint, type SeriesPoint } from "./series.ts";
 
 /** The chart ranges: label key, window in seconds. Up to an hour the live series (backfilled) is enough. */
 export const RANGES = [
@@ -45,10 +45,11 @@ export interface RangeHistory {
 export function useRangeHistory(
   connection: Connection,
   range: string,
-  refreshKey: number | null,
+  /** The answers come through the console process: only then is there recorded history to ask for. */
+  recorded: boolean,
 ): RangeHistory {
   const seconds = rangeSeconds(range);
-  const active = seconds > LIVE_RANGE_MAX_S;
+  const active = seconds > LIVE_RANGE_MAX_S && recorded;
   const [state, setState] = useState<RangeHistory>({
     active,
     points: [],
@@ -101,6 +102,6 @@ export function useRangeHistory(
       controller.abort();
       if (timer) clearTimeout(timer);
     };
-  }, [connection.baseUrl, connection.token, active, seconds, refreshKey]);
+  }, [connection.baseUrl, connection.token, active, seconds]);
   return { ...state, active };
 }

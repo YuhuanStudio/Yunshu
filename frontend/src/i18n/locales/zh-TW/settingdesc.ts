@@ -312,5 +312,7 @@ const settingdesc = {
     "主控台保留 1 分鐘歷史、請求紀錄與引擎事件的天數。",
   YUNSHU_CONSOLE_DB_MAX_MB:
     "主控台歷史檔案的大小上限（MiB）；超過時刪除最舊的資料。",
+  YUNSHU_CONSOLE_DB:
+    "主控台程序保存歷史的位置（SQLite）。未設定時為 ~/.yunshu/console-history.sqlite。",
 };
 export default settingdesc;

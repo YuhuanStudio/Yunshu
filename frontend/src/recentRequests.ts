@@ -150,6 +150,8 @@ async function getHistory(
 export function useRecentRequests(
   connection: Connection,
   signal: string | null | undefined,
+  /** The answers come through the console process, which keeps the recorded request log. */
+  recorded = false,
 ): Recent {
   const [state, setState] = useScopedState<Recent>(
     connectionScope(connection),
@@ -212,7 +214,10 @@ export function useRecentRequests(
       void load();
     };
     // Once per connection: what the console process recorded while nobody was looking.
-    getHistory(connection, controller.signal).then(
+    (recorded
+      ? getHistory(connection, controller.signal)
+      : Promise.resolve([])
+    ).then(
       (entries) => {
         if (controller.signal.aborted) return;
         historyRef.current = entries
@@ -227,7 +232,7 @@ export function useRecentRequests(
       controller.abort();
       if (timer) clearTimeout(timer);
     };
-  }, [connection.baseUrl, connection.token]);
+  }, [connection.baseUrl, connection.token, recorded]);
   useEffect(() => {
     if (signal) kick.current?.();
   }, [signal]);

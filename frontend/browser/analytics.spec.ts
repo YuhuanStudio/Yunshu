@@ -240,18 +240,18 @@ test.describe("analytics dashboard contracts", () => {
       memory.locator('[data-yunui="time-series-chart"]'),
     ).toHaveAttribute("data-active-x", selectedX!);
 
-    await overview.getByRole("tab", { name: "5 分鐘", exact: true }).click();
+    await overview.getByRole("tab", { name: "15 分鐘", exact: true }).click();
     const downloadPromise = page.waitForEvent("download");
     await overview
       .getByRole("button", { name: "匯出觀測", exact: true })
       .click();
     const download = await downloadPromise;
-    expect(download.suggestedFilename()).toBe("yunshu-observations-5m.csv");
+    expect(download.suggestedFilename()).toBe("yunshu-observations-15m.csv");
     const path = await download.path();
     expect(path).not.toBeNull();
     const csv = await readFile(path!, "utf8");
     expect(csv.charCodeAt(0)).toBe(0xfeff);
-    expect(csv.trimEnd().split(/\r?\n/)).toHaveLength(4); // header plus the three samples in the selected five-minute window
+    expect(csv.trimEnd().split(/\r?\n/)).toHaveLength(7); // header plus the six samples in the selected fifteen-minute window
     expect(csv).toContain('"mean_decode_tps_window"');
     expect(fixture.unexpected).toEqual([]);
     expect(pageErrors).toEqual([]);

@@ -331,7 +331,7 @@ class HistoryStore:
             ).fetchall()
         t = [float(r[0]) for r in rows]
         cols = {f: [r[i + 1] for r in rows] for i, f in enumerate(self.fields)}
-        out_res = res
+        out_res: float = res
         if step and step > res and rows:
             t, cols = _rebucket(t, cols, step, self.fields)
             out_res = step

@@ -259,7 +259,11 @@ export function Requests({
       if (timer) clearTimeout(timer);
     };
   }, [detail?.id, connection.baseUrl, connection.token]);
-  const recent = useRecentRequests(connection, engine.status?.last?.request_id);
+  const recent = useRecentRequests(
+    connection,
+    engine.status?.last?.request_id,
+    engine.status?.console_process === true,
+  );
   const sampled = useMemo(
     () =>
       finishedFromHistory(engine.history).map(

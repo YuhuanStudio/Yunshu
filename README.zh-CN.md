@@ -105,6 +105,7 @@ Yunshu 提供的所有能力，分组列出。每一行链接到有示例与限�
 | 能力 | 内容 |
 |---|---|
 | [网页 console](docs/CONSOLE.md) | 实时请求阶段、历史、日志、模型、下载、缓存、测试、密钥、设置、状态岛 |
+| [Console 进程](docs/CONSOLE.md) | console 与引擎分开运行（端口 8100）：引擎离线时仍可用、历史与请求记录、离线缺口 |
 | [API 密钥与配额](docs/guides/AUTH_AND_KEYS.md) | 多把密钥，含权限、到期、每钥用量与每日配额 |
 | [设置写入与 CORS 编辑](docs/guides/AUTH_AND_KEYS.md) | 从 console 或 API 写入引擎设置（需重启者会提示）并编辑 CORS |
 | [主机遥测](docs/guides/TELEMETRY.md) | 功耗、GPU 时钟、温度、散热与内存压力、每请求能耗估计、Prometheus |
@@ -157,12 +158,15 @@ print(msg.content[0].text)
 
 ### 本地 console
 
-位于 `/console/` 的本地网页 console 显示引擎正在做什么并可管理它，支持英文、繁体中文与简体中文。
-它内置于 `yunshu` 包（pip、uv tool、Homebrew 安装均有），无需另外编译：
+本地网页 console 显示引擎正在做什么并可管理它，支持英文、繁体中文与简体中文。它是独立的轻量进程
+（`yunshu console`，不加载 MLX），由 `yunshu serve` 在引擎旁边启动，默认端口 8100：提供 console 与文档、
+在同一个来源转发引擎 API、并记录历史，所以引擎重启或崩溃时仍可使用、仍持续记录。它内置于 `yunshu` 包
+（pip、uv tool、Homebrew 安装均有），无需另外编译：
 
 ```bash
 yunshu serve -m <model>
-open http://127.0.0.1:8000/console/
+open http://127.0.0.1:8100/console/
+yunshu console --engine http://mac-studio.local:8000
 ```
 
 - **总览**：实时请求阶段、prefill 与 decode tok/s、prefill 条内的前缀缓存命中区段、首 token 延迟、Metal 内存、
@@ -173,6 +177,9 @@ open http://127.0.0.1:8000/console/
   RAM／WARM／SSD 前缀缓存层。
 - **推理测试**与 **API 接入**：流式对话（含推理）、比较、查看代码；Claude Code、Codex、opencode、SDK 与 curl 的可粘贴设置。
 - **密钥**与**设置**：含配额与用量的 API 密钥、所有引擎设置（需重启者会提示）与 CORS 编辑器。
+- **比引擎活得久的历史**：console 进程每秒读取一次引擎（一小时内 1 秒分辨率、一天 10 秒、30 天 1 分钟）并保存请求记录
+  （只有元数据），打开时图表与请求列表自动回补、引擎离线时段显示为缺口，不必有浏览器开着。引擎离线时，console 会明确
+  说明、保留文档、设置与最后的数据，并自动重新连接。
 - 浮动的**状态岛**跟着你切换页面，布局也适用于手机。
 
 <picture>

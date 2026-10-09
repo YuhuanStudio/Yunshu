@@ -311,6 +311,7 @@ _add("YUNSHU_CONSOLE_ENGINE", "str", None, "Engine URL the console process watch
 _add("YUNSHU_CONSOLE_ENGINE_TOKEN", "str", None, "Bearer token the console process uses to read the engine while it records history. Unset: YUNSHU_AUTH_TOKEN. The browser's own token is passed through to the engine unchanged.", "console", secret=True)
 _add("YUNSHU_CONSOLE_POLL_S", "float", 1.0, "Seconds between the console process's reads of the engine (status and finished requests, the same cheap endpoints the console page uses). 1 s gives the 1 s history resolution.", "console", minimum=0.25)
 _add("YUNSHU_CONSOLE_HISTORY", "bool", True, "Record the metrics history (1 s for 1 h, 10 s for 24 h, 1 min for the retention) and the request log (metadata only, never prompts or outputs) to ~/.yunshu/console-history.sqlite, with engine outages kept as explicit gaps and events. Off keeps the console live-only.", "console")
+_add("YUNSHU_CONSOLE_DB", "path", None, "Where the console process keeps its history (SQLite, WAL). Unset: ~/.yunshu/console-history.sqlite.", "console")
 _add("YUNSHU_CONSOLE_RETENTION_DAYS", "float", 30.0, "Days the console keeps 1-minute history rows, the request log and the engine events.", "console", minimum=1.0)
 _add("YUNSHU_CONSOLE_DB_MAX_MB", "float", 64.0, "Size cap of the console history file in MiB: when exceeded, the oldest request rows and then the oldest 1-minute rows are dropped.", "console", minimum=1.0)
 _add("YUNSHU_HISTORY_INTERVAL_S", "float", 5.0, "Console history: seconds between samples of the in-memory ring behind GET /v1/yunshu/history (throughput, request counts, memory, TTFT percentiles); 0 turns the sampler off. The ring is fixed-size and never grows: 12 columns, 4 bytes each (timestamp 8), per slot.", "observability", minimum=0.0)
@@ -500,6 +501,7 @@ _RESTART = frozenset(
         "YUNSHU_CONSOLE_ENGINE_TOKEN",
         "YUNSHU_CONSOLE_POLL_S",
         "YUNSHU_CONSOLE_HISTORY",
+        "YUNSHU_CONSOLE_DB",
         "YUNSHU_CONSOLE_RETENTION_DAYS",
         "YUNSHU_CONSOLE_DB_MAX_MB",
         "YUNSHU_TELEMETRY",
