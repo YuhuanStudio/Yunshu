@@ -155,6 +155,8 @@ follows Strata's published draft policy (no Strata code used).
 `python/yunshu_engine/ple_parallel.py` replaces mlx-vlm's (MIT)
 `QuantizedMMapNGramEmbedding._read_rows` with a parallel `pread` version that returns
 the same bytes (monkeypatch recorded in `vendor.json`).
+`python/yunshu_engine/ple_scale.py` applies the per-table `ngram_embedding.weight_scale` that mlx-vlm
+drops (rows scaled in float32, rounded once to bf16; recorded in `vendor.json`).
 
 ## aiortc — optional WebRTC dependency
 

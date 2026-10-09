@@ -581,6 +581,11 @@ class VLMEngine:
         weights = {}
         for wf in weight_files:
             weights.update(mx.load(wf))
+        ple_table_scales = {}
+        if config.get("model_type") == "qwen4_exp":
+            from .ple_scale import collect_table_scales
+
+            ple_table_scales = collect_table_scales(weights)
 
         reason = unsupported_pack_reason(config, weights)
         if reason:
@@ -701,6 +706,16 @@ class VLMEngine:
             weights = {k: v for k, v in weights.items() if k in model_params}
 
         model.load_weights(list(weights.items()))
+        if ple_table_scales:
+            from .ple_scale import apply_table_scales
+
+            n_scaled = apply_table_scales(model.language_model, ple_table_scales)
+            if n_scaled:
+                logger.info(
+                    "Qwen4 PLE: %d n-gram table(s) scaled by %s",
+                    n_scaled,
+                    sorted(set(ple_table_scales.values())),
+                )
         mx.eval(model.parameters())
         model.eval()
         return model

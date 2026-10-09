@@ -2244,6 +2244,21 @@
       "why": "Read the 48 per-token PLE rows with parallel pread instead of serial memmap fancy-index page faults; returned arrays, row cache and counters are byte-identical (tests/unit/test_ple_parallel.py).",
       "source_sha256": "4a31310895b56550eb8772abe8380dbc4b5a00895fd2b5945e3d1a8541e29b98",
       "installed_version": "0.7.6"
+    },
+    {
+      "kind": "patches",
+      "path": "python/yunshu_engine/ple_scale.py",
+      "repo": "https://github.com/Blaizzy/mlx-vlm",
+      "clone": "reference/mlx-vlm",
+      "package": "mlx-vlm",
+      "module": "mlx_vlm.models.qwen4_exp.language",
+      "symbol": "Qwen4ExpNGramEmbedding.__call__",
+      "signature": "(self, input_ids: mx.array, cache: Optional[ArraysCache])",
+      "license": "MIT",
+      "commit": "v0.7.6",
+      "why": "Packs such as Jundot oQ4e ship the PLE table's magnitude as ngram_embedding.weight_scale (0.0002); upstream drops that tensor so PLE rows are ~5000x too large. Rows are scaled in float32 and rounded once to bf16 after the table lookup.",
+      "source_sha256": "9abc42a47687e91f8ee80ae7e59fdd34a86ec46b926ac677e081bf0e58b534cf",
+      "installed_version": "0.7.6"
     }
   ],
   "watch": [
