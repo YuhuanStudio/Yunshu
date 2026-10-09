@@ -396,9 +396,9 @@
       "commit": "deb9f00a",
       "license": "Apache-2.0",
       "why": "deprecated port of the oMLX MTP patch (PR 990)",
-      "reviewed_commit": "25aebb3ee0bb052a264241953bef6820f102dd0b",
-      "reviewed_date": "2026-10-08",
-      "review_reason": "Retain the independently qualified local serving routes. 0eb8df1f adds verify-route introspection and changes sigmoid rounding; local GDN admission already probes its arithmetic. c82ab6dd/3f585300 widen Qwen4/MoE batching, not the 27B default. Cache/memory changes use upstream scheduler/SSD contracts. No unmeasured shape or numerical admission is broadened."
+      "reviewed_commit": "0b07e88ea507d0037264c0931467dd6b44d1384c",
+      "reviewed_date": "2026-10-09",
+      "review_reason": "Reviewed upstream subjects: perf(mtp): context-copy drafts and per-request priming for DeepSeek DSpark (#4363); perf(prefill): batch concurrent prompt prefills into one forward (#4361). Candidates logged for the backlog, not ported in this sync: ce70139b Q8 GS64 W8A8 prefill projections on M5 (activation quantization is lossy, would be a user option), batched concurrent prefill 4c4e290c. Scheduler/web-UI/memory-guard changes target a different serving design."
     },
     {
       "kind": "derived",
@@ -452,9 +452,9 @@
       "commit": "deb9f00a",
       "license": "Apache-2.0",
       "why": "process memory limit enforcer, simplified to one asyncio loop",
-      "reviewed_commit": "25aebb3ee0bb052a264241953bef6820f102dd0b",
-      "reviewed_date": "2026-10-08",
-      "review_reason": "Retain the independently qualified local serving routes. 0eb8df1f adds verify-route introspection and changes sigmoid rounding; local GDN admission already probes its arithmetic. c82ab6dd/3f585300 widen Qwen4/MoE batching, not the 27B default. Cache/memory changes use upstream scheduler/SSD contracts. No unmeasured shape or numerical admission is broadened."
+      "reviewed_commit": "0b07e88ea507d0037264c0931467dd6b44d1384c",
+      "reviewed_date": "2026-10-09",
+      "review_reason": "Reviewed upstream subjects: fix(memory-guard): count a quarter of other apps' memory in balanced (#4349) (#4372). Candidates logged for the backlog, not ported in this sync: ce70139b Q8 GS64 W8A8 prefill projections on M5 (activation quantization is lossy, would be a user option), batched concurrent prefill 4c4e290c. Scheduler/web-UI/memory-guard changes target a different serving design."
     },
     {
       "kind": "derived",
@@ -497,9 +497,9 @@
       "commit": "64ea011cb65f14d9ce2737e60db9a4ae91ed7441",
       "license": "MIT",
       "why": "Native MLX 0.32.3 NAX QMM accumulation over lane-tiled weights/paired scales; only input loader and M tile differ. Installed headers are version-guarded and source-hashed into the prefill arithmetic namespace.",
-      "reviewed_commit": "6553c47ba6500e877d7348dd576c021c43a22cf7",
-      "reviewed_date": "2026-10-08",
-      "review_reason": "f8aaf49d qmv float bias sums and partial output tiles are transcribed by qmvsync 20c67dee with version selection. Retain mlx<0.32.4 until a genuine stock source build passes M5 gates; missing Metal compiler prevents admission. Local NAX prefill is independently qualified, not blindly re-copied."
+      "reviewed_commit": "43f5eaae97a342ab34216c79ee981ccc77f3d66f",
+      "reviewed_date": "2026-10-09",
+      "review_reason": "Reviewed upstream subjects: Add 1-bit affine quantization support (Metal) (#3161). Both land after 0.32.3 and stay behind the mlx<0.32.4 cap: 1-bit affine quantization (Metal) and a negative-stride index fix in masked_scatter/SDPA mask/segmented_gemm; re-read when the cap is lifted."
     },
     {
       "kind": "derived",
@@ -837,9 +837,9 @@
       "commit": "1b97ff11",
       "license": "Apache-2.0",
       "why": "TeaCache config and hook",
-      "reviewed_commit": "c32a26a8450b553d60436d211fa4f67fca31bf52",
-      "reviewed_date": "2026-10-08",
-      "review_reason": "Upstream TeaCache changes add native family/SP support. Keep local lossy cache as an explicit option; no supported 27B shared path changes or lossless default is inferred."
+      "reviewed_commit": "ee81f33001922f8d91dd09da0a57ee1531a8df82",
+      "reviewed_date": "2026-10-09",
+      "review_reason": "Reviewed upstream subjects: [Bugfix] Fix missing SenseNova-U1 TeaCache position embeddings (#8260); [Bugfix] Calibrate Z-Image TeaCache coefficients and add ZImageAdapter (#8408). Candidate logged for the backlog: d8fa463e hybrid Mamba prefix-cache boundary fix, compare with the local exact hybrid checkpoint boundaries. Other commits are server-scale frontend work."
     },
     {
       "kind": "inspired",
@@ -852,9 +852,9 @@
       "commit": "924707f1",
       "license": "Apache-2.0",
       "why": "block pool adapted for UMA",
-      "reviewed_commit": "3ca00a8261c7790ba7487e2001ab9004ad8065f2",
-      "reviewed_date": "2026-10-08",
-      "review_reason": "Retain independent single-node cache/proposer code. BlockPool change is a docstring correction; GPU NGram MRV2 signatures and speculative metrics aggregation belong to a different execution contract. New mRoPE/grammar/cache fixes are backlog probes, not CUDA code ports."
+      "reviewed_commit": "18c19eaf239f09bc2543637c73f3b2d05f9bf5c5",
+      "reviewed_date": "2026-10-09",
+      "review_reason": "Reviewed upstream subjects: [Bugfix][Prefix caching] Fix inconsistent hybrid Mamba prefix cache boundaries (#60533). Candidate logged for the backlog: d8fa463e hybrid Mamba prefix-cache boundary fix, compare with the local exact hybrid checkpoint boundaries. Other commits are server-scale frontend work."
     },
     {
       "kind": "inspired",
@@ -891,9 +891,9 @@
       "commit": "deb9f00a",
       "license": "Apache-2.0",
       "why": "per-model runtime settings loaded from the model directory",
-      "reviewed_commit": "25aebb3ee0bb052a264241953bef6820f102dd0b",
-      "reviewed_date": "2026-10-08",
-      "review_reason": "Retain the independently qualified local serving routes. 0eb8df1f adds verify-route introspection and changes sigmoid rounding; local GDN admission already probes its arithmetic. c82ab6dd/3f585300 widen Qwen4/MoE batching, not the 27B default. Cache/memory changes use upstream scheduler/SSD contracts. No unmeasured shape or numerical admission is broadened."
+      "reviewed_commit": "0b07e88ea507d0037264c0931467dd6b44d1384c",
+      "reviewed_date": "2026-10-09",
+      "review_reason": "Reviewed upstream subjects: refactor: split the web UI into apps/omlx-web and add serve --headless (#4359). Candidates logged for the backlog, not ported in this sync: ce70139b Q8 GS64 W8A8 prefill projections on M5 (activation quantization is lossy, would be a user option), batched concurrent prefill 4c4e290c. Scheduler/web-UI/memory-guard changes target a different serving design."
     },
     {
       "kind": "inspired",
@@ -906,9 +906,9 @@
       "commit": "deb9f00a",
       "license": "Apache-2.0",
       "why": "mRoPE delta capture and batch decode positions",
-      "reviewed_commit": "b75060e85560cdb49448d4c91c08bf8a6c91fd0d",
-      "reviewed_date": "2026-10-08",
-      "review_reason": "Reviewed eight scheduler.py commits (MiniMax grammar after thinking, qwen4 prefill route, paged KV out of completion snapshots, MLX 0.32.3 upgrade, SSD-streamed MoE experts). None touches the mRoPE position algorithm this file is inspired by; Yunshu keeps mlx<0.32.4. No port."
+      "reviewed_commit": "0b07e88ea507d0037264c0931467dd6b44d1384c",
+      "reviewed_date": "2026-10-09",
+      "review_reason": "Reviewed upstream subjects: fix: exclude resumed prefill work from cached tokens (#4383); perf(prefill): batch concurrent prompt prefills into one forward (#4361); feat(server): stream prefill progress with return_progress (#4362). Candidates logged for the backlog, not ported in this sync: ce70139b Q8 GS64 W8A8 prefill projections on M5 (activation quantization is lossy, would be a user option), batched concurrent prefill 4c4e290c. Scheduler/web-UI/memory-guard changes target a different serving design."
     },
     {
       "kind": "inspired",
@@ -947,7 +947,10 @@
       ],
       "commit": "deb9f00a",
       "license": "Apache-2.0",
-      "why": "per-request prefill progress tracker"
+      "why": "per-request prefill progress tracker",
+      "reviewed_commit": "0b07e88ea507d0037264c0931467dd6b44d1384c",
+      "reviewed_date": "2026-10-09",
+      "review_reason": "Reviewed upstream subjects: feat(server): stream prefill progress with return_progress (#4362). Candidates logged for the backlog, not ported in this sync: ce70139b Q8 GS64 W8A8 prefill projections on M5 (activation quantization is lossy, would be a user option), batched concurrent prefill 4c4e290c. Scheduler/web-UI/memory-guard changes target a different serving design."
     },
     {
       "kind": "inspired",
@@ -999,9 +1002,9 @@
       "commit": "a0ba1968",
       "license": "Apache-2.0",
       "why": "radix-tree prefix matching",
-      "reviewed_commit": "943621c3364de6948fc02ee13c55b4f1cdf97f3a",
-      "reviewed_date": "2026-10-08",
-      "review_reason": "Reviewed 5a4d01a3 match_prefix returning only the matched length with KV indices read off the node path; an SGLang radix-tree API refactor, local prefix match already returns lengths from its own tree. No port."
+      "reviewed_commit": "14e3414513bc0a4b54ed6041f778ab5dc3fa5f9e",
+      "reviewed_date": "2026-10-09",
+      "review_reason": "Reviewed upstream subjects: [MemCache] Skip KV events and eviction config on a disabled radix cache (#43253); [MemCache] Report no prefix sharing from a disabled `RadixCache` (#43197); [Scheduler] Refresh waiting requests' cached prefixes under FCFS-like policies with LRU ev. Candidate logged for the backlog: e902207a block verification for the DFlash family (compare with local DFlash verify; no port without an A/B). Disabled-radix-cache and FCFS cache refresh changes do not apply to the single-node prefix cache."
     },
     {
       "kind": "inspired",
@@ -1063,9 +1066,9 @@
       "local_changes": [
         "structured_outputs request field folded into Yunshu's grammar/response_format"
       ],
-      "reviewed_commit": "3ca00a8261c7790ba7487e2001ab9004ad8065f2",
-      "reviewed_date": "2026-10-08",
-      "review_reason": "Retain independent single-node cache/proposer code. BlockPool change is a docstring correction; GPU NGram MRV2 signatures and speculative metrics aggregation belong to a different execution contract. New mRoPE/grammar/cache fixes are backlog probes, not CUDA code ports."
+      "reviewed_commit": "18c19eaf239f09bc2543637c73f3b2d05f9bf5c5",
+      "reviewed_date": "2026-10-09",
+      "review_reason": "Reviewed upstream subjects: [Frontend] Add return_mm_kwargs to render requests (#60728). Candidate logged for the backlog: d8fa463e hybrid Mamba prefix-cache boundary fix, compare with the local exact hybrid checkpoint boundaries. Other commits are server-scale frontend work."
     },
     {
       "kind": "inspired",
@@ -1154,7 +1157,10 @@
       "license": "Apache-2.0",
       "local_changes": [
         "drain timeout 0 aborts in-flight requests (vLLM shutdown_timeout semantics)"
-      ]
+      ],
+      "reviewed_commit": "18c19eaf239f09bc2543637c73f3b2d05f9bf5c5",
+      "reviewed_date": "2026-10-09",
+      "review_reason": "Reviewed upstream subjects: [Frontend] Accept each connection on the least loaded API worker (#60723). Candidate logged for the backlog: d8fa463e hybrid Mamba prefix-cache boundary fix, compare with the local exact hybrid checkpoint boundaries. Other commits are server-scale frontend work."
     },
     {
       "kind": "inspired",
@@ -2252,7 +2258,9 @@
       ],
       "why": "new or changed Qwen3.5-family kernels we may want",
       "commit": "25aebb3ee0bb052a264241953bef6820f102dd0b",
-      "reviewed_date": "2026-10-08"
+      "reviewed_date": "2026-10-09",
+      "reviewed_commit": "0b07e88ea507d0037264c0931467dd6b44d1384c",
+      "review_reason": "Reviewed upstream subjects: refactor(qwen35): drop the OMLX_OQ_A8 env switches; perf(qwen35): run Q8 GS64 prefill projections as W8A8 on M5 (#4350). Candidates logged for the backlog, not ported in this sync: ce70139b Q8 GS64 W8A8 prefill projections on M5 (activation quantization is lossy, would be a user option), batched concurrent prefill 4c4e290c. Scheduler/web-UI/memory-guard changes target a different serving design."
     },
     {
       "repo": "https://github.com/Blaizzy/mlx-vlm",
@@ -2294,9 +2302,9 @@
       "why": "quantized matmul / NAX kernels",
       "pin_package": "mlx",
       "commit": "6553c47ba6500e877d7348dd576c021c43a22cf7",
-      "reviewed_date": "2026-10-08",
-      "reviewed_commit": "3c40e8f92d0cce0866fc2f436f9b5096cf3b0ea7",
-      "review_reason": "Reviewed 3c40e8f9 thin-N NAX GEMM (new steel_gemm_thin_nax kernels, stock-only; local verify/decode kernels do not call it) and 494c8a6c split-K quantized-matmul partials in float32 (changes stock qmm_splitk rounding; stock path is not used by the batch-invariant lane). Both land after 0.32.3; the mlx<0.32.4 cap stays until a genuine source build passes the long identity."
+      "reviewed_date": "2026-10-09",
+      "reviewed_commit": "43f5eaae97a342ab34216c79ee981ccc77f3d66f",
+      "review_reason": "Reviewed upstream subjects: Fix metal negative stride index in masked_scatter/scatter/SDPA mask/segmented_gemm (#4650); Add 1-bit affine quantization support (Metal) (#3161). Both land after 0.32.3 and stay behind the mlx<0.32.4 cap: 1-bit affine quantization (Metal) and a negative-stride index fix in masked_scatter/SDPA mask/segmented_gemm; re-read when the cap is lifted."
     },
     {
       "repo": "https://github.com/ashhart/TensorFold",
@@ -2315,7 +2323,10 @@
         "**"
       ],
       "why": "native Metal runtime using M5 Neural Accelerators (MPP) for prefill/GEMM",
-      "commit": "128bdd73"
+      "commit": "128bdd73",
+      "reviewed_commit": "24badc8dd173e4111b64996a718d0e056405ea62",
+      "reviewed_date": "2026-10-09",
+      "review_reason": "Reviewed upstream subjects: sync: open-core source for 0.3.0. Independent local code retained; no port in this sync."
     },
     {
       "repo": "https://github.com/sgl-project/sglang",
@@ -2327,9 +2338,9 @@
       ],
       "why": "radix prefix cache, speculative decoding, structured output",
       "commit": "7760d5264ac16b85392aefb1bf5c13ce38d9632e",
-      "reviewed_date": "2026-10-08",
-      "reviewed_commit": "943621c3364de6948fc02ee13c55b4f1cdf97f3a",
-      "review_reason": "Reviewed 5a4d01a3 match_prefix returns only matched length, b3e6c87b single KV-loc translation, 508ddc85 DFLASH/DSPARK admission with fused draft KV under unified memory. Scheduler-internal refactors of a different cache design; no local equivalent changes. Independent single-node code retained."
+      "reviewed_date": "2026-10-09",
+      "reviewed_commit": "14e3414513bc0a4b54ed6041f778ab5dc3fa5f9e",
+      "review_reason": "Reviewed upstream subjects: [MemCache] Skip KV events and eviction config on a disabled radix cache (#43253); [MemCache] Report no prefix sharing from a disabled `RadixCache` (#43197); [Scheduler] Refresh waiting requests' cached prefixes under FCFS-like policies with LRU ev; [Speculative] Support block verification for the DFlash family (#43012). Candidate logged for the backlog: e902207a block verification for the DFlash family (compare with local DFlash verify; no port without an A/B). Disabled-radix-cache and FCFS cache refresh changes do not apply to the single-node prefix cache."
     },
     {
       "repo": "https://github.com/vllm-project/vllm",
@@ -2343,9 +2354,9 @@
       ],
       "why": "n-gram / suffix / MTP proposers, block pool, mRoPE",
       "commit": "3ca00a8261c7790ba7487e2001ab9004ad8065f2",
-      "reviewed_date": "2026-10-08",
-      "reviewed_commit": "458ba2edf85bc9b7ebc0d5141f34ea658520faf5",
-      "review_reason": "Reviewed e161a079 free-KV-queue overhead reduction in the paged block pool; Yunshu has no block pool. No port."
+      "reviewed_date": "2026-10-09",
+      "reviewed_commit": "18c19eaf239f09bc2543637c73f3b2d05f9bf5c5",
+      "review_reason": "Reviewed upstream subjects: [Bugfix][Prefix caching] Fix inconsistent hybrid Mamba prefix cache boundaries (#60533). Candidate logged for the backlog: d8fa463e hybrid Mamba prefix-cache boundary fix, compare with the local exact hybrid checkpoint boundaries. Other commits are server-scale frontend work."
     },
     {
       "repo": "https://github.com/ggml-org/llama.cpp",
@@ -2399,9 +2410,9 @@
       ],
       "why": "MLX serving engine: tools, caching, agent runtime",
       "commit": "082d72230417bcc5a24ff16e44d70c62a8c09049",
-      "reviewed_date": "2026-10-08",
-      "reviewed_commit": "e77bbeb0322d0e7c0cc671accfd0ea24672915b5",
-      "review_reason": "Reviewed seven commits through e77bbeb0: typed request refusals/model-window cap, family/GLM prompt-store retention, thinking-off nonstream content, base runtime packaging and CLI source preflight; desktop localization excluded. Local context budget and request-local reasoning already exist; add cross-surface regressions and optional-runtime diagnostics, not TensorFold/native or desktop code. See U015-R2-04/05/06."
+      "reviewed_date": "2026-10-09",
+      "reviewed_commit": "45842692b6198c7f4a2b7e543e218e9f7752a6c3",
+      "review_reason": "Reviewed upstream subjects: feat(cli): support cache-only model loading (#4387); Lock automatic prefix cache persistence across servers (#4381); feat(scheduler): bound a streaming request's stall while another prompt prefills (#4338); fix(agents): support OpenCode 2.x provider and service flow (#4380); feat(system-one): serve Cloudflare Clef on native MLX (#4365); feat(scheduler): wait for a running prefill of the same prompt prefix (#4345); +3 more. Independent local code retained; no port in this sync."
     },
     {
       "repo": "https://github.com/waybarrios/vllm-mlx",
@@ -2436,9 +2447,9 @@
       ],
       "why": "experimental Apple Silicon inference runtime for the next Qwen generation",
       "commit": "3d0b9d58",
-      "reviewed_commit": "92ada04cc7a59c3263e214b0a1127924fedd52db",
-      "reviewed_date": "2026-10-08",
-      "review_reason": "Reviewed full 362-commit log (356 watched in prior receipt), new-file inventory and mechanism diffs/tests through 92ada04: shared snapshot ledger/value retention, exact route/numerics receipts, PLD committed-segment composition, completion-cost prefill stalls, MoE NAX width/mask admission, power/thermal sampling, semantic capsules, rollback/publication guards and API contracts. Capsule/HySparse2 training changes alter semantics and are not lossless defaults; no native kernels or throughput control plane imported. See U015-R2-10..18."
+      "reviewed_commit": "65d88d0d4bfd08d05b9a01d57644c7cf0a73a961",
+      "reviewed_date": "2026-10-09",
+      "review_reason": "Reviewed upstream subjects: Replace Apple copyright headers on two lab-written model files; Never publish MCP code from the export tool; Bind Flash-Next expert arithmetic to an APCv2 namespace and fix atlas replay; Record declared known model behaviour in the qualifier and keep going; Add the Mellum 2.1 Thinking adapter; Bound cancellation qualification to the served context; fix stream whitespace; +23 more. Independent local code retained; no port in this sync."
     },
     {
       "repo": "https://github.com/VincentGourbin/qwen38-mlx-swift",
@@ -2459,9 +2470,9 @@
       ],
       "why": "fused add+norm and other Metal kernels in a Zig MLX server",
       "commit": "6281442d",
-      "reviewed_commit": "459a68b75a940b1d1d1c286615b916d087c1d7ab",
-      "reviewed_date": "2026-10-08",
-      "review_reason": "Reviewed 431b353 omp launcher sends thinking level as reasoning_effort (CLI launch glue only). No server-side change to port."
+      "reviewed_commit": "a21784b08d71fb18e5f278a50f01e7921ae29cc4",
+      "reviewed_date": "2026-10-09",
+      "review_reason": "Reviewed upstream subjects: feat(console): rebuild the web console as app-web, one built src/html/index.html; fix(registry): auto --max-resident-mem is Metal's working-set limit, not 80% of it; feat(music): YuE2-3B songs on /v1/audio/music-generations and in the Music tab; feat(linux): CUDA fused hd-256/512 attention, one weight read per batch, Linux build fixes; Merge branch 'main' of github.com:ddalcu/mlx-serve into linux-cuda; feat(linux): CUDA media engines, MLX cache patch, f16 packs at bf16; +4 more. Independent local code retained; no port in this sync."
     },
     {
       "repo": "https://github.com/Blaizzy/mlx-audio",
@@ -2473,7 +2484,9 @@
       ],
       "why": "ASR / TTS backend we depend on",
       "commit": "200aac3c64e5140dbe0daa4570dcb129f0f7afc9",
-      "reviewed_date": "2026-10-08"
+      "reviewed_date": "2026-10-09",
+      "reviewed_commit": "6cf186c03ece4c7468cdfcfd25d2c4e73e0a84ea",
+      "review_reason": "Reviewed upstream subjects: Merge pull request #1006 from lyonsno/cc/warpstorm-nemotron-cache-1008; Merge pull request #992 from Lazarus-931/feat/nemotron-speech-streaming; Merge pull request #977 from x-n2o/fish-s2-streaming; Merge pull request #993 from yoshphys/feature/irodori-tts-v4-large; Reuse Nemotron predictor results across blank frames; Fix Nemotron config formatting; +3 more. Independent local code retained; no port in this sync."
     },
     {
       "repo": "https://github.com/Blaizzy/mlx-embeddings",
@@ -2493,7 +2506,9 @@
       ],
       "why": "TeaCache diffusion step cache",
       "commit": "c32a26a8450b553d60436d211fa4f67fca31bf52",
-      "reviewed_date": "2026-10-08"
+      "reviewed_date": "2026-10-09",
+      "reviewed_commit": "ee81f33001922f8d91dd09da0a57ee1531a8df82",
+      "review_reason": "Reviewed upstream subjects: [Bugfix] Fix missing SenseNova-U1 TeaCache position embeddings (#8260); [Bugfix] Calibrate Z-Image TeaCache coefficients and add ZImageAdapter (#8408). Candidate logged for the backlog: d8fa463e hybrid Mamba prefix-cache boundary fix, compare with the local exact hybrid checkpoint boundaries. Other commits are server-scale frontend work."
     },
     {
       "repo": "https://github.com/guidance-ai/llguidance",
@@ -2973,7 +2988,7 @@
   "package_reviews": {
     "huggingface-hub": {
       "installed_version": "1.33.0",
-      "latest_version": "2.1.1",
+      "latest_version": "2.2.0",
       "blocked_by": [
         "tokenizers",
         "diffusers"
