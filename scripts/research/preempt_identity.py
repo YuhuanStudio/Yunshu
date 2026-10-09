@@ -32,7 +32,11 @@ def verdict(plain: list[str], scoped: list[str], evals: int) -> dict:
     elif plain != scoped:
         problems.append(
             "chunks differ: "
-            + ",".join(str(i) for i, (a, b) in enumerate(zip(plain, scoped)) if a != b)
+            + ",".join(
+                str(i)
+                for i, (a, b) in enumerate(zip(plain, scoped, strict=True))
+                if a != b
+            )
         )
     if evals <= 0:
         problems.append("the preempt scope evaluated nothing (hook not engaged)")
