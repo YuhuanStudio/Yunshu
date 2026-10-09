@@ -110,7 +110,21 @@ async def run(args):
         return (time.perf_counter() - t_start) * 1e3 / args.steps
 
     results = {}
-    for tag in ("real", "noPLE"):
+    from yunshu_engine import const_cache
+
+    plan = [
+        ("real", "off"),
+        ("real", "on"),
+        ("noPLE", "off"),
+        ("noPLE", "on"),
+        ("real", "off"),
+        ("real", "on"),
+    ]
+    for tag, const in plan:
+        if const == "on":
+            const_cache.install()
+        else:
+            const_cache.uninstall()
         orig = ps.QuantizedMMapNGramEmbedding.__call__
         if tag == "noPLE":
 
@@ -131,6 +145,8 @@ async def run(args):
         row = {
             "kind": "decode",
             "ple": tag,
+            "const_cache": const,
+            "const_cache_stats": const_cache.stats(),
             "serial_build": summarize(b),
             "serial_eval": summarize(e),
             "serial_total_ms": round(
@@ -149,7 +165,8 @@ async def run(args):
         }
         row["serial_tok_s"] = tok_s(row["serial_total_ms"])
         row["pipelined_tok_s"] = tok_s(p)
-        results[tag] = row
+        if const == "on":
+            results[tag] = row
         emit(row)
 
     # No per-layer async_eval: build = pure Python/C++ graph tracing, eval = encode + GPU execution.
