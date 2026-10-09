@@ -218,7 +218,7 @@ export function footerPills(input: FooterInput): FooterPill[] {
   pills.push({
     key: "now",
     label: loadingModel ? t("shell.engine.live.loading") : phaseLabels[a.phase],
-    value,
+    value: value ?? "\u00a0",
     // The same state-to-colour map as the top pill: decode green, other work amber, idle no dot.
     tone:
       a.phase === "decode"
@@ -227,7 +227,8 @@ export function footerPills(input: FooterInput): FooterPill[] {
           ? "neutral"
           : "warning",
     dot: a.phase !== "idle" || !!loadingModel,
-    minCh: a.phase === "decode" ? 9 : a.phase === "prefill" ? 4 : undefined,
+    // the value area is always as wide as "1234 tok/s", so the pills after it never move
+    minCh: 9,
     tween,
     help:
       a.phase === "idle"
@@ -237,6 +238,25 @@ export function footerPills(input: FooterInput): FooterPill[] {
           : a.phase === "prefill"
             ? t("shell.footer.now.help.prefill")
             : t("shell.footer.now.help.queued"),
+  });
+  // Always present and before the pills that come and go (swap, GPU), so nothing after it moves.
+  pills.push({
+    key: "load",
+    label: t("shell.footer.load.label"),
+    value:
+      a.counts.queued > 0
+        ? t("shell.footer.load.both", {
+            active: a.counts.active,
+            queued: a.counts.queued,
+          })
+        : t("shell.footer.load.active", { active: a.counts.active }),
+    tone: "neutral",
+    dot: false,
+    minCh: 16,
+    help: t("shell.footer.load.help", {
+      active: a.counts.active,
+      queued: a.counts.queued,
+    }),
   });
   const swap = input.ledger?.host.swap_used_gb;
   if (finite(swap) && swap >= 0.05)
@@ -255,26 +275,8 @@ export function footerPills(input: FooterInput): FooterPill[] {
       value: `${n(input.gpuBusy * 100)}%`,
       tone: "neutral",
       dot: false,
-      minCh: 3,
+      minCh: 4,
       help: t("shell.footer.gpu.help"),
-    });
-  if (a.counts.active > 0 || a.counts.queued > 0)
-    pills.push({
-      key: "load",
-      label: t("shell.footer.load.label"),
-      value:
-        a.counts.queued > 0
-          ? t("shell.footer.load.both", {
-              active: a.counts.active,
-              queued: a.counts.queued,
-            })
-          : t("shell.footer.load.active", { active: a.counts.active }),
-      tone: "neutral",
-      dot: false,
-      help: t("shell.footer.load.help", {
-        active: a.counts.active,
-        queued: a.counts.queued,
-      }),
     });
 
   return pills;

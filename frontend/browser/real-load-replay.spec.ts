@@ -81,7 +81,7 @@ for (const [name, project] of [
       const page = await ctx.newPage();
       await replay(page);
       await page.goto(`/console/#/${route}`, { waitUntil: "domcontentloaded" });
-      await page.waitForTimeout(1800);
+      await page.waitForTimeout(4500); // first paint and first host sample are not "load"
       await page.evaluate(() => window.__review.reset());
       await page.waitForTimeout(SECONDS * 1000);
       const rec = await page.evaluate(() => window.__review.stop());

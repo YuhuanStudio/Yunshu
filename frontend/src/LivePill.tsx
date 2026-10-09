@@ -25,14 +25,14 @@ export function LivePill({
       data-phase={pill.phase}
     >
       <StatusIndicator status={pill.tone} />
-      <span className="leading-4 text-foreground">{pill.phase}</span>
-      {pill.detail && (
-        // Wide enough for the longest "prefill 100% · decode 123.4 tok/s": the pill keeps its width
-        // while the numbers change.
-        <Slot ch={32} className="hidden leading-4 sm:inline-block">
-          {pill.detail}
-        </Slot>
-      )}
+      <Slot ch={6} className="leading-4 text-foreground">
+        {pill.phase}
+      </Slot>
+      {/* As wide as the longest "prefill 100% · decode 123.4 tok/s", idle or busy: the pill and the
+          cluster around it keep their width while phase and numbers change. */}
+      <Slot ch={32} className="hidden leading-4 sm:inline-block">
+        {pill.detail}
+      </Slot>
     </span>
   );
 }

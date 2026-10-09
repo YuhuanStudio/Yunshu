@@ -59,12 +59,12 @@ const input = (status: EngineStatus | null, extra = {}) => ({
 });
 const keys = (p: { key: string }[]) => p.map((x) => x.key);
 
-test("idle online: engine, now and memory only; no last-request pills", () => {
+test("idle online: engine, memory, now and a steady load pill; no last-request pills", () => {
   const pills = footerPills(input(mk()));
-  assert.deepEqual(keys(pills), ["engine", "memory", "now"]);
+  assert.deepEqual(keys(pills), ["engine", "memory", "now", "load"]);
   assert.equal(pills[0].value, "Qwen3.8-27B");
   assert.equal(pills[2].label, "閒置");
-  assert.equal(pills[2].value, undefined);
+  assert.equal(pills[2].value, "\u00a0");
   assert.ok(!JSON.stringify(pills).includes("TTFT"));
   assert.ok(pills[0].help.includes("2 小時 1 分"));
   // Running is the success tone on the dot; idle work has no dot and stays neutral.
@@ -115,7 +115,7 @@ test("memory tone follows pressure level, swap and gpu only when present", () =>
       }),
     }),
   );
-  assert.deepEqual(keys(calm), ["engine", "memory", "now"]);
+  assert.deepEqual(keys(calm), ["engine", "memory", "now", "load"]);
 });
 
 test("offline pills carry the cause; online-only pills disappear", () => {

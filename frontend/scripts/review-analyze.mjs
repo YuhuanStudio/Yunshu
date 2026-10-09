@@ -87,7 +87,7 @@ export const PAGE_RECORDER = `
       for (const e of list.getEntries()) entries.push({ t: Math.round(e.startTime), value: e.value, hadRecentInput: e.hadRecentInput, sources: (e.sources || []).slice(0, 4).map((x) => { const n = x.node; const d = n ? (n.getAttribute && n.getAttribute('data-testid')) || ((n.tagName || '#text').toLowerCase() + '.' + String(n.className || '').split(' ')[0]) : '?'; return { node: d + ':' + String(n.textContent || '').trim().slice(0, 14), dy: Math.round(x.currentRect.y - x.previousRect.y), dx: Math.round(x.currentRect.x - x.previousRect.x), dw: Math.round(x.currentRect.width - x.previousRect.width), dh: Math.round(x.currentRect.height - x.previousRect.height), y: Math.round(x.currentRect.y) }; }) });
     }).observe({ type: "layout-shift", buffered: true });
   } catch {}
-  const SEL = "main [data-testid], main section, main li, main tr, main [class*='rounded-'], main h1, main h2, main button";
+  const SEL = "main [data-testid], main section, main li, main tr, main [class*='rounded-'], main h1, main h2, main button, header [class*='rounded-'], header [data-testid], [data-testid='live-phase'], li[class*='inline-flex']";
   const keyOf = (el) => (el.getAttribute("data-testid") || el.tagName.toLowerCase() + "." + (el.className && el.className.toString().split(" ")[0])) + ":" + (el.textContent || "").trim().slice(0, 14);
   const sample = () => {
     const scroller = document.querySelector('[data-testid="page-scroll"]');
