@@ -123,8 +123,10 @@ const settingdesc = {
     "APC SSD 层的大小上限（GiB），整个目录共用一份预算（跨命名空间先淘汰最久未使用的文件；0 表示不设上限，仍受剩余空间保留限制）。未设置时为卷的四分之一，最多 64 GiB。27B 检查点每个 token 约 130 KiB，因此 64 GiB 约可容纳 500K token。",
   YUNSHU_PREFILL_MATMUL:
     "M5 级 GPU 上 Qwen3.5 系列 VLM 运行器：超过 512 行的预填充块所用的矩阵乘法。`stock` 对未分块的权重运行 MLX 量化矩阵乘法（27B 冷预填充约快 25%，块的比特结果取决于行数）；`lane` 对所有行数都使用行不变的 lane 内核。属于每个 APC 键和 SSD 命名空间的一部分。",
+  YUNSHU_PLE_READ_THREADS:
+    "Qwen3.8-Flash-Next 从 SSD 读取 n-gram 嵌入（PLE）时，用多少线程并行读取每个 token 的 48 行 PLE，而不是逐行读取（新文本每个 token 约省 7 ms）。读出的数据逐位相同，输出不变；0 表示沿用上游逐行读取。",
   YUNSHU_PREFILL_BUFFER_CACHE_GB:
-    "VLM 运行器：在预填充步骤之间保留的 MLX 已释放缓冲缓存大小（GiB）。未设置时为物理内存的 5%，最多 6 GiB。可让长前缀恢复的缓冲在请求之间保持热状态；0 表示沿用上游每个块之后清除。仅影响分配器，输出不变。",
+    "VLM 运行器：在预填充步骤之间保留的 MLX 已释放缓冲缓存大小（GiB）。未设置时为物理内存的 5%，最多 6 GiB；常驻权重使内存余量很少时改为 0.5 GiB（可压低超大模型长预填充的峰值）。可让长前缀恢复的缓冲在请求之间保持热状态；0 表示沿用上游每个块之后清除。仅影响分配器，输出不变。",
   YUNSHU_PREFILL_GDN:
     "Qwen3.5 系列 VLM 运行器：64 个 token 以上预填充块的 GatedDeltaNet 内核。`chunked` 使用 MLX 的 `mx.fast.gated_delta_update`（每层快 2.7 倍，与 `step` 相差在 bf16 舍入内）；`step` 保持 mlx-vlm 的逐 token 内核。属于每个 APC 键和 SSD 命名空间的一部分。",
   YUNSHU_VLM_APC_DISK_TIERS:
