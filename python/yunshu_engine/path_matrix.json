@@ -1833,6 +1833,45 @@
      ]
     }
    }
+  },
+  "qwen4_fused_rmsnorm": {
+   "module": "python/yunshu_engine/kernels/fused_rmsnorm.py",
+   "what": "One Metal kernel for the Qwen4 centered RMSNorm (fixed per-row reduction order); installed with YUNSHU_QWEN4_FUSED_HC",
+   "cells": {
+    "mtp": {
+     "s": "na",
+     "why": "qwen4_exp (Flash-Next) norm kernel exists only for that family, which is served on the generic runner"
+    },
+    "dflash": {
+     "s": "na",
+     "why": "qwen4_exp (Flash-Next) norm kernel exists only for that family, which is served on the generic runner"
+    },
+    "driver": {
+     "s": "na",
+     "why": "qwen4_exp (Flash-Next) norm kernel exists only for that family, which is served on the generic runner"
+    },
+    "batch": {
+     "s": "na",
+     "why": "qwen4_exp (Flash-Next) norm kernel exists only for that family, which is served on the generic runner"
+    },
+    "text": {
+     "s": "na",
+     "why": "qwen4_exp (Flash-Next) norm kernel exists only for that family, which is served on the generic runner"
+    },
+    "loop": {
+     "s": "na",
+     "why": "qwen4_exp (Flash-Next) norm kernel exists only for that family, which is served on the generic runner"
+    },
+    "generic": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/vlm_engine.py",
+       "fused_rmsnorm.install("
+      ]
+     ]
+    }
+   }
   }
  },
  "exclusions": [
@@ -2210,7 +2249,8 @@
   "python/yunshu_engine/kernels/tf_flash_next/base.py": "TensorFold flash_next v1 kernels used by qwen4_fused_hc (kernels/tf_hc_forward.py)",
   "python/yunshu_engine/kernels/tf_flash_next/hc.py": "TensorFold flash_next v1 kernels used by qwen4_fused_hc (kernels/tf_hc_forward.py)",
   "python/yunshu_engine/kernels/tf_flash_next/threads.py": "TensorFold flash_next v1 kernels used by qwen4_fused_hc (kernels/tf_hc_forward.py)",
-  "python/yunshu_engine/kernels/tf_flash_next/inputs.py": "TensorFold flash_next v1 kernels used by qwen4_fused_hc (kernels/tf_hc_forward.py)"
+  "python/yunshu_engine/kernels/tf_flash_next/inputs.py": "TensorFold flash_next v1 kernels used by qwen4_fused_hc (kernels/tf_hc_forward.py)",
+  "python/yunshu_engine/kernels/tf_flash_next/experts.py": "TensorFold flash_next v1 router/expert kernels used by qwen4_fused_hc (kernels/tf_hc_forward.py)"
  },
  "settings": {
   "YUNSHU_MTP": "draft_family_coverage",

@@ -177,7 +177,7 @@ https://github.com/mflux-community/mflux
 
 ## TensorFold flash_next v1 kernels — `python/yunshu_engine/kernels/tf_flash_next/`
 
-`base.py`, `hc.py` (from `src/tensorfold/kernels/qwen/flash_next/v1/`), `threads.py` and `inputs.py`
+`base.py`, `hc.py`, `experts.py` (from `src/tensorfold/kernels/qwen/flash_next/v1/`), `threads.py` and `inputs.py`
 (from `src/tensorfold/kernels/`) are copied from https://github.com/ashhart/TensorFold at commit `17c73e1`
 (v0.6.1), which is licensed under the Apache License, Version 2.0 (releases before 0.6.0 were MIT). Only
 intra-package imports were changed and a credit line was added at the top of each file; the full license

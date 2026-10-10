@@ -309,6 +309,18 @@
         "intra-package imports changed; first line credit comment added"
       ],
       "kind": "vendored"
+    },
+    {
+      "path": "python/yunshu_engine/kernels/tf_flash_next/experts.py",
+      "repo": "https://github.com/ashhart/TensorFold",
+      "clone": "reference/TensorFold",
+      "upstream_path": "src/tensorfold/kernels/qwen/flash_next/v1/experts.py",
+      "commit": "17c73e1",
+      "license": "Apache-2.0",
+      "local_changes": [
+        "intra-package imports changed; first line credit comment added"
+      ],
+      "kind": "vendored"
     }
   ],
   "derived": [
@@ -2360,6 +2372,21 @@
       "commit": "v0.7.6",
       "why": "Packs such as Jundot oQ4e ship the PLE table's magnitude as ngram_embedding.weight_scale (0.0002); upstream drops that tensor so PLE rows are ~5000x too large. Rows are scaled in float32 and rounded once to bf16 after the table lookup.",
       "source_sha256": "9abc42a47687e91f8ee80ae7e59fdd34a86ec46b926ac677e081bf0e58b534cf",
+      "installed_version": "0.7.6"
+    },
+    {
+      "kind": "patches",
+      "path": "python/yunshu_engine/kernels/fused_rmsnorm.py",
+      "repo": "https://github.com/Blaizzy/mlx-vlm",
+      "clone": "reference/mlx-vlm",
+      "package": "mlx-vlm",
+      "module": "mlx_vlm.models.qwen4_exp.language",
+      "symbol": "Qwen4ExpRMSNorm.__call__",
+      "signature": "(self, x: mx.array)",
+      "license": "MIT",
+      "commit": "v0.7.6",
+      "why": "Replace the AsType+Square+Sum+elementwise chain of the Qwen4 centered RMSNorm by one Metal kernel with a fixed per-row reduction order; own implementation.",
+      "source_sha256": "b47a270c1b0eade5e754f879d9a9a4c6dbf8615f757e6f988766e0634622452a",
       "installed_version": "0.7.6"
     }
   ],
