@@ -225,6 +225,7 @@ extend-exclude = [
     "python/yunshu_engine/kernels/tensorfold/lane_qmm.py",
     "python/yunshu_engine/kernels/tensorfold/lane_widen.py",
     "python/yunshu_engine/kernels/tensorfold/inputs.py",
+    "python/yunshu_engine/kernels/tf_flash_next/*.py",
 ]
 
 [tool.ruff.lint]
