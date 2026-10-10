@@ -826,8 +826,9 @@ def part_promote(s, out, a):
     run on the speculative lane (the server log shows "Promoted request")."""
     n_a = int(a.decode_tokens)
     ctx = (a.only_ctx or [1024])[0]
-    text_a = decode_prompt("code", ctx, False)
-    text_b = decode_prompt("prose", ctx, False)
+    kind_a = os.environ.get("TFB_PROMOTE_KIND", "code")
+    text_a = decode_prompt(kind_a, ctx, False)
+    text_b = decode_prompt("prose" if kind_a == "code" else "code", ctx, False)
 
     def send_a():
         return send(s.url, req(s.model, text_a, n_a))

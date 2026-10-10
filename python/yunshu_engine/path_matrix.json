@@ -1803,11 +1803,11 @@
   },
   "lane_promotion": {
    "module": "python/yunshu_engine/vlm_batch_runner.py",
-   "what": "A lone decoding row of the shared batch moves onto the speculative lane at a step boundary (batch to lane transition)",
+   "what": "A lone decoding row of the shared batch moves onto the speculative lane at a step boundary (batch to lane transition). Eligibility mirrors the lane's limits (greedy, no guide/processors/logprobs/thinking budget): widen it in the same change when sampled/guided DFlash lands",
    "cells": {
     "mtp": {
      "s": "missing",
-     "why": "the MTP head needs its own KV over the prompt's target hidden states, which a plain batch row never captured; only the DFlash lane can start with a plain capture round",
+     "why": "MTP head needs prompt hidden states the batch row never captured; capturing last-layer hidden states on the batch path would unlock it later",
      "owner": "decode16",
      "impact": "low",
      "absent": [
