@@ -65,6 +65,25 @@ VLM 路径的限制：视觉语言模型会拒绝 LoRA adapter 和自定义 logi
 
 此表描述的是代码所处理的范围，并不保证某个系列的每个检查点都能配合每项功能工作。
 
+## Qwen3.8-Flash-Next 在 80 GB 内运行(qwen4_exp)
+
+`Jundot/Qwen3.8-Flash-Next-oQ4e-mtp` 磁盘上 106 GB,其中 32 GB 是每层 n-gram 嵌入表(PLE)。Yunshu 从 SSD 逐行读取 PLE,不加载整张表,常驻权重剩 74.3 GB(含 1.5 GB 的 MTP head)。
+
+1. 建立一次外部 PLE 视图(硬链接,不复制数据,原始模型不变;来源与视图必须在同一个磁盘):`python scripts/research/flashnext80_prepare_view.py <pack> <pack>-ple-ssd`。
+2. 以视图启动:`YUNSHU_MAX_MEMORY_GB=74.5 yunshu serve -m <pack>-ple-ssd`。MTP head 会自动使用(每轮一个草稿);APC SSD 层默认开启。
+
+设置内存上限后,Yunshu 会把释放缓冲池保持在 0.5 GiB,并在第一个图片请求前不加载视觉塔。两者均无损;可用 `YUNSHU_PREFILL_BUFFER_CACHE_GB` 覆盖缓冲池。
+
+| 上下文(M5 Max 128 GB,MTP 开,整机内存差值) | 稳态 | 冷 prefill 峰值 | 解码 |
+|---|---:|---:|---:|
+| 1K | 75-76 GB | 77 GB | 45-50 tok/s |
+| 8K | 77 GB | 79 GB | 42 tok/s |
+| 32K | 75 GB | 80 GB | 37-38 tok/s |
+| 约 169K,命中 SSD APC(第二次请求) | 75 GB | 81 GB | 22 tok/s,首 token 1.2 秒 |
+| 约 169K,冷启动 | 75 GB | 84-85 GB | 21 tok/s |
+
+冷 prefill 超過約 32K 時,峰值需要約 83-85 GB(多出的是 prefill 工作記憶體);同一個提示從 SSD 提示快取提供則維持在約 81 GB。開關推測解码、命中或未命中提示快取,輸出完全相同。MTP 在這裡約增加 20%,因為每多一列驗證就多讀一批專家。思考模式 MMLU-Pro(300 題,貪婪解码):261/300 = 0.870 (0 parse failures; the 27B oQ4e gate protocol gives 0.833)。
+
 ## 相关页面
 
 - [结构化输出](/docs/guides/structured-output)

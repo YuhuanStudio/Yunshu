@@ -110,7 +110,15 @@ async def run(args):
         return (time.perf_counter() - t_start) * 1e3 / args.steps
 
     results = {}
-    for tag in ("real", "noPLE"):
+    plan = [
+        ("real", "off"),
+        ("real", "on"),
+        ("noPLE", "off"),
+        ("noPLE", "on"),
+        ("real", "off"),
+        ("real", "on"),
+    ]
+    for tag, _const in plan:
         orig = ps.QuantizedMMapNGramEmbedding.__call__
         if tag == "noPLE":
 
@@ -191,6 +199,113 @@ async def run(args):
             "top_primitives": sorted(hist.items(), key=lambda kv: -kv[1])[:25],
         }
     )
+
+    # Who builds the small kernels?  Count mx.arange / mx.zeros / mx.full / mx.concatenate callers in one step.
+    import traceback
+    from collections import Counter
+
+    callers = Counter()
+    wrapped = {}
+    for fname in (
+        "arange",
+        "zeros",
+        "full",
+        "ones",
+        "concatenate",
+        "stack",
+        "where",
+        "broadcast_to",
+    ):
+        fn = getattr(mx, fname)
+        wrapped[fname] = fn
+
+        def make(fn=fn, fname=fname):
+            def inner(*a, **k):
+                fr = traceback.extract_stack(limit=3)[0]
+                callers[
+                    f"{fname}  {Path(fr.filename).parent.name}/{Path(fr.filename).name}:{fr.lineno}"
+                ] += 1
+                return fn(*a, **k)
+
+            return inner
+
+        setattr(mx, fname, make())
+    try:
+        mx.async_eval = lambda *a, **k: None
+        yy = step(y0)
+        mx.eval(yy)
+    finally:
+        mx.async_eval = original_async
+        for fname, fn in wrapped.items():
+            setattr(mx, fname, fn)
+    emit({"kind": "callers", "top": callers.most_common(40)})
+
+    # Per-component graph census with the real layers: which block owns the Sum/Square/AsType nodes?
+    import re as _re
+
+    from mlx_vlm.models.qwen4_exp import language as _ql
+
+    fwd = _ql._QWEN4_BATCH_INVARIANT_FORWARD
+    mx.async_eval = lambda *a, **k: None
+
+    def census(label, fn, calls):
+        try:
+            _census(label, fn, calls)
+        except Exception as exc:  # noqa: BLE001 - keep the other components
+            emit({"kind": "component", "label": label, "error": repr(exc)[:300]})
+
+    def _census(label, fn, calls):
+        out = fn()
+        path = args.out.with_suffix(f".{label}.dot")
+        mx.export_to_dot(str(path), out)
+        text = path.read_text()
+        path.unlink()
+        hist = defaultdict(int)
+        for lab in _re.findall(r'\[\s*label\s*=\s*"([^"]+)"', text):
+            hist[lab.split()[0] if lab.split() else lab] += 1
+        mx.eval(out)
+        emit(
+            {
+                "kind": "component",
+                "label": label,
+                "calls_per_step": calls,
+                "nodes": sum(hist.values()),
+                "top": sorted(hist.items(), key=lambda kv: -kv[1])[:14],
+            }
+        )
+
+    try:
+        layers = lm.model.layers
+        h4 = mx.random.normal((1, 1, 10240)).astype(mx.bfloat16)
+        h1 = mx.random.normal((1, 1, 2560)).astype(mx.bfloat16)
+        gdn_i = next(i for i, ly in enumerate(layers) if ly.is_linear)
+        att_i = next(i for i, ly in enumerate(layers) if not ly.is_linear)
+        census(
+            "hyper_connection",
+            lambda: fwd._hyper_connection(layers[1].attn_hyper_connection, h4)[0],
+            97,
+        )
+        census("feed_forward", lambda: fwd._feed_forward(layers[1].mlp, h1), 48)
+        census(
+            "inject",
+            lambda: fwd._inject(h1, h4, mx.ones((1, 1, 4), dtype=mx.bfloat16)),
+            96,
+        )
+        census(
+            "gated_delta",
+            lambda: fwd._gated_delta(layers[gdn_i].linear_attn, h1, None, cache[gdn_i]),
+            36,
+        )
+        pos = mx.array([[args.ctx]], dtype=mx.int32)
+        census(
+            "qsa_attention",
+            lambda: fwd._qsa_attention(
+                layers[att_i].self_attn, h1, cache[att_i], pos, None
+            ),
+            12,
+        )
+    finally:
+        mx.async_eval = original_async
 
     # cProfile over a few serial steps: where does host time go, and how often does a step sync?
     import cProfile
