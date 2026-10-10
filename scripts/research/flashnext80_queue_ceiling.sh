@@ -14,9 +14,9 @@ roll() {  # name, extra harness args...
   $S --label "flashnext80-rollback-$n" --priority 0 --timeout 15 --stall 10 --mem-gb 95 --expect-complete \
     --out "$O/rollback-$n.jsonl" -- $PYB scripts/research/flashnext80_footprint.py "${COMMON[@]}" "$@" --out "$O/rollback-$n.jsonl"
 }
-roll off --env YUNSHU_QWEN4_FUSED_HC=1 --env YUNSHU_VLM_DRAFT=off
-roll b2 --env YUNSHU_QWEN4_FUSED_HC=1 --env YUNSHU_VLM_DRAFT=mtp --env YUNSHU_MTP_BLOCK_SIZE=2
-roll b4 --env YUNSHU_QWEN4_FUSED_HC=1 --env YUNSHU_VLM_DRAFT=mtp --env YUNSHU_MTP_BLOCK_SIZE=4
+roll off --env YUNSHU_VLM_DRAFT=off
+roll b2 --env YUNSHU_VLM_DRAFT=mtp --env YUNSHU_MTP_BLOCK_SIZE=2
+roll b4 --env YUNSHU_VLM_DRAFT=mtp --env YUNSHU_MTP_BLOCK_SIZE=4
 roll offstock --env YUNSHU_VLM_DRAFT=off
 roll b4stock --env YUNSHU_VLM_DRAFT=mtp --env YUNSHU_MTP_BLOCK_SIZE=4
 for arm in tf-nodraft tf-mtp; do

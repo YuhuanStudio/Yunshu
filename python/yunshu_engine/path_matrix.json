@@ -1797,7 +1797,7 @@
   },
   "qwen4_fused_hc": {
    "module": "python/yunshu_engine/kernels/tf_hc_forward.py",
-   "what": "TensorFold flash_next fused hyper-connection kernels for the qwen4_exp layer loop (YUNSHU_QWEN4_FUSED_HC, experimental)",
+   "what": "TensorFold flash_next fused hyper-connection + router/experts kernels for the qwen4_exp layer loop (always on for qwen4_exp; single-request plain decode 26 -> 14.4 ms)",
    "cells": {
     "mtp": {
      "s": "na",
@@ -2267,8 +2267,7 @@
   "YUNSHU_CACHE_STALE_DAYS": "apc_prefix_cache",
   "YUNSHU_FOOTPRINT_SAMPLE_MS": "idle_memory_return",
   "YUNSHU_MAX_MEMORY_GB": "idle_memory_return",
-  "YUNSHU_PLE_READ_THREADS": "ple_ssd_rows",
-  "YUNSHU_QWEN4_FUSED_HC": "qwen4_fused_hc"
+  "YUNSHU_PLE_READ_THREADS": "ple_ssd_rows"
  },
  "gap_budget": 59,
  "settings_categories": [
