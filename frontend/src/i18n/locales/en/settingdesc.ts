@@ -82,6 +82,8 @@ const settingdesc = {
     "Bearer token. When set, every request except health, version and docs needs it; unset: inference is open and operational endpoints are denied.",
   YUNSHU_AUTH_DISABLED:
     "Disable auth entirely (operational endpoints open too). Local development only.",
+  YUNSHU_DEBUG_TREE_PROFILE:
+    "Debugging aid: time each stage of the DFlash tree verify (GDN mixer, attention, MLP, norms, commit) and log per-round means when a request ends. Adds a sync after every stage, so it slows decoding; use only to find the dominant stage.",
   YUNSHU_DEBUG_ROUTES:
     "Mount the `/debug/*` diagnostic routes (engine, system, kv-cache, spec-decode, ...). They need the auth token or `YUNSHU_AUTH_DISABLED`. `/metrics` is always mounted.",
   YUNSHU_DEBUG_STREAM_CAPTURE:
@@ -119,6 +121,8 @@ const settingdesc = {
     "SSD prefix caches (APC and text): a checkpoint namespace unused for this many days, or whose checkpoint no longer exists or has changed, is removed before anything else is evicted (0 = never by age).",
   YUNSHU_KV_QUANT_BITS:
     "Text engine KV cache quantization (lossy; memory vs quality): `off` (lossless), `auto` (8-bit once the KV cache would exceed about 2 GiB), or 2/3/4/8 bits always.",
+  YUNSHU_VLM_APC_DRAFT_WINDOW_GB:
+    "RAM budget (GiB) for the DFlash drafter context windows kept beside APC checkpoints (about 0.1 GiB each). On a prefix hit the drafter starts with the stored window, restoring its acceptance. Lossless: the target verifies every draft. 0 disables.",
   YUNSHU_VLM_APC_MEMORY_GB:
     "VLM runner prefix cache (APC) RAM budget in GiB; 0 disables it. Unset: half of the memory left after weights and an OS/activation reserve, capped at a quarter of the machine and 32 GiB, and off when under 1 GiB would be left. A 27B checkpoint costs about 130 KiB per cached token.",
   YUNSHU_VLM_APC_DISK:
@@ -155,6 +159,8 @@ const settingdesc = {
     "Qwen3.5-family VLMs: speculative draft override. A DFlash drafter directory; `mtp` forces the checkpoint MTP head; `off` disables drafting. Unset: a matching DFlash2 drafter in the models dir or Hugging Face cache is used automatically, else the MTP head.",
   YUNSHU_MTP_BLOCK_SIZE:
     "Draft block size (for DFlash, the ceiling its acceptance-driven depth stays under). Unset: 6 for MTP, the drafter’s trained block for DFlash.",
+  YUNSHU_SPEC_NODES:
+    "Experimental. Qwen3.5-family DFlash fast tree: pin the draft nodes verified each round (0–15; a round verifies nodes+1 rows). Unset: the cost-aware budget chooses. Output is unchanged either way.",
   YUNSHU_SPEC_COPY_ROWS:
     "Qwen3.5-family single-request speculative lane: verify rows a prompt-copy round may use (copy drafts = rows - 1). A copy round proposes the continuation of the longest earlier occurrence of the current tail in the prompt plus generated text, and the same verify checks it, so output is unchanged. Agent, code-editing and multi-turn traffic that quotes its context commits several times more tokens per round. Default 16 rows, capped to the backend’s certified width; 0 turns copy rounds off.",
   YUNSHU_DRAFT_BITS:

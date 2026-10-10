@@ -188,6 +188,7 @@ def rounds(
 
     lm = model.language_model if hasattr(model, "language_model") else model
     from .constrained_spec import (
+        ProcessorWindow,
         current_request,
         exact_verify,
         forced_tokens,
@@ -246,6 +247,7 @@ def rounds(
 
     emitted = 1  # the caller already emitted the first bonus
     b = int(first_bonus)
+    window_procs = ProcessorWindow.for_request(request, b)
     copy = None
     context = _STATE["context"]
     copy_rows = copy_rows_for_model(lm)
@@ -329,6 +331,7 @@ def rounds(
                 keyed is None
                 and masks is None
                 and guide is None
+                and window_procs is None
                 and not (request and request.logprobs)
             ):
                 with exact_verify(request, guide):
@@ -354,6 +357,10 @@ def rounds(
                         sample_target_tokens=False,
                     )
                     logits = lm.speculative_logits_from_hidden(verify.hidden)
+                if window_procs is not None:
+                    logits = window_procs.apply(
+                        logits, draft_tokens.reshape(-1).tolist(), emitted
+                    )
                 target, logprobs = target_rows(logits, masks, emitted, keyed, request)
                 target = target.astype(token_dtype)
             # Early absorb: every row through the head with the true tokens.
@@ -386,6 +393,8 @@ def rounds(
                 if kept < len(new_tokens):
                     new_tokens = new_tokens[:kept]
                     accepted = kept - 1
+            if window_procs is not None:
+                window_procs.commit(new_tokens)
             # per-round drafted / accepted counts (drafter lifetime counters; the runner
             # diffs them per request for x_yunshu.speculative)
             _record_speculative_round(draft_model, accepted, bs - 1)
@@ -461,6 +470,13 @@ def rounds(
             mx.clear_cache()
 
 
+def _request_has_processors() -> bool:
+    from .constrained_spec import current_request
+
+    request = current_request()
+    return bool(request is not None and request.processors)
+
+
 def install() -> bool:
     """Serve single-row greedy MTP requests of ``BatchGenerator`` with
     ``rounds``; other requests keep upstream's loop."""
@@ -484,6 +500,7 @@ def install() -> bool:
                 and kw.get("greedy_sampling")
                 and _STATE["guide"] is None
                 and not isinstance(kw.get("sampler"), KeyedSampler)
+                and not _request_has_processors()
             )
             and kw.get("draft_kind") == "mtp"
             and (

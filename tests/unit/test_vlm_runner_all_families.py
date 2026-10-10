@@ -20,9 +20,12 @@ def test_non_qwen_family_gets_runner_without_speculative_decode(monkeypatch):
     eng._executor = None
     eng._model_path = "/models/gemma-4-e4b-it"
     eng._mx_large_model = False
-    # Rotating (sliding-window) cache: no APC for this family.
+    # An unsupported cache must still run without APC.
     eng.backend_capabilities = lambda lm=None: SimpleNamespace(
         cache=SimpleNamespace(has_sliding_window=True)
+    )
+    monkeypatch.setattr(
+        "mlx_vlm.apc.model_apc_plan", lambda lm: SimpleNamespace(restorable=False)
     )
     monkeypatch.setenv("YUNSHU_VLM_DRAFT", "/nonexistent/drafter")
 
@@ -172,3 +175,152 @@ def test_gateway_rejects_lora_and_logits_processors_for_vlm():
     assert "is not supported for multimodal" in src
     assert "status_code=400" in src
     assert "_apply_lora_adapter(vlm_engine" not in inspect.getsource(chat)
+
+
+def test_restorable_sliding_window_family_gets_checkpoint_apc(monkeypatch):
+    from mlx_vlm.models.cache import KVCache, RotatingKVCache
+
+    eng = VLMEngine("/models/gemma-4-e2b-it-4bit")
+    eng._config = {"model_type": "gemma4"}
+    lm = SimpleNamespace(make_cache=lambda: [RotatingKVCache(max_size=8), KVCache()])
+    eng._model = SimpleNamespace(language_model=lm)
+    eng._processor = object()
+    eng._mx_large_model = False
+    monkeypatch.setenv("YUNSHU_VLM_APC_MEMORY_GB", "1")
+    monkeypatch.setenv("YUNSHU_VLM_APC_DISK", "0")
+    monkeypatch.setattr(eng, "_install_apc_identity", lambda lm: None)
+    runner = eng._build_batch_runner(eng._model_path)
+    assert runner.apc_manager is not None
+    coordinator = runner.apc_manager.coordinator(lm)
+    assert coordinator.is_checkpoint and coordinator.enabled
+    runner.apc_manager.close()
+    eng._executor.shutdown()
+
+
+def test_media_salt_includes_geometry_and_audio_mask_but_not_text_length(monkeypatch):
+    utils = importlib.import_module("mlx_vlm.utils")
+    raw = {
+        "input_ids": mx.array([[1, 2, 3]]),
+        "pixel_values": mx.ones((16, 8)),
+        "image_grid_thw": mx.array([[1, 4, 4]]),
+        "input_features": mx.ones((1, 4, 8)),
+        "feature_attention_mask": mx.array([[1, 1, 1, 0]]),
+    }
+    monkeypatch.setattr(utils, "prepare_inputs", lambda *a, **k: dict(raw))
+    model = SimpleNamespace(
+        config=SimpleNamespace(image_token_index=None),
+        language_model=object(),
+        get_input_embeddings=lambda *a, **k: SimpleNamespace(to_dict=lambda: {}),
+    )
+    runner = VLMBatchRunner(model, processor=object(), apc_manager=object())
+    salt = runner.prepare_media("one turn")[2]
+    assert runner.prepare_media("same image with additional text")[2] == salt
+    raw["input_ids"] = mx.array([[1, 2, 3, 4]])
+    assert runner.prepare_media("longer turn")[2] == salt
+    raw["image_grid_thw"] = mx.array([[1, 2, 8]])
+    assert runner.prepare_media("different grid, identical patch pixels")[2] != salt
+    raw["image_grid_thw"] = mx.array([[1, 4, 4]])
+    raw["feature_attention_mask"] = mx.array([[1, 1, 0, 0]])
+    assert runner.prepare_media("different valid audio features")[2] != salt
+
+
+def test_media_ids_include_wrapper_config_and_native_audio():
+    from yunshu_engine.vlm_batch_runner import media_token_ids
+
+    model = SimpleNamespace(
+        config=SimpleNamespace(
+            image_token_id=900, audio_token_id=901, video_token_id=902
+        ),
+        language_model=SimpleNamespace(config=SimpleNamespace()),
+    )
+    assert media_token_ids(model) == {900, 901, 902}
+    native = SimpleNamespace(
+        config=SimpleNamespace(
+            thinker_config=SimpleNamespace(image_token_index=903, audio_token_index=904)
+        )
+    )
+    assert media_token_ids(native) == {903, 904}
+
+
+def test_image_cache_control_maps_wrapper_media_expansion(monkeypatch):
+    eng = VLMEngine.__new__(VLMEngine)
+    eng._model = SimpleNamespace(
+        config=SimpleNamespace(image_token_id=900),
+        language_model=SimpleNamespace(config=SimpleNamespace()),
+    )
+    eng._tokenizer = SimpleNamespace(encode=lambda *a, **k: [1, 900, 2, 3])
+    eng._apply_vlm_template_with_cache = lambda *a, **k: "prompt"
+    monkeypatch.setattr(
+        "yunshu_engine.prompt_caching.rendered_boundaries",
+        lambda *a, **k: {
+            "points": [(2, 300)],
+            "writes": [(2, 300)],
+            "lookup_points": [2],
+        },
+    )
+    messages = [
+        {
+            "role": "user",
+            "content": [{"type": "image_url", "image_url": {"url": "file://fixture"}}],
+        }
+    ]
+    plan = dict(markers={"MARK": 300}, tools={}, messages=messages)
+    resolved = eng._resolve_prompt_cache_plan(
+        plan, messages, [1, 900, 900, 2, 3], {"inputs_embeds": object()}, False, {}
+    )
+    assert resolved["points"] == [(3, 300)] and resolved["lookup_points"] == [3]
+
+
+def test_image_cache_control_maps_processor_wrappers_and_skips_unsafe_head(monkeypatch):
+    eng = VLMEngine.__new__(VLMEngine)
+    eng._model = SimpleNamespace(
+        config=SimpleNamespace(image_token_id=900),
+        language_model=SimpleNamespace(config=SimpleNamespace()),
+    )
+    eng._tokenizer = SimpleNamespace(encode=lambda *a, **k: [1, 900, 2, 3])
+    eng._processor = SimpleNamespace(
+        image_token_id=900,
+        boi_token="BEGIN",
+        eoi_token="END",
+        tokenizer=SimpleNamespace(
+            encode=lambda text, **k: [901] if text == "BEGIN" else [902]
+        ),
+    )
+    eng._apply_vlm_template_with_cache = lambda *a, **k: "prompt"
+    monkeypatch.setattr(
+        "yunshu_engine.prompt_caching.rendered_boundaries",
+        lambda *a, **k: {
+            "points": [(1, 300), (2, 300), (3, 300)],
+            "writes": [(2, 300)],
+            "lookup_points": [1, 2],
+        },
+    )
+    messages = [
+        {
+            "role": "user",
+            "content": [{"type": "image_url", "image_url": {"url": "file://fixture"}}],
+        }
+    ]
+    plan = dict(markers={"MARK": 300}, tools={}, messages=messages)
+    result = eng._resolve_prompt_cache_plan(
+        plan,
+        messages,
+        [1, 901, 900, 900, 902, 2, 3],
+        {"inputs_embeds": object()},
+        False,
+        {},
+    )
+    assert result["points"] == [(5, 300), (6, 300)]
+    assert result["writes"] == [(5, 300)] and result["lookup_points"] == [5]
+    # Unknown processor transformations never cause an inference 500 over a hint.
+    assert (
+        eng._resolve_prompt_cache_plan(
+            plan,
+            messages,
+            [1, 999, 900, 902, 2, 3],
+            {"inputs_embeds": object()},
+            False,
+            {},
+        )
+        is None
+    )

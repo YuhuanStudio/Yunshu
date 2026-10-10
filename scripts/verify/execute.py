@@ -34,6 +34,7 @@ class Cell:
     share_key: str = ""
     cwd: Path | None = None  # pinned source tree for remote route probes
     device: str = ""  # "any": small-model liveness cells may run on the M3 lane
+    cwd: Path | None = None  # remote snapshots must come from this pinned arm
 
     @property
     def sig(self) -> str:
@@ -265,6 +266,20 @@ class Executor:
     def _run_cell_batch(self, cells: list) -> dict:
         """Run every cell not already completed; returns key -> CellResult. Stops at the first
         failure (fail-fast): pending cells of the batch are cancelled and left unresults."""
+        # Long suites contain many contexts/reps. Keep at most six cells in
+        # flight, as required by gpuq ownership hygiene, while preserving the
+        # interleaved arm order and the existing fail-fast/resume behavior.
+        if len(cells) > 6:
+            results = {}
+            for start in range(0, len(cells), 6):
+                batch = cells[start : start + 6]
+                partial = self.run_cells(batch)
+                results.update(partial)
+                if len(partial) != len(batch) or any(
+                    not r.ok for r in partial.values()
+                ):
+                    break
+            return results
         results: dict = {}
         todo: list = []
         for c in cells:

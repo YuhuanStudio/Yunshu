@@ -196,6 +196,18 @@ def install(language_model: Any = None) -> bool:
         return True
     _install_row_capture()
     _install_context_window()
+    try:
+        from . import dflash_apc_window, settings
+
+        dflash_apc_window.install(
+            int(float(settings.get("YUNSHU_VLM_APC_DRAFT_WINDOW_GB") or 0) * (1 << 30))
+        )
+    except Exception:  # lossless fallback: suffix-only drafter context after a hit
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "drafter window store not installed", exc_info=True
+        )
     _STATE["installed"] = True
     return True
 

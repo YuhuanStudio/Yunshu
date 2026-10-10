@@ -16,6 +16,7 @@ STAGES = (
     "memory",
     "longqa",
     "conc",
+    "multimodal",
     "modelprobe",
     "client_compat",
     "respfeat",
@@ -39,6 +40,7 @@ LADDER = tuple(
     not in (
         "longqa",
         "conc",
+        "multimodal",
         "snapshot",
         "modelprobe",
         "client_compat",
@@ -73,6 +75,12 @@ SUITES = {
     "client_compat_m5": {
         "stages": ["preflight", "client_compat"],
         "client_compat_device": "m5",
+    },
+    "multimodal": {
+        "stages": ["preflight", "multimodal"],
+        "ctx": [46, 32768],
+        "reps": 3,
+        "media_quality_items": 200,
     },
     "console": {"stages": ["console"]},
     "console-identity": {

@@ -75,6 +75,8 @@ const settingdesc = {
     "Bearer 權杖。設定後，除 health、version 與 docs 外的所有請求都需要它；未設定時推論開放，但管理類端點被拒絕。",
   YUNSHU_AUTH_DISABLED:
     "完全停用驗證（管理類端點也會開放），僅供本機開發使用。",
+  YUNSHU_DEBUG_TREE_PROFILE:
+    "除錯用：為 DFlash 樹驗證的每個階段（GDN、注意力、MLP、正規化、提交）計時，請求結束時記錄每輪平均。每個階段後都會同步，因此會拖慢解碼；只用來找出最耗時的階段。",
   YUNSHU_DEBUG_ROUTES:
     "掛載 `/debug/*` 診斷路由（engine、system、kv-cache、spec-decode 等），需要驗證權杖或 `YUNSHU_AUTH_DISABLED`；`/metrics` 一律掛載。",
   YUNSHU_DEBUG_STREAM_CAPTURE:
@@ -111,6 +113,8 @@ const settingdesc = {
     "SSD 前綴快取（APC 與文字）：檢查點命名空間超過此天數未使用，或其檢查點已不存在或已變更，會在淘汰其他內容之前先被移除（0 表示不依時間清除）。",
   YUNSHU_KV_QUANT_BITS:
     "文字引擎 KV 快取量化（有損，以品質換記憶體）：`off`（無損）、`auto`（KV 快取將超過約 2 GiB 時改用 8-bit），或固定 2/3/4/8 bit。",
+  YUNSHU_VLM_APC_DRAFT_WINDOW_GB:
+    "在 APC 檢查點旁保留 DFlash 草稿模型上下文視窗的記憶體預算（GiB，每份約 0.1 GiB）。前綴命中時草稿模型直接使用保存的視窗，恢復接受率。無損：每個草稿都由主模型驗證。0 表示關閉。",
   YUNSHU_VLM_APC_MEMORY_GB:
     "VLM 執行器前綴快取（APC）的記憶體預算（GiB）；0 表示停用。未設定時取扣除權重與系統／啟動值保留後剩餘記憶體的一半，上限為機器的四分之一與 32 GiB，剩餘不足 1 GiB 時關閉。27B 檢查點每個快取 token 約需 130 KiB。",
   YUNSHU_VLM_APC_DISK:
@@ -145,6 +149,8 @@ const settingdesc = {
     "Qwen3.5 系列 VLM：推測解碼草稿覆寫。可填 DFlash 草稿模型目錄；`mtp` 強制使用檢查點的 MTP 頭；`off` 停用草稿。未設定時，若模型目錄或 Hugging Face 快取中有相符的 DFlash2 草稿模型則自動使用，否則使用 MTP 頭。",
   YUNSHU_MTP_BLOCK_SIZE:
     "草稿區塊大小（對 DFlash 而言是其依接受率調整的深度上限）。未設定時，MTP 為 6，DFlash 為草稿模型訓練時的區塊大小。",
+  YUNSHU_SPEC_NODES:
+    "實驗性。Qwen3.5 系列 DFlash 快速樹：固定每輪驗證的草稿節點數（0–15；每輪驗證 節點數+1 行）。未設定時由成本導向預算決定。無論如何輸出不變。",
   YUNSHU_SPEC_COPY_ROWS:
     "Qwen3.5 系列單一請求推測解碼通道：提示詞複製回合可使用的驗證列數（複製草稿數 = 列數 - 1）。複製回合會在提示詞與已生成文字中找出目前尾端最長的先前出現處，提出其後續內容，並由同一個驗證步驟檢查，因此輸出不變。引用上下文的代理、程式碼編輯與多輪流量，每回合可提交數倍的 token。預設 16 列，並受後端認證寬度限制；0 表示關閉複製回合。",
   YUNSHU_DRAFT_BITS:

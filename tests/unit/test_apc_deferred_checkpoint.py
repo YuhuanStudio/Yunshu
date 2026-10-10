@@ -691,3 +691,28 @@ def test_flush_does_not_clear_the_allocator_pool(monkeypatch):
     assert coordinator.store_checkpoint(list(range(32)), [kv], extra_hash=0)
     coordinator.flush_deferred_checkpoints()
     assert "store" in events and "clear" not in events
+
+
+def test_sliding_window_checkpoint_is_deferred_and_survives_live_mutation(monkeypatch):
+    from mlx_vlm.models.cache import RotatingKVCache
+
+    manager = _mgr()
+    coordinator = _coordinator(manager)
+    coordinator.defer_checkpoint_stores = True
+    rot = RotatingKVCache(max_size=64)
+    rot.update_and_fetch(mx.ones((1, 1, 32, 4)), mx.ones((1, 1, 32, 4)) * 3)
+    calls = []
+    monkeypatch.setattr(
+        manager,
+        "store_exact_cache",
+        lambda ids, cache, **kw: calls.append(cache) or True,
+    )
+    # Gemma-style local layers: the capture must not store (and copy) before the first token.
+    assert coordinator.store_checkpoint(list(range(32)), [rot], extra_hash=5)
+    assert calls == []
+    rot.update_and_fetch(mx.zeros((1, 1, 1, 4)), mx.zeros((1, 1, 1, 4)))
+    coordinator.flush_deferred_checkpoints()
+    assert len(calls) == 1
+    frozen = calls[0][0]
+    assert frozen.offset == 32
+    assert frozen.keys[:, :, :32, :].tolist() == [[[[1.0] * 4] * 32]]

@@ -164,6 +164,33 @@ def jobs(w):
 
 
 # ── suites ───────────────────────────────────────────────────────────────
+def test_multimodal_speed_rejects_short_turn_regression_and_keeps_long_cells():
+    numbers = {}
+    for rep in range(3):
+        for arm in ("base", "cand"):
+            numbers[f"{arm}-r{rep}"] = [
+                dict(
+                    size=size,
+                    kind=kind,
+                    ttft_s=(
+                        0.1177
+                        if arm == "cand" and kind == "turn2-hit" and size == 46
+                        else 0.1
+                    ),
+                )
+                for size in (46, 32768)
+                for kind in ("cold", "warm", "turn2-hit")
+            ]
+    result = stages._multimodal_speed(numbers, 3, 2)
+    assert not result["ok"]
+    assert result["regressions"][0]["ctx"] == 46
+    assert {r["ctx"] for r in result["cells"]} == {46, 32768}
+    for rep in range(3):
+        for row in numbers[f"cand-r{rep}"]:
+            row["ttft_s"] = 0.1
+    assert stages._multimodal_speed(numbers, 3, 2)["ok"]
+
+
 def test_suite_named_and_adhoc():
     assert suites.parse_suite("decode")["stages"][0] == "preflight"
     cfg = suites.parse_suite("speed,smoke")
@@ -179,6 +206,7 @@ def test_full_suite_has_every_stage():
     assert set(suites.STAGES) - set(suites.LADDER) == {
         "longqa",
         "conc",
+        "multimodal",
         "snapshot",
         "modelprobe",
         "client_compat",
@@ -372,6 +400,42 @@ def test_base_identity_is_shared_across_runs_but_candidate_cells_are_not(world):
 def mkexec(w, label="x"):
     rd = core.RunDir(w.runs / label)
     return rd, Executor(rd, w.gq, label, lambda m: None, cache_dir=w.tmp / "cellcache")
+
+
+@pytest.mark.parametrize("failure", [None, "6"])
+def test_executor_bounds_pending_cells_and_stops_before_next_window(
+    world, monkeypatch, failure
+):
+    from verify.execute import CellResult
+
+    _, ex = mkexec(world)
+    live, submitted, cancelled = set(), [], []
+    monkeypatch.setattr(ex, "_cached", lambda c: None)
+    monkeypatch.setattr(ex, "_shared", lambda c: None)
+    monkeypatch.setattr(ex, "_inflight", lambda c: None)
+    monkeypatch.setattr(ex, "_attempts", lambda c: 0)
+
+    def submit(c, attempt):
+        live.add(c.key)
+        submitted.append(c.key)
+        assert len(live) <= 6
+        return c.key
+
+    def finish(c, jid, attempt):
+        live.remove(c.key)
+        return CellResult(c.key, c.key != failure)
+
+    monkeypatch.setattr(ex, "_submit", submit)
+    monkeypatch.setattr(ex, "_finish", finish)
+    monkeypatch.setattr(ex.gq, "cancel", cancelled.append)
+    results = ex.run_cells([Cell("st", str(i), []) for i in range(18)])
+    if failure is None:
+        assert len(results) == len(submitted) == 18
+        assert not live and not cancelled
+    else:
+        assert submitted == [str(i) for i in range(12)]
+        assert len(results) == 7 and not results["6"].ok
+        assert cancelled == [str(i) for i in range(7, 12)]
 
 
 def cell(key, body, **kw):
@@ -1102,6 +1166,65 @@ def test_detach_pins_arms_resolved_by_the_caller(tmp_path):
     ]
     dir_arm = core.Arm("cand", str(wt), "c" * 40, wt.resolve(), "")
     assert cli.pinned_spec(dir_arm) == str(wt.resolve())
+
+
+def test_multimodal_evidence_is_fail_closed(tmp_path):
+    path = tmp_path / "mm.jsonl"
+    path.write_text('{"complete": true}\n')
+    assert not stages._multimodal_valid(path, [1], True)[0]
+    rows = []
+    for size, kinds in [
+        (1, ["cold", "warm", "turn2-hit", "turn2-miss", "other-image"]),
+        (
+            0,
+            [
+                "anthropic-cold",
+                "anthropic-warm",
+                "anthropic-turn2-hit",
+                "anthropic-turn2-miss",
+            ],
+        ),
+    ]:
+        for kind in kinds:
+            hit = kind.endswith("warm") or kind.endswith("hit")
+            rows.append(
+                dict(
+                    event="request",
+                    size=size,
+                    kind=kind,
+                    ids=[7],
+                    cached=42 if hit else 0,
+                )
+            )
+    rows.append(dict(complete=True))
+    path.write_text("".join(json.dumps(r) + "\n" for r in rows))
+    assert stages._multimodal_valid(path, [1], True)[0]
+    baseline = [r for r in rows if not r.get("kind", "").startswith("anthropic-")]
+    base_path = tmp_path / "base.jsonl"
+    base_path.write_text("".join(json.dumps(r) + "\n" for r in baseline))
+    assert stages._multimodal_valid(base_path, [1], False, require_anthropic=False)[0]
+    assert not stages._multimodal_valid(base_path, [1], True)[0]
+    paired = rows[:-1] + [
+        dict(
+            event="parity_item",
+            i=0,
+            cold_ids=[7],
+            hit_ids=[7],
+            cached=42,
+            cold_correct=True,
+            hit_correct=True,
+        ),
+        dict(event="quality", n=1, scores=dict(cold=1, hit=1)),
+        dict(complete=True),
+    ]
+    path.write_text("".join(json.dumps(r) + "\n" for r in paired))
+    assert stages._multimodal_quality_valid(path, [1], 1)[0]
+    paired[-3]["hit_ids"] = [8]
+    path.write_text("".join(json.dumps(r) + "\n" for r in paired))
+    assert not stages._multimodal_quality_valid(path, [1], 1)[0]
+    rows[1]["ids"] = [8]
+    path.write_text("".join(json.dumps(r) + "\n" for r in rows))
+    assert not stages._multimodal_valid(path, [1], True)[0]
 
 
 def test_gate_owner_prefix_and_timing_admission(gate_world):

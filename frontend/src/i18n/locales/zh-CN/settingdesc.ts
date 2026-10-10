@@ -75,6 +75,8 @@ const settingdesc = {
     "Bearer 令牌。设置后，除 health、version 和 docs 外的所有请求都需要它；未设置时推理开放，但运维类端点被拒绝。",
   YUNSHU_AUTH_DISABLED:
     "完全禁用认证（运维类端点也会开放），仅供本地开发使用。",
+  YUNSHU_DEBUG_TREE_PROFILE:
+    "调试用：为 DFlash 树验证的每个阶段（GDN、注意力、MLP、归一化、提交）计时，请求结束时记录每轮平均。每个阶段后都会同步，因此会拖慢解码；只用来找出最耗时的阶段。",
   YUNSHU_DEBUG_ROUTES:
     "挂载 `/debug/*` 诊断路由（engine、system、kv-cache、spec-decode 等），需要认证令牌或 `YUNSHU_AUTH_DISABLED`；`/metrics` 始终挂载。",
   YUNSHU_DEBUG_STREAM_CAPTURE:
@@ -111,6 +113,8 @@ const settingdesc = {
     "SSD 前缀缓存（APC 和文本）：检查点命名空间超过此天数未使用，或其检查点已不存在或已变更，会在淘汰其他内容之前先被移除（0 表示不按时间清除）。",
   YUNSHU_KV_QUANT_BITS:
     "文本引擎 KV 缓存量化（有损，以质量换内存）：`off`（无损）、`auto`（KV 缓存将超过约 2 GiB 时改用 8-bit），或固定 2/3/4/8 bit。",
+  YUNSHU_VLM_APC_DRAFT_WINDOW_GB:
+    "在 APC 检查点旁保留 DFlash 草稿模型上下文窗口的内存预算（GiB，每份约 0.1 GiB）。前缀命中时草稿模型直接使用保存的窗口，恢复接受率。无损：每个草稿都由主模型验证。0 表示关闭。",
   YUNSHU_VLM_APC_MEMORY_GB:
     "VLM 运行器前缀缓存（APC）的内存预算（GiB）；0 表示禁用。未设置时取扣除权重与系统／激活值保留后剩余内存的一半，上限为机器的四分之一和 32 GiB，剩余不足 1 GiB 时关闭。27B 检查点每个缓存 token 约需 130 KiB。",
   YUNSHU_VLM_APC_DISK:
@@ -145,6 +149,8 @@ const settingdesc = {
     "Qwen3.5 系列 VLM：推测解码草稿覆盖。可填 DFlash 草稿模型目录；`mtp` 强制使用检查点的 MTP 头；`off` 禁用草稿。未设置时，若模型目录或 Hugging Face 缓存中有匹配的 DFlash2 草稿模型则自动使用，否则使用 MTP 头。",
   YUNSHU_MTP_BLOCK_SIZE:
     "草稿块大小（对 DFlash 而言是其按接受率调整的深度上限）。未设置时，MTP 为 6，DFlash 为草稿模型训练时的块大小。",
+  YUNSHU_SPEC_NODES:
+    "实验性。Qwen3.5 系列 DFlash 快速树：固定每轮验证的草稿节点数（0–15；每轮验证 节点数+1 行）。未设置时由成本导向预算决定。无论如何输出不变。",
   YUNSHU_SPEC_COPY_ROWS:
     "Qwen3.5 系列单请求推测解码通道：提示词复制回合可使用的验证行数（复制草稿数 = 行数 - 1）。复制回合会在提示词和已生成文本中找出当前尾部最长的先前出现处，提出其后续内容，并由同一个验证步骤检查，因此输出不变。引用上下文的代理、代码编辑和多轮流量，每回合可提交数倍的 token。默认 16 行，并受后端认证宽度限制；0 表示关闭复制回合。",
   YUNSHU_DRAFT_BITS:

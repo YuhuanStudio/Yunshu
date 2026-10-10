@@ -85,7 +85,7 @@ def exact_verify(request=None, guide=None):
     from .kernels import batch_invariant
 
     if not batch_invariant.is_installed() or not (
-        guide is not None or (request and request.logprobs)
+        guide is not None or (request and (request.logprobs or request.processors))
     ):
         yield
         return
@@ -300,6 +300,64 @@ def normalize_rows(logits):
     )
 
 
+def apply_row_processors(processors, logits, context, drafted, calls):
+    """Run the request's logits processors over every row of a verify window.
+
+    Row ``j`` is the serial step whose input is the window's ``j``-th token, so it sees the
+    committed context (which already ends with the bonus token) plus ``drafted[:j]``;
+    stateful token masks count ``calls + j + 1`` generated tokens, as ``j + 1`` serial
+    ``process_last_token`` calls would. ``logits`` is ``[1, T, V]``."""
+    base = mx.array(context, dtype=mx.int32)
+    rows = []
+    for j in range(logits.shape[1]):
+        row = logits[:, j, :]
+        history = (
+            mx.concatenate([base, mx.array(drafted[:j], dtype=mx.int32)]) if j else base
+        )
+        for proc in processors:
+            if hasattr(proc, "pure_at"):
+                row = proc.pure_at(calls + j + 1, row)
+            else:
+                row = proc(history, row)
+        rows.append(row)
+    return mx.stack(rows, axis=1)
+
+
+class ProcessorWindow:
+    """One request's logits processors over a chain of verify windows (shared by the DFlash
+    chain and the MTP lane).
+
+    ``history`` is the serial path's token context ending at the window's bonus token. The
+    tree verify paths do not use it: their kernels are batch-invariant but not
+    serial-arithmetic, and a penalty can turn a low-bit difference of a non-winning logit
+    into a different argmax, so a request with processors is verified by the chain under
+    ``exact_verify`` (see path_matrix.json, penalties-tree-verify).
+    """
+
+    def __init__(self, request, bonus: int):
+        self.processors = list(request.processors)
+        self.history = list(request.context or []) + [int(bonus)]
+
+    @classmethod
+    def for_request(cls, request, bonus: int):
+        return (
+            cls(request, bonus) if request is not None and request.processors else None
+        )
+
+    def apply(self, logits, drafted, emitted: int):
+        """``logits`` ``[1, T, V]`` of the window ``[bonus, *drafted]``; ``emitted`` tokens
+        have been generated, the first of which came from the prefill."""
+        return apply_row_processors(
+            self.processors, logits, self.history, drafted, emitted - 1
+        )
+
+    def commit(self, tokens) -> None:
+        self.history.extend(int(t) for t in tokens)
+        for proc in self.processors:
+            if hasattr(proc, "advance"):
+                proc.advance(len(tokens))
+
+
 def target_rows(logits, masks, emitted, keyed, request=None):
     if masks is not None:
         logits = apply_bitmask(logits, masks)
@@ -323,6 +381,10 @@ class SpecRequest:
         self.first_probs = None
         self.pending: deque = deque()
         self.guide = None
+        self.processors: list = []  # penalties / bias / token mask, applied per window row
+        self.context: list | None = (
+            None  # the serial path's token context at the first round
+        )
         self.forced_windows = 0
         self.serial_verify_rounds = 0
 
@@ -410,6 +472,7 @@ def dflash_rounds(model, draft_model, prompt_cache, hidden, *, request, **kw):
     emitted = 1
     if guide is not None:
         guide.feed(bonus)
+    window_procs = ProcessorWindow.for_request(request, bonus)
     copy = None
     context = mtp_lane._STATE["context"]
     rows = mtp_lane._STATE["copy_rows"]
@@ -458,6 +521,8 @@ def dflash_rounds(model, draft_model, prompt_cache, hidden, *, request, **kw):
                     inputs, prompt_cache, list(draft_model.config.target_layer_ids)
                 )
                 logits = lm.speculative_logits_from_hidden(final)
+            if window_procs is not None:
+                logits = window_procs.apply(logits, drafted, emitted)
             targets, probs = target_rows(logits, masks, emitted, keyed, request)
             hidden = mx.concatenate(captured, axis=-1)
             mx.async_eval(targets, hidden)
@@ -472,6 +537,8 @@ def dflash_rounds(model, draft_model, prompt_cache, hidden, *, request, **kw):
                     tokens = tokens[:kept]
                     accepted = kept - 1
             _record_speculative_round(draft_model, accepted, bs - 1)
+            if window_procs is not None:
+                window_procs.commit(tokens)
             reports = request.reports(probs, tokens)
             hidden = hidden[:, : accepted + 1, :]
             commit_speculative_round(lm, prompt_cache, states, accepted, bs)
@@ -526,10 +593,15 @@ def install():
     def serial_prompt_init(self, *args, **kwargs):
         prompt_init(self, *args, **kwargs)
         request = current_request()
-        if request is not None and (request.guide is not None or request.logprobs):
+        if request is not None and (
+            request.guide is not None or request.logprobs or request.processors
+        ):
             # Upstream may create AND prefill the batch inside one next() call.
             # Preparing it only at the next runner slice is already too late.
             prepare_serial_prompt(self)
+            ctx = getattr(self, "_token_context", None)
+            if request.processors and ctx:
+                request.context = list(ctx[0])
 
     ar.PromptProcessingBatch.__init__ = serial_prompt_init
 
@@ -585,7 +657,7 @@ def install():
         request = current_request()
         if (
             request is not None
-            and (request.guide is not None or request.logprobs)
+            and (request.guide is not None or request.logprobs or request.processors)
             and kw.get("draft_kind") == "dflash"
             and kw["first_bonus"].size == 1
         ):
