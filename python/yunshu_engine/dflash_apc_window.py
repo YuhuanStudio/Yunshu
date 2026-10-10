@@ -85,7 +85,9 @@ def window_from_chunks(chunks: list, keep: int) -> tuple[list, int] | None:
 
     if not chunks:
         return None
-    layers = [mx.concatenate(parts, axis=1) for parts in zip(*chunks, strict=True)]
+    layers = [
+        mx.concatenate(list(parts), axis=1) for parts in zip(*chunks, strict=True)
+    ]
     if int(layers[0].shape[1]) > keep:
         layers = [x[:, -keep:] for x in layers]
     # Never block here: this runs inside the prefill step, ahead of the first token.
@@ -117,7 +119,7 @@ def seed(batch) -> bool:
     metas = getattr(batch, "_apc_meta", None) or []
     meta = metas[0] if metas else None
     prefix = int((meta or {}).get("prefix_len") or 0)
-    if prefix <= 0 or sp.chunks:
+    if meta is None or prefix <= 0 or sp.chunks:
         return False
     layers = get(key_for(meta.get("extra_hash", 0), meta["full_input_ids"][:prefix]))
     if layers is None:
