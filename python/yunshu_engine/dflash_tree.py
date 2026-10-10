@@ -83,13 +83,27 @@ def compute_lattice_gpu(
     dh = drafter._hidden(inputs, hidden, cache)[:, 1:]
     if prof:
         t0 = tv._tick("drafter_layers_ms", dh, t0)
-    logits = drafter._logits(dh)
-    if prof:
-        t0 = tv._tick("drafter_head_ms", logits, t0)
-    cands = mx.argpartition(logits, -sel.top_k, axis=-1)[0, ..., -sel.top_k :]  # [D, K]
+    vocab = getattr(drafter, "_draft_vocab", None)
+    subset = (
+        vocab.logits_subset(dh)
+        if vocab is not None and drafter.config.final_logit_softcapping is None
+        else None
+    )
+    if subset is not None:
+        logits, ids = subset  # [D, n] over the searched ids
+        if prof:
+            t0 = tv._tick("drafter_head_ms", logits, t0)
+        part = mx.argpartition(logits, -sel.top_k, axis=-1)[..., -sel.top_k :]
+        cands = mx.take(ids, part)  # [D, K]
+        unary = mx.take_along_axis(logits, part, axis=-1).astype(mx.float32)
+    else:
+        logits = drafter._logits(dh)
+        if prof:
+            t0 = tv._tick("drafter_head_ms", logits, t0)
+        cands = mx.argpartition(logits, -sel.top_k, axis=-1)[0, ..., -sel.top_k :]
+        unary = mx.take_along_axis(logits[0], cands, axis=-1).astype(mx.float32)
     if prof:
         t0 = tv._tick("drafter_topk_ms", cands, t0)
-    unary = mx.take_along_axis(logits[0], cands, axis=-1).astype(mx.float32)
     hproj = sel.hidden_projection(dh)[0].astype(mx.float32)
     succ = sel.successor_codebook(cands).astype(mx.float32)  # [D, K, R]
     pred = sel.predecessor_codebook(cands).astype(mx.float32)

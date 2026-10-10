@@ -1912,6 +1912,15 @@ class VLMEngine:
                 from .kernels.verify_select import install as install_streamed5
 
                 kernels["streamed5"] = install_streamed5()
+            if draft_kind == "dflash" and invariant and drafter is not None:
+                # Reduced candidate vocabulary for the DFlash lattice (draft_vocab.logits_subset).
+                from .draft_vocab import DRAFT_VOCAB as DFLASH_KEEP
+                from .draft_vocab import install as _install_dflash_vocab
+
+                found = _install_dflash_vocab(
+                    drafter, self._model.language_model, DFLASH_KEEP
+                )
+                kernels["draft_vocab"] = DFLASH_KEEP if found else None
             if draft_kind == "mtp" and invariant and drafter is not None:
                 # The lane's own MTP rounds (one host read per cycle, the head
                 # run over every verify row inside the verify's graph), fused

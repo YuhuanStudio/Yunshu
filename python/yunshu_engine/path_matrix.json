@@ -24,11 +24,8 @@
      ]
     },
     "dflash": {
-     "s": "missing",
-     "why": "compute_lattice_gpu reads the drafter's full-vocab logits and takes argpartition over 248k every round (dflash_tree.py compute_lattice_gpu); draft_vocab is installed only under draft_kind == 'mtp'",
-     "owner": "decode16",
-     "impact": "high",
-     "absent": [
+     "s": "engaged",
+     "ev": [
       [
        "python/yunshu_engine/dflash_tree.py",
        "_draft_vocab"
@@ -70,11 +67,8 @@
    "what": "Reduced-vocabulary top-k for tree/lattice candidates (MTP tree, DFlash lattice)",
    "cells": {
     "mtp": {
-     "s": "missing",
-     "why": "mtp_tree.py takes argpartition over the full-vocab head logits; DraftVocab only serves the greedy argmax",
-     "owner": "decode16",
-     "impact": "medium",
-     "absent": [
+     "s": "engaged",
+     "ev": [
       [
        "python/yunshu_engine/mtp_tree.py",
        "_draft_vocab"
@@ -82,11 +76,8 @@
      ]
     },
     "dflash": {
-     "s": "missing",
-     "why": "same gap as draft_vocab on the lattice top-k",
-     "owner": "decode16",
-     "impact": "high",
-     "absent": [
+     "s": "engaged",
+     "ev": [
       [
        "python/yunshu_engine/dflash_tree.py",
        "_draft_vocab"
@@ -2287,7 +2278,7 @@
   "YUNSHU_VLM_APC_DRAFT_WINDOW_GB": "apc_prefix_cache",
   "YUNSHU_DEBUG_TREE_PROFILE": "tree_drafts"
  },
- "gap_budget": 58,
+ "gap_budget": 55,
  "settings_categories": [
   "speculative",
   "vlm-runner",

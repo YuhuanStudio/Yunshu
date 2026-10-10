@@ -97,14 +97,21 @@ def _forward_level(
     return head.norm(h)[0]
 
 
-def _top_children(lm, hidden, count):
+def _top_children(lm, hidden, count, vocab=None):
     """Each row's ``count`` most likely next tokens (best first) and their
-    log-probabilities: ([R, count] ids, [R, count] logp)."""
-    logits = lm.speculative_logits_from_hidden(hidden).astype(mx.float32)
+    log-probabilities: ([R, count] ids, [R, count] logp). With a ``DraftVocab`` the
+    candidates and the normalizer come from its reduced vocabulary (drafts only propose)."""
+    subset = vocab.logits_subset(hidden) if vocab is not None else None
+    if subset is not None:
+        logits, ids = subset
+        logits = logits.astype(mx.float32)
+    else:
+        logits, ids = lm.speculative_logits_from_hidden(hidden).astype(mx.float32), None
     idx = mx.argpartition(-logits, count - 1, axis=-1)[..., :count]
     vals = mx.take_along_axis(logits, idx, axis=-1)
     order = mx.argsort(-vals, axis=-1)
-    idx = mx.take_along_axis(idx, order, axis=-1).astype(mx.int32)
+    idx = mx.take_along_axis(idx, order, axis=-1)
+    idx = (mx.take(ids, idx) if ids is not None else idx).astype(mx.int32)
     vals = mx.take_along_axis(vals, order, axis=-1)
     lp = vals - mx.logsumexp(logits, axis=-1, keepdims=True)
     return idx, mx.minimum(lp, -1e-4)  # strictly decreasing along a path
@@ -116,10 +123,11 @@ def search_tree(head, lm, root_hidden: mx.array, nodes: int):
     call; the ``nodes`` most probable nodes overall form the tree. Returns
     ``(tokens [n], parents [n + 1])`` as ``dflash_tree.search_tree`` (parents in
     window rows, best node first, parents before children); nothing is read back."""
+    vocab = getattr(head, "_draft_vocab", None)
     n_prefix = int(head._cache[0].offset)
     base_pos = int(head._next_position)
     tree_kv: list = [None] * len(head.layers)
-    idx, lp = _top_children(lm, root_hidden, BEAM)  # the root's children
+    idx, lp = _top_children(lm, root_hidden, BEAM, vocab)  # the root's children
     tok, cum = idx[0], lp[0]  # [B]
     pool_tok, pool_cum = [tok], [cum]
     pool_par = [mx.full((BEAM,), -1, dtype=mx.int32)]
@@ -149,7 +157,7 @@ def search_tree(head, lm, root_hidden: mx.array, nodes: int):
             head, tok, hid_in, lvl, tree_mask, n_prefix, base_pos, tree_kv
         )
         # expand every kept path to its best children and keep the best BEAM
-        cidx, clp = _top_children(lm, out, CHILDREN)  # [B, C]
+        cidx, clp = _top_children(lm, out, CHILDREN, vocab)  # [B, C]
         flat = (cum[:, None] + clp).reshape(-1)
         top = mx.argsort(-flat)[:BEAM]
         cum = mx.take(flat, top)

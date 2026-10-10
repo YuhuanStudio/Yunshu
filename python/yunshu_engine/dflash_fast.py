@@ -405,6 +405,7 @@ def rounds(
     from . import settings
 
     profile_sync = bool(settings.get("YUNSHU_DEBUG_TREE_PROFILE"))
+    draft_vocab = getattr(draft, "_draft_vocab", None)
     prof = {"rounds": 0, "draft": 0.0, "verify": 0.0, "commit": 0.0, "nodes": 0}
     context = mtp_lane._STATE["context"]
     copy_rows = mtp_lane.copy_rows_for_model(lm)
@@ -561,6 +562,8 @@ def rounds(
                     first=emitted == 1,
                 )
                 bonus = new_tokens[-1]
+                if draft_vocab is not None:
+                    draft_vocab.learn(new_tokens)
             finally:
                 lane_linear.set_sum_reuse(previous_sums)
             counted = False
