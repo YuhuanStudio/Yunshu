@@ -72,14 +72,30 @@ def compute_lattice_gpu(
         [[int(anchor)] + [int(drafter.config.mask_token_id)] * positions],
         dtype=mx.int32,
     )
+    from . import tree_verify as tv
+
+    prof = tv._profile_on()
+    if prof:
+        import time
+
+        mx.eval(inputs, hidden)
+        t0 = time.perf_counter()
     dh = drafter._hidden(inputs, hidden, cache)[:, 1:]
+    if prof:
+        t0 = tv._tick("drafter_layers_ms", dh, t0)
     logits = drafter._logits(dh)
+    if prof:
+        t0 = tv._tick("drafter_head_ms", logits, t0)
     cands = mx.argpartition(logits, -sel.top_k, axis=-1)[0, ..., -sel.top_k :]  # [D, K]
+    if prof:
+        t0 = tv._tick("drafter_topk_ms", cands, t0)
     unary = mx.take_along_axis(logits[0], cands, axis=-1).astype(mx.float32)
     hproj = sel.hidden_projection(dh)[0].astype(mx.float32)
     succ = sel.successor_codebook(cands).astype(mx.float32)  # [D, K, R]
     pred = sel.predecessor_codebook(cands).astype(mx.float32)
     anchor_row = sel.predecessor_codebook(mx.array([int(anchor)]))[0].astype(mx.float32)
+    if prof:
+        tv._tick("drafter_selector_ms", (unary, hproj, succ, pred, anchor_row), t0)
     return GpuLattice(cands, unary, hproj, succ, pred, anchor_row)
 
 

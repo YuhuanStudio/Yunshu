@@ -162,6 +162,7 @@ _add("YUNSHU_COMPACT_MAX_TOKENS", "int", 2048, "Responses compaction: maximum to
 _add("YUNSHU_AUTH_TOKEN", "str", None, "Bearer token. When set, every request except health/version/docs needs it; unset: inference is open and operational endpoints are denied.", "auth", secret=True)
 _add("YUNSHU_AUTH_DISABLED", "bool", False, "Disable auth entirely (operational endpoints open too). Local development only.", "auth")
 _add("YUNSHU_DEBUG_ROUTES", "bool", False, "Mount the /debug/* diagnostic routes (engine, system, kv-cache, spec-decode, ...). They need the auth token or YUNSHU_AUTH_DISABLED. /metrics is always mounted.", "observability")
+_add("YUNSHU_DEBUG_TREE_PROFILE", "bool", False, "Debugging aid: time every stage of the DFlash tree verify (GDN mixer, attention, MLP, residual norms, commit) by evaluating after each one, and log the per-round means when a request ends. The sync after each stage lengthens the round; the split is for finding the dominant stage, not for speed.", "observability")
 _add("YUNSHU_DEBUG_STREAM_CAPTURE", "path", None, "Debugging aid: append one JSON line per VLM-runner generation to this file with the generated token ids, the text pieces the engine handed to the gateway and their joined text, so a delivered answer can be compared with what was generated (soak invariant check). Off when unset.", "observability", stability="internal")
 _add("YUNSHU_ACTOR_IDENTITY", "str", "owner", "Identity recorded for authenticated requests in the audit log.", "auth")
 _add("YUNSHU_RATE_LIMIT_RPM", "int", 0, "Per-client request rate limit in requests per minute; 0 (default) turns rate limiting off. A local single-user engine has no need for it; set it when the server is exposed to other machines.", "auth", minimum=0)
@@ -187,6 +188,7 @@ _add("YUNSHU_CACHE_STALE_DAYS", "float", 7.0, "SSD prefix caches (APC and text):
 _add("YUNSHU_KV_QUANT_BITS", "enum", "off", "Text engine KV cache quantization (lossy; memory vs quality): 'off' (lossless), 'auto' (8-bit once the KV cache would exceed ~2 GiB), or 2/3/4/8 bits always.", "cache", choices=("auto", "off", "2", "3", "4", "8"))
 
 # ── VLM runner ─────────────────────────────────────────────────────────
+_add("YUNSHU_VLM_APC_DRAFT_WINDOW_GB", "float", 0.25, "RAM budget in GiB for the DFlash drafter context windows kept beside APC checkpoints (about 0.1 GiB each at 2047 positions). On a prefix hit the drafter starts with the stored window instead of only the uncached suffix, which restores its acceptance (lossless: the target verifies every draft). 0 disables.", "vlm-runner", minimum=0.0)
 _add("YUNSHU_VLM_APC_MEMORY_GB", "float", None, "VLM runner prefix cache (APC) RAM budget in GiB; 0 disables the prefix cache. Unset: half of the memory left after the model weights and an OS / activation reserve (a quarter of the machine, 4 to 16 GiB), at most a quarter of the machine and 32 GiB, and 0 (off) when under 1 GiB would be left (128 GB machine, 27B model: 32; 8 GB machine, 4B model: 0). A 27B checkpoint costs about 130 KiB per cached token.", "vlm-runner", minimum=0.0)
 _add("YUNSHU_VLM_APC_DISK", "bool", True, "APC SSD tier: prefix checkpoints that RAM evicts (and, at shutdown, those still resident) are written to disk and read back instead of re-prefilling (bit-exact states, lossless; a 27B checkpoint reloads about 20x faster than it prefills). Set 0 to keep the prefix cache in RAM only.", "vlm-runner")
 _add("YUNSHU_VLM_APC_DISK_DIR", "path", None, "Directory of the APC SSD tier. Unset: ~/.yunshu/cache/apc (internal disk). Put it on a fast volume to keep the internal disk clean.", "vlm-runner")
@@ -227,6 +229,7 @@ _add("YUNSHU_QUANT_CONFIG", "str", None, "Bits/group for affine in-memory quanti
 # ── kernels / experiments ──────────────────────────────────────────────
 _add("YUNSHU_ROUND_PREFILL_CHUNK", "int", 512, "Round driver: prompt tokens per prefill span. A decoding request only steps between prefill forwards, so smaller spans keep it running next to a long prompt (Qwen3.8-27B, M5 Max, one MTP row beside an 8K prompt: 512 -> 6 tok/s, 128 -> 24 tok/s, ~20% lower prefill speed). Atoms are fixed per prompt (idle steps merge consecutive full atoms without changing any bit), so output stays independent of what else is running; prompts prefilled with different chunk sizes are each self-consistent but not bit-identical to each other.", "vlm-runner", minimum=16)
 _add("YUNSHU_ROUND_DRIVER", "bool", False, "Dense Qwen3.5-family VLMs: Yunshu's round driver serves text requests (packed forwards over every decoding row's window, alternating with prefill steps that batch several prompts' fixed chunks; row-invariant lane projections; MTP drafts for every row with cost-aware per-row depth; sampled rows draw with the position-keyed sampler; see docs/guides/ROUND_DRIVER.md). Off: upstream BatchGenerator shared batch + single-request speculative lane. APC prefix reuse (exact hybrid checkpoints) runs in the driver; image prompts, int8 KV and MoE stay on the upstream path either way.", "vlm-runner", stability="experimental", decide="needs single-request greedy decode >= the default lane (2026-10-01: 10-40% behind; serial draft chain + verify, overlap them), sampled-row seed + digest identity vs keyed serial on 27B, then 27B idle GPU, off vs on: sweep_round_driver.py parity, bench_batch_spec-style rows 1/2/4/8, probe_concurrency, bench_engine_matrix, bench_context_batch b1-b8 + 32K/131K, bench_mixed_load 16K/32K, MMLU-Pro 300 b8 (scripts/research/validate_round_driver.sh); if it wins it becomes the path (with APC / images moved) and this flag, the upstream shared batch and the spec lane are deleted", added="2026-09-29")
+_add("YUNSHU_SPEC_NODES", "int", None, "Qwen3.5-family DFlash fast tree: pin the draft nodes verified each round (0..15; the round verifies nodes+1 rows). Unset: the cost-aware budget chooses. For the depth/cost experiment against TensorFold.", "speculative", minimum=0, stability="experimental", decide="pin 15/11/7 vs the cost-aware budget at 1K prose/code, then keep whichever commits more tokens per ms and delete the flag", added="2026-10-09")
 _add("YUNSHU_MTP_ROW_EXACT", "bool", False, "Qwen3.5-family runner: oMLX row-exact verify (verify rows bit-identical to one-row decode) instead of batch-invariant kernels.", "kernels", stability="experimental", decide="sweep_mtp_depth parity at long contexts vs decode tok/s (currently 30-50% slower than batch-invariant)", added="2026-09-28")
 _add("YUNSHU_ENGINE_LOOP", "bool", False, "Text models: EngineCore continuous-batching loop instead of the single-request fast path.", "text-engine", stability="experimental", decide="unify text-only models onto the batch runner vs keeping this loop (concurrency probe on a text model)", added="2026-06-30")
 _add("YUNSHU_OVERLAP", "enum", "", "Text engine loop: overlap CPU and GPU work ('cpu_gpu') or split a batch into two overlapping halves ('two_batch').", "text-engine", stability="experimental", choices=("", "cpu_gpu", "two_batch"), decide="concurrency probe tok/s on a text model with the engine loop; deleted with the loop if text models move to the runner", added="2026-06-30")
@@ -337,6 +340,8 @@ _add("YUNSHU_HF_ENDPOINT", "str", None, "Hugging Face Hub endpoint for `yunshu s
 APPLIES_CLASSES = ("live", "reload", "restart")
 _LIVE = frozenset(
     {
+        "YUNSHU_DEBUG_TREE_PROFILE",
+        "YUNSHU_SPEC_NODES",
         "YUNSHU_AUTH_TOKEN",
         "YUNSHU_AUTH_DISABLED",
         "YUNSHU_ACTOR_IDENTITY",
@@ -468,6 +473,7 @@ _RELOAD = frozenset(
 )
 _RESTART = frozenset(
     {
+        "YUNSHU_VLM_APC_DRAFT_WINDOW_GB",
         "YUNSHU_MODEL",
         "YUNSHU_MULTI_MODEL",
         "YUNSHU_MODELS_DIR",

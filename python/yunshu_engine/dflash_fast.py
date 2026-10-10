@@ -6,12 +6,30 @@ arrays live in the current TreeResult, rather than a global id-keyed cache.
 """
 
 import hashlib
+import logging
 from typing import Any
 
 import mlx.core as mx
 
 from . import tree_verify as tv
 from .dflash_plan import live_bound
+
+logger = logging.getLogger(__name__)
+
+
+def observe_budget(budget, copied, n, landed, ms, *, first=False) -> bool:
+    """Feed a round to the cost-aware node budget, unless it was a copy round.
+
+    A copy round runs no drafter (about 10 ms of GPU work less) and its accepted path is a
+    copied chain, not ranks of the draft tree. Recorded under its length ``n`` it made a
+    short budget look ~10 ms cheaper than it is (a 5-row cycle read 41 ms against 50-56 ms
+    for tree rounds of 3 and 6+ rows) and trained the per-rank landing estimates on chain
+    positions."""
+    if copied:
+        return False
+    budget.observe(n, landed, ms, first=first)
+    return True
+
 
 _KERNELS: dict[str, Any] = {}
 
@@ -384,6 +402,11 @@ def rounds(
     target_ids = list(draft.config.target_layer_ids)
     draft_cache = draft.reset(model)
     budget = NodeBudget(15, prior=dt.PRIOR)
+    from . import settings
+
+    pin = settings.get("YUNSHU_SPEC_NODES")
+    profile_sync = bool(settings.get("YUNSHU_DEBUG_TREE_PROFILE"))
+    prof = {"rounds": 0, "draft": 0.0, "verify": 0.0, "commit": 0.0, "nodes": 0}
     context = mtp_lane._STATE["context"]
     copy_rows = mtp_lane.copy_rows_for_model(lm)
     copy = CopyDrafter(max_draft=copy_rows - 1) if copy_rows >= 3 else None
@@ -391,6 +414,12 @@ def rounds(
         copy.extend(context)
         copy.extend([first_bonus])
     keep = context_window(draft)
+    logger.info(
+        "DFlash drafter context: %d prompt-hidden positions (window %s, target KV %d)",
+        int(hidden.shape[1]) if hasattr(hidden, "shape") else 0,
+        keep,
+        context_length(lm, cache),
+    )
     skipped = 0
     verifier = Verifier(q35._EXACT_SPECULATIVE_VERIFIER)
     bonus = int(first_bonus)
@@ -431,6 +460,8 @@ def rounds(
                     else max_tokens - emitted
                 )
                 n = budget.choose(max(0, room - 1))
+                if pin is not None:
+                    n = min(pin, max(0, room - 1))
                 copied = (
                     copy.draft(min(copy.max_draft, room - 1))
                     if copy is not None
@@ -454,6 +485,10 @@ def rounds(
                     finally:
                         private.bind(False)
                     tokens, parents = search_tree(lattice, n)
+                    if profile_sync:
+                        mx.eval(
+                            tokens, parents
+                        )  # drafter GPU time lands in the draft stage
                     tokens, parents, ranks = reorder(tokens, parents)
                     window = mx.concatenate(
                         [mx.array([bonus], dtype=token_dtype), tokens]
@@ -464,6 +499,7 @@ def rounds(
                     parents = mx.array([-1], dtype=mx.int32)
                     shape = FastShape(parents, 0, is_chain=True)
                     window = mx.array([[bonus]], dtype=token_dtype)
+                t_drafted = time.perf_counter()
                 result = tv.tree_forward(
                     lm, window, shape, cache, target_ids, verifier=verifier
                 )
@@ -481,6 +517,7 @@ def rounds(
                 except BaseException:
                     tv.tree_abort(cache, result)
                     raise
+                t_verified = time.perf_counter()
                 path = dt.walk(window_ids, parent_ids, target_ids_row)
                 new_tokens = [window_ids[row] for row in path[1:]] + [
                     target_ids_row[path[-1]]
@@ -509,10 +546,19 @@ def rounds(
                 landed = [row - 1 for row in path[1:]]
                 if ranks is not None:
                     landed = remap_landed(landed, ranks)
-                budget.observe(
+                t_done = time.perf_counter()
+                if emitted > 1:
+                    prof["rounds"] += 1
+                    prof["nodes"] += n
+                    prof["draft"] += (t_drafted - started) * 1000
+                    prof["verify"] += (t_verified - t_drafted) * 1000
+                    prof["commit"] += (t_done - t_verified) * 1000
+                observe_budget(
+                    budget,
+                    copied,
                     n,
                     landed,
-                    (time.perf_counter() - started) * 1000,
+                    (t_done - started) * 1000,
                     first=emitted == 1,
                 )
                 bonus = new_tokens[-1]
@@ -534,6 +580,35 @@ def rounds(
                 if emitted >= max_tokens:
                     return
     finally:
+        if prof["rounds"]:
+            r = prof["rounds"]
+            logger.info(
+                "DFlash round profile: %d rounds, %.1f nodes/round, draft %.2f ms, verify %.2f ms, commit+host %.2f ms",
+                r,
+                prof["nodes"] / r,
+                prof["draft"] / r,
+                prof["verify"] / r,
+                prof["commit"] / r,
+            )
+            from . import tree_verify as _tv
+
+            if _tv.PROFILE.get("rounds"):
+                n = _tv.PROFILE.pop("rounds")
+                logger.info(
+                    "Tree verify stage profile (%d rounds, ms/round): %s",
+                    n,
+                    {k: round(v / n, 2) for k, v in sorted(_tv.PROFILE.items())},
+                )
+                _tv.PROFILE.clear()
+                _tv.PROFILE["rounds"] = 0
+            logger.info(
+                "DFlash budget state: p=%s cycle_ms=%s",
+                [round(x, 2) for x in budget.p],
+                {
+                    n: round(budget._median(v), 1)
+                    for n, v in sorted(budget.samples.items())
+                },
+            )
         private.bind(False)
         hidden = None
         draft_cache = None
