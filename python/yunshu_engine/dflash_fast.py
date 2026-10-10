@@ -11,6 +11,7 @@ from typing import Any
 
 import mlx.core as mx
 
+from . import gpu_window
 from . import tree_verify as tv
 from .dflash_plan import live_bound
 
@@ -547,6 +548,7 @@ def rounds(
                 if ranks is not None:
                     landed = remap_landed(landed, ranks)
                 t_done = time.perf_counter()
+                gpu_window.tick()
                 if emitted > 1:
                     prof["rounds"] += 1
                     prof["nodes"] += n
