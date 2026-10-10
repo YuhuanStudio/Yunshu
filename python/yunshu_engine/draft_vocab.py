@@ -170,7 +170,7 @@ class DraftVocab:
         x = hidden.reshape(-1, hidden.shape[-1])
         logits = self._matmul(x, self.rows)
         ids = self.ids
-        if self.extra_ids is not None:
+        if self.extra_ids is not None and self.extra_rows is not None:
             logits = mx.concatenate([logits, self._matmul(x, self.extra_rows)], axis=-1)
             ids = mx.concatenate([ids, self.extra_ids])
         return logits, ids

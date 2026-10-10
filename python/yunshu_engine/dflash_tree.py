@@ -205,6 +205,7 @@ def _stack_linears(first: Any, second: Any) -> Any:
     layers of equal bits and group size; each output column is the separate layer's."""
     import mlx.nn as nn
 
+    out: Any
     if isinstance(first, nn.QuantizedLinear) and isinstance(second, nn.QuantizedLinear):
         if (first.bits, first.group_size, first.mode) != (
             second.bits,
@@ -216,10 +217,14 @@ def _stack_linears(first: Any, second: Any) -> Any:
             first.weight.shape[1] * 32 // first.bits, 1, bias=False
         )
         out.group_size, out.bits, out.mode = first.group_size, first.bits, first.mode
-        out.weight = mx.concatenate([first.weight, second.weight], axis=0)
+        out.weight = mx.concatenate(
+            [mx.array(first.weight), mx.array(second.weight)], axis=0
+        )
         out.scales = mx.concatenate([first.scales, second.scales], axis=0)
         if "biases" in first and "biases" in second:
-            out.biases = mx.concatenate([first.biases, second.biases], axis=0)
+            out.biases = mx.concatenate(
+                [getattr(first, "biases"), getattr(second, "biases")], axis=0
+            )
         return out
     if isinstance(first, nn.Linear) and isinstance(second, nn.Linear):
         out = nn.Linear(first.weight.shape[1], 1, bias=False)

@@ -1921,6 +1921,7 @@ class VLMEngine:
                 from .draft_vocab import DRAFT_VOCAB as DFLASH_KEEP
                 from .draft_vocab import install as _install_dflash_vocab
 
+                assert self._model is not None
                 found = _install_dflash_vocab(
                     drafter, self._model.language_model, DFLASH_KEEP
                 )
