@@ -256,6 +256,35 @@ def _stacked_mlp(mlp: Any, gate_up: Any) -> Any:
     return StackedMLP()
 
 
+def share_masks() -> bool:
+    """Build each attention mask once per round instead of once per drafter layer.
+
+    The five layers of a round share (rows, context length, window): the mask is a pure
+    function of those, so later layers reuse the first one's array (TensorFold keeps the
+    same per-round mask table in its ``_dflash_attend``). Idempotent."""
+    from mlx_vlm.speculative.drafters.qwen3_dflash import dflash as vendor
+
+    if getattr(vendor.create_causal_mask, "_yunshu_shared", False):
+        return True
+    original = vendor.create_causal_mask
+    table: dict = {}
+
+    def shared(n, offset=0, window_size=None, *args, **kwargs):
+        if args or kwargs:
+            return original(n, offset, window_size, *args, **kwargs)
+        key = (int(n), int(offset), window_size)
+        mask = table.get(key)
+        if mask is None:
+            if len(table) >= 32:
+                table.clear()
+            mask = table[key] = original(n, offset=offset, window_size=window_size)
+        return mask
+
+    shared._yunshu_shared = True  # type: ignore[attr-defined]
+    vendor.create_causal_mask = shared
+    return True
+
+
 def stack_projections(drafter: Any) -> int:
     """Stack each layer's K|V and gate|up projections into single matmuls (ported from
     TensorFold ``lane_fuse``: attn_kv, mlp_gate_up). Drafts only propose, so this changes

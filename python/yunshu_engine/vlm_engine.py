@@ -1811,7 +1811,9 @@ class VLMEngine:
                 draft_bits = int(settings.get("YUNSHU_DRAFT_BITS"))
                 if draft_bits:
                     quantize_drafter(drafter, draft_bits)
-                from .dflash_tree import stack_projections
+                from .dflash_tree import share_masks, stack_projections
+
+                share_masks()
 
                 # K|V and gate|up as one matmul each (TensorFold lane_fuse): fewer dispatches.
                 stack_projections(drafter)
