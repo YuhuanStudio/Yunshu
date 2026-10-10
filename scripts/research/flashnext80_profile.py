@@ -331,6 +331,61 @@ async def run(args):
     finally:
         mx.async_eval = original_async
 
+    # Where does a k-row verify spend its time?  Component timers (eval after each call, sync overhead included).
+    from collections import defaultdict as _dd
+
+    from yunshu_engine.kernels import tf_hc_forward as _tfh
+    from yunshu_engine.kernels.tf_flash_next import hc as _hc
+
+    _tfh.install()
+    _tfh.set_moe(True)
+    acc2 = _dd(float)
+
+    def timed(owner, name, label):
+        inner = getattr(owner, name)
+
+        def wrapper(*a, **k):
+            t0 = time.perf_counter()
+            out = inner(*a, **k)
+            if isinstance(out, tuple) and out and isinstance(out[0], str):
+                mx.eval(out[1])
+            elif out is not None:
+                mx.eval(out)
+            acc2[label] += (time.perf_counter() - t0) * 1e3
+            return out
+
+        setattr(owner, name, wrapper)
+        return owner, name, inner
+
+    patches = [
+        timed(_tfh, "_moe", "moe_fused"),
+        timed(_hc, "hc_project", "hc_project"),
+        timed(_hc, "hc_norm", "hc_norm"),
+        timed(_ql.Qwen4ExpBatchInvariantForward, "_gated_delta", "gated_delta"),
+        timed(_ql.Qwen4ExpBatchInvariantForward, "_qsa_attention", "qsa_attention"),
+    ]
+    try:
+        for k in (1, 2, 4):
+            yk = mx.array([[ids[-1]] * k])
+            acc2.clear()
+            n = 6
+            for _ in range(n):
+                hidden, _, txn = lm.speculative_verify_hidden(yk, cache)
+                mx.eval(hidden)
+                txn.abort()
+            emit(
+                {
+                    "kind": "verify_components",
+                    "rows": k,
+                    "ms_per_forward": {
+                        c: round(v / n, 2) for c, v in sorted(acc2.items())
+                    },
+                }
+            )
+    finally:
+        for owner, name, inner in patches:
+            setattr(owner, name, inner)
+
     # cProfile over a few serial steps: where does host time go, and how often does a step sync?
     import cProfile
     import pstats
