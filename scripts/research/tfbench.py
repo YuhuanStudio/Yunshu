@@ -847,6 +847,50 @@ def part_promote(s, out, a):
     emit(out, part="promote", phase="conc_A", **{**ra, "text": ra["_text"]})
 
 
+def part_forced(s, out, a):
+    """Same-text decoding: continue the other engine's output in windows of WINDOW tokens.
+
+    TFB_FORCED_TEXT is a decode JSONL record file holding that engine's cold text for the
+    cell; each window sends prompt + the text's first k tokens as an assistant prefill and
+    decodes WINDOW tokens greedily, so round statistics compare on identical text (until the
+    continuation diverges; ``match`` is the length of the common prefix in characters)."""
+    from transformers import AutoTokenizer
+
+    tok = AutoTokenizer.from_pretrained(a.model)
+    window = int(os.environ.get("TFB_WINDOW", "160"))
+    ctx, kind = (a.only_ctx or [1024])[0], (a.only_kind or ["prose"])[0]
+    text = None
+    for line in Path(os.environ["TFB_FORCED_TEXT"]).read_text().splitlines():
+        d = json.loads(line)
+        if d.get("part") == "decode" and d.get("phase") == "cold":
+            text = d["text"]
+    ids = tok.encode(text)
+    prompt = decode_prompt(kind, ctx, False)
+    for k in range(0, min(len(ids), 6 * window), window):
+        prefix = tok.decode(ids[:k]) if k else ""
+        b = req(s.model, prompt, window)
+        if prefix:
+            b["messages"] += [{"role": "assistant", "content": prefix}]
+        r = send(s.url, b)
+        want = tok.decode(ids[k : k + window])
+        got = r["_text"]
+        n = next(
+            (i for i, (x, y) in enumerate(zip(got, want, strict=False)) if x != y),
+            min(len(got), len(want)),
+        )
+        r.pop("_text")
+        emit(
+            out,
+            part="forced",
+            ctx=ctx,
+            kind=kind,
+            start_tok=k,
+            match_chars=n,
+            want_chars=len(want),
+            **r,
+        )
+
+
 def part_conc(s, out, a):
     ns = [int(x) for x in (a.conc_ns or "2,4,8").split(",")]
     for n in (2,) if a.smoke else ns:
@@ -1012,9 +1056,18 @@ def parse_args(argv=None):
 def main():
     a = parse_args()
     extra_env = dict(kv.split("=", 1) for kv in a.env)
-    if a.part not in ("decode", "conc", "agent", "ca", "needle", "conc32", "promote"):
+    if a.part not in (
+        "decode",
+        "conc",
+        "agent",
+        "ca",
+        "needle",
+        "conc32",
+        "promote",
+        "forced",
+    ):
         raise ValueError(
-            "supported parts: decode, conc, agent, ca, needle, conc32, promote"
+            "supported parts: decode, conc, agent, ca, needle, conc32, promote, forced"
         )
     if a.dry_run:
         if a.part == "decode" and not a.smoke:
@@ -1100,6 +1153,7 @@ def main():
                     "needle": part_needle,
                     "conc32": part_conc32,
                     "promote": part_promote,
+                    "forced": part_forced,
                 }[a.part](s, out, a)
             s.verify_spec_mode()
             mem = getattr(s, "mem", None)

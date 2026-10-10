@@ -223,7 +223,8 @@ def _stack_linears(first: Any, second: Any) -> Any:
         out.scales = mx.concatenate([first.scales, second.scales], axis=0)
         if "biases" in first and "biases" in second:
             out.biases = mx.concatenate(
-                [getattr(first, "biases"), getattr(second, "biases")], axis=0
+                [first.biases, second.biases],  # type: ignore[list-item]
+                axis=0,
             )
         return out
     if isinstance(first, nn.Linear) and isinstance(second, nn.Linear):
