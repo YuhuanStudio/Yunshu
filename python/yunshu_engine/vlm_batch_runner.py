@@ -385,6 +385,7 @@ class VLMBatchRunner:
         self.apc_semantic_hash = apc_semantic_hash
         self.drafter = drafter
         self.draft_kind = draft_kind
+        self.promotions = 0  # shared-batch rows moved onto the speculative lane
         from . import penalty_context
 
         penalty_context.install()  # penalty context = the full prompt on an APC hit too
@@ -1007,6 +1008,19 @@ class VLMBatchRunner:
         job.stats.used_apc = use_apc
         spec_lane = self._aux_spec if job.priority < 0 else self._spec
         spec = job.use_draft and alone and spec_lane is None
+        job.promotable = bool(
+            job.use_draft
+            and not spec
+            and self.draft_kind == "dflash"
+            and job.priority >= 0
+            and job.greedy
+            and job.guide is None
+            and not job.logprobs
+            and not job.processors
+            and job.budget is None
+            and job.cache_plan is None
+            and job.prompt_kwargs is None
+        )
         job.stats.spec_reason = (
             "engaged"
             if spec
@@ -1142,6 +1156,108 @@ class VLMBatchRunner:
         group.jobs[uid] = job
         if group.sampler is not None and job.sampling is not None:
             group.sampler.add(uid, job.sampling)
+
+    def _maybe_promote(self) -> bool:
+        """Move a lone decoding row from the shared batch onto the speculative lane.
+
+        A request that started while others ran stays off the lane for its whole life; once
+        it is the only request left it would decode at plain speed for the rest of a long
+        reply. At a step boundary the shared batch holds its KV (one-row ``BatchKVCache``,
+        the lane's own layout), every committed token processed, and the next token sampled
+        but neither cached nor emitted, which is the state a prefill hands the lane. The
+        drafter has no target hidden states for the committed positions: the lane's first
+        round is a plain one-row verify that captures them, so promotion is lossless.
+        """
+        if (
+            self.drafter is None
+            or self._spec is not None
+            or self._aux_spec is not None
+            or self._driver_jobs
+            or self._pending
+            or self.inflight() != 1
+        ):
+            return False
+        groups = [g for g in self._batches.values() if g.jobs]
+        if len(groups) != 1 or len(groups[0].jobs) != 1:
+            return False
+        group = groups[0]
+        ((uid, job),) = group.jobs.items()
+        gen = group.gen
+        batch = gen._generation_batch
+        if (
+            not job.promotable
+            or not job.stats.t_first
+            or group.prefills
+            or gen._prompt_batch is not None
+            or gen._unprocessed_sequences
+            or getattr(batch, "is_speculative", False)
+            or list(batch.uids) != [uid]
+            or batch._next_tokens is None
+            or batch.logits_processors
+            and any(batch.logits_processors)
+        ):
+            return False
+        remaining = int(batch.max_tokens[0]) - int(batch._num_tokens[0])
+        if remaining < 2:
+            return False
+        from mlx_vlm.generate.ar import SpeculativeGenerationBatch
+
+        batch._eval_pending_state()
+        cache = list(batch.prompt_cache)  # the filter below clears the batch's own list
+        spec_batch = SpeculativeGenerationBatch(
+            self.model,
+            self.drafter,
+            self.draft_kind,
+            [uid],
+            batch._next_tokens,
+            cache,
+            batch.sampler,
+            batch.stop_criteria,
+            [remaining],
+            None,
+            None,
+            None,
+            draft_block_size=self.draft_block_size,
+            token_dtype=batch._next_tokens.dtype,
+            greedy_sampling=True,
+        )
+        new_gen = self._new_generator(
+            spec=True,
+            use_apc=job.stats.used_apc,
+            top_logprobs=0,
+            sampler=None,
+            greedy=True,
+        )
+        new_gen._generation_batch = spec_batch
+        gen._generation_batch.filter([])
+        group.jobs.pop(uid, None)
+        if group.sampler is not None:
+            group.sampler.drop(uid)
+        from .constrained_spec import SpecRequest, install
+
+        install()
+        job.use_draft = True
+        job.promotable = False
+        job.stats.used_draft = True
+        job.stats.spec_reason = "promoted"
+        job.stats.spec_mode = _spec_mode(self.drafter)
+        job.spec_base = _spec_counters(self.drafter)
+        job.spec_last = job.spec_base
+        job.spec_request = SpecRequest(False, 0)
+        job.spec_request.guide = None
+        job.spec_request.processors = []
+        vocab = getattr(self.drafter, "_draft_vocab", None)
+        if vocab is not None:
+            vocab.set_context(job.ids)
+            self._vocab_owner = job
+        self._spec = _Group(gen=new_gen, spec=True, jobs={uid: job})
+        self.promotions += 1
+        logger.info(
+            "Promoted request onto the speculative lane (%s): %d tokens left",
+            job.stats.spec_mode,
+            remaining,
+        )
+        return True
 
     # ── round driver ────────────────────────────────────────────────────
     def _admit_driver(self, job: _Job, use_apc: bool) -> None:
@@ -2044,6 +2160,10 @@ class VLMBatchRunner:
             if waiting:
                 with self._lock:
                     self._pending = waiting + self._pending
+            try:
+                self._maybe_promote()
+            except Exception:  # lossless fallback: the row keeps decoding in the batch
+                logger.exception("speculative-lane promotion failed")
             if work_order:
                 self._step_work_groups(primary)
             else:
@@ -2380,6 +2500,7 @@ class _Job:
     guide: Any = None
     spec_request: Any = None
     spec_procs: list = field(default_factory=list)
+    promotable: bool = False  # may move from the shared batch onto the speculative lane
     keyed: Any = (
         None  # KeyedSampler of a sampled request served by the speculative lane
     )

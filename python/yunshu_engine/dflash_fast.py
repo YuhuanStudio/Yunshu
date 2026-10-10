@@ -459,6 +459,8 @@ def rounds(
                     else max_tokens - emitted
                 )
                 n = budget.choose(max(0, room - 1))
+                if hidden is None:
+                    n = 0  # a promoted row: the first round is plain and captures hidden states
                 copied = (
                     copy.draft(min(copy.max_draft, room - 1))
                     if copy is not None

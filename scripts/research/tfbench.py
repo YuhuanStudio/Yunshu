@@ -819,6 +819,33 @@ def part_conc32(s, out, a):
         )
 
 
+def part_promote(s, out, a):
+    """A long reply A starts while a shorter reply B runs; B ends first and A then decodes alone.
+
+    Solo A is the reference; the concurrent A must produce the same text, and its tail should
+    run on the speculative lane (the server log shows "Promoted request")."""
+    n_a = int(a.decode_tokens)
+    ctx = (a.only_ctx or [1024])[0]
+    text_a = decode_prompt("code", ctx, False)
+    text_b = decode_prompt("prose", ctx, False)
+
+    def send_a():
+        return send(s.url, req(s.model, text_a, n_a))
+
+    solo = send_a()
+    emit(out, part="promote", phase="solo", **{**solo, "text": solo["_text"]})
+    solo.pop("_text")
+    with cf.ThreadPoolExecutor(2) as ex:
+        # B starts first and owns the lane; A arrives while B decodes (so it joins the shared
+        # batch) and is the only request left once B ends.
+        fb = ex.submit(lambda: send(s.url, req(s.model, text_b, 200)))
+        time.sleep(float(os.environ.get("TFB_PROMOTE_DELAY_S", "0.8")))
+        fa = ex.submit(send_a)
+        rb, ra = fb.result(), fa.result()
+    emit(out, part="promote", phase="conc_B", **{**rb, "text": rb["_text"]})
+    emit(out, part="promote", phase="conc_A", **{**ra, "text": ra["_text"]})
+
+
 def part_conc(s, out, a):
     ns = [int(x) for x in (a.conc_ns or "2,4,8").split(",")]
     for n in (2,) if a.smoke else ns:
@@ -984,8 +1011,10 @@ def parse_args(argv=None):
 def main():
     a = parse_args()
     extra_env = dict(kv.split("=", 1) for kv in a.env)
-    if a.part not in ("decode", "conc", "agent", "ca", "needle", "conc32"):
-        raise ValueError("supported parts: decode, conc, agent, ca, needle, conc32")
+    if a.part not in ("decode", "conc", "agent", "ca", "needle", "conc32", "promote"):
+        raise ValueError(
+            "supported parts: decode, conc, agent, ca, needle, conc32, promote"
+        )
     if a.dry_run:
         if a.part == "decode" and not a.smoke:
             for ctx in a.only_ctx or [1024, 8192, 32768]:
@@ -1069,6 +1098,7 @@ def main():
                     "agent": part_agent,
                     "needle": part_needle,
                     "conc32": part_conc32,
+                    "promote": part_promote,
                 }[a.part](s, out, a)
             s.verify_spec_mode()
             mem = getattr(s, "mem", None)
