@@ -110,14 +110,16 @@ async def run(args):
         return (time.perf_counter() - t_start) * 1e3 / args.steps
 
     def verify_ms(k):
-        """Median ms of one k-row forward (what a verify round costs), serial."""
+        """Median ms of the real speculative verify forward of k rows (batch-invariant path, rolled back)."""
         yk = mx.array([[ids[-1]] * k])
         times = []
         for i in range(args.steps // 2 + 3):
             t0 = time.perf_counter()
-            mx.eval(lm(yk, cache=cache).logits)
+            hidden, _, txn = lm.speculative_verify_hidden(yk, cache)
+            mx.eval(hidden)
             if i >= 3:
                 times.append((time.perf_counter() - t0) * 1e3)
+            txn.abort()
         return round(statistics.median(times), 3)
 
     results = {}
