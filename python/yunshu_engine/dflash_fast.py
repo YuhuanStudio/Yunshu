@@ -404,7 +404,6 @@ def rounds(
     budget = NodeBudget(15, prior=dt.PRIOR)
     from . import settings
 
-    pin = settings.get("YUNSHU_SPEC_NODES")
     profile_sync = bool(settings.get("YUNSHU_DEBUG_TREE_PROFILE"))
     prof = {"rounds": 0, "draft": 0.0, "verify": 0.0, "commit": 0.0, "nodes": 0}
     context = mtp_lane._STATE["context"]
@@ -460,8 +459,6 @@ def rounds(
                     else max_tokens - emitted
                 )
                 n = budget.choose(max(0, room - 1))
-                if pin is not None:
-                    n = min(pin, max(0, room - 1))
                 copied = (
                     copy.draft(min(copy.max_draft, room - 1))
                     if copy is not None

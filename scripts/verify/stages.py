@@ -1894,6 +1894,8 @@ def stage_console(ctx: Ctx) -> StageResult:
             "console", result.ok, [] if result.ok else [result.reason], numbers
         ),
     )
+
+
 def _qwen4_mtp_valid(path):
     rows = read_jsonl(path)
     if not rows or rows[-1].get("complete") is not True:

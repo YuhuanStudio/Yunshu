@@ -2237,7 +2237,6 @@
   "YUNSHU_FOOTPRINT_SAMPLE_MS": "idle_memory_return",
   "YUNSHU_MAX_MEMORY_GB": "idle_memory_return",
   "YUNSHU_PLE_READ_THREADS": "ple_ssd_rows",
-  "YUNSHU_SPEC_NODES": "cost_aware_depth",
   "YUNSHU_VLM_APC_DRAFT_WINDOW_GB": "apc_prefix_cache",
   "YUNSHU_DEBUG_TREE_PROFILE": "tree_drafts"
  },
