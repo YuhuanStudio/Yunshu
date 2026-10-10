@@ -24,6 +24,25 @@ failed or untested and link its receipt. A capability advertised by code and a
 feature proven on hardware are distinct. The release gate supplies acceptance
 checks; this page does not invent results for untested checkpoints.
 
+## Qwen3.8-Flash-Next under 80 GB (qwen4_exp)
+
+`Jundot/Qwen3.8-Flash-Next-oQ4e-mtp` is 106 GB on disk, of which 32 GB is the per-layer n-gram embedding (PLE). Yunshu reads PLE rows from the SSD instead of loading the table, which leaves 74.3 GB of resident weights (the 1.5 GB MTP head included).
+
+1. Build the external-PLE view once (hard links, nothing is copied, the original pack is untouched; source and view must be on the same volume): `python scripts/research/flashnext80_prepare_view.py <pack> <pack>-ple-ssd`.
+2. Serve the view: `YUNSHU_MAX_MEMORY_GB=74.5 yunshu serve -m <pack>-ple-ssd`. The MTP head is used automatically (one draft per round); the APC SSD tier is on by default.
+
+With a memory ceiling set, Yunshu keeps the freed-buffer pool at 0.5 GiB and leaves the vision tower unloaded until the first image request. Both are lossless; set `YUNSHU_PREFILL_BUFFER_CACHE_GB` to override the pool.
+
+| Context (M5 Max 128 GB, MTP on, whole-system memory delta) | Steady | Cold-prefill peak | Decode |
+|---|---:|---:|---:|
+| 1K | 75-76 GB | 77 GB | 45-50 tok/s |
+| 8K | 77 GB | 79 GB | 42 tok/s |
+| 32K | 75 GB | 80 GB | 37-38 tok/s |
+| about 169K, SSD APC hit (second request) | 75 GB | 81 GB | 22 tok/s, first token in 1.2 s |
+| about 169K, cold | 75 GB | 84-85 GB | 21 tok/s |
+
+A cold prefill beyond roughly 32K needs about 83-85 GB at its peak (the extra is prefill working memory); the same prompt served from the SSD prompt cache stays near 81 GB. Output is identical with speculation on and off and with a prompt-cache hit or miss. MTP gains about 20% here because every extra verify row reads more experts. Thinking-mode MMLU-Pro (300 questions, greedy): TBD.
+
 ## Omni (audio, image, video in; speech out)
 
 | Checkpoint | Serves | Real-server evidence (2026-10-06, `omnismall` jobs; M5 until the M3 allowlist reaches the queue daemon) |
