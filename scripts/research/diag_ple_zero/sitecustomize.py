@@ -17,11 +17,3 @@ if os.environ.get("FN80_PLE_ZERO") == "1":
         ple_storage.QuantizedMMapNGramEmbedding.__call__ = _zero
     except Exception:  # noqa: BLE001
         pass
-
-if os.environ.get("FN80_GDN_OFF") == "1":
-    try:
-        from yunshu_engine.kernels import tf_hc_forward
-
-        tf_hc_forward.set_gdn(False)
-    except Exception:  # noqa: BLE001
-        pass

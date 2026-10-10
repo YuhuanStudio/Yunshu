@@ -151,7 +151,6 @@ async def run(args):
         else:
             tf_hc_forward.install()
             tf_hc_forward.set_moe(mode.startswith("hc+moe"))
-            tf_hc_forward.set_gdn(mode.endswith("+gdn"))
         orig = ps.QuantizedMMapNGramEmbedding.__call__
         if tag == "noPLE":
 
@@ -192,7 +191,7 @@ async def run(args):
         }
         row["serial_tok_s"] = tok_s(row["serial_total_ms"])
         row["pipelined_tok_s"] = tok_s(p)
-        if mode == "hc+moe+gdn":
+        if mode == "hc+moe":
             results[tag] = row
         emit(row)
 
@@ -373,7 +372,7 @@ async def run(args):
         timed(_tfh, "_moe", "moe_fused"),
         timed(_hc, "hc_project", "hc_project"),
         timed(_hc, "hc_norm", "hc_norm"),
-        timed(_tfh, "_gated_delta", "gated_delta"),
+        timed(_ql.Qwen4ExpBatchInvariantForward, "_gated_delta", "gated_delta"),
         timed(_ql.Qwen4ExpBatchInvariantForward, "_qsa_attention", "qsa_attention"),
     ]
     try:
@@ -407,7 +406,6 @@ async def run(args):
 
     _tfh2.install()
     _tfh2.set_moe(True)
-    _tfh2.set_gdn(True)
     seen = []
     orig_gateup = _experts.expert_gateup
 
@@ -459,10 +457,9 @@ async def run(args):
 
     _tfa.install()
     _tfa.set_moe(True)
-    _tfa.set_gdn(True)
     fwd_cls = _ql.Qwen4ExpBatchInvariantForward
     real = {
-        "gdn": _tfa._gated_delta,
+        "gdn": fwd_cls._gated_delta,
         "qsa": fwd_cls._qsa_attention,
         "moe": _tfa._moe,
         "proj": _hca.hc_project,
@@ -486,7 +483,7 @@ async def run(args):
 
     def set_stub(name, on):
         if name == "gdn":
-            _tfa._gated_delta = stubs["gdn"] if on else real["gdn"]
+            fwd_cls._gated_delta = stubs["gdn"] if on else real["gdn"]
         elif name == "qsa":
             fwd_cls._qsa_attention = stubs["qsa"] if on else real["qsa"]
         elif name == "moe":
