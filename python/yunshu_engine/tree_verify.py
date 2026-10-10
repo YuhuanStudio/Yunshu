@@ -924,6 +924,12 @@ def _tick(name: str, arrays, t0: float) -> float:
     mx.eval(arrays)
     now = time.perf_counter()
     PROFILE[name] = PROFILE.get(name, 0.0) + (now - t0) * 1000
+    from . import gpu_window
+
+    count = gpu_window.stage_end()
+    if count:
+        key = name[:-3] + "_disp" if name.endswith("_ms") else name + "_disp"
+        PROFILE[key] = PROFILE.get(key, 0.0) + count
     return now
 
 
@@ -969,6 +975,9 @@ def _tree_forward(
 
         PROFILE["rounds"] += 1
         mx.eval(h, normed)
+        from . import gpu_window
+
+        gpu_window.stage_begin()
         t0 = time.perf_counter()
     for i, (layer, c) in enumerate(zip(layers, cache, strict=True)):
         if layer.is_linear:

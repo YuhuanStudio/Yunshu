@@ -57,3 +57,21 @@ def tick() -> None:
             stats["commit_cpu_ms"] / rounds,
             stats,
         )
+
+
+def stage_begin() -> None:
+    """Reset the dispatch counter (profile mode: the caller has just evaluated everything)."""
+    lib = _lib()
+    if lib is not None:
+        lib.metalrt_begin()
+
+
+def stage_end() -> int:
+    """Dispatches since the last ``stage_begin``/``stage_end``, then reset; 0 without the interposer."""
+    lib = _lib()
+    if lib is None:
+        return 0
+    buf = ctypes.create_string_buffer(4096)
+    lib.metalrt_end(buf, 4096)
+    lib.metalrt_begin()
+    return int(json.loads(buf.value.decode())["dispatches"])

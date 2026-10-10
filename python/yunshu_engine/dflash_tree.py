@@ -79,6 +79,9 @@ def compute_lattice_gpu(
         import time
 
         mx.eval(inputs, hidden)
+        from . import gpu_window
+
+        gpu_window.stage_begin()
         t0 = time.perf_counter()
     dh = drafter._hidden(inputs, hidden, cache)[:, 1:]
     if prof:

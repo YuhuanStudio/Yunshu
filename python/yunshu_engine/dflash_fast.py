@@ -490,6 +490,9 @@ def rounds(
                         mx.eval(
                             tokens, parents
                         )  # drafter GPU time lands in the draft stage
+                        tv.PROFILE["search_disp"] = (
+                            tv.PROFILE.get("search_disp", 0.0) + gpu_window.stage_end()
+                        )
                     tokens, parents, ranks = reorder(tokens, parents)
                     window = mx.concatenate(
                         [mx.array([bonus], dtype=token_dtype), tokens]
