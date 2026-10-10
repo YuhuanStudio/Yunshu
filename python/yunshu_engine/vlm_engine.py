@@ -1811,6 +1811,10 @@ class VLMEngine:
                 draft_bits = int(settings.get("YUNSHU_DRAFT_BITS"))
                 if draft_bits:
                     quantize_drafter(drafter, draft_bits)
+                from .dflash_tree import stack_projections
+
+                # K|V and gate|up as one matmul each (TensorFold lane_fuse): fewer dispatches.
+                stack_projections(drafter)
                 # Project only the context window the drafter attends to.
                 from .dflash_context import install as install_dflash_context
 

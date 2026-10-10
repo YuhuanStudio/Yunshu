@@ -635,14 +635,19 @@
       "repo": "https://github.com/ashhart/TensorFold",
       "clone": "reference/TensorFold",
       "upstream_paths": [
-        "src/tensorfold/drafters/dflash_tree.py"
+        "src/tensorfold/drafters/dflash_tree.py",
+        "src/tensorfold/kernels/qwen/dense/v1/lane_fuse.py",
+        "src/tensorfold/drafters/dflash_drafter.py"
       ],
       "commit": "34bae79a",
       "license": "MIT",
       "why": "draft-tree lattice scoring (unary + edge*pairwise, tau)",
       "reviewed_commit": "f8fe17d24629aedabf90bbf78279dd776e6d62e7",
       "reviewed_date": "2026-10-08",
-      "review_reason": "Upstream 394d566 removes the Python engine in favor of native Zig. Preserve the qualified local Python arithmetic, M1-M4 coordinates, M5 sources and request-local state contracts; upstream file deletion is not a correctness reason to remove supported local decoding. New native projection/cache ideas require separate lossless A/B."
+      "review_reason": "Upstream 394d566 removes the Python engine in favor of native Zig. Preserve the qualified local Python arithmetic, M1-M4 coordinates, M5 sources and request-local state contracts; upstream file deletion is not a correctness reason to remove supported local decoding. New native projection/cache ideas require separate lossless A/B.",
+      "local_changes": [
+        "drafter K|V and gate|up stacked into single matmuls (stack_projections, after TensorFold lane_fuse attn_kv / mlp_gate_up); lattice candidates from the reduced draft vocabulary (after DFlashDrafter.draft_vocab)"
+      ]
     },
     {
       "kind": "inspired",
