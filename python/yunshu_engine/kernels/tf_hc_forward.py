@@ -24,7 +24,14 @@ from typing import Any
 
 import mlx.core as mx
 
-_STATE: dict[str, Any] = {"original": None, "installed": False, "modules": {}}
+from .tf_flash_next.base import MAX_ROWS
+
+_STATE: dict[str, Any] = {
+    "original": None,
+    "installed": False,
+    "modules": {},
+    "moe": True,
+}
 
 
 def _plan(module: Any) -> Any:
@@ -78,6 +85,73 @@ def _plan(module: Any) -> Any:
     return plan
 
 
+def _dense_rows(linear: Any) -> Any:
+    """A router linear's rows in bf16 (a quantized one dequantized): one matvec takes them all."""
+    if hasattr(linear, "scales"):
+        return mx.dequantize(
+            linear.weight,
+            linear.scales,
+            linear.biases,
+            group_size=linear.group_size,
+            bits=linear.bits,
+        ).astype(mx.bfloat16)
+    return linear.weight.astype(mx.bfloat16)
+
+
+def _moe_plan(mlp: Any) -> Any:
+    """Router rows (experts + shared gate) and projections for the fused MoE kernels, or None."""
+    key = ("moe", id(mlp))
+    plan = _STATE["modules"].get(key)
+    if plan is not None:
+        return plan if plan != "ineligible" else None
+    try:
+        from .tf_flash_next.experts import _format
+
+        sw, se = mlp.switch_mlp, mlp.shared_expert
+        _format(sw.gate_proj, sw.up_proj)
+        _format(sw.down_proj)
+        _format(se.gate_proj, se.up_proj)
+        _format(se.down_proj)
+        router_rows = mx.concatenate(
+            [_dense_rows(mlp.gate), _dense_rows(mlp.shared_expert_gate)]
+        )
+        mx.eval(router_rows)
+        plan = {
+            "router": router_rows,
+            "top_k": int(mlp.top_k),
+            "experts": int(mlp.num_experts),
+            "sw": sw,
+            "se": se,
+        }
+    except Exception:  # noqa: BLE001 - any odd format keeps the upstream MoE for that layer
+        _STATE["modules"][key] = "ineligible"
+        return None
+    _STATE["modules"][key] = plan
+    return plan
+
+
+def _moe(mlp: Any, x2d: Any) -> Any:
+    """Fused router + experts for <= MAX_ROWS rows: ("grouped", (Y, weights, logits)) for the next hc_norm."""
+    from .tf_flash_next import experts
+
+    plan = _moe_plan(mlp)
+    if not _STATE["moe"] or plan is None or x2d.shape[0] > MAX_ROWS:
+        return None
+    logits = experts.router(x2d, plan["router"])
+    sw, se = plan["sw"], plan["se"]
+    act, picks, weights = experts.expert_gateup(
+        x2d,
+        logits,
+        plan["top_k"],
+        plan["experts"],
+        sw.gate_proj,
+        sw.up_proj,
+        shared=(se.gate_proj, se.up_proj),
+    )
+    y = experts.expert_down_y(act, picks, sw.down_proj, se.down_proj)
+    return "grouped", (y, weights, logits)
+
+
 def eligible(model: Any) -> bool:
     """Every layer's two HC modules have affine weights the kernels read (decided once per model)."""
     key = ("model", id(model))
@@ -112,11 +186,12 @@ def _tf_model(self, model, inputs, cache, inputs_embeds, position_ids):
     dims = width // model.args.hc_count
     streams = model.args.hc_count
 
-    def norm(h, branch=None, inject=None):
-        if branch is None:
+    def norm(h, pending=None):
+        if pending is None:
             return tf_hc.hc_norm(h, streams=streams, write_back="none")
+        kind, branch, inject = pending
         return tf_hc.hc_norm(
-            h, streams=streams, write_back="plain", branch=(branch,), inject=inject
+            h, streams=streams, write_back=kind, branch=branch, inject=inject
         )
 
     def project(hn, ssp, module):
@@ -138,7 +213,7 @@ def _tf_model(self, model, inputs, cache, inputs_embeds, position_ids):
     )
     for layer, layer_cache in zip(model.layers, cache, strict=True):
         layer_mask = ssm_mask if layer.is_linear else fa_mask
-        hn, ssp = norm(h, *(pending or (None, None)))
+        hn, ssp = norm(h, pending)
         if "ple" in layer:
             stream = hn.reshape(batch, length, width)
             stream = stream + self._ple(
@@ -156,14 +231,22 @@ def _tf_model(self, model, inputs, cache, inputs_embeds, position_ids):
             branch = self._qsa_attention(
                 layer.self_attn, mixed, layer_cache, position_ids, layer_mask
             )
-        hn2, ssp2 = norm(hn, branch.reshape(rows, dims), inject)
+        hn2, ssp2 = norm(hn, ("plain", (branch.reshape(rows, dims),), inject))
         mixed, inject2 = project(hn2, ssp2, layer.mlp_hyper_connection)
-        branch2 = self._feed_forward(layer.mlp, mixed.reshape(batch, length, dims))
+        fused = _moe(layer.mlp, mixed)
+        if fused is None:
+            branch2 = self._feed_forward(layer.mlp, mixed.reshape(batch, length, dims))
+            fused = ("plain", (branch2.reshape(rows, dims),))
         h = hn2
-        pending = (branch2.reshape(rows, dims), inject2)
-        mx.async_eval(h, pending[0])
-    hn, _ = norm(h, *pending)
+        pending = (fused[0], fused[1], inject2)
+        mx.async_eval(h, *fused[1])
+    hn, _ = norm(h, pending)
     return hn.reshape(batch, length, width)
+
+
+def set_moe(enabled: bool) -> None:
+    """Route the MoE blocks through the fused router + expert kernels (default) or keep upstream's."""
+    _STATE["moe"] = bool(enabled)
 
 
 def install() -> bool:

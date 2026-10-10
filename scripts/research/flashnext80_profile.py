@@ -109,22 +109,36 @@ async def run(args):
         y.item()
         return (time.perf_counter() - t_start) * 1e3 / args.steps
 
+    def verify_ms(k):
+        """Median ms of one k-row forward (what a verify round costs), serial."""
+        yk = mx.array([[ids[-1]] * k])
+        times = []
+        for i in range(args.steps // 2 + 3):
+            t0 = time.perf_counter()
+            mx.eval(lm(yk, cache=cache).logits)
+            if i >= 3:
+                times.append((time.perf_counter() - t0) * 1e3)
+        return round(statistics.median(times), 3)
+
     results = {}
     plan = [
         ("real", "off"),
-        ("real", "on"),
+        ("real", "hc"),
+        ("real", "hc+moe"),
         ("noPLE", "off"),
-        ("noPLE", "on"),
+        ("noPLE", "hc"),
+        ("noPLE", "hc+moe"),
         ("real", "off"),
-        ("real", "on"),
+        ("real", "hc+moe"),
     ]
     from yunshu_engine.kernels import tf_hc_forward
 
     for tag, mode in plan:
-        if mode == "on":
-            tf_hc_forward.install()
-        else:
+        if mode == "off":
             tf_hc_forward.uninstall()
+        else:
+            tf_hc_forward.install()
+            tf_hc_forward.set_moe(mode == "hc+moe")
         orig = ps.QuantizedMMapNGramEmbedding.__call__
         if tag == "noPLE":
 
@@ -145,6 +159,7 @@ async def run(args):
         row = {
             "kind": "decode",
             "ple": tag,
+            "verify_ms": {k: verify_ms(k) for k in (2, 3, 4)},
             "tf_hc": mode,
             "serial_build": summarize(b),
             "serial_eval": summarize(e),
@@ -164,7 +179,7 @@ async def run(args):
         }
         row["serial_tok_s"] = tok_s(row["serial_total_ms"])
         row["pipelined_tok_s"] = tok_s(p)
-        if mode == "on":
+        if mode == "hc+moe":
             results[tag] = row
         emit(row)
 
