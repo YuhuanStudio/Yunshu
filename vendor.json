@@ -2358,6 +2358,21 @@
       "why": "Packs such as Jundot oQ4e ship the PLE table's magnitude as ngram_embedding.weight_scale (0.0002); upstream drops that tensor so PLE rows are ~5000x too large. Rows are scaled in float32 and rounded once to bf16 after the table lookup.",
       "source_sha256": "9abc42a47687e91f8ee80ae7e59fdd34a86ec46b926ac677e081bf0e58b534cf",
       "installed_version": "0.7.6"
+    },
+    {
+      "kind": "patches",
+      "path": "python/yunshu_engine/penalty_context.py",
+      "repo": "https://github.com/Blaizzy/mlx-vlm",
+      "clone": "reference/mlx-vlm",
+      "package": "mlx-vlm",
+      "module": "mlx_vlm.generate.ar",
+      "symbol": "PromptProcessingBatch.__init__",
+      "signature": "(self, model: nn.Module, uids: List[int], input_ids: List[List[int]], max_tokens: List[int], inputs_embeds: mx.array, prompt_kwargs: dict, logits_processors: Optional[List[Optional[List[Callable[[mx.array, mx.array], mx.array]]]]]=None, thinking_budget_criteria: Optional[List[Any]]=None, prefill_step_size: Optional[int]=DEFAULT_PREFILL_STEP_SIZE, kv_bits=None, kv_key_bits=None, kv_value_bits=None, kv_key_scheme=None, kv_value_scheme=None, kv_group_size: int=DEFAULT_KV_GROUP_SIZE, kv_quant_scheme: str=DEFAULT_KV_QUANT_SCHEME, quantized_kv_start: int=0, warm_cache: Optional[List[Any]]=None, apc_meta: Optional[List[dict]]=None, apc_manager: Optional['_apc.APCManager']=None, apc_coordinator: Optional['_apc.APCCoordinator']=None, right_pad_per_row: Optional[List[int]]=None, suffix_lens: Optional[List[int]]=None, apc_mode: Optional[str]=None, draft_model: Optional[nn.Module]=None, draft_kind: Optional[str]=None, draft_block_size: Optional[int]=None, greedy_sampling: bool=False)",
+      "license": "MIT",
+      "commit": "v0.7.6",
+      "why": "After an APC hit upstream builds the logits processors' token context from the uncached suffix only, so repetition/presence/frequency penalties answered differently on a hit than on a miss; the patch gives them the full prompt.",
+      "source_sha256": "1b8c550c53c7eb3a399be087e9d5fe9db0c7b5bff87d211543fb7aa4abc662eb",
+      "installed_version": "0.7.6"
     }
   ],
   "watch": [
