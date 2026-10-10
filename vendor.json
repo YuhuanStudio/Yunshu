@@ -2373,6 +2373,36 @@
       "why": "After an APC hit upstream builds the logits processors' token context from the uncached suffix only, so repetition/presence/frequency penalties answered differently on a hit than on a miss; the patch gives them the full prompt.",
       "source_sha256": "1b8c550c53c7eb3a399be087e9d5fe9db0c7b5bff87d211543fb7aa4abc662eb",
       "installed_version": "0.7.6"
+    },
+    {
+      "kind": "patches",
+      "path": "python/yunshu_engine/dflash_apc_window.py",
+      "repo": "https://github.com/Blaizzy/mlx-vlm",
+      "clone": "reference/mlx-vlm",
+      "package": "mlx-vlm",
+      "module": "mlx_vlm.generate.ar",
+      "symbol": "PromptProcessingBatch.__init__",
+      "signature": "(self, model: nn.Module, uids: List[int], input_ids: List[List[int]], max_tokens: List[int], inputs_embeds: mx.array, prompt_kwargs: dict, logits_processors: Optional[List[Optional[List[Callable[[mx.array, mx.array], mx.array]]]]]=None, thinking_budget_criteria: Optional[List[Any]]=None, prefill_step_size: Optional[int]=DEFAULT_PREFILL_STEP_SIZE, kv_bits=None, kv_key_bits=None, kv_value_bits=None, kv_key_scheme=None, kv_value_scheme=None, kv_group_size: int=DEFAULT_KV_GROUP_SIZE, kv_quant_scheme: str=DEFAULT_KV_QUANT_SCHEME, quantized_kv_start: int=0, warm_cache: Optional[List[Any]]=None, apc_meta: Optional[List[dict]]=None, apc_manager: Optional['_apc.APCManager']=None, apc_coordinator: Optional['_apc.APCCoordinator']=None, right_pad_per_row: Optional[List[int]]=None, suffix_lens: Optional[List[int]]=None, apc_mode: Optional[str]=None, draft_model: Optional[nn.Module]=None, draft_kind: Optional[str]=None, draft_block_size: Optional[int]=None, greedy_sampling: bool=False)",
+      "license": "MIT",
+      "commit": "v0.7.6",
+      "why": "seed the drafter context window from the APC checkpoint on a hit",
+      "source_sha256": "1b8c550c53c7eb3a399be087e9d5fe9db0c7b5bff87d211543fb7aa4abc662eb",
+      "installed_version": "0.7.6"
+    },
+    {
+      "kind": "patches",
+      "path": "python/yunshu_engine/dflash_apc_window.py",
+      "repo": "https://github.com/Blaizzy/mlx-vlm",
+      "clone": "reference/mlx-vlm",
+      "package": "mlx-vlm",
+      "module": "mlx_vlm.generate.ar",
+      "symbol": "PromptProcessingBatch.prompt_step",
+      "signature": "(self)",
+      "license": "MIT",
+      "commit": "v0.7.4",
+      "why": "expose the running prefill batch to the checkpoint capture",
+      "source_sha256": "94591dbb4d1c3f1c7eb63d2c677d24ceffc2b073671343a183ddac76d539897c",
+      "installed_version": "0.7.6"
     }
   ],
   "watch": [
