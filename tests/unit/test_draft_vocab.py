@@ -122,3 +122,21 @@ def test_a_non_latin_prompt_or_output_falls_back_to_the_full_readout():
     # the next request starts reduced again
     vocab.set_context([1, 2, 3])
     assert not vocab.full
+
+
+def test_logits_subset_matches_the_full_head_on_the_searched_ids():
+    head = _head()
+    vocab = DraftVocab(head, KEEP)
+    vocab.set_context([700, 701, 5])  # two ids above the base set join the extension
+    x = mx.random.normal((3, K)).astype(mx.bfloat16)
+    logits, ids = vocab.logits_subset(x)
+    full = _full_logits(head, x)
+    assert logits.shape == (3, KEEP + 2) and ids.shape == (KEEP + 2,)
+    assert mx.allclose(logits, mx.take(full, ids, axis=-1), atol=1e-2).item()
+    assert sorted(ids.tolist())[-2:] == [700, 701]
+
+
+def test_logits_subset_is_none_once_the_request_reads_the_full_vocabulary():
+    vocab = DraftVocab(_head(), KEEP)
+    vocab.full = True
+    assert vocab.logits_subset(mx.zeros((1, K), dtype=mx.bfloat16)) is None

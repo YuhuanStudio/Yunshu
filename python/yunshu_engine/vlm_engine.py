@@ -1811,6 +1811,10 @@ class VLMEngine:
                 draft_bits = int(settings.get("YUNSHU_DRAFT_BITS"))
                 if draft_bits:
                     quantize_drafter(drafter, draft_bits)
+                from .dflash_tree import stack_projections
+
+                # K|V and gate|up as one matmul each (TensorFold lane_fuse): fewer dispatches.
+                stack_projections(drafter)
                 # Project only the context window the drafter attends to.
                 from .dflash_context import install as install_dflash_context
 
@@ -1912,6 +1916,16 @@ class VLMEngine:
                 from .kernels.verify_select import install as install_streamed5
 
                 kernels["streamed5"] = install_streamed5()
+            if draft_kind == "dflash" and invariant and drafter is not None:
+                # Reduced candidate vocabulary for the DFlash lattice (draft_vocab.logits_subset).
+                from .draft_vocab import DRAFT_VOCAB as DFLASH_KEEP
+                from .draft_vocab import install as _install_dflash_vocab
+
+                assert self._model is not None
+                found = _install_dflash_vocab(
+                    drafter, self._model.language_model, DFLASH_KEEP
+                )
+                kernels["draft_vocab"] = DFLASH_KEEP if found else None
             if draft_kind == "mtp" and invariant and drafter is not None:
                 # The lane's own MTP rounds (one host read per cycle, the head
                 # run over every verify row inside the verify's graph), fused

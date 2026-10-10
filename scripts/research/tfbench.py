@@ -819,6 +819,78 @@ def part_conc32(s, out, a):
         )
 
 
+def part_promote(s, out, a):
+    """A long reply A starts while a shorter reply B runs; B ends first and A then decodes alone.
+
+    Solo A is the reference; the concurrent A must produce the same text, and its tail should
+    run on the speculative lane (the server log shows "Promoted request")."""
+    n_a = int(a.decode_tokens)
+    ctx = (a.only_ctx or [1024])[0]
+    kind_a = os.environ.get("TFB_PROMOTE_KIND", "code")
+    text_a = decode_prompt(kind_a, ctx, False)
+    text_b = decode_prompt("prose" if kind_a == "code" else "code", ctx, False)
+
+    def send_a():
+        return send(s.url, req(s.model, text_a, n_a))
+
+    solo = send_a()
+    emit(out, part="promote", phase="solo", **{**solo, "text": solo["_text"]})
+    solo.pop("_text")
+    with cf.ThreadPoolExecutor(2) as ex:
+        # B starts first and owns the lane; A arrives while B decodes (so it joins the shared
+        # batch) and is the only request left once B ends.
+        fb = ex.submit(lambda: send(s.url, req(s.model, text_b, 200)))
+        time.sleep(float(os.environ.get("TFB_PROMOTE_DELAY_S", "0.8")))
+        fa = ex.submit(send_a)
+        rb, ra = fb.result(), fa.result()
+    emit(out, part="promote", phase="conc_B", **{**rb, "text": rb["_text"]})
+    emit(out, part="promote", phase="conc_A", **{**ra, "text": ra["_text"]})
+
+
+def part_forced(s, out, a):
+    """Same-text decoding: continue the other engine's output in windows of WINDOW tokens.
+
+    TFB_FORCED_TEXT is a decode JSONL record file holding that engine's cold text for the
+    cell; each window sends prompt + the text's first k tokens as an assistant prefill and
+    decodes WINDOW tokens greedily, so round statistics compare on identical text (until the
+    continuation diverges; ``match`` is the length of the common prefix in characters)."""
+    from transformers import AutoTokenizer
+
+    tok = AutoTokenizer.from_pretrained(a.model)
+    window = int(os.environ.get("TFB_WINDOW", "160"))
+    ctx, kind = (a.only_ctx or [1024])[0], (a.only_kind or ["prose"])[0]
+    text = None
+    for line in Path(os.environ["TFB_FORCED_TEXT"]).read_text().splitlines():
+        d = json.loads(line)
+        if d.get("part") == "decode" and d.get("phase") == "cold":
+            text = d["text"]
+    ids = tok.encode(text)
+    prompt = decode_prompt(kind, ctx, False)
+    for k in range(0, min(len(ids), 6 * window), window):
+        prefix = tok.decode(ids[:k]) if k else ""
+        b = req(s.model, prompt, window)
+        if prefix:
+            b["messages"] += [{"role": "assistant", "content": prefix}]
+        r = send(s.url, b)
+        want = tok.decode(ids[k : k + window])
+        got = r["_text"]
+        n = next(
+            (i for i, (x, y) in enumerate(zip(got, want, strict=False)) if x != y),
+            min(len(got), len(want)),
+        )
+        r.pop("_text")
+        emit(
+            out,
+            part="forced",
+            ctx=ctx,
+            kind=kind,
+            start_tok=k,
+            match_chars=n,
+            want_chars=len(want),
+            **r,
+        )
+
+
 def part_conc(s, out, a):
     ns = [int(x) for x in (a.conc_ns or "2,4,8").split(",")]
     for n in (2,) if a.smoke else ns:
@@ -984,8 +1056,19 @@ def parse_args(argv=None):
 def main():
     a = parse_args()
     extra_env = dict(kv.split("=", 1) for kv in a.env)
-    if a.part not in ("decode", "conc", "agent", "ca", "needle", "conc32"):
-        raise ValueError("supported parts: decode, conc, agent, ca, needle, conc32")
+    if a.part not in (
+        "decode",
+        "conc",
+        "agent",
+        "ca",
+        "needle",
+        "conc32",
+        "promote",
+        "forced",
+    ):
+        raise ValueError(
+            "supported parts: decode, conc, agent, ca, needle, conc32, promote, forced"
+        )
     if a.dry_run:
         if a.part == "decode" and not a.smoke:
             for ctx in a.only_ctx or [1024, 8192, 32768]:
@@ -1069,6 +1152,8 @@ def main():
                     "agent": part_agent,
                     "needle": part_needle,
                     "conc32": part_conc32,
+                    "promote": part_promote,
+                    "forced": part_forced,
                 }[a.part](s, out, a)
             s.verify_spec_mode()
             mem = getattr(s, "mem", None)

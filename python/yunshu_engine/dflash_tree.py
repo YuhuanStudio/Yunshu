@@ -83,13 +83,27 @@ def compute_lattice_gpu(
     dh = drafter._hidden(inputs, hidden, cache)[:, 1:]
     if prof:
         t0 = tv._tick("drafter_layers_ms", dh, t0)
-    logits = drafter._logits(dh)
-    if prof:
-        t0 = tv._tick("drafter_head_ms", logits, t0)
-    cands = mx.argpartition(logits, -sel.top_k, axis=-1)[0, ..., -sel.top_k :]  # [D, K]
+    vocab = getattr(drafter, "_draft_vocab", None)
+    subset = (
+        vocab.logits_subset(dh)
+        if vocab is not None and drafter.config.final_logit_softcapping is None
+        else None
+    )
+    if subset is not None:
+        logits, ids = subset  # [D, n] over the searched ids
+        if prof:
+            t0 = tv._tick("drafter_head_ms", logits, t0)
+        part = mx.argpartition(logits, -sel.top_k, axis=-1)[..., -sel.top_k :]
+        cands = mx.take(ids, part)  # [D, K]
+        unary = mx.take_along_axis(logits, part, axis=-1).astype(mx.float32)
+    else:
+        logits = drafter._logits(dh)
+        if prof:
+            t0 = tv._tick("drafter_head_ms", logits, t0)
+        cands = mx.argpartition(logits, -sel.top_k, axis=-1)[0, ..., -sel.top_k :]
+        unary = mx.take_along_axis(logits[0], cands, axis=-1).astype(mx.float32)
     if prof:
         t0 = tv._tick("drafter_topk_ms", cands, t0)
-    unary = mx.take_along_axis(logits[0], cands, axis=-1).astype(mx.float32)
     hproj = sel.hidden_projection(dh)[0].astype(mx.float32)
     succ = sel.successor_codebook(cands).astype(mx.float32)  # [D, K, R]
     pred = sel.predecessor_codebook(cands).astype(mx.float32)
@@ -184,6 +198,87 @@ def quantize_drafter(drafter: Any, bits: int = 8, group_size: int = 64) -> int:
         sum(1 for _, m in drafter.named_modules() if isinstance(m, nn.QuantizedLinear))
         - before
     )
+
+
+def _stack_linears(first: Any, second: Any) -> Any:
+    """One projection computing ``first(x) | second(x)`` (outputs concatenated) for linear
+    layers of equal bits and group size; each output column is the separate layer's."""
+    import mlx.nn as nn
+
+    out: Any
+    if isinstance(first, nn.QuantizedLinear) and isinstance(second, nn.QuantizedLinear):
+        if (first.bits, first.group_size, first.mode) != (
+            second.bits,
+            second.group_size,
+            second.mode,
+        ):
+            return None
+        out = nn.QuantizedLinear(
+            first.weight.shape[1] * 32 // first.bits, 1, bias=False
+        )
+        out.group_size, out.bits, out.mode = first.group_size, first.bits, first.mode
+        out.weight = mx.concatenate(
+            [mx.array(first.weight), mx.array(second.weight)], axis=0
+        )
+        out.scales = mx.concatenate([first.scales, second.scales], axis=0)
+        if "biases" in first and "biases" in second:
+            out.biases = mx.concatenate(
+                [first.biases, second.biases],  # type: ignore[list-item]
+                axis=0,
+            )
+        return out
+    if isinstance(first, nn.Linear) and isinstance(second, nn.Linear):
+        out = nn.Linear(first.weight.shape[1], 1, bias=False)
+        out.weight = mx.concatenate([first.weight, second.weight], axis=0)
+        return out
+    return None
+
+
+def _stacked_mlp(mlp: Any, gate_up: Any) -> Any:
+    """The drafter's gated MLP with gate and up stacked (one matmul over the input)."""
+    import mlx.nn as nn
+    from mlx_vlm.speculative.drafters.qwen3_dflash.dflash import swiglu
+
+    class StackedMLP(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.gate_up = gate_up
+            self.down_proj = mlp.down_proj
+
+        def __call__(self, x):
+            both = self.gate_up(x)
+            half = both.shape[-1] // 2
+            return self.down_proj(swiglu(both[..., :half], both[..., half:]))
+
+    return StackedMLP()
+
+
+def stack_projections(drafter: Any) -> int:
+    """Stack each layer's K|V and gate|up projections into single matmuls (ported from
+    TensorFold ``lane_fuse``: attn_kv, mlp_gate_up). Drafts only propose, so this changes
+    speed and never a token. Returns the groups stacked."""
+    count = 0
+    for layer in drafter.layers:
+        attn = layer.self_attn
+        kv = _stack_linears(attn.k_proj, attn.v_proj)
+        if kv is not None:
+
+            def project(x, _kv=kv):
+                both = _kv(x)
+                half = both.shape[-1] // 2
+                return both[..., :half], both[..., half:]
+
+            object.__setattr__(attn, "_project_kv", project)
+            object.__setattr__(attn, "_stacked_kv", kv)
+            attn.k_proj = attn.v_proj = None  # the stacked copy owns the bytes
+            mx.eval(kv.parameters())
+            count += 1
+        gu = _stack_linears(layer.mlp.gate_proj, layer.mlp.up_proj)
+        if gu is not None:
+            layer.mlp = _stacked_mlp(layer.mlp, gu)
+            count += 1
+    mx.eval(drafter.parameters())
+    return count
 
 
 def supported(model: Any, draft_model: Any) -> bool:

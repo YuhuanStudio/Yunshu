@@ -1,3 +1,4 @@
+# Upstream (patches): Blaizzy/mlx-vlm (MIT) mlx_vlm/generate/ar.py PromptProcessingBatch @ v0.7.3
 """Keep the DFlash drafter's context window across APC prefix hits.
 
 The DFlash2 drafter reads the target's captured hidden states of the last

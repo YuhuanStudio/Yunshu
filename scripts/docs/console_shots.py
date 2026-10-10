@@ -40,14 +40,24 @@ def main(base: str) -> int:
     for lang, locale in LANGS.items():
         with tempfile.TemporaryDirectory(prefix="console-shots-") as tmp:
             env = {**os.environ, "LOCALE": locale, "FAST": "1"}
-            subprocess.run(["node", "scripts/docs/console_shots.mjs", base, tmp], cwd=ROOT, env=env, check=True)
+            subprocess.run(
+                ["node", "scripts/docs/console_shots.mjs", base, tmp],
+                cwd=ROOT,
+                env=env,
+                check=True,
+            )
             dest = ROOT / "docs/images/console" / lang
             dest.mkdir(parents=True, exist_ok=True)
             for png in sorted(Path(tmp).glob("*.png")):
                 q = to_webp(png, dest / (png.stem + ".webp"))
-                print(f"{lang}/{png.stem}.webp q={q} {(dest / (png.stem + '.webp')).stat().st_size // 1024} KB", flush=True)
+                print(
+                    f"{lang}/{png.stem}.webp q={q} {(dest / (png.stem + '.webp')).stat().st_size // 1024} KB",
+                    flush=True,
+                )
     return 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(main(sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:3994"))
+    raise SystemExit(
+        main(sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:3994")
+    )
