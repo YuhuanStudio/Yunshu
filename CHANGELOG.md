@@ -60,6 +60,7 @@ No new decode or TTFT claim is made for this cycle here. Historical measurements
 
 ### Added
 
+- A request that starts while others are running no longer stays off speculative decoding for its whole life: once it is the only request left, a greedy plain DFlash row moves from the shared batch onto the speculative lane at the next step boundary (output identical to a solo run).
 - Console backend: VLM speculative acceptance by draft depth, resident APC entries and bounded lifecycle events, metadata-only serve-log history with cursor pages, CLI diagnostics bundle download/manifest, actual structured-decoding enforcement reports, and advisory model unload/load impact.
 - OpenAI Evals API: 12 CRUD/run/output-item endpoints, atomic local persistence, cancellable background runs through normal chat inference, JSONL/file/stored-completion sources, lexical similarity and local score/label graders.
 - Add optional unprivileged Apple IOReport/HID host telemetry, request GPU+DRAM energy estimates, Prometheus gauges/counter, `yunshu top`, and tfbench/yv efficiency fields. Handle qualified macOS 27 CLPC counters and Max ANE/MTR sensor names. Off by default (opt in with `YUNSHU_TELEMETRY=on`): the 27B A/B found a small follow-up TTFT cost when on.

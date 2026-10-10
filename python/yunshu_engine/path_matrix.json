@@ -1800,6 +1800,53 @@
      "why": "PLE tables exist only in qwen4_exp (Flash-Next), which is served on the generic runner"
     }
    }
+  },
+  "lane_promotion": {
+   "module": "python/yunshu_engine/vlm_batch_runner.py",
+   "what": "A lone decoding row of the shared batch moves onto the speculative lane at a step boundary (batch to lane transition)",
+   "cells": {
+    "mtp": {
+     "s": "missing",
+     "why": "the MTP head needs its own KV over the prompt's target hidden states, which a plain batch row never captured; only the DFlash lane can start with a plain capture round",
+     "owner": "decode16",
+     "impact": "low",
+     "absent": [
+      [
+       "python/yunshu_engine/mtp_lane.py",
+       "_maybe_promote"
+      ]
+     ]
+    },
+    "dflash": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/vlm_batch_runner.py",
+       "def _maybe_promote"
+      ]
+     ]
+    },
+    "driver": {
+     "s": "na",
+     "why": "rows of the round driver have no shared-batch phase"
+    },
+    "batch": {
+     "s": "na",
+     "why": "this is the batch side of the transition"
+    },
+    "generic": {
+     "s": "na",
+     "why": "no drafter on this path"
+    },
+    "text": {
+     "s": "na",
+     "why": "n-gram drafts need no promotion"
+    },
+    "loop": {
+     "s": "na",
+     "why": "legacy loop is not grown (CLAUDE.md); decision is its removal"
+    }
+   }
   }
  },
  "exclusions": [
@@ -2240,7 +2287,7 @@
   "YUNSHU_VLM_APC_DRAFT_WINDOW_GB": "apc_prefix_cache",
   "YUNSHU_DEBUG_TREE_PROFILE": "tree_drafts"
  },
- "gap_budget": 57,
+ "gap_budget": 58,
  "settings_categories": [
   "speculative",
   "vlm-runner",
