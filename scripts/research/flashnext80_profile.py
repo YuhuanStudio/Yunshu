@@ -118,7 +118,13 @@ async def run(args):
         ("real", "off"),
         ("real", "on"),
     ]
-    for tag, _const in plan:
+    from yunshu_engine.kernels import tf_hc_forward
+
+    for tag, mode in plan:
+        if mode == "on":
+            tf_hc_forward.install()
+        else:
+            tf_hc_forward.uninstall()
         orig = ps.QuantizedMMapNGramEmbedding.__call__
         if tag == "noPLE":
 
@@ -139,6 +145,7 @@ async def run(args):
         row = {
             "kind": "decode",
             "ple": tag,
+            "tf_hc": mode,
             "serial_build": summarize(b),
             "serial_eval": summarize(e),
             "serial_total_ms": round(
@@ -157,7 +164,8 @@ async def run(args):
         }
         row["serial_tok_s"] = tok_s(row["serial_total_ms"])
         row["pipelined_tok_s"] = tok_s(p)
-        results[tag] = row
+        if mode == "on":
+            results[tag] = row
         emit(row)
 
     # No per-layer async_eval: build = pure Python/C++ graph tracing, eval = encode + GPU execution.
