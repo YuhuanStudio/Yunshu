@@ -453,6 +453,61 @@ async def run(args):
         }
     )
 
+    # Ablation: time a k-row verify with one component replaced by zeros (garbage output, right shapes).
+    from yunshu_engine.kernels import tf_hc_forward as _tfa
+    from yunshu_engine.kernels.tf_flash_next import hc as _hca
+
+    _tfa.install()
+    _tfa.set_moe(True)
+    _tfa.set_gdn(True)
+    fwd_cls = _ql.Qwen4ExpBatchInvariantForward
+    real = {
+        "gdn": _tfa._gated_delta,
+        "qsa": fwd_cls._qsa_attention,
+        "moe": _tfa._moe,
+        "proj": _hca.hc_project,
+    }
+
+    def zeros_like_mixed(mixed):
+        return mx.zeros(mixed.shape, dtype=mixed.dtype)
+
+    stubs = {
+        "gdn": lambda self, layer, mixed, mask, cache: zeros_like_mixed(mixed),
+        "qsa": lambda self, attention, mixed, cache, pos, mask: zeros_like_mixed(mixed),
+        "moe": lambda mlp, x: (
+            "grouped",
+            (
+                mx.zeros((x.shape[0], 11, x.shape[1]), dtype=mx.bfloat16),
+                mx.zeros((x.shape[0], 10), dtype=mx.float32),
+                mx.zeros((x.shape[0], 513), dtype=mx.float32),
+            ),
+        ),
+    }
+
+    def set_stub(name, on):
+        if name == "gdn":
+            _tfa._gated_delta = stubs["gdn"] if on else real["gdn"]
+        elif name == "qsa":
+            fwd_cls._qsa_attention = stubs["qsa"] if on else real["qsa"]
+        elif name == "moe":
+            _tfa._moe = stubs["moe"] if on else real["moe"]
+
+    ablation = {}
+    try:
+        for name in (None, "gdn", "qsa", "moe"):
+            if name:
+                set_stub(name, True)
+            row = {}
+            for k in (1, 2, 4):
+                row[k] = verify_ms(k)
+            ablation[name or "none"] = row
+            if name:
+                set_stub(name, False)
+    finally:
+        for name in ("gdn", "qsa", "moe"):
+            set_stub(name, False)
+    emit({"kind": "ablation_verify_ms", "by_stub": ablation})
+
     # cProfile over a few serial steps: where does host time go, and how often does a step sync?
     import cProfile
     import pstats
