@@ -27,6 +27,6 @@ done
 for arm in yunshu-off yunshu-mtp; do
   $S --label "flashnext80-ceiling-$arm" --priority 0 --timeout 15 --stall 10 --mem-gb 95 --quiet --expect-complete \
     --out "$O/ceiling-$arm.jsonl" -- $PYB scripts/research/flashnext80_engines.py --arm $arm --model "$V" --ctx 1024 \
-    --reps 3 --tokens 256 --env=YUNSHU_QWEN4_FUSED_HC=1 --env=YUNSHU_VLM_APC_DISK=0 --env=YUNSHU_MAX_MEMORY_GB=74.5 \
+    --reps 3 --tokens 256 --env=YUNSHU_VLM_APC_DISK=0 --env=YUNSHU_MAX_MEMORY_GB=74.5 \
     --out "$O/ceiling-$arm.jsonl"
 done

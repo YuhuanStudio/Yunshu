@@ -76,13 +76,13 @@ VLM 路径的限制：视觉语言模型会拒绝 LoRA adapter 和自定义 logi
 
 | 上下文(M5 Max 128 GB,MTP 开,整机内存差值) | 稳态 | 冷 prefill 峰值 | 解码 |
 |---|---:|---:|---:|
-| 1K | 75-76 GB | 77 GB | 45-50 tok/s |
-| 8K | 77 GB | 79 GB | 42 tok/s |
-| 32K | 75 GB | 80 GB | 37-38 tok/s |
+| 1K | 75-76 GB | 77 GB | 70 tok/s |
+| 8K | 77 GB | 79 GB | 66 tok/s |
+| 32K | 75 GB | 80 GB | 37-38 tok/s（融合内核之前） |
 | 约 169K,命中 SSD APC(第二次请求) | 75 GB | 81 GB | 22 tok/s,首 token 1.2 秒 |
 | 约 169K,冷启动 | 75 GB | 84-85 GB | 21 tok/s |
 
-冷 prefill 超過約 32K 時,峰值需要約 83-85 GB(多出的是 prefill 工作記憶體);同一個提示從 SSD 提示快取提供則維持在約 81 GB。開關推測解码、命中或未命中提示快取,輸出完全相同。MTP 在這裡約增加 20%,因為每多一列驗證就多讀一批專家。思考模式 MMLU-Pro(300 題,貪婪解码):261/300 = 0.870 (0 parse failures; the 27B oQ4e gate protocol gives 0.833)。
+冷 prefill 超過約 32K 時,峰值需要約 83-85 GB(多出的是 prefill 工作記憶體);同一個提示從 SSD 提示快取提供則維持在約 81 GB。開關推測解码、命中或未命中提示快取,輸出完全相同。解码使用融合的 hyper-connection 与 router/expert Metal 内核(源自 TensorFold,Apache-2.0),不开推测时 1K 为 65 tok/s、8K 为 55;MTP 在 1K 约增加 8%、8K 约增加 20%,因为每多一行验证就多读一批专家。思考模式 MMLU-Pro(300 題,貪婪解码):261/300 = 0.870 (0 parse failures; the 27B oQ4e gate protocol gives 0.833)。
 
 ## 相关页面
 
