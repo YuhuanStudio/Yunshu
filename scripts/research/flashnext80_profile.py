@@ -125,29 +125,19 @@ async def run(args):
         ("real", "off"),
         ("real", "hc"),
         ("real", "hc+moe"),
-        ("real", "hc+moe+rms"),
         ("noPLE", "off"),
         ("noPLE", "hc+moe"),
-        ("noPLE", "hc+moe+rms"),
         ("real", "hc+moe"),
-        ("real", "hc+moe+rms"),
         ("real", "hc+moe"),
-        ("real", "hc+moe+rms"),
     ]
     from yunshu_engine.kernels import tf_hc_forward
 
     for tag, mode in plan:
-        from yunshu_engine.kernels import fused_rmsnorm
-
         if mode == "off":
             tf_hc_forward.uninstall()
         else:
             tf_hc_forward.install()
             tf_hc_forward.set_moe(mode.startswith("hc+moe"))
-        if mode.endswith("+rms"):
-            fused_rmsnorm.install()
-        else:
-            fused_rmsnorm.uninstall()
         orig = ps.QuantizedMMapNGramEmbedding.__call__
         if tag == "noPLE":
 
@@ -188,7 +178,7 @@ async def run(args):
         }
         row["serial_tok_s"] = tok_s(row["serial_total_ms"])
         row["pipelined_tok_s"] = tok_s(p)
-        if mode == "hc+moe+rms":
+        if mode == "hc+moe":
             results[tag] = row
         emit(row)
 

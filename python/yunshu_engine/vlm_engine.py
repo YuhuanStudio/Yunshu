@@ -603,10 +603,9 @@ class VLMEngine:
         if config.get("model_type") == "qwen4_exp" and settings.get_bool(
             "YUNSHU_QWEN4_FUSED_HC"
         ):
-            from .kernels import fused_rmsnorm, tf_hc_forward
+            from .kernels import tf_hc_forward
 
             tf_hc_forward.install()
-            fused_rmsnorm.install()
 
         model_config = model_class.ModelConfig.from_dict(config)
         modules = ["text", "vision", "perceiver", "projector", "audio"]
