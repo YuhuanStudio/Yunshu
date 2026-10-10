@@ -407,9 +407,9 @@ class VLMBatchRunner:
 
     def _processor_fingerprint(self) -> str | None:
         """Everything that turns image bytes into pixel values, or None if unknown."""
-        cached = getattr(self, "_proc_fp", 0)
+        cached: str | None | int = getattr(self, "_proc_fp", 0)
         if cached != 0:
-            return cached
+            return cached  # type: ignore[return-value]
         fp = None
         try:
             import json
@@ -460,8 +460,8 @@ class VLMBatchRunner:
             except Exception:
                 digest = None
             if digest is not None:
-                return digest
-        return _apc.hash_image_payload(pixel_values=pixel_values)
+                return int(digest)
+        return int(_apc.hash_image_payload(pixel_values=pixel_values))
 
     def prepare_media(
         self,
