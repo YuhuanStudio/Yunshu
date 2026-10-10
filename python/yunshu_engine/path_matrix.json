@@ -1794,6 +1794,45 @@
      "why": "PLE tables exist only in qwen4_exp (Flash-Next), which is served on the generic runner"
     }
    }
+  },
+  "qwen4_fused_hc": {
+   "module": "python/yunshu_engine/kernels/tf_hc_forward.py",
+   "what": "TensorFold flash_next fused hyper-connection kernels for the qwen4_exp layer loop (YUNSHU_QWEN4_FUSED_HC, experimental)",
+   "cells": {
+    "mtp": {
+     "s": "na",
+     "why": "qwen4_exp (Flash-Next) hyper-connection kernels exist only for that family, which is served on the generic runner"
+    },
+    "dflash": {
+     "s": "na",
+     "why": "qwen4_exp (Flash-Next) hyper-connection kernels exist only for that family, which is served on the generic runner"
+    },
+    "driver": {
+     "s": "na",
+     "why": "qwen4_exp (Flash-Next) hyper-connection kernels exist only for that family, which is served on the generic runner"
+    },
+    "batch": {
+     "s": "na",
+     "why": "qwen4_exp (Flash-Next) hyper-connection kernels exist only for that family, which is served on the generic runner"
+    },
+    "text": {
+     "s": "na",
+     "why": "qwen4_exp (Flash-Next) hyper-connection kernels exist only for that family, which is served on the generic runner"
+    },
+    "loop": {
+     "s": "na",
+     "why": "qwen4_exp (Flash-Next) hyper-connection kernels exist only for that family, which is served on the generic runner"
+    },
+    "generic": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/vlm_engine.py",
+       "tf_hc_forward.install("
+      ]
+     ]
+    }
+   }
   }
  },
  "exclusions": [
@@ -2167,7 +2206,11 @@
   "python/yunshu_engine/mtp_patch.py": "orphan (see orphans)",
   "python/yunshu_engine/mtp_decoder.py": "orphan (see orphans)",
   "python/yunshu_engine/spec_interface.py": "orphan (see orphans)",
-  "python/yunshu_engine/spec_proposer.py": "orphan (see orphans)"
+  "python/yunshu_engine/spec_proposer.py": "orphan (see orphans)",
+  "python/yunshu_engine/kernels/tf_flash_next/base.py": "TensorFold flash_next v1 kernels used by qwen4_fused_hc (kernels/tf_hc_forward.py)",
+  "python/yunshu_engine/kernels/tf_flash_next/hc.py": "TensorFold flash_next v1 kernels used by qwen4_fused_hc (kernels/tf_hc_forward.py)",
+  "python/yunshu_engine/kernels/tf_flash_next/threads.py": "TensorFold flash_next v1 kernels used by qwen4_fused_hc (kernels/tf_hc_forward.py)",
+  "python/yunshu_engine/kernels/tf_flash_next/inputs.py": "TensorFold flash_next v1 kernels used by qwen4_fused_hc (kernels/tf_hc_forward.py)"
  },
  "settings": {
   "YUNSHU_MTP": "draft_family_coverage",
@@ -2223,7 +2266,8 @@
   "YUNSHU_CACHE_STALE_DAYS": "apc_prefix_cache",
   "YUNSHU_FOOTPRINT_SAMPLE_MS": "idle_memory_return",
   "YUNSHU_MAX_MEMORY_GB": "idle_memory_return",
-  "YUNSHU_PLE_READ_THREADS": "ple_ssd_rows"
+  "YUNSHU_PLE_READ_THREADS": "ple_ssd_rows",
+  "YUNSHU_QWEN4_FUSED_HC": "qwen4_fused_hc"
  },
  "gap_budget": 59,
  "settings_categories": [

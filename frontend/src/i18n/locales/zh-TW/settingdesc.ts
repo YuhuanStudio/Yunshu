@@ -125,6 +125,8 @@ const settingdesc = {
     "M5 級 GPU 上 Qwen3.5 系列 VLM 執行器：超過 512 列的預填區塊所用的矩陣乘法。`stock` 對未分塊的權重執行 MLX 量化矩陣乘法（27B 冷預填約快 25%，區塊的位元結果取決於列數）；`lane` 對所有列數都使用列不變的 lane 核心。屬於每個 APC 鍵與 SSD 命名空間的一部分。",
   YUNSHU_PLE_READ_THREADS:
     "Qwen3.8-Flash-Next 從 SSD 讀取 n-gram 嵌入（PLE）時，用多少執行緒平行讀取每個 token 的 48 列 PLE，而不是逐列讀取（新文字每個 token 約省 7 ms）。讀出的資料逐位元相同，輸出不變；0 表示沿用上游逐列讀取。",
+  YUNSHU_QWEN4_FUSED_HC:
+    "Qwen3.8-Flash-Next：每個步驟的 97 個 hyper-connection 區塊改用 TensorFold 的融合 Metal 核心（每區塊由約 14 個核心變成 3 個），所有前向傳遞都適用。在真實 oQ4e 權重上，單純解碼一步由 23.2 ms 降到 14.7 ms（68 對 43 tok/s）。每一列與其他列互不影響，所以開關推測解碼、提示快取命中與否輸出一致；與關閉時不是逐位元相同（混合輸入的最後一個 bf16 位元）。成對準確度檢查完成前為實驗性。",
   YUNSHU_PREFILL_BUFFER_CACHE_GB:
     "VLM 執行器：在預填步驟之間保留的 MLX 已釋放緩衝快取大小（GiB）。未設定時為實體記憶體的 5%，最多 6 GiB；常駐權重讓記憶體餘裕很少時改為 0.5 GiB（可壓低超大模型長預填的峰值）。可讓長前綴還原的緩衝在請求之間保持熱狀態；0 表示沿用上游每個區塊後清除。僅影響配置器，輸出不變。",
   YUNSHU_PREFILL_GDN:

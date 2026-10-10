@@ -133,6 +133,8 @@ const settingdesc = {
     "Qwen3.5-family VLM runner on M5-class GPUs: matmul for prefill chunks over 512 rows. `stock` runs MLX’s quantized matmul on the untiled weight (cold 27B prefill about 25% faster; a chunk’s bits depend on its row count); `lane` keeps the row-invariant lane kernel for every row count. Part of every APC key and SSD namespace.",
   YUNSHU_PLE_READ_THREADS:
     "Qwen3.8-Flash-Next with the n-gram embedding (PLE) read from SSD: threads that read a token's 48 PLE rows in parallel instead of one after another (about 7 ms per token on fresh text). Rows are byte-identical, so output is unchanged. 0 = upstream serial reads.",
+  YUNSHU_QWEN4_FUSED_HC:
+    "Qwen3.8-Flash-Next: run the 97 hyper-connection blocks of a step on TensorFold's fused Metal kernels (3 kernels instead of about 14 per block), in every forward. On the real oQ4e weights a plain decode step takes 14.7 ms instead of 23.2 (68 vs 43 tok/s). Each row is independent of the other rows, so speculation on equals off and prompt-cache hit equals miss; outputs are not bit-equal to the off setting (last bf16 bit of the mixed input). Experimental until the paired accuracy check.",
   YUNSHU_PREFILL_BUFFER_CACHE_GB:
     "VLM runner: GiB of MLX’s freed-buffer cache kept across prefill steps. Unset: 5% of physical RAM, at most 6 GiB, but 0.5 GiB when the resident weights leave little memory headroom (cuts the long-prefill peak of very large models). Keeps long-prefix restore buffers warm across requests; 0 = upstream clear after every chunk. Allocator only; output unchanged.",
   YUNSHU_PREFILL_GDN:

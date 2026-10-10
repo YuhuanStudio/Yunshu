@@ -600,6 +600,12 @@ class VLMEngine:
         from . import ple_parallel
 
         ple_parallel.install(int(settings.get("YUNSHU_PLE_READ_THREADS")))
+        if config.get("model_type") == "qwen4_exp" and settings.get_bool(
+            "YUNSHU_QWEN4_FUSED_HC"
+        ):
+            from .kernels import tf_hc_forward
+
+            tf_hc_forward.install()
 
         model_config = model_class.ModelConfig.from_dict(config)
         modules = ["text", "vision", "perceiver", "projector", "audio"]
