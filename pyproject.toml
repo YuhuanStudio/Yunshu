@@ -283,6 +283,11 @@ module = [
 follow_imports = "skip"
 follow_imports_for_stubs = true
 
+# Vendored TensorFold kernels (Apache-2.0): kept as upstream wrote them.
+[[tool.mypy.overrides]]
+module = ["yunshu_engine.kernels.tf_flash_next.*"]
+ignore_errors = true
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]

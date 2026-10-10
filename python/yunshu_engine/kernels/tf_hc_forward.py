@@ -163,7 +163,7 @@ def eligible(model: Any) -> bool:
             for name in ("attn_hyper_connection", "mlp_hyper_connection")
         )
         _STATE["modules"][key] = found
-    return found
+    return bool(found)
 
 
 def _tf_model(self, model, inputs, cache, inputs_embeds, position_ids):
