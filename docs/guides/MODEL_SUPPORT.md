@@ -41,7 +41,7 @@ With a memory ceiling set, Yunshu keeps the freed-buffer pool at 0.5 GiB and lea
 | about 169K, SSD APC hit (second request) | 75 GB | 81 GB | 22 tok/s, first token in 1.2 s |
 | about 169K, cold | 75 GB | 84-85 GB | 21 tok/s |
 
-A cold prefill beyond roughly 32K needs about 83-85 GB at its peak (the extra is prefill working memory); the same prompt served from the SSD prompt cache stays near 81 GB. Output is identical with speculation on and off and with a prompt-cache hit or miss. MTP gains about 20% here because every extra verify row reads more experts. Thinking-mode MMLU-Pro (300 questions, greedy): TBD.
+A cold prefill beyond roughly 32K needs about 83-85 GB at its peak (the extra is prefill working memory); the same prompt served from the SSD prompt cache stays near 81 GB. Output is identical with speculation on and off and with a prompt-cache hit or miss. MTP gains about 20% here because every extra verify row reads more experts. Thinking-mode MMLU-Pro (300 questions, greedy): 261/300 = 0.870 (0 parse failures; the 27B oQ4e gate protocol gives 0.833).
 
 ## Omni (audio, image, video in; speech out)
 
