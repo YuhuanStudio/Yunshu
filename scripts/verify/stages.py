@@ -1105,6 +1105,253 @@ def _memory_valid(path: Path):
     return True, ""
 
 
+def _multimodal_valid(
+    path: Path, sizes: list, require_hit: bool, require_anthropic=True
+):
+    rows = read_jsonl(path)
+    if not rows or not rows[-1].get("complete"):
+        return False, "incomplete multimodal evidence"
+    requests = {
+        (r.get("size"), r.get("kind")): r for r in rows if r.get("event") == "request"
+    }
+    expected = {
+        (n, k)
+        for n in sizes
+        for k in ("cold", "warm", "turn2-hit", "turn2-miss", "other-image")
+    }
+    if require_anthropic:
+        expected.update(
+            (0, k)
+            for k in (
+                "anthropic-cold",
+                "anthropic-warm",
+                "anthropic-turn2-hit",
+                "anthropic-turn2-miss",
+            )
+        )
+    if set(requests) != expected:
+        return False, "missing multimodal requests"
+    controls = [(n, [("cold", "warm"), ("turn2-miss", "turn2-hit")]) for n in sizes]
+    if require_anthropic:
+        controls += [
+            (
+                0,
+                [
+                    ("anthropic-cold", "anthropic-warm"),
+                    ("anthropic-turn2-miss", "anthropic-turn2-hit"),
+                ],
+            )
+        ]
+    for n, pairs in controls:
+        for miss, hit in pairs:
+            a, b = requests[n, miss], requests[n, hit]
+            if not a.get("ids") or a["ids"] != b.get("ids") or a.get("cached") != 0:
+                return False, "raw token hit/miss identity failed"
+            skipped = hit == "turn2-hit" and b.get("restore_skipped") is True
+            if require_hit and b.get("cached", 0) <= 0 and not skipped:
+                return False, "media APC not engaged"
+    if any(requests[n, "other-image"].get("cached") != 0 for n in sizes):
+        return False, "different image reused state"
+    return True, ""
+
+
+def _multimodal_quality_valid(path, sizes, n):
+    ok, reason = _multimodal_valid(path, sizes, True)
+    if not ok:
+        return ok, reason
+    rows = read_jsonl(path)
+    items = [r for r in rows if r.get("event") == "parity_item"]
+    if len(items) != n or {r.get("i") for r in items} != set(range(n)):
+        return False, "incomplete paired image set"
+    if any(
+        not r.get("cached")
+        or not r.get("cold_ids")
+        or r["cold_ids"] != r.get("hit_ids")
+        for r in items
+    ):
+        return False, "paired image raw-ID drift"
+    summary = next((r for r in rows if r.get("event") == "quality"), {})
+    scores = summary.get("scores", {})
+    counts = {
+        "cold": sum(bool(r.get("cold_correct")) for r in items),
+        "hit": sum(bool(r.get("hit_correct")) for r in items),
+    }
+    if (
+        summary.get("n") != n
+        or any(scores.get(k) != v for k, v in counts.items())
+        or abs(counts["cold"] - counts["hit"]) > 1
+    ):
+        return False, "invalid paired quality scores"
+    return True, ""
+
+
+def _multimodal_speed(numbers, reps, tolerance):
+    def timing(arm, rep):
+        phases = {"cold": "cold", "warm": "warm", "turn2-hit": "turn2"}
+        return [
+            dict(
+                part="decode",
+                ctx=r["size"],
+                kind="media",
+                phase=phases[r["kind"]],
+                ttft_s=r["ttft_s"],
+                dec_tps=1.0,
+            )
+            for r in numbers[f"{arm}-r{rep}"]
+            if r["kind"] in phases
+        ]
+
+    return analyze.speed_compare(
+        [timing("base", i) for i in range(reps)],
+        [timing("cand", i) for i in range(reps)],
+        tolerance,
+        robust=True,
+    )
+
+
+def stage_multimodal(ctx: Ctx) -> StageResult:
+    """Pinned media sessions: raw IDs, pixel isolation, short + long TTFT."""
+
+    def cell(arm, rep):
+        key = f"{arm}-r{rep}"
+        scratch = ctx.run.path / "media" / key
+        scratch.mkdir(parents=True, exist_ok=True)
+        env = ctx.arm_env(
+            arm,
+            {
+                "YUNSHU_VLM_APC_DISK": "0",
+                "YUNSHU_VLM_APC_WARM": "off",
+                "YUNSHU_KV_PRECISION": "bf16",
+                "YUNSHU_VLM_DRAFT": "off",
+                "YUNSHU_MEDIA_DIR": str(scratch),
+                "HF_HUB_OFFLINE": "1",
+            },
+        )
+        argv = ["env", f"PYTHONPATH={ctx.tree(arm).path / 'python'}"]
+        argv += [f"{k}={v}" for k, v in env.items()]
+        remote = (
+            "gemma-4-e2b" in ctx.model
+            and int(ctx.suite.get("reps", 3)) == 1
+            and ctx.env.get("GPUQ_DEVICE") != "m5"
+        )
+        script = ctx.cand.path / "scripts/research/multimodal_apc.py"
+        if remote:
+            # gpuq snapshots cwd, not arbitrary external pinned trees. Run
+            # the committed common harness in each arm's own snapshot; the
+            # old arm need not contain this new measurement script.
+            source = script.read_text()
+            compile(source, str(script), "exec")  # CPU preflight before submit
+            entry = [
+                ctx.py,
+                "-c",
+                "import sys; __file__='scripts/research/multimodal_apc.py'; sys.path.insert(0, 'scripts/research'); "
+                + f"exec(compile({source!r}, 'multimodal_apc.py', 'exec'))",
+            ]
+        else:
+            entry = [ctx.py, str(script)]
+        argv += [
+            *entry,
+            "--model",
+            ctx.model,
+            "--out",
+            "{out}",
+            "--sizes",
+        ]
+        argv += [str(n) for n in ctx.suite["ctx"]]
+        if ctx.env.get("APC_PROBE_IMAGE_AUDIO") == "1":
+            argv += ["--image-audio"]
+        if arm == "cand":
+            argv += ["--require-hit"]
+        else:
+            argv += ["--skip-anthropic"]
+        cells = [
+            Cell(
+                "multimodal",
+                key,
+                argv,
+                mem_gb=ctx.mem_gb,
+                quiet=int(ctx.suite.get("reps", 3)) >= 3,
+                timeout_min=20,
+                device="m3" if remote else "m5",
+                cwd=ctx.tree(arm).path if remote else None,
+                validate=lambda path, hit=arm == "cand": _multimodal_valid(
+                    path, ctx.suite["ctx"], hit, require_anthropic=hit
+                ),
+            )
+        ]
+        return cells[0]
+
+    parity_n = (
+        int(ctx.suite.get("mmlu_n", 200)) if ctx.suite.get("media_quality_items") else 0
+    )
+    quality_result = None
+    if parity_n:
+        quality_cell = cell("cand", "quality")
+        quality_cell.argv += ["--parity-items", str(parity_n)]
+        quality_cell.quiet = False
+        quality_cell.validate = lambda path: _multimodal_quality_valid(
+            path, ctx.suite["ctx"], parity_n
+        )
+        quality_result = ctx.exe.run_cells([quality_cell])[quality_cell.key]
+        if not quality_result.ok:
+            return _finish(
+                ctx, StageResult("multimodal", False, [quality_result.reason])
+            )
+    cells = [
+        cell(arm, rep)
+        for rep in range(int(ctx.suite.get("reps", 3)))
+        for arm in ("base", "cand")
+    ]
+    results = ctx.exe.run_cells(cells)
+    reasons = _failed_cells(results)
+    numbers = {}
+    if quality_result is not None:
+        numbers["paired_quality"] = next(
+            r
+            for r in read_jsonl(quality_result.evidence)
+            if r.get("event") == "quality"
+        )
+    if not reasons:
+        for key, result in results.items():
+            rows = [
+                r for r in read_jsonl(result.evidence) if r.get("event") == "request"
+            ]
+            numbers[key] = [
+                {k: r[k] for k in ("kind", "size", "pt", "cached", "ttft_s", "sha")}
+                for r in rows
+            ]
+        for rep in range(int(ctx.suite.get("reps", 3))):
+            b, c = numbers[f"base-r{rep}"], numbers[f"cand-r{rep}"]
+            c = [r for r in c if not r["kind"].startswith("anthropic-")]
+            if [(r["kind"], r["size"], r["sha"]) for r in b] != [
+                (r["kind"], r["size"], r["sha"]) for r in c
+            ]:
+                reasons.append(f"raw token identity differs base/cand rep {rep}")
+            br = read_jsonl(results[f"base-r{rep}"].evidence)
+            cr = read_jsonl(results[f"cand-r{rep}"].evidence)
+            bv = next(
+                (r.get("versions") for r in br if r.get("event") == "engaged"), None
+            )
+            cv = next(
+                (r.get("versions") for r in cr if r.get("event") == "engaged"), None
+            )
+            if not bv or bv != cv:
+                reasons.append(
+                    f"dependencies changed across paired arms rep {rep}: {bv} / {cv}"
+                )
+            bd, cd = {r.get("device") for r in br}, {r.get("device") for r in cr}
+            if len(bd) != 1 or bd != cd or not bd <= {"m3", "m5"}:
+                reasons.append(f"mixed or missing devices rep {rep}: {bd} / {cd}")
+    if not reasons and int(ctx.suite.get("reps", 3)) >= 3:
+        speed = _multimodal_speed(
+            numbers, int(ctx.suite["reps"]), float(ctx.suite["speed_tol_pct"])
+        )
+        numbers["speed"] = speed
+        reasons.extend(_speed_reason(r) for r in speed["regressions"])
+        reasons.extend(speed["missing"])
+    return _finish(ctx, StageResult("multimodal", not reasons, reasons, numbers))
+
+
 def _toolparse_valid(path: Path):
     records = read_jsonl(path)
     if not records or records[-1].get("complete") is not True:
@@ -1834,5 +2081,6 @@ STAGE_FUNCS = {
     "memory": stage_memory,
     "longqa": stage_longqa,
     "conc": stage_conc,
+    "multimodal": stage_multimodal,
     "modelprobe": stage_modelprobe,
 }

@@ -248,7 +248,8 @@ def test_doctor_fails_on_missing_model(tmp_path, doctor_cli):
     code, out = invoke("-m", str(tmp_path / "missing"), "--port", "18989")
     assert code == 1 and not out["ok"]
     bad = [c for c in out["checks"] if c["status"] == "fail"]
-    assert bad[0]["name"] == "model" and "yunshu pull" in bad[0]["fix"]
+    model_check = next(c for c in bad if c["name"] == "model")
+    assert "yunshu pull" in model_check["fix"]
 
 
 def test_doctor_cli_keeps_dependency_failures(doctor_cli, monkeypatch):

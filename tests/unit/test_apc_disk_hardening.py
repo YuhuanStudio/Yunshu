@@ -220,3 +220,30 @@ def test_apc_keys_depend_on_the_checkpoint(tmp_path):
     (ckpt / "model.safetensors").write_bytes(b"b" * 10)
     os.utime(ckpt / "model.safetensors", ns=(1, 2))
     assert salt(ckpt) != before
+
+
+def test_rotating_checkpoint_roundtrip_keeps_absolute_position_and_ring(tmp_path):
+    from mlx_vlm.apc import _sequence_hash
+    from mlx_vlm.models.cache import RotatingKVCache
+
+    tokens = list(range(20))
+    c = RotatingKVCache(max_size=8, keep=0)
+    for i in tokens:
+        c.update_and_fetch(mx.full((1, 2, 1, 4), i), mx.full((1, 2, 1, 4), i))
+    template = [RotatingKVCache(max_size=8, keep=0)]
+    assert c.offset == 20 and c.keys.shape[2] == 8
+    assert check_loaded_cache(tokens, [c], template, kv_heads=2, head_dim=4)
+    store = _store(tmp_path)
+    key = _sequence_hash(tuple(tokens), 0, BLOCK)
+    assert store.write_now(key, tokens, 0, [c], True)
+    store.flush()
+    _, _, loaded = store.load_exact_cache(key, prefix_len=20)
+    assert loaded[0].meta_state == c.meta_state
+    assert mx.array_equal(loaded[0].keys, c.keys).item()
+    assert check_loaded_cache(tokens, loaded, template, kv_heads=2, head_dim=4)
+    loaded[0]._idx = 9
+    assert not check_loaded_cache(tokens, loaded, template)
+    loaded[0]._idx = c._idx
+    loaded[0].max_size = 9
+    assert not check_loaded_cache(tokens, loaded, template)
+    store.close()

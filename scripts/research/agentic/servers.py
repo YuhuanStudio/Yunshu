@@ -197,6 +197,7 @@ class Server:
             return None
         modes = re.findall(r"VLM batch runner: [^\n]*?draft=(dflash|mtp|off)\b", text)
         return modes[-1] if modes else None
+
     def log_tail(self, n: int = 30) -> str:
         try:
             return "".join(self.log.read_text(errors="replace").splitlines(True)[-n:])

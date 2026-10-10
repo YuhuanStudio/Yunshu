@@ -50,6 +50,10 @@ _CANONICAL_LOOKUP: contextvars.ContextVar[
 
 GIB = 1 << 30
 
+_MEDIA_COST: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "yunshu_media_restore_cost", default=False
+)
+
 # ``APCManager``'s clone of a prompt cache (restoring a checkpoint, storing one) differs
 # from upstream in two ways, both pure scheduling of the same copies:
 # - ``store_exact_cache`` clones the cache it is given, so a checkpoint that is already a
@@ -193,6 +197,8 @@ def check_loaded_cache(
     token count and every tensor must have a plausible rank, dtype and batch of one. A
     corrupt or foreign file fails here and the caller falls back to a cold prefill.
     """
+    from mlx_vlm.models.cache import RotatingKVCache
+
     n_tokens = len(token_ids)
     if not prompt_cache or n_tokens <= 0:
         return False
@@ -206,12 +212,31 @@ def check_loaded_cache(
             if keys is None or values is None or isinstance(keys, (tuple, list)):
                 return False
             offset = int(getattr(c, "offset", 0))
+            if keys.ndim != 4 or values.ndim != 4:
+                return False
+            rotating = isinstance(c, RotatingKVCache)
+            if rotating:
+                # Absolute position can exceed the ring's physical token rows.
+                # Validate its native metadata rather than treating it as a
+                # truncated dense cache. Multi-token prefill may hold >window
+                # rows until the next decode update normalises the ring.
+                if (
+                    offset != n_tokens
+                    or not 0 <= c.keep < c.max_size
+                    or not 0 < c._idx <= keys.shape[2]
+                    or (
+                        template is not None
+                        and (c.max_size, c.keep)
+                        != (template[i].max_size, template[i].keep)
+                    )
+                ):
+                    return False
             if (
                 keys.ndim != 4
                 or keys.shape[0] != 1
                 or keys.shape[:3] != values.shape[:3]
                 or keys.dtype != values.dtype
-                or not 0 < offset <= min(keys.shape[2], n_tokens)
+                or (not rotating and not 0 < offset <= min(keys.shape[2], n_tokens))
                 or (kv_heads is not None and keys.shape[1] != kv_heads)
                 or (head_dim is not None and keys.shape[3] != head_dim)
             ):
@@ -693,6 +718,22 @@ def share_prefix_rows(pending, max_tail: int = SHARE_MAX_TAIL) -> list:
 class _Coordinator(APCCoordinator):
     """Checkpoint positions: the prompt end, one interval boundary, the end of the system turn."""
 
+    # Dense block restores intentionally reject media prefixes upstream. A media
+    # lane instead snapshots every layer at one text-only suffix boundary, just
+    # like the recurrent/windowed plans, retaining the original position state.
+    media_checkpoint = False
+
+    @property
+    def strategy(self):
+        strategy = super().strategy
+        return (
+            "checkpoint" if self.media_checkpoint and strategy == "block" else strategy
+        )
+
+    @property
+    def legacy_mode(self):
+        return "exact" if self.strategy == "checkpoint" else self.strategy
+
     def set_request(self, token_ids, policy):
         if policy is None:
             return
@@ -781,7 +822,11 @@ class _Coordinator(APCCoordinator):
         # Media processors may expand / reshape positions; retain their existing
         # boundary policy. Text prefixes use the same grid in cold and warm runs.
         if not stride or kwargs["prefix_has_media"](len(token_ids)):
-            return super().lookup(token_ids, **kwargs)
+            context = _MEDIA_COST.set(self.media_checkpoint)
+            try:
+                return super().lookup(token_ids, **kwargs)
+            finally:
+                _MEDIA_COST.reset(context)
         policy = (
             id(self.manager),
             stride,
@@ -877,7 +922,13 @@ class _Coordinator(APCCoordinator):
             return False  # deterministic forward boundary, not an extra snapshot
         from mlx_vlm.apc import _cache_nbytes
         from mlx_vlm.apc_adapters import clone_cache_entry
-        from mlx_vlm.models.cache import ArraysCache, BatchKVCache, KVCache
+        from mlx_vlm.models.cache import (
+            ArraysCache,
+            BatchKVCache,
+            BatchRotatingKVCache,
+            KVCache,
+            RotatingKVCache,
+        )
 
         # Multi-row extraction and custom contracts stay on the upstream path.
         # Native single-row caches (including the spec lane's BatchKVCache) only
@@ -889,8 +940,11 @@ class _Coordinator(APCCoordinator):
             and batch_idx in (None, 0)
             and bool(prompt_cache)
             and all(
-                type(c) in (ArraysCache, KVCache)
-                or (type(c) is BatchKVCache and c.is_single_row())
+                type(c) in (ArraysCache, KVCache, RotatingKVCache)
+                or (
+                    type(c) in (BatchKVCache, BatchRotatingKVCache)
+                    and c.is_single_row()
+                )
                 for c in prompt_cache
             )
         )
@@ -1141,6 +1195,9 @@ class YunshuAPCManager(APCManager):
             collections.OrderedDict()
         )
         self.lookups: collections.deque[Lookup] = collections.deque(maxlen=64)
+        from .apc_restore_cost import MediaRestoreCost
+
+        self.media_restore_cost = MediaRestoreCost()
         self._generation = 0
         # Explicit endpoints are protected against superseding until their
         # inactivity TTL expires, always within the existing byte/entry budgets.
@@ -1955,6 +2012,13 @@ class YunshuAPCManager(APCManager):
     def lookup_exact_cache(self, token_ids, *args, **kwargs):
         refresh_retention = kwargs.pop("refresh_retention", True)
         self._expire_boundaries()
+        if _MEDIA_COST.get() and self._skip_media_restore(token_ids, args, kwargs):
+            self.media_restore_cost.skips += 1
+            self.tier_hits["none"] += 1
+            self.lookups.append(
+                Lookup(len(token_ids), 0, "none", 0.0, time.perf_counter(), None)
+            )
+            return None, 0
         policy = _CANONICAL_LOOKUP.get()
         if policy is not None and policy[0] == id(self):
             names = ("extra_hash", "max_prefix_tokens", "min_prefix_tokens")
@@ -2037,6 +2101,42 @@ class YunshuAPCManager(APCManager):
             )
         )
         return cache, n
+
+    def _skip_media_restore(self, token_ids, args, kwargs):
+        """Inspect HOT metadata before upstream allocates/copies the restore.
+
+        Explicit checkpoint policies do not set _MEDIA_COST. Use upstream's
+        matching rule: dense entries can restore a shorter shared block prefix.
+        """
+        from mlx_vlm.apc import _cache_nbytes
+
+        tokens = tuple(int(t) for t in token_ids)
+        extra = self._extra_of(args, kwargs)
+        maximum = kwargs.get("max_prefix_tokens", args[1] if len(args) > 1 else None)
+        minimum = kwargs.get("min_prefix_tokens", args[2] if len(args) > 2 else 0)
+        maximum = min(len(tokens) - 1, maximum or len(tokens) - 1)
+        with self.lock:
+            candidates = []
+            for e in self._exact_cache.values():
+                if e.extra_hash != extra:
+                    continue
+                n = _upstream_apc._checkpoint_match_len(
+                    tokens,
+                    e.token_ids,
+                    maximum,
+                    self.block_size,
+                    _upstream_apc._dense_checkpoint_trimmable(
+                        e.prompt_cache, len(e.token_ids)
+                    ),
+                )
+                if n > minimum:
+                    candidates.append((n, e))
+            best = max(candidates, key=lambda pair: pair[0], default=None)
+            if best is None:
+                return False
+            n, entry = best
+            size = _cache_nbytes(entry.prompt_cache)
+        return not self.media_restore_cost.worth(size, n, len(tokens) - n)
 
     @staticmethod
     def _extra_of(args, kwargs) -> int:

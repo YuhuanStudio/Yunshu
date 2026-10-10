@@ -1405,8 +1405,7 @@ class VLMEngine:
 
     def backend_capabilities(self, lm: Any = None) -> Any:
         """This backbone's cache layout via the shared ``model_backend`` layer
-        (memoized); the runner build uses it to skip APC for sliding-window
-        caches."""
+        (memoized); callers use it to describe cache layout."""
         if self._backend_caps is not None:
             return self._backend_caps
         from .model_backend import BackendKind, derive_capabilities
@@ -1975,13 +1974,18 @@ class VLMEngine:
         buffer_cache.install(float(cache_gib))
         budget = self._apc_memory_gb()
         if self._apc_backend is None and budget > 0:
-            from mlx_vlm.apc import semantic_extra_hash
+            # A rotating cache cannot be assembled from dense KV blocks, but
+            # its native snapshot includes the window, absolute offset and
+            # ring index. Upstream's grouped plan checks that every component
+            # has a restore contract before admitting exact checkpoints.
+            from mlx_vlm.apc import model_apc_plan, semantic_extra_hash
 
             from .apc_manager import YunshuAPCManager
 
-            # Sliding-window (rotating) caches cannot be checkpointed at a
-            # prefix boundary, so those families decode without APC.
-            if not self.backend_capabilities(lm).cache.has_sliding_window:
+            if model_apc_plan(lm).restorable and (
+                self._config.get("model_type") == "gemma4"
+                or not self.backend_capabilities(lm).cache.has_sliding_window
+            ):
                 warm_mode = str(settings.get("YUNSHU_VLM_APC_WARM"))
                 share = float(settings.get("YUNSHU_VLM_APC_WARM_SHARE"))
                 warm_gb = budget * share if warm_mode != "off" else 0.0
@@ -2623,18 +2627,41 @@ class VLMEngine:
             )
             return None
         if prompt_kwargs is not None:
-            from mlx_vlm.apc import multimodal_token_ids_from_config
+            from .prompt_caching import image_token_wrappers
+            from .vlm_batch_runner import media_token_ids
 
-            media = multimodal_token_ids_from_config(self._model.language_model.config)
-            lookup = expanded_boundaries(
-                rendered_ids, ids, [(n, 0) for n in points["lookup_points"]], media
-            )
-            points = {
-                k: expanded_boundaries(rendered_ids, ids, value, media)
-                for k, value in points.items()
-                if k != "lookup_points"
-            }
-            points["lookup_points"] = [n for n, _ in lookup]
+            try:
+                media = media_token_ids(self._model)
+                wrappers = image_token_wrappers(getattr(self, "_processor", None))
+                lookup = expanded_boundaries(
+                    rendered_ids,
+                    ids,
+                    [(n, 0) for n in points["lookup_points"]],
+                    media,
+                    wrappers,
+                )
+                points = {
+                    k: expanded_boundaries(rendered_ids, ids, value, media, wrappers)
+                    for k, value in points.items()
+                    if k != "lookup_points"
+                }
+                points["lookup_points"] = [n for n, _ in lookup]
+                from mlx_vlm.apc import media_safe_prefix_min
+
+                minimum = media_safe_prefix_min(ids, media)
+                # Earlier system/text endpoints may precede a later image.
+                # The upstream restore contract requires a text-only suffix;
+                # keep safe endpoints instead of failing an otherwise valid turn.
+                for key in ("points", "writes"):
+                    points[key] = [
+                        (n, ttl) for n, ttl in points[key] if minimum <= n < len(ids)
+                    ]
+                points["lookup_points"] = [
+                    n for n in points["lookup_points"] if minimum <= n < len(ids)
+                ]
+            except ValueError as exc:
+                logger.warning("explicit media cache breakpoints ignored: %s", exc)
+                return None
         plan.update(points)
         plan["resolved"] = True
         logger.info("Prompt cache rendered token boundaries: %s", plan["points"])

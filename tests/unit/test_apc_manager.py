@@ -796,6 +796,90 @@ def test_budget_sheds_the_anchor_that_owns_its_rows_not_the_whole_chain():
     assert all(k in m._exact_cache for k in anchors if k != owner)
 
 
+def test_dense_media_lane_uses_exact_checkpoint_and_rejects_foreign_pixels():
+    from types import SimpleNamespace
+
+    m = _mgr()
+    c = m.coordinator(SimpleNamespace(make_cache=lambda: [KVCache()]))
+    assert c.strategy == "block"  # text-only dense families keep their block pool
+    c.media_checkpoint = True
+    assert c.is_checkpoint and c.legacy_mode == "exact"
+    ids = [1] * 20 + [4242] * 8 + [2] * 80
+    points = c.checkpoint_lengths(ids, {4242})
+    assert points == [107]
+    kv = KVCache()
+    kv.update_and_fetch(mx.ones((1, 1, 107, 4)), mx.ones((1, 1, 107, 4)))
+    assert c.store_checkpoint(ids[:107], [kv], extra_hash=123)
+    args = dict(
+        safe_lookup_min=28,
+        suffix_is_text_only=lambda n: n >= 28,
+        prefix_has_media=lambda n: n > 20,
+    )
+    hit = c.lookup(ids, extra_hash=123, **args)
+    assert hit is not None and hit["prefix_len"] == 107
+
+    assert c.lookup(ids, extra_hash=456, **args) is None
+    # A multi-turn continuation reuses the same image-containing checkpoint.
+    hit = c.lookup(ids + [3] * 12, extra_hash=123, **args)
+    assert hit is not None and hit["prefix_len"] == 107
+
+
+def test_media_cost_rejects_before_clone_and_leaves_text_lookup_unchanged(monkeypatch):
+    from types import SimpleNamespace
+
+    from mlx_vlm.apc import APCManager
+
+    m = _mgr()
+    c = m.coordinator(SimpleNamespace(make_cache=lambda: [KVCache()]))
+    c.media_checkpoint = True
+    ids = list(range(108))
+    m.store_exact_cache(ids[:107], _cache(107), extra_hash=123)
+    m.media_restore_cost.observe(108, 0, 0.06)
+    m.media_restore_cost.observe(108, 107, 0.015)
+    calls = []
+    original = APCManager.lookup_exact_cache
+
+    def lookup(*a, **kw):
+        calls.append(1)
+        return original(*a, **kw)
+
+    monkeypatch.setattr(APCManager, "lookup_exact_cache", lookup)
+    args = dict(
+        safe_lookup_min=0,
+        suffix_is_text_only=lambda n: True,
+        prefix_has_media=lambda n: True,
+    )
+    assert c.lookup(ids + [200] * 31, extra_hash=123, **args) is None
+    assert calls == [] and m.media_restore_cost.skips == 1
+    assert c.lookup(ids, extra_hash=123, **args)["prefix_len"] == 107
+    assert len(calls) == 1
+    # The context must be reset; direct/text callers retain normal admission.
+    assert m.lookup_exact_cache(ids + [200] * 31, extra_hash=123)[1] == 107
+
+
+def test_media_cost_accounts_for_trimmed_dense_followup():
+    from types import SimpleNamespace
+
+    m = _mgr()
+    c = m.coordinator(SimpleNamespace(make_cache=lambda: [KVCache()]))
+    c.media_checkpoint = True
+    ids = list(range(109))
+    m.store_exact_cache(ids[:108], [_cache(108)[1]], extra_hash=123)
+    follow = ids[:96] + [200] * 35
+    # This is a real dense hit, even though the stored 108-token prompt is
+    # not itself a prefix of the follow-up (the trailing template changed).
+    assert m.lookup_exact_cache(follow, extra_hash=123)[1] == 96
+    m.media_restore_cost.observe(109, 0, 0.06)
+    m.media_restore_cost.observe(109, 108, 0.015)
+    args = dict(
+        safe_lookup_min=0,
+        suffix_is_text_only=lambda n: True,
+        prefix_has_media=lambda n: True,
+    )
+    assert c.lookup(follow, extra_hash=123, **args) is None
+    assert m.media_restore_cost.skips == 1
+
+
 def test_console_snapshot_counts_hits_and_omits_token_content():
     m = _mgr()
     ids = list(range(300))

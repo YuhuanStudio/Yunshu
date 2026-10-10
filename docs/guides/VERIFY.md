@@ -160,6 +160,30 @@ Ad-hoc scripts are for measurements `yv` does not cover. Put them in `scripts/re
 unit test, make them write a final `complete: true` record, and then add them as a stage or a
 cell in `scripts/verify/stages.py` so the next worker does not need the script.
 
+## Multimodal prefix checkpoints
+
+`yv ab --base <sha> --cand <sha> --suite multimodal --model <local-checkpoint>
+--label <worker>-media --priority -1` verifies image-prefix reuse with the shared VLM
+runner. It compares the runner's raw emitted token IDs (including control/reasoning
+IDs) on cold, repeated-image and follow-up requests, rejects different-image reuse,
+and exercises candidate image-block `cache_control` through `/v1/messages` with
+its own cold/hit controls (historical baselines may fail that route). A candidate must
+report real cache reads, including the explicit Anthropic image checkpoint. The
+common committed probe is CPU-tested before loading a model; incomplete request
+matrices fail closed.
+
+Before timing, a non-quiet candidate cell checks 200 image-conditioned arithmetic
+items as cold/hit pairs: every raw-ID sequence must match and the net correct-answer
+difference must be within one. This is a small deterministic cache check, not a
+general vision benchmark. `--mmlu-n 1` is a one-item harness pilot.
+
+The default then uses three interleaved base/candidate M5 cells, with short and 32K text
+bodies (`--ctx 46,32768`; each receipt reports the actual media-expanded prompt length).
+Cells use quiet timing admission. `gemma-4-e2b-it-4bit --reps 1` uses the allowlisted
+M3 lane for correctness only; both arms use their own pinned checkout snapshots.
+M3 numbers never decide M5 performance. The verdict rejects mixed-device pairs and mismatched dependency versions.
+
+
 ### Web tools
 
 `yv ab --base BASE_SHA --cand CAND_SHA --suite preflight,websearch --label websearch-smoke --model /Volumes/P5Plus/models/Qwen3.5-0.8B-MLX-bf16 --priority -1` exercises the existing `route_checks_tools` search contract against a loopback SearXNG/page fixture, then candidate Responses `open_page`/`find_in_page` and resident Qwen3-Embedding-0.6B fusion, plus ten frozen adversarial fixture replays. The fixture pilot cannot approve the 200-pair quality gate. This optional stage is excluded from the core full/decode ladder. Use the main checkout gpuq (`YV_GPUQ`) and `GPUQ_OWNER=websearch`. CPU probe/validator tests run before queue submission; every result ends with `complete: true`. It is correctness smoke, never a performance or answer-quality verdict.
