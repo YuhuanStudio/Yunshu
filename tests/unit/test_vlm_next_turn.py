@@ -411,3 +411,20 @@ def test_early_settle_is_free_without_a_rehearsal(monkeypatch):
     asyncio.run(
         eng._settle_rehearsal_early([{"role": "user", "content": "q"}], None, None)
     )
+
+
+def test_early_settle_does_not_tokenize_before_the_rehearsal_started(monkeypatch):
+    eng, _ = _engine(monkeypatch)
+    ev = threading.Event()
+    st = next_turn.RehearsalState(ev)
+    st.set_ids([9, 1, 3])  # not submitted: still inside the start delay
+    eng._rehearsal_state = st
+
+    def boom(*a):
+        raise AssertionError("no token peek while nothing runs (costs a warm hit 7 ms)")
+
+    eng._peek_prompt_ids = boom
+    asyncio.run(
+        eng._settle_rehearsal_early([{"role": "user", "content": "q"}], None, None)
+    )
+    assert ev.is_set()

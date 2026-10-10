@@ -1437,7 +1437,8 @@ class VLMEngine:
             )
             for m in messages
         )
-        if has_media:
+        if has_media or not state.submitted:
+            # media, or no work running yet (the start delay): nothing to adopt, no tokens needed
             state.cancel_event.set()
             return
         try:

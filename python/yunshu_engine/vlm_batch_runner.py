@@ -1102,7 +1102,9 @@ class VLMBatchRunner:
         """``group.gen.next()``; a lone job whose cancel event is marked ``preemptible`` (the
         next-turn rehearsal) may be stopped between decoder-layer groups (kernels/preempt.py)."""
         jobs = list(group.jobs.values())
-        if len(jobs) == 1 and getattr(jobs[0].cancel_event, "preemptible", False):
+        if len(jobs) == 1 and getattr(
+            getattr(jobs[0], "cancel_event", None), "preemptible", False
+        ):
             from .kernels import preempt
 
             if preempt.supported():
