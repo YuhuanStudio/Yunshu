@@ -96,6 +96,7 @@ YUNSHU_REALTIME_SILENCE_MS = 400
 | `YUNSHU_CHAT_COMPLETIONS_MAX` | int | 5000 | restart | Stored chat completions kept; the oldest are evicted past this count. |
 | `YUNSHU_CONVERSATION_MAX_ITEMS` | int | 10000 | live | Conversations API: maximum number of items one conversation may hold. |
 | `YUNSHU_COMPACT_MAX_TOKENS` | int | 2048 | live | Responses compaction: maximum tokens of the model-written summary. |
+| `YUNSHU_GIL_SWITCH_MS` | float | 0.5 | reload | Serving process: how long (ms) a Python thread may hold the GIL before another thread that wants it gets it. CPython's 5 ms made the event loop wake up to 5 ms late while the generation thread was running Python (Qwen3.8-27B decode: loop wake-up lag p99 5.3 ms, 0.5 ms gives 2.0 ms; short-prompt TTFT -1.4 ms; tokens/s unchanged). Scheduling only, output unchanged. 0 = CPython default. |
 
 ### auth
 

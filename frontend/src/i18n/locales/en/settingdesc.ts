@@ -135,6 +135,8 @@ const settingdesc = {
     "Size cap of the APC SSD tier in GiB, one budget for the whole directory (least recently used files go first across namespaces; 0 = no configured cap, the free-space reserve still applies). Unset: a quarter of the volume, at most 64 GiB. A 27B checkpoint costs about 130 KiB per token, so 64 GiB holds about 500K tokens.",
   YUNSHU_PREFILL_MATMUL:
     "Qwen3.5-family VLM runner on M5-class GPUs: matmul for prefill chunks over 512 rows. `stock` runs MLX’s quantized matmul on the untiled weight (cold 27B prefill about 25% faster; a chunk’s bits depend on its row count); `lane` keeps the row-invariant lane kernel for every row count. Part of every APC key and SSD namespace.",
+  YUNSHU_GIL_SWITCH_MS:
+    "Serving process: how long (ms) a Python thread may hold the GIL before another thread that wants it gets it. CPython's 5 ms made the event loop wake up to 5 ms late while the generation thread ran Python (27B decode: loop lag p99 5.3 ms, 0.5 ms gives 2.0 ms; tokens/s unchanged). Scheduling only; output unchanged. 0 = CPython default.",
   YUNSHU_PLE_READ_THREADS:
     "Qwen3.8-Flash-Next with the n-gram embedding (PLE) read from SSD: threads that read a token's 48 PLE rows in parallel instead of one after another (about 7 ms per token on fresh text). Rows are byte-identical, so output is unchanged. 0 = upstream serial reads.",
   YUNSHU_PREFILL_BUFFER_CACHE_GB:
