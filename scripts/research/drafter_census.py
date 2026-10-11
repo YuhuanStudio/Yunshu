@@ -19,11 +19,16 @@ def main() -> int:
     import mlx.nn as nn
 
     sys.path.insert(0, "python")
-    from mlx_vlm.speculative.drafters.qwen3_dflash.dflash import DFlashConfig, DFlashDraftModel
+    from mlx_vlm.speculative.drafters.qwen3_dflash.dflash import (
+        DFlashConfig,
+        DFlashDraftModel,
+    )
 
     from yunshu_engine.dflash_tree import quantize_drafter, stack_projections
 
-    cfg = DFlashConfig.from_dict(json.loads((Path(DRAFTER) / "config.json").read_text()))
+    cfg = DFlashConfig.from_dict(
+        json.loads((Path(DRAFTER) / "config.json").read_text())
+    )
     out = {}
     for stacked in (False, True):
         m = DFlashDraftModel(cfg)
@@ -34,7 +39,9 @@ def main() -> int:
             stack_projections(m)
         cache = m.make_cache()
         ids = mx.array([[5] + [3] * 15], dtype=mx.int32)
-        ctx = mx.random.normal((1, 64, len(cfg.target_layer_ids) * cfg.hidden_size)).astype(mx.bfloat16)
+        ctx = mx.random.normal(
+            (1, 64, len(cfg.target_layer_ids) * cfg.hidden_size)
+        ).astype(mx.bfloat16)
         mx.eval(ids, ctx)
         for _ in range(3):
             mx.eval(m._hidden(ids, ctx, cache))
@@ -44,7 +51,10 @@ def main() -> int:
         ms = (time.perf_counter() - t0) * 1000 / 20
         with tempfile.NamedTemporaryFile(suffix=".dot", delete=False) as f:
             mx.export_to_dot(f.name, m._hidden(ids, ctx, cache))
-        out["stacked" if stacked else "plain"] = {"ms": round(ms, 2), "graph_nodes": nodes(f.name)}
+        out["stacked" if stacked else "plain"] = {
+            "ms": round(ms, 2),
+            "graph_nodes": nodes(f.name),
+        }
     print(json.dumps(out))
     return 0
 
