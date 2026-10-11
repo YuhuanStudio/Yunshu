@@ -247,11 +247,74 @@ def _replay_kernel():
     return _KERNELS["replay"]
 
 
+def _replay_tail_kernel():
+    if "replay_tail" not in _KERNELS:
+        source = (
+            (tv._REPLAY_PATH + tv._TAIL_COPY)
+            .replace("gdn_decay(pa[gi], dtb, neg_a)", "G[gi]")
+            .replace("gdn_beta(pb[gi])", "BETA[gi]")
+        )
+        _KERNELS["replay_tail"] = mx.fast.metal_kernel(
+            name=_name("yunshu_tree_gate_replay_tail", source),
+            input_names=[
+                "state_in",
+                "A_log",
+                "dt_bias",
+                "pk",
+                "pv",
+                "G",
+                "BETA",
+                "path",
+                "count",
+                *tv.TAIL_INPUTS,
+            ],
+            output_names=["state_out", "tail_out"],
+            source=source,
+            header=tv.gv._HELPERS,
+        )
+    return _KERNELS["replay_tail"]
+
+
 class GateRows(tuple):
     def __new__(cls, k, v, a, b, g, beta):
         result = super().__new__(cls, (k, v, a, b))
         result.gates = (g, beta)
         return result
+
+    def replay_tail(self, layer, state, path, count, conv_prev, mixed, conv_idx):
+        k, v, _, _ = self
+        g, beta = self.gates
+        geo = tv.gv._geometry(layer, 1)
+        out, tail = _replay_tail_kernel()(
+            inputs=[
+                state,
+                layer.A_log,
+                layer.dt_bias,
+                k,
+                v,
+                g,
+                beta,
+                path,
+                count,
+                conv_prev,
+                mixed,
+                conv_idx,
+            ],
+            template=[
+                ("InT", k.dtype),
+                ("Hk", geo["Hk"]),
+                ("Hv", geo["Hv"]),
+                ("Dk", geo["Dk"]),
+                ("Dv", geo["Dv"]),
+                ("P", k.shape[1]),
+                *tv.tail_template(conv_prev),
+            ],
+            grid=geo["grid"],
+            threadgroup=(32, 4, 1),
+            output_shapes=[state.shape, tuple(conv_prev.shape)],
+            output_dtypes=[mx.float32, conv_prev.dtype],
+        )
+        return out, tail
 
     def replay(self, layer, state, path, count):
         k, v, _, _ = self
