@@ -56,12 +56,15 @@ def local_env() -> dict:
     """KEY=VALUE lines of the main checkout's scripts/research/local.env (model paths etc.)."""
     out = {}
     p = MAIN_CHECKOUT / "scripts/research/local.env"
-    if p.exists():
-        for line in p.read_text().splitlines():
-            line = line.strip()
-            if line and not line.startswith("#") and "=" in line:
-                k, v = line.split("=", 1)
-                out[k] = v.strip().strip('"')
+    try:
+        text = p.read_text()
+    except OSError:  # absent, or unreadable from a sandboxed CI clone
+        return out
+    for line in text.splitlines():
+        line = line.strip()
+        if line and not line.startswith("#") and "=" in line:
+            k, v = line.split("=", 1)
+            out[k] = v.strip().strip('"')
     return out
 
 

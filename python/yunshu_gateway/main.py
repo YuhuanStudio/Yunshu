@@ -472,6 +472,9 @@ def _configure_logging() -> None:
 
 def create_app() -> FastAPI:
     _configure_logging()
+    from yunshu_engine import gil_switch
+
+    gil_switch.apply()
     # Anthropic API paths — exact matching to avoid overmatching routes that
     # merely end in '/messages' (e.g. /api/v1/admin/messages).
     _ANTHROPIC_PATHS = frozenset(
