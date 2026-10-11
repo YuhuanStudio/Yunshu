@@ -530,7 +530,9 @@ def rounds(
                     _record_speculative_round(
                         draft, len(path) - 1, n, parents=parent_ids
                     )
+                t_m1 = time.perf_counter()
                 tv.tree_commit(lm, cache, result, path)
+                t_m2 = time.perf_counter()
                 captured = mx.concatenate(result.captured, axis=-1)[
                     :, mx.array(path, dtype=mx.int32)
                 ]
@@ -539,6 +541,7 @@ def rounds(
                     if hidden is None
                     else mx.concatenate([hidden, captured], axis=1)
                 )
+                t_m3 = time.perf_counter()
                 if copied:
                     copy.observe_copy(n, len(path) - 1)
                     if keep is not None and hidden.shape[1] > keep:
@@ -558,6 +561,13 @@ def rounds(
                     prof["draft"] += (t_drafted - started) * 1000
                     prof["verify"] += (t_verified - t_drafted) * 1000
                     prof["commit"] += (t_done - t_verified) * 1000
+                    for key, a_, b_ in (
+                        ("m_walk_record", t_verified, t_m1),
+                        ("m_tree_commit", t_m1, t_m2),
+                        ("m_hidden", t_m2, t_m3),
+                        ("m_copy_landed", t_m3, t_done),
+                    ):
+                        prof[key] = prof.get(key, 0.0) + (b_ - a_) * 1000
                 observe_budget(
                     budget,
                     copied,
@@ -607,8 +617,9 @@ def rounds(
                 prof["commit"] / r,
             )
             logger.info(
-                "DFlash host between rounds: consumer (yield) %.2f ms/round",
+                "DFlash host between rounds: consumer (yield) %.2f ms/round; commit parts %s",
                 prof.get("yield", 0.0) / r,
+                {k: round(v / r, 3) for k, v in prof.items() if k.startswith("m_")},
             )
             from . import tree_verify as _tv
 
