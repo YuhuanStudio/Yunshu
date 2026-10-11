@@ -739,10 +739,11 @@ class VLMEngine:
         )
         # Every request goes through the runner; a model it cannot serve fails
         # at load instead of silently taking another path.
-        self._batch_runner = self._build_batch_runner(str(model_path))
+        runner = self._build_batch_runner(str(model_path))
+        self._batch_runner = runner
         policy = settings.get("YUNSHU_GC_POLICY")
         self._gc_policy = policy
-        self._batch_runner.gc_guard = gc_policy.install(policy)
+        runner.gc_guard = gc_policy.install(policy)
 
     async def start(self) -> None:
         if self._model is not None:
