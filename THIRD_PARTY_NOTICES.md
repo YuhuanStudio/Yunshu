@@ -174,3 +174,12 @@ and weight applier APIs of mflux-community/mflux (MIT, reviewed commit
 affine4 tensors before mapping; its reference uses floating arithmetic. No mflux
 source is copied and the serving engine does not import this bridge.
 https://github.com/mflux-community/mflux
+
+## TensorFold flash_next v1 kernels — `python/yunshu_engine/kernels/tf_flash_next/`
+
+`base.py`, `hc.py`, `experts.py` (from `src/tensorfold/kernels/qwen/flash_next/v1/`), `threads.py` and `inputs.py`
+(from `src/tensorfold/kernels/`) are copied from https://github.com/ashhart/TensorFold at commit `17c73e1`
+(v0.6.1), which is licensed under the Apache License, Version 2.0 (releases before 0.6.0 were MIT). Only
+intra-package imports were changed and a credit line was added at the top of each file; the full license
+text is at https://www.apache.org/licenses/LICENSE-2.0 and in TensorFold's `LICENSE`. TensorFold's NOTICE:
+"TensorFold. Copyright 2026 TensorFold contributors. https://github.com/ashhart/TensorFold".

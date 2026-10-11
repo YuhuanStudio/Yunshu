@@ -63,7 +63,18 @@ async def run(args):
         out.flush()
         print(json.dumps(row), flush=True)
 
-    ids = [(i * 7919) % 200000 + 1000 for i in range(args.ctx)]
+    passage = (
+        "The lighthouse stood at the edge of the cliff, its white tower weathered by a hundred winters. "
+        "Every evening the keeper climbed the spiral stairs, trimmed the wick, and watched the ships pass "
+        "far below. In the morning he wrote the weather in a worn ledger, noting the wind, the tide, and "
+        "the color of the sky. "
+    )
+    tokenizer = getattr(engine, "_tokenizer", None)
+    if tokenizer is not None:
+        base = tokenizer.encode(passage)
+        ids = (base * (args.ctx // len(base) + 1))[: args.ctx]
+    else:
+        ids = [(i * 7919) % 200000 + 1000 for i in range(args.ctx)]
     cache = lm.make_cache()
     for i in range(0, args.ctx, 512):
         o = lm(mx.array([ids[i : i + 512]]), cache=cache)
@@ -109,16 +120,37 @@ async def run(args):
         y.item()
         return (time.perf_counter() - t_start) * 1e3 / args.steps
 
+    def verify_ms(k):
+        """Median ms of the real speculative verify forward of k rows (batch-invariant path, rolled back)."""
+        yk = mx.array([[ids[-1]] * k])
+        times = []
+        for i in range(args.steps // 2 + 3):
+            t0 = time.perf_counter()
+            hidden, _, txn = lm.speculative_verify_hidden(yk, cache)
+            mx.eval(hidden)
+            if i >= 3:
+                times.append((time.perf_counter() - t0) * 1e3)
+            txn.abort()
+        return round(statistics.median(times), 3)
+
     results = {}
     plan = [
         ("real", "off"),
-        ("real", "on"),
-        ("noPLE", "off"),
-        ("noPLE", "on"),
-        ("real", "off"),
-        ("real", "on"),
+        ("real", "hc+moe"),
+        ("real", "hc+moe+gdn"),
+        ("real", "hc+moe"),
+        ("real", "hc+moe+gdn"),
+        ("noPLE", "hc+moe"),
+        ("noPLE", "hc+moe+gdn"),
     ]
-    for tag, _const in plan:
+    from yunshu_engine.kernels import tf_hc_forward
+
+    for tag, mode in plan:
+        if mode == "off":
+            tf_hc_forward.uninstall()
+        else:
+            tf_hc_forward.install()
+            tf_hc_forward.set_moe(mode.startswith("hc+moe"))
         orig = ps.QuantizedMMapNGramEmbedding.__call__
         if tag == "noPLE":
 
@@ -139,6 +171,8 @@ async def run(args):
         row = {
             "kind": "decode",
             "ple": tag,
+            "verify_ms": {k: verify_ms(k) for k in (2, 3, 4)},
+            "tf_hc": mode,
             "serial_build": summarize(b),
             "serial_eval": summarize(e),
             "serial_total_ms": round(
@@ -157,7 +191,8 @@ async def run(args):
         }
         row["serial_tok_s"] = tok_s(row["serial_total_ms"])
         row["pipelined_tok_s"] = tok_s(p)
-        results[tag] = row
+        if mode == "hc+moe":
+            results[tag] = row
         emit(row)
 
     # No per-layer async_eval: build = pure Python/C++ graph tracing, eval = encode + GPU execution.
@@ -306,6 +341,169 @@ async def run(args):
         )
     finally:
         mx.async_eval = original_async
+
+    # Where does a k-row verify spend its time?  Component timers (eval after each call, sync overhead included).
+    from collections import defaultdict as _dd
+
+    from yunshu_engine.kernels import tf_hc_forward as _tfh
+    from yunshu_engine.kernels.tf_flash_next import hc as _hc
+
+    _tfh.install()
+    _tfh.set_moe(True)
+    acc2 = _dd(float)
+
+    def timed(owner, name, label):
+        inner = getattr(owner, name)
+
+        def wrapper(*a, **k):
+            t0 = time.perf_counter()
+            out = inner(*a, **k)
+            if isinstance(out, tuple) and out and isinstance(out[0], str):
+                mx.eval(out[1])
+            elif out is not None:
+                mx.eval(out)
+            acc2[label] += (time.perf_counter() - t0) * 1e3
+            return out
+
+        setattr(owner, name, wrapper)
+        return owner, name, inner
+
+    patches = [
+        timed(_tfh, "_moe", "moe_fused"),
+        timed(_hc, "hc_project", "hc_project"),
+        timed(_hc, "hc_norm", "hc_norm"),
+        timed(_ql.Qwen4ExpBatchInvariantForward, "_gated_delta", "gated_delta"),
+        timed(_ql.Qwen4ExpBatchInvariantForward, "_qsa_attention", "qsa_attention"),
+    ]
+    try:
+        for k in (1, 2, 4):
+            yk = mx.array([[ids[-1]] * k])
+            acc2.clear()
+            n = 6
+            for _ in range(n):
+                hidden, _, txn = lm.speculative_verify_hidden(yk, cache)
+                mx.eval(hidden)
+                txn.abort()
+            emit(
+                {
+                    "kind": "verify_components",
+                    "rows": k,
+                    "ms_per_forward": {
+                        c: round(v / n, 2) for c, v in sorted(acc2.items())
+                    },
+                }
+            )
+    finally:
+        for owner, name, inner in patches:
+            setattr(owner, name, inner)
+
+    # Expert-union census on real text: greedy-decode a continuation, record each token's routed experts per
+    # layer, then count distinct experts per layer for windows of k consecutive tokens (a k-row verify reads that many).
+    import numpy as np
+
+    from yunshu_engine.kernels import tf_hc_forward as _tfh2
+    from yunshu_engine.kernels.tf_flash_next import experts as _experts
+
+    _tfh2.install()
+    _tfh2.set_moe(True)
+    seen = []
+    orig_gateup = _experts.expert_gateup
+
+    def spy(x, logits, top_k, n_experts, *a, **k):
+        out = orig_gateup(x, logits, top_k, n_experts, *a, **k)
+        seen.append(out[1])
+        return out
+
+    _experts.expert_gateup = spy
+    try:
+        picks_by_token = []
+        yy = mx.array([[ids[-1]]])
+        for _ in range(48):
+            seen.clear()
+            yy = step(yy)
+            mx.eval(yy, seen)
+            picks_by_token.append(
+                np.stack([np.array(p)[0] for p in seen])
+            )  # [layers, top_k]
+    finally:
+        _experts.expert_gateup = orig_gateup
+    arr = np.stack(picks_by_token)  # [T, layers, top_k]
+    union = {}
+    for k in (1, 2, 3, 4):
+        sizes = []
+        for t0 in range(0, arr.shape[0] - k + 1):
+            win = arr[t0 : t0 + k]  # [k, layers, top_k]
+            sizes.append(
+                np.mean(
+                    [
+                        len(np.unique(win[:, layer_i].reshape(-1)))
+                        for layer_i in range(win.shape[1])
+                    ]
+                )
+            )
+        union[k] = round(float(np.mean(sizes)), 2)
+    emit(
+        {
+            "kind": "expert_union",
+            "tokens": int(arr.shape[0]),
+            "layers": int(arr.shape[1]),
+            "distinct_per_layer_by_window": union,
+        }
+    )
+
+    # Ablation: time a k-row verify with one component replaced by zeros (garbage output, right shapes).
+    from yunshu_engine.kernels import tf_hc_forward as _tfa
+    from yunshu_engine.kernels.tf_flash_next import hc as _hca
+
+    _tfa.install()
+    _tfa.set_moe(True)
+    fwd_cls = _ql.Qwen4ExpBatchInvariantForward
+    real = {
+        "gdn": fwd_cls._gated_delta,
+        "qsa": fwd_cls._qsa_attention,
+        "moe": _tfa._moe,
+        "proj": _hca.hc_project,
+    }
+
+    def zeros_like_mixed(mixed):
+        return mx.zeros(mixed.shape, dtype=mixed.dtype)
+
+    stubs = {
+        "gdn": lambda self, layer, mixed, mask, cache: zeros_like_mixed(mixed),
+        "qsa": lambda self, attention, mixed, cache, pos, mask: zeros_like_mixed(mixed),
+        "moe": lambda mlp, x: (
+            "grouped",
+            (
+                mx.zeros((x.shape[0], 11, x.shape[1]), dtype=mx.bfloat16),
+                mx.zeros((x.shape[0], 10), dtype=mx.float32),
+                mx.zeros((x.shape[0], 513), dtype=mx.float32),
+            ),
+        ),
+    }
+
+    def set_stub(name, on):
+        if name == "gdn":
+            fwd_cls._gated_delta = stubs["gdn"] if on else real["gdn"]
+        elif name == "qsa":
+            fwd_cls._qsa_attention = stubs["qsa"] if on else real["qsa"]
+        elif name == "moe":
+            _tfa._moe = stubs["moe"] if on else real["moe"]
+
+    ablation = {}
+    try:
+        for name in (None, "gdn", "qsa", "moe"):
+            if name:
+                set_stub(name, True)
+            row = {}
+            for k in (1, 2, 4):
+                row[k] = verify_ms(k)
+            ablation[name or "none"] = row
+            if name:
+                set_stub(name, False)
+    finally:
+        for name in ("gdn", "qsa", "moe"):
+            set_stub(name, False)
+    emit({"kind": "ablation_verify_ms", "by_stub": ablation})
 
     # cProfile over a few serial steps: where does host time go, and how often does a step sync?
     import cProfile

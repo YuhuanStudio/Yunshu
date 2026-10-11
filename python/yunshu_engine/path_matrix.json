@@ -1838,6 +1838,45 @@
      "why": "legacy loop is not grown (CLAUDE.md); decision is its removal"
     }
    }
+  },
+  "qwen4_fused_hc": {
+   "module": "python/yunshu_engine/kernels/tf_hc_forward.py",
+   "what": "TensorFold flash_next fused hyper-connection + router/experts kernels for the qwen4_exp layer loop (always on for qwen4_exp; single-request plain decode 26 -> 14.4 ms)",
+   "cells": {
+    "mtp": {
+     "s": "na",
+     "why": "qwen4_exp (Flash-Next) hyper-connection kernels exist only for that family, which is served on the generic runner"
+    },
+    "dflash": {
+     "s": "na",
+     "why": "qwen4_exp (Flash-Next) hyper-connection kernels exist only for that family, which is served on the generic runner"
+    },
+    "driver": {
+     "s": "na",
+     "why": "qwen4_exp (Flash-Next) hyper-connection kernels exist only for that family, which is served on the generic runner"
+    },
+    "batch": {
+     "s": "na",
+     "why": "qwen4_exp (Flash-Next) hyper-connection kernels exist only for that family, which is served on the generic runner"
+    },
+    "text": {
+     "s": "na",
+     "why": "qwen4_exp (Flash-Next) hyper-connection kernels exist only for that family, which is served on the generic runner"
+    },
+    "loop": {
+     "s": "na",
+     "why": "qwen4_exp (Flash-Next) hyper-connection kernels exist only for that family, which is served on the generic runner"
+    },
+    "generic": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/vlm_engine.py",
+       "tf_hc_forward.install("
+      ]
+     ]
+    }
+   }
   }
  },
  "exclusions": [
@@ -2219,7 +2258,12 @@
   "python/yunshu_engine/spec_proposer.py": "orphan (see orphans)",
   "python/yunshu_engine/dflash_apc_window.py": "DFlash drafter context window kept beside APC checkpoints (dflash path; apc_prefix_cache)",
   "python/yunshu_engine/penalty_context.py": "Penalty context = full prompt on an APC hit (hit == miss; part of penalties_in_spec / apc)",
-  "python/yunshu_engine/gpu_window.py": "debug GPU busy/idle window (Metal interposer), inert unless DYLD_INSERT_LIBRARIES loads it"
+  "python/yunshu_engine/gpu_window.py": "debug GPU busy/idle window (Metal interposer), inert unless DYLD_INSERT_LIBRARIES loads it",
+  "python/yunshu_engine/kernels/tf_flash_next/base.py": "TensorFold flash_next v1 kernels used by qwen4_fused_hc (kernels/tf_hc_forward.py)",
+  "python/yunshu_engine/kernels/tf_flash_next/hc.py": "TensorFold flash_next v1 kernels used by qwen4_fused_hc (kernels/tf_hc_forward.py)",
+  "python/yunshu_engine/kernels/tf_flash_next/threads.py": "TensorFold flash_next v1 kernels used by qwen4_fused_hc (kernels/tf_hc_forward.py)",
+  "python/yunshu_engine/kernels/tf_flash_next/inputs.py": "TensorFold flash_next v1 kernels used by qwen4_fused_hc (kernels/tf_hc_forward.py)",
+  "python/yunshu_engine/kernels/tf_flash_next/experts.py": "TensorFold flash_next v1 router/expert kernels used by qwen4_fused_hc (kernels/tf_hc_forward.py)"
  },
  "settings": {
   "YUNSHU_MTP": "draft_family_coverage",

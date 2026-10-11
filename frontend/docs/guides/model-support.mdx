@@ -76,13 +76,13 @@ With a memory ceiling set, Yunshu keeps the freed-buffer pool at 0.5 GiB and lea
 
 | Context (M5 Max 128 GB, MTP on, whole-system memory delta) | Steady | Cold-prefill peak | Decode |
 |---|---:|---:|---:|
-| 1K | 75-76 GB | 77 GB | 45-50 tok/s |
-| 8K | 77 GB | 79 GB | 42 tok/s |
-| 32K | 75 GB | 80 GB | 37-38 tok/s |
+| 1K | 75-76 GB | 77 GB | 70 tok/s |
+| 8K | 77 GB | 79 GB | 66 tok/s |
+| 32K | 75 GB | 80 GB | 37-38 tok/s (before the fused kernels) |
 | about 169K, SSD APC hit (second request) | 75 GB | 81 GB | 22 tok/s, first token in 1.2 s |
 | about 169K, cold | 75 GB | 84-85 GB | 21 tok/s |
 
-A cold prefill beyond roughly 32K needs about 83-85 GB at its peak (the extra is prefill working memory); the same prompt served from the SSD prompt cache stays near 81 GB. Output is identical with speculation on and off and with a prompt-cache hit or miss. MTP gains about 20% here because every extra verify row reads more experts. Thinking-mode MMLU-Pro (300 questions, greedy): 261/300 = 0.870 (0 parse failures; the 27B oQ4e gate protocol gives 0.833).
+A cold prefill beyond roughly 32K needs about 83-85 GB at its peak (the extra is prefill working memory); the same prompt served from the SSD prompt cache stays near 81 GB. Output is identical with speculation on and off and with a prompt-cache hit or miss. Decode uses fused hyper-connection and router/expert Metal kernels (derived from TensorFold, Apache-2.0), 65 tok/s without speculation at 1K and 55 at 8K; MTP adds 8% at 1K and 20% at 8K because every extra verify row reads more experts. Thinking-mode MMLU-Pro (300 questions, greedy): 261/300 = 0.870 (0 parse failures; the 27B oQ4e gate protocol gives 0.833).
 
 ## Related
 

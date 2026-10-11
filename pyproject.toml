@@ -225,6 +225,7 @@ extend-exclude = [
     "python/yunshu_engine/kernels/tensorfold/lane_qmm.py",
     "python/yunshu_engine/kernels/tensorfold/lane_widen.py",
     "python/yunshu_engine/kernels/tensorfold/inputs.py",
+    "python/yunshu_engine/kernels/tf_flash_next/*.py",
 ]
 
 [tool.ruff.lint]
@@ -281,6 +282,11 @@ module = [
 ]
 follow_imports = "skip"
 follow_imports_for_stubs = true
+
+# Vendored TensorFold kernels (Apache-2.0): kept as upstream wrote them.
+[[tool.mypy.overrides]]
+module = ["yunshu_engine.kernels.tf_flash_next.*"]
+ignore_errors = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

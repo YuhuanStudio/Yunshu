@@ -261,6 +261,66 @@
       "license": "Apache-2.0",
       "kind": "vendored",
       "local_changes": []
+    },
+    {
+      "path": "python/yunshu_engine/kernels/tf_flash_next/base.py",
+      "repo": "https://github.com/ashhart/TensorFold",
+      "clone": "reference/TensorFold",
+      "upstream_path": "src/tensorfold/kernels/qwen/flash_next/v1/base.py",
+      "commit": "17c73e1",
+      "license": "Apache-2.0",
+      "local_changes": [
+        "intra-package imports changed; first line credit comment added"
+      ],
+      "kind": "vendored"
+    },
+    {
+      "path": "python/yunshu_engine/kernels/tf_flash_next/hc.py",
+      "repo": "https://github.com/ashhart/TensorFold",
+      "clone": "reference/TensorFold",
+      "upstream_path": "src/tensorfold/kernels/qwen/flash_next/v1/hc.py",
+      "commit": "17c73e1",
+      "license": "Apache-2.0",
+      "local_changes": [
+        "intra-package imports changed; first line credit comment added"
+      ],
+      "kind": "vendored"
+    },
+    {
+      "path": "python/yunshu_engine/kernels/tf_flash_next/threads.py",
+      "repo": "https://github.com/ashhart/TensorFold",
+      "clone": "reference/TensorFold",
+      "upstream_path": "src/tensorfold/kernels/threads.py",
+      "commit": "17c73e1",
+      "license": "Apache-2.0",
+      "local_changes": [
+        "intra-package imports changed; first line credit comment added"
+      ],
+      "kind": "vendored"
+    },
+    {
+      "path": "python/yunshu_engine/kernels/tf_flash_next/inputs.py",
+      "repo": "https://github.com/ashhart/TensorFold",
+      "clone": "reference/TensorFold",
+      "upstream_path": "src/tensorfold/kernels/inputs.py",
+      "commit": "17c73e1",
+      "license": "Apache-2.0",
+      "local_changes": [
+        "intra-package imports changed; first line credit comment added"
+      ],
+      "kind": "vendored"
+    },
+    {
+      "path": "python/yunshu_engine/kernels/tf_flash_next/experts.py",
+      "repo": "https://github.com/ashhart/TensorFold",
+      "clone": "reference/TensorFold",
+      "upstream_path": "src/tensorfold/kernels/qwen/flash_next/v1/experts.py",
+      "commit": "17c73e1",
+      "license": "Apache-2.0",
+      "local_changes": [
+        "intra-package imports changed; first line credit comment added"
+      ],
+      "kind": "vendored"
     }
   ],
   "derived": [
