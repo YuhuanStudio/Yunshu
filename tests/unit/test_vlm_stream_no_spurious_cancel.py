@@ -80,3 +80,38 @@ def test_client_break_still_cancels():
 
     asyncio.run(go())
     assert cancel.is_set()
+
+
+def test_first_delivery_handoff_releases_after_consumer_resumes_or_closes():
+    from types import SimpleNamespace
+
+    for close_early in (False, True):
+        eng = _engine(finish_delay=0)
+        eng._batch_runner = SimpleNamespace(draft_kind="dflash")
+        observed = {}
+
+        def emit(ids, req_id, queue, **kwargs):
+            observed["handoff"] = kwargs["first_delivery"]
+            queue.put_nowait(RequestOutput(request_id=req_id, new_text="hi"))
+            queue.put_nowait(
+                RequestOutput(request_id=req_id, finished=True, finish_reason="stop")
+            )
+            queue.put_nowait(None)
+
+        eng._stream_vlm_runner_text = emit
+
+        async def drive():
+            iterator = eng.generate_stream(prompt="x")
+            first = await iterator.__anext__()
+            assert first.new_text == "hi"
+            assert not observed["handoff"].is_set()
+            if not close_early:
+                await iterator.__anext__()
+                assert observed["handoff"].is_set()
+            await iterator.aclose()
+            assert observed["handoff"].is_set()
+
+        try:
+            asyncio.run(drive())
+        finally:
+            eng._executor.shutdown(wait=True)

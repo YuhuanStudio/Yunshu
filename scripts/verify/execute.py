@@ -209,6 +209,9 @@ class Executor:
                 reason = f"job {j.id}: {reason}"
         if ok and cell.quiet and j.contended:
             ok, reason = False, f"job {j.id} was CPU-contended (timing not trusted)"
+        paused = bool(j.d.get("pauses") or j.d.get("paused"))
+        if ok and cell.quiet and paused:
+            ok, reason = False, f"job {j.id} was paused (timing not trusted)"
         final = self.run.cell_path(cell.stage, cell.key)
         if ok and cell.needs_out:
             # Keep gpuq's declared output for digest/watchdog; promote a copy atomically.
@@ -232,6 +235,7 @@ class Executor:
                 "rc": j.rc,
                 "state": j.state,
                 "contended": j.contended,
+                "paused": paused,
                 "reason": reason,
             },
         )
@@ -265,21 +269,7 @@ class Executor:
 
     def _run_cell_batch(self, cells: list) -> dict:
         """Run every cell not already completed; returns key -> CellResult. Stops at the first
-        failure (fail-fast): pending cells of the batch are cancelled and left unresults."""
-        # Long suites contain many contexts/reps. Keep at most six cells in
-        # flight, as required by gpuq ownership hygiene, while preserving the
-        # interleaved arm order and the existing fail-fast/resume behavior.
-        if len(cells) > 6:
-            results = {}
-            for start in range(0, len(cells), 6):
-                batch = cells[start : start + 6]
-                partial = self.run_cells(batch)
-                results.update(partial)
-                if len(partial) != len(batch) or any(
-                    not r.ok for r in partial.values()
-                ):
-                    break
-            return results
+        failure (fail-fast): at most six cells are queued; later batches stay unsubmitted."""
         results: dict = {}
         todo: list = []
         for c in cells:
@@ -289,39 +279,41 @@ class Executor:
                 self.log(f"{c.stage}/{c.key}: reused (job {hit.job})")
             else:
                 todo.append(c)
-        live: dict = {}
-        for c in todo:
-            att = self._inflight(c)
-            if att:
-                live[c.key] = att
-                self.log(f"{c.stage}/{c.key}: re-attached to {att[0]}")
-            else:
-                n = self._attempts(c) + 1
-                live[c.key] = (self._submit(c, n), n)
-        for c in todo:
-            jid, attempt = live[c.key]
-            r = self._finish(c, jid, attempt)
-            tries = 0
-            while not r.ok and (r.contended or "CPU-contended" in r.reason):
-                tries += 1
-                if tries > c.retries:
-                    break
-                self.log(f"{c.stage}/{c.key}: contended, rerunning")
-                n = self._attempts(c) + 1
-                r = self._finish(c, self._submit(c, n), n)
-            results[c.key] = r
-            if not r.ok:
-                for k2, (j2, _a) in live.items():
-                    if k2 != c.key and k2 not in results:
-                        self.gq.cancel(j2)
-                        self.run.append(
-                            c.stage,
-                            {
-                                "ev": "cell_cancelled",
-                                "cell": k2,
-                                "job": j2,
-                                "why": f"{c.key} failed",
-                            },
-                        )
-                break
+        for offset in range(0, len(todo), 6):
+            batch = todo[offset : offset + 6]
+            live: dict = {}
+            for c in batch:
+                att = self._inflight(c)
+                if att:
+                    live[c.key] = att
+                    self.log(f"{c.stage}/{c.key}: re-attached to {att[0]}")
+                else:
+                    n = self._attempts(c) + 1
+                    live[c.key] = (self._submit(c, n), n)
+            for c in batch:
+                jid, attempt = live[c.key]
+                r = self._finish(c, jid, attempt)
+                tries = 0
+                while not r.ok and (r.contended or "timing not trusted" in r.reason):
+                    tries += 1
+                    if tries > c.retries:
+                        break
+                    self.log(f"{c.stage}/{c.key}: timing interrupted, rerunning")
+                    n = self._attempts(c) + 1
+                    r = self._finish(c, self._submit(c, n), n)
+                results[c.key] = r
+                if not r.ok:
+                    for k2, (j2, _a) in live.items():
+                        if k2 != c.key and k2 not in results:
+                            self.gq.cancel(j2)
+                            self.run.append(
+                                c.stage,
+                                {
+                                    "ev": "cell_cancelled",
+                                    "cell": k2,
+                                    "job": j2,
+                                    "why": f"{c.key} failed",
+                                },
+                            )
+                    return results
         return results

@@ -176,6 +176,12 @@ const settingdesc = {
     "加载时在内存中量化权重（有损，以质量换内存）：`mxfp4`、`nvfp4`、`mxfp8` 或 `affine`（留空则保持检查点原样）。",
   YUNSHU_QUANT_CONFIG:
     "`affine` 内存内量化的位数和分组大小：JSON（含 `bits` 和 `group_size` 键）或 `bits`／`bits,group` 格式。",
+  YUNSHU_GC_POLICY:
+    "VLM 运行器的 Python 循环回收策略：`defer`（默认）冻结启动堆，并在请求到达至第一个 token 之间暂停回收，避免第 2 代回收延迟首个 token；`freeze` 仅冻结；`default` 为 Python 原生行为。输出不变。",
+  YUNSHU_NEXT_TURN_PREFILL:
+    "完成纯文本回复后，引擎空闲时先把该回复按下一轮的呈现方式预填充，使后续提问只需预填充新消息。`exact`（默认）预填充到回复结尾，`stride` 对齐预填充区间网格，`boundary` 仅加入预填充边界（对照用），`off` 关闭。同一对话的请求会接管进行中的预填充；其他请求会在数个解码层内取消它。输出不变。",
+  YUNSHU_NEXT_TURN_DELAY_S:
+    "完成回复后到开始下一轮预填充之间的等待秒数。更早到达的请求（重试、重发、代理循环）不会遇到运行中的任务。",
   YUNSHU_ROUND_PREFILL_CHUNK:
     "回合驱动器：每个预填充区间的提示词 token 数。解码中的请求只在预填充前向传递之间推进，因此区间越小，越能在长提示词旁保持运行，代价是预填充速度约降低 20%。区间按提示词固定，输出不受其他运行中任务影响；以不同大小预填充的提示词各自一致，但彼此并非按位相同。",
   YUNSHU_ROUND_DRIVER:

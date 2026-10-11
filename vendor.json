@@ -1341,6 +1341,21 @@
       "reviewed_commit": "259b8dd0418b687e31ce53258775dff35f879440",
       "reviewed_date": "2026-10-08",
       "review_reason": "Independent request-local untyped XML container coercion. Preserve JSON scalar text, explicit string unions and JSON-wire values; tests/unit/test_untyped_xml_containers.py fails without the fix."
+    },
+    {
+      "kind": "inspired",
+      "path": "python/yunshu_engine/gc_policy.py",
+      "repo": "https://github.com/vllm-project/vllm",
+      "clone": "reference/vllm",
+      "upstream_paths": [
+        "vllm/utils/gc_utils.py",
+        "vllm/v1/engine/core.py"
+      ],
+      "commit": "ba77c4c1",
+      "license": "Apache-2.0",
+      "local_changes": [
+        "gc.collect() + gc.freeze() of the startup heap after model load (vLLM freeze_gc_heap, SGLang freeze_gc in python/sglang/srt/utils/common.py); the generation-2 multiplier and the bounded first-token collector hold are Yunshu's own"
+      ]
     }
   ],
   "patches": [
@@ -2467,6 +2482,21 @@
       "commit": "v0.7.4",
       "why": "expose the running prefill batch to the checkpoint capture",
       "source_sha256": "94591dbb4d1c3f1c7eb63d2c677d24ceffc2b073671343a183ddac76d539897c",
+      "installed_version": "0.7.6"
+    },
+    {
+      "kind": "patches",
+      "path": "python/yunshu_engine/kernels/preempt.py",
+      "repo": "https://github.com/Blaizzy/mlx-vlm",
+      "clone": "reference/mlx-vlm",
+      "package": "mlx-vlm",
+      "module": "mlx_vlm.models.qwen3_5.language",
+      "symbol": "Qwen3_5DecoderLayer.__call__",
+      "signature": "(self, x: mx.array, mask: Optional[mx.array]=None, cache: Optional[Any]=None, position_ids: Optional[mx.array]=None, position_embeddings: Optional[tuple[mx.array, mx.array]]=None)",
+      "license": "MIT",
+      "commit": "v0.7.3",
+      "why": "preemptible prefill: evaluate every few layers so a background rehearsal can stop inside a prefill atom",
+      "source_sha256": "88aba0b13d9e64c327ad86d76380324beb20099c179472dcba1a2f2742b09c1e",
       "installed_version": "0.7.6"
     }
   ],

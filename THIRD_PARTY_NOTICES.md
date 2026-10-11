@@ -105,6 +105,11 @@ text under `console_static/licenses/yunui/`; Vite generates the bundled dependen
 license catalogue at `console_static/licenses/bundled-dependencies.md`. The local
 Geist and JetBrains Mono font assets carry their OFL texts under `console_static/fonts/`.
 
+## vLLM / SGLang — idea only (`python/yunshu_engine/gc_policy.py`)
+
+Collecting once and calling `gc.freeze()` on the startup heap after model load follows vLLM's
+`freeze_gc_heap` (vllm/utils/gc_utils.py, Apache-2.0) and SGLang's `freeze_gc`
+(python/sglang/srt/utils/common.py, Apache-2.0). No code is copied; the code is written independently.
 ## mlx2 telemetry
 
 `python/yunshu_engine/telemetry/apple.py` is derived from pierre427/mlx2

@@ -187,6 +187,12 @@ const settingdesc = {
     "Quantize weights in memory at load (lossy; memory vs quality): `mxfp4`, `nvfp4`, `mxfp8` or `affine` (empty keeps the checkpoint).",
   YUNSHU_QUANT_CONFIG:
     "Bits and group size for `affine` in-memory quantization: JSON (with `bits` and `group_size` keys) or `bits` / `bits,group`.",
+  YUNSHU_GC_POLICY:
+    "Python cyclic-collector policy of the VLM runner: `defer` (default) freezes the startup heap and holds the collector from request arrival to the first token, so a generation-2 pass cannot delay the first token; `freeze` only freezes; `default` is Python's own. Output is unchanged.",
+  YUNSHU_NEXT_TURN_PREFILL:
+    "After a finished plain-text reply and while the engine is idle, prefill the reply as the next turn will render it, so the follow-up prefills only the new message. `exact` (default) rehearses to the end of the reply, `stride` to the prefill-atom grid, `boundary` only adds the prefill boundary (reference), `off` disables it. A request for the same conversation takes over a running rehearsal; any other request cancels it within a few decoder layers. Output is unchanged.",
+  YUNSHU_NEXT_TURN_DELAY_S:
+    "Seconds between a finished reply and the start of the next-turn rehearsal. Requests that arrive sooner (retries, resends, agent loops) find no work running.",
   YUNSHU_ROUND_PREFILL_CHUNK:
     "Round driver: prompt tokens per prefill span. A decoding request only steps between prefill forwards, so smaller spans keep it running next to a long prompt, at about 20% lower prefill speed. Spans are fixed per prompt, so output is independent of what else is running; prompts prefilled with different sizes are self-consistent but not bit-identical to each other.",
   YUNSHU_ROUND_DRIVER:

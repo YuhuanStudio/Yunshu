@@ -44,7 +44,7 @@ from typing import Any
 
 import mlx.core as mx
 
-from . import netguard, settings
+from . import gc_policy, netguard, next_turn, settings
 from .moe_pack import tensor_quantization_override, unsupported_pack_reason
 from .request import RequestOutput
 from .types import EngineConfig
@@ -395,6 +395,9 @@ class VLMEngine:
         self._config: dict = {}
         self._running = False
         self._active_count = 0
+        self._rehearsal_cancel: threading.Event | None = None
+        self._rehearsal_state: next_turn.RehearsalState | None = None
+        self._rehearsal_task: asyncio.Future | None = None
         self._active_count_lock = threading.Lock()
         self._num_requests_processed = 0
         self._total_reasoning_tokens = 0
@@ -780,7 +783,11 @@ class VLMEngine:
         )
         # Every request goes through the runner; a model it cannot serve fails
         # at load instead of silently taking another path.
-        self._batch_runner = self._build_batch_runner(str(model_path))
+        runner = self._build_batch_runner(str(model_path))
+        self._batch_runner = runner
+        policy = settings.get("YUNSHU_GC_POLICY")
+        self._gc_policy = policy
+        runner.gc_guard = gc_policy.install(policy)
 
     async def start(self) -> None:
         if self._model is not None:
@@ -829,6 +836,9 @@ class VLMEngine:
         self._batch_runner = None
         self._processor = None
         self._running = False
+        if getattr(self, "_gc_policy", "default") != "default":
+            gc_policy.unfreeze()
+            self._gc_policy = "default"
 
         self._text_prompt_cache.clear()
         guard_counts = getattr(self, "_guard_token_counts", None)
@@ -951,6 +961,7 @@ class VLMEngine:
             )
             self._track_pipeline(kwargs, messages, image_paths, audio_paths)
             self._check_request_supported(image_paths, audio_paths, kwargs)
+            await self._settle_rehearsal_early(messages, _enable_thinking, tpl_extra)
 
             _runner_extras: dict = {}
             runner_params = self._runner_kwargs(
@@ -983,6 +994,7 @@ class VLMEngine:
                 ids, pkw, salt = self._runner_input(
                     messages, image_paths, audio_paths, _enable_thinking, tpl_extra
                 )
+                self._settle_rehearsal(ids)
                 _marks["template_end"] = time.perf_counter()
                 return _RunnerCall(
                     self._generate_vlm_runner_text,
@@ -1072,6 +1084,16 @@ class VLMEngine:
                 )
             except Exception:
                 pass
+            self._maybe_rehearse(
+                messages,
+                result.rsplit("</think>", 1)[-1].strip(),
+                finish_reason=_finish_reason,
+                completion_tokens=completion_token_count,
+                enable_thinking=_enable_thinking,
+                tpl_extra=tpl_extra,
+                has_media=bool(image_paths or audio_paths),
+                kwargs=kwargs,
+            )
             return {
                 "text": result,
                 "finish_reason": _finish_reason,
@@ -1154,12 +1176,20 @@ class VLMEngine:
         )
         self._track_pipeline(kwargs, messages, image_paths, audio_paths)
         self._check_request_supported(image_paths, audio_paths, kwargs)
+        await self._settle_rehearsal_early(messages, enable_thinking, tpl_extra)
 
         import uuid
 
         req_id = f"vlm-{uuid.uuid4().hex[:8]}"
 
         queue: asyncio.Queue[RequestOutput | None] = asyncio.Queue(maxsize=256)
+        # DFlash's copy-index setup can collect the Python heap after its first
+        # target token is ready. Let the async consumer deliver that token first.
+        first_delivery = (
+            threading.Event()
+            if getattr(self._batch_runner, "draft_kind", None) == "dflash"
+            else None
+        )
 
         # Capture event loop for thread-safe queue writes from executor thread.
         # asyncio.Queue.put_nowait() is NOT thread-safe — must schedule puts
@@ -1222,6 +1252,7 @@ class VLMEngine:
             },
         )
 
+        runner_params["first_delivery"] = first_delivery
         from .request_tracker import current_request_info
 
         _latency_info = current_request_info.get()
@@ -1232,6 +1263,7 @@ class VLMEngine:
             ids, pkw, salt = self._runner_input(
                 messages, image_paths, audio_paths, enable_thinking, tpl_extra
             )
+            self._settle_rehearsal(ids)
             _marks["template_end"] = time.perf_counter()
             return _RunnerCall(
                 self._stream_vlm_runner_text,
@@ -1317,6 +1349,8 @@ class VLMEngine:
         _model_id = self.model_name
 
         _ended_normally = False
+        _reply_parts: list[tuple[str, str]] = []
+        _finish_seen: str | None = None
 
         try:
             while True:
@@ -1343,6 +1377,9 @@ class VLMEngine:
                     break
                 if output.finished and output.finish_reason != "error":
                     _ended_normally = True
+                    _finish_seen = output.finish_reason
+                if output.new_text:
+                    _reply_parts.append((output.new_text, output.current_state))
                 if output.prompt_tokens > 0:
                     _prompt_tokens_count = output.prompt_tokens
                 if output.completion_tokens > 0:
@@ -1362,7 +1399,14 @@ class VLMEngine:
                     except Exception:
                         pass
                 yield output
+                # The caller has resumed after handling this chunk. This also
+                # releases promptly when a parser needs another token before
+                # it can produce a visible fragment.
+                if first_delivery is not None and output.new_text:
+                    first_delivery.set()
         finally:
+            if first_delivery is not None:
+                first_delivery.set()
             # Record in ServerMetrics for VLM streaming
             try:
                 from .server_metrics import get_server_metrics
@@ -1390,6 +1434,17 @@ class VLMEngine:
                     queue.get_nowait()
                 except asyncio.QueueEmpty:
                     break
+            if _ended_normally and not cancel_event.is_set():
+                self._maybe_rehearse(
+                    messages,
+                    next_turn.reply_text(_reply_parts),
+                    finish_reason=_finish_seen,
+                    completion_tokens=_completion_tokens_count,
+                    enable_thinking=enable_thinking,
+                    tpl_extra=tpl_extra,
+                    has_media=bool(image_paths or audio_paths),
+                    kwargs=kwargs,
+                )
             # This async generator is driven step-by-step from a separate task by
             # the SSE keepalive wrapper, so this finally can run in a different
             # contextvars.Context than the one .set() ran in — reset() would then
@@ -1406,6 +1461,248 @@ class VLMEngine:
                             f for f in self._temp_files if f not in _mine_set
                         ]
             self._cleanup_temp_files(_mine)
+
+    # -- next-turn rehearsal (YUNSHU_NEXT_TURN_PREFILL) ---------------------------------
+
+    def _cancel_rehearsal(self) -> None:
+        """Stop an unfinished rehearsal at its next prefill atom (no prompt to compare)."""
+        ev = getattr(self, "_rehearsal_cancel", None)
+        if ev is not None:
+            ev.set()
+
+    def _peek_prompt_ids(
+        self, messages: list[dict], enable_thinking: bool | None, tpl_extra: dict | None
+    ) -> list[int]:
+        """Token ids of a request's prompt without touching MLX (any thread)."""
+        text = self._format_prompt(
+            messages, enable_thinking=enable_thinking, template_extra=tpl_extra
+        )
+        bos = getattr(self._tokenizer, "bos_token", None)
+        add_special = not (isinstance(bos, str) and bos and text.startswith(bos))
+        return list(
+            self._text_prompt_cache.prefix_tokens.encode(
+                self._tokenizer, text, add_special_tokens=add_special
+            )
+        )
+
+    async def _settle_rehearsal_early(
+        self, messages: list[dict], enable_thinking: bool | None, tpl_extra: dict | None
+    ) -> None:
+        """A request arrived: adopt or cancel the running rehearsal BEFORE queueing behind it.
+
+        The request's own tokenization runs on the single MLX executor, which is busy with the
+        rehearsal's prefill; deciding there would only cancel after the atom. Decide here, from
+        the event loop, with a token peek that needs no MLX."""
+        state = getattr(self, "_rehearsal_state", None)
+        if state is None:
+            return
+        has_media = any(
+            isinstance(m.get("content"), list)
+            and any(
+                isinstance(p, dict) and p.get("type") not in (None, "text")
+                for p in m["content"]
+            )
+            for m in messages
+        )
+        if has_media or not state.submitted:
+            # media, or no work running yet (the start delay): nothing to adopt, no tokens needed
+            state.cancel_event.set()
+            return
+        try:
+            ids = await asyncio.get_running_loop().run_in_executor(
+                None, self._peek_prompt_ids, messages, enable_thinking, tpl_extra
+            )
+        except Exception:
+            logger.debug("rehearsal peek failed; cancelling", exc_info=True)
+            state.cancel_event.set()
+            return
+        self._settle_rehearsal(ids)
+
+    def _settle_rehearsal(self, ids: list[int]) -> None:
+        """A real request's prompt is known: adopt the running rehearsal or cancel it."""
+        state = getattr(self, "_rehearsal_state", None)
+        if state is None:
+            return
+        verdict = state.arrive(ids)
+        logger.debug("next-turn rehearsal vs arriving request: %s", verdict)
+
+    def _maybe_rehearse(
+        self,
+        messages: list[dict],
+        reply: str,
+        *,
+        finish_reason: str | None,
+        completion_tokens: int,
+        enable_thinking: bool | None,
+        tpl_extra: dict | None,
+        has_media: bool,
+        kwargs: dict,
+    ) -> None:
+        mode = settings.get("YUNSHU_NEXT_TURN_PREFILL")
+        if mode in (None, False, "", "off", "boundary"):
+            return
+        reason = next_turn.ineligible_reason(
+            finish_reason=finish_reason,
+            completion_tokens=completion_tokens,
+            reply=reply,
+            has_media=has_media,
+            has_tools=bool(kwargs.get("_tool_spec") or kwargs.get("tools")),
+            constrained=bool(kwargs.get("json_schema") or kwargs.get("grammar")),
+        )
+        if reason is not None:
+            logger.debug("next-turn rehearsal ineligible: %s", reason)
+            next_turn.record("ineligible")
+            return
+        from .kernels import preempt
+
+        if not preempt.supported():
+            # a diverging request would wait for the whole 2048-token atom
+            logger.debug("next-turn rehearsal ineligible: prefill is not preemptible")
+            next_turn.record("ineligible")
+            return
+        if self._active_count > 1 or self._batch_runner is None:
+            logger.debug("next-turn rehearsal ineligible: engine busy")
+            next_turn.record("ineligible")
+            return  # other work is waiting: the GPU is not idle
+        # created here, not in the task: a request arriving before the task first runs must
+        # still be able to cancel it
+        ev = threading.Event()
+        ev.preemptible = True  # type: ignore[attr-defined]  # read by the runner (kernels/preempt)
+        self._rehearsal_cancel = ev
+        state = next_turn.RehearsalState(ev)
+        self._rehearsal_state = state
+        task = asyncio.ensure_future(
+            self._rehearse(
+                messages, reply, enable_thinking, tpl_extra, str(mode), state
+            )
+        )
+        self._rehearsal_task = task
+
+    async def _rehearse(
+        self,
+        messages: list[dict],
+        reply: str,
+        enable_thinking: bool | None,
+        tpl_extra: dict | None,
+        mode: str = "stride",
+        state: next_turn.RehearsalState | None = None,
+    ) -> None:
+        loop = asyncio.get_running_loop()
+        if state is None:
+            state = next_turn.RehearsalState(threading.Event())
+            self._rehearsal_cancel = state.cancel_event
+            self._rehearsal_state = state
+        ev = state.cancel_event
+        rehearsal_messages = next_turn.with_reply(messages, reply)
+        marker = self._chatml_head_marker()
+        tokenizer = self._tokenizer
+
+        def _prepare():
+            full = self._tokenize_with_cache(
+                rehearsal_messages,
+                enable_thinking=enable_thinking,
+                template_extra=tpl_extra,
+            ).tolist()
+            ids = next_turn.cut_before_user_turn(
+                full,
+                marker[0] if marker else None,
+                lambda toks: tokenizer.decode(list(toks)),
+            )
+            if ids is None or ev.is_set():
+                return None
+            stride = int(getattr(self, "_apc_prefill_stride", 0) or 0)
+            manager = getattr(self._apc_backend, "manager", None)
+            guard = int(getattr(manager, "exact_cache_guard_tokens", 1) or 1)
+            if mode == "exact":
+                # end exactly at the next turn's header: the manager's turn boundary is
+                # the checkpoint, the guard token is the header itself
+                ids = full[: len(ids) + guard]
+            else:
+                target = next_turn.rehearsal_length(len(ids), stride, guard)
+                if target is None:
+                    return None
+                ids = ids[:target]
+            params = self._runner_kwargs(
+                max_tokens=1,
+                temperature=0.0,
+                top_p=1.0,
+                top_k=0,
+                min_p=0.0,
+                seed=None,
+                stop=None,
+                stop_token_ids=[],
+                repetition_penalty=1.0,
+                logprobs=False,
+                top_logprobs=None,
+                enable_thinking=enable_thinking,
+                thinking_budget=None,
+                cancel_event=ev,
+                kwargs={},
+            )
+            state.set_ids(ids)
+            return _RunnerCall(
+                self._generate_vlm_runner_text,
+                ids,
+                extras={},
+                prompt_kwargs=None,
+                apc_semantic_hash=None,
+                prompt_cache_plan=self._resolve_prompt_cache_plan(
+                    None,
+                    rehearsal_messages[:-1],
+                    ids,
+                    None,
+                    enable_thinking,
+                    tpl_extra,
+                    {"ttl": None},
+                ),
+                **params,
+            )
+
+        started = False
+        call = None
+        try:
+            # Wait first, prepare after: preparing tokenizes the whole conversation on the MLX
+            # executor, which a back-to-back request would queue behind (warm TTFT +10-17 ms).
+            delay = float(settings.get("YUNSHU_NEXT_TURN_DELAY_S") or 0.0)
+            if delay > 0:
+                await asyncio.sleep(delay)
+            if ev.is_set():
+                next_turn.record("cancelled")
+                return
+            call = await loop.run_in_executor(self._executor, _prepare)
+            if call is None:
+                logger.debug("next-turn rehearsal skipped (no clean cut)")
+                return
+            if not state.submit():
+                next_turn.record("cancelled")
+                return
+            next_turn.record("started")
+            started = True
+            t0 = time.perf_counter()
+            extras: dict = call.keywords["extras"]
+            outcome = await loop.run_in_executor(self._runner_consumers(), call)
+            cached = int(outcome[5]) if outcome and len(outcome) > 5 else -1
+            cancelled = ev.is_set()
+            next_turn.record(
+                "cancelled" if cancelled else "completed",
+                0 if cancelled else int(extras.get("prompt_tokens") or 0),
+            )
+            logger.info(
+                "next-turn rehearsal: prompt %s tokens, %s cached, done in %.2fs%s",
+                extras.get("prompt_tokens"),
+                cached,
+                time.perf_counter() - t0,
+                " (cancelled)" if cancelled else "",
+            )
+        except (Exception, asyncio.CancelledError):
+            logger.debug("next-turn rehearsal ended", exc_info=True)
+            if started and ev.is_set():
+                next_turn.record("cancelled")
+        finally:
+            if getattr(self, "_rehearsal_cancel", None) is ev:
+                self._rehearsal_cancel = None
+            if getattr(self, "_rehearsal_state", None) is state:
+                self._rehearsal_state = None
 
     def backend_capabilities(self, lm: Any = None) -> Any:
         """This backbone's cache layout via the shared ``model_backend`` layer
@@ -1979,6 +2276,9 @@ class VLMEngine:
 
             singleton_cache.install()
             cache_restore.install()
+            from .kernels import preempt
+
+            preempt.install()
         cache_gib = settings.get("YUNSHU_PREFILL_BUFFER_CACHE_GB")
         if cache_gib is None:
             import mlx.core as _mx
@@ -2043,6 +2343,10 @@ class VLMEngine:
                     prefill_boundary_tokens=tuple(boundary_tokens),
                     prefill_assistant_header=assistant_header,
                     prefill_message_end=message_end,
+                    prefill_turn_boundary=(
+                        settings.get("YUNSHU_NEXT_TURN_PREFILL")
+                        in ("boundary", "exact")
+                    ),
                 )
                 self._install_apc_identity(lm)
                 self._apc_semantic_hash = semantic_extra_hash(
@@ -2289,6 +2593,7 @@ class VLMEngine:
         xtc_threshold: float = 0.0,
         tool_spec: dict | None = None,
         tools_declared: bool = False,
+        first_delivery: threading.Event | None = None,
     ):
         """Yield ``(text, token_id, state, finish_reason, thinking_tokens, logprob)``.
 
@@ -2404,6 +2709,7 @@ class VLMEngine:
             xtc_threshold=xtc_threshold,
             xtc_special_tokens=list(self._get_eos_ids()),
             guide=guide,
+            first_delivery=first_delivery,
         ):
             count += 1
             lp = stats.last_logprob if logprobs else None

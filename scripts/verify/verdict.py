@@ -112,9 +112,15 @@ def _numbers_en(s: dict) -> str:
             )
         cf = n.get("confirmation")
         if cf:
+            initial = ", ".join(
+                "{}@{} {} {:+.1f}%".format(
+                    r["kind"], r["ctx"], r["metric"], r["delta_pct"]
+                )
+                for r in cf["initial_regressions"]
+            )
             parts.append(
                 f"initial: regression in {len(cf['initial_regressions'])} metric(s) "
-                f"({', '.join(f'{r["kind"]}@{r["ctx"]} {r["metric"]} {r["delta_pct"]:+.1f}%' for r in cf['initial_regressions'])}); "
+                f"({initial}); "
                 f"{cf['extra_reps']} confirmation reps (median of paired deltas, MAD noise); "
                 f"confirmed: {cf['confirmed_verdict']}"
             )

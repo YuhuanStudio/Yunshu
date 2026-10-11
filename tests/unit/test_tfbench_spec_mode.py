@@ -271,6 +271,42 @@ def test_busy_port_pool_waits_and_recovers(monkeypatch):
     assert now[0] == 2
 
 
+def test_optional_client_timestamps_are_exact_and_not_in_default_schema(monkeypatch):
+    import json
+
+    payloads = [
+        dict(choices=[dict(delta=dict(content="hello"), finish_reason="stop")]),
+        dict(usage=dict(completion_tokens=1, prompt_tokens=10)),
+        "[DONE]",
+    ]
+
+    class Response:
+        def __enter__(self):
+            return iter(
+                b"data: "
+                + (p.encode() if isinstance(p, str) else json.dumps(p).encode())
+                + b"\n"
+                for p in payloads
+            )
+
+        def __exit__(self, *args):
+            pass
+
+    monkeypatch.setattr(
+        tfbench.urllib.request, "urlopen", lambda *args, **kw: Response()
+    )
+    for capture in (False, True):
+        times = iter((1.0, 1.1, 1.2))
+        monkeypatch.setattr(tfbench.time, "perf_counter", lambda: next(times))
+        result = tfbench.send("http://fake", {}, capture_timestamps=capture)
+        assert result["ttft_s"] == 0.1
+        if capture:
+            assert result["_sent_at_s"] == 1.0
+            assert result["_first_at_s"] == 1.1
+        else:
+            assert "_sent_at_s" not in result and "_first_at_s" not in result
+
+
 def test_ready_request_carries_the_configured_key():
     request = tfbench.ready_request("http://x", {"YUNSHU_AUTH_TOKEN": "tok"})
     assert request.get_header("Authorization") == "Bearer tok"

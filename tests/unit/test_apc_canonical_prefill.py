@@ -123,3 +123,80 @@ def test_user_quoted_thinking_tags_do_not_split_prefill():
     )
     ids = [900, 846, 777, 778, 901, 900, 74455, 777, 10, 778, 901]
     assert manager.semantic_boundaries(ids) == {8, 10}
+
+
+def test_turn_boundary_marks_the_end_of_prior_assistant_turns_only():
+    # user turn, assistant turn (ended), user turn, assistant generation prompt (open)
+    ids = [900, 846, 5, 901, 900, 74455, 6, 901, 900, 846, 7, 901, 900, 74455, 8]
+    on = _mgr(
+        prefill_stride=64,
+        prefill_assistant_header=(900, 74455),
+        prefill_message_end=901,
+        prefill_turn_boundary=True,
+    )
+    off = _mgr(
+        prefill_stride=64,
+        prefill_assistant_header=(900, 74455),
+        prefill_message_end=901,
+    )
+    assert on.semantic_boundaries(ids) == {
+        8
+    }  # the user header after the assistant turn
+    assert off.semantic_boundaries(ids) == set()
+    # a single-turn prompt (no prior assistant turn) gets no extra boundary
+    assert on.semantic_boundaries([900, 846, 5, 901, 900, 74455, 8]) == set()
+    # a user turn ending is not an assistant turn ending
+    assert on.semantic_boundaries([900, 846, 5, 901, 900, 846, 7, 901]) == set()
+
+
+def _two_turn_ids():
+    history = (
+        [900, 846]
+        + list(range(10, 70))
+        + [901]
+        + [900, 74455]
+        + list(range(100, 150))
+        + [901]
+    )
+    boundary = len(history)  # the next turn's header index
+    follow_up = history + [900, 846] + list(range(200, 230)) + [901, 900, 74455]
+    return history, boundary, follow_up
+
+
+def _turn_mgr(on):
+    return _mgr(
+        prefill_stride=64,
+        prefill_assistant_header=(900, 74455),
+        prefill_message_end=901,
+        prefill_turn_boundary=on,
+    )
+
+
+def test_turn_boundary_is_a_cold_forward_split_and_the_rehearsal_final():
+    history, boundary, follow_up = _two_turn_ids()
+    on, off = _turn_mgr(True), _turn_mgr(False)
+    # the follow-up's cold prefill splits at the end of the earlier assistant turn
+    assert boundary in _coordinator(on).checkpoint_lengths(follow_up, set())
+    assert boundary not in _coordinator(off).checkpoint_lengths(follow_up, set())
+    # the rehearsal request ends at the header: its stored checkpoint (len - guard) is that boundary
+    rehearsal = history + [900]
+    assert _coordinator(on).checkpoint_lengths(rehearsal, set())[-1] == boundary
+    # a single-turn prompt is split exactly as without the option
+    single = history[: boundary - 51] + [900, 74455] + list(range(300, 340))
+    assert _coordinator(on).checkpoint_lengths(single, set()) == _coordinator(
+        off
+    ).checkpoint_lengths(single, set())
+
+
+def test_restore_at_the_turn_boundary_is_an_allowed_lookup(monkeypatch):
+    history, boundary, follow_up = _two_turn_ids()
+    on, off = _turn_mgr(True), _turn_mgr(False)
+    for m, want in ((on, True), (off, False)):
+        policy = (
+            id(m),
+            64,
+            len(follow_up) - 1,
+            0,
+            frozenset(m.semantic_boundaries(follow_up)),
+        )
+        assert (boundary in policy[4]) is want

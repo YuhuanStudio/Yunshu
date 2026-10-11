@@ -139,6 +139,8 @@ def _dec_args(ctx: Ctx) -> list:
         out.append("--long-ask")
     if ctx.suite.get("turn2_tokens"):
         out += ["--turn2-tokens", str(int(ctx.suite["turn2_tokens"]))]
+    if ctx.suite.get("think_s"):
+        out += ["--think-s", str(float(ctx.suite["think_s"]))]
     return out
 
 
@@ -399,7 +401,8 @@ def stage_smoke(ctx: Ctx) -> StageResult:
                     ["--part", "decode", "--smoke", "--rep", "0"],
                 ),
                 mem_gb=ctx.mem_gb,
-                timeout_min=12 if ctx.big else 5,
+                # measured 10-16 s with a resident 27B load: honest short-lane declaration
+                timeout_min=9 if ctx.big else 5,
                 stall_min=6 if ctx.big else 2,
                 validate=_smoke_valid,
                 device="" if ctx.big else "any",
@@ -1103,6 +1106,84 @@ def _memory_valid(path: Path):
     if not any(r.get("step") == "idle-after" and "footprint_gib" in r for r in rows):
         return False, "no idle-after record"
     return True, ""
+
+
+def _ttft_profile_valid(path: Path):
+    rows = read_jsonl(path)
+    if not rows or rows[-1].get("complete") is not True:
+        return False, "missing final complete record"
+    requests = rows[:-1]
+    phases = [r.get("phase") for r in requests]
+    if phases != ["cold", "warm", "warm", "warm", "followup"]:
+        return False, "unexpected diagnostic request phases"
+    if any(not r.get("call_spans") or not r.get("engaged") for r in requests[1:]):
+        return False, "missing diagnostic spans or engaged mode"
+    for row in requests[1:]:
+        if not row.get("copy_index_gc_engaged"):
+            return False, "missing runtime proof of copy-index GC policy"
+        if not any(r.get("stage") == "gpu_wait" for r in row["call_spans"]):
+            return False, "missing native evaluation spans"
+        if row.get("http", {}).get("first_sse_submit_ms") is None:
+            return False, "missing first nonempty SSE marker"
+        if not row.get("cached") or not row.get("followup_apc_required"):
+            return False, "diagnostic did not require and exercise APC"
+    return True, ""
+
+
+def stage_ttft_profile(ctx: Ctx) -> StageResult:
+    """Locate TTFT work with a profiled server. Never infer a speed win here."""
+    cells = []
+    for size in ctx.suite["ctx"]:
+        for kind in ctx.suite["kinds"]:
+            for arm in ("base", "cand"):
+                key = f"{arm}-c{size}-{kind}"
+                cells.append(
+                    Cell(
+                        "ttft_profile",
+                        key,
+                        [
+                            ctx.py,
+                            str(REPO / "scripts/research/ttft_warm_probe.py"),
+                            "--model",
+                            ctx.model,
+                            "--src",
+                            str(ctx.tree(arm).path / "python"),
+                            "--ctx",
+                            str(size),
+                            "--kind",
+                            kind,
+                            "--warm",
+                            "3",
+                            "--calls",
+                            "--no-stacks",
+                            "--tag",
+                            f"{ctx.exe.label}-{key}",
+                            "--out",
+                            "{out}",
+                            *_env_flags(ctx.arm_env(arm)),
+                        ],
+                        mem_gb=ctx.mem_gb,
+                        # measured 117 s at 32K (27B); only 128K needs the long lane
+                        timeout_min=9 if size <= 32768 else 30,
+                        stall_min=6 if size <= 32768 else 12,
+                        quiet=True,
+                        validate=_ttft_profile_valid,
+                    )
+                )
+    results = ctx.exe.run_cells(cells)
+    reasons = _failed_cells(results)
+    return _finish(
+        ctx,
+        StageResult(
+            "ttft_profile",
+            not reasons,
+            reasons,
+            {
+                "diagnostic_only": True,
+                "method": "profiled Python/C spans; run long for identity and speed",
+            },
+        ),
+    )
 
 
 def _multimodal_valid(
@@ -2059,6 +2140,7 @@ def stage_telemetry(ctx: Ctx, *, pilot: bool = False) -> StageResult:
 
 
 STAGE_FUNCS = {
+    "ttft_profile": stage_ttft_profile,
     "snapshot": stage_snapshot,
     "console": stage_console,
     "telemetry": stage_telemetry,

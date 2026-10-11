@@ -1877,6 +1877,114 @@
      ]
     }
    }
+  },
+  "next_turn_rehearsal": {
+   "module": "python/yunshu_engine/kernels/preempt.py",
+   "what": "Next-turn rehearsal (YUNSHU_NEXT_TURN_PREFILL): while idle after a reply, prefill the assistant reply as the next turn renders it so the follow-up prefills only the new message (27B 32K follow-up TTFT 3.4 -> 0.6 s); preemptible per decoder-layer group (kernels/preempt.py) so a diverging request waits <= ~0.35 s",
+   "cells": {
+    "mtp": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/vlm_engine.py",
+       "_maybe_rehearse("
+      ]
+     ]
+    },
+    "dflash": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/vlm_engine.py",
+       "_maybe_rehearse("
+      ]
+     ]
+    },
+    "batch": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/vlm_engine.py",
+       "_maybe_rehearse("
+      ]
+     ]
+    },
+    "driver": {
+     "s": "na",
+     "why": "a lone background rehearsal is below DRIVER_MIN_CONCURRENCY, so it runs on the stock batch runner; the driver itself is experimental and default off"
+    },
+    "generic": {
+     "s": "na",
+     "why": "preemption wraps the Qwen3.5 decoder layer only; other families report preempt.supported() False and never rehearse (a diverging request would wait a whole atom)"
+    },
+    "text": {
+     "s": "na",
+     "why": "text-only mlx-lm fast path has no APC checkpoints to rehearse into"
+    },
+    "loop": {
+     "s": "na",
+     "why": "legacy loop, not grown"
+    }
+   }
+  },
+  "gc_policy": {
+   "module": "python/yunshu_engine/gc_policy.py",
+   "what": "Python GC policy of the VLM runner (YUNSHU_GC_POLICY=defer): freeze the startup heap and hold the collector from request arrival to the first token, so a ~110 ms generation-2 pass cannot delay the first token (27B 32K warm -2.3%)",
+   "cells": {
+    "mtp": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/vlm_engine.py",
+       "gc_policy.install("
+      ]
+     ]
+    },
+    "dflash": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/vlm_engine.py",
+       "gc_policy.install("
+      ]
+     ]
+    },
+    "batch": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/vlm_engine.py",
+       "gc_policy.install("
+      ]
+     ]
+    },
+    "driver": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/vlm_engine.py",
+       "gc_policy.install("
+      ]
+     ]
+    },
+    "generic": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/vlm_engine.py",
+       "gc_policy.install("
+      ]
+     ]
+    },
+    "text": {
+     "s": "na",
+     "why": "text-only mlx-lm path does not go through the VLM runner"
+    },
+    "loop": {
+     "s": "na",
+     "why": "legacy loop, not grown"
+    }
+   }
   }
  },
  "exclusions": [
@@ -2321,7 +2429,10 @@
   "YUNSHU_MAX_MEMORY_GB": "idle_memory_return",
   "YUNSHU_PLE_READ_THREADS": "ple_ssd_rows",
   "YUNSHU_VLM_APC_DRAFT_WINDOW_GB": "apc_prefix_cache",
-  "YUNSHU_DEBUG_TREE_PROFILE": "tree_drafts"
+  "YUNSHU_DEBUG_TREE_PROFILE": "tree_drafts",
+  "YUNSHU_NEXT_TURN_PREFILL": "next_turn_rehearsal",
+  "YUNSHU_NEXT_TURN_DELAY_S": "next_turn_rehearsal",
+  "YUNSHU_GC_POLICY": "gc_policy"
  },
  "gap_budget": 55,
  "settings_categories": [

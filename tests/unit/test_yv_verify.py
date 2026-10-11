@@ -206,6 +206,7 @@ def test_full_suite_has_every_stage():
     assert set(suites.STAGES) - set(suites.LADDER) == {
         "longqa",
         "conc",
+        "ttft_profile",
         "multimodal",
         "snapshot",
         "modelprobe",
@@ -1168,6 +1169,109 @@ def test_detach_pins_arms_resolved_by_the_caller(tmp_path):
     assert cli.pinned_spec(dir_arm) == str(wt.resolve())
 
 
+def test_ttft_profile_is_opt_in_and_requires_complete_spans(tmp_path):
+    assert "ttft_profile" not in suites.LADDER
+    assert "ttft_profile" not in suites.SUITES["long"]["stages"]
+    path = tmp_path / "profile.jsonl"
+    rows = [
+        dict(
+            phase=phase,
+            call_spans=[dict(stage="gpu_wait")],
+            engaged="dflash",
+            cached=1,
+            followup_apc_required=True,
+            copy_index_gc_engaged=True,
+            http=dict(first_sse_submit_ms=10),
+        )
+        for phase in ("cold", "warm", "warm", "warm", "followup")
+    ]
+    path.write_text("\n".join(json.dumps(r) for r in rows) + "\n")
+    assert not stages._ttft_profile_valid(path)[0]
+    rows.append(dict(complete=True))
+    path.write_text("\n".join(json.dumps(r) for r in rows) + "\n")
+    assert stages._ttft_profile_valid(path)[0]
+    rows[1]["call_spans"] = []
+    path.write_text("\n".join(json.dumps(r) for r in rows) + "\n")
+    assert not stages._ttft_profile_valid(path)[0]
+
+
+def test_yv_imports_on_its_macos_system_interpreter():
+    import os
+
+    interpreter = Path("/usr/bin/python3")
+    if not interpreter.exists():
+        pytest.skip("macOS system interpreter unavailable")
+    result = subprocess.run(
+        [str(interpreter), "-m", "verify", "suites"],
+        cwd=REPO,
+        env=dict(os.environ, PYTHONPATH=str(REPO / "scripts")),
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "long" in result.stdout
+
+
+def test_executor_batches_at_most_six_cells_and_stops_before_later_batches(
+    world, monkeypatch
+):
+    _, ex = mkexec(world)
+    submit, finish = ex._submit, ex._finish
+    live, peaks, submitted = set(), [], []
+
+    def track_submit(c, attempt):
+        jid = submit(c, attempt)
+        live.add(jid)
+        submitted.append(c.key)
+        peaks.append(len(live))
+        return jid
+
+    def track_finish(c, jid, attempt):
+        result = finish(c, jid, attempt)
+        live.remove(jid)
+        return result
+
+    monkeypatch.setattr(ex, "_submit", track_submit)
+    monkeypatch.setattr(ex, "_finish", track_finish)
+    result = ex.run_cells([cell(str(i), OK_BODY) for i in range(14)])
+    assert len(result) == 14 and all(r.ok for r in result.values())
+    assert max(peaks) == 6 and not live
+    _, broken = mkexec(world, "bounded-fail")
+    failed = broken.run_cells(
+        [cell(str(i), "raise RuntimeError()" if i == 0 else OK_BODY) for i in range(14)]
+    )
+    assert not failed["0"].ok
+    rows = broken.run.rows("st")
+    assert sum(r.get("ev") == "cell_submitted" for r in rows) == 6
+
+
+@pytest.mark.parametrize("quiet", [True, False])
+def test_executor_retries_paused_timing_but_accepts_correctness(
+    world, monkeypatch, quiet
+):
+    rd, ex = mkexec(world)
+    wait = world.gq.wait
+    calls = []
+
+    def paused_once(jid):
+        job = wait(jid)
+        calls.append(jid)
+        if len(calls) == 1:
+            return core.Job({**job.d, "pauses": [[1, 2]], "contended": False})
+        return job
+
+    monkeypatch.setattr(world.gq, "wait", paused_once)
+    result = ex.run_cells([cell("p", OK_BODY, quiet=quiet)])
+    assert result["p"].ok
+    assert len(calls) == (2 if quiet else 1)
+    done = [r for r in rd.rows("st") if r.get("ev") == "cell_done"]
+    assert done[0]["paused"] and not done[0]["contended"]
+    assert done[0]["ok"] is (not quiet)
+    if quiet:
+        assert "paused" in done[0]["reason"]
+
+
 def test_multimodal_evidence_is_fail_closed(tmp_path):
     path = tmp_path / "mm.jsonl"
     path.write_text('{"complete": true}\n')
@@ -1429,6 +1533,41 @@ def test_client_compat_pilot_is_pinned_and_stops_before_second_model(
     assert not result.passed and len(calls) == 1
     assert calls[0].cwd == world.repo and calls[0].device == "m3"
     assert "--tree-sha" in calls[0].argv and "Qwen3.5-0.8B" in " ".join(calls[0].argv)
+
+
+def test_ttft_profile_32k_cells_use_the_short_lane_and_128k_does_not(tmp_path):
+    from types import SimpleNamespace
+
+    class StopError(Exception):
+        pass
+
+    cells = []
+
+    class Capture:
+        label = "t"
+
+        def run_cells(self, submitted):
+            cells.extend(submitted)
+            raise StopError
+
+    for size, limit_ok in ((32768, True), (131072, False)):
+        cells.clear()
+        ctx = stages.Ctx(
+            run=None,
+            exe=Capture(),
+            base=SimpleNamespace(path=tmp_path / "base"),
+            cand=SimpleNamespace(path=tmp_path / "cand"),
+            env={},
+            base_env={},
+            cand_env={},
+            model="tiny",
+            model_name="tiny",
+            suite={"ctx": [size], "kinds": ["code"]},
+            mem_gb=60,
+        )
+        with pytest.raises(StopError):
+            stages.stage_ttft_profile(ctx)
+        assert (max(c.timeout_min for c in cells) <= 10) is limit_ok
 
 
 def test_qwen4_tiny_verdict_rejects_incomplete_or_unengaged_evidence(tmp_path):

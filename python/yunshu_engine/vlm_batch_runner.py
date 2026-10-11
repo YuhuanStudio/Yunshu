@@ -38,6 +38,7 @@ import numpy as np
 
 from . import keyed_sampling, settings
 from .idle_memory import IdleMemory
+from .kernels.preempt import PreemptedError as _Preempted
 from .keyed_sampling import top_k_filter, top_p_filter
 from .serving.busy_time import BusyMeter
 from .serving.work_scheduler import (
@@ -52,6 +53,7 @@ from .serving.work_scheduler import (
 )
 
 logger = logging.getLogger(__name__)
+
 
 # Upstream prefill default; APC checkpoints land on these chunk boundaries and
 # cancellation is honoured between chunks (~2 s at 2K tokens on a 27B model).
@@ -411,6 +413,7 @@ class VLMBatchRunner:
         self._handoff_timer: threading.Timer | None = None
         self.clear_on_idle = False
         self._idle_memory: IdleMemory | None = None
+        self.gc_guard: Any = None  # gc_policy.TtftGcGuard when YUNSHU_GC_POLICY=defer
         # Requests the engine has accepted, including ones still being
         # prepared (templating, image encoding) — the runner alone cannot see
         # those, and a request is only "alone" if the engine has no others.
@@ -626,6 +629,7 @@ class VLMBatchRunner:
         xtc_special_tokens: list | None = None,
         guide: Any = None,
         prompt_cache_plan: dict | None = None,
+        first_delivery: threading.Event | None = None,
     ) -> Iterator[int]:
         """Yield generated token ids; ``stats`` is filled in as generation runs.
 
@@ -716,6 +720,7 @@ class VLMBatchRunner:
             priority=getattr(cancel_event, "scheduling_priority", 0),
             cache_plan=prompt_cache_plan,
             budget=budget,
+            first_delivery=first_delivery,
         )
         # The round driver drafts for any row without logits processors, logprobs
         # or a tool-call guide (a thinking budget is fine there); sampled rows draw
@@ -782,7 +787,8 @@ class VLMBatchRunner:
 
         Data past OUT_LIMIT (a consumer that stopped reading) ends the job with
         an error instead of growing without bound; the row is dropped at the
-        next slice. Never blocks the executor thread.
+        next slice. Only the first DFlash stream token can wait for a bounded
+        consumer handoff; ordinary data never blocks the executor thread.
         """
         if job.terminal:
             return
@@ -795,28 +801,56 @@ class VLMBatchRunner:
                 "request cancelled"
             )
         job.out.put(item)
+        if self.gc_guard is not None:
+            self.gc_guard.first_token(id(job))
+        # The first target token is already complete. Starting copy lookup now
+        # can run a full cyclic collection while the SSE consumer still needs
+        # the GIL. Give that consumer one bounded opportunity to deliver first.
+        # No tensor, sampler or proposal state changes, including on timeout.
+        if (
+            isinstance(item, tuple)
+            and job.stats.generated == 1
+            and job.first_delivery is not None
+            and not job.first_delivery_waited
+            and job.allow_draft
+            and job.use_draft
+            and self.draft_kind == "dflash"
+            and self._executor is not None
+            and job.max_tokens > 1
+        ):
+            job.first_delivery_waited = True
+            completed = job.first_delivery.wait(0.004)
+            if not getattr(self, "_first_delivery_logged", False):
+                self._first_delivery_logged = True
+                logger.info(
+                    "First-content handoff engaged (DFlash, 4ms bound, completed=%s)",
+                    completed,
+                )
 
     def _fail_all(self, exc: BaseException) -> None:
-        """Terminate every pending / active job with ``exc`` (executor gone)."""
+        """Detach failed work before waking consumers; their terminal means drained."""
         with self._lock:
             pending, self._pending = self._pending, []
+            groups = list(self._groups())
+            drivers, self._driver_jobs = self._driver_jobs, {}
+            self._batches.clear()
+            self._spec = None
+            self._aux_spec = None
             self._driving = False
-        for job in pending:
-            self._emit(job, exc)
-        for group in self._groups():
-            for job in group.jobs.values():
-                self._emit(job, exc)
+        for group in groups:
             with contextlib.suppress(Exception):
                 close_generator(group.gen)
-        self._batches.clear()
-        self._spec = None
-        self._aux_spec = None
-        for job in self._driver_jobs.values():
-            self._emit(job, exc)
+        for job in drivers.values():
             if self.driver is not None:
                 with contextlib.suppress(Exception):
                     (job.driver or self.driver).remove(job)
-        self._driver_jobs.clear()
+        for job in pending:
+            self._emit(job, exc)
+        for group in groups:
+            for job in group.jobs.values():
+                self._emit(job, exc)
+        for job in drivers.values():
+            self._emit(job, exc)
 
     def _schedule(self) -> None:
         try:
@@ -839,6 +873,8 @@ class VLMBatchRunner:
     def _submit(self, job: _Job) -> None:
         if self._idle_memory is not None:
             self._idle_memory.activity()
+        if self.gc_guard is not None:
+            self.gc_guard.begin(id(job))
         with self._lock:
             job.queued = job.last_service = time.perf_counter()
             self._pending.append(job)
@@ -1408,6 +1444,21 @@ class VLMBatchRunner:
                     group.gen.remove(uid)
                 self._finish(group, uid, "cancel" if cancelled else None)
 
+    @staticmethod
+    def _next_preemptible(group):
+        """``group.gen.next()``; a lone job whose cancel event is marked ``preemptible`` (the
+        next-turn rehearsal) may be stopped between decoder-layer groups (kernels/preempt.py)."""
+        jobs = list(group.jobs.values())
+        if len(jobs) == 1 and getattr(
+            getattr(jobs[0], "cancel_event", None), "preemptible", False
+        ):
+            from .kernels import preempt
+
+            if preempt.supported():
+                with preempt.scope(jobs[0].cancel_event):
+                    return group.gen.next()
+        return group.gen.next()
+
     def _step_group(self, group: _Group, *, decode_only: bool = False) -> None:
         from .kernels import batch_invariant
 
@@ -1533,11 +1584,26 @@ class VLMBatchRunner:
                 finally:
                     group.gen.completion_batch_size = capacity
             else:
-                prompt_progress, responses = group.gen.next()
+                prompt_progress, responses = self._next_preemptible(group)
             if group.spec and (job.guide is not None or job.logprobs):
                 from .constrained_spec import finish_serial_prefill
 
                 finish_serial_prefill(group.gen)
+        except _Preempted as stop:
+            # A background rehearsal was cancelled inside a prefill atom. Nothing of the partial
+            # atom was stored; the cancel flag makes the next slice drop the job and its cache.
+            discard = getattr(apc, "discard_deferred_checkpoints", None)
+            if discard is not None:
+                discard()
+            logger.info(
+                "background prefill preempted at layer group %d (after %d layers)",
+                stop.group,
+                stop.layers,
+            )
+            from . import next_turn
+
+            next_turn.record("preempted")
+            return
         except BaseException:
             discard = getattr(apc, "discard_deferred_checkpoints", None)
             if discard is not None:
@@ -2509,6 +2575,8 @@ class _Job:
     spec_last: tuple | None = None
     terminal: bool = False
     overflowed: bool = False
+    first_delivery: threading.Event | None = None
+    first_delivery_waited: bool = False
 
 
 @dataclass

@@ -190,6 +190,27 @@ M3 numbers never decide M5 performance. The verdict rejects mixed-device pairs a
 
 The frozen eval entry point is `scripts/research/websearch_eval.py`; the dated 130-query seed set is `scripts/research/data/websearch_queries.jsonl`. Capture writes pending gold, never invented answers. Curate references before replay; `--dry-run` makes no answer-quality claim. Raw page snapshots remain private.
 
+
+
+`ttft_profile` is an opt-in diagnostic suite (32K / 128K code, both pinned arms).
+It records three full-hit requests and one genuine follow-up per fresh server,
+Python call spans and MLX evaluation waits without adding GPU synchronization.
+The profile perturbs Python costs: its PASS means complete diagnostic evidence,
+not a speed or identity verdict. Use `long --reps 3` for those verdicts.
+`http_sse_queue_other` includes transport, executor queue and uninstrumented work;
+it is not pure network overhead. Raw spans retain the exact evaluation callsite.
+
+The probe also records exact client send/first-token timestamps, client request
+preparation, Uvicorn ingress and first nonempty SSE submission, and runtime
+package versions. SSE role-only, usage and DONE records are excluded from first-token
+measurement. `--synthetic-prompt --draft off` is a self-contained tiny-model pilot,
+not the long timing corpus.
+
+Native MLX calls are wrapped because nanobind callables need not produce Python
+`c_call` profiler events. GC spans retain their triggering stack. Use
+`--calls --no-stacks` for an observer-effect control; stack-sampler allocations
+can themselves create GC pressure. Tiny pilots may explicitly pass
+`--allow-followup-miss`; the yv diagnostic suite and long gates require APC hits.
 ### Reranker / classifier oracle
 
 `--suite rerank` runs CPU preflight and the dedicated capability stage: candidate
@@ -218,6 +239,21 @@ RERANK_MODEL_ROOT=PATH` overrides the model root. Encoder head serving needs the
 promotes a copy of successful evidence and keeps the original gpuq-declared output
 so digest and watchdog checks can still verify it. A finished job without an
 explicit return code of zero fails verification.
+
+
+Timing cells interrupted by gpuq priority pauses are rejected and retried, even
+if CPU contention is clean. Correctness cells can retain their digest evidence.
+Each stage submits at most six cells at a time; later batches remain unsubmitted
+when a cell fails.
+
+The TTFT diagnostic stage defaults to `--no-stacks` as an observer-effect control.
+`--cand-env TTFT_PROBE_COPY_INDEX_GC=defer` installs a diagnostic-only scoped GC
+wrapper around copy-index building. It preserves the previous GC enabled state
+and restores it on exceptions; normal serving is unchanged. The runtime manifest
+must prove the policy was installed. `delivery_tail_spans` records GC/index work
+between the first token and client completion so moving a collection later
+cannot be mistaken for eliminating its cost. Use an uninstrumented long speed
+verdict before promoting any production GC strategy.
 
 ### Evals API correctness
 
