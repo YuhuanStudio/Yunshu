@@ -346,3 +346,22 @@ def test_warm_lossless_and_ssd_hits_are_token_identical_to_hot(tmp_path):
 
     cold, _ = run(VLMBatchRunner(model, processor=proc), a2)
     assert out_hot == out_warm == out_ssd == cold
+
+
+def test_admin_clear_discards_pending_warm_results_and_preserves_workers():
+    m = _mgr(hot_entries=1)
+    try:
+        _store(m, _toks(300, 1), 1)
+        _store(m, _toks(300, 2), 2)
+        assert m.warm is not None
+        m.clear()
+        m.warm._worker.submit(lambda: None).result(timeout=5)
+        assert not m.warm.drain()
+        assert not m.console_snapshot()["entries"]
+        # Clearing does not silently disable compression or shut down workers.
+        _store(m, _toks(300, 3), 3)
+        _store(m, _toks(300, 4), 4)
+        _settle(m)
+        assert m.warm.entries and m.warm.mode == "lossless"
+    finally:
+        m.warm.close()

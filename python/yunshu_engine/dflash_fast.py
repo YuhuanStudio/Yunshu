@@ -6,12 +6,31 @@ arrays live in the current TreeResult, rather than a global id-keyed cache.
 """
 
 import hashlib
+import logging
 from typing import Any
 
 import mlx.core as mx
 
+from . import gpu_window
 from . import tree_verify as tv
 from .dflash_plan import live_bound
+
+logger = logging.getLogger(__name__)
+
+
+def observe_budget(budget, copied, n, landed, ms, *, first=False) -> bool:
+    """Feed a round to the cost-aware node budget, unless it was a copy round.
+
+    A copy round runs no drafter (about 10 ms of GPU work less) and its accepted path is a
+    copied chain, not ranks of the draft tree. Recorded under its length ``n`` it made a
+    short budget look ~10 ms cheaper than it is (a 5-row cycle read 41 ms against 50-56 ms
+    for tree rounds of 3 and 6+ rows) and trained the per-rank landing estimates on chain
+    positions."""
+    if copied:
+        return False
+    budget.observe(n, landed, ms, first=first)
+    return True
+
 
 _KERNELS: dict[str, Any] = {}
 
@@ -369,7 +388,6 @@ def rounds(
     import time
 
     from mlx_vlm.models.qwen3_5 import language as q35
-    from mlx_vlm.speculative.common import _record_speculative_round
 
     from . import dflash_tree as dt
     from . import mtp_lane
@@ -377,6 +395,7 @@ def rounds(
     from .dflash_context import context_window
     from .dflash_plan import FastShape, remap_landed, reorder, search_tree
     from .kernels import lane_linear
+    from .spec_metrics import record as _record_speculative_round
     from .spec_schedule import NodeBudget
 
     lm = getattr(model, "language_model", model)
@@ -384,6 +403,11 @@ def rounds(
     target_ids = list(draft.config.target_layer_ids)
     draft_cache = draft.reset(model)
     budget = NodeBudget(15, prior=dt.PRIOR)
+    from . import settings
+
+    profile_sync = bool(settings.get("YUNSHU_DEBUG_TREE_PROFILE"))
+    draft_vocab = getattr(draft, "_draft_vocab", None)
+    prof = {"rounds": 0, "draft": 0.0, "verify": 0.0, "commit": 0.0, "nodes": 0}
     context = mtp_lane._STATE["context"]
     copy_rows = mtp_lane.copy_rows_for_model(lm)
     copy = CopyDrafter(max_draft=copy_rows - 1) if copy_rows >= 3 else None
@@ -391,6 +415,12 @@ def rounds(
         copy.extend(context)
         copy.extend([first_bonus])
     keep = context_window(draft)
+    logger.info(
+        "DFlash drafter context: %d prompt-hidden positions (window %s, target KV %d)",
+        int(hidden.shape[1]) if hasattr(hidden, "shape") else 0,
+        keep,
+        context_length(lm, cache),
+    )
     skipped = 0
     verifier = Verifier(q35._EXACT_SPECULATIVE_VERIFIER)
     bonus = int(first_bonus)
@@ -431,6 +461,8 @@ def rounds(
                     else max_tokens - emitted
                 )
                 n = budget.choose(max(0, room - 1))
+                if hidden is None:
+                    n = 0  # a promoted row: the first round is plain and captures hidden states
                 copied = (
                     copy.draft(min(copy.max_draft, room - 1))
                     if copy is not None
@@ -454,6 +486,13 @@ def rounds(
                     finally:
                         private.bind(False)
                     tokens, parents = search_tree(lattice, n)
+                    if profile_sync:
+                        mx.eval(
+                            tokens, parents
+                        )  # drafter GPU time lands in the draft stage
+                        tv.PROFILE["search_disp"] = (
+                            tv.PROFILE.get("search_disp", 0.0) + gpu_window.stage_end()
+                        )
                     tokens, parents, ranks = reorder(tokens, parents)
                     window = mx.concatenate(
                         [mx.array([bonus], dtype=token_dtype), tokens]
@@ -464,6 +503,7 @@ def rounds(
                     parents = mx.array([-1], dtype=mx.int32)
                     shape = FastShape(parents, 0, is_chain=True)
                     window = mx.array([[bonus]], dtype=token_dtype)
+                t_drafted = time.perf_counter()
                 result = tv.tree_forward(
                     lm, window, shape, cache, target_ids, verifier=verifier
                 )
@@ -481,12 +521,15 @@ def rounds(
                 except BaseException:
                     tv.tree_abort(cache, result)
                     raise
+                t_verified = time.perf_counter()
                 path = dt.walk(window_ids, parent_ids, target_ids_row)
                 new_tokens = [window_ids[row] for row in path[1:]] + [
                     target_ids_row[path[-1]]
                 ]
                 if n:
-                    _record_speculative_round(draft, len(path) - 1, n)
+                    _record_speculative_round(
+                        draft, len(path) - 1, n, parents=parent_ids
+                    )
                 tv.tree_commit(lm, cache, result, path)
                 captured = mx.concatenate(result.captured, axis=-1)[
                     :, mx.array(path, dtype=mx.int32)
@@ -507,15 +550,32 @@ def rounds(
                 landed = [row - 1 for row in path[1:]]
                 if ranks is not None:
                     landed = remap_landed(landed, ranks)
-                budget.observe(
+                t_done = time.perf_counter()
+                gpu_window.tick()
+                if emitted > 1:
+                    prof["rounds"] += 1
+                    prof["nodes"] += n
+                    prof["draft"] += (t_drafted - started) * 1000
+                    prof["verify"] += (t_verified - t_drafted) * 1000
+                    prof["commit"] += (t_done - t_verified) * 1000
+                observe_budget(
+                    budget,
+                    copied,
                     n,
                     landed,
-                    (time.perf_counter() - started) * 1000,
+                    (t_done - started) * 1000,
                     first=emitted == 1,
                 )
                 bonus = new_tokens[-1]
+                if draft_vocab is not None:
+                    draft_vocab.learn(new_tokens)
             finally:
                 lane_linear.set_sum_reuse(previous_sums)
+            # start the commit and the next context on the GPU before the consumer runs
+            mx.async_eval(
+                hidden,
+                [c.state for c in cache if hasattr(c, "state")],
+            )
             counted = False
             for token in new_tokens:
                 if copy is not None:
@@ -527,11 +587,48 @@ def rounds(
                         )
                         counted = True
                     draft.copy_total_tokens = getattr(draft, "copy_total_tokens", 0) + 1
+                t_yield = time.perf_counter()
                 yield token, None
+                prof["yield"] = (
+                    prof.get("yield", 0.0) + (time.perf_counter() - t_yield) * 1000
+                )
                 emitted += 1
                 if emitted >= max_tokens:
                     return
     finally:
+        if prof["rounds"]:
+            r = prof["rounds"]
+            logger.info(
+                "DFlash round profile: %d rounds, %.1f nodes/round, draft %.2f ms, verify %.2f ms, commit+host %.2f ms",
+                r,
+                prof["nodes"] / r,
+                prof["draft"] / r,
+                prof["verify"] / r,
+                prof["commit"] / r,
+            )
+            logger.info(
+                "DFlash host between rounds: consumer (yield) %.2f ms/round",
+                prof.get("yield", 0.0) / r,
+            )
+            from . import tree_verify as _tv
+
+            if _tv.PROFILE.get("rounds"):
+                n = _tv.PROFILE.pop("rounds")
+                logger.info(
+                    "Tree verify stage profile (%d rounds, ms/round): %s",
+                    n,
+                    {k: round(v / n, 2) for k, v in sorted(_tv.PROFILE.items())},
+                )
+                _tv.PROFILE.clear()
+                _tv.PROFILE["rounds"] = 0
+            logger.info(
+                "DFlash budget state: p=%s cycle_ms=%s",
+                [round(x, 2) for x in budget.p],
+                {
+                    n: round(budget._median(v), 1)
+                    for n, v in sorted(budget.samples.items())
+                },
+            )
         private.bind(False)
         hidden = None
         draft_cache = None

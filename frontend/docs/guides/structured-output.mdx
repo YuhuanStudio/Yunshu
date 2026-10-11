@@ -1,0 +1,344 @@
+---
+title: Structured output and tool calling
+description: Constrain generation to a JSON schema, regex, choice list or grammar, and call tools with tool_choice and parallel calls, across the chat, Responses, Messages and Ollama routes.
+---
+
+Yunshu can force the model's output into a shape while it decodes. The constraint is applied token by token, so the result always matches. It is not a prompt that asks nicely and a parser that hopes. Tool calling is built on the same machinery.
+
+Constrained decoding is available for text and vision-language models. A model that does not generate text (an embedding, ASR or image model) rejects constraint fields with a `400` that names the field. The `yunshu` object of each entry in `GET /v1/models` lists what the served model accepts under `contract.structured_output` and `contract.tools`.
+
+## Output constraints
+
+| Constraint | Chat Completions | Responses | Messages | Ollama |
+|---|---|---|---|---|
+| JSON object | `response_format: {"type": "json_object"}` | `text.format: {"type": "json_object"}` | `response_format` (Yunshu extension) | `format: "json"` |
+| JSON schema | `response_format: {"type": "json_schema", ...}` | `text.format: {"type": "json_schema", ...}` | `output_config.format` or `output_format` | `format: {<schema>}` |
+| Regex | `grammar: {"type": "regex", "pattern": ...}` | `grammar` | `grammar` | not available |
+| Choice | `grammar: {"type": "choice", "choices": [...]}` | `grammar` | `grammar` | not available |
+| Context-free grammar | `grammar: {"type": "cfg", "grammar": "<lark>"}` | `grammar` | `grammar` | not available |
+
+The `grammar` field and the vLLM-style aliases are Yunshu and vLLM compatibility extensions. Where an alias is accepted, it folds into the same constraint:
+
+- `guided_json`, `guided_regex`, `guided_choice` and `guided_grammar` on `POST /v1/chat/completions` and `POST /v1/completions`.
+- `structured_outputs` (vLLM's field) with exactly one of `json`, `regex`, `choice`, `grammar` or `json_object`, on the chat, completions, Responses and Messages routes. `structural_tag` is not supported.
+- A field you set natively wins over an alias. `grammar` with `{"type": "json", "schema": {...}}` is also accepted.
+
+<Callout type="info">
+An unsupported or invalid constraint is a `400` before generation starts: an uncompilable regex, a malformed grammar, or a schema construct that neither engine can enforce. Yunshu does not silently generate against an approximation.
+</Callout>
+
+### JSON schema with the OpenAI SDK
+
+<Tabs items={["Python", "JavaScript", "curl"]}>
+<Tab value="Python">
+
+```python
+import json
+from openai import OpenAI
+
+client = OpenAI(base_url="http://localhost:8000/v1", api_key="sk-local")
+
+schema = {
+    "type": "object",
+    "properties": {
+        "city": {"type": "string"},
+        "population": {"type": "integer"},
+        "tags": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": ["city", "population", "tags"],
+    "additionalProperties": False,
+}
+
+r = client.chat.completions.create(
+    model="local",
+    messages=[{"role": "user", "content": "Give me facts about Taipei."}],
+    response_format={
+        "type": "json_schema",
+        "json_schema": {"name": "city_facts", "schema": schema, "strict": True},
+    },
+)
+print(json.loads(r.choices[0].message.content))
+```
+
+</Tab>
+<Tab value="JavaScript">
+
+```ts
+import OpenAI from "openai";
+
+const client = new OpenAI({ baseURL: "http://localhost:8000/v1", apiKey: "sk-local" });
+
+const r = await client.chat.completions.create({
+  model: "local",
+  messages: [{ role: "user", content: "Give me facts about Taipei." }],
+  response_format: {
+    type: "json_schema",
+    json_schema: {
+      name: "city_facts",
+      strict: true,
+      schema: {
+        type: "object",
+        properties: { city: { type: "string" }, population: { type: "integer" } },
+        required: ["city", "population"],
+        additionalProperties: false,
+      },
+    },
+  },
+});
+console.log(JSON.parse(r.choices[0].message.content ?? "{}"));
+```
+
+</Tab>
+<Tab value="curl">
+
+```bash
+curl http://localhost:8000/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "model": "local",
+    "messages": [{"role": "user", "content": "Give me facts about Taipei."}],
+    "response_format": {
+      "type": "json_schema",
+      "json_schema": {
+        "name": "city_facts",
+        "strict": true,
+        "schema": {
+          "type": "object",
+          "properties": {"city": {"type": "string"}, "population": {"type": "integer"}},
+          "required": ["city", "population"],
+          "additionalProperties": false
+        }
+      }
+    }
+  }'
+```
+
+</Tab>
+</Tabs>
+
+`response_format.json_schema.schema` is required when `type` is `json_schema`; a missing schema is a `400`. The Responses form is the same schema under `text.format`:
+
+```python
+r = client.responses.create(
+    model="local",
+    input="Give me facts about Taipei.",
+    text={
+        "format": {
+            "type": "json_schema",
+            "name": "city_facts",
+            "schema": schema,
+            "strict": True,
+        }
+    },
+)
+print(r.output_text)
+```
+
+### Regex, choice and grammar
+
+These go in `grammar` through `extra_body` with the OpenAI SDK:
+
+```python
+# A phone number, exactly
+r = client.chat.completions.create(
+    model="local",
+    messages=[{"role": "user", "content": "Invent a phone number."}],
+    extra_body={"grammar": {"type": "regex", "pattern": r"\+886-9[0-9]{2}-[0-9]{3}-[0-9]{3}"}},
+)
+
+# One of a fixed set of labels
+r = client.chat.completions.create(
+    model="local",
+    messages=[{"role": "user", "content": "Sentiment of: I love it."}],
+    extra_body={"grammar": {"type": "choice", "choices": ["positive", "negative", "neutral"]}},
+)
+
+# A context-free grammar in Lark syntax
+r = client.chat.completions.create(
+    model="local",
+    messages=[{"role": "user", "content": "Answer yes or no."}],
+    extra_body={"grammar": {"type": "cfg", "grammar": 'start: "yes" | "no"'}},
+)
+```
+
+`guided_regex` is limited to 2048 characters and `guided_grammar` to 32768.
+
+### Messages and Ollama
+
+On `POST /v1/messages`, structured output uses Anthropic's field (the older beta `output_format` is accepted too):
+
+```python
+import anthropic
+
+client = anthropic.Anthropic(base_url="http://localhost:8000", api_key="sk-local")
+
+msg = client.messages.create(
+    model="local",
+    max_tokens=512,
+    messages=[{"role": "user", "content": "Give me facts about Taipei."}],
+    extra_body={"output_config": {"format": {"type": "json_schema", "schema": schema}}},
+)
+print(msg.content[-1].text)
+```
+
+On `POST /api/chat` and `POST /api/generate`, `format` is `"json"` or a JSON schema object (treated as strict).
+
+### How a constraint is enforced
+
+JSON schema and `json_object` constraints are enforced by one of two engines. `YUNSHU_JSON_SCHEMA_ENGINE` picks the preferred one (`llguidance` by default, which keeps properties in schema order, or `inhouse`). A schema that the preferred engine cannot compile falls back to the other when it supports the schema. Regex and choice constraints are compiled in-house; context-free grammars (Lark syntax) need `llguidance`, which `contract.structured_output.grammar` reports as supported or not.
+
+Two optional performance settings, both off by default, apply to the text engine: `YUNSHU_GRAMMAR_BITMASK` switches the default allowlist sampler to an xgrammar-style bitmask engine, and `YUNSHU_JUMP_FORWARD` emits tokens the schema forces without running a forward pass.
+
+## Tool calling
+
+Tools are declared the way each dialect defines them: `tools[].function` on chat, `tools` with `type: "function"` on Responses, `tools[].input_schema` on Messages, and `tools` on `POST /api/chat`.
+
+### Two modes: template and prompt
+
+How the tools reach the model depends on its chat template, and `contract.tools.mode` in `GET /v1/models` tells you which one applies.
+
+| Mode | When | What happens |
+|---|---|---|
+| `template` | the chat template has native tool support | tools are rendered by the model's own template, in its own tool format and special tokens, and the model's tool-call output is parsed back into structured calls |
+| `prompt` | the template has no tool support | the tool definitions are injected into the prompt and calls are extracted from the generated text |
+
+`template` gives better adherence and parse rates when it is available. Both modes return the same response shape. In `contract.tools`, `parallel` says whether the template can carry several calls in one assistant turn.
+
+### `tool_choice`
+
+| Value | Chat | Responses | Messages |
+|---|---|---|---|
+| let the model decide | `"auto"` (default) | `"auto"` | `{"type": "auto"}` |
+| no tools | `"none"` | `"none"` | `{"type": "none"}` |
+| must call some tool | `"required"` | `"required"` | `{"type": "any"}` |
+| must call this tool | `{"type": "function", "function": {"name": "..."}}` | `{"type": "function", "name": "..."}` | `{"type": "tool", "name": "..."}` |
+
+A `tool_choice` of `required` or a named function needs a non-empty `tools` list, and a named function must be one of the declared tools; otherwise the request is a `400`. The `allowed_tools` form is folded into `tools` plus a mode on the chat and Responses routes. A forced choice is always enforced by constrained decoding, so the call is guaranteed to exist and to name the right tool with arguments matching its schema. For `auto`, calls are decoded freely and repaired after the fact; the experimental setting `YUNSHU_TOOL_GRAMMAR` extends the constrained decoding to `auto` as well and is off by default.
+
+### Parallel tool calls
+
+A model can emit several calls in one turn when its template supports it (`contract.tools.parallel`). Set `parallel_tool_calls: false` (chat and Responses) or `disable_parallel_tool_use: true` inside the Messages `tool_choice` to keep only the first call. On Responses, `max_tool_calls` caps the total.
+
+### A tool-call round trip
+
+```python
+import json
+from openai import OpenAI
+
+client = OpenAI(base_url="http://localhost:8000/v1", api_key="sk-local")
+
+tools = [{
+    "type": "function",
+    "function": {
+        "name": "get_weather",
+        "description": "Current weather for a city",
+        "parameters": {
+            "type": "object",
+            "properties": {"city": {"type": "string"}},
+            "required": ["city"],
+        },
+    },
+}]
+
+messages = [{"role": "user", "content": "What is the weather in Taipei and Tokyo?"}]
+first = client.chat.completions.create(
+    model="local", messages=messages, tools=tools, tool_choice="auto"
+)
+call_message = first.choices[0].message
+messages.append(call_message)
+
+for call in call_message.tool_calls or []:
+    args = json.loads(call.function.arguments)
+    messages.append({
+        "role": "tool",
+        "tool_call_id": call.id,
+        "content": json.dumps({"city": args["city"], "temp_c": 24}),
+    })
+
+final = client.chat.completions.create(model="local", messages=messages, tools=tools)
+print(final.choices[0].message.content)
+```
+
+When the model calls tools, `finish_reason` is `tool_calls` on chat and `stop_reason` is `tool_use` on Messages. Streaming sends the call as incremental deltas.
+
+### The same call on each route
+
+<Tabs items={["Chat", "Responses", "Messages", "Ollama"]}>
+<Tab value="Chat">
+
+```json
+{
+  "model": "local",
+  "messages": [{"role": "user", "content": "Weather in Taipei?"}],
+  "tools": [{"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]}}}],
+  "tool_choice": {"type": "function", "function": {"name": "get_weather"}},
+  "parallel_tool_calls": false
+}
+```
+
+</Tab>
+<Tab value="Responses">
+
+```json
+{
+  "model": "local",
+  "input": "Weather in Taipei?",
+  "tools": [{"type": "function", "name": "get_weather", "parameters": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]}}],
+  "tool_choice": {"type": "function", "name": "get_weather"},
+  "parallel_tool_calls": false
+}
+```
+
+</Tab>
+<Tab value="Messages">
+
+```json
+{
+  "model": "local",
+  "max_tokens": 512,
+  "messages": [{"role": "user", "content": "Weather in Taipei?"}],
+  "tools": [{"name": "get_weather", "input_schema": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]}}],
+  "tool_choice": {"type": "tool", "name": "get_weather", "disable_parallel_tool_use": true}
+}
+```
+
+</Tab>
+<Tab value="Ollama">
+
+```json
+{
+  "model": "local",
+  "messages": [{"role": "user", "content": "Weather in Taipei?"}],
+  "tools": [{"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]}}}],
+  "stream": false
+}
+```
+
+Ollama has no `tool_choice` field; tool arguments come back as objects, not strings.
+
+</Tab>
+</Tabs>
+
+## Support
+
+| Capability | Status |
+|---|---|
+| `json_object` and `json_schema` on chat, Responses, Messages, Ollama | <Support status="supported">supported</Support> |
+| `regex`, `choice` through `grammar` | <Support status="supported">chat, completions, Responses, Messages</Support> |
+| Context-free grammar (Lark) | <Support status="partial">needs `llguidance`; check `contract.structured_output.grammar`</Support> |
+| `guided_*` aliases | <Support status="extension">chat and completions</Support> |
+| `structured_outputs` (vLLM) | <Support status="extension">all four generation routes; no `structural_tag`</Support> |
+| Constraints on a non-text model | <Support status="unsupported">`400`</Support> |
+| `tool_choice` `auto`, `none`, `required`, a named function | <Support status="supported">supported</Support> |
+| Forced `tool_choice` guarantee | <Support status="supported">constrained decoding</Support> |
+| `auto` decoded with the tool grammar | <Support status="partial">only with the experimental setting, off by default</Support> |
+| `parallel_tool_calls: false` | <Support status="supported">keeps the first call</Support> |
+| Chat `functions` / `function_call` (deprecated) | <Support status="unsupported">not supported</Support> |
+| Custom (non-function) tools on chat | <Support status="unsupported">not supported</Support> |
+
+## Related
+
+- [Chat Completions](/docs/api/chat-completions), [Responses](/docs/api/responses), [Messages](/docs/api/messages) and [Ollama](/docs/api/ollama)
+- [Model support](/docs/guides/model-support)
+- [Coding agents and SDKs](/docs/guides/agents)
+- [Architecture](/docs/developers/architecture)

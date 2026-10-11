@@ -1,0 +1,251 @@
+---
+title: 扩展
+description: Yunshu 在 OpenAI、Anthropic 与 Ollama API 之上额外提供的功能：状态、预热、取消、逐笔响应统计、多任务 WebSocket、原生语音与 System One。
+---
+
+Yunshu 的扩展一律是附加且有命名空间的，所以官方 SDK 不需修改就能继续使用。它们出现在三个地方：
+
+- JSON：响应顶层的 `x_yunshu` 对象（Messages 与 Responses 则放在 `usage` 内），以及错误中的 `error.x_yunshu`。OpenAI SDK 会把未知字段保留在 `model_extra`；Anthropic 与 Ollama SDK 则会忽略。
+- SSE：以注释行呈现，例如 `: yunshu-progress {...}`。所有 SSE 解析器都会略过注释。
+- 标头：`X-Request-Id` 与 `X-Yunshu-*`。
+
+验证规则和其他路由相同：只有在配置了 `YUNSHU_AUTH_TOKEN` 时才会强制验证。
+
+<Endpoint method="GET" path="/v1/yunshu/status" />
+<Endpoint method="POST" path="/v1/yunshu/warmup" />
+<Endpoint method="POST" path="/v1/cancel" />
+<Endpoint method="GET" path="/v1/active-generations" />
+<Endpoint method="WS" path="/v1/stream" />
+<Endpoint method="POST" path="/v1/omni/speech/stream" />
+<Endpoint method="POST" path="/v1/systemone" />
+
+查看请求用的路由 `GET /v1/requests`、`GET /v1/requests/{request_id}` 与 `DELETE /v1/requests/{request_id}`，说明在[运维](/docs/api/operations)。
+
+## 请求 id
+
+每个请求都有 id：若你的 `X-Request-Id` 标头是 1 到 128 个 `A-Za-z0-9._:-` 字符就使用它，否则产生 `req_...` 形式的值。它会返回在每个响应上（包含错误）、写入服务器日志，并放入 `x_yunshu.request_id` 与 `error.x_yunshu.request_id`。同一个 id 也是查找状态与取消的把手：
+
+```bash
+curl http://localhost:8000/v1/chat/completions -H "X-Request-Id: job-7" -H "Content-Type: application/json" \
+  -d '{"model": "local", "stream": true, "messages": [{"role": "user", "content": "Write a long story."}]}'
+
+curl http://localhost:8000/v1/requests/job-7                       # where is it?
+curl -X DELETE http://localhost:8000/v1/requests/job-7             # cancel it
+```
+
+如果取消指令在请求抵达引擎之前就到了（例如还在分词或解码图片），服务器会记住它，并在开始生成的瞬间套用。
+
+## 逐笔响应统计：`x_yunshu`
+
+`x_yunshu` 出现在非流式 Chat 与 Completions 响应的 JSON 正文、流式的最后一个 usage 数据块中，而在客户端没有要求 usage 时，则放在 `[DONE]` 之前的 `: yunshu-stats {...}` 注释里。Messages 与 Responses 则把同一个对象放在 `usage` 之内。Ollama 路由会把它对应到 Ollama 自己的纳秒字段。
+
+```json
+"x_yunshu": {
+  "request_id": "job-7",
+  "queue_wait_ms": 0.4, "ttft_ms": 309.5,
+  "prompt_tokens": 58, "cached_tokens": 0, "prefill_ms": 287.5, "prefill_tps": 201.7,
+  "completion_tokens": 24, "decode_ms": 541.3, "decode_tps": 42.5, "total_ms": 857.3,
+  "speculative": { "mode": "mtp", "drafted": 20, "accepted": 15, "acceptance_rate": 0.75 },
+  "timings": { "cache_n": 0, "prompt_n": 58, "prompt_ms": 287.5, "prompt_per_second": 201.7,
+               "predicted_n": 24, "predicted_ms": 541.3, "predicted_per_second": 42.5 }
+}
+```
+
+| 字段 | 意义 |
+| --- | --- |
+| `queue_wait_ms` | 从抵达引擎到开始 prefill 之间的时间。 |
+| `ttft_ms` | 从请求抵达到第一个生成 token 的时间。 |
+| `prefill_tps` | 未缓存的提示 token 数除以 prefill 时间。 |
+| `decode_tps` | (completion token 数 - 1) 除以第一个与最后一个 token 之间的时间。 |
+| `cached_tokens` | 由前缀缓存提供的提示 token 数。 |
+| `speculative` | 有草稿器（`mtp` 或 `dflash`）服务该请求时才有；没有草稿时为 `null`。 |
+| `timings` | 同样的量测值，使用 llama.cpp 风格的键名。 |
+| `cancelled` | 回答被取消或逾时截断时为 `true`。 |
+| `context_policy` | 提示为了放进窗口而被缩短时才有：策略、前后的 token 与消息数，以及被移除的内容。 |
+| `budget` | `max_tokens` 因提示占去上下文窗口而被调降时才有（`max_tokens_requested` 与 `max_tokens_granted`）。 |
+| `server_tools` | Messages 与 Responses 上的服务器端工具循环报告：`rounds`、`round_usage[]`、`tools[]`。 |
+
+路径无法量测的字段为 `null`。非流式响应另外带有精简标头 `X-Yunshu-Queue-Wait-Ms`、`X-Yunshu-TTFT-Ms`、`X-Yunshu-Prefill-Tps`、`X-Yunshu-Decode-Tps`、`X-Yunshu-Cached-Tokens`、`X-Yunshu-Cache-Tier`、`X-Yunshu-Cache-Reload-Ms`、`X-Yunshu-Total-Ms`、`X-Yunshu-Spec`、`X-Yunshu-Spec-Acceptance`、`X-Yunshu-Cancelled`、`X-Yunshu-Context-Policy`，给只记录标头、不解析正文的客户端。
+
+放不下的提示不会被默默截断：最新的用户回合与系统消息一律不会被移除，如果光是它们就超过窗口，请求会以 `400` 与 code `context_length_exceeded` 失败。
+
+## 队列、进度与重载
+
+生成响应带有 `X-Yunshu-Queue-Position`（比你早到、仍在处理中的请求数；0 表示立即服务）与 `X-Yunshu-Queue-Est-Wait-Ms`（依你前面尚待 prefill 的量估算的下限）。
+
+流式的 Chat 或 Completions 请求在排队或 prefill 期间，服务器每隔 `YUNSHU_PROGRESS_INTERVAL_S` 秒（默认 2，`0` 关闭）写出一行 SSE 注释，直到第一个 token：
+
+```text
+: yunshu-progress {"request_id":"job-8","elapsed_s":8.12,"phase":"prefill","prompt_tokens":93268,"cached_tokens":0,"processed_tokens":92160,"percent":98.8,"tokens_per_second":8125.3,"eta_s":0.1}
+: yunshu-progress {"request_id":"job-9","elapsed_s":3.0,"phase":"queued","queue_position":1,"queue_est_wait_ms":41200.0}
+```
+
+`percent` 只计算实际运算的 token；前缀缓存命中的部分以 `cached_tokens` 报告。非流式请求无法在处理途中报告进度，请用你发送的 id 轮询 `GET /v1/requests/{request_id}`。
+
+重载时会直接拒绝，而不是无上限地排队。当处理中的请求已达 `YUNSHU_QUEUE_LIMIT`（默认 64，`0` 表示不限）时，新抵达的 Chat、Completions、Messages、Responses 请求会得到 `429`，带有 `Retry-After`，以及 `error.x_yunshu` 内容 `{"reason": "queue_full", "queue_depth", "queue_limit", "retry_after_s"}`。当 MLX 内存超过 `YUNSHU_MEMORY_PRESSURE_REJECT`（默认为 Metal 工作集的 0.95）且仍有其他请求在运行时，新的生成请求会得到 `503`，reason 为 `memory_pressure`。闲置的服务器不会因为内存而拒绝请求。
+
+`X-Yunshu-Deadline-Ms: N`（1 到 86,400,000）是你愿意等待的墙钟时间，从抵达起算，含排队时间。超过后生成会被取消，客户端收到 `504` 与 code `deadline_exceeded`（Messages 为 `timeout_error`）；若流式已开始，则以一个终止错误事件结束。这和请求正文的 `timeout` 字段不同，后者是让生成以部分答案结束。
+
+## `keep_alive` 与状态
+
+`POST /v1/chat/completions` 与 `POST /v1/completions` 上的 `keep_alive` 遵循 Ollama 的语法：秒数、像 `"5m"` 的时间字符串、负值表示「保持加载」、`0` 表示闲置后立即释放模型。它在多模型模式下才有作用：闲置模型会在 keep-alive 到期后卸载，若请求没有配置，则依 `YUNSHU_MODEL_TTL_SECONDS`。单模型服务器永远不会释放模型，所以会接受这个字段但不做任何事。
+
+`GET /v1/yunshu/status` 返回一个对象，包含营运者在发送大请求前想知道的一切：
+
+```json
+{
+  "object": "yunshu.status",
+  "version": "0.1.2",
+  "state": "running",
+  "uptime_s": 17.3,
+  "load_error": null,
+  "models": [{ "id": "Qwen3.8-27B-oQ4e-mtp", "type": "VLMEngine", "loaded": true, "loading": false, "pinned": true }],
+  "memory": { "active_gb": 16.2, "active_bytes": 17394617344, "cache_gb": 0.28, "peak_gb": 16.9, "total_gb": 128.0, "pressure": 0.127 },
+  "requests": { "active": 1, "queued": 0, "prefill": 0, "decode": 1, "items": [{ "request_id": "job-7", "phase": "decode", "completion_tokens": 112 }] },
+  "last": null,
+  "gpu": {},
+  "throughput": { "window_s": 60, "requests": 3, "prompt_tokens": 11765, "completion_tokens": 64,
+                  "live_decode_tps": 41.8, "mean_prefill_tps": 502.9, "mean_decode_tps": 51.7 }
+}
+```
+
+`state` 为 `running`、`shutdown_requested` 或 `shutting_down`。名称为 `*_gb` 的内存字段使用二进位 GiB（1 GiB 为 1024^3 字节），且各有精确的 `*_bytes` 对应字段。多模型模式下，每个模型另有 `size_gb`、`size_bytes`、`idle_s`、`keep_alive_s`、`expires_in_s`。`gpu` 内是有追踪 GPU 忙碌时间的各引擎累计秒数。
+
+## 预热
+
+`POST /v1/yunshu/warmup` 会在需要时加载模型，沿着正常路径运行一次小型生成（编译 kernel、预热配置器），并把指定的提示留在前缀缓存中，让第一个真正的请求就是热的。
+
+| 参数 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `model` | string | 否 | 默认为所服务的模型。多模型模式下指定未知模型返回 `404`。 |
+| `prompt` | string | 否 | 要留在缓存中的系统提示或前缀，默认 `"Hello"`。 |
+| `messages` | array | 否 | 以聊天消息替换 `prompt` 进行预热。 |
+| `keep_alive` | string、number | 否 | 配置该模型的 keep-alive（多模型模式）。值不合法返回 `400`。 |
+| `max_tokens` | integer | 否 | 默认 1。 |
+
+响应：
+
+```json
+{
+  "object": "yunshu.warmup",
+  "model": "Qwen3.8-27B-oQ4e-mtp",
+  "loaded_now": false,
+  "load_ms": 0.0,
+  "keep_alive_s": 1800,
+  "generated": true,
+  "x_yunshu": { "ttft_ms": 309.5 },
+  "warmup_ms": 412.7
+}
+```
+
+对无法生成文本的模型类型（ASR、TTS、embedding 等），`generated` 为 `false`。若预热用的生成本身失败，调用仍然成功，响应会带 `warning` 字符串，而不是 `x_yunshu`。
+
+## 取消
+
+`POST /v1/cancel` 接收 `{"request_id": "job-7"}` 或 `{"cancel_all": true}`，返回 `{"status": "cancelled", "request_id": ...}` 或 `{"status": "cancelled", "count": N}`。id 不存在返回 `404`，正文两个字段都没有则返回 `400`。`GET /v1/active-generations` 返回处理中生成的 `{"object": "list", "data": [...], "active": [...], "count": N}`。它们与 `DELETE /v1/requests/{request_id}` 接受相同的 id。
+
+## `WS /v1/stream`
+
+一条 WebSocket 可承载许多并行请求。服务器事件就是 SSE 流式所带的同一批对象，外面包上你的请求 id。握手使用与 HTTP 相同的验证（`Authorization: Bearer`、`x-api-key` 或 `?token=`），并在升级连接前检查；检查失败时握手会被拒绝。服务器发送的第一则消息是 `session.created`。
+
+客户端消息（JSON 文本帧）：
+
+| 消息 | 意义 |
+| --- | --- |
+| `{"type": "request", "id": "a", "api": "chat.completions", "body": {...}, "stream_id": "s"}` | 开始一个请求。`api` 为 `chat.completions`、`completions`、`responses` 或 `messages`；`body` 是一般的 HTTP 正文（`stream` 会被强制打开；chat 的 `stream_options.include_usage` 默认打开）。`stream_id` 为选填。 |
+| `{"type": "cancel", "id": "a"}` | 中止，以 `done` 结束，reason 为 `cancelled`。 |
+| `{"type": "stop", "id": "a"}` | 依需求停止，reason 为 `stopped`。 |
+| `{"type": "update", "id": "a", "max_tokens": N}` | 限制流式 delta 的总数；响应 `updated`，以 reason `max_tokens` 结束。 |
+| `{"type": "ping", "t": ...}` | 存活检查，响应 `pong`。 |
+
+服务器消息：
+
+| 消息 | 意义 |
+| --- | --- |
+| `session.created` | `{"protocol": "yunshu.stream", "apis": [...], "limits": {"max_inflight", "max_stream_ids", "send_queue", "ping_interval_s"}}` |
+| `event` | `{"id", "event": "<SSE 事件名称或 null>", "data": {...}}`，一个 SSE 事件。 |
+| `progress`、`stats` | 字段与 `yunshu-progress`、`yunshu-stats` 注释相同。 |
+| `done` | 每个请求的终止消息：`reason`（`completed`、`cancelled`、`stopped`、`max_tokens`、`error`）、`request_id`、`stats`（`ttft_ms`、`duration_ms`、`events`、`deltas`）。 |
+| `error` | `{"id"?, "status", "error": {"message", "type", ...}}`，带有 `id` 时属于该请求。 |
+| `ping` | 每隔 `YUNSHU_WS_PING_INTERVAL` 秒的心跳（默认 15，`0` 关闭）。 |
+
+限制：每条连接最多 `YUNSHU_WS_MAX_INFLIGHT`（默认 16）个并行请求（超过返回 `429`，code 为 `too_many_requests`），重复使用仍在进行中的 `id` 为 `409`，不同的 `stream_id` 最多 32 个。相同 `stream_id` 的请求依序运行，不同 id 则并行。发送的事件最多缓冲 `YUNSHU_WS_SEND_QUEUE`（默认 256）个，超过后生成会暂停，直到读取端跟上。关闭 socket 会取消所有进行中的请求。当你的 `id` 是 1 到 128 个 `A-Za-z0-9._:-` 字符时，它同时也是 HTTP 的 `X-Request-Id`。
+
+`WS /v1/responses` 在同一个传输层上提供 OpenAI 的 Responses WebSocket 模式，请见 [Responses](/docs/api/responses)。
+
+## 原生语音：`POST /v1/omni/speech/stream`
+
+对带有 Talker 的模型（Qwen3-Omni），这个路由从同一个模型流式文本与语音，不需要 ASR 到 LLM 再到 TTS 的级联。若所服务的模型能发声就直接重用；否则可用 `YUNSHU_OMNI_MODEL` 指向另一个 omni 模型。没有可发声的模型时，路由返回 `503`。
+
+| 参数 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `text` | string | 是 | 1 到 8000 个字符。 |
+| `speaker` | string | 否 | 模型的说话者或别名。未知的说话者返回 `400` 并列出有效名称。 |
+| `thinker_max_new_tokens` | integer | 否 | 0 到 512。 |
+| `image_path` | string | 否 | 图片输入：服务器上的文件路径、`data:` URI（base64）或 http(s) URL。 |
+| `audio_path` | string | 否 | 音频输入，形式同上。 |
+
+内嵌与下载的媒体上限为 64 MiB（`413`）。响应为 `text/event-stream`：
+
+| 事件 | 内容 |
+| --- | --- |
+| `{"type": "text", "delta": "..."}` | 一段 Thinker 文本。 |
+| `{"type": "audio", "delta": "<base64 PCM16>", "sr": 24000}` | 一个语音数据块，单声道 16-bit little-endian。 |
+| `{"type": "done", ...}` | 最终统计，之后接 `data: [DONE]`。 |
+| `{"type": "error", "message": ...}` | 流式开始后的失败。 |
+
+```bash
+curl -N http://localhost:8000/v1/omni/speech/stream \
+  -H "Content-Type: application/json" \
+  -d '{"text": "Say hello in one short sentence."}'
+```
+
+## System One：`POST /v1/systemone`
+
+这是[决策](/docs/api/decisions)引擎的另一种传输格式：问题是以名称为键的 map，答案也用相同的名称返回。它需要相同的决策 checkpoint。
+
+| 参数 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `model` | string | 是 | 决策模型 id。 |
+| `state` | any | 是 | 输入，文本或任何 JSON 值。 |
+| `questions` | object | 是 | 名称对应 `{"type", "instructions"?, "criteria"?}` 的 map，1 到 128 个问题。 |
+| `images` | array of string | 否 | base64 图片或 `data:image/...;base64,...` URL，最多 128 张。 |
+
+问题类型：`noul`（布尔；选填的 `criteria` map 可含 `true` 与 `false` 的描述）、`choice`（`criteria` 为选项对应描述的 map，至少 2 个）与 `score`（`criteria` 为等级描述的列表，至少 2 个）。
+
+```json
+{
+  "model": "abenzerps/Clef-MLX",
+  "answers": {
+    "urgent": { "type": "noul", "noul": 0.81 },
+    "route": { "type": "choice", "choice": "support", "confidence": 0.93, "probabilities": { "support": 0.93, "sales": 0.07 } },
+    "tone": { "type": "score", "score": 0.22, "confidence": 0.78, "legend": { "0": "calm", "1": "angry" }, "probabilities": { "0": 0.78, "1": 0.22 } }
+  },
+  "usage": { "input_tokens": 142, "output_tokens": 0 }
+}
+```
+
+此路由的验证错误返回 `422`（decisions 路由则是 `400`）；非决策模型、找不到模型或引擎错误，则与 `POST /v1/decisions` 相同，返回 `400` 或 `404`。决策头无法回答的问题会返回 `{"type": "refusal"}`。
+
+## 会告诉你该怎么做的错误
+
+OpenAI 格式的错误（包含中介层产生的）会把修正方式放两次：附加在 `error.message` 后面，以及结构化地放在 `error.x_yunshu`（`hint`、`request_id`，重载时还有队列字段）。提示涵盖的情况有：上下文太长、内存不足、验证、未知模型、正文过大、速率限制、模型加载中或关闭中、验证失败与内部错误。Anthropic 格式的错误则完全维持 Anthropic 规格的样子。
+
+## 支持状况
+
+| 功能 | 状态 |
+| --- | --- |
+| `x_yunshu` 统计、`X-Yunshu-*` 标头、进度注释 | <Support status="extension">Yunshu 扩展</Support> |
+| 请求 id、依 id 取消、deadline 标头 | <Support status="extension">Yunshu 扩展</Support> |
+| `keep_alive` | <Support status="partial">仅在多模型模式下有作用</Support> |
+| 状态与预热 | <Support status="extension">Yunshu 扩展</Support> |
+| `WS /v1/stream` | <Support status="extension">Yunshu 协定</Support> |
+| 非流式请求的进度 | <Support status="unsupported">请改为轮询 `GET /v1/requests/{request_id}`</Support> |
+| 原生语音 | <Support status="partial">需要带有 Talker 的模型</Support> |
+
+## 相关页面
+
+- [运维](/docs/api/operations)：健康检查、指标与请求查看。
+- [Realtime](/docs/api/realtime)：OpenAI Realtime WebSocket。
+- [Decisions](/docs/api/decisions)：`POST /v1/decisions`。
+- [Chat Completions](/docs/api/chat-completions)：带有这些字段的路由。

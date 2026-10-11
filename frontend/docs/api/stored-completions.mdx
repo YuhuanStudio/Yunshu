@@ -1,0 +1,187 @@
+---
+title: Stored completions
+description: Keep chat completions on disk with store true, then list, retrieve, label and delete them with the OpenAI stored-completions routes.
+---
+
+Set `store: true` on a chat completion request and Yunshu keeps the finished completion together with the messages you sent. The routes below list, fetch, relabel and delete the stored records, following the OpenAI stored-completions API. Everything lives on your disk; nothing is sent anywhere.
+
+<Endpoint method="POST" path="/v1/chat/completions" />
+<Endpoint method="GET" path="/v1/chat/completions" />
+<Endpoint method="GET" path="/v1/chat/completions/{completion_id}" />
+<Endpoint method="POST" path="/v1/chat/completions/{completion_id}" />
+<Endpoint method="DELETE" path="/v1/chat/completions/{completion_id}" />
+<Endpoint method="GET" path="/v1/chat/completions/{completion_id}/messages" />
+
+<Callout type="info">
+Authentication is only enforced when `YUNSHU_AUTH_TOKEN` is set; these routes then need the token like every other inference route. See [API overview](/docs/api/overview).
+</Callout>
+
+## How storing works
+
+- Send `store: true` (and optionally `metadata`) on `POST /v1/chat/completions`. Without `store`, nothing is written.
+- A non-streaming completion is stored when the response is a `200`. A streaming completion is stored when the stream finishes cleanly with `data: [DONE]`: the chunks are folded back into one `chat.completion` object (content, `reasoning_content`, tool calls, logprobs, usage). A stream that is cut off or ends with an error is not stored.
+- Each record holds the completion object and the input messages. All choices are stored when `n` is greater than 1.
+- Records are JSON files, one per completion, under `~/.yunshu/chat_completions` (change it with `YUNSHU_CHAT_COMPLETIONS_DIR`). When more than `YUNSHU_CHAT_COMPLETIONS_MAX` records exist (default 5000) the oldest are deleted.
+- A storing failure never fails the request: it is logged and the response is returned as usual.
+- The files are plain JSON. Image data URLs in your messages are stored as sent, so a record can be large.
+
+### Metadata
+
+`metadata` is an object of up to 16 string pairs; keys are at most 64 characters and values at most 512. Anything else is a `400` with `param: "metadata"`. It is returned on the stored completion and can be used as a list filter.
+
+## List stored completions
+
+`GET /v1/chat/completions` returns a page of stored completions.
+
+| Query parameter | Type | Description |
+| --- | --- | --- |
+| `limit` | integer | `1` to `100`. Default `20`. |
+| `order` | string | `asc` (oldest first, the default) or `desc`. |
+| `after` | string | Completion id to continue after. An unknown id is a `400`. |
+| `model` | string | Only completions whose `model` equals this value. |
+| `metadata[key]` | string | Only completions whose metadata has this exact value. Repeat for several keys; all must match. |
+
+```bash
+curl -G http://localhost:8000/v1/chat/completions \
+  --data-urlencode "limit=10" \
+  --data-urlencode "order=desc" \
+  --data-urlencode "metadata[session]=demo"
+```
+
+```json
+{
+  "object": "list",
+  "data": [
+    {
+      "id": "chatcmpl-9f2c4e1ab07d4c3e8a51b2c6",
+      "object": "chat.completion",
+      "created": 1760000000,
+      "model": "local",
+      "choices": [{ "index": 0, "message": { "role": "assistant", "content": "Hello!" }, "finish_reason": "stop" }],
+      "usage": { "prompt_tokens": 12, "completion_tokens": 3, "total_tokens": 15 },
+      "metadata": { "session": "demo" }
+    }
+  ],
+  "first_id": "chatcmpl-9f2c4e1ab07d4c3e8a51b2c6",
+  "last_id": "chatcmpl-9f2c4e1ab07d4c3e8a51b2c6",
+  "has_more": false
+}
+```
+
+## Retrieve, update and delete
+
+| Route | Behavior |
+| --- | --- |
+| `GET /v1/chat/completions/{completion_id}` | Returns the stored `chat.completion` object, including `metadata`. |
+| `POST /v1/chat/completions/{completion_id}` | Body `{"metadata": {...}}`. Replaces the whole metadata object (send `{}` to clear it) and returns the updated completion. `metadata` is required. |
+| `DELETE /v1/chat/completions/{completion_id}` | Deletes the record and returns `{"id": "...", "object": "chat.completion.deleted", "deleted": true}`. |
+| `GET /v1/chat/completions/{completion_id}/messages` | Lists the input messages of the completion. Takes `limit`, `order` and `after` like the list route. |
+
+Each message in the messages list is the message you sent, plus a generated `id` (`msg_...`). When `content` was an array, `content` becomes the concatenated text and `content_parts` keeps the `text` and `image_url` parts; otherwise `content_parts` is `null`.
+
+## Examples
+
+<Tabs items={["curl", "Python", "JavaScript"]}>
+<Tab value="curl">
+
+```bash
+# Store a completion
+curl http://localhost:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "local",
+    "store": true,
+    "metadata": {"session": "demo"},
+    "messages": [{"role": "user", "content": "Say hello."}]
+  }'
+
+# Fetch, relabel and delete it
+curl http://localhost:8000/v1/chat/completions/chatcmpl-9f2c4e1ab07d4c3e8a51b2c6
+curl -X POST http://localhost:8000/v1/chat/completions/chatcmpl-9f2c4e1ab07d4c3e8a51b2c6 \
+  -H "Content-Type: application/json" -d '{"metadata": {"session": "demo", "reviewed": "yes"}}'
+curl http://localhost:8000/v1/chat/completions/chatcmpl-9f2c4e1ab07d4c3e8a51b2c6/messages
+curl -X DELETE http://localhost:8000/v1/chat/completions/chatcmpl-9f2c4e1ab07d4c3e8a51b2c6
+```
+
+</Tab>
+<Tab value="Python">
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="http://localhost:8000/v1", api_key="sk-local")
+
+created = client.chat.completions.create(
+    model="local",
+    store=True,
+    metadata={"session": "demo"},
+    messages=[{"role": "user", "content": "Say hello."}],
+)
+
+stored = client.chat.completions.retrieve(created.id)
+client.chat.completions.update(created.id, metadata={"session": "demo", "reviewed": "yes"})
+
+for c in client.chat.completions.list(metadata={"session": "demo"}, order="desc", limit=10):
+    print(c.id, c.metadata)
+
+for m in client.chat.completions.messages.list(created.id):
+    print(m.role, m.content)
+
+client.chat.completions.delete(created.id)
+```
+
+</Tab>
+<Tab value="JavaScript">
+
+```ts
+import OpenAI from "openai";
+
+const client = new OpenAI({ baseURL: "http://localhost:8000/v1", apiKey: "sk-local" });
+
+const created = await client.chat.completions.create({
+  model: "local",
+  store: true,
+  metadata: { session: "demo" },
+  messages: [{ role: "user", content: "Say hello." }],
+});
+
+const stored = await client.chat.completions.retrieve(created.id);
+await client.chat.completions.update(created.id, { metadata: { reviewed: "yes" } });
+for await (const c of client.chat.completions.list({ order: "desc", limit: 10 })) {
+  console.log(c.id);
+}
+await client.chat.completions.delete(created.id);
+```
+
+</Tab>
+</Tabs>
+
+## Errors
+
+Errors use the OpenAI shape `{"error": {"message", "type": "invalid_request_error", "param", "code"}}`.
+
+| Status | `code` | When |
+| --- | --- | --- |
+| 400 | `invalid_type`, `invalid_value` | `limit` is not an integer or is outside `1` to `100`; `order` is not `asc` or `desc`; `after` is not in the list (`param` names the field). |
+| 400 | `invalid_json` | The update body is not JSON. |
+| 400 | `missing_required_parameter` | The update body has no `metadata`. |
+| 400 | `invalid_type`, `metadata_too_large` | Metadata is not an object of strings, has more than 16 keys, or a key or value is too long. |
+| 401 | | Token configured and missing or wrong. |
+| 404 | `not_found` | No stored completion has that id. An id that does not look like `chatcmpl-...` is also a `404`. |
+
+## Support
+
+| Feature | Status |
+| --- | --- |
+| `store: true` on non-streaming and streaming chat completions | <Support status="supported">supported</Support> |
+| List with `limit`, `order`, `after`, `model`, `metadata[...]` filters | <Support status="supported">supported</Support> |
+| Retrieve, update metadata, delete, list messages | <Support status="supported">supported</Support> |
+| Storing Responses API objects here | <Support status="unsupported">not applicable; see Responses</Support> |
+| Storage outside the local disk, per-record expiry | <Support status="unsupported">not supported; only the count limit evicts</Support> |
+
+## Related
+
+- [Chat completions](/docs/api/chat-completions)
+- [Responses](/docs/api/responses)
+- [API overview](/docs/api/overview)
+- [Configuration](/docs/guides/configuration)

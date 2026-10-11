@@ -1,0 +1,222 @@
+---
+title: Realtime
+description: The OpenAI Realtime protocol over WebSocket (GA and beta schemas) and WebRTC, with ephemeral client secrets, text and voice turns, and tool calls.
+---
+
+Yunshu serves the OpenAI Realtime protocol: a long-lived WebSocket (or WebRTC data channel) that carries JSON events in both directions. You configure a session, add conversation items or stream microphone audio, and the server streams back text, audio and tool-call events. The official `openai` SDK (`client.realtime.connect()`) works against it.
+
+<Endpoint method="WS" path="/v1/realtime" />
+<Endpoint method="WS" path="/realtime" />
+<Endpoint method="POST" path="/v1/realtime/client_secrets" />
+<Endpoint method="POST" path="/v1/realtime/sessions" />
+<Endpoint method="POST" path="/v1/realtime/transcription_sessions" />
+<Endpoint method="POST" path="/v1/realtime/calls" />
+
+## Connecting
+
+Open a WebSocket to `ws://localhost:8000/v1/realtime?model=local`. The `model` query parameter selects the model for the session (in single-model mode any name resolves to the served model; an unknown model in multi-model mode produces an `error` event with code `model_not_found` and closes the socket).
+
+| Dialect | How it is chosen | Notes |
+| --- | --- | --- |
+| GA (default) | `WS /v1/realtime` without a beta header | What `client.realtime.connect()` speaks: nested `audio.input` / `audio.output` session, `response.output_text.delta` style event names. |
+| Beta | `OpenAI-Beta: realtime=v1` on `WS /v1/realtime`, or always on `WS /realtime` | Flat session (`modalities`, `voice`, `input_audio_format`, ...), `response.text.delta` style names, plus `conversation.created`. |
+
+Authentication is only enforced when `YUNSHU_AUTH_TOKEN` is set. Then the socket needs one of:
+
+- an `Authorization: Bearer <token>` header,
+- the browser subprotocol `openai-insecure-api-key.<token>` (send `realtime` as a second subprotocol),
+- a `?token=` query parameter,
+- an ephemeral client secret (`ek_...`) in any of those places, see below.
+
+An `Origin` header, when present, must be allowed by `YUNSHU_CORS_ORIGINS` (unless that is `*`). Failed checks close the connection before the upgrade, so the client sees a failed handshake.
+
+The first server message is `session.created`. The GA dialect then stays quiet until you speak; the beta dialect also sends `conversation.created`. If no model is loaded the server sends an `error` event right away.
+
+## Session configuration
+
+Send `session.update` with a `session` object. Shown in the GA shape, with the beta name in parentheses.
+
+| Field | Description | Status |
+| --- | --- | --- |
+| `output_modalities` (`modalities`) | `["text"]` (default) or `["audio"]`. The beta form also accepts `["text", "audio"]`. | supported |
+| `instructions` | System prompt for responses. | supported |
+| `audio.output.voice` (`voice`) | One of `alloy`, `echo`, `shimmer`, `ash`, `ballad`, `coral`, `sage`, `verse`, or a native speaker of an omni model. An invalid voice is ignored. | supported |
+| `audio.input.format`, `audio.output.format` (`input_audio_format`, `output_audio_format`) | GA: `audio/pcm` (24 kHz mono 16-bit), `audio/pcmu`, `audio/pcma`. Beta: `pcm16`, `g711_ulaw`, `g711_alaw`. | supported |
+| `audio.input.turn_detection` (`turn_detection`) | `null` (manual commits) or `{"type": "server_vad", "threshold", "prefix_padding_ms", "silence_duration_ms", "idle_timeout_ms"}`. | supported |
+| `audio.input.noise_reduction` (`input_audio_noise_reduction`) | `{"type": "near_field"}` or `far_field`, or `null`. | supported |
+| `tools`, `tool_choice` | Function tools; `tool_choice` is `auto`, `none`, `required` or a named function. | supported |
+| `max_output_tokens` (`max_response_output_tokens`) | Integer. | supported |
+| `temperature` | Sampling temperature, default 0.7. | supported |
+| `audio.input.transcription` | The ASR model is whichever ASR engine is loaded; the field does not pick one. | accepted and ignored |
+| `top_p`, `top_k`, `min_p`, `repetition_penalty`, `frequency_penalty`, `presence_penalty`, `logit_bias`, `seed`, `enable_thinking` | Yunshu sampling extensions, passed through. | extension |
+| `tracing`, `include`, `type` | Ignored. | accepted and ignored |
+
+Defaults for server VAD are `threshold` 0.5, `prefix_padding_ms` 300, `silence_duration_ms` 500, and a barge-in threshold of 120 ms of sustained speech (`barge_in_min_ms`, not exposed in the GA session). They can be changed server-wide with `YUNSHU_REALTIME_VAD_THRESHOLD`, `YUNSHU_REALTIME_PREFIX_PADDING_MS`, `YUNSHU_REALTIME_SILENCE_MS` and `YUNSHU_REALTIME_BARGE_IN_MS`. `YUNSHU_REALTIME_VAD=silero` switches from the default energy-based detector to Silero VAD (model `YUNSHU_REALTIME_VAD_MODEL`). `turn_detection.type` of `semantic_vad` is served as `server_vad`; `eagerness`, `create_response` and `interrupt_response` are ignored (a response is always created after a detected turn, and speech interrupts a playing response).
+
+Invalid values for a field (for example an unknown audio format) are skipped silently and the previous value is kept; the `session.updated` event shows the effective session.
+
+## Client events
+
+| Event | Behaviour |
+| --- | --- |
+| `session.update` | Changes the session; answered with `session.updated`. |
+| `conversation.item.create` | Adds an item (message, function call, function call output). Answered with `conversation.item.added` and `conversation.item.done` (GA) or `conversation.item.created` (beta). Duplicate ids and oversized items are rejected with `error`. |
+| `conversation.item.delete` | Removes an item; answered with `conversation.item.deleted`. |
+| `conversation.item.truncate` | Records how much audio of an assistant item was heard; answered with `conversation.item.truncated`. |
+| `input_audio_buffer.append` | Appends base64 audio. |
+| `input_audio_buffer.commit` | Transcribes the buffer and adds it as a user message. |
+| `input_audio_buffer.clear` | Discards the buffer. |
+| `response.create` | Starts a response. `response` may carry `output_modalities`, `instructions`, `tools`, `tool_choice`, `temperature`, `max_output_tokens`, `input` (items to use as the whole context for this response; `[]` clears it) and `conversation: "none"` (keep it out of the history). |
+| `response.cancel` | Cancels the running response. |
+| `output_audio_buffer.clear` | Cuts a response that is currently speaking. |
+
+Only one response runs per session. A `response.create` while another is running returns an `error`. An unknown event type returns an `error` with `type: "invalid_request_error"`.
+
+## Server events
+
+Text turn, in order: `response.created`, `rate_limits.updated`, `response.output_item.added`, `response.content_part.added`, repeated `response.output_text.delta`, `response.output_text.done`, `response.content_part.done`, `response.output_item.done`, `response.done`. In the beta dialect the names are `response.text.delta` and `response.text.done`.
+
+A turn with a tool call emits a `function_call` output item with `response.function_call_arguments.delta` and `response.function_call_arguments.done`. Return the result with `conversation.item.create` of type `function_call_output`, then send `response.create` again.
+
+`response.done` carries `status` (`completed`, `cancelled` or `failed`), the output items and `usage` (`input_tokens`, `output_tokens`, `total_tokens`).
+
+Voice turn events:
+
+| Event | When |
+| --- | --- |
+| `input_audio_buffer.speech_started`, `input_audio_buffer.speech_stopped` | Server VAD detected the start and end of speech. |
+| `input_audio_buffer.committed` | Buffer committed, by VAD or by your `commit`. |
+| `conversation.item.added` / `.done` | The user item with the transcript. |
+| `conversation.item.input_audio_transcription.completed` | The ASR transcript of the user turn. |
+| `response.output_audio.delta`, `response.output_audio.done` | Base64 audio chunks in the session output format (`response.audio.delta` in beta). |
+| `response.output_audio_transcript.delta`, `.done` | Text of the spoken reply. |
+| `output_audio_buffer.started`, `.stopped`, `.cleared` | GA dialect only: bracket the audio of a response; `cleared` when it was cut by a cancel or barge-in. |
+| `input_audio_buffer.timeout_triggered` | `idle_timeout_ms` elapsed with no speech; an empty user turn is committed and answered. |
+| `error` | Any failure. The body is `{"type": "error", "event_id", "error": {"message", "type", "code"?}}`. |
+
+## Text turns and voice turns
+
+A text turn needs only a loaded chat model: create a user message item, send `response.create`, and read `output_text` events.
+
+A voice turn has two implementations:
+
+- **Cascade (default).** Input audio is transcribed by a loaded ASR model, the text goes to the chat model, and the reply is synthesized by a loaded TTS model. This needs a multi-model setup with an ASR model and (for audio output) a TTS model loaded next to the chat model. Without an ASR model, a commit returns an `error` with code `no_asr_engine`. Without a TTS model an audio response finishes with no audio chunks.
+- **Native speech-to-speech.** When the served model has a Talker (Qwen3-Omni), the raw audio goes straight to the model and speech comes straight back. `YUNSHU_REALTIME_OMNI` is `auto` by default (native when a speakable model is served), `on` forces it, `off` forces the cascade.
+
+Audio limits: the input buffer is capped by `YUNSHU_REALTIME_MAX_INPUT_AUDIO_BYTES` (10 MiB), exceeding it clears the buffer and sends an `input_audio_buffer_overflow` error. A session keeps at most `YUNSHU_REALTIME_MAX_CONVERSATION_ITEMS` (1000) items; the oldest are dropped.
+
+## Ephemeral client secrets
+
+For browsers, mint a short-lived key on your backend and hand it to the page. The `ek_...` value is accepted wherever the static token is, for `WS /v1/realtime` and `POST /v1/realtime/calls`.
+
+`POST /v1/realtime/client_secrets` (GA) takes `{"expires_after": {"anchor": "created_at", "seconds": 10..7200}, "session": {...}}` (default 600 seconds; `session.type` is `realtime` or `transcription`) and returns `{"value": "ek_...", "expires_at", "session": {...}}`. The session you pass is the one applied to the connection that uses the key; it cannot be overridden later by that connection. `POST /v1/realtime/sessions` and `POST /v1/realtime/transcription_sessions` are the beta forms and return the session with a `client_secret` object. Secrets live in memory only (at most 1000 live), so they do not survive a restart. A transcription secret can transcribe but cannot create responses.
+
+## WebRTC
+
+`POST /v1/realtime/calls` negotiates a WebRTC call: send an SDP offer as `application/sdp` (or multipart `sdp` plus a JSON `session`), get an SDP answer with status `201`. Audio flows on the media tracks (resampled to 24 kHz mono PCM internally) and the same JSON events flow on a data channel labeled `oai-events`, using the GA dialect.
+
+Requirements and limits:
+
+- Install the optional extra: `pip install "yunshu[webrtc]"`. Without it the route returns `503` and suggests the WebSocket.
+- No STUN or TURN servers are configured, so peers must be directly reachable (same machine or LAN).
+- At most 16 live calls (`429` beyond that). An offer larger than 128 KiB returns `413`.
+- A call ends when the peer fails or closes, on server shutdown, one hour after it opened, or 60 seconds after the offer if the data channel never opens.
+- The response carries a `Location` header naming the call, but there is no route to fetch or hang up a call; close the peer connection instead.
+
+## Examples
+
+<Tabs items={["curl", "Python", "JavaScript"]}>
+<Tab value="curl">
+
+```bash
+# Mint an ephemeral key for a browser
+curl http://localhost:8000/v1/realtime/client_secrets \
+  -H "Content-Type: application/json" \
+  -d '{"expires_after": {"anchor": "created_at", "seconds": 600},
+       "session": {"type": "realtime", "model": "local", "output_modalities": ["text"], "instructions": "Be brief."}}'
+```
+
+</Tab>
+<Tab value="Python">
+
+```python
+import asyncio
+from openai import AsyncOpenAI
+
+client = AsyncOpenAI(base_url="http://localhost:8000/v1", api_key="not-needed")
+
+async def main():
+    async with client.realtime.connect(model="local") as conn:
+        await conn.session.update(session={"type": "realtime", "output_modalities": ["text"]})
+        await conn.conversation.item.create(
+            item={"type": "message", "role": "user",
+                  "content": [{"type": "input_text", "text": "Say hello in five words."}]}
+        )
+        await conn.response.create()
+        async for event in conn:
+            if event.type == "response.output_text.delta":
+                print(event.delta, end="", flush=True)
+            elif event.type == "response.done":
+                break
+
+asyncio.run(main())
+```
+
+</Tab>
+<Tab value="JavaScript">
+
+```ts
+import WebSocket from "ws";
+
+const ws = new WebSocket("ws://localhost:8000/v1/realtime?model=local", {
+  headers: { Authorization: "Bearer not-needed" },
+});
+
+ws.on("open", () => {
+  ws.send(JSON.stringify({ type: "session.update", session: { type: "realtime", output_modalities: ["text"] } }));
+  ws.send(JSON.stringify({
+    type: "conversation.item.create",
+    item: { type: "message", role: "user", content: [{ type: "input_text", text: "Say hello in five words." }] },
+  }));
+  ws.send(JSON.stringify({ type: "response.create" }));
+});
+
+ws.on("message", (raw) => {
+  const event = JSON.parse(raw.toString());
+  if (event.type === "response.output_text.delta") process.stdout.write(event.delta);
+  if (event.type === "response.done") ws.close();
+});
+```
+
+</Tab>
+</Tabs>
+
+## Differences from the hosted API
+
+- `semantic_vad` is served as `server_vad`.
+- `rate_limits.updated` follows `response.created`, but there is no quota: `requests` reports `YUNSHU_RATE_LIMIT_RPM` (or the maximum 32-bit integer when it is 0) and `tokens` the model context window.
+- `audio.input.noise_reduction` is a light causal high-pass filter plus noise-floor expander on the CPU, not a neural denoiser.
+- `output_audio_buffer.started`, `.stopped` and `.cleared` are sent on the WebSocket too (OpenAI sends them on WebRTC and SIP).
+- Unsupported session fields are accepted silently rather than rejected.
+- Audio input needs a separate ASR model or a native speech model; there is no built-in speech recognizer.
+- SIP calls and a monitoring sideband WebSocket are not provided.
+
+## Support
+
+| Feature | Status |
+| --- | --- |
+| WebSocket, GA and beta schemas | <Support status="supported">supported</Support> |
+| Text turns, tool calls, truncation, cancel | <Support status="supported">supported</Support> |
+| Voice turns through ASR, LLM and TTS | <Support status="partial">needs ASR and TTS models loaded</Support> |
+| Native speech-to-speech | <Support status="partial">needs a model with a Talker (Qwen3-Omni)</Support> |
+| Server VAD | <Support status="supported">energy based, optional Silero</Support> |
+| `semantic_vad` | <Support status="partial">served as `server_vad`</Support> |
+| Ephemeral client secrets | <Support status="supported">in memory only</Support> |
+| WebRTC | <Support status="partial">optional `webrtc` extra, no STUN/TURN</Support> |
+| SIP, sideband connections | <Support status="unsupported">not provided</Support> |
+
+## Related
+
+- [Audio](/docs/api/audio) for the HTTP speech and transcription endpoints.
+- [Extensions](/docs/api/extensions) for `WS /v1/stream` and `POST /v1/omni/speech/stream`.
+- [Chat completions](/docs/api/chat-completions) for the text sampling behaviour that Realtime reuses.

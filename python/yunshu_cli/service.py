@@ -48,6 +48,14 @@ def log_file() -> Path:
     return paths.log_dir() / "yunshu.log"
 
 
+def console_log_file() -> Path:
+    return paths.log_dir() / "console.log"
+
+
+def _console_target() -> str:
+    return f"{_domain()}/{paths.CONSOLE_SERVICE_LABEL}"
+
+
 def serve_args(
     model: str | None,
     models_dir: str | None,
@@ -56,7 +64,8 @@ def serve_args(
     config: str | None,
     set_: list[str],
 ) -> list[str]:
-    args = [sys.executable, "-m", "yunshu_cli", "serve", "--host", host]
+    # The console is its own job (see console_args), so the engine never starts one itself.
+    args = [sys.executable, "-m", "yunshu_cli", "serve", "--host", host, "--no-console"]
     args += ["--port", str(port)]
     if model:
         p = Path(model).expanduser()
@@ -70,16 +79,45 @@ def serve_args(
     return args
 
 
-def build_plist(program: list[str]) -> dict:
+def console_args(
+    host: str, port: int, console_port: int, config: str | None
+) -> list[str]:
+    """The console job: it watches this engine over localhost and serves the web console."""
+    engine_host = "127.0.0.1" if host in ("0.0.0.0", "") else host
+    args = [
+        sys.executable,
+        "-m",
+        "yunshu_console",
+        "--engine",
+        f"http://{engine_host}:{port}",
+        "--host",
+        host,
+        "--port",
+        str(console_port),
+        "--log-level",
+        "warning",
+    ]
+    if config:
+        args += ["--config", str(Path(config).expanduser().resolve())]
+    return args
+
+
+def build_plist(
+    program: list[str],
+    *,
+    label: str | None = None,
+    log_path: Path | None = None,
+    keep_alive_always: bool = False,
+) -> dict:
     env = {"PATH": _PATH}
     env.update({k: os.environ[k] for k in _PASSTHROUGH_ENV if os.environ.get(k)})
-    log = str(log_file())
+    log = str(log_path or log_file())
     return {
-        "Label": paths.SERVICE_LABEL,
+        "Label": label or paths.SERVICE_LABEL,
         "ProgramArguments": program,
         "RunAtLoad": True,
-        # Restart after a crash, not after a clean stop.
-        "KeepAlive": {"SuccessfulExit": False},
+        # The engine restarts after a crash, not after a clean stop; the console whenever it ends.
+        "KeepAlive": True if keep_alive_always else {"SuccessfulExit": False},
         "ThrottleInterval": 10,
         "WorkingDirectory": str(Path.home()),
         "EnvironmentVariables": env,
@@ -96,6 +134,10 @@ def _loaded() -> bool:
     return _launchctl("print", _target()).returncode == 0
 
 
+def _console_loaded() -> bool:
+    return _launchctl("print", _console_target()).returncode == 0
+
+
 def parse_print(text: str) -> dict:
     """pid / state / last exit code from ``launchctl print`` output."""
     out: dict = {}
@@ -108,6 +150,16 @@ def parse_print(text: str) -> dict:
         if m:
             out[key] = int(m.group(1)) if key == "pid" else m.group(1).strip()
     return out
+
+
+def _installed_console_address(plist_path: Path) -> tuple[str, int] | None:
+    try:
+        args = plistlib.loads(plist_path.read_bytes())["ProgramArguments"]
+        host = args[args.index("--host") + 1]
+        port = int(args[args.index("--port") + 1])
+    except (OSError, KeyError, ValueError, IndexError, plistlib.InvalidFileException):
+        return None
+    return ("127.0.0.1" if host == "0.0.0.0" else host), port
 
 
 def _installed_address(plist_path: Path) -> tuple[str, int] | None:
@@ -143,8 +195,17 @@ def install(
         False, "--no-start", help="Write the agent but do not start it now."
     ),
     force: bool = typer.Option(False, "--force", help="Replace an installed agent."),
+    no_console: bool = typer.Option(
+        False,
+        "--no-console",
+        help="Install the engine only: no console job (web console, docs, history).",
+    ),
+    console_port: int = typer.Option(
+        8100, "--console-port", help="Port of the console job (YUNSHU_CONSOLE_PORT)."
+    ),
 ):
-    """Install the launchd agent: start Yunshu at login and restart it on crash."""
+    """Install the launchd agents: the engine and, as its own job, the console; both start at login
+    and restart on a crash. The console keeps serving and recording while the engine restarts."""
     if sys.platform != "darwin":
         fail("`yunshu service` uses launchd and runs on macOS only.", code=2)
     if not model and not models_dir and not settings.get("YUNSHU_MODEL"):
@@ -164,9 +225,20 @@ def install(
 
     plist = build_plist(serve_args(model, models_dir, host, port, config, set_))
     dest = paths.launch_agent_plist()
+    console_plist = build_plist(
+        console_args(host, port, console_port, config),
+        label=paths.CONSOLE_SERVICE_LABEL,
+        log_path=console_log_file(),
+        keep_alive_always=True,
+    )
+    console_dest = paths.console_launch_agent_plist()
     if dry_run:
         text = plistlib.dumps(plist).decode()
-        emit({"path": str(dest), "plist": plist}, human=lambda: print(text))
+        out: dict = {"path": str(dest), "plist": plist}
+        if not no_console:
+            out["console"] = {"path": str(console_dest), "plist": console_plist}
+            text += "\n" + plistlib.dumps(console_plist).decode()
+        emit(out, human=lambda: print(text))
         return
     if dest.exists() and not force:
         fail(
@@ -176,22 +248,51 @@ def install(
         )
     if dest.exists() and _loaded():
         _launchctl("bootout", _target())
+    if console_dest.exists() and _console_loaded():
+        _launchctl("bootout", _console_target())
     dest.parent.mkdir(parents=True, exist_ok=True)
     paths.log_dir().mkdir(parents=True, exist_ok=True)
     dest.write_bytes(plistlib.dumps(plist))
+    if not no_console:
+        console_dest.write_bytes(plistlib.dumps(console_plist))
+    elif console_dest.exists():
+        console_dest.unlink()
     started = False
     if not no_start:
-        r = _launchctl("bootstrap", _domain(), str(dest))
-        if r.returncode != 0:
-            fail(f"Wrote {dest} but launchctl could not start it: {r.stderr.strip()}")
+        # The console first: it is happy to wait for an engine that is still loading its model.
+        jobs = ([] if no_console else [console_dest]) + [dest]
+        for job in jobs:
+            r = _launchctl("bootstrap", _domain(), str(job))
+            if r.returncode != 0:
+                fail(
+                    f"Wrote {job} but launchctl could not start it: {r.stderr.strip()}"
+                )
         started = True
+    shown = "127.0.0.1" if host == "0.0.0.0" else host
     emit(
-        {"path": str(dest), "log": str(log_file()), "started": started},
+        {
+            "path": str(dest),
+            "log": str(log_file()),
+            "started": started,
+            "console": None
+            if no_console
+            else {
+                "path": str(console_dest),
+                "log": str(console_log_file()),
+                "url": f"http://{shown}:{console_port}/console/",
+            },
+        },
         human=lambda: console.print(
             f"[green]✓ Installed[/] {dest}\n"
             f"  {'Started; it' if started else 'It'} runs at login on "
             f"http://{host}:{port} and restarts after a crash.\n"
             f"  Logs: {log_file()}  (yunshu service logs -f)"
+            + (
+                ""
+                if no_console
+                else f"\n  Console (its own job, keeps recording while the engine restarts): "
+                f"http://{shown}:{console_port}/console/\n  Logs: {console_log_file()}"
+            )
         ),
     )
 
@@ -200,6 +301,11 @@ def install(
 def uninstall():
     """Stop the service and remove the launchd agent (models and logs are kept)."""
     dest = paths.launch_agent_plist()
+    console_dest = paths.console_launch_agent_plist()
+    if _console_loaded():
+        _launchctl("bootout", _console_target())
+    if console_dest.exists():
+        console_dest.unlink()
     was_loaded = _loaded()
     if was_loaded:
         _launchctl("bootout", _target())
@@ -220,6 +326,9 @@ def start():
     dest = paths.launch_agent_plist()
     if not dest.exists():
         fail("Not installed. Run `yunshu service install --model <model>` first.")
+    console_dest = paths.console_launch_agent_plist()
+    if console_dest.exists() and not _console_loaded():
+        _launchctl("bootstrap", _domain(), str(console_dest))
     r = (
         _launchctl("kickstart", _target())
         if _loaded()
@@ -233,6 +342,8 @@ def start():
 @service_app.command("stop")
 def stop():
     """Stop the service until the next login (or `yunshu service start`)."""
+    if _console_loaded():
+        _launchctl("bootout", _console_target())
     if _loaded():
         _launchctl("bootout", _target())
     emit({"stopped": True}, human=lambda: console.print("[green]✓ Stopped[/]"))
@@ -240,7 +351,8 @@ def stop():
 
 @service_app.command("restart")
 def restart():
-    """Restart the running service (e.g. after changing its config file)."""
+    """Restart the engine (e.g. after changing its config file). The console job keeps running
+    and records the restart as a gap."""
     if not _loaded():
         fail("The service is not running. Use `yunshu service start`.")
     r = _launchctl("kickstart", "-k", _target())
@@ -266,6 +378,21 @@ def status():
     if addr:
         info["url"] = f"http://{addr[0]}:{addr[1]}"
         info["healthy"] = _healthy(info["url"])
+    console_dest = paths.console_launch_agent_plist()
+    if console_dest.exists():
+        cr = _launchctl("print", _console_target())
+        c: dict = {
+            "installed": True,
+            "plist": str(console_dest),
+            "log": str(console_log_file()),
+            "loaded": cr.returncode == 0,
+        }
+        if c["loaded"]:
+            c.update(parse_print(cr.stdout))
+        caddr = _installed_console_address(console_dest)
+        if caddr:
+            c["url"] = f"http://{caddr[0]}:{caddr[1]}/console/"
+        info["console"] = c
     if is_json():
         emit(info)
         return
@@ -285,6 +412,14 @@ def status():
         mark = "[green]healthy[/]" if info["healthy"] else "[yellow]not answering[/]"
         console.print(f"Server: {info['url']} {mark}")
     console.print(f"Agent: {dest}\nLogs: {log_file()}")
+    c = info.get("console")
+    if c:
+        cstate = "running" if c.get("pid") else ("loaded" if c["loaded"] else "stopped")
+        console.print(
+            f"Console: [bold]{cstate}[/]"
+            + (f" (pid {c['pid']})" if c.get("pid") else "")
+            + (f" {c['url']}" if c.get("url") else "")
+        )
 
 
 def _healthy(url: str) -> bool:
@@ -300,9 +435,12 @@ def _healthy(url: str) -> bool:
 def logs(
     lines: int = typer.Option(50, "--lines", "-n", min=1, help="Lines to show."),
     follow: bool = typer.Option(False, "--follow", "-f", help="Keep printing."),
+    console_log: bool = typer.Option(
+        False, "--console", help="Show the console job's log instead of the engine's."
+    ),
 ):
     """Show the service log."""
-    path = log_file()
+    path = console_log_file() if console_log else log_file()
     if not path.exists():
         fail(f"No log yet at {path}.")
     cmd = ["tail", "-n", str(lines)] + (["-F"] if follow else []) + [str(path)]

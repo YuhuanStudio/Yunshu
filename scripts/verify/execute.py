@@ -34,6 +34,7 @@ class Cell:
     share_key: str = ""
     cwd: Path | None = None  # pinned source tree for remote route probes
     device: str = ""  # "any": small-model liveness cells may run on the M3 lane
+    cwd: Path | None = None  # remote snapshots must come from this pinned arm
 
     @property
     def sig(self) -> str:
@@ -251,6 +252,22 @@ class Executor:
 
     # -- API
     def run_cells(self, cells: list) -> dict:
+        """Submit bounded windows, preserving cell order and fail-fast behavior."""
+        try:
+            window = int(os.environ.get("YV_MAX_PENDING", "6"))
+        except ValueError as exc:
+            raise InfraError("YV_MAX_PENDING must be an integer from 1 to 6") from exc
+        if not 1 <= window <= 6:
+            raise InfraError("YV_MAX_PENDING must be an integer from 1 to 6")
+        results = {}
+        for offset in range(0, len(cells), window):
+            batch = self._run_cell_batch(cells[offset : offset + window])
+            results.update(batch)
+            if any(not result.ok for result in batch.values()):
+                break
+        return results
+
+    def _run_cell_batch(self, cells: list) -> dict:
         """Run every cell not already completed; returns key -> CellResult. Stops at the first
         failure (fail-fast): at most six cells are queued; later batches stay unsubmitted."""
         results: dict = {}

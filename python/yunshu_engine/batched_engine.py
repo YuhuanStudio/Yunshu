@@ -37,6 +37,7 @@ from .context_window import reject_overlong_prompt as reject_overlong_prompt
 from .fast_path_stats import FastPathStats as FastPathStats
 from .stream_bridge import StreamBridge as StreamBridge
 from .stream_bridge import make_stream_queue as make_stream_queue
+from .structural_tag import constrains_initial_output as constrains_initial_output
 from .text_utils import StopHoldbackBuffer as StopHoldbackBuffer
 
 if TYPE_CHECKING:
@@ -1442,7 +1443,7 @@ class BatchedEngine(
             thinking_budget = _REASONING_EFFORT_MAP.get(reasoning_effort, 8192)
             if enable_thinking is None:
                 enable_thinking = True
-        if json_schema is not None:
+        if constrains_initial_output(json_schema):
             # Bare structured output is constrained from its first token: a thinking
             # budget would force a close tag into the mask (all logits -inf).
             thinking_budget = None
@@ -1895,7 +1896,7 @@ class BatchedEngine(
             thinking_budget = _REASONING_EFFORT_MAP.get(reasoning_effort, 8192)
             if enable_thinking is None:
                 enable_thinking = True
-        if json_schema is not None:
+        if constrains_initial_output(json_schema):
             # Bare structured output is constrained from its first token: a thinking
             # budget would force a close tag into the mask (all logits -inf).
             thinking_budget = None

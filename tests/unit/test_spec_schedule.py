@@ -95,3 +95,52 @@ def test_chain_budget_replaces_dflash_block_size(monkeypatch):
             assert (wide > 0.5) == expect_wide, (row_ms, sizes[-12:])
     finally:
         dflash_mod._dflash_next_block_size = original
+
+
+def _simulate(seed, rounds=600, true_p=None, slope=0.37, base=49.0):
+    """Closed loop: landing is Bernoulli per rank node, round cost nearly flat in rows."""
+    import random
+
+    from yunshu_engine.spec_schedule import NodeBudget
+
+    rng = random.Random(seed)
+    true_p = true_p or [
+        0.9,
+        0.75,
+        0.55,
+        0.3,
+        0.2,
+        0.15,
+        0.12,
+        0.1,
+        0.08,
+        0.06,
+        0.05,
+        0.04,
+        0.04,
+        0.03,
+        0.03,
+    ]
+    budget = NodeBudget(
+        15, prior=[0.94, 0.74, 0.52, 0.14, 0.2, 0.2, 0.21, 0.11] + [0.05] * 7
+    )
+    chosen = []
+    for _ in range(rounds):
+        n = budget.choose(100)
+        landed = [i for i in range(n) if rng.random() < true_p[i]]
+        cost = (40.0 if n == 0 else base + slope * n) + rng.uniform(-1.5, 1.5)
+        budget.observe(n, landed, cost)
+        chosen.append(n)
+    return sum(chosen[100:]) / len(chosen[100:])
+
+
+def test_flat_row_cost_keeps_the_full_tree():
+    # Measured on M5: verify cost grows ~0.35 ms per row while ranks 8-15 still add ~10% tokens.
+    means = [_simulate(seed) for seed in range(8)]
+    assert min(means) >= 12.0, means
+
+
+def test_steep_row_cost_still_shrinks_the_tree():
+    # Long context: a row costs ~3 ms, so the tail (<10% tokens) no longer pays.
+    means = [_simulate(seed, slope=3.0) for seed in range(8)]
+    assert max(means) <= 9.0, means

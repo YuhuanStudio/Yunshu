@@ -57,6 +57,20 @@ setting.
 source (`cli`, `env`, `file`, `default`); `--all` adds experimental and
 internal ones, `--json` prints JSON, `--config FILE` includes a config file.
 
+## When a change applies
+
+Each setting is classified from where the code reads it (`Applies` column):
+
+- **live**: re-read on every use; a change applies at once.
+- **reload**: read when a model, runner or connection is built; applies on the
+  next model load.
+- **restart**: read once at startup; applies after a restart.
+
+The console writes settings with `PATCH /v1/yunshu/config`, which saves to the
+config file and answers `applied` / `needs_reload` / `needs_restart` per
+setting. A `YUNSHU_*` environment variable or `--set` value set at launch
+still wins at runtime (reported as `overridden`).
+
 ## Stability
 
 - **stable**: supported deployment settings.
@@ -100,11 +114,11 @@ def render() -> str:
         if not rows:
             continue
         out.append(f"### {cat}\n")
-        out.append("| Setting | Type | Default | Description |")
-        out.append("|---|---|---|---|")
+        out.append("| Setting | Type | Default | Applies | Description |")
+        out.append("|---|---|---|---|---|")
         for s in rows:
             out.append(
-                f"| `{s.name}` | {_type(s)} | {_cell(_default(s))} | {_cell(s.description)} |"
+                f"| `{s.name}` | {_type(s)} | {_cell(_default(s))} | {s.applies} | {_cell(s.description)} |"
             )
         out.append("")
     for stability, title in (
@@ -118,20 +132,20 @@ def render() -> str:
             continue
         if stability == "experimental":
             out.append(
-                "| Setting | Type | Default | Description | Decided by | Added |"
+                "| Setting | Type | Default | Applies | Description | Decided by | Added |"
             )
-            out.append("|---|---|---|---|---|---|")
+            out.append("|---|---|---|---|---|---|---|")
             for s in rows:
                 out.append(
-                    f"| `{s.name}` | {_type(s)} | {_cell(_default(s))} | {_cell(s.description)} "
+                    f"| `{s.name}` | {_type(s)} | {_cell(_default(s))} | {s.applies} | {_cell(s.description)} "
                     f"| {_cell(s.decide)} | {s.added} |"
                 )
         else:
-            out.append("| Setting | Type | Default | Description |")
-            out.append("|---|---|---|---|")
+            out.append("| Setting | Type | Default | Applies | Description |")
+            out.append("|---|---|---|---|---|")
             for s in rows:
                 out.append(
-                    f"| `{s.name}` | {_type(s)} | {_cell(_default(s))} | {_cell(s.description)} |"
+                    f"| `{s.name}` | {_type(s)} | {_cell(_default(s))} | {s.applies} | {_cell(s.description)} |"
                 )
         out.append("")
     return "\n".join(out).rstrip("\n") + "\n"

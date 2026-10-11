@@ -1,0 +1,201 @@
+---
+title: 批次
+description: OpenAI Batch API，由單一的 loopback 背景工作程序把每一行 JSONL 重播到本伺服器，重新啟動後可繼續執行。
+---
+
+`/v1/batches` 遵循 OpenAI Batch API。流程是：先透過[檔案 API](/docs/api/files) 上傳 `purpose=batch` 的 JSONL 請求檔，建立指向該檔案的批次，輪詢到批次結束，再下載輸出檔。Anthropic 的訊息批次使用同一套機制，文件寫在 [Messages](/docs/api/messages) 頁面。
+
+<Endpoint method="POST" path="/v1/batches" />
+<Endpoint method="GET" path="/v1/batches" />
+<Endpoint method="GET" path="/v1/batches/{batch_id}" />
+<Endpoint method="POST" path="/v1/batches/{batch_id}/cancel" />
+
+<Callout type="info">
+只有在設定了 `YUNSHU_AUTH_TOKEN` 時才會強制驗證。背景工作程序呼叫伺服器時會沿用該 token，所以批次的驗證、模型路由、前綴快取與工具行為都和一般請求相同。
+</Callout>
+
+## 批次如何執行
+
+- 單一背景工作程序依建立時間由舊到新處理排隊的批次，批次內的請求也是一次執行一筆。
+- 每一行都會當作一般的 HTTP `POST`，送到本伺服器上該批次指定的端點（使用建立批次時的同一個主機與連接埠）。一般的即時流量會與之交錯，GPU 工作由引擎序列化。
+- 每一行的 `stream` 都會被強制設為 `false`。
+- 批次狀態存放在檔案儲存區（預設 `~/.yunshu/files`，可用 `YUNSHU_FILES_DIR` 變更）。重新啟動後，工作程序會接手未完成的批次，並跳過已經有結果的行，因此批次會從中斷處繼續。
+- 完成期限固定為建立後 24 小時。超過期限仍未跑完時，批次以 `expired` 結束，剩下的行不會執行。
+
+## 建立批次
+
+| 參數 | 型別 | 必填 | 說明 | 狀態 |
+| --- | --- | --- | --- | --- |
+| `input_file_id` | string | 是 | 以 `purpose=batch` 上傳的檔案。 | 支援 |
+| `endpoint` | string | 是 | `/v1/chat/completions`、`/v1/completions`、`/v1/embeddings`、`/v1/responses` 之一。 | 支援 |
+| `completion_window` | string | 是 | 必須是 `24h`。 | 支援 |
+| `metadata` | object | 否 | 最多 16 個鍵，值只能是字串。 | 支援 |
+| `output_expires_after` | object | 否 | OpenAI 用來設定輸出檔到期的欄位。 | 接受但忽略 |
+
+### 輸入檔格式
+
+每行一個 JSON 物件（空白行會略過）：
+
+```json
+{"custom_id": "req-1", "method": "POST", "url": "/v1/chat/completions", "body": {"model": "local", "messages": [{"role": "user", "content": "Say hi"}], "max_tokens": 16}}
+{"custom_id": "req-2", "method": "POST", "url": "/v1/chat/completions", "body": {"model": "local", "messages": [{"role": "user", "content": "Say bye"}], "max_tokens": 16}}
+```
+
+建立批次時會檢查：
+
+- `custom_id` 必填、為字串，且在檔案內唯一。
+- `method` 必須是 `POST`。
+- `url` 必須等於批次的 `endpoint`。
+- `body` 必須是 JSON 物件，且不可設定 `stream: true`。
+- 最多 50,000 筆請求。
+- 檔案不可為空。
+
+只要有任何一行驗證失敗，批次仍會建立，但 `status` 是 `"failed"`，並附上 `errors` 清單（最多 20 筆，含 `code`、`message`、`param`、`line`），不會執行任何請求。
+
+## 批次物件
+
+```json
+{
+  "id": "batch_0a1b2c3d4e5f60718293a4b5",
+  "object": "batch",
+  "endpoint": "/v1/chat/completions",
+  "errors": null,
+  "input_file_id": "file_9f8e7d6c5b4a39281716f5e4",
+  "completion_window": "24h",
+  "status": "in_progress",
+  "output_file_id": null,
+  "error_file_id": null,
+  "created_at": 1767225600,
+  "in_progress_at": 1767225601,
+  "expires_at": 1767312000,
+  "finalizing_at": null,
+  "completed_at": null,
+  "failed_at": null,
+  "expired_at": null,
+  "cancelling_at": null,
+  "cancelled_at": null,
+  "request_counts": { "total": 2, "completed": 1, "failed": 0 },
+  "metadata": null
+}
+```
+
+狀態有：`validating`、`failed`、`in_progress`、`finalizing`、`completed`、`expired`、`cancelling`、`cancelled`。輸入驗證通過的批次在工作程序接手前會維持 `validating`。id 也接受 `batch-...` 的寫法，並對應到 `batch_...`。
+
+## 結果
+
+批次結束時，成功的行寫入輸出檔，非 2xx 的行寫入錯誤檔。兩者都是儲存區裡的一般檔案（purpose 分別為 `batch_output` 與 `batch_error`），而且只有在有內容時才會建立。用 `output_file_id` 與 `error_file_id` 搭配 `GET /v1/files/{file_id}/content` 取得。
+
+每一行結果：
+
+```json
+{"id": "batch_req_3c1f...", "custom_id": "req-1", "response": {"status_code": 200, "request_id": "req_...", "body": {"id": "chatcmpl-...", "object": "chat.completion"}}, "error": null}
+```
+
+如果請求根本送不出去（傳輸失敗），該行會是 `response: null`，並帶 `error: {"code": "request_failed", "message": ...}`，計為失敗。
+
+## 列表與取消
+
+`GET /v1/batches` 接受 `limit`（1 到 100，預設 20）與 `after`（批次 id），回傳 `{"object": "list", "data", "first_id", "last_id", "has_more"}`，由新到舊。
+
+`POST /v1/batches/{batch_id}/cancel` 會把 `validating` 或 `in_progress` 的批次改成 `cancelling`；工作程序會在下一行之前停止，批次以 `cancelled` 結束。對已在 `cancelling` 的批次再次取消會原樣回傳。其他狀態回傳 `409`，code 為 `invalid_state`。已經完成的行會保留結果。
+
+## 範例
+
+<Tabs items={["curl", "Python", "JavaScript"]}>
+<Tab value="curl">
+
+```bash
+curl http://localhost:8000/v1/files -F purpose=batch -F file=@requests.jsonl
+
+curl http://localhost:8000/v1/batches \
+  -H "Content-Type: application/json" \
+  -d '{"input_file_id": "file_9f8e7d6c5b4a39281716f5e4", "endpoint": "/v1/chat/completions", "completion_window": "24h"}'
+
+curl http://localhost:8000/v1/batches/batch_0a1b2c3d4e5f60718293a4b5
+curl http://localhost:8000/v1/files/file_1122334455667788990011aa/content
+```
+
+</Tab>
+<Tab value="Python">
+
+```python
+import time
+from openai import OpenAI
+
+client = OpenAI(base_url="http://localhost:8000/v1", api_key="not-needed")
+
+up = client.files.create(file=open("requests.jsonl", "rb"), purpose="batch")
+batch = client.batches.create(
+    input_file_id=up.id,
+    endpoint="/v1/chat/completions",
+    completion_window="24h",
+)
+
+while batch.status in ("validating", "in_progress", "finalizing", "cancelling"):
+    time.sleep(2)
+    batch = client.batches.retrieve(batch.id)
+
+if batch.output_file_id:
+    print(client.files.content(batch.output_file_id).text)
+```
+
+</Tab>
+<Tab value="JavaScript">
+
+```ts
+import OpenAI from "openai";
+import fs from "node:fs";
+
+const client = new OpenAI({ baseURL: "http://localhost:8000/v1", apiKey: "not-needed" });
+
+const up = await client.files.create({
+  file: fs.createReadStream("requests.jsonl"),
+  purpose: "batch",
+});
+let batch = await client.batches.create({
+  input_file_id: up.id,
+  endpoint: "/v1/chat/completions",
+  completion_window: "24h",
+});
+while (["validating", "in_progress", "finalizing", "cancelling"].includes(batch.status)) {
+  await new Promise((r) => setTimeout(r, 2000));
+  batch = await client.batches.retrieve(batch.id);
+}
+```
+
+</Tab>
+</Tabs>
+
+## 錯誤
+
+OpenAI 格式：`{"error": {"message", "type", "param", "code"}}`。
+
+| 狀態碼 | Code | 情況 |
+| --- | --- | --- |
+| `400` | `missing_required_parameter` | 缺少 `input_file_id`。 |
+| `400` | `invalid_value` | `endpoint` 不合法、`completion_window` 不是 `24h`、`metadata` 不合法、輸入檔的 purpose 不是 `batch`、輸入檔不存在。 |
+| `404` | `batch_not_found` | 批次 id 不存在。 |
+| `409` | `invalid_state` | 取消已結束的批次。 |
+
+## Anthropic 訊息批次
+
+Anthropic Message Batches 路由（`POST /v1/messages/batches` 等）共用同一個工作程序、儲存區與 24 小時期限，說明在 [Messages](/docs/api/messages) 頁面。差異在於：請求直接內嵌在 `requests` 陣列（含 `custom_id` 與 `params`），每批最多 100,000 筆，結果以 JSONL 從 `GET /v1/messages/batches/{batch_id}/results` 串流取得，已結束的批次可用 `DELETE /v1/messages/batches/{batch_id}` 刪除。
+
+## 支援狀況
+
+| 功能 | 狀態 |
+| --- | --- |
+| 建立、取得、列出、取消 | <Support status="supported">支援</Support> |
+| 端點 `/v1/chat/completions`、`/v1/completions`、`/v1/embeddings`、`/v1/responses` | <Support status="supported">支援</Support> |
+| 重新啟動後繼續 | <Support status="supported">未完成的批次會接續執行</Support> |
+| 行與行之間平行執行 | <Support status="unsupported">一次執行一行</Support> |
+| 串流的行 | <Support status="unsupported">建立時即拒絕</Support> |
+| `24h` 以外的完成期限 | <Support status="unsupported">被拒絕</Support> |
+| 其他端點（例如 `/v1/images/generations`） | <Support status="unsupported">被拒絕</Support> |
+| 刪除 OpenAI 批次 | <Support status="unsupported">沒有刪除路由</Support> |
+
+## 相關頁面
+
+- [檔案](/docs/api/files)：上傳輸入與下載輸出。
+- [Messages](/docs/api/messages)：Anthropic 批次路由。
+- [Chat Completions](/docs/api/chat-completions)、[Responses](/docs/api/responses) 與 [Embeddings](/docs/api/embeddings)：請求本文格式。

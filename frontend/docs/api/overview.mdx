@@ -1,0 +1,197 @@
+---
+title: API overview
+description: Base URLs, the dialects Yunshu serves, authentication, how the model field is resolved, error shapes, request ids and the route map for the whole API.
+---
+
+One Yunshu process serves several wire formats at once: the OpenAI API, the Anthropic Messages API, an Ollama-compatible layer, a JSON-RPC MCP endpoint and a set of vLLM-style utility routes (tokenize, score, rerank). All of them are thin layers over the same engine. This page covers what all of them share. The per-route details are on the pages linked in the [route map](#route-map).
+
+## Base URLs
+
+The server listens on port `8000` by default.
+
+| Client | Base URL | Notes |
+| --- | --- | --- |
+| OpenAI SDKs and any OpenAI-compatible tool | `http://localhost:8000/v1` | The SDK appends `/chat/completions`, `/embeddings` and so on. |
+| Anthropic SDKs | `http://localhost:8000` | The SDK appends `/v1/messages`. Do not add `/v1` yourself. |
+| Ollama clients | `http://localhost:8000` | Routes live under `/api/*`. |
+| vLLM-style tools (tokenize) | `http://localhost:8000` | `/tokenize` and `/detokenize` also exist without the `/v1` prefix. |
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="http://localhost:8000/v1", api_key="not-needed")
+```
+
+```python
+import anthropic
+
+client = anthropic.Anthropic(base_url="http://localhost:8000", api_key="not-needed")
+```
+
+## Authentication
+
+Authentication is optional and controlled by two settings.
+
+- `YUNSHU_AUTH_TOKEN` is unset (the default): inference routes (chat, completions, embeddings, tokenize and so on) are open. Operational routes such as `POST /v1/models/load` answer `401` because there is no way to authorize them.
+- `YUNSHU_AUTH_TOKEN` is set: every request except a short public list needs the token. The public paths are `/health`, `/health/live`, `/health/ready`, `/version`, `/docs`, `/openapi.json`, `/redoc`, `/`, `/console` and the static asset prefixes.
+- `YUNSHU_AUTH_DISABLED=true` turns authentication off entirely, operational routes included. Use it for local development only.
+
+Send the token either way; the server accepts both on every route, whatever the dialect:
+
+```bash
+curl http://localhost:8000/v1/models -H "Authorization: Bearer $YUNSHU_AUTH_TOKEN"
+curl http://localhost:8000/v1/models -H "x-api-key: $YUNSHU_AUTH_TOKEN"
+```
+
+If both headers are present the `Authorization: Bearer` value is used. The comparison is constant time. A missing token answers `401` with the message `Missing or invalid Authorization header`; a wrong token answers `401` with `Invalid or missing API key`. Both carry a `WWW-Authenticate: Bearer` header.
+
+<Callout type="info">
+When no token is configured the key your SDK sends is ignored, so any placeholder such as `not-needed` or `sk-local` works. Bind to localhost (the default) or set a token before exposing the server to a network.
+</Callout>
+
+## The `model` field
+
+What `model` means depends on how the server was started.
+
+| Mode | How it is started | Meaning of `model` |
+| --- | --- | --- |
+| Single-model | `YUNSHU_MODEL` set, or one model passed to `yunshu serve` | Advisory. Every generation route serves the one loaded model whatever name you send, and the name is echoed back in the response. `GET /v1/models/{id}` still returns `404` for an id the server does not list. |
+| Multi-model | `YUNSHU_MULTI_MODEL=1` with models under `YUNSHU_MODELS_DIR` | A selector. The name is resolved against the registry (aliases, case-insensitive match, and the part after the last `/`), the model is loaded on first use, and an unknown name answers `404`. |
+
+`GET /v1/models` lists the ids you can use; see [Models](/docs/api/models). Embedding, reranking and scoring models are separate checkpoints: in multi-model mode you name them in `model`, in single-model mode the one loaded model must itself be the embedder or reranker.
+
+Every generation route also checks the model's capability contract before running. A request that uses something the model does not have (an image part on a text-only model, tools on an embedding model, `logprobs` on a model that does not generate text) is a `400` that names the field. See [Models](/docs/api/models) for the contract.
+
+## Errors
+
+The error body follows the dialect of the route that failed, including errors raised by authentication, rate limiting and request validation before the route runs.
+
+OpenAI-shaped routes (everything except Anthropic, Ollama, MCP and Tavily):
+
+```json
+{
+  "error": {
+    "message": "Model 'foo' not found (hint: GET /v1/models lists the model ids this server can serve; pull one with `yunshu pull <repo>`)",
+    "type": "invalid_request_error",
+    "param": null,
+    "code": "model_not_found",
+    "x_yunshu": {
+      "hint": "GET /v1/models lists the model ids this server can serve; pull one with `yunshu pull <repo>`",
+      "request_id": "req_0f3a9c2d4b7e41a6b8c1d2e3"
+    }
+  }
+}
+```
+
+Anthropic routes (`/v1/messages`, `/messages`, and the `count_tokens` routes):
+
+```json
+{
+  "type": "error",
+  "error": { "type": "invalid_request_error", "message": "max_tokens: Field required" }
+}
+```
+
+| Status | OpenAI `type` / `code` | Anthropic `error.type` |
+| --- | --- | --- |
+| 400 | `invalid_request_error` / `validation_error` for schema failures, `bad_request` otherwise | `invalid_request_error` |
+| 401 | `authentication_error` / `invalid_api_key` | `authentication_error` |
+| 404 | `invalid_request_error` / `model_not_found` (an unknown route is `not_found`) | `not_found_error` |
+| 409 | `invalid_request_error` / `conflict` | `invalid_request_error` |
+| 413 | `invalid_request_error` / `request_too_large` | `request_too_large` |
+| 429 | `rate_limit_error` / `rate_limit_exceeded`, with `Retry-After` | `rate_limit_error` |
+| 500 | `server_error` / `internal_error` | `api_error` |
+| 503 | `server_error` / `service_unavailable`, with `Retry-After` | `overloaded_error` |
+
+Other dialects: the Ollama routes answer `{"error": "message"}`, the MCP endpoint answers a JSON-RPC 2.0 error object, and the Tavily routes answer `{"detail": {"error": "message"}}`.
+
+Details worth knowing:
+
+- Request-body validation failures are `400`, not `422`, on every dialect. `error.param` names the offending field.
+- A prompt that does not fit the model's context window is a `400` with `code: "context_length_exceeded"`.
+- The `x_yunshu.hint` is a one-line fix for common errors; the same text is appended to `message` as `(hint: ...)` because many SDKs show only the message.
+- A server that is full (`YUNSHU_QUEUE_LIMIT`) answers `429` with `Retry-After`; one short of memory answers `503`. The OpenAI and Anthropic SDKs retry both.
+- An error after a stream has started cannot change the HTTP status. The stream carries one final `data: {"error": ...}` event and then `data: [DONE]`.
+
+## Request ids and headers
+
+Every request gets an id. Send `X-Request-Id` (1 to 128 characters of `A-Z a-z 0-9 . _ : -`) to choose it, otherwise the server generates `req_...`. The id is echoed in the `X-Request-Id` response header, errors included, and appears in `error.x_yunshu.request_id` and `x_yunshu.request_id`. It identifies the request in the server log.
+
+Other headers the generation routes understand or return:
+
+| Header | Direction | Meaning |
+| --- | --- | --- |
+| `X-Request-Id` | both | Request id described above. |
+| `X-Yunshu-Deadline-Ms` | request | Wall-clock budget from arrival, queue wait included. Past it the generation is cancelled and the answer is a `504` (or one terminal error event on a stream). |
+| `X-Yunshu-Queue-Position`, `X-Yunshu-Queue-Est-Wait-Ms` | response | How busy the server was when the request arrived. |
+| `X-Yunshu-TTFT-Ms`, `X-Yunshu-Prefill-Tps`, `X-Yunshu-Decode-Tps`, `X-Yunshu-Cached-Tokens`, `X-Yunshu-Cache-Tier`, `X-Yunshu-Total-Ms` | response (non-streaming) | Compact copies of the numbers in `x_yunshu`. A header is omitted when the value is unknown. |
+| `X-Yunshu-Cancelled` | response | `true` when the answer was cut short by a cancel or a deadline. |
+| `X-Yunshu-Spec`, `X-Yunshu-Spec-Acceptance` | response | Speculative decoding mode and acceptance rate, when it ran. |
+| `Retry-After` | response | Seconds to wait on `429` and `503`. |
+
+A generation in progress can be cancelled by its request id; see [Operations](/docs/api/operations).
+
+## Yunshu extension fields
+
+Everything Yunshu adds is namespaced so the official SDKs keep working unchanged.
+
+- `x_yunshu` in the JSON body of a non-streaming chat, completions, Responses or Messages answer: queue wait, time to first token, prefill and decode speed, cached tokens and the cache tier, speculative decoding counters, and `cancelled`, `budget` or `context_policy` when they apply. Streaming answers carry the same object in the final usage chunk (OpenAI) or inside `usage` (Messages, Responses).
+- `error.x_yunshu` on OpenAI-shaped errors: `hint`, `request_id` and, for overload errors, the reason and queue depth.
+- Server-sent comment lines such as `: yunshu-progress {...}` while a request waits or prefills. SSE parsers ignore comments.
+- `yunshu` inside every model object from `GET /v1/models`.
+- Extra request fields (for example `top_n_sigma`, `spec_decode`, `thinking_budget`, `keep_alive`, `grammar`) on the generation routes.
+
+The fields and their meaning are listed in [Extensions](/docs/api/extensions).
+
+## Route map
+
+| Route | Page |
+| --- | --- |
+| `POST /v1/chat/completions`, `POST /v1/completions` | [Chat completions](/docs/api/chat-completions) |
+| `GET /v1/chat/completions`, `GET /v1/chat/completions/{id}`, `POST /v1/chat/completions/{id}`, `DELETE /v1/chat/completions/{id}`, `GET /v1/chat/completions/{id}/messages` | [Stored completions](/docs/api/stored-completions) |
+| `POST /v1/responses`, `GET /v1/responses/{id}`, `DELETE /v1/responses/{id}`, `POST /v1/responses/{id}/cancel`, `POST /v1/responses/input_tokens`, `POST /v1/responses/compact`, `WS /v1/responses` | [Responses](/docs/api/responses) |
+| `POST /v1/messages`, `POST /v1/messages/count_tokens` (also without `/v1`) | [Messages](/docs/api/messages) |
+| Server-side web search, web fetch and MCP connector tools | [Server tools](/docs/api/server-tools) |
+| `POST /v1/embeddings`, `POST /v1/pooling` | [Embeddings](/docs/api/embeddings) |
+| `POST /v1/rerank`, `POST /v1/score`, `POST /v1/classify` | [Rerank and scoring](/docs/api/rerank) |
+| `POST /v1/tokenize`, `POST /v1/detokenize`, `POST /v1/apply-template` (also without `/v1`) | [Tokenization](/docs/api/tokenization) |
+| `POST /v1/audio/transcriptions`, `POST /v1/audio/translations`, `POST /v1/audio/speech`, `POST /v1/audio/speech/stream`, `GET /v1/audio/voices` | [Audio](/docs/api/audio) |
+| `POST /v1/images/generations`, `POST /v1/images/edits`, `POST /v1/images/variations` | [Images](/docs/api/images) |
+| `GET /v1/models`, `GET /v1/models/{id}`, `POST /v1/models/load`, `POST /v1/models/unload/{id}` | [Models](/docs/api/models) |
+| `POST /v1/files`, `GET /v1/files`, `GET /v1/files/{id}`, `GET /v1/files/{id}/content`, `DELETE /v1/files/{id}` | [Files](/docs/api/files) |
+| `POST /v1/batches`, `GET /v1/batches`, `POST /v1/messages/batches` and related | [Batches](/docs/api/batches) |
+| `POST /v1/evals` and related | [Evals](/docs/api/evals) |
+| `WS /v1/realtime`, `POST /v1/realtime/client_secrets`, `POST /v1/realtime/calls` | [Realtime](/docs/api/realtime) |
+| `POST /api/chat`, `POST /api/generate`, `POST /api/embed`, `GET /api/tags` and related | [Ollama](/docs/api/ollama) |
+| `POST /v1/mcp`, `GET /v1/mcp/sse` | [MCP](/docs/api/mcp) |
+| `POST /v1/decisions`, `POST /v1/systemone` | [Decisions](/docs/api/decisions) |
+| `GET /v1/requests`, `DELETE /v1/requests/{id}`, `POST /v1/cancel`, `GET /v1/yunshu/status`, `GET /health`, `GET /metrics` | [Operations](/docs/api/operations) |
+
+## OpenAI and Anthropic features that are not served
+
+Yunshu is a local inference engine, so APIs that exist to run hosted services have no counterpart. A request to one of these routes answers `404`.
+
+<NotServed>
+
+| Not served | API | Reason |
+| --- | --- | --- |
+| `/v1/fine_tuning/jobs` | OpenAI | No training on this server. Use `mlx-lm` tooling to produce LoRA adapters and load them with `lora_adapter` where the engine supports it. |
+| `/v1/moderations` | OpenAI | No hosted moderation model. |
+| `/v1/assistants`, `/v1/threads`, `/v1/threads/{id}/runs` | OpenAI (legacy) | Superseded by the Responses API, which Yunshu serves. |
+| `/v1/vector_stores`, file search | OpenAI | No hosted retrieval store. Use `POST /v1/embeddings` with your own index. |
+| `/v1/uploads` | OpenAI | Multipart chunked uploads are not implemented. `POST /v1/files` accepts a single upload. |
+| `/v1/containers`, code interpreter | OpenAI | No hosted sandbox. |
+| `/v1/videos` (Sora) | OpenAI | No video generation endpoint. |
+| `/v1/organizations/*`, `/v1/skills` | Anthropic | Account and hosted-skill management does not exist locally. |
+| Code execution, computer use and memory tools | Anthropic and OpenAI | Hosted tools with no local meaning. Client-side function tools work. |
+
+</NotServed>
+
+The tools Yunshu does run inside the generation loop (web search, web fetch, MCP connector) are described under [Server tools](/docs/api/server-tools).
+
+## Related
+
+- [Chat completions](/docs/api/chat-completions)
+- [Models](/docs/api/models)
+- [Extensions](/docs/api/extensions)
+- [Configuration](/docs/guides/configuration)

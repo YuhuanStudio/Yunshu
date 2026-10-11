@@ -163,6 +163,16 @@ def serve(
         "--reload",
         help="Enable auto-reload (development mode).",
     ),
+    no_console: bool = typer.Option(
+        False,
+        "--no-console",
+        help="Do not start the console process (web console, docs, history) next to the engine.",
+    ),
+    console_port: int | None = typer.Option(
+        None,
+        "--console-port",
+        help="Port of the console process (default 8100; YUNSHU_CONSOLE_PORT).",
+    ),
     config: str | None = typer.Option(
         None,
         "--config",
@@ -209,6 +219,8 @@ def serve(
         ("YUNSHU_KEEP_ALIVE_TIMEOUT", keep_alive_timeout),
         ("YUNSHU_MAX_REQUEST_SIZE", max_request_size),
         ("YUNSHU_UDS", os.path.abspath(os.path.expanduser(uds)) if uds else None),
+        ("YUNSHU_CONSOLE", False if no_console else None),
+        ("YUNSHU_CONSOLE_PORT", console_port),
     ):
         if value is not None:
             overrides[key] = value
@@ -323,6 +335,11 @@ def serve(
     # Override os.environ for the child process
     os.environ.update(env)
 
+    # The console is its own light process: started next to the engine, never inside it.
+    # If it dies the engine is unaffected; the service runs it as a separate job instead.
+    if not uds and not settings.get("YUNSHU_UDS"):
+        _start_console_sibling(host, port)
+
     # Warn if reload=True with workers>1 (uvicorn ignores workers in reload mode)
     if reload and workers > 1:
         console.print(
@@ -380,6 +397,59 @@ def graceful_shutdown_timeout(drain_timeout: float) -> int:
     import math
 
     return max(0, math.ceil(float(drain_timeout)))
+
+
+def _start_console_sibling(host: str, port: int) -> None:
+    """Start ``yunshu console`` for this engine unless it is off or already running."""
+    if not settings.get("YUNSHU_CONSOLE"):
+        return
+    import atexit
+    import subprocess
+    import sys
+
+    from .console_cmd import console_port_busy
+
+    cport = int(settings.get("YUNSHU_CONSOLE_PORT") or 8100)
+    chost = settings.get("YUNSHU_CONSOLE_HOST") or host
+    shown = "127.0.0.1" if chost in ("0.0.0.0", "") else chost
+    if console_port_busy(chost, cport):
+        console.print(
+            f"[dim]A console is already running at http://{shown}:{cport}/console/ "
+            "(for example the service's); it will find this engine on its own.[/]"
+        )
+        return
+    engine = f"http://{'127.0.0.1' if host in ('0.0.0.0', '') else host}:{port}"
+    args = [
+        sys.executable,
+        "-m",
+        "yunshu_console",
+        "--engine",
+        engine,
+        "--host",
+        chost,
+        "--port",
+        str(cport),
+        "--log-level",
+        "warning",
+    ]
+    try:
+        child = subprocess.Popen(args, stdin=subprocess.DEVNULL)
+    except OSError as exc:
+        console.print(f"[yellow]Warning:[/] could not start the console process: {exc}")
+        return
+
+    def stop_child() -> None:
+        if child.poll() is None:
+            child.terminate()
+            try:
+                child.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                child.kill()
+
+    atexit.register(stop_child)
+    console.print(
+        f"[bold]Console[/] http://{shown}:{cport}/console/  (its own process; --no-console to skip)"
+    )
 
 
 def _check_bind_address(host: str, port: int) -> None:

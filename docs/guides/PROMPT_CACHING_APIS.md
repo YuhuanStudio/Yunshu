@@ -1,5 +1,7 @@
 # Prompt-caching APIs — the three vendor paradigms
 
+> The console's Docs section carries this guide in English, 繁體中文 and 简体中文 ([`frontend/docs/guides/prompt-caching.mdx`](../../frontend/docs/guides/prompt-caching.mdx)); this file is its GitHub-facing counterpart.
+
 There are three distinct ways the major API vendors expose prompt caching. Yunshu
 implements the first two over the serving path's prefix cache: mlx-vlm APC on the
 VLM runner, `KVPrefixCache` on the text fast path — see [KV_CACHE_MATRIX](KV_CACHE_MATRIX.md).

@@ -1,0 +1,414 @@
+---
+title: Responses
+description: OpenAI Responses API with stored responses, background mode, conversations, compaction, client tools and WebSocket mode.
+---
+
+Yunshu serves the OpenAI Responses API on `POST /v1/responses` and the routes around it: retrieve, delete, cancel, list input items, count input tokens, compact a conversation, and the Conversations API. A WebSocket mode is available on the same path. The official `openai` SDK works unchanged (`client.responses.create`, `.retrieve`, `.delete`, `.cancel`, `.input_items.list`, `.compact`, `.input_tokens.count`, `.connect`, `client.conversations.*`).
+
+Every request is translated to the same engine path as [Chat Completions](/docs/api/chat-completions), so sampling, constrained decoding, the prefix cache, vision input and tool calling behave the same. Web search and the `mcp` tool are executed by the server; see [Server tools](/docs/api/server-tools).
+
+<Endpoint method="POST" path="/v1/responses" />
+<Endpoint method="GET" path="/v1/responses/{response_id}" />
+<Endpoint method="DELETE" path="/v1/responses/{response_id}" />
+<Endpoint method="POST" path="/v1/responses/{response_id}/cancel" />
+<Endpoint method="GET" path="/v1/responses/{response_id}/input_items" />
+<Endpoint method="POST" path="/v1/responses/input_tokens" />
+<Endpoint method="POST" path="/v1/responses/compact" />
+<Endpoint method="WS" path="/v1/responses" />
+<Endpoint method="POST" path="/v1/conversations" />
+<Endpoint method="GET" path="/v1/conversations/{conversation_id}" />
+<Endpoint method="POST" path="/v1/conversations/{conversation_id}" />
+<Endpoint method="DELETE" path="/v1/conversations/{conversation_id}" />
+<Endpoint method="POST" path="/v1/conversations/{conversation_id}/items" />
+<Endpoint method="GET" path="/v1/conversations/{conversation_id}/items" />
+<Endpoint method="GET" path="/v1/conversations/{conversation_id}/items/{item_id}" />
+<Endpoint method="DELETE" path="/v1/conversations/{conversation_id}/items/{item_id}" />
+
+<Callout type="info">
+Authentication is only enforced when `YUNSHU_AUTH_TOKEN` is set. In single-model mode the `model` field is advisory: the loaded model answers under any name and the response echoes the name you sent. In multi-model mode an unknown model is a `404`.
+</Callout>
+
+## Request
+
+`POST /v1/responses` takes a JSON body.
+
+### Input and state
+
+| Parameter | Type | Required | Description | Status |
+| --- | --- | --- | --- | --- |
+| `model` | string | yes | Model id. Empty string is rejected. | supported |
+| `input` | string or array of items | yes | A plain string, or items: `message` (roles `user`, `assistant`, `system`, `developer`; `developer` is treated as `system`), `function_call`, `function_call_output`, `reasoning`, `custom_tool_call`, `custom_tool_call_output`, `local_shell_call`, `local_shell_call_output`, `tool_search_call`, `tool_search_output`, `computer_call`, `computer_call_output`, `web_search_call`, `mcp_call`, `mcp_list_tools`, `mcp_approval_request`, `mcp_approval_response`, `compaction`, `item_reference`. Content parts: `input_text`, `input_image`, `input_file`, `input_audio`. Empty strings and empty lists are rejected (except with `generate: false`). | supported |
+| `instructions` | string | no | System prompt for this request. Not carried over by `previous_response_id`. | supported |
+| `previous_response_id` | string | no | Continue from a stored response. The earlier turns are replayed into the prompt, following at most 16 links back. An id that is unknown, not stored or not yours is not an error: the chain simply stops there and the request runs without that history. | supported |
+| `conversation` | string or object | no | A conversation id (or `{"id": ...}`). The conversation items are prepended to `input`, and this turn is appended to the conversation when the response finishes. Cannot be combined with `previous_response_id` (`400`). | supported |
+| `context_management` | array | no | `[{"type": "compaction", "compact_threshold": N}]` compacts the input first when it exceeds N tokens. | supported |
+| `store` | boolean | no | Default `true`, as in the hosted API. A stored response can be retrieved, deleted, cancelled, chained and listed. | supported |
+| `background` | boolean | no | Return a `queued` response immediately and generate in the background. Ignored when `stream` is `true` (the request streams normally). Not supported together with `web_search` or `mcp` tools (`400`). | supported |
+| `truncation` | `auto` or `disabled` | no | `auto` drops the oldest non-system messages when the prompt would exceed the context window and reports what was removed in `x_yunshu.context_policy`. `disabled` (default) answers `400` instead. | supported |
+| `generate` | boolean | no | `false` prefills the prompt prefix into the cache and returns a response id with no output (WebSocket prewarm used by Codex). | supported |
+| `metadata` | object | no | At most 16 pairs; echoed on the response. | supported |
+| `include` | array of string | no | `reasoning.encrypted_content` adds an opaque `encrypted_content` to reasoning items; `web_search_call.action.sources` lists search sources. Other values are accepted and have no effect. | partial |
+| `max_tool_calls` | integer | no | Caps the server-tool calls of one response (web search and `mcp`). | supported |
+| `prompt_cache_key`, `prompt_cache_retention`, `prompt_cache_options`, `safety_identifier`, `service_tier`, `client_metadata`, `user` | various | no | Accepted and echoed where the Response object has the field. They do not change behavior; prefix caching is automatic. | accepted and ignored |
+
+### Generation
+
+| Parameter | Type | Required | Description | Status |
+| --- | --- | --- | --- | --- |
+| `max_output_tokens` | integer | no | 1 to 1048576. Defaults to the server setting `YUNSHU_DEFAULT_MAX_TOKENS`. `max_completion_tokens` is accepted as an alias. | supported |
+| `temperature` | number | no | 0 to 2, default 1.0. | supported |
+| `top_p` | number | no | 0 to 1, default 1.0. | supported |
+| `top_k`, `min_p`, `top_n_sigma`, `repetition_penalty`, `frequency_penalty`, `presence_penalty`, `xtc_probability`, `xtc_threshold` | number | no | Extra sampling controls, same ranges as Chat Completions. | extension |
+| `seed` | integer | no | Deterministic sampling seed. | supported |
+| `stop`, `stop_token_ids` | array | no | Up to 16 non-empty stop strings (a single string is accepted). | extension |
+| `min_tokens`, `ignore_eos`, `suppress_tokens`, `logit_bias`, `logprobs`, `top_logprobs`, `n` | various | no | Passed to the engine. `logit_bias` values must be finite and within -100 to 100. `n` greater than 1 is rejected with `stream: true`. | extension |
+| `reasoning` | object | no | `{"effort": "low\|medium\|high"}` maps to the template's reasoning effort. `summary` is not read. | partial |
+| `reasoning_effort`, `enable_thinking`, `thinking_budget` | various | no | Flat equivalents of `reasoning`. | extension |
+| `text` | object | no | `text.format` of type `json_schema` or `json_object` becomes constrained decoding; `text` type is the default. | supported |
+| `response_format`, `grammar` | object | no | Chat-style structured output and grammar constraints (`json`, `regex`, `choice`, `cfg`). | extension |
+| `stream` | boolean | no | Server-Sent Events. | supported |
+| `stream_options` | object | no | Accepted. Usage always arrives in the final event. | accepted and ignored |
+| `timeout`, `priority`, `lora_adapter`, `spec_decode` | various | no | Engine controls shared with the other routes. `lora_adapter` and custom `logits_processors` are rejected for vision-language models. | extension |
+
+### Tools
+
+| Parameter | Type | Required | Description | Status |
+| --- | --- | --- | --- | --- |
+| `tools` | array | no | See the tool types below. | partial |
+| `tool_choice` | string or object | no | `auto`, `none`, `required`, a named function (`{"type": "function", "name": "..."}`) or an `allowed_tools` object (folded into the tool list). Forced choices are checked before the stream starts. | supported |
+| `parallel_tool_calls` | boolean | no | Default `true`. | supported |
+
+Supported tool types:
+
+| `type` | Executed by | Status |
+| --- | --- | --- |
+| `function` | Your client. The model's call comes back as a `function_call` item. | supported |
+| `namespace` | Your client. Child tools are flattened for the model; the namespace is kept on the returned call. Duplicate names across namespaces are a `400`. | supported |
+| `custom` | Your client. Comes back as `custom_tool_call` with a plain-text `input`. Text format, and `grammar` formats with `syntax` `regex` or `lark`, are supported (constrained decoding). | supported |
+| `local_shell` | Your client. Comes back as `local_shell_call`. | supported |
+| `tool_search` | Your client, with `execution: "client"` only. `defer_loading` tools stay hidden until a `tool_search_output` loads them. Hosted tool search is a `400`. | partial |
+| `computer` | Your client. See below. | partial |
+| `web_search`, `web_search_preview` | The server. See [Server tools](/docs/api/server-tools). | supported |
+| `mcp` | The server connects to the MCP server you name. See [Server tools](/docs/api/server-tools). | partial |
+| `file_search`, `code_interpreter`, `image_generation` and other hosted tools | Not available. | not supported |
+
+Client tools (`custom`, `local_shell`, `tool_search`, `computer`) cannot be combined with `web_search` or `mcp` in one request (`400`).
+
+#### The computer tool
+
+`tools: [{"type": "computer"}]` is supported as a client-executed tool. The gateway turns it into a function whose arguments are an ordered `actions` array, and returns a `computer_call` item with `actions` (each action is one of `click`, `double_click`, `drag`, `move`, `scroll`, `keypress`, `type`, `wait`, `screenshot`). `pending_safety_checks` is always empty.
+
+Yunshu never executes a computer action. Your client performs the actions, takes a screenshot and sends it back as a `computer_call_output` item whose `output` is `{"type": "computer_screenshot", "image_url": "..."}` or `{"file_id": "..."}`; the model needs vision input to read it. A `computer_call_output` without a `computer_screenshot` is a `400`. The model is a local model: it is not trained for computer use the way hosted computer-use models are, so action quality depends on the model you load.
+
+## Examples
+
+<Tabs items={["curl", "Python", "JavaScript"]}>
+<Tab value="curl">
+
+```bash
+curl http://localhost:8000/v1/responses \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-local" \
+  -d '{
+    "model": "local",
+    "instructions": "Answer in one sentence.",
+    "input": "Why is the sky blue?",
+    "max_output_tokens": 200
+  }'
+```
+
+</Tab>
+<Tab value="Python">
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="http://localhost:8000/v1", api_key="sk-local")
+
+first = client.responses.create(
+    model="local",
+    input="My name is Mei. Remember it.",
+)
+second = client.responses.create(
+    model="local",
+    previous_response_id=first.id,
+    input="What is my name?",
+)
+print(second.output_text)
+```
+
+</Tab>
+<Tab value="JavaScript">
+
+```ts
+import OpenAI from "openai";
+
+const client = new OpenAI({ baseURL: "http://localhost:8000/v1", apiKey: "sk-local" });
+
+const stream = await client.responses.create({
+  model: "local",
+  input: "Write a haiku about autumn.",
+  stream: true,
+});
+for await (const event of stream) {
+  if (event.type === "response.output_text.delta") process.stdout.write(event.delta);
+}
+```
+
+</Tab>
+</Tabs>
+
+### Structured output
+
+```python
+resp = client.responses.create(
+    model="local",
+    input="Extract: Ada Lovelace, born 1815.",
+    text={
+        "format": {
+            "type": "json_schema",
+            "name": "person",
+            "strict": True,
+            "schema": {
+                "type": "object",
+                "properties": {"name": {"type": "string"}, "born": {"type": "integer"}},
+                "required": ["name", "born"],
+                "additionalProperties": False,
+            },
+        }
+    },
+)
+print(resp.output_text)
+```
+
+### Function tool loop
+
+```python
+tools = [{
+    "type": "function",
+    "name": "get_weather",
+    "description": "Current weather for a city",
+    "parameters": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]},
+}]
+r1 = client.responses.create(model="local", input="Weather in Taipei?", tools=tools)
+call = next(i for i in r1.output if i.type == "function_call")
+r2 = client.responses.create(
+    model="local",
+    previous_response_id=r1.id,
+    tools=tools,
+    input=[{"type": "function_call_output", "call_id": call.call_id, "output": '{"temp_c": 24}'}],
+)
+print(r2.output_text)
+```
+
+### Background mode
+
+```python
+job = client.responses.create(model="local", input="Write a long story.", background=True)
+print(job.status)  # queued
+done = client.responses.retrieve(job.id)       # poll until status leaves queued / in_progress
+client.responses.cancel(job.id)                # or cancel
+```
+
+A cancel that arrives while the response is still `queued` is honored before any generation runs. Background responses are generated without streaming; if a background generation fails, the stored status becomes `failed` with `error.code` `internal_error`.
+
+## Response
+
+```json
+{
+  "id": "resp-3f2a9c1d5b7e4a60c8d19e22",
+  "object": "response",
+  "created_at": 1760000000,
+  "completed_at": 1760000002,
+  "status": "completed",
+  "model": "local",
+  "output": [
+    {
+      "type": "message",
+      "id": "msg-0d4c7e9a1b2f3c4d5e6f7a8b",
+      "role": "assistant",
+      "status": "completed",
+      "content": [
+        { "type": "output_text", "text": "Sunlight scatters off air molecules, and blue scatters most.", "annotations": [] }
+      ]
+    }
+  ],
+  "usage": {
+    "input_tokens": 28,
+    "output_tokens": 14,
+    "total_tokens": 42,
+    "input_tokens_details": { "cached_tokens": 0, "cache_write_tokens": 0 },
+    "output_tokens_details": { "reasoning_tokens": 0 }
+  },
+  "instructions": "Answer in one sentence.",
+  "tool_choice": "auto",
+  "parallel_tool_calls": true,
+  "store": true,
+  "background": false,
+  "truncation": "disabled",
+  "previous_response_id": null,
+  "metadata": null
+}
+```
+
+The object also echoes the request configuration (`temperature`, `top_p`, `max_output_tokens`, `tools`, `text`, `reasoning`, `service_tier`, ...). When the model reasons, a `reasoning` item with a `summary` of type `summary_text` comes first in `output`. Tool calls appear as `function_call` items with `call_id`, `name` and `arguments`. A response cut short by the token limit has `status: "incomplete"` and `incomplete_details.reason`. Yunshu adds an `x_yunshu` object (timing, cache and speculative-decoding statistics, and `context_policy` when turns were dropped) described in [Extensions](/docs/api/extensions).
+
+### Retrieve, delete, cancel
+
+- `GET /v1/responses/{response_id}` returns the stored response, or `404` with code `response_not_found`.
+- `DELETE /v1/responses/{response_id}` returns `{"id": "...", "object": "response.deleted", "deleted": true}`.
+- `POST /v1/responses/{response_id}/cancel` stops a running generation. For a stored `queued` or `in_progress` response it stores and returns `status: "cancelled"`; for an already finished response it returns that response unchanged; for an unknown id it returns `404`.
+
+Stored responses live in the server process memory (the most recent 1024 are kept) and are lost on restart. A response is only visible to the caller that created it.
+
+### List input items
+
+`GET /v1/responses/{response_id}/input_items` returns this request's own input as Responses items (`message` with `input_text` or `input_image` parts, `function_call`, `function_call_output`). `instructions` and system or developer messages are not listed, and history reached through `previous_response_id` belongs to the earlier responses.
+
+| Query | Description |
+| --- | --- |
+| `limit` | 1 to 100, default 20. |
+| `order` | `desc` (default) or `asc`. |
+| `after`, `before` | Item ids as cursors. An unknown cursor is a `404` with code `item_not_found`. |
+
+The result is `{"object": "list", "data": [...], "first_id", "last_id", "has_more"}`.
+
+### Count input tokens
+
+`POST /v1/responses/input_tokens` accepts the same body as `POST /v1/responses` (`model` is still required) and returns:
+
+```json
+{ "object": "response.input_tokens", "input_tokens": 28 }
+```
+
+The prompt is built like generation (instructions, items, conversation, compaction items, the `previous_response_id` chain, tools) and rendered through the chat template, so the number equals `usage.input_tokens` of the same request. It does not count server-side tool definitions (`web_search`, `mcp`) and does not run an automatic compaction.
+
+### Compact
+
+`POST /v1/responses/compact` compresses a conversation. It takes `model`, and `input` (string or items) and/or `previous_response_id`, plus optional `instructions` and `tools`. All user and developer messages are kept verbatim; the rest is replaced by one opaque `compaction` item that wraps a model-written summary (up to `YUNSHU_COMPACT_MAX_TOKENS` tokens, default 2048). Long histories are summarized in several passes when they do not fit the context window.
+
+```json
+{
+  "id": "resp_9a8b7c6d5e4f3a2b1c0d9e8f",
+  "object": "response.compaction",
+  "created_at": 1760000000,
+  "output": [
+    { "type": "message", "role": "user", "content": [{ "type": "input_text", "text": "..." }] },
+    { "type": "compaction", "id": "cmp_0123456789abcdef01234567", "encrypted_content": "..." }
+  ],
+  "usage": { "input_tokens": 1200, "output_tokens": 180, "total_tokens": 1380 }
+}
+```
+
+Pass `output` back as `input` in the next request. The `encrypted_content` is a base64 envelope of the summary, not encryption; it only lets a client treat the item as opaque.
+
+## Conversations
+
+The Conversations API stores items server side so you can reuse them with `conversation` instead of resending history. Each conversation is a JSON file under `YUNSHU_CONVERSATIONS_DIR` (default `~/.yunshu/conversations`), so conversations survive restarts.
+
+| Route | Description |
+| --- | --- |
+| `POST /v1/conversations` | Body `{"items": [...], "metadata": {...}}`, both optional. At most 20 items per call and 16 metadata keys. Returns `{"id": "conv_...", "object": "conversation", "created_at", "metadata"}`. |
+| `GET /v1/conversations/{conversation_id}` | Retrieve. |
+| `POST /v1/conversations/{conversation_id}` | Replace `metadata` (required in the body). |
+| `DELETE /v1/conversations/{conversation_id}` | Returns `{"id", "object": "conversation.deleted", "deleted": true}`. |
+| `POST /v1/conversations/{conversation_id}/items` | Body `{"items": [...]}` (required), up to 20 per call. Returns a list. |
+| `GET /v1/conversations/{conversation_id}/items` | `limit` 1-100 (default 20), `order` `desc` (default) or `asc`, `after` cursor. |
+| `GET /v1/conversations/{conversation_id}/items/{item_id}` | Retrieve one item. |
+| `DELETE /v1/conversations/{conversation_id}/items/{item_id}` | Remove one item. |
+
+```python
+conv = client.conversations.create()
+client.responses.create(model="local", conversation=conv.id, input="I like green tea.")
+r = client.responses.create(model="local", conversation=conv.id, input="What do I like?")
+print(r.output_text)
+```
+
+Errors use the OpenAI shape with codes such as `conversation_not_found`, `item_not_found`, `invalid_json`, `missing_required_parameter` and `insufficient_storage` (`507`, disk full).
+
+## Streaming
+
+With `stream: true` the response is Server-Sent Events: each message has an `event:` line equal to the `type` of its JSON `data:` and an ascending `sequence_number`. The stream ends with `data: [DONE]`. Comment lines (`: keep-alive`) may appear while a long prompt is prefilled.
+
+Plain generation emits, in order:
+
+1. `response.created`, `response.in_progress`
+2. For reasoning: `response.output_item.added` (a `reasoning` item), `response.reasoning_summary_part.added`, `response.reasoning_summary_text.delta`, `response.reasoning_summary_text.done`, `response.reasoning_summary_part.done`, `response.output_item.done`
+3. For the message: `response.output_item.added`, `response.content_part.added`, repeated `response.output_text.delta`, `response.output_text.done`, `response.content_part.done`, `response.output_item.done`
+4. For each function call: `response.output_item.added` (already carrying `call_id`, `name`, `arguments`), `response.function_call_arguments.done`, `response.output_item.done`. A function call is delivered whole rather than as argument deltas.
+5. A terminal event: `response.completed`, `response.incomplete` (token limit, timeout or cancellation) or `response.failed`
+
+Other events, depending on the request:
+
+| Event | When |
+| --- | --- |
+| `response.custom_tool_call_input.delta`, `response.custom_tool_call_input.done` | A `custom` tool call. |
+| `response.output_text.annotation.added` | URL citations from web search. |
+| `response.web_search_call.in_progress`, `.searching`, `.completed` | Server-side web search. |
+| `response.mcp_list_tools.in_progress`, `.completed` | The `mcp` tool listed a server's tools. |
+| `response.mcp_call.in_progress`, `response.mcp_call_arguments.delta`, `response.mcp_call_arguments.done`, `response.mcp_call.completed`, `response.mcp_call.failed` | A server-side `mcp` call. |
+
+An error after the stream has started is a terminal `response.failed` event on the same stream (never a second HTTP response); an unknown model with `stream: true` is also reported as `response.failed` with code `model_not_found`.
+
+## WebSocket mode
+
+`WS /v1/responses` speaks OpenAI's Responses WebSocket mode (`client.responses.connect()` in the SDK). Origin and token checks run before the upgrade; with `YUNSHU_AUTH_TOKEN` set, send the token as `Authorization: Bearer ...`, `x-api-key` or a `token` query parameter.
+
+Client messages (JSON text frames):
+
+| Message | Description |
+| --- | --- |
+| `{"type": "response.create", ...body}` | The body fields are the same as `POST /v1/responses`; `stream` is forced on. Optional `stream_id` puts requests in a lane (first in, first out within a lane, parallel across lanes; at most 32 lanes) and optional `client_request_id` names the request. |
+| `{"type": "response.cancel", "id": "..."}` | Cancels by `client_request_id` or `stream_id`. Without an id it cancels every active request on the socket. An unknown id returns a `404` error message. |
+| `{"type": "ping"}` | Answered with `{"type": "pong"}`. |
+
+The server sends the same `response.*` events as the SSE stream, as one JSON object per frame. Failures that are not part of a response arrive as `{"type": "error", "status": 400, "error": {"message", "type"}}`: invalid JSON, an unknown message type, a duplicate active request id (`409`), or too many concurrent requests (`429`, default 16 per connection, setting `YUNSHU_WS_MAX_INFLIGHT`). Outbound events are buffered per connection (`YUNSHU_WS_SEND_QUEUE`); a slow reader pauses generation instead of growing the buffer. Closing the socket cancels its active requests.
+
+```python
+with client.responses.connect() as conn:
+    conn.response.create(model="local", input="Say hi.")
+    for event in conn:
+        if event.type == "response.output_text.delta":
+            print(event.delta, end="")
+        if event.type in ("response.completed", "response.failed"):
+            break
+```
+
+## Errors
+
+Errors use the OpenAI envelope `{"error": {"message", "type", "param", "code"}}`.
+
+| Status | Cause |
+| --- | --- |
+| `400` | Invalid body or field (empty `input`, `stop` over 16 items, `logit_bias` out of range, `metadata` over 16 pairs), prompt over the context window with `truncation` disabled (`context_length_exceeded`), a model that does not support a requested feature, `conversation` with `previous_response_id`, unsupported tool combinations, a malformed `computer_call_output`. |
+| `401` / `403` | Missing or wrong token; a key without permission for the model. |
+| `404` | Unknown model (multi-model mode), unknown response (`response_not_found`) or file reference. |
+| `413` | Prompt too large to prefill in memory. |
+| `424` | An `mcp` tool server could not be reached (`external_connector_error`). |
+| `502` | The model produced malformed arguments for a client tool, for example invalid `computer` actions. |
+| `503` | No model loaded. |
+
+## Support
+
+| Feature | Status |
+| --- | --- |
+| `POST /v1/responses`, stream and non-stream | <Support status="supported">supported</Support> |
+| Retrieve, delete, cancel, input items, input tokens, compact | <Support status="supported">supported</Support> |
+| `previous_response_id` chaining, `store` | <Support status="supported">supported (in memory, lost on restart)</Support> |
+| Background mode | <Support status="partial">partial (no streaming of background responses)</Support> |
+| Conversations API | <Support status="supported">supported (persistent)</Support> |
+| `text.format` json_schema and json_object | <Support status="supported">supported</Support> |
+| Function, namespace, custom, local_shell, client tool_search | <Support status="supported">supported</Support> |
+| `computer` tool | <Support status="partial">client-executed; the server never runs actions</Support> |
+| `web_search`, `mcp` | <Support status="supported">supported, server-side</Support> |
+| `reasoning.summary` generation, hosted `tool_search`, `file_search`, `code_interpreter`, `image_generation` | <Support status="unsupported">not supported</Support> |
+| Resuming a background stream | <Support status="unsupported">not supported</Support> |
+| WebSocket mode | <Support status="supported">supported</Support> |
+
+## Related
+
+- [Chat Completions](/docs/api/chat-completions)
+- [Server tools](/docs/api/server-tools)
+- [Structured output](/docs/guides/structured-output)
+- [Prompt caching](/docs/guides/prompt-caching)
+- [Extensions](/docs/api/extensions)

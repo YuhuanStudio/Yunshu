@@ -662,10 +662,19 @@ async def create(request: Request):
 @router.post("/pull")
 @_wrap
 async def pull(request: Request):
-    from ..ollama_models import pull_model
+    from ..ollama_models import check_pull, pull_events, pull_model
 
     body = await _json_body(request)
-    await pull_model(request, _model_name(body))
+    name = _model_name(body)
+    if body.get("stream", True):
+        check_pull(request, name)  # auth / mode / name errors are HTTP errors
+
+        async def events():
+            async for line in pull_events(request, name):
+                yield _ndjson(line)
+
+        return StreamingResponse(events(), media_type="application/x-ndjson")
+    await pull_model(request, name)
     return _status_success(body)
 
 

@@ -1,0 +1,115 @@
+---
+title: Verification
+description: How Yunshu checks that an optimization is lossless and not slower, using the yv verify tool, and how accuracy is compared against stock MLX.
+---
+
+Yunshu accepts an optimization only with evidence: the output must match (or stay within a stated tolerance), the path must demonstrably run, and the measured effect must be real. This page describes the tooling that produces that evidence and the rules it applies. It is aimed at contributors who change the decode, prefill, cache or scheduling paths.
+
+## What has to hold
+
+| Requirement | Meaning |
+|---|---|
+| **Token-identical** | A lossless change leaves greedy output unchanged: the candidate produces the same tokens as the base commit on the same checkpoint. For speculative decoding, output with drafting on must equal output with drafting off |
+| **Engaged** | A new path must be proven to run (a counter, a log line or a response field), not assumed. A comparison of two runs that both used the old path proves nothing |
+| **Cache-exact** | A request served from the prefix cache must equal the same request served cold, and must report `cached_tokens > 0` |
+| **No regression** | Decode speed, time to first token and memory must not get worse beyond measured noise |
+| **Fail closed** | No evidence means no pass. An incomplete run, a missing result or a job that ended early is a failure, never a skipped check |
+
+Lossy options (KV int8, weight quantization, anything that changes output quality) are user settings with a lossless default and are not adopted by a benchmark. See [Contributing](/docs/developers/contributing).
+
+## The `yv` tool
+
+`scripts/dev/yv` runs the standard verification of a candidate change and returns one verdict. Use it instead of a one-off measurement script. It builds a pinned tree for each arm, runs the stages in order, stops at the first failure, remembers what finished, and writes `verdict.json` and `verdict.md`.
+
+```bash
+scripts/dev/yv ab --base <base-sha> --cand <candidate-sha> --suite decode --label my-change
+scripts/dev/yv ab --base <base-sha> --cand <candidate-sha> --suite prefill \
+  --cand-env YUNSHU_VLM_DRAFT=mtp --label my-change-mtp --detach
+scripts/dev/yv status <run>      # state of a run
+scripts/dev/yv wait <run>        # block until the verdict
+scripts/dev/yv suites            # list suites
+scripts/dev/yv gate              # the release gate, with per-stage persistence
+```
+
+The exit code is `0` when every stage passed, `1` when a stage failed and `2` for an infrastructure error (the tool, git or a parameter mismatch). `yv ab` blocks until done; `--detach` returns at once.
+
+### Arms
+
+For a reviewable verdict, commit both arms and pass their full commit SHAs, so the base and the candidate are distinct, named states. `--base` and `--cand` also accept a checkout directory; uncommitted changes are hashed into the arm key so a resume never mixes two states of one tree. Both arms run the same interpreter. `--env K=V` applies to both arms, `--cand-env` to the candidate only and `--base-env` to the base. `--model` selects the checkpoint.
+
+### Stages
+
+Stages run in this order and stop at the first failure (unless the suite is marked to keep going).
+
+| Stage | What it does | Passes when |
+|---|---|---|
+| `preflight` | CPU only. Both trees import, and the unit tests related to the diff are run | imports work, tests pass |
+| `smoke` | Both arms serve and answer. `--engaged SPEC` proves the candidate path ran: `log:REGEX` (candidate server log), `field:KEY=REGEX` (an `x_yunshu` response field) or `spec:MODE` (the speculative mode in use) | it answers and every `--engaged` check matched |
+| `identity` | Greedy decode of fixed code and prose prompts at each suite context length (cold, warm, follow-up turn); a digest over text, reasoning, tool calls, finish reason and token count. With `--spec-off`, the candidate with drafting off must also equal the candidate with it on | every cell is equal |
+| `apc` | The warm request (served from the prefix cache) must equal the cold one and report `cached_tokens > 0`. `--no-apc-hit-required` is for paths without a prefix cache | hit equals miss |
+| `quality` | 200-item paired MMLU-Pro run, interleaving base and candidate | all items scored in both arms, and the difference in correct answers within one question |
+| `speed` | Decode tok/s, cold TTFT and follow-up TTFT over several reps, interleaved base, candidate, base, candidate. Medians, paired deltas and a noise estimate are reported | no median worsens by more than the larger of 2% and the measured noise (`--speed-tol`); a contended rep is rerun once |
+| `memory` | Peak footprint, footprint after idle, footprint held after a short follow-up | no metric exceeds the base by more than 3% plus 0.25 GiB |
+| `longqa` | Deterministic key-value needles placed in 32K, 64K and 128K prompts, one greedy question each | the correct count is within one of the base |
+| `conc` | Two concurrent requests, each a warm 32K prefix plus new text | TTFT and per-request decode within 10% of the base |
+
+`--spec-modes default,mtp,dflash` repeats the identity stage once per speculative method.
+
+### Suites
+
+| Suite | Stages and contexts |
+|---|---|
+| `decode` | preflight, smoke, identity, apc, speed at 1K and 8K |
+| `prefill` | adds quality, up to 32K |
+| `scheduler` | preflight, smoke, identity, apc, quality, speed at 1K and 8K |
+| `memory` | preflight, smoke, identity, memory |
+| `quick` | a fast iteration ladder; run `full` before merging |
+| `full` | every stage at 1K, 8K and 32K |
+| `long` | 32K, 64K and 128K cells with 2048-token replies: identity including drafting on and off, apc, speed, memory, longqa and conc; every stage runs even after a failure |
+| `longtrend` | one rep of the headline long cells, for comparing releases |
+| `tiny` | every stage on a small model, as a dry run of the tool |
+
+An ad-hoc ladder such as `--suite smoke,identity,speed` keeps the canonical stage order. Overrides: `--ctx`, `--reps`, `--mmlu-n`, `--mem-sizes`, `--mem-reps`, `--speed-tol` and `--spec-off`.
+
+### Resume and the verdict
+
+Every stage writes its evidence as it goes. A cell's evidence counts only when its job exited cleanly and the record ends with `complete: true`; a job that ended early leaves no evidence and the stage fails. Running the same command again resumes: finished cells are reused (the verdict marks them), and a failure costs only the cell in flight. Changing the base, candidate, env, suite or model under an existing label is refused, so use a new label.
+
+`verdict.json` has the label, both commits, the environment, the suite, the model, the overall result, the failed stage and per-stage status, reasons and numbers. `verdict.md` is a human summary.
+
+## Accuracy against stock MLX
+
+Equivalence to stock MLX or `mlx-vlm` on the same checkpoint is checked in three tiers, cheapest and most sensitive first. A 300-question benchmark carries roughly 13 questions of 95% noise, so it cannot see small numeric drift on its own.
+
+| Tier | Compares | Sensitive to |
+|---|---|---|
+| 1 | next-token distributions on fixed text (teacher forcing): KL divergence and top-1 agreement | very small numeric drift |
+| 2 | greedy continuations of 50 fixed prompts, up to 256 tokens | the first differing token |
+| 3 | paired downstream evals (GSM8K, IFEval, MMLU-Pro, needle retrieval, tool calls), paired by item with McNemar tests and confidence intervals | task-level differences |
+
+The reference is always stock `mlx-vlm` on the same checkpoint with none of Yunshu's kernels imported, and the run asserts this. A candidate is judged against what stock MLX does to itself: reruns are bit-exact, so any nonzero difference is a real path difference, but changing the batch size or the prefill chunk size already moves the mean KL divergence by about 1e-3 to 3e-3 and top-1 agreement to about 98.8%. That is the scale of a numerically legitimate implementation.
+
+Tier 1 pass criteria:
+
+- mean KL divergence at most twice the stock-versus-stock floor, and the median and the 99th percentile likewise;
+- top-1 agreement of at least 98.4%;
+- perplexity change of at most 0.5%;
+- hard gates: with speculative decoding, the multi-token verify block must be bit-identical to single-token decode, so drafting on equals drafting off.
+
+Tier 2: with drafting on and off the 50 prompts must be identical, and the match against the reference must not fall below the recorded baseline for the same checkpoint.
+
+Tier 3 is reported as a paired difference with an interval, and equivalent paths must agree within one question on a paired set of roughly 200 to 300 items. The full benchmarks are not rerun for every change.
+
+## Verifying agent and API behavior
+
+Behavior that clients depend on is checked with the official tools rather than assumed:
+
+- Unit tests (`tests/unit`) cover the request and response shapes, including a test that compares every request parameter of the installed `openai` and `anthropic` SDK types with the request models, so a new SDK field that is neither supported nor listed as ignored fails CI.
+- A route-coverage test fails when the application registers a route that no check or reviewed exemption names.
+- The release gate drives an installed build over HTTP with the official SDKs; see [Release gate](/docs/developers/release-gate).
+
+## Related
+
+- [Release gate](/docs/developers/release-gate)
+- [Contributing](/docs/developers/contributing)
+- [Architecture](/docs/developers/architecture)

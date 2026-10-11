@@ -51,7 +51,7 @@ def is_mtp_capable(model_path: str) -> bool:
     tc = cfg.get("text_config") or cfg
     if int(tc.get("mtp_num_hidden_layers", 0) or 0) <= 0:
         return False
-    if cfg.get("model_type") not in ("qwen3_5", "qwen3_6"):
+    if cfg.get("model_type") not in ("qwen3_5", "qwen3_6", "qwen4_exp"):
         return False
     # A config can advertise MTP even when the downloaded checkpoint omits
     # the head. Do not turn an unreadable/missing index into a positive match.
@@ -65,7 +65,7 @@ def is_mtp_capable(model_path: str) -> bool:
         shards = {
             shard
             for key, shard in wm.items()
-            if key.startswith("mtp.") or key.startswith("language_model.mtp.")
+            if key.startswith(("mtp.", "language_model.mtp.", "model.mtp."))
         }
         return bool(shards) and all(
             isinstance(shard, str) and (Path(model_path) / shard).is_file()

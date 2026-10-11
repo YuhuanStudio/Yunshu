@@ -1,0 +1,171 @@
+---
+title: MCP
+description: Yunshu as an MCP server (JSON-RPC over HTTP) that exposes generation, speech and image tools, plus routes that report the MCP client pool.
+---
+
+Yunshu speaks the Model Context Protocol in two directions.
+
+- As an **MCP server**, `POST /v1/mcp` accepts JSON-RPC 2.0 requests and exposes the local models as tools: text generation, speech synthesis and image generation. Any MCP-capable agent can use your local models this way.
+- As an **MCP client**, Yunshu can connect at startup to MCP tool servers you configure and report what it found on two read-only routes.
+
+Calling remote MCP servers from a Messages or Responses request (the `mcp_servers` and `mcp` tool features) is a separate feature, described in [Server tools](/docs/api/server-tools).
+
+<Endpoint method="POST" path="/v1/mcp" />
+<Endpoint method="GET" path="/v1/mcp/sse" />
+<Endpoint method="GET" path="/v1/mcp/tools" />
+<Endpoint method="GET" path="/v1/mcp/client/status" />
+<Endpoint method="GET" path="/v1/mcp/client/tools" />
+
+<Callout type="info">
+Authentication is only enforced when `YUNSHU_AUTH_TOKEN` is set; send `Authorization: Bearer <token>` or `x-api-key`. An authentication or permission failure on `POST /v1/mcp` is returned as a JSON-RPC error object (code `-32600`) with the HTTP status, so MCP clients can parse it. Keys that are restricted to certain models are also checked for the `generate`, `synthesize_speech` and `generate_image` tools.
+</Callout>
+
+## The MCP server
+
+### Protocol as implemented
+
+- Transport: one JSON-RPC 2.0 message per `POST /v1/mcp`, answered with a single `application/json` response. Batch arrays are not supported (an error object is returned). The server is stateless: it issues no session id and keeps no per-client state.
+- A message without an `id` is a notification and gets `204 No Content`. An explicit `id: null` is treated as a request.
+- `initialize` reports `protocolVersion` `2024-11-05`, `serverInfo` `{"name": "yunshu", "version": ...}` and the capabilities `tools`, `resources` and `prompts` (none of them with `listChanged` or `subscribe`).
+- Server-initiated messages (sampling, roots, logging, progress notifications, resource subscriptions) are not implemented.
+
+Methods:
+
+| Method | Behavior |
+| --- | --- |
+| `initialize` | Returns the capabilities above. |
+| `notifications/initialized` | Accepted. |
+| `ping` | Returns `{}`. |
+| `tools/list` | Lists the tools below, plus any tools registered in-process by embedding code. |
+| `tools/call` | Runs a tool. Unknown tool: error `-32601`. |
+| `resources/list` | One resource per registered model, `yunshu://models/<model id>`, MIME `application/json`. Empty in single-model mode. |
+| `resources/read` | Reads one of those URIs (model info as JSON text). Unknown URI: error `-32602`. |
+| `prompts/list`, `prompts/get` | Four built-in prompt templates: `summarize` (`text`), `translate` (`text`, `target_language`), `code_review` (`code`, `language`) and `explain` (`concept`). Missing required arguments: error `-32602`. |
+
+Other methods return error `-32601` (method not found). Invalid JSON is `-32700`, a malformed envelope is `-32600`, bad parameters are `-32602`, and an unexpected failure is `-32603` with the generic message `Internal error`.
+
+### Tools
+
+| Tool | Arguments | Result |
+| --- | --- | --- |
+| `generate` | `model` (required in the schema; if omitted the default model is used), `messages` (array of `{role, content}`, required), `max_tokens` (512), `temperature` (0.7), `top_p`, `top_k`, `min_p`, `repetition_penalty`, `frequency_penalty`, `presence_penalty`, `enable_thinking`, `seed`, `stop` | One `text` content item with the generated text. |
+| `synthesize_speech` | `text` (required), `voice` (default `alloy`) | A `text` item and an `audio` item (base64 WAV, `audio/wav`). Needs multi-model mode with a TTS model loaded. |
+| `generate_image` | `prompt` (required), `width`, `height` (default 512), `num_inference_steps` (default 4), `seed` | An `image` item (base64 PNG, `image/png`) and a `text` item. Needs multi-model mode with an image model loaded. |
+
+Results use the standard shape `{"content": [...], "isError": false}`. A failure while a tool runs (model not loaded, engine error) is a normal result with `isError: true` and the message in a `text` item; a missing required argument is a JSON-RPC error `-32602`. Text and base64 payloads are truncated at about 1 MB.
+
+`generate` has a smaller argument set than Chat Completions: no tools, no streaming and no structured output. Use [Chat Completions](/docs/api/chat-completions) for those.
+
+### Examples
+
+<Tabs items={["curl", "Python"]}>
+<Tab value="curl">
+
+```bash
+curl http://localhost:8000/v1/mcp \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+       "params": {"name": "generate",
+                  "arguments": {"model": "local", "max_tokens": 64,
+                                "messages": [{"role": "user", "content": "Say hello."}]}}}'
+```
+
+</Tab>
+<Tab value="Python">
+
+```python
+import httpx
+
+def rpc(method, params=None, id=1):
+    r = httpx.post(
+        "http://localhost:8000/v1/mcp",
+        headers={"Authorization": "Bearer sk-local"},
+        json={"jsonrpc": "2.0", "id": id, "method": method, "params": params or {}},
+        timeout=120,
+    )
+    return r.json()
+
+print(rpc("initialize")["result"]["serverInfo"])
+print([t["name"] for t in rpc("tools/list")["result"]["tools"]])
+out = rpc("tools/call", {"name": "generate", "arguments": {"messages": [{"role": "user", "content": "Hi"}]}})
+print(out["result"]["content"][0]["text"])
+```
+
+</Tab>
+</Tabs>
+
+Response to `tools/call`:
+
+```json
+{ "jsonrpc": "2.0", "id": 1, "result": { "content": [{ "type": "text", "text": "Hello!" }], "isError": false } }
+```
+
+### REST discovery
+
+`GET /v1/mcp/tools` returns the same tool list as `tools/list` without the JSON-RPC envelope: `{"tools": [{name, description, inputSchema}]}`.
+
+`GET /v1/mcp/sse` opens a Server-Sent Events stream that sends `event: endpoint` with `data: /v1/mcp` once, then `event: ping` roughly every 15 seconds until the client disconnects. It only announces where to POST: responses still come back in the body of each `POST /v1/mcp`, not on this stream. A legacy HTTP+SSE client that expects replies on the event stream will therefore not get them; use a client that accepts plain JSON responses to POST.
+
+### Connecting a client
+
+An MCP client that supports HTTP servers and accepts a JSON reply to each POST can use `http://localhost:8000/v1/mcp` as its server URL, with the bearer token as an `Authorization` header when authentication is on. For Claude Code that is the HTTP transport of `claude mcp add`; Codex and other agents have an equivalent setting in their MCP configuration. Because the server implements protocol version `2024-11-05` and the tools above, expect to use it for "call my local model as a tool", not as a replacement for the agent's own tools. Coding agents that run against Yunshu as their model endpoint (see [Agents](/docs/guides/agents)) do not need this server: they connect to their own MCP servers themselves, and the tools reach the model as ordinary function tools.
+
+## The MCP client pool
+
+At startup Yunshu can connect to MCP tool servers, from a file (`YUNSHU_MCP_CONFIG`) or from a JSON array in `YUNSHU_MCP_SERVERS`. The file holds either `{"mcpServers": {"<id>": {...}}}` or `{"servers": [...]}`. Each entry:
+
+| Key | Description |
+| --- | --- |
+| `id` / `name` | Server id (the key, when `mcpServers` is an object). |
+| `transport` | `stdio` (default), `sse` or `streamable_http`. |
+| `command`, `args` | The process to start for `stdio`. |
+| `url`, `headers` | The endpoint and headers for `sse` and `streamable_http`. |
+| `enabled` | `true` by default. |
+
+Servers are connected once at startup (a restart is needed after changing the configuration), and servers that fail to connect are skipped. When a non-streaming Chat Completions response contains a tool call whose name matches a pooled tool, Yunshu executes it and adds the outputs to the response body as `mcp_tool_results` (a list of `{tool_call_id, output}`); the results are not fed back to the model automatically, and the model is only offered a tool if the request declares it. Tool calls that match no pooled tool are returned to your client as usual.
+
+### Status and tools
+
+`GET /v1/mcp/client/status`:
+
+```json
+{
+  "enabled": true,
+  "connected_servers": 1,
+  "total_tools": 3,
+  "servers": { "files": { "connected": true, "tools": 3 } }
+}
+```
+
+With no pool configured it returns `{"enabled": false, "connected_servers": 0, "total_tools": 0}`.
+
+`GET /v1/mcp/client/tools` returns `{"tools": [{name, description, server_id, input_schema}], "openai_format": [{type: "function", function: {name, description, parameters}}]}`; with no pool both lists are empty. The `openai_format` list can be passed directly as `tools` in a Chat Completions request.
+
+## Errors
+
+| Case | Result |
+| --- | --- |
+| Invalid JSON | HTTP 200, JSON-RPC error `-32700`. |
+| Not a JSON object, bad envelope, wrong `jsonrpc` | JSON-RPC error `-32600`. |
+| Unknown method or tool | JSON-RPC error `-32601`. |
+| Missing or invalid parameters | JSON-RPC error `-32602`. |
+| Unexpected failure | JSON-RPC error `-32603`, message `Internal error`. |
+| Authentication or permission failure | JSON-RPC error `-32600` with HTTP `401` or `403`. |
+| Tool runs but fails | A result with `isError: true`. |
+
+## Support
+
+| Feature | Status |
+| --- | --- |
+| `POST /v1/mcp` with `initialize`, tools, resources, prompts, `ping` | <Support status="supported">supported</Support> |
+| `generate`, `synthesize_speech`, `generate_image` tools | <Support status="supported">supported (the last two need a loaded TTS or image model)</Support> |
+| Sessions, JSON-RPC batches, server-to-client requests, progress, subscriptions | <Support status="unsupported">not supported</Support> |
+| Replies on the legacy SSE stream | <Support status="unsupported">not supported (replies are in the POST body)</Support> |
+| MCP client pool (stdio, SSE, streamable HTTP), status routes | <Support status="partial">configured at startup; results are reported, not fed back to the model</Support> |
+
+## Related
+
+- [Server tools](/docs/api/server-tools)
+- [Agents](/docs/guides/agents)
+- [Chat Completions](/docs/api/chat-completions)
+- [Configuration](/docs/guides/configuration)

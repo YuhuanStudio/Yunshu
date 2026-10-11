@@ -1,0 +1,267 @@
+---
+title: 音訊
+description: OpenAI 風格的語音轉文字、翻譯與文字轉語音端點，以及本機自訂語音，由 mlx-audio 模型提供。
+---
+
+音訊路由遵循 OpenAI 的 `/v1/audio/*` 規格。轉錄與翻譯接收 multipart 上傳，回傳 JSON 或字幕文字；語音合成接收 JSON，回傳編碼後的音訊，或是以 Server-Sent Events 串流傳送的原始 PCM 區塊。Yunshu 另外提供本機自訂語音（同意錄音加語音登錄）。
+
+音訊模型來自選用的 `audio` extra（`pip install "yunshu[audio]"`，底層為 `mlx-audio`）。你指定的模型必須是已載入、且類型正確的音訊模型（轉錄用 ASR，語音合成用 TTS），否則伺服器回傳 `404`，訊息會指出模態不符。
+
+<Endpoint method="POST" path="/v1/audio/transcriptions" />
+<Endpoint method="POST" path="/v1/audio/translations" />
+<Endpoint method="POST" path="/v1/audio/speech" />
+<Endpoint method="POST" path="/v1/audio/speech/stream" />
+<Endpoint method="GET" path="/v1/audio/voices" />
+<Endpoint method="POST" path="/v1/audio/voices" />
+<Endpoint method="POST" path="/v1/audio/voice_consents" />
+
+<Callout type="info">
+只有在設定了 `YUNSHU_AUTH_TOKEN` 時才會強制驗證。設定後請送出 `Authorization: Bearer <token>`（或 `x-api-key`）。未設定 token 時，這類推論路由對綁定的位址是開放的。
+</Callout>
+
+## 模型選擇
+
+- 單模型模式（`yunshu serve` 只載入一個模型）會使用所服務的模型，`model` 欄位僅供參考。
+- 多模型模式下，模型必須已經載入，否則請求會得到 `503`，訊息提示使用 `POST /v1/models/load`。設定 `YUNSHU_ALLOW_AUTO_LOAD=1` 後，音訊請求可以按需載入模型。
+- 載入多個音訊引擎時，會使用 id 與 `model` 相符（不分大小寫）的引擎。
+
+被辨識為 ASR 的模型系列有 `whisper`、`qwen3_asr`、`parakeet`、`qwen2_audio`；TTS 系列有 `qwen3_tts`、`kokoro`、`chatterbox`（以及名稱含 `tts` 者）。個別 checkpoint 能否運作取決於安裝的 `mlx-audio`，請參考[模型](/docs/getting-started/models)。
+
+## 轉錄
+
+`POST /v1/audio/transcriptions` 使用 `multipart/form-data`。
+
+| 參數 | 型別 | 必填 | 說明 | 狀態 |
+| --- | --- | --- | --- | --- |
+| `file` | file | 是 | 音訊或影片上傳，最大 25 MB。音訊：`.wav .mp3 .ogg .flac .m4a .webm .aac`。影片：`.mp4 .mkv .avi .mov .wmv .ts .mts`（以 `ffmpeg` 擷取音軌）。 | 支援 |
+| `model` | string | 是 | ASR 模型 id。空字串會回傳 `400`。 | 支援 |
+| `language` | string | 否 | 傳給模型的語言提示。 | 支援 |
+| `response_format` | string | 否 | `json`（預設）、`text`、`srt`、`vtt`、`verbose_json`。其他值回傳 `400`。 | 支援 |
+| `prompt` | string | 否 | 傳給模型的提示文字。 | 支援 |
+| `temperature` | number | 否 | 0 到 1。省略時由模型使用自己的預設值。 | 支援 |
+| `timestamp_granularities` | list of string | 否 | 傳入 `word` 可要求逐字時間戳。同時接受 `timestamp_granularities` 與 SDK 使用的 `timestamp_granularities[]`。 | 支援 |
+
+### 回應格式
+
+| `response_format` | Content-Type | 內容 |
+| --- | --- | --- |
+| `json` | `application/json` | `{"text", "language"}`；模型有產生時另含 `segments` 與 `duration` |
+| `verbose_json` | `application/json` | `text`、`language`、`task: "transcribe"`、`duration`、`segments`（欄位會補齊成 OpenAI 的 segment 結構，模型沒給的欄位用中性預設值），可用時另含 `words` |
+| `text` | `text/plain` | 純文字逐字稿 |
+| `srt` | `text/plain` | 由 segments 產生的 SubRip 字幕 |
+| `vtt` | `text/vtt` | 由 segments 產生的 WebVTT 字幕 |
+
+`srt` 與 `vtt` 需要 segment 時間戳。模型若沒有回傳 segments，字幕內容會是空的。
+
+## 翻譯
+
+`POST /v1/audio/translations` 把語音解碼成英文文字。接受 `file`、`model`、`response_format`（同樣五種值）、`prompt` 與 `temperature`，沒有 `language` 欄位。
+
+翻譯是 Whisper 的能力。若已載入的模型路徑與請求的 id 都不含 `whisper`，伺服器回傳 `501`：
+
+```json
+{
+  "error": {
+    "message": "The loaded ASR model does not support translation (Whisper-only). Load a Whisper model for /v1/audio/translations, or use /v1/audio/transcriptions followed by an LLM translation step.",
+    "type": "server_error",
+    "param": null,
+    "code": null
+  }
+}
+```
+
+`json` 回傳 `{"text": ...}`。`verbose_json` 另含 `task: "translate"`、`language: "english"`、`duration` 與 `segments`。`text`、`srt`、`vtt` 回傳純文字內容（這裡三者都是 `text/plain`）。
+
+## 語音合成
+
+`POST /v1/audio/speech` 接受 JSON 本文（或欄位名稱相同的 `multipart/form-data`），回傳音訊位元組，並帶有 `Content-Disposition: attachment; filename=speech.<ext>` 標頭。
+
+| 參數 | 型別 | 必填 | 說明 | 狀態 |
+| --- | --- | --- | --- | --- |
+| `model` | string | 是 | TTS 模型 id。 | 支援 |
+| `input` | string | 是 | 要朗讀的文字。不可為空，最多 32768 個字元。 | 支援 |
+| `voice` | string 或 object | 否 | 語音名稱（預設 `alloy`），或以 `POST /v1/audio/voices` 登錄的自訂語音 `{"id": "voice_..."}`。內建名稱以 `GET /v1/audio/voices` 為準；備用清單為 `alloy`、`chelsie`、`ethan`、`aiden`。 | 支援 |
+| `response_format` | string | 否 | `mp3`、`opus`、`aac`、`flac`、`wav`、`pcm`。伺服器預設為 `wav`；官方 OpenAI SDK 除非你覆寫，否則會送出 `mp3`。可用 `format` 作為別名。 | 支援 |
+| `speed` | number | 否 | 0.25 到 4.0，預設 1.0。 | 支援 |
+| `temperature` | number | 否 | 0 到 2。 | 支援 |
+| `instruct` | string | 否 | 給 VoiceDesign 類模型的自由描述。省略時會依語音名稱產生簡短描述。 | 擴充 |
+| `top_k` | integer | 否 | 預設 50。 | 擴充 |
+| `top_p` | number | 否 | 0 到 1，預設 0.95。 | 擴充 |
+| `repetition_penalty` | number | 否 | 0 到 2，預設 1.0。 | 擴充 |
+| `max_tokens` | integer | 否 | 1 到 32768，預設 4096。 | 擴充 |
+| `ref_audio` | string | 否 | 聲音複製用的本機參考錄音路徑。URI scheme 與 `..` 片段會被拒絕；絕對路徑需要 `YUNSHU_ALLOW_LOCAL_FILES=1`。不能與自訂 `voice` 同時使用。 | 擴充 |
+| `ref_text` | string | 否 | 參考錄音的逐字稿。 | 擴充 |
+| `language` | string | 否 | 多語系模型使用的語言代碼。 | 擴充 |
+| `seed` | integer | 否 | 隨機種子。 | 擴充 |
+| `segment_size` | integer | 否 | 50 到 2000，預設 300。只用於串流路由。 | 擴充 |
+| `instructions`、`stream_format` | | 否 | 不在結構內的 OpenAI 欄位，會被忽略。 | 接受但忽略 |
+
+### 輸出格式與 ffmpeg 後備
+
+引擎產生的是 WAV，其他格式由 `ffmpeg` 轉碼：
+
+| `response_format` | Content-Type | 備註 |
+| --- | --- | --- |
+| `wav` | `audio/wav` | 不轉碼。 |
+| `pcm` | `audio/L16; rate=<取樣率>; channels=<n>` | 去掉 WAV 標頭的原始 16-bit little-endian 取樣，由 Python 處理，不需要 `ffmpeg`。 |
+| `mp3` | `audio/mpeg` | 需要 `ffmpeg`。 |
+| `opus` | `audio/ogg` | Ogg 封裝的 Opus；需要含 `libopus` 的 `ffmpeg`。 |
+| `aac` | `audio/aac` | ADTS 串流；需要 `ffmpeg`。 |
+| `flac` | `audio/flac` | 需要 `ffmpeg`。 |
+
+若 `PATH` 中沒有 `ffmpeg`（或轉碼失敗），伺服器不會替位元組貼上錯誤的標籤，而是回傳 `audio/wav` 的 WAV 音訊，並加上回應標頭 `X-Yunshu-Audio-Format-Fallback: wav`，檔名為 `.wav`。若你依賴壓縮格式，請檢查這個標頭。安裝 `ffmpeg`（例如 `brew install ffmpeg`）即可避免後備。影片轉錄同樣依賴 `ffmpeg`，沒有時請求會失敗並回傳 `415`。
+
+## 語音串流
+
+`POST /v1/audio/speech/stream` 使用相同的 JSON 本文，回應為 `text/event-stream`。回應標頭包含 `X-Audio-Format: pcm-s16le` 與 `X-Sample-Rate: <取樣率>`。串流時沒有壓縮格式：區塊一律是原始 16-bit PCM，`response_format` 只會被驗證，不會有其他作用。
+
+過長的輸入會依 `segment_size` 個字元切成多段，依序合成。事件順序如下：
+
+| 事件 `type` | 欄位 | 時機 |
+| --- | --- | --- |
+| `header` | `wav_header`（base64）、`sample_rate` | 第一個事件。WAV 標頭宣告長度未知。 |
+| `audio` | `audio`（base64 PCM16）、`text`、`segment` | 每個音訊區塊一筆。 |
+| `done` | 無 | 最後一段之後。 |
+| `cancelled` | 無 | 請求被取消，例如透過 `POST /v1/cancel`。 |
+| `error` | `error.message`、`error.type` | 合成中途失敗。 |
+
+`done` 或 `error` 之後，串流以 `data: [DONE]` 結束。`cancelled` 事件會直接結束串流，不會再送 `[DONE]`。
+
+## 自訂語音
+
+自訂語音只存在本機。錄音存放在有上限的 Files 儲存區，因此 Files 的配額與到期規則同樣適用，請見[檔案](/docs/api/files)。登錄流程會保存一份同意錄音，但不會驗證說話者身分。
+
+1. `POST /v1/audio/voice_consents` 建立同意記錄。
+2. `POST /v1/audio/voices` 建立引用該同意記錄的語音。
+3. 在語音合成請求中使用 `"voice": {"id": "voice_..."}`。
+
+`POST /v1/audio/voice_consents` 使用 `multipart/form-data`：
+
+| 參數 | 型別 | 必填 | 說明 |
+| --- | --- | --- | --- |
+| `name` | string | 是 | 1 到 256 個字元。 |
+| `language` | string | 是 | 最多 64 個字元。 |
+| `recording` | file | 是 | 音訊，最大 10 MiB，解碼後最長 60 秒。MIME 類型須為 `audio/mpeg`、`audio/wav`、`audio/x-wav`、`audio/ogg`、`audio/aac`、`audio/flac`、`audio/webm`、`audio/mp4` 之一。 |
+
+回傳 `{"object": "audio.voice_consent", "id": "cons_...", "name", "language", "created_at"}`。
+
+`POST /v1/audio/voices` 使用 `multipart/form-data`：
+
+| 參數 | 型別 | 必填 | 說明 |
+| --- | --- | --- | --- |
+| `name` | string | 是 | 1 到 256 個字元。 |
+| `consent` | string | 是 | 上一步取得的 `cons_...` id。 |
+| `audio_sample` | file | 是 | 限制與上面的 `recording` 相同。 |
+| `type` | string | 否 | 只支援 `audio_sample`，其他值回傳 `400`（不支援以提示詞設計的語音）。 |
+| `ref_text` | string | 否 | 樣本的逐字稿，最多 32768 個字元。 |
+
+回傳 `{"object": "audio.voice", "id": "voice_...", "name", "type": "audio_sample", "created_at"}`。登錄時會用 `soundfile`（包含在 audio extra 中）解碼樣本；無法解碼的樣本回傳 `400`，缺少相依套件則回傳 `503`。
+
+使用自訂語音需要支援參考音訊的 TTS 模型，否則語音合成請求會回傳 `400`。Qwen3-TTS 必須是 Base 模型，且需要逐字稿（登錄時的 `ref_text` 或語音合成請求中的 `ref_text`）；CustomVoice 與 VoiceDesign 變體會被拒絕。
+
+`GET /v1/audio/voices` 回傳 `{"object": "list", "data": [{"id": "alloy", "object": "voice"}, ...]}`，先列出已載入 TTS 模型的內建名稱，再接上已登錄的自訂語音（完整語音物件）。
+
+## 範例
+
+<Tabs items={["curl", "Python", "JavaScript"]}>
+<Tab value="curl">
+
+```bash
+# Transcribe
+curl http://localhost:8000/v1/audio/transcriptions \
+  -F file=@meeting.wav \
+  -F model=local \
+  -F response_format=verbose_json \
+  -F "timestamp_granularities[]=word"
+
+# Speak (WAV, no ffmpeg needed)
+curl http://localhost:8000/v1/audio/speech \
+  -H "Content-Type: application/json" \
+  -d '{"model": "local", "input": "Hello from Yunshu.", "voice": "alloy", "response_format": "wav"}' \
+  -o hello.wav
+```
+
+</Tab>
+<Tab value="Python">
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="http://localhost:8000/v1", api_key="not-needed")
+
+with open("meeting.wav", "rb") as f:
+    result = client.audio.transcriptions.create(
+        model="local", file=f, response_format="verbose_json"
+    )
+print(result.text)
+
+speech = client.audio.speech.create(
+    model="local", voice="alloy", input="Hello from Yunshu.", response_format="wav"
+)
+speech.write_to_file("hello.wav")
+```
+
+</Tab>
+<Tab value="JavaScript">
+
+```ts
+import OpenAI from "openai";
+import fs from "node:fs";
+
+const client = new OpenAI({ baseURL: "http://localhost:8000/v1", apiKey: "not-needed" });
+
+const result = await client.audio.transcriptions.create({
+  model: "local",
+  file: fs.createReadStream("meeting.wav"),
+});
+console.log(result.text);
+
+const speech = await client.audio.speech.create({
+  model: "local",
+  voice: "alloy",
+  input: "Hello from Yunshu.",
+  response_format: "wav",
+});
+fs.writeFileSync("hello.wav", Buffer.from(await speech.arrayBuffer()));
+```
+
+</Tab>
+</Tabs>
+
+## 錯誤
+
+錯誤使用 OpenAI 的格式 `{"error": {"message", "type", "param", "code"}}`。
+
+| 狀態碼 | 情況 |
+| --- | --- |
+| `400` | `response_format` 不合法、`model` 或 `input` 為空、數值超出範圍、`voice` 物件不合法、上傳內容不是可解碼的音訊、自訂語音或同意記錄有誤。 |
+| `404` | 找不到符合 `model` 且模態正確的已載入模型。 |
+| `413` | 上傳超過 25 MB（轉錄、翻譯），或錄音超過 10 MiB（語音登錄）。 |
+| `415` | 上傳了影片，但缺少 `ffmpeg` 或無法擷取音軌。 |
+| `501` | 在非 Whisper 的 ASR 模型上要求翻譯。 |
+| `503` | 多模型模式下模型未載入，或語音登錄缺少 `soundfile`。 |
+| `507` | GPU 記憶體不足。 |
+| `500` | 轉錄、翻譯或合成失敗。 |
+
+回應開始後才發生的串流失敗，會以 `error` 事件送出，而不是 HTTP 狀態碼。
+
+## 支援狀況
+
+| 功能 | 狀態 |
+| --- | --- |
+| 轉錄，`json` / `text` / `srt` / `vtt` / `verbose_json` | <Support status="supported">支援</Support> |
+| 逐字時間戳 | <Support status="partial">ASR 模型有產生時才有</Support> |
+| 翻譯成英文 | <Support status="partial">僅 Whisper 模型；其他回傳 501</Support> |
+| 語音合成 `wav` 與 `pcm` | <Support status="supported">支援</Support> |
+| 語音合成 `mp3`、`opus`、`aac`、`flac` | <Support status="partial">需要 ffmpeg，否則回傳帶後備標頭的 WAV</Support> |
+| 串流時的壓縮音訊 | <Support status="unsupported">僅原始 PCM16</Support> |
+| 自訂語音 | <Support status="partial">需要支援參考音訊的 TTS 模型</Support> |
+| 提示詞設計語音（`type` 非 `audio_sample`） | <Support status="unsupported">回傳 400</Support> |
+| `diarized_json`、`gpt-4o-transcribe` 串流事件 | <Support status="unsupported">尚未支援</Support> |
+
+## 相關頁面
+
+- [Realtime](/docs/api/realtime)：透過 WebSocket 進行語音對話。
+- [擴充](/docs/api/extensions)：`POST /v1/omni/speech/stream`，原生語音對語音。
+- [檔案](/docs/api/files)：存放已登錄語音的儲存區。
+- [模型](/docs/getting-started/models)：選擇與載入音訊模型。

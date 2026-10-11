@@ -1,0 +1,306 @@
+---
+title: 评测
+description: 以本地保存实现的 OpenAI Evals API：定义评分器、对 JSONL 或已保存的 completion 运行评测，并读取逐笔结果。
+---
+
+`/v1/evals` 路由遵循 OpenAI Evals API。一个 eval 描述数据结构与一组评分器（`testing_criteria`）；run 则把每一条数据交给这些评分器，必要时先让模型采样，并为每条数据记录一个 output item，以及通过 / 失败的统计。所有内容都以 JSON 存放在 `~/.yunshu/evals`（可用 `YUNSHU_EVALS_DIR` 变更）。
+
+run 在服务器进程内于背景运行。采样与以模型评分的评分器，会在进程内调用本服务器自己的 Chat Completions 路由，因此使用的模型、验证与采样行为都和一般请求相同。
+
+<Endpoint method="POST" path="/v1/evals" />
+<Endpoint method="GET" path="/v1/evals" />
+<Endpoint method="GET" path="/v1/evals/{eval_id}" />
+<Endpoint method="POST" path="/v1/evals/{eval_id}" />
+<Endpoint method="DELETE" path="/v1/evals/{eval_id}" />
+<Endpoint method="POST" path="/v1/evals/{eval_id}/runs" />
+<Endpoint method="GET" path="/v1/evals/{eval_id}/runs" />
+<Endpoint method="GET" path="/v1/evals/{eval_id}/runs/{run_id}" />
+<Endpoint method="POST" path="/v1/evals/{eval_id}/runs/{run_id}/cancel" />
+<Endpoint method="DELETE" path="/v1/evals/{eval_id}/runs/{run_id}" />
+<Endpoint method="GET" path="/v1/evals/{eval_id}/runs/{run_id}/output_items" />
+<Endpoint method="GET" path="/v1/evals/{eval_id}/runs/{run_id}/output_items/{output_item_id}" />
+
+<Callout type="info">
+只有在配置了 `YUNSHU_AUTH_TOKEN` 时才会强制验证。run 会把创建它的请求中的 `Authorization` 或 `x-api-key` 标头只保留在内存里（不会写入磁盘），供内部调用使用。
+</Callout>
+
+## 创建 eval
+
+`POST /v1/evals` 接收 JSON 正文，同时必须通过 OpenAI SDK `EvalCreateParams` 类型的检查。
+
+| 参数 | 类型 | 必填 | 说明 | 状态 |
+| --- | --- | --- | --- | --- |
+| `name` | string | 否 | 显示名称。 | 支持 |
+| `metadata` | object | 否 | 最多 16 组字符串键值。 | 支持 |
+| `data_source_config` | object | 是 | `{"type": "custom", "item_schema": {...}, "include_sample_schema": bool}`。`type` 也可以是 `stored_completions` 或 `logs`。 | 部分支持 |
+| `testing_criteria` | array | 是 | 非空的评分器列表，`name` 不可为空且不可重复。 | 支持 |
+
+`custom` 需要 `item_schema`，且必须是有效的 JSON Schema（Draft 2020-12）；创建 run 时，每一条数据的 `item` 都会依它验证。保存后返回的 `data_source_config` 形式为 `{"type", "schema"}`，其中 `schema` 会把你的 `item_schema` 包在 `item` 之下（`include_sample_schema` 为 true 时另加 `sample.output_text` 属性）。
+
+### 评分器
+
+| 评分器 `type` | 字段 | 作用 |
+| --- | --- | --- |
+| `string_check` | `name`、`input`、`reference`、`operation`（`eq`、`ne`、`like`、`ilike`） | 比较两个模板字符串。`like` 表示 `reference` 是 `input` 的子字符串；`ilike` 不分大小写。分数为 1 或 0。 |
+| `text_similarity` | `name`、`input`、`reference`、`evaluation_metric`、`pass_threshold` | 在本地计算、不使用模型的字面相似度。指标：`cosine`、`fuzzy_match`、`bleu`、`gleu`、`meteor`、`rouge_1` 到 `rouge_5`、`rouge_l`。分数达到 `pass_threshold` 即通过。 |
+| `score_model` | `name`、`model`、`input`（消息）、选填 `range`（默认 `[0, 1]`）、`pass_threshold`、`sampling_params` | 由模型返回 `range` 内的数字；分数达到 `pass_threshold`（默认 1）即通过。 |
+| `label_model` | `name`、`model`、`input`（消息）、`labels`、`passing_labels`、`sampling_params` | 由模型返回 `labels` 之一；标签在 `passing_labels` 内即通过。 |
+
+评分器字段是模板：`{{item.field}}` 与 `{{sample.output_text}}` 这类占位符会替换为该条数据中的值（嵌套路径与列表索引以点号表示）。引用了不存在的字段，该条数据会以错误结束。字面相似度指标是 Yunshu 自己的实现：cosine 使用词频，METEOR 使用完全相同token的对齐且没有同义词语料，BLEU 是未经平滑的句子级别 BLEU，所以分数可能与其他实现略有差异。
+
+以模型评分的评分器会通过本地的 `response_format` JSON Schema 路径要求结构化输出（一个 `score` 数字或一个 `label` 字符串），再验证结果。
+
+其他评分器类型（例如 `python`、`endpoint`）会返回 `400`。
+
+## 更新、列出、删除 eval
+
+- `POST /v1/evals/{eval_id}` 可更新 `name` 与 `metadata`。
+- `GET /v1/evals` 接受 `limit`（1 到 100，默认 20）、`order`（`asc` 或 `desc`，默认 `desc`）、`after` 与 `order_by`（`created_at` 或 `updated_at`）。
+- `DELETE /v1/evals/{eval_id}` 会删除 eval、取消并移除它所有的 run，并返回 `{"object": "eval.deleted", "deleted": true, "eval_id": ...}`。
+
+列表返回 `{"object": "list", "data", "has_more", "first_id", "last_id"}`。`after` 光标不存在时返回 `400`。
+
+## 创建 run
+
+`POST /v1/evals/{eval_id}/runs` 的正文会依 SDK 的 `RunCreateParams` 验证：
+
+| 参数 | 类型 | 必填 | 说明 | 状态 |
+| --- | --- | --- | --- | --- |
+| `name`、`metadata` | | 否 | 显示名称与最多 16 组字符串键值。 | 支持 |
+| `data_source.type` | string | 是 | `jsonl`（直接评分给定的数据）或 `completions`（先让模型采样）。其他类型返回 `400`。 | 部分支持 |
+| `data_source.source` | object | 是 | 数据源，见下表。 | 支持 |
+| `data_source.model` | string | 否 | 搭配 `type: "completions"`，指定要采样的模型。省略时评分数据本身的 `sample`。 | 支持 |
+| `data_source.input_messages` | object | 有 `model` 时必填 | `{"type": "template", "template": [messages]}` 或 `{"type": "item_reference", "item_reference": "item.input"}`。 | 支持 |
+| `data_source.sampling_params` | object | 否 | 传给 Chat Completions（`temperature`、`top_p`、`seed`、`max_completion_tokens` 等）。 | 支持 |
+
+数据源（`data_source.source.type`）：
+
+| 来源 | 字段 | 备注 |
+| --- | --- | --- |
+| `file_content` | `content`：`{"item": {...}, "sample": {...}}` 的数组 | 内嵌数据。 |
+| `file_id` | [文件](/docs/api/files)存储区中文件的 `id` | JSONL 档，一行一条，格式同上。 |
+| `stored_completions` | 选填 `model`、`metadata`、`created_after`、`created_before`、`limit` | 由本服务器保存的 Chat Completions 组成（见[已保存的 Completions](/docs/api/stored-completions)）。`limit` 为 1 到 10000。 |
+
+数据最多 10,000 笔，每笔 `item` 都必须符合 eval 的 `item_schema`。数据源有问题时，创建请求会在任何事情运行前以 `400` 失败。
+
+创建请求会立刻返回 `status: "queued"` 的 run，实际工作在背景进行。
+
+```json
+{
+  "id": "evalrun_0a1b2c3d4e5f60718293a4b5",
+  "object": "eval.run",
+  "created_at": 1767225600,
+  "eval_id": "eval_9f8e7d6c5b4a39281716f5e4",
+  "name": "",
+  "model": "local",
+  "status": "queued",
+  "error": null,
+  "report_url": "",
+  "metadata": null,
+  "per_model_usage": [],
+  "per_testing_criteria_results": [
+    { "testing_criteria": "exact", "passed": 0, "failed": 0 }
+  ],
+  "result_counts": { "total": 0, "passed": 0, "failed": 0, "errored": 0 },
+  "data_source": { "type": "completions", "model": "local" }
+}
+```
+
+run 的 `status` 有：`queued`、`in_progress`、`completed`、`canceled`、`failed`。数据逐笔依序处理。服务器重新启动时，排队中或运行中的 run 会被标为失败（`error.code` 为 `interrupted`），请创建新的 run 重试。`report_url` 一律为空字符串。
+
+## Run 与 output item
+
+- `GET /v1/evals/{eval_id}/runs` 接受 `status`、`limit`、`order`（默认 `asc`）与 `after`。
+- `GET /v1/evals/{eval_id}/runs/{run_id}` 返回 run，含目前的计数与各模型的 token 用量。
+- `POST /v1/evals/{eval_id}/runs/{run_id}/cancel` 取消排队中或运行中的 run（状态变为 `canceled`）；已结束的 run 原样返回。
+- `DELETE /v1/evals/{eval_id}/runs/{run_id}` 取消并删除，返回 `{"object": "eval.run.deleted", "deleted": true, "run_id": ...}`。
+- `GET .../output_items` 列出项目，`status` 可筛选 `pass` 或 `fail`。`GET .../output_items/{output_item_id}` 取得单一项目。
+
+output item 范例：
+
+```json
+{
+  "id": "evalitem_0a1b2c3d4e5f60718293a4b5",
+  "object": "eval.run.output_item",
+  "created_at": 1767225610,
+  "eval_id": "eval_9f8e7d6c5b4a39281716f5e4",
+  "run_id": "evalrun_0a1b2c3d4e5f60718293a4b5",
+  "datasource_item_id": 0,
+  "datasource_item": { "question": "2+2?", "answer": "4" },
+  "sample": {
+    "model": "local",
+    "input": [{ "role": "user", "content": "2+2?" }],
+    "output": [{ "role": "assistant", "content": "4" }],
+    "finish_reason": "stop",
+    "usage": { "prompt_tokens": 14, "completion_tokens": 2, "total_tokens": 16, "cached_tokens": 0 },
+    "error": null
+  },
+  "results": [
+    { "name": "exact", "type": "string_check", "score": 1.0, "passed": true }
+  ],
+  "status": "pass"
+}
+```
+
+所有评分器都通过时 `status` 为 `pass`，至少一个未通过为 `fail`，该条数据本身出错（例如模板引用的字段不存在，或模型调用失败）则为 `error`，错误消息在 `sample.error`。`error` 项目会计入 `result_counts.errored`，且不会出现在 `pass` / `fail` 的筛选结果中。
+
+## 范例
+
+<Tabs items={["curl", "Python", "JavaScript"]}>
+<Tab value="curl">
+
+```bash
+curl http://localhost:8000/v1/evals \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "arith",
+    "data_source_config": {
+      "type": "custom",
+      "item_schema": {"type": "object", "properties": {"question": {"type": "string"}, "answer": {"type": "string"}}, "required": ["question", "answer"]},
+      "include_sample_schema": true
+    },
+    "testing_criteria": [
+      {"type": "string_check", "name": "exact", "input": "{{sample.output_text}}", "operation": "eq", "reference": "{{item.answer}}"}
+    ]
+  }'
+
+curl http://localhost:8000/v1/evals/eval_9f8e7d6c5b4a39281716f5e4/runs \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "run-1",
+    "data_source": {
+      "type": "completions",
+      "model": "local",
+      "input_messages": {"type": "template", "template": [{"role": "user", "content": "{{item.question}} Answer with just the number."}]},
+      "source": {"type": "file_content", "content": [{"item": {"question": "2+2?", "answer": "4"}}]}
+    }
+  }'
+```
+
+</Tab>
+<Tab value="Python">
+
+```python
+import time
+from openai import OpenAI
+
+client = OpenAI(base_url="http://localhost:8000/v1", api_key="not-needed")
+
+ev = client.evals.create(
+    name="arith",
+    data_source_config={
+        "type": "custom",
+        "item_schema": {
+            "type": "object",
+            "properties": {"question": {"type": "string"}, "answer": {"type": "string"}},
+            "required": ["question", "answer"],
+        },
+        "include_sample_schema": True,
+    },
+    testing_criteria=[
+        {
+            "type": "string_check",
+            "name": "exact",
+            "input": "{{sample.output_text}}",
+            "operation": "eq",
+            "reference": "{{item.answer}}",
+        }
+    ],
+)
+
+run = client.evals.runs.create(
+    ev.id,
+    name="run-1",
+    data_source={
+        "type": "completions",
+        "model": "local",
+        "input_messages": {
+            "type": "template",
+            "template": [{"role": "user", "content": "{{item.question}} Answer with just the number."}],
+        },
+        "source": {"type": "file_content", "content": [{"item": {"question": "2+2?", "answer": "4"}}]},
+    },
+)
+
+while run.status in ("queued", "in_progress"):
+    time.sleep(1)
+    run = client.evals.runs.retrieve(run.id, eval_id=ev.id)
+print(run.result_counts)
+```
+
+</Tab>
+<Tab value="JavaScript">
+
+```ts
+import OpenAI from "openai";
+
+const client = new OpenAI({ baseURL: "http://localhost:8000/v1", apiKey: "not-needed" });
+
+const ev = await client.evals.create({
+  name: "arith",
+  data_source_config: {
+    type: "custom",
+    item_schema: {
+      type: "object",
+      properties: { question: { type: "string" }, answer: { type: "string" } },
+      required: ["question", "answer"],
+    },
+    include_sample_schema: true,
+  },
+  testing_criteria: [
+    {
+      type: "string_check",
+      name: "exact",
+      input: "{{sample.output_text}}",
+      operation: "eq",
+      reference: "{{item.answer}}",
+    },
+  ],
+});
+
+let run = await client.evals.runs.create(ev.id, {
+  data_source: {
+    type: "completions",
+    model: "local",
+    input_messages: {
+      type: "template",
+      template: [{ role: "user", content: "{{item.question}} Answer with just the number." }],
+    },
+    source: { type: "file_content", content: [{ item: { question: "2+2?", answer: "4" } }] },
+  },
+});
+```
+
+</Tab>
+</Tabs>
+
+## 错误
+
+错误使用 OpenAI 的格式，code 例如 `invalid_value`、`invalid_type`、`not_found`、`unsupported_value`。
+
+| 状态码 | 情况 |
+| --- | --- |
+| `400` | 正文不符合 SDK 类型、`data_source_config`、评分器或数据源类型不支持、JSON Schema 无效、模板有误、超过 10,000 条数据、某条数据违反 `item_schema`、分页或筛选值不合法。 |
+| `404` | eval、run、output item 或文件不存在。 |
+
+run 运行期间发生的失败不会改变 HTTP 状态码，而是以 `error` 状态的 output item 呈现，或让 run 变成 `status: "failed"` 并带有 `error`。
+
+## 支持状况
+
+| 功能 | 状态 |
+| --- | --- |
+| eval CRUD、run、output item、取消 | <Support status="supported">支持</Support> |
+| 评分器 `string_check`、`text_similarity`、`score_model`、`label_model` | <Support status="supported">支持</Support> |
+| 评分器 `python`、`endpoint`、`multi` | <Support status="unsupported">返回 400</Support> |
+| run 数据源 `jsonl` 与 `completions` | <Support status="supported">支持</Support> |
+| run 数据源 `responses`、`logs` 等 | <Support status="unsupported">返回 400</Support> |
+| `data_source_config.type: "logs"` | <Support status="partial">可创建 eval，但没有任何 run 来源会读取 logs</Support> |
+| 数据平行处理 | <Support status="unsupported">一次处理一条</Support> |
+| 重新启动后继续 run | <Support status="unsupported">被中断的 run 会标为失败</Support> |
+| `report_url` | <Support status="unsupported">一律为空</Support> |
+
+## 相关页面
+
+- [文件](/docs/api/files)：以 `purpose=evals` 上传 JSONL 数据。
+- [已保存的 Completions](/docs/api/stored-completions)：`stored_completions` 来源所读取的内容。
+- [Chat Completions](/docs/api/chat-completions)：run 使用的采样路径。

@@ -119,3 +119,46 @@ def test_unreleased_changelog_has_release_notes_structure():
     assert count == 0 or 3 <= count <= 6  # A freshly cut next-release draft is empty.
     assert "| Machine | Model / mode | Metric / workload | Before → after |" in section
     assert "https://github.com/YuhuanStudio/Yunshu/compare/" in section
+
+
+PUBLIC_DOCS = sorted(
+    [ROOT / n for n in ("CONTRIBUTING.md", "RELEASING.md", "SECURITY.md", "AGENTS.md")]
+    + list((ROOT / "docs").glob("*.md"))
+    + list((ROOT / "docs/guides").glob("*.md"))
+)
+
+
+@pytest.mark.parametrize("path", READMES + PUBLIC_DOCS, ids=lambda p: p.name)
+def test_code_block_yunshu_commands_exist(path):
+    """Every `yunshu ...` line inside a fenced block names a real command and flags."""
+    cli = get_command(app)
+    for block in re.findall(
+        r"```(?:bash|sh|shell|console)?\n(.*?)```", path.read_text(), re.S
+    ):
+        for line in block.splitlines():
+            m = re.match(r"^\s*(?:\$ )?(?:uv run )?(yunshu(?: [^#|>&;\\]+)?)", line)
+            if not m or "<" in m.group(1) and "yunshu serve" in m.group(1):
+                continue
+            try:
+                args = [a for a in shlex.split(m.group(1)) if a != "--json"]
+            except ValueError:
+                continue
+            command, position = cli, 1
+            while hasattr(command, "commands") and position < len(args):
+                part = args[position]
+                if part.startswith("-"):
+                    break
+                if part not in command.commands:
+                    assert any(
+                        p.param_type_name == "argument" for p in command.params
+                    ), f"{path.name}: unknown command in `{line.strip()}`"
+                    break
+                command = command.commands[part]
+                position += 1
+            options = {o for p in command.params for o in getattr(p, "opts", [])}
+            options |= {"--help", "--version", "-V", "--json", "-u", "--url"}
+            for arg in args[position:]:
+                if arg.startswith("-"):
+                    assert arg.split("=", 1)[0] in options, (
+                        f"{path.name}: unknown flag in `{line.strip()}`"
+                    )

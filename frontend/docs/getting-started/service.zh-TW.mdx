@@ -1,0 +1,115 @@
+---
+title: 服務
+description: 以 yunshu service 管理的使用者層級 launchd 代理程式，讓 Yunshu 在登入時於背景執行。
+---
+
+`yunshu service` 在 macOS 上管理使用者層級的 launchd 代理程式（agent）。該 agent 會在你登入時啟動 Yunshu，當程序當機時重新啟動（正常停止則不會），並把輸出寫入會自動輪替的記錄檔。它以你的身分執行，不需要 root 權限，也不會動到下列兩個路徑以外的任何位置。
+
+| 項目 | 位置 |
+|---|---|
+| launchd agent | `~/Library/LaunchAgents/com.yuhuanstudio.yunshu.plist` |
+| 記錄檔 | `~/Library/Logs/Yunshu/yunshu.log` |
+
+此指令僅限 macOS。不論以 uv、pip 或 Homebrew 安裝，用法都相同；Homebrew formula 沒有另外定義 service。
+
+## 安裝
+
+可以先檢查模型，再安裝：
+
+```bash
+yunshu doctor -m mlx-community/Qwen3.5-9B-MLX-4bit
+yunshu service install -m mlx-community/Qwen3.5-9B-MLX-4bit
+```
+
+`install` 接受決定要服務什麼、在哪裡服務的選項：
+
+| 選項 | 說明 |
+|---|---|
+| `--model`、`-m` | 模型資料夾或 Hugging Face repo id。已存在的路徑會以絕對路徑儲存。 |
+| `--models-dir`、`-d` | 服務此目錄中的所有模型（多模型模式）。 |
+| `--host` | 綁定的主機。預設 `127.0.0.1`。 |
+| `--port`、`-p` | 綁定的連接埠。預設 `8000`。 |
+| `--config`、`-c` | 服務每次啟動時都會讀取的 TOML 設定檔，檔案必須存在。 |
+| `--set KEY=VALUE` | 在安裝時固定的設定，可重複使用。 |
+| `--dry-run` | 以 property list 格式印出 launchd agent，不做任何變更。 |
+| `--no-start` | 寫入 agent 但不立即啟動。 |
+| `--force` | 取代已安裝的 agent。 |
+
+你必須指明要服務什麼：傳入 `--model` 或 `--models-dir`，或已設定 `YUNSHU_MODEL`。`install` 會拒絕未通過 `yunshu doctor -m` 同一套模型檢查的模型（例如路徑不存在或下載不完整）。若已安裝 agent，除非加上 `--force`，否則 `install` 會報錯停止。
+
+`install` 會寫入兩個 agent：引擎，以及獨立 job 的主控台程序（`com.yuhuanstudio.yunshu.console`，停止時一律重新啟動），所以引擎重新啟動或當機時，主控台仍持續服務與記錄。`--no-console` 只安裝引擎、`--console-port` 更換主控台連接埠（預設 8100），`yunshu service logs --console` 讀取它的記錄檔，`yunshu service restart` 只重新啟動引擎。引擎 agent 使用執行 `install` 的那個安裝環境所用的 Python 來執行 `python -m yunshu_cli serve --no-console ...`。在同一個環境升級 Yunshu 之後，請執行 `yunshu service restart`。若換到不同的環境，請重新執行 `yunshu service install --force ...`。
+
+```bash
+yunshu service install -m mlx-community/Qwen3.5-9B-MLX-4bit --dry-run   # 先檢視
+```
+
+### 服務使用的設定
+
+你在 shell 中 `export` 的設定不會被複製到服務。請把它們寫進以 `--config` 傳入的設定檔，或用 `--set` 固定。環境變數 `HF_HOME`、`HF_HUB_CACHE`、`HF_ENDPOINT` 與 `HF_HUB_OFFLINE` 是例外：它們會被複製，讓服務找到同一個 Hugging Face 快取。未指定 `--config` 時，服務仍會讀取 `yunshu config set` 寫入的使用者層級檔案 `~/.yunshu/config.toml`。服務的 `PATH` 固定為 `/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin`。
+
+設定檔是扁平的 `KEY = value` TOML：
+
+```toml
+# ~/.yunshu/yunshu.toml
+YUNSHU_AUTH_TOKEN = "change-me"
+YUNSHU_LOG_KEEP = 14
+```
+
+```bash
+yunshu service install -m mlx-community/Qwen3.5-9B-MLX-4bit -c ~/.yunshu/yunshu.toml
+```
+
+若綁定非本機的 `--host`，請同時設定驗證 token。所有設定請見[設定](/docs/guides/configuration)。
+
+## 日常指令
+
+```bash
+yunshu service status        # 已安裝 / 執行中（pid）/ 是否健康，以及路徑
+yunshu service logs -n 100   # 最後 100 行（預設 50）
+yunshu service logs -f       # 持續追蹤記錄
+yunshu service restart       # 例如編輯設定檔之後
+yunshu service stop          # 停止，直到下次登入或執行 `service start`
+yunshu service start
+yunshu service uninstall     # 停止並移除 agent；模型與記錄會保留
+```
+
+| 指令 | 行為 |
+|---|---|
+| `status` | 回報 agent 是否已安裝與載入、pid 與上次結束代碼、安裝時使用的 URL，以及 `GET /health` 是否有回應。`--json` 回傳相同的資訊。 |
+| `logs` | 顯示最後 `--lines`/`-n` 行。`--follow`/`-f` 持續輸出，且不能與 `--json` 併用。尚無記錄檔時會失敗。 |
+| `start` | 啟動已安裝的 agent。尚未安裝時會失敗。 |
+| `stop` | 卸載 agent。直到下次登入或執行 `start` 之前都會保持停止。 |
+| `restart` | 重新啟動執行中的 agent。服務未執行時會失敗，此時請改用 `start`。 |
+| `uninstall` | 停止 agent 並刪除 plist。模型與記錄會保留。 |
+
+agent 被設定為當機後重新啟動、正常結束則不重啟，且 launchd 兩次重啟之間至少間隔 10 秒。若模型無法載入，伺服器仍會保持運作，`GET /health/ready` 會回傳 503 並附上原因，而不是讓程序反覆結束重啟。
+
+## 記錄輪替
+
+服務在執行期間會自行輪替記錄。輪替依大小與時間進行；被輪替的檔案是已去除 token 與 API 金鑰的 gzip 壓縮檔。下列設定控制輪替：
+
+| 設定 | 預設值 | 說明 |
+|---|---|---|
+| `YUNSHU_LOG_MAX_MB` | 50 | 達到此大小（MiB）時輪替。0 表示關閉依大小輪替。 |
+| `YUNSHU_LOG_ROTATE_HOURS` | 24 | 經過此小時數也會輪替。0 表示關閉依時間輪替。 |
+| `YUNSHU_LOG_KEEP` | 7 | 保留的已輪替檔案數量。 |
+| `YUNSHU_LOG_RETENTION_DAYS` | 14 | 刪除超過此天數的已輪替檔案。0 表示保留，直到被 `YUNSHU_LOG_KEEP` 清除。 |
+
+`yunshu service rotate-logs` 會立即輪替記錄，適合在服務已停止時使用。
+
+## 完整解除安裝
+
+```bash
+yunshu service uninstall
+uv tool uninstall yunshu               # 或：brew uninstall yunshu、pip uninstall yunshu
+rm -rf ~/Library/Logs/Yunshu
+rm -rf ~/.yunshu                       # 下載的模型與設定：刪除前請確認
+```
+
+前綴快取的 SSD 層位於 `~/.yunshu/cache/apc`，除非 `YUNSHU_VLM_APC_DISK_DIR` 指向其他位置；若你設定過，也請一併刪除該目錄。
+
+## 相關頁面
+
+- [安裝](/docs/getting-started/install)
+- [疑難排解](/docs/guides/troubleshooting)
+- [CLI 參考](/docs/guides/cli)

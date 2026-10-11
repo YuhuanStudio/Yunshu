@@ -1,5 +1,7 @@
 # Release gate
 
+> The console's Docs section carries this guide in English, 繁體中文 and 简体中文 ([`frontend/docs/developers/release-gate.mdx`](../../frontend/docs/developers/release-gate.mdx)); this file is its GitHub-facing counterpart.
+
 A version ships only when `scripts/release/gate.sh` passes on the commit being released **and** the
 `long` stage (32K-128K against the previous release, run by `scripts/dev/yv gate`) passes. The gate
 tests Yunshu the way a user gets it: built into a wheel, installed with `uv tool install` into a

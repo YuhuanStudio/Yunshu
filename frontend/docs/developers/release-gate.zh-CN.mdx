@@ -1,0 +1,71 @@
+---
+title: 发布关卡
+description: Yunshu 版本发布前必须通过的检查、关卡如何测试已安装的构建版本，以及新用户第一个小时的就绪清单。
+---
+
+只有在确切要发布的 commit 上通过发布关卡，版本才会发布。关卡以用户获取 Yunshu 的方式来测试：构建成 wheel，用 `uv tool install` 安装到干净的环境，再用官方的 OpenAI 与 Anthropic SDK 通过 HTTP 驱动。每项检查都会印出 `PASS`、`FAIL` 或 `SKIP`，结束时输出总表，只要有任何失败就以非零结束码退出。已记载的功能若失败就是 `FAIL`；某个模型家族的检查点路径没有配置时，会以 `SKIP` 并附上原因报告。
+
+关卡会把所有安装与写入的内容放在自己的根目录底下：自己的 `HOME`、工具目录与缓存。它绝不会动到你的 `~/.yunshu` 或 `~/.local`。
+
+## 阶段
+
+| 阶段 | 必须成立的条件 |
+|---|---|
+| `install` | `uv build` 成功。`yunshu[vision]` 与 `yunshu[all]` 都能从 wheel 安装。`--version` 与 `pyproject.toml` 一致。`yunshu doctor` 没有失败的检查。`model list` 找得到模型目录。对已在磁盘上的模型运行 `pull` 会拒绝下载。`config set models_dir` 能往返。`service install --dry-run` 会印出 launchd agent 且不写入任何东西 |
+| `serve-27b` | 旗舰模型 Qwen3.8-27B 在已安装的运行档上运作。功能矩阵全数通过。OpenAI SDK 通过 chat、流式、工具（auto、强制、流式 delta）、JSON schema、stop、logprobs、推理内容拆分与图像输入；Anthropic SDK 通过 messages、流式、工具使用与 thinking。生成中途中断流式后，下一个请求仍能正确回答。32K token 的提示词能找回其中的 needle。八个并行请求都能回答。服务器的解码速度与引擎在进程内的速度相当（同样的贪婪提示词各走一次，要求文本相同，并有吞吐量比值的门槛）。服务器日志没有 traceback |
+| `families` | 每个支持的模型家族都能启动、通过冒烟检查，并在结束时没有 traceback：VLM runner 上的 Qwen3.5 家族、纯文本 `mlx-lm` 模型（快速路径、工具与 schema）、Gemma-4（工具与图像）、OCR、ASR、TTS、Qwen3-Omni 与图像生成 |
+| `soak` | 27B 模型在八个请求同时进行下完成成对的 MMLU-Pro，零错误，且准确度没有明显低于已记录的基线；接着进行贴近真实的混合浸泡测试，零错误且正确率高。每一部分结束后，进程的内存占用必须回到起点附近数 GiB 之内 |
+| `agent-sessions` | 长时间代理流量会做的事，每项检查都在各自干净启动的服务器上运行。约 50K token、Claude Code 风格的 `POST /v1/messages` 循环，每一轮都必须产生有效的工具调用、找回所有 needle，并且每轮都从缓存重用前一个提示词的绝大部分。长文档、短问题、工具调用与 JSON schema 答案分别单独与同时运行，同时运行的每个输出都必须等于它单独运行的输出。闲置一段时间（释放内存）后，以及在同一个 SSD 缓存层上重新启动后，相同请求会返回相同文本，且提示词的大部分来自缓存。服务器的贪婪文本等于同一检查点上的原生 `mlx-lm` 或 `mlx-vlm` |
+| `long` | 在 32K、64K 与 128K 运行[验证](/docs/developers/verification)的 `long` suite，并以前一个版本为参考：token 相同（包含长回复的起草打开与关闭）、前缀缓存相等、速度、内存、相对于原生的 needle 检索，以及并行长请求。结论必须存在且每个规划的阶段都要通过；缺少格子、阶段没有运行、基础设施错误，或超过门槛的退步都会让关卡失败 |
+| `service` | 缺省关闭，因为它会加载真实的 launchd agent。激活后，`service install` 必须能提供模型服务，`service uninstall` 必须释放连接端口 |
+
+需要模型的阶段通过 `scripts/dev/yv gate` 运行，它把各阶段当作独立的工作运行，并记住哪些阶段已在该 commit 上通过，所以较晚的失败之后重跑时会略过已通过的阶段（`--fresh` 重跑全部；`--stages` 选择部分阶段）。请不要直接调用底层脚本：保存成功阶段证据的是 `yv`。
+
+```bash
+scripts/dev/yv gate                                   # 所有阶段
+scripts/dev/yv gate --stages install,serve-27b        # 指定阶段
+```
+
+检查本身位于 `scripts/release/gate_checks.py`。模型路径来自环境变量（`scripts/release/local.env.example` 列出变量名称）。当基线合理地改变时，例如新的缺省 kernel 让某个准确度分数改变，脚本中的基线常数会连同支持这项改变的量测一起更新。
+
+## 发布一个版本
+
+版本号放在 `pyproject.toml`，每次发布都需要一笔标有日期的 `CHANGELOG.md` 条目。所有验证都针对最终的那个 commit；之后再有任何改动，就需要重新检查。
+
+1. 用 `scripts/dev/ci-local <sha>` 在本机运行等同 CI 的检查：lint、格式、mypy、前端检查、单元测试、套件构建、`twine` 验证与 wheel 安装冒烟测试。
+2. 在同一个 commit 上运行完整关卡与其他发布检查。需要模型的代理基准测试另外收集，仅供参考，不会阻挡发布。
+3. 为 commit 打上 tag（`v<version>`）并推送。发布工作流程会检查 tag 与 `pyproject.toml` 及 changelog 一致，在 Apple Silicon runner 上运行 lint、类型检查、控制台构建与单元测试，构建 sdist 与 wheel，运行 `twine check`，把 wheel 安装到干净环境，等待维护者在 `pypi` environment 核准，以 trusted publishing 发布到 PyPI（不保存任何 token），并打开一个草稿 GitHub release 供审阅。
+
+如果在发布步骤之前失败，就没有发布任何东西：删除 tag、修正问题后重新打 tag。版本号以小步前进；patch 带来修正与改进，minor 代表真正的能力跃进。完整流程见仓库中的 `RELEASING.md`。
+
+## 发布就绪清单
+
+就绪清单涵盖新用户在第一个 token 之前会遇到的事。它是能力清单，而不是测试结果：它说明有哪些东西存在，而证明某个 commit 的是上面的关卡。
+
+| 范围 | 用户可以期待什么 | 状态 |
+|---|---|---|
+| 安装 | 从 PyPI、wheel 或 git 运行 `uv tool install "yunshu[vision]"`；以 `uv sync` 从源代码安装 | <Support status="supported">支持</Support> |
+| 安装 | 通过共用的 `YuhuanStudio/homebrew-tap` formula 使用 Homebrew | <Support status="partial">在每次 PyPI 发布之后才加入</Support> |
+| 安装 | macOS 应用程序、菜单列程序、DMG | <Support status="unsupported">不在规划中：以 CLI 加 launchd 服务为主</Support> |
+| 首次运行 | `yunshu doctor` 检查平台、Rosetta、macOS、Python、MLX 与 Metal、`mlx-lm` 与 `mlx-vlm`、内存、配置、模型目录与磁盘、模型是否放得下、连接端口与服务，并为每个问题提供修正方式 | <Support status="supported">支持</Support> |
+| 首次运行 | `yunshu pull org/name` 下载到 `~/.yunshu/models`，可续传中断的下载，并拒绝重新下载已在磁盘上的模型（模型目录或 Hugging Face 缓存） | <Support status="supported">支持</Support> |
+| 首次运行 | 依可用 RAM 的精选模型选择器 | <Support status="planned">规划中：目前用户需要自己知道仓库 id</Support> |
+| 服务 | `yunshu serve -m <model>` 或 `--models-dir`；缺省安全绑定 `127.0.0.1`，网络绑定但没有 token 时会警告 | <Support status="supported">支持</Support> |
+| 服务 | 预检通过后模型加载失败时，服务器保持运作，`GET /health/ready` 返回 503 并写出 fatal 日志 | <Support status="supported">有意为之，让后台服务能报告状态</Support> |
+| 服务 | 后台服务：`yunshu service install`、`start`、`stop`、`restart`、`status`、`logs`、`rotate-logs`（launchd、当机自动重启、依大小与时间轮替日志） | <Support status="supported">支持</Support> |
+| 维运 | `GET /health`、`GET /health/ready`、`GET /health/live`、`GET /version`、`GET /metrics` 与 `yunshu status` | <Support status="supported">支持</Support> |
+| 配置 | 单一入口：注册表、`~/.yunshu/config.toml`、`--set` 与 `yunshu config`，以及自动产生的参考文档 | <Support status="supported">支持</Support> |
+| 客户端 | OpenAI SDK、curl 与 Anthropic SDK；以 `yunshu launch` 支持 Claude Code、Codex、opencode 与 Pi | <Support status="supported">支持</Support> |
+| 客户端 | Cline、Continue、Open WebUI | <Support status="partial">配置指引；并非每个版本都测试</Support> |
+| 升级 | `uv tool upgrade yunshu`；运行中的服务需要 `yunshu service restart` | <Support status="supported">支持</Support> |
+| 遥测 | 不收集任何数据。只有在用户操作时才会对外连接：模型下载、你配置的 MCP 服务器、已配置的网络搜索来源，以及请求指定 URL 的 `web_fetch` | <Support status="supported">有意为之</Support> |
+| CI | 每次 push 运行 lint 与构建；macOS 单元测试套件在发布或手动触发时运行 | <Support status="partial">并非每次 push 都跑完整单元测试</Support> |
+
+这些项目面向用户的部分，请见[编程代理与 SDK](/docs/guides/agents)、[网络搜索与抓取](/docs/guides/web-search) 与[后台服务指南](/docs/getting-started/service)。
+
+## 相关页面
+
+- [验证](/docs/developers/verification)
+- [贡献指南](/docs/developers/contributing)
+- [上游追踪](/docs/developers/upstream-tracking)
+- [安装](/docs/getting-started/install)

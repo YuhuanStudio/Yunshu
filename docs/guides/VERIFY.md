@@ -1,5 +1,7 @@
 # Verifying a change: `yv`
 
+> The console's Docs section carries this guide in English, 繁體中文 and 简体中文 ([`frontend/docs/developers/verification.mdx`](../../frontend/docs/developers/verification.mdx)); this file is its GitHub-facing counterpart.
+
 `scripts/dev/yv` runs the standard verification of a candidate change end to end and returns one
 verdict. Use it instead of writing a measurement script: it builds pinned trees for both arms,
 submits every GPU job to gpuq itself with sane memory / timeout / `--quiet` settings, stops at
@@ -12,6 +14,7 @@ scripts/dev/yv status <run>      # state of a run (directory or name under .../v
 scripts/dev/yv wait <run>        # block until the verdict; exit code = the verdict's
 scripts/dev/yv suites            # list suites
 scripts/dev/yv gate              # release gate with per-stage persistence
+scripts/dev/yv gate --ref COMMIT_SHA --label-prefix worker --root /Volumes/P5Plus/yunshu-build/gate-worker --stages install,serve-27b,families
 scripts/dev/yv ab --base <base-sha> --cand <candidate-sha> --suite preflight --label docs-check  # CPU only
 ```
 
@@ -83,7 +86,7 @@ changes.
 ## `yv gate`
 
 Runs `scripts/release/gate.sh` one stage per gpuq job (`install`, `serve-27b`, `families`,
-`soak-mmlu`, `soak-realistic`, `agent-sessions`; port 18993) plus the `long` stage (`yv ab --suite long`, cand = HEAD, base = last `v*` tag; verdict judged fail-closed) and records each in `runs/gate-<commit>/`. A stage
+`soak-mmlu`, `soak-realistic`, `agent-sessions`; port 18993) plus the `long` stage (`yv ab --suite long`, cand = HEAD, base = last `v*` tag; verdict judged fail-closed) and records each in `runs/gate-<commit>/`. `--ref COMMIT_SHA` builds a clean pinned tree; `--label-prefix worker` attributes every GPU job to that worker. `--root PATH` isolates installed tools and caches from other workers. Marked `.yv-own-venv` trees use their own interpreter, and installed wheel RECORD fingerprints invalidate old evidence when an environment changes. `YV_MAX_PENDING` limits a runner to 1–6 queued cells (default 6); use 2 when running several verdicts together. The `serve-27b` timing stage requests quiet admission. A stage
 passes when its check rows have no FAIL or CONTENDED, at least one PASS, and the job exited 0.
 A rerun on the same commit skips passed stages (`--fresh` reruns all); `install` reruns if
 `$GATE_ROOT` holds another commit's install.
@@ -156,6 +159,30 @@ The gate, M3 sweep and agent compatibility remain blocking. Never leave its resu
 Ad-hoc scripts are for measurements `yv` does not cover. Put them in `scripts/research/` with a CPU
 unit test, make them write a final `complete: true` record, and then add them as a stage or a
 cell in `scripts/verify/stages.py` so the next worker does not need the script.
+
+## Multimodal prefix checkpoints
+
+`yv ab --base <sha> --cand <sha> --suite multimodal --model <local-checkpoint>
+--label <worker>-media --priority -1` verifies image-prefix reuse with the shared VLM
+runner. It compares the runner's raw emitted token IDs (including control/reasoning
+IDs) on cold, repeated-image and follow-up requests, rejects different-image reuse,
+and exercises candidate image-block `cache_control` through `/v1/messages` with
+its own cold/hit controls (historical baselines may fail that route). A candidate must
+report real cache reads, including the explicit Anthropic image checkpoint. The
+common committed probe is CPU-tested before loading a model; incomplete request
+matrices fail closed.
+
+Before timing, a non-quiet candidate cell checks 200 image-conditioned arithmetic
+items as cold/hit pairs: every raw-ID sequence must match and the net correct-answer
+difference must be within one. This is a small deterministic cache check, not a
+general vision benchmark. `--mmlu-n 1` is a one-item harness pilot.
+
+The default then uses three interleaved base/candidate M5 cells, with short and 32K text
+bodies (`--ctx 46,32768`; each receipt reports the actual media-expanded prompt length).
+Cells use quiet timing admission. `gemma-4-e2b-it-4bit --reps 1` uses the allowlisted
+M3 lane for correctness only; both arms use their own pinned checkout snapshots.
+M3 numbers never decide M5 performance. The verdict rejects mixed-device pairs and mismatched dependency versions.
+
 
 ### Web tools
 

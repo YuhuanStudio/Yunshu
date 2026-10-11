@@ -1,0 +1,214 @@
+---
+title: Rerank 与评分
+description: 以 embedding 模型、cross-encoder reranker 与序列分类检查点对文档重新排序、为文本配对打分并分类文本。
+---
+
+三个 vLLM 风格的路由负责检索后处理：`POST /v1/rerank` 按与查询的相关度为文档排序，`POST /v1/score` 为文本配对打分，`POST /v1/classify` 为文本分配标签。它们会在你指定的、具备打分能力的模型上运行：
+
+- 训练过的 cross-encoder reranker（文本，或像 Qwen3-VL-Reranker 这样的多模态 reranker）会把每组查询/文档配对一起打分。这是精度最好的选择。
+- 序列分类检查点（带有训练过的分类头的模型）由 `POST /v1/classify` 使用，标签取自检查点本身。
+- Embedding 模型可作为备选：比较分别计算出的向量之间的相似度。成本较低，但不如 cross-encoder 精准；`rerank` 会把余弦相似度映射到 `0` 至 `1` 的范围。
+
+聊天模型不能用于这些路由；它们会返回 `400`，并说明该模型无法生成 embedding。
+
+<Endpoint method="POST" path="/v1/rerank" />
+<Endpoint method="POST" path="/v1/score" />
+<Endpoint method="POST" path="/v1/classify" />
+
+<Callout type="info">
+只有在设置 `YUNSHU_AUTH_TOKEN` 时才会强制认证，见 [API 概览](/docs/api/overview)。多模型模式下 `model` 用来选择打分模型；单模型模式下，加载的模型本身就必须是打分模型。
+</Callout>
+
+## Rerank
+
+### 请求
+
+| 参数 | 类型 | 必填 | 说明 | 状态 |
+| --- | --- | --- | --- | --- |
+| `model` | string | 是 | Reranker 或 embedding 模型 id。 | 支持 |
+| `query` | string 或 object | 是 | 查询。对象 `{"text": ..., "image": ...}` 需要多模态 cross-encoder。 | 支持 |
+| `documents` | array | 是 | 最多 2048 项，每项是字符串或 `{"text": ..., "image": ...}` 对象。超过 8192 字符的字符串会被截断。 | 支持 |
+| `top_n` | integer | 否 | 只返回最好的 `n` 个，`1` 至 `2048`。 | 支持 |
+| `return_documents` | boolean | 否 | 默认 `true`：每条结果都带着它的 `document`。 | 支持 |
+| `instruction` | string | 否 | 给支持指令的 cross-encoder 的任务指令，最多 8192 字符。 | 支持 |
+| `use_activation` | boolean | 否 | 仅限文本 cross-encoder：应用分数的 activation（默认开启）。其他模型会返回 `400`。 | 扩展 |
+
+### 示例
+
+<Tabs items={["curl", "Python"]}>
+<Tab value="curl">
+
+```bash
+curl http://localhost:8000/v1/rerank \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "Qwen/Qwen3-Reranker-0.6B",
+    "query": "How do I reset my password?",
+    "documents": [
+      "Our office is closed on public holidays.",
+      "To reset your password, open Settings and choose Security.",
+      "Shipping usually takes three to five days."
+    ],
+    "top_n": 2
+  }'
+```
+
+</Tab>
+<Tab value="Python">
+
+```python
+import requests
+
+r = requests.post(
+    "http://localhost:8000/v1/rerank",
+    json={
+        "model": "Qwen/Qwen3-Reranker-0.6B",
+        "query": "How do I reset my password?",
+        "documents": [
+            "Our office is closed on public holidays.",
+            "To reset your password, open Settings and choose Security.",
+            "Shipping usually takes three to five days.",
+        ],
+        "top_n": 2,
+    },
+)
+for item in r.json()["results"]:
+    print(item["index"], item["relevance_score"], item["document"]["text"])
+```
+
+</Tab>
+</Tabs>
+
+### 响应
+
+```json
+{
+  "id": "rerank-1760000000",
+  "object": "list",
+  "model": "Qwen/Qwen3-Reranker-0.6B",
+  "results": [
+    { "index": 1, "relevance_score": 0.982114, "document": { "text": "To reset your password, open Settings and choose Security." } },
+    { "index": 2, "relevance_score": 0.114203, "document": { "text": "Shipping usually takes three to five days." } }
+  ],
+  "usage": { "prompt_tokens": 63, "total_tokens": 63 }
+}
+```
+
+结果按 `relevance_score` 由高到低排序；`index` 是该文档在请求 `documents` 中的位置。`relevance_score` 四舍五入到小数点后六位。cross-encoder 的分数就是模型给的分数；embedding 模型则是 `(cosine + 1) / 2`。
+
+## Score
+
+`POST /v1/score` 为文本配对打分，每组配对返回一个数字。
+
+| 参数 | 类型 | 必填 | 说明 | 状态 |
+| --- | --- | --- | --- | --- |
+| `model` | string | 是 | 模型 id。 | 支持 |
+| `text_1` | string 或 array | 是 | 第一组文本。别名：`queries`、`data_1`。 | 支持 |
+| `text_2` | string 或 array | 是 | 第二组文本。别名：`documents`、`items`、`data_2`。 | 支持 |
+| `scoring_type` | string | 否 | `cosine`（默认）、`dot` 或 `euclidean`（负的距离）。只有 embedding 模型可配置；cross-encoder 除了 `cosine` 都返回 `400`。 | 支持 |
+| `use_activation` | boolean | 否 | 仅限文本 cross-encoder。 | 扩展 |
+| `instruction` | string | 否 | 给 cross-encoder 的任务指令。也可以放在 `chat_template_kwargs.instruction`；`chat_template_kwargs` 的其他键会返回 `400`。 | 支持 |
+
+两边的文本会逐项配对。如果某一边只有一项，会与另一边的每一项广播配对；否则两边长度必须相同。每边最多 2048 项，每段文本最多 8192 字符。
+
+```bash
+curl http://localhost:8000/v1/score \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "Qwen/Qwen3-Reranker-0.6B",
+    "text_1": "What is the capital of France?",
+    "text_2": ["Paris is the capital of France.", "Bananas are yellow."]
+  }'
+```
+
+```json
+{
+  "object": "list",
+  "id": "score-0f1e2d3c4b5a69788796a5b4c3d2e1f0",
+  "created": 1760000000,
+  "model": "Qwen/Qwen3-Reranker-0.6B",
+  "data": [
+    { "object": "score", "index": 0, "score": 0.9731 },
+    { "object": "score", "index": 1, "score": 0.0124 }
+  ],
+  "usage": { "prompt_tokens": 38, "total_tokens": 38 }
+}
+```
+
+## Classify
+
+`POST /v1/classify` 有两种模式，由模型决定。
+
+**训练过的分类器。** 如果模型是序列分类检查点，`input` 是字符串或字符串数组，且不可传 `labels`（会使用检查点自带的标签；传了 `labels` 会返回 `400`）。
+
+```json
+{
+  "object": "list",
+  "model": "my-classifier",
+  "data": [
+    { "object": "classification", "index": 0, "probs": [0.91, 0.06, 0.03] }
+  ],
+  "labels": ["positive", "neutral", "negative"],
+  "usage": { "prompt_tokens": 9, "total_tokens": 9 },
+  "results": [
+    { "label": "positive", "score": 0.91, "index": 0 },
+    { "label": "neutral", "score": 0.06, "index": 1 },
+    { "label": "negative", "score": 0.03, "index": 2 }
+  ]
+}
+```
+
+当 `input` 是单个字符串时，会多出 `results`（按分数排序的标签）。
+
+**用 embedding 模型做零样本分类。** `input` 是单个字符串，`labels` 至少两项（也接受别名 `candidate_labels`）。输入与每个标签都会被嵌入，余弦相似度除以 `temperature`（默认 `0.07`，范围大于 `0` 至 `10`）后再做 softmax。
+
+```bash
+curl http://localhost:8000/v1/classify \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "Qwen/Qwen3-Embedding-0.6B",
+    "input": "The battery died after two hours.",
+    "labels": ["battery", "screen", "shipping"]
+  }'
+```
+
+```json
+{
+  "model": "Qwen/Qwen3-Embedding-0.6B",
+  "results": [
+    { "label": "battery", "score": 0.874, "index": 0 },
+    { "label": "screen", "score": 0.082, "index": 2 },
+    { "label": "shipping", "score": 0.044, "index": 1 }
+  ],
+  "usage": { "prompt_tokens": 16, "total_tokens": 16 }
+}
+```
+
+`index` 是标签在请求中的位置；`results` 按 `score` 排序。分数总和为一。
+
+## 错误
+
+| 状态码 | 时机 |
+| --- | --- |
+| 400 | 校验失败（空文本、无法广播的长度不一致、未知的 `scoring_type`、标签少于两个、文本超过 8192 字符、对训练过的分类器传了 `labels`）；把多模态的查询或文档发给不是 cross-encoder reranker 的模型；对不是文本 cross-encoder 的模型使用 `use_activation`；无法生成 embedding 的聊天模型。 |
+| 401 | 已配置 token，但缺少或不正确。 |
+| 404 | 找不到该模型。 |
+| 507 | GPU 内存不足。 |
+| 500 | 打分失败（`server_error`）。 |
+
+## 支持情况
+
+| 功能 | 状态 |
+| --- | --- |
+| 文本 cross-encoder 重新排序 | <Support status="supported">支持</Support> |
+| 多模态重新排序（图片查询或文档） | <Support status="partial">仅限多模态 cross-encoder 模型</Support> |
+| 以 embedding 模型作为 rerank、score、classify 的备选 | <Support status="supported">支持</Support> |
+| 训练过的序列分类头 | <Support status="supported">支持</Support> |
+| `dot` 与 `euclidean` 打分 | <Support status="partial">仅限 embedding 模型</Support> |
+| Cohere 或 Jina 专属字段（`max_chunks_per_doc`、`rank_fields`） | <Support status="unsupported">暂不支持；未知字段会被忽略</Support> |
+
+## 相关页面
+
+- [Embeddings](/docs/api/embeddings)
+- [模型](/docs/api/models)
+- [模型支持](/docs/guides/model-support)

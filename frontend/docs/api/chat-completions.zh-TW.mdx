@@ -1,0 +1,433 @@
+---
+title: Chat completions
+description: OpenAI Chat Completions 端點，支援 tools、結構化輸出、logprobs、推理、圖片／音訊／影片輸入與串流，並附上舊版文字補全端點。
+---
+
+`POST /v1/chat/completions` 遵循 OpenAI Chat Completions 格式，因此官方 `openai` SDK、LangChain、LiteLLM 與多數 agent 工具只要改 base URL 就能使用。純文字的 `mlx-lm` 模型與視覺語言的 `mlx-vlm` 模型由同一個路由提供；請求中只要含有圖片、音訊或影片區塊，就會被導向 VLM。`POST /v1/completions` 是舊版的「給提示詞、回傳文字」端點，說明放在本頁最後。
+
+<Endpoint method="POST" path="/v1/chat/completions" />
+<Endpoint method="POST" path="/v1/completions" />
+
+<Callout type="info">
+只有在設定 `YUNSHU_AUTH_TOKEN` 時才會強制驗證，請見 [API 總覽](/docs/api/overview)。單模型模式下 `model` 的值僅供參考；多模型模式下它用來選擇模型。
+</Callout>
+
+## 請求
+
+未知的頂層欄位會被忽略，所以用戶端可以繼續送出 Yunshu 用不到的 OpenAI 欄位（`service_tier`、`modalities`、`prediction`、`web_search_options`、`safety_identifier` 等）。任何選用欄位若為 JSON `null`，視為「未設定」並套用預設值。負的 `top_k`（vLLM 表示「停用」的寫法）會變成 `0`。
+
+### 核心欄位
+
+| 參數 | 型別 | 必填 | 說明 | 狀態 |
+| --- | --- | --- | --- | --- |
+| `model` | string | 是 | 模型 id。單模型模式下僅供參考。 | 支援 |
+| `messages` | array | 是 | 對話內容。至少要有一則內容不為空的 `user` 訊息。見[訊息](#訊息)。 | 支援 |
+| `stream` | boolean | 否 | 使用 Server-Sent Events。預設 `false`。 | 支援 |
+| `stream_options` | object | 否 | 僅能搭配 `stream: true`。`include_usage` 會在最後加一個 usage 區塊；`continuous_usage_stats`（vLLM 擴充）會在每個區塊都附上累計的 `usage`。 | 支援 |
+| `max_tokens` | integer | 否 | 生成長度上限，`0` 至 `1048576`。預設為 `YUNSHU_DEFAULT_MAX_TOKENS` 設定值（32768）。上下文預算仍會對它做限縮，見 `x_yunshu.budget`。 | 支援 |
+| `max_completion_tokens` | integer | 否 | OpenAI 較新的名稱。兩者同時設定時以它為準。 | 支援 |
+| `n` | integer | 否 | 回傳的選項數，`1` 至 `128`。不可與 `stream: true` 並用。 | 支援 |
+| `stop` | string 或 array | 否 | 最多 16 個停止序列。空字串會被丟棄。 | 支援 |
+| `user` | string | 否 | 只會連同請求 ID 寫入日誌，沒有其他作用。 | 接受但忽略 |
+| `store` | boolean | 否 | 保留完成的 completion 供日後查詢。見[儲存的 completions](/docs/api/stored-completions)。 | 支援 |
+| `metadata` | object | 否 | 最多 16 組字串鍵值；`store` 為 true 時會連同 completion 一起儲存。 | 支援 |
+| `keep_alive` | string 或 number | 否 | Ollama 風格的常駐提示（`"5m"`、`300`、`-1`、`0`）。在多模型模式下生效。 | 擴充 |
+| `timeout` | number | 否 | 秒數，`1` 至 `600`。時間到時結束生成，回傳部分結果與 `finish_reason: "length"`。 | 擴充 |
+
+### 取樣
+
+| 參數 | 型別 | 預設 | 說明 | 狀態 |
+| --- | --- | --- | --- | --- |
+| `temperature` | number | `0.7` | `0` 至 `2`。注意預設值與 OpenAI 的 `1.0` 不同。 | 支援 |
+| `top_p` | number | `1.0` | `0` 至 `1`。 | 支援 |
+| `top_k` | integer | `0` | `0` 表示停用。 | 支援 |
+| `min_p` | number | `0.0` | `0` 至 `1`。 | 支援 |
+| `repetition_penalty` | number | `1.0` | `0` 至 `2`。 | 支援 |
+| `frequency_penalty` | number | `0.0` | `-2` 至 `2`。 | 支援 |
+| `presence_penalty` | number | `0.0` | `-2` 至 `2`。 | 支援 |
+| `logit_bias` | object | 無 | token id 對偏移量的對照，每個值介於 `-100` 至 `100`。鍵為字串形式的 token id。 | 支援 |
+| `seed` | integer | 無 | 64 位元有號整數。讓取樣可重現。 | 支援 |
+| `top_n_sigma` | number | `0.0` | `0` 至 `10`。只保留 logit 落在最大值 n 個標準差內的 token；`0` 為關閉。 | 擴充 |
+| `xtc_probability`、`xtc_threshold` | number | `0.0` | XTC 取樣器。機率 `0` 至 `1`，門檻 `0` 至 `0.5`。 | 擴充 |
+| `min_tokens` | integer | `0` | 在累積到這麼多 token 之前，遮蔽結束符號。 | 擴充 |
+| `ignore_eos` | boolean | `false` | 越過結束符號繼續生成，直到 `max_tokens`。 | 擴充 |
+| `suppress_tokens` | array of integer | 無 | 永遠不會被產生的 token id。 | 擴充 |
+| `stop_token_ids` | array of integer | 無 | 最多 16 個會結束生成的 token id。 | 擴充 |
+| `spec_decode` | boolean | `false` | 要求此請求使用推測解碼。只有在模型與路徑具備 drafter 時才生效，否則忽略。 | 部分支援 |
+| `priority` | integer | `0` | `0` 至 `100`。以請求優先順序的形式轉交給引擎。 | 部分支援 |
+| `lora_adapter` | string | 無 | 此請求使用的 LoRA adapter id。僅限文字模型；VLM 會回應 `400`。 | 部分支援 |
+| `logits_processors` | array | 無 | 自訂 logits processor。VLM 會回應 `400`。 | 部分支援 |
+
+### 訊息
+
+每則訊息的 `role` 為 `system`、`developer`、`user`、`assistant`、`tool` 或 `function`，其他角色都是 `400`。
+
+| 欄位 | 型別 | 說明 | 狀態 |
+| --- | --- | --- | --- |
+| `content` | string、array 或 null | 文字，或內容區塊的陣列。`system`、`developer` 與 `user` 訊息不接受僅含空白的文字與空陣列。 | 支援 |
+| `tool_calls` | array | 用於 `assistant` 訊息：模型先前發出的呼叫，含 `id`、`type` 與 `function.name` / `function.arguments`。 | 支援 |
+| `tool_call_id` | string | `tool` 訊息必填。 | 支援 |
+| `name` | string | `tool` 訊息上的函式名稱。 | 支援 |
+| `reasoning_content` 或 `reasoning` | string | `assistant` 訊息中先前的推理內容，會交給聊天模板。 | 擴充 |
+
+內容區塊：
+
+| 區塊 `type` | 結構 | 說明 |
+| --- | --- | --- |
+| `text` | `{"type": "text", "text": "..."}` | 可帶 `prompt_cache_breakpoint` 物件，見[提示詞快取](/docs/guides/prompt-caching)。 |
+| `image_url` | `{"type": "image_url", "image_url": {"url": "..."}}` | 支援 `http`、`https` 與 `data:` URL。`file://` URL 以及指向 loopback、私有或 link-local 主機的 URL 會被以 `400` 拒絕。`detail` 會被接受但僅供參考，像素預算由模型的 processor 決定。`image` 與 `image_data` 區塊會被正規化成這個結構。 |
+| `input_audio` | `{"type": "input_audio", "input_audio": {"data": "<base64>", "format": "wav"}}` | 導向接受音訊輸入的模型。 |
+| `audio_url` | `{"type": "audio_url", "audio_url": {"url": "..."}}` | 同上。 |
+| `video_url`、`video_file` | OpenAI 風格的影片區塊 | 導向接受影片輸入的模型。 |
+
+模型若不接受某個區塊的模態，會回應 `400` 並指出該區塊，例如 `messages.content[type=image_url]: this model accepts text input, not image`。帶有媒體的請求若指向不是視覺語言模型的模型，同樣回應 `400`。
+
+### Tools
+
+| 參數 | 型別 | 說明 | 狀態 |
+| --- | --- | --- | --- |
+| `tools` | array | 函式工具：`{"type": "function", "function": {"name", "description", "parameters"}}`。 | 支援 |
+| `tool_choice` | string 或 object | `auto`、`none`、`required`，或 `{"type": "function", "function": {"name": "..."}}`。`required` 與指定函式都需要非空的 `tools`，且名稱必須在 `tools` 內。`allowed_tools` 形式會被摺疊成 `tools` 加上模式。 | 支援 |
+| `parallel_tool_calls` | boolean | 預設 `true`。設為 `false` 時最多回傳一個呼叫。 | 支援 |
+
+模型的聊天模板若原生支援 tools，Yunshu 會把 tools 交給模板；否則會注入一段工具提示並從輸出解析呼叫。模型卡上的 `yunshu.contract.tools.mode` 會告訴你是哪一種（`template` 或 `prompt`）。呼叫會出現在 `message.tool_calls`，並帶 `finish_reason: "tool_calls"`。生成之後，伺服器會強制執行 `tool_choice: "none"`（不回傳任何呼叫）、指定函式（丟棄其他函式的呼叫）以及 `parallel_tool_calls: false`（只保留第一個呼叫）。模型沒有發出的呼叫不會被憑空捏造。字串型態的引數值會依你 `parameters` 結構描述中的型別轉換。在 VLM 上，tools 不能與 `response_format` 或 `grammar` 並用，否則回應 `400`。
+
+### 結構化輸出
+
+| 參數 | 說明 | 狀態 |
+| --- | --- | --- |
+| `response_format` | `{"type": "text"}`、`{"type": "json_object"}` 或 `{"type": "json_schema", "json_schema": {"name", "schema", "strict"}}`。`json_schema` 必須提供 `json_schema` 物件。`strict: true` 時，物件結構會加上 `additionalProperties: false`。其他 `type` 一律 `400`。 | 支援 |
+| `grammar` | 原生約束：`{"type": "json", "schema": {...}}`、`{"type": "regex", "pattern": "..."}`、`{"type": "choice", "choices": [...]}` 或 `{"type": "cfg", "grammar": "..."}`。優先於 `response_format`。 | 擴充 |
+| `guided_json`、`guided_regex`、`guided_choice`、`guided_grammar` | 同樣約束的 vLLM 寫法。`guided_regex` 上限 2048 字元，`guided_grammar` 上限 32768。 | 擴充 |
+| `structured_outputs` | vLLM 物件，恰好帶 `json`、`regex`、`choice`、`grammar`、`json_object` 其中一個。不支援 `structural_tag`。 | 擴充 |
+
+約束式解碼會遮蔽 logits，因此從第一個 token 起就能產生符合結構的輸出。引擎無法編譯的 schema 或 pattern 會回應 `400`。見[結構化輸出](/docs/guides/structured-output)。
+
+### 推理
+
+| 參數 | 說明 | 狀態 |
+| --- | --- | --- |
+| `enable_thinking` | 開啟或關閉模型的思考模式。也會讀取 `chat_template_kwargs.enable_thinking`。 | 支援 |
+| `reasoning_effort` | 推理強度。也會讀取 `chat_template_kwargs.reasoning_effort`。超出模板自身清單的值會被對應（在使用 `xhigh` 的模板上，`high` 會變成 `xhigh`）。對沒有推理模式的模型會被接受但沒有作用。 | 支援 |
+| `thinking_budget` | 思考 token 上限，`1` 至 `32768`。 | 擴充 |
+| `chat_template_kwargs` | 傳給聊天模板的額外變數。 | 支援 |
+
+推理文字會放在 `message.reasoning_content`，與 `content` 分開。推理 token 也算在 `completion_tokens` 內，`usage.completion_tokens_details.reasoning_tokens` 則說明其中有多少。
+
+### Logprobs
+
+| 參數 | 型別 | 說明 | 狀態 |
+| --- | --- | --- | --- |
+| `logprobs` | boolean | 在 `choices[].logprobs.content` 回傳每個 token 的對數機率。 | 支援 |
+| `top_logprobs` | integer | 每個 token 的候選數，`0` 至 `20`。需要 `logprobs: true`。 | 支援 |
+| `prompt_logprobs` | integer | 提示詞各 token 的 logprobs，回傳在 `choices[].prompt_logprobs`。 | 擴充 |
+
+### 快取
+
+| 參數 | 說明 | 狀態 |
+| --- | --- | --- |
+| `prompt_cache_key`、`prompt_cache_retention`、`prompt_cache_options` | OpenAI 的提示詞快取提示。在視覺語言路徑上使用；純文字模型會接受但忽略，因為它們的前綴快取是自動的。 | 部分支援 |
+
+## 範例
+
+<Tabs items={["curl", "Python", "JavaScript"]}>
+<Tab value="curl">
+
+```bash
+curl http://localhost:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-local" \
+  -d '{
+    "model": "local",
+    "messages": [
+      {"role": "system", "content": "You are concise."},
+      {"role": "user", "content": "Name three prime numbers."}
+    ],
+    "max_tokens": 64
+  }'
+```
+
+</Tab>
+<Tab value="Python">
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="http://localhost:8000/v1", api_key="sk-local")
+
+resp = client.chat.completions.create(
+    model="local",
+    messages=[
+        {"role": "system", "content": "You are concise."},
+        {"role": "user", "content": "Name three prime numbers."},
+    ],
+    max_tokens=64,
+)
+print(resp.choices[0].message.content)
+print(resp.usage.prompt_tokens, resp.usage.completion_tokens)
+```
+
+</Tab>
+<Tab value="JavaScript">
+
+```ts
+import OpenAI from "openai";
+
+const client = new OpenAI({ baseURL: "http://localhost:8000/v1", apiKey: "sk-local" });
+
+const resp = await client.chat.completions.create({
+  model: "local",
+  messages: [
+    { role: "system", content: "You are concise." },
+    { role: "user", content: "Name three prime numbers." },
+  ],
+  max_tokens: 64,
+});
+console.log(resp.choices[0].message.content);
+```
+
+</Tab>
+</Tabs>
+
+### 串流
+
+<Tabs items={["curl", "Python"]}>
+<Tab value="curl">
+
+```bash
+curl -N http://localhost:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "local",
+    "stream": true,
+    "stream_options": {"include_usage": true},
+    "messages": [{"role": "user", "content": "Write a haiku about autumn."}]
+  }'
+```
+
+</Tab>
+<Tab value="Python">
+
+```python
+stream = client.chat.completions.create(
+    model="local",
+    messages=[{"role": "user", "content": "Write a haiku about autumn."}],
+    stream=True,
+    stream_options={"include_usage": True},
+)
+for chunk in stream:
+    if chunk.choices:
+        delta = chunk.choices[0].delta
+        print(delta.content or "", end="", flush=True)
+    elif chunk.usage:
+        print("\n", chunk.usage.total_tokens, "tokens")
+```
+
+</Tab>
+</Tabs>
+
+### 工具呼叫
+
+```python
+tools = [{
+    "type": "function",
+    "function": {
+        "name": "get_weather",
+        "description": "Current weather for a city",
+        "parameters": {
+            "type": "object",
+            "properties": {"city": {"type": "string"}},
+            "required": ["city"],
+        },
+    },
+}]
+
+messages = [{"role": "user", "content": "What is the weather in Taipei?"}]
+first = client.chat.completions.create(model="local", messages=messages, tools=tools)
+call = first.choices[0].message.tool_calls[0]
+print(call.function.name, call.function.arguments)
+
+messages.append(first.choices[0].message.model_dump(exclude_none=True))
+messages.append({"role": "tool", "tool_call_id": call.id, "content": '{"temp_c": 24}'})
+final = client.chat.completions.create(model="local", messages=messages, tools=tools)
+print(final.choices[0].message.content)
+```
+
+### JSON schema 輸出
+
+```python
+resp = client.chat.completions.create(
+    model="local",
+    messages=[{"role": "user", "content": "Extract: Ada Lovelace, born 1815."}],
+    response_format={
+        "type": "json_schema",
+        "json_schema": {
+            "name": "person",
+            "strict": True,
+            "schema": {
+                "type": "object",
+                "properties": {"name": {"type": "string"}, "born": {"type": "integer"}},
+                "required": ["name", "born"],
+            },
+        },
+    },
+)
+print(resp.choices[0].message.content)
+```
+
+### 圖片輸入
+
+請使用視覺語言模型，例如 Qwen3.5 VLM 檢查點。
+
+```python
+resp = client.chat.completions.create(
+    model="local",
+    messages=[{
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "What is in this picture?"},
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,iVBORw0KGgo..."}},
+        ],
+    }],
+)
+```
+
+### 推理
+
+```python
+resp = client.chat.completions.create(
+    model="local",
+    messages=[{"role": "user", "content": "Is 391 prime?"}],
+    extra_body={"enable_thinking": True},
+)
+msg = resp.choices[0].message
+print(getattr(msg, "reasoning_content", None))
+print(msg.content)
+print(resp.usage.completion_tokens_details.reasoning_tokens)
+```
+
+## 回應
+
+```json
+{
+  "id": "chatcmpl-9f2c4e1ab07d4c3e8a51b2c6",
+  "object": "chat.completion",
+  "created": 1760000000,
+  "model": "local",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "2, 3 and 5.",
+        "reasoning_content": null
+      },
+      "finish_reason": "stop"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 24,
+    "completion_tokens": 9,
+    "total_tokens": 33,
+    "completion_tokens_details": { "reasoning_tokens": 0 },
+    "prompt_tokens_details": { "cached_tokens": 0 }
+  },
+  "x_yunshu": { "request_id": "req_0f3a9c2d4b7e41a6b8c1d2e3", "ttft_ms": 84.2, "decode_tps": 61.3 }
+}
+```
+
+- `reasoning_content` 只在模型產生了推理時才會出現。模型呼叫工具時，`tool_calls` 會取代或伴隨 `content`；每個呼叫都有 `id`（`call_...`）、`type: "function"` 與 `function.name` / `function.arguments`（JSON 字串）。
+- `finish_reason` 為 `stop`、`length` 或 `tool_calls`。內部原因會被對應：取消或錯誤對應為 `stop`，逾時或記憶體上限對應為 `length`。
+- `usage.completion_tokens` 已經包含推理 token；`reasoning_tokens` 與 `cached_tokens` 是各自總數內的細項，不會另外加總。`cached_tokens` 是由前綴快取提供的提示詞前綴長度。
+- `choices[].logprobs.content[]` 的每一項為 `{token, logprob, bytes, top_logprobs: [{token, logprob, bytes}]}`。
+- `x_yunshu` 是 [API 總覽](/docs/api/overview)中說明的 Yunshu 擴充。當回傳的工具呼叫對應到已設定的 MCP 用戶端的工具，並由閘道代為執行時，會出現 `mcp_tool_results`。
+- `max_tokens: 0` 會立即回傳空訊息、`finish_reason: "length"` 與提示詞的 token 數。
+- 若 VLM 的結構化輸出結果仍未通過驗證，會回應 `422` 並附上 `x_yunshu.validation`。
+
+## 串流
+
+設定 `stream: true` 後，回應為 `text/event-stream`。每個事件是 `data: <json>` 加一個空行。
+
+1. 第一個區塊帶 `delta: {"role": "assistant", "content": null}`。
+2. 內容區塊帶 `delta.content`。推理會先以 `delta.reasoning_content` 送出，接著才是回答。
+3. 工具呼叫以 `delta.tool_calls` 串流：先是一個帶 `index`、`id`、`type` 與 `function.name` 的區塊，再來是同一個 `index` 的 `function.arguments` 片段。
+4. 帶有 `finish_reason` 與空 delta 的區塊結束該選項。
+5. 有 `stream_options.include_usage` 時，之後還有一個 `choices: []` 的區塊，內含 `usage` 物件與 `x_yunshu` 統計。
+6. `data: [DONE]` 結束串流。
+
+區塊的 `object` 為 `chat.completion.chunk`。區塊之間伺服器可能送出 SSE 註解行（`: keep-alive`，以及長提示詞 prefill 期間的 `: yunshu-progress {...}`），SSE 解析器會忽略註解。如果串流開始後生成失敗，串流會送出單一的 `data: {"error": {...}}` 事件，然後是 `[DONE]`。
+
+## 錯誤
+
+| 狀態碼 | 時機 |
+| --- | --- |
+| 400 | 結構或數值驗證失敗（`code: validation_error`，`param` 指出欄位）、模型不支援的功能、無效的圖片 URL、提示詞超出上下文視窗、格式錯誤的 `response_format` 或 `grammar`。 |
+| 401 | 已設定 token，但缺少或不正確。 |
+| 404 | 多模型模式下未知的模型。 |
+| 429 | 佇列已滿，帶 `Retry-After`。 |
+| 500 | 引擎失敗（`server_error`）。 |
+| 503 | 沒有載入任何模型、模型仍在載入，或有其他請求執行時記憶體吃緊。 |
+| 504 | 超過 `X-Yunshu-Deadline-Ms` 的期限。 |
+| 507 | GPU 記憶體不足（`type: memory_error`）。 |
+
+## 支援狀況
+
+| 功能 | 狀態 |
+| --- | --- |
+| 文字、system、developer、tool 訊息 | <Support status="supported">支援</Support> |
+| 圖片輸入 | <Support status="supported">視覺語言模型</Support> |
+| 音訊與影片輸入區塊 | <Support status="partial">接受它們的模型</Support> |
+| 串流、`stream_options.include_usage` | <Support status="supported">支援</Support> |
+| `n` 大於 1 | <Support status="partial">僅限非串流</Support> |
+| Function tools、`tool_choice`、`parallel_tool_calls` | <Support status="supported">支援</Support> |
+| `response_format` 的 `json_object` 與 `json_schema` | <Support status="supported">約束式解碼</Support> |
+| `logprobs`、`top_logprobs` | <Support status="supported">最多 20 個候選</Support> |
+| `reasoning_effort`、`enable_thinking`、`reasoning_content` | <Support status="supported">具推理模式的模型</Support> |
+| `store`、`metadata` | <Support status="supported">見儲存的 completions</Support> |
+| `user`、`service_tier`、`modalities`、`prediction` | <Support status="unsupported">接受但忽略</Support> |
+| 音訊輸出（`audio` 請求欄位） | <Support status="unsupported">尚未支援；請使用音訊路由</Support> |
+| VLM 上的 LoRA 與自訂 logits processor | <Support status="unsupported">400</Support> |
+
+## 舊版文字補全
+
+`POST /v1/completions` 接受原始提示詞並回傳文字，不套用聊天模板。它支援與 chat 路由相同的取樣參數，以及 `stream`、`stream_options`、`stop`、`seed`、`logit_bias`、`response_format`、`grammar` / `guided_*` 約束、`logprobs`、`n`、`echo` 與 `best_of`。這裡沒有推理與工具相關參數。
+
+| 參數 | 型別 | 說明 | 狀態 |
+| --- | --- | --- | --- |
+| `model` | string | 模型 id。 | 支援 |
+| `prompt` | string、字串陣列、token id 陣列，或 token id 陣列的陣列 | 必填。字串陣列或 token id 陣列的陣列會依序為每個提示詞產生選項。有多個提示詞時不可使用 `stream: true`。 | 支援 |
+| `max_tokens` | integer | 預設 `128`，上限 `1048576`。也接受 `max_completion_tokens`。 | 支援 |
+| `echo` | boolean | 把提示詞放在回傳文字之前。搭配 `logprobs` 時，提示詞 token 也會有 logprobs（限單一字串提示詞）。 | 支援 |
+| `logprobs` | integer | `0` 至 `5`。回應使用舊版的 `tokens`、`token_logprobs`、`top_logprobs`、`text_offset` 陣列。 | 支援 |
+| `best_of` | integer | 為每個提示詞產生這麼多候選，回傳平均 logprob 最佳的 `n` 個。必須不小於 `n`；不可搭配串流或多個提示詞。所有候選都計入 `usage`。 | 支援 |
+| `n` | integer | `1` 至 `128`。不可與 `stream: true` 並用。 | 支援 |
+| `suffix` | string | 會被接受。這裡沒有 fill-in-the-middle 模板，所以不會被使用，也不會附加到文字後面。 | 接受但忽略 |
+| `stop`、`seed`、`temperature`、`top_p`、`top_k`、`min_p`、各種 penalty、`logit_bias`、`stream_options` | | 與 chat 路由相同。 | 支援 |
+
+```bash
+curl http://localhost:8000/v1/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model": "local", "prompt": "The capital of France is", "max_tokens": 8, "temperature": 0}'
+```
+
+```json
+{
+  "id": "cmpl-3b7d1c0e5a9f4d2e8c61a0b7",
+  "object": "text_completion",
+  "created": 1760000000,
+  "model": "local",
+  "choices": [{ "index": 0, "text": " Paris.", "finish_reason": "stop" }],
+  "usage": { "prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8 }
+}
+```
+
+串流使用 `object: "text_completion"` 的區塊與 `choices[].text`，之後是選用的 usage 區塊與 `[DONE]`。錯誤格式與 chat 路由相同。這裡也會強制執行模型的能力契約（對不生成文字的模型使用 `response_format`、`grammar` 與 `logprobs` 會回應 `400`）。
+
+## 相關頁面
+
+- [儲存的 completions](/docs/api/stored-completions)
+- [Responses](/docs/api/responses)
+- [結構化輸出](/docs/guides/structured-output)
+- [提示詞快取](/docs/guides/prompt-caching)
+- [模型與能力契約](/docs/api/models)
+- [擴充功能](/docs/api/extensions)

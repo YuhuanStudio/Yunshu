@@ -1,5 +1,7 @@
 # Running Yunshu as a background service
 
+> The console's Docs section carries this guide in English, 繁體中文 and 简体中文 ([`frontend/docs/getting-started/service.mdx`](../../frontend/docs/getting-started/service.mdx)); this file is its GitHub-facing counterpart.
+
 `yunshu service` manages a per-user launchd agent. It starts Yunshu at login, restarts it after a
 crash (not after a clean stop), and writes its output to a rotating log file. It does not need root.
 The primary files are:

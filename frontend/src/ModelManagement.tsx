@@ -1,3 +1,4 @@
+import { t } from "./i18n/index.ts";
 import { useRef, useState } from "react";
 import {
   Button,
@@ -11,11 +12,15 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
 } from "@yuhuanowo/yunui";
 import { MoreHorizontal, Copy, Trash2 } from "lucide-react";
 import type { Connection } from "./api";
 import { copyModel, deleteModel, pullModel } from "./management-api";
-import type { Perform } from "./Models";
+import type { Perform } from "./ModelActions";
 
 type Operation = "pull" | "copy" | "delete" | null;
 
@@ -23,11 +28,14 @@ export function ModelManagement({
   connection,
   modelId,
   disabled,
+  disabledReason,
   perform,
 }: {
   connection: Connection;
   modelId?: string;
   disabled: boolean;
+  /** Why the controls are disabled; shown as a tooltip on the import button. */
+  disabledReason?: string;
   perform: Perform;
 }) {
   const [operation, setOperation] = useState<Operation>(null);
@@ -96,7 +104,7 @@ export function ModelManagement({
               variant="ghost"
               size="sm"
               disabled={busy}
-              aria-label={`${modelId} 的更多操作`}
+              aria-label={t("models.manage.moreActions", { id: modelId })}
             >
               <MoreHorizontal size={16} />
             </Button>
@@ -114,7 +122,7 @@ export function ModelManagement({
               }}
             >
               <Copy size={14} />
-              建立別名
+              {t("models.manage.createAlias")}
             </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem
@@ -125,23 +133,34 @@ export function ModelManagement({
               }}
             >
               <Trash2 size={14} />
-              刪除模型
+              {t("models.manage.deleteModel")}
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
       ) : (
-        <Button
-          variant="secondary"
-          size="sm"
-          disabled={busy}
-          onClick={(event) => {
-            opener.current = event.currentTarget;
-            setRepository("");
-            setOperation("pull");
-          }}
-        >
-          匯入模型
-        </Button>
+        <TooltipProvider delayDuration={200}>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span tabIndex={busy && disabledReason ? 0 : undefined}>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  disabled={busy}
+                  onClick={(event) => {
+                    opener.current = event.currentTarget;
+                    setRepository("");
+                    setOperation("pull");
+                  }}
+                >
+                  {t("models.manage.import")}
+                </Button>
+              </span>
+            </TooltipTrigger>
+            {busy && disabledReason && (
+              <TooltipContent>{disabledReason}</TooltipContent>
+            )}
+          </Tooltip>
+        </TooltipProvider>
       )}
 
       <Dialog
@@ -150,18 +169,17 @@ export function ModelManagement({
       >
         <DialogContent
           onCloseAutoFocus={restore}
-          closeLabel="關閉匯入模型"
+          closeLabel={t("models.manage.pull.close")}
           className="max-w-lg"
         >
-          <DialogTitle>匯入 Hugging Face MLX 模型</DialogTitle>
+          <DialogTitle>{t("models.manage.pull.title")}</DialogTitle>
           <DialogDescription>
-            輸入原生 MLX safetensors 儲存庫
-            ID（org/name）。這會開始實際下載；檔案大小未知，服務不提供下載進度或取消操作。
+            {t("models.manage.pull.description")}
           </DialogDescription>
           <form className="space-y-4" onSubmit={submitPull}>
             <div>
               <label htmlFor="model-repository" className="text-sm">
-                儲存庫 ID
+                {t("models.manage.pull.repoLabel")}
               </label>
               <Input
                 id="model-repository"
@@ -173,8 +191,7 @@ export function ModelManagement({
                 required
               />
               <p className="mt-2 text-xs text-muted-foreground">
-                僅支援 Hugging Face 原生 MLX 模型；Ollama registry 與 GGUF
-                不支援。
+                {t("models.manage.pull.hint")}
               </p>
             </div>
             <div className="flex justify-end gap-2">
@@ -184,10 +201,10 @@ export function ModelManagement({
                 disabled={busy}
                 onClick={close}
               >
-                取消
+                {t("models.manage.cancel")}
               </Button>
               <Button type="submit" disabled={busy || !validRepository}>
-                開始下載
+                {t("models.manage.pull.start")}
               </Button>
             </div>
           </form>
@@ -200,18 +217,17 @@ export function ModelManagement({
       >
         <DialogContent
           onCloseAutoFocus={restore}
-          closeLabel="關閉建立別名"
+          closeLabel={t("models.manage.copy.close")}
           className="max-w-lg"
         >
-          <DialogTitle>建立模型別名</DialogTitle>
+          <DialogTitle>{t("models.manage.copy.title")}</DialogTitle>
           <DialogDescription>
-            為 {modelId}{" "}
-            建立持久別名。服務會建立指向相同權重的連結，不會複製模型檔案。
+            {t("models.manage.copy.description", { id: modelId ?? "" })}
           </DialogDescription>
           <form className="space-y-4" onSubmit={submitCopy}>
             <div>
               <label htmlFor="model-alias" className="text-sm">
-                新模型 ID
+                {t("models.manage.copy.newId")}
               </label>
               <Input
                 id="model-alias"
@@ -230,13 +246,13 @@ export function ModelManagement({
                 disabled={busy}
                 onClick={close}
               >
-                取消
+                {t("models.manage.cancel")}
               </Button>
               <Button
                 type="submit"
                 disabled={busy || !validAlias || alias === modelId}
               >
-                建立別名
+                {t("models.manage.createAlias")}
               </Button>
             </div>
           </form>
@@ -249,18 +265,17 @@ export function ModelManagement({
       >
         <DialogContent
           onCloseAutoFocus={restore}
-          closeLabel="關閉刪除模型確認"
+          closeLabel={t("models.manage.delete.close")}
           className="max-w-lg"
         >
-          <DialogTitle>刪除模型與權重？</DialogTitle>
+          <DialogTitle>{t("models.manage.delete.title")}</DialogTitle>
           <DialogDescription>
-            這項操作可能永久移除模型權重，無法復原。請輸入完整模型 ID「{modelId}
-            」確認。
+            {t("models.manage.delete.description", { id: modelId ?? "" })}
           </DialogDescription>
           <form className="space-y-4" onSubmit={submitDelete}>
             <div>
               <label htmlFor="delete-model-confirm" className="text-sm">
-                確認模型 ID
+                {t("models.manage.delete.confirmLabel")}
               </label>
               <Input
                 id="delete-model-confirm"
@@ -278,14 +293,14 @@ export function ModelManagement({
                 disabled={busy}
                 onClick={close}
               >
-                取消
+                {t("models.manage.cancel")}
               </Button>
               <Button
                 type="submit"
                 variant="destructive"
                 disabled={busy || !exactConfirmation}
               >
-                刪除模型
+                {t("models.manage.deleteModel")}
               </Button>
             </div>
           </form>

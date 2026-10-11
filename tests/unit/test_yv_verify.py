@@ -81,6 +81,8 @@ def git(cwd, *a):
 @pytest.fixture
 def world(tmp_path, monkeypatch):
     """A tiny repo with two commits (cand edits foo.py + its test) and fakes wired in."""
+    # The caller's production queue window must not alter fixture expectations.
+    monkeypatch.delenv("YV_MAX_PENDING", raising=False)
     repo = tmp_path / "repo"
     (repo / "python/yunshu_engine").mkdir(parents=True)
     for pkg in ("yunshu_engine", "yunshu_gateway", "yunshu_kv"):
@@ -162,6 +164,33 @@ def jobs(w):
 
 
 # ── suites ───────────────────────────────────────────────────────────────
+def test_multimodal_speed_rejects_short_turn_regression_and_keeps_long_cells():
+    numbers = {}
+    for rep in range(3):
+        for arm in ("base", "cand"):
+            numbers[f"{arm}-r{rep}"] = [
+                dict(
+                    size=size,
+                    kind=kind,
+                    ttft_s=(
+                        0.1177
+                        if arm == "cand" and kind == "turn2-hit" and size == 46
+                        else 0.1
+                    ),
+                )
+                for size in (46, 32768)
+                for kind in ("cold", "warm", "turn2-hit")
+            ]
+    result = stages._multimodal_speed(numbers, 3, 2)
+    assert not result["ok"]
+    assert result["regressions"][0]["ctx"] == 46
+    assert {r["ctx"] for r in result["cells"]} == {46, 32768}
+    for rep in range(3):
+        for row in numbers[f"cand-r{rep}"]:
+            row["ttft_s"] = 0.1
+    assert stages._multimodal_speed(numbers, 3, 2)["ok"]
+
+
 def test_suite_named_and_adhoc():
     assert suites.parse_suite("decode")["stages"][0] == "preflight"
     cfg = suites.parse_suite("speed,smoke")
@@ -178,14 +207,23 @@ def test_full_suite_has_every_stage():
         "longqa",
         "conc",
         "ttft_profile",
+        "multimodal",
+        "snapshot",
         "modelprobe",
         "client_compat",
         "respfeat",
         "websearch",
         "rerank",
+        "embedding",
+        "priorart",
         "evals",
+        "console",
+        "telemetry",
+        "telemetry-tiny",
         "tavily",
         "searchrank",
+        "toolparse",
+        "qwen4_mtp",
     }
 
 
@@ -363,6 +401,42 @@ def test_base_identity_is_shared_across_runs_but_candidate_cells_are_not(world):
 def mkexec(w, label="x"):
     rd = core.RunDir(w.runs / label)
     return rd, Executor(rd, w.gq, label, lambda m: None, cache_dir=w.tmp / "cellcache")
+
+
+@pytest.mark.parametrize("failure", [None, "6"])
+def test_executor_bounds_pending_cells_and_stops_before_next_window(
+    world, monkeypatch, failure
+):
+    from verify.execute import CellResult
+
+    _, ex = mkexec(world)
+    live, submitted, cancelled = set(), [], []
+    monkeypatch.setattr(ex, "_cached", lambda c: None)
+    monkeypatch.setattr(ex, "_shared", lambda c: None)
+    monkeypatch.setattr(ex, "_inflight", lambda c: None)
+    monkeypatch.setattr(ex, "_attempts", lambda c: 0)
+
+    def submit(c, attempt):
+        live.add(c.key)
+        submitted.append(c.key)
+        assert len(live) <= 6
+        return c.key
+
+    def finish(c, jid, attempt):
+        live.remove(c.key)
+        return CellResult(c.key, c.key != failure)
+
+    monkeypatch.setattr(ex, "_submit", submit)
+    monkeypatch.setattr(ex, "_finish", finish)
+    monkeypatch.setattr(ex.gq, "cancel", cancelled.append)
+    results = ex.run_cells([Cell("st", str(i), []) for i in range(18)])
+    if failure is None:
+        assert len(results) == len(submitted) == 18
+        assert not live and not cancelled
+    else:
+        assert submitted == [str(i) for i in range(12)]
+        assert len(results) == 7 and not results["6"].ok
+        assert cancelled == [str(i) for i in range(7, 12)]
 
 
 def cell(key, body, **kw):
@@ -1198,6 +1272,175 @@ def test_executor_retries_paused_timing_but_accepts_correctness(
         assert "paused" in done[0]["reason"]
 
 
+def test_multimodal_evidence_is_fail_closed(tmp_path):
+    path = tmp_path / "mm.jsonl"
+    path.write_text('{"complete": true}\n')
+    assert not stages._multimodal_valid(path, [1], True)[0]
+    rows = []
+    for size, kinds in [
+        (1, ["cold", "warm", "turn2-hit", "turn2-miss", "other-image"]),
+        (
+            0,
+            [
+                "anthropic-cold",
+                "anthropic-warm",
+                "anthropic-turn2-hit",
+                "anthropic-turn2-miss",
+            ],
+        ),
+    ]:
+        for kind in kinds:
+            hit = kind.endswith("warm") or kind.endswith("hit")
+            rows.append(
+                dict(
+                    event="request",
+                    size=size,
+                    kind=kind,
+                    ids=[7],
+                    cached=42 if hit else 0,
+                )
+            )
+    rows.append(dict(complete=True))
+    path.write_text("".join(json.dumps(r) + "\n" for r in rows))
+    assert stages._multimodal_valid(path, [1], True)[0]
+    baseline = [r for r in rows if not r.get("kind", "").startswith("anthropic-")]
+    base_path = tmp_path / "base.jsonl"
+    base_path.write_text("".join(json.dumps(r) + "\n" for r in baseline))
+    assert stages._multimodal_valid(base_path, [1], False, require_anthropic=False)[0]
+    assert not stages._multimodal_valid(base_path, [1], True)[0]
+    paired = rows[:-1] + [
+        dict(
+            event="parity_item",
+            i=0,
+            cold_ids=[7],
+            hit_ids=[7],
+            cached=42,
+            cold_correct=True,
+            hit_correct=True,
+        ),
+        dict(event="quality", n=1, scores=dict(cold=1, hit=1)),
+        dict(complete=True),
+    ]
+    path.write_text("".join(json.dumps(r) + "\n" for r in paired))
+    assert stages._multimodal_quality_valid(path, [1], 1)[0]
+    paired[-3]["hit_ids"] = [8]
+    path.write_text("".join(json.dumps(r) + "\n" for r in paired))
+    assert not stages._multimodal_quality_valid(path, [1], 1)[0]
+    rows[1]["ids"] = [8]
+    path.write_text("".join(json.dumps(r) + "\n" for r in rows))
+    assert not stages._multimodal_valid(path, [1], True)[0]
+
+
+def test_gate_owner_prefix_and_timing_admission(gate_world):
+    assert (
+        run_gate(gate_world, stages=["install", "serve-27b"], label_prefix="sync015")
+        == 0
+    )
+    records = [
+        json.loads(p.read_text()) for p in (gate_world.tmp / "jobs").glob("*.json")
+    ]
+    assert all(r["label"].startswith("sync015-gate-") for r in records)
+    for record in records:
+        assert ("--quiet" in record["opts"]) == ("serve-27b" in record["label"])
+
+
+def test_gate_cli_pins_ref_and_forwards_owner_prefix(world, monkeypatch):
+    from verify import cli
+
+    commit = git(world.repo, "rev-parse", "base")
+    seen = {}
+    monkeypatch.setattr(core, "TREES", world.trees)
+
+    def capture(stages, **kwargs):
+        seen.update(kwargs)
+        assert stages == ["install"]
+        return 0
+
+    monkeypatch.setattr(cli.gate_mod, "run_gate", capture)
+    assert (
+        cli.main(
+            [
+                "gate",
+                "--ref",
+                commit,
+                "--label-prefix",
+                "sync015",
+                "--stages",
+                "install",
+                "--root",
+                str(world.tmp / "own-gate"),
+            ]
+        )
+        == 0
+    )
+    assert git(seen["repo"], "rev-parse", "HEAD") == commit
+    assert seen["label_prefix"] == "sync015"
+    assert seen["extra_env"] == {"GATE_ROOT": str(world.tmp / "own-gate")}
+
+
+def test_executor_bounds_submitted_cells_before_waiting(world, monkeypatch):
+    monkeypatch.setenv("YV_MAX_PENDING", "2")
+    _, ex = mkexec(world)
+    submit, finish = ex._submit, ex._finish
+    live = peak = 0
+
+    def tracked_submit(*args):
+        nonlocal live, peak
+        result = submit(*args)
+        live += 1
+        peak = max(peak, live)
+        return result
+
+    def tracked_finish(*args):
+        nonlocal live
+        result = finish(*args)
+        live -= 1
+        return result
+
+    monkeypatch.setattr(ex, "_submit", tracked_submit)
+    monkeypatch.setattr(ex, "_finish", tracked_finish)
+    result = ex.run_cells([cell(str(i), OK_BODY) for i in range(7)])
+    assert len(result) == 7 and all(r.ok for r in result.values())
+    assert peak <= 2
+
+
+def test_quality_uses_marked_arm_interpreters(world):
+    for name in ("base", "cand"):
+        arm = core.resolve_arm(name, name, world.trees)
+        (arm.path / ".venv/bin").mkdir(parents=True)
+        (arm.path / ".venv/bin/python").symlink_to(sys.executable)
+        (arm.path / ".yv-own-venv").touch()
+    assert go(world, suite="quality", mmlu_n=2) == 0
+    records = [json.loads(p.read_text()) for p in (world.tmp / "jobs").glob("*.json")]
+    for record in records:
+        command = record["cmd"]
+        tree = Path(
+            next(x.split("=", 1)[1] for x in command if x.startswith("PAIRED_TREE="))
+        )
+        expected = str(tree / ".venv/bin/python")
+        assert f"PAIRED_PY={expected}" in command
+        assert expected in command
+
+
+def test_marked_runtime_record_changes_arm_identity(tmp_path):
+    bindir = tmp_path / ".venv/bin"
+    bindir.mkdir(parents=True)
+    (bindir / "python").write_text("python")
+    (tmp_path / ".yv-own-venv").touch()
+    record = tmp_path / ".venv/lib/python3.13/site-packages/mlx-0.32.4.dist-info/RECORD"
+    record.parent.mkdir(parents=True)
+    record.write_text("mlx/core.so,sha256=old,1\n")
+    before = core.Arm("cand", "c", "a" * 40, tmp_path, "")
+    key = before.key
+    record.write_text("mlx/core.so,sha256=new,1\n")
+    after = core.Arm("cand", "c", "a" * 40, tmp_path, "")
+    assert after.key != key
+    assert before.key == key  # a run freezes its installed-runtime receipt
+    (tmp_path / ".yv-own-venv").unlink()
+    unmarked = core.Arm("cand", "c", "a" * 40, tmp_path, "")
+    assert unmarked.key == "a" * 12
+
+
 def test_detach_retains_caller_verifier_implementation(monkeypatch, tmp_path):
     from verify import cli
 
@@ -1217,6 +1460,23 @@ def test_modelprobe_is_explicit_and_not_in_release_suites():
 def test_evals_suite_is_a_separate_correctness_probe():
     assert suites.parse_suite("evals")["stages"] == ["preflight", "evals"]
     assert "evals" in stages.STAGE_FUNCS
+
+
+def test_declared_short_timeout_preserves_gpuq_short_lane(monkeypatch):
+    from types import SimpleNamespace
+
+    calls = []
+
+    def run(argv, **kw):
+        calls.append(argv)
+        return SimpleNamespace(returncode=0, stdout="fake-job-id\n", stderr="")
+
+    monkeypatch.setattr(core, "subprocess", SimpleNamespace(run=run))
+    gq = core.Gpuq(binary="fake-gpuq")
+    gq.submit("short", ["python", "--version"], timeout_min=10, mem_gb=60, priority=-1)
+    gq.submit("long", ["python", "--version"], timeout_min=14, mem_gb=60, priority=-1)
+    assert "--short" in calls[0]
+    assert "--short" not in calls[1]
 
 
 def test_client_routes_validator_fails_closed(tmp_path):
@@ -1308,3 +1568,28 @@ def test_ttft_profile_32k_cells_use_the_short_lane_and_128k_does_not(tmp_path):
         with pytest.raises(StopError):
             stages.stage_ttft_profile(ctx)
         assert (max(c.timeout_min for c in cells) <= 10) is limit_ok
+
+
+def test_qwen4_tiny_verdict_rejects_incomplete_or_unengaged_evidence(tmp_path):
+    evidence = tmp_path / "native.jsonl"
+    checks = [{"check": f"spec-depth-{d}", "passed": True} for d in (2, 3, 4)]
+    checks += [{"check": f"rollback-{k}", "passed": True} for k in (1, 2, 3, 4)]
+    good = {
+        "complete": True,
+        "passed": True,
+        "device": "m5",
+        "engaged": "qwen4-native",
+        "checks": checks,
+    }
+    evidence.write_text(json.dumps(good) + "\n")
+    assert stages._qwen4_mtp_valid(evidence)[0]
+    for bad in (
+        {"complete": False},
+        {"dry_run": True},
+        {"device": "m3"},
+        {"engaged": "off"},
+        {"checks": checks[:-1]},
+        {"checks": [dict(c, passed=False) for c in checks]},
+    ):
+        evidence.write_text(json.dumps({**good, **bad}) + "\n")
+        assert not stages._qwen4_mtp_valid(evidence)[0]

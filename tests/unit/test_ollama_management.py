@@ -103,9 +103,21 @@ def test_busy_copy_cannot_be_deleted(managed):
 
 def test_pull_native_repository(managed, monkeypatch):
     client, entries, _ = managed
-    monkeypatch.setattr(
-        "huggingface_hub.snapshot_download", lambda **kw: om.paths.models_dir() / "base"
-    )
+    from yunshu_gateway import downloads
+
+    class Hub:
+        def list_files(self, repo, revision, patterns):
+            return [("model.safetensors", 7)]
+
+        def cache_dir(self):
+            return om.paths.models_dir()
+
+        def download(self, repo, revision, patterns, local_dir, on_file, on_bytes):
+            on_file("model.safetensors", 7, 0)
+            on_bytes("model.safetensors", 7)
+            return om.paths.models_dir() / "base"
+
+    monkeypatch.setattr(downloads, "_registry", downloads.DownloadRegistry(Hub()))
     r = client.post("/api/pull", json={"model": "org/native", "stream": False})
     assert r.status_code == 200 and r.json() == {"status": "success"}
     assert entries["org/native"].model_path == str(om.model_link("org/native"))

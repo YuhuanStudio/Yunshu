@@ -1,0 +1,214 @@
+---
+title: Rerank and scoring
+description: Rerank documents against a query, score text pairs and classify text with embedding models, cross-encoder rerankers and sequence-classifier checkpoints.
+---
+
+Three vLLM-style routes cover retrieval post-processing: `POST /v1/rerank` orders documents by relevance to a query, `POST /v1/score` scores text pairs, and `POST /v1/classify` assigns labels. They run on whatever scoring-capable model you name:
+
+- A trained cross-encoder reranker (text, or a multimodal reranker such as Qwen3-VL-Reranker) scores each query/document pair jointly. This is the accurate option.
+- A sequence-classifier checkpoint (a model with a trained classification head) is used by `POST /v1/classify` with the labels stored in the checkpoint.
+- An embedding model works as a fallback: similarity between separately computed vectors. It is cheaper but less precise than a cross-encoder, and for `rerank` the cosine similarity is mapped to the `0` to `1` range.
+
+A chat model cannot be used for these routes; they answer `400` with a message that the model cannot produce embeddings.
+
+<Endpoint method="POST" path="/v1/rerank" />
+<Endpoint method="POST" path="/v1/score" />
+<Endpoint method="POST" path="/v1/classify" />
+
+<Callout type="info">
+Authentication is only enforced when `YUNSHU_AUTH_TOKEN` is set. See [API overview](/docs/api/overview). In multi-model mode `model` selects the scoring model; in single-model mode the loaded model itself must be one.
+</Callout>
+
+## Rerank
+
+### Request
+
+| Parameter | Type | Required | Description | Status |
+| --- | --- | --- | --- | --- |
+| `model` | string | yes | Reranker or embedding model id. | supported |
+| `query` | string or object | yes | The query. An object `{"text": ..., "image": ...}` needs a multimodal cross-encoder. | supported |
+| `documents` | array | yes | Up to 2048 items, each a string or a `{"text": ..., "image": ...}` object. Strings longer than 8192 characters are truncated. | supported |
+| `top_n` | integer | no | Return only the best `n`, `1` to `2048`. | supported |
+| `return_documents` | boolean | no | Default `true`: each result carries its `document`. | supported |
+| `instruction` | string | no | Task instruction for cross-encoders that take one, up to 8192 characters. | supported |
+| `use_activation` | boolean | no | Text cross-encoders only: apply the score activation (default on). Any other model answers `400`. | extension |
+
+### Example
+
+<Tabs items={["curl", "Python"]}>
+<Tab value="curl">
+
+```bash
+curl http://localhost:8000/v1/rerank \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "Qwen/Qwen3-Reranker-0.6B",
+    "query": "How do I reset my password?",
+    "documents": [
+      "Our office is closed on public holidays.",
+      "To reset your password, open Settings and choose Security.",
+      "Shipping usually takes three to five days."
+    ],
+    "top_n": 2
+  }'
+```
+
+</Tab>
+<Tab value="Python">
+
+```python
+import requests
+
+r = requests.post(
+    "http://localhost:8000/v1/rerank",
+    json={
+        "model": "Qwen/Qwen3-Reranker-0.6B",
+        "query": "How do I reset my password?",
+        "documents": [
+            "Our office is closed on public holidays.",
+            "To reset your password, open Settings and choose Security.",
+            "Shipping usually takes three to five days.",
+        ],
+        "top_n": 2,
+    },
+)
+for item in r.json()["results"]:
+    print(item["index"], item["relevance_score"], item["document"]["text"])
+```
+
+</Tab>
+</Tabs>
+
+### Response
+
+```json
+{
+  "id": "rerank-1760000000",
+  "object": "list",
+  "model": "Qwen/Qwen3-Reranker-0.6B",
+  "results": [
+    { "index": 1, "relevance_score": 0.982114, "document": { "text": "To reset your password, open Settings and choose Security." } },
+    { "index": 2, "relevance_score": 0.114203, "document": { "text": "Shipping usually takes three to five days." } }
+  ],
+  "usage": { "prompt_tokens": 63, "total_tokens": 63 }
+}
+```
+
+Results are sorted by `relevance_score`, best first; `index` is the position in the request's `documents`. `relevance_score` is rounded to six decimals. For a cross-encoder it is the model's score; for an embedding model it is `(cosine + 1) / 2`.
+
+## Score
+
+`POST /v1/score` scores pairs of texts and returns one number per pair.
+
+| Parameter | Type | Required | Description | Status |
+| --- | --- | --- | --- | --- |
+| `model` | string | yes | Model id. | supported |
+| `text_1` | string or array | yes | First texts. Aliases: `queries`, `data_1`. | supported |
+| `text_2` | string or array | yes | Second texts. Aliases: `documents`, `items`, `data_2`. | supported |
+| `scoring_type` | string | no | `cosine` (default), `dot` or `euclidean` (the negative distance). Only configurable for embedding models; cross-encoders answer `400` for anything but `cosine`. | supported |
+| `use_activation` | boolean | no | Text cross-encoders only. | extension |
+| `instruction` | string | no | Task instruction for cross-encoders. Also accepted as `chat_template_kwargs.instruction`; other `chat_template_kwargs` keys are a `400`. | supported |
+
+The two sides are paired element by element. If one side has a single item it is broadcast against the other; otherwise the lengths must match. At most 2048 items per side and 8192 characters per text.
+
+```bash
+curl http://localhost:8000/v1/score \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "Qwen/Qwen3-Reranker-0.6B",
+    "text_1": "What is the capital of France?",
+    "text_2": ["Paris is the capital of France.", "Bananas are yellow."]
+  }'
+```
+
+```json
+{
+  "object": "list",
+  "id": "score-0f1e2d3c4b5a69788796a5b4c3d2e1f0",
+  "created": 1760000000,
+  "model": "Qwen/Qwen3-Reranker-0.6B",
+  "data": [
+    { "object": "score", "index": 0, "score": 0.9731 },
+    { "object": "score", "index": 1, "score": 0.0124 }
+  ],
+  "usage": { "prompt_tokens": 38, "total_tokens": 38 }
+}
+```
+
+## Classify
+
+`POST /v1/classify` works in two modes, chosen by the model.
+
+**Trained classifier.** If the model is a sequence-classifier checkpoint, `input` is a string or an array of strings and `labels` must be omitted (the checkpoint's own labels are used; sending `labels` is a `400`).
+
+```json
+{
+  "object": "list",
+  "model": "my-classifier",
+  "data": [
+    { "object": "classification", "index": 0, "probs": [0.91, 0.06, 0.03] }
+  ],
+  "labels": ["positive", "neutral", "negative"],
+  "usage": { "prompt_tokens": 9, "total_tokens": 9 },
+  "results": [
+    { "label": "positive", "score": 0.91, "index": 0 },
+    { "label": "neutral", "score": 0.06, "index": 1 },
+    { "label": "negative", "score": 0.03, "index": 2 }
+  ]
+}
+```
+
+`results` (labels sorted by score) is added when `input` was a single string.
+
+**Zero-shot with an embedding model.** `input` is one string and `labels` has at least two entries (`candidate_labels` is accepted as an alias). The input and each label are embedded, cosine similarities are divided by `temperature` (default `0.07`, range above `0` up to `10`) and passed through a softmax.
+
+```bash
+curl http://localhost:8000/v1/classify \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "Qwen/Qwen3-Embedding-0.6B",
+    "input": "The battery died after two hours.",
+    "labels": ["battery", "screen", "shipping"]
+  }'
+```
+
+```json
+{
+  "model": "Qwen/Qwen3-Embedding-0.6B",
+  "results": [
+    { "label": "battery", "score": 0.874, "index": 0 },
+    { "label": "screen", "score": 0.082, "index": 2 },
+    { "label": "shipping", "score": 0.044, "index": 1 }
+  ],
+  "usage": { "prompt_tokens": 16, "total_tokens": 16 }
+}
+```
+
+`index` is the label's position in the request; `results` is sorted by `score`. Scores sum to one.
+
+## Errors
+
+| Status | When |
+| --- | --- |
+| 400 | Validation (empty text, length mismatch that cannot broadcast, unknown `scoring_type`, fewer than two labels, text over 8192 characters, `labels` sent to a trained classifier); a multimodal query or document sent to a model that is not a cross-encoder reranker; `use_activation` on a model that is not a text cross-encoder; a chat model that cannot embed. |
+| 401 | Token configured and missing or wrong. |
+| 404 | The model is not found. |
+| 507 | Out of GPU memory. |
+| 500 | Scoring failed (`server_error`). |
+
+## Support
+
+| Feature | Status |
+| --- | --- |
+| Text cross-encoder reranking | <Support status="supported">supported</Support> |
+| Multimodal reranking (image query or documents) | <Support status="partial">multimodal cross-encoder models only</Support> |
+| Embedding-model fallback for rerank, score, classify | <Support status="supported">supported</Support> |
+| Trained sequence-classifier heads | <Support status="supported">supported</Support> |
+| `dot` and `euclidean` scoring | <Support status="partial">embedding models only</Support> |
+| Cohere or Jina specific fields (`max_chunks_per_doc`, `rank_fields`) | <Support status="unsupported">not supported; unknown fields are ignored</Support> |
+
+## Related
+
+- [Embeddings](/docs/api/embeddings)
+- [Models](/docs/api/models)
+- [Model support](/docs/guides/model-support)

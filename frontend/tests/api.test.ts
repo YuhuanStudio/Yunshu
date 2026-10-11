@@ -180,7 +180,8 @@ test("requestJson parses backend detail, status, invalid JSON and timeout errors
         (error: unknown) => {
           assert.ok(error instanceof ApiError);
           assert.equal(error.status, 409);
-          assert.equal(error.publicMessage, "Model is in use");
+          assert.match(error.publicMessage, /衝突/);
+          assert.equal(error.detail, "Model is in use");
           return true;
         },
       );
@@ -193,7 +194,7 @@ test("requestJson parses backend detail, status, invalid JSON and timeout errors
       await assert.rejects(
         requestJson(connection, "/yunshu/status"),
         (error: unknown) =>
-          error instanceof ApiError && /invalid JSON/.test(error.message),
+          error instanceof ApiError && /JSON/.test(error.message),
       );
     },
   );
@@ -211,7 +212,7 @@ test("requestJson parses backend detail, status, invalid JSON and timeout errors
       await assert.rejects(
         requestJson(connection, "/yunshu/status", { timeoutMs: 5 }),
         (error: unknown) =>
-          error instanceof ApiError && /timed out/.test(error.publicMessage),
+          error instanceof ApiError && /逾時/.test(error.publicMessage),
       );
     },
   );

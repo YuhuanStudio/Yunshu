@@ -1,0 +1,332 @@
+---
+title: Messages
+description: Anthropic Messages API with tools, thinking, images, documents with citations, token counting and message batches.
+---
+
+Yunshu serves the Anthropic Messages API on `POST /v1/messages` (also reachable as `POST /messages`), token counting on `POST /v1/messages/count_tokens`, and Message Batches under `/v1/messages/batches`. The official `anthropic` Python and TypeScript SDKs work by pointing `base_url` at the server root, with no `/v1` suffix. Claude Code and other Anthropic-dialect agents connect the same way (see [Agents](/docs/guides/agents)).
+
+Requests are translated to the same engine path as [Chat Completions](/docs/api/chat-completions), so the local model, prefix cache and constrained decoding are shared. Server-side tools (`web_search_20250305`, `web_fetch_20250910`, the MCP connector) are described in [Server tools](/docs/api/server-tools).
+
+<Endpoint method="POST" path="/v1/messages" />
+<Endpoint method="POST" path="/messages" />
+<Endpoint method="POST" path="/v1/messages/count_tokens" />
+<Endpoint method="POST" path="/messages/count_tokens" />
+<Endpoint method="POST" path="/v1/messages/batches" />
+<Endpoint method="GET" path="/v1/messages/batches" />
+<Endpoint method="GET" path="/v1/messages/batches/{batch_id}" />
+<Endpoint method="POST" path="/v1/messages/batches/{batch_id}/cancel" />
+<Endpoint method="DELETE" path="/v1/messages/batches/{batch_id}" />
+<Endpoint method="GET" path="/v1/messages/batches/{batch_id}/results" />
+
+<Callout type="info">
+Authentication is only enforced when `YUNSHU_AUTH_TOKEN` is set. The Anthropic SDK sends its key as `x-api-key`, which the server accepts in place of `Authorization: Bearer`. In single-model mode the `model` field is advisory: the loaded model answers under any name (for example `claude-sonnet-4-5`) and the response echoes the name you sent. In multi-model mode `YUNSHU_MODEL_ALIASES` can map such names onto a served model.
+</Callout>
+
+## Headers
+
+| Header | Behavior |
+| --- | --- |
+| `x-api-key` | Honored as the bearer token when `YUNSHU_AUTH_TOKEN` is set. |
+| `Authorization: Bearer ...` | Also accepted. |
+| `anthropic-version` | Accepted from any client; the value is not validated and does not change behavior. |
+| `anthropic-beta` | Accepted; not required. Beta features such as the MCP connector, structured outputs and the Files API are driven by the request body, not by this header. |
+
+## Request
+
+### Core fields
+
+| Parameter | Type | Required | Description | Status |
+| --- | --- | --- | --- | --- |
+| `model` | string | yes | Model id; advisory in single-model mode. | supported |
+| `messages` | array | yes | Non-empty list of `{role, content}`. `content` is a string or a list of blocks. A leading or in-conversation `system` role entry is lifted into the system prompt. | supported |
+| `max_tokens` | integer | no | 1 to 1048576. The Anthropic API requires it; Yunshu falls back to 1024 when it is omitted. | supported |
+| `system` | string or array of text blocks | no | System prompt. Blocks may carry `cache_control`. | supported |
+| `temperature` | number | no | 0 to 2. Default 0.7 when omitted. | supported |
+| `top_p`, `top_k` | number, integer | no | `top_p` 0 to 1 (default 1.0); `top_k` 0 disables. | supported |
+| `stop_sequences` | array of string | no | Up to 16 non-empty strings. A match ends the turn with `stop_reason: "stop_sequence"` and the matched string in `stop_sequence`. | supported |
+| `stream` | boolean | no | Server-Sent Events. | supported |
+| `metadata` | object | no | Accepted. | accepted and ignored |
+| `service_tier`, `container` | string, object | no | Accepted so SDK requests validate. | accepted and ignored |
+| `context_management` | object | no | Accepted (Claude Code sends it). No context editing is performed. | accepted and ignored |
+
+### Thinking
+
+| Parameter | Description | Status |
+| --- | --- | --- |
+| `thinking: {"type": "enabled", "budget_tokens": N}` | Turns thinking on with a budget. `budget_tokens` must be a positive integer below `max_tokens`, otherwise `400`. The reasoning is returned as `thinking` content blocks. | supported |
+| `thinking: {"type": "disabled"}` | Turns thinking off. | supported |
+| `thinking: {"type": "adaptive"}` | Leaves the model's template default. | supported |
+| `output_config.effort` | Becomes the template's reasoning effort. `reasoning_effort` is the Yunshu spelling. | supported |
+
+Thinking is a property of the loaded model. For models whose chat template does not think natively, `enabled` adds an instruction to wrap reasoning in `<think>` tags and constrains the start of the reply to do so, so a `thinking` block is still returned. A forced `tool_choice` (`any` or `tool`) turns thinking off, as Anthropic does not combine them. Thinking blocks carry an empty `signature`; there are no redacted thinking blocks.
+
+### Tools
+
+| Parameter | Type | Description | Status |
+| --- | --- | --- | --- |
+| `tools` | array | Custom tools `{name, description, input_schema}`. | supported |
+| `tool_choice` | object or string | `{"type": "auto"}`, `{"type": "any"}`, `{"type": "tool", "name": "..."}`, `{"type": "none"}`. `disable_parallel_tool_use: true` caps the reply to one call. Forced choices are enforced by constrained decoding; a call to a tool other than the forced one is dropped. | supported |
+| `tools[].cache_control` | object | Participates in cache accounting (see below). | supported |
+| `bash_*`, `text_editor_*`, `memory_*`, `computer_*` typed tools | object | Declared by `type` and `name` only. Yunshu fills in the documented `input_schema` so a local model can produce a valid `tool_use`; your client executes the tool and sends back the `tool_result`. `computer_*` supports `display_width_px`, `display_height_px`, `display_number` and `enable_zoom`. The newer `computer_toolset_20260801` protocol is not implemented. | partial |
+| `web_search_*`, `web_fetch_*`, `mcp_toolset` and top-level `mcp_servers` | array | Executed by the server. See [Server tools](/docs/api/server-tools). | supported |
+| `code_execution_*` and other hosted tools | | Not available. | not supported |
+
+Client tool results go back as `tool_result` blocks in a user message, as in the hosted API. A `tool_result` may contain text and image blocks.
+
+### Content blocks
+
+| Block | Description | Status |
+| --- | --- | --- |
+| `text` | Plain text, optional `cache_control`. | supported |
+| `image` | `source` of type `base64` (png, jpeg, gif, webp), `url` (checked against SSRF rules; private and non-HTTP(S) URLs are a `400`), or `file` (a [Files](/docs/api/files) id). Needs a vision-language model; a text-only model answers `400`. | supported |
+| `document` | `source` of type `text` (`text/plain`), `content` (text and image blocks), `base64` PDF (up to 32 MiB and 100 pages, unencrypted), `url` (a PDF; private addresses are blocked) or `file`. `title`, `context` and `citations: {"enabled": true}` are honored. The text layer is read; a vision model also receives page images, and image-only PDFs need a vision model. Extracted text is capped at 2 million characters. | supported |
+| `tool_use`, `tool_result` | Client tool round trips. | supported |
+| `thinking` | Returned for reasoning models; accepted back in assistant turns. | supported |
+| `server_tool_use`, `web_search_tool_result`, `web_fetch_tool_result`, `mcp_tool_use`, `mcp_tool_result` | Returned by server tools; accepted back in history. | supported |
+| `search_result`, `container_upload`, `redacted_thinking` | Not interpreted. | not supported |
+
+#### Citations
+
+When a `document` block has `citations: {"enabled": true}`, the model is shown the document with exact character offsets and asked to mark sources. Markers are validated against the real document and translated to the public schema: `char_location` (text), `page_location` (PDF) or `content_block_location` (content documents), each with `cited_text`, `document_index` and `document_title`. A marker outside the document, or a citation to a document without citations enabled, fails the request with `502` (an SSE `error` event when streaming) rather than returning a made-up citation. In a stream the citations arrive as `citations_delta` events. Citation quality depends on the local model following the marker instruction.
+
+### Structured output and engine controls
+
+| Parameter | Description | Status |
+| --- | --- | --- |
+| `output_config.format` / `output_format` | `{"type": "json_schema", "schema": {...}}` constrains decoding to the schema. | supported |
+| `cache_control` (top level, block level) | Marks prefix-cache breakpoints (see below). | supported |
+| `json_schema`, `response_format`, `grammar` | Yunshu extensions for constrained decoding (`json_object`, `json_schema`; `regex`, `choice`, `cfg` grammars). | extension |
+| `min_p`, `repetition_penalty`, `frequency_penalty`, `presence_penalty`, `logit_bias`, `seed`, `stop_token_ids`, `min_tokens`, `ignore_eos`, `suppress_tokens`, `xtc_probability`, `xtc_threshold`, `logprobs`, `top_logprobs`, `lora_adapter`, `spec_decode`, `priority`, `timeout` | Engine controls shared with the other routes. | extension |
+
+### Prompt caching
+
+`cache_control: {"type": "ephemeral"}` on system blocks, messages, tool definitions or documents marks cache breakpoints. Yunshu's prefix cache is automatic; the hints tell it where durable breakpoints are. Usage reports the split: `cache_read_input_tokens` is the reused prefix, `cache_creation_input_tokens` is the cacheable prefix written this turn (up to the last breakpoint), and `input_tokens` is the rest, so the three add up to the prompt length. See [Prompt caching](/docs/guides/prompt-caching).
+
+## Examples
+
+<Tabs items={["curl", "Python", "TypeScript"]}>
+<Tab value="curl">
+
+```bash
+curl http://localhost:8000/v1/messages \
+  -H "Content-Type: application/json" \
+  -H "x-api-key: sk-local" \
+  -H "anthropic-version: 2023-06-01" \
+  -d '{
+    "model": "local",
+    "max_tokens": 256,
+    "system": "You are concise.",
+    "messages": [{"role": "user", "content": "Name three primary colors."}]
+  }'
+```
+
+</Tab>
+<Tab value="Python">
+
+```python
+import anthropic
+
+client = anthropic.Anthropic(base_url="http://localhost:8000", api_key="sk-local")
+
+message = client.messages.create(
+    model="local",
+    max_tokens=256,
+    messages=[{"role": "user", "content": "Name three primary colors."}],
+)
+print(message.content[0].text)
+print(message.usage.input_tokens, message.usage.output_tokens)
+```
+
+</Tab>
+<Tab value="TypeScript">
+
+```ts
+import Anthropic from "@anthropic-ai/sdk";
+
+const client = new Anthropic({ baseURL: "http://localhost:8000", apiKey: "sk-local" });
+
+const stream = client.messages.stream({
+  model: "local",
+  max_tokens: 256,
+  messages: [{ role: "user", content: "Write a haiku about rain." }],
+});
+stream.on("text", (t) => process.stdout.write(t));
+const final = await stream.finalMessage();
+console.log(final.stop_reason);
+```
+
+</Tab>
+</Tabs>
+
+### Tool use
+
+```python
+tools = [{
+    "name": "get_weather",
+    "description": "Current weather for a city",
+    "input_schema": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]},
+}]
+msgs = [{"role": "user", "content": "Weather in Taipei?"}]
+r1 = client.messages.create(model="local", max_tokens=512, tools=tools, messages=msgs)
+use = next(b for b in r1.content if b.type == "tool_use")
+msgs += [
+    {"role": "assistant", "content": r1.content},
+    {"role": "user", "content": [{"type": "tool_result", "tool_use_id": use.id, "content": "24 C, clear"}]},
+]
+r2 = client.messages.create(model="local", max_tokens=512, tools=tools, messages=msgs)
+print(r2.content[0].text)
+```
+
+### Image
+
+```python
+import base64
+
+data = base64.b64encode(open("photo.png", "rb").read()).decode()
+r = client.messages.create(
+    model="local",
+    max_tokens=200,
+    messages=[{
+        "role": "user",
+        "content": [
+            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": data}},
+            {"type": "text", "text": "What is in this picture?"},
+        ],
+    }],
+)
+```
+
+### Document with citations
+
+```python
+r = client.messages.create(
+    model="local",
+    max_tokens=300,
+    messages=[{
+        "role": "user",
+        "content": [
+            {
+                "type": "document",
+                "source": {"type": "text", "media_type": "text/plain", "data": "The moon orbits Earth every 27.3 days."},
+                "title": "Moon facts",
+                "citations": {"enabled": True},
+            },
+            {"type": "text", "text": "How long is the moon's orbit?"},
+        ],
+    }],
+)
+for block in r.content:
+    print(block.text, getattr(block, "citations", None))
+```
+
+### Thinking
+
+```python
+r = client.messages.create(
+    model="local",
+    max_tokens=2048,
+    thinking={"type": "enabled", "budget_tokens": 1024},
+    messages=[{"role": "user", "content": "Is 91 prime?"}],
+)
+for block in r.content:
+    print(block.type)  # thinking, then text
+```
+
+### Count tokens
+
+```python
+n = client.messages.count_tokens(
+    model="local",
+    messages=[{"role": "user", "content": "Hello"}],
+)
+print(n.input_tokens)
+```
+
+## Response
+
+```json
+{
+  "id": "msg_4f1c2a7e9b3d4c5a6e7f8091",
+  "type": "message",
+  "role": "assistant",
+  "model": "local",
+  "content": [
+    { "type": "text", "text": "Red, yellow and blue." }
+  ],
+  "stop_reason": "end_turn",
+  "stop_sequence": null,
+  "usage": {
+    "input_tokens": 21,
+    "output_tokens": 8,
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0
+  }
+}
+```
+
+`stop_reason` is `end_turn`, `max_tokens` (also used when generation was cut short by a timeout or the memory guard), `stop_sequence`, `tool_use`, or `pause_turn` (a server-tool loop that hit its iteration limit; see [Server tools](/docs/api/server-tools)). When the model reasoned, `usage.output_tokens_details.reasoning_tokens` is present. Server-tool requests add `usage.server_tool_use`.
+
+### Count tokens
+
+`POST /v1/messages/count_tokens` takes the same body as `POST /v1/messages` and returns `{"input_tokens": N}`. It renders the prompt like generation does (system prompt including lifted `system` messages, tools, thinking instructions, documents, files) through the chat template, so the count matches the `input_tokens` of the real call. Each image is counted with a fixed estimate of 576 tokens.
+
+### Message batches
+
+Batches run on a background worker that calls this server over loopback and resumes after a restart. `POST /v1/messages/batches` takes `{"requests": [{"custom_id", "params"}]}` where `params` is a normal Messages body (`model`, `max_tokens` and `messages` required); `custom_id` must match `^[a-zA-Z0-9_-]{1,64}$` and be unique, with at most 100000 requests. The batch object has `type: "message_batch"`, `processing_status` (`in_progress`, `canceling`, `ended`), `request_counts`, timestamps and `results_url`. List with `limit` (1-1000), `after_id`, `before_id`. Results (`GET .../results`) are JSONL and are only available after the batch has ended (`409` before). Cancelling an ended batch, or deleting one that is still processing, is a `400`. The OpenAI-style batch API is on [Batches](/docs/api/batches).
+
+## Streaming
+
+With `stream: true` the server sends Server-Sent Events in Anthropic's order:
+
+1. `message_start` (the message with empty `content` and the prompt `usage`)
+2. For each block: `content_block_start`, one or more `content_block_delta`, `content_block_stop`. Delta types are `thinking_delta` (thinking blocks come first), `text_delta`, `input_json_delta` (tool arguments, streamed as partial JSON) and `citations_delta` (documents with citations, server-tool results).
+3. `message_delta` with `delta.stop_reason`, `delta.stop_sequence` and cumulative `usage`
+4. `message_stop`
+
+`: keep-alive` comment lines are sent during long prefill so clients with short read timeouts stay connected. A failure after the stream starts is a single `event: error` with `{"type": "error", "error": {"type", "message"}}`, with no `message_delta` or `message_stop` after it. Dropping the connection cancels the generation.
+
+## Errors
+
+Errors use Anthropic's envelope, also for denials from the authentication and rate-limit layers on these paths:
+
+```json
+{ "type": "error", "error": { "type": "invalid_request_error", "message": "messages: field is required and cannot be empty" } }
+```
+
+| Status | `error.type` | Cause |
+| --- | --- | --- |
+| `400` | `invalid_request_error` | Invalid body (empty `messages`, `thinking.budget_tokens` not below `max_tokens`, more than 16 `stop_sequences`), prompt over the context window, an image sent to a text-only model, a blocked URL, an unreadable document, a model that does not support a requested feature. |
+| `401` | `authentication_error` | Missing or wrong key while `YUNSHU_AUTH_TOKEN` is set. |
+| `403` | `permission_error` | A key without access to the model. |
+| `404` | `not_found_error` | Unknown model in multi-model mode, unknown file id or batch id. |
+| `413` | `request_too_large` | Prompt too large to prefill, or an oversized document. |
+| `429` | `rate_limit_error` | A configured limit was hit. |
+| `500` | `api_error` | Internal error. |
+| `502` | `api_error` | A document citation the model produced did not validate. |
+| `503` / `529` | `overloaded_error` | No model loaded or the server is saturated. |
+
+## Support
+
+| Feature | Status |
+| --- | --- |
+| Messages, streaming and non-streaming | <Support status="supported">supported</Support> |
+| `count_tokens` | <Support status="supported">supported</Support> |
+| Message batches | <Support status="supported">supported</Support> |
+| Tools, `tool_choice`, parallel tool use control | <Support status="supported">supported</Support> |
+| `bash`, `text_editor`, `memory`, `computer` client tools | <Support status="partial">schemas supplied; the client executes them</Support> |
+| `thinking` enabled, disabled, adaptive | <Support status="supported">supported</Support> |
+| Images (base64, url, file) | <Support status="supported">supported (vision model)</Support> |
+| Documents and citations | <Support status="supported">supported</Support> |
+| Server tools: web search, web fetch, MCP connector | <Support status="supported">supported</Support> |
+| `cache_control` | <Support status="partial">hints and accounting; the cache itself is automatic</Support> |
+| `metadata`, `service_tier`, `container`, `context_management` | <Support status="partial">accepted and ignored</Support> |
+| Code execution, hosted memory tool, `search_result` blocks, signed or redacted thinking | <Support status="unsupported">not supported</Support> |
+
+## Related
+
+- [Server tools](/docs/api/server-tools)
+- [Chat Completions](/docs/api/chat-completions)
+- [Files](/docs/api/files)
+- [Batches](/docs/api/batches)
+- [Agents](/docs/guides/agents)
+- [Prompt caching](/docs/guides/prompt-caching)

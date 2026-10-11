@@ -123,3 +123,13 @@ def test_watchdog_index_stale(tmp_path: Path, monkeypatch) -> None:
     assert wd._index_stale(now + 60) == []  # at most hourly
     assert wd._index_stale(now + 3700)  # again after an hour
     assert os.fspath(tmp_path) in str(wd.BASE)
+
+
+def test_parity_board_invalid_and_present(tmp_path):
+    assert "unknown" in ri.parity_verdict(tmp_path)
+    p = tmp_path / "docs/research/parityboard/board.json"
+    p.parent.mkdir(parents=True)
+    p.write_text(json.dumps({"parity": 2, "total": 7, "missing": ["x"]}))
+    assert "parity: 2/7 items, missing: 1" in ri.parity_verdict(tmp_path)
+    p.write_text(json.dumps({"parity": 8, "total": 7, "missing": []}))
+    assert "unknown" in ri.parity_verdict(tmp_path)

@@ -26,6 +26,8 @@ def test_spec_counters_diff_per_request():
     spec = x_yunshu.build_stats(info, usage)["speculative"]
     assert spec == {
         "mode": "mtp",
+        "per_depth": [],
+        "position_basis": "depth",
         "drafted": 10,
         "accepted": 5,
         "acceptance_rate": 0.5,

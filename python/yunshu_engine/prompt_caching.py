@@ -441,7 +441,22 @@ def openai_plan(messages, options=None):
     }
 
 
-def expanded_boundaries(plain, expanded, points, media_ids):
+def image_token_wrappers(processor):
+    """Declared processor delimiters around an expanded image (e.g. Gemma 4)."""
+    tok = getattr(processor, "tokenizer", processor)
+    image_id = getattr(
+        processor, "image_token_id", getattr(tok, "image_token_id", None)
+    )
+    begin = getattr(processor, "boi_token", getattr(tok, "boi_token", None))
+    end = getattr(processor, "eoi_token", getattr(tok, "eoi_token", None))
+    if image_id is None or not begin or not end or not hasattr(tok, "encode"):
+        return {}
+    left = tuple(tok.encode(str(begin), add_special_tokens=False))
+    right = tuple(tok.encode(str(end), add_special_tokens=False))
+    return {int(image_id): (left, right)} if left and right else {}
+
+
+def expanded_boundaries(plain, expanded, points, media_ids, media_wrappers=None):
     """Map verified processor repetitions without guessing placeholder lengths.
 
     Non-media tokens must be identical. A media run maps only its start and
@@ -451,6 +466,21 @@ def expanded_boundaries(plain, expanded, points, media_ids):
     i = j = 0
     while i < len(plain) and j < len(expanded):
         token = plain[i]
+        wrapper = (media_wrappers or {}).get(token) if token in media_ids else None
+        if wrapper and token != expanded[j]:
+            left, right = wrapper
+            if tuple(expanded[j : j + len(left)]) != tuple(left):
+                raise ValueError("processor media begin delimiter differs")
+            j += len(left)
+            start = j
+            while j < len(expanded) and expanded[j] == token:
+                j += 1
+            if j == start or tuple(expanded[j : j + len(right)]) != tuple(right):
+                raise ValueError("processor media end delimiter differs")
+            j += len(right)
+            i += 1
+            mapping[i] = j  # full encoded image, including its delimiters
+            continue
         if token != expanded[j]:
             raise ValueError(
                 "processor tokens differ outside a verified media expansion"

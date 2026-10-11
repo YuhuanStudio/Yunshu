@@ -763,6 +763,9 @@ class FileTier:
             e = self.index.pop(h, None)
         if e is not None:
             self._unlink(e.path)
+            from .cache_observation import disk_event
+
+            disk_event(self, "eviction", h, len(e.tokens), "disk_budget_or_superseded")
 
     def _unlink(self, path: Path) -> None:
         """Delete a file; a file somebody is reading right now goes when the reader is done."""
@@ -858,6 +861,9 @@ class FileTier:
                     exc_info=True,
                 )
         self.demoted_in += 1
+        from .cache_observation import disk_event
+
+        disk_event(self, "demotion", cache_hash, len(tokens), "storage_placement")
         return True
 
     def raw_path_for_load(self, h: int, scratch: Path) -> tuple[Path, Path | None]:

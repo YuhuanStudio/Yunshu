@@ -907,6 +907,32 @@ def _rope_delta(lm) -> int:
     return int(delta.reshape(-1)[0].item())
 
 
+# Debug stage timer (YUNSHU_DEBUG_TREE_PROFILE): evaluates after every stage, so the
+# split is exact per stage but the total is longer than the pipelined real round.
+PROFILE: dict[str, float] = {"rounds": 0}
+
+
+def _profile_on() -> bool:
+    from . import settings
+
+    return bool(settings.get("YUNSHU_DEBUG_TREE_PROFILE"))
+
+
+def _tick(name: str, arrays, t0: float) -> float:
+    import time
+
+    mx.eval(arrays)
+    now = time.perf_counter()
+    PROFILE[name] = PROFILE.get(name, 0.0) + (now - t0) * 1000
+    from . import gpu_window
+
+    count = gpu_window.stage_end()
+    if count:
+        key = name[:-3] + "_disp" if name.endswith("_ms") else name + "_disp"
+        PROFILE[key] = PROFILE.get(key, 0.0) + count
+    return now
+
+
 def _tree_forward(
     lm,
     tokens: mx.array,
@@ -943,9 +969,21 @@ def _tree_forward(
     layers = model.layers
     nxt_norm = {i: layers[i + 1].input_layernorm for i in range(len(layers) - 1)}
     normed = layers[0].input_layernorm(h)
+    prof = _profile_on()
+    if prof:
+        import time
+
+        PROFILE["rounds"] += 1
+        mx.eval(h, normed)
+        from . import gpu_window
+
+        gpu_window.stage_begin()
+        t0 = time.perf_counter()
     for i, (layer, c) in enumerate(zip(layers, cache, strict=True)):
         if layer.is_linear:
             r, rec = _gdn_layer(verifier, layer.linear_attn, normed, c, shape)
+            if prof:
+                t0 = _tick("gdn_mixer_ms", r, t0)
         else:
             at = layer.self_attn
             q, k, v = verifier._linears((at.q_proj, at.k_proj, at.v_proj), normed)
@@ -956,6 +994,8 @@ def _tree_forward(
             out = out.transpose(0, 2, 1, 3).reshape(1, w, -1)
             r = verifier._linear(at.o_proj, out * mx.sigmoid(gate))
             rec = ("kv",)
+            if prof:
+                t0 = _tick("attention_ms", r, t0)
         res.records[i] = rec
         # fused residual add + RMSNorm (bit-exact to the separate ops)
         post = layer.post_attention_layernorm
@@ -964,7 +1004,11 @@ def _tree_forward(
         else:
             h = h + r
             normed = post(h)
+        if prof:
+            t0 = _tick("residual_norm_ms", normed, t0)
         ff = verifier._feed_forward(layer.mlp, normed)
+        if prof:
+            t0 = _tick("mlp_ms", ff, t0)
         nxt = nxt_norm.get(i)
         if nxt is not None and vq._add_rms_eligible(h, ff, nxt):
             h, normed, _ = _add_rms(shape, h, ff, nxt)
@@ -972,12 +1016,14 @@ def _tree_forward(
             h = h + ff
             if nxt is not None:
                 normed = nxt(h)
+        if prof:
+            t0 = _tick("residual_norm_ms", (h, normed), t0)
         if i in capture:
             res.captured.append(h)
         # Submit the unchanged graph while later layers are being built. The
         # first layer starts the drafter/verify dependency promptly; four-layer
         # chunks avoid a separate submission for every decoder layer.
-        if (i == 0 or (i + 1) % 4 == 0) and i + 1 < len(layers):
+        if not prof and (i == 0 or (i + 1) % 4 == 0) and i + 1 < len(layers):
             try:
                 mx.async_eval(h, normed)
             except BaseException:
@@ -986,6 +1032,8 @@ def _tree_forward(
                 tree_abort(cache, res)
                 raise
     res.hidden = model.norm(h)
+    if prof:
+        _tick("final_norm_ms", res.hidden, t0)
     return res
 
 
@@ -1017,15 +1065,31 @@ def compact_kv(caches: list, src: mx.array, n0: int, m: int) -> None:
         c.values[..., n0 + 1 : n0 + m, :] = v
 
 
+def conv_tail(conv_prev, mixed, path, conv_idx, tail_idx):
+    """The conv state after committing ``path``: its last three inputs. With three or more
+    committed rows they all come from the window, so one gather replaces the concatenation of
+    the old tail with the window plus a gather (same values, one dispatch fewer per layer)."""
+    if tail_idx is not None:
+        return mx.take(mixed[0], tail_idx, axis=0)[None]
+    seq = mx.concatenate([conv_prev, mixed], axis=1)[0]
+    return mx.take(seq, conv_idx, axis=0)[None]
+
+
 def tree_commit(lm, cache: list, res: TreeResult, path: list[int]) -> None:
     """Keep the window rows in ``path`` (root first, each row a child of the
     previous one): the caches end as if those tokens had been decoded one by one."""
     from mlx_vlm.models.qwen3_5 import language as q35
 
+    prof = _profile_on()
+    if prof:
+        import time
+
+        t_commit = time.perf_counter()
     w, n0, m = res.shape.width, res.n0, len(path)
     path_arr = mx.array(path + [0] * (w - m), dtype=mx.int32)
     count_arr = mx.array([m], dtype=mx.int32)
     conv_idx = mx.array(([0, 1, 2] + [3 + r for r in path])[-3:], dtype=mx.int32)
+    tail_idx = mx.array(path[-3:], dtype=mx.int32) if len(path) >= 3 else None
     compact = path != list(range(m))
     if compact:
         src = mx.array([n0 + r for r in path[1:]], dtype=mx.int32)
@@ -1045,11 +1109,12 @@ def tree_commit(lm, cache: list, res: TreeResult, path: list[int]) -> None:
                 else replay_path(layer, state, rows, path_arr, count_arr)
             )
             c._omlx_gdn_pending = None
-            seq = mx.concatenate([conv_prev, mixed], axis=1)[0]
-            c[0] = mx.take(seq, conv_idx, axis=0)[None]
+            c[0] = conv_tail(conv_prev, mixed, path, conv_idx, tail_idx)
             if hasattr(c, "advance"):
                 c.advance(m)
                 q35._qwen3_5_advance_lengths_info(c, m)
+    if prof:
+        _tick("commit_ms", [c.state for c in cache if hasattr(c, "state")], t_commit)
 
 
 def tree_abort(cache: list, res: TreeResult) -> None:

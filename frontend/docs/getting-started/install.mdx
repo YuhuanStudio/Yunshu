@@ -1,0 +1,92 @@
+---
+title: Install
+description: Install Yunshu from PyPI with uv or pip, or with Homebrew, and check the installation with yunshu doctor.
+---
+
+## Requirements
+
+| Requirement | Detail |
+|---|---|
+| Hardware | A Mac with Apple Silicon (arm64). MLX does not run on Intel Macs or on Python running under Rosetta. |
+| macOS | 14 (Sonoma) or newer. `yunshu doctor` fails the check on older versions. |
+| Python | 3.13 or newer. `uv tool install` can fetch a managed 3.13 for you. |
+| Memory | Enough unified memory for the model weights plus the KV cache. `yunshu doctor -m <model>` warns when a model does not fit. |
+
+## Install with uv (recommended)
+
+Install [uv](https://docs.astral.sh/uv/getting-started/installation/) first, then install the package from [PyPI](https://pypi.org/project/yunshu):
+
+```bash
+uv tool install "yunshu[vision]" --python 3.13
+yunshu --version
+```
+
+The `vision` extra installs `mlx-vlm`. You need it for the Qwen3.5 / 3.6 / 3.8 families and for every vision-language model; it also serves text requests to those models. The base install (without extras) serves text-only `mlx-lm` models.
+
+To upgrade later:
+
+```bash
+uv tool upgrade yunshu
+```
+
+## Install with pip
+
+```bash
+python3.13 -m venv ~/yunshu-env
+source ~/yunshu-env/bin/activate
+pip install "yunshu[vision]"
+```
+
+## Install with Homebrew
+
+Yunshu is published in the shared tap `YuhuanStudio/homebrew-tap`:
+
+```bash
+brew install yuhuanstudio/tap/yunshu
+```
+
+The formula builds a Python 3.13 virtual environment and installs the package with the `vision` extra. It requires Apple Silicon and macOS Sonoma or newer. The formula does not define a Homebrew service; to run Yunshu in the background use [`yunshu service`](/docs/getting-started/service), which is the same for every install method.
+
+## Optional extras
+
+Install extras by name, for example `uv tool install "yunshu[vision,audio]" --python 3.13`.
+
+| Extra | Adds | Needed for |
+|---|---|---|
+| `vision` | `mlx-vlm`, Pillow | Qwen3.5 / 3.6 / 3.8 and other vision-language models, image and video input |
+| `audio` | `mlx-audio` | Speech-to-text, text-to-speech, and the Realtime voice WebSocket |
+| `omni` | `mlx-vlm`, torch, torchvision, Pillow | Native speech-to-speech with Qwen3-Omni |
+| `embeddings` | `mlx-embeddings` | `POST /v1/embeddings` |
+| `generation` | diffusers, torch, torchvision, Pillow | Image generation. Without it, `POST /v1/images/generations` returns 503. |
+| `compression` | zstandard, lz4 | Optional codecs for the prefix cache SSD tiers |
+| `webrtc` | aiortc | Realtime over WebRTC (`POST /v1/realtime/calls`) |
+| `web-render` | playwright | Browser rendering for web fetch (needs an installed browser) |
+| `all` | `vision`, `audio`, `omni`, `embeddings`, `generation`, `compression` | Every modality above |
+
+## Check the installation
+
+```bash
+yunshu doctor
+```
+
+`yunshu doctor` checks the platform (Apple Silicon, macOS version, Rosetta), Python, MLX and Metal, memory, installed package versions and extras, your settings, the models directory and unfinished downloads, free disk space, cache integrity, the port you will serve on, and whether the login service is installed. Each problem comes with a suggested fix. The command exits with status 1 when something blocks serving.
+
+Add `-m <model>` to also check a model (path or Hugging Face repo id) for existence, completeness and fit in memory, and for Qwen3.5-family models which speculative path will be used. Use `--no-metal` to skip importing MLX; that check cannot prove that Metal or a checkpoint works.
+
+```bash
+yunshu doctor -m mlx-community/Qwen3.5-0.8B-MLX-bf16
+yunshu --json doctor --no-metal
+```
+
+## Uninstall
+
+```bash
+yunshu service uninstall      # only if you installed the login service
+uv tool uninstall yunshu      # or: brew uninstall yunshu, pip uninstall yunshu
+```
+
+Downloaded models live under `~/.yunshu/models` and are not removed. See [Service](/docs/getting-started/service) for a complete clean-up list.
+
+## Next
+
+Continue with the [Quickstart](/docs/getting-started/quickstart). If installation fails, see [Troubleshooting](/docs/guides/troubleshooting).

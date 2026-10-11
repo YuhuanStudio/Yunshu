@@ -346,12 +346,12 @@ def test_entire_probe_on_fake_engine(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("family", ["bert", "roberta", "xlm-roberta"])
-def test_encoder_head_matches_transformers_fixture(tmp_path, family):
+@pytest.mark.parametrize("num_labels", [1, 2])
+def test_encoder_head_matches_transformers_fixture(tmp_path, family, num_labels):
     """Small-array unit test, independently exercising the complete trained head."""
     import mlx.core as mx
 
     torch = pytest.importorskip("torch")
-    pytest.importorskip("mlx_embeddings")
     from transformers import (
         AutoModelForSequenceClassification,
         BertConfig,
@@ -374,7 +374,7 @@ def test_encoder_head_matches_transformers_fixture(tmp_path, family):
         num_hidden_layers=1,
         num_attention_heads=2,
         max_position_embeddings=32,
-        num_labels=2,
+        num_labels=num_labels,
         attn_implementation="eager",
     )
     model = AutoModelForSequenceClassification.from_config(config).eval()
@@ -387,3 +387,98 @@ def test_encoder_head_matches_transformers_fixture(tmp_path, family):
         ref = model(input_ids=torch.tensor(ids)).logits[0].tolist()
     got = mlx_model(input_ids=mx.array(ids))[0].tolist()
     assert got == pytest.approx(ref, abs=1e-6)
+
+
+def test_quantized_classifier_keeps_float_trained_head(tmp_path):
+    import mlx.core as mx
+    import mlx.nn as nn
+    from mlx.utils import tree_flatten
+    from mlx_vlm.models.bert import ModelConfig, SequenceClassificationModel
+
+    from yunshu_engine.scoring_engine import load_sequence_classifier
+
+    cfg = {
+        "model_type": "bert",
+        "architectures": ["BertForSequenceClassification"],
+        "vocab_size": 64,
+        "hidden_size": 64,
+        "intermediate_size": 64,
+        "num_hidden_layers": 1,
+        "num_attention_heads": 1,
+        "max_position_embeddings": 64,
+        "num_labels": 2,
+    }
+    original = SequenceClassificationModel(ModelConfig.from_dict(cfg))
+    original.eval()
+    nn.quantize(
+        original,
+        group_size=64,
+        bits=4,
+        class_predicate=lambda path, module: (
+            path != "classifier" and hasattr(module, "to_quantized")
+        ),
+    )
+    assert isinstance(
+        original.encoder.layer[0].attention.self.query, nn.QuantizedLinear
+    )
+    mx.save_safetensors(
+        str(tmp_path / "model.safetensors"), dict(tree_flatten(original.parameters()))
+    )
+    cfg["quantization"] = {"group_size": 64, "bits": 4}
+    loaded = load_sequence_classifier(str(tmp_path), cfg)
+    assert isinstance(loaded.classifier, nn.Linear)
+    assert loaded.classifier.weight.tolist() == original.classifier.weight.tolist()
+    ids = mx.array([[2, 7, 9, 3]])
+    assert loaded(input_ids=ids).tolist() == original(input_ids=ids).logits.tolist()
+    weights = dict(tree_flatten(original.parameters()))
+    weights.pop("classifier.weight")
+    mx.save_safetensors(str(tmp_path / "model.safetensors"), weights)
+    with pytest.raises(ValueError):
+        load_sequence_classifier(str(tmp_path), cfg)
+
+
+def test_jina_ranking_head_is_not_qwen_yes_no():
+    from yunshu_engine.scoring_engine import scoring_kind
+
+    assert (
+        scoring_kind(
+            {"model_type": "qwen3", "architectures": ["JinaForRanking"]},
+            "jina-reranker-v3-4bit-mxfp4",
+        )
+        is None
+    )
+
+
+@pytest.mark.parametrize("labels", [1, 2])
+def test_published_bge_quantized_namespace_keeps_head(tmp_path, labels):
+    import mlx.core as mx
+    import mlx.nn as nn
+    from mlx.utils import tree_flatten
+    from mlx_vlm.models.xlm_roberta import ModelConfig, SequenceClassificationModel
+
+    from yunshu_engine.scoring_engine import load_sequence_classifier
+
+    config = {
+        "model_type": "xlm-roberta",
+        "architectures": ["XLMRobertaForSequenceClassification"],
+        "vocab_size": 64,
+        "hidden_size": 64,
+        "intermediate_size": 64,
+        "num_hidden_layers": 1,
+        "num_attention_heads": 1,
+        "max_position_embeddings": 64,
+        "num_labels": labels,
+    }
+    original = SequenceClassificationModel(ModelConfig.from_dict(config))
+    original.eval()
+    nn.quantize(original, group_size=64, bits=8)
+    # Published BGE uses bare backbone names and quantizes the trained head too.
+    weights = dict(tree_flatten(original.parameters()))
+    mx.save_safetensors(str(tmp_path / "model.safetensors"), weights)
+    config["quantization"] = {"bits": 8, "group_size": 64}
+    loaded = load_sequence_classifier(str(tmp_path), config)
+    assert isinstance(loaded.classifier.out_proj, nn.QuantizedLinear)
+    ids = mx.array([[2, 7, 9, 3]])
+    assert loaded(input_ids=ids)[0].tolist() == pytest.approx(
+        original(input_ids=ids).logits[0].tolist(), abs=1e-5
+    )

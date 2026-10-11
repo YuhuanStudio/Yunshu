@@ -71,5 +71,62 @@ def fold_structured_outputs(data: Any) -> Any:
             raise ValueError("structured_outputs.grammar: must be a non-empty string")
         data.setdefault("grammar", {"type": "cfg", "grammar": val})
     else:
-        raise ValueError("structured_outputs.structural_tag is not supported")
+        import json
+
+        if isinstance(val, str):
+            try:
+                val = json.loads(val)
+            except ValueError as exc:
+                raise ValueError("structural_tag: not valid JSON") from exc
+        if not isinstance(val, dict):
+            raise ValueError("structural_tag: must be an object")
+        structural_tag_grammar(val)
+        data.setdefault("response_format", {**val, "type": "structural_tag"})
     return data
+
+
+def structural_tag_grammar(spec: Any) -> str:
+    """Compile the OpenAI tags/triggers shape using llguidance's lazy lexemes.
+
+    Ordinary text (including reasoning) remains free until a trigger appears.
+    Treat markers as byte strings: they need not be single special tokens.
+    """
+    from llguidance import StructTag
+
+    if not isinstance(spec, dict):
+        raise ValueError("structural_tag: must be an object")
+    tags, triggers = spec.get("structures"), spec.get("triggers")
+    if not isinstance(tags, list) or not tags:
+        raise ValueError("structural_tag.structures: must be a non-empty list")
+    if (
+        not isinstance(triggers, list)
+        or not triggers
+        or not all(isinstance(t, str) and t for t in triggers)
+    ):
+        raise ValueError("structural_tag.triggers: must be non-empty strings")
+    compiled = []
+    used = set()
+    for tag in tags:
+        if not isinstance(tag, dict):
+            raise ValueError("structural_tag: each structure must be an object")
+        begin, end, schema = tag.get("begin"), tag.get("end"), tag.get("schema")
+        if not isinstance(begin, str) or not begin or not isinstance(end, str):
+            raise ValueError(
+                "structural_tag: begin/end must be strings, begin non-empty"
+            )
+        if not isinstance(schema, dict):
+            raise ValueError("structural_tag: schema must be an object")
+        matches = [t for t in triggers if begin.startswith(t)]
+        if len(matches) != 1:
+            raise ValueError("structural_tag: begin must match exactly one trigger")
+        used.add(matches[0])
+        compiled.append(
+            StructTag(trigger=matches[0], begin=begin, end=end, grammar=schema)
+        )
+    if used != set(triggers):
+        raise ValueError("structural_tag: every trigger must have a structure")
+    lark = StructTag.to_grammar(compiled, assume_special=False)
+    from yunshu_engine.grammar_constraint import validate_llg_cfg
+
+    validate_llg_cfg(lark)
+    return "// yunshu structural_tag\n" + lark

@@ -181,6 +181,21 @@ def speed_compare(
                 "noise_pct": round(noise, 2),
                 "limit_pct": round(limit, 2),
                 "verdict": verdict,
+                "efficiency": {
+                    arm: {
+                        field: statistics.median(values) if values else None
+                        for field in ("joules_per_token", "gpu_watts_mean")
+                        for values in [
+                            [
+                                idx.get((ctx, kind, phase), {}).get(field)
+                                for idx in indices
+                                if idx.get((ctx, kind, phase), {}).get(field)
+                                is not None
+                            ]
+                        ]
+                    }
+                    for arm, indices in (("base", bidx), ("cand", cidx))
+                },
             }
             out.append(row)
             if verdict == "regression":

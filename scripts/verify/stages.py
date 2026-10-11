@@ -26,6 +26,7 @@ from .core import (
 )
 from .core import sha as _sha
 from .execute import Cell, Executor
+from .snapshot import stage_snapshot
 
 TFBENCH = REPO / "scripts/research/tfbench.py"
 MEMORY_AB = REPO / "scripts/research/memory_ab.py"
@@ -194,7 +195,7 @@ def stage_preflight(ctx: Ctx) -> StageResult:
         e = dict(env, PYTHONPATH=str(arm.path / "python"))
         r = subprocess.run(
             [
-                ctx.py,
+                arm.python(ctx.py),
                 "-c",
                 "import yunshu_engine, yunshu_gateway, yunshu_kv; print('ok')",
             ],
@@ -482,7 +483,8 @@ def _identity_cells(ctx: Ctx) -> list:
                             env=ctx.arm_env(tree_arm, extra),
                         ),
                         mem_gb=ctx.mem_gb,
-                        timeout_min=_decode_est_min(
+                        timeout_min=cfg.get("identity_timeout_min")
+                        or _decode_est_min(
                             ctx,
                             ctxs,
                             len(kinds),
@@ -534,6 +536,32 @@ def _rows_for(res: dict, arm: str, mode: str) -> list:
     return out
 
 
+def _spec_depth_valid(rows: list, mode: str) -> tuple[bool, str]:
+    specs = [(row.get("xy") or {}).get("speculative") for row in rows]
+    specs = [spec for spec in specs if isinstance(spec, dict) and spec.get("drafted")]
+    if not specs:
+        return False, "no speculative draft telemetry recorded"
+    for spec in specs:
+        if spec.get("mode") != mode or not spec.get("rounds"):
+            return False, "speculative mode or rounds missing"
+        depths = spec.get("per_depth") or []
+        if not depths or any(not isinstance(row, dict) for row in depths):
+            return False, "per-depth counters missing"
+        if any(
+            row.get("position") != pos
+            or not isinstance(row.get("drafted"), int)
+            or not isinstance(row.get("accepted"), int)
+            or not 0 <= row["accepted"] <= row["drafted"]
+            for pos, row in enumerate(depths)
+        ):
+            return False, "invalid per-depth counter"
+        if sum(row["drafted"] for row in depths) != spec["drafted"] or sum(
+            row["accepted"] for row in depths
+        ) != spec.get("accepted"):
+            return False, "per-depth counters do not sum to request totals"
+    return True, ""
+
+
 def stage_identity(ctx: Ctx) -> StageResult:
     _check_prompts(ctx.suite["ctx"], ctx.suite["kinds"])
     res = ctx.exe.run_cells(_identity_cells(ctx))
@@ -543,6 +571,11 @@ def stage_identity(ctx: Ctx) -> StageResult:
         for mode in ctx.suite.get("spec_modes") or ["default"]:
             tag = "" if mode == "default" else f"[{mode}] "
             base, cand = _rows_for(res, "base", mode), _rows_for(res, "cand", mode)
+            if ctx.suite.get("require_spec_depth"):
+                depth_ok, why = _spec_depth_valid(cand, mode)
+                numbers[f"{tag}per_depth".strip()] = depth_ok
+                if not depth_ok:
+                    reasons.append(f"{tag}{why}")
             cmp_ = analyze.compare_identity(base, cand, "base", "cand")
             numbers[f"{tag}base_vs_cand".strip()] = {
                 "compared": cmp_["compared"],
@@ -645,6 +678,12 @@ def stage_quality(ctx: Ctx, max_rounds: int = 6) -> StageResult:
             break
         cells = []
         for arm in todo:
+            py = ctx.tree(arm).python(
+                os.environ.get(
+                    "PAIRED_PY",
+                    "/Volumes/P5Plus/yunshu-test-envs/paired-eval/bin/python",
+                )
+            )
             cells.append(
                 Cell(
                     "quality",
@@ -656,10 +695,8 @@ def stage_quality(ctx: Ctx, max_rounds: int = 6) -> StageResult:
                         f"PAIRED_PORT_LAST={PORT_LAST}",
                         f"PAIRED_MAX_TOKENS={ctx.suite.get('quality_max_tokens', 2048)}",
                         f"PAIRED_THINKING={1 if ctx.suite.get('quality_thinking') else 0}",
-                        os.environ.get(
-                            "PAIRED_PY",
-                            "/Volumes/P5Plus/yunshu-test-envs/paired-eval/bin/python",
-                        ),
+                        f"PAIRED_PY={py}",
+                        py,
                         str(PAIRED),
                         "run",
                         "--bench",
@@ -1149,6 +1186,305 @@ def stage_ttft_profile(ctx: Ctx) -> StageResult:
     )
 
 
+def _multimodal_valid(
+    path: Path, sizes: list, require_hit: bool, require_anthropic=True
+):
+    rows = read_jsonl(path)
+    if not rows or not rows[-1].get("complete"):
+        return False, "incomplete multimodal evidence"
+    requests = {
+        (r.get("size"), r.get("kind")): r for r in rows if r.get("event") == "request"
+    }
+    expected = {
+        (n, k)
+        for n in sizes
+        for k in ("cold", "warm", "turn2-hit", "turn2-miss", "other-image")
+    }
+    if require_anthropic:
+        expected.update(
+            (0, k)
+            for k in (
+                "anthropic-cold",
+                "anthropic-warm",
+                "anthropic-turn2-hit",
+                "anthropic-turn2-miss",
+            )
+        )
+    if set(requests) != expected:
+        return False, "missing multimodal requests"
+    controls = [(n, [("cold", "warm"), ("turn2-miss", "turn2-hit")]) for n in sizes]
+    if require_anthropic:
+        controls += [
+            (
+                0,
+                [
+                    ("anthropic-cold", "anthropic-warm"),
+                    ("anthropic-turn2-miss", "anthropic-turn2-hit"),
+                ],
+            )
+        ]
+    for n, pairs in controls:
+        for miss, hit in pairs:
+            a, b = requests[n, miss], requests[n, hit]
+            if not a.get("ids") or a["ids"] != b.get("ids") or a.get("cached") != 0:
+                return False, "raw token hit/miss identity failed"
+            skipped = hit == "turn2-hit" and b.get("restore_skipped") is True
+            if require_hit and b.get("cached", 0) <= 0 and not skipped:
+                return False, "media APC not engaged"
+    if any(requests[n, "other-image"].get("cached") != 0 for n in sizes):
+        return False, "different image reused state"
+    return True, ""
+
+
+def _multimodal_quality_valid(path, sizes, n):
+    ok, reason = _multimodal_valid(path, sizes, True)
+    if not ok:
+        return ok, reason
+    rows = read_jsonl(path)
+    items = [r for r in rows if r.get("event") == "parity_item"]
+    if len(items) != n or {r.get("i") for r in items} != set(range(n)):
+        return False, "incomplete paired image set"
+    if any(
+        not r.get("cached")
+        or not r.get("cold_ids")
+        or r["cold_ids"] != r.get("hit_ids")
+        for r in items
+    ):
+        return False, "paired image raw-ID drift"
+    summary = next((r for r in rows if r.get("event") == "quality"), {})
+    scores = summary.get("scores", {})
+    counts = {
+        "cold": sum(bool(r.get("cold_correct")) for r in items),
+        "hit": sum(bool(r.get("hit_correct")) for r in items),
+    }
+    if (
+        summary.get("n") != n
+        or any(scores.get(k) != v for k, v in counts.items())
+        or abs(counts["cold"] - counts["hit"]) > 1
+    ):
+        return False, "invalid paired quality scores"
+    return True, ""
+
+
+def _multimodal_speed(numbers, reps, tolerance):
+    def timing(arm, rep):
+        phases = {"cold": "cold", "warm": "warm", "turn2-hit": "turn2"}
+        return [
+            dict(
+                part="decode",
+                ctx=r["size"],
+                kind="media",
+                phase=phases[r["kind"]],
+                ttft_s=r["ttft_s"],
+                dec_tps=1.0,
+            )
+            for r in numbers[f"{arm}-r{rep}"]
+            if r["kind"] in phases
+        ]
+
+    return analyze.speed_compare(
+        [timing("base", i) for i in range(reps)],
+        [timing("cand", i) for i in range(reps)],
+        tolerance,
+        robust=True,
+    )
+
+
+def stage_multimodal(ctx: Ctx) -> StageResult:
+    """Pinned media sessions: raw IDs, pixel isolation, short + long TTFT."""
+
+    def cell(arm, rep):
+        key = f"{arm}-r{rep}"
+        scratch = ctx.run.path / "media" / key
+        scratch.mkdir(parents=True, exist_ok=True)
+        env = ctx.arm_env(
+            arm,
+            {
+                "YUNSHU_VLM_APC_DISK": "0",
+                "YUNSHU_VLM_APC_WARM": "off",
+                "YUNSHU_KV_PRECISION": "bf16",
+                "YUNSHU_VLM_DRAFT": "off",
+                "YUNSHU_MEDIA_DIR": str(scratch),
+                "HF_HUB_OFFLINE": "1",
+            },
+        )
+        argv = ["env", f"PYTHONPATH={ctx.tree(arm).path / 'python'}"]
+        argv += [f"{k}={v}" for k, v in env.items()]
+        remote = (
+            "gemma-4-e2b" in ctx.model
+            and int(ctx.suite.get("reps", 3)) == 1
+            and ctx.env.get("GPUQ_DEVICE") != "m5"
+        )
+        script = ctx.cand.path / "scripts/research/multimodal_apc.py"
+        if remote:
+            # gpuq snapshots cwd, not arbitrary external pinned trees. Run
+            # the committed common harness in each arm's own snapshot; the
+            # old arm need not contain this new measurement script.
+            source = script.read_text()
+            compile(source, str(script), "exec")  # CPU preflight before submit
+            entry = [
+                ctx.py,
+                "-c",
+                "import sys; __file__='scripts/research/multimodal_apc.py'; sys.path.insert(0, 'scripts/research'); "
+                + f"exec(compile({source!r}, 'multimodal_apc.py', 'exec'))",
+            ]
+        else:
+            entry = [ctx.py, str(script)]
+        argv += [
+            *entry,
+            "--model",
+            ctx.model,
+            "--out",
+            "{out}",
+            "--sizes",
+        ]
+        argv += [str(n) for n in ctx.suite["ctx"]]
+        if ctx.env.get("APC_PROBE_IMAGE_AUDIO") == "1":
+            argv += ["--image-audio"]
+        if arm == "cand":
+            argv += ["--require-hit"]
+        else:
+            argv += ["--skip-anthropic"]
+        cells = [
+            Cell(
+                "multimodal",
+                key,
+                argv,
+                mem_gb=ctx.mem_gb,
+                quiet=int(ctx.suite.get("reps", 3)) >= 3,
+                timeout_min=20,
+                device="m3" if remote else "m5",
+                cwd=ctx.tree(arm).path if remote else None,
+                validate=lambda path, hit=arm == "cand": _multimodal_valid(
+                    path, ctx.suite["ctx"], hit, require_anthropic=hit
+                ),
+            )
+        ]
+        return cells[0]
+
+    parity_n = (
+        int(ctx.suite.get("mmlu_n", 200)) if ctx.suite.get("media_quality_items") else 0
+    )
+    quality_result = None
+    if parity_n:
+        quality_cell = cell("cand", "quality")
+        quality_cell.argv += ["--parity-items", str(parity_n)]
+        quality_cell.quiet = False
+        quality_cell.validate = lambda path: _multimodal_quality_valid(
+            path, ctx.suite["ctx"], parity_n
+        )
+        quality_result = ctx.exe.run_cells([quality_cell])[quality_cell.key]
+        if not quality_result.ok:
+            return _finish(
+                ctx, StageResult("multimodal", False, [quality_result.reason])
+            )
+    cells = [
+        cell(arm, rep)
+        for rep in range(int(ctx.suite.get("reps", 3)))
+        for arm in ("base", "cand")
+    ]
+    results = ctx.exe.run_cells(cells)
+    reasons = _failed_cells(results)
+    numbers = {}
+    if quality_result is not None:
+        numbers["paired_quality"] = next(
+            r
+            for r in read_jsonl(quality_result.evidence)
+            if r.get("event") == "quality"
+        )
+    if not reasons:
+        for key, result in results.items():
+            rows = [
+                r for r in read_jsonl(result.evidence) if r.get("event") == "request"
+            ]
+            numbers[key] = [
+                {k: r[k] for k in ("kind", "size", "pt", "cached", "ttft_s", "sha")}
+                for r in rows
+            ]
+        for rep in range(int(ctx.suite.get("reps", 3))):
+            b, c = numbers[f"base-r{rep}"], numbers[f"cand-r{rep}"]
+            c = [r for r in c if not r["kind"].startswith("anthropic-")]
+            if [(r["kind"], r["size"], r["sha"]) for r in b] != [
+                (r["kind"], r["size"], r["sha"]) for r in c
+            ]:
+                reasons.append(f"raw token identity differs base/cand rep {rep}")
+            br = read_jsonl(results[f"base-r{rep}"].evidence)
+            cr = read_jsonl(results[f"cand-r{rep}"].evidence)
+            bv = next(
+                (r.get("versions") for r in br if r.get("event") == "engaged"), None
+            )
+            cv = next(
+                (r.get("versions") for r in cr if r.get("event") == "engaged"), None
+            )
+            if not bv or bv != cv:
+                reasons.append(
+                    f"dependencies changed across paired arms rep {rep}: {bv} / {cv}"
+                )
+            bd, cd = {r.get("device") for r in br}, {r.get("device") for r in cr}
+            if len(bd) != 1 or bd != cd or not bd <= {"m3", "m5"}:
+                reasons.append(f"mixed or missing devices rep {rep}: {bd} / {cd}")
+    if not reasons and int(ctx.suite.get("reps", 3)) >= 3:
+        speed = _multimodal_speed(
+            numbers, int(ctx.suite["reps"]), float(ctx.suite["speed_tol_pct"])
+        )
+        numbers["speed"] = speed
+        reasons.extend(_speed_reason(r) for r in speed["regressions"])
+        reasons.extend(speed["missing"])
+    return _finish(ctx, StageResult("multimodal", not reasons, reasons, numbers))
+
+
+def _toolparse_valid(path: Path):
+    records = read_jsonl(path)
+    if not records or records[-1].get("complete") is not True:
+        return False, "toolparse probe did not complete"
+    rows = records[-1].get("rows", [])
+    if {r.get("kind") for r in rows} != {
+        "forced",
+        "stream",
+        "structural",
+        "structural_tool",
+    } or not all(r.get("ok") is True for r in rows):
+        return False, "missing or failed tool/structural-tag checks"
+    return True, ""
+
+
+def stage_toolparse(ctx: Ctx) -> StageResult:
+    """Candidate-only capability checks; base need not implement the new API.
+
+    Exact candidate checkout is the job cwd, including on the M3 transport.
+    Parser-only families remain covered by preflight fixtures.
+    """
+    cell = Cell(
+        "toolparse",
+        "cand",
+        [
+            "env",
+            f"PYTHONPATH={ctx.cand.path / 'python'}",
+            f"YUNSHU_SSD_CACHE_DIR={ctx.run.path / 'toolparse-cache'}",
+            ctx.py,
+            str(ctx.cand.path / "scripts/research/toolparse_smoke.py"),
+            "--model",
+            ctx.model,
+            "--out",
+            "{out}",
+        ],
+        mem_gb=ctx.mem_gb,
+        timeout_min=6,
+        stall_min=3,
+        validate=_toolparse_valid,
+        device="" if ctx.big else "any",
+        cwd=ctx.cand.path,
+    )
+    results = ctx.exe.run_cells([cell])
+    reasons = _failed_cells(results)
+    numbers = {}
+    result = results.get("cand")
+    if result is not None and result.ok and result.evidence:
+        row = read_jsonl(result.evidence)[-1]
+        numbers["checks"] = row["rows"]
+    return _finish(ctx, StageResult("toolparse", not reasons, reasons, numbers))
+
+
 def stage_modelprobe(ctx: Ctx) -> StageResult:
     """Candidate-only absolute reserve/serving pilot; no relative-model verdict."""
     script = ctx.cand.path / "scripts/research/bigmoe_probe.py"
@@ -1337,6 +1673,123 @@ def stage_rerank(ctx: Ctx) -> StageResult:
     return _finish(ctx, StageResult("rerank", not reasons, reasons, numbers))
 
 
+def stage_embedding(ctx: Ctx) -> StageResult:
+    """Published-format loader and independent same-device upstream invocation."""
+    reference = ctx.env.get(
+        "EMBEDDING_REFERENCE",
+        "/Volumes/P5Plus/yunshu-build/codex/priorfix/gemma-ref/ref.json",
+    )
+    root = Path(ctx.env.get("EMBEDDING_MODEL_ROOT", "/Volumes/P5Plus/models"))
+    reasons, numbers = [], {}
+    for name in (
+        "embeddinggemma-2-bf16",
+        "embeddinggemma-2-4bit",
+        "embeddinggemma-2-bf16-multishard",
+    ):
+        cell = Cell(
+            "embedding",
+            name,
+            [
+                "env",
+                f"PYTHONPATH={ctx.cand.path / 'python'}",
+                "HF_HUB_OFFLINE=1",
+                ctx.py,
+                str(ctx.cand.path / "scripts/research/priorfix_embedding_parity.py"),
+                "--model",
+                str(root / name),
+                "--reference",
+                reference,
+                "--out",
+                "{out}",
+            ],
+            mem_gb=8,
+            timeout_min=10,
+            stall_min=5,
+            priority=-1,
+            device="m5",
+        )
+        results = ctx.exe.run_cells([cell])
+        reasons += _failed_cells(results)
+        if reasons:
+            break
+        rows = read_jsonl(results[name].evidence)
+        numbers[name] = rows[-1]
+        if not rows[-1].get("passed"):
+            reasons.append(f"{name} parity failed")
+            break
+    return _finish(ctx, StageResult("embedding", not reasons, reasons, numbers))
+
+
+def stage_priorart(ctx: Ctx) -> StageResult:
+    reasons, numbers = [], {}
+    kinds = ctx.env.get("PRIORART_KINDS", "retrieval,classifier,diffusion,omni").split(
+        ","
+    )
+    for kind in kinds:
+        prefix = str(ctx.cand.path / "python")
+        if kind.startswith("diffusion") or kind == "capabilities":
+            prefix += ":/Volumes/P5Plus/yunshu-build/codex/priorfix/mflux-deps"
+        extra = []
+        if kind in ("retrieval", "capabilities"):
+            import urllib.request
+
+            reference = ctx.run.path / "aperepel-cfe20b0-server.py"
+            if not reference.exists():
+                url = "https://raw.githubusercontent.com/aperepel/mlx-rerank/cfe20b0b0e2505240be91dbcf6e5575b8a8d7388/server.py"
+                with urllib.request.urlopen(url, timeout=30) as response:
+                    reference.write_bytes(response.read())
+            compile(reference.read_text(), str(reference), "exec")
+            extra = ["--rerank-reference", str(reference)]
+        script = ctx.cand.path / "scripts/research/priorfix_runtime_parity.py"
+        mode_args = ["--kind", kind]
+        if kind == "diffusion-timing":
+            script = ctx.cand.path / "scripts/research/priorfix_diffusion_timing.py"
+            mode_args = []
+        elif kind == "capabilities":
+            script = ctx.cand.path / "scripts/research/priorfix_capabilities.py"
+            mode_args = [
+                "--model-root",
+                ctx.env.get("EMBEDDING_MODEL_ROOT", "/Volumes/P5Plus/models"),
+                "--reference",
+                ctx.env.get(
+                    "EMBEDDING_REFERENCE",
+                    "/Volumes/P5Plus/yunshu-build/codex/priorfix/gemma-ref/ref.json",
+                ),
+            ]
+        cell = Cell(
+            "priorart",
+            kind,
+            [
+                "env",
+                f"PYTHONPATH={prefix}",
+                "HF_HUB_OFFLINE=1",
+                ctx.py,
+                str(script),
+                *mode_args,
+                *extra,
+                "--out",
+                "{out}",
+            ],
+            # The floating two-runtime image pilot peaked at 57.3 (M5 gpuq RSS).
+            mem_gb=64 if kind.startswith("diffusion") or kind == "capabilities" else 8,
+            quiet=kind == "diffusion-timing",
+            timeout_min=10,
+            stall_min=5,
+            priority=-1,
+            device="m5",
+        )
+        results = ctx.exe.run_cells([cell])
+        reasons += _failed_cells(results)
+        if reasons:
+            break
+        rows = read_jsonl(results[kind].evidence)
+        numbers[kind] = rows[-1]
+        if not rows[-1].get("passed"):
+            reasons.append(f"{kind} parity failed")
+            break
+    return _finish(ctx, StageResult("priorart", not reasons, reasons, numbers))
+
+
 def stage_evals(ctx: Ctx) -> StageResult:
     """SDK shape + local engine route coverage; CPU probe tests run in preflight."""
     tree = ctx.tree("cand").path
@@ -1470,6 +1923,113 @@ def stage_searchrank(ctx: Ctx) -> StageResult:
     )
 
 
+def _console_validate(path):
+    rows = read_jsonl(path)
+    if not rows or not rows[-1].get("complete") or rows[-1].get("failures"):
+        return False, "console route probe incomplete or failed"
+    required = {
+        "console_registration_cancel",
+        "console_host_latency",
+        "stream_latency",
+        "single_stream_latency",
+        "console_backend_gaps",
+        "history_restart",
+    }
+    checks = rows[-1].get("checks", {})
+    # gpuq adds device / execution_device / remote_host to every record: require the
+    # four checks, each PASS, rather than an exact key set.
+    missing = sorted(k for k in required if checks.get(k) != "PASS")
+    if missing:
+        return False, "console route checks missing or failing: " + ", ".join(missing)
+    return True, ""
+
+
+def stage_console(ctx: Ctx) -> StageResult:
+    """Single-node console API correctness on a pinned candidate; no timing verdict."""
+
+    validate = _console_validate
+
+    cell = Cell(
+        "console",
+        "cand",
+        [
+            ctx.py,
+            str(ctx.cand.path / "scripts/research/consolefeat_routes.py"),
+            "--model",
+            ctx.model,
+            "--src",
+            str(ctx.cand.path / "python"),
+            "--out",
+            "{out}",
+        ],
+        mem_gb=12,
+        timeout_min=10,
+        quiet=False,
+        validate=validate,
+    )
+    result = ctx.exe.run_cells([cell])["cand"]
+    numbers = read_jsonl(result.evidence)[-1] if result.ok and result.evidence else {}
+    return _finish(
+        ctx,
+        StageResult(
+            "console", result.ok, [] if result.ok else [result.reason], numbers
+        ),
+    )
+
+
+def _qwen4_mtp_valid(path):
+    rows = read_jsonl(path)
+    if not rows or rows[-1].get("complete") is not True:
+        return False, "missing final Qwen4 complete record"
+    final = rows[-1]
+    checks = final.get("checks", [])
+    expected = {f"spec-depth-{d}" for d in (2, 3, 4)} | {
+        f"rollback-{k}" for k in (1, 2, 3, 4)
+    }
+    if (
+        final.get("passed") is not True
+        or final.get("dry_run")
+        or final.get("device") != "m5"
+        or final.get("engaged") != "qwen4-native"
+        or {check.get("check") for check in checks} != expected
+        or len(checks) != len(expected)
+        or any(check.get("passed") is not True for check in checks)
+    ):
+        return False, "missing or failed native Qwen4 identity/rollback evidence"
+    return True, ""
+
+
+def stage_qwen4_mtp(ctx: Ctx) -> StageResult:
+    """Tiny native HC/QSA/GDN parity before any full checkpoint download."""
+    tree = ctx.cand.path
+    cell = Cell(
+        "qwen4_mtp",
+        "tiny-native",
+        [
+            "env",
+            f"PYTHONPATH={tree / 'python'}",
+            ctx.py,
+            str(tree / "scripts/research/qwen4_mtp_probe.py"),
+            "--out",
+            "{out}",
+        ],
+        mem_gb=3,
+        timeout_min=8,
+        priority=-1,
+        device="m5",
+        retries=0,
+        validate=_qwen4_mtp_valid,
+    )
+    results = ctx.exe.run_cells([cell])
+    reasons = _failed_cells(results)
+    numbers = {}
+    if not reasons:
+        numbers = read_jsonl(results["tiny-native"].evidence)[-1]
+        if not numbers.get("passed") or numbers.get("dry_run"):
+            reasons.append("Qwen4 native tiny identity/rollback failed")
+    return _finish(ctx, StageResult("qwen4_mtp", not reasons, reasons, numbers))
+
+
 def stage_respfeat(ctx: Ctx) -> StageResult:
     """One bounded M5 tiny server covers client-executed tools and transports."""
     import json
@@ -1525,9 +2085,70 @@ def stage_respfeat(ctx: Ctx) -> StageResult:
     )
 
 
+def stage_telemetry(ctx: Ctx, *, pilot: bool = False) -> StageResult:
+    """Unprivileged sensor plausibility + request receipt on the pinned candidate."""
+
+    def validate(path):
+        rows = read_jsonl(path)
+        if not rows or rows[-1].get("complete") is not True:
+            return False, "telemetry probe incomplete"
+        summary = rows[-1].get("summary", {})
+        if (
+            not summary.get("gpu_peak_watts")
+            or not summary.get("gpu_mhz_max")
+            or not summary.get("die_max_c")
+        ):
+            return False, "missing power, frequency or temperature evidence"
+        return True, ""
+
+    name = "telemetry-tiny" if pilot else "telemetry"
+    model = "/Volumes/P5Plus/models/Qwen3.5-0.8B-MLX-bf16" if pilot else ctx.model
+    big = False if pilot else ctx.big
+    cell = Cell(
+        name,
+        "cand",
+        [
+            "env",
+            f"TFB_YUNSHU_SRC={ctx.cand.path / 'python'}",
+            f"TFB_OUT={ctx.run.path / 'tfb' / name}",
+            ctx.py,
+            str(ctx.cand.path / "scripts/research/telemetry_probe.py"),
+            "--model",
+            model,
+            "--draft",
+            "mtp" if big else "off",
+            "--tokens",
+            "512" if big else "2048",
+            "--out",
+            "{out}",
+        ],
+        mem_gb=14 if pilot else ctx.mem_gb,
+        timeout_min=10,
+        quiet=False,
+        validate=validate,
+    )
+    result = ctx.exe.run_cells([cell])["cand"]
+    numbers = (
+        read_jsonl(result.evidence)[-1].get("summary", {})
+        if result.ok and result.evidence
+        else {}
+    )
+    return _finish(
+        ctx,
+        StageResult(name, result.ok, [] if result.ok else [result.reason], numbers),
+    )
+
+
 STAGE_FUNCS = {
     "ttft_profile": stage_ttft_profile,
+    "snapshot": stage_snapshot,
+    "console": stage_console,
+    "telemetry": stage_telemetry,
+    "telemetry-tiny": lambda ctx: stage_telemetry(ctx, pilot=True),
+    "qwen4_mtp": stage_qwen4_mtp,
     "respfeat": stage_respfeat,
+    "priorart": stage_priorart,
+    "embedding": stage_embedding,
     "evals": stage_evals,
     "websearch": stage_websearch,
     "tavily": stage_tavily,
@@ -1535,6 +2156,7 @@ STAGE_FUNCS = {
     "rerank": stage_rerank,
     "preflight": stage_preflight,
     "smoke": stage_smoke,
+    "toolparse": stage_toolparse,
     "client_compat": stage_client_compat,
     "identity": stage_identity,
     "apc": stage_apc,
@@ -1543,5 +2165,6 @@ STAGE_FUNCS = {
     "memory": stage_memory,
     "longqa": stage_longqa,
     "conc": stage_conc,
+    "multimodal": stage_multimodal,
     "modelprobe": stage_modelprobe,
 }

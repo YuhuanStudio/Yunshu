@@ -1,0 +1,433 @@
+---
+title: Chat completions
+description: The OpenAI Chat Completions endpoint, with tools, structured output, logprobs, reasoning, image/audio/video input and streaming, plus the legacy text completions endpoint.
+---
+
+`POST /v1/chat/completions` follows the OpenAI Chat Completions format, so the official `openai` SDKs, LangChain, LiteLLM and most agent tools work by changing the base URL. Text-only `mlx-lm` models and vision-language `mlx-vlm` models are served by the same route; a request that contains an image, audio or video part is routed to a VLM. `POST /v1/completions` is the legacy prompt-in, text-out endpoint and is documented at the end of this page.
+
+<Endpoint method="POST" path="/v1/chat/completions" />
+<Endpoint method="POST" path="/v1/completions" />
+
+<Callout type="info">
+Authentication is only enforced when `YUNSHU_AUTH_TOKEN` is set. See [API overview](/docs/api/overview). In single-model mode the `model` value is advisory; in multi-model mode it selects the model.
+</Callout>
+
+## Request
+
+Unknown top-level fields are ignored, so a client can keep sending OpenAI fields Yunshu has no use for (`service_tier`, `modalities`, `prediction`, `web_search_options`, `safety_identifier` and so on). A JSON `null` on any optional field means "not set" and the default applies. A negative `top_k` (the vLLM spelling of "disabled") becomes `0`.
+
+### Core fields
+
+| Parameter | Type | Required | Description | Status |
+| --- | --- | --- | --- | --- |
+| `model` | string | yes | Model id. Advisory in single-model mode. | supported |
+| `messages` | array | yes | Conversation. Must contain at least one `user` message with content. See [Messages](#messages). | supported |
+| `stream` | boolean | no | Server-sent events. Default `false`. | supported |
+| `stream_options` | object | no | Only valid with `stream: true`. `include_usage` adds a final usage chunk. `continuous_usage_stats` (a vLLM extension) puts a running `usage` on every chunk. | supported |
+| `max_tokens` | integer | no | Completion limit, `0` to `1048576`. Default is the `YUNSHU_DEFAULT_MAX_TOKENS` setting (32768). The context budget still clamps it; see `x_yunshu.budget`. | supported |
+| `max_completion_tokens` | integer | no | OpenAI's newer name. Wins over `max_tokens` when both are set. | supported |
+| `n` | integer | no | Number of choices, `1` to `128`. Not allowed with `stream: true`. | supported |
+| `stop` | string or array | no | Up to 16 stop sequences. Empty strings are dropped. | supported |
+| `user` | string | no | Logged with the request id. No other effect. | accepted and ignored |
+| `store` | boolean | no | Keep the finished completion for retrieval. See [Stored completions](/docs/api/stored-completions). | supported |
+| `metadata` | object | no | Up to 16 string pairs, stored with the completion when `store` is true. | supported |
+| `keep_alive` | string or number | no | Ollama-style residency hint (`"5m"`, `300`, `-1`, `0`). Applies in multi-model mode. | extension |
+| `timeout` | number | no | Seconds, `1` to `600`. Ends generation with a partial answer and `finish_reason: "length"`. | extension |
+
+### Sampling
+
+| Parameter | Type | Default | Description | Status |
+| --- | --- | --- | --- | --- |
+| `temperature` | number | `0.7` | `0` to `2`. Note the default differs from OpenAI's `1.0`. | supported |
+| `top_p` | number | `1.0` | `0` to `1`. | supported |
+| `top_k` | integer | `0` | `0` disables. | supported |
+| `min_p` | number | `0.0` | `0` to `1`. | supported |
+| `repetition_penalty` | number | `1.0` | `0` to `2`. | supported |
+| `frequency_penalty` | number | `0.0` | `-2` to `2`. | supported |
+| `presence_penalty` | number | `0.0` | `-2` to `2`. | supported |
+| `logit_bias` | object | none | Map of token id to bias, each `-100` to `100`. Keys are token ids as strings. | supported |
+| `seed` | integer | none | 64-bit signed. Makes sampling reproducible. | supported |
+| `top_n_sigma` | number | `0.0` | `0` to `10`. Keeps tokens whose logit is within n sigma of the maximum; `0` is off. | extension |
+| `xtc_probability`, `xtc_threshold` | number | `0.0` | XTC sampler. Probability `0` to `1`, threshold `0` to `0.5`. | extension |
+| `min_tokens` | integer | `0` | Mask end-of-sequence until this many tokens exist. | extension |
+| `ignore_eos` | boolean | `false` | Keep generating past end-of-sequence up to `max_tokens`. | extension |
+| `suppress_tokens` | array of integer | none | Token ids that may never be produced. | extension |
+| `stop_token_ids` | array of integer | none | Up to 16 token ids that end generation. | extension |
+| `spec_decode` | boolean | `false` | Ask for speculative decoding on this request. Takes effect only where the model and path have a drafter; otherwise ignored. | partial |
+| `priority` | integer | `0` | `0` to `100`. Forwarded to the engine as a request priority. | partial |
+| `lora_adapter` | string | none | LoRA adapter id for this request. Text models only; a VLM answers `400`. | partial |
+| `logits_processors` | array | none | Custom logits processors. A VLM answers `400`. | partial |
+
+### Messages
+
+Each message has a `role` of `system`, `developer`, `user`, `assistant`, `tool` or `function`. Any other role is a `400`.
+
+| Field | Type | Description | Status |
+| --- | --- | --- | --- |
+| `content` | string, array or null | Text, or an array of content parts. Whitespace-only text and empty arrays are rejected on `system`, `developer` and `user` messages. | supported |
+| `tool_calls` | array | On `assistant` messages: calls the model made earlier, with `id`, `type` and `function.name` / `function.arguments`. | supported |
+| `tool_call_id` | string | Required on `tool` messages. | supported |
+| `name` | string | Function name on `tool` messages. | supported |
+| `reasoning_content` or `reasoning` | string | Earlier reasoning on `assistant` messages, passed back to the chat template. | extension |
+
+Content parts:
+
+| Part `type` | Shape | Notes |
+| --- | --- | --- |
+| `text` | `{"type": "text", "text": "..."}` | May carry a `prompt_cache_breakpoint` object; see [Prompt caching](/docs/guides/prompt-caching). |
+| `image_url` | `{"type": "image_url", "image_url": {"url": "..."}}` | `http`, `https` and `data:` URLs. `file://` URLs and URLs that point at loopback, private or link-local hosts are rejected with `400`. `detail` is accepted and advisory; the pixel budget comes from the model's processor. `image` and `image_data` parts are normalized to this shape. |
+| `input_audio` | `{"type": "input_audio", "input_audio": {"data": "<base64>", "format": "wav"}}` | Routes to a model that accepts audio input. |
+| `audio_url` | `{"type": "audio_url", "audio_url": {"url": "..."}}` | As above. |
+| `video_url`, `video_file` | OpenAI-style video part | Routes to a model that accepts video input. |
+
+A model that does not accept the modality of a part answers `400` naming the part, for example `messages.content[type=image_url]: this model accepts text input, not image`. A request with media for a model that is not a vision-language model answers `400` as well.
+
+### Tools
+
+| Parameter | Type | Description | Status |
+| --- | --- | --- | --- |
+| `tools` | array | Function tools: `{"type": "function", "function": {"name", "description", "parameters"}}`. | supported |
+| `tool_choice` | string or object | `auto`, `none`, `required`, or `{"type": "function", "function": {"name": "..."}}`. `required` and a named function need a non-empty `tools`, and the name must be in `tools`. The `allowed_tools` form is folded into `tools` plus a mode. | supported |
+| `parallel_tool_calls` | boolean | Default `true`. With `false`, at most one call is returned. | supported |
+
+When the model's chat template renders tools natively, Yunshu hands the tools to the template; otherwise it injects a tool prompt and parses the calls from the output. `yunshu.contract.tools.mode` on the model card says which (`template` or `prompt`). Calls come back in `message.tool_calls` with `finish_reason: "tool_calls"`. After generation the server enforces `tool_choice: "none"` (no calls are returned), a named function (calls to other functions are dropped) and `parallel_tool_calls: false` (only the first call is kept). A call the model did not make is never invented. String argument values are coerced to the types in your `parameters` schema. On a VLM, tools cannot be combined with `response_format` or `grammar`; that request is a `400`.
+
+### Structured output
+
+| Parameter | Description | Status |
+| --- | --- | --- |
+| `response_format` | `{"type": "text"}`, `{"type": "json_object"}` or `{"type": "json_schema", "json_schema": {"name", "schema", "strict"}}`. `json_schema` requires the `json_schema` object. With `strict: true`, `additionalProperties: false` is added to object schemas. Any other `type` is a `400`. | supported |
+| `grammar` | Native constraint: `{"type": "json", "schema": {...}}`, `{"type": "regex", "pattern": "..."}`, `{"type": "choice", "choices": [...]}` or `{"type": "cfg", "grammar": "..."}`. Wins over `response_format`. | extension |
+| `guided_json`, `guided_regex`, `guided_choice`, `guided_grammar` | vLLM spellings of the same constraints. `guided_regex` is limited to 2048 characters and `guided_grammar` to 32768. | extension |
+| `structured_outputs` | vLLM object with exactly one of `json`, `regex`, `choice`, `grammar`, `json_object`. `structural_tag` is not supported. | extension |
+
+Constrained decoding masks the logits, so output that matches the schema is produced from the first token. A schema or pattern the engine cannot compile is a `400`. See [Structured output](/docs/guides/structured-output).
+
+### Reasoning
+
+| Parameter | Description | Status |
+| --- | --- | --- |
+| `enable_thinking` | Turn the model's thinking mode on or off. Also read from `chat_template_kwargs.enable_thinking`. | supported |
+| `reasoning_effort` | Effort level. Also read from `chat_template_kwargs.reasoning_effort`. Values outside the template's own list are mapped (`high` becomes `xhigh` on templates that use it). On a model without a reasoning mode it is accepted and has no effect. | supported |
+| `thinking_budget` | Maximum thinking tokens, `1` to `32768`. | extension |
+| `chat_template_kwargs` | Extra variables for the chat template. | supported |
+
+Reasoning text is returned in `message.reasoning_content`, separate from `content`. The reasoning tokens are part of `completion_tokens`, and `usage.completion_tokens_details.reasoning_tokens` says how many.
+
+### Logprobs
+
+| Parameter | Type | Description | Status |
+| --- | --- | --- | --- |
+| `logprobs` | boolean | Return per-token log probabilities in `choices[].logprobs.content`. | supported |
+| `top_logprobs` | integer | `0` to `20` alternatives per token. Requires `logprobs: true`. | supported |
+| `prompt_logprobs` | integer | Per-token logprobs for the prompt, returned in `choices[].prompt_logprobs`. | extension |
+
+### Caching
+
+| Parameter | Description | Status |
+| --- | --- | --- |
+| `prompt_cache_key`, `prompt_cache_retention`, `prompt_cache_options` | OpenAI prompt-cache hints. Used on the vision-language path; accepted and ignored on text-only models, whose prefix cache is automatic. | partial |
+
+## Examples
+
+<Tabs items={["curl", "Python", "JavaScript"]}>
+<Tab value="curl">
+
+```bash
+curl http://localhost:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-local" \
+  -d '{
+    "model": "local",
+    "messages": [
+      {"role": "system", "content": "You are concise."},
+      {"role": "user", "content": "Name three prime numbers."}
+    ],
+    "max_tokens": 64
+  }'
+```
+
+</Tab>
+<Tab value="Python">
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="http://localhost:8000/v1", api_key="sk-local")
+
+resp = client.chat.completions.create(
+    model="local",
+    messages=[
+        {"role": "system", "content": "You are concise."},
+        {"role": "user", "content": "Name three prime numbers."},
+    ],
+    max_tokens=64,
+)
+print(resp.choices[0].message.content)
+print(resp.usage.prompt_tokens, resp.usage.completion_tokens)
+```
+
+</Tab>
+<Tab value="JavaScript">
+
+```ts
+import OpenAI from "openai";
+
+const client = new OpenAI({ baseURL: "http://localhost:8000/v1", apiKey: "sk-local" });
+
+const resp = await client.chat.completions.create({
+  model: "local",
+  messages: [
+    { role: "system", content: "You are concise." },
+    { role: "user", content: "Name three prime numbers." },
+  ],
+  max_tokens: 64,
+});
+console.log(resp.choices[0].message.content);
+```
+
+</Tab>
+</Tabs>
+
+### Streaming
+
+<Tabs items={["curl", "Python"]}>
+<Tab value="curl">
+
+```bash
+curl -N http://localhost:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "local",
+    "stream": true,
+    "stream_options": {"include_usage": true},
+    "messages": [{"role": "user", "content": "Write a haiku about autumn."}]
+  }'
+```
+
+</Tab>
+<Tab value="Python">
+
+```python
+stream = client.chat.completions.create(
+    model="local",
+    messages=[{"role": "user", "content": "Write a haiku about autumn."}],
+    stream=True,
+    stream_options={"include_usage": True},
+)
+for chunk in stream:
+    if chunk.choices:
+        delta = chunk.choices[0].delta
+        print(delta.content or "", end="", flush=True)
+    elif chunk.usage:
+        print("\n", chunk.usage.total_tokens, "tokens")
+```
+
+</Tab>
+</Tabs>
+
+### Tool calling
+
+```python
+tools = [{
+    "type": "function",
+    "function": {
+        "name": "get_weather",
+        "description": "Current weather for a city",
+        "parameters": {
+            "type": "object",
+            "properties": {"city": {"type": "string"}},
+            "required": ["city"],
+        },
+    },
+}]
+
+messages = [{"role": "user", "content": "What is the weather in Taipei?"}]
+first = client.chat.completions.create(model="local", messages=messages, tools=tools)
+call = first.choices[0].message.tool_calls[0]
+print(call.function.name, call.function.arguments)
+
+messages.append(first.choices[0].message.model_dump(exclude_none=True))
+messages.append({"role": "tool", "tool_call_id": call.id, "content": '{"temp_c": 24}'})
+final = client.chat.completions.create(model="local", messages=messages, tools=tools)
+print(final.choices[0].message.content)
+```
+
+### JSON schema output
+
+```python
+resp = client.chat.completions.create(
+    model="local",
+    messages=[{"role": "user", "content": "Extract: Ada Lovelace, born 1815."}],
+    response_format={
+        "type": "json_schema",
+        "json_schema": {
+            "name": "person",
+            "strict": True,
+            "schema": {
+                "type": "object",
+                "properties": {"name": {"type": "string"}, "born": {"type": "integer"}},
+                "required": ["name", "born"],
+            },
+        },
+    },
+)
+print(resp.choices[0].message.content)
+```
+
+### Image input
+
+Use a vision-language model such as a Qwen3.5 VLM checkpoint.
+
+```python
+resp = client.chat.completions.create(
+    model="local",
+    messages=[{
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "What is in this picture?"},
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,iVBORw0KGgo..."}},
+        ],
+    }],
+)
+```
+
+### Reasoning
+
+```python
+resp = client.chat.completions.create(
+    model="local",
+    messages=[{"role": "user", "content": "Is 391 prime?"}],
+    extra_body={"enable_thinking": True},
+)
+msg = resp.choices[0].message
+print(getattr(msg, "reasoning_content", None))
+print(msg.content)
+print(resp.usage.completion_tokens_details.reasoning_tokens)
+```
+
+## Response
+
+```json
+{
+  "id": "chatcmpl-9f2c4e1ab07d4c3e8a51b2c6",
+  "object": "chat.completion",
+  "created": 1760000000,
+  "model": "local",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "2, 3 and 5.",
+        "reasoning_content": null
+      },
+      "finish_reason": "stop"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 24,
+    "completion_tokens": 9,
+    "total_tokens": 33,
+    "completion_tokens_details": { "reasoning_tokens": 0 },
+    "prompt_tokens_details": { "cached_tokens": 0 }
+  },
+  "x_yunshu": { "request_id": "req_0f3a9c2d4b7e41a6b8c1d2e3", "ttft_ms": 84.2, "decode_tps": 61.3 }
+}
+```
+
+- `reasoning_content` is present only when the model produced reasoning. `tool_calls` replaces or accompanies `content` when the model called a tool; each call has `id` (`call_...`), `type: "function"` and `function.name` / `function.arguments` (a JSON string).
+- `finish_reason` is `stop`, `length` or `tool_calls`. Internal reasons are mapped: a cancel or error to `stop`, a timeout or memory limit to `length`.
+- `usage.completion_tokens` already includes reasoning tokens; `reasoning_tokens` and `cached_tokens` are details inside their totals, never extra. `cached_tokens` is the prompt prefix served from the prefix cache.
+- `choices[].logprobs.content[]` items are `{token, logprob, bytes, top_logprobs: [{token, logprob, bytes}]}`.
+- `x_yunshu` is the Yunshu extension described in [API overview](/docs/api/overview). `mcp_tool_results` appears when a returned tool call matched a tool of a configured MCP client and was executed by the gateway.
+- `max_tokens: 0` returns immediately with an empty message, `finish_reason: "length"` and the prompt token count.
+- If a structured-output result still fails validation on a VLM, the answer is a `422` with `x_yunshu.validation`.
+
+## Streaming
+
+With `stream: true` the response is `text/event-stream`. Every event is `data: <json>` followed by a blank line.
+
+1. The first chunk carries `delta: {"role": "assistant", "content": null}`.
+2. Content chunks carry `delta.content`. Reasoning arrives first as `delta.reasoning_content`, then the answer.
+3. Tool calls stream as `delta.tool_calls`: one chunk with `index`, `id`, `type` and `function.name`, then chunks with `function.arguments` fragments for the same `index`.
+4. A chunk with the `finish_reason` and an empty delta ends the choice.
+5. With `stream_options.include_usage`, one more chunk follows with `choices: []` and the `usage` object, and the `x_yunshu` stats.
+6. `data: [DONE]` ends the stream.
+
+Chunks have `object: "chat.completion.chunk"`. Between chunks the server may send SSE comment lines (`: keep-alive`, `: yunshu-progress {...}` while a long prompt prefills). Comments are ignored by SSE parsers. If generation fails after the stream started, the stream carries a single `data: {"error": {...}}` event and then `[DONE]`.
+
+## Errors
+
+| Status | When |
+| --- | --- |
+| 400 | Schema or value validation (`code: validation_error`, `param` names the field), an unsupported capability for the model, a bad image URL, a prompt that exceeds the context window, a malformed `response_format` or `grammar`. |
+| 401 | Token configured and missing or wrong. |
+| 404 | Unknown model in multi-model mode. |
+| 429 | The queue is full, with `Retry-After`. |
+| 500 | Engine failure (`server_error`). |
+| 503 | No model loaded, a model still loading, or memory pressure with other requests running. |
+| 504 | The `X-Yunshu-Deadline-Ms` deadline passed. |
+| 507 | Out of GPU memory (`type: memory_error`). |
+
+## Support
+
+| Feature | Status |
+| --- | --- |
+| Text, system, developer, tool messages | <Support status="supported">supported</Support> |
+| Image input | <Support status="supported">vision-language models</Support> |
+| Audio and video input parts | <Support status="partial">models that accept them</Support> |
+| Streaming, `stream_options.include_usage` | <Support status="supported">supported</Support> |
+| `n` greater than 1 | <Support status="partial">non-streaming only</Support> |
+| Function tools, `tool_choice`, `parallel_tool_calls` | <Support status="supported">supported</Support> |
+| `response_format` `json_object` and `json_schema` | <Support status="supported">constrained decoding</Support> |
+| `logprobs`, `top_logprobs` | <Support status="supported">up to 20 alternatives</Support> |
+| `reasoning_effort`, `enable_thinking`, `reasoning_content` | <Support status="supported">models with a reasoning mode</Support> |
+| `store`, `metadata` | <Support status="supported">see Stored completions</Support> |
+| `user`, `service_tier`, `modalities`, `prediction` | <Support status="unsupported">accepted and ignored</Support> |
+| Audio output (`audio` request field) | <Support status="unsupported">not supported; use the audio routes</Support> |
+| LoRA and custom logits processors on a VLM | <Support status="unsupported">400</Support> |
+
+## Legacy text completions
+
+`POST /v1/completions` takes a raw prompt and returns text, with no chat template. It supports the same sampling parameters as the chat route, `stream`, `stream_options`, `stop`, `seed`, `logit_bias`, `response_format` and the `grammar` / `guided_*` constraints, `logprobs`, `n`, `echo` and `best_of`. Reasoning and tool parameters do not exist here.
+
+| Parameter | Type | Description | Status |
+| --- | --- | --- | --- |
+| `model` | string | Model id. | supported |
+| `prompt` | string, array of strings, array of token ids, or array of token-id arrays | Required. An array of strings or token-id arrays produces choices for each prompt, in order. Not allowed with `stream: true` when it has more than one prompt. | supported |
+| `max_tokens` | integer | Default `128`, up to `1048576`. `max_completion_tokens` is also accepted. | supported |
+| `echo` | boolean | Prepend the prompt to the returned text. With `logprobs` the prompt tokens get logprobs too (single string prompt). | supported |
+| `logprobs` | integer | `0` to `5`. The response uses the legacy `tokens`, `token_logprobs`, `top_logprobs`, `text_offset` arrays. | supported |
+| `best_of` | integer | Generates this many candidates per prompt and returns the `n` with the best average logprob. Must be at least `n`; not with streaming or several prompts. All candidates are billed in `usage`. | supported |
+| `n` | integer | `1` to `128`. Not allowed with `stream: true`. | supported |
+| `suffix` | string | Accepted. There is no fill-in-the-middle template, so it is not used and never appended to the text. | accepted and ignored |
+| `stop`, `seed`, `temperature`, `top_p`, `top_k`, `min_p`, penalties, `logit_bias`, `stream_options` | | As on the chat route. | supported |
+
+```bash
+curl http://localhost:8000/v1/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model": "local", "prompt": "The capital of France is", "max_tokens": 8, "temperature": 0}'
+```
+
+```json
+{
+  "id": "cmpl-3b7d1c0e5a9f4d2e8c61a0b7",
+  "object": "text_completion",
+  "created": 1760000000,
+  "model": "local",
+  "choices": [{ "index": 0, "text": " Paris.", "finish_reason": "stop" }],
+  "usage": { "prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8 }
+}
+```
+
+Streaming uses `object: "text_completion"` chunks with `choices[].text`, then the optional usage chunk and `[DONE]`. Errors have the same shapes as on the chat route. The model's capability contract is enforced here too (`response_format`, `grammar` and `logprobs` on a model that does not generate text are a `400`).
+
+## Related
+
+- [Stored completions](/docs/api/stored-completions)
+- [Responses](/docs/api/responses)
+- [Structured output](/docs/guides/structured-output)
+- [Prompt caching](/docs/guides/prompt-caching)
+- [Models and the capability contract](/docs/api/models)
+- [Extensions](/docs/api/extensions)

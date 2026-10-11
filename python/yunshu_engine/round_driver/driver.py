@@ -884,6 +884,9 @@ class RoundDriver:
             st.spec_drafted += drafted
             st.spec_rounds += 1
             st.spec_accepted += landed
+            from ..spec_metrics import observe
+
+            observe(st, landed, drafted)
         for j in range(drafted):
             self.depth_drafted[j] += 1
             self.depth_landed[j] += int(j < landed)

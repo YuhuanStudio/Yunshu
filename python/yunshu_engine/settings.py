@@ -70,6 +70,9 @@ class Setting:
     added: str = ""  # experimental only: date added
     empty_is_value: bool = False  # "" is a real value, not "unset"
     secret: bool = False
+    # When a changed value takes effect (see ``APPLIES``): "live" (re-read on
+    # each use), "reload" (next model load), "restart" (read once at startup).
+    applies: str = ""
 
 
 REGISTRY: dict[str, Setting] = {}
@@ -90,6 +93,7 @@ CATEGORIES = (
     "mcp",
     "server-tools",
     "observability",
+    "console",
     "cli",
 )
 
@@ -158,6 +162,7 @@ _add("YUNSHU_COMPACT_MAX_TOKENS", "int", 2048, "Responses compaction: maximum to
 _add("YUNSHU_AUTH_TOKEN", "str", None, "Bearer token. When set, every request except health/version/docs needs it; unset: inference is open and operational endpoints are denied.", "auth", secret=True)
 _add("YUNSHU_AUTH_DISABLED", "bool", False, "Disable auth entirely (operational endpoints open too). Local development only.", "auth")
 _add("YUNSHU_DEBUG_ROUTES", "bool", False, "Mount the /debug/* diagnostic routes (engine, system, kv-cache, spec-decode, ...). They need the auth token or YUNSHU_AUTH_DISABLED. /metrics is always mounted.", "observability")
+_add("YUNSHU_DEBUG_TREE_PROFILE", "bool", False, "Debugging aid: time every stage of the DFlash tree verify (GDN mixer, attention, MLP, residual norms, commit) by evaluating after each one, and log the per-round means when a request ends. The sync after each stage lengthens the round; the split is for finding the dominant stage, not for speed.", "observability")
 _add("YUNSHU_DEBUG_STREAM_CAPTURE", "path", None, "Debugging aid: append one JSON line per VLM-runner generation to this file with the generated token ids, the text pieces the engine handed to the gateway and their joined text, so a delivered answer can be compared with what was generated (soak invariant check). Off when unset.", "observability", stability="internal")
 _add("YUNSHU_ACTOR_IDENTITY", "str", "owner", "Identity recorded for authenticated requests in the audit log.", "auth")
 _add("YUNSHU_RATE_LIMIT_RPM", "int", 0, "Per-client request rate limit in requests per minute; 0 (default) turns rate limiting off. A local single-user engine has no need for it; set it when the server is exposed to other machines.", "auth", minimum=0)
@@ -183,13 +188,14 @@ _add("YUNSHU_CACHE_STALE_DAYS", "float", 7.0, "SSD prefix caches (APC and text):
 _add("YUNSHU_KV_QUANT_BITS", "enum", "off", "Text engine KV cache quantization (lossy; memory vs quality): 'off' (lossless), 'auto' (8-bit once the KV cache would exceed ~2 GiB), or 2/3/4/8 bits always.", "cache", choices=("auto", "off", "2", "3", "4", "8"))
 
 # ── VLM runner ─────────────────────────────────────────────────────────
+_add("YUNSHU_VLM_APC_DRAFT_WINDOW_GB", "float", 0.25, "RAM budget in GiB for the DFlash drafter context windows kept beside APC checkpoints (about 0.1 GiB each at 2047 positions). On a prefix hit the drafter starts with the stored window instead of only the uncached suffix, which restores its acceptance (lossless: the target verifies every draft). 0 disables.", "vlm-runner", minimum=0.0)
 _add("YUNSHU_VLM_APC_MEMORY_GB", "float", None, "VLM runner prefix cache (APC) RAM budget in GiB; 0 disables the prefix cache. Unset: half of the memory left after the model weights and an OS / activation reserve (a quarter of the machine, 4 to 16 GiB), at most a quarter of the machine and 32 GiB, and 0 (off) when under 1 GiB would be left (128 GB machine, 27B model: 32; 8 GB machine, 4B model: 0). A 27B checkpoint costs about 130 KiB per cached token.", "vlm-runner", minimum=0.0)
 _add("YUNSHU_VLM_APC_DISK", "bool", True, "APC SSD tier: prefix checkpoints that RAM evicts (and, at shutdown, those still resident) are written to disk and read back instead of re-prefilling (bit-exact states, lossless; a 27B checkpoint reloads about 20x faster than it prefills). Set 0 to keep the prefix cache in RAM only.", "vlm-runner")
 _add("YUNSHU_VLM_APC_DISK_DIR", "path", None, "Directory of the APC SSD tier. Unset: ~/.yunshu/cache/apc (internal disk). Put it on a fast volume to keep the internal disk clean.", "vlm-runner")
 _add("YUNSHU_KV_PRECISION", "enum", "bf16", "KV cache precision of the Qwen3.5-family runner's shared decode batch: 'bf16' (lossless) or 'int8' (int8 codes + one fp16 scale per 32-dim group: ~0.53x the KV memory and read bandwidth for a small attention error; memory vs quality). A lone request and the speculative lane stay bf16. Applies to models with Qwen3.5-family attention (the ragged KV layout).", "vlm-runner", choices=("bf16", "int8"))
 _add("YUNSHU_VLM_APC_DISK_GB", "float", None, "Size cap of the APC SSD tier in GiB, one budget for the whole directory (every checkpoint namespace together; least recently used files go first across namespaces; 0 = no configured cap, the free-space reserve still applies). Unset: a quarter of the volume, at most 64 GiB (a 128 GB disk: 32). A 27B checkpoint costs about 130 KiB per token, so 64 GiB holds about 500K tokens.", "vlm-runner", minimum=0.0)
 _add("YUNSHU_PREFILL_MATMUL", "enum", "stock", "Qwen3.5-family VLM runner on M5-class GPUs: matmul of prefill chunks (more than 512 rows; shorter calls, such as the new tokens of a cached-prefix turn, keep the lane kernel because untiling the weight costs about 0.16 s per call). 'stock' runs MLX's quantized matmul on the weight untiled per call (cold 27B prefill about 25% faster; a chunk's bits then depend on its row count, as in stock mlx-lm; decode and verify rows keep the row-invariant lane kernel, so speculative on == off); 'lane' keeps the row-invariant lane kernel for every row count (a prompt's bits never depend on how it was chunked). Part of every APC key and SSD namespace.", "vlm-runner", choices=("stock", "lane"))
-_add("YUNSHU_PREFILL_BUFFER_CACHE_GB", "float", None, "VLM runner: GiB of MLX's freed-buffer cache kept across prefill steps. Unset: 5% of physical RAM, at most 6 GiB (128 GiB: 6; 8 GiB: 0.4). Uses MLX's cache limit to reclaim excess freed memory on the next allocation without clearing every reusable bucket; freed buffers may transiently exceed the limit until that allocation. Keeps long-prefix restore buffers warm across requests. 0 = upstream clear after every chunk. Allocator only; output unchanged.", "vlm-runner", minimum=0.0)
+_add("YUNSHU_PREFILL_BUFFER_CACHE_GB", "float", None, "VLM runner: GiB of MLX's freed-buffer cache kept across prefill steps. Unset: 5% of physical RAM, at most 6 GiB (128 GiB: 6; 8 GiB: 0.4), but 0.5 GiB when the resident weights leave little headroom (above 80% of YUNSHU_MAX_MEMORY_GB when set, else above 45% of RAM): lossless, it cuts the long-prefill peak of a 74 GB model by 5-10 GB. Uses MLX's cache limit to reclaim excess freed memory on the next allocation without clearing every reusable bucket; freed buffers may transiently exceed the limit until that allocation. Keeps long-prefix restore buffers warm across requests. 0 = upstream clear after every chunk. Allocator only; output unchanged.", "vlm-runner", minimum=0.0)
 _add("YUNSHU_PREFILL_GDN", "enum", "chunked", "Qwen3.5-family VLM runner: GatedDeltaNet core of prefill chunks of 64 or more tokens. 'chunked' runs MLX's mx.fast.gated_delta_update (2.7x faster per layer than the step kernel; outputs within bf16 rounding of it, so cold prefill bits differ from 'step'); 'step' keeps mlx-vlm's per-token kernel. Part of every APC key and SSD namespace; decode, verify and the round driver always use the step kernels.", "vlm-runner", choices=("chunked", "step"))
 _add("YUNSHU_VLM_APC_DISK_TIERS", "str", None, "Further APC storage tiers below the SSD directory, comma-separated, each 'PATH[@GiB]' (an external SSD, an HDD, a NAS mount). Each volume is profiled at startup (sequential read / write bandwidth and latency, cached per mount for a day) and the tiers are ordered by measured read speed. Checkpoints the SSD tier evicts move down in the background instead of being deleted; a tier is used for a hit only when restoring from it beats re-prefilling (measured bandwidth against the observed prefill speed). A tier that is not mounted is skipped; when it returns its files are validated again. Each tier has its own cap (default: a quarter of its volume, at most 64 GiB) and free-space reserve. Lossless; unset: SSD only.", "vlm-runner")
 _add("YUNSHU_VLM_APC_DISK_ENCODING", "enum", "auto", "How the lower APC storage tiers (YUNSHU_VLM_APC_DISK_TIERS) hold a checkpoint: 'raw' (a copy of the SSD file), 'zstd' (lossless: byte-plane shuffle of bf16 tensors + zstd; decoded on restore), 'auto' (zstd only when the measured gain in effective read bandwidth, ratio against decode cost, beats raw on that device: slow disks and network shares, not fast SSDs). Never lossy.", "vlm-runner", choices=("auto", "raw", "zstd"))
@@ -204,6 +210,7 @@ _add("YUNSHU_MTP", "bool", True, "Qwen3.5-family VLMs: draft with the checkpoint
 _add("YUNSHU_VLM_DRAFT", "path", None, "Qwen3.5-family VLMs: speculative draft override. A DFlash drafter directory; 'mtp' forces the checkpoint MTP head; 'off' disables drafting. Unset: a DFlash2 drafter matching the model is used automatically when it is in the models dir or the Hugging Face cache, else the MTP head (batch-invariant verify, spec on == spec off).", "speculative")
 _add("YUNSHU_MTP_BLOCK_SIZE", "int", None, "Draft block size (DFlash: the ceiling its acceptance-driven depth stays under). Unset: 6 for MTP, the drafter's trained block for DFlash.", "speculative", minimum=2)
 _add("YUNSHU_SPEC_COPY_ROWS", "int", 16, "Qwen3.5-family single-request speculative lane: verify rows a prompt-copy round may use (copy drafts = rows - 1). A copy round proposes the continuation of the longest earlier occurrence of the current tail in the request's full prompt plus its generated text, and the same verify checks it, so output is unchanged (greedy: identical to plain decode; sampled: keyed-sampler exact); agent / code-editing and multi-turn traffic that quotes its context commits several times more tokens per round. Qualified dense DFlash2 greedy requests use their trained model block plus copied runs; sampled and unsupported requests retain the original depth controller. The default is 16 rows, capped to the backend's certified width (32 for dense lane projections with compatible tile attention, 8 otherwise). 0 turns copy rounds off.", "speculative", minimum=0)
+_add("YUNSHU_PLE_READ_THREADS", "int", 16, "Qwen3.8-Flash-Next (qwen4_exp) with the n-gram embedding (PLE) read from SSD: threads that read a token's PLE rows in parallel. A token needs 48 random row reads (16 heads x weight/scales/biases); upstream reads them one after another (about 7 ms per token on fresh text, hidden only when a prompt repeats and hits the row cache). The rows returned are byte-identical to the serial read, so output is unchanged. 0 = upstream serial reads.", "vlm-runner", minimum=0, stability="stable")
 _add("YUNSHU_DRAFT_BITS", "int", 8, "Qwen3.5-family DFlash drafter weight bits: 8 (default), 4, or 0 to keep the shipped bf16. Drafts are verified by the target, so output is token-identical for every value; fewer bits cut the drafter's bytes per round but can lower acceptance (27B on M5: 4-bit +4% to +8% decode at 1K-8K, -7% on 32K code).", "speculative", minimum=0, stability="stable")
 _add("YUNSHU_GC_POLICY", "enum", "defer", "Python cyclic-collector policy of the VLM runner (a ~110 ms generation-2 pass can land right after a long prefill and delay the first token). Default: defer (27B 32K, yv ttftfloor-gc-defer32: identity 0 mismatches, warm TTFT -2.3%, follow-up -0.6%, decode +0.4%). default: Python's own, the opt-out. freeze: after load, collect once and gc.freeze() the startup heap (vLLM and SGLang do the same). defer: freeze, a 100x higher generation-2 multiplier, and the collector is disabled from request arrival to its first token (bounded: first token, 60 s or 5M net allocations; idle servers still collect). Output is unchanged.", "vlm-runner", choices=("default", "freeze", "defer"), stability="stable")
 _add("YUNSHU_SPEC_TREE", "enum", "auto", "Qwen3.5-family single-request speculative lane: off keeps trained chain + copy; tree forces the draft-tree verifier; auto uses the certified M5 Q4 DFlash2 fast tree for eligible greedy requests within its live-context safety bounds, including long contexts, retaining chain + copy elsewhere. Greedy tokens remain identical to plain decode.", "speculative", choices=("off", "tree", "auto"), stability="stable")
@@ -291,6 +298,8 @@ _add("YUNSHU_MODEL_ALIASES", "json", None, "Multi-model mode: map the model name
 
 # ── observability ──────────────────────────────────────────────────────
 _add("YUNSHU_LOG_LEVEL", "enum", "INFO", "Log level for Yunshu's loggers (third-party loggers stay at WARNING).", "observability", choices=("DEBUG", "INFO", "WARNING", "ERROR"))
+_add("YUNSHU_TELEMETRY", "enum", "off", "Unprivileged Apple power/GPU/temperature sampler (on/off); off by default (the 27B A/B showed a small, consistent follow-up TTFT cost when on); 1 Hz when on, restart required.", "observability", choices=("on", "off"))
+_add("YUNSHU_TELEMETRY_INTERVAL_S", "float", 1.0, "Host telemetry sampling interval in seconds (restart required).", "observability", minimum=0.1)
 _add("YUNSHU_AUDIT_LOG_FILE", "path", None, "Also write the audit log to this file.", "observability")
 _add("YUNSHU_LOG_MAX_MB", "float", 50.0, "Service log (launchd): rotate the log file at this size in MiB; 0 turns size rotation off.", "observability", minimum=0.0)
 _add("YUNSHU_LOG_ROTATE_HOURS", "float", 24.0, "Service log: also rotate when this many hours passed since the last rotation; 0 turns time rotation off.", "observability", minimum=0.0)
@@ -299,7 +308,20 @@ _add("YUNSHU_LOG_RETENTION_DAYS", "float", 14.0, "Service log: delete rotated fi
 _add("YUNSHU_SERVE_LOG", "bool", False, "Write one numbers-only JSON line per finished generation request (timings, token counts, speculative acceptance, cache tier, concurrency, arm, build) to a local, size-capped, rotated file. Never prompts, outputs or token ids. Off by default; nothing leaves the machine.", "observability")
 _add("YUNSHU_SERVE_LOG_DIR", "path", None, "Directory of the serve log. Unset: ~/.yunshu/logs.", "observability")
 _add("YUNSHU_SERVE_LOG_MAX_MB", "float", 4.0, "Serve log: rotate at this size in MiB; with YUNSHU_SERVE_LOG_KEEP the directory is capped at max * (keep + 1).", "observability", minimum=0.01)
+_add("YUNSHU_SERVE_LOG_RETENTION_DAYS", "int", 30, "History API metadata retention window in days; 0 disables age filtering. File storage remains bounded by SERVE_LOG_MAX_MB and SERVE_LOG_KEEP.", "observability", minimum=0)
 _add("YUNSHU_SERVE_LOG_KEEP", "int", 4, "Serve log: rotated files kept.", "observability", minimum=0)
+_add("YUNSHU_CONSOLE", "bool", True, "`yunshu serve` also starts the console process (the web console, the docs, and the metrics history recorder) as a sibling on YUNSHU_CONSOLE_PORT. The console is its own light process that never loads MLX: it keeps running and recording while the engine restarts or crashes, and an engine fault cannot take it down. `--no-console` turns it off; `yunshu console` runs it on its own.", "console")
+_add("YUNSHU_CONSOLE_PORT", "int", 8100, "Port of the console process (the web console at /console/, its reverse proxy to the engine API, and the history endpoints). 8100 stays clear of the engine's 8000 and of the usual dev servers (3000, 5173, 8080, 8888).", "console", minimum=1)
+_add("YUNSHU_CONSOLE_HOST", "str", None, "Bind host of the console process. Unset: the engine's own host for the sibling, 127.0.0.1 for a standalone `yunshu console`.", "console")
+_add("YUNSHU_CONSOLE_ENGINE", "str", None, "Engine URL the console process watches and proxies to. Unset: the engine that started it, else http://127.0.0.1:8000. Point it at a LAN or remote engine to watch that one.", "console")
+_add("YUNSHU_CONSOLE_ENGINE_TOKEN", "str", None, "Bearer token the console process uses to read the engine while it records history. Unset: YUNSHU_AUTH_TOKEN. The browser's own token is passed through to the engine unchanged.", "console", secret=True)
+_add("YUNSHU_CONSOLE_POLL_S", "float", 1.0, "Seconds between the console process's reads of the engine (status and finished requests, the same cheap endpoints the console page uses). 1 s gives the 1 s history resolution.", "console", minimum=0.25)
+_add("YUNSHU_CONSOLE_HISTORY", "bool", True, "Record the metrics history (1 s for 1 h, 10 s for 24 h, 1 min for the retention) and the request log (metadata only, never prompts or outputs) to ~/.yunshu/console-history.sqlite, with engine outages kept as explicit gaps and events. Off keeps the console live-only.", "console")
+_add("YUNSHU_CONSOLE_DB", "path", None, "Where the console process keeps its history (SQLite, WAL). Unset: ~/.yunshu/console-history.sqlite.", "console")
+_add("YUNSHU_CONSOLE_RETENTION_DAYS", "float", 30.0, "Days the console keeps 1-minute history rows, the request log and the engine events.", "console", minimum=1.0)
+_add("YUNSHU_CONSOLE_DB_MAX_MB", "float", 64.0, "Size cap of the console history file in MiB: when exceeded, the oldest request rows and then the oldest 1-minute rows are dropped.", "console", minimum=1.0)
+_add("YUNSHU_HISTORY_INTERVAL_S", "float", 5.0, "Console history: seconds between samples of the in-memory ring behind GET /v1/yunshu/history (throughput, request counts, memory, TTFT percentiles); 0 turns the sampler off. The ring is fixed-size and never grows: 12 columns, 4 bytes each (timestamp 8), per slot.", "observability", minimum=0.0)
+_add("YUNSHU_HISTORY_HOURS", "float", 12.0, "Console history: hours the history ring keeps (capacity = hours * 3600 / YUNSHU_HISTORY_INTERVAL_S slots, preallocated; 12 h at 5 s is 8,640 slots, about 0.4 MiB).", "observability", minimum=0.0)
 _add("YUNSHU_ARM", "str", None, "Label recorded in the serve log for the configuration arm this server runs (for offline A/B analysis); it changes no behaviour.", "observability")
 
 # ── CLI ────────────────────────────────────────────────────────────────
@@ -307,6 +329,229 @@ _add("YUNSHU_GATEWAY_URL", "str", "http://localhost:8000", "Server URL used by t
 _add("YUNSHU_HF_ENDPOINT", "str", None, "Hugging Face Hub endpoint for `yunshu serve` (exported as HF_ENDPOINT).", "cli")
 
 # fmt: on
+
+# ── when a change applies ──────────────────────────────────────────────
+# Classified from each setting's read sites (the strictest site wins):
+#   live    re-read on every use (per request / call), or rebuilt when it
+#           changes; a changed value applies now.
+#   reload  read when an engine, runner or connection is built; applies on the
+#           next model load.
+#   restart read once at process start (create_app, lifespan, serve, module
+#           import); applies after a restart.
+# A new setting must be added here (import fails otherwise; unit-tested).
+APPLIES_CLASSES = ("live", "reload", "restart")
+_LIVE = frozenset(
+    {
+        "YUNSHU_NEXT_TURN_DELAY_S",
+        "YUNSHU_DEBUG_TREE_PROFILE",
+        "YUNSHU_AUTH_TOKEN",
+        "YUNSHU_AUTH_DISABLED",
+        "YUNSHU_ACTOR_IDENTITY",
+        "YUNSHU_CORS_ORIGINS",
+        "YUNSHU_HF_CACHE_MODELS",
+        "YUNSHU_QUEUE_LIMIT",
+        "YUNSHU_MEMORY_PRESSURE_REJECT",
+        "YUNSHU_MAX_PREFILL_TOKENS",
+        "YUNSHU_WS_MAX_INFLIGHT",
+        "YUNSHU_WS_PING_INTERVAL",
+        "YUNSHU_WS_SEND_QUEUE",
+        "YUNSHU_PROGRESS_INTERVAL_S",
+        "YUNSHU_BATCH_MAX_ITEMS",
+        "YUNSHU_BATCH_TIMEOUT",
+        "YUNSHU_ALLOW_LOCAL_FILES",
+        "YUNSHU_MEDIA_DIR",
+        "YUNSHU_FILES_DIR",
+        "YUNSHU_FILES_MAX_BYTES",
+        "YUNSHU_FILES_TTL_DAYS",
+        "YUNSHU_FILES_MAX_TOTAL_BYTES",
+        "YUNSHU_CONVERSATIONS_DIR",
+        "YUNSHU_CONVERSATION_MAX_ITEMS",
+        "YUNSHU_COMPACT_MAX_TOKENS",
+        "YUNSHU_ALLOW_AUTO_LOAD",
+        "YUNSHU_DEBUG_STREAM_CAPTURE",
+        "YUNSHU_PREFILL_STEP_SIZE",
+        "YUNSHU_CACHE_RESERVE_PCT",
+        "YUNSHU_CACHE_RESERVE_GB",
+        "YUNSHU_CACHE_STALE_DAYS",
+        "YUNSHU_VLM_MAX_IMAGE_BYTES",
+        "YUNSHU_VLM_INSECURE_SSL",
+        "YUNSHU_GPU_SAMPLER",
+        "YUNSHU_JUMP_FORWARD",
+        "YUNSHU_JSON_SCHEMA_ENGINE",
+        "YUNSHU_GRAMMAR_BITMASK",
+        "YUNSHU_TOOL_GRAMMAR",
+        "YUNSHU_OMNI_PERSONA",
+        "YUNSHU_REALTIME_SILENCE_MS",
+        "YUNSHU_REALTIME_BARGE_IN_MS",
+        "YUNSHU_REALTIME_VAD_THRESHOLD",
+        "YUNSHU_REALTIME_PREFIX_PADDING_MS",
+        "YUNSHU_REALTIME_VAD",
+        "YUNSHU_REALTIME_VAD_MODEL",
+        "YUNSHU_REALTIME_MAX_INPUT_AUDIO_BYTES",
+        "YUNSHU_REALTIME_MAX_CONVERSATION_ITEMS",
+        "YUNSHU_ANE_EMBEDDINGS",
+        "YUNSHU_ANE_EMBEDDING_MODEL",
+        "YUNSHU_WEB_SEARCH_PROVIDER",
+        "YUNSHU_SEARXNG_URL",
+        "YUNSHU_BRAVE_API_KEY",
+        "YUNSHU_TAVILY_API_KEY",
+        "YUNSHU_EXA_API_KEY",
+        "YUNSHU_WEB_SEARCH_RESULTS",
+        "YUNSHU_WEB_FETCH",
+        "YUNSHU_WEB_FETCH_ALLOW_PRIVATE",
+        "YUNSHU_WEB_FETCH_MAX_BYTES",
+        "YUNSHU_WEB_FETCH_TIMEOUT",
+        "YUNSHU_WEB_FETCH_MAX_TEXT_CHARS",
+        "YUNSHU_MCP_CONNECTOR",
+        "YUNSHU_MCP_CONNECTOR_ALLOW_PRIVATE",
+        "YUNSHU_MCP_CONNECTOR_TIMEOUT",
+        "YUNSHU_MCP_CONNECTOR_MAX_BYTES",
+        "YUNSHU_SERVER_TOOL_MAX_ITERATIONS",
+        "YUNSHU_MODEL_ALIASES",
+        "YUNSHU_LOG_MAX_MB",
+        "YUNSHU_LOG_ROTATE_HOURS",
+        "YUNSHU_LOG_KEEP",
+        "YUNSHU_LOG_RETENTION_DAYS",
+        "YUNSHU_SERVE_LOG",
+        "YUNSHU_SERVE_LOG_DIR",
+        "YUNSHU_SERVE_LOG_MAX_MB",
+        "YUNSHU_SERVE_LOG_KEEP",
+        "YUNSHU_SERVE_LOG_RETENTION_DAYS",
+        "YUNSHU_ARM",
+        "YUNSHU_GATEWAY_URL",
+    }
+)
+_RELOAD = frozenset(
+    {
+        "YUNSHU_GC_POLICY",
+        "YUNSHU_NEXT_TURN_PREFILL",
+        "YUNSHU_PLE_READ_THREADS",
+        "YUNSHU_MAX_LORAS",
+        "YUNSHU_TRUST_REMOTE_CODE",
+        "YUNSHU_WARM_PROMPTS",
+        "YUNSHU_UNCACHED_SCHEDULING",
+        "YUNSHU_AUXILIARY_SCHEDULING",
+        "YUNSHU_DEFAULT_MAX_TOKENS",
+        "YUNSHU_MEM_PRESSURE_THRESHOLD",
+        "YUNSHU_PREFIX_MAX_ENTRIES",
+        "YUNSHU_PREFIX_HOT_LIMIT",
+        "YUNSHU_SSD_CACHE",
+        "YUNSHU_SSD_CACHE_DIR",
+        "YUNSHU_SSD_CACHE_PRECISION",
+        "YUNSHU_SSD_CACHE_PREFILL_CEIL_TPS",
+        "YUNSHU_SSD_CACHE_MAX_GB",
+        "YUNSHU_KV_QUANT_BITS",
+        "YUNSHU_VLM_APC_MEMORY_GB",
+        "YUNSHU_VLM_APC_DISK",
+        "YUNSHU_VLM_APC_DISK_DIR",
+        "YUNSHU_KV_PRECISION",
+        "YUNSHU_VLM_APC_DISK_GB",
+        "YUNSHU_PREFILL_MATMUL",
+        "YUNSHU_PREFILL_BUFFER_CACHE_GB",
+        "YUNSHU_PREFILL_GDN",
+        "YUNSHU_VLM_APC_DISK_TIERS",
+        "YUNSHU_VLM_APC_DISK_ENCODING",
+        "YUNSHU_VLM_APC_WARM",
+        "YUNSHU_VLM_APC_WARM_SHARE",
+        "YUNSHU_MTP",
+        "YUNSHU_VLM_DRAFT",
+        "YUNSHU_MTP_BLOCK_SIZE",
+        "YUNSHU_SPEC_COPY_ROWS",
+        "YUNSHU_DRAFT_BITS",
+        "YUNSHU_SPEC_TREE",
+        "YUNSHU_NGRAM_DEFAULT",
+        "YUNSHU_SPEC_PROPOSER",
+        "YUNSHU_GEMMA4_ASSISTANT",
+        "YUNSHU_QUANT_MODE",
+        "YUNSHU_QUANT_CONFIG",
+        "YUNSHU_ROUND_PREFILL_CHUNK",
+        "YUNSHU_ROUND_DRIVER",
+        "YUNSHU_MTP_ROW_EXACT",
+        "YUNSHU_ENGINE_LOOP",
+        "YUNSHU_OVERLAP",
+        "YUNSHU_SPEC_UNVERIFIED",
+        "YUNSHU_DRAFT_MODEL",
+        "YUNSHU_OMNI_THINKER_MAX",
+        "YUNSHU_DIFFUSION_SCHEDULER",
+    }
+)
+_RESTART = frozenset(
+    {
+        "YUNSHU_VLM_APC_DRAFT_WINDOW_GB",
+        "YUNSHU_MODEL",
+        "YUNSHU_MULTI_MODEL",
+        "YUNSHU_MODELS_DIR",
+        "YUNSHU_MODEL_TTL_SECONDS",
+        "YUNSHU_CONFIG",
+        "YUNSHU_MAX_CONCURRENT",
+        "YUNSHU_COMPLETION_BATCH_SIZE",
+        "YUNSHU_STARTUP_TIMEOUT",
+        "YUNSHU_DRAIN_TIMEOUT",
+        "YUNSHU_KEEP_ALIVE_TIMEOUT",
+        "YUNSHU_UDS",
+        "YUNSHU_MAX_REQUEST_SIZE",
+        "YUNSHU_SLOW_REQUEST_THRESHOLD",
+        "YUNSHU_RESPONSE_CACHE",
+        "YUNSHU_DEBUG_ROUTES",
+        "YUNSHU_RATE_LIMIT_RPM",
+        "YUNSHU_TRUSTED_PROXIES",
+        "YUNSHU_FOOTPRINT_SAMPLE_MS",
+        "YUNSHU_MAX_MEMORY_GB",
+        "YUNSHU_REALTIME_OMNI",
+        "YUNSHU_OMNI_MODEL",
+        "YUNSHU_OMNI_PRELOAD",
+        "YUNSHU_MCP_CONFIG",
+        "YUNSHU_MCP_SERVERS",
+        "YUNSHU_LOG_LEVEL",
+        "YUNSHU_AUDIT_LOG_FILE",
+        "YUNSHU_HISTORY_INTERVAL_S",
+        "YUNSHU_HISTORY_HOURS",
+        "YUNSHU_CONSOLE",
+        "YUNSHU_CONSOLE_PORT",
+        "YUNSHU_CONSOLE_HOST",
+        "YUNSHU_CONSOLE_ENGINE",
+        "YUNSHU_CONSOLE_ENGINE_TOKEN",
+        "YUNSHU_CONSOLE_POLL_S",
+        "YUNSHU_CONSOLE_HISTORY",
+        "YUNSHU_CONSOLE_DB",
+        "YUNSHU_CONSOLE_RETENTION_DAYS",
+        "YUNSHU_CONSOLE_DB_MAX_MB",
+        "YUNSHU_TELEMETRY",
+        "YUNSHU_TELEMETRY_INTERVAL_S",
+        "YUNSHU_HF_ENDPOINT",
+        "YUNSHU_EVALS_DIR",
+        "YUNSHU_CHAT_COMPLETIONS_DIR",
+        "YUNSHU_CHAT_COMPLETIONS_MAX",
+        "YUNSHU_VLM_MAX_VIDEO_BYTES",
+        "YUNSHU_WEB_SEARCH_PROVIDER_TIMEOUT",
+        "YUNSHU_WEB_SEARCH_HEALTH_FILE",
+        "YUNSHU_WEB_MWMBL",
+        "YUNSHU_WEB_KEYLESS",
+        "YUNSHU_MOJEEK_API_KEY",
+        "YUNSHU_MARGINALIA_API_KEY",
+        "YUNSHU_SERPER_API_KEY",
+        "YUNSHU_PERPLEXITY_API_KEY",
+        "YUNSHU_WEB_RESEARCH",
+        "YUNSHU_WEB_RENDER",
+        "YUNSHU_WEB_RESEARCH_BUDGET",
+        "YUNSHU_WEB_RESEARCH_PAGES",
+        "YUNSHU_WEB_RESEARCH_MODEL",
+    }
+)
+
+
+def _classify() -> None:
+    from dataclasses import replace
+
+    for cls, group in (("live", _LIVE), ("reload", _RELOAD), ("restart", _RESTART)):
+        for name in group:
+            REGISTRY[name] = replace(REGISTRY[name], applies=cls)
+    missing = [n for n, s in REGISTRY.items() if not s.applies]
+    if missing:
+        raise RuntimeError(f"settings without an applies class: {missing}")
+
+
+_classify()
 
 # ── resolution ─────────────────────────────────────────────────────────
 
@@ -397,18 +642,29 @@ def _file() -> dict[str, str]:
     return _file_values
 
 
-def write_config_value(name: str, value: Any | None, path: Path | None = None) -> Path:
-    """Set (or with ``value=None`` remove) one setting in a TOML config file,
-    validating it against the registry first. Entries are written flat."""
-    s = _setting(name)
+def active_config_path() -> Path:
+    """The file a write lands in: the config file in use (``--config`` /
+    ``YUNSHU_CONFIG``), else the user file."""
+    path = _config_path()
+    return Path(path).expanduser() if path else user_config_path()
+
+
+def write_config_values(
+    changes: Mapping[str, Any | None], path: Path | None = None
+) -> Path:
+    """Set (``None`` removes) several settings in a TOML config file in one
+    write, validating every value against the registry first (nothing is
+    written when one is bad). Entries are written flat."""
     target = Path(path).expanduser() if path else user_config_path()
     values = load_config_file(target) if target.is_file() else {}
-    if value is None:
-        values.pop(name, None)
-    else:
-        text = _to_text(value)
-        _parse(s, text)  # raises SettingError on a bad value
-        values[name] = text
+    for name, value in changes.items():
+        s = _setting(name)
+        if value is None:
+            values.pop(name, None)
+        else:
+            text = _to_text(value)
+            _parse(s, text)  # raises SettingError on a bad value
+            values[name] = text
     target.parent.mkdir(parents=True, exist_ok=True)
     lines = [
         "# Yunshu settings (`yunshu config set KEY VALUE`); see docs/CONFIGURATION.md"
@@ -426,6 +682,12 @@ def write_config_value(name: str, value: Any | None, path: Path | None = None) -
     finally:
         Path(tmp).unlink(missing_ok=True)
     return target
+
+
+def write_config_value(name: str, value: Any | None, path: Path | None = None) -> Path:
+    """Set (or with ``value=None`` remove) one setting in a TOML config file,
+    validating it against the registry first."""
+    return write_config_values({name: value}, path)
 
 
 def raw(name: str) -> tuple[str | None, str]:
@@ -588,6 +850,12 @@ def effective(include: tuple[str, ...] = ("stable",)) -> list[dict[str, Any]]:
                 "stability": s.stability,
                 "category": s.category,
                 "description": s.description,
+                "default": s.default,
+                "type": s.type,
+                "choices": list(s.choices),
+                "applies": s.applies,
+                "minimum": s.minimum,
+                "secret": s.secret,
             }
         )
     return rows

@@ -208,3 +208,27 @@ def get_model_capabilities(model: Any, model_name: str) -> dict[str, Any]:
         caps["moe_top_k"] = getattr(config, "num_experts_per_tok", 2)
 
     return caps
+
+
+def sanitize_qwen4_checkpoint(
+    model: Any, weights: dict, *, prepare: Any = None
+) -> tuple[dict, dict]:
+    """Keep the native head separate while upstream sanitizes target weights.
+
+    The target has no MTP parameters: retaining them in its parameter tree
+    would defeat strict loading. Return them to the caller for the independently
+    loaded drafter instead of letting qwen4_exp.sanitize discard them.
+    """
+    prefixes = ("mtp.", "language_model.mtp.", "model.mtp.")
+    head = {}
+    target = {}
+    for key, value in weights.items():
+        prefix = next((p for p in prefixes if key.startswith(p)), None)
+        if prefix is None:
+            target[key] = value
+        else:
+            name = key[len(prefix) :]
+            if name in head:
+                raise ValueError(f"Duplicate Qwen4 MTP tensor: {name}")
+            head[name] = value
+    return (prepare or model.sanitize)(target), head

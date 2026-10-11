@@ -1,0 +1,222 @@
+---
+title: Realtime
+description: 通过 WebSocket（GA 与 beta 结构）和 WebRTC 提供的 OpenAI Realtime 协定，支持暂时性客户端密钥、文本与语音回合，以及工具调用。
+---
+
+Yunshu 提供 OpenAI Realtime 协定：一条长连接的 WebSocket（或 WebRTC data channel），双向发送 JSON 事件。你配置 session、加入对话项目或流式麦克风音频，服务器则流式返回文本、音频与工具调用事件。官方 `openai` SDK 的 `client.realtime.connect()` 可以直接使用。
+
+<Endpoint method="WS" path="/v1/realtime" />
+<Endpoint method="WS" path="/realtime" />
+<Endpoint method="POST" path="/v1/realtime/client_secrets" />
+<Endpoint method="POST" path="/v1/realtime/sessions" />
+<Endpoint method="POST" path="/v1/realtime/transcription_sessions" />
+<Endpoint method="POST" path="/v1/realtime/calls" />
+
+## 连接
+
+连到 `ws://localhost:8000/v1/realtime?model=local`。`model` 查找参数指定这个 session 使用的模型（单模型模式下任何名称都会对应到所服务的模型；多模型模式下指定未知模型时，会收到 code 为 `model_not_found` 的 `error` 事件，并关闭连接）。
+
+| 格式 | 如何选择 | 备注 |
+| --- | --- | --- |
+| GA（默认） | `WS /v1/realtime`，不带 beta 标头 | `client.realtime.connect()` 使用的格式：嵌套的 `audio.input` / `audio.output` session，事件名称如 `response.output_text.delta`。 |
+| Beta | 在 `WS /v1/realtime` 带 `OpenAI-Beta: realtime=v1`，或直接使用 `WS /realtime` | 扁平的 session（`modalities`、`voice`、`input_audio_format` 等），事件名称如 `response.text.delta`，另外会发送 `conversation.created`。 |
+
+只有在配置了 `YUNSHU_AUTH_TOKEN` 时才会强制验证。配置后，连接需要下列其中一种：
+
+- `Authorization: Bearer <token>` 标头，
+- 浏览器用的子协定 `openai-insecure-api-key.<token>`（同时带上 `realtime` 作为第二个子协定），
+- `?token=` 查找参数，
+- 暂时性客户端密钥（`ek_...`），可放在上述任一位置，见下文。
+
+若带有 `Origin` 标头，必须被 `YUNSHU_CORS_ORIGINS` 允许（该配置为 `*` 时除外）。检查失败时会在升级连接之前就关闭，客户端看到的是握手失败。
+
+服务器发送的第一则消息是 `session.created`。GA 格式之后会保持安静直到你开口；beta 格式还会发送 `conversation.created`。若没有加载任何模型，服务器会立刻发送一个 `error` 事件。
+
+## Session 配置
+
+发送带有 `session` 对象的 `session.update`。下表用 GA 结构，括号内是 beta 名称。
+
+| 字段 | 说明 | 状态 |
+| --- | --- | --- |
+| `output_modalities`（`modalities`） | `["text"]`（默认）或 `["audio"]`。beta 形式也接受 `["text", "audio"]`。 | 支持 |
+| `instructions` | 响应使用的系统提示。 | 支持 |
+| `audio.output.voice`（`voice`） | `alloy`、`echo`、`shimmer`、`ash`、`ballad`、`coral`、`sage`、`verse` 之一，或 omni 模型的原生说话者。无效的语音会被忽略。 | 支持 |
+| `audio.input.format`、`audio.output.format`（`input_audio_format`、`output_audio_format`） | GA：`audio/pcm`（24 kHz 单声道 16-bit）、`audio/pcmu`、`audio/pcma`。Beta：`pcm16`、`g711_ulaw`、`g711_alaw`。 | 支持 |
+| `audio.input.turn_detection`（`turn_detection`） | `null`（手动 commit）或 `{"type": "server_vad", "threshold", "prefix_padding_ms", "silence_duration_ms", "idle_timeout_ms"}`。 | 支持 |
+| `audio.input.noise_reduction`（`input_audio_noise_reduction`） | `{"type": "near_field"}`、`far_field` 或 `null`。 | 支持 |
+| `tools`、`tool_choice` | 函数工具；`tool_choice` 为 `auto`、`none`、`required` 或指定函数。 | 支持 |
+| `max_output_tokens`（`max_response_output_tokens`） | 整数。 | 支持 |
+| `temperature` | 采样温度，默认 0.7。 | 支持 |
+| `audio.input.transcription` | 使用哪个 ASR 模型取决于目前加载的 ASR 引擎，这个字段不会用来挑选。 | 接受但忽略 |
+| `top_p`、`top_k`、`min_p`、`repetition_penalty`、`frequency_penalty`、`presence_penalty`、`logit_bias`、`seed`、`enable_thinking` | Yunshu 的采样扩展，会直接传递。 | 扩展 |
+| `tracing`、`include`、`type` | 忽略。 | 接受但忽略 |
+
+server VAD 的默认值为 `threshold` 0.5、`prefix_padding_ms` 300、`silence_duration_ms` 500，以及 120 ms 持续说话才算插话的门槛（`barge_in_min_ms`，GA session 中不会显示）。可用 `YUNSHU_REALTIME_VAD_THRESHOLD`、`YUNSHU_REALTIME_PREFIX_PADDING_MS`、`YUNSHU_REALTIME_SILENCE_MS`、`YUNSHU_REALTIME_BARGE_IN_MS` 在服务器端统一调整。`YUNSHU_REALTIME_VAD=silero` 会把默认的能量式侦测改为 Silero VAD（模型由 `YUNSHU_REALTIME_VAD_MODEL` 指定）。`turn_detection.type` 为 `semantic_vad` 时会以 `server_vad` 处理；`eagerness`、`create_response`、`interrupt_response` 会被忽略（侦测到回合结束后一律创建响应，说话会打断正在播放的响应）。
+
+某个字段的值不合法（例如不认得的音频格式）时会被默默略过并保留原值；`session.updated` 事件会显示实际生效的 session。
+
+## 客户端事件
+
+| 事件 | 行为 |
+| --- | --- |
+| `session.update` | 变更 session，响应 `session.updated`。 |
+| `conversation.item.create` | 添加项目（消息、函数调用、函数调用输出）。响应 `conversation.item.added` 与 `conversation.item.done`（GA）或 `conversation.item.created`（beta）。id 重复或项目过大时以 `error` 拒绝。 |
+| `conversation.item.delete` | 移除项目，响应 `conversation.item.deleted`。 |
+| `conversation.item.truncate` | 记录用户实际听到助理音频项目的多少，响应 `conversation.item.truncated`。 |
+| `input_audio_buffer.append` | 附加 base64 音频。 |
+| `input_audio_buffer.commit` | 转录缓冲区，并作为用户消息加入对话。 |
+| `input_audio_buffer.clear` | 丢弃缓冲区。 |
+| `response.create` | 开始一个响应。`response` 可带 `output_modalities`、`instructions`、`tools`、`tool_choice`、`temperature`、`max_output_tokens`、`input`（作为这个响应完整上下文的项目；`[]` 表示清空）以及 `conversation: "none"`（不写入历史）。 |
+| `response.cancel` | 取消运行中的响应。 |
+| `output_audio_buffer.clear` | 中断正在说话的响应。 |
+
+每个 session 同时只会有一个响应。已有响应运行中又送 `response.create` 会得到 `error`。未知的事件类型会得到 `type: "invalid_request_error"` 的 `error`。
+
+## 服务器事件
+
+文本回合的顺序：`response.created`、`rate_limits.updated`、`response.output_item.added`、`response.content_part.added`、重复的 `response.output_text.delta`、`response.output_text.done`、`response.content_part.done`、`response.output_item.done`、`response.done`。beta 格式的名称是 `response.text.delta` 与 `response.text.done`。
+
+包含工具调用的回合会输出 `function_call` 项目，以及 `response.function_call_arguments.delta` 与 `response.function_call_arguments.done`。把结果以 `function_call_output` 类型的 `conversation.item.create` 送回，再送一次 `response.create`。
+
+`response.done` 带有 `status`（`completed`、`cancelled` 或 `failed`）、输出项目，以及 `usage`（`input_tokens`、`output_tokens`、`total_tokens`）。
+
+语音回合的事件：
+
+| 事件 | 时机 |
+| --- | --- |
+| `input_audio_buffer.speech_started`、`input_audio_buffer.speech_stopped` | server VAD 侦测到开始与结束说话。 |
+| `input_audio_buffer.committed` | 缓冲区已 commit，由 VAD 或你的 `commit` 触发。 |
+| `conversation.item.added` / `.done` | 带有逐字稿的用户项目。 |
+| `conversation.item.input_audio_transcription.completed` | 用户回合的 ASR 逐字稿。 |
+| `response.output_audio.delta`、`response.output_audio.done` | 以 session 输出格式编码的 base64 音频数据块（beta 为 `response.audio.delta`）。 |
+| `response.output_audio_transcript.delta`、`.done` | 语音回复的文本。 |
+| `output_audio_buffer.started`、`.stopped`、`.cleared` | 仅 GA 格式：标示一个响应音频的起讫；被取消或插话中断时为 `cleared`。 |
+| `input_audio_buffer.timeout_triggered` | 经过 `idle_timeout_ms` 都没有说话；会 commit 一个空的用户回合并响应。 |
+| `error` | 任何失败。内容为 `{"type": "error", "event_id", "error": {"message", "type", "code"?}}`。 |
+
+## 文本回合与语音回合
+
+文本回合只需要加载聊天模型：创建用户消息项目，发送 `response.create`，读取 `output_text` 事件。
+
+语音回合有两种实现：
+
+- **级联（默认）。** 输入音频由已加载的 ASR 模型转录，文本送给聊天模型，回复再由已加载的 TTS 模型合成。这需要多模型配置，在聊天模型旁同时加载 ASR 模型，以及（要输出音频时）TTS 模型。没有 ASR 模型时，commit 会得到 code 为 `no_asr_engine` 的 `error`；没有 TTS 模型时，音频响应会结束但没有任何音频数据块。
+- **原生语音对语音。** 当所服务的模型带有 Talker（Qwen3-Omni）时，原始音频直接送进模型，语音直接回来。`YUNSHU_REALTIME_OMNI` 默认为 `auto`（有可发声的模型时使用原生），`on` 强制使用，`off` 强制使用级联。
+
+音频限制：输入缓冲区上限为 `YUNSHU_REALTIME_MAX_INPUT_AUDIO_BYTES`（10 MiB），超过会清空缓冲区并发送 `input_audio_buffer_overflow` 错误。一个 session 最多保留 `YUNSHU_REALTIME_MAX_CONVERSATION_ITEMS`（1000）个项目，最旧的会被丢弃。
+
+## 暂时性客户端密钥
+
+给浏览器使用时，请在你的后端产生一把短效密钥再交给网页。`ek_...` 的值可用在静态 token 能用的地方，包含 `WS /v1/realtime` 与 `POST /v1/realtime/calls`。
+
+`POST /v1/realtime/client_secrets`（GA）接收 `{"expires_after": {"anchor": "created_at", "seconds": 10..7200}, "session": {...}}`（默认 600 秒；`session.type` 为 `realtime` 或 `transcription`），返回 `{"value": "ek_...", "expires_at", "session": {...}}`。你传入的 session 会套用在使用该密钥的连接上，该连接之后无法覆盖。`POST /v1/realtime/sessions` 与 `POST /v1/realtime/transcription_sessions` 是 beta 形式，返回的 session 带有 `client_secret` 对象。密钥只存在内存（最多同时 1000 把），所以重新启动后会失效。转录密钥可以做转录，但不能创建响应。
+
+## WebRTC
+
+`POST /v1/realtime/calls` 用来协商 WebRTC 通话：以 `application/sdp` 发送 SDP offer（或 multipart 的 `sdp` 加 JSON `session`），得到状态 `201` 的 SDP answer。音频走媒体轨道（内部重新采样为 24 kHz 单声道 PCM），相同的 JSON 事件则走标签为 `oai-events` 的 data channel，使用 GA 格式。
+
+需求与限制：
+
+- 需安装选用的 extra：`pip install "yunshu[webrtc]"`。没有安装时，此路由返回 `503`，并建议改用 WebSocket。
+- 没有配置 STUN 或 TURN 服务器，所以对等端必须能直接连接（同一台机器或局域网路）。
+- 同时最多 16 通有效通话（超过返回 `429`）。大于 128 KiB 的 offer 返回 `413`。
+- 通话会在对等端失败或关闭、服务器关闭、打开后满一小时，或 offer 之后 60 秒内 data channel 都没有打开时结束。
+- 响应带有一个指出通话的 `Location` 标头，但没有可查找或挂断通话的路由，请直接关闭 peer connection。
+
+## 范例
+
+<Tabs items={["curl", "Python", "JavaScript"]}>
+<Tab value="curl">
+
+```bash
+# Mint an ephemeral key for a browser
+curl http://localhost:8000/v1/realtime/client_secrets \
+  -H "Content-Type: application/json" \
+  -d '{"expires_after": {"anchor": "created_at", "seconds": 600},
+       "session": {"type": "realtime", "model": "local", "output_modalities": ["text"], "instructions": "Be brief."}}'
+```
+
+</Tab>
+<Tab value="Python">
+
+```python
+import asyncio
+from openai import AsyncOpenAI
+
+client = AsyncOpenAI(base_url="http://localhost:8000/v1", api_key="not-needed")
+
+async def main():
+    async with client.realtime.connect(model="local") as conn:
+        await conn.session.update(session={"type": "realtime", "output_modalities": ["text"]})
+        await conn.conversation.item.create(
+            item={"type": "message", "role": "user",
+                  "content": [{"type": "input_text", "text": "Say hello in five words."}]}
+        )
+        await conn.response.create()
+        async for event in conn:
+            if event.type == "response.output_text.delta":
+                print(event.delta, end="", flush=True)
+            elif event.type == "response.done":
+                break
+
+asyncio.run(main())
+```
+
+</Tab>
+<Tab value="JavaScript">
+
+```ts
+import WebSocket from "ws";
+
+const ws = new WebSocket("ws://localhost:8000/v1/realtime?model=local", {
+  headers: { Authorization: "Bearer not-needed" },
+});
+
+ws.on("open", () => {
+  ws.send(JSON.stringify({ type: "session.update", session: { type: "realtime", output_modalities: ["text"] } }));
+  ws.send(JSON.stringify({
+    type: "conversation.item.create",
+    item: { type: "message", role: "user", content: [{ type: "input_text", text: "Say hello in five words." }] },
+  }));
+  ws.send(JSON.stringify({ type: "response.create" }));
+});
+
+ws.on("message", (raw) => {
+  const event = JSON.parse(raw.toString());
+  if (event.type === "response.output_text.delta") process.stdout.write(event.delta);
+  if (event.type === "response.done") ws.close();
+});
+```
+
+</Tab>
+</Tabs>
+
+## 与官方托管 API 的差异
+
+- `semantic_vad` 以 `server_vad` 提供。
+- `rate_limits.updated` 会跟在 `response.created` 之后，但并没有配额：`requests` 报告 `YUNSHU_RATE_LIMIT_RPM`（为 0 时是 32 比特整数的最大值），`tokens` 报告模型的上下文窗口。
+- `audio.input.noise_reduction` 是在 CPU 上运行的轻量因果高通滤波加底噪展开器，不是神经网络降噪。
+- `output_audio_buffer.started`、`.stopped`、`.cleared` 在 WebSocket 上也会发送（OpenAI 只在 WebRTC 与 SIP 发送）。
+- 不支持的 session 字段会被默默接受，而不是被拒绝。
+- 音频输入需要另外的 ASR 模型或原生语音模型，没有内置的语音辨识器。
+- 不提供 SIP 通话与监控用的 sideband WebSocket。
+
+## 支持状况
+
+| 功能 | 状态 |
+| --- | --- |
+| WebSocket，GA 与 beta 结构 | <Support status="supported">支持</Support> |
+| 文本回合、工具调用、truncate、取消 | <Support status="supported">支持</Support> |
+| 经由 ASR、LLM、TTS 的语音回合 | <Support status="partial">需要加载 ASR 与 TTS 模型</Support> |
+| 原生语音对语音 | <Support status="partial">需要带有 Talker 的模型（Qwen3-Omni）</Support> |
+| server VAD | <Support status="supported">能量式，可选 Silero</Support> |
+| `semantic_vad` | <Support status="partial">以 `server_vad` 提供</Support> |
+| 暂时性客户端密钥 | <Support status="supported">仅存在内存</Support> |
+| WebRTC | <Support status="partial">选用的 `webrtc` extra，没有 STUN/TURN</Support> |
+| SIP、sideband 连接 | <Support status="unsupported">未提供</Support> |
+
+## 相关页面
+
+- [音频](/docs/api/audio)：HTTP 的语音合成与转录端点。
+- [扩展](/docs/api/extensions)：`WS /v1/stream` 与 `POST /v1/omni/speech/stream`。
+- [Chat Completions](/docs/api/chat-completions)：Realtime 沿用的文本采样行为。

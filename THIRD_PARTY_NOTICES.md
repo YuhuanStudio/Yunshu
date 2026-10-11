@@ -10,7 +10,7 @@ comment. Summary of upstreams and licenses:
 |---|---|---|
 | jundot/omlx | Apache-2.0 | vendored `kernels/omlx/`; derived `ragged_attention.py` tile kernel, `mtp_patch.py`; inspired `spec_prefill.py`, `routers/decisions.py` (route design only), `lane_layers.py`, `model_settings.py`, `mrope.py`, `mlx_executor.py`, `prefill_progress.py`, `yunshu_kv/mlx_cache.py`; derived `process_memory_enforcer.py` |
 | ashhart/TensorFold | MIT | vendored `kernels/tensorfold/`; derived `lane_linear.py`, `int_code_linear.py`, `round_driver/allocate.py`, `copy_drafter.py`; inspired draft vocabulary, DFlash/tree drafting, tree verify, round driver, ordered chunk merge |
-| Blaizzy/mlx-vlm | MIT | patched (speculative verifier, DFlash/MTP rounds, batch generator, audio patches, APC checkpoint policy and lookup provenance); derived `dflash_context.py`, `dflash_copy.py`, `mtp_lane.py`, `mtp_tree.py`, `round_driver/mtp.py`; tool-format registry, DFlash chain depth, structured-output wiring |
+| Blaizzy/mlx-vlm | MIT | patched (speculative verifier, DFlash/MTP rounds, batch generator, audio patches, APC checkpoint policy and lookup provenance); derived `dflash_context.py`, patched `penalty_context.py`, `dflash_apc_window.py`, `dflash_copy.py`, `mtp_lane.py`, `mtp_tree.py`, `round_driver/mtp.py`; tool-format registry, DFlash chain depth, structured-output wiring |
 | ml-explore/mlx-lm | MIT | patched Qwen3.5 GatedDeltaNet (`n_confirmed_patch.py`); tool parsers; speculative verification (`spec_draft_verifier.py`), sampler order (`batched_engine.py`) |
 | ml-explore/mlx | MIT | patched `nn.QuantizedLinear.__call__` for batch-invariant decode; derived native NAX prefill loader (`nax_prefill.py`) |
 | vllm-project/vllm, vllm-omni | Apache-2.0 | derived `gemma4_assistant.py`; inspired Qwen3 reasoning ends at a tool-call marker (`vlm_engine.py`), `structured_outputs` request field and entrypoint request-validation / route checks (`schemas/structured_outputs.py`, `scripts/research/route_checks_vllm.py`), n-gram / suffix proposers, block pool, mRoPE state, TeaCache |
@@ -110,6 +110,55 @@ Geist and JetBrains Mono font assets carry their OFL texts under `console_static
 Collecting once and calling `gc.freeze()` on the startup heap after model load follows vLLM's
 `freeze_gc_heap` (vllm/utils/gc_utils.py, Apache-2.0) and SGLang's `freeze_gc`
 (python/sglang/srt/utils/common.py, Apache-2.0). No code is copied; the code is written independently.
+## mlx2 telemetry
+
+`python/yunshu_engine/telemetry/apple.py` is derived from pierre427/mlx2
+`src/mlx2/apple_telemetry.py`, revision `92ada04cc7a59c3263e214b0a1127924fedd52db`,
+under Apache-2.0. Upstream NOTICE: “mlx2 is licensed under the Apache License, Version 2.0 (see LICENSE).”
+The unrelated third-party adaptations listed in upstream NOTICE are not used by this telemetry module.
+Source: https://github.com/pierre427/mlx2. Yunshu changes ownership cleanup and reporting integration.
+
+## macmon Apple telemetry compatibility
+
+`telemetry/clpc.py` derives the macOS 27 driver/counter catalog and scalar IOReport
+descriptor format from vladkens/macmon `src/clpc.rs` / `src/sources.rs`, revision
+`7df49f55d9a1b9072e31fc8ba991abda84593563`. `telemetry/apple.py` uses channel-family
+and MTR sensor naming knowledge from `src/metrics.rs`. Source: https://github.com/vladkens/macmon.
+Native lifetime handling is rewritten in Python; unknown OS/driver catalogs are rejected.
+
+MIT License
+
+Copyright (c) 2024 vladkens
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+### Qwen4 native MTP integration
+
+`python/yunshu_engine/qwen4_mtp.py` uses the MIT-licensed mlx-vlm
+Qwen4Exp MTP head and family-specific verifier directly (Blaizzy/mlx-vlm).
+Prior art and reviewed revisions are recorded in `vendor.json`; no TensorFold
+or Strata implementation was copied into this integration.
+`python/yunshu_engine/ple_parallel.py` replaces mlx-vlm's (MIT)
+`QuantizedMMapNGramEmbedding._read_rows` with a parallel `pread` version that returns
+the same bytes (monkeypatch recorded in `vendor.json`).
+`python/yunshu_engine/ple_scale.py` applies the per-table `ngram_embedding.weight_scale` that mlx-vlm
+drops (rows scaled in float32, rounded once to bf16; recorded in `vendor.json`).
 
 ## aiortc — optional WebRTC dependency
 
@@ -121,3 +170,21 @@ installed dependency distribution; Yunshu does not bundle or relink those binari
 Sources and dependency licenses: https://github.com/aiortc/aiortc and
 https://github.com/PyAV-Org/PyAV . The SDK protocol adapters are independent code
 checked against openai-python (Apache-2.0) and anthropic-sdk-python (MIT).
+
+## mflux — independent image reference probe
+
+The priorfix_mflux_reference probe uses the unchanged loader cache, HF mapper
+and weight applier APIs of mflux-community/mflux (MIT, reviewed commit
+465df30a3965b38c9c64fa853e26df140ddd5c55). The probe decodes downloaded diffusers
+affine4 tensors before mapping; its reference uses floating arithmetic. No mflux
+source is copied and the serving engine does not import this bridge.
+https://github.com/mflux-community/mflux
+
+## TensorFold flash_next v1 kernels — `python/yunshu_engine/kernels/tf_flash_next/`
+
+`base.py`, `hc.py`, `experts.py` (from `src/tensorfold/kernels/qwen/flash_next/v1/`), `threads.py` and `inputs.py`
+(from `src/tensorfold/kernels/`) are copied from https://github.com/ashhart/TensorFold at commit `17c73e1`
+(v0.6.1), which is licensed under the Apache License, Version 2.0 (releases before 0.6.0 were MIT). Only
+intra-package imports were changed and a credit line was added at the top of each file; the full license
+text is at https://www.apache.org/licenses/LICENSE-2.0 and in TensorFold's `LICENSE`. TensorFold's NOTICE:
+"TensorFold. Copyright 2026 TensorFold contributors. https://github.com/ashhart/TensorFold".

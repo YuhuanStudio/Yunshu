@@ -471,3 +471,14 @@ def test_drafter_bits_setting_defaults_to_the_measured_eight_bits(monkeypatch):
     assert settings.get("YUNSHU_DRAFT_BITS") == 4
     monkeypatch.setenv("YUNSHU_DRAFT_BITS", "0")
     assert settings.get("YUNSHU_DRAFT_BITS") == 0
+
+
+def test_copy_rounds_do_not_feed_the_node_budget():
+    from yunshu_engine import dflash_fast
+    from yunshu_engine.spec_schedule import NodeBudget
+
+    budget = NodeBudget(15)
+    assert dflash_fast.observe_budget(budget, [7, 8, 9], 3, [0, 1, 2], 41.0) is False
+    assert budget.rounds == 0 and budget.samples == {}
+    assert dflash_fast.observe_budget(budget, [], 4, [0], 52.0) is True
+    assert budget.rounds == 1 and budget.samples[4] == [52.0]

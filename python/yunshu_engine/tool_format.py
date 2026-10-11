@@ -63,6 +63,8 @@ class ToolFormat:
     end: str
     parse: Callable[[str, Any], list[Call]]
     whole: bool = False
+    whole_prefixes: tuple[str, ...] = ("{", "<|python_tag|>")
+    alternate_ends: tuple[str, ...] = ()
 
 
 _GEMMA_Q = '<|"|>'
@@ -433,19 +435,78 @@ def _parse_deepseek_v4(body: str) -> list[Call]:
     return parse_calls(body)
 
 
+def _parse_dsml_v4(body: str, tools) -> list[Call]:
+    """Official encoder grammar first; the compact single-line form falls back."""
+    try:
+        return _parse_deepseek_v4(body)
+    except Exception:
+        return _families.dsml(body, tools)
+
+
+# Native formats do not depend on the installed MLX parser registry.
+from . import tool_family_parsers as _families
+
+HERMES = ToolFormat("hermes", "<tool_call>", "</tool_call>", _parse_yunshu_json)
+LLAMA_JSON = ToolFormat("llama3_json", "", "", _parse_json_message, whole=True)
+PYTHONIC = ToolFormat(
+    "llama3_pythonic",
+    "",
+    "",
+    _families.pythonic,
+    whole=True,
+    whole_prefixes=("[", "<|python_tag|>"),
+)
+PYTHONIC_TAGGED = ToolFormat(
+    "pythonic", "<|tool_call_start|>", "<|tool_call_end|>", _families.pythonic
+)
+GLM = ToolFormat("glm47", "<tool_call>", "</tool_call>", _families.glm)
+MISTRAL = ToolFormat("mistral", "[TOOL_CALLS]", "", _families.mistral)
+KIMI = ToolFormat(
+    "kimi_k2",
+    "<|tool_calls_section_begin|>",
+    "<|tool_calls_section_end|>",
+    _families.kimi,
+)
+HARMONY = ToolFormat(
+    "harmony",
+    "<|start|>assistant",
+    "<|call|>",
+    _families.harmony,
+    alternate_ends=("<|end|>", "<|return|>"),
+)
+HARMONY_SUFFIX = ToolFormat(
+    "harmony_suffix",
+    "",
+    "",
+    _families.harmony,
+    whole=True,
+    whole_prefixes=("to=", "<|channel|>"),
+)
+DSML = ToolFormat(
+    "deepseek_v32",
+    "<｜DSML｜function_calls>",
+    "</｜DSML｜function_calls>",
+    _families.dsml,
+)
+DSML_V4 = ToolFormat(
+    "deepseek_v4",
+    "<｜DSML｜tool_calls>",
+    "</｜DSML｜tool_calls>",
+    _parse_dsml_v4,
+)
+
 # Chat-template markers for the Yunshu-owned formats (upstream's registry
 # decides everything else).
 _OWN_TEMPLATE_MARKERS: tuple[tuple[str, ToolFormat], ...] = (
+    ("<|tool_call_start|>", PYTHONIC_TAGGED),
+    ("<｜DSML｜tool_calls>", DSML_V4),
+    ("<｜DSML｜function_calls>", DSML),
     ("<｜tool▁calls▁begin｜>", DEEPSEEK),
-    (
-        "<｜DSML｜tool_calls>",
-        ToolFormat(
-            name="deepseek_v4",
-            start="<｜DSML｜tool_calls>",
-            end="</｜DSML｜tool_calls>",
-            parse=lambda body, tools: _parse_deepseek_v4(body),
-        ),
-    ),
+    ("<|tool_calls_section_begin|>", KIMI),
+    ("<|call|>", HARMONY),
+    ("[TOOL_CALLS]", MISTRAL),
+    ("<arg_key>", GLM),
+    ("<|python_tag|>", LLAMA_JSON),
 )
 
 _FALLBACK: tuple[ToolFormat, ...] = (INJECTED_JSON, JSON_MESSAGE)
@@ -475,9 +536,34 @@ def native_format(tokenizer: Any) -> ToolFormat | None:
     text = _template_text(tokenizer)
     if not text:
         return None
+    # Llama's JSON and Python templates often have no call marker at all.
+    if "<|start_header_id|>" in text:
+        if "python list" in text.lower() or re.search(
+            r"tool_call\.name\s*\+\s*['\"]\(", text
+        ):
+            return PYTHONIC
+        if "parameters" in text and (
+            "function call" in text.lower() or "tool_call" in text
+        ):
+            return LLAMA_JSON
+    model_hint = str(getattr(tokenizer, "name_or_path", "")).lower()
+    if "glm" in model_hint and "<tool_call>" in text:
+        return GLM
+    if "<|python_tag|>" in text and (
+        "pythonic" in text.lower() or "[" in text and "parameters" not in text
+    ):
+        return PYTHONIC
     for marker, fmt in _OWN_TEMPLATE_MARKERS:
         if marker in text:
             return fmt
+    if (
+        "<tool_call>" in text
+        and "<function=" not in text
+        and ("arguments" in text or "arg_value" in text or "parameters" in text)
+    ):
+        if "arg_value" in text or "tool.name" in text and '"name"' not in text:
+            return GLM
+        return HERMES
     name = None
     try:
         from mlx_vlm.tools.registry import _infer_tool_parser
@@ -490,7 +576,7 @@ def native_format(tokenizer: Any) -> ToolFormat | None:
             from mlx_lm.tokenizer_utils import _infer_tool_parser as lm_infer
 
             name = lm_infer(tokenizer)
-        except ImportError:  # pragma: no cover
+        except (ImportError, AttributeError):  # pragma: no cover
             name = None
     if name is None or name == "json_tools":
         # json_tools is the same shape Yunshu's injected prompt uses.
@@ -503,6 +589,8 @@ def formats_for_tokenizer(tokenizer: Any) -> tuple[ToolFormat, ...]:
     ``yunshu_json`` form the injected tool prompt asks for, and a bare JSON
     call message."""
     native = native_format(tokenizer) if tokenizer is not None else None
+    if native is HARMONY:
+        return (native, HARMONY_SUFFIX, *_FALLBACK)
     return (native, *_FALLBACK) if native is not None else _FALLBACK
 
 
@@ -565,12 +653,78 @@ def openai_tools(tools: Any) -> list[dict] | None:
     return out or None
 
 
+def _inside_string(text: str, *, pythonic: bool = False) -> bool:
+    """Whether a potential closing marker is inside JSON/Python string data."""
+    quote = ""
+    i = 0
+    while i < len(text):
+        if quote:
+            if text[i] == "\\":
+                i += 2
+                continue
+            if text.startswith(quote, i):
+                i += len(quote)
+                quote = ""
+                continue
+        elif text[i] == '"' or pythonic and text[i] == "'":
+            quote = text[i]
+            if pythonic and text.startswith(quote * 3, i):
+                quote *= 3
+            i += len(quote)
+            continue
+        i += 1
+    return bool(quote)
+
+
 def _span_end(text: str, fmt: ToolFormat, body_start: int) -> tuple[int, int] | None:
     """(body_end, span_end) of a call whose body starts at ``body_start``, or
     None when its end marker has not arrived yet."""
     if fmt.end:
-        idx = text.find(fmt.end, body_start)
-        return None if idx < 0 else (idx, idx + len(fmt.end))
+        ends = []
+        for marker in (fmt.end, *fmt.alternate_ends):
+            idx = text.find(marker, body_start)
+            while idx >= 0:
+                quoted = False
+                if fmt.name in (
+                    "hermes",
+                    "yunshu_json",
+                    "harmony",
+                    "deepseek",
+                    "kimi_k2",
+                    "pythonic",
+                ):
+                    quoted = _inside_string(
+                        text[body_start:idx], pythonic=fmt.name == "pythonic"
+                    )
+                raw_parameter = {
+                    "glm47": ("<arg_value>", "</arg_value>"),
+                    "deepseek_v32": ("<｜DSML｜parameter ", "</｜DSML｜parameter>"),
+                    "deepseek_v4": ("<｜DSML｜parameter ", "</｜DSML｜parameter>"),
+                }.get(fmt.name)
+                if raw_parameter is not None:
+                    prefix = text[body_start:idx]
+                    quoted = prefix.rfind(raw_parameter[0]) > prefix.rfind(
+                        raw_parameter[1]
+                    )
+                if not quoted:
+                    ends.append((idx, marker))
+                    break
+                idx = text.find(marker, idx + len(marker))
+        if not ends:
+            return None
+        idx, marker = min(ends)
+        return idx, idx + len(marker)
+    if fmt.name == "mistral":
+        body = text[body_start:]
+        args_at = -1 if body.lstrip().startswith(("[", "{")) else body.find("[ARGS]")
+        offset = args_at + len("[ARGS]") if args_at >= 0 else 0
+        leading = len(body[offset:]) - len(body[offset:].lstrip())
+        offset += leading
+        try:
+            _, size = json.JSONDecoder().raw_decode(body, offset)
+        except ValueError:
+            return None
+        return body_start + size, body_start + size
     idx = text.find("\n", body_start)
     return None if idx < 0 else (idx, idx + 1)
 

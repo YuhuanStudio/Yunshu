@@ -1,0 +1,251 @@
+---
+title: Extensions
+description: Everything Yunshu adds on top of the OpenAI, Anthropic and Ollama APIs - status, warmup, cancellation, per-response stats, a multiplexed WebSocket, native speech, and System One.
+---
+
+Yunshu's extensions are additive and namespaced, so the official SDKs keep working unchanged. They show up in three places:
+
+- JSON: a top-level `x_yunshu` object on responses (or inside `usage` on Messages and Responses), and `error.x_yunshu` on errors. The OpenAI SDKs keep unknown fields in `model_extra`; the Anthropic and Ollama SDKs ignore them.
+- SSE: comment lines such as `: yunshu-progress {...}`. Every SSE parser skips comments.
+- Headers: `X-Request-Id` and `X-Yunshu-*`.
+
+Authentication follows the normal rule: only enforced when `YUNSHU_AUTH_TOKEN` is set.
+
+<Endpoint method="GET" path="/v1/yunshu/status" />
+<Endpoint method="POST" path="/v1/yunshu/warmup" />
+<Endpoint method="POST" path="/v1/cancel" />
+<Endpoint method="GET" path="/v1/active-generations" />
+<Endpoint method="WS" path="/v1/stream" />
+<Endpoint method="POST" path="/v1/omni/speech/stream" />
+<Endpoint method="POST" path="/v1/systemone" />
+
+The request-inspection routes `GET /v1/requests`, `GET /v1/requests/{request_id}` and `DELETE /v1/requests/{request_id}` are documented on [Operations](/docs/api/operations).
+
+## Request ids
+
+Every request has an id: your `X-Request-Id` header when it is 1 to 128 characters of `A-Za-z0-9._:-`, otherwise a generated `req_...` value. It is echoed on every response (errors included), written to the server log, and placed in `x_yunshu.request_id` and `error.x_yunshu.request_id`. The same id is the handle for status and cancellation:
+
+```bash
+curl http://localhost:8000/v1/chat/completions -H "X-Request-Id: job-7" -H "Content-Type: application/json" \
+  -d '{"model": "local", "stream": true, "messages": [{"role": "user", "content": "Write a long story."}]}'
+
+curl http://localhost:8000/v1/requests/job-7                       # where is it?
+curl -X DELETE http://localhost:8000/v1/requests/job-7             # cancel it
+```
+
+A cancel that arrives before the request reached the engine (while it is tokenizing or decoding an image) is remembered and applied the moment generation starts.
+
+## Per-response stats: `x_yunshu`
+
+`x_yunshu` appears in the JSON body of non-streaming Chat and Completions responses, in the final usage chunk of streams, and (when the client did not ask for usage) in a trailing `: yunshu-stats {...}` comment before `[DONE]`. On Messages and Responses the same object sits inside `usage`. The Ollama routes map it to Ollama's own nanosecond fields.
+
+```json
+"x_yunshu": {
+  "request_id": "job-7",
+  "queue_wait_ms": 0.4, "ttft_ms": 309.5,
+  "prompt_tokens": 58, "cached_tokens": 0, "prefill_ms": 287.5, "prefill_tps": 201.7,
+  "completion_tokens": 24, "decode_ms": 541.3, "decode_tps": 42.5, "total_ms": 857.3,
+  "speculative": { "mode": "mtp", "drafted": 20, "accepted": 15, "acceptance_rate": 0.75 },
+  "timings": { "cache_n": 0, "prompt_n": 58, "prompt_ms": 287.5, "prompt_per_second": 201.7,
+               "predicted_n": 24, "predicted_ms": 541.3, "predicted_per_second": 42.5 }
+}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `queue_wait_ms` | Time between reaching the engine and the start of prefill. |
+| `ttft_ms` | Request arrival to the first generated token. |
+| `prefill_tps` | Uncached prompt tokens divided by prefill time. |
+| `decode_tps` | (completion tokens - 1) divided by the time between first and last token. |
+| `cached_tokens` | Prompt tokens served from the prefix cache. |
+| `speculative` | Present when a drafter (`mtp` or `dflash`) served the request; `null` when nothing was drafted. |
+| `timings` | The same measurements under llama.cpp-style key names. |
+| `cancelled` | `true` when the answer was cut short by a cancel or a deadline. |
+| `context_policy` | Present when the prompt was shortened to fit: the strategy, tokens and messages before and after, and what was removed. |
+| `budget` | Present when `max_tokens` was clamped to the room the prompt leaves in the context window (`max_tokens_requested` and `max_tokens_granted`). |
+| `server_tools` | Server-side tool loop report on Messages and Responses: `rounds`, `round_usage[]`, `tools[]`. |
+
+Fields are `null` when a path cannot measure them. Non-streaming responses also carry the compact headers `X-Yunshu-Queue-Wait-Ms`, `X-Yunshu-TTFT-Ms`, `X-Yunshu-Prefill-Tps`, `X-Yunshu-Decode-Tps`, `X-Yunshu-Cached-Tokens`, `X-Yunshu-Cache-Tier`, `X-Yunshu-Cache-Reload-Ms`, `X-Yunshu-Total-Ms`, `X-Yunshu-Spec`, `X-Yunshu-Spec-Acceptance`, `X-Yunshu-Cancelled` and `X-Yunshu-Context-Policy`, for clients that log headers and never parse bodies.
+
+A prompt that does not fit is never silently cut: the latest user turn and system messages are never removed, and when they alone exceed the window the request fails with `400` and code `context_length_exceeded`.
+
+## Queue, progress and overload
+
+Generation responses carry `X-Yunshu-Queue-Position` (requests that arrived earlier and are still in flight; 0 means served at once) and `X-Yunshu-Queue-Est-Wait-Ms` (a lower bound based on the prefill still owed ahead of you).
+
+While a streaming Chat or Completions request is queued or prefilling, the server writes an SSE comment every `YUNSHU_PROGRESS_INTERVAL_S` seconds (default 2, `0` turns it off) until the first token:
+
+```text
+: yunshu-progress {"request_id":"job-8","elapsed_s":8.12,"phase":"prefill","prompt_tokens":93268,"cached_tokens":0,"processed_tokens":92160,"percent":98.8,"tokens_per_second":8125.3,"eta_s":0.1}
+: yunshu-progress {"request_id":"job-9","elapsed_s":3.0,"phase":"queued","queue_position":1,"queue_est_wait_ms":41200.0}
+```
+
+`percent` counts only tokens that are actually computed; a prefix cache hit is reported as `cached_tokens`. Non-streaming requests cannot report progress mid-flight, so poll `GET /v1/requests/{request_id}` with the id you sent.
+
+Overload is refused instead of queued without bound. Chat, Completions, Messages and Responses requests that arrive while `YUNSHU_QUEUE_LIMIT` (default 64, `0` for no limit) requests are in flight get `429` with `Retry-After` and `error.x_yunshu` of `{"reason": "queue_full", "queue_depth", "queue_limit", "retry_after_s"}`. While MLX memory is above `YUNSHU_MEMORY_PRESSURE_REJECT` (default 0.95 of the Metal working set) and other requests are running, a new generation request gets `503` with reason `memory_pressure`. An idle server never refuses on memory.
+
+`X-Yunshu-Deadline-Ms: N` (1 to 86,400,000) is the wall time you are willing to wait, counted from arrival and including queue time. Past it the generation is cancelled and the client gets `504` with code `deadline_exceeded` (Messages: `timeout_error`); once a stream has started it ends with one terminal error event. This is different from the request body `timeout` field, which ends generation with a partial answer.
+
+## `keep_alive` and status
+
+`keep_alive` on `POST /v1/chat/completions` and `POST /v1/completions` follows Ollama's grammar: seconds, a duration string such as `"5m"`, a negative value for "keep loaded", `0` to free the model once idle. It applies in multi-model mode, where an idle model is unloaded after its keep-alive or after `YUNSHU_MODEL_TTL_SECONDS` when the request set none. A single-model server never frees its model, so it accepts the field and does nothing.
+
+`GET /v1/yunshu/status` returns one object with everything an operator wants before sending a large request:
+
+```json
+{
+  "object": "yunshu.status",
+  "version": "0.1.2",
+  "state": "running",
+  "uptime_s": 17.3,
+  "load_error": null,
+  "models": [{ "id": "Qwen3.8-27B-oQ4e-mtp", "type": "VLMEngine", "loaded": true, "loading": false, "pinned": true }],
+  "memory": { "active_gb": 16.2, "active_bytes": 17394617344, "cache_gb": 0.28, "peak_gb": 16.9, "total_gb": 128.0, "pressure": 0.127 },
+  "requests": { "active": 1, "queued": 0, "prefill": 0, "decode": 1, "items": [{ "request_id": "job-7", "phase": "decode", "completion_tokens": 112 }] },
+  "last": null,
+  "gpu": {},
+  "throughput": { "window_s": 60, "requests": 3, "prompt_tokens": 11765, "completion_tokens": 64,
+                  "live_decode_tps": 41.8, "mean_prefill_tps": 502.9, "mean_decode_tps": 51.7 }
+}
+```
+
+`state` is `running`, `shutdown_requested` or `shutting_down`. Memory fields named `*_gb` use binary GiB (1 GiB is 1024^3 bytes) and each has an exact `*_bytes` sibling. In multi-model mode each model also has `size_gb`, `size_bytes`, `idle_s`, `keep_alive_s` and `expires_in_s`. `gpu` holds cumulative GPU-busy seconds per engine that tracks them.
+
+## Warmup
+
+`POST /v1/yunshu/warmup` loads a model if needed, runs a small generation through the normal path (kernel compile, allocator warm-up) and leaves the given prompt in the prefix cache, so the first real request is warm.
+
+| Parameter | Type | Required | Description |
+| --- | --- | --- | --- |
+| `model` | string | no | Defaults to the served model. Unknown model in multi-model mode returns `404`. |
+| `prompt` | string | no | A system prompt or prefix to leave in the cache. Default `"Hello"`. |
+| `messages` | array | no | Chat messages to warm instead of `prompt`. |
+| `keep_alive` | string, number | no | Sets the model's keep-alive (multi-model mode). Invalid value returns `400`. |
+| `max_tokens` | integer | no | Default 1. |
+
+Response:
+
+```json
+{
+  "object": "yunshu.warmup",
+  "model": "Qwen3.8-27B-oQ4e-mtp",
+  "loaded_now": false,
+  "load_ms": 0.0,
+  "keep_alive_s": 1800,
+  "generated": true,
+  "x_yunshu": { "ttft_ms": 309.5 },
+  "warmup_ms": 412.7
+}
+```
+
+`generated` is `false` for model types that cannot generate text (ASR, TTS, embeddings and so on). If the warm-up generation itself fails, the call still succeeds and the response carries a `warning` string instead of `x_yunshu`.
+
+## Cancel
+
+`POST /v1/cancel` takes `{"request_id": "job-7"}` or `{"cancel_all": true}` and returns `{"status": "cancelled", "request_id": ...}` or `{"status": "cancelled", "count": N}`. An unknown id returns `404`, a body with neither field `400`. `GET /v1/active-generations` returns `{"object": "list", "data": [...], "active": [...], "count": N}` of in-flight generations. These accept the same ids as `DELETE /v1/requests/{request_id}`.
+
+## `WS /v1/stream`
+
+One WebSocket carries many concurrent requests. Server events are the same objects the SSE streams carry, wrapped with your request id. The handshake uses the same auth as HTTP (`Authorization: Bearer`, `x-api-key` or `?token=`) and is checked before the upgrade; a failed check rejects the handshake. The first server message is `session.created`.
+
+Client messages (JSON text frames):
+
+| Message | Meaning |
+| --- | --- |
+| `{"type": "request", "id": "a", "api": "chat.completions", "body": {...}, "stream_id": "s"}` | Start a request. `api` is `chat.completions`, `completions`, `responses` or `messages`; `body` is the normal HTTP body (`stream` is forced on; `stream_options.include_usage` defaults on for chat). `stream_id` is optional. |
+| `{"type": "cancel", "id": "a"}` | Abort; ends with `done` and reason `cancelled`. |
+| `{"type": "stop", "id": "a"}` | Stop on demand; ends with reason `stopped`. |
+| `{"type": "update", "id": "a", "max_tokens": N}` | Cap the total streamed deltas; answered with `updated`, ends with reason `max_tokens`. |
+| `{"type": "ping", "t": ...}` | Liveness. Answered with `pong`. |
+
+Server messages:
+
+| Message | Meaning |
+| --- | --- |
+| `session.created` | `{"protocol": "yunshu.stream", "apis": [...], "limits": {"max_inflight", "max_stream_ids", "send_queue", "ping_interval_s"}}` |
+| `event` | `{"id", "event": "<SSE event name or null>", "data": {...}}`, one SSE event. |
+| `progress`, `stats` | The fields of the `yunshu-progress` and `yunshu-stats` comments. |
+| `done` | Terminal message of every request: `reason` (`completed`, `cancelled`, `stopped`, `max_tokens`, `error`), `request_id`, `stats` (`ttft_ms`, `duration_ms`, `events`, `deltas`). |
+| `error` | `{"id"?, "status", "error": {"message", "type", ...}}`, request-scoped when it has an `id`. |
+| `ping` | Heartbeat every `YUNSHU_WS_PING_INTERVAL` seconds (default 15; `0` disables). |
+
+Limits: at most `YUNSHU_WS_MAX_INFLIGHT` (default 16) concurrent requests per connection (more get `429` with code `too_many_requests`), a duplicate active `id` is `409`, and at most 32 distinct `stream_id` values. Requests with the same `stream_id` run in order; different ids run concurrently. Outbound events are buffered up to `YUNSHU_WS_SEND_QUEUE` (default 256); beyond that generation pauses until the reader catches up. Closing the socket cancels everything in flight. When your `id` is 1 to 128 characters of `A-Za-z0-9._:-` it is also the HTTP `X-Request-Id`.
+
+`WS /v1/responses` speaks OpenAI's Responses WebSocket mode on the same transport; see [Responses](/docs/api/responses).
+
+## Native speech: `POST /v1/omni/speech/stream`
+
+For models with a Talker (Qwen3-Omni), this route streams text and speech from one model, without an ASR to LLM to TTS cascade. If the served model can speak it is reused; otherwise `YUNSHU_OMNI_MODEL` can point at a separate omni model. With no speakable model the route returns `503`.
+
+| Parameter | Type | Required | Description |
+| --- | --- | --- | --- |
+| `text` | string | yes | 1 to 8000 characters. |
+| `speaker` | string | no | A speaker of the model or an alias. An unknown speaker returns `400` listing the valid names. |
+| `thinker_max_new_tokens` | integer | no | 0 to 512. |
+| `image_path` | string | no | Image input: a file path on the server, a `data:` URI (base64) or an http(s) URL. |
+| `audio_path` | string | no | Audio input, same forms. |
+
+Inline and downloaded media is capped at 64 MiB (`413`). The response is `text/event-stream`:
+
+| Event | Payload |
+| --- | --- |
+| `{"type": "text", "delta": "..."}` | A piece of the Thinker text. |
+| `{"type": "audio", "delta": "<base64 PCM16>", "sr": 24000}` | A speech chunk, mono 16-bit little-endian. |
+| `{"type": "done", ...}` | Final statistics. Followed by `data: [DONE]`. |
+| `{"type": "error", "message": ...}` | Failure after the stream started. |
+
+```bash
+curl -N http://localhost:8000/v1/omni/speech/stream \
+  -H "Content-Type: application/json" \
+  -d '{"text": "Say hello in one short sentence."}'
+```
+
+## System One: `POST /v1/systemone`
+
+A second wire format for the [decision](/docs/api/decisions) engine: questions are a map keyed by name, and answers come back keyed by the same names. It needs the same decision checkpoint.
+
+| Parameter | Type | Required | Description |
+| --- | --- | --- | --- |
+| `model` | string | yes | Decision model id. |
+| `state` | any | yes | The input, text or any JSON value. |
+| `questions` | object | yes | Map of name to `{"type", "instructions"?, "criteria"?}`. 1 to 128 questions. |
+| `images` | array of string | no | Base64 images or `data:image/...;base64,...` URLs. At most 128. |
+
+Question types: `noul` (boolean; optional `criteria` map with `true` and `false` descriptions), `choice` (`criteria` is a map of option to description, at least 2) and `score` (`criteria` is a list of level descriptions, at least 2).
+
+```json
+{
+  "model": "abenzerps/Clef-MLX",
+  "answers": {
+    "urgent": { "type": "noul", "noul": 0.81 },
+    "route": { "type": "choice", "choice": "support", "confidence": 0.93, "probabilities": { "support": 0.93, "sales": 0.07 } },
+    "tone": { "type": "score", "score": 0.22, "confidence": 0.78, "legend": { "0": "calm", "1": "angry" }, "probabilities": { "0": 0.78, "1": 0.22 } }
+  },
+  "usage": { "input_tokens": 142, "output_tokens": 0 }
+}
+```
+
+Validation errors on this route return `422` (the decisions route returns `400`); a non-decision model, a missing model or an engine error return `400` or `404` as on `POST /v1/decisions`. A question the head cannot answer returns `{"type": "refusal"}`.
+
+## Errors that say what to do
+
+OpenAI-format errors, middleware ones included, get the fix twice: appended to `error.message`, and structured in `error.x_yunshu` (`hint`, `request_id`, and for overload the queue fields). Hints exist for context too long, out of memory, authentication, unknown model, oversized body, rate limit, model loading or shutting down, validation and internal errors. Anthropic-format errors stay exactly as the Anthropic spec defines them.
+
+## Support
+
+| Feature | Status |
+| --- | --- |
+| `x_yunshu` stats, `X-Yunshu-*` headers, progress comments | <Support status="extension">Yunshu extension</Support> |
+| Request ids, cancel by id, deadline header | <Support status="extension">Yunshu extension</Support> |
+| `keep_alive` | <Support status="partial">has an effect in multi-model mode only</Support> |
+| Status and warmup | <Support status="extension">Yunshu extension</Support> |
+| `WS /v1/stream` | <Support status="extension">Yunshu protocol</Support> |
+| Progress for non-streaming requests | <Support status="unsupported">poll `GET /v1/requests/{request_id}` instead</Support> |
+| Native speech | <Support status="partial">needs a model with a Talker</Support> |
+
+## Related
+
+- [Operations](/docs/api/operations) for health, metrics and request inspection.
+- [Realtime](/docs/api/realtime) for the OpenAI Realtime WebSocket.
+- [Decisions](/docs/api/decisions) for `POST /v1/decisions`.
+- [Chat completions](/docs/api/chat-completions) for the routes that carry these fields.

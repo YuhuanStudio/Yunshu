@@ -166,6 +166,12 @@ function createApiFixture(page: Page, withActiveRequest = false) {
       return;
     }
 
+    // Older engines have no memory ledger; the console falls back quietly.
+    // Optional Yunshu-native reads (memory ledger, config, recent requests) are absent
+    // on older engines; the console falls back, so the fixture answers 404 without flagging.
+    if (call.method === "GET" && call.path.startsWith("/v1/yunshu/"))
+      return json(route, 404, { detail: "Not Found" });
+
     if (call.method !== "GET")
       unexpectedMutations.push(`${call.method} ${call.path}`);
     unexpected.push(`${call.method} ${call.path}`);
@@ -387,33 +393,17 @@ test.describe("fixture-only API controls", () => {
   }) => {
     const { fixture, pageErrors } = await open(page, "diagnostics");
     const diagnostics = page.getByTestId("diagnostics");
+    await expect(diagnostics.getByTestId("debug-disabled")).toContainText(
+      "YUNSHU_DEBUG_ROUTES",
+    );
+    // One probe only: no per-group 404 cards and no placeholder tabs.
     await expect(
-      diagnostics.getByText("此服務未啟用診斷介面", { exact: true }),
-    ).toBeVisible();
-    await diagnostics
-      .getByRole("button", { name: "請求", exact: true })
-      .click();
-    await expect(
-      diagnostics.getByText("未啟用", { exact: true }).first(),
-    ).toBeVisible();
-    await diagnostics
-      .getByRole("button", { name: "快取", exact: true })
-      .click();
-    await expect(
-      diagnostics.getByText("此服務未啟用診斷介面", { exact: true }),
-    ).toBeVisible();
+      diagnostics.getByRole("button", { name: "快取", exact: true }),
+    ).toHaveCount(0);
     const debugPaths = fixture.requests
       .filter((request) => request.path.startsWith("/debug/"))
       .map((request) => request.path);
-    expect(debugPaths).toEqual(
-      expect.arrayContaining([
-        "/debug/system",
-        "/debug/engine",
-        "/debug/requests",
-        "/debug/kv-cache",
-        "/debug/ssd-cache",
-      ]),
-    );
+    expect(new Set(debugPaths)).toEqual(new Set(["/debug/system"]));
 
     await page.goto("/console/#/api", { waitUntil: "domcontentloaded" });
     const catalog = page.getByTestId("api-catalog");
@@ -453,14 +443,17 @@ test.describe("fixture-only API controls", () => {
       exact: true,
     });
     await detailsButton.click();
-    const dialog = page.getByRole("dialog", { name: "請求詳情" });
+    // Below xl the detail is a Sheet (dialog); from xl it is the inspector column (complementary).
+    const dialog = page
+      .getByRole("dialog", { name: "請求詳情" })
+      .or(page.getByRole("complementary", { name: "請求詳情" }));
     await expect(dialog.getByText("777", { exact: true })).toBeVisible();
     await expect(dialog.getByText("333", { exact: true })).toBeVisible();
     await expect(dialog.getByText("55", { exact: true })).toBeVisible();
     expect(fixture.detailCalls()).toBe(1);
 
     await page.keyboard.press("Escape");
-    await expect(dialog).toHaveCount(0);
+    await expect(dialog.getByText("777", { exact: true })).toHaveCount(0);
     await expect(detailsButton).toBeFocused();
     await page.waitForTimeout(1_700);
     expect(fixture.detailCalls()).toBe(1); // Closing the Sheet cleared its poll timer.
@@ -487,7 +480,7 @@ test.describe("fixture-only API controls", () => {
     ]);
 
     await page.keyboard.press("Escape");
-    await expect(dialog).toHaveCount(0);
+    await expect(dialog.getByText("777", { exact: true })).toHaveCount(0);
     expect(fixture.unexpectedMutations).toEqual([]);
     expect(fixture.unexpected).toEqual([]);
     expect(pageErrors).toEqual([]);
@@ -527,8 +520,8 @@ test.describe("fixture-only API controls", () => {
       .getByRole("button", { name: "生成參數", exact: true })
       .click();
     const settings = page.getByRole("dialog", { name: "生成參數" });
-    await settings.getByRole("button", { name: "關閉", exact: true }).click();
-    await settings.getByRole("button", { name: "JSON", exact: true }).click();
+    await settings.getByRole("tab", { name: "關閉", exact: true }).click();
+    await settings.getByRole("tab", { name: "JSON", exact: true }).click();
     await settings
       .getByRole("button", { name: "關閉生成參數", exact: true })
       .click();

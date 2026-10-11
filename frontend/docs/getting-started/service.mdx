@@ -1,0 +1,115 @@
+---
+title: Service
+description: Run Yunshu in the background at login with a per-user launchd agent managed by yunshu service.
+---
+
+`yunshu service` manages a per-user launchd agent on macOS. The agent starts Yunshu when you log in, restarts it after a crash (but not after a clean stop), and writes its output to a log file that is rotated automatically. It runs as you; it needs no root access and touches nothing outside the two paths below.
+
+| What | Where |
+|---|---|
+| launchd agent | `~/Library/LaunchAgents/com.yuhuanstudio.yunshu.plist` |
+| Log | `~/Library/Logs/Yunshu/yunshu.log` |
+
+The command exists on macOS only. It is the same for every install method (uv, pip or Homebrew); the Homebrew formula defines no separate service.
+
+## Install
+
+Check the model first if you like, then install:
+
+```bash
+yunshu doctor -m mlx-community/Qwen3.5-9B-MLX-4bit
+yunshu service install -m mlx-community/Qwen3.5-9B-MLX-4bit
+```
+
+`install` takes the options that decide what to serve and where:
+
+| Option | Meaning |
+|---|---|
+| `--model`, `-m` | A model folder or a Hugging Face repo id. An existing path is stored as an absolute path. |
+| `--models-dir`, `-d` | Serve every model in this directory (multi-model mode). |
+| `--host` | Bind host. Default `127.0.0.1`. |
+| `--port`, `-p` | Bind port. Default `8000`. |
+| `--config`, `-c` | A TOML settings file that the service reads on every start. It must exist. |
+| `--set KEY=VALUE` | A setting fixed at install time. Repeatable. |
+| `--dry-run` | Print the launchd agent as a property list and change nothing. |
+| `--no-start` | Write the agent but do not start it now. |
+| `--force` | Replace an agent that is already installed. |
+
+You must say what to serve: pass `--model` or `--models-dir`, or have `YUNSHU_MODEL` set. `install` refuses a model that fails the same model check as `yunshu doctor -m` (for example a missing path or an incomplete download). If an agent is already installed, `install` stops with an error unless you pass `--force`.
+
+`install` writes two agents: the engine, and the console process as its own job (`com.yuhuanstudio.yunshu.console`, kept alive whenever it stops), so the console keeps serving and recording while the engine restarts or crashes. `--no-console` installs the engine only, `--console-port` moves the console (default 8100), `yunshu service logs --console` reads its log, and `yunshu service restart` restarts the engine only. The engine agent runs `python -m yunshu_cli serve --no-console ...` using the Python of the installation that ran `install`. After you upgrade Yunshu in the same environment, run `yunshu service restart`. After you move to a different environment, run `yunshu service install --force ...` again.
+
+```bash
+yunshu service install -m mlx-community/Qwen3.5-9B-MLX-4bit --dry-run   # review first
+```
+
+### Settings for the service
+
+Settings that you `export` in your shell are not copied into the service. Put them in a config file passed with `--config`, or fix them with `--set`. The environment variables `HF_HOME`, `HF_HUB_CACHE`, `HF_ENDPOINT` and `HF_HUB_OFFLINE` are the exception: they are copied, so the service finds the same Hugging Face cache. Without `--config`, the service still reads the per-user file `~/.yunshu/config.toml` that `yunshu config set` writes. The service's `PATH` is fixed to `/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin`.
+
+A config file is flat `KEY = value` TOML:
+
+```toml
+# ~/.yunshu/yunshu.toml
+YUNSHU_AUTH_TOKEN = "change-me"
+YUNSHU_LOG_KEEP = 14
+```
+
+```bash
+yunshu service install -m mlx-community/Qwen3.5-9B-MLX-4bit -c ~/.yunshu/yunshu.toml
+```
+
+If you bind a non-local `--host`, set an auth token as well. See [Configuration](/docs/guides/configuration) for every setting.
+
+## Everyday commands
+
+```bash
+yunshu service status        # installed / running (pid) / healthy, plus paths
+yunshu service logs -n 100   # last 100 lines (default 50)
+yunshu service logs -f       # follow the log
+yunshu service restart       # for example after editing the config file
+yunshu service stop          # stop until the next login or `service start`
+yunshu service start
+yunshu service uninstall     # stop and remove the agent; models and logs stay
+```
+
+| Command | Behavior |
+|---|---|
+| `status` | Reports whether the agent is installed and loaded, its pid and last exit code, the URL it was installed with, and whether `GET /health` answers. `--json` returns the same facts. |
+| `logs` | Shows the last `--lines`/`-n` lines. `--follow`/`-f` keeps printing and cannot be combined with `--json`. Fails if no log exists yet. |
+| `start` | Starts an installed agent. Fails if nothing is installed. |
+| `stop` | Unloads the agent. It stays stopped until the next login or `start`. |
+| `restart` | Restarts a running agent. Fails if the service is not running; use `start` then. |
+| `uninstall` | Stops the agent and deletes the plist. Models and logs are kept. |
+
+The agent is configured to restart after a crash, not after a clean exit, and launchd waits at least 10 seconds between restarts. If the model cannot load, the server stays up and `GET /health/ready` returns 503 with a reason rather than the process exiting in a loop.
+
+## Log rotation
+
+The service rotates its own log while it runs. Rotation happens by size and by age; rotated files are gzip archives with tokens and API keys redacted. These settings control it:
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `YUNSHU_LOG_MAX_MB` | 50 | Rotate at this size in MiB. 0 turns size rotation off. |
+| `YUNSHU_LOG_ROTATE_HOURS` | 24 | Also rotate after this many hours. 0 turns time rotation off. |
+| `YUNSHU_LOG_KEEP` | 7 | Rotated files kept. |
+| `YUNSHU_LOG_RETENTION_DAYS` | 14 | Delete rotated files older than this. 0 keeps them until `YUNSHU_LOG_KEEP` prunes them. |
+
+`yunshu service rotate-logs` rotates the log immediately, which is useful for a stopped service.
+
+## Uninstall completely
+
+```bash
+yunshu service uninstall
+uv tool uninstall yunshu               # or: brew uninstall yunshu, pip uninstall yunshu
+rm -rf ~/Library/Logs/Yunshu
+rm -rf ~/.yunshu                       # downloaded models and config: check before deleting
+```
+
+The prefix cache SSD tier lives in `~/.yunshu/cache/apc` unless `YUNSHU_VLM_APC_DISK_DIR` points elsewhere; delete that directory too if you set it.
+
+## Related
+
+- [Install](/docs/getting-started/install)
+- [Troubleshooting](/docs/guides/troubleshooting)
+- [CLI reference](/docs/guides/cli)

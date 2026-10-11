@@ -23,6 +23,10 @@ type RequestFixture = {
   percent?: number;
 };
 
+/** Engine routes the console treats as optional (history, memory ledger, effective config, recent requests). */
+const OPTIONAL_ROUTE =
+  /\/v1\/yunshu\/(history|memory|config|downloads|service|cors|keys|host|requests\/recent|models\/local|models\/[^/]+\/fit)(\?|$)/;
+
 function createApiFixture() {
   const token = "playwright-only-token";
   const models: ModelFixture[] = [
@@ -228,6 +232,8 @@ function createApiFixture() {
         fixture: true,
       });
     }
+    if (method === "GET" && OPTIONAL_ROUTE.test(url.pathname))
+      return json(route, { detail: "Not available on this fixture." }, 404);
     return json(
       route,
       { detail: `Unhandled Playwright fixture route: ${method} ${path}` },
@@ -255,6 +261,15 @@ function createApiFixture() {
       return cancelCount;
     },
   };
+}
+
+/** Settings hydrates its lazy sections right after navigation and a controlled field can drop a value typed in that window: type again until it sticks. */
+async function fillToken(page: Page, token: string) {
+  const field = page.getByLabel("存取權杖");
+  await expect(async () => {
+    await field.fill(token);
+    expect(await field.inputValue()).toBe(token);
+  }).toPass();
 }
 
 async function installRouteSse(page: Page) {
@@ -358,13 +373,18 @@ async function installDiagnostics(
   page.on("console", (message) => {
     if (message.type() !== "error") return;
     if (/status of 401|status of 409/.test(message.text())) return;
-    unexpectedConsole.push(message.text());
+    if (
+      /status of 404/.test(message.text()) &&
+      OPTIONAL_ROUTE.test(message.location().url)
+    )
+      return;
+    unexpectedConsole.push(`${message.text()} ${message.location().url}`);
   });
   page.on("requestfailed", (request) => {
     const path = new URL(request.url()).pathname;
     if (
       /ERR_ABORTED|cancelled/i.test(request.failure()?.errorText ?? "") &&
-      path.endsWith("/v1/yunshu/status")
+      (path.endsWith("/v1/yunshu/status") || OPTIONAL_ROUTE.test(path))
     )
       return;
     failures.push(`${request.url()} ${request.failure()?.errorText}`);
@@ -378,6 +398,7 @@ async function installDiagnostics(
   });
   page.on("response", (response) => {
     if (response.status() < 400) return;
+    if (OPTIONAL_ROUTE.test(new URL(response.url()).pathname)) return;
     const index = expected.findIndex(
       (item) =>
         item.status === response.status() &&
@@ -401,7 +422,8 @@ async function installDiagnostics(
         !(
           item.status === 401 &&
           item.method === "GET" &&
-          item.sourcePath.endsWith("/v1/yunshu/status")
+          (item.sourcePath.endsWith("/v1/yunshu/status") ||
+            OPTIONAL_ROUTE.test(item.sourcePath))
         ),
     );
     expect(remaining, `${label} unobserved operation error responses`).toEqual(
@@ -425,18 +447,18 @@ test("auth, model lifecycle, warmup and request cancellation use the real /v1 AP
   await expect(page.getByTestId("overview")).toBeVisible();
   await expect(page.getByText("需要有效的存取權杖")).toBeVisible();
 
-  await page.getByRole("button", { name: "設定", exact: true }).click();
+  await page.getByRole("button", { name: /^開啟設定/ }).click();
   const tokenInput = page.getByLabel("存取權杖");
   await tokenInput.fill("wrong-playwright-token");
   await page.getByRole("button", { name: "儲存並連線", exact: true }).click();
   await page.getByRole("link", { name: "引擎總覽", exact: true }).click();
   await expect(page.getByText("需要有效的存取權杖")).toBeVisible();
 
-  await page.getByRole("button", { name: "設定", exact: true }).click();
+  await page.getByRole("button", { name: /^開啟設定/ }).click();
   await tokenInput.fill(api.token);
   await page.getByRole("button", { name: "儲存並連線", exact: true }).click();
   await page.getByRole("link", { name: "引擎總覽", exact: true }).click();
-  await expect(page.getByText("已連線", { exact: true })).toBeVisible();
+  await expect(page.getByTestId("live-phase")).toBeVisible();
   const storage = await page.evaluate(() =>
     JSON.stringify({
       local: Object.values(localStorage),
@@ -455,7 +477,7 @@ test("auth, model lifecycle, warmup and request cancellation use the real /v1 AP
     )
     .toBeGreaterThanOrEqual(2);
   await expect(page.getByTestId("overview")).toContainText(
-    /本頁開啟後採樣 · [2-9]\d* 筆/,
+    /本頁開啟後採樣（此引擎沒有提供歷史） · [2-9]\d* 筆/,
   );
 
   await page.getByRole("link", { name: "模型庫", exact: true }).click();
@@ -477,7 +499,7 @@ test("auth, model lifecycle, warmup and request cancellation use the real /v1 AP
   const qwenSmall = models.getByRole("row").filter({ hasText: "Qwen3.5-9B" });
   api.requireNextLoad401();
   await qwenSmall.getByRole("button", { name: "載入", exact: true }).click();
-  await expect(page.getByRole("alert")).toContainText("Authentication failed");
+  await expect(page.getByRole("alert")).toContainText("驗證失敗");
   await qwenSmall.getByRole("button", { name: "載入", exact: true }).click();
   await expect(qwenSmall.getByText("已載入", { exact: true })).toBeVisible();
   await qwenSmall.getByRole("button", { name: "預熱", exact: true }).click();
@@ -492,9 +514,8 @@ test("auth, model lifecycle, warmup and request cancellation use the real /v1 AP
   await qwenSmall.getByRole("button", { name: "卸載", exact: true }).click();
   const unloadDialog = page.getByRole("dialog");
   await unloadDialog.getByRole("button", { name: "卸載", exact: true }).click();
-  await expect(page.getByRole("alert")).toContainText(
-    "active Playwright fixture request",
-  );
+  // The zh-TW line is the alert; the backend text sits behind 詳細資訊.
+  await expect(page.getByRole("alert")).toContainText("狀態衝突");
   await expect(qwenSmall.getByText("已載入", { exact: true })).toBeVisible();
   await qwenSmall.getByRole("button", { name: "卸載", exact: true }).click();
   await page
@@ -532,8 +553,8 @@ test("stream send/stop and changing service URL resets sampled history", async (
     "stream integration",
   );
   await page.goto("/console/");
-  await page.getByRole("button", { name: "設定", exact: true }).click();
-  await page.getByLabel("存取權杖").fill(api.token);
+  await page.getByRole("button", { name: /^開啟設定/ }).click();
+  await fillToken(page, api.token);
   await page.getByRole("button", { name: "儲存並連線", exact: true }).click();
   await page.getByRole("link", { name: "推理測試", exact: true }).click();
   const playground = page.getByTestId("playground");
@@ -569,13 +590,13 @@ test("stream send/stop and changing service URL resets sampled history", async (
     )
     .toBe(1);
 
-  await page.getByRole("button", { name: "設定", exact: true }).click();
+  await page.getByRole("button", { name: /^開啟設定/ }).click();
   await page
     .getByLabel("服務位址")
     .fill(
       `${new URL(process.env.PLAYWRIGHT_BASE_URL ?? "http://127.0.0.1:3971").origin}/qa-connection`,
     );
-  await page.getByLabel("存取權杖").fill(api.token);
+  await fillToken(page, api.token);
   await page.getByRole("button", { name: "儲存並連線", exact: true }).click();
   await expect
     .poll(
@@ -588,7 +609,7 @@ test("stream send/stop and changing service URL resets sampled history", async (
     .toBeGreaterThanOrEqual(1);
   await page.getByRole("link", { name: "引擎總覽", exact: true }).click();
   await expect(page.getByTestId("overview")).toContainText(
-    "本頁開啟後採樣 · 1 筆 · 中斷期間不補資料",
+    "本頁開啟後採樣（此引擎沒有提供歷史） · 1 筆 · 中斷期間不補資料",
   );
   await verifyClean();
 });

@@ -63,6 +63,7 @@ def test_server_launch_checks_fresh_log_and_cleans_up(monkeypatch, tmp_path, act
 
     monkeypatch.setattr(tfbench, "OUT", tmp_path)
     monkeypatch.setattr(tfbench, "free_port", lambda: 18999)
+    monkeypatch.setattr(tfbench, "owns_listener", lambda *args: True)
     log = tmp_path / "out/server-repeat.log"
     log.parent.mkdir()
     log.write_text("VLM batch runner: apc=off draft=dflash block=8\n")
@@ -190,6 +191,7 @@ def test_cpu_preflight_checks_legacy_tag_without_starting_server(
 def test_fatal_startup_does_not_spend_queue_time_polling(monkeypatch, tmp_path):
     monkeypatch.setattr(tfbench, "OUT", tmp_path)
     monkeypatch.setattr(tfbench, "free_port", lambda: 18999)
+    monkeypatch.setattr(tfbench, "owns_listener", lambda *args: True)
 
     class Proc:
         def poll(self):
@@ -303,3 +305,41 @@ def test_optional_client_timestamps_are_exact_and_not_in_default_schema(monkeypa
             assert result["_first_at_s"] == 1.1
         else:
             assert "_sent_at_s" not in result and "_first_at_s" not in result
+
+
+def test_ready_request_carries_the_configured_key():
+    request = tfbench.ready_request("http://x", {"YUNSHU_AUTH_TOKEN": "tok"})
+    assert request.get_header("Authorization") == "Bearer tok"
+    assert tfbench.ready_request("http://x", {}).get_header("Authorization") == (
+        "Bearer k"
+    )
+
+
+def test_send_surfaces_energy_from_x_yunshu(monkeypatch):
+    import json as _json
+
+    energy = {"decode": {"joules_per_token": 0.05, "gpu_watts_mean": 11.0}}
+    chunks = [
+        {"choices": [{"delta": {"content": "a"}, "finish_reason": None}]},
+        {"choices": [{"delta": {}, "finish_reason": "stop"}]},
+        {"usage": {"completion_tokens": 2, "prompt_tokens": 1}},
+        {"x_yunshu": {"energy": energy}},
+    ]
+    lines = [b"data: " + _json.dumps(c).encode() + b"\n" for c in chunks]
+    lines.append(b"data: [DONE]\n")
+
+    class Resp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def __iter__(self):
+            return iter(lines)
+
+    monkeypatch.setattr(tfbench.urllib.request, "urlopen", lambda *a, **k: Resp())
+    out = tfbench.send("http://x", {"messages": []})
+    assert out["energy"] == energy
+    assert out["joules_per_token"] == 0.05
+    assert out["xy"]["energy"] == energy

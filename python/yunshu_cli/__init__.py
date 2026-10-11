@@ -97,6 +97,7 @@ from .cache import cache_app
 from .chat import chat_app
 from .completion import completion
 from .config import config_app
+from .console_cmd import console_command
 from .diagnose import diagnose_app
 from .doctor import doctor
 from .eval import eval_app
@@ -116,6 +117,7 @@ _INFER = "Inference (calls a running server)"
 
 app.command("setup", rich_help_panel=_START)(setup)
 app.command("top", rich_help_panel=_SERVER)(top)
+app.command("console", rich_help_panel=_SERVER)(console_command)
 app.command("completion", rich_help_panel=_START)(completion)
 app.command("doctor", rich_help_panel=_START)(doctor)
 app.command("pull", rich_help_panel=_START)(pull)

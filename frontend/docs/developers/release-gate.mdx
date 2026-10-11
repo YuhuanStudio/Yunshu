@@ -1,0 +1,71 @@
+---
+title: Release gate
+description: The checks a Yunshu version must pass before it ships, how the gate tests an installed build, and the readiness checklist for a new user's first hour.
+---
+
+A version ships only when the release gate passes on the exact commit being released. The gate tests Yunshu the way a user gets it: built into a wheel, installed with `uv tool install` into a clean environment, and driven over HTTP with the official OpenAI and Anthropic SDKs. Every check prints `PASS`, `FAIL` or `SKIP`, and the run ends with a table and a non-zero exit if anything failed. A documented capability that fails is a `FAIL`; a model family whose checkpoint path is not configured is reported as `SKIP` with the reason.
+
+The gate keeps everything it installs and writes under its own root directory: its own `HOME`, tool directories and caches. It never touches your `~/.yunshu` or `~/.local`.
+
+## Stages
+
+| Stage | What must hold |
+|---|---|
+| `install` | `uv build` succeeds. `yunshu[vision]` and `yunshu[all]` install from the wheel. `--version` matches `pyproject.toml`. `yunshu doctor` reports no failed check. `model list` finds the models directory. `pull` of a model already on disk refuses to download. `config set models_dir` round-trips. `service install --dry-run` prints the launchd agent and writes nothing |
+| `serve-27b` | The flagship Qwen3.8-27B model runs on the installed binary. The capability matrix passes completely. The OpenAI SDK passes chat, streaming, tools (auto, forced, streamed deltas), JSON schema, stop, logprobs, reasoning split and image input; the Anthropic SDK passes messages, streaming, tool use and thinking. Dropping a stream mid-generation still leaves the next request answered correctly. A 32K-token prompt recalls its needle. Eight concurrent requests all answer. The server decodes as fast as the engine does in-process (same greedy prompts through both, identical text required, with a throughput ratio threshold). The server log has no traceback |
+| `families` | Each supported family boots, answers its smoke checks and exits without a traceback: the Qwen3.5 family on the VLM runner, a text-only `mlx-lm` model (fast path, tools and schema), Gemma-4 (tools and image), OCR, ASR, TTS, Qwen3-Omni and image generation |
+| `soak` | The 27B model completes a paired MMLU-Pro run at eight requests in flight with zero errors and accuracy not meaningfully below the recorded baseline, then a realistic mixed soak with zero errors and a high correct rate. After each part the process footprint must return to within a few GiB of where it started |
+| `agent-sessions` | What long agent traffic does, each check on its own cold server. A Claude Code-style `POST /v1/messages` loop of about 50K tokens must produce a valid tool call every turn, recall every needle and reuse nearly all of the previous prompt from the cache each turn. Long documents, a short question, a tool call and a JSON-schema answer run alone and concurrently, and each concurrent output must equal its solo output. After an idle period (memory release) and after a restart on the same SSD cache tier, the same request returns the same text with most of the prompt cached. The server's greedy text equals stock `mlx-lm` or `mlx-vlm` on the same checkpoint |
+| `long` | The `long` suite of [Verification](/docs/developers/verification) at 32K, 64K and 128K against the previous release as the reference: token identity (including drafting on and off over long replies), prefix-cache equality, speed, memory, needle retrieval against stock and concurrent long requests. The verdict must exist and every planned stage must pass; a missing cell, a stage that did not run, an infrastructure error or a regression beyond the thresholds fails the gate |
+| `service` | Off by default, because it loads a real launchd agent. With it enabled, `service install` must serve the model and `service uninstall` must free the port |
+
+Model-backed stages run through `scripts/dev/yv gate`, which runs the stages as separate jobs and remembers which passed on the commit, so a rerun after a late failure skips what already passed (`--fresh` reruns everything; `--stages` selects some). Do not invoke the underlying script directly: `yv` is what preserves successful stage evidence.
+
+```bash
+scripts/dev/yv gate                                   # all stages
+scripts/dev/yv gate --stages install,serve-27b        # selected stages
+```
+
+The checks themselves live in `scripts/release/gate_checks.py`. Model paths come from the environment (`scripts/release/local.env.example` lists the variable names). When a baseline legitimately moves, for example because a new default kernel changes an accuracy score, the baseline constant in the script is updated together with the measurement that justifies it.
+
+## Cutting a release
+
+The version lives in `pyproject.toml` and each release needs a dated `CHANGELOG.md` entry. All verification refers to that final commit; a change afterwards needs another check.
+
+1. Run CI-equivalent checks locally with `scripts/dev/ci-local <sha>`: lint, format, mypy, frontend checks, unit tests, package build, `twine` validation and a wheel-install smoke test.
+2. Run the full gate and the other release checks on the same commit. The model-backed agent benchmark is collected separately and is informational, not a release blocker.
+3. Tag the commit (`v<version>`) and push the tag. The release workflow checks that the tag matches `pyproject.toml` and the changelog, runs lint, type checks, the console build and unit tests on an Apple Silicon runner, builds the sdist and wheel, runs `twine check`, installs the wheel into a clean environment, waits for a maintainer's approval on the `pypi` environment, publishes to PyPI with trusted publishing (no token is stored) and opens a draft GitHub release for review.
+
+If something fails before the publish step, nothing was published: delete the tag, fix the problem and tag again. Versions go up in small steps; a patch carries fixes and improvements and a minor marks a real capability jump. The full procedure is in `RELEASING.md` in the repository.
+
+## Release readiness checklist
+
+The readiness checklist covers what a new user meets before the first token. It is a capability inventory, not a test result: it states what exists, and the gate above is what proves a given commit.
+
+| Area | What a user can expect | Status |
+|---|---|---|
+| Install | `uv tool install "yunshu[vision]"` from PyPI, from a wheel or from git; source install with `uv sync` | <Support status="supported">supported</Support> |
+| Install | Homebrew through the shared `YuhuanStudio/homebrew-tap` formula | <Support status="partial">added after each PyPI release</Support> |
+| Install | macOS app, menu-bar app, DMG | <Support status="unsupported">not planned: CLI plus a launchd service</Support> |
+| First run | `yunshu doctor` checks platform, Rosetta, macOS, Python, MLX and Metal, `mlx-lm` and `mlx-vlm`, memory, settings, the models directory and disk, whether the model fits, the port and the service, and gives a fix for each problem | <Support status="supported">supported</Support> |
+| First run | `yunshu pull org/name` downloads to `~/.yunshu/models`, resumes interrupted downloads and refuses to re-download a model already on disk (models directory or Hugging Face cache) | <Support status="supported">supported</Support> |
+| First run | A curated model picker by available RAM | <Support status="planned">planned: users currently need to know a repository id</Support> |
+| Serving | `yunshu serve -m <model>` or `--models-dir`; safe default bind to `127.0.0.1` with a warning on a network bind without a token | <Support status="supported">supported</Support> |
+| Serving | A model that fails to load after the pre-flight leaves the server up with `GET /health/ready` returning 503 and a fatal log line | <Support status="supported">by design, so a background service reports its state</Support> |
+| Serving | Background service: `yunshu service install`, `start`, `stop`, `restart`, `status`, `logs`, `rotate-logs` (launchd, restart on crash, size and age log rotation) | <Support status="supported">supported</Support> |
+| Operations | `GET /health`, `GET /health/ready`, `GET /health/live`, `GET /version`, `GET /metrics`, and `yunshu status` | <Support status="supported">supported</Support> |
+| Settings | One entry point: the registry, `~/.yunshu/config.toml`, `--set`, and `yunshu config` with a generated reference | <Support status="supported">supported</Support> |
+| Clients | OpenAI SDKs, curl and the Anthropic SDK; `yunshu launch` for Claude Code, Codex, opencode and Pi | <Support status="supported">supported</Support> |
+| Clients | Cline, Continue, Open WebUI | <Support status="partial">configuration guidance; not tested every release</Support> |
+| Upgrade | `uv tool upgrade yunshu`; a running service needs `yunshu service restart` | <Support status="supported">supported</Support> |
+| Telemetry | none is collected. Outbound connections happen on user action only: model downloads, MCP servers you configure, the configured web search provider, and `web_fetch` for URLs a request names | <Support status="supported">by design</Support> |
+| CI | lint and build on every push; the macOS unit suite on release or manual trigger | <Support status="partial">the full unit suite is not run on every push</Support> |
+
+See [Agents](/docs/guides/agents), [Web search](/docs/guides/web-search) and the [service guide](/docs/getting-started/service) for the user-facing side of these items.
+
+## Related
+
+- [Verification](/docs/developers/verification)
+- [Contributing](/docs/developers/contributing)
+- [Upstream tracking](/docs/developers/upstream-tracking)
+- [Install](/docs/getting-started/install)

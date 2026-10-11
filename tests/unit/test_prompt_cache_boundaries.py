@@ -208,3 +208,24 @@ def test_chat_conversion_preserves_explicit_content_breakpoint():
     from yunshu_engine.vlm_engine import VLMEngine
 
     assert VLMEngine._extract_text(converted) == "stable\ntail"
+
+
+def test_processor_declared_image_delimiters_map_complete_endpoints():
+    from yunshu_engine.prompt_caching import expanded_boundaries
+
+    wrappers = {900: ((901,), (902,))}
+    assert expanded_boundaries(
+        [1, 900, 2], [1, 901, 900, 900, 902, 2], [(2, 300)], {900}, wrappers
+    ) == [(5, 300)]
+    # Two image placeholders have distinct full endpoints even when adjacent.
+    assert expanded_boundaries(
+        [900, 900, 2],
+        [901, 900, 902, 901, 900, 900, 902, 2],
+        [(1, 300), (2, 300)],
+        {900},
+        wrappers,
+    ) == [(3, 300), (7, 300)]
+    with pytest.raises(ValueError, match="end delimiter"):
+        expanded_boundaries([900, 2], [901, 900, 903, 2], [(1, 300)], {900}, wrappers)
+    with pytest.raises(ValueError, match="begin delimiter"):
+        expanded_boundaries([900, 2], [903, 900, 902, 2], [(1, 300)], {900}, wrappers)

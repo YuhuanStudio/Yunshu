@@ -1,0 +1,98 @@
+---
+title: Architecture
+description: How a request moves through the gateway and the engine, the two serving paths, the prefix cache, speculative decoding, batch-invariant kernels and constrained decoding.
+---
+
+Yunshu is a single-node inference engine for Apple Silicon. One process runs a FastAPI gateway and the MLX-based engine, and it exposes OpenAI-, Anthropic- and Ollama-style APIs. This page describes how the pieces fit together, for people who read or change the code. It states only what the code does; for tunable behavior see [Configuration](/docs/guides/configuration).
+
+## Package layout
+
+The repository is a flat monorepo. Python packages live under `python/`.
+
+| Package | Responsibility |
+|---|---|
+| `yunshu_gateway` | FastAPI app. The routers (`routers/`) implement the OpenAI, Anthropic, Ollama, MCP, Realtime and Tavily-compatible surfaces; `schemas/` holds shared request normalization; `server_tools/` runs server-side web search, fetch and the MCP connector; `middleware/` has auth, metrics, request logging, rate limiting, disconnect handling and the `x_yunshu` extensions |
+| `yunshu_engine` | Everything that runs a model: modality dispatch (LLM, VLM, OCR, ASR, TTS, image, embeddings), the two text serving paths, sampling and constraints, speculative decoding, the prefix caches, Metal kernels (`kernels/`) and the settings registry (`settings.py`) |
+| `yunshu_kv` | KV cache building blocks: block pool and hashing, serialization, compression, SSD stores and the warm tier. The engine's prefix caches are built from these parts |
+| `yunshu_cli` | The `yunshu` command: `serve`, `chat`, `launch`, `service`, `config`, `doctor`, `cache` and more |
+| `yunshu_control` | Small shared helpers: the audit log and token counting |
+
+## From request to tokens
+
+```text
+client ── HTTP ──> middleware ──> router ──> engine dispatch
+                                              │
+                    ┌─────────────────────────┴───────────────────────┐
+                    │ VLM batch runner                                │ text fast path
+                    │ (every mlx-vlm model)                           │ (text-only mlx-lm models)
+                    └─────────────────────────┬───────────────────────┘
+                                              ▼
+                              one MLX thread, one Metal stream
+```
+
+1. **Middleware** authenticates the request (a token is required only when `YUNSHU_AUTH_TOKEN` is set), assigns an `X-Request-Id`, records metrics and watches for client disconnects, which cancel the generation.
+2. **A router** validates the body against its dialect's schema, normalizes it (null fields mean unset, `guided_*` and `structured_outputs` fold into one constraint form, tool choice is validated) and turns it into one internal generation request.
+3. **Engine dispatch** looks up the model (`ModelManager` loads models lazily, evicts by LRU under memory pressure and can pin models) and hands the request to the engine for its type.
+4. The engine returns tokens; the gateway turns them into the dialect's response or stream, including usage, tool-call blocks, reasoning split and the additive `x_yunshu` fields.
+
+## Two serving paths
+
+All GPU work runs on **one MLX thread**: a global single-worker executor owns a thread-local Metal stream, and every engine submits its work there. This is what makes multi-model serving safe, and it is why the code never touches MLX arrays from the event loop.
+
+### VLM batch runner
+
+Every model served through `mlx-vlm` (`VLMEngine`) runs on the VLM batch runner, built by `VLMEngine._build_batch_runner` on top of upstream `mlx-vlm`'s `BatchGenerator`. This includes text-only requests to a VLM checkpoint such as Qwen3.5.
+
+- **Continuous batching** with per-request sampling parameters and seeds (`RowSampler`). Prefill is admitted one request at a time and interleaved with decode of the other rows.
+- **Prefix cache (APC)** for every family without a sliding-window cache, using exact checkpoints for hybrid models, image-pixel and audio-feature keys for media, and an optional SSD tier. See [Prompt caching](/docs/guides/prompt-caching).
+- **Image, audio and video input** through the media preparation step of the runner.
+- **Speculative decoding** for the Qwen3.5 family only (see below).
+- LoRA adapters and custom logits processors are rejected for VLMs.
+
+The runner only yields token ids. Detokenizing, stop strings, thinking state and delivery to the HTTP layer stay in `VLMEngine`, so every text path reports results the same way.
+
+### Text-only fast path
+
+Text-only `mlx-lm` models run through `_generate_fast`, which calls mlx-lm's `generate_step` directly for one request at a time. Concurrent requests to such a model are serialized. This path has its own prefix cache (`KVPrefixCache`), KV quantization, n-gram and jump-forward options, and the constrained-decoding samplers.
+
+A continuous-batching loop for text models exists behind `YUNSHU_ENGINE_LOOP` (experimental, off by default). It is a legacy path rather than a direction for new work.
+
+### Per-request state
+
+- **Sampler**: temperature, top-p, top-k, min-p, penalties, logit bias and seed are applied per request. Sampled requests that use speculative decoding draw position-keyed noise so the result does not depend on which tokens were drafted.
+- **Stop and reasoning state**: stop strings, end-of-sequence tokens and reasoning boundaries are tracked with a per-request state machine built on an Aho-Corasick trie, so a stop sequence is found even when it spans token boundaries.
+- **Detokenizer**: each request gets its own streaming detokenizer. Detokenizers are never pooled, because resetting one can leak byte buffers.
+
+## Prefix cache
+
+Both paths reuse the KV cache of an earlier prompt that shares a prefix with the new one. The VLM runner's APC stores exact checkpoints (attention KV plus recurrent state at a token position), keeps a head checkpoint per distinct system-prompt-plus-tools, supersedes older checkpoints of the same conversation, and writes evicted checkpoints to an SSD tier that survives restarts. Models with sliding-window layers cannot be checkpointed at a prefix boundary and run without a prefix cache. The lossless and lossy options, and what appears in usage, are described in [Prompt caching](/docs/guides/prompt-caching).
+
+## Speculative decoding
+
+For the Qwen3.5 family on the VLM runner (model types `qwen3_5`, `qwen3_6` and `qwen3_5_moe`), decoding can draft several tokens and verify them in one forward pass:
+
+- **MTP**: draft with the checkpoint's own multi-token-prediction head. This is the default (`YUNSHU_MTP`), with a default block of 6 tokens (`YUNSHU_MTP_BLOCK_SIZE`).
+- **DFlash**: draft with an external block-diffusion drafter. `YUNSHU_VLM_DRAFT` points at a drafter directory, forces `mtp`, or turns drafting `off`; when unset, a matching drafter found in the models directory or the Hugging Face cache is used.
+
+Speculative decoding runs in a single-request lane: concurrent requests are batched for ordinary decoding but do not draft. Other model families use the generic paths without speculation.
+
+### Batch-invariant kernels and the lossless guarantee
+
+The guarantee Yunshu makes is: **with speculative decoding on, greedy output is token-identical to the same engine with it off.** To get it, every target-model matmul for decode (one row) and verify (a few rows) goes through one kernel whose per-row result does not depend on how many rows share the call, and the attention and GatedDeltaNet verify paths are bit-exact against single-row decode. Only modules the engine marks as targets are rerouted; draft models keep stock kernels. Prefill chunks keep the stock kernels.
+
+What the guarantee does not say: the output is not required to be bit-identical to stock MLX single-row decoding. Different reductions move logits by rounding-level amounts, and that drift is expected. The kernels are Metal kernels compiled at runtime (`mx.fast.metal_kernel`) and live in `python/yunshu_engine/kernels/`; some are vendored or derived from other projects, tracked in [Upstream tracking](/docs/developers/upstream-tracking). A custom kernel is adopted only when a same-checkpoint end-to-end comparison shows a real win with identical (or tolerance-checked) output; see [Verification](/docs/developers/verification).
+
+## Constrained decoding
+
+`response_format`, `grammar`, `guided_*` and forced `tool_choice` become a constraint object. At each step the sampler masks tokens the constraint cannot accept. JSON schema and `json_object` use an `llguidance` matcher by default or an in-house state machine (`YUNSHU_JSON_SCHEMA_ENGINE`); regex and choice are compiled in-house; context-free grammars use `llguidance`. The default masking is an allowlist sampler, with an opt-in xgrammar-style bitmask engine (`YUNSHU_GRAMMAR_BITMASK`) and jump-forward decoding (`YUNSHU_JUMP_FORWARD`). Invalid constraints are rejected with a `400` before generation. See [Structured output](/docs/guides/structured-output).
+
+## Settings
+
+Every `YUNSHU_*` setting is registered in `python/yunshu_engine/settings.py` with a type, default, description and group, and is read through `settings.get(...)`; code never reads `os.environ` for them (a unit test enforces this). Values come from, in order of precedence, the command line (`--set`), the environment, `~/.yunshu/config.toml` and the registered default, and `yunshu config` shows the effective value and its source. See [Contributing](/docs/developers/contributing) for the rules on adding one.
+
+## Related
+
+- [Prompt caching](/docs/guides/prompt-caching)
+- [Structured output](/docs/guides/structured-output)
+- [Contributing](/docs/developers/contributing)
+- [Verification](/docs/developers/verification)

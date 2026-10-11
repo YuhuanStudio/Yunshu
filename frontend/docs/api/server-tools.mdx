@@ -1,0 +1,217 @@
+---
+title: Server tools
+description: Web search, web fetch and the MCP connector, executed by Yunshu inside the generation loop for Anthropic Messages and OpenAI Responses requests.
+---
+
+Some tools in the Anthropic and OpenAI APIs are run by the server, not by your client. Yunshu supports three of them: web search, web fetch (Anthropic only) and a connector that calls remote MCP servers. When a request declares one, Yunshu runs a loop inside the single request: the model generates, calls a server tool, Yunshu executes it (asynchronously, off the model thread, with timeouts), appends the result and generates again, until the model answers without a server tool call. You get one response whose content interleaves the tool blocks and the final text. Every round re-sends the same conversation plus the new turn, so the prefix cache serves the shared prefix and a continuation only prefills the new tokens.
+
+| Tool | Anthropic Messages | OpenAI Responses |
+| --- | --- | --- |
+| Web search | `web_search_20250305` | `web_search`, `web_search_preview` |
+| Web fetch | `web_fetch_20250910` | not part of the API |
+| MCP connector | `mcp_servers` + `mcp_toolset` | `{"type": "mcp"}` |
+
+The routes are [`POST /v1/messages`](/docs/api/messages) and [`POST /v1/responses`](/docs/api/responses); there is no separate endpoint.
+
+<Callout type="warn">
+Web search with the default providers sends your query text (and your IP address) to third-party search services. Nothing is sent unless a request declares a web search tool and the model calls it. Set `YUNSHU_WEB_SEARCH_PROVIDER=none` to disable search entirely. See [Web search](/docs/guides/web-search).
+</Callout>
+
+## Configuration
+
+Server tools are configured on the server through settings (see [Configuration](/docs/guides/configuration)); the request only declares the tool.
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `YUNSHU_WEB_SEARCH_PROVIDER` | `auto` | Search backend: `auto`, `none`, `searxng`, `brave`, `tavily`, `exa`, `serper`, `perplexity`, `ddg_html`, `wikipedia`, `mwmbl`, `mojeek`, `marginalia`. `auto` queries several lightweight and configured providers in parallel and merges the results; `none` disables search. |
+| `YUNSHU_WEB_KEYLESS` | on | Allow keyless DuckDuckGo (best effort, may be blocked) and Wikipedia in `auto` mode. |
+| `YUNSHU_SEARXNG_URL` | unset | Base URL of a self-hosted SearXNG instance (JSON output enabled). Optional. |
+| `YUNSHU_BRAVE_API_KEY`, `YUNSHU_TAVILY_API_KEY`, `YUNSHU_EXA_API_KEY`, `YUNSHU_SERPER_API_KEY`, `YUNSHU_PERPLEXITY_API_KEY`, `YUNSHU_MOJEEK_API_KEY`, `YUNSHU_MARGINALIA_API_KEY` | unset | Keys for the keyed providers. A configured key joins `auto`. |
+| `YUNSHU_WEB_SEARCH_RESULTS` | 5 | Results returned per search call. |
+| `YUNSHU_WEB_SEARCH_PROVIDER_TIMEOUT` | 1.0 s | Per-provider deadline in `auto` mode. |
+| `YUNSHU_WEB_RESEARCH` | off | Enrich snippets with excerpts from the origin pages (the fetched URLs leave the machine). |
+| `YUNSHU_WEB_FETCH` | on | Serve `web_fetch`. Off: web fetch requests get an `unavailable` error. |
+| `YUNSHU_WEB_FETCH_ALLOW_PRIVATE` | off | Let `web_fetch` reach private, loopback and link-local addresses. |
+| `YUNSHU_WEB_FETCH_MAX_BYTES` | 2000000 | Largest body downloaded. |
+| `YUNSHU_WEB_FETCH_TIMEOUT` | 20 s | Per-page deadline. |
+| `YUNSHU_WEB_FETCH_MAX_TEXT_CHARS` | 40000 | Extracted text handed to the model is cut to this length. |
+| `YUNSHU_MCP_CONNECTOR` | on | Serve the MCP connector. |
+| `YUNSHU_MCP_CONNECTOR_ALLOW_PRIVATE` | on | Let the connector reach private and loopback MCP servers (local tool servers are the common case). Off: public addresses only. |
+| `YUNSHU_MCP_CONNECTOR_TIMEOUT` | 30 s | Per call (initialize, `tools/list`, `tools/call`). |
+| `YUNSHU_MCP_CONNECTOR_MAX_BYTES` | 8 MiB | Largest single reply from an MCP server. |
+| `YUNSHU_SERVER_TOOL_MAX_ITERATIONS` | 8 | Most generate-run-continue rounds in one request. |
+
+With no usable search provider, a search request does not fail the whole call: the tool result carries an `unavailable` error and the response's `x_yunshu.server_tools` object includes a setup hint. `GET /v1/models` shows the current state of each tool under `yunshu.server_tools` (`web_search.available` and provider, `web_fetch.available`, `mcp_connector.available`).
+
+## Anthropic Messages
+
+### Web search
+
+Declare the tool in `tools`:
+
+```json
+{ "type": "web_search_20250305", "name": "web_search", "max_uses": 3, "allowed_domains": ["docs.python.org"], "user_location": {"type": "approximate", "country": "TW"} }
+```
+
+| Field | Status | Description |
+| --- | --- | --- |
+| `max_uses` | supported | After this many calls in one request, further calls return a `max_uses_exceeded` error result. |
+| `allowed_domains`, `blocked_domains` | supported | Filter results by domain (a domain also matches its subdomains). |
+| `user_location` | supported | Passed to the search provider as a location hint. |
+| `cache_control`, `allowed_callers`, `defer_loading` | accepted and ignored | |
+
+The response content interleaves these blocks:
+
+```json
+[
+  { "type": "server_tool_use", "id": "srvtoolu_...", "name": "web_search", "input": { "query": "python 3.13 release date" } },
+  {
+    "type": "web_search_tool_result",
+    "tool_use_id": "srvtoolu_...",
+    "content": [
+      { "type": "web_search_result", "url": "https://...", "title": "...", "encrypted_content": "...", "page_age": null }
+    ]
+  },
+  {
+    "type": "text",
+    "text": "Python 3.13 was released in October 2024 [1].",
+    "citations": [
+      { "type": "web_search_result_location", "url": "https://...", "title": "...", "encrypted_index": "...", "cited_text": "..." }
+    ]
+  }
+]
+```
+
+A failed search returns `content: {"type": "web_search_tool_result_error", "error_code": "..."}` with codes `unavailable`, `max_uses_exceeded`, `too_many_requests`, `invalid_input`, `query_too_long` (queries over 400 characters). `usage.server_tool_use.web_search_requests` counts the calls.
+
+### Web fetch
+
+```json
+{ "type": "web_fetch_20250910", "name": "web_fetch", "max_uses": 5, "allowed_domains": ["example.com"], "max_content_tokens": 20000 }
+```
+
+`max_uses`, `allowed_domains`, `blocked_domains` and `max_content_tokens` (lowers the text cap to roughly four characters per token) are honored. The result block:
+
+```json
+{
+  "type": "web_fetch_tool_result",
+  "tool_use_id": "srvtoolu_...",
+  "content": {
+    "type": "web_fetch_result",
+    "url": "https://example.com/",
+    "retrieved_at": "2026-01-01T00:00:00Z",
+    "content": {
+      "type": "document",
+      "title": "Example Domain",
+      "citations": { "enabled": false },
+      "source": { "type": "text", "media_type": "text/markdown", "data": "..." }
+    }
+  }
+}
+```
+
+HTML is converted to Markdown; text, JSON and XML types are returned as text. Other content types (including PDF and images) fail with `unsupported_content_type`. Errors come back as `web_fetch_tool_result_error` with `error_code` `url_not_allowed`, `url_not_accessible`, `unsupported_content_type`, `url_too_long` (URLs over 250 characters), `invalid_tool_input`, `too_many_requests`, `max_uses_exceeded` or `unavailable`. `usage.server_tool_use.web_fetch_requests` counts the calls. Fetched content is not citable: the result document has `citations.enabled` false.
+
+### Citations
+
+Citations on text blocks are built from the `[n]` markers the model writes next to results it used. Each is a `web_search_result_location` with the result's `url` and `title`, a `cited_text` of up to 150 characters taken from the best-matching passage or snippet, and `encrypted_index`. `encrypted_content` and `encrypted_index` are opaque envelopes that let a later request replay the results; a local server has nothing to hide from its own client, so they are not encrypted. `page_age` is whatever the provider returns and is often `null`. Whether the model writes `[n]` markers depends on the model, so a small model may answer from search results without producing citations. Document citations are a different feature, described on [Messages](/docs/api/messages).
+
+### pause_turn
+
+If the loop reaches `YUNSHU_SERVER_TOOL_MAX_ITERATIONS` rounds and the model is still calling server tools, the message ends with `stop_reason: "pause_turn"`. Send the response content back as an assistant turn to continue.
+
+### MCP connector
+
+Declare remote MCP servers in the top-level `mcp_servers` and, optionally, one `mcp_toolset` entry per server in `tools`:
+
+```json
+{
+  "mcp_servers": [
+    { "type": "url", "name": "docs", "url": "https://mcp.example.com/mcp", "authorization_token": "secret" }
+  ],
+  "tools": [
+    { "type": "mcp_toolset", "mcp_server_name": "docs", "default_config": { "enabled": true }, "configs": { "dangerous_tool": { "enabled": false } } }
+  ]
+}
+```
+
+| Field | Status | Description |
+| --- | --- | --- |
+| `mcp_servers[].name`, `url` | supported | Both required. |
+| `mcp_servers[].authorization_token` | supported | Sent as a bearer token. |
+| `mcp_servers[].headers` | extension | Extra request headers. |
+| `mcp_servers[].tool_configuration` | supported | The earlier beta form: `enabled` and `allowed_tools`. |
+| `mcp_toolset.default_config.enabled`, `configs.{tool}.enabled` | supported | Enable or disable tools. |
+| `defer_loading`, `cache_control` in a toolset | accepted and ignored | |
+
+The gateway connects when the request starts (streamable HTTP, falling back to the older HTTP+SSE transport), lists the tools and shows the enabled ones to the model as `<server>__<tool>`. A tool call produces `mcp_tool_use` (with `server_name`) and `mcp_tool_result` (with `is_error` and text `content`). Tool results are cut to 100000 characters. Calls in the same turn run concurrently. There is no approval step. An unreachable server is a `400 invalid_request_error`.
+
+## OpenAI Responses
+
+### Web search
+
+```json
+{ "type": "web_search", "filters": { "allowed_domains": ["docs.python.org"] }, "user_location": {"type": "approximate", "country": "TW"}, "search_context_size": "medium" }
+```
+
+`filters.allowed_domains` and `user_location` are honored; `search_context_size` is accepted and has no effect. The model can also open a page and search inside it (the actions `open_page` and `find_in_page`). The output contains a `web_search_call` item (`action` with `type`, `query`; `status` `completed` or `failed`) followed by a `message` whose `output_text` carries `url_citation` annotations (`start_index`, `end_index`, `url`, `title`) built from the model's `[n]` markers. Add `include: ["web_search_call.action.sources"]` to list the result URLs in `action.sources`. `max_tool_calls` caps the number of searches; calls past the cap fail with a message the model sees.
+
+### The mcp tool
+
+```json
+{
+  "type": "mcp",
+  "server_label": "docs",
+  "server_url": "https://mcp.example.com/mcp",
+  "authorization": "secret",
+  "allowed_tools": ["search"],
+  "require_approval": "never"
+}
+```
+
+| Field | Status | Description |
+| --- | --- | --- |
+| `server_label`, `server_url` | supported | Both required (`400` otherwise). |
+| `authorization`, `headers` | supported | Credentials for the MCP server; they are not echoed back in the response `tools`. |
+| `allowed_tools` | supported | A list of names, or `{"tool_names": [...]}`. |
+| `require_approval` | supported | `"never"` runs tools immediately. The default (`"always"`), or an object listing `never.tool_names`, makes the model's call stop at an `mcp_approval_request` item; send an `mcp_approval_response` item (`approval_request_id`, `approve`, `reason`) in the next request (with `previous_response_id`) to run or refuse it. |
+| `connector_id` | not supported | OpenAI-hosted connectors are a `400` (`unsupported_connector`); pass the server URL instead. |
+
+The first response for a server includes an `mcp_list_tools` item; a later request that carries that item (or a stored response that has it) skips the listing. Calls appear as `mcp_call` items with `arguments`, `output`, `error` and `approval_request_id`. An unreachable server is a `424` with code `external_connector_error`.
+
+## Network safety
+
+- `web_fetch` resolves the hostname itself and refuses private, loopback and link-local addresses, including cloud metadata addresses, before connecting, and again for every redirect (at most 5, each re-validated). The connection is pinned to the validated address, so a DNS answer cannot change between the check and the request. Cookies are not sent. `YUNSHU_WEB_FETCH_ALLOW_PRIVATE=1` lifts the restriction.
+- Image and PDF `url` sources on Messages are checked the same way.
+- The MCP connector is the exception by default: it can reach private and loopback servers (`YUNSHU_MCP_CONNECTOR_ALLOW_PRIVATE`), because local tool servers are the normal case. Turn that off if untrusted clients can reach your server.
+- Search queries and fetched pages are model-controlled input. Fetched text reaches the model as tool output, so a page can try to steer it; treat server tools as you would any tool that reads the open web.
+
+## Limits and what is not supported
+
+- Code execution, the hosted memory tool, file search, image generation and OpenAI-hosted connectors are not available.
+- `web_fetch` does not read PDFs or images and cannot execute JavaScript.
+- Web search quality depends on the provider you configure; the keyless defaults are best effort.
+- The Responses API has no web fetch tool; use an `mcp` fetch server or the Anthropic route.
+- Server tools cannot be mixed with `custom`, `local_shell`, `tool_search` or `computer` tools in one Responses request (`400`). Ordinary function tools can be combined with server tools; function calls are returned to your client.
+- `background: true` is not supported together with `web_search` or `mcp` in a Responses request (`400`).
+
+## Support
+
+| Feature | Status |
+| --- | --- |
+| Anthropic `web_search_20250305` | <Support status="supported">supported</Support> |
+| Anthropic `web_fetch_20250910` | <Support status="supported">supported (text, HTML)</Support> |
+| Anthropic `mcp_servers` + `mcp_toolset` | <Support status="supported">supported</Support> |
+| Responses `web_search` / `web_search_preview` | <Support status="supported">supported</Support> |
+| Responses `mcp` tool, approvals | <Support status="supported">supported</Support> |
+| Responses `connector_id` connectors | <Support status="unsupported">not supported</Support> |
+| `pause_turn` for long loops | <Support status="supported">Anthropic only</Support> |
+| Web fetch citations, PDF fetch | <Support status="unsupported">not supported</Support> |
+
+## Related
+
+- [Messages](/docs/api/messages)
+- [Responses](/docs/api/responses)
+- [Web search guide](/docs/guides/web-search)
+- [Configuration](/docs/guides/configuration)
+- [Agents](/docs/guides/agents)

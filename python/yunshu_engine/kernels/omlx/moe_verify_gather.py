@@ -11,7 +11,7 @@ but in expert order: each threadgroup finds the pair at its sorted position,
 and the grid covers all pairs of one output tile before the next. Pairs that
 share an expert then run back to back and read the expert tile from cache.
 Per pair, the arithmetic is MLX's ``qmv_fast`` or ``qmv`` traversal (chosen by
-``qmv_fast_layout``, MLX's rule), transcribed from MLX 0.32.2 ``quantized.h``,
+``qmv_fast_layout``, MLX's rule), transcribed from MLX ``quantized.h`` (version-matched bias sums),
 so each output equals the ``gather_qmm`` output bit for bit.
 """
 
@@ -20,6 +20,8 @@ from __future__ import annotations
 from functools import cache
 
 import mlx.core as mx
+
+from ..qmv_compat import FLOAT_SUMS, stock_load_vector
 
 MAX_ROWS = 8
 _BITS = (4, 5, 6, 8)
@@ -187,13 +189,18 @@ inline float qdot_n(
 }
 """
 
+_HEADER = stock_load_vector(_HEADER)
+
+
 def qmv_fast_layout(k: int, n: int, bits: int) -> bool:
-    """Whether MLX 0.32.2 runs ``qmv_fast`` (else ``qmv``) for a one-row affine
-    product with ``k`` inputs and ``n`` outputs: N a multiple of 8 and K of the
-    kernel's block, ``pack_factor * packs_per_thread * 32`` (quantized.cpp
-    ``qmv_fast_k_alignment``): 512 for 4/5-bit, 256 for 6/8-bit weights."""
+    """Stock one-row affine kernel choice, including f8aaf49d partial rows.
+
+    K must be divisible by the block (512 for 4/5-bit, 256 for 6/8-bit).
+    Before 0.32.4 N must also divide 8. Gather callers require N % 8 == 0
+    independently: stock gather_qmv still has that restriction after f8aaf49d.
+    """
     pack_factor = 8 if bits in (3, 5) else (4 if bits == 6 else 32 // bits)
-    return n % 8 == 0 and k % (pack_factor * (1 if bits == 2 else 2) * 32) == 0
+    return (FLOAT_SUMS or n % 8 == 0) and k % (pack_factor * (1 if bits == 2 else 2) * 32) == 0
 
 
 # Each threadgroup takes the pair at sorted position ``y`` (pairs ordered by

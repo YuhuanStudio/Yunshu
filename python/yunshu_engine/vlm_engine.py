@@ -584,6 +584,11 @@ class VLMEngine:
         weights = {}
         for wf in weight_files:
             weights.update(mx.load(wf))
+        ple_table_scales = {}
+        if config.get("model_type") == "qwen4_exp":
+            from .ple_scale import collect_table_scales
+
+            ple_table_scales = collect_table_scales(weights)
 
         reason = unsupported_pack_reason(config, weights)
         if reason:
@@ -595,6 +600,13 @@ class VLMEngine:
         config.setdefault("vision_config", {})
         config.setdefault("audio_config", {})
         resolve_external_ple_manifest(config, model_path)
+        from . import ple_parallel
+
+        ple_parallel.install(int(settings.get("YUNSHU_PLE_READ_THREADS")))
+        if config.get("model_type") == "qwen4_exp":
+            from .kernels import tf_hc_forward
+
+            tf_hc_forward.install()
 
         model_config = model_class.ModelConfig.from_dict(config)
         modules = ["text", "vision", "perceiver", "projector", "audio"]
@@ -603,7 +615,18 @@ class VLMEngine:
             model_config.model_path = str(model_path)
 
         model = model_class.Model(model_config)
-        weights = _prepare_vlm_weights(model, model_class, model_config, weights)
+        if config.get("model_type") == "qwen4_exp":
+            from .model_patches import sanitize_qwen4_checkpoint
+
+            weights, self._qwen4_mtp_weights = sanitize_qwen4_checkpoint(
+                model,
+                weights,
+                prepare=lambda w: _prepare_vlm_weights(
+                    model, model_class, model_config, w
+                ),
+            )
+        else:
+            weights = _prepare_vlm_weights(model, model_class, model_config, weights)
 
         # Apply quantization BEFORE filtering — the predicate needs to see
         # `.scales` keys to decide which modules to quantize. If we filter
@@ -690,7 +713,28 @@ class VLMEngine:
             weights = {k: v for k, v in weights.items() if k in model_params}
 
         model.load_weights(list(weights.items()))
-        mx.eval(model.parameters())
+        if ple_table_scales:
+            from .ple_scale import apply_table_scales
+
+            n_scaled = apply_table_scales(model.language_model, ple_table_scales)
+            if n_scaled:
+                logger.info(
+                    "Qwen4 PLE: %d n-gram table(s) scaled by %s",
+                    n_scaled,
+                    sorted(set(ple_table_scales.values())),
+                )
+        from .apc_manager import total_memory_bytes
+        from .weight_residency import eval_set
+
+        to_eval, lazy_names = eval_set(
+            flatten_tree(model.parameters()), total_memory_bytes()
+        )
+        mx.eval(to_eval)
+        if lazy_names:
+            logger.info(
+                "weights take most of RAM: %d vision tensors stay lazy until an image request",
+                len(lazy_names),
+            )
         model.eval()
         return model
 
@@ -891,6 +935,8 @@ class VLMEngine:
             messages = messages or []
         if self._model is None:
             raise RuntimeError("Engine not started")
+        from .structural_tag import constrains_initial_output
+
         tpl_extra = self._request_template_extra(kwargs)
         # A timeout below must be able to stop the generation it abandons.
         if kwargs.get("cancel_event") is None:
@@ -910,7 +956,8 @@ class VLMEngine:
             video_frames = await self._extract_video_frames(messages)
             image_paths.extend(video_frames)
             _enable_thinking = self._default_enable_thinking(
-                enable_thinking, constrained=kwargs.get("json_schema") is not None
+                enable_thinking,
+                constrained=constrains_initial_output(kwargs.get("json_schema")),
             )
             self._track_pipeline(kwargs, messages, image_paths, audio_paths)
             self._check_request_supported(image_paths, audio_paths, kwargs)
@@ -935,13 +982,20 @@ class VLMEngine:
                 kwargs=kwargs,
             )
 
+            from .request_tracker import current_request_info
+
+            _latency_info = current_request_info.get()
+
             def _prepare():
                 # Templating + media encoding on the MLX thread; generation is
                 # then consumed off it (the runner's driver needs that thread).
+                _marks = getattr(_latency_info, "latency_marks", {})
+                _marks["template_start"] = time.perf_counter()
                 ids, pkw, salt = self._runner_input(
                     messages, image_paths, audio_paths, _enable_thinking, tpl_extra
                 )
                 self._settle_rehearsal(ids)
+                _marks["template_end"] = time.perf_counter()
                 return _RunnerCall(
                     self._generate_vlm_runner_text,
                     ids,
@@ -1050,6 +1104,9 @@ class VLMEngine:
                 "completion_tokens": completion_token_count,
                 "cached_tokens": cached_token_count,
                 "logprobs": _runner_extras.get("logprobs"),
+                "stopped_by_stop_sequence": bool(
+                    _runner_extras.get("stopped_by_stop_sequence")
+                ),
             }
         finally:
             with self._active_count_lock:
@@ -1097,6 +1154,8 @@ class VLMEngine:
         if self._model is None:
             raise RuntimeError("Engine not started")
 
+        from .structural_tag import constrains_initial_output
+
         tpl_extra = self._request_template_extra(kwargs)
         if cancel_event is None:
             cancel_event = threading.Event()
@@ -1112,7 +1171,8 @@ class VLMEngine:
         image_paths.extend(video_frames)
 
         enable_thinking = self._default_enable_thinking(
-            enable_thinking, constrained=kwargs.get("json_schema") is not None
+            enable_thinking,
+            constrained=constrains_initial_output(kwargs.get("json_schema")),
         )
         self._track_pipeline(kwargs, messages, image_paths, audio_paths)
         self._check_request_supported(image_paths, audio_paths, kwargs)
@@ -1193,12 +1253,18 @@ class VLMEngine:
         )
 
         runner_params["first_delivery"] = first_delivery
+        from .request_tracker import current_request_info
+
+        _latency_info = current_request_info.get()
 
         def _prepare():
+            _marks = getattr(_latency_info, "latency_marks", {})
+            _marks["template_start"] = time.perf_counter()
             ids, pkw, salt = self._runner_input(
                 messages, image_paths, audio_paths, enable_thinking, tpl_extra
             )
             self._settle_rehearsal(ids)
+            _marks["template_end"] = time.perf_counter()
             return _RunnerCall(
                 self._stream_vlm_runner_text,
                 ids,
@@ -1640,8 +1706,7 @@ class VLMEngine:
 
     def backend_capabilities(self, lm: Any = None) -> Any:
         """This backbone's cache layout via the shared ``model_backend`` layer
-        (memoized); the runner build uses it to skip APC for sliding-window
-        caches."""
+        (memoized); callers use it to describe cache layout."""
         if self._backend_caps is not None:
             return self._backend_caps
         from .model_backend import BackendKind, derive_capabilities
@@ -1666,7 +1731,7 @@ class VLMEngine:
 
     # Checkpoints whose speculative decoding (MTP / DFlash draft, verify and
     # batch-invariant kernels) is validated. Every family uses the runner.
-    _SPEC_MODEL_TYPES = ("qwen3_5", "qwen3_6", "qwen3_5_moe")
+    _SPEC_MODEL_TYPES = ("qwen3_5", "qwen3_6", "qwen3_5_moe", "qwen4_exp")
 
     def _apc_memory_gb(self) -> float:
         """APC RAM budget in GiB: ``YUNSHU_VLM_APC_MEMORY_GB``, else sized from the
@@ -1984,7 +2049,8 @@ class VLMEngine:
 
         spec_family = self._config.get("model_type") in self._SPEC_MODEL_TYPES
         lm = self._model.language_model
-        use_driver = self._round_driver_wanted(lm)
+        qwen4 = self._config.get("model_type") == "qwen4_exp"
+        use_driver = not qwen4 and self._round_driver_wanted(lm)
         driver_lanes = 0
         if use_driver:
             # Row-invariant lane projections everywhere (before any verify
@@ -2046,6 +2112,12 @@ class VLMEngine:
                 draft_bits = int(settings.get("YUNSHU_DRAFT_BITS"))
                 if draft_bits:
                     quantize_drafter(drafter, draft_bits)
+                from .dflash_tree import share_masks, stack_projections
+
+                share_masks()
+
+                # K|V and gate|up as one matmul each (TensorFold lane_fuse): fewer dispatches.
+                stack_projections(drafter)
                 # Project only the context window the drafter attends to.
                 from .dflash_context import install as install_dflash_context
 
@@ -2057,13 +2129,26 @@ class VLMEngine:
             from .mlxvlm_mtp import _load_drafter_in_memory
 
             if is_mtp_capable(model_path):
-                drafter = _load_drafter_in_memory(model_path)
+                if qwen4:
+                    from .qwen4_mtp import load_native_head
+
+                    drafter = load_native_head(
+                        self._config, getattr(self, "_qwen4_mtp_weights", None)
+                    )
+                    self._qwen4_mtp_weights = None
+                else:
+                    drafter = _load_drafter_in_memory(model_path)
                 validate_drafter_compatibility(self._model, drafter, "mtp")
         block = settings.get("YUNSHU_MTP_BLOCK_SIZE")
         kernels = None
         # Spec off on a spec family still runs the lane's plain-decode arithmetic
         # (invariant kernels), so spec on == spec off token-for-token.
-        if drafter is not None or (spec_family and not use_driver):
+        if qwen4:
+            from .qwen4_mtp import configure_lane
+
+            kernels, block = configure_lane(lm, drafter, block)
+            self._qwen4_mtp_weights = None
+        if not qwen4 and (drafter is not None or (spec_family and not use_driver)):
             from .kernels.omlx import apply as apply_verify_kernels
 
             # Experimental alternative (YUNSHU_MTP_ROW_EXACT): upstream oMLX
@@ -2134,6 +2219,16 @@ class VLMEngine:
                 from .kernels.verify_select import install as install_streamed5
 
                 kernels["streamed5"] = install_streamed5()
+            if draft_kind == "dflash" and invariant and drafter is not None:
+                # Reduced candidate vocabulary for the DFlash lattice (draft_vocab.logits_subset).
+                from .draft_vocab import DRAFT_VOCAB as DFLASH_KEEP
+                from .draft_vocab import install as _install_dflash_vocab
+
+                assert self._model is not None
+                found = _install_dflash_vocab(
+                    drafter, self._model.language_model, DFLASH_KEEP
+                )
+                kernels["draft_vocab"] = DFLASH_KEEP if found else None
             if draft_kind == "mtp" and invariant and drafter is not None:
                 # The lane's own MTP rounds (one host read per cycle, the head
                 # run over every verify row inside the verify's graph), fused
@@ -2176,7 +2271,7 @@ class VLMEngine:
         )
         from .kernels import buffer_cache
 
-        if spec_family:
+        if spec_family and not qwen4:
             from .kernels import cache_restore, singleton_cache
 
             singleton_cache.install()
@@ -2186,19 +2281,31 @@ class VLMEngine:
             preempt.install()
         cache_gib = settings.get("YUNSHU_PREFILL_BUFFER_CACHE_GB")
         if cache_gib is None:
+            import mlx.core as _mx
+
             from .apc_manager import total_memory_bytes
 
-            cache_gib = buffer_cache.auto_limit_gib(total_memory_bytes())
+            ceiling = settings.get("YUNSHU_MAX_MEMORY_GB")
+            cache_gib = buffer_cache.auto_limit_gib_for_weights(
+                total_memory_bytes(),
+                _mx.get_active_memory(),
+                int(float(ceiling) * (1 << 30)) if ceiling else None,
+            )
         buffer_cache.install(float(cache_gib))
         budget = self._apc_memory_gb()
         if self._apc_backend is None and budget > 0:
-            from mlx_vlm.apc import semantic_extra_hash
+            # A rotating cache cannot be assembled from dense KV blocks, but
+            # its native snapshot includes the window, absolute offset and
+            # ring index. Upstream's grouped plan checks that every component
+            # has a restore contract before admitting exact checkpoints.
+            from mlx_vlm.apc import model_apc_plan, semantic_extra_hash
 
             from .apc_manager import YunshuAPCManager
 
-            # Sliding-window (rotating) caches cannot be checkpointed at a
-            # prefix boundary, so those families decode without APC.
-            if not self.backend_capabilities(lm).cache.has_sliding_window:
+            if model_apc_plan(lm).restorable and (
+                self._config.get("model_type") == "gemma4"
+                or not self.backend_capabilities(lm).cache.has_sliding_window
+            ):
                 warm_mode = str(settings.get("YUNSHU_VLM_APC_WARM"))
                 share = float(settings.get("YUNSHU_VLM_APC_WARM_SHARE"))
                 warm_gb = budget * share if warm_mode != "off" else 0.0
@@ -2278,7 +2385,7 @@ class VLMEngine:
                     if dflash_fast.supported(lm, drafter):
                         dflash_fast.prepare(drafter)
                         kernels["dflash_fast"] = "short-context"
-        if drafter is not None:
+        if drafter is not None and not qwen4:
             # Tree drafts through the tree verify (single greedy row,
             # batch-invariant kernels only; every other round keeps the loop).
             if settings.get("YUNSHU_SPEC_TREE") == "tree":
@@ -2309,7 +2416,7 @@ class VLMEngine:
         precision = settings.get("YUNSHU_KV_PRECISION")
         from .kernels import ragged_kv
 
-        if ragged_kv.supports(self._model.language_model):
+        if not qwen4 and ragged_kv.supports(self._model.language_model):
             ragged_kv.install()
             ragged_kv.enable(None)  # the runner sets the format while it steps
             runner.ragged_kv = precision
@@ -2496,6 +2603,7 @@ class VLMEngine:
         ``finish_reason`` is set only on the last event: "stop" (EOS or stop
         string), "length", "budget" (thinking budget reached) or "cancel".
         """
+        from .structural_tag import constrains_initial_output
         from .text_utils import StopHoldbackBuffer
         from .vlm_batch_runner import (
             ConstraintProcessor,
@@ -2517,6 +2625,14 @@ class VLMEngine:
                 TokenMaskProcessor(eos_ids=list(self._get_eos_ids()), **mask_kw)
             )
         constraint = self._build_text_constraint(json_schema)
+        from .structured_report import backend_name, report
+
+        stats.structured_output = report(
+            "mlx-vlm",
+            json_schema,
+            backend_name(constraint),
+            enforced=constraint is not None,
+        )
         constraint_guide = None
         if constraint is not None:
             from .constrained_spec import ConstraintGuide
@@ -2583,8 +2699,7 @@ class VLMEngine:
                 thinking_budget
                 if enable_thinking is not False
                 and think_start is not None
-                and constraint_guide
-                is None  # bare structured output: no thinking phase
+                and not constrains_initial_output(json_schema)
                 else None
             ),
             prompt_preopens_thinking=in_think,
@@ -2628,6 +2743,7 @@ class VLMEngine:
             if stop_strings and not in_think:
                 text = holdback.feed(segment)
                 if holdback.contains_stop():
+                    stats.stop_string_hit = True
                     yield (
                         text + holdback.take_stopped(),
                         token,
@@ -2837,18 +2953,41 @@ class VLMEngine:
             )
             return None
         if prompt_kwargs is not None:
-            from mlx_vlm.apc import multimodal_token_ids_from_config
+            from .prompt_caching import image_token_wrappers
+            from .vlm_batch_runner import media_token_ids
 
-            media = multimodal_token_ids_from_config(self._model.language_model.config)
-            lookup = expanded_boundaries(
-                rendered_ids, ids, [(n, 0) for n in points["lookup_points"]], media
-            )
-            points = {
-                k: expanded_boundaries(rendered_ids, ids, value, media)
-                for k, value in points.items()
-                if k != "lookup_points"
-            }
-            points["lookup_points"] = [n for n, _ in lookup]
+            try:
+                media = media_token_ids(self._model)
+                wrappers = image_token_wrappers(getattr(self, "_processor", None))
+                lookup = expanded_boundaries(
+                    rendered_ids,
+                    ids,
+                    [(n, 0) for n in points["lookup_points"]],
+                    media,
+                    wrappers,
+                )
+                points = {
+                    k: expanded_boundaries(rendered_ids, ids, value, media, wrappers)
+                    for k, value in points.items()
+                    if k != "lookup_points"
+                }
+                points["lookup_points"] = [n for n, _ in lookup]
+                from mlx_vlm.apc import media_safe_prefix_min
+
+                minimum = media_safe_prefix_min(ids, media)
+                # Earlier system/text endpoints may precede a later image.
+                # The upstream restore contract requires a text-only suffix;
+                # keep safe endpoints instead of failing an otherwise valid turn.
+                for key in ("points", "writes"):
+                    points[key] = [
+                        (n, ttl) for n, ttl in points[key] if minimum <= n < len(ids)
+                    ]
+                points["lookup_points"] = [
+                    n for n in points["lookup_points"] if minimum <= n < len(ids)
+                ]
+            except ValueError as exc:
+                logger.warning("explicit media cache breakpoints ignored: %s", exc)
+                return None
         plan.update(points)
         plan["resolved"] = True
         logger.info("Prompt cache rendered token boundaries: %s", plan["points"])
@@ -2939,6 +3078,7 @@ class VLMEngine:
             parts = ["<think>", *reasoning, "</think>", *parts]
         if extras is not None:
             extras["prompt_tokens"] = stats.prompt_tokens
+            extras["stopped_by_stop_sequence"] = stats.stop_string_hit
             if params.get("logprobs"):
                 extras["logprobs"] = lps
         if finish == "cancel":
@@ -2991,6 +3131,9 @@ class VLMEngine:
                         reasoning_tokens=thinking,
                         ttft_ms=round(stats.first_token_s * 1000, 1) if first else 0.0,
                         logprobs=[lp] if lp is not None else None,
+                        stopped_by_stop_sequence=bool(
+                            reason == "stop" and stats.stop_string_hit
+                        ),
                     )
                 )
                 if not ok or reason is not None:
@@ -3179,9 +3322,17 @@ class VLMEngine:
         if tools:
             extra["tools"] = tools
             kwargs["_tool_recovery_tools"] = tools
+            from .structural_tag import is_lazy_constraint
             from .tool_call_grammar import is_forced, normalize_tool_choice
 
-            if is_forced(choice) or settings.get_bool("YUNSHU_TOOL_GRAMMAR"):
+            lazy = is_lazy_constraint(kwargs.get("json_schema"))
+            if lazy and is_forced(choice):
+                raise ValueError(
+                    "structural_tag cannot be combined with forced tool_choice"
+                )
+            if is_forced(choice) or (
+                settings.get_bool("YUNSHU_TOOL_GRAMMAR") and not lazy
+            ):
                 choice = normalize_tool_choice(choice)
                 if choice != "none":
                     kwargs["_tool_spec"] = {
@@ -4180,6 +4331,18 @@ class VLMEngine:
         except Exception:
             logger.debug("APC snapshot unavailable", exc_info=True)
             return None
+
+    def apc_overview(self, max_entries: int = 200) -> dict | None:
+        """Tiers, lookup counters and capped entry metadata (cache browser); None if APC is off."""
+        apc = self._apc_backend
+        fn = getattr(apc, "cache_overview", None)
+        return fn(max_entries) if callable(fn) else None
+
+    def apc_clear(self, tier: str) -> dict | None:
+        """Drop one APC tier (``ram`` / ``warm`` / ``ssd``); None when the cache is off."""
+        apc = self._apc_backend
+        fn = getattr(apc, "clear_tier", None)
+        return fn(tier) if callable(fn) else None
 
     def busy_snapshot(self) -> dict | None:
         """GPU-busy accounting of the batch runner (None before a model is loaded)."""

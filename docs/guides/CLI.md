@@ -1,5 +1,7 @@
 # Yunshu CLI
 
+> The console's Docs section carries this guide in English, 繁體中文 and 简体中文 ([`frontend/docs/guides/cli.mdx`](../../frontend/docs/guides/cli.mdx)); this file is its GitHub-facing counterpart.
+
 Install on an Apple Silicon Mac (Python 3.13+, macOS 14+):
 
 ```sh
@@ -52,7 +54,9 @@ Stop/unload a model before removing its files.
 ## Server and service
 
 ```sh
-yunshu serve -m org/name --port 8000
+yunshu serve -m org/name --port 8000   # also starts the console process on :8100
+yunshu serve -m org/name --no-console
+yunshu console --engine http://127.0.0.1:8000
 yunshu status
 yunshu top                    # refresh the merged health/system/engine API every 2 s
 yunshu top --once              # one snapshot
@@ -62,6 +66,7 @@ yunshu service install -m org/name           # start at login, restart after cra
 yunshu service status
 yunshu service logs -n 100
 yunshu service logs -f
+yunshu service logs --console
 yunshu service restart
 yunshu service stop
 yunshu service uninstall
@@ -73,6 +78,14 @@ monitoring fields are omitted. Set the configured auth token for protected endpo
 All install methods use `yunshu service`, rather than a second Homebrew service.
 `service install --no-start` only writes the agent; `--force` replaces it.
 Models and logs survive uninstall. Logs can be rotated with `service rotate-logs`.
+
+The web console is its own light process. `yunshu serve` starts it next to the engine (port 8100, or
+`--console-port`; `--no-console` skips it) and stops it with the engine; `yunshu console --engine URL`
+runs it alone, for example against an engine on another machine (`--engine-token`, `--host`,
+`--no-history`). `service install` installs two launchd jobs, the engine and the console, so the console keeps
+serving and recording while the engine restarts (`--no-console` installs the engine only,
+`--console-port` moves it; `service logs --console` reads its log, and `service restart` restarts the engine
+only). See the [console guide](../CONSOLE.md#the-console-process).
 
 ## JSON and errors
 

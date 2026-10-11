@@ -1,0 +1,160 @@
+---
+title: Web search and fetch
+description: Server-side web_search and web_fetch tools, the search providers behind them, the settings that control them, and what leaves your machine.
+---
+
+Coding agents and SDK clients can ask Yunshu to search the web or fetch a page while a model is generating. The server runs the tool, feeds the result back to the model and returns the answer together with the tool blocks and citations in the format of the dialect the request used.
+
+| Dialect | Tool types | Notes |
+|---|---|---|
+| Anthropic Messages (`POST /v1/messages`) | `web_search_*` (for example `web_search_20250305`), `web_fetch_*` (for example `web_fetch_20250910`) | results come back as `server_tool_use` and `web_search_tool_result` / `web_fetch_tool_result` blocks; text blocks carry `web_search_result_location` citations |
+| OpenAI Responses (`POST /v1/responses`) | `web_search`, `web_search_preview` | results come back as `web_search_call` items; `open_page` and `find_in_page` actions work on pages the search already retrieved. `web_fetch` is not a Responses tool |
+
+See [Server tools](/docs/api/server-tools) for the request and response shapes, and [Coding agents and SDKs](/docs/guides/agents) for which agents use them.
+
+<Callout type="warn">
+Web search is not offline inference. With the default settings the **query text, and your IP address, leave the machine** to reach DuckDuckGo, Wikipedia and any provider you configured. Queries are written by the model and can contain context from the conversation. Fetched URLs are visible to the origin sites. No conversation history and no client credentials are forwarded, and provider keys go only to their own search APIs. To keep everything local, set `YUNSHU_WEB_SEARCH_PROVIDER=none`.
+</Callout>
+
+## Choose a search provider
+
+`YUNSHU_WEB_SEARCH_PROVIDER` selects the backend. The default is `auto`.
+
+| Value | Behavior |
+|---|---|
+| `auto` | Runs the keyless sources (DuckDuckGo HTML and Wikipedia) and every provider that has credentials in parallel. Results are deduplicated and fused with reciprocal-rank fusion, and each source has health backoff so a failing source stops slowing queries down |
+| `none` | Disables server-side search. Requests that declare a search tool get an `unavailable` tool error |
+| `searxng`, `brave`, `tavily`, `exa`, `serper`, `perplexity`, `mojeek`, `marginalia`, `ddg_html`, `wikipedia`, `mwmbl` | Use exactly that provider |
+
+DuckDuckGo HTML is best effort: it may block automated queries. `YUNSHU_WEB_KEYLESS=0` turns off the keyless sources (DuckDuckGo and Wikipedia), which leaves only providers you configured.
+
+```bash
+# Default: keyless sources plus any configured provider
+yunshu serve -m <model> --set web_search_provider=auto
+
+# Keep everything local
+yunshu serve -m <model> --set web_search_provider=none
+
+# Add a keyed provider
+export YUNSHU_BRAVE_API_KEY=...
+yunshu serve -m <model>
+```
+
+### Provider settings
+
+All of these are registered in the settings registry and listed in [Configuration](/docs/guides/configuration).
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `YUNSHU_WEB_SEARCH_PROVIDER` | `auto` | provider selector, see above |
+| `YUNSHU_WEB_SEARCH_RESULTS` | `5` | results returned per `web_search` call |
+| `YUNSHU_WEB_SEARCH_PROVIDER_TIMEOUT` | `1.0` | per-provider deadline in seconds in metasearch, so a slow source cannot hold up the query |
+| `YUNSHU_WEB_KEYLESS` | on | allow keyless DuckDuckGo and Wikipedia |
+| `YUNSHU_SEARXNG_URL` | unset | base URL of your own SearXNG instance with JSON output enabled. Optional: the built-in metasearch needs no SearXNG |
+| `YUNSHU_BRAVE_API_KEY`, `YUNSHU_TAVILY_API_KEY`, `YUNSHU_EXA_API_KEY`, `YUNSHU_SERPER_API_KEY`, `YUNSHU_PERPLEXITY_API_KEY`, `YUNSHU_MOJEEK_API_KEY`, `YUNSHU_MARGINALIA_API_KEY` | unset | credentials for hosted search APIs. A configured key joins `auto` |
+| `YUNSHU_WEB_MWMBL` | off | opt in to the Mwmbl small-web index. Its data is CC-BY-NC-SA 4.0 (noncommercial, attribution, share-alike). Choosing `mwmbl` explicitly also opts in |
+| `YUNSHU_WEB_SEARCH_HEALTH_FILE` | `~/.yunshu/cache/websearch-health.json` | a small snapshot of provider health. It stores no query text and no result pages |
+| `YUNSHU_WEB_RESEARCH` | off | enrich snippets with excerpts from the origin pages (extra fetches: those URLs leave the machine too) |
+| `YUNSHU_WEB_RESEARCH_BUDGET` | `4.0` | overall enrichment deadline in seconds (4 at most) |
+| `YUNSHU_WEB_RESEARCH_PAGES` | `6` | origin pages per enrichment (6 at most) |
+| `YUNSHU_WEB_RESEARCH_MODEL` | unset | id of an already loaded local embedding model used to re-rank excerpts. It never loads a model; without it ranking uses BM25 only |
+| `YUNSHU_SERVER_TOOL_MAX_ITERATIONS` | `8` | most generate, run-tool, continue rounds one request may take |
+
+`yunshu config` shows the effective values and the latest provider health snapshot.
+
+## Fetch pages
+
+`web_fetch` downloads a URL and hands the extracted text to the model. It needs no provider and is on by default.
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `YUNSHU_WEB_FETCH` | on | serve the `web_fetch` tool. Off: requests get an `unavailable` error |
+| `YUNSHU_WEB_FETCH_ALLOW_PRIVATE` | off | allow private, loopback and link-local destinations. Leave it off unless you know why you need it |
+| `YUNSHU_WEB_FETCH_MAX_BYTES` | `2000000` | largest response body downloaded |
+| `YUNSHU_WEB_FETCH_TIMEOUT` | `20.0` | seconds to wait for a page |
+| `YUNSHU_WEB_FETCH_MAX_TEXT_CHARS` | `40000` | extracted text handed to the model is cut to this length (a request's `max_content_tokens` can lower it) |
+
+### Network safety rules
+
+The URLs a fetch follows are chosen by the model, and so, through prompt injection, by any web page it read. Yunshu therefore applies one network policy to every outbound fetch (`web_fetch`, the MCP connector and VLM media download):
+
+- Only `http` and `https` URLs are accepted. URLs with embedded credentials, control characters or spaces, a missing host or an out-of-range port are rejected.
+- The hostname is resolved first and the **resolved addresses** are checked. Loopback, private, link-local (including cloud metadata addresses), carrier-grade NAT, multicast, reserved and unspecified addresses are refused, and so are IPv4-mapped IPv6 forms of those. The connection is then pinned to an address that passed the check, so a DNS answer that changes between check and connect cannot slip through.
+- Redirects are followed one hop at a time (at most 5), and every hop goes through the same check.
+- Credentials are bound to the origin that received them. Authorization, API-key and cookie headers are dropped when a redirect changes origin.
+- Downloads are limited by `YUNSHU_WEB_FETCH_MAX_BYTES` and `YUNSHU_WEB_FETCH_TIMEOUT`. Only text-like content types (text, JSON, XML, XHTML, JavaScript) are accepted; other types return `unsupported_content_type`.
+
+The MCP connector has its own switch: `YUNSHU_MCP_CONNECTOR_ALLOW_PRIVATE` is on by default because local tool servers are the common case. See [Server tools](/docs/api/server-tools).
+
+Extracted pages are treated as untrusted data. The research enrichment removes hidden elements and invisible control characters and counts suspected instruction text in a metric, but these filters do not guarantee resistance to prompt injection.
+
+## Tool errors
+
+A failed search or fetch does not fail the request. The model gets a tool result with an error code and can continue. Search codes follow Anthropic's `web_search_tool_result_error`: `too_many_requests`, `invalid_input`, `max_uses_exceeded`, `query_too_long` and `unavailable`. Fetch codes follow `web_fetch_tool_result_error`: `invalid_tool_input`, `url_too_long`, `url_not_allowed`, `url_not_accessible`, `too_many_requests`, `unsupported_content_type`, `max_uses_exceeded` and `unavailable`. When search is disabled, the error hints at the setting that enables it.
+
+## Local Tavily-compatible API
+
+Yunshu also mounts a local, Tavily-style retrieval API under `/tavily`, for clients written against the Tavily SDKs. It is a separate surface from the model tools above and uses the same providers.
+
+| Route | Purpose |
+|---|---|
+| `POST /tavily/search` | search, with optional answer generation by the served chat model |
+| `POST /tavily/extract` | extract page content |
+| `POST /tavily/crawl`, `POST /tavily/map` | crawl a site or list its links (breadth-first, robots rules and host politeness applied) |
+| `POST /tavily/research`, `GET /tavily/research/{request_id}` | start a research task and poll it |
+| `POST /tavily/feedback`, `POST /tavily/logs` | feedback and log submission |
+| `GET /tavily/usage`, `GET /tavily/providers` | local usage estimates and live provider health |
+| `POST /tavily/mcp` | native stateless MCP endpoint |
+
+Point the SDKs at the prefix; there is no `/v1` in this API:
+
+<Tabs items={["Python", "JavaScript"]}>
+<Tab value="Python">
+
+```python
+from tavily import TavilyClient
+
+client = TavilyClient(api_key="tvly-local", api_base_url="http://localhost:8000/tavily")
+print(client.search("MLX inference"))
+```
+
+</Tab>
+<Tab value="JavaScript">
+
+```ts
+import { tavily } from "@tavily/core";
+
+const client = tavily({ apiKey: "tvly-local", apiBaseURL: "http://localhost:8000/tavily" });
+const result = await client.search("MLX inference");
+```
+
+</Tab>
+</Tabs>
+
+Things to know:
+
+- It is a local implementation. Credit billing and Tavily's proprietary ranking and research behavior are not reproduced; credits in responses are informational estimates.
+- Plain search uses lexical ranking and deduplication and makes no model call. An answer or a research report uses the served chat model, and only when you ask for it.
+- `YUNSHU_TAVILY_API_KEY` configures the hosted Tavily service as one of the search providers. It is unrelated to the key your clients send to this local API.
+- When `YUNSHU_AUTH_TOKEN` is set, send it as the key. With no token configured the normal local open policy applies.
+- The upstream `tavily-mcp` package has its base URL hard-coded and cannot be redirected to Yunshu; use the native `POST /tavily/mcp` endpoint instead.
+- Optional Chromium rendering for JavaScript-heavy pages in extract, crawl and map is off by default (`YUNSHU_WEB_RENDER`) and needs the `web-render` extra and an installed browser.
+
+## Support
+
+| Capability | Status |
+|---|---|
+| Messages `web_search_*` server tool with citations | <Support status="supported">supported</Support> |
+| Messages `web_fetch_*` server tool | <Support status="supported">supported</Support> |
+| Responses `web_search` / `web_search_preview`, `open_page`, `find_in_page` | <Support status="supported">supported</Support> |
+| Responses `web_fetch` tool | <Support status="unsupported">not a Responses tool</Support> |
+| Domain filters (`allowed_domains`, `blocked_domains`) | <Support status="partial">applied to results by the server; Responses supports `allowed_domains`</Support> |
+| Offline search | <Support status="unsupported">search always needs the network; use `none` to disable</Support> |
+| Image search in the Tavily API | <Support status="partial">only through a configured SearXNG or Brave provider</Support> |
+
+## Related
+
+- [Server tools](/docs/api/server-tools)
+- [Coding agents and SDKs](/docs/guides/agents)
+- [Configuration](/docs/guides/configuration)
+- [Messages](/docs/api/messages) and [Responses](/docs/api/responses)

@@ -16,6 +16,8 @@ identity — fix them when shared with the LLM/VLM path or explicitly prioritize
 **Non-goals (do not reintroduce):** no distributed/multi-node mesh, no throughput/batching race, no
 multi-tenant control plane. Custom Metal kernels only when a same-checkpoint A/B proves an end-to-end win with
 matching output. Performance = TTFT, decode speed, prefix reuse (cold and warm).
+Single-node console exception (2026-10-07): multiple API keys with per-key usage/quotas, writing engine settings and
+editing CORS are in scope; multi-node and a wider multi-tenant control plane are not.
 
 This repo is mid-**refocus** away from its old "production platform / distributed Infra" framing. The
 whitepaper and the wave-narrative VALIDATION_REPORT are retired — do not cite or resurrect their claims.

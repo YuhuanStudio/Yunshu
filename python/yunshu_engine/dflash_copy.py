@@ -66,6 +66,8 @@ class CopyDraft:
         self, bonus, hidden, cache, block, sampler, token_dtype=mx.int32
     ):
         if self._next_copy:
+            if hidden is None:  # a promoted row's first round: nothing captured yet
+                return mx.array([self._next_copy], dtype=token_dtype)
             self._pending_hidden = (
                 hidden
                 if self._pending_hidden is None

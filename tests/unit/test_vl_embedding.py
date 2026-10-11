@@ -65,9 +65,10 @@ def test_normalize_item_str_to_dict():
     assert _normalize_item("hello") == {"text": "hello"}
 
 
-def test_normalize_item_dict_passthrough():
+def test_normalize_item_dict_copy():
     d = {"image": "x.png", "instruction": "find"}
-    assert _normalize_item(d) is d
+    got = _normalize_item(d)
+    assert got == d and got is not d
 
 
 def test_normalize_item_rejects_other():
@@ -233,3 +234,10 @@ async def test_rerank_multimodal_rejected_on_cosine_fallback(monkeypatch):
         await scoring.create_rerank(req, _Req())
     assert ei.value.status_code == 400
     assert "cross-encoder" in ei.value.detail
+
+
+@pytest.mark.asyncio
+async def test_empty_embed_does_not_call_processor():
+    engine = VLEmbeddingEngine("Qwen3-VL-Embedding-2B-4bit")
+    engine._loaded = True
+    assert await engine.embed([]) == []

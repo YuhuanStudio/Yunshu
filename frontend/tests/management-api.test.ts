@@ -90,7 +90,7 @@ test("debug responses require JSON while management responses permit empty succe
     (error: unknown) =>
       error instanceof ApiError &&
       error.status === 200 &&
-      /empty response/.test(error.message),
+      /空的內容/.test(error.message),
   );
   await assert.doesNotReject(copyModel(connection, "source", "destination"));
 });
@@ -110,7 +110,8 @@ test("server operations preserve auth and expose backend 401/409 errors", async 
     (error: unknown) =>
       error instanceof ApiError &&
       error.status === 409 &&
-      error.publicMessage === "model is in use",
+      /衝突/.test(error.publicMessage) &&
+      error.detail === "model is in use",
   );
 
   globalThis.fetch = async () =>
@@ -120,7 +121,7 @@ test("server operations preserve auth and expose backend 401/409 errors", async 
     (error: unknown) =>
       error instanceof ApiError &&
       error.status === 401 &&
-      /Authentication failed/.test(error.publicMessage),
+      /驗證失敗/.test(error.publicMessage),
   );
 });
 

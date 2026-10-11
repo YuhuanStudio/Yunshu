@@ -1,0 +1,164 @@
+---
+title: 疑難排解
+description: 安裝、啟動與呼叫 Yunshu 時常見問題的解法，以及如何收集診斷檔。
+---
+
+請先執行 `yunshu doctor`。加上 `-m <model>` 可一併檢查模型。它會檢查平台、MLX 與 Metal、記憶體、設定、模型目錄、連接埠與登入服務，並為每個問題印出修復方式。有問題導致無法啟動時，會以狀態碼 1 結束。
+
+```bash
+yunshu doctor -m <model>
+yunshu --json doctor -m <model>
+```
+
+## 安裝
+
+<Accordions>
+<Accordion title="cannot import mlx，或 Python 在 Rosetta 下執行">
+
+MLX 只提供 arm64 wheel，因此 x86_64 的 Python（例如 `/usr/local` 下舊版的 Homebrew）無法載入它。`yunshu doctor` 會回報「Python runs under Rosetta」。請用 `uv python install 3.13` 安裝原生直譯器，再用它重新安裝 Yunshu。
+
+</Accordion>
+<Accordion title="requires-python >=3.13">
+
+Yunshu 需要 Python 3.13 或更新版本。`uv tool install "yunshu[vision]" --python 3.13` 會在需要時取得由 uv 管理的 3.13。
+
+</Accordion>
+<Accordion title="Qwen3.5 / 3.6 / 3.8 或視覺模型載入失敗，且 doctor 顯示 mlx-vlm 未安裝">
+
+安裝 `vision` 額外套件：`uv tool install "yunshu[vision]" --python 3.13`。請見[安裝](/docs/getting-started/install)。
+
+</Accordion>
+<Accordion title="macOS 版本太舊">
+
+低於 macOS 14 時，`yunshu doctor` 的平台檢查會失敗。請更新 macOS；MLX 需要 14 或更新版本。
+
+</Accordion>
+</Accordions>
+
+## 啟動伺服器
+
+<Accordions>
+<Accordion title="Error: no such directory，或找不到模型">
+
+`yunshu serve` 會在載入前先檢查模型。
+
+- `yunshu model list` 顯示磁碟上有什麼（模型目錄與 Hugging Face 快取）。
+- `yunshu pull <org/name>` 下載模型。
+- 存放多個模型的目錄應交給 `--models-dir`，而不是 `--model`。
+
+</Accordion>
+<Accordion title="下載中斷，或缺少權重分片">
+
+再執行一次相同的 `yunshu pull`。它會續傳，並只取得缺少的檔案。
+
+</Accordion>
+<Accordion title="權重大於記憶體，或出現 GPU 工作集的警告">
+
+模型放不進統一記憶體。請改用較小或量化程度更高的版本，例如 4-bit 的 MLX 轉換版。若權重放得下，但佔用了大部分的 GPU 工作集，模型可以載入，但長提示詞可能會記憶體不足。macOS 給 GPU 的工作集略小於總 RAM；`yunshu doctor -m <model>` 會印出兩個數字。
+
+</Accordion>
+<Accordion title="Cannot listen on host:port，或連接埠被其他程式佔用">
+
+用 `--port` 選擇其他連接埠（例如 `--port 8001`），並在你的用戶端使用它。`yunshu serve` 會在載入模型之前先檢查位址，並以錯誤結束。若佔用該埠的是 Yunshu 本身（例如登入服務），`yunshu status` 會回報，`yunshu doctor` 也會顯示「Yunshu is already running」。
+
+</Accordion>
+<Accordion title="伺服器已啟動，但 GET /health/ready 回傳 503">
+
+模型載入失敗時（路徑錯誤、權重損毀、記憶體不足），伺服器會繼續執行而不是結束，這樣像 launchd 這類監督程式就不會不斷重啟。就緒探測會回傳 503，已知載入錯誤時會附上 `reason`；需要模型的對話請求則會得到 503，直到你修正原因並重新啟動。完整的 traceback 在伺服器記錄中（終端機，或 `yunshu service logs`）；請尋找 `FATAL: model ... load failed`。
+
+```bash
+curl -i http://127.0.0.1:8000/health/ready
+```
+
+伺服器關閉中，或 GPU 記憶體使用率超過 95% 時，探測也會回傳 503。
+
+</Accordion>
+<Accordion title="目前使用哪一條推測路徑？">
+
+`yunshu doctor -m <model>` 會印出 `speculative` 列，啟動記錄中也有 `Speculative decoding:` 一行。在模型目錄或 Hugging Face 快取中找到相符的 DFlash2 drafter 時，會自動採用。`YUNSHU_VLM_DRAFT=mtp` 強制使用檢查點的 MTP 頭，`YUNSHU_VLM_DRAFT=off` 關閉草稿生成，給目錄路徑則指定特定的 drafter。若自動選到的 drafter 無法載入，伺服器會記錄警告並退回 MTP。
+
+</Accordion>
+<Accordion title="錯誤的設定使啟動中止">
+
+`yunshu config` 會顯示每個有效值及其來源。設定值無效時，指令會以錯誤中止。拼錯的 `YUNSHU_*` 名稱只會產生帶有最接近名稱的警告；`--set` 使用未知名稱則會報錯。
+
+</Accordion>
+<Accordion title="停止伺服器">
+
+Ctrl-C 或 `kill`（SIGINT 或 SIGTERM）會停止接受新請求，並讓執行中的請求在 `YUNSHU_DRAIN_TIMEOUT` 秒內（預設 30）完成。之後會切斷剩餘連線、停止其生成，然後伺服器結束。請求進行中斷線的用戶端會取消其生成。
+
+</Accordion>
+</Accordions>
+
+## 呼叫 API
+
+<Accordions>
+<Accordion title="401 Missing or invalid Authorization header">
+
+伺服器設定了 `YUNSHU_AUTH_TOKEN`（例如透過 `--auth-token`）。請送出 `Authorization: Bearer <token>`，Anthropic 用戶端則送出 `x-api-key: <token>`。沒有設定 token 時，推論是開放的，但模型載入、卸載等操作性端點會被拒絕。健康檢查、版本與文件路由永遠不需要 token。
+
+</Accordion>
+<Accordion title="Docker 中的用戶端無法連線">
+
+伺服器預設只監聽 `127.0.0.1`。請用 `--host 0.0.0.0 --auth-token <secret>` 啟動，並連到 `http://host.docker.internal:8000`。
+
+</Accordion>
+<Accordion title="多模型模式下出現 model not found">
+
+請使用 `GET /v1/models` 中的 id（`yunshu model list --url http://127.0.0.1:8000`）。單一模型模式下，任何模型名稱都可以。
+
+</Accordion>
+<Accordion title="推理模型的回答是空的">
+
+它的 token 都用在思考上了。請提高 `max_tokens`、降低 `reasoning_effort`，或在 `chat_template_kwargs` 中把 `enable_thinking` 設為 `false`。
+
+</Accordion>
+<Accordion title="請求回傳 400">
+
+回應內容會說明原因。常見原因：
+
+- `context_length_exceeded`：提示詞比模型的上下文視窗長。請縮短提示詞，或使用上下文更長的模型。
+- `max_tokens` 超過請求驗證的上限（1,048,576），或超過由模型上下文與輸出預算所決定的較低限制。訊息中會註明數字。
+- 引擎無法強制執行的 JSON schema 關鍵字或正規表達式語法（例如 `uniqueItems`、`not`、`if`/`then`/`else`、`contains`）。這些會被拒絕，而不是默默忽略。
+- 模型缺少的功能，例如工具呼叫、圖片、音訊或 logprobs。`GET /v1/models` 列出每個模型支援的項目。
+
+</Accordion>
+<Accordion title="429 Rate limit exceeded">
+
+速率限制預設是關閉的。只有在 `YUNSHU_RATE_LIMIT_RPM` 設為大於 0 時才會啟用。
+
+</Accordion>
+</Accordions>
+
+## 磁碟與快取
+
+前綴快取的 SSD 層（預設 `~/.yunshu/cache/apc`）每個快取根目錄有一份預算，並保留空閒空間。寫入失敗時，會以一則警告暫停寫入磁碟。磁碟空間不足時，`yunshu doctor` 會發出警告。
+
+```bash
+yunshu cache status        # 每個命名空間的項目、大小與上限
+yunshu cache gc            # 回報可以移除的內容
+yunshu cache gc --apply    # 移除被截斷、損毀與舊格式的項目，並修剪到上限
+```
+
+`YUNSHU_VLM_APC_DISK=0` 會讓前綴快取只留在 RAM。請見[提示快取](/docs/guides/prompt-caching)。
+
+## 回報錯誤
+
+`yunshu diagnose bundle` 會寫出本機診斷檔，內含版本、平台、套件版本、已遮蔽機密的設定、doctor 輸出、SSD 快取狀態，以及服務記錄中最近的錯誤行與其 trace id。其中不含提示詞或補全內容，也不會上傳。
+
+```bash
+yunshu diagnose bundle -o yunshu-diagnostics.json
+```
+
+在 [github.com/YuhuanStudio/Yunshu](https://github.com/YuhuanStudio/Yunshu/issues) 提出 issue 時，請附上：
+
+- `yunshu --json doctor -m <model>` 的輸出
+- 模型資料夾名稱
+- 失敗的指令或請求
+- 伺服器記錄的最後約 50 行
+
+## 相關頁面
+
+- [CLI 參考](/docs/guides/cli)
+- [服務](/docs/getting-started/service)
+- [設定](/docs/guides/configuration)

@@ -1,0 +1,98 @@
+---
+title: 架構
+description: 請求如何流經 gateway 與引擎、兩條服務路徑、前綴快取、推測解碼、batch-invariant kernel 與無損保證，以及受限解碼。
+---
+
+Yunshu 是針對 Apple Silicon 的單節點推論引擎。單一行程同時執行 FastAPI gateway 與以 MLX 為基礎的引擎，並提供 OpenAI、Anthropic 與 Ollama 風格的 API。本頁說明各部分如何組合，對象是會閱讀或修改程式碼的人。這裡只陳述程式碼實際做的事；可調整的行為請見[設定](/docs/guides/configuration)。
+
+## 套件結構
+
+儲存庫是扁平的 monorepo，Python 套件都在 `python/` 底下。
+
+| 套件 | 職責 |
+|---|---|
+| `yunshu_gateway` | FastAPI 應用程式。`routers/` 實作 OpenAI、Anthropic、Ollama、MCP、Realtime 與 Tavily 相容介面；`schemas/` 放共用的請求正規化；`server_tools/` 執行伺服器端的網路搜尋、擷取與 MCP connector；`middleware/` 有驗證、指標、請求日誌、速率限制、斷線處理與 `x_yunshu` 擴充 |
+| `yunshu_engine` | 所有實際執行模型的部分：模態分派（LLM、VLM、OCR、ASR、TTS、圖像、embeddings）、兩條文字服務路徑、取樣與限制、推測解碼、前綴快取、Metal kernel（`kernels/`）以及設定註冊表（`settings.py`） |
+| `yunshu_kv` | KV 快取的建構元件：block pool 與雜湊、序列化、壓縮、SSD 儲存與 warm 層。引擎的前綴快取就是由這些元件組成 |
+| `yunshu_cli` | `yunshu` 指令：`serve`、`chat`、`launch`、`service`、`config`、`doctor`、`cache` 等 |
+| `yunshu_control` | 少量共用輔助：稽核日誌與 token 計數 |
+
+## 從請求到 token
+
+```text
+client ── HTTP ──> middleware ──> router ──> engine dispatch
+                                              │
+                    ┌─────────────────────────┴───────────────────────┐
+                    │ VLM batch runner                                │ text fast path
+                    │ (every mlx-vlm model)                           │ (text-only mlx-lm models)
+                    └─────────────────────────┬───────────────────────┘
+                                              ▼
+                              one MLX thread, one Metal stream
+```
+
+1. **Middleware** 驗證請求（只有設定了 `YUNSHU_AUTH_TOKEN` 才需要 token）、指派 `X-Request-Id`、記錄指標，並監看用戶端斷線；斷線會取消該次生成。
+2. **Router** 依方言的 schema 驗證請求本文，並加以正規化（null 欄位視為未設定，`guided_*` 與 `structured_outputs` 折疊成同一種限制形式，驗證 tool choice），再轉成一個內部的生成請求。
+3. **引擎分派** 查找模型（`ModelManager` 延遲載入模型、在記憶體壓力下以 LRU 淘汰，也可以釘選模型），並把請求交給該類型的引擎。
+4. 引擎回傳 token；gateway 再把它們轉成方言的回應或串流，包括 usage、工具呼叫區塊、推理內容拆分與附加的 `x_yunshu` 欄位。
+
+## 兩條服務路徑
+
+所有 GPU 工作都在**單一 MLX 執行緒**上進行：一個全域的單 worker executor 擁有執行緒本地的 Metal stream，每個引擎都把工作提交到那裡。多模型服務因此是安全的，也是程式碼從不在 event loop 上直接操作 MLX 陣列的原因。
+
+### VLM batch runner
+
+所有經由 `mlx-vlm` 服務的模型（`VLMEngine`）都跑在 VLM batch runner 上，由 `VLMEngine._build_batch_runner` 建構，底層是上游 `mlx-vlm` 的 `BatchGenerator`。這也包含送到 Qwen3.5 這類 VLM 檢查點的純文字請求。
+
+- **連續批次處理**，每個請求有自己的取樣參數與種子（`RowSampler`）。預填一次只接納一個請求，並與其他列的解碼交錯進行。
+- **前綴快取（APC）** 適用於所有沒有滑動視窗快取的模型家族：混合模型使用精確檢查點，媒體以圖像像素與音訊特徵為鍵，另有選用的 SSD 層。見[提示詞快取](/docs/guides/prompt-caching)。
+- **圖像、音訊與影片輸入**由 runner 的媒體準備步驟處理。
+- **推測解碼** 僅限 Qwen3.5 家族（見下）。
+- VLM 不接受 LoRA 轉接器與自訂 logits processor。
+
+Runner 只產出 token id。解碼成文字、stop 字串、思考狀態與交給 HTTP 層的傳遞都留在 `VLMEngine`，所以每條文字路徑回報結果的方式一致。
+
+### 純文字快速路徑
+
+純文字 `mlx-lm` 模型走 `_generate_fast`，直接呼叫 mlx-lm 的 `generate_step`，一次處理一個請求；對這類模型的並行請求會被序列化。這條路徑有自己的前綴快取（`KVPrefixCache`）、KV 量化、n-gram 與 jump-forward 選項，以及受限解碼的取樣器。
+
+文字模型的連續批次迴圈放在 `YUNSHU_ENGINE_LOOP` 之後（實驗性、預設關閉）。它是舊有的路徑，而不是新工作的方向。
+
+### 每個請求的狀態
+
+- **取樣器**：溫度、top-p、top-k、min-p、懲罰項、logit bias 與種子都是逐請求套用。使用推測解碼的取樣請求會抽取以位置為鍵的雜訊，讓結果不依賴哪些 token 被草擬。
+- **Stop 與推理狀態**：stop 字串、結束 token 與推理邊界由每個請求自己的狀態機追蹤（建立在 Aho-Corasick trie 上），所以即使 stop 序列橫跨 token 邊界也能被找到。
+- **Detokenizer**：每個請求有自己的串流 detokenizer。Detokenizer 從不放進池中重複使用，因為 reset 可能洩漏位元組緩衝區。
+
+## 前綴快取
+
+兩條路徑都會重用先前提示詞中與新提示詞共享前綴的 KV 快取。VLM runner 的 APC 儲存精確檢查點（某個 token 位置的注意力 KV 加循環狀態），為每一組不同的「system prompt 加工具」保留一個開頭檢查點，以較新的檢查點取代同一段對話較舊的檢查點，並把被淘汰的檢查點寫入可跨重啟保留的 SSD 層。含有滑動視窗層的模型無法在前綴邊界建立檢查點，因此沒有前綴快取。無損與有損的選項，以及 usage 中會看到什麼，見[提示詞快取](/docs/guides/prompt-caching)。
+
+## 推測解碼
+
+對 VLM runner 上的 Qwen3.5 家族（model type 為 `qwen3_5`、`qwen3_6` 與 `qwen3_5_moe`），解碼可以先草擬數個 token，再用一次前向傳遞驗證：
+
+- **MTP**：使用檢查點自帶的 multi-token-prediction head 草擬。這是預設（`YUNSHU_MTP`），預設區塊大小為 6 個 token（`YUNSHU_MTP_BLOCK_SIZE`）。
+- **DFlash**：使用外部的 block-diffusion 草擬器。`YUNSHU_VLM_DRAFT` 可指向草擬器目錄、強制使用 `mtp`，或設為 `off` 關閉草擬；未設定時，會使用在模型目錄或 Hugging Face 快取中找到的相符草擬器。
+
+推測解碼在單一請求通道中執行：並行請求在一般解碼時會被批次處理，但不會草擬。其他模型家族走通用路徑，不做推測。
+
+### Batch-invariant kernel 與無損保證
+
+Yunshu 做出的保證是：**開啟推測解碼時，貪婪（greedy）輸出與同一個引擎關閉推測解碼時 token 完全相同。** 為此，目標模型在解碼（一列）與驗證（數列）時的每個矩陣乘法，都通過同一個 kernel，其每一列的結果不依賴有幾列共用這次呼叫；注意力與 GatedDeltaNet 的驗證路徑相對於單列解碼是位元精確的。只有引擎標記為目標的模組會被改道，草擬模型保留原本的 kernel；預填區塊也維持原本的 kernel。
+
+這個保證沒有說的是：輸出不需要與原生 MLX 的單列解碼位元相同。不同的歸約順序會讓 logits 產生捨入等級的差異，這種漂移是預期內的。Kernel 是在執行期編譯的 Metal kernel（`mx.fast.metal_kernel`），放在 `python/yunshu_engine/kernels/`；其中一部分是從其他專案 vendor 或衍生而來，記錄在[上游追蹤](/docs/developers/upstream-tracking)。只有在同一個檢查點的端到端比較顯示確實有收益、且輸出相同（或在容差內）時，才會採用自訂 kernel；見[驗證](/docs/developers/verification)。
+
+## 受限解碼
+
+`response_format`、`grammar`、`guided_*` 與強制的 `tool_choice` 會轉成一個限制物件。每一步取樣器都會遮蔽限制不接受的 token。JSON schema 與 `json_object` 預設使用 `llguidance` matcher，或內建的狀態機（`YUNSHU_JSON_SCHEMA_ENGINE`）；正規表示式與 choice 由內建引擎編譯；上下文無關文法使用 `llguidance`。預設的遮蔽方式是 allowlist 取樣器，另有選用的 xgrammar 風格 bitmask 引擎（`YUNSHU_GRAMMAR_BITMASK`）與 jump-forward 解碼（`YUNSHU_JUMP_FORWARD`）。無效的限制會在生成前以 `400` 拒絕。見[結構化輸出](/docs/guides/structured-output)。
+
+## 設定
+
+每個 `YUNSHU_*` 設定都登錄在 `python/yunshu_engine/settings.py`，有型別、預設值、說明與分組，並透過 `settings.get(...)` 讀取；程式碼從不用 `os.environ` 讀取它們（由單元測試強制）。值的來源依優先順序為：命令列（`--set`）、環境變數、`~/.yunshu/config.toml`、登錄的預設值；`yunshu config` 會顯示生效的值與其來源。新增設定的規則見[貢獻指南](/docs/developers/contributing)。
+
+## 相關頁面
+
+- [提示詞快取](/docs/guides/prompt-caching)
+- [結構化輸出](/docs/guides/structured-output)
+- [貢獻指南](/docs/developers/contributing)
+- [驗證](/docs/developers/verification)

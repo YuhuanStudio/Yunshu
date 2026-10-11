@@ -9,9 +9,22 @@ Release steps: [RELEASING.md](RELEASING.md).
 
 The 0.1.5 cycle adds local decision models, repeatable evaluations and broader coding-agent
 and web-retrieval compatibility to the `yunshu` package. These changes are merged on main;
-0.1.4 remains the published version. This draft does not include unmerged model-head or console redesign work.
+0.1.4 remains the published version.
 
 ### Highlights
+
+- The web console is its own light process (`yunshu console`, default port 8100, never loads MLX).
+  `yunshu serve` starts it next to the engine (`--no-console` to skip), `yunshu service install` runs it as its own
+  launchd job, and `yunshu console --engine URL` watches a remote engine. It serves the console and docs, proxies
+  the engine API (streams and WebSockets included) on one origin, and records a 1 s / 10 s / 1 min history for 30
+  days plus a metadata-only request log in SQLite, with engine outages kept as gaps and events, so the console
+  stays usable and keeps recording while the engine restarts or crashes. The engine keeps no history store and
+  gains only a cursor on its finished-request read and its pid in `/v1/yunshu/status`.
+  **Deprecation:** `/console/` on the engine now only redirects to the console process (or explains how to start
+  it); the engine no longer serves the console files, and this pointer goes away in a later release.
+  Settings: `YUNSHU_CONSOLE`, `YUNSHU_CONSOLE_PORT`, `YUNSHU_CONSOLE_HOST`, `YUNSHU_CONSOLE_ENGINE`,
+  `YUNSHU_CONSOLE_ENGINE_TOKEN`, `YUNSHU_CONSOLE_POLL_S`, `YUNSHU_CONSOLE_HISTORY`,
+  `YUNSHU_CONSOLE_RETENTION_DAYS`, `YUNSHU_CONSOLE_DB_MAX_MB`. [Console guide](docs/CONSOLE.md).
 
 - Ask typed predicate, choice and score questions with the Decisions API on Clef MLX checkpoints,
   without generating a text answer. [Guide](docs/guides/DECISIONS.md).
@@ -47,6 +60,14 @@ No new decode or TTFT claim is made for this cycle here. Historical measurements
 
 ### Added
 
+- A request that starts while others are running no longer stays off speculative decoding for its whole life: once it is the only request left, a greedy plain DFlash row moves from the shared batch onto the speculative lane at the next step boundary (output identical to a solo run).
+- Console backend: VLM speculative acceptance by draft depth, resident APC entries and bounded lifecycle events, metadata-only serve-log history with cursor pages, CLI diagnostics bundle download/manifest, actual structured-decoding enforcement reports, and advisory model unload/load impact.
+- OpenAI Evals API: 12 CRUD/run/output-item endpoints, atomic local persistence, cancellable background runs through normal chat inference, JSONL/file/stored-completion sources, lexical similarity and local score/label graders.
+- Add optional unprivileged Apple IOReport/HID host telemetry, request GPU+DRAM energy estimates, Prometheus gauges/counter, `yunshu top`, and tfbench/yv efficiency fields. Handle qualified macOS 27 CLPC counters and Max ANE/MTR sensor names. Off by default (opt in with `YUNSHU_TELEMETRY=on`): the 27B A/B found a small follow-up TTFT cost when on.
+- Add authenticated console model load/download cancellation and validated local/HF snapshot registration without loading or copying weights.
+- Expose cached CPU-only thermal, power, OS memory pressure and swap telemetry with explicit unknown reasons.
+- Record per-request latency milestones in `x_yunshu` and expose them through recent request metadata.
+
 - Client-executed Responses computer actions and screenshot round trips.
 - Incremental Anthropic document citation streaming with checked source ranges.
 - Optional WebRTC Realtime transport (`yunshu[webrtc]`) and local audio-sample voice enrollment for reference-audio TTS models.
@@ -77,15 +98,24 @@ No new decode or TTFT claim is made for this cycle here. Historical measurements
 
 ### Changed
 
+- Refresh the dependency lock for the next cycle (including Anthropic 1.12 and FastAPI 0.143.0) and review upstream changes. MLX stays below 0.32.4 pending version-matched kernel validation.
+- Documentation coverage: a capability overview table in all three READMEs (generated from `docs/feature_index.json`, checked by a unit test), the console guide rewritten page by page with screenshots, and new guides for [inference features](docs/guides/INFERENCE.md), [multimodal endpoints](docs/guides/MULTIMODAL.md) and [authentication, keys, settings and CORS](docs/guides/AUTH_AND_KEYS.md).
 - gpuq admits declared short verification jobs between long cells without preemption, with a bounded
   time budget; `--gate` takes precedence over same-priority backlog. Foreign CPU contention is measured,
   parsed job records are cached, and non-quiet filler work can run while quiet work waits for CPU admission.
 - CI and local CI include frontend type checks, tests and build plus Python lint/format/mypy and package checks.
 - Local CI matches the release runner's Python 3.13 environment, short paths and inaccessible local data;
   tests avoid shared server-port collisions. [Contributor workflow](CONTRIBUTING.md).
+- Modality qualification through yv includes published embedding/classifier loaders,
+  prepared-input parity and bounded fixed-seed diffusion comparisons. Diffusion
+  timing requires three same-device interleaved quiet pairs after a successful pilot.
 
 ### Fixed
 
+- The web console no longer jumps while a busy engine streams updates: the overview's live card keeps one size with five fixed request slots, placeholders match the charts that replace them, numbers and wrapping labels reserve their width, request rows slide into place instead of pushing, and panels that appear with data sit under the list. Measured on a replay of a real 27B load: layout shift 0.05-0.54 down to 0.001-0.005, moving boxes 32-130 down to 0.
+- Repetition, presence and frequency penalties no longer depend on the prefix cache: after an APC hit the penalty context was only the uncached suffix, so the same request answered differently on a hit than on a miss. The context is now the whole prompt either way. Outputs of requests that use these penalties change relative to earlier builds (a bug fix).
+- Requests with penalties, `logit_bias`, `min_tokens` or suppress tokens keep speculative decoding on the DFlash chain and the MTP lane instead of silently turning it off; tokens are identical with speculation on and off.
+- Untyped XML tool arguments containing JSON objects or arrays reach clients as containers; scalar text and declared string unions keep their existing types. Numeric or nested container text containing non-finite values stays literal instead of emitting invalid JSON.
 - GPU guard blocks broad `pkill` commands that could terminate another worker or user process.
 
 - EmbeddingGemma 2 loading retains every weight shard instead of keeping only the last shard.
@@ -94,6 +124,12 @@ No new decode or TTFT claim is made for this cycle here. Historical measurements
   behind the long job they were admitted between. Queue tests no longer leave isolated daemons behind.
 - Public documentation now includes the new APIs and correct native Ollama model operations, supported
   decision heads and current release status.
+- EmbeddingGemma 2 loader constructs published quantized layers through the pinned
+  MIT mlx-vlm port, preferring the installed native loader when available.
+- Quantized BERT-family sequence classifiers retain their trained head under strict
+  loading. Jina v3 custom ranking heads are rejected rather than scored as Qwen yes/no.
+- Qwen3-VL embedding handles empty inputs and keeps caller dictionaries unchanged.
+  Format support and release shard impact are documented in `docs/PRIOR_ART_FORMATS.md`.
 
 ### Security
 

@@ -1,0 +1,23 @@
+const common = {
+  retry: "重試",
+  configure: "連線設定",
+  lastOk: "最後成功連線 {time}，下方保留上次資料。",
+  details: "詳細資訊",
+  copy: "複製",
+  copied: "已複製",
+  copyFailed: "無法寫入剪貼簿",
+  copyLabel: "複製{label}",
+  "language.label": "語言",
+  sentenceGap: "",
+  offlineSince: "引擎自 {time} 離線，已 {t}。",
+  retryIn: "{s} 秒後重試。",
+  retryNow: "正在重試…",
+  engineMessage: "引擎回報：{message}",
+  retrying: "暫時無法更新，數字為上一次讀取，將自動重試",
+  staleAt: "資料停在 {time}",
+  "unlock.placeholder": "貼上存取權杖",
+  "unlock.label": "解鎖金鑰",
+  "unlock.remember": "在此裝置記住",
+  "unlock.submit": "解鎖",
+};
+export default common;

@@ -1,3 +1,5 @@
+import { t } from "./i18n/index.ts";
+
 export function operationResult(
   key: string,
   result: unknown,
@@ -9,12 +11,14 @@ export function operationResult(
   if (typeof body?.warning === "string" && body.warning)
     return {
       error: true,
-      text: `操作部分完成：${body.warning}。請檢查最新引擎狀態。`,
+      text: t("errors.operation.partial", { warning: body.warning }),
     };
   if (key.startsWith("warmup:") && body?.generated === false)
-    return { error: false, text: "模型已載入；此類型未執行文字預熱。" };
+    return { error: false, text: t("errors.operation.warmupSkipped") };
   return {
     error: false,
-    text: key.startsWith("cancel:") ? "已送出取消請求。" : "操作已完成。",
+    text: key.startsWith("cancel:")
+      ? t("errors.operation.cancelSent")
+      : t("errors.operation.done"),
   };
 }

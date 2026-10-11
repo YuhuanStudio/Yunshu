@@ -1,0 +1,187 @@
+---
+title: 已存储的 completions
+description: 以 store true 把 chat completion 保存在本地磁盘，再用 OpenAI 的 stored-completions 路由列出、查询、加标签与删除。
+---
+
+在 chat completion 请求上设置 `store: true`，Yunshu 就会把完成的 completion 连同你发送的消息一起保存。下列路由可以列出、查询、重新标记与删除这些记录，遵循 OpenAI 的 stored-completions API。所有数据都在你的磁盘上，不会发送到任何地方。
+
+<Endpoint method="POST" path="/v1/chat/completions" />
+<Endpoint method="GET" path="/v1/chat/completions" />
+<Endpoint method="GET" path="/v1/chat/completions/{completion_id}" />
+<Endpoint method="POST" path="/v1/chat/completions/{completion_id}" />
+<Endpoint method="DELETE" path="/v1/chat/completions/{completion_id}" />
+<Endpoint method="GET" path="/v1/chat/completions/{completion_id}/messages" />
+
+<Callout type="info">
+只有在设置 `YUNSHU_AUTH_TOKEN` 时才会强制认证；设置后，这些路由和其他推理路由一样需要 token。见 [API 概览](/docs/api/overview)。
+</Callout>
+
+## 存储的工作方式
+
+- 在 `POST /v1/chat/completions` 上发送 `store: true`（可再加 `metadata`）。没有 `store` 就不会写入任何东西。
+- 非流式的 completion 在响应为 `200` 时存储。流式的 completion 则在流以 `data: [DONE]` 正常结束时存储：各块会被重新组合成单个 `chat.completion` 对象（内容、`reasoning_content`、工具调用、logprobs、usage）。中途断开或以错误结束的流不会被存储。
+- 每条记录包含 completion 对象与输入消息。`n` 大于 1 时，所有选项都会存储。
+- 记录是 JSON 文件，每个 completion 一个，放在 `~/.yunshu/chat_completions`（可用 `YUNSHU_CHAT_COMPLETIONS_DIR` 更改）。记录数超过 `YUNSHU_CHAT_COMPLETIONS_MAX`（默认 5000）时，最旧的会被删除。
+- 存储失败不会让请求失败：只会记入日志，响应照常返回。
+- 文件是纯 JSON。你消息中的图片 data URL 会按原样存储，所以单条记录可能很大。
+
+### Metadata
+
+`metadata` 是最多 16 组字符串键值的对象；键最长 64 字符，值最长 512 字符。超出限制或不是字符串，会返回 `400` 并带 `param: "metadata"`。它会随存储的 completion 一并返回，也可作为列表的过滤条件。
+
+## 列出已存储的 completions
+
+`GET /v1/chat/completions` 返回一页已存储的 completions。
+
+| 查询参数 | 类型 | 说明 |
+| --- | --- | --- |
+| `limit` | integer | `1` 至 `100`。默认 `20`。 |
+| `order` | string | `asc`（最旧在前，默认）或 `desc`。 |
+| `after` | string | 从哪个 completion id 之后继续。未知的 id 会返回 `400`。 |
+| `model` | string | 只列出 `model` 等于此值的 completions。 |
+| `metadata[key]` | string | 只列出 metadata 中该键恰好等于此值的 completions。可重复指定多个键，必须全部匹配。 |
+
+```bash
+curl -G http://localhost:8000/v1/chat/completions \
+  --data-urlencode "limit=10" \
+  --data-urlencode "order=desc" \
+  --data-urlencode "metadata[session]=demo"
+```
+
+```json
+{
+  "object": "list",
+  "data": [
+    {
+      "id": "chatcmpl-9f2c4e1ab07d4c3e8a51b2c6",
+      "object": "chat.completion",
+      "created": 1760000000,
+      "model": "local",
+      "choices": [{ "index": 0, "message": { "role": "assistant", "content": "Hello!" }, "finish_reason": "stop" }],
+      "usage": { "prompt_tokens": 12, "completion_tokens": 3, "total_tokens": 15 },
+      "metadata": { "session": "demo" }
+    }
+  ],
+  "first_id": "chatcmpl-9f2c4e1ab07d4c3e8a51b2c6",
+  "last_id": "chatcmpl-9f2c4e1ab07d4c3e8a51b2c6",
+  "has_more": false
+}
+```
+
+## 查询、更新与删除
+
+| 路由 | 行为 |
+| --- | --- |
+| `GET /v1/chat/completions/{completion_id}` | 返回存储的 `chat.completion` 对象，含 `metadata`。 |
+| `POST /v1/chat/completions/{completion_id}` | 请求体为 `{"metadata": {...}}`。整个 metadata 对象会被替换（传 `{}` 即清空），并返回更新后的 completion。`metadata` 为必填。 |
+| `DELETE /v1/chat/completions/{completion_id}` | 删除记录，返回 `{"id": "...", "object": "chat.completion.deleted", "deleted": true}`。 |
+| `GET /v1/chat/completions/{completion_id}/messages` | 列出该 completion 的输入消息。与列表路由一样接受 `limit`、`order` 与 `after`。 |
+
+消息列表中的每一条是你发送的消息，外加生成的 `id`（`msg_...`）。原本 `content` 是数组时，`content` 会变成拼接后的文本，而 `content_parts` 保留 `text` 与 `image_url` 块；否则 `content_parts` 为 `null`。
+
+## 示例
+
+<Tabs items={["curl", "Python", "JavaScript"]}>
+<Tab value="curl">
+
+```bash
+# Store a completion
+curl http://localhost:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "local",
+    "store": true,
+    "metadata": {"session": "demo"},
+    "messages": [{"role": "user", "content": "Say hello."}]
+  }'
+
+# Fetch, relabel and delete it
+curl http://localhost:8000/v1/chat/completions/chatcmpl-9f2c4e1ab07d4c3e8a51b2c6
+curl -X POST http://localhost:8000/v1/chat/completions/chatcmpl-9f2c4e1ab07d4c3e8a51b2c6 \
+  -H "Content-Type: application/json" -d '{"metadata": {"session": "demo", "reviewed": "yes"}}'
+curl http://localhost:8000/v1/chat/completions/chatcmpl-9f2c4e1ab07d4c3e8a51b2c6/messages
+curl -X DELETE http://localhost:8000/v1/chat/completions/chatcmpl-9f2c4e1ab07d4c3e8a51b2c6
+```
+
+</Tab>
+<Tab value="Python">
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="http://localhost:8000/v1", api_key="sk-local")
+
+created = client.chat.completions.create(
+    model="local",
+    store=True,
+    metadata={"session": "demo"},
+    messages=[{"role": "user", "content": "Say hello."}],
+)
+
+stored = client.chat.completions.retrieve(created.id)
+client.chat.completions.update(created.id, metadata={"session": "demo", "reviewed": "yes"})
+
+for c in client.chat.completions.list(metadata={"session": "demo"}, order="desc", limit=10):
+    print(c.id, c.metadata)
+
+for m in client.chat.completions.messages.list(created.id):
+    print(m.role, m.content)
+
+client.chat.completions.delete(created.id)
+```
+
+</Tab>
+<Tab value="JavaScript">
+
+```ts
+import OpenAI from "openai";
+
+const client = new OpenAI({ baseURL: "http://localhost:8000/v1", apiKey: "sk-local" });
+
+const created = await client.chat.completions.create({
+  model: "local",
+  store: true,
+  metadata: { session: "demo" },
+  messages: [{ role: "user", content: "Say hello." }],
+});
+
+const stored = await client.chat.completions.retrieve(created.id);
+await client.chat.completions.update(created.id, { metadata: { reviewed: "yes" } });
+for await (const c of client.chat.completions.list({ order: "desc", limit: 10 })) {
+  console.log(c.id);
+}
+await client.chat.completions.delete(created.id);
+```
+
+</Tab>
+</Tabs>
+
+## 错误
+
+错误采用 OpenAI 格式 `{"error": {"message", "type": "invalid_request_error", "param", "code"}}`。
+
+| 状态码 | `code` | 时机 |
+| --- | --- | --- |
+| 400 | `invalid_type`、`invalid_value` | `limit` 不是整数或不在 `1` 至 `100`；`order` 不是 `asc` 或 `desc`；`after` 不在列表中（`param` 会指出字段）。 |
+| 400 | `invalid_json` | 更新请求的请求体不是 JSON。 |
+| 400 | `missing_required_parameter` | 更新请求的请求体没有 `metadata`。 |
+| 400 | `invalid_type`、`metadata_too_large` | Metadata 不是字符串对象、超过 16 组键值，或键或值太长。 |
+| 401 | | 已配置 token，但缺少或不正确。 |
+| 404 | `not_found` | 没有匹配该 id 的已存储 completion。看起来不像 `chatcmpl-...` 的 id 同样是 `404`。 |
+
+## 支持情况
+
+| 功能 | 状态 |
+| --- | --- |
+| 非流式与流式 chat completion 上的 `store: true` | <Support status="supported">支持</Support> |
+| 以 `limit`、`order`、`after`、`model`、`metadata[...]` 过滤列表 | <Support status="supported">支持</Support> |
+| 查询、更新 metadata、删除、列出消息 | <Support status="supported">支持</Support> |
+| 在这里存储 Responses API 对象 | <Support status="unsupported">不适用；见 Responses</Support> |
+| 本地磁盘以外的存储、单条记录过期 | <Support status="unsupported">暂不支持；只有数量上限会淘汰旧记录</Support> |
+
+## 相关页面
+
+- [Chat completions](/docs/api/chat-completions)
+- [Responses](/docs/api/responses)
+- [API 概览](/docs/api/overview)
+- [配置](/docs/guides/configuration)
