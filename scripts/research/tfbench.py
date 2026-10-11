@@ -630,6 +630,19 @@ def parse_phases(text):
     return set(phases)
 
 
+def part_corpus(s, out, a):
+    """Cold decode of many distinct prompts on one server (averages out greedy-divergence content).
+
+    A reply that stops early is recorded with ``short`` set instead of aborting the job, so the
+    analysis counts only complete cells and reports how many were dropped."""
+    n_dec = int(a.decode_tokens)
+    for path in [Path(x) for x in a.prompt_files.split(",") if x]:
+        r = send(s.url, req(s.model, path.read_text(), n_dec))
+        r["text"] = r.pop("_text")
+        short = r.get("finish") != "length" or r.get("ct") != n_dec
+        emit(out, part="corpus", prompt=path.stem, phase="cold", short=short, **r)
+
+
 def part_decode(s, out, a):
     phases = parse_phases(a.phases)
     n_dec = int(a.decode_tokens)
@@ -1036,6 +1049,11 @@ def parse_args(argv=None):
         help="JSON object merged into every decode request body (e.g. penalties)",
     )
     ap.add_argument(
+        "--prompt-files",
+        default="",
+        help="corpus part: comma list of prompt files, one cold request each",
+    )
+    ap.add_argument(
         "--phases",
         default=",".join(ALL_PHASES),
         help="decode phases to run (comma list of cold,warm,turn2,specoff); the checks stay "
@@ -1065,9 +1083,10 @@ def main():
         "conc32",
         "promote",
         "forced",
+        "corpus",
     ):
         raise ValueError(
-            "supported parts: decode, conc, agent, ca, needle, conc32, promote, forced"
+            "supported parts: decode, conc, agent, ca, needle, conc32, promote, forced, corpus"
         )
     if a.dry_run:
         if a.part == "decode" and not a.smoke:
@@ -1154,6 +1173,7 @@ def main():
                     "conc32": part_conc32,
                     "promote": part_promote,
                     "forced": part_forced,
+                    "corpus": part_corpus,
                 }[a.part](s, out, a)
             s.verify_spec_mode()
             mem = getattr(s, "mem", None)
