@@ -1595,13 +1595,18 @@ class VLMEngine:
         started = False
         call = None
         try:
+            # Wait first, prepare after: preparing tokenizes the whole conversation on the MLX
+            # executor, which a back-to-back request would queue behind (warm TTFT +10-17 ms).
+            delay = float(settings.get("YUNSHU_NEXT_TURN_DELAY_S") or 0.0)
+            if delay > 0:
+                await asyncio.sleep(delay)
+            if ev.is_set():
+                next_turn.record("cancelled")
+                return
             call = await loop.run_in_executor(self._executor, _prepare)
             if call is None:
                 logger.debug("next-turn rehearsal skipped (no clean cut)")
                 return
-            delay = float(settings.get("YUNSHU_NEXT_TURN_DELAY_S") or 0.0)
-            if delay > 0:
-                await asyncio.sleep(delay)
             if not state.submit():
                 next_turn.record("cancelled")
                 return

@@ -428,3 +428,23 @@ def test_early_settle_does_not_tokenize_before_the_rehearsal_started(monkeypatch
         eng._settle_rehearsal_early([{"role": "user", "content": "q"}], None, None)
     )
     assert ev.is_set()
+
+
+def test_nothing_is_tokenized_during_the_start_delay(monkeypatch):
+    eng, calls = _engine(monkeypatch)
+    _delay(monkeypatch, 0.05)
+    seen = []
+    real = eng._tokenize_with_cache
+    eng._tokenize_with_cache = lambda *a, **k: (seen.append(1), real(*a, **k))[1]
+
+    async def main():
+        _go(eng)
+        await asyncio.sleep(0.01)
+        assert (
+            seen == []
+        )  # a back-to-back request must not queue behind our tokenization
+        eng._cancel_rehearsal()
+        await eng._rehearsal_task
+
+    asyncio.run(main())
+    assert seen == [] and calls == []
