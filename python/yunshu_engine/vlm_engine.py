@@ -1705,9 +1705,10 @@ class VLMEngine:
                 self._rehearsal_cancel = None
             if getattr(self, "_rehearsal_state", None) is state:
                 self._rehearsal_state = None
-            mgr = getattr(self._apc_backend, "manager", None)
-            if mgr is not None and getattr(mgr, "keep_prior_for", None) is not None:
-                mgr.keep_prior_for = None
+            # keep_prior_for stays set: the SSD write of the rehearsal's checkpoint completes in
+            # the background after this task ends, and its supersede hook must still skip the
+            # previous request (a tombstone there vetoes a retry's RAM hit). The next
+            # rehearsal replaces it.
 
     def backend_capabilities(self, lm: Any = None) -> Any:
         """This backbone's cache layout via the shared ``model_backend`` layer

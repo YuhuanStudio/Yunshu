@@ -913,3 +913,24 @@ def test_rehearsal_checkpoint_does_not_supersede_the_request_just_served():
             cache, n = m.lookup_exact_cache(a[:97])  # the same prompt again
             assert n == 96 and cache is not None
         m.keep_prior_for = None
+
+
+def test_rehearsal_guard_covers_the_late_ssd_supersede_hook():
+    """The SSD write of the rehearsal's checkpoint finishes after the rehearsal task ended; its
+    hook must still leave the previous request's checkpoint (and no tombstone) alone."""
+    a = list(range(1000, 1100))
+    m = _mgr()
+    m.begin_request()
+    m.store_exact_cache(a[:96], _cache(96))
+    m.keep_prior_for = tuple(a[:100] + [1, 2, 3])
+
+    class Disk:
+        dropped = []
+
+        def exact_prefixes_of(self, *a, **k):
+            raise AssertionError("guarded: must not even look for prefixes to drop")
+
+    m.disk = Disk()
+    m._born[12345] = 99
+    m._disk_superseded_by(12345, a[:100] + [1, 2, 3], 0)
+    assert m.disk_superseded == 0

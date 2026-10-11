@@ -1220,8 +1220,9 @@ class YunshuAPCManager(APCManager):
         self._last_shared_keys: list[int] = []
         self._nbytes_memo: dict[int, tuple[Any, int]] = {}
         self._anchors: dict[int, int] = {}  # retained superseded checkpoint -> length
-        # token ids of the running next-turn rehearsal (vlm_engine._rehearse); its checkpoints
-        # are added without superseding the previous request's
+        # token ids of the latest next-turn rehearsal (vlm_engine._rehearse); its checkpoints
+        # (RAM, and the SSD writes that finish later) are added without superseding the
+        # previous request's
         self.keep_prior_for: tuple[int, ...] | None = None
         # entry key -> (root buffer owner key, K/V bytes it views instead of owning), and the
         # K/V bytes of each root buffer: lets resident_bytes count a shared buffer once.
