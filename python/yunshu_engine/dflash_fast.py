@@ -571,6 +571,11 @@ def rounds(
                     draft_vocab.learn(new_tokens)
             finally:
                 lane_linear.set_sum_reuse(previous_sums)
+            # start the commit and the next context on the GPU before the consumer runs
+            mx.async_eval(
+                hidden,
+                [c.state for c in cache if hasattr(c, "state")],
+            )
             counted = False
             for token in new_tokens:
                 if copy is not None:
@@ -582,7 +587,11 @@ def rounds(
                         )
                         counted = True
                     draft.copy_total_tokens = getattr(draft, "copy_total_tokens", 0) + 1
+                t_yield = time.perf_counter()
                 yield token, None
+                prof["yield"] = (
+                    prof.get("yield", 0.0) + (time.perf_counter() - t_yield) * 1000
+                )
                 emitted += 1
                 if emitted >= max_tokens:
                     return
@@ -596,6 +605,10 @@ def rounds(
                 prof["draft"] / r,
                 prof["verify"] / r,
                 prof["commit"] / r,
+            )
+            logger.info(
+                "DFlash host between rounds: consumer (yield) %.2f ms/round",
+                prof.get("yield", 0.0) / r,
             )
             from . import tree_verify as _tv
 
