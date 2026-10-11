@@ -83,7 +83,23 @@ def compute_lattice_gpu(
 
         gpu_window.stage_begin()
         t0 = time.perf_counter()
-    dh = drafter._hidden(inputs, hidden, cache)[:, 1:]
+    if prof:
+        # the vendor ``_hidden`` loop, with a counted stage after each piece
+        h = drafter._embed_input_tokens(inputs)
+        t0 = tv._tick("drafter_embed_ms", h, t0)
+        h_ctx = drafter.hidden_norm(drafter.fc(hidden))
+        t0 = tv._tick("drafter_fc_ms", h_ctx, t0)
+        projected = drafter._project_context_kv(h_ctx)
+        t0 = tv._tick(
+            "drafter_ctxkv_ms", [h_ctx] if projected is None else projected, t0
+        )
+        for index, (layer, c) in enumerate(zip(drafter.layers, cache, strict=True)):
+            layer_ctx = None if projected is None else projected[index]
+            h = layer(h, h_ctx, drafter.rope, c, layer_ctx)
+            t0 = tv._tick(f"drafter_layer{index}_ms", h, t0)
+        dh = drafter.norm(h)[:, 1:]
+    else:
+        dh = drafter._hidden(inputs, hidden, cache)[:, 1:]
     if prof:
         t0 = tv._tick("drafter_layers_ms", dh, t0)
     vocab = getattr(drafter, "_draft_vocab", None)
