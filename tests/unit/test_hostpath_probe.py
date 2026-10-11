@@ -50,3 +50,23 @@ def test_stream_measures_and_fails_closed():
     else:
         raise AssertionError("truncated stream must fail")
     s.shutdown()
+
+
+def test_short_summary_medians():
+    sys.path.insert(
+        0, str(Path(__file__).resolve().parents[2] / "scripts" / "research")
+    )
+    import hostpath_short as hs
+
+    rows = [
+        {
+            "first_visible_ms": 100.0,
+            "events": [
+                {"name": "a", "duration_ms": 2.0},
+                {"name": "a", "duration_ms": 1.0},
+            ],
+        },
+        {"first_visible_ms": 120.0, "events": [{"name": "a", "duration_ms": 5.0}]},
+    ]
+    s = hs.summarize(rows)
+    assert s["first_visible_ms_med"] == 110.0 and s["events"]["a"]["ms_med"] == 4.0
