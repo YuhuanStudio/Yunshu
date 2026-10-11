@@ -17,7 +17,7 @@ class H(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.end_headers()
-        for i in range(3):
+        for _ in range(3):
             c = {"choices": [{"delta": {"content": "x"}}]}
             self.wfile.write(b"data: " + json.dumps(c).encode() + b"\n\n")
         u = {"choices": [], "usage": {"completion_tokens": 3, "prompt_tokens": 5}}

@@ -19,7 +19,6 @@ import argparse
 import contextlib
 import http.client
 import json
-import os
 import statistics
 import subprocess
 import sys
