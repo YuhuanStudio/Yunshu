@@ -83,3 +83,11 @@ def test_rehearsal_length_ends_one_guard_after_the_stride_multiple():
     )  # guard would pass the prefix
     assert nt.rehearsal_length(1500, 2048, 1) is None
     assert nt.rehearsal_length(5000, 0, 1) == 5000  # no canonical grid: rehearse it all
+
+
+def test_next_turn_prefill_default_is_exact_with_off_opt_out():
+    from yunshu_engine import settings
+
+    spec = settings.REGISTRY["YUNSHU_NEXT_TURN_PREFILL"]
+    assert spec.default == "exact" and spec.stability == "stable"
+    assert "off" in spec.choices
