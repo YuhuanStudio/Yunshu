@@ -894,3 +894,22 @@ def test_console_snapshot_counts_hits_and_omits_token_content():
     assert snap["entries"][0]["hits"] == 1
     assert snap["events"][-1]["request_id"] == "http-id"
     assert all("token_ids" not in row for row in snap["entries"])
+
+
+def test_rehearsal_checkpoint_does_not_supersede_the_request_just_served():
+    """yv gate agent.restart_idle: a retry of the same prompt must still find its final checkpoint."""
+    a = list(range(1000, 1100))
+    reply = [1, 2, 3, 4]
+    for rehearsing, kept in ((False, [103]), (True, [96, 103])):
+        m = _mgr()
+        m.begin_request()
+        m.store_exact_cache(a[:96], _cache(96))  # the served request's final checkpoint
+        m.begin_request()
+        if rehearsing:
+            m.keep_prior_for = tuple(a[:100] + reply[:3])
+        m.store_exact_cache(a[:100] + reply[:3], _cache(103))
+        assert sorted(len(e.token_ids) for e in m._exact_cache.values()) == kept
+        if rehearsing:
+            cache, n = m.lookup_exact_cache(a[:97])  # the same prompt again
+            assert n == 96 and cache is not None
+        m.keep_prior_for = None

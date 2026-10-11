@@ -1220,6 +1220,9 @@ class YunshuAPCManager(APCManager):
         self._last_shared_keys: list[int] = []
         self._nbytes_memo: dict[int, tuple[Any, int]] = {}
         self._anchors: dict[int, int] = {}  # retained superseded checkpoint -> length
+        # token ids of the running next-turn rehearsal (vlm_engine._rehearse); its checkpoints
+        # are added without superseding the previous request's
+        self.keep_prior_for: tuple[int, ...] | None = None
         # entry key -> (root buffer owner key, K/V bytes it views instead of owning), and the
         # K/V bytes of each root buffer: lets resident_bytes count a shared buffer once.
         self._kv_share: dict[int, tuple[int, int]] = {}
@@ -1327,6 +1330,9 @@ class YunshuAPCManager(APCManager):
         RAM; without this a tier fills with stale copies of every session and the cache the next
         request needs is the one LRU pushes out first. Heads are kept, and so is anything this
         process did not store or restore itself (it may serve another session)."""
+        keep_for = self.keep_prior_for
+        if keep_for is not None and tuple(tokens) == keep_for[: len(tokens)]:
+            return  # a next-turn rehearsal does not retire the request just served
         with self._plock:
             newest = self._born.get(cache_hash)
             heads = set(self._head_keys) | set(self._retention) | set(self._anchors)
@@ -1645,6 +1651,14 @@ class YunshuAPCManager(APCManager):
         so the byte and entry budgets evict them before anything newer.
         """
         tokens = tuple(int(t) for t in token_ids)
+        keep_for = self.keep_prior_for
+        if keep_for is not None and tokens == keep_for[: len(tokens)]:
+            # A next-turn rehearsal prefills a conversation nobody has asked for yet: it must
+            # not thin the checkpoints of the request that was just served, or a retry or
+            # regenerate of that same request (an identical prompt) finds its final checkpoint
+            # gone and restores from an older anchor (yv gate agent.restart_idle: 28159 of
+            # 41375 cached).
+            return
         with self._plock:
             protected = set(self._head_keys) | set(self._retention)
             anchors = dict(self._anchors)

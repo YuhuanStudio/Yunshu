@@ -1640,6 +1640,8 @@ class VLMEngine:
                 kwargs={},
             )
             state.set_ids(ids)
+            if manager is not None:
+                manager.keep_prior_for = tuple(int(t) for t in ids)
             return _RunnerCall(
                 self._generate_vlm_runner_text,
                 ids,
@@ -1703,6 +1705,9 @@ class VLMEngine:
                 self._rehearsal_cancel = None
             if getattr(self, "_rehearsal_state", None) is state:
                 self._rehearsal_state = None
+            mgr = getattr(self._apc_backend, "manager", None)
+            if mgr is not None and getattr(mgr, "keep_prior_for", None) is not None:
+                mgr.keep_prior_for = None
 
     def backend_capabilities(self, lm: Any = None) -> Any:
         """This backbone's cache layout via the shared ``model_backend`` layer
