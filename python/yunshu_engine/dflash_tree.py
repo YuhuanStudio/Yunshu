@@ -79,8 +79,27 @@ def compute_lattice_gpu(
         import time
 
         mx.eval(inputs, hidden)
+        from . import gpu_window
+
+        gpu_window.stage_begin()
         t0 = time.perf_counter()
-    dh = drafter._hidden(inputs, hidden, cache)[:, 1:]
+    if prof:
+        # the vendor ``_hidden`` loop, with a counted stage after each piece
+        h = drafter._embed_input_tokens(inputs)
+        t0 = tv._tick("drafter_embed_ms", h, t0)
+        h_ctx = drafter.hidden_norm(drafter.fc(hidden))
+        t0 = tv._tick("drafter_fc_ms", h_ctx, t0)
+        projected = drafter._project_context_kv(h_ctx)
+        t0 = tv._tick(
+            "drafter_ctxkv_ms", [h_ctx] if projected is None else projected, t0
+        )
+        for index, (layer, c) in enumerate(zip(drafter.layers, cache, strict=True)):
+            layer_ctx = None if projected is None else projected[index]
+            h = layer(h, h_ctx, drafter.rope, c, layer_ctx)
+            t0 = tv._tick(f"drafter_layer{index}_ms", h, t0)
+        dh = drafter.norm(h)[:, 1:]
+    else:
+        dh = drafter._hidden(inputs, hidden, cache)[:, 1:]
     if prof:
         t0 = tv._tick("drafter_layers_ms", dh, t0)
     vocab = getattr(drafter, "_draft_vocab", None)
@@ -251,6 +270,35 @@ def _stacked_mlp(mlp: Any, gate_up: Any) -> Any:
             return self.down_proj(swiglu(both[..., :half], both[..., half:]))
 
     return StackedMLP()
+
+
+def share_masks() -> bool:
+    """Build each attention mask once per round instead of once per drafter layer.
+
+    The five layers of a round share (rows, context length, window): the mask is a pure
+    function of those, so later layers reuse the first one's array (TensorFold keeps the
+    same per-round mask table in its ``_dflash_attend``). Idempotent."""
+    from mlx_vlm.speculative.drafters.qwen3_dflash import dflash as vendor
+
+    if getattr(vendor.create_causal_mask, "_yunshu_shared", False):
+        return True
+    original = vendor.create_causal_mask
+    table: dict = {}
+
+    def shared(n, offset=0, window_size=None, *args, **kwargs):
+        if args or kwargs:
+            return original(n, offset, window_size, *args, **kwargs)
+        key = (int(n), int(offset), window_size)
+        mask = table.get(key)
+        if mask is None:
+            if len(table) >= 32:
+                table.clear()
+            mask = table[key] = original(n, offset=offset, window_size=window_size)
+        return mask
+
+    shared._yunshu_shared = True  # type: ignore[attr-defined]
+    vendor.create_causal_mask = shared
+    return True
 
 
 def stack_projections(drafter: Any) -> int:

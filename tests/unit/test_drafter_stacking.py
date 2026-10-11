@@ -43,3 +43,19 @@ def test_stacked_mlp_matches_the_gated_mlp():
     want = mlp(x)
     stacked = _stacked_mlp(mlp, _stack_linears(mlp.gate_proj, mlp.up_proj))
     assert mx.allclose(stacked(x), want, atol=1e-4).item()
+
+
+def test_shared_masks_equal_fresh_masks_and_are_reused():
+    from mlx_vlm.speculative.drafters.qwen3_dflash import dflash as vendor
+
+    from yunshu_engine.dflash_tree import share_masks
+
+    fresh = vendor.create_causal_mask
+    share_masks()
+    shared = vendor.create_causal_mask
+    first = shared(16, offset=100, window_size=2048)
+    assert shared(16, offset=100, window_size=2048) is first
+    original = getattr(fresh, "__wrapped__", None) or fresh
+    want = original(16, offset=100, window_size=2048)
+    assert mx.array_equal(first, want).item()
+    assert shared(16, offset=101, window_size=2048) is not first

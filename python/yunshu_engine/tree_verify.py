@@ -924,6 +924,12 @@ def _tick(name: str, arrays, t0: float) -> float:
     mx.eval(arrays)
     now = time.perf_counter()
     PROFILE[name] = PROFILE.get(name, 0.0) + (now - t0) * 1000
+    from . import gpu_window
+
+    count = gpu_window.stage_end()
+    if count:
+        key = name[:-3] + "_disp" if name.endswith("_ms") else name + "_disp"
+        PROFILE[key] = PROFILE.get(key, 0.0) + count
     return now
 
 
@@ -969,6 +975,9 @@ def _tree_forward(
 
         PROFILE["rounds"] += 1
         mx.eval(h, normed)
+        from . import gpu_window
+
+        gpu_window.stage_begin()
         t0 = time.perf_counter()
     for i, (layer, c) in enumerate(zip(layers, cache, strict=True)):
         if layer.is_linear:
@@ -1056,6 +1065,16 @@ def compact_kv(caches: list, src: mx.array, n0: int, m: int) -> None:
         c.values[..., n0 + 1 : n0 + m, :] = v
 
 
+def conv_tail(conv_prev, mixed, path, conv_idx, tail_idx):
+    """The conv state after committing ``path``: its last three inputs. With three or more
+    committed rows they all come from the window, so one gather replaces the concatenation of
+    the old tail with the window plus a gather (same values, one dispatch fewer per layer)."""
+    if tail_idx is not None:
+        return mx.take(mixed[0], tail_idx, axis=0)[None]
+    seq = mx.concatenate([conv_prev, mixed], axis=1)[0]
+    return mx.take(seq, conv_idx, axis=0)[None]
+
+
 def tree_commit(lm, cache: list, res: TreeResult, path: list[int]) -> None:
     """Keep the window rows in ``path`` (root first, each row a child of the
     previous one): the caches end as if those tokens had been decoded one by one."""
@@ -1070,6 +1089,7 @@ def tree_commit(lm, cache: list, res: TreeResult, path: list[int]) -> None:
     path_arr = mx.array(path + [0] * (w - m), dtype=mx.int32)
     count_arr = mx.array([m], dtype=mx.int32)
     conv_idx = mx.array(([0, 1, 2] + [3 + r for r in path])[-3:], dtype=mx.int32)
+    tail_idx = mx.array(path[-3:], dtype=mx.int32) if len(path) >= 3 else None
     compact = path != list(range(m))
     if compact:
         src = mx.array([n0 + r for r in path[1:]], dtype=mx.int32)
@@ -1089,8 +1109,7 @@ def tree_commit(lm, cache: list, res: TreeResult, path: list[int]) -> None:
                 else replay_path(layer, state, rows, path_arr, count_arr)
             )
             c._omlx_gdn_pending = None
-            seq = mx.concatenate([conv_prev, mixed], axis=1)[0]
-            c[0] = mx.take(seq, conv_idx, axis=0)[None]
+            c[0] = conv_tail(conv_prev, mixed, path, conv_idx, tail_idx)
             if hasattr(c, "advance"):
                 c.advance(m)
                 q35._qwen3_5_advance_lengths_info(c, m)

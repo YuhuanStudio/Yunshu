@@ -132,6 +132,18 @@ def _install_row_capture() -> None:
     cls.__call__ = __call__
 
 
+def neutral_context(drafter: Any):
+    """One all-zero context position for a drafter that has seen no target hidden states.
+
+    A row promoted onto the lane from the shared batch has no captured states until its first
+    verify. Drafts only propose (the target verifies every one), so a neutral context costs
+    acceptance for that round and never a token; later rounds carry the real states."""
+    import mlx.core as mx
+
+    width = len(drafter.config.target_layer_ids) * int(drafter.config.hidden_size)
+    return mx.zeros((1, 1, width), dtype=mx.bfloat16)
+
+
 def _install_context_window() -> None:
     from mlx_vlm.speculative import utils as spec_utils
     from mlx_vlm.speculative.drafters.qwen3_dflash.dflash import DFlashDraftModel
@@ -139,6 +151,8 @@ def _install_context_window() -> None:
     orig_hidden = DFlashDraftModel._hidden
 
     def _hidden(self, inputs, target_hidden, cache):
+        if target_hidden is None:
+            target_hidden = neutral_context(self)
         keep = context_window(self)
         length = int(target_hidden.shape[1])
         if keep is not None and length > keep:
