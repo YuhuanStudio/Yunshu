@@ -44,6 +44,32 @@ def clone_native_restore(
     return restored
 
 
+def extract_single_row(cache: Any) -> Any | None:
+    """``BatchKVCache.extract(0)`` for a one-row cache without a GPU round trip per layer.
+
+    Upstream reads ``left_padding[idx].item()``: slicing builds a graph node, so every full-attention
+    layer commits a command buffer and waits (about 0.25 ms each, 4 ms for the 27B's 16 layers) on the
+    first-token path. ``left_padding`` itself is already computed, so reading it as a list is free.
+    The arrays produced are the same slices.
+    """
+    import mlx.core as mx
+    from mlx_vlm.models.cache import BatchKVCache, KVCache
+
+    if (
+        type(cache) is not BatchKVCache
+        or not cache.is_single_row()
+        or cache.empty()
+        or cache.keys is None
+    ):
+        return None
+    padding = int(cache.left_padding.tolist()[0])
+    out = KVCache()
+    out.keys = mx.contiguous(cache.keys[0:1, :, padding : cache._idx])
+    out.values = mx.contiguous(cache.values[0:1, :, padding : cache._idx])
+    out.offset = out.keys.shape[2]
+    return out
+
+
 def install() -> None:
     """Install once; only exact native cache restores use view handles."""
     from mlx_vlm import apc_adapters
@@ -53,6 +79,9 @@ def install() -> None:
         return
 
     def clone(cache: Any, *, min_capacity_tokens: int | None, eval_targets: list[Any]):
+        row = extract_single_row(cache)
+        if row is not None:
+            cache = row
         restored = clone_native_restore(
             cache, min_capacity_tokens=min_capacity_tokens, eval_targets=eval_targets
         )

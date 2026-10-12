@@ -2345,7 +2345,7 @@
       "signature": "(c, *, min_capacity_tokens, eval_targets)",
       "license": "MIT",
       "commit": "v0.7.4",
-      "why": "native APC restore uses independent copy-on-write handles before direct capacity reservation; stores and custom caches keep upstream detached snapshots",
+      "why": "native APC restore uses independent copy-on-write handles before direct capacity reservation; a one-row BatchKVCache is extracted with left_padding read as a list (upstream .item() on a slice costs a GPU round trip per layer on the first-token path); stores and custom caches keep upstream detached snapshots",
       "source_sha256": "2f92c734175d88d663e5c687a47fd71c9ea2c741bb0fb94f9231145603f9e4d8",
       "installed_version": "0.7.6"
     },
