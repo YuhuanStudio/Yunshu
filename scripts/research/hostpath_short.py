@@ -19,6 +19,23 @@ import time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+PROF = """
+import cProfile, io, pstats, itertools, pathlib
+_d = pathlib.Path(%r); _d.mkdir(parents=True, exist_ok=True)
+_n = itertools.count()
+def _prof(cls, name):
+    inner = getattr(cls, name)
+    def run(self, *a, **k):
+        pr = cProfile.Profile()
+        try:
+            return pr.runcall(inner, self, *a, **k)
+        finally:
+            b = io.StringIO(); pstats.Stats(pr, stream=b).sort_stats('cumtime').print_stats(14)
+            (_d / f"{name}-{next(_n)}.txt").write_text(b.getvalue())
+    setattr(cls, name, run)
+_prof(_Coordinator, 'store_checkpoint')
+_prof(_Coordinator, 'observe_cache')
+"""
 
 
 def summarize(rows):
@@ -51,6 +68,9 @@ def main():
     p.add_argument("--out", type=Path, required=True)
     p.add_argument("--n", type=int, default=8)
     p.add_argument(
+        "--prof", action="store_true", help="cProfile APC store/observe calls"
+    )
+    p.add_argument(
         "--reps",
         type=int,
         nargs="*",
@@ -82,7 +102,8 @@ def main():
         "tr.wrap(mx, 'async_eval', 'mx.async_eval')\n"
         "tr.wrap(ar.PromptProcessingBatch, '_store_apc_exact_checkpoints')\n"
         "tr.wrap(_Coordinator, 'observe_cache')\n"
-        "from yunshu_cli import main\nmain()\n"
+        + (PROF % str(a.out.with_suffix(".prof")) if a.prof else "")
+        + "from yunshu_cli import main\nmain()\n"
     )
     launcher.chmod(0o700)
     t.YUNSHU_BIN = str(launcher)

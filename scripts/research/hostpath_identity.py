@@ -35,23 +35,37 @@ def main():
         for kind in ("prose", "code"):
             text = t.load_prompt(f"{kind}-1024")
             for k in range(3):
-                r = t.send(
-                    server.url,
-                    t.req(server.model, f"[{k}]\n" + text + t.LONG_ASK, 384, seed=7),
-                )
-                r.pop("_text")
-                rows.append(
-                    dict(
-                        ms=a.ms,
-                        kind=kind,
-                        k=k,
-                        sha=r["sha"],
-                        dec_tps=r["dec_tps"],
-                        ttft_s=r["ttft_s"],
-                        ct=r["ct"],
+                for phase in (
+                    "cold",
+                    "warm",
+                ):  # warm = the same prompt again, an APC hit
+                    r = t.send(
+                        server.url,
+                        t.req(
+                            server.model, f"[{k}]\n" + text + t.LONG_ASK, 384, seed=7
+                        ),
                     )
-                )
-                print(json.dumps(rows[-1]), flush=True)
+                    r.pop("_text")
+                    rows.append(
+                        dict(
+                            ms=a.ms,
+                            kind=kind,
+                            k=k,
+                            phase=phase,
+                            sha=r["sha"],
+                            dec_tps=r["dec_tps"],
+                            ttft_s=r["ttft_s"],
+                            ct=r["ct"],
+                            cached=r["cached"],
+                        )
+                    )
+                    print(json.dumps(rows[-1]), flush=True)
+        by = {}
+        for r in rows:
+            by.setdefault((r["kind"], r["k"]), {})[r["phase"]] = r
+        for key, pair in by.items():
+            if pair["cold"]["sha"] != pair["warm"]["sha"] or not pair["warm"]["cached"]:
+                raise RuntimeError(f"hit != miss or no hit for {key}: {pair}")
         if any(r["ct"] < 300 for r in rows):
             raise RuntimeError("short generation")
         a.out.write_text("\n".join(map(json.dumps, rows)) + "\n")
