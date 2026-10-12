@@ -247,11 +247,74 @@ def _replay_kernel():
     return _KERNELS["replay"]
 
 
+def _replay_tail_kernel():
+    if "replay_tail" not in _KERNELS:
+        source = (
+            (tv._REPLAY_PATH + tv._TAIL_COPY)
+            .replace("gdn_decay(pa[gi], dtb, neg_a)", "G[gi]")
+            .replace("gdn_beta(pb[gi])", "BETA[gi]")
+        )
+        _KERNELS["replay_tail"] = mx.fast.metal_kernel(
+            name=_name("yunshu_tree_gate_replay_tail", source),
+            input_names=[
+                "state_in",
+                "A_log",
+                "dt_bias",
+                "pk",
+                "pv",
+                "G",
+                "BETA",
+                "path",
+                "count",
+                *tv.TAIL_INPUTS,
+            ],
+            output_names=["state_out", "tail_out"],
+            source=source,
+            header=tv.gv._HELPERS,
+        )
+    return _KERNELS["replay_tail"]
+
+
 class GateRows(tuple):
     def __new__(cls, k, v, a, b, g, beta):
         result = super().__new__(cls, (k, v, a, b))
         result.gates = (g, beta)
         return result
+
+    def replay_tail(self, layer, state, path, count, conv_prev, mixed, conv_idx):
+        k, v, _, _ = self
+        g, beta = self.gates
+        geo = tv.gv._geometry(layer, 1)
+        out, tail = _replay_tail_kernel()(
+            inputs=[
+                state,
+                layer.A_log,
+                layer.dt_bias,
+                k,
+                v,
+                g,
+                beta,
+                path,
+                count,
+                conv_prev,
+                mixed,
+                conv_idx,
+            ],
+            template=[
+                ("InT", k.dtype),
+                ("Hk", geo["Hk"]),
+                ("Hv", geo["Hv"]),
+                ("Dk", geo["Dk"]),
+                ("Dv", geo["Dv"]),
+                ("P", k.shape[1]),
+                *tv.tail_template(conv_prev),
+            ],
+            grid=geo["grid"],
+            threadgroup=(32, 4, 1),
+            output_shapes=[state.shape, tuple(conv_prev.shape)],
+            output_dtypes=[mx.float32, conv_prev.dtype],
+        )
+        return out, tail
 
     def replay(self, layer, state, path, count):
         k, v, _, _ = self
@@ -530,7 +593,9 @@ def rounds(
                     _record_speculative_round(
                         draft, len(path) - 1, n, parents=parent_ids
                     )
+                t_m1 = time.perf_counter()
                 tv.tree_commit(lm, cache, result, path)
+                t_m2 = time.perf_counter()
                 captured = mx.concatenate(result.captured, axis=-1)[
                     :, mx.array(path, dtype=mx.int32)
                 ]
@@ -539,6 +604,7 @@ def rounds(
                     if hidden is None
                     else mx.concatenate([hidden, captured], axis=1)
                 )
+                t_m3 = time.perf_counter()
                 if copied:
                     copy.observe_copy(n, len(path) - 1)
                     if keep is not None and hidden.shape[1] > keep:
@@ -558,6 +624,13 @@ def rounds(
                     prof["draft"] += (t_drafted - started) * 1000
                     prof["verify"] += (t_verified - t_drafted) * 1000
                     prof["commit"] += (t_done - t_verified) * 1000
+                    for key, a_, b_ in (
+                        ("m_walk_record", t_verified, t_m1),
+                        ("m_tree_commit", t_m1, t_m2),
+                        ("m_hidden", t_m2, t_m3),
+                        ("m_copy_landed", t_m3, t_done),
+                    ):
+                        prof[key] = prof.get(key, 0.0) + (b_ - a_) * 1000
                 observe_budget(
                     budget,
                     copied,
@@ -607,8 +680,9 @@ def rounds(
                 prof["commit"] / r,
             )
             logger.info(
-                "DFlash host between rounds: consumer (yield) %.2f ms/round",
+                "DFlash host between rounds: consumer (yield) %.2f ms/round; commit parts %s",
                 prof.get("yield", 0.0) / r,
+                {k: round(v / r, 3) for k, v in prof.items() if k.startswith("m_")},
             )
             from . import tree_verify as _tv
 
