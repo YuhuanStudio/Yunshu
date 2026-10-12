@@ -1202,7 +1202,7 @@ def tree_commit(lm, cache: list, res: TreeResult, path: list[int]) -> None:
             fused = getattr(rows, "replay_tail", None)
             if fused is None and not hasattr(rows, "replay"):
                 fused = replay_path_tail
-                fused_args = (layer, state, rows, path_arr, count_arr)
+                fused_args: tuple[Any, ...] = (layer, state, rows, path_arr, count_arr)
             else:
                 fused_args = (layer, state, path_arr, count_arr)
             if fused is not None and tail_fits(layer, conv_prev, mixed):
