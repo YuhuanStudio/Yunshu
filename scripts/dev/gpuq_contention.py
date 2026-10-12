@@ -31,6 +31,7 @@ DEFAULTS = dict(
     max_wait_s=300.0,
     sample_s=30.0,
     foreign_model_cpu_pct=15.0,
+    swap_mb=64.0,
 )
 ENV = dict(
     threshold_pct="GPUQ_CPU_THRESHOLD",
@@ -38,6 +39,7 @@ ENV = dict(
     max_wait_s="GPUQ_QUIET_MAX_WAIT_S",
     sample_s="GPUQ_CPU_SAMPLE_S",
     foreign_model_cpu_pct="GPUQ_FOREIGN_MODEL_CPU",
+    swap_mb="GPUQ_SWAP_MB",
 )
 
 # Command lines of MLX model runtimes started outside gpuq. GPUQ_FOREIGN_MODEL_PATTERNS
@@ -117,6 +119,24 @@ def requires_quiet(job):
     # Only jobs that compare timings ask for a quiet CPU (--quiet); correctness and
     # smoke jobs run at once. Contention is still sampled and recorded for every job.
     return bool(job.get("quiet"))
+
+
+def swapout_bytes():
+    """Lifetime swap-out bytes from vm_stat, or None when it cannot be read.
+
+    A timing job that runs while the machine swaps measures the swap, not the engine
+    (a 64K Flash-Next run read 20 tok/s against a clean 52), so swap growth during a
+    job latches it as contended just like foreign CPU load.
+    """
+    try:
+        out = subprocess.run(
+            ["vm_stat"], capture_output=True, text=True, check=True, timeout=5
+        ).stdout
+        page = int(re.search(r"page size of (\d+) bytes", out).group(1))
+        pages = int(re.search(r"Swapouts:\s+(\d+)", out).group(1))
+        return pages * page
+    except (OSError, subprocess.SubprocessError, AttributeError, ValueError):
+        return None
 
 
 def process_snapshot():
@@ -309,6 +329,7 @@ class ContentionMonitor:
             # a verified quiet start with ps's historical first-sample estimate.
             row.update(self.job["cpu_admission_sample"])
         row["phase"] = phase
+        self._check_swap(phase)
         cpu = row["foreign_cpu_pct"]
         if cpu is not None:
             self.count += 1
@@ -354,6 +375,8 @@ class ContentionMonitor:
             foreign_cpu_sample_count=self.count,
             contention_config=self.cfg,
             foreign_model_processes=list(self.models.values()),
+            swapouts_start=self.job.get("swapouts_start"),
+            swap_mb=self.job.get("swap_mb", 0.0),
         )
         self.job.update(fields)
         data = self.read(self.path)
@@ -370,6 +393,24 @@ class ContentionMonitor:
         )
         self.last_poll = now
 
+    def _check_swap(self, phase):
+        cur = swapout_bytes()
+        reasons = self.job.setdefault("contention_reasons", [])
+        if cur is None:
+            if "swap_unreadable" not in reasons:
+                reasons.append("swap_unreadable")
+            self.job["contended"] = True
+            return
+        if self.job.get("swapouts_start") is None or phase == "start":
+            self.job.setdefault("swapouts_start", cur)
+            return
+        mb = max(0.0, (cur - self.job["swapouts_start"]) / 1e6)
+        self.job["swap_mb"] = round(mb, 1)
+        if mb > self.cfg["swap_mb"]:
+            self.job["contended"] = True
+            if "swap" not in reasons:
+                reasons.append("swap")
+
     def poll(self, now):
         if self.last_poll is None or now - self.last_poll >= min(
             2.0, self.cfg["sample_s"]
@@ -383,7 +424,7 @@ class ContentionMonitor:
         return (
             f"gpuq: CPU {state}; foreign CPU max={self.maximum:.1f}% "
             f"mean={mean_text}% threshold={self.cfg['threshold_pct']:.1f}% "
-            f"samples={self.count} reasons={self.job.get('contention_reasons', [])}"
+            f"samples={self.count} swap={self.job.get('swap_mb', 0.0):g}MB reasons={self.job.get('contention_reasons', [])}"
         )
 
 

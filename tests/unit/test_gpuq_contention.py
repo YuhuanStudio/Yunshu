@@ -127,6 +127,7 @@ def test_submit_quiet_cli_and_configuration(q, monkeypatch, capsys):
         max_wait_s=9,
         sample_s=30,
         foreign_model_cpu_pct=15,
+        swap_mb=64,
     )
 
 
@@ -885,3 +886,44 @@ def test_cli_and_ci_sandbox_commands_are_not_foreign_models():
     assert hit("/Users/u/Yunshu/.venv/bin/python -m yunshu_cli serve -m /models/27b")
     assert hit("/opt/homebrew/bin/yunshu serve -m qwen")
     assert hit("python -m mlx_lm.server --model x")
+
+
+def test_swap_growth_during_job_latches_contended(monkeypatch, q):
+    h = helper()
+    _fake_ps(monkeypatch, h, [_rows(0)] * 3, ARGS)
+    swap = iter([1_000_000_000, 1_010_000_000, 1_200_000_000])
+    monkeypatch.setattr(h, "swapout_bytes", lambda: next(swap))
+    job = dict(id="j", quiet=True, env={})
+    path = q.JOBS / "j.json"
+    q._write(path, job)
+    m = h.ContentionMonitor(job, path, q.LOGS, q._write, q._read)
+    m.record("start", now=100)
+    m.record("poll", now=102)  # +10 MB: under the 64 MB default
+    assert not job.get("contended")
+    m.record("poll", now=104)  # +200 MB swapped out while the job ran
+    assert job["contended"] and "swap" in job["contention_reasons"]
+    assert job["swap_mb"] == 200.0
+    assert q._read(path)["swap_mb"] == 200.0
+
+
+def test_unreadable_swap_fails_closed(monkeypatch, q):
+    h = helper()
+    _fake_ps(monkeypatch, h, [_rows(0)] * 2, ARGS)
+    monkeypatch.setattr(h, "swapout_bytes", lambda: None)
+    job = dict(id="j", quiet=True, env={})
+    path = q.JOBS / "j.json"
+    q._write(path, job)
+    m = h.ContentionMonitor(job, path, q.LOGS, q._write, q._read)
+    m.record("start", now=100)
+    assert job["contended"] and "swap_unreadable" in job["contention_reasons"]
+
+
+def test_swapout_bytes_reads_vm_stat(monkeypatch):
+    h = helper()
+    out = "Mach Virtual Memory Statistics: (page size of 16384 bytes)\nSwapouts:   3.\n"
+    monkeypatch.setattr(
+        h.subprocess,
+        "run",
+        lambda *a, **k: h.subprocess.CompletedProcess(a, 0, out, ""),
+    )
+    assert h.swapout_bytes() == 3 * 16384
