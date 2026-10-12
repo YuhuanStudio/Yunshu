@@ -943,7 +943,7 @@ def test_long_lookup_logs_the_decision(caplog):
     a = list(range(5000, 5000 + 4200))
     m.begin_request()
     m.store_exact_cache(a[:4192], _cache(4192))
-    with caplog.at_level(logging.INFO, logger="yunshu_engine.apc_manager"):
+    with caplog.at_level(logging.DEBUG, logger="yunshu_engine.apc_manager"):
         m.lookup_exact_cache(a[:4195])
     line = [r.getMessage() for r in caplog.records if "APC lookup:" in r.getMessage()]
     assert line and "prefix_entries=[4192]" in line[0] and "prompt=4195" in line[0]

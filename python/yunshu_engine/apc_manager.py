@@ -2047,8 +2047,8 @@ class YunshuAPCManager(APCManager):
     def _log_lookup(self, token_ids, chosen: int, stage: str) -> None:
         """One INFO line per long lookup: what the cache held for this prompt and what it chose
         (the idle-resend root cause of yv gate agent.restart_idle was invisible without it)."""
-        if len(token_ids) < 4096:
-            return
+        if len(token_ids) < 4096 or not logger.isEnabledFor(logging.DEBUG):
+            return  # the scan below hashes prefixes: only pay for it when it is read
         tokens = tuple(int(t) for t in token_ids)
         with self.lock:
             held = sorted(
@@ -2064,7 +2064,7 @@ class YunshuAPCManager(APCManager):
             if _sequence_hash(tokens[:n], 0, self.block_size)
             in self._expired_boundaries
         ]
-        logger.info(
+        logger.debug(
             "APC lookup: prompt=%d chosen=%d stage=%s prefix_entries=%s of %d resident "
             "tombstoned_extra0=%s anchors=%d rehearsal_guard=%s",
             len(tokens),
