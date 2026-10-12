@@ -37,7 +37,7 @@ async def run(args):
     out = args.out.open("w")
 
     def emit(row):
-        out.write(json.dumps(row) + "\\n")
+        out.write(json.dumps(row) + "\n")
         out.flush()
         print(json.dumps(row), flush=True)
 
