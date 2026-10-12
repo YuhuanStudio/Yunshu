@@ -2432,8 +2432,7 @@
   "YUNSHU_DEBUG_TREE_PROFILE": "tree_drafts",
   "YUNSHU_NEXT_TURN_PREFILL": "next_turn_rehearsal",
   "YUNSHU_NEXT_TURN_DELAY_S": "next_turn_rehearsal",
-  "YUNSHU_GC_POLICY": "gc_policy",
-  "YUNSHU_DRAFT_COMPILE": "tree_drafts"
+  "YUNSHU_GC_POLICY": "gc_policy"
  },
  "gap_budget": 55,
  "settings_categories": [

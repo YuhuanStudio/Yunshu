@@ -40,12 +40,6 @@ EVIDENCE = {
         ],
         "Old invariant receipts have parity and speed advantage, but current-source long-context paired decision is incomplete. Sweep now emits full-token digests and a final complete record; new job repeats 1K/8K/32K/131K code+prose with AR references.",
     ),
-    "YUNSHU_DRAFT_COMPILE": (
-        "draft_compile",
-        "partial",
-        ["/Volumes/P5Plus/yunshu-build/decode16/compile"],
-        "mx.compile of the fixed-shape DFlash2 drafter halves, after TensorFold. Decision: corpus A/B ms/round and identical rounds/accepted at 1K prose and code, then default on and delete the flag.",
-    ),
     "YUNSHU_ENGINE_LOOP": (
         "k02",
         "pending_owner",

@@ -151,8 +151,6 @@ const settingdesc = {
     "Qwen3.5 系列 VLM：推測解碼草稿覆寫。可填 DFlash 草稿模型目錄；`mtp` 強制使用檢查點的 MTP 頭；`off` 停用草稿。未設定時，若模型目錄或 Hugging Face 快取中有相符的 DFlash2 草稿模型則自動使用，否則使用 MTP 頭。",
   YUNSHU_MTP_BLOCK_SIZE:
     "草稿區塊大小（對 DFlash 而言是其依接受率調整的深度上限）。未設定時，MTP 為 6，DFlash 為草稿模型訓練時的區塊大小。",
-  YUNSHU_DRAFT_COMPILE:
-    "實驗性。在快速樹中以 mx.compile 編譯每層 DFlash2 草稿器的固定形狀部分（正規化、卷積準備與完成、殘差），做法同 TensorFold。草稿只負責提議，輸出 token 不變。",
   YUNSHU_SPEC_COPY_ROWS:
     "Qwen3.5 系列單一請求推測解碼通道：提示詞複製回合可使用的驗證列數（複製草稿數 = 列數 - 1）。複製回合會在提示詞與已生成文字中找出目前尾端最長的先前出現處，提出其後續內容，並由同一個驗證步驟檢查，因此輸出不變。引用上下文的代理、程式碼編輯與多輪流量，每回合可提交數倍的 token。預設 16 列，並受後端認證寬度限制；0 表示關閉複製回合。",
   YUNSHU_DRAFT_BITS:

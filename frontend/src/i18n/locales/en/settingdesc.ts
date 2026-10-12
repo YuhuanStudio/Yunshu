@@ -161,8 +161,6 @@ const settingdesc = {
     "Qwen3.5-family VLMs: speculative draft override. A DFlash drafter directory; `mtp` forces the checkpoint MTP head; `off` (default) disables drafting. Unset: a matching DFlash2 drafter in the models dir or Hugging Face cache is used automatically, else the MTP head.",
   YUNSHU_MTP_BLOCK_SIZE:
     "Draft block size (for DFlash, the ceiling its acceptance-driven depth stays under). Unset: 6 for MTP, the drafter’s trained block for DFlash.",
-  YUNSHU_DRAFT_COMPILE:
-    "Experimental. mx.compile the fixed-shape halves (norm, convolution prepare and finish, residual) of each DFlash2 drafter layer in the fast tree, the way TensorFold does. Drafts only propose, so output tokens are unchanged.",
   YUNSHU_SPEC_COPY_ROWS:
     "Qwen3.5-family single-request speculative lane: verify rows a prompt-copy round may use (copy drafts = rows - 1). A copy round proposes the continuation of the longest earlier occurrence of the current tail in the prompt plus generated text, and the same verify checks it, so output is unchanged. Agent, code-editing and multi-turn traffic that quotes its context commits several times more tokens per round. Default 16 rows, capped to the backend’s certified width; 0 turns copy rounds off.",
   YUNSHU_DRAFT_BITS:

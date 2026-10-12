@@ -453,10 +453,9 @@ class PrivateProjections:
                 id(original): converted for _, _, original, converted in self.bindings
             }
             view = self._view = _copy_with(draft, lanes)
-            if settings.get("YUNSHU_DRAFT_COMPILE"):
-                from .dflash_tree import compile_layers
+            from .dflash_tree import compile_layers
 
-                compile_layers(view)
+            compile_layers(view)
         sync_view(view, draft)
         return view
 
@@ -537,7 +536,6 @@ def rounds(
     view_of = getattr(private, "view_of", None)
     fast_draft = view_of(draft) if view_of is not None else draft
     budget = NodeBudget(15, prior=dt.PRIOR)
-    from . import settings
 
     profile_sync = bool(settings.get("YUNSHU_DEBUG_TREE_PROFILE"))
     draft_vocab = getattr(draft, "_draft_vocab", None)
