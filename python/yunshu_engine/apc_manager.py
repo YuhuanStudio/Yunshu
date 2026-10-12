@@ -1220,6 +1220,10 @@ class YunshuAPCManager(APCManager):
         self._last_shared_keys: list[int] = []
         self._nbytes_memo: dict[int, tuple[Any, int]] = {}
         self._anchors: dict[int, int] = {}  # retained superseded checkpoint -> length
+        # token ids of the latest next-turn rehearsal (vlm_engine._rehearse); its checkpoints
+        # (RAM, and the SSD writes that finish later) are added without superseding the
+        # previous request's
+        self.keep_prior_for: tuple[int, ...] | None = None
         # entry key -> (root buffer owner key, K/V bytes it views instead of owning), and the
         # K/V bytes of each root buffer: lets resident_bytes count a shared buffer once.
         self._kv_share: dict[int, tuple[int, int]] = {}
@@ -1327,6 +1331,9 @@ class YunshuAPCManager(APCManager):
         RAM; without this a tier fills with stale copies of every session and the cache the next
         request needs is the one LRU pushes out first. Heads are kept, and so is anything this
         process did not store or restore itself (it may serve another session)."""
+        keep_for = self.keep_prior_for
+        if keep_for is not None and tuple(tokens) == keep_for[: len(tokens)]:
+            return  # a next-turn rehearsal does not retire the request just served
         with self._plock:
             newest = self._born.get(cache_hash)
             heads = set(self._head_keys) | set(self._retention) | set(self._anchors)
@@ -1645,6 +1652,14 @@ class YunshuAPCManager(APCManager):
         so the byte and entry budgets evict them before anything newer.
         """
         tokens = tuple(int(t) for t in token_ids)
+        keep_for = self.keep_prior_for
+        if keep_for is not None and tokens == keep_for[: len(tokens)]:
+            # A next-turn rehearsal prefills a conversation nobody has asked for yet: it must
+            # not thin the checkpoints of the request that was just served, or a retry or
+            # regenerate of that same request (an identical prompt) finds its final checkpoint
+            # gone and restores from an older anchor (yv gate agent.restart_idle: 28159 of
+            # 41375 cached).
+            return
         with self._plock:
             protected = set(self._head_keys) | set(self._retention)
             anchors = dict(self._anchors)
@@ -2029,6 +2044,39 @@ class YunshuAPCManager(APCManager):
                 limit = previous(n)
         return best
 
+    def _log_lookup(self, token_ids, chosen: int, stage: str) -> None:
+        """One INFO line per long lookup: what the cache held for this prompt and what it chose
+        (the idle-resend root cause of yv gate agent.restart_idle was invisible without it)."""
+        if len(token_ids) < 4096 or not logger.isEnabledFor(logging.DEBUG):
+            return  # the scan below hashes prefixes: only pay for it when it is read
+        tokens = tuple(int(t) for t in token_ids)
+        with self.lock:
+            held = sorted(
+                len(e.token_ids)
+                for e in self._exact_cache.values()
+                if len(e.token_ids) <= len(tokens)
+                and tokens[: len(e.token_ids)] == e.token_ids
+            )
+            total = len(self._exact_cache)
+        dead = [
+            n
+            for n in held
+            if _sequence_hash(tokens[:n], 0, self.block_size)
+            in self._expired_boundaries
+        ]
+        logger.debug(
+            "APC lookup: prompt=%d chosen=%d stage=%s prefix_entries=%s of %d resident "
+            "tombstoned_extra0=%s anchors=%d rehearsal_guard=%s",
+            len(tokens),
+            chosen,
+            stage,
+            held,
+            total,
+            dead,
+            len(self._anchors),
+            self.keep_prior_for is not None,
+        )
+
     def lookup_exact_cache(self, token_ids, *args, **kwargs):
         refresh_retention = kwargs.pop("refresh_retention", True)
         self._expire_boundaries()
@@ -2054,6 +2102,7 @@ class YunshuAPCManager(APCManager):
                 tuple(token_ids), int(vals[0]), maximum, int(vals[2]), policy
             )
             if not n:
+                self._log_lookup(token_ids, 0, "canonical-none")
                 self.tier_hits["none"] += 1
                 self.lookups.append(
                     Lookup(len(token_ids), 0, "none", 0.0, time.perf_counter(), None)
@@ -2113,6 +2162,7 @@ class YunshuAPCManager(APCManager):
             self.observation.hit(key)
             if tier == "ssd":
                 self.observation.event("promotion", key, n, "ram", "ssd_hit")
+        self._log_lookup(token_ids, int(n), f"{tier}")
         self.tier_hits[tier] += 1
         device = getattr(self.disk, "last_device", None) if tier == "ssd" else None
         self.lookups.append(

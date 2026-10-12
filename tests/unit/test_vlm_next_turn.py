@@ -212,7 +212,7 @@ def test_rehearsal_stops_at_the_stride_grid(monkeypatch):
     eng, calls = _engine(monkeypatch)
     eng._apc_prefill_stride = 4
     mgr = type("M", (), {"exact_cache_guard_tokens": 1})()
-    eng._apc_backend = type("B", (), {"manager": mgr})()
+    eng._apc_backend = mgr
 
     async def main():
         _go(eng)
@@ -228,7 +228,7 @@ def test_exact_mode_rehearses_through_the_next_turn_header(monkeypatch):
     eng, calls = _engine(monkeypatch, on="exact")
     eng._apc_prefill_stride = 2048
     mgr = type("M", (), {"exact_cache_guard_tokens": 1})()
-    eng._apc_backend = type("B", (), {"manager": mgr})()
+    eng._apc_backend = mgr
 
     async def main():
         _go(eng)
@@ -448,3 +448,18 @@ def test_nothing_is_tokenized_during_the_start_delay(monkeypatch):
 
     asyncio.run(main())
     assert seen == [] and calls == []
+
+
+def test_rehearsal_registers_its_ids_with_the_real_manager_object(monkeypatch):
+    """The guard never engaged in the 27B gate because the engine looked for backend.manager;
+    the backend IS the manager."""
+    eng, calls = _engine(monkeypatch)
+    mgr = type("M", (), {"exact_cache_guard_tokens": 1, "keep_prior_for": None})()
+    eng._apc_backend = mgr
+
+    async def main():
+        _go(eng)
+        await eng._rehearsal_task
+
+    asyncio.run(main())
+    assert mgr.keep_prior_for == (9, 1, 3, 4, 9, 2, 3, 5)
