@@ -15,6 +15,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import mlx.core as mx
+
 MAX_ROWS = 8
 _STATE: dict[str, Any] = {"engaged": 0, "fallback": 0}
 
