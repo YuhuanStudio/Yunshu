@@ -1611,7 +1611,7 @@ class VLMEngine:
             if ids is None or ev.is_set():
                 return None
             stride = int(getattr(self, "_apc_prefill_stride", 0) or 0)
-            manager = getattr(self._apc_backend, "manager", None)
+            manager = self._apc_backend  # the YunshuAPCManager itself
             guard = int(getattr(manager, "exact_cache_guard_tokens", 1) or 1)
             if mode == "exact":
                 # end exactly at the next turn's header: the manager's turn boundary is
