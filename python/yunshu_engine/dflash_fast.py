@@ -11,7 +11,7 @@ from typing import Any
 
 import mlx.core as mx
 
-from . import gpu_window
+from . import gpu_window, settings
 from . import tree_verify as tv
 from .dflash_plan import live_bound
 
@@ -453,6 +453,10 @@ class PrivateProjections:
                 id(original): converted for _, _, original, converted in self.bindings
             }
             view = self._view = _copy_with(draft, lanes)
+            if settings.get("YUNSHU_DRAFT_COMPILE"):
+                from .dflash_tree import compile_layers
+
+                compile_layers(view)
         sync_view(view, draft)
         return view
 
