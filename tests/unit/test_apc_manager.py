@@ -934,3 +934,16 @@ def test_rehearsal_guard_covers_the_late_ssd_supersede_hook():
     m._born[12345] = 99
     m._disk_superseded_by(12345, a[:100] + [1, 2, 3], 0)
     assert m.disk_superseded == 0
+
+
+def test_long_lookup_logs_the_decision(caplog):
+    import logging
+
+    m = _mgr()
+    a = list(range(5000, 5000 + 4200))
+    m.begin_request()
+    m.store_exact_cache(a[:4192], _cache(4192))
+    with caplog.at_level(logging.INFO, logger="yunshu_engine.apc_manager"):
+        m.lookup_exact_cache(a[:4195])
+    line = [r.getMessage() for r in caplog.records if "APC lookup:" in r.getMessage()]
+    assert line and "prefix_entries=[4192]" in line[0] and "prompt=4195" in line[0]

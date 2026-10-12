@@ -2044,6 +2044,39 @@ class YunshuAPCManager(APCManager):
                 limit = previous(n)
         return best
 
+    def _log_lookup(self, token_ids, chosen: int, stage: str) -> None:
+        """One INFO line per long lookup: what the cache held for this prompt and what it chose
+        (the idle-resend root cause of yv gate agent.restart_idle was invisible without it)."""
+        if len(token_ids) < 4096:
+            return
+        tokens = tuple(int(t) for t in token_ids)
+        with self.lock:
+            held = sorted(
+                len(e.token_ids)
+                for e in self._exact_cache.values()
+                if len(e.token_ids) <= len(tokens)
+                and tokens[: len(e.token_ids)] == e.token_ids
+            )
+            total = len(self._exact_cache)
+        dead = [
+            n
+            for n in held
+            if _sequence_hash(tokens[:n], 0, self.block_size)
+            in self._expired_boundaries
+        ]
+        logger.info(
+            "APC lookup: prompt=%d chosen=%d stage=%s prefix_entries=%s of %d resident "
+            "tombstoned_extra0=%s anchors=%d rehearsal_guard=%s",
+            len(tokens),
+            chosen,
+            stage,
+            held,
+            total,
+            dead,
+            len(self._anchors),
+            self.keep_prior_for is not None,
+        )
+
     def lookup_exact_cache(self, token_ids, *args, **kwargs):
         refresh_retention = kwargs.pop("refresh_retention", True)
         self._expire_boundaries()
@@ -2069,6 +2102,7 @@ class YunshuAPCManager(APCManager):
                 tuple(token_ids), int(vals[0]), maximum, int(vals[2]), policy
             )
             if not n:
+                self._log_lookup(token_ids, 0, "canonical-none")
                 self.tier_hits["none"] += 1
                 self.lookups.append(
                     Lookup(len(token_ids), 0, "none", 0.0, time.perf_counter(), None)
@@ -2128,6 +2162,7 @@ class YunshuAPCManager(APCManager):
             self.observation.hit(key)
             if tier == "ssd":
                 self.observation.event("promotion", key, n, "ram", "ssd_hit")
+        self._log_lookup(token_ids, int(n), f"{tier}")
         self.tier_hits[tier] += 1
         device = getattr(self.disk, "last_device", None) if tier == "ssd" else None
         self.lookups.append(
