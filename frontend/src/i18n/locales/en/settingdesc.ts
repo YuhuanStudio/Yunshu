@@ -158,7 +158,7 @@ const settingdesc = {
   YUNSHU_MTP:
     "Qwen3.5-family VLMs: draft with the checkpoint’s MTP head (batch-invariant; speculative on equals off).",
   YUNSHU_VLM_DRAFT:
-    "Qwen3.5-family VLMs: speculative draft override. A DFlash drafter directory; `mtp` forces the checkpoint MTP head; `off` disables drafting. Unset: a matching DFlash2 drafter in the models dir or Hugging Face cache is used automatically, else the MTP head.",
+    "Qwen3.5-family VLMs: speculative draft override. A DFlash drafter directory; `mtp` forces the checkpoint MTP head; `off` (default) disables drafting. Unset: a matching DFlash2 drafter in the models dir or Hugging Face cache is used automatically, else the MTP head.",
   YUNSHU_MTP_BLOCK_SIZE:
     "Draft block size (for DFlash, the ceiling its acceptance-driven depth stays under). Unset: 6 for MTP, the drafter’s trained block for DFlash.",
   YUNSHU_SPEC_COPY_ROWS:
@@ -190,7 +190,7 @@ const settingdesc = {
   YUNSHU_GC_POLICY:
     "Python cyclic-collector policy of the VLM runner: `defer` (default) freezes the startup heap and holds the collector from request arrival to the first token, so a generation-2 pass cannot delay the first token; `freeze` only freezes; `default` is Python's own. Output is unchanged.",
   YUNSHU_NEXT_TURN_PREFILL:
-    "After a finished plain-text reply and while the engine is idle, prefill the reply as the next turn will render it, so the follow-up prefills only the new message. `exact` (default) rehearses to the end of the reply, `stride` to the prefill-atom grid, `boundary` only adds the prefill boundary (reference), `off` disables it. A request for the same conversation takes over a running rehearsal; any other request cancels it within a few decoder layers. Output is unchanged.",
+    "After a finished plain-text reply and while the engine is idle, prefill the reply as the next turn will render it, so the follow-up prefills only the new message. `exact` rehearses to the end of the reply, `stride` to the prefill-atom grid, `boundary` only adds the prefill boundary (reference), `off` disables it. A request for the same conversation takes over a running rehearsal; any other request cancels it within a few decoder layers. Output is unchanged.",
   YUNSHU_NEXT_TURN_DELAY_S:
     "Seconds between a finished reply and the start of the next-turn rehearsal. Requests that arrive sooner (retries, resends, agent loops) find no work running.",
   YUNSHU_ROUND_PREFILL_CHUNK:
