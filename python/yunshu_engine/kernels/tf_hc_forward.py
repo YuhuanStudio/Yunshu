@@ -31,7 +31,6 @@ _STATE: dict[str, Any] = {
     "installed": False,
     "modules": {},
     "moe": True,
-    "eval_every": 1,
 }
 
 
@@ -212,8 +211,7 @@ def _tf_model(self, model, inputs, cache, inputs_embeds, position_ids):
     pending = (
         None  # (branch [rows, dims], inject gates) of the previous layer's MoE block
     )
-    every = _STATE["eval_every"]
-    for index, (layer, layer_cache) in enumerate(zip(model.layers, cache, strict=True)):
+    for layer, layer_cache in zip(model.layers, cache, strict=True):
         layer_mask = ssm_mask if layer.is_linear else fa_mask
         hn, ssp = norm(h, pending)
         if "ple" in layer:
@@ -241,15 +239,9 @@ def _tf_model(self, model, inputs, cache, inputs_embeds, position_ids):
             fused = ("plain", (branch2.reshape(rows, dims),))
         h = hn2
         pending = (fused[0], fused[1], inject2)
-        if every and (index + 1) % every == 0:
-            mx.async_eval(h, *fused[1])
+        mx.async_eval(h, *fused[1])
     hn, _ = norm(h, pending)
     return hn.reshape(batch, length, width)
-
-
-def set_eval_every(n: int) -> None:
-    """Queue the GPU every n layers (1 = every layer, 0 = only when the caller evaluates)."""
-    _STATE["eval_every"] = int(n)
 
 
 def set_moe(enabled: bool) -> None:
