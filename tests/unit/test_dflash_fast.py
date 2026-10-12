@@ -527,3 +527,19 @@ def test_private_view_swaps_in_lane_projections_without_touching_the_shared_draf
     assert view is not draft and view.layers[0] is not layer
     draft.embed_tokens = "embed-2"  # a later bind() to a (re)loaded target
     assert bundle.view_of(draft) is view and view.embed_tokens == "embed-2"
+
+
+def test_packed_readback_returns_the_same_four_lists():
+    import mlx.core as mlx
+
+    target = mlx.array([[5, 6, 7, 248000]], dtype=mlx.uint32)
+    window = mlx.array([[1, 2, 3, 4]], dtype=mlx.int32)
+    parents = mlx.array([-1, 0, 0, 1], dtype=mlx.int32)
+    ranks = mlx.array([0, 2, 1, 3], dtype=mlx.int32)
+    for r in (ranks, None):
+        packed = fast.pack_readback(target, window, parents, r)
+        t, w, p, rk = fast.unpack_readback(
+            packed.tolist(), target.size, window.size, parents.size, r is not None
+        )
+        assert t == target.reshape(-1).tolist() and w == window.reshape(-1).tolist()
+        assert p == parents.tolist() and rk == (None if r is None else r.tolist())

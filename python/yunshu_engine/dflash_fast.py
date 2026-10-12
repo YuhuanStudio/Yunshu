@@ -18,6 +18,21 @@ from .dflash_plan import live_bound
 logger = logging.getLogger(__name__)
 
 
+def pack_readback(target, window, parents, ranks):
+    """target | window | parents | ranks as one int32 array: one transfer and one ``tolist``
+    instead of four (token ids and row numbers all fit in int32)."""
+    parts = [target, window, parents]
+    if ranks is not None:
+        parts.append(ranks)
+    return mx.concatenate([p.reshape(-1).astype(mx.int32) for p in parts])
+
+
+def unpack_readback(values, n_target, n_window, n_parents, has_ranks):
+    a, b = n_target, n_target + n_window
+    c = b + n_parents
+    return values[:a], values[a:b], values[b:c], (values[c:] if has_ranks else None)
+
+
 def observe_budget(budget, copied, n, landed, ms, *, first=False) -> bool:
     """Feed a round to the cost-aware node budget, unless it was a copy round.
 
@@ -619,15 +634,17 @@ def rounds(
                 )
                 try:
                     target = lm.speculative_argmax_from_hidden(result.hidden)
-                    if shape.original_ranks is None:
-                        mx.async_eval(target, window, parents)
-                        ranks = None
-                    else:
-                        mx.async_eval(target, window, parents, shape.original_ranks)
-                        ranks = shape.original_ranks.tolist()
-                    parent_ids = parents.tolist()
-                    target_ids_row = target.reshape(-1).tolist()
-                    window_ids = window.reshape(-1).tolist()
+                    packed = pack_readback(
+                        target, window, parents, shape.original_ranks
+                    )
+                    mx.async_eval(packed)
+                    target_ids_row, window_ids, parent_ids, ranks = unpack_readback(
+                        packed.tolist(),
+                        int(target.size),
+                        int(window.size),
+                        int(parents.size),
+                        shape.original_ranks is not None,
+                    )
                 except BaseException:
                     tv.tree_abort(cache, result)
                     raise
