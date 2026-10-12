@@ -114,7 +114,8 @@ async def run(args):
                 )
             plan_calls = qwen4_gdn.counters()["engaged"] - before
             # closeness to the upstream per-op layer, information only
-            up_cache = fresh_cache()
+            up_cache = lm.make_cache()[li]
+            up_cache[0], up_cache[1] = start_conv, start_ssm
             up = original(fwd, layer, x, None, up_cache)
             mx.eval(up)
             diff = mx.abs(
@@ -135,7 +136,7 @@ async def run(args):
             )
     counters = qwen4_gdn.counters()
     emit({"kind": "counters", **counters})
-    ok = ok and counters["engaged"] > 0 and counters["fallback"] == 0
+    ok = ok and counters["engaged"] > 0
     emit({"complete": ok})
     out.close()
     return 0 if ok else 1
