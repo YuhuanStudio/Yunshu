@@ -37,6 +37,22 @@ MTPLX_BIN = str(ENVS / "mtplx/.venv/bin/mtplx")
 OMLX_BIN = str(ENVS / "omlx-bench/venv/bin/omlx")
 LLAMA_BIN = str(ENVS / "llamacpp/build/bin/llama-server")
 SPLASH_BIN = "/opt/homebrew/bin/splash"
+# refsync (2026-10-12): latest engines in their own envs under ENVS (the ids above stay for the 0.1.4 snapshot)
+FN_CHECKPOINT = "/Volumes/P5Plus/models/Jundot/Qwen3.8-Flash-Next-oQ4e-mtp"
+FN_CHECKPOINT_PLE = "/Volumes/P5Plus/models/Jundot/Qwen3.8-Flash-Next-oQ4e-mtp-ple-ssd"
+FN_GGUF = "/Volumes/Micron/yunshu-refsync/gguf-flashnext/UD-IQ4_XS/Qwen3.8-Flash-Next-UD-IQ4_XS-00001-of-00003.gguf"
+FN_GGUF_MTP = (
+    "/Volumes/Micron/yunshu-refsync/gguf-flashnext/MTP/mtp-Qwen3.8-Flash-Next-Q8_0.gguf"
+)
+TF_NATIVE_BIN = str(
+    ENVS / "tensorfold-1.0.7/tensorfold-1.0.7-macos-arm64/bin/tensorfold-native"
+)
+TF_NATIVE_MODEL = "/Volumes/P5Plus/models/TensorFold/Qwen3.8-27B-MLX-4bit"
+OMLX_BIN_LATEST = str(ENVS / "omlx-latest/bin/omlx")
+LLAMA_BIN_LATEST = str(ENVS / "llamacpp-b11565/build/bin/llama-server")
+DFLASH_GGUF = "/Volumes/P5Plus/models/z-lab/Qwen3.8-27B-DFlash2-GGUF/Qwen3.8-27B-DFlash2-Q8_0.gguf"
+MTPLX_BIN_LATEST = str(ENVS / "mtplx-2.12.2/bin/mtplx")
+SPLASH_BIN_LATEST = str(ENVS / "splash-1.3.0/bin/splash")
 SPLASH_MODEL = "incoai/Qwen3.8-27B-Splash"
 NO_THINK_KWARGS = '{"enable_thinking": false}'
 # env vars that would change a server's behaviour under a benchmark
@@ -170,6 +186,140 @@ ENGINES: dict[str, Engine] = {
             0.4,
             22.0,
         ),
+        # ---- refsync: latest engines, 27B cells ----
+        Engine(
+            "yunshu-main",
+            "Yunshu main",
+            "dflash",
+            "same",
+            CHECKPOINT,
+            DRAFTER,
+            "yunshu",
+            "main HEAD tree (TFB_YUNSHU_SRC); drafter auto-discovered",
+            1.0,
+            75.0,
+        ),
+        Engine(
+            "yunshu-tf4",
+            "Yunshu main (TensorFold q4g64 pack)",
+            "dflash",
+            "same",
+            TF_NATIVE_MODEL,
+            DRAFTER,
+            "yunshu",
+            "same weights as tf-native/splash-latest: TensorFold/Qwen3.8-27B-MLX-4bit + DFlash2",
+            1.0,
+            75.0,
+        ),
+        Engine(
+            "tf-native",
+            "TensorFold 1.0.7 (native Zig)",
+            "dflash",
+            "different",
+            TF_NATIVE_MODEL,
+            DRAFTER,
+            "external",
+            "TensorFold/Qwen3.8-27B-MLX-4bit (affine q4 g64, NOT oQ4e) + DFlash2; native runtime, no Python",
+            1.0,
+            75.0,
+        ),
+        Engine(
+            "omlx-latest",
+            "oMLX main",
+            "dflash",
+            "same",
+            CHECKPOINT,
+            DRAFTER,
+            "external",
+            "own venv from reference/omlx main; DFlash2 via model_settings.json",
+            0.9,
+            60.0,
+        ),
+        Engine(
+            "mtplx-latest",
+            "MTPLX 2.12.2",
+            "mtp",
+            "same",
+            CHECKPOINT,
+            None,
+            "external",
+            "native MTP, profile turbo",
+            0.7,
+            60.0,
+        ),
+        Engine(
+            "llamacpp-mtp",
+            "llama.cpp b11565 (MTP)",
+            "mtp",
+            "different",
+            GGUF,
+            GGUF_MTP,
+            "external",
+            "UD-Q4_K_M GGUF is NOT the oQ4e weights; MTP head Q4_0",
+            0.4,
+            22.0,
+        ),
+        Engine(
+            "llamacpp-dflash",
+            "llama.cpp b11565 (DFlash2)",
+            "dflash",
+            "different",
+            GGUF,
+            DFLASH_GGUF,
+            "external",
+            "UD-Q4_K_M GGUF is NOT the oQ4e weights; z-lab DFlash2 GGUF Q8_0 drafter, draft-dflash",
+            0.4,
+            22.0,
+        ),
+        Engine(
+            "splash-latest",
+            "Splash 1.3.0",
+            "dflash",
+            "different",
+            TF_NATIVE_MODEL,
+            DRAFTER,
+            "external",
+            "separate bottle copy of 1.3.0; loads the MLX q4g64 checkpoint TensorFold/Qwen3.8-27B-MLX-4bit (same weights as tf-native, NOT oQ4e) from an offline HF cache view + local DFlash2 draft; bf16 KV",
+            1.1,
+            75.0,
+        ),
+        # ---- refsync: Flash-Next cells (Qwen3.8-Flash-Next: MoE + PLE + MTP) ----
+        Engine(
+            "fn-yunshu-main",
+            "Yunshu main (Flash-Next)",
+            "mtp",
+            "same",
+            FN_CHECKPOINT_PLE,
+            None,
+            "yunshu",
+            "Jundot oQ4e-mtp through the -ple-ssd view (PLE on SSD)",
+            1.0,
+            40.0,
+        ),
+        Engine(
+            "fn-omlx-latest",
+            "oMLX main (Flash-Next)",
+            "mtp",
+            "same",
+            FN_CHECKPOINT,
+            None,
+            "external",
+            "Jundot oQ4e-mtp, Lightning MTP",
+            0.9,
+            40.0,
+        ),
+        Engine(
+            "fn-llamacpp-mtp",
+            "llama.cpp b11565 (Flash-Next MTP)",
+            "mtp",
+            "different",
+            FN_GGUF,
+            FN_GGUF_MTP,
+            "external",
+            "unsloth UD-IQ4_XS GGUF (87 GiB) is NOT oQ4e; MTP head Q8_0",
+            0.4,
+            30.0,
+        ),
     ]
 }
 # the legacy tfbench engines keep their old code path
@@ -211,14 +361,14 @@ class Launch:
     )
 
 
-def yunshu_home_links(home: str | Path) -> dict:
+def yunshu_home_links(home: str | Path, checkpoint: str = CHECKPOINT) -> dict:
     """A ``yunshu pull`` layout inside the isolated HOME: models dir org/name entries. The drafter lives
     next to the checkpoint under ~/.yunshu/models, which is where spec_select looks, so discovery is real."""
     base = Path(home) / ".yunshu" / "models"
-    return {
-        str(base / "Jundot" / "Qwen3.8-27B-oQ4e-mtp"): CHECKPOINT,
-        str(base / "incoai" / "Qwen3.8-27B-DFlash2"): DRAFTER,
-    }
+    links = {str(base / "Jundot" / Path(checkpoint).name): checkpoint}
+    if checkpoint in (CHECKPOINT, TF_NATIVE_MODEL):
+        links[str(base / "incoai" / "Qwen3.8-27B-DFlash2")] = DRAFTER
+    return links
 
 
 def build_launch(
@@ -235,8 +385,8 @@ def build_launch(
     e = ENGINES[engine]
     base_env = {"HOME": home, "HF_HUB_OFFLINE": "1", "NO_PROXY": "127.0.0.1"}
     if e.kind == "yunshu":
-        links = yunshu_home_links(home)
-        model = str(Path(home) / ".yunshu/models/Jundot/Qwen3.8-27B-oQ4e-mtp")
+        links = yunshu_home_links(home, e.checkpoint)
+        model = str(Path(home) / ".yunshu/models/Jundot" / Path(e.checkpoint).name)
         return Launch(
             [
                 environ.get("TFB_YUNSHU_BIN", YUNSHU_BIN),
@@ -425,7 +575,198 @@ def build_launch(
             {},
             probe="/props",
         )
+    if engine in REFSYNC_ALIASES:
+        # same launch recipe as the pinned-snapshot engine, newer binary
+        base = REFSYNC_ALIASES[engine]
+        launch = build_launch(base, port, home, environ, ctx_tokens, parallel)
+        if engine == "omlx-latest":
+            launch.cmd[0] = OMLX_BIN_LATEST
+        elif engine == "mtplx-latest":
+            launch.cmd[0] = MTPLX_BIN_LATEST
+        return launch
+    if engine == "splash-latest":
+        rev = "a" * 40
+        hub = (
+            Path(home)
+            / ".cache/huggingface/hub/models--TensorFold--Qwen3.8-27B-MLX-4bit"
+        )
+        return Launch(
+            [
+                SPLASH_BIN_LATEST,
+                "serve",
+                "--model",
+                "TensorFold/Qwen3.8-27B-MLX-4bit",
+                "--offline",
+                "--draft-model",
+                DRAFTER,
+                "--host",
+                "127.0.0.1",
+                "--port",
+                p,
+                "--no-webui",
+                "--kv-format",
+                "bf16",
+                "--default-reasoning-effort",
+                "none",
+                "--max-context",
+                str(int(ctx_tokens)),
+            ],
+            scrubbed_env(environ, base_env),
+            {
+                "kv_format": "bf16 (lossless)",
+                "reasoning_effort": "none",
+                "draft": "local DFlash2",
+            },
+            {str(hub / "refs" / "main"): rev},
+            {str(hub / "snapshots" / rev): TF_NATIVE_MODEL},
+            probe="/status",
+        )
+    if engine == "tf-native":
+        return Launch(
+            [
+                TF_NATIVE_BIN,
+                "serve",
+                TF_NATIVE_MODEL,
+                "--host",
+                "127.0.0.1",
+                "--port",
+                p,
+                "--drafter",
+                DRAFTER,
+                "--no-update-check",
+                "--no-thinking",
+                "--context",
+                str(int(ctx_tokens)),
+            ],
+            scrubbed_env(environ, base_env),
+            {"drafter": "DFlash2 (explicit --drafter)", "thinking": "off"},
+            {},
+            {},
+        )
+    if engine in ("llamacpp-mtp", "llamacpp-dflash"):
+        dflash = engine == "llamacpp-dflash"
+        ctx = int(ctx_tokens)
+        return Launch(
+            [
+                LLAMA_BIN_LATEST,
+                "-m",
+                GGUF,
+                "--spec-type",
+                "draft-dflash" if dflash else "draft-mtp",
+                "--spec-draft-model",
+                DFLASH_GGUF if dflash else GGUF_MTP,
+                "--spec-draft-n-max",
+                "7" if dflash else "3",
+                "--host",
+                "127.0.0.1",
+                "--port",
+                p,
+                "-c",
+                str(ctx),
+                "-np",
+                str(parallel),
+                "-ngl",
+                "99",
+                "-fa",
+                "on",
+                "--jinja",
+                "--chat-template-kwargs",
+                NO_THINK_KWARGS,
+                "--no-webui",
+            ],
+            scrubbed_env(environ, base_env),
+            {
+                "ctx": ctx,
+                "parallel": parallel,
+                "flash_attn": "on",
+                "spec_type": "draft-dflash" if dflash else "draft-mtp",
+                "n_max": 7 if dflash else 3,
+            },
+            {},
+            {},
+            probe="/props",
+        )
+    if engine == "fn-omlx-latest":
+        mid = Path(FN_CHECKPOINT).name
+        settings = Path(home) / "omlx-base" / "model_settings.json"
+        cfg = {"version": 1, "models": {mid: {"mtp_enabled": True}}}
+        return Launch(
+            [
+                OMLX_BIN_LATEST,
+                "serve",
+                "--model-dir",
+                str(Path(home) / "omlx-models"),
+                "--host",
+                "127.0.0.1",
+                "--port",
+                p,
+                "--max-concurrent-requests",
+                "8",
+                "--memory-guard-gb",
+                "120",
+                "--paged-ssd-cache-dir",
+                str(Path(home) / "omlx-ssd"),
+                "--paged-ssd-cache-max-size",
+                "20GB",
+                "--hot-cache-max-size",
+                "4GB",
+                "--no-hf-cache",
+                "--base-path",
+                str(Path(home) / "omlx-base"),
+                "--log-level",
+                "info",
+            ],
+            scrubbed_env(environ, base_env),
+            {
+                "mtp": "model_settings mtp_enabled=true (verify in log)",
+                "memory_guard_gb": 120,
+            },
+            {str(settings): json.dumps(cfg)},
+            {str(Path(home) / "omlx-models" / mid): FN_CHECKPOINT},
+        )
+    if engine == "fn-llamacpp-mtp":
+        ctx = int(ctx_tokens)
+        return Launch(
+            [
+                LLAMA_BIN_LATEST,
+                "-m",
+                FN_GGUF,
+                "--spec-type",
+                "draft-mtp",
+                "--spec-draft-model",
+                FN_GGUF_MTP,
+                "--spec-draft-n-max",
+                "3",
+                "--host",
+                "127.0.0.1",
+                "--port",
+                p,
+                "-c",
+                str(ctx),
+                "-np",
+                str(parallel),
+                "-ngl",
+                "99",
+                "-fa",
+                "on",
+                "--jinja",
+                "--chat-template-kwargs",
+                NO_THINK_KWARGS,
+                "--no-webui",
+            ],
+            scrubbed_env(environ, base_env),
+            {"ctx": ctx, "spec_type": "draft-mtp", "n_max": 3},
+            {},
+            {},
+            probe="/props",
+        )
     raise KeyError(engine)
+
+
+REFSYNC_ALIASES = {
+    "omlx-latest": "omlx",
+    "mtplx-latest": "mtplx",
+}
 
 
 # ---- engaged-speculative-mode detection (fail closed) -----------------------------------------------
@@ -438,6 +779,33 @@ def detect_mode(engine: str, log: str, probe_text: str | None = None) -> str | N
     if e.kind == "yunshu":
         modes = re.findall(r"VLM batch runner: [^\n]*?draft=(dflash|mtp|off)\b", log)
         return modes[-1] if modes else None
+    if engine == "tf-native":
+        # 1.0.x native log: a drafter line naming DFlash2 and its block size (confirmed by the pilot)
+        return (
+            "dflash"
+            if re.search(r"DFlash2 drafts for|drafter[^\n]*(DFlash|dflash)", log)
+            and re.search(r"drafts: on", log)
+            else None
+        )
+    if engine == "llamacpp-dflash":
+        # b11565 logs "adding speculative implementation 'draft-dflash'" when the drafter is wired
+        wired = re.search(r"adding speculative implementation 'draft-dflash'", log)
+        configured = re.search(r"draft-dflash", probe_text or "")
+        return "dflash" if wired or configured else None
+    if engine == "fn-omlx-latest":
+        return (
+            "mtp"
+            if re.search(r"Speculative backend selected for [^\n]*Lightning MTP", log)
+            else None
+        )
+    legacy_engine = engine
+    engine = {
+        "omlx-latest": "omlx",
+        "mtplx-latest": "mtplx",
+        "splash-latest": "splash",
+        "llamacpp-mtp": "llamacpp",
+        "fn-llamacpp-mtp": "llamacpp",
+    }.get(engine, engine)
     if engine == "tf-new":
         return (
             "dflash"
@@ -467,10 +835,15 @@ def detect_mode(engine: str, log: str, probe_text: str | None = None) -> str | N
         configured = re.search(
             r'"speculative\.types"\s*:\s*"draft-mtp"', probe_text or ""
         )
+        # b11565 prints no per-request speculative stats at the default log level: the MTP head file
+        # loaded as the draft model, or "draft-mtp" in /props, is the engagement evidence.
+        loose = legacy_engine != "llamacpp"
         if (
             (loaded_mtp and drafted)
+            or (loose and loaded_mtp)
             or configured
             or re.search(r"draft-mtp|speculative decoding.*mtp|mtp.*draft", log, re.I)
+            or re.search(r"draft-mtp", probe_text or "")
         ):
             return "mtp"
         return None
@@ -528,6 +901,14 @@ STATIC_VERSIONS = {
     "splash": ("1.1.0 (Homebrew)", None),
     "mtplx": ("2.12.0 (own venv, mlx-lm 0.31.3)", None),
     "llamacpp": ("0.5.0-dev build 242", "836d57176dc699a726c55418e4f96b8ca628e1bf"),
+    "tf-native": ("1.0.7 (native Zig, release binary)", None),
+    "omlx-latest": ("main 0b07e88e (0.7.0 + 171 commits)", "0b07e88e"),
+    "mtplx-latest": ("2.12.2 (own venv, mlx 0.32.2)", "9882703f"),
+    "llamacpp-mtp": ("b11565 (0.6.0-dev build 427)", "2f160ba59"),
+    "llamacpp-dflash": ("b11565 (0.6.0-dev build 427)", "2f160ba59"),
+    "fn-omlx-latest": ("main 0b07e88e (0.7.0 + 171 commits)", "0b07e88e"),
+    "fn-llamacpp-mtp": ("b11565 (0.6.0-dev build 427)", "2f160ba59"),
+    "splash-latest": ("1.3.0 (bottle copy)", None),
 }
 
 
@@ -566,9 +947,27 @@ def required_paths(engine: str) -> list[str]:
     """Files that must exist before a job is worth submitting."""
     common = [CHECKPOINT + "/config.json"]
     e = ENGINES[engine]
+    if engine == "fn-yunshu-main":
+        return [FN_CHECKPOINT_PLE + "/config.json", YUNSHU_BIN]
     if e.kind == "yunshu":
         return common + [DRAFTER + "/config.json", YUNSHU_BIN]
     return {
+        "tf-native": [
+            TF_NATIVE_MODEL + "/config.json",
+            DRAFTER + "/config.json",
+            TF_NATIVE_BIN,
+        ],
+        "omlx-latest": common + [DRAFTER + "/config.json", OMLX_BIN_LATEST],
+        "mtplx-latest": common + [MTPLX_BIN_LATEST],
+        "llamacpp-mtp": [GGUF, GGUF_MTP, LLAMA_BIN_LATEST],
+        "llamacpp-dflash": [GGUF, DFLASH_GGUF, LLAMA_BIN_LATEST],
+        "splash-latest": [
+            SPLASH_BIN_LATEST,
+            TF_NATIVE_MODEL + "/config.json",
+            DRAFTER + "/config.json",
+        ],
+        "fn-omlx-latest": [FN_CHECKPOINT + "/config.json", OMLX_BIN_LATEST],
+        "fn-llamacpp-mtp": [FN_GGUF, FN_GGUF_MTP, LLAMA_BIN_LATEST],
         "tf-new": common + [DRAFTER + "/config.json", TF_BIN],
         "mlxlm": common + [MAIN_PY],
         "omlx": common + [DRAFTER + "/config.json", OMLX_BIN],

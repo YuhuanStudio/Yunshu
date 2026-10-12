@@ -151,7 +151,7 @@ def ready_request(url, extra_env):
 def warm_lazy_engine(engine, url, model):
     # /v1/models is discovery-only for oMLX. Load the target/drafter before
     # checking the engaged mode, and keep this startup request out of timing.
-    if engine in ("omlx", "llamacpp"):
+    if engine in ("omlx", "llamacpp", "omlx-latest", "llamacpp-mtp", "llamacpp-dflash", "fn-omlx-latest", "fn-llamacpp-mtp"):
         send(url, req(model, "Write a short example and explain it.", 16), timeout=240)
 
 
