@@ -505,6 +505,27 @@ async def run(args):
             set_stub(name, False)
     emit({"kind": "ablation_verify_ms", "by_stub": ablation})
 
+    # Host graph-build time of a k-row verify (no eval) vs its eval time: the serial gap inside an MTP round.
+    gap = {}
+    for k in (1, 2, 3):
+        yk = mx.array([[ids[-1]] * k])
+        bs, es = [], []
+        for i in range(10):
+            t0 = time.perf_counter()
+            hidden, _, txn = lm.speculative_verify_hidden(yk, cache)
+            t1 = time.perf_counter()
+            mx.eval(hidden)
+            t2 = time.perf_counter()
+            txn.abort()
+            if i >= 3:
+                bs.append((t1 - t0) * 1e3)
+                es.append((t2 - t1) * 1e3)
+        gap[k] = {
+            "build_ms": round(statistics.median(bs), 2),
+            "eval_ms": round(statistics.median(es), 2),
+        }
+    emit({"kind": "verify_build_vs_eval", "by_rows": gap})
+
     # cProfile over a few serial steps: where does host time go, and how often does a step sync?
     import cProfile
     import pstats
