@@ -58,7 +58,7 @@ def test_detect_mode_new_engines():
     assert (
         be.detect_mode(
             "fn-omlx-latest",
-            "Speculative backend selected for x: Lightning MTP (model_type=qwen4_exp, active)",
+            "omlx.patches.mlx_vlm_qwen4_exp_compat - INFO - Qwen4-Exp Lightning MTP enabled for /m/x (che",
         )
         == "mtp"
     )

@@ -24,7 +24,6 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import bench_engines as be  # noqa: E402
 import bench_snapshot as bs  # noqa: E402
-import snapshot_corpus as sc  # noqa: E402
 
 REPO = HERE.parents[1]
 BUILD = Path("/Volumes/P5Plus/yunshu-build/refsync")
@@ -52,6 +51,30 @@ SETS = {
             ("c1c", 1024, ("code",)),
             ("c8p", 8192, ("prose",)),
         ],
+    },
+    "long27": {
+        "part": "decode",
+        "engines": [
+            "yunshu-main",
+            "yunshu-tf4",
+            "tf-native",
+            "omlx-latest",
+            "llamacpp-mtp",
+            "llamacpp-dflash",
+            "splash-latest",
+        ],
+        "reference": "yunshu-main",
+        "groups": [
+            ("L32", 32768, ("code",)),
+            ("L64", 65536, ("code",)),
+            ("L128", 131072, ("code",)),
+        ],
+    },
+    "longfn": {
+        "part": "decode",
+        "engines": ["fn-yunshu-main", "fn-omlx-latest", "fn-llamacpp-mtp"],
+        "reference": "fn-yunshu-main",
+        "groups": [("F32", 32768, ("code",)), ("F64", 65536, ("code",))],
     },
     "fn": {
         "engines": ["fn-yunshu-main", "fn-omlx-latest", "fn-llamacpp-mtp"],
@@ -104,13 +127,19 @@ def job_env(engine: str) -> dict:
 
 
 def make_job(
-    engine: str, group: str, ctx: int, kinds, rep: int, outdir: Path
+    engine: str,
+    group: str,
+    ctx: int,
+    kinds,
+    rep: int,
+    outdir: Path,
+    part: str = "corpus",
 ) -> bs.Job:
-    est = bs.estimate_minutes(engine, "corpus", (ctx,), kinds)
+    est = bs.estimate_minutes(engine, part, (ctx,), kinds)
     job = bs.Job(
         f"{engine}-{group}-r{rep}",
         engine,
-        "corpus",
+        part,
         group,
         rep,
         "cell",
@@ -142,8 +171,64 @@ def cells(set_name: str, engines, reps: int, outdir: Path) -> list[bs.Job]:
         for group, ctx, kinds in spec["groups"]:
             for e in spec["engines"]:
                 if e in engines:
-                    jobs.append(make_job(e, group, ctx, kinds, rep, outdir))
+                    jobs.append(
+                        make_job(
+                            e,
+                            group,
+                            ctx,
+                            kinds,
+                            rep,
+                            outdir,
+                            spec.get("part", "corpus"),
+                        )
+                    )
     return jobs
+
+
+def collect_long(outdir: Path, set_name: str) -> dict:
+    """(ctx, engine) -> {'status', 'cold_ttft', 'warm_ttft', 'turn2_ttft', 'dec_tps' (cold), 'cached'} per valid job;
+    an invalid or missing job is reported with its reason, never dropped."""
+    spec = SETS[set_name]
+    out: dict = {}
+    for group, ctx, kinds in spec["groups"]:
+        for e in spec["engines"]:
+            job = make_job(e, group, ctx, kinds, 0, outdir, "decode")
+            rows = bs.read_rows(job.out)
+            problems = bs.validate_rows(job, rows)
+            if problems:
+                out[(ctx, e)] = {"status": "; ".join(problems[:2]) or "no output"}
+                continue
+            d = {r["phase"]: r for r in rows if r.get("part") == "decode"}
+            out[(ctx, e)] = {
+                "status": "ok",
+                "cold_ttft": d["cold"]["ttft_s"],
+                "cold_tps": d["cold"]["dec_tps"],
+                "warm_ttft": d["warm"]["ttft_s"],
+                "turn2_ttft": d["turn2"]["ttft_s"],
+                "turn2_cached": d["turn2"].get("cached"),
+                "pt": d["cold"]["pt"],
+            }
+    return out
+
+
+def render_long(outdir: Path, set_name: str) -> str:
+    data = collect_long(outdir, set_name)
+    lines = [
+        "",
+        f"## Long context, {set_name} (code prompt, greedy, cold decode 2048 tokens; warm = same prompt again; follow-up = turn 2 reusing the prefix)",
+        "",
+        "| ctx | engine | prompt tok | cold TTFT s | cold decode tok/s | warm TTFT s | follow-up TTFT s (cached tok) | status |",
+        "|---|---|---|---|---|---|---|---|",
+    ]
+    for (ctx, e), v in sorted(data.items()):
+        if v["status"] != "ok":
+            lines.append(f"| {ctx} | {e} | - | - | - | - | - | {v['status']} |")
+        else:
+            lines.append(
+                f"| {ctx} | {e} | {v['pt']} | {v['cold_ttft']} | {v['cold_tps']} | {v['warm_ttft']} | "
+                f"{v['turn2_ttft']} ({v['turn2_cached']}) | ok |"
+            )
+    return "\n".join(lines)
 
 
 def collect(outdir: Path, set_name: str) -> dict:
@@ -167,9 +252,69 @@ def collect(outdir: Path, set_name: str) -> dict:
     return out
 
 
+# Same-weights reference per engine (None: no same-weights Yunshu arm exists, only the cross-weights column).
+SAME_WEIGHTS_REF = {
+    "yunshu-tf4": "yunshu-main",  # different pack: shown as cross only
+    "tf-native": "yunshu-tf4",
+    "splash-latest": "yunshu-tf4",
+    "omlx-latest": "yunshu-main",
+    "mtplx-latest": "yunshu-main",
+    "fn-omlx-latest": "fn-yunshu-main",
+}
+SAME_PACK_ENGINES = (
+    "tf-native",
+    "splash-latest",
+    "omlx-latest",
+    "mtplx-latest",
+    "fn-omlx-latest",
+)
+
+
+def _paired(values, ref):
+    common = [p for p in values if p in ref and ref[p] > 0]
+    if not common:
+        return None
+    import statistics
+
+    r = [values[p] / ref[p] for p in common]
+    return statistics.fmean(r), (statistics.stdev(r) if len(r) > 1 else 0.0), len(r)
+
+
 def render(outdir: Path, set_name: str) -> str:
+    import statistics
+
     spec = SETS[set_name]
-    return sc.render(collect(outdir, set_name), spec["engines"], spec["reference"])
+    groups = collect(outdir, set_name)
+    engines = spec["engines"]
+    main_ref = spec["reference"]
+    lines = [
+        "",
+        f"## Decode corpus, {set_name}: 10 prompts per cell and rep, greedy, 1024 decode tokens, q4 weights as listed",
+        "Same-weights ratio: per-prompt speed over the Yunshu arm on the same weights (TF/Splash over yunshu-tf4; oMLX/MTPLX over "
+        f"{main_ref}). Cross-weights ratio: over {main_ref} (oQ4e). +-: stdev of the per-prompt ratios.",
+        "",
+        "| cell | engine | mean / median tok/s (n) | same-weights ratio | cross-weights ratio |",
+        "|---|---|---|---|---|",
+    ]
+    for (ctx, kind), per in sorted(groups.items()):
+        for e in engines:
+            v = per.get(e)
+            if not v:
+                lines.append(f"| {kind}-{ctx} | {e} | n/a | n/a | n/a |")
+                continue
+            tps = list(v.values())
+            same = (
+                _paired(v, per.get(SAME_WEIGHTS_REF.get(e, ""), {}))
+                if e in SAME_PACK_ENGINES
+                else None
+            )
+            cross = _paired(v, per.get(main_ref, {})) if e != main_ref else None
+            f = lambda t: "n/a" if t is None else f"x{t[0]:.3f} +-{t[1]:.3f} (n={t[2]})"  # noqa: E731
+            lines.append(
+                f"| {kind}-{ctx} | {e} | {statistics.fmean(tps):.1f} / {statistics.median(tps):.1f} ({len(tps)}) | "
+                f"{f(same) if e in SAME_PACK_ENGINES else 'reference' if e == 'yunshu-tf4' else 'n/a'} | {f(cross)} |"
+            )
+    return "\n".join(lines)
 
 
 def main(argv=None) -> int:
@@ -184,7 +329,7 @@ def main(argv=None) -> int:
     ap.add_argument("--md", type=Path)
     a = ap.parse_args(argv)
     configure()
-    names = list(SETS) if a.set == "all" else [a.set]
+    names = [k for k in SETS if not k.startswith("long")] if a.set == "all" else [a.set]
     chosen = [e for e in a.engines.split(",") if e]
     bad = [e for e in chosen if e not in be.ENGINES]
     if bad:
@@ -210,7 +355,12 @@ def main(argv=None) -> int:
             )
         return 0
     if a.cmd == "aggregate":
-        text = "\n".join(render(a.out, n) for n in names)
+        text = "\n".join(
+            render_long(a.out, n)
+            if SETS[n].get("part") == "decode"
+            else render(a.out, n)
+            for n in names
+        )
         if a.md:
             a.md.write_text(text)
         print(text)

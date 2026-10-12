@@ -795,7 +795,7 @@ def detect_mode(engine: str, log: str, probe_text: str | None = None) -> str | N
     if engine == "fn-omlx-latest":
         return (
             "mtp"
-            if re.search(r"Speculative backend selected for [^\n]*Lightning MTP", log)
+            if re.search(r"Lightning MTP enabled for|MTP path activated|Speculative backend selected for [^\n]*Lightning MTP", log)
             else None
         )
     legacy_engine = engine
