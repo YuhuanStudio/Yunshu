@@ -425,6 +425,56 @@ class PrivateProjections:
             if module is not None:
                 module.update_modules({key: converted if enabled else original})
 
+    def view_of(self, draft):
+        """An immutable private copy of the drafter whose eligible projections are the lane
+        versions, so the fast tree reads it directly instead of swapping modules in and out of
+        the shared drafter twice a round. The shared drafter (fallback requests) is untouched:
+        the view copies only the module wrappers on the path to a converted projection and
+        shares every weight array. Request-level state (target binding, draft vocabulary) is
+        refreshed from the drafter by ``sync_view``."""
+        view = getattr(self, "_view", None)
+        if view is None:
+            lanes = {
+                id(original): converted for _, _, original, converted in self.bindings
+            }
+            view = self._view = _copy_with(draft, lanes)
+        sync_view(view, draft)
+        return view
+
+
+def _copy_with(module, lanes):
+    """``module`` as a new wrapper tree with ``lanes[id(child)]`` swapped in for those children."""
+    import mlx.nn as nn
+
+    def convert(value):
+        if id(value) in lanes:
+            return lanes[id(value)]
+        if isinstance(value, nn.Module):
+            return _copy_with(value, lanes)
+        if isinstance(value, list):
+            return [convert(v) for v in value]
+        if isinstance(value, tuple):
+            return tuple(convert(v) for v in value)
+        if isinstance(value, dict):
+            return {k: convert(v) for k, v in value.items()}
+        return value
+
+    new = type(module).__new__(type(module))
+    new.__dict__.update(module.__dict__)
+    for key, value in dict.items(module):
+        dict.__setitem__(new, key, convert(value))
+    return new
+
+
+def sync_view(view, draft):
+    """Per-request attributes the drafter gets from ``bind`` / the engine after the view exists."""
+    for key in ("embed_tokens", "lm_head", "embed_scale", "argmax_from_hidden"):
+        if key in draft.__dict__ or key in draft:
+            setattr(view, key, getattr(draft, key))
+    for key in ("_draft_vocab", "accept_lens", "draft_lens", "_greedy_token"):
+        if key in draft.__dict__:
+            view.__dict__[key] = draft.__dict__[key]
+
 
 def prepare(draft):
     private = getattr(draft, "_yunshu_fast_projections", None)
@@ -465,6 +515,8 @@ def rounds(
     private = prepare(draft)
     target_ids = list(draft.config.target_layer_ids)
     draft_cache = draft.reset(model)
+    view_of = getattr(private, "view_of", None)
+    fast_draft = view_of(draft) if view_of is not None else draft
     budget = NodeBudget(15, prior=dt.PRIOR)
     from . import settings
 
@@ -498,7 +550,6 @@ def rounds(
 
                 for entry in draft_cache:
                     entry.offset += skipped
-                private.bind(False)
                 yield from resume_chain(
                     _chain,
                     model,
@@ -541,13 +592,9 @@ def rounds(
                         for entry in draft_cache:
                             entry.offset += skipped
                         skipped = 0
-                    private.bind(True)
-                    try:
-                        lattice = dt.compute_lattice_gpu(
-                            draft, bonus, hidden, draft_cache, 15
-                        )
-                    finally:
-                        private.bind(False)
+                    lattice = dt.compute_lattice_gpu(
+                        fast_draft, bonus, hidden, draft_cache, 15
+                    )
                     tokens, parents = search_tree(lattice, n)
                     if profile_sync:
                         mx.eval(
@@ -703,7 +750,6 @@ def rounds(
                     for n, v in sorted(budget.samples.items())
                 },
             )
-        private.bind(False)
         hidden = None
         draft_cache = None
 
