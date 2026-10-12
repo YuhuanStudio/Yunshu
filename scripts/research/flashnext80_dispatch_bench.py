@@ -65,27 +65,30 @@ async def run(args):
         return h, br
 
     compiled = mx.compile(chain)
-    res = {}
-    for name, fn in (("eager", chain), ("compiled", compiled)):
-        try:
-            mx.eval(fn(h, br, inj))  # warm / trace
-            builds, evals = [], []
-            for _ in range(args.reps):
-                t0 = time.perf_counter()
-                o = fn(h, br, inj)
-                t1 = time.perf_counter()
-                mx.eval(o)
-                t2 = time.perf_counter()
-                builds.append((t1 - t0) * 1e3)
-                evals.append((t2 - t1) * 1e3)
-            res[name] = {
-                "build_ms": round(statistics.median(builds), 3),
-                "eval_ms": round(statistics.median(evals), 3),
-            }
-            res[name + "_out"] = fn(h, br, inj)
-            mx.eval(res[name + "_out"])
-        except Exception as exc:  # noqa: BLE001
-            res[name] = {"error": repr(exc)[:300]}
+    for fn in (chain, compiled, chain, compiled):  # warm both arms, twice
+        mx.eval(fn(h, br, inj))
+    res = {
+        "eager": {"evals": [], "builds": []},
+        "compiled": {"evals": [], "builds": []},
+    }
+    for _ in range(args.reps):
+        for name, fn in (("eager", chain), ("compiled", compiled)):
+            t0 = time.perf_counter()
+            o = fn(h, br, inj)
+            t1 = time.perf_counter()
+            mx.eval(o)
+            t2 = time.perf_counter()
+            res[name]["builds"].append((t1 - t0) * 1e3)
+            res[name]["evals"].append((t2 - t1) * 1e3)
+    for name in ("eager", "compiled"):
+        res[name] = {
+            "build_ms": round(statistics.median(res[name]["builds"]), 3),
+            "eval_ms": round(statistics.median(res[name]["evals"]), 3),
+        }
+        res[name + "_out"] = None
+    res["eager_out"] = chain(h, br, inj)
+    res["compiled_out"] = compiled(h, br, inj)
+    mx.eval(res["eager_out"], res["compiled_out"])
     same = None
     if "eager_out" in res and "compiled_out" in res:
         same = all(
