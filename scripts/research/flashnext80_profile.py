@@ -134,15 +134,7 @@ async def run(args):
         return round(statistics.median(times), 3)
 
     results = {}
-    plan = [
-        ("real", "off"),
-        ("real", "hc+moe"),
-        ("real", "hc+moe+gdn"),
-        ("real", "hc+moe"),
-        ("real", "hc+moe+gdn"),
-        ("noPLE", "hc+moe"),
-        ("noPLE", "hc+moe+gdn"),
-    ]
+    plan = [("real", "off")] + [("real", f"e{n}") for n in (1, 4, 12, 0, 1, 4, 12, 0)]
     from yunshu_engine.kernels import tf_hc_forward
 
     for tag, mode in plan:
@@ -150,7 +142,8 @@ async def run(args):
             tf_hc_forward.uninstall()
         else:
             tf_hc_forward.install()
-            tf_hc_forward.set_moe(mode.startswith("hc+moe"))
+            tf_hc_forward.set_moe(True)
+            tf_hc_forward.set_eval_every(int(mode[1:]))
         orig = ps.QuantizedMMapNGramEmbedding.__call__
         if tag == "noPLE":
 
@@ -191,8 +184,7 @@ async def run(args):
         }
         row["serial_tok_s"] = tok_s(row["serial_total_ms"])
         row["pipelined_tok_s"] = tok_s(p)
-        if mode == "hc+moe":
-            results[tag] = row
+        results[tag] = row
         emit(row)
 
     # No per-layer async_eval: build = pure Python/C++ graph tracing, eval = encode + GPU execution.
