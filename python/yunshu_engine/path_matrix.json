@@ -2611,6 +2611,45 @@
           "why": "legacy loop is not grown (CLAUDE.md)"
         }
       }
+    },
+    "qwen4_gdn_fused": {
+      "module": "python/yunshu_engine/kernels/qwen4_gdn.py",
+      "what": "oMLX Qwen4 fused GDN verify plan + deferred rollback for the qwen4_exp layer loop (YUNSHU_QWEN4_GDN_FUSED, experimental)",
+      "cells": {
+        "mtp": {
+          "s": "na",
+          "why": "qwen4_exp (Flash-Next) GDN verify plan exists only for that family, which is served on the generic runner"
+        },
+        "dflash": {
+          "s": "na",
+          "why": "qwen4_exp (Flash-Next) GDN verify plan exists only for that family, which is served on the generic runner"
+        },
+        "driver": {
+          "s": "na",
+          "why": "qwen4_exp (Flash-Next) GDN verify plan exists only for that family, which is served on the generic runner"
+        },
+        "batch": {
+          "s": "na",
+          "why": "qwen4_exp (Flash-Next) GDN verify plan exists only for that family, which is served on the generic runner"
+        },
+        "text": {
+          "s": "na",
+          "why": "qwen4_exp (Flash-Next) GDN verify plan exists only for that family, which is served on the generic runner"
+        },
+        "loop": {
+          "s": "na",
+          "why": "qwen4_exp (Flash-Next) GDN verify plan exists only for that family, which is served on the generic runner"
+        },
+        "generic": {
+          "s": "engaged",
+          "ev": [
+            [
+              "python/yunshu_engine/kernels/tf_hc_forward.py",
+              "qwen4_gdn.gated_delta("
+            ]
+          ]
+        }
+      }
     }
   },
   "exclusions": [
@@ -2953,7 +2992,14 @@
     "python/yunshu_engine/ane/native/__init__.py": "Phase 1 research-only optional native ANE runtime; no serving importer or setting. GPU default unchanged; private API failures return unavailable.",
     "python/yunshu_engine/ane/native/mil.py": "CPU-only native ANE benchmark MIL builder; fp16/int8 numerics unqualified for serving.",
     "python/yunshu_engine/qwen4_dflash.py": "Flash-Next mixed layer capture adapter on its existing invariant forward; qwen4 native MTP retains full hyper-state.",
-    "python/yunshu_engine/qwen4_norms.py": "Read legacy direct-gamma and residual Qwen4 norm formats; ordinary GDN/vision RMSNorm tensors are unchanged; MTP inherits base convention."
+    "python/yunshu_engine/qwen4_norms.py": "Read legacy direct-gamma and residual Qwen4 norm formats; ordinary GDN/vision RMSNorm tensors are unchanged; MTP inherits base convention.",
+    "python/yunshu_engine/kernels/omlx_q4/module_cache.py": "oMLX 125ca681 Qwen4 GDN verify kernels used by qwen4_gdn (kernels/qwen4_gdn.py)",
+    "python/yunshu_engine/kernels/omlx_q4/moe_verify_gather.py": "oMLX 125ca681 Qwen4 GDN verify kernels used by qwen4_gdn (kernels/qwen4_gdn.py)",
+    "python/yunshu_engine/kernels/omlx_q4/qwen35_gdn_prework.py": "oMLX 125ca681 Qwen4 GDN verify kernels used by qwen4_gdn (kernels/qwen4_gdn.py)",
+    "python/yunshu_engine/kernels/omlx_q4/qwen35_gdn_verify_fused.py": "oMLX 125ca681 Qwen4 GDN verify kernels used by qwen4_gdn (kernels/qwen4_gdn.py)",
+    "python/yunshu_engine/kernels/omlx_q4/qwen35_verify_qmm.py": "oMLX 125ca681 Qwen4 GDN verify kernels used by qwen4_gdn (kernels/qwen4_gdn.py)",
+    "python/yunshu_engine/kernels/omlx_q4/row_exact_qmv.py": "oMLX 125ca681 Qwen4 GDN verify kernels used by qwen4_gdn (kernels/qwen4_gdn.py)",
+    "python/yunshu_engine/kernels/omlx_q4/__init__.py": "oMLX 125ca681 Qwen4 GDN verify kernels used by qwen4_gdn (kernels/qwen4_gdn.py)"
   },
   "settings": {
     "YUNSHU_MTP": "draft_family_coverage",
@@ -3025,7 +3071,8 @@
     "YUNSHU_ANE_FFN_TRACE": "ane_ffn_split",
     "YUNSHU_GRAMMAR_PREWARM": "grammar_prewarm",
     "YUNSHU_SDPA_CHUNK": "sdpa_chunk_pre_nax",
-    "YUNSHU_PLE_STORAGE": "ple_ssd_rows"
+    "YUNSHU_PLE_STORAGE": "ple_ssd_rows",
+    "YUNSHU_QWEN4_GDN_FUSED": "qwen4_gdn_fused"
   },
   "gap_budget": 41,
   "settings_categories": [

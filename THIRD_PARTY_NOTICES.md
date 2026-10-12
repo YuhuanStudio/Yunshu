@@ -223,3 +223,10 @@ Modified for Yunshu: MLX custom kernels over MLX affine and Yunshu tiled quantiz
 MLX-stream shared-event bridge, calibration kept in a file. Enabled only by
 `YUNSHU_ANE_FFN_SPLIT=splash` (off by default; lossy). The Apache-2.0 license is reproduced in
 this repository's LICENSE.
+## oMLX Qwen4 kernels — `python/yunshu_engine/kernels/omlx_q4/`
+
+`module_cache.py`, `moe_verify_gather.py`, `qwen35_gdn_prework.py`, `qwen35_gdn_verify_fused.py`, `qwen35_verify_qmm.py`
+and `row_exact_qmv.py` are copied verbatim from https://github.com/jundot/omlx at commit `125ca6819ed78212cacdf70fbbbfb25c25dd5f3f`
+(`omlx/patches/`), licensed under the Apache License, Version 2.0 (SPDX-License-Identifier: Apache-2.0 in each file; some
+kernels credit mlx-serve and the mlxfast-challenge in their headers). Yunshu calls the Qwen4 fused GDN verify plan and
+deferred rollback from `python/yunshu_engine/kernels/qwen4_gdn.py`.

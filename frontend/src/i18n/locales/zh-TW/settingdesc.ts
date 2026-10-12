@@ -19,6 +19,8 @@ const settingdesc = {
   YUNSHU_ALLOW_AUTO_LOAD:
     "多模型模式：允許音訊請求載入尚未載入的模型（否則會被拒絕）。",
   YUNSHU_MAX_LORAS: "同時保持載入的 LoRA 適配器數量上限（文字模型）。",
+  YUNSHU_QWEN4_GDN_FUSED:
+    "Qwen3.8-Flash-Next：36 個 Gated DeltaNet 層改用 oMLX 的融合 Qwen4 驗證計畫與延遲回滾（推測輪不再寫入逐步狀態歷史）。窗口各列與單列使用同一套算術，所以開關推測解碼、提示快取命中與否輸出一致；位元可能與未融合版本不同。長上下文 A/B 與成對準確度檢查完成前為實驗性。",
   YUNSHU_TRUST_REMOTE_CODE:
     "允許需要 `trust_remote_code` 的 Hugging Face 分詞器與處理器。",
   YUNSHU_WARM_PROMPTS:

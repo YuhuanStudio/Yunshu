@@ -32,6 +32,7 @@ _STATE: dict[str, Any] = {
     "installed": False,
     "modules": {},
     "moe": True,
+    "q4_gdn": False,
 }
 
 
@@ -153,6 +154,31 @@ def _moe(mlp: Any, x2d: Any) -> Any:
     return "grouped", (y, weights, logits)
 
 
+def _gdn(verifier: Any, layer: Any, mixed: Any, mask: Any, cache: Any) -> Any:
+    original = type(verifier)._gated_delta
+    if not _STATE["q4_gdn"]:
+        return original(verifier, layer, mixed, mask, cache)
+    from . import qwen4_gdn
+
+    return qwen4_gdn.gated_delta(
+        verifier,
+        layer,
+        mixed,
+        mask,
+        cache,
+        lambda v, lyr, x, m, c: original(v, lyr, x, m, c),
+    )
+
+
+def set_qwen4_gdn(enabled: bool) -> None:
+    """Run Gated DeltaNet layers on the oMLX Qwen4 fused verify plan (see kernels/qwen4_gdn.py)."""
+    if enabled:
+        from . import qwen4_gdn
+
+        qwen4_gdn.install_cache_patch()
+    _STATE["q4_gdn"] = bool(enabled)
+
+
 def eligible(model: Any) -> bool:
     """Every layer's two HC modules have affine weights the kernels read (decided once per model)."""
     key = ("model", id(model))
@@ -259,9 +285,7 @@ def _tf_model(
         mixed, inject = project(hn, ssp, layer.attn_hyper_connection)
         mixed = mixed.reshape(batch, length, dims)
         if layer.is_linear:
-            branch = self._gated_delta(
-                layer.linear_attn, mixed, layer_mask, layer_cache
-            )
+            branch = _gdn(self, layer.linear_attn, mixed, layer_mask, layer_cache)
         else:
             branch = self._qsa_attention(
                 layer.self_attn, mixed, layer_cache, position_ids, layer_mask

@@ -213,6 +213,7 @@ extend-exclude = [
     "python/yunshu_engine/kernels/tensorfold/lane_widen.py",
     "python/yunshu_engine/kernels/tensorfold/inputs.py",
     "python/yunshu_engine/kernels/tf_flash_next/*.py",
+    "python/yunshu_engine/kernels/omlx_q4/*.py",
 ]
 
 [tool.ruff.lint]
@@ -271,7 +272,7 @@ follow_imports_for_stubs = true
 
 # Vendored TensorFold kernels (Apache-2.0): kept as upstream wrote them.
 [[tool.mypy.overrides]]
-module = ["yunshu_engine.kernels.tf_flash_next.*"]
+module = ["yunshu_engine.kernels.tf_flash_next.*", "yunshu_engine.kernels.omlx_q4.*"]
 ignore_errors = true
 
 [tool.pytest.ini_options]
