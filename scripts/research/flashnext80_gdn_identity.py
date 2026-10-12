@@ -83,6 +83,8 @@ async def run(args):
     )
     eligible = [i for i in all_gdn if census[i]["eligible"]]
     gdn_layers = eligible[: args.layers] or all_gdn[: args.layers]
+    ok = True
+    mx.random.seed(7)
     for li in gdn_layers:
         layer = lm.model.layers[li].linear_attn
 
