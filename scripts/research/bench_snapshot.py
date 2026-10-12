@@ -567,11 +567,15 @@ def job_active(job_id: str) -> bool:
     return r.returncode == 2
 
 
-def submit_jobs(jobs, outdir: Path, max_attempts: int = 2) -> dict:
+def bs_problems(job) -> list[str]:
+    return validate_rows(job, read_rows(job.out))
+
+
+def submit_jobs(jobs, outdir: Path, max_attempts: int = 2, max_active: int = 6) -> dict:
     state = load_state(outdir)
     counts = {"complete": 0, "queued": 0, "submitted": 0, "gave_up": 0}
     for job in jobs:
-        if counts["queued"] + counts["submitted"] >= 6:
+        if counts["queued"] + counts["submitted"] >= max_active:
             break
         if is_complete(job):
             counts["complete"] += 1
@@ -588,6 +592,11 @@ def submit_jobs(jobs, outdir: Path, max_attempts: int = 2) -> dict:
             )
             continue
         job.out.parent.mkdir(parents=True, exist_ok=True)
+        if job.out.exists() and not bs_problems(job):
+            counts["complete"] += (
+                1  # never move a valid output aside (races with is_complete)
+            )
+            continue
         if job.out.exists():  # a failed attempt's output must not mix with the retry
             job.out.rename(job.out.with_suffix(f".failed{st.get('attempts', 0)}.jsonl"))
         r = subprocess.run(

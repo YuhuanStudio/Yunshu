@@ -151,7 +151,15 @@ def ready_request(url, extra_env):
 def warm_lazy_engine(engine, url, model):
     # /v1/models is discovery-only for oMLX. Load the target/drafter before
     # checking the engaged mode, and keep this startup request out of timing.
-    if engine in ("omlx", "llamacpp", "omlx-latest", "llamacpp-mtp", "llamacpp-dflash", "fn-omlx-latest", "fn-llamacpp-mtp"):
+    if engine in (
+        "omlx",
+        "llamacpp",
+        "omlx-latest",
+        "llamacpp-mtp",
+        "llamacpp-dflash",
+        "fn-omlx-latest",
+        "fn-llamacpp-mtp",
+    ):
         send(url, req(model, "Write a short example and explain it.", 16), timeout=240)
 
 
@@ -720,11 +728,15 @@ def part_corpus(s, out, a):
     A reply that stops early is recorded with ``short`` set instead of aborting the job, so the
     analysis counts only complete cells and reports how many were dropped."""
     n_dec = int(a.decode_tokens)
+    shorts: list[str] = []
     for path in [Path(x) for x in a.prompt_files.split(",") if x]:
         r = send(s.url, req(s.model, path.read_text(), n_dec))
         r["text"] = r.pop("_text")
         short = r.get("finish") != "length" or r.get("ct") != n_dec
         emit(out, part="corpus", prompt=path.stem, phase="cold", short=short, **r)
+        shorts.append(path.stem) if short else None
+    if shorts:  # fail closed: a short reply is data loss, the job must not end complete
+        raise RuntimeError(f"corpus: {len(shorts)} short replies: {shorts}")
 
 
 def part_decode(s, out, a):

@@ -234,7 +234,7 @@ def main(argv=None) -> int:
         sys.exit(
             f"pilot not validated for {blocked}; run `pilot` and read the logs first"
         )
-    print(json.dumps(bs.submit_jobs(jobs, a.out)))
+    print(json.dumps(bs.submit_jobs(jobs, a.out, max_active=40)))
     return 0
 
 

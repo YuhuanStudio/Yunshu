@@ -75,3 +75,20 @@ def test_detect_mode_new_engines():
     )
     assert be.detect_mode("tf-native", tf) == "dflash"
     assert be.detect_mode("tf-native", "drafts: off") is None
+
+
+def test_corpus_short_reply_fails_closed(tmp_path, monkeypatch):
+    import types
+
+    import tfbench
+
+    p = tmp_path / "p.txt"
+    p.write_text("hi")
+    monkeypatch.setattr(
+        tfbench, "send", lambda *a, **k: {"_text": "", "finish": "stop", "ct": 1}
+    )
+    monkeypatch.setattr(tfbench, "emit", lambda *a, **k: None)
+    s = types.SimpleNamespace(url="u", model="m")
+    a = types.SimpleNamespace(decode_tokens=1024, prompt_files=str(p))
+    with pytest.raises(RuntimeError, match="short replies"):
+        tfbench.part_corpus(s, None, a)
