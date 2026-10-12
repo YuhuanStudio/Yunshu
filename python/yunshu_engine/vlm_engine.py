@@ -572,6 +572,13 @@ class VLMEngine:
         )
 
         config = vlm_load_config(model_path)
+        if config.get("model_type") == "qwen4_exp":
+            # MLX bills a command-buffer commit for every large bound buffer (expert banks exceed its
+            # 50 MB default cap twice per MoE layer); raising the caps before the first Metal command
+            # removes those commits (-0.6 to -1.0 ms per plain Flash-Next step, same tokens).
+            # A user-set value wins.
+            os.environ.setdefault("MLX_MAX_MB_PER_BUFFER", "100000")
+            os.environ.setdefault("MLX_MAX_OPS_PER_BUFFER", "200")
 
         weight_files = [
             wf
