@@ -53,8 +53,6 @@ async def run(args):
         out.flush()
         print(json.dumps(row), flush=True)
 
-    from yunshu_engine.kernels.omlx_q4 import qwen35_gdn_prework as prework
-
     all_gdn = [i for i, ly in enumerate(lm.model.layers) if ly.is_linear]
     census = {}
     for i in all_gdn:
@@ -69,7 +67,7 @@ async def run(args):
                 la.out_proj,
             )
         )
-        census[i] = {"eligible": prework._qwen4_verify_plan(la) is not None, "sig": sig}
+        census[i] = {"eligible": qwen4_gdn.plan_for(la) is not None, "sig": sig}
     sigs = {}
     for c in census.values():
         sigs[str(c["sig"])] = sigs.get(str(c["sig"]), 0) + 1
