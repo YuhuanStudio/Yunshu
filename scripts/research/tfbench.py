@@ -315,12 +315,15 @@ class Srv:
             self.mem.stop()
 
 
-def send(url, body, timeout=600):
+def send(url, body, timeout=600, *, capture_timestamps=False, trace_id=None):
     body = dict(body, stream=True, stream_options={"include_usage": True})
+    headers = {"Content-Type": "application/json", "Authorization": "Bearer k"}
+    if trace_id is not None:
+        headers["X-TTFT-Probe-ID"] = trace_id
     req = urllib.request.Request(
         url + "/v1/chat/completions",
         json.dumps(body).encode(),
-        {"Content-Type": "application/json", "Authorization": "Bearer k"},
+        headers,
     )
     t0 = time.perf_counter()
     tf = None
@@ -382,7 +385,7 @@ def send(url, body, timeout=600):
             [c, rs, [tools[i] for i in sorted(tools)], finish], ensure_ascii=False
         ).encode()
     ).hexdigest()[:16]
-    return dict(
+    result = dict(
         energy=(xy or {}).get("energy"),
         joules_per_token=((xy or {}).get("energy") or {})
         .get("decode", {})
@@ -415,6 +418,10 @@ def send(url, body, timeout=600):
         if xy
         else None,
     )
+    if capture_timestamps:
+        result["_sent_at_s"] = t0
+        result["_first_at_s"] = tf
+    return result
 
 
 def corpus(kind):
@@ -492,6 +499,83 @@ def req(model, text, mt, seed=None, extra=None, temp=0):
     if extra:
         b.update(extra)
     return b
+
+
+def rehearsal_prefix(rendered, marker="<|im_start|>user"):
+    """The next turn's shared prefix: the rendered conversation up to its last user header."""
+    cut = rendered.rfind(marker)
+    if cut <= 0:
+        raise ValueError(f"marker {marker!r} not found in the rendered next turn")
+    return rendered[:cut]
+
+
+def _post_json(url, path, body, timeout=600):
+    req = urllib.request.Request(
+        url + path,
+        json.dumps(body).encode(),
+        {"Content-Type": "application/json", "Authorization": "Bearer k"},
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return json.loads(r.read())
+
+
+def rehearsal_count(metrics_text, outcome):
+    """Value of yunshu_next_turn_rehearsals_total{outcome=...} (0 when absent)."""
+    for line in metrics_text.splitlines():
+        if line.startswith("yunshu_next_turn_rehearsals_total{") and (
+            f'outcome="{outcome}"' in line
+        ):
+            return int(float(line.rsplit(" ", 1)[1]))
+    return 0
+
+
+def completed_rehearsals(metrics_text):
+    return rehearsal_count(metrics_text, "completed")
+
+
+def check_rehearsal_engaged(s, a):
+    """Fail closed: a server run with YUNSHU_NEXT_TURN_PREFILL=1 and a think time must have
+    completed at least one rehearsal, or the A/B would measure a feature that never ran."""
+    if str(s.extra_env.get("YUNSHU_NEXT_TURN_PREFILL", "")).lower() in (
+        "",
+        "off",
+        "boundary",  # the no-rehearsal reference
+        "0",
+        "false",
+    ):
+        return None
+    req = urllib.request.Request(
+        s.url + "/metrics", headers={"Authorization": "Bearer k"}
+    )
+    with urllib.request.urlopen(req, timeout=30) as r:
+        done = completed_rehearsals(r.read().decode())
+    if (a.think_s or getattr(a, "require_engaged", False)) and done < 1:
+        raise RuntimeError(
+            "YUNSHU_NEXT_TURN_PREFILL=1 but /metrics shows 0 completed rehearsals: "
+            "the feature never engaged (not noise, broken run)"
+        )
+    return done
+
+
+def rehearse(s, b):
+    """Prefill the assistant reply the way the next turn will (opt-in pilot, --rehearse)."""
+    kw = b.get("chat_template_kwargs")
+    rendered = _post_json(
+        s.url,
+        "/apply-template",
+        {"model": s.model, "messages": b["messages"], "chat_template_kwargs": kw},
+    )["prompt"]
+    prefix = rehearsal_prefix(rendered)
+    t0 = time.perf_counter()
+    r = _post_json(
+        s.url,
+        "/v1/completions",
+        {"model": s.model, "prompt": prefix, "max_tokens": 1, "temperature": 0},
+    )
+    return {
+        "rehearsal_s": round(time.perf_counter() - t0, 3),
+        "rehearsal_usage": r.get("usage"),
+    }
 
 
 META: dict = {}  # engine / version / sha / flags / drafter / engaged spec mode / checkpoint, on every row
@@ -630,6 +714,19 @@ def parse_phases(text):
     return set(phases)
 
 
+def part_corpus(s, out, a):
+    """Cold decode of many distinct prompts on one server (averages out greedy-divergence content).
+
+    A reply that stops early is recorded with ``short`` set instead of aborting the job, so the
+    analysis counts only complete cells and reports how many were dropped."""
+    n_dec = int(a.decode_tokens)
+    for path in [Path(x) for x in a.prompt_files.split(",") if x]:
+        r = send(s.url, req(s.model, path.read_text(), n_dec))
+        r["text"] = r.pop("_text")
+        short = r.get("finish") != "length" or r.get("ct") != n_dec
+        emit(out, part="corpus", prompt=path.stem, phase="cold", short=short, **r)
+
+
 def part_decode(s, out, a):
     phases = parse_phases(a.phases)
     n_dec = int(a.decode_tokens)
@@ -658,13 +755,25 @@ def part_decode(s, out, a):
                             "content": "Continue with the next part, at the same length.",
                         },
                     ]
+                extra_rec = {}
+                if phase == "turn2" and a.think_s:
+                    time.sleep(
+                        a.think_s
+                    )  # the user reads the reply before the follow-up
+                if phase == "turn2" and a.rehearse:
+                    extra_rec = rehearse(s, b)
                 r = send(s.url, b)
+                r.update(extra_rec)
                 if not a.smoke:
                     check_decode_len(r, want, f"decode {kind}-{ctx} {phase}")
                 if phase == "cold":
                     reply = r["_text"]
                 r["text"] = r.pop("_text")
                 r["rep4"] = ngram_repeat(r["text"])
+                if phase == "turn2":
+                    done = check_rehearsal_engaged(s, a)
+                    if done is not None:
+                        r["rehearsals_completed"] = done
                 emit(
                     out,
                     part="decode",
@@ -685,6 +794,91 @@ def part_decode(s, out, a):
                 r = send(s.url, req(s.model, text, n_dec, extra={"draft": False}))
                 r["text"] = r.pop("_text")
                 emit(out, part="decode", ctx=ctx, kind=kind, phase="specoff", **r)
+
+
+def arrival_offsets(window_s, n):
+    """n arrival times spread uniformly over the rehearsal window, plus one after it (control)."""
+    step = window_s / n
+    return [round(step * (i + 0.5), 3) for i in range(n)] + [round(window_s * 3, 3)]
+
+
+def part_arrive(s, out, a):
+    """A request arriving while a next-turn rehearsal runs (YUNSHU_NEXT_TURN_PREFILL).
+
+    One shared prompt is primed once; every trial asks a variant of it (cached prefix, so a trial
+    costs one decode), waits its offset after the reply and sends either a diverging request
+    (--arrive-mode diverge: another session, a tiny prompt) or the conversation's follow-up
+    (adopt). TTFT of that request against the offset gives the wait a rehearsal can cost
+    (diverge) or the time it saves (adopt)."""
+    ctx = (a.only_ctx or [32768])[0]
+    kind = (a.only_kind or ["code"])[0]
+    base = load_prompt(f"{kind}-{ctx}") + LONG_ASK
+    n_dec = int(a.decode_tokens)
+    send(s.url, req(s.model, base, 16))  # prime: the 32K prefix enters the cache
+    baseline = send(s.url, req(s.model, "Say hi.", 8))["ttft_s"]
+    emit(
+        out,
+        part="arrive",
+        ctx=ctx,
+        kind=kind,
+        mode=a.arrive_mode,
+        role="baseline",
+        ttft_s=baseline,
+    )
+    for k, off in enumerate(arrival_offsets(a.arrive_window, a.arrive_n)):
+        text = base + f"\nVariant {k}: answer in a different style."
+        r = send(s.url, req(s.model, text, n_dec))
+        check_decode_len(r, n_dec, f"arrive {ctx} trial {k}")
+        reply = r["_text"]
+        time.sleep(off)
+        if a.arrive_mode == "diverge":
+            b = req(s.model, "Say hi.", 8)
+        else:
+            b = req(s.model, text, 16)
+            b["messages"] += [
+                {"role": "assistant", "content": reply},
+                {
+                    "role": "user",
+                    "content": "Continue with the next part, at the same length.",
+                },
+            ]
+        probe = send(s.url, b)
+        rec = {
+            "offset_s": off,
+            "ttft_s": probe["ttft_s"],
+            "cached": probe.get("cached"),
+            "pt": probe.get("pt"),
+        }
+        if a.arrive_mode == "diverge":
+            rec["wait_s"] = round(probe["ttft_s"] - baseline, 3)
+        emit(
+            out,
+            part="arrive",
+            ctx=ctx,
+            kind=kind,
+            mode=a.arrive_mode,
+            role="trial",
+            trial=k,
+            **rec,
+        )
+        time.sleep(a.arrive_settle)
+    a.require_engaged = True
+    done = check_rehearsal_engaged(s, a)
+    metrics_req = urllib.request.Request(
+        s.url + "/metrics", headers={"Authorization": "Bearer k"}
+    )
+    with urllib.request.urlopen(metrics_req, timeout=30) as r:
+        preempted = rehearsal_count(r.read().decode(), "preempted")
+    emit(
+        out,
+        part="arrive",
+        ctx=ctx,
+        kind=kind,
+        mode=a.arrive_mode,
+        role="summary",
+        rehearsals_completed=done,
+        preempted=preempted,
+    )
 
 
 NEEDLE_NAMES = [
@@ -819,6 +1013,78 @@ def part_conc32(s, out, a):
         )
 
 
+def part_promote(s, out, a):
+    """A long reply A starts while a shorter reply B runs; B ends first and A then decodes alone.
+
+    Solo A is the reference; the concurrent A must produce the same text, and its tail should
+    run on the speculative lane (the server log shows "Promoted request")."""
+    n_a = int(a.decode_tokens)
+    ctx = (a.only_ctx or [1024])[0]
+    kind_a = os.environ.get("TFB_PROMOTE_KIND", "code")
+    text_a = decode_prompt(kind_a, ctx, False)
+    text_b = decode_prompt("prose" if kind_a == "code" else "code", ctx, False)
+
+    def send_a():
+        return send(s.url, req(s.model, text_a, n_a))
+
+    solo = send_a()
+    emit(out, part="promote", phase="solo", **{**solo, "text": solo["_text"]})
+    solo.pop("_text")
+    with cf.ThreadPoolExecutor(2) as ex:
+        # B starts first and owns the lane; A arrives while B decodes (so it joins the shared
+        # batch) and is the only request left once B ends.
+        fb = ex.submit(lambda: send(s.url, req(s.model, text_b, 200)))
+        time.sleep(float(os.environ.get("TFB_PROMOTE_DELAY_S", "0.8")))
+        fa = ex.submit(send_a)
+        rb, ra = fb.result(), fa.result()
+    emit(out, part="promote", phase="conc_B", **{**rb, "text": rb["_text"]})
+    emit(out, part="promote", phase="conc_A", **{**ra, "text": ra["_text"]})
+
+
+def part_forced(s, out, a):
+    """Same-text decoding: continue the other engine's output in windows of WINDOW tokens.
+
+    TFB_FORCED_TEXT is a decode JSONL record file holding that engine's cold text for the
+    cell; each window sends prompt + the text's first k tokens as an assistant prefill and
+    decodes WINDOW tokens greedily, so round statistics compare on identical text (until the
+    continuation diverges; ``match`` is the length of the common prefix in characters)."""
+    from transformers import AutoTokenizer
+
+    tok = AutoTokenizer.from_pretrained(a.model)
+    window = int(os.environ.get("TFB_WINDOW", "160"))
+    ctx, kind = (a.only_ctx or [1024])[0], (a.only_kind or ["prose"])[0]
+    text = None
+    for line in Path(os.environ["TFB_FORCED_TEXT"]).read_text().splitlines():
+        d = json.loads(line)
+        if d.get("part") == "decode" and d.get("phase") == "cold":
+            text = d["text"]
+    ids = tok.encode(text)
+    prompt = decode_prompt(kind, ctx, False)
+    for k in range(0, min(len(ids), 6 * window), window):
+        prefix = tok.decode(ids[:k]) if k else ""
+        b = req(s.model, prompt, window)
+        if prefix:
+            b["messages"] += [{"role": "assistant", "content": prefix}]
+        r = send(s.url, b)
+        want = tok.decode(ids[k : k + window])
+        got = r["_text"]
+        n = next(
+            (i for i, (x, y) in enumerate(zip(got, want, strict=False)) if x != y),
+            min(len(got), len(want)),
+        )
+        r.pop("_text")
+        emit(
+            out,
+            part="forced",
+            ctx=ctx,
+            kind=kind,
+            start_tok=k,
+            match_chars=n,
+            want_chars=len(want),
+            **r,
+        )
+
+
 def part_conc(s, out, a):
     ns = [int(x) for x in (a.conc_ns or "2,4,8").split(",")]
     for n in (2,) if a.smoke else ns:
@@ -938,6 +1204,27 @@ def parse_args(argv=None):
         default=256,
         help="reply length of decode cells; a cell that does not end finish=length at exactly N is an error",
     )
+    ap.add_argument("--arrive-mode", choices=("diverge", "adopt"), default="diverge")
+    ap.add_argument(
+        "--arrive-n", type=int, default=8, help="arrival offsets in the window"
+    )
+    ap.add_argument(
+        "--arrive-window", type=float, default=3.0, help="rehearsal window, seconds"
+    )
+    ap.add_argument(
+        "--arrive-settle", type=float, default=8.0, help="seconds after each probe"
+    )
+    ap.add_argument(
+        "--think-s",
+        type=float,
+        default=0.0,
+        help="seconds between the first reply and the follow-up (the user's reading time)",
+    )
+    ap.add_argument(
+        "--rehearse",
+        action="store_true",
+        help="before turn2, prefill the rendered assistant reply (next-turn rehearsal pilot)",
+    )
     ap.add_argument(
         "--conc-ns", default="", help="concurrency levels, e.g. 2,4 (default 2,4,8)"
     )
@@ -964,6 +1251,11 @@ def parse_args(argv=None):
         help="JSON object merged into every decode request body (e.g. penalties)",
     )
     ap.add_argument(
+        "--prompt-files",
+        default="",
+        help="corpus part: comma list of prompt files, one cold request each",
+    )
+    ap.add_argument(
         "--phases",
         default=",".join(ALL_PHASES),
         help="decode phases to run (comma list of cold,warm,turn2,specoff); the checks stay "
@@ -984,8 +1276,21 @@ def parse_args(argv=None):
 def main():
     a = parse_args()
     extra_env = dict(kv.split("=", 1) for kv in a.env)
-    if a.part not in ("decode", "conc", "agent", "ca", "needle", "conc32"):
-        raise ValueError("supported parts: decode, conc, agent, ca, needle, conc32")
+    if a.part not in (
+        "decode",
+        "conc",
+        "agent",
+        "ca",
+        "needle",
+        "conc32",
+        "arrive",
+        "promote",
+        "forced",
+        "corpus",
+    ):
+        raise ValueError(
+            "supported parts: decode, conc, agent, ca, needle, conc32, arrive, promote, forced, corpus"
+        )
     if a.dry_run:
         if a.part == "decode" and not a.smoke:
             for ctx in a.only_ctx or [1024, 8192, 32768]:
@@ -1065,10 +1370,14 @@ def main():
             else:
                 {
                     "decode": part_decode,
+                    "arrive": part_arrive,
                     "conc": part_conc,
                     "agent": part_agent,
                     "needle": part_needle,
                     "conc32": part_conc32,
+                    "promote": part_promote,
+                    "forced": part_forced,
+                    "corpus": part_corpus,
                 }[a.part](s, out, a)
             s.verify_spec_mode()
             mem = getattr(s, "mem", None)

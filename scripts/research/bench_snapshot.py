@@ -34,6 +34,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import bench_engines as be  # noqa: E402
+import snapshot_corpus as sc  # noqa: E402
 
 MAIN = Path("/Users/yuhuan/Documents/YuhuanStudio/Yunshu")
 GPUQ = str(MAIN / "scripts/dev/gpuq")
@@ -81,6 +82,10 @@ DECODE_GROUPS = (
     ("d128k-prose", (131072,), ("prose",)),
     ("d128k-code", (131072,), ("code",)),
 )
+# Decode tok/s cells run N distinct prompts (snapshot_corpus); TTFT cells keep the single prompt.
+CORPUS_DIR = Path("/Volumes/P5Plus/yunshu-build/snapshot014/corpus/variants")
+CORPUS_TOKENS = 1024
+CORPUS_GROUPS = (("cp1k", 1024), ("cp8k", 8192), ("cp32k", 32768))
 NEEDLE_GROUPS = (("n32k", 32768), ("n64k", 65536), ("n128k", 131072))
 CONC_NS = (2, 4)
 CONC_TRIALS = 2
@@ -167,6 +172,17 @@ def estimate_minutes(engine: str, part: str, ctxs, kinds) -> float:
     s = _STARTUP_S[engine] + 30 + 20  # + idle footprint wait + warm-up requests
     if part == "decode":
         s += sum(decode_cell_seconds(engine, c) for c in ctxs for _ in kinds)
+    elif part == "corpus":
+        for c in ctxs:
+            s += (
+                len(kinds)
+                * sc.CORPUS_N
+                * (
+                    prefill_seconds(engine, c)
+                    + decode_seconds(engine, c, CORPUS_TOKENS)
+                    + 3
+                )
+            )
     elif part == "needle":
         for c in ctxs:
             # Generic hybrid-cache servers may prefill every changed question.
@@ -240,6 +256,16 @@ def tfbench_argv(job: Job, out: Path) -> list[str]:
             "--ctx-tokens",
             str(max(job.ctxs) + 4096),
         ]
+    elif job.part == "corpus":
+        files = sc.corpus_files(CORPUS_DIR, job.ctxs[0], job.kinds)
+        argv += [
+            "--prompt-files",
+            ",".join(str(f) for f in files),
+            "--decode-tokens",
+            str(CORPUS_TOKENS),
+            "--ctx-tokens",
+            str(job.ctxs[0] + 4096),
+        ]
     elif job.part == "needle":
         for c in job.ctxs:
             argv += ["--only-ctx", str(c)]
@@ -261,7 +287,12 @@ def tfbench_argv(job: Job, out: Path) -> list[str]:
 
 
 def plan_cells(
-    engines, reps: int, outdir: Path, trees: dict, needle_reps: int = 1
+    engines,
+    reps: int,
+    outdir: Path,
+    trees: dict,
+    needle_reps: int = 1,
+    corpus: bool = False,
 ) -> list[Job]:
     """All measurement jobs: rep-major, group-major, engine-minor (engines interleave inside a cell)."""
     jobs: list[Job] = []
@@ -292,6 +323,10 @@ def plan_cells(
         for group, ctxs, kinds in DECODE_GROUPS:
             for e in engines:
                 add(e, "decode", group, rep, ctxs, kinds)
+        if corpus:
+            for group, ctx in CORPUS_GROUPS:
+                for e in engines:
+                    add(e, "corpus", group, rep, (ctx,), KINDS)
         for e in engines:
             add(e, "conc", "c2c4", rep, (), ())
         if rep < needle_reps:
@@ -366,6 +401,8 @@ def expected_rows(job: Job) -> dict:
         return {"decode": 3}
     if job.part == "decode":
         return {"decode": len(job.ctxs) * len(job.kinds) * len(PHASES)}
+    if job.part == "corpus":
+        return {"corpus": len(job.kinds) * sc.CORPUS_N}
     if job.part == "needle":
         return {"needle": len(job.ctxs) * NEEDLES}
     return {"conc": len(CONC_NS) * CONC_TRIALS}
@@ -418,6 +455,25 @@ def validate_rows(job: Job, rows: list[dict]) -> list[str]:
         problems.append("terminal record is not complete")
     if any(r.get("engine") != job.engine for r in rows):
         problems.append("engine identity mismatch")
+    if job.stage == "cell" and job.part == "corpus":
+        names = {f.stem for f in sc.corpus_files(CORPUS_DIR, job.ctxs[0], job.kinds)}
+        got_names = [r.get("prompt") for r in rows if r.get("part") == "corpus"]
+        if sorted(got_names) != sorted(names):
+            problems.append("corpus prompts missing, duplicate or unexpected")
+        for r in rows:
+            if r.get("part") != "corpus":
+                continue
+            v = r.get("dec_tps")
+            if not isinstance(v, int | float) or not math.isfinite(v) or v <= 0:
+                problems.append("invalid dec_tps")
+            if r.get("short") or r.get("ct") != CORPUS_TOKENS:
+                problems.append(f"{r.get('prompt')}: short reply ct={r.get('ct')}")
+                break
+            if be.ENGINES[job.engine].weights == "same" and r.get("pt") != job.ctxs[0]:
+                problems.append(
+                    "actual server prompt tokens differ from reference budget"
+                )
+                break
     if job.stage == "cell" and job.part == "decode":
         got = Counter(
             (r.get("ctx"), r.get("kind"), r.get("phase"))
@@ -789,7 +845,8 @@ def collect(outdir: Path, engines, yv_run: Path | None = None) -> dict:
                 continue
             rows = read_rows(f)
             planned = {
-                j.out.name: j for j in plan_cells([e], 9, outdir, {}, needle_reps=9)
+                j.out.name: j
+                for j in plan_cells([e], 9, outdir, {}, needle_reps=9, corpus=True)
             }
             job = planned.get(name)
             if job is None or validate_rows(job, rows):
@@ -812,6 +869,11 @@ def collect(outdir: Path, engines, yv_run: Path | None = None) -> dict:
                         ).append(r.get("ttft_s"))
                     if r["phase"] == "cold":
                         cells.setdefault(k + ("dec_tps",), []).append(r.get("dec_tps"))
+                elif p == "corpus":
+                    kind_, ctx_, _ = r["prompt"].split("-")
+                    cells.setdefault(
+                        (e, "corpus", int(ctx_), kind_, r["prompt"]), []
+                    ).append(r.get("dec_tps"))
                 elif p == "needle":
                     cells.setdefault(
                         (e, "needle", r["ctx"], "prose", "correct"), []
@@ -1007,6 +1069,16 @@ def render_markdown(cells: dict, engines) -> str:
                 for e in engines
             ]
             out.append(f"| {group} | " + " | ".join(comparison(values)) + " |")
+    corpus_groups: dict = {}
+    for key, values in cells.items():
+        if len(key) == 5 and key[1] == "corpus":
+            usable = [v for v in values if isinstance(v, int | float)]
+            if usable:
+                corpus_groups.setdefault((key[2], key[3]), {}).setdefault(key[0], {})[
+                    key[4]
+                ] = statistics.fmean(usable)
+    if corpus_groups:
+        out.append(sc.render(corpus_groups, engines))
     out.append("")
     out += [
         "## Gap hypotheses (unproven; applies to each positive gap in the corresponding engine/metric)",
@@ -1065,6 +1137,11 @@ def main(argv=None) -> int:
     ap.add_argument("--agents", default="claude,opencode")
     ap.add_argument("--agent-tf", action=argparse.BooleanOptionalAction, default=True)
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument(
+        "--corpus",
+        action="store_true",
+        help="also plan the N-prompt decode corpus cells (snapshot_corpus)",
+    )
     ap.add_argument("--md", type=Path)
     ap.add_argument("--yv-run", type=Path)
     a = ap.parse_args(argv)
@@ -1075,7 +1152,7 @@ def main(argv=None) -> int:
     dry = a.dry_run or a.cmd in ("plan", "status", "aggregate")
     trees, shas = resolve_trees(a, dry)
     pilots = plan_pilots(engines, a.out, trees)
-    cells = plan_cells(engines, a.reps, a.out, trees, a.needle_reps)
+    cells = plan_cells(engines, a.reps, a.out, trees, a.needle_reps, corpus=a.corpus)
 
     if a.cmd == "plan":
         extra = [

@@ -24,11 +24,8 @@
      ]
     },
     "dflash": {
-     "s": "missing",
-     "why": "compute_lattice_gpu reads the drafter's full-vocab logits and takes argpartition over 248k every round (dflash_tree.py compute_lattice_gpu); draft_vocab is installed only under draft_kind == 'mtp'",
-     "owner": "decode16",
-     "impact": "high",
-     "absent": [
+     "s": "engaged",
+     "ev": [
       [
        "python/yunshu_engine/dflash_tree.py",
        "_draft_vocab"
@@ -70,11 +67,8 @@
    "what": "Reduced-vocabulary top-k for tree/lattice candidates (MTP tree, DFlash lattice)",
    "cells": {
     "mtp": {
-     "s": "missing",
-     "why": "mtp_tree.py takes argpartition over the full-vocab head logits; DraftVocab only serves the greedy argmax",
-     "owner": "decode16",
-     "impact": "medium",
-     "absent": [
+     "s": "engaged",
+     "ev": [
       [
        "python/yunshu_engine/mtp_tree.py",
        "_draft_vocab"
@@ -82,11 +76,8 @@
      ]
     },
     "dflash": {
-     "s": "missing",
-     "why": "same gap as draft_vocab on the lattice top-k",
-     "owner": "decode16",
-     "impact": "high",
-     "absent": [
+     "s": "engaged",
+     "ev": [
       [
        "python/yunshu_engine/dflash_tree.py",
        "_draft_vocab"
@@ -1801,6 +1792,53 @@
     }
    }
   },
+  "lane_promotion": {
+   "module": "python/yunshu_engine/vlm_batch_runner.py",
+   "what": "A lone decoding row of the shared batch moves onto the speculative lane at a step boundary (batch to lane transition). Eligibility mirrors the lane's limits (greedy, no guide/processors/logprobs/thinking budget): widen it in the same change when sampled/guided DFlash lands",
+   "cells": {
+    "mtp": {
+     "s": "missing",
+     "why": "MTP head needs prompt hidden states the batch row never captured; capturing last-layer hidden states on the batch path would unlock it later",
+     "owner": "decode16",
+     "impact": "low",
+     "absent": [
+      [
+       "python/yunshu_engine/mtp_lane.py",
+       "_maybe_promote"
+      ]
+     ]
+    },
+    "dflash": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/vlm_batch_runner.py",
+       "def _maybe_promote"
+      ]
+     ]
+    },
+    "driver": {
+     "s": "na",
+     "why": "rows of the round driver have no shared-batch phase"
+    },
+    "batch": {
+     "s": "na",
+     "why": "this is the batch side of the transition"
+    },
+    "generic": {
+     "s": "na",
+     "why": "no drafter on this path"
+    },
+    "text": {
+     "s": "na",
+     "why": "n-gram drafts need no promotion"
+    },
+    "loop": {
+     "s": "na",
+     "why": "legacy loop is not grown (CLAUDE.md); decision is its removal"
+    }
+   }
+  },
   "qwen4_fused_hc": {
    "module": "python/yunshu_engine/kernels/tf_hc_forward.py",
    "what": "TensorFold flash_next fused hyper-connection + router/experts kernels for the qwen4_exp layer loop (always on for qwen4_exp; single-request plain decode 26 -> 14.4 ms)",
@@ -1837,6 +1875,114 @@
        "tf_hc_forward.install("
       ]
      ]
+    }
+   }
+  },
+  "next_turn_rehearsal": {
+   "module": "python/yunshu_engine/kernels/preempt.py",
+   "what": "Next-turn rehearsal (YUNSHU_NEXT_TURN_PREFILL): while idle after a reply, prefill the assistant reply as the next turn renders it so the follow-up prefills only the new message (27B 32K follow-up TTFT 3.4 -> 0.6 s); preemptible per decoder-layer group (kernels/preempt.py) so a diverging request waits <= ~0.35 s",
+   "cells": {
+    "mtp": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/vlm_engine.py",
+       "_maybe_rehearse("
+      ]
+     ]
+    },
+    "dflash": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/vlm_engine.py",
+       "_maybe_rehearse("
+      ]
+     ]
+    },
+    "batch": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/vlm_engine.py",
+       "_maybe_rehearse("
+      ]
+     ]
+    },
+    "driver": {
+     "s": "na",
+     "why": "a lone background rehearsal is below DRIVER_MIN_CONCURRENCY, so it runs on the stock batch runner; the driver itself is experimental and default off"
+    },
+    "generic": {
+     "s": "na",
+     "why": "preemption wraps the Qwen3.5 decoder layer only; other families report preempt.supported() False and never rehearse (a diverging request would wait a whole atom)"
+    },
+    "text": {
+     "s": "na",
+     "why": "text-only mlx-lm fast path has no APC checkpoints to rehearse into"
+    },
+    "loop": {
+     "s": "na",
+     "why": "legacy loop, not grown"
+    }
+   }
+  },
+  "gc_policy": {
+   "module": "python/yunshu_engine/gc_policy.py",
+   "what": "Python GC policy of the VLM runner (YUNSHU_GC_POLICY=defer): freeze the startup heap and hold the collector from request arrival to the first token, so a ~110 ms generation-2 pass cannot delay the first token (27B 32K warm -2.3%)",
+   "cells": {
+    "mtp": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/vlm_engine.py",
+       "gc_policy.install("
+      ]
+     ]
+    },
+    "dflash": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/vlm_engine.py",
+       "gc_policy.install("
+      ]
+     ]
+    },
+    "batch": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/vlm_engine.py",
+       "gc_policy.install("
+      ]
+     ]
+    },
+    "driver": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/vlm_engine.py",
+       "gc_policy.install("
+      ]
+     ]
+    },
+    "generic": {
+     "s": "engaged",
+     "ev": [
+      [
+       "python/yunshu_engine/vlm_engine.py",
+       "gc_policy.install("
+      ]
+     ]
+    },
+    "text": {
+     "s": "na",
+     "why": "text-only mlx-lm path does not go through the VLM runner"
+    },
+    "loop": {
+     "s": "na",
+     "why": "legacy loop, not grown"
     }
    }
   }
@@ -2218,13 +2364,14 @@
   "python/yunshu_engine/mtp_decoder.py": "orphan (see orphans)",
   "python/yunshu_engine/spec_interface.py": "orphan (see orphans)",
   "python/yunshu_engine/spec_proposer.py": "orphan (see orphans)",
+  "python/yunshu_engine/dflash_apc_window.py": "DFlash drafter context window kept beside APC checkpoints (dflash path; apc_prefix_cache)",
+  "python/yunshu_engine/penalty_context.py": "Penalty context = full prompt on an APC hit (hit == miss; part of penalties_in_spec / apc)",
+  "python/yunshu_engine/gpu_window.py": "debug GPU busy/idle window (Metal interposer), inert unless DYLD_INSERT_LIBRARIES loads it",
   "python/yunshu_engine/kernels/tf_flash_next/base.py": "TensorFold flash_next v1 kernels used by qwen4_fused_hc (kernels/tf_hc_forward.py)",
   "python/yunshu_engine/kernels/tf_flash_next/hc.py": "TensorFold flash_next v1 kernels used by qwen4_fused_hc (kernels/tf_hc_forward.py)",
   "python/yunshu_engine/kernels/tf_flash_next/threads.py": "TensorFold flash_next v1 kernels used by qwen4_fused_hc (kernels/tf_hc_forward.py)",
   "python/yunshu_engine/kernels/tf_flash_next/inputs.py": "TensorFold flash_next v1 kernels used by qwen4_fused_hc (kernels/tf_hc_forward.py)",
-  "python/yunshu_engine/kernels/tf_flash_next/experts.py": "TensorFold flash_next v1 router/expert kernels used by qwen4_fused_hc (kernels/tf_hc_forward.py)",
-  "python/yunshu_engine/dflash_apc_window.py": "DFlash drafter context window kept beside APC checkpoints (dflash path; apc_prefix_cache)",
-  "python/yunshu_engine/penalty_context.py": "Penalty context = full prompt on an APC hit (hit == miss; part of penalties_in_spec / apc)"
+  "python/yunshu_engine/kernels/tf_flash_next/experts.py": "TensorFold flash_next v1 router/expert kernels used by qwen4_fused_hc (kernels/tf_hc_forward.py)"
  },
  "settings": {
   "YUNSHU_MTP": "draft_family_coverage",
@@ -2281,11 +2428,13 @@
   "YUNSHU_FOOTPRINT_SAMPLE_MS": "idle_memory_return",
   "YUNSHU_MAX_MEMORY_GB": "idle_memory_return",
   "YUNSHU_PLE_READ_THREADS": "ple_ssd_rows",
-  "YUNSHU_SPEC_NODES": "cost_aware_depth",
   "YUNSHU_VLM_APC_DRAFT_WINDOW_GB": "apc_prefix_cache",
-  "YUNSHU_DEBUG_TREE_PROFILE": "tree_drafts"
+  "YUNSHU_DEBUG_TREE_PROFILE": "tree_drafts",
+  "YUNSHU_NEXT_TURN_PREFILL": "next_turn_rehearsal",
+  "YUNSHU_NEXT_TURN_DELAY_S": "next_turn_rehearsal",
+  "YUNSHU_GC_POLICY": "gc_policy"
  },
- "gap_budget": 57,
+ "gap_budget": 55,
  "settings_categories": [
   "speculative",
   "vlm-runner",

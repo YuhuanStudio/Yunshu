@@ -38,6 +38,7 @@ import numpy as np
 
 from . import keyed_sampling, settings
 from .idle_memory import IdleMemory
+from .kernels.preempt import PreemptedError as _Preempted
 from .keyed_sampling import top_k_filter, top_p_filter
 from .serving.busy_time import BusyMeter
 from .serving.work_scheduler import (
@@ -52,6 +53,7 @@ from .serving.work_scheduler import (
 )
 
 logger = logging.getLogger(__name__)
+
 
 # Upstream prefill default; APC checkpoints land on these chunk boundaries and
 # cancellation is honoured between chunks (~2 s at 2K tokens on a 27B model).
@@ -385,6 +387,7 @@ class VLMBatchRunner:
         self.apc_semantic_hash = apc_semantic_hash
         self.drafter = drafter
         self.draft_kind = draft_kind
+        self.promotions = 0  # shared-batch rows moved onto the speculative lane
         from . import penalty_context
 
         penalty_context.install()  # penalty context = the full prompt on an APC hit too
@@ -410,6 +413,7 @@ class VLMBatchRunner:
         self._handoff_timer: threading.Timer | None = None
         self.clear_on_idle = False
         self._idle_memory: IdleMemory | None = None
+        self.gc_guard: Any = None  # gc_policy.TtftGcGuard when YUNSHU_GC_POLICY=defer
         # Requests the engine has accepted, including ones still being
         # prepared (templating, image encoding) — the runner alone cannot see
         # those, and a request is only "alone" if the engine has no others.
@@ -625,6 +629,7 @@ class VLMBatchRunner:
         xtc_special_tokens: list | None = None,
         guide: Any = None,
         prompt_cache_plan: dict | None = None,
+        first_delivery: threading.Event | None = None,
     ) -> Iterator[int]:
         """Yield generated token ids; ``stats`` is filled in as generation runs.
 
@@ -715,6 +720,7 @@ class VLMBatchRunner:
             priority=getattr(cancel_event, "scheduling_priority", 0),
             cache_plan=prompt_cache_plan,
             budget=budget,
+            first_delivery=first_delivery,
         )
         # The round driver drafts for any row without logits processors, logprobs
         # or a tool-call guide (a thinking budget is fine there); sampled rows draw
@@ -781,7 +787,8 @@ class VLMBatchRunner:
 
         Data past OUT_LIMIT (a consumer that stopped reading) ends the job with
         an error instead of growing without bound; the row is dropped at the
-        next slice. Never blocks the executor thread.
+        next slice. Only the first DFlash stream token can wait for a bounded
+        consumer handoff; ordinary data never blocks the executor thread.
         """
         if job.terminal:
             return
@@ -794,28 +801,56 @@ class VLMBatchRunner:
                 "request cancelled"
             )
         job.out.put(item)
+        if self.gc_guard is not None:
+            self.gc_guard.first_token(id(job))
+        # The first target token is already complete. Starting copy lookup now
+        # can run a full cyclic collection while the SSE consumer still needs
+        # the GIL. Give that consumer one bounded opportunity to deliver first.
+        # No tensor, sampler or proposal state changes, including on timeout.
+        if (
+            isinstance(item, tuple)
+            and job.stats.generated == 1
+            and job.first_delivery is not None
+            and not job.first_delivery_waited
+            and job.allow_draft
+            and job.use_draft
+            and self.draft_kind == "dflash"
+            and self._executor is not None
+            and job.max_tokens > 1
+        ):
+            job.first_delivery_waited = True
+            completed = job.first_delivery.wait(0.004)
+            if not getattr(self, "_first_delivery_logged", False):
+                self._first_delivery_logged = True
+                logger.info(
+                    "First-content handoff engaged (DFlash, 4ms bound, completed=%s)",
+                    completed,
+                )
 
     def _fail_all(self, exc: BaseException) -> None:
-        """Terminate every pending / active job with ``exc`` (executor gone)."""
+        """Detach failed work before waking consumers; their terminal means drained."""
         with self._lock:
             pending, self._pending = self._pending, []
+            groups = list(self._groups())
+            drivers, self._driver_jobs = self._driver_jobs, {}
+            self._batches.clear()
+            self._spec = None
+            self._aux_spec = None
             self._driving = False
-        for job in pending:
-            self._emit(job, exc)
-        for group in self._groups():
-            for job in group.jobs.values():
-                self._emit(job, exc)
+        for group in groups:
             with contextlib.suppress(Exception):
                 close_generator(group.gen)
-        self._batches.clear()
-        self._spec = None
-        self._aux_spec = None
-        for job in self._driver_jobs.values():
-            self._emit(job, exc)
+        for job in drivers.values():
             if self.driver is not None:
                 with contextlib.suppress(Exception):
                     (job.driver or self.driver).remove(job)
-        self._driver_jobs.clear()
+        for job in pending:
+            self._emit(job, exc)
+        for group in groups:
+            for job in group.jobs.values():
+                self._emit(job, exc)
+        for job in drivers.values():
+            self._emit(job, exc)
 
     def _schedule(self) -> None:
         try:
@@ -838,6 +873,8 @@ class VLMBatchRunner:
     def _submit(self, job: _Job) -> None:
         if self._idle_memory is not None:
             self._idle_memory.activity()
+        if self.gc_guard is not None:
+            self.gc_guard.begin(id(job))
         with self._lock:
             job.queued = job.last_service = time.perf_counter()
             self._pending.append(job)
@@ -1007,6 +1044,19 @@ class VLMBatchRunner:
         job.stats.used_apc = use_apc
         spec_lane = self._aux_spec if job.priority < 0 else self._spec
         spec = job.use_draft and alone and spec_lane is None
+        job.promotable = bool(
+            job.use_draft
+            and not spec
+            and self.draft_kind == "dflash"
+            and job.priority >= 0
+            and job.greedy
+            and job.guide is None
+            and not job.logprobs
+            and not job.processors
+            and job.budget is None
+            and job.cache_plan is None
+            and job.prompt_kwargs is None
+        )
         job.stats.spec_reason = (
             "engaged"
             if spec
@@ -1142,6 +1192,108 @@ class VLMBatchRunner:
         group.jobs[uid] = job
         if group.sampler is not None and job.sampling is not None:
             group.sampler.add(uid, job.sampling)
+
+    def _maybe_promote(self) -> bool:
+        """Move a lone decoding row from the shared batch onto the speculative lane.
+
+        A request that started while others ran stays off the lane for its whole life; once
+        it is the only request left it would decode at plain speed for the rest of a long
+        reply. At a step boundary the shared batch holds its KV (one-row ``BatchKVCache``,
+        the lane's own layout), every committed token processed, and the next token sampled
+        but neither cached nor emitted, which is the state a prefill hands the lane. The
+        drafter has no target hidden states for the committed positions: the lane's first
+        round is a plain one-row verify that captures them, so promotion is lossless.
+        """
+        if (
+            self.drafter is None
+            or self._spec is not None
+            or self._aux_spec is not None
+            or self._driver_jobs
+            or self._pending
+            or self.inflight() != 1
+        ):
+            return False
+        groups = [g for g in self._batches.values() if g.jobs]
+        if len(groups) != 1 or len(groups[0].jobs) != 1:
+            return False
+        group = groups[0]
+        ((uid, job),) = group.jobs.items()
+        gen = group.gen
+        batch = gen._generation_batch
+        if (
+            not job.promotable
+            or not job.stats.t_first
+            or group.prefills
+            or gen._prompt_batch is not None
+            or gen._unprocessed_sequences
+            or getattr(batch, "is_speculative", False)
+            or list(batch.uids) != [uid]
+            or batch._next_tokens is None
+            or batch.logits_processors
+            and any(batch.logits_processors)
+        ):
+            return False
+        remaining = int(batch.max_tokens[0]) - int(batch._num_tokens[0])
+        if remaining < 2:
+            return False
+        from mlx_vlm.generate.ar import SpeculativeGenerationBatch
+
+        batch._eval_pending_state()
+        cache = list(batch.prompt_cache)  # the filter below clears the batch's own list
+        spec_batch = SpeculativeGenerationBatch(
+            self.model,
+            self.drafter,
+            self.draft_kind,
+            [uid],
+            batch._next_tokens,
+            cache,
+            batch.sampler,
+            batch.stop_criteria,
+            [remaining],
+            None,
+            None,
+            None,
+            draft_block_size=self.draft_block_size,
+            token_dtype=batch._next_tokens.dtype,
+            greedy_sampling=True,
+        )
+        new_gen = self._new_generator(
+            spec=True,
+            use_apc=job.stats.used_apc,
+            top_logprobs=0,
+            sampler=None,
+            greedy=True,
+        )
+        new_gen._generation_batch = spec_batch
+        gen._generation_batch.filter([])
+        group.jobs.pop(uid, None)
+        if group.sampler is not None:
+            group.sampler.drop(uid)
+        from .constrained_spec import SpecRequest, install
+
+        install()
+        job.use_draft = True
+        job.promotable = False
+        job.stats.used_draft = True
+        job.stats.spec_reason = "promoted"
+        job.stats.spec_mode = _spec_mode(self.drafter)
+        job.spec_base = _spec_counters(self.drafter)
+        job.spec_last = job.spec_base
+        job.spec_request = SpecRequest(False, 0)
+        job.spec_request.guide = None
+        job.spec_request.processors = []
+        vocab = getattr(self.drafter, "_draft_vocab", None)
+        if vocab is not None:
+            vocab.set_context(job.ids)
+            self._vocab_owner = job
+        self._spec = _Group(gen=new_gen, spec=True, jobs={uid: job})
+        self.promotions += 1
+        logger.info(
+            "Promoted request onto the speculative lane (%s): %d tokens left",
+            job.stats.spec_mode,
+            remaining,
+        )
+        return True
 
     # ── round driver ────────────────────────────────────────────────────
     def _admit_driver(self, job: _Job, use_apc: bool) -> None:
@@ -1292,6 +1444,21 @@ class VLMBatchRunner:
                     group.gen.remove(uid)
                 self._finish(group, uid, "cancel" if cancelled else None)
 
+    @staticmethod
+    def _next_preemptible(group):
+        """``group.gen.next()``; a lone job whose cancel event is marked ``preemptible`` (the
+        next-turn rehearsal) may be stopped between decoder-layer groups (kernels/preempt.py)."""
+        jobs = list(group.jobs.values())
+        if len(jobs) == 1 and getattr(
+            getattr(jobs[0], "cancel_event", None), "preemptible", False
+        ):
+            from .kernels import preempt
+
+            if preempt.supported():
+                with preempt.scope(jobs[0].cancel_event):
+                    return group.gen.next()
+        return group.gen.next()
+
     def _step_group(self, group: _Group, *, decode_only: bool = False) -> None:
         from .kernels import batch_invariant
 
@@ -1417,11 +1584,26 @@ class VLMBatchRunner:
                 finally:
                     group.gen.completion_batch_size = capacity
             else:
-                prompt_progress, responses = group.gen.next()
+                prompt_progress, responses = self._next_preemptible(group)
             if group.spec and (job.guide is not None or job.logprobs):
                 from .constrained_spec import finish_serial_prefill
 
                 finish_serial_prefill(group.gen)
+        except _Preempted as stop:
+            # A background rehearsal was cancelled inside a prefill atom. Nothing of the partial
+            # atom was stored; the cancel flag makes the next slice drop the job and its cache.
+            discard = getattr(apc, "discard_deferred_checkpoints", None)
+            if discard is not None:
+                discard()
+            logger.info(
+                "background prefill preempted at layer group %d (after %d layers)",
+                stop.group,
+                stop.layers,
+            )
+            from . import next_turn
+
+            next_turn.record("preempted")
+            return
         except BaseException:
             discard = getattr(apc, "discard_deferred_checkpoints", None)
             if discard is not None:
@@ -2044,6 +2226,10 @@ class VLMBatchRunner:
             if waiting:
                 with self._lock:
                     self._pending = waiting + self._pending
+            try:
+                self._maybe_promote()
+            except Exception:  # lossless fallback: the row keeps decoding in the batch
+                logger.exception("speculative-lane promotion failed")
             if work_order:
                 self._step_work_groups(primary)
             else:
@@ -2380,6 +2566,7 @@ class _Job:
     guide: Any = None
     spec_request: Any = None
     spec_procs: list = field(default_factory=list)
+    promotable: bool = False  # may move from the shared batch onto the speculative lane
     keyed: Any = (
         None  # KeyedSampler of a sampled request served by the speculative lane
     )
@@ -2388,6 +2575,8 @@ class _Job:
     spec_last: tuple | None = None
     terminal: bool = False
     overflowed: bool = False
+    first_delivery: threading.Event | None = None
+    first_delivery_waited: bool = False
 
 
 @dataclass

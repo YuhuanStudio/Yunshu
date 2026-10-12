@@ -1,5 +1,5 @@
 """Real HTTP server (uvicorn, real lifespan) in front of the scripted engine: CPU-only, no model.
-Used by tests/unit/test_graceful_shutdown_real_server.py. Usage: scripted_server.py PORT DELAY_S PIECES."""
+Used by tests/unit/test_graceful_shutdown_real_server.py. Usage: scripted_server.py PORT DELAY_S PIECES [BOUND_FD]."""
 
 from __future__ import annotations
 

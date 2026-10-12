@@ -16,6 +16,7 @@ STAGES = (
     "memory",
     "longqa",
     "conc",
+    "ttft_profile",
     "multimodal",
     "modelprobe",
     "client_compat",
@@ -40,6 +41,7 @@ LADDER = tuple(
     not in (
         "longqa",
         "conc",
+        "ttft_profile",
         "multimodal",
         "snapshot",
         "modelprobe",
@@ -62,6 +64,14 @@ LADDER = tuple(
 
 # Every key is a default; the CLI can override ctx / reps / mmlu_n / mem_sizes.
 SUITES = {
+    # Diagnostic instrumentation only; does not judge speed or token identity.
+    "ttft_profile": {
+        "stages": ["preflight", "ttft_profile"],
+        "ctx": [32768, 131072],
+        "kinds": ["code"],
+        "spec_off": False,
+        "reps": 1,
+    },
     "snapshot": {"stages": ["snapshot"]},
     "qwen4_mtp": {"stages": ["preflight", "qwen4_mtp"]},
     "respfeat": {"stages": ["preflight", "respfeat"]},
@@ -172,6 +182,39 @@ SUITES = {
         "keep_going": True,  # a regression in one stage must not hide the others
         "mem_sizes": [32768, 131072],
         "mem_reps": 2,
+        "speed_tol_pct": 3.0,
+    },
+    # follow-up TTFT after the user reads the reply (next-turn rehearsal needs idle time):
+    # same cells as `long`, 12 s between the reply and the follow-up, code only, 3 reps
+    "followup": {
+        "stages": ["preflight", "identity", "apc", "speed"],
+        "ctx": [32768, 131072],
+        "kinds": ["code"],
+        "spec_off": False,
+        "reps": 3,
+        "decode_tokens": 2048,
+        "turn2_tokens": 256,
+        "think_s": 12,
+        "split_cells": True,
+        "long_ask": True,
+        "keep_going": True,
+        "speed_tol_pct": 3.0,
+    },
+    # the follow-up arrives 1 s after the warm resend, i.e. while the next-turn rehearsal of the
+    # warm reply is still prefilling (adopt case); the warm resend itself arrives right after the
+    # cold reply (a diverging request mid-rehearsal). Run with YUNSHU_NEXT_TURN_DELAY_S=0.
+    "followup_mid": {
+        "stages": ["preflight", "identity", "apc", "speed"],
+        "ctx": [32768],
+        "kinds": ["code"],
+        "spec_off": False,
+        "reps": 3,
+        "decode_tokens": 2048,
+        "turn2_tokens": 256,
+        "think_s": 1,
+        "split_cells": True,
+        "long_ask": True,
+        "keep_going": True,
         "speed_tol_pct": 3.0,
     },
     # release trend: one rep of the headline long cells, no noise estimate (compare tags pairwise)

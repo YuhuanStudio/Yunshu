@@ -159,6 +159,22 @@ class DraftVocab:
             bits=self.bits,
         )
 
+    def logits_subset(self, hidden: mx.array) -> tuple[mx.array, mx.array] | None:
+        """Logits over the searched ids, ``([rows, n], ids [n])`` for ``hidden`` ``[..., D]``;
+        None once the request is in a script the base set does not cover (the caller then
+        reads the full vocabulary). Shared by the MTP chain / tree and the DFlash lattice:
+        a draft only proposes, the target verifies it, so a reduced candidate set cannot
+        change an output token."""
+        if self.full:
+            return None
+        x = hidden.reshape(-1, hidden.shape[-1])
+        logits = self._matmul(x, self.rows)
+        ids = self.ids
+        if self.extra_ids is not None and self.extra_rows is not None:
+            logits = mx.concatenate([logits, self._matmul(x, self.extra_rows)], axis=-1)
+            ids = mx.concatenate([ids, self.extra_ids])
+        return logits, ids
+
     def argmax(self, hidden: mx.array) -> mx.array:
         """Greedy token ids for ``hidden`` [..., D], shaped like an argmax over
         full-vocabulary logits [..., V]."""
@@ -195,12 +211,17 @@ def install(drafter: Any, target_language_model: Any, keep: int) -> DraftVocab |
     if vocab.bits != 4 or getattr(head, "mode", "affine") != "affine":
         return None
 
-    vocab.fallback = drafter._greedy_token
+    greedy = getattr(drafter, "_greedy_token", None)
+    # a DFlash drafter has no greedy readout: its lattice reads logits_subset instead, and the
+    # fallback only marks that a full-vocabulary readout exists
+    vocab.fallback = greedy if greedy is not None else drafter._logits
 
-    def _greedy_token(hidden: mx.array) -> mx.array:
-        return vocab.argmax(hidden)
+    if greedy is not None:
 
-    object.__setattr__(drafter, "_greedy_token", _greedy_token)
+        def _greedy_token(hidden: mx.array) -> mx.array:
+            return vocab.argmax(hidden)
+
+        object.__setattr__(drafter, "_greedy_token", _greedy_token)
     object.__setattr__(drafter, "_draft_vocab", vocab)
     return vocab
 

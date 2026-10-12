@@ -135,6 +135,8 @@ const settingdesc = {
     "Size cap of the APC SSD tier in GiB, one budget for the whole directory (least recently used files go first across namespaces; 0 = no configured cap, the free-space reserve still applies). Unset: a quarter of the volume, at most 64 GiB. A 27B checkpoint costs about 130 KiB per token, so 64 GiB holds about 500K tokens.",
   YUNSHU_PREFILL_MATMUL:
     "Qwen3.5-family VLM runner on M5-class GPUs: matmul for prefill chunks over 512 rows. `stock` runs MLX’s quantized matmul on the untiled weight (cold 27B prefill about 25% faster; a chunk’s bits depend on its row count); `lane` keeps the row-invariant lane kernel for every row count. Part of every APC key and SSD namespace.",
+  YUNSHU_GIL_SWITCH_MS:
+    "Serving process: how long (ms) a Python thread may hold the GIL before another thread that wants it gets it. CPython's 5 ms made the event loop wake up to 5 ms late while the generation thread ran Python (27B decode: loop lag p99 5.3 ms, 0.5 ms gives 2.0 ms; tokens/s unchanged). Scheduling only; output unchanged. 0 = CPython default.",
   YUNSHU_PLE_READ_THREADS:
     "Qwen3.8-Flash-Next with the n-gram embedding (PLE) read from SSD: threads that read a token's 48 PLE rows in parallel instead of one after another (about 7 ms per token on fresh text). Rows are byte-identical, so output is unchanged. 0 = upstream serial reads.",
   YUNSHU_PREFILL_BUFFER_CACHE_GB:
@@ -156,11 +158,9 @@ const settingdesc = {
   YUNSHU_MTP:
     "Qwen3.5-family VLMs: draft with the checkpoint’s MTP head (batch-invariant; speculative on equals off).",
   YUNSHU_VLM_DRAFT:
-    "Qwen3.5-family VLMs: speculative draft override. A DFlash drafter directory; `mtp` forces the checkpoint MTP head; `off` disables drafting. Unset: a matching DFlash2 drafter in the models dir or Hugging Face cache is used automatically, else the MTP head.",
+    "Qwen3.5-family VLMs: speculative draft override. A DFlash drafter directory; `mtp` forces the checkpoint MTP head; `off` (default) disables drafting. Unset: a matching DFlash2 drafter in the models dir or Hugging Face cache is used automatically, else the MTP head.",
   YUNSHU_MTP_BLOCK_SIZE:
     "Draft block size (for DFlash, the ceiling its acceptance-driven depth stays under). Unset: 6 for MTP, the drafter’s trained block for DFlash.",
-  YUNSHU_SPEC_NODES:
-    "Experimental. Qwen3.5-family DFlash fast tree: pin the draft nodes verified each round (0–15; a round verifies nodes+1 rows). Unset: the cost-aware budget chooses. Output is unchanged either way.",
   YUNSHU_SPEC_COPY_ROWS:
     "Qwen3.5-family single-request speculative lane: verify rows a prompt-copy round may use (copy drafts = rows - 1). A copy round proposes the continuation of the longest earlier occurrence of the current tail in the prompt plus generated text, and the same verify checks it, so output is unchanged. Agent, code-editing and multi-turn traffic that quotes its context commits several times more tokens per round. Default 16 rows, capped to the backend’s certified width; 0 turns copy rounds off.",
   YUNSHU_DRAFT_BITS:
@@ -187,6 +187,12 @@ const settingdesc = {
     "Quantize weights in memory at load (lossy; memory vs quality): `mxfp4`, `nvfp4`, `mxfp8` or `affine` (empty keeps the checkpoint).",
   YUNSHU_QUANT_CONFIG:
     "Bits and group size for `affine` in-memory quantization: JSON (with `bits` and `group_size` keys) or `bits` / `bits,group`.",
+  YUNSHU_GC_POLICY:
+    "Python cyclic-collector policy of the VLM runner: `defer` (default) freezes the startup heap and holds the collector from request arrival to the first token, so a generation-2 pass cannot delay the first token; `freeze` only freezes; `default` is Python's own. Output is unchanged.",
+  YUNSHU_NEXT_TURN_PREFILL:
+    "After a finished plain-text reply and while the engine is idle, prefill the reply as the next turn will render it, so the follow-up prefills only the new message. `exact` rehearses to the end of the reply, `stride` to the prefill-atom grid, `boundary` only adds the prefill boundary (reference), `off` disables it. A request for the same conversation takes over a running rehearsal; any other request cancels it within a few decoder layers. Output is unchanged.",
+  YUNSHU_NEXT_TURN_DELAY_S:
+    "Seconds between a finished reply and the start of the next-turn rehearsal. Requests that arrive sooner (retries, resends, agent loops) find no work running.",
   YUNSHU_ROUND_PREFILL_CHUNK:
     "Round driver: prompt tokens per prefill span. A decoding request only steps between prefill forwards, so smaller spans keep it running next to a long prompt, at about 20% lower prefill speed. Spans are fixed per prompt, so output is independent of what else is running; prompts prefilled with different sizes are self-consistent but not bit-identical to each other.",
   YUNSHU_ROUND_DRIVER:

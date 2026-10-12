@@ -290,6 +290,102 @@ _REPLAY_PATH = (
 )
 
 
+# The commit's conv tail (the last three conv inputs of the committed path) copied by the same
+# threads that finish the state replay: one dispatch and one Python call per GDN layer instead of
+# two. A pure copy, so bits equal the gather it replaces. Needs 3 * C <= threads in the grid.
+_TAIL_COPY = """
+    {
+        uint tid = (n * Dv + dv) * 32 + lane;
+        if (tid < 3 * C) {
+            uint j = tid / C;
+            uint c = tid - j * C;
+            int src = tail_src[j];
+            tail_out[tid] = src < 3 ? conv_prev[src * C + c] : mixed[(src - 3) * C + c];
+        }
+    }
+"""
+TAIL_INPUTS = ["conv_prev", "mixed", "tail_src"]
+
+
+def tail_fits(layer, conv_prev, mixed) -> bool:
+    """The fused tail copy covers the conv state with the replay kernel's own threads."""
+    c = int(conv_prev.shape[-1])
+    return (
+        conv_prev.ndim == 3
+        and mixed.dtype == conv_prev.dtype
+        and int(mixed.shape[-1]) == int(conv_prev.shape[-1])
+        and int(conv_prev.shape[0]) == 1
+        and int(conv_prev.shape[1]) == 3
+        and 3 * c <= 32 * int(layer.head_v_dim) * int(layer.num_v_heads)
+    )
+
+
+def tail_template(conv_prev):
+    return [("C", int(conv_prev.shape[-1]))]
+
+
+def _replay_tail_kernel():
+    kernel = _KERNELS.get("replay_tail")
+    if kernel is None:
+        kernel = _KERNELS["replay_tail"] = mx.fast.metal_kernel(
+            name="yunshu_gdn_replay_path_tail",
+            input_names=[
+                "state_in",
+                "A_log",
+                "dt_bias",
+                "pk",
+                "pv",
+                "pa",
+                "pb",
+                "path",
+                "count",
+                *TAIL_INPUTS,
+            ],
+            output_names=["state_out", "tail_out"],
+            source=_REPLAY_PATH + _TAIL_COPY,
+            header=gv._HELPERS,
+        )
+    return kernel
+
+
+def replay_path_tail(
+    layer, state, rows, path_arr, count_arr, conv_prev, mixed, conv_idx
+):
+    """``replay_path`` plus the conv tail: ``(state, tail [1, 3, C])``."""
+    pk, pv, pa, pb = rows
+    geo = gv._geometry(layer, 1)
+    out, tail = _replay_tail_kernel()(
+        inputs=[
+            state,
+            layer.A_log,
+            layer.dt_bias,
+            pk,
+            pv,
+            pa,
+            pb,
+            path_arr,
+            count_arr,
+            conv_prev,
+            mixed,
+            conv_idx,
+        ],
+        template=[
+            ("InT", pk.dtype),
+            ("Hk", geo["Hk"]),
+            ("Hv", geo["Hv"]),
+            ("Dk", geo["Dk"]),
+            ("Dv", geo["Dv"]),
+            ("P", pk.shape[1]),
+            *tail_template(conv_prev),
+        ],
+        grid=geo["grid"],
+        threadgroup=(32, 4, 1),
+        output_shapes=[state.shape, tuple(conv_prev.shape)],
+        output_dtypes=[mx.float32, conv_prev.dtype],
+    )
+    return out, tail
+
+
 def _replay_kernel():
     kernel = _KERNELS.get("replay")
     if kernel is None:
@@ -924,6 +1020,12 @@ def _tick(name: str, arrays, t0: float) -> float:
     mx.eval(arrays)
     now = time.perf_counter()
     PROFILE[name] = PROFILE.get(name, 0.0) + (now - t0) * 1000
+    from . import gpu_window
+
+    count = gpu_window.stage_end()
+    if count:
+        key = name[:-3] + "_disp" if name.endswith("_ms") else name + "_disp"
+        PROFILE[key] = PROFILE.get(key, 0.0) + count
     return now
 
 
@@ -969,6 +1071,9 @@ def _tree_forward(
 
         PROFILE["rounds"] += 1
         mx.eval(h, normed)
+        from . import gpu_window
+
+        gpu_window.stage_begin()
         t0 = time.perf_counter()
     for i, (layer, c) in enumerate(zip(layers, cache, strict=True)):
         if layer.is_linear:
@@ -1050,10 +1155,20 @@ def compact_kv(caches: list, src: mx.array, n0: int, m: int) -> None:
     rows = []
     for c in caches:
         rows.append((mx.take(c.keys, src, axis=2), mx.take(c.values, src, axis=2)))
-    mx.eval(rows)
+    mx.async_eval(rows)
     for c, (k, v) in zip(caches, rows, strict=True):
         c.keys[..., n0 + 1 : n0 + m, :] = k
         c.values[..., n0 + 1 : n0 + m, :] = v
+
+
+def conv_tail(conv_prev, mixed, path, conv_idx, tail_idx):
+    """The conv state after committing ``path``: its last three inputs. With three or more
+    committed rows they all come from the window, so one gather replaces the concatenation of
+    the old tail with the window plus a gather (same values, one dispatch fewer per layer)."""
+    if tail_idx is not None:
+        return mx.take(mixed[0], tail_idx, axis=0)[None]
+    seq = mx.concatenate([conv_prev, mixed], axis=1)[0]
+    return mx.take(seq, conv_idx, axis=0)[None]
 
 
 def tree_commit(lm, cache: list, res: TreeResult, path: list[int]) -> None:
@@ -1070,6 +1185,7 @@ def tree_commit(lm, cache: list, res: TreeResult, path: list[int]) -> None:
     path_arr = mx.array(path + [0] * (w - m), dtype=mx.int32)
     count_arr = mx.array([m], dtype=mx.int32)
     conv_idx = mx.array(([0, 1, 2] + [3 + r for r in path])[-3:], dtype=mx.int32)
+    tail_idx = mx.array(path[-3:], dtype=mx.int32) if len(path) >= 3 else None
     compact = path != list(range(m))
     if compact:
         src = mx.array([n0 + r for r in path[1:]], dtype=mx.int32)
@@ -1082,15 +1198,23 @@ def tree_commit(lm, cache: list, res: TreeResult, path: list[int]) -> None:
             c.trim(w - m)
         else:
             _, layer, state, conv_prev, mixed, rows = rec
-            replay = getattr(rows, "replay", None)
-            c[1] = (
-                replay(layer, state, path_arr, count_arr)
-                if replay is not None
-                else replay_path(layer, state, rows, path_arr, count_arr)
-            )
             c._omlx_gdn_pending = None
-            seq = mx.concatenate([conv_prev, mixed], axis=1)[0]
-            c[0] = mx.take(seq, conv_idx, axis=0)[None]
+            fused = getattr(rows, "replay_tail", None)
+            if fused is None and not hasattr(rows, "replay"):
+                fused = replay_path_tail
+                fused_args: tuple[Any, ...] = (layer, state, rows, path_arr, count_arr)
+            else:
+                fused_args = (layer, state, path_arr, count_arr)
+            if fused is not None and tail_fits(layer, conv_prev, mixed):
+                c[1], c[0] = fused(*fused_args, conv_prev, mixed, conv_idx)
+            else:
+                replay = getattr(rows, "replay", None)
+                c[1] = (
+                    replay(layer, state, path_arr, count_arr)
+                    if replay is not None
+                    else replay_path(layer, state, rows, path_arr, count_arr)
+                )
+                c[0] = conv_tail(conv_prev, mixed, path, conv_idx, tail_idx)
             if hasattr(c, "advance"):
                 c.advance(m)
                 q35._qwen3_5_advance_lengths_info(c, m)

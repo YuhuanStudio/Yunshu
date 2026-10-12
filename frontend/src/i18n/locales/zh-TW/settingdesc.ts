@@ -127,6 +127,8 @@ const settingdesc = {
     "APC SSD 層的大小上限（GiB），整個目錄共用一份預算（跨命名空間先淘汰最久未使用的檔案；0 表示不設上限，仍受剩餘空間保留限制）。未設定時為磁碟區的四分之一，最多 64 GiB。27B 檢查點每個 token 約 130 KiB，因此 64 GiB 約可容納 500K token。",
   YUNSHU_PREFILL_MATMUL:
     "M5 級 GPU 上 Qwen3.5 系列 VLM 執行器：超過 512 列的預填區塊所用的矩陣乘法。`stock` 對未分塊的權重執行 MLX 量化矩陣乘法（27B 冷預填約快 25%，區塊的位元結果取決於列數）；`lane` 對所有列數都使用列不變的 lane 核心。屬於每個 APC 鍵與 SSD 命名空間的一部分。",
+  YUNSHU_GIL_SWITCH_MS:
+    "服務程序：一個 Python 執行緒持有 GIL 多久（毫秒）後，要讓給其他想用的執行緒。CPython 預設的 5 ms 會讓事件迴圈在生成執行緒跑 Python 時最多晚 5 ms 才醒（27B 解碼：迴圈延遲 p99 5.3 ms，0.5 ms 降為 2.0 ms；tokens/s 不變）。僅影響排程，輸出不變；0 表示沿用 CPython 預設。",
   YUNSHU_PLE_READ_THREADS:
     "Qwen3.8-Flash-Next 從 SSD 讀取 n-gram 嵌入（PLE）時，用多少執行緒平行讀取每個 token 的 48 列 PLE，而不是逐列讀取（新文字每個 token 約省 7 ms）。讀出的資料逐位元相同，輸出不變；0 表示沿用上游逐列讀取。",
   YUNSHU_PREFILL_BUFFER_CACHE_GB:
@@ -149,8 +151,6 @@ const settingdesc = {
     "Qwen3.5 系列 VLM：推測解碼草稿覆寫。可填 DFlash 草稿模型目錄；`mtp` 強制使用檢查點的 MTP 頭；`off` 停用草稿。未設定時，若模型目錄或 Hugging Face 快取中有相符的 DFlash2 草稿模型則自動使用，否則使用 MTP 頭。",
   YUNSHU_MTP_BLOCK_SIZE:
     "草稿區塊大小（對 DFlash 而言是其依接受率調整的深度上限）。未設定時，MTP 為 6，DFlash 為草稿模型訓練時的區塊大小。",
-  YUNSHU_SPEC_NODES:
-    "實驗性。Qwen3.5 系列 DFlash 快速樹：固定每輪驗證的草稿節點數（0–15；每輪驗證 節點數+1 行）。未設定時由成本導向預算決定。無論如何輸出不變。",
   YUNSHU_SPEC_COPY_ROWS:
     "Qwen3.5 系列單一請求推測解碼通道：提示詞複製回合可使用的驗證列數（複製草稿數 = 列數 - 1）。複製回合會在提示詞與已生成文字中找出目前尾端最長的先前出現處，提出其後續內容，並由同一個驗證步驟檢查，因此輸出不變。引用上下文的代理、程式碼編輯與多輪流量，每回合可提交數倍的 token。預設 16 列，並受後端認證寬度限制；0 表示關閉複製回合。",
   YUNSHU_DRAFT_BITS:
@@ -176,6 +176,12 @@ const settingdesc = {
     "載入時在記憶體中量化權重（有損，以品質換記憶體）：`mxfp4`、`nvfp4`、`mxfp8` 或 `affine`（留空則維持檢查點原樣）。",
   YUNSHU_QUANT_CONFIG:
     "`affine` 記憶體內量化的位元數與群組大小：JSON（含 `bits` 與 `group_size` 鍵）或 `bits`／`bits,group` 格式。",
+  YUNSHU_GC_POLICY:
+    "VLM 執行器的 Python 循環回收策略：`defer`（預設）凍結啟動堆積，並在請求到達至第一個 token 之間暫停回收，避免第 2 代回收延遲首個 token；`freeze` 僅凍結；`default` 為 Python 原生行為。輸出不變。",
+  YUNSHU_NEXT_TURN_PREFILL:
+    "完成純文字回覆後，引擎閒置時先把該回覆依下一輪的呈現方式預填，使後續提問只需預填新訊息。`exact` 預填到回覆結尾，`stride` 對齊預填區段格線，`boundary` 只加入預填邊界（對照用），`off`（預設）關閉。同一對話的請求會接手進行中的預填；其他請求會在數個解碼層內取消它。輸出不變。",
+  YUNSHU_NEXT_TURN_DELAY_S:
+    "完成回覆後到開始下一輪預填之間的等待秒數。更早到達的請求（重試、重送、代理迴圈）不會遇到執行中的工作。",
   YUNSHU_ROUND_PREFILL_CHUNK:
     "回合驅動器：每個預填區段的提示詞 token 數。解碼中的請求只在預填前向傳遞之間推進，因此區段越小，越能在長提示詞旁維持執行，代價是預填速度約降低 20%。區段依提示詞固定，輸出不受其他執行中工作影響；以不同大小預填的提示詞各自一致，但彼此並非位元相同。",
   YUNSHU_ROUND_DRIVER:
