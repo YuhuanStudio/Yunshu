@@ -894,3 +894,56 @@ def test_console_snapshot_counts_hits_and_omits_token_content():
     assert snap["entries"][0]["hits"] == 1
     assert snap["events"][-1]["request_id"] == "http-id"
     assert all("token_ids" not in row for row in snap["entries"])
+
+
+def test_rehearsal_checkpoint_does_not_supersede_the_request_just_served():
+    """yv gate agent.restart_idle: a retry of the same prompt must still find its final checkpoint."""
+    a = list(range(1000, 1100))
+    reply = [1, 2, 3, 4]
+    for rehearsing, kept in ((False, [103]), (True, [96, 103])):
+        m = _mgr()
+        m.begin_request()
+        m.store_exact_cache(a[:96], _cache(96))  # the served request's final checkpoint
+        m.begin_request()
+        if rehearsing:
+            m.keep_prior_for = tuple(a[:100] + reply[:3])
+        m.store_exact_cache(a[:100] + reply[:3], _cache(103))
+        assert sorted(len(e.token_ids) for e in m._exact_cache.values()) == kept
+        if rehearsing:
+            cache, n = m.lookup_exact_cache(a[:97])  # the same prompt again
+            assert n == 96 and cache is not None
+        m.keep_prior_for = None
+
+
+def test_rehearsal_guard_covers_the_late_ssd_supersede_hook():
+    """The SSD write of the rehearsal's checkpoint finishes after the rehearsal task ended; its
+    hook must still leave the previous request's checkpoint (and no tombstone) alone."""
+    a = list(range(1000, 1100))
+    m = _mgr()
+    m.begin_request()
+    m.store_exact_cache(a[:96], _cache(96))
+    m.keep_prior_for = tuple(a[:100] + [1, 2, 3])
+
+    class Disk:
+        dropped = []
+
+        def exact_prefixes_of(self, *a, **k):
+            raise AssertionError("guarded: must not even look for prefixes to drop")
+
+    m.disk = Disk()
+    m._born[12345] = 99
+    m._disk_superseded_by(12345, a[:100] + [1, 2, 3], 0)
+    assert m.disk_superseded == 0
+
+
+def test_long_lookup_logs_the_decision(caplog):
+    import logging
+
+    m = _mgr()
+    a = list(range(5000, 5000 + 4200))
+    m.begin_request()
+    m.store_exact_cache(a[:4192], _cache(4192))
+    with caplog.at_level(logging.DEBUG, logger="yunshu_engine.apc_manager"):
+        m.lookup_exact_cache(a[:4195])
+    line = [r.getMessage() for r in caplog.records if "APC lookup:" in r.getMessage()]
+    assert line and "prefix_entries=[4192]" in line[0] and "prompt=4195" in line[0]
