@@ -258,10 +258,14 @@ def test_private_projection_bundle_does_not_keep_the_model_alive(monkeypatch):
     bundle.bind(False)  # no parent retention or stale-model lookup
 
 
+@pytest.mark.parametrize("log_level", ["WARNING", "INFO"])
 @pytest.mark.parametrize("head_error", [False, True])
 def test_single_remaining_token_and_failure_restore_the_sum_scope(
-    monkeypatch, head_error
+    monkeypatch, caplog, head_error, log_level
 ):
+    # Unknown target KV length must be loggable, including with INFO enabled by
+    # an earlier engine/server setup in the full suite.
+    caplog.set_level(log_level, logger=fast.logger.name)
     from yunshu_engine import dflash_plan
     from yunshu_engine.kernels import lane_linear
 

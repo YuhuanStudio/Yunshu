@@ -548,7 +548,7 @@ def rounds(
         copy.extend([first_bonus])
     keep = context_window(draft)
     logger.info(
-        "DFlash drafter context: %d prompt-hidden positions (window %s, target KV %d)",
+        "DFlash drafter context: %d prompt-hidden positions (window %s, target KV %s)",
         int(hidden.shape[1]) if hasattr(hidden, "shape") else 0,
         keep,
         context_length(lm, cache),
