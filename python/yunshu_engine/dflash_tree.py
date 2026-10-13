@@ -272,6 +272,58 @@ def _stacked_mlp(mlp: Any, gate_up: Any) -> Any:
     return StackedMLP()
 
 
+def compiled_layer_class():
+    """DFlash2 decoder layer whose fixed-shape pre/post halves are ``mx.compile`` d, the way
+    TensorFold compiles its drafter (``dflash_proposer``). The growing attention and the MLP stay
+    eager; the compiled halves are the same ops grouped differently, so proposals must stay
+    bit-identical (checked by tests and by the corpus A/B's round counts)."""
+    from mlx_vlm.speculative.drafters.dflash2.dflash2 import DFlash2DecoderLayer
+
+    class CompiledDecoderLayer(DFlash2DecoderLayer):
+        def _compiled(self):
+            fns = self.__dict__.get("_yunshu_compiled")
+            if fns is None:
+
+                def pre(x):
+                    return self.attention_conv.prepare(self.input_layernorm(x))
+
+                def mid(residual, attended, kernel):
+                    x = residual + self.attention_conv.finish(attended, kernel)
+                    prepared, kernel2 = self.mlp_conv.prepare(
+                        self.post_attention_layernorm(x)
+                    )
+                    return x, prepared, kernel2
+
+                def post(x, mlp_out, kernel2):
+                    return x + self.mlp_conv.finish(mlp_out, kernel2)
+
+                fns = (mx.compile(pre), mx.compile(mid), mx.compile(post))
+                self.__dict__["_yunshu_compiled"] = fns
+            return fns
+
+        def __call__(self, x, x_ctx, rope, cache, projected_context=None):
+            pre, mid, post = self._compiled()
+            prepared, kernel = pre(x)
+            attended = self.self_attn(prepared, x_ctx, rope, cache, projected_context)
+            x1, prepared2, kernel2 = mid(x, attended, kernel)
+            return post(x1, self.mlp(prepared2), kernel2)
+
+    return CompiledDecoderLayer
+
+
+def compile_layers(view) -> int:
+    """Switch the private view's DFlash2 decoder layers to the compiled-halves class."""
+    from mlx_vlm.speculative.drafters.dflash2.dflash2 import DFlash2DecoderLayer
+
+    cls = compiled_layer_class()
+    count = 0
+    for layer in getattr(view, "layers", []):
+        if type(layer) is DFlash2DecoderLayer:
+            layer.__class__ = cls
+            count += 1
+    return count
+
+
 def share_masks() -> bool:
     """Build each attention mask once per round instead of once per drafter layer.
 

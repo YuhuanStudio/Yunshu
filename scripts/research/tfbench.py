@@ -958,6 +958,17 @@ def part_needle(s, out, a):
             )
 
 
+# The old "Continue." prompt naturally stopped at 993/1024 on base 03b86abf.
+# Keep the length gate strict; request enough concrete work on every growing turn.
+CONC32_TASK = (
+    "Write a complete Python implementation of a persistent task scheduler with "
+    "SQLite storage, retries, dependency graphs, cancellation, and recovery. "
+    "Write at least 400 lines of implementation and tests. Output code only, "
+    "with one statement per line; do not summarize or conclude early. "
+    "Start a fresh implementation for this turn using the material above."
+)
+
+
 def part_conc32(s, out, a):
     """Two sub-agents at once, each a growing agentic conversation: a warm 32K prefix, then three
     rounds that each append ~2K of new text after the previous reply (the usual agent pattern)
@@ -977,12 +988,14 @@ def part_conc32(s, out, a):
             src = "Extra." * 20 if a.smoke else load_prompt(f"{other}-8192")
             piece = src[rnd * 6500 : rnd * 6500 + 6500]
             if rnd == 0:
-                msgs[k][0]["content"] += "\n\nNew material:\n" + piece + "\nContinue."
+                msgs[k][0]["content"] += (
+                    "\n\nNew material:\n" + piece + "\n" + CONC32_TASK
+                )
             else:
                 msgs[k].append(
                     {
                         "role": "user",
-                        "content": "More material:\n" + piece + "\nContinue.",
+                        "content": "More material:\n" + piece + "\n" + CONC32_TASK,
                     }
                 )
             b = req(s.model, "", n_new)

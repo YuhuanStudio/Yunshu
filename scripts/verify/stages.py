@@ -7,6 +7,7 @@ A stage writes its final `stage_complete` record only when its analysis finished
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 import subprocess
@@ -1065,24 +1066,40 @@ def conc_summary(rows: list) -> dict:
 def stage_conc(ctx: Ctx) -> StageResult:
     _check_prompts([32768], ["prose", "code"])
     _check_prompts([8192], ["prose", "code"])
+    commands = {
+        arm: [
+            arg.replace("{out}", "{arm_out}")
+            for arg in _tfbench_argv(
+                ctx, arm, "conc", arm, ["--part", "conc32", "--rep", "0"]
+            )
+        ]
+        for arm in ("base", "cand")
+    }
     cells = [
         Cell(
             "conc",
-            arm,
-            _tfbench_argv(ctx, arm, "conc", arm, ["--part", "conc32", "--rep", "0"]),
+            "pair",
+            [
+                ctx.py,
+                str(REPO / "scripts/verify/conc_pair.py"),
+                "--out",
+                "{out}",
+                "--commands",
+                json.dumps(commands),
+            ],
             mem_gb=ctx.mem_gb,
-            timeout_min=20 if ctx.big else 6,
-            stall_min=12 if ctx.big else 4,
+            timeout_min=20 if ctx.big else 12,
+            stall_min=12 if ctx.big else 8,
             quiet=True,
         )
-        for arm in ("base", "cand")
     ]
     res = ctx.exe.run_cells(cells)
     reasons = _failed_cells(res)
     numbers: dict = {}
     if not reasons:
-        sb = conc_summary(read_jsonl(res["base"].evidence))
-        sc = conc_summary(read_jsonl(res["cand"].evidence))
+        rows = read_jsonl(res["pair"].evidence)
+        sb = conc_summary([r for r in rows if r.get("arm") == "base"])
+        sc = conc_summary([r for r in rows if r.get("arm") == "cand"])
         numbers = {
             "trials": {"base": sb["trials"], "cand": sc["trials"]},
             "ttft_med": [sb["ttft_med"], sc["ttft_med"]],

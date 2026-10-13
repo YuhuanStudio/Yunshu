@@ -321,8 +321,9 @@ def test_single_remaining_token_and_failure_restore_the_sum_scope(
         iterator.close()
         assert commits == [[0]] and not aborted
     assert not lane_linear.sum_reuse_enabled()
-    assert bindings[-1] is False
-    assert True not in bindings  # no drafter when only one token remains
+    assert (
+        bindings == []
+    )  # the fast tree reads a private view; nothing is bound or unbound
 
 
 def test_live_boundary_hands_off_without_rebuilding_draft_kv(monkeypatch):
@@ -366,7 +367,7 @@ def test_live_boundary_hands_off_without_rebuilding_draft_kv(monkeypatch):
             _chain=chain,
         )
     ) == [(10, None)]
-    assert events == [False, False]
+    assert events == []
 
 
 @pytest.mark.parametrize("remaining", [1, 2, 8, 16])
@@ -482,3 +483,63 @@ def test_copy_rounds_do_not_feed_the_node_budget():
     assert budget.rounds == 0 and budget.samples == {}
     assert dflash_fast.observe_budget(budget, [], 4, [0], 52.0) is True
     assert budget.rounds == 1 and budget.samples[4] == [52.0]
+
+
+def test_private_view_swaps_in_lane_projections_without_touching_the_shared_drafter():
+    import mlx.nn as nn
+
+    class Quant(nn.Module):
+        pass
+
+    class Lane(nn.Module):
+        pass
+
+    class Attn(nn.Module):
+        def __init__(self, q):
+            super().__init__()
+            self.q_proj = q
+            self.scale = 3
+
+    class Layer(nn.Module):
+        def __init__(self, q):
+            super().__init__()
+            self.self_attn = Attn(q)
+
+    q = Quant()
+    lane = Lane()
+    other = Quant()  # not eligible: a plain wrapper copy, same type
+    layer = Layer(q)
+    layer.self_attn.k_proj = other
+    draft = nn.Module()
+    draft.layers = [layer]
+    draft.embed_tokens = "embed-1"
+    bundle = fast.PrivateProjections.__new__(fast.PrivateProjections)
+    bundle.bindings = [(None, "q_proj", q, lane)]
+    view = bundle.view_of(draft)
+    assert view.layers[0].self_attn.q_proj is lane
+    assert (
+        type(view.layers[0].self_attn.k_proj) is Quant
+        and view.layers[0].self_attn.scale == 3
+    )
+    assert (
+        layer.self_attn.q_proj is q and draft.layers[0] is layer
+    )  # shared drafter untouched
+    assert view is not draft and view.layers[0] is not layer
+    draft.embed_tokens = "embed-2"  # a later bind() to a (re)loaded target
+    assert bundle.view_of(draft) is view and view.embed_tokens == "embed-2"
+
+
+def test_packed_readback_returns_the_same_four_lists():
+    import mlx.core as mlx
+
+    target = mlx.array([[5, 6, 7, 248000]], dtype=mlx.uint32)
+    window = mlx.array([[1, 2, 3, 4]], dtype=mlx.int32)
+    parents = mlx.array([-1, 0, 0, 1], dtype=mlx.int32)
+    ranks = mlx.array([0, 2, 1, 3], dtype=mlx.int32)
+    for r in (ranks, None):
+        packed = fast.pack_readback(target, window, parents, r)
+        t, w, p, rk = fast.unpack_readback(
+            packed.tolist(), target.size, window.size, parents.size, r is not None
+        )
+        assert t == target.reshape(-1).tolist() and w == window.reshape(-1).tolist()
+        assert p == parents.tolist() and rk == (None if r is None else r.tolist())

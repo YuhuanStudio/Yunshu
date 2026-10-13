@@ -168,7 +168,7 @@ def test_long_suite_end_to_end_with_split_cells(long_world, monkeypatch):
     assert "c131072prose" in labels and "c32768code" in labels
     by = {s["name"]: s for s in v["stages"]}
     assert by["longqa"]["numbers"]["items"] == 30
-    assert len(by["conc"]["numbers"]["trials"]["cand"]) == 2
+    assert len(by["conc"]["numbers"]["trials"]["cand"]) == 3
 
 
 def test_long_suite_keeps_going_and_flags_retrieval_loss(long_world, monkeypatch):
