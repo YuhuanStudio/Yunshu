@@ -210,7 +210,11 @@ def _loaded_paths() -> dict[str, tuple[str, bool]]:
                 out[str(Path(e.model_path).resolve())] = (e.model_id, bool(e.is_loaded))
         else:
             eng = get_engine()
-            p = getattr(eng, "_model_path", None) or getattr(eng, "model_path", None)
+            p = (
+                getattr(eng, "_model_path", None)
+                or getattr(eng, "model_path", None)
+                or getattr(eng, "model_name", None)
+            )
             if eng is not None and p:
                 out[str(Path(str(p)).resolve())] = (
                     str(getattr(eng, "model_name", p)),

@@ -140,6 +140,8 @@ vision = [
 # Also the backbone for the Realtime voice WebSocket.
 audio = [
     "mlx-audio>=0.5.8",
+    # Voice enrollment decodes recordings directly; mlx-audio no longer pulls this in.
+    "soundfile>=0.12",
 ]
 # Native omni (Qwen3-Omni Thinker+Talker: speech-in/speech-out from ONE model)
 # — the forward-differentiation surface (/v1/omni/speech/stream + the native

@@ -26,7 +26,21 @@ from route_checks import check, expect
 )
 def tavily_routes(c):
     expect(c.fake is not None, "Tavily real check requires fixture backend")
-    root = c.fake.url + "/page"
+    # Answers/research use a served model; an isolated --only run starts with
+    # the multi-model registry unloaded rather than inheriting earlier checks.
+    warm = c.oa.chat.completions.create(
+        model=c.model,
+        messages=[{"role": "user", "content": "Say hello."}],
+        max_tokens=8,
+        extra_body={"enable_thinking": False},
+    )
+    expect(warm.choices and warm.usage.completion_tokens > 0, "chat model did not load")
+    private = c.fake.url + "/page"
+    denied = c.req("POST", "/tavily/extract", json={"urls": [private]}).json()
+    expect(not denied["results"] and denied["failed_results"], denied)
+    expect("private or reserved" in denied["failed_results"][0]["error"], denied)
+    # Exercise the served extraction paths without weakening the SSRF guard.
+    root = "https://example.com/"
     response = c.req(
         "POST",
         "/tavily/search",

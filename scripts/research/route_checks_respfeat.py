@@ -38,7 +38,7 @@ def computer(c: Ctx):
         any(e.get("item", {}).get("type") == "computer_call" for e in events),
         str(events),
     )
-    follow = c.oa.responses.create(
+    follow_kwargs = dict(
         model=c.model,
         previous_response_id=events[-1]["response"]["id"],
         input=[
@@ -57,6 +57,17 @@ def computer(c: Ctx):
         temperature=0,
         extra_body={"enable_thinking": False},
     )
+    if c.kind == "text":
+        import openai
+
+        try:
+            c.oa.responses.create(**follow_kwargs)
+        except openai.BadRequestError as exc:
+            expect("does not accept image/audio/video" in str(exc), str(exc))
+            c.unserved()  # screenshot ingestion requires a VLM; still test rejection.
+            return
+        raise AssertionError("text model accepted a computer screenshot")
+    follow = c.oa.responses.create(**follow_kwargs)
     expect(follow.status == "completed" and follow.output_text, str(follow))
 
 

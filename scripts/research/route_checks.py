@@ -990,7 +990,10 @@ def _models_multi(c: Ctx):
 
 @check("models_admin_denied", "POST /v1/models/load", served=False)
 def _models_denied(c: Ctx):
-    r = c.http.post("/v1/models/load", json={"model": c.model})  # no token
+    request = c.http.build_request("POST", "/v1/models/load", json={"model": c.model})
+    for header in ("Authorization", "x-api-key"):
+        request.headers.pop(header, None)
+    r = c.http.send(request)  # do not inherit the authenticated client defaults
     err_ok(r, "openai")
     expect(r.status_code == 401, f"load without token -> {r.status_code}")
 
@@ -2704,10 +2707,10 @@ from route_checks_media import (
 from route_checks_omni import (
     _omni_audio_in,  # noqa: E402,F401  registers the omni input / speech-out checks
 )
+from route_checks_tavily import tavily_routes  # noqa: E402,F401
 from route_checks_tools import (
     FakeBackend,  # noqa: E402,F401  registers the server-tool checks
 )
-from route_checks_tavily import tavily_routes  # noqa: E402,F401
 from route_checks_vision import (
     _vision_input,  # noqa: E402,F401  registers the image-input check
 )
@@ -3126,7 +3129,7 @@ def evals_check(c: Ctx):
     needs="multi",
 )
 def console_host_latency(c):
-    host = c.http.get("/v1/yunshu/host")
+    host = c.req("GET", "/v1/yunshu/host")
     expect(host.status_code == 200, host.text)
     data = host.json()
     c.notes["host"] = data
@@ -3134,7 +3137,7 @@ def console_host_latency(c):
         expect("state" in data[key], f"{key}: missing state")
         if data[key]["state"] == "unknown":
             expect(bool(data[key].get("reason")), f"{key}: missing reason")
-    recent = c.http.get("/v1/yunshu/requests/recent")
+    recent = c.req("GET", "/v1/yunshu/requests/recent")
     expect(recent.status_code == 200, recent.text)
     expect(isinstance(recent.json()["data"], list), "recent data must be a list")
 
@@ -3234,7 +3237,8 @@ def console_backend_gaps(c):
             },
         },
     }
-    response = c.http.post(
+    response = c.req(
+        "POST",
         "/v1/chat/completions",
         json=body,
         headers={"X-Request-Id": "consolegaps-schema"},
@@ -3253,7 +3257,7 @@ def console_backend_gaps(c):
     expect(
         bool(stats["structured_output"]["grammar_backend"]), "grammar backend absent"
     )
-    cache = c.http.get("/v1/yunshu/cache")
+    cache = c.req("GET", "/v1/yunshu/cache")
     expect(cache.status_code == 200, cache.text)
     expect(cache.json()["data"], "real prefill produced no cache entries")
     for entry in cache.json()["data"]:
@@ -3280,28 +3284,28 @@ def console_backend_gaps(c):
         "cache event lacks request link",
     )
     for path in ("spec-decode", "bundle/manifest", "bundle"):
-        result = c.http.get("/v1/yunshu/" + path)
+        result = c.req("GET", "/v1/yunshu/" + path)
         expect(result.status_code == 200, result.text)
-    manifest = c.http.get("/v1/yunshu/bundle/manifest").json()
-    bundle = c.http.get("/v1/yunshu/bundle").json()
+    manifest = c.req("GET", "/v1/yunshu/bundle/manifest").json()
+    bundle = c.req("GET", "/v1/yunshu/bundle").json()
     expect(set(manifest["included"]) == set(bundle), "CLI bundle manifest mismatched")
-    impact = c.http.get("/v1/yunshu/models/impact", params={"model": c.model})
+    impact = c.req("GET", "/v1/yunshu/models/impact", params={"model": c.model})
     expect(
         impact.status_code == 200
         and impact.json()["unload"]["in_flight_policy"] == "reject",
         impact.text,
     )
-    history = c.http.get("/v1/yunshu/requests/history", params={"limit": 1})
+    history = c.req("GET", "/v1/yunshu/requests/history", params={"limit": 1})
     expect(history.status_code == 200 and history.json()["enabled"], history.text)
     expect(
         history.json()["data"][0]["request_id"] == "consolegaps-schema",
         "persisted metadata missing",
     )
     expect("context context" not in history.text, "history leaked prompt")
-    cleared = c.http.post("/v1/yunshu/cache/clear")
+    cleared = c.req("POST", "/v1/yunshu/cache/clear")
     expect(cleared.status_code == 200, cleared.text)
     expect(
-        c.http.get("/v1/yunshu/cache").json()["data"] == [],
+        c.req("GET", "/v1/yunshu/cache").json()["data"] == [],
         "resident clear did not clear",
     )
     c.notes["consolegaps"] = {

@@ -367,3 +367,91 @@ def test_missing_base_dependency_triggers_env_sync():
     assert jobs.lock_mismatches(
         {"pypdf": "6.19.0", "optional": "1"}, {}, {"pypdf"}
     ) == {"pypdf": ("6.19.0", None)}
+
+
+def test_admin_denied_check_removes_authenticated_client_defaults():
+    import httpx
+    import route_checks as rc
+
+    seen = []
+
+    def respond(request):
+        seen.append(request)
+        return httpx.Response(
+            401,
+            json={"error": {"message": "unauthorized", "type": "authentication_error"}},
+        )
+
+    with httpx.Client(
+        base_url="http://test",
+        headers={"Authorization": "Bearer owner", "x-api-key": "owner"},
+        transport=httpx.MockTransport(respond),
+    ) as http:
+        rc.REGISTRY["models_admin_denied"].fn(
+            rc.Ctx("http://test", "owner", "m", "text", http=http)
+        )
+    assert "authorization" not in seen[0].headers
+    assert "x-api-key" not in seen[0].headers
+
+
+def test_audio_extra_declares_voice_recording_decoder():
+    import tomllib
+
+    from packaging.requirements import Requirement
+
+    project = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]
+    assert "soundfile" in {
+        jobs.norm(Requirement(d).name)
+        for d in project["optional-dependencies"]["audio"]
+    }
+
+
+def test_tavily_isolated_check_loads_chat_before_answer_request():
+    from types import SimpleNamespace
+
+    import pytest
+    import route_checks_tavily as tavily
+
+    calls = []
+
+    def chat(**kwargs):
+        calls.append(("chat", kwargs["model"]))
+        return SimpleNamespace(
+            choices=[True], usage=SimpleNamespace(completion_tokens=1)
+        )
+
+    def request(method, path, **kwargs):
+        calls.append((method, path))
+        raise RuntimeError("end fixture after model precondition")
+
+    ctx = SimpleNamespace(
+        fake=SimpleNamespace(url="http://127.0.0.1:18994"),
+        model="tiny",
+        oa=SimpleNamespace(
+            chat=SimpleNamespace(completions=SimpleNamespace(create=chat))
+        ),
+        req=request,
+    )
+    with pytest.raises(RuntimeError, match="end fixture"):
+        tavily.tavily_routes(ctx)
+    assert calls == [("chat", "tiny"), ("POST", "/tavily/extract")]
+
+
+def test_route_registry_initializes_multi_only_helpers_in_fresh_process():
+    import subprocess
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import m3sweep_jobs as jobs; assert 'tavily' in jobs.route_registry(); from route_checks_tools import FakeBackend; assert FakeBackend",
+        ],
+        env={
+            **__import__("os").environ,
+            "PYTHONPATH": str(ROOT / "scripts/research") + ":" + str(ROOT / "python"),
+        },
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stderr

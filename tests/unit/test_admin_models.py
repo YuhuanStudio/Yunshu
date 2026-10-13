@@ -649,3 +649,38 @@ def test_local_inventory_lists_a_model_served_from_an_explicit_path(env, monkeyp
     row = next(m for m in j["models"] if m["id"] == "my-model")
     assert row["loaded"] is True and row["source"] == "path"
     assert row["size_bytes"] >= 128
+
+
+def test_completed_download_reconciles_aggregate_hub_progress(env):
+    client, hub, _, _ = env
+    real_download = hub.download
+
+    def aggregate_download(repo, revision, patterns, local_dir, on_file, on_bytes):
+        path = real_download(
+            repo, revision, patterns, local_dir, lambda *a: None, lambda *a: None
+        )
+        on_file("Downloading bytes", 0, 0)
+        on_bytes("Downloading bytes", 1000)
+        return path
+
+    hub.download = aggregate_download
+    job = client.post("/v1/yunshu/downloads", json={"repo": "org/tiny"}).json()
+    result = wait_state(client, job["id"], ("done", "failed"))
+    assert result["state"] == "done"
+    assert {f["name"] for f in result["files"]} == set(hub.files)
+    assert result["files_done"] == result["files_total"] == 2
+    assert result["active_files"] == []
+
+
+def test_local_inventory_lists_single_text_engine_explicit_path(env, monkeypatch):
+    client, _, _, tmp = env
+    ext = _model(tmp / "external", "text", {"model_type": "qwen2"}, weights=b"w" * 128)
+    monkeypatch.setattr("yunshu_cli.model.scan_hf_cache", lambda: [])
+    monkeypatch.setattr(am, "_inv_cache", None)
+    monkeypatch.setattr(
+        am, "get_engine", lambda: SimpleNamespace(model_name=str(ext), is_loaded=True)
+    )
+    rows = client.get("/v1/yunshu/models/local").json()["models"]
+    row = next(m for m in rows if m["path"] == str(ext.resolve()))
+    assert row["loaded"] is True and row["source"] == "path"
+    assert row["complete"] is True

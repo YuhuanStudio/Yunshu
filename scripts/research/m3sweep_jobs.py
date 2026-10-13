@@ -568,6 +568,12 @@ def cmd_env(a):
 
     project = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]
     required = {norm(Requirement(d).name) for d in project["dependencies"]}
+    # This sweep exercises optional audio/vision routes as well as core inference.
+    for extra, dependencies in project.get("optional-dependencies", {}).items():
+        for dependency in dependencies:
+            req = Requirement(dependency)
+            if req.marker is None or req.marker.evaluate({"extra": extra}):
+                required.add(norm(req.name))
     mism = lock_mismatches(locked, installed_versions(), required)
     res["mismatch_before"] = mism
     print("lock mismatches before:", mism, flush=True)
@@ -779,13 +785,23 @@ def _gemma2_reference_fns(model):
     return fn, task_fn
 
 
+def route_registry():
+    """Initialize registrations before importing their mutually dependent helpers."""
+    import route_checks
+
+    return route_checks.REGISTRY
+
+
 def cmd_routes(a):
     """Every registered route against real servers (scripts/research/route_checks.py): each --model
     in the default configuration (one server after the other: the ports are few), and, with
     --multi, a token-protected multi-model server with a fake SearXNG / MCP backend."""
     import httpx
 
+    registry = route_registry()
     only = set(a.only.split(",")) if a.only else None
+    if only and only - registry.keys():
+        raise ValueError(f"Unknown route checks: {sorted(only - registry.keys())}")
     os.environ.setdefault("COVAUDIT_PORT_LO", "18994")  # servers on 18994-18996 only
     res = {
         "kind": "routes",
