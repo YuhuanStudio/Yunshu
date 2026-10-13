@@ -920,7 +920,7 @@ def test_unreadable_swap_fails_closed(monkeypatch, q):
 
 def test_swapout_bytes_reads_vm_stat(monkeypatch):
     h = helper()
-    out = "Mach Virtual Memory Statistics: (page size of 16384 bytes)\nSwapouts:   3.\n"
+    out = "Mach Virtual Memory Statistics: (page size of 16384 bytes)\nSwapins:   3.\nSwapouts:   9.\n"
     monkeypatch.setattr(
         h.subprocess,
         "run",

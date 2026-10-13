@@ -122,18 +122,20 @@ def requires_quiet(job):
 
 
 def swapout_bytes():
-    """Lifetime swap-out bytes from vm_stat, or None when it cannot be read.
+    """Lifetime swap-IN bytes from vm_stat, or None when it cannot be read.
 
     A timing job that runs while the machine swaps measures the swap, not the engine
     (a 64K Flash-Next run read 20 tok/s against a clean 52), so swap growth during a
-    job latches it as contended just like foreign CPU load.
+    job latches it as contended just like foreign CPU load. Swap-ins are what stall
+    the job: loading a 57-82 GB checkpoint makes macOS page idle apps OUT by 1-2 GB,
+    which costs the job nothing and wrongly rejected clean runs when it was counted.
     """
     try:
         out = subprocess.run(
             ["vm_stat"], capture_output=True, text=True, check=True, timeout=5
         ).stdout
         page = int(re.search(r"page size of (\d+) bytes", out).group(1))
-        pages = int(re.search(r"Swapouts:\s+(\d+)", out).group(1))
+        pages = int(re.search(r"Swapins:\s+(\d+)", out).group(1))
         return pages * page
     except (OSError, subprocess.SubprocessError, AttributeError, ValueError):
         return None
