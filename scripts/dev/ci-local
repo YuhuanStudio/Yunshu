@@ -10,7 +10,9 @@ REF="${1:-HEAD}"
 SRC="$(cd "$(dirname "$0")/../.." && pwd)"
 SHA="$(git -C "$SRC" rev-parse "$REF")"
 # Short path on purpose: AF_UNIX socket paths cap at 104 bytes on macOS and the runner's TMPDIR is short.
-WORK="/tmp/ycl-$(echo "$SHA" | cut -c1-8)"
+# YUNSHU_CI_ROOT moves the ~8 GB checkout + venv off the system disk (an external SSD; it must not be
+# the denied build volume below). Default /tmp.
+WORK="${YUNSHU_CI_ROOT:-/tmp}/ycl-$(echo "$SHA" | cut -c1-8)"
 rm -rf "$WORK"
 git clone -q --no-hardlinks "$SRC" "$WORK"
 git -C "$WORK" checkout -q "$SHA"

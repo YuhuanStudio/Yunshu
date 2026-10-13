@@ -12,6 +12,15 @@ _os.environ["YV_PY"] = _sys.executable
 _os.environ["YV_ROOT"] = _os.path.join(_DEV_ROOT, "verify")
 _os.environ["AGENTIC_BUILD"] = _os.path.join(_DEV_ROOT, "agentic")
 _os.environ["AGENTBENCH_ROOT"] = _os.path.join(_DEV_ROOT, "agentbench")
+# Stores, keys, caches and config default to ~/.yunshu (Path.home()). A unit test must never write
+# into the developer's real home (scripted chat completions piled up in ~/.yunshu/chat_completions),
+# so every test runs with HOME pointed at the throwaway root, removed when the session ends.
+_os.makedirs(_os.path.join(_DEV_ROOT, "home"), exist_ok=True)
+_os.environ["HOME"] = _os.path.join(_DEV_ROOT, "home")
+import atexit as _atexit
+import shutil as _shutil
+
+_atexit.register(_shutil.rmtree, _DEV_ROOT, True)
 
 import os
 from unittest.mock import MagicMock
