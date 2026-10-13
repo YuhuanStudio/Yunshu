@@ -463,3 +463,20 @@ def test_rehearsal_registers_its_ids_with_the_real_manager_object(monkeypatch):
 
     asyncio.run(main())
     assert mgr.keep_prior_for == (9, 1, 3, 4, 9, 2, 3, 5)
+
+
+def test_default_rehearsal_uses_canonical_checkpoint_not_assistant_end(monkeypatch):
+    # Exercise the shipped default, rather than the helper's forced stride setting.
+    default = settings.REGISTRY["YUNSHU_NEXT_TURN_PREFILL"].default
+    eng, calls = _engine(monkeypatch, on=default)
+    eng._apc_prefill_stride = 4
+    eng._apc_backend = type("M", (), {"exact_cache_guard_tokens": 1})()
+
+    async def main():
+        _go(eng)
+        await eng._rehearsal_task
+
+    asyncio.run(main())
+    # The 8-token assistant end is not a canonical reusable checkpoint: the
+    # guard must fit inside the known prefix. Rehearse through 4 + one guard.
+    assert calls[0][0] == [9, 1, 3, 4, 9]
