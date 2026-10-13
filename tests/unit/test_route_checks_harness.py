@@ -37,6 +37,7 @@ SOCKETS = {
     "ws_realtime",
     "realtime_voice_native",
     "realtime_voice_cascade",
+    "respfeat-webrtc",  # requires a persistent server loop; covered by test_respfeat
 }
 
 
@@ -121,6 +122,9 @@ def test_check_has_no_harness_bug(name, monkeypatch):
         pass
     finally:
         signal.alarm(0)
+        from yunshu_gateway import realtime_webrtc
+
+        assert not realtime_webrtc._calls, f"{name}: leaked a live WebRTC peer"
 
 
 def test_omni_helpers():

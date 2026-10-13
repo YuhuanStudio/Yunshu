@@ -245,6 +245,10 @@ SUITES = {
     },
 }
 
+# Confirmation must keep the exact long workload (2048-token decode and follow-up),
+# rather than falling back to the short stage-list defaults of `--suite speed`.
+SUITES["long-speed"] = {**SUITES["long"], "stages": ["speed"]}
+
 DEFAULTS = {
     "ctx": [1024, 8192],
     "kinds": ["prose", "code"],

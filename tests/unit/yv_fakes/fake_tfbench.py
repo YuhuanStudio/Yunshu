@@ -60,7 +60,7 @@ with open(a.out, "a") as out:
         ctxs = []
     if a.part == "conc32":
         slow = 2.0 if env.get("FAKE_SLOW") == "1" else 1.0
-        for t in range(2):
+        for t in range(3):
             emit(
                 part="conc32",
                 trial=t,
