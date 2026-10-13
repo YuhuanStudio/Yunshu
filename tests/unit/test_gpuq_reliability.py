@@ -707,3 +707,36 @@ def test_m3_jobs_do_not_cost_an_owner_its_m5_turn(q):
         ),
     ]
     assert q._pick(jobs)["id"] == "mine"
+
+
+def test_quiet_timing_job_is_requeued_not_paused_for_priority_work(q, monkeypatch):
+    monkeypatch.setattr(q, "free_memory_gb", lambda: 100.0)
+    now = 100_000.0
+    monkeypatch.setattr(q.time, "time", lambda: now)
+    low = dict(
+        id="low",
+        label="replykv-speed",
+        state="running",
+        priority=-1,
+        quiet=True,
+        submitted=now - 600,
+        started=now - 500,
+        pid=1,
+        env={},
+        cmd=["true"],
+        cwd=str(q.ROOT),
+        mem_gb=24.0,
+    )
+    q._write(q.JOBS / "low.json", low)
+    q.submit(["true"], "gate-stage", 1, 0, mem_gb=10.0)
+    ran = []
+    monkeypatch.setattr(q, "_execute", lambda job, *a, **k: ran.append(job["label"]))
+    pauser = q.Pauser(low, q.JOBS / "low.json")
+    signals = []
+    monkeypatch.setattr(pauser, "_signal", lambda sig: signals.append(sig))
+    assert q._priority_step(pauser, q.ServingGate(), now) is False
+    assert not pauser.paused and signals == []  # never stopped mid-measurement
+    stopped = q._read(q.JOBS / "low.json")
+    assert stopped["cancel"] is True
+    clone = q._read(q.JOBS / f"{stopped['requeued_as']}.json")
+    assert clone["state"] == "pending" and clone["quiet"] and clone["requeues"] == 1

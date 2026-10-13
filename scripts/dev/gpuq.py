@@ -1117,6 +1117,17 @@ def _priority_step(pauser: Pauser, gate: ServingGate, now: float) -> bool:
     # decides when the admitted high-priority job can start; it must not let the
     # low-priority job resume early through the shorter serving resume window.
     if any(j.get("waiting") != "mem" for j in pending):
+        if (
+            requires_quiet(pauser.job)
+            and not pauser.paused
+            and pauser.job.get("requeues", 0) < MAX_REQUEUES
+        ):
+            # A timing job measures wall time: once stopped, its numbers are void, and
+            # its resident server plus the priority job overcommit memory and swap
+            # (two 27B replykv timing runs swapped 1.4-2 GB under gate jobs). Stop it
+            # and queue a fresh copy instead of pausing it.
+            _requeue(pauser.job, pauser.path)
+            return False
         pauser.pause(now, reason="priority")
     if high is not None:
         path = JOBS / f"{high['id']}.json"
