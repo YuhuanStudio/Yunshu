@@ -996,6 +996,14 @@ def _models_denied(c: Ctx):
     r = c.http.send(request)  # do not inherit the authenticated client defaults
     err_ok(r, "openai")
     expect(r.status_code == 401, f"load without token -> {r.status_code}")
+    # Authorized single-checkpoint servers reject manager-only loads gracefully.
+    # The VLM loader takes no model argument; calling it that way used to return 500.
+    authorized = c.req("POST", "/v1/models/load", json={"model": c.model})
+    err_ok(authorized, "openai")
+    expect(
+        authorized.status_code == 400, f"single-engine load -> {authorized.status_code}"
+    )
+    expect("model manager" in authorized.text, authorized.text[:200])
 
 
 # ── files, batches (OpenAI and Anthropic) ────────────────────────────────────────────────

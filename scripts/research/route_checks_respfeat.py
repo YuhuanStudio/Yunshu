@@ -78,6 +78,7 @@ def citations(c: Ctx):
         "/v1/messages",
         {
             "model": c.model,
+            "system": "Answer with source text BEFORE the citation. Use double opening and closing square brackets for citations. For this document, the complete answer is BLUE[[cite:0:0:4]].",
             "max_tokens": 96,
             "stream": True,
             "thinking": {"type": "disabled"},
@@ -97,7 +98,7 @@ def citations(c: Ctx):
                         },
                         {
                             "type": "text",
-                            "text": "Copy exactly, nothing else: BLUE[[cite:0:0:4]]",
+                            "text": "What color word appears in the document? Write BLUE followed immediately by [[cite:0:0:4]], preserving both pairs of square brackets.",
                         },
                     ],
                 }

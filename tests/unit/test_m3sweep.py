@@ -377,9 +377,17 @@ def test_admin_denied_check_removes_authenticated_client_defaults():
 
     def respond(request):
         seen.append(request)
+        authorized = request.headers.get("Authorization") == "Bearer owner"
         return httpx.Response(
-            401,
-            json={"error": {"message": "unauthorized", "type": "authentication_error"}},
+            400 if authorized else 401,
+            json={
+                "error": {
+                    "message": "use model manager" if authorized else "unauthorized",
+                    "type": "invalid_request_error"
+                    if authorized
+                    else "authentication_error",
+                }
+            },
         )
 
     with httpx.Client(
@@ -392,6 +400,7 @@ def test_admin_denied_check_removes_authenticated_client_defaults():
         )
     assert "authorization" not in seen[0].headers
     assert "x-api-key" not in seen[0].headers
+    assert seen[1].headers["Authorization"] == "Bearer owner"
 
 
 def test_audio_extra_declares_voice_recording_decoder():

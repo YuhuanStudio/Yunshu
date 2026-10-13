@@ -219,7 +219,7 @@ async def get_model(model_id: str, request: Request) -> dict:
 
 @router.post("/models/load")
 async def load_model(req: LoadModelRequest, request: Request) -> dict:
-    """Load a model (supports both single-engine and multi-model modes)."""
+    """Load a model; fixed text/VLM checkpoints require model-manager mode."""
     actor = resolve_actor(request)
     _check_permission(request, "can_load_models")
     if not req.model or not req.model.strip():
@@ -298,18 +298,19 @@ async def load_model(req: LoadModelRequest, request: Request) -> dict:
             raise HTTPException(status_code=503, detail="Engine not initialized")
 
         from yunshu_engine.batched_engine import BatchedEngine
+        from yunshu_engine.vlm_engine import VLMEngine
 
-        if isinstance(engine, BatchedEngine):
+        if isinstance(engine, BatchedEngine | VLMEngine):
             log_operation(
                 "model_load",
                 req.model,
                 "failure",
                 actor=actor,
-                detail="single_engine_not_supported_in_batched",
+                detail="single_engine_fixed_checkpoint",
             )
             raise HTTPException(
                 status_code=400,
-                detail="Single-engine load not supported in batched mode — use model manager",
+                detail="Single-engine load not supported for a fixed checkpoint — use model manager",
             )
         from yunshu_engine.mlx_executor import get_mlx_executor
 
