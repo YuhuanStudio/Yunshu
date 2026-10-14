@@ -189,6 +189,11 @@ def test_restorable_sliding_window_family_gets_checkpoint_apc(monkeypatch):
     monkeypatch.setenv("YUNSHU_VLM_APC_MEMORY_GB", "1")
     monkeypatch.setenv("YUNSHU_VLM_APC_DISK", "0")
     monkeypatch.setattr(eng, "_install_apc_identity", lambda lm: None)
+    # Real Apple GPU path: a paravirtual-Metal VM (the CI runner) deliberately serves
+    # the stock runner without APC, which tests/unit/test_paravirtual_metal.py covers.
+    from yunshu_engine.utils import hardware
+
+    monkeypatch.setattr(hardware, "is_paravirtual_metal", lambda: False)
     runner = eng._build_batch_runner(eng._model_path)
     assert runner.apc_manager is not None
     coordinator = runner.apc_manager.coordinator(lm)
