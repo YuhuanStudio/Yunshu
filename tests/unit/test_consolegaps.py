@@ -203,7 +203,7 @@ def test_route_probe_on_cpu_fake_server(monkeypatch, tmp_path):
 
     sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts/research"))
     import pytest
-    from route_checks import Fail, console_backend_gaps
+    from route_checks import Ctx, Fail, console_backend_gaps
 
     monkeypatch.setenv("YUNSHU_AUTH_DISABLED", "true")
     log = ServeLog(tmp_path, 4096, 2)
@@ -297,7 +297,7 @@ def test_route_probe_on_cpu_fake_server(monkeypatch, tmp_path):
 
     with ThreadPoolExecutor(1) as pool, TestClient(app) as client:
         monkeypatch.setattr(mlx_executor, "get_mlx_executor", lambda: pool)
-        ctx = SimpleNamespace(http=client, model="m", notes={})
+        ctx = Ctx("http://testserver", "", "m", "multi", http=client)
         console_backend_gaps(ctx)
         assert ctx.notes["consolegaps"]["cache_entries"] == 1
         enforced = False

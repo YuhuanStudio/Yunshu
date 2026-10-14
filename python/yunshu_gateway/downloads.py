@@ -311,6 +311,19 @@ class DownloadRegistry:
                     job.add_bytes,
                 )
             )
+            # Recent Hub versions report aggregate byte bars rather than filenames.
+            # Reconcile terminal progress against the manifest and actual landed files.
+            landed = {}
+            for name, size in files:
+                actual = (Path(job.path) / name).stat().st_size
+                if actual != size:
+                    raise RuntimeError(
+                        f"Downloaded file {name} has {actual} bytes, expected {size}"
+                    )
+                landed[name] = [size, actual]
+            with job._lock:
+                job.files = landed
+                job.done = sum(s for _, s in files)
             if job.on_complete is not None:
                 job.on_complete(job)
             with job._lock:

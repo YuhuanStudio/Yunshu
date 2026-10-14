@@ -38,7 +38,7 @@ def computer(c: Ctx):
         any(e.get("item", {}).get("type") == "computer_call" for e in events),
         str(events),
     )
-    follow = c.oa.responses.create(
+    follow_kwargs = dict(
         model=c.model,
         previous_response_id=events[-1]["response"]["id"],
         input=[
@@ -57,6 +57,17 @@ def computer(c: Ctx):
         temperature=0,
         extra_body={"enable_thinking": False},
     )
+    if c.kind == "text":
+        import openai
+
+        try:
+            c.oa.responses.create(**follow_kwargs)
+        except openai.BadRequestError as exc:
+            expect("does not accept image/audio/video" in str(exc), str(exc))
+            c.unserved()  # screenshot ingestion requires a VLM; still test rejection.
+            return
+        raise AssertionError("text model accepted a computer screenshot")
+    follow = c.oa.responses.create(**follow_kwargs)
     expect(follow.status == "completed" and follow.output_text, str(follow))
 
 
@@ -67,6 +78,7 @@ def citations(c: Ctx):
         "/v1/messages",
         {
             "model": c.model,
+            "system": "Answer with source text BEFORE the citation. Use double opening and closing square brackets for citations. For this document, the complete answer is BLUE[[cite:0:0:4]].",
             "max_tokens": 96,
             "stream": True,
             "thinking": {"type": "disabled"},
@@ -86,7 +98,7 @@ def citations(c: Ctx):
                         },
                         {
                             "type": "text",
-                            "text": "Copy exactly, nothing else: BLUE[[cite:0:0:4]]",
+                            "text": "What color word appears in the document? Write BLUE followed immediately by [[cite:0:0:4]], preserving both pairs of square brackets.",
                         },
                     ],
                 }
