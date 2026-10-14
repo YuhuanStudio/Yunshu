@@ -7,9 +7,32 @@ Release steps: [RELEASING.md](RELEASING.md).
 
 ## [Unreleased]
 
+Changes on main after 0.1.5; not part of a published package yet.
+
+### Highlights
+
+### Upgrade notes / breaking changes
+
+### Performance
+
+| Machine | Model / mode | Metric / workload | Before → after | Recorded source |
+|---|---|---|---|---|
+
+### Added
+
+### Changed
+
+### Fixed
+
+### Security
+
+[Full changelog: v0.1.5…main](https://github.com/YuhuanStudio/Yunshu/compare/v0.1.5...main)
+
+## [0.1.5] - 2026-10-15
+
 The 0.1.5 cycle adds local decision models, repeatable evaluations and broader coding-agent
-and web-retrieval compatibility to the `yunshu` package. These changes are merged on main;
-0.1.4 remains the published version.
+and web-retrieval compatibility to the `yunshu` package. Qwen3.8-27B decodes up to 7% faster at
+32K-64K with outputs bit-identical to 0.1.4.
 
 ### Highlights
 
@@ -52,11 +75,18 @@ and web-retrieval compatibility to the `yunshu` package. These changes are merge
 
 ### Performance
 
+Same checkpoint, greedy, outputs identical to 0.1.4 on every cell (yv `long` suite, base v0.1.4 vs 0.1.5).
+
 | Machine | Model / mode | Metric / workload | Before → after | Recorded source |
 |---|---|---|---|---|
+| M5 Max 128 GB | Qwen3.8-27B oQ4e, DFlash | decode, 32K code / prose | 97.95 → 105.1 / 64.8 → 69.05 tok/s (+7.3% / +6.6%) | yv long, 2 reps |
+| M5 Max 128 GB | Qwen3.8-27B oQ4e, DFlash | decode, 64K prose / code | 51.15 → 54.7 (+6.9%) / 121.35 → 118.25 (-2.5%) tok/s | yv long, 2 reps |
+| M5 Max 128 GB | Qwen3.8-27B oQ4e, DFlash | warm TTFT (APC hit), 32K / 64K code | 0.191 → 0.173 s / 0.396 → 0.303 s | yv long, 2 reps |
+| M5 Max 128 GB | Qwen3.8-27B oQ4e, DFlash | cold TTFT, 32K / 128K | 34.3 / 199.4 s, unchanged | yv long, 2 reps |
 
-No new decode or TTFT claim is made for this cycle here. Historical measurements remain in
-[Benchmarks](docs/BENCHMARKS.md).
+The DFlash gains come from host-side cuts in the round (an immutable private drafter view instead of two
+module rebinds per round, one packed readback, compiled fixed-shape drafter halves) and the fused GDN
+replay / conv-tail commit kernel. Cross-engine long-context tables are in [Benchmarks](docs/BENCHMARKS.md).
 
 ### Added
 
@@ -98,6 +128,11 @@ No new decode or TTFT claim is made for this cycle here. Historical measurements
 
 ### Changed
 
+- The next-turn rehearsal (`YUNSHU_NEXT_TURN_PREFILL`) is on by default in `stride` mode: after a reply, while
+  idle, the engine prefills the reply up to the prefill-atom grid, so the follow-up re-prefills less, and every
+  output stays bit-identical to a run without rehearsal. `exact` (rehearse to the end of the reply) remains an
+  option; it adds a prefill boundary at each earlier assistant turn and so changes multi-turn rounding.
+
 - Refresh the dependency lock for the next cycle (including Anthropic 1.12 and FastAPI 0.143.0) and review upstream changes. MLX stays below 0.32.4 pending version-matched kernel validation.
 - Documentation coverage: a capability overview table in all three READMEs (generated from `docs/feature_index.json`, checked by a unit test), the console guide rewritten page by page with screenshots, and new guides for [inference features](docs/guides/INFERENCE.md), [multimodal endpoints](docs/guides/MULTIMODAL.md) and [authentication, keys, settings and CORS](docs/guides/AUTH_AND_KEYS.md).
 - gpuq admits declared short verification jobs between long cells without preemption, with a bounded
@@ -111,6 +146,14 @@ No new decode or TTFT claim is made for this cycle here. Historical measurements
   timing requires three same-device interleaved quiet pairs after a successful pilot.
 
 ### Fixed
+
+- `POST /v1/models/load` on a fixed text/VLM checkpoint returns a clear 400 pointing to the model manager
+  instead of a 500.
+- Console model downloads check every landed file's size against the manifest; recent Hub versions report
+  aggregate progress, which left the download accounting wrong.
+- Voice enrollment works again: the `audio` extra installs `soundfile`, which mlx-audio no longer pulls in.
+- The console's model view finds the loaded single-engine model by its name when no path attribute exists.
+- An INFO log line no longer formats `None` with `%d` (it raised inside a DFlash restore path).
 
 - The web console no longer jumps while a busy engine streams updates: the overview's live card keeps one size with five fixed request slots, placeholders match the charts that replace them, numbers and wrapping labels reserve their width, request rows slide into place instead of pushing, and panels that appear with data sit under the list. Measured on a replay of a real 27B load: layout shift 0.05-0.54 down to 0.001-0.005, moving boxes 32-130 down to 0.
 - Repetition, presence and frequency penalties no longer depend on the prefix cache: after an APC hit the penalty context was only the uncached suffix, so the same request answered differently on a hit than on a miss. The context is now the whole prompt either way. Outputs of requests that use these penalties change relative to earlier builds (a bug fix).
@@ -141,7 +184,7 @@ No new decode or TTFT claim is made for this cycle here. Historical measurements
   private destinations and cross-origin rendered resources are rejected according to the fetch policy.
   See [API surface](docs/guides/API_SURFACE.md) and [Tavily limitations](docs/guides/TAVILY.md).
 
-[Full changelog: v0.1.4…main](https://github.com/YuhuanStudio/Yunshu/compare/v0.1.4...main)
+[Full changelog: v0.1.4…v0.1.5](https://github.com/YuhuanStudio/Yunshu/compare/v0.1.4...v0.1.5)
 
 ## [0.1.4] - 2026-10-08
 
