@@ -56,3 +56,25 @@ def test_long_speed_keeps_long_workload():
     assert speed["turn2_tokens"] == 256
     assert speed["long_ask"] is True
     assert speed["speed_tol_pct"] == 3.0
+
+
+def test_leftover_evidence_from_an_earlier_attempt_is_not_appended_to(
+    monkeypatch, tmp_path
+):
+    out = tmp_path / "pair.jsonl"
+    old = [dict(part="conc32", trial=i, cts=[1024, 1024]) for i in range(3)]
+    for arm in ("base", "cand"):
+        out.with_name(f"pair.{arm}.jsonl").write_text(
+            "\n".join(json.dumps(r) for r in [*old, dict(complete=True)]) + "\n"
+        )
+
+    def fake_run(argv, check):  # the real probe appends to its output file
+        rows = [dict(part="conc32", trial=i, cts=[1024, 1024]) for i in range(3)]
+        with Path(argv[1]).open("a") as f:
+            f.write(
+                "\n".join(json.dumps(r) for r in [*rows, dict(complete=True)]) + "\n"
+            )
+
+    monkeypatch.setattr("verify.conc_pair.subprocess.run", fake_run)
+    run_pair(out, {arm: [arm, "{arm_out}"] for arm in ("base", "cand")})
+    assert '"complete": true' in out.read_text()

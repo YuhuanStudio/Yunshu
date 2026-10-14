@@ -13,6 +13,9 @@ def run_pair(out: Path, commands: dict) -> None:
         for arm in ("base", "cand"):
             evidence = out.with_name(f"{out.stem}.{arm}.jsonl")
             argv = [arg.replace("{arm_out}", str(evidence)) for arg in commands[arm]]
+            # The probe appends; a leftover file from an earlier attempt at the same path
+            # would double the rounds (0,1,2,0,1,2) and fail an otherwise complete run.
+            evidence.unlink(missing_ok=True)
             subprocess.run(argv, check=True)
             rows = [
                 json.loads(line) for line in evidence.read_text().splitlines() if line
