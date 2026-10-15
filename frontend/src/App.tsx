@@ -275,7 +275,11 @@ export default function App() {
     [query, setQuery] = useState("");
   // Focus goes back to whatever opened the palette (button or shortcut).
   const paletteOpener = useRef<HTMLElement | null>(null);
+  const paletteFocusTimer = useRef<ReturnType<typeof setTimeout> | undefined>(
+    undefined,
+  );
   const openPalette = () => {
+    clearTimeout(paletteFocusTimer.current);
     paletteOpener.current =
       document.activeElement instanceof HTMLElement
         ? document.activeElement
@@ -287,8 +291,10 @@ export default function App() {
     setQuery("");
     const opener = paletteOpener.current;
     paletteOpener.current = null;
-    if (opener?.isConnected) setTimeout(() => opener.focus(), 0);
-    else setTimeout(() => document.getElementById("main-content")?.focus(), 0);
+    paletteFocusTimer.current = setTimeout(() => {
+      if (opener?.isConnected) opener.focus();
+      else document.getElementById("main-content")?.focus();
+    }, 0);
   };
   useCommandPaletteShortcut(openPalette);
   const skipToMain = (event: { preventDefault: () => void }) => {
@@ -329,6 +335,13 @@ export default function App() {
     const find = () => {
       const h1 = document.querySelector<HTMLElement>("#main-content h1");
       const loading = document.querySelector('[data-testid="page-loading"]');
+      // A lazy page must not take focus back after the reader starts interacting.
+      if (
+        document.activeElement?.closest(
+          "input, textarea, select, button, [role=dialog]",
+        )
+      )
+        return;
       if (h1 && !loading && h1 === seen) {
         h1.setAttribute("tabindex", "-1");
         h1.focus({ preventScroll: true });
@@ -768,7 +781,7 @@ export default function App() {
               </Button>
               <Breadcrumb
                 aria-label={t("shell.nav.breadcrumb")}
-                className="card w-fit min-w-0 whitespace-nowrap px-3 py-2 max-sm:hidden"
+                className="card w-fit min-w-0 overflow-hidden whitespace-nowrap px-3 py-2 max-sm:hidden"
               >
                 <BreadcrumbList className="flex-nowrap gap-2 overflow-hidden sm:gap-2">
                   <BreadcrumbItem className="shrink-0">
@@ -833,8 +846,10 @@ export default function App() {
                     className="card inline-flex h-8 items-center gap-1.5 rounded-full px-3 py-0 text-xs text-muted-foreground transition-colors hover:text-foreground"
                   >
                     <Search size={13} />
-                    {t("shell.top.search")}
-                    <Kbd>⌘K</Kbd>
+                    <span className="max-xl:sr-only">
+                      {t("shell.top.search")}
+                    </span>
+                    <Kbd className="max-xl:hidden">⌘K</Kbd>
                   </Button>
                   {/* YunUI ThemeToggle is next-themes backed; the console owns its
                   theme state (Settings shares it), so keep a pill IconButton. */}

@@ -104,6 +104,12 @@ jobs:
           pnpm exec yunui doctor --strict
           pnpm exec yunui audit --strict
 
+      - name: Install CPU-only console test dependencies
+        run: |
+          uv venv .console-test-venv --python ${{ env.PYTHON_VERSION }}
+          uv pip install --python .console-test-venv/bin/python fastapi==0.143.0 httpx==0.28.1 uvicorn==0.54.0 websockets==17.2
+          echo "YUNSHU_TEST_PYTHON=$PWD/.console-test-venv/bin/python" >> "$GITHUB_ENV"
+
       - name: Browser API integration tests
         working-directory: frontend
         run: |

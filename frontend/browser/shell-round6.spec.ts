@@ -324,3 +324,50 @@ test("loading model shows in the live pill, not idle", async ({ page }) => {
   await page.goto("/console/#/overview");
   await expect(page.getByTestId("live-phase")).toContainText("載入中");
 });
+
+test("delayed navigation focus preserves a settings field already being edited", async ({
+  page,
+}) => {
+  await install(page, world());
+  await page.goto("/console/#/overview");
+  await page.clock.install();
+  await page.clock.pauseAt(new Date(Date.now() + 1000));
+  await page.getByRole("button", { name: /^開啟設定/ }).click();
+  const field = page.getByLabel("服務位址", { exact: true });
+  await field.fill(`${new URL(page.url()).origin}/server-b`);
+  await page.clock.runFor(250);
+  await expect(field).toBeFocused();
+  await expect(field).toHaveValue(`${new URL(page.url()).origin}/server-b`);
+});
+
+test("reopening the palette cancels the previous close's deferred focus restoration", async ({
+  page,
+}) => {
+  await install(page, world());
+  await page.goto("/console/#/overview");
+  await page.getByRole("button", { name: /搜尋/ }).first().focus();
+  await page.keyboard.press("Control+k");
+  await page.getByRole("combobox").fill("清除快取");
+  // Hold only zero-delay callbacks, preserving the palette's own presence animation and polling.
+  // This makes a slow close callback race deterministically with the next opening.
+  await page.evaluate(() => {
+    const native = window.setTimeout.bind(window);
+    window.setTimeout = ((
+      handler: TimerHandler,
+      delay?: number,
+      ...args: unknown[]
+    ) =>
+      native(
+        handler,
+        delay === 0 ? 500 : delay,
+        ...args,
+      )) as typeof window.setTimeout;
+  });
+  await page.keyboard.press("Enter");
+  await page.keyboard.press("Control+k");
+  await page.getByRole("combobox").fill("前往日誌");
+  await page.waitForTimeout(650);
+  await expect(page.getByRole("combobox")).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(page).toHaveURL(/#\/logs$/);
+});
