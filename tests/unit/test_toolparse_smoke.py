@@ -3,6 +3,7 @@
 import importlib.util
 import json
 import threading
+import types
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -152,9 +153,14 @@ def test_probe_waits_when_the_port_pool_is_busy(monkeypatch):
 
     monkeypatch.setattr(probe.socket, "socket", BusySocket)
     times = iter([0.0, 0.0, 6.0])
-    monkeypatch.setattr(probe.time, "monotonic", lambda: next(times))
     sleeps = []
-    monkeypatch.setattr(probe.time, "sleep", sleeps.append)
+    # Replace only the probe's own reference: patching the shared time module also
+    # captured sleeps from threads other tests left running (55,000 x 0.05 s in CI).
+    monkeypatch.setattr(
+        probe,
+        "time",
+        types.SimpleNamespace(monotonic=lambda: next(times), sleep=sleeps.append),
+    )
     with pytest.raises(RuntimeError, match="pool busy"):
         probe.available_port(18996, wait_s=5.0)
     assert sleeps == [5.0]
