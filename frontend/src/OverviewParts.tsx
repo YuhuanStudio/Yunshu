@@ -349,12 +349,8 @@ export function HealthLine({
         {/* i18n-keys: overview.health. */}
         {checking ? "—" : tr(`overview.health.${level}`)}
       </span>
-      <span
-        className="min-w-0 flex-1 truncate text-muted-foreground"
-        title={text}
-      >
-        {text}
-      </span>
+      {/* The action sits before the truncating reason text: placed after it, the button rode the
+          width of the uptime/clock text beside this line and moved under live load. */}
       {!checking && level !== "ok" && target && (
         <Button
           className="w-20 shrink-0"
@@ -366,6 +362,12 @@ export function HealthLine({
           <ArrowRight size={13} />
         </Button>
       )}
+      <span
+        className="min-w-0 flex-1 truncate text-muted-foreground"
+        title={text}
+      >
+        {text}
+      </span>
     </div>
   );
 }

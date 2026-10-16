@@ -780,3 +780,23 @@ test.describe("iPhone width (402x874)", () => {
       .scrollIntoViewIfNeeded();
   });
 });
+
+test("a reason stays readable when focusing scrolls its off-screen control into view", async ({
+  page,
+}) => {
+  // Focus scrolls the trigger into view and that scroll used to close the tooltip at once.
+  await page.setViewportSize({ width: 1280, height: 260 });
+  await install(page, world());
+  await openModels(page);
+  const half = page.getByTestId("local-row").filter({ hasText: "org/half" });
+  await expect(half).toContainText("檔案不完整");
+  const reasoned = half.getByTestId("reasoned");
+  expect((await reasoned.boundingBox())!.y).toBeGreaterThan(260);
+  await reasoned.focus();
+  await page.waitForTimeout(800);
+  await expect(page.getByRole("tooltip").first()).toContainText(
+    "檔案不完整，請先重新下載",
+  );
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("tooltip")).toHaveCount(0);
+});

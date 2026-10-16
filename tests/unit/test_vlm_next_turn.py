@@ -480,3 +480,22 @@ def test_default_rehearsal_uses_canonical_checkpoint_not_assistant_end(monkeypat
     # The 8-token assistant end is not a canonical reusable checkpoint: the
     # guard must fit inside the known prefix. Rehearse through 4 + one guard.
     assert calls[0][0] == [9, 1, 3, 4, 9]
+
+
+def test_concurrent_completions_cancel_superseded_rehearsal(monkeypatch):
+    eng, calls = _engine(monkeypatch)
+
+    async def main():
+        # Both completion callbacks run before either delayed task starts.
+        _go(eng)
+        first_task = eng._rehearsal_task
+        first_cancel = eng._rehearsal_cancel
+        _go(eng)
+        second_task = eng._rehearsal_task
+        assert first_cancel.is_set()
+        # A new foreground request must stop all outstanding rehearsal work.
+        eng._cancel_rehearsal()
+        await asyncio.gather(first_task, second_task)
+
+    asyncio.run(main())
+    assert calls == []

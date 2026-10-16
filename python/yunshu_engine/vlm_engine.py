@@ -1571,6 +1571,10 @@ class VLMEngine:
             logger.debug("next-turn rehearsal ineligible: engine busy")
             next_turn.record("ineligible")
             return  # other work is waiting: the GPU is not idle
+        # Concurrent completions can both schedule a delayed rehearsal. Cancel the
+        # previous owner before replacing its handle, or arriving requests can only
+        # cancel the newest task and the orphan keeps prefilling beside decode.
+        self._cancel_rehearsal()
         # created here, not in the task: a request arriving before the task first runs must
         # still be able to cancel it
         ev = threading.Event()
