@@ -660,7 +660,37 @@ export async function streamCompletion(
       );
   } finally {
     signal.removeEventListener("abort", cancelOnAbort);
-    await reader.cancel().catch(() => {});
+    // A finished stream is read to its end: cancelling it right after the done event aborted a
+    // request that had succeeded (the browser and the engine both saw a client cancel). Only an
+    // abort, an error or a server that keeps the body open past the done event is cancelled.
+    if (!(receivedDone && !signal.aborted && (await drained(reader))))
+      await reader.cancel().catch(() => {});
     reader.releaseLock();
+  }
+}
+
+const DRAIN_MS = 1000;
+
+/** Reads what is left of a finished stream; false if it does not end within DRAIN_MS. */
+async function drained(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+): Promise<boolean> {
+  const deadline = Date.now() + DRAIN_MS;
+  try {
+    for (;;) {
+      const left = deadline - Date.now();
+      if (left <= 0) return false;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const step = await Promise.race([
+        reader.read(),
+        new Promise<"late">((resolve) => {
+          timer = setTimeout(() => resolve("late"), left);
+        }),
+      ]).finally(() => clearTimeout(timer));
+      if (step === "late") return false;
+      if (step.done) return true;
+    }
+  } catch {
+    return false;
   }
 }

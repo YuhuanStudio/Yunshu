@@ -468,3 +468,58 @@ test("non-chat streams fail closed without a terminal event or on error events",
     /boom/,
   );
 });
+
+function tailStream(text: string, tailDelayMs: number, closes = true) {
+  const state = { cancelled: false, pulledToEnd: false };
+  const bytes = new TextEncoder().encode(text);
+  let sent = false;
+  const stream = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      if (!sent) {
+        sent = true;
+        controller.enqueue(bytes);
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, tailDelayMs));
+      if (!closes) return;
+      state.pulledToEnd = true;
+      controller.close();
+    },
+    cancel() {
+      state.cancelled = true;
+    },
+  });
+  return {
+    state,
+    response: new Response(stream, {
+      headers: { "Content-Type": "text/event-stream" },
+    }),
+  };
+}
+
+test("a finished stream is read to its end, not cancelled after the done event", async (t) => {
+  // Cancelling right after message_stop aborted a request that had succeeded (playground CI flake).
+  const { state, response } = tailStream(
+    'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+    50,
+  );
+  installFetch(t, (async () => response) as typeof fetch);
+  await streamCompletion(
+    connection,
+    body,
+    () => {},
+    new AbortController().signal,
+    "messages",
+  );
+  assert.equal(state.cancelled, false);
+  assert.equal(state.pulledToEnd, true);
+});
+
+test("a server that keeps the body open after the done event is cancelled, not waited on", async (t) => {
+  const { state, response } = tailStream("data: [DONE]\n\n", 5_000, false);
+  installFetch(t, (async () => response) as typeof fetch);
+  const started = Date.now();
+  await streamCompletion(connection, body, () => {}, new AbortController().signal);
+  assert.ok(Date.now() - started < 3_000);
+  assert.equal(state.cancelled, true);
+});
