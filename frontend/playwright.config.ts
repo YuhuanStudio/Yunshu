@@ -7,6 +7,13 @@ export default defineConfig({
   timeout: 30_000,
   fullyParallel: false,
   workers: 1,
+  // GitHub's runner occasionally loses a WebKit process ("internal error"): one retry there, none
+  // locally. A test that passes only on retry is reported as flaky (scripts/report-flaky.mjs) and is
+  // a defect to root-cause, not a pass to forget.
+  retries: process.env.CI ? 1 : 0,
+  reporter: process.env.CI
+    ? [["list"], ["json", { outputFile: "playwright-report.json" }]]
+    : "list",
   use: {
     baseURL: process.env.PLAYWRIGHT_BASE_URL ?? origin,
     // The default language is zh-TW; specs read its wording unless they set another locale.

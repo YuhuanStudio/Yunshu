@@ -116,6 +116,19 @@ jobs:
           pnpm exec playwright install --with-deps chromium webkit
           pnpm test:browser
 
+      - name: Report flaky browser tests
+        if: always()
+        working-directory: frontend
+        run: node scripts/report-flaky.mjs
+
+      - name: Upload browser failure traces
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-test-results
+          path: frontend/test-results/
+          retention-days: 7
+
       - name: Build sdist + wheel
         run: uv build
 
