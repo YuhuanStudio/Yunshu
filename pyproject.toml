@@ -73,7 +73,7 @@ classifiers = [
 dependencies = [
     # ── Apple ML Stack (text path only) ──
     # qmv copies select version-matched arithmetic for mlx f8aaf49d (0.32.4).
-    # Retain the cap until the source-built 0.32.4 passes M5 long identity.
+    # 0.32.4 breaks FP32 SSD APC == RAM/cold parity (sync016 unit bisect).
     "mlx>=0.32.3,<0.32.4",
     "mlx-lm>=0.32.0",
     # ── Model / Tokenizer ──
