@@ -1,6 +1,10 @@
 import { Component, type ErrorInfo, type ReactNode } from "react";
 import { Button } from "@yuhuanowo/yunui";
 import { t } from "./i18n/index.ts";
+import { reloadForChunk } from "./lazy-page";
+
+// A failed page-chunk import stays failed in the browser: only a reload loads it again.
+const CHUNK_FAILED = /dynamically imported module|Importing a module script failed|module script/i;
 
 /**
  * One page's error must not blank the app: the shell, the navigation and every other page keep
@@ -50,7 +54,12 @@ export class PageBoundary extends Component<
             <Button
               size="sm"
               onClick={() =>
-                this.setState((s) => ({ error: null, attempt: s.attempt + 1 }))
+                CHUNK_FAILED.test(this.state.error?.message ?? "")
+                  ? reloadForChunk()
+                  : this.setState((s) => ({
+                      error: null,
+                      attempt: s.attempt + 1,
+                    }))
               }
             >
               {t("shell.boundary.retry")}

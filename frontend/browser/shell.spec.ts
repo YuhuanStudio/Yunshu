@@ -134,3 +134,35 @@ test.describe("status band never covers content", () => {
     });
   }
 });
+
+test("a page whose code fails to load once (engine restarting) recovers on its own", async ({
+  page,
+}) => {
+  // The console is served by the engine: a page chunk requested while it restarts fails once.
+  await install(page);
+  let blocked = 0;
+  await page.route(/\/(src\/Settings\.tsx|assets\/Settings-[^/]*\.js)(\?|$)/, (route) => {
+    if (blocked++ === 0) return route.abort("connectionrefused");
+    return route.fallback();
+  });
+  await page.goto("/console/#/settings", { waitUntil: "domcontentloaded" });
+  await expect(page.getByTestId("page-error")).toHaveCount(0, { timeout: 15_000 });
+  await expect(page.getByTestId("settings")).toBeVisible({ timeout: 15_000 });
+  expect(blocked).toBeGreaterThan(1);
+});
+
+test("a page whose code never loads reloads once, then shows its error instead of looping", async ({
+  page,
+}) => {
+  await install(page);
+  await page.route(/\/(src\/Settings\.tsx|assets\/Settings-[^/]*\.js)(\?|$)/, (route) =>
+    route.abort("connectionrefused"),
+  );
+  let loads = 0;
+  page.on("load", () => loads++);
+  await page.goto("/console/#/settings", { waitUntil: "domcontentloaded" });
+  await expect(page.getByTestId("page-error")).toBeVisible({ timeout: 20_000 });
+  await page.waitForTimeout(2000);
+  expect(loads).toBe(2); // the first load and one automatic reload, no more
+  await expect(page.getByTestId("page-error")).toBeVisible();
+});

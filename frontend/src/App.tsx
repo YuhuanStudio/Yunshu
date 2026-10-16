@@ -1,6 +1,7 @@
 import { SegmentedTray } from "./SegmentedTray";
 import { gbTotalText } from "./byte-format";
-import { Suspense, lazy, useEffect, useRef, useState } from "react";
+import { Suspense, useEffect, useRef, useState } from "react";
+import { lazyPage } from "./lazy-page";
 import {
   Breadcrumb,
   BreadcrumbItem,
@@ -91,33 +92,33 @@ import {
   routeHref,
   type Page,
 } from "./route";
-const Dashboard = lazy(() =>
+const Dashboard = lazyPage(() =>
   import("./Dashboard").then((m) => ({ default: m.Dashboard })),
 );
-const Models = lazy(() =>
+const Models = lazyPage(() =>
   import("./Models").then((m) => ({ default: m.Models })),
 );
-const Requests = lazy(() =>
+const Requests = lazyPage(() =>
   import("./Requests").then((m) => ({ default: m.Requests })),
 );
-const Settings = lazy(() =>
+const Settings = lazyPage(() =>
   import("./Settings").then((m) => ({ default: m.Settings })),
 );
-const ApiView = lazy(() =>
+const ApiView = lazyPage(() =>
   import("./ApiAccess").then((m) => ({ default: m.ApiView })),
 );
 import { operationResult } from "./operation-result";
-const Diagnostics = lazy(() =>
+const Diagnostics = lazyPage(() =>
   import("./Diagnostics").then((m) => ({ default: m.Diagnostics })),
 );
-const Playground = lazy(() =>
+const Playground = lazyPage(() =>
   import("./Playground").then((m) => ({ default: m.Playground })),
 );
-const Downloads = lazy(() => import("./Downloads"));
-const Cache = lazy(() => import("./Cache"));
-const Keys = lazy(() => import("./Keys"));
-const Docs = lazy(() => import("./Docs"));
-const Logs = lazy(() => import("./Logs"));
+const Downloads = lazyPage(() => import("./Downloads"));
+const Cache = lazyPage(() => import("./Cache"));
+const Keys = lazyPage(() => import("./Keys"));
+const Docs = lazyPage(() => import("./Docs"));
+const Logs = lazyPage(() => import("./Logs"));
 // i18n-keys: shell.page.
 const pageTitle = (page: string) => tr(`shell.page.${page}`);
 const route = () => {
