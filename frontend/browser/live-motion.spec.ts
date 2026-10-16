@@ -1,3 +1,4 @@
+import { frameBudget } from "./support/frame-budget";
 import { expect, test, type Page } from "@playwright/test";
 
 // Live data is real-time and smooth: numbers glide to each sample, progress bars move between
@@ -236,28 +237,31 @@ test.describe("phone", () => {
     isMobile: true,
   });
   test("the animation loop keeps the frame budget", async ({ page }) => {
+    const sample = () =>
+      page.evaluate(
+        () =>
+          new Promise<number[]>((resolve) => {
+            const out: number[] = [];
+            let last = performance.now();
+            const end = last + 2500;
+            const tick = (t: number) => {
+              out.push(t - last);
+              last = t;
+              if (t < end) requestAnimationFrame(tick);
+              else resolve(out);
+            };
+            requestAnimationFrame(tick);
+          }),
+      );
+    const idle = await sample();
     await open(page, "overview", 500);
     await expect(page.locator(BAR_FILL).first()).toBeVisible();
-    const deltas = await page.evaluate(
-      () =>
-        new Promise<number[]>((resolve) => {
-          const out: number[] = [];
-          let last = performance.now();
-          const end = last + 2500;
-          const tick = (t: number) => {
-            out.push(t - last);
-            last = t;
-            if (t < end) requestAnimationFrame(tick);
-            else resolve(out);
-          };
-          requestAnimationFrame(tick);
-        }),
+    const deltas = await sample();
+    const budget = frameBudget(deltas.slice(1), idle.slice(1));
+    expect(budget.p95, JSON.stringify(budget)).toBeLessThan(budget.p95Limit);
+    expect(budget.stalls, JSON.stringify(budget)).toBeLessThanOrEqual(
+      budget.stallLimit,
     );
-    deltas.shift();
-    const sorted = [...deltas].sort((a, b) => a - b);
-    const p95 = sorted[Math.floor(sorted.length * 0.95)];
-    expect(p95, `p95 frame ${p95.toFixed(1)} ms`).toBeLessThan(40);
-    expect(deltas.filter((d) => d > 120)).toEqual([]);
   });
 });
 

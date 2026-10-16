@@ -1,3 +1,4 @@
+import { liveSlots } from "./live-slots";
 import { FRESH_ROW, useFreshIds } from "./fresh-rows";
 import { ErrorNote } from "./error-note";
 import { RequestWaterfall } from "./RequestWaterfall";
@@ -331,6 +332,13 @@ export function Requests({
         });
   const matched = useMemo(() => sortRows(bySpeed, sort), [bySpeed, sort]);
   const shown = matched.slice(0, limit);
+  const lanes = useRef<(Row | null)[]>([]);
+  const laneScope = `${filter}/${outcome}/${query}/${speed}/${sort.key}/${sort.dir}`;
+  const previousScope = useRef(laneScope);
+  if (previousScope.current !== laneScope) lanes.current = [];
+  previousScope.current = laneScope;
+  lanes.current = filter === "active" ? liveSlots(lanes.current, shown) : [];
+  const displayed = filter === "active" ? lanes.current : shown;
   const listRef = useRef<HTMLDivElement>(null);
   useFlip(listRef);
   const fresh = useFreshIds(shown.map((r) => r.id));
@@ -796,7 +804,11 @@ export function Requests({
         list={
           <div className="space-y-5">
             <Card className="overflow-hidden">
-              <div className="min-h-[42rem]" data-live-list="" ref={listRef}>
+              <div
+                className="relative min-h-[42rem]"
+                data-live-list=""
+                ref={listRef}
+              >
                 <TooltipProvider delayDuration={200}>
                   <Table
                     className="md:min-w-[840px] md:table-fixed"
@@ -851,7 +863,24 @@ export function Requests({
                       </Tr>
                     </Thead>
                     <Tbody>
-                      {shown.map((row) => {
+                      {displayed.map((row, lane) => {
+                        if (!row)
+                          return (
+                            <Tr
+                              key={`lane-${lane}`}
+                              aria-hidden="true"
+                              className="live-request-slot invisible"
+                            >
+                              <Td className="max-sm:hidden" />
+                              <Td className="min-w-44" />
+                              <Td className="hidden lg:table-cell" />
+                              <Td className="hidden md:table-cell" />
+                              <Td className="hidden md:table-cell" />
+                              <Td className="hidden md:table-cell" />
+                              <Td className="hidden min-[1800px]:table-cell" />
+                              <Td />
+                            </Tr>
+                          );
                         const percent =
                             row.phase === "prefill"
                               ? prefillPercent(row)
@@ -870,10 +899,15 @@ export function Requests({
                             st.total != null ? formatMs(st.total) : "—";
                         return (
                           <Tr
-                            key={row.id}
-                            data-flip={row.id}
+                            key={filter === "active" ? `lane-${lane}` : row.id}
+                            data-request-id={row.id}
+                            data-live-request={
+                              filter === "active" ? "" : undefined
+                            }
+                            data-flip={filter === "active" ? undefined : row.id}
                             className={
                               [
+                                filter === "active" ? "live-request-slot" : "",
                                 detail?.id === row.id ? "bg-accent-subtle" : "",
                                 fresh(row.id) ? FRESH_ROW : "",
                               ]
@@ -1035,7 +1069,14 @@ export function Requests({
                   </Table>
                 </TooltipProvider>
                 {!shown.length && (
-                  <TableState loading={!engine.status}>
+                  <TableState
+                    className={
+                      filter === "active"
+                        ? "absolute inset-x-0 top-12"
+                        : undefined
+                    }
+                    loading={!engine.status}
+                  >
                     {engine.status
                       ? query
                         ? t("requests.list.noMatch")

@@ -95,8 +95,35 @@ for (const [name, project] of [
       // The live card's count and its rows must agree: "n active" with an empty row area is a defect.
       const empty: string[] = [];
       let streak = 0;
+      let previousRows: Record<string, number> = {};
+      const rowMoves: string[] = [];
+      let liveRowSamples = 0,
+        liveRowComparisons = 0;
       for (let i = 0; i < SECONDS * 2; i++) {
         await page.waitForTimeout(500);
+        if (route === "requests") {
+          const current = await page.evaluate(() =>
+            Object.fromEntries(
+              [
+                ...document.querySelectorAll<HTMLElement>(
+                  "tr[data-live-request][data-request-id]",
+                ),
+              ].map((el) => [
+                el.dataset.requestId!,
+                el.getBoundingClientRect().top,
+              ]),
+            ),
+          );
+          liveRowSamples += Object.keys(current).length;
+          for (const [id, top] of Object.entries(current)) {
+            if (previousRows[id] == null) continue;
+            liveRowComparisons++;
+            if (Math.abs(top - previousRows[id]) > 1.5)
+              rowMoves.push(`${id}: ${previousRows[id]} -> ${top}`);
+          }
+          previousRows = current;
+          continue;
+        }
         if (route !== "overview") continue;
         const seen = await page.evaluate(() => {
           const h = document.querySelector('[data-testid="live-panel"] h2');
@@ -119,6 +146,17 @@ for (const [name, project] of [
         if (streak >= 2) empty.push(`t=${i / 2}s n=${seen.n} rows=0`);
       }
       expect(empty, "active requests but no visible lane row").toEqual([]);
+      expect(
+        rowMoves,
+        "surviving live requests changed lanes under real load",
+      ).toEqual([]);
+      if (route === "requests") {
+        expect(liveRowSamples, "live rows were observed").toBeGreaterThan(5);
+        expect(
+          liveRowComparisons,
+          "surviving rows were compared",
+        ).toBeGreaterThan(5);
+      }
       const rec = await page.evaluate(() => window.__review.stop());
       const s = summarize(rec.entries, rec.frames);
       if (process.env.REPLAY_RESULTS)

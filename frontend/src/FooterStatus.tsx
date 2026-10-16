@@ -157,7 +157,7 @@ export function FooterStatus({
           ref={(el: HTMLButtonElement | null) => {
             anchorRef.current = el;
           }}
-          className="h-8 max-w-full gap-2 rounded-full bg-(--bg-elevated) px-3 text-[11px]"
+          className="h-8 w-80 max-w-full gap-2 rounded-full bg-(--bg-elevated) px-3 text-[11px]"
           aria-haspopup="dialog"
           aria-expanded={open}
           data-testid="footer-compact"

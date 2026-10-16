@@ -30,10 +30,12 @@ export function LiveScroll({
   useLayoutEffect(() => {
     const el = box.current;
     if (!el) return;
-    el.style.setProperty("--live-shift", "0");
-    if (reducedMotion() || !(spanMs > 0) || !newestAt) return;
+    if (reducedMotion() || !(spanMs > 0) || !newestAt) {
+      el.style.setProperty("--live-shift", "0");
+      return;
+    }
     const born = performance.now() - Math.max(0, Date.now() - newestAt);
-    return ticker.subscribe((now) => {
+    const draw = (now: number) => {
       const rect = el.querySelector("clipPath rect");
       const w = Number(rect?.getAttribute("width") ?? 0);
       const age = Math.min(maxMs, Math.max(0, now - born));
@@ -41,7 +43,10 @@ export function LiveScroll({
         "--live-shift",
         Math.min(w, (age / spanMs) * w).toFixed(2),
       );
-    });
+    };
+    // A late sample already has an age. Apply it before paint rather than briefly resetting to zero.
+    draw(performance.now());
+    return ticker.subscribe(draw);
   }, [spanMs, newestAt, maxMs]);
 
   return (

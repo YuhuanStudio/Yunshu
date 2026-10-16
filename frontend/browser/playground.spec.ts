@@ -419,7 +419,7 @@ async function installDiagnostics(
   page.on("request", (request) => {
     if (
       new URL(request.url()).origin !==
-      new URL(process.env.PLAYWRIGHT_BASE_URL ?? "http://127.0.0.1:3971").origin
+      new URL(String(test.info().project.use.baseURL)).origin
     )
       external.push(request.url());
   });
