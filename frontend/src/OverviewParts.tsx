@@ -357,7 +357,7 @@ export function HealthLine({
       </span>
       {!checking && level !== "ok" && target && (
         <Button
-          className="shrink-0"
+          className="w-20 shrink-0"
           size="sm"
           variant="ghost"
           onClick={() => navigate(target)}

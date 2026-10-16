@@ -168,7 +168,12 @@ for (const name of PROFILES) {
       await open(page);
       await page.waitForTimeout(16_000); // five samples are needed before the chart draws a line
       const { frames } = await record(page, 9_000);
-      expect(frames.length, "frames recorded").toBeGreaterThan(200);
+      // Correctness needs coverage across sample boundaries, independent of runner refresh rate.
+      expect(frames.length, "frames recorded").toBeGreaterThan(60);
+      expect(
+        frames.at(-1)!.t - frames[0]!.t,
+        "recorded time span",
+      ).toBeGreaterThan(8500);
       expect(frames[0]!.dpr).toBe(2);
       // follow every tick label that exists in two consecutive frames
       let worstUp = 0;

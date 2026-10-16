@@ -302,6 +302,9 @@ test("restarting the engine: the session reconnects, the data resumes and the ga
   // the engine's own ring is empty after the restart; the recorded log still lists the earlier requests
   await json(`${engineUrl()}/__busy/0`, { method: "POST" });
   await open(page, "requests");
+  // The page can still hold the last busy sample until the next status poll.
+  // This assertion concerns persisted history, regardless of its initial tab.
+  await page.getByRole("tab", { name: "已結束", exact: true }).click();
   await expect(page.getByRole("button", { name: "詳情" })).toHaveCount(3, {
     timeout: 15_000,
   });

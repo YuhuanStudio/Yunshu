@@ -499,9 +499,11 @@ async def test_poll_cost_is_small(capsys, monkeypatch):
         for k, v in results.items():
             print(f"POLLCOST {k}: {v:.2f}")
     for path in PATHS:
-        assert results[path] < 50, (
-            results
-        )  # generous CI bound; real numbers are printed
+        # Generous CI bound; real numbers are printed. The full-ring history read is
+        # the one large payload (~620 KB, ~21 ms on an M5 Max): it gets 0.1 ms per KB on
+        # top, so a slower CI VM passes while a per-request cost regression still fails.
+        bound = 50 + results[path + " bytes"] / 10_000
+        assert results[path] < bound, results
     assert not math.isnan(results["/v1/yunshu/config"])
 
 

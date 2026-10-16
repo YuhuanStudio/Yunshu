@@ -1,6 +1,7 @@
 #!/bin/sh
 # Run the release workflow's build-and-check job locally before tagging (CPU only, no GPU).
 #   scripts/dev/ci-local [REF]      # REF defaults to HEAD
+#   YUNSHU_CI_BROWSER=1 scripts/dev/ci-local [REF]  # also run Chromium + WebKit
 # Mirrors .github/workflows/release.yml: a fresh checkout of REF, `uv sync --dev --extra vision
 # --extra compression` into its own venv, ruff/mypy, console checks, the unit suite, uv build, twine and a wheel
 # install smoke. The suite runs under sandbox-exec with this machine's build volume and the main
@@ -27,6 +28,10 @@ uv run --python 3.13 ruff check python/ tests/
 uv run --python 3.13 ruff format --check python/ tests/
 uv run --python 3.13 python scripts/dev/mypy_gate.py
 (cd frontend && pnpm install --frozen-lockfile && pnpm exec tsc --noEmit && pnpm test && pnpm build && pnpm exec yunui doctor --strict && pnpm exec yunui audit --strict)
+if [ "${YUNSHU_CI_BROWSER:-0}" = 1 ]; then
+  (cd frontend && pnpm exec playwright install --with-deps chromium webkit && \
+    YUNSHU_TEST_PYTHON="$WORK/.venv/bin/python" pnpm test:browser)
+fi
 PROFILE="$WORK/ci.sb"
 cat > "$PROFILE" <<EOF
 (version 1)
@@ -69,6 +74,15 @@ rc=$?
 set -e
 cat "$WORK/pytest.log"
 [ "$rc" -eq 0 ] || { echo "ci-local: FAIL (pytest rc $rc) $SHA"; exit "$rc"; }
+# Exercise runner capability fallbacks even on a physical Apple GPU. Tests that
+# explicitly pin physical hardware retain their override; detector cases stay real.
+set +e
+sandbox-exec -f "$PROFILE" env -u YV_PY -u YV_ROOT -u YUNSHU_MAIN -u VIRTUAL_ENV PYTHONPATH="$CIHOME/shim:$WORK" TMPDIR="$CIHOME/tmp" HOME="$CIHOME" \
+  "$WORK/.venv/bin/python" -m pytest tests/unit -q --tb=short -p no:cacheprovider -p scripts.dev.ci_paravirtual > "$WORK/pytest-paravirtual.log" 2>&1
+rc=$?
+set -e
+cat "$WORK/pytest-paravirtual.log"
+[ "$rc" -eq 0 ] || { echo "ci-local: FAIL (paravirtual pytest rc $rc) $SHA"; exit "$rc"; }
 uv build -q
 "$WORK/.venv/bin/python" - <<'PYCODE'
 import glob, tarfile, zipfile

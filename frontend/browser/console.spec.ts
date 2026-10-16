@@ -392,7 +392,7 @@ async function installDiagnostics(
   page.on("request", (request) => {
     if (
       new URL(request.url()).origin !==
-      new URL(process.env.PLAYWRIGHT_BASE_URL ?? "http://127.0.0.1:3971").origin
+      new URL(String(test.info().project.use.baseURL)).origin
     )
       external.push(request.url());
   });
@@ -594,7 +594,7 @@ test("stream send/stop and changing service URL resets sampled history", async (
   await page
     .getByLabel("服務位址")
     .fill(
-      `${new URL(process.env.PLAYWRIGHT_BASE_URL ?? "http://127.0.0.1:3971").origin}/qa-connection`,
+      `${new URL(String(test.info().project.use.baseURL)).origin}/qa-connection`,
     );
   await fillToken(page, api.token);
   await page.getByRole("button", { name: "儲存並連線", exact: true }).click();
