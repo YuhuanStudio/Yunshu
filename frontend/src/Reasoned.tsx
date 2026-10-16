@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import {
   Tooltip,
   TooltipContent,
@@ -17,17 +17,42 @@ export function Reasoned({
   reason?: string | null;
   children: ReactNode;
 }) {
+  const trigger = useRef<HTMLSpanElement>(null);
+  const dismissed = useRef(false);
+  const [open, setOpen] = useState(false);
   // Same wrapper box with or without a reason, so a reason appearing or going never changes the layout.
   if (!reason) return <span className="inline-flex">{children}</span>;
+  // The tooltip closes on any scroll around its trigger, and focusing an off-screen trigger scrolls it
+  // into view: a keyboard user saw no reason at all. While the trigger keeps focus only an explicit
+  // dismissal (Escape, a press) closes it.
+  const onOpenChange = (next: boolean) => {
+    if (
+      !next &&
+      !dismissed.current &&
+      trigger.current != null &&
+      document.activeElement === trigger.current
+    )
+      return;
+    dismissed.current = false;
+    setOpen(next);
+  };
   return (
     <TooltipProvider>
-      <Tooltip>
+      <Tooltip open={open} onOpenChange={onOpenChange}>
         <TooltipTrigger asChild>
-          <span tabIndex={0} className="inline-flex" data-testid="reasoned">
+          <span
+            ref={trigger}
+            tabIndex={0}
+            className="inline-flex"
+            data-testid="reasoned"
+            onPointerDown={() => (dismissed.current = true)}
+          >
             {children}
           </span>
         </TooltipTrigger>
-        <TooltipContent>{reason}</TooltipContent>
+        <TooltipContent onEscapeKeyDown={() => (dismissed.current = true)}>
+          {reason}
+        </TooltipContent>
       </Tooltip>
     </TooltipProvider>
   );
