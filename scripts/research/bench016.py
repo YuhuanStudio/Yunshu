@@ -141,7 +141,33 @@ def cell(manifest: dict, argv: list[str]) -> int:
     import tfbench
 
     sys.argv = ["tfbench.py", *argv]
-    return tfbench.main() or 0
+    from scripts.research.docs016_console import memory_snapshot, validate_memory_window
+
+    before = memory_snapshot()
+    try:
+        rc = tfbench.main() or 0
+    finally:
+        after = memory_snapshot()
+        errors = validate_memory_window(before, after)
+        print(
+            json.dumps(
+                {"memory_window": {"before": before, "after": after, "errors": errors}}
+            ),
+            flush=True,
+        )
+    return rc or (2 if errors else 0)
+
+
+def select_jobs(jobs: list, manifest: dict) -> list:
+    """A repair resumes named cells without rerunning pilots or accepted reps."""
+    targets = manifest.get("target_cells")
+    if targets is None:
+        return jobs
+    available = {job.name for job in jobs}
+    unknown = set(targets) - available
+    if unknown:
+        raise ValueError(f"unknown repair cells: {sorted(unknown)}")
+    return [job for job in jobs if job.name in targets]
 
 
 def controller(manifest: dict, path: Path) -> int:
@@ -182,12 +208,13 @@ def controller(manifest: dict, path: Path) -> int:
                         engine, f"L{depth}", depth, ("code",), rep, out, "decode"
                     )
                 )
+    jobs = select_jobs(jobs, manifest)
     blocked = set()
     failed = set()
     for job in jobs:
         if job.engine in blocked:
             continue
-        for attempt in range(1, 4):
+        for attempt in range(1, manifest.get("max_attempts", 3) + 1):
             name = f"{job.name}-try{attempt}"
             output = out / job.engine / f"{name}.jsonl"
             output.parent.mkdir(exist_ok=True, parents=True)

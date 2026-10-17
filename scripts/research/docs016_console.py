@@ -34,6 +34,33 @@ def swap_mb(text: str) -> float:
     return float(match[1]) * (1024 if match[2] == "G" else 1)
 
 
+def pageouts(text: str) -> int:
+    match = re.search(r"^Pageouts:\s+(\d+)\.", text, re.MULTILINE)
+    if not match:
+        raise ValueError("cannot parse pageouts")
+    return int(match[1])
+
+
+def validate_memory_window(before: dict, after: dict) -> list[str]:
+    errors = []
+    if after["swap_mb"] > before["swap_mb"]:
+        errors.append("host swap grew during capture")
+    if after["pageouts"] != before["pageouts"]:
+        errors.append("pageouts changed during capture")
+    return errors
+
+
+def memory_snapshot() -> dict:
+    swap = subprocess.check_output(["sysctl", "vm.swapusage"], text=True)
+    vm = subprocess.check_output(["vm_stat"], text=True)
+    return {
+        "swap_mb": swap_mb(swap),
+        "pageouts": pageouts(vm),
+        "swapusage": swap,
+        "vm_stat": vm,
+    }
+
+
 def validate_long_usage(usage: dict, cached: bool) -> list[str]:
     errors = []
     if usage.get("prompt_tokens", 0) < 32768:
@@ -69,9 +96,8 @@ def main() -> int:
     )
     ap.add_argument("--max-host-swap-mb", type=float)
     args = ap.parse_args()
-    initial_swap = swap_mb(
-        subprocess.check_output(["sysctl", "vm.swapusage"], text=True)
-    )
+    initial_memory = memory_snapshot()
+    initial_swap = initial_memory["swap_mb"]
     if args.max_host_swap_mb is not None and initial_swap > args.max_host_swap_mb:
         raise RuntimeError(
             f"capture requires low host swap: {initial_swap} MiB exceeds {args.max_host_swap_mb} MiB"
@@ -230,10 +256,10 @@ def main() -> int:
                     env=env,
                     check=True,
                 )
-            final_swap = swap_mb(
-                subprocess.check_output(["sysctl", "vm.swapusage"], text=True)
-            )
+            final_memory = memory_snapshot()
+            final_swap = final_memory["swap_mb"]
             errors = validate(expected, inventory(), counts["complete_requests"])
+            errors.extend(validate_memory_window(initial_memory, final_memory))
             if args.max_host_swap_mb is not None and final_swap > args.max_host_swap_mb:
                 errors.append("host swap too high at capture end")
             if args.context_file and not re.search(
@@ -251,6 +277,8 @@ def main() -> int:
                 **counts,
                 "model": args.model,
                 "long_session_usage": usage_rows,
+                "memory_window_before": initial_memory,
+                "memory_window_after": final_memory,
                 "host_swap_mb_start": initial_swap,
                 "host_swap_mb_end": final_swap,
                 "ports": [ep, cp],

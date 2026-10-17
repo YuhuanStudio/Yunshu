@@ -32,3 +32,16 @@ def test_capture_swap_reading_fails_closed():
     assert swap_mb("used = 1.25G") == 1280
     with pytest.raises(ValueError):
         swap_mb("unknown")
+
+
+def test_sticky_swap_allowed_only_without_growth_or_pageouts():
+    import pytest
+    from scripts.research.docs016_console import pageouts, validate_memory_window
+
+    before = {"swap_mb": 9600, "pageouts": 100}
+    assert validate_memory_window(before, dict(before)) == []
+    assert validate_memory_window(before, {**before, "swap_mb": 9601})
+    assert validate_memory_window(before, {**before, "pageouts": 101})
+    assert pageouts("Pageouts: 123.\n") == 123
+    with pytest.raises(ValueError):
+        pageouts("unknown")

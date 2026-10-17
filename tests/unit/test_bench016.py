@@ -88,3 +88,16 @@ def test_pinned_sha_check_applies_only_to_yunshu_arms():
     rows = [dict(engine=job.engine, git_sha="other")]
     probs = snap.validate_rows(job, rows)
     assert not any("release SHA" in p for p in probs)
+
+
+def test_repair_selects_only_missing_cells_and_rejects_unknown_names():
+    import pytest
+
+    jobs = [
+        SimpleNamespace(name=n) for n in ["e-smoke-pilot", "e-L32768-r0", "e-L65536-r1"]
+    ]
+    assert b.select_jobs(jobs, {}) == jobs
+    assert b.select_jobs(jobs, {"target_cells": ["e-L65536-r1"]}) == jobs[2:]
+    assert b.select_jobs(jobs, {"target_cells": []}) == []
+    with pytest.raises(ValueError, match="unknown repair cells"):
+        b.select_jobs(jobs, {"target_cells": ["typo"]})
