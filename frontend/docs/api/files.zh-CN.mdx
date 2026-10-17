@@ -14,7 +14,7 @@ Yunshu 把上传的文件存放在同一个本地存储区（默认 `~/.yunshu/f
 <Endpoint method="DELETE" path="/v1/files/{file_id}" />
 
 <Callout type="info">
-只有在配置了 `YUNSHU_AUTH_TOKEN` 时才会强制验证。这里只有单一拥有者：出示 token 的人（未配置 token 时则是任何人）看得到所有文件。
+配置静态 token 或 API 密钥后会强制验证。这里只有单一拥有者：出示 token 的人（未配置 token 时则是任何人）看得到所有文件。
 </Callout>
 
 ## 限制与保存

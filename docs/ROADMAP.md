@@ -10,7 +10,7 @@ results belong in BENCHMARKS and PERF_TREND.
 
 | Priority | Work | Completion evidence |
 |---|---|---|
-| Now | Release notes and upgrade clarity | Every release has sourced highlights, migration notes and install commands |
+| Now | Close measured long-context gaps in 27B and Flash-Next | Cold/warm/follow-up TTFT and decode compared separately at 32K/64K/128K; see [current gaps](BENCHMARKS.md#where-yunshu-stands) |
 | Next | Apple Silicon portability evidence | Recorded M1–M5 / macOS checks distinguish passed, failed and untested combinations |
 | Next | Model/client capability evidence | Checkpoint- and client-version-specific results; unsupported features give actionable errors |
 | Next | Reproducible performance publication | Same-checkpoint cold/warm/turn-2 runs with correctness checks and raw receipt links |

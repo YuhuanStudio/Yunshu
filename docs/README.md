@@ -2,8 +2,8 @@
 
 Yunshu is a fast, local, single-node LLM / VLM inference engine for Apple Silicon.
 Qwen3.8-27B is the first fully tuned model; other modalities are supported capabilities.
-Latest release: v0.1.4 (2026-10-08); main contains the unreleased 0.1.5 cycle. Benchmark pages
-label later main measurements as unreleased. Start at the top-level [README](../README.md).
+Latest release: v0.1.5; main contains the 0.1.6 development cycle. Benchmark pages
+pin their measured source independently of release status. Start at the top-level [README](../README.md).
 
 ## Start here
 

@@ -9,9 +9,8 @@ uv tool install 'yunshu[vision]'
 # Or: brew install yuhuanstudio/tap/yunshu
 ```
 
-The commands below describe the next release's CLI. Installed 0.1.4 users can use
-`yunshu model list`, `yunshu model info`, and `yunshu pull`; `setup`, `models`,
-`completion`, and `top` require the updated CLI.
+The commands below are available in 0.1.5. Upgrade older installations before using
+`setup`, `models`, `completion`, or `top`.
 
 ## First run
 

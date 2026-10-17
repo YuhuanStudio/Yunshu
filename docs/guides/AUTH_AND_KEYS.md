@@ -5,7 +5,7 @@ Yunshu is a single-node, single-operator server. Access control has three layers
 ## Static token
 
 Set `YUNSHU_AUTH_TOKEN` and every request except health, version and docs needs
-`Authorization: Bearer <token>` (or `x-api-key`). With no token, inference routes stay open and
+`Authorization: Bearer <token>` (or `x-api-key`). With neither a token nor stored API keys, inference routes stay open and
 operational routes (model load/unload, settings, keys, logs, diagnostics) are denied. The token is an
 admin credential. `YUNSHU_AUTH_DISABLED=1` opens everything and is for local development only.
 

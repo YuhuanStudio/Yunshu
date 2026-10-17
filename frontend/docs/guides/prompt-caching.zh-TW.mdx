@@ -119,7 +119,7 @@ Chat Completions 與 Responses 都接受 OpenAI 風格的欄位。
 
 ## 哪些模型不支援
 
-前綴重用需要能在前綴邊界建立檢查點的快取。**含有滑動視窗注意力層的模型**（rotating KV cache）做不到，因此 VLM runner 會在沒有前綴快取的情況下服務它們，`GET /v1/models` 的 `yunshu` 鍵底下會回報 `prefix_cache.supported: false` 與原因。在純文字快速路徑上，快取為混合／循環式或滑動視窗的模型同樣無法重用已儲存的前綴。沒有這些層的模型，以及 VLM runner 上的混合式 Qwen3.5 家族，則受支援。
+前綴重用需要能在前綴邊界還原的檢查點。VLM runner 已有特定模型的精確視窗支援（Gemma 4 有具日期的命中／未命中一致性驗證），但不代表所有 rotating cache 模型皆支援。請查閱[模型支援](/docs/guides/model-support)及已載入模型的能力契約。純文字快速路徑的混合／循環與滑動視窗快取仍無法重用已儲存前綴。
 
 ## 記憶體與儲存選項
 

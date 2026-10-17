@@ -32,8 +32,8 @@ client = anthropic.Anthropic(base_url="http://localhost:8000", api_key="not-need
 
 认证是可选的，由两个配置控制。
 
-- 未设置 `YUNSHU_AUTH_TOKEN`（默认）：推理路由（chat、completions、embeddings、tokenize 等）无需认证。`POST /v1/models/load` 这类运维路由因为无从授权，会返回 `401`。
-- 设置了 `YUNSHU_AUTH_TOKEN`：除了一份很短的公开列表之外，所有请求都需要 token。公开路径为 `/health`、`/health/live`、`/health/ready`、`/version`、`/docs`、`/openapi.json`、`/redoc`、`/`、`/console` 与静态资源前缀。
+- 未设置 `YUNSHU_AUTH_TOKEN` 且没有 API 密钥（默认）：推理路由（chat、completions、embeddings、tokenize 等）无需认证。`POST /v1/models/load` 这类运维路由因为无从授权，会返回 `401`。
+- 设置了 `YUNSHU_AUTH_TOKEN`：除了一份很短的公开列表之外，所有请求都需要有效的 token 或 API 密钥。公开路径为 `/health`、`/health/live`、`/health/ready`、`/version`、`/docs`、`/openapi.json`、`/redoc`、`/`、`/console` 与静态资源前缀。
 - `YUNSHU_AUTH_DISABLED=true` 会完全关闭认证，连运维路由也不例外。仅限本地开发使用。
 
 两种发送方式都可以，服务器在所有路由、所有方言上都接受：
@@ -45,8 +45,10 @@ curl http://localhost:8000/v1/models -H "x-api-key: $YUNSHU_AUTH_TOKEN"
 
 两个请求头都存在时，采用 `Authorization: Bearer` 的值。比较采用常数时间。缺少 token 时返回 `401`，消息为 `Missing or invalid Authorization header`；token 错误时返回 `401`，消息为 `Invalid or missing API key`。两者都会带 `WWW-Authenticate: Bearer` 头。
 
+具名 API 密钥使用相同标头；`infer` 与 `admin` 限制访问范围，过期或撤销的密钥无效，超出配额返回 `429`。密钥共享这台服务器的数据，没有租户隔离。
+
 <Callout type="info">
-未设置 token 时，SDK 发送的密钥会被忽略，所以 `not-needed` 或 `sk-local` 之类的任何占位字符串都可以。要让服务器对外网开放之前，请保持默认的 localhost 绑定，或先设置 token。
+没有设置 token 与 API 密钥时，SDK 发送的密钥会被忽略，所以 `not-needed` 或 `sk-local` 之类的任何占位字符串都可以。要让服务器对外网开放之前，请保持默认的 localhost 绑定，或先设置 token。
 </Callout>
 
 ## `model` 字段

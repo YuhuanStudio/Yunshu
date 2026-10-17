@@ -119,7 +119,10 @@ test("unknown pages say so and link back", async ({ page }) => {
 
 test("the command palette finds docs pages and sections", async ({ page }) => {
   await open(page, "overview", "en");
-  await page.getByRole("button", { name: /Search/ }).first().click();
+  await page
+    .getByRole("button", { name: /Search/ })
+    .first()
+    .click();
   const input = page.getByPlaceholder("Search pages, models and actions…");
   await input.fill("prompt caching");
   const hit = page
@@ -185,3 +188,21 @@ test.describe("phone", () => {
     expect(errors).toEqual([]);
   });
 });
+
+for (const [locale, title] of [
+  ["en", "Benchmarks"],
+  ["zh-TW", "效能實測"],
+  ["zh-CN", "性能实测"],
+]) {
+  test(`release benchmark evidence renders in ${locale}`, async ({ page }) => {
+    const errors = await open(page, "docs/guides/benchmarks", locale);
+    await expect(article(page).getByRole("heading", { level: 1 })).toHaveText(
+      title,
+    );
+    await expect(article(page)).toContainText("134.400");
+    await expect(article(page)).toContainText("117.550");
+    await expect(article(page)).toContainText("77.950");
+    await expect(article(page)).toContainText("no part_done (incomplete job)");
+    expect(errors).toEqual([]);
+  });
+}

@@ -32,5 +32,5 @@ yunshu rerank "query" "doc one" "doc two" --top-n 1
 - Speech, ASR, TTS, image generation and OCR are supported capabilities, not the tuned path; features
   differ per checkpoint and are verified per model (see [model support](MODEL_SUPPORT.md)).
 - Realtime transcription-only session configuration is echoed but not executed as a transcription-only session.
-- Models with sliding-window KV (for example Gemma 4) have no prefix cache.
-- A repeated image alone does not yet hit the cache on Qwen3-Omni.
+- Prefix reuse depends on the cache layout. Gemma 4 has scoped exact-window restore receipts; see [model support](MODEL_SUPPORT.md). Do not infer support for every rotating-cache model.
+- Qwen3-Omni repeated-image APC has scoped hit/miss parity receipts; combined image+audio cache reuse remains unverified. See [model support](MODEL_SUPPORT.md).

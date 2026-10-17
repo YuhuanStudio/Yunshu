@@ -4,7 +4,7 @@ A local web console for the engine: see what every request is doing, manage mode
 and settings, and try a model, without leaving the browser. It is a YunUI-based single-page app served by
 its own light process (`yunshu console`, see [The console process](#the-console-process)), so it stays usable
 and keeps recording while the engine restarts or crashes. It is an operator tool for one machine, not a chat
-product, and it does not start or stop the engine process.
+product. It does not own the engine process; Settings can request a restart when the engine runs under launchd.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="images/console/en/overview-dark.webp">
@@ -87,7 +87,7 @@ the user-facing guides; the same-named files in `docs/guides/` are their GitHub-
 
 ## Status island
 
-A floating pill at the bottom of every page shows the live engine state: running model, memory, prefill or
+Separate floating status pills at the bottom of a desktop page show the live engine state: running model, memory, prefill or
 decode progress and active requests. Opening it shows the current phase of each request, Metal memory and
 pressure, and host power, GPU clock and temperature without leaving the page you are on. On a phone it
 collapses to a single compact pill.
@@ -240,9 +240,12 @@ prefix-cache hit counters. Missing values remain unavailable rather than zero.
 
 ## Reproducing the screenshots
 
-The images in `docs/images/console/` are rendered from the real console against route mocks (no engine and
-no GPU), so the numbers in them are illustrative fixtures, not measurements:
-`node scripts/docs/console_shots.mjs <vite-url> <out-dir>` (see the script header).
+Run the capture harness through gpuq against the current built console, a real
+engine and real request traffic. Use `scripts/research/docs016_console.py --model
+<local-checkpoint> --out <receipt.json>` as the queued command; it allocates ports
+from 18990–18999, isolates history/caches, verifies the original file set and sizes,
+and stops only the processes it starts. `--pilot` first checks browser capture
+without replacing the published images. No route mocks are installed.
 
 ## Validation and packaging
 
@@ -266,3 +269,23 @@ recorded in `frontend/vendor/README.md`. No release version was changed.
 Browser/API fixture checks validate the UI without model inference. Model-backed
 acceptance checks on a shared machine belong in `gpuq` / `yv`; see
 [verification](guides/VERIFY.md).
+
+## Screenshot provenance
+
+The release refresh captures the current console (docs016 based on `9288ccc1`,
+main in the 0.1.6 development cycle; package version still 0.1.5). It captures every image in English, 繁體中文 and 简体中文 against
+the current console with a real Qwen3.8-27B engine and real requests, inside gpuq.
+Empty downloads or API-key panels mean that the isolated capture session has no
+downloads or configured keys; they are not populated with invented activity.
+Desktop images retain 2880 × 1800 pixels and phone images 1206 × 2622 pixels.
+`scripts/research/docs016_console.py` validates the file set, original dimensions
+and complete real load requests. `scripts/docs/console_shots.py` converts the captures
+without resizing. The screenshot session is not a performance benchmark.
+
+## Model lifecycle controls
+
+Model load and download cancellation and local/Hugging Face snapshot registration
+require the configured management token. Registration does not copy weights; removing
+a registration does not delete them. Fixed-model servers reject manager-only loads
+with an explanatory 400. Unload impact is advisory. See the
+[route contract](guides/API_SURFACE.md) for authentication and conflict responses.

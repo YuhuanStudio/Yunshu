@@ -14,7 +14,7 @@ Yunshu 把上傳的檔案存放在同一個本機儲存區（預設 `~/.yunshu/f
 <Endpoint method="DELETE" path="/v1/files/{file_id}" />
 
 <Callout type="info">
-只有在設定了 `YUNSHU_AUTH_TOKEN` 時才會強制驗證。這裡只有單一擁有者：出示 token 的人（未設定 token 時則是任何人）看得到所有檔案。
+設定靜態 token 或 API 金鑰後會強制驗證。這裡只有單一擁有者：出示 token 的人（未設定 token 時則是任何人）看得到所有檔案。
 </Callout>
 
 ## 限制與儲存

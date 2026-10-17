@@ -11,7 +11,7 @@ Yunshu 是為 Apple Silicon Mac 設計的單機推論引擎。單一行程透過
 
 - 相容 OpenAI 的路由，例如 `POST /v1/chat/completions` 與 `POST /v1/responses`，以及 Anthropic 路由 `POST /v1/messages`。請見 [API 總覽](/docs/api/overview)。
 - 命令列工具 `yunshu`，用於安裝、檢查、啟動，以及將引擎作為登入服務執行。請見 [CLI 參考](/docs/guides/cli)。
-- 由閘道提供的網頁主控台，可查看狀態、模型、請求並使用 Playground。請見[主控台](/docs/getting-started/console)。
+- 由獨立輕量行程提供的網頁主控台，可查看狀態、模型、請求並使用 Playground。請見[主控台](/docs/getting-started/console)。
 - 帶有選用 SSD 層的前綴快取、Qwen3.5 系列的推測式解碼，以及針對 JSON schema 與文法的受限解碼。
 
 ## 服務的運作方式
@@ -28,7 +28,7 @@ Yunshu 會依你載入的模型選擇服務路徑。所有 GPU 工作都在單�
 
 ## Yunshu 不是什麼
 
-Yunshu 只服務一台機器。它沒有多節點或分散式模式，也不以多租戶的批次吞吐量最大化為目標。驗證機制是單一的選用 bearer token（`YUNSHU_AUTH_TOKEN`）。
+Yunshu 只服務一台機器。它沒有多節點或分散式模式，也不以多租戶的批次吞吐量最大化為目標。驗證支援選用的管理 token（`YUNSHU_AUTH_TOKEN`），以及這台伺服器的具名 API 金鑰、權限範圍、期限與配額。
 
 ## 文件的組織方式
 
@@ -52,3 +52,7 @@ Yunshu 只服務一台機器。它沒有多節點或分散式模式，也不以�
 <Callout type="info">
 API 參考中的每項功能都會標示為支援、部分支援、接受但忽略，或尚未支援。伺服器接受但不會實際處理的參數，會明確標示，而不會被寫成可用。
 </Callout>
+
+## 效能實測
+
+0.1.5 已發布；main 為 0.1.6 開發週期。以下保留原始數據、樣本數與限制；不同權重的比較不能視為同權重結論。 [32K / 64K / 128K: results, strengths and gaps](/docs/guides/benchmarks).

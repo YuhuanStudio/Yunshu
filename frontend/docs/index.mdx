@@ -11,7 +11,7 @@ The focus is large language models and vision-language models: decode speed, tim
 
 - OpenAI-compatible routes such as `POST /v1/chat/completions` and `POST /v1/responses`, and the Anthropic route `POST /v1/messages`. See the [API overview](/docs/api/overview).
 - A command line (`yunshu`) for installing, checking, serving and running the engine as a login service. See the [CLI reference](/docs/guides/cli).
-- A web console served by the gateway for status, models, requests and a playground. See [Console](/docs/getting-started/console).
+- A web console served by its separate lightweight console process for status, models, requests and a playground. See [Console](/docs/getting-started/console).
 - Prefix caching with an optional SSD tier, speculative decoding for the Qwen3.5 family, and constrained decoding for JSON schema and grammars.
 
 ## How serving works
@@ -28,7 +28,7 @@ See [Model support](/docs/guides/model-support) for the details of each path.
 
 ## What Yunshu is not
 
-Yunshu serves one machine. It has no multi-node or distributed mode, and it does not aim to maximize batch throughput for many tenants. Authentication is a single optional bearer token (`YUNSHU_AUTH_TOKEN`).
+Yunshu serves one machine. It has no multi-node or distributed mode, and it does not aim to maximize batch throughput for many tenants. Authentication supports an optional admin token (`YUNSHU_AUTH_TOKEN`) plus named API keys with scopes, expiry and quotas for this single server.
 
 ## How these docs are organised
 
@@ -52,3 +52,7 @@ If you are new, follow [Install](/docs/getting-started/install) and then [Quicks
 <Callout type="info">
 Each feature in the API reference is marked as supported, partial, accepted and ignored, or not supported. A parameter that the server accepts but does not act on is labelled as such rather than described as working.
 </Callout>
+
+## Benchmarks
+
+Release 0.1.5; main is in the 0.1.6 development cycle. [32K / 64K / 128K: results, strengths and gaps](/docs/guides/benchmarks).

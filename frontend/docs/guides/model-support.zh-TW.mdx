@@ -19,7 +19,7 @@ Yunshu 載入 MLX 檢查點。它會根據資料夾中的檔案與 `config.json`
 
 | 路徑 | 適用對象 | 行為 |
 |---|---|---|
-| VLM batch runner | 所有經由 `mlx-vlm` 服務的模型，包括以 `vision` 額外套件載入的 Qwen3.5 / 3.6 / 3.8 系列 | 連續批次處理，每個請求獨立取樣。一次只預填一個請求。對不使用滑動視窗快取的模型系列提供自動前綴快取，鍵值也包含圖片與音訊特徵，並可選用 SSD 層。接受圖片、音訊與影片輸入。 |
+| VLM batch runner | 所有經由 `mlx-vlm` 服務的模型，包括以 `vision` 額外套件載入的 Qwen3.5 / 3.6 / 3.8 系列 | 連續批次處理，每個請求獨立取樣。一次只預填一個請求。對可還原檢查點的模型系列（含特定模型的精確視窗支援）提供自動前綴快取，鍵值也包含圖片與音訊特徵，並可選用 SSD 層。接受圖片、音訊與影片輸入。 |
 | 推測式通道（僅 Qwen3.5 系列） | `qwen3_5`、`qwen3_6`、`qwen3_5_moe` | 在單一請求通道中進行 MTP 或 DFlash 草稿生成，使用批次不變的解碼與驗證核心，使開啟草稿的輸出與關閉草稿時相同。由 `YUNSHU_MTP`（預設開啟）與 `YUNSHU_VLM_DRAFT` 控制。並行請求目前不會一起進行草稿生成。 |
 | 文字快速路徑 | 純文字 `mlx-lm` 模型 | 透過 `mlx-lm` 一次處理一個請求；並行的請求會依序處理。 |
 
@@ -73,6 +73,8 @@ VLM 路徑的限制：視覺語言模型會拒絕 LoRA adapter 與自訂 logits 
 2. 以檢視啟動:`YUNSHU_MAX_MEMORY_GB=74.5 yunshu serve -m <pack>-ple-ssd`。MTP head 會自動使用(每輪一個草稿);APC SSD 層預設開啟。
 
 設定記憶體上限後,Yunshu 會把釋放緩衝池保持在 0.5 GiB,並在第一個圖片請求前不載入視覺塔。兩者皆無損;可用 `YUNSHU_PREFILL_BUFFER_CACHE_GB` 覆寫緩衝池。
+
+Historical external-PLE prototype measurements (including pre-fused-kernel runs), not current release speed or an 80 GB served-peak guarantee. The 0.1.5 snapshot measures Flash-Next at 32K / 64K: 67.050 / 56.750 tok/s; cold TTFT 33.243 / 68.247 s, warm 0.132 / 0.229 s, immediate follow-up 2.474 / 2.918 s. [Current evidence](/docs/guides/benchmarks).
 
 | 上下文(M5 Max 128 GB,MTP 開,整機記憶體差值) | 穩態 | 冷 prefill 峰值 | 解碼 |
 |---|---:|---:|---:|

@@ -33,6 +33,8 @@ checks; this page does not invent results for untested checkpoints.
 
 With a memory ceiling set, Yunshu keeps the freed-buffer pool at 0.5 GiB and leaves the vision tower unloaded until the first image request. Both are lossless; set `YUNSHU_PREFILL_BUFFER_CACHE_GB` to override the pool.
 
+Historical external-PLE prototype measurements (including pre-fused-kernel runs), not current release speed or an 80 GB served-peak guarantee. The 0.1.5 snapshot measures Flash-Next at 32K / 64K: 67.050 / 56.750 tok/s; cold TTFT 33.243 / 68.247 s, warm 0.132 / 0.229 s, immediate follow-up 2.474 / 2.918 s. [Current evidence](../BENCHMARKS.md#where-yunshu-stands).
+
 | Context (M5 Max 128 GB, MTP on, whole-system memory delta) | Steady | Cold-prefill peak | Decode |
 |---|---:|---:|---:|
 | 1K | 75-76 GB | 77 GB | 70 tok/s |

@@ -60,7 +60,7 @@ and web-retrieval compatibility to the `yunshu` package. Qwen3.8-27B decodes up 
 
 ### Upgrade notes / breaking changes
 
-- New APIs are available from a source build of main until 0.1.5 is released; upgrading the published
+- New APIs are available in 0.1.5; upgrading the published
   0.1.4 package does not add them. No package version bump is part of this draft.
 - Decisions require a supported Clef joint-schema checkpoint; ordinary chat checkpoints and unknown
   decision heads are rejected. OpenJev, Laya and D1 support is not included in this merged loader.
