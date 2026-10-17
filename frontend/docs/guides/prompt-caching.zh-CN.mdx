@@ -119,7 +119,7 @@ Chat Completions 与 Responses 都接受 OpenAI 风格的字段。
 
 ## 哪些模型不支持
 
-前缀重用需要能在前缀边界创建检查点的缓存。**含有滑动窗口注意力层的模型**（rotating KV cache）做不到，因此 VLM runner 会在没有前缀缓存的情况下服务它们，`GET /v1/models` 的 `yunshu` 键底下会报告 `prefix_cache.supported: false` 与原因。在纯文本快速路径上，缓存为混合／循环式或滑动窗口的模型同样无法重用已保存的前缀。没有这些层的模型，以及 VLM runner 上的混合式 Qwen3.5 家族，则受支持。
+前缀重用需要能在前缀边界恢复的检查点。VLM runner 已有特定模型的精确窗口支持（Gemma 4 有具日期的命中／未命中一致性验证），但不代表所有 rotating cache 模型均支持。请查阅[模型支持](/docs/guides/model-support)及已加载模型的能力契约。纯文本快速路径的混合／循环与滑动窗口缓存仍无法重用已保存前缀。
 
 ## 内存与保存选项
 

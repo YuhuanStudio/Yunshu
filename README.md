@@ -67,6 +67,8 @@ Everything Yunshu serves, grouped. Each row links to the guide with an example a
 | [Large MoE loading (partial)](docs/guides/INFERENCE.md) | bits and group size derived from tensor shapes for community DeepSeek-V4-Flash packs; fit check before loading |
 | [Round driver (experimental)](docs/guides/ROUND_DRIVER.md) | own speculative round driver for dense Qwen3.5-family models |
 | [Model support](docs/guides/MODEL_SUPPORT.md) | what is tuned, generic and validated, per family |
+| [Next-turn rehearsal](docs/guides/INFERENCE.md) | Canonical stride APC rehearsal after eligible text replies; boundary/exact are explicit numeric-changing opt-ins |
+| [Batch-to-lane promotion](docs/guides/INFERENCE.md) | An eligible greedy request moves to speculation when the shared batch drains to one row; multi-row speculation is not implemented |
 
 **APIs**
 
@@ -93,13 +95,14 @@ Everything Yunshu serves, grouped. Each row links to the guide with an example a
 | [Tavily-compatible API](docs/guides/TAVILY.md) | search, extract, crawl, map, research and MCP, with provider health backoff |
 | [MCP](docs/guides/API_SURFACE.md) | native MCP endpoint, and remote MCP servers named in a request |
 | [Client setup](docs/guides/CLIENTS.md) | curl, OpenAI and Anthropic SDKs, Open WebUI |
+| [Qualified auxiliary scheduling](docs/guides/AUXILIARY_SCHEDULING.md) | Captured opencode titles yield to interactive turns; unknown requests keep normal priority |
 
 **Multimodal**
 
 | Capability | What it does |
 |---|---|
 | [Image, audio and video input](docs/guides/MULTIMODAL.md) | mlx-vlm models take media in Chat, Responses and Messages; media enters the cache key |
-| [Speech-to-speech (partial)](docs/guides/MULTIMODAL.md) | Qwen3-Omni native speech; a repeated image does not yet hit the cache |
+| [Speech-to-speech (partial)](docs/guides/MULTIMODAL.md) | Qwen3-Omni native speech; repeated-image and audio APC have scoped parity receipts; combined image+audio reuse is unverified |
 | [Realtime voice](docs/guides/MULTIMODAL.md) | WebSocket and optional WebRTC, server VAD, barge-in, ephemeral client secrets, local voices |
 | [Speech to text, text to speech](docs/guides/MULTIMODAL.md) | transcriptions, translations, speech and voices |
 | [OCR and image generation](docs/guides/MULTIMODAL.md) | GLM-OCR text extraction; image generations, edits and variations |
@@ -120,6 +123,8 @@ Everything Yunshu serves, grouped. Each row links to the guide with an example a
 | [Security](docs/guides/AUTH_AND_KEYS.md) | auth token, CORS credentials rule, redirect header stripping, secret redaction, SSRF guard |
 | [First run and troubleshooting](docs/guides/FIRST_RUN.md) | install, choose a model, readiness checks, fixes |
 | [Benchmarks and accuracy](docs/BENCHMARKS.md) | where each number comes from, how to reproduce it, accuracy gates |
+| [Model lifecycle controls](docs/CONSOLE.md) | Authenticated load/download cancellation, local and Hugging Face snapshot registration, and unload impact |
+
 
 ## Quickstart
 
@@ -330,7 +335,7 @@ decision = client.decisions.create(
 print(decision.answers)  # typed value, confidence, every option's probability
 ```
 
-Also new on main for 0.1.5: stored chat completions, Evals (`/v1/evals`) and Realtime client secrets.
+Available in 0.1.5: stored chat completions, Evals (`/v1/evals`) and Realtime client secrets.
 
 [Decisions](docs/guides/DECISIONS.md), [Evals](docs/guides/EVALS.md), [web search](docs/guides/WEB_SEARCH.md) and [Tavily API](docs/guides/TAVILY.md)
 
@@ -356,24 +361,17 @@ SearXNG is optional. MCP servers named in a request are connected by the gateway
 
 ## Performance
 
-Qwen3.8-27B (oQ4e) on an M5 Max, 128 GB, single request, greedy. Methods, raw results and the full
-comparison tables are in [docs/BENCHMARKS.md](docs/BENCHMARKS.md).
+Release 0.1.5 · M5 Max 128 GB · Qwen3.8-27B · greedy · 2026-10-13–14.
 
-| | Yunshu | TensorFold 0.6.1 |
-|---|---|---|
-| Cold TTFT, 8K prompt | 8.6 s | 8.5 s |
-| Cold TTFT, 32K prompt | 38.3 s | 39.4 s |
-| Repeated / edited long prompt | restores from the prefix cache instead of re-prefilling | — |
-| Follow-up turn TTFT, 8K / 32K code | 512 / 721 ms | 505 / 670 ms |
-| Decode, short code prompt | ~110 tok/s (DFlash2) | ~140 tok/s (DFlash2) |
-| JSON-schema / tool-call output, warm | 111 / 78 tok/s (speculative decoding stays on) | — |
+| Context | Yunshu oQ4e decode tok/s | Splash 1.3.0 decode tok/s | Yunshu cold / warm / follow-up TTFT s |
+|---|---|---|---|
+| 32K | 134.400 | 116.200 | 34.590 / 0.182 / 2.958 |
+| 64K | 117.550 | 92.300 | 79.195 / 0.329 / 4.022 |
+| 128K | 77.950 | 89.900 | 199.440 / 0.593 / 6.452 |
 
-Snapshot of main on 2026-10-02/03 (unreleased after v0.1.4; the table's TensorFold column is the 2026-10-02 same-window run); a fresh same-window 0.1.4 comparison is pending.
-TensorFold is still faster at single-request decode and at 32K follow-up turns; closing those gaps is the
-main ongoing work. Structured output keeps speculative decoding (23 tok/s without it).
-Speculation never changes Yunshu's greedy output. Accuracy against the stock MLX path is checked at
-three levels (logit alignment, greedy divergence, paired downstream evals) in
-[Accuracy](docs/guides/ACCURACY.md).
+Where Yunshu stands: the 27B snapshot shows an observed 15.66% / 27.35% decode advantage at 32K / 64K over the best competitor, using different weights. At 128K oQ4e trails Splash and TensorFold. Cold TTFT trails Splash; warm and immediate follow-up TTFT trail llama.cpp. Flash-Next decode and follow-up also trail llama.cpp. APC works at 128K in both Yunshu reps where TensorFold reports no hit. Spec-on/off identity is scoped to the recorded checks.
+
+[Evidence and limits](docs/BENCHMARKS.md#where-yunshu-stands): Yunshu n=2; reused competitors n=1; one long prompt per depth. These are observations, not a general ranking. Main is in the 0.1.6 development cycle.
 
 ## Models
 

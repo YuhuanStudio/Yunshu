@@ -1,13 +1,14 @@
 {
- "title": "指南",
- "pages": [
-  "agents",
-  "web-search",
-  "prompt-caching",
-  "structured-output",
-  "cli",
-  "configuration",
-  "model-support",
-  "troubleshooting"
- ]
+  "title": "指南",
+  "pages": [
+    "agents",
+    "web-search",
+    "prompt-caching",
+    "structured-output",
+    "cli",
+    "configuration",
+    "model-support",
+    "troubleshooting",
+    "benchmarks"
+  ]
 }

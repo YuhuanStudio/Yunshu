@@ -65,7 +65,7 @@ A continuous-batching loop for text models exists behind `YUNSHU_ENGINE_LOOP` (e
 
 ## Prefix cache
 
-Both paths reuse the KV cache of an earlier prompt that shares a prefix with the new one. The VLM runner's APC stores exact checkpoints (attention KV plus recurrent state at a token position), keeps a head checkpoint per distinct system-prompt-plus-tools, supersedes older checkpoints of the same conversation, and writes evicted checkpoints to an SSD tier that survives restarts. Models with sliding-window layers cannot be checkpointed at a prefix boundary and run without a prefix cache. The lossless and lossy options, and what appears in usage, are described in [Prompt caching](/docs/guides/prompt-caching).
+Both paths reuse the KV cache of an earlier prompt that shares a prefix with the new one. The VLM runner's APC stores exact checkpoints (attention KV plus recurrent state at a token position), keeps a head checkpoint per distinct system-prompt-plus-tools, supersedes older checkpoints of the same conversation, and writes evicted checkpoints to an SSD tier that survives restarts. Exact-window restore is checkpoint-specific; Gemma 4 has scoped parity receipts, without certifying every sliding-window model. The lossless and lossy options, and what appears in usage, are described in [Prompt caching](/docs/guides/prompt-caching).
 
 ## Speculative decoding
 

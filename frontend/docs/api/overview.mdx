@@ -30,10 +30,10 @@ client = anthropic.Anthropic(base_url="http://localhost:8000", api_key="not-need
 
 ## Authentication
 
-Authentication is optional and controlled by two settings.
+Authentication supports the static admin token and named API keys with scopes, expiry and rolling quotas.
 
-- `YUNSHU_AUTH_TOKEN` is unset (the default): inference routes (chat, completions, embeddings, tokenize and so on) are open. Operational routes such as `POST /v1/models/load` answer `401` because there is no way to authorize them.
-- `YUNSHU_AUTH_TOKEN` is set: every request except a short public list needs the token. The public paths are `/health`, `/health/live`, `/health/ready`, `/version`, `/docs`, `/openapi.json`, `/redoc`, `/`, `/console` and the static asset prefixes.
+- `YUNSHU_AUTH_TOKEN` is unset and no API keys exist (the default): inference routes (chat, completions, embeddings, tokenize and so on) are open. Operational routes such as `POST /v1/models/load` answer `401` because there is no way to authorize them.
+- `YUNSHU_AUTH_TOKEN` is set: every request except a short public list needs a valid token or API key. The public paths are `/health`, `/health/live`, `/health/ready`, `/version`, `/docs`, `/openapi.json`, `/redoc`, `/`, `/console` and the static asset prefixes.
 - `YUNSHU_AUTH_DISABLED=true` turns authentication off entirely, operational routes included. Use it for local development only.
 
 Send the token either way; the server accepts both on every route, whatever the dialect:
@@ -45,8 +45,10 @@ curl http://localhost:8000/v1/models -H "x-api-key: $YUNSHU_AUTH_TOKEN"
 
 If both headers are present the `Authorization: Bearer` value is used. The comparison is constant time. A missing token answers `401` with the message `Missing or invalid Authorization header`; a wrong token answers `401` with `Invalid or missing API key`. Both carry a `WWW-Authenticate: Bearer` header.
 
+Named API keys use the same headers; `infer` and `admin` scopes restrict access, expired/revoked keys fail, and exceeded quotas return `429`. Keys share one server’s data, without per-key tenant isolation.
+
 <Callout type="info">
-When no token is configured the key your SDK sends is ignored, so any placeholder such as `not-needed` or `sk-local` works. Bind to localhost (the default) or set a token before exposing the server to a network.
+When neither a token nor API keys are configured the key your SDK sends is ignored, so any placeholder such as `not-needed` or `sk-local` works. Bind to localhost (the default) or set a token before exposing the server to a network.
 </Callout>
 
 ## The `model` field

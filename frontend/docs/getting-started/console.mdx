@@ -3,7 +3,7 @@ title: Console
 description: The web console the Yunshu server hosts for watching the engine, managing models and keys, reading logs, trying the API and reading these docs.
 ---
 
-The console is a web application served by its own light process (`yunshu console`, port 8100), apart from the engine. That process serves the console and these docs, passes the console's API calls on to the engine, and records the history, so the console stays usable and keeps recording while the engine restarts or crashes. It is a view onto one engine: live status, requests, models, caches, logs, API keys, settings and this documentation. It does not start the engine and it is not a chat product.
+The console is a web application served by its own light process (`yunshu console`, port 8100), apart from the engine. That process serves the console and these docs, passes the console's API calls on to the engine, and records the history, so the console stays usable and keeps recording while the engine restarts or crashes. It is a view onto one engine: live status, requests, models, caches, logs, API keys, settings and this documentation. It does not own the engine process; service restart is available under launchd. It is not a chat product.
 
 <Callout type="info">
 The console speaks Traditional Chinese, Simplified Chinese and English. It follows your browser's language and the choice is kept in the browser; switch it from the language button in the top bar. This documentation follows the same choice.
@@ -26,6 +26,8 @@ pnpm build
 The build is written to `python/yunshu_gateway/console_static`, which the console process serves.
 
 ## Pages
+
+The sidebar has six sections: Overview, Requests, Diagnostics, Models, Playground and Settings. Logs is a Diagnostics tab; Downloads and Cache are Models tabs; Keys and API access are Settings tabs. Docs opens from the top bar. Existing tab addresses remain valid.
 
 | Page | What it does |
 |---|---|
@@ -50,7 +52,7 @@ When the engine does not answer, the console says "engine offline since 18:02:11
 
 ## Status and the status band
 
-The band at the bottom of every page shows the engine state, the loaded model and memory. Click it (or the compact pill on a phone) to open the status island: live phase, throughput, memory by owner and the host. Values the server did not report are shown as unavailable, not as zero.
+The separate floating status pills at the bottom of a desktop page shows the engine state, the loaded model and memory. Click it (or the compact pill on a phone) to open the status island: live phase, throughput, memory by owner and the host. Values the server did not report are shown as unavailable, not as zero.
 
 If a refresh fails the console keeps the last numbers and says so; when the engine cannot be reached it shows an offline banner with Retry and Connection settings.
 

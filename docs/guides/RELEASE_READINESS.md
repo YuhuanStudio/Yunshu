@@ -4,7 +4,8 @@ This page covers what a new user meets before the first token: installing, the f
 the server, connecting clients, upgrading, uninstalling, and what happens when something is
 wrong. Engine speed and accuracy are tracked in [BENCHMARKS.md](../BENCHMARKS.md).
 
-Source review: 2026-10-08, released v0.1.4; main is the unreleased 0.1.5 cycle.
+Release status reviewed 2026-10-17: v0.1.5 released 2026-10-15; main is the 0.1.6 development cycle.
+Older runtime receipts below retain their original dates.
 ✅ means the capability exists, with dated runtime evidence stated separately;
 🟡 means incomplete and ❌ means missing. This checklist does not replace a
 commit-pinned release gate or claim a fresh runtime test.
@@ -16,8 +17,8 @@ commit-pinned release gate or claim a fresh runtime test.
 | From source (`uv sync --extra vision`) | ✅ | `uv.lock` records exact dependency versions; the vision extra requires mlx-vlm >=0.7.6 |
 | `uv tool install` from a wheel | ✅ | Clean tool env on 2026-09-29, then `doctor`, serve Qwen3.5-0.8B, `/health`, `/version`, `/v1/models`, chat, `/v1/messages`, `service install --dry-run` |
 | `uv tool install` from git | ✅ | Same package as the wheel; the repository is public |
-| PyPI (`uv tool install "yunshu[vision]"`, `pipx install`) | ✅ | v0.1.4 (2026-10-08) released; see [RELEASING.md](../../RELEASING.md) |
-| Homebrew | 🟡 P2 | Formula points to the v0.1.3 sdist (repository formula; the external tap is not verified here) in the shared tap [YuhuanStudio/homebrew-tap](https://github.com/YuhuanStudio/homebrew-tap) (`brew install yuhuanstudio/tap/yunshu`) in `packaging/homebrew/`; added after the PyPI release ([steps](../../packaging/homebrew/README.md)) |
+| PyPI (`uv tool install "yunshu[vision]"`, `pipx install`) | ✅ | v0.1.5 (2026-10-15) released; see [RELEASING.md](../../RELEASING.md) |
+| Homebrew | 🟡 P2 | Formula points to the v0.1.5 sdist (repository formula; the external tap is not verified here) in the shared tap [YuhuanStudio/homebrew-tap](https://github.com/YuhuanStudio/homebrew-tap) (`brew install yuhuanstudio/tap/yunshu`) in `packaging/homebrew/`; added after the PyPI release ([steps](../../packaging/homebrew/README.md)) |
 | macOS app / menu bar / DMG | — | Not planned for now: CLI + launchd service (decided 2026-09-29) |
 | `curl … \| bash` installer with a model suggestion by RAM | ❌ P3 | Rapid-MLX has one; `uv tool install` + `yunshu doctor` covers most of it |
 | Python versions | 🟡 P3 | Requires Python >=3.13; CI targets 3.13 |
@@ -67,7 +68,7 @@ commit-pinned release gate or claim a fresh runtime test.
 | | Status | Notes |
 |---|---|---|
 | One version source | ✅ | `pyproject.toml`; the CLI, `/version`, OpenAPI and MCP read the installed metadata |
-| CHANGELOG | ✅ | `## [0.1.4]` entry; version bumped in `pyproject.toml` and `uv.lock` |
+| CHANGELOG | ✅ | `## [0.1.5]` entry; version bumped in `pyproject.toml` and `uv.lock` |
 | Release workflow | ✅ | Tag-only; checks version / changelog, lint, tests, build, twine, clean install, PyPI behind approval, draft GitHub release |
 | CI on push | 🟡 P1 | Lint + build on Linux; macOS unit tests only on release / manual run (to save quota). See the workflow run history; no fresh CI run is claimed by this checklist |
 | Third-party notices in the artifacts | ✅ | `THIRD_PARTY_NOTICES.md` ships in the wheel and sdist |
@@ -75,7 +76,7 @@ commit-pinned release gate or claim a fresh runtime test.
 
 ## Decisions (2026-09-29)
 
-- The repository is public; v0.1.4 is released. Future releases follow the
+- The repository is public; v0.1.5 is released. Future releases follow the
   pre-release check.
 - CLI + launchd service; no app for now.
 - Homebrew through the shared tap `YuhuanStudio/homebrew-tap`.

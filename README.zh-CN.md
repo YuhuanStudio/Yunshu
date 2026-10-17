@@ -62,6 +62,8 @@ Yunshu 提供的所有能力，分组列出。每一行链接到有示例与限�
 | [大型 MoE 加载（部分）](docs/guides/INFERENCE.md) | 社区 DeepSeek-V4-Flash 权重包的位数与 group size 由张量形状推得；加载前有容纳检查 |
 | [Round driver（实验）](docs/guides/ROUND_DRIVER.md) | 稠密 Qwen3.5 系列模型的自有推测回合驱动 |
 | [模型支持](docs/guides/MODEL_SUPPORT.md) | 各系列哪些是调校、通用与已验证 |
+| [下一轮预填](docs/guides/INFERENCE.md) | 符合条件的文本回复以标准 stride 边界预填 APC；boundary/exact 会改变数值运算，须明确选用 |
+| [单请求转入推测路径](docs/guides/INFERENCE.md) | 共享批次剩下一个符合条件的贪婪请求时转入推测；尚无多行推测 |
 
 **API**
 
@@ -88,13 +90,14 @@ Yunshu 提供的所有能力，分组列出。每一行链接到有示例与限�
 | [Tavily 兼容 API](docs/guides/TAVILY.md) | search、extract、crawl、map、research 与 MCP，含 provider 健康退避 |
 | [MCP](docs/guides/API_SURFACE.md) | 原生 MCP 端点，以及请求中指定的远端 MCP server |
 | [客户端设置](docs/guides/CLIENTS.md) | curl、OpenAI 与 Anthropic SDK、Open WebUI |
+| [经验证的辅助请求调度](docs/guides/AUXILIARY_SCHEDULING.md) | 已捕获的 opencode 标题请求让位给交互轮次；未知请求维持一般优先级 |
 
 **多模态**
 
 | 能力 | 内容 |
 |---|---|
 | [图片、音频与视频输入](docs/guides/MULTIMODAL.md) | mlx-vlm 模型在 Chat、Responses、Messages 接受媒体；媒体进入缓存键 |
-| [语音对语音（部分）](docs/guides/MULTIMODAL.md) | Qwen3-Omni 原生语音；重复图片尚未命中缓存 |
+| [语音对语音（部分）](docs/guides/MULTIMODAL.md) | Qwen3-Omni 原生语音；图片与音频 APC 有配对验证，图片加音频混合重用尚未验证 |
 | [Realtime 语音](docs/guides/MULTIMODAL.md) | WebSocket 与可选 WebRTC、服务器 VAD、打断、短期 client secret、本机声音 |
 | [语音转文字与文字转语音](docs/guides/MULTIMODAL.md) | transcriptions、translations、speech 与 voices |
 | [OCR 与图像生成](docs/guides/MULTIMODAL.md) | GLM-OCR 文字提取；图像 generations、edits、variations |
@@ -115,6 +118,8 @@ Yunshu 提供的所有能力，分组列出。每一行链接到有示例与限�
 | [安全](docs/guides/AUTH_AND_KEYS.md) | 验证 token、CORS 凭证规则、转址时移除标头、机密遮蔽、SSRF 防护 |
 | [首次运行与故障排查](docs/guides/FIRST_RUN.md) | 安装、选择模型、就绪检查与修复 |
 | [性能基准与准确度](docs/BENCHMARKS.md) | 每个数字的来源、复现方式与准确度检查 |
+| [模型生命周期控制](docs/CONSOLE.md) | 需验证的加载／下载取消、本地与 Hugging Face 快照注册、卸载影响提示 |
+
 
 ## 快速开始
 
@@ -306,7 +311,7 @@ decision = client.decisions.create(
 print(decision.answers)  # typed value, confidence, every option's probability
 ```
 
-0.1.5 在 main 上另外新增：存储聊天响应、Evals（`/v1/evals`）与 Realtime client secrets。
+0.1.5 已包含：存储聊天响应、Evals（`/v1/evals`）与 Realtime client secrets。
 
 [决策](docs/guides/DECISIONS.md)、[Evals](docs/guides/EVALS.md)、[网页搜索](docs/guides/WEB_SEARCH.md)与 [Tavily API](docs/guides/TAVILY.md)
 
@@ -329,21 +334,17 @@ agent。对 Claude Code 还会装上状态栏，即时显示预填进度、解�
 
 ## 性能
 
-Qwen3.8-27B（oQ4e），M5 Max 128 GB，单一请求，贪婪解码。方法、原始结果与完整比较表在
-[docs/BENCHMARKS.md](docs/BENCHMARKS.md)。
+Release 0.1.5 · M5 Max 128 GB · Qwen3.8-27B · greedy · 2026-10-13–14.
 
-| | Yunshu | TensorFold 0.6.1 |
-|---|---|---|
-| 冷启动首字延迟，8K prompt | 8.6 秒 | 8.5 秒 |
-| 冷启动首字延迟，32K prompt | 38.3 秒 | 39.4 秒 |
-| 重复或修改过的长 prompt | 从前缀缓存还原，不必重新预填 | — |
-| 后续回合首字延迟，8K / 32K 代码 | 512 / 721 毫秒 | 505 / 670 毫秒 |
-| 解码，短代码 prompt | 约 110 tok/s（DFlash2） | 约 140 tok/s（DFlash2） |
-| JSON schema / 工具调用输出，warm | 111 / 78 tok/s（推测解码照常启用） | — |
+| Context | Yunshu oQ4e decode tok/s | Splash 1.3.0 decode tok/s | Yunshu cold / warm / follow-up TTFT s |
+|---|---|---|---|
+| 32K | 134.400 | 116.200 | 34.590 / 0.182 / 2.958 |
+| 64K | 117.550 | 92.300 | 79.195 / 0.329 / 4.022 |
+| 128K | 77.950 | 89.900 | 199.440 / 0.593 / 6.452 |
 
-目前 TensorFold 的单请求解码与 32K 后续回合仍较快，缩小这些差距是正在进行的主要工作。结构化输出也照常使用推测解码（不用时为 23 tok/s）。推测解码永远不会改变
-Yunshu 的贪婪输出。相对于原版 MLX 路径的准确度，分三个层次检查（logit 对齐、贪婪分歧、成对下游评测），
-见 [准确度](docs/guides/ACCURACY.md)。
+目前位置：27B 在 32K / 64K 的实测解码比最快对手快 15.66% / 27.35%，但使用不同权重；128K oQ4e 落后 Splash 与 TensorFold。冷 TTFT 落后 Splash，暖缓存与立即后续 TTFT 落后 llama.cpp；Flash-Next 解码与后续也落后 llama.cpp。128K APC 在云枢两轮均命中，TensorFold 该次未命中。推测开关逐位元一致仅指已记录的检查范围。
+
+[Evidence and limits](docs/BENCHMARKS.md#where-yunshu-stands): Yunshu n=2; reused competitors n=1; one long prompt per depth. These are observations, not a general ranking. Main is in the 0.1.6 development cycle.
 
 ## 模型
 

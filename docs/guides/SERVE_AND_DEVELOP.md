@@ -1,6 +1,6 @@
 # Serve and develop on one machine
 
-One Mac can run a production Yunshu server for real users and still run development GPU jobs (benchmarks, evals).
+The queue supports running a production Yunshu server for real users and still run development GPU jobs (benchmarks, evals).
 The GPU queue (`scripts/dev/gpuq`) is aware of the production server: dev jobs run only while it is idle and are
 frozen the instant user traffic arrives.
 
@@ -87,7 +87,7 @@ report such a sample.
 * Limit: preemption happens within one poll interval of the first request, so a sample can briefly share the GPU
   with a request before the stop lands. Keep `poll_s` small; the idle gate makes this rare.
 
-## Implemented offline measurement support (unreleased main)
+## Implemented offline measurement support
 
 `YUNSHU_SERVE_LOG=1` writes a local, size-capped numbers-only event log: timings,
 token counts, cache tier, speculative acceptance, concurrency, arm and build. It
@@ -285,3 +285,9 @@ that needs no quiet CPU, passed memory admission, and declares a timeout of at m
 short jobs first, and short fillers count against the short-lane budget. The head's window restarts when the filler
 ends, so the head gets the next quiet slot before any second filler. The daemon also caches parsed job files, so a queue
 with thousands of finished jobs costs about 2.5% of a core idle and about 4% while a job runs.
+
+## Current qualification status
+
+Always-on 27B serving alongside development remains gated on long-context parity across
+cold, warm and immediate follow-up TTFT, decode, concurrency and memory. The queue
+mechanisms above are implemented; this is not a claim that that performance gate has passed.

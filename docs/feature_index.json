@@ -211,7 +211,7 @@
       "id": "omni",
       "group": "multimodal",
       "title": "Speech-to-speech (partial)",
-      "summary": "Qwen3-Omni native speech; a repeated image does not yet hit the cache",
+      "summary": "Qwen3-Omni native speech; repeated-image and audio APC have scoped parity receipts; combined image+audio reuse is unverified",
       "doc": "docs/guides/MULTIMODAL.md",
       "status": "partial"
     },
@@ -333,6 +333,38 @@
       "title": "Benchmarks and accuracy",
       "summary": "where each number comes from, how to reproduce it, accuracy gates",
       "doc": "docs/BENCHMARKS.md",
+      "status": "stable"
+    },
+    {
+      "id": "next-turn-rehearsal",
+      "group": "inference",
+      "title": "Next-turn rehearsal",
+      "summary": "Canonical stride APC rehearsal after eligible text replies; boundary/exact are explicit numeric-changing opt-ins",
+      "doc": "docs/guides/INFERENCE.md",
+      "status": "stable"
+    },
+    {
+      "id": "batch-lane-promotion",
+      "group": "inference",
+      "title": "Batch-to-lane promotion",
+      "summary": "An eligible greedy request moves to speculation when the shared batch drains to one row; multi-row speculation is not implemented",
+      "doc": "docs/guides/INFERENCE.md",
+      "status": "stable"
+    },
+    {
+      "id": "console-lifecycle",
+      "group": "ops",
+      "title": "Model lifecycle controls",
+      "summary": "Authenticated load/download cancellation, local and Hugging Face snapshot registration, and unload impact",
+      "doc": "docs/CONSOLE.md",
+      "status": "stable"
+    },
+    {
+      "id": "auxiliary-scheduling",
+      "group": "agents",
+      "title": "Qualified auxiliary scheduling",
+      "summary": "Captured opencode title fingerprints yield to interactive VLM turns with APC isolation; unknown requests retain normal priority",
+      "doc": "docs/guides/AUXILIARY_SCHEDULING.md",
       "status": "stable"
     }
   ]

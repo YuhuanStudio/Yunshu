@@ -10,7 +10,7 @@ are in [Benchmarks](../BENCHMARKS.md) and [PERF_TREND](../reports/PERF_TREND.md)
 | Model | Path | Speculation | Prefix cache |
 |---|---|---|---|
 | Qwen3.5 / 3.6 / 3.8 family (mlx-vlm) | VLM batch runner, single-request speculative lane | DFlash2, MTP, prompt-copy | exact hybrid checkpoints (APC) |
-| Other mlx-vlm models | same runner | none | APC where the cache layout allows it (not sliding-window models) |
+| Other mlx-vlm models | same runner | none | APC where the cache layout allows it (including checkpoint-specific exact-window support; see model support) |
 | Text-only mlx-lm models | single-request fast path | optional n-gram / suffix, Gemma 4 assistant, external draft (experimental) | mlx-lm prompt cache |
 
 `/v1/models` reports what the loaded model supports.
@@ -91,3 +91,17 @@ A lossy option never becomes a default because of a benchmark.
   `GET /v1/yunshu/models/{id}/fit` and the console Models page.
 - Memory accounting: `GET /v1/yunshu/memory` lists what holds memory; all `*_gb` fields are binary GiB
   ([units](API_EXTENSIONS.md#memory-units)).
+
+## Next-turn rehearsal
+
+In 0.1.5, `YUNSHU_NEXT_TURN_PREFILL=stride` is the default for eligible VLM text chats.
+After a reply, idle work prefills full canonical atoms of the assistant reply and stores
+APC checkpoints; the next request still computes the remainder and its new suffix.
+It costs idle GPU time and another cached prefix. A matching request can adopt work
+already in progress; a diverging request can wait for the current atom.
+`off` disables it. `boundary` and `exact` add assistant-end splits and can change
+multi-turn floating-point rounding; they are explicit opt-ins. This does not eliminate
+the measured [immediate follow-up latency gap](../BENCHMARKS.md#where-yunshu-stands).
+
+When a shared batch drains to one eligible greedy request, the runner can promote it
+to the speculative lane at a step boundary. Concurrent rows do not draft together.

@@ -119,7 +119,7 @@ On the text fast path these fields are accepted and have no effect beyond the au
 
 ## Which models are excluded
 
-Prefix reuse needs a cache that can be checkpointed at a prefix boundary. **Models with sliding-window attention layers** (rotating KV caches) cannot, so the VLM runner serves them without a prefix cache and `GET /v1/models` reports `prefix_cache.supported: false` with the reason under the `yunshu` key of the model entry. On the text fast path, models whose cache is hybrid/recurrent or sliding-window cannot reuse a stored prefix either. Models without these layers, and the hybrid Qwen3.5 family on the VLM runner, are supported.
+Prefix reuse requires a restorable checkpoint at a prefix boundary. The VLM runner has checkpoint-specific exact-window support (Gemma 4 has dated hit/miss parity receipts); this does not certify every rotating-cache model. See [model support](/docs/guides/model-support) and the loaded model contract. On the text fast path, hybrid/recurrent and sliding-window cache layouts cannot reuse a stored prefix.
 
 ## Memory and storage options
 

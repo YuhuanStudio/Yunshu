@@ -14,7 +14,7 @@ Stored files are used as inputs elsewhere: batch input and output files ([Batche
 <Endpoint method="DELETE" path="/v1/files/{file_id}" />
 
 <Callout type="info">
-Authentication is only enforced when `YUNSHU_AUTH_TOKEN` is set. There is a single owner: whoever presents the token (or anyone, when no token is set) sees every file.
+Authentication is enforced when a static token or API keys are configured. Authenticated keys share the same Files store; without configured auth, anyone who can reach the server sees every file.
 </Callout>
 
 ## Limits and storage

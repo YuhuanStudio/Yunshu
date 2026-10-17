@@ -1,5 +1,7 @@
 # M5 Max hardware map for Yunshu
 
+Historical probe environment, not a statement of the current dependency versions or release performance. For the release comparison, use [Benchmarks](../BENCHMARKS.md).
+
 What each hardware unit of an M5 Max (40-core GPU, 128 GB, macOS 27, MLX 0.32.2) delivers when measured,
 what Yunshu uses of it, and which proposals survive a roofline check. Probes live in
 `scripts/research/hw/` (each writes JSONL); numbers below are medians from one machine.

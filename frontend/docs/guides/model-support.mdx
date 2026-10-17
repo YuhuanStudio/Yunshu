@@ -19,7 +19,7 @@ Yunshu loads MLX checkpoints. It detects what kind of model a folder holds from 
 
 | Path | Used for | Behavior |
 |---|---|---|
-| VLM batch runner | Every model served through `mlx-vlm`, including the Qwen3.5 / 3.6 / 3.8 family when it is loaded with the `vision` extra | Continuous batching with per-request sampling. One request is prefilled at a time. Automatic prefix cache for families that do not use a sliding-window cache, keyed also on image and audio features, with an optional SSD tier. Accepts image, audio and video input. |
+| VLM batch runner | Every model served through `mlx-vlm`, including the Qwen3.5 / 3.6 / 3.8 family when it is loaded with the `vision` extra | Continuous batching with per-request sampling. One request is prefilled at a time. Automatic prefix cache for families with a restorable checkpoint (including scoped exact-window support), keyed also on image and audio features, with an optional SSD tier. Accepts image, audio and video input. |
 | Speculative lane (Qwen3.5 family only) | `qwen3_5`, `qwen3_6`, `qwen3_5_moe` | MTP or DFlash drafting in a single-request lane, using batch-invariant decode and verify kernels so that output with drafting on matches output with drafting off. `YUNSHU_MTP` (default on) and `YUNSHU_VLM_DRAFT` control it. Concurrent requests are not yet drafted together. |
 | Text fast path | Text-only `mlx-lm` models | One request at a time through `mlx-lm`; concurrent requests are served one after another. |
 
@@ -73,6 +73,8 @@ Support in this table describes what the code handles. It is not a promise that 
 2. Serve the view: `YUNSHU_MAX_MEMORY_GB=74.5 yunshu serve -m <pack>-ple-ssd`. The MTP head is used automatically (one draft per round); the APC SSD tier is on by default.
 
 With a memory ceiling set, Yunshu keeps the freed-buffer pool at 0.5 GiB and leaves the vision tower unloaded until the first image request. Both are lossless; set `YUNSHU_PREFILL_BUFFER_CACHE_GB` to override the pool.
+
+Historical external-PLE prototype measurements (including pre-fused-kernel runs), not current release speed or an 80 GB served-peak guarantee. The 0.1.5 snapshot measures Flash-Next at 32K / 64K: 67.050 / 56.750 tok/s; cold TTFT 33.243 / 68.247 s, warm 0.132 / 0.229 s, immediate follow-up 2.474 / 2.918 s. [Current evidence](/docs/guides/benchmarks).
 
 | Context (M5 Max 128 GB, MTP on, whole-system memory delta) | Steady | Cold-prefill peak | Decode |
 |---|---:|---:|---:|
