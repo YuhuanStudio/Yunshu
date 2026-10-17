@@ -14,20 +14,24 @@ again to see whether it returns toward the start.
 
 import argparse
 import base64
+import hashlib
 import http.client
 import json
+import math
 import random
 import statistics
 import sys
 import threading
 import time
 import urllib.parse
+import urllib.request
 from io import BytesIO
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-
-from process_memory import process_tree_memory, retained_gib  # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "dev"))
+from gpuq_pause import pause_intervals  # noqa: E402
+from process_memory import apc_resident_gib, process_tree_memory  # noqa: E402
 
 CODES = [
     "AMBER",
@@ -135,6 +139,7 @@ class Client:
             "usage": None,
             "first": None,
             "chunks": 0,
+            "done": False,
         }
         t0 = time.perf_counter()
         conn = http.client.HTTPConnection(self.host, self.port, timeout=self.timeout)
@@ -148,17 +153,19 @@ class Client:
             resp = conn.getresponse()
             r["status"] = resp.status
             if resp.status != 200:
-                r["error"] = resp.read().decode(errors="replace")[:400]
+                resp.read()
+                r["error"] = f"HTTP {resp.status}"
                 return r
             for line in resp:
                 if not line.startswith(b"data: "):
                     continue
                 data = line[6:].strip()
                 if data == b"[DONE]":
+                    r["done"] = True
                     break
                 ev = json.loads(data)
                 if ev.get("error"):
-                    r["error"] = str(ev["error"])[:400]
+                    r["error"] = "SSE error event"
                 r["usage"] = ev.get("usage") or r["usage"]
                 for ch in ev.get("choices") or []:
                     d = ch.get("delta") or {}
@@ -183,11 +190,104 @@ class Client:
                     r["aborted"] = True
                     break
         except Exception as e:  # noqa: BLE001
-            r["error"] = repr(e)[:400]
+            r["error"] = type(e).__name__
         finally:
             conn.close()
+        if not r.get("aborted") and (not r["done"] or r["finish"] is None):
+            r.setdefault("error", "incomplete stream: missing [DONE] or finish reason")
         r["wall"] = time.perf_counter() - t0
         return r
+
+
+def memory_ledger(url):
+    """One coherent snapshot; unknown counters must never become zero."""
+    try:
+        with urllib.request.urlopen(
+            url.rstrip("/") + "/v1/yunshu/memory", timeout=10
+        ) as r:
+            return json.load(r)
+    except Exception as exc:  # noqa: BLE001
+        return {"error": type(exc).__name__}
+
+
+def idle_verdict(start, end, tolerance_gib=0.5):
+    """APC may stay resident; the freed-buffer pool must actually return at idle.
+
+    Process footprint and MLX active overlap: compare each separately, never add them.
+    """
+    problems = []
+
+    def counters(ledger):
+        apc = sum(
+            o["bytes"]
+            for o in ledger.get("owners", [])
+            if o["kind"] in ("apc_ram", "apc_warm") and o.get("bytes") is not None
+        )
+        owners = ledger.get("owners", [])
+        if not any(
+            o["kind"] == "apc_ram" and o.get("bytes") is not None for o in owners
+        ):
+            raise ValueError("missing APC occupancy")
+        return (
+            ledger["process"]["footprint_bytes"] - apc,
+            ledger["mlx"]["active_bytes"] - apc,
+            ledger["mlx"]["cache_bytes"],
+        )
+
+    try:
+        before, after = counters(start), counters(end)
+        if after[2] > 64 * 2**20:
+            problems.append("idle allocator pool exceeds 64 MiB")
+        for name, a, b in zip(
+            ("footprint", "active"), before[:2], after[:2], strict=True
+        ):
+            if b - a > tolerance_gib * 2**30:
+                problems.append(f"unattributed {name} growth {(b - a) / 2**30:.3f} GiB")
+    except (KeyError, TypeError, ValueError):
+        problems.append("missing memory ledger counters")
+    return problems
+
+
+def run_verdict(reqs, elapsed_s, requested_s, start_ledger, end_ledger, aborted=False):
+    problems = idle_verdict(start_ledger, end_ledger)
+    if aborted or not math.isfinite(elapsed_s) or elapsed_s < requested_s:
+        problems.append("soak duration incomplete")
+    if not reqs or any(not r["ok"] or r.get("error") for r in reqs):
+        problems.append("missing or failed requests")
+    return problems
+
+
+def active_seconds(start, end):
+    paused = sum(max(0.0, min(b, end) - max(a, start)) for a, b in pause_intervals())
+    return max(0.0, end - start - paused)
+
+
+def sample_verdict(rows, started, ended):
+    """A dead sampler cannot turn a long soak into endpoint-only memory evidence."""
+    samples = [r for r in rows if r.get("kind") == "mem"]
+    if not samples:
+        return ["no minute memory samples"]
+    try:
+        times = (
+            [started] + sorted(r["t"] for r in samples if r["t"] >= started) + [ended]
+        )
+        if any(
+            active_seconds(a, b) > 90 for a, b in zip(times, times[1:], strict=False)
+        ):
+            return ["memory sampling gap exceeds 90 active seconds"]
+        for row in samples:
+            if row.get("footprint_gib") is None or row.get("ledger", {}).get("error"):
+                return ["missing minute memory counters"]
+            processes = row["process_tree"]["processes"]
+            if not processes or any(
+                p.get("wired_bytes") is None
+                or p.get("physical_footprint_bytes") is None
+                for p in processes
+            ):
+                return ["missing minute process/wired counters"]
+    except (KeyError, TypeError, ValueError):
+        return ["incomplete memory sampling records"]
+    return []
 
 
 def main():
@@ -204,8 +304,18 @@ def main():
     ap.add_argument("--footprint-stop-gib", type=float, default=90)
     ap.add_argument("--seed", type=int, default=7)
     ap.add_argument("--note", default="")
+    ap.add_argument(
+        "--long-doc-lines",
+        type=int,
+        default=0,
+        help="Minimum document lines; long sessions must verify prompt_tokens >= 32768",
+    )
     ap.add_argument("--output", type=Path, required=True)
     a = ap.parse_args()
+    if a.minutes <= 0 or a.long_doc_lines < 0:
+        ap.error("minutes must be positive and long-doc-lines nonnegative")
+    if a.output.exists():
+        ap.error("output already exists; use a unique segment path")
     a.output.parent.mkdir(parents=True, exist_ok=True)
     out = a.output.open("a")
     lock = threading.Lock()
@@ -225,12 +335,23 @@ def main():
 
     def sampler():
         while not stop.is_set():
-            emit({"kind": "mem", "t": round(time.time(), 1), "footprint_gib": mem()})
-            stop.wait(5)
+            emit(
+                {
+                    "kind": "mem",
+                    "t": round(time.time(), 1),
+                    "footprint_gib": mem(),
+                    "ledger": memory_ledger(a.url),
+                    "process_tree": process_tree_memory(a.pid),
+                }
+            )
+            stop.wait(60)
 
     rnd = random.Random(a.seed)
     cli = Client(a.url, a.model, 1200)
-    docs = [document(i, rnd.choice([80, 160, 320, 640, 960])) for i in range(12)]
+    docs = [
+        document(i, max(a.long_doc_lines, rnd.choice([80, 160, 320, 640, 960])))
+        for i in range(12)
+    ]
     threads = [[{"role": "system", "content": "You are concise."}] for _ in range(3)]
     thread_codes = [None, None, None]
     kinds = (
@@ -244,7 +365,9 @@ def main():
         + ["long"] * 8
     )
     start_mem = mem()
-    start_apc = retained_gib(a.url)
+    start_apc = apc_resident_gib(a.url)
+    start_ledger = memory_ledger(a.url)
+    aborted = False
 
     def ex_apc(total, apc):
         return None if total is None or apc is None else round(total - apc, 3)
@@ -263,11 +386,12 @@ def main():
         }
     )
     threading.Thread(target=sampler, daemon=True).start()
-    t_end = time.time() + a.minutes * 60
+    started = time.time()
     next_idle = time.time() + a.idle_every_min * 60
     n = 0
+    long_messages, long_reply, long_code = [], "", ""
     last_note = time.time()
-    while time.time() < t_end:
+    while active_seconds(started, time.time()) < a.minutes * 60:
         if time.time() - last_note >= 60:  # progress on stdout (queue stall detection)
             last_note = time.time()
             print(f"soak {n} requests, footprint {mem()} GiB", flush=True)
@@ -275,23 +399,57 @@ def main():
             emit({"kind": "idle", "seconds": a.idle_s, "footprint_gib": mem()})
             time.sleep(a.idle_s)
             next_idle = time.time() + a.idle_every_min * 60
-        kind = rnd.choice(kinds)
+        # Each cycle guarantees the workload mix, including long immediate follow-ups.
+        coverage = [
+            "doc",
+            "followup",
+            "tool",
+            "disconnect",
+            "image",
+            "schema",
+            "chat",
+            "think",
+            "long",
+        ]
+        kind = coverage[n % len(coverage)] if a.long_doc_lines else rnd.choice(kinds)
         ok, expect = None, None
-        if kind == "doc":
-            i = rnd.randrange(len(docs))
-            body, code = docs[i]
-            r = cli.chat(
-                [
+        if kind in ("doc", "followup"):
+            if kind == "followup":
+                messages = long_messages + [
+                    {"role": "assistant", "content": long_reply},
+                    {"role": "user", "content": "Repeat the access code only."},
+                ]
+                r = cli.chat(messages, 16)
+                expect, ok = long_code, long_code in r["content"].upper()
+            else:
+                i = rnd.randrange(len(docs))
+                body, code = docs[i]
+                r = cli.chat(
+                    [
+                        {
+                            "role": "user",
+                            "content": body
+                            + f"\nThe access code for this archive is {code}. "
+                            "What is the access code? Reply with the code only.",
+                        }
+                    ],
+                    16,
+                )
+                expect, ok = code, code in r["content"].upper()
+                long_messages = [
                     {
                         "role": "user",
                         "content": body
                         + f"\nThe access code for this archive is {code}. "
                         "What is the access code? Reply with the code only.",
                     }
-                ],
-                16,
-            )
-            expect, ok = code, code in r["content"].upper()
+                ]
+                long_reply, long_code = r["content"], code
+            if (
+                a.long_doc_lines
+                and (r.get("usage") or {}).get("prompt_tokens", 0) < 32768
+            ):
+                r["error"] = "long session shorter than 32768 prompt tokens"
         elif kind == "chat":
             j = rnd.randrange(3)
             if thread_codes[j] is None or rnd.random() < 0.3:
@@ -423,6 +581,7 @@ def main():
                 1024,
             )
             ok = r.get("status") == 200 and len(r["content"]) > 1000
+        ok = bool(ok) and not r.get("error")
         n += 1
         u = r.get("usage") or {}
         emit(
@@ -431,12 +590,8 @@ def main():
                 "n": n,
                 "type": kind,
                 "ok": bool(ok),
-                "expect": expect,
-                "got": (r["content"] or "")[:80],
-                # Full delivered text, for the generated-vs-delivered check
-                # (scripts/research/check_stream_delivery.py).
-                "content": r["content"],
-                "reasoning": r["reasoning"],
+                "text_sha256": hashlib.sha256(r["content"].encode()).hexdigest(),
+                "content_chars": len(r["content"]),
                 "tool_calls": len(r["tools"]),
                 "status": r.get("status"),
                 "error": r.get("error"),
@@ -459,10 +614,16 @@ def main():
                     "reason": f"footprint {fp} GiB > {a.footprint_stop_gib}",
                 }
             )
+            aborted = True
             break
+        if not ok:
+            aborted = True
+            break
+    elapsed_s = active_seconds(started, time.time())
     time.sleep(a.final_idle_s)
     stop.set()
-    end_mem, end_apc = mem(), retained_gib(a.url)
+    end_mem, end_apc = mem(), apc_resident_gib(a.url)
+    end_ledger = memory_ledger(a.url)
     rows = [
         json.loads(line) for line in a.output.read_text().splitlines() if line.strip()
     ]
@@ -501,9 +662,26 @@ def main():
             "wall_p95": round(walls[int(0.95 * (len(walls) - 1))], 3),
             "first_p50": round(statistics.median(firsts), 3) if firsts else None,
         }
+    problems = run_verdict(
+        reqs, elapsed_s, a.minutes * 60, start_ledger, end_ledger, aborted
+    )
+    problems.extend(sample_verdict(rows, started, time.time()))
+    if a.long_doc_lines:
+        missing = set(coverage) - {r["type"] for r in reqs}
+        if missing:
+            problems.append(f"missing workload types: {sorted(missing)}")
+    summary.update(
+        complete=True,
+        passed=not problems,
+        problems=problems,
+        elapsed_s=elapsed_s,
+        start_ledger=start_ledger,
+        end_ledger=end_ledger,
+    )
     emit(summary)
     print(json.dumps(summary, ensure_ascii=False, indent=1))
+    return 0 if not problems else 1
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

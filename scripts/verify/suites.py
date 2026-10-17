@@ -5,6 +5,8 @@ from __future__ import annotations
 STAGES = (
     "preflight",
     "console",
+    "deployment",
+    "service_deploy",
     "telemetry-tiny",
     "telemetry",
     "smoke",
@@ -47,6 +49,8 @@ LADDER = tuple(
         "modelprobe",
         "client_compat",
         "console",
+        "deployment",
+        "service_deploy",
         "telemetry",
         "telemetry-tiny",
         "respfeat",

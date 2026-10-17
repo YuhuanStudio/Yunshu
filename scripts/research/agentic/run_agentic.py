@@ -374,7 +374,21 @@ def cmd_run(args):
     finally:
         if server:
             server.kill()
-    return 0
+    completed = done_keys(out, args.engine_label, args.agent)
+    complete = all((t.id, rep) in completed for t, rep in plan)
+    with out.open("a") as f:
+        f.write(
+            json.dumps(
+                {
+                    "type": "summary",
+                    "complete": complete,
+                    "planned": len(plan),
+                    "completed": len(completed),
+                }
+            )
+            + "\n"
+        )
+    return 0 if complete else 1
 
 
 def wilson(k, n, z=1.96):
@@ -516,7 +530,11 @@ def main():
     r.add_argument("--context", type=int, default=131072)
     r.add_argument("--max-output", type=int, default=32768)
     r.add_argument("--proxy-port", type=int, default=0)
-    r.add_argument("--save-bodies", action="store_true")
+    r.add_argument(
+        "--save-bodies",
+        action="store_true",
+        help="Deprecated no-op; bodies are never persisted",
+    )
     r.add_argument("--keep-work", action="store_true")
     s = sub.add_parser("summarize")
     s.add_argument("files", nargs="+")

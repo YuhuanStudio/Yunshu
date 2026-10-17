@@ -95,7 +95,14 @@ def _host_uncached() -> dict[str, Any]:
     try:
         import psutil
 
-        put(out, "available", psutil.virtual_memory().available, 2)
+        available = psutil.virtual_memory().available
+        if total is None or not 0 <= available <= total:
+            # macOS can report available bytes above physical RAM. Preserve the raw
+            # observation, but never use impossible counters as deployment headroom.
+            out["available_reported_bytes"] = available
+            out["available_reason"] = "OS available counter is outside physical RAM"
+        else:
+            put(out, "available", available, 2)
     except Exception:
         logger.debug("psutil unavailable", exc_info=True)
     return out

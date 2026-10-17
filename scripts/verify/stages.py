@@ -1940,6 +1940,110 @@ def stage_searchrank(ctx: Ctx) -> StageResult:
     )
 
 
+def _deployment_valid(path):
+    rows = read_jsonl(path)
+    if (
+        not rows
+        or rows[-1].get("complete") is not True
+        or rows[-1].get("passed") is not True
+    ):
+        return False, "deployment check missing, incomplete or failed"
+    return True, ""
+
+
+def stage_deployment(ctx: Ctx) -> StageResult:
+    """Four resumable hour-long 32K+ agentic segments, then bounded desktop load."""
+    results = {}
+    for key, extra, timeout in [
+        ("pilot", ["--pilot"], 10),
+        *[
+            (f"hour-{i}", ["--minutes", "60", "--seed", str(170 + i)], 85)
+            for i in range(1, 5)
+        ],
+        ("resident-load", ["--pilot", "--resident-load-gib", "16"], 10),
+    ]:
+        cell = Cell(
+            "deployment",
+            key,
+            [
+                ctx.py,
+                str(ctx.cand.path / "scripts/research/deploy27b_segment.py"),
+                "--model",
+                ctx.model,
+                "--output",
+                "{out}",
+                *extra,
+            ],
+            mem_gb=64,
+            timeout_min=timeout,
+            stall_min=15,
+            quiet=True,
+            priority=0,
+            retries=0,
+            validate=_deployment_valid,
+            device="m5",
+        )
+        result = ctx.exe.run_cells([cell])[key]
+        results[key] = result
+        if not result.ok:
+            break
+    reasons = _failed_cells(results)
+    numbers = {
+        k: read_jsonl(r.evidence)[-1] for k, r in results.items() if r.ok and r.evidence
+    }
+    return _finish(
+        ctx,
+        StageResult("deployment", not reasons and len(results) == 6, reasons, numbers),
+    )
+
+
+def stage_service_deploy(ctx: Ctx) -> StageResult:
+    """An isolated installed old wheel is upgraded in place to the candidate wheel."""
+    env = ctx.arm_env("cand")
+    required = ("DEPLOY_SERVICE_PY", "DEPLOY_UPGRADE_WHEEL")
+    if any(not env.get(k) for k in required):
+        return _finish(
+            ctx,
+            StageResult(
+                "service_deploy",
+                False,
+                ["missing isolated interpreter / candidate wheel"],
+            ),
+        )
+    cell = Cell(
+        "service_deploy",
+        "launchd-upgrade",
+        [
+            ctx.py,
+            str(ctx.cand.path / "scripts/research/deploy27b_service.py"),
+            "--python",
+            env["DEPLOY_SERVICE_PY"],
+            "--wheel",
+            env["DEPLOY_UPGRADE_WHEEL"],
+            "--model",
+            ctx.model,
+            "--output",
+            "{out}",
+        ],
+        mem_gb=8,
+        timeout_min=12,
+        stall_min=10,
+        quiet=False,
+        priority=0,
+        retries=0,
+        validate=_deployment_valid,
+        device="m5",
+    )
+    result = ctx.exe.run_cells([cell])[cell.key]
+    numbers = read_jsonl(result.evidence)[-1] if result.ok and result.evidence else {}
+    return _finish(
+        ctx,
+        StageResult(
+            "service_deploy", result.ok, [] if result.ok else [result.reason], numbers
+        ),
+    )
+
+
 def _console_validate(path):
     rows = read_jsonl(path)
     if not rows or not rows[-1].get("complete") or rows[-1].get("failures"):
@@ -2160,6 +2264,8 @@ STAGE_FUNCS = {
     "ttft_profile": stage_ttft_profile,
     "snapshot": stage_snapshot,
     "console": stage_console,
+    "deployment": stage_deployment,
+    "service_deploy": stage_service_deploy,
     "telemetry": stage_telemetry,
     "telemetry-tiny": lambda ctx: stage_telemetry(ctx, pilot=True),
     "qwen4_mtp": stage_qwen4_mtp,

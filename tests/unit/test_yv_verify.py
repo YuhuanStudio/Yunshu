@@ -218,6 +218,8 @@ def test_full_suite_has_every_stage():
         "priorart",
         "evals",
         "console",
+        "deployment",
+        "service_deploy",
         "telemetry",
         "telemetry-tiny",
         "tavily",

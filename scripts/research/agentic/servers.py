@@ -29,7 +29,11 @@ TF_BIN = os.environ.get(
     "AGENTIC_TF_BIN", "/Volumes/P5Plus/yunshu-test-envs/tensorfold/bin/tensorfold"
 )
 TF_DRAFTER = "/Volumes/P5Plus/models/incoai/Qwen3.8-27B-DFlash2"
-SERVER_HOME = Path("/Volumes/P5Plus/yunshu-build/agentic/server-home")
+SERVER_HOME = Path(
+    os.environ.get(
+        "AGENTIC_SERVER_HOME", "/Volumes/P5Plus/yunshu-build/agentic/server-home"
+    )
+)
 
 
 def port_bindable(port: int) -> bool:

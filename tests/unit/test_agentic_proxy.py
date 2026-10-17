@@ -52,6 +52,7 @@ def test_usage_and_text(rig, path, stream):
     st, data = post(px, path, {"model": "fake", "stream": stream, "messages": []})
     assert st == 200 and b"fake" in data
     r = px.snapshot()[0]
+    assert not r.get("error")
     assert r["prompt_tokens"] == 100 and r["completion_tokens"] == 5
     assert r["cached_tokens"] == 60 and r["tool_calls"] == 0
     assert "ttft_s" in r and r["total_s"] >= r["ttft_s"]
@@ -72,13 +73,14 @@ def test_tool_calls_and_malformed(rig, path, stream):
     assert bad["malformed_tool_calls"] == 1
 
 
-def test_error_saved(rig):
+def test_error_never_saves_prompt_or_response(rig):
     fake, px = rig
     st, _ = post(px, "/v1/chat/completions", {"model": "fake-err"})
     assert st == 500
     r = px.snapshot()[0]
-    assert r["error"] and "boom" in r["error_body"]
-    assert Path(r["error_req_file"]).exists()
+    assert r["error"] is True
+    assert "error_body" not in r and "error_req_file" not in r
+    assert not list(px.bodies_dir.glob("*"))
 
 
 def test_passthrough_get(rig):
@@ -114,3 +116,32 @@ def test_leak_marker_across_every_chunk_boundary(marker):
             len(tracker._leak_tail)
             <= max(map(len, __import__("proxy").LEAK_MARKERS)) - 1
         )
+
+
+@pytest.mark.parametrize("error", [True, False])
+def test_http_200_error_or_truncated_stream_fails_without_saving_content(
+    rig, monkeypatch, error
+):
+    fake, px = rig
+    px.save_bodies = True  # even legacy opt-in must never persist bodies
+    event = (
+        {"error": {"message": "secret-prompt"}}
+        if error
+        else {"choices": [{"delta": {"content": "partial"}}]}
+    )
+    monkeypatch.setattr(
+        fake, "_answer", lambda h, body: fake._sse(h, [(None, event), (None, "[DONE]")])
+    )
+    status, _ = post(
+        px,
+        "/v1/chat/completions",
+        {
+            "model": "fake",
+            "stream": True,
+            "messages": [{"role": "user", "content": "secret-prompt"}],
+        },
+    )
+    record = px.snapshot()[0]
+    assert status == 200 and record["error"] is True
+    assert "secret-prompt" not in json.dumps(record)
+    assert not list(px.bodies_dir.glob("*"))
