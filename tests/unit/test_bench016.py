@@ -101,3 +101,46 @@ def test_repair_selects_only_missing_cells_and_rejects_unknown_names():
     assert b.select_jobs(jobs, {"target_cells": []}) == []
     with pytest.raises(ValueError, match="unknown repair cells"):
         b.select_jobs(jobs, {"target_cells": ["typo"]})
+
+
+def test_old_memory_rejection_recovered_without_changing_receipt():
+    import json
+
+    receipt = dict(rc=2, state="failed", contended=False)
+    window = dict(
+        before=dict(swap_mb=100, pageouts=100),
+        after=dict(swap_mb=101, pageouts=106),
+        errors=["pageouts changed during capture"],
+    )
+    log = json.dumps(dict(memory_window=window))
+    effective, audit = b.revalidate_memory_receipt(receipt, log)
+    assert effective["rc"] == 0 and effective["state"] == "done"
+    assert receipt["rc"] == 2
+    assert audit["deltas"] == dict(swap_mb=1, pageouts=6)
+    for changed in [dict(rc=1), dict(contended=True), dict(contended=None)]:
+        original = {**receipt, **changed}
+        assert b.revalidate_memory_receipt(original, log) == (original, None)
+    window["after"]["pageouts"] = 4197
+    assert (
+        b.revalidate_memory_receipt(receipt, json.dumps(dict(memory_window=window)))[1]
+        is None
+    )
+    window["after"]["pageouts"] = 106
+    window["after"]["swap_mb"] = 165
+    assert (
+        b.revalidate_memory_receipt(receipt, json.dumps(dict(memory_window=window)))[1]
+        is None
+    )
+    window["after"]["swap_mb"] = 101
+    window["errors"].append("other failure")
+    assert (
+        b.revalidate_memory_receipt(receipt, json.dumps(dict(memory_window=window)))[1]
+        is None
+    )
+    assert b.revalidate_memory_receipt(receipt, log + "\n" + log)[1] is None
+
+
+def test_retry_cap_counts_same_reason_across_resumed_attempts():
+    a, other = ["gpuq rc not zero", "contention"], ["short output"]
+    assert not b.rejection_limit([a, other], a)
+    assert b.rejection_limit([a, other, list(reversed(a))], a)

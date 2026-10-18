@@ -55,3 +55,20 @@ def test_memory_rejection_retries_without_accepting_or_blocking_engine():
     assert not retryable_measurement(
         {"rc": 2, "contended": False}, '{"memory_window":null}'
     )
+
+
+def test_unreported_cache_counter_is_not_a_fabricated_zero():
+    rows = [
+        dict(part="decode", phase=p, ttft_s=1, dec_tps=2, cached=None)
+        for p in ("cold", "warm", "turn2")
+    ]
+    rows.append(dict(part="memory", peak_gib=3))
+    value = r.metrics(rows)
+    assert value["cached_tokens"] is None
+    result = r.summarize(dict.fromkeys(range(3), value))
+    assert result["status"] == "qualified"
+    assert result["metrics"]["cached_tokens"] is None
+    assert result["metrics"]["decode_tps"]["median"] == 2
+    assert "not reported" in r.markdown(
+        dict(cells=[dict(engine="e", depth=32768, **result)])
+    )

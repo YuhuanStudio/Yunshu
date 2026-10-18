@@ -6,6 +6,7 @@ import argparse
 import dataclasses
 import hashlib
 import json
+import math
 import os
 import re
 import subprocess
@@ -61,6 +62,53 @@ def verdict(job, rows: list[dict], receipt: dict) -> list[str]:
         if phases.get("cold", {}).get("sha") != phases.get("warm", {}).get("sha"):
             errors.append("cold/warm text mismatch")
     return errors
+
+
+def revalidate_memory_receipt(receipt: dict, log: str) -> tuple[dict, dict | None]:
+    """Recover only the old memory-gate rc2; keep the original queue receipt intact."""
+    if receipt.get("rc") != 2 or receipt.get("contended") is not False:
+        return receipt, None
+    windows = []
+    for line in log.splitlines():
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(row, dict) and "memory_window" in row:
+            windows.append(row["memory_window"])
+    if len(windows) != 1 or not isinstance(windows[0], dict):
+        return receipt, None
+    window = windows[0]
+    allowed = {"host swap grew during capture", "pageouts changed during capture"}
+    if not window.get("errors") or not set(window["errors"]) <= allowed:
+        return receipt, None
+    from scripts.research.docs016_console import validate_memory_window
+
+    try:
+        before, after = window["before"], window["after"]
+        if validate_memory_window(before, after):
+            return receipt, None
+        deltas = {k: after[k] - before[k] for k in ("swap_mb", "pageouts")}
+        if any(
+            not isinstance(v, int | float) or not math.isfinite(v)
+            for v in deltas.values()
+        ):
+            return receipt, None
+    except (KeyError, TypeError, ValueError):
+        return receipt, None
+    return {**receipt, "rc": 0, "state": "done"}, {
+        "original_rc": 2,
+        "original_state": receipt.get("state"),
+        "original_errors": window["errors"],
+        "deltas": deltas,
+        "rule": "swap growth <=64 MiB; pageouts <=4096 (16 KiB pages)",
+    }
+
+
+def rejection_limit(history: list[list[str]], errors: list[str]) -> bool:
+    """Two occurrences of the same rejection stop this cell, including on resume."""
+    signature = sorted(set(errors))
+    return sum(sorted(set(previous)) == signature for previous in history) >= 2
 
 
 def configure(manifest: dict) -> None:
@@ -228,9 +276,11 @@ def controller(manifest: dict, path: Path) -> int:
     jobs = select_jobs(jobs, manifest)
     blocked = set()
     failed = set()
+    stopped = {}
     for job in jobs:
         if job.engine in blocked:
             continue
+        history = []
         for attempt in range(1, manifest.get("max_attempts", 3) + 1):
             name = f"{job.name}-try{attempt}"
             output = out / job.engine / f"{name}.jsonl"
@@ -284,7 +334,12 @@ def controller(manifest: dict, path: Path) -> int:
                     "\n".join(log.read_text(errors="replace").splitlines()[-20:]),
                     flush=True,
                 )
+            receipt, recovery = revalidate_memory_receipt(
+                receipt, log.read_text(errors="replace") if log.exists() else ""
+            )
             errors = verdict(job, bs.read_rows(output), receipt)
+            if recovery and not errors:
+                state[name]["memory_recovery"] = recovery
             state[name].update(errors=errors, state=receipt["state"])
             (build / "state.json").write_text(json.dumps(state, indent=2))
             print("VERDICT", name, errors or "PASS", flush=True)
@@ -292,6 +347,11 @@ def controller(manifest: dict, path: Path) -> int:
                 failed.discard(job.name)
                 break
             failed.add(job.name)
+            history.append(errors)
+            if rejection_limit(history, errors):
+                stopped[job.name] = errors
+                print("RETRY CAP", job.name, errors, flush=True)
+                break
             if retryable_measurement(
                 receipt, log.read_text(errors="replace") if log.exists() else ""
             ):
@@ -305,6 +365,7 @@ def controller(manifest: dict, path: Path) -> int:
                 "pass": not blocked and not failed,
                 "blocked": sorted(blocked),
                 "failed": sorted(failed),
+                "retry_capped": stopped,
             }
         )
     )

@@ -42,7 +42,8 @@ def metrics(rows: list[dict]) -> dict:
     )
     if any(
         not isinstance(v, int | float) or not math.isfinite(v) or v < 0
-        for v in values.values()
+        for key, v in values.items()
+        if key != "cached_tokens" or v is not None
     ):
         raise ValueError("missing or invalid metric")
     return values
@@ -56,7 +57,9 @@ def summarize(samples: dict[int, dict]) -> dict:
         "status": "qualified",
         "reps": sorted(samples),
         "metrics": {
-            key: {
+            key: None
+            if any(s[key] is None for s in samples.values())
+            else {
                 "median": statistics.median(s[key] for s in samples.values()),
                 "min": min(s[key] for s in samples.values()),
                 "max": max(s[key] for s in samples.values()),
@@ -69,6 +72,7 @@ def summarize(samples: dict[int, dict]) -> dict:
 def collect(manifest: dict, state: dict, queue: Path) -> dict:
     samples = {}
     rejected = {}
+    recovered = {}
     for name, entry in state.items():
         match = re.fullmatch(r"(.+)-L(32768|65536|131072)-r([0-2])-try\d+", name)
         if not match:
@@ -85,6 +89,11 @@ def collect(manifest: dict, state: dict, queue: Path) -> dict:
                 part="decode",
                 env={"TFB_EXPECT_YUNSHU_SHA": manifest["yunshu_sha"]},
             )
+            log_path = queue / "logs" / f"{entry['id']}.log"
+            receipt, recovery = b.revalidate_memory_receipt(
+                receipt,
+                log_path.read_text(errors="replace") if log_path.exists() else "",
+            )
             errors = b.verdict(job, rows, receipt)
             if receipt.get("state") != "done":
                 errors.append("receipt not done")
@@ -92,6 +101,8 @@ def collect(manifest: dict, state: dict, queue: Path) -> dict:
                 rejected[name] = errors
                 continue
             value = metrics(rows)
+            if recovery:
+                recovered[name] = {"id": entry["id"], **recovery}
             bucket = samples.setdefault((engine, depth), {})
             # First valid attempt is selected; never select the fastest rerun.
             bucket.setdefault(rep, value)
@@ -110,6 +121,7 @@ def collect(manifest: dict, state: dict, queue: Path) -> dict:
         "yunshu_sha": manifest["yunshu_sha"],
         "cells": cells,
         "rejected": rejected,
+        "recovered": recovered,
         "complete": all(c["status"] == "qualified" for c in cells),
     }
 
@@ -126,7 +138,12 @@ def markdown(report: dict) -> str:
     ]
     for cell in report["cells"]:
         vals = (
-            [f"{m['median']} [{m['min']},{m['max']}]" for m in cell["metrics"].values()]
+            [
+                f"{m['median']} [{m['min']},{m['max']}]"
+                if m is not None
+                else "not reported"
+                for m in cell["metrics"].values()
+            ]
             if cell["status"] == "qualified"
             else ["incomplete"] * len(METRICS)
         )

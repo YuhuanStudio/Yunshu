@@ -41,7 +41,10 @@ def test_sticky_swap_allowed_only_without_growth_or_pageouts():
     before = {"swap_mb": 9600, "pageouts": 100}
     assert validate_memory_window(before, dict(before)) == []
     # Background noise seen on 10-18 (6 host pageouts in a 6-minute 128K cell) must not reject it.
-    assert validate_memory_window(before, {**before, "swap_mb": 9601, "pageouts": 106}) == []
+    assert (
+        validate_memory_window(before, {**before, "swap_mb": 9601, "pageouts": 106})
+        == []
+    )
     assert validate_memory_window(before, {**before, "swap_mb": 9600 + 65})
     assert validate_memory_window(before, {**before, "pageouts": 100 + 4097})
     assert pageouts("Pageouts: 123.\n") == 123
