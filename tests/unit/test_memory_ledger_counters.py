@@ -35,3 +35,21 @@ def test_valid_available_counter_is_preserved(monkeypatch):
         SimpleNamespace(virtual_memory=lambda: SimpleNamespace(available=40)),
     )
     assert ledger._host_uncached()["available_bytes"] == 40
+
+
+def test_drafter_weights_exclude_target_and_internal_aliases():
+    target_array = SimpleNamespace(nbytes=100)
+    draft_array = SimpleNamespace(nbytes=40)
+    target = SimpleNamespace(parameters=lambda: {"weight": target_array})
+    draft = SimpleNamespace(
+        parameters=lambda: {
+            "tied": target_array,
+            "weight": draft_array,
+            "alias": draft_array,
+        }
+    )
+    engine = SimpleNamespace(
+        _model=target, _batch_runner=SimpleNamespace(drafter=draft)
+    )
+    assert ledger.measured_drafter_bytes(engine) == 40
+    assert ledger.measured_drafter_bytes(SimpleNamespace(_model=target)) is None

@@ -2020,6 +2020,8 @@ def stage_service_deploy(ctx: Ctx) -> StageResult:
             env["DEPLOY_SERVICE_PY"],
             "--wheel",
             env["DEPLOY_UPGRADE_WHEEL"],
+            "--launch-method",
+            env.get("DEPLOY_LAUNCH_METHOD", "bootstrap"),
             "--model",
             ctx.model,
             "--output",

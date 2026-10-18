@@ -34,6 +34,7 @@ import contextvars
 import logging
 import threading
 import time
+import weakref
 from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any
@@ -1218,7 +1219,7 @@ class YunshuAPCManager(APCManager):
         self._head_keys: set[int] = set()
         self._last_hit: tuple[tuple, int] | None = None
         self._last_shared_keys: list[int] = []
-        self._nbytes_memo: dict[int, tuple[Any, int]] = {}
+        self._nbytes_memo: dict[int, tuple[weakref.ReferenceType[Any], int]] = {}
         self._anchors: dict[int, int] = {}  # retained superseded checkpoint -> length
         # token ids of the latest next-turn rehearsal (vlm_engine._rehearse); its checkpoints
         # (RAM, and the SSD writes that finish later) are added without superseding the
@@ -1752,8 +1753,9 @@ class YunshuAPCManager(APCManager):
                 entry = self._exact_cache.get(key)
                 if entry is not None:
                     cached = memo.get(key)
-                    if cached is None or cached[0] is not entry:
-                        cached = (entry, _cache_nbytes(entry.prompt_cache))
+                    if cached is None or cached[0]() is not entry:
+                        # Size metadata must not pin an evicted checkpoint's arrays.
+                        cached = (weakref.ref(entry), _cache_nbytes(entry.prompt_cache))
                         memo[key] = cached
                     own += cached[1] - self._kv_share.get(key, (0, 0))[1]
             for key in [k for k in memo if k not in self._anchors]:

@@ -31,6 +31,13 @@ def service_pid(text):
     return int(match[1]) if match else None
 
 
+def require_owned_job(state, program):
+    """An inactive submitted job still needs bootout after a startup failure."""
+    if str(program) not in state:
+        raise RuntimeError("launchd job ownership could not be verified")
+    return service_pid(state)
+
+
 def require_owned(state, program):
     """Never signal a launchd job unless its executable is our isolated interpreter."""
     if str(program) not in state or service_pid(state) is None:
@@ -38,10 +45,44 @@ def require_owned(state, program):
     return service_pid(state)
 
 
+def submit_args(job):
+    """Run the isolated plist's command when noowners prevents plist bootstrap.
+
+    launchctl submit creates a keepalive job in the caller's launchd domain. Its
+    clean-exit policy differs from the product plist, so record the transport and
+    use this only for the crash/API-restart/upgrade checks, never plist validation.
+    No environment is inherited from the worker or the user's actual HOME.
+    """
+    argv = job["ProgramArguments"]
+    code = (
+        "import os; "
+        f"os.chdir({job['WorkingDirectory']!r}); "
+        f"out=os.open({job['StandardOutPath']!r}, os.O_WRONLY|os.O_CREAT|os.O_APPEND, 0o600); "
+        "os.dup2(out,1); os.close(out); "
+        f"err=os.open({job['StandardErrorPath']!r}, os.O_WRONLY|os.O_CREAT|os.O_APPEND, 0o600); "
+        "os.dup2(err,2); os.close(err); "
+        f"os.execve({argv[0]!r}, {argv!r}, {job['EnvironmentVariables']!r})"
+    )
+    # The isolated Python interpreter is after nice's two arguments.
+    python_bin = argv[3] if argv[0] == "/usr/bin/nice" else argv[0]
+    return [
+        "submit",
+        "-l",
+        job["Label"],
+        "--",
+        python_bin,
+        "-c",
+        code,
+    ]
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--python", type=Path, required=True, dest="python_bin")
     ap.add_argument("--wheel", type=Path, required=True)
+    ap.add_argument(
+        "--launch-method", choices=("bootstrap", "submit"), default="bootstrap"
+    )
     ap.add_argument("--model", type=Path, required=True)
     ap.add_argument("--output", type=Path, required=True)
     a = ap.parse_args()
@@ -115,6 +156,13 @@ def main():
             }
         )
     )
+    plist.chmod(0o600)
+
+    def boot_job():
+        if a.launch_method == "submit":
+            return ctl(*submit_args(plistlib.loads(plist.read_bytes())))
+        return ctl("bootstrap", f"gui/{os.getuid()}", str(plist))
+
     events = []
     owned = False
 
@@ -161,12 +209,20 @@ def main():
         ):
             raise RuntimeError("empty first response")
 
-    result = {"complete": False, "passed": False, "events": events, "port": port}
+    result = {
+        "complete": False,
+        "passed": False,
+        "events": events,
+        "port": port,
+        "launch_method": a.launch_method,
+        "plist_bootstrap_verified": False,
+    }
     try:
-        boot = ctl("bootstrap", f"gui/{os.getuid()}", str(plist))
+        boot = boot_job()
         if boot.returncode:
             raise RuntimeError("bootstrap failed: " + boot.stderr.strip())
         owned = True
+        result["plist_bootstrap_verified"] = a.launch_method == "bootstrap"
         pid = ready()
         chat()
         key = api(
@@ -219,7 +275,7 @@ def main():
             raise RuntimeError("upgrade install failed")
         if ctl("print", target).returncode == 0:
             raise RuntimeError("another service appeared during upgrade")
-        if ctl("bootstrap", f"gui/{os.getuid()}", str(plist)).returncode:
+        if boot_job().returncode:
             raise RuntimeError("upgraded bootstrap failed")
         owned = True
         pid = ready(restarted)
@@ -264,7 +320,7 @@ def main():
     finally:
         if owned:
             state = ctl("print", target)
-            require_owned(state.stdout, python_bin)
+            require_owned_job(state.stdout, python_bin)
             ctl("bootout", target)
         a.output.write_text(json.dumps(result) + "\n")
         print(json.dumps(result), flush=True)

@@ -237,6 +237,45 @@ def measured_weight_bytes(engine: Any) -> int | None:
     return total or None
 
 
+def _parameter_arrays(tree: Any):
+    if isinstance(tree, dict):
+        for value in tree.values():
+            yield from _parameter_arrays(value)
+    elif isinstance(tree, (list, tuple)):
+        for value in tree:
+            yield from _parameter_arrays(value)
+    elif hasattr(tree, "nbytes"):
+        yield tree
+
+
+def measured_drafter_bytes(engine: Any) -> int | None:
+    """Drafter parameters, excluding arrays tied to the target and repeated aliases.
+
+    Array metadata only. Views can still share storage, so this is a parameter-byte
+    attribution rather than an allocator census; never add it to process footprint.
+    """
+    runner = getattr(engine, "_batch_runner", None)
+    drafter = getattr(runner, "drafter", None)
+    if drafter is None or not hasattr(drafter, "parameters"):
+        return None
+    try:
+        target = getattr(engine, "_model", None)
+        seen = (
+            {id(a) for a in _parameter_arrays(target.parameters())}
+            if target is not None and hasattr(target, "parameters")
+            else set()
+        )
+        total = 0
+        for array in _parameter_arrays(drafter.parameters()):
+            if id(array) not in seen:
+                seen.add(id(array))
+                total += int(array.nbytes)
+        return total
+    except Exception:
+        logger.debug("drafter weight walk failed", exc_info=True)
+        return None
+
+
 def _loaded_models(manager: Any, engine: Any, display_id: str | None) -> list[dict]:
     rows: list[dict] = []
     if manager is not None:
@@ -313,6 +352,19 @@ def collect(manager: Any, engine: Any, display_id: str | None = None) -> dict[st
             }
         )
         attributed += w_bytes or 0
+        draft_bytes = measured_drafter_bytes(eng) if eng is not None else None
+        if draft_bytes is not None:
+            owners.append(
+                {
+                    "kind": "drafter_weights",
+                    "id": m["id"],
+                    "bytes": draft_bytes,
+                    "reclaimable": manager is not None,
+                    "estimated": True,
+                    "source": "drafter parameters excluding target array identities",
+                }
+            )
+            attributed += draft_bytes
         snap = _apc_snapshot(eng) if eng is not None else None
         if snap is None:
             continue

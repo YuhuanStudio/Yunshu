@@ -10,8 +10,10 @@ import argparse
 import json
 import os
 import shutil
+import subprocess
 import sys
 import time
+import urllib.request
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -27,6 +29,7 @@ def main():
     ap.add_argument("--minutes", type=float, default=60)
     ap.add_argument("--seed", type=int, default=17)
     ap.add_argument("--pilot", action="store_true")
+    ap.add_argument("--diagnostics", action="store_true")
     ap.add_argument("--resident-load-gib", type=int, default=0)
     a = ap.parse_args()
     if not 0 <= a.resident_load_gib <= 24:
@@ -78,6 +81,40 @@ def main():
         if warm.get("error") or not warm.get("done") or not warm.get("content"):
             raise RuntimeError("baseline warm request failed")
         time.sleep(40)
+
+        def diagnose(phase):
+            if not a.diagnostics:
+                return True
+            # Only allocation metadata and vmmap's region summary, never content.
+            path = root / f"{phase}-census.json"
+            ok = True
+            try:
+                with urllib.request.urlopen(
+                    server.url + "/debug/memory-census?min_mib=8", timeout=120
+                ) as response:
+                    sample = json.load(response)
+                ok = isinstance(sample.get("active_mib"), (int, float))
+                path.write_text(json.dumps(sample) + "\n")
+            except Exception as exc:  # noqa: BLE001
+                ok = False
+                path.write_text(json.dumps({"error": type(exc).__name__}) + "\n")
+            with (root / f"{phase}-vmmap.txt").open("w") as log:
+                try:
+                    proc = subprocess.run(
+                        ["/usr/bin/vmmap", "-summary", str(server.proc.pid)],
+                        stdout=log,
+                        stderr=subprocess.STDOUT,
+                        timeout=60,
+                    )
+                    ok = ok and proc.returncode == 0
+                    print(f"{phase} vmmap rc={proc.returncode}", flush=True)
+                except (OSError, subprocess.TimeoutExpired) as exc:
+                    ok = False
+                    log.write(type(exc).__name__ + "\n")
+            return ok
+
+        if not diagnose("before"):
+            raise RuntimeError("baseline allocation diagnostics incomplete")
         if a.pilot:
             before = memory_ledger(server.url)
             load = []
@@ -156,7 +193,9 @@ def main():
             "--note",
             f"deploy27b 32K+ agentic segment draft={mode}",
         ]
-        return soak_main()
+        rc = soak_main()
+        diagnostics_ok = diagnose("after")
+        return rc if diagnostics_ok else 1
     finally:
         server.kill()
         # Only this segment's cache; preserve JSONL/log evidence, never delete model links.

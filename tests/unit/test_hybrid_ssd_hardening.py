@@ -71,8 +71,13 @@ def test_rescan_after_restart_enforces_the_cap(tmp_path):
     assert small.total_bytes <= 2 * one + 1
 
 
-def test_block_store_and_hybrid_share_one_budget(tmp_path):
+def test_block_store_and_hybrid_share_one_budget(tmp_path, monkeypatch):
     from yunshu_engine.kv_prefix_cache import KVPrefixCache
+    from yunshu_kv.disk_budget import DiskBudget
+
+    # This checks shared accounting, not the host volume's current free space.
+    # Keep the real reserve policy; simulate capacity only for this tiny fixture.
+    monkeypatch.setattr(DiskBudget, "free", lambda self: 10**12)
 
     cache = KVPrefixCache.__new__(KVPrefixCache)
     cache._lock = threading.RLock()

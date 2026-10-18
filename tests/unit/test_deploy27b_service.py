@@ -47,3 +47,34 @@ def test_deployment_stage_is_opt_in_and_rejects_false_complete(tmp_path):
     assert _deployment_valid(path)[0] is False
     path.write_text('{"complete":true,"passed":true}\n')
     assert _deployment_valid(path)[0] is True
+
+
+def test_submitted_job_uses_isolated_plist_without_changing_user_home():
+    job = {
+        "Label": service.LABEL,
+        "ProgramArguments": ["/test/python", "-m", "yunshu_cli", "serve"],
+        "WorkingDirectory": "/Volumes/P5Plus/test/home",
+        "EnvironmentVariables": {"HOME": "/Volumes/P5Plus/test/home", "PATH": "/bin"},
+        "StandardOutPath": "/Volumes/P5Plus/test/server.log",
+        "StandardErrorPath": "/Volumes/P5Plus/test/server.log",
+    }
+    args = service.submit_args(job)
+    assert args[:3] == ["submit", "-l", service.LABEL]
+    assert args[args.index("--") + 1 :][:2] == ["/test/python", "-c"]
+    code = args[-1]
+    assert "os.chdir" in code and "os.execve" in code
+    assert "/Volumes/P5Plus/test/home" in code
+    assert "'-m', 'yunshu_cli', 'serve'" in code
+    assert "os.environ" not in code
+    assert "-o" not in args and "-e" not in args
+    assert "os.open" in code and "os.dup2" in code
+
+
+def test_owned_inactive_job_can_be_cleaned_up_without_signalling_a_pid():
+    state = "program = /Volumes/P5Plus/isolated/bin/python\n state = spawn scheduled\n"
+    assert (
+        service.require_owned_job(state, Path("/Volumes/P5Plus/isolated/bin/python"))
+        is None
+    )
+    with pytest.raises(RuntimeError):
+        service.require_owned_job(state, Path("/somebody/else/bin/python"))

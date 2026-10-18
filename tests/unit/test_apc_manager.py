@@ -947,3 +947,23 @@ def test_long_lookup_logs_the_decision(caplog):
         m.lookup_exact_cache(a[:4195])
     line = [r.getMessage() for r in caplog.records if "APC lookup:" in r.getMessage()]
     assert line and "prefix_entries=[4192]" in line[0] and "prompt=4195" in line[0]
+
+
+def test_anchor_size_memo_does_not_keep_an_evicted_checkpoint_alive():
+    import gc
+    import weakref
+
+    from mlx_vlm.apc import APCExactCacheEntry
+
+    m = _mgr()
+    entry = APCExactCacheEntry((1,), 0, [])
+    m._exact_cache[7] = entry
+    m._anchors[7] = 1
+    m.anchor_bytes()
+    held = weakref.ref(entry)
+    # The anchor's metadata may survive a RAM eviction for an SSD lookup.
+    del m._exact_cache[7]
+    del entry
+    gc.collect()
+    assert 7 in m._anchors
+    assert held() is None
