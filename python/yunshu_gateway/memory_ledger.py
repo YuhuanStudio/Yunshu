@@ -407,6 +407,23 @@ def collect(manager: Any, engine: Any, display_id: str | None = None) -> dict[st
                 }
             )
 
+    # This process-wide bounded store lives beside KV checkpoints, not inside
+    # the APC manager's occupancy counter. Count it once even with several models.
+    from yunshu_engine.dflash_apc_window import resident_bytes
+
+    draft_window = resident_bytes()
+    owners.append(
+        {
+            "kind": "apc_draft_window",
+            "id": None,
+            "bytes": draft_window,
+            "reclaimable": True,
+            "estimated": False,
+            "source": "DFlash APC captured-layer window store",
+        }
+    )
+    attributed += draft_window
+
     # Live KV of in-flight requests is not counted anywhere yet: unknown, not zero.
     owners.append(
         {

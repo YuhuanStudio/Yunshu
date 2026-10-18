@@ -207,3 +207,44 @@ def test_close_generator_tolerates_generators_without_speculation():
     g = Plain()
     close_generator(g)
     assert g.closed
+
+
+def test_idle_trim_releases_host_allocator_after_mlx(monkeypatch):
+    from yunshu_engine import idle_memory, mlx_executor
+
+    calls = []
+    monkeypatch.setattr(idle_memory.gc, "collect", lambda: calls.append("gc"))
+    monkeypatch.setattr(idle_memory, "_gib", lambda: (20, 0))
+    monkeypatch.setattr(
+        mlx_executor, "sync_and_clear_cache", lambda: calls.append("mlx")
+    )
+    monkeypatch.setattr(
+        idle_memory, "_trim_host_allocator", lambda: calls.append("host") or 123
+    )
+    idle_memory._trim()
+    assert calls == ["gc", "mlx", "host"]
+
+
+def test_host_allocator_uses_all_zones_and_correct_abi(monkeypatch):
+    import ctypes
+    import sys
+    from types import SimpleNamespace
+
+    from yunshu_engine.idle_memory import _trim_host_allocator
+
+    calls = []
+
+    class Relief:
+        def __call__(self, zone, goal):
+            calls.append((zone, goal))
+            return 42
+
+    relief = Relief()
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(
+        ctypes, "CDLL", lambda path: SimpleNamespace(malloc_zone_pressure_relief=relief)
+    )
+    assert _trim_host_allocator() == 42
+    assert calls == [(None, 0)]
+    assert relief.argtypes == [ctypes.c_void_p, ctypes.c_size_t]
+    assert relief.restype is ctypes.c_size_t

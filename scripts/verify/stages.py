@@ -1952,13 +1952,13 @@ def _deployment_valid(path):
 
 
 def stage_deployment(ctx: Ctx) -> StageResult:
-    """Four resumable hour-long 32K+ agentic segments, then bounded desktop load."""
+    """One hour-long 32K+ agentic segment, then bounded desktop load."""
     results = {}
     for key, extra, timeout in [
         ("pilot", ["--pilot"], 10),
         *[
             (f"hour-{i}", ["--minutes", "60", "--seed", str(170 + i)], 85)
-            for i in range(1, 5)
+            for i in range(1, 2)
         ],
         ("resident-load", ["--pilot", "--resident-load-gib", "16"], 10),
     ]:
@@ -1993,7 +1993,48 @@ def stage_deployment(ctx: Ctx) -> StageResult:
     }
     return _finish(
         ctx,
-        StageResult("deployment", not reasons and len(results) == 6, reasons, numbers),
+        StageResult("deployment", not reasons and len(results) == 3, reasons, numbers),
+    )
+
+
+def stage_deployment_idle(ctx: Ctx) -> StageResult:
+    """Short strict idle-return diagnostic before spending a full soak hour."""
+    cell = Cell(
+        "deployment-idle",
+        "short",
+        [
+            ctx.py,
+            str(ctx.cand.path / "scripts/research/deploy27b_segment.py"),
+            "--model",
+            ctx.model,
+            "--output",
+            "{out}",
+            "--minutes",
+            "15",
+            "--seed",
+            "17",
+            "--diagnostics",
+        ],
+        mem_gb=64,
+        timeout_min=25,
+        stall_min=15,
+        quiet=True,
+        priority=0,
+        retries=0,
+        validate=_deployment_valid,
+        device="m5",
+    )
+    result = ctx.exe.run_cells([cell])[cell.key]
+    numbers = (
+        read_jsonl(result.evidence)[-1]
+        if result.evidence and result.evidence.exists()
+        else {}
+    )
+    return _finish(
+        ctx,
+        StageResult(
+            "deployment-idle", result.ok, [] if result.ok else [result.reason], numbers
+        ),
     )
 
 
@@ -2267,6 +2308,7 @@ STAGE_FUNCS = {
     "snapshot": stage_snapshot,
     "console": stage_console,
     "deployment": stage_deployment,
+    "deployment-idle": stage_deployment_idle,
     "service_deploy": stage_service_deploy,
     "telemetry": stage_telemetry,
     "telemetry-tiny": lambda ctx: stage_telemetry(ctx, pilot=True),

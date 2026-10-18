@@ -118,9 +118,32 @@ def _trim() -> None:
     gc.collect()
     before = _gib()
     sync_and_clear_cache()
+    host_released = _trim_host_allocator()
+    logger.info("idle memory: host allocator released %d bytes", host_released)
     after = _gib()
     logger.info(
         "idle memory: released the allocator pool, cache %.2f -> %.2f GiB",
         before[1],
         after[1],
     )
+
+
+def _trim_host_allocator() -> int:
+    """Return free malloc pages as well as Metal buffers, only at the idle trim.
+
+    Darwin's NULL-zone / zero-goal request asks every zone to release all unused
+    pages. Live objects remain allocated; the returned count is diagnostic only.
+    """
+    import ctypes
+    import sys
+
+    if sys.platform != "darwin":
+        return 0
+    try:
+        relief = ctypes.CDLL("/usr/lib/libSystem.B.dylib").malloc_zone_pressure_relief
+        relief.argtypes = [ctypes.c_void_p, ctypes.c_size_t]
+        relief.restype = ctypes.c_size_t
+        return int(relief(None, 0))
+    except (AttributeError, OSError):
+        logger.debug("host allocator pressure relief unavailable", exc_info=True)
+        return 0

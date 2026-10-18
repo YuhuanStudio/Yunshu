@@ -109,6 +109,11 @@ export function StateStrip({
       data-testid="state-strip"
     >
       {header}
+      {status?.deployment_alerts?.map((message) => (
+        <div key={message} role="alert" className="text-sm text-(--error)">
+          {message}
+        </div>
+      ))}
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
         <ul
           className="-ml-2 flex shrink-0 items-center gap-0.5 max-sm:w-full max-sm:justify-between"

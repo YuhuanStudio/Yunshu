@@ -53,3 +53,19 @@ def test_drafter_weights_exclude_target_and_internal_aliases():
     )
     assert ledger.measured_drafter_bytes(engine) == 40
     assert ledger.measured_drafter_bytes(SimpleNamespace(_model=target)) is None
+
+
+def test_draft_window_store_is_attributed_once(monkeypatch):
+    from yunshu_engine import dflash_apc_window
+
+    monkeypatch.setattr(dflash_apc_window, "resident_bytes", lambda: 123456)
+    monkeypatch.setattr(ledger, "_loaded_models", lambda *args: [])
+    monkeypatch.setattr(
+        ledger, "mlx_counters", lambda: {"active": 123456, "cache": 0, "peak": 123456}
+    )
+    sample = ledger.collect(None, None)
+    windows = [o for o in sample["owners"] if o["kind"] == "apc_draft_window"]
+    assert len(windows) == 1
+    assert windows[0]["bytes"] == 123456
+    assert windows[0]["estimated"] is False
+    assert next(o for o in sample["owners"] if o["kind"] == "other")["bytes"] == 0

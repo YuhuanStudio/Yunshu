@@ -221,7 +221,8 @@ def idle_verdict(start, end, tolerance_gib=0.5):
         apc = sum(
             o["bytes"]
             for o in ledger.get("owners", [])
-            if o["kind"] in ("apc_ram", "apc_warm") and o.get("bytes") is not None
+            if o["kind"] in ("apc_ram", "apc_warm", "apc_draft_window")
+            and o.get("bytes") is not None
         )
         owners = ledger.get("owners", [])
         if not any(
@@ -246,6 +247,25 @@ def idle_verdict(start, end, tolerance_gib=0.5):
     except (KeyError, TypeError, ValueError):
         problems.append("missing memory ledger counters")
     return problems
+
+
+def footprint_slope_gib_h(rows):
+    """Least-squares slope of the minute samples; missing data stays unknown."""
+    points = [
+        (r.get("t"), r.get("footprint_gib")) for r in rows if r.get("kind") == "mem"
+    ]
+    if len(points) < 2 or any(t is None or v is None for t, v in points):
+        return None
+    origin = points[0][0]
+    xs = [(t - origin) / 3600 for t, _ in points]
+    ys = [v for _, v in points]
+    xm, ym = statistics.mean(xs), statistics.mean(ys)
+    denominator = sum((x - xm) ** 2 for x in xs)
+    return (
+        sum((x - xm) * (y - ym) for x, y in zip(xs, ys, strict=True)) / denominator
+        if denominator
+        else None
+    )
 
 
 def run_verdict(reqs, elapsed_s, requested_s, start_ledger, end_ledger, aborted=False):
@@ -675,6 +695,7 @@ def main():
         passed=not problems,
         problems=problems,
         elapsed_s=elapsed_s,
+        footprint_slope_gib_h=footprint_slope_gib_h(rows),
         start_ledger=start_ledger,
         end_ledger=end_ledger,
     )

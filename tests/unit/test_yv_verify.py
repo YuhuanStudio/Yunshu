@@ -219,6 +219,7 @@ def test_full_suite_has_every_stage():
         "evals",
         "console",
         "deployment",
+        "deployment-idle",
         "service_deploy",
         "telemetry",
         "telemetry-tiny",

@@ -1,6 +1,6 @@
 """gpuq-only deployment segment: reuse realistic soak and the agentic server lifecycle.
 
-Run a tiny pilot first, then four independent --minutes 60 jobs. Each segment has its
+Run a tiny pilot first, then one --minutes 60 job. Each segment has its
 own HOME and outputs; the controller resumes only completed, clean segments.
 """
 

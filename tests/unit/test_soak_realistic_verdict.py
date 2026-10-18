@@ -159,3 +159,22 @@ def test_lost_sampler_or_missing_wired_data_fails(monkeypatch):
     bad = sample(0)
     bad["process_tree"]["processes"][0]["wired_bytes"] = None
     assert soak.sample_verdict([bad], 0, 60)
+
+
+def test_minute_slope_and_unknown_data():
+    rows = [
+        {"kind": "mem", "t": 1000 + i * 60, "footprint_gib": 20 + i / 30}
+        for i in range(61)
+    ]
+    assert soak.footprint_slope_gib_h(rows) == pytest.approx(2)
+    assert soak.footprint_slope_gib_h(rows[:1]) is None
+    rows[4]["footprint_gib"] = None
+    assert soak.footprint_slope_gib_h(rows) is None
+
+
+def test_draft_window_is_intended_cache_but_unknown_growth_still_fails():
+    before, after = ledger(), ledger(active=22.2, footprint=24.2)
+    after["owners"].append({"kind": "apc_draft_window", "bytes": 0.2 * 2**30})
+    assert not soak.idle_verdict(before, after)
+    after["process"]["footprint_bytes"] += 0.6 * 2**30
+    assert soak.idle_verdict(before, after)

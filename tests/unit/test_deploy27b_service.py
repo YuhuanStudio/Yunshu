@@ -42,6 +42,7 @@ def test_deployment_stage_is_opt_in_and_rejects_false_complete(tmp_path):
 
     assert "deployment" in STAGES and "service_deploy" in STAGES
     assert "deployment" not in LADDER and "service_deploy" not in LADDER
+    assert "deployment-idle" in STAGES and "deployment-idle" not in LADDER
     path = tmp_path / "result.jsonl"
     path.write_text('{"complete":true,"passed":false}\n')
     assert _deployment_valid(path)[0] is False
@@ -78,3 +79,32 @@ def test_owned_inactive_job_can_be_cleaned_up_without_signalling_a_pid():
     )
     with pytest.raises(RuntimeError):
         service.require_owned_job(state, Path("/somebody/else/bin/python"))
+
+
+def test_deployment_runs_exactly_one_hour_then_resident_load(monkeypatch, tmp_path):
+    import sys
+    from types import SimpleNamespace
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
+    from verify import stages
+
+    calls = []
+    output = tmp_path / "complete.jsonl"
+    output.write_text('{"complete":true,"passed":true}\n')
+
+    def cells(batch):
+        cell = batch[0]
+        calls.append(cell)
+        return {cell.key: SimpleNamespace(ok=True, evidence=output)}
+
+    ctx = SimpleNamespace(
+        py="python",
+        cand=SimpleNamespace(path=tmp_path),
+        model="27B",
+        exe=SimpleNamespace(run_cells=cells),
+    )
+    monkeypatch.setattr(stages, "_finish", lambda ctx, result: result)
+    monkeypatch.setattr(stages, "_failed_cells", lambda results: [])
+    result = stages.stage_deployment(ctx)
+    assert result.passed
+    assert [cell.key for cell in calls] == ["pilot", "hour-1", "resident-load"]

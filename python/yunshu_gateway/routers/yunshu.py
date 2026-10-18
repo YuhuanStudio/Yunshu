@@ -74,6 +74,11 @@ def _memory() -> dict[str, Any]:
             out["pressure"] = round(out["active_bytes"] / total, 3)
     except (ValueError, OSError, AttributeError):
         pass
+    from yunshu_engine.footprint_sampler import self_footprint_bytes
+
+    footprint = self_footprint_bytes()
+    if footprint:
+        put_gb(out, "footprint", footprint)
     return out
 
 

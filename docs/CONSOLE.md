@@ -289,3 +289,12 @@ require the configured management token. Registration does not copy weights; rem
 a registration does not delete them. Fixed-model servers reject manager-only loads
 with an explanatory 400. Unload impact is advisory. See the
 [route contract](guides/API_SURFACE.md) for authentication and conflict responses.
+
+The console recorder also watches deployment health. It records process footprint and its
+15–30 minute regression slope, request error rate, and the existing restart/outage events in
+its bounded history. A footprint slope above 1 GiB/hour or at least 5% failed requests among
+20 or more completions in the last minute raises a console alert and one warning log/event
+on entry. Cancellation is excluded from the error rate. Missing footprint or a changed
+process/model resets the slope baseline. Cache growth can trigger this operational warning;
+it is a reason to inspect the memory ledger, not a leak diagnosis. Keep the console running
+for day-to-day history; longer release soaks run separately before a tagged release.

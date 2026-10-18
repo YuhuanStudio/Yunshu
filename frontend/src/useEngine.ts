@@ -226,6 +226,19 @@ export function useEngine(connection: Connection): UseEngineResult {
             connectionKey !== connectionKeyRef.current
           )
             return;
+          if (status.console_process) {
+            const recorder = await fetchConsoleState(
+              apiConnection,
+              controller.signal,
+            );
+            if (
+              controller.signal.aborted ||
+              generation !== generationRef.current ||
+              connectionKey !== connectionKeyRef.current
+            )
+              return;
+            status.deployment_alerts = recorder?.alerts ?? [];
+          }
           const at = Date.now();
           if (status.console_process) consoleSeenRef.current = true;
           // The engine answers again after an outage: what happened meanwhile comes from its history.
