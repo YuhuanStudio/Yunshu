@@ -669,7 +669,7 @@
       ],
       "local_changes": [
         "Research-only Steel FA2 harvester and exact-shape screen; kernel arithmetic retained, function constants fixed to causal aligned/no-mask/no-sinks/no-LSE and scratch supplied by caller. Not connected to inference; no winner or token parity claimed.",
-        "Harvest release 0.32.4 vector TK4 bodies; fixed batch1,G6,D256 with screen-selected blocks 512/1024/1024 at 32K/64K/128K (not upstream g17s defaults). Installed MLX 0.32.3 only compiles/launches the bodies; all screened candidates failed bit parity and none is connected to inference."
+        "Harvest release 0.32.4 vector TK4 bodies; fixed batch1,G6,D256 with screen-selected blocks 512/1024/1024 at 32K/64K/128K (not upstream g17s defaults). Installed MLX 0.32.3 compiles/launches. Bit differences are diagnostic, not a lossless rejection: deterministic, fp32/reference error, row/cache invariance and paired accuracy gates govern qualification."
       ]
     }
   ],
@@ -1418,6 +1418,20 @@
       "reviewed_commit": "7840bede989adc226d35e893f29deec1814734f7",
       "reviewed_date": "2026-10-15",
       "review_reason": "sync016 source diff review: KEEP; BACKLOG cache: upstream centralizes hybrid cache hit alignment and tail proof, moves cache planning, handles early process shutdown and weight-version spans. None removes Yunshu GC policy or its host-thread contract."
+    },
+    {
+      "kind": "inspired",
+      "path": "scripts/research/kernelstudy_parity.py",
+      "repo": "https://github.com/ml-explore/mlx",
+      "clone": "/Volumes/Micron/yunshu-refsync/mlx",
+      "upstream_paths": [
+        "mlx/backend/metal/kernels/sdpa_vector.h"
+      ],
+      "commit": "36969c094354086e15d2a327a9c50feb20b9cf11",
+      "license": "MIT",
+      "local_changes": [
+        "Research-only canonical per-query TK4 adapter imports the registered harvester, preserving absolute prefix lengths and split geometry across T=1..7. FP64 reference reports both kernels absolute/relative errors; deterministic and reconstructed-cache tensor checks. No serving connection or full APC/accuracy qualification."
+      ]
     }
   ],
   "patches": [

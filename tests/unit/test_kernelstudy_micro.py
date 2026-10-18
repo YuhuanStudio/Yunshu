@@ -59,11 +59,12 @@ def test_malformed_fails(key, value):
         probe.validate([entry], "attention", [32768], 1)
 
 
-def test_numerical_mismatch_is_rejected_not_hidden():
+def test_bit_difference_is_diagnostic_not_lossless_rejection():
     entry = row()
     entry.update(bit_equal=False, max_abs=0.01)
     result = probe.validate([entry], "attention", [32768], 1)
-    assert result["complete"] and not result["component_parity"]
+    assert result["complete"] and not result["bit_parity"]
+    assert result["lossless_qualified"] is False
 
 
 def test_missing_long_context_fails():

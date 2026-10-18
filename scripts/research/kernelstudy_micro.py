@@ -60,7 +60,8 @@ def validate(rows, candidate, contexts, reps):
         "complete": True,
         "candidate": candidate,
         "rows": len(rows),
-        "component_parity": all(row["bit_equal"] for row in rows),
+        "bit_parity": all(row["bit_equal"] for row in rows),
+        "lossless_qualified": False,
         "serving_qualified": False,
     }
 
@@ -427,7 +428,7 @@ def main(argv=None):
             error = float(
                 mx.max(mx.abs(a.astype(mx.float32) - b.astype(mx.float32))).item()
             )
-            # Fail fast for invalid numerics; unequal arithmetic is a recorded rejection.
+            # Fail fast for invalid numerics; bit differences alone do not reject losslessness.
             if not math.isfinite(error):
                 raise ValueError("non-finite output")
             for rep in range(args.reps):
