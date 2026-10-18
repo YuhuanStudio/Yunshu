@@ -41,11 +41,18 @@ def pageouts(text: str) -> int:
     return int(match[1])
 
 
+# Host-wide counters move a little under any background process (a handful of 16 KiB pages over a
+# 6-minute cell). Reject only paging that could touch the measured engine: the same 64 MB budget
+# gpuq's contention check uses.
+MEMORY_WINDOW_SWAP_MB = 64.0
+MEMORY_WINDOW_PAGEOUT_PAGES = 4096  # 64 MiB of 16 KiB pages
+
+
 def validate_memory_window(before: dict, after: dict) -> list[str]:
     errors = []
-    if after["swap_mb"] > before["swap_mb"]:
+    if after["swap_mb"] - before["swap_mb"] > MEMORY_WINDOW_SWAP_MB:
         errors.append("host swap grew during capture")
-    if after["pageouts"] != before["pageouts"]:
+    if after["pageouts"] - before["pageouts"] > MEMORY_WINDOW_PAGEOUT_PAGES:
         errors.append("pageouts changed during capture")
     return errors
 
