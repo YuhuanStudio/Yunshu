@@ -68,18 +68,43 @@ def memory_snapshot() -> dict:
     }
 
 
-def validate_long_usage(usage: dict, cached: bool) -> list[str]:
+def validate_long_usage(
+    usage: dict, cached: bool, finish_reason: str | None = None
+) -> list[str]:
     errors = []
     if usage.get("prompt_tokens", 0) < 32768:
         errors.append("context below 32K")
-    if usage.get("completion_tokens", 0) != 2048:
-        errors.append("long reply incomplete")
+    # A real agent turn can end naturally before max_tokens. Require a long,
+    # terminal reply; exact token budgets remain mandatory in benchmark cells.
+    if usage.get("completion_tokens", 0) < 1024:
+        errors.append("long reply too short")
+    if finish_reason not in {"stop", "length"}:
+        errors.append("long reply missing terminal finish reason")
     if (
         cached
         and usage.get("prompt_tokens_details", {}).get("cached_tokens", 0) < 32768
     ):
         errors.append("32K cached prefix not engaged")
     return errors
+
+
+def followup_task(turn: int) -> str:
+    components = (
+        "durable scheduler journal and crash recovery",
+        "fair task admission and cancellation propagation",
+        "prefix-cache ownership and eviction accounting",
+        "stream backpressure and client disconnect handling",
+        "deadline propagation and bounded retry policy",
+        "integration fixtures and fault injection",
+    )
+    component = components[(turn - 1) % len(components)]
+    return (
+        f"Agent implementation task {turn}: implement {component} for this project. "
+        "Use the repository context above and prior implementation. Start this new component "
+        "now, rather than summarizing previous work. Provide the full Python implementation, "
+        "type definitions, error paths, and at least ten detailed pytest cases with fixtures. "
+        "Explain each design choice and edge case. Write at least 3000 words."
+    )
 
 
 def inventory() -> dict:
@@ -201,12 +226,19 @@ def main() -> int:
                             raise RuntimeError("incomplete load response")
                         if args.context_file:
                             errors = validate_long_usage(
-                                usage, counts["complete_requests"] > 0
+                                usage,
+                                counts["complete_requests"] > 0,
+                                r["choices"][0].get("finish_reason"),
                             )
                             if errors:
                                 raise RuntimeError("; ".join(errors))
                             # Metadata only: never persist prompt/completion content.
-                            usage_rows.append(usage)
+                            usage_rows.append(
+                                {
+                                    **usage,
+                                    "finish_reason": r["choices"][0]["finish_reason"],
+                                }
+                            )
                             if counts["complete_requests"] > 0:
                                 messages.extend(
                                     [
@@ -218,7 +250,9 @@ def main() -> int:
                                         },
                                         {
                                             "role": "user",
-                                            "content": "Continue implementing the next scheduler component with detailed Python code, tests and reasoning. Write at least 3000 words.",
+                                            "content": followup_task(
+                                                counts["complete_requests"]
+                                            ),
                                         },
                                     ]
                                 )
@@ -284,6 +318,8 @@ def main() -> int:
                 **counts,
                 "model": args.model,
                 "long_session_usage": usage_rows,
+                "minimum_long_reply_tokens": 1024,
+                "requested_max_reply_tokens": 2048,
                 "memory_window_before": initial_memory,
                 "memory_window_after": final_memory,
                 "host_swap_mb_start": initial_swap,
