@@ -170,6 +170,23 @@ def select_jobs(jobs: list, manifest: dict) -> list:
     return [job for job in jobs if job.name in targets]
 
 
+def retryable_measurement(receipt: dict, log: str) -> bool:
+    """Retry rejected memory windows without treating engine errors as transient."""
+    if receipt.get("contended") is True:
+        return True
+    if receipt.get("rc") != 2:
+        return False
+    for line in reversed(log.splitlines()):
+        try:
+            row = json.loads(line)
+        except (ValueError, TypeError):
+            continue
+        if isinstance(row, dict) and "memory_window" in row:
+            window = row["memory_window"]
+            return isinstance(window, dict) and bool(window.get("errors"))
+    return False
+
+
 def controller(manifest: dict, path: Path) -> int:
     build = path.parent
     configure(manifest)
@@ -275,7 +292,9 @@ def controller(manifest: dict, path: Path) -> int:
                 failed.discard(job.name)
                 break
             failed.add(job.name)
-            if receipt.get("contended"):
+            if retryable_measurement(
+                receipt, log.read_text(errors="replace") if log.exists() else ""
+            ):
                 continue
             blocked.add(job.engine)
             break

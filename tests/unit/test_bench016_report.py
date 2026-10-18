@@ -34,3 +34,24 @@ def test_receipt_is_rechecked_and_first_valid_attempt_wins(tmp_path, monkeypatch
     assert result["cells"][0]["reps"] == [0]
     assert list(result["rejected"]) == ["engine-L32768-r0-try1"]
     assert "incomplete" in r.markdown(result)
+
+
+def test_memory_rejection_retries_without_accepting_or_blocking_engine():
+    from scripts.research.bench016 import retryable_measurement
+
+    log = "\n".join(
+        [
+            '{"memory_window":{"errors":["pageouts changed during capture"]}}',
+            "gpuq: failed rc=2",
+        ]
+    )
+    assert retryable_measurement({"rc": 2, "contended": False}, log)
+    assert retryable_measurement({"rc": 0, "contended": True}, "")
+    assert not retryable_measurement({"rc": 1, "contended": False}, log)
+    assert not retryable_measurement({"rc": 2, "contended": False}, "")
+    assert not retryable_measurement(
+        {"rc": 2, "contended": False}, '{"memory_window":{"errors":[]}}'
+    )
+    assert not retryable_measurement(
+        {"rc": 2, "contended": False}, '{"memory_window":null}'
+    )
