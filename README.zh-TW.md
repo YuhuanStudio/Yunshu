@@ -342,7 +342,7 @@ agent。對 Claude Code 還會裝上狀態列，即時顯示預填進度、解�
 | 64K | 118.0 | 150.6 | 84.1 | 79.288 / 0.314 / 3.906 |
 | 128K | 75.5 | 116.7 | 94.8 | 200.094 / 0.573 / 6.235 |
 
-TensorFold 在所有深度的 27B 解碼均領先，包括同 checkpoint 比較。雲樞冷 TTFT 較低；TensorFold 在 32K／64K 的暖快取與接續 TTFT 較低，但 128K 未命中快取。llama.cpp 在所有深度的暖快取與接續 TTFT 均較低。Flash-Next 雲樞／共享 MTP llama.cpp 在 32K／64K／128K 解碼為 66.7／60.4、56.7／55.0、24.0／42.3 tok/s（不同量化）。每個深度僅一個 prompt，不代表一般排名。新截圖仍待驗證。
+TensorFold 在所有深度的 27B 解碼均領先，包括同 checkpoint 比較。雲樞冷 TTFT 較低；TensorFold 在 32K／64K 的暖快取與接續 TTFT 較低，但 128K 未命中快取。llama.cpp 在所有深度的暖快取與接續 TTFT 均較低。Flash-Next 雲樞／共享 MTP llama.cpp 在 32K／64K／128K 解碼為 66.7／60.4、56.7／55.0、24.0／42.3 tok/s（不同量化）。每個深度僅一個 prompt，不代表一般排名。主控台截圖取自真實 40K–73K MTP 會話（[Console](docs/CONSOLE.md)）。
 
 [Evidence and limits](docs/BENCHMARKS.md#where-yunshu-stands); [0.1.5 history](docs/reports/RELEASE_015_BENCHMARKS.md).
 

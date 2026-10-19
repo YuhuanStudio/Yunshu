@@ -369,7 +369,7 @@ SearXNG is optional. MCP servers named in a request are connected by the gateway
 | 64K | 118.0 | 150.6 | 84.1 | 79.288 / 0.314 / 3.906 |
 | 128K | 75.5 | 116.7 | 94.8 | 200.094 / 0.573 / 6.235 |
 
-TensorFold leads 27B decode at all depths, including the same-checkpoint comparison. Yunshu has lower cold TTFT; TensorFold has lower warm/follow-up TTFT at 32K/64K but no cache hit at 128K. llama.cpp has lower warm/follow-up TTFT at every depth. Flash-Next Yunshu / shared-MTP llama.cpp decode: 66.7 / 60.4, 56.7 / 55.0, 24.0 / 42.3 tok/s at 32K/64K/128K (different quantizations). One prompt per depth; no general ranking. Fresh screenshots remain pending qualification.
+TensorFold leads 27B decode at all depths, including the same-checkpoint comparison. Yunshu has lower cold TTFT; TensorFold has lower warm/follow-up TTFT at 32K/64K but no cache hit at 128K. llama.cpp has lower warm/follow-up TTFT at every depth. Flash-Next Yunshu / shared-MTP llama.cpp decode: 66.7 / 60.4, 56.7 / 55.0, 24.0 / 42.3 tok/s at 32K/64K/128K (different quantizations). One prompt per depth; no general ranking. Console screenshots were captured during a real 40K–73K MTP session ([Console](docs/CONSOLE.md)).
 
 [Evidence and limits](docs/BENCHMARKS.md#where-yunshu-stands); [0.1.5 history](docs/reports/RELEASE_015_BENCHMARKS.md).
 
