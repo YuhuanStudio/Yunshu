@@ -90,7 +90,7 @@ def test_readme_settings_and_install_extras_exist(path):
 def test_translated_performance_numbers_match_english():
     def numbers(path):
         tables = re.findall(r"(?:^\|.*\n)+", path.read_text(), re.MULTILINE)
-        perf = [t for t in tables if "Splash 1.3.0 decode" in t]
+        perf = [t for t in tables if "TensorFold 1.1.0 decode" in t]
         assert len(perf) == 1, f"{path.name}: expected one performance table"
         return re.findall(r"\d+(?:\.\d+)?", perf[0])
 

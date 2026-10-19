@@ -1040,7 +1040,7 @@
   },
   "prefill_kernels": {
    "module": "python/yunshu_engine/kernels/nax_prefill.py",
-   "what": "NAX prefill matmul and chunked GDN prefill (YUNSHU_PREFILL_MATMUL, YUNSHU_PREFILL_GDN)",
+   "what": "NAX prefill matmul, BQ32 prefill attention and chunked GDN prefill (YUNSHU_PREFILL_MATMUL, YUNSHU_PREFILL_ATTENTION, YUNSHU_PREFILL_GDN)",
    "cells": {
     "mtp": {
      "s": "engaged",
@@ -1048,6 +1048,10 @@
       [
        "python/yunshu_engine/vlm_engine.py",
        "gdn_prefill.install()"
+      ],
+      [
+       "python/yunshu_engine/vlm_engine.py",
+       "attn_prefill.enable()"
       ]
      ]
     },
@@ -1057,6 +1061,10 @@
       [
        "python/yunshu_engine/vlm_engine.py",
        "gdn_prefill.install()"
+      ],
+      [
+       "python/yunshu_engine/vlm_engine.py",
+       "attn_prefill.enable()"
       ]
      ]
     },
@@ -1066,6 +1074,10 @@
       [
        "python/yunshu_engine/round_driver/driver.py",
        "gdn_prefill"
+      ],
+      [
+       "python/yunshu_engine/vlm_engine.py",
+       "attn_prefill.enable()"
       ]
      ]
     },
@@ -1075,6 +1087,10 @@
       [
        "python/yunshu_engine/vlm_engine.py",
        "gdn_prefill.install()"
+      ],
+      [
+       "python/yunshu_engine/vlm_engine.py",
+       "attn_prefill.enable()"
       ]
      ]
     },
@@ -2371,7 +2387,8 @@
   "python/yunshu_engine/kernels/tf_flash_next/hc.py": "TensorFold flash_next v1 kernels used by qwen4_fused_hc (kernels/tf_hc_forward.py)",
   "python/yunshu_engine/kernels/tf_flash_next/threads.py": "TensorFold flash_next v1 kernels used by qwen4_fused_hc (kernels/tf_hc_forward.py)",
   "python/yunshu_engine/kernels/tf_flash_next/inputs.py": "TensorFold flash_next v1 kernels used by qwen4_fused_hc (kernels/tf_hc_forward.py)",
-  "python/yunshu_engine/kernels/tf_flash_next/experts.py": "TensorFold flash_next v1 router/expert kernels used by qwen4_fused_hc (kernels/tf_hc_forward.py)"
+  "python/yunshu_engine/kernels/tf_flash_next/experts.py": "TensorFold flash_next v1 router/expert kernels used by qwen4_fused_hc (kernels/tf_hc_forward.py)",
+  "python/yunshu_engine/kernels/attn_prefill.py": "prefill_kernels"
  },
  "settings": {
   "YUNSHU_MTP": "draft_family_coverage",
@@ -2397,6 +2414,7 @@
   "YUNSHU_KV_QUANT_BITS": "kv_precision",
   "YUNSHU_PREFILL_MATMUL": "prefill_kernels",
   "YUNSHU_PREFILL_GDN": "prefill_kernels",
+  "YUNSHU_PREFILL_ATTENTION": "prefill_kernels",
   "YUNSHU_PREFILL_BUFFER_CACHE_GB": "prefill_kernels",
   "YUNSHU_ROUND_DRIVER": "spec_under_concurrency",
   "YUNSHU_ROUND_PREFILL_CHUNK": "spec_under_concurrency",

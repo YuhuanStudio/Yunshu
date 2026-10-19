@@ -143,6 +143,8 @@ const settingdesc = {
     "VLM runner: GiB of MLX’s freed-buffer cache kept across prefill steps. Unset: 5% of physical RAM, at most 6 GiB, but 0.5 GiB when the resident weights leave little memory headroom (cuts the long-prefill peak of very large models). Keeps long-prefix restore buffers warm across requests; 0 = upstream clear after every chunk. Allocator only; output unchanged.",
   YUNSHU_PREFILL_GDN:
     "Qwen3.5-family VLM runner: GatedDeltaNet core for prefill chunks of 64 or more tokens. `chunked` uses MLX’s `mx.fast.gated_delta_update` (2.7x faster per layer; within bf16 rounding of `step`); `step` keeps mlx-vlm’s per-token kernel. Part of every APC key and SSD namespace.",
+  YUNSHU_PREFILL_ATTENTION:
+    "Qwen3.5-family VLM runner on the measured M5 Max / MLX 0.32.3 pair: attention of prefill chunks of 1024 or more query rows. `tile` runs MLX’s own head-dim-split NAX attention compiled for a 32-row query tile with a bank-conflict-free score exchange (about 15% faster per call; output bit-identical to MLX, so it is not part of any APC key); `stock` keeps `mx.fast.scaled_dot_product_attention`. Prefill only.",
   YUNSHU_VLM_APC_DISK_TIERS:
     "Further APC storage tiers below the SSD directory, comma-separated `PATH[@GiB]` (external SSD, HDD, NAS). Volumes are profiled at startup and ordered by read speed; evicted checkpoints move down instead of being deleted, and a tier serves a hit only when restoring beats re-prefilling. Unmounted tiers are skipped. Lossless; unset: SSD only.",
   YUNSHU_VLM_APC_DISK_ENCODING:

@@ -2044,6 +2044,9 @@ class VLMEngine:
         from .vlm_batch_runner import VLMBatchRunner
 
         nax_prefill.disable()
+        from .kernels import attn_prefill
+
+        attn_prefill.disable()
         from .kernels import lane_linear as lane_sum_policy
 
         lane_sum_policy.configure_sum_policy(False)
@@ -2226,6 +2229,11 @@ class VLMEngine:
                     from .kernels import gdn_prefill
 
                     gdn_prefill.install()
+                if settings.get("YUNSHU_PREFILL_ATTENTION") == "tile":
+                    # Bit-identical to stock MLX attention, so no APC key change.
+                    kernels["attn_prefill"] = (
+                        attn_prefill.arithmetic_id() if attn_prefill.enable() else None
+                    )
                 kernels["invariant"] = install_invariant(
                     self._model.language_model, model=self._model, packed=False
                 )

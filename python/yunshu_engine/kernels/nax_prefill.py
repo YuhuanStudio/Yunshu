@@ -265,10 +265,17 @@ def narrow_eligible(m: int, k: int, n: int, bits: int, group: int) -> bool:
     )
 
 
+def tile_rows(m: int, k: int) -> int:
+    """M tile of the lane QMM. K > 8192 (the down projections) is faster with 64 rows (measured at M=2048 and, before, M>4096;
+    K=17408: 55.1 -> 58.2 TFLOP/s q4, 54.3 -> 56.6 q5 at M=2048); shorter K keeps 128.
+    The tile never changes the K loop or accumulation order, so output bits are identical."""
+    return 64 if k > 8192 else 128
+
+
 def matmul(x: mx.array, weight: mx.array, sbt: mx.array, *, bits: int) -> mx.array:
     m, k = x.shape
     record_dispatch(m, k, sbt.shape[1], bits)
-    bm = 64 if m > 4096 and k > 8192 else 128
+    bm = tile_rows(m, k)
     return cast(
         mx.array, make(mx, x, weight, None, None, bits=bits, bm=bm, bn=64, sbt=sbt)()
     )
