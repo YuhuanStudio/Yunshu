@@ -158,6 +158,30 @@ nice -n 15 npm run build
 Do not add `taskpolicy -b` to unit tests: efficiency-core scheduling can break timing-sensitive checks.
 Load averages remain recorded without filtering; they can still include background work.
 
+The memory contention rule (policy version 2) independently rejects a job when:
+
+- its observed process tree exceeds 64 MB of attributed compressed/swapped memory
+  (`GPUQ_SWAP_MB`, decimal MB);
+- host swap-ins during the job exceed 1 GiB (`GPUQ_HOST_SWAP_MB=1073.741824`);
+- host free + inactive memory falls below 4096 MB (`GPUQ_MEMORY_FLOOR_MB`).
+
+`footprint --swapped -f bytes` supplies each process's attributed dirty swap/compression;
+`proc_pid_rusage` records its start identity and diagnostic page-ins. File-backed mmap
+page-ins during model loading are expected and do not trigger the local swap budget.
+Per-process peaks remain counted after children exit. This is conservative: compressed
+pages need not be on disk, and peaks may occur at different times. Point sampling can
+miss children or pressure that exist only between polls. Unreadable live processes,
+missing memory evidence, and malformed output latch contention. Very short jobs with
+no observed process memory fail closed; this does not turn correctness jobs into timing jobs.
+
+Job JSON records `host_swap_mb` (also the legacy `swap_mb`), `job_swap_mb`,
+`available_min_mb`, `memory_processes` and `memory_policy_version`. The host backstop
+separates ordinary old-app swap-ins from large system pressure; it does not treat the
+existing swap stock as current pressure. `gpuq_swap_review.py` reads historical JSON
+without changing or resubmitting it. Records missing local swap/minimum-memory evidence
+remain `UNVERIFIABLE`, even when the old host-only rejection clears. Contention clearance
+alone does not establish successful completion or validate a benchmark's output.
+
 `GPUQ_CONTENTION_FILE` names the atomic JSON flag file. Harnesses can use
 `scripts/dev/gpuq_contention.py:was_contended()` for the latched job flag, or
 `was_contended(t0, t1)` for one wall-clock attempt. Missing/bad files or flags with a last sample older than ten seconds fail closed when the variable is set;

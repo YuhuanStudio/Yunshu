@@ -18,6 +18,8 @@ import subprocess
 import time
 from pathlib import Path
 
+from gpuq_swap import host_available_bytes, memory_verdict, process_memory
+
 MAX_POLL_GAP_S = 5.0
 STALE_FLAG_S = 10.0
 
@@ -32,6 +34,8 @@ DEFAULTS = dict(
     sample_s=30.0,
     foreign_model_cpu_pct=15.0,
     swap_mb=64.0,
+    host_swap_mb=1073.741824,  # 1 GiB, decimal MB like the existing job JSON
+    memory_floor_mb=4096.0,  # 4 GB free+inactive; independent of old swap stock
 )
 ENV = dict(
     threshold_pct="GPUQ_CPU_THRESHOLD",
@@ -40,6 +44,8 @@ ENV = dict(
     sample_s="GPUQ_CPU_SAMPLE_S",
     foreign_model_cpu_pct="GPUQ_FOREIGN_MODEL_CPU",
     swap_mb="GPUQ_SWAP_MB",
+    host_swap_mb="GPUQ_HOST_SWAP_MB",
+    memory_floor_mb="GPUQ_MEMORY_FLOOR_MB",
 )
 
 # Command lines of MLX model runtimes started outside gpuq. GPUQ_FOREIGN_MODEL_PATTERNS
@@ -122,13 +128,10 @@ def requires_quiet(job):
 
 
 def swapout_bytes():
-    """Lifetime swap-IN bytes from vm_stat, or None when it cannot be read.
+    """Lifetime HOST swap-IN bytes (legacy name), or None when unreadable.
 
-    A timing job that runs while the machine swaps measures the swap, not the engine
-    (a 64K Flash-Next run read 20 tok/s against a clean 52), so swap growth during a
-    job latches it as contended just like foreign CPU load. Swap-ins are what stall
-    the job: loading a 57-82 GB checkpoint makes macOS page idle apps OUT by 1-2 GB,
-    which costs the job nothing and wrongly rejected clean runs when it was counted.
+    Old swapped-out apps may page in without job pressure. This counter is only
+    the large host backstop; job footprint and free+inactive are independent gates.
     """
     try:
         out = subprocess.run(
@@ -302,6 +305,45 @@ class QuietGate:
         return True
 
 
+def _process_gone(pid):
+    """True when pid has exited or is a zombie (its memory is already released)."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return True
+    except PermissionError:
+        return False
+    try:
+        stat = subprocess.run(
+            ["ps", "-o", "stat=", "-p", str(pid)],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        ).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return not stat or stat.startswith("Z")
+
+
+def _read_memory(pid, retry_s=0.2):
+    """One process's memory row; None if it exited meanwhile; False if unreadable.
+
+    Short-lived children (git, probes) often exit between the ps snapshot and the
+    footprint read; 4 of the first 19 jobs under policy 2 latched job_swap_unreadable
+    that way. A still-live process that stays unreadable after one retry is not
+    evidence of zero swap and still fails closed.
+    """
+    for attempt in range(2):
+        try:
+            return process_memory(pid)
+        except (OSError, ValueError, subprocess.SubprocessError):
+            if _process_gone(pid):
+                return None
+            if attempt == 0:
+                time.sleep(retry_s)
+    return False
+
+
 class ContentionMonitor:
     def __init__(self, job, path, logs, write, read):
         self.job, self.path, self.write, self.read = job, path, write, read
@@ -314,6 +356,7 @@ class ContentionMonitor:
         self.count = job.get("foreign_cpu_sample_count", 0)
         self.total = job.get("foreign_cpu_sum_pct", 0.0)
         self.maximum = job.get("foreign_cpu_max_pct", 0.0)
+        self.memory_processes = dict(job.get("memory_processes", {}))
         self.last_poll = None
         self.last_saved_sample = None
         if job.get("quiet_timeout"):
@@ -331,7 +374,7 @@ class ContentionMonitor:
             # a verified quiet start with ps's historical first-sample estimate.
             row.update(self.job["cpu_admission_sample"])
         row["phase"] = phase
-        self._check_swap(phase)
+        self._check_swap(phase, row["since"], now)
         cpu = row["foreign_cpu_pct"]
         if cpu is not None:
             self.count += 1
@@ -379,6 +422,11 @@ class ContentionMonitor:
             foreign_model_processes=list(self.models.values()),
             swapouts_start=self.job.get("swapouts_start"),
             swap_mb=self.job.get("swap_mb", 0.0),
+            host_swap_mb=self.job.get("swap_mb", 0.0),
+            job_swap_mb=self.job.get("job_swap_mb"),
+            available_min_mb=self.job.get("available_min_mb"),
+            memory_processes=self.memory_processes,
+            memory_policy_version=2,
         )
         self.job.update(fields)
         data = self.read(self.path)
@@ -395,23 +443,59 @@ class ContentionMonitor:
         )
         self.last_poll = now
 
-    def _check_swap(self, phase):
+    def _check_swap(self, phase, since, now):
         cur = swapout_bytes()
-        reasons = self.job.setdefault("contention_reasons", [])
-        if cur is None:
-            if "swap_unreadable" not in reasons:
-                reasons.append("swap_unreadable")
+        available = host_available_bytes()
+        if cur is not None:
+            if self.job.get("swapouts_start") is None:
+                self.job["swapouts_start"] = cur
+            self.job["swap_mb"] = round(
+                max(
+                    self.job.get("swap_mb", 0.0),
+                    (cur - self.job["swapouts_start"]) / 1e6,
+                ),
+                6,
+            )
+        if available is not None:
+            self.job["available_min_mb"] = min(
+                self.job.get("available_min_mb", available / 1e6), available / 1e6
+            )
+        readable = True
+        for pid in self.sampler.owned:
+            row = _read_memory(pid)
+            if row is None:  # exited (or a zombie) between ps and footprint
+                continue
+            if row is False:
+                readable = False
+                continue
+            key = f"{pid}:{row['start']}"
+            old = self.memory_processes.get(key, {})
+            row["swapped_peak_bytes"] = max(
+                old.get("swapped_peak_bytes", 0), row["swapped_bytes"]
+            )
+            self.memory_processes[key] = row
+        if not self.sampler.owned and phase != "start":
+            readable = False
+        if phase != "start" and not self.memory_processes:
+            readable = False
+        # Sum per-process peaks, including exited children: conservative for
+        # non-overlapping lifetimes; never subtract a child's swap when it exits.
+        own_mb = (
+            sum(r["swapped_peak_bytes"] for r in self.memory_processes.values()) / 1e6
+        )
+        self.job["job_swap_mb"] = round(own_mb, 6) if readable else None
+        failures = memory_verdict(
+            self.job.get("swap_mb") if cur is not None else None,
+            self.job["job_swap_mb"],
+            self.job.get("available_min_mb") if available is not None else None,
+            self.cfg,
+        )
+        for reason in failures:
             self.job["contended"] = True
-            return
-        if self.job.get("swapouts_start") is None or phase == "start":
-            self.job.setdefault("swapouts_start", cur)
-            return
-        mb = max(0.0, (cur - self.job["swapouts_start"]) / 1e6)
-        self.job["swap_mb"] = round(mb, 1)
-        if mb > self.cfg["swap_mb"]:
-            self.job["contended"] = True
-            if "swap" not in reasons:
-                reasons.append("swap")
+            reasons = self.job.setdefault("contention_reasons", [])
+            if reason not in reasons:
+                reasons.append(reason)
+            self.events.append([since, now])
 
     def poll(self, now):
         if self.last_poll is None or now - self.last_poll >= min(
@@ -426,7 +510,10 @@ class ContentionMonitor:
         return (
             f"gpuq: CPU {state}; foreign CPU max={self.maximum:.1f}% "
             f"mean={mean_text}% threshold={self.cfg['threshold_pct']:.1f}% "
-            f"samples={self.count} swap={self.job.get('swap_mb', 0.0):g}MB reasons={self.job.get('contention_reasons', [])}"
+            f"samples={self.count} host_swap={self.job.get('swap_mb', 0.0):g}MB "
+            f"job_swap={self.job.get('job_swap_mb')}MB "
+            f"available_min={self.job.get('available_min_mb')}MB "
+            f"reasons={self.job.get('contention_reasons', [])}"
         )
 
 
