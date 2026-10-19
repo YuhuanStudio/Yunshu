@@ -800,6 +800,10 @@ class VLMBatchRunner:
                 f"output queue exceeded {OUT_LIMIT} undelivered tokens; "
                 "request cancelled"
             )
+        # The vocabulary context is only an identity guard. Once a request ends,
+        # retaining its Job also retains grammar/media/cache-plan state at idle.
+        if job.terminal and self._vocab_owner is job:
+            self._vocab_owner = None
         job.out.put(item)
         if self.gc_guard is not None:
             self.gc_guard.first_token(id(job))
