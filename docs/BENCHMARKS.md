@@ -47,3 +47,9 @@ and DFlash2 configurations remain separate. The GGUF comparison is cross-quantiz
 
 
 [Full ranges, versions, memory and failure coverage](reports/RELEASE_016_BENCHMARKS_2026-10-19.md). Representative fresh console screenshots remain pending qualification.
+
+TensorFold 1.1.0's same-round suffix-copy graft contributes to its decode lead:
+a clean three-repetition 512-token diagnostic measured copy48/copy0 medians of
+234.37/112.12, 141.83/95.02 and 85.68/69.37 tok/s at 32K/64K/128K,
+with identical paired raw output. This diagnostic does not replace the 2048-token
+standings; see the dated report for turn/cache limits.

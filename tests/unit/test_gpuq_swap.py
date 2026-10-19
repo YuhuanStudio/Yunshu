@@ -146,7 +146,8 @@ def test_tree_peak_retained_after_child_exit_and_read_errors(tmp_path, monkeypat
         raise PermissionError("denied")
 
     monkeypatch.setattr(h, "process_memory", denied)
-    monkeypatch.setattr(h.os, "kill", lambda *a: None)  # still alive
+    monkeypatch.setattr(h, "_process_gone", lambda pid: False)  # still alive
+    monkeypatch.setattr(h.time, "sleep", lambda s: None)
     m.record("poll", 104)
     assert (
         job["job_swap_mb"] is None
@@ -172,3 +173,75 @@ def test_review_preserves_unreadable_interval():
 
 def test_memory_budget_boundaries():
     assert memory_verdict(h.DEFAULTS["host_swap_mb"], 64, 4096, h.DEFAULTS) == []
+
+
+def _monitor(tmp_path, monkeypatch):
+    job = dict(id="exit", pid=10, env={})
+    path = tmp_path / "job.json"
+    path.write_text(json.dumps(job))
+    m = h.ContentionMonitor(
+        job,
+        path,
+        tmp_path,
+        lambda p, d: p.write_text(json.dumps(d)),
+        lambda p: json.loads(p.read_text()),
+    )
+    monkeypatch.setattr(h, "host_available_bytes", lambda: 100_000_000_000)
+    monkeypatch.setattr(h, "swapout_bytes", lambda: 0)
+    monkeypatch.setattr(h.time, "sleep", lambda s: None)
+    monkeypatch.setattr(
+        m.sampler,
+        "sample",
+        lambda *a, **kw: dict(time=kw["now"], since=kw["now"] - 2, foreign_cpu_pct=0),
+    )
+    return job, m
+
+
+def _row(pid):
+    return dict(pid=pid, start=pid, pageins=0, swapped_bytes=0, regions=1)
+
+
+def test_child_exiting_during_read_is_not_unreadable(tmp_path, monkeypatch):
+    # 1019 deploy27b-heap-27b-1019h: a short-lived child exited (zombie) between the ps
+    # snapshot and footprint; policy 2 latched job_swap_unreadable with 0.0 MB swapped.
+    job, m = _monitor(tmp_path, monkeypatch)
+    m.sampler.owned = {10, 11}
+
+    def read(pid):
+        if pid == 11:
+            raise ValueError("incomplete footprint for 11")
+        return _row(pid)
+
+    monkeypatch.setattr(h, "process_memory", read)
+    monkeypatch.setattr(h, "_process_gone", lambda pid: pid == 11)
+    m.record("start", 100)
+    m.record("poll", 140)
+    assert job["job_swap_mb"] == 0 and not job.get("contention_reasons")
+
+
+def test_transient_read_failure_retries(tmp_path, monkeypatch):
+    job, m = _monitor(tmp_path, monkeypatch)
+    m.sampler.owned = {10}
+    calls = []
+
+    def flaky(pid):
+        calls.append(pid)
+        if len(calls) == 1:
+            raise h.subprocess.TimeoutExpired("footprint", 5)
+        return _row(pid)
+
+    monkeypatch.setattr(h, "process_memory", flaky)
+    monkeypatch.setattr(h, "_process_gone", lambda pid: False)
+    m.record("start", 100)
+    assert len(calls) == 2 and job["job_swap_mb"] == 0
+    assert not job.get("contention_reasons")
+
+
+def test_zombie_counts_as_gone(monkeypatch):
+    monkeypatch.setattr(h.os, "kill", lambda *a: None)
+    monkeypatch.setattr(
+        h.subprocess,
+        "run",
+        lambda *a, **kw: h.subprocess.CompletedProcess(a, 0, stdout="Z+\n"),
+    )
+    assert h._process_gone(4242)

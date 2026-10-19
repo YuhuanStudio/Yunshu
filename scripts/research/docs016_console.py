@@ -6,6 +6,7 @@ import argparse
 import json
 import os
 import re
+import statistics
 import subprocess
 import sys
 import threading
@@ -74,10 +75,9 @@ def validate_long_usage(
     errors = []
     if usage.get("prompt_tokens", 0) < 32768:
         errors.append("context below 32K")
-    # A real agent turn can end naturally before max_tokens. Require a long,
-    # terminal reply; exact token budgets remain mandatory in benchmark cells.
-    if usage.get("completion_tokens", 0) < 1024:
-        errors.append("long reply too short")
+    # Individual agent turns may be short; length is qualified over the session.
+    if usage.get("completion_tokens", 0) <= 0:
+        errors.append("empty reply")
     if finish_reason not in {"stop", "length"}:
         errors.append("long reply missing terminal finish reason")
     if (
@@ -85,6 +85,22 @@ def validate_long_usage(
         and usage.get("prompt_tokens_details", {}).get("cached_tokens", 0) < 32768
     ):
         errors.append("32K cached prefix not engaged")
+    return errors
+
+
+def validate_long_session(rows: list[dict]) -> list[str]:
+    """Require a deep cached conversation, three follow-ups and long median output."""
+    errors = []
+    # The first two requests prime/replay the prefix; subsequent rows are follow-ups.
+    if len(rows) < 5:
+        errors.append("fewer than three follow-up turns")
+    if (
+        not rows
+        or statistics.median(r.get("completion_tokens", 0) for r in rows) < 1024
+    ):
+        errors.append("median reply below 1024 tokens")
+    for index, row in enumerate(rows):
+        errors.extend(validate_long_usage(row, index > 0, row.get("finish_reason")))
     return errors
 
 
@@ -257,7 +273,9 @@ def main() -> int:
                                     ]
                                 )
                         counts["complete_requests"] += 1
-                        if counts["complete_requests"] >= 3:
+                        if counts["complete_requests"] >= (
+                            4 if args.context_file else 3
+                        ):
                             primed.set()
                     except Exception as exc:
                         print("load failed:", str(exc), flush=True)
@@ -297,6 +315,10 @@ def main() -> int:
                     env=env,
                     check=True,
                 )
+            stop.set()
+            worker.join(timeout=960)
+            if worker.is_alive():
+                raise RuntimeError("load worker did not finish")
             final_memory = memory_snapshot()
             final_swap = final_memory["swap_mb"]
             errors = validate(expected, inventory(), counts["complete_requests"])
@@ -310,6 +332,8 @@ def main() -> int:
                 errors.append("MTP engagement missing from engine log")
             if counts["failures"]:
                 errors.append(f"real load failures: {counts['failures']}")
+            if args.context_file:
+                errors.extend(validate_long_session(usage_rows))
             history = get(f"http://127.0.0.1:{cp}/v1/yunshu/requests/history?limit=100")
             result = {
                 "complete": True,
@@ -318,7 +342,8 @@ def main() -> int:
                 **counts,
                 "model": args.model,
                 "long_session_usage": usage_rows,
-                "minimum_long_reply_tokens": 1024,
+                "minimum_median_reply_tokens": 1024,
+                "minimum_followup_turns": 3,
                 "requested_max_reply_tokens": 2048,
                 "memory_window_before": initial_memory,
                 "memory_window_after": final_memory,

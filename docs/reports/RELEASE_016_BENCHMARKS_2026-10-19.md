@@ -40,6 +40,16 @@ TTFT at 32K/64K but reports zero cached tokens at 128K. llama.cpp has lower warm
 follow-up TTFT than Yunshu at every depth. Flash-Next 128K decode is a Yunshu weakness.
 Splash/oMLX and other unqualified engines are not counted as wins or losses.
 
+A separate three-repetition, interleaved TensorFold 1.1.0 diagnostic isolates its
+same-round suffix-copy graft. With copy cap 48 versus 0, median cold decode at
+32K/64K/128K was **234.37/112.12, 141.83/95.02, 85.68/69.37 tok/s**.
+All paired raw outputs matched; the job was uncontended. These are 512-token
+same-engine diagnostics, not replacements for the 2048-token comparison above.
+The graft increases accepted tokens per round and helps explain TensorFold's
+lead; it does not establish an equivalent gain in Yunshu. The 32K follow-up
+showed no gain, and 128K still reported zero cached tokens.
+Implementation: [TensorFold 1.1.0](https://github.com/ashhart/TensorFold/tree/76aafcf274e60a5e31a59ce145b2f71f7b366e9d).
+
 ## 27B — TensorFold 1.1.0 and llama.cpp b11721
 
 Yunshu arms use DFlash2; native TensorFold explicitly engages DFlash2. llama.cpp MTP

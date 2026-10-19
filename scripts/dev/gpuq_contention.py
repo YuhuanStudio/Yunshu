@@ -305,6 +305,45 @@ class QuietGate:
         return True
 
 
+def _process_gone(pid):
+    """True when pid has exited or is a zombie (its memory is already released)."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return True
+    except PermissionError:
+        return False
+    try:
+        stat = subprocess.run(
+            ["ps", "-o", "stat=", "-p", str(pid)],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        ).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return not stat or stat.startswith("Z")
+
+
+def _read_memory(pid, retry_s=0.2):
+    """One process's memory row; None if it exited meanwhile; False if unreadable.
+
+    Short-lived children (git, probes) often exit between the ps snapshot and the
+    footprint read; 4 of the first 19 jobs under policy 2 latched job_swap_unreadable
+    that way. A still-live process that stays unreadable after one retry is not
+    evidence of zero swap and still fails closed.
+    """
+    for attempt in range(2):
+        try:
+            return process_memory(pid)
+        except (OSError, ValueError, subprocess.SubprocessError):
+            if _process_gone(pid):
+                return None
+            if attempt == 0:
+                time.sleep(retry_s)
+    return False
+
+
 class ContentionMonitor:
     def __init__(self, job, path, logs, write, read):
         self.job, self.path, self.write, self.read = job, path, write, read
@@ -423,24 +462,18 @@ class ContentionMonitor:
             )
         readable = True
         for pid in self.sampler.owned:
-            try:
-                row = process_memory(pid)
-                key = f"{pid}:{row['start']}"
-                old = self.memory_processes.get(key, {})
-                row["swapped_peak_bytes"] = max(
-                    old.get("swapped_peak_bytes", 0), row["swapped_bytes"]
-                )
-                self.memory_processes[key] = row
-            except (OSError, ValueError, subprocess.SubprocessError):
-                # Exited children are normal. A still-live but unreadable process
-                # is not evidence of zero swap. No blanket ESRCH suppression.
-                try:
-                    os.kill(pid, 0)
-                except ProcessLookupError:
-                    continue
-                except PermissionError:
-                    pass
+            row = _read_memory(pid)
+            if row is None:  # exited (or a zombie) between ps and footprint
+                continue
+            if row is False:
                 readable = False
+                continue
+            key = f"{pid}:{row['start']}"
+            old = self.memory_processes.get(key, {})
+            row["swapped_peak_bytes"] = max(
+                old.get("swapped_peak_bytes", 0), row["swapped_bytes"]
+            )
+            self.memory_processes[key] = row
         if not self.sampler.owned and phase != "start":
             readable = False
         if phase != "start" and not self.memory_processes:

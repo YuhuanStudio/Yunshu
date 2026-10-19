@@ -19,7 +19,7 @@ def test_long_session_requires_real_depth_cache_and_complete_replies():
         "prompt_tokens_details": {"cached_tokens": 32768},
     }
     assert validate_long_usage(usage, True, "length") == []
-    assert validate_long_usage({**usage, "completion_tokens": 100}, True, "stop")
+    assert validate_long_usage({**usage, "completion_tokens": 100}, True, "stop") == []
     assert validate_long_usage({**usage, "prompt_tokens": 1024}, False, "length")
     assert validate_long_usage({**usage, "prompt_tokens_details": {}}, True, "length")
 
@@ -73,4 +73,22 @@ def test_natural_long_eos_is_complete_but_unterminated_output_fails():
     assert validate_long_usage(usage, True, "stop") == []
     assert validate_long_usage(usage, True)
     assert validate_long_usage(usage, True, "error")
-    assert validate_long_usage({**usage, "completion_tokens": 1023}, True, "stop")
+    assert validate_long_usage({**usage, "completion_tokens": 1023}, True, "stop") == []
+
+
+def test_capture_session_median_allows_short_turn_without_hiding_failures():
+    from scripts.research.docs016_console import validate_long_session
+
+    row = {
+        "prompt_tokens": 40970,
+        "completion_tokens": 2048,
+        "prompt_tokens_details": {"cached_tokens": 40960},
+        "finish_reason": "stop",
+    }
+    rows = [dict(row) for _ in range(4)] + [{**row, "completion_tokens": 100}]
+    assert validate_long_session(rows) == []
+    assert validate_long_session(rows[:4])
+    assert validate_long_session([{**row, "completion_tokens": 100}] * 4)
+    assert validate_long_session(rows + [{**row, "finish_reason": "error"}])
+    assert validate_long_session(rows + [{**row, "completion_tokens": 0}])
+    assert validate_long_session(rows + [{**row, "prompt_tokens_details": {}}])
