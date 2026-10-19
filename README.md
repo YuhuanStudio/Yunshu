@@ -361,17 +361,17 @@ SearXNG is optional. MCP servers named in a request are connected by the gateway
 
 ## Performance
 
-Release 0.1.5 · M5 Max 128 GB · Qwen3.8-27B · greedy · 2026-10-13–14.
+2026-10-19 development snapshot · M5 Max 128 GB · Qwen3.8-27B · greedy · three interleaved qualifying reps.
 
-| Context | Yunshu oQ4e decode tok/s | Splash 1.3.0 decode tok/s | Yunshu cold / warm / follow-up TTFT s |
-|---|---|---|---|
-| 32K | 134.400 | 116.200 | 34.590 / 0.182 / 2.958 |
-| 64K | 117.550 | 92.300 | 79.195 / 0.329 / 4.022 |
-| 128K | 77.950 | 89.900 | 199.440 / 0.593 / 6.452 |
+| Context | Yunshu oQ4e decode tok/s | TensorFold 1.1.0 decode tok/s | Yunshu TF4 same-checkpoint decode tok/s | Yunshu cold / warm / follow-up TTFT s |
+|---|---|---|---|---|
+| 32K | 135.2 | 200.4 | 142.2 | 34.640 / 0.178 / 2.961 |
+| 64K | 118.0 | 150.6 | 84.1 | 79.288 / 0.314 / 3.906 |
+| 128K | 75.5 | 116.7 | 94.8 | 200.094 / 0.573 / 6.235 |
 
-Where Yunshu stands: the 27B snapshot shows an observed 15.66% / 27.35% decode advantage at 32K / 64K over the best competitor, using different weights. At 128K oQ4e trails Splash and TensorFold. Cold TTFT trails Splash; warm and immediate follow-up TTFT trail llama.cpp. Flash-Next decode and follow-up also trail llama.cpp. APC works at 128K in both Yunshu reps where TensorFold reports no hit. Spec-on/off identity is scoped to the recorded checks.
+TensorFold leads 27B decode at all depths, including the same-checkpoint comparison. Yunshu has lower cold TTFT; TensorFold has lower warm/follow-up TTFT at 32K/64K but no cache hit at 128K. llama.cpp has lower warm/follow-up TTFT at every depth. Flash-Next Yunshu / shared-MTP llama.cpp decode: 66.7 / 60.4, 56.7 / 55.0, 24.0 / 42.3 tok/s at 32K/64K/128K (different quantizations). One prompt per depth; no general ranking. Fresh screenshots remain pending qualification.
 
-[Evidence and limits](docs/BENCHMARKS.md#where-yunshu-stands): Yunshu n=2; reused competitors n=1; one long prompt per depth. These are observations, not a general ranking. Main is in the 0.1.6 development cycle.
+[Evidence and limits](docs/BENCHMARKS.md#where-yunshu-stands); [0.1.5 history](docs/reports/RELEASE_015_BENCHMARKS.md).
 
 ## Models
 
