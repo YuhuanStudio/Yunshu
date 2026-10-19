@@ -3,7 +3,7 @@ title: 效能實測
 description: 2026-10-19 長上下文實測與限制。
 ---
 
-以下保留英文證據與精確數字。TensorFold 在三個深度的 27B 解碼均領先；雲樞冷 TTFT 較低，128K 快取可重用。不同量化不代表相同品質；未合格引擎不計勝負，新截圖仍待驗證。
+以下保留英文證據與精確數字。TensorFold 在三個深度的 27B 解碼均領先；雲樞冷 TTFT 較低，128K 快取可重用。不同量化不代表相同品質；未合格引擎不計勝負，新截圖已通過真實長會話驗證，較慢的畫面也完整保留。
 
 # Benchmarks — 2026-10-19
 
@@ -46,6 +46,16 @@ comparison. Yunshu has lower cold TTFT; native TensorFold has lower warm/follow-
 TTFT at 32K/64K but reports zero cached tokens at 128K. llama.cpp has lower warm and
 follow-up TTFT than Yunshu at every depth. Flash-Next 128K decode is a Yunshu weakness.
 Splash/oMLX and other unqualified engines are not counted as wins or losses.
+
+A separate three-repetition, interleaved TensorFold 1.1.0 diagnostic isolates its
+same-round suffix-copy graft. With copy cap 48 versus 0, median cold decode at
+32K/64K/128K was **234.37/112.12, 141.83/95.02, 85.68/69.37 tok/s**.
+All paired raw outputs matched; the job was uncontended. These are 512-token
+same-engine diagnostics, not replacements for the 2048-token comparison above.
+The graft increases accepted tokens per round and helps explain TensorFold's
+lead; it does not establish an equivalent gain in Yunshu. The 32K follow-up
+showed no gain, and 128K still reported zero cached tokens.
+Implementation: [TensorFold 1.1.0](https://github.com/ashhart/TensorFold/tree/76aafcf274e60a5e31a59ce145b2f71f7b366e9d).
 
 ## 27B — TensorFold 1.1.0 and llama.cpp b11721
 
@@ -192,6 +202,21 @@ The private evidence ledger retains all rejected attempts and log digests. Repro
 qualification with `python -m scripts.research.bench016_report --manifest <manifest> --output <report>`.
 No new 1K/8K ranking is inferred from the historical secondary corpus.
 
-Representative console screenshots remain pending: captures failed the long-reply,
-32K cached-prefix or contention gates. No failed capture is published as fresh evidence;
-existing images remain historical UI illustrations and are not the source of these tables.
+The 78 console screenshots were recaptured on 2026-10-19 during one real
+Qwen3.8-27B oQ4e MTP agent implementation session, growing from 40,971 to 72,603
+prompt tokens. All three locales, light/dark and mobile images were visually reviewed.
+The session completed 21 replies (median 1,611 tokens), with at least 40,970 cached
+tokens after priming and no request failures. gpuq recorded rc0, no contention,
+job swap 0 MB and host swap-ins 6.619136 MB. Host swap used stayed at 7,559.12 MB
+and pageouts stayed at 119,913: sticky host swap was present, with no growth.
+
+The live numbers are unedited. Desktop overview frames range from 19.4 to 211.4
+tok/s; late-session frames around 69K–73K context show about 19–20 tok/s.
+That slowdown remains visible. Locales were captured sequentially at different
+session depths, so these frames cannot compare locale performance or replace the
+fixed-corpus benchmark tables. The playground demonstrations add a few short UI
+requests while the long session continues; they are not the primary workload.
+Admin-only pages show their actual unauthenticated permission notices.
+The capture receipt records usage, memory checks and every image SHA256 in
+[CONSOLE_CAPTURE_2026-10-19.json](https://github.com/YuhuanStudio/Yunshu/blob/main/docs/reports/CONSOLE_CAPTURE_2026-10-19.json).
+Earlier failed attempts remain excluded.

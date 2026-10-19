@@ -46,7 +46,7 @@ Yunshu arms use DFlash2; native TensorFold explicitly engages DFlash2. llama.cpp
 and DFlash2 configurations remain separate. The GGUF comparison is cross-quantization.
 
 
-[Full ranges, versions, memory and failure coverage](reports/RELEASE_016_BENCHMARKS_2026-10-19.md). Representative fresh console screenshots remain pending qualification.
+[Full ranges, versions, memory and failure coverage](reports/RELEASE_016_BENCHMARKS_2026-10-19.md). All 78 console screenshots now show the qualified 40K–73K MTP session (21 replies, median 1,611 tokens); real late-session rates around 19–20 tok/s remain visible. See the dated report for capture provenance and limits.
 
 TensorFold 1.1.0's same-round suffix-copy graft contributes to its decode lead:
 a clean three-repetition 512-token diagnostic measured copy48/copy0 medians of

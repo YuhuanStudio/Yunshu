@@ -195,6 +195,21 @@ The private evidence ledger retains all rejected attempts and log digests. Repro
 qualification with `python -m scripts.research.bench016_report --manifest <manifest> --output <report>`.
 No new 1K/8K ranking is inferred from the historical secondary corpus.
 
-Representative console screenshots remain pending: captures failed the long-reply,
-32K cached-prefix or contention gates. No failed capture is published as fresh evidence;
-existing images remain historical UI illustrations and are not the source of these tables.
+The 78 console screenshots were recaptured on 2026-10-19 during one real
+Qwen3.8-27B oQ4e MTP agent implementation session, growing from 40,971 to 72,603
+prompt tokens. All three locales, light/dark and mobile images were visually reviewed.
+The session completed 21 replies (median 1,611 tokens), with at least 40,970 cached
+tokens after priming and no request failures. gpuq recorded rc0, no contention,
+job swap 0 MB and host swap-ins 6.619136 MB. Host swap used stayed at 7,559.12 MB
+and pageouts stayed at 119,913: sticky host swap was present, with no growth.
+
+The live numbers are unedited. Desktop overview frames range from 19.4 to 211.4
+tok/s; late-session frames around 69K–73K context show about 19–20 tok/s.
+That slowdown remains visible. Locales were captured sequentially at different
+session depths, so these frames cannot compare locale performance or replace the
+fixed-corpus benchmark tables. The playground demonstrations add a few short UI
+requests while the long session continues; they are not the primary workload.
+Admin-only pages show their actual unauthenticated permission notices.
+The capture receipt records usage, memory checks and every image SHA256 in
+[CONSOLE_CAPTURE_2026-10-19.json](https://github.com/YuhuanStudio/Yunshu/blob/main/docs/reports/CONSOLE_CAPTURE_2026-10-19.json).
+Earlier failed attempts remain excluded.

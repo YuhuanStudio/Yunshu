@@ -22,7 +22,7 @@ def test_console_benchmark_tables_preserve_public_evidence_rows():
             "122.724 GiB",
             "concatenate shapes",
             "no speed ranking",
-            "screenshots remain pending",
+            "All three locales, light/dark and mobile images were visually reviewed.",
         ):
             assert status in page
     history = (ROOT / "docs/reports/RELEASE_015_BENCHMARKS.md").read_text()
@@ -46,6 +46,37 @@ def test_release_comparison_preserves_weight_and_sample_limits():
         "Different weights",
         "zero cached tokens at 128K",
         "24.0 / 42.3",
-        "screenshots remain pending",
+        "All 78 console screenshots now show the qualified",
     ):
         assert required in text
+
+
+def test_published_capture_receipt_matches_every_real_image():
+    import hashlib
+    import json
+    import statistics
+
+    from scripts.research.docs016_console import validate_long_session
+
+    receipt = json.loads(
+        (ROOT / "docs/reports/CONSOLE_CAPTURE_2026-10-19.json").read_text()
+    )
+    assert receipt["complete"] and receipt["pass"]
+    assert receipt["gpuq"]["state"] == "done" and receipt["gpuq"]["rc"] == 0
+    assert receipt["gpuq"]["contended"] is False
+    assert receipt["spec_mode"] == "mtp" and receipt["failures"] == 0
+    rows = receipt["long_session_usage"]
+    assert validate_long_session(rows) == []
+    assert receipt["median_reply_tokens"] == statistics.median(
+        row["completion_tokens"] for row in rows
+    )
+    assert receipt["visual_review_images"] == len(receipt["images"]) == 78
+    expected = {
+        str(p.relative_to(ROOT))
+        for p in (ROOT / "docs/images/console").glob("*/*.webp")
+    }
+    assert {image["path"] for image in receipt["images"]} == expected
+    for image in receipt["images"]:
+        raw = (ROOT / image["path"]).read_bytes()
+        assert hashlib.sha256(raw).hexdigest() == image["sha256"]
+        assert len(raw) == image["size"] <= 300_000
