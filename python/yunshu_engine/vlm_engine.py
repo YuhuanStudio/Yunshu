@@ -2387,7 +2387,7 @@ class VLMEngine:
                     invariant=bool(kernels.get("invariant")),
                     lane_projections=bool(kernels.get("lane_linear")),
                 )
-                if kernels["dflash_copy"] and kernels["copy_rows"] == 16:
+                if kernels["dflash_copy"] and kernels["copy_rows"] in (16, 32):
                     from . import dflash_fast
 
                     if dflash_fast.supported(lm, drafter):

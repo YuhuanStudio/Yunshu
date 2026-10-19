@@ -155,3 +155,25 @@ def verify_graft(lm, cache, bonus, model_drafts, copied, token_dtype):
             tv.tree_abort(cache, result)
 
     return SelectedPath(), drafted, len(path)
+
+
+def longest_verified_path(tokens, parents, targets):
+    """Duplicate shared-prefix leaves must not hide a longer verified branch."""
+    paths = [[0]]
+    for row in range(1, len(tokens)):
+        parent = parents[row]
+        if tokens[row] == targets[parent]:
+            prefix = next((p for p in paths if p[-1] == parent), None)
+            if prefix is not None:
+                paths.append([*prefix, row])
+    return max(paths, key=len)
+
+
+def plan_tree_graft(proposal, model_nodes, budget):
+    """A short alternative branch can win even inside the model node budget.
+
+    Model node count bounds shared depth; it is not the agreed prefix length.
+    Offer that prefix plus a bounded tail probe, never require copy > node count.
+    """
+    width = budget.choose(len(proposal))
+    return proposal[: model_nodes + width] if width else []

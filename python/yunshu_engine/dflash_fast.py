@@ -523,8 +523,9 @@ def rounds(
     from . import dflash_tree as dt
     from . import mtp_lane
     from .copy_drafter import CopyDrafter
+    from .copy_graft import GraftBudget, longest_verified_path, plan_tree_graft
     from .dflash_context import context_window
-    from .dflash_plan import FastShape, remap_landed, reorder, search_tree
+    from .dflash_plan import FastShape, graft_copy, remap_landed, reorder, search_tree
     from .kernels import lane_linear
     from .spec_metrics import record as _record_speculative_round
     from .spec_schedule import NodeBudget
@@ -546,6 +547,10 @@ def rounds(
     if copy is not None:
         copy.extend(context)
         copy.extend([first_bonus])
+    graft_budget = GraftBudget()
+    graft_stats = dict(
+        rounds=0, proposed=0, accepted=0, extra_accepted=0, matches=0, rows=0, ms=0.0
+    )
     keep = context_window(draft)
     logger.info(
         "DFlash drafter context: %d prompt-hidden positions (window %s, target KV %s)",
@@ -594,9 +599,11 @@ def rounds(
                 n = budget.choose(max(0, room - 1))
                 if hidden is None:
                     n = 0  # a promoted row: the first round is plain and captures hidden states
+                grafted = []
+                graft_enabled = copy is not None and copy_rows > 16 and n > 0
                 copied = (
                     copy.draft(min(copy.max_draft, room - 1))
-                    if copy is not None
+                    if copy is not None and not graft_enabled
                     else []
                 )
                 if copied:
@@ -620,11 +627,20 @@ def rounds(
                         tv.PROFILE["search_disp"] = (
                             tv.PROFILE.get("search_disp", 0.0) + gpu_window.stage_end()
                         )
+                    if graft_enabled:
+                        proposal = copy.lookup(min(copy_rows - n - 1, room - 1))
+                        if copy.last_match >= copy.cfg.min_match:
+                            graft_stats["matches"] += 1
+                            grafted = plan_tree_graft(proposal, n, graft_budget)
+                        if grafted:
+                            tokens, parents = graft_copy(tokens, parents, grafted)
                     tokens, parents, ranks = reorder(tokens, parents)
                     window = mx.concatenate(
                         [mx.array([bonus], dtype=token_dtype), tokens]
                     )[None]
-                    shape = FastShape(parents, 15, original_ranks=ranks)
+                    shape = FastShape(
+                        parents, max(15, len(grafted)), original_ranks=ranks
+                    )
                     hidden = None
                 else:
                     parents = mx.array([-1], dtype=mx.int32)
@@ -651,13 +667,17 @@ def rounds(
                     tv.tree_abort(cache, result)
                     raise
                 t_verified = time.perf_counter()
-                path = dt.walk(window_ids, parent_ids, target_ids_row)
+                path = (
+                    longest_verified_path(window_ids, parent_ids, target_ids_row)
+                    if grafted
+                    else dt.walk(window_ids, parent_ids, target_ids_row)
+                )
                 new_tokens = [window_ids[row] for row in path[1:]] + [
                     target_ids_row[path[-1]]
                 ]
                 if n:
                     _record_speculative_round(
-                        draft, len(path) - 1, n, parents=parent_ids
+                        draft, len(path) - 1, n + len(grafted), parents=parent_ids
                     )
                 t_m1 = time.perf_counter()
                 tv.tree_commit(lm, cache, result, path)
@@ -679,14 +699,38 @@ def rounds(
                         skipped += dropped
                 elif copy is not None:
                     copy.observe_model(len(new_tokens))
+                if graft_enabled:
+                    copy_accepted = 0
+                    for token, proposed in zip(new_tokens[:-1], grafted, strict=False):
+                        if token != proposed:
+                            break
+                        copy_accepted += 1
+                    extra_accepted = sum(
+                        1 for row in path[1:] if ranks is not None and ranks[row] > n
+                    )
+                    round_ms = (t_m3 - started) * 1000
+                    shared_accepted = copy_accepted - extra_accepted
+                    graft_budget.observe(
+                        shared_accepted if grafted else 0,
+                        len(grafted) - shared_accepted if grafted else 0,
+                        copy_accepted if grafted else len(new_tokens) - 1,
+                        round_ms,
+                    )
+                    if grafted:
+                        graft_stats["rounds"] += 1
+                        graft_stats["proposed"] += len(grafted)
+                        graft_stats["accepted"] += copy_accepted
+                        graft_stats["extra_accepted"] += extra_accepted
+                        graft_stats["rows"] += int(window.size)
+                        graft_stats["ms"] += round_ms
                 landed = [row - 1 for row in path[1:]]
                 if ranks is not None:
-                    landed = remap_landed(landed, ranks)
+                    landed = [r for r in remap_landed(landed, ranks) if r < n]
                 t_done = time.perf_counter()
                 gpu_window.tick()
                 if emitted > 1:
                     prof["rounds"] += 1
-                    prof["nodes"] += n
+                    prof["nodes"] += int(window.size) - 1
                     prof["draft"] += (t_drafted - started) * 1000
                     prof["verify"] += (t_verified - t_drafted) * 1000
                     prof["commit"] += (t_done - t_verified) * 1000
@@ -699,7 +743,7 @@ def rounds(
                         prof[key] = prof.get(key, 0.0) + (b_ - a_) * 1000
                 observe_budget(
                     budget,
-                    copied,
+                    copied or grafted,
                     n,
                     landed,
                     (t_done - started) * 1000,
@@ -735,6 +779,16 @@ def rounds(
                 if emitted >= max_tokens:
                     return
     finally:
+        logger.info(
+            "DFlash suffix graft engagement: copy_rounds=%d proposed=%d accepted=%d extra_accepted=%d matches=%d verify_rows=%d round_ms=%.3f",
+            graft_stats["rounds"],
+            graft_stats["proposed"],
+            graft_stats["accepted"],
+            graft_stats["extra_accepted"],
+            graft_stats["matches"],
+            graft_stats["rows"],
+            graft_stats["ms"],
+        )
         if prof["rounds"]:
             r = prof["rounds"]
             logger.info(
@@ -822,7 +876,7 @@ def eligible(lm, draft, cache, kwargs):
         and mtp_lane._STATE["guide"] is None
         and context is not None
         and kwargs.get("draft_block_size") in (None, 8)
-        and mtp_lane.copy_rows_for_model(lm) == 16
+        and mtp_lane.copy_rows_for_model(lm) in (16, 32)
         and tv.lane_ready(lm, cache)
         and (length := context_length(lm, cache)) is not None
         and live_eligible(length + 1)

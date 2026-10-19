@@ -267,3 +267,43 @@ def state_slots(parents):
         output_shapes=[(width,)] * 2,
         output_dtypes=[mx.int32] * 2,
     )
+
+
+_GRAFT_KERNEL = None
+
+
+def graft_copy(tokens, parents, copied):
+    """Share matching DFlash ancestors, then append a suffix branch on device.
+
+    Duplicate matching slots are leaves; the first matching model child remains
+    canonical. Reordering afterwards retains the bounded state-slot schedule.
+    """
+    global _GRAFT_KERNEL
+    n, c = int(tokens.size), len(copied)
+    if _GRAFT_KERNEL is None:
+        _GRAFT_KERNEL = mx.fast.metal_kernel(
+            name="yunshu_dflash_suffix_graft",
+            input_names=["model_tokens", "model_parents", "copy_tokens"],
+            output_names=["tokens", "parents"],
+            source="""
+            if(thread_position_in_grid.x!=0)return;
+            for(int r=0;r<N;++r)tokens[r]=model_tokens[r];
+            for(int r=0;r<=N;++r)parents[r]=model_parents[r];
+            int canonical=0;
+            for(int j=0;j<C;++j){
+                int row=N+1+j, token=copy_tokens[j], matched=-1;
+                tokens[row-1]=token;parents[row]=canonical;
+                for(int r=1;r<=N;++r)
+                    if(model_parents[r]==canonical && model_tokens[r-1]==token){matched=r;break;}
+                canonical=matched>=0?matched:row;
+            }
+            """,
+        )
+    return _GRAFT_KERNEL(
+        inputs=[tokens, parents, mx.array(copied, dtype=mx.int32)],
+        template=[("N", n), ("C", c)],
+        grid=(32, 1, 1),
+        threadgroup=(32, 1, 1),
+        output_shapes=[(n + c,), (n + c + 1,)],
+        output_dtypes=[mx.int32, mx.int32],
+    )

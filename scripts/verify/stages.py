@@ -563,6 +563,20 @@ def _spec_depth_valid(rows: list, mode: str) -> tuple[bool, str]:
     return True, ""
 
 
+def spec_mode_failures(base, cand, cfg, cell):
+    """A paired cell must prove both engines engaged the same speculative path."""
+    modes = []
+    for arm, rows in (("base", base), ("cand", cand)):
+        sessions = [r for r in rows if r.get("part") == "session"]
+        values = {r.get("engaged_spec_mode") for r in sessions}
+        if not sessions or len(values) != 1 or not all(values):
+            return [f"{cell}: missing or ambiguous {arm} engaged spec mode"]
+        modes.append(next(iter(values)))
+    if modes[0] != modes[1] and not cfg.get("allow_spec_mode_change", False):
+        return [f"{cell}: engaged spec mode mismatch base={modes[0]} cand={modes[1]}"]
+    return []
+
+
 def stage_identity(ctx: Ctx) -> StageResult:
     _check_prompts(ctx.suite["ctx"], ctx.suite["kinds"])
     res = ctx.exe.run_cells(_identity_cells(ctx))
@@ -577,6 +591,7 @@ def stage_identity(ctx: Ctx) -> StageResult:
                 numbers[f"{tag}per_depth".strip()] = depth_ok
                 if not depth_ok:
                     reasons.append(f"{tag}{why}")
+            reasons += spec_mode_failures(base, cand, ctx.suite, f"identity {mode}")
             cmp_ = analyze.compare_identity(base, cand, "base", "cand")
             numbers[f"{tag}base_vs_cand".strip()] = {
                 "compared": cmp_["compared"],
@@ -845,6 +860,18 @@ def stage_speed(ctx: Ctx) -> StageResult:
                     rows += read_jsonl(r.evidence)
             return rows
 
+        for key, result in res.items():
+            if key.startswith("base-"):
+                paired = res.get("cand-" + key[len("base-") :])
+                reasons += spec_mode_failures(
+                    read_jsonl(result.evidence),
+                    read_jsonl(paired.evidence) if paired else [],
+                    cfg,
+                    f"speed {key}",
+                )
+        if reasons:
+            return _finish(ctx, StageResult("speed", False, reasons, numbers))
+
         tol = float(cfg["speed_tol_pct"])
         base = [arm_rep("base", i) for i in range(reps)]
         cand = [arm_rep("cand", i) for i in range(reps)]
@@ -866,6 +893,17 @@ def stage_speed(ctx: Ctx) -> StageResult:
                 res = allres
                 base = [arm_rep("base", i) for i in range(reps + k_extra)]
                 cand = [arm_rep("cand", i) for i in range(reps + k_extra)]
+                for key, result in cres.items():
+                    if key.startswith("base-"):
+                        paired = cres.get("cand-" + key[len("base-") :])
+                        reasons += spec_mode_failures(
+                            read_jsonl(result.evidence),
+                            read_jsonl(paired.evidence) if paired else [],
+                            cfg,
+                            f"speed confirmation {key}",
+                        )
+                if reasons:
+                    return _finish(ctx, StageResult("speed", False, reasons, numbers))
                 cf = analyze.speed_compare(base, cand, tol, robust=True, only=sus)
                 keep = [c for c in sp["cells"] if (c["ctx"], c["kind"]) not in set(sus)]
                 numbers = {

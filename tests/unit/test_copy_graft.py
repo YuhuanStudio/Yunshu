@@ -114,3 +114,25 @@ def test_grafted_mtp_rounds_match_plain_with_wrong_model_drafts(monkeypatch):
     )
     got = run_lane(monkeypatch, target, None, script[0], 100, 100, 0.0, 7, 6)
     assert got == script
+
+
+def test_dflash_shared_prefix_leaf_cannot_hide_copy_tail():
+    from yunshu_engine.copy_graft import longest_verified_path
+
+    # Model and copied shared-prefix leaf occur in either visit order.
+    assert longest_verified_path(
+        [1, 2, 2, 3, 4], [-1, 0, 0, 2, 3], [2, 3, 3, 4, 5]
+    ) == [0, 2, 3, 4]
+    assert longest_verified_path(
+        [1, 2, 3, 4, 2], [-1, 0, 1, 2, 0], [2, 3, 4, 5, 3]
+    ) == [0, 1, 2, 3]
+    assert longest_verified_path([1, 9], [-1, 0], [2, 3]) == [0]
+
+
+def test_short_copy_branch_does_not_require_exceeding_model_node_count():
+    from yunshu_engine.copy_graft import plan_tree_graft
+
+    budget = GraftBudget()
+    assert plan_tree_graft([9, 8, 7], 15, budget) == [9, 8, 7]
+    assert len(plan_tree_graft(list(range(31)), 8, budget)) == 12
+    assert plan_tree_graft([], 15, budget) == []
