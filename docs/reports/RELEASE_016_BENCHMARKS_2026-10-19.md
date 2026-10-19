@@ -1,0 +1,215 @@
+# Benchmarks — 2026-10-19
+
+Apple M5 Max, 128 GB unified memory. Yunshu development source pinned to
+`5ac5452c3d82f43a2208d34730cd35136bd73fa0`. Competitor releases were checked on
+2026-10-19; this is a dated snapshot, not a promise to track future releases.
+The [0.1.5 snapshot](RELEASE_015_BENCHMARKS.md) remains unchanged as history.
+
+Greedy, single-user, same release015 code/agentic prompt corpus at 32K/64K/128K.
+Cold and warm requests require exactly 2048 output tokens, immediate follow-up 256.
+Every numerical row below has three qualifying interleaved repetitions in its own
+cohort. Values are median [min,max]; cohorts are not pooled. First valid attempt per
+repetition is selected, with complete output, cold/warm text identity, engaged mode
+and clean quiet-gpuq receipts. Missing, short, parity-failed and contended attempts
+remain failures. Only one prompt per depth: this does not establish general quality
+or workload performance. Different weights and quantizations affect generated text
+and speed; the Yunshu TF4 arm uses the same checkpoint as native TensorFold.
+
+Sticky host swap was present (about 8–10 GiB), so these are not zero-swap results.
+Each cell records before/after vm.swapusage and pageouts; admission rejects swap
+contention and memory-window growth/pageouts above 64 MiB. Older memory-only
+rejections were revalidated against that budget without overwriting receipts;
+real gpuq contention remains excluded. No other owned engine was resident at admission.
+Peak host delta includes reclamation effects and is not process allocation or model
+size. RSS and phys_footprint are reported separately; mmap weights limit either metric.
+
+## Where Yunshu stands
+
+| Axis / cohort | 32K | 64K | 128K |
+|---|---|---|---|
+| 27B decode tok/s: Yunshu oQ4e / TensorFold 1.1.0 | 135.2 / 200.4 | 118.0 / 150.6 | 75.5 / 116.7 |
+| Same-checkpoint decode tok/s: Yunshu TF4 / TensorFold | 142.2 / 200.4 | 84.1 / 150.6 | 94.8 / 116.7 |
+| 27B cold TTFT s: Yunshu oQ4e / TensorFold | 34.640 / 34.887 | 79.288 / 84.463 | 200.094 / 241.684 |
+| 27B warm TTFT s: Yunshu oQ4e / TensorFold | 0.178 / 0.152 | 0.314 / 0.213 | 0.573 / 241.252 |
+| 27B immediate follow-up TTFT s: Yunshu oQ4e / TensorFold | 2.961 / 0.228 | 3.906 / 0.284 | 6.235 / 247.820 |
+| Flash-Next decode tok/s: Yunshu / shared-MTP llama.cpp | 66.7 / 60.4 | 56.7 / 55.0 | 24.0 / 42.3 |
+
+TensorFold leads measured 27B decode at all three depths, including the same-checkpoint
+comparison. Yunshu has lower cold TTFT; native TensorFold has lower warm/follow-up
+TTFT at 32K/64K but reports zero cached tokens at 128K. llama.cpp has lower warm and
+follow-up TTFT than Yunshu at every depth. Flash-Next 128K decode is a Yunshu weakness.
+Splash/oMLX and other unqualified engines are not counted as wins or losses.
+
+A separate three-repetition, interleaved TensorFold 1.1.0 diagnostic isolates its
+same-round suffix-copy graft. With copy cap 48 versus 0, median cold decode at
+32K/64K/128K was **234.37/112.12, 141.83/95.02, 85.68/69.37 tok/s**.
+All paired raw outputs matched; the job was uncontended. These are 512-token
+same-engine diagnostics, not replacements for the 2048-token comparison above.
+The graft increases accepted tokens per round and helps explain TensorFold's
+lead; it does not establish an equivalent gain in Yunshu. The 32K follow-up
+showed no gain, and 128K still reported zero cached tokens.
+Implementation: [TensorFold 1.1.0](https://github.com/ashhart/TensorFold/tree/76aafcf274e60a5e31a59ce145b2f71f7b366e9d).
+
+## 27B — TensorFold 1.1.0 and llama.cpp b11721
+
+Yunshu arms use DFlash2; native TensorFold explicitly engages DFlash2. llama.cpp MTP
+and DFlash2 configurations remain separate. The GGUF comparison is cross-quantization.
+
+| Depth | Engine | Reps | Cold TTFT s | Decode tok/s | Warm TTFT s | Follow-up TTFT s | Cached tokens | Peak host delta GiB |
+|---|---|---|---|---|---|---|---|---|
+| 32768 | yunshu-main | 3/3 | 34.64 [34.637,34.907] | 135.2 [134.3,135.4] | 0.178 [0.178,0.193] | 2.961 [2.957,2.969] | 32767 [32767,32767] | 34.594 [34.289,34.76] |
+| 32768 | tf-native | 3/3 | 34.887 [34.885,34.906] | 200.4 [200.3,200.5] | 0.152 [0.149,0.152] | 0.228 [0.221,0.229] | 32761 [32761,32761] | 39.921 [39.569,45.33] |
+| 32768 | yunshu-tf4 | 3/3 | 34.504 [34.491,34.53] | 142.2 [142.2,142.8] | 0.179 [0.177,0.179] | 2.944 [2.943,2.955] | 32767 [32767,32767] | 34.184 [34.157,34.398] |
+| 32768 | llamacpp-mtp | 3/3 | 53.854 [53.846,53.856] | 47.6 [47.6,47.7] | 0.091 [0.091,0.092] | 0.416 [0.414,0.421] | 32764 [32764,32764] | 15.543 [13.822,23.13] |
+| 32768 | llamacpp-dflash | 3/3 | 52.534 [52.527,52.536] | 55.6 [55.6,55.6] | 0.094 [0.094,0.096] | 0.426 [0.424,0.427] | 32764 [32764,32764] | 14.072 [12.22,14.358] |
+| 65536 | yunshu-main | 3/3 | 79.288 [79.278,79.298] | 118.0 [117.7,118.2] | 0.314 [0.307,0.342] | 3.906 [3.899,3.91] | 65535 [65535,65535] | 38.627 [36.294,45.394] |
+| 65536 | tf-native | 3/3 | 84.463 [84.435,84.502] | 150.6 [150.6,150.7] | 0.213 [0.21,0.218] | 0.284 [0.279,0.287] | 65529 [65529,65529] | 45.479 [43.774,46.486] |
+| 65536 | yunshu-tf4 | 3/3 | 79.054 [79.018,79.099] | 84.1 [84.1,85.5] | 0.314 [0.307,0.325] | 3.889 [3.882,3.892] | 65535 [65535,65535] | 39.772 [38.972,40.861] |
+| 65536 | llamacpp-mtp | 3/3 | 130.556 [130.542,130.573] | 43.1 [43.1,43.1] | 0.124 [0.124,0.126] | 0.503 [0.503,0.505] | 65532 [65532,65532] | 17.208 [14.692,18.601] |
+| 65536 | llamacpp-dflash | 3/3 | 126.525 [126.517,126.57] | 51.1 [51.1,51.1] | 0.127 [0.124,0.137] | 0.516 [0.513,0.518] | 65532 [65532,65532] | 14.711 [14.384,17.033] |
+| 131072 | yunshu-main | 3/3 | 200.094 [200.072,200.111] | 75.5 [74.9,78.9] | 0.573 [0.571,0.588] | 6.235 [6.196,6.271] | 131071 [131071,131071] | 54.611 [49.43,57.633] |
+| 131072 | tf-native | 3/3 | 241.684 [241.638,241.768] | 116.7 [116.7,116.7] | 241.252 [241.176,241.277] | 247.82 [247.743,247.834] | 0 [0,0] | 38.844 [38.644,38.873] |
+| 131072 | yunshu-tf4 | 3/3 | 199.558 [199.431,199.731] | 94.8 [93.7,94.8] | 0.585 [0.572,0.614] | 6.201 [6.153,6.217] | 131071 [131071,131071] | 45.239 [44.908,46.464] |
+| 131072 | llamacpp-mtp | 3/3 | 354.929 [354.903,354.982] | 31.3 [31.3,31.3] | 0.186 [0.186,0.189] | 0.702 [0.701,0.704] | 131068 [131068,131068] | 30.277 [29.732,30.676] |
+| 131072 | llamacpp-dflash | 3/3 | 341.556 [341.386,341.643] | 33.2 [33.2,33.2] | 0.191 [0.187,0.192] | 0.713 [0.71,0.718] | 131068 [131068,131068] | 21.143 [19.169,21.262] |
+
+## Flash-Next — shared MTP, separate interleaved cohort
+
+| Depth | Engine | Reps | Cold TTFT s | Decode tok/s | Warm TTFT s | Follow-up TTFT s | Cached tokens | Peak host delta GiB |
+|---|---|---|---|---|---|---|---|---|
+| 32768 | fn-yunshu-main | 3/3 | 32.457 [32.031,32.477] | 66.7 [66.7,66.8] | 0.141 [0.134,0.145] | 2.443 [2.442,2.445] | 32767 [32767,32767] | 60.634 [58.805,75.422] |
+| 32768 | fn-llamacpp-unsloth | 3/3 | 41.427 [41.406,41.509] | 60.4 [60.2,60.4] | 0.089 [0.082,0.091] | 0.337 [0.332,0.339] | 32764 [32764,32764] | 94.656 [77.447,95.122] |
+| 65536 | fn-yunshu-main | 3/3 | 66.358 [66.348,66.599] | 56.7 [56.6,56.8] | 0.232 [0.223,0.239] | 2.837 [2.819,2.858] | 65535 [65535,65535] | 62.706 [61.72,63.145] |
+| 65536 | fn-llamacpp-unsloth | 3/3 | 92.232 [92.228,92.302] | 55.0 [53.0,57.3] | 0.119 [0.115,0.121] | 0.406 [0.399,0.412] | 65532 [65532,65532] | 96.105 [95.444,96.166] |
+| 131072 | fn-yunshu-main | 3/3 | 159.359 [159.271,159.926] | 24.0 [23.7,24.1] | 0.434 [0.418,0.455] | 3.662 [3.654,3.723] | 131071 [131071,131071] | 69.559 [65.274,70.648] |
+| 131072 | fn-llamacpp-unsloth | 3/3 | 218.634 [218.497,218.723] | 42.3 [42.3,42.5] | 0.191 [0.188,0.192] | 0.548 [0.528,0.556] | 131068 [131068,131068] | 97.208 [79.946,97.284] |
+
+## Rapid-MLX 0.16.3 — separate 2026-10-18 interleaved cohort
+
+The matching Yunshu observations are retained here; do not pool this cohort with
+the newer TensorFold/llama.cpp matrix. Rapid-MLX cached-token telemetry is unavailable,
+not zero. Its warm/follow-up requests do not show a TTFT benefit in this workload.
+
+| Depth | Engine | Reps | Cold TTFT s | Decode tok/s | Warm TTFT s | Follow-up TTFT s | Cached tokens | Peak host delta GiB |
+|---|---|---|---|---|---|---|---|---|
+| 32768 | yunshu-main | 3/3 | 34.64 [34.637,34.651] | 134.9 [134.9,134.9] | 0.181 [0.18,0.182] | 2.959 [2.959,2.968] | 32767 [32767,32767] | 34.954 [22.341,35.08] |
+| 32768 | rapid-mlx | 3/3 | 37.784 [37.775,37.785] | 40.5 [40.5,40.5] | 37.718 [37.707,37.726] | 40.504 [40.472,40.509] | not reported | 49.404 [49.189,50.316] |
+| 65536 | yunshu-main | 3/3 | 79.337 [79.261,79.342] | 119.4 [119.0,119.5] | 0.312 [0.309,0.325] | 3.916 [3.897,3.924] | 65535 [65535,65535] | 39.093 [28.717,42.976] |
+| 65536 | rapid-mlx | 3/3 | 85.836 [85.807,85.842] | 33.0 [33.0,33.0] | 85.784 [85.771,85.849] | 89.214 [89.198,89.244] | not reported | 74.518 [51.433,75.554] |
+| 131072 | yunshu-main | 3/3 | 200.116 [200.051,205.378] | 77.1 [74.2,78.8] | 0.588 [0.565,0.614] | 6.263 [6.144,6.757] | 131071 [131071,131071] | 54.552 [29.854,64.295] |
+| 131072 | rapid-mlx | 3/3 | 213.637 [213.588,213.666] | 25.7 [25.7,25.7] | 213.615 [213.571,215.048] | 218.313 [218.305,224.814] | not reported | 100.819 [82.029,102.56] |
+
+## Flash-Next configuration and quality limits
+
+The shared Q8_0 MTP drafter requires the upstream `qwen4exp/mtp` branch,
+commit `6fcaa16f4b360649933a54d1f91ad40ed35c0e11`, with Metal enabled.
+Stock mainline b11715 failed to load this shared drafter (`token_embd.weight` missing).
+A quiet selection pilot tested n-max 3/4/5: 50.9/45.5/45.8 tok/s; n-max 3 was selected
+before the three-repetition long matrix. Pilot numbers are configuration selection,
+not long-context standings. The older non-shared mainline arm is superseded here.
+
+The GGUF quant is UD-IQ4_XS (~93.7 GB), versus Yunshu oQ4e (~99 GB).
+[Unsloth’s guide](https://unsloth.ai/docs/models/qwen3.8-next) recommends the
+higher-quality UD-Q4_K_XL (~111.3 GB). Published mean KLD is 0.083630 for the used
+IQ4_XS and 0.046893 for Q4_K_XL; IQ4_XS p99.9 KLD is 2.3677 and top-1 agreement
+89.554%. These published quality figures do not compare either GGUF with oQ4e.
+
+## Coverage and failures
+
+| Engine / workload | Qualification status |
+|---|---|
+| Splash 1.3.2 / 27B | Not qualified: cold/warm output mismatch in long cells; no speed ranking |
+| oMLX 0.7.1rc1 / 27B | Not qualified: long output/prompt-budget validation failures; no speed ranking |
+| MTPLX 2.12.2 / 27B | Not qualified: cold generation stopped at 23 of 2048 requested tokens |
+| mlx-serve 26.10.2 | Incomplete coverage; cold/warm text mismatch at 64K; no speed ranking |
+| vllm-mlx 0.5.0 | Incomplete long outputs; no speed ranking |
+| oMLX / Flash-Next | Unsupported tested long configuration: 32K prefill prediction 110289899605 bytes exceeds 109935270089-byte cap |
+| vllm-mlx / Flash-Next | Unsupported required complete-output cell: cold generation stopped at 103 of 2048 tokens; not a model-wide incompatibility claim |
+| Rapid-MLX 0.16.3 / Flash-Next | Unsupported checkpoint loader: unexpected PLE ngram_embedding.weight_scale |
+| Strata 0.1.45 / Flash-Next | Unsupported stock Metal build: undeclared CUDA capability/stream-priority identifiers; no numerical patches applied |
+| Ollama 0.40.7-rc0 MLX runtime | Loaded actual MLX runner, then HTTP 500: concatenate shapes (10240,640)/(6144,800); tested checkpoint loader failure, no speed ranking |
+| LM Studio | No qualifying local long matrix; not measured in standings |
+| Unsloth Desktop CLI 2026.10.6 | Installed externally; run uses internal random ports outside the permitted test pool; not measured |
+
+Unsupported applies to the tested checkpoint/configuration on this machine. Short,
+missing, contended or parity-failed outputs are never converted into speed results.
+No new 1K/8K ranking is inferred from the historical secondary corpus.
+
+
+TensorFold 1.1.0 Flash-Next startup was aborted on this 128 GB host: process-tree phys_footprint 122.724 GiB, host free 0.809 GiB and 28322.8 MiB swapouts. No complete output; no retry of this configuration and no speed loss/win inferred.
+
+
+## Versions and artifact provenance
+
+Release timestamps are UTC; SHA256 identifies the downloaded artifact, not a successful measurement. RC status is explicit.
+
+| Engine | Release | Published UTC | Artifact SHA256 |
+|---|---|---|---|
+| [incoai/splash](https://github.com/incoai/splash/releases) | 1.3.2 | 2026-10-14T09:58:19Z | `c3deb1dd971461ffafcf6b82c318789d6698b22aa865e490a11a0ed943686c0b` |
+| [ashhart/TensorFold](https://github.com/ashhart/TensorFold/releases) | v1.1.0 | 2026-10-18T10:39:43Z | `99c66f56fcde07a7dd8df6ea555bcbd406d0537b7d92a453112a54bef5a72707` |
+| [ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp/releases) | b11721 | 2026-10-18T18:04:19Z | `2ace55512ee1ab4e2703f80c135c2a92d40d3367a5b3a98d21b103ffa7f0eb82` |
+| [jundot/omlx](https://github.com/jundot/omlx/releases) | v0.7.1rc1 | 2026-10-15T18:23:10Z | `75dde4ff1104dc2ec30f341c98c18bfbb85284edbcd5f49cfb39dbb63537a562` |
+| [youssofal/MTPLX](https://github.com/youssofal/MTPLX/releases) | v2.12.2 | 2026-10-03T00:01:27Z | `8f19e956faefb3e8e671fa80ccbe391ecf3524ee10a58221e66fa1ee6f4eb775` |
+| [ddalcu/mlx-serve](https://github.com/ddalcu/mlx-serve/releases) | v26.10.2 | 2026-10-12T23:53:05Z | `7082424c2d4c3821c1b323e2822aec79502cc82475b01fd2bfcd70d6ccd7ec27` |
+| [waybarrios/vllm-mlx](https://github.com/waybarrios/vllm-mlx/releases) | v0.5.0 | 2026-09-17T21:48:07Z | `b2ca2e1dd680fa9e9383ad53c8768143e25b6cf222be943093494c1fb6ebb987` |
+| [raullenchai/Rapid-MLX](https://github.com/raullenchai/Rapid-MLX/releases) | v0.16.3 | 2026-10-17T15:01:23Z | `3f2621a81391c4ee601b2bf7a8215b9c6bf6c52fec5c19415fbd5e9f8a06da80` |
+| [Niko1221/Strata](https://github.com/Niko1221/Strata/releases) | v0.1.45 | 2026-10-17T06:53:17Z | `23d63d8b1be979117b920f7b126db9c034d714cbb951fcf640653c5c93dc155e` |
+| [ollama/ollama](https://github.com/ollama/ollama/releases) | v0.40.7-rc0 | 2026-10-18T00:28:57Z | `307391d6022effb2ab07fed999a0d6a85bdcd5e0cd8b3ccacce84aec14d21185` |
+| [Unsloth CLI](https://pypi.org/project/unsloth/2026.10.6/) | 2026.10.6 | 2026-10-15T18:50:16Z | `103efac52b090a1070c0083911119e34986a910df1118667ab2a1e8d6ccbab48` (PyPI wheel) |
+
+Shared MTP SHA256: `5ff54097406a905cf3a724c709124ceb0e3e10235ee862298969e91c96fa96e6`.
+Upstream shared-MTP branch: `6fcaa16f4b360649933a54d1f91ad40ed35c0e11`.
+TensorFold release source: `76aafcf274e60a5e31a59ce145b2f71f7b366e9d`.
+llama.cpp b11721: `ff5a23376725e5a889fa0bfb987b7541dc304da0`.
+
+## Memory on qualifying repetitions
+
+
+Host delta includes reclaim effects; process phys_footprint omits much mmap weight memory.
+RSS, host delta and phys_footprint are separate observations; do not add them.
+
+| Depth | Engine | Host delta GiB | Process-tree RSS GiB | Process-tree phys_footprint GiB |
+|---|---|---|---|---|
+| 32768 | llamacpp-dflash | 14.072 [12.22,14.358] | 22.867 [22.821,22.885] | 6.001 [5.992,6.028] |
+| 32768 | llamacpp-mtp | 15.543 [13.822,23.13] | 21.59 [21.402,21.615] | 5.108 [5.065,5.11] |
+| 32768 | tf-native | 39.921 [39.569,45.33] | 22.748 [22.748,22.749] | 38.853 [38.853,38.853] |
+| 32768 | yunshu-main | 34.594 [34.289,34.76] | 5.384 [5.383,17.942] | 34.444 [34.41,34.581] |
+| 32768 | yunshu-tf4 | 34.184 [34.157,34.398] | 17.758 [15.856,19.696] | 33.95 [33.384,34.18] |
+| 65536 | llamacpp-dflash | 14.711 [14.384,17.033] | 24.963 [24.963,24.964] | 8.108 [8.107,8.108] |
+| 65536 | llamacpp-mtp | 17.208 [14.692,18.601] | 23.913 [23.838,23.948] | 7.404 [7.368,7.407] |
+| 65536 | tf-native | 45.479 [43.774,46.486] | 22.776 [22.774,22.784] | 45.267 [45.236,45.267] |
+| 65536 | yunshu-main | 38.627 [36.294,45.394] | 5.343 [5.342,5.418] | 39.408 [39.259,45.46] |
+| 65536 | yunshu-tf4 | 39.772 [38.972,40.861] | 19.696 [19.696,19.697] | 37.96 [37.948,44.049] |
+| 131072 | llamacpp-dflash | 21.143 [19.169,21.262] | 29.082 [29.08,29.112] | 12.255 [12.253,12.255] |
+| 131072 | llamacpp-mtp | 30.277 [29.732,30.676] | 28.196 [28.196,28.257] | 11.896 [11.895,11.923] |
+| 131072 | tf-native | 38.844 [38.644,38.873] | 22.827 [22.826,22.839] | 37.51 [37.503,37.514] |
+| 131072 | yunshu-main | 54.611 [49.43,57.633] | 5.497 [5.497,5.498] | 58.974 [53.005,59.263] |
+| 131072 | yunshu-tf4 | 45.239 [44.908,46.464] | 18.406 [17.685,19.696] | 52.715 [52.169,58.947] |
+
+
+## Reproduction and limitations
+
+Harness: `scripts/research/bench016.py`, `tfbench.py`, `bench016_report.py`;
+release015 corpus, latest1019 and us-long-v3 manifests/state/JSONL and gpuq receipts.
+The private evidence ledger retains all rejected attempts and log digests. Reproduce
+qualification with `python -m scripts.research.bench016_report --manifest <manifest> --output <report>`.
+No new 1K/8K ranking is inferred from the historical secondary corpus.
+
+The 78 console screenshots were recaptured on 2026-10-19 during one real
+Qwen3.8-27B oQ4e MTP agent implementation session, growing from 40,971 to 72,603
+prompt tokens. All three locales, light/dark and mobile images were visually reviewed.
+The session completed 21 replies (median 1,611 tokens), with at least 40,970 cached
+tokens after priming and no request failures. gpuq recorded rc0, no contention,
+job swap 0 MB and host swap-ins 6.619136 MB. Host swap used stayed at 7,559.12 MB
+and pageouts stayed at 119,913: sticky host swap was present, with no growth.
+
+The live numbers are unedited. Desktop overview frames range from 19.4 to 211.4
+tok/s; late-session frames around 69K–73K context show about 19–20 tok/s.
+That slowdown remains visible. Locales were captured sequentially at different
+session depths, so these frames cannot compare locale performance or replace the
+fixed-corpus benchmark tables. The playground demonstrations add a few short UI
+requests while the long session continues; they are not the primary workload.
+Admin-only pages show their actual unauthenticated permission notices.
+The capture receipt records usage, memory checks and every image SHA256 in
+[CONSOLE_CAPTURE_2026-10-19.json](https://github.com/YuhuanStudio/Yunshu/blob/main/docs/reports/CONSOLE_CAPTURE_2026-10-19.json).
+Earlier failed attempts remain excluded.

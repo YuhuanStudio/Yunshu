@@ -449,7 +449,11 @@ def validate_rows(job: Job, rows: list[dict]) -> list[str]:
         if got != n:
             problems.append(f"{part}: {got} rows, want {n}")
     expected_sha = job.env.get("TFB_EXPECT_YUNSHU_SHA")
-    if expected_sha and any(r.get("git_sha") != expected_sha for r in rows):
+    if (
+        expected_sha
+        and be.ENGINES[job.engine].kind == "yunshu"
+        and any(r.get("git_sha") != expected_sha for r in rows)
+    ):
         problems.append("release SHA does not match pinned engine")
     if rows[-1].get("part") != "part_done" or rows[-1].get("complete") is not True:
         problems.append("terminal record is not complete")

@@ -484,6 +484,23 @@ def test_lazy_omlx_is_loaded_before_engagement_detection(monkeypatch):
     assert requests[0][1]["temperature"] == 0 and requests[0][1]["max_tokens"] == 16
 
 
+def test_lazy_ollama_loads_runtime_before_mlx_engagement_check(monkeypatch):
+    import tfbench
+
+    requests = []
+    monkeypatch.setattr(
+        tfbench, "send", lambda url, body, **kw: requests.append((url, body, kw))
+    )
+    tfbench.warm_lazy_engine("ollama-mlx", "http://fixture", "bench016")
+    assert len(requests) == 1
+    url, body, options = requests[0]
+    assert url == "http://fixture"
+    assert body["model"] == "bench016"
+    assert body["temperature"] == 0
+    assert body["max_tokens"] == 16
+    assert options["timeout"] == 240
+
+
 def test_stock_server_models_endpoint_has_an_existing_isolated_hf_cache(tmp_path):
     launch = be.build_launch("mlxlm", 18990, tmp_path, {})
     for path, text in launch.files.items():
