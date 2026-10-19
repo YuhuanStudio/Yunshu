@@ -28,6 +28,25 @@ def load(name, path):
     return module
 
 
+@pytest.fixture(autouse=True)
+def _memory_evidence(monkeypatch):
+    # These legacy CPU tests use synthetic PIDs. Memory policy has its own tests.
+    h = helper()
+    original = h.ContentionMonitor.__init__
+
+    def init(self, *a, **kw):
+        original(self, *a, **kw)
+        self.sampler.owned = {10}
+
+    monkeypatch.setattr(h.ContentionMonitor, "__init__", init)
+    monkeypatch.setattr(h, "host_available_bytes", lambda: 100_000_000_000)
+    monkeypatch.setattr(
+        h,
+        "process_memory",
+        lambda pid: dict(pid=pid, start=1, pageins=0, swapped_bytes=0, regions=1),
+    )
+
+
 @pytest.fixture
 def q(tmp_path, monkeypatch):
     m = load("gpuq_cpu_test", DEV / "gpuq.py")
@@ -122,6 +141,8 @@ def test_submit_quiet_cli_and_configuration(q, monkeypatch, capsys):
     data = q._read(q.JOBS / (capsys.readouterr().out.strip() + ".json"))
     assert data["quiet"]
     assert data["contention_config"] == dict(
+        host_swap_mb=1073.741824,
+        memory_floor_mb=4096.0,
         threshold_pct=80,
         window_s=4,
         max_wait_s=9,
@@ -811,7 +832,7 @@ def _rows(t30, t31=0, t33=0):
 def test_foreign_model_listed_but_idle_does_not_latch(monkeypatch, q):
     h = helper()
     _fake_ps(monkeypatch, h, [_rows(0)] * 3, ARGS)
-    job = dict(id="j", quiet=True, env={})
+    job = dict(id="j", pid=10, quiet=True, env={})
     path = q.JOBS / "j.json"
     q._write(path, job)
     m = h.ContentionMonitor(job, path, q.LOGS, q._write, q._read)
@@ -826,7 +847,7 @@ def test_foreign_model_listed_but_idle_does_not_latch(monkeypatch, q):
 def test_busy_foreign_model_latches_with_reason(monkeypatch, q):
     h = helper()
     _fake_ps(monkeypatch, h, [_rows(0), _rows(1.0)], ARGS)
-    job = dict(id="j", quiet=True, env={})
+    job = dict(id="j", pid=10, quiet=True, env={})
     path = q.JOBS / "j.json"
     q._write(path, job)
     m = h.ContentionMonitor(job, path, q.LOGS, q._write, q._read)
@@ -845,7 +866,9 @@ def test_foreign_model_threshold_env_and_extra_pattern(monkeypatch, q):
     args = {10: "x", 30: "/opt/mymodel-runner --serve"}
     monkeypatch.setenv("GPUQ_FOREIGN_MODEL_PATTERNS", "mymodel-runner")
     _fake_ps(monkeypatch, h, [_rows(0), _rows(1.0)], args)
-    job = dict(id="j", quiet=True, env=dict(os.environ, GPUQ_FOREIGN_MODEL_CPU="80"))
+    job = dict(
+        id="j", pid=10, quiet=True, env=dict(os.environ, GPUQ_FOREIGN_MODEL_CPU="80")
+    )
     path = q.JOBS / "j.json"
     q._write(path, job)
     m = h.ContentionMonitor(job, path, q.LOGS, q._write, q._read)
@@ -888,29 +911,29 @@ def test_cli_and_ci_sandbox_commands_are_not_foreign_models():
     assert hit("python -m mlx_lm.server --model x")
 
 
-def test_swap_growth_during_job_latches_contended(monkeypatch, q):
+def test_large_host_swap_growth_during_job_latches_contended(monkeypatch, q):
     h = helper()
     _fake_ps(monkeypatch, h, [_rows(0)] * 3, ARGS)
-    swap = iter([1_000_000_000, 1_010_000_000, 1_200_000_000])
+    swap = iter([1_000_000_000, 1_010_000_000, 3_000_000_000])
     monkeypatch.setattr(h, "swapout_bytes", lambda: next(swap))
-    job = dict(id="j", quiet=True, env={})
+    job = dict(id="j", pid=10, quiet=True, env={})
     path = q.JOBS / "j.json"
     q._write(path, job)
     m = h.ContentionMonitor(job, path, q.LOGS, q._write, q._read)
     m.record("start", now=100)
     m.record("poll", now=102)  # +10 MB: under the 64 MB default
     assert not job.get("contended")
-    m.record("poll", now=104)  # +200 MB swapped out while the job ran
+    m.record("poll", now=104)  # +2 GB host swap-in exceeds the 1 GiB backstop
     assert job["contended"] and "swap" in job["contention_reasons"]
-    assert job["swap_mb"] == 200.0
-    assert q._read(path)["swap_mb"] == 200.0
+    assert job["swap_mb"] == 2000.0
+    assert q._read(path)["swap_mb"] == 2000.0
 
 
 def test_unreadable_swap_fails_closed(monkeypatch, q):
     h = helper()
     _fake_ps(monkeypatch, h, [_rows(0)] * 2, ARGS)
     monkeypatch.setattr(h, "swapout_bytes", lambda: None)
-    job = dict(id="j", quiet=True, env={})
+    job = dict(id="j", pid=10, quiet=True, env={})
     path = q.JOBS / "j.json"
     q._write(path, job)
     m = h.ContentionMonitor(job, path, q.LOGS, q._write, q._read)
