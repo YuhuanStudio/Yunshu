@@ -68,7 +68,7 @@ class _AttentionCapture:
 
     def __call__(self, x, mask=None, cache=None, **kwargs):
         queries = self._query_extractor(self._original, x, cache)
-        self._query_buffer[self._buf_idx].append(queries)
+        self._query_buffer.setdefault(self._buf_idx, []).append(queries)
         return self._original(x, mask=mask, cache=cache, **kwargs)
 
     def __getattr__(self, name):
@@ -239,21 +239,9 @@ def score_tokens(
     finally:
         _unpatch_attention_capture(draft_model, originals, attn_layers)
 
-    # Compute attention-based importance scores: Q @ K^T / sqrt(d_k)
-    # Build a mapping from cache index to layer index for correct query pairing.
-    # Cache entries and attention layers are in 1:1 correspondence: cache[i]
-    # corresponds to attn_layers[i].  We track which cache indices have valid
-    # keys so we can look up the right captured queries.
-    _cache_to_layer: dict[int, int] = {}
-    _valid_cache_idx = 0
-    for _ci, c in enumerate(cache):
-        if not hasattr(c, "keys") or c.keys is None:
-            continue
-        if c.keys.shape[-2] < n_prompt:
-            continue
-        _cache_to_layer[_ci] = _valid_cache_idx
-        _valid_cache_idx += 1
-
+    # Compute attention-based importance scores: Q @ K^T / sqrt(d_k). The cache holds
+    # one entry per model layer, so a cache index is the layer index the queries were
+    # captured under.
     importance_scores = []
     for cache_idx, c in enumerate(cache):
         if not hasattr(c, "keys") or c.keys is None:
@@ -264,8 +252,7 @@ def score_tokens(
         prompt_keys = keys[..., :n_prompt, :].astype(mx.float32)
 
         # Look up captured queries for this cache entry's layer
-        layer_idx = _cache_to_layer.get(cache_idx)
-        layer_queries = query_buffer.get(layer_idx, []) if layer_idx is not None else []
+        layer_queries = query_buffer.get(cache_idx, [])
 
         if not layer_queries:
             scores = mx.mean(mx.abs(prompt_keys), axis=-1)
@@ -275,6 +262,10 @@ def score_tokens(
 
         # Real attention scoring: average Q @ K^T / sqrt(d) across lookahead steps
         d_k = prompt_keys.shape[-1]
+        if layer_queries and layer_queries[0].shape[1] != prompt_keys.shape[1]:
+            # GQA: each KV head serves n_heads // n_kv_heads query heads.
+            group = layer_queries[0].shape[1] // prompt_keys.shape[1]
+            prompt_keys = mx.repeat(prompt_keys, group, axis=1)
         all_attn = []
         for q in layer_queries:
             # q: (B, n_heads, 1, d_k), prompt_keys: (B, n_heads, M, d_k)
