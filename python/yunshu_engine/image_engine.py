@@ -2055,6 +2055,16 @@ class ImageGenEngine(ActiveRequestMixin):
         # apply the same way here, unloading in the finally.
         _clean_prompt, _lora_tags = _parse_lora_tags(prompt)
 
+        def _put_terminal(item):
+            # The terminal event must not be lost to a full queue: wait for the
+            # consumer to make room unless the request is cancelled.
+            while not _cancel.is_set():
+                try:
+                    _thread_queue.put(item, timeout=0.1)
+                    return
+                except _queue_mod.Full:
+                    continue
+
         def _stream_sync():
             _applied = False
             try:
@@ -2127,20 +2137,18 @@ class ImageGenEngine(ActiveRequestMixin):
                 image = self._vae.decode(latents)
                 mx.eval(image)
                 png = self._to_png(image)
-                with contextlib.suppress(_queue_mod.Full):
-                    _thread_queue.put_nowait(
-                        {
-                            "step": num_inference_steps,
-                            "total_steps": num_inference_steps,
-                            "progress": 1.0,
-                            "image": png,
-                            "is_final": True,
-                        }
-                    )
+                _put_terminal(
+                    {
+                        "step": num_inference_steps,
+                        "total_steps": num_inference_steps,
+                        "progress": 1.0,
+                        "image": png,
+                        "is_final": True,
+                    }
+                )
             except Exception as e:
                 logger.error(f"Image stream error: {e}", exc_info=True)
-                with contextlib.suppress(_queue_mod.Full):
-                    _thread_queue.put_nowait(None)
+                _put_terminal(None)
             finally:
                 if _applied:
                     self.unload_diffusion_lora()
@@ -2156,8 +2164,16 @@ class ImageGenEngine(ActiveRequestMixin):
                 try:
                     chunk = _thread_queue.get_nowait()
                 except _queue_mod.Empty:
-                    await asyncio.sleep(0.01)
-                    continue
+                    if stream_task.done():
+                        # Producer finished without a terminal event: end the
+                        # stream instead of polling forever.
+                        try:
+                            chunk = _thread_queue.get_nowait()
+                        except _queue_mod.Empty:
+                            break
+                    else:
+                        await asyncio.sleep(0.01)
+                        continue
                 if chunk is None:
                     break
                 yield chunk
