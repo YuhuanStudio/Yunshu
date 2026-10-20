@@ -483,6 +483,23 @@ def _convert_anthropic_messages(
     has_images: bool = False,
     temp_files: list[str] | None = None,
 ) -> tuple[list[dict], list[str]]:
+    """Convert, unlinking whatever it staged if a later block fails (see below)."""
+    if temp_files is None:
+        temp_files = []
+    staged_before = len(temp_files)
+    try:
+        return _convert_anthropic_messages_impl(messages_input, has_images, temp_files)
+    except BaseException:
+        _unlink_staged(temp_files[staged_before:])
+        del temp_files[staged_before:]
+        raise
+
+
+def _convert_anthropic_messages_impl(
+    messages_input: list[AnthropicMessage],
+    has_images: bool,
+    temp_files: list[str],
+) -> tuple[list[dict], list[str]]:
     """Convert Anthropic messages to OpenAI-compatible format.
 
     Properly handles:
@@ -1111,6 +1128,39 @@ def _keeps_mid_system(requested_model: str | None) -> bool:
 
 @router.post("/messages", response_model=None)
 async def create_message(req: AnthropicMessagesRequest, request: Request):
+    """Run the Messages endpoint; unlink staged images unless a stream owns them."""
+    temp_files: list[str] = []
+    try:
+        result = await _create_message(req, request, temp_files)
+    except BaseException:
+        _unlink_staged(temp_files)
+        raise
+    # A stream reads its files until it ends (an SSE error frame included); every other
+    # return (early error, finished non-stream) is done with them here.
+    if isinstance(result, StreamingResponse):
+        result.body_iterator = _unlink_after(result.body_iterator, temp_files)
+    else:
+        _unlink_staged(temp_files)
+    return result
+
+
+async def _unlink_after(body, paths: list[str]):
+    try:
+        async for chunk in body:
+            yield chunk
+    finally:
+        _unlink_staged(paths)
+
+
+def _unlink_staged(paths: list[str]) -> None:
+    for path in paths:
+        with contextlib.suppress(OSError):
+            os.unlink(path)
+
+
+async def _create_message(
+    req: AnthropicMessagesRequest, request: Request, _temp_files: list[str]
+):
     """Anthropic Messages API endpoint.
 
     Requests that declare server tools (web_search / web_fetch) or MCP servers run the
@@ -1169,7 +1219,6 @@ async def create_message(req: AnthropicMessagesRequest, request: Request):
     # block below — do NOT add it here, or it gets lifted back out and the merge
     # duplicates it / leaves `messages` (what generation consumes) system-less.
     messages = []
-    _temp_files: list[str] = []  # track temp files for cleanup
 
     # Extract cache_control hints and compute KV cache breakpoint offsets.
     # char_offsets are cumulative character positions in the system text
@@ -1192,7 +1241,7 @@ async def create_message(req: AnthropicMessagesRequest, request: Request):
 
     # Convert Anthropic messages to OpenAI-compatible format
     # This properly handles tool_use/tool_result blocks instead of flattening them
-    converted_msgs, _temp_files = _convert_anthropic_messages(
+    converted_msgs, _ = _convert_anthropic_messages(
         req.messages,
         has_images=has_images,
         temp_files=_temp_files,

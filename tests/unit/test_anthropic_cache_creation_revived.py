@@ -45,7 +45,7 @@ def test_helper_counts_list_prefix_but_zero_for_string():
 
 
 def test_create_message_snapshots_original_system():
-    src = inspect.getsource(A.create_message)
+    src = inspect.getsource(A._create_message)
     # the original list is captured BEFORE req.system is collapsed to a string
     i_snap = src.index("req._anthropic_orig_system = req.system")
     i_join = src.index('req.system = "\\n\\n".join(_all_system)')
