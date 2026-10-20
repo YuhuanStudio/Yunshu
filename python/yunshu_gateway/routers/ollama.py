@@ -53,6 +53,8 @@ def _client(request: Request) -> httpx.AsyncClient:
         headers["X-Request-Id"] = rid
     if request.headers.get("authorization"):
         headers["Authorization"] = request.headers["authorization"]
+    if request.headers.get("x-api-key"):
+        headers["x-api-key"] = request.headers["x-api-key"]
     base = f"{request.url.scheme}://{request.url.netloc}"
     return httpx.AsyncClient(base_url=base, headers=headers, timeout=None)
 
