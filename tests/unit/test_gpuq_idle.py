@@ -21,6 +21,8 @@ def gpuq(tmp_path, monkeypatch):
     monkeypatch.setattr(module.time, "time", lambda: NOW)
     monkeypatch.setattr(module, "_now", lambda: NOW)
     module.JOBS.mkdir(parents=True, exist_ok=True)
+    # line holding (test_gpuq_hold.py) off: these fixtures' history jobs each count as their own line
+    monkeypatch.setattr(module, "HOLD_MAX_S", 0)
     return module
 
 

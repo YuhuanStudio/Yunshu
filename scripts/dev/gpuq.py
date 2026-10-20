@@ -79,6 +79,10 @@ SHORT_MIN = float(os.environ.get("GPUQ_SHORT_MIN", 10))
 SHORT_WAIT_S = float(os.environ.get("GPUQ_SHORT_WAIT_S", 5 * 60))
 SHORT_SHARE = float(os.environ.get("GPUQ_SHORT_SHARE", 0.15))
 SHORT_WINDOW_S = 2 * 3600
+# Line holding (see _hold_filter): the line running long jobs keeps the M5 lane while it has more, waits
+# HOLD_GAP_S for its next batch, and yields after HOLD_MAX_S of tenure. Env: GPUQ_HOLD_GAP_S, GPUQ_HOLD_MAX_S.
+HOLD_GAP_S = float(os.environ.get("GPUQ_HOLD_GAP_S", 120))
+HOLD_MAX_S = float(os.environ.get("GPUQ_HOLD_MAX_S", 4 * 3600))
 # Filler: while the head job waits only for a quiet CPU, an idle GPU runs one job that needs no quiet CPU.
 FILLER_WAIT_S = float(os.environ.get("GPUQ_FILLER_WAIT_S", 30))
 FILLER_MAX_MIN = float(os.environ.get("GPUQ_FILLER_MAX_MIN", 30))
@@ -704,6 +708,9 @@ def _pick(jobs: list[dict], eligible=None, interleave=False) -> dict | None:
     if not pending:
         return None
     now = time.time()
+    pending = _hold_filter(jobs, pending, now)
+    if not pending:
+        return None
     top = max(_eff_priority(j, now) for j in pending)
     pending = [j for j in pending if _eff_priority(j, now) == top]
     # Turns are per device: an owner's M3 correctness jobs must not push its M5 jobs
@@ -733,6 +740,61 @@ def _pick(jobs: list[dict], eligible=None, interleave=False) -> dict | None:
             every = [j for j in every if eligible(j)]
         return _interleave_choice(jobs, every, winner, now) or winner
     return winner
+
+
+def _long(job: dict) -> bool:
+    return not (_lane_short(job) or _is_short(job) or job.get("interleaved"))
+
+
+def _holder(jobs: list[dict], now: float) -> tuple[str, float, float, int] | None:
+    """(owner, tenure seconds, seconds since its last long job ended, its priority) of the line holding the M5
+    lane: the owner of the latest started long job, its tenure the run time of its unbroken streak."""
+    started = sorted(
+        (j for j in jobs if j.get("started") and _lane(j) == "m5" and _long(j)),
+        key=lambda j: j["started"],
+    )
+    if not started:
+        return None
+    owner = _owner(started[-1])
+    tenure = 0.0
+    for j in reversed(started):
+        if _owner(j) != owner:
+            break
+        tenure += _run_s(j, now, 0.0)
+    last = started[-1]
+    idle = 0.0 if last.get("state") == "running" else now - (last.get("ended") or now)
+    return owner, tenure, idle, last.get("priority", 0)
+
+
+def _hold_filter(jobs: list[dict], pending: list[dict], now: float) -> list[dict]:
+    """Big jobs run line by line: the holding line keeps the lane for its next long job (its suite's
+    next cells, or a batch it submits within HOLD_GAP_S), so suites finish one after another instead of
+    all advancing a cell at a time (2026-10-20: 374 long jobs switched line 159 times; each line got
+    9-27% of its wall span). Other lines' long jobs at or below the holder's priority wait; short jobs,
+    gates and higher-priority work do not. After HOLD_MAX_S of tenure a waiting line takes over."""
+    held = _holder(jobs, now)
+    if held is None:
+        return pending
+    owner, tenure, idle, last_prio = held
+    if tenure >= HOLD_MAX_S:
+        return pending
+    longs = [
+        j
+        for j in pending
+        if j.get("device", "m5") == "m5" and _long(j) and not j.get("gate")
+    ]
+    mine = [_eff_priority(j, now) for j in longs if _owner(j) == owner]
+    if mine:
+        ceiling = max(mine)
+    elif idle < HOLD_GAP_S:
+        ceiling = last_prio
+    else:
+        return pending
+    return [
+        j
+        for j in pending
+        if not (j in longs and _owner(j) != owner and _eff_priority(j, now) <= ceiling)
+    ]
 
 
 _SHORT = re.compile(r"(^|[-_])(tiny|smoke|dry)([-_]|$)", re.I)

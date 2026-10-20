@@ -567,7 +567,8 @@ def test_stem_keeps_sizes(q):
     assert q._stem("wide7-api-core-pilot-10b") == "wide7-api-core-pilot-10b"
 
 
-def test_external_worktrees_take_turns(q):
+def test_external_worktrees_take_turns(q, monkeypatch):
+    monkeypatch.setattr(q, "HOLD_MAX_S", 0)  # round-robin fallback (no line holding)
     import time
 
     now = time.time()
@@ -660,7 +661,8 @@ def test_stats_counts_wasted_minutes(q, capsys, monkeypatch):
     assert "wide8" in out and "wasted=  10.0 min" in out
 
 
-def test_m3_jobs_do_not_cost_an_owner_its_m5_turn(q):
+def test_m3_jobs_do_not_cost_an_owner_its_m5_turn(q, monkeypatch):
+    monkeypatch.setattr(q, "HOLD_MAX_S", 0)  # round-robin fallback (no line holding)
     """main's M3 sweep must not push main's M5 job behind other owners (2026-10-06)."""
     import time
 
