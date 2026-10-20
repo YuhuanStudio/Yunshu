@@ -316,6 +316,9 @@ async def _vlm_to_responses(req, messages, request, logit_bias, own_input_messag
         user=req.user,
         timeout=req.timeout,
         grammar=req.grammar,
+        prompt_cache_key=req.prompt_cache_key,
+        prompt_cache_retention=req.prompt_cache_retention,
+        prompt_cache_options=req.prompt_cache_options,
     )
     vlm_json_schema = _parse_response_format(chat_response_format, req.grammar)
     chat_resp = await _handle_vlm_chat(
