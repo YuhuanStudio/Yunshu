@@ -229,7 +229,7 @@ def timing(a, lm, ids):
                     shape = make_shape(tv, kind, T, a.fast)
 
                     def fwd(shape=shape, toks=toks):
-                        res = tv.tree_forward(lm, toks, shape, cache)
+                        res = tv.tree_forward(lm, toks, shape, cache, a.capture)
                         tgt = lm.speculative_argmax_from_hidden(res.hidden)
                         return tgt, lambda: tv.tree_abort(cache, res)
 
@@ -286,6 +286,13 @@ def main():
     ap.add_argument("--output", type=Path)
     ap.add_argument(
         "--fast", action="store_true", help="time tree shapes as DFlash FastShape"
+    )
+    ap.add_argument(
+        "--capture",
+        type=int,
+        nargs="*",
+        default=(),
+        help="target layers whose hidden states the verify captures (DFlash2: 5 19 33 47 61)",
     )
     ap.add_argument(
         "--fused-rows",
