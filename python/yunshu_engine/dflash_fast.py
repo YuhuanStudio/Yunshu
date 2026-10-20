@@ -600,6 +600,7 @@ def rounds(
                 if hidden is None:
                     n = 0  # a promoted row: the first round is plain and captures hidden states
                 grafted = []
+                graft_rows = 0
                 graft_enabled = copy is not None and copy_rows > 16 and n > 0
                 copied = (
                     copy.draft(min(copy.max_draft, room - 1))
@@ -628,18 +629,26 @@ def rounds(
                             tv.PROFILE.get("search_disp", 0.0) + gpu_window.stage_end()
                         )
                     if graft_enabled:
-                        proposal = copy.lookup(min(copy_rows - n - 1, room - 1))
-                        if copy.last_match >= copy.cfg.min_match:
+                        graft_room = min(copy_rows - 1 - n, room - 1 - n)
+                        proposal = copy.lookup(n + graft_room) if graft_room > 0 else []
+                        if proposal and copy.last_match >= copy.cfg.min_match:
                             graft_stats["matches"] += 1
-                            grafted = plan_tree_graft(proposal, n, graft_budget)
+                            grafted, graft_rows = plan_tree_graft(
+                                proposal, n, graft_budget, room - 1
+                            )
+                            graft_rows = min(graft_rows, graft_room)
+                            if graft_rows <= 0:
+                                grafted = []
                         if grafted:
-                            tokens, parents = graft_copy(tokens, parents, grafted)
+                            tokens, parents = graft_copy(
+                                tokens, parents, grafted, graft_rows
+                            )
                     tokens, parents, ranks = reorder(tokens, parents)
                     window = mx.concatenate(
                         [mx.array([bonus], dtype=token_dtype), tokens]
                     )[None]
                     shape = FastShape(
-                        parents, max(15, len(grafted)), original_ranks=ranks
+                        parents, max(15, n + graft_rows), original_ranks=ranks
                     )
                     hidden = None
                 else:
@@ -677,7 +686,7 @@ def rounds(
                 ]
                 if n:
                     _record_speculative_round(
-                        draft, len(path) - 1, n + len(grafted), parents=parent_ids
+                        draft, len(path) - 1, n + graft_rows, parents=parent_ids
                     )
                 t_m1 = time.perf_counter()
                 tv.tree_commit(lm, cache, result, path)
@@ -712,13 +721,14 @@ def rounds(
                     shared_accepted = copy_accepted - extra_accepted
                     graft_budget.observe(
                         shared_accepted if grafted else 0,
-                        len(grafted) - shared_accepted if grafted else 0,
+                        graft_rows if grafted else 0,
                         copy_accepted if grafted else len(new_tokens) - 1,
                         round_ms,
+                        tokens=len(new_tokens),
                     )
                     if grafted:
                         graft_stats["rounds"] += 1
-                        graft_stats["proposed"] += len(grafted)
+                        graft_stats["proposed"] += graft_rows
                         graft_stats["accepted"] += copy_accepted
                         graft_stats["extra_accepted"] += extra_accepted
                         graft_stats["rows"] += int(window.size)

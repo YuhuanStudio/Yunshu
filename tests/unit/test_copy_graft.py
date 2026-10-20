@@ -133,6 +133,45 @@ def test_short_copy_branch_does_not_require_exceeding_model_node_count():
     from yunshu_engine.copy_graft import plan_tree_graft
 
     budget = GraftBudget()
-    assert plan_tree_graft([9, 8, 7], 15, budget) == [9, 8, 7]
-    assert len(plan_tree_graft(list(range(31)), 8, budget)) == 12
-    assert plan_tree_graft([], 15, budget) == []
+    assert plan_tree_graft([9, 8, 7], 15, budget) == ([9, 8, 7], 3)
+    source, rows = plan_tree_graft(list(range(31)), 8, budget)
+    assert rows == 4 and len(source) == 12
+    assert plan_tree_graft([], 15, budget) == ([], 0)
+    assert plan_tree_graft(list(range(31)), 8, budget, room=10)[1] == 2
+
+
+def test_graft_reference_shares_matching_ancestors_without_duplicates():
+    from yunshu_engine.dflash_plan import graft_reference
+
+    # model tree: 1 -> 2 (children of root chain), copied chain 1 2 3 4
+    tokens, parents = [1, 2, 9], [-1, 0, 1, 1]
+    out_t, out_p = graft_reference(tokens, parents, [1, 2, 3, 4], 2)
+    assert out_t == [1, 2, 9, 3, 4]
+    assert out_p[:4] == [-1, 0, 1, 1]
+    # appended rows chain from the deepest shared node (row 2 = token 2)
+    assert out_p[4] == 2 and out_p[5] == 4
+
+
+def test_graft_reference_pads_and_diverges_at_root():
+    from yunshu_engine.dflash_plan import graft_reference
+
+    out_t, out_p = graft_reference([5], [-1, 0], [7, 8], 3)
+    assert out_t == [5, 7, 8, 0]
+    assert out_p == [-1, 0, 0, 2, 3]
+
+
+def test_budget_stops_grafting_when_rounds_are_slower_per_token():
+    budget = GraftBudget()
+    for _ in range(3):
+        budget.observe(0, 0, 8, 55.0, tokens=9)
+    for _ in range(3):
+        budget.observe(4, 8, 12, 105.0, tokens=12)
+    assert budget.choose(20) == 0
+    assert any(budget.choose(20) for _ in range(16))
+
+
+def test_budget_keeps_grafting_when_rounds_are_faster_per_token():
+    budget = GraftBudget()
+    budget.observe(0, 0, 8, 55.0, tokens=9)
+    budget.observe(4, 8, 12, 80.0, tokens=17)
+    assert budget.choose(20) > 0

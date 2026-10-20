@@ -21,6 +21,8 @@ class GraftBudget:
         self.base_tokens = 3.0
         self.width = 4
         self.calls = 0
+        self.graft_rate: float | None = None  # tokens per ms of graft rounds (EMA)
+        self.base_rate: float | None = None  # tokens per ms of plain rounds (EMA)
 
     def choose(self, available: int) -> int:
         self.calls += 1
@@ -29,6 +31,14 @@ class GraftBudget:
             return 0
         if not self.samples or self.base_ms is None:
             return cap
+        if (
+            self.graft_rate is not None
+            and self.base_rate is not None
+            and self.graft_rate < self.base_rate
+        ):
+            # measured whole-round tokens/ms of graft rounds are worse than plain
+            # rounds: never regress, re-probe a short tail now and then
+            return min(cap, 4) if self.calls % 16 == 0 else 0
         if (
             cap > max(s[0] for s in self.samples)
             and self.samples[-1][1] == self.samples[-1][0]
@@ -47,7 +57,28 @@ class GraftBudget:
                 best, best_rate = n, rate
         return min(cap, 4) if best == 0 and self.calls % 16 == 0 else best
 
-    def observe(self, prefix: int, extra: int, accepted: int, ms: float | None) -> None:
+    def observe(
+        self,
+        prefix: int,
+        extra: int,
+        accepted: int,
+        ms: float | None,
+        tokens: int | None = None,
+    ) -> None:
+        if tokens is not None and ms is not None and ms > 0:
+            rate = tokens / ms
+            if extra:
+                self.graft_rate = (
+                    rate
+                    if self.graft_rate is None
+                    else 0.5 * self.graft_rate + 0.5 * rate
+                )
+            else:
+                self.base_rate = (
+                    rate
+                    if self.base_rate is None
+                    else 0.8 * self.base_rate + 0.2 * rate
+                )
         if extra:
             landed = max(0, accepted - prefix)
             if landed == extra:
@@ -169,11 +200,19 @@ def longest_verified_path(tokens, parents, targets):
     return max(paths, key=len)
 
 
-def plan_tree_graft(proposal, model_nodes, budget):
-    """A short alternative branch can win even inside the model node budget.
+def plan_tree_graft(proposal, model_nodes, budget, room=None):
+    """Return ``(source, rows)``: the copied chain and how many new rows to append.
 
-    Model node count bounds shared depth; it is not the agreed prefix length.
-    Offer that prefix plus a bounded tail probe, never require copy > node count.
+    The copied chain is walked down the model tree on the device, so up to
+    ``model_nodes`` leading tokens may coincide with model rows and cost nothing;
+    ``rows`` extra rows continue from there. ``rows`` is bounded by the budget,
+    the proposal length and ``room`` (tokens the request may still emit).
     """
-    width = budget.choose(len(proposal))
-    return proposal[: model_nodes + width] if width else []
+    if not proposal:
+        return [], 0
+    rows = budget.choose(len(proposal))
+    if room is not None:
+        rows = min(rows, max(0, room - model_nodes))
+    if rows <= 0:
+        return [], 0
+    return list(proposal[: model_nodes + rows]), rows
