@@ -73,6 +73,26 @@ def finish_serial_prefill(gen):
             batch.prompt_cache[i] = dense
 
 
+def invariant_guide(guide, logprobs=False, processors=()) -> bool:
+    """A tool-call guide alone: its rows keep the batch-invariant arithmetic.
+
+    Free text under a tool-call guide is unmasked, and inside a call the mask only
+    restricts the argmax of a row whose logits the invariant kernels already make equal
+    in verify and in one-row decode. So such a request decodes, verifies and prefills
+    exactly like an unguided one (same kernels, APC namespace, DFlash fast tree), with
+    the call's masked rows checked on the chain. Logprobs, penalties / bias processors
+    and response-format guides keep the serial path."""
+    from .tool_call_grammar import ToolCallGuide
+
+    return isinstance(guide, ToolCallGuide) and not logprobs and not processors
+
+
+def invariant_request(request) -> bool:
+    return request is not None and invariant_guide(
+        request.guide, request.logprobs, request.processors
+    )
+
+
 @contextmanager
 def exact_verify(request=None, guide=None):
     """Constrained/logprob rows use serial arithmetic, including non-winning logits.
@@ -84,8 +104,16 @@ def exact_verify(request=None, guide=None):
     global _SERIAL_VERIFY
     from .kernels import batch_invariant
 
-    if not batch_invariant.is_installed() or not (
-        guide is not None or (request and (request.logprobs or request.processors))
+    if (
+        not batch_invariant.is_installed()
+        or not (
+            guide is not None or (request and (request.logprobs or request.processors))
+        )
+        or invariant_guide(
+            guide,
+            bool(request and request.logprobs),
+            bool(request and request.processors),
+        )
     ):
         yield
         return
@@ -661,6 +689,12 @@ def install():
             and kw.get("draft_kind") == "dflash"
             and kw["first_bonus"].size == 1
         ):
+            from . import dflash_copy
+
+            if invariant_request(request) and dflash_copy.takes_guided(
+                model, draft_model, prompt_cache, kw
+            ):
+                return original(model, draft_model, prompt_cache, hidden, **kw)
             return dflash_rounds(
                 model, draft_model, prompt_cache, hidden, request=request, **kw
             )

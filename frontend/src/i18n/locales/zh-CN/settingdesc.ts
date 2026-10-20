@@ -50,7 +50,7 @@ const settingdesc = {
     "以逗号分隔的允许 CORS 来源（`*` 表示任意）；同时用于检查 Realtime WebSocket 的 Origin 头。",
   YUNSHU_RESPONSE_CACHE: "在内存中缓存相同的非流式响应。",
   YUNSHU_BATCH_MAX_ITEMS: "Batch API：每个批次的请求数上限。",
-  YUNSHU_BATCH_TIMEOUT: "Batch API：每个批次的默认超时秒数。",
+  YUNSHU_BATCH_TIMEOUT: "Batch API：批次中每个请求的超时秒数（0：不限）。",
   YUNSHU_ALLOW_LOCAL_FILES:
     "允许请求引用任意本地文件路径（默认仅限 `YUNSHU_MEDIA_DIR` 之下）。",
   YUNSHU_MEDIA_DIR:
@@ -135,6 +135,8 @@ const settingdesc = {
     "VLM 运行器：在预填充步骤之间保留的 MLX 已释放缓冲缓存大小（GiB）。未设置时为物理内存的 5%，最多 6 GiB；常驻权重使内存余量很少时改为 0.5 GiB（可压低超大模型长预填充的峰值）。可让长前缀恢复的缓冲在请求之间保持热状态；0 表示沿用上游每个块之后清除。仅影响分配器，输出不变。",
   YUNSHU_PREFILL_GDN:
     "Qwen3.5 系列 VLM 运行器：64 个 token 以上预填充块的 GatedDeltaNet 内核。`chunked` 使用 MLX 的 `mx.fast.gated_delta_update`（每层快 2.7 倍，与 `step` 相差在 bf16 舍入内）；`step` 保持 mlx-vlm 的逐 token 内核。属于每个 APC 键和 SSD 命名空间的一部分。",
+  YUNSHU_PREFILL_ATTENTION:
+    "Qwen3.5 系列 VLM 运行器，仅限已测量的 M5 Max / MLX 0.32.3：1024 行以上查询的预填注意力。`tile` 使用 MLX 自己的 head-dim 切分 NAX 注意力，改为 32 行查询 tile 并使用无 bank 冲突的分数交换（每次调用约快 15%；输出与 MLX 逐位相同，因此不属于任何 APC 键）；`stock` 保持 `mx.fast.scaled_dot_product_attention`。仅影响预填。",
   YUNSHU_VLM_APC_DISK_TIERS:
     "SSD 目录之下的其他 APC 存储层，以逗号分隔的 `PATH[@GiB]`（外接 SSD、HDD、NAS）。启动时会测量各卷并按读取速度排序；被淘汰的检查点会下移而非删除，且仅在恢复比重新预填充更快时才由该层服务命中。未挂载的层会跳过。无损；未设置则只用 SSD。",
   YUNSHU_VLM_APC_DISK_ENCODING:

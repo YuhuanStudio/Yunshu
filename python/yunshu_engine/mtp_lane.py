@@ -511,11 +511,13 @@ def rounds(
             mx.clear_cache()
 
 
-def _request_has_processors() -> bool:
+def _request_needs_chain() -> bool:
+    # Processors and logprob reports are recorded per token by the chain rounds only; the tree
+    # rounds emit bare tokens.
     from .constrained_spec import current_request
 
     request = current_request()
-    return bool(request is not None and request.processors)
+    return bool(request is not None and (request.processors or request.logprobs))
 
 
 def install() -> bool:
@@ -541,7 +543,7 @@ def install() -> bool:
                 and kw.get("greedy_sampling")
                 and _STATE["guide"] is None
                 and not isinstance(kw.get("sampler"), KeyedSampler)
-                and not _request_has_processors()
+                and not _request_needs_chain()
             )
             and kw.get("draft_kind") == "mtp"
             and (

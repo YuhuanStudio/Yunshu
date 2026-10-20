@@ -10,6 +10,7 @@ Foreign processes with nice >= 10 are background work and excluded.
 from __future__ import annotations
 
 import contextlib
+import fcntl
 import json
 import math
 import os
@@ -163,6 +164,14 @@ def _cpu_seconds(value):
     for part in parts:
         total = total * 60 + part
     return float(days) * 86400 + total
+
+
+@contextlib.contextmanager
+def job_lock(path):
+    """Exclusive per-job lock for read-modify-write of a job file (CLI cancel vs daemon updates)."""
+    with open(str(path) + ".lock", "a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        yield
 
 
 class CpuSampler:
@@ -429,9 +438,10 @@ class ContentionMonitor:
             memory_policy_version=2,
         )
         self.job.update(fields)
-        data = self.read(self.path)
-        data.update(fields)
-        self.write(self.path, data)
+        with job_lock(self.path):
+            data = self.read(self.path)
+            data.update(fields)
+            self.write(self.path, data)
         self.write(
             self.flag,
             dict(

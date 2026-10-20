@@ -116,6 +116,8 @@ def plan(
                             task,
                             "--repeat",
                             "1",
+                            "--repeat-start",
+                            str(rep),
                             "--timeout-min",
                             str(RUN_TIMEOUT_MIN),
                             "--budget-min",
@@ -264,14 +266,21 @@ def task_ids(spec):
 def finish(outdir, wait_ids, max_seconds, baseline):
     meta = json.loads((outdir / "plan.json").read_text())
     planned = [dict(j, out=Path(j["out"])) for j in meta["jobs"]]
+    # --collect has no ids to wait on: ask the queue about the saved ones without waiting.
+    ids = wait_ids or [j["id"] for j in planned if j.get("id")]
     wait_rc = None
-    if wait_ids:
+    if ids:
         wait_rc = subprocess.run(
-            [GPUQ, "wait", "--max-seconds", str(max_seconds), *wait_ids]
+            [GPUQ, "wait", "--max-seconds", str(max_seconds if wait_ids else 0), *ids]
         ).returncode
     rows, _ = load_rows([str(j["out"]) for j in planned])
     base_rows, _ = load_rows(baseline) if baseline else ([], [])
     v = judge(planned, rows, base_rows)
+    if wait_rc not in (0, None):
+        v["problems"].append(
+            f"queue jobs failed, were cancelled or are unfinished (gpuq wait rc={wait_rc})"
+        )
+        v["verdict"] = "FAIL"
     v.update(
         sha=meta["sha"],
         ref=meta["ref"],

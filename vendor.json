@@ -577,6 +577,21 @@
     },
     {
       "kind": "derived",
+      "path": "python/yunshu_engine/kernels/attn_prefill.py",
+      "repo": "https://github.com/ml-explore/mlx",
+      "clone": "reference/mlx",
+      "upstream_paths": [
+        "mlx/backend/metal/kernels/steel/attn/kernels/steel_attention_nax.h"
+      ],
+      "commit": "64ea011cb65f14d9ce2737e60db9a4ae91ed7441",
+      "license": "MIT",
+      "why": "Native MLX 0.32.3 head-dim-split NAX attention body (attention_nax_dsplit) compiled for a 32-row query tile with a lane-minor score-exchange layout; same key-block order and reductions, output bit-identical to mx.fast.scaled_dot_product_attention. Installed headers are version-guarded.",
+      "reviewed_commit": "83b976ea438466418dea20c89709601201851fe1",
+      "reviewed_date": "2026-10-16",
+      "review_reason": "Reviewed upstream subjects: Adding VJP for the scaled dot product attention (#4563). Training-only (backward pass); the forward D-split kernel we harvest is unchanged. Re-read when the mlx<0.32.4 cap is lifted."
+    },
+    {
+      "kind": "derived",
       "path": "python/yunshu_engine/kernels/nax_prefill.py",
       "repo": "https://github.com/ml-explore/mlx",
       "clone": "reference/mlx",
@@ -2011,6 +2026,21 @@
       "why": "depended on (not patched): forget an invalidated file",
       "source_sha256": "bd807a6e029355ab1165cba870fcf968ce7d8732740ab6353dcbaaa5e5ea3b1c",
       "installed_version": "0.7.8"
+    },
+    {
+      "kind": "patches",
+      "path": "python/yunshu_engine/kernels/attn_prefill.py",
+      "repo": "https://github.com/Blaizzy/mlx-vlm",
+      "clone": "reference/mlx-vlm",
+      "package": "mlx-vlm",
+      "module": "mlx_vlm.models.base",
+      "symbol": "scaled_dot_product_attention",
+      "signature": "(queries, keys, values, cache, scale, mask, sinks=None)",
+      "license": "MIT",
+      "commit": "v0.7.3",
+      "why": "prefill attention of 1024+ query rows (causal, plain KV cache) runs the BQ32 tile kernel; everything else calls the original",
+      "installed_version": "0.7.6",
+      "source_sha256": "2bc5644af48b66c94f7ab1488e5807a9e2f5c2700fd32d06185eeb246bda667c"
     },
     {
       "kind": "patches",

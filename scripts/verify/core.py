@@ -137,6 +137,20 @@ class Arm:
         }
 
 
+def _dirty_hash(path: Path) -> str:
+    """Hash of everything that differs from HEAD: tracked diff plus untracked (non-ignored) files."""
+    parts: list[object] = [git("diff", "HEAD", cwd=path)]
+    for name in sorted(
+        git("ls-files", "--others", "--exclude-standard", cwd=path).splitlines()
+    ):
+        f = path / name
+        try:
+            parts.append([name, hashlib.sha256(f.read_bytes()).hexdigest()])
+        except OSError:
+            parts.append([name, "unreadable"])
+    return "" if parts == [""] else sha(parts, n=8)
+
+
 def resolve_arm(name: str, spec: str, trees: Path | None = None) -> Arm:
     """`spec` is a git ref (a pinned detached worktree is built, reused by commit hash)
     or an existing directory (a checkout / worktree used as is; uncommitted changes are hashed
@@ -145,9 +159,7 @@ def resolve_arm(name: str, spec: str, trees: Path | None = None) -> Arm:
     p = Path(spec)
     if p.is_dir() and (p / ".git").exists():
         commit = git("rev-parse", "HEAD", cwd=p)
-        diff = git("diff", "HEAD", cwd=p)
-        dirty = sha(diff, n=8) if diff else ""
-        return Arm(name, spec, commit, p.resolve(), dirty)
+        return Arm(name, spec, commit, p.resolve(), _dirty_hash(p))
     commit = git("rev-parse", "--verify", spec + "^{commit}")
     path = trees / commit[:12]
     if not (path / ".git").exists():
@@ -155,7 +167,7 @@ def resolve_arm(name: str, spec: str, trees: Path | None = None) -> Arm:
         git("worktree", "add", "--detach", str(path), commit)
     if git("rev-parse", "HEAD", cwd=path) != commit:
         raise InfraError(f"{path} is not at {commit[:12]}")
-    return Arm(name, spec, commit, path, "")
+    return Arm(name, spec, commit, path, _dirty_hash(path))
 
 
 def changed_files(base: Arm, cand: Arm) -> list[str]:

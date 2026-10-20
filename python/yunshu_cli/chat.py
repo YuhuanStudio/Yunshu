@@ -12,6 +12,8 @@ from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.text import Text
 
+from ._output import auth_headers
+
 console = Console()
 chat_app = typer.Typer(help="Interactive chat.", no_args_is_help=False)
 
@@ -52,7 +54,7 @@ def chat(
     resolved_model = model
     if not resolved_model:
         try:
-            resp = httpx.get(f"{url}/v1/models", timeout=5)
+            resp = httpx.get(f"{url}/v1/models", headers=auth_headers(), timeout=5)
             if resp.status_code == 200:
                 models = resp.json().get("data", [])
                 # Prefer LLM models
@@ -203,7 +205,12 @@ def _send_non_stream(url: str, payload: dict) -> None:
     import httpx
 
     with console.status("[bold cyan]Generating..."):
-        resp = httpx.post(f"{url}/v1/chat/completions", json=payload, timeout=120)
+        resp = httpx.post(
+            f"{url}/v1/chat/completions",
+            json=payload,
+            headers=auth_headers(),
+            timeout=120,
+        )
 
     if resp.status_code != 200:
         console.print(f"[red]Error {resp.status_code}:[/] {resp.text[:200]}")
@@ -248,7 +255,11 @@ def _send_stream(url: str, payload: dict) -> None:
     import httpx
 
     with httpx.stream(
-        "POST", f"{url}/v1/chat/completions", json=payload, timeout=120
+        "POST",
+        f"{url}/v1/chat/completions",
+        json=payload,
+        headers=auth_headers(),
+        timeout=120,
     ) as resp:
         if resp.status_code != 200:
             error_body = "".join(resp.iter_text())

@@ -327,7 +327,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
         from .routers import batches as _batches
 
-        _batches.start_runner()  # resume unfinished Batch API jobs
+        _batches.start_runner(app)  # resume unfinished Batch API jobs
     except Exception:
         logger.warning("Batch runner resume failed", exc_info=True)
 
@@ -729,11 +729,6 @@ def create_app() -> FastAPI:
 
     app.add_middleware(SurrogateGuardMiddleware)
     app.add_middleware(ToolReasoningMiddleware)
-    from .middleware.live_cors import LiveCORSMiddleware
-
-    # Follows YUNSHU_CORS_ORIGINS live (PATCH /v1/yunshu/cors).
-    app.add_middleware(LiveCORSMiddleware)
-
     # Gateway middleware (order: outermost first)
     from .middleware.auth import AuthMiddleware
     from .middleware.metrics import MetricsMiddleware
@@ -1005,6 +1000,12 @@ def create_app() -> FastAPI:
     from .middleware.model_lease import ModelLeaseMiddleware
 
     app.add_middleware(ModelLeaseMiddleware)
+    from .middleware.live_cors import LiveCORSMiddleware
+
+    # Follows YUNSHU_CORS_ORIGINS live (PATCH /v1/yunshu/cors). Added after auth / rate limit
+    # so it wraps them: their 401 / 429 / 413 responses must carry CORS headers too, else a
+    # browser client sees an opaque network error instead of the status.
+    app.add_middleware(LiveCORSMiddleware)
     # OUTERMOST — added last so it wraps auth/rate-limit and records their
     # rejections (401/429/413/503) into the metrics, which it could not see when innermost.
     app.add_middleware(MetricsMiddleware)

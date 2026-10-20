@@ -93,6 +93,7 @@ def world(tmp_path, monkeypatch):
     (repo / "tests/unit/test_foo.py").write_text(
         "from yunshu_engine import foo\n\ndef test_x():\n    assert foo.X >= 1\n"
     )
+    (repo / ".gitignore").write_text("__pycache__/\n.pytest_cache/\n")
     git(repo, "init", "-q", "-b", "main")
     git(repo, "add", "-A")
     git(repo, "commit", "-qm", "base")
@@ -273,6 +274,25 @@ def test_dirty_dir_arm_key_changes(world):
     (d / "python/yunshu_engine/foo.py").write_text("X = 3\n")
     a2 = core.resolve_arm("cand", str(d))
     assert a1.key != a2.key and a2.dirty
+
+
+def test_untracked_files_change_the_dir_arm_key(world):
+    d = world.repo
+    a0 = core.resolve_arm("cand", str(d))
+    new = d / "python/yunshu_engine/new_mod.py"
+    new.write_text("A = 1\n")
+    a1 = core.resolve_arm("cand", str(d))
+    new.write_text("A = 2\n")
+    a2 = core.resolve_arm("cand", str(d))
+    assert len({a0.key, a1.key, a2.key}) == 3 and a1.dirty
+
+
+def test_dirty_pinned_ref_worktree_is_not_keyed_clean(world):
+    c = core.resolve_arm("cand", "cand", world.trees)
+    assert not c.dirty
+    (c.path / "python/yunshu_engine/foo.py").write_text("X = 99\n")
+    c2 = core.resolve_arm("cand", "cand", world.trees)
+    assert c2.dirty and c2.key != c.key
 
 
 # ── analysis ─────────────────────────────────────────────────────────────
@@ -1057,7 +1077,20 @@ def test_memory_base_shared_and_speed_base_only_on_request(world):
         )
         == 0
     )
-    assert not [j for j in jobs(world)[n:] if "-speed-base" in j] or True
+    # the first reuse run has nothing to reuse yet: it records the shared base
+    assert len([j for j in jobs(world)[n:] if "-speed-base" in j]) == 3
+    n = len(jobs(world))
+    assert (
+        go(
+            world,
+            suite="speed",
+            label="s4",
+            cand_env=["FAKE_Z=1"],
+            reuse_base_speed=True,
+        )
+        == 0
+    )
+    assert not [j for j in jobs(world)[n:] if "-speed-base" in j]
 
 
 def test_one_server_per_arm_for_identity_and_small_model_smoke_uses_any_device(world):
@@ -1076,7 +1109,7 @@ def test_one_server_per_arm_for_identity_and_small_model_smoke_uses_any_device(w
         opts = json.loads(p.read_text())["opts"]
         assert opts[opts.index("--device") + 1] == "any"
     for p in (world.tmp / "jobs").glob("*identity*.json"):
-        assert "--device" not in json.loads(p.read_text())["opts"] or True
+        assert "--device" not in json.loads(p.read_text())["opts"]
 
 
 def test_quick_suite_and_gpu_minutes(world):
@@ -1615,3 +1648,26 @@ def test_real_stage_rejects_cross_spec_modes_with_identical_outputs(world, suite
     v, _ = verdict_of(world)
     assert v["stages"][0]["status"] == "FAIL"
     assert any("engaged spec mode mismatch" in r for r in v["stages"][0]["reasons"])
+
+
+def test_apc_stage_checks_every_spec_mode(tmp_path):
+    import json
+    from types import SimpleNamespace
+
+    good, bad = rows(cached=1024), rows(cached=1024)
+    bad[1]["sha"] = "zzz"  # MTP warm != cold; the later (good) mode must not mask it
+    ev = {"mtp": bad, "dflash": good}
+
+    def cell_path(stage, key):
+        p = tmp_path / f"{stage}.{key}.jsonl"
+        mode = key.split(".")[1]
+        p.write_text("".join(json.dumps(r) + "\n" for r in ev[mode]))
+        return p
+
+    ctx = SimpleNamespace(
+        suite={"spec_modes": ["mtp", "dflash"], "ctx": [1024], "kinds": ["code"]},
+        run=SimpleNamespace(cell_path=cell_path, append=lambda *a: None),
+        exe=SimpleNamespace(jobs=[]),
+    )
+    res = stages.stage_apc(ctx)
+    assert not res.passed

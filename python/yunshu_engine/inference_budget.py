@@ -169,7 +169,7 @@ class InferenceBudgetManager:
         self._exhausted: dict[str, int] = defaultdict(int)
         self._total_tokens_consumed: int = 0
         self._global_token_window: list[tuple[float, int]] = []
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
 
     @classmethod
     def from_env(cls) -> InferenceBudgetManager:

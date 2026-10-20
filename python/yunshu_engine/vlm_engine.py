@@ -795,6 +795,10 @@ class VLMEngine:
         policy = settings.get("YUNSHU_GC_POLICY")
         self._gc_policy = policy
         runner.gc_guard = gc_policy.install(policy)
+        # YUNSHU_GIL_SWITCH_MS is reload-class: re-read it on every model load.
+        from . import gil_switch
+
+        gil_switch.apply()
 
     async def start(self) -> None:
         if self._model is not None:
@@ -836,6 +840,9 @@ class VLMEngine:
             # Persist resident checkpoints to the SSD tier (if any) before dropping them.
             with contextlib.suppress(Exception):
                 await asyncio.get_running_loop().run_in_executor(None, apc.close)
+        from .kernels import tf_hc_forward
+
+        tf_hc_forward.forget(self._model)
         self._model = None
         self._tokenizer = None
         self._apc_backend = None
@@ -2044,6 +2051,9 @@ class VLMEngine:
         from .vlm_batch_runner import VLMBatchRunner
 
         nax_prefill.disable()
+        from .kernels import attn_prefill
+
+        attn_prefill.disable()
         from .kernels import lane_linear as lane_sum_policy
 
         lane_sum_policy.configure_sum_policy(False)
@@ -2226,6 +2236,11 @@ class VLMEngine:
                     from .kernels import gdn_prefill
 
                     gdn_prefill.install()
+                if settings.get("YUNSHU_PREFILL_ATTENTION") == "tile":
+                    # Bit-identical to stock MLX attention, so no APC key change.
+                    kernels["attn_prefill"] = (
+                        attn_prefill.arithmetic_id() if attn_prefill.enable() else None
+                    )
                 kernels["invariant"] = install_invariant(
                     self._model.language_model, model=self._model, packed=False
                 )

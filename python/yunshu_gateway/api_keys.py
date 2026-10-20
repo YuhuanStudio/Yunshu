@@ -124,6 +124,12 @@ class Principal:
     name: str | None = None
 
 
+# Loopback calls the gateway makes to itself on a caller's behalf (Ollama routes, compaction)
+# carry this per-process secret, so the auth middleware does not charge the same key's quotas a
+# second time (a max_concurrent=1 key would otherwise 429 its own request). Never leaves the process.
+INTERNAL_HEADER = "x-yunshu-internal"
+INTERNAL_SECRET = secrets.token_urlsafe(24)
+
 ADMIN_TOKEN = Principal("token", frozenset(SCOPES), None, "admin-token")
 
 

@@ -64,11 +64,15 @@ def test_get_no_trim_consults_hybrid_ssd_on_empty_ram_cache():
             return (["HYBRID_RESTORED"], 128)
 
     c._hybrid_ssd = _HybridSSD()
-    prompt = mx.arange(128, dtype=mx.int32)
+    prompt = mx.arange(130, dtype=mx.int32)
     result, remaining, matched = c._get_no_trim_unlocked(prompt)
     assert result == ["HYBRID_RESTORED"]
     assert matched == 128
-    assert remaining == 0
+    assert remaining == 2
+    # A full exact hit is declined like the RAM branch: the caller would re-feed the last
+    # token into recurrent state that cannot be trimmed.
+    result, remaining, matched = c._get_no_trim_unlocked(prompt[:128])
+    assert result is None and matched == 0 and remaining == 128
 
 
 def test_get_no_trim_still_fast_exits_with_no_hybrid_ssd():
@@ -108,3 +112,25 @@ def test_ssd_longer_than_ram_hit_wins_and_short_ram_hit_does_not_hide_it():
     # no SSD tier: nothing to do
     c._ssd_cache = None
     assert c._ssd_longer_than_ram(query, 256) is None
+
+
+def test_native_ssd_restore_keeps_the_kv_dtype():
+    class _SSD:
+        def __init__(self, dtype):
+            self.dtype = dtype
+
+        def has_block(self, key):
+            return True
+
+        def load_block(self, key):
+            k = mx.ones((1, 2, 64, 8), dtype=self.dtype)
+            return [(k, k)]
+
+    c = _cache()
+    c._n_ssd_restore = 0
+    c._ssd_cache = _SSD(mx.float16)
+    cache, n = c.restore_prefix_from_ssd([1, 2])
+    assert n == 128 and cache[0].keys.dtype == mx.float16
+    c._ssd_cache = _SSD(mx.float32)  # int8 blocks dequantize to float32
+    cache, _ = c.restore_prefix_from_ssd([1])
+    assert cache[0].keys.dtype == mx.bfloat16

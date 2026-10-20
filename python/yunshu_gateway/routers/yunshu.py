@@ -449,7 +449,9 @@ async def warmup(req: WarmupRequest, request: Request) -> dict:
         for h in ("authorization", "x-api-key"):
             if request.headers.get(h):
                 headers[h] = request.headers[h]
-        base = f"{request.url.scheme}://{request.url.netloc}"
+        from ..loopback import self_base
+
+        base = self_base(request)
         t1 = time.perf_counter()
         try:
             async with httpx.AsyncClient(

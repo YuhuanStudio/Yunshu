@@ -179,7 +179,10 @@ def build_xml_grammar(
         props = params.get("properties")
         defs = params.get("$defs") or params.get("definitions")
         alts: list[str] = []
+        required: list[str] = []
         if isinstance(props, dict) and props:
+            needed = params.get("required")
+            needed = set(needed) if isinstance(needed, list) else set()
             for ki, (key, prop) in enumerate(props.items()):
                 rule = f"p{ti}_{ki}"
                 lines.append(
@@ -187,9 +190,16 @@ def build_xml_grammar(
                     f'{b.value(prop, defs)} "\\n"?'
                 )
                 alts.append(rule)
+                if key in needed:
+                    required.append(rule)
         else:
             alts.append("pany")
-        lines.append(f"params{ti}: ({' | '.join(alts)})*")
+        # Every required parameter appears (in declared order, the order the chat template
+        # lists them); other parameters may come anywhere around them.
+        anyp = f"({' | '.join(alts)})*"
+        lines.append(
+            f"params{ti}: {' '.join([anyp, *(f'{r} {anyp}' for r in required)])}"
+        )
         head = _q("<function=" + tool.name + ">")
         lines.append(
             f'call{ti}: {head} "\\n"? params{ti} "</function>" "\\n"? <[{end_id}]>'
@@ -699,7 +709,7 @@ class ToolCallGuide:
         if self.phase == FREE:
             return token == g.start_id
         if self.phase == WAIT:
-            return g.forced and token == g.think_end_id
+            return token == g.start_id or (g.forced and token == g.think_end_id)
         return False
 
     def feed(self, token: int) -> bool:
@@ -713,7 +723,12 @@ class ToolCallGuide:
                     self.consumed = 0
                 else:
                     self.phase = FREE
-            return True
+                return True
+            if token != g.start_id:
+                return True
+            # A call marker inside reasoning ends it implicitly (the engine surfaces the
+            # call), so the body is constrained like one opened after the reasoning.
+            self.phase = FREE
         if self.phase == FREE:
             if token == g.start_id:
                 self.phase = BODY

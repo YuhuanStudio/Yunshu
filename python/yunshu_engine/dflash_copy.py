@@ -140,6 +140,50 @@ def resume_chain(original, model, draft, cache, hidden, *, copy, draft_cache, **
             proxy.close()
 
 
+def _copy_gate(lm, draft, cache, kw) -> bool:
+    """The copy / fast-tree wrapper's preconditions (greedy, lane-ready, row bounds)."""
+    from mlx_vlm.speculative.common import _dflash_block_total
+
+    from . import mtp_lane, tree_verify
+
+    return not (
+        not kw.get("greedy_sampling", True)
+        or mtp_lane._STATE["context"] is None
+        or mtp_lane.copy_rows_for_model(lm) < 3
+        or not hasattr(draft, "candidate_selector")
+        or callable(getattr(draft, "prepare_target_hidden", None))
+        or context_window(draft) is None
+        or not tree_verify.supported(lm)
+        or not tree_verify.lane_projections(lm)
+        or not tree_verify.lane_ready(lm, cache)
+        or mtp_lane.verify_max_rows(True, lm) < 16
+        or _dflash_block_total(draft, kw.get("draft_block_size"))
+        > mtp_lane.verify_max_rows(tree_verify.lane_projections(lm), lm)
+    )
+
+
+def takes_guided(model, draft, cache, kw) -> bool:
+    """Whether the DFlash fast tree takes this tool-guided request (it masks the call's rows
+    on its chain); otherwise constrained_spec runs the guided chain. ``kw`` may be the
+    server-rounds keywords (``first_bonus`` an array) or the rounds keywords."""
+    from mlx_vlm.speculative import utils
+
+    from . import dflash_fast, settings
+
+    if not getattr(utils._dflash_rounds, "_yunshu_copy", False):
+        return False  # only this wrapper hands a guided request to the fast tree
+    lm = getattr(model, "language_model", model)
+    kw = dict(kw)
+    bonus = kw.get("first_bonus")
+    if hasattr(bonus, "reshape"):
+        kw["first_bonus"] = int(bonus.reshape(-1).item())
+    return bool(
+        settings.get("YUNSHU_SPEC_TREE") == "auto"
+        and _copy_gate(lm, draft, cache, kw)
+        and dflash_fast.eligible(lm, draft, cache, kw, guided=True)
+    )
+
+
 def install() -> bool:
     """Install once; unsupported and sampled requests retain their original loop."""
     from mlx_vlm.speculative import dflash, utils
@@ -165,32 +209,24 @@ def install() -> bool:
         return choose(draft, block, remaining, initial)
 
     def rounds(model, draft, cache, hidden, **kw):
-        from mlx_vlm.speculative.common import _dflash_block_total
-
-        from . import mtp_lane, tree_verify
+        from . import dflash_fast, mtp_lane, settings
 
         lm = getattr(model, "language_model", model)
-        context = mtp_lane._STATE["context"]
-        rows = mtp_lane.copy_rows_for_model(lm)
-        if (
-            not kw.get("greedy_sampling", True)
-            or context is None
-            or rows < 3
-            or mtp_lane._STATE["guide"] is not None
-            or not hasattr(draft, "candidate_selector")
-            or callable(getattr(draft, "prepare_target_hidden", None))
-            or context_window(draft) is None
-            or not tree_verify.supported(lm)
-            or not tree_verify.lane_projections(lm)
-            or not tree_verify.lane_ready(lm, cache)
-            or mtp_lane.verify_max_rows(True, lm) < 16
-            or _dflash_block_total(draft, kw.get("draft_block_size"))
-            > mtp_lane.verify_max_rows(tree_verify.lane_projections(lm), lm)
-        ):
+        if mtp_lane._STATE["guide"] is not None:
+            # constrained_spec.run sends a guided request here only when this predicate
+            # holds (otherwise it runs the guided chain itself)
+            if not takes_guided(model, draft, cache, kw):
+                yield from current(model, draft, cache, hidden, **kw)
+                return
+            yield from dflash_fast.rounds(
+                model, draft, cache, hidden, _chain=current, **kw
+            )
+            return
+        if not _copy_gate(lm, draft, cache, kw):
             yield from current(model, draft, cache, hidden, **kw)
             return
-        from . import dflash_fast, settings
-
+        context = mtp_lane._STATE["context"]
+        rows = mtp_lane.copy_rows_for_model(lm)
         if settings.get("YUNSHU_SPEC_TREE") == "auto" and dflash_fast.eligible(
             lm, draft, cache, kw
         ):

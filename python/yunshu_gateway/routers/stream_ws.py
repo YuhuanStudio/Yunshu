@@ -5,7 +5,6 @@ from __future__ import annotations
 from fastapi import APIRouter, WebSocket
 
 from yunshu_engine import settings
-from yunshu_gateway.token_compare import tokens_equal
 
 from ..ws_transport import Connection
 
@@ -25,14 +24,20 @@ async def _admit(ws: WebSocket) -> bool:
             if origin.rstrip("/") not in allowed:
                 await ws.close(code=1008)
                 return False
+    from yunshu_gateway import api_keys
+
     token = settings.get("YUNSHU_AUTH_TOKEN")
-    if token and not settings.get_bool("YUNSHU_AUTH_DISABLED"):
+    if (token or api_keys.get_store().has_keys()) and not settings.get_bool(
+        "YUNSHU_AUTH_DISABLED"
+    ):
         got = ws.headers.get("authorization", "").removeprefix("Bearer ").strip()
         if not got:
             got = ws.headers.get("x-api-key", "") or (
                 ws.query_params.get("token") or ""
             )
-        if not (got and tokens_equal(got, token)):
+        # the static token or a stored API key with inference rights (as realtime does)
+        principal = api_keys.principal_for(got, token)
+        if principal is None or not ({"infer", "admin"} & principal.scopes):
             await ws.close(code=1008)
             return False
     return True

@@ -38,6 +38,13 @@ OPENAI_ENDPOINTS = (
 )
 MAX_OPENAI_LINES = 50_000
 MAX_ANTHROPIC_REQUESTS = 100_000
+
+
+def _cap(hard: int) -> int:
+    """The protocol limit, lowered by YUNSHU_BATCH_MAX_ITEMS."""
+    return min(hard, int(settings.get("YUNSHU_BATCH_MAX_ITEMS")))
+
+
 WINDOW_SECONDS = 86_400
 ACTIVE = ("validating", "in_progress", "cancelling")
 _CUSTOM_ID_RE = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
@@ -48,13 +55,26 @@ _CUSTOM_ID_RE = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
 # ---------------------------------------------------------------------------
 
 
+_INTERNAL_BASE = "http://yunshu.internal"
+
+
 def _default_client(base_url: str, headers: dict[str, str]) -> httpx.AsyncClient:
-    return httpx.AsyncClient(base_url=base_url, headers=headers, timeout=None)
+    # In-process ASGI dispatch: the worker never follows the submitter's Host header, so its
+    # credentials cannot be sent to another server.
+    if runner.app is None:
+        raise RuntimeError("batch runner has no app bound")
+    return httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=runner.app),
+        base_url=base_url,
+        headers=headers,
+        timeout=settings.get("YUNSHU_BATCH_TIMEOUT") or None,
+    )
 
 
 class BatchRunner:
     def __init__(self) -> None:
         self.client_factory = _default_client
+        self.app: Any = None
         self.autostart = True
         self.yield_seconds = 0.05
         self._task: asyncio.Task | None = None
@@ -135,7 +155,7 @@ class BatchRunner:
             )
         headers = self._headers(rec)
         end = "completed"
-        async with self.client_factory(rec["base_url"], headers) as client:
+        async with self.client_factory(_INTERNAL_BASE, headers) as client:
             for line in lines:
                 if line["custom_id"] in done:
                     continue
@@ -286,8 +306,10 @@ class BatchRunner:
 runner = BatchRunner()
 
 
-def start_runner() -> None:
+def start_runner(app: Any = None) -> None:
     """Called from the gateway lifespan: resume unfinished batches."""
+    if app is not None:
+        runner.app = app
     try:
         if BatchRunner.next_batch(get_store()) is not None:
             runner.ensure_started()
@@ -316,7 +338,6 @@ def _new_record(api: str, prefix: str, request: Request, total: int) -> dict[str
         "status": "validating",
         "created_at": now,
         "expires_at": now + WINDOW_SECONDS,
-        "base_url": _base(request),
         "in_progress_at": None,
         "finalizing_at": None,
         "completed_at": None,
@@ -402,11 +423,11 @@ def _validate_openai_input(raw: bytes, endpoint: str) -> tuple[list[dict], list[
     for n, text in enumerate(raw.decode("utf-8", errors="replace").split("\n"), 1):
         if not text.strip():
             continue
-        if len(lines) >= MAX_OPENAI_LINES:
+        if len(lines) >= (limit := _cap(MAX_OPENAI_LINES)):
             bad(
                 n,
                 "batch_request_limit_exceeded",
-                f"Batches are limited to {MAX_OPENAI_LINES} requests",
+                f"Batches are limited to {limit} requests",
             )
             break
         try:
@@ -531,6 +552,7 @@ async def create_batch(request: Request):
         return openai_batch(rec)
     _write_input(store, rec, lines)
     store.save_batch(rec)
+    runner.app = request.app
     runner.ensure_started()
     return openai_batch(rec)
 
@@ -580,6 +602,7 @@ async def cancel_batch(batch_id: str, request: Request):
     if rec["status"] in ("validating", "in_progress"):
         rec.update(status="cancelling", cancelling_at=int(time.time()))
         store.save_batch(rec)
+        runner.app = request.app
         runner.ensure_started()
     elif rec["status"] != "cancelling":
         return error_response(
@@ -688,11 +711,11 @@ async def create_message_batch(request: Request):
     reqs = body.get("requests")
     if not isinstance(reqs, list) or not reqs:
         return _aerr(request, 400, "requests: must be a non-empty list")
-    if len(reqs) > MAX_ANTHROPIC_REQUESTS:
+    if len(reqs) > (limit := _cap(MAX_ANTHROPIC_REQUESTS)):
         return _aerr(
             request,
             413,
-            f"requests: a batch may hold at most {MAX_ANTHROPIC_REQUESTS} requests",
+            f"requests: a batch may hold at most {limit} requests",
         )
     lines, seen = [], set()
     for i, item in enumerate(reqs):
@@ -722,6 +745,7 @@ async def create_message_batch(request: Request):
     rec["status"] = "in_progress"
     _write_input(store, rec, lines)
     store.save_batch(rec)
+    runner.app = request.app
     runner.ensure_started()
     return anthropic_batch(rec, request)
 
@@ -773,6 +797,7 @@ async def cancel_message_batch(batch_id: str, request: Request):
     if rec["status"] == "in_progress" or rec["status"] == "validating":
         rec.update(status="cancelling", cancelling_at=int(time.time()))
         store.save_batch(rec)
+        runner.app = request.app
         runner.ensure_started()
     elif rec["status"] != "cancelling":
         return _aerr(request, 400, "Cannot cancel a batch that has already ended")

@@ -702,6 +702,16 @@ def test_supports_only_qwen3_5_attention():
             self.layers = [attn]
 
     assert ragged_kv.supports(Holder())
+    attn.q_proj = nn.Linear(4, 4)
+    attn.q_proj.weight = attn.q_proj.weight.astype(mx.bfloat16)
+    assert ragged_kv.supports(Holder())
+    attn.q_proj.weight = attn.q_proj.weight.astype(mx.float16)
+    assert not ragged_kv.supports(
+        Holder()
+    )  # bf16-only kernels, no fallback once ragged
+    attn.q_proj = nn.QuantizedLinear(64, 64, bits=4)
+    attn.q_proj.scales = attn.q_proj.scales.astype(mx.bfloat16)
+    assert ragged_kv.supports(Holder())
 
 
 def test_set_format_validates_and_scopes():
@@ -711,3 +721,24 @@ def test_set_format_validates_and_scopes():
     assert ragged_kv._STATE["format"] is None
     with pytest.raises(ValueError):
         ragged_kv.set_format("fp8")
+
+
+def test_dense_lane_head_dim_128_takes_the_per_head_kernel():
+    """The tile kernel is D=256 only; another head size must not select it (it would raise)."""
+    from mlx_vlm.models.cache import KVCache
+
+    from yunshu_engine.kernels.ragged_kv import dense_lane_attention, set_dense_lane
+
+    d = 128
+    mx.random.seed(91)
+    k = mx.random.normal((1, HKV, 256, d)).astype(mx.bfloat16)
+    c = KVCache()
+    c.update_and_fetch(k, k)
+    q = mx.random.normal((1, H, 1, d)).astype(mx.bfloat16)
+    c.update_and_fetch(k[:, :, :1], k[:, :, :1])
+    set_dense_lane(True)
+    try:
+        out = dense_lane_attention(q, c, d**-0.5)
+    finally:
+        set_dense_lane(False)
+    assert out is not None and out.shape == q.shape

@@ -242,13 +242,21 @@ def test_free_until_the_marker_and_back(xml_grammar):
 def test_thinking_defers_the_marker(xml_grammar):
     guide = xml_grammar.guide(thinking_open=True)
     assert guide.phase == tcg.WAIT and guide.mask() is None
-    # a marker inside the reasoning is text, not a call
-    guide.feed(xml_grammar.start_id)
+    guide.feed(1234)
     assert guide.phase == tcg.WAIT
     guide.feed(xml_grammar.think_end_id)
     assert guide.phase == tcg.FREE
     guide.feed(xml_grammar.start_id)
     assert guide.phase == tcg.BODY
+
+
+def test_a_marker_inside_reasoning_opens_a_constrained_call(xml_grammar):
+    # the engine ends reasoning implicitly at the call marker and surfaces the call
+    # (vlm_engine), so the body must be masked like any other call
+    guide = xml_grammar.guide(thinking_open=True)
+    assert guide.arms(xml_grammar.start_id)
+    assert guide.feed(xml_grammar.start_id)
+    assert guide.phase == tcg.BODY and guide.mask() is not None
 
 
 def test_forced_choice_starts_constrained_after_reasoning(xml_tok):
@@ -475,3 +483,14 @@ def test_forced_reply_cannot_end_inside_its_reasoning(request):
     auto = tcg.compile_tool_grammar(TOOLS, tok, len(tok) + 243)
     free = auto.guide(thinking_open=True)
     assert not free.constrained and free.mask() is None
+
+
+def test_xml_call_needs_its_required_parameters(xml_tok, xml_grammar):
+    head = "\n<function=Bash>\n"
+    assert rejects_after(xml_tok, xml_grammar, head, "</function>")
+    timeout = head + "<parameter=timeout>\n5\n</parameter>\n"
+    assert rejects_after(xml_tok, xml_grammar, timeout, "</function>")
+    command = timeout + "<parameter=command>\nls\n</parameter>\n"
+    assert not rejects_after(xml_tok, xml_grammar, command, "</function>")
+    after = command + "<parameter=background>\ntrue\n</parameter>\n"
+    assert not rejects_after(xml_tok, xml_grammar, after, "</function>")

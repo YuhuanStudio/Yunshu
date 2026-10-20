@@ -33,6 +33,8 @@ import asyncio
 import logging
 from typing import Any
 
+from .active_tracking import ActiveRequestMixin, tracks_active
+
 logger = logging.getLogger(__name__)
 
 # Default instructions per the official Qwen3-VL-Embedding usage.
@@ -51,7 +53,7 @@ def _normalize_item(item: Any) -> dict:
     )
 
 
-class VLEmbeddingEngine:
+class VLEmbeddingEngine(ActiveRequestMixin):
     """Multimodal embedding / reranking engine for Qwen3-VL retrieval models."""
 
     def __init__(self, model_path: str, config: Any | None = None) -> None:
@@ -110,6 +112,7 @@ class VLEmbeddingEngine:
         self._processor = None
         self._loaded = False
 
+    @tracks_active
     async def embed(
         self, inputs: list[Any], instruction: str | None = None
     ) -> list[list[float]]:
@@ -141,6 +144,7 @@ class VLEmbeddingEngine:
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(self._executor, _run)
 
+    @tracks_active
     async def rerank(
         self,
         query: Any,

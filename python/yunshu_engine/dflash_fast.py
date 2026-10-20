@@ -562,6 +562,14 @@ def rounds(
     verifier = Verifier(q35._EXACT_SPECULATIVE_VERIFIER)
     bonus = int(first_bonus)
     emitted = 1
+    # A tool-call guide (constrained_spec.invariant_guide): free text runs the tree and
+    # copy rounds unmasked; a round stops at the token that opens a call, and the call's
+    # rows run as a chain with the guide's masks (forced or copied proposals).
+    guide = mtp_lane._STATE["guide"]
+    if guide is not None:
+        from .constrained_spec import forced_tokens, target_rows
+
+        guide.feed(bonus)
     try:
         while emitted < max_tokens:
             current = context_length(lm, cache) + 1 if _chain is not None else 0
@@ -601,24 +609,40 @@ def rounds(
                     n = 0  # a promoted row: the first round is plain and captures hidden states
                 grafted = []
                 graft_rows = 0
-                graft_enabled = copy is not None and copy_rows > 16 and n > 0
-                # A copy round needs no drafter and verifies a chain: it stays the choice
-                # whenever the copier proposes. Wide (> 16 row) copy chains only on a
-                # confident match; a graft hedges the model tree with a match the copier
-                # alone would not bet a round on (2026-10-20: grafting every match in place
-                # of copy rounds cost -5.6% on 32K code).
-                copied = (
-                    copy.draft(min(copy.max_draft, room - 1))
-                    if copy is not None
-                    else []
+                masked = guide is not None and guide.constrained
+                graft_enabled = (
+                    copy is not None and copy_rows > 16 and n > 0 and not masked
                 )
-                # The first round also bounds the first visible token (the prefill bonus is
-                # usually the reasoning marker), so it never pays for a second 16-row block.
-                if copied and (
-                    emitted == 1 or copy.last_match < copy.cfg.confident_match
-                ):
-                    copied = copied[:15]
-                if copied:
+                if masked:
+                    proposals = forced_tokens(guide, min(15, room - 1))
+                    if len(proposals) < 2 and copy is not None:
+                        proposals = copy.draft(min(15, copy.max_draft, room - 1))
+                    copied = proposals
+                    n = len(copied)
+                    guide.lane_rounds += 1
+                else:
+                    # A copy round needs no drafter and verifies a chain: it stays the choice
+                    # whenever the copier proposes. Wide (> 16 row) copy chains only on a
+                    # confident match; a graft hedges the model tree with a match the copier
+                    # alone would not bet a round on (2026-10-20: grafting every match in
+                    # place of copy rounds cost -5.6% on 32K code).
+                    copied = (
+                        copy.draft(min(copy.max_draft, room - 1))
+                        if copy is not None
+                        else []
+                    )
+                    # The first round also bounds the first visible token (the prefill bonus
+                    # is usually the reasoning marker), so it never pays for a second
+                    # 16-row block.
+                    if copied and (
+                        emitted == 1 or copy.last_match < copy.cfg.confident_match
+                    ):
+                        copied = copied[:15]
+                if masked:
+                    window = mx.array([[bonus, *copied]], dtype=token_dtype)
+                    parents = mx.arange(-1, n, dtype=mx.int32)
+                    shape = FastShape(parents, n, is_chain=True)
+                elif copied:
                     n = len(copied)
                     window = mx.array([[bonus, *copied]], dtype=token_dtype)
                     parents = mx.arange(-1, n, dtype=mx.int32)
@@ -671,7 +695,17 @@ def rounds(
                     lm, window, shape, cache, target_ids, verifier=verifier
                 )
                 try:
-                    target = lm.speculative_argmax_from_hidden(result.hidden)
+                    if masked:
+                        # the serial path's target rows: mask, normalize, argmax
+                        target, _ = target_rows(
+                            lm.speculative_logits_from_hidden(result.hidden),
+                            guide.plan(copied, n + 1),
+                            emitted,
+                            None,
+                        )
+                        target = target.reshape(-1)
+                    else:
+                        target = lm.speculative_argmax_from_hidden(result.hidden)
                     packed = pack_readback(
                         target, window, parents, shape.original_ranks
                     )
@@ -695,6 +729,13 @@ def rounds(
                 new_tokens = [window_ids[row] for row in path[1:]] + [
                     target_ids_row[path[-1]]
                 ]
+                if guide is not None:
+                    # rows after a call-opening token were not masked: that token ends
+                    # the round as its bonus (it is the unmasked target of the row before)
+                    kept = guide.advance(new_tokens)
+                    if kept < len(new_tokens):
+                        new_tokens = new_tokens[:kept]
+                        path = path[:kept]
                 if n:
                     _record_speculative_round(
                         draft, len(path) - 1, n + graft_rows, parents=parent_ids
@@ -885,8 +926,9 @@ def supported(lm, draft):
     )
 
 
-def eligible(lm, draft, cache, kwargs):
-    """Admit by live context; request output budgets do not predict cost."""
+def eligible(lm, draft, cache, kwargs, *, guided=False):
+    """Admit by live context; request output budgets do not predict cost. ``guided``: the
+    request's tool-call guide is masked here (constrained_spec.invariant_guide)."""
     from . import mtp_lane
     from .keyed_sampling import KeyedSampler
 
@@ -894,7 +936,7 @@ def eligible(lm, draft, cache, kwargs):
     return bool(
         kwargs.get("greedy_sampling", True)
         and not isinstance(kwargs.get("sampler"), KeyedSampler)
-        and mtp_lane._STATE["guide"] is None
+        and (mtp_lane._STATE["guide"] is None or guided)
         and context is not None
         and kwargs.get("draft_block_size") in (None, 8)
         and mtp_lane.copy_rows_for_model(lm) in (16, 32)

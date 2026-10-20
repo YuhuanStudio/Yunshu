@@ -476,3 +476,30 @@ def test_atoms_grow_with_the_absolute_position():
     assert d._run_end(row, 0, 8192) == 2048  # 512-atoms merge up to the switch
     assert d._run_end(row, 2048, 8192) == 2048 + 1024 * 3
     assert d._run_end(row, 2048, 1024) == 3072
+
+
+def test_sampled_bf16_rows_do_not_depend_on_drafting(tiny):
+    """bf16 logits: the drafting row (keyed, float32 normalization) and the plain row draw the
+    same stream."""
+    from mlx.utils import tree_map
+
+    lm, drafter = tiny
+    original = lm.parameters()
+    lm.update(
+        tree_map(
+            lambda a: (
+                a.astype(mx.bfloat16) if mx.issubdtype(a.dtype, mx.floating) else a
+            ),
+            original,
+        )
+    )
+    try:
+        seeds = [11, 22, 33]
+        ref = [
+            _sampled_run(lm, None, [p], [s])[0][0]
+            for p, s in zip(PROMPTS, seeds, strict=True)
+        ]
+        got, _ = _sampled_run(lm, drafter, PROMPTS, seeds, oracle=dict(enumerate(ref)))
+        assert got == ref
+    finally:
+        lm.update(original)

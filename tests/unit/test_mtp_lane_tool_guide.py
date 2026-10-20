@@ -342,9 +342,9 @@ def test_marker_as_first_token_and_reasoning_gate(toy, monkeypatch):
     target = ToyTarget(script, len(hf) + 4, eos)
     got = run_lane(monkeypatch, target, grammar.guide(), start, eos, 200, 0.8, 1, 5)
     assert got == script
-    # inside reasoning a marker is text: nothing is masked until </think>
+    # reasoning is not masked until </think> (a call marker would open a call)
     think_end = grammar.think_end_id
-    text = [start] + ids_of(hf, "{junk}") + [think_end] + ids_of(hf, "done") + [eos]
+    text = ids_of(hf, "{junk}") + [think_end] + ids_of(hf, "done") + [eos]
     target = ToyTarget(text, len(hf) + 4, eos, seed=8)
     ref = reference(target, grammar.guide(thinking_open=True), text[0], eos, 100)
     assert ref == text
@@ -355,6 +355,23 @@ def test_marker_as_first_token_and_reasoning_gate(toy, monkeypatch):
         text[0],
         eos,
         100,
+        0.5,
+        2,
+        4,
+    )
+    assert got == ref
+    # a call opened inside reasoning is masked like any other, on and off the lane
+    text = ids_of(hf, "hmm") + [start] + script_ids(hf, CALL) + [eos]
+    target = ToyTarget(text, len(hf) + 4, eos, seed=9)
+    ref = reference(target, grammar.guide(thinking_open=True), text[0], eos, 200)
+    assert ref == text
+    got = run_lane(
+        monkeypatch,
+        target,
+        grammar.guide(thinking_open=True),
+        text[0],
+        eos,
+        200,
         0.5,
         2,
         4,

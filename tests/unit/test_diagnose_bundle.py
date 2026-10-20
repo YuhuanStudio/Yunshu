@@ -63,4 +63,4 @@ def test_cli_command_prints_the_path(tmp_path, monkeypatch):
     dest = tmp_path / "x.json"
     r = CliRunner().invoke(diagnose.diagnose_app, ["bundle", "-o", str(dest)])
     assert r.exit_code == 0 and dest.exists() and "x.json" in r.output
-    assert settings.get("YUNSHU_AUTH_TOKEN") is None or True
+    assert settings.get("YUNSHU_AUTH_TOKEN") is None

@@ -289,6 +289,18 @@ def test_close_persists_resident_checkpoints_for_a_restart(tmp_path):
     fresh.close()
 
 
+def test_explicit_split_plans_survive_a_restart(tmp_path):
+    """Explicit checkpoints restore only under their recorded split plan; the receipts must
+    persist with the SSD entries or every explicit checkpoint misses after a restart."""
+    m = _disk_mgr(tmp_path)
+    m._span_plans[123] = ()
+    m._span_plans[456] = (17, 4100)
+    m.close()
+    fresh = _disk_mgr(tmp_path)
+    assert fresh._span_plans == {123: (), 456: (17, 4100)}
+    fresh.close()
+
+
 def test_entry_too_large_for_ram_is_written_synchronously(tmp_path):
     m = _disk_mgr(tmp_path, gb=0.000001)  # ~1 KiB: nothing fits
     ids = list(range(3000, 3096))

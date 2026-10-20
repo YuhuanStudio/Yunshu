@@ -323,10 +323,12 @@ def main(argv=None):
 
 
 def finish(outdir, sha, jobs, _unused, max_seconds, wait_ids):
+    # --collect has no ids to wait on: ask the queue about the saved ones without waiting.
+    ids = wait_ids or [j["id"] for j in jobs if j.get("id")]
     wait_rc = None
-    if wait_ids:
+    if ids:
         wait_rc = subprocess.run(
-            [GPUQ, "wait", "--max-seconds", str(max_seconds), *wait_ids]
+            [GPUQ, "wait", "--max-seconds", str(max_seconds if wait_ids else 0), *ids]
         ).returncode
     v = verdict(jobs, wait_rc)
     v["sha"] = sha

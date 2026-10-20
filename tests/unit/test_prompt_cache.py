@@ -365,3 +365,15 @@ class TestSizeEstimation:
     def test_estimate_fallback(self):
         size = PromptCacheManager._estimate_size("some string")
         assert size == 1024  # fallback
+
+
+def test_replacing_an_entry_keeps_the_memory_budget():
+    from yunshu_engine.prompt_cache import PromptCacheManager
+
+    mb = 1024 * 1024
+    m = PromptCacheManager(max_memory_mb=512)
+    assert m.store("a", object(), size_bytes=300 * mb)
+    assert m.store("b", object(), size_bytes=200 * mb)
+    assert m.store("a", object(), size_bytes=400 * mb)  # grows past the cap with b kept
+    assert m._stats.total_size_bytes <= 512 * mb
+    assert m.lookup("a") is not None and m.lookup("b") is None

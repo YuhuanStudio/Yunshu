@@ -567,7 +567,8 @@ def test_stem_keeps_sizes(q):
     assert q._stem("wide7-api-core-pilot-10b") == "wide7-api-core-pilot-10b"
 
 
-def test_external_worktrees_take_turns(q):
+def test_external_worktrees_take_turns(q, monkeypatch):
+    monkeypatch.setattr(q, "HOLD_MAX_S", 0)  # round-robin fallback (no line holding)
     import time
 
     now = time.time()
@@ -660,7 +661,8 @@ def test_stats_counts_wasted_minutes(q, capsys, monkeypatch):
     assert "wide8" in out and "wasted=  10.0 min" in out
 
 
-def test_m3_jobs_do_not_cost_an_owner_its_m5_turn(q):
+def test_m3_jobs_do_not_cost_an_owner_its_m5_turn(q, monkeypatch):
+    monkeypatch.setattr(q, "HOLD_MAX_S", 0)  # round-robin fallback (no line holding)
     """main's M3 sweep must not push main's M5 job behind other owners (2026-10-06)."""
     import time
 
@@ -740,3 +742,69 @@ def test_quiet_timing_job_is_requeued_not_paused_for_priority_work(q, monkeypatc
     assert stopped["cancel"] is True
     clone = q._read(q.JOBS / f"{stopped['requeued_as']}.json")
     assert clone["state"] == "pending" and clone["quiet"] and clone["requeues"] == 1
+
+
+def _backlog(q, now, **kw):
+    low = dict(
+        id="low",
+        label="fnchain-identity",
+        state="running",
+        priority=-3,
+        submitted=now - 600,
+        started=now - 500,
+        pid=1,
+        env={},
+        cmd=["true"],
+        cwd=str(q.ROOT),
+        mem_gb=24.0,
+        **kw,
+    )
+    q._write(q.JOBS / "low.json", low)
+    return low
+
+
+def test_backlog_job_is_requeued_not_paused_under_long_work(q, monkeypatch):
+    monkeypatch.setattr(q, "free_memory_gb", lambda: 100.0)
+    now = 100_000.0
+    monkeypatch.setattr(q.time, "time", lambda: now)
+    low = _backlog(q, now)
+    q.submit(["true"], "deploy27b-soak60", 90, 0, mem_gb=10.0)  # a long p0 job
+    monkeypatch.setattr(q, "_execute", lambda job, *a, **k: None)
+    pauser = q.Pauser(low, q.JOBS / "low.json")
+    signals = []
+    monkeypatch.setattr(pauser, "_signal", lambda sig: signals.append(sig))
+    assert q._priority_step(pauser, q.ServingGate(), now) is False
+    assert not pauser.paused and signals == []
+    stopped = q._read(q.JOBS / "low.json")
+    assert stopped["cancel"] is True
+    assert q._read(q.JOBS / f"{stopped['requeued_as']}.json")["state"] == "pending"
+
+
+def test_backlog_job_still_pauses_under_short_work(q, monkeypatch):
+    monkeypatch.setattr(q, "free_memory_gb", lambda: 100.0)
+    now = 100_000.0
+    monkeypatch.setattr(q.time, "time", lambda: now)
+    low = _backlog(q, now)
+    q.submit(["true"], "tf110-smoke", 5, 0, mem_gb=10.0)  # short p0 job
+    monkeypatch.setattr(q, "_execute", lambda job, *a, **k: None)
+    pauser = q.Pauser(low, q.JOBS / "low.json")
+    monkeypatch.setattr(pauser, "_signal", lambda sig: None)
+    q._priority_step(pauser, q.ServingGate(), now)
+    assert not q._read(q.JOBS / "low.json").get("cancel")
+
+
+@pytest.mark.parametrize(
+    "content,expected",
+    [
+        ('{"complete": false}\n', 1),
+        ("run incomplete\n", 1),
+        ('{"complete": "yes"}\n', 1),
+        ('{"complete": true}\n', 0),
+        ('{"kind": "x"}\n{"complete": true, "n": 3}\n', 0),
+    ],
+)
+def test_expect_complete_requires_structured_true(q, content, expected):
+    path = q.ROOT / "result"
+    path.write_text(content)
+    job(q, "result", outputs=[str(path)], expect_complete=True)
+    assert q.wait(["result"], max_seconds=0) == expected

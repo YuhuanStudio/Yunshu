@@ -96,3 +96,20 @@ class TestJSONRPCRequest:
         assert req.jsonrpc == "2.0"
         assert req.method == "initialize"
         assert req.id == 1
+
+
+@pytest.mark.asyncio
+async def test_generate_tool_reads_the_vlm_engine_dict(monkeypatch):
+    from yunshu_gateway import engine as engine_mod
+    from yunshu_gateway.routers import mcp
+
+    class FakeVLM:
+        async def generate(self, **kw):
+            return {"text": "hello from vlm", "finish_reason": "stop"}
+
+    monkeypatch.setattr(engine_mod, "get_engine", lambda: FakeVLM())
+    out = await mcp._tool_generate(
+        {"messages": [{"role": "user", "content": "hi"}]}, 1
+    )
+    assert out["result"]["isError"] is False
+    assert out["result"]["content"][0]["text"] == "hello from vlm"

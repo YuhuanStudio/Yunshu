@@ -79,6 +79,10 @@ SHORT_MIN = float(os.environ.get("GPUQ_SHORT_MIN", 10))
 SHORT_WAIT_S = float(os.environ.get("GPUQ_SHORT_WAIT_S", 5 * 60))
 SHORT_SHARE = float(os.environ.get("GPUQ_SHORT_SHARE", 0.15))
 SHORT_WINDOW_S = 2 * 3600
+# Line holding (see _hold_filter): the line running long jobs keeps the M5 lane while it has more, waits
+# HOLD_GAP_S for its next batch, and yields after HOLD_MAX_S of tenure. Env: GPUQ_HOLD_GAP_S, GPUQ_HOLD_MAX_S.
+HOLD_GAP_S = float(os.environ.get("GPUQ_HOLD_GAP_S", 120))
+HOLD_MAX_S = float(os.environ.get("GPUQ_HOLD_MAX_S", 4 * 3600))
 # Filler: while the head job waits only for a quiet CPU, an idle GPU runs one job that needs no quiet CPU.
 FILLER_WAIT_S = float(os.environ.get("GPUQ_FILLER_WAIT_S", 30))
 FILLER_MAX_MIN = float(os.environ.get("GPUQ_FILLER_MAX_MIN", 30))
@@ -94,6 +98,7 @@ from gpuq_contention import (  # noqa: E402
     contention_config,
     flag_sample_time,
     foreign_model_reason,
+    job_lock,
     requires_quiet,
 )
 
@@ -455,15 +460,16 @@ class Pauser:
     def _save(self) -> None:
         self.job["pauses"] = self.pauses
         self.job["paused"] = self.paused
-        data = _read(
-            self.path
-        )  # merge: never clobber a cancel flag the CLI set meanwhile
-        data.update(
-            pauses=self.pauses,
-            paused=self.paused,
-            pause_reason=self.job.get("pause_reason"),
-        )
-        _write(self.path, data)
+        with job_lock(self.path):
+            data = _read(
+                self.path
+            )  # merge: never clobber a cancel flag the CLI set meanwhile
+            data.update(
+                pauses=self.pauses,
+                paused=self.paused,
+                pause_reason=self.job.get("pause_reason"),
+            )
+            _write(self.path, data)
         _write(LOGS / f"{self.job['id']}.pauses.json", {"pauses": self.pauses})
 
     def _signal(self, sig: int) -> None:
@@ -704,6 +710,9 @@ def _pick(jobs: list[dict], eligible=None, interleave=False) -> dict | None:
     if not pending:
         return None
     now = time.time()
+    pending = _hold_filter(jobs, pending, now)
+    if not pending:
+        return None
     top = max(_eff_priority(j, now) for j in pending)
     pending = [j for j in pending if _eff_priority(j, now) == top]
     # Turns are per device: an owner's M3 correctness jobs must not push its M5 jobs
@@ -733,6 +742,61 @@ def _pick(jobs: list[dict], eligible=None, interleave=False) -> dict | None:
             every = [j for j in every if eligible(j)]
         return _interleave_choice(jobs, every, winner, now) or winner
     return winner
+
+
+def _long(job: dict) -> bool:
+    return not (_lane_short(job) or _is_short(job) or job.get("interleaved"))
+
+
+def _holder(jobs: list[dict], now: float) -> tuple[str, float, float, int] | None:
+    """(owner, tenure seconds, seconds since its last long job ended, its priority) of the line holding the M5
+    lane: the owner of the latest started long job, its tenure the run time of its unbroken streak."""
+    started = sorted(
+        (j for j in jobs if j.get("started") and _lane(j) == "m5" and _long(j)),
+        key=lambda j: j["started"],
+    )
+    if not started:
+        return None
+    owner = _owner(started[-1])
+    tenure = 0.0
+    for j in reversed(started):
+        if _owner(j) != owner:
+            break
+        tenure += _run_s(j, now, 0.0)
+    last = started[-1]
+    idle = 0.0 if last.get("state") == "running" else now - (last.get("ended") or now)
+    return owner, tenure, idle, last.get("priority", 0)
+
+
+def _hold_filter(jobs: list[dict], pending: list[dict], now: float) -> list[dict]:
+    """Big jobs run line by line: the holding line keeps the lane for its next long job (its suite's
+    next cells, or a batch it submits within HOLD_GAP_S), so suites finish one after another instead of
+    all advancing a cell at a time (2026-10-20: 374 long jobs switched line 159 times; each line got
+    9-27% of its wall span). Other lines' long jobs at or below the holder's priority wait; short jobs,
+    gates and higher-priority work do not. After HOLD_MAX_S of tenure a waiting line takes over."""
+    held = _holder(jobs, now)
+    if held is None:
+        return pending
+    owner, tenure, idle, last_prio = held
+    if tenure >= HOLD_MAX_S:
+        return pending
+    longs = [
+        j
+        for j in pending
+        if j.get("device", "m5") == "m5" and _long(j) and not j.get("gate")
+    ]
+    mine = [_eff_priority(j, now) for j in longs if _owner(j) == owner]
+    if mine:
+        ceiling = max(mine)
+    elif idle < HOLD_GAP_S:
+        ceiling = last_prio
+    else:
+        return pending
+    return [
+        j
+        for j in pending
+        if not (j in longs and _owner(j) != owner and _eff_priority(j, now) <= ceiling)
+    ]
 
 
 _SHORT = re.compile(r"(^|[-_])(tiny|smoke|dry)([-_]|$)", re.I)
@@ -1117,11 +1181,14 @@ def _priority_step(pauser: Pauser, gate: ServingGate, now: float) -> bool:
     # decides when the admitted high-priority job can start; it must not let the
     # low-priority job resume early through the shorter serving resume window.
     if any(j.get("waiting") != "mem" for j in pending):
+        # A stopped job stays resident. Behind a long job (a suite cell, a soak) that is
+        # memory and swap for its whole run, and a cancel is only seen once the nested
+        # run returns (2026-10-20: a stopped Flash-Next job sat under a 60-minute 27B
+        # soak, which swapped 15 GB). Only short work may run over a stopped job.
+        long_preemptor = any(_long(j) for j in pending if j.get("waiting") != "mem")
         if (
-            requires_quiet(pauser.job)
-            and not pauser.paused
-            and pauser.job.get("requeues", 0) < MAX_REQUEUES
-        ):
+            requires_quiet(pauser.job) and not pauser.paused or long_preemptor
+        ) and pauser.job.get("requeues", 0) < MAX_REQUEUES:
             # A timing job measures wall time: once stopped, its numbers are void, and
             # its resident server plus the priority job overcommit memory and swap
             # (two 27B replykv timing runs swapped 1.4-2 GB under gate jobs). Stop it
@@ -1358,6 +1425,7 @@ def _adopt(job: dict, path: Path, gate: ServingGate | None = None) -> None:
         )
     monitor.record("adopt")
     why = None
+    sigint_at = None
     while _alive(pid):
         now = _now()
         if gate.enabled:
@@ -1375,8 +1443,14 @@ def _adopt(job: dict, path: Path, gate: ServingGate | None = None) -> None:
         )
         if not why and (cancelled or (now > deadline and not pauser.paused)):
             why = "cancelled" if cancelled else "timeout"
+            sigint_at = now
             with contextlib.suppress(ProcessLookupError):
                 os.killpg(pid, signal.SIGINT)
+        elif sigint_at is not None and now - sigint_at > 30:
+            # Same escalation as _run_one: a job that ignores SIGINT must not hold the lane.
+            sigint_at = now + 10**9
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(pid, signal.SIGKILL)
         time.sleep(min(POLL_S, gate.poll_s) if gate.enabled else POLL_S)
     rc_file = LOGS / f"{job['id']}.rc"
     try:
@@ -1685,10 +1759,11 @@ def daemon() -> None:
 
 
 def _patch_job(path: Path, **kw) -> None:
-    data = _read(path)
-    if data:
-        data.update(kw)
-        _write(path, data)
+    with job_lock(path):
+        data = _read(path)
+        if data:
+            data.update(kw)
+            _write(path, data)
 
 
 FINAL = {"done", "failed", "timeout", "stalled", "cancelled", "lost"}
@@ -2009,10 +2084,7 @@ def main() -> int:
         sys.exit(restart())
     elif a.op == "cancel":
         path = JOBS / f"{a.id}.json"
-        j = _read(path)
-        if j:
-            j["cancel"] = True
-            _write(path, j)
+        _patch_job(path, cancel=True)
     elif a.op == "_daemon":
         # A daemon started from a background shell job inherits SIGINT ignored,
         # and so would every job: timeouts and cancels (SIGINT first) would then
