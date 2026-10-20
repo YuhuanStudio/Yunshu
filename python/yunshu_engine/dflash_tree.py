@@ -171,10 +171,14 @@ def search_tree(
     edge: float = EDGE,
     tau: float = TAU,
 ):
-    """``_search_tree`` compiled per (nodes, children, beam, edge, tau): about 150 small
-    kernels per round fused where MLX can (1.67 -> 1.14 ms for 15 depths, same tokens and
-    parents; M5 Max)."""
-    key = (int(nodes), int(children), int(beam), float(edge), float(tau))
+    """``_search_tree`` compiled once (about 150 small kernels per round fused where MLX can:
+    1.67 -> 1.14 ms for 15 depths on M5 Max, same tokens and parents).
+
+    It always searches ``NODES`` and keeps the first ``nodes``: a node's ancestors rank above
+    it, so the best ``nodes`` and their parent rows are the same as a ``nodes`` search's. One
+    compiled shape: a per-``nodes`` compile cost the requests that first met each width."""
+    full = max(int(nodes), NODES)
+    key = (full, int(children), int(beam), float(edge), float(tau))
     fn = _SEARCH_COMPILED.get(key)
     if fn is None:
 
@@ -184,7 +188,12 @@ def search_tree(
             )
 
         fn = _SEARCH_COMPILED[key] = mx.compile(run)
-    return fn(lat.cands, lat.unary, lat.hproj, lat.succ, lat.pred, lat.anchor)
+    tokens, parents = fn(
+        lat.cands, lat.unary, lat.hproj, lat.succ, lat.pred, lat.anchor
+    )
+    if full == nodes:
+        return tokens, parents
+    return tokens[:nodes], parents[: nodes + 1]
 
 
 def _search_tree(
