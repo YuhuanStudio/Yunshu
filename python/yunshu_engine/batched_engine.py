@@ -475,6 +475,11 @@ class BatchedEngine(
         if self._loaded:
             return
 
+        # YUNSHU_GIL_SWITCH_MS is reload-class: re-read it on every model load.
+        from . import gil_switch
+
+        gil_switch.apply()
+
         # Guard against concurrent start() calls from multiple coroutines.
         # Without this, two concurrent generate() calls that both see
         # _loaded=False can race and both load the model simultaneously,

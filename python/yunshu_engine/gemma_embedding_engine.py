@@ -11,6 +11,7 @@ import asyncio
 import logging
 from typing import Any
 
+from .active_tracking import tracks_active
 from .vl_embedding_engine import VLEmbeddingEngine
 
 logger = logging.getLogger(__name__)
@@ -51,6 +52,7 @@ class GemmaEmbeddingEngine(VLEmbeddingEngine):
             self._gemma.processor.tokenizer.decode(ids, skip_special_tokens=True)
         )
 
+    @tracks_active
     async def embed_with_usage(
         self,
         inputs: list[Any],

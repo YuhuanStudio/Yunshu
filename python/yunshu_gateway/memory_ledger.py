@@ -15,6 +15,7 @@ import os
 import struct
 import threading
 import time
+import weakref
 from typing import Any
 
 from yunshu_engine import units
@@ -198,7 +199,9 @@ def process_footprint() -> dict[str, int | None]:
 
 # ── owners ──────────────────────────────────────────────────────────────
 
-_weight_cache: dict[int, int] = {}
+# id(engine) -> (weakref to that engine, bytes). The weakref proves the entry still belongs
+# to the same object: a new engine reusing a dead one's address must not inherit its bytes.
+_weight_cache: dict[int, tuple[weakref.ReferenceType | None, int]] = {}
 
 
 def _tree_nbytes(tree: Any) -> int:
@@ -214,8 +217,12 @@ def measured_weight_bytes(engine: Any) -> int | None:
     """Bytes of the engine's parameter arrays (array metadata only, no evaluation); cached per
     engine object because the weights do not change after load."""
     key = id(engine)
-    if key in _weight_cache:
-        return _weight_cache[key] or None
+    hit = _weight_cache.get(key)
+    if hit is not None:
+        ref, cached = hit
+        if ref is not None and ref() is engine:
+            return cached or None
+        del _weight_cache[key]
     total = 0
     try:
         for attr in ("_model", "model"):
@@ -226,7 +233,17 @@ def measured_weight_bytes(engine: Any) -> int | None:
     except Exception:
         logger.debug("weight walk failed", exc_info=True)
         total = 0
-    _weight_cache[key] = total
+
+    def _forget(dead: weakref.ReferenceType, k: int = key) -> None:
+        entry = _weight_cache.get(k)
+        if entry is not None and entry[0] is dead:
+            del _weight_cache[k]
+
+    try:
+        ref: weakref.ReferenceType | None = weakref.ref(engine, _forget)
+    except TypeError:  # not weak-referenceable: do not cache
+        return total or None
+    _weight_cache[key] = (ref, total)
     return total or None
 
 

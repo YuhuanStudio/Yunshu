@@ -548,3 +548,76 @@ class TestEdgeCases:
         )
         assert p.prompt_length == 1024
         assert p.decode_tps == 100.0
+
+
+class TestBatchUsesSuppliedPrompts:
+    @pytest.mark.asyncio
+    async def test_each_supplied_prompt_is_sent(self):
+        engine = _make_mock_engine(prompt_tokens=20, completion_tokens=2)
+        seen: list[str] = []
+        inner = engine.stream_generate
+
+        def _spy(prompt, **kw):
+            seen.append(prompt)
+            return inner(prompt=prompt, **kw)
+
+        engine.stream_generate = _spy
+        runner = BenchmarkRunner(engine)
+        await runner.bench_batch(
+            prompts=["alpha one", "beta two", "gamma three"], max_tokens=2
+        )
+        assert sorted(seen) == ["alpha one", "beta two", "gamma three"]
+
+
+class TestBatchReportsFailures:
+    @pytest.mark.asyncio
+    async def test_failed_requests_are_counted(self):
+        engine = _make_mock_engine(prompt_tokens=20, completion_tokens=2)
+        inner = engine.stream_generate
+
+        def _flaky(prompt, **kw):
+            if prompt.startswith("bad"):
+                raise RuntimeError("boom")
+            return inner(prompt=prompt, **kw)
+
+        engine.stream_generate = _flaky
+        runner = BenchmarkRunner(engine)
+        result = await runner.bench_batch(
+            prompts=["good a", "bad b", "bad c", "good d"], max_tokens=2
+        )
+        assert result.num_requests == 2
+        assert result.num_failed == 2
+        assert len(result.errors) == 2 and "boom" in result.errors[0]
+        assert result.to_dict()["num_failed"] == 2
+
+
+class TestPrefillIsCold:
+    @pytest.mark.asyncio
+    async def test_prefill_sweep_does_not_warm_the_prompt(self):
+        engine = _make_mock_engine(prompt_tokens=20, completion_tokens=3)
+        warmups: list[str] = []
+        streamed: list[str] = []
+        inner_gen, inner_stream = engine.generate, engine.stream_generate
+
+        async def _gen(prompt, **kw):
+            warmups.append(prompt)
+            return await inner_gen(prompt=prompt, **kw)
+
+        def _stream(prompt, **kw):
+            streamed.append(prompt)
+            return inner_stream(prompt=prompt, **kw)
+
+        engine.generate, engine.stream_generate = _gen, _stream
+        runner = BenchmarkRunner(engine)
+        await runner.bench_prefill_vs_decode(
+            prompt_lengths=[8, 16], max_decode_tokens=3
+        )
+        assert warmups == []  # no warm-up generation of the timed prompt
+        assert len(set(streamed)) == 2
+
+    @pytest.mark.asyncio
+    async def test_single_request_labels_prefix_state(self):
+        runner = BenchmarkRunner(_make_mock_engine(completion_tokens=3))
+        assert (await runner.bench_single_request(max_tokens=3)).prefix_state == "warm"
+        cold = await runner.bench_single_request(max_tokens=3, cold=True)
+        assert cold.prefix_state == "cold"

@@ -105,8 +105,8 @@ The descriptions below come straight from the settings registry and are in Engli
 | `YUNSHU_SLOW_REQUEST_THRESHOLD` | float | 30.0 | restart | Log a warning for requests slower than this many seconds. |
 | `YUNSHU_CORS_ORIGINS` | str | http://localhost:3000,http://localhost:8000 | live | Comma-separated allowed CORS origins ('*' for any). Also checked for the Realtime WebSocket Origin header. |
 | `YUNSHU_RESPONSE_CACHE` | bool | off | restart | Cache identical non-streaming responses in memory. |
-| `YUNSHU_BATCH_MAX_ITEMS` | int | 500 | live | Batch API: maximum requests per batch. |
-| `YUNSHU_BATCH_TIMEOUT` | float | 300.0 | live | Batch API: default per-batch timeout in seconds. |
+| `YUNSHU_BATCH_MAX_ITEMS` | int | 100000 | live | Batch API: maximum requests per batch (also capped by the protocol limits: 50,000 OpenAI, 100,000 Anthropic). |
+| `YUNSHU_BATCH_TIMEOUT` | float | 0.0 | live | Batch API: timeout in seconds for each request a batch runs (0: no timeout); a request that times out is recorded as failed. |
 | `YUNSHU_ALLOW_LOCAL_FILES` | bool | off | live | Allow requests to reference any local file path (default: only under YUNSHU_MEDIA_DIR). |
 | `YUNSHU_MEDIA_DIR` | path | unset | live | Directory local media paths must live under. Unset: $TMPDIR/yunshu_media. |
 | `YUNSHU_FILES_DIR` | path | unset | live | Directory of the local Files / Batch API store. Unset: ~/.yunshu/files. |

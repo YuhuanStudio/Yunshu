@@ -1077,7 +1077,20 @@ def test_memory_base_shared_and_speed_base_only_on_request(world):
         )
         == 0
     )
-    assert not [j for j in jobs(world)[n:] if "-speed-base" in j] or True
+    # the first reuse run has nothing to reuse yet: it records the shared base
+    assert len([j for j in jobs(world)[n:] if "-speed-base" in j]) == 3
+    n = len(jobs(world))
+    assert (
+        go(
+            world,
+            suite="speed",
+            label="s4",
+            cand_env=["FAKE_Z=1"],
+            reuse_base_speed=True,
+        )
+        == 0
+    )
+    assert not [j for j in jobs(world)[n:] if "-speed-base" in j]
 
 
 def test_one_server_per_arm_for_identity_and_small_model_smoke_uses_any_device(world):
@@ -1096,7 +1109,7 @@ def test_one_server_per_arm_for_identity_and_small_model_smoke_uses_any_device(w
         opts = json.loads(p.read_text())["opts"]
         assert opts[opts.index("--device") + 1] == "any"
     for p in (world.tmp / "jobs").glob("*identity*.json"):
-        assert "--device" not in json.loads(p.read_text())["opts"] or True
+        assert "--device" not in json.loads(p.read_text())["opts"]
 
 
 def test_quick_suite_and_gpu_minutes(world):

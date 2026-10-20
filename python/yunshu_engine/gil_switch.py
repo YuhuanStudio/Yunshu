@@ -12,10 +12,19 @@ import sys
 
 from . import settings
 
+_original: float | None = None  # the interval before this module first changed it
+
 
 def apply() -> float:
-    """Set the interval from YUNSHU_GIL_SWITCH_MS (0 keeps CPython's 5 ms); returns seconds in effect."""
+    """Set the interval from YUNSHU_GIL_SWITCH_MS (0 restores CPython's 5 ms if this
+    module had changed it); returns seconds in effect."""
+    global _original
     ms = float(settings.get("YUNSHU_GIL_SWITCH_MS") or 0.0)
     if ms > 0:
+        if _original is None:
+            _original = sys.getswitchinterval()
         sys.setswitchinterval(ms / 1000.0)
+    elif _original is not None:
+        sys.setswitchinterval(_original)
+        _original = None
     return sys.getswitchinterval()

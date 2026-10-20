@@ -38,6 +38,13 @@ OPENAI_ENDPOINTS = (
 )
 MAX_OPENAI_LINES = 50_000
 MAX_ANTHROPIC_REQUESTS = 100_000
+
+
+def _cap(hard: int) -> int:
+    """The protocol limit, lowered by YUNSHU_BATCH_MAX_ITEMS."""
+    return min(hard, int(settings.get("YUNSHU_BATCH_MAX_ITEMS")))
+
+
 WINDOW_SECONDS = 86_400
 ACTIVE = ("validating", "in_progress", "cancelling")
 _CUSTOM_ID_RE = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
@@ -60,7 +67,7 @@ def _default_client(base_url: str, headers: dict[str, str]) -> httpx.AsyncClient
         transport=httpx.ASGITransport(app=runner.app),
         base_url=base_url,
         headers=headers,
-        timeout=None,
+        timeout=settings.get("YUNSHU_BATCH_TIMEOUT") or None,
     )
 
 
@@ -416,11 +423,11 @@ def _validate_openai_input(raw: bytes, endpoint: str) -> tuple[list[dict], list[
     for n, text in enumerate(raw.decode("utf-8", errors="replace").split("\n"), 1):
         if not text.strip():
             continue
-        if len(lines) >= MAX_OPENAI_LINES:
+        if len(lines) >= (limit := _cap(MAX_OPENAI_LINES)):
             bad(
                 n,
                 "batch_request_limit_exceeded",
-                f"Batches are limited to {MAX_OPENAI_LINES} requests",
+                f"Batches are limited to {limit} requests",
             )
             break
         try:
@@ -704,11 +711,11 @@ async def create_message_batch(request: Request):
     reqs = body.get("requests")
     if not isinstance(reqs, list) or not reqs:
         return _aerr(request, 400, "requests: must be a non-empty list")
-    if len(reqs) > MAX_ANTHROPIC_REQUESTS:
+    if len(reqs) > (limit := _cap(MAX_ANTHROPIC_REQUESTS)):
         return _aerr(
             request,
             413,
-            f"requests: a batch may hold at most {MAX_ANTHROPIC_REQUESTS} requests",
+            f"requests: a batch may hold at most {limit} requests",
         )
     lines, seen = [], set()
     for i, item in enumerate(reqs):
