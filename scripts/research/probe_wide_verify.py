@@ -45,6 +45,22 @@ def shape_parents(kind: str, w: int) -> list[int]:
     raise ValueError(kind)
 
 
+def make_shape(tv, kind: str, w: int, fast: bool):
+    """The generic TreeShape, or (``--fast``) the DFlash runtime's FastShape: fused attention
+    glue, GDN prework and the fast GDN forward, which is what a DFlash round verifies with."""
+    if not fast:
+        return tv.TreeShape(shape_parents(kind, w))
+    import mlx.core as mx
+
+    from yunshu_engine.dflash_plan import FastShape
+
+    parents = mx.array(shape_parents(kind, w), dtype=mx.int32)
+    depth = [0] * w
+    for r in range(1, w):
+        depth[r] = depth[int(parents[r].item())] + 1
+    return FastShape(parents, max(depth), is_chain=kind == "chain")
+
+
 def setup(model_dir: str, lane_linear: bool = True):
     from mlx_vlm import load
 
@@ -210,7 +226,7 @@ def timing(a, lm, ids):
                         r = chain_verify(lm, toks, cache)
                         return r.target_tokens, r.abort
                 else:
-                    shape = tv.TreeShape(shape_parents(kind, T))
+                    shape = make_shape(tv, kind, T, a.fast)
 
                     def fwd(shape=shape, toks=toks):
                         res = tv.tree_forward(lm, toks, shape, cache)
@@ -268,7 +284,19 @@ def main():
     ap.add_argument("--shapes", nargs="+", default=["heap"])
     ap.add_argument("--steps", type=int, default=12)
     ap.add_argument("--output", type=Path)
+    ap.add_argument(
+        "--fast", action="store_true", help="time tree shapes as DFlash FastShape"
+    )
+    ap.add_argument(
+        "--fused-rows",
+        type=int,
+        help="tree_verify.FUSED_ROWS (16: before 4-group fusion)",
+    )
     a = ap.parse_args()
+    if a.fused_rows is not None:
+        from yunshu_engine import tree_verify
+
+        tree_verify.FUSED_ROWS = a.fused_rows
     if a.mode == "time" and a.output is not None and refuse_contended(a.output):
         return
     model, lm, ids = setup(a.model_dir)

@@ -56,6 +56,20 @@ def test_shared_plan_serves_both_groups_in_one_launch():
     assert lengths1 == [2 * ck + 7] and len(starts1) == 8 and items1 == [0, 1]
 
 
+def test_shared_plan_serves_four_groups_in_one_launch():
+    # windows of 17-32 rows (a DFlash tree with a grafted copy chain) read the prefix once,
+    # not once per 8-token group (bit identity: scripts/research/bench_tree_attention.py)
+    from yunshu_engine import tree_verify as tv
+
+    ck = tv.CK
+    lengths, nc, items, starts, total = tv.shared_plan_lists(3 * ck, 4)
+    assert lengths == [3 * ck + 7 + 8 * g for g in range(4)]
+    assert nc == 3
+    assert items == [g * 3 + c for c in range(3) for g in range(4)]
+    assert starts == [3 * i for i in range(32)] and total == 96
+    assert tv.FUSED_ROWS == tv.MAX_ROWS == 32
+
+
 def test_only_the_fast_shape_takes_the_fused_glue():
     from yunshu_engine.dflash_plan import FastShape
 
