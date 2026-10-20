@@ -290,7 +290,7 @@ def bench_throughput(
                             total_tokens += data.get("usage", {}).get(
                                 "completion_tokens", 0
                             )
-                        completed += 1
+                            completed += 1
                     except Exception:
                         logger.debug("throughput request %d failed", idx, exc_info=True)
 
@@ -397,6 +397,11 @@ def bench_memory():
     except Exception:
         logger.debug("Failed to query GPU info via system_profiler", exc_info=True)
         console.print("  [dim]Unable to query GPU info[/]")
+
+
+def _per_request_tpot(decode_time: float, total_tokens: int, batch_size: int) -> float:
+    """Seconds per token as one request sees it: ``total_tokens`` counts every row of the batch."""
+    return decode_time / (total_tokens / batch_size) if total_tokens > 0 else 0
 
 
 def _fmt_bytes(b: int) -> str:
@@ -521,7 +526,7 @@ def bench_inference(
 
         decode_time = t_decode_end - t_decode_start
         total_tokens = sum(len(v) for v in all_tokens.values())
-        tpot = decode_time / total_tokens if total_tokens > 0 else 0
+        tpot = _per_request_tpot(decode_time, total_tokens, batch_size)
         throughput = total_tokens / decode_time if decode_time > 0 else 0
 
         tpot_list.append(tpot)

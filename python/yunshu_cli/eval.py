@@ -352,7 +352,7 @@ class HumanEvalBenchmark(BaseBenchmark):
             return False
         pred_stripped = predicted.strip().replace(" ", "").replace("\n", "")
         canon_stripped = canonical.strip().replace(" ", "").replace("\n", "")
-        return pred_stripped == canon_stripped or len(pred_stripped) > 10
+        return pred_stripped == canon_stripped
 
     def get_max_tokens(self) -> int:
         return 512

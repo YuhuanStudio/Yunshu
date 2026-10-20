@@ -230,12 +230,16 @@ def _msg_to_item(msg: dict) -> dict | None:
 
 def stored_chain_messages(prev_id: str, request: Request) -> list[dict]:
     """Chat messages of a stored ``previous_response_id`` chain, oldest first."""
-    from .routers.responses import _get_stored_response, _owns_stored
+    from .routers.responses import (
+        _CHAIN_MAX_HOPS,
+        _get_stored_response,
+        _owns_stored,
+    )
 
     hops: list[list[dict]] = []
     seen: set[str] = set()
     pid: str | None = prev_id
-    for _ in range(16):
+    for _ in range(_CHAIN_MAX_HOPS):
         if not pid or pid in seen:
             break
         seen.add(pid)
@@ -267,6 +271,14 @@ def stored_chain_messages(prev_id: str, request: Request) -> list[dict]:
                 )
         hops.append(turn)
         pid = p.get("previous_response_id")
+    else:
+        if pid and pid not in seen and _get_stored_response(pid):
+            raise ContextError(
+                400,
+                f"previous_response_id chain is longer than {_CHAIN_MAX_HOPS} responses.",
+                "previous_response_chain_too_long",
+                "previous_response_id",
+            )
     return [m for hop in reversed(hops) for m in hop]
 
 
