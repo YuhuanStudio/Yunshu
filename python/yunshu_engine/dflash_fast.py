@@ -602,11 +602,18 @@ def rounds(
                 grafted = []
                 graft_rows = 0
                 graft_enabled = copy is not None and copy_rows > 16 and n > 0
+                # A copy round needs no drafter and verifies a chain: it stays the choice
+                # whenever the copier proposes. Wide (> 16 row) copy chains only on a
+                # confident match; a graft hedges the model tree with a match the copier
+                # alone would not bet a round on (2026-10-20: grafting every match in place
+                # of copy rounds cost -5.6% on 32K code).
                 copied = (
                     copy.draft(min(copy.max_draft, room - 1))
-                    if copy is not None and not graft_enabled
+                    if copy is not None
                     else []
                 )
+                if copied and copy.last_match < copy.cfg.confident_match:
+                    copied = copied[:15]
                 if copied:
                     n = len(copied)
                     window = mx.array([[bonus, *copied]], dtype=token_dtype)
