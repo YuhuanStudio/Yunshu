@@ -699,7 +699,7 @@ class ToolCallGuide:
         if self.phase == FREE:
             return token == g.start_id
         if self.phase == WAIT:
-            return g.forced and token == g.think_end_id
+            return token == g.start_id or (g.forced and token == g.think_end_id)
         return False
 
     def feed(self, token: int) -> bool:
@@ -713,7 +713,12 @@ class ToolCallGuide:
                     self.consumed = 0
                 else:
                     self.phase = FREE
-            return True
+                return True
+            if token != g.start_id:
+                return True
+            # A call marker inside reasoning ends it implicitly (the engine surfaces the
+            # call), so the body is constrained like one opened after the reasoning.
+            self.phase = FREE
         if self.phase == FREE:
             if token == g.start_id:
                 self.phase = BODY
