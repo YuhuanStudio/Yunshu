@@ -199,25 +199,15 @@ class PromptCacheManager:
             return False
 
         with self._lock:
-            # If key already exists, update in place
-            if messages_hash in self._cache:
-                old_entry = self._cache[messages_hash]
+            # A replaced entry leaves first, then the new one is budgeted like any other.
+            kept: dict = {}
+            old_entry = self._cache.pop(messages_hash, None)
+            if old_entry is not None:
                 self._stats.total_size_bytes -= old_entry.size_bytes
-
-                entry = CacheEntry(
-                    key=messages_hash,
-                    kv_state=kv_state,
-                    messages_hash=messages_hash,
-                    created_at=old_entry.created_at,
-                    access_count=old_entry.access_count,
-                    size_bytes=size_bytes,
-                    token_count=token_count,
-                )
-                self._cache[messages_hash] = entry
-                self._cache.move_to_end(messages_hash)
-                self._stats.total_size_bytes += size_bytes
-                self._stats.stores += 1
-                return True
+                kept = {
+                    "created_at": old_entry.created_at,
+                    "access_count": old_entry.access_count,
+                }
 
             # Evict if necessary
             if self._eviction_on_store:
@@ -234,6 +224,7 @@ class PromptCacheManager:
                 messages_hash=messages_hash,
                 size_bytes=size_bytes,
                 token_count=token_count,
+                **kept,
             )
             self._cache[messages_hash] = entry
             self._stats.total_size_bytes += size_bytes
