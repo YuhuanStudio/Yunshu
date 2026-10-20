@@ -36,6 +36,9 @@ class Secret:
     session_id: str
     kind: str  # "realtime" | "transcription"
     config: dict = field(default_factory=dict)  # internal (beta-shaped) session fields
+    key_id: str | None = (
+        None  # the stored key that minted it: its sessions count to that key
+    )
 
 
 _lock = threading.Lock()
@@ -65,7 +68,14 @@ def ttl_from(expires_after: object) -> int:
     return seconds
 
 
-def mint(config: dict, kind: str, ttl: int, *, now: float | None = None) -> Secret:
+def mint(
+    config: dict,
+    kind: str,
+    ttl: int,
+    *,
+    now: float | None = None,
+    key_id: str | None = None,
+) -> Secret:
     t = time.time() if now is None else now
     sec = Secret(
         value="ek_" + secrets.token_urlsafe(32),
@@ -73,6 +83,7 @@ def mint(config: dict, kind: str, ttl: int, *, now: float | None = None) -> Secr
         session_id=f"sess_{uuid.uuid4().hex[:24]}",
         kind=kind,
         config=dict(config),
+        key_id=key_id,
     )
     with _lock:
         for k in [k for k, v in _secrets.items() if v.expires_at <= t]:

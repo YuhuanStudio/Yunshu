@@ -93,6 +93,12 @@ def _kind(session: dict) -> str:
     return cast(str, t)
 
 
+def _minting_key(request: Request) -> str | None:
+    """The stored key minting a secret (None for the static token or auth off)."""
+    principal = getattr(getattr(request, "state", None), "principal", None)
+    return getattr(principal, "key_id", None)
+
+
 @router.post("/realtime/client_secrets")
 async def create_client_secret(request: Request) -> Any:
     _check_permission(request, "can_infer")
@@ -106,7 +112,7 @@ async def create_client_secret(request: Request) -> Any:
         cfg, full = _effective(session, kind)
     except rs.SecretError as exc:
         return _error(400, exc.message, exc.param)
-    sec = rs.mint(cfg, kind, ttl)
+    sec = rs.mint(cfg, kind, ttl, key_id=_minting_key(request))
     return {
         "value": sec.value,
         "expires_at": sec.expires_at,
@@ -122,7 +128,7 @@ async def _beta(request: Request, kind: str) -> Any:
         ttl = rs.DEFAULT_TTL_S
     except rs.SecretError as exc:
         return _error(400, exc.message, exc.param)
-    sec = rs.mint(cfg, kind, ttl)
+    sec = rs.mint(cfg, kind, ttl, key_id=_minting_key(request))
     return rs.beta_session(sec, full)
 
 

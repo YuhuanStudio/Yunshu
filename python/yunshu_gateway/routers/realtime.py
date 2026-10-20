@@ -953,6 +953,10 @@ class RealtimeSession:
     def __init__(self, ws: WebSocket, dialect: str = "beta"):
         self.ws = ws
         self._secret_kind = "realtime"
+        # The stored key this session runs as (directly or through a secret it minted):
+        # each response is admitted against its quotas and counted to it, like a request.
+        self._key_id: str | None = None
+        self._last_usage = (0, 0)
         # "ga": OpenAI Realtime GA schema (openai SDK client.realtime); "beta":
         # the flat schema (OpenAI-Beta: realtime=v1, and the legacy /realtime path).
         self.dialect = dialect
@@ -1059,6 +1063,49 @@ class RealtimeSession:
                     self._arm_idle_timer()
         except Exception:  # noqa: BLE001
             logger.debug("realtime bookkeeping failed for %s", t, exc_info=True)
+
+    async def _admit_key(self) -> bool:
+        """Admit one response against the session key's quotas (holding its concurrency
+        slot until ``_settle_key``); on refusal send the error event and return False."""
+        if not self._key_id:
+            return True
+        from .. import api_keys
+
+        store = api_keys.get_store()
+        try:
+            store.admit(store.principal_by_id(self._key_id))
+        except api_keys.QuotaExceededError as exc:
+            await self.send_event(
+                _event(
+                    RealtimeEvent.ERROR,
+                    error={
+                        "type": "invalid_request_error",
+                        "code": f"{exc.which}_exceeded",
+                        "message": str(exc),
+                    },
+                )
+            )
+            return False
+        except api_keys.AuthFailureError as exc:
+            await self.send_event(
+                _event(
+                    RealtimeEvent.ERROR,
+                    error={
+                        "type": "invalid_request_error",
+                        "code": "invalid_api_key",
+                        "message": str(exc),
+                    },
+                )
+            )
+            return False
+        return True
+
+    def _settle_key(self) -> None:
+        from .. import api_keys
+
+        store = api_keys.get_store()
+        store.release(self._key_id)
+        store.account(self._key_id, *self._last_usage)
 
     def _rate_limits_event(self) -> dict:
         """``rate_limits.updated``: a local server has no quota, so the limits are the
@@ -1526,6 +1573,8 @@ class RealtimeSession:
             )
             return
 
+        if not await self._admit_key():
+            return
         response_id = f"resp_{uuid.uuid4().hex[:16]}"
         item_id = f"item_{uuid.uuid4().hex[:24]}"
         self._cancel_idle_timer()
@@ -1568,9 +1617,12 @@ class RealtimeSession:
             )
         )
 
+        self._last_usage = (0, 0)
         self._active_response = asyncio.create_task(
             self._generate_response(response_id, item_id, modalities, response_config)
         )
+        if self._key_id:
+            self._active_response.add_done_callback(lambda _t: self._settle_key())
         self._active_response._response_id = response_id
         self._active_response._item_id = item_id
         self._active_modalities = modalities
@@ -2274,6 +2326,7 @@ class RealtimeSession:
                     )
                 )
 
+            self._last_usage = (_usage_pt, _usage_ct)  # counted to the session key
             # response.done — include usage so metering clients get token counts.
             await self.send_event(
                 _event(
@@ -3735,6 +3788,7 @@ async def realtime_endpoint(ws: WebSocket):
 
     auth_token = settings.get("YUNSHU_AUTH_TOKEN")
     secret = None
+    principal = None
     if (auth_token or api_keys.get_store().has_keys()) and not settings.get_bool(
         "YUNSHU_AUTH_DISABLED"
     ):
@@ -3770,6 +3824,11 @@ async def realtime_endpoint(ws: WebSocket):
                 h = proto.removeprefix("openai-insecure-api-key.")
         secret = realtime_secrets.lookup(h or ws.query_params.get("token"))
     model = ws.query_params.get("model")
+    session._key_id = (
+        principal.key_id
+        if secret is None and principal is not None
+        else getattr(secret, "key_id", None)
+    )
     if secret is not None:
         session._secret_kind = secret.kind
         session.session.update({k: v for k, v in secret.config.items() if k != "model"})
