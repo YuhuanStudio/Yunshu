@@ -121,6 +121,7 @@ class TestCancelEndpoint:
         mock_state.role = None
         mock_state.rbac_key = None
         mock_state.tenant = None
+        mock_state.principal = None
         mock_req.state = mock_state
         return mock_req
 

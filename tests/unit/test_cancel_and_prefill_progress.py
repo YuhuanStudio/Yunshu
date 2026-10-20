@@ -544,16 +544,15 @@ class TestPrefillProgressSSEFormat:
 
 
 class TestCancelAdminGating:
-    """The /v1/cancel admin gate derives from request.state.role. Single-consumer
-    model: the simplified auth middleware stamps role="owner" on every admitted
-    request, so the owner can always cancel_all / cancel by id."""
+    """cancel_all needs the admin scope once a token or keys are configured. The
+    middleware stamps role="owner" on every admitted request, infer-only keys included,
+    so the stamp grants nothing; with no auth configured the one local user is admin."""
 
-    async def _call(self, role, cancel_all=True, request_id=None, monkeypatch=None):
+    async def _call(self, scopes, monkeypatch, token="tok", role="owner"):
         import types
 
         from yunshu_gateway.routers import cancel as cancel_mod
 
-        # Fake tracker so cancel_all/cancel don't touch real state.
         class _Tracker:
             def cancel_all(self):
                 return 0
@@ -567,40 +566,31 @@ class TestCancelAdminGating:
         monkeypatch.setattr(
             cancel_mod, "get_request_tracker", lambda: _Tracker(), raising=False
         )
-        # Auth is tested elsewhere — stub _check_auth so we can drive the admin
-        # gate directly with an arbitrary role.
-        monkeypatch.setattr(
-            cancel_mod, "_check_auth", lambda request: None, raising=False
-        )
-        # Simulate a real authenticated (non dev-bypass) deployment.
         monkeypatch.delenv("YUNSHU_AUTH_DISABLED", raising=False)
-        # request.state.role is set by the simplified AuthMiddleware for
-        # every admitted request; role as given drives the admin gate.
-        st = types.SimpleNamespace(role=role)
+        if token:
+            monkeypatch.setenv("YUNSHU_AUTH_TOKEN", token)
+        else:
+            monkeypatch.delenv("YUNSHU_AUTH_TOKEN", raising=False)
+        principal = None if scopes is None else types.SimpleNamespace(scopes=scopes)
+        st = types.SimpleNamespace(role=role, principal=principal)
         req_obj = types.SimpleNamespace(state=st, headers={})
-        body = cancel_mod.CancelRequest(cancel_all=cancel_all, request_id=request_id)
+        body = cancel_mod.CancelRequest(cancel_all=True)
         return await cancel_mod.cancel_generation(body, req_obj)
 
     @pytest.mark.asyncio
-    async def test_role_unset_denied_cancel_all(self, monkeypatch):
+    async def test_infer_only_key_denied_cancel_all(self, monkeypatch):
         from fastapi import HTTPException
 
         with pytest.raises(HTTPException) as exc:
-            await self._call(role=None, cancel_all=True, monkeypatch=monkeypatch)
+            await self._call({"infer"}, monkeypatch)
         assert exc.value.status_code == 403
 
     @pytest.mark.asyncio
-    async def test_admin_role_allowed_cancel_all(self, monkeypatch):
-        result = await self._call(
-            role="admin", cancel_all=True, monkeypatch=monkeypatch
-        )
+    async def test_admin_key_allowed_cancel_all(self, monkeypatch):
+        result = await self._call({"admin"}, monkeypatch)
         assert result.get("status") == "cancelled"
 
     @pytest.mark.asyncio
-    async def test_owner_role_allowed_cancel_all(self, monkeypatch):
-        # Single-consumer default: role="owner" (stamped by the simplified middleware).
-        result = await self._call(
-            role="owner", cancel_all=True, monkeypatch=monkeypatch
-        )
-        assert result.get("status") == "cancelled"
+    async def test_local_user_without_auth_allowed_cancel_all(self, monkeypatch):
+        result = await self._call(None, monkeypatch, token=None)
         assert result.get("status") == "cancelled"

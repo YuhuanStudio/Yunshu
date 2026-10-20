@@ -23,49 +23,30 @@ class CancelRequest(BaseModel):
 
 
 def _check_auth(request: Request) -> None:
-    """Verify auth token when YUNSHU_AUTH_TOKEN is configured.
+    """Cancelling your own generation is an inference-level operation."""
+    from yunshu_gateway.routers.models import _check_permission
 
-    Single-consumer model: the simplified AuthMiddleware stamps
-    ``request.state.role = "owner"`` on every request it admits. Honor that.
+    _check_permission(request, "can_infer")
 
-    Raises HTTPException 401 if auth is required but missing/invalid.
-    """
-    # The simplified middleware has already authenticated the request and
-    # stamped request.state.role — trust that.
-    if hasattr(request, "state"):
-        if getattr(request.state, "role", None):
-            return
 
-    auth_token = settings.get("YUNSHU_AUTH_TOKEN")
-    if not auth_token:
-        # Deny by default when no auth is configured (secure default).
-        # Explicit opt-in via YUNSHU_AUTH_DISABLED=true is required to
-        # skip authentication.
-        if not settings.get_bool("YUNSHU_AUTH_DISABLED"):
-            raise HTTPException(
-                status_code=401,
-                detail="No authentication configured. Set YUNSHU_AUTH_TOKEN or YUNSHU_AUTH_DISABLED=true.",
-            )
-        return
+def _is_admin(request: Request) -> bool:
+    """cancel_all, cancelling another caller's request and listing every caller's need
+    the admin scope once keys or a token are configured; with none configured (or auth
+    disabled) the one local user is the admin. The auth middleware's legacy
+    ``role="owner"`` stamp is on every admitted request, infer-only keys included, so
+    it grants nothing here."""
+    from yunshu_gateway import api_keys
+    from yunshu_gateway.routers.models import _check_permission
+
     if settings.get_bool("YUNSHU_AUTH_DISABLED"):
-        return  # Auth explicitly disabled
-
-    auth = request.headers.get("Authorization", "")
-    if not auth.startswith("Bearer "):
-        raise HTTPException(
-            status_code=401,
-            detail="Missing or invalid Authorization header",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    token = auth[7:]
-    from yunshu_gateway.token_compare import tokens_equal
-
-    if not tokens_equal(token, auth_token):
-        raise HTTPException(
-            status_code=401,
-            detail="Invalid API key",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+        return True
+    if not settings.get("YUNSHU_AUTH_TOKEN") and not api_keys.get_store().has_keys():
+        return True
+    try:
+        _check_permission(request, "admin")
+    except HTTPException:
+        return False
+    return True
 
 
 @router.post("/cancel")
@@ -82,19 +63,8 @@ async def cancel_generation(req: CancelRequest, request: Request):
 
     tracker = get_request_tracker()
 
-    # Admin gate: cancel_all and arbitrary request_id cancellation are powerful,
-    # so gate them on the canonical request.state.role stamped by the auth
-    # middleware. Single-consumer model: the simplified AuthMiddleware
-    # stamps role="owner" on every admitted request (or "admin"/"system" for
-    # static-token holders), so the single owner can always cancel_all and
-    # cancel by id. Auth-disabled dev mode is also treated as admin.
-    _auth_disabled = settings.get_bool("YUNSHU_AUTH_DISABLED")
-    _role_str = str(getattr(request.state, "role", "") or "")
-    is_admin = (
-        _auth_disabled
-        or _role_str.lower() in ("admin", "system", "owner")
-        or _role_str.upper().endswith("ADMIN")
-    )
+    # cancel_all and cancelling another caller's request need admin (_is_admin).
+    is_admin = _is_admin(request)
 
     if req.cancel_all:
         if not is_admin:
@@ -180,13 +150,7 @@ async def list_active_generations(request: Request):
     admin (was leaking every tenant's live request_id + model)."""
     _check_auth(request)
     actor = resolve_actor(request)
-    _auth_disabled = settings.get_bool("YUNSHU_AUTH_DISABLED")
-    _role_str = str(getattr(request.state, "role", "") or "")
-    is_admin = (
-        _auth_disabled
-        or _role_str.lower() in ("admin", "system", "owner")
-        or _role_str.upper().endswith("ADMIN")
-    )
+    is_admin = _is_admin(request)
 
     from yunshu_engine.request_tracker import get_request_tracker
 
