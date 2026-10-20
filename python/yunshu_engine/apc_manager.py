@@ -31,7 +31,9 @@ from __future__ import annotations
 import collections
 import contextlib
 import contextvars
+import json
 import logging
+import os
 import threading
 import time
 from dataclasses import dataclass
@@ -1262,6 +1264,7 @@ class YunshuAPCManager(APCManager):
             self.disk.event_origin = lambda key: self.__dict__.get(
                 "_console_generations", {}
             ).get(self._born.get(key))
+            self._load_span_plans()
 
     # ── demotion: HOT -> WARM -> SSD ───────────────────────────────────
     def _spill(self, key, entry) -> None:
@@ -1442,6 +1445,25 @@ class YunshuAPCManager(APCManager):
         self.observation.event("promotion", key, n, "ram", "warm_hit")
         self._promoted = (n, (time.perf_counter() - t0) * 1000.0)
 
+    # Explicit checkpoints restore only under the split plan they were written with
+    # (_Coordinator.lookup), so the receipts persist next to the SSD tier's entries.
+    _SPAN_PLANS_FILE = "span_plans.json"
+
+    def _load_span_plans(self) -> None:
+        try:
+            raw = json.loads((self.disk.dir / self._SPAN_PLANS_FILE).read_text())
+            plans = {int(k): tuple(int(p) for p in v) for k, v in raw.items()}
+        except (OSError, ValueError, TypeError, AttributeError):
+            return
+        self._span_plans.update(list(plans.items())[-_BORN_MAX:])
+
+    def _save_span_plans(self) -> None:
+        path = self.disk.dir / self._SPAN_PLANS_FILE
+        tmp = path.with_suffix(".tmp")
+        data = {str(k): list(v) for k, v in self._span_plans.items()}
+        tmp.write_text(json.dumps(data))
+        os.replace(tmp, path)
+
     def close(self) -> None:
         """Write what is still resident so the cache survives a restart."""
         if isinstance(self.disk, SpillDiskStore):
@@ -1468,6 +1490,12 @@ class YunshuAPCManager(APCManager):
                     self._spill(key, _Held(ent.token_ids, ent.extra_hash, cache))
             with contextlib.suppress(Exception):
                 self.disk.flush()
+            try:
+                self._save_span_plans()
+            except OSError:
+                logger.warning(
+                    "APC: could not save the explicit split plans", exc_info=True
+                )
         if self.warm is not None:
             self.warm.close()
         super().close()
