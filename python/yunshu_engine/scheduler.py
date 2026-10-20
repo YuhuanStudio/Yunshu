@@ -4893,38 +4893,18 @@ class Scheduler:
     # ── Batch-path SpecPrefill, Spec-Aware Scheduling, Batched Draft Collection ──
 
     def _apply_batch_spec_prefill(self, to_insert: list[Request]) -> list[Request]:
-        """Apply SpecPrefill to waiting requests before insertion.
-
-        For each request with a prompt exceeding the threshold, computes
-        which tokens are skippable and attaches the selected indices to
-        the request metadata. The actual sparse prefill happens during
-        the BatchGenerator insert phase.
-
-        Args:
-            to_insert: List of requests to potentially apply SpecPrefill to.
-
-        Returns:
-            The same list with spec_prefill metadata attached where applicable.
-        """
-        if self._batch_spec_prefill is None:
-            return to_insert
-
-        for req in to_insert:
-            if (
-                req.prompt_token_ids
-                and len(req.prompt_token_ids)
-                >= self._batch_spec_prefill.config.threshold
-            ):
-                selected = self._batch_spec_prefill.compute_skippable_tokens(
-                    req.prompt_token_ids,
-                )
-                if selected is not None:
-                    req._spec_prefill_selected = selected
-                    logger.debug(
-                        f"Batch SpecPrefill: {len(selected)}/{len(req.prompt_token_ids)} "
-                        f"tokens selected for {req.request_id}"
-                    )
-
+        """SpecPrefill is not applied on the engine loop: its insertion has no sparse
+        prefill (no position-mapped insert), so a selection only cost a draft prefill
+        and counted tokens as skipped while the full prompt was prefilled. Warn once
+        and insert the requests unchanged."""
+        if self._batch_spec_prefill is not None and not getattr(
+            self, "_spec_prefill_warned", False
+        ):
+            self._spec_prefill_warned = True
+            logger.warning(
+                "SpecPrefill is not applied on the engine loop (YUNSHU_ENGINE_LOOP=1): "
+                "prompts are prefilled in full"
+            )
         return to_insert
 
     def spec_prefill_step(self, tokens: list[int]) -> list[int] | None:
