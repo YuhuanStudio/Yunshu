@@ -113,13 +113,16 @@ class _ErrorFormatter:
         )
 
 
-async def _release_after(body, store, key_id):
-    """Yield the response body, then free the key's concurrency slot (stream end or abort)."""
+async def _release_after(body, store, key_id, state=None):
+    """Yield the response body, then free the key's concurrency slot (stream end or abort),
+    unless the route moved the slot to work that outlives the response (``slot_moved``:
+    a background response releases it when its generation ends)."""
     try:
         async for chunk in body:
             yield chunk
     finally:
-        store.release(key_id)
+        if not getattr(state, "slot_moved", False):
+            store.release(key_id)
 
 
 def _owner_identity() -> str:
@@ -279,7 +282,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 store.release(principal.key_id)
                 raise
             response.body_iterator = _release_after(
-                response.body_iterator, store, principal.key_id
+                response.body_iterator, store, principal.key_id, request.state
             )
             return response
 

@@ -1158,7 +1158,37 @@ async def _start_background_response(req: ResponsesRequest, request: Request):
             },
         )
 
+    # The key's concurrency slot and token accounting follow the generation, not the
+    # queued reply: the auth middleware leaves the slot to this runner, which releases
+    # it and accounts the final usage (the HTTP request settled before any tokens).
+    key_id = getattr(request.state, "api_key_id", None)
+    if key_id:
+        request.state.slot_moved = True
+
     async def _runner():
+        from yunshu_engine.request_tracker import current_request_info
+
+        current_request_info.set(None)  # this task's copy: not the settled HTTP request
+        try:
+            await _generate()
+        finally:
+            if key_id:
+                from .. import api_keys
+
+                usage = (_get_stored_response(response_id) or {}).get("usage") or {}
+                store = api_keys.get_store()
+                store.release(key_id)
+                store.account(
+                    key_id,
+                    int(usage.get("input_tokens") or 0),
+                    int(usage.get("output_tokens") or 0),
+                    int(
+                        (usage.get("input_tokens_details") or {}).get("cached_tokens")
+                        or 0
+                    ),
+                )
+
+    async def _generate():
         # Flip queued → in_progress so a poll mid-generation reflects reality.
         cur = _get_stored_response(response_id)
         # honor a cancel that landed during the queued window (cancel_response

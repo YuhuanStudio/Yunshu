@@ -22,9 +22,9 @@ def test_cancel_persists_and_runner_bails():
     # cancel endpoint persists status=cancelled when the tracker had no entry
     assert 'stored.get("status") in ("queued", "in_progress")' in src
     assert '_cancel_payload["status"] = "cancelled"' in src
-    # _runner bails on a persisted cancel before generating
+    # the background generation bails on a persisted cancel before generating
     runner_region = src[
-        src.index("async def _runner") : src.index("async def _runner") + 900
+        src.index("async def _generate") : src.index("async def _generate") + 900
     ]
     assert 'cur.get("status") == "cancelled"' in runner_region
     assert "return" in runner_region
