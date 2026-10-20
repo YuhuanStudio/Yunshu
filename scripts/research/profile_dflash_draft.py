@@ -176,7 +176,10 @@ def main():
 
         base_context = drafter._project_context_kv
         if not install_quantized_context(drafter):
-            raise RuntimeError("quantized context fusion did not engage")
+            # e.g. the fast tree's lane view: its context projections are not the fused kind
+            f.write(json.dumps({"fused_context": "not engaged: A/B skipped"}) + "\n")
+            f.write(json.dumps({"complete": True, "mode": kind, "bits": a.bits}) + "\n")
+            return
         fused_context = drafter._project_context_kv
         for rep in range(3):
             for fused in [False, True] if rep % 2 == 0 else [True, False]:
