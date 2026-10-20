@@ -795,6 +795,10 @@ class VLMEngine:
         policy = settings.get("YUNSHU_GC_POLICY")
         self._gc_policy = policy
         runner.gc_guard = gc_policy.install(policy)
+        # YUNSHU_GIL_SWITCH_MS is reload-class: re-read it on every model load.
+        from . import gil_switch
+
+        gil_switch.apply()
 
     async def start(self) -> None:
         if self._model is not None:
