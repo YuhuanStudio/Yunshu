@@ -4,12 +4,22 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
 from fastapi.testclient import TestClient
 
 from yunshu_gateway import api_keys
 from yunshu_gateway.routers import ollama
 
-from .test_api_keys import H, make_app, store  # noqa: F401
+from .test_api_keys import H, make_app
+
+
+@pytest.fixture(name="store")
+def _store(tmp_path, monkeypatch):
+    monkeypatch.delenv("YUNSHU_AUTH_TOKEN", raising=False)
+    monkeypatch.delenv("YUNSHU_AUTH_DISABLED", raising=False)
+    s = api_keys.configure(tmp_path / "keys.json")
+    yield s
+    api_keys._store = None
 
 
 def _outer_holds_slot(store):

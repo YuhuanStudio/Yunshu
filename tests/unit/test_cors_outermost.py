@@ -9,5 +9,9 @@ def test_live_cors_is_outside_auth_and_rate_limit(monkeypatch):
     monkeypatch.setenv("YUNSHU_CORS_ORIGINS", "*")
     names = [m.cls.__name__ for m in create_app().user_middleware]  # outermost first
     cors = names.index("LiveCORSMiddleware")
-    for inner in ("AuthMiddleware", "YunshuExtensionsMiddleware", "MetricsMiddleware"):
+    for inner in (
+        "AuthMiddleware",
+        "YunshuExtensionsMiddleware",
+        "ModelLeaseMiddleware",
+    ):
         assert cors < names.index(inner), (inner, names)
