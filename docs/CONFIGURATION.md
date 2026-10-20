@@ -227,7 +227,7 @@ still wins at runtime (reported as `overridden`).
 
 | Setting | Type | Default | Applies | Description |
 |---|---|---|---|---|
-| `YUNSHU_DIFFUSION_SCHEDULER` | `''` \| `ddim` \| `dpm_plus_plus` \| `euler` \| `euler_ancestral` \| `lms` | unset | reload | Image generation sampler override ('' uses the pipeline's own). |
+| `YUNSHU_DIFFUSION_SCHEDULER` | `''` \| `ddim` \| `dpm_plus_plus` \| `euler` \| `euler_ancestral` \| `lms` | unset | reload | Image generation sampler name ('' uses the pipeline's own). Every value currently runs the same Euler update over the same sigma schedule: the named DDIM / DPM++ / ancestral / LMS steps are not implemented, so the choice does not change the image. |
 
 ### embeddings
 

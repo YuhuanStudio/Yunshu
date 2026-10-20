@@ -256,7 +256,7 @@ _add("YUNSHU_REALTIME_MAX_INPUT_AUDIO_BYTES", "int", 10 * 1024 * 1024, "Realtime
 _add("YUNSHU_REALTIME_MAX_CONVERSATION_ITEMS", "int", 1000, "Realtime: conversation items kept per session.", "voice", minimum=1)
 
 # ── image ──────────────────────────────────────────────────────
-_add("YUNSHU_DIFFUSION_SCHEDULER", "enum", "", "Image generation sampler override ('' uses the pipeline's own).", "image-video", choices=("", "ddim", "dpm_plus_plus", "euler", "euler_ancestral", "lms"))
+_add("YUNSHU_DIFFUSION_SCHEDULER", "enum", "", "Image generation sampler name ('' uses the pipeline's own). Every value currently runs the same Euler update over the same sigma schedule: the named DDIM / DPM++ / ancestral / LMS steps are not implemented, so the choice does not change the image.", "image-video", choices=("", "ddim", "dpm_plus_plus", "euler", "euler_ancestral", "lms"))
 
 # ── embeddings ─────────────────────────────────────────────────────────
 _add("YUNSHU_ANE_EMBEDDINGS", "bool", False, "Compute embeddings on the Apple Neural Engine via CoreML when available.", "embeddings")
