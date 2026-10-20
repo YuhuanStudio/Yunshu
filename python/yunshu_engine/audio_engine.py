@@ -1271,7 +1271,15 @@ class ASREngine(ActiveRequestMixin):
             caller_hint_is_zh = (language or "").lower().startswith(
                 "zh"
             ) or not language
-            if text and caller_hint_is_zh and not current_lang.lower().startswith("zh"):
+            # Japanese/Korean share Han characters with Chinese; a model that
+            # detected them correctly must not be relabeled "zh".
+            detected_ja_ko = current_lang.lower().startswith(("ja", "ko"))
+            if (
+                text
+                and caller_hint_is_zh
+                and not current_lang.lower().startswith("zh")
+                and not detected_ja_ko
+            ):
                 # Count CJK Unified Ideographs + extensions (excl. punctuation/digits)
                 cjk_chars = sum(
                     1
