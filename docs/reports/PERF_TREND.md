@@ -1271,3 +1271,14 @@ verify prefillspeed-attn2-long: base 6520d39ad901 vs cand 447a266509f2 on /Volum
   longqa: PASS - base 30/30 cand 30/30 per ctx {32768: [10, 10, 10], 65536: [10, 10, 10], 131072: [10, 10, 10]}
   conc: PASS - base ttft [2.556, 5.311] dec [19.5, 20.5]; base ttft [6.983, 12.23] dec [11.1, 11.7]; base ttft [15.131, 9.759] dec [20.0, 18.3]; cand ttft [2.518, 5.242] dec [19.5, 20.6]; cand ttft [6.978, 11.985] dec [13.3, 13.7]; cand ttft [4.876, 17.109] dec [17.3, 21.4]
 ```
+
+2026-10-20 Tool-call guided requests (`YUNSHU_TOOL_GRAMMAR=1`) keep the batch-invariant kernels, the dense lane, the ordinary APC namespace and the DFlash fast tree / copy rounds (a0ede47e); the call's masked rows verify on the fast tree's chain. Before, every request with a tool guide ran stock serial arithmetic and the guided chain. Qwen3.8-27B oQ4e-mtp, M5 Max, 32K exact snapshot code prompt + 6 declared tools, greedy, real server (scripts/research/probe_tools_decode.py on main@30b9088b, probe_tools_identity.py on toolfast; evidence /Volumes/P5Plus/yunshu-build/toolfast-evidence):
+
+| tree | grammar | decode tok/s with tools | no tools |
+|---|---|---:|---:|
+| main 30b9088b (512 tokens) | on | 47.6 | 145.0 |
+| main 30b9088b (512 tokens) | off (default) | 93.3 | 152.5 |
+| toolfast (256 tokens) | on | 77.9 | 117.5 |
+| toolfast (256 tokens) | off | 76.6 | 114.0 |
+
+Identity with the grammar on: DFlash, MTP and drafting off give identical content and identical tool calls (Read + Grep, closed under the grammar, 40 masked lane rounds) for a 32K free-text reply, a 32K tool-calling turn and a no-tools control; log shows `constrained=True` and no serial verify. The grammar no longer costs decode speed (77.9 on vs 76.6 off on the same tree). The tools-vs-no-tools gap with the grammar off is the reply's content (acceptance 0.35 vs 0.54 on main), not a path change. The main and toolfast rows are different runs with different lengths and content; read each tree's rows side by side, not across trees.
