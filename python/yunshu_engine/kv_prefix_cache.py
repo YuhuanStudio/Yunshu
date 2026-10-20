@@ -934,8 +934,11 @@ class KVPrefixCache:
         when len(prompt) % 64 == 0 (the "wrote N MB / restored 0" failure class).
         """
         n = len(q)
+        store = self._hybrid_ssd
+        if store is None:
+            return None
         try:
-            counts = self._hybrid_ssd.candidate_token_counts()
+            counts = store.candidate_token_counts()
         except Exception:
             counts = []
         for c in counts:
@@ -945,8 +948,8 @@ class KVPrefixCache:
                 continue
             try:
                 key = _token_hash(q[:c]).encode("utf-8")[:32]
-                if self._hybrid_ssd.has(key):
-                    cache_list, tok = self._hybrid_ssd.load(key)
+                if store.has(key):
+                    cache_list, tok = store.load(key)
                     if cache_list is not None and tok >= max(floor, self._min_prefix):
                         logger.info("hybrid SSD snapshot hit: %d/%d tokens", tok, n)
                         return cache_list, n - tok, tok

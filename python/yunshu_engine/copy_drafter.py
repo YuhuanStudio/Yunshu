@@ -151,7 +151,7 @@ class CopyDrafter:
                 np.flatnonzero(self._keys[n:size] == self._keys[size]) + n
             ).tolist()
         else:
-            cands = self._index.get(tuple(ctx[size - n :]))
+            cands = self._index.get(tuple(ctx[size - n :])) or []
         if not cands:
             return []
         best_end, best_len = -1, 0

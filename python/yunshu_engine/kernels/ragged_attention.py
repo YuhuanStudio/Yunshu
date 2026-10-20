@@ -686,7 +686,7 @@ def ragged_decode_attention(
         and slots is None
         and k_scales is None
     ):
-        return _attend_grouped(
+        return _attend_grouped(  # type: ignore[no-any-return]
             queries, keys, values, lengths, scale, max_length, int(row_lengths[0])
         )
     outs = []

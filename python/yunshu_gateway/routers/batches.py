@@ -16,7 +16,7 @@ import logging
 import re
 import secrets
 import time
-from typing import Any
+from typing import Any, cast
 
 import httpx
 from fastapi import APIRouter, Request
@@ -352,7 +352,7 @@ def _submitter(request: Request) -> str | None:
     principal = getattr(getattr(request, "state", None), "principal", None)
     if principal is None:
         return None
-    return principal.key_id or principal.name
+    return cast("str | None", principal.key_id or principal.name)
 
 
 def _new_record(api: str, prefix: str, request: Request, total: int) -> dict[str, Any]:

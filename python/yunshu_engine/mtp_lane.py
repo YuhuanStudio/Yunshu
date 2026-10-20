@@ -84,7 +84,7 @@ def verify_max_rows(lane_projections: bool, language_model: Any = None) -> int:
     if (
         not lane_projections
         or not ra.tile_ready()
-        or getattr(language_model, "_yunshu_lane_skipped", 0)
+        or bool(getattr(language_model, "_yunshu_lane_skipped", 0))
     ):
         return 8
     if language_model is not None:
