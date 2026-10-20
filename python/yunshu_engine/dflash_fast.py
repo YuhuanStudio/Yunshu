@@ -549,7 +549,14 @@ def rounds(
         copy.extend([first_bonus])
     graft_budget = GraftBudget()
     graft_stats = dict(
-        rounds=0, proposed=0, accepted=0, extra_accepted=0, matches=0, rows=0, ms=0.0
+        rounds=0,
+        proposed=0,
+        accepted=0,
+        extra_accepted=0,
+        matches=0,
+        rows=0,
+        ms=0.0,
+        first_rows=0,
     )
     keep = context_window(draft)
     logger.info(
@@ -611,7 +618,11 @@ def rounds(
                 graft_rows = 0
                 masked = guide is not None and guide.constrained
                 graft_enabled = (
-                    copy is not None and copy_rows > 16 and n > 0 and not masked
+                    copy is not None
+                    and copy_rows > 16
+                    and n > 0
+                    and not masked
+                    and not first_round(emitted)
                 )
                 if masked:
                     proposals = forced_tokens(guide, min(15, room - 1))
@@ -631,11 +642,9 @@ def rounds(
                         if copy is not None
                         else []
                     )
-                    # The first round also bounds the first visible token (the prefill bonus
-                    # is usually the reasoning marker), so it never pays for a second
-                    # 16-row block.
                     if copied and (
-                        emitted == 1 or copy.last_match < copy.cfg.confident_match
+                        first_round(emitted)
+                        or copy.last_match < copy.cfg.confident_match
                     ):
                         copied = copied[:15]
                 if masked:
@@ -690,6 +699,8 @@ def rounds(
                     parents = mx.array([-1], dtype=mx.int32)
                     shape = FastShape(parents, 0, is_chain=True)
                     window = mx.array([[bonus]], dtype=token_dtype)
+                if first_round(emitted):
+                    graft_stats["first_rows"] = int(window.size)
                 t_drafted = time.perf_counter()
                 result = tv.tree_forward(
                     lm, window, shape, cache, target_ids, verifier=verifier
@@ -842,7 +853,7 @@ def rounds(
                     return
     finally:
         logger.info(
-            "DFlash suffix graft engagement: copy_rounds=%d proposed=%d accepted=%d extra_accepted=%d matches=%d verify_rows=%d round_ms=%.3f",
+            "DFlash suffix graft engagement: copy_rounds=%d proposed=%d accepted=%d extra_accepted=%d matches=%d verify_rows=%d round_ms=%.3f first_round_rows=%d",
             graft_stats["rounds"],
             graft_stats["proposed"],
             graft_stats["accepted"],
@@ -850,6 +861,7 @@ def rounds(
             graft_stats["matches"],
             graft_stats["rows"],
             graft_stats["ms"],
+            graft_stats["first_rows"],
         )
         if prof["rounds"]:
             r = prof["rounds"]
@@ -887,6 +899,13 @@ def rounds(
             )
         hidden = None
         draft_cache = None
+
+
+def first_round(emitted: int) -> bool:
+    """The round the first visible token waits for (the prefill bonus is usually the
+    reasoning marker): it never pays for a second 16-row block, neither a wide copy chain
+    nor a graft (each cost ~+17 ms warm TTFT at 32K code)."""
+    return emitted == 1
 
 
 def supported(lm, draft):
