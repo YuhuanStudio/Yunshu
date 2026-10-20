@@ -702,6 +702,16 @@ def test_supports_only_qwen3_5_attention():
             self.layers = [attn]
 
     assert ragged_kv.supports(Holder())
+    attn.q_proj = nn.Linear(4, 4)
+    attn.q_proj.weight = attn.q_proj.weight.astype(mx.bfloat16)
+    assert ragged_kv.supports(Holder())
+    attn.q_proj.weight = attn.q_proj.weight.astype(mx.float16)
+    assert not ragged_kv.supports(
+        Holder()
+    )  # bf16-only kernels, no fallback once ragged
+    attn.q_proj = nn.QuantizedLinear(64, 64, bits=4)
+    attn.q_proj.scales = attn.q_proj.scales.astype(mx.bfloat16)
+    assert ragged_kv.supports(Holder())
 
 
 def test_set_format_validates_and_scopes():

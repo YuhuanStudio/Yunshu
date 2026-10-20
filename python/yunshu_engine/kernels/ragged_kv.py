@@ -42,6 +42,7 @@ same route (same math, only draft acceptance can move).
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 import mlx.core as mx
@@ -410,7 +411,28 @@ def supports(language_model: Any) -> bool:
     modules = getattr(language_model, "modules", None)
     if not callable(modules):
         return False
-    return any(isinstance(m, lang.Qwen3_5Attention) for m in modules())
+    attention = [m for m in modules() if isinstance(m, lang.Qwen3_5Attention)]
+    # The ragged kernels take bf16 queries only and have no stock fallback once a cache is
+    # ragged, so an fp16/fp32 checkpoint keeps stock caches.
+    dtypes = [_projection_dtype(m) for m in attention]
+    ok = all(d is None or d == mx.bfloat16 for d in dtypes)
+    if attention and not ok:
+        logging.getLogger(__name__).warning(
+            "ragged KV off: Qwen3.5 attention computes in %s, the kernels take bf16",
+            next(d for d in dtypes if d is not None and d != mx.bfloat16),
+        )
+    return bool(attention) and ok
+
+
+def _projection_dtype(attention: Any) -> Any:
+    proj = getattr(attention, "q_proj", None)
+    if proj is None:
+        return None
+    # Quantized projections compute in their scales' dtype.
+    array = getattr(proj, "scales", None)
+    if array is None:
+        array = getattr(proj, "weight", None)
+    return getattr(array, "dtype", None)
 
 
 def set_dense_lane(active: bool) -> None:
