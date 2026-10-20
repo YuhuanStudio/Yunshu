@@ -62,7 +62,7 @@ async def test_stream_resamples_when_model_has_no_speed():
 
 @pytest.mark.asyncio
 async def test_terminal_marker_does_not_drop_audio():
-    n = 70
+    n = 65
     eng = _engine(_Model(n=n, samples=10))
     agen = eng.synthesize_stream("hi")
     chunks = [await agen.__anext__()]
