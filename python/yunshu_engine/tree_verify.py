@@ -983,12 +983,16 @@ def supported(language_model: Any) -> bool:
 
 
 def lane_projections(lm: Any) -> bool:
-    """The decoder's projections are ``LaneLinear`` (row-invariant at any row count)."""
+    """The decoder's projections are ``LaneLinear`` (row-invariant at any row count).
+
+    One projection ``lane_linear.convert`` could not read (FP16 scales, an unsupported
+    width) stays a QuantizedLinear, whose sg8 arithmetic matches decode only up to 8 rows.
+    """
     from .kernels.lane_linear import LaneLinear
 
     layer = lm.model.layers[0]
     proj = layer.linear_attn.in_proj_qkv if layer.is_linear else layer.self_attn.q_proj
-    return isinstance(proj, LaneLinear)
+    return isinstance(proj, LaneLinear) and not getattr(lm, "_yunshu_lane_skipped", 0)
 
 
 def lane_ready(lm: Any, cache: list) -> bool:

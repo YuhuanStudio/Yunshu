@@ -376,6 +376,9 @@ def convert(language_model: Any) -> dict:
     if pending:
         mx.eval(pending)
     mx.clear_cache()
+    # Wide verify windows are row-invariant only when every projection is a lane one
+    # (tree_verify.lane_projections); a skipped one keeps them at sg8's 8 rows.
+    language_model._yunshu_lane_skipped = len(skipped)
     if skipped:
         logger.info("lane projections: %d skipped (%s)", len(skipped), skipped[:4])
     return {"converted": converted, "skipped": skipped}

@@ -80,7 +80,11 @@ def verify_max_rows(lane_projections: bool, language_model: Any = None) -> int:
     projections) 8."""
     from .kernels import ragged_attention as ra
 
-    if not lane_projections or not ra.tile_ready():
+    if (
+        not lane_projections
+        or not ra.tile_ready()
+        or getattr(language_model, "_yunshu_lane_skipped", 0)
+    ):
         return 8
     if language_model is not None:
         for layer in language_model.model.layers:

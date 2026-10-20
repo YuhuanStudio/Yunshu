@@ -162,3 +162,47 @@ def test_prefill_narrow_projection_never_takes_the_row_count_dispatch(monkeypatc
         assert mx.array_equal(lane.prefill([x[:512]])[0], ref[:512]).item()
     finally:
         lane_linear.set_stock_rows(0)
+
+
+def test_a_skipped_projection_keeps_verify_windows_narrow():
+    # One FP16-scale projection stays a QuantizedLinear (sg8: invariant to 8 rows), so
+    # the wide lane windows must not be used even though layer 0 converted.
+    from types import SimpleNamespace
+
+    from yunshu_engine import mtp_lane, tree_verify
+
+    def quantized(dtype):
+        lin = nn.Linear(512, 64, bias=False)
+        lin.set_dtype(mx.bfloat16)
+        q = nn.QuantizedLinear.from_linear(lin, group_size=64, bits=4)
+        q.scales = q.scales.astype(dtype)
+        q.biases = q.biases.astype(dtype)
+        return q
+
+    class Attn(nn.Module):
+        def __init__(self, dtype):
+            super().__init__()
+            self.q_proj = quantized(dtype)
+
+    class LM(nn.Module):
+        def __init__(self, dtypes):
+            super().__init__()
+            self.layers = [Attn(d) for d in dtypes]
+
+    for dtypes, skipped in (
+        ((mx.bfloat16, mx.bfloat16), 0),
+        ((mx.bfloat16, mx.float16), 1),
+    ):
+        lm = LM(dtypes)
+        assert lane_linear.convert(lm)["skipped"] == (
+            ["layers.1.q_proj"] if skipped else []
+        )
+        view = SimpleNamespace(
+            model=SimpleNamespace(
+                layers=[SimpleNamespace(is_linear=False, self_attn=lm.layers[0])]
+            ),
+            _yunshu_lane_skipped=lm._yunshu_lane_skipped,
+        )
+        assert tree_verify.lane_projections(view) is (not skipped)
+        if skipped:
+            assert mtp_lane.verify_max_rows(True, view) == 8

@@ -215,6 +215,16 @@ def install(language_model: Any, model: Any = None, packed: bool = False) -> dic
             ):
                 if x.shape[0] * x.shape[1] <= MAX_ROWS:
                     return invariant_linear(self, x, exact_rows)
+                if x.shape[1] == 1:
+                    # More decode rows than sg8 takes: the same kernel per 8-row
+                    # piece, so a row's arithmetic never depends on how many share it.
+                    return mx.concatenate(
+                        [
+                            invariant_linear(self, x[b : b + MAX_ROWS], exact_rows)
+                            for b in range(0, x.shape[0], MAX_ROWS)
+                        ],
+                        axis=0,
+                    )
             return stock_call(self, x)
 
         nn.QuantizedLinear.__call__ = call
