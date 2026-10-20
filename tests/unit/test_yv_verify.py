@@ -356,6 +356,16 @@ def test_speed_regression_noise_and_improvement():
     ]  # missing metric fails closed
 
 
+def test_a_slower_follow_up_decode_is_a_regression():
+    base = [rows() for _ in range(3)]
+    cand = [rows() for _ in range(3)]
+    for rep in cand:
+        rep[2]["dec_tps"] = 70.0  # turn2 only; the cold reply is as fast
+    sp = analyze.speed_compare(base, cand)
+    assert not sp["ok"]
+    assert [r["metric"] for r in sp["regressions"]] == ["followup_decode_tps"]
+
+
 def mem_rows(arm, hog=0.0, rep=0):
     return [
         {

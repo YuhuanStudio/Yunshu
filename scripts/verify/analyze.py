@@ -119,6 +119,9 @@ METRICS = {
     "decode_tps": ("cold", "dec_tps", True),
     "cold_ttft_s": ("cold", "ttft_s", False),
     "followup_ttft_s": ("turn2", "ttft_s", False),
+    # an agent's next turn decodes too: a follow-up slowed by speculation that only pays off
+    # on a fresh answer (copy chains matching the previous reply) must not pass unseen
+    "followup_decode_tps": ("turn2", "dec_tps", True),
     "warm_ttft_s": ("warm", "ttft_s", False),
 }
 
