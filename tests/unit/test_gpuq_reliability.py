@@ -742,3 +742,52 @@ def test_quiet_timing_job_is_requeued_not_paused_for_priority_work(q, monkeypatc
     assert stopped["cancel"] is True
     clone = q._read(q.JOBS / f"{stopped['requeued_as']}.json")
     assert clone["state"] == "pending" and clone["quiet"] and clone["requeues"] == 1
+
+
+def _backlog(q, now, **kw):
+    low = dict(
+        id="low",
+        label="fnchain-identity",
+        state="running",
+        priority=-3,
+        submitted=now - 600,
+        started=now - 500,
+        pid=1,
+        env={},
+        cmd=["true"],
+        cwd=str(q.ROOT),
+        mem_gb=24.0,
+        **kw,
+    )
+    q._write(q.JOBS / "low.json", low)
+    return low
+
+
+def test_backlog_job_is_requeued_not_paused_under_long_work(q, monkeypatch):
+    monkeypatch.setattr(q, "free_memory_gb", lambda: 100.0)
+    now = 100_000.0
+    monkeypatch.setattr(q.time, "time", lambda: now)
+    low = _backlog(q, now)
+    q.submit(["true"], "deploy27b-soak60", 90, 0, mem_gb=10.0)  # a long p0 job
+    monkeypatch.setattr(q, "_execute", lambda job, *a, **k: None)
+    pauser = q.Pauser(low, q.JOBS / "low.json")
+    signals = []
+    monkeypatch.setattr(pauser, "_signal", lambda sig: signals.append(sig))
+    assert q._priority_step(pauser, q.ServingGate(), now) is False
+    assert not pauser.paused and signals == []
+    stopped = q._read(q.JOBS / "low.json")
+    assert stopped["cancel"] is True
+    assert q._read(q.JOBS / f"{stopped['requeued_as']}.json")["state"] == "pending"
+
+
+def test_backlog_job_still_pauses_under_short_work(q, monkeypatch):
+    monkeypatch.setattr(q, "free_memory_gb", lambda: 100.0)
+    now = 100_000.0
+    monkeypatch.setattr(q.time, "time", lambda: now)
+    low = _backlog(q, now)
+    q.submit(["true"], "tf110-smoke", 5, 0, mem_gb=10.0)  # short p0 job
+    monkeypatch.setattr(q, "_execute", lambda job, *a, **k: None)
+    pauser = q.Pauser(low, q.JOBS / "low.json")
+    monkeypatch.setattr(pauser, "_signal", lambda sig: None)
+    q._priority_step(pauser, q.ServingGate(), now)
+    assert not q._read(q.JOBS / "low.json").get("cancel")

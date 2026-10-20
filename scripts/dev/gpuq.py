@@ -1179,11 +1179,14 @@ def _priority_step(pauser: Pauser, gate: ServingGate, now: float) -> bool:
     # decides when the admitted high-priority job can start; it must not let the
     # low-priority job resume early through the shorter serving resume window.
     if any(j.get("waiting") != "mem" for j in pending):
+        # A stopped job stays resident. Behind a long job (a suite cell, a soak) that is
+        # memory and swap for its whole run, and a cancel is only seen once the nested
+        # run returns (2026-10-20: a stopped Flash-Next job sat under a 60-minute 27B
+        # soak, which swapped 15 GB). Only short work may run over a stopped job.
+        long_preemptor = any(_long(j) for j in pending if j.get("waiting") != "mem")
         if (
-            requires_quiet(pauser.job)
-            and not pauser.paused
-            and pauser.job.get("requeues", 0) < MAX_REQUEUES
-        ):
+            requires_quiet(pauser.job) and not pauser.paused or long_preemptor
+        ) and pauser.job.get("requeues", 0) < MAX_REQUEUES:
             # A timing job measures wall time: once stopped, its numbers are void, and
             # its resident server plus the priority job overcommit memory and swap
             # (two 27B replykv timing runs swapped 1.4-2 GB under gate jobs). Stop it
