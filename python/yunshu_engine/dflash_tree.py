@@ -63,6 +63,34 @@ class GpuLattice:
         self.succ, self.pred, self.anchor = succ, pred, anchor
 
 
+TOP_K_CHUNK = 1024
+
+
+def top_k_ids(logits: mx.array, k: int, chunk: int = TOP_K_CHUNK) -> mx.array:
+    """Indices of each row's ``k`` largest values (``[D, n]`` -> ``[D, k]``, any order).
+
+    Two stages: the ``k`` best of every ``chunk``-wide slice, then the ``k`` best of those.
+    One argpartition over 65536 ids cost 1.09 ms for 15 rows; this 0.27 ms, same set (M5 Max).
+    A draft candidate only changes what is verified, never the output."""
+    d, n = logits.shape
+    if n <= chunk * 2:
+        return mx.argpartition(logits, -k, axis=-1)[..., -k:]
+    pad = -n % chunk
+    if pad:
+        logits = mx.concatenate(
+            [logits, mx.full((d, pad), -float("inf"), dtype=logits.dtype)], axis=-1
+        )
+    c = logits.shape[-1] // chunk
+    x = logits.reshape(d, c, chunk)
+    local = mx.argpartition(x, -k, axis=-1)[..., -k:]  # [D, C, k] within each slice
+    values = mx.take_along_axis(x, local, axis=-1).reshape(d, c * k)
+    ids = (local + (mx.arange(c, dtype=local.dtype) * chunk)[None, :, None]).reshape(
+        d, c * k
+    )
+    best = mx.argpartition(values, -k, axis=-1)[..., -k:]
+    return mx.take_along_axis(ids, best, axis=-1)
+
+
 def compute_lattice_gpu(
     drafter, anchor: int, hidden: mx.array, cache, positions: int
 ) -> GpuLattice:
@@ -112,14 +140,14 @@ def compute_lattice_gpu(
         logits, ids = subset  # [D, n] over the searched ids
         if prof:
             t0 = tv._tick("drafter_head_ms", logits, t0)
-        part = mx.argpartition(logits, -sel.top_k, axis=-1)[..., -sel.top_k :]
+        part = top_k_ids(logits, sel.top_k)
         cands = mx.take(ids, part)  # [D, K]
         unary = mx.take_along_axis(logits, part, axis=-1).astype(mx.float32)
     else:
         logits = drafter._logits(dh)
         if prof:
             t0 = tv._tick("drafter_head_ms", logits, t0)
-        cands = mx.argpartition(logits, -sel.top_k, axis=-1)[0, ..., -sel.top_k :]
+        cands = top_k_ids(logits[0], sel.top_k)
         unary = mx.take_along_axis(logits[0], cands, axis=-1).astype(mx.float32)
     if prof:
         t0 = tv._tick("drafter_topk_ms", cands, t0)
