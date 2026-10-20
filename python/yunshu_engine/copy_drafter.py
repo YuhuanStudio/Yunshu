@@ -32,8 +32,14 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+import numpy as np
+
 if TYPE_CHECKING:
     from .copy_cost import CopyCosts
+
+
+_TOKEN_BITS = 21
+_TOKEN_LIMIT = 1 << _TOKEN_BITS
 
 
 @dataclass
@@ -67,6 +73,12 @@ class CopyDrafter:
         self.ctx: list[int] = []
         self._index: dict[tuple[int, ...], list[int]] = {}
         self._indexed = 0
+        # vectorized index: packed n-gram keys (21 bits per token) per end position
+        n = self.cfg.ngram
+        self._vec = n >= 1 and n * _TOKEN_BITS <= 63
+        self._tok = np.zeros(1024, dtype=np.int64)
+        self._keys = np.zeros(1024, dtype=np.uint64)
+        self._vsynced = 0  # ctx tokens already copied into the numpy buffers
         self._silent = 0
         self._misses = 0
         self._wide = False
@@ -83,7 +95,39 @@ class CopyDrafter:
         """Append tokens (the prompt first, then each committed token)."""
         self.ctx.extend(int(t) for t in tokens)
 
+    def _sync_vec(self) -> bool:
+        """Grow the numpy token/key buffers; False if the dict path must be used."""
+        n, ctx = self.cfg.ngram, self.ctx
+        size, old = len(ctx), self._vsynced
+        if size > old:
+            new = np.asarray(ctx[old:size], dtype=np.int64)
+            if int(new.min()) < 0 or int(new.max()) >= _TOKEN_LIMIT:
+                self._vec = False
+                return False
+            if size + 1 > len(self._tok):
+                cap = len(self._tok)
+                while cap < size + 1:
+                    cap *= 2
+                for name in ("_tok", "_keys"):
+                    arr = getattr(self, name)
+                    grown = np.zeros(cap, dtype=arr.dtype)
+                    grown[: len(arr)] = arr
+                    setattr(self, name, grown)
+            tok = self._tok
+            tok[old:size] = new
+            lo = max(old + 1, n)  # first end whose key gained a new token
+            if size >= lo:
+                acc = np.zeros(size - lo + 1, dtype=np.uint64)
+                for j in range(n):
+                    part = tok[lo - n + j : size - n + j + 1].astype(np.uint64)
+                    acc |= part << np.uint64(_TOKEN_BITS * (n - 1 - j))
+                self._keys[lo : size + 1] = acc
+            self._vsynced = size
+        return True
+
     def _sync_index(self) -> None:
+        if self._vec and self._sync_vec():
+            return
         n = self.cfg.ngram
         ctx = self.ctx
         # the tail key must not index itself: positions are "end of a key whose
@@ -102,7 +146,12 @@ class CopyDrafter:
         if width <= 0 or size < n + 1:
             return []
         self._sync_index()
-        cands = self._index.get(tuple(ctx[size - n :]))
+        if self._vec:
+            cands = (
+                np.flatnonzero(self._keys[n:size] == self._keys[size]) + n
+            ).tolist()
+        else:
+            cands = self._index.get(tuple(ctx[size - n :]))
         if not cands:
             return []
         best_end, best_len = -1, 0
