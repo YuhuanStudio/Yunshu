@@ -229,8 +229,13 @@ def idle_verdict(start, end, tolerance_gib=0.5):
             o["kind"] == "apc_ram" and o.get("bytes") is not None for o in owners
         ):
             raise ValueError("missing APC occupancy")
+        native = sum(
+            o["bytes"]
+            for o in ledger.get("native_owners", [])
+            if o["kind"] == "grammar_tokenizer" and o.get("bytes") is not None
+        )
         return (
-            ledger["process"]["footprint_bytes"] - apc,
+            ledger["process"]["footprint_bytes"] - apc - native,
             ledger["mlx"]["active_bytes"] - apc,
             ledger["mlx"]["cache_bytes"],
         )

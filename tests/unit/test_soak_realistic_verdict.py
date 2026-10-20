@@ -178,3 +178,12 @@ def test_draft_window_is_intended_cache_but_unknown_growth_still_fails():
     assert not soak.idle_verdict(before, after)
     after["process"]["footprint_bytes"] += 0.6 * 2**30
     assert soak.idle_verdict(before, after)
+
+
+def test_grammar_token_tables_explain_footprint_growth_only_once():
+    before, after = ledger(), ledger(active=22.0, footprint=24.8)
+    assert soak.idle_verdict(before, after)  # 0.8 GiB native growth, unexplained
+    after["native_owners"] = [{"kind": "grammar_tokenizer", "bytes": 0.45 * 2**30}]
+    assert not soak.idle_verdict(before, after)
+    after["process"]["footprint_bytes"] += 0.6 * 2**30
+    assert soak.idle_verdict(before, after)

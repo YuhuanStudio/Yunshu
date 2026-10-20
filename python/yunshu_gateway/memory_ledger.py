@@ -424,6 +424,22 @@ def collect(manager: Any, engine: Any, display_id: str | None = None) -> dict[st
     )
     attributed += draft_window
 
+    # Native process heap, not device memory: llguidance token tables built on the
+    # first constrained request and cached for the process life. Deliberately not
+    # added to ``attributed`` (that sum is compared with MLX active bytes).
+    from yunshu_engine.tool_call_grammar import resident_tokenizer_bytes
+
+    native_owners = [
+        {
+            "kind": "grammar_tokenizer",
+            "id": None,
+            "bytes": resident_tokenizer_bytes(),
+            "reclaimable": False,
+            "estimated": True,
+            "source": "process heap growth while building llguidance token tables",
+        }
+    ]
+
     # Live KV of in-flight requests is not counted anywhere yet: unknown, not zero.
     owners.append(
         {
@@ -486,6 +502,7 @@ def collect(manager: Any, engine: Any, display_id: str | None = None) -> dict[st
             {"footprint": proc["footprint"], "footprint_peak": proc["footprint_peak"]}
         ),
         "owners": owners,
+        "native_owners": native_owners,
         **_overshoot_block(overshoot),
         "storage_tiers": storage,
         "limits": {
