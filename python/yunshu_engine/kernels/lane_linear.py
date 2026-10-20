@@ -168,7 +168,9 @@ class LaneLinear(nn.Module):
             group=self.group_size,
             row_block=block,
             row_limit=PIECE,
-            sk=getattr(self, "sk", None),
+            # a per-module split (the drafter's) is tuned for draft rows, not for a
+            # context-window projection (2047 rows at a warm hit: +18 ms TTFT)
+            sk=getattr(self, "sk", None) if m <= 32 else None,
             prefill_narrow=prefill_narrow,
         )
 
