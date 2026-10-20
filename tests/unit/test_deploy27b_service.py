@@ -121,3 +121,27 @@ def test_plist_lives_off_the_noowners_volume():
     assert "shutil.rmtree(plist_dir" in source
     assert '"StandardOutPath": str(plist_dir / "server.log")' in source
     assert '"StandardOutPath": str(root' not in source
+
+
+def test_wait_unloaded_tolerates_our_own_lingering_job_only():
+    from types import SimpleNamespace as NS
+
+    ours = NS(returncode=0, stdout="program = /iso/bin/python\n")
+    gone = NS(returncode=113, stdout="")
+    seq = iter([ours, ours, gone])
+    service.wait_unloaded(
+        lambda *a: next(seq), "t", Path("/iso/bin/python"), sleep=lambda s: None
+    )
+    other = NS(returncode=0, stdout="program = /somebody/else\n")
+    with pytest.raises(RuntimeError, match="another service"):
+        service.wait_unloaded(
+            lambda *a: other, "t", Path("/iso/bin/python"), sleep=lambda s: None
+        )
+    with pytest.raises(RuntimeError, match="still loaded"):
+        service.wait_unloaded(
+            lambda *a: ours,
+            "t",
+            Path("/iso/bin/python"),
+            timeout=0,
+            sleep=lambda s: None,
+        )

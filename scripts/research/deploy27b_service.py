@@ -40,6 +40,23 @@ def require_owned_job(state, program):
     return service_pid(state)
 
 
+def wait_unloaded(ctl, target, program, timeout=30.0, sleep=time.sleep):
+    """bootout returns before launchd forgets the job: wait for our own to vanish.
+
+    A job that is still listed but belongs to another executable is someone else's
+    service and fails at once."""
+    deadline = time.monotonic() + timeout
+    while True:
+        state = ctl("print", target)
+        if state.returncode != 0:
+            return
+        if str(program) not in state.stdout:
+            raise RuntimeError("another service appeared during upgrade")
+        if time.monotonic() >= deadline:
+            raise RuntimeError("stopped service is still loaded in launchd")
+        sleep(0.5)
+
+
 def require_owned(state, program):
     """Never signal a launchd job unless its executable is our isolated interpreter."""
     if str(program) not in state or service_pid(state) is None:
@@ -280,8 +297,7 @@ def main():
             )
         if upgrade.returncode:
             raise RuntimeError("upgrade install failed")
-        if ctl("print", target).returncode == 0:
-            raise RuntimeError("another service appeared during upgrade")
+        wait_unloaded(ctl, target, python_bin)
         if boot_job().returncode:
             raise RuntimeError("upgraded bootstrap failed")
         owned = True
