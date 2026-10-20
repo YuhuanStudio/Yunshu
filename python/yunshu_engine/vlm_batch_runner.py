@@ -1094,7 +1094,7 @@ class VLMBatchRunner:
                 mx.array(job.ids)[None], None, mask=None
             ).to_dict()
         salt = job.salt if job.salt is not None else self.apc_semantic_hash
-        if job.guide is not None or job.logprobs:
+        if _serial_rows(job):
             from mlx_vlm.apc import semantic_extra_hash
 
             # Ordinary speculative requests can prefill short spans with the
@@ -1148,7 +1148,7 @@ class VLMBatchRunner:
                 job.priority,
                 use_apc,
                 job.cache_plan is not None,
-                job.guide is not None or job.logprobs,
+                _serial_rows(job),
                 job.prompt_kwargs is not None,
             )
             group = self._batches.get(key)
@@ -1481,10 +1481,7 @@ class VLMBatchRunner:
         # regardless of batch arrival order. The same existing kernels already
         # make the speculative lane invariant. Exact constrained / logprob
         # requests share stock AR arithmetic on both paths (constrained_spec).
-        serial_rows = any(
-            getattr(job, "guide", None) is not None or getattr(job, "logprobs", None)
-            for job in group.jobs.values()
-        )
+        serial_rows = any(_serial_rows(job) for job in group.jobs.values())
         invariant = batch_invariant.is_installed() and not serial_rows
         # With ragged KV on, the speculative lane's decode and verify
         # attention run the ragged kernel over its one-row cache, so both
@@ -1562,7 +1559,7 @@ class VLMBatchRunner:
             from .constrained_spec import set_request
 
             set_request(job.spec_request)
-            if job.guide is not None or job.logprobs:
+            if _serial_rows(job):
                 from .constrained_spec import prepare_serial_prefill
 
                 prepare_serial_prefill(group.gen)
@@ -1585,7 +1582,7 @@ class VLMBatchRunner:
                     group.gen.completion_batch_size = capacity
             else:
                 prompt_progress, responses = self._next_preemptible(group)
-            if group.spec and (job.guide is not None or job.logprobs):
+            if group.spec and _serial_rows(job):
                 from .constrained_spec import finish_serial_prefill
 
                 finish_serial_prefill(group.gen)
@@ -2371,6 +2368,20 @@ def _note_spec(drafter: Any, job: _Job) -> None:
     job.stats.spec_copy_rounds = max(int(now[3] - base[3]), 0)
     job.stats.spec_copy_tokens = max(int(now[4] - base[4]), 0)
     job.spec_last = now
+
+
+def _serial_rows(job) -> bool:
+    """Rows that take the stock serial arithmetic (logprobs, response-format or
+    combined guides). A tool-call guide alone keeps the invariant kernels, the dense
+    lane and the ordinary APC namespace (constrained_spec.invariant_guide): agent
+    requests declare tools on every turn, and free text under that guide is unmasked."""
+    from .constrained_spec import invariant_guide
+
+    guide = getattr(job, "guide", None)
+    logprobs = getattr(job, "logprobs", None)
+    if guide is None:
+        return bool(logprobs)
+    return not invariant_guide(guide, logprobs)
 
 
 def _spec_mode(drafter: Any) -> str:

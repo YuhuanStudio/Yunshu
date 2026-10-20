@@ -369,13 +369,21 @@
     },
     "dflash": {
      "s": "partial",
-     "why": "chain verifies under the guide; copy islands and the fast tree are disabled while a guide is set",
+     "why": "tool-call guides alone run the fast tree and copy rounds on free text and mask the call's rows on its chain (constrained_spec.invariant_guide, dflash_copy.takes_guided); response-format / combined guides, logprobs and penalties still verify on the serial chain",
      "owner": "decode16",
      "impact": "high",
      "ev": [
       [
        "python/yunshu_engine/vlm_batch_runner.py",
        "speculative_verify_dflash_hidden"
+      ],
+      [
+       "python/yunshu_engine/dflash_fast.py",
+       "guide.plan(copied, n + 1)"
+      ],
+      [
+       "python/yunshu_engine/dflash_copy.py",
+       "def takes_guided"
       ]
      ]
     },
