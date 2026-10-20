@@ -121,3 +121,73 @@ def test_dry_run_plans_every_agent_and_task(capsys):
     )
     out = json.loads(capsys.readouterr().out)
     assert [j["task"] for j in out] == ["cli-add-flag", "shell-report"]
+
+
+def test_repeat_jobs_tell_the_child_its_repeat_number(tmp_path):
+    ab = _ab()
+    jobs = ab.plan(["claude"], ["a"], 2, tmp_path, Path("/t/python"), "x", -1)
+    starts = [j["cmd"][j["cmd"].index("--repeat-start") + 1] for j in jobs]
+    assert starts == ["1", "2"]
+    assert all(j["cmd"][j["cmd"].index("--repeat") + 1] == "1" for j in jobs)
+    planned = [dict(j, out=j["out"]) for j in jobs]
+    rows = [row(task="a", rep=1), row(task="a", rep=2)]
+    assert ab.judge(planned, rows, [])["verdict"] == "PASS"
+
+
+def test_child_repeat_start_numbers_its_runs():
+    import sys
+    from types import SimpleNamespace
+
+    sys.path.insert(0, str(ROOT / "scripts/research/agentic"))
+    import run_agentic
+
+    assert list(
+        run_agentic.repeat_numbers(SimpleNamespace(repeat=1, repeat_start=3))
+    ) == [3]
+    assert list(run_agentic.repeat_numbers(SimpleNamespace(repeat=2))) == [1, 2]
+
+
+def _finish_fixture(ab, tmp_path, monkeypatch, wait_rc):
+    from types import SimpleNamespace
+
+    jobs = ab.plan(["claude"], ["a"], 1, tmp_path, Path("/t/python"), "x", -1)
+    jobs[0]["id"] = "job1"
+    (tmp_path / "plan.json").write_text(
+        json.dumps(
+            {
+                "sha": "abcdef0",
+                "ref": "main",
+                "jobs": [{**j, "out": str(j["out"])} for j in jobs],
+            }
+        )
+    )
+    jobs[0]["out"].write_text(json.dumps(row(task="a")) + "\n")
+    asked = []
+
+    def fake_run(cmd, **kw):
+        asked.append(cmd)
+        return SimpleNamespace(returncode=wait_rc)
+
+    monkeypatch.setattr(ab.subprocess, "run", fake_run)
+    return asked
+
+
+def test_failed_queue_job_fails_the_verdict(tmp_path, monkeypatch):
+    ab = _ab()
+    _finish_fixture(ab, tmp_path, monkeypatch, wait_rc=1)
+    assert ab.finish(tmp_path, ["job1"], 10, []) == 1
+    assert json.loads((tmp_path / "verdict.json").read_text())["verdict"] == "FAIL"
+
+
+def test_collect_checks_the_saved_queue_ids(tmp_path, monkeypatch):
+    ab = _ab()
+    asked = _finish_fixture(ab, tmp_path, monkeypatch, wait_rc=1)
+    assert ab.finish(tmp_path, [], 10, []) == 1
+    assert "job1" in asked[0]
+    asked.clear()
+    monkeypatch.setattr(
+        ab.subprocess,
+        "run",
+        lambda cmd, **kw: __import__("types").SimpleNamespace(returncode=0),
+    )
+    assert ab.finish(tmp_path, [], 10, []) == 0

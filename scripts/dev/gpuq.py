@@ -98,6 +98,7 @@ from gpuq_contention import (  # noqa: E402
     contention_config,
     flag_sample_time,
     foreign_model_reason,
+    job_lock,
     requires_quiet,
 )
 
@@ -459,15 +460,16 @@ class Pauser:
     def _save(self) -> None:
         self.job["pauses"] = self.pauses
         self.job["paused"] = self.paused
-        data = _read(
-            self.path
-        )  # merge: never clobber a cancel flag the CLI set meanwhile
-        data.update(
-            pauses=self.pauses,
-            paused=self.paused,
-            pause_reason=self.job.get("pause_reason"),
-        )
-        _write(self.path, data)
+        with job_lock(self.path):
+            data = _read(
+                self.path
+            )  # merge: never clobber a cancel flag the CLI set meanwhile
+            data.update(
+                pauses=self.pauses,
+                paused=self.paused,
+                pause_reason=self.job.get("pause_reason"),
+            )
+            _write(self.path, data)
         _write(LOGS / f"{self.job['id']}.pauses.json", {"pauses": self.pauses})
 
     def _signal(self, sig: int) -> None:
@@ -1423,6 +1425,7 @@ def _adopt(job: dict, path: Path, gate: ServingGate | None = None) -> None:
         )
     monitor.record("adopt")
     why = None
+    sigint_at = None
     while _alive(pid):
         now = _now()
         if gate.enabled:
@@ -1440,8 +1443,14 @@ def _adopt(job: dict, path: Path, gate: ServingGate | None = None) -> None:
         )
         if not why and (cancelled or (now > deadline and not pauser.paused)):
             why = "cancelled" if cancelled else "timeout"
+            sigint_at = now
             with contextlib.suppress(ProcessLookupError):
                 os.killpg(pid, signal.SIGINT)
+        elif sigint_at is not None and now - sigint_at > 30:
+            # Same escalation as _run_one: a job that ignores SIGINT must not hold the lane.
+            sigint_at = now + 10**9
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(pid, signal.SIGKILL)
         time.sleep(min(POLL_S, gate.poll_s) if gate.enabled else POLL_S)
     rc_file = LOGS / f"{job['id']}.rc"
     try:
@@ -1750,10 +1759,11 @@ def daemon() -> None:
 
 
 def _patch_job(path: Path, **kw) -> None:
-    data = _read(path)
-    if data:
-        data.update(kw)
-        _write(path, data)
+    with job_lock(path):
+        data = _read(path)
+        if data:
+            data.update(kw)
+            _write(path, data)
 
 
 FINAL = {"done", "failed", "timeout", "stalled", "cancelled", "lost"}
@@ -2074,10 +2084,7 @@ def main() -> int:
         sys.exit(restart())
     elif a.op == "cancel":
         path = JOBS / f"{a.id}.json"
-        j = _read(path)
-        if j:
-            j["cancel"] = True
-            _write(path, j)
+        _patch_job(path, cancel=True)
     elif a.op == "_daemon":
         # A daemon started from a background shell job inherits SIGINT ignored,
         # and so would every job: timeouts and cancels (SIGINT first) would then

@@ -77,6 +77,18 @@ def output_paths(job: dict) -> list:
     return paths
 
 
+def _is_complete_line(line: str) -> bool:
+    """A JSON record with complete=true (or the bare marker line "complete")."""
+    line = line.strip()
+    if line == "complete":
+        return True
+    try:
+        rec = json.loads(line)
+    except ValueError:
+        return False
+    return isinstance(rec, dict) and rec.get("complete") is True
+
+
 def output_problem(path: Path, expect_complete: bool = False) -> Optional[str]:
     """None when the output exists and has content, else a short reason."""
     try:
@@ -90,7 +102,7 @@ def output_problem(path: Path, expect_complete: bool = False) -> Optional[str]:
             return "empty"
         if expect_complete:
             with path.open(encoding="utf-8", errors="replace") as f:
-                if not any("complete" in line for line in f):
+                if not any(_is_complete_line(line) for line in f):
                     return "no complete line"
         return None
     except OSError as e:

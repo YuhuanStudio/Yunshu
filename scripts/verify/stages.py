@@ -602,13 +602,15 @@ def stage_identity(ctx: Ctx) -> StageResult:
 
 # ── d. apc (analysis of the candidate's cold/warm pairs from the identity cells) ──
 def stage_apc(ctx: Ctx) -> StageResult:
-    rows = []
+    per_mode = {}
     for mode in ctx.suite.get("spec_modes") or ["default"]:
+        rows = []
         for tag, _c, _k in _units(ctx):
             rows += read_jsonl(
                 ctx.run.cell_path("identity", identity_cell_key("cand", mode, tag))
             )
-    if not rows:
+        per_mode[mode] = rows
+    if not any(per_mode.values()):
         return _finish(
             ctx,
             StageResult(
@@ -617,12 +619,22 @@ def stage_apc(ctx: Ctx) -> StageResult:
                 ["no candidate identity evidence (run the identity stage)"],
             ),
         )
-    a = analyze.check_apc(rows, require_hit=ctx.suite.get("apc_require_hit", True))
-    reasons = [f"{m['cell']}: {m['why']}" for m in a["mismatches"]]
+    reasons, compared, hits = [], 0, []
+    for mode, rows in per_mode.items():
+        if not rows:
+            reasons.append(f"{mode}: no candidate identity evidence")
+            continue
+        a = analyze.check_apc(rows, require_hit=ctx.suite.get("apc_require_hit", True))
+        reasons += [f"{mode} {m['cell']}: {m['why']}" for m in a["mismatches"]]
+        compared += a["compared"]
+        hits += [{"mode": mode, **h} for h in a["hits"]]
     return _finish(
         ctx,
         StageResult(
-            "apc", a["ok"], reasons, {"compared": a["compared"], "hits": a["hits"]}
+            "apc",
+            not reasons and compared > 0,
+            reasons,
+            {"compared": compared, "hits": hits},
         ),
     )
 

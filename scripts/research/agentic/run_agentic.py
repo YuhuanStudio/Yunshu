@@ -270,13 +270,19 @@ def run_one(task, agent, args, engine_url, model, server_pid, rep, out_dir) -> d
     return row
 
 
+def repeat_numbers(args) -> range:
+    """Repeat numbers this invocation runs (--repeat-start lets one job per repeat keep its number)."""
+    start = getattr(args, "repeat_start", 1)
+    return range(start, start + args.repeat)
+
+
 def cmd_run(args):
     out = Path(args.output)
     out.parent.mkdir(parents=True, exist_ok=True)
     cache = BUILD / "tasks-cache"
     cache.mkdir(parents=True, exist_ok=True)
     tasks = tasklib.select(args.tasks, tasklib.all_tasks(cache))
-    plan = [(t, r) for r in range(1, args.repeat + 1) for t in tasks]
+    plan = [(t, r) for r in repeat_numbers(args) for t in tasks]
     plan = [x for i, x in enumerate(plan) if i % args.shard_n == args.shard_i]
     todo = [
         (t, r)
@@ -503,6 +509,7 @@ def main():
     r.add_argument("--agent", required=True, choices=["opencode", "claude", "codex"])
     r.add_argument("--tasks", default="all")
     r.add_argument("--repeat", type=int, default=1)
+    r.add_argument("--repeat-start", type=int, default=1)
     r.add_argument("--output", required=True)
     r.add_argument("--timeout-min", type=float, default=20)
     r.add_argument(

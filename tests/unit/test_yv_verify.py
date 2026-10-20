@@ -93,6 +93,7 @@ def world(tmp_path, monkeypatch):
     (repo / "tests/unit/test_foo.py").write_text(
         "from yunshu_engine import foo\n\ndef test_x():\n    assert foo.X >= 1\n"
     )
+    (repo / ".gitignore").write_text("__pycache__/\n.pytest_cache/\n")
     git(repo, "init", "-q", "-b", "main")
     git(repo, "add", "-A")
     git(repo, "commit", "-qm", "base")
@@ -273,6 +274,25 @@ def test_dirty_dir_arm_key_changes(world):
     (d / "python/yunshu_engine/foo.py").write_text("X = 3\n")
     a2 = core.resolve_arm("cand", str(d))
     assert a1.key != a2.key and a2.dirty
+
+
+def test_untracked_files_change_the_dir_arm_key(world):
+    d = world.repo
+    a0 = core.resolve_arm("cand", str(d))
+    new = d / "python/yunshu_engine/new_mod.py"
+    new.write_text("A = 1\n")
+    a1 = core.resolve_arm("cand", str(d))
+    new.write_text("A = 2\n")
+    a2 = core.resolve_arm("cand", str(d))
+    assert len({a0.key, a1.key, a2.key}) == 3 and a1.dirty
+
+
+def test_dirty_pinned_ref_worktree_is_not_keyed_clean(world):
+    c = core.resolve_arm("cand", "cand", world.trees)
+    assert not c.dirty
+    (c.path / "python/yunshu_engine/foo.py").write_text("X = 99\n")
+    c2 = core.resolve_arm("cand", "cand", world.trees)
+    assert c2.dirty and c2.key != c.key
 
 
 # ── analysis ─────────────────────────────────────────────────────────────
@@ -1593,3 +1613,26 @@ def test_qwen4_tiny_verdict_rejects_incomplete_or_unengaged_evidence(tmp_path):
     ):
         evidence.write_text(json.dumps({**good, **bad}) + "\n")
         assert not stages._qwen4_mtp_valid(evidence)[0]
+
+
+def test_apc_stage_checks_every_spec_mode(tmp_path):
+    import json
+    from types import SimpleNamespace
+
+    good, bad = rows(cached=1024), rows(cached=1024)
+    bad[1]["sha"] = "zzz"  # MTP warm != cold; the later (good) mode must not mask it
+    ev = {"mtp": bad, "dflash": good}
+
+    def cell_path(stage, key):
+        p = tmp_path / f"{stage}.{key}.jsonl"
+        mode = key.split(".")[1]
+        p.write_text("".join(json.dumps(r) + "\n" for r in ev[mode]))
+        return p
+
+    ctx = SimpleNamespace(
+        suite={"spec_modes": ["mtp", "dflash"], "ctx": [1024], "kinds": ["code"]},
+        run=SimpleNamespace(cell_path=cell_path, append=lambda *a: None),
+        exe=SimpleNamespace(jobs=[]),
+    )
+    res = stages.stage_apc(ctx)
+    assert not res.passed

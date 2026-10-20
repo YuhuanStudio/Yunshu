@@ -464,3 +464,30 @@ def test_route_registry_initializes_multi_only_helpers_in_fresh_process():
         timeout=30,
     )
     assert result.returncode == 0, result.stderr
+
+
+def test_collect_asks_the_queue_about_saved_job_ids(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    d = _driver()
+    out = tmp_path / "w.jsonl"
+    out.write_text('{"complete": true, "pass": true}\n')
+    (tmp_path / "plan.json").write_text(
+        json.dumps(
+            {
+                "sha": "abc1234",
+                "jobs": [{"name": "w", "label": "l", "out": str(out), "id": "job9"}],
+            }
+        )
+    )
+    asked = []
+
+    def fake_run(cmd, **kw):
+        asked.append(cmd)
+        return SimpleNamespace(returncode=1)
+
+    monkeypatch.setattr(d.subprocess, "run", fake_run)
+    monkeypatch.setattr(d, "judge_output", lambda *a, **k: [])
+    assert d.main(["--collect", str(tmp_path)]) == 1
+    assert "job9" in asked[0]
+    assert json.loads((tmp_path / "verdict.json").read_text())["verdict"] == "FAIL"

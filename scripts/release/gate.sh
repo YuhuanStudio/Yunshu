@@ -47,6 +47,11 @@ CLIENT=(uv run --no-project --quiet --python 3.13 --with openai --with anthropic
 log(){ echo "$(date +%H:%M:%S) $*"; }
 has(){ [[ ",$STAGE," == *",$1,"* ]]; }
 rec(){ $PY $ROOT/scripts/release/gate_checks.py --results $RESULTS record "$@"; }
+# A client process that dies before recording its rows (dependency resolve, SDK import) must fail the stage.
+client(){  # $1 check prefix, rest: gate_checks.py subcommand + args
+  local pfx=$1; shift
+  ${CLIENT[@]} --prefix $pfx "$@" || rec ${pfx}client FAIL "client step '$1' exited non-zero"
+}
 jget(){ $PY -c "import json,sys; d=[json.loads(l) for l in open(sys.argv[1]) if l.strip()]; s=[x for x in d if x.get('kind')=='summary'][-1]; print(eval(sys.argv[2], {}, s))" "$@" 2>/dev/null; }
 # Memory returns: the footprint after the idle must come back to within 4 GiB of the start
 # once the prefix cache's resident bytes (APC, held by design up to its RAM budget) are
@@ -133,9 +138,9 @@ if has serve-27b; then
         --checkpoint $M --pid $YP --note "release gate" --output $OUT/27b-matrix.jsonl > $OUT/27b-matrix.log 2>&1
       ok=$(jget $OUT/27b-matrix.jsonl "f\"{ok}/{total} {failed}\"")
       [[ $ok == 34/34* ]] && rec serve-27b.matrix PASS "$ok" || rec serve-27b.matrix FAIL "${ok:-no summary (27b-matrix.log)}"
-      ${CLIENT[@]} --prefix serve-27b. sdk --url $URL
-      ${CLIENT[@]} --prefix serve-27b. cancel --url $URL
-      ${CLIENT[@]} --prefix serve-27b. long --url $URL --tokens 32768
+      client serve-27b. sdk --url $URL
+      client serve-27b. cancel --url $URL
+      client serve-27b. long --url $URL --tokens 32768
       $PY scripts/research/probe_concurrency.py --url $URL --model Qwen3.8-27B --n 8 \
         --note "release gate" --output $OUT/27b-concurrency.jsonl > /dev/null 2>&1
       qa=$(jget $OUT/27b-concurrency.jsonl "f\"{qa_concurrent_ok}/{qa_n} agg {aggregate_tps} tok/s\"")
@@ -187,7 +192,7 @@ if has families; then
       log "family $label"
       if serve $BA $mpath $OUT/family-$label-server.log; then
         rec families.$label.boot PASS "$(basename $mpath)"
-        ${CLIENT[@]} --prefix families.$label. family --url $URL --kinds $kinds --audio $OUT/asr.wav
+        client families.$label. family --url $URL --kinds $kinds --audio $OUT/asr.wav
       else rec families.$label.boot FAIL "not ready (family-$label-server.log)"; fi
       stop $YP
       log_clean families.$label.log_clean $OUT/family-$label-server.log
