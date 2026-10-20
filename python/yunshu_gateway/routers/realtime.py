@@ -337,6 +337,18 @@ def _omni_tools_prompt(tools: list[dict], tool_choice: str | dict = "auto") -> s
     return "\n".join(lines)
 
 
+def _with_tools_system(
+    messages: list[dict], tools: list[dict], tool_choice: str | dict = "auto"
+) -> list[dict]:
+    """Cascade path: declared Realtime tools reach the text model as a leading system
+    message (the engine's chat template is never given ``tools=`` here). No tools →
+    ``messages`` unchanged."""
+    text = _omni_tools_prompt(tools, tool_choice)
+    if not text:
+        return messages
+    return [{"role": "system", "content": text}, *messages]
+
+
 def _f32_to_pcm16_bytes(wav_f32) -> bytes:
     """float32 [-1,1] mono ndarray → int16 little-endian PCM bytes (24 kHz)."""
     import numpy as np
@@ -1798,6 +1810,10 @@ class RealtimeSession:
             _snap_tool_choice = config.get(
                 "tool_choice", getattr(self.session, "tool_choice", "auto")
             )
+            # the cascade text model must be told about the declared tools, else
+            # tool parsing below can never fire.
+            if _snap_tools:
+                messages = _with_tools_system(messages, _snap_tools, _snap_tool_choice)
             # response.create with conversation="none" is an OUT-OF-BAND response —
             # the generated output is delivered to the client but must NOT be appended to the
             # persistent conversation, else the next normal turn's prompt (_build_messages reads
