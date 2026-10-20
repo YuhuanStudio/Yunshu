@@ -483,26 +483,41 @@ class EngineStreamMixin:
         # Create detokenizer at _run scope so the error handler can finalize
         # it even if _run_inner() crashes before its own cleanup paths run.
         _detokenizer_ref = [None]  # mutable box shared with _run_inner
-        # Hybrid-model guard : the prefix cache relies on trimming the
-        # cached KV; hybrid/recurrent models (Qwen3.5 ArraysCache) are NOT
-        # trimmable and reusing such a cache silently corrupts the recurrent
-        # layers → grossly wrong logits. The non-streaming path disables the
-        # cache for them; the streaming path must do the same (was missing).
+        # Hybrid-model guard: hybrid/recurrent models (Qwen3.5 ArraysCache) are NOT
+        # trimmable, so trim-based reuse would corrupt the recurrent layers. Like
+        # _generate_fast they reuse prefixes through trim=0 boundary snapshots taken
+        # during prefill, and never store the post-generation cache.
         # Also bypass for seeded sampling (reproducibility needs a fresh cache).
+        _stream_seed_bypass = seed is not None and temperature > 0
+        _stream_auxiliary = getattr(cancel_event, "scheduling_priority", 0) < 0
+        _stream_trimmable = self._cache_supports_trim(self._model)
+        from .engine_fast import hybrid_snapshot_mode
+
+        _stream_hybrid = hybrid_snapshot_mode(
+            trimmable=_stream_trimmable,
+            seed_bypass=_stream_seed_bypass,
+            auxiliary=_stream_auxiliary,
+            lora_adapter=lora_adapter,
+            prefix_cache=self._kv_prefix_cache,
+        )
+        if _stream_hybrid:
+            self._kv_prefix_cache._no_trim_mode = True
         _stream_bypass_cache = (
-            (seed is not None and temperature > 0)
-            or getattr(cancel_event, "scheduling_priority", 0) < 0
-            or not self._cache_supports_trim(self._model)
+            _stream_seed_bypass
+            or _stream_auxiliary
+            or (not _stream_trimmable and not _stream_hybrid)
             # bypass when a LoRA adapter is active — the prefix cache is not
             # adapter-keyed, so reusing KV computed under a different adapter (or base)
             # silently serves the wrong adapter's state. Mirrors _generate_fast.
             or (lora_adapter is not None)
         )
         prefix_cache = None if _stream_bypass_cache else self._kv_prefix_cache
+        # Post-generation stores trim the live cache back to the prompt: not for hybrids.
+        store_cache = None if _stream_hybrid else prefix_cache
 
         def _save_breakpoint_prefixes(token_ids, kv_cache):
             """Save KV prefix cache entries at breakpoint positions."""
-            if not _stream_kv_breakpoints or prefix_cache is None:
+            if not _stream_kv_breakpoints or store_cache is None:
                 return
             from .kv_prefix_cache import cache_length as _cache_len_bp
 
@@ -515,10 +530,10 @@ class EngineStreamMixin:
                     # bp_pos-token key leaked the prior completion into a future hit.
                     trim_count = max(0, _cache_len_bp(kv_cache) - bp_pos)
                     try:
-                        bp_cache = prefix_cache._snapshot_cache(
+                        bp_cache = store_cache._snapshot_cache(
                             kv_cache, trim=trim_count
                         )
-                        prefix_cache.add(bp_tokens, bp_cache)
+                        store_cache.add(bp_tokens, bp_cache)
                     except Exception:
                         _engine.logger.debug(
                             "KV breakpoint prefix add failed at pos %d",
@@ -640,9 +655,29 @@ class EngineStreamMixin:
             _stream_cached_tokens = matched
             _cached_tokens_box[0] = _stream_cached_tokens
 
+            # Hybrid boundary-snapshot capture (see _generate_fast): prefill all but the
+            # last prompt token in blocks, storing a trim=0 snapshot at each boundary.
+            if _stream_hybrid and prefix_cache is not None and len(ids_to_prefill) > 1:
+                try:
+                    _resident = self._capture_hybrid_prefix(
+                        model,
+                        ids,
+                        cache,
+                        prefix_cache,
+                        start_offset=_stream_cached_tokens,
+                        block=self._hybrid_prefix_block,
+                    )
+                    if _resident >= len(ids) - 1:
+                        ids_to_prefill = ids[-1:]
+                except Exception:
+                    _engine.logger.warning(
+                        "hybrid prefix capture failed in streaming — full prefill",
+                        exc_info=True,
+                    )
+
             # Inflight prefix sharing ()
             _inflight_entry = None
-            if cached_kv is None:
+            if cached_kv is None and not _stream_hybrid:
                 try:
                     from .inflight_prefix_sharing import get_inflight_tracker
 
@@ -977,8 +1012,8 @@ class EngineStreamMixin:
                                     "normal",
                                 )
                             )
-                            if prefix_cache is not None:
-                                prefix_cache.add(ids, cache)
+                            if store_cache is not None:
+                                store_cache.add(ids, cache)
                             _save_breakpoint_prefixes(ids, cache)
                             mx.synchronize()
                             if _prefill_tracker is not None:
@@ -1144,14 +1179,14 @@ class EngineStreamMixin:
                         _put(
                             ("", n_tok, "stop", len(_thinking_tokens), None, _cur_state)
                         )
-                        if prefix_cache is not None:
-                            prefix_cache.add(ids, cache)
+                        if store_cache is not None:
+                            store_cache.add(ids, cache)
                         _save_breakpoint_prefixes(ids, cache)
                         mx.synchronize()
                         _unregister_inflight()
                         return
-                if prefix_cache is not None:
-                    prefix_cache.add(ids, cache)
+                if store_cache is not None:
+                    store_cache.add(ids, cache)
                 _save_breakpoint_prefixes(ids, cache)
                 detokenizer.finalize()
                 remaining = detokenizer.last_segment
