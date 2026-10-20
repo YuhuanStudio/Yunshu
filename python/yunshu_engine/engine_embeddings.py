@@ -270,6 +270,19 @@ class EngineEmbeddingsMixin:
         # Pooling those gives a wrong-dimensioned, meaningless embedding. Warn loudly
         # (once) when the last dim doesn't match the model's hidden_size — the router
         # fallback already has this awareness; the engine path was silent.
+        _vocab = None
+        for _obj in (
+            getattr(self._model, "config", None),
+            getattr(self._model, "args", None),
+        ):
+            _vocab = _vocab or getattr(_obj, "vocab_size", None)
+        if _vocab and getattr(hidden, "ndim", 0) >= 1 and hidden.shape[-1] == _vocab:
+            # Definitely vocabulary logits: an embedding of vocab size is wrong.
+            raise RuntimeError(
+                f"embed/pool: no transformer backbone resolved for {getattr(self, 'model_name', '?')}; "
+                f"the model output has the vocabulary dimension ({_vocab}), not hidden "
+                "states. This model cannot serve embeddings/pooling."
+            )
         try:
             _hs = self._get_hidden_size()
             if (
