@@ -130,3 +130,33 @@ class TestCheckAndEnforce:
         # Tried to find a victim, found none, exited loop without unloading
         mgr._find_lru_victim.assert_called()
         mgr.unload_model.assert_not_called()
+
+
+class TestActiveAbort:
+    @pytest.mark.asyncio
+    async def test_over_limit_cancels_active_sole_model(self):
+        """The idle-only victim selector never returns the active model; the
+        enforcer must still cancel its in-flight requests."""
+        mgr = _make_manager()
+        mgr._lock = asyncio.Lock()
+        mgr._get_mlx_executor = MagicMock(return_value=None)
+        engine = MagicMock()
+        engine.has_active_requests.return_value = True
+        entry = MagicMock(
+            is_loaded=True, is_pinned=False, is_loading=False, engine=engine
+        )
+        entry.model_id = "m"
+        mgr._entries = {"m": entry}
+        enf = ProcessMemoryEnforcer(mgr, max_bytes=1 * 1024**3)
+        tracker = MagicMock()
+        with (
+            patch("yunshu_engine.process_memory_enforcer.mx") as mx_mock,
+            patch(
+                "yunshu_engine.request_tracker.get_request_tracker",
+                return_value=tracker,
+            ),
+        ):
+            mx_mock.get_active_memory.return_value = 50 * 1024**3
+            await enf._check_and_enforce()
+        tracker.cancel_all.assert_called_once()
+        mgr.unload_model.assert_not_called()
