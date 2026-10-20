@@ -612,7 +612,11 @@ def rounds(
                     if copy is not None
                     else []
                 )
-                if copied and copy.last_match < copy.cfg.confident_match:
+                # The first round also bounds the first visible token (the prefill bonus is
+                # usually the reasoning marker), so it never pays for a second 16-row block.
+                if copied and (
+                    emitted == 1 or copy.last_match < copy.cfg.confident_match
+                ):
                     copied = copied[:15]
                 if copied:
                     n = len(copied)
