@@ -232,7 +232,13 @@ class AuthMiddleware(BaseHTTPMiddleware):
         if store.has_keys():
             try:
                 principal = store.authenticate(token)
-                store.admit(principal)
+                # an in-process loopback call rides the slot its outer request already holds
+                internal = tokens_equal(
+                    request.headers.get(api_keys.INTERNAL_HEADER, ""),
+                    api_keys.INTERNAL_SECRET,
+                )
+                if not internal:
+                    store.admit(principal)
             except api_keys.AuthFailureError as exc:
                 return _ErrorFormatter.auth_error(request, str(exc), exc.status)
             except api_keys.QuotaExceededError as exc:
@@ -245,6 +251,8 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 )
             request.state.principal = principal
             request.state.api_key_id = principal.key_id
+            if internal:
+                return await call_next(request)
             try:
                 response = await call_next(request)
             except BaseException:

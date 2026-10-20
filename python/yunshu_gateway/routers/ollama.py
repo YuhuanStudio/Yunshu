@@ -55,6 +55,9 @@ def _client(request: Request) -> httpx.AsyncClient:
         headers["Authorization"] = request.headers["authorization"]
     if request.headers.get("x-api-key"):
         headers["x-api-key"] = request.headers["x-api-key"]
+    from .. import api_keys
+
+    headers[api_keys.INTERNAL_HEADER] = api_keys.INTERNAL_SECRET
     base = f"{request.url.scheme}://{request.url.netloc}"
     return httpx.AsyncClient(base_url=base, headers=headers, timeout=None)
 
