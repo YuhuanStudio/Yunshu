@@ -661,7 +661,9 @@ class KVPrefixCache:
                 except Exception:
                     _counts = []
                 for c in _counts:
-                    if c > n or c < self._min_prefix:
+                    # c == n is a full exact hit: like the RAM branch below, decline it
+                    # (the caller would re-feed the last token into recurrent state).
+                    if c >= n or c < self._min_prefix:
                         continue
                     try:
                         key = _token_hash(q[:c]).encode("utf-8")[:32]
@@ -1830,8 +1832,11 @@ class KVPrefixCache:
                 # Concatenate along the sequence axis. Use -2 (not the absolute
                 # 2) so it stays correct if a cache ever exposes 3-D keys/values
                 # rather than the usual [B, H, S, D].
-                ck = mx.concatenate(ks, axis=-2).astype(mx.bfloat16)
-                cv = mx.concatenate(vs, axis=-2).astype(mx.bfloat16)
+                # Native blocks keep their KV dtype (fp16 stays fp16); int8 blocks come back
+                # as dequantized float32 and return to bf16 as before.
+                kv_dtype = ks[0].dtype if ks[0].dtype != mx.float32 else mx.bfloat16
+                ck = mx.concatenate(ks, axis=-2).astype(kv_dtype)
+                cv = mx.concatenate(vs, axis=-2).astype(kv_dtype)
                 c = KVCache()
                 c.keys = ck
                 c.values = cv
