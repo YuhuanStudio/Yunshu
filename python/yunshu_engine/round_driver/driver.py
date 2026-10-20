@@ -509,6 +509,10 @@ class RoundDriver:
                 draws.append((it, tok, None))
                 continue
             x = self._processed(row, lg[off : off + 1], first=it.kind == "p")
+            if row.base is not None:
+                # normalize in float32 like the keyed (drafting) branch: the stream must not
+                # depend on whether this row drafts
+                x = x.astype(mx.float32)
             lp = x - mx.logsumexp(x, axis=-1, keepdims=True)
             tok = self._sample(row, lp)
             extra = None
