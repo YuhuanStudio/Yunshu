@@ -1702,7 +1702,12 @@ async def create_response(req: ResponsesRequest, request: Request):
     from .chat import _has_audio, _has_images
 
     has_media = _has_images(messages) or _has_audio(messages)
-    if has_media:
+    from yunshu_engine.vlm_engine import VLMEngine
+
+    # A streamed media turn on the VLM engine takes the token-streaming path below: the
+    # engine reads the media from the message list. The bridge buffers the whole answer
+    # (first output only after the last token), so it keeps the rest.
+    if has_media and not (req.stream and isinstance(engine, VLMEngine)):
         # previously this returned `_handle_vlm_chat(...)` verbatim — a
         # Chat-Completions object (object="chat.completion", choices[].message) for
         # non-stream and chat.completion.chunk SSE events for stream. That breaks

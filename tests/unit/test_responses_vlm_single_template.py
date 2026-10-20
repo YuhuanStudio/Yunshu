@@ -87,3 +87,62 @@ def test_responses_pass_messages_to_a_vlm_engine(_vlm, monkeypatch, stream):
     assert isinstance(prompt, list), f"engine got {type(prompt)}: {prompt!r}"
     assert [m["role"] for m in prompt][-1] == "user"
     assert any("SYS" in str(m["content"]) for m in prompt)
+
+
+def test_streamed_image_turn_streams_tokens_from_the_vlm_engine(_vlm, monkeypatch):
+    # A media turn used to run non-streaming and replay one delta after the last token.
+    from yunshu_engine.request import RequestOutput
+    from yunshu_gateway.main import create_app
+
+    engine, set_engine = _vlm
+    seen = {}
+
+    async def _generate(**kw):
+        raise AssertionError("a streamed media turn must not buffer through generate()")
+
+    async def _stream(prompt=None, **kw):
+        seen["prompt"] = prompt
+        for i, piece in enumerate(("a ", "cat")):
+            yield RequestOutput(
+                request_id="r",
+                new_text=piece,
+                output_text="a cat"[: 2 + 3 * i],
+                finished=i == 1,
+                finish_reason="stop" if i == 1 else None,
+                prompt_tokens=3,
+                completion_tokens=i + 1,
+            )
+
+    monkeypatch.setattr(engine, "generate", _generate)
+    monkeypatch.setattr(engine, "generate_stream", _stream)
+    set_engine(engine)
+    client = TestClient(create_app(), raise_server_exceptions=False)
+    r = client.post(
+        "/v1/responses",
+        json={
+            "model": "any",
+            "stream": True,
+            "input": [
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [
+                        {"type": "input_text", "text": "what is this?"},
+                        {
+                            "type": "input_image",
+                            "image_url": "data:image/png;base64,iVBORw0KGgo=",
+                        },
+                    ],
+                }
+            ],
+        },
+    )
+    deltas = [
+        line
+        for line in r.text.splitlines()
+        if line.startswith("data:") and '"response.output_text.delta"' in line
+    ]
+    assert len(deltas) == 2, r.text[-1500:]
+    assert '"response.completed"' in r.text
+    parts = seen["prompt"][-1]["content"]
+    assert any("image" in str(p.get("type")) for p in parts), parts
