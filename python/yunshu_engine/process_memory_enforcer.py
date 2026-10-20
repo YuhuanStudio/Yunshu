@@ -153,18 +153,15 @@ class ProcessMemoryEnforcer:
                     victim_id = victim.model_id
                 else:
                     victim_id = None
-                    # Single model: abort requests, keep loaded (frees KV cache)
-                    if victim.engine and hasattr(victim.engine, "has_active_requests"):
-                        if victim.engine.has_active_requests():
-                            logger.warning(
-                                f"Aborting active requests on '{victim.model_id}' "
-                                f"due to memory pressure (model kept loaded)"
-                            )
-                            active_dict = getattr(victim.engine, "_active", None)
-                            abort_set = getattr(victim.engine, "_abort_set", None)
-                            if active_dict is not None and abort_set is not None:
-                                for rid in list(active_dict.keys()):
-                                    abort_set.add(rid)
+                    # The only loaded model stays loaded and its requests run on: cancelling
+                    # them would cut long agent sessions in a loop whenever weights + KV exceed
+                    # the cap. (No engine ever had the _abort_set this branch used to fill, so
+                    # it only logged an abort.)
+                    logger.warning(
+                        "Memory limit exceeded with only '%s' loaded: nothing to evict, "
+                        "requests are not cancelled",
+                        victim.model_id,
+                    )
                     break
 
             if victim_id:
