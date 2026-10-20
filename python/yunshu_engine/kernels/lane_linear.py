@@ -168,6 +168,7 @@ class LaneLinear(nn.Module):
             group=self.group_size,
             row_block=block,
             row_limit=PIECE,
+            sk=getattr(self, "sk", None),
             prefill_narrow=prefill_narrow,
         )
 

@@ -411,6 +411,17 @@ class Verifier:
         return method(feed_forward, x)
 
 
+def draft_split_k(projection) -> int | None:
+    """K slices for a drafter projection: drafts are verified, so its bits need not follow the
+    target's shape-fixed split. Eight slices where each keeps at least eight 64-groups (the
+    stacked 5120 -> 34816 gate|up at 16 rows, 8-bit: 0.725 -> 0.534 ms on M5 Max); None keeps
+    the shape's own split."""
+    bits, k = getattr(projection, "bits", 4), getattr(projection, "input_dims", 0)
+    if bits == 4:
+        return None
+    return 8 if (k // 64) // 8 >= 8 else None
+
+
 class PrivateProjections:
     """Keep original drafter projections for fallback requests; parents are weak."""
 
@@ -429,6 +440,7 @@ class PrivateProjections:
                     child
                 ):
                     converted = lane_linear.LaneLinear.from_quantized(child)
+                    converted.sk = draft_split_k(converted)
                     self.bindings.append((weakref.ref(parent), key, child, converted))
                     pending.extend([converted.weight, converted.sbt])
         if pending:

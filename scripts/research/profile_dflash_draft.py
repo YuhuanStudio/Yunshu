@@ -75,6 +75,8 @@ def main():
     drafter, kind = load_drafter(a.drafter_dir)
     validate_drafter_compatibility(model, drafter, kind)
     converted = dflash_tree.quantize_drafter(drafter, a.bits)
+    dflash_tree.share_masks()  # as the engine prepares a served drafter
+    dflash_tree.stack_projections(drafter)
     dflash_context.install(lm)
     if a.lane:
         from yunshu_engine import dflash_fast
