@@ -8,7 +8,7 @@ import time
 
 import httpx
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
 from yunshu_gateway import files_store
@@ -512,3 +512,39 @@ def test_anthropic_sdk_shapes(env):
     assert sdk.messages.batches.retrieve(b.id).processing_status == "ended"
     results = list(sdk.messages.batches.results(b.id))
     assert results[0].custom_id == "s1" and results[0].result.type == "succeeded"
+
+
+def test_worker_dispatches_in_process_whatever_the_host_header(env, monkeypatch):
+    """A submitter-chosen Host must never become the worker's destination (it carries the token)."""
+    client, _, state = env
+    monkeypatch.setenv("YUNSHU_AUTH_TOKEN", "admin-secret")
+    seen: list[str] = []
+    runner = batches_router.runner
+    app = FastAPI()
+
+    @app.post("/v1/chat/completions")
+    async def chat(request: Request):
+        seen.append(request.headers.get("authorization", ""))
+        return {"id": "chatcmpl-1", "choices": [{"message": {"content": "ok"}}]}
+
+    runner.app = app
+    runner.client_factory = batches_router._default_client
+    fid = upload_batch_file(client, jsonl(chat_line("a")))
+    r = client.post(
+        "/v1/batches",
+        json={
+            "input_file_id": fid,
+            "endpoint": "/v1/chat/completions",
+            "completion_window": "24h",
+        },
+        headers={
+            "Host": "attacker.example:8080",
+            "Authorization": "Bearer admin-secret",
+        },
+    )
+    assert r.status_code == 200, r.text
+    runner.app = app  # the route bound the bare test app; dispatch to the stub
+    drain()
+    assert seen == ["Bearer admin-secret"]
+    rec = files_store.get_store().load_batch(r.json()["id"])
+    assert "base_url" not in rec and rec["status"] == "completed"

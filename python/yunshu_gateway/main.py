@@ -327,7 +327,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
         from .routers import batches as _batches
 
-        _batches.start_runner()  # resume unfinished Batch API jobs
+        _batches.start_runner(app)  # resume unfinished Batch API jobs
     except Exception:
         logger.warning("Batch runner resume failed", exc_info=True)
 
