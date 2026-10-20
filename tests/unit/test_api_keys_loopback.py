@@ -59,3 +59,94 @@ def test_ollama_loopback_client_marks_itself_internal():
     )
     c = ollama._client(req)
     assert c.headers[api_keys.INTERNAL_HEADER] == api_keys.INTERNAL_SECRET
+
+
+def _batch_app(monkeypatch, tmp_path):
+    import asyncio
+
+    from yunshu_gateway import files_store
+    from yunshu_gateway.routers import batches, files
+
+    monkeypatch.setenv("YUNSHU_FILES_DIR", str(tmp_path / "files"))
+    files_store.reset_store()
+    app = make_app()
+    app.include_router(files.router, prefix="/v1")
+    app.include_router(batches.router, prefix="/v1")
+    runner = batches.runner
+    monkeypatch.setattr(runner, "autostart", False)
+    monkeypatch.setattr(runner, "yield_seconds", 0)
+    monkeypatch.setattr(runner, "client_factory", batches._default_client)
+    monkeypatch.setattr(runner, "app", runner.app)
+
+    def drain():
+        runner.app = app
+        asyncio.run(runner.process_all())
+
+    return TestClient(app), drain
+
+
+def _submit(c, sec, n):
+    import json
+
+    line = {
+        "method": "POST",
+        "url": "/v1/chat/completions",
+        "body": {"model": "m", "messages": [{"role": "user", "content": "hi"}]},
+    }
+    data = b"".join(
+        json.dumps({**line, "custom_id": f"c{i}"}).encode() + b"\n" for i in range(n)
+    )
+    fid = c.post(
+        "/v1/files",
+        headers=H(sec),
+        data={"purpose": "batch"},
+        files={"file": ("in.jsonl", data, "application/x-jsonl")},
+    ).json()["id"]
+    r = c.post(
+        "/v1/batches",
+        headers=H(sec),
+        json={
+            "input_file_id": fid,
+            "endpoint": "/v1/chat/completions",
+            "completion_window": "24h",
+        },
+    )
+    assert r.status_code == 200, r.text
+    return r.json()["id"]
+
+
+def test_batch_lines_run_as_and_are_counted_to_the_submitting_key(
+    store, monkeypatch, tmp_path
+):
+    # Stored keys only: the worker used to send no credential, so every line got 401.
+    from yunshu_gateway import files_store
+
+    rec, sec = store.create("batcher")
+    c, drain = _batch_app(monkeypatch, tmp_path)
+    bid = _submit(c, sec, 3)
+    drain()
+    batch = files_store.get_store().load_batch(bid)
+    assert batch["status"] == "completed" and batch["counts"]["succeeded"] == 3, batch
+    # upload + create + three lines, all on this key
+    assert store._state[rec.id].req_sum == 5
+    assert store._state[rec.id].inflight == 0
+
+
+def test_batch_lines_respect_the_submitting_keys_daily_quota(
+    store, monkeypatch, tmp_path
+):
+    from yunshu_gateway import files_store
+
+    _, sec = store.create("small", quotas={"requests_per_day": 3})
+    c, drain = _batch_app(monkeypatch, tmp_path)
+    bid = _submit(c, sec, 3)  # upload + create leave one request for the lines
+    drain()
+    counts = files_store.get_store().load_batch(bid)["counts"]
+    assert counts["succeeded"] == 1 and counts["errored"] == 2, counts
+
+
+def test_act_as_header_needs_the_internal_secret(store):
+    rec, _ = store.create("victim")
+    c = TestClient(make_app())
+    h = {api_keys.INTERNAL_HEADER: "guess", api_keys.INTERNAL_KEY_HEADER: rec.id}
+    assert c.post("/v1/chat/completions", headers=h).status_code == 401

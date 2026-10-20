@@ -129,6 +129,9 @@ class Principal:
 # second time (a max_concurrent=1 key would otherwise 429 its own request). Never leaves the process.
 INTERNAL_HEADER = "x-yunshu-internal"
 INTERNAL_SECRET = secrets.token_urlsafe(24)
+# With INTERNAL_HEADER: the key a queued job (a batch line) runs as, admitted and accounted
+# like the key's own request. The value is a key id, or ADMIN_TOKEN's name for the static token.
+INTERNAL_KEY_HEADER = "x-yunshu-internal-key"
 
 ADMIN_TOKEN = Principal("token", frozenset(SCOPES), None, "admin-token")
 
@@ -280,6 +283,21 @@ class KeyStore:
         rec = self.lookup(secret)
         if rec is None:
             raise AuthFailureError(401, "Invalid or missing API key")
+        return self._principal(rec, now)
+
+    def principal_by_id(self, key_id: str, now: float | None = None) -> Principal:
+        """The principal of a stored key by id (a queued job's submitter), checked like
+        ``authenticate``: a key deleted, disabled or expired since submission fails."""
+        self._refresh()
+        rec = self._keys.get(key_id)
+        if rec is None:
+            raise AuthFailureError(
+                401, "The API key that submitted this job no longer exists"
+            )
+        return self._principal(rec, now)
+
+    @staticmethod
+    def _principal(rec: KeyRecord, now: float | None) -> Principal:
         now = time.time() if now is None else now
         if not rec.enabled:
             raise AuthFailureError(401, "This API key is disabled")

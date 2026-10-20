@@ -175,9 +175,15 @@ class BatchRunner:
 
     @staticmethod
     def _headers(rec: dict[str, Any]) -> dict[str, str]:
+        from yunshu_gateway import api_keys
+
         h: dict[str, str] = {}
-        token = settings.get("YUNSHU_AUTH_TOKEN")
-        if token:
+        if rec.get("principal"):
+            # Run as the submitting key: its scopes, quotas and token accounting.
+            h[api_keys.INTERNAL_HEADER] = api_keys.INTERNAL_SECRET
+            h[api_keys.INTERNAL_KEY_HEADER] = rec["principal"]
+        elif token := settings.get("YUNSHU_AUTH_TOKEN"):
+            # A batch recorded before submitters were (or with auth off).
             h["Authorization"] = f"Bearer {token}"
             h["x-api-key"] = str(token)
         if rec["api"] == "anthropic":
@@ -196,6 +202,16 @@ class BatchRunner:
         exc_msg = None
         try:
             resp = await client.post(line["url"], json=body)
+            # The submitting key at its concurrency limit (its own live requests): wait
+            # for a slot rather than failing the line; daily quotas fail it.
+            while (
+                resp.status_code == 429
+                and "max_concurrent" in resp.text
+                and time.time() < rec["expires_at"]
+                and (store.load_batch(rec["id"]) or {}).get("status") != "cancelling"
+            ):
+                await asyncio.sleep(float(resp.headers.get("retry-after", "1")))
+                resp = await client.post(line["url"], json=body)
             status = resp.status_code
             request_id = resp.headers.get("x-request-id")
             try:
@@ -330,11 +346,21 @@ def _base(request: Request) -> str:
     return f"{request.url.scheme}://{request.url.netloc}"
 
 
+def _submitter(request: Request) -> str | None:
+    """The key id the batch's lines run as (the static token by its name); None with
+    auth off."""
+    principal = getattr(getattr(request, "state", None), "principal", None)
+    if principal is None:
+        return None
+    return principal.key_id or principal.name
+
+
 def _new_record(api: str, prefix: str, request: Request, total: int) -> dict[str, Any]:
     now = int(time.time())
     return {
         "id": new_id(prefix),
         "api": api,
+        "principal": _submitter(request),
         "status": "validating",
         "created_at": now,
         "expires_at": now + WINDOW_SECONDS,

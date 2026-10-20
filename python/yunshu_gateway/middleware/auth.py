@@ -187,6 +187,19 @@ class AuthMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         auth_token = settings.get("YUNSHU_AUTH_TOKEN") or ""
+        # A queued job's line (batches) runs as the key that submitted it.
+        act_as = (
+            request.headers.get(api_keys.INTERNAL_KEY_HEADER, "")
+            if tokens_equal(
+                request.headers.get(api_keys.INTERNAL_HEADER, ""),
+                api_keys.INTERNAL_SECRET,
+            )
+            else ""
+        )
+        if act_as == api_keys.ADMIN_TOKEN.name:
+            with contextlib.suppress(Exception):
+                request.state.principal = api_keys.ADMIN_TOKEN
+            return await call_next(request)
         auth = request.headers.get("Authorization", "")
         # Anthropic SDKs send the key as x-api-key instead of a bearer token.
         api_key = request.headers.get("x-api-key", "")
@@ -205,7 +218,9 @@ class AuthMiddleware(BaseHTTPMiddleware):
             except (ValueError, TypeError):
                 pass
 
-        if auth.startswith("Bearer "):
+        if act_as:
+            token = ""
+        elif auth.startswith("Bearer "):
             token = auth[7:]
         elif api_key:
             token = api_key
@@ -222,7 +237,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
         # Static token auth (constant-time comparison). The single consumer
         # authenticates with the one configured bearer token.
-        if auth_token and tokens_equal(token, auth_token):
+        if auth_token and token and tokens_equal(token, auth_token):
             with contextlib.suppress(Exception):
                 request.state.principal = api_keys.ADMIN_TOKEN
             return await call_next(request)
@@ -231,9 +246,14 @@ class AuthMiddleware(BaseHTTPMiddleware):
         store = api_keys.get_store()
         if store.has_keys():
             try:
-                principal = store.authenticate(token)
-                # an in-process loopback call rides the slot its outer request already holds
-                internal = tokens_equal(
+                principal = (
+                    store.principal_by_id(act_as)
+                    if act_as
+                    else store.authenticate(token)
+                )
+                # an in-process loopback call rides the slot its outer request already
+                # holds; a queued job's line has no outer request and is admitted
+                internal = not act_as and tokens_equal(
                     request.headers.get(api_keys.INTERNAL_HEADER, ""),
                     api_keys.INTERNAL_SECRET,
                 )
