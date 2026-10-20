@@ -98,6 +98,7 @@ from gpuq_contention import (  # noqa: E402
     contention_config,
     flag_sample_time,
     foreign_model_reason,
+    job_lock,
     requires_quiet,
 )
 
@@ -459,15 +460,16 @@ class Pauser:
     def _save(self) -> None:
         self.job["pauses"] = self.pauses
         self.job["paused"] = self.paused
-        data = _read(
-            self.path
-        )  # merge: never clobber a cancel flag the CLI set meanwhile
-        data.update(
-            pauses=self.pauses,
-            paused=self.paused,
-            pause_reason=self.job.get("pause_reason"),
-        )
-        _write(self.path, data)
+        with job_lock(self.path):
+            data = _read(
+                self.path
+            )  # merge: never clobber a cancel flag the CLI set meanwhile
+            data.update(
+                pauses=self.pauses,
+                paused=self.paused,
+                pause_reason=self.job.get("pause_reason"),
+            )
+            _write(self.path, data)
         _write(LOGS / f"{self.job['id']}.pauses.json", {"pauses": self.pauses})
 
     def _signal(self, sig: int) -> None:
@@ -1757,10 +1759,11 @@ def daemon() -> None:
 
 
 def _patch_job(path: Path, **kw) -> None:
-    data = _read(path)
-    if data:
-        data.update(kw)
-        _write(path, data)
+    with job_lock(path):
+        data = _read(path)
+        if data:
+            data.update(kw)
+            _write(path, data)
 
 
 FINAL = {"done", "failed", "timeout", "stalled", "cancelled", "lost"}
@@ -2081,10 +2084,7 @@ def main() -> int:
         sys.exit(restart())
     elif a.op == "cancel":
         path = JOBS / f"{a.id}.json"
-        j = _read(path)
-        if j:
-            j["cancel"] = True
-            _write(path, j)
+        _patch_job(path, cancel=True)
     elif a.op == "_daemon":
         # A daemon started from a background shell job inherits SIGINT ignored,
         # and so would every job: timeouts and cancels (SIGINT first) would then

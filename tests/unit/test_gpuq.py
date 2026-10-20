@@ -120,3 +120,24 @@ def test_adopted_job_ignoring_sigint_is_killed_after_grace(gpuq, tmp_path, monke
     gpuq._adopt(job, path)
     assert sent[0] == signal.SIGINT
     assert sent[-1] == signal.SIGKILL
+
+
+def test_cancel_and_patch_take_the_job_lock(gpuq, tmp_path):
+    """Job-file read-modify-write must hold the per-job lock (lost cancel / state updates)."""
+    import fcntl
+    import threading
+
+    path = tmp_path / "j.json"
+    gpuq._write(path, {"id": "j", "state": "pending"})
+    with open(str(path) + ".lock", "a") as held:
+        fcntl.flock(held, fcntl.LOCK_EX)
+        t = threading.Thread(
+            target=gpuq._patch_job, args=(path,), kwargs={"cancel": True}
+        )
+        t.start()
+        t.join(0.5)
+        blocked = t.is_alive()
+        fcntl.flock(held, fcntl.LOCK_UN)
+        t.join(5)
+    assert blocked
+    assert gpuq._read(path)["cancel"] is True
