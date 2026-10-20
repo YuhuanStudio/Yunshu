@@ -548,3 +548,22 @@ class TestEdgeCases:
         )
         assert p.prompt_length == 1024
         assert p.decode_tps == 100.0
+
+
+class TestBatchUsesSuppliedPrompts:
+    @pytest.mark.asyncio
+    async def test_each_supplied_prompt_is_sent(self):
+        engine = _make_mock_engine(prompt_tokens=20, completion_tokens=2)
+        seen: list[str] = []
+        inner = engine.stream_generate
+
+        def _spy(prompt, **kw):
+            seen.append(prompt)
+            return inner(prompt=prompt, **kw)
+
+        engine.stream_generate = _spy
+        runner = BenchmarkRunner(engine)
+        await runner.bench_batch(
+            prompts=["alpha one", "beta two", "gamma three"], max_tokens=2
+        )
+        assert sorted(seen) == ["alpha one", "beta two", "gamma three"]

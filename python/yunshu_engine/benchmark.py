@@ -172,12 +172,15 @@ class BenchmarkRunner:
         prompt_tokens: int = 128,
         max_tokens: int = 256,
         temperature: float = 0.0,
+        prompt: str | None = None,
     ) -> BenchmarkResult:
         """Benchmark a single request, measuring TTFT, TPOT, and throughput.
 
         Uses streaming (stream_generate) to separate prefill from decode timing.
+        ``prompt`` overrides the synthetic prompt built from ``prompt_tokens``.
         """
-        prompt = _make_prompt(prompt_tokens)
+        if prompt is None:
+            prompt = _make_prompt(prompt_tokens)
 
         # Phase 1: Non-streaming generate to get actual prompt token count
         gen_result = await self.engine.generate(
@@ -291,6 +294,7 @@ class BenchmarkRunner:
                     prompt_tokens=prompt_tokens,
                     max_tokens=max_tokens,
                     temperature=temperature,
+                    prompt=prompts[idx],
                 )
                 per_request_results[idx] = result
 
