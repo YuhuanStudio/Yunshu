@@ -108,8 +108,6 @@ async def test_generate_tool_reads_the_vlm_engine_dict(monkeypatch):
             return {"text": "hello from vlm", "finish_reason": "stop"}
 
     monkeypatch.setattr(engine_mod, "get_engine", lambda: FakeVLM())
-    out = await mcp._tool_generate(
-        {"messages": [{"role": "user", "content": "hi"}]}, 1
-    )
+    out = await mcp._tool_generate({"messages": [{"role": "user", "content": "hi"}]}, 1)
     assert out["result"]["isError"] is False
     assert out["result"]["content"][0]["text"] == "hello from vlm"

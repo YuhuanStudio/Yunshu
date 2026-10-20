@@ -396,7 +396,9 @@ async def _tool_generate(args: dict, req_id: int | str | None) -> dict:
             )
             # VLMEngine returns a dict; legacy engines return a state object.
             text = (
-                state.get("text", "") if isinstance(state, dict) else state.generated_text
+                state.get("text", "")
+                if isinstance(state, dict)
+                else state.generated_text
             )
 
         return _rpc_response(
