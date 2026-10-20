@@ -453,9 +453,18 @@ async def run_stream(req, request, inner: Inner, setup: _Setup) -> AsyncIterator
     msg_id = _new_id("msg_")
     try:
         for rnd in range(max_iter):
+            used = int(total.d.get("output_tokens") or 0)
+            if used >= req.max_tokens:
+                stop_reason = "max_tokens"
+                break
             stats["rounds"] += 1
             inner_req = _inner_request(
-                req, history, setup.client_tools + fn_tools, rnd == 0, setup.defs
+                req,
+                history,
+                setup.client_tools + fn_tools,
+                rnd == 0,
+                setup.defs,
+                used_output=used,
             )
             resp = await inner(inner_req, request)
             if not isinstance(resp, StreamingResponse):
@@ -773,7 +782,14 @@ def _last_user_text(history: list[dict]) -> str:
     return "\n".join(parts)
 
 
-def _inner_request(req, history: list[dict], tools: list[dict], first: bool, defs=()):
+def _inner_request(
+    req,
+    history: list[dict],
+    tools: list[dict],
+    first: bool,
+    defs=(),
+    used_output: int = 0,
+):
     """A fresh request for one generation round: the running history, function-style tools.
 
     ``tool_choice`` only shapes the first round (a forced tool would otherwise loop): later rounds are
@@ -790,6 +806,8 @@ def _inner_request(req, history: list[dict], tools: list[dict], first: bool, def
             tc = {"type": "tool", "name": want}
     return req.model_copy(
         update={
+            # the caller's cap covers the whole outward response, not each round
+            "max_tokens": max(1, req.max_tokens - used_output),
             "messages": [
                 AnthropicMessage(role=m["role"], content=m["content"]) for m in history
             ],

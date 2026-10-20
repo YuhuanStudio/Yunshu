@@ -621,7 +621,14 @@ def _approval_items(req, request) -> tuple[list[dict], set[str], list[dict]]:
     return decisions, known, []
 
 
-def _inner_request(req, items: list[dict], tools: list[dict], first: bool, defs=()):
+def _inner_request(
+    req,
+    items: list[dict],
+    tools: list[dict],
+    first: bool,
+    defs=(),
+    used_output: int = 0,
+):
     from ..routers.responses import ResponseInputText, ResponseTool
 
     base = list(req.input) if isinstance(req.input, list) else None
@@ -655,8 +662,13 @@ def _inner_request(req, items: list[dict], tools: list[dict], first: bool, defs=
         tc = {"type": "function", "name": "web_search"}
     elif isinstance(tc, dict) and tc.get("type") == "mcp":
         tc = "auto"
+    upd: dict = {}
+    if req.max_output_tokens is not None:
+        # the caller's cap covers the whole outward response, not each round
+        upd["max_output_tokens"] = max(1, req.max_output_tokens - used_output)
     return req.model_copy(
         update={
+            **upd,
             "input": base + [ResponseInputText(**i) for i in items],
             "tools": [ResponseTool(**t) for t in tools] or None,
             "tool_choice": tc if tools else None,
@@ -752,11 +764,21 @@ async def run_stream(req, request, inner: Inner, setup: _Setup, run: _Run):
             )
 
         for rnd in range(max_iter):
+            used = int(run.usage["output_tokens"])
+            if req.max_output_tokens is not None and used >= req.max_output_tokens:
+                run.status = "incomplete"
+                run.incomplete_reason = "max_output_tokens"
+                break
             run.stats["rounds"] += 1
             capped = cap is not None and run.total_calls >= cap
             tools = setup.client_tools + ([] if capped else fn_tools)
             inner_req = _inner_request(
-                req, hist, tools, first=(rnd == 0 and not hist), defs=setup.defs
+                req,
+                hist,
+                tools,
+                first=(rnd == 0 and not hist),
+                defs=setup.defs,
+                used_output=used,
             )
             with contextlib.suppress(Exception):
                 request.state._forced_response_id = run.id
