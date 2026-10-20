@@ -140,6 +140,18 @@ def engaged_spec_mode(engine, log):
     return None
 
 
+# Warnings that mean a tuned kernel path silently turned off for this model.
+_DISABLED_FAST_PATHS = (re.compile(r"ragged KV off: [^\n]*"),)
+
+
+def disabled_fast_path(log):
+    """The first log line saying a tuned fast path is off, or None."""
+    for pattern in _DISABLED_FAST_PATHS:
+        if m := pattern.search(log):
+            return m.group(0)
+    return None
+
+
 def ready_request(url, extra_env):
     """Readiness probe; the server may require the key the arm configured."""
     token = extra_env.get("YUNSHU_AUTH_TOKEN", "k")
@@ -307,6 +319,10 @@ class Srv:
                 f"requested spec={self.requested_spec_mode}, "
                 f"engaged={self.engaged_spec_mode}; see {self.log}"
             )
+        if self.engine == "yunshu" and (off := disabled_fast_path(log)):
+            # the lane's spec on == spec off rests on these kernels; a run without them
+            # measures a different engine (2026-10-20: ragged KV off broke identity)
+            raise RuntimeError(f"{off}; see {self.log}")
 
     def kill(self):
         if self.proc.poll() is None:
