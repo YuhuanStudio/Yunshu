@@ -91,7 +91,10 @@ class GemmaEmbeddingEngine(VLEmbeddingEngine):
     async def embed(
         self, inputs: list[Any], instruction: str | None = None, task: str | None = None
     ) -> list[list[float]]:
-        return (await self.embed_with_usage(inputs, instruction, task))[0]
+        vectors: list[list[float]] = (
+            await self.embed_with_usage(inputs, instruction, task)
+        )[0]
+        return vectors
 
     async def rerank(self, *a: Any, **k: Any) -> list[float]:
         raise NotImplementedError("EmbeddingGemma 2 is an embedder, not a reranker")

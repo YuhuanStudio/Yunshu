@@ -310,7 +310,7 @@ def _resample_for_speed(audio: np.ndarray, speed: float) -> np.ndarray:
     (speed>1 -> fewer samples = faster)."""
     import scipy.signal
 
-    return scipy.signal.resample(audio, max(1, round(len(audio) / speed)))
+    return np.asarray(scipy.signal.resample(audio, max(1, round(len(audio) / speed))))
 
 
 class TTSEngine(ActiveRequestMixin):

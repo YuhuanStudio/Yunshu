@@ -219,8 +219,8 @@ def measured_weight_bytes(engine: Any) -> int | None:
     key = id(engine)
     hit = _weight_cache.get(key)
     if hit is not None:
-        ref, cached = hit
-        if ref is not None and ref() is engine:
+        held, cached = hit
+        if held is not None and held() is engine:
             return cached or None
         del _weight_cache[key]
     total = 0

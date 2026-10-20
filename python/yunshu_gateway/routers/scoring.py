@@ -879,7 +879,7 @@ async def _get_embeddings(
         # Multimodal VL embedder: embed() is async and takes no `normalize` kwarg
         # (it runs on its own executor). The generic run_in_executor(partial(...))
         # path would hand back an un-awaited coroutine / TypeError → 500.
-        vecs = await engine.embed(list(texts))
+        vecs: list[list[float]] = await engine.embed(list(texts))
         if normalize:
             vecs = [_l2_normalize(v) for v in vecs]
         return vecs
