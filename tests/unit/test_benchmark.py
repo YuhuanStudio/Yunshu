@@ -567,3 +567,25 @@ class TestBatchUsesSuppliedPrompts:
             prompts=["alpha one", "beta two", "gamma three"], max_tokens=2
         )
         assert sorted(seen) == ["alpha one", "beta two", "gamma three"]
+
+
+class TestBatchReportsFailures:
+    @pytest.mark.asyncio
+    async def test_failed_requests_are_counted(self):
+        engine = _make_mock_engine(prompt_tokens=20, completion_tokens=2)
+        inner = engine.stream_generate
+
+        def _flaky(prompt, **kw):
+            if prompt.startswith("bad"):
+                raise RuntimeError("boom")
+            return inner(prompt=prompt, **kw)
+
+        engine.stream_generate = _flaky
+        runner = BenchmarkRunner(engine)
+        result = await runner.bench_batch(
+            prompts=["good a", "bad b", "bad c", "good d"], max_tokens=2
+        )
+        assert result.num_requests == 2
+        assert result.num_failed == 2
+        assert len(result.errors) == 2 and "boom" in result.errors[0]
+        assert result.to_dict()["num_failed"] == 2

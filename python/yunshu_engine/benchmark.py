@@ -19,7 +19,7 @@ import asyncio
 import platform
 import time
 from collections.abc import Sequence
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Protocol, runtime_checkable
 
@@ -55,6 +55,8 @@ class BatchBenchmarkResult:
     latency_p50_ms: float
     latency_p95_ms: float
     latency_p99_ms: float
+    num_failed: int = 0
+    errors: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
@@ -301,10 +303,11 @@ class BenchmarkRunner:
         t0 = time.perf_counter()
         # return_exceptions=True so one failed request doesn't
         # kill the whole benchmark and orphan sibling tasks.
-        await asyncio.gather(
+        outcomes = await asyncio.gather(
             *[_one_request(i) for i in range(num)],
             return_exceptions=True,
         )
+        errors = [repr(o) for o in outcomes if isinstance(o, BaseException)]
         total_time_s = time.perf_counter() - t0
 
         # Filter out any None (shouldn't happen but be safe)
@@ -326,6 +329,8 @@ class BenchmarkRunner:
             latency_p50_ms=_percentile(latencies, 50),
             latency_p95_ms=_percentile(latencies, 95),
             latency_p99_ms=_percentile(latencies, 99),
+            num_failed=num - len(valid_results),
+            errors=errors,
         )
 
     # ── Prefill vs Decode sweep ──
