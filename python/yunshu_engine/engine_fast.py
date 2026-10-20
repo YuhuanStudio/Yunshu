@@ -14,6 +14,22 @@ from .context_window import ContextBudgetError, reject_overlong_prompt
 from .fast_path_stats import FastPathStats
 
 
+def hybrid_snapshot_mode(
+    *, trimmable: bool, seed_bypass: bool, auxiliary: bool, lora_adapter, prefix_cache
+) -> bool:
+    """Non-trimmable (hybrid) caches reuse prefixes through boundary snapshots.
+
+    Prefix keys carry no adapter identity, so a LoRA request must neither read nor publish them.
+    """
+    return (
+        not trimmable
+        and not seed_bypass
+        and not auxiliary
+        and lora_adapter is None
+        and prefix_cache is not None
+    )
+
+
 class EngineFastMixin:
     def _jump_forward_generate_sync(
         self, input_ids, constraint, max_tokens, eos_ids, stop=None
@@ -843,11 +859,12 @@ class EngineFastMixin:
             # trimmable), so route them through the
             # boundary-snapshot path instead: keep the cache enabled, force
             # trim=0-only reuse (no_trim mode), and chunk-prefill with snapshots.
-            _hybrid_mode = (
-                (not _cache_trimmable)
-                and not _bypass_cache_for_seed
-                and not _auxiliary
-                and self._kv_prefix_cache is not None
+            _hybrid_mode = hybrid_snapshot_mode(
+                trimmable=_cache_trimmable,
+                seed_bypass=_bypass_cache_for_seed,
+                auxiliary=_auxiliary,
+                lora_adapter=lora_adapter,
+                prefix_cache=self._kv_prefix_cache,
             )
             if _hybrid_mode:
                 self._kv_prefix_cache._no_trim_mode = True
@@ -1039,13 +1056,14 @@ class EngineFastMixin:
             # reuse losslessly. generate_step then prefills only the final token
             # and starts decoding. Any failure falls through to a normal full
             # prefill below (ids_to_prefill unchanged).
-            if _hybrid_mode and len(ids_to_prefill) > 1:
+            # The local prefix_cache is None under a cache bypass (LoRA: keys carry no adapter).
+            if _hybrid_mode and prefix_cache is not None and len(ids_to_prefill) > 1:
                 try:
                     _resident = self._capture_hybrid_prefix(
                         model,
                         ids,
                         cache,
-                        self._kv_prefix_cache,
+                        prefix_cache,
                         start_offset=cached_tokens,
                         block=self._hybrid_prefix_block,
                     )
