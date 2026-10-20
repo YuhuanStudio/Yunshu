@@ -207,6 +207,42 @@ class TestBatchedEngineFastPathPromptTokens:
 
         assert result.prompt_tokens == 5
 
+    @pytest.mark.asyncio
+    async def test_prompt_cache_off_without_prefix_cache(self):
+        """prefix_cache_enabled=false: the prompt cache cannot snapshot or trim, so it stays unused."""
+        engine = self._make_batched_engine()
+        engine._kv_prefix_cache = None
+        engine._tokenizer.encode.return_value = [1, 2, 3, 4, 5]
+        engine._tokenizer.eos_token_id = 2
+        engine._tokenizer.eos_token_ids = [2]
+        engine._tokenizer.decode.return_value = "test"
+        mock_detokenizer = MagicMock()
+        mock_detokenizer.last_segment = "test"
+        mock_detokenizer.finalize.return_value = ""
+        engine._tokenizer.detokenizer = mock_detokenizer
+        with (
+            patch("mlx_lm.generate.generate_step") as mock_step,
+            patch("mlx_lm.sample_utils.make_sampler"),
+            patch(
+                "yunshu_engine.batched_engine._create_prompt_cache_with_quant",
+                return_value=[],
+            ),
+            patch("mlx.core") as mock_mx,
+            patch(
+                "yunshu_engine.batched_engine._clean_special_tokens",
+                side_effect=lambda x: x,
+            ),
+            patch.object(engine, "_apply_chat_template", return_value="test"),
+        ):
+            mock_step.return_value = iter([(100, None), (101, None), (2, None)])
+            mock_mx.array.return_value = MagicMock()
+            mock_mx.stream.return_value = MagicMock()
+            mock_mx.new_thread_local_stream.return_value = MagicMock()
+            engine._model.max_seq_len = 4096
+            await engine._generate_fast(prompt="hello world test", max_tokens=10)
+        engine._prompt_cache.lookup.assert_not_called()
+        engine._prompt_cache.store.assert_not_called()
+
 
 # ── 4. Engine loop prompt_tokens mapping ──
 

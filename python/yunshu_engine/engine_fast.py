@@ -875,11 +875,14 @@ class EngineFastMixin:
             # snapshots only.
             _fp_stats.stats.latency_marks["apc_start"] = time.perf_counter()
             _pc_hit = False
+            # The prompt cache borrows the prefix cache's snapshot/trim; without it a hit would
+            # share (and later mutate) the stored post-generation KV.
             if (
                 not _bypass_cache
                 and not _hybrid_mode
                 and hasattr(self, "_prompt_cache")
                 and self._prompt_cache is not None
+                and self._kv_prefix_cache is not None
             ):
                 try:
                     from .prompt_cache import compute_messages_hash
@@ -909,22 +912,12 @@ class EngineFastMixin:
                         # the correct position. (BUG-A2 full-hit duplication.)
                         _pc_count = int(_pc_entry.token_count)
                         _refeed = 1 if (_pc_count >= len(ids) and len(ids) > 0) else 0
-                        if self._kv_prefix_cache is not None:
-                            try:
-                                cache = self._kv_prefix_cache._snapshot_cache(
-                                    _pc_entry.kv_state,
-                                    trim=_refeed,
-                                )
-                            except Exception:
-                                _engine.logger.debug(
-                                    "prompt cache snapshot failed; falling back to direct ref",
-                                    exc_info=True,
-                                )
-                                cache = _pc_entry.kv_state
-                                _refeed = 0
-                        else:
-                            cache = _pc_entry.kv_state
-                            _refeed = 0
+                        # A failed snapshot raises into the miss path below: never reuse the
+                        # stored object directly.
+                        cache = self._kv_prefix_cache._snapshot_cache(
+                            _pc_entry.kv_state,
+                            trim=_refeed,
+                        )
                         _pc_hit = True
                         cached_tokens = _pc_count - _refeed
                         _engine.logger.debug(
@@ -1294,6 +1287,7 @@ class EngineFastMixin:
                 and not _hybrid_mode
                 and hasattr(self, "_prompt_cache")
                 and self._prompt_cache is not None
+                and prefix_cache is not None
             ):
                 try:
                     from .kv_prefix_cache import cache_length as _cache_len
@@ -1306,7 +1300,7 @@ class EngineFastMixin:
                     _prompt_only_len = int(len(ids))
                     _full_cache_len = int(_cache_len(cache))
                     _trim = max(0, _full_cache_len - _prompt_only_len)
-                    if _trim > 0 and prefix_cache is not None:
+                    if _trim > 0:
                         # Reuse prefix_cache's snapshot+trim (it knows how to
                         # detach and slice KV layers safely).
                         _trimmed_cache = prefix_cache._snapshot_cache(cache, trim=_trim)
