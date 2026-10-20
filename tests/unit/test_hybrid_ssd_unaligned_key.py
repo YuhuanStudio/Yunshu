@@ -101,3 +101,49 @@ def test_snapshot_shorter_than_its_token_count_is_rejected(tmp_path):
     store.save(key, [short], token_count=100)
     cache_list, tok = HybridSnapshotStore(str(tmp_path)).load(key)
     assert cache_list is None and tok == 0
+
+
+def _ram_and_ssd(ram_len, ssd_len, query):
+    ssd_key = _token_hash(query[:ssd_len]).encode("utf-8")[:32]
+
+    class _Hybrid:
+        def candidate_token_counts(self):
+            return [ssd_len]
+
+        def has(self, key):
+            return key == ssd_key
+
+        def load(self, key):
+            return (["SSD"], ssd_len)
+
+    c = KVPrefixCache.__new__(KVPrefixCache)
+    c._prompts = [query[:ram_len]]
+    c._caches = ["RAM"]
+    c._min_prefix = 4
+    c._hybrid_ssd = _Hybrid()
+    c._snapshot_cache = lambda cached, trim: [cached]
+    c._touch = lambda i: None
+    return c
+
+
+def test_longer_ssd_snapshot_beats_a_short_ram_hit(monkeypatch):
+    # RAM keeps a 128-token system prefix; SSD holds the 4K conversation checkpoint.
+    import yunshu_engine.kv_prefix_cache as kpc
+
+    monkeypatch.setattr(kpc, "cache_length", lambda cached: 128)
+    query = mx.arange(5000, dtype=mx.int32)
+    result, remaining, matched = _ram_and_ssd(128, 4096, query)._get_no_trim_unlocked(
+        query
+    )
+    assert result == ["SSD"] and matched == 4096 and remaining == 904
+
+
+def test_ssd_snapshot_barely_longer_than_ram_keeps_the_ram_hit(monkeypatch):
+    import yunshu_engine.kv_prefix_cache as kpc
+
+    monkeypatch.setattr(kpc, "cache_length", lambda cached: 4000)
+    query = mx.arange(5000, dtype=mx.int32)
+    result, remaining, matched = _ram_and_ssd(4000, 4096, query)._get_no_trim_unlocked(
+        query
+    )
+    assert result == ["RAM"] and matched == 4000

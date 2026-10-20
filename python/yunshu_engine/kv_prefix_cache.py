@@ -644,40 +644,19 @@ class KVPrefixCache:
             if matched == clen and matched >= self._min_prefix:
                 best_index = i
                 best_length = clen
+        # The hybrid SSD whole-snapshot store: on a RAM miss, or when it holds a clearly
+        # longer prefix than the RAM hit (a short resident system prefix must not hide a
+        # long persisted conversation, as _ssd_longer_than_ram does for dense caches).
+        if self._hybrid_ssd is not None:
+            floor = (
+                best_length + self._SSD_OVER_RAM_MIN_GAIN
+                if best_index >= 0
+                else self._min_prefix
+            )
+            hit = self._probe_hybrid_ssd(prompt_tokens, floor)
+            if hit is not None:
+                return hit
         if best_index < 0:
-            # RAM miss — try the hybrid SSD whole-snapshot store.
-            # Probe the EXACT stored token-counts (descending → longest
-            # match first), NOT 64-aligned boundaries. The snapshot is keyed by the
-            # hash of the FULL stored prompt (almost never a multiple of _BLOCK_SIZE),
-            # so the old block-aligned probe `_token_hash(q[:b])` matched only when
-            # len(prompt) % 64 == 0 → the snapshot was written but never restorable
-            # (the "wrote N MB / restored 0" failure class). The largest stored count c
-            # whose prefix-hash matches q[:c] is reusable with trim=0.
-            if self._hybrid_ssd is not None:
-                q = prompt_tokens
-                n = len(q)
-                try:
-                    _counts = self._hybrid_ssd.candidate_token_counts()
-                except Exception:
-                    _counts = []
-                for c in _counts:
-                    # c == n is a full exact hit: like the RAM branch below, decline it
-                    # (the caller would re-feed the last token into recurrent state).
-                    if c >= n or c < self._min_prefix:
-                        continue
-                    try:
-                        key = _token_hash(q[:c]).encode("utf-8")[:32]
-                        if self._hybrid_ssd.has(key):
-                            cache_list, tok = self._hybrid_ssd.load(key)
-                            if cache_list is not None and tok >= self._min_prefix:
-                                logger.info(
-                                    "hybrid SSD snapshot hit: %d/%d tokens", tok, n
-                                )
-                                return cache_list, n - tok, tok
-                    except Exception:
-                        logger.debug(
-                            "hybrid SSD probe failed at c=%d", c, exc_info=True
-                        )
             return None, len(prompt_tokens), 0
         # Decline a FULL-EXACT match (the whole query is cached, remaining
         # would be 0). The no_trim path is for hybrid/recurrent caches that CANNOT be
@@ -942,6 +921,38 @@ class KVPrefixCache:
     # the disk read (a RAM hit on the shared system prompt must not hide the
     # conversation's own, much longer, spilled prefix).
     _SSD_OVER_RAM_MIN_GAIN = 512
+
+    def _probe_hybrid_ssd(
+        self, q: mx.array, floor: int
+    ) -> tuple[list, int, int] | None:
+        """Longest hybrid SSD snapshot of at least ``floor`` tokens that is a full
+        prefix of ``q``, as ``(cache, remaining, matched)``; None when there is none.
+
+        Probes the EXACT stored token-counts (descending → longest match first), NOT
+        64-aligned boundaries: a snapshot is keyed by the hash of its FULL stored prompt
+        (almost never a multiple of _BLOCK_SIZE), so a block-aligned probe matched only
+        when len(prompt) % 64 == 0 (the "wrote N MB / restored 0" failure class).
+        """
+        n = len(q)
+        try:
+            counts = self._hybrid_ssd.candidate_token_counts()
+        except Exception:
+            counts = []
+        for c in counts:
+            # c == n is a full exact hit: like the RAM branch, decline it (the caller
+            # would re-feed the last token into recurrent state).
+            if c >= n or c < max(floor, self._min_prefix):
+                continue
+            try:
+                key = _token_hash(q[:c]).encode("utf-8")[:32]
+                if self._hybrid_ssd.has(key):
+                    cache_list, tok = self._hybrid_ssd.load(key)
+                    if cache_list is not None and tok >= max(floor, self._min_prefix):
+                        logger.info("hybrid SSD snapshot hit: %d/%d tokens", tok, n)
+                        return cache_list, n - tok, tok
+            except Exception:
+                logger.debug("hybrid SSD probe failed at c=%d", c, exc_info=True)
+        return None
 
     def _ssd_longer_than_ram(self, query_blocks, ram_len: int):
         """Restore from SSD when it holds a clearly longer prefix than the RAM hit.
