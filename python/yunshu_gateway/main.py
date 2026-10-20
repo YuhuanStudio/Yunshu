@@ -729,11 +729,6 @@ def create_app() -> FastAPI:
 
     app.add_middleware(SurrogateGuardMiddleware)
     app.add_middleware(ToolReasoningMiddleware)
-    from .middleware.live_cors import LiveCORSMiddleware
-
-    # Follows YUNSHU_CORS_ORIGINS live (PATCH /v1/yunshu/cors).
-    app.add_middleware(LiveCORSMiddleware)
-
     # Gateway middleware (order: outermost first)
     from .middleware.auth import AuthMiddleware
     from .middleware.metrics import MetricsMiddleware
@@ -1008,6 +1003,12 @@ def create_app() -> FastAPI:
     # OUTERMOST — added last so it wraps auth/rate-limit and records their
     # rejections (401/429/413/503) into the metrics, which it could not see when innermost.
     app.add_middleware(MetricsMiddleware)
+    from .middleware.live_cors import LiveCORSMiddleware
+
+    # Follows YUNSHU_CORS_ORIGINS live (PATCH /v1/yunshu/cors). Added after auth / rate limit /
+    # metrics so it wraps them: their 401 / 429 / 413 responses must carry CORS headers too,
+    # else a browser client sees an opaque network error instead of the status.
+    app.add_middleware(LiveCORSMiddleware)
     # Outermost: sees the client's disconnect (BaseHTTPMiddleware hides it).
     from .middleware.disconnect import DisconnectWatchMiddleware
 
