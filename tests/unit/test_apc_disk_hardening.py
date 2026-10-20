@@ -247,3 +247,12 @@ def test_rotating_checkpoint_roundtrip_keeps_absolute_position_and_ring(tmp_path
     loaded[0].max_size = 9
     assert not check_loaded_cache(tokens, loaded, template)
     store.close()
+
+
+def test_checkpoint_shorter_than_its_tokens_is_rejected():
+    # A 32-token checkpoint whose attention layer only holds 16 positions would skip
+    # 16 prompt tokens that were never prefilled.
+    cache = _cache(n=32)
+    assert check_loaded_cache(TOKENS, cache, None)
+    cache[1].offset = 16
+    assert not check_loaded_cache(TOKENS, cache, None)

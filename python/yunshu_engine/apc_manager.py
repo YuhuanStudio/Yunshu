@@ -238,7 +238,7 @@ def check_loaded_cache(
                 or keys.shape[0] != 1
                 or keys.shape[:3] != values.shape[:3]
                 or keys.dtype != values.dtype
-                or (not rotating and not 0 < offset <= min(keys.shape[2], n_tokens))
+                or (not rotating and not offset == n_tokens <= keys.shape[2])
                 or (kv_heads is not None and keys.shape[1] != kv_heads)
                 or (head_dim is not None and keys.shape[3] != head_dim)
             ):

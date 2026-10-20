@@ -17,9 +17,9 @@ from yunshu_engine.kv_prefix_cache import KVPrefixCache, _token_hash
 
 class _FakeKV:
     def __init__(self):
-        self.keys = mx.zeros((1, 2, 4, 8))
-        self.values = mx.zeros((1, 2, 4, 8))
-        self.offset = 4
+        self.keys = mx.zeros((1, 2, 100, 8))
+        self.values = mx.zeros((1, 2, 100, 8))
+        self.offset = 100
 
 
 def test_store_roundtrip_resolves_count_across_restart(tmp_path):
@@ -89,3 +89,15 @@ def test_get_no_trim_no_false_hit_when_prefix_differs(tmp_path):
 
     result, remaining, matched = c._get_no_trim_unlocked(query)
     assert result is None and matched == 0 and remaining == 150
+
+
+def test_snapshot_shorter_than_its_token_count_is_rejected(tmp_path):
+    # The attention layer holds 50 positions but the record claims 100 tokens: a hit
+    # would skip 50 prompt tokens that were never prefilled.
+    key = _token_hash(mx.arange(100, dtype=mx.int32)).encode("utf-8")[:32]
+    short = _FakeKV()
+    short.offset = 50
+    store = HybridSnapshotStore(str(tmp_path))
+    store.save(key, [short], token_count=100)
+    cache_list, tok = HybridSnapshotStore(str(tmp_path)).load(key)
+    assert cache_list is None and tok == 0

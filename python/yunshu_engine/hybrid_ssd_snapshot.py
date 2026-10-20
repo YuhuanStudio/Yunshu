@@ -422,7 +422,7 @@ class HybridSnapshotStore:
                     or v.ndim != 4
                     or k.shape[:3] != v.shape[:3]
                     or k.dtype != v.dtype
-                    or not 0 < offset <= k.shape[-2]
+                    or not 0 < offset == token_count <= k.shape[-2]
                 ):
                     return None, 0
                 c.offset = offset
