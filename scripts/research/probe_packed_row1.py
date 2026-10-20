@@ -45,7 +45,7 @@ def main():
         packed = pl._pack([q])[0]
         store = packed._store
         bad = 0
-        for trial in range(8):
+        for _trial in range(8):
             x = mx.random.normal((1, k)).astype(mx.bfloat16)
             pad = mx.concatenate([x, mx.zeros_like(x)])
             ref = pl.packed_matmul(
@@ -84,11 +84,12 @@ def main():
             bad += int(not mx.array_equal(ref, got).item())
 
         def bench(fn):
+            # Every call is evaluated: a lazy loop that kept only the last output
+            # ran one matmul and divided by 50.
             mx.eval(fn())
             t = time.perf_counter()
             for _ in range(50):
-                out = fn()
-            mx.eval(out)
+                mx.eval(fn())
             return (time.perf_counter() - t) / 50 * 1e6
 
         x = mx.random.normal((1, k)).astype(mx.bfloat16)
