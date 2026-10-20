@@ -2055,6 +2055,12 @@ class ImageGenEngine(ActiveRequestMixin):
         # apply the same way here, unloading in the finally.
         _clean_prompt, _lora_tags = _parse_lora_tags(prompt)
 
+        def _decode(lat):
+            # Same auto-tiling as the non-streaming pipeline for large images.
+            if width * height > 1024 * 1024:
+                return self._vae.decode_tiled(lat, tile_size_px=512, overlap_px=64)
+            return self._vae.decode(lat)
+
         def _put_terminal(item):
             # The terminal event must not be lost to a full queue: wait for the
             # consumer to make room unless the request is cancelled.
@@ -2113,7 +2119,7 @@ class ImageGenEngine(ActiveRequestMixin):
 
                     preview_png = None
                     if _should_preview(step_num, num_inference_steps):
-                        image = self._vae.decode(latents)
+                        image = _decode(latents)
                         mx.eval(image)
                         preview_png = self._to_png(image)
 
@@ -2134,7 +2140,7 @@ class ImageGenEngine(ActiveRequestMixin):
                         continue
 
                 # Final decode
-                image = self._vae.decode(latents)
+                image = _decode(latents)
                 mx.eval(image)
                 png = self._to_png(image)
                 _put_terminal(

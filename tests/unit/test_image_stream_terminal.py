@@ -39,3 +39,15 @@ async def test_final_event_survives_full_queue(monkeypatch):
     assert chunks[-1]["is_final"] is True
     assert chunks[-1]["image"] == b"png"
     eng._executor.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_stream_uses_tiled_vae_for_large_images(monkeypatch):
+    eng = _engine(monkeypatch)
+    async for _ in eng.generate_image_stream(
+        "a cat", width=2048, height=2048, num_inference_steps=2, preview_interval=1
+    ):
+        pass
+    assert eng._vae.decode_tiled.called
+    assert not eng._vae.decode.called
+    eng._executor.shutdown()
