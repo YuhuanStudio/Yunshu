@@ -56,10 +56,10 @@ def _client(request: Request) -> httpx.AsyncClient:
     if request.headers.get("x-api-key"):
         headers["x-api-key"] = request.headers["x-api-key"]
     from .. import api_keys
+    from ..loopback import self_base
 
     headers[api_keys.INTERNAL_HEADER] = api_keys.INTERNAL_SECRET
-    base = f"{request.url.scheme}://{request.url.netloc}"
-    return httpx.AsyncClient(base_url=base, headers=headers, timeout=None)
+    return httpx.AsyncClient(base_url=self_base(request), headers=headers, timeout=None)
 
 
 def _err_from(resp_text: str, status: int) -> OllamaError:

@@ -55,6 +55,7 @@ def test_ollama_loopback_client_marks_itself_internal():
         headers={"authorization": "Bearer k"},
         state=SimpleNamespace(request_id=None),
         url=SimpleNamespace(scheme="http", netloc="h"),
+        scope={"server": ("127.0.0.1", 18990)},
     )
     c = ollama._client(req)
     assert c.headers[api_keys.INTERNAL_HEADER] == api_keys.INTERNAL_SECRET

@@ -12,6 +12,7 @@ def _req(headers):
         headers=headers,
         state=SimpleNamespace(request_id=None),
         url=SimpleNamespace(scheme="http", netloc="h"),
+        scope={"server": ("127.0.0.1", 18990)},
     )
 
 
