@@ -679,6 +679,16 @@ def ragged_decode_attention(
         )
     if impl != "tile" or T > MAX_WINDOW:
         raise ValueError(f"ragged_decode_attention: {T} tokens need impl='tile'")
+    if (
+        GROUPED_LAUNCH
+        and int(queries.shape[0]) == 1
+        and row_lengths is not None
+        and slots is None
+        and k_scales is None
+    ):
+        return _attend_grouped(
+            queries, keys, values, lengths, scale, max_length, int(row_lengths[0])
+        )
     outs = []
     for g in range(0, T, TILE_TOKENS):
         tg = min(TILE_TOKENS, T - g)
@@ -703,6 +713,48 @@ def ragged_decode_attention(
             )
         )
     return mx.concatenate(outs, axis=2)
+
+
+# Windows wider than 8 tokens in one tile launch (the groups as batch rows reading the same
+# buffer row) instead of a launch per group, each of which re-read the whole prefix from DRAM.
+GROUPED_LAUNCH = True
+
+
+def _attend_grouped(queries, keys, values, lengths, scale, max_length, n):
+    """One window of T > 8 tokens over buffer row 0 as ceil(T / 8) batch rows of 8 tokens.
+
+    The partial group goes first, padded at its end: group g's slot t is window token
+    ``start_g + t`` and the kernel gives it ``length_g - (7 - t)`` keys, so ``length_g =
+    n - (T - 8 - start_g)`` keeps every real token's causal limit ``n - (T - 1 - i)`` (a
+    token's bits depend only on its keys, not on its launch). Padding slots of the first
+    group see at most ``n - T + 8 <= n`` keys, never past the written ones."""
+    _, h, t, d = (int(v) for v in queries.shape)
+    head = t % TILE_TOKENS or TILE_TOKENS
+    groups = -(-t // TILE_TOKENS)
+    starts = [0] + [head + TILE_TOKENS * g for g in range(groups - 1)]
+    q = queries
+    if head < TILE_TOKENS:
+        pad = mx.zeros((1, h, TILE_TOKENS - head, d), dtype=q.dtype)
+        q = mx.concatenate([q[:, :, :head], pad, q[:, :, head:]], axis=2)
+    q = q.reshape(h, groups, TILE_TOKENS, d).transpose(1, 0, 2, 3)
+    row = tuple(n - (t - TILE_TOKENS - s) for s in starts)
+    out = _attend(
+        q,
+        keys,
+        values,
+        lengths - (t - TILE_TOKENS) + mx.array(starts, dtype=mx.int32),
+        scale,
+        max_length,
+        None,
+        None,
+        "tile",
+        row,
+        mx.zeros((groups,), dtype=mx.int32),
+    )
+    out = out.transpose(1, 0, 2, 3).reshape(1, h, groups * TILE_TOKENS, d)
+    if head < TILE_TOKENS:
+        out = mx.concatenate([out[:, :, :head], out[:, :, TILE_TOKENS:]], axis=2)
+    return out
 
 
 def _attend(
