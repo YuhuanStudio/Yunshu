@@ -1423,6 +1423,7 @@ def _adopt(job: dict, path: Path, gate: ServingGate | None = None) -> None:
         )
     monitor.record("adopt")
     why = None
+    sigint_at = None
     while _alive(pid):
         now = _now()
         if gate.enabled:
@@ -1440,8 +1441,14 @@ def _adopt(job: dict, path: Path, gate: ServingGate | None = None) -> None:
         )
         if not why and (cancelled or (now > deadline and not pauser.paused)):
             why = "cancelled" if cancelled else "timeout"
+            sigint_at = now
             with contextlib.suppress(ProcessLookupError):
                 os.killpg(pid, signal.SIGINT)
+        elif sigint_at is not None and now - sigint_at > 30:
+            # Same escalation as _run_one: a job that ignores SIGINT must not hold the lane.
+            sigint_at = now + 10**9
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(pid, signal.SIGKILL)
         time.sleep(min(POLL_S, gate.poll_s) if gate.enabled else POLL_S)
     rc_file = LOGS / f"{job['id']}.rc"
     try:

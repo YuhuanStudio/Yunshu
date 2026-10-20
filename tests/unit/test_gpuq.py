@@ -93,3 +93,30 @@ def test_gate_job_runs_before_same_priority_backlog(tmp_path, monkeypatch):
     assert gpuq._pick(backlog + [gate, higher])["id"] == "urgent"
     low_gate = job("lowgate", __import__("time").time(), gate=True, priority=-1)
     assert gpuq._pick(backlog + [low_gate])["id"] == "bench0"
+
+
+def test_adopted_job_ignoring_sigint_is_killed_after_grace(gpuq, tmp_path, monkeypatch):
+    import signal
+
+    clock = [1000.0]
+    sent = []
+    monkeypatch.setattr(gpuq, "_now", lambda: clock[0])
+    monkeypatch.setattr(
+        gpuq.time, "sleep", lambda s: clock.__setitem__(0, clock[0] + 5)
+    )
+    monkeypatch.setattr(gpuq.os, "killpg", lambda pid, sig: sent.append(sig))
+    monkeypatch.setattr(
+        gpuq, "_alive", lambda pid: signal.SIGKILL not in sent and clock[0] < 1500
+    )
+    job = {
+        "id": "stuck",
+        "pid": 123,
+        "started": 900,
+        "state": "running",
+        "cancel": True,
+    }
+    path = tmp_path / "stuck.json"
+    gpuq._write(path, job)
+    gpuq._adopt(job, path)
+    assert sent[0] == signal.SIGINT
+    assert sent[-1] == signal.SIGKILL
