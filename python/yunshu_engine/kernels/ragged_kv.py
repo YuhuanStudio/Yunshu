@@ -428,11 +428,13 @@ def _projection_dtype(attention: Any) -> Any:
     proj = getattr(attention, "q_proj", None)
     if proj is None:
         return None
-    # Quantized projections compute in their scales' dtype.
-    array = getattr(proj, "scales", None)
-    if array is None:
-        array = getattr(proj, "weight", None)
-    return getattr(array, "dtype", None)
+    # Quantized projections compute in their scales' dtype. A packed weight (uint32: the
+    # tuned lane / NAX projections) says nothing about it, so only a float dtype counts.
+    for name in ("scales", "weight"):
+        dtype = getattr(getattr(proj, name, None), "dtype", None)
+        if dtype is not None and mx.issubdtype(dtype, mx.floating):
+            return dtype
+    return None
 
 
 def set_dense_lane(active: bool) -> None:

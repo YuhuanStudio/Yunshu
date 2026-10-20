@@ -713,6 +713,16 @@ def test_supports_only_qwen3_5_attention():
     attn.q_proj.scales = attn.q_proj.scales.astype(mx.bfloat16)
     assert ragged_kv.supports(Holder())
 
+    # the tuned 27B projections are packed modules: a uint32 weight and no scales attribute
+    # (2026-10-20: reading uint32 as "not bf16" turned ragged KV off and broke spec on == off)
+    class Packed(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.weight = mx.zeros((8, 8), dtype=mx.uint32)
+
+    attn.q_proj = Packed()
+    assert ragged_kv.supports(Holder())
+
 
 def test_set_format_validates_and_scopes():
     ragged_kv.set_format("int8")
