@@ -2180,7 +2180,7 @@
     ],
     [
      "python/yunshu_engine/mtp_lane.py",
-     "_request_has_processors"
+     "_request_needs_chain"
     ]
    ],
    "why": "Tree verify kernels are batch-invariant (the argmax equals serial decode) but not serial-arithmetic: non-winning logits can differ in low bits. A penalty moves the winner, so a near tie could flip against serial decode. A request with processors is therefore verified by the chain under exact_verify; the tree paths stay for unprocessed greedy requests."
