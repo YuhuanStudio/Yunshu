@@ -340,13 +340,45 @@ def _omni_tools_prompt(tools: list[dict], tool_choice: str | dict = "auto") -> s
 def _with_tools_system(
     messages: list[dict], tools: list[dict], tool_choice: str | dict = "auto"
 ) -> list[dict]:
-    """Cascade path: declared Realtime tools reach the text model as a leading system
-    message (the engine's chat template is never given ``tools=`` here). No tools →
-    ``messages`` unchanged."""
+    """Cascade path without native template tools: the declared Realtime tools join the
+    leading system message (chat templates accept one system turn, at the start).
+    No tools -> ``messages`` unchanged."""
     text = _omni_tools_prompt(tools, tool_choice)
     if not text:
         return messages
+    if messages and messages[0].get("role") == "system":
+        first = messages[0]
+        content = first.get("content")
+        if isinstance(content, str):
+            merged = f"{content}\n\n{text}" if content else text
+            return [{**first, "content": merged}, *messages[1:]]
+        if isinstance(content, list):
+            parts = [*content, {"type": "text", "text": text}]
+            return [{**first, "content": parts}, *messages[1:]]
     return [{"role": "system", "content": text}, *messages]
+
+
+def _chat_tools(tools: list[dict]) -> list[dict]:
+    """Realtime's flat function tools in the chat-completions shape the engine's chat
+    template renders natively."""
+    out = []
+    for t in tools or []:
+        if t.get("type", "function") != "function" or not t.get("name"):
+            continue
+        fn = {"name": t["name"]}
+        if t.get("description"):
+            fn["description"] = t["description"]
+        fn["parameters"] = t.get("parameters") or {"type": "object", "properties": {}}
+        out.append({"type": "function", "function": fn})
+    return out
+
+
+def _chat_tool_choice(choice):
+    """Realtime ``{"type": "function", "name": X}`` -> chat ``{"type": "function",
+    "function": {"name": X}}``; strings pass through."""
+    if isinstance(choice, dict) and choice.get("name") and "function" not in choice:
+        return {"type": "function", "function": {"name": choice["name"]}}
+    return choice
 
 
 def _f32_to_pcm16_bytes(wav_f32) -> bytes:
@@ -1812,8 +1844,25 @@ class RealtimeSession:
             )
             # the cascade text model must be told about the declared tools, else
             # tool parsing below can never fire.
+            # Native template tools for an engine whose chat template renders them (the
+            # call format its parser expects, and the tool grammar); otherwise the generic
+            # tool prompt joins the system message.
+            _native_tools = None
             if _snap_tools:
-                messages = _with_tools_system(messages, _snap_tools, _snap_tool_choice)
+                check = getattr(engine, "supports_native_tools", None)
+                try:
+                    native = bool(callable(check) and check())
+                except Exception:
+                    native = False
+                if native:
+                    _native_tools = {
+                        "tools": _chat_tools(_snap_tools),
+                        "tool_choice": _chat_tool_choice(_snap_tool_choice),
+                    }
+                else:
+                    messages = _with_tools_system(
+                        messages, _snap_tools, _snap_tool_choice
+                    )
             # response.create with conversation="none" is an OUT-OF-BAND response —
             # the generated output is delivered to the client but must NOT be appended to the
             # persistent conversation, else the next normal turn's prompt (_build_messages reads
@@ -1961,6 +2010,7 @@ class RealtimeSession:
                     stop_token_ids=_stop_token_ids,
                     seed=getattr(self.session, "seed", None),
                     cancel_event=self._cancel_event,
+                    **(_native_tools or {}),
                 ):
                     if getattr(output, "error", None):
                         raise EngineStreamError(str(output.error))
