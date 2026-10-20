@@ -792,6 +792,7 @@ class TieredKVCacheManager:
         self,
         token_ids: list[int],
         model_hash: int = 0,
+        request_id: str | None = None,
     ) -> tuple[BlockTable, PrefixMatch]:
         """Allocate blocks with hot + warm + SSD tier lookup.
 
@@ -800,7 +801,9 @@ class TieredKVCacheManager:
         3. For remaining misses, check SSD cache
         4. Allocate new blocks for remaining tokens
         """
-        table, match = self.hot.allocate_for_prefill(token_ids, model_hash)
+        table, match = self.hot.allocate_for_prefill(
+            token_ids, model_hash, request_id=request_id
+        )
 
         # If there are unmatched tokens, check warm tier and SSD cache
         if not match.unmatched_token_ids:

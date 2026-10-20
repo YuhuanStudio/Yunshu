@@ -1,5 +1,7 @@
 """Tests for PagedScheduler — Scheduler + KVCacheManager integration."""
 
+import pytest
+
 from yunshu_engine.paged_scheduler import PagedScheduler
 from yunshu_engine.request import Request, RequestStatus, SamplingParams
 from yunshu_kv.manager import KVCacheConfig, KVCacheManager
@@ -369,3 +371,49 @@ class TestPagedSchedulerSlidingWindow:
         assert freed3 == 1
         assert table.num_blocks == 0
         assert kv.num_free_blocks == initial_free + 4
+
+
+class TestPagedSchedulerRadixRefs:
+    def test_allocation_names_the_request_so_completion_releases_its_refs(self):
+        # A radix hit inc_refs its node; only a request id lets free_request dec_ref it.
+        seen = []
+
+        class _Recording(KVCacheManager):
+            def allocate_for_prefill(self, token_ids, model_hash=0, request_id=None):
+                seen.append(request_id)
+                return super().allocate_for_prefill(
+                    token_ids, model_hash, request_id=request_id
+                )
+
+        config = KVCacheConfig(block_size=4, num_layers=4, num_kv_heads=8, head_dim=128)
+        scheduler = PagedScheduler(
+            None, _FakeTokenizer(), kv_cache_manager=_Recording(config, 50)
+        )
+        scheduler._batch_gen = _FakeBatchGen()
+        scheduler.add_request(
+            Request(
+                request_id="ref-1",
+                prompt="Hello",
+                sampling_params=SamplingParams(max_tokens=10),
+                prompt_token_ids=list(range(8)),
+                num_prompt_tokens=8,
+            )
+        )
+        assert seen == ["ref-1"]
+
+
+def test_tiered_manager_forwards_the_request_id():
+    from yunshu_kv.tiered import TieredKVCacheManager
+
+    seen = []
+
+    class _Hot:
+        def allocate_for_prefill(self, token_ids, model_hash=0, request_id=None):
+            seen.append(request_id)
+            raise ValueError("stop here")
+
+    tiered = TieredKVCacheManager.__new__(TieredKVCacheManager)
+    tiered.hot = _Hot()
+    with pytest.raises(ValueError, match="stop here"):
+        tiered.allocate_for_prefill([1, 2, 3, 4], request_id="r9")
+    assert seen == ["r9"]

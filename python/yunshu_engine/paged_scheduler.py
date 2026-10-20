@@ -140,7 +140,9 @@ class PagedScheduler(Scheduler):
                 return
 
         try:
-            table, prefix_match = self._kv_manager.allocate_for_prefill(token_ids)
+            table, prefix_match = self._kv_manager.allocate_for_prefill(
+                token_ids, request_id=request.request_id
+            )
         except (MemoryError, ValueError) as exc:
             # OOM recovery: allocate_for_prefill may have partially allocated
             # blocks before failing.  Free whatever was allocated and reject.
