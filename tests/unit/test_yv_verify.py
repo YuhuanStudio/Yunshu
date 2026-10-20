@@ -1593,3 +1593,26 @@ def test_qwen4_tiny_verdict_rejects_incomplete_or_unengaged_evidence(tmp_path):
     ):
         evidence.write_text(json.dumps({**good, **bad}) + "\n")
         assert not stages._qwen4_mtp_valid(evidence)[0]
+
+
+def test_apc_stage_checks_every_spec_mode(tmp_path):
+    import json
+    from types import SimpleNamespace
+
+    good, bad = rows(cached=1024), rows(cached=1024)
+    bad[1]["sha"] = "zzz"  # MTP warm != cold; the later (good) mode must not mask it
+    ev = {"mtp": bad, "dflash": good}
+
+    def cell_path(stage, key):
+        p = tmp_path / f"{stage}.{key}.jsonl"
+        mode = key.split(".")[1]
+        p.write_text("".join(json.dumps(r) + "\n" for r in ev[mode]))
+        return p
+
+    ctx = SimpleNamespace(
+        suite={"spec_modes": ["mtp", "dflash"], "ctx": [1024], "kinds": ["code"]},
+        run=SimpleNamespace(cell_path=cell_path, append=lambda *a: None),
+        exe=SimpleNamespace(jobs=[]),
+    )
+    res = stages.stage_apc(ctx)
+    assert not res.passed
