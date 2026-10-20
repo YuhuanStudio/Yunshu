@@ -13,9 +13,11 @@ import os
 import plistlib
 import re
 import secrets
+import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.request
 from pathlib import Path
@@ -116,8 +118,12 @@ def main():
     config = data_dir / "config.toml"
     config.write_text(f'auth_token = "{admin}"\nvlm_apc_memory_gb = 1.0\n')
     config.chmod(0o600)
-    plist = home / "Library/LaunchAgents" / f"{LABEL}.plist"
-    plist.parent.mkdir(parents=True)
+    # launchd refuses to bootstrap a plist from a noowners volume such as P5Plus
+    # ("Bootstrap failed: 5: Input/output error"), so only this few-KB file lives on
+    # the internal disk, in a private temp dir removed at exit. HOME, models, logs
+    # and the wheel environment all stay on P5Plus.
+    plist_dir = Path(tempfile.mkdtemp(prefix="deploy27b-plist-"))
+    plist = plist_dir / f"{LABEL}.plist"
     env = {
         "HOME": str(home),
         "PATH": "/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin",
@@ -322,6 +328,7 @@ def main():
             state = ctl("print", target)
             require_owned_job(state.stdout, python_bin)
             ctl("bootout", target)
+        shutil.rmtree(plist_dir, ignore_errors=True)
         a.output.write_text(json.dumps(result) + "\n")
         print(json.dumps(result), flush=True)
     return 0 if result["passed"] else 1

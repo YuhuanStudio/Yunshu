@@ -108,3 +108,14 @@ def test_deployment_runs_exactly_one_hour_then_resident_load(monkeypatch, tmp_pa
     result = stages.stage_deployment(ctx)
     assert result.passed
     assert [cell.key for cell in calls] == ["pilot", "hour-1", "resident-load"]
+
+
+def test_plist_lives_off_the_noowners_volume():
+    # launchd answers "Bootstrap failed: 5: Input/output error" for a plist on the
+    # P5Plus (noowners) volume; the plist must be written to a private temp dir.
+    source = (
+        Path(__file__).resolve().parents[2] / "scripts/research/deploy27b_service.py"
+    ).read_text()
+    assert 'tempfile.mkdtemp(prefix="deploy27b-plist-")' in source
+    assert "Library/LaunchAgents" not in source
+    assert "shutil.rmtree(plist_dir" in source
