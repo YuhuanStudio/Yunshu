@@ -67,7 +67,13 @@ def main():
 
 def one(mx, tv, FastShape, reorder, rng, rnd, h, hkv, d, w, layers, scale, n0, a):
     cap = -(-(n0 + w + 64) // 64) * 64
-    cache = SimpleNamespace(keys=rnd((1, hkv, cap, d)), values=rnd((1, hkv, cap, d)))
+    # one cache per layer: a shared one stays in the system cache and hides the DRAM
+    # re-read a per-group prefix launch costs in a real forward
+    caches = [
+        SimpleNamespace(keys=rnd((1, hkv, cap, d)), values=rnd((1, hkv, cap, d)))
+        for _ in range(layers)
+    ]
+    cache = caches[0]
     qs = [rnd((1, h, w, d)) for _ in range(layers)]
     shapes = []
     for _ in range(a.trees):
@@ -77,7 +83,9 @@ def one(mx, tv, FastShape, reorder, rng, rnd, h, hkv, d, w, layers, scale, n0, a
         if w > 1:
             _, par, _ = reorder(mx.arange(w - 1, dtype=mx.int32), par)
         shapes.append(FastShape(par, min(15, w - 1) if w > 1 else 0))
-    mx.eval(cache.keys, cache.values, qs, [s.parents_array() for s in shapes])
+    mx.eval(
+        [(c.keys, c.values) for c in caches], qs, [s.parents_array() for s in shapes]
+    )
 
     def run(shape, fused, queries):
         shape.fast_glue = fused
@@ -98,8 +106,8 @@ def one(mx, tv, FastShape, reorder, rng, rnd, h, hkv, d, w, layers, scale, n0, a
             shape.fast_glue = fused
             rc = tv.RoundContext(shape, n0)
             x = qs[0]
-            for _layer in range(layers):
-                x = tv.tree_attention(x, cache, scale, shape, n0, rc)
+            for layer in range(layers):
+                x = tv.tree_attention(x, caches[layer], scale, shape, n0, rc)
             mx.eval(x)
             if rep >= 3:
                 times.append((time.perf_counter() - t0) * 1000)

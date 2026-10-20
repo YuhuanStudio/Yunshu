@@ -768,7 +768,13 @@ def part_decode(s, out, a):
                 else decode_prompt(kind, ctx, a.long_ask)
             )
             reply = ""
-            for phase in [p for p in ("cold", "warm", "turn2") if p in phases]:
+            order = [p for p in ("cold", "warm", "turn2") if p in phases]
+            if (
+                "warm" in order
+            ):  # repeated warm hits separate a one-time cost from a per-hit one
+                at = order.index("warm")
+                order[at : at + 1] = ["warm"] * max(1, int(a.warm_reps))
+            for phase in order:
                 want = (a.turn2_tokens or n_dec) if phase == "turn2" else n_dec
                 b = req(
                     s.model,
@@ -1302,6 +1308,12 @@ def parse_args(argv=None):
         default=",".join(ALL_PHASES),
         help="decode phases to run (comma list of cold,warm,turn2,specoff); the checks stay "
         "fail-closed for every selected phase",
+    )
+    ap.add_argument(
+        "--warm-reps",
+        type=int,
+        default=1,
+        help="warm (full APC hit) requests per prompt; each is recorded",
     )
     ap.add_argument("--dry-run", action="store_true")
     args = list(sys.argv[1:] if argv is None else argv)

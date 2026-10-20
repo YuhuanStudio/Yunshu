@@ -243,7 +243,7 @@ def test_default_copy_cap_is_wide_but_unknown_backend_stays_narrow(monkeypatch):
     from yunshu_engine import mtp_lane, settings
 
     monkeypatch.delenv("YUNSHU_SPEC_COPY_ROWS", raising=False)
-    assert settings.REGISTRY["YUNSHU_SPEC_COPY_ROWS"].default == 16
-    monkeypatch.setitem(mtp_lane._STATE, "copy_rows", 16)
+    assert settings.REGISTRY["YUNSHU_SPEC_COPY_ROWS"].default == 32
+    monkeypatch.setitem(mtp_lane._STATE, "copy_rows", 32)
     assert mtp_lane.copy_rows_for_model(object()) == 8
     assert mtp_lane.copy_rows_for_model(object(), rows=0) == 0

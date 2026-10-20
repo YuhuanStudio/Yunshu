@@ -85,3 +85,41 @@ def test_unqualified_contexts_and_cleared_requests_disable_reuse(monkeypatch):
     ll.set_sum_reuse(True)
     ll.configure_sum_policy(False)
     assert not ll.sum_reuse_enabled()
+
+
+def test_copy_graft_retains_long_context_sum_policy(monkeypatch):
+    """Execute the real engine configuration branch with a stubbed target."""
+    import ast
+    from pathlib import Path
+
+    from yunshu_engine import dflash_fast
+
+    source = Path(__file__).parents[2] / "python/yunshu_engine/vlm_engine.py"
+    tree = ast.parse(source.read_text())
+    branch = next(
+        n
+        for n in ast.walk(tree)
+        if isinstance(n, ast.If)
+        and any(
+            isinstance(c, ast.Constant) and c.value == "lane_sum_identity"
+            for c in ast.walk(n)
+        )
+        and "copy_rows" in ast.unparse(n.test)
+    )
+    monkeypatch.setattr(dflash_fast, "supported", lambda *_: True)
+    calls = []
+    for rows in (16, 32):
+        kernels = {"dflash_copy": True, "copy_rows": rows}
+        namespace = dict(
+            __package__="yunshu_engine",
+            kernels=kernels,
+            lm=None,
+            drafter=None,
+            lane_sum_policy=SimpleNamespace(configure_sum_policy=calls.append),
+        )
+        exec(
+            compile(ast.Module(body=[branch], type_ignores=[]), str(source), "exec"),
+            namespace,
+        )
+        assert kernels.get("lane_sum_identity") == "long-context"
+    assert calls == [True, True]

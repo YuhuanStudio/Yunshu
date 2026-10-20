@@ -116,6 +116,10 @@
       [
        "python/yunshu_engine/mtp_lane.py",
        "copy_drafter"
+      ],
+      [
+       "python/yunshu_engine/mtp_lane.py",
+       "verify_graft("
       ]
      ]
     },
@@ -2396,7 +2400,8 @@
   "python/yunshu_engine/kernels/tf_flash_next/threads.py": "TensorFold flash_next v1 kernels used by qwen4_fused_hc (kernels/tf_hc_forward.py)",
   "python/yunshu_engine/kernels/tf_flash_next/inputs.py": "TensorFold flash_next v1 kernels used by qwen4_fused_hc (kernels/tf_hc_forward.py)",
   "python/yunshu_engine/kernels/tf_flash_next/experts.py": "TensorFold flash_next v1 router/expert kernels used by qwen4_fused_hc (kernels/tf_hc_forward.py)",
-  "python/yunshu_engine/kernels/attn_prefill.py": "prefill_kernels"
+  "python/yunshu_engine/kernels/attn_prefill.py": "prefill_kernels",
+  "python/yunshu_engine/copy_graft.py": "Implementation helper of the registered copy_rounds feature: MTP greedy shared-prefix tree selection and request-local cost budget. Existing copy_rounds remains available on sampled/constrained MTP via its original verifier. This prototype does not claim DFlash/driver/generic/text graft coverage; those adapters and GPU qualification remain explicitly pending in tf110/HANDOFF.md."
  },
  "settings": {
   "YUNSHU_MTP": "draft_family_coverage",

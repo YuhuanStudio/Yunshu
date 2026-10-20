@@ -547,3 +547,8 @@ def test_packed_readback_returns_the_same_four_lists():
         )
         assert t == target.reshape(-1).tolist() and w == window.reshape(-1).tolist()
         assert p == parents.tolist() and rk == (None if r is None else r.tolist())
+
+
+def test_graft_width_keeps_default_fast_dflash_route(monkeypatch, admission):
+    monkeypatch.setattr(mtp_lane, "copy_rows_for_model", lambda *_: 32)
+    assert fast.eligible(None, None, [], admission)

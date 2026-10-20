@@ -1628,6 +1628,28 @@ def test_qwen4_tiny_verdict_rejects_incomplete_or_unengaged_evidence(tmp_path):
         assert not stages._qwen4_mtp_valid(evidence)[0]
 
 
+@pytest.mark.parametrize("stage", ["identity", "speed"])
+def test_spec_mode_guard_rejects_mixed_or_missing_engagement(stage):
+    base = [{"part": "session", "engaged_spec_mode": "dflash"}]
+    cand = [{"part": "session", "engaged_spec_mode": "mtp"}]
+    assert stages.spec_mode_failures(base, cand, {}, stage)
+    assert stages.spec_mode_failures(base, [], {}, stage)
+    assert not stages.spec_mode_failures(base, base, {}, stage)
+    assert not stages.spec_mode_failures(
+        base, cand, {"allow_spec_mode_change": True}, stage
+    )
+    # Explicit opt-in does not waive missing evidence.
+    assert stages.spec_mode_failures(base, [], {"allow_spec_mode_change": True}, stage)
+
+
+@pytest.mark.parametrize("suite", ["identity", "speed"])
+def test_real_stage_rejects_cross_spec_modes_with_identical_outputs(world, suite):
+    assert go(world, suite=suite, cand_env=["YUNSHU_VLM_DRAFT=off"]) == 1
+    v, _ = verdict_of(world)
+    assert v["stages"][0]["status"] == "FAIL"
+    assert any("engaged spec mode mismatch" in r for r in v["stages"][0]["reasons"])
+
+
 def test_apc_stage_checks_every_spec_mode(tmp_path):
     import json
     from types import SimpleNamespace

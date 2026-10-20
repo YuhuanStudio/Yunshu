@@ -50,6 +50,7 @@ MAX_ROWS = 32  # lane projections (<= 128 rows), the fused GDN kernels (<= 32), 
 NARROW_ROWS = (
     8  # without lane projections only the sg8 / packed kernels' window is row-invariant
 )
+FUSED_ROWS = MAX_ROWS  # fast-tree windows up to this width take the fused attention (one shared-prefix launch)
 CK = ra.CHUNK
 
 
@@ -721,7 +722,7 @@ def tree_attention(
     g = h // hkv
     cstar, tail_start, ntail, m = rc.cstar, rc.tail_start, rc.ntail, rc.m
     scale_arr = _scale_array(scale)
-    if getattr(shape, "fast_glue", False) and w <= 2 * ra.TILE_TOKENS:
+    if getattr(shape, "fast_glue", False) and w <= FUSED_ROWS:
         return _tree_attention_fused(
             queries, keys, values, shape, rc, scale_arr, (h, hkv, d)
         )
@@ -825,13 +826,13 @@ _SHARED: dict = {}
 
 
 def shared_plan_lists(tail_start: int, groups: int):
-    """Work list of the one shared-prefix launch that serves both 8-token groups.
+    """Work list of the one shared-prefix launch that serves every 8-token group.
 
-    Each group is a batch row of the tile kernel and both read key row 0, so the
+    Each group is a batch row of the tile kernel and all read key row 0, so the
     prefix K/V is streamed once per layer instead of once per group. A group's
     ``length`` is its last token's key count plus its pad to 8 tokens, which
     keeps every real token's causal limit (``length - (7 - t)``) unchanged.
-    Items run chunk-major, group-minor: the two groups' threadgroups for one
+    Items run chunk-major, group-minor: the groups' threadgroups for one
     chunk are launched back to back and share its cache lines."""
     lengths = [tail_start + 7 + 8 * g for g in range(groups)]
     nc = tail_start // CK  # the merge reads only the shared chunks (c < cstar)
@@ -885,16 +886,17 @@ def _add_rms(shape, h, r, norm):
 
 
 def _tree_attention_fused(queries, keys, values, shape, rc, scale_arr, dims):
-    """``tree_attention`` for windows of at most two 8-token groups with the
-    query layouts, the per-row key/value tails and the partial tables built by
-    one kernel each instead of a chain of copies, and the shared prefix read
-    once for both token groups. Same values, same partials, same merge order."""
+    """``tree_attention`` with the query layouts, the per-row key/value tails and
+    the partial tables built by one kernel each instead of a chain of copies, and
+    the shared prefix read once for all of the window's 8-token groups (one launch,
+    chunk-major; a launch per group re-reads the whole prefix from DRAM, about 3 ms
+    a group at 32K over 16 layers). Same values, same partials, same merge order."""
     from . import tree_glue
 
     h, hkv, d = dims
     w = shape.width
     cstar, ntail, m = rc.cstar, rc.ntail, rc.m
-    groups = 2 if w > ra.TILE_TOKENS else 1
+    groups = -(-w // ra.TILE_TOKENS)
     q_a, q_b = tree_glue.fuse_queries(queries, hkv, groups)
     cap2 = _tree_tail_capacity(m + shape.max_depth + 1)
     tail_k, tail_v = tree_glue.tail_copy(
@@ -906,8 +908,8 @@ def _tree_attention_fused(queries, keys, values, shape, rc, scale_arr, dims):
         depth_rows=shape.max_depth + 1,
         cap2=cap2,
     )
-    if cstar and groups == 2:
-        lengths, slots, plan, nc = _shared_plan(rc.tail_start, 2)
+    if cstar and groups >= 2:
+        lengths, slots, plan, nc = _shared_plan(rc.tail_start, groups)
         po_a, pm_a, pl_a, _ = _tile_partials(
             q_a, keys, values, lengths, slots, scale_arr, plan, 8, nc
         )

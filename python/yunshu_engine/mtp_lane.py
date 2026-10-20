@@ -43,6 +43,7 @@ import mlx.core as mx
 
 from .copy_cost import RoundCostClock
 from .copy_drafter import CopyDrafter
+from .copy_graft import GraftBudget, verify_graft
 from .keyed_sampling import KeyedSampler
 
 logger = logging.getLogger(__name__)
@@ -54,7 +55,7 @@ _STATE: dict = {
     "profile": None,
     "guide": None,
     "context": None,  # the request's FULL prompt ids (not the tail after a prefix hit)
-    "copy_rows": 16,  # verify rows a copy round may use (0: copy rounds off)
+    "copy_rows": 32,  # verify rows a copy round may use (0: copy rounds off)
 }
 
 
@@ -267,6 +268,20 @@ def rounds(
         cap = min(max_tokens - done, copy.max_draft)
         return copy.draft(cap) if cap >= 2 else []
 
+    from . import tree_verify as tv
+
+    graft_ready = (
+        copy is not None
+        and keyed is None
+        and guide is None
+        and window_procs is None
+        and not (request and request.logprobs)
+        and tv.supported(lm)
+        and tv.lane_ready(lm, prompt_cache)
+    )
+    graft_budget = GraftBudget()
+    if graft_ready:
+        logger.info("MTP same-round suffix-copy graft: max %d verify rows", copy_rows)
     next_copy = plan_copy(emitted)
     if guide is not None:
         guide.feed(b)
@@ -275,9 +290,7 @@ def rounds(
 
     prof = _STATE["profile"]
     clock = time.perf_counter
-    cost_clock = (
-        RoundCostClock() if copy is not None and copy.costs is not None else None
-    )
+    cost_clock = RoundCostClock() if copy is not None else None
 
     def mark(name, since):
         now = clock()
@@ -289,7 +302,16 @@ def rounds(
         forced = forced_tokens(guide, min(block_total - 1, max_tokens - emitted))
         if len(forced) < 2:
             forced = []
-        is_copy = bool(next_copy)
+        graft_copy: list[int] = []
+        if graft_ready and copy is not None:
+            model_rows = min(block_total, max_tokens - emitted + 1)
+            prefix = model_rows - 1
+            proposal = copy.lookup(min(copy_rows - model_rows, max_tokens - emitted))
+            if copy.last_match >= copy.cfg.min_match:
+                extra = graft_budget.choose(len(proposal) - prefix)
+                if extra:
+                    graft_copy = proposal[: prefix + extra]
+        is_copy = bool(next_copy) and not graft_copy
         bs = (
             len(forced) + 1
             if forced
@@ -320,6 +342,10 @@ def rounds(
         verify = None
         t = mark("chain_build", t)
         try:
+            if graft_copy:
+                verify, draft_tokens, bs = verify_graft(
+                    lm, prompt_cache, b, draft_tokens, graft_copy, token_dtype
+                )
             # the verify's graph is built while the chain runs on the GPU
             verify_input = mx.concatenate(
                 [mx.array([[b]], dtype=token_dtype), draft_tokens], axis=1
@@ -339,7 +365,7 @@ def rounds(
                 and not (request and request.logprobs)
             ):
                 with exact_verify(request, guide):
-                    verify = mtp._mtp_verify_target(
+                    verify = verify or mtp._mtp_verify_target(
                         lm,
                         verify_input,
                         prompt_cache,
@@ -388,6 +414,13 @@ def rounds(
             accepted = 0
             while accepted < bs - 1 and drafted[accepted] == tgt[accepted]:
                 accepted += 1
+            if graft_ready and not is_copy:
+                graft_budget.observe(
+                    min(block_total - 1, max_tokens - emitted),
+                    max(0, len(graft_copy) - (block_total - 1)),
+                    accepted,
+                    round_ms,
+                )
             new_tokens = (drafted[:accepted] + [tgt[accepted]])[: max_tokens - emitted]
             if guide is not None:
                 # Keep the tokens up to the first one that arms a constraint (the
@@ -401,7 +434,11 @@ def rounds(
                 window_procs.commit(new_tokens)
             # per-round drafted / accepted counts (drafter lifetime counters; the runner
             # diffs them per request for x_yunshu.speculative)
-            _record_speculative_round(draft_model, accepted, bs - 1)
+            _record_speculative_round(
+                draft_model,
+                accepted,
+                verify.graft_nodes if graft_copy else bs - 1,
+            )
             reports = (
                 request.reports(logprobs, new_tokens) if request is not None else []
             )
@@ -418,8 +455,12 @@ def rounds(
             t = mark("walk", t)
             # The next chain is queued before the rollback is built.
             if copy is not None:
-                if is_copy:
-                    copy.observe_copy(bs - 1, accepted, round_ms)
+                if is_copy or graft_copy:
+                    copy.observe_copy(
+                        len(graft_copy) if graft_copy else bs - 1,
+                        verify.copy_accepted if graft_copy else accepted,
+                        round_ms,
+                    )
                     draft_model.copy_total_rounds = (
                         getattr(draft_model, "copy_total_rounds", 0) + 1
                     )

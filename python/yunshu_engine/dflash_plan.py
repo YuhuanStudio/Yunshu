@@ -267,3 +267,83 @@ def state_slots(parents):
         output_shapes=[(width,)] * 2,
         output_dtypes=[mx.int32] * 2,
     )
+
+
+_GRAFT_KERNEL = None
+
+
+def graft_reference(tokens, parents, copied, rows):
+    """Host reference of ``graft_copy``: walk the copied chain down the model tree
+    (matching children are shared, never duplicated), then append ``rows`` rows
+    continuing from the deepest shared node. Rows past the copied tokens are
+    padded with token 0 (the verifier alone decides acceptance)."""
+    n = len(tokens)
+    out_tokens, out_parents = list(tokens), list(parents[: n + 1])
+    canonical, emitted = 0, 0
+    for token in copied:
+        matched = -1
+        for r in range(1, n + 1):
+            if parents[r] == canonical and tokens[r - 1] == token:
+                matched = r
+                break
+        if matched >= 0:
+            canonical = matched
+            continue
+        if emitted >= rows:
+            break
+        out_tokens.append(token)
+        out_parents.append(canonical)
+        canonical = n + 1 + emitted
+        emitted += 1
+    while emitted < rows:
+        out_tokens.append(0)
+        out_parents.append(canonical)
+        canonical = n + 1 + emitted
+        emitted += 1
+    return out_tokens, out_parents
+
+
+def graft_copy(tokens, parents, copied, rows):
+    """Share matching DFlash ancestors, then append ``rows`` suffix rows on device.
+
+    The copied chain is walked down the model tree; matching nodes are the model's
+    own rows (no duplicate slots), so the window grows by exactly ``rows``.
+    Reordering afterwards retains the bounded state-slot schedule.
+    """
+    global _GRAFT_KERNEL
+    n, c = int(tokens.size), len(copied)
+    if _GRAFT_KERNEL is None:
+        _GRAFT_KERNEL = mx.fast.metal_kernel(
+            name="yunshu_dflash_suffix_graft_shared",
+            input_names=["model_tokens", "model_parents", "copy_tokens"],
+            output_names=["tokens", "parents"],
+            source="""
+            if(thread_position_in_grid.x!=0)return;
+            for(int r=0;r<N;++r)tokens[r]=model_tokens[r];
+            for(int r=0;r<=N;++r)parents[r]=model_parents[r];
+            int canonical=0, emitted=0;
+            for(int j=0;j<C;++j){
+                int token=copy_tokens[j], matched=-1;
+                for(int r=1;r<=N;++r)
+                    if(model_parents[r]==canonical && model_tokens[r-1]==token){matched=r;break;}
+                if(matched>=0){canonical=matched;continue;}
+                if(emitted>=R)break;
+                int row=N+1+emitted;
+                tokens[row-1]=token;parents[row]=canonical;
+                canonical=row;++emitted;
+            }
+            while(emitted<R){
+                int row=N+1+emitted;
+                tokens[row-1]=0;parents[row]=canonical;
+                canonical=row;++emitted;
+            }
+            """,
+        )
+    return _GRAFT_KERNEL(
+        inputs=[tokens, parents, mx.array(copied, dtype=mx.int32)],
+        template=[("N", n), ("C", c), ("R", rows)],
+        grid=(32, 1, 1),
+        threadgroup=(32, 1, 1),
+        output_shapes=[(n + rows,), (n + rows + 1,)],
+        output_dtypes=[mx.int32, mx.int32],
+    )

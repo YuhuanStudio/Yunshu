@@ -669,6 +669,23 @@
       "upstream_paths": [
         "mlx_vlm/encoder_loader.py"
       ]
+    },
+    {
+      "path": "scripts/research/kernelstudy_micro.py",
+      "repo": "https://github.com/ml-explore/mlx",
+      "clone": "/Volumes/Micron/yunshu-refsync/mlx",
+      "commit": "36969c094354086e15d2a327a9c50feb20b9cf11",
+      "license": "MIT",
+      "kind": "derived",
+      "upstream_paths": [
+        "mlx/backend/metal/kernels/steel/attn/kernels/steel_attention.h",
+        "mlx/backend/metal/kernels/steel/attn/params.h",
+        "mlx/backend/metal/kernels/sdpa_vector.h"
+      ],
+      "local_changes": [
+        "Research-only Steel FA2 harvester and exact-shape screen; kernel arithmetic retained, function constants fixed to causal aligned/no-mask/no-sinks/no-LSE and scratch supplied by caller. Not connected to inference; no winner or token parity claimed.",
+        "Harvest release 0.32.4 vector TK4 bodies; fixed batch1,G6,D256 with screen-selected blocks 512/1024/1024 at 32K/64K/128K (not upstream g17s defaults). Installed MLX 0.32.3 compiles/launches. Bit differences are diagnostic, not a lossless rejection: deterministic, fp32/reference error, row/cache invariance and paired accuracy gates govern qualification."
+      ]
     }
   ],
   "inspired": [
@@ -1416,6 +1433,20 @@
       "reviewed_commit": "7840bede989adc226d35e893f29deec1814734f7",
       "reviewed_date": "2026-10-15",
       "review_reason": "sync016 source diff review: KEEP; BACKLOG cache: upstream centralizes hybrid cache hit alignment and tail proof, moves cache planning, handles early process shutdown and weight-version spans. None removes Yunshu GC policy or its host-thread contract."
+    },
+    {
+      "kind": "inspired",
+      "path": "scripts/research/kernelstudy_parity.py",
+      "repo": "https://github.com/ml-explore/mlx",
+      "clone": "/Volumes/Micron/yunshu-refsync/mlx",
+      "upstream_paths": [
+        "mlx/backend/metal/kernels/sdpa_vector.h"
+      ],
+      "commit": "36969c094354086e15d2a327a9c50feb20b9cf11",
+      "license": "MIT",
+      "local_changes": [
+        "Research-only canonical per-query TK4 adapter imports the registered harvester, preserving absolute prefix lengths and split geometry across T=1..7. FP64 reference reports both kernels absolute/relative errors; deterministic and reconstructed-cache tensor checks. No serving connection or full APC/accuracy qualification."
+      ]
     }
   ],
   "patches": [
@@ -2927,6 +2958,16 @@
       "reviewed_date": "2026-10-15",
       "reviewed_commit": "b534021a9c8c45bb064959d754870fd98322e447",
       "review_reason": "sync016 release/merged-PR triage: commit inventory in sync016/UPSTREAM_COMMITS.txt and per-engine dispositions in sync016/BACKLOG.md; copied/patched intersections independently reviewed in LEARNINGS.md. Keep qualified local paths; released compatible changes enter via upgraded lock, unpublished optimizations/features remain explicit owning-line backlog. No speed or numerical qualification is inferred from this source review."
+    },
+    {
+      "repo": "https://github.com/ml-explore/mlx",
+      "clone": "/Volumes/Micron/yunshu-refsync/mlx",
+      "commit": "36969c094354086e15d2a327a9c50feb20b9cf11",
+      "globs": [
+        "mlx/backend/metal/kernels/sdpa_vector.h",
+        "mlx/backend/metal/kernels/steel/attn/**/*.h"
+      ],
+      "why": "Pinned external release source for research-only kernelstudy screen; external disk clone, no inference port."
     }
   ],
   "packages": [
@@ -3253,6 +3294,138 @@
         "Jundot/Qwen3.8-Flash-Next-oQ4e-mtp"
       ],
       "pending": "M5 same-checkpoint reference parity and long identity/speed; no qualification claimed"
+    },
+    {
+      "id": "kernelstudy-llama.cpp",
+      "owner": "kernelstudy",
+      "repo": "https://github.com/ggml-org/llama.cpp",
+      "revision": "620d2225cc436ab0b001e3200e590e3b286ef9ab",
+      "release": "v0.7.0",
+      "license": "MIT",
+      "paths": [],
+      "status": "release source inspected; top-three M5 component screens complete, all failed bit parity; no inference port",
+      "pending": "No qualified winner. Any future arithmetic adaptation requires same-split Q1/verify parity, yv long spec/APC identity, paired quality and same-checkpoint cold/warm/follow-up measurements."
+    },
+    {
+      "id": "kernelstudy-mlx",
+      "owner": "kernelstudy",
+      "repo": "https://github.com/ml-explore/mlx",
+      "revision": "36969c094354086e15d2a327a9c50feb20b9cf11",
+      "release": "v0.32.4",
+      "license": "MIT",
+      "paths": [],
+      "status": "release source inspected; top-three M5 component screens complete, all failed bit parity; no inference port",
+      "pending": "No qualified winner. Any future arithmetic adaptation requires same-split Q1/verify parity, yv long spec/APC identity, paired quality and same-checkpoint cold/warm/follow-up measurements."
+    },
+    {
+      "id": "kernelstudy-mlx-lm",
+      "owner": "kernelstudy",
+      "repo": "https://github.com/ml-explore/mlx-lm",
+      "revision": "93e6d4a6447b3080861985947f0820e76fcb957d",
+      "release": "v0.32.2",
+      "license": "MIT",
+      "paths": [],
+      "status": "release source inspected; top-three M5 component screens complete, all failed bit parity; no inference port",
+      "pending": "No qualified winner. Any future arithmetic adaptation requires same-split Q1/verify parity, yv long spec/APC identity, paired quality and same-checkpoint cold/warm/follow-up measurements."
+    },
+    {
+      "id": "kernelstudy-mlx-vlm",
+      "owner": "kernelstudy",
+      "repo": "https://github.com/Blaizzy/mlx-vlm",
+      "revision": "9790231827a890eade1a626643a6bc94a1317c72",
+      "release": "v0.7.8",
+      "license": "MIT",
+      "paths": [],
+      "status": "release source inspected; top-three M5 component screens complete, all failed bit parity; no inference port",
+      "pending": "No qualified winner. Any future arithmetic adaptation requires same-split Q1/verify parity, yv long spec/APC identity, paired quality and same-checkpoint cold/warm/follow-up measurements."
+    },
+    {
+      "id": "kernelstudy-TensorFold",
+      "owner": "kernelstudy",
+      "repo": "https://github.com/ashhart/TensorFold",
+      "revision": "833bbfcba9109bb38c7af7303f80da0ca12b213c",
+      "release": "v1.0.12",
+      "license": "Apache-2.0 (inspect per-file notices before copying)",
+      "paths": [],
+      "status": "release source inspected; top-three M5 component screens complete, all failed bit parity; no inference port",
+      "pending": "No qualified winner. Any future arithmetic adaptation requires same-split Q1/verify parity, yv long spec/APC identity, paired quality and same-checkpoint cold/warm/follow-up measurements."
+    },
+    {
+      "id": "kernelstudy-MTPLX",
+      "owner": "kernelstudy",
+      "repo": "https://github.com/youssofal/MTPLX",
+      "revision": "9882703f3105363ddc37eca9f97aa09a1d387112",
+      "release": "v2.12.2",
+      "license": "Apache-2.0 (inspect per-file notices before copying)",
+      "paths": [],
+      "status": "release source inspected; top-three M5 component screens complete, all failed bit parity; no inference port",
+      "pending": "No qualified winner. Any future arithmetic adaptation requires same-split Q1/verify parity, yv long spec/APC identity, paired quality and same-checkpoint cold/warm/follow-up measurements."
+    },
+    {
+      "id": "kernelstudy-omlx",
+      "owner": "kernelstudy",
+      "repo": "https://github.com/jundot/omlx",
+      "revision": "7a5a3d75ce7463300bdfa5fedccd34348f60ff46",
+      "release": "v0.7.1rc1",
+      "license": "Apache-2.0 (inspect per-file notices before copying)",
+      "paths": [],
+      "status": "release source inspected; top-three M5 component screens complete, all failed bit parity; no inference port",
+      "pending": "No qualified winner. Any future arithmetic adaptation requires same-split Q1/verify parity, yv long spec/APC identity, paired quality and same-checkpoint cold/warm/follow-up measurements."
+    },
+    {
+      "id": "kernelstudy-dflash-mlx",
+      "owner": "kernelstudy",
+      "repo": "https://github.com/bstnxbt/dflash-mlx",
+      "revision": "9ca002898b48e14c9727dec17299f497e8467870",
+      "release": "v0.1.10",
+      "license": "Apache-2.0 (inspect per-file notices before copying)",
+      "paths": [],
+      "status": "release source inspected; top-three M5 component screens complete, all failed bit parity; no inference port",
+      "pending": "No qualified winner. Any future arithmetic adaptation requires same-split Q1/verify parity, yv long spec/APC identity, paired quality and same-checkpoint cold/warm/follow-up measurements."
+    },
+    {
+      "id": "kernelstudy-vllm-metal",
+      "owner": "kernelstudy",
+      "repo": "https://github.com/vllm-project/vllm-metal",
+      "revision": "e7a0c90bec180e5dd4275c473fd7a36e709a930e",
+      "release": "v0.31.0",
+      "license": "Apache-2.0 (inspect per-file notices before copying)",
+      "paths": [],
+      "status": "release source inspected; top-three M5 component screens complete, all failed bit parity; no inference port",
+      "pending": "No qualified winner. Any future arithmetic adaptation requires same-split Q1/verify parity, yv long spec/APC identity, paired quality and same-checkpoint cold/warm/follow-up measurements."
+    },
+    {
+      "id": "kernelstudy-vllm-mlx",
+      "owner": "kernelstudy",
+      "repo": "https://github.com/waybarrios/vllm-mlx",
+      "revision": "b064502055a68aaf94c6c58f9c0d749e0bd4f8cb",
+      "release": "v0.5.0",
+      "license": "Apache-2.0 (inspect per-file notices before copying)",
+      "paths": [],
+      "status": "release source inspected; top-three M5 component screens complete, all failed bit parity; no inference port",
+      "pending": "No qualified winner. Any future arithmetic adaptation requires same-split Q1/verify parity, yv long spec/APC identity, paired quality and same-checkpoint cold/warm/follow-up measurements."
+    },
+    {
+      "id": "kernelstudy-Rapid-MLX",
+      "owner": "kernelstudy",
+      "repo": "https://github.com/raullenchai/Rapid-MLX",
+      "revision": "76b8296cd1cf3a009de045d719dd4823974afae2",
+      "release": "v0.16.3",
+      "license": "Apache-2.0 (inspect per-file notices before copying)",
+      "paths": [],
+      "status": "release source inspected; top-three M5 component screens complete, all failed bit parity; no inference port",
+      "pending": "No qualified winner. Any future arithmetic adaptation requires same-split Q1/verify parity, yv long spec/APC identity, paired quality and same-checkpoint cold/warm/follow-up measurements."
+    },
+    {
+      "id": "kernelstudy-strata",
+      "owner": "kernelstudy",
+      "repo": "https://github.com/Niko1221/Strata",
+      "revision": "477ac13cbe8e582c20484871ce459d20d82df09d",
+      "release": "v0.1.45",
+      "license": "MIT",
+      "paths": [],
+      "status": "release source inspected; top-three M5 component screens complete, all failed bit parity; no inference port",
+      "pending": "No qualified winner. Any future arithmetic adaptation requires same-split Q1/verify parity, yv long spec/APC identity, paired quality and same-checkpoint cold/warm/follow-up measurements."
     }
   ],
   "websearch_prior_art": [
