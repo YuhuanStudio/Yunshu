@@ -1045,7 +1045,9 @@ class ASREngine(ActiveRequestMixin):
                     )
                     speech_detected = False
                     offset = 0
-                    while offset + frame_samples <= len(samples):
+                    # The final partial frame (or a clip shorter than one frame) is
+                    # judged too: its energy is computed over the samples it has.
+                    while offset < len(samples):
                         frame_data = samples[offset : offset + frame_samples]
                         # EnergyVAD.process_frame expects raw int16 bytes.
                         # *32767 not *32768 — a full-scale +1.0 sample * 32768 = 32768

@@ -60,3 +60,16 @@ async def test_japanese_not_relabeled_zh(tmp_path):
     eng._executor.shutdown(wait=True)
     assert out["language"] == "ja"
     assert out["segments"][0]["language"] == "ja"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("silent,loud", [(0, 320), (480, 320)])
+async def test_partial_frame_speech_reaches_asr(tmp_path, silent, loud):
+    p = tmp_path / "a.wav"
+    _wav(p, silent, loud)
+    model = _Model("hi", "en")
+    eng = _engine(model)
+    out = await eng.transcribe(str(p))
+    eng._executor.shutdown(wait=True)
+    assert model.calls == 1
+    assert out["text"] == "hi"
