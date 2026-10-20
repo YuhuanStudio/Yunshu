@@ -20,6 +20,7 @@ Everything else in the layer (attention, gated delta net, MoE, PLE) is upstream'
 
 from __future__ import annotations
 
+import contextlib
 from typing import Any
 
 import mlx.core as mx
@@ -262,6 +263,23 @@ def install() -> bool:
     cls._model = _tf_model
     _STATE["installed"] = True
     return True
+
+
+def forget(model) -> None:
+    """Drop the plans of one model's modules (they hold its weights) when its engine stops.
+
+    Plans are keyed by ``id()``, so a stale entry could also alias a later module at the same
+    address.
+    """
+    plans = _STATE["modules"]
+    if not plans or model is None:
+        return
+    ids = {id(model)}
+    with contextlib.suppress(Exception):
+        ids.update(id(m) for m in model.modules())
+    for key in list(plans):
+        if (key[1] if isinstance(key, tuple) else key) in ids:
+            del plans[key]
 
 
 def uninstall() -> None:

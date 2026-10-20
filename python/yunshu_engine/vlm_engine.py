@@ -836,6 +836,9 @@ class VLMEngine:
             # Persist resident checkpoints to the SSD tier (if any) before dropping them.
             with contextlib.suppress(Exception):
                 await asyncio.get_running_loop().run_in_executor(None, apc.close)
+        from .kernels import tf_hc_forward
+
+        tf_hc_forward.forget(self._model)
         self._model = None
         self._tokenizer = None
         self._apc_backend = None
