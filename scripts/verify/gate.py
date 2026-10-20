@@ -228,7 +228,7 @@ def run_gate(
     commit = git("rev-parse", "HEAD", cwd=repo)
     if git("status", "--porcelain", "--untracked-files=no", cwd=repo):
         log(
-            "warning: tracked changes in the tree; stages will not reuse earlier results"
+            "warning: tracked changes in the tree; stages reuse only results of this same diff"
         )
     rd = RunDir((runs or RUNS) / f"gate-{commit[:12]}")
     env = dict(local_env())
