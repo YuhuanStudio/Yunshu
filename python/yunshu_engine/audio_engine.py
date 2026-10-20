@@ -305,6 +305,14 @@ def list_voices() -> list[str]:
 from .active_tracking import ActiveRequestMixin, tracks_active, tracks_active_gen
 
 
+def _resample_for_speed(audio: np.ndarray, speed: float) -> np.ndarray:
+    """Change playback rate for models without native speed control
+    (speed>1 -> fewer samples = faster)."""
+    import scipy.signal
+
+    return scipy.signal.resample(audio, max(1, round(len(audio) / speed)))
+
+
 class TTSEngine(ActiveRequestMixin):
     """MLX-native Text-to-Speech engine using mlx-audio.
 
@@ -474,9 +482,7 @@ class TTSEngine(ActiveRequestMixin):
             # (so it wasn't forwarded to generate), resample the output to change the
             # playback rate (speed>1 → fewer samples = faster) instead of ignoring it.
             if speed != 1.0 and "speed" not in gen_kwargs:
-                import scipy.signal
-
-                audio = scipy.signal.resample(audio, max(1, round(len(audio) / speed)))
+                audio = _resample_for_speed(audio, speed)
             return _audio_to_wav_bytes(audio, int(sample_rate))
 
         t0 = time.monotonic()
@@ -574,6 +580,18 @@ class TTSEngine(ActiveRequestMixin):
                 cancel_event is not None and cancel_event.is_set()
             )
 
+        def _put_terminal(item):
+            # Never drop queued audio to make room for the terminal marker: wait
+            # for the consumer (bounded by the stalled-client deadline).
+            _deadline = time.monotonic() + _CLIENT_STALL_S
+            while time.monotonic() < _deadline:
+                try:
+                    _thread_queue.put(item, timeout=0.05)
+                    return
+                except _queue_mod.Full:
+                    if _cancelled():
+                        return
+
         def _stream_sync():
             try:
                 if _seed is not None:
@@ -598,6 +616,8 @@ class TTSEngine(ActiveRequestMixin):
                     if result is None:
                         break
                     audio = np.array(result.audio).flatten()
+                    if speed != 1.0 and "speed" not in gen_kwargs:
+                        audio = _resample_for_speed(audio, speed)
                     # Propagate the NaN/Inf guard to the streaming
                     # encoder — this third encode site was missed (np.clip passes NaN
                     # through and (NaN*32767).astype(int16) is a garbage sample + a
@@ -653,17 +673,7 @@ class TTSEngine(ActiveRequestMixin):
                                     ) from None
                 # Send is_final sentinel — drain one item if full so the client
                 # always receives the completion marker and doesn't hang.
-                try:
-                    _thread_queue.put_nowait(
-                        {"audio": b"", "text": "", "is_final": True}
-                    )
-                except _queue_mod.Full:
-                    with contextlib.suppress(_queue_mod.Empty):
-                        _thread_queue.get_nowait()
-                    with contextlib.suppress(_queue_mod.Full):
-                        _thread_queue.put_nowait(
-                            {"audio": b"", "text": "", "is_final": True}
-                        )
+                _put_terminal({"audio": b"", "text": "", "is_final": True})
             except Exception as e:
                 logger.error(f"TTS stream error: {e}", exc_info=True)
                 # Enqueue an ERROR-tagged terminal chunk, NOT a bare None. A bare
@@ -675,15 +685,7 @@ class TTSEngine(ActiveRequestMixin):
                 # event + [DONE]. The realtime consumer treats empty-audio+is_final as a clean
                 # turn end (its finally still emits the terminal audio.done).
                 _err = {"audio": b"", "text": "", "error": str(e), "is_final": True}
-                try:
-                    _thread_queue.put_nowait(_err)
-                except _queue_mod.Full:
-                    # Queue is full and we can't signal error — drain one
-                    # item and retry so the client sees the error sentinel.
-                    with contextlib.suppress(_queue_mod.Empty):
-                        _thread_queue.get_nowait()
-                    with contextlib.suppress(_queue_mod.Full):
-                        _thread_queue.put_nowait(_err)
+                _put_terminal(_err)
 
         loop = asyncio.get_running_loop()
         stream_task = loop.run_in_executor(self._executor, _stream_sync)
