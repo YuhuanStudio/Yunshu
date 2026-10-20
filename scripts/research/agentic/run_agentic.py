@@ -276,6 +276,11 @@ def repeat_numbers(args) -> range:
     return range(start, start + args.repeat)
 
 
+def starts_another(done: int, elapsed_s: float, budget_min: float) -> bool:
+    """A job always makes its first run; after that, new runs start only inside the budget."""
+    return done == 0 or elapsed_s <= budget_min * 60
+
+
 def cmd_run(args):
     out = Path(args.output)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -294,7 +299,6 @@ def cmd_run(args):
         return 0
     server = None
     spec_mode = None
-    t_job = time.time()
     try:
         if args.serve:
             from servers import Server, start_server
@@ -356,8 +360,10 @@ def cmd_run(args):
             )
             with out.open("a") as f:
                 f.write(json.dumps(meta) + "\n")
-        for task, rep in todo:
-            if time.time() - t_job > args.budget_min * 60:
+        # the budget covers runs, not server start-up (which gpuq may pause); every job runs at least one
+        t_job = time.time()
+        for i, (task, rep) in enumerate(todo):
+            if not starts_another(i, time.time() - t_job, args.budget_min):
                 print(
                     "[agentic] job budget reached; remaining runs resume in a later job",
                     flush=True,

@@ -147,6 +147,18 @@ def test_child_repeat_start_numbers_its_runs():
     assert list(run_agentic.repeat_numbers(SimpleNamespace(repeat=2))) == [1, 2]
 
 
+def test_budget_never_skips_a_jobs_first_run():
+    # a one-task job with --budget-min 1 whose server start-up was paused past the budget ran nothing
+    import sys
+
+    sys.path.insert(0, str(ROOT / "scripts/research/agentic"))
+    import run_agentic
+
+    assert run_agentic.starts_another(0, 600.0, 1)
+    assert run_agentic.starts_another(1, 30.0, 1)
+    assert not run_agentic.starts_another(1, 61.0, 1)
+
+
 def _finish_fixture(ab, tmp_path, monkeypatch, wait_rc):
     from types import SimpleNamespace
 
