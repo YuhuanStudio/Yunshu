@@ -160,7 +160,34 @@ def compute_lattice_gpu(
     return GpuLattice(cands, unary, hproj, succ, pred, anchor_row)
 
 
+_SEARCH_COMPILED: dict = {}
+
+
 def search_tree(
+    lat: GpuLattice,
+    nodes: int,
+    children: int = CHILDREN,
+    beam: int = BEAM,
+    edge: float = EDGE,
+    tau: float = TAU,
+):
+    """``_search_tree`` compiled per (nodes, children, beam, edge, tau): about 150 small
+    kernels per round fused where MLX can (1.67 -> 1.14 ms for 15 depths, same tokens and
+    parents; M5 Max)."""
+    key = (int(nodes), int(children), int(beam), float(edge), float(tau))
+    fn = _SEARCH_COMPILED.get(key)
+    if fn is None:
+
+        def run(cands, unary, hproj, succ, pred, anchor):
+            return _search_tree(
+                GpuLattice(cands, unary, hproj, succ, pred, anchor), *key
+            )
+
+        fn = _SEARCH_COMPILED[key] = mx.compile(run)
+    return fn(lat.cands, lat.unary, lat.hproj, lat.succ, lat.pred, lat.anchor)
+
+
+def _search_tree(
     lat: GpuLattice,
     nodes: int,
     children: int = CHILDREN,
