@@ -106,32 +106,6 @@ class ProcessMemoryEnforcer:
             self._manager.ttl_seconds = self._ttl_seconds
         await self._manager.check_ttl()
 
-    def _abort_active_requests(self) -> bool:
-        """Cancel in-flight generations when a loaded model provably has active
-        requests. Returns True if a cancellation was issued."""
-        active = False
-        for entry in list(self._manager._entries.values()):
-            if not entry.is_loaded or entry.is_pinned or entry.engine is None:
-                continue
-            probe = getattr(entry.engine, "has_active_requests", None)
-            if not callable(probe):
-                continue
-            try:
-                if probe():
-                    active = True
-                    logger.warning(
-                        f"Aborting active requests on '{entry.model_id}' "
-                        f"due to memory pressure (model kept loaded)"
-                    )
-            except Exception:
-                logger.debug("has_active_requests probe failed", exc_info=True)
-        if not active:
-            return False
-        from .request_tracker import get_request_tracker
-
-        get_request_tracker().cancel_all()
-        return True
-
     async def _check_and_enforce(self) -> None:
         """Check memory and evict if over limit ."""
         if self._max_bytes <= 0:
@@ -156,12 +130,8 @@ class ProcessMemoryEnforcer:
             async with self._manager._lock:
                 victim = self._manager._find_lru_victim()
                 if victim is None:
-                    # No IDLE victim. If a loaded model is serving requests, cancel
-                    # the in-flight generations (the model stays loaded) so their
-                    # KV/activation memory is released; the selector never returns
-                    # an active engine, so this is the only place that can act.
-                    aborted_any = self._abort_active_requests()
                     # Check for loading models — request abort
+                    aborted_any = False
                     for entry in list(self._manager._entries.values()):
                         if entry.is_loading:
                             logger.warning(
