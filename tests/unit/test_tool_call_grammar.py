@@ -483,3 +483,14 @@ def test_forced_reply_cannot_end_inside_its_reasoning(request):
     auto = tcg.compile_tool_grammar(TOOLS, tok, len(tok) + 243)
     free = auto.guide(thinking_open=True)
     assert not free.constrained and free.mask() is None
+
+
+def test_xml_call_needs_its_required_parameters(xml_tok, xml_grammar):
+    head = "\n<function=Bash>\n"
+    assert rejects_after(xml_tok, xml_grammar, head, "</function>")
+    timeout = head + "<parameter=timeout>\n5\n</parameter>\n"
+    assert rejects_after(xml_tok, xml_grammar, timeout, "</function>")
+    command = timeout + "<parameter=command>\nls\n</parameter>\n"
+    assert not rejects_after(xml_tok, xml_grammar, command, "</function>")
+    after = command + "<parameter=background>\ntrue\n</parameter>\n"
+    assert not rejects_after(xml_tok, xml_grammar, after, "</function>")
