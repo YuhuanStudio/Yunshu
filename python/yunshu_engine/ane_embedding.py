@@ -1160,13 +1160,22 @@ def get_ane_processor() -> ANEEmbeddingProcessor | None:
     Thread-safe: only creates one instance.
     """
     global _ane_processor
+    model_name = settings.get("YUNSHU_ANE_EMBEDDING_MODEL")
     if _ane_processor is not None:
-        return _ane_processor
+        # The setting is live: a processor built for another model would answer in
+        # the wrong embedding space, so rebuild it.
+        if _ane_processor._config.model_name == model_name:
+            return _ane_processor
+        logger.info(
+            "ANE embedding model changed (%s -> %s): rebuilding processor",
+            _ane_processor._config.model_name,
+            model_name,
+        )
+        _ane_processor = None
 
     if not is_ane_available():
         return None
 
-    model_name = settings.get("YUNSHU_ANE_EMBEDDING_MODEL")
     max_seq = 512
     config = ANEEmbeddingConfig(
         model_name=model_name,
