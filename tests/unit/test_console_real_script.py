@@ -148,7 +148,7 @@ def test_stop_tree_survives_an_already_exited_group_and_kills_orphan_children():
     mod.stop_tree(proc)  # leader already gone: must return without raising
     assert time.time() - t0 < 15
     for pid in kids:
-        assert not mod.alive(pid) or True
+        assert not mod.alive(pid)
 
     # a live child in its own group is killed through the pid fallback path
     class Fake:

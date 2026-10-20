@@ -276,25 +276,25 @@ class TestPressurePausing:
             pass
         # Now paused — next request should be rejected with reason
         can, reason = sched.can_admit_request(1024)
-        if not can:
-            assert "paused" in reason.lower() or "pressure" in reason.lower()
+        assert not can
+        assert "paused" in reason.lower() or "pressure" in reason.lower()
 
     def test_hysteresis_prevents_thrashing(self):
         """Hysteresis prevents rapid admit/pause cycling."""
         sched = _make_scheduler(budget_mb=10, pressure_pct=80.0, hysteresis=15.0)
-        # Reserve exactly at threshold
-        at_threshold = int(10 * 1024 * 1024 * 0.80)
-        sched.reserve_memory("req-1", at_threshold)
-        # Check admission — should trigger pause
-        sched.can_admit_request(1024)
-        # Release a tiny bit — still above (80-15)=65%
-        sched.release_memory("req-1")
-        # Re-reserve at 70% — still paused (above 65%)
-        sched.reserve_memory("req-1", int(10 * 1024 * 1024 * 0.70))
+        mb = 1024 * 1024
+        sched.reserve_memory("req-1", int(7.5 * mb))
+        sched.reserve_memory("req-2", int(0.5 * mb))  # 80% used: at the threshold
+        can, _ = sched.can_admit_request(1024)  # admitted, but triggers the pause
+        assert can and sched.is_paused
+        # Release down to 75%: still above (80-15)=65% -> stay paused, reject
+        sched.release_memory("req-2")
         can, _ = sched.can_admit_request(1024)
-        # Should still be paused since 70% > 65% (80% - 15%)
-        if sched.is_paused and not can:
-            assert True  # Hysteresis working
+        assert sched.is_paused and not can
+        # Release below 65% -> admissions resume
+        sched.release_memory("req-1")
+        can, _ = sched.can_admit_request(1024)
+        assert can and not sched.is_paused
 
     def test_stats_pressure_tracking(self):
         """Stats track pressure pauses and resumes."""
