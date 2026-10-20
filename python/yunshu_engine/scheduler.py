@@ -2212,45 +2212,11 @@ class Scheduler:
                             "prefix cache lookup failed in batch path", exc_info=True
                         )
 
-                # Inflight prefix sharing: if the completed
-                # prefix cache didn't have a match, check if another request
-                # is currently being prefilled with the same prefix.  If so,
-                # reuse its partial KV cache so we skip the shared prefill.
-                #
-                # This handles the case where Request A starts prefilling and
-                # Request B arrives with the same system prompt.  B finds A's
-                # in-flight KV via the tracker and starts from the shared
-                # prefix boundary, avoiding redundant prefill.
-                if cached_kv is None and req.prompt_token_ids:
-                    try:
-                        from .inflight_prefix_sharing import get_inflight_tracker
-
-                        _tracker = get_inflight_tracker()
-                        _inflight_entry = _tracker.find_prefix(
-                            req.prompt_token_ids,
-                            getattr(self, "model_id", "") or "",
-                        )
-                        if (
-                            _inflight_entry is not None
-                            and _inflight_entry.kv_cache_ref is not None
-                        ):
-                            cached_kv = _inflight_entry.kv_cache_ref
-                            shared_len = min(
-                                len(_inflight_entry.token_ids),
-                                len(req.prompt_token_ids),
-                            )
-                            remaining_tokens = req.prompt_token_ids[shared_len:]
-                            req.cached_tokens = shared_len
-                            logger.debug(
-                                "inflight prefix reuse: %d tokens from req=%s for %s",
-                                shared_len,
-                                _inflight_entry.request_id[:12],
-                                req.request_id[:12],
-                            )
-                    except Exception:
-                        logger.debug(
-                            "inflight prefix lookup failed in batch path", exc_info=True
-                        )
+                # No inflight prefix borrowing: a donor's LIVE cache is untrimmed and still
+                # growing, and the tracker reports only the donor, not the shared length, so
+                # adopting it skipped recipient tokens and decoded on another prompt's KV
+                # (the fast path disabled the same borrow, engine_fast.py). Shared prefixes
+                # reuse the snapshot-based prefix cache above.
 
                 # Check encoder cache for encoder-decoder models.
                 # If the request has a cached encoder hidden state (from a prior

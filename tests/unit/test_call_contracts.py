@@ -74,3 +74,12 @@ def test_kv_manager_save_guards_unbound_tensors():
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))
+
+
+def test_scheduler_never_adopts_a_live_inflight_cache():
+    # H3: the batch path adopted a donor's live kv_cache_ref and assumed the whole shorter
+    # prompt matched, skipping recipient tokens and decoding on another prompt's KV.
+    from yunshu_engine import scheduler
+
+    src = inspect.getsource(scheduler)
+    assert "find_prefix(" not in src  # no donor lookup, so no live cache to adopt
