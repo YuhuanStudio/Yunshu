@@ -548,3 +548,21 @@ def test_worker_dispatches_in_process_whatever_the_host_header(env, monkeypatch)
     assert seen == ["Bearer admin-secret"]
     rec = files_store.get_store().load_batch(r.json()["id"])
     assert "base_url" not in rec and rec["status"] == "completed"
+
+
+def test_max_items_setting_caps_the_batch(env, monkeypatch):
+    client, _, _ = env
+    monkeypatch.setenv("YUNSHU_BATCH_MAX_ITEMS", "3")
+    data = jsonl(*[chat_line(f"c{i}") for i in range(5)])
+    b = create(client, upload_batch_file(client, data)).json()
+    assert b["status"] == "failed"
+    assert b["errors"]["data"][0]["code"] == "batch_request_limit_exceeded"
+
+
+def test_batch_timeout_setting_reaches_the_worker_client(monkeypatch):
+    monkeypatch.setattr(batches_router.runner, "app", object())
+    monkeypatch.setenv("YUNSHU_BATCH_TIMEOUT", "7")
+    c = batches_router._default_client("http://x", {})
+    assert c.timeout.read == 7.0
+    monkeypatch.setenv("YUNSHU_BATCH_TIMEOUT", "0")
+    assert batches_router._default_client("http://x", {}).timeout.read is None

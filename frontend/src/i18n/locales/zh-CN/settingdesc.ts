@@ -50,7 +50,7 @@ const settingdesc = {
     "以逗号分隔的允许 CORS 来源（`*` 表示任意）；同时用于检查 Realtime WebSocket 的 Origin 头。",
   YUNSHU_RESPONSE_CACHE: "在内存中缓存相同的非流式响应。",
   YUNSHU_BATCH_MAX_ITEMS: "Batch API：每个批次的请求数上限。",
-  YUNSHU_BATCH_TIMEOUT: "Batch API：每个批次的默认超时秒数。",
+  YUNSHU_BATCH_TIMEOUT: "Batch API：批次中每个请求的超时秒数（0：不限）。",
   YUNSHU_ALLOW_LOCAL_FILES:
     "允许请求引用任意本地文件路径（默认仅限 `YUNSHU_MEDIA_DIR` 之下）。",
   YUNSHU_MEDIA_DIR:

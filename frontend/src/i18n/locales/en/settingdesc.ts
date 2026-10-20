@@ -55,7 +55,7 @@ const settingdesc = {
     "Comma-separated allowed CORS origins (`*` for any); also checked against the Realtime WebSocket Origin header.",
   YUNSHU_RESPONSE_CACHE: "Cache identical non-streaming responses in memory.",
   YUNSHU_BATCH_MAX_ITEMS: "Batch API: maximum requests per batch.",
-  YUNSHU_BATCH_TIMEOUT: "Batch API: default per-batch timeout in seconds.",
+  YUNSHU_BATCH_TIMEOUT: "Batch API: timeout in seconds for each request a batch runs (0: no timeout).",
   YUNSHU_ALLOW_LOCAL_FILES:
     "Allow requests to reference any local file path (default: only under `YUNSHU_MEDIA_DIR`).",
   YUNSHU_MEDIA_DIR:
