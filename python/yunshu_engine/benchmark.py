@@ -18,6 +18,7 @@ Design goals:
 import asyncio
 import platform
 import time
+import uuid
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
@@ -38,6 +39,9 @@ class BenchmarkResult:
     throughput_tps: float  # tokens per second
     prefill_time_ms: float
     decode_time_ms: float
+    # "warm": the exact prompt was generated once before timing (prefix cache
+    # may serve it); "cold": unique prompt, no warm-up, prefill is measured.
+    prefix_state: str = "warm"
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -175,27 +179,36 @@ class BenchmarkRunner:
         max_tokens: int = 256,
         temperature: float = 0.0,
         prompt: str | None = None,
+        cold: bool = False,
     ) -> BenchmarkResult:
         """Benchmark a single request, measuring TTFT, TPOT, and throughput.
 
         Uses streaming (stream_generate) to separate prefill from decode timing.
         ``prompt`` overrides the synthetic prompt built from ``prompt_tokens``.
+        ``cold`` skips the warm-up generation and makes the prompt unique, so the
+        timed TTFT is a real prefill rather than a prefix-cache restore.
         """
         if prompt is None:
             prompt = _make_prompt(prompt_tokens)
+        if cold:
+            prompt = f"[{uuid.uuid4().hex}] {prompt}"
 
-        # Phase 1: Non-streaming generate to get actual prompt token count
-        gen_result = await self.engine.generate(
-            prompt=prompt,
-            max_tokens=max_tokens,
-            temperature=temperature,
-        )
-        actual_prompt_tokens = (
-            getattr(gen_result, "prompt_tokens", prompt_tokens) or prompt_tokens
-        )
-        actual_completion_tokens = (
-            getattr(gen_result, "completion_tokens", max_tokens) or max_tokens
-        )
+        # Phase 1: Non-streaming generate to get actual prompt token count (this
+        # also warms the prefix cache for the timed run; skipped for cold runs)
+        actual_prompt_tokens = prompt_tokens
+        actual_completion_tokens = max_tokens
+        if not cold:
+            gen_result = await self.engine.generate(
+                prompt=prompt,
+                max_tokens=max_tokens,
+                temperature=temperature,
+            )
+            actual_prompt_tokens = (
+                getattr(gen_result, "prompt_tokens", prompt_tokens) or prompt_tokens
+            )
+            actual_completion_tokens = (
+                getattr(gen_result, "completion_tokens", max_tokens) or max_tokens
+            )
 
         # Phase 2: Streaming to measure TTFT / TPOT
         ttft_ms = 0.0
@@ -256,6 +269,7 @@ class BenchmarkRunner:
             throughput_tps=throughput_tps,
             prefill_time_ms=prefill_time_ms,
             decode_time_ms=decode_time_ms,
+            prefix_state="cold" if cold else "warm",
         )
 
     # ── Batch ──
@@ -354,6 +368,7 @@ class BenchmarkRunner:
                 prompt_tokens=plen,
                 max_tokens=max_decode_tokens,
                 temperature=temperature,
+                cold=True,
             )
             points.append(
                 PrefillDecodePoint(
