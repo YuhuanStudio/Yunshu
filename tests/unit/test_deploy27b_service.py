@@ -119,3 +119,5 @@ def test_plist_lives_off_the_noowners_volume():
     assert 'tempfile.mkdtemp(prefix="deploy27b-plist-")' in source
     assert "Library/LaunchAgents" not in source
     assert "shutil.rmtree(plist_dir" in source
+    assert '"StandardOutPath": str(plist_dir / "server.log")' in source
+    assert '"StandardOutPath": str(root' not in source

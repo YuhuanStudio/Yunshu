@@ -120,8 +120,9 @@ def main():
     config.chmod(0o600)
     # launchd refuses to bootstrap a plist from a noowners volume such as P5Plus
     # ("Bootstrap failed: 5: Input/output error"), so only this few-KB file lives on
-    # the internal disk, in a private temp dir removed at exit. HOME, models, logs
-    # and the wheel environment all stay on P5Plus.
+    # the internal disk, in a private temp dir removed at exit, and so does the
+    # server log (launchd exits 78 EX_CONFIG when StandardOutPath is on that volume;
+    # it is copied to P5Plus at exit). HOME, models and the venv stay on P5Plus.
     plist_dir = Path(tempfile.mkdtemp(prefix="deploy27b-plist-"))
     plist = plist_dir / f"{LABEL}.plist"
     env = {
@@ -157,8 +158,8 @@ def main():
                 "ThrottleInterval": 2,
                 "WorkingDirectory": str(home),
                 "EnvironmentVariables": env,
-                "StandardOutPath": str(root / "server.log"),
-                "StandardErrorPath": str(root / "server.log"),
+                "StandardOutPath": str(plist_dir / "server.log"),
+                "StandardErrorPath": str(plist_dir / "server.log"),
             }
         )
     )
@@ -328,6 +329,8 @@ def main():
             state = ctl("print", target)
             require_owned_job(state.stdout, python_bin)
             ctl("bootout", target)
+        if (plist_dir / "server.log").exists():
+            shutil.copyfile(plist_dir / "server.log", root / "server.log")
         shutil.rmtree(plist_dir, ignore_errors=True)
         a.output.write_text(json.dumps(result) + "\n")
         print(json.dumps(result), flush=True)
