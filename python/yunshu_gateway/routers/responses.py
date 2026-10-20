@@ -48,6 +48,8 @@ _TRUNCATE_KEEP = 512 * 1024
 # In-memory, bounded LRU; not persisted across process restarts.
 # ──────────────────────────────────────────────────────────────────────
 _RESPONSE_STORE_MAX = 1024
+# previous_response_id hops replayed into a prompt; a longer chain is an error, never truncated.
+_CHAIN_MAX_HOPS = 1000
 _response_store: OrderedDict[str, dict] = OrderedDict()
 _response_store_lock = threading.Lock()
 
@@ -1301,29 +1303,37 @@ def _enforce_tool_choice(req: ResponsesRequest, calls: list[dict]) -> list[dict]
 
 def _apply_previous_response_chain(req, messages: list[dict], request) -> list[dict]:
     """Replay the stored ``previous_response_id`` chain (oldest first) into ``messages``: after a leading
-    system message, before the new input. Shared by generation and ``/input_tokens``."""
+    system message, before the new input. Shared by generation and ``/input_tokens``.
+    Raises ``ContextError``: 404 for an unknown / foreign id, 400 for a chain past the hop cap."""
     if not req.previous_response_id:
         return messages
+    from ..responses_context import ContextError
+
     chain: list[dict] = []
-    # Walk the chain back-to-front. Limit to 16 hops AND track visited ids to
-    # prevent loops. : the 16-cap alone only bounded a cycle — a repeated
+    # Walk the chain back-to-front. Limit to _CHAIN_MAX_HOPS AND track visited ids to
+    # prevent loops. : the cap alone only bounded a cycle — a repeated
     # previous_response_id (e.g. a self-referential or A↔B pair) would still
     # prepend the same turn up to 16 times, duplicating context. The `_seen` set
     # stops the walk at the first repeat (completes the comment's stated intent).
     _prev_id = req.previous_response_id
     _seen: set[str] = set()
-    for _ in range(16):
+    for _ in range(_CHAIN_MAX_HOPS):
         if not _prev_id or _prev_id in _seen:
             break
         _seen.add(_prev_id)
         _prev = _get_stored_response(_prev_id)
-        if not _prev:
-            break
         # SECURITY: ownership-gate the chain parent. Without this a
         # tenant could chain off another tenant's stored response id to
         # replay (and then exfiltrate) its private input/output. Mirrors the
-        # GET /responses/{id} ownership guard.
-        if not _owns_stored(request, _prev):
+        # GET /responses/{id} ownership guard. A foreign id reads as unknown.
+        if not _prev or not _owns_stored(request, _prev):
+            if len(_seen) == 1:
+                raise ContextError(
+                    404,
+                    f"Previous response with id '{req.previous_response_id}' not found.",
+                    "previous_response_not_found",
+                    "previous_response_id",
+                )
             break
         # Build this hop's turn as a UNIT in natural
         # order (user input(s) then the assistant reply) and prepend the whole unit.
@@ -1386,6 +1396,14 @@ def _apply_previous_response_chain(req, messages: list[dict], request) -> list[d
                 )
         chain[0:0] = _turn
         _prev_id = _prev.get("previous_response_id")
+    else:
+        if _prev_id and _prev_id not in _seen and _get_stored_response(_prev_id):
+            raise ContextError(
+                400,
+                f"previous_response_id chain is longer than {_CHAIN_MAX_HOPS} responses.",
+                "previous_response_chain_too_long",
+                "previous_response_id",
+            )
     if chain:
         # Inject chain after any system message but before the new user input
         if messages and messages[0].get("role") == "system":
@@ -1402,7 +1420,12 @@ async def create_response(req: ResponsesRequest, request: Request):
     from ..capability_gate import enforce_responses
 
     enforce_responses(req)
-    from ..responses_context import needs_state, run_stateful_response
+    from ..responses_context import (
+        ContextError,
+        error_json,
+        needs_state,
+        run_stateful_response,
+    )
 
     if needs_state(req):
         # conversation / compaction items / auto compaction: rewrite the request, re-enter here
@@ -1513,7 +1536,10 @@ async def create_response(req: ResponsesRequest, request: Request):
     # the predecessor. The Responses API contract says the chain provides
     # implicit conversation memory; without this the model sees only the
     # new turn and can't recall prior context.
-    messages = _apply_previous_response_chain(req, messages, request)
+    try:
+        messages = _apply_previous_response_chain(req, messages, request)
+    except ContextError as exc:
+        return error_json(exc)
 
     json_schema = _parse_response_format(req.response_format, req.grammar)
 
@@ -3744,7 +3770,12 @@ async def count_input_tokens(request: Request):
     fn_tools = function_tools(req.tools)
     if fn_tools != req.tools:
         req = req.model_copy(update={"tools": fn_tools})
-    messages = _apply_previous_response_chain(req, _convert_to_messages(req), request)
+    try:
+        messages = _apply_previous_response_chain(
+            req, _convert_to_messages(req), request
+        )
+    except ContextError as exc:
+        return error_json(exc)
     native = None
     if req.tools:
         from .chat import ToolDefinition, ToolFunction, _vlm_renders_tools
