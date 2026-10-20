@@ -284,6 +284,21 @@ def rounds(
     )
     graft_budget = GraftBudget()
     graft_stats = dict(rounds=0, rows=0, accepted=0, copy_rounds=0, wide=0)
+
+    def log_graft():
+        # Logged before the last token is yielded: a consumer that stops reading after
+        # it closes this generator at that yield.
+        if graft_ready:
+            logger.info(
+                "MTP suffix graft engagement: graft_rounds=%d rows=%d copy_accepted=%d "
+                "wide_rounds=%d copy_rounds=%d",
+                graft_stats["rounds"],
+                graft_stats["rows"],
+                graft_stats["accepted"],
+                graft_stats["wide"],
+                graft_stats["copy_rounds"],
+            )
+
     if graft_ready:
         logger.info("MTP same-round suffix-copy graft: max %d verify rows", copy_rows)
     next_copy = plan_copy(emitted)
@@ -522,6 +537,8 @@ def rounds(
                 finished = True
             if stop_check is not None and stop_check(0, tok):
                 finished = True
+            if finished:
+                log_graft()
             publication = clock() if cost_clock is not None else None
             yield [tok], {"round_pos": pos, "round_len": n}
             if cost_clock is not None and publication is not None:
@@ -531,16 +548,6 @@ def rounds(
         b = new_tokens[-1] if new_tokens else b
         if emitted % 256 == 0:
             mx.clear_cache()
-    if graft_ready:
-        logger.info(
-            "MTP suffix graft engagement: graft_rounds=%d rows=%d copy_accepted=%d "
-            "wide_rounds=%d copy_rounds=%d",
-            graft_stats["rounds"],
-            graft_stats["rows"],
-            graft_stats["accepted"],
-            graft_stats["wide"],
-            graft_stats["copy_rounds"],
-        )
 
 
 def _request_needs_chain() -> bool:
