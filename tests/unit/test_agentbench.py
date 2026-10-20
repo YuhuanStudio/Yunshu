@@ -121,3 +121,27 @@ def test_dry_run_plans_every_agent_and_task(capsys):
     )
     out = json.loads(capsys.readouterr().out)
     assert [j["task"] for j in out] == ["cli-add-flag", "shell-report"]
+
+
+def test_repeat_jobs_tell_the_child_its_repeat_number(tmp_path):
+    ab = _ab()
+    jobs = ab.plan(["claude"], ["a"], 2, tmp_path, Path("/t/python"), "x", -1)
+    starts = [j["cmd"][j["cmd"].index("--repeat-start") + 1] for j in jobs]
+    assert starts == ["1", "2"]
+    assert all(j["cmd"][j["cmd"].index("--repeat") + 1] == "1" for j in jobs)
+    planned = [dict(j, out=j["out"]) for j in jobs]
+    rows = [row(task="a", rep=1), row(task="a", rep=2)]
+    assert ab.judge(planned, rows, [])["verdict"] == "PASS"
+
+
+def test_child_repeat_start_numbers_its_runs():
+    import sys
+    from types import SimpleNamespace
+
+    sys.path.insert(0, str(ROOT / "scripts/research/agentic"))
+    import run_agentic
+
+    assert list(
+        run_agentic.repeat_numbers(SimpleNamespace(repeat=1, repeat_start=3))
+    ) == [3]
+    assert list(run_agentic.repeat_numbers(SimpleNamespace(repeat=2))) == [1, 2]

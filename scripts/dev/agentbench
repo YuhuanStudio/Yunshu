@@ -116,6 +116,8 @@ def plan(
                             task,
                             "--repeat",
                             "1",
+                            "--repeat-start",
+                            str(rep),
                             "--timeout-min",
                             str(RUN_TIMEOUT_MIN),
                             "--budget-min",
