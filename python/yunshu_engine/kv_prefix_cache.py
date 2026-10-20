@@ -1333,15 +1333,18 @@ class KVPrefixCache:
                     and evicted_cache is not None
                     and evicted_prompt is not None
                 ):
+                    import numpy as np
+
+                    # Once per entry, not per block: dequantizing a quantized layer
+                    # rebuilds the whole context, which per block was quadratic.
+                    evicted_cache = [self._maybe_dequantize(c) for c in evicted_cache]
+                    tokens = np.array(evicted_prompt)
                     for bi, bh in enumerate(evicted_hashes):
                         bh_bytes = (
                             bh.to_bytes(8, "little") if isinstance(bh, int) else bh
                         )
                         if not self._ssd_cache.has_block(bh_bytes):
                             try:
-                                import numpy as np
-
-                                tokens = np.array(evicted_prompt)
                                 start = bi * _BLOCK_SIZE
                                 end = min(start + _BLOCK_SIZE, len(tokens))
                                 block_cache = self._extract_block_cache_data(
@@ -1762,11 +1765,13 @@ class KVPrefixCache:
             if cache is not None and not self._is_block_decomposable(cache):
                 continue
             block_hashes = snapshot_hashes[i]
+            if cache is not None:
+                cache = [self._maybe_dequantize(c) for c in cache]
+            tokens = np_array(prompt)
             for bi, bh in enumerate(block_hashes):
                 bh_bytes = bh.to_bytes(8, "little") if isinstance(bh, int) else bh
                 if self._ssd_cache.has_block(bh_bytes):
                     continue
-                tokens = np_array(prompt)
                 start = bi * _BLOCK_SIZE
                 end = min(start + _BLOCK_SIZE, len(tokens))
                 block_cache = self._extract_block_cache_data(cache, bi)
