@@ -98,7 +98,16 @@ class Executor:
                 done = r
         if done and done.get("ok") and done.get("sig") == cell.sig:
             ev = self.run.cell_path(cell.stage, cell.key)
-            if ev.exists() or not cell.needs_out:
+            if cell.needs_out:
+                # cached evidence is re-validated: a truncated or edited file is not a pass
+                ok, _ = (
+                    (cell.validate or default_validate)(ev)
+                    if ev.exists()
+                    else (False, "")
+                )
+            else:
+                ok = True
+            if ok:
                 self.jobs.append((cell.stage, cell.key, done.get("job", ""), True))
                 return CellResult(
                     cell.key, True, "", done.get("job", ""), ev, False, True

@@ -1649,3 +1649,149 @@ def test_apc_stage_checks_every_spec_mode(tmp_path):
     )
     res = stages.stage_apc(ctx)
     assert not res.passed
+
+
+# ── fail-closed evidence reuse (gate fingerprint, share keys, cached cells, planned grids) ──
+def _model_dir(tmp_path, name="m", cfg="{}"):
+    d = tmp_path / name
+    d.mkdir(exist_ok=True)
+    (d / "config.json").write_text(cfg)
+    (d / "model.safetensors").write_bytes(b"w" * 8)
+    return d
+
+
+def test_gate_reuse_requires_matching_model_env_and_clean_tree(gate_world, tmp_path):
+    w = gate_world
+    stages_ = ["install", "serve-27b"]
+    model = _model_dir(tmp_path)
+    env = {"M": str(model), "AGENT_TURNS": "4"}
+    assert run_gate(w, stages=stages_, extra_env=env) == 0
+    n = len(jobs(w))
+    assert run_gate(w, stages=stages_, extra_env=env) == 0
+    assert len(jobs(w)) == n  # same fingerprint: reused
+    (model / "config.json").write_text('{"changed": 1}')  # replaced checkpoint
+    assert run_gate(w, stages=stages_, extra_env=env) == 0
+    assert len(jobs(w)) == n + 2
+    n = len(jobs(w))
+    assert run_gate(w, stages=stages_, extra_env={**env, "AGENT_TURNS": "9"}) == 0
+    assert len(jobs(w)) == n + 2  # a gate parameter changed
+    n = len(jobs(w))
+    (w.repo / "scripts/release/gate.sh").write_text(FAKE_GATE + "\n# edited\n")
+    assert run_gate(w, stages=stages_, extra_env={**env, "AGENT_TURNS": "9"}) == 0
+    assert len(jobs(w)) == n + 2  # an uncommitted edit reruns
+    assert run_gate(w, stages=stages_, extra_env={**env, "AGENT_TURNS": "9"}) == 0
+    assert len(jobs(w)) == n + 2  # the same edit is the same tree: reused
+    (w.repo / "scripts/release/gate.sh").write_text(FAKE_GATE + "\n# edited twice\n")
+    assert run_gate(w, stages=stages_, extra_env={**env, "AGENT_TURNS": "9"}) == 0
+    assert len(jobs(w)) == n + 4  # a different edit reruns
+    git(w.repo, "checkout", "scripts/release/gate.sh")
+
+
+def test_gate_partial_run_checks_install_marker(gate_world):
+    assert run_gate(gate_world, stages=["install", "serve-27b"]) == 0
+    marker = gate_world.tmp / "gateroot/.yv-install-commit"
+    marker.write_text("deadbeef")
+    n = len(jobs(gate_world))
+    assert run_gate(gate_world, stages=["serve-27b"]) == 0
+    assert len(jobs(gate_world)) == n + 1  # no reuse on a stale install
+
+
+def _share_ctx(tmp_path, monkeypatch, py=None):
+    from types import SimpleNamespace
+
+    arm = core.Arm("base", "b", "a" * 40, tmp_path / "arm", "")
+    return SimpleNamespace(
+        tree=lambda a: arm,
+        arm_env=lambda a, e=None: dict(e or {}),
+        model=str(_model_dir(tmp_path)),
+        suite={"kinds": ["prose"]},
+        py=py or str(tmp_path / "venv/bin/python"),
+        base=arm,
+    )
+
+
+def test_identity_share_key_tracks_prompt_content_checkpoint_and_packages(
+    tmp_path, monkeypatch
+):
+    prompts = tmp_path / "prompts"
+    prompts.mkdir()
+    (prompts / "prose-1024.txt").write_text("one")
+    monkeypatch.setattr(stages, "PROMPTS", prompts)
+    site = tmp_path / "venv/lib/python3.13/site-packages"
+    (site / "mlx-0.1.0.dist-info").mkdir(parents=True)
+    (tmp_path / "venv/bin").mkdir(parents=True)
+    (tmp_path / "venv/bin/python").write_text("")
+    ctx = _share_ctx(tmp_path, monkeypatch)
+
+    def key():
+        return stages._share_key(ctx, "base", {}, [1024])
+
+    k0 = key()
+    (prompts / "prose-1024.txt").write_text("two")  # regenerated in place
+    k1 = key()
+    assert k1 != k0
+    (Path(ctx.model) / "config.json").write_text('{"v": 2}')
+    k2 = key()
+    assert k2 != k1
+    (site / "mlx-0.2.0.dist-info").mkdir()
+    assert key() != k2
+
+
+def test_memory_share_key_tracks_harness_bytes(tmp_path, monkeypatch):
+    harness = tmp_path / "memory_ab.py"
+    harness.write_text("v1")
+    monkeypatch.setattr(stages, "MEMORY_AB", harness)
+    ctx = _share_ctx(tmp_path, monkeypatch)
+    ctx.suite = {"mem_reps": 1, "mem_sizes": [1024]}
+    ctx.mem_gb = 8
+    ctx.big = False
+    keys = []
+
+    class CapturedStopError(Exception):
+        pass
+
+    class Capture:
+        def run_cells(self, cells):
+            keys.extend(c.share_key for c in cells if c.share_key)
+            raise CapturedStopError
+
+    ctx.exe = Capture()
+    for text in ("v1", "v2"):
+        harness.write_text(text)
+        with pytest.raises(CapturedStopError):
+            stages.stage_memory(ctx)
+    assert len(keys) == 2 and keys[0] != keys[1]
+
+
+def test_cached_cell_is_revalidated(world):
+    rd, ex = mkexec(world, "cached")
+    cell = Cell("s", "c1", ["true"])
+    ev = rd.cell_path("s", "c1")
+    ev.write_text('{"complete": true}\n')
+    rd.append(
+        "s", {"ev": "cell_done", "cell": "c1", "ok": True, "sig": cell.sig, "job": "j"}
+    )
+    assert ex._cached(cell) is not None
+    ev.write_text('{"part": "decode"}\n')  # truncated / edited after the fact
+    assert ex._cached(cell) is None
+    cell2 = Cell("s", "c2", ["true"], validate=lambda p: (False, "bad"))
+    rd.cell_path("s", "c2").write_text('{"complete": true}\n')
+    rd.append(
+        "s", {"ev": "cell_done", "cell": "c2", "ok": True, "sig": cell2.sig, "job": "j"}
+    )
+    assert ex._cached(cell2) is None
+
+
+def test_identity_and_speed_check_the_planned_grid():
+    planned = analyze.planned_identity([1024, 131072], ["code"])
+    only_small = rows(ctx=1024)  # the 128K records are lost from both arms
+    assert analyze.compare_identity(only_small, only_small)["ok"]  # observed grid only
+    r = analyze.compare_identity(only_small, only_small, planned=planned)
+    assert not r["ok"] and any("131072" in str(m["cell"]) for m in r["mismatches"])
+    nosha = [{**x, "sha": None, "ct": None} for x in rows()]
+    r = analyze.compare_identity(nosha, nosha)
+    assert not r["ok"] and "missing" in r["mismatches"][0]["why"]
+    base = [rows(ctx=1024) for _ in range(3)]
+    assert analyze.speed_compare(base, base)["ok"]
+    sp = analyze.speed_compare(base, base, planned=[(1024, "code"), (131072, "code")])
+    assert not sp["ok"] and any("131072" in m for m in sp["missing"])

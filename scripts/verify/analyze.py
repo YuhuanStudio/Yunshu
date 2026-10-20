@@ -24,10 +24,21 @@ def session_info(rows: Iterable[dict]) -> dict:
     return {}
 
 
-def compare_identity(a_rows, b_rows, a_name="base", b_name="cand", ctxs=None) -> dict:
-    """Greedy digests equal on every cell both arms produced; a missing cell fails closed."""
+def planned_identity(ctxs, kinds, phases=PHASES) -> list:
+    """The (ctx, kind, phase) grid a stage asked for."""
+    return [(c, k, p) for c in ctxs for k in kinds for p in phases]
+
+
+def compare_identity(
+    a_rows, b_rows, a_name="base", b_name="cand", ctxs=None, planned=None
+) -> dict:
+    """Greedy digests equal on every planned cell (default: the cells either arm produced); a
+    cell missing in either arm, or a record without sha / ct, fails closed."""
     a, b = decode_index(a_rows), decode_index(b_rows)
-    keys = sorted(k for k in set(a) | set(b) if ctxs is None or k[0] in ctxs)
+    if planned is not None:
+        keys = sorted({tuple(k) for k in planned})
+    else:
+        keys = sorted(k for k in set(a) | set(b) if ctxs is None or k[0] in ctxs)
     bad, n = [], 0
     for k in keys:
         ra, rb = a.get(k), b.get(k)
@@ -40,6 +51,16 @@ def compare_identity(a_rows, b_rows, a_name="base", b_name="cand", ctxs=None) ->
             )
             continue
         n += 1
+        lacking = [
+            nm
+            for nm, r in ((a_name, ra), (b_name, rb))
+            if not r.get("sha") or r.get("ct") is None
+        ]
+        if lacking:
+            bad.append(
+                {"cell": list(k), "why": f"sha or ct missing in {', '.join(lacking)}"}
+            )
+            continue
         if ra.get("sha") != rb.get("sha") or ra.get("ct") != rb.get("ct"):
             bad.append(
                 {
@@ -117,12 +138,15 @@ def speed_compare(
     tol_pct: float = 2.0,
     robust: bool = False,
     only: Iterable | None = None,
+    planned: Iterable | None = None,
 ) -> dict:
     """Per (ctx, kind, metric): medians, per-rep paired deltas, noise = half range of the paired
     deltas; a regression is a median worsening beyond max(tol, noise). Reps pair by index.
     `robust` (confirmation reps): the delta is the median of the per-rep paired deltas and the
     noise is the larger of 1.4826 x MAD of those deltas and of each arm's own spread (MAD as a
-    percent of its median), so one stalled rep cannot decide. `only` limits it to (ctx, kind)s."""
+    percent of its median), so one stalled rep cannot decide. `only` limits it to (ctx, kind)s;
+    `planned` is the (ctx, kind) grid the stage asked for: a cell absent from every rep of both
+    arms is then reported missing instead of being invisible."""
     out, regress, missing = [], [], []
     n = min(len(base_reps), len(cand_reps))
     if n == 0:
@@ -135,7 +159,10 @@ def speed_compare(
         }
     bidx = [decode_index(r) for r in base_reps[:n]]
     cidx = [decode_index(r) for r in cand_reps[:n]]
-    cells = sorted({(k[0], k[1]) for i in bidx + cidx for k in i})
+    if planned is not None:
+        cells = sorted({tuple(c) for c in planned})
+    else:
+        cells = sorted({(k[0], k[1]) for i in bidx + cidx for k in i})
     if only is not None:
         keep = {tuple(x) for x in only}
         cells = [c for c in cells if c in keep]

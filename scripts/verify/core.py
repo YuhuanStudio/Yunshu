@@ -43,6 +43,40 @@ def sha(*parts: object, n: int = 12) -> str:
     return h.hexdigest()[:n]
 
 
+def checkpoint_identity(model: object) -> str:
+    """Cheap identity of a model checkpoint directory: config.json bytes plus name, size and mtime
+    of its safetensors files / index / tokenizer files (never the weights themselves). A missing
+    path has its own identity, so it can never match a present one."""
+    p = Path(str(model))
+    if not p.is_dir():
+        return "absent:" + str(model)
+    h = hashlib.sha256()
+    for f in sorted(p.iterdir()):
+        n = f.name
+        if n == "config.json":
+            h.update(n.encode())
+            h.update(f.read_bytes())
+        elif n.endswith((".safetensors", ".safetensors.index.json")) or n.startswith(
+            "tokenizer"
+        ):
+            st = f.stat()
+            h.update(f"{n}:{st.st_size}:{st.st_mtime_ns}".encode())
+    return h.hexdigest()[:16]
+
+
+def runtime_identity(py: str | Path) -> str:
+    """Interpreter plus mlx / mlx-lm / mlx-vlm versions of the venv that runs an unmarked arm
+    (read from dist-info names; MLX is never imported)."""
+    exe = Path(str(py))
+    venv = exe.parent.parent
+    pkgs = []
+    for pat in ("mlx", "mlx_lm", "mlx_vlm"):
+        pkgs += sorted(
+            d.name for d in venv.glob(f"lib/python*/site-packages/{pat}-*.dist-info")
+        )
+    return sha(str(exe.resolve()) if exe.exists() else str(exe), pkgs)
+
+
 def read_jsonl(path: Path) -> list[dict]:
     rows: list[dict] = []
     if not path.exists():

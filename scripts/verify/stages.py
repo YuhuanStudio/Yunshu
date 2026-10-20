@@ -22,6 +22,7 @@ from .core import (
     InfraError,
     RunDir,
     changed_files,
+    checkpoint_identity,
     read_jsonl,
     related_tests,
 )
@@ -505,6 +506,26 @@ def _harness_hash() -> str:
     return hashlib.sha256(TFBENCH.read_bytes()).hexdigest() if TFBENCH.exists() else ""
 
 
+def _file_hash(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest() if path.exists() else ""
+
+
+def _prompt_hashes(ctxs, kinds) -> list:
+    """Content hashes of the tfbench prompt files a cell reads (not their locations)."""
+    return [
+        _file_hash(PROMPTS / f"{k}-{c}.txt")
+        for c in sorted(ctxs)
+        for k in sorted(kinds)
+    ]
+
+
+def _runtime_key(ctx: Ctx, arm: str) -> str:
+    """Marked arms carry their wheel receipts; an unmarked arm runs ctx.py, so key its packages."""
+    from .core import runtime_identity
+
+    return ctx.tree(arm).runtime_fingerprint or runtime_identity(ctx.py)
+
+
 def _share_key(ctx: Ctx, arm: str, extra: dict, c, tag: str = "") -> str:
     """Greedy digests of the base arm are deterministic: reuse them across runs. The key holds
     everything that could change them (code, env, model, harness, device) and no run path."""
@@ -515,11 +536,14 @@ def _share_key(ctx: Ctx, arm: str, extra: dict, c, tag: str = "") -> str:
         ctx.tree(arm).key,
         ctx.arm_env(arm, extra),
         ctx.model,
+        checkpoint_identity(ctx.model),
         c,
         ctx.suite["kinds"],
+        _prompt_hashes(c, ctx.suite["kinds"]),
+        _runtime_key(ctx, arm),
         tag,
         _dec_args(ctx),
-        hashlib.sha256(TFBENCH.read_bytes()).hexdigest() if TFBENCH.exists() else "",
+        _harness_hash(),
         os.environ.get("GPUQ_DEVICE", "m5"),
         n=24,
     )
@@ -577,7 +601,8 @@ def stage_identity(ctx: Ctx) -> StageResult:
                 numbers[f"{tag}per_depth".strip()] = depth_ok
                 if not depth_ok:
                     reasons.append(f"{tag}{why}")
-            cmp_ = analyze.compare_identity(base, cand, "base", "cand")
+            planned = analyze.planned_identity(ctx.suite["ctx"], ctx.suite["kinds"])
+            cmp_ = analyze.compare_identity(base, cand, "base", "cand", planned=planned)
             numbers[f"{tag}base_vs_cand".strip()] = {
                 "compared": cmp_["compared"],
                 "mismatches": len(cmp_["mismatches"]),
@@ -586,7 +611,9 @@ def stage_identity(ctx: Ctx) -> StageResult:
                 reasons.append(f"{tag}base != cand: {cmp_['mismatches'][:3]}")
             offrows = _rows_for(res, "candoff", mode)
             if offrows:
-                c2 = analyze.compare_identity(offrows, cand, "spec_off", "cand")
+                c2 = analyze.compare_identity(
+                    offrows, cand, "spec_off", "cand", planned=planned
+                )
                 numbers[f"{tag}spec_on_vs_off".strip()] = {
                     "compared": c2["compared"],
                     "mismatches": len(c2["mismatches"]),
@@ -817,8 +844,11 @@ def _speed_cells(ctx: Ctx, rep: int, units: list, only: set | None = None) -> li
                         ctx.base.key,
                         ctx.arm_env("base"),
                         ctx.model,
+                        checkpoint_identity(ctx.model),
                         ctxs,
                         kinds,
+                        _prompt_hashes(ctxs, kinds),
+                        _runtime_key(ctx, "base"),
                         _dec_args(ctx),
                         rep,
                         _harness_hash(),
@@ -860,7 +890,9 @@ def stage_speed(ctx: Ctx) -> StageResult:
         tol = float(cfg["speed_tol_pct"])
         base = [arm_rep("base", i) for i in range(reps)]
         cand = [arm_rep("cand", i) for i in range(reps)]
-        sp = analyze.speed_compare(base, cand, tol)
+        sp = analyze.speed_compare(
+            base, cand, tol, planned=[(c, k) for c in cfg["ctx"] for k in cfg["kinds"]]
+        )
         numbers = {k: sp[k] for k in ("cells", "reps", "tol_pct")}
         k_extra = int(cfg.get("speed_confirm_reps", 2))
         if sp["regressions"] and not sp["missing"] and k_extra > 0:
@@ -878,7 +910,9 @@ def stage_speed(ctx: Ctx) -> StageResult:
                 res = allres
                 base = [arm_rep("base", i) for i in range(reps + k_extra)]
                 cand = [arm_rep("cand", i) for i in range(reps + k_extra)]
-                cf = analyze.speed_compare(base, cand, tol, robust=True, only=sus)
+                cf = analyze.speed_compare(
+                    base, cand, tol, robust=True, only=sus, planned=sus
+                )
                 keep = [c for c in sp["cells"] if (c["ctx"], c["kind"]) not in set(sus)]
                 numbers = {
                     "cells": keep + cf["cells"],
@@ -953,7 +987,17 @@ def stage_memory(ctx: Ctx) -> StageResult:
                     stall_min=12 if ctx.big else 4,
                     validate=_memory_valid,
                     quiet=False,
-                    share_key=_sha("memory", ctx.base.key, e, ctx.model, sizes, rep)
+                    share_key=_sha(
+                        "memory",
+                        ctx.base.key,
+                        e,
+                        ctx.model,
+                        checkpoint_identity(ctx.model),
+                        sizes,
+                        rep,
+                        _file_hash(MEMORY_AB),
+                        _runtime_key(ctx, "base"),
+                    )
                     if arm == "base"
                     else "",
                 )

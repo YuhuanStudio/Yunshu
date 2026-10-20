@@ -7,6 +7,7 @@ have no FAIL / CONTENDED, at least one PASS, and the job exited 0.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import time
@@ -21,10 +22,12 @@ from .core import (
     Gpuq,
     InfraError,
     RunDir,
+    checkpoint_identity,
     git,
     now,
     read_jsonl,
     resolve_arm,
+    sha,
     write_json_atomic,
 )
 
@@ -66,6 +69,41 @@ def local_env() -> dict:
             k, v = line.split("=", 1)
             out[k] = v.strip().strip('"')
     return out
+
+
+_ENV_PREFIXES = ("M_", "GATE_", "AGENT_", "MMLU_", "SOAK_")
+_ENV_NAMES = (
+    "M", "FAMILIES", "CLIENT", "PULL_REPO", "MODELS_DIR", "WHEEL", "YENV", "YP",
+    "BA", "BV", "RESULTS", "URL", "GH",
+)  # fmt: skip
+
+
+def stage_fingerprint(
+    name: str, env: dict, commit: str, repo: Path, base: str = ""
+) -> str:
+    """Everything a stage's result depends on besides HEAD: the env the gate reads (job env and
+    process env), the checkpoint identity of every model path it names, the long reference, and
+    the tracked tree's uncommitted changes (the install builds the working tree): the same
+    edits reuse, any other edit reruns."""
+    merged = {
+        k: v
+        for k, v in os.environ.items()
+        if k in _ENV_NAMES or k.startswith(_ENV_PREFIXES)
+    }
+    merged.update(env)
+    merged.pop("OUT", None)
+    models = {}
+    for k, v in merged.items():
+        if k == "M" or k.startswith("M_"):
+            models[k] = checkpoint_identity(v)
+        elif k.endswith("MODELS_DIR") and Path(str(v)).is_dir():
+            models[k] = {
+                d.name: checkpoint_identity(d)
+                for d in sorted(Path(str(v)).iterdir())
+                if d.is_dir()
+            }
+    dirty = git("diff", "HEAD", cwd=repo)
+    return sha(name, commit, merged, models, base, dirty, n=16)
 
 
 def judge_rows(rows: list, prefix: str) -> tuple[bool, list]:
@@ -190,7 +228,7 @@ def run_gate(
     commit = git("rev-parse", "HEAD", cwd=repo)
     if git("status", "--porcelain", "--untracked-files=no", cwd=repo):
         log(
-            "warning: tracked changes in the tree; the gate record is keyed by HEAD only"
+            "warning: tracked changes in the tree; stages will not reuse earlier results"
         )
     rd = RunDir((runs or RUNS) / f"gate-{commit[:12]}")
     env = dict(local_env())
@@ -204,8 +242,21 @@ def run_gate(
         prior = [r for r in rd.rows(name) if r.get("ev") == "stage_complete"]
         marker_ok = marker.exists() and marker.read_text().strip() == commit
         # the tools under $GATE_ROOT must still be this commit's install, else a pass is stale
-        fresh = marker_ok or (name != "install" and "install" not in stages)
-        if resume and prior and prior[-1].get("passed") and fresh:
+        # (also for partial-stage runs; the long suite builds its own arms and needs no install)
+        fresh = marker_ok or name == "long"
+        base_ref = ""
+        if name == "long":
+            base_ref = env.get("GATE_LONG_BASE") or long_base(repo)
+            with contextlib.suppress(InfraError):
+                base_ref += "@" + git("rev-parse", base_ref + "^{commit}", cwd=repo)
+        fp = stage_fingerprint(name, env, commit, repo, base_ref)
+        if (
+            resume
+            and prior
+            and prior[-1].get("passed")
+            and fresh
+            and prior[-1].get("fp") == fp
+        ):
             log(
                 f"gate {name}: passed earlier on {commit[:12]} (job {prior[-1].get('job')}), skipped"
             )
@@ -247,6 +298,7 @@ def run_gate(
                     "passed": ok,
                     "reasons": reasons,
                     "job": where,
+                    "fp": fp,
                 },
             )
             results.append(
@@ -307,7 +359,14 @@ def run_gate(
                 ok = False
                 reasons.append(f"job {jid} {job.state} rc={job.rc}")
         rd.append(
-            name, {"ev": "stage_complete", "passed": ok, "reasons": reasons, "job": jid}
+            name,
+            {
+                "ev": "stage_complete",
+                "passed": ok,
+                "reasons": reasons,
+                "job": jid,
+                "fp": fp,
+            },
         )
         if ok and name == "install":
             marker.parent.mkdir(parents=True, exist_ok=True)
