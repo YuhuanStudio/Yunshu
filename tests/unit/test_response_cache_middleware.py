@@ -31,19 +31,19 @@ class _App:
         self.state.response_cache = cache
 
 
-def _scope(app, body: bytes):
+def _scope(app, body: bytes, path: str = "/v1/chat/completions"):
     return {
         "type": "http",
         "method": "POST",
-        "path": "/v1/chat/completions",
-        "raw_path": b"/v1/chat/completions",
+        "path": path,
+        "raw_path": path.encode(),
         "query_string": b"",
         "headers": [(b"content-type", b"application/json")],
         "app": app,
     }
 
 
-async def _call(mw, app, body: bytes, receive=None):
+async def _call(mw, app, body: bytes, receive=None, path="/v1/chat/completions"):
     sent = []
 
     async def default_receive():
@@ -52,7 +52,7 @@ async def _call(mw, app, body: bytes, receive=None):
     async def send(msg):
         sent.append(msg)
 
-    await mw(_scope(app, body), receive or default_receive, send)
+    await mw(_scope(app, body, path), receive or default_receive, send)
     return sent
 
 
@@ -134,3 +134,27 @@ def test_replayed_body_not_repeated_and_disconnect_preserved():
     asyncio.run(_call(mw, app, BODY, receive))
     assert reads[0]["body"] == BODY
     assert reads[1]["type"] == "http.disconnect"
+
+
+def test_chat_and_completions_never_share_an_entry():
+    # One body valid for both endpoints (each ignores the other's field).
+    body = json.dumps(
+        {
+            "model": "m",
+            "messages": [{"role": "user", "content": "Say A"}],
+            "prompt": "Say B",
+            "temperature": 0,
+        }
+    ).encode()
+    calls: list = []
+    app = _App(FakeCache())
+    mw = ResponseCacheMiddleware(_downstream(calls))
+
+    async def run():
+        await _call(mw, app, body, path="/v1/chat/completions")
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        await _call(mw, app, body, path="/v1/completions")
+        assert len(calls) == 2
+
+    asyncio.run(run())

@@ -90,8 +90,12 @@ class ResponseCacheMiddleware:
             # part of the key so an unload / reload / swap never serves old output.
             from yunshu_gateway.engine import engine_generation
 
+            # The endpoint too: one body can be valid for both Chat and Completions
+            # (each ignores the other's fields) and they return different shapes.
             cache_key = hashlib.sha256(
                 _auth.encode("utf-8")
+                + b"\x00"
+                + request.url.path.encode("utf-8")
                 + b"\x00"
                 + str(engine_generation()).encode("utf-8")
                 + b"\x00"
