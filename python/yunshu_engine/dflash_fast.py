@@ -684,6 +684,11 @@ def rounds(
                         tv.PROFILE["search_disp"] = (
                             tv.PROFILE.get("search_disp", 0.0) + gpu_window.stage_end()
                         )
+                    else:
+                        # Start the drafter (and the last round's lazy commit) on the GPU
+                        # now: it runs while this thread builds the ~1750-dispatch verify
+                        # graph, instead of the GPU idling until that graph is evaluated.
+                        mx.async_eval(tokens, parents)
                     if graft_enabled:
                         graft_room = min(copy_rows - 1 - n, room - 1 - n)
                         proposal = copy.lookup(n + graft_room) if graft_room > 0 else []
