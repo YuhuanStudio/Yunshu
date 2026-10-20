@@ -38,6 +38,17 @@ def main():
     ap.add_argument("--output", type=Path, required=True)
     ap.add_argument("--compile-conv", action="store_true")
     ap.add_argument("--bits", type=int, choices=[4, 6, 8], default=8)
+    ap.add_argument(
+        "--positions",
+        type=int,
+        default=7,
+        help="masked draft positions (fast tree: 15)",
+    )
+    ap.add_argument(
+        "--lane",
+        action="store_true",
+        help="time the fast tree's private drafter view (LaneLinear projections, compiled layers)",
+    )
     a = ap.parse_args()
     if refuse_contended(a.output):
         return
@@ -65,9 +76,15 @@ def main():
     validate_drafter_compatibility(model, drafter, kind)
     converted = dflash_tree.quantize_drafter(drafter, a.bits)
     dflash_context.install(lm)
+    if a.lane:
+        from yunshu_engine import dflash_fast
+
+        private = dflash_fast.prepare(drafter)
     cache = drafter.reset(model)
+    if a.lane:
+        drafter = private.view_of(drafter)
     cfg = drafter.config
-    positions = 7
+    positions = a.positions
     d = len(cfg.target_layer_ids) * cfg.hidden_size
     mx.random.seed(0)
     context_rows = max(1, int(cfg.sliding_window or 257) - 1)
@@ -133,6 +150,8 @@ def main():
 
     row = {
         "bits": a.bits,
+        "positions": positions,
+        "lane": a.lane,
         "converted": converted,
         "hidden_rows": a.hidden_rows,
         "context_rows": context_rows,
