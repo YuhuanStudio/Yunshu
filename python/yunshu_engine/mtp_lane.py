@@ -262,10 +262,13 @@ def rounds(
         copy.extend([b])
 
     def plan_copy(done: int) -> list[int]:
-        """Copy draft for the next round (``[]``: the model drafts)."""
+        """Copy draft for the next round (``[]``: the model drafts). The first visible
+        token waits for the first round, so it stays within one 16-row block."""
         if copy is None:
             return []
         cap = min(max_tokens - done, copy.max_draft)
+        if done == 1:
+            cap = min(cap, 15)
         return copy.draft(cap) if cap >= 2 else []
 
     from . import tree_verify as tv
@@ -280,6 +283,7 @@ def rounds(
         and tv.lane_ready(lm, prompt_cache)
     )
     graft_budget = GraftBudget()
+    graft_stats = dict(rounds=0, rows=0, accepted=0, copy_rounds=0, wide=0)
     if graft_ready:
         logger.info("MTP same-round suffix-copy graft: max %d verify rows", copy_rows)
     next_copy = plan_copy(emitted)
@@ -303,12 +307,19 @@ def rounds(
         if len(forced) < 2:
             forced = []
         graft_copy: list[int] = []
-        if graft_ready and copy is not None:
+        # As in the DFlash fast tree: a copy round, when the copier proposes one, goes
+        # first; a graft hedges the model block with a match, within one 16-row block
+        # unless the match is confident (rows 17+ take a second projection block, about
+        # +14 ms at 32K); never on the round the first visible token waits for.
+        if graft_ready and copy is not None and not next_copy and emitted > 1:
             model_rows = min(block_total, max_tokens - emitted + 1)
             prefix = model_rows - 1
             proposal = copy.lookup(min(copy_rows - model_rows, max_tokens - emitted))
             if copy.last_match >= copy.cfg.min_match:
-                extra = graft_budget.choose(len(proposal) - prefix)
+                room = len(proposal) - prefix
+                if copy.last_match < copy.cfg.confident_match:
+                    room = min(room, 16 - model_rows)
+                extra = graft_budget.choose(room)
                 if extra:
                     graft_copy = proposal[: prefix + extra]
         is_copy = bool(next_copy) and not graft_copy
@@ -455,6 +466,13 @@ def rounds(
             t = mark("walk", t)
             # The next chain is queued before the rollback is built.
             if copy is not None:
+                if graft_copy:
+                    graft_stats["rounds"] += 1
+                    graft_stats["rows"] += len(graft_copy) + 1
+                    graft_stats["accepted"] += int(verify.copy_accepted)
+                    graft_stats["wide"] += len(graft_copy) + 1 > 16
+                elif is_copy:
+                    graft_stats["copy_rounds"] += 1
                 if is_copy or graft_copy:
                     copy.observe_copy(
                         len(graft_copy) if graft_copy else bs - 1,
@@ -513,6 +531,16 @@ def rounds(
         b = new_tokens[-1] if new_tokens else b
         if emitted % 256 == 0:
             mx.clear_cache()
+    if graft_ready:
+        logger.info(
+            "MTP suffix graft engagement: graft_rounds=%d rows=%d copy_accepted=%d "
+            "wide_rounds=%d copy_rounds=%d",
+            graft_stats["rounds"],
+            graft_stats["rows"],
+            graft_stats["accepted"],
+            graft_stats["wide"],
+            graft_stats["copy_rounds"],
+        )
 
 
 def _request_needs_chain() -> bool:
