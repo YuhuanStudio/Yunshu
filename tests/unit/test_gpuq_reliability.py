@@ -791,3 +791,20 @@ def test_backlog_job_still_pauses_under_short_work(q, monkeypatch):
     monkeypatch.setattr(pauser, "_signal", lambda sig: None)
     q._priority_step(pauser, q.ServingGate(), now)
     assert not q._read(q.JOBS / "low.json").get("cancel")
+
+
+@pytest.mark.parametrize(
+    "content,expected",
+    [
+        ('{"complete": false}\n', 1),
+        ("run incomplete\n", 1),
+        ('{"complete": "yes"}\n', 1),
+        ('{"complete": true}\n', 0),
+        ('{"kind": "x"}\n{"complete": true, "n": 3}\n', 0),
+    ],
+)
+def test_expect_complete_requires_structured_true(q, content, expected):
+    path = q.ROOT / "result"
+    path.write_text(content)
+    job(q, "result", outputs=[str(path)], expect_complete=True)
+    assert q.wait(["result"], max_seconds=0) == expected
