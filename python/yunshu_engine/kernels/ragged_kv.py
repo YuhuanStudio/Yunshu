@@ -497,7 +497,11 @@ def dense_lane_attention(queries: mx.array, cache: Any, scale: float):
     # tile: every token x head of the KV head per pass over the keys (verify
     # reads K/V once); the key-parallel fallback (no tensor ops) keeps the
     # same per-token bits for any T but reads K/V once per token.
-    tile = queries.shape[1] // keys.shape[1] <= 8 and tile_ready()
+    tile = (
+        keys.shape[-1] == 256
+        and queries.shape[1] // keys.shape[1] <= 8
+        and tile_ready()
+    )
     if tile and keys.shape[2] % 64:
         # The tile kernel walks keys in 64-key windows at absolute positions,
         # but pulls the last window back inside a buffer whose capacity is not

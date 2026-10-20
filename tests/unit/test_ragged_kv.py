@@ -721,3 +721,24 @@ def test_set_format_validates_and_scopes():
     assert ragged_kv._STATE["format"] is None
     with pytest.raises(ValueError):
         ragged_kv.set_format("fp8")
+
+
+def test_dense_lane_head_dim_128_takes_the_per_head_kernel():
+    """The tile kernel is D=256 only; another head size must not select it (it would raise)."""
+    from mlx_vlm.models.cache import KVCache
+
+    from yunshu_engine.kernels.ragged_kv import dense_lane_attention, set_dense_lane
+
+    d = 128
+    mx.random.seed(91)
+    k = mx.random.normal((1, HKV, 256, d)).astype(mx.bfloat16)
+    c = KVCache()
+    c.update_and_fetch(k, k)
+    q = mx.random.normal((1, H, 1, d)).astype(mx.bfloat16)
+    c.update_and_fetch(k[:, :, :1], k[:, :, :1])
+    set_dense_lane(True)
+    try:
+        out = dense_lane_attention(q, c, d**-0.5)
+    finally:
+        set_dense_lane(False)
+    assert out is not None and out.shape == q.shape
