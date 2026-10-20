@@ -760,6 +760,8 @@ def build_model_card(
         id=mid,
         display_name=_display_name(mid),
         created=created or int(mtime) or int(time.time()),
+        # replace() is shallow: runtime facts applied below must not reach the cache
+        prefix_cache=dict(base.prefix_cache),
     )
     card.state = {
         "loaded": loaded,
