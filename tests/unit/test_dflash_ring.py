@@ -125,3 +125,29 @@ def test_lattice_runs_outside_profiling_and_from_the_ring():
     )
     mx.eval(lat2.cands)
     assert lat2.cands.shape == lat.cands.shape
+
+
+def test_a_tight_ring_drafts_as_a_roomy_one_after_the_window_drops_rows():
+    # the served ring has keep + 64 slots: the first append fills the window at once and
+    # later appends overwrite only rows the window has already dropped. (The ring keeps the
+    # last ``keep`` rows; the vendor's rotating cache keeps keep - 1 older rows plus the
+    # round's own, one row apart at keep = 2047; drafts only propose.)
+    window = 25
+    d = _drafter(window=window)
+    keep = window - 1
+    rounds = _rounds(16, [3, 16, 5, 9, 16, 2, 7], first=keep)
+    roomy = _ring_rounds(d, rounds, 15, cap=2 * keep + 64)
+    tight = _ring_rounds(d, rounds, 15, cap=keep + 16)
+    for r, t in zip(roomy, tight, strict=True):
+        assert mx.array_equal(r, t)
+
+
+def test_only_the_first_append_may_fill_past_the_window():
+    keep = 12
+    d = _drafter(window=keep + 1)
+    ring = dflash_ring.Ring(d, keep + 16, keep)
+    ring.append(
+        d, mx.zeros((1, keep + 16, D_TARGET), dtype=mx.bfloat16), mx.array([keep])
+    )
+    with pytest.raises(ValueError):
+        ring.append(d, mx.zeros((1, 17, D_TARGET), dtype=mx.bfloat16), mx.array([1]))

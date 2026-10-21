@@ -39,12 +39,14 @@ class Ring:
         ]
         self.slot_pos = mx.full((self.cap,), INVALID, dtype=mx.int32)
         self.pos = mx.zeros((1,), dtype=mx.int32)  # context rows appended so far
+        self.empty = True  # the first append may fill every slot: no live row to keep
 
     def append(self, drafter: Any, target_hidden: mx.array, count: mx.array) -> None:
         """Append the first ``count`` of ``target_hidden``'s rows ([1, W, D]) as context."""
         width = int(target_hidden.shape[1])
-        if width > self.cap - self.keep:
+        if width > (self.cap if self.empty else self.cap - self.keep):
             raise ValueError(f"{width} rows do not fit beside a {self.keep}-row window")
+        self.empty = False
         h_ctx = drafter.hidden_norm(drafter.fc(target_hidden))
         offsets = mx.arange(width, dtype=mx.int32)
         absolute = self.pos + offsets
@@ -97,7 +99,7 @@ def _attend(attn: Any, x: mx.array, keys: mx.array, values: mx.array, rope, pos,
     return attn.o_proj(o.transpose(0, 2, 1, 3).reshape(b, n, -1))
 
 
-def draft_hidden(drafter: Any, ring: Ring, bonus: mx.array, positions: int) -> mx.array:
+def draft_hidden(drafter: Any, ring: Ring, bonus: mx.array, positions: int) -> Any:
     """The proposal rows' hidden states ([1, positions, H]) after ``bonus`` ([1] token)."""
     cfg = drafter.config
     masks = mx.full((positions,), int(cfg.mask_token_id), dtype=mx.int32)

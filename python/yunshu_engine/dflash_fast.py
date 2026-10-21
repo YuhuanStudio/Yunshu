@@ -616,7 +616,10 @@ def rounds(
         from . import dflash_ring
         from .dflash_plan import walk_gpu
 
-        ring = dflash_ring.Ring(fast_draft, 2 * keep + 64, keep)
+        # the proposal rows read every slot: a round's widest append (the 32-row window
+        # or a 33-row path) beside the window, not more (2 * keep + 64 cost +1.2 ms GPU
+        # per round, tf110 1021r2)
+        ring = dflash_ring.Ring(fast_draft, keep + 64, keep)
         rows = int(hidden.shape[1])
         if rows > keep:  # the vendor crop: positions still count the dropped rows
             ring.pos = mx.array([rows - keep], dtype=mx.int32)
