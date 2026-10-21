@@ -76,7 +76,9 @@ def test_invariance_dispatches_fast_shapes(monkeypatch):
 
     args = SimpleNamespace(rows=[8], shapes=["chain", "heap"], fast=True, context=40)
     assert probe.invariance(args, model, list(range(100)))
-    assert len(shapes) == 2
+    # the fast_chain check (FastShape chain against one-row decodes), then the chain and heap trees
+    assert len(shapes) == 3
+    assert shapes[0].is_chain
     assert all(getattr(shape, "fast_glue", False) for shape in shapes)
 
 

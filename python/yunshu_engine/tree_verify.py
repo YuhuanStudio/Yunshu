@@ -52,9 +52,11 @@ NARROW_ROWS = (
     8  # without lane projections only the sg8 / packed kernels' window is row-invariant
 )
 # The fast tree's windows (FastShape, fast_glue). Its GDN kernels read gates past 32 rows,
-# but a 33-48 row chain at 2K is not bit-equal to decode on any row (2026-10-21,
-# probe_wide_verify --mode invariance, job 1021-110307) and costs 90-100 ms at 32K against
-# 71 ms at 32 rows, so the limit stays 32 until that is found.
+# and a FastShape chain of 33-64 rows at 2K is bit-equal to one-row decode on every row
+# (2026-10-22, probe_wide_verify --fast fast_chain, job 1022-030549; the earlier mismatch was
+# the MTP chain verify, another path). It costs 90-100 ms at 32K against 71 ms at 32 rows
+# (a third 16-row projection block), which a 48-row copy round does not earn back on the
+# 32K code trace (~1.4%), so the limit stays 32.
 FAST_MAX_ROWS = 32
 FUSED_ROWS = FAST_MAX_ROWS  # fast-tree windows up to this width take the fused attention (one shared-prefix launch)
 CK = ra.CHUNK
