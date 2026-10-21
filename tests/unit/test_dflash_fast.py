@@ -554,16 +554,14 @@ def test_graft_width_keeps_default_fast_dflash_route(monkeypatch, admission):
     assert fast.eligible(None, None, [], admission)
 
 
-@pytest.mark.parametrize("stop_early", [False, True])
-def test_round_tokens_reach_the_consumer_after_the_next_verify_is_submitted(
-    monkeypatch, stop_early
-):
-    # The consumer's host time overlaps the next round's verify; a consumer that stops
-    # while a window is in flight drops that window (it is never committed).
-    from yunshu_engine import dflash_plan, spec_schedule
+def _fake_rounds(monkeypatch, nodes):
+    """rounds() on fakes: ``nodes`` lists the node count chosen for each round (0 = plain row,
+    >0 = model tree). Returns the event log and a factory for the round iterator."""
+    from yunshu_engine import dflash_plan, dflash_tree, spec_schedule
     from yunshu_engine.kernels import lane_linear
 
     events = []
+    chosen = iter(nodes)
     monkeypatch.setattr(fast, "prepare", lambda *_: SimpleNamespace())
     monkeypatch.setattr(mtp_lane, "copy_rows_for_model", lambda *_: 0)
     monkeypatch.setitem(mtp_lane._STATE, "context", [1] * 1034)
@@ -577,7 +575,7 @@ def test_round_tokens_reach_the_consumer_after_the_next_verify_is_submitted(
             pass
 
         def choose(self, _room):
-            return 0
+            return next(chosen)
 
         def _median(self, v):
             return 0
@@ -599,9 +597,24 @@ def test_round_tokens_reach_the_consumer_after_the_next_verify_is_submitted(
         lambda *_args, **_kw: SimpleNamespace(width=1, original_ranks=None),
     )
 
+    def lattice(*_a, **_k):
+        events.append("draft")
+
+    monkeypatch.setattr(dflash_tree, "compute_lattice_gpu", lattice)
+    monkeypatch.setattr(
+        dflash_plan,
+        "search_tree",
+        lambda _l, n: (np.arange(n, dtype=np.int32), np.arange(-1, n, dtype=np.int32)),
+    )
+    monkeypatch.setattr(dflash_plan, "reorder", lambda t, p: (t, p, None))
+    monkeypatch.setattr(dflash_tree, "walk", lambda *_: [0])
+    monkeypatch.setattr(dflash_tree, "PRIOR", None, raising=False)
+
     def forward(*args, **kwargs):
         events.append("verify")
-        return SimpleNamespace(hidden=np.ones((1, 1, 1)), captured=[np.ones((1, 1, 1))])
+        return SimpleNamespace(
+            hidden=np.ones((1, 1, 1)), captured=[np.ones((1, 1, 1))], n0=0
+        )
 
     monkeypatch.setattr(tv, "tree_forward", forward)
     monkeypatch.setattr(tv, "tree_commit", lambda *a: events.append("commit"))
@@ -613,9 +626,31 @@ def test_round_tokens_reach_the_consumer_after_the_next_verify_is_submitted(
     draft = SimpleNamespace(
         config=SimpleNamespace(target_layer_ids=[0]), reset=lambda *_: []
     )
-    iterator = fast.rounds(
-        model, draft, [], np.ones((1, 1, 1)), first_bonus=11, max_tokens=4, sampler=None
-    )
+
+    def start(max_tokens):
+        return fast.rounds(
+            model,
+            draft,
+            [],
+            np.ones((1, 1, 1)),
+            first_bonus=11,
+            max_tokens=max_tokens,
+            sampler=None,
+        )
+
+    return events, start
+
+
+@pytest.mark.parametrize("stop_early", [False, True])
+def test_round_tokens_reach_the_consumer_after_the_next_verify_is_submitted(
+    monkeypatch, stop_early
+):
+    # The consumer's host time overlaps the next round's verify; a consumer that stops
+    # while a window is in flight drops that window (it is never committed).
+    from yunshu_engine.kernels import lane_linear
+
+    events, start = _fake_rounds(monkeypatch, [0, 0, 0])
+    iterator = start(4)
     assert next(iterator) == (20, None)
     assert events == ["verify", "commit", "verify"]
     assert (
@@ -628,3 +663,18 @@ def test_round_tokens_reach_the_consumer_after_the_next_verify_is_submitted(
         assert list(iterator) == [(21, None), (22, None)]
         assert events == ["verify", "commit"] * 3
     assert not lane_linear.sum_reuse_enabled()
+
+
+def test_commit_follows_the_next_draft_and_precedes_its_verify(monkeypatch):
+    events, start = _fake_rounds(monkeypatch, [0, 2, 2])
+    assert list(start(4)) == [(20, None), (21, None), (22, None)]
+    assert events == [
+        "verify",
+        "draft",
+        "commit",
+        "verify",
+        "draft",
+        "commit",
+        "verify",
+        "commit",  # the last round, before the loop ends
+    ]

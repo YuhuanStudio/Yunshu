@@ -609,14 +609,39 @@ def rounds(
         held.clear()
         prof["yield"] = prof.get("yield", 0.0) + (time.perf_counter() - t_yield) * 1000
 
+    # A round's cache commit is built after the next round's draft is dispatched: the drafter
+    # reads only its own cache and the captured hidden rows, so its GPU work covers the host
+    # time of building the commit. The commit is in the graph before the next verify reads
+    # the cache, and before any exit.
+    pending: list = []
+
+    def commit_pending():
+        if pending:
+            result, path = pending.pop()
+            t_c = time.perf_counter()
+            tv.tree_commit(lm, cache, result, path)
+            mx.async_eval([c.state for c in cache if hasattr(c, "state")])
+            gpu_window.mark("commit_sent")
+            if emitted > 1:
+                prof["m_tree_commit"] = (
+                    prof.get("m_tree_commit", 0.0) + (time.perf_counter() - t_c) * 1000
+                )
+
+    def committed_length():
+        if pending:
+            result, path = pending[0]
+            return result.n0 + len(path)
+        return context_length(lm, cache)
+
     try:
         while emitted < max_tokens:
-            current = context_length(lm, cache) + 1 if _chain is not None else 0
+            current = committed_length() + 1 if _chain is not None else 0
             if _chain is not None and (
                 not live_eligible(current) or emitted >= GENERATED_LIMIT
             ):
                 from .dflash_copy import resume_chain
 
+                commit_pending()
                 yield from release()
                 for entry in draft_cache:
                     entry.offset += skipped
@@ -702,15 +727,17 @@ def rounds(
                         mx.eval(
                             tokens, parents
                         )  # drafter GPU time lands in the draft stage
+                        commit_pending()
                         tv.PROFILE["search_disp"] = (
                             tv.PROFILE.get("search_disp", 0.0) + gpu_window.stage_end()
                         )
                     else:
-                        # Start the drafter (and the last round's lazy commit) on the GPU
-                        # now: it runs while this thread builds the ~1750-dispatch verify
-                        # graph, instead of the GPU idling until that graph is evaluated.
+                        # Start the drafter on the GPU now: it runs while this thread builds
+                        # the last round's commit and the ~1750-dispatch verify graph,
+                        # instead of the GPU idling until that graph is evaluated.
                         mx.async_eval(tokens, parents)
                         gpu_window.mark("draft_sent")
+                        commit_pending()
                     if graft_enabled:
                         graft_room = min(copy_rows - 1 - n, room - 1 - n)
                         proposal = copy.lookup(n + graft_room) if graft_room > 0 else []
@@ -740,6 +767,7 @@ def rounds(
                     window = mx.array([[bonus]], dtype=token_dtype)
                 if first_round(emitted):
                     graft_stats["first_rows"] = int(window.size)
+                commit_pending()  # copy, guided and plain rounds: no drafter to cover it
                 t_drafted = time.perf_counter()
                 result = tv.tree_forward(
                     lm, window, shape, cache, target_ids, verifier=verifier
@@ -796,7 +824,7 @@ def rounds(
                         draft, len(path) - 1, n + graft_rows, parents=parent_ids
                     )
                 t_m1 = time.perf_counter()
-                tv.tree_commit(lm, cache, result, path)
+                pending.append((result, path))
                 t_m2 = time.perf_counter()
                 captured = mx.concatenate(result.captured, axis=-1)[
                     :, mx.array(path, dtype=mx.int32)
@@ -853,7 +881,6 @@ def rounds(
                     prof["commit"] += (t_done - t_verified) * 1000
                     for key, a_, b_ in (
                         ("m_walk_record", t_verified, t_m1),
-                        ("m_tree_commit", t_m1, t_m2),
                         ("m_hidden", t_m2, t_m3),
                         ("m_copy_landed", t_m3, t_done),
                     ):
@@ -871,12 +898,10 @@ def rounds(
                     draft_vocab.learn(new_tokens)
             finally:
                 lane_linear.set_sum_reuse(previous_sums)
-            # start the commit and the next context on the GPU before the consumer runs
             mx.async_eval(
-                hidden,
-                [c.state for c in cache if hasattr(c, "state")],
-            )
-            gpu_window.mark("commit_sent")
+                hidden
+            )  # the next draft's input, gathered while the host moves on
+            gpu_window.mark("round_done")
             new_tokens = new_tokens[: max_tokens - emitted]
             if copy is not None:
                 copy.extend(new_tokens)
@@ -887,8 +912,17 @@ def rounds(
                 )
             held.extend(new_tokens)
             emitted += len(new_tokens)
+        commit_pending()
         yield from release()
     finally:
+        # a failure between a round and the next draft: keep the decided tokens
+        if pending:
+            try:
+                commit_pending()
+            except Exception:  # noqa: BLE001
+                logger.exception(
+                    "DFlash: committing the last round after a failure failed"
+                )
         logger.info(
             "DFlash suffix graft engagement: copy_rounds=%d proposed=%d accepted=%d extra_accepted=%d matches=%d verify_rows=%d round_ms=%.3f first_round_rows=%d",
             graft_stats["rounds"],
