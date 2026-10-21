@@ -156,3 +156,41 @@ def test_unmeasured_generation_cannot_enable(monkeypatch, architecture):
     )
     assert not nax_prefill.enable()
     assert not nax_prefill.enabled()
+
+
+@pytest.mark.parametrize("rows", [513, 534, 535, 536, 600, 1023, 2047])
+@pytest.mark.parametrize("entry", ["call", "prefill"])
+def test_short_tail_native_route_skips_untile(monkeypatch, rows, entry):
+    import mlx.core as mx
+
+    from yunshu_engine.kernels import lane_linear
+
+    layer = lane_linear.LaneLinear(
+        mx.zeros((256, 8), dtype=mx.uint32),
+        mx.zeros((256, 1), dtype=mx.bfloat16),
+        mx.zeros((256, 1), dtype=mx.bfloat16),
+        4,
+        64,
+    )
+    monkeypatch.setattr(lane_linear, "STOCK_ROWS", 512)
+    monkeypatch.setattr(nax_prefill, "_enabled", True)
+    monkeypatch.setattr(
+        layer, "stock", lambda: pytest.fail("short tail must not untile")
+    )
+    calls = []
+
+    def native(x, weight, sbt, *, bits):
+        calls.append(x.shape[0])
+        return mx.zeros((x.shape[0], 256), dtype=mx.bfloat16)
+
+    monkeypatch.setattr(nax_prefill, "matmul", native)
+    x = mx.zeros((1, rows, 64), dtype=mx.bfloat16)
+    got = layer(x) if entry == "call" else layer.prefill([x])[0]
+    assert got.shape == (1, rows, 256)
+    assert calls == [((rows + 127) // 128) * 128]
+
+
+@pytest.mark.parametrize("rows", [1, 128, 512, 2049, 8193])
+def test_tail_guard_keeps_lane_rows_and_unqualified_large_tails(monkeypatch, rows):
+    monkeypatch.setattr(nax_prefill, "_enabled", True)
+    assert not nax_prefill.tail_eligible(rows, 5120, 17408, 4, 64, True)
