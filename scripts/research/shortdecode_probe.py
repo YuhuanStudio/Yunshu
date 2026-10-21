@@ -148,6 +148,8 @@ def main(argv=None):
         )
     # Reserve only the documented pool, fail before loading weights if occupied.
     with socket.socket() as sock:
+        # TIME_WAIT from the previous arm's connections must not block the check.
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         sock.bind(("127.0.0.1", port))
     a = bench.parse_args(
         [
