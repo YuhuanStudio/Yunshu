@@ -16,11 +16,12 @@ def _load():
 def test_gate_dataset_overrides_the_tree_copy(monkeypatch, tmp_path):
     data = tmp_path / "mmlu_pro_test.jsonl"
     monkeypatch.setenv("MMLU_DATA", str(data))
-    assert _load().DATASET == data
+    assert data == _load().DATASET
 
 
 def test_default_is_the_tree_reference_copy(monkeypatch):
     monkeypatch.delenv("MMLU_DATA", raising=False)
-    assert _load().DATASET == SCRIPT.parents[2] / (
-        "reference/omlx/omlx/eval/data/mmlu_pro_test.jsonl"
+    assert (
+        SCRIPT.parents[2] / ("reference/omlx/omlx/eval/data/mmlu_pro_test.jsonl")
+        == _load().DATASET
     )
