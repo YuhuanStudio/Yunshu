@@ -19,6 +19,7 @@ def test_only_server_launch_is_wrapped():
     ]
     assert module.server_command(["lsof", "-t"]) == ["lsof", "-t"]
     assert module.server_command([]) == []
+    assert module.server_command(command, "--serve-tail")[2] == "--serve-tail"
 
 
 def test_padding_preserves_aligned_lengths_and_covers_tail():

@@ -12,9 +12,9 @@ import time
 from pathlib import Path
 
 
-def server_command(command):
+def server_command(command, mode="--serve"):
     if command and Path(command[0]).name == "yunshu":
-        return [sys.executable, str(Path(__file__).resolve()), "--serve", *command[1:]]
+        return [sys.executable, str(Path(__file__).resolve()), mode, *command[1:]]
     return command
 
 
@@ -138,9 +138,24 @@ def install_profile():
 
 
 def main():
-    if sys.argv[1:2] == ["--serve"]:
-        sys.argv.pop(1)
-        install_profile()
+    if sys.argv[1:2] in (["--serve"], ["--serve-tail"]):
+        mode = sys.argv.pop(1)
+        if mode == "--serve":
+            install_profile()
+        else:
+            from yunshu_engine.kernels import nax_prefill
+
+            original = nax_prefill.tail_matmul
+            seen = set()
+
+            def tail(x, weight, sbt, *, bits):
+                rows = x.shape[0]
+                if 512 < rows < 640 and rows not in seen:
+                    seen.add(rows)
+                    print("TURN2TAIL " + json.dumps(dict(rows=rows)), flush=True)
+                return original(x, weight, sbt, bits=bits)
+
+            nax_prefill.tail_matmul = tail
         from yunshu_cli import main as cli
 
         cli()

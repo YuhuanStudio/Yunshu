@@ -85,9 +85,21 @@ def main():
     ap.add_argument("--turn2-repeat", type=int, default=24)
     ap.add_argument("--compare-spec-off", action="store_true")
     ap.add_argument("--tokens", type=int, default=64)
+    ap.add_argument("--trace-tail", action="store_true")
     ap.add_argument("--env", action="append", default=[])
     ap.add_argument("--out", required=True)
     a = ap.parse_args()
+    if a.trace_tail:
+        import subprocess
+
+        from turn2prefill_profile import server_command
+
+        popen = subprocess.Popen
+
+        def launch(command, *args, **kwargs):
+            return popen(server_command(command, "--serve-tail"), *args, **kwargs)
+
+        subprocess.Popen = launch
     env = dict(kv.split("=", 1) for kv in a.env)
     P = t.load_prompt(f"{a.kind}-{a.ctx}")
     Q = (
@@ -132,7 +144,14 @@ def main():
         finally:
             s.kill()
     ref = res["cold"]
-    out = dict(ctx=a.ctx, kind=a.kind, turn2=a.turn2, env=env)
+    out = dict(
+        ctx=a.ctx,
+        kind=a.kind,
+        turn2=a.turn2,
+        requested_tokens=a.tokens,
+        generated_tokens=len(ref["toks"]),
+        env=env,
+    )
     for k in ("partial", "full", *(["spec_off"] if a.compare_spec_off else [])):
         r = res[k]
         out[k] = dict(
