@@ -547,6 +547,10 @@ class Pauser:
 
 
 AGE_S = float(os.environ.get("GPUQ_AGE_S", 2 * 3600))
+# A pending job at priority >= 0 that has waited STARVE_S rises one step, so a p1 stream
+# (round-robin, short-first, line holding) cannot park a p1 or p0 job for hours (2026-10-21: a p1
+# profile job waited 93 min, a p0 gate 50 min). Env: GPUQ_STARVE_S.
+STARVE_S = float(os.environ.get("GPUQ_STARVE_S", 30 * 60))
 
 
 def _eff_priority(job: dict, now: float | None = None) -> int:
@@ -554,6 +558,11 @@ def _eff_priority(job: dict, now: float | None = None) -> int:
     one (never above 0), so p-1 work is not starved forever by a stream of p0 jobs
     while deep backlog (p-3) stays behind interactive work."""
     p = job.get("priority", 0)
+    if p >= 0 and job.get("state") == "pending":
+        t = now or time.time()
+        if t - job.get("submitted", t) >= STARVE_S:
+            p += 1
+        return min(p, job.get("priority_cap", p))
     if p >= 0 or job.get("state") not in ("pending", "running"):
         return p
     waited = (now or time.time()) - job.get("submitted", now or time.time())

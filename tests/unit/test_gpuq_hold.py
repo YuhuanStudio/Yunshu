@@ -27,7 +27,7 @@ def job(i, wt, **kw):
         "id": i,
         "label": i,
         "state": "pending",
-        "submitted": NOW - 3600,
+        "submitted": NOW - 600,
         "priority": 0,
         "timeout_s": 3600,
         "cwd": f"/x/Yunshu-wt-{wt}",
@@ -44,7 +44,7 @@ def ran(i, wt, start_ago, dur, **kw):
 def test_holder_keeps_lane_while_it_has_long_jobs(gpuq):
     # Round-robin alone would pick line b (it ran longest ago); the holding line a goes on.
     hist = [ran("b0", "b", 120 * MIN, 30 * MIN), ran("a0", "a", 60 * MIN, 59 * MIN)]
-    pending = [job("b1", "b", submitted=NOW - 7200), job("a1", "a", submitted=NOW - 60)]
+    pending = [job("b1", "b", submitted=NOW - 1200), job("a1", "a", submitted=NOW - 60)]
     assert gpuq._pick(hist + pending)["id"] == "a1"
 
 
