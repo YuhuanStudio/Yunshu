@@ -151,3 +151,27 @@ def test_only_the_first_append_may_fill_past_the_window():
     )
     with pytest.raises(ValueError):
         ring.append(d, mx.zeros((1, 17, D_TARGET), dtype=mx.bfloat16), mx.array([1]))
+
+
+@pytest.mark.parametrize("bits", [None, 8])
+def test_fused_context_projection_matches_each_layers_own(bits):
+    # the served drafter is 8-bit: every layer's k_proj / v_proj stacked into one matmul
+    d = _drafter(window=4096)
+    if bits:
+        nn.quantize(
+            d,
+            group_size=32,
+            bits=bits,
+            class_predicate=lambda _, m: (
+                isinstance(m, nn.Linear) and m.weight.shape[-1] % 32 == 0
+            ),
+        )
+    rounds = _rounds(16, [1, 5, 16, 3])
+    fused = _ring_rounds(d, rounds, 15, cap=4096 + 64)
+    assert d._yunshu_ring_kv is not False
+    d._yunshu_ring_kv = False
+    split = _ring_rounds(d, rounds, 15, cap=4096 + 64)
+    for f, s in zip(fused, split, strict=True):
+        err = mx.abs(f.astype(mx.float32) - s.astype(mx.float32)).max().item()
+        scale = mx.abs(s.astype(mx.float32)).max().item()
+        assert err <= 0.02 * scale, (err, scale)

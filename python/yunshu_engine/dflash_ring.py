@@ -18,6 +18,7 @@ from __future__ import annotations
 from typing import Any
 
 import mlx.core as mx
+import mlx.nn as nn
 
 INVALID = -(1 << 30)
 
@@ -48,13 +49,11 @@ class Ring:
             raise ValueError(f"{width} rows do not fit beside a {self.keep}-row window")
         self.empty = False
         h_ctx = drafter.hidden_norm(drafter.fc(target_hidden))
-        offsets = mx.arange(width, dtype=mx.int32)
-        absolute = self.pos + offsets
-        slots = absolute % self.cap
-        valid = offsets < count.reshape(())
+        slots, marks = _slots(self.pos, count, width, self.cap)
+        projected = _context_kv(drafter, h_ctx)
         for i, layer in enumerate(drafter.layers):
             attn = layer.self_attn
-            k, v = attn._project_kv(h_ctx)
+            k, v = projected[i]
             k = attn.k_norm(k.reshape(1, width, attn.n_kv_heads, -1)).transpose(
                 0, 2, 1, 3
             )
@@ -64,16 +63,92 @@ class Ring:
             # overwrites them from its own position
             self.keys[i][:, :, slots, :] = k.astype(mx.bfloat16)
             self.values[i][:, :, slots, :] = v.astype(mx.bfloat16)
-        self.slot_pos[slots] = mx.where(valid, absolute, INVALID)
+        self.slot_pos[slots] = marks
         self.pos = self.pos + count.reshape(1).astype(mx.int32)
 
-    def mask(self, rows: int) -> mx.array:
+    def mask(self, rows: int) -> Any:
         """Additive mask [1, 1, 1, cap + rows]: the last ``keep`` context rows and every
         proposal row (the drafter's attention is not causal)."""
-        live = (self.slot_pos >= self.pos - self.keep) & (self.slot_pos >= 0)
-        ring = mx.where(live, 0.0, -mx.inf).astype(mx.bfloat16)
-        props = mx.zeros((rows,), dtype=mx.bfloat16)
-        return mx.concatenate([ring, props]).reshape(1, 1, 1, -1)
+        return _mask(self.slot_pos, self.pos, self.keep, rows)
+
+
+@mx.compile
+def _slot_math(pos, count, offsets, cap):
+    absolute = pos + offsets
+    return absolute % cap, mx.where(offsets < count.reshape(()), absolute, INVALID)
+
+
+def _slots(pos: mx.array, count: mx.array, width: int, cap: int):
+    """Ring slots of the next ``width`` rows and the absolute position each slot then holds
+    (INVALID past ``count``), fused."""
+    offsets = mx.arange(width, dtype=mx.int32)
+    return _slot_math(
+        pos, count.astype(mx.int32), offsets, mx.array(cap, dtype=mx.int32)
+    )
+
+
+@mx.compile
+def _mask_math(slot_pos, pos, keep, props):
+    live = (slot_pos >= pos - keep) & (slot_pos >= 0)
+    ring = mx.where(live, 0.0, -mx.inf).astype(mx.bfloat16)
+    return mx.concatenate([ring, props]).reshape(1, 1, 1, -1)
+
+
+def _mask(slot_pos: mx.array, pos: mx.array, keep: int, rows: int) -> Any:
+    props = mx.zeros((rows,), dtype=mx.bfloat16)
+    return _mask_math(slot_pos, pos, mx.array(keep, dtype=mx.int32), props)
+
+
+def _context_kv(drafter: Any, h_ctx: mx.array) -> list:
+    """Every layer's context keys and values from one matmul: the layers project the same
+    ``h_ctx`` (the vendor fuses this for float drafters only; the served drafter is 8-bit)."""
+    fused: Any = getattr(drafter, "_yunshu_ring_kv", None)
+    if fused is None:
+        fused = _fuse_context_kv(drafter) or False
+        drafter._yunshu_ring_kv = fused
+    if fused is False:
+        return [layer.self_attn._project_kv(h_ctx) for layer in drafter.layers]
+    weight, scales, biases, cfg, widths = fused
+    if scales is None:
+        out = h_ctx @ weight.T
+    else:
+        out = mx.quantized_matmul(h_ctx, weight, scales, biases, transpose=True, **cfg)
+    bounds, total = [], 0
+    for w in widths[:-1]:
+        total += w
+        bounds.append(total)
+    chunks = mx.split(out, bounds, axis=-1)
+    return list(zip(chunks[::2], chunks[1::2], strict=True))
+
+
+def _fuse_context_kv(drafter: Any):
+    """(weight, scales, biases, quant config, output widths) of every layer's k_proj and
+    v_proj stacked, or None when they are not plain or same-format affine-quantized."""
+    projections = [
+        p
+        for layer in drafter.layers
+        for p in (layer.self_attn.k_proj, layer.self_attn.v_proj)
+    ]
+    if any(getattr(p, "bias", None) is not None for p in projections):
+        return None
+    widths = [int(p.weight.shape[0]) for p in projections]
+    if all(type(p) is nn.Linear for p in projections):
+        weight = mx.concatenate([p.weight for p in projections], axis=0)
+        mx.eval(weight)
+        return weight, None, None, {}, widths
+    if not all(type(p) is nn.QuantizedLinear for p in projections):
+        return None
+    first = projections[0]
+    fmt = (first.group_size, first.bits, getattr(first, "mode", "affine"))
+    if fmt[2] != "affine" or any(
+        (p.group_size, p.bits, getattr(p, "mode", "affine")) != fmt for p in projections
+    ):
+        return None
+    weight = mx.concatenate([p.weight for p in projections], axis=0)
+    scales = mx.concatenate([p.scales for p in projections], axis=0)
+    biases = mx.concatenate([p.biases for p in projections], axis=0)
+    mx.eval(weight, scales, biases)
+    return weight, scales, biases, {"group_size": fmt[0], "bits": fmt[1]}, widths
 
 
 def _attend(attn: Any, x: mx.array, keys: mx.array, values: mx.array, rope, pos, mask):
