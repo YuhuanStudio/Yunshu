@@ -32,7 +32,7 @@ def test_measured_short_request_is_admitted(admission):
     "damage",
     [
         "long",
-        "short",
+        "empty_kv",
         "guide",
         "copy_off",
         "no_context",
@@ -45,8 +45,8 @@ def test_measured_short_request_is_admitted(admission):
 def test_other_requests_keep_the_original_rounds(monkeypatch, admission, damage):
     if damage == "long":
         monkeypatch.setitem(mtp_lane._STATE, "context", [1] * (fast.CONTEXT_LIMIT + 10))
-    elif damage == "short":
-        monkeypatch.setitem(mtp_lane._STATE, "context", [1] * 40)
+    elif damage == "empty_kv":
+        monkeypatch.setattr(fast, "context_length", lambda *_: -1)
     elif damage == "guide":
         monkeypatch.setitem(mtp_lane._STATE, "guide", object())
     elif damage == "copy_off":
@@ -696,3 +696,13 @@ def test_debug_log_traces_every_round(monkeypatch, caplog):
     ]
     assert len(lines) == 3
     assert all("kind=" in line and "accepted=" in line for line in lines)
+
+
+@pytest.mark.parametrize("context", [1, 40, 85, 511, 512])
+def test_subtile_context_uses_fast_tree(monkeypatch, admission, context):
+    # Kapitsa greedy code starts at 85 tokens: the old 512 floor silently used
+    # the chain for the whole request, even after it grew past the threshold.
+    monkeypatch.setitem(mtp_lane._STATE, "context", [1] * context)
+    assert fast.eligible(None, None, [], admission)
+    assert fast.live_eligible(context)
+    assert not fast.live_eligible(0)

@@ -54,7 +54,9 @@ _KERNELS: dict[str, Any] = {}
 # key/value buffer (tree_verify.compact_kv); with that fixed the tree wins at
 # 32K-128K (27B oQ4e + DFlash2, M5, see PERF_TREND). The limits stay as safety
 # bounds only: kernels were bit-checked to 131072 keys; 262144 is the model's.
-CONTEXT_MIN = 512
+# The old 512-token performance cutoff kept short requests on chain for their
+# whole lifetime. Attention tile width does not constrain live-context length.
+CONTEXT_MIN = 1
 CONTEXT_LIMIT = 262144
 GENERATED_LIMIT = 1 << 30
 
