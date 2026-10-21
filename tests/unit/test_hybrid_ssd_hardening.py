@@ -71,8 +71,18 @@ def test_rescan_after_restart_enforces_the_cap(tmp_path):
     assert small.total_bytes <= 2 * one + 1
 
 
-def test_block_store_and_hybrid_share_one_budget(tmp_path):
+def test_block_store_and_hybrid_share_one_budget(tmp_path, monkeypatch):
+    from collections import namedtuple
+
     from yunshu_engine.kv_prefix_cache import KVPrefixCache
+    from yunshu_kv import disk_budget
+
+    # The root budget refuses writes when the real volume is within its free-space
+    # reserve (ci-local on a ~95 GiB-free disk); this test is about the shared cap.
+    usage = namedtuple("usage", "total used free")
+    monkeypatch.setattr(
+        disk_budget, "disk_usage", lambda _p: usage(10**13, 10**12, 9 * 10**12)
+    )
 
     cache = KVPrefixCache.__new__(KVPrefixCache)
     cache._lock = threading.RLock()
