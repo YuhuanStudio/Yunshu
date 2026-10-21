@@ -103,3 +103,25 @@ def test_ring_keeps_only_the_last_window_rows():
     assert ring.pos.item() == total
     live = (ring.mask(3)[0, 0, 0, : ring.cap] == 0).sum().item()
     assert live == keep
+
+
+def test_lattice_runs_outside_profiling_and_from_the_ring():
+    # 33cb10b4 split the lattice tail off and left t0 unset outside profile mode: every
+    # fast-tree round raised UnboundLocalError (no unit test ran the real lattice)
+    from yunshu_engine import dflash_tree as dt
+
+    d = _drafter(window=4096)
+    d.lm_head = d.embed_tokens.as_linear
+    cache = d.make_cache()
+    hidden = mx.random.normal((1, 9, D_TARGET)).astype(mx.bfloat16)
+    lat = dt.compute_lattice_gpu(d, 11, hidden, cache, 15)
+    mx.eval(lat.cands, lat.unary, lat.anchor)
+    assert lat.cands.shape == (15, d.candidate_selector.top_k)
+    ring = dflash_ring.Ring(d, 4096 + 64, 4095)
+    ring.append(d, hidden, mx.array([9], dtype=mx.int32))
+    anchor = mx.array([11], dtype=mx.int32)
+    lat2 = dt.lattice_from_hidden(
+        d, dflash_ring.draft_hidden(d, ring, anchor, 15), anchor
+    )
+    mx.eval(lat2.cands)
+    assert lat2.cands.shape == lat.cands.shape

@@ -102,6 +102,7 @@ def compute_lattice_gpu(
     from . import tree_verify as tv
 
     prof = tv._profile_on()
+    t0 = 0.0
     if prof:
         import time
 
