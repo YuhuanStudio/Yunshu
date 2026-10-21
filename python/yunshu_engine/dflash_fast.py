@@ -604,14 +604,13 @@ def rounds(
         context_length(lm, cache),
     )
     skipped = 0
-    # YUNSHU_DFLASH_RING: the drafter context in GPU-positioned rings (dflash_ring), so the
+    # The drafter context in GPU-positioned rings (dflash_ring), so the
     # next round's draft can be queued behind the verify. Only where the request cannot reach
     # the chain handoff (it takes the vendor draft cache).
     ring = None
     prebuilt = None
     if (
-        settings.get("YUNSHU_DFLASH_RING")
-        and keep is not None
+        keep is not None
         and hidden is not None
         and (context_length(lm, cache) or 0) + max_tokens < CONTEXT_LIMIT
     ):

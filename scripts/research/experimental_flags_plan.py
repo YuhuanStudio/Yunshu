@@ -80,15 +80,6 @@ EVIDENCE = {
         ],
         "Same-tokenizer ordinary target/draft pair is available. CPU preflight validates configs/vocabularies/imports; successful model smoke must precede three alternating traced-parity and uninstrumented-timing repetitions.",
     ),
-    "YUNSHU_DFLASH_RING": (
-        "tf110",
-        "measured_regression_fix_pending",
-        [
-            "tests/unit/test_dflash_ring.py",
-            "/Volumes/P5Plus/yunshu-build/verify/runs/tf110-opsbuf-1021r2",
-        ],
-        "32K cold A/B (0f9a368e, 2 interleaved reps): token-identical; GPU idle per round 2.72 -> 1.80 ms but busy +1.2 ms from a 2 * keep + 64 slot ring, code 179 -> 171 tok/s. 28675ec7 cuts the ring to keep + 64 slots; re-measured in tf110 1021r3.",
-    ),
 }
 
 

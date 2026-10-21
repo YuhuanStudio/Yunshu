@@ -159,8 +159,6 @@ const settingdesc = {
     "Qwen3.5 系列 DFlash 草稿模型的權重位元數：8（預設）、4，或 0 表示保留原出貨的 bf16。草稿由目標模型驗證，因此任何值的輸出 token 都相同；位元數越少，草稿模型每回合讀取的位元組越少，但接受率可能下降。",
   YUNSHU_SPEC_TREE:
     "Qwen3.5 系列單一請求推測解碼通道：`off` 維持訓練好的鏈式加複製；`tree` 強制使用草稿樹驗證器；`auto` 對有界的 1K 級貪婪請求使用已認證的 M5 Q4 DFlash2 快速樹，其餘維持鏈式加複製。貪婪解碼的 token 與一般解碼相同。",
-  YUNSHU_DFLASH_RING:
-    "DFlash 快速樹：drafter 的上下文放在固定寬度、位置由 GPU 持有的環形緩衝區，下一輪草稿排在驗證之後送出，不必等讀回。草稿都會被驗證，輸出 token 不變。實驗性。",
   YUNSHU_NGRAM_DEFAULT:
     "文字模型：預設對貪婪請求啟用無損的 n-gram 推測解碼（也可由單次請求的 `spec_decode` 啟用）。在重複性高的輸出上有優勢。",
   YUNSHU_SPEC_PROPOSER: "文字模型：n-gram 推測解碼所用的提案器類型。",

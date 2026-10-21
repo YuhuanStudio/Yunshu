@@ -216,7 +216,6 @@ _add("YUNSHU_PLE_READ_THREADS", "int", 16, "Qwen3.8-Flash-Next (qwen4_exp) with 
 _add("YUNSHU_DRAFT_BITS", "int", 8, "Qwen3.5-family DFlash drafter weight bits: 8 (default), 4, or 0 to keep the shipped bf16. Drafts are verified by the target, so output is token-identical for every value; fewer bits cut the drafter's bytes per round but can lower acceptance (27B on M5: 4-bit +4% to +8% decode at 1K-8K, -7% on 32K code).", "speculative", minimum=0, stability="stable")
 _add("YUNSHU_GC_POLICY", "enum", "defer", "Python cyclic-collector policy of the VLM runner (a ~110 ms generation-2 pass can land right after a long prefill and delay the first token). Default: defer (27B 32K, yv ttftfloor-gc-defer32: identity 0 mismatches, warm TTFT -2.3%, follow-up -0.6%, decode +0.4%). default: Python's own, the opt-out. freeze: after load, collect once and gc.freeze() the startup heap (vLLM and SGLang do the same). defer: freeze, a 100x higher generation-2 multiplier, and the collector is disabled from request arrival to its first token (bounded: first token, 60 s or 5M net allocations; idle servers still collect). Output is unchanged.", "vlm-runner", choices=("default", "freeze", "defer"), stability="stable")
 _add("YUNSHU_SPEC_TREE", "enum", "auto", "Qwen3.5-family single-request speculative lane: off keeps trained chain + copy; tree forces the draft-tree verifier; auto uses the certified M5 Q4 DFlash2 fast tree for eligible greedy requests within its live-context safety bounds, including long contexts, retaining chain + copy elsewhere. Greedy tokens remain identical to plain decode.", "speculative", choices=("off", "tree", "auto"), stability="stable")
-_add("YUNSHU_DFLASH_RING", "bool", False, "DFlash fast tree: the drafter's context lives in fixed-width rings with GPU-held positions, and the next round's draft is queued behind the verify (accepted path, count and bonus computed on the GPU) instead of after the readback. Drafts are verified, so output is token-identical either way.", "speculative", stability="experimental", decide="yv 32K code/prose identity + speed and the 8K-128K ladder, off vs on: GPU idle per round (gpuwindow) and decode tok/s; on becomes the default only with no regression on any cell", added="2026-10-21")
 _add("YUNSHU_NGRAM_DEFAULT", "bool", False, "Text models: lossless n-gram speculation on greedy requests by default (per-request spec_decode also enables it). Wins on repetitive output.", "speculative")
 _add("YUNSHU_SPEC_PROPOSER", "enum", "ngram", "Text models: speculative proposer family for n-gram speculation.", "speculative", choices=("ngram", "suffix"))
 _add("YUNSHU_GEMMA4_ASSISTANT", "path", None, "Text Gemma-4 models: assistant drafter directory (KV-shared speculative drafter).", "speculative")
@@ -464,7 +463,6 @@ _RELOAD = frozenset(
         "YUNSHU_SPEC_COPY_ROWS",
         "YUNSHU_DRAFT_BITS",
         "YUNSHU_SPEC_TREE",
-        "YUNSHU_DFLASH_RING",
         "YUNSHU_NGRAM_DEFAULT",
         "YUNSHU_SPEC_PROPOSER",
         "YUNSHU_GEMMA4_ASSISTANT",
