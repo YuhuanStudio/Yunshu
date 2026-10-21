@@ -128,6 +128,8 @@ def compute_lattice_gpu(
         dh = drafter.norm(h)[:, 1:]
     else:
         dh = drafter._hidden(inputs, hidden, cache)[:, 1:]
+        # the drafter's layers start on the GPU while the head, selector and search are built
+        mx.async_eval(dh)
     if prof:
         t0 = tv._tick("drafter_layers_ms", dh, t0)
     vocab = getattr(drafter, "_draft_vocab", None)
