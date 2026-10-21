@@ -101,3 +101,45 @@ def test_stride_rehearsal_must_advance_the_completed_prompt_checkpoint():
     assert nt.rehearsal_length(6145, 2048, 1, prompt_tokens=4248) == 6145
     # Exact mode / non-grid models retain the existing contract.
     assert nt.rehearsal_length(4285, 0, 1, prompt_tokens=4248) == 4285
+
+
+def test_arrive_cancels_when_request_hit_covers_rehearsal():
+    import threading
+
+    ev = threading.Event()
+    st = nt.RehearsalState(ev)
+    st.set_ids([1, 2, 3, 4])
+    st.submit()
+    # request already has a 4-token hit: the rehearsal adds nothing, do not wait on it
+    assert st.arrive([1, 2, 3, 4, 5], covered=4) == "cancel"
+    assert ev.is_set()
+    ev2 = threading.Event()
+    st2 = nt.RehearsalState(ev2)
+    st2.set_ids([1, 2, 3, 4])
+    st2.submit()
+    assert st2.arrive([1, 2, 3, 4, 5], covered=2) == "adopt"
+    assert not ev2.is_set()
+
+
+def test_resident_prefix_len_picks_longest_prefix_checkpoint():
+    import threading
+    from types import SimpleNamespace as NS
+
+    from yunshu_engine.apc_manager import YunshuAPCManager
+
+    def e(toks, x=0):
+        return NS(token_ids=tuple(toks), extra_hash=x)
+
+    fake = NS(
+        lock=threading.RLock(),
+        _exact_cache={
+            1: e([1, 2]),
+            2: e([1, 2, 3, 4]),
+            3: e([1, 9, 3]),
+            4: e([1, 2, 3], 7),
+        },
+    )
+    f = YunshuAPCManager.resident_prefix_len
+    assert f(fake, [1, 2, 3, 4, 5]) == 4
+    assert f(fake, [1, 2, 3]) == 2
+    assert f(fake, [9]) == 0

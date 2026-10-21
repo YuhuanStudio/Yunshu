@@ -1517,6 +1517,21 @@ class YunshuAPCManager(APCManager):
                 return i
         return 0
 
+    def resident_prefix_len(self, token_ids, extra_hash=0) -> int:
+        """Longest resident exact checkpoint that is a prefix of ``token_ids`` (no MLX work)."""
+        tokens = tuple(token_ids)
+        best = 0
+        with self.lock:
+            for entry in self._exact_cache.values():
+                n = len(entry.token_ids)
+                if (
+                    best < n <= len(tokens)
+                    and entry.extra_hash == extra_hash
+                    and tokens[:n] == tuple(entry.token_ids)
+                ):
+                    best = n
+        return best
+
     def checkpoint_ready(self, token_ids, extra_hash):
         """Publication receipt without cloning/evaluating a checkpoint."""
         if extra_hash is None:

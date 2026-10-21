@@ -190,12 +190,16 @@ class RehearsalState:
             self.submitted = True
             return True
 
-    def arrive(self, request_ids: Sequence[int]) -> str:
-        """A real request's prompt is known: 'adopt' (leave running) or 'cancel'."""
+    def arrive(self, request_ids: Sequence[int], covered: int = 0) -> str:
+        """A real request's prompt is known: 'adopt' (leave running) or 'cancel'.
+
+        ``covered`` is the length of the request's own resident cache hit: a rehearsal that
+        is not longer than it adds nothing, so the request must not wait behind it."""
         with self._lock:
             if (
                 self.submitted
                 and self.ids is not None
+                and covered < len(self.ids)
                 and extends(request_ids, self.ids)
             ):
                 return "adopt"

@@ -445,8 +445,11 @@ def main():
         if mode is None:
             raise RuntimeError("missing engaged speculative mode")
         a.out.parent.mkdir(parents=True, exist_ok=True)
+        _log = s.log.read_text()
+        _restored = _log.count("DFlash drafter window restored from APC hit")
         with a.out.open("w") as f:
             for row in rows:
+                row["drafter_window_restored_total"] = _restored
                 row["sampled_stage_ms"] = stage_summary(
                     samples, row["start"], row["first"], a.thread
                 )

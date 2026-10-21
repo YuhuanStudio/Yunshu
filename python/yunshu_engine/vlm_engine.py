@@ -1539,7 +1539,15 @@ class VLMEngine:
         state = getattr(self, "_rehearsal_state", None)
         if state is None:
             return
-        verdict = state.arrive(ids)
+        covered = 0
+        manager = getattr(self, "_apc_backend", None)
+        probe = getattr(manager, "resident_prefix_len", None)
+        if probe is not None:
+            try:
+                covered = int(probe(ids))
+            except Exception:
+                covered = 0
+        verdict = state.arrive(ids, covered)
         logger.debug("next-turn rehearsal vs arriving request: %s", verdict)
 
     def _maybe_rehearse(
