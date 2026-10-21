@@ -3,6 +3,9 @@
 Active only when the process was started with DYLD_INSERT_LIBRARIES pointing at
 libmetalrt_trace.dylib (scripts/research/metalrt_trace.mm on branch metalrt); otherwise inert.
 ``tick()`` is called once per round; rounds START..END are measured and logged once.
+``mark(name)`` notes a host point inside the window; with an interposer that exports
+``metalrt_gaps`` each GPU idle interval is charged to the host segment it falls in (the segment
+that starts at a mark is named after it), so the log says which part of a round the GPU waits on.
 """
 
 from __future__ import annotations
@@ -15,7 +18,7 @@ import time
 
 logger = logging.getLogger(__name__)
 START, END = 40, 80
-_STATE: dict = {"lib": False, "n": 0, "t0": 0.0}
+_STATE: dict = {"lib": False, "n": 0, "t0": 0.0, "marks": None}
 
 
 def _lib():
@@ -41,6 +44,7 @@ def tick() -> None:
     if n == START:
         lib.metalrt_begin()
         _STATE["t0"] = time.perf_counter()
+        _STATE["marks"] = [(time.monotonic(), "tick")]
     elif n == END:
         wall = (time.perf_counter() - _STATE["t0"]) * 1000
         buf = ctypes.create_string_buffer(4096)
@@ -57,6 +61,51 @@ def tick() -> None:
             stats["commit_cpu_ms"] / rounds,
             stats,
         )
+        marks, _STATE["marks"] = _STATE["marks"], None
+        if marks and hasattr(lib, "metalrt_gaps"):
+            lib.metalrt_gaps.argtypes = [ctypes.c_char_p, ctypes.c_int, ctypes.c_double]
+            big = ctypes.create_string_buffer(1 << 21)
+            lib.metalrt_gaps(big, 1 << 21, 0.02)
+            charged = charge_gaps(json.loads(big.value.decode()), marks)
+            logger.info(
+                "GPU idle by host segment (ms/round, gaps > 20 us): %s",
+                {
+                    k: round(v / rounds, 3)
+                    for k, v in sorted(charged.items(), key=lambda kv: -kv[1])
+                },
+            )
+    elif START < n < END and _STATE["marks"] is not None:
+        _STATE["marks"].append((time.monotonic(), "tick"))
+
+
+def mark(name: str) -> None:
+    """A host point inside the measured window (no-op outside it)."""
+    marks = _STATE["marks"]
+    if marks is not None:
+        marks.append((time.monotonic(), name))
+
+
+def charge_gaps(gaps, marks) -> dict:
+    """Idle ms per host segment: a segment runs from one mark to the next and is named after
+    the mark that opens it; idle after the last mark is charged to that mark."""
+    out: dict = {}
+    if not marks:
+        return out
+    bounds = [t for t, _ in marks[1:]] + [float("inf")]
+    j = 0
+    for start, end in gaps:
+        while j + 1 < len(marks) and marks[j + 1][0] <= start:
+            j += 1
+        if start < marks[0][0]:
+            start = marks[0][0]
+        k = j
+        while start < end and k < len(marks):
+            stop = min(end, bounds[k])
+            if stop > start:
+                out[marks[k][1]] = out.get(marks[k][1], 0.0) + (stop - start) * 1000
+            start = stop
+            k += 1
+    return out
 
 
 def stage_begin() -> None:

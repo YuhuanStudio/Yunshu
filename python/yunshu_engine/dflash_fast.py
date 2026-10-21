@@ -710,6 +710,7 @@ def rounds(
                         # now: it runs while this thread builds the ~1750-dispatch verify
                         # graph, instead of the GPU idling until that graph is evaluated.
                         mx.async_eval(tokens, parents)
+                        gpu_window.mark("draft_sent")
                     if graft_enabled:
                         graft_room = min(copy_rows - 1 - n, room - 1 - n)
                         proposal = copy.lookup(n + graft_room) if graft_room > 0 else []
@@ -759,8 +760,10 @@ def rounds(
                         target, window, parents, shape.original_ranks
                     )
                     mx.async_eval(packed)
+                    gpu_window.mark("verify_sent")
                     # the consumer may stop here (GeneratorExit): the window is dropped below
                     yield from release(previous_sums)
+                    gpu_window.mark("consumer_done")
                     target_ids_row, window_ids, parent_ids, ranks = unpack_readback(
                         packed.tolist(),
                         int(target.size),
@@ -772,6 +775,7 @@ def rounds(
                     tv.tree_abort(cache, result)
                     raise
                 t_verified = time.perf_counter()
+                gpu_window.mark("readback")
                 path = (
                     longest_verified_path(window_ids, parent_ids, target_ids_row)
                     if grafted
@@ -872,6 +876,7 @@ def rounds(
                 hidden,
                 [c.state for c in cache if hasattr(c, "state")],
             )
+            gpu_window.mark("commit_sent")
             new_tokens = new_tokens[: max_tokens - emitted]
             if copy is not None:
                 copy.extend(new_tokens)

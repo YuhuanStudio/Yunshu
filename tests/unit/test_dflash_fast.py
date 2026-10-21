@@ -607,7 +607,9 @@ def test_round_tokens_reach_the_consumer_after_the_next_verify_is_submitted(
     monkeypatch.setattr(tv, "tree_commit", lambda *a: events.append("commit"))
     monkeypatch.setattr(tv, "tree_abort", lambda *_: events.append("abort"))
     made = iter(range(20, 40))
-    model = SimpleNamespace(speculative_argmax_from_hidden=lambda *_: np.array([next(made)]))
+    model = SimpleNamespace(
+        speculative_argmax_from_hidden=lambda *_: np.array([next(made)])
+    )
     draft = SimpleNamespace(
         config=SimpleNamespace(target_layer_ids=[0]), reset=lambda *_: []
     )
@@ -616,7 +618,9 @@ def test_round_tokens_reach_the_consumer_after_the_next_verify_is_submitted(
     )
     assert next(iterator) == (20, None)
     assert events == ["verify", "commit", "verify"]
-    assert not lane_linear.sum_reuse_enabled()  # the consumer runs outside the round's scope
+    assert (
+        not lane_linear.sum_reuse_enabled()
+    )  # the consumer runs outside the round's scope
     if stop_early:
         iterator.close()
         assert events == ["verify", "commit", "verify", "abort"]
