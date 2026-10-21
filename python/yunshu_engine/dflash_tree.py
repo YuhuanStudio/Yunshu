@@ -95,7 +95,6 @@ def compute_lattice_gpu(
     drafter, anchor: int, hidden: mx.array, cache, positions: int
 ) -> GpuLattice:
     """``compute_lattice`` without the host round trip (nothing is evaluated)."""
-    sel = drafter.candidate_selector
     inputs = mx.array(
         [[int(anchor)] + [int(drafter.config.mask_token_id)] * positions],
         dtype=mx.int32,
@@ -130,6 +129,15 @@ def compute_lattice_gpu(
         dh = drafter._hidden(inputs, hidden, cache)[:, 1:]
     if prof:
         t0 = tv._tick("drafter_layers_ms", dh, t0)
+    return lattice_from_hidden(drafter, dh, mx.array([int(anchor)]), prof=prof, t0=t0)
+
+
+def lattice_from_hidden(drafter, dh, anchor, *, prof=False, t0=0.0) -> GpuLattice:
+    """The lattice from the proposal rows' hidden states ``dh`` [1, D, H]; ``anchor`` is the
+    round's bonus token as a [1] array (it may still be on the GPU)."""
+    from . import tree_verify as tv
+
+    sel = drafter.candidate_selector
     vocab = getattr(drafter, "_draft_vocab", None)
     subset = (
         vocab.logits_subset(dh)
@@ -154,7 +162,7 @@ def compute_lattice_gpu(
     hproj = sel.hidden_projection(dh)[0].astype(mx.float32)
     succ = sel.successor_codebook(cands).astype(mx.float32)  # [D, K, R]
     pred = sel.predecessor_codebook(cands).astype(mx.float32)
-    anchor_row = sel.predecessor_codebook(mx.array([int(anchor)]))[0].astype(mx.float32)
+    anchor_row = sel.predecessor_codebook(anchor.reshape(1))[0].astype(mx.float32)
     if prof:
         tv._tick("drafter_selector_ms", (unary, hproj, succ, pred, anchor_row), t0)
     return GpuLattice(cands, unary, hproj, succ, pred, anchor_row)
