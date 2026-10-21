@@ -1,6 +1,7 @@
 # Patches upstream mlx-vlm symbols (registered in vendor.json).
 """Native singleton forward views that retain KV capacity.
 
+Preserve native singleton capacity for ordinary and DFlash captured forwards.
 Replicate qwen3_5's singleton extract/merge metadata while leaving custom,
 quantized, padded, multi-row, and speculative state on upstream's path.
 """
@@ -110,12 +111,7 @@ def wrap(original):
 
         batch = (inputs_embeds if inputs_embeds is not None else inputs).shape[0]
         rows = None
-        if (
-            batch == 1
-            and hidden_sink is None
-            and cache
-            and type(cache[self.fa_idx]) is BatchKVCache
-        ):
+        if batch == 1 and cache and type(cache[self.fa_idx]) is BatchKVCache:
             rows = extract_rows(cache)
         if rows is None:
             return original(
@@ -128,14 +124,29 @@ def wrap(original):
                 capture_layer_ids=capture_layer_ids,
                 hidden_sink=hidden_sink,
             )
-        # Upstream's singleton shortcut drops mask/capture arguments here too.
-        result = original(
-            self,
-            inputs,
-            inputs_embeds=inputs_embeds,
-            cache=rows,
-            position_ids=position_ids,
-        )
+        if hidden_sink is None:
+            # Match upstream's ordinary singleton shortcut, including dropped mask.
+            result = original(
+                self,
+                inputs,
+                inputs_embeds=inputs_embeds,
+                cache=rows,
+                position_ids=position_ids,
+            )
+        else:
+            # DFlash's capture adapter also extracts a single native row, but
+            # its extract/merge pair truncates capacity and recopies the prefix.
+            # Preserve that adapter's forward arguments as well as its captures.
+            result = original(
+                self,
+                inputs,
+                inputs_embeds=inputs_embeds,
+                mask=mask,
+                cache=rows,
+                position_ids=position_ids,
+                capture_layer_ids=capture_layer_ids,
+                hidden_sink=hidden_sink,
+            )
         replacements = merge_rows(rows)
         cache[:] = replacements
         forward.native_calls += 1

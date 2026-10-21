@@ -10,6 +10,13 @@ import time
 from collections import deque
 
 NAMES = {
+    "dflash_rounds": "first_round",
+    "draft": "drafter_proposal",
+    "prepare_target_hidden": "drafter_setup",
+    "_emit": "first_content_handoff",
+    "_restore_kv": "apc_kv_restore",
+    "merge_rows": "apc_merge",
+    "seed": "drafter_window_seed",
     "_tokenize_with_cache": "template_tokenize",
     "_format_prompt": "template",
     "lookup_exact_cache": "apc_lookup_clone",
@@ -73,6 +80,9 @@ class CallSpans:
             start = self.active.pop(key, None)
             if start is not None:
                 t, label, detail = start
+                if label == "apc_lookup_clone":
+                    local = frame.f_locals
+                    detail += f" tier={local.get('tier', 'nested')} cached={local.get('n', 'unknown')}"
                 self.rows.append(
                     (
                         t,

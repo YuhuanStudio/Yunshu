@@ -193,3 +193,54 @@ def test_shipped_installer_is_idempotent_and_preserves_callable_signature(monkey
     assert list(inspect.signature(installed).parameters) == list(
         inspect.signature(original).parameters
     )
+
+
+@pytest.mark.parametrize("suffix", [1, 8, 66])
+def test_captured_singleton_keeps_capacity_and_bit_equal_hidden_states(
+    monkeypatch, suffix
+):
+    from yunshu_engine import dflash_context
+
+    # Install just the capture adapter, isolating the real pre-optimization path.
+    monkeypatch.setattr(Qwen3_5Model, "__call__", Qwen3_5Model.__call__)
+    dflash_context._install_row_capture()
+    original = Qwen3_5Model.__call__
+    optimized = probe.wrap(original)
+    mx.random.seed(321)
+    model = _model()
+    baseline = [ArraysCache(2), BatchKVCache([0])]
+    candidate = [ArraysCache(2), BatchKVCache([0])]
+    for tokens in (mx.array([[1, 2, 3, 4, 5]]), mx.arange(suffix).reshape(1, -1) % 32):
+        left_hidden, right_hidden = [], []
+        left = original(
+            model,
+            tokens,
+            cache=baseline,
+            capture_layer_ids=[0, 1],
+            hidden_sink=left_hidden,
+        )
+        right = optimized(
+            model,
+            tokens,
+            cache=candidate,
+            capture_layer_ids=[0, 1],
+            hidden_sink=right_hidden,
+        )
+        mx.eval(
+            left,
+            right,
+            left_hidden,
+            right_hidden,
+            [c.state for c in baseline + candidate],
+        )
+        assert len(left_hidden) == len(right_hidden) == 2
+        assert mx.array_equal(left, right).item()
+        for a, b in zip(left_hidden, right_hidden, strict=True):
+            assert mx.array_equal(a, b).item()
+        assert baseline[1]._idx == candidate[1]._idx
+        for a, b in zip(baseline[1].state, candidate[1].state, strict=True):
+            assert mx.array_equal(a, b).item()
+        for a, b in zip(baseline[0].state, candidate[0].state, strict=True):
+            assert mx.array_equal(a, b).item()
+        assert candidate[1].keys.shape[2] == 256
+    assert optimized.native_calls == 2

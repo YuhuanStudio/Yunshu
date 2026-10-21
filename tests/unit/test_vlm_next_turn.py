@@ -499,3 +499,27 @@ def test_concurrent_completions_cancel_superseded_rehearsal(monkeypatch):
 
     asyncio.run(main())
     assert calls == []
+
+
+def test_rehearsal_skips_stride_before_the_completed_prompt(monkeypatch):
+    eng, calls = _engine(monkeypatch)
+    eng._apc_prefill_stride = 4
+
+    async def main():
+        _go(eng, prompt_tokens=7)  # rehearsal cut at 8 -> target 5; no progress
+        await eng._rehearsal_task
+
+    asyncio.run(main())
+    assert calls == []
+
+
+def test_rehearsal_keeps_stride_that_advances_the_completed_prompt(monkeypatch):
+    eng, calls = _engine(monkeypatch)
+    eng._apc_prefill_stride = 4
+
+    async def main():
+        _go(eng, prompt_tokens=4)
+        await eng._rehearsal_task
+
+    asyncio.run(main())
+    assert len(calls) == 1 and len(calls[0][0]) == 5

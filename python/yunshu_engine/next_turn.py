@@ -130,7 +130,9 @@ def ineligible_reason(
     return None
 
 
-def rehearsal_length(prefix_len: int, stride: int, guard: int) -> int | None:
+def rehearsal_length(
+    prefix_len: int, stride: int, guard: int, *, prompt_tokens: int = 0
+) -> int | None:
     """Prompt length to rehearse on the canonical prefill grid.
 
     With a position-keyed grid (``stride`` tokens per atom) the cache restores a follow-up only
@@ -144,6 +146,11 @@ def rehearsal_length(prefix_len: int, stride: int, guard: int) -> int | None:
     s = (prefix_len // stride) * stride
     if s + guard > prefix_len:
         s -= stride
+    # Replaying a boundary behind the completed prompt cannot advance this
+    # conversation's reusable prefix. That old boundary may already be evicted;
+    # rebuilding it can make the arriving request wait for an entire cold prompt.
+    if prompt_tokens and s <= prompt_tokens - guard:
+        return None
     return s + guard if s >= stride else None
 
 
@@ -183,12 +190,16 @@ class RehearsalState:
             self.submitted = True
             return True
 
-    def arrive(self, request_ids: Sequence[int]) -> str:
-        """A real request's prompt is known: 'adopt' (leave running) or 'cancel'."""
+    def arrive(self, request_ids: Sequence[int], covered: int = 0) -> str:
+        """A real request's prompt is known: 'adopt' (leave running) or 'cancel'.
+
+        ``covered`` is the length of the request's own resident cache hit: a rehearsal that
+        is not longer than it adds nothing, so the request must not wait behind it."""
         with self._lock:
             if (
                 self.submitted
                 and self.ids is not None
+                and covered < len(self.ids)
                 and extends(request_ids, self.ids)
             ):
                 return "adopt"
