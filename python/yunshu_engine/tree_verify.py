@@ -51,7 +51,10 @@ MAX_ROWS = 32  # lane projections (<= 128 rows), the fused GDN kernels (<= 32), 
 NARROW_ROWS = (
     8  # without lane projections only the sg8 / packed kernels' window is row-invariant
 )
-FUSED_ROWS = MAX_ROWS  # fast-tree windows up to this width take the fused attention (one shared-prefix launch)
+# The fast tree's windows (FastShape, fast_glue): its GDN kernels read gates past 32 rows,
+# the lane projections take 16-row blocks to 48 and the attention runs 8-token groups.
+FAST_MAX_ROWS = 48
+FUSED_ROWS = FAST_MAX_ROWS  # fast-tree windows up to this width take the fused attention (one shared-prefix launch)
 CK = ra.CHUNK
 
 
@@ -1050,8 +1053,9 @@ def _tree_forward(
     verifier = q35._EXACT_SPECULATIVE_VERIFIER if verifier is None else verifier
     model = lm.model
     w = shape.width
-    if w > MAX_ROWS:
-        raise ValueError(f"tree window of {w} rows (limit {MAX_ROWS})")
+    limit = FAST_MAX_ROWS if getattr(shape, "fast_glue", False) else MAX_ROWS
+    if w > limit:
+        raise ValueError(f"tree window of {w} rows (limit {limit})")
     if w > NARROW_ROWS and not lane_projections(lm):
         raise ValueError(f"tree window of {w} rows needs the lane projections")
     n0 = ragged_kv._lane_length(cache[model.fa_idx])
@@ -1237,6 +1241,7 @@ def tree_abort(cache: list, res: TreeResult) -> None:
 
 
 __all__ = [
+    "FAST_MAX_ROWS",
     "MAX_ROWS",
     "TreeResult",
     "TreeShape",

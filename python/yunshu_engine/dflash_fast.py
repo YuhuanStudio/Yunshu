@@ -199,6 +199,13 @@ def _gate_values(a, b, alog, dt):
     )
 
 
+# Gates of row t: lanes 0..31 hold rows 0..31 (one shuffle); a wider window's later rows
+# load theirs. Every lane runs the shuffle (uniform control flow).
+WIDE_G = "float gt = simd_shuffle(lane_g, ushort(t & 31)); if (t >= 32) gt = G[{0}];"
+WIDE_B = "float bt = simd_shuffle(lane_b, ushort(t & 31)); if (t >= 32) bt = BETA[{0}];"
+_ROW_GATE = "(b_idx * P + row) * Hv + hv"
+
+
 def _forward_kernel():
     if "forward" not in _KERNELS:
         source = tv._TREE_GDN
@@ -208,6 +215,10 @@ def _forward_kernel():
             "float states[T][NK];": "float states[LIVE][NK];",
             "states[par][i]": "states[read_slots[t]][i]",
             "states[t][i] = st[i];": "if (write_slots[t] >= 0) states[write_slots[t]][i] = st[i];",
+            # rows past one simdgroup's lanes read their (precomputed) gates directly:
+            # the same floats the shuffle would deliver, so windows up to FAST_MAX_ROWS
+            "float gt = simd_shuffle(lane_g, ushort(t));": WIDE_G.format("t * Hv + hv"),
+            "float bt = simd_shuffle(lane_b, ushort(t));": WIDE_B.format("t * Hv + hv"),
         }
         for old, new in edits.items():
             if source.count(old) != 1:
@@ -237,11 +248,24 @@ def _forward_kernel():
     return _KERNELS["forward"]
 
 
+def _wide_replay(source):
+    for old, new in (
+        ("float gt = simd_shuffle(lane_g, ushort(t));", WIDE_G.format(_ROW_GATE)),
+        ("float bt = simd_shuffle(lane_b, ushort(t));", WIDE_B.format(_ROW_GATE)),
+    ):
+        if source.count(old) != 1:
+            raise RuntimeError("replay source changed: " + old)
+        source = source.replace(old, new)
+    return source
+
+
 def _replay_kernel():
     if "replay" not in _KERNELS:
-        source = tv._REPLAY_PATH.replace(
-            "gdn_decay(pa[gi], dtb, neg_a)", "G[gi]"
-        ).replace("gdn_beta(pb[gi])", "BETA[gi]")
+        source = _wide_replay(
+            tv._REPLAY_PATH.replace("gdn_decay(pa[gi], dtb, neg_a)", "G[gi]").replace(
+                "gdn_beta(pb[gi])", "BETA[gi]"
+            )
+        )
         _KERNELS["replay"] = mx.fast.metal_kernel(
             name=_name("yunshu_tree_gate_replay", source),
             input_names=[
@@ -264,7 +288,7 @@ def _replay_kernel():
 
 def _replay_tail_kernel():
     if "replay_tail" not in _KERNELS:
-        source = (
+        source = _wide_replay(
             (tv._REPLAY_PATH + tv._TAIL_COPY)
             .replace("gdn_decay(pa[gi], dtb, neg_a)", "G[gi]")
             .replace("gdn_beta(pb[gi])", "BETA[gi]")
@@ -555,6 +579,9 @@ def rounds(
     prof = {"rounds": 0, "draft": 0.0, "verify": 0.0, "commit": 0.0, "nodes": 0}
     context = mtp_lane._STATE["context"]
     copy_rows = mtp_lane.copy_rows_for_model(lm)
+    if copy_rows >= tv.MAX_ROWS:
+        # the fast tree's own kernels take wider windows than the lane's (MTP) verify
+        copy_rows = tv.FAST_MAX_ROWS
     copy = CopyDrafter(max_draft=copy_rows - 1) if copy_rows >= 3 else None
     if copy is not None:
         copy.extend(context)
