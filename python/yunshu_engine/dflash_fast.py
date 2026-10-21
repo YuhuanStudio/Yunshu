@@ -578,10 +578,7 @@ def rounds(
     draft_vocab = getattr(draft, "_draft_vocab", None)
     prof = {"rounds": 0, "draft": 0.0, "verify": 0.0, "commit": 0.0, "nodes": 0}
     context = mtp_lane._STATE["context"]
-    copy_rows = mtp_lane.copy_rows_for_model(lm)
-    if copy_rows >= tv.MAX_ROWS:
-        # the fast tree's own kernels take wider windows than the lane's (MTP) verify
-        copy_rows = tv.FAST_MAX_ROWS
+    copy_rows = min(mtp_lane.copy_rows_for_model(lm), tv.FAST_MAX_ROWS)
     copy = CopyDrafter(max_draft=copy_rows - 1) if copy_rows >= 3 else None
     if copy is not None:
         copy.extend(context)

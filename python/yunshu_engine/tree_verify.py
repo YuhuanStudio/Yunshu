@@ -51,9 +51,11 @@ MAX_ROWS = 32  # lane projections (<= 128 rows), the fused GDN kernels (<= 32), 
 NARROW_ROWS = (
     8  # without lane projections only the sg8 / packed kernels' window is row-invariant
 )
-# The fast tree's windows (FastShape, fast_glue): its GDN kernels read gates past 32 rows,
-# the lane projections take 16-row blocks to 48 and the attention runs 8-token groups.
-FAST_MAX_ROWS = 48
+# The fast tree's windows (FastShape, fast_glue). Its GDN kernels read gates past 32 rows,
+# but a 33-48 row chain at 2K is not bit-equal to decode on any row (2026-10-21,
+# probe_wide_verify --mode invariance, job 1021-110307) and costs 90-100 ms at 32K against
+# 71 ms at 32 rows, so the limit stays 32 until that is found.
+FAST_MAX_ROWS = 32
 FUSED_ROWS = FAST_MAX_ROWS  # fast-tree windows up to this width take the fused attention (one shared-prefix launch)
 CK = ra.CHUNK
 

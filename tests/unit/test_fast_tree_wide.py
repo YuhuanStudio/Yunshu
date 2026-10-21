@@ -1,4 +1,5 @@
-"""Fast-tree GDN kernels past one simdgroup's 32 lanes: a 48-row chain equals 32 + 16 rows.
+"""Fast-tree GDN kernels past one simdgroup's 32 lanes: a 48-row chain equals 32 + 16 rows
+(the kernels alone; the verify window itself stays at 32 rows).
 
 Rows 32.. read their gates directly instead of through the lane shuffle; any slip there
 changes their outputs or the replayed state."""
@@ -53,7 +54,6 @@ def _replay(gate_rows, layer, state, keep):
 
 @pytest.mark.parametrize("wide", [40, 48])
 def test_wide_chain_equals_32_then_the_rest(wide):
-    assert wide <= tv.FAST_MAX_ROWS
     layer = _layer()
     state = (0.1 * mx.random.normal((1, HV, DV, DK))).astype(mx.float32)
     rows = _inputs(wide)
@@ -70,5 +70,6 @@ def test_wide_chain_equals_32_then_the_rest(wide):
     assert mx.array_equal(_replay(g_wide, layer, state, wide), want).item()
 
 
-def test_the_lane_verify_keeps_its_32_row_limit():
-    assert tv.MAX_ROWS == 32 and tv.FAST_MAX_ROWS == 48
+def test_verify_windows_stay_at_32_rows():
+    # wider windows are not bit-equal to decode yet (see tree_verify.FAST_MAX_ROWS)
+    assert tv.MAX_ROWS == tv.FAST_MAX_ROWS == 32
