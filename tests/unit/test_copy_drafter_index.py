@@ -24,7 +24,7 @@ def test_randomized_equivalence(ngram):
     rng = random.Random(ngram)
     for _ in range(60):
         vocab = rng.choice([2, 3, 5, 12])
-        vec, ref = _pair(ngram, max_candidates=rng.choice([1, 4, 24]))
+        vec, ref = _pair(ngram, max_candidates=rng.choice([1, 4, 24, 256]))
         for _ in range(rng.randint(1, 12)):
             toks = [rng.randrange(vocab) for _ in range(rng.randint(0, 80))]
             vec.extend(toks)

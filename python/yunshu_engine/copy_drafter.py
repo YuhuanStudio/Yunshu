@@ -52,7 +52,9 @@ class CopyConfig:
     confident_match: int = 24  # a match this long always proposes, full width
     first_width: int = 4  # drafts offered on a short match / after a miss
     max_extension: int = 64  # backward comparison cap
-    max_candidates: int = 24  # most recent occurrences compared per proposal
+    # most recent occurrences compared per proposal. 24 missed the long earlier match on 3
+    # of 45 rounds of a 32K code reply (tf110 1021c replay: 88 tokens copied short)
+    max_candidates: int = 256
     benefit_ratio: float = 1.0  # copy tokens/round must reach this x model's
     backoff_cap: int = 16  # longest silence, in rounds
     ema: float = 0.5
@@ -150,11 +152,14 @@ class CopyDrafter:
             return []
         self._sync_index()
         if self._vec:
-            cands = (
-                np.flatnonzero(self._keys[n:size] == self._keys[size]) + n
-            ).tolist()
-        else:
-            cands = self._index.get(tuple(ctx[size - n :])) or []
+            ends = np.flatnonzero(self._keys[n:size] == self._keys[size]) + n
+            ends = ends[ends < size][-cfg.max_candidates :]
+            if not len(ends):
+                return []
+            best_end, best_len = self._longest(ends, size)
+            self.last_match = best_len
+            return ctx[best_end : best_end + width] if best_end >= 0 else []
+        cands = self._index.get(tuple(ctx[size - n :])) or []
         if not cands:
             return []
         best_end, best_len = -1, 0
@@ -173,6 +178,21 @@ class CopyDrafter:
         if best_end < 0:
             return []
         return ctx[best_end : best_end + width]
+
+    def _longest(self, ends: np.ndarray, size: int) -> tuple[int, int]:
+        """(end, length) of the longest backward match among ``ends``, the most recent on a
+        tie: the scalar loop's choice, for every candidate at once."""
+        reach = self.cfg.max_extension
+        tok = self._tok
+        steps = np.arange(reach)
+        back = ends[:, None] - 1 - steps[None, :]  # [C, reach]
+        tail = size - 1 - steps
+        valid = (back >= 0) & (tail >= 0)[None, :]
+        same = valid & (tok[np.maximum(back, 0)] == tok[np.maximum(tail, 0)][None, :])
+        lengths = np.cumprod(same, axis=1).sum(axis=1)
+        pick = len(ends) - 1 - int(np.argmax(lengths[::-1]))
+        best = int(lengths[pick])
+        return (int(ends[pick]), best) if best > 0 else (-1, 0)
 
     # -- round choice --------------------------------------------------
     def draft(self, max_draft: int | None = None) -> list[int]:
