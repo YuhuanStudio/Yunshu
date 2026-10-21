@@ -84,6 +84,7 @@ def main():
     ap.add_argument("--turn2", action="store_true")
     ap.add_argument("--turn2-repeat", type=int, default=24)
     ap.add_argument("--compare-spec-off", action="store_true")
+    ap.add_argument("--tokens", type=int, default=64)
     ap.add_argument("--env", action="append", default=[])
     ap.add_argument("--out", required=True)
     a = ap.parse_args()
@@ -112,22 +113,22 @@ def main():
     s = t.Srv("yunshu", env, f"apcid-A-{a.ctx}")
     try:
         t.send(s.url, t.req(s.model, "Say hi.", 8))
-        res["cold"] = ask(s.url, s.model, Q)
+        res["cold"] = ask(s.url, s.model, Q, a.tokens)
     finally:
         s.kill()
     s = t.Srv("yunshu", env, f"apcid-B-{a.ctx}")
     try:
         t.send(s.url, t.req(s.model, "Say hi.", 8))
         res["prime"] = ask(s.url, s.model, P, 8)
-        res["partial"] = ask(s.url, s.model, Q)
-        res["full"] = ask(s.url, s.model, Q)
+        res["partial"] = ask(s.url, s.model, Q, a.tokens)
+        res["full"] = ask(s.url, s.model, Q, a.tokens)
     finally:
         s.kill()
     if a.compare_spec_off:
         s = t.Srv("yunshu", {**env, "YUNSHU_VLM_DRAFT": "off"}, f"apcid-off-{a.ctx}")
         try:
             t.send(s.url, t.req(s.model, "Say hi.", 8))
-            res["spec_off"] = ask(s.url, s.model, Q)
+            res["spec_off"] = ask(s.url, s.model, Q, a.tokens)
         finally:
             s.kill()
     ref = res["cold"]

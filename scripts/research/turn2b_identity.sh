@@ -8,7 +8,7 @@ export TFB_WORK=/Volumes/P5Plus/yunshu-build/snapshot014/corpus TFB_EXACT_PROMPT
 export TFB_YUNSHU_SRC="$ROOT/python" TFB_OUT="$OUT/tfb" TFB_PORT_LAST=18996
 for kind in code prose; do
  /Users/yuhuan/Documents/YuhuanStudio/Yunshu/.venv/bin/python "$ROOT/scripts/research/apc_restore_identity.py" \
- --ctx 32768 --kind "$kind" --turn2 --turn2-repeat 48 --compare-spec-off --out "$OUT/$kind.jsonl" \
+ --ctx 32768 --kind "$kind" --turn2 --turn2-repeat 48 --compare-spec-off --tokens 512 --out "$OUT/$kind.jsonl" \
  --env YUNSHU_VLM_APC_DISK=0 \
  --env YUNSHU_VLM_APC_DISK_DIR=/Volumes/Micron/yunshu-apc/turn2b-identity-1022a \
  --env YUNSHU_VLM_DRAFT=/Volumes/P5Plus/models/incoai/Qwen3.8-27B-DFlash2
