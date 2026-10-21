@@ -2184,7 +2184,12 @@ class VLMEngine:
                 from . import dflash_apc_window
 
                 dflash_apc_window.set_tag(
-                    tuple(getattr(drafter.config, "target_layer_ids", ()) or ())
+                    tuple(
+                        getattr(
+                            getattr(drafter, "config", None), "target_layer_ids", ()
+                        )
+                        or ()
+                    )
                 )
                 # Project only the context window the drafter attends to.
                 from .dflash_context import install as install_dflash_context
