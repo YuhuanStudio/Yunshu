@@ -16,6 +16,7 @@ import collections
 import concurrent.futures
 import http.client
 import json
+import os
 import re
 import sys
 import threading
@@ -28,7 +29,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from process_memory import process_tree_memory, retained_gib  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
-DATASET = ROOT / "reference/omlx/omlx/eval/data/mmlu_pro_test.jsonl"
+# a pinned gate tree has no reference/ checkout (gitignored): the gate passes the main checkout's copy
+DATASET = Path(
+    os.environ.get("MMLU_DATA")
+    or ROOT / "reference/omlx/omlx/eval/data/mmlu_pro_test.jsonl"
+)
 DEFAULT_IDS = Path.home() / "Downloads/Qwen3.8-27B-oQ4e-mtp_mmlu_pro.json"
 
 

@@ -557,11 +557,12 @@ def test_graft_width_keeps_default_fast_dflash_route(monkeypatch, admission):
 def _fake_rounds(monkeypatch, nodes):
     """rounds() on fakes: ``nodes`` lists the node count chosen for each round (0 = plain row,
     >0 = model tree). Returns the event log and a factory for the round iterator."""
-    from yunshu_engine import dflash_plan, dflash_tree, spec_schedule
+    from yunshu_engine import dflash_plan, dflash_tree, spec_metrics, spec_schedule
     from yunshu_engine.kernels import lane_linear
 
     events = []
     chosen = iter(nodes)
+    monkeypatch.setattr(spec_metrics, "record", lambda *_a, **_k: None)
     monkeypatch.setattr(fast, "prepare", lambda *_: SimpleNamespace())
     monkeypatch.setattr(mtp_lane, "copy_rows_for_model", lambda *_: 0)
     monkeypatch.setitem(mtp_lane._STATE, "context", [1] * 1034)
