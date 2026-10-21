@@ -253,6 +253,25 @@ def eligible(m: int, k: int, n: int, bits: int, group: int, tiled: bool) -> bool
     )
 
 
+def tail_eligible(m: int, k: int, n: int, bits: int, group: int, tiled: bool) -> bool:
+    """Short stock-QMM tails can use padded native tiles without untiling.
+
+    Keep <=512 rows on the invariant lane arithmetic. Only the row loader is
+    padded; canonical prompt spans and the reduction order stay unchanged.
+    """
+    return 512 < m <= 2048 and eligible(
+        ((m + 127) // 128) * 128, k, n, bits, group, tiled
+    )
+
+
+def tail_matmul(x: mx.array, weight: mx.array, sbt: mx.array, *, bits: int) -> mx.array:
+    rows = x.shape[0]
+    padded = ((rows + 127) // 128) * 128
+    if padded != rows:
+        x = mx.pad(x, [(0, padded - rows), (0, 0)])
+    return matmul(x, weight, sbt, bits=bits)[:rows]
+
+
 def narrow_eligible(m: int, k: int, n: int, bits: int, group: int) -> bool:
     return bool(
         _enabled

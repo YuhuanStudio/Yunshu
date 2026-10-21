@@ -197,7 +197,9 @@ class LaneLinear(nn.Module):
         matmul speed. A stock call's bits depend on its own row count, so the
         caller passes each prompt span as its own array: a prompt's prefill
         never depends on what shares the step. The weight is untiled once for
-        all spans (a transient copy, not a second resident one).
+        all spans (a transient copy, not a second resident one). Qualified
+        short tails instead pad only the input rows for the native tiled-weight
+        loader and crop its output, avoiding a transient stock weight copy.
 
         Narrow projections (GDN ``in_proj_a`` / ``in_proj_b``, a few dozen
         outputs) are not span-invariant in the stock matmul (its kernel choice
@@ -230,6 +232,19 @@ class LaneLinear(nn.Module):
                 # row from its own row and the weight (one 128-row tile config
                 # up to 4096 rows), so an atom's bits equal its run's
                 y = nax_prefill.matmul(x2, self.weight, self.sbt, bits=self.bits)
+                if "bias" in self:
+                    y = y + self["bias"]
+                out.append(y.reshape(*lead, self.output_dims).astype(dtype))
+                continue
+            if nax_prefill.tail_eligible(
+                m,
+                self.input_dims,
+                self.output_dims,
+                self.bits,
+                self.group_size,
+                self.tiled,
+            ):
+                y = nax_prefill.tail_matmul(x2, self.weight, self.sbt, bits=self.bits)
                 if "bias" in self:
                     y = y + self["bias"]
                 out.append(y.reshape(*lead, self.output_dims).astype(dtype))
@@ -297,6 +312,19 @@ class LaneLinear(nn.Module):
             )
         ):
             y = nax_prefill.matmul(x2, self.weight, self.sbt, bits=self.bits)
+        elif (
+            STOCK_ROWS
+            and m > STOCK_ROWS
+            and nax_prefill.tail_eligible(
+                m,
+                self.input_dims,
+                self.output_dims,
+                self.bits,
+                self.group_size,
+                self.tiled,
+            )
+        ):
+            y = nax_prefill.tail_matmul(x2, self.weight, self.sbt, bits=self.bits)
         elif STOCK_ROWS and m > STOCK_ROWS and self.output_dims >= NARROW:
             weight, scales, biases = self.stock()
             y = mx.quantized_matmul(
