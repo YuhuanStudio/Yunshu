@@ -650,19 +650,23 @@ def test_round_tokens_reach_the_consumer_after_the_next_verify_is_submitted(
     # while a window is in flight drops that window (it is never committed).
     from yunshu_engine.kernels import lane_linear
 
-    events, start = _fake_rounds(monkeypatch, [0, 0, 0])
-    iterator = start(4)
+    events, start = _fake_rounds(monkeypatch, [0, 0, 0, 0])
+    iterator = start(5)
+    # the reply's first round is not held (its first visible text is the TTFT)
     assert next(iterator) == (20, None)
-    assert events == ["verify", "commit", "verify"]
+    assert events == ["verify"]
+    # later rounds reach the consumer once the next verify is on the GPU
+    assert next(iterator) == (21, None)
+    assert events == ["verify", "commit", "verify", "commit", "verify"]
     assert (
         not lane_linear.sum_reuse_enabled()
-    )  # the consumer runs outside the round's scope
+    )  # consumer runs outside the round's scope
     if stop_early:
         iterator.close()
-        assert events == ["verify", "commit", "verify", "abort"]
+        assert events == ["verify", "commit", "verify", "commit", "verify", "abort"]
     else:
-        assert list(iterator) == [(21, None), (22, None)]
-        assert events == ["verify", "commit"] * 3
+        assert list(iterator) == [(22, None), (23, None)]
+        assert events == ["verify", "commit"] * 4
     assert not lane_linear.sum_reuse_enabled()
 
 

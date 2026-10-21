@@ -993,8 +993,13 @@ def rounds(
                 draft.copy_total_tokens = getattr(draft, "copy_total_tokens", 0) + len(
                     new_tokens
                 )
+            opening = emitted == 1
             held.extend(new_tokens)
             emitted += len(new_tokens)
+            if opening:
+                # the reply's first round reaches the consumer at once: its first visible
+                # text is the time to first token (+6 ms on 32K code warm, yv 1021y12)
+                yield from release()
         commit_pending()
         yield from release()
     finally:

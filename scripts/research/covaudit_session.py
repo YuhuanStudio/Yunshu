@@ -642,7 +642,9 @@ def cmd_restart(a) -> int:
 
     out = Path(a.out)
     out.parent.mkdir(parents=True, exist_ok=True)
-    home = Path(f"/Volumes/P5Plus/yunshu-build/covaudit/home-{out.stem}")
+    # the restart check's APC disk tier lives under this HOME: the gate puts it under its
+    # own root, since a volume below the APC free-space reserve skips every SSD write
+    home = Path(a.home or f"/Volumes/P5Plus/yunshu-build/covaudit/home-{out.stem}")
     shutil.rmtree(home, ignore_errors=True)
     rc, srv = 2, None
     try:
