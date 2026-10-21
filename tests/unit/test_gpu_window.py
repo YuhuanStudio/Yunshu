@@ -30,3 +30,9 @@ def test_marks_are_ignored_outside_the_window():
     gpu_window._STATE["marks"] = None
     gpu_window.mark("readback")
     assert gpu_window._STATE["marks"] is None
+
+
+def test_segment_times_sum_each_marks_span():
+    marks = [(0.0, "a"), (0.001, "b"), (0.003, "a"), (0.004, "b")]
+    out = gpu_window.segment_times(marks)
+    assert round(out["a"], 6) == 2.0 and round(out["b"], 6) == 2.0

@@ -746,9 +746,11 @@ def rounds(
                         for entry in draft_cache:
                             entry.offset += skipped
                         skipped = 0
+                    gpu_window.mark("lattice_start")
                     lattice = dt.compute_lattice_gpu(
                         fast_draft, bonus, hidden, draft_cache, 15
                     )
+                    gpu_window.mark("search_start")
                     tokens, parents = search_tree(lattice, n)
                     if profile_sync:
                         mx.eval(

@@ -74,6 +74,14 @@ def tick() -> None:
                     for k, v in sorted(charged.items(), key=lambda kv: -kv[1])
                 },
             )
+            spans = segment_times(marks)
+            logger.info(
+                "Host time by segment (ms/round): %s",
+                {
+                    k: round(v / rounds, 3)
+                    for k, v in sorted(spans.items(), key=lambda kv: -kv[1])
+                },
+            )
     elif START < n < END and _STATE["marks"] is not None:
         _STATE["marks"].append((time.monotonic(), "tick"))
 
@@ -83,6 +91,14 @@ def mark(name: str) -> None:
     marks = _STATE["marks"]
     if marks is not None:
         marks.append((time.monotonic(), name))
+
+
+def segment_times(marks) -> dict:
+    """Host ms per segment (from one mark to the next, named after the opening mark)."""
+    out: dict = {}
+    for (t0, name), (t1, _) in zip(marks, marks[1:], strict=False):
+        out[name] = out.get(name, 0.0) + (t1 - t0) * 1000
+    return out
 
 
 def charge_gaps(gaps, marks) -> dict:
