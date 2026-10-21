@@ -1282,3 +1282,25 @@ verify prefillspeed-attn2-long: base 6520d39ad901 vs cand 447a266509f2 on /Volum
 | toolfast (256 tokens) | off | 76.6 | 114.0 |
 
 Identity with the grammar on: DFlash, MTP and drafting off give identical content and identical tool calls (Read + Grep, closed under the grammar, 40 masked lane rounds) for a 32K free-text reply, a 32K tool-calling turn and a no-tools control; log shows `constrained=True` and no serial verify. The grammar no longer costs decode speed (77.9 on vs 76.6 off on the same tree). The tools-vs-no-tools gap with the grammar off is the reply's content (acceptance 0.35 vs 0.54 on main), not a path change. The main and toolfast rows are different runs with different lengths and content; read each tree's rows side by side, not across trees.
+
+2026-10-21 DFlash deferred consumer yield (5f3c1b07): one round's tokens are handed to the consumer only after the next round's verify graph is on the GPU, so consumer time overlaps verify. yv tf110-dflash-speed32-1021y2 (Qwen3.8-27B oQ4e-mtp + DFlash2 draft, M5 Max, 32K, base 19d59ffa vs cand 5f3c1b07): PASS.
+
+```
+verify tf110-dflash-speed32-1021y2: base 19d59ffa2059 vs cand 5f3c1b07a2b5 on /Volumes/P5Plus/models/Jundot/Qwen3.8-27B-oQ4e-mtp, suite tf110-speed32 -> PASS
+  identity: PASS - base_vs_cand 6 cells, 0 mismatches; spec_on_vs_off 6 cells, 0 mismatches
+  apc: PASS - 2 cold/warm pairs, hits 32767,32767
+  speed: PASS - prose@32768 decode_tps 68.0->68.1 (+0.1%); code@32768 decode_tps 178.5->180.1 (+0.9%, noise +-0.6%, reps [1.35, 0.9, 0.5]); warm and follow-up TTFT neutral (code warm_ttft_s +4.0% initially, confirmed neutral)
+```
+
+2026-10-21 DFlash deferred tree commit (e87f7a8e): the previous round's commit is built after the next draft is submitted; copy and plain rounds commit before their verify. yv tf110-dflash-speed32-1021y7 (base 5f3c1b07 vs cand e87f7a8e, 32K): PASS, end-to-end neutral. Kept because the draft-first order is the base for later pipelining. An earlier run, 1021y6, is not evidence: a paused p-1 job's server was still running and the base code cell ran 7x slower.
+
+```
+verify tf110-dflash-speed32-1021y7: base 5f3c1b07a2b5 vs cand e87f7a8e1002 on /Volumes/P5Plus/models/Jundot/Qwen3.8-27B-oQ4e-mtp, suite tf110-speed32 -> PASS
+  identity: PASS - base_vs_cand 6 cells, 0 mismatches; spec_on_vs_off 6 cells, 0 mismatches
+  apc: PASS - 2 cold/warm pairs, hits 32767,32767
+  speed: PASS - prose@32768 decode_tps 68.8->68.8 (+0.0%); code@32768 decode_tps 179.9->179.2 (-0.4%); warm_ttft_s code -1.9%, prose -3.9%; follow-up TTFT +0.3% / +0.7%
+```
+
+2026-10-21 Negative results (both reverted), DFlash 32K, 27B oQ4e-mtp, M5 Max.
+- 48-row fast-tree verify window (73d6ca98, gpuwindow 1021y10, one cold 32K run; reverted in 99a5dc88): code decode 179 -> 144.4 tok/s (40 rounds but ~80 ms verify per round), prose 67.4. FastShape chain eval at 32K for 16/17/24/32/33/40/48 rows: 47.4/60.6/64.2/71.0/89.9/93.1/100.2 ms. At 2K, 33/40/48-row windows were not bit-equal on any row (tokens identical), so the arithmetic changes with width beyond 32 rows. `FAST_MAX_ROWS` stays 32.
+- Copy drafter `min_match` 6 -> 4 (gpuwindow 1021y11 on 99a5dc88, one cold 32K run; reverted in 2fd6a717): code decode 179.1 (1021y5) -> 165.7 tok/s, 46 rounds (17 copy) vs 45; a 32-row copy round costs ~71 ms against ~47 ms for a 16-row model round. The CPU replay that predicted fewer rounds counted rounds only, not per-round cost. Prose 69.4 tok/s in the same run.
