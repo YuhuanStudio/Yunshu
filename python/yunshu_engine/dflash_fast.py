@@ -979,6 +979,17 @@ def rounds(
                         ("m_copy_landed", t_m3, t_done),
                     ):
                         prof[key] = prof.get(key, 0.0) + (b_ - a_) * 1000
+                if logger.isEnabledFor(logging.DEBUG):
+                    # one line per round, for replaying round kinds against the output
+                    logger.debug(
+                        "DFlash round: at=%d kind=%s rows=%d accepted=%d match=%d ms=%.2f",
+                        emitted,
+                        "copy" if copied else "graft" if grafted else "model",
+                        int(window.size),
+                        len(new_tokens),
+                        copy.last_match if copy is not None else -1,
+                        (t_done - started) * 1000,
+                    )
                 observe_budget(
                     budget,
                     copied or grafted,

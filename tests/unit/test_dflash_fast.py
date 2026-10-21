@@ -683,3 +683,16 @@ def test_commit_follows_the_next_draft_and_precedes_its_verify(monkeypatch):
         "verify",
         "commit",  # the last round, before the loop ends
     ]
+
+
+def test_debug_log_traces_every_round(monkeypatch, caplog):
+    import logging
+
+    events, start = _fake_rounds(monkeypatch, [0, 2, 2])
+    with caplog.at_level(logging.DEBUG, logger="yunshu_engine.dflash_fast"):
+        list(start(4))
+    lines = [
+        r.getMessage() for r in caplog.records if "DFlash round:" in r.getMessage()
+    ]
+    assert len(lines) == 3
+    assert all("kind=" in line and "accepted=" in line for line in lines)
