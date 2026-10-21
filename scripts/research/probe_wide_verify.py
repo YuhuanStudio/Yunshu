@@ -52,13 +52,21 @@ def make_shape(tv, kind: str, w: int, fast: bool):
         return tv.TreeShape(shape_parents(kind, w))
     import mlx.core as mx
 
-    from yunshu_engine.dflash_plan import FastShape
+    from yunshu_engine.dflash_plan import FastShape, reorder
 
     parents = mx.array(shape_parents(kind, w), dtype=mx.int32)
+    ranks = None
+    if kind != "chain":
+        # The fast recurrence sizes its state bank for the runtime last-use
+        # order. A breadth-first heap can exceed that bank and is not a valid
+        # FastShape until reordered, just as dflash_fast.rounds does.
+        _, parents, ranks = reorder(mx.arange(1, w, dtype=mx.int32), parents)
     depth = [0] * w
     for r in range(1, w):
         depth[r] = depth[int(parents[r].item())] + 1
-    return FastShape(parents, max(depth), is_chain=kind == "chain")
+    return FastShape(
+        parents, max(depth), original_ranks=ranks, is_chain=kind == "chain"
+    )
 
 
 def setup(model_dir: str, lane_linear: bool = True):
@@ -148,19 +156,26 @@ def invariance(a, lm, ids):
         print(json.dumps(row), flush=True)
         # tree windows: row r equals the chain verify of its root path
         for kind in a.shapes:
-            if kind == "chain" or T < 3:
+            if (kind == "chain" and not a.fast) or T < 3:
                 continue
             cache = prefill(lm, ids, a.context)
             parents = shape_parents(kind, T)
-            shape = tv.TreeShape(parents)
-            res = tv.tree_forward(lm, toks, shape, cache)
+            shape = make_shape(tv, kind, T, a.fast)
+            permutation = getattr(shape, "original_ranks", None)
+            window_tokens = (
+                toks if permutation is None else mx.take(toks, permutation, axis=1)
+            )
+            if a.fast:
+                parents = shape.parents_array().tolist()
+            paths = tv.TreeShape(parents).paths
+            res = tv.tree_forward(lm, window_tokens, shape, cache)
             mx.eval(res.hidden)
             h_tree = res.hidden
             tv.tree_abort(cache, res)
             bad = []
             for rr in range(T):
-                path = shape.paths[rr]
-                pt = mx.array([[int(toks[0, p].item()) for p in path]])
+                path = paths[rr]
+                pt = mx.array([[int(window_tokens[0, p].item()) for p in path]])
                 reference, abort = path_reference(lm, pt, cache)
                 mx.eval(reference)
                 if not mx.array_equal(reference[:, -1], h_tree[:, rr]).item():
