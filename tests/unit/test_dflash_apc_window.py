@@ -80,8 +80,93 @@ def test_window_capture_never_blocks_the_prefill_step(monkeypatch):
     stub.eval = lambda x: calls.append("eval")
     stub.contiguous = lambda x: calls.append("contiguous") or x
     import mlx
+    import mlx.core  # noqa: F401  (the attribute must exist to be patched when run alone)
 
     monkeypatch.setitem(sys.modules, "mlx.core", stub)
     monkeypatch.setattr(mlx, "core", stub)
     layers, nbytes = w.window_from_chunks([[A(3)], [A(4)]], keep=2)
     assert calls == ["async"] and nbytes == 16
+
+
+class _Budget:
+    def __init__(self, allow=True):
+        self.allow, self.written = allow, []
+
+    def allow_write(self, size):
+        return self.allow
+
+    def note_written(self, path, size=None):
+        self.written.append(path)
+
+
+@pytest.fixture
+def disk(tmp_path):
+    w._DISK.update(dir=None, budget=None, tag=None)
+    yield tmp_path
+    w.flush()
+    w._DISK.update(dir=None, budget=None, tag=None)
+
+
+def _window(seed):
+    import mlx.core as mx
+
+    mx.random.seed(seed)
+    return [mx.random.normal((1, 4, 8)).astype(mx.bfloat16) for _ in range(3)]
+
+
+def test_prompt_end_window_survives_a_ram_miss(disk):
+    # an SSD-restored checkpoint (another process, or evicted from RAM) had no window
+    # and its decode drafted from a handful of positions (tf110 1021h2: -10% at 32K)
+    import mlx.core as mx
+
+    budget = _Budget()
+    w.set_disk(disk / "win", budget, tag=(5, 19))
+    w.set_budget(10_000)
+    key = w.key_for(7, [1, 2, 3])
+    layers = _window(0)
+    w.put(key, layers, sum(int(x.nbytes) for x in layers))
+    assert w.persist(key)
+    w.flush()
+    assert budget.written and w.stats()["disk_written"] == 1
+    w.clear()  # a new process: RAM empty
+    got = w.get(key)
+    assert got is not None and len(got) == 3
+    for a, b in zip(layers, got, strict=True):
+        assert a.dtype == b.dtype == mx.bfloat16 and mx.array_equal(a, b)
+    # another drafter (other target layers) never reads it
+    w.clear()
+    w.set_tag((1, 2))
+    assert w.get(key) is None
+
+
+def test_no_disk_write_without_tag_or_space(disk):
+    w.set_budget(10_000)
+    key = w.key_for(7, [1, 2])
+    layers = _window(1)
+    w.put(key, layers, sum(int(x.nbytes) for x in layers))
+    w.set_disk(disk / "win", _Budget(), tag=None)
+    assert not w.persist(key)
+    w.set_disk(disk / "win", _Budget(allow=False), tag=(5,))
+    assert not w.persist(key) and w.stats()["disk_skipped"] >= 1
+
+
+def test_disk_store_keeps_the_newest_within_its_cap(disk, monkeypatch):
+    import time
+
+    w.set_disk(disk / "win", _Budget(), tag=(5,))
+    w.set_budget(10_000)
+    sizes = []
+    for i in range(3):
+        key = w.key_for(7, [i])
+        layers = _window(i)
+        w.put(key, layers, sum(int(x.nbytes) for x in layers))
+        assert w.persist(key)
+        w.flush()
+        sizes.append(next(iter(sorted((disk / "win").glob("*.npy")))).stat().st_size)
+        time.sleep(0.01)
+    monkeypatch.setattr(w, "DISK_CAP", sizes[0] * 2)
+    w._disk_trim(disk / "win")
+    assert len(list((disk / "win").glob("*.npy"))) == 2
+    w.clear()
+    assert w.get(w.key_for(7, [0])) is None  # the oldest went
+    assert w.get(w.key_for(7, [2])) is not None

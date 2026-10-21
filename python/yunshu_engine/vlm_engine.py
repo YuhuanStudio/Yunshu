@@ -1948,6 +1948,17 @@ class VLMEngine:
         if lower_specs:
             self._attach_lower_tiers(disk, path, lower_specs)
         logger.info("APC disk tier at %s (cap %.0f GiB, root-wide)", disk.dir, max_gb)
+        try:
+            from . import dflash_apc_window
+
+            # beside the APC root, not inside it: the root-wide budget owns that tree
+            root = disk.dir.parent
+            dflash_apc_window.set_disk(
+                root.with_name(root.name + ".dflash-window") / disk.dir.name,
+                getattr(disk, "budget", None),
+            )
+        except Exception:
+            logger.warning("drafter window disk store unavailable", exc_info=True)
         return disk
 
     def _attach_lower_tiers(self, disk, primary_path, specs) -> None:
@@ -2149,6 +2160,12 @@ class VLMEngine:
                 from .dflash_ring import install_context_projection
 
                 install_context_projection(drafter)
+                # stored drafter windows are this drafter's captured target layers
+                from . import dflash_apc_window
+
+                dflash_apc_window.set_tag(
+                    tuple(getattr(drafter.config, "target_layer_ids", ()) or ())
+                )
                 # Project only the context window the drafter attends to.
                 from .dflash_context import install as install_dflash_context
 

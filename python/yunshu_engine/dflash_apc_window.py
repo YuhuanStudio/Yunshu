@@ -10,7 +10,12 @@ unchanged; only acceptance suffers.
 
 At each APC checkpoint store the window that ends exactly there, keyed by the checkpoint's
 extra hash and token prefix; on a hit seed the new prefill's chunk list with it. A missing
-window (evicted, SSD-restored checkpoint, other drafter) leaves the previous behaviour.
+window (evicted, other drafter) leaves the previous behaviour.
+
+The RAM budget holds about two 32K windows, and an SSD-restored checkpoint (another process,
+or evicted from RAM) had none: 32K decode after such a hit ran ~10% slower (tf110 1021h2,
+prose 69.7 -> 62.9 tok/s, same tokens). With an APC disk tier the window that ends at the
+prompt is also written beside it (``set_disk``), read back on a RAM miss.
 """
 
 from __future__ import annotations
@@ -23,8 +28,20 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 _STATE: dict[str, Any] = {"installed": False, "current": None, "budget": 0}
+DISK_CAP = 4 << 30  # bytes of windows kept on disk per namespace (~40 at 32K)
+# disk store: directory, the volume's APC budget (its free-space reserve), the drafter tag
+# (its target layers: the window is their captured states) and the writer thread
+_DISK: dict[str, Any] = {"dir": None, "budget": None, "tag": None, "queue": None}
 _STORE: collections.OrderedDict = collections.OrderedDict()
-_STATS = {"stored": 0, "seeded": 0, "evicted": 0, "missed": 0}
+_STATS = {
+    "stored": 0,
+    "seeded": 0,
+    "evicted": 0,
+    "missed": 0,
+    "disk_written": 0,
+    "disk_read": 0,
+    "disk_skipped": 0,
+}
 
 
 def key_for(extra_hash: int, token_ids) -> tuple:
@@ -74,10 +91,140 @@ def put(key: tuple, layers: list, nbytes: int) -> bool:
 def get(key: tuple):
     hit = _STORE.get(key)
     if hit is None:
-        _STATS["missed"] += 1
-        return None
+        layers = _disk_get(key)
+        if layers is None:
+            _STATS["missed"] += 1
+            return None
+        nbytes = sum(int(x.nbytes) for x in layers)
+        if nbytes <= _STATE["budget"]:
+            put(key, layers, nbytes)
+        return layers
     _STORE.move_to_end(key)
     return hit[0]
+
+
+# -- disk store ----------------------------------------------------------------------
+
+
+def set_disk(directory, budget=None, tag=None) -> None:
+    """Keep prompt-end windows under ``directory`` (None: RAM only). ``budget`` is the
+    volume's APC DiskBudget (its free-space reserve applies); ``tag`` names the drafter's
+    captured layers and is part of every file name."""
+    from pathlib import Path
+
+    _DISK["dir"] = None if directory is None else Path(directory)
+    _DISK["budget"] = budget
+    if tag is not None:
+        _DISK["tag"] = tag
+
+
+def set_tag(tag) -> None:
+    _DISK["tag"] = tag
+
+
+def _disk_path(key: tuple):
+    directory, tag = _DISK["dir"], _DISK["tag"]
+    if directory is None or tag is None:
+        return None
+    name = hashlib.blake2b(
+        repr((tag, key[0], key[1])).encode() + key[2], digest_size=16
+    )
+    return directory / f"{name.hexdigest()}.bf16.npy"
+
+
+def persist(key: tuple) -> bool:
+    """Write the RAM window under ``key`` to disk (the prompt-end one; called by the APC
+    store). The copy to host memory runs here, on the MLX thread; the file write runs on a
+    writer thread."""
+    path = _disk_path(key)
+    hit = _STORE.get(key)
+    if path is None or hit is None:
+        return False
+    import mlx.core as mx
+    import numpy as np
+
+    layers = hit[0]
+    if any(x.dtype != mx.bfloat16 for x in layers):
+        return False
+    budget = _DISK["budget"]
+    nbytes = hit[1]
+    if budget is not None and not budget.allow_write(nbytes):
+        _STATS["disk_skipped"] += 1
+        return False
+    stacked = mx.stack(layers).view(mx.uint16)
+    mx.eval(stacked)
+    host = np.array(stacked, copy=True)
+    _writer().put((path, host))
+    return True
+
+
+def _writer():
+    import queue
+    import threading
+
+    q = _DISK["queue"]
+    if q is None:
+        q = _DISK["queue"] = queue.Queue()
+        threading.Thread(target=_write_loop, args=(q,), daemon=True).start()
+    return q
+
+
+def _write_loop(q) -> None:
+    import numpy as np
+
+    while True:
+        path, host = q.get()
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_name(path.name + ".tmp")
+            with open(tmp, "wb") as f:
+                np.save(f, host)
+            tmp.replace(path)
+            _STATS["disk_written"] += 1
+            budget = _DISK["budget"]
+            if budget is not None:
+                budget.note_written(path)
+            _disk_trim(path.parent)
+        except Exception:  # the window is an optimisation only
+            logger.debug("drafter window write failed", exc_info=True)
+        finally:
+            q.task_done()
+
+
+def _disk_trim(directory) -> None:
+    files = sorted(directory.glob("*.bf16.npy"), key=lambda f: f.stat().st_mtime)
+    total = sum(f.stat().st_size for f in files)
+    while files and total > DISK_CAP:
+        oldest = files.pop(0)
+        total -= oldest.stat().st_size
+        oldest.unlink(missing_ok=True)
+
+
+def _disk_get(key: tuple):
+    path = _disk_path(key)
+    if path is None or not path.exists():
+        return None
+    import os
+
+    import mlx.core as mx
+    import numpy as np
+
+    try:
+        host = np.load(path)
+        stacked = mx.array(host).view(mx.bfloat16)
+        os.utime(path)  # recently used: the trim keeps it
+    except Exception:
+        logger.debug("drafter window read failed", exc_info=True)
+        return None
+    _STATS["disk_read"] += 1
+    return [stacked[i] for i in range(int(stacked.shape[0]))]
+
+
+def flush() -> None:
+    """Wait for queued window writes (tests, shutdown)."""
+    q = _DISK["queue"]
+    if q is not None:
+        q.join()
 
 
 def window_from_chunks(chunks: list, keep: int) -> tuple[list, int] | None:
@@ -96,8 +243,9 @@ def window_from_chunks(chunks: list, keep: int) -> tuple[list, int] | None:
     return layers, sum(int(x.nbytes) for x in layers)
 
 
-def capture(token_ids, extra_hash: int) -> bool:
-    """Called from the coordinator's ``store_checkpoint`` while a prefill step is running."""
+def capture(token_ids, extra_hash: int, *, prompt_end: bool = False) -> bool:
+    """Called from the coordinator's ``store_checkpoint`` while a prefill step is running;
+    ``prompt_end``: the checkpoint ends the request's prompt (its window goes to disk too)."""
     batch = _STATE["current"]
     if batch is None or _STATE["budget"] <= 0:
         return False
@@ -109,7 +257,14 @@ def capture(token_ids, extra_hash: int) -> bool:
     if built is None:
         return False
     layers, nbytes = built
-    return put(key_for(extra_hash, token_ids), layers, nbytes)
+    key = key_for(extra_hash, token_ids)
+    stored = put(key, layers, nbytes)
+    if stored and prompt_end:
+        try:
+            persist(key)
+        except Exception:  # the window is an optimisation only
+            logger.debug("drafter window persist failed", exc_info=True)
+    return stored
 
 
 def seed(batch) -> bool:
