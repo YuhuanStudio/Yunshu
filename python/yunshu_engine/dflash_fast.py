@@ -589,6 +589,26 @@ def rounds(
         from .constrained_spec import forced_tokens, target_rows
 
         guide.feed(bonus)
+    # A round's tokens reach the consumer once the next round's verify graph is on the GPU,
+    # so the consumer's host time (detokenize, stop checks, streaming) overlaps the verify
+    # instead of leaving the GPU idle. ``emitted`` counts decided tokens, held ones included.
+    held: list = []
+
+    def release(outside=None):
+        # ``outside``: the lane-sum flag the consumer ran with before (a round sets it)
+        t_yield = time.perf_counter()
+        inside = lane_linear.sum_reuse_enabled()
+        if outside is not None:
+            lane_linear.set_sum_reuse(outside)
+        try:
+            for token in held:
+                yield token, None
+        finally:
+            if outside is not None:
+                lane_linear.set_sum_reuse(inside)
+        held.clear()
+        prof["yield"] = prof.get("yield", 0.0) + (time.perf_counter() - t_yield) * 1000
+
     try:
         while emitted < max_tokens:
             current = context_length(lm, cache) + 1 if _chain is not None else 0
@@ -597,6 +617,7 @@ def rounds(
             ):
                 from .dflash_copy import resume_chain
 
+                yield from release()
                 for entry in draft_cache:
                     entry.offset += skipped
                 yield from resume_chain(
@@ -738,6 +759,8 @@ def rounds(
                         target, window, parents, shape.original_ranks
                     )
                     mx.async_eval(packed)
+                    # the consumer may stop here (GeneratorExit): the window is dropped below
+                    yield from release(previous_sums)
                     target_ids_row, window_ids, parent_ids, ranks = unpack_readback(
                         packed.tolist(),
                         int(target.size),
@@ -849,25 +872,17 @@ def rounds(
                 hidden,
                 [c.state for c in cache if hasattr(c, "state")],
             )
-            counted = False
-            for token in new_tokens:
-                if copy is not None:
-                    copy.extend([token])
-                if copied:
-                    if not counted:
-                        draft.copy_total_rounds = (
-                            getattr(draft, "copy_total_rounds", 0) + 1
-                        )
-                        counted = True
-                    draft.copy_total_tokens = getattr(draft, "copy_total_tokens", 0) + 1
-                t_yield = time.perf_counter()
-                yield token, None
-                prof["yield"] = (
-                    prof.get("yield", 0.0) + (time.perf_counter() - t_yield) * 1000
+            new_tokens = new_tokens[: max_tokens - emitted]
+            if copy is not None:
+                copy.extend(new_tokens)
+            if copied and new_tokens:
+                draft.copy_total_rounds = getattr(draft, "copy_total_rounds", 0) + 1
+                draft.copy_total_tokens = getattr(draft, "copy_total_tokens", 0) + len(
+                    new_tokens
                 )
-                emitted += 1
-                if emitted >= max_tokens:
-                    return
+            held.extend(new_tokens)
+            emitted += len(new_tokens)
+        yield from release()
     finally:
         logger.info(
             "DFlash suffix graft engagement: copy_rounds=%d proposed=%d accepted=%d extra_accepted=%d matches=%d verify_rows=%d round_ms=%.3f first_round_rows=%d",

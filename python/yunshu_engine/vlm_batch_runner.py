@@ -1403,6 +1403,12 @@ class VLMBatchRunner:
                 if oldest is not None:
                     oldest.handoff_graced = True
         self._observe_prefill(job)
+        if not group.jobs and getattr(group, "spec", False):
+            # before the APC sees the cache: closing the rounds drops a window the fast
+            # DFlash tree has in flight (its tokens reach the consumer one round late)
+            from .spec_release import release_rounds
+
+            release_rounds(group.gen)
         coordinator = getattr(group.gen, "apc", None)
         if coordinator is not None and hasattr(coordinator, "release_request"):
             pending_ids = getattr(coordinator.manager, "_console_requests", {}).get(
@@ -1415,10 +1421,6 @@ class VLMBatchRunner:
                 if not pending_ids:
                     coordinator.manager._console_requests.pop(tuple(job.ids), None)
             coordinator.release_request(job.ids, job.cache_plan)
-        if not group.jobs and getattr(group, "spec", False):
-            from .spec_release import release_rounds
-
-            release_rounds(group.gen)
         self._emit(job, _DONE)
 
     @staticmethod

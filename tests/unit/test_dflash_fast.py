@@ -552,3 +552,75 @@ def test_packed_readback_returns_the_same_four_lists():
 def test_graft_width_keeps_default_fast_dflash_route(monkeypatch, admission):
     monkeypatch.setattr(mtp_lane, "copy_rows_for_model", lambda *_: 32)
     assert fast.eligible(None, None, [], admission)
+
+
+@pytest.mark.parametrize("stop_early", [False, True])
+def test_round_tokens_reach_the_consumer_after_the_next_verify_is_submitted(
+    monkeypatch, stop_early
+):
+    # The consumer's host time overlaps the next round's verify; a consumer that stops
+    # while a window is in flight drops that window (it is never committed).
+    from yunshu_engine import dflash_plan, spec_schedule
+    from yunshu_engine.kernels import lane_linear
+
+    events = []
+    monkeypatch.setattr(fast, "prepare", lambda *_: SimpleNamespace())
+    monkeypatch.setattr(mtp_lane, "copy_rows_for_model", lambda *_: 0)
+    monkeypatch.setitem(mtp_lane._STATE, "context", [1] * 1034)
+    monkeypatch.setattr(lane_linear, "_SUM_REUSE", False)
+    monkeypatch.setattr(fast, "observe_budget", lambda *_a, **_k: False)
+
+    class Budget:
+        p, samples = [], {}
+
+        def __init__(self, *_a, **_k):
+            pass
+
+        def choose(self, _room):
+            return 0
+
+        def _median(self, v):
+            return 0
+
+    monkeypatch.setattr(spec_schedule, "NodeBudget", Budget)
+    monkeypatch.setattr(
+        fast,
+        "mx",
+        SimpleNamespace(
+            array=lambda v, **_: np.array(v),
+            int32=np.int32,
+            concatenate=np.concatenate,
+            async_eval=lambda *_: None,
+        ),
+    )
+    monkeypatch.setattr(
+        dflash_plan,
+        "FastShape",
+        lambda *_args, **_kw: SimpleNamespace(width=1, original_ranks=None),
+    )
+
+    def forward(*args, **kwargs):
+        events.append("verify")
+        return SimpleNamespace(hidden=np.ones((1, 1, 1)), captured=[np.ones((1, 1, 1))])
+
+    monkeypatch.setattr(tv, "tree_forward", forward)
+    monkeypatch.setattr(tv, "tree_commit", lambda *a: events.append("commit"))
+    monkeypatch.setattr(tv, "tree_abort", lambda *_: events.append("abort"))
+    made = iter(range(20, 40))
+    model = SimpleNamespace(speculative_argmax_from_hidden=lambda *_: np.array([next(made)]))
+    draft = SimpleNamespace(
+        config=SimpleNamespace(target_layer_ids=[0]), reset=lambda *_: []
+    )
+    iterator = fast.rounds(
+        model, draft, [], np.ones((1, 1, 1)), first_bonus=11, max_tokens=4, sampler=None
+    )
+    assert next(iterator) == (20, None)
+    assert events == ["verify", "commit", "verify"]
+    assert not lane_linear.sum_reuse_enabled()  # the consumer runs outside the round's scope
+    if stop_early:
+        iterator.close()
+        assert events == ["verify", "commit", "verify", "abort"]
+    else:
+        assert list(iterator) == [(21, None), (22, None)]
+        assert events == ["verify", "commit"] * 3
+    assert not lane_linear.sum_reuse_enabled()
