@@ -153,9 +153,13 @@ def test_only_the_first_append_may_fill_past_the_window():
         ring.append(d, mx.zeros((1, 17, D_TARGET), dtype=mx.bfloat16), mx.array([1]))
 
 
-@pytest.mark.parametrize("bits", [None, 8])
-def test_fused_context_projection_matches_each_layers_own(bits):
-    # the served drafter is 8-bit: every layer's k_proj / v_proj stacked into one matmul
+@pytest.mark.parametrize(
+    ("bits", "stacked"), [(None, False), (8, False), (None, True), (8, True)]
+)
+def test_fused_context_projection_matches_each_layers_own(bits, stacked):
+    # the served drafter is 8-bit with each layer's K|V stacked (dflash_tree
+    # .stack_projections sets k_proj / v_proj to None; 04932a8f read their weights and
+    # failed every served ring request): every layer's projection becomes one matmul
     d = _drafter(window=4096)
     if bits:
         nn.quantize(
@@ -166,6 +170,11 @@ def test_fused_context_projection_matches_each_layers_own(bits):
                 isinstance(m, nn.Linear) and m.weight.shape[-1] % 32 == 0
             ),
         )
+    if stacked:
+        from yunshu_engine.dflash_tree import stack_projections
+
+        stack_projections(d)
+        assert d.layers[0].self_attn.k_proj is None
     rounds = _rounds(16, [1, 5, 16, 3])
     fused = _ring_rounds(d, rounds, 15, cap=4096 + 64)
     assert d._yunshu_ring_kv is not False

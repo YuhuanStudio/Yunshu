@@ -101,7 +101,8 @@ def _mask(slot_pos: mx.array, pos: mx.array, keep: int, rows: int) -> Any:
 
 def _context_kv(drafter: Any, h_ctx: mx.array) -> list:
     """Every layer's context keys and values from one matmul: the layers project the same
-    ``h_ctx`` (the vendor fuses this for float drafters only; the served drafter is 8-bit)."""
+    ``h_ctx`` (the vendor fuses this for float drafters only, and the served drafter is 8-bit
+    with each layer's K|V already stacked by ``dflash_tree.stack_projections``)."""
     fused: Any = getattr(drafter, "_yunshu_ring_kv", None)
     if fused is None:
         fused = _fuse_context_kv(drafter) or False
@@ -114,24 +115,38 @@ def _context_kv(drafter: Any, h_ctx: mx.array) -> list:
     else:
         out = mx.quantized_matmul(h_ctx, weight, scales, biases, transpose=True, **cfg)
     bounds, total = [], 0
-    for w in widths[:-1]:
+    for w in widths:
+        bounds += [total + w // 2, total + w]
         total += w
-        bounds.append(total)
-    chunks = mx.split(out, bounds, axis=-1)
+    chunks = mx.split(out, bounds[:-1], axis=-1)
     return list(zip(chunks[::2], chunks[1::2], strict=True))
 
 
+def _layer_kv(attn: Any) -> list | None:
+    """The linears whose outputs, concatenated, are this layer's K then V."""
+    stacked = getattr(attn, "_stacked_kv", None)
+    if stacked is not None:
+        return [stacked]
+    k, v = getattr(attn, "k_proj", None), getattr(attn, "v_proj", None)
+    if k is None or v is None or k.weight.shape[0] != v.weight.shape[0]:
+        return None
+    return [k, v]
+
+
 def _fuse_context_kv(drafter: Any):
-    """(weight, scales, biases, quant config, output widths) of every layer's k_proj and
-    v_proj stacked, or None when they are not plain or same-format affine-quantized."""
-    projections = [
-        p
-        for layer in drafter.layers
-        for p in (layer.self_attn.k_proj, layer.self_attn.v_proj)
-    ]
+    """(weight, scales, biases, quant config, K|V width per layer) of every layer's context
+    projection stacked, or None unless all are bias-free plain or same-format affine
+    quantized linears."""
+    per_layer: list[list[Any]] = []
+    for layer in drafter.layers:
+        group = _layer_kv(layer.self_attn)
+        if group is None:
+            return None
+        per_layer.append(group)
+    projections = [p for group in per_layer for p in group]
     if any(getattr(p, "bias", None) is not None for p in projections):
         return None
-    widths = [int(p.weight.shape[0]) for p in projections]
+    widths = [sum(int(p.weight.shape[0]) for p in group) for group in per_layer]
     if all(type(p) is nn.Linear for p in projections):
         weight = mx.concatenate([p.weight for p in projections], axis=0)
         mx.eval(weight)
