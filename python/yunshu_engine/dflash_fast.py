@@ -857,8 +857,15 @@ def rounds(
                     # the consumer may stop here (GeneratorExit): the window is dropped below
                     yield from release(previous_sums)
                     gpu_window.mark("consumer_done")
-                    if ring is not None and not grafted and guide is None:
-                        # the next round's context and draft, from the GPU's own walk
+                    if (
+                        ring is not None
+                        and not grafted
+                        and guide is None
+                        and not copied
+                    ):
+                        # the next round's context and draft, from the GPU's own walk. Not
+                        # after a copy round: copy rounds run in streaks, and a draft the
+                        # next copy round drops cost 32K code -2.8% (tf110 1021r3)
                         path_g, count_g, bonus_g = walk_gpu(
                             window, shape.parents_array(), target
                         )
