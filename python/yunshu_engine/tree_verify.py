@@ -38,6 +38,7 @@ from typing import Any, cast
 
 import mlx.core as mx
 
+from . import gpu_window
 from .kernels import ragged_attention as ra
 from .kernels import ragged_kv
 from .kernels.omlx import qwen35_gdn_prework as gp
@@ -1026,7 +1027,6 @@ def _tick(name: str, arrays, t0: float) -> float:
     mx.eval(arrays)
     now = time.perf_counter()
     PROFILE[name] = PROFILE.get(name, 0.0) + (now - t0) * 1000
-    from . import gpu_window
 
     count = gpu_window.stage_end()
     if count:
@@ -1077,7 +1077,6 @@ def _tree_forward(
 
         PROFILE["rounds"] += 1
         mx.eval(h, normed)
-        from . import gpu_window
 
         gpu_window.stage_begin()
         t0 = time.perf_counter()
@@ -1128,6 +1127,8 @@ def _tree_forward(
         if not prof and (i == 0 or (i + 1) % 4 == 0) and i + 1 < len(layers):
             try:
                 mx.async_eval(h, normed)
+                if i == 0:
+                    gpu_window.mark("verify_first")
             except BaseException:
                 # Early evaluation can fail before the round loop receives
                 # TreeResult. Restore appended KV lengths here in that case.

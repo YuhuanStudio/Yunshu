@@ -767,6 +767,7 @@ def rounds(
                     window = mx.array([[bonus]], dtype=token_dtype)
                 if first_round(emitted):
                     graft_stats["first_rows"] = int(window.size)
+                gpu_window.mark("drafted")
                 commit_pending()  # copy, guided and plain rounds: no drafter to cover it
                 t_drafted = time.perf_counter()
                 result = tv.tree_forward(
