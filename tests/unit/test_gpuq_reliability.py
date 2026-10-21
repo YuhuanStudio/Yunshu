@@ -808,3 +808,52 @@ def test_expect_complete_requires_structured_true(q, content, expected):
     path.write_text(content)
     job(q, "result", outputs=[str(path)], expect_complete=True)
     assert q.wait(["result"], max_seconds=0) == expected
+
+
+def _state(pid):
+    return subprocess.check_output(
+        ["ps", "-o", "stat=", "-p", str(pid)], text=True
+    ).strip()
+
+
+def test_pause_stops_a_server_the_job_started_in_its_own_session(q, tmp_path):
+    # tfbench starts its server with start_new_session: SIGSTOP of the job's group alone
+    # left that server decoding while the job was "paused" (2026-10-21, a timed cell 7x slow)
+    pidfile = tmp_path / "server.pid"
+    script = (
+        "import subprocess, sys, time\n"
+        "p = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'],"
+        " start_new_session=True)\n"
+        f"open({str(pidfile)!r}, 'w').write(str(p.pid))\n"
+        "time.sleep(60)\n"
+    )
+    root = subprocess.Popen([sys.executable, "-c", script], start_new_session=True)
+    try:
+        for _ in range(100):
+            if pidfile.exists() and pidfile.read_text():
+                break
+            import time
+
+            time.sleep(0.05)
+        server = int(pidfile.read_text())
+        assert os.getpgid(server) != root.pid
+        pauser = q.Pauser({"id": "j", "pid": root.pid}, q.JOBS / "j.json")
+        q._write(q.JOBS / "j.json", {"id": "j"})
+        pauser.pause(1.0)
+        assert _state(root.pid).startswith("T") and _state(server).startswith("T")
+        pauser.resume(2.0)
+        assert not _state(server).startswith("T")
+        q._signal_tree(root.pid, 9)
+        root.wait(timeout=10)
+        for _ in range(100):
+            try:
+                os.kill(server, 0)
+            except ProcessLookupError:
+                break
+            import time
+
+            time.sleep(0.05)
+        else:
+            raise AssertionError("the job's own-session server survived the kill")
+    finally:
+        root.kill()

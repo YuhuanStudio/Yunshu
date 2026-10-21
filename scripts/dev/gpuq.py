@@ -17,7 +17,7 @@ without polling anything else.
 
 Serving awareness (optional; docs/guides/SERVE_AND_DEVELOP.md): with production server URLs configured
 (GPUQ_SERVING_URLS, or $GPUQ_DIR/serving.json) a job starts only after every server has been idle for
-IDLE_START seconds, is SIGSTOPped (its own process group only) the moment a production request appears, and
+IDLE_START seconds, is SIGSTOPped (every process group of its own process tree) the moment a production request appears, and
 SIGCONTed after IDLE_RESUME idle seconds. Pause intervals go to the job JSON and to the file named by
 $GPUQ_PAUSE_FILE (read them with scripts/dev/gpuq_pause.py). ``--serving-ok`` bypasses the gate (CPU-only
 jobs, still subject to priority preemption); ``--mem-gb`` is checked against free memory minus the production reserve. The poller reads only the
@@ -443,8 +443,43 @@ def _admit(jobs: list[dict], gate: ServingGate, preempt=False) -> dict | None:
     return winner if winner is not None and winner["waiting"] is None else None
 
 
+def _tree_pgids(root_pid: int) -> set[int]:
+    """Process groups of a job's process tree. A server the job starts in its own session
+    (``start_new_session``) is outside the job's group, so signalling the group alone left
+    it running: a "paused" job's server kept decoding and contended a timed job."""
+    groups = {root_pid}
+    try:
+        rows = [
+            tuple(map(int, line.split()))
+            for line in subprocess.check_output(
+                ["ps", "-axo", "pid=,ppid=,pgid="], text=True, timeout=5
+            ).splitlines()
+        ]
+    except Exception:  # noqa: BLE001
+        return groups
+    tree = {root_pid}
+    while True:
+        grown = tree | {pid for pid, ppid, _ in rows if ppid in tree}
+        if grown == tree:
+            break
+        tree = grown
+    groups |= {pgid for pid, _, pgid in rows if pid in tree}
+    own = os.getpgid(0)
+    return {g for g in groups if g > 1 and g != own}
+
+
+def _signal_tree(root_pid: int, sig: int, groups: set[int] | None = None) -> set[int]:
+    """Signal every process group of the job's tree; returns the groups signalled."""
+    groups = _tree_pgids(root_pid) if groups is None else groups
+    for g in groups:
+        with contextlib.suppress(ProcessLookupError, PermissionError):
+            os.killpg(g, sig)
+    return groups
+
+
 class Pauser:
-    """SIGSTOP / SIGCONT of one job's own process group, plus the pause-interval log."""
+    """SIGSTOP / SIGCONT of one job's process groups (its own and any its children
+    started in new sessions), plus the pause-interval log."""
 
     def __init__(self, job: dict, path: Path) -> None:
         self.job, self.path = job, path
@@ -474,9 +509,11 @@ class Pauser:
 
     def _signal(self, sig: int) -> None:
         pid = self.job.get("pid")
-        if pid and pid > 1:  # only ever the job's own session / process group
-            with contextlib.suppress(ProcessLookupError, PermissionError):
-                os.killpg(pid, sig)
+        if pid and pid > 1:  # only ever the job's own process tree
+            groups = _tree_pgids(pid) | set(getattr(self, "_stopped", ()))
+            _signal_tree(pid, sig, groups)
+            # a stopped tree cannot grow, so resume reaches every group the pause stopped
+            self._stopped = groups if sig == signal.SIGSTOP else set()
 
     def pause(self, now: float, reason: str = "serving") -> None:
         self.job["pause_reason"] = reason
@@ -1295,7 +1332,7 @@ def _run_one(job: dict, path: Path, gate: ServingGate | None = None) -> None:
                 try:
                     rc = proc.wait(timeout=30)
                 except subprocess.TimeoutExpired:
-                    os.killpg(proc.pid, signal.SIGKILL)
+                    _signal_tree(proc.pid, signal.SIGKILL)
                     rc = proc.wait()
     # The command's own exit status is in the rc file; the shell's status alone is not
     # trusted (a wrapper that ends in `echo` exits 0 after a crash).
@@ -1449,8 +1486,7 @@ def _adopt(job: dict, path: Path, gate: ServingGate | None = None) -> None:
         elif sigint_at is not None and now - sigint_at > 30:
             # Same escalation as _run_one: a job that ignores SIGINT must not hold the lane.
             sigint_at = now + 10**9
-            with contextlib.suppress(ProcessLookupError):
-                os.killpg(pid, signal.SIGKILL)
+            _signal_tree(pid, signal.SIGKILL)
         time.sleep(min(POLL_S, gate.poll_s) if gate.enabled else POLL_S)
     rc_file = LOGS / f"{job['id']}.rc"
     try:
@@ -1497,8 +1533,7 @@ def _execute(job: dict, path: Path, gate: ServingGate) -> None:
         # Never leave an untracked GPU process behind after a runner error.
         pid = job.get("pid")
         if pid and pid > 1:
-            with contextlib.suppress(ProcessLookupError, PermissionError):
-                os.killpg(pid, signal.SIGKILL)
+            _signal_tree(pid, signal.SIGKILL)
         with contextlib.suppress(Exception):
             pauser = Pauser(job, path)
             ended = _now()
