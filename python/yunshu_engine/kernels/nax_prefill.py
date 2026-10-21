@@ -266,6 +266,17 @@ def tail_eligible(m: int, k: int, n: int, bits: int, group: int, tiled: bool) ->
 
 def tail_matmul(x: mx.array, weight: mx.array, sbt: mx.array, *, bits: int) -> mx.array:
     rows = x.shape[0]
+    if 512 < rows < 640:
+        # A turn-two suffix just above one atom otherwise computes five M128
+        # tiles. M64 needs only nine tiles at 532 rows, with identical K loops.
+        padded = ((rows + 63) // 64) * 64
+        if padded != rows:
+            x = mx.pad(x, [(0, padded - rows), (0, 0)])
+        record_dispatch(padded, x.shape[1], sbt.shape[1], bits)
+        return cast(
+            mx.array,
+            make(mx, x, weight, None, None, bits=bits, bm=64, bn=64, sbt=sbt)(),
+        )[:rows]
     padded = ((rows + 127) // 128) * 128
     if padded != rows:
         x = mx.pad(x, [(0, padded - rows), (0, 0)])

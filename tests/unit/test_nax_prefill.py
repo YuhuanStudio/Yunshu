@@ -184,10 +184,17 @@ def test_short_tail_native_route_skips_untile(monkeypatch, rows, entry):
         return mx.zeros((x.shape[0], 256), dtype=mx.bfloat16)
 
     monkeypatch.setattr(nax_prefill, "matmul", native)
+
+    def make(mx, x, weight, scales, biases, *, bits, bm, bn, sbt):
+        assert bm == 64 and bn == 64
+        return lambda: native(x, weight, sbt, bits=bits)
+
+    monkeypatch.setattr(nax_prefill, "make", make)
     x = mx.zeros((1, rows, 64), dtype=mx.bfloat16)
     got = layer(x) if entry == "call" else layer.prefill([x])[0]
     assert got.shape == (1, rows, 256)
-    assert calls == [((rows + 127) // 128) * 128]
+    tile = 64 if 512 < rows < 640 else 128
+    assert calls == [((rows + tile - 1) // tile) * tile]
 
 
 @pytest.mark.parametrize("rows", [1, 128, 512, 2049, 8193])

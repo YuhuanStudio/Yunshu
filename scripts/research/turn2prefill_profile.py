@@ -18,6 +18,28 @@ def server_command(command):
     return command
 
 
+def measured_call(original, name, mx, emit, active):
+    """Synchronize only prompt components; decode timing stays uninstrumented."""
+
+    def measured(self, x, *args, **kwargs):
+        if not active() or not 1 < x.shape[1] <= 2048:
+            return original(self, x, *args, **kwargs)
+        mx.synchronize()
+        t = time.perf_counter()
+        result = original(self, x, *args, **kwargs)
+        mx.eval(result)
+        mx.synchronize()
+        emit(
+            span=name,
+            rows=x.shape[1],
+            module=id(self),
+            elapsed_s=time.perf_counter() - t,
+        )
+        return result
+
+    return measured
+
+
 def install_profile():
     import mlx.core as mx
     from mlx_vlm.generate.ar import PromptProcessingBatch
@@ -26,6 +48,23 @@ def install_profile():
     from yunshu_engine.kernels.lane_linear import LaneLinear
 
     totals = {"stock_s": 0.0, "stock_calls": 0}
+    layer_hooks = []
+    state = {"prompt": False}
+
+    def install_layer_hooks():
+        # Install after engine startup patches have selected the served methods.
+        if layer_hooks:
+            return
+        from mlx_vlm.models.qwen3_5 import language
+
+        for name in ("Qwen3_5Attention", "Qwen3_5GatedDeltaNet", "Qwen3_5MLP"):
+            cls = getattr(language, name)
+            original = cls.__call__
+
+            cls.__call__ = measured_call(
+                original, name, mx, emit, lambda: state["prompt"]
+            )
+            layer_hooks.append(cls)
 
     def emit(**record):
         print("TURN2PROFILE " + json.dumps(record), flush=True)
@@ -45,11 +84,16 @@ def install_profile():
     step = PromptProcessingBatch.prompt_step
 
     def timed_step(self):
+        install_layer_hooks()
         mx.synchronize()
         start = self._processed_prompt_columns
         totals.update(stock_s=0.0, stock_calls=0)
         t = time.perf_counter()
-        n = step(self)
+        state["prompt"] = True
+        try:
+            n = step(self)
+        finally:
+            state["prompt"] = False
         mx.synchronize()
         emit(
             span="prompt_step",

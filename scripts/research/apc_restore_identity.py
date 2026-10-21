@@ -20,9 +20,9 @@ import tfbench as t  # noqa: E402
 
 
 def assert_identity(out):
-    for mode in ("partial", "full"):
+    for mode in ("partial", "full", *(["spec_off"] if "spec_off" in out else [])):
         result = out[mode]
-        if not result["cached"] or not (
+        if (mode != "spec_off" and not result["cached"]) or not (
             result["tokens_equal"] and result["logprobs_equal"]
         ):
             raise RuntimeError(f"APC {mode} restore is not bit-equal: {result}")
@@ -82,6 +82,8 @@ def main():
     ap.add_argument("--ctx", type=int, default=8192)
     ap.add_argument("--kind", default="prose")
     ap.add_argument("--turn2", action="store_true")
+    ap.add_argument("--turn2-repeat", type=int, default=24)
+    ap.add_argument("--compare-spec-off", action="store_true")
     ap.add_argument("--env", action="append", default=[])
     ap.add_argument("--out", required=True)
     a = ap.parse_args()
@@ -98,7 +100,7 @@ def main():
                 "role": "assistant",
                 "content": (
                     "The reference describes events, names, places, and their explanations. "
-                    * 24
+                    * a.turn2_repeat
                 ),
             },
             {
@@ -121,9 +123,16 @@ def main():
         res["full"] = ask(s.url, s.model, Q)
     finally:
         s.kill()
+    if a.compare_spec_off:
+        s = t.Srv("yunshu", {**env, "YUNSHU_VLM_DRAFT": "off"}, f"apcid-off-{a.ctx}")
+        try:
+            t.send(s.url, t.req(s.model, "Say hi.", 8))
+            res["spec_off"] = ask(s.url, s.model, Q)
+        finally:
+            s.kill()
     ref = res["cold"]
     out = dict(ctx=a.ctx, kind=a.kind, turn2=a.turn2, env=env)
-    for k in ("partial", "full"):
+    for k in ("partial", "full", *(["spec_off"] if a.compare_spec_off else [])):
         r = res[k]
         out[k] = dict(
             cached=r["cached"],
