@@ -602,6 +602,29 @@ def rounds(
         context_length(lm, cache),
     )
     skipped = 0
+    # YUNSHU_DFLASH_RING: the drafter context in GPU-positioned rings (dflash_ring), so the
+    # next round's draft can be queued behind the verify. Only where the request cannot reach
+    # the chain handoff (it takes the vendor draft cache).
+    ring = None
+    prebuilt = None
+    if (
+        settings.get("YUNSHU_DFLASH_RING")
+        and keep is not None
+        and hidden is not None
+        and (context_length(lm, cache) or 0) + max_tokens < CONTEXT_LIMIT
+    ):
+        from . import dflash_ring
+        from .dflash_plan import walk_gpu
+
+        ring = dflash_ring.Ring(fast_draft, 2 * keep + 64, keep)
+        rows = int(hidden.shape[1])
+        if rows > keep:  # the vendor crop: positions still count the dropped rows
+            ring.pos = mx.array([rows - keep], dtype=mx.int32)
+            hidden = hidden[:, rows - keep :]
+        ring.append(
+            fast_draft, hidden, mx.array([int(hidden.shape[1])], dtype=mx.int32)
+        )
+        hidden = None
     verifier = Verifier(q35._EXACT_SPECULATIVE_VERIFIER)
     bonus = int(first_bonus)
     emitted = 1
@@ -694,8 +717,10 @@ def rounds(
                     else max_tokens - emitted
                 )
                 n = budget.choose(max(0, room - 1))
-                if hidden is None:
+                if hidden is None and ring is None:
                     n = 0  # a promoted row: the first round is plain and captures hidden states
+                ready, prebuilt = prebuilt, None
+                appended = False
                 grafted = []
                 graft_rows = 0
                 masked = guide is not None and guide.constrained
@@ -739,14 +764,24 @@ def rounds(
                     parents = mx.arange(-1, n, dtype=mx.int32)
                     shape = FastShape(parents, n, is_chain=True)
                 elif n:
-                    if skipped:
-                        for entry in draft_cache:
-                            entry.offset += skipped
-                        skipped = 0
                     gpu_window.mark("lattice_start")
-                    lattice = dt.compute_lattice_gpu(
-                        fast_draft, bonus, hidden, draft_cache, 15
-                    )
+                    if ring is not None:
+                        if ready is None:
+                            anchor = mx.array([bonus], dtype=mx.int32)
+                            ready = dt.lattice_from_hidden(
+                                fast_draft,
+                                dflash_ring.draft_hidden(fast_draft, ring, anchor, 15),
+                                anchor,
+                            )
+                        lattice = ready
+                    else:
+                        if skipped:
+                            for entry in draft_cache:
+                                entry.offset += skipped
+                            skipped = 0
+                        lattice = dt.compute_lattice_gpu(
+                            fast_draft, bonus, hidden, draft_cache, 15
+                        )
                     gpu_window.mark("search_start")
                     tokens, parents = search_tree(lattice, n)
                     if profile_sync:
@@ -819,6 +854,23 @@ def rounds(
                     # the consumer may stop here (GeneratorExit): the window is dropped below
                     yield from release(previous_sums)
                     gpu_window.mark("consumer_done")
+                    if ring is not None and not grafted and guide is None:
+                        # the next round's context and draft, from the GPU's own walk
+                        path_g, count_g, bonus_g = walk_gpu(
+                            window, shape.parents_array(), target
+                        )
+                        rows_g = mx.take(
+                            mx.concatenate(result.captured, axis=-1), path_g, axis=1
+                        )
+                        ring.append(fast_draft, rows_g, count_g)
+                        appended = True
+                        prebuilt = dt.lattice_from_hidden(
+                            fast_draft,
+                            dflash_ring.draft_hidden(fast_draft, ring, bonus_g, 15),
+                            bonus_g,
+                        )
+                        mx.async_eval(prebuilt.cands, prebuilt.unary, prebuilt.anchor)
+                        gpu_window.mark("prebuilt")
                     target_ids_row, window_ids, parent_ids, ranks = unpack_readback(
                         packed.tolist(),
                         int(target.size),
@@ -856,15 +908,20 @@ def rounds(
                 captured = mx.concatenate(result.captured, axis=-1)[
                     :, mx.array(path, dtype=mx.int32)
                 ]
-                hidden = (
-                    captured
-                    if hidden is None
-                    else mx.concatenate([hidden, captured], axis=1)
-                )
+                if ring is None:
+                    hidden = (
+                        captured
+                        if hidden is None
+                        else mx.concatenate([hidden, captured], axis=1)
+                    )
+                elif not appended:  # grafted or guided: the host's path
+                    ring.append(
+                        fast_draft, captured, mx.array([len(path)], dtype=mx.int32)
+                    )
                 t_m3 = time.perf_counter()
                 if copied:
                     copy.observe_copy(n, len(path) - 1)
-                    if keep is not None and hidden.shape[1] > keep:
+                    if ring is None and keep is not None and hidden.shape[1] > keep:
                         dropped = int(hidden.shape[1]) - keep
                         hidden = hidden[:, dropped:]
                         skipped += dropped
@@ -925,9 +982,8 @@ def rounds(
                     draft_vocab.learn(new_tokens)
             finally:
                 lane_linear.set_sum_reuse(previous_sums)
-            mx.async_eval(
-                hidden
-            )  # the next draft's input, gathered while the host moves on
+            if hidden is not None:  # the next draft's input, gathered meanwhile
+                mx.async_eval(hidden)
             gpu_window.mark("round_done")
             new_tokens = new_tokens[: max_tokens - emitted]
             if copy is not None:
