@@ -574,7 +574,9 @@ def rounds(
     draft_cache = draft.reset(model)
     view_of = getattr(private, "view_of", None)
     fast_draft = view_of(draft) if view_of is not None else draft
-    budget = NodeBudget(15, prior=dt.PRIOR)
+    # 7 or 15 nodes (8 / 16 rows): at 128K 8 -> 12 rows costs +11.5 ms (a second 8-token
+    # attention group) and 12 -> 16 only +1.4 (tf110 1021f row cost)
+    budget = NodeBudget(15, prior=dt.PRIOR, widths=(7, 15))
 
     profile_sync = bool(settings.get("YUNSHU_DEBUG_TREE_PROFILE"))
     draft_vocab = getattr(draft, "_draft_vocab", None)

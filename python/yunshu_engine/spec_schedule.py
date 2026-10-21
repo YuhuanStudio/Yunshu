@@ -39,8 +39,17 @@ class NodeBudget:
         plain_ms: float = 43.0,
         row_ms: float = 0.5,
         draft_ms: float = 10.0,
+        widths: tuple[int, ...] | None = None,
     ):
         self.size = int(size)
+        # budgets the choice may land on (None: any): a verify's cost steps with its rows
+        # (the fast tree: 8-token attention groups, 16-row projection blocks), so a
+        # budget between two steps pays the upper one's cost for fewer nodes
+        self.widths = (
+            None
+            if widths is None
+            else tuple(sorted({0, *(int(w) for w in widths if 0 < w <= self.size)}))
+        )
         prior = list(prior or [])
         # per-node landing probability: the prior, decaying for unlisted nodes
         self.p = [float(prior[i]) if i < len(prior) else 0.05 for i in range(self.size)]
@@ -111,7 +120,9 @@ class NodeBudget:
         def rate(n):
             return self.expected_tokens(n) / self.cycle_ms(n)
 
-        top = max(range(self.size + 1), key=rate)
+        top = max(
+            self.widths if self.widths is not None else range(self.size + 1), key=rate
+        )
         return top if rate(top) > MIN_GAIN * rate(self.size) else self.size
 
     # -- per round -------------------------------------------------------------------

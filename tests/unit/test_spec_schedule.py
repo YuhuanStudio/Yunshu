@@ -144,3 +144,31 @@ def test_steep_row_cost_still_shrinks_the_tree():
     # Long context: a row costs ~3 ms, so the tail (<10% tokens) no longer pays.
     means = [_simulate(seed, slope=3.0) for seed in range(8)]
     assert max(means) <= 9.0, means
+
+
+def _stepped(seed, widths, rounds=400):
+    # 128K-like verify: rows cost in 8-row steps (an 8-token attention group each),
+    # nearly flat inside a step (tf110 1021f: 8 rows 58.9 ms, 12 rows 70.4, 16 rows 71.8)
+    import random
+
+    rng = random.Random(seed)
+    true_p = [0.9, 0.7, 0.5, 0.35, 0.25, 0.18, 0.13, 0.1] + [0.06] * 7
+    budget = NodeBudget(15, prior=true_p, widths=widths)
+    chosen = []
+    for _ in range(rounds):
+        n = budget.choose(100)
+        landed = [i for i in range(n) if rng.random() < true_p[i]]
+        rows = n + 1
+        cost = 56.0 + (0 if rows <= 8 else 12.0) + 0.2 * rows + rng.uniform(-1, 1)
+        budget.observe(n, landed, cost)
+        chosen.append(n)
+    return chosen[100:]
+
+
+def test_widths_keep_the_budget_on_row_steps():
+    for seed in range(4):
+        chosen = _stepped(seed, (7, 15))
+        assert set(chosen) <= {0, 7, 15}, set(chosen)
+    # unrestricted, the linear fit between the probes lands between the steps
+    free = [n for seed in range(4) for n in _stepped(seed, None)]
+    assert any(8 <= n <= 14 for n in free)
