@@ -97,6 +97,8 @@ A lossy option never becomes a default because of a benchmark.
 In 0.1.5, `YUNSHU_NEXT_TURN_PREFILL=stride` is the default for eligible VLM text chats.
 After a reply, idle work prefills full canonical atoms of the assistant reply and stores
 APC checkpoints; the next request still computes the remainder and its new suffix.
+Stride rehearsal skips boundaries at or before the completed prompt checkpoint: a short
+reply that adds no full atom does not trigger a replay of an older prefix.
 It costs idle GPU time and another cached prefix. A matching request can adopt work
 already in progress; a diverging request can wait for the current atom.
 `off` disables it. `boundary` and `exact` add assistant-end splits and can change

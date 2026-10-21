@@ -354,3 +354,72 @@ def test_probe_validates_experiment_env_before_server_start(
     with pytest.raises(SystemExit) as error:
         probe.main()
     assert error.value.code == 2
+
+
+def test_kapitsa_cached_protocol_keeps_all_previous_turns_and_warm_is_identical():
+    messages = [
+        {"role": "system", "content": "context"},
+        {"role": "user", "content": "first question"},
+    ]
+    followups = ["question 2", "question 3", "question 4"]
+    body = {"model": "fixture", "stream": True, "max_tokens": 16}
+    cold = probe.kapitsa_request(body, messages, [], followups, None)
+    assert cold["max_tokens"] == 256
+    assert cold["temperature"] == 0 and cold["top_k"] == 1
+    history = messages + [{"role": "assistant", "content": "reply 1"}]
+    for i, question in enumerate(followups):
+        request = probe.kapitsa_request(body, messages, history, followups, i)
+        assert request["messages"][:-1] == history
+        assert request["messages"][-1] == {"role": "user", "content": question}
+        history = request["messages"] + [
+            {"role": "assistant", "content": f"reply {i + 2}"}
+        ]
+        assert probe.kapitsa_request(body, messages, history, followups, None) == cold
+    assert len(history) == 9
+    assert len(messages) == 2 and body["max_tokens"] == 16
+
+
+def test_kapitsa_sampled_requests_match_competitor_sampling_with_fixed_seed():
+    result = probe.kapitsa_request({}, [], [], [], None, temperature=0.6)
+    assert (result["temperature"], result["top_p"], result["top_k"]) == (0.6, 0.95, 20)
+    assert result["seed"] == 42
+    assert result["reasoning_effort"] == "none"
+
+
+def test_ssd_restart_flushes_own_process_before_cleanup(monkeypatch):
+    from types import SimpleNamespace
+
+    events = []
+    monkeypatch.setattr(probe.os, "killpg", lambda pid, sig: events.append((pid, sig)))
+    server = SimpleNamespace(
+        proc=SimpleNamespace(
+            pid=123, wait=lambda timeout: events.append(("wait", timeout))
+        ),
+        kill=lambda: events.append("cleanup"),
+    )
+    probe.persist_and_close(server)
+    assert events == [(123, probe.signal.SIGTERM), ("wait", 120), "cleanup"]
+
+
+def test_lookup_span_records_actual_tier_without_reading_arrays(monkeypatch):
+    from types import SimpleNamespace
+
+    spec = importlib.util.spec_from_file_location(
+        "tier_spans", _PATH.parent / "ttft_probe_site/spans.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    ticks = iter((1.0, 1.1))
+    monkeypatch.setattr(module.time, "perf_counter", lambda: next(ticks))
+    frame = SimpleNamespace(
+        f_code=SimpleNamespace(
+            co_name="lookup_exact_cache",
+            co_filename="yunshu_engine/apc_manager.py",
+            co_firstlineno=1,
+        ),
+        f_locals={"tier": "ssd", "n": 4095},
+    )
+    spans = module.CallSpans()
+    spans.profile(frame, "call", None)
+    spans.profile(frame, "return", None)
+    assert spans.rows[0][4].endswith("tier=ssd cached=4095")

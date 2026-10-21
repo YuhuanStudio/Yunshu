@@ -191,8 +191,61 @@ def load_samples(prefix):
     return rows
 
 
+def kapitsa_request(body, messages, history, followups, index, temperature=0):
+    """Deterministic cached-x3 workload; history grows only on follow-up replies.
+
+    Keep prompt construction separate from transport so a fixture can check the
+    protocol before loading a model. A fixed seed lets sampled and greedy
+    restore A/Bs reproduce reply histories.
+    """
+    result = dict(body)
+    result["messages"] = (
+        list(messages)
+        if index is None
+        else list(history) + [{"role": "user", "content": followups[index]}]
+    )
+    result.update(
+        max_tokens=256,
+        temperature=temperature,
+        top_p=0.95 if temperature else 1,
+        top_k=20 if temperature else 1,
+        seed=42,
+        reasoning_effort="none",
+        min_p=0,
+        presence_penalty=0,
+        frequency_penalty=0,
+        repeat_penalty=1,
+    )
+    return result
+
+
+def persist_and_close(server):
+    """Gracefully close our own server so APC flushes before an SSD restart."""
+    try:
+        os.killpg(server.proc.pid, signal.SIGTERM)
+        server.proc.wait(timeout=120)
+    finally:
+        server.kill()
+
+
 def main():
     ap = argparse.ArgumentParser()
+    ap.add_argument(
+        "--kapitsa-harness", type=Path, help="Kapitsa bench.py: exact cached-x3 prompts"
+    )
+    ap.add_argument(
+        "--unprofiled",
+        action="store_true",
+        help="disable all instrumentation for timing",
+    )
+    ap.add_argument(
+        "--temperature", type=float, default=0, help="Kapitsa sampling (fixed seed 42)"
+    )
+    ap.add_argument(
+        "--restart-after-cold",
+        action="store_true",
+        help="graceful APC flush then restart; first warm request measures SSD",
+    )
     ap.add_argument("--model", required=True)
     ap.add_argument("--kind", default="code")
     ap.add_argument("--ctx", type=int, default=32768)
@@ -276,19 +329,38 @@ def main():
         kw["env"] = env
         return real_popen(cmd, **kw)
 
-    tfbench.subprocess.Popen = popen
+    if not a.unprofiled:
+        tfbench.subprocess.Popen = popen
     prompt = (
         "Explain this material in detail: local inference uses a prefix cache. " * 128
         if a.synthetic_prompt
+        else ""
+        if a.kapitsa_harness
         else tfbench.load_prompt(f"{a.kind}-{a.ctx}")
     )
+    kapitsa = None
+    if a.kapitsa_harness:
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location(
+            "kapitsa_bench", a.kapitsa_harness
+        )
+        kapitsa = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(kapitsa)
+        messages = kapitsa.prefill_messages(
+            kapitsa.build_context(a.ctx),
+            "session cachedttft-fixed-seed",
+            "In one sentence, what is the first file in the repository context about?",
+        )
     extra_env = {"YUNSHU_VLM_DRAFT": tfbench.D if a.draft == "dflash" else a.draft}
     extra_env.update(server_env)
     s = tfbench.Srv("yunshu", extra_env, f"-probe-{a.tag}", model=a.model)
     try:
         rows = []
         reply = ""
-        phases = ["cold"] + ["warm"] * a.warm + ["followup"]
+        phases = ["cold"] + ["warm"] * a.warm + ["followup"] * (3 if kapitsa else 1)
+        history = []
+        followup_index = 0
         for i, phase in enumerate(phases):
             body = tfbench.req(
                 s.model, prompt, a.followup_tokens if phase == "cold" else a.max_tokens
@@ -301,6 +373,18 @@ def main():
                         "content": "Continue with the next part, at the same length.",
                     },
                 ]
+            if kapitsa:
+                body = kapitsa_request(
+                    body,
+                    messages,
+                    history,
+                    kapitsa.FOLLOWUPS,
+                    followup_index if phase == "followup" else None,
+                    a.temperature,
+                )
+                if phase == "followup":
+                    followup_index += 1
+                    time.sleep(1)
             rehearsal = {}
             if phase == "followup" and a.rehearse:
                 rehearsal = tfbench.rehearse(s, body)
@@ -315,6 +399,10 @@ def main():
                 raise ValueError("stream had no visible first token")
             if phase == "cold":
                 reply = r["_text"]
+            if kapitsa and phase != "warm":
+                history = body["messages"] + [
+                    {"role": "assistant", "content": r["_text"]}
+                ]
             r.pop("_text", None)
             validate_response(r, phase, require_followup_hit=not a.allow_followup_miss)
             rows.append(
@@ -334,8 +422,14 @@ def main():
                 f"{phase} {i}: TTFT {r['ttft_s']:.3f}s cached {r['cached']}/{r['pt']}",
                 flush=True,
             )
-        signal_dump(s.proc.pid)
-        time.sleep(3)
+            if phase == "cold" and a.restart_after_cold:
+                persist_and_close(s)
+                s = tfbench.Srv(
+                    "yunshu", extra_env, f"-probe-{a.tag}-restart", model=a.model
+                )
+        if not a.unprofiled:
+            signal_dump(s.proc.pid)
+            time.sleep(3)
         samples = load_samples(prof)
         spans = [
             json.loads(line)
@@ -344,7 +438,7 @@ def main():
             if line
         ]
         runtime = [json.loads(p.read_text()) for p in out.glob("runtime.*.json")]
-        if not samples and not spans:
+        if not a.unprofiled and not samples and not spans:
             print("FAIL: no probe evidence")
             sys.exit(1)
         mode = tfbench.engaged_spec_mode("yunshu", s.log.read_text())
@@ -398,8 +492,14 @@ def main():
                     kind=a.kind,
                     device=os.environ.get("GPUQ_DEVICE", "m5"),
                     engaged=mode,
-                    timing_method="Python/C call spans + 2ms stack sampling; not GPU attribution",
-                    diagnostic_only=True,
+                    timing_method=(
+                        "uninstrumented HTTP first-content"
+                        if a.unprofiled
+                        else "Python/C call spans; optional 2ms stacks; not GPU attribution"
+                    ),
+                    diagnostic_only=not a.unprofiled,
+                    kapitsa_prompts=bool(kapitsa),
+                    restarted_after_cold=a.restart_after_cold,
                     followup_apc_required=not a.allow_followup_miss,
                     stack_sampling=not a.no_stacks,
                     runtime=runtime,

@@ -1103,6 +1103,7 @@ class VLMEngine:
                 result.rsplit("</think>", 1)[-1].strip(),
                 finish_reason=_finish_reason,
                 completion_tokens=completion_token_count,
+                prompt_tokens=prompt_tokens,
                 enable_thinking=_enable_thinking,
                 tpl_extra=tpl_extra,
                 has_media=bool(image_paths or audio_paths),
@@ -1454,6 +1455,7 @@ class VLMEngine:
                     next_turn.reply_text(_reply_parts),
                     finish_reason=_finish_seen,
                     completion_tokens=_completion_tokens_count,
+                    prompt_tokens=_prompt_tokens_count,
                     enable_thinking=enable_thinking,
                     tpl_extra=tpl_extra,
                     has_media=bool(image_paths or audio_paths),
@@ -1551,6 +1553,7 @@ class VLMEngine:
         tpl_extra: dict | None,
         has_media: bool,
         kwargs: dict,
+        prompt_tokens: int = 0,
     ) -> None:
         mode = settings.get("YUNSHU_NEXT_TURN_PREFILL")
         if mode in (None, False, "", "off", "boundary"):
@@ -1591,7 +1594,13 @@ class VLMEngine:
         self._rehearsal_state = state
         task = asyncio.ensure_future(
             self._rehearse(
-                messages, reply, enable_thinking, tpl_extra, str(mode), state
+                messages,
+                reply,
+                enable_thinking,
+                tpl_extra,
+                str(mode),
+                state,
+                prompt_tokens,
             )
         )
         self._rehearsal_task = task
@@ -1604,6 +1613,7 @@ class VLMEngine:
         tpl_extra: dict | None,
         mode: str = "stride",
         state: next_turn.RehearsalState | None = None,
+        prompt_tokens: int = 0,
     ) -> None:
         loop = asyncio.get_running_loop()
         if state is None:
@@ -1636,7 +1646,9 @@ class VLMEngine:
                 # the checkpoint, the guard token is the header itself
                 ids = full[: len(ids) + guard]
             else:
-                target = next_turn.rehearsal_length(len(ids), stride, guard)
+                target = next_turn.rehearsal_length(
+                    len(ids), stride, guard, prompt_tokens=prompt_tokens
+                )
                 if target is None:
                     return None
                 ids = ids[:target]

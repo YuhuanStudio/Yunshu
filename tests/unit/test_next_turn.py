@@ -91,3 +91,13 @@ def test_next_turn_prefill_default_preserves_the_canonical_grid():
     spec = settings.REGISTRY["YUNSHU_NEXT_TURN_PREFILL"]
     assert spec.default == "stride" and spec.stability == "stable"
     assert "off" in spec.choices
+
+
+def test_stride_rehearsal_must_advance_the_completed_prompt_checkpoint():
+    assert nt.rehearsal_length(4285, 2048, 1, prompt_tokens=4248) is None
+    assert nt.rehearsal_length(16390, 2048, 1, prompt_tokens=16277) == 16385
+    assert nt.rehearsal_length(16390, 2048, 1, prompt_tokens=16385) is None
+    assert nt.rehearsal_length(6144, 2048, 1, prompt_tokens=4248) is None
+    assert nt.rehearsal_length(6145, 2048, 1, prompt_tokens=4248) == 6145
+    # Exact mode / non-grid models retain the existing contract.
+    assert nt.rehearsal_length(4285, 0, 1, prompt_tokens=4248) == 4285
