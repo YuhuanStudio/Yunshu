@@ -1245,7 +1245,13 @@ def _ssd_ttft_valid(path: Path):
     rows = read_jsonl(path)
     if not rows or rows[-1].get("complete") is not True:
         return False, "missing final complete record"
-    requests = [r for r in rows if "ctx" in r and r.get("phase") != "spill"]
+    requests = [
+        r
+        for r in rows
+        if "ctx" in r
+        and r.get("phase")
+        not in ("spill", "eviction_fill", "rehearsal_source", "next_turn")
+    ]
     for size in {r["ctx"] for r in requests}:
         group = {r["phase"]: r for r in requests if r["ctx"] == size}
         phases = (
@@ -1273,6 +1279,13 @@ def _ssd_ttft_valid(path: Path):
                 or (row.get("xy") or {}).get("cache", {}).get("tier") != tier
             ):
                 return False, "missing cache tier proof"
+    proof = [r for r in rows if r.get("event") == "next_turn_proof"]
+    if (
+        not proof
+        or proof[-1].get("completed_delta", 0) < 1
+        or proof[-1].get("cached", 0) <= proof[-1].get("source_prompt_tokens", 0)
+    ):
+        return False, "missing automatic post-restart rehearsal proof"
     if not requests:
         return False, "empty SSD matrix"
     return True, ""
@@ -1284,7 +1297,7 @@ def stage_ssd_ttft(ctx: Ctx) -> StageResult:
         key = f"{arm}-r{rep}"
         env = ctx.arm_env(arm)
         root = f"/Volumes/Micron/yunshu-apc/ssdttft-{ctx.exe.label}-{key}"
-        env = dict(env, YUNSHU_VLM_APC_DISK_DIR=root)
+        env = dict(env, YUNSHU_VLM_APC_DISK_DIR=root, YUNSHU_VLM_APC_MEMORY_GB="18")
         cells.append(
             Cell(
                 "ssd_ttft",
@@ -1304,6 +1317,7 @@ def stage_ssd_ttft(ctx: Ctx) -> StageResult:
                     *map(str, ctx.suite["ctx"]),
                     *_env_flags(env),
                     "--cleanup-apc",
+                    "--check-next-turn",
                 ],
                 mem_gb=ctx.mem_gb,
                 timeout_min=45,
@@ -1312,7 +1326,14 @@ def stage_ssd_ttft(ctx: Ctx) -> StageResult:
                 validate=_ssd_ttft_valid,
             )
         )
-    results = ctx.exe.run_cells(cells)
+    # gpuq may reorder equal-priority pending jobs; submit the next arm only
+    # after its predecessor completes to preserve the requested interleave.
+    results = {}
+    for cell in cells:
+        batch = ctx.exe.run_cells([cell])
+        results.update(batch)
+        if _failed_cells(batch):
+            break
     reasons = _failed_cells(results)
     evidence = {
         key: read_jsonl(r.evidence) for key, r in results.items() if r.ok and r.evidence
@@ -1321,7 +1342,11 @@ def stage_ssd_ttft(ctx: Ctx) -> StageResult:
     cached_signatures = []
     numbers = {}
     for key, rows in evidence.items():
-        requests = [r for r in rows if "ctx" in r and r.get("phase") != "spill"]
+        requests = [
+            r
+            for r in rows
+            if "ctx" in r and r.get("phase") not in ("spill", "eviction_fill")
+        ]
         digests.append({(r["ctx"], r["phase"]): r.get("sha") for r in requests})
         cached_signatures.append(
             {(r["ctx"], r["phase"]): r.get("cached") for r in requests}
@@ -1348,7 +1373,7 @@ def _ssd_ttft_profile_valid(path: Path):
     rows = read_jsonl(path)
     if not rows or rows[-1].get("complete") is not True:
         return False, "missing final complete record"
-    requests = rows[:-1]
+    requests = [r for r in rows[:-1] if r.get("phase") != "eviction_fill"]
     if [r.get("phase") for r in requests] != [
         "cold",
         "warm",
@@ -1378,6 +1403,13 @@ def stage_ttft_profile(ctx: Ctx, *, ssd: bool = False) -> StageResult:
         for kind in ctx.suite["kinds"]:
             for arm in ("base", "cand"):
                 key = f"{arm}-c{size}-{kind}"
+                env = ctx.arm_env(arm)
+                if ssd:
+                    env = dict(
+                        env,
+                        YUNSHU_VLM_APC_DISK_DIR=f"/Volumes/Micron/yunshu-apc/ssdttft-profile-{ctx.exe.label}-{key}",
+                        YUNSHU_VLM_APC_MEMORY_GB="18",
+                    )
                 cells.append(
                     Cell(
                         stage_name,
@@ -1404,6 +1436,7 @@ def stage_ttft_profile(ctx: Ctx, *, ssd: bool = False) -> StageResult:
                                     "--followup-tokens",
                                     "512",
                                     "--rehearse",
+                                    "--cleanup-apc",
                                 ]
                                 if ssd
                                 else []
@@ -1414,7 +1447,7 @@ def stage_ttft_profile(ctx: Ctx, *, ssd: bool = False) -> StageResult:
                             f"{ctx.exe.label}-{key}",
                             "--out",
                             "{out}",
-                            *_env_flags(ctx.arm_env(arm)),
+                            *_env_flags(env),
                         ],
                         mem_gb=ctx.mem_gb,
                         # measured 117 s at 32K (27B); only 128K needs the long lane

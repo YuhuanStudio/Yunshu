@@ -70,3 +70,40 @@ def test_matrix_rejects_false_ssd_hit_and_output_drift():
         probe.validate(row, "ssd")
     with pytest.raises(ValueError, match="output mismatch"):
         probe.validate(row, reference={"sha": "b"})
+
+
+def test_disk_inventory_exposes_counts_and_sizes_without_token_ids(tmp_path):
+    import json
+
+    header = json.dumps({"__metadata__": {"token_ids": "12345,67890"}}).encode()
+    path = tmp_path / "exact_example.safetensors"
+    path.write_bytes(len(header).to_bytes(8, "little") + header + b"payload")
+    (tmp_path / "exact_torn.safetensors").write_bytes(b"broken")
+    rows = probe.disk_inventory(tmp_path)
+    assert rows == [{"tokens": 2, "bytes": path.stat().st_size}]
+    assert "12345" not in json.dumps(rows)
+
+
+def test_automatic_rehearsal_proof_requires_completion_and_reply_reuse():
+    probe.validate_next_turn(dict(ct=2304, pt=32768), dict(cached=34816), 1)
+    for count, cached in ((0, 34816), (1, 32767)):
+        with pytest.raises(ValueError):
+            probe.validate_next_turn(
+                dict(ct=2304, pt=32768), dict(cached=cached), count
+            )
+
+
+def test_eviction_wait_requires_the_measured_checkpoint_before_restart():
+    fills = []
+
+    def inventory(root):
+        return [{"tokens": 123, "bytes": 8}] if fills else []
+
+    assert probe.ensure_spilled(
+        "root", [123], fills.append, wait_s=0, inventory=inventory
+    ) == [{"tokens": 123, "bytes": 8}]
+    assert fills == [0]
+    with pytest.raises(ValueError, match="did not persist"):
+        probe.ensure_spilled(
+            "root", [999], fills.append, wait_s=0, max_fill=1, inventory=inventory
+        )

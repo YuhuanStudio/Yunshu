@@ -208,6 +208,8 @@ def test_full_suite_has_every_stage():
         "longqa",
         "conc",
         "ttft_profile",
+        "ssd_ttft",
+        "ssd_ttft_profile",
         "multimodal",
         "snapshot",
         "modelprobe",
@@ -1876,6 +1878,15 @@ def test_ssd_matrix_stage_validator_rejects_rehearsal_drift(tmp_path):
             ("followup_rehearsed", "ram"),
         )
     ]
+    rows.insert(
+        0,
+        dict(
+            event="next_turn_proof",
+            completed_delta=1,
+            cached=2048,
+            source_prompt_tokens=1024,
+        ),
+    )
     rows.append({"complete": True})
 
     def valid():

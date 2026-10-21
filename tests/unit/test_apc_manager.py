@@ -959,3 +959,48 @@ def test_long_lookup_logs_the_decision(caplog):
         m.lookup_exact_cache(a[:4195])
     line = [r.getMessage() for r in caplog.records if "APC lookup:" in r.getMessage()]
     assert line and "prefix_entries=[4192]" in line[0] and "prompt=4195" in line[0]
+
+
+@pytest.mark.parametrize("dtype", ["bfloat16", "float16", "float32"])
+def test_ssd_native_reader_keeps_bits_and_avoids_python_tensor_copies(
+    tmp_path, monkeypatch, dtype
+):
+    """An SSD restart uses native tensors and still returns a private cache."""
+    import mlx_vlm.apc as upstream
+
+    ids = list(range(2000, 2096))
+    source = _cache(96)
+    cache_dtype = getattr(mx, dtype)
+    source[0].cache = [a.astype(cache_dtype) for a in source[0].cache]
+    source[1].keys = source[1].keys.astype(cache_dtype)
+    source[1].values = source[1].values.astype(cache_dtype)
+    m = _disk_mgr(tmp_path)
+    m.store_exact_cache(ids, source)
+    m.close()
+    fresh = _disk_mgr(tmp_path)
+
+    def forbidden(*args):
+        raise AssertionError("native exact restore must not copy Python tensor bytes")
+
+    monkeypatch.setattr(upstream, "_mlx_array_from_safetensors_bytes", forbidden)
+    cache, n = fresh.lookup_exact_cache(ids + [9, 9])
+    assert n == 96 and cache is not None
+    assert fresh.take_lookup(98, 96).tier == "ssd"
+    for a, b in zip(source[0].cache, cache[0].cache, strict=True):
+        assert a.dtype == b.dtype
+        assert mx.array_equal(a.view(mx.uint16), b.view(mx.uint16)).item()
+    for a, b in ((source[1].keys, cache[1].keys), (source[1].values, cache[1].values)):
+        assert a.dtype == b.dtype
+        assert mx.array_equal(
+            a[..., :96, :].view(mx.uint16), b[..., :96, :].view(mx.uint16)
+        ).item()
+    from yunshu_engine.apc_manager import _EXACT_DISK_ARRAYS
+
+    assert _EXACT_DISK_ARRAYS.get() is None
+    cache[1].keys[..., :96, :] = mx.zeros_like(cache[1].keys[..., :96, :])
+    again, matched = fresh.lookup_exact_cache(ids + [9, 9])
+    assert matched == 96
+    assert mx.array_equal(
+        source[1].keys[..., :96, :], again[1].keys[..., :96, :]
+    ).item()
+    fresh.close()

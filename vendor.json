@@ -2069,7 +2069,7 @@
       "symbol": "DiskBlockStore._load_exact_cache_file",
       "signature": "(self, path: Path, *, min_capacity_tokens: Optional[int], prefix_len: Optional[int]=None)",
       "license": "MIT",
-      "commit": "v0.7.3",
+      "commit": "v0.7.8",
       "why": "lower storage tiers restore a checkpoint file from any path through the upstream exact-cache loader",
       "source_sha256": "bdeabe368f076a095b8a03b4a4954dd24cbfe51425e4f9413052d75984596029",
       "installed_version": "0.7.8"
@@ -2617,6 +2617,36 @@
       "commit": "v0.7.3",
       "why": "preemptible prefill: evaluate every few layers so a background rehearsal can stop inside a prefill atom",
       "source_sha256": "88aba0b13d9e64c327ad86d76380324beb20099c179472dcba1a2f2742b09c1e",
+      "installed_version": "0.7.8"
+    },
+    {
+      "kind": "patches",
+      "path": "python/yunshu_engine/apc_manager.py",
+      "repo": "https://github.com/Blaizzy/mlx-vlm",
+      "clone": "reference/mlx-vlm",
+      "package": "mlx-vlm",
+      "module": "mlx_vlm.apc",
+      "symbol": "_read_safetensors_tensor",
+      "signature": "(path: Path, data_start: int, entry: dict)",
+      "license": "MIT",
+      "commit": "v0.7.8",
+      "why": "Scoped native MLX safetensors exact-cache reload; upstream reconstruction and validation retained",
+      "source_sha256": "bf6e50f040fe4e90d32b0fa2f4acfbc2b8a76972e7ace41aaae131d18962bde7",
+      "installed_version": "0.7.8"
+    },
+    {
+      "kind": "patches",
+      "path": "python/yunshu_engine/apc_manager.py",
+      "repo": "https://github.com/Blaizzy/mlx-vlm",
+      "clone": "reference/mlx-vlm",
+      "package": "mlx-vlm",
+      "module": "mlx_vlm.apc",
+      "symbol": "DiskBlockStore._load_exact_cache_file",
+      "signature": "(self, path: Path, *, min_capacity_tokens: Optional[int], prefix_len: Optional[int]=None)",
+      "license": "MIT",
+      "commit": "v0.7.8",
+      "why": "Scoped native MLX safetensors exact-cache reload; upstream reconstruction and validation retained",
+      "source_sha256": "88380d9fde952ed59f3a276ccb4d58475f7d16ad222a72e68a3465c6e116b835",
       "installed_version": "0.7.8"
     }
   ],

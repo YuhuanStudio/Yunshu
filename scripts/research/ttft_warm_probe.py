@@ -285,6 +285,7 @@ def main():
         type=int,
         help="After RAM probes, prefill this context then restart and require a genuine SSD hit",
     )
+    ap.add_argument("--cleanup-apc", action="store_true")
     ap.add_argument("--model", required=True)
     ap.add_argument("--kind", default="code")
     ap.add_argument("--ctx", type=int, default=32768)
@@ -342,6 +343,10 @@ def main():
         if not key or not sep:
             ap.error("--env requires K=V")
         server_env[key] = value
+    if a.spill_context and a.warm < 1:
+        ap.error("--spill-context requires at least one RAM warm probe")
+    if a.spill_context and not server_env.get("YUNSHU_VLM_APC_DISK_DIR"):
+        ap.error("--spill-context requires an explicit APC disk directory")
     gc_policy = a.copy_index_gc or server_env.get("TTFT_PROBE_COPY_INDEX_GC", "auto")
     if gc_policy not in ("auto", "defer"):
         ap.error("TTFT_PROBE_COPY_INDEX_GC must be auto or defer")
@@ -430,10 +435,46 @@ def main():
                     )
                 )
                 print(f"spill cached={spilled['cached']}/{spilled['pt']}", flush=True)
+                from ssd_ttft_probe import ensure_spilled
+
+                def fill(index):
+                    prompt = (
+                        f"Independent eviction session {index}.\n"
+                        + tfbench.load_prompt("prose-32768")
+                    )
+                    fill_trace = f"ttft-{os.getpid()}-fill-{index}"
+                    result = tfbench.send(
+                        s.url,
+                        tfbench.req(s.model, prompt, 1),
+                        capture_timestamps=True,
+                        trace_id=fill_trace,
+                    )
+                    start = result.pop("_sent_at_s")
+                    first = result.pop("_first_at_s")
+                    result.pop("_text", None)
+                    result.pop("head", None)
+                    rows.append(
+                        dict(
+                            rep=i,
+                            phase="eviction_fill",
+                            start=start,
+                            first=first,
+                            finished=time.perf_counter(),
+                            client_prepare_ms=0,
+                            trace_id=fill_trace,
+                            **result,
+                        )
+                    )
+
+                ensure_spilled(
+                    server_env["YUNSHU_VLM_APC_DISK_DIR"], [rows[1]["cached"]], fill
+                )
                 if not a.unprofiled:
                     signal_dump(s.proc.pid)
                     time.sleep(3)
-                persist_and_close(s)
+                # Abrupt process restart: shutdown flushing must not manufacture
+                # the SSD hit that this eviction experiment is meant to prove.
+                s.kill()
                 s = tfbench.Srv(
                     "yunshu", extra_env, f"-probe-{a.tag}-ssd", model=a.model
                 )
@@ -482,6 +523,14 @@ def main():
                 restart_reply = r["_text"]
             r.pop("_text", None)
             r.pop("head", None)
+            a.out.parent.mkdir(parents=True, exist_ok=True)
+            with a.out.with_suffix(".partial.jsonl").open("a") as partial:
+                partial.write(
+                    json.dumps(
+                        dict(rep=i, phase=phase, start=sent_at, first=first_at, **r)
+                    )
+                    + "\n"
+                )
             if phase == "ssd":
                 validate_ssd_response(r)
             else:
@@ -501,9 +550,6 @@ def main():
                     **r,
                 )
             )
-            a.out.parent.mkdir(parents=True, exist_ok=True)
-            with a.out.with_suffix(".partial.jsonl").open("a") as partial:
-                partial.write(json.dumps(rows[-1]) + "\n")
             print(
                 f"{phase} {i}: TTFT {r['ttft_s']:.3f}s cached {r['cached']}/{r['pt']}",
                 flush=True,
@@ -614,6 +660,10 @@ def main():
             )
     finally:
         s.kill()
+        if a.cleanup_apc:
+            from ssd_ttft_probe import cleanup_scratch
+
+            cleanup_scratch(server_env["YUNSHU_VLM_APC_DISK_DIR"])
 
 
 if __name__ == "__main__":
