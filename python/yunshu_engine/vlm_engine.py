@@ -2145,6 +2145,10 @@ class VLMEngine:
 
                 # K|V and gate|up as one matmul each (TensorFold lane_fuse): fewer dispatches.
                 stack_projections(drafter)
+                # every layer's context K|V from one (lane) matmul, as the ring reads them
+                from .dflash_ring import install_context_projection
+
+                install_context_projection(drafter)
                 # Project only the context window the drafter attends to.
                 from .dflash_context import install as install_dflash_context
 

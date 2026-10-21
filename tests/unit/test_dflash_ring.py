@@ -164,10 +164,10 @@ def test_fused_context_projection_matches_each_layers_own(bits, stacked):
     if bits:
         nn.quantize(
             d,
-            group_size=32,
+            group_size=64,  # the served drafter's: its stacked projection runs as a lane kernel
             bits=bits,
             class_predicate=lambda _, m: (
-                isinstance(m, nn.Linear) and m.weight.shape[-1] % 32 == 0
+                isinstance(m, nn.Linear) and m.weight.shape[-1] % 64 == 0
             ),
         )
     if stacked:
@@ -178,9 +178,39 @@ def test_fused_context_projection_matches_each_layers_own(bits, stacked):
     rounds = _rounds(16, [1, 5, 16, 3])
     fused = _ring_rounds(d, rounds, 15, cap=4096 + 64)
     assert d._yunshu_ring_kv is not False
+    if bits:
+        assert type(d._yunshu_ring_kv[0]).__name__ == "LaneLinear"
     d._yunshu_ring_kv = False
     split = _ring_rounds(d, rounds, 15, cap=4096 + 64)
     for f, s in zip(fused, split, strict=True):
         err = mx.abs(f.astype(mx.float32) - s.astype(mx.float32)).max().item()
         scale = mx.abs(s.astype(mx.float32)).max().item()
+        assert err <= 0.02 * scale, (err, scale)
+
+
+def test_vendor_draft_reads_the_installed_context_projection():
+    from yunshu_engine.dflash_tree import stack_projections
+
+    d = _drafter(window=4096)
+    nn.quantize(
+        d,
+        group_size=64,
+        bits=8,
+        class_predicate=lambda _, m: (
+            isinstance(m, nn.Linear) and m.weight.shape[-1] % 64 == 0
+        ),
+    )
+    stack_projections(d)
+    rounds = _rounds(16, [1, 5, 16, 3])
+    want = _vendor_rounds(d, rounds, 15)
+    assert dflash_ring.install_context_projection(d)
+    assert dflash_ring.install_context_projection(d)  # idempotent
+    calls = []
+    project = d._project_context_kv
+    d._project_context_kv = lambda h: calls.append(1) or project(h)
+    got = _vendor_rounds(d, rounds, 15)
+    assert len(calls) == len(rounds)
+    for w, g in zip(want, got, strict=True):
+        err = mx.abs(w.astype(mx.float32) - g.astype(mx.float32)).max().item()
+        scale = mx.abs(w.astype(mx.float32)).max().item()
         assert err <= 0.02 * scale, (err, scale)

@@ -109,11 +109,8 @@ def _context_kv(drafter: Any, h_ctx: mx.array) -> list:
         drafter._yunshu_ring_kv = fused
     if fused is False:
         return [layer.self_attn._project_kv(h_ctx) for layer in drafter.layers]
-    weight, scales, biases, cfg, widths = fused
-    if scales is None:
-        out = h_ctx @ weight.T
-    else:
-        out = mx.quantized_matmul(h_ctx, weight, scales, biases, transpose=True, **cfg)
+    project, widths = fused
+    out = project(h_ctx)
     bounds, total = [], 0
     for w in widths:
         bounds += [total + w // 2, total + w]
@@ -150,7 +147,7 @@ def _fuse_context_kv(drafter: Any):
     if all(type(p) is nn.Linear for p in projections):
         weight = mx.concatenate([p.weight for p in projections], axis=0)
         mx.eval(weight)
-        return weight, None, None, {}, widths
+        return (lambda x: x @ weight.T), widths
     if not all(type(p) is nn.QuantizedLinear for p in projections):
         return None
     first = projections[0]
@@ -159,11 +156,30 @@ def _fuse_context_kv(drafter: Any):
         (p.group_size, p.bits, getattr(p, "mode", "affine")) != fmt for p in projections
     ):
         return None
-    weight = mx.concatenate([p.weight for p in projections], axis=0)
-    scales = mx.concatenate([p.scales for p in projections], axis=0)
-    biases = mx.concatenate([p.biases for p in projections], axis=0)
-    mx.eval(weight, scales, biases)
-    return weight, scales, biases, {"group_size": fmt[0], "bits": fmt[1]}, widths
+    if any(p.get("biases") is None for p in projections):
+        return None
+    stacked = nn.QuantizedLinear(
+        int(first.weight.shape[1]) * 32 // int(first.bits),
+        1,
+        bias=False,
+        group_size=int(first.group_size),
+        bits=int(first.bits),
+    )
+    stacked.weight = mx.concatenate([p.weight for p in projections], axis=0)
+    stacked.scales = mx.concatenate([p.scales for p in projections], axis=0)
+    stacked.biases = mx.concatenate([p.biases for p in projections], axis=0)
+    mx.eval(stacked.parameters())
+    # the fast tree's drafter projections run as split-K lane kernels (dflash_fast
+    # .PrivateProjections); the stacked context projection reads the same way
+    from .dflash_fast import draft_split_k
+    from .kernels import lane_linear
+
+    if lane_linear.eligible(stacked):
+        lane = lane_linear.LaneLinear.from_quantized(stacked)
+        lane.sk = draft_split_k(lane)
+        mx.eval(lane.parameters())
+        return lane, widths
+    return stacked, widths
 
 
 def _attend(attn: Any, x: mx.array, keys: mx.array, values: mx.array, rope, pos, mask):
@@ -218,3 +234,23 @@ def _layer(layer, x, keys, values, rope, pos, mask):
     residual = x
     prepared, kernel = layer.mlp_conv.prepare(layer.post_attention_layernorm(x))
     return residual + layer.mlp_conv.finish(layer.mlp(prepared), kernel)
+
+
+def install_context_projection(drafter: Any) -> bool:
+    """Give the vendor draft (``DFlashDraftModel._hidden``) the same one-matmul context
+    projection: its own fusion skips quantized drafters, and after ``stack_projections`` it
+    projects each layer separately. Drafts only propose. Idempotent; False when the
+    projections cannot be stacked."""
+    if getattr(drafter, "_yunshu_context_projection", False):
+        return True
+    fused = _fuse_context_kv(drafter)
+    if fused is None:
+        return False
+    drafter._yunshu_ring_kv = fused
+
+    def project_context(hidden: mx.array) -> list:
+        return _context_kv(drafter, hidden)
+
+    object.__setattr__(drafter, "_project_context_kv", project_context)
+    object.__setattr__(drafter, "_yunshu_context_projection", True)
+    return True
