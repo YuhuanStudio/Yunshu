@@ -10,6 +10,12 @@ import time
 from collections import deque
 
 NAMES = {
+    "_load_validated": "ssd_read_validate",
+    "_load_exact_cache_file": "ssd_read_validate",
+    "_read_safetensors_tensor": "ssd_tensor_read",
+    "_mlx_array_from_safetensors_bytes": "ssd_array_copy",
+    "_restore": "apc_row_restore",
+    "_prefill_step": "suffix_prefill",
     "dflash_rounds": "first_round",
     "draft": "drafter_proposal",
     "prepare_target_hidden": "drafter_setup",

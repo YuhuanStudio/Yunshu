@@ -1241,8 +1241,138 @@ def _ttft_profile_valid(path: Path):
     return True, ""
 
 
-def stage_ttft_profile(ctx: Ctx) -> StageResult:
+def _ssd_ttft_valid(path: Path):
+    rows = read_jsonl(path)
+    if not rows or rows[-1].get("complete") is not True:
+        return False, "missing final complete record"
+    requests = [r for r in rows if "ctx" in r and r.get("phase") != "spill"]
+    for size in {r["ctx"] for r in requests}:
+        group = {r["phase"]: r for r in requests if r["ctx"] == size}
+        phases = (
+            "cold",
+            "ram_before_restart",
+            "ssd",
+            "ram_after_restart",
+            "followup",
+            "followup_rehearsed",
+        )
+        if set(group) != set(phases):
+            return False, "missing SSD matrix phase"
+        if len({group[p].get("sha") for p in phases[:4]}) != 1:
+            return False, "cold/RAM/SSD output mismatch"
+        if group["followup"].get("sha") != group["followup_rehearsed"].get("sha"):
+            return False, "rehearsal output mismatch"
+        for phase, tier in (
+            ("ram_before_restart", "ram"),
+            ("ssd", "ssd"),
+            ("ram_after_restart", "ram"),
+        ):
+            row = group[phase]
+            if (
+                not row.get("cached")
+                or (row.get("xy") or {}).get("cache", {}).get("tier") != tier
+            ):
+                return False, "missing cache tier proof"
+    if not requests:
+        return False, "empty SSD matrix"
+    return True, ""
+
+
+def stage_ssd_ttft(ctx: Ctx) -> StageResult:
+    cells = []
+    for rep, arm in ((0, "base"), (0, "cand"), (1, "cand"), (1, "base")):
+        key = f"{arm}-r{rep}"
+        env = ctx.arm_env(arm)
+        root = f"/Volumes/Micron/yunshu-apc/ssdttft-{ctx.exe.label}-{key}"
+        env = dict(env, YUNSHU_VLM_APC_DISK_DIR=root)
+        cells.append(
+            Cell(
+                "ssd_ttft",
+                key,
+                [
+                    ctx.py,
+                    str(REPO / "scripts/research/ssd_ttft_probe.py"),
+                    "--src",
+                    str(ctx.tree(arm).path / "python"),
+                    "--model",
+                    ctx.model,
+                    "--tag",
+                    f"{ctx.exe.label}-{key}",
+                    "--out",
+                    "{out}",
+                    "--contexts",
+                    *map(str, ctx.suite["ctx"]),
+                    *_env_flags(env),
+                    "--cleanup-apc",
+                ],
+                mem_gb=ctx.mem_gb,
+                timeout_min=45,
+                stall_min=12,
+                quiet=True,
+                validate=_ssd_ttft_valid,
+            )
+        )
+    results = ctx.exe.run_cells(cells)
+    reasons = _failed_cells(results)
+    evidence = {
+        key: read_jsonl(r.evidence) for key, r in results.items() if r.ok and r.evidence
+    }
+    digests = []
+    cached_signatures = []
+    numbers = {}
+    for key, rows in evidence.items():
+        requests = [r for r in rows if "ctx" in r and r.get("phase") != "spill"]
+        digests.append({(r["ctx"], r["phase"]): r.get("sha") for r in requests})
+        cached_signatures.append(
+            {(r["ctx"], r["phase"]): r.get("cached") for r in requests}
+        )
+        numbers[key] = [
+            {
+                k: r.get(k)
+                for k in ("ctx", "phase", "cached", "pt", "ttft_s", "dec_tps", "xy")
+            }
+            for r in requests
+        ]
+    if cached_signatures and any(
+        d != cached_signatures[0] for d in cached_signatures[1:]
+    ):
+        reasons.append(
+            "base/candidate cached token counts differ; timings not comparable"
+        )
+    if digests and any(d != digests[0] for d in digests[1:]):
+        reasons.append("base/candidate output digests differ")
+    return _finish(ctx, StageResult("ssd_ttft", not reasons, reasons, numbers))
+
+
+def _ssd_ttft_profile_valid(path: Path):
+    rows = read_jsonl(path)
+    if not rows or rows[-1].get("complete") is not True:
+        return False, "missing final complete record"
+    requests = rows[:-1]
+    if [r.get("phase") for r in requests] != [
+        "cold",
+        "warm",
+        "spill",
+        "ssd",
+        "warm",
+        "followup",
+    ]:
+        return False, "unexpected SSD diagnostic phases"
+    for row, tier in ((requests[1], "ram"), (requests[3], "ssd"), (requests[4], "ram")):
+        if (row.get("xy") or {}).get("cache", {}).get("tier") != tier:
+            return False, f"expected {tier} provenance"
+        if not row.get("cached") or not row.get("call_spans"):
+            return False, "missing hit or diagnostic spans"
+    if len({requests[i].get("sha") for i in (0, 1, 3, 4)}) != 1:
+        return False, "cold/RAM/SSD output mismatch"
+    if not requests[-1].get("rehearsal_usage") or not requests[-1].get("cached"):
+        return False, "missing post-restart rehearsal/followup evidence"
+    return True, ""
+
+
+def stage_ttft_profile(ctx: Ctx, *, ssd: bool = False) -> StageResult:
     """Locate TTFT work with a profiled server. Never infer a speed win here."""
+    stage_name = "ssd_ttft_profile" if ssd else "ttft_profile"
     cells = []
     for size in ctx.suite["ctx"]:
         for kind in ctx.suite["kinds"]:
@@ -1250,7 +1380,7 @@ def stage_ttft_profile(ctx: Ctx) -> StageResult:
                 key = f"{arm}-c{size}-{kind}"
                 cells.append(
                     Cell(
-                        "ttft_profile",
+                        stage_name,
                         key,
                         [
                             ctx.py,
@@ -1264,7 +1394,20 @@ def stage_ttft_profile(ctx: Ctx) -> StageResult:
                             "--kind",
                             kind,
                             "--warm",
-                            "3",
+                            "1" if ssd else "3",
+                            *(
+                                [
+                                    "--spill-context",
+                                    "131072",
+                                    "--max-tokens",
+                                    "512",
+                                    "--followup-tokens",
+                                    "512",
+                                    "--rehearse",
+                                ]
+                                if ssd
+                                else []
+                            ),
                             "--calls",
                             "--no-stacks",
                             "--tag",
@@ -1275,10 +1418,12 @@ def stage_ttft_profile(ctx: Ctx) -> StageResult:
                         ],
                         mem_gb=ctx.mem_gb,
                         # measured 117 s at 32K (27B); only 128K needs the long lane
-                        timeout_min=9 if size <= 32768 else 30,
+                        timeout_min=45 if ssd else (9 if size <= 32768 else 30),
                         stall_min=6 if size <= 32768 else 12,
                         quiet=True,
-                        validate=_ttft_profile_valid,
+                        validate=_ssd_ttft_profile_valid
+                        if ssd
+                        else _ttft_profile_valid,
                     )
                 )
     results = ctx.exe.run_cells(cells)
@@ -1286,7 +1431,7 @@ def stage_ttft_profile(ctx: Ctx) -> StageResult:
     return _finish(
         ctx,
         StageResult(
-            "ttft_profile",
+            stage_name,
             not reasons,
             reasons,
             {
@@ -2251,6 +2396,8 @@ def stage_telemetry(ctx: Ctx, *, pilot: bool = False) -> StageResult:
 
 
 STAGE_FUNCS = {
+    "ssd_ttft": stage_ssd_ttft,
+    "ssd_ttft_profile": lambda ctx: stage_ttft_profile(ctx, ssd=True),
     "ttft_profile": stage_ttft_profile,
     "snapshot": stage_snapshot,
     "console": stage_console,
