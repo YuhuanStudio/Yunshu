@@ -192,6 +192,10 @@ def rounds(
     )
 
     lm = model.language_model if hasattr(model, "language_model") else model
+    from . import tree_verify as _tv
+
+    # one attention-cache growth per 2048 decoded rows, not one (a full copy) per 256
+    _tv.reserve_decode(prompt_cache, max_tokens + _tv.FAST_MAX_ROWS + 1)
     from .constrained_spec import (
         ProcessorWindow,
         current_request,

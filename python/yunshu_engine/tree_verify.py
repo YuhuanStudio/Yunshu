@@ -1235,6 +1235,28 @@ def tree_commit(lm, cache: list, res: TreeResult, path: list[int]) -> None:
         _tick("commit_ms", [c.state for c in cache if hasattr(c, "state")], t_commit)
 
 
+DECODE_STEP_CAP = 2048  # tokens of attention-cache headroom reserved at a time
+
+
+def reserve_decode(cache: list, tokens: int) -> int:
+    """Grow the attention caches by up to ``tokens`` rows at a time while decoding.
+
+    mlx-lm's KVCache grows 256 rows at a time and each growth concatenates (copies) the
+    whole cache: at 32K a reply paid ~25-60 ms every 256 tokens (tf110 1021c trace), four
+    times that at 128K. One growth per ``DECODE_STEP_CAP`` rows instead; the headroom is
+    at most 2048 rows (64 KB each on Qwen3.8-27B). Contents are unchanged. Returns the
+    step set (0 when no cache takes it)."""
+    from mlx_lm.models.cache import KVCache
+
+    step = min(DECODE_STEP_CAP, max(256, -(-int(tokens) // 256) * 256))
+    count = 0
+    for c in cache:
+        if type(c) is KVCache:
+            c.step = step
+            count += 1
+    return step if count else 0
+
+
 def tree_abort(cache: list, res: TreeResult) -> None:
     """Drop the window: attention caches lose its keys, GDN caches never changed."""
     for i, rec in res.records.items():
@@ -1243,6 +1265,8 @@ def tree_abort(cache: list, res: TreeResult) -> None:
 
 
 __all__ = [
+    "DECODE_STEP_CAP",
+    "reserve_decode",
     "FAST_MAX_ROWS",
     "MAX_ROWS",
     "TreeResult",

@@ -567,6 +567,8 @@ def rounds(
     from .spec_schedule import NodeBudget
 
     lm = getattr(model, "language_model", model)
+    # one attention-cache growth per 2048 decoded rows, not one (a full copy) per 256
+    tv.reserve_decode(cache, max_tokens + tv.FAST_MAX_ROWS + 1)
     private = prepare(draft)
     target_ids = list(draft.config.target_layer_ids)
     draft_cache = draft.reset(model)
