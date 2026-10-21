@@ -1304,3 +1304,20 @@ verify tf110-dflash-speed32-1021y7: base 5f3c1b07a2b5 vs cand e87f7a8e1002 on /V
 2026-10-21 Negative results (both reverted), DFlash 32K, 27B oQ4e-mtp, M5 Max.
 - 48-row fast-tree verify window (73d6ca98, gpuwindow 1021y10, one cold 32K run; reverted in 99a5dc88): code decode 179 -> 144.4 tok/s (40 rounds but ~80 ms verify per round), prose 67.4. FastShape chain eval at 32K for 16/17/24/32/33/40/48 rows: 47.4/60.6/64.2/71.0/89.9/93.1/100.2 ms. At 2K, 33/40/48-row windows were not bit-equal on any row (tokens identical), so the arithmetic changes with width beyond 32 rows. `FAST_MAX_ROWS` stays 32.
 - Copy drafter `min_match` 6 -> 4 (gpuwindow 1021y11 on 99a5dc88, one cold 32K run; reverted in 2fd6a717): code decode 179.1 (1021y5) -> 165.7 tok/s, 46 rounds (17 copy) vs 45; a 32-row copy round costs ~71 ms against ~47 ms for a 16-row model round. The CPU replay that predicted fewer rounds counted rounds only, not per-round cost. Prose 69.4 tok/s in the same run.
+
+2026-10-21 DFlash 32K push: main 5316f456 -> ce444efa (81 commits). The DFlash-relevant changes are copy rounds at up to 32 verify rows by default, the same-round suffix-copy graft, a compiled tree search and two-stage top-16 draft lattice, deferred consumer yield and commit, the GPU-side accepted-path walk, and the opt-in YUNSHU_DFLASH_RING (default off, still under A/B, not part of the numbers below). Qwen3.8-27B oQ4e-mtp + DFlash2 drafter, M5 Max, 32K exact-snapshot prompts, greedy, real server, 3 reps, yv suite tf110-speed32 (base 5316f456 vs cand).
+
+| cell (32K) | base | cand | change |
+|---|---:|---:|---:|
+| code decode tok/s (1021y12, cand 2fd6a717) | 154.7 | 178.6 | +15.3% (reps +15.3/+16.1/+15.2) |
+| code decode tok/s (1021y13, cand 6aff92ed) | 154.5 | 179.6 | +16.4% (reps +14.7/+16.4/+20.0, noise +-2.5%) |
+| prose decode tok/s (1021y12) | 68.0 | 68.9 | +1.3% |
+| prose decode tok/s (1021y13) | 68.2 | 68.8 | +0.9% |
+| code cold TTFT s (y12 / y13) | 33.647 / 33.65 | 33.643 / 33.638 | neutral |
+| prose cold TTFT s (y12 / y13) | 33.626 / 33.608 | 33.629 / 33.624 | neutral |
+| code follow-up TTFT s (y12 / y13) | 1.255 / 1.261 | 1.256 / 1.247 | 0.0% / -0.6% |
+| prose follow-up TTFT s (y12 / y13) | 1.26 / 1.258 | 1.257 / 1.257 | -0.2% / 0.0% |
+| code warm TTFT s (y12 / y13) | 0.147 / 0.152 | 0.153 / 0.153 | +4.8% / +1.9% |
+| prose warm TTFT s (y12 / y13) | 0.146 / 0.147 | 0.145 / 0.146 | -0.7% / -0.7% |
+
+Identity: both runs 6 cells base-vs-cand and 6 cells spec-on-vs-off, 0 mismatches; APC: 2 cold/warm pairs, hits 32767 on both. Honest notes: 1021y12 is a FAIL verdict, not a pass: code warm TTFT +4.8% (0.147 -> 0.153 s, limit 3.0%, confirmed over 2 confirmation reps, reps +5.4/0.0/+4.8); the 6 ms is a warm-hit path of a few hundred ms and was not traced to a cause. 1021y13 (cand 6aff92ed, the first-round fix) passes: warm TTFT +1.9% (noise +-3.2%), initial +4.1%/+3.5% flagged, confirmed neutral. The decode gain is code only; prose gains ~1%, i.e. within a point of noise on one tree. The remaining 32K gap to TensorFold 1.1.0 is not closed (prose ~69 vs 72.6, code ~179 vs 233.9 tok/s). ce444efa itself (ring flag registration and docs) was not re-run through yv; its decode path is 6aff92ed plus 28675ec7, which changes only the flag-on path.
