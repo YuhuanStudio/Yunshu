@@ -347,3 +347,49 @@ def graft_copy(tokens, parents, copied, rows):
         output_shapes=[(n + rows,), (n + rows + 1,)],
         output_dtypes=[mx.int32, mx.int32],
     )
+
+
+_WALK_KERNEL = None
+
+
+def walk_gpu(window, parents, target):
+    """``dflash_tree.walk`` on the GPU, so the next round's inputs can be queued before the
+    readback: the accepted rows (root first, padded with 0 to the window), their count and
+    the bonus token (the target's token after the last accepted row). ``window`` [W] tokens,
+    ``parents`` [W] (row 0's is -1), ``target`` [W] greedy tokens."""
+    global _WALK_KERNEL
+    if _WALK_KERNEL is None:
+        _WALK_KERNEL = mx.fast.metal_kernel(
+            name="yunshu_tree_walk",
+            input_names=["window", "parents", "target"],
+            output_names=["path", "count", "bonus"],
+            source="""
+            if (thread_position_in_grid.x != 0) return;
+            int cur = 0, n = 1;
+            path[0] = 0;
+            while (true) {
+                int want = target[cur], next = -1;
+                for (int c = cur + 1; c < W; ++c)
+                    if (parents[c] == cur && window[c] == want) { next = c; break; }
+                if (next < 0) break;
+                path[n++] = next;
+                cur = next;
+            }
+            for (int i = n; i < W; ++i) path[i] = 0;
+            count[0] = n;
+            bonus[0] = target[cur];
+            """,
+        )
+    width = int(window.shape[-1])
+    return _WALK_KERNEL(
+        inputs=[
+            window.reshape(-1).astype(mx.int32),
+            parents.reshape(-1).astype(mx.int32),
+            target.reshape(-1).astype(mx.int32),
+        ],
+        template=[("W", width)],
+        grid=(32, 1, 1),
+        threadgroup=(32, 1, 1),
+        output_shapes=[(width,), (1,), (1,)],
+        output_dtypes=[mx.int32] * 3,
+    )
