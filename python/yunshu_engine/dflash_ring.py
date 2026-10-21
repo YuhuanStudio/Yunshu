@@ -178,6 +178,12 @@ def _fuse_context_kv(drafter: Any):
         lane = lane_linear.LaneLinear.from_quantized(stacked)
         lane.sk = draft_split_k(lane)
         mx.eval(lane.parameters())
+        # one call per kernel variant LaneLinear picks by row count (row block 16 above
+        # 16 rows, split-K up to 32, neither above 48): the first round to meet a variant
+        # otherwise pays its Metal compile (32K code, first run: draft 5.2 -> 9.3 ms/round)
+        dims = int(first.weight.shape[1]) * 32 // int(first.bits)
+        for rows in (1, 17, 33, 49):
+            mx.eval(lane(mx.zeros((1, rows, dims), dtype=mx.bfloat16)))
         return lane, widths
     return stacked, widths
 
