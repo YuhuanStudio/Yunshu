@@ -45,7 +45,9 @@ _TOKEN_LIMIT = 1 << _TOKEN_BITS
 @dataclass
 class CopyConfig:
     ngram: int = 3  # tokens hashed into the index key
-    min_match: int = 6  # backward-matching tokens needed to propose
+    # backward-matching tokens needed to propose (6 -> 4: replaying a 32K code reply,
+    # 47 -> 42 rounds; a 32K prose reply unchanged at 129)
+    min_match: int = 4
     confident_match: int = 24  # a match this long always proposes, full width
     first_width: int = 4  # drafts offered on a short match / after a miss
     max_extension: int = 64  # backward comparison cap
