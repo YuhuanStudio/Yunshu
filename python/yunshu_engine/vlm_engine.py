@@ -2311,6 +2311,7 @@ class VLMEngine:
                     kernels.get("nax_prefill")
                     and kernels.get("attn_prefill")
                     and settings.get("YUNSHU_PREFILL_GDN") == "chunked"
+                    and settings.get("YUNSHU_KV_PRECISION") == "bf16"
                     and all(
                         module.output_dims < lane_linear.NARROW
                         or module.output_dims >= 100_000
@@ -3074,6 +3075,7 @@ class VLMEngine:
                 "explicit cache breakpoints ignored, serving without them: %s", exc
             )
             return None
+        minimum = 0
         if prompt_kwargs is not None:
             from .prompt_caching import image_token_wrappers
             from .vlm_batch_runner import media_token_ids
@@ -3110,6 +3112,17 @@ class VLMEngine:
             except ValueError as exc:
                 logger.warning("explicit media cache breakpoints ignored: %s", exc)
                 return None
+        manager = getattr(self, "_apc_backend", None)
+        alignment = getattr(manager, "prefill_alignment", 0)
+        if alignment:
+            from .prompt_caching import align_prefill_plan
+
+            points = align_prefill_plan(
+                points,
+                alignment,
+                maximum=len(ids) - manager.exact_cache_guard_tokens,
+                minimum=minimum,
+            )
         plan.update(points)
         plan["resolved"] = True
         logger.info("Prompt cache rendered token boundaries: %s", plan["points"])

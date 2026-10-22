@@ -738,9 +738,22 @@ class _Coordinator(APCCoordinator):
 
     def checkpoint_len(self, token_ids, media_token_ids):
         n = super().checkpoint_len(token_ids, media_token_ids)
-        if not media_token_ids.intersection(token_ids):
-            return self.manager.align_prefill_boundary(n)
-        return n
+        if not self.manager.prefill_alignment:
+            return n
+        has_media = bool(media_token_ids.intersection(token_ids))
+        while n > 0:
+            aligned = self.manager.align_prefill_boundary(n)
+            if not has_media:
+                return aligned
+            from mlx_vlm.apc import adjust_prefix_to_text_suffix_boundary
+
+            safe = adjust_prefix_to_text_suffix_boundary(
+                token_ids, aligned, media_token_ids, max_prefix_tokens=aligned
+            )
+            if safe == aligned:
+                return aligned
+            n = safe
+        return 0
 
     def set_request(self, token_ids, policy):
         if policy is None:
@@ -914,6 +927,11 @@ class _Coordinator(APCCoordinator):
                 "_console_generations", {}
             ).get(getattr(self, "_request_generation", None))
         tokens = tuple(token_ids)
+        if (
+            self.manager.prefill_alignment
+            and len(tokens) % self.manager.prefill_alignment
+        ):
+            return False
         full_ids = getattr(self, "_current_ids", tokens)
         try:
             from . import dflash_apc_window
@@ -1626,6 +1644,8 @@ class YunshuAPCManager(APCManager):
         _owned=False,
     ) -> bool:
         n = len(token_ids)
+        if self.prefill_alignment and n % self.prefill_alignment:
+            return False
         if _generation is not None:
             self.observation.request_id = self.__dict__.get(
                 "_console_generations", {}

@@ -303,6 +303,16 @@ class LaneLinear(nn.Module):
                     if "bias" in self:
                         y = y + self["bias"]
                     return y.reshape(*lead, self.output_dims).astype(dtype)
+                if m <= PIECE:
+                    y = self._rows(
+                        x2,
+                        cache_input=x
+                        if _SUM_REUSE and dtype == mx.bfloat16 and m <= 128
+                        else None,
+                    )
+                    if "bias" in self:
+                        y = y + self["bias"]
+                    return y.reshape(*lead, self.output_dims).astype(dtype)
                 return self.lane_only(x)
             if not nax_prefill.split_eligible(
                 m,

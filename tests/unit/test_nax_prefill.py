@@ -268,3 +268,35 @@ def test_split_nax_dispatch_does_not_change_decode(monkeypatch):
         assert layer(x).shape == (1, 1, 256)
     assert layer(x).shape == (1, 1, 256)
     assert calls == ["decode", "prefill", "decode"]
+
+
+@pytest.mark.parametrize("rows", [64, 1024])
+def test_split_prefill_preserves_narrow_gate_launch_and_sum_reuse(monkeypatch, rows):
+    import mlx.core as mx
+
+    from yunshu_engine.kernels import gdn_prefill, lane_linear
+
+    layer = lane_linear.LaneLinear(
+        mx.zeros((48, 8), dtype=mx.uint32),
+        mx.zeros((48, 1), dtype=mx.bfloat16),
+        mx.zeros((48, 1), dtype=mx.bfloat16),
+        4,
+        64,
+    )
+    monkeypatch.setitem(gdn_prefill._STATE, "enabled", True)
+    monkeypatch.setitem(gdn_prefill._STATE, "split", True)
+    monkeypatch.setattr(lane_linear, "_SUM_REUSE", True)
+    monkeypatch.setattr(nax_prefill, "_enabled", True)
+    calls = []
+
+    def narrow(x, *, prefill_narrow=False, cache_input=None):
+        calls.append((x.shape[0], prefill_narrow, cache_input))
+        return mx.zeros((x.shape[0], 48), dtype=mx.bfloat16)
+
+    monkeypatch.setattr(layer, "_rows", narrow)
+    x = mx.zeros((1, rows, 64), dtype=mx.bfloat16)
+    with gdn_prefill.prefill_scope():
+        assert layer(x).shape == (1, rows, 48)
+    assert len(calls) == 1
+    assert calls[0][:2] == (rows, rows > 512)
+    assert calls[0][2] is (x if rows <= 128 else None)

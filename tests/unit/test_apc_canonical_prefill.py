@@ -262,3 +262,14 @@ def test_prompt_dispatch_never_splits_inside_a_recurrence_block(
         assert (prefix + batch._processed_prompt_columns) % 64 == 0
     assert 1 <= batch._inputs_embeds.shape[1] <= 64
     assert batch.prefill_step_size == 2048
+
+
+def test_split_media_checkpoint_also_ends_at_a_complete_block():
+    manager = _mgr(prefill_stride=2048, prefill_alignment=64)
+    assert _coordinator(manager).checkpoint_lengths(list(range(200)), {121}) == [192]
+
+
+def test_split_manager_rejects_incomplete_recurrence_states():
+    manager = _mgr(prefill_stride=2048, prefill_alignment=64)
+    assert not manager.store_exact_cache(list(range(700)), _cache(700), extra_hash=7)
+    assert not manager._exact_cache

@@ -101,3 +101,24 @@ def test_split_gdn_dispatch_is_confined_to_prompt_scope(patched, monkeypatch):
             assert kernel(q, q, q, gates, gates, state) == "step"
     assert kernel(q, q, q, gates, gates, state) == "step"
     assert calls == ["padded"]
+
+
+def test_singleton_prompt_keeps_prefill_forward_and_convolution(monkeypatch):
+    from types import SimpleNamespace
+
+    from mlx_vlm.models.qwen3_5.language import Qwen3_5GatedDeltaNet
+
+    monkeypatch.setitem(gdn_prefill._STATE, "enabled", True)
+    monkeypatch.setitem(gdn_prefill._STATE, "split", True)
+    monkeypatch.setattr(
+        Qwen3_5GatedDeltaNet, "_causal_conv1d_decode", lambda *args: "decode-conv"
+    )
+    lm = SimpleNamespace(_supports_batch_invariant_decode=lambda: True)
+    gdn_prefill.install_split_forward(lm)
+    layer = SimpleNamespace(conv1d=lambda x: "prefill-conv")
+    assert lm._supports_batch_invariant_decode()
+    assert Qwen3_5GatedDeltaNet._causal_conv1d_decode(layer, None) == "decode-conv"
+    with gdn_prefill.prefill_scope():
+        assert not lm._supports_batch_invariant_decode()
+        assert Qwen3_5GatedDeltaNet._causal_conv1d_decode(layer, None) == "prefill-conv"
+    assert lm._supports_batch_invariant_decode()
