@@ -264,3 +264,20 @@ verdict before promoting any production GC strategy.
 The opt-in `ssd_ttft` stage primes each context, verifies a RAM hit, prefills 128K to evict checkpoints, then starts a second server and requires SSD provenance. It checks cold/RAM/SSD output digests and post-restart follow-up/rehearsal equivalence, in base/candidate/candidate/base order (two repetitions). Each arm has a separate scratch APC directory that is removed on exit. Provide the prompt corpus through `TFB_WORK`; it must contain `prompts/prose-<context>.txt` and `prose-131072.txt`. Use disjoint context prefixes so priming a larger context is genuinely cold.
 
 `ssd_ttft_profile` provides diagnostic Python/C spans for the same eviction/restart workflow. Its `ttft_split_ms` partitions host wall time into lookup, SSD read/validation, restore, suffix prefill, first token, and residual work. Instrumentation perturbs timing; use `ssd_ttft` for speed comparisons. A new process preserves the OS file cache, so an SSD-tier hit does not imply a cold physical disk read. Keep chunked prefill enabled for the 128K eviction request.
+
+
+## In-graph projection bandwidth (optional)
+
+`--suite lane_bandwidth` measures the candidate's affine-quantized target and DFlash2
+projection shapes at 1, 8, 16, 17 and 32 rows. Set `--env YUNSHU_VLM_DRAFT=/path/to/drafter`.
+Each timed sample evaluates one graph containing distinct checkpoint layers; graph
+construction, loading and quantization are outside the timer. Output includes all samples,
+useful weight-plus-scale bytes, split-K, row blocks and the fraction of the configured
+614 GB/s peak. This is useful traffic divided by graph latency, not a hardware DRAM counter;
+small working sets can reside in cache. It is diagnostic evidence, not an end-to-end speed verdict.
+
+For CPU admission checks, run `scripts/research/probe_lane_bandwidth.py --dry-run --target
+/path/to/target --draft /path/to/drafter --out /path/to/results.jsonl`. Through gpuq, the
+probe also supports `--whole-forward` (all quantized projections with independent inputs,
+excluding embedding/head/nonquantized operations), and research-only `--compare-direct8
+--parity` (interleaved scheduling experiment, all row counts 1..32 checked bitwise).

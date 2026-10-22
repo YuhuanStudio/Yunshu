@@ -2428,7 +2428,74 @@ def stage_telemetry(ctx: Ctx, *, pilot: bool = False) -> StageResult:
     )
 
 
+def _lane_bandwidth_valid(path: Path) -> tuple[bool, str]:
+    import math
+
+    rows = read_jsonl(path)
+    if not rows or rows[-1].get("complete") is not True:
+        return False, "missing final complete record"
+    cells = [row for row in rows if row.get("phase") == "timing"]
+    if {row.get("kind") for row in cells} != {"target", "draft"}:
+        return False, "missing target or draft timings"
+    groups = {}
+    for row in cells:
+        if any(
+            not isinstance(row.get(key), (int, float))
+            or not math.isfinite(row[key])
+            or row[key] <= 0
+            for key in ("ms", "gbps", "bytes")
+        ):
+            return False, "invalid timing or traffic"
+        key = (row.get("kind"), row.get("name"), row.get("bits"))
+        groups.setdefault(key, set()).add(row.get("rows"))
+    if any(counts != {1, 8, 16, 17, 32} for counts in groups.values()):
+        return False, "missing row-count coverage"
+    return True, ""
+
+
+def stage_lane_bandwidth(ctx: Ctx) -> StageResult:
+    """Candidate-only in-graph projection bandwidth; no end-to-end speed verdict."""
+    name = "lane_bandwidth"
+    script = ctx.cand.path / "scripts/research/probe_lane_bandwidth.py"
+    draft = ctx.env.get(
+        "YUNSHU_VLM_DRAFT", "/Volumes/P5Plus/models/incoai/Qwen3.8-27B-DFlash2"
+    )
+    cell = Cell(
+        name,
+        "cand",
+        [
+            "env",
+            f"PYTHONPATH={ctx.cand.path / 'python'}",
+            ctx.py,
+            str(script),
+            "--target",
+            ctx.model,
+            "--draft",
+            draft,
+            "--out",
+            "{out}",
+        ],
+        quiet=True,
+        mem_gb=24,
+        timeout_min=15,
+        cwd=ctx.cand.path,
+        validate=_lane_bandwidth_valid,
+    )
+    results = ctx.exe.run_cells([cell])
+    reasons = _failed_cells(results)
+    numbers = {
+        "scope": "useful weight+scale bytes / single-eval graph latency; not DRAM counters or end-to-end verdict"
+    }
+    result = results.get("cand")
+    if result and result.ok and result.evidence:
+        numbers["timing_cells"] = sum(
+            row.get("phase") == "timing" for row in read_jsonl(result.evidence)
+        )
+    return _finish(ctx, StageResult(name, not reasons, reasons, numbers))
+
+
 STAGE_FUNCS = {
+    "lane_bandwidth": stage_lane_bandwidth,
     "ssd_ttft": stage_ssd_ttft,
     "ssd_ttft_profile": lambda ctx: stage_ttft_profile(ctx, ssd=True),
     "ttft_profile": stage_ttft_profile,

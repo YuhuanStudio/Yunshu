@@ -213,6 +213,7 @@ def test_full_suite_has_every_stage():
         "multimodal",
         "snapshot",
         "modelprobe",
+        "lane_bandwidth",
         "client_compat",
         "respfeat",
         "websearch",
@@ -1902,3 +1903,35 @@ def test_ssd_stages_are_explicitly_selectable_but_not_default_ladder():
     for stage in ("ssd_ttft", "ssd_ttft_profile"):
         assert suites.parse_suite(stage)["stages"] == [stage]
         assert stage not in suites.LADDER
+
+
+def test_lane_bandwidth_stage_coverage_fails_closed(tmp_path):
+    assert suites.parse_suite("lane_bandwidth")["stages"] == ["lane_bandwidth"]
+    path = tmp_path / "bandwidth.jsonl"
+    cells = [
+        dict(
+            phase="timing",
+            kind=kind,
+            name="projection",
+            bits=bits,
+            rows=count,
+            ms=1.0,
+            gbps=100.0,
+            bytes=100000000,
+        )
+        for kind, bits in [("target", 4), ("draft", 8)]
+        for count in (1, 8, 16, 17, 32)
+    ]
+
+    def write(rows):
+        path.write_text("".join(json.dumps(row) + "\n" for row in rows))
+
+    write(cells + [{"complete": True}])
+    assert stages._lane_bandwidth_valid(path)[0]
+    write(cells)
+    assert not stages._lane_bandwidth_valid(path)[0]
+    write(cells[:-1] + [{"complete": True}])
+    assert not stages._lane_bandwidth_valid(path)[0]
+    cells[0]["ms"] = float("nan")
+    write(cells + [{"complete": True}])
+    assert not stages._lane_bandwidth_valid(path)[0]
