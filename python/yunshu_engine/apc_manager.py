@@ -77,7 +77,9 @@ CLONE_EVAL_BYTES = 512 << 20
 def _install_exact_disk_reader() -> contextvars.ContextVar[tuple | None]:
     original = _upstream_apc._read_safetensors_tensor
     if getattr(original, "_yunshu_native_exact", False):
-        return original._yunshu_exact_arrays
+        return cast(
+            "contextvars.ContextVar[tuple | None]", original._yunshu_exact_arrays
+        )
 
     # The upstream function is process-wide. Both package spellings (and any
     # module reload) must enter the very same scope as the installed reader.
