@@ -53,12 +53,57 @@ def install():
                 return gdn_prefill.prefill_scope()
             return contextlib.nullcontext()
 
+        def _split_position(self):
+            embeds = getattr(self, "_inputs_embeds", None)
+            if not (
+                gdn_prefill.split_enabled()
+                and embeds is not None
+                and embeds.shape[0] == 1
+            ):
+                return None
+            meta = getattr(self, "_apc_meta", None)
+            prefix = (
+                int(meta[0].get("prefix_len", 0))
+                if meta and len(meta) == 1 and meta[0]
+                else int((getattr(self, "_cached_tokens_per_row", None) or [0])[0])
+            )
+            start = self._processed_prompt_columns + prefix
+            if start % 64:
+                raise ValueError(
+                    "split-invariant prefill cannot resume an unaligned state"
+                )
+            return start, start + embeds.shape[1]
+
+        def needs_processing(self):
+            position = self._split_position()
+            if position is None:
+                return super().needs_processing()
+            start, end = position
+            # Leave the entire last recurrence block for generate(), including
+            # its real prompt logits. The upstream last-one-row cut is unaligned.
+            return (end - 1) // 64 * 64 > start
+
         def prompt_step(self):
             with self._prefill_scope():
                 return self._absolute_prompt_step()
 
         def _absolute_prompt_step(self):
             step = self.prefill_step_size
+            position = self._split_position()
+            if position is not None:
+                start, end = position
+                step = step or 2048
+                boundary = min((start // step + 1) * step, (end - 1) // 64 * 64)
+                if boundary <= start or boundary % 64:
+                    raise ValueError(
+                        "split-invariant prefill needs an aligned forward boundary"
+                    )
+                previous_step = self.prefill_step_size
+                self.prefill_step_size = boundary - start
+                try:
+                    return super().prompt_step()
+                finally:
+                    self.prefill_step_size = previous_step
             meta = getattr(self, "_apc_meta", None)
             coordinator = getattr(self, "_apc_coordinator", None)
             policy = (

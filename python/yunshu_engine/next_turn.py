@@ -154,6 +154,20 @@ def rehearsal_length(
     return s + guard if s >= stride else None
 
 
+def aligned_rehearsal_length(
+    prefix_len: int, guard: int, *, prompt_tokens: int = 0
+) -> int | None:
+    """Last complete recurrence block at/before assistant end, plus final guard.
+
+    The guard may come from the sentinel header: it is consumed only to make
+    the runner publish S, and is never reused as assistant text.
+    """
+    boundary = prefix_len // 64 * 64
+    if boundary <= 0 or boundary <= (prompt_tokens - guard) // 64 * 64:
+        return None
+    return boundary + guard
+
+
 def extends(request_ids: Sequence[int], rehearsed_ids: Sequence[int]) -> bool:
     """True when the request's prompt starts with every rehearsed token (it is the follow-up)."""
     n = len(rehearsed_ids)

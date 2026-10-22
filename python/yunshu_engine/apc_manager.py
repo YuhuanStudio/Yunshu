@@ -736,6 +736,12 @@ class _Coordinator(APCCoordinator):
     def legacy_mode(self):
         return "exact" if self.strategy == "checkpoint" else self.strategy
 
+    def checkpoint_len(self, token_ids, media_token_ids):
+        n = super().checkpoint_len(token_ids, media_token_ids)
+        if not media_token_ids.intersection(token_ids):
+            return self.manager.align_prefill_boundary(n)
+        return n
+
     def set_request(self, token_ids, policy):
         if policy is None:
             return
@@ -788,7 +794,7 @@ class _Coordinator(APCCoordinator):
             source = self.manager._span_plans.get(key)
             if (
                 (n in candidates)
-                and source == signature
+                and (self.manager.prefill_alignment or source == signature)
                 and kwargs["suffix_is_text_only"](n)
             ):
                 self.manager.touch_boundary(token_ids[:n], extra_hash)
@@ -832,7 +838,9 @@ class _Coordinator(APCCoordinator):
         policy = (
             id(self.manager),
             stride,
-            len(token_ids) - self.manager.exact_cache_guard_tokens,
+            self.manager.align_prefill_boundary(
+                len(token_ids) - self.manager.exact_cache_guard_tokens
+            ),
             self.manager.head_boundary(token_ids),
             frozenset(self.manager.semantic_boundaries(token_ids)),
         )
@@ -1094,6 +1102,8 @@ class _Coordinator(APCCoordinator):
 
             lengths = []
             for n, _ in policy["points"]:
+                if mgr.prefill_alignment and n % mgr.prefill_alignment:
+                    raise ValueError("split-invariant checkpoint must be 64-aligned")
                 safe = adjust_prefix_to_text_suffix_boundary(
                     token_ids, n, media_token_ids, max_prefix_tokens=final
                 )
@@ -1183,6 +1193,7 @@ class YunshuAPCManager(APCManager):
         warm_mode: str = "off",
         warm_bytes: int = 0,
         prefill_stride: int = 0,
+        prefill_alignment: int = 0,
         prefill_boundary_tokens: tuple[int, ...] = (),
         prefill_assistant_header: tuple[int, int] | None = None,
         prefill_message_end: int | None = None,
@@ -1196,6 +1207,9 @@ class YunshuAPCManager(APCManager):
         self.head_marker = head_marker
         self.keep_interval_checkpoint = keep_interval_checkpoint
         self.prefill_stride = int(prefill_stride)
+        self.prefill_alignment = int(prefill_alignment)
+        if self.prefill_alignment not in (0, 64):
+            raise ValueError("prefill alignment must be 0 or 64")
         self.prefill_boundary_tokens = frozenset(prefill_boundary_tokens)
         self.prefill_assistant_header = prefill_assistant_header
         self.prefill_message_end = prefill_message_end
@@ -1506,6 +1520,10 @@ class YunshuAPCManager(APCManager):
     def coordinator(self, model: Any) -> APCCoordinator:
         return _Coordinator(self, model)
 
+    def align_prefill_boundary(self, n: int) -> int:
+        alignment = self.prefill_alignment
+        return n // alignment * alignment if alignment else n
+
     def head_boundary(self, token_ids) -> int:
         """Token index where the first user turn starts (the end of the system turn)."""
         if self.head_marker is None:
@@ -1516,7 +1534,7 @@ class YunshuAPCManager(APCManager):
             return 0
         for i in range(1, n - 1):
             if token_ids[i] == a and token_ids[i + 1] == b:
-                return i
+                return self.align_prefill_boundary(i)
         return 0
 
     def resident_prefix_len(self, token_ids, extra_hash=0) -> int:
@@ -1727,7 +1745,7 @@ class YunshuAPCManager(APCManager):
             # at (a stride multiple or a semantic boundary): any other anchor could not be
             # restored without changing the recurrence's numerical spans.
             semantic = self.semantic_boundaries(tokens)
-            stride = self.prefill_stride
+            stride = self.prefill_alignment or self.prefill_stride
             dropped_by_filter = {
                 k: n for k, n in chain.items() if not (n % stride == 0 or n in semantic)
             }
@@ -2031,15 +2049,23 @@ class YunshuAPCManager(APCManager):
             if assistant and token in self.prefill_boundary_tokens:
                 boundaries.add(i + 1)
             previous = token
-        return boundaries
+        return {
+            self.align_prefill_boundary(n)
+            for n in boundaries
+            if self.align_prefill_boundary(n) > 0
+        }
 
     def _canonical_bounds(self, tokens, extra_hash, maximum, minimum, policy):
         _, stride, final, head, semantic = policy
 
         def allowed(n):
+            if self.prefill_alignment:
+                return n > 0 and n % self.prefill_alignment == 0
             return n > 0 and (n in (final, head) or n in semantic or n % stride == 0)
 
         def previous(n):
+            if self.prefill_alignment:
+                return (n - 1) // self.prefill_alignment * self.prefill_alignment
             return max(
                 (n - 1) // stride * stride,
                 head if head < n else 0,

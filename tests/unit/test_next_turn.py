@@ -143,3 +143,12 @@ def test_resident_prefix_len_picks_longest_prefix_checkpoint():
     assert f(fake, [1, 2, 3, 4, 5]) == 4
     assert f(fake, [1, 2, 3]) == 2
     assert f(fake, [9]) == 0
+
+
+def test_aligned_rehearsal_keeps_last_complete_reply_block():
+    from yunshu_engine.next_turn import aligned_rehearsal_length
+
+    assert aligned_rehearsal_length(33303, 1, prompt_tokens=32768) == 33281
+    assert aligned_rehearsal_length(33280, 1, prompt_tokens=32768) == 33281
+    assert aligned_rehearsal_length(32780, 1, prompt_tokens=32780) is None
+    assert aligned_rehearsal_length(63, 1) is None

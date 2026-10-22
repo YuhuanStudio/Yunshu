@@ -523,3 +523,23 @@ def test_rehearsal_keeps_stride_that_advances_the_completed_prompt(monkeypatch):
 
     asyncio.run(main())
     assert len(calls) == 1 and len(calls[0][0]) == 5
+
+
+def test_split_rehearsal_stops_at_last_aligned_assistant_position(monkeypatch):
+    from types import SimpleNamespace
+
+    eng, calls = _engine(monkeypatch)
+    full = [9, 1, 3] + [4] * 100 + [9, 2, 3] + [5] * 200 + [9, 1, 3, 6, 9, 2, 3]
+    eng._tokenize_with_cache = lambda *args, **kwargs: _Arr(full)
+    eng._apc_backend = SimpleNamespace(prefill_alignment=64, exact_cache_guard_tokens=1)
+    eng._apc_prefill_stride = 2048
+
+    async def main():
+        _go(eng, prompt_tokens=100)
+        await eng._rehearsal_task
+
+    asyncio.run(main())
+    assert len(calls) == 1
+    ids, _ = calls[0]
+    assert ids == full[:257]
+    assert eng._apc_backend.keep_prior_for == tuple(full[:257])

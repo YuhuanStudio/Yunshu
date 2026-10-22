@@ -200,3 +200,65 @@ def test_restore_at_the_turn_boundary_is_an_allowed_lookup(monkeypatch):
             frozenset(m.semantic_boundaries(follow_up)),
         )
         assert (boundary in policy[4]) is want
+
+
+def test_split_invariant_checkpoints_are_always_absolute_64_aligned():
+    manager = _mgr(prefill_stride=2048, prefill_alignment=64)
+    manager.head_marker = (90, 91)
+    ids = list(range(100)) + [90, 91] + list(range(100, 300))
+    points = _coordinator(manager).checkpoint_lengths(ids, set())
+    assert points and all(n % 64 == 0 for n in points)
+    assert manager.head_boundary(ids) == 64
+    assert max(points) == (len(ids) - 1) // 64 * 64
+
+
+def test_split_invariant_lookup_accepts_rehearsed_subatom_but_not_unaligned():
+    manager = _mgr(prefill_stride=2048, prefill_alignment=64)
+    ids = list(range(1024))
+    manager.store_exact_cache(ids[:640], _cache(640), extra_hash=7)
+    manager.store_exact_cache(ids[:700], _cache(700), extra_hash=7)
+    assert lookup(_coordinator(manager), ids)["prefix_len"] == 640
+
+
+@pytest.mark.parametrize(
+    "total,prefix",
+    [(1, 0), (63, 0), (64, 0), (65, 0), (1001, 0), (1361, 960), (32769, 0)],
+)
+def test_prompt_dispatch_never_splits_inside_a_recurrence_block(
+    monkeypatch, total, prefix
+):
+    from types import SimpleNamespace
+
+    from yunshu_engine import cache_prefill
+    from yunshu_engine.kernels import gdn_prefill
+
+    class Base:
+        def needs_processing(self):
+            return self._inputs_embeds.shape[1] > 1
+
+        def prompt_step(self):
+            n = min(self.prefill_step_size, self._inputs_embeds.shape[1] - 1)
+            self._processed_prompt_columns += n
+            self._inputs_embeds.shape = (1, self._inputs_embeds.shape[1] - n, 1)
+            return n
+
+    ar = SimpleNamespace(PromptProcessingBatch=Base)
+    root = SimpleNamespace()
+    monkeypatch.setattr(
+        cache_prefill.importlib,
+        "import_module",
+        lambda name: ar if name.endswith(".ar") else root,
+    )
+    monkeypatch.setitem(gdn_prefill._STATE, "enabled", True)
+    monkeypatch.setitem(gdn_prefill._STATE, "split", True)
+    cache_prefill.install()
+    batch = ar.PromptProcessingBatch()
+    batch.prefill_step_size = 2048
+    batch._processed_prompt_columns = 0
+    batch._cached_tokens_per_row = [prefix]
+    batch._inputs_embeds = SimpleNamespace(shape=(1, total - prefix, 1))
+    while batch.needs_processing():
+        assert batch.prompt_step() > 0
+        assert (prefix + batch._processed_prompt_columns) % 64 == 0
+    assert 1 <= batch._inputs_embeds.shape[1] <= 64
+    assert batch.prefill_step_size == 2048

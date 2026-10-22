@@ -5,7 +5,9 @@ mlx-vlm's Qwen3.5 GatedDeltaNet runs the per-token step kernel over a whole prom
 ``mx.fast.gated_delta_update`` is the chunked (tensor-unit on M5) form of the same recurrence:
 Qwen3.8-27B, T=4096, one layer: 6.5 -> 2.4 ms. It rounds differently from the step kernel (bf16
 outputs differ by at most one ulp; the fp32 state by ~0.2% of its scale), so it is only used for
-chunks of at least ``MIN_TOKENS`` tokens when the runner enables it, and its id is part of every APC
+chunks of at least ``MIN_TOKENS`` tokens on the legacy path. Qualified split-invariant
+prefill uses it for every length inside an explicit prompt scope, with identity padding to 64
+rows. Its id is part of every APC
 key (``kernel_id``). Decode, speculative verify and the round driver never take it.
 """
 

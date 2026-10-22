@@ -294,7 +294,15 @@ class LaneLinear(nn.Module):
         m = int(x2.shape[0])
         if gdn_prefill.split_enabled() and gdn_prefill.in_prefill():
             if self.output_dims < NARROW or self.output_dims >= 100_000:
-                # The narrow lane kernel has fixed per-row reductions already.
+                # Both have fixed per-row reductions. Preserve the measured
+                # single-launch schedule for full-atom narrow gates.
+                if nax_prefill.narrow_eligible(
+                    m, self.input_dims, self.output_dims, self.bits, self.group_size
+                ):
+                    y = self._rows(x2, prefill_narrow=True)
+                    if "bias" in self:
+                        y = y + self["bias"]
+                    return y.reshape(*lead, self.output_dims).astype(dtype)
                 return self.lane_only(x)
             if not nax_prefill.split_eligible(
                 m,
