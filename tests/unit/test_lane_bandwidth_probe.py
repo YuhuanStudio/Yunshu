@@ -197,3 +197,22 @@ def test_pair16_keeps_group_fma_and_split_reduction_source():
     result = pair.preflight(PROBE.parents[2])
     assert set(result) == {"main", "bytes"}
     assert all(len(value) == 64 for value in result.values())
+
+
+def test_reference_mode_restores_native_without_installing_a_variant():
+    from types import SimpleNamespace
+
+    native, old = object(), object()
+    q = SimpleNamespace(lane_matmul=native)
+    reference = SimpleNamespace(lane_matmul=old)
+
+    def fail():
+        raise AssertionError("research installer must not run in native reference mode")
+
+    undo = probe.activate_mode(q, reference, native, fail, "base-r1")
+    assert q.lane_matmul is old
+    undo()
+    assert q.lane_matmul is native
+    undo = probe.activate_mode(q, reference, native, fail, "cand")
+    assert q.lane_matmul is native
+    undo()

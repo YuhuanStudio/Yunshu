@@ -5,9 +5,11 @@ not hardware DRAM counters. --dry-run reads only safetensors headers (no MLX).
 """
 
 import argparse
+import importlib.util
 import json
 import statistics
 import struct
+import sys
 import time
 from collections import defaultdict
 from functools import partial
@@ -60,6 +62,19 @@ def inventory(root, draft=False):
                         (file, prefix + "|" + prefix.removesuffix(first) + second)
                         for file, prefix in members
                     ]
+        kv = next(
+            (
+                (key, members)
+                for key, members in groups.items()
+                if key[0] == "self_attn.kv"
+            ),
+            None,
+        )
+        if kv and len({file for file, _ in kv[1]}) == 1:
+            (_, n, k, bits), members = kv
+            groups[("self_attn.context_kv", n * len(members), k, bits)] = [
+                (members[0][0], "|".join(prefix for _, prefix in members))
+            ]
     return groups
 
 
@@ -71,6 +86,17 @@ def projection_graph(mx, layers, inputs, serial=False):
             x = mx.depends(x, outputs[-1])
         outputs.append(layer(x))
     return outputs
+
+
+def activate_mode(q, reference, native, install, mode):
+    if reference is not None:
+        q.lane_matmul = reference.lane_matmul if mode.startswith("base") else native
+
+        def undo():
+            q.lane_matmul = native
+
+        return undo
+    return install() if mode.startswith("cand") else None
 
 
 def main():
@@ -87,6 +113,8 @@ def main():
     p.add_argument("--compare-pair16", action="store_true")
     p.add_argument("--half-row-block", type=int, choices=(16, 32))
     p.add_argument("--parity", action="store_true")
+    p.add_argument("--baseline-qmm", type=Path)
+    p.add_argument("--gate-only", action="store_true")
     p.add_argument("--only-draft", action="store_true")
     p.add_argument("--only-name")
     p.add_argument("--whole-forward", action="store_true")
@@ -95,6 +123,14 @@ def main():
     p.add_argument("--reps", type=int, default=5)
     p.add_argument("--peak-gbps", type=float, default=614)
     a = p.parse_args()
+    if a.baseline_qmm and not a.baseline_qmm.is_file():
+        p.error("baseline qmm source does not exist")
+    if a.gate_only and not a.parity:
+        p.error("--gate-only requires --parity")
+    if a.baseline_qmm and (
+        a.compare_pair16 or a.compare_half or a.compare_direct8 or a.direct8
+    ):
+        p.error("baseline mode measures native candidate, without research installers")
     jobs = [
         (kind, key, members)
         for kind, root in [("target", a.target), ("draft", a.draft)]
@@ -122,6 +158,22 @@ def main():
     from yunshu_engine.kernels.lane_linear import LaneLinear
     from yunshu_engine.kernels.tensorfold import lane_qmm as q
 
+    reference = None
+    native = q.lane_matmul
+    if a.baseline_qmm:
+        spec = importlib.util.spec_from_file_location(
+            "yunshu_engine.kernels.tensorfold._lanebw_reference", a.baseline_qmm
+        )
+        reference = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = reference
+        spec.loader.exec_module(reference)
+
+    def activate(mode):
+        return activate_mode(q, reference, native, install, mode)
+
+    serving_draft = any(
+        kind == "draft" and key[0] == "self_attn.context_kv" for kind, key, _ in jobs
+    )
     a.out.parent.mkdir(parents=True, exist_ok=True)
     with a.out.open("w") as out:
 
@@ -130,7 +182,15 @@ def main():
             out.flush()
             print(json.dumps(row), flush=True)
 
-        emit(dict(phase="device", info=mx.device_info(), peak_gbps=a.peak_gbps))
+        emit(
+            dict(
+                phase="device",
+                info=mx.device_info(),
+                peak_gbps=a.peak_gbps,
+                native_source=str(q.__file__),
+                reference_source=str(a.baseline_qmm) if a.baseline_qmm else None,
+            )
+        )
         if a.compare_pair16:
             from lane_pair16 import install
         elif a.compare_half:
@@ -173,19 +233,32 @@ def main():
                 mx.eval(layer.parameters())
                 linears.append(layer)
             del loaded, data, w, s, b
-            if a.whole_forward and name not in ("self_attn.kv", "mlp.gate_up"):
+            excluded = ("self_attn.kv", "mlp.gate_up", "self_attn.context_kv")
+            if kind == "draft" and serving_draft:
+                excluded = (
+                    "self_attn.k_proj",
+                    "self_attn.v_proj",
+                    "self_attn.kv",
+                    "mlp.gate_proj",
+                    "mlp.up_proj",
+                )
+            if a.whole_forward and name not in excluded:
                 retained.extend((kind, l) for l in linears)
             traffic = sum(l.weight.nbytes + l.sbt.nbytes for l in linears)
             if a.parity:
                 xgate = mx.random.normal((32, k)).astype(mx.bfloat16)
                 layer = linears[0]
                 for count in range(1, 33):
+                    undo_base = activate("base")
                     expected = layer(xgate[:count])
                     mx.eval(expected)
-                    undo = install()
+                    if undo_base:
+                        undo_base()
+                    undo = activate("cand")
                     actual = layer(xgate[:count])
                     mx.eval(actual)
-                    undo()
+                    if undo:
+                        undo()
                     if not mx.array_equal(expected, actual).item():
                         raise RuntimeError((kind, name, bits, count, "parity"))
                 emit(
@@ -199,18 +272,24 @@ def main():
                     )
                 )
                 del xgate, expected, actual
+            if a.gate_only:
+                del linears, layer
+                q._xs_cache.clear()
+                mx.clear_cache()
+                continue
             for rows in (1, 8, 16, 17, 32):
                 x = mx.random.normal((rows, k)).astype(mx.bfloat16)
                 mx.eval(x)
                 modes = (
                     ("base", "cand", "cand-r1", "base-r1")
-                    if (a.compare_direct8 and bits == 8)
+                    if a.baseline_qmm
+                    or (a.compare_direct8 and bits == 8)
                     or (a.compare_half and bits == 4)
                     or (a.compare_pair16 and bits in (4, 5))
                     else (("cand",) if a.direct8 else ("base",))
                 )
                 for mode in modes:
-                    undo = install() if mode.startswith("cand") else None
+                    undo = activate(mode)
 
                     def graph(x=x, linears=linears):
                         return projection_graph(
@@ -248,7 +327,21 @@ def main():
                             ms=ms,
                             gbps=gbps,
                             peak_fraction=gbps / a.peak_gbps,
-                            row_blocks=2 if rows > 16 and n < 100000 else 1,
+                            row_blocks=(
+                                1
+                                if rows <= 16
+                                or (
+                                    not (
+                                        reference is not None
+                                        and mode.startswith("base")
+                                    )
+                                    and getattr(
+                                        q, "_lane_schedule", lambda *args: "default"
+                                    )(bits, n, k, rows, 64)
+                                    == "pair16"
+                                )
+                                else 2
+                            ),
                             cache_resident_possible=traffic < 128 * 1024**2,
                         )
                     )
@@ -271,14 +364,15 @@ def main():
                 modes = (
                     ("base", "cand", "cand-r1", "base-r1")
                     if (
-                        (a.compare_direct8 and kind == "draft")
+                        a.baseline_qmm
+                        or (a.compare_direct8 and kind == "draft")
                         or (a.compare_half and kind == "target")
                         or (a.compare_pair16 and kind == "target")
                     )
                     else (("cand",) if a.direct8 else ("base",))
                 )
                 for mode in modes:
-                    undo = install() if mode.startswith("cand") else None
+                    undo = activate(mode)
                     for _ in range(3):
                         mx.eval(projection_graph(mx, layers, inputs, a.serial))
                     samples = []
@@ -296,6 +390,9 @@ def main():
                             dependency_chain=a.serial,
                             mode=mode,
                             excluded=["embedding", "lm_head", "nonquantized"],
+                            projection_layout="serving-fused"
+                            if kind == "draft" and serving_draft
+                            else "raw",
                             kind=kind,
                             rows=rows,
                             projections=len(layers),

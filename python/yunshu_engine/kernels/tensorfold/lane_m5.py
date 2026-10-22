@@ -118,3 +118,62 @@ _COOP = r"""
       if (m < M) Y[m * N + n] = static_cast<bfloat>(C[i]);
     }
 """
+
+
+def pair_rows(source: str) -> str:
+    descriptor = "matmul2d_descriptor(16 * TMR, NT,"
+    if source.count(descriptor) != 1:
+        raise RuntimeError("unexpected tensor descriptor")
+    source = source.replace(descriptor, "matmul2d_descriptor(16, NT,")
+    starts = ["    auto a = tA.slice(g * GS, 0);", "    auto a = tA.slice(g * 64, 0);"]
+    needle = next((s for s in starts if source.count(s) == 1), None)
+    if needle is None:
+        raise RuntimeError("unexpected input slice")
+    begin = source.index(needle)
+    end = source.index("\n  }\n", begin)
+    original = source[begin:end]
+    body = original.replace(
+        needle,
+        "    for (int tb = 0; tb < TMR; tb++) {\n"
+        + needle.replace(", 0);", ", tb * 16);"),
+    )
+    body = body.replace("for (int t = 0; t < TMR; t++)", "for (int t = 0; t < 1; t++)")
+    body = body.replace("rb + t * 16", "rb + (tb + t) * 16").replace(
+        "C[t][i]", "C[tb + t][i]"
+    )
+    barrier = "    simdgroup_barrier(mem_flags::mem_threadgroup);   // the op has read the stage before the next group's widening\n"
+    staged = barrier in body
+    body = body.replace(barrier, "") + "\n    }"
+    if staged:
+        body += "\n" + barrier.rstrip("\n")
+    return source[:begin] + body + source[end:]
+
+
+def direct_bytes(source: str) -> str:
+    begin = source.index("  threadgroup uint stage_all[")
+    end = source.index("  const device uint* Wv", begin)
+    source = source[:begin] + source[end:]
+    begin = source.index("    uint w[WPG + 1];")
+    end = source.index("    float s[NF][4]", begin)
+    source = source[:begin] + source[end:]
+    source = source.replace(
+        "    auto a = tA.slice(g * 64, 0);",
+        """    auto a = tA.slice(g * 64, 0);
+    tensor<device uint8_t, dextents<int32_t, 2>, tensor_inline> wb(
+        (device uint8_t*)Wq, dextents<int32_t, 2>(K, N));
+    auto b = wb.slice(g * 64, n0);
+    tensor<device uint8_t, dextents<int32_t, 2>, tensor_inline> bt(
+        (device uint8_t*)Wq + (int64_t)(threadgroup_position_in_grid.x * KG + g) * NT * 64,
+        dextents<int32_t, 2>(64, NT));""",
+    )
+    source = source.replace(
+        "    auto P = op.template get_destination_cooperative_tensor<decltype(a), decltype(b), float>();\n    op.run(a, b, P);",
+        "    auto P = op.template get_destination_cooperative_tensor<decltype(a), decltype(b), float>();\n    if (TILED) op.run(a, bt, P); else op.run(a, b, P);",
+    )
+    source = source.replace(
+        "    simdgroup_barrier(mem_flags::mem_threadgroup);   // the op has read the stage before the next group's widening\n",
+        "",
+    )
+    if "stage[" in source or "simdgroup_barrier" in source:
+        raise RuntimeError("unexpected staged source")
+    return source

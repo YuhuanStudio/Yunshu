@@ -281,3 +281,10 @@ For CPU admission checks, run `scripts/research/probe_lane_bandwidth.py --dry-ru
 probe also supports `--whole-forward` (all quantized projections with independent inputs,
 excluding embedding/head/nonquantized operations; add `--serial` to retain projection dependencies), and research-only `--compare-direct8
 --parity` (interleaved scheduling experiment, all row counts 1..32 checked bitwise).
+
+For a native-kernel candidate, `--baseline-qmm /path/to/pinned/base/python/yunshu_engine/kernels/tensorfold/lane_qmm.py`
+compares both schedules in the same process, with independent kernel and group-sum caches. `--parity --gate-only`
+checks every row count 1..32 against that source without collecting timings. The reference imports the current
+unchanged original Metal source constants; source-generator regression tests preserve the qualified arithmetic.
+The drafter inventory includes serving's fused all-layer context K|V and gate|up. Its whole projection graph
+uses those fused projections rather than counting both the fused and separate buffers.

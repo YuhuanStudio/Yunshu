@@ -216,8 +216,17 @@ def _kernel(name: str) -> Any:
         else:
             from . import lane_widen
 
-            source = {"coop": _COOP, "main_tiled": _MAIN_TILED, "main": _MAIN, "lowbit": lane_widen.NIBBLES,
-                      "bytes": lane_widen.BYTES}[name]
+            if name in ("pair4", "pair4_tiled", "pair5", "bytes8"):
+                from . import lane_m5
+
+                if name == "bytes8":
+                    source = lane_m5.direct_bytes(lane_widen.BYTES)
+                else:
+                    original = {"pair4": _MAIN, "pair4_tiled": _MAIN_TILED, "pair5": lane_widen.BYTES}[name]
+                    source = lane_m5.pair_rows(original)
+            else:
+                source = {"coop": _COOP, "main_tiled": _MAIN_TILED, "main": _MAIN, "lowbit": lane_widen.NIBBLES,
+                          "bytes": lane_widen.BYTES}[name]
             _kernels[name] = _Baked("lane_qmm_" + name, source, ["X", "XS", "Wq", "SBt", "mdims"], ["Y"])
     return _kernels[name]
 
@@ -289,6 +298,22 @@ def supports(weight: mx.array, scales: mx.array, x: mx.array, bits: int, group_s
     return k % 64 == 0 and int(weight.shape[1]) * 32 == k * bits and n % 4 == 0
 
 
+def _lane_schedule(bits: int, n: int, k: int, rows: int, group: int, nt: int = 32) -> str:
+    """Certified M5 schedules; keep all other shapes and prefill on their original path."""
+    if _VARIANT != "m5" or group != 64 or nt != 32:
+        return "default"
+    if bits == 5 and 16 < rows <= 32 and (n, k) in ((6144, 5120), (5120, 6144), (5120, 17408)):
+        return "pair16"
+    if bits == 4 and rows == 32 and (n, k) == (5120, 17408):
+        return "pair16"
+    draft_shapes = ((5120, 25600), (1280, 5120), (5120, 17408), (17408, 5120),
+                    (34816, 5120), (4096, 5120), (1024, 5120), (2048, 5120),
+                    (10240, 5120), (5120, 4096))
+    if bits == 8 and (n, k) in draft_shapes and (1 <= rows <= 16 or ((n, k) == (5120, 25600) and rows <= 32)):
+        return "direct8"
+    return "default"
+
+
 def lane_matmul(x: mx.array, weight: mx.array, sbt: mx.array, *, tiled: bool = False,
                 sk: int | None = None, nt: int = NT, group: int = 64, row_block: int | None = None, row_limit: int = MAX_ROWS, prefill_narrow: bool = False) -> mx.array:
     """x (..., K) bf16 times the packed ``weight`` (N, K*bits/32) transposed, rows <= MAX_ROWS, tiled or not."""
@@ -334,12 +359,14 @@ def lane_matmul(x: mx.array, weight: mx.array, sbt: mx.array, *, tiled: bool = F
             _xs_cache.pop(next(iter(_xs_cache)))
     sk = int(sk) if sk else split_k(N, K)       # a column's bits follow K and sk (lane_fuse's stacks)
     nt = int(nt) if tiled else NT
-    block = int(row_block) if row_block else (MP if MP <= ROW_BLOCK else ROW_BLOCK)
+    schedule = _lane_schedule(bits, N, K, M, group, nt)
+    block = 32 if schedule == "pair16" else (int(row_block) if row_block else (MP if MP <= ROW_BLOCK else ROW_BLOCK))
     edge = int(MP % block != 0)     # a bound check only where the last block passes MP (33-48, 65-80, 97-112 rows)
     if bits != 4:
         if tiled and N % NT:
             raise ValueError(f"tiled weights need N to be a multiple of {NT}, got {N}")
-        y = _kernel("lowbit" if bits < 4 else "bytes")(inputs=[x2, xs, weight, sbt, mdims],
+        name = "lowbit" if bits < 4 else ("pair5" if schedule == "pair16" else ("bytes8" if schedule == "direct8" else "bytes"))
+        y = _kernel(name)(inputs=[x2, xs, weight, sbt, mdims],
                               template=[("TMR", block // 16), ("N", N), ("K", K), ("NT", NT), ("SK", sk),
                                         ("BITS", bits), ("TILED", int(bool(tiled)))],
                               grid=(-(-N // NT) * 32 * sk, -(-MP // block), 1), threadgroup=(32 * sk, 1, 1),
@@ -354,7 +381,8 @@ def lane_matmul(x: mx.array, weight: mx.array, sbt: mx.array, *, tiled: bool = F
         return y.reshape(*lead, N)
     if tiled and N % nt:
         raise ValueError(f"tiled weights need N to be a multiple of {nt}, got {N}")
-    y = _kernel("main_tiled" if tiled else "main")(inputs=[x2, xs, weight, sbt, mdims],
+    name = ("pair4_tiled" if tiled else "pair4") if schedule == "pair16" else ("main_tiled" if tiled else "main")
+    y = _kernel(name)(inputs=[x2, xs, weight, sbt, mdims],
                         template=[("TMR", block // 16), ("N", N), ("K", K), ("NT", nt), ("SK", sk), ("GS", group),
                                   ("EDGE", edge)],
                         grid=(-(-N // nt) * 32 * sk, -(-MP // block), 1), threadgroup=(32 * sk, 1, 1),
