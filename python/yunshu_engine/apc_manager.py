@@ -74,18 +74,19 @@ CLONE_EVAL_BYTES = 512 << 20
 # Native safetensors loading avoids Python bytes -> memoryview -> MLX copies for
 # every tensor. The upstream cache decoder still validates/rebuilds all classes;
 # the context limits this reader to one exact-cache file on the calling thread.
-_EXACT_DISK_ARRAYS: contextvars.ContextVar[tuple | None] = contextvars.ContextVar(
-    "yunshu_apc_exact_disk_arrays", default=None
-)
-
-
-def _install_exact_disk_reader() -> None:
+def _install_exact_disk_reader() -> contextvars.ContextVar[tuple | None]:
     original = _upstream_apc._read_safetensors_tensor
     if getattr(original, "_yunshu_native_exact", False):
-        return
+        return original._yunshu_exact_arrays
+
+    # The upstream function is process-wide. Both package spellings (and any
+    # module reload) must enter the very same scope as the installed reader.
+    arrays_scope: contextvars.ContextVar[tuple | None] = contextvars.ContextVar(
+        "yunshu_apc_exact_disk_arrays", default=None
+    )
 
     def read(path, data_start, entry):
-        scope = _EXACT_DISK_ARRAYS.get()
+        scope = arrays_scope.get()
         if scope is not None and str(path) == scope[0] and data_start == scope[1]:
             key = (
                 tuple(entry.get("data_offsets", ())),
@@ -97,10 +98,12 @@ def _install_exact_disk_reader() -> None:
         return original(path, data_start, entry)
 
     read._yunshu_native_exact = True  # type: ignore[attr-defined]
+    read._yunshu_exact_arrays = arrays_scope  # type: ignore[attr-defined]
     _upstream_apc._read_safetensors_tensor = read
+    return arrays_scope
 
 
-_install_exact_disk_reader()
+_EXACT_DISK_ARRAYS = _install_exact_disk_reader()
 
 
 def _restore_kv(c, min_capacity_tokens, targets):

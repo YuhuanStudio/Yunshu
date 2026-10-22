@@ -1004,3 +1004,138 @@ def test_ssd_native_reader_keeps_bits_and_avoids_python_tensor_copies(
         source[1].keys[..., :96, :], again[1].keys[..., :96, :]
     ).item()
     fresh.close()
+
+
+@pytest.mark.parametrize(
+    "kind",
+    [
+        "kv",
+        "rotating_kv",
+        "chunked_kv",
+        "ring_kv",
+        "arrays",
+        "simple_kv",
+        "pooling",
+        "minimax_m3",
+        "cache_list",
+        "tuple",
+        "quantized",
+        "empty",
+    ],
+)
+def test_ssd_native_roundtrip_all_decoder_kinds(tmp_path, monkeypatch, kind):
+    """Every upstream decoder branch preserves native state, including packed KV."""
+    import mlx_vlm.apc as upstream
+    from mlx_vlm.models import cache as caches
+
+    from yunshu_engine.apc_manager import SpillDiskStore
+
+    k = mx.arange(32, dtype=mx.float32).reshape(1, 1, 4, 8).transpose(0, 1, 3, 2)
+    v = -k
+    rec = ArraysCache(3)
+    rec.cache = [k, mx.zeros((1, 2, 0), dtype=mx.bfloat16), None]
+    rec.left_padding = mx.array([0], dtype=mx.int32)
+    rec.lengths = mx.array([8], dtype=mx.int32)
+    kv = KVCache()
+    kv.keys, kv.values, kv.offset = k, v, 8
+    if kind == "kv":
+        source = kv
+    elif kind == "rotating_kv":
+        source = caches.RotatingKVCache(max_size=16, keep=2)
+        source.keys, source.values, source.offset, source._idx = k, v, 8, 8
+    elif kind == "chunked_kv":
+        source = caches.ChunkedKVCache(chunk_size=16)
+        source.keys, source.values, source.offset = k, v, 8
+    elif kind == "ring_kv":
+        from mlx_vlm.models.unlimited_ocr.language import RingSlidingKVCache
+
+        source = RingSlidingKVCache(16)
+        source.keys, source.values, source.offset = k, v, 8
+    elif kind == "arrays":
+        source = rec
+    elif kind == "simple_kv":
+        source = caches.SimpleKVCache()
+        source.keys, source.values, source.cache_length = k, v, 8
+    elif kind == "pooling":
+        source = caches.PoolingCache(4)
+        source.pooled, source.buf_kv, source.buf_gate = k, v, rec.cache[1]
+        source.remainder = 2
+    elif kind == "minimax_m3":
+        from mlx_vlm.models.minimax_m3_vl.language import MiniMaxM3KVCache
+
+        source = MiniMaxM3KVCache()
+        source.kv_cache = kv
+        source.index_keys, source.index_offset = k, 8
+    elif kind == "cache_list":
+        source = caches.CacheList(kv, rec)
+    elif kind == "tuple":
+        source = (kv, rec)
+    elif kind == "quantized":
+        source = caches.QuantizedKVCache(group_size=32, bits=4)
+        q = mx.arange(256, dtype=mx.float32).reshape(1, 1, 8, 32) / 7
+        source.update_and_fetch(q, -q)
+    else:
+        source = caches.CacheList(KVCache(), rec)
+
+    store = SpillDiskStore(tmp_path, namespace="native", num_workers=1)
+    try:
+        assert store.save_exact_cache(123, range(8), 0, [source], synchronous=True)
+
+        def forbidden(*args):
+            raise AssertionError("native restore must not copy Python tensor bytes")
+
+        monkeypatch.setattr(upstream, "_mlx_array_from_safetensors_bytes", forbidden)
+        loaded = store.load_exact_cache(123)
+        assert loaded is not None
+        assert loaded[:2] == (tuple(range(8)), 0)
+        before, after, before_meta, after_meta = {}, {}, {}, {}
+        assert store._snapshot_exact_cache_entry(source, "c0", before, before_meta)
+        assert store._snapshot_exact_cache_entry(loaded[2][0], "c0", after, after_meta)
+        assert before_meta == after_meta
+        assert before.keys() == after.keys()
+        for name, value in before.items():
+            restored = after[name]
+            assert restored.dtype == value.dtype
+            assert restored.shape == value.shape
+            assert mx.array_equal(value.view(mx.uint8), restored.view(mx.uint8)).item()
+    finally:
+        store.close()
+
+
+@pytest.mark.parametrize("dtype", ["bfloat16", "float16", "float32"])
+def test_ssd_native_reader_shared_across_module_aliases(tmp_path, monkeypatch, dtype):
+    """Both supported package spellings must use the installed reader's scope."""
+    import importlib.util
+    import sys
+
+    import mlx_vlm.apc as upstream
+
+    import yunshu_engine.apc_manager as canonical
+
+    name = "yunshu_engine._apc_reader_alias"
+    spec = importlib.util.spec_from_file_location(name, canonical.__file__)
+    alias = importlib.util.module_from_spec(spec)
+    monkeypatch.setitem(sys.modules, name, alias)
+    spec.loader.exec_module(alias)
+    source = _cache(8)
+    for c in source:
+        if isinstance(c, ArraysCache):
+            c.cache = [a.astype(getattr(mx, dtype)) for a in c.cache]
+        else:
+            c.keys = c.keys.astype(getattr(mx, dtype))
+            c.values = c.values.astype(getattr(mx, dtype))
+    store = alias.SpillDiskStore(tmp_path, namespace="alias", num_workers=1)
+    try:
+        assert store.save_exact_cache(123, range(8), 0, source, synchronous=True)
+
+        def forbidden(*args):
+            raise AssertionError(
+                "native exact restore must not copy Python tensor bytes"
+            )
+
+        monkeypatch.setattr(upstream, "_mlx_array_from_safetensors_bytes", forbidden)
+        loaded = store.load_exact_cache(123)
+        assert loaded is not None
+        assert canonical._EXACT_DISK_ARRAYS is alias._EXACT_DISK_ARRAYS
+    finally:
+        store.close()
