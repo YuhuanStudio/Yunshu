@@ -262,7 +262,9 @@ def main():
                     mx.eval(actual)
                     if undo:
                         undo()
-                    if not mx.array_equal(expected, actual).item():
+                    if not mx.array_equal(
+                        expected.view(mx.uint16), actual.view(mx.uint16)
+                    ).item():
                         raise RuntimeError((kind, name, bits, count, "parity"))
                 emit(
                     dict(

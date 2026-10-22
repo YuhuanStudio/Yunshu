@@ -221,7 +221,9 @@ def test_measured_projection_rows_match_the_unmodified_wide_path(bits, n, k):
     expected = layer.lane_only(x)
     mx.eval(expected)
     for rows in range(1, 33):
-        assert mx.array_equal(layer.lane_only(x[:rows]), expected[:rows]).item(), (
+        assert mx.array_equal(
+            layer.lane_only(x[:rows]).view(mx.uint16), expected[:rows].view(mx.uint16)
+        ).item(), (
             bits,
             rows,
         )
