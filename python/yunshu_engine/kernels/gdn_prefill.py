@@ -67,7 +67,7 @@ def install_split_forward(language_model) -> None:
                 supports() if callable(supports) else True
             )
 
-        supported._yunshu_split_prefill = True
+        supported._yunshu_split_prefill = True  # type: ignore[attr-defined]
         language_model._supports_batch_invariant_decode = supported
     original = Qwen3_5GatedDeltaNet._causal_conv1d_decode
     if not getattr(original, "_yunshu_split_prefill", False):
@@ -77,7 +77,7 @@ def install_split_forward(language_model) -> None:
                 return layer.conv1d(inputs)
             return original(layer, inputs)
 
-        conv._yunshu_split_prefill = True
+        conv._yunshu_split_prefill = True  # type: ignore[attr-defined]
         Qwen3_5GatedDeltaNet._causal_conv1d_decode = conv
 
 
