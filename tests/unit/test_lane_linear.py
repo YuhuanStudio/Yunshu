@@ -206,3 +206,24 @@ def test_a_skipped_projection_keeps_verify_windows_narrow():
         assert tree_verify.lane_projections(view) is (not skipped)
         if skipped:
             assert mtp_lane.verify_max_rows(True, view) == 8
+
+
+@pytest.mark.parametrize(
+    "bits,n,k", [(5, 5120, 17408), (4, 5120, 17408), (8, 34816, 5120)]
+)
+def test_measured_projection_rows_match_the_unmodified_wide_path(bits, n, k):
+    mx.random.seed(47)
+    weight, scales, biases = mx.quantize(
+        mx.random.normal((n, k)).astype(mx.bfloat16), bits=bits, group_size=64
+    )
+    layer = lane_linear.LaneLinear(weight, scales, biases, bits, 64)
+    x = mx.random.normal((64, k)).astype(mx.bfloat16)
+    expected = layer.lane_only(x)
+    mx.eval(expected)
+    for rows in range(1, 33):
+        assert mx.array_equal(
+            layer.lane_only(x[:rows]).view(mx.uint16), expected[:rows].view(mx.uint16)
+        ).item(), (
+            bits,
+            rows,
+        )

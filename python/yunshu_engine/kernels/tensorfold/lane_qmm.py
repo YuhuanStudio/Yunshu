@@ -216,8 +216,13 @@ def _kernel(name: str) -> Any:
         else:
             from . import lane_widen
 
-            source = {"coop": _COOP, "main_tiled": _MAIN_TILED, "main": _MAIN, "lowbit": lane_widen.NIBBLES,
-                      "bytes": lane_widen.BYTES}[name]
+            if name == "bytes8":
+                from . import lane_m5
+
+                source = lane_m5.direct_bytes(lane_widen.BYTES)
+            else:
+                source = {"coop": _COOP, "main_tiled": _MAIN_TILED, "main": _MAIN, "lowbit": lane_widen.NIBBLES,
+                          "bytes": lane_widen.BYTES}[name]
             _kernels[name] = _Baked("lane_qmm_" + name, source, ["X", "XS", "Wq", "SBt", "mdims"], ["Y"])
     return _kernels[name]
 
@@ -289,6 +294,19 @@ def supports(weight: mx.array, scales: mx.array, x: mx.array, bits: int, group_s
     return k % 64 == 0 and int(weight.shape[1]) * 32 == k * bits and n % 4 == 0
 
 
+
+def _lane_schedule(bits: int, n: int, k: int, rows: int, group: int, nt: int = 32) -> str:
+    """Use already-byte weights directly only on the certified M5 drafter shapes."""
+    if bits != 8 or _VARIANT != "m5" or group != 64 or nt != 32:
+        return "default"
+    shapes = ((5120, 25600), (1280, 5120), (5120, 17408), (17408, 5120),
+              (34816, 5120), (4096, 5120), (1024, 5120), (2048, 5120),
+              (10240, 5120), (5120, 4096))
+    if (n, k) in shapes and (1 <= rows <= 16 or ((n, k) == (5120, 25600) and 1 <= rows <= 32)):
+        return "direct8"
+    return "default"
+
+
 def lane_matmul(x: mx.array, weight: mx.array, sbt: mx.array, *, tiled: bool = False,
                 sk: int | None = None, nt: int = NT, group: int = 64, row_block: int | None = None, row_limit: int = MAX_ROWS, prefill_narrow: bool = False) -> mx.array:
     """x (..., K) bf16 times the packed ``weight`` (N, K*bits/32) transposed, rows <= MAX_ROWS, tiled or not."""
@@ -339,7 +357,10 @@ def lane_matmul(x: mx.array, weight: mx.array, sbt: mx.array, *, tiled: bool = F
     if bits != 4:
         if tiled and N % NT:
             raise ValueError(f"tiled weights need N to be a multiple of {NT}, got {N}")
-        y = _kernel("lowbit" if bits < 4 else "bytes")(inputs=[x2, xs, weight, sbt, mdims],
+        name = "lowbit" if bits < 4 else "bytes"
+        if bits == 8 and tiled and _lane_schedule(bits, N, K, M, group, nt) == "direct8":
+            name = "bytes8"
+        y = _kernel(name)(inputs=[x2, xs, weight, sbt, mdims],
                               template=[("TMR", block // 16), ("N", N), ("K", K), ("NT", NT), ("SK", sk),
                                         ("BITS", bits), ("TILED", int(bool(tiled)))],
                               grid=(-(-N // NT) * 32 * sk, -(-MP // block), 1), threadgroup=(32 * sk, 1, 1),
