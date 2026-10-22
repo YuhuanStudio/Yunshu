@@ -805,6 +805,12 @@ class _Coordinator(APCCoordinator):
         n = super().checkpoint_len(token_ids, media_token_ids)
         if not self.manager.prefill_alignment:
             return n
+        return self._aligned_media_safe(token_ids, n, media_token_ids)
+
+    def _aligned_media_safe(self, token_ids, n, media_token_ids):
+        """Largest 64-aligned point <= ``n`` that cuts no media span: a split-invariant
+        prefill resumes only at aligned points, and the unaligned plan's move past an
+        image would leave the point unaligned."""
         has_media = bool(media_token_ids.intersection(token_ids))
         while n > 0:
             aligned = self.manager.align_prefill_boundary(n)
@@ -1211,9 +1217,12 @@ class _Coordinator(APCCoordinator):
             last = ((final - 1) // interval) * interval
             if stride:
                 last = (last // stride) * stride
-            last = adjust_prefix_to_text_suffix_boundary(
-                token_ids, last, media_token_ids, max_prefix_tokens=final
-            )
+            if mgr.prefill_alignment:
+                last = self._aligned_media_safe(token_ids, last, media_token_ids)
+            else:
+                last = adjust_prefix_to_text_suffix_boundary(
+                    token_ids, last, media_token_ids, max_prefix_tokens=final
+                )
             if mgr.exact_cache_min_tokens <= last < final:
                 lengths.add(last)
         head = mgr.head_boundary(token_ids)
