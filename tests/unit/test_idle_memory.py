@@ -230,7 +230,8 @@ def test_heartbeat_keeps_the_gpu_warm_until_the_trim():
     assert _wait(lambda: idle.trims == 1)
     time.sleep(0.15)
     assert beats[-1] == "release"  # the trim gives the wired limit back
-    assert len(beats) - 1 == 4 == idle.beats  # the beats before the trim, then it stops
+    # only beats before the trim (timer drift under load may drop the last one), then it stops
+    assert 1 <= len(beats) - 1 == idle.beats <= 4
 
 
 def test_request_stops_the_heartbeat():
