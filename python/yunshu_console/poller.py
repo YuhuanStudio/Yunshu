@@ -39,6 +39,9 @@ from .store import HistoryStore
 logger = logging.getLogger(__name__)
 
 FIELDS = (
+    "footprint_gb",
+    "footprint_slope_gib_h",
+    "error_rate",
     "active_gb",
     "cache_gb",
     "peak_gb",
@@ -195,6 +198,7 @@ class Poller:
         self._uptime: float | None = None
         self.ticks = 0
         self.errors = 0
+        self.watch = DeploymentWatch()
 
     # ── http ────────────────────────────────────────────────────────────
     def _headers(self) -> dict[str, str]:
@@ -231,6 +235,20 @@ class Poller:
             with contextlib.suppress(httpx.HTTPError, ValueError, OSError):
                 self._host = telemetry_fields(await self._get("/v1/yunshu/host"))
         row.update(self._host)
+        row["footprint_gb"] = memory_gib(status.get("memory") or {}, "footprint")
+        watch = self.watch.update(
+            now,
+            self._pid,
+            tuple(sorted(self._models.items())),
+            row["footprint_gb"],
+            list(self._window),
+        )
+        row["footprint_slope_gib_h"] = watch["slope_gib_h"]
+        row["error_rate"] = watch["error_rate"]
+        for alert in watch["raised"]:
+            logger.warning("deployment alert: %s", alert)
+            if self.store is not None:
+                self.store.add_event(now, "deployment_alert", {"message": alert})
         if self.store is not None:
             self.store.add_sample(now, row)
 
@@ -369,6 +387,7 @@ class Poller:
 
     def state(self) -> dict[str, Any]:
         return {
+            "watch": self.watch.state,
             "up": self.up,
             "since": self.since,
             "last_ok": self.last_ok,
@@ -380,3 +399,64 @@ class Poller:
             "requests_recorded": self.requests_recorded,
             "cursor": {"boot_id": self.boot_id, "seq": self.seq},
         }
+
+
+class DeploymentWatch:
+    """Bounded 30-minute footprint regression; restart/model changes reset the baseline.
+
+    Alerts at >1 GiB/hour after 15 minutes, or >=5% failed requests (>=20
+    completions in 60 seconds). These are operational warnings, not leak verdicts:
+    intentional cache growth is included. Persisted samples/events retain the history.
+    """
+
+    def __init__(self):
+        self.samples = collections.deque(maxlen=7201)
+        self.identity = None
+        self.active = set()
+        self.state = {"slope_gib_h": None, "error_rate": None, "alerts": []}
+
+    def update(self, now, pid, models, footprint, requests):
+        identity = (pid, models)
+        if identity != self.identity:
+            self.samples.clear()
+            self.identity = identity
+        if footprint is None or not math.isfinite(footprint):
+            self.samples.clear()
+        else:
+            self.samples.append((now, footprint))
+        while self.samples and self.samples[0][0] < now - 1800:
+            self.samples.popleft()
+        slope = None
+        if len(self.samples) >= 15 and now - self.samples[0][0] >= 900:
+            xs = [(t - now) / 3600 for t, _ in self.samples]
+            ys = [v for _, v in self.samples]
+            xm, ym = sum(xs) / len(xs), sum(ys) / len(ys)
+            denominator = sum((x - xm) ** 2 for x in xs)
+            if denominator:
+                slope = (
+                    sum((x - xm) * (y - ym) for x, y in zip(xs, ys, strict=True))
+                    / denominator
+                )
+        completed = [
+            r
+            for r in requests
+            if _num(r.get("status")) is not None and not r.get("cancelled")
+        ]
+        rate = (
+            sum(r["status"] >= 400 for r in completed) / len(completed)
+            if completed
+            else None
+        )
+        alerts = set()
+        if slope is not None and slope > 1.0:
+            alerts.add("Footprint growth exceeds 1 GiB/h over the last 15–30 minutes")
+        if rate is not None and len(completed) >= 20 and rate >= 0.05:
+            alerts.add("Request error rate is at least 5% over the last minute")
+        raised = sorted(alerts - self.active)
+        self.active = alerts
+        self.state = {
+            "slope_gib_h": slope,
+            "error_rate": rate,
+            "alerts": sorted(alerts),
+        }
+        return {**self.state, "raised": raised}

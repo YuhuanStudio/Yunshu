@@ -150,6 +150,7 @@ export interface ConsoleState {
   /** Epoch ms when the engine's current state (up or down) began. */
   since: number | null;
   lastError: string | null;
+  alerts?: string[];
 }
 
 export async function fetchConsoleState(
@@ -165,6 +166,13 @@ export async function fetchConsoleState(
     if (body.object !== "yunshu.console") return null;
     const since = num(body.since);
     return {
+      alerts:
+        (body.watch as { alerts?: unknown } | undefined)?.alerts instanceof
+        Array
+          ? (body.watch as { alerts: unknown[] }).alerts.filter(
+              (v): v is string => typeof v === "string",
+            )
+          : [],
       recording: body.recording === true,
       up: typeof body.up === "boolean" ? body.up : null,
       since: since == null ? null : since * 1000,

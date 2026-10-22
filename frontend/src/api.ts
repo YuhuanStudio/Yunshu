@@ -84,6 +84,7 @@ export interface EngineThroughput {
 
 export interface EngineStatus {
   object: "yunshu.status";
+  deployment_alerts?: string[];
   version: string;
   state: string;
   uptime_s: number;

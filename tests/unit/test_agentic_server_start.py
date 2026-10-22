@@ -151,3 +151,12 @@ def test_start_server_does_not_retry_other_failures(servers, monkeypatch, tmp_pa
     with pytest.raises(RuntimeError):
         servers.start_server(1, Fake, wait_s=0)
     assert len(made) == 1
+
+
+def test_server_home_can_be_isolated_by_job(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENTIC_SERVER_HOME", str(tmp_path / "owned-home"))
+    path = Path(__file__).resolve().parents[2] / "scripts/research/agentic/servers.py"
+    spec = importlib.util.spec_from_file_location("isolated_agentic_servers", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    assert tmp_path / "owned-home" == module.SERVER_HOME

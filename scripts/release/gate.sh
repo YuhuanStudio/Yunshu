@@ -234,6 +234,10 @@ if has soak || has soak-mmlu || has soak-realistic; then
       log "soak realistic $SOAK_MINUTES min"
       $PY scripts/research/soak_realistic.py --url $URL --model Qwen3.8-27B --pid $YP \
         --minutes $SOAK_MINUTES --note "release gate" --output $OUT/soak-realistic.jsonl 2>&1 | tee $OUT/soak-realistic.log
+      # A summary is not sufficient: short/aborted runs and retained idle pool fail closed.
+      complete=$(jget $OUT/soak-realistic.jsonl "str(complete and passed)")
+      [[ $complete == True ]] && rec soak.realistic_complete PASS "full duration, streams and idle ledger verified" \
+        || rec soak.realistic_complete FAIL "incomplete run, request failure or idle memory not returned"
       s=$(jget $OUT/soak-realistic.jsonl "f\"{requests} {ok} {errors} {start_footprint_gib} {max_footprint_gib} {end_footprint_gib} {start_footprint_ex_apc_gib} {end_footprint_ex_apc_gib} {start_apc_gib} {end_apc_gib}\"")
       if [ -z "$s" ]; then rec soak.realistic FAIL "no summary (soak-realistic.log)"
       else

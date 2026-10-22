@@ -212,3 +212,36 @@ def test_gc_guard_spans_request_arrival_to_first_emit(runner):  # noqa: F811
             gc.enable()
     assert spy.log[0] == "begin" and "first" in spy.log
     assert gc.isenabled() == was and not spy._held
+
+
+def test_terminal_releases_vocab_owner_and_request_payload(runner):  # noqa: F811
+    import weakref
+
+    for terminal in (vbr._DONE, RuntimeError("request failed"), "overflow"):
+        job = _handoff_job(None)
+
+        # A weak-referenceable stand-in for request-scoped grammar/media state.
+        class Payload:
+            pass
+
+        payload = Payload()
+        retained = weakref.ref(payload)
+        job.processors = [payload]
+        runner._vocab_owner = job
+        del payload
+        if terminal == "overflow":
+            for i in range(vbr.OUT_LIMIT):
+                job.out.put((i, None))
+            runner._emit(job, (999, None))
+        else:
+            runner._emit(job, terminal)
+        assert runner._vocab_owner is None
+        del job
+        assert retained() is None
+
+
+def test_terminal_preserves_another_live_vocab_owner(runner):  # noqa: F811
+    owner = _handoff_job(None)
+    runner._vocab_owner = owner
+    runner._emit(_handoff_job(None), vbr._DONE)
+    assert runner._vocab_owner is owner

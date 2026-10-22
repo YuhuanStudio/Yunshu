@@ -96,7 +96,14 @@ def _host_uncached() -> dict[str, Any]:
     try:
         import psutil
 
-        put(out, "available", psutil.virtual_memory().available, 2)
+        available = psutil.virtual_memory().available
+        if total is None or not 0 <= available <= total:
+            # macOS can report available bytes above physical RAM. Preserve the raw
+            # observation, but never use impossible counters as deployment headroom.
+            out["available_reported_bytes"] = available
+            out["available_reason"] = "OS available counter is outside physical RAM"
+        else:
+            put(out, "available", available, 2)
     except Exception:
         logger.debug("psutil unavailable", exc_info=True)
     return out
@@ -247,6 +254,45 @@ def measured_weight_bytes(engine: Any) -> int | None:
     return total or None
 
 
+def _parameter_arrays(tree: Any):
+    if isinstance(tree, dict):
+        for value in tree.values():
+            yield from _parameter_arrays(value)
+    elif isinstance(tree, (list, tuple)):
+        for value in tree:
+            yield from _parameter_arrays(value)
+    elif hasattr(tree, "nbytes"):
+        yield tree
+
+
+def measured_drafter_bytes(engine: Any) -> int | None:
+    """Drafter parameters, excluding arrays tied to the target and repeated aliases.
+
+    Array metadata only. Views can still share storage, so this is a parameter-byte
+    attribution rather than an allocator census; never add it to process footprint.
+    """
+    runner = getattr(engine, "_batch_runner", None)
+    drafter = getattr(runner, "drafter", None)
+    if drafter is None or not hasattr(drafter, "parameters"):
+        return None
+    try:
+        target = getattr(engine, "_model", None)
+        seen = (
+            {id(a) for a in _parameter_arrays(target.parameters())}
+            if target is not None and hasattr(target, "parameters")
+            else set()
+        )
+        total = 0
+        for array in _parameter_arrays(drafter.parameters()):
+            if id(array) not in seen:
+                seen.add(id(array))
+                total += int(array.nbytes)
+        return total
+    except Exception:
+        logger.debug("drafter weight walk failed", exc_info=True)
+        return None
+
+
 def _loaded_models(manager: Any, engine: Any, display_id: str | None) -> list[dict]:
     rows: list[dict] = []
     if manager is not None:
@@ -323,6 +369,19 @@ def collect(manager: Any, engine: Any, display_id: str | None = None) -> dict[st
             }
         )
         attributed += w_bytes or 0
+        draft_bytes = measured_drafter_bytes(eng) if eng is not None else None
+        if draft_bytes is not None:
+            owners.append(
+                {
+                    "kind": "drafter_weights",
+                    "id": m["id"],
+                    "bytes": draft_bytes,
+                    "reclaimable": manager is not None,
+                    "estimated": True,
+                    "source": "drafter parameters excluding target array identities",
+                }
+            )
+            attributed += draft_bytes
         snap = _apc_snapshot(eng) if eng is not None else None
         if snap is None:
             continue
@@ -364,6 +423,39 @@ def collect(manager: Any, engine: Any, display_id: str | None = None) -> dict[st
                     "available": t.get("available"),
                 }
             )
+
+    # This process-wide bounded store lives beside KV checkpoints, not inside
+    # the APC manager's occupancy counter. Count it once even with several models.
+    from yunshu_engine.dflash_apc_window import resident_bytes
+
+    draft_window = resident_bytes()
+    owners.append(
+        {
+            "kind": "apc_draft_window",
+            "id": None,
+            "bytes": draft_window,
+            "reclaimable": True,
+            "estimated": False,
+            "source": "DFlash APC captured-layer window store",
+        }
+    )
+    attributed += draft_window
+
+    # Native process heap, not device memory: llguidance token tables built on the
+    # first constrained request and cached for the process life. Deliberately not
+    # added to ``attributed`` (that sum is compared with MLX active bytes).
+    from yunshu_engine.tool_call_grammar import resident_tokenizer_bytes
+
+    native_owners = [
+        {
+            "kind": "grammar_tokenizer",
+            "id": None,
+            "bytes": resident_tokenizer_bytes(),
+            "reclaimable": False,
+            "estimated": True,
+            "source": "process heap growth while building llguidance token tables",
+        }
+    ]
 
     # Live KV of in-flight requests is not counted anywhere yet: unknown, not zero.
     owners.append(
@@ -427,6 +519,7 @@ def collect(manager: Any, engine: Any, display_id: str | None = None) -> dict[st
             {"footprint": proc["footprint"], "footprint_peak": proc["footprint_peak"]}
         ),
         "owners": owners,
+        "native_owners": native_owners,
         **_overshoot_block(overshoot),
         "storage_tiers": storage,
         "limits": {

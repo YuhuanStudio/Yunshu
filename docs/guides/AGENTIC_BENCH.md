@@ -13,7 +13,7 @@ Per (agent, engine, task, repeat) run:
 - number of model requests; total prompt, completion and cached tokens; cache-hit ratio; largest prompt;
 - per request TTFT and decode tok/s (measured at the wire by a recording proxy, so every engine is
   measured the same way);
-- API errors (4xx/5xx, bodies saved), malformed tool-call arguments, tool-call markup leaking into text;
+- API errors (4xx/5xx and incomplete/error streams; metadata only), malformed tool-call arguments, tool-call markup leaking into text;
 - the server's peak physical footprint during the run.
 
 Agents (pinned copies under `/Volumes/P5Plus/yunshu-test-envs/agentic-clis`, installed by
@@ -64,7 +64,7 @@ directory), `repo/` (the starting files), `hidden/` (test files copied to `_hidd
 `check-tasks` must report the starting repo failing and the reference passing. Keep tasks deterministic and
 offline. Polyglot exercises are listed in `tasks.py` and materialized from the dataset, never committed.
 
-Raw prompts, recordings and JSONL stay private (`docs/research/`). Publish only dated,
+Run metadata, agent artifacts and JSONL stay private (`docs/research/`). Publish only dated,
 aggregate results with snapshot SHAs, denominators, timeouts and uncertainty, as in
 [BENCHMARKS](../BENCHMARKS.md) and [PERF_TREND](../reports/PERF_TREND.md).
 The 2026-10-02 matrix is partial; Codex and TensorFold cells have no published result.
