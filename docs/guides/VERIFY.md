@@ -270,7 +270,7 @@ The opt-in `ssd_ttft` stage primes each context, verifies a RAM hit, prefills 12
 
 `--suite lane_bandwidth` measures the candidate's affine-quantized target and DFlash2
 projection shapes at 1, 8, 16, 17 and 32 rows. Set `--env YUNSHU_VLM_DRAFT=/path/to/drafter`.
-Each timed sample evaluates one graph containing distinct checkpoint layers; graph
+The stage uses `mx.depends` to serialize distinct checkpoint projections in one graph without changing their inputs. Each timed sample evaluates that graph; graph
 construction, loading and quantization are outside the timer. Output includes all samples,
 useful weight-plus-scale bytes, split-K, row blocks and the fraction of the configured
 614 GB/s peak. This is useful traffic divided by graph latency, not a hardware DRAM counter;
@@ -279,5 +279,5 @@ small working sets can reside in cache. It is diagnostic evidence, not an end-to
 For CPU admission checks, run `scripts/research/probe_lane_bandwidth.py --dry-run --target
 /path/to/target --draft /path/to/drafter --out /path/to/results.jsonl`. Through gpuq, the
 probe also supports `--whole-forward` (all quantized projections with independent inputs,
-excluding embedding/head/nonquantized operations), and research-only `--compare-direct8
+excluding embedding/head/nonquantized operations; add `--serial` to retain projection dependencies), and research-only `--compare-direct8
 --parity` (interleaved scheduling experiment, all row counts 1..32 checked bitwise).

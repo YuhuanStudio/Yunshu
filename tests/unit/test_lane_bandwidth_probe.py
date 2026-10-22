@@ -91,3 +91,109 @@ def test_draft_inventory_includes_serving_fusions(tmp_path):
         got[("mlp.gate_up", 34816, 5120, 8)][0][1]
         == "layers.0.mlp.gate_proj|layers.0.mlp.up_proj"
     )
+
+
+def test_half_tile_only_changes_weight_address():
+    module_spec = importlib.util.spec_from_file_location(
+        "half_tile", PROBE.parent / "lane_half_tile.py"
+    )
+    half = importlib.util.module_from_spec(module_spec)
+    module_spec.loader.exec_module(half)
+    needle = "(int64_t)(threadgroup_position_in_grid.x * KG + g) * (NT * GS / 2)"
+    source = "before\n" + needle + "\nafter"
+    new = half.transform(source)
+    assert new.startswith("before\n") and new.endswith("\nafter")
+    for group in range(80):
+        for tile in range(10):
+            offset = ((tile // 2) * 80 + group) * (32 * 64 // 2) + (tile % 2) * (
+                16 * 64 // 2
+            )
+            for column in range(16):
+                n = tile * 16 + column
+                assert (
+                    offset + column * 32
+                    == ((n // 32) * 80 + group) * 1024 + (n % 32) * 32
+                )
+
+
+def test_half_tile_keeps_split_k_and_can_pair_rows(monkeypatch):
+    import sys
+    from types import ModuleType, SimpleNamespace
+
+    module_spec = importlib.util.spec_from_file_location(
+        "half_route", PROBE.parent / "lane_half_tile.py"
+    )
+    half = importlib.util.module_from_spec(module_spec)
+    module_spec.loader.exec_module(half)
+
+    def base(*args, **kwargs):
+        return kwargs
+
+    kernel = object()
+    q = SimpleNamespace(
+        _resolve_variant=lambda: "m5",
+        _kernel=lambda name: kernel,
+        _MAIN_TILED="(int64_t)(threadgroup_position_in_grid.x * KG + g) * (NT * GS / 2)",
+        _Baked=lambda *args: object(),
+        _kernels={},
+        lane_matmul=base,
+        weight_bits=lambda *args: 4,
+    )
+    fake = ModuleType("yunshu_engine.kernels.tensorfold")
+    fake.lane_qmm = q
+    monkeypatch.setitem(sys.modules, "yunshu_engine.kernels.tensorfold", fake)
+    undo = half.install(row_block=32)
+    for rows in (1, 16, 17, 32):
+        x = SimpleNamespace(size=rows * 5120, shape=(rows, 5120))
+        result = q.lane_matmul(x, None, None, tiled=True, sk=4, row_block=16)
+        assert result["nt"] == 16
+        assert result["sk"] == 4  # changing the column tile must never retune K slices
+        assert result["row_block"] == (32 if rows > 16 else 16)
+    undo()
+    assert q.lane_matmul is base
+    assert q._kernels["main_tiled"] is kernel
+
+
+def test_projection_dependency_chain_does_not_modify_inputs():
+    from types import SimpleNamespace
+
+    inputs = [object(), object(), object()]
+    dependencies = []
+    seen = []
+
+    def depends(x, previous):
+        dependencies.append((x, previous))
+        return x
+
+    def layer(x):
+        seen.append(x)
+        return len(seen)
+
+    fake = SimpleNamespace(depends=depends)
+    assert probe.projection_graph(fake, [layer] * 3, inputs, serial=True) == [1, 2, 3]
+    assert seen == inputs
+    assert dependencies == [(inputs[1], 1), (inputs[2], 2)]
+
+
+def test_direct8_selective_route_avoids_measured_wide_regression():
+    spec = importlib.util.spec_from_file_location(
+        "direct_route", PROBE.parent / "lane_direct8.py"
+    )
+    direct = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(direct)
+    for rows in range(1, 33):
+        assert direct.direct_for(34816, 5120, rows) is (rows <= 16)
+        assert direct.direct_for(5120, 25600, rows)
+
+
+def test_pair16_keeps_group_fma_and_split_reduction_source():
+    spec = importlib.util.spec_from_file_location(
+        "pair16_source", PROBE.parent / "lane_pair16.py"
+    )
+    pair = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(pair)
+    # Includes strict source guards for descriptor, group-fma expression,
+    # stage barrier count and byte-identical split-K reduction suffix.
+    result = pair.preflight(PROBE.parents[2])
+    assert set(result) == {"main", "bytes"}
+    assert all(len(value) == 64 for value in result.values())

@@ -10,6 +10,7 @@ import statistics
 import struct
 import time
 from collections import defaultdict
+from functools import partial
 from pathlib import Path
 
 
@@ -62,6 +63,16 @@ def inventory(root, draft=False):
     return groups
 
 
+def projection_graph(mx, layers, inputs, serial=False):
+    """One eval graph; optional dependencies retain inputs without arithmetic."""
+    outputs = []
+    for layer, x in zip(layers, inputs, strict=True):
+        if serial and outputs:
+            x = mx.depends(x, outputs[-1])
+        outputs.append(layer(x))
+    return outputs
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--target", required=True)
@@ -71,9 +82,16 @@ def main():
     p.add_argument("--smoke", action="store_true")
     p.add_argument("--direct8", action="store_true")
     p.add_argument("--compare-direct8", action="store_true")
+    p.add_argument("--selective8", action="store_true")
+    p.add_argument("--compare-half", action="store_true")
+    p.add_argument("--compare-pair16", action="store_true")
+    p.add_argument("--half-row-block", type=int, choices=(16, 32))
     p.add_argument("--parity", action="store_true")
     p.add_argument("--only-draft", action="store_true")
+    p.add_argument("--only-name")
     p.add_argument("--whole-forward", action="store_true")
+    p.add_argument("--serial", action="store_true")
+    p.add_argument("--whole-reps", type=int, default=15)
     p.add_argument("--reps", type=int, default=5)
     p.add_argument("--peak-gbps", type=float, default=614)
     a = p.parse_args()
@@ -82,9 +100,21 @@ def main():
         for kind, root in [("target", a.target), ("draft", a.draft)]
         for key, members in inventory(root, kind == "draft").items()
     ]
+    if a.only_name:
+        jobs = [job for job in jobs if job[1][0] == a.only_name]
+    if not jobs:
+        p.error("no matching projection shapes")
     if a.only_draft:
         jobs = [job for job in jobs if job[0] == "draft"]
     if a.dry_run:
+        if a.compare_pair16:
+            from lane_pair16 import preflight
+
+            print(
+                json.dumps(
+                    {"pair16_preflight": preflight(Path(__file__).resolve().parents[2])}
+                )
+            )
         print(json.dumps([dict(kind=c, shape=k, layers=len(v)) for c, k, v in jobs]))
         return
     import mlx.core as mx
@@ -101,7 +131,16 @@ def main():
             print(json.dumps(row), flush=True)
 
         emit(dict(phase="device", info=mx.device_info(), peak_gbps=a.peak_gbps))
-        from lane_direct8 import install
+        if a.compare_pair16:
+            from lane_pair16 import install
+        elif a.compare_half:
+            from lane_half_tile import install as half_install
+
+            install = partial(half_install, row_block=a.half_row_block)
+        else:
+            from lane_direct8 import install as byte_install
+
+            install = partial(byte_install, selective=a.selective8)
 
         retained = []
         for kind, (name, n, k, bits), members in jobs[:1] if a.smoke else jobs:
@@ -165,16 +204,21 @@ def main():
                 mx.eval(x)
                 modes = (
                     ("base", "cand", "cand-r1", "base-r1")
-                    if a.compare_direct8 and bits == 8
+                    if (a.compare_direct8 and bits == 8)
+                    or (a.compare_half and bits == 4)
+                    or (a.compare_pair16 and bits in (4, 5))
                     else (("cand",) if a.direct8 else ("base",))
                 )
                 for mode in modes:
                     undo = install() if mode.startswith("cand") else None
 
                     def graph(x=x, linears=linears):
-                        return [l(x) for l in linears]
+                        return projection_graph(
+                            mx, linears, [x] * len(linears), a.serial
+                        )
 
-                    mx.eval(graph())
+                    for _ in range(3):
+                        mx.eval(graph())
                     samples = []
                     for _ in range(a.reps):
                         # Construct graph before timing; force all outputs in ONE eval.
@@ -189,6 +233,7 @@ def main():
                     emit(
                         dict(
                             phase="timing",
+                            dependency_chain=a.serial,
                             mode=mode,
                             kind=kind,
                             name=name,
@@ -217,40 +262,52 @@ def main():
             if not layers:
                 continue
             traffic = sum(l.weight.nbytes + l.sbt.nbytes for l in layers)
-            undo = install() if a.direct8 else None
             for rows in (1, 8, 16, 17, 32):
                 inputs = [
                     mx.random.normal((rows, l.input_dims)).astype(mx.bfloat16)
                     for l in layers
                 ]
                 mx.eval(inputs)
-                mx.eval([l(x) for l, x in zip(layers, inputs, strict=True)])
-                samples = []
-                for _ in range(a.reps):
-                    ys = [l(x) for l, x in zip(layers, inputs, strict=True)]
-                    mx.synchronize()
-                    begin = time.perf_counter()
-                    mx.eval(ys)
-                    mx.synchronize()
-                    samples.append((time.perf_counter() - begin) * 1000)
-                ms = statistics.median(samples)
-                emit(
-                    dict(
-                        phase="whole_projection_graph",
-                        mode="cand" if a.direct8 else "base",
-                        excluded=["embedding", "lm_head", "nonquantized"],
-                        kind=kind,
-                        rows=rows,
-                        projections=len(layers),
-                        bytes=traffic,
-                        ms=ms,
-                        samples_ms=samples,
-                        gbps=traffic / ms / 1e6,
-                        peak_fraction=traffic / ms / 1e6 / a.peak_gbps,
+                modes = (
+                    ("base", "cand", "cand-r1", "base-r1")
+                    if (
+                        (a.compare_direct8 and kind == "draft")
+                        or (a.compare_half and kind == "target")
+                        or (a.compare_pair16 and kind == "target")
                     )
+                    else (("cand",) if a.direct8 else ("base",))
                 )
-            if undo:
-                undo()
+                for mode in modes:
+                    undo = install() if mode.startswith("cand") else None
+                    for _ in range(3):
+                        mx.eval(projection_graph(mx, layers, inputs, a.serial))
+                    samples = []
+                    for _ in range(a.whole_reps):
+                        ys = projection_graph(mx, layers, inputs, a.serial)
+                        mx.synchronize()
+                        begin = time.perf_counter()
+                        mx.eval(ys)
+                        mx.synchronize()
+                        samples.append((time.perf_counter() - begin) * 1000)
+                    ms = statistics.median(samples)
+                    emit(
+                        dict(
+                            phase="whole_projection_graph",
+                            dependency_chain=a.serial,
+                            mode=mode,
+                            excluded=["embedding", "lm_head", "nonquantized"],
+                            kind=kind,
+                            rows=rows,
+                            projections=len(layers),
+                            bytes=traffic,
+                            ms=ms,
+                            samples_ms=samples,
+                            gbps=traffic / ms / 1e6,
+                            peak_fraction=traffic / ms / 1e6 / a.peak_gbps,
+                        )
+                    )
+                    if undo:
+                        undo()
         emit(dict(phase="complete", complete=True))
 
 

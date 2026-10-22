@@ -2474,10 +2474,12 @@ def stage_lane_bandwidth(ctx: Ctx) -> StageResult:
             draft,
             "--out",
             "{out}",
+            "--serial",
+            "--whole-forward",
         ],
         quiet=True,
         mem_gb=24,
-        timeout_min=15,
+        timeout_min=8,
         cwd=ctx.cand.path,
         validate=_lane_bandwidth_valid,
     )

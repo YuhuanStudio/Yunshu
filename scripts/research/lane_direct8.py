@@ -35,7 +35,12 @@ def transform(source):
     return source
 
 
-def install():
+def direct_for(n, k, rows):
+    """Screened schedule: narrow rows, plus FC where all tested widths improved."""
+    return rows <= 16 or ((n, k) == (5120, 25600) and rows <= 32)
+
+
+def install(*, selective=False):
     from yunshu_engine.kernels.tensorfold import lane_qmm as q
     from yunshu_engine.kernels.tensorfold import lane_widen
 
@@ -50,9 +55,12 @@ def install():
     )
 
     def dispatch(*, template=(), **kwargs):
-        return (fast if dict(template)["BITS"] == 8 else base)(
-            template=template, **kwargs
+        config = dict(template)
+        rows = int(kwargs["inputs"][0].shape[0])
+        use = config["BITS"] == 8 and (
+            not selective or direct_for(config["N"], config["K"], rows)
         )
+        return (fast if use else base)(template=template, **kwargs)
 
     q._kernels["bytes"] = dispatch
 
