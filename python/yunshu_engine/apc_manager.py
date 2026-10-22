@@ -530,7 +530,8 @@ class SpillDiskStore(DiskBlockStore):
         entries, metadata, data_start = parsed
         if metadata.get("layout") != "exact_cache_v1":
             return None
-        arrays = cast("dict[str, Any]", mx.load(str(path)))
+        # format: a decompressed tier file (apc_storage) has no .safetensors suffix
+        arrays = cast("dict[str, Any]", mx.load(str(path), format="safetensors"))
         mapped = {}
         for name, entry in entries.items():
             array = arrays.get(name)

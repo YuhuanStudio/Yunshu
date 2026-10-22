@@ -2631,7 +2631,7 @@
       "license": "MIT",
       "commit": "v0.7.8",
       "why": "Scoped native MLX safetensors exact-cache reload; upstream reconstruction and validation retained",
-      "source_sha256": "bf6e50f040fe4e90d32b0fa2f4acfbc2b8a76972e7ace41aaae131d18962bde7",
+      "source_sha256": "960ce57fff4b109045c8d3c63b6e0d91990b9d2e6ab24d35d3c39600e7beac1a",
       "installed_version": "0.7.8"
     },
     {
@@ -2646,7 +2646,7 @@
       "license": "MIT",
       "commit": "v0.7.8",
       "why": "Scoped native MLX safetensors exact-cache reload; upstream reconstruction and validation retained",
-      "source_sha256": "88380d9fde952ed59f3a276ccb4d58475f7d16ad222a72e68a3465c6e116b835",
+      "source_sha256": "bdeabe368f076a095b8a03b4a4954dd24cbfe51425e4f9413052d75984596029",
       "installed_version": "0.7.8"
     }
   ],
