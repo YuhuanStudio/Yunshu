@@ -208,6 +208,8 @@ def test_full_suite_has_every_stage():
         "longqa",
         "conc",
         "ttft_profile",
+        "ssd_ttft",
+        "ssd_ttft_profile",
         "multimodal",
         "snapshot",
         "modelprobe",
@@ -1827,3 +1829,76 @@ def test_identity_and_speed_check_the_planned_grid():
     assert analyze.speed_compare(base, base)["ok"]
     sp = analyze.speed_compare(base, base, planned=[(1024, "code"), (131072, "code")])
     assert not sp["ok"] and any("131072" in m for m in sp["missing"])
+
+
+def test_ssd_ttft_profile_requires_tiers_and_cold_ram_ssd_parity(tmp_path):
+    path = tmp_path / "ssd.jsonl"
+    rows = [
+        dict(
+            phase=p,
+            sha="equal",
+            cached=1,
+            xy={"cache": {"tier": tier}},
+            call_spans=[{"stage": "ssd_read_validate"}],
+        )
+        for p, tier in (
+            ("cold", "none"),
+            ("warm", "ram"),
+            ("spill", "none"),
+            ("ssd", "ssd"),
+            ("warm", "ram"),
+            ("followup", "ram"),
+        )
+    ]
+    rows[-1]["rehearsal_usage"] = {"prompt_tokens": 10}
+    rows.append({"complete": True})
+
+    def valid():
+        path.write_text("\n".join(json.dumps(r) for r in rows) + "\n")
+        return stages._ssd_ttft_profile_valid(path)[0]
+
+    assert valid()
+    rows[3]["xy"]["cache"]["tier"] = "ram"
+    assert not valid()
+    rows[3]["xy"]["cache"]["tier"] = "ssd"
+    rows[3]["sha"] = "different"
+    assert not valid()
+
+
+def test_ssd_matrix_stage_validator_rejects_rehearsal_drift(tmp_path):
+    path = tmp_path / "matrix.jsonl"
+    rows = [
+        dict(ctx=4096, phase=p, sha="same", cached=10, xy={"cache": {"tier": t}})
+        for p, t in (
+            ("cold", "none"),
+            ("ram_before_restart", "ram"),
+            ("ssd", "ssd"),
+            ("ram_after_restart", "ram"),
+            ("followup", "ram"),
+            ("followup_rehearsed", "ram"),
+        )
+    ]
+    rows.insert(
+        0,
+        dict(
+            event="next_turn_proof",
+            completed_delta=1,
+            cached=2048,
+            source_prompt_tokens=1024,
+        ),
+    )
+    rows.append({"complete": True})
+
+    def valid():
+        path.write_text("\n".join(json.dumps(r) for r in rows) + "\n")
+        return stages._ssd_ttft_valid(path)[0]
+
+    assert valid()
+    rows[-2]["sha"] = "drift"
+    assert not valid()
+
+
+def test_ssd_stages_are_explicitly_selectable_but_not_default_ladder():
+    for stage in ("ssd_ttft", "ssd_ttft_profile"):
+        assert suites.parse_suite(stage)["stages"] == [stage]
+        assert stage not in suites.LADDER

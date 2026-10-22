@@ -433,6 +433,8 @@ def send(url, body, timeout=600, *, capture_timestamps=False, trace_id=None):
             k: xy.get(k)
             for k in (
                 "speculative",
+                "cache",
+                "latency",
                 "decode_tps",
                 "prefill_tps",
                 "ttft_ms",

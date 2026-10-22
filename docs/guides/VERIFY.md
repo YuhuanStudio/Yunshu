@@ -258,3 +258,9 @@ verdict before promoting any production GC strategy.
 ### Evals API correctness
 
 `yv ab --base <main-sha> --cand <candidate-sha> --suite evals --model /Volumes/P5Plus/models/Qwen3.5-0.8B-MLX-bf16 --label evals-smoke-<unique> --priority -1 --detach` runs CPU preflight and the 12-route SDK check against a real server. The `evals` stage exercises normal chat sampling plus local score/label graders; it makes no speed or accuracy comparison. Its JSONL evidence must end with `complete: true`, `passed: true`, 12 routes and three model invocations.
+
+### SSD restart TTFT
+
+The opt-in `ssd_ttft` stage primes each context, verifies a RAM hit, prefills 128K to evict checkpoints, then starts a second server and requires SSD provenance. It checks cold/RAM/SSD output digests and post-restart follow-up/rehearsal equivalence, in base/candidate/candidate/base order (two repetitions). Each arm has a separate scratch APC directory that is removed on exit. Provide the prompt corpus through `TFB_WORK`; it must contain `prompts/prose-<context>.txt` and `prose-131072.txt`. Use disjoint context prefixes so priming a larger context is genuinely cold.
+
+`ssd_ttft_profile` provides diagnostic Python/C spans for the same eviction/restart workflow. Its `ttft_split_ms` partitions host wall time into lookup, SSD read/validation, restore, suffix prefill, first token, and residual work. Instrumentation perturbs timing; use `ssd_ttft` for speed comparisons. A new process preserves the OS file cache, so an SSD-tier hit does not imply a cold physical disk read. Keep chunked prefill enabled for the 128K eviction request.

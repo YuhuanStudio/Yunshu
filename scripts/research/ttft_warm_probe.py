@@ -142,6 +142,31 @@ def partition_spans(spans, duration_ms, thread):
     return {key: round(value, 3) for key, value in totals.items()}
 
 
+def ttft_split(stages):
+    """Exclusive host-wall buckets; SSD includes validation and native load waits."""
+    groups = {
+        "lookup": {"apc_lookup_clone"},
+        "ssd_read": {"ssd_read_validate", "ssd_tensor_read", "ssd_array_copy"},
+        "restore": {"apc_clone", "apc_kv_restore", "apc_merge", "apc_row_restore"},
+        "suffix_prefill": {"new_token_prefill", "suffix_prefill"},
+        "first_token": {
+            "first_round",
+            "sampling",
+            "drafter_proposal",
+            "drafter_setup",
+            "drafter_window_seed",
+            "copy_index",
+        },
+    }
+    result = {
+        name: round(sum(stages.get(k, 0) for k in keys), 3)
+        for name, keys in groups.items()
+    }
+    known = set().union(*groups.values())
+    result["other"] = round(sum(v for k, v in stages.items() if k not in known), 3)
+    return result
+
+
 def clip_spans(spans, start, end, trace_id):
     """Clip spans to one delivery interval, retaining request-correlated HTTP marks."""
     return [
@@ -171,6 +196,15 @@ def validate_response(result, phase, *, require_followup_hit=True):
         raise ValueError("warm request is not a full hit")
     if phase == "followup" and require_followup_hit and not result["cached"]:
         raise ValueError("followup request did not hit APC")
+
+
+def validate_ssd_response(result):
+    """An SSD checkpoint may be a canonical partial hit; require tier evidence."""
+    if (
+        not result.get("cached")
+        or (result.get("xy") or {}).get("cache", {}).get("tier") != "ssd"
+    ):
+        raise ValueError("restart request did not hit the SSD tier")
 
 
 def signal_dump(pid):
@@ -246,6 +280,12 @@ def main():
         action="store_true",
         help="graceful APC flush then restart; first warm request measures SSD",
     )
+    ap.add_argument(
+        "--spill-context",
+        type=int,
+        help="After RAM probes, prefill this context then restart and require a genuine SSD hit",
+    )
+    ap.add_argument("--cleanup-apc", action="store_true")
     ap.add_argument("--model", required=True)
     ap.add_argument("--kind", default="code")
     ap.add_argument("--ctx", type=int, default=32768)
@@ -303,6 +343,10 @@ def main():
         if not key or not sep:
             ap.error("--env requires K=V")
         server_env[key] = value
+    if a.spill_context and a.warm < 1:
+        ap.error("--spill-context requires at least one RAM warm probe")
+    if a.spill_context and not server_env.get("YUNSHU_VLM_APC_DISK_DIR"):
+        ap.error("--spill-context requires an explicit APC disk directory")
     gc_policy = a.copy_index_gc or server_env.get("TTFT_PROBE_COPY_INDEX_GC", "auto")
     if gc_policy not in ("auto", "defer"):
         ap.error("TTFT_PROBE_COPY_INDEX_GC must be auto or defer")
@@ -358,10 +402,82 @@ def main():
     try:
         rows = []
         reply = ""
-        phases = ["cold"] + ["warm"] * a.warm + ["followup"] * (3 if kapitsa else 1)
+        restart_reply = None
+        phases = ["cold"] + ["warm"] * a.warm
+        if a.spill_context:
+            phases += ["ssd", "warm"]
+        phases += ["followup"] * (3 if kapitsa else 1)
         history = []
         followup_index = 0
         for i, phase in enumerate(phases):
+            if phase == "ssd":
+                spill = tfbench.req(
+                    s.model, tfbench.load_prompt(f"{a.kind}-{a.spill_context}"), 1
+                )
+                spill_trace = f"ttft-{os.getpid()}-spill"
+                spilled = tfbench.send(
+                    s.url, spill, capture_timestamps=True, trace_id=spill_trace
+                )
+                spill_start = spilled.pop("_sent_at_s")
+                spill_first = spilled.pop("_first_at_s")
+                spilled.pop("_text", None)
+                spilled.pop("head", None)
+                rows.append(
+                    dict(
+                        rep=i,
+                        phase="spill",
+                        start=spill_start,
+                        first=spill_first,
+                        finished=time.perf_counter(),
+                        client_prepare_ms=0,
+                        trace_id=spill_trace,
+                        **spilled,
+                    )
+                )
+                print(f"spill cached={spilled['cached']}/{spilled['pt']}", flush=True)
+                from ssd_ttft_probe import ensure_spilled
+
+                def fill(index):
+                    prompt = (
+                        f"Independent eviction session {index}.\n"
+                        + tfbench.load_prompt("prose-32768")
+                    )
+                    fill_trace = f"ttft-{os.getpid()}-fill-{index}"
+                    result = tfbench.send(
+                        s.url,
+                        tfbench.req(s.model, prompt, 1),
+                        capture_timestamps=True,
+                        trace_id=fill_trace,
+                    )
+                    start = result.pop("_sent_at_s")
+                    first = result.pop("_first_at_s")
+                    result.pop("_text", None)
+                    result.pop("head", None)
+                    rows.append(
+                        dict(
+                            rep=i,
+                            phase="eviction_fill",
+                            start=start,
+                            first=first,
+                            finished=time.perf_counter(),
+                            client_prepare_ms=0,
+                            trace_id=fill_trace,
+                            **result,
+                        )
+                    )
+
+                ensure_spilled(
+                    server_env["YUNSHU_VLM_APC_DISK_DIR"], [rows[1]["cached"]], fill
+                )
+                if not a.unprofiled:
+                    signal_dump(s.proc.pid)
+                    time.sleep(3)
+                # Abrupt process restart: shutdown flushing must not manufacture
+                # the SSD hit that this eviction experiment is meant to prove.
+                s.kill()
+                s = tfbench.Srv(
+                    "yunshu", extra_env, f"-probe-{a.tag}-ssd", model=a.model
+                )
             body = tfbench.req(
                 s.model, prompt, a.followup_tokens if phase == "cold" else a.max_tokens
             )
@@ -403,8 +519,24 @@ def main():
                 history = body["messages"] + [
                     {"role": "assistant", "content": r["_text"]}
                 ]
+            if phase == "ssd":
+                restart_reply = r["_text"]
             r.pop("_text", None)
-            validate_response(r, phase, require_followup_hit=not a.allow_followup_miss)
+            r.pop("head", None)
+            a.out.parent.mkdir(parents=True, exist_ok=True)
+            with a.out.with_suffix(".partial.jsonl").open("a") as partial:
+                partial.write(
+                    json.dumps(
+                        dict(rep=i, phase=phase, start=sent_at, first=first_at, **r)
+                    )
+                    + "\n"
+                )
+            if phase == "ssd":
+                validate_ssd_response(r)
+            else:
+                validate_response(
+                    r, phase, require_followup_hit=not a.allow_followup_miss
+                )
             rows.append(
                 dict(
                     rep=i,
@@ -470,6 +602,7 @@ def main():
                 row["exclusive_call_stage_ms"] = partition_spans(
                     row["call_spans"], (row["first"] - row["start"]) * 1000, a.thread
                 )
+                row["ttft_split_ms"] = ttft_split(row["exclusive_call_stage_ms"])
                 http_receive = [
                     r["start_ms"]
                     for r in row["call_spans"]
@@ -503,6 +636,10 @@ def main():
                     diagnostic_only=not a.unprofiled,
                     kapitsa_prompts=bool(kapitsa),
                     restarted_after_cold=a.restart_after_cold,
+                    spill_context=a.spill_context,
+                    restart_reply_equal=(restart_reply == reply)
+                    if restart_reply is not None
+                    else None,
                     followup_apc_required=not a.allow_followup_miss,
                     stack_sampling=not a.no_stacks,
                     runtime=runtime,
@@ -523,6 +660,10 @@ def main():
             )
     finally:
         s.kill()
+        if a.cleanup_apc:
+            from ssd_ttft_probe import cleanup_scratch
+
+            cleanup_scratch(server_env["YUNSHU_VLM_APC_DISK_DIR"])
 
 
 if __name__ == "__main__":

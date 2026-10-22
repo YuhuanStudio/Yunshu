@@ -423,3 +423,42 @@ def test_lookup_span_records_actual_tier_without_reading_arrays(monkeypatch):
     spans.profile(frame, "call", None)
     spans.profile(frame, "return", None)
     assert spans.rows[0][4].endswith("tier=ssd cached=4095")
+
+
+def test_restart_accepts_partial_ssd_checkpoint_but_rejects_ram_or_miss():
+    row = dict(ct=1, ttft_s=0.1, cached=2047, pt=4096, xy={"cache": {"tier": "ssd"}})
+    probe.validate_ssd_response(row)
+    for cached, tier in [(0, "ssd"), (2047, "ram"), (2047, "none")]:
+        with pytest.raises(ValueError, match="SSD tier"):
+            probe.validate_ssd_response(
+                dict(row, cached=cached, xy={"cache": {"tier": tier}})
+            )
+
+
+def test_ssd_and_suffix_scopes_are_classified():
+    spec = importlib.util.spec_from_file_location(
+        "ssd_spans", _PATH.parent / "ttft_probe_site/spans.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    assert module.NAMES["_load_validated"] == "ssd_read_validate"
+    assert module.NAMES["_restore"] == "apc_row_restore"
+    assert module.NAMES["_prefill_step"] == "suffix_prefill"
+
+
+def test_ttft_split_preserves_exclusive_sum_without_double_counting_nested_io():
+    stages = dict(
+        apc_lookup_clone=4,
+        ssd_read_validate=10,
+        ssd_tensor_read=6,
+        ssd_array_copy=8,
+        apc_clone=3,
+        new_token_prefill=9,
+        first_round=5,
+        http_sse_queue_other=2,
+    )
+    split = probe.ttft_split(stages)
+    assert split == dict(
+        lookup=4, ssd_read=24, restore=3, suffix_prefill=9, first_token=5, other=2
+    )
+    assert sum(split.values()) == sum(stages.values())

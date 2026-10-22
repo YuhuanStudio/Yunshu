@@ -38,7 +38,7 @@ import threading
 import time
 from dataclasses import dataclass
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import mlx_vlm.apc as _upstream_apc
 from mlx_vlm.apc import APCManager, DiskBlockStore, _sequence_hash
@@ -69,6 +69,41 @@ _OWNED_SNAPSHOT: contextvars.ContextVar[bool] = contextvars.ContextVar(
     "yunshu_apc_owned_snapshot", default=False
 )
 CLONE_EVAL_BYTES = 512 << 20
+
+
+# Native safetensors loading avoids Python bytes -> memoryview -> MLX copies for
+# every tensor. The upstream cache decoder still validates/rebuilds all classes;
+# the context limits this reader to one exact-cache file on the calling thread.
+def _install_exact_disk_reader() -> contextvars.ContextVar[tuple | None]:
+    original = _upstream_apc._read_safetensors_tensor
+    if getattr(original, "_yunshu_native_exact", False):
+        return original._yunshu_exact_arrays
+
+    # The upstream function is process-wide. Both package spellings (and any
+    # module reload) must enter the very same scope as the installed reader.
+    arrays_scope: contextvars.ContextVar[tuple | None] = contextvars.ContextVar(
+        "yunshu_apc_exact_disk_arrays", default=None
+    )
+
+    def read(path, data_start, entry):
+        scope = arrays_scope.get()
+        if scope is not None and str(path) == scope[0] and data_start == scope[1]:
+            key = (
+                tuple(entry.get("data_offsets", ())),
+                tuple(entry.get("shape", ())),
+                entry.get("dtype"),
+            )
+            if key in scope[2]:
+                return scope[2][key]
+        return original(path, data_start, entry)
+
+    read._yunshu_native_exact = True  # type: ignore[attr-defined]
+    read._yunshu_exact_arrays = arrays_scope  # type: ignore[attr-defined]
+    _upstream_apc._read_safetensors_tensor = read
+    return arrays_scope
+
+
+_EXACT_DISK_ARRAYS = _install_exact_disk_reader()
 
 
 def _restore_kv(c, min_capacity_tokens, targets):
@@ -482,6 +517,33 @@ class SpillDiskStore(DiskBlockStore):
         except Exception:
             logger.warning("APC disk: index lookup failed, going cold", exc_info=True)
             return None
+
+    def _load_exact_cache_file(self, path, **kwargs):
+        """Use MLX's native reader, retaining upstream header/cache validation."""
+        import mlx.core as mx
+
+        parsed = self._open_shard_header(path)
+        if parsed is None:
+            return None
+        entries, metadata, data_start = parsed
+        if metadata.get("layout") != "exact_cache_v1":
+            return None
+        arrays = cast("dict[str, Any]", mx.load(str(path)))
+        mapped = {}
+        for name, entry in entries.items():
+            array = arrays.get(name)
+            bounds = _upstream_apc._safetensors_tensor_bounds(entry)
+            if array is None or bounds is None:
+                return None
+            if tuple(array.shape) != tuple(entry["shape"]):
+                return None
+            key = (tuple(entry["data_offsets"]), tuple(entry["shape"]), entry["dtype"])
+            mapped[key] = array
+        token = _EXACT_DISK_ARRAYS.set((str(path), data_start, mapped))
+        try:
+            return super()._load_exact_cache_file(path, **kwargs)
+        finally:
+            _EXACT_DISK_ARRAYS.reset(token)
 
     def load_exact_cache(self, cache_hash, **kwargs):
         with self._index_lock:
