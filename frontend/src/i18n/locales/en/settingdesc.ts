@@ -164,7 +164,7 @@ const settingdesc = {
   YUNSHU_MTP_BLOCK_SIZE:
     "Draft block size (for DFlash, the ceiling its acceptance-driven depth stays under). Unset: 6 for MTP, the drafter’s trained block for DFlash.",
   YUNSHU_SPEC_COPY_ROWS:
-    "Qwen3.5-family single-request speculative lane: verify rows a prompt-copy round may use (copy drafts = rows - 1). A copy round proposes the continuation of the longest earlier occurrence of the current tail in the prompt plus generated text, and the same verify checks it, so output is unchanged. Agent, code-editing and multi-turn traffic that quotes its context commits several times more tokens per round. Default 16 rows, capped to the backend’s certified width; 0 turns copy rounds off.",
+    "Qwen3.5-family single-request speculative lane: verify rows a prompt-copy round may use (copy drafts = rows - 1). A copy round proposes the continuation of the longest earlier occurrence of the current tail in the prompt plus generated text, and the same verify checks it, so output is unchanged. Agent, code-editing and multi-turn traffic that quotes its context commits several times more tokens per round. Default 48 rows (32K code on the DFlash drafter: +2-3% decode over 32 rows, output identical), capped to the backend’s certified width: 48 on the DFlash fast tree, 32 on the MTP lane, 8 without lane projections and tile attention; 0 turns copy rounds off.",
   YUNSHU_DRAFT_BITS:
     "Qwen3.5-family DFlash drafter weight bits: 8 (default), 4, or 0 to keep the shipped bf16. Drafts are verified by the target, so output is token-identical for every value; fewer bits cut the drafter’s bytes per round but can lower acceptance.",
   YUNSHU_SPEC_TREE:

@@ -273,3 +273,16 @@ def test_split_manager_rejects_incomplete_recurrence_states():
     manager = _mgr(prefill_stride=2048, prefill_alignment=64)
     assert not manager.store_exact_cache(list(range(700)), _cache(700), extra_hash=7)
     assert not manager._exact_cache
+
+
+def test_split_invariant_interval_checkpoint_before_an_image_stays_aligned():
+    """cc_image turn 2 (agentcensus 1022): the interval checkpoint moved back to the start
+    of an image span was left unaligned, and the next prefill refused to resume there."""
+    manager = _mgr(prefill_alignment=64)
+    image = 4242
+    ids = list(range(100, 4190)) + [image] * 200 + list(range(5000, 5600))
+    assert 4096 < 4090 + 200  # the 4096 interval point falls inside the image span
+    points = _coordinator(manager).checkpoint_lengths(ids, {image})
+    assert points and all(n % 64 == 0 for n in points)
+    for n in points:  # and none cuts the image span
+        assert not (ids[n - 1] == image and ids[n] == image)

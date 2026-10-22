@@ -248,3 +248,59 @@ def test_host_allocator_uses_all_zones_and_correct_abi(monkeypatch):
     assert calls == [(None, 0)]
     assert relief.argtypes == [ctypes.c_void_p, ctypes.c_size_t]
     assert relief.restype is ctypes.c_size_t
+
+
+def _beating(busy_flag, beats, heartbeat_s=0.02, trim_s=0.1):
+    return IdleMemory(
+        lambda fn: fn(),
+        lambda: busy_flag["busy"],
+        collect_after_s=0.01,
+        trim_after_s=trim_s,
+        collect=lambda: None,
+        trim=lambda: None,
+        heartbeat_s=heartbeat_s,
+        beat=lambda: beats.append(time.monotonic()),
+        release=lambda: beats.append("release"),
+    )
+
+
+def test_heartbeat_keeps_the_gpu_warm_until_the_trim():
+    beats, busy = [], {"busy": False}
+    idle = _beating(busy, beats)
+    idle.drained()
+    assert _wait(lambda: idle.trims == 1)
+    time.sleep(0.15)
+    assert beats[-1] == "release"  # the trim gives the wired limit back
+    # only beats before the trim (timer drift under load may drop the last one), then it stops
+    assert 1 <= len(beats) - 1 == idle.beats <= 4
+
+
+def test_request_stops_the_heartbeat():
+    beats, busy = [], {"busy": False}
+    idle = _beating(busy, beats, heartbeat_s=0.03, trim_s=1.0)
+    idle.drained()
+    assert _wait(lambda: len(beats) >= 2)
+    idle.activity()
+    n = len(beats)
+    time.sleep(0.15)
+    assert len(beats) == n
+
+
+def test_heartbeat_skips_while_busy_and_restarts_on_the_next_drain():
+    beats, busy = [], {"busy": True}
+    idle = _beating(busy, beats)
+    idle.drained()
+    time.sleep(0.1)
+    assert beats == []
+    busy["busy"] = False
+    idle.drained()
+    assert _wait(lambda: len(beats) >= 2)
+
+
+def test_heartbeat_disabled_with_zero_period():
+    beats, busy = [], {"busy": False}
+    idle = _beating(busy, beats, heartbeat_s=0.0)
+    idle.drained()
+    assert _wait(lambda: idle.trims == 1)
+    time.sleep(0.05)
+    assert beats == []  # nothing held, so nothing released

@@ -74,11 +74,20 @@ def set_context(ids: Any) -> None:
     lane_linear.set_sum_context(ids)
 
 
-def verify_max_rows(lane_projections: bool, language_model: Any = None) -> int:
+CHAIN_MAX_ROWS = (
+    32  # the chain verify (MTP, DFlash without the fast tree) is certified to 32 rows
+)
+
+
+def verify_max_rows(
+    lane_projections: bool, language_model: Any = None, *, fast: bool = False
+) -> int:
     """Widest verify window whose rows equal plain decode: with the lane
     projections and the tile attention kernel the fused GDN, tile attention and
-    lane matmul are row-invariant to 32 rows; otherwise (sg8 / packed
-    projections) 8."""
+    lane matmul are row-invariant to 32 rows on the chain verify (MTP stays
+    there: its chain verify was not bit-equal past 32) and to 48 on the DFlash
+    fast tree (``fast=True``, probe_wide_verify fast_chain); otherwise (sg8 /
+    packed projections) 8."""
     from .kernels import ragged_attention as ra
 
     if (
@@ -101,7 +110,7 @@ def verify_max_rows(lane_projections: bool, language_model: Any = None) -> int:
                 or attention.num_attention_heads // attention.num_key_value_heads > 8
             ):
                 return 8
-    return ra.MAX_WINDOW
+    return ra.MAX_WINDOW if fast else min(ra.MAX_WINDOW, CHAIN_MAX_ROWS)
 
 
 def set_copy_rows(rows: int, limit: int | None = None) -> int:
@@ -115,7 +124,9 @@ def set_copy_rows(rows: int, limit: int | None = None) -> int:
     return rows
 
 
-def copy_rows_for_model(language_model: Any, rows: int | None = None) -> int:
+def copy_rows_for_model(
+    language_model: Any, rows: int | None = None, *, fast: bool = False
+) -> int:
     """Recheck the current target, even if another loaded engine set the lane's
     process-global copy preference after this engine was constructed."""
     rows = int(_STATE["copy_rows"] if rows is None else rows)
@@ -131,7 +142,8 @@ def copy_rows_for_model(language_model: Any, rows: int | None = None) -> int:
         layer.linear_attn.in_proj_qkv if layer.is_linear else layer.self_attn.q_proj
     )
     return min(
-        rows, verify_max_rows(isinstance(projection, LaneLinear), language_model)
+        rows,
+        verify_max_rows(isinstance(projection, LaneLinear), language_model, fast=fast),
     )
 
 
