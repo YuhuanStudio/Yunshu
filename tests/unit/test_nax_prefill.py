@@ -201,3 +201,102 @@ def test_short_tail_native_route_skips_untile(monkeypatch, rows, entry):
 def test_tail_guard_keeps_lane_rows_and_unqualified_large_tails(monkeypatch, rows):
     monkeypatch.setattr(nax_prefill, "_enabled", True)
     assert not nax_prefill.tail_eligible(rows, 5120, 17408, 4, 64, True)
+
+
+@pytest.mark.parametrize("rows", [1, 2, 31, 63, 64, 65, 512, 8192])
+def test_split_prefill_geometry_includes_short_pieces(monkeypatch, rows):
+    monkeypatch.setattr(nax_prefill, "_enabled", True)
+    assert nax_prefill.split_eligible(rows, 5120, 17408, 4, 64, True)
+    monkeypatch.setattr(nax_prefill, "_enabled", False)
+    assert not nax_prefill.split_eligible(rows, 5120, 17408, 4, 64, True)
+
+
+@pytest.mark.parametrize("rows", [1, 2, 31, 63, 64, 65, 512])
+def test_split_prefill_pads_only_rows_and_crops(monkeypatch, rows):
+    import mlx.core as mx
+
+    calls = []
+
+    def make(mx, x, weight, scales, biases, *, bits, bm, bn, sbt):
+        calls.append((x.shape, bm, bn, bits))
+        return lambda: mx.zeros((x.shape[0], 256), dtype=mx.bfloat16)
+
+    monkeypatch.setattr(nax_prefill, "make", make)
+    result = nax_prefill.split_matmul(
+        mx.zeros((rows, 64), dtype=mx.bfloat16),
+        mx.zeros((256, 8), dtype=mx.uint32),
+        mx.zeros((1, 256, 2), dtype=mx.bfloat16),
+        bits=4,
+    )
+    assert result.shape == (rows, 256)
+    assert calls == [((((rows + 63) // 64) * 64, 64), 64, 64, 4)]
+
+
+def test_split_nax_dispatch_does_not_change_decode(monkeypatch):
+    import mlx.core as mx
+
+    from yunshu_engine.kernels import gdn_prefill, lane_linear
+
+    layer = lane_linear.LaneLinear(
+        mx.zeros((256, 8), dtype=mx.uint32),
+        mx.zeros((256, 1), dtype=mx.bfloat16),
+        mx.zeros((256, 1), dtype=mx.bfloat16),
+        4,
+        64,
+    )
+    monkeypatch.setitem(gdn_prefill._STATE, "enabled", True)
+    monkeypatch.setitem(gdn_prefill._STATE, "split", True)
+    monkeypatch.setattr(nax_prefill, "_enabled", True)
+    calls = []
+
+    def output(x, *args, **kwargs):
+        return mx.zeros((x.shape[0], 256), dtype=mx.bfloat16)
+
+    def lane(x, **kwargs):
+        calls.append("decode")
+        return output(x)
+
+    def prefill(x, *args, **kwargs):
+        calls.append("prefill")
+        return output(x)
+
+    monkeypatch.setattr(layer, "_rows", lane)
+    monkeypatch.setattr(nax_prefill, "split_matmul", prefill)
+    x = mx.zeros((1, 1, 64), dtype=mx.bfloat16)
+    assert layer(x).shape == (1, 1, 256)
+    with gdn_prefill.prefill_scope():
+        assert layer(x).shape == (1, 1, 256)
+    assert layer(x).shape == (1, 1, 256)
+    assert calls == ["decode", "prefill", "decode"]
+
+
+@pytest.mark.parametrize("rows", [64, 1024])
+def test_split_prefill_preserves_narrow_gate_launch_and_sum_reuse(monkeypatch, rows):
+    import mlx.core as mx
+
+    from yunshu_engine.kernels import gdn_prefill, lane_linear
+
+    layer = lane_linear.LaneLinear(
+        mx.zeros((48, 8), dtype=mx.uint32),
+        mx.zeros((48, 1), dtype=mx.bfloat16),
+        mx.zeros((48, 1), dtype=mx.bfloat16),
+        4,
+        64,
+    )
+    monkeypatch.setitem(gdn_prefill._STATE, "enabled", True)
+    monkeypatch.setitem(gdn_prefill._STATE, "split", True)
+    monkeypatch.setattr(lane_linear, "_SUM_REUSE", True)
+    monkeypatch.setattr(nax_prefill, "_enabled", True)
+    calls = []
+
+    def narrow(x, *, prefill_narrow=False, cache_input=None):
+        calls.append((x.shape[0], prefill_narrow, cache_input))
+        return mx.zeros((x.shape[0], 48), dtype=mx.bfloat16)
+
+    monkeypatch.setattr(layer, "_rows", narrow)
+    x = mx.zeros((1, rows, 64), dtype=mx.bfloat16)
+    with gdn_prefill.prefill_scope():
+        assert layer(x).shape == (1, rows, 48)
+    assert len(calls) == 1
+    assert calls[0][:2] == (rows, rows > 512)
+    assert calls[0][2] is (x if rows <= 128 else None)

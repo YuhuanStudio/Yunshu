@@ -11,8 +11,10 @@ bit-identical to ``mx.fast.scaled_dot_product_attention`` (checked by tests/unit
 probe scripts/research/prefillspeed_attn_identity.py); only the schedule changes.
 
 Engaged only for: MLX 0.32.3, M5-generation GPU, bf16, batch 1, causal mask, no sinks, a plain (not
-quantized) KV cache, 24/4 heads of D=256 (any GQA factor), and at least ``MIN_ROWS`` query rows (below
-that stock MLX picks other kernels). Everything else calls the stock function.
+quantized) KV cache, 24/4 heads of D=256 (any GQA factor), and at least ``MIN_ROWS`` query rows on the legacy path. Qualified split-invariant 27B
+prompt scopes use BQ32 at every positive query length, including unaligned tails; their arithmetic
+is explicitly named in APC keys. Short-piece outputs can differ from old stock MLX. Decode and
+speculative verify keep their original dispatch. Everything else calls the stock function.
 """
 
 from __future__ import annotations
@@ -26,6 +28,8 @@ from pathlib import Path
 from typing import Any, cast
 
 import mlx.core as mx
+
+from . import gdn_prefill
 
 logger = logging.getLogger(__name__)
 
@@ -154,7 +158,8 @@ def eligible(
         and dk == BD
         and hk > 0
         and h % hk == 0
-        and rows >= MIN_ROWS
+        and rows
+        >= (1 if gdn_prefill.split_enabled() and gdn_prefill.in_prefill() else MIN_ROWS)
         and keys >= rows
         and dtype == mx.bfloat16
         and abs(scale - _SCALE) < 1e-12
@@ -165,7 +170,13 @@ def skip_reason(queries, keys, values, cache, scale, mask, sinks) -> str | None:
     """Why a call keeps the stock function (None: the replacement takes it)."""
     if sinks is not None:
         return "sinks"
-    if not (isinstance(mask, str) and mask == "causal"):
+    singleton_prefill = (
+        gdn_prefill.split_enabled()
+        and gdn_prefill.in_prefill()
+        and queries.shape[-2] == 1
+        and mask is None
+    )
+    if not singleton_prefill and not (isinstance(mask, str) and mask == "causal"):
         return f"mask:{type(mask).__name__}"
     if type(cache).__name__ not in ("KVCache", "BatchKVCache"):
         return f"cache:{type(cache).__name__}"

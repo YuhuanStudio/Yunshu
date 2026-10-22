@@ -126,7 +126,7 @@ const settingdesc = {
   YUNSHU_VLM_APC_DISK_GB:
     "APC SSD 层的大小上限（GiB），整个目录共用一份预算（跨命名空间先淘汰最久未使用的文件；0 表示不设上限，仍受剩余空间保留限制）。未设置时为卷的四分之一，最多 64 GiB。27B 检查点每个 token 约 130 KiB，因此 64 GiB 约可容纳 500K token。",
   YUNSHU_PREFILL_MATMUL:
-    "M5 级 GPU 上 Qwen3.5 系列 VLM 运行器：超过 512 行的预填充块所用的矩阵乘法。`stock` 对未分块的权重运行 MLX 量化矩阵乘法（27B 冷预填充约快 25%，块的比特结果取决于行数）；`lane` 对所有行数都使用行不变的 lane 内核。属于每个 APC 键和 SSD 命名空间的一部分。",
+    "VLM prefill 矩阵乘法。通过资格的 27B／M5 Max／MLX 0.32.3 路径在 stock 下，每段都使用 NAX；短段补至 64 行再裁切，窄门与词汇 head 保留逐行不变的 lane 算术。lane 使用全 lane 路径。decode／verify 保留原 kernel，APC 以独立算术 namespace 隔离。",
   YUNSHU_GIL_SWITCH_MS:
     "服务进程：一个 Python 线程持有 GIL 多久（毫秒）后，要让给其他想用的线程。CPython 默认的 5 ms 会让事件循环在生成线程运行 Python 时最多晚 5 ms 才醒（27B 解码：循环延迟 p99 5.3 ms，0.5 ms 降为 2.0 ms；tokens/s 不变）。仅影响调度，输出不变；0 表示沿用 CPython 默认。",
   YUNSHU_PLE_READ_THREADS:
@@ -134,9 +134,9 @@ const settingdesc = {
   YUNSHU_PREFILL_BUFFER_CACHE_GB:
     "VLM 运行器：在预填充步骤之间保留的 MLX 已释放缓冲缓存大小（GiB）。未设置时为物理内存的 5%，最多 6 GiB；常驻权重使内存余量很少时改为 0.5 GiB（可压低超大模型长预填充的峰值）。可让长前缀恢复的缓冲在请求之间保持热状态；0 表示沿用上游每个块之后清除。仅影响分配器，输出不变。",
   YUNSHU_PREFILL_GDN:
-    "Qwen3.5 系列 VLM 运行器：64 个 token 以上预填充块的 GatedDeltaNet 内核。`chunked` 使用 MLX 的 `mx.fast.gated_delta_update`（每层快 2.7 倍，与 `step` 相差在 bf16 舍入内）；`step` 保持 mlx-vlm 的逐 token 内核。属于每个 APC 键和 SSD 命名空间的一部分。",
+    "VLM prefill 递归。chunked 在通过资格的 27B 路径，对每段都使用 chunked GDN，短尾以 identity updates 补至 64 行且保留 fp32 state；可续算切点只允许绝对 64 对齐。step 停用 split-invariant 模式；decode／verify 不变。",
   YUNSHU_PREFILL_ATTENTION:
-    "Qwen3.5 系列 VLM 运行器，仅限已测量的 M5 Max / MLX 0.32.3：1024 行以上查询的预填注意力。`tile` 使用 MLX 自己的 head-dim 切分 NAX 注意力，改为 32 行查询 tile 并使用无 bank 冲突的分数交换（每次调用约快 15%；输出与 MLX 逐位相同，因此不属于任何 APC 键）；`stock` 保持 `mx.fast.scaled_dot_product_attention`。仅影响预填。",
+    "VLM prefill attention。通过资格的 27B／M5 Max／MLX 0.32.3 路径，tile 对所有 query 长度使用 BQ32，包含非对齐短尾；其他设置保留 1024 行门槛。stock 停用 split-invariant 模式。APC namespace 纳入此算术；decode／verify 不变。",
   YUNSHU_VLM_APC_DISK_TIERS:
     "SSD 目录之下的其他 APC 存储层，以逗号分隔的 `PATH[@GiB]`（外接 SSD、HDD、NAS）。启动时会测量各卷并按读取速度排序；被淘汰的检查点会下移而非删除，且仅在恢复比重新预填充更快时才由该层服务命中。未挂载的层会跳过。无损；未设置则只用 SSD。",
   YUNSHU_VLM_APC_DISK_ENCODING:
@@ -181,9 +181,9 @@ const settingdesc = {
   YUNSHU_GC_POLICY:
     "VLM 运行器的 Python 循环回收策略：`defer`（默认）冻结启动堆，并在请求到达至第一个 token 之间暂停回收，避免第 2 代回收延迟首个 token；`freeze` 仅冻结；`default` 为 Python 原生行为。输出不变。",
   YUNSHU_NEXT_TURN_PREFILL:
-    "完成纯文本回复后，引擎空闲时先把该回复按下一轮的呈现方式预填充，使后续提问只需预填充新消息。`stride`（默认）预填充到预填充区间网格，输出与不预填充时完全相同；`exact` 预填充到回复结尾，但会改变多轮对话的舍入；`boundary` 仅加入预填充边界（对照用），`off` 关闭。同一对话的请求会接管进行中的预填充；其他请求会在数个解码层内取消它。",
+    "回复后空闲时，以 prefill 算术预演下一轮 assistant 文字并存 APC，不重用 decode KV。默认 stride 在通过资格的 27B 路径停在 assistant 结束前最后的绝对 64 对齐位置；其他路径保留完整 atom。相同对话可接手执行中预演，其他请求取消。off 停用；boundary／exact 在旧路径保留额外 assistant-end 切分且可能改变浮点舍入。",
   YUNSHU_NEXT_TURN_DELAY_S:
-    "完成回复后到开始下一轮预填充之间的等待秒数。更早到达的请求（重试、重发、代理循环）不会遇到运行中的任务。",
+    "回复后至开始下一轮预演的秒数。默认 0.3，让立即追问（代理循环）在预演开始前抵达而只需预填一次，较晚的相符追问则接手执行中的工作；0 表示空闲即开始，立即追问会多花约 0.15–0.25 秒（预演加一次短尾请求）。有前台请求等待时不启动预演。",
   YUNSHU_ROUND_PREFILL_CHUNK:
     "回合驱动器：每个预填充区间的提示词 token 数。解码中的请求只在预填充前向传递之间推进，因此区间越小，越能在长提示词旁保持运行，代价是预填充速度约降低 20%。区间按提示词固定，输出不受其他运行中任务影响；以不同大小预填充的提示词各自一致，但彼此并非按位相同。",
   YUNSHU_ROUND_DRIVER:

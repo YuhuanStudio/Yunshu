@@ -68,3 +68,15 @@ def test_nax_lane_tile_rows():
     assert nax_prefill.tile_rows(8192, 17408) == 64
     assert nax_prefill.tile_rows(2048, 5120) == 128
     assert nax_prefill.tile_rows(2048, 6144) == 128
+
+
+def test_short_attention_is_only_enabled_inside_prompt_scope(monkeypatch):
+    from yunshu_engine.kernels import gdn_prefill
+
+    monkeypatch.setitem(gdn_prefill._STATE, "enabled", True)
+    monkeypatch.setitem(gdn_prefill._STATE, "split", True)
+    args = ((1, 24, 1, 256), (1, 4, 32769, 256), mx.bfloat16, 0.0625)
+    assert not ap.eligible(*args)
+    with gdn_prefill.prefill_scope():
+        assert ap.eligible(*args)
+    assert not ap.eligible(*args)

@@ -520,3 +520,33 @@ def trim_safe_shadow(value, markers):
     if isinstance(value, dict):
         return {k: trim_safe_shadow(v, markers) for k, v in value.items()}
     return value
+
+
+def align_prefill_plan(plan, alignment=64, *, maximum, minimum=0):
+    """Treat cache hints as upper bounds on reusable, complete recurrence blocks.
+
+    Multiple hints in one block share one checkpoint with the longest requested
+    retention. A hint shorter than one safe block simply writes no checkpoint;
+    it must never make an otherwise valid chat fail.
+    """
+
+    def points(values):
+        merged = {}
+        for n, ttl in values:
+            n = min(n, maximum) // alignment * alignment
+            if n > 0 and n >= minimum:
+                merged[n] = max(ttl, merged.get(n, ttl))
+        return sorted(merged.items())
+
+    result = dict(plan)
+    result["points"] = points(plan.get("points", []))
+    result["writes"] = points(plan.get("writes", plan.get("points", [])))
+    result["lookup_points"] = sorted(
+        {
+            min(n, maximum) // alignment * alignment
+            for n in plan.get("lookup_points", [n for n, _ in plan.get("points", [])])
+            if min(n, maximum) // alignment * alignment > 0
+            and min(n, maximum) // alignment * alignment >= minimum
+        }
+    )
+    return result

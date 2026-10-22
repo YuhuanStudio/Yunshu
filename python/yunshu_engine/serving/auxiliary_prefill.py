@@ -11,6 +11,7 @@ class AuxiliaryPrefillPolicy(SimpleNamespace):
     def __init__(self, manager):
         super().__init__(
             _generation=0,
+            prefill_alignment=int(getattr(manager, "prefill_alignment", 0)),
             **{
                 name: getattr(manager, name)
                 for name in (
@@ -24,13 +25,17 @@ class AuxiliaryPrefillPolicy(SimpleNamespace):
             },
         )
 
+    def align_prefill_boundary(self, n):
+        alignment = self.prefill_alignment
+        return n // alignment * alignment if alignment else n
+
     def head_boundary(self, token_ids):
         if self.head_marker is None:
             return 0
         a, b = self.head_marker
         return next(
             (
-                i
+                self.align_prefill_boundary(i)
                 for i in range(1, len(token_ids) - 1)
                 if token_ids[i] == a and token_ids[i + 1] == b
             ),

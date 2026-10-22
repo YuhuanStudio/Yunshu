@@ -1052,7 +1052,7 @@
   },
   "prefill_kernels": {
    "module": "python/yunshu_engine/kernels/nax_prefill.py",
-   "what": "NAX prefill matmul, BQ32 prefill attention and chunked GDN prefill (YUNSHU_PREFILL_MATMUL, YUNSHU_PREFILL_ATTENTION, YUNSHU_PREFILL_GDN)",
+   "what": "Qualified 27B split-invariant prompt scopes: NAX rows padded to 64, BQ32 every query length, identity-padded chunked GDN; absolute 64-aligned APC checkpoints, distinct arithmetic namespace; decode/verify unchanged (YUNSHU_PREFILL_MATMUL, YUNSHU_PREFILL_ATTENTION, YUNSHU_PREFILL_GDN)",
    "cells": {
     "mtp": {
      "s": "engaged",
@@ -1908,7 +1908,7 @@
   },
   "next_turn_rehearsal": {
    "module": "python/yunshu_engine/kernels/preempt.py",
-   "what": "Next-turn rehearsal (YUNSHU_NEXT_TURN_PREFILL): while idle after a reply, prefill the assistant reply as the next turn renders it so the follow-up prefills only the new message (27B 32K follow-up TTFT 3.4 -> 0.6 s); preemptible per decoder-layer group (kernels/preempt.py) so a diverging request waits <= ~0.35 s",
+   "what": "Next-turn rehearsal (YUNSHU_NEXT_TURN_PREFILL): while idle after a reply, prefill the assistant reply as the next turn renders it through the last absolute 64-aligned assistant-end position on qualified 27B; preemptible per decoder-layer group (kernels/preempt.py), matching follow-ups adopt work, off disables rehearsal",
    "cells": {
     "mtp": {
      "s": "engaged",

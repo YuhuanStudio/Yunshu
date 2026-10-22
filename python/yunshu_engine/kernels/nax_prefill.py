@@ -283,6 +283,26 @@ def tail_matmul(x: mx.array, weight: mx.array, sbt: mx.array, *, bits: int) -> m
     return matmul(x, weight, sbt, bits=bits)[:rows]
 
 
+def split_eligible(m: int, k: int, n: int, bits: int, group: int, tiled: bool) -> bool:
+    """Same qualified weights as full NAX atoms, for any positive prompt length."""
+    return 0 < m <= 8192 and eligible(640, k, n, bits, group, tiled)
+
+
+def split_matmul(
+    x: mx.array, weight: mx.array, sbt: mx.array, *, bits: int
+) -> mx.array:
+    """M64 tail of the full-atom NAX arithmetic, including one-row prompts."""
+    rows, k = x.shape
+    padded = ((rows + 63) // 64) * 64
+    if padded != rows:
+        x = mx.pad(x, [(0, padded - rows), (0, 0)])
+    record_dispatch(padded, k, sbt.shape[1], bits)
+    return cast(
+        mx.array,
+        make(mx, x, weight, None, None, bits=bits, bm=64, bn=64, sbt=sbt)(),
+    )[:rows]
+
+
 def narrow_eligible(m: int, k: int, n: int, bits: int, group: int) -> bool:
     return bool(
         _enabled

@@ -96,3 +96,22 @@ def test_qwen_capacity_gate_preserves_existing_partial_prefix():
         _exact_cache={1: entry},
     )
     assert engine._apc_capacity_allows(mx.arange(32226))
+
+
+def test_split_prefill_namespace_includes_attention_and_alignment(monkeypatch):
+    from yunshu_engine.kernels import attn_prefill, gdn_prefill
+    from yunshu_engine.vlm_engine import VLMEngine
+
+    engine = object.__new__(VLMEngine)
+    engine._model = None
+    engine._apc_prefill_stride = 2048
+    monkeypatch.setitem(gdn_prefill._STATE, "enabled", True)
+    monkeypatch.setitem(gdn_prefill._STATE, "split", False)
+    legacy = engine._prefill_kernel_id()
+    monkeypatch.setitem(gdn_prefill._STATE, "split", True)
+    monkeypatch.setattr(attn_prefill, "arithmetic_id", lambda: "attention-source-A")
+    split = engine._prefill_kernel_id()
+    assert split != legacy
+    assert "gdn-chunked-pad64-v1" in split and "split64-v1" in split
+    monkeypatch.setattr(attn_prefill, "arithmetic_id", lambda: "attention-source-B")
+    assert engine._prefill_kernel_id() != split

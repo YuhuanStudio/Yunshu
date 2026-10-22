@@ -25,7 +25,7 @@ from typing import Any
 import mlx.core as mx
 import mlx.nn as nn
 
-from . import nax_prefill
+from . import gdn_prefill, nax_prefill
 from .tensorfold import lane_qmm
 
 logger = logging.getLogger(__name__)
@@ -71,6 +71,8 @@ def set_stock_rows(rows: int) -> None:
 def prefill_kernel_id() -> str:
     """Names the prefill arithmetic; part of every APC key and SSD namespace, so states written
     by one prefill kernel are never read back as another's."""
+    if gdn_prefill.split_enabled():
+        return "split64-v1+" + nax_prefill.arithmetic_id()
     base = f"stock-qmm-gt{STOCK_ROWS}" if STOCK_ROWS else "lane-qmm"
     return (
         base + "+" + nax_prefill.arithmetic_id()
@@ -290,7 +292,51 @@ class LaneLinear(nn.Module):
         if dtype != mx.bfloat16:
             x2 = x2.astype(mx.bfloat16)
         m = int(x2.shape[0])
-        if (
+        if gdn_prefill.split_enabled() and gdn_prefill.in_prefill():
+            if self.output_dims < NARROW or self.output_dims >= 100_000:
+                # Both have fixed per-row reductions. Preserve the measured
+                # single-launch schedule for full-atom narrow gates.
+                if nax_prefill.narrow_eligible(
+                    m, self.input_dims, self.output_dims, self.bits, self.group_size
+                ):
+                    y = self._rows(x2, prefill_narrow=True)
+                    if "bias" in self:
+                        y = y + self["bias"]
+                    return y.reshape(*lead, self.output_dims).astype(dtype)
+                if m <= PIECE:
+                    y = self._rows(
+                        x2,
+                        cache_input=x
+                        if _SUM_REUSE and dtype == mx.bfloat16 and m <= 128
+                        else None,
+                    )
+                    if "bias" in self:
+                        y = y + self["bias"]
+                    return y.reshape(*lead, self.output_dims).astype(dtype)
+                return self.lane_only(x)
+            if not nax_prefill.split_eligible(
+                m,
+                self.input_dims,
+                self.output_dims,
+                self.bits,
+                self.group_size,
+                self.tiled,
+            ):
+                raise ValueError("unqualified split-invariant prefill projection")
+            # Full atoms keep their measured M128/M64 schedule; short or
+            # unaligned pieces use the equivalent M64 row loader.
+            if nax_prefill.eligible(
+                m,
+                self.input_dims,
+                self.output_dims,
+                self.bits,
+                self.group_size,
+                self.tiled,
+            ):
+                y = nax_prefill.matmul(x2, self.weight, self.sbt, bits=self.bits)
+            else:
+                y = nax_prefill.split_matmul(x2, self.weight, self.sbt, bits=self.bits)
+        elif (
             STOCK_ROWS
             and m > STOCK_ROWS
             and nax_prefill.narrow_eligible(

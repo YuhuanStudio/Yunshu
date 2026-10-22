@@ -1649,7 +1649,14 @@ class VLMEngine:
             stride = int(getattr(self, "_apc_prefill_stride", 0) or 0)
             manager = self._apc_backend  # the YunshuAPCManager itself
             guard = int(getattr(manager, "exact_cache_guard_tokens", 1) or 1)
-            if mode == "exact":
+            if getattr(manager, "prefill_alignment", 0) == 64:
+                target = next_turn.aligned_rehearsal_length(
+                    len(ids), guard, prompt_tokens=prompt_tokens
+                )
+                if target is None:
+                    return None
+                ids = full[:target]
+            elif mode == "exact":
                 # end exactly at the next turn's header: the manager's turn boundary is
                 # the checkpoint, the guard token is the header itself
                 ids = full[: len(ids) + guard]
@@ -1864,6 +1871,10 @@ class VLMEngine:
                 single_row = "+single-row-invariant-v1"
         stride = getattr(self, "_apc_prefill_stride", 0)
         grid = f"+apc-grid{stride}-v2" if stride else ""
+        if gdn_prefill.split_enabled():
+            from .kernels import attn_prefill
+
+            grid = f"+split64-v1+{attn_prefill.arithmetic_id()}"
         return f"{matmul}+{gdn_prefill.kernel_id()}{single_row}{grid}"
 
     def _install_apc_identity(self, lm) -> None:
@@ -2082,6 +2093,9 @@ class VLMEngine:
         from .vlm_batch_runner import VLMBatchRunner
 
         nax_prefill.disable()
+        from .kernels import gdn_prefill
+
+        gdn_prefill.disable()
         from .kernels import attn_prefill
 
         attn_prefill.disable()
@@ -2290,6 +2304,36 @@ class VLMEngine:
                 kernels["invariant"] = install_invariant(
                     self._model.language_model, model=self._model, packed=False
                 )
+                # Every prompt piece uses the same arithmetic, while decode and
+                # speculative verify retain their own invariant kernels. Only the
+                # jointly qualified 27B device/ABI/weight geometry can enter it.
+                split_ready = bool(
+                    kernels.get("nax_prefill")
+                    and kernels.get("attn_prefill")
+                    and settings.get("YUNSHU_PREFILL_GDN") == "chunked"
+                    and settings.get("YUNSHU_KV_PRECISION") == "bf16"
+                    and all(
+                        module.output_dims < lane_linear.NARROW
+                        or module.output_dims >= 100_000
+                        or nax_prefill.split_eligible(
+                            64,
+                            module.input_dims,
+                            module.output_dims,
+                            module.bits,
+                            module.group_size,
+                            module.tiled,
+                        )
+                        for _, module in lm.named_modules()
+                        if isinstance(module, lane_linear.LaneLinear)
+                    )
+                )
+                gdn_prefill.configure_split(split_ready)
+                if split_ready:
+                    gdn_prefill.install_split_forward(lm)
+                    kernels["split_prefill"] = "split64-v1"
+                    logger.info(
+                        "Split-invariant prefill engaged: NAX/BQ32/GDN, alignment=64"
+                    )
                 # The runner turns them on for spec and lone AR target steps.
                 set_active(False)
             else:
@@ -2418,6 +2462,7 @@ class VLMEngine:
                     warm_mode=warm_mode,
                     warm_bytes=int(warm_gb * (1 << 30)),
                     prefill_stride=self._apc_prefill_stride,
+                    prefill_alignment=64 if gdn_prefill.split_enabled() else 0,
                     prefill_boundary_tokens=tuple(boundary_tokens),
                     prefill_assistant_header=assistant_header,
                     prefill_message_end=message_end,
@@ -3030,6 +3075,7 @@ class VLMEngine:
                 "explicit cache breakpoints ignored, serving without them: %s", exc
             )
             return None
+        minimum = 0
         if prompt_kwargs is not None:
             from .prompt_caching import image_token_wrappers
             from .vlm_batch_runner import media_token_ids
@@ -3066,6 +3112,17 @@ class VLMEngine:
             except ValueError as exc:
                 logger.warning("explicit media cache breakpoints ignored: %s", exc)
                 return None
+        manager = getattr(self, "_apc_backend", None)
+        alignment = getattr(manager, "prefill_alignment", 0)
+        if alignment:
+            from .prompt_caching import align_prefill_plan
+
+            points = align_prefill_plan(
+                points,
+                alignment,
+                maximum=len(ids) - manager.exact_cache_guard_tokens,
+                minimum=minimum,
+            )
         plan.update(points)
         plan["resolved"] = True
         logger.info("Prompt cache rendered token boundaries: %s", plan["points"])

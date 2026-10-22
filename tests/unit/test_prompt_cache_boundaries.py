@@ -229,3 +229,20 @@ def test_processor_declared_image_delimiters_map_complete_endpoints():
         expanded_boundaries([900, 2], [901, 900, 903, 2], [(1, 300)], {900}, wrappers)
     with pytest.raises(ValueError, match="begin delimiter"):
         expanded_boundaries([900, 2], [903, 900, 902, 2], [(1, 300)], {900}, wrappers)
+
+
+def test_cache_hints_align_without_changing_retention_or_failing_short_hints():
+    from yunshu_engine.prompt_caching import align_prefill_plan
+
+    plan = {
+        "points": [(31, 300), (65, 300), (100, 3600), (199, 300)],
+        "writes": [(65, 300), (100, 3600)],
+        "lookup_points": [31, 65, 100, 199],
+    }
+    got = align_prefill_plan(plan, maximum=190)
+    assert got["points"] == [(64, 3600), (128, 300)]
+    assert got["writes"] == [(64, 3600)]
+    assert got["lookup_points"] == [64, 128]
+    assert plan["lookup_points"] == [31, 65, 100, 199]
+    assert align_prefill_plan(plan, maximum=63)["writes"] == []
+    assert align_prefill_plan(plan, maximum=190, minimum=70)["lookup_points"] == [128]

@@ -402,6 +402,35 @@ def test_auxiliary_keeps_checkpoint_cuts_without_primary_cache_effects():
     assert not hasattr(policy, "disk")
 
 
+def test_auxiliary_policy_keeps_64_aligned_checkpoint_cuts():
+    from yunshu_engine.apc_manager import YunshuAPCManager
+    from yunshu_engine.serving.auxiliary_prefill import (
+        AuxiliaryPrefillPolicy,
+        _AuxiliaryCoordinator,
+    )
+
+    class Manager:
+        exact_cache_guard_tokens = 1
+        checkpoint_interval_tokens = 2048
+        keep_interval_checkpoint = True
+        block_size = 256
+        exact_cache_min_tokens = 1
+        head_marker = (9, 8)
+        prefill_alignment = 64
+        head_boundary = YunshuAPCManager.head_boundary
+        align_prefill_boundary = YunshuAPCManager.align_prefill_boundary
+
+    policy = AuxiliaryPrefillPolicy(Manager())
+    assert policy.prefill_alignment == 64
+    assert policy.align_prefill_boundary(3003) == 2944
+    c = object.__new__(_AuxiliaryCoordinator)
+    c.manager = policy
+    c.plan = SimpleNamespace(restorable=True, strategy="checkpoint")
+    ids = [1, 2, 9, 8, *range(3000)]
+    cuts = c.checkpoint_lengths(ids, set())
+    assert cuts and all(n % 64 == 0 for n in cuts), cuts
+
+
 def test_auxiliary_generator_receives_numerical_policy_not_primary_cache(runner):  # noqa: F811
     from yunshu_engine.serving.auxiliary_prefill import AuxiliaryPrefillPolicy
 

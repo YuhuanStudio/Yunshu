@@ -121,8 +121,11 @@ def install():
 
     def decode(self, inputs, mask=None, cache=None, **kwargs):
         nonlocal logged
+        from .kernels import gdn_prefill
+
         eligible = (
-            getattr(_STATE, "active", False)
+            not (gdn_prefill.split_enabled() and gdn_prefill.in_prefill())
+            and getattr(_STATE, "active", False)
             and not kwargs
             and not self.training
             and inputs.ndim == 3
