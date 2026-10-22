@@ -1163,7 +1163,7 @@ async def create_message(req: AnthropicMessagesRequest, request: Request):
             and result.status_code == 200
             and _hide_thinking(req)
         ):
-            body = json.loads(result.body)
+            body = json.loads(bytes(result.body))
             for block in body.get("content", []):
                 if block.get("type") == "thinking":
                     from ..reasoning_token import seal_reasoning
@@ -1214,6 +1214,9 @@ async def _thinking_events(body, req: AnthropicMessagesRequest):
                 yield raw + b"\n\n"
                 continue
             kind, index = event.get("type"), event.get("index")
+            if not isinstance(index, int):  # message-level events pass through
+                yield raw + b"\n\n"
+                continue
             if (
                 kind == "content_block_start"
                 and event.get("content_block", {}).get("type") == "thinking"
