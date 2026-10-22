@@ -26,7 +26,10 @@ def inventory(root, draft=False):
                 continue
             prefix = key[:-7]
             if draft:
-                if not prefix.startswith("layers.") and prefix != "fc":
+                if not prefix.startswith("layers.") and prefix not in (
+                    "fc",
+                    "candidate_selector.hidden_projection",
+                ):
                     continue
                 n, k = value["shape"]
                 bits = 8

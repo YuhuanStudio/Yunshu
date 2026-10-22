@@ -120,35 +120,6 @@ _COOP = r"""
 """
 
 
-def pair_rows(source: str) -> str:
-    descriptor = "matmul2d_descriptor(16 * TMR, NT,"
-    if source.count(descriptor) != 1:
-        raise RuntimeError("unexpected tensor descriptor")
-    source = source.replace(descriptor, "matmul2d_descriptor(16, NT,")
-    starts = ["    auto a = tA.slice(g * GS, 0);", "    auto a = tA.slice(g * 64, 0);"]
-    needle = next((s for s in starts if source.count(s) == 1), None)
-    if needle is None:
-        raise RuntimeError("unexpected input slice")
-    begin = source.index(needle)
-    end = source.index("\n  }\n", begin)
-    original = source[begin:end]
-    body = original.replace(
-        needle,
-        "    for (int tb = 0; tb < TMR; tb++) {\n"
-        + needle.replace(", 0);", ", tb * 16);"),
-    )
-    body = body.replace("for (int t = 0; t < TMR; t++)", "for (int t = 0; t < 1; t++)")
-    body = body.replace("rb + t * 16", "rb + (tb + t) * 16").replace(
-        "C[t][i]", "C[tb + t][i]"
-    )
-    barrier = "    simdgroup_barrier(mem_flags::mem_threadgroup);   // the op has read the stage before the next group's widening\n"
-    staged = barrier in body
-    body = body.replace(barrier, "") + "\n    }"
-    if staged:
-        body += "\n" + barrier.rstrip("\n")
-    return source[:begin] + body + source[end:]
-
-
 def direct_bytes(source: str) -> str:
     begin = source.index("  threadgroup uint stage_all[")
     end = source.index("  const device uint* Wv", begin)

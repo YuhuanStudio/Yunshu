@@ -33,6 +33,7 @@ def test_draft_fc_and_projection_names(tmp_path):
         k: {"shape": v}
         for k, v in [
             ("fc.weight", [5120, 25600]),
+            ("candidate_selector.hidden_projection.weight", [256, 5120]),
             ("layers.0.self_attn.q_proj.weight", [4096, 5120]),
             ("hidden_norm.weight", [5120]),
         ]
@@ -41,6 +42,7 @@ def test_draft_fc_and_projection_names(tmp_path):
     (tmp_path / "model.safetensors").write_bytes(struct.pack("<Q", len(raw)) + raw)
     assert set(probe.inventory(tmp_path, True)) == {
         ("fc", 5120, 25600, 8),
+        ("candidate_selector.hidden_projection", 256, 5120, 8),
         ("self_attn.q_proj", 4096, 5120, 8),
     }
 

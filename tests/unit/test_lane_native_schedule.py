@@ -27,12 +27,8 @@ def test_schedule_is_limited_to_measured_shapes_and_rows():
     namespace = schedule_namespace()
     select = namespace["_lane_schedule"]
     for rows in range(1, 65):
-        assert select(5, 5120, 17408, rows, 64) == (
-            "pair16" if 17 <= rows <= 32 else "default"
-        )
-        assert select(4, 5120, 17408, rows, 64) == (
-            "pair16" if rows == 32 else "default"
-        )
+        assert select(5, 5120, 17408, rows, 64) == "default"
+        assert select(4, 5120, 17408, rows, 64) == "default"
         assert select(8, 34816, 5120, rows, 64) == (
             "direct8" if rows <= 16 else "default"
         )
@@ -61,8 +57,7 @@ def test_native_sources_match_the_bit_qualified_experiments():
         widen,
     )
     for file, function, sources in [
-        ("lane_pair16.py", "pair_rows", [native["_MAIN"], widen["BYTES"]]),
-        ("lane_direct8.py", "direct_bytes", [widen["BYTES"]]),
+        ("lane_direct8.py", "direct_bytes", [widen["BYTES"]])
     ]:
         spec = importlib.util.spec_from_file_location(
             "qualified_source", ROOT / "scripts/research" / file
