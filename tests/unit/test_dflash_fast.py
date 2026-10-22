@@ -18,7 +18,7 @@ def admission(monkeypatch):
     monkeypatch.setattr(
         fast, "context_length", lambda *_: len(mtp_lane._STATE["context"])
     )
-    monkeypatch.setattr(mtp_lane, "copy_rows_for_model", lambda *_: 16)
+    monkeypatch.setattr(mtp_lane, "copy_rows_for_model", lambda *_, **__: 16)
     monkeypatch.setitem(mtp_lane._STATE, "guide", None)
     monkeypatch.setitem(mtp_lane._STATE, "context", list(range(1034)))
     return dict(max_tokens=256, greedy_sampling=True, sampler=None, draft_block_size=8)
@@ -50,7 +50,7 @@ def test_other_requests_keep_the_original_rounds(monkeypatch, admission, damage)
     elif damage == "guide":
         monkeypatch.setitem(mtp_lane._STATE, "guide", object())
     elif damage == "copy_off":
-        monkeypatch.setattr(mtp_lane, "copy_rows_for_model", lambda *_: 0)
+        monkeypatch.setattr(mtp_lane, "copy_rows_for_model", lambda *_, **__: 0)
     elif damage == "no_context":
         monkeypatch.setitem(mtp_lane._STATE, "context", None)
     elif damage == "sampled":
@@ -277,7 +277,7 @@ def test_single_remaining_token_and_failure_restore_the_sum_scope(
         "prepare",
         lambda *_: SimpleNamespace(bind=lambda enabled: bindings.append(enabled)),
     )
-    monkeypatch.setattr(mtp_lane, "copy_rows_for_model", lambda *_: 0)
+    monkeypatch.setattr(mtp_lane, "copy_rows_for_model", lambda *_, **__: 0)
     monkeypatch.setitem(mtp_lane._STATE, "context", [1] * 1034)
     monkeypatch.setattr(lane_linear, "_SUM_REUSE", False)
     monkeypatch.setattr(
@@ -344,7 +344,7 @@ def test_live_boundary_hands_off_without_rebuilding_draft_kv(monkeypatch):
     )
     monkeypatch.setattr(fast, "prepare", lambda _: private)
     monkeypatch.setattr(fast, "context_length", lambda *_: fast.CONTEXT_LIMIT - 1)
-    monkeypatch.setattr(mtp_lane, "copy_rows_for_model", lambda _: 16)
+    monkeypatch.setattr(mtp_lane, "copy_rows_for_model", lambda *_, **__: 16)
     monkeypatch.setitem(mtp_lane._STATE, "context", [1] * (fast.CONTEXT_LIMIT - 1))
     monkeypatch.setattr(q35, "_EXACT_SPECULATIVE_VERIFIER", object(), raising=False)
 
@@ -426,7 +426,7 @@ def test_generated_limit_hands_the_same_request_to_chain(monkeypatch):
     monkeypatch.setattr(fast, "prepare", lambda _: private)
     monkeypatch.setattr(fast, "context_length", lambda *_: 1000)
     monkeypatch.setattr(fast, "GENERATED_LIMIT", 1)
-    monkeypatch.setattr(mtp_lane, "copy_rows_for_model", lambda _: 16)
+    monkeypatch.setattr(mtp_lane, "copy_rows_for_model", lambda *_, **__: 16)
     monkeypatch.setitem(mtp_lane._STATE, "context", [1] * 1000)
     monkeypatch.setattr(q35, "_EXACT_SPECULATIVE_VERIFIER", object(), raising=False)
     seen = {}
@@ -550,7 +550,7 @@ def test_packed_readback_returns_the_same_four_lists():
 
 
 def test_graft_width_keeps_default_fast_dflash_route(monkeypatch, admission):
-    monkeypatch.setattr(mtp_lane, "copy_rows_for_model", lambda *_: 32)
+    monkeypatch.setattr(mtp_lane, "copy_rows_for_model", lambda *_, **__: 32)
     assert fast.eligible(None, None, [], admission)
 
 
@@ -564,7 +564,7 @@ def _fake_rounds(monkeypatch, nodes):
     chosen = iter(nodes)
     monkeypatch.setattr(spec_metrics, "record", lambda *_a, **_k: None)
     monkeypatch.setattr(fast, "prepare", lambda *_: SimpleNamespace())
-    monkeypatch.setattr(mtp_lane, "copy_rows_for_model", lambda *_: 0)
+    monkeypatch.setattr(mtp_lane, "copy_rows_for_model", lambda *_, **__: 0)
     monkeypatch.setitem(mtp_lane._STATE, "context", [1] * 1034)
     monkeypatch.setattr(lane_linear, "_SUM_REUSE", False)
     monkeypatch.setattr(fast, "observe_budget", lambda *_a, **_k: False)

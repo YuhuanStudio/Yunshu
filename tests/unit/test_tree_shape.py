@@ -67,7 +67,8 @@ def test_shared_plan_serves_four_groups_in_one_launch():
     assert nc == 3
     assert items == [g * 3 + c for c in range(3) for g in range(4)]
     assert starts == [3 * i for i in range(32)] and total == 96
-    assert tv.FUSED_ROWS == tv.FAST_MAX_ROWS == tv.MAX_ROWS == 32
+    assert tv.FUSED_ROWS == tv.FAST_MAX_ROWS == 48
+    assert tv.MAX_ROWS == 32
 
 
 def test_only_the_fast_shape_takes_the_fused_glue():

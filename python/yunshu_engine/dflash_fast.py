@@ -540,6 +540,37 @@ def prepare(draft):
     return private
 
 
+WARM_ROWS = (
+    16,
+    32,
+    48,
+)  # one chain window per projection block count / attention group count
+
+
+def warm_verify(lm, rows: int) -> list[int]:
+    """Compile the fast tree's verify kernels (lane matmul row blocks, tile attention token
+    groups, GDN) for chain windows up to ``rows`` at load, so the first long request does not
+    pay the Metal compiles (first 48-row window otherwise: 32K cold decode 188 -> 163 tok/s).
+    Runs the windows on a private 64-token cache and drops them; returns the widths run."""
+    from .dflash_plan import FastShape
+
+    widths = [w for w in WARM_ROWS if w <= min(rows, tv.FAST_MAX_ROWS)]
+    if not widths:
+        return []
+    cache = lm.make_cache()
+    lm(mx.zeros((1, 64), dtype=mx.int32), cache=cache)
+    mx.eval([c.state for c in cache])
+    if not tv.lane_ready(lm, cache):
+        return []
+    for width in widths:
+        parents = mx.arange(-1, width - 1, dtype=mx.int32)
+        shape = FastShape(parents, width - 1, is_chain=True)
+        res = tv.tree_forward(lm, mx.zeros((1, width), dtype=mx.int32), shape, cache)
+        mx.eval(res.hidden)
+        tv.tree_abort(cache, res)
+    return widths
+
+
 def rounds(
     model,
     draft,
@@ -584,7 +615,7 @@ def rounds(
     draft_vocab = getattr(draft, "_draft_vocab", None)
     prof = {"rounds": 0, "draft": 0.0, "verify": 0.0, "commit": 0.0, "nodes": 0}
     context = mtp_lane._STATE["context"]
-    copy_rows = min(mtp_lane.copy_rows_for_model(lm), tv.FAST_MAX_ROWS)
+    copy_rows = min(mtp_lane.copy_rows_for_model(lm, fast=True), tv.FAST_MAX_ROWS)
     copy = CopyDrafter(max_draft=copy_rows - 1) if copy_rows >= 3 else None
     if copy is not None:
         copy.extend(context)
@@ -1143,7 +1174,7 @@ def eligible(lm, draft, cache, kwargs, *, guided=False):
         and (mtp_lane._STATE["guide"] is None or guided)
         and context is not None
         and kwargs.get("draft_block_size") in (None, 8)
-        and mtp_lane.copy_rows_for_model(lm) in (16, 32)
+        and mtp_lane.copy_rows_for_model(lm, fast=True) in (16, 32, 48)
         and tv.lane_ready(lm, cache)
         and (length := context_length(lm, cache)) is not None
         and live_eligible(length + 1)
