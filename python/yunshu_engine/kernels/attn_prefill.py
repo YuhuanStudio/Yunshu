@@ -27,6 +27,8 @@ from typing import Any, cast
 
 import mlx.core as mx
 
+from . import gdn_prefill
+
 logger = logging.getLogger(__name__)
 
 BQ, BK, BD, WM, WN = 32, 32, 256, 2, 2
@@ -154,7 +156,8 @@ def eligible(
         and dk == BD
         and hk > 0
         and h % hk == 0
-        and rows >= MIN_ROWS
+        and rows
+        >= (1 if gdn_prefill.split_enabled() and gdn_prefill.in_prefill() else MIN_ROWS)
         and keys >= rows
         and dtype == mx.bfloat16
         and abs(scale - _SCALE) < 1e-12
@@ -165,7 +168,13 @@ def skip_reason(queries, keys, values, cache, scale, mask, sinks) -> str | None:
     """Why a call keeps the stock function (None: the replacement takes it)."""
     if sinks is not None:
         return "sinks"
-    if not (isinstance(mask, str) and mask == "causal"):
+    singleton_prefill = (
+        gdn_prefill.split_enabled()
+        and gdn_prefill.in_prefill()
+        and queries.shape[-2] == 1
+        and mask is None
+    )
+    if not singleton_prefill and not (isinstance(mask, str) and mask == "causal"):
         return f"mask:{type(mask).__name__}"
     if type(cache).__name__ not in ("KVCache", "BatchKVCache"):
         return f"cache:{type(cache).__name__}"

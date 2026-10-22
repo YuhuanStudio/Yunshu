@@ -1782,6 +1782,10 @@ def apply_qwen35_gdn_prework_patch() -> bool:
         return result
 
     def decode(self, inputs, mask=None, cache=None, **kwargs):
+        from .. import gdn_prefill
+
+        if gdn_prefill.split_enabled() and gdn_prefill.in_prefill():
+            return original(self, inputs, mask=mask, cache=cache, **kwargs)
         # Runtime extensions (for example capture/verification keywords)
         # must keep their original implementation and cache semantics.
         if kwargs:

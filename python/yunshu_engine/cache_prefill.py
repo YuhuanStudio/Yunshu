@@ -7,7 +7,10 @@ other workers. A suffix starts by finishing the same atom as a cold request.
 
 from __future__ import annotations
 
+import contextlib
 import importlib
+
+from .kernels import gdn_prefill
 
 
 def install():
@@ -32,14 +35,29 @@ def install():
                 else []
             )
             try:
-                return super().generate(*args, **kwargs)
+                with self._prefill_scope():
+                    return super().generate(*args, **kwargs)
             finally:
                 # A decoding row no longer needs its prefill descriptor. This
                 # runs before the next identical queued prompt can look up APC.
                 for ids, policy in descriptors:
                     coordinator.release_request(ids, policy)
 
+        def _prefill_scope(self):
+            embeds = getattr(self, "_inputs_embeds", None)
+            if (
+                gdn_prefill.split_enabled()
+                and embeds is not None
+                and embeds.shape[0] == 1
+            ):
+                return gdn_prefill.prefill_scope()
+            return contextlib.nullcontext()
+
         def prompt_step(self):
+            with self._prefill_scope():
+                return self._absolute_prompt_step()
+
+        def _absolute_prompt_step(self):
             step = self.prefill_step_size
             meta = getattr(self, "_apc_meta", None)
             coordinator = getattr(self, "_apc_coordinator", None)
