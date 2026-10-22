@@ -68,7 +68,7 @@ Codex 0.160.1, opencode 1.18.34.
 | New item | Seen in | Yunshu |
 |---|---|---|
 | `anthropic-beta: thinking-display-updates-2026-08-18` | Claude Code 2.1.291, every turn | accepted; betas are never rejected |
-| `thinking.display` (`thinking: {type: "adaptive", display: "updates"}`) | Claude Code 2.1.291 | accepted (the `thinking` object is read for `type` / `budget_tokens`); `display` has no local meaning and is ignored |
+| `thinking.display` (`thinking: {type: "adaptive", display: "updates"}`) | Claude Code 2.1.291 | `omitted` / `updates` hide local reasoning (streaming and non-streaming); no separate progress-update channel is generated. `summarized` / absent preserve local visible reasoning. Hidden thinking round-trips through a local opaque signature envelope (base64, not encryption); streams emit the matching `signature_delta` before block stop. See API_SURFACE.md |
 | header `x-opencode-session-id` | opencode 1.18.34 | ignored (`x-session-id` already feeds the session affinity) |
 
 ### Found by the latest-CLI run and the SDK-field inventory (2026-10-06)
