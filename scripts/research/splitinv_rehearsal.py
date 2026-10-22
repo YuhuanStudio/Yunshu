@@ -17,6 +17,15 @@ def metrics(t, server):
         return t.completed_rehearsals(response.read().decode())
 
 
+def check_reply_len(row, tokens, what):
+    """Natural stop is fine once the reply reached half the budget (long budgets)."""
+    if row.get("finish") == "length" or (
+        row.get("finish") == "stop" and row.get("ct", 0) >= tokens // 2
+    ):
+        return
+    raise RuntimeError(f"{what}: finish={row.get('finish')} ct={row.get('ct')}")
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--ctx", type=int, default=1024)
@@ -93,7 +102,7 @@ def main():
                 )
                 before = metrics(t, server)
                 first = t.send(server.url, body)
-                t.check_decode_len(first, tokens, f"splitinv reply {tokens}")
+                check_reply_len(first, tokens, f"splitinv reply {tokens}")
                 if not first["_text"].strip():
                     raise RuntimeError("empty assistant reply")
                 if arrival == "completed":

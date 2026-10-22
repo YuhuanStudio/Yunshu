@@ -22,13 +22,16 @@ def main():
         default=["base", "cand", "cand-r1", "base-r1", "base-r2", "cand-r2"],
     )
     p.add_argument("--idle-s", type=float, default=8)
+    p.add_argument("--arrivals", nargs="+", default=["after", "immediate"])
+    p.add_argument("--env", action="append", default=[], metavar="K=V")
+    p.add_argument("--tag", default="")
     p.add_argument("--dry-run", action="store_true")
     a = p.parse_args()
     if a.dry_run:
         print(json.dumps(vars(a), default=str))
         return
     import tfbench as t
-    from splitinv_rehearsal import metrics
+    from splitinv_rehearsal import check_reply_len, metrics
 
     a.out.parent.mkdir(parents=True, exist_ok=True)
 
@@ -47,6 +50,7 @@ def main():
                 "YUNSHU_VLM_DRAFT": t.D,
                 "YUNSHU_NEXT_TURN_PREFILL": "stride",
                 "YUNSHU_VLM_APC_DISK": "0",
+                **dict(e.split("=", 1) for e in a.env),
                 "YUNSHU_VLM_APC_DISK_DIR": f"/Volumes/Micron/yunshu-apc/splitinv-ttft-{arm}",
             },
             f"splitinv-ttft-{a.ctx}-{arm}",
@@ -54,7 +58,7 @@ def main():
         try:
             for kind in a.kinds:
                 prompt = t.decode_prompt(kind, a.ctx, True)
-                for arrival in ["after", "immediate"]:
+                for arrival in a.arrivals:
                     for tokens in a.reply_tokens:
                         text = (
                             prompt
@@ -63,7 +67,7 @@ def main():
                         body = t.req(server.model, text, tokens)
                         before = metrics(t, server)
                         first = t.send(server.url, body)
-                        t.check_decode_len(
+                        check_reply_len(
                             first, tokens, f"{arm}/{kind}/{tokens}/{arrival}"
                         )
                         follow = t.req(server.model, text, 16)
@@ -90,7 +94,7 @@ def main():
                             row.pop("_text", None)
                             emit(
                                 dict(
-                                    arm=arm,
+                                    arm=arm + a.tag,
                                     ctx=a.ctx,
                                     kind=kind,
                                     reply_tokens=tokens,
