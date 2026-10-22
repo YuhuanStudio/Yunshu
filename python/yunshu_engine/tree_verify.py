@@ -54,10 +54,11 @@ NARROW_ROWS = (
 # The fast tree's windows (FastShape, fast_glue). Its GDN kernels read gates past 32 rows,
 # and a FastShape chain of 33-64 rows at 2K is bit-equal to one-row decode on every row
 # (2026-10-22, probe_wide_verify --fast fast_chain, job 1022-030549; the earlier mismatch was
-# the MTP chain verify, another path). It costs 90-100 ms at 32K against 71 ms at 32 rows
-# (a third 16-row projection block), which a 48-row copy round does not earn back on the
-# 32K code trace (~1.4%), so the limit stays 32.
-FAST_MAX_ROWS = 32
+# the MTP chain verify, another path, which stays capped at 32 rows: mtp_lane.CHAIN_MAX_ROWS).
+# A 48-row window costs a third 16-row projection block (90-100 ms at 32K against 71 ms at
+# 32 rows) but a copy round of 47 drafts needs fewer rounds on quoting text (32K code trace:
+# 55 -> 51 rounds, decode +2-3% warm, tokens identical), so the fast tree takes 48 rows.
+FAST_MAX_ROWS = 48
 FUSED_ROWS = FAST_MAX_ROWS  # fast-tree windows up to this width take the fused attention (one shared-prefix launch)
 CK = ra.CHUNK
 
