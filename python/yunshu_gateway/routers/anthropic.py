@@ -297,6 +297,15 @@ class AnthropicMessagesRequest(BaseModel):
             raise ValueError("stop_token_ids: maximum 16 stop token IDs")
         # Validate thinking configuration per Anthropic spec
         if self.thinking:
+            if self.thinking.get("display") not in (
+                None,
+                "summarized",
+                "omitted",
+                "updates",
+            ):
+                raise ValueError(
+                    "thinking.display must be 'summarized', 'omitted' or 'updates'"
+                )
             thinking_type = self.thinking.get("type")
             if thinking_type == "enabled":
                 budget = self.thinking.get("budget_tokens")
@@ -764,6 +773,12 @@ def _split_thinking(content: list) -> tuple[list, str]:
         if t == "thinking":
             if b.get("thinking"):
                 think.append(b["thinking"])
+            else:
+                from ..reasoning_token import unseal_reasoning
+
+                restored = unseal_reasoning(b.get("signature"))
+                if restored:
+                    think.append(restored)
         elif t != "redacted_thinking":
             keep.append(b)
     return keep, "\n".join(think)
@@ -1138,10 +1153,130 @@ async def create_message(req: AnthropicMessagesRequest, request: Request):
     # A stream reads its files until it ends (an SSE error frame included); every other
     # return (early error, finished non-stream) is done with them here.
     if isinstance(result, StreamingResponse):
-        result.body_iterator = _unlink_after(result.body_iterator, temp_files)
+        result.body_iterator = _unlink_after(
+            _thinking_events(result.body_iterator, req), temp_files
+        )
     else:
         _unlink_staged(temp_files)
+        if (
+            isinstance(result, JSONResponse)
+            and result.status_code == 200
+            and _hide_thinking(req)
+        ):
+            body = json.loads(result.body)
+            for block in body.get("content", []):
+                if block.get("type") == "thinking":
+                    from ..reasoning_token import seal_reasoning
+
+                    if block.get("thinking") and not block.get("signature"):
+                        block["signature"] = seal_reasoning(block["thinking"])
+                    block["thinking"] = ""
+            result.body = json.dumps(body, ensure_ascii=False).encode()
+            result.headers["content-length"] = str(len(result.body))
     return result
+
+
+def _hide_thinking(req: AnthropicMessagesRequest) -> bool:
+    # Local models expose reasoning, not Claude's separate progress-update channel.
+    # Neither omitted nor updates is permission to return that reasoning text.
+    return (req.thinking or {}).get("display") in ("omitted", "updates")
+
+
+async def _thinking_events(body, req: AnthropicMessagesRequest):
+    """Apply the public display policy across ordinary, document and server-tool streams.
+
+    Keep byte fragments until a complete SSE frame, so splitting a UTF-8 codepoint
+    never corrupts text. Preserve unknown frames and keepalives verbatim. Local
+    reasoning uses the same local opaque envelope as Responses when hidden, so
+    clients can replay it without losing reasoning continuity. This is not a
+    cryptographic Claude signature. Visible reasoning retains an empty signature.
+    """
+    pending = b""
+    thinking: dict[int, dict] = {}
+    hide = _hide_thinking(req)
+
+    def frame(event):
+        return f"event: {event['type']}\ndata: {json.dumps(event, ensure_ascii=False)}\n\n".encode()
+
+    async for chunk in body:
+        pending += chunk.encode() if isinstance(chunk, str) else bytes(chunk)
+        while b"\n\n" in pending:
+            raw, pending = pending.split(b"\n\n", 1)
+            payload = [
+                ln[5:].strip() for ln in raw.splitlines() if ln.startswith(b"data:")
+            ]
+            try:
+                event = json.loads(b"\n".join(payload))
+            except (ValueError, UnicodeDecodeError):
+                yield raw + b"\n\n"
+                continue
+            if not isinstance(event, dict):
+                yield raw + b"\n\n"
+                continue
+            kind, index = event.get("type"), event.get("index")
+            if (
+                kind == "content_block_start"
+                and event.get("content_block", {}).get("type") == "thinking"
+            ):
+                block = event["content_block"]
+                thinking[index] = {
+                    "signed": False,
+                    "empty_sent": False,
+                    "signature": block.get("signature", ""),
+                    "reasoning": [block.get("thinking", "")] if hide else [],
+                }
+                if hide and block.get("thinking"):
+                    block["thinking"] = ""
+                    yield frame(event)
+                    continue
+            state = thinking.get(index)
+            if state is not None:
+                delta = event.get("delta", {})
+                if (
+                    kind == "content_block_delta"
+                    and delta.get("type") == "signature_delta"
+                ):
+                    state["signed"] = True
+                elif (
+                    kind == "content_block_delta"
+                    and delta.get("type") == "thinking_delta"
+                    and hide
+                ):
+                    state["reasoning"].append(delta.get("thinking", ""))
+                    if not state["empty_sent"]:
+                        delta["thinking"] = ""
+                        yield frame(event)
+                        state["empty_sent"] = True
+                    continue
+                elif kind == "content_block_stop":
+                    if hide and not state["empty_sent"]:
+                        yield frame(
+                            {
+                                "type": "content_block_delta",
+                                "index": index,
+                                "delta": {"type": "thinking_delta", "thinking": ""},
+                            }
+                        )
+                    if not state["signed"]:
+                        from ..reasoning_token import seal_reasoning
+
+                        signature = state["signature"]
+                        if hide and not signature and any(state["reasoning"]):
+                            signature = seal_reasoning("".join(state["reasoning"]))
+                        yield frame(
+                            {
+                                "type": "content_block_delta",
+                                "index": index,
+                                "delta": {
+                                    "type": "signature_delta",
+                                    "signature": signature,
+                                },
+                            }
+                        )
+                    del thinking[index]
+            yield raw + b"\n\n"
+    if pending:
+        yield pending
 
 
 async def _unlink_after(body, paths: list[str]):
