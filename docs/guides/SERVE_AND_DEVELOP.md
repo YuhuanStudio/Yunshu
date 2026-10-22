@@ -99,6 +99,16 @@ The server reports cumulative GPU busy seconds in `/v1/yunshu/status` and
 hardware utilization samples. Offline switchback, CUPED and mSPRT helpers and
 run-history variance profiling are implemented; no online arm selection is enabled.
 
+## Local co-serving handshake and offline loop pieces
+
+* `YUNSHU_RESEARCH_ACTIVITY_FILE` (server) plus `activity_files` in gpuq `serving.json`: the server writes a
+  numbers-only activity file and, before inference, waits up to `YUNSHU_RESEARCH_PAUSE_TIMEOUT_S` for gpuq's fresh
+  acknowledgement that every research process is observed stopped (timeout returns 503). This closes the
+  poll-interval window in which the first request could share the GPU with a timing sample.
+* `scripts/servedev/` holds the offline pieces: shape-only replay A/B (`replay.py`, token-identical or fail), a
+  UCB1 bandit over registered lossless knobs with a reversible ledger (`bandit.py`) and a gated candidate loop
+  (`loop.py`). None of them selects an arm on live traffic.
+
 ## Planned, not implemented
 
 * Online lossless A/B on live traffic, recording metrics only (no prompts).

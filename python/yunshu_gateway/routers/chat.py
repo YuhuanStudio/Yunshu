@@ -1429,6 +1429,12 @@ def _format_logprobs(
                         decoded_top.append(tlp)
                 entries.append(
                     {
+                        **(
+                            {"token_id": lp["token_id"]}
+                            if settings.get_bool("YUNSHU_REPLAY_TOKEN_IDS")
+                            and "token_id" in lp
+                            else {}
+                        ),
                         "token": token_str,
                         "logprob": lp.get("logprob", 0.0),
                         "bytes": _lp_bytes(lp, token_str, tokenizer),
@@ -4234,6 +4240,12 @@ def _format_chat_logprobs(
             )
         content.append(
             {
+                **(
+                    {"token_id": lp_entry["token_id"]}
+                    if settings.get_bool("YUNSHU_REPLAY_TOKEN_IDS")
+                    and "token_id" in lp_entry
+                    else {}
+                ),
                 "token": token_str,
                 "logprob": lp_entry.get("logprob", 0.0),
                 "bytes": _lp_bytes(lp_entry, token_str, tokenizer),
