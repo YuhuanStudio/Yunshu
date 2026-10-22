@@ -1321,3 +1321,17 @@ verify tf110-dflash-speed32-1021y7: base 5f3c1b07a2b5 vs cand e87f7a8e1002 on /V
 | prose warm TTFT s (y12 / y13) | 0.146 / 0.147 | 0.145 / 0.146 | -0.7% / -0.7% |
 
 Identity: both runs 6 cells base-vs-cand and 6 cells spec-on-vs-off, 0 mismatches; APC: 2 cold/warm pairs, hits 32767 on both. Honest notes: 1021y12 is a FAIL verdict, not a pass: code warm TTFT +4.8% (0.147 -> 0.153 s, limit 3.0%, confirmed over 2 confirmation reps, reps +5.4/0.0/+4.8); the 6 ms is a warm-hit path of a few hundred ms and was not traced to a cause. 1021y13 (cand 6aff92ed, the first-round fix) passes: warm TTFT +1.9% (noise +-3.2%), initial +4.1%/+3.5% flagged, confirmed neutral. The decode gain is code only; prose gains ~1%, i.e. within a point of noise on one tree. The remaining 32K gap to TensorFold 1.1.0 is not closed (prose ~69 vs 72.6, code ~179 vs 233.9 tok/s). ce444efa itself (ring flag registration and docs) was not re-run through yv; its decode path is 6aff92ed plus 28675ec7, which changes only the flag-on path.
+
+2026-10-22 DFlash push: main ce444efa -> 17850ae1 (25 commits). Qwen3.8-27B oQ4e-mtp + DFlash2 drafter, M5 Max, 32K exact-snapshot prompts, greedy, real server, yv tf110-speed32-1021y16 (base ce444efa vs cand c9245329, APC SSD tier off so cold arms are cold): PASS.
+
+| cell (32K) | base | cand | change |
+|---|---:|---:|---:|
+| code decode tok/s | 173.9 | 188.6 | +8.4% |
+| prose decode tok/s | 67.8 | 69.5 | +2.5% |
+| code / prose warm TTFT s | 0.158 / 0.148 | 0.103 / 0.100 | -34.8% / -32.4% |
+| code / prose follow-up TTFT s | 1.272 / 1.262 | 1.08 / 1.09 | -15.1% / -13.6% |
+| code / prose cold TTFT s | 34.449 / 33.643 | 33.258 / 33.248 | -3.5% / -1.2% |
+
+Identity: 6 cells base-vs-cand and 6 spec-on-vs-off, 0 mismatches; APC hits 32767. Quick gate (install, serve-27b, families, soak-mmlu, soak-realistic, agent-sessions) PASS; ci-local PASS on 17850ae1. One rep per cell in the speed stage (yv's noise column reads 0.0).
+What moved, each with its own A/B: the drafter context ring as the default with one fused context K|V lane matmul (ring off vs on, same commit: 32K prose +1.0%, code +0.7%; 64K code +8.9%); copy drafter comparing 256 occurrences (32K code 178 -> 186, 45 -> 41 rounds); follow-up turns no longer wait behind a stale next-turn rehearsal and the DFlash capture keeps cache capacity (Kapitsa cached x3: 4K third turn 3990 -> 216 ms, 16K/32K follow-ups -20-35%); short prefill tails run native QMM (turn 2 1.27 -> 1.21 s); the fast tree admits contexts under 512 tokens (256-token contexts +29-34%, 1K neutral); the drafter window survives an SSD-tier hit (decode after a new-process hit 63.4 -> 69.9 prose, 176 -> 192 code, now equal to cold). Neutral within noise and kept as lossless: KV growth per 2048 rows, node budget on 8/16-row steps (128K prose +1-4%).
+Negative/withdrawn today: an assistant-end prefill grid for short-reply rehearsal changes cold outputs (32K sha differs) and stays opt-in. Honest limits: 32K code still trails TensorFold 1.1.0 (233.9 tok/s, 16 tokens/round vs our ~12); 1-4K code 101-106 -> ~116-138 tok/s vs Kapitsa 145.6 (1 competitor rep, direction only).

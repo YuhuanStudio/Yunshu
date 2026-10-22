@@ -22,3 +22,12 @@ def test_identity_probe_rejects_miss_and_bit_drift(mode, field):
 
 def test_identity_probe_accepts_both_restores():
     assert_identity(results())
+
+
+def test_spec_off_reference_does_not_require_a_cache_hit():
+    out = results()
+    out["spec_off"] = dict(cached=0, tokens_equal=True, logprobs_equal=True)
+    assert_identity(out)
+    out["spec_off"]["logprobs_equal"] = False
+    with pytest.raises(RuntimeError, match="spec_off restore is not bit-equal"):
+        assert_identity(out)

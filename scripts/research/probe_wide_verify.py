@@ -154,6 +154,32 @@ def invariance(a, lm, ids):
         }
         ok_all &= not bad and bool(tok_ok)
         print(json.dumps(row), flush=True)
+        if a.fast:
+            # the DFlash copy round's verify: a FastShape chain through tree_forward,
+            # checked against the same one-row decodes (the MTP chain verify above is
+            # another code path)
+            cache = prefill(lm, ids, a.context)
+            shape = make_shape(tv, "chain", T, True)
+            res = tv.tree_forward(lm, toks, shape, cache)
+            mx.eval(res.hidden)
+            bad = [
+                j
+                for j in range(T)
+                if not mx.array_equal(res.hidden[:, j], seq_h[:, j]).item()
+            ]
+            tv.tree_abort(cache, res)
+            print(
+                json.dumps(
+                    {
+                        "check": "fast_chain",
+                        "T": T,
+                        "bit_equal": not bad,
+                        "bad_rows": bad,
+                    }
+                ),
+                flush=True,
+            )
+            ok_all &= not bad
         # tree windows: row r equals the chain verify of its root path
         for kind in a.shapes:
             if (kind == "chain" and not a.fast) or T < 3:
@@ -314,7 +340,16 @@ def main():
         type=int,
         help="tree_verify.FUSED_ROWS (16: before 4-group fusion)",
     )
+    ap.add_argument(
+        "--fast-max-rows",
+        type=int,
+        help="tree_verify.FAST_MAX_ROWS and FUSED_ROWS (research: windows past 32 rows)",
+    )
     a = ap.parse_args()
+    if a.fast_max_rows is not None:
+        from yunshu_engine import tree_verify
+
+        tree_verify.FAST_MAX_ROWS = tree_verify.FUSED_ROWS = a.fast_max_rows
     if a.fused_rows is not None:
         from yunshu_engine import tree_verify
 
