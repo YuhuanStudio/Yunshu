@@ -207,3 +207,56 @@ def test_close_generator_tolerates_generators_without_speculation():
     g = Plain()
     close_generator(g)
     assert g.closed
+
+
+def _beating(busy_flag, beats, heartbeat_s=0.02, trim_s=0.1):
+    return IdleMemory(
+        lambda fn: fn(),
+        lambda: busy_flag["busy"],
+        collect_after_s=0.01,
+        trim_after_s=trim_s,
+        collect=lambda: None,
+        trim=lambda: None,
+        heartbeat_s=heartbeat_s,
+        beat=lambda: beats.append(time.monotonic()),
+    )
+
+
+def test_heartbeat_keeps_the_gpu_warm_until_the_trim():
+    beats, busy = [], {"busy": False}
+    idle = _beating(busy, beats)
+    idle.drained()
+    assert _wait(lambda: idle.trims == 1)
+    time.sleep(0.15)
+    assert len(beats) == 5 == idle.beats  # trim_after_s / heartbeat_s, then it stops
+
+
+def test_request_stops_the_heartbeat():
+    beats, busy = [], {"busy": False}
+    idle = _beating(busy, beats, heartbeat_s=0.03, trim_s=1.0)
+    idle.drained()
+    assert _wait(lambda: len(beats) >= 2)
+    idle.activity()
+    n = len(beats)
+    time.sleep(0.15)
+    assert len(beats) == n
+
+
+def test_heartbeat_skips_while_busy_and_restarts_on_the_next_drain():
+    beats, busy = [], {"busy": True}
+    idle = _beating(busy, beats)
+    idle.drained()
+    time.sleep(0.1)
+    assert beats == []
+    busy["busy"] = False
+    idle.drained()
+    assert _wait(lambda: len(beats) >= 2)
+
+
+def test_heartbeat_disabled_with_zero_period():
+    beats, busy = [], {"busy": False}
+    idle = _beating(busy, beats, heartbeat_s=0.0)
+    idle.drained()
+    assert _wait(lambda: idle.trims == 1)
+    time.sleep(0.05)
+    assert beats == []
