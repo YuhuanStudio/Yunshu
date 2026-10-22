@@ -7,6 +7,9 @@
 # install smoke. The suite runs under sandbox-exec with this machine's build volume and the main
 # checkout unreadable, as on the CI runner, so tests that depend on local paths fail here first.
 set -eu
+# The CI runner has no gpuq job context; run through gpuq (so the suite never overlaps a timing job),
+# the job's GPUQ_* variables would turn research harness tests onto their gpuq branches.
+for v in $(env | sed -n 's/^\(GPUQ_[A-Za-z0-9_]*\)=.*/\1/p'); do unset "$v"; done
 REF="${1:-HEAD}"
 SRC="$(cd "$(dirname "$0")/../.." && pwd)"
 SHA="$(git -C "$SRC" rev-parse "$REF")"
