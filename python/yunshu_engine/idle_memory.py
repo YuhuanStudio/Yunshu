@@ -176,7 +176,7 @@ def _beat() -> None:
     global _BEAT_OPERAND, _WIRED_BEFORE
     if _WIRED_BEFORE is None:
         _WIRED_BEFORE = mx.set_wired_limit(
-            mx.device_info()["max_recommended_working_set_size"]
+            int(mx.device_info()["max_recommended_working_set_size"])
         )
         logger.info("idle memory: holding the wired limit until the idle trim")
     if _BEAT_OPERAND is None:
