@@ -219,6 +219,7 @@ def _beating(busy_flag, beats, heartbeat_s=0.02, trim_s=0.1):
         trim=lambda: None,
         heartbeat_s=heartbeat_s,
         beat=lambda: beats.append(time.monotonic()),
+        release=lambda: beats.append("release"),
     )
 
 
@@ -228,7 +229,8 @@ def test_heartbeat_keeps_the_gpu_warm_until_the_trim():
     idle.drained()
     assert _wait(lambda: idle.trims == 1)
     time.sleep(0.15)
-    assert len(beats) == 5 == idle.beats  # trim_after_s / heartbeat_s, then it stops
+    assert beats[-1] == "release"  # the trim gives the wired limit back
+    assert len(beats) - 1 == 4 == idle.beats  # the beats before the trim, then it stops
 
 
 def test_request_stops_the_heartbeat():
@@ -259,4 +261,4 @@ def test_heartbeat_disabled_with_zero_period():
     idle.drained()
     assert _wait(lambda: idle.trims == 1)
     time.sleep(0.05)
-    assert beats == []
+    assert beats == []  # nothing held, so nothing released

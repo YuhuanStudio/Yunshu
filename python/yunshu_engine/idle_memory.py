@@ -9,11 +9,13 @@ Two things stay behind after a request ends:
 - MLX's freed-buffer pool (bounded, kept on purpose so the next request's cache restore
   and prefill reuse buffers) is released after ``IDLE_TRIM_S`` without a request.
 
-Until that trim the GPU also gets a tiny kernel every ``HEARTBEAT_S``: after ~2 s without
-a command buffer Metal stops keeping the weights resident, and the next request's first
-submission re-pins all of them (~200 ms for the 27B, measured 2026-10-22: idle follow-up
-TTFT 0.23 s within 2 s, 0.53 s from 4 s on). The beat touches no model array, so outputs
-are unchanged; it costs ~1 ms per second of idle.
+Until that trim the weights also stay wired: upstream's BatchGenerator raises the wired
+limit while it lives and drops it on close, and after ~2 s without a command buffer Metal
+stops keeping the weights resident, so the next request's generator re-pins all of them
+(~200 ms for the 27B, measured 2026-10-22: idle follow-up TTFT 0.23 s within 2 s, 0.44-0.66 s
+from 4 s on). Each heartbeat (every ``HEARTBEAT_S``) holds the limit and runs a tiny kernel
+that touches no model array, so outputs are unchanged (~1 ms per second of idle); the trim
+gives the limit back.
 
 The timer thread only submits work; every MLX call runs on the serialized MLX executor,
 and each stage re-checks that the runner is still idle.
@@ -23,6 +25,7 @@ from __future__ import annotations
 
 import gc
 import logging
+import math
 import threading
 from collections.abc import Callable
 
@@ -45,6 +48,7 @@ class IdleMemory:
         trim: Callable[[], None] | None = None,
         heartbeat_s: float = HEARTBEAT_S,
         beat: Callable[[], None] | None = None,
+        release: Callable[[], None] | None = None,
     ) -> None:
         self._submit = submit
         self._busy = busy
@@ -55,8 +59,13 @@ class IdleMemory:
         self._lock = threading.Lock()
         self._timer: threading.Timer | None = None
         self._heartbeat_s = heartbeat_s
-        self._beats_per_idle = 0 if heartbeat_s <= 0 else int(trim_after_s / heartbeat_s)
+        # beats strictly before the trim, which ends the window
+        self._beats_per_idle = (
+            0 if heartbeat_s <= 0 else max(0, math.ceil(trim_after_s / heartbeat_s) - 1)
+        )
         self._beat = beat or _beat
+        self._release = release or _release_wired
+        self._holding = False
         self._beat_timer: threading.Timer | None = None
         self.collections = 0
         self.trims = 0
@@ -100,6 +109,7 @@ class IdleMemory:
         if self._busy():
             return
         try:
+            self._holding = True
             self._beat()
             self.beats += 1
         except Exception:  # noqa: BLE001
@@ -137,6 +147,16 @@ class IdleMemory:
             setattr(self, counter, getattr(self, counter) + 1)
         except Exception:  # noqa: BLE001
             logger.debug("idle memory stage %d failed", stage, exc_info=True)
+        if stage == len(self._stages) - 1 and self._holding:
+            with self._lock:
+                if self._beat_timer is not None:
+                    self._beat_timer.cancel()
+                    self._beat_timer = None
+            self._holding = False
+            try:
+                self._release()
+            except Exception:  # noqa: BLE001
+                logger.debug("idle wired-limit release failed", exc_info=True)
         self._arm(stage + 1)
 
 
@@ -147,16 +167,32 @@ def _gib() -> tuple[float, float]:
 
 
 _BEAT_OPERAND = None
+_WIRED_BEFORE: int | None = None
 
 
 def _beat() -> None:
     import mlx.core as mx
 
-    global _BEAT_OPERAND
+    global _BEAT_OPERAND, _WIRED_BEFORE
+    if _WIRED_BEFORE is None:
+        _WIRED_BEFORE = mx.set_wired_limit(
+            mx.device_info()["max_recommended_working_set_size"]
+        )
+        logger.info("idle memory: holding the wired limit until the idle trim")
     if _BEAT_OPERAND is None:
         _BEAT_OPERAND = mx.ones((256, 256))
     mx.eval(_BEAT_OPERAND @ _BEAT_OPERAND)
     mx.synchronize()
+
+
+def _release_wired() -> None:
+    import mlx.core as mx
+
+    global _WIRED_BEFORE
+    if _WIRED_BEFORE is not None:
+        mx.set_wired_limit(_WIRED_BEFORE)
+        _WIRED_BEFORE = None
+        logger.info("idle memory: released the wired limit")
 
 
 def _collect() -> None:
