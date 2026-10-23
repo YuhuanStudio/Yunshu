@@ -70,22 +70,27 @@ if sys.version_info >= (3, 13):
 PYEOF
 # The sandboxed suite writes its output inside $WORK: if the caller redirected stdout to a denied
 # path (e.g. a log on /Volumes/P5Plus), every write would fail and pytest would exit 120 silently.
+# The plain and the paravirtual suite are independent, so they run at the same time (each ~8 min,
+# serially 17 min) with their own HOME and TMPDIR; the paravirtual pass exercises runner capability
+# fallbacks even on a physical Apple GPU (tests that pin physical hardware keep their override).
+PVHOME="$WORK/home-pv"
+cp -R "$CIHOME" "$PVHOME"
 set +e
 sandbox-exec -f "$PROFILE" env -u YV_PY -u YV_ROOT -u YUNSHU_MAIN -u VIRTUAL_ENV PYTHONPATH="$CIHOME/shim" TMPDIR="$CIHOME/tmp" HOME="$CIHOME" \
-  "$WORK/.venv/bin/python" -m pytest tests/unit -q --tb=short -p no:cacheprovider > "$WORK/pytest.log" 2>&1
+  "$WORK/.venv/bin/python" -m pytest tests/unit -q --tb=short -p no:cacheprovider --durations=25 > "$WORK/pytest.log" 2>&1 &
+plain=$!
+sandbox-exec -f "$PROFILE" env -u YV_PY -u YV_ROOT -u YUNSHU_MAIN -u VIRTUAL_ENV PYTHONPATH="$PVHOME/shim:$WORK" TMPDIR="$PVHOME/tmp" HOME="$PVHOME" \
+  "$WORK/.venv/bin/python" -m pytest tests/unit -q --tb=short -p no:cacheprovider -p scripts.dev.ci_paravirtual > "$WORK/pytest-paravirtual.log" 2>&1 &
+para=$!
+wait "$plain"
 rc=$?
+wait "$para"
+prc=$?
 set -e
 cat "$WORK/pytest.log"
 [ "$rc" -eq 0 ] || { echo "ci-local: FAIL (pytest rc $rc) $SHA"; exit "$rc"; }
-# Exercise runner capability fallbacks even on a physical Apple GPU. Tests that
-# explicitly pin physical hardware retain their override; detector cases stay real.
-set +e
-sandbox-exec -f "$PROFILE" env -u YV_PY -u YV_ROOT -u YUNSHU_MAIN -u VIRTUAL_ENV PYTHONPATH="$CIHOME/shim:$WORK" TMPDIR="$CIHOME/tmp" HOME="$CIHOME" \
-  "$WORK/.venv/bin/python" -m pytest tests/unit -q --tb=short -p no:cacheprovider -p scripts.dev.ci_paravirtual > "$WORK/pytest-paravirtual.log" 2>&1
-rc=$?
-set -e
 cat "$WORK/pytest-paravirtual.log"
-[ "$rc" -eq 0 ] || { echo "ci-local: FAIL (paravirtual pytest rc $rc) $SHA"; exit "$rc"; }
+[ "$prc" -eq 0 ] || { echo "ci-local: FAIL (paravirtual pytest rc $prc) $SHA"; exit "$prc"; }
 uv build -q
 "$WORK/.venv/bin/python" - <<'PYCODE'
 import glob, tarfile, zipfile
