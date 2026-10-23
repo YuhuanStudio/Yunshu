@@ -851,7 +851,11 @@ def record_tool_outcome(parsed: int, markup_failed: int) -> None:
 
 
 def parse_tool_output(
-    text: str, formats: Sequence[ToolFormat], tools: Any = None
+    text: str,
+    formats: Sequence[ToolFormat],
+    tools: Any = None,
+    *,
+    record: bool = True,
 ) -> tuple[list[Call], str]:
     """Extract tool calls from a finished model output (and record the outcome on the request).
 
@@ -866,7 +870,8 @@ def parse_tool_output(
         whole = _only_declared(whole, tools)
     if whole:
         out = coerce_tool_calls(whole, tools) or []
-        record_tool_outcome(len(out), 0)
+        if record:
+            record_tool_outcome(len(out), 0)
         return out, ""
     failed = 0
     calls: list[Call] = []
@@ -892,8 +897,10 @@ def parse_tool_output(
         pos = end
     kept.append(text[pos:])
     if not calls:
-        record_tool_outcome(0, failed)
+        if record:
+            record_tool_outcome(0, failed)
         return [], _tidy("".join(kept)) if any_dropped else text
     out = coerce_tool_calls(calls, tools) or []
-    record_tool_outcome(len(out), failed)
+    if record:
+        record_tool_outcome(len(out), failed)
     return out, _tidy("".join(kept))

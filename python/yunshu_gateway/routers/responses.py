@@ -2958,8 +2958,12 @@ async def _stream_response(
             if req.tools and req.tool_choice != "none":
                 from yunshu_engine.tool_format import parse_tool_output, tool_formats
 
+                # with a ToolCallStreamer, its flush() already recorded this response's outcome
                 tool_calls, _clean = parse_tool_output(
-                    accumulated_text, tool_formats(engine), req.tools
+                    accumulated_text,
+                    tool_formats(engine),
+                    req.tools,
+                    record=_resp_tool_streamer is None,
                 )
                 if tool_calls:
                     clean_text = _clean

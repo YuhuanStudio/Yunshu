@@ -68,3 +68,12 @@ def test_plain_text_records_zero_and_ring_has_fields(caplog):
     row = x_yunshu.registry.recent_cursor(limit=1)[0][0]
     assert row["tool_calls_parsed"] == 2 and row["tool_markup_failed"] == 1
     assert "tool_markup_failed=1" in caplog.text and "finish_reason=" in caplog.text
+
+
+def test_record_false_does_not_count():
+    info, tok = _info()
+    try:
+        parse_tool_output("hi " + GOOD, _fmts(), TOOLS, record=False)
+        assert info.tool_calls_parsed is None
+    finally:
+        current_request_info.reset(tok)
