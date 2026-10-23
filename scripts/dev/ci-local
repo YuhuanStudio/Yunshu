@@ -70,25 +70,32 @@ if sys.version_info >= (3, 13):
 PYEOF
 # The sandboxed suite writes its output inside $WORK: if the caller redirected stdout to a denied
 # path (e.g. a log on /Volumes/P5Plus), every write would fail and pytest would exit 120 silently.
-# The plain and the paravirtual suite are independent, so they run at the same time (each ~9 min on one
-# process, serially 18 min) with their own HOME and TMPDIR; the paravirtual pass exercises runner capability
+# The plain and the paravirtual suite are independent, so they run at the same time with their own
+# HOME and TMPDIR; the paravirtual pass exercises runner capability
 # fallbacks even on a physical Apple GPU (tests that pin physical hardware keep their override).
-# Each suite also spreads its files over YUNSHU_CI_WORKERS pytest-xdist workers (--dist loadfile keeps a
-# file's tests, and their module fixtures, in one worker).
-W="${YUNSHU_CI_WORKERS:-6}"
+# Each suite spreads its tests over YUNSHU_CI_WORKERS pytest-xdist workers (worksteal: an idle worker takes
+# queued tests from a busy one). Most tests wait on sockets, subprocesses or timers rather than the CPU, so
+# 2 x 12 workers fit on 18 cores (one suite ~9 min on one process -> ~1 min). Tests marked `serial` read
+# host-wide state (CPU load, process table) and run alone afterwards.
+W="${YUNSHU_CI_WORKERS:-12}"
 PVHOME="$WORK/home-pv"
 cp -R "$CIHOME" "$PVHOME"
+plain_env() { sandbox-exec -f "$PROFILE" env -u YV_PY -u YV_ROOT -u YUNSHU_MAIN -u VIRTUAL_ENV PYTHONPATH="$CIHOME/shim" TMPDIR="$CIHOME/tmp" HOME="$CIHOME" "$@"; }
+para_env() { sandbox-exec -f "$PROFILE" env -u YV_PY -u YV_ROOT -u YUNSHU_MAIN -u VIRTUAL_ENV PYTHONPATH="$PVHOME/shim:$WORK" TMPDIR="$PVHOME/tmp" HOME="$PVHOME" "$@"; }
 set +e
-sandbox-exec -f "$PROFILE" env -u YV_PY -u YV_ROOT -u YUNSHU_MAIN -u VIRTUAL_ENV PYTHONPATH="$CIHOME/shim" TMPDIR="$CIHOME/tmp" HOME="$CIHOME" \
-  "$WORK/.venv/bin/python" -m pytest tests/unit -q --tb=short -p no:cacheprovider -n "$W" --dist loadfile --durations=25 > "$WORK/pytest.log" 2>&1 &
+plain_env "$WORK/.venv/bin/python" -m pytest tests/unit -q --tb=short -p no:cacheprovider -n "$W" --dist worksteal -m "not serial" --durations=25 > "$WORK/pytest.log" 2>&1 &
 plain=$!
-sandbox-exec -f "$PROFILE" env -u YV_PY -u YV_ROOT -u YUNSHU_MAIN -u VIRTUAL_ENV PYTHONPATH="$PVHOME/shim:$WORK" TMPDIR="$PVHOME/tmp" HOME="$PVHOME" \
-  "$WORK/.venv/bin/python" -m pytest tests/unit -q --tb=short -p no:cacheprovider -n "$W" --dist loadfile -p scripts.dev.ci_paravirtual > "$WORK/pytest-paravirtual.log" 2>&1 &
+para_env "$WORK/.venv/bin/python" -m pytest tests/unit -q --tb=short -p no:cacheprovider -n "$W" --dist worksteal -m "not serial" -p scripts.dev.ci_paravirtual > "$WORK/pytest-paravirtual.log" 2>&1 &
 para=$!
 wait "$plain"
 rc=$?
 wait "$para"
 prc=$?
+# Exit 5 = no test carries the marker.
+plain_env "$WORK/.venv/bin/python" -m pytest tests/unit -q --tb=short -p no:cacheprovider -m serial >> "$WORK/pytest.log" 2>&1
+s=$?; [ "$s" -eq 0 ] || [ "$s" -eq 5 ] || [ "$rc" -ne 0 ] || rc=$s
+para_env "$WORK/.venv/bin/python" -m pytest tests/unit -q --tb=short -p no:cacheprovider -m serial -p scripts.dev.ci_paravirtual >> "$WORK/pytest-paravirtual.log" 2>&1
+s=$?; [ "$s" -eq 0 ] || [ "$s" -eq 5 ] || [ "$prc" -ne 0 ] || prc=$s
 set -e
 cat "$WORK/pytest.log"
 [ "$rc" -eq 0 ] || { echo "ci-local: FAIL (pytest rc $rc) $SHA"; exit "$rc"; }

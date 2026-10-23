@@ -184,7 +184,7 @@ jobs:
         run: uv sync --dev --extra vision --extra compression
 
       - name: Run unit tests
-        run: uv run pytest tests/unit -q --tb=short -n auto --dist loadfile
+        run: uv run pytest tests/unit -q --tb=short -n auto --dist worksteal -m "not serial" && uv run pytest tests/unit -q --tb=short -m serial
 
       - name: CLI smoke (no model)
         run: |
