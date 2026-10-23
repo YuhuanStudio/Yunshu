@@ -248,6 +248,18 @@ const settingdesc = {
   YUNSHU_WEB_FETCH_TIMEOUT: "`web_fetch` 等待網頁的秒數。",
   YUNSHU_WEB_FETCH_MAX_TEXT_CHARS:
     "交給模型的擷取網頁文字會截斷至此字元數（請求的 `max_content_tokens` 可進一步調低）。",
+  YUNSHU_CODE_EXECUTION:
+    "在本機於 Anthropic sandbox-runtime（srt；選用，需要 Node 22.12 以上）內提供程式碼執行工具（Anthropic `code_execution_*`）。關閉時宣告這些工具的請求回 400；開啟但沒有 srt 時回 503，絕不在沙盒外執行。",
+  YUNSHU_CODE_EXECUTION_ROOT:
+    "存放程式碼執行容器的目錄（每個容器一個子目錄，權限 0700）。",
+  YUNSHU_CODE_EXECUTION_TIMEOUT:
+    "單次程式碼執行呼叫可執行的牆鐘秒數，超過即終止；同時作為 CPU 時間上限。",
+  YUNSHU_CODE_EXECUTION_MEMORY_MB:
+    "單次程式碼執行呼叫可使用的常駐記憶體（MB），以整個行程群組取樣；超過即終止。",
+  YUNSHU_CODE_EXECUTION_NETWORK_ALLOW:
+    "沙盒可連線的主機，以逗號分隔（`example.com`、`*.example.com`、`host:443`）。留空：完全沒有網路，包含 loopback。",
+  YUNSHU_CODE_EXECUTION_TTL_MIN:
+    "程式碼執行容器閒置多少分鐘後，連同其檔案一併刪除。",
   YUNSHU_MCP_CONNECTOR:
     "提供 MCP 連接器：Anthropic 的 `mcp_servers` 與 OpenAI Responses 的 `mcp` 工具由本伺服器執行，並透過可串流 HTTP／SSE 連線到指定的 MCP 伺服器。",
   YUNSHU_MCP_CONNECTOR_ALLOW_PRIVATE:
