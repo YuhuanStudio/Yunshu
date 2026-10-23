@@ -46,6 +46,33 @@ def in_prefill() -> bool:
     return _PREFILL.get()
 
 
+_TAIL: ContextVar[bool] = ContextVar("split_invariant_prompt_tail", default=False)
+
+
+@contextlib.contextmanager
+def tail_scope():
+    """The short prompt tail after the last aligned boundary: projections and the recurrence take
+    the decode/verify kernels, attention keeps the prefill kernel (the stock fallback for a few
+    query rows over a long cache was ~8 ms per layer at 32K)."""
+    token = _TAIL.set(True)
+    try:
+        yield
+    finally:
+        _TAIL.reset(token)
+
+
+def in_tail() -> bool:
+    return _TAIL.get()
+
+
+def in_prefill_math() -> bool:
+    """Prompt rows whose attention, recurrence and convolution keep the prefill kernels: the
+    long prefill scope and the prompt tail (only the tail's projections differ). Spec on and
+    off must agree there, and the decode-side paths differ between DFlash's capturing per-row
+    forward and the plain batched one."""
+    return _PREFILL.get() or _TAIL.get()
+
+
 def configure_split(enabled: bool) -> None:
     """Enable only after all three prefill families have qualified together."""
     _STATE["split"] = bool(enabled)
@@ -63,7 +90,7 @@ def install_split_forward(language_model) -> None:
     if not getattr(supports, "_yunshu_split_prefill", False):
 
         def supported():
-            return not (split_enabled() and in_prefill()) and (
+            return not (split_enabled() and in_prefill_math()) and (
                 supports() if callable(supports) else True
             )
 
@@ -74,7 +101,7 @@ def install_split_forward(language_model) -> None:
     if not getattr(original, "_yunshu_split_prefill", False):
 
         def conv(layer, inputs):
-            if split_enabled() and in_prefill():
+            if split_enabled() and in_prefill_math():
                 return layer.conv1d(inputs)
             return original(layer, inputs)
 
@@ -154,7 +181,7 @@ def install_fused_conv(cls) -> None:
         B, S, _ = inputs.shape
         if not (
             split_enabled()
-            and in_prefill()
+            and in_prefill_math()
             and not kwargs
             and B == 1
             and S >= 3
@@ -277,7 +304,7 @@ def install() -> bool:
         step = gd.gated_delta_kernel
 
         def gated_delta_kernel(q, k, v, g, beta, state, mask=None):
-            if split_enabled() and in_prefill() and not _STATE["bypass"]:
+            if split_enabled() and in_prefill_math() and not _STATE["bypass"]:
                 if g.ndim != 3 or state is None:
                     raise ValueError(
                         "split-invariant prefill needs scalar gates and fp32 state"

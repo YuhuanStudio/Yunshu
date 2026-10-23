@@ -12,6 +12,8 @@ import importlib
 
 from .kernels import gdn_prefill
 
+TAIL_FAST_ROWS = 48  # tail rows on the lane projections (LaneLinear row pieces; attention stays BQ32)
+
 
 def install():
     ar = importlib.import_module("mlx_vlm.generate.ar")
@@ -35,7 +37,7 @@ def install():
                 else []
             )
             try:
-                with self._prefill_scope():
+                with self._tail_scope():
                     return super().generate(*args, **kwargs)
             finally:
                 # A decoding row no longer needs its prefill descriptor. This
@@ -52,6 +54,22 @@ def install():
             ):
                 return gdn_prefill.prefill_scope()
             return contextlib.nullcontext()
+
+        def _tail_scope(self):
+            # The final rows after the last 64-aligned boundary (1-64 tokens) always start at
+            # the same absolute position for a given prompt, cold or restored, so they need
+            # no long kernels to stay split-invariant. Up to TAIL_FAST_ROWS of them run on the
+            # decode/verify kernels: a 16-row tail took 168 ms on the long prefill path
+            # (host-bound: ~2000 small ops) against ~40 ms for a verify window.
+            embeds = getattr(self, "_inputs_embeds", None)
+            if (
+                gdn_prefill.split_enabled()
+                and embeds is not None
+                and embeds.shape[0] == 1
+                and embeds.shape[1] <= TAIL_FAST_ROWS
+            ):
+                return gdn_prefill.tail_scope()
+            return self._prefill_scope()
 
         def _split_position(self):
             embeds = getattr(self, "_inputs_embeds", None)
