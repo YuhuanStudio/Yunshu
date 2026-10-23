@@ -15,6 +15,9 @@ def test_serve_uds_passes_uds_to_uvicorn(monkeypatch):
     import uvicorn
 
     monkeypatch.setenv("YUNSHU_UDS", "")  # restored on teardown (serve exports env)
+    # A models dir skips the first-run model picker (which exits 2 without a TTY), whatever
+    # settings an earlier test in this process left behind.
+    monkeypatch.setenv("YUNSHU_MODELS_DIR", tempfile.mkdtemp(prefix="ysm", dir="/tmp"))
     seen = {}
     monkeypatch.setattr(uvicorn, "run", lambda *a, **kw: seen.update(kw))
     d = tempfile.mkdtemp(prefix="ys", dir="/tmp")
@@ -38,6 +41,9 @@ def test_serve_default_is_tcp(monkeypatch):
     import uvicorn
 
     monkeypatch.setenv("YUNSHU_UDS", "")  # restored on teardown (serve exports env)
+    # A models dir skips the first-run model picker (which exits 2 without a TTY), whatever
+    # settings an earlier test in this process left behind.
+    monkeypatch.setenv("YUNSHU_MODELS_DIR", tempfile.mkdtemp(prefix="ysm", dir="/tmp"))
     seen = {}
     monkeypatch.setattr(uvicorn, "run", lambda *a, **kw: seen.update(kw))
     # A free port: worker servers own the fixed 18990-18999 range during runs.

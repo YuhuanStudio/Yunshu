@@ -210,6 +210,7 @@ dev = [
     "pytest-asyncio>=1.3.0",
     "pytest-httpx>=0.30.0",
     "pytest-timeout>=2.3.0",
+    "pytest-xdist>=3.8",
     "ruff>=0.11.0",
 ]
 
@@ -304,4 +305,5 @@ markers = [
     "gpu: requires Apple GPU / MLX runtime",
     "integration: requires running services or real models",
     "slow: tests that take >5 seconds",
+    "serial: depends on host-wide state (CPU load, process table); ci-local runs these alone after the parallel pass",
 ]

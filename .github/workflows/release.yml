@@ -38,7 +38,7 @@ jobs:
           uv run ruff check python/ tests/
           uv run ruff format --check python/ tests/
           uv run python scripts/dev/mypy_gate.py
-          uv run pytest tests/unit -q --tb=short
+          uv run pytest tests/unit -q --tb=short -n auto --dist loadfile -m "not serial" && uv run pytest tests/unit -q --tb=short -m serial
 
       - name: Set up Node for the console
         uses: actions/setup-node@v4
