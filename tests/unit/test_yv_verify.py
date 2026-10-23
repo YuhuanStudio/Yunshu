@@ -1962,3 +1962,18 @@ def test_lane_bandwidth_stage_coverage_fails_closed(tmp_path):
     cells[0]["ms"] = float("nan")
     write(cells + [{"complete": True}])
     assert not stages._lane_bandwidth_valid(path)[0]
+
+
+def test_spec_depth_check_accepts_the_engaged_mode_for_default_suites():
+    # console-identity runs spec_modes ["default"]; the server reports the mode it engaged (dflash).
+    spec = {
+        "mode": "dflash",
+        "drafted": 4,
+        "accepted": 2,
+        "rounds": 2,
+        "per_depth": [{"position": 0, "drafted": 4, "accepted": 2}],
+    }
+    rows = [{"xy": {"speculative": spec}}]
+    assert stages._spec_depth_valid(rows, "default")[0]
+    assert not stages._spec_depth_valid(rows, "mtp")[0]
+    assert not stages._spec_depth_valid([{"xy": {"speculative": dict(spec, rounds=0)}}], "default")[0]
