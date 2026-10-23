@@ -351,6 +351,7 @@ def detect_style(tokenizer: Any) -> str | None:
 
 _TOKENIZERS: dict[tuple[int, int], tuple[Any, Any]] = {}
 _TOKENIZER_LOCK = threading.Lock()
+_TOKENIZER_BYTES: dict[tuple[int, int], int] = {}
 
 
 def _hf_tokenizer(tokenizer: Any) -> Any:
@@ -372,10 +373,45 @@ def llg_tokenizer(tokenizer: Any, vocab_size: int):
             return hit[1]
     import llguidance.hf
 
+    before = _heap_pages_bytes()
     built = llguidance.hf.from_tokenizer(hf, n_vocab=int(vocab_size))
+    grown = max(0, _heap_pages_bytes() - before)
     with _TOKENIZER_LOCK:
         _TOKENIZERS[key] = (hf, built)  # keeps ``hf`` alive so its id stays unique
+        _TOKENIZER_BYTES[key] = grown
     return built
+
+
+def _heap_pages_bytes() -> int:
+    """Pages the default malloc zone holds (macOS); 0 where it cannot be read."""
+    try:
+        import ctypes
+
+        class _Stats(ctypes.Structure):
+            _fields_ = [
+                ("blocks", ctypes.c_uint),
+                ("in_use", ctypes.c_size_t),
+                ("max_in_use", ctypes.c_size_t),
+                ("allocated", ctypes.c_size_t),
+            ]
+
+        lib = ctypes.CDLL("/usr/lib/libSystem.B.dylib")
+        value = _Stats()
+        lib.malloc_zone_statistics.argtypes = [ctypes.c_void_p, ctypes.POINTER(_Stats)]
+        lib.malloc_zone_statistics(None, ctypes.byref(value))
+        return int(value.allocated)
+    except (OSError, AttributeError):
+        return 0
+
+
+def resident_tokenizer_bytes() -> int:
+    """Process heap held by cached llguidance token tables (grown while building).
+
+    A 248K-token vocabulary costs about 0.45 GiB of native heap on the first
+    constrained request; it stays as an intended cache for the process life and is
+    reported in the memory ledger so idle footprint is fully attributed."""
+    with _TOKENIZER_LOCK:
+        return sum(_TOKENIZER_BYTES.values())
 
 
 class ToolGrammar:

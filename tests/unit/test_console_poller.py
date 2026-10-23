@@ -382,3 +382,20 @@ def test_a_tick_that_raises_does_not_end_the_loop(tmp_path):
 
     run(go())
     assert calls["n"] >= 2 and poller.errors == 1 and poller.up is True
+
+
+def test_deployment_error_alert_persists_and_logs_once(tmp_path, caplog):
+    engine, clock = FakeEngine(), Clock()
+    poller, store = make(tmp_path, engine, clock)
+    for i in range(20):
+        engine.finish(f"req-{i}", T0 - 1, status=500 if i == 0 else 200)
+    run(poller.tick())
+    assert poller.state()["watch"]["error_rate"] == 0.05
+    assert len(poller.state()["watch"]["alerts"]) == 1
+    run(poller.tick())
+    alerts = [
+        e for e in store.events_between(0, T0 + 10) if e["kind"] == "deployment_alert"
+    ]
+    assert len(alerts) == 1
+    assert sum("deployment alert:" in r.message for r in caplog.records) == 1
+    store.close()

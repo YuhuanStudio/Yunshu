@@ -4,7 +4,7 @@ Streaming-transparent: bytes are forwarded as they arrive, and the proxy only *o
 For every request it records time to first byte, time to first generated token, total time,
 token usage (prompt / completion / cached), decode rate, finish reason, tool-call validity and
 API errors. Understands OpenAI Chat Completions, Anthropic Messages and OpenAI Responses, both
-streaming (SSE) and plain JSON. Error bodies are always saved; all bodies with ``save_bodies``.
+streaming (SSE) and plain JSON. Request and response bodies are never persisted, including errors.
 
 It never changes what the agent sends or what the server answers.
 """
@@ -75,6 +75,7 @@ class Tracker:
         self.delta_events = 0
         self.x_yunshu = None
         self.error_event = None
+        self.terminal = False
         self._blocks: dict[int, str] = {}
 
     def _tok(self, t: float):
@@ -173,6 +174,8 @@ class Tracker:
                 self._tok(t)
             elif d.get("type") == "thinking_delta":
                 self._tok(t)
+        elif ty == "message_stop":
+            self.terminal = True
         elif ty == "message_delta":
             self._anthropic_usage(ev.get("usage"))
             sr = (ev.get("delta") or {}).get("stop_reason")
@@ -194,6 +197,7 @@ class Tracker:
                     it.get("arguments") or ""
                 )
         elif ty in ("response.completed", "response.incomplete", "response.failed"):
+            self.terminal = True
             r = ev.get("response") or {}
             u = r.get("usage") or {}
             self.prompt = u.get("input_tokens")
@@ -270,8 +274,9 @@ class Tracker:
                 out["decode_tok_s"] = round((n - 1) / span, 2)
         if self.x_yunshu is not None:
             out["x_yunshu"] = self.x_yunshu
-        if self.error_event:
-            out["error_event"] = self.error_event
+        if self.error_event or self.finish in ("failed", "incomplete"):
+            out["error_event"] = True
+            out["error"] = True
         return out
 
 
@@ -287,7 +292,7 @@ class RecordingProxy:
         u = urlsplit(upstream)
         self.up_host, self.up_port = u.hostname, u.port or 80
         self.bodies_dir = Path(bodies_dir) if bodies_dir else None
-        self.save_bodies = save_bodies
+        # Legacy save_bodies argument is accepted but never persists content.
         self.records: list[dict] = []
         self._lock = threading.Lock()
         self._seq = 0
@@ -350,14 +355,6 @@ class RecordingProxy:
             self._seq += 1
             return self._seq
 
-    def _save(self, rid: int, suffix: str, data: bytes):
-        if not self.bodies_dir:
-            return None
-        self.bodies_dir.mkdir(parents=True, exist_ok=True)
-        p = self.bodies_dir / f"{rid:04d}-{suffix}"
-        p.write_bytes(data)
-        return str(p)
-
     def _read_request_body(self, h) -> bytes:
         if h.headers.get("Transfer-Encoding", "").lower() == "chunked":
             out = b""
@@ -400,8 +397,6 @@ class RecordingProxy:
             for k in ("temperature", "top_p", "max_tokens", "max_output_tokens"):
                 if rj.get(k) is not None:
                     rec.setdefault("sampling", {})[k] = rj[k]
-        if self.save_bodies and kind:
-            rec["req_file"] = self._save(rid, "req.json", body)
         tr = Tracker(kind, t0)
         self.active[rid] = (rec, tr, t0)
         resp_buf = bytearray()
@@ -448,7 +443,9 @@ class RecordingProxy:
                         ln = ln.strip()
                         if ln.startswith(b"data:"):
                             d = ln[5:].strip()
-                            if d and d != b"[DONE]":
+                            if d == b"[DONE]":
+                                tr.terminal = True
+                            elif d:
                                 with contextlib.suppress(ValueError):
                                     tr.feed_event(json.loads(d), t)
             if chunked:
@@ -481,14 +478,15 @@ class RecordingProxy:
         rec["total_s"] = round(t_end - t0, 4)
         if kind:
             rec.update(tr.summary(t_end))
+            if not rec.get("client_aborted") and (
+                tr.finish is None or (sse and not tr.terminal)
+            ):
+                rec["error"] = True
+                rec["incomplete_stream"] = True
         status = rec.get("status", 0)
         if status >= 400 or rec.get("proxy_error"):
             rec["error"] = True
-            rec["error_body"] = bytes(resp_buf[:2000]).decode(errors="replace")
-            rec["error_req_file"] = self._save(rid, "error-req.json", body)
-            self._save(rid, "error-resp.txt", bytes(resp_buf))
-        elif self.save_bodies and kind:
-            rec["resp_file"] = self._save(rid, "resp.txt", bytes(resp_buf))
+
         with self._lock:
             self.records.append(rec)
             self.active.pop(rid, None)
