@@ -159,7 +159,12 @@ def eligible(
         and hk > 0
         and h % hk == 0
         and rows
-        >= (1 if gdn_prefill.split_enabled() and gdn_prefill.in_prefill() else MIN_ROWS)
+        >= (
+            1
+            if gdn_prefill.split_enabled()
+            and (gdn_prefill.in_prefill() or gdn_prefill.in_tail())
+            else MIN_ROWS
+        )
         and keys >= rows
         and dtype == mx.bfloat16
         and abs(scale - _SCALE) < 1e-12

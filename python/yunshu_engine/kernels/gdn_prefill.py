@@ -46,6 +46,25 @@ def in_prefill() -> bool:
     return _PREFILL.get()
 
 
+_TAIL: ContextVar[bool] = ContextVar("split_invariant_prompt_tail", default=False)
+
+
+@contextlib.contextmanager
+def tail_scope():
+    """The short prompt tail after the last aligned boundary: projections and the recurrence take
+    the decode/verify kernels, attention keeps the prefill kernel (the stock fallback for a few
+    query rows over a long cache was ~8 ms per layer at 32K)."""
+    token = _TAIL.set(True)
+    try:
+        yield
+    finally:
+        _TAIL.reset(token)
+
+
+def in_tail() -> bool:
+    return _TAIL.get()
+
+
 def configure_split(enabled: bool) -> None:
     """Enable only after all three prefill families have qualified together."""
     _STATE["split"] = bool(enabled)

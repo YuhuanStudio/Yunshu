@@ -306,7 +306,7 @@ def test_short_prompt_tail_runs_outside_the_long_prefill_scope(
 
     class Base:
         def generate(self, *a, **k):
-            seen.append(gdn_prefill.in_prefill())
+            seen.append((gdn_prefill.in_prefill(), gdn_prefill.in_tail()))
 
     ar = SimpleNamespace(PromptProcessingBatch=Base)
     monkeypatch.setattr(
@@ -320,4 +320,4 @@ def test_short_prompt_tail_runs_outside_the_long_prefill_scope(
     batch = ar.PromptProcessingBatch()
     batch._inputs_embeds = SimpleNamespace(shape=(1, tail, 1))
     batch.generate()
-    assert seen == [scoped]
+    assert seen == [(scoped, not scoped)]

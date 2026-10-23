@@ -68,7 +68,7 @@ def install():
                 and embeds.shape[0] == 1
                 and embeds.shape[1] <= TAIL_FAST_ROWS
             ):
-                return contextlib.nullcontext()
+                return gdn_prefill.tail_scope()
             return self._prefill_scope()
 
         def _split_position(self):
