@@ -32,19 +32,19 @@ class RoundTripTracker:
         ``reusable`` is how many of the earlier response's generated tokens the new prompt reproduces in
         place (a prefix match that runs through the earlier prompt into its generation).
         """
-        best = None
-        for idx, seq, plen in self._seqs:
-            lcp = common_prefix(seq, prompt)
+        best: tuple[int, int, list[int], int] | None = None
+        for e_idx, e_seq, e_plen in self._seqs:
+            lcp = common_prefix(e_seq, prompt)
             # only a continuation of that earlier prompt counts as the same conversation
-            if lcp < plen:
+            if lcp < e_plen:
                 continue
             if best is None or lcp > best[0]:
-                best = (lcp, idx, seq, plen)
+                best = (lcp, e_idx, e_seq, e_plen)
         if best is None:
             return None
         lcp, idx, seq, plen = best
         gen_len = len(seq) - plen
-        rec = {
+        rec: dict = {
             "prev_index": idx,
             "prev_prompt_len": plen,
             "prev_gen_len": gen_len,

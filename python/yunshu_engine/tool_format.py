@@ -837,7 +837,7 @@ def record_tool_outcome(parsed: int, markup_failed: int) -> None:
     try:
         from .request_tracker import current_request_info
 
-        info = current_request_info.get()
+        info: Any = current_request_info.get()
         if info is None:
             return
         info.tool_calls_parsed = (
