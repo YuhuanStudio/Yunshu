@@ -1364,3 +1364,10 @@ quiet reps (gpuq 1023-151722, 1023-152645): immediate turn-2 restore 43.1/43.4 -
 0.841/0.852 -> 0.813/0.811 s; warm re-send code 0.266 -> 0.230-0.243 s, prose restore unchanged. Cold 32K flat (~33 s).
 Identity: APC hit/miss and spec on/off tokens + logprobs exact (1023-151746); rehearsal == plain raw IDs 12/12
 (1023-165252). Memory: the held storage counts inside the existing allocator budget and is released at the 30 s idle trim.
+
+2026-10-23 ccache (f788cdb8): agent prefix-cache hit rate. Same M5 Max, Qwen3.8-27B + DFlash2, 3 agent tasks x 3 sessions per client
+(sampled, so turn counts differ between runs; percent of prompt tokens served from cache). Claude Code 2.1.285 62.5 -> 92.3%
+(median TTFT 10.43 -> 1.11 s), 2.1.309 83.0 -> 90.4% (1.40 -> 1.16 s), Codex 0.164.0 84.0 -> 88.6% (1.18 -> 0.90 s); opencode
+1.19.4 87.7% before, not re-measured. Ideal with the previous reply re-prefilled: 94-97%; the rest is the reply (3-7 pp) and
+64-alignment (~0.2 pp). Identity: yv console-identity base f364cf02 vs cand 26d15bf3, 12 + 12 cells 0 mismatches, APC 4 pairs;
+APC hit/miss and spec-off at 32K tokens + logprobs exact (gpuq 1023-213201).
