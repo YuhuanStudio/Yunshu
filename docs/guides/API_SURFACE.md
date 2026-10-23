@@ -352,10 +352,10 @@ clients must not treat its zero-shot scores as those probabilities.
 ## SDK coverage walk
 
 `scripts/dev/api_coverage.py` reads the resource modules of the installed `openai` and `anthropic` SDKs (AST only) and lists every
-endpoint they can request (575 on openai 3.26.0 / anthropic 1.11.0, websockets included). `tests/unit/test_api_coverage.py` fails when
+endpoint they can request (589 on openai 3.31.0 / anthropic 1.14.0, websockets included). `tests/unit/test_api_coverage.py` fails when
 one is neither served by the gateway nor declared in `scripts/dev/api_coverage_na.json` as `not_applicable` or `planned`, each with a
 reason, and when a declaration matches nothing or still calls a served route planned/not applicable. An `implemented` declaration documents completed work but cannot hide a missing route. This replaces building the matrix from the routes
-we already had (which is how `POST /v1/decisions` was missed). Current state: 75 implemented, 0 planned, the rest not applicable (OpenAI and Anthropic
+we already had (which is how `POST /v1/decisions` was missed). Current state: 75 implemented, 0 planned, 514 not applicable (OpenAI and Anthropic
 skills, which mount into hosted sandboxes, SIP call control, organization and admin APIs, fine-tuning, Assistants/Threads, vector stores, hosted
 agent platforms, video, containers, webhooks, ChatKit, Live).
 Upgrading an SDK is the trigger: a new endpoint fails the test until someone decides.
@@ -601,7 +601,7 @@ as `agent-custom-tools`, `agent-shell-search`, `agent-documents-citations`,
 and `agent-http-video` in `route_checks_agent_compat.py`. `yv --suite client_compat`
 uses the M3 lane; `client_compat_m5` uses the M5. Both run the 0.8B pilot before the
 3B text model, validate the commit-pinned source tree, and fail closed on missing
-or unsuccessful checks. Real-server evidence is pending for this addition.
+or unsuccessful checks. Real-server evidence: the `client_compat` (M3 lane, `codexcompat-m3-1008u`) and `client_compat_m5` (`codexcompat-m5-tiny-short-1008x`) yv suites passed on 2026-10-08 at commit `0d427de7` with the 0.8B and 3B text models only; the probes have not been re-run on the 27B or on current main.
 
 
 ### Responses computer and local voice enrollment

@@ -56,6 +56,8 @@ Each row is its own experiment; do not add them.
 | M5 Max | 27B + DFlash2 | 32K turn-2 TTFT, 513-639 row tail | 1.10 -> 1.05 s | 92bd61fa (job 1022-030233) |
 | M5 Max | 27B + DFlash2 | 32K turn-2 TTFT, 513-2048 row tail | 1.27 -> 1.21 s | c9245329 (job 1021-224236) |
 | M5 Max | 27B (Kapitsa cached x3) | 4K third-turn TTFT | 3990 -> 216 ms | 9607b060 (job 1021-225435) |
+| M5 Max | 27B + DFlash2 | 32K re-send TTFT, code / prose (tail of at most 48 rows on the decode/verify kernels) | 0.279/0.267, 0.260/0.267 -> 0.198/0.201, 0.199/0.216 s | b30ca98f (jobs 1023-132555..59) |
+| M5 Max | 27B + DFlash2 | 32K immediate turn-2 APC restore; TTFT, code / prose | 43.1/43.4 -> 14.0/13.7 ms; 0.841/0.852 -> 0.813/0.811 s | f8233fd7 (jobs 1023-151722, 1023-152645) |
 | M5 Max | 27B DFlash | code decode 32K screen (copy 32 rows) | 154.0 -> 173.5 tok/s (+12.7%) | 34634a71 (1021a) |
 
 Regressions and limits: the 32K code warm TTFT +10.5% in the 1020o ladder (34634a71) was removed in the
@@ -70,6 +72,9 @@ and cold 32K TTFT versus Splash 1.3.2.
   hidden-thinking continuity through the `reasoning_token` envelope (it restores only Yunshu's own reasoning).
 - `YUNSHU_PREFILL_ATTENTION` setting; the `yv` SSD-TTFT profile stage and next-turn-after-restart probes.
 - Idle keep-warm heartbeat that holds the wired-memory limit up to 30 s after a request.
+- Opt-in serve-and-develop handshake with the local GPU queue: `YUNSHU_RESEARCH_ACTIVITY_FILE` (off when unset)
+  makes a request wait for a fresh pause acknowledgement before inference, and `YUNSHU_RESEARCH_PAUSE_TIMEOUT_S`
+  (2 s) bounds the wait (a timeout returns 503 `research_pause_timeout`). No request content is written.
 
 ### Changed
 
@@ -77,8 +82,15 @@ and cold 32K TTFT versus Splash 1.3.2.
   checkpoints are the default on the qualified 27B path; rehearsal starts after 0.3 s.
 - The DFlash fast tree admits short contexts, reads 8-bit lane weights directly,
   and short prefill tails (513-2048 rows) use native or exact M64 tiles.
+- The prompt tail of at most 48 rows after the last 64-aligned boundary runs its projections on the decode/verify
+  kernels (attention, recurrence and conv keep the prefill kernels), so a 32K re-send reaches its first token in
+  0.20-0.22 s instead of 0.26-0.28 s with identical hit and miss outputs.
 - APC SSD restore uses MLX's native safetensors reader; header and cache-class validation are unchanged.
 - Idle memory: evicted APC anchors, terminal-job vocabulary pin and malloc pressure relief at the idle trim.
+- An APC restore writes into the finished request's KV storage instead of a fresh allocation (the held storage is
+  released at the 30 s idle trim).
+- Development infrastructure: the unit suite runs on 2 x 12 pytest-xdist workers with serial tests
+  afterwards (`ci-local` 595 -> 157 s).
 - gpuq jobs pending at priority >= 0 rise one step after 30 min; swap contention is attributed to the job's own memory.
 
 ### Fixed
