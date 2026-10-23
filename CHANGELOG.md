@@ -83,6 +83,10 @@ and cold 32K TTFT versus Splash 1.3.2.
 
 ### Fixed
 
+- Agent follow-ups reuse the whole conversation prefix. Claude Code's per-turn `<total_tokens>` messages no longer
+  grow the system prompt; the tool-list end and the prompt end are always checkpoints; a new session reuses the
+  head it shares with recent ones. Prefix-cache hit rate on a 3-task agent run: Claude Code 2.1.285 62.5 -> 92.3%,
+  2.1.309 83.0 -> 90.4%, Codex 0.164.0 84.0 -> 88.6%.
 - Claude Code image turn 2 no longer fails (split-invariant checkpoints next to an image stay 64-aligned).
 - A follow-up no longer waits behind a stale rehearsal; a superseded rehearsal keeps its cancellation handle
   (2x32K concurrent decode no longer drops to 11-13 tok/s).
