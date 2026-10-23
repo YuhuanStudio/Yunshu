@@ -404,13 +404,13 @@ class ChatCompletionRequest(BaseModel):
     prompt_cache_key: str | None = None
     prompt_cache_retention: str | None = None
     prompt_cache_options: dict | None = None
-    temperature: float = Field(default=0.7, ge=0.0, le=2.0)
-    top_p: float = Field(default=1.0, ge=0.0, le=1.0)
-    top_k: int = Field(default=0, ge=0)
-    min_p: float = Field(default=0.0, ge=0.0, le=1.0)
-    repetition_penalty: float = Field(default=1.0, ge=0.0, le=2.0)
-    frequency_penalty: float = Field(default=0.0, ge=-2.0, le=2.0)
-    presence_penalty: float = Field(default=0.0, ge=-2.0, le=2.0)
+    temperature: float | None = Field(default=None, ge=0.0, le=2.0)
+    top_p: float | None = Field(default=None, ge=0.0, le=1.0)
+    top_k: int | None = Field(default=None, ge=0)
+    min_p: float | None = Field(default=None, ge=0.0, le=1.0)
+    repetition_penalty: float | None = Field(default=None, ge=0.0, le=2.0)
+    frequency_penalty: float | None = Field(default=None, ge=-2.0, le=2.0)
+    presence_penalty: float | None = Field(default=None, ge=-2.0, le=2.0)
     logit_bias: dict[int, float] | None = None
     max_tokens: int = Field(
         default_factory=lambda: int(settings.get("YUNSHU_DEFAULT_MAX_TOKENS")),
@@ -1783,6 +1783,9 @@ def _enforce_capability_contract(req: ChatCompletionRequest) -> None:
 
 @router.post("/chat/completions", response_model=None)
 async def create_chat_completion(req: ChatCompletionRequest, request: Request):
+    from ..sampling_defaults import resolve_sampling
+
+    resolve_sampling(req)
     if not req.store:
         return await _create_chat_completion(req, request)
     from yunshu_gateway.chat_store import check_metadata
@@ -1875,6 +1878,9 @@ def _tee_store(resp, req: ChatCompletionRequest):
 
 
 async def _create_chat_completion(req: ChatCompletionRequest, request: Request):
+    from ..sampling_defaults import resolve_sampling
+
+    resolve_sampling(req)
     from yunshu_gateway.admission import classify_request, defer_auxiliary
 
     classify_request(req.model_dump())

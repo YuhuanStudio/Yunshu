@@ -71,6 +71,18 @@ curl -s localhost:8000/v1/chat/completions -H 'content-type: application/json' -
     "schema":{"type":"object","properties":{"color":{"type":"string"}},"required":["color"],"additionalProperties":false}}}}'
 ```
 
+## Sampling defaults
+
+A request that leaves out `temperature`, `top_p`, `top_k`, `min_p`, `repetition_penalty`, `presence_penalty` or
+`frequency_penalty` uses, in order: the model's `generation_config.json` value, then the API's official default
+(`temperature` 1.0, `top_p` 1.0, `top_k` 0 = off, `min_p` 0, penalties off). A value the request sends always
+wins, including one equal to the old default (0.7). There is no operator setting for default sampling, so the
+order is request > generation_config > API default. `do_sample` is not read: send `temperature: 0` for greedy.
+Each model's file is read once per file version, so multi-model servers get per-model defaults. Qwen3.8-27B's
+file gives 1.0 / 0.95 / 20. The values a request ran with and where each came from are in `x_yunshu.sampling`
+(`request`, `generation_config`, `api_default`); `GET /v1/models/{id}` lists the model's effective defaults under
+`yunshu.sampling_defaults`.
+
 ## Lossy memory options (off by default)
 
 | Setting | Effect |

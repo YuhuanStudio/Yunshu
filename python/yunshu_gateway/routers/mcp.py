@@ -185,13 +185,16 @@ async def _handle_tools_list(params: dict | None, req_id: int | str | None) -> d
                         },
                     },
                     "max_tokens": {"type": "integer", "default": 512},
-                    "temperature": {"type": "number", "default": 0.7},
-                    "top_p": {"type": "number", "default": 1.0},
-                    "top_k": {"type": "integer", "default": 0},
-                    "min_p": {"type": "number", "default": 0.0},
-                    "repetition_penalty": {"type": "number", "default": 1.0},
-                    "frequency_penalty": {"type": "number", "default": 0.0},
-                    "presence_penalty": {"type": "number", "default": 0.0},
+                    "temperature": {
+                        "type": "number",
+                        "description": "Omitted: the model's generation_config value, else 1.0.",
+                    },
+                    "top_p": {"type": "number"},
+                    "top_k": {"type": "integer"},
+                    "min_p": {"type": "number"},
+                    "repetition_penalty": {"type": "number"},
+                    "frequency_penalty": {"type": "number"},
+                    "presence_penalty": {"type": "number"},
                     "enable_thinking": {"type": "boolean"},
                     "seed": {"type": "integer"},
                     "stop": {"type": "array", "items": {"type": "string"}},
@@ -321,13 +324,34 @@ async def _tool_generate(args: dict, req_id: int | str | None) -> dict:
     model = args.get("model", "")
     messages = args.get("messages", [])
     max_tokens = args.get("max_tokens", 512)
-    temperature = args.get("temperature", 0.7)
-    top_p = args.get("top_p", 1.0)
-    top_k = args.get("top_k", 0)
-    min_p = args.get("min_p", 0.0)
-    repetition_penalty = args.get("repetition_penalty", 1.0)
-    frequency_penalty = args.get("frequency_penalty", 0.0)
-    presence_penalty = args.get("presence_penalty", 0.0)
+    temperature = args.get("temperature")
+    top_p = args.get("top_p")
+    top_k = args.get("top_k")
+    min_p = args.get("min_p")
+    repetition_penalty = args.get("repetition_penalty")
+    frequency_penalty = args.get("frequency_penalty")
+    presence_penalty = args.get("presence_penalty")
+    from ..sampling_defaults import fill_sampling, model_path_for
+
+    _smp = {
+        "temperature": temperature,
+        "top_p": top_p,
+        "top_k": top_k,
+        "min_p": min_p,
+        "repetition_penalty": repetition_penalty,
+        "frequency_penalty": frequency_penalty,
+        "presence_penalty": presence_penalty,
+    }
+    fill_sampling(_smp, model_path_for(model))
+    temperature, top_p, top_k, min_p = (
+        _smp["temperature"],
+        _smp["top_p"],
+        _smp["top_k"],
+        _smp["min_p"],
+    )
+    repetition_penalty = _smp["repetition_penalty"]
+    frequency_penalty = _smp["frequency_penalty"]
+    presence_penalty = _smp["presence_penalty"]
     enable_thinking = args.get("enable_thinking")
     seed = args.get("seed")
     stop = args.get("stop")
