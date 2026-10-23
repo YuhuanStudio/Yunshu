@@ -112,4 +112,8 @@ PYCODE
 uvx -q twine check dist/*
 UV_TOOL_DIR="$WORK/tools" UV_TOOL_BIN_DIR="$WORK/bin" uv tool install --python 3.13 "$(ls dist/yunshu-*.whl)"
 "$WORK/bin/yunshu" --version
-echo "ci-local: PASS $SHA ($WORK)"
+# A passing run's ~13 GB checkout + venv is not needed again (a failing one stays for debugging);
+# YUNSHU_CI_KEEP=1 keeps it.
+cd /
+[ "${YUNSHU_CI_KEEP:-0}" = 1 ] || rm -rf "$WORK"
+echo "ci-local: PASS $SHA ($WORK$([ "${YUNSHU_CI_KEEP:-0}" = 1 ] || echo ', removed'))"
