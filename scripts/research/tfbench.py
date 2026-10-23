@@ -353,6 +353,7 @@ def send(url, body, timeout=600, *, capture_timestamps=False, trace_id=None):
     t0 = time.perf_counter()
     tf = None
     content, reasoning, tools = [], [], {}
+    lp_tokens, lps = [], []
     usage = finish = xy = None
     done = False
     nchunks = 0
@@ -398,6 +399,9 @@ def send(url, body, timeout=600, *, capture_timestamps=False, trace_id=None):
                         )
                 if got and tf is None:
                     tf = time.perf_counter()
+                for e in (ch.get("logprobs") or {}).get("content") or []:
+                    lp_tokens.append(e.get("token"))
+                    lps.append(e.get("logprob"))
                 finish = ch.get("finish_reason") or finish
     t1 = time.perf_counter()
     if not done or finish is None or usage is None:
@@ -427,6 +431,8 @@ def send(url, body, timeout=600, *, capture_timestamps=False, trace_id=None):
         finish=finish,
         sha=sha,
         reasoning_chars=len(rs),
+        lp_tokens=lp_tokens or None,
+        lps=lps or None,
         head=(c or rs)[:80],
         _text=c,
         xy={
@@ -782,7 +788,11 @@ def part_decode(s, out, a):
                     s.model,
                     text,
                     16 if a.smoke else want,
-                    extra=json.loads(a.request_extra) if a.request_extra else None,
+                    extra={
+                        **(json.loads(a.request_extra) if a.request_extra else {}),
+                        **({"logprobs": True} if a.logprobs else {}),
+                    }
+                    or None,
                 )
                 if phase == "turn2":
                     b["messages"] += [
@@ -1294,6 +1304,11 @@ def parse_args(argv=None):
         type=float,
         default=30.0,
         help="pause before the idle footprint sample",
+    )
+    ap.add_argument(
+        "--logprobs",
+        action="store_true",
+        help="decode part: request chosen-token logprobs (identity evidence compares them)",
     )
     ap.add_argument(
         "--request-extra",
