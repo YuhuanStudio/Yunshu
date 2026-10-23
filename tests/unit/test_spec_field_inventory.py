@@ -52,6 +52,7 @@ ACCEPTED_IGNORED = {
         "prompt": "stored prompt templates live on the hosted platform; KNOWN GAP",
     },
     "messages": {
+        "speed": "fast-mode tier of the hosted API",
         "diagnostics": HOSTED,
         "inference_geo": HOSTED,
         "user_profile_id": HOSTED,
@@ -67,6 +68,7 @@ ACCEPTED_IGNORED = {
         "fallback_credit_token": HOSTED,
         "fallbacks": "model fallback list of the hosted API",
         "speed": "fast-mode tier of the hosted API",
+        "thread": "server-held conversation state of the hosted API (Threads); KNOWN GAP, clients resend history",
     },
     "completions": {},
 }

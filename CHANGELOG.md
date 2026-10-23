@@ -68,6 +68,13 @@ and cold 32K TTFT versus Splash 1.3.2.
 
 ### Added
 
+- Anthropic API version 2026-10-21: requests that send `anthropic-version: 2026-10-21` (or later; the 2.x SDKs do)
+  get the official 400 `invalid_request_error` for a `document` block in an `assistant` message and for a non-empty
+  `citations` array on `text` blocks in `user` messages (also inside `search_result`), on `/v1/messages`,
+  `/v1/messages/count_tokens` and each request of a Message Batch. `2023-06-01` and requests without the header
+  keep the lenient behavior. `temperature` / `top_p` / `top_k` are still accepted. The 2.x SDK's Bearer key
+  authenticates, `role: "system"` messages are accepted, and the beta `clear_at: "next_user_message"` on a system
+  message is honored (`output_config` on a system message is accepted, not applied).
 - Anthropic `thinking.display` (`summarized`, `omitted`, `updates`), `signature_delta` per thinking block and
   hidden-thinking continuity through the `reasoning_token` envelope (it restores only Yunshu's own reasoning).
 - `YUNSHU_PREFILL_ATTENTION` setting; the `yv` SSD-TTFT profile stage and next-turn-after-restart probes.

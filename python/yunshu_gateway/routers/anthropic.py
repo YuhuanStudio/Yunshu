@@ -181,6 +181,10 @@ def _record_metrics(prompt_tokens: int, completion_tokens: int) -> None:
 class AnthropicMessage(BaseModel):
     role: str
     content: str | list[dict] | None = None
+    # beta `role: "system"` messages: how long the text stays in front of the model, and a
+    # per-turn output config (effort; accepted, not applied per message).
+    clear_at: str | None = None
+    output_config: dict | None = None
 
 
 class AnthropicTool(BaseModel):
@@ -1156,9 +1160,52 @@ def _drop_token_counters(req) -> None:
         req.messages = [m for m in req.messages if not counter(m)]
 
 
+def _apply_clear_at(req: AnthropicMessagesRequest) -> None:
+    """Beta `clear_at: "next_user_message"` on a system message: shown only for the user turn it
+    follows. Once a later `user` message exists the message stays in the array (clients resend it
+    unchanged) but is not rendered. System messages with no content (output_config only) carry
+    nothing to render either."""
+    msgs = req.messages
+    last_user = max((i for i, m in enumerate(msgs) if m.role == "user"), default=-1)
+    keep = [
+        m
+        for i, m in enumerate(msgs)
+        if not (
+            m.role == "system"
+            and (
+                (m.clear_at == "next_user_message" and i < last_user)
+                or m.content is None
+            )
+        )
+    ]
+    if len(keep) != len(msgs):
+        req.messages = keep
+
+
+def _version_error(req: AnthropicMessagesRequest, request: Request):
+    """400 for the 2026-10-21 rules (document in assistant, citations in user) or None."""
+    from ..anthropic_version import is_strict, validate_messages
+
+    if not is_strict(request.headers.get("anthropic-version")):
+        return None
+    msg = validate_messages(req.messages)
+    if msg is None:
+        return None
+    return JSONResponse(
+        status_code=400,
+        content={
+            "type": "error",
+            "error": {"type": "invalid_request_error", "message": msg},
+        },
+    )
+
+
 @router.post("/messages", response_model=None)
 async def create_message(req: AnthropicMessagesRequest, request: Request):
     """Run the Messages endpoint; unlink staged images unless a stream owns them."""
+    if (bad := _version_error(req, request)) is not None:
+        return bad
+    _apply_clear_at(req)
     temp_files: list[str] = []
     try:
         result = await _create_message(req, request, temp_files)
@@ -3278,13 +3325,16 @@ def _format_anthropic_logprobs(logprobs_list: list[dict] | None) -> list[dict] |
 
 
 @router.post("/messages/count_tokens")
-async def count_tokens(req: AnthropicMessagesRequest, request: Request) -> dict:
+async def count_tokens(req: AnthropicMessagesRequest, request: Request):
     """Token counting endpoint (Anthropic compatible).
 
     Returns Anthropic-format errors on failure:
       {"type": "error", "error": {"type": "...", "message": "..."}}
     """
     _check_permission(request, "can_infer")
+    if (bad := _version_error(req, request)) is not None:
+        return bad
+    _apply_clear_at(req)
     from ..anthropic_client_tools import fill_client_tool_schemas
     from ..anthropic_documents import has_documents, prepare_documents
     from ..files_store import has_file_refs, resolve_file_refs
