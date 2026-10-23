@@ -158,7 +158,7 @@ def _copy_gate(lm, draft, cache, kw) -> bool:
         or not tree_verify.lane_ready(lm, cache)
         or mtp_lane.verify_max_rows(True, lm) < 16
         or _dflash_block_total(draft, kw.get("draft_block_size"))
-        > mtp_lane.verify_max_rows(tree_verify.lane_projections(lm), lm, fast=True)
+        > mtp_lane.verify_max_rows(tree_verify.lane_projections(lm), lm)
     )
 
 
@@ -260,7 +260,7 @@ def configure(
     """Apply the existing setting to this target and install only the measured lane."""
     from . import mtp_lane
 
-    limit = mtp_lane.verify_max_rows(lane_projections, language_model, fast=True)
+    limit = mtp_lane.verify_max_rows(lane_projections, language_model)
     effective = mtp_lane.set_copy_rows(rows, limit)
     enabled = bool(
         effective >= 3 and invariant and lane_projections and limit >= 16 and install()

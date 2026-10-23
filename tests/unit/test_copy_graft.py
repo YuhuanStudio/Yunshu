@@ -93,7 +93,7 @@ def test_grafted_mtp_rounds_match_plain_with_wrong_model_drafts(monkeypatch):
     target = ToyTarget(script, 128, 100)
     monkeypatch.setattr(tv, "supported", lambda lm: True)
     monkeypatch.setattr(tv, "lane_ready", lambda lm, cache: True)
-    monkeypatch.setattr(mtp_lane, "copy_rows_for_model", lambda lm, **__: 32)
+    monkeypatch.setattr(mtp_lane, "copy_rows_for_model", lambda lm: 32)
     monkeypatch.setitem(mtp_lane._STATE, "context", list(range(10, 60)) * 2)
 
     def tree_forward(lm, window, shape, cache):

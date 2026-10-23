@@ -146,8 +146,8 @@ def install_fixture(monkeypatch):
     )
     monkeypatch.setitem(mtp_lane._STATE, "context", [11, 12, 13])
     monkeypatch.setitem(mtp_lane._STATE, "guide", None)
-    monkeypatch.setattr(mtp_lane, "copy_rows_for_model", lambda lm, **__: 16)
-    monkeypatch.setattr(mtp_lane, "verify_max_rows", lambda *args, **kw: 32)
+    monkeypatch.setattr(mtp_lane, "copy_rows_for_model", lambda lm: 16)
+    monkeypatch.setattr(mtp_lane, "verify_max_rows", lambda *args: 32)
     monkeypatch.setattr(tree_verify, "supported", lambda lm: True)
     monkeypatch.setattr(tree_verify, "lane_ready", lambda lm, cache: True)
     monkeypatch.setattr(tree_verify, "lane_projections", lambda lm: True)
@@ -199,7 +199,7 @@ def test_unsupported_requests_keep_original_loop(monkeypatch, case):
     elif case == "guide":
         monkeypatch.setitem(mtp_lane._STATE, "guide", object())
     elif case == "narrow":
-        monkeypatch.setattr(mtp_lane, "copy_rows_for_model", lambda lm, **__: 0)
+        monkeypatch.setattr(mtp_lane, "copy_rows_for_model", lambda lm: 0)
     elif case == "unsupported":
         monkeypatch.setattr(tree_verify, "supported", lambda lm: False)
     elif case == "narrow_backend":
@@ -270,9 +270,7 @@ def test_configuration_honors_copy_setting_and_certified_backend(
     from yunshu_engine import mtp_lane
 
     monkeypatch.setitem(mtp_lane._STATE, "copy_rows", 16)
-    monkeypatch.setattr(
-        mtp_lane, "verify_max_rows", lambda wide, lm, **__: 32 if wide else 8
-    )
+    monkeypatch.setattr(mtp_lane, "verify_max_rows", lambda wide, lm: 32 if wide else 8)
     calls = []
     monkeypatch.setattr(dflash_copy, "install", lambda: calls.append(True) or True)
     assert dflash_copy.configure(
@@ -286,7 +284,7 @@ def test_uncertified_wide_geometry_keeps_original_rounds(monkeypatch):
     from yunshu_engine import mtp_lane
 
     utils, raw, received, _ = install_fixture(monkeypatch)
-    monkeypatch.setattr(mtp_lane, "verify_max_rows", lambda *args, **kw: 8)
+    monkeypatch.setattr(mtp_lane, "verify_max_rows", lambda *args: 8)
     list(utils._dflash_rounds(None, raw, [], None, first_bonus=1, greedy_sampling=True))
     assert received == [raw]
 
@@ -295,7 +293,7 @@ def test_configuration_does_not_install_on_eight_row_geometry(monkeypatch):
     from yunshu_engine import mtp_lane
 
     monkeypatch.setitem(mtp_lane._STATE, "copy_rows", 16)
-    monkeypatch.setattr(mtp_lane, "verify_max_rows", lambda *args, **kw: 8)
+    monkeypatch.setattr(mtp_lane, "verify_max_rows", lambda *args: 8)
     monkeypatch.setattr(
         dflash_copy, "install", lambda: pytest.fail("narrow geometry installed")
     )

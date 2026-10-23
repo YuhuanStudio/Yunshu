@@ -1,5 +1,5 @@
 """Fast-tree GDN kernels past one simdgroup's 32 lanes: a 48-row chain equals 32 + 16 rows
-(the kernels alone; the fast tree takes 48-row windows, the chain verify 32).
+(the kernels alone; the verify window itself stays at 32 rows).
 
 Rows 32.. read their gates directly instead of through the lane shuffle; any slip there
 changes their outputs or the replayed state."""
@@ -70,8 +70,6 @@ def test_wide_chain_equals_32_then_the_rest(wide):
     assert mx.array_equal(_replay(g_wide, layer, state, wide), want).item()
 
 
-def test_fast_tree_windows_take_48_rows_and_the_chain_verify_stays_at_32():
-    # the fast tree's chains of 33-64 rows are bit-equal to decode (probe_wide_verify
-    # fast_chain); the generic / MTP chain verify is not, so MAX_ROWS stays 32
-    assert tv.FAST_MAX_ROWS == tv.FUSED_ROWS == 48
-    assert tv.MAX_ROWS == 32
+def test_verify_windows_stay_at_32_rows():
+    # wider windows are not bit-equal to decode yet (see tree_verify.FAST_MAX_ROWS)
+    assert tv.MAX_ROWS == tv.FAST_MAX_ROWS == 32

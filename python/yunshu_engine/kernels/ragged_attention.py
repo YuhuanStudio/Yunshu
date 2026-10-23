@@ -636,7 +636,7 @@ def _work_list(
 
 
 TILE_TOKENS = 8  # query tokens one tile launch serves (the kernel's fused rows)
-MAX_WINDOW = 48  # widest speculative window (tokens) the tile kernel path takes
+MAX_WINDOW = 32  # widest speculative window (tokens) the tile kernel path takes
 
 
 def ragged_decode_attention(
