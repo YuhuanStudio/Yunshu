@@ -69,6 +69,7 @@ def install_split_forward(language_model) -> None:
 
         supported._yunshu_split_prefill = True  # type: ignore[attr-defined]
         language_model._supports_batch_invariant_decode = supported
+    install_fused_conv(Qwen3_5GatedDeltaNet)
     original = Qwen3_5GatedDeltaNet._causal_conv1d_decode
     if not getattr(original, "_yunshu_split_prefill", False):
 
@@ -79,6 +80,149 @@ def install_split_forward(language_model) -> None:
 
         conv._yunshu_split_prefill = True  # type: ignore[attr-defined]
         Qwen3_5GatedDeltaNet._causal_conv1d_decode = conv
+
+
+_CONV_SRC = """
+    uint c = thread_position_in_grid.x;
+    uint t = thread_position_in_grid.y;
+    uint rows = rows_[0];
+    if (c >= CH || t >= rows) return;
+    float acc = 0.0f;
+    for (int j = 0; j < 4; ++j) {
+        int src = int(t) + j - 3;
+        float v = src < 0 ? float(state[(src + 3) * CH + c]) : float(x[src * CH + c]);
+        acc = acc + v * float(w[c * 4 + j]);
+    }
+    bfloat16_t y = bfloat16_t(acc);
+    bfloat16_t ab = bfloat16_t(metal::abs(float(y)));
+    bfloat16_t ex = bfloat16_t(metal::precise::exp(float(ab)));
+    bfloat16_t den = bfloat16_t(1.0f + float(ex));
+    bfloat16_t e = bfloat16_t(1.0f / float(den));
+    bfloat16_t sg = float(y) < 0 ? e : bfloat16_t(1.0f - float(e));
+    out[t * CH + c] = bfloat16_t(float(y) * float(sg));
+"""
+_CONV_KERNELS: dict = {}
+_COUNTS = {"fused_conv": 0}
+
+
+def fused_conv_calls() -> int:
+    """Engagement counter: fused conv+silu launches since process start."""
+    return _COUNTS["fused_conv"]
+
+
+def fused_conv_silu(state, x, weight):
+    """``silu(conv1d(concat([state, x], 1)))`` for B=1, kernel 4, bf16, bit-identical to MLX.
+
+    Reads the three carried rows and the S input rows directly and applies MLX's
+    bf16 sigmoid step by step (each intermediate rounded to bf16).
+    """
+    channels = x.shape[-1]
+    rows = x.shape[1]
+    kernel = _CONV_KERNELS.get(channels)
+    if kernel is None:
+        kernel = mx.fast.metal_kernel(
+            name=f"yunshu_gdn_conv_silu_c{channels}",
+            input_names=["state", "x", "w", "rows_"],
+            output_names=["out"],
+            source=_CONV_SRC.replace("CH", str(channels)),
+        )
+        _CONV_KERNELS[channels] = kernel
+    if not _COUNTS["fused_conv"]:
+        logger.info("GDN prefill fused conv+silu engaged: channels=%d", channels)
+    _COUNTS["fused_conv"] += 1
+    return kernel(
+        inputs=[
+            state,
+            x,
+            weight.reshape(channels, 4),
+            mx.array([rows], dtype=mx.int32),
+        ],
+        grid=(channels, rows, 1),
+        threadgroup=(256, 1, 1),
+        output_shapes=[(1, rows, channels)],
+        output_dtypes=[mx.bfloat16],
+    )[0]
+
+
+def install_fused_conv(cls) -> None:
+    """Prefill-only fused conv+silu (no concatenate); every other call is upstream's."""
+    if getattr(cls, "_yunshu_fused_conv", False):
+        return
+    original = cls.__call__
+
+    def call(self, inputs, mask=None, cache=None, **kwargs):
+        B, S, _ = inputs.shape
+        if not (
+            split_enabled()
+            and in_prefill()
+            and not kwargs
+            and B == 1
+            and S >= 3
+            and inputs.dtype == mx.bfloat16
+            and self.conv_kernel_size == 4
+            and self.conv1d.weight.dtype == mx.bfloat16
+            and getattr(self.conv1d, "bias", None) is None
+            and not self.training
+            and mx.default_device() == mx.gpu
+            and (
+                cache is None or (not cache.history_capacity and cache.lengths is None)
+            )
+        ):
+            return original(self, inputs, mask=mask, cache=cache, **kwargs)
+        from mlx_vlm.models.qwen3_5.language import (
+            _qwen3_5_advance_lengths_info,
+            gated_delta_update,
+        )
+
+        mixed_qkv = self.in_proj_qkv(inputs)
+        z = self.in_proj_z(inputs)
+        b, a = self._project_gates(inputs)
+        z = z.reshape(B, S, -1, self.head_v_dim)
+        state = None
+        if cache is not None and cache[0] is not None:
+            state = cache[0]
+            if state.shape[0] != B:
+                state = None
+        if state is None:
+            state = mx.zeros((B, 3, self.conv_dim), dtype=inputs.dtype)
+        if mask is not None:
+            if mask.shape[0] != B:
+                mask = None
+            else:
+                mixed_qkv = mx.where(mask[..., None], mixed_qkv, 0)
+        if cache is not None:
+            cache.update_window(0, mixed_qkv[:, S - 3 :], 3)
+        conv_out = fused_conv_silu(state, mixed_qkv, self.conv1d.weight)
+        q, k, v = [
+            t.reshape(B, S, h, d)
+            for t, h, d in zip(
+                mx.split(conv_out, [self.key_dim, 2 * self.key_dim], -1),
+                [self.num_k_heads, self.num_k_heads, self.num_v_heads],
+                [self.head_k_dim, self.head_k_dim, self.head_v_dim],
+                strict=True,
+            )
+        ]
+        q, k = self._normalize_qk(q, k)
+        out, _ = gated_delta_update(
+            q,
+            k,
+            v,
+            a,
+            b,
+            self.A_log,
+            self.dt_bias,
+            mask=mask,
+            use_kernel=not self.training,
+            cache=cache,
+        )
+        if cache is not None and hasattr(cache, "advance"):
+            cache.advance(S)
+            _qwen3_5_advance_lengths_info(cache, S)
+        out = self.norm(out, z)
+        return self.out_proj(out.reshape(B, S, -1))
+
+    cls.__call__ = call
+    cls._yunshu_fused_conv = True
 
 
 def chunked_padded(q, k, v, g, beta, state, mask=None):
