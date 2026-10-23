@@ -12,7 +12,7 @@ import importlib
 
 from .kernels import gdn_prefill
 
-TAIL_FAST_ROWS = 48  # widest decode/verify window (ragged_attention.MAX_WINDOW)
+TAIL_FAST_ROWS = 48  # tail rows on the lane projections (LaneLinear row pieces; attention stays BQ32)
 
 
 def install():
