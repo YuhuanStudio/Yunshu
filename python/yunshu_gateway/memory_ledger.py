@@ -13,6 +13,7 @@ import ctypes
 import logging
 import os
 import struct
+import sys
 import threading
 import time
 import weakref
@@ -440,6 +441,20 @@ def collect(manager: Any, engine: Any, display_id: str | None = None) -> dict[st
         }
     )
     attributed += draft_window
+
+    buffers = sys.modules.get("yunshu_engine.kernels.buffer_cache")
+    restore_spare = buffers.restore_buffer_bytes() if buffers is not None else 0
+    owners.append(
+        {
+            "kind": "apc_restore_buffers",
+            "id": None,
+            "bytes": restore_spare,
+            "reclaimable": True,
+            "estimated": False,
+            "source": "finished KV storage within allocator pool budget",
+        }
+    )
+    attributed += restore_spare
 
     # Native process heap, not device memory: llguidance token tables built on the
     # first constrained request and cached for the process life. Deliberately not
