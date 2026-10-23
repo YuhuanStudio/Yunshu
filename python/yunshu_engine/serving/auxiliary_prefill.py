@@ -45,6 +45,11 @@ class AuxiliaryPrefillPolicy(SimpleNamespace):
     def note_head(self, token_ids):
         pass
 
+    def divergence_point(self, token_ids):
+        # The shared-prefix checkpoint is learned from, and stored for, primary requests only; an
+        # auxiliary request must not read or write that memo (it crashed the runner step otherwise).
+        return 0
+
     def begin_request(self):
         pass
 
