@@ -49,6 +49,12 @@ const settingdesc = {
   YUNSHU_CORS_ORIGINS:
     "以逗号分隔的允许 CORS 来源（`*` 表示任意）；同时用于检查 Realtime WebSocket 的 Origin 头。",
   YUNSHU_RESPONSE_CACHE: "在内存中缓存相同的非流式响应。",
+  YUNSHU_REPLAY_TOKEN_IDS:
+    "在请求的 chat logprobs 中附上精确的 token_id，供本机无损重放验证；默认关闭，token ID 永不写入服务日志。",
+  YUNSHU_RESEARCH_ACTIVITY_FILE:
+    "可选的本机 gpuq 暂停握手文件（在 gpuq serving.json 的 activity_files 设置同一个文件）；不写入任何请求内容。请求在推理前等待新的安全确认，超时返回 503。",
+  YUNSHU_RESEARCH_PAUSE_TIMEOUT_S:
+    "请求进入推理前，等待 gpuq 暂停确认的最长秒数。",
   YUNSHU_BATCH_MAX_ITEMS: "Batch API：每个批次的请求数上限。",
   YUNSHU_BATCH_TIMEOUT: "Batch API：批次中每个请求的超时秒数（0：不限）。",
   YUNSHU_ALLOW_LOCAL_FILES:

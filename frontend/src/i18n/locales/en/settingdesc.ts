@@ -54,6 +54,12 @@ const settingdesc = {
   YUNSHU_CORS_ORIGINS:
     "Comma-separated allowed CORS origins (`*` for any); also checked against the Realtime WebSocket Origin header.",
   YUNSHU_RESPONSE_CACHE: "Cache identical non-streaming responses in memory.",
+  YUNSHU_REPLAY_TOKEN_IDS:
+    "Include the exact token_id in requested chat logprobs for local lossless replay verification. Off by default; token IDs are never written to the serve log.",
+  YUNSHU_RESEARCH_ACTIVITY_FILE:
+    "Opt-in local gpuq pause handshake file (set the same file in gpuq serving.json activity_files). No request content is written. Requests wait for a fresh safe acknowledgement before inference; a timeout returns 503.",
+  YUNSHU_RESEARCH_PAUSE_TIMEOUT_S:
+    "Maximum wait, in seconds, for the gpuq pause acknowledgement before a request is admitted.",
   YUNSHU_BATCH_MAX_ITEMS: "Batch API: maximum requests per batch.",
   YUNSHU_BATCH_TIMEOUT: "Batch API: timeout in seconds for each request a batch runs (0: no timeout).",
   YUNSHU_ALLOW_LOCAL_FILES:
