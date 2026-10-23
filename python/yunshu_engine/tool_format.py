@@ -840,7 +840,9 @@ def record_tool_outcome(parsed: int, markup_failed: int) -> None:
         info = current_request_info.get()
         if info is None:
             return
-        info.tool_calls_parsed = (getattr(info, "tool_calls_parsed", None) or 0) + parsed
+        info.tool_calls_parsed = (
+            getattr(info, "tool_calls_parsed", None) or 0
+        ) + parsed
         info.tool_markup_failed = (
             getattr(info, "tool_markup_failed", None) or 0
         ) + markup_failed

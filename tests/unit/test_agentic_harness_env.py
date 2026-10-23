@@ -45,7 +45,14 @@ def test_zsh_heredoc_works_in_sandbox(tmp_path):
 def test_codex_launch_writes_product_catalog(tmp_path):
     env = agents.base_env(tmp_path / "home")
     agents._codex(
-        env, tmp_path / "home", tmp_path, "http://127.0.0.1:1", "m27", "hi", 131072, 4096
+        env,
+        tmp_path / "home",
+        tmp_path,
+        "http://127.0.0.1:1",
+        "m27",
+        "hi",
+        131072,
+        4096,
     )
     chome = tmp_path / "home" / ".codex"
     t = tomllib.loads((chome / "config.toml").read_text())
