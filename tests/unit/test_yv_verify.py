@@ -1976,4 +1976,6 @@ def test_spec_depth_check_accepts_the_engaged_mode_for_default_suites():
     rows = [{"xy": {"speculative": spec}}]
     assert stages._spec_depth_valid(rows, "default")[0]
     assert not stages._spec_depth_valid(rows, "mtp")[0]
-    assert not stages._spec_depth_valid([{"xy": {"speculative": dict(spec, rounds=0)}}], "default")[0]
+    assert not stages._spec_depth_valid(
+        [{"xy": {"speculative": dict(spec, rounds=0)}}], "default"
+    )[0]
