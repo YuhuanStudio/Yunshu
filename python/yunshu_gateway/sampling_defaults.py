@@ -29,7 +29,9 @@ def model_path_for(model: str | None) -> str | None:
             entry = manager.get_entry(model)
             if entry is not None and getattr(entry, "model_path", None):
                 return _as_dir(entry.model_path)
-        eng = getattr(engine_mod, "_engine", None)  # not get_engine(): no lease side effects
+        eng = getattr(
+            engine_mod, "_engine", None
+        )  # not get_engine(): no lease side effects
         if eng is not None:
             for attr in ("_model_path", "model_path", "model_name"):
                 v = getattr(eng, attr, None)
@@ -78,7 +80,7 @@ def _publish(report: dict[str, dict[str, Any]], filled: bool) -> None:
     try:
         from yunshu_engine.request_tracker import current_request_info
 
-        info = current_request_info.get()
+        info: Any = current_request_info.get()
         if info is not None and (filled or getattr(info, "sampling", None) is None):
             info.sampling = {
                 "temperature": report["temperature"]["value"],

@@ -227,9 +227,9 @@ class AnthropicMessagesRequest(BaseModel):
     # than `...` (required) to preserve compatibility with internal tests
     # and lazy clients.
     max_tokens: int = Field(default=1024, ge=1, le=1048576)
-    temperature: float | None = Field(default=None, ge=0.0, le=2.0)
-    top_p: float | None = Field(default=None, ge=0.0, le=1.0)
-    top_k: int | None = Field(default=None, ge=0)
+    temperature: float = Field(default=None, ge=0.0, le=2.0)  # type: ignore[assignment]  # None until resolve_sampling
+    top_p: float = Field(default=None, ge=0.0, le=1.0)  # type: ignore[assignment]  # None until resolve_sampling
+    top_k: int = Field(default=None, ge=0)  # type: ignore[assignment]  # None until resolve_sampling
     stream: bool = False
     stop_sequences: list[str] | None = None
     system: str | list[dict] | None = None
@@ -249,10 +249,10 @@ class AnthropicMessagesRequest(BaseModel):
 
     # ── Yunshu-extended fields (forwarded to engine) ──
     lora_adapter: str | None = None
-    min_p: float | None = Field(default=None, ge=0.0, le=1.0)
-    repetition_penalty: float | None = Field(default=None, ge=0.0, le=2.0)
-    frequency_penalty: float | None = Field(default=None, ge=-2.0, le=2.0)
-    presence_penalty: float | None = Field(default=None, ge=-2.0, le=2.0)
+    min_p: float = Field(default=None, ge=0.0, le=1.0)  # type: ignore[assignment]  # None until resolve_sampling
+    repetition_penalty: float = Field(default=None, ge=0.0, le=2.0)  # type: ignore[assignment]  # None until resolve_sampling
+    frequency_penalty: float = Field(default=None, ge=-2.0, le=2.0)  # type: ignore[assignment]  # None until resolve_sampling
+    presence_penalty: float = Field(default=None, ge=-2.0, le=2.0)  # type: ignore[assignment]  # None until resolve_sampling
     logit_bias: dict[str, float] | None = None
     seed: int | None = None
     reasoning_effort: str | None = None

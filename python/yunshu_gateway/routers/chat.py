@@ -404,13 +404,13 @@ class ChatCompletionRequest(BaseModel):
     prompt_cache_key: str | None = None
     prompt_cache_retention: str | None = None
     prompt_cache_options: dict | None = None
-    temperature: float | None = Field(default=None, ge=0.0, le=2.0)
-    top_p: float | None = Field(default=None, ge=0.0, le=1.0)
-    top_k: int | None = Field(default=None, ge=0)
-    min_p: float | None = Field(default=None, ge=0.0, le=1.0)
-    repetition_penalty: float | None = Field(default=None, ge=0.0, le=2.0)
-    frequency_penalty: float | None = Field(default=None, ge=-2.0, le=2.0)
-    presence_penalty: float | None = Field(default=None, ge=-2.0, le=2.0)
+    temperature: float = Field(default=None, ge=0.0, le=2.0)  # type: ignore[assignment]  # None until resolve_sampling
+    top_p: float = Field(default=None, ge=0.0, le=1.0)  # type: ignore[assignment]  # None until resolve_sampling
+    top_k: int = Field(default=None, ge=0)  # type: ignore[assignment]  # None until resolve_sampling
+    min_p: float = Field(default=None, ge=0.0, le=1.0)  # type: ignore[assignment]  # None until resolve_sampling
+    repetition_penalty: float = Field(default=None, ge=0.0, le=2.0)  # type: ignore[assignment]  # None until resolve_sampling
+    frequency_penalty: float = Field(default=None, ge=-2.0, le=2.0)  # type: ignore[assignment]  # None until resolve_sampling
+    presence_penalty: float = Field(default=None, ge=-2.0, le=2.0)  # type: ignore[assignment]  # None until resolve_sampling
     logit_bias: dict[int, float] | None = None
     max_tokens: int = Field(
         default_factory=lambda: int(settings.get("YUNSHU_DEFAULT_MAX_TOKENS")),

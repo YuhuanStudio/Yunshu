@@ -324,34 +324,28 @@ async def _tool_generate(args: dict, req_id: int | str | None) -> dict:
     model = args.get("model", "")
     messages = args.get("messages", [])
     max_tokens = args.get("max_tokens", 512)
-    temperature = args.get("temperature")
-    top_p = args.get("top_p")
-    top_k = args.get("top_k")
-    min_p = args.get("min_p")
-    repetition_penalty = args.get("repetition_penalty")
-    frequency_penalty = args.get("frequency_penalty")
-    presence_penalty = args.get("presence_penalty")
     from ..sampling_defaults import fill_sampling, model_path_for
 
-    _smp = {
-        "temperature": temperature,
-        "top_p": top_p,
-        "top_k": top_k,
-        "min_p": min_p,
-        "repetition_penalty": repetition_penalty,
-        "frequency_penalty": frequency_penalty,
-        "presence_penalty": presence_penalty,
+    _smp: dict[str, Any] = {
+        f: args.get(f)
+        for f in (
+            "temperature",
+            "top_p",
+            "top_k",
+            "min_p",
+            "repetition_penalty",
+            "frequency_penalty",
+            "presence_penalty",
+        )
     }
     fill_sampling(_smp, model_path_for(model))
-    temperature, top_p, top_k, min_p = (
-        _smp["temperature"],
-        _smp["top_p"],
-        _smp["top_k"],
-        _smp["min_p"],
-    )
-    repetition_penalty = _smp["repetition_penalty"]
-    frequency_penalty = _smp["frequency_penalty"]
-    presence_penalty = _smp["presence_penalty"]
+    temperature: float = _smp["temperature"]
+    top_p: float = _smp["top_p"]
+    top_k: int = _smp["top_k"]
+    min_p: float = _smp["min_p"]
+    repetition_penalty: float = _smp["repetition_penalty"]
+    frequency_penalty: float = _smp["frequency_penalty"]
+    presence_penalty: float = _smp["presence_penalty"]
     enable_thinking = args.get("enable_thinking")
     seed = args.get("seed")
     stop = args.get("stop")
