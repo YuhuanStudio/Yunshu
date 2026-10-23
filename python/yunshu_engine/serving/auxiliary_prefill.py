@@ -45,6 +45,11 @@ class AuxiliaryPrefillPolicy(SimpleNamespace):
     def note_head(self, token_ids):
         pass
 
+    def divergence_point(self, token_ids):
+        # Auxiliary prefills store no checkpoints, and 64-aligned cuts are split-invariant, so the shared-head
+        # checkpoint of the primary manager is not needed here; nor may an auxiliary prompt enter its recent list.
+        return 0
+
     def begin_request(self):
         pass
 
