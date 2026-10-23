@@ -16,6 +16,7 @@ from __future__ import annotations
 import contextlib
 import logging
 from contextvars import ContextVar
+from functools import cache
 
 import mlx.core as mx
 
@@ -47,18 +48,28 @@ def in_prefill() -> bool:
 
 
 _TAIL: ContextVar[bool] = ContextVar("split_invariant_prompt_tail", default=False)
+_TAIL_LOGITS: ContextVar[int] = ContextVar("prompt_tail_logits", default=0)
 
 
 @contextlib.contextmanager
-def tail_scope():
-    """The short prompt tail after the last aligned boundary: projections and the recurrence take
-    the decode/verify kernels, attention keeps the prefill kernel (the stock fallback for a few
-    query rows over a long cache was ~8 ms per layer at 32K)."""
+def tail_scope(logits_to_keep: int = 0):
+    """Short prompt tail: lane projections, with prefill attention and recurrence.
+
+    logits_to_keep describes the rows the prompt sampler consumes; it does not
+    trim hidden states needed by the cache or speculative drafter.
+    """
     token = _TAIL.set(True)
+    logits_token = _TAIL_LOGITS.set(logits_to_keep)
     try:
         yield
     finally:
+        _TAIL_LOGITS.reset(logits_token)
         _TAIL.reset(token)
+
+
+def tail_logits_to_keep() -> int:
+    """Head rows consumed by the prompt sampler; zero leaves arbitrary forwards intact."""
+    return _TAIL_LOGITS.get()
 
 
 def in_tail() -> bool:
@@ -252,6 +263,54 @@ def install_fused_conv(cls) -> None:
     cls._yunshu_fused_conv = True
 
 
+@cache
+def _padding_kernel():
+    # Five independent copies share one launch. All valid elements are copied
+    # without arithmetic, including signed zeros; the suffix is the same
+    # recurrence identity as concatenate(full(...)). Strided v needs no copy.
+    names = ("q", "k", "v", "g", "beta")
+    source = "uint i = thread_position_in_grid.x;\n"
+    for name in names:
+        size = (
+            f"{name}_shape[1] * {name}_shape[2] * {name}_shape[3]"
+            if name in ("q", "k", "v")
+            else f"{name}_shape[1] * {name}_shape[2]"
+        )
+        width = (
+            f"{name}_shape[2] * {name}_shape[3]"
+            if name in ("q", "k", "v")
+            else f"{name}_shape[2]"
+        )
+        fill = 1 if name == "g" else 0
+        source += f"""
+        if (i < 64 * ({width})) {{
+            if (i < {size})
+                out_{name}[i] = {name}[elem_to_loc<int64_t>(int64_t(i), {name}_shape, {name}_strides, {name}_ndim)];
+            else out_{name}[i] = {fill};
+        }}
+        """
+    return mx.fast.metal_kernel(
+        name="yunshu_gdn_identity_pad64_v1",
+        input_names=list(names),
+        output_names=["out_" + name for name in names],
+        source=source,
+        ensure_row_contiguous=False,
+    )
+
+
+def pad_short_inputs(q, k, v, g, beta):
+    """One B=1 short recurrence's five inputs, padded without changing any bits."""
+    arrays = (q, k, v, g, beta)
+    shapes = [(1, 64, *x.shape[2:]) for x in arrays]
+    return _padding_kernel()(
+        inputs=list(arrays),
+        grid=(max(64 * (x.size // x.shape[1]) for x in arrays), 1, 1),
+        threadgroup=(256, 1, 1),
+        output_shapes=shapes,
+        output_dtypes=[x.dtype for x in arrays],
+    )
+
+
 def chunked_padded(q, k, v, g, beta, state, mask=None):
     """Chunked recurrence with an identity suffix to complete the final 64 rows.
 
@@ -261,7 +320,15 @@ def chunked_padded(q, k, v, g, beta, state, mask=None):
     """
     rows = q.shape[1]
     pad = (-rows) % 64
-    if pad:
+    if (
+        pad
+        and rows < 64
+        and q.shape[0] == 1
+        and mask is None
+        and mx.default_device() == mx.gpu
+    ):
+        q, k, v, g, beta = pad_short_inputs(q, k, v, g, beta)
+    elif pad:
 
         def padded(x, value=0):
             shape = list(x.shape)

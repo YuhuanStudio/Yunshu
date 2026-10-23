@@ -122,3 +122,22 @@ def test_singleton_prompt_keeps_prefill_forward_and_convolution(monkeypatch):
         assert not lm._supports_batch_invariant_decode()
         assert Qwen3_5GatedDeltaNet._causal_conv1d_decode(layer, None) == "prefill-conv"
     assert lm._supports_batch_invariant_decode()
+
+
+@pytest.mark.parametrize("rows", [1, 16, 31, 48, 63])
+def test_fused_short_padding_copies_bits_including_strided_views(rows):
+    # The real tail's v is a view of conv_out, unlike the normalized q/k.
+    x = (mx.arange(rows * 32).reshape(1, rows, 4, 8) - 37).astype(mx.bfloat16)
+    q, k, v = x[:, :, :2, :4], x[:, :, 2:, 1:5], x[..., ::2]
+    g = mx.broadcast_to(mx.array([-0.0, 0.5, 0.75, 1.0]), (1, rows, 4))
+    beta = g[:, :, ::-1]
+    arrays = (q, k, v, g, beta)
+    got = gdn_prefill.pad_short_inputs(*arrays)
+    for index, (value, padded) in enumerate(zip(arrays, got, strict=True)):
+        fill = 1 if index == 3 else 0
+        ref = mx.concatenate(
+            [value, mx.full((1, 64 - rows, *value.shape[2:]), fill, dtype=value.dtype)],
+            axis=1,
+        )
+        bits = mx.uint16 if value.dtype == mx.bfloat16 else mx.uint32
+        assert mx.array_equal(padded.view(bits), ref.view(bits)).item()

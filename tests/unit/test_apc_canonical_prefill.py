@@ -321,3 +321,33 @@ def test_short_prompt_tail_runs_outside_the_long_prefill_scope(
     batch._inputs_embeds = SimpleNamespace(shape=(1, tail, 1))
     batch.generate()
     assert seen == [(scoped, not scoped)]
+
+
+@pytest.mark.parametrize("padding,keep", [(None, 1), ([0], 1), ([3], 4)])
+def test_short_tail_preserves_sampler_right_padding_logits(monkeypatch, padding, keep):
+    from types import SimpleNamespace
+
+    from yunshu_engine import cache_prefill
+    from yunshu_engine.kernels import gdn_prefill
+
+    seen = []
+
+    class Base:
+        def generate(self):
+            seen.append(gdn_prefill.tail_logits_to_keep())
+
+    ar = SimpleNamespace(PromptProcessingBatch=Base)
+    monkeypatch.setattr(
+        cache_prefill.importlib,
+        "import_module",
+        lambda name: ar if name.endswith(".ar") else SimpleNamespace(),
+    )
+    monkeypatch.setitem(gdn_prefill._STATE, "enabled", True)
+    monkeypatch.setitem(gdn_prefill._STATE, "split", True)
+    cache_prefill.install()
+    batch = ar.PromptProcessingBatch()
+    batch._inputs_embeds = SimpleNamespace(shape=(1, 16, 64))
+    batch._right_pad_per_row = padding
+    batch.generate()
+    assert seen == [keep]
+    assert gdn_prefill.tail_logits_to_keep() == 0
