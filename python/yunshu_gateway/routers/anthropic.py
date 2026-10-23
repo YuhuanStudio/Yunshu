@@ -1141,6 +1141,21 @@ def _keeps_mid_system(requested_model: str | None) -> bool:
     )
 
 
+def _drop_token_counters(req) -> None:
+    """Remove Claude Code's per-turn ``<total_tokens>`` system messages before cache marking.
+
+    ``mark_anthropic`` appends a marker to every text block, so a marked counter no longer matches the
+    counter filter and used to be hoisted into the system prompt, growing it on every turn.
+    """
+    from yunshu_engine.message_adapter import is_token_counter_message
+
+    def counter(m) -> bool:
+        return is_token_counter_message({"role": m.role, "content": m.content})
+
+    if any(counter(m) for m in req.messages):
+        req.messages = [m for m in req.messages if not counter(m)]
+
+
 @router.post("/messages", response_model=None)
 async def create_message(req: AnthropicMessagesRequest, request: Request):
     """Run the Messages endpoint; unlink staged images unless a stream owns them."""
@@ -1365,6 +1380,7 @@ async def _create_message(
     req._anthropic_orig_system = req.system
     from yunshu_engine.prompt_caching import mark_anthropic
 
+    _drop_token_counters(req)
     try:
         req._prompt_cache_plan = mark_anthropic(req)  # type: ignore[attr-defined]
     except ValueError as exc:

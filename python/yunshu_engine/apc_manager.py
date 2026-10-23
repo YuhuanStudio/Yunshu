@@ -878,7 +878,7 @@ class _Coordinator(APCCoordinator):
             signature = tuple(p for p in points if p < n and p % 2048)
             source = self.manager._span_plans.get(key)
             if (
-                (n in candidates)
+                (n in candidates or key in self.manager.__dict__.get("_tail_keys", ()))
                 and (self.manager.prefill_alignment or source == signature)
                 and kwargs["suffix_is_text_only"](n)
             ):
@@ -904,6 +904,13 @@ class _Coordinator(APCCoordinator):
         self.manager._span_plans[key] = signature
         while len(self.manager._span_plans) > _BORN_MAX:
             self.manager._span_plans.pop(next(iter(self.manager._span_plans)))
+        if policy.get("tail") == len(tokens):
+            # The server's own prompt-end checkpoint: the next turn of this conversation may resume
+            # from it although it is not one of that turn's declared breakpoints.
+            tails = self.manager.__dict__.setdefault("_tail_keys", {})
+            tails[key] = True
+            while len(tails) > 256:
+                tails.pop(next(iter(tails)))
         policy["written"] = max(policy.get("written", 0), len(tokens))
 
     # Enabled only around a runner generator step. Round-driver and external APC
@@ -1241,6 +1248,18 @@ class _Coordinator(APCCoordinator):
         if head and mgr.exact_cache_min_tokens <= head < final:
             lengths.add(head)
             mgr.note_head(token_ids[:head])
+        div = mgr.divergence_point(token_ids) if mgr.prefill_alignment else 0
+        if div:
+            from mlx_vlm.apc import adjust_prefix_to_text_suffix_boundary
+
+            if (
+                mgr.exact_cache_min_tokens <= div < final
+                and adjust_prefix_to_text_suffix_boundary(
+                    token_ids, div, media_token_ids, max_prefix_tokens=final
+                )
+                == div
+            ):
+                lengths.add(div)
         if begin:
             mgr.begin_request()
         self._request_generation = mgr._generation
@@ -1704,6 +1723,46 @@ class YunshuAPCManager(APCManager):
             ):  # bookkeeping only: forget the oldest generations
                 cut = self._generation - _BORN_KEEP_GENERATIONS
                 self._born = {k: g for k, g in self._born.items() if g >= cut}
+
+    def divergence_point(self, token_ids) -> int:
+        """Aligned length of the longest prefix this prompt shares with a recent, different prompt.
+
+        Two sessions of one client share a long head (instructions, tools) and then differ in a
+        per-session field (working directory, a hash in a header). Neither the system-turn end nor
+        the prompt end is a reusable checkpoint across them, so the first request that diverges
+        from a recent prompt checkpoints the shared prefix for every later session. A prompt that
+        extends a recent one (the next turn of one conversation) is not a divergence. The answer is
+        fixed per prompt, so every checkpoint_lengths call of one request agrees.
+        """
+        import numpy as np
+
+        key = (
+            len(token_ids),
+            hash(tuple(token_ids[:64])),
+            hash(tuple(token_ids[-64:])),
+        )
+        with self._plock:
+            memo = self.__dict__.setdefault(
+                "_divergence_memo", collections.OrderedDict()
+            )
+            if key in memo:
+                return int(memo[key])
+            recent = self.__dict__.setdefault(
+                "_recent_prompts", collections.deque(maxlen=8)
+            )
+            cur = np.asarray(token_ids, dtype=np.int64)
+            best = 0
+            for prev in recent:
+                m = min(len(prev), len(cur))
+                diff = np.flatnonzero(prev[:m] != cur[:m])
+                n = int(diff[0]) if diff.size else m
+                if n < len(prev) and n < len(cur):
+                    best = max(best, self.align_prefill_boundary(n))
+            recent.append(cur)
+            memo[key] = best
+            while len(memo) > 16:
+                memo.popitem(last=False)
+            return best
 
     def note_head(self, head_tokens, extra_hash: int = 0) -> None:
         with self._plock:
