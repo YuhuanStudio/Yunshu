@@ -1262,6 +1262,30 @@ def test_yv_imports_on_its_macos_system_interpreter():
     assert "long" in result.stdout
 
 
+def test_yv_identity_compare_runs_on_its_macos_system_interpreter():
+    # Import alone is not enough: 3.10+ syntax inside a function (zip(strict=...)) only fails when called.
+    import os
+
+    interpreter = Path("/usr/bin/python3")
+    if not interpreter.exists():
+        pytest.skip("macOS system interpreter unavailable")
+    code = (
+        "from verify import analyze as a; "
+        "r = {'lps': [-0.5, -0.25], 'lp_tokens': ['a', 'b']}; "
+        "print(a.logprob_delta(r, dict(r, lps=[-0.5, -0.125])))"
+    )
+    result = subprocess.run(
+        [str(interpreter), "-c", code],
+        cwd=REPO,
+        env=dict(os.environ, PYTHONPATH=str(REPO / "scripts")),
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "(0.125, '')"
+
+
 def test_executor_batches_at_most_six_cells_and_stops_before_later_batches(
     world, monkeypatch
 ):
