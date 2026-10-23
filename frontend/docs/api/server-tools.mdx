@@ -120,6 +120,10 @@ Citations on text blocks are built from the `[n]` markers the model writes next 
 
 If the loop reaches `YUNSHU_SERVER_TOOL_MAX_ITERATIONS` rounds and the model is still calling server tools, the message ends with `stop_reason: "pause_turn"`. Send the response content back as an assistant turn to continue.
 
+### Code execution
+
+`code_execution_20250825`, `_20260120` and `_20260521` run bash and a text editor on this machine inside Anthropic's sandbox-runtime. Off by default: set `YUNSHU_CODE_EXECUTION=1` and install `@anthropic-ai/sandbox-runtime` (Node 22.12 or newer). Off, a request that declares the tool gets a `400`; on without the runtime, a `503`; a command never runs unsandboxed. The response has `bash_code_execution_tool_result` / `text_editor_code_execution_tool_result` blocks and a `container` to pass back. Files written to `$OUTPUT_DIR` come back as Files API ids. The sandbox writes only inside its container, cannot read your home, and has no network unless `YUNSHU_CODE_EXECUTION_NETWORK_ALLOW` lists hosts.
+
 ### MCP connector
 
 Declare remote MCP servers in the top-level `mcp_servers` and, optionally, one `mcp_toolset` entry per server in `tools`:
@@ -188,7 +192,7 @@ The first response for a server includes an `mcp_list_tools` item; a later reque
 
 ## Limits and what is not supported
 
-- Code execution, the hosted memory tool, file search, image generation and OpenAI-hosted connectors are not available.
+- The hosted memory tool, file search, image generation and OpenAI-hosted connectors are not available. Anthropic code execution is opt-in (see above); OpenAI `code_interpreter` and `shell` are not served.
 - `web_fetch` does not read PDFs or images and cannot execute JavaScript.
 - Web search quality depends on the provider you configure; the keyless defaults are best effort.
 - The Responses API has no web fetch tool; use an `mcp` fetch server or the Anthropic route.

@@ -271,6 +271,12 @@ still wins at runtime (reported as `overridden`).
 | `YUNSHU_WEB_FETCH_MAX_BYTES` | int | 2000000 | live | Largest response body web_fetch downloads. |
 | `YUNSHU_WEB_FETCH_TIMEOUT` | float | 20.0 | live | Seconds web_fetch waits for a page. |
 | `YUNSHU_WEB_FETCH_MAX_TEXT_CHARS` | int | 40000 | live | Extracted page text handed to the model is cut to this many characters (a request's max_content_tokens can lower it). |
+| `YUNSHU_CODE_EXECUTION` | bool | off | live | Serve the server-side code execution tools (Anthropic code_execution_*) on this machine inside the Anthropic sandbox-runtime (srt, optional: `npm i @anthropic-ai/sandbox-runtime`, Node >= 22.12). Off: requests that declare them get a 400. On without srt: 503, never an unsandboxed run. The sandbox writes only inside a per-container directory, reads nothing of your home, and has no network unless YUNSHU_CODE_EXECUTION_NETWORK_ALLOW lists hosts. |
+| `YUNSHU_CODE_EXECUTION_ROOT` | path | ~/.yunshu/sandbox | live | Directory holding the code execution containers (one sub-directory each). Created with mode 0700. |
+| `YUNSHU_CODE_EXECUTION_TIMEOUT` | float | 60.0 | live | Wall-clock seconds one code execution call may run before its process group is killed (execution_time_exceeded). Also the CPU-time limit. |
+| `YUNSHU_CODE_EXECUTION_MEMORY_MB` | int | 2048 | live | Resident memory a code execution call may use (whole process group, sampled every 100 ms); above it the call is killed. |
+| `YUNSHU_CODE_EXECUTION_NETWORK_ALLOW` | str | unset | live | Comma-separated hosts the sandbox may reach (`example.com`, `*.example.com`, `host:443`). Unset: no network at all, loopback included. Private address ranges stay blocked even for allowed names. |
+| `YUNSHU_CODE_EXECUTION_TTL_MIN` | float | 20.0 | live | Minutes a code execution container may sit unused before it and its files are deleted. |
 | `YUNSHU_MCP_CONNECTOR` | bool | on | live | Serve the MCP connector: Anthropic mcp_servers and OpenAI Responses {type: mcp} tools are executed by this server, which connects to the named MCP servers over streamable HTTP / SSE. |
 | `YUNSHU_MCP_CONNECTOR_ALLOW_PRIVATE` | bool | on | live | Let the MCP connector reach private and loopback MCP servers (local tool servers are the common case). Off: only public addresses. |
 | `YUNSHU_MCP_CONNECTOR_TIMEOUT` | float | 30.0 | live | Seconds an MCP connector call (initialize, tools/list, tools/call) may take, DNS included. |

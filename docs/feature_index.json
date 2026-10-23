@@ -176,6 +176,14 @@
       "status": "stable"
     },
     {
+      "id": "code-execution",
+      "group": "agents",
+      "title": "Code execution",
+      "summary": "Anthropic code_execution (bash + text editor) run locally inside the sandbox-runtime; opt-in, no network by default",
+      "doc": "docs/guides/CODE_EXECUTION.md",
+      "status": "partial"
+    },
+    {
       "id": "tavily-api",
       "group": "agents",
       "title": "Tavily-compatible API",

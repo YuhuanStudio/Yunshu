@@ -291,6 +291,12 @@ _add("YUNSHU_WEB_FETCH_ALLOW_PRIVATE", "bool", False, "Let web_fetch reach priva
 _add("YUNSHU_WEB_FETCH_MAX_BYTES", "int", 2000000, "Largest response body web_fetch downloads.", "server-tools", minimum=1024)
 _add("YUNSHU_WEB_FETCH_TIMEOUT", "float", 20.0, "Seconds web_fetch waits for a page.", "server-tools", minimum=1.0)
 _add("YUNSHU_WEB_FETCH_MAX_TEXT_CHARS", "int", 40000, "Extracted page text handed to the model is cut to this many characters (a request's max_content_tokens can lower it).", "server-tools", minimum=1000)
+_add("YUNSHU_CODE_EXECUTION", "bool", False, "Serve the server-side code execution tools (Anthropic code_execution_*) on this machine inside the Anthropic sandbox-runtime (srt, optional: `npm i @anthropic-ai/sandbox-runtime`, Node >= 22.12). Off: requests that declare them get a 400. On without srt: 503, never an unsandboxed run. The sandbox writes only inside a per-container directory, reads nothing of your home, and has no network unless YUNSHU_CODE_EXECUTION_NETWORK_ALLOW lists hosts.", "server-tools")
+_add("YUNSHU_CODE_EXECUTION_ROOT", "path", "~/.yunshu/sandbox", "Directory holding the code execution containers (one sub-directory each). Created with mode 0700.", "server-tools")
+_add("YUNSHU_CODE_EXECUTION_TIMEOUT", "float", 60.0, "Wall-clock seconds one code execution call may run before its process group is killed (execution_time_exceeded). Also the CPU-time limit.", "server-tools", minimum=1.0)
+_add("YUNSHU_CODE_EXECUTION_MEMORY_MB", "int", 2048, "Resident memory a code execution call may use (whole process group, sampled every 100 ms); above it the call is killed.", "server-tools", minimum=64)
+_add("YUNSHU_CODE_EXECUTION_NETWORK_ALLOW", "str", None, "Comma-separated hosts the sandbox may reach (`example.com`, `*.example.com`, `host:443`). Unset: no network at all, loopback included. Private address ranges stay blocked even for allowed names.", "server-tools")
+_add("YUNSHU_CODE_EXECUTION_TTL_MIN", "float", 20.0, "Minutes a code execution container may sit unused before it and its files are deleted.", "server-tools", minimum=1.0)
 _add("YUNSHU_MCP_CONNECTOR", "bool", True, "Serve the MCP connector: Anthropic mcp_servers and OpenAI Responses {type: mcp} tools are executed by this server, which connects to the named MCP servers over streamable HTTP / SSE.", "server-tools")
 _add("YUNSHU_MCP_CONNECTOR_ALLOW_PRIVATE", "bool", True, "Let the MCP connector reach private and loopback MCP servers (local tool servers are the common case). Off: only public addresses.", "server-tools")
 _add("YUNSHU_MCP_CONNECTOR_TIMEOUT", "float", 30.0, "Seconds an MCP connector call (initialize, tools/list, tools/call) may take, DNS included.", "server-tools", minimum=1.0)
@@ -407,6 +413,12 @@ _LIVE = frozenset(
         "YUNSHU_WEB_FETCH_MAX_BYTES",
         "YUNSHU_WEB_FETCH_TIMEOUT",
         "YUNSHU_WEB_FETCH_MAX_TEXT_CHARS",
+        "YUNSHU_CODE_EXECUTION",
+        "YUNSHU_CODE_EXECUTION_ROOT",
+        "YUNSHU_CODE_EXECUTION_TIMEOUT",
+        "YUNSHU_CODE_EXECUTION_MEMORY_MB",
+        "YUNSHU_CODE_EXECUTION_NETWORK_ALLOW",
+        "YUNSHU_CODE_EXECUTION_TTL_MIN",
         "YUNSHU_MCP_CONNECTOR",
         "YUNSHU_MCP_CONNECTOR_ALLOW_PRIVATE",
         "YUNSHU_MCP_CONNECTOR_TIMEOUT",

@@ -120,6 +120,10 @@ HTML 會轉成 Markdown；text、JSON 與 XML 類型以文字回傳。其他內�
 
 迴圈達到 `YUNSHU_SERVER_TOOL_MAX_ITERATIONS` 輪、模型仍在呼叫伺服器端工具時，訊息會以 `stop_reason: "pause_turn"` 結束。把回應內容當作助理回合送回去，就能繼續。
 
+### 程式碼執行
+
+`code_execution_20250825`、`_20260120` 與 `_20260521` 在本機的 Anthropic sandbox-runtime 內執行 bash 與文字編輯器。預設關閉：設 `YUNSHU_CODE_EXECUTION=1` 並安裝 `@anthropic-ai/sandbox-runtime`（Node 22.12 以上）。關閉時宣告此工具的請求回 `400`；開啟但沒有 runtime 時回 `503`；指令絕不會在沙盒外執行。回應含 `bash_code_execution_tool_result` / `text_editor_code_execution_tool_result` 區塊與可回傳的 `container`；寫入 `$OUTPUT_DIR` 的檔案以 Files API id 回傳。沙盒只能寫入自己的容器、讀不到你的家目錄，除非用 `YUNSHU_CODE_EXECUTION_NETWORK_ALLOW` 列出主機，否則沒有網路。
+
 ### MCP 連接器
 
 在頂層 `mcp_servers` 宣告遠端 MCP 伺服器，並可在 `tools` 中為每個伺服器加一筆 `mcp_toolset`：
@@ -188,7 +192,7 @@ HTML 會轉成 Markdown；text、JSON 與 XML 類型以文字回傳。其他內�
 
 ## 限制與尚未支援的部分
 
-- 程式碼執行、託管的記憶工具、檔案搜尋、圖片生成與 OpenAI 託管連接器皆無法使用。
+- 託管的記憶工具、檔案搜尋、圖片生成與 OpenAI 託管連接器皆無法使用。Anthropic 程式碼執行需手動開啟（見上）；OpenAI `code_interpreter` 與 `shell` 尚未提供。
 - `web_fetch` 不讀取 PDF 或圖片，也無法執行 JavaScript。
 - 網路搜尋品質取決於你設定的提供者；免金鑰的預設值是盡力而為。
 - Responses API 沒有網頁擷取工具；請使用 `mcp` 的 fetch 伺服器，或改走 Anthropic 路由。

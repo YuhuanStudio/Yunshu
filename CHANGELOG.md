@@ -68,6 +68,7 @@ and cold 32K TTFT versus Splash 1.3.2.
 
 ### Added
 
+- Anthropic `code_execution_20250825` / `_20260120` / `_20260521` run locally inside Anthropic's sandbox-runtime (srt, optional, Node >= 22.12): bash and text-editor sub-tools, `container` reuse and expiry, `container_upload`, `$OUTPUT_DIR` files through the Files API, streaming. Off by default (`YUNSHU_CODE_EXECUTION`, plus `_ROOT`, `_TIMEOUT`, `_MEMORY_MB`, `_NETWORK_ALLOW`, `_TTL_MIN`); no network, no access to your home, wall/CPU/memory/output limits; `yunshu doctor` checks srt. [Guide](docs/guides/CODE_EXECUTION.md).
 - Anthropic API version 2026-10-21: requests that send `anthropic-version: 2026-10-21` (or later; the 2.x SDKs do)
   get the official 400 `invalid_request_error` for a `document` block in an `assistant` message and for a non-empty
   `citations` array on `text` blocks in `user` messages (also inside `search_result`), on `/v1/messages`,
