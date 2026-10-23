@@ -57,7 +57,8 @@ def judge(value):
 def researcher(gb):
     import mlx.core as mx
 
-    allocation = mx.ones((int(gb * (1 << 30) / 4),), dtype=mx.float32)
+    # 2-D: one dimension cannot hold 2**31 elements (8 GiB of float32)
+    allocation = mx.ones((int(gb * 256), 1 << 20), dtype=mx.float32)
     mx.eval(allocation)
     a = mx.ones((1024, 1024))
     print(
