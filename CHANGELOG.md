@@ -34,8 +34,7 @@ tested memory guidance for 128 GB and tight hosts. Outputs of speculation on and
 - Split-invariant prefill is the default on the qualified 27B / M5 Max / MLX 0.32.3 path. Cold outputs may
   differ from 0.1.5 within the accuracy gate (n=240: 132 vs 131 correct); APC uses a new arithmetic
   namespace, so 0.1.5 checkpoints on disk are not reused.
-- `YUNSHU_SPEC_COPY_ROWS` now defaults to 48 (was 16): the DFlash fast tree takes 48-row copy rounds, MTP and
-  chain verify stay at 32. `0` turns copy rounds off.
+- `YUNSHU_SPEC_COPY_ROWS` now defaults to 32 (was 16). `0` turns copy rounds off.
 - `YUNSHU_NEXT_TURN_DELAY_S` now defaults to 0.3 s (was 1.0); stride rehearsal stops at the last 64-aligned
   position at or before the assistant end.
 - The idle heartbeat holds the wired-memory limit for up to 30 s after a request, until the idle trim.
@@ -54,7 +53,6 @@ Each row is its own experiment; do not add them.
 | Machine | Model / mode | Metric / workload | Before → after | Recorded source |
 |---|---|---|---|---|
 | M5 Max | 27B + DFlash2 | decode, 256-token context, prose / code | 60 -> 77 / 57 -> 76.5 tok/s | 02f1f0ab (jobs 1021e, 1021f4) |
-| M5 Max | 27B + DFlash2 | decode, 32K code (copy 48 rows) | 90.6 -> 92.0 tok/s (+1.6%); 128K +0.1% | 8036c167 (yv ab 176c7086 vs a668334b) |
 | M5 Max | 27B + DFlash2 | decode, 1K code / 32K code (8-bit lane matmul) | 91.4/91.7 -> 92.2/92.2; 188.8/188.9 -> 189.9/190.0 tok/s | 176c7086 |
 | M5 Max | 27B + DFlash2 | turn-2 TTFT after 8 s idle, code 256/512 | 0.857/1.180 -> 0.380/0.417 s | 70d24961 |
 | M5 Max | 27B + DFlash2 | immediate follow-up, code 256/512/2048 | 0.595/1.003/2.787 -> 0.492/0.870/2.622 s | 70d24961 |
@@ -83,7 +81,7 @@ and cold 32K TTFT versus Splash 1.3.2.
 
 - Split-invariant prefill (NAX GEMM padded to 64 rows, BQ32 attention, chunked GDN) and 64-token-aligned APC
   checkpoints are the default on the qualified 27B path; rehearsal starts after 0.3 s.
-- The DFlash fast tree takes 48-row copy rounds, admits short contexts, reads 8-bit lane weights directly,
+- The DFlash fast tree admits short contexts, reads 8-bit lane weights directly,
   and short prefill tails (513-2048 rows) use native or exact M64 tiles.
 - APC SSD restore uses MLX's native safetensors reader; header and cache-class validation are unchanged.
 - Idle memory: evicted APC anchors, terminal-job vocabulary pin and malloc pressure relief at the idle trim.

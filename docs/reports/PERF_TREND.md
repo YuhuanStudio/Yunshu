@@ -1350,3 +1350,10 @@ Negative/withdrawn today: an assistant-end prefill grid for short-reply rehearsa
 Identity: spec on == off and base == cand on every cell the merge messages list (0 mismatches). Quality yv n=240: 132 vs 131. Deployment S4 (27B soak 60 min, 766/0 requests, peak 38.8 GiB, 0 pageouts); tight hosts APC RAM 4 + prefill buffer 1: peak 37.2 -> 31.5 GiB.
 
 Open gaps (1 rep, direction only, main 176c7086 vs latest local competitors, M5 Max, p0, sometimes contended; not a parity claim): decode 1K code 89.7 vs TensorFold 1.1.0 106.2 (84%), 32K code 187.8 vs 239.4 (78%), 1K prose 76.6 vs 86.0, 32K prose 63.9 vs 73.3, 128K prose 44.4 vs Splash 52.1 (85%); cold TTFT 32K 33.15 vs Splash 30.49 s (+9%); warm TTFT 32K 0.230 vs Splash 0.085 s; turn-2 TTFT 32K code 1.004 vs llama.cpp 0.416 s. Leads: cold TTFT 128K 187.6 s vs Splash 195.1 s; decode 128K code 83.3 vs 85.6 (97%). The 8-way concurrency axis was not measured; mtplx-latest failed all cells and has no numbers.
+
+### 2026-10-23 correction: 48-row copy rounds reverted
+
+The 48-row DFlash fast-tree windows (8036c167, +1.6% 32K code) were not bit-equal to plain decode at 32K:
+spec on vs off differed by 9.3e-5 in logprobs over 64 tokens (tokens equal), apc_restore_identity 32K code turn-2;
+bisect 176c7086 PASS / 8036c167 FAIL (gpuq 1023-130609, 1023-130610). The earlier yv identity compared token digests
+only. Reverted to 32 rows; the +1.6% above no longer applies.

@@ -22,7 +22,7 @@ are in [Benchmarks](../BENCHMARKS.md) and [PERF_TREND](../reports/PERF_TREND.md)
 - **MTP**: the checkpoint's own multi-token-prediction head (`YUNSHU_MTP`, on by default; block size
   `YUNSHU_MTP_BLOCK_SIZE`).
 - **Prompt-copy drafting**: proposes the continuation of text that already occurred in the prompt
-  (`YUNSHU_SPEC_COPY_ROWS`, default 48 verify rows on the DFlash2 fast tree and 32 on MTP / chain verify; `0` disables).
+  (`YUNSHU_SPEC_COPY_ROWS`, default 32 verify rows; `0` disables).
 - **Batch-invariant kernels** make verification arithmetic identical to ordinary decode, so greedy
   output with speculation on is token-identical to speculation off.
 - Override with `YUNSHU_VLM_DRAFT=mtp|off|<drafter path>`.
