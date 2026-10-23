@@ -7,26 +7,101 @@ Release steps: [RELEASING.md](RELEASING.md).
 
 ## [Unreleased]
 
-Changes on main after 0.1.5; not part of a published package yet.
+Changes on main after 0.1.6; not part of a published package yet.
+
+[Full changelog: v0.1.6…main](https://github.com/YuhuanStudio/Yunshu/compare/v0.1.6...main)
+
+## [0.1.6] - TBD
+
+The 0.1.6 cycle makes follow-up turns, SSD cache hits and short contexts of Qwen3.8-27B faster in the
+`yunshu` package, with a new split-invariant prefill default, Anthropic `thinking.display` support and
+tested memory guidance for 128 GB and tight hosts. Outputs of speculation on and off stay token-identical.
 
 ### Highlights
 
+- Turn-2 TTFT after an idle gap drops (32K, 27B + DFlash2): 0.857/1.180 -> 0.380/0.417 s for code replies
+  of 256/512 tokens, because prefill is split-invariant and rehearsal stops at the assistant end.
+- Follow-ups after 4-16 s idle no longer re-pin the weights: 32K follow-up 0.42-0.59 -> 0.23-0.26 s.
+- APC SSD hits restore faster through MLX's native safetensors reader: 32K SSD-hit TTFT 440 -> 272 ms.
+- Short contexts decode faster: the DFlash fast tree now admits 256-token contexts (+29-34%).
+- Claude Code / Codex CLI / opencode keep working on the local engine, and Anthropic `thinking.display`
+  (`summarized`, `omitted`, `updates`) is honored. [Coverage](docs/guides/API_SURFACE.md).
+- Deployment guidance from a 60-minute 27B soak (766 requests, 0 errors): defaults on 128 GB, a smaller
+  APC and prefill buffer on tight hosts. [Guide](docs/guides/INFERENCE.md#split-invariant-prefill-and-idle-keep-warm).
+
 ### Upgrade notes / breaking changes
+
+- Split-invariant prefill is the default on the qualified 27B / M5 Max / MLX 0.32.3 path. Cold outputs may
+  differ from 0.1.5 within the accuracy gate (n=240: 132 vs 131 correct); APC uses a new arithmetic
+  namespace, so 0.1.5 checkpoints on disk are not reused.
+- `YUNSHU_SPEC_COPY_ROWS` now defaults to 48 (was 16): the DFlash fast tree takes 48-row copy rounds, MTP and
+  chain verify stay at 32. `0` turns copy rounds off.
+- `YUNSHU_NEXT_TURN_DELAY_S` now defaults to 0.3 s (was 1.0); stride rehearsal stops at the last 64-aligned
+  position at or before the assistant end.
+- The idle heartbeat holds the wired-memory limit for up to 30 s after a request, until the idle trim.
+- Batch API defaults changed: `YUNSHU_BATCH_MAX_ITEMS` 500 -> 100000 (also capped by the protocol limits),
+  `YUNSHU_BATCH_TIMEOUT` 300 -> 0 (no per-request timeout).
+- New setting `YUNSHU_PREFILL_ATTENTION` (`tile` default, `stock`); `YUNSHU_PREFILL_MATMUL` and
+  `YUNSHU_PREFILL_GDN` descriptions follow the split-invariant path.
+- Tight hosts: `YUNSHU_VLM_APC_MEMORY_GB=4` and `YUNSHU_PREFILL_BUFFER_CACHE_GB=1`; 128 GB hosts keep the defaults.
+- Dependencies were synced (28 upgrades, nothing pinned).
 
 ### Performance
 
+Machine M5 Max, Qwen3.8-27B oQ4e-mtp + DFlash2, interleaved reps as stated, APC disk off unless noted.
+Each row is its own experiment; do not add them.
+
 | Machine | Model / mode | Metric / workload | Before → after | Recorded source |
 |---|---|---|---|---|
+| M5 Max | 27B + DFlash2 | decode, 256-token context, prose / code | 60 -> 77 / 57 -> 76.5 tok/s | 02f1f0ab (jobs 1021e, 1021f4) |
+| M5 Max | 27B + DFlash2 | decode, 32K code (copy 48 rows) | 90.6 -> 92.0 tok/s (+1.6%); 128K +0.1% | 8036c167 (yv ab 176c7086 vs a668334b) |
+| M5 Max | 27B + DFlash2 | decode, 1K code / 32K code (8-bit lane matmul) | 91.4/91.7 -> 92.2/92.2; 188.8/188.9 -> 189.9/190.0 tok/s | 176c7086 |
+| M5 Max | 27B + DFlash2 | turn-2 TTFT after 8 s idle, code 256/512 | 0.857/1.180 -> 0.380/0.417 s | 70d24961 |
+| M5 Max | 27B + DFlash2 | immediate follow-up, code 256/512/2048 | 0.595/1.003/2.787 -> 0.492/0.870/2.622 s | 70d24961 |
+| M5 Max | 27B + DFlash2 | cold prefill TTFT, 1K | -5% (32K and 128K unchanged) | 70d24961 |
+| M5 Max | 27B + DFlash2 | follow-up after 4-16 s idle, 32K | 0.42-0.59 -> 0.23-0.26 s | 41ed2fa4 |
+| M5 Max | 27B + DFlash2 | APC SSD-hit TTFT 4K / 16K / 32K | 198/208 -> 169/167; 266/271 -> 191/187; 432/448 -> 274/269 ms | 4844944a |
+| M5 Max | 27B + DFlash2 | 32K turn-2 TTFT, 513-639 row tail | 1.10 -> 1.05 s | 92bd61fa (job 1022-030233) |
+| M5 Max | 27B + DFlash2 | 32K turn-2 TTFT, 513-2048 row tail | 1.27 -> 1.21 s | c9245329 (job 1021-224236) |
+| M5 Max | 27B (Kapitsa cached x3) | 4K third-turn TTFT | 3990 -> 216 ms | 9607b060 (job 1021-225435) |
+| M5 Max | 27B DFlash | code decode 32K screen (copy 32 rows) | 154.0 -> 173.5 tok/s (+12.7%) | 34634a71 (1021a) |
+
+Regressions and limits: the 32K code warm TTFT +10.5% in the 1020o ladder (34634a71) was removed in the
+1021a screen; prose decode is neutral. Quality (yv, n=240): 132 vs 131, within one question (70d24961).
+Open gaps versus the latest local competitors (1 rep, direction only, 2026-10-22/23, main 176c7086) are
+in [PERF_TREND](docs/reports/PERF_TREND.md): warm and turn-2 TTFT at 32K, TensorFold 1.1.0 decode at 1K-32K
+and cold 32K TTFT versus Splash 1.3.2.
 
 ### Added
 
+- Anthropic `thinking.display` (`summarized`, `omitted`, `updates`), `signature_delta` per thinking block and
+  hidden-thinking continuity through the `reasoning_token` envelope (it restores only Yunshu's own reasoning).
+- `YUNSHU_PREFILL_ATTENTION` setting; the `yv` SSD-TTFT profile stage and next-turn-after-restart probes.
+- Idle keep-warm heartbeat that holds the wired-memory limit up to 30 s after a request.
+
 ### Changed
+
+- Split-invariant prefill (NAX GEMM padded to 64 rows, BQ32 attention, chunked GDN) and 64-token-aligned APC
+  checkpoints are the default on the qualified 27B path; rehearsal starts after 0.3 s.
+- The DFlash fast tree takes 48-row copy rounds, admits short contexts, reads 8-bit lane weights directly,
+  and short prefill tails (513-2048 rows) use native or exact M64 tiles.
+- APC SSD restore uses MLX's native safetensors reader; header and cache-class validation are unchanged.
+- Idle memory: evicted APC anchors, terminal-job vocabulary pin and malloc pressure relief at the idle trim.
+- gpuq jobs pending at priority >= 0 rise one step after 30 min; swap contention is attributed to the job's own memory.
 
 ### Fixed
 
+- Claude Code image turn 2 no longer fails (split-invariant checkpoints next to an image stay 64-aligned).
+- A follow-up no longer waits behind a stale rehearsal; a superseded rehearsal keeps its cancellation handle
+  (2x32K concurrent decode no longer drops to 11-13 tok/s).
+- CI: console layout under load, focus races and a hybrid SSD budget test that read the real volume.
+- Verified code-review fixes in the gateway, infrastructure and remaining modules.
+
 ### Security
 
-[Full changelog: v0.1.5…main](https://github.com/YuhuanStudio/Yunshu/compare/v0.1.5...main)
+- No security-specific changes in this release.
+
+[Full changelog: v0.1.5…v0.1.6](https://github.com/YuhuanStudio/Yunshu/compare/v0.1.5...v0.1.6)
 
 ## [0.1.5] - 2026-10-15
 

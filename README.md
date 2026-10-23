@@ -268,7 +268,7 @@ For Qwen3.5-family models a single request decodes in a speculative lane:
 - **MTP** — the checkpoint's own multi-token-prediction head; the fallback when no drafter is present.
 - **Prompt-copy drafting** — when the output starts repeating text from the prompt (code edits,
   quoting tool results, multi-turn agents), the lane proposes the continuation of that earlier text
-  and verifies it in the same pass. It is on by default (`YUNSHU_SPEC_COPY_ROWS`, `0` turns it off).
+  and verifies it in the same pass. It is on by default (`YUNSHU_SPEC_COPY_ROWS`, default 48 rows on the DFlash2 fast tree, 32 on MTP; `0` turns it off).
 
 Every decode and verify matmul goes through **batch-invariant kernels**: a token's arithmetic is the
 same whether it is verified alone or among other rows. That is what makes greedy output identical
@@ -293,7 +293,11 @@ prefill would.
 Repeated or edited long prompts, multi-turn chats and agent loops restore from the nearest
 checkpoint instead of prefilling again. When a conversation grows, older checkpoints of the same
 conversation are replaced rather than piling up. `yunshu cache status` and `yunshu cache gc` show
-and clean the SSD caches.
+and clean the SSD caches. SSD hits restore through MLX's native safetensors reader (32K hit TTFT 440 -> 272 ms).
+On the qualified 27B / M5 Max path prefill is split-invariant by default: checkpoints sit on absolute
+64-token boundaries, so a cached or rehearsed prefix gives the same tokens as a cold prefill
+([details](docs/guides/INFERENCE.md#split-invariant-prefill-and-idle-keep-warm)). Tight hosts: set
+`YUNSHU_VLM_APC_MEMORY_GB=4` and `YUNSHU_PREFILL_BUFFER_CACHE_GB=1` (27B peak 37.2 -> 31.5 GiB); 128 GB hosts keep the defaults.
 
 ### Structured output
 
