@@ -41,7 +41,7 @@ exclude = [
 
 [project]
 name = "yunshu"
-version = "0.1.6"
+version = "0.1.6.dev0"
 description = "Fast local single-node LLM/VLM inference engine for Apple Silicon — speculative decoding, prefix reuse, OpenAI/Anthropic-compatible"
 readme = "README.md"
 license = "Apache-2.0"
