@@ -1525,6 +1525,45 @@ class VLMBatchRunner:
                 if dense_lane:
                     ragged_kv.set_dense_lane(False)
 
+    def _emit_ready_first(self, group: _Group) -> _Job | None:
+        """Deliver an already sampled AR token before upstream builds its lookahead.
+
+        A warm request can share the ordinary lane with a rehearsal. Its prompt
+        already materialized this token, but GenerationBatch._step submits the
+        second token's forward before returning it. Keep that forward and every
+        sampler/cache update unchanged; only publish the ready token earlier.
+        """
+        if group.spec or len(group.jobs) != 1:
+            return None
+        from mlx_vlm.generate.ar import GenerationBatch
+
+        batch = getattr(group.gen, "_generation_batch", None)
+        if not isinstance(batch, GenerationBatch):
+            return None
+        job: _Job
+        (job,) = group.jobs.values()
+        if (
+            job.logprobs
+            or job.stats.generated
+            or batch.uids != [job.uid]
+            or batch._num_tokens != [0]
+            or batch._current_tokens is not None
+            or batch._next_tokens is None
+        ):
+            return None
+        token = int(batch._next_tokens.tolist()[0])
+        now = time.perf_counter()
+        stats = job.stats
+        stats.t_first = stats.t_last = now
+        stats.first_token_s = now - job.start
+        stats.prefill_done = stats.prefill_total
+        stats.generated = 1
+        self._emit(job, (token, None))
+        if not getattr(self, "_ready_first_logged", False):
+            self._ready_first_logged = True
+            logger.info("Ready AR first-token delivery engaged before lookahead")
+        return job
+
     def _step_generator(self, group: _Group, *, decode_only: bool = False) -> None:
         if group.spec:
             # Upstream's speculative verify reads mRoPE deltas from model
@@ -1576,7 +1615,9 @@ class VLMBatchRunner:
             # decode one row while admitting another, whose first token has not
             # been delivered yet; that admission keeps synchronous stores.
             apc.defer_checkpoint_stores = len(group.jobs) == 1
+        early_first = None
         try:
+            early_first = self._emit_ready_first(group)
             if decode_only:
                 # Upstream returns after decode once capacity is reached. Zero
                 # capacity yields without starting/resuming any prefill atom.
@@ -1651,6 +1692,12 @@ class VLMBatchRunner:
         for response in responses:
             job = group.jobs.get(response.uid)
             if job is None:
+                continue
+            if job is early_first:
+                # Upstream still owns stop/length handling and all batch state.
+                # This response's token and accounting were published above.
+                if response.finish_reason is not None:
+                    finished.append((response.uid, response.finish_reason))
                 continue
             stats = job.stats
             now = time.perf_counter()

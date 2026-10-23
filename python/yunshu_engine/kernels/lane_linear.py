@@ -286,11 +286,6 @@ class LaneLinear(nn.Module):
         return y.reshape(*lead, self.output_dims).astype(dtype)
 
     def __call__(self, x: mx.array) -> mx.array:
-        keep = gdn_prefill.tail_logits_to_keep()
-        if keep and self.output_dims >= 100_000 and x.ndim == 3:
-            # Only the sampler's final rows are used. The lane head has the
-            # same reduction and split-K schedule for every row count.
-            x = x[:, -keep:, :]
         lead = x.shape[:-1]
         x2 = x.reshape(-1, self.input_dims)
         dtype = x2.dtype

@@ -68,11 +68,7 @@ def install():
                 and embeds.shape[0] == 1
                 and embeds.shape[1] <= TAIL_FAST_ROWS
             ):
-                # Upstream consumes only these final logits (including any
-                # right padding), but Qwen3.5 ignores its logits_to_keep kwarg.
-                # The lane head is row invariant, so omit the unused rows.
-                keep = 1 + max(getattr(self, "_right_pad_per_row", None) or [0])
-                return gdn_prefill.tail_scope(logits_to_keep=keep)
+                return gdn_prefill.tail_scope()
             return self._prefill_scope()
 
         def _split_position(self):

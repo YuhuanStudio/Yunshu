@@ -123,35 +123,3 @@ def test_copy_graft_retains_long_context_sum_policy(monkeypatch):
         )
         assert kernels.get("lane_sum_identity") == "long-context"
     assert calls == [True, True]
-
-
-@pytest.mark.parametrize("keep", [0, 1, 4])
-def test_prompt_tail_head_projects_only_consumed_rows(monkeypatch, keep):
-    """Qwen3.5 ignores logits_to_keep; do not run unused rows through the huge head."""
-    from yunshu_engine.kernels import gdn_prefill
-
-    calls = []
-
-    class Head(Projection):
-        def _rows(self, x, **kwargs):
-            calls.append(x.shape)
-            return mx.zeros((x.shape[0], self.output_dims), dtype=mx.bfloat16)
-
-    head = Head(input_dims=64, output_dims=100_000)
-    x = mx.zeros((1, 16, 64), dtype=mx.bfloat16)
-    monkeypatch.setattr(ll, "STOCK_ROWS", 0)
-    with gdn_prefill.tail_scope(logits_to_keep=keep):
-        y = ll.LaneLinear.__call__(head, x)
-    assert calls == [(keep or 16, 64)]
-    assert y.shape == (1, keep or 16, 100_000)
-    assert gdn_prefill.tail_logits_to_keep() == 0
-
-
-def test_tail_head_scope_restores_after_failure():
-    from yunshu_engine.kernels import gdn_prefill
-
-    with gdn_prefill.tail_scope(logits_to_keep=4):
-        with pytest.raises(RuntimeError), gdn_prefill.tail_scope(logits_to_keep=1):
-            raise RuntimeError("model failed")
-        assert gdn_prefill.tail_logits_to_keep() == 4
-    assert gdn_prefill.tail_logits_to_keep() == 0
