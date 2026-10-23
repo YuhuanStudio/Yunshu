@@ -339,3 +339,76 @@ def test_prefix_sharing_uses_invariant_kernels_in_shared_batch(runner, monkeypat
     assert _collect(runner, 2) == [1, 2]
     assert True in active
     assert active[-1] is False
+
+
+@pytest.mark.parametrize("finish", [None, "length", "stop"])
+def test_ready_ar_first_token_is_emitted_before_lookahead(runner, monkeypatch, finish):
+    import mlx.core as mx
+    from mlx_vlm.generate.ar import GenerationBatch
+
+    with mx.stream(mx.cpu):
+        batch = GenerationBatch(
+            model=SimpleNamespace(),
+            uids=[7],
+            inputs=mx.array([42]),
+            prompt_cache=[],
+            sampler=None,
+            stop_criteria=lambda token: finish == "stop",
+            max_tokens=[1 if finish == "length" else 8],
+        )
+    stats = vbr.RunStats(prefill_total=3)
+    job = SimpleNamespace(
+        uid=7, stats=stats, start=0.0, logprobs=False, cancel_event=None
+    )
+    emitted, finished, order = [], [], []
+
+    def emit(job, item):
+        order.append("emit")
+        emitted.append(item)
+        assert job.stats.generated == 1
+
+    def lookahead():
+        order.append("lookahead")
+        # Upstream must retain its original token count and sampled input.
+        assert batch._num_tokens == [0]
+        assert batch._next_tokens.tolist() == [42]
+        return [42], None, None, None
+
+    batch._step = lookahead
+    gen = SimpleNamespace(_generation_batch=batch, next=lambda: ([], batch.next()))
+    group = vbr._Group(gen=gen, spec=False, jobs={7: job})
+    runner.ragged_kv = None
+    monkeypatch.setattr(runner, "_emit", emit)
+    monkeypatch.setattr(runner, "_note_prefill", lambda group: None)
+    monkeypatch.setattr(runner, "_note_cache", lambda job: None)
+    monkeypatch.setattr(runner, "_finish", lambda group, uid, why: finished.append(why))
+    runner._step_generator(group)
+    assert order == ["emit", "lookahead"]
+    assert emitted == [(42, None)]  # no duplicate when upstream returns that token
+    assert stats.generated == 1 and stats.t_first > 0
+    assert stats.prefill_done == 3
+    assert finished == ([] if finish is None else [finish])
+
+
+def test_early_ar_delivery_leaves_logprob_requests_on_original_path(runner):
+    import mlx.core as mx
+    from mlx_vlm.generate.ar import GenerationBatch
+
+    with mx.stream(mx.cpu):
+        batch = GenerationBatch(
+            model=SimpleNamespace(),
+            uids=[7],
+            inputs=mx.array([42]),
+            prompt_cache=[],
+            sampler=None,
+            stop_criteria=lambda token: False,
+            max_tokens=[8],
+        )
+    stats = vbr.RunStats()
+    group = vbr._Group(
+        gen=SimpleNamespace(_generation_batch=batch),
+        spec=False,
+        jobs={7: SimpleNamespace(uid=7, logprobs=True, stats=stats)},
+    )
+    assert runner._emit_ready_first(group) is None
+    assert stats.generated == 0 and batch._num_tokens == [0]
