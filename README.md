@@ -268,7 +268,7 @@ For Qwen3.5-family models a single request decodes in a speculative lane:
 - **MTP** — the checkpoint's own multi-token-prediction head; the fallback when no drafter is present.
 - **Prompt-copy drafting** — when the output starts repeating text from the prompt (code edits,
   quoting tool results, multi-turn agents), the lane proposes the continuation of that earlier text
-  and verifies it in the same pass. It is on by default (`YUNSHU_SPEC_COPY_ROWS`, default 48 rows on the DFlash2 fast tree, 32 on MTP; `0` turns it off).
+  and verifies it in the same pass. It is on by default (`YUNSHU_SPEC_COPY_ROWS`, default 32 rows; `0` turns it off).
 
 Every decode and verify matmul goes through **batch-invariant kernels**: a token's arithmetic is the
 same whether it is verified alone or among other rows. That is what makes greedy output identical

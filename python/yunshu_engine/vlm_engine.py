@@ -2493,7 +2493,7 @@ class VLMEngine:
                     invariant=bool(kernels.get("invariant")),
                     lane_projections=bool(kernels.get("lane_linear")),
                 )
-                if kernels["dflash_copy"] and kernels["copy_rows"] in (16, 32, 48):
+                if kernels["dflash_copy"] and kernels["copy_rows"] in (16, 32):
                     from . import dflash_fast
 
                     if dflash_fast.supported(lm, drafter):
@@ -2508,17 +2508,6 @@ class VLMEngine:
                     if dflash_fast.supported(lm, drafter):
                         dflash_fast.prepare(drafter)
                         kernels["dflash_fast"] = "short-context"
-                        try:
-                            kernels["dflash_warm_rows"] = dflash_fast.warm_verify(
-                                lm, int(kernels["copy_rows"])
-                            )
-                        except (
-                            Exception
-                        ):  # a failed warm-up only costs the first request's compiles
-                            logger.warning(
-                                "fast-tree verify warm-up failed", exc_info=True
-                            )
-                            kernels["dflash_warm_rows"] = []
         if drafter is not None and not qwen4:
             # Tree drafts through the tree verify (single greedy row,
             # batch-invariant kernels only; every other round keeps the loop).

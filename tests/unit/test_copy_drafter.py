@@ -160,22 +160,16 @@ def test_copy_rows_follow_verify_width():
 
 
 @pytest.mark.parametrize(
-    "lane,tile,expected,fast",
-    [
-        (False, False, 8, 8),
-        (False, True, 8, 8),
-        (True, False, 8, 8),
-        (True, True, 32, 48),
-    ],
+    "lane,tile,expected",
+    [(False, False, 8), (False, True, 8), (True, False, 8), (True, True, 32)],
 )
 def test_copy_width_requires_both_lane_projections_and_tile_attention(
-    monkeypatch, lane, tile, expected, fast
+    monkeypatch, lane, tile, expected
 ):
     from yunshu_engine.kernels import ragged_attention
 
     monkeypatch.setattr(ragged_attention, "tile_ready", lambda: tile)
-    assert mtp_lane.verify_max_rows(lane) == expected  # MTP / chain verify: 32 at most
-    assert mtp_lane.verify_max_rows(lane, fast=True) == fast  # DFlash fast tree: 48
+    assert mtp_lane.verify_max_rows(lane) == expected
 
 
 @pytest.mark.parametrize("dim,group,expected", [(256, 8, 32), (128, 8, 8), (256, 9, 8)])
@@ -226,7 +220,7 @@ def test_round_rechecks_target_after_another_engine_sets_global_copy_width(monke
 
     monkeypatch.setattr(lane_linear, "LaneLinear", Lane)
     monkeypatch.setattr(ragged_attention, "tile_ready", lambda: True)
-    monkeypatch.setitem(mtp_lane._STATE, "copy_rows", 48)
+    monkeypatch.setitem(mtp_lane._STATE, "copy_rows", 32)
     attention = SimpleNamespace(
         q_proj=object(), head_dim=256, num_attention_heads=32, num_key_value_heads=4
     )
@@ -237,8 +231,7 @@ def test_round_rechecks_target_after_another_engine_sets_global_copy_width(monke
     )
     assert mtp_lane.copy_rows_for_model(model) == 8
     attention.q_proj = Lane()
-    assert mtp_lane.copy_rows_for_model(model) == 32  # MTP / chain verify stays at 32
-    assert mtp_lane.copy_rows_for_model(model, fast=True) == 48  # DFlash fast tree
+    assert mtp_lane.copy_rows_for_model(model) == 32
 
 
 def test_unknown_target_geometry_keeps_a_conservative_copy_cap(monkeypatch):
@@ -250,7 +243,7 @@ def test_default_copy_cap_is_wide_but_unknown_backend_stays_narrow(monkeypatch):
     from yunshu_engine import mtp_lane, settings
 
     monkeypatch.delenv("YUNSHU_SPEC_COPY_ROWS", raising=False)
-    assert settings.REGISTRY["YUNSHU_SPEC_COPY_ROWS"].default == 48
-    monkeypatch.setitem(mtp_lane._STATE, "copy_rows", 48)
+    assert settings.REGISTRY["YUNSHU_SPEC_COPY_ROWS"].default == 32
+    monkeypatch.setitem(mtp_lane._STATE, "copy_rows", 32)
     assert mtp_lane.copy_rows_for_model(object()) == 8
     assert mtp_lane.copy_rows_for_model(object(), rows=0) == 0
