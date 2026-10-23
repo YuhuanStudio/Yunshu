@@ -20,8 +20,11 @@ def test_whole_and_partial_and_unrelated():
     )
     # a different conversation matches nothing
     assert t.observe_prompt([5, 6, 7, 8]) is None
-    # prompt that does not even keep the earlier prompt (compaction) matches nothing
-    assert t.observe_prompt([1, 2, 9, 10]) is None
+    # a re-rendered prompt tail loses part of the earlier prompt: counted, nothing reusable
+    r = t.observe_prompt([1, 2, 9, 10])
+    assert r["prompt_tail_lost"] == 1 and r["matched_gen"] == 0
+    # compaction (almost nothing of the earlier prompt kept) matches nothing
+    assert t.observe_prompt([1, 8, 9, 10, 11, 12]) is None
 
 
 def test_report_summarizes(tmp_path):

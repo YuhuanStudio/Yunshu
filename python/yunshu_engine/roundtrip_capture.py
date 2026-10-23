@@ -35,8 +35,9 @@ class RoundTripTracker:
         best: tuple[int, int, list[int], int] | None = None
         for e_idx, e_seq, e_plen in self._seqs:
             lcp = common_prefix(e_seq, prompt)
-            # only a continuation of that earlier prompt counts as the same conversation
-            if lcp < e_plen:
+            # the same conversation keeps most of that earlier prompt (the tail may differ: the
+            # generation prompt "assistant\n<think>\n" is re-rendered)
+            if lcp * 2 < e_plen:
                 continue
             if best is None or lcp > best[0]:
                 best = (lcp, e_idx, e_seq, e_plen)
@@ -48,7 +49,9 @@ class RoundTripTracker:
             "prev_index": idx,
             "prev_prompt_len": plen,
             "prev_gen_len": gen_len,
-            "matched_gen": min(lcp - plen, gen_len),
+            "lcp": lcp,
+            "prompt_tail_lost": max(0, plen - lcp),
+            "matched_gen": max(0, min(lcp - plen, gen_len)),
             "whole_gen_reproduced": lcp >= len(seq),
         }
         if lcp < len(seq) and lcp < len(prompt):
