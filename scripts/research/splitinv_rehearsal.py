@@ -44,10 +44,14 @@ def main():
     p.add_argument("--reply-tokens", type=int, nargs="+", default=[256, 512, 2048])
     p.add_argument("--out", type=Path, required=True)
     p.add_argument("--dry-run", action="store_true")
+    # A logprobs request takes the stock-serial arithmetic and its own APC namespace
+    # (vlm_batch_runner._serial_rows), so it never reads the invariant checkpoints a
+    # rehearsal writes: rehearsal == plain is a raw-token-ID gate. --logprobs asks for
+    # them anyway and shows such a request missing the rehearsal (cached 0).
     p.add_argument(
-        "--raw-ids-only",
+        "--logprobs",
         action="store_true",
-        help="Partial gate only; does not verify logprobs",
+        help="Also request and compare chosen-token logprobs (served outside the rehearsal namespace)",
     )
     a = p.parse_args()
     if a.dry_run:
@@ -70,7 +74,7 @@ def main():
     def ask_plain(server, messages):
         body = t.req(server.model, "", 32)
         body["messages"] = messages
-        body["logprobs"] = not a.raw_ids_only
+        body["logprobs"] = a.logprobs
         result = t.send(server.url, body)
         deadline = time.monotonic() + 3
         while True:
@@ -164,7 +168,7 @@ def main():
             plain = ask_plain(server, messages)
             equal = (
                 plain["toks"] == reference["toks"]
-                if a.raw_ids_only
+                if not a.logprobs
                 else same_output(plain, reference)
             )
             emit(
@@ -177,7 +181,7 @@ def main():
                     tokens_equal=plain["toks"] == reference["toks"],
                     raw_ids_equal=plain["toks"] == reference["toks"],
                     logprobs_equal=(
-                        None if a.raw_ids_only else plain["lps"] == reference["lps"]
+                        plain["lps"] == reference["lps"] if a.logprobs else None
                     ),
                     **{k: v for k, v in plain.items() if k not in ("toks", "lps")},
                 )
@@ -187,7 +191,7 @@ def main():
         server.verify_spec_mode()
     finally:
         server.kill()
-    emit(dict(complete=True, cases=len(fixtures), logprobs_checked=not a.raw_ids_only))
+    emit(dict(complete=True, cases=len(fixtures), logprobs_checked=a.logprobs))
 
 
 if __name__ == "__main__":
