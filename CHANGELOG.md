@@ -94,6 +94,8 @@ and cold 32K TTFT versus Splash 1.3.2.
   0.20-0.22 s instead of 0.26-0.28 s with identical hit and miss outputs.
 - APC SSD restore uses MLX's native safetensors reader; header and cache-class validation are unchanged.
 - Idle memory: evicted APC anchors, terminal-job vocabulary pin and malloc pressure relief at the idle trim.
+- A warm single request delivers its first token as soon as it is sampled instead of after the next step's forward
+  (32K re-send first_decode 43 -> ~1 ms; warm TTFT -20 to -40 ms).
 - An APC restore writes into the finished request's KV storage instead of a fresh allocation (the held storage is
   released at the 30 s idle trim).
 - Development infrastructure: the unit suite runs on 2 x 12 pytest-xdist workers with serial tests
