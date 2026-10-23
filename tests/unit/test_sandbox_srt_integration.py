@@ -110,7 +110,6 @@ def test_output_truncation(env):
 
 
 def test_background_process_does_not_survive(env):
-    m = env[2] / "alive"
     bash(env, f"(sleep 1.5; touch {env[1].work}/alive) & echo started")
     import time
 

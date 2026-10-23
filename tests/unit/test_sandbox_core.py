@@ -104,14 +104,14 @@ def test_supervisor_leaves_no_survivors(tmp_path):
 @pytest.fixture
 def mgr(tmp_path):
     now = [1000.0]
-    m = C.ContainerManager(tmp_path / "root", ttl_s=60, clock=lambda: now[0])
+    m = cont.ContainerManager(tmp_path / "root", ttl_s=60, clock=lambda: now[0])
     m.now = now
     return m
 
 
 def test_container_create_get_touch_expire(mgr):
     c = mgr.create()
-    assert C.valid_id(c.id) and c.work.is_dir() and c.out.is_dir()
+    assert cont.valid_id(c.id) and c.work.is_dir() and c.out.is_dir()
     assert oct(c.path.stat().st_mode & 0o777) == "0o700"
     mgr.now[0] += 50
     c2 = mgr.get(c.id)  # touch resets the timer
@@ -119,17 +119,17 @@ def test_container_create_get_touch_expire(mgr):
     mgr.now[0] += 59
     mgr.get(c.id)
     mgr.now[0] += 61
-    with pytest.raises(C.ContainerError) as e:
+    with pytest.raises(cont.ContainerError) as e:
         mgr.get(c.id)
     assert e.value.code == "expired" and not c.path.exists()
 
 
 def test_container_unknown_and_bad_ids(mgr):
-    with pytest.raises(C.ContainerError) as e:
+    with pytest.raises(cont.ContainerError) as e:
         mgr.get("container_" + "0" * 24)
     assert e.value.code == "not_found"
     for bad in ("../x", "container_zz", "", "container_" + "0" * 23 + "/"):
-        with pytest.raises(C.ContainerError) as e:
+        with pytest.raises(cont.ContainerError) as e:
             mgr.get(bad)
         assert e.value.code == "invalid"
 
@@ -220,3 +220,34 @@ def test_model_text_shapes():
     assert "execution_time_exceeded" in model_text(
         ExecResult(False, "execution_time_exceeded")
     )
+
+
+# ── doctor ──────────────────────────────────────────────────────────────────
+def test_doctor_check_states(monkeypatch):
+    import importlib
+
+    import yunshu_gateway.sandbox.srt as srt_mod
+
+    doctor = importlib.import_module("yunshu_cli.doctor")
+    from yunshu_engine import settings as st
+
+    monkeypatch.setattr(srt_mod, "find_srt", lambda: None)
+    real = st.get
+    monkeypatch.setattr(
+        st,
+        "get",
+        lambda n, *a, **k: False if n == "YUNSHU_CODE_EXECUTION" else real(n, *a, **k),
+    )
+    c = doctor.check_code_execution()
+    assert c.status == "ok" and "not installed" in c.detail
+    monkeypatch.setattr(
+        st,
+        "get",
+        lambda n, *a, **k: True if n == "YUNSHU_CODE_EXECUTION" else real(n, *a, **k),
+    )
+    c = doctor.check_code_execution()
+    assert c.status == "fail" and "503" in c.detail and "sandbox-runtime" in c.fix
+    monkeypatch.setattr(
+        srt_mod, "find_srt", lambda: SrtInfo("/n", "/c", problem="Node 20.1 is too old")
+    )
+    assert "too old" in doctor.check_code_execution().detail

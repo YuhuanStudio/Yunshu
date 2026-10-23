@@ -235,7 +235,7 @@ class CodeExecutor:
         return found
 
     # ── text editor (runs in the gateway, confined to the container) ─────────
-    def _resolve(self, c: Container, path: str) -> Path | None:
+    def _resolve(self, c: Container, path: str | None) -> Path | None:
         if not isinstance(path, str) or not path or "\0" in path:
             return None
         base = c.work.resolve()
