@@ -9,6 +9,23 @@ Release steps: [RELEASING.md](RELEASING.md).
 
 Changes on main after 0.1.6; not part of a published package yet.
 
+### Highlights
+
+### Upgrade notes / breaking changes
+
+### Performance
+
+| Machine | Model / mode | Metric / workload | Before → after | Recorded source |
+|---|---|---|---|---|
+
+### Added
+
+### Changed
+
+### Fixed
+
+### Security
+
 [Full changelog: v0.1.6…main](https://github.com/YuhuanStudio/Yunshu/compare/v0.1.6...main)
 
 ## [0.1.6] - TBD

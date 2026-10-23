@@ -31,7 +31,7 @@ def test_local_gate_runs_full_suite_with_vm_capability_plugin():
     assert "-m pytest tests/unit" in script
     assert "-p scripts.dev.ci_paravirtual" in script
     assert 'cat "$WORK/pytest-paravirtual.log"' in script
-    assert "paravirtual pytest rc $rc" in script
+    assert "paravirtual pytest rc $prc" in script
 
 
 def test_vm_fixture_forces_capability_but_keeps_explicit_path_overrides(monkeypatch):
