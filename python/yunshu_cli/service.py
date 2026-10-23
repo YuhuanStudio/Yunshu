@@ -30,6 +30,41 @@ service_app = typer.Typer(
     no_args_is_help=True,
 )
 
+_instance: str | None = None
+_state_dir: Path | None = None
+
+
+@service_app.callback()
+def service_options(
+    instance: str | None = typer.Option(
+        None, "--instance", help="Isolated development launchd label (dev-*)."
+    ),
+    state_dir: Path | None = typer.Option(
+        None,
+        "--state-dir",
+        help="External state/log directory for an isolated instance.",
+    ),
+):
+    global _instance, _state_dir
+    if bool(instance) != bool(state_dir):
+        fail("--instance and --state-dir must be supplied together.", code=2)
+    if instance and not re.fullmatch(r"dev-[a-z0-9-]{1,60}", instance):
+        fail("Isolated instance must match dev-[a-z0-9-]{1,60}.", code=2)
+    _instance, _state_dir = instance, state_dir.resolve() if state_dir else None
+
+
+def _label() -> str:
+    return paths.SERVICE_LABEL + ("." + _instance if _instance else "")
+
+
+def _plist() -> Path:
+    return (
+        (_state_dir / (_label() + ".plist"))
+        if _state_dir
+        else paths.launch_agent_plist()
+    )
+
+
 # Passed through to the service when set in the installing shell, so the
 # service finds the same Hugging Face cache and endpoint.
 _PASSTHROUGH_ENV = ("HF_HOME", "HF_HUB_CACHE", "HF_ENDPOINT", "HF_HUB_OFFLINE")
@@ -41,11 +76,11 @@ def _domain() -> str:
 
 
 def _target() -> str:
-    return f"{_domain()}/{paths.SERVICE_LABEL}"
+    return f"{_domain()}/{_label()}"
 
 
 def log_file() -> Path:
-    return paths.log_dir() / "yunshu.log"
+    return (_state_dir if _state_dir else paths.log_dir()) / "yunshu.log"
 
 
 def console_log_file() -> Path:
@@ -111,9 +146,11 @@ def build_plist(
 ) -> dict:
     env = {"PATH": _PATH}
     env.update({k: os.environ[k] for k in _PASSTHROUGH_ENV if os.environ.get(k)})
+    if _instance:
+        env["PYTHONPATH"] = str(Path(__file__).resolve().parents[1])
     log = str(log_path or log_file())
     return {
-        "Label": label or paths.SERVICE_LABEL,
+        "Label": label or _label(),
         "ProgramArguments": program,
         "RunAtLoad": True,
         # The engine restarts after a crash, not after a clean stop; the console whenever it ends.
@@ -208,6 +245,8 @@ def install(
     and restart on a crash. The console keeps serving and recording while the engine restarts."""
     if sys.platform != "darwin":
         fail("`yunshu service` uses launchd and runs on macOS only.", code=2)
+    if _instance and not 18990 <= port <= 18999:
+        fail("Isolated services use development ports 18990–18999 only.", code=2)
     if not model and not models_dir and not settings.get("YUNSHU_MODEL"):
         fail(
             "Say what to serve: --model <path or repo id> or --models-dir <dir> "
@@ -224,7 +263,7 @@ def install(
         fail(f"Config file not found: {config}", code=2)
 
     plist = build_plist(serve_args(model, models_dir, host, port, config, set_))
-    dest = paths.launch_agent_plist()
+    dest = _plist()
     console_plist = build_plist(
         console_args(host, port, console_port, config),
         label=paths.CONSOLE_SERVICE_LABEL,
@@ -251,7 +290,7 @@ def install(
     if console_dest.exists() and _console_loaded():
         _launchctl("bootout", _console_target())
     dest.parent.mkdir(parents=True, exist_ok=True)
-    paths.log_dir().mkdir(parents=True, exist_ok=True)
+    log_file().parent.mkdir(parents=True, exist_ok=True)
     dest.write_bytes(plistlib.dumps(plist))
     if not no_console:
         console_dest.write_bytes(plistlib.dumps(console_plist))
@@ -300,7 +339,7 @@ def install(
 @service_app.command("uninstall")
 def uninstall():
     """Stop the service and remove the launchd agent (models and logs are kept)."""
-    dest = paths.launch_agent_plist()
+    dest = _plist()
     console_dest = paths.console_launch_agent_plist()
     if _console_loaded():
         _launchctl("bootout", _console_target())
@@ -323,7 +362,7 @@ def uninstall():
 @service_app.command("start")
 def start():
     """Start the installed service now."""
-    dest = paths.launch_agent_plist()
+    dest = _plist()
     if not dest.exists():
         fail("Not installed. Run `yunshu service install --model <model>` first.")
     console_dest = paths.console_launch_agent_plist()
@@ -364,7 +403,7 @@ def restart():
 @service_app.command("status")
 def status():
     """Installed? running? healthy? — and where the logs are."""
-    dest = paths.launch_agent_plist()
+    dest = _plist()
     info: dict = {
         "installed": dest.exists(),
         "plist": str(dest),
