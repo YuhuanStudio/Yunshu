@@ -288,8 +288,12 @@ def test_split_invariant_interval_checkpoint_before_an_image_stays_aligned():
         assert not (ids[n - 1] == image and ids[n] == image)
 
 
-@pytest.mark.parametrize("tail,scoped", [(1, False), (16, False), (48, False), (49, True), (64, True)])
-def test_short_prompt_tail_runs_outside_the_long_prefill_scope(monkeypatch, tail, scoped):
+@pytest.mark.parametrize(
+    "tail,scoped", [(1, False), (16, False), (48, False), (49, True), (64, True)]
+)
+def test_short_prompt_tail_runs_outside_the_long_prefill_scope(
+    monkeypatch, tail, scoped
+):
     """The rows after the last aligned boundary start at the same absolute position cold or
     restored, so up to TAIL_FAST_ROWS of them take the decode/verify kernels (a 16-row tail
     was host-bound at 168 ms on the long prefill path)."""
