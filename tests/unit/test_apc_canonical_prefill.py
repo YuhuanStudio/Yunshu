@@ -286,3 +286,34 @@ def test_split_invariant_interval_checkpoint_before_an_image_stays_aligned():
     assert points and all(n % 64 == 0 for n in points)
     for n in points:  # and none cuts the image span
         assert not (ids[n - 1] == image and ids[n] == image)
+
+
+@pytest.mark.parametrize("tail,scoped", [(1, False), (16, False), (48, False), (49, True), (64, True)])
+def test_short_prompt_tail_runs_outside_the_long_prefill_scope(monkeypatch, tail, scoped):
+    """The rows after the last aligned boundary start at the same absolute position cold or
+    restored, so up to TAIL_FAST_ROWS of them take the decode/verify kernels (a 16-row tail
+    was host-bound at 168 ms on the long prefill path)."""
+    from types import SimpleNamespace
+
+    from yunshu_engine import cache_prefill
+    from yunshu_engine.kernels import gdn_prefill
+
+    seen = []
+
+    class Base:
+        def generate(self, *a, **k):
+            seen.append(gdn_prefill.in_prefill())
+
+    ar = SimpleNamespace(PromptProcessingBatch=Base)
+    monkeypatch.setattr(
+        cache_prefill.importlib,
+        "import_module",
+        lambda name: ar if name.endswith(".ar") else SimpleNamespace(),
+    )
+    monkeypatch.setitem(gdn_prefill._STATE, "enabled", True)
+    monkeypatch.setitem(gdn_prefill._STATE, "split", True)
+    cache_prefill.install()
+    batch = ar.PromptProcessingBatch()
+    batch._inputs_embeds = SimpleNamespace(shape=(1, tail, 1))
+    batch.generate()
+    assert seen == [scoped]
