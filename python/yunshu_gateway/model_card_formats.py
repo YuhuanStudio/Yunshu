@@ -26,6 +26,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
+from yunshu_engine import settings
 from yunshu_engine.model_card import ModelCard
 
 # OpenRouter's modality vocabulary: text, image, audio, file, video, embeddings.
@@ -259,7 +260,7 @@ def anthropic_capabilities(card: ModelCard) -> dict[str, Any]:
     return {
         "batch": sup(False),
         "citations": sup(False),
-        "code_execution": sup(False),
+        "code_execution": sup(bool(settings.get("YUNSHU_CODE_EXECUTION"))),
         "context_management": {"supported": False},
         "effort": {
             "supported": bool(levels),

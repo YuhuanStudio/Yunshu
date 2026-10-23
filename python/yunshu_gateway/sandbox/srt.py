@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import os
 import re
 import shlex
 import shutil
@@ -45,7 +46,20 @@ class SrtInfo:
         ]
 
 
+_NODE_VERSIONS: dict[tuple[str, float], tuple[int, ...] | None] = {}
+
+
 def _node_version(node: str) -> tuple[int, ...] | None:
+    try:
+        key = (node, os.stat(node).st_mtime)
+    except OSError:
+        return None
+    if key not in _NODE_VERSIONS:
+        _NODE_VERSIONS[key] = _probe_node(node)
+    return _NODE_VERSIONS[key]
+
+
+def _probe_node(node: str) -> tuple[int, ...] | None:
     try:
         out = subprocess.run(
             [node, "--version"], capture_output=True, text=True, timeout=10
