@@ -24,6 +24,7 @@ from fastapi.responses import FileResponse, JSONResponse
 
 from yunshu_engine import settings
 
+from ..anthropic_version import is_strict, validate_request_body
 from ..files_store import FileStore, FileStoreError, get_store, new_id
 from .files import auth, error_response, iso, paginate_ids
 
@@ -763,6 +764,10 @@ async def create_message_batch(request: Request):
         for key in ("model", "max_tokens", "messages"):
             if key not in params:
                 return _aerr(request, 400, f"requests.{i}.params.{key}: Field required")
+        if is_strict(request.headers.get("anthropic-version")) and (
+            bad := validate_request_body(params, f"requests.{i}.params.")
+        ):
+            return _aerr(request, 400, bad)
         lines.append(
             {"custom_id": cid, "method": "POST", "url": "/v1/messages", "body": params}
         )

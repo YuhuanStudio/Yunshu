@@ -46,8 +46,8 @@ class AuxiliaryPrefillPolicy(SimpleNamespace):
         pass
 
     def divergence_point(self, token_ids):
-        # The shared-prefix checkpoint is learned from, and stored for, primary requests only; an
-        # auxiliary request must not read or write that memo (it crashed the runner step otherwise).
+        # Auxiliary prefills store no checkpoints, and 64-aligned cuts are split-invariant, so the shared-head
+        # checkpoint of the primary manager is not needed here; nor may an auxiliary prompt enter its recent list.
         return 0
 
     def begin_request(self):
