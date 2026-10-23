@@ -1335,3 +1335,18 @@ Identity: both runs 6 cells base-vs-cand and 6 cells spec-on-vs-off, 0 mismatche
 Identity: 6 cells base-vs-cand and 6 spec-on-vs-off, 0 mismatches; APC hits 32767. Quick gate (install, serve-27b, families, soak-mmlu, soak-realistic, agent-sessions) PASS; ci-local PASS on 17850ae1. One rep per cell in the speed stage (yv's noise column reads 0.0).
 What moved, each with its own A/B: the drafter context ring as the default with one fused context K|V lane matmul (ring off vs on, same commit: 32K prose +1.0%, code +0.7%; 64K code +8.9%); copy drafter comparing 256 occurrences (32K code 178 -> 186, 45 -> 41 rounds); follow-up turns no longer wait behind a stale next-turn rehearsal and the DFlash capture keeps cache capacity (Kapitsa cached x3: 4K third turn 3990 -> 216 ms, 16K/32K follow-ups -20-35%); short prefill tails run native QMM (turn 2 1.27 -> 1.21 s); the fast tree admits contexts under 512 tokens (256-token contexts +29-34%, 1K neutral); the drafter window survives an SSD-tier hit (decode after a new-process hit 63.4 -> 69.9 prose, 176 -> 192 code, now equal to cold). Neutral within noise and kept as lossless: KV growth per 2048 rows, node budget on 8/16-row steps (128K prose +1-4%).
 Negative/withdrawn today: an assistant-end prefill grid for short-reply rehearsal changes cold outputs (32K sha differs) and stays opt-in. Honest limits: 32K code still trails TensorFold 1.1.0 (233.9 tok/s, 16 tokens/round vs our ~12); 1-4K code 101-106 -> ~116-138 tok/s vs Kapitsa 145.6 (1 competitor rep, direction only).
+
+2026-10-23 0.1.6 batch: main v0.1.5 -> 43d538d1 (merge-message numbers only; each row is its own A/B, not additive). Qwen3.8-27B oQ4e-mtp + DFlash2, M5 Max.
+
+| cell | base -> cand | source |
+|---|---|---|
+| decode 256-token context prose / code tok/s | 60 -> 77 / 57 -> 76.5 | 02f1f0ab (shortdecode 1021e, 1021f4) |
+| decode 32K code tok/s (copy 48 rows) | 90.6 -> 92.0 (128K +0.1%) | 8036c167 (yv ab 176c7086 vs a668334b) |
+| turn-2 TTFT after 8 s idle, code 256/512 | 0.857/1.180 -> 0.380/0.417 s | 70d24961 (split-invariant prefill) |
+| 32K follow-up after 4-16 s idle | 0.42-0.59 -> 0.23-0.26 s | 41ed2fa4 (keep-warm heartbeat) |
+| APC SSD-hit TTFT 32K | 432/448 -> 274/269 ms | 4844944a |
+| 32K turn-2 TTFT, short tails | 1.27 -> 1.21 s (job 1021-224236); 1.10 -> 1.05 s (job 1022-030233) | c9245329, 92bd61fa |
+
+Identity: spec on == off and base == cand on every cell the merge messages list (0 mismatches). Quality yv n=240: 132 vs 131. Deployment S4 (27B soak 60 min, 766/0 requests, peak 38.8 GiB, 0 pageouts); tight hosts APC RAM 4 + prefill buffer 1: peak 37.2 -> 31.5 GiB.
+
+Open gaps (1 rep, direction only, main 176c7086 vs latest local competitors, M5 Max, p0, sometimes contended; not a parity claim): decode 1K code 89.7 vs TensorFold 1.1.0 106.2 (84%), 32K code 187.8 vs 239.4 (78%), 1K prose 76.6 vs 86.0, 32K prose 63.9 vs 73.3, 128K prose 44.4 vs Splash 52.1 (85%); cold TTFT 32K 33.15 vs Splash 30.49 s (+9%); warm TTFT 32K 0.230 vs Splash 0.085 s; turn-2 TTFT 32K code 1.004 vs llama.cpp 0.416 s. Leads: cold TTFT 128K 187.6 s vs Splash 195.1 s; decode 128K code 83.3 vs 85.6 (97%). The 8-way concurrency axis was not measured; mtplx-latest failed all cells and has no numbers.

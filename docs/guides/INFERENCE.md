@@ -22,7 +22,7 @@ are in [Benchmarks](../BENCHMARKS.md) and [PERF_TREND](../reports/PERF_TREND.md)
 - **MTP**: the checkpoint's own multi-token-prediction head (`YUNSHU_MTP`, on by default; block size
   `YUNSHU_MTP_BLOCK_SIZE`).
 - **Prompt-copy drafting**: proposes the continuation of text that already occurred in the prompt
-  (`YUNSHU_SPEC_COPY_ROWS`, `0` disables).
+  (`YUNSHU_SPEC_COPY_ROWS`, default 48 verify rows on the DFlash2 fast tree and 32 on MTP / chain verify; `0` disables).
 - **Batch-invariant kernels** make verification arithmetic identical to ordinary decode, so greedy
   output with speculation on is token-identical to speculation off.
 - Override with `YUNSHU_VLM_DRAFT=mtp|off|<drafter path>`.
@@ -92,6 +92,26 @@ A lossy option never becomes a default because of a benchmark.
 - Memory accounting: `GET /v1/yunshu/memory` lists what holds memory; all `*_gb` fields are binary GiB
   ([units](API_EXTENSIONS.md#memory-units)).
 
+## Split-invariant prefill and idle keep-warm
+
+On the qualified Qwen3.8-27B / M5 Max / MLX 0.32.3 path (0.1.6 default) prefill uses one kernel
+family for every piece length: NAX GEMM padded to 64 rows, BQ32 attention for any query length,
+chunked GDN padded to 64 with identity updates. Prompt pieces and APC checkpoints are cut at
+absolute 64-token boundaries (a new APC arithmetic namespace, so 0.1.5 checkpoints are not reused).
+Cold, cached and rehearsed prefixes therefore yield the same tokens. Cold outputs may differ from
+0.1.5 within the accuracy gate (n=240: 132 vs 131 correct). Related settings:
+`YUNSHU_PREFILL_MATMUL`, `YUNSHU_PREFILL_GDN`, `YUNSHU_PREFILL_ATTENTION`.
+
+Idle keep-warm: after a request the engine holds the wired-memory limit with a 1 Hz heartbeat
+(a tiny matmul touching no model array) for up to 30 s, until the idle trim gives it back. Without
+it Metal stops keeping the 27B weights resident after about 2 s and the next request re-pins them
+(~200 ms). SSD restore reads checkpoints with MLX's native safetensors reader.
+
+Deployment sizing (27B, 60-minute soak, 766 requests, 0 errors, peak 38.8 GiB, 0 pageouts): keep
+the defaults on 128 GB hosts. On tight hosts set `YUNSHU_VLM_APC_MEMORY_GB=4` and
+`YUNSHU_PREFILL_BUFFER_CACHE_GB=1` (peak 37.2 -> 31.5 GiB). `YUNSHU_MAX_MEMORY_GB` is only needed
+for multi-model hosts.
+
 ## Next-turn rehearsal
 
 In 0.1.5, `YUNSHU_NEXT_TURN_PREFILL=stride` is the default for eligible VLM text chats.
@@ -100,7 +120,7 @@ APC checkpoints; the next request still computes the remainder and its new suffi
 Stride rehearsal skips boundaries at or before the completed prompt checkpoint: a short
 reply that adds no full atom does not trigger a replay of an older prefix.
 It costs idle GPU time and another cached prefix. A matching request can adopt work
-already in progress; a diverging request can wait for the current atom.
+already in progress (since 0.1.6 rehearsal starts 0.3 s after a reply and stops at the last 64-aligned position at or before the assistant end); a diverging request can wait for the current atom.
 `off` disables it. `boundary` and `exact` add assistant-end splits and can change
 multi-turn floating-point rounding; they are explicit opt-ins. This does not eliminate
 the measured [immediate follow-up latency gap](../BENCHMARKS.md#where-yunshu-stands).
