@@ -160,3 +160,18 @@ def test_server_home_can_be_isolated_by_job(monkeypatch, tmp_path):
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     assert tmp_path / "owned-home" == module.SERVER_HOME
+
+
+def test_server_env_caps_apc_disk_tier(servers, monkeypatch, tmp_path):
+    seen = {}
+
+    def launch(*args, **kwargs):
+        seen.update(kwargs["env"])
+        raise OSError("stop here")
+
+    monkeypatch.delenv("YUNSHU_VLM_APC_DISK_GB", raising=False)
+    monkeypatch.setattr(servers.subprocess, "Popen", launch)
+    server = servers.Server("yunshu", "existing-model", 18999, tmp_path / "s.log")
+    with pytest.raises(Exception):
+        server.start(ready_timeout=1)
+    assert seen["YUNSHU_VLM_APC_DISK_GB"] == "16"
