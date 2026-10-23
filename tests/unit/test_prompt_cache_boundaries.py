@@ -246,3 +246,102 @@ def test_cache_hints_align_without_changing_retention_or_failing_short_hints():
     assert plan["lookup_points"] == [31, 65, 100, 199]
     assert align_prefill_plan(plan, maximum=63)["writes"] == []
     assert align_prefill_plan(plan, maximum=190, minimum=70)["lookup_points"] == [128]
+
+
+def test_anthropic_tool_list_end_is_always_a_write():
+    # The tool list is the prefix different sessions of one client share (system text with a per-session
+    # hash follows it), so it is a checkpoint even when the client marked nothing there.
+    tools = [
+        {"name": "a", "parameters": {"type": "object"}},
+        {"name": "b", "parameters": {"type": "object"}},
+    ]
+    prompt = (
+        '<tools>\n{"name": "a", "parameters": {"type": "object"}}\n'
+        '{"name": "b", "parameters": {"type": "object"}}\n</tools><sys>hash-1</sys>'
+    )
+    marked = prompt + "MARK"
+    tok = SeamTokenizer()
+    plan = {"write_markers": {"MARK"}, "write_tools": set()}
+    out = rendered_boundaries(
+        prompt,
+        marked,
+        {"MARK": 300},
+        tok,
+        tok.encode(prompt),
+        tools=tools,
+        tool_controls={0: 300, 1: 300},
+        selection=plan,
+    )
+    end_b = prompt.index("\n</tools>")
+    assert (end_b, 300) in out["writes"]
+    assert (prompt.index('\n{"name": "b"'), 300) not in out["writes"]
+
+
+def test_anthropic_prompt_tail_is_a_write_for_text_requests():
+    from types import SimpleNamespace
+
+    from yunshu_engine.vlm_engine import VLMEngine
+
+    eng = VLMEngine.__new__(VLMEngine)
+    eng._tokenizer = SimpleNamespace(encode=lambda *a, **k: list(range(100)))
+    eng._apply_vlm_template_with_cache = lambda *a, **k: "prompt"
+    eng._format_prompt = lambda *a, **k: "prompt"
+    eng._apc_backend = SimpleNamespace(prefill_alignment=0, exact_cache_guard_tokens=1)
+    import yunshu_engine.prompt_caching as pc
+
+    orig = pc.rendered_boundaries
+    pc.rendered_boundaries = lambda *a, **k: {
+        "points": [(40, 300)],
+        "writes": [(40, 300)],
+        "lookup_points": [40],
+    }
+    try:
+        plan = dict(markers={"MARK": 300}, tools={}, messages=[], write_markers=set())
+        out = eng._resolve_prompt_cache_plan(
+            plan, [{"role": "user", "content": "x"}], list(range(100)), None, False, {}
+        )
+    finally:
+        pc.rendered_boundaries = orig
+    assert (99, 300) in out["writes"] and 99 in out["lookup_points"]
+    assert (40, 300) in out["writes"]
+
+
+def test_token_counter_messages_never_reach_the_prompt_when_cache_control_is_active():
+    # Claude Code 2.1.285 appends a '<total_tokens>N tokens left</total_tokens>' system message per turn.
+    # mark_anthropic put a cache marker on it, the counter filter then missed it, and the gateway hoisted
+    # every counter into the system prompt: the prompt diverged at the system end on every turn.
+    from yunshu_engine.prompt_caching import mark_anthropic
+    from yunshu_gateway.routers.anthropic import (
+        AnthropicMessagesRequest,
+        _convert_anthropic_messages,
+        _drop_token_counters,
+    )
+
+    req = AnthropicMessagesRequest(
+        model="local",
+        max_tokens=1,
+        system=[{"type": "text", "text": "s", "cache_control": {"type": "ephemeral"}}],
+        messages=[
+            {"role": "user", "content": "hi"},
+            {
+                "role": "system",
+                "content": "<total_tokens>100 tokens left</total_tokens>",
+            },
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "<total_tokens>90 tokens left</total_tokens>",
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
+            },
+        ],
+    )
+    _drop_token_counters(req)
+    mark_anthropic(req)
+    converted, _ = _convert_anthropic_messages(
+        req.messages, has_images=False, temp_files=[]
+    )
+    assert [m["role"] for m in converted] == ["user"]

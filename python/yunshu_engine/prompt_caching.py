@@ -330,6 +330,11 @@ def rendered_boundaries(
     )
     if selection is None:
         return points
+    if tool_chars and selection.get("protocol") != "openai":
+        # The end of the tool list is the longest prefix that different sessions of one client share
+        # (the system text after it carries per-session fields such as Claude Code's billing-header
+        # hash), so it is always a checkpoint, whether or not the client marked it.
+        write_chars.add(max(n for n, _ in tool_chars))
     writes = sorted({endpoint_map[n] for n in write_chars if n in endpoint_map})
     if selection.get("protocol") == "openai":
         lookup = {n for n, _ in writes}
