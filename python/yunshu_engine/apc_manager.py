@@ -53,6 +53,10 @@ _CANONICAL_LOOKUP: contextvars.ContextVar[
 
 GIB = 1 << 30
 
+_RESTORE_STORAGE: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "yunshu_apc_restore_storage", default=True
+)
+
 _MEDIA_COST: contextvars.ContextVar[bool] = contextvars.ContextVar(
     "yunshu_media_restore_cost", default=False
 )
@@ -129,6 +133,13 @@ def _restore_kv(c, min_capacity_tokens, targets):
     pad = capacity - rows
 
     def build(a):
+        from .kernels.buffer_cache import take_restore_buffer
+
+        dst = take_restore_buffer(a, capacity) if _RESTORE_STORAGE.get() else None
+        if dst is not None:
+            dst[..., :rows, :] = a[..., :rows, :]
+            dst[..., rows:, :] = 0
+            return dst
         part = a[..., :rows, :]
         if pad <= 0:
             return mx.contiguous(mx.array(part, dtype=part.dtype))
@@ -2245,6 +2256,15 @@ class YunshuAPCManager(APCManager):
         )
 
     def lookup_exact_cache(self, token_ids, *args, **kwargs):
+        # Rehearsal discards its live cache at prefill completion. Reserve the
+        # finished request's storage for a user request that can return it.
+        reuse = _RESTORE_STORAGE.set(tuple(token_ids) != self.keep_prior_for)
+        try:
+            return self._lookup_exact_cache(token_ids, *args, **kwargs)
+        finally:
+            _RESTORE_STORAGE.reset(reuse)
+
+    def _lookup_exact_cache(self, token_ids, *args, **kwargs):
         refresh_retention = kwargs.pop("refresh_retention", True)
         self._expire_boundaries()
         if _MEDIA_COST.get() and self._skip_media_restore(token_ids, args, kwargs):

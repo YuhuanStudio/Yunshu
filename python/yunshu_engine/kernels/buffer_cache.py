@@ -17,6 +17,60 @@ import mlx.core as mx
 logger = logging.getLogger(__name__)
 
 _STATE = {"limit": 0}
+# Storage only: checkpoints always overwrite every row before using these arrays.
+_RESTORE_BUFFERS: list = []
+
+
+def restore_buffer_bytes() -> int:
+    return sum(a.nbytes for a in _RESTORE_BUFFERS)
+
+
+def _restore_pool_limit() -> None:
+    mx.set_cache_limit(max(0, _STATE["limit"] - restore_buffer_bytes()))
+
+
+def clear_restore_buffers() -> None:
+    _RESTORE_BUFFERS.clear()
+    _restore_pool_limit()
+
+
+def offer_restore_buffers(caches) -> None:
+    """Retain at most one finished KV set within the existing allocator budget.
+
+    Keep the larger set across short re-sends. Detach the arrays from the finished
+    cache objects so the next overwrite can donate their physical buffers.
+    """
+    from mlx_vlm.models.cache import BatchKVCache, KVCache
+
+    candidates = [c for c in caches if type(c) in (KVCache, BatchKVCache)]
+    arrays = [a for c in candidates for a in (c.keys, c.values)]
+    if not arrays or any(a is None for a in arrays):
+        return
+    size = sum(a.nbytes for a in arrays)
+    if not restore_buffer_bytes() < size <= _STATE["limit"]:
+        return
+    _RESTORE_BUFFERS[:] = arrays
+    for c in candidates:
+        c.keys = c.values = None
+    _restore_pool_limit()
+    # MLX enforces a reduced cache limit on the next allocation, not at
+    # set_cache_limit. Reclaim now so idle storage + allocator stay bounded.
+    mx.eval(mx.empty((1,), dtype=mx.uint8))
+
+
+def take_restore_buffer(a, capacity):
+    """A sole-owner destination with identical layout and sufficient capacity."""
+    for i, dst in enumerate(_RESTORE_BUFFERS):
+        if (
+            dst.dtype == a.dtype
+            and dst.shape[:2] == a.shape[:2]
+            and dst.shape[3:] == a.shape[3:]
+            and dst.shape[2] >= capacity
+        ):
+            out = _RESTORE_BUFFERS.pop(i)
+            _restore_pool_limit()
+            return out
+    return None
 
 
 def auto_limit_gib(total_bytes: int) -> float:
@@ -67,6 +121,7 @@ def install(limit_gib: float) -> bool:
     """Bound allocator reuse; 0 restores upstream's clear at each boundary."""
     from mlx_vlm.generate import ar
 
+    _RESTORE_BUFFERS.clear()
     limit = int(max(0.0, limit_gib) * (1 << 30))
     if limit > 0:
         previous = mx.set_cache_limit(limit)

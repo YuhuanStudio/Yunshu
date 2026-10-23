@@ -1425,6 +1425,11 @@ class VLMBatchRunner:
                 if not pending_ids:
                     coordinator.manager._console_requests.pop(tuple(job.ids), None)
             coordinator.release_request(job.ids, job.cache_plan)
+        if not group.jobs and getattr(group, "spec", False):
+            from .kernels.buffer_cache import offer_restore_buffers
+
+            batch = getattr(group.gen, "_generation_batch", None)
+            offer_restore_buffers(getattr(batch, "prompt_cache", None) or [])
         self._emit(job, _DONE)
 
     @staticmethod

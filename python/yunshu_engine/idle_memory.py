@@ -210,10 +210,12 @@ def _collect() -> None:
 
 
 def _trim() -> None:
+    from .kernels.buffer_cache import clear_restore_buffers
     from .mlx_executor import sync_and_clear_cache
 
     gc.collect()
     before = _gib()
+    clear_restore_buffers()
     sync_and_clear_cache()
     host_released = _trim_host_allocator()
     logger.info("idle memory: host allocator released %d bytes", host_released)
