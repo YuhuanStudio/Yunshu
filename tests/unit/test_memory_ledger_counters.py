@@ -108,3 +108,22 @@ def test_grammar_token_tables_are_a_named_native_owner(monkeypatch):
     assert len(owner) == 1 and owner[0]["bytes"] == 4242
     assert all(o["kind"] != "grammar_tokenizer" for o in sample["owners"])
     assert next(o for o in sample["owners"] if o["kind"] == "other")["bytes"] == 10
+
+
+def test_restore_spare_storage_is_attributed_once(monkeypatch):
+    from yunshu_engine.kernels import buffer_cache
+
+    monkeypatch.setattr(buffer_cache, "restore_buffer_bytes", lambda: 1024)
+    monkeypatch.setattr(ledger, "_loaded_models", lambda *args: [])
+    from yunshu_engine import dflash_apc_window
+
+    monkeypatch.setattr(dflash_apc_window, "resident_bytes", lambda: 0)
+    monkeypatch.setattr(
+        ledger, "mlx_counters", lambda: {"active": 1024, "cache": 0, "peak": 1024}
+    )
+    sample = ledger.collect(None, None)
+    spare = [o for o in sample["owners"] if o["kind"] == "apc_restore_buffers"]
+    assert len(spare) == 1
+    assert spare[0]["bytes"] == 1024
+    assert spare[0]["reclaimable"] is True
+    assert next(o for o in sample["owners"] if o["kind"] == "other")["bytes"] == 0

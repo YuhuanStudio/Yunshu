@@ -211,8 +211,12 @@ def test_close_generator_tolerates_generators_without_speculation():
 
 def test_idle_trim_releases_host_allocator_after_mlx(monkeypatch):
     from yunshu_engine import idle_memory, mlx_executor
+    from yunshu_engine.kernels import buffer_cache
 
     calls = []
+    monkeypatch.setattr(
+        buffer_cache, "clear_restore_buffers", lambda: calls.append("spares")
+    )
     monkeypatch.setattr(idle_memory.gc, "collect", lambda: calls.append("gc"))
     monkeypatch.setattr(idle_memory, "_gib", lambda: (20, 0))
     monkeypatch.setattr(
@@ -222,7 +226,7 @@ def test_idle_trim_releases_host_allocator_after_mlx(monkeypatch):
         idle_memory, "_trim_host_allocator", lambda: calls.append("host") or 123
     )
     idle_memory._trim()
-    assert calls == ["gc", "mlx", "host"]
+    assert calls == ["gc", "spares", "mlx", "host"]
 
 
 def test_host_allocator_uses_all_zones_and_correct_abi(monkeypatch):

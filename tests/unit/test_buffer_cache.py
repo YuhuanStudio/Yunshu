@@ -23,6 +23,7 @@ def restore():
     previous = mx.set_cache_limit(0)
     mx.set_cache_limit(previous)
     yield
+    buffer_cache._RESTORE_BUFFERS.clear()
     ar.mx = original
     mx.set_cache_limit(previous)
     buffer_cache._STATE.clear()
@@ -84,3 +85,89 @@ def test_ceiling_decides_when_set():
     total = 128 * gib
     assert buffer_cache.auto_limit_gib_for_weights(total, 69 * gib, 74 * gib) == 0.5
     assert buffer_cache.auto_limit_gib_for_weights(total, 69 * gib, 110 * gib) == 6.0
+
+
+@pytest.mark.parametrize("batched", [False, True])
+def test_finished_storage_is_reused_with_exact_prefix_and_zero_tail(restore, batched):
+    from mlx_vlm.models.cache import KVCache
+
+    from yunshu_engine.apc_manager import _restore_kv
+
+    buffer_cache.install(0.001)
+    from mlx_vlm.models.cache import BatchKVCache
+
+    finished = BatchKVCache([0]) if batched else KVCache()
+    finished.keys = mx.full((1, 1, 512, 4), 7.0)
+    finished.values = mx.full((1, 1, 512, 4), -7.0)
+    mx.eval(finished.state)
+    size = finished.keys.nbytes + finished.values.nbytes
+    buffer_cache.offer_restore_buffers([finished])
+    assert buffer_cache.restore_buffer_bytes() == size
+    assert mx.get_cache_memory() <= buffer_cache._STATE["limit"] - size
+    assert finished.keys is None and finished.values is None
+    source = KVCache()
+    source.keys = mx.full((1, 1, 128, 4), 0.5)
+    source.values = mx.full((1, 1, 128, 4), -0.5)
+    source.offset = 128
+    targets = []
+    out = _restore_kv(source, 300, targets)
+    mx.eval(targets)
+    assert out.offset == 128
+    assert buffer_cache.restore_buffer_bytes() == 0
+    for result, src in zip(out.state, source.state, strict=True):
+        assert mx.array_equal(result[..., :128, :], src).item()
+        assert mx.all(result[..., 128:, :] == 0).item()
+
+
+def test_storage_respects_pool_budget_and_trim(restore):
+    from mlx_vlm.models.cache import KVCache
+
+    buffer_cache.install(0)
+    c = KVCache()
+    c.keys = mx.ones((1, 1, 256, 4))
+    c.values = mx.ones((1, 1, 256, 4))
+    buffer_cache.offer_restore_buffers([c])
+    assert buffer_cache.restore_buffer_bytes() == 0
+    assert c.keys is not None
+    buffer_cache.install(0.001)
+    buffer_cache.offer_restore_buffers([c])
+    assert buffer_cache.restore_buffer_bytes() > 0
+    buffer_cache.clear_restore_buffers()
+    assert buffer_cache.restore_buffer_bytes() == 0
+
+
+def test_rehearsal_restore_preserves_finished_storage(restore):
+    from mlx_vlm.models.cache import KVCache
+
+    from yunshu_engine.apc_manager import _RESTORE_STORAGE, _restore_kv
+
+    buffer_cache.install(0.001)
+    finished = KVCache()
+    finished.keys = mx.ones((1, 1, 512, 4))
+    finished.values = mx.ones((1, 1, 512, 4))
+    mx.eval(finished.state)
+    buffer_cache.offer_restore_buffers([finished])
+    before = buffer_cache.restore_buffer_bytes()
+    source = KVCache()
+    source.keys = source.values = mx.zeros((1, 1, 128, 4))
+    source.offset = 128
+    token = _RESTORE_STORAGE.set(False)
+    try:
+        targets = []
+        _restore_kv(source, 300, targets)
+        mx.eval(targets)
+    finally:
+        _RESTORE_STORAGE.reset(token)
+    assert buffer_cache.restore_buffer_bytes() == before
+
+
+def test_only_exact_rehearsal_lookup_excludes_storage():
+    from yunshu_engine.apc_manager import _RESTORE_STORAGE, YunshuAPCManager
+
+    manager = object.__new__(YunshuAPCManager)
+    manager.keep_prior_for = (1, 2, 3)
+    manager._lookup_exact_cache = lambda *a, **kw: _RESTORE_STORAGE.get()
+    assert manager.lookup_exact_cache([1, 2, 3]) is False
+    assert manager.lookup_exact_cache([1, 2]) is True
+    assert manager.lookup_exact_cache([1, 2, 3, 4]) is True
+    assert _RESTORE_STORAGE.get() is True

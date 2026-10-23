@@ -1357,3 +1357,10 @@ The 48-row DFlash fast-tree windows (8036c167, +1.6% 32K code) were not bit-equa
 spec on vs off differed by 9.3e-5 in logprobs over 64 tokens (tokens equal), apc_restore_identity 32K code turn-2;
 bisect 176c7086 PASS / 8036c167 FAIL (gpuq 1023-130609, 1023-130610). The earlier yv identity compared token digests
 only. Reverted to 32 rows; the +1.6% above no longer applies.
+
+2026-10-23 restoretouch (f8233fd7): an APC restore writes into the finished request's KV storage instead of a fresh
+allocation (MLX reuses a freed buffer only for near-exact sizes). Qwen3.8-27B + DFlash2, M5 Max, 32K, two interleaved
+quiet reps (gpuq 1023-151722, 1023-152645): immediate turn-2 restore 43.1/43.4 -> 14.0/13.7 ms (code/prose), TTFT
+0.841/0.852 -> 0.813/0.811 s; warm re-send code 0.266 -> 0.230-0.243 s, prose restore unchanged. Cold 32K flat (~33 s).
+Identity: APC hit/miss and spec on/off tokens + logprobs exact (1023-151746); rehearsal == plain raw IDs 12/12
+(1023-165252). Memory: the held storage counts inside the existing allocator budget and is released at the 30 s idle trim.

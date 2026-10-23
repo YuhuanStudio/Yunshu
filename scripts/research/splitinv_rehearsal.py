@@ -26,6 +26,17 @@ def check_reply_len(row, tokens, what):
     raise RuntimeError(f"{what}: finish={row.get('finish')} ct={row.get('ct')}")
 
 
+def same_output(left, right):
+    """Require complete chosen-token logprobs as well as raw token identity."""
+    return bool(
+        left.get("toks")
+        and left["toks"] == right.get("toks")
+        and left.get("lps") is not None
+        and len(left["lps"]) == len(left["toks"])
+        and left["lps"] == right.get("lps")
+    )
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--ctx", type=int, default=1024)
@@ -33,6 +44,15 @@ def main():
     p.add_argument("--reply-tokens", type=int, nargs="+", default=[256, 512, 2048])
     p.add_argument("--out", type=Path, required=True)
     p.add_argument("--dry-run", action="store_true")
+    # A logprobs request takes the stock-serial arithmetic and its own APC namespace
+    # (vlm_batch_runner._serial_rows), so it never reads the invariant checkpoints a
+    # rehearsal writes: rehearsal == plain is a raw-token-ID gate. --logprobs asks for
+    # them anyway and shows such a request missing the rehearsal (cached 0).
+    p.add_argument(
+        "--logprobs",
+        action="store_true",
+        help="Also request and compare chosen-token logprobs (served outside the rehearsal namespace)",
+    )
     a = p.parse_args()
     if a.dry_run:
         print(json.dumps(vars(a), default=str))
@@ -54,6 +74,7 @@ def main():
     def ask_plain(server, messages):
         body = t.req(server.model, "", 32)
         body["messages"] = messages
+        body["logprobs"] = a.logprobs
         result = t.send(server.url, body)
         deadline = time.monotonic() + 3
         while True:
@@ -145,7 +166,11 @@ def main():
     try:
         for tokens, arrival, messages, reference in fixtures:
             plain = ask_plain(server, messages)
-            equal = plain["toks"] == reference["toks"]
+            equal = (
+                plain["toks"] == reference["toks"]
+                if not a.logprobs
+                else same_output(plain, reference)
+            )
             emit(
                 dict(
                     ctx=a.ctx,
@@ -155,6 +180,9 @@ def main():
                     arm="plain",
                     tokens_equal=plain["toks"] == reference["toks"],
                     raw_ids_equal=plain["toks"] == reference["toks"],
+                    logprobs_equal=(
+                        plain["lps"] == reference["lps"] if a.logprobs else None
+                    ),
                     **{k: v for k, v in plain.items() if k not in ("toks", "lps")},
                 )
             )
@@ -163,7 +191,7 @@ def main():
         server.verify_spec_mode()
     finally:
         server.kill()
-    emit(dict(complete=True, cases=len(fixtures)))
+    emit(dict(complete=True, cases=len(fixtures), logprobs_checked=a.logprobs))
 
 
 if __name__ == "__main__":

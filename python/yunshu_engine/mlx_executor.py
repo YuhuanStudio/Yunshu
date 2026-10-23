@@ -55,9 +55,11 @@ def get_mlx_executor() -> ThreadPoolExecutor:
     to prevent Metal command buffer races that cause segfaults.
     """
     global _executor
-    if _executor is None:
+    # A pool someone shut down directly (not via shutdown_mlx_executor) with no live worker is
+    # replaced, so later GPU work does not fail with "cannot schedule new futures after shutdown".
+    if _executor is None or _is_broken(_executor):
         with _executor_lock:
-            if _executor is None:
+            if _executor is None or _is_broken(_executor):
                 _executor = ThreadPoolExecutor(
                     max_workers=1,
                     thread_name_prefix="mlx-global",
