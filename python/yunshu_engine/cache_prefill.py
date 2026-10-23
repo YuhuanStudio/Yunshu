@@ -1,8 +1,8 @@
 # Patches upstream mlx-vlm dispatch; kernels remain unchanged.
 """Absolute prefill spans for the upstream runner's exact checkpoints.
 
-Only span dispatch is changed. Kernels and checkpoint publication are owned by
-other workers. A suffix starts by finishing the same atom as a cold request.
+Span dispatch and native KV capacity reservation are changed. Kernels and
+checkpoint publication retain their existing contracts. A suffix starts by finishing the same atom as a cold request.
 """
 
 from __future__ import annotations
@@ -13,6 +13,20 @@ import importlib
 from .kernels import gdn_prefill
 
 TAIL_FAST_ROWS = 48  # tail rows on the lane projections (LaneLinear row pieces; attention stays BQ32)
+
+
+def reserve_prompt_kv(prompt_cache, end: int) -> None:
+    """Reserve native KV backing once its first chunk establishes the head shape.
+
+    The logical offset and canonical prefill boundaries stay unchanged. Native
+    reservation preserves the existing prefix and APC snapshots keep their
+    detached ownership contract. Attention reads the reserved backing's strides.
+    """
+    from mlx_vlm.models.cache import KVCache
+
+    for cache in prompt_cache:
+        if type(cache) is KVCache:
+            cache.prefix_cache_reserve(end)
 
 
 def install():
@@ -110,6 +124,7 @@ def install():
             position = self._split_position()
             if position is not None:
                 start, end = position
+                reserve_prompt_kv(self.prompt_cache, end)
                 step = step or 2048
                 boundary = min((start // step + 1) * step, (end - 1) // 64 * 64)
                 if boundary <= start or boundary % 64:
