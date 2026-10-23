@@ -161,8 +161,7 @@ def eligible(
         and rows
         >= (
             1
-            if gdn_prefill.split_enabled()
-            and (gdn_prefill.in_prefill() or gdn_prefill.in_tail())
+            if gdn_prefill.split_enabled() and gdn_prefill.in_prefill_math()
             else MIN_ROWS
         )
         and keys >= rows
@@ -177,7 +176,7 @@ def skip_reason(queries, keys, values, cache, scale, mask, sinks) -> str | None:
         return "sinks"
     singleton_prefill = (
         gdn_prefill.split_enabled()
-        and gdn_prefill.in_prefill()
+        and gdn_prefill.in_prefill_math()
         and queries.shape[-2] == 1
         and mask is None
     )

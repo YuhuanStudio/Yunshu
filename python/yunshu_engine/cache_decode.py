@@ -124,7 +124,7 @@ def install():
         from .kernels import gdn_prefill
 
         eligible = (
-            not (gdn_prefill.split_enabled() and gdn_prefill.in_prefill())
+            not (gdn_prefill.split_enabled() and gdn_prefill.in_prefill_math())
             and getattr(_STATE, "active", False)
             and not kwargs
             and not self.training
