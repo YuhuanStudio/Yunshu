@@ -3,7 +3,8 @@
 Each run gets a fresh, fully isolated environment under ``BUILD`` (HOME, XDG_*, TMPDIR,
 CLAUDE_CONFIG_DIR, CODEX_HOME, git/npm config), a scrubbed environment (nothing inherited
 except PATH basics), and a dummy API key. The whole agent process tree is additionally wrapped
-in a macOS ``sandbox-exec`` profile that
+in a sandbox (default: Anthropic sandbox-runtime ``srt``; ``AGENTIC_SANDBOX=seatbelt``
+selects the older hand-written ``sandbox-exec`` profile) that
 
 * denies all network except loopback (so a stray telemetry / update / registry call fails
   loudly instead of leaving the machine),
@@ -21,6 +22,7 @@ import os
 import shlex
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import urlparse
 
 CLIS = Path(
     os.environ.get("AGENTIC_CLIS", "/Volumes/P5Plus/yunshu-test-envs/agentic-clis")
@@ -98,6 +100,9 @@ def base_env(home: Path, port_hint: str = "") -> dict[str, str]:
         "XDG_CACHE_HOME": str(home / ".cache"),
         "XDG_STATE_HOME": str(home / ".local" / "state"),
         "TMPDIR": str(tmp) + "/",
+        "TMPPREFIX": str(
+            tmp / "zsh"
+        ),  # zsh heredoc temp files (default /tmp/zsh is read-only)
         "LANG": "en_US.UTF-8",
         "LC_ALL": "en_US.UTF-8",
         "TERM": "dumb",
@@ -137,6 +142,50 @@ def sandbox_profile(writable: list[Path]) -> str:
         '(allow file-write* (subpath "/private/var/folders"))',
     ]
     return "\n".join(lines) + "\n"
+
+
+# --- Anthropic sandbox-runtime (srt), installed on the external disk only -------------------
+SRT_DIR = Path(os.environ.get("AGENTIC_SRT", "/Volumes/P5Plus/yunshu-build/srt"))
+SRT_CLI = SRT_DIR / "node_modules/@anthropic-ai/sandbox-runtime/dist/cli.js"
+NODE = os.environ.get("AGENTIC_NODE", "/opt/homebrew/bin/node")
+SANDBOX_MODE = os.environ.get("AGENTIC_SANDBOX", "srt")  # "srt" | "seatbelt"
+
+
+def srt_settings(writable: list[Path], port: int | None = None) -> dict:
+    """The srt settings equivalent to ``sandbox_profile``.
+
+    * writes: srt denies everywhere by default, so ``allowWrite`` is the run's own dirs
+      (the run dir holds HOME, XDG_*, TMPDIR and zsh's TMPPREFIX; plus the workspace);
+    * reads: allowed except ``DENY_HOME`` (real agent configs, keys, shell rc, Documents ...);
+    * network: srt denies all by default. ``allowedDomains`` names only our port (for clients
+      that honour the proxy); agent CLIs bypass the proxy for loopback (srt sets no_proxy), so
+      ``allowLocalBinding`` is required for their direct connection. On macOS it means
+      "connect to localhost on any port", the same width as the old profile's
+      ``remote ip "localhost:*"``. Everything else is refused.
+    """
+    domains = ["localhost", "127.0.0.1"]
+    if port is not None:
+        domains = [f"{d}:{port}" for d in domains]
+    return {
+        "network": {
+            "allowedDomains": domains,
+            "deniedDomains": [],
+            "allowLocalBinding": True,
+        },
+        "filesystem": {
+            "denyRead": [str(REAL_HOME / p) for p in DENY_HOME],
+            "allowRead": [],
+            "allowWrite": [str(p) for p in writable],
+            "denyWrite": [],
+        },
+    }
+
+
+def wrap_srt(
+    cmd: list[str], settings_path: Path, writable: list[Path], port: int | None = None
+) -> list[str]:
+    settings_path.write_text(json.dumps(srt_settings(writable, port), indent=2))
+    return [NODE, str(SRT_CLI), "--settings", str(settings_path), "-c", shlex.join(cmd)]
 
 
 def wrap_sandbox(cmd: list[str], profile_path: Path, writable: list[Path]) -> list[str]:
@@ -179,7 +228,11 @@ def prepare(
     fn = {"opencode": _opencode, "claude": _claude, "codex": _codex}[agent]
     launch = fn(env, home, workdir, base_url, model, prompt, context_len, max_output)
     writable = [run_dir, workdir]
-    launch.cmd = wrap_sandbox(launch.cmd, run_dir / "sandbox.sb", writable)
+    if SANDBOX_MODE == "seatbelt":
+        launch.cmd = wrap_sandbox(launch.cmd, run_dir / "sandbox.sb", writable)
+    else:
+        port = urlparse(base_url).port
+        launch.cmd = wrap_srt(launch.cmd, run_dir / "srt-settings.json", writable, port)
     return launch
 
 
