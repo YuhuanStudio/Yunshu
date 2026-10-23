@@ -20,6 +20,7 @@ ap.add_argument("--decode-tokens", type=int, default=256)
 ap.add_argument("--turn2-tokens", type=int, default=0)
 ap.add_argument("--long-ask", action="store_true")
 ap.add_argument("--items", default="")
+ap.add_argument("--logprobs", action="store_true")
 a = ap.parse_args()
 env = dict(kv.split("=", 1) for kv in a.env)
 if env.get("FAKE_CRASH") == "1":
@@ -104,6 +105,8 @@ with open(a.out, "a") as out:
                     cached=0 if phase == "cold" else ctx,
                     sha=hashlib.sha256(key.encode()).hexdigest()[:16],
                     text="hello",
+                    lp_tokens=["h", "i"] if a.logprobs else None,
+                    lps=[-0.5, -1.0 / (1 + len(key))] if a.logprobs else None,
                     xy={"speculative": spec},
                 )
     emit(part="part_done", engine="yunshu", which=a.part, rep=a.rep, complete=True)

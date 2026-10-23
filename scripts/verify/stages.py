@@ -135,8 +135,10 @@ def _units(ctx: Ctx) -> list:
     return [(f"c{c}{k}", [c], [k]) for c in cfg["ctx"] for k in cfg["kinds"]]
 
 
-def _dec_args(ctx: Ctx) -> list:
+def _dec_args(ctx: Ctx, stage_logprobs: bool = False) -> list:
     out = ["--decode-tokens", str(int(ctx.suite.get("decode_tokens", 256)))]
+    if stage_logprobs:
+        out.append("--logprobs")
     if ctx.suite.get("long_ask"):
         out.append("--long-ask")
     if ctx.suite.get("turn2_tokens"):
@@ -481,7 +483,7 @@ def _identity_cells(ctx: Ctx) -> list:
                             key,
                             _unit_args(ctxs)
                             + _kind_args(kinds, cfg["kinds"])
-                            + _dec_args(ctx),
+                            + _dec_args(ctx, stage_logprobs=True),
                             env=ctx.arm_env(tree_arm, extra),
                         ),
                         mem_gb=ctx.mem_gb,
@@ -542,7 +544,7 @@ def _share_key(ctx: Ctx, arm: str, extra: dict, c, tag: str = "") -> str:
         _prompt_hashes(c, ctx.suite["kinds"]),
         _runtime_key(ctx, arm),
         tag,
-        _dec_args(ctx),
+        _dec_args(ctx, stage_logprobs=True),
         _harness_hash(),
         os.environ.get("GPUQ_DEVICE", "m5"),
         n=24,
@@ -622,16 +624,27 @@ def stage_identity(ctx: Ctx) -> StageResult:
                 "compared": cmp_["compared"],
                 "mismatches": len(cmp_["mismatches"]),
             }
+            numbers[f"{tag}cross_version_drift".strip()] = {
+                "cells": len(cmp_["drift"]),
+                "max_abs_dlp": max([d["max_abs_dlp"] for d in cmp_["drift"]] or [0.0]),
+                "note": "tokens equal, logprobs differ (information; see the accuracy-gate decision)",
+            }
             if not cmp_["ok"]:
                 reasons.append(f"{tag}base != cand: {cmp_['mismatches'][:3]}")
             offrows = _rows_for(res, "candoff", mode)
             if offrows:
                 c2 = analyze.compare_identity(
-                    offrows, cand, "spec_off", "cand", planned=planned
+                    offrows,
+                    cand,
+                    "spec_off",
+                    "cand",
+                    planned=planned,
+                    strict_logprobs=True,
                 )
                 numbers[f"{tag}spec_on_vs_off".strip()] = {
                     "compared": c2["compared"],
                     "mismatches": len(c2["mismatches"]),
+                    "max_abs_dlp": c2["max_abs_dlp"],
                 }
                 if not c2["ok"]:
                     reasons.append(f"{tag}spec on != spec off: {c2['mismatches'][:3]}")

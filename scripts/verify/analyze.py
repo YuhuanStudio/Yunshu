@@ -29,17 +29,37 @@ def planned_identity(ctxs, kinds, phases=PHASES) -> list:
     return [(c, k, p) for c in ctxs for k in kinds for p in phases]
 
 
+def logprob_delta(ra: dict, rb: dict):
+    """(max |dlp|, why) of the per-token chosen-token logprobs of two records; why is set when
+    they cannot be compared (absent, different tokens or length)."""
+    la, lb = ra.get("lps"), rb.get("lps")
+    if not la or not lb:
+        return None, "logprobs missing"
+    if ra.get("lp_tokens") != rb.get("lp_tokens") or len(la) != len(lb):
+        return None, "logprob token sequences differ"
+    return max(abs(x - y) for x, y in zip(la, lb, strict=True)), ""
+
+
 def compare_identity(
-    a_rows, b_rows, a_name="base", b_name="cand", ctxs=None, planned=None
+    a_rows,
+    b_rows,
+    a_name="base",
+    b_name="cand",
+    ctxs=None,
+    planned=None,
+    strict_logprobs=False,
 ) -> dict:
     """Greedy digests equal on every planned cell (default: the cells either arm produced); a
-    cell missing in either arm, or a record without sha / ct, fails closed."""
+    cell missing in either arm, or a record without sha / ct, fails closed. With
+    strict_logprobs (spec on vs off: same version) the chosen-token logprobs must also be
+    present and bit-equal (max |dlp| == 0.0). Without it (base vs cand) a logprob difference on
+    equal digests is reported as cross-version "drift", not a failure."""
     a, b = decode_index(a_rows), decode_index(b_rows)
     if planned is not None:
         keys = sorted({tuple(k) for k in planned})
     else:
         keys = sorted(k for k in set(a) | set(b) if ctxs is None or k[0] in ctxs)
-    bad, n = [], 0
+    bad, n, drift, worst = [], 0, [], 0.0
     for k in keys:
         ra, rb = a.get(k), b.get(k)
         if ra is None or rb is None:
@@ -78,7 +98,26 @@ def compare_identity(
                     },
                 }
             )
-    return {"compared": n, "mismatches": bad, "ok": n > 0 and not bad}
+            continue
+        d, why = logprob_delta(ra, rb)
+        if d is None:
+            if strict_logprobs:
+                bad.append({"cell": list(k), "why": why})
+        elif d != 0.0:
+            worst = max(worst, d)
+            if strict_logprobs:
+                bad.append(
+                    {"cell": list(k), "why": "logprobs differ", "max_abs_dlp": d}
+                )
+            else:
+                drift.append({"cell": list(k), "max_abs_dlp": d})
+    return {
+        "compared": n,
+        "mismatches": bad,
+        "drift": drift,
+        "max_abs_dlp": worst,
+        "ok": n > 0 and not bad,
+    }
 
 
 def check_apc(rows, require_hit: bool = True) -> dict:
@@ -103,6 +142,16 @@ def check_apc(rows, require_hit: bool = True) -> dict:
                     "warm": warm.get("sha"),
                 }
             )
+        if cold.get("lps") or warm.get("lps"):  # evidence with logprobs: bit-equal too
+            d, why = logprob_delta(cold, warm)
+            if d is None or d != 0.0:
+                bad.append(
+                    {
+                        "cell": [ctx, kind],
+                        "why": why or "warm logprobs differ from cold",
+                        "max_abs_dlp": d,
+                    }
+                )
         if require_hit and not (warm.get("cached") or 0) > 0:
             bad.append(
                 {
