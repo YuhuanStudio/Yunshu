@@ -1052,7 +1052,7 @@
   },
   "prefill_kernels": {
    "module": "python/yunshu_engine/kernels/nax_prefill.py",
-   "what": "Qualified 27B split-invariant prompt scopes: NAX rows padded to 64, BQ32 every query length, identity-padded chunked GDN; absolute 64-aligned APC checkpoints, distinct arithmetic namespace; decode/verify unchanged (YUNSHU_PREFILL_MATMUL, YUNSHU_PREFILL_ATTENTION, YUNSHU_PREFILL_GDN)",
+   "what": "Qualified 27B split-invariant prompt scopes: NAX rows padded to 64, BQ32 every query length, identity-padded chunked GDN, fused conv1d+silu (no concatenate); absolute 64-aligned APC checkpoints, distinct arithmetic namespace; decode/verify unchanged (YUNSHU_PREFILL_MATMUL, YUNSHU_PREFILL_ATTENTION, YUNSHU_PREFILL_GDN)",
    "cells": {
     "mtp": {
      "s": "engaged",

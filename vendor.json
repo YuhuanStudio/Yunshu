@@ -2298,6 +2298,21 @@
     },
     {
       "kind": "patches",
+      "path": "python/yunshu_engine/kernels/gdn_prefill.py",
+      "repo": "https://github.com/Blaizzy/mlx-vlm",
+      "clone": "reference/mlx-vlm",
+      "package": "mlx-vlm",
+      "module": "mlx_vlm.models.qwen3_5.language",
+      "symbol": "Qwen3_5GatedDeltaNet.__call__",
+      "signature": "(self, inputs: mx.array, mask: Optional[mx.array]=None, cache: Optional[Any]=None)",
+      "license": "MIT",
+      "commit": "v0.7.4",
+      "why": "split-invariant prefill (B=1, S>=3, bf16) runs one Metal kernel for conv1d+silu over the carried 3 rows and the new rows (no concatenate), bit-identical to MLX; the body after the conv mirrors upstream; every other call is upstream",
+      "source_sha256": "f8deff65c803d4dab0611c00d51d08d1f88326361125334436622982fa10ca5d",
+      "installed_version": "0.7.8"
+    },
+    {
+      "kind": "patches",
       "path": "python/yunshu_engine/kernels/buffer_cache.py",
       "repo": "https://github.com/Blaizzy/mlx-vlm",
       "clone": "reference/mlx-vlm",
