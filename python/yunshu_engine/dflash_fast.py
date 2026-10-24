@@ -1169,8 +1169,13 @@ def eligible(lm, draft, cache, kwargs, *, guided=False):
     """Admit by live context; request output budgets do not predict cost. ``guided``: the
     request's tool-call guide is masked here (constrained_spec.invariant_guide)."""
     from . import mtp_lane
-    from .keyed_sampling import tree_supported
+    from .constrained_spec import current_request
+    from .keyed_sampling import KeyedSampler, tree_supported
 
+    request = current_request()
+    position_sensitive = isinstance(kwargs.get("sampler"), KeyedSampler) or bool(
+        request is not None and request.logprobs
+    )
     context = mtp_lane._STATE["context"]
     return bool(
         tree_supported(kwargs.get("sampler"), kwargs.get("greedy_sampling", True))
@@ -1181,5 +1186,12 @@ def eligible(lm, draft, cache, kwargs, *, guided=False):
         and tv.lane_ready(lm, cache)
         and (length := context_length(lm, cache)) is not None
         and live_eligible(length + 1)
+        # The upstream handoff starts its generation indices at one and does not
+        # publish tree probability reports. Keep these requests on chain from the
+        # start if their budget could reach that boundary.
+        and (
+            not position_sensitive
+            or live_eligible(length + int(kwargs.get("max_tokens") or 0))
+        )
         and supported(lm, draft)
     )
