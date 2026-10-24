@@ -1,0 +1,182 @@
+---
+title: Transports
+description: The HTTP, SSE, WebSocket, Realtime, WebRTC and Unix socket transports Yunshu serves, the multiplexed text WebSocket protocol, and what is not offered.
+---
+
+Yunshu serves the same app over several transports. Every one dispatches into the same handlers, so auth, middleware, request ids, the prefix cache and cancellation behave identically.
+
+| Transport | Endpoint | Status |
+|---|---|---|
+| HTTP and SSE | `POST /v1/chat/completions`, `/v1/responses`, `/v1/messages` | stable |
+| Text WebSocket, multiplexed | `WS /v1/stream` | stable, Yunshu protocol (below) |
+| Responses WebSocket mode | `WS /v1/responses` | stable, OpenAI's protocol |
+| Realtime WebSocket | `WS /v1/realtime` (GA schema; beta with `OpenAI-Beta: realtime=v1`) and `/realtime` (beta) | stable |
+| Realtime WebRTC | `POST /v1/realtime/calls` | optional `yunshu[webrtc]` |
+| Unix domain socket | `yunshu serve --uds PATH` | stable |
+| HTTP/2 (h2c) | not offered | none |
+
+## What the specs say
+
+**Responses WebSocket mode.** Per OpenAI's WebSocket mode guide, a client connects to `/v1/responses` as a WebSocket (SDK: `client.responses.connect()`), sends `{"type":"response.create", "model", "input", "store", "previous_response_id", "generate", "stream_id"}`, and receives the same `response.*` events as the SSE stream, raw, plus `error`. Requests with the same `stream_id` run in order and never overlap; different ids run concurrently. Continuation uses `previous_response_id` with only the new input items. Yunshu implements this at `WS /v1/responses`.
+
+**Anthropic Messages.** SSE (`stream: true`) is the only official streaming transport; there is no WebSocket mode to match. Messages is reachable through Yunshu's own `/v1/stream` (`api: "messages"`).
+
+**OpenAI Realtime.** WebSocket at `/v1/realtime?model=M` with `Authorization: Bearer` (browsers use the subprotocols `realtime` and `openai-insecure-api-key.<key>`), JSON text frames. The GA session has `type: "realtime"`, `output_modalities`, `audio.input` and `audio.output`, `instructions`, `tools` and `tool_choice`. Audio formats are `audio/pcm` (24 kHz, mono, 16-bit), `audio/pcmu` and `audio/pcma`; turn detection is `server_vad`, `semantic_vad` or null. WebRTC posts an SDP offer to `/v1/realtime/calls` and exchanges the same events on an `oai-events` data channel.
+
+## Text WebSocket: WS /v1/stream
+
+This is the Yunshu protocol, used where no official WebSocket mode exists (chat completions, completions, messages) and for the multiplexing extras. One connection carries many concurrent requests. Server events are the same objects the SSE stream carries as `data:` payloads, wrapped with the client's request id.
+
+<Steps>
+<Step>
+
+Connect with the same auth as HTTP (`Authorization: Bearer`, `x-api-key` or `?token=`). Origin and credentials are checked before the upgrade, so a rejected client gets an HTTP 403 handshake failure.
+
+</Step>
+<Step>
+
+Read the first server message, `session.created`. It lists `apis` and `limits` (`max_inflight`, `max_stream_ids`, `send_queue`, `ping_interval_s`).
+
+</Step>
+<Step>
+
+Send a request frame. `body` is the normal HTTP body; `stream` is forced on and, for chat and completions, `stream_options.include_usage` defaults to true.
+
+```json
+{"type": "request", "id": "a", "api": "chat.completions", "body": {"model": "local", "messages": [{"role": "user", "content": "Hi"}]}}
+```
+
+</Step>
+<Step>
+
+Read `event` frames until the terminal `done` frame for that id.
+
+</Step>
+</Steps>
+
+Client to server (JSON text frames):
+
+| Message | Meaning |
+|---|---|
+| `{"type":"request","id":"a","api":"chat.completions\|completions\|responses\|messages","body":{...},"stream_id":"s"}` | start a request (`stream_id` optional) |
+| `{"type":"cancel","id":"a"}` | abort; generation stops (the same path as an SSE client disconnect); ends with `done(cancelled)` |
+| `{"type":"stop","id":"a"}` | stop on demand; ends with `done(stopped)` |
+| `{"type":"update","id":"a","max_tokens":N}` | cap total streamed deltas (about one per token) at N; ends with `done(max_tokens)` |
+| `{"type":"ping","t":..}` and `{"type":"pong"}` | liveness in both directions |
+
+Server to client:
+
+| Message | Meaning |
+|---|---|
+| `{"type":"session.created","protocol":"yunshu.stream","apis":[...],"limits":{...}}` | first message |
+| `{"type":"event","id":"a","event":"<SSE event name or null>","data":{...}}` | one SSE event. For chat, `data` is the `chat.completion.chunk`; for responses and messages, the named events |
+| `{"type":"done","id":"a","reason":"completed\|cancelled\|stopped\|max_tokens\|error","stats":{"ttft_ms","duration_ms","events","deltas"}}` | terminal message of every request; also carries `request_id` |
+| `{"type":"error","id"?,"status":404,"error":{...}}` | request-scoped (with `id`) or connection-scoped error; upstream HTTP errors keep their status and body |
+| `{"type":"ping","t":...}` | heartbeat every `YUNSHU_WS_PING_INTERVAL` seconds |
+| `{"type":"updated","id","max_tokens"}` | acknowledgement of `update` |
+| `{"type":"progress","id",...}` | queue and prefill progress: the fields of the SSE `: yunshu-progress` comment (`phase`, `percent`, `processed_tokens`, `tokens_per_second`, `eta_s`, `queue_position`, ...) |
+| `{"type":"stats","id",...}` | per-response stats: the fields of the `x_yunshu` object (`ttft_ms`, `decode_tps`, cache hits, ...). See [Yunshu extensions](/docs/api/extensions) |
+
+### Rules
+
+- `id` is the client request id. When it is header-safe (1 to 128 characters of `A-Za-z0-9._:-`) it is also the HTTP `X-Request-Id`, so `GET` and `DELETE /v1/requests/{id}`, logs and error hints use the same id. Otherwise the handler generates one and reports it as `request_id` in `done`.
+- At most `YUNSHU_WS_MAX_INFLIGHT` (default 16) requests run at once per connection; more get `429 too_many_requests`. Reusing an active id is `409`. Requests sharing a `stream_id` run in order; at most 32 stream ids per connection.
+- Backpressure: the per-connection outbound queue is bounded (`YUNSHU_WS_SEND_QUEUE`, default 256 events), so a slow reader blocks the app's `send()` and generation pauses instead of buffering. Heartbeats never queue behind a stalled reader.
+- Closing the socket cancels every in-flight request.
+
+| Setting | Default | Effect |
+|---|---|---|
+| `YUNSHU_WS_MAX_INFLIGHT` | `16` | concurrent requests per connection |
+| `YUNSHU_WS_PING_INTERVAL` | `15.0` | seconds between heartbeats; `0` disables |
+| `YUNSHU_WS_SEND_QUEUE` | `256` | buffered outbound events before generation pauses |
+
+### Responses WebSocket mode
+
+`WS /v1/responses` speaks OpenAI's protocol: send `{"type":"response.create", ...body..., "stream_id"?}` and receive raw `response.*` events. `stream_id` lanes work as above. Yunshu adds `{"type":"response.cancel","stream_id"|"id"}`. Progress and stats events are not emitted in this dialect, because OpenAI's protocol has no slot for them. The official `openai` SDK (`client.responses.connect()`) is the reference client.
+
+### Python client
+
+```python
+from yunshu_client import YunshuStream
+
+async with YunshuStream("ws://127.0.0.1:8000/v1/stream", token=None) as conn:
+    async for m in conn.chat({"model": "m", "messages": [...]}, id="a", with_done=True):
+        ...                      # events, then the done message
+    await conn.cancel("a")       # from any task
+```
+
+`examples/ws_stream.py` streams two chats on one socket and cancels one.
+
+## Realtime
+
+`/v1/realtime` implements the OpenAI Realtime protocol in two dialects chosen at the handshake: GA (the default, what `client.realtime.connect()` speaks) and beta (`OpenAI-Beta: realtime=v1`, and the legacy `/realtime` path). The session engine is shared; `yunshu_gateway/realtime_ga.py` translates event names and the session shape at the socket boundary. Auth and Origin are checked before the upgrade (HTTP 403). See the [Realtime API reference](/docs/api/realtime).
+
+Differences from api.openai.com:
+
+- `semantic_vad` is served as `server_vad`; `eagerness` is ignored.
+- `turn_detection.idle_timeout_ms`: that long after a completed response (plus the playback time of its audio) without user speech, the server sends `input_audio_buffer.timeout_triggered`, commits the empty buffer as a silent user turn and answers.
+- `audio.input.noise_reduction` (`near_field` or `far_field`) applies a causal CPU high-pass and noise-floor expander before VAD and ASR. It is a light filter, not a neural denoiser.
+- `rate_limits.updated` follows `response.created`. A local server has no quota: `requests` reports `YUNSHU_RATE_LIMIT_RPM` (2^31-1 when 0, meaning unlimited) and `tokens` reports the model's context window.
+- `output_audio_buffer.started`, `.stopped` and `.cleared` (GA dialect only) bracket the audio of a response; the client event `output_audio_buffer.clear` cancels the speaking response.
+- `response.create.input` replaces the conversation as the context of that response; combine it with `conversation: "none"` to keep it out of the history.
+- Unsupported session fields pass through silently, with no `invalid_request_error`.
+
+### WebRTC
+
+<Steps>
+<Step>
+
+Install the extra: `uv pip install 'yunshu[webrtc]'`. Without it, `POST /v1/realtime/calls` returns 503 and `WS /v1/realtime` is the alternative.
+
+</Step>
+<Step>
+
+Post an SDP offer to `/v1/realtime/calls` (`application/sdp`, or multipart `sdp` plus JSON `session`), as `client.realtime.calls.create` does. The server returns 201, an SDP answer and a `Location` call ID.
+
+</Step>
+<Step>
+
+Exchange events on the `oai-events` data channel, which shares the GA Realtime session. Audio travels on RTP tracks.
+
+</Step>
+</Steps>
+
+Incoming audio is resampled on CPU to mono PCM16 at 24 kHz, and outgoing PCM uses a bounded two-second buffer. Sessions close on peer failure, client channel close, server shutdown or after one hour; offers without an opened channel expire after 60 seconds; at most 16 calls stay live. Ephemeral client secrets also authenticate this endpoint. There are no public STUN or TURN servers, so loopback and LAN peers need directly reachable ICE candidates. SIP call management and a monitoring sideband WebSocket are not provided.
+
+## Unix domain socket
+
+`yunshu serve --uds /path/y.sock` (setting `YUNSHU_UDS`) serves the identical app on a socket instead of TCP. `--host` and `--port` are ignored, and a stale socket file is removed. Owner-only file permissions are the access control, which makes this the safest local transport: no port and no network exposure.
+
+<Tabs items={["curl", "Python"]}>
+<Tab value="curl">
+
+```bash
+curl --unix-socket /path/y.sock http://localhost/v1/models
+```
+
+</Tab>
+<Tab value="Python">
+
+```python
+import httpx, openai
+
+client = openai.OpenAI(
+    base_url="http://yunshu/v1",
+    api_key="x",
+    http_client=httpx.Client(transport=httpx.HTTPTransport(uds="/path/y.sock")),
+)
+```
+
+</Tab>
+</Tabs>
+
+`YunshuStream(url, uds=path)` does the same for the WebSocket. The OpenAI SDK's own Realtime and Responses WebSocket clients open TCP connections, so use a TCP port for them.
+
+## HTTP/2
+
+Not offered. uvicorn speaks HTTP/1.1 only, and h2c would need a second server stack (hypercorn or granian) with its own lifespan, WebSocket and disconnect semantics. Disconnect-driven cancellation and the multiplexed WebSocket already cover what HTTP/2 would add: many concurrent streams on one connection, with no head-of-line blocking between requests.
+
+## How to verify
+
+- `scripts/dev/realtime_conformance.py` checks Realtime against the official SDK (a unit test with a fake engine); `scripts/dev/transport_smoke.py` is the real-model smoke.
+- WebRTC signalling, audio framing, queue bounds and cleanup are covered in `tests/unit/test_respfeat.py`.

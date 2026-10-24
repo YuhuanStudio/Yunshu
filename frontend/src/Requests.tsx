@@ -274,7 +274,7 @@ export function Requests({
     engine.status?.last?.request_id,
     // A page opened while the engine is away has no status yet, but the console still answers its record.
     engine.status?.console_process === true ||
-      (engine.status == null && engine.phase === "offline"),
+      (engine.status == null && engine.failures > 0),
   );
   const sampled = useMemo(
     () =>
@@ -345,6 +345,14 @@ export function Requests({
         });
   const matched = useMemo(() => sortRows(bySpeed, sort), [bySpeed, sort]);
   const shown = matched.slice(0, limit);
+  const recentDone = useMemo(
+    () =>
+      rows
+        .filter((r) => r.phase === "complete")
+        .sort((a, b) => (b.t ?? 0) - (a.t ?? 0))
+        .slice(0, 5),
+    [rows],
+  );
   const lanes = useRef<(Row | null)[]>([]);
   const laneScope = `${filter}/${outcome}/${query}/${speed}/${sort.key}/${sort.dir}`;
   const previousScope = useRef(laneScope);
@@ -463,6 +471,14 @@ export function Requests({
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, [xl, detail]);
+  const newestFinished = useMemo(
+    () =>
+      finished.reduce<Row | null>(
+        (a, r) => (!a || (r.t ?? 0) > (a.t ?? 0) ? r : a),
+        null,
+      ),
+    [finished],
+  );
   const view =
     (detail &&
       finished.find(
@@ -472,7 +488,9 @@ export function Requests({
             r.source === "archive" ||
             r.source === "history"),
       )) ||
-    detail;
+    detail ||
+    // Nothing chosen on a wide screen: the details column shows the newest finished request, not a blank card.
+    (xl ? newestFinished : null);
   const done = view?.phase === "complete";
   const copyId = (id: string) => {
     void navigator.clipboard?.writeText(id).then(() => {
@@ -810,13 +828,13 @@ export function Requests({
           <div className="space-y-5">
             <Card className="overflow-hidden">
               <div
-                className="relative min-h-[42rem]"
+                className={`relative ${filter === "active" ? "min-h-[9rem]" : "min-h-[14rem]"}`}
                 data-live-list=""
                 ref={listRef}
               >
                 <TooltipProvider delayDuration={200}>
                   <Table
-                    className="md:min-w-[680px] xl:table-fixed"
+                    className="md:min-w-[680px] min-[1700px]:table-fixed"
                     scrollLabel={t("requests.list.tableLabel")}
                   >
                     <Thead>
@@ -825,7 +843,7 @@ export function Requests({
                           k="time"
                           sort={sort}
                           setSort={setSort}
-                          className="w-24 max-sm:hidden"
+                          className="w-20 max-sm:hidden"
                         >
                           {t("requests.list.colTime")}
                         </SortTh>
@@ -837,7 +855,7 @@ export function Requests({
                           k="ttft"
                           sort={sort}
                           setSort={setSort}
-                          className="hidden w-24 md:table-cell"
+                          className="hidden w-20 md:table-cell"
                         >
                           {t("requests.list.colTtft")}
                         </SortTh>
@@ -845,7 +863,7 @@ export function Requests({
                           k="total"
                           sort={sort}
                           setSort={setSort}
-                          className="hidden w-24 md:table-cell"
+                          className="hidden w-20 md:table-cell"
                         >
                           {t("requests.list.colTotal")}
                         </SortTh>
@@ -853,14 +871,14 @@ export function Requests({
                           k="tps"
                           sort={sort}
                           setSort={setSort}
-                          className="hidden w-24 md:table-cell"
+                          className="hidden w-20 md:table-cell"
                         >
                           tok/s
                         </SortTh>
                         <Th className="hidden w-24 min-[1800px]:table-cell">
                           {t("requests.list.colSpec")}
                         </Th>
-                        <Th className="w-28">
+                        <Th className="w-24">
                           <span className="sr-only">
                             {t("requests.list.colActions")}
                           </span>
@@ -1033,7 +1051,7 @@ export function Requests({
                                       : `${elapsed(row.elapsed_s)} · ${number(speedValue)} tok/s`}
                                 </p>
                                 {/* Below lg the usage column is gone; the same numbers ride on a line of their own. */}
-                                <p className="mt-0.5 text-xs tabular-nums text-muted-foreground xl:hidden">
+                                <p className="mt-0.5 truncate text-xs tabular-nums text-muted-foreground xl:hidden">
                                   {t("requests.list.mobileUsage", {
                                     prompt: number(row.prompt_tokens, 0),
                                     out: number(row.completion_tokens, 0),
@@ -1155,6 +1173,37 @@ export function Requests({
                   </TableState>
                 )}
               </div>
+              {filter === "active" && recentDone.length > 0 && (
+                <div
+                  className="border-t px-4 py-3"
+                  data-testid="recent-finished"
+                >
+                  <p className="mb-2 text-xs font-medium text-muted-foreground">
+                    {t("requests.list.recentFinished")}
+                  </p>
+                  <ul className="m-0 flex list-none flex-col gap-1 p-0">
+                    {recentDone.map((r) => (
+                      <li key={r.id}>
+                        <button
+                          type="button"
+                          className="flex w-full items-center justify-between gap-3 rounded-md px-2 py-1.5 text-left text-xs text-muted-foreground tabular-nums hover:bg-muted"
+                          onClick={() => setDetail(r)}
+                        >
+                          <span className="min-w-0 truncate font-mono">
+                            {shortId(r.id)}
+                          </span>
+                          <span className="shrink-0">
+                            {r.ttft_ms != null ? formatMs(r.ttft_ms) : "—"} ·{" "}
+                            {r.decode_tps != null
+                              ? `${number(r.decode_tps)} tok/s`
+                              : "—"}
+                          </span>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
               {matched.length > shown.length && (
                 <div className="flex justify-center py-2">
                   <Button

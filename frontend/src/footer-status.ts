@@ -216,7 +216,7 @@ export function footerPills(input: FooterInput): FooterPill[] {
   const raw = activity(status);
   // Same rule as the top pill: a held "decode" with nothing decoding and no speed is idle.
   const a =
-    raw.phase === "decode" && raw.decodeNow == null && raw.counts.decode === 0
+    raw.phase === "decode" && raw.decodeNow == null && raw.counts.active === 0
       ? { ...raw, phase: "idle" as const }
       : raw;
   let value: string | undefined;

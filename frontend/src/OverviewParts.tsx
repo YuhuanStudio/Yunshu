@@ -131,9 +131,7 @@ export function StateStrip({
               >
                 <StatusIndicator status={dot(id, lit)} />
                 {tr(`overview.phase.${id}`)}
-                <Slot ch={2} align="right" className="tabular-nums">
-                  {lit ? countOf(id) : ""}
-                </Slot>
+                {lit && <span className="tabular-nums">{countOf(id)}</span>}
               </li>
             );
           })}

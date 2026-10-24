@@ -1,0 +1,169 @@
+---
+title: Agent compatibility
+description: What Claude Code, Codex CLI and opencode actually call, how Yunshu serves each request, and the scripts that re-earn those claims against the newest CLIs.
+---
+
+The goal for coding agents is near-native fidelity: Claude Code, Codex CLI, opencode and the official SDKs should find every endpoint, header, beta, tool type and server-side tool they use working like the real Anthropic and OpenAI APIs, not only correct generation. This page records what each agent calls (from a census of the real CLIs), what Yunshu does with it, and how the claim is verified. For the user-facing setup see [Agents](/docs/guides/agents).
+
+## What it does
+
+A census harness runs the real CLIs against a recording mock server, so the list of requests an agent makes comes from observation, not from documentation. The tools live in `scripts/research/agent_compat/`.
+
+| Piece | What it does |
+|---|---|
+| `census_server.py` | A scripted, recording mock model server. Records every request (method, path, query, headers, body), answers a script of tool calls so the agent walks a session, returns 404 for unknown paths, and answers `web_search_*` requests with spec-shaped server-tool blocks. No GPU |
+| `census.py` | Runs the pinned CLIs through scripted sessions: plain, bash and edit, sub-agents, web search and fetch, MCP, images, thinking, `/context`, `/cost`, `/compact`, status line, model discovery, Codex reasoning, compaction, websocket and catalog, opencode. Isolation: scrubbed environment, isolated `HOME`, `CLAUDE_CONFIG_DIR` and `CODEX_HOME`, `sandbox-exec` denying everything but loopback |
+| `census_tui.py` | Drives an agent's interactive TUI in a pty (`/status`, `/model`) |
+| `replay.py`, `replay_report.py` | Replay every recorded request against a real Yunshu and compare status and stream validity |
+| `e2e_agents.py`, `e2e_sdk.py`, `capture_proxy.py`, `fake_searxng.py`, `tiny_mcp.py` | End-to-end runs of the real agents and official SDKs against a real model, with a fake SearXNG (fixed corpus with a checkable fact), a tiny MCP server and a full-capture proxy |
+| `stream_check.py`, `synthetic_requests.py` | Stream validation and SDK-shaped synthetic requests used by the replay stages |
+
+Raw census data is private (`docs/research/runs/<date>-agent-census/`, gitignored).
+
+## What each agent calls
+
+### Claude Code
+
+| Request | When | Yunshu |
+|---|---|---|
+| `POST /v1/messages?beta=true`, `stream: true` | Every turn. Several `anthropic-beta` values, `system` as multiple blocks with `cache_control`, mid-conversation `role: "system"` entries, many client tools, `thinking: {type: "adaptive"}`, `output_config`, `context_management`, `metadata.user_id` | Served. Betas are never rejected. `adaptive` thinking and `output_config` are accepted |
+| `POST /v1/messages/count_tokens?beta=true` | `/context` | Served (counts system, messages, tools) |
+| `GET /v1/models?limit=1000` | Only with `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1`; fills `/model` | Served with `max_input_tokens`, `max_tokens` and `capabilities` |
+| `POST /v1/messages` with a `web_search_20250305` tool | Its WebSearch tool: the search runs server-side and the client renders `web_search_tool_result` blocks | Implemented as a server tool, see below |
+| Small-model calls | Titles, summaries, the WebFetch page summary | Served |
+| MCP servers | Client-side: tools reach the model as `mcp__server__tool` function tools | Nothing to serve; needs ordinary tool calling |
+| WebFetch | Client-side fetch, then a small-model summary call | Nothing to serve |
+| Sub-agents, `/compact` | Ordinary `/v1/messages` calls | Served |
+
+With traffic to Anthropic blocked, nothing else was requested: no telemetry, OAuth or update calls. Two things the CLI does not learn from a custom server: the context window (it assumes 200K for an unknown model id, which is why `CLAUDE_CODE_MAX_CONTEXT_TOKENS` exists) and prices (it prints its own arithmetic for an unknown model; this cannot be corrected from the server).
+
+### Codex CLI
+
+| Request | When | Yunshu |
+|---|---|---|
+| `POST /v1/responses`, `stream: true`, `store: false` | Every turn. `instructions`, `input` items (`developer` and `user` messages, `function_call`, `function_call_output`, `reasoning`), `tools` of type `function`, `namespace` (with nested `tools`) and `web_search`, `parallel_tool_calls`, `reasoning`, `include: ["reasoning.encrypted_content"]`, `prompt_cache_key` | Served, including `namespace` and `web_search` tools |
+| `/v1/responses` with `Upgrade: websocket` | Only when the provider sets `supports_websockets = true`; three attempts, then POST | `WS /v1/responses` exists; see [Transports](/docs/guides/transports) |
+| Compaction | Local: an ordinary `POST /v1/responses` with `tools: []`; there is no `/responses/compact` for a custom provider | Served |
+| Model metadata | Never fetched from a custom provider; without a catalog Codex prints "Model metadata not found", sends no reasoning effort and offers only built-in models | `yunshu launch codex` writes `model_catalog_json` |
+| `web_search = "live"` | Adds a `{type: "web_search"}` tool and expects `web_search_call` items | Implemented |
+| MCP servers | Client-side function tools | Nothing to serve |
+
+### opencode
+
+| Request | When | Yunshu |
+|---|---|---|
+| `POST /v1/chat/completions`, `stream_options: {include_usage: true}` | Every turn; title generation runs a first request with `reasoning_effort: "low"`; headers `x-session-id`, `x-session-affinity` | Served |
+| `/models` | Not fetched; limits come from `provider.*.models.*.limit` | `yunshu launch opencode` writes them |
+
+## Guarantees
+
+The feature matrix below uses these labels: **works** (verified, evidence named), **partial**, **missing**, **n/a** (the agent never asks for it). Evidence: "E2E" is the real pinned agent against a real Yunshu with the launch-helper configuration and a capture proxy; "SDK" is the official SDK against a real server; "unit" is `tests/unit` with fakes.
+
+| Feature | Claude Code | Codex | opencode | SDK users | Evidence |
+|---|---|---|---|---|---|
+| Streaming generation, tool calls | works | works | works | works | E2E edit and bash tasks in all three, unit |
+| Mid-conversation system messages | works (text and image turns) | works (`developer` items) | n/a | works | unit |
+| Thinking and reasoning in the native shape | works (`thinking` blocks) | works (`reasoning` items, `encrypted_content` round trip) | works (`reasoning_content`) | works | unit, SDK |
+| Effort control | works (`output_config.effort`) | works (`reasoning.effort` via catalog levels) | works (`reasoning_effort`) | works | unit, launch |
+| Web search, server-side | works | works | n/a (client tool) | works (Messages and Responses, streamed and not) | E2E, SDK |
+| Web fetch | client-side in the CLI | n/a | n/a | works (server-side, SSRF-guarded) | SDK |
+| MCP | client-side, works | client-side, works | n/a | server-side connector works | E2E, SDK |
+| Images (tool result or input) | works | n/a in exec | n/a | works | E2E |
+| Model discovery and picker | works | works (catalog) | n/a | works | TUI capture, census |
+| Context window and auto-compact point | works | works (catalog) | works (`limit.context`) | works | E2E `/context`, launch |
+| Cost display | shows zero; the per-turn cost is the CLI's own arithmetic | n/a | n/a | n/a | TUI capture |
+| Rate-limit headers | n/a: no agent needs them; Yunshu has no quota and invents none | n/a | n/a | n/a | census |
+| `count_tokens` | works | n/a | n/a | works | census replay |
+| Usage fields | works (including cache read and thinking tokens) | works | works (`include_usage`) | works | E2E capture |
+| Engine failure mid-request | works: an SSE `error` event with the engine message | works: `response.failed` | works: an error chunk | works | unit |
+| Websocket transport | n/a | works (`WS /v1/responses`) | n/a | n/a | E2E |
+| Live engine state in the agent UI | works: `yunshu launch claude` installs `yunshu statusline` unless you have your own | not available | not available | `x_yunshu` fields, `: yunshu-progress` SSE comments | unit |
+| Prefix-cache reuse on agent traffic | works: per-request `x_yunshu.cache` and `X-Yunshu-Cache-*` | works | works | works | cache audit in the benchmark log |
+
+### Request-shape rules learned from real clients
+
+These are behaviors that failed against real SDKs and clients, fixed and now covered by tests:
+
+| Client behavior | What Yunshu does |
+|---|---|
+| An explicit `cache_control` marker that the chat template drops | The request is served without explicit checkpoints and the log names the marker; markers are hints, never a failure |
+| `"temperature": null`, `"max_tokens": null`, `"stream": null` (LangChain, LiteLLM, Vercel AI SDK, Zed) | An explicit null means unset on all generation routes (`schemas/nulls.py`) |
+| `top_k: -1` | A negative `top_k` means disabled |
+| Omitted `max_tokens` | `YUNSHU_DEFAULT_MAX_TOKENS` (default 32768) is the default; the context budget still clamps it |
+| Chat `tool_choice: {"type": "allowed_tools"}` and the Responses form | Folded into `tools` plus a mode on both routes |
+| Responses `usage.input_tokens_details` | Includes `cache_write_tokens` as the current `openai` `Response` type requires (real writes are in `x_yunshu`) |
+| A template or engine error after the stream started | An `error` event on Messages, chat and Responses, never an empty successful reply |
+| Claude Code turn after an image `Read` | The vision path runs the family message adapter, so per-turn system notes do not break Qwen's template |
+
+Known gaps (each listed with a reason in `tests/unit/test_spec_field_inventory.py`): chat `functions` and `function_call` (deprecated), custom tools in chat, Responses `prompt` templates, messages with no `user` turn, Responses `input` omitted. Yunshu ends Responses streams with `data: [DONE]` (the real API does not); every SDK and Codex stop on it.
+
+### Sampled speculative decoding
+
+Sampled requests (temperature above zero, what coding agents send) draft through the MTP lane with position-keyed Gumbel sampling (`keyed_sampling.py`). Noise uses 23 random bits (24 bits rounded to 1.0 in float32 and produced an infinite Gumbel value) and filtered logits are masked after the noise is added, so a filtered token can never win. Greedy requests were never affected. The check is the lane being token-identical to keyed serial draws, the draws matching the filtered softmax, and the agent E2E tasks passing with clean output.
+
+## Server-side tools
+
+Web search, web fetch and the MCP connector run inside Yunshu so Claude Code, Codex and the SDKs see the native server-tool blocks. The user guide is [Web search](/docs/guides/web-search); the registered settings and their defaults are:
+
+| Setting | Default | Effect |
+|---|---|---|
+| `YUNSHU_WEB_SEARCH_PROVIDER` | `auto` | Search backend; `none` disables search |
+| `YUNSHU_WEB_KEYLESS` | on | Allows keyless DuckDuckGo and Wikipedia (best effort); set `0` to disable the keyless fallback |
+| `YUNSHU_WEB_RESEARCH` | off | Opt-in origin fetch, extraction and local ranking; stays off pending paired quality evaluation |
+| `YUNSHU_WEB_RESEARCH_MODEL` | unset | Names an already-loaded local embedding model; Yunshu never loads one or falls back to the generation model |
+| `YUNSHU_WEB_FETCH` | on | Serves the server-side `web_fetch` tool; private, loopback and link-local addresses are blocked |
+| `YUNSHU_WEB_FETCH_MAX_BYTES`, `YUNSHU_WEB_FETCH_TIMEOUT` | 2000000, 20.0 | Largest body and wait per page |
+| `YUNSHU_MCP_CONNECTOR` | on | Serves the MCP connector for Anthropic `mcp_servers` and OpenAI Responses `{type: mcp}` |
+| `YUNSHU_SERVER_TOOL_MAX_ITERATIONS` | 8 | Generate, run and continue rounds per request |
+
+<Callout type="warn">
+Search queries leave the machine. Model-generated query text can contain conversation context, and the search provider sees that query and your IP; origin pages see fetch URLs. Conversation history and client credentials are not forwarded. Excerpts from fetched pages are untrusted data and the filters do not guarantee resistance to prompt injection.
+</Callout>
+
+## Launching an agent
+
+`yunshu launch claude|codex|opencode` reads the model card from `/v1/models` and passes the agent what it would otherwise guess wrong; `--dry-run` prints it.
+
+| Agent | What is set |
+|---|---|
+| Claude Code | `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, every model alias to the served model, `CLAUDE_CODE_MAX_CONTEXT_TOKENS` (the real window), `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY`, optional `CLAUDE_CODE_EFFORT_LEVEL` (`--effort`), and a `--settings` status line running `yunshu statusline` (skipped when you have your own `statusLine`, off with `--no-statusline`). Environment and flags only: `~/.claude` is not written |
+| Codex | `~/.codex/config.toml` (`model_provider`, `model_context_window`, `model_auto_compact_token_limit`, `web_search = "live"` when a provider is configured) and `~/.codex/yunshu-models.json` (`model_catalog_json`) |
+| opencode | `provider.yunshu` in `opencode.json` with `limit.context`, `limit.output`, `reasoning`, `tool_call`, `modalities` |
+
+## Knobs
+
+| Setting or option | Default | Effect |
+|---|---|---|
+| `YUNSHU_DEFAULT_MAX_TOKENS` | 32768 | Completion length when a request omits `max_tokens` |
+| `scripts/dev/agentcompat --stages` | `census,m3` | Which verification stages run |
+| `scripts/dev/agentcompat --model` | `Qwen3.5-9B-MLX-4bit` | Model served for the M3 stage |
+
+## Limits
+
+- Claude Code's `/model` still lists its built-in rows, and the default row carries a `[1m]` label: both come from the client's own catalog. The window it works with is the real one (`/context`).
+- The non-streaming Responses `web_search` SDK check is model dependent: a small model sometimes answers without calling the tool.
+- Codex `/status` needs a completed turn before it prints token usage.
+- Cline, Continue and Open WebUI are configuration guidance, not per-release end-to-end claims.
+
+## How to verify
+
+Documents drift, so the claims above are re-earned by one command with one verdict (exit 0 only on positive evidence, written to `docs/research/runs/<date>-agentcompat-<commit>/verdict.json`):
+
+```bash
+scripts/dev/agentcompat                      # census,m3
+scripts/dev/agentcompat --stages install,census,m3
+```
+
+| Stage | What it proves |
+|---|---|
+| `install` | Installs the newest Claude Code, Codex and opencode under `/Volumes/P5Plus/yunshu-build/agentic-clis-latest` (never global; `install_agents.sh` with `*_V=latest`) |
+| `census` | The scripted sessions with those CLIs against the recording mock; diffed against the pinned census (paths, query keys, headers, beta values, body fields, tool and block types). Every new item must be written down in this page |
+| `m3` | Two bounded gpuq jobs on the M3 laptop (`m3_serve.py`, a small Qwen3.5 model, loopback only behind an `ssh -L` forward). Job 1 replays the first and last request of every census session plus SDK-shaped synthetic requests (status 2xx, SSE event order and fields, bodies validated by the official `anthropic` and `openai` models). Job 2 runs scripted agent tasks with the latest CLIs (edit, bash, MCP, image, `/context`). A dropped tunnel or a job that does not end cleanly fails the run and quarantines the lane for a person to check |
+
+Spec drift in `python/` is covered by `tests/unit/test_spec_field_inventory.py`: every parameter of the installed `openai` and `anthropic` SDK request types is either a field of the request model or listed with a reason, so a new SDK release that adds a field fails CI instead of being silently dropped.  Agent compatibility is one of the blocking checks of `scripts/dev/release_check`; see [Release readiness](/docs/developers/release-readiness).
+
+## Related
+
+- [Agents](/docs/guides/agents)
+- [Agentic coding benchmark](/docs/developers/agentic-bench)
+- [Release gate](/docs/developers/release-gate)

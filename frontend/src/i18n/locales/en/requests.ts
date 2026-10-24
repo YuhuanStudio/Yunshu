@@ -66,17 +66,16 @@ const requests: Shape<typeof zh> = {
   "tile.activeHint": "Queued {queued} · Prefill {prefill} · Decode {decode}",
   "tile.activeName": "Active requests trend",
   "tile.ttftLabel": "TTFT (finished requests)",
-  "tile.ttftServer": "Median over {count} finished requests · latest {last}",
-  "tile.ttftPage":
-    "Median over {count} requests seen on this page · latest {last}",
+  "tile.ttftServer": "Median · {count} finished · latest {last}",
+  "tile.ttftPage": "Median · {count} on this page · latest {last}",
   "tile.noFinished": "No finished requests observed yet",
   "tile.ttftName": "Finished-request TTFT trend",
   "tile.decodeLabel": "Decode speed",
   "tile.decodeHint": "Engine window average",
   "tile.decodeName": "Decode tok/s trend",
   "tile.hitLabel": "Prefix hit rate",
-  "tile.hitServer": "Weighted over {count} finished requests",
-  "tile.hitPage": "Weighted over {count} requests seen on this page",
+  "tile.hitServer": "Weighted · {count} finished",
+  "tile.hitPage": "Weighted · {count} on this page",
   "tile.hitLatest": " · latest {value}%",
   "tile.hitName": "Prefix hit rate trend",
   "detail.title": "Request details",
@@ -303,5 +302,6 @@ const requests: Shape<typeof zh> = {
   "list.mobileUsage": "{prompt} in · {cached} cached · {out} out",
   "list.awayEmpty": "The engine is away and nothing has been recorded yet",
   "list.away": "Engine went away {time}",
+  "list.recentFinished": "Recently finished",
 };
 export default requests;

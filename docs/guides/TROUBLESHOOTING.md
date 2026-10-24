@@ -1,5 +1,7 @@
 # Troubleshooting
 
+
+> Console docs: the maintained, translated version of this page is `/docs/guides/troubleshooting` (source `frontend/docs/guides/troubleshooting.mdx`). This file stays as the repository-side reference read by tooling.
 > The console's Docs section carries this guide in English, 繁體中文 and 简体中文 ([`frontend/docs/guides/troubleshooting.mdx`](../../frontend/docs/guides/troubleshooting.mdx)); this file is its GitHub-facing counterpart.
 
 Start with `yunshu doctor` (add `-m <model>` to check a model too). It checks the platform, MLX /

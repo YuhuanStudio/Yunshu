@@ -1,5 +1,7 @@
 # M5 Max hardware map for Yunshu
 
+
+> Console docs: the maintained, translated version of this page is `/docs/developers/hardware-validation` (source `frontend/docs/developers/hardware-validation.mdx`). This file stays as the repository-side reference read by tooling.
 Historical probe environment, not a statement of the current dependency versions or release performance. For the release comparison, use [Benchmarks](../BENCHMARKS.md).
 
 What each hardware unit of an M5 Max (40-core GPU, 128 GB, macOS 27, MLX 0.32.2) delivers when measured,

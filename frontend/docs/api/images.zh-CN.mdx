@@ -95,7 +95,7 @@ description: OpenAI 风格的本地图像生成、编辑与变体端点，以及
 {
   "text": "Invoice 2026-001\nTotal: 120.00",
   "model": "mlx-community/GLM-OCR-bf16",
-  "confidence": 0.0,
+  "confidence": null,
   "language": null,
   "task": "text",
   "prompt_tokens": 312,
@@ -109,7 +109,7 @@ description: OpenAI 风格的本地图像生成、编辑与变体端点，以及
 }
 ```
 
-走 VLM 回退时 `confidence` 为 `null`，否则是 OCR 引擎报告的值，仅供参考。`language` 会原样返回你给的提示。
+`confidence` 一律为 `null`：两条路径都不产生置信度分数。走 VLM 回退时 `language` 会原样返回你给的提示，走 OCR 引擎时为 `null`。
 
 ## 范例
 

@@ -45,46 +45,6 @@ EVIDENCE = {
         ],
         "Old invariant receipts have parity and speed advantage, but current-source long-context paired decision is incomplete. Sweep now emits full-token digests and a final complete record; new job repeats 1K/8K/32K/131K code+prose with AR references.",
     ),
-    "YUNSHU_ENGINE_LOOP": (
-        "k02",
-        "pending_owner",
-        [
-            "/Volumes/P5Plus/yunshu-build/codex/k02_matrix.sh",
-            "/Volumes/P5Plus/yunshu-build/codex/k02_progress.md",
-            "gpuq 1002-215141-00-k02-matrix-quiet",
-        ],
-        "codex-k02 owns the shared-runner/fast decision and prepared close-flags branch. Reuse its existing p-1 quiet Qwen2.5 4bit/bf16 token and concurrency matrix; do not duplicate or mutate its files.",
-    ),
-    "YUNSHU_OVERLAP": (
-        "k02",
-        "pending_owner",
-        [
-            "/Volumes/P5Plus/yunshu-build/codex/k02_matrix.sh",
-            "/Volumes/P5Plus/yunshu-build/codex/k02_progress.md",
-            "gpuq 1002-215141-00-k02-matrix-quiet",
-        ],
-        "Coupled to ENGINE_LOOP: a qualified shared-runner win removes the loop and both overlap arms. Current queued owner matrix is the unification comparison; no separate overlap timing claim is made.",
-    ),
-    "YUNSHU_SPEC_UNVERIFIED": (
-        "external",
-        "cpu_correctness_only",
-        [
-            "tests/unit/test_external_lm_reachability.py",
-            "tests/unit/test_external_draft_greedy.py",
-            "commits 4de2b6d2 / ca853629",
-        ],
-        "Ordinary Qwen2 target/draft is reachable without EAGLE training. Three CPU counterexamples exposed ratio acceptance on greedy requests; fixed to target argmax. Unsupported request options fall back. No real-model speed/parity receipt yet.",
-    ),
-    "YUNSHU_DRAFT_MODEL": (
-        "external",
-        "cpu_correctness_only",
-        [
-            "/Volumes/P5Plus/models/Qwen2.5-3B-Instruct-bf16",
-            "/Volumes/P5Plus/models/Qwen2.5-3B-Instruct-4bit",
-            "scripts/research/audit_external_draft.py --dry-run verified",
-        ],
-        "Same-tokenizer ordinary target/draft pair is available. CPU preflight validates configs/vocabularies/imports; successful model smoke must precede three alternating traced-parity and uninstrumented-timing repetitions.",
-    ),
 }
 
 

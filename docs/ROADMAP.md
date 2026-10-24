@@ -1,5 +1,7 @@
 # Roadmap and proposals
 
+
+> Console docs: the maintained, translated version of this page is `/docs/developers/roadmap` (source `frontend/docs/developers/roadmap.mdx`). This file stays as the repository-side reference read by tooling.
 Yunshu prioritizes fast local LLM/VLM inference on Apple Silicon: decode speed,
 cold and cached first-token latency, prefix reuse, and complete client behavior.
 Qwen3.8-27B is the first tuned model. This page records direction, not dates or

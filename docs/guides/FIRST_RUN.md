@@ -1,5 +1,7 @@
 # Your first local conversation
 
+
+> Console docs: the maintained, translated version of this page is `/docs/getting-started/quickstart` (source `frontend/docs/getting-started/quickstart.mdx`). This file stays as the repository-side reference read by tooling.
 Yunshu runs on Apple Silicon with macOS 14 or later. Install [uv](https://docs.astral.sh/uv/getting-started/installation/), then install the vision runtime for Qwen3.5 / Qwen3.8 models (it also serves their text requests):
 
 ```bash

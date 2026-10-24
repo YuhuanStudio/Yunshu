@@ -1,3 +1,4 @@
+import { isCalm } from "./outage-view";
 import { t } from "./i18n/index.ts";
 import { useEffect, useState } from "react";
 import {
@@ -131,7 +132,9 @@ export function ModelDetail({
             description={
               engine.status
                 ? t("models.detail.missingDescription")
-                : t("models.detail.waitingDescription")
+                : isCalm(engine.outage.kind)
+                  ? t("models.detail.waitingCalm")
+                  : t("models.detail.waitingDescription")
             }
           />
         </Card>

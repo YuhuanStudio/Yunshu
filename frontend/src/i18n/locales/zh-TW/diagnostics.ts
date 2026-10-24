@@ -156,5 +156,6 @@ const diagnostics = {
   "realtime.notMeasured": "還沒有量到：先按「測試連線」。",
   "realtime.serverMissing": "引擎沒有回報這個數字，所以不顯示。",
   "realtime.note": "這是瀏覽器透過 {scheme} 開一次 /v1/realtime 並等第一個事件，不送音訊，不佔用 GPU；量到的是從這個瀏覽器到引擎的路徑，不是語音推論延遲。",
+  "verdict.waiting": "等待引擎",
 };
 export default diagnostics;
