@@ -394,6 +394,82 @@ def _realtime_voice_cascade(c: Ctx):
     _realtime_voice(c, require_transcript_word=True)
 
 
+@check(
+    "realtime_transcription_only",
+    "WS /v1/realtime",
+    "WS /realtime",
+    needs="cascade",
+    served=True,
+)
+def _realtime_transcription_only(c: Ctx):
+    """OpenAI's transcription session (`?intent=transcription`): committed speech is transcribed
+    (`input_audio_transcription.completed`) and nothing is ever generated; `response.create` is an
+    error. Both the GA (`session.update` type transcription) and the beta
+    (`transcription_session.update`) configuration events."""
+    pcm = wav_pcm16(_speech(c))
+    for beta in (False, True):
+        path = (
+            "/realtime" if beta else "/v1/realtime"
+        )  # the legacy path speaks the beta schema
+        with c.ws(f"{path}?intent=transcription&model={c.model}") as ws:
+            first = json.loads(ws.recv(timeout=60))
+            expect(first.get("type") == "session.created", f"first {first.get('type')}")
+            if beta:
+                upd_event = {
+                    "type": "transcription_session.update",
+                    "session": {"turn_detection": None},
+                }
+                want = "transcription_session.updated"
+            else:
+                upd_event = {
+                    "type": "session.update",
+                    "session": {"type": "transcription"},
+                }
+                want = "session.updated"
+            ws.send(json.dumps(upd_event))
+            upd = json.loads(ws.recv(timeout=60))
+            expect(upd.get("type") == want, f"beta={beta}: update answered {upd}")
+            for i in range(0, len(pcm), 48000):
+                ws.send(
+                    json.dumps(
+                        {
+                            "type": "input_audio_buffer.append",
+                            "audio": _b64(pcm[i : i + 48000]),
+                        }
+                    )
+                )
+            ws.send(json.dumps({"type": "input_audio_buffer.commit"}))
+            evs = _ws_events(
+                ws,
+                lambda e: (
+                    "input_audio_transcription.completed" in e.get("type", "")
+                    or e.get("type") == "error"
+                ),
+                timeout=300,
+            )
+            types = [e["type"] for e in evs]
+            heard = " ".join(
+                e.get("transcript") or ""
+                for e in evs
+                if "input_audio_transcription.completed" in e.get("type", "")
+            )
+            expect(
+                _word_in(heard), f"beta={beta}: transcript {heard!r}; events {types}"
+            )
+            expect(
+                not any(t.startswith("response.") for t in types),
+                f"beta={beta}: generated in a transcription session: {types}",
+            )
+            ws.send(json.dumps({"type": "response.create"}))
+            err = json.loads(ws.recv(timeout=60))
+            expect(
+                err.get("type") == "error"
+                and err["error"].get("code") == "transcription_only",
+                f"beta={beta}: response.create answered {err}",
+            )
+            c.notes[f"realtime_transcription_only_beta{beta}"] = heard[:80]
+
+
 # ── native speech-to-speech (Qwen3-Omni, M5) ────────────────────────────────────────────
 
 
