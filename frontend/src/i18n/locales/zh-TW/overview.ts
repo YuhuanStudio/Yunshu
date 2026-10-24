@@ -22,6 +22,8 @@ const overview = {
   "phase.running": "執行",
   "phase.idle": "閒置",
   "activity.rowActive": "活動請求",
+  "lane.waiting": "等待輪到預填 · 前面還有 {ahead} 個",
+  "lane.phases": "排隊 {queue} · 預填 {prefill} · 快取 {cached}",
   "speed.live": "即時合計",
   "speed.window": "近 {s} 秒均值",
   "lane.prefixHit": "前綴命中 {cached} / {prompt} token",

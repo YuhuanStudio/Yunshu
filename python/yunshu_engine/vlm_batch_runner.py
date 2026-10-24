@@ -118,7 +118,13 @@ class RunStats:
     latency_marks: dict[str, float] = field(default_factory=dict)
     t_prefill_end: float = 0.0
     t_submit: float = 0.0  # handed to the runner
-    t_admit: float = 0.0  # left the queue, prefill started
+    t_admit: float = 0.0  # left the queue, handed to the generator
+    # The first prefill atom of this request started running. Admission comes earlier: with several
+    # requests the scheduler runs their atoms one at a time, so an admitted request waits for its turn.
+    # ``tracks_prefill_start`` is set by the runner; paths that do not track it (the text fast path)
+    # count admission as the start.
+    t_prefill_start: float = 0.0
+    tracks_prefill_start: bool = False
     t_first: float = 0.0  # first generated token
     t_last: float = 0.0  # latest generated token
     prefill_done: int = 0  # prompt tokens computed so far (cache hits excluded)
@@ -146,7 +152,9 @@ class RunStats:
         if not self.t_admit:
             return "queued"
         if not self.t_first:
-            return "prefill"
+            if self.t_prefill_start or not self.tracks_prefill_start:
+                return "prefill"
+            return "queued"
         return "decode"
 
 
@@ -1010,6 +1018,7 @@ class VLMBatchRunner:
         from .mrope import clear_rope_state
 
         job.stats.t_admit = time.perf_counter()
+        job.stats.tracks_prefill_start = True
         job.stats.prefill_total = len(job.ids)
         job.stats.prefill_known = (
             False  # the upstream path learns its cache hit on the first step
@@ -1333,7 +1342,8 @@ class VLMBatchRunner:
             )
         )
         self._vocab_owner = driver
-        job.start = job.stats.t_admit = time.perf_counter()
+        job.start = job.stats.t_admit = job.stats.t_prefill_start = time.perf_counter()
+        job.stats.tracks_prefill_start = True
         hit = int(hit or 0)
         job.stats.cached_tokens = hit
         job.stats.prefill_total = len(job.ids) - hit
@@ -1801,6 +1811,30 @@ class VLMBatchRunner:
             job.stats.cache_device = rec.device
             job.stats.latency_marks["prefill_start"] = rec.t
 
+    @staticmethod
+    def _begin_prefill(job: _Job | None) -> None:
+        """Its first atom is about to run: from now the request is prefilling, not waiting."""
+        if job is not None and not job.stats.t_prefill_start:
+            job.stats.t_prefill_start = time.perf_counter()
+
+    def _begin_prefill_front(self, group: _Group) -> None:
+        """Generator-ordered paths: the request at the head of the generator's prefill line."""
+        gen = group.gen
+        pb = getattr(gen, "_prompt_batch", None)
+        uid = None
+        if pb is not None and getattr(pb, "uids", None):
+            uid = pb.uids[0]
+        else:
+            queue = getattr(gen, "_unprocessed_sequences", None)
+            if queue:
+                uid = queue[0][0]
+            elif not hasattr(gen, "_unprocessed_sequences"):
+                for job in group.jobs.values():
+                    if not job.stats.t_first:
+                        self._begin_prefill(job)
+        if uid is not None:
+            self._begin_prefill(group.jobs.get(uid))
+
     def _note_driver_prefill(self, driver=None) -> None:
         """Publish prefill progress of the round driver's rows."""
         try:
@@ -2020,6 +2054,8 @@ class VLMBatchRunner:
                 first_pending = job.finishing_prefill and not job.stats.t_first
                 if job.uid in group.prefills:
                     group.gen._prompt_batch = group.prefills.pop(job.uid)
+                if prefilling or first_pending:
+                    self._begin_prefill(job)
                 before = time.perf_counter()
                 self._step_group(group)
                 elapsed = time.perf_counter() - before
@@ -2129,6 +2165,7 @@ class VLMBatchRunner:
             # Generators without the upstream atom API (test fakes) retain
             # ordinary dispatch. The optional round driver has its own policy.
             if not hasattr(group.gen, "_unprocessed_sequences"):
+                self._begin_prefill_front(group)
                 self._step_group(group)
                 continue
             selected_job = (
@@ -2149,6 +2186,8 @@ class VLMBatchRunner:
             first_pending = any(
                 j.finishing_prefill and not j.stats.t_first for j in allowed
             )
+            if selected:
+                self._begin_prefill(selected_job)
             before = time.perf_counter()
             self._step_group(group, decode_only=not selected)
             elapsed = time.perf_counter() - before
@@ -2346,6 +2385,7 @@ class VLMBatchRunner:
                             for j in group.jobs.values()
                         )
                     ):
+                        self._begin_prefill_front(group)
                         self._step_group(group)
                         for j in group.jobs.values():
                             j.last_service = time.perf_counter()

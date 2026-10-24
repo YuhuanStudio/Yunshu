@@ -113,7 +113,7 @@ class HistoryRing:
 def sample_row() -> dict[str, float | None]:
     """One row of numbers from counters only (no engine calls)."""
     from . import memory_ledger as ml
-    from .x_yunshu import live_decode_rate, registry
+    from .x_yunshu import live_decode_rate, prefill_began, registry
 
     row: dict[str, float | None] = {}
     mlx = ml.mlx_counters()
@@ -142,8 +142,8 @@ def sample_row() -> dict[str, float | None]:
         phase = st.phase
         if phase == "queued":
             queued += 1
-        elif phase == "prefill" and st.t_admit and st.prefill_done > 0:
-            prefill += st.prefill_done / max(now - st.t_admit, 1e-6)
+        elif phase == "prefill" and prefill_began(st) and st.prefill_done > 0:
+            prefill += st.prefill_done / max(now - prefill_began(st), 1e-6)
             any_prefill = True
         elif phase == "decode" and st.t_first and st.t_last > st.t_first:
             decode += live_decode_rate(info, now) or 0.0

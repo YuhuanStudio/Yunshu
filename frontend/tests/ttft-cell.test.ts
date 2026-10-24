@@ -27,3 +27,18 @@ test("the total column carries the running time until the request finishes", () 
     { ms: 5000, running: false },
   );
 });
+
+import { phaseDurations } from "../src/request-insight.ts";
+
+test("a decoding row keeps what its queue and prefill took, even when a poll never saw the prefill", () => {
+  assert.deepEqual(
+    phaseDurations({
+      prompt_tokens: 10000,
+      cached_tokens: 9200,
+      offsets_ms: { admit: 40, first_token: 460 },
+    }),
+    { queueMs: 40, prefillMs: 420, cachedPct: 92 },
+  );
+  assert.equal(phaseDurations({ offsets_ms: { admit: 40 } }), null);
+  assert.equal(phaseDurations({}), null);
+});

@@ -307,6 +307,16 @@ registry = _Registry()
 # ── queue / progress ────────────────────────────────────────────────────
 
 
+def prefill_began(st) -> float:
+    """When this request's first prefill atom started (0 = not yet). Admission is earlier: an admitted
+    request waits for its turn while other requests' atoms run."""
+    if st is None:
+        return 0.0
+    return getattr(st, "t_prefill_start", 0.0) or (
+        0.0 if getattr(st, "tracks_prefill_start", False) else st.t_admit
+    )
+
+
 def _remaining_prefill_s(st) -> float:
     """Best-effort seconds of prefill left for one request's stats (0 when unknown)."""
     if st is None:
@@ -314,8 +324,8 @@ def _remaining_prefill_s(st) -> float:
     left = max(st.prefill_total - st.prefill_done, 0)
     if left <= 0 or st.t_first:
         return 0.0
-    if st.t_admit and st.prefill_done > 0:
-        rate = st.prefill_done / max(time.perf_counter() - st.t_admit, 1e-6)
+    if prefill_began(st) and st.prefill_done > 0:
+        rate = st.prefill_done / max(time.perf_counter() - prefill_began(st), 1e-6)
         return left / rate if rate > 0 else 0.0
     rate = recent_rates().get("prefill_tps") or 0.0
     return left / rate if rate > 0 else 0.0
@@ -332,6 +342,7 @@ def queue_snapshot(info: RequestInfo) -> tuple[int, float]:
         i
         for i in registry.active()
         if i is not info
+        and (i.stats is None or not i.stats.t_first)  # a decoding request is not ahead
         and (
             i.scheduling_priority > info.scheduling_priority
             or (
@@ -442,8 +453,8 @@ def _prefill_rate(info: RequestInfo, done: int, now: float) -> float | None:
         rate = inst if not prev[2] else 0.5 * prev[2] + 0.5 * inst
     elif prev is not None:
         rate = prev[2] or None
-    if rate is None and st is not None and st.t_admit and done > 0:
-        rate = done / max(now - st.t_admit, 1e-6)
+    if rate is None and st is not None and prefill_began(st) and done > 0:
+        rate = done / max(now - prefill_began(st), 1e-6)
     if prev is None or done != prev[1]:
         info._rate = (now, done, rate or 0.0)
     return rate
@@ -482,7 +493,7 @@ def phase_offsets_ms(info: RequestInfo, t_first: float | None = None) -> dict:
         t_first = st_first or info.t_first_chunk
     return {
         "arrive": 0.0,
-        "admit": off(getattr(st, "t_admit", None)),
+        "admit": off(prefill_began(st) or None),
         "first_token": off(t_first),
         "last_token": off(getattr(st, "t_last", None) if st_first else None),
         "done": off(info.t_done),
@@ -502,6 +513,7 @@ def latency_breakdown(info: RequestInfo) -> dict:
         for key, attr in (
             ("engine_submit", "t_submit"),
             ("engine_admit", "t_admit"),
+            ("prefill_start", "t_prefill_start"),
             ("prefill_end", "t_prefill_end"),
             ("first_decode", "t_first"),
         ):
@@ -557,14 +569,13 @@ def build_stats(info: RequestInfo, usage: dict | None = None) -> dict:
     if t_first is None and info.t_first_chunk is not None:
         t_first = info.t_first_chunk
     ttft = (t_first - info.arrived) if t_first is not None else None
+    began = prefill_began(st) if st is not None else 0.0
     queue_wait = (
-        (st.t_admit - st.t_submit)
-        if st is not None and st.t_admit and st.t_submit
-        else None
+        (began - st.t_submit) if st is not None and began and st.t_submit else None
     )
     prefill_s = (
-        (t_first - st.t_admit)
-        if (st is not None and st.t_admit and t_first is not None)
+        (t_first - began)
+        if (st is not None and began and t_first is not None)
         else None
     )
     fresh = (prompt_tokens - cached) if prompt_tokens is not None else None

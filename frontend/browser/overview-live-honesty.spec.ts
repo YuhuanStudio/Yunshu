@@ -85,3 +85,41 @@ test("one live request: served model name, short prefill state, no fake rows", a
   expect(lines.some((l) => l.hidden)).toBe(true);
   for (const l of lines) expect(l.border).toBe(0);
 });
+
+
+test("a running request keeps its queue and prefill durations; a waiting one says where it is", async ({
+  page,
+}) => {
+  const json = (route: Route, body: unknown) =>
+    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(body) });
+  await page.route("**/v1/**", async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path === "/v1/yunshu/status") {
+      const base = status(1, "m");
+      base.requests.items = [
+        {
+          ...base.requests.items[0],
+          prompt_tokens: 10000,
+          cached_tokens: 9200,
+          offsets_ms: { arrive: 0, admit: 40, first_token: 460 },
+        } as never,
+        {
+          request_id: "req_waiting_0002",
+          phase: "queued",
+          model: "Qwen3.8-27B-oQ4e-mtp",
+          elapsed_s: 3,
+          queue_position: 1,
+        } as never,
+      ];
+      base.requests.active = 2;
+      base.requests.queued = 1;
+      return json(route, base);
+    }
+    return route.fulfill({ status: 404, contentType: "application/json", body: "{}" });
+  });
+  await page.goto("/console/#/overview", { waitUntil: "domcontentloaded" });
+  const list = page.locator("[data-live-list]");
+  await expect(list).toContainText("排隊 40 ms · 預填 420 ms");
+  await expect(list).toContainText("快取 92%");
+  await expect(list).toContainText("前面還有 1 個");
+});

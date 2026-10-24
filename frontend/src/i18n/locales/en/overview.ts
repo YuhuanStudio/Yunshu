@@ -25,6 +25,8 @@ const overview: Shape<typeof zh> = {
   "phase.running": "Running",
   "phase.idle": "Idle",
   "activity.rowActive": "Active requests",
+  "lane.waiting": "Waiting for its prefill turn · {ahead} ahead",
+  "lane.phases": "Queued {queue} · prefill {prefill} · {cached} cached",
   "speed.live": "Live total",
   "speed.window": "{s}s mean",
   "lane.prefixHit": "Prefix hit {cached} / {prompt} tokens",

@@ -25,6 +25,8 @@ const overview: Shape<typeof zh> = {
   "phase.running": "运行",
   "phase.idle": "空闲",
   "activity.rowActive": "活动请求",
+  "lane.waiting": "等待轮到预填 · 前面还有 {ahead} 个",
+  "lane.phases": "排队 {queue} · 预填 {prefill} · 缓存 {cached}",
   "speed.live": "实时合计",
   "speed.window": "近 {s} 秒均值",
   "lane.prefixHit": "前缀命中 {cached} / {prompt} token",

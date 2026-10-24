@@ -804,3 +804,38 @@ def test_phase_counts_follow_the_requests_through_queued_prefill_decode(atoms):
     c = r.phase_counts()
     assert c["prefill"] == 0 and c["decode"] >= 1
     assert any(p for _, p, _ in seen)
+
+
+def test_admitted_request_is_queued_until_its_own_first_atom_runs(atoms):
+    """Admission comes before a request's atoms; with two cold prompts the second waits for its
+    turn. It must read `queued` (not `prefill` with no progress) until its first atom starts, and
+    only one request prefills at a time."""
+    r, _ = atoms
+    a = job(0)
+    a.ids = list(range(9000))
+    r._submit(a)
+    b = job(0)
+    b.ids = list(range(9000))
+    r._submit(b)
+    both_prefill = 0
+    b_queued_while_a_prefills = 0
+    order = []
+    for _ in range(600):
+        r._drive_slice(False)
+        pa, pb = a.stats.phase, b.stats.phase
+        if pa == "prefill" and pb == "prefill":
+            both_prefill += 1
+        if pa == "prefill" and pb == "queued":
+            b_queued_while_a_prefills += 1
+        for name, ph in (("a", pa), ("b", pb)):
+            if not order or order[-1] != (name, ph):
+                order.append((name, ph))
+        if a.stats.t_first and b.stats.t_first:
+            break
+    assert both_prefill == 0
+    assert b_queued_while_a_prefills > 0
+    assert ("b", "prefill") in order
+    assert order.index(("b", "queued")) < order.index(("b", "prefill"))
+    assert (
+        b.stats.t_prefill_start >= a.stats.t_first - 1e-9 or b.stats.t_prefill_start > 0
+    )

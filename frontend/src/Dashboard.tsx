@@ -88,6 +88,7 @@ import {
   StatValue,
 } from "./ui";
 import { formatMs } from "./RequestTimeline";
+import { phaseDurations } from "./request-insight";
 import { HostPanel } from "./HostPanel";
 import { useHostTelemetry } from "./host-hook";
 // Color follows the entity: decode is slot 1 and prefill slot 2 on every chart of the page; context
@@ -183,6 +184,7 @@ function RequestLane({ row, leaving }: { row: RequestRow; leaving?: boolean }) {
   const phase = String(row.phase);
   const prompt = row.prompt_tokens ?? 0,
     cached = row.cached_tokens ?? 0;
+  const spent = phase === "decode" ? phaseDurations(row as never) : null;
   const progress =
     phase === "prefill" || phase === "starting"
       ? (row.percent ??
@@ -255,6 +257,23 @@ function RequestLane({ row, leaving }: { row: RequestRow; leaving?: boolean }) {
                 </span>
               )}
             </div>
+          ) : phase === "queued" && row.queue_position != null ? (
+            <p className="col-span-2 truncate text-xs text-muted-foreground">
+              {t("overview.lane.waiting", {
+                ahead: number(row.queue_position, 0),
+              })}
+            </p>
+          ) : spent ? (
+            <p className="col-span-2 truncate text-xs tabular-nums text-muted-foreground">
+              {t("overview.lane.phases", {
+                queue: formatMs(spent.queueMs),
+                prefill: formatMs(spent.prefillMs),
+                cached:
+                  spent.cachedPct == null
+                    ? "—"
+                    : `${number(spent.cachedPct, 0)}%`,
+              })}
+            </p>
           ) : phase !== "prefill" && cached > 0 && prompt > 0 ? (
             <p className="col-span-2 truncate text-xs text-muted-foreground">
               {t("overview.lane.prefixHit", {
