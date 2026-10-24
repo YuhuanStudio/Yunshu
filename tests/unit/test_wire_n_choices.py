@@ -1,10 +1,9 @@
 """R23: n > 1 on chat and completions: per-choice seeds stay inside the signed 64-bit range
-and differ, streaming n > 1 is refused up front, and every choice shares the logical request's
+and differ (streaming n > 1 included), and every choice shares the logical request's
 cancel event (usage billing for n > 1 is in test_wire_usage_invariants)."""
 
 from __future__ import annotations
 
-import openai
 import pytest
 
 from .wire_clients import Clients
@@ -32,17 +31,20 @@ def test_per_choice_seeds_are_valid_and_distinct(monkeypatch, seed):
         assert group[0] == seed  # choice 0 is the stream n=1 would give
 
 
-def test_streamed_n_choices_are_rejected_not_half_served(monkeypatch):
-    cl, eng = _serve(monkeypatch, pieces=["a"])
-    for create in (
-        lambda: cl.oa.chat.completions.create(
-            model="m", messages=USER, n=2, stream=True
-        ),
-        lambda: cl.oa.completions.create(model="m", prompt="hi", n=2, stream=True),
-    ):
-        with pytest.raises(openai.BadRequestError):
-            create()
-    assert not eng.calls
+def test_streamed_n_choices_are_served_by_index_with_distinct_seeds(monkeypatch):
+    cl, eng = _serve(monkeypatch, pieces=["a", "b"])
+    chat = list(
+        cl.oa.chat.completions.create(
+            model="m", messages=USER, n=2, stream=True, seed=7
+        )
+    )
+    comp = list(
+        cl.oa.completions.create(model="m", prompt="hi", n=2, stream=True, seed=7)
+    )
+    assert {c.index for ch in chat for c in ch.choices} == {0, 1}
+    assert {c.index for ch in comp for c in ch.choices} == {0, 1}
+    seeds = [c["seed"] for c in eng.calls]
+    assert seeds[:2] == [7, 8] and seeds[2:] == [7, 8]
 
 
 def test_all_choices_share_the_request_cancel_event(monkeypatch):
