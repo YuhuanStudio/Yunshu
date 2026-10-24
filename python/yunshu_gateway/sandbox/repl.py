@@ -374,6 +374,11 @@ class ReplSession:
                     out = fail("crashed")
                     out.stderr = tail[-2000:]
                     return out
+        except asyncio.CancelledError:
+            # the request went away mid-cell: its "done" would answer the NEXT call, so the process
+            # (and its state) goes with it
+            self.kill()
+            raise
         finally:
             self._active = False
 

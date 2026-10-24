@@ -449,3 +449,21 @@ def test_doctor_self_test_runs_the_sandbox_python(monkeypatch):
     assert c.status in ("ok", "warn", "fail")
     if c.status == "ok":
         assert "self-test passed" in c.detail
+
+
+def test_cancelled_call_does_not_leave_a_cell_running_for_the_next_one(env):
+    e, c, _ = env
+
+    async def go():
+        await e.python(c, "keep = 1")
+        slow = asyncio.create_task(
+            e.python(c, "import time\ntime.sleep(5)\nprint('late')")
+        )
+        await asyncio.sleep(0.8)
+        slow.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await slow
+        r = await e.python(c, "print('next')")
+        assert r.ok and r.stdout.strip() == "next" and r.state_lost
+
+    asyncio.run(go())
