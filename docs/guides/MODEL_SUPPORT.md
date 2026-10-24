@@ -24,6 +24,30 @@ failed or untested and link its receipt. A capability advertised by code and a
 feature proven on hardware are distinct. The release gate supplies acceptance
 checks; this page does not invent results for untested checkpoints.
 
+## Per-checkpoint receipts (real server, 2026-10-24)
+
+One `yunshu serve` per checkpoint on the M5 (default settings), then through the `openai` SDK: load, a chat completion, a stream with usage, a forced function call, and (when the model card advertises image input) a solid-red image the model must name. `untested` means the card does not advertise the capability; `not run` means no receipt exists. Script: `scripts/research/model_family_check.py`, gpuq jobs labelled `realcheck-fam-<model>`.
+
+| Checkpoint | Family and path | Load | Chat | Stream | Tools | Vision | Notes |
+|---|---|---|---|---|---|---|---|
+| `Qwen3.8-27B oQ4e-mtp` | qwen3_5 (VLM runner, tuned) | not run | not run | not run | not run | not run | not run: the gpuq job was cancelled before it started (27B jobs waited behind higher-priority work) |
+| `Qwen3.8-27B MLX-4bit (TensorFold)` | qwen3_5 (VLM runner) | not run | not run | not run | not run | not run | not run: the gpuq job was cancelled before it started (27B jobs waited behind higher-priority work) |
+| `qwen3.8-27b-4bit (kapitsa)` | qwen3_5 (VLM runner) | not run | not run | not run | not run | not run | not run: the gpuq job was cancelled before it started (27B jobs waited behind higher-priority work) |
+| `openjev-MLX-4bit` | qwen3_5 (VLM runner) | pass | pass | pass | pass | untested | vision: the model card does not advertise image input |
+| `Qwen3.5-9B-MLX-4bit` | qwen3_5 (VLM runner, tuned family) | pass | pass | pass | pass | pass |  |
+| `Qwen3.5-2B-MLX-bf16` | qwen3_5 (VLM runner, tuned family) | pass | pass | pass | pass | pass |  |
+| `Qwen3.5-0.8B-MLX-bf16` | qwen3_5 (VLM runner, tuned family) | pass | pass | pass | pass | pass |  |
+| `Qwen2.5-3B-Instruct-4bit` | qwen2 (text fast path) | pass | pass | pass | pass | untested | vision: the model card does not advertise image input |
+| `gemma-4-e4b-it-bf16` | gemma4 (VLM runner) | pass | pass | pass | pass | pass | forced `tool_choice` refused with 400; `auto` call parsed |
+| `gemma-4-e2b-it-4bit` | gemma4 (VLM runner) | pass | pass | pass | FAIL | pass | tools: BadRequestError: Error code: 400 - {'error': {'message': "Cannot guarantee forced tool_choice for this model a |
+| `Qwen3-Omni-30B-A3B-Instruct-4bit` | qwen3_omni_moe (VLM runner) | pass | pass | pass | pass | pass |  |
+| `Nemotron-3-Nano-Omni-30B-A3B-4bit` | nemotron_h_nano_omni (VLM runner) | pass | pass | pass | pass | pass |  |
+| `d1-3B` | lfm2_vl (VLM runner) | pass | pass | pass | pass | pass |  |
+| `d1-3B-MLX-8bit` | lfm2_vl (VLM runner) | pass | pass | pass | pass | pass |  |
+| `Lance-3B-bf16` | qwen2_5_vl image specialist | FAIL | untested | untested | untested | untested | load: RuntimeError: server not ready after 174s; :     127.0.0.1:62413 - "GET /v1/yunshu/status HTTP/1; chat: load failed; stream: load failed; tools: load failed; vision: load failed |
+
+`Lance-3B-bf16` is an image-to-image specialist, not a chat checkpoint: the server never became ready within 174 s (the reason was not captured; not re-run). Qwen3.5-4B (broken Hugging Face cache link), DeepSeek-V4-Flash and Qwen3.8-Flash-Next were not run.
+
 ## Qwen3.8-Flash-Next under 80 GB (qwen4_exp)
 
 `Jundot/Qwen3.8-Flash-Next-oQ4e-mtp` is 106 GB on disk, of which 32 GB is the per-layer n-gram embedding (PLE). Yunshu reads PLE rows from the SSD instead of loading the table, which leaves 74.3 GB of resident weights (the 1.5 GB MTP head included).
