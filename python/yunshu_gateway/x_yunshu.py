@@ -295,8 +295,14 @@ class _Registry:
             if model is not None and e.get("model") != model:
                 continue
             out.append(dict(e))
-            if len(out) >= limit:
+            if after_seq is None and len(out) >= limit:
                 break
+        if after_seq is not None and len(out) > limit:
+            # More finished since the cursor than one page holds: hand out the OLDEST page and move the cursor only
+            # to its newest row, so the next read continues there. Returning the newest page with the global latest
+            # skipped everything in between (a reader under load lost 88 of 3000 requests).
+            out = out[-limit:]
+            return out, int(out[0].get("seq", latest))
         return out, latest
 
     def clear(self) -> None:

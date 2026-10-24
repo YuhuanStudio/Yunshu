@@ -100,3 +100,19 @@ def test_the_status_names_the_engine_process():
         assert body["pid"] == os.getpid()
     finally:
         os.environ.pop("YUNSHU_AUTH_DISABLED", None)
+
+
+def test_a_burst_larger_than_one_page_is_paged_not_skipped():
+    # More requests finish between two reads than one page holds (but the 512-entry ring still has them all): the
+    # reader must get every one, oldest page first.
+    reg = x_yunshu._Registry()
+    for i in range(500):
+        reg.record_done(entry(i))
+    seen: list[str] = []
+    cursor = 0
+    while True:
+        rows, cursor = reg.recent_cursor(limit=200, after_seq=cursor)
+        if not rows:
+            break
+        seen.extend(r["request_id"] for r in reversed(rows))
+    assert seen == [f"r{i}" for i in range(500)]
