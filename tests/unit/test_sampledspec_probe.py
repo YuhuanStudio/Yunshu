@@ -6,7 +6,11 @@ import sys
 from pathlib import Path
 
 import pytest
-from scripts.research.sampledspec_speed import arm_order, validate_row
+from scripts.research.sampledspec_speed import (
+    arm_order,
+    validate_row,
+    verify_engagement,
+)
 
 
 def test_interleaved_order():
@@ -24,6 +28,22 @@ def test_timing_rows_fail_closed():
     ):
         with pytest.raises(RuntimeError):
             validate_row(bad)
+
+
+def test_each_sampled_candidate_cell_must_engage_the_keyed_tree():
+    for sampling in ("sampled", "qwen"):
+        for log in ("", "DFlash fast verification: keyed=False"):
+            with pytest.raises(RuntimeError, match="candidate cell"):
+                verify_engagement("cand", sampling, log)
+        assert (
+            verify_engagement("cand", sampling, "DFlash fast verification: keyed=True")
+            == "fast-keyed"
+        )
+    assert verify_engagement("base", "sampled", "") == "chain"
+    assert (
+        verify_engagement("cand", "greedy", "DFlash fast verification: keyed=False")
+        == "fast-greedy"
+    )
 
 
 def test_dry_run_never_imports_mlx_or_starts_server(tmp_path):

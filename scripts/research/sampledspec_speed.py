@@ -36,6 +36,17 @@ def validate_row(row):
     return (row["ct"] - 1) / spec["rounds"]
 
 
+def verify_engagement(arm, sampling, request_log):
+    keyed = "DFlash fast verification: keyed=True" in request_log
+    if arm == "cand" and sampling != "greedy" and not keyed:
+        raise RuntimeError("sampled candidate cell did not engage the fast keyed tree")
+    if keyed:
+        return "fast-keyed"
+    if "DFlash fast verification: keyed=False" in request_log:
+        return "fast-greedy"
+    return "chain"
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--base-src", type=Path, required=True)
@@ -87,6 +98,7 @@ def main():
                             t.decode_prompt(kind, ctx, True)
                             + f"\nSampling case: {sampling}."
                         )
+                        log_start = server.log.stat().st_size
                         row = t.send(
                             server.url,
                             t.req(
@@ -94,6 +106,11 @@ def main():
                             ),
                         )
                         committed = validate_row(row)
+                        with server.log.open("rb") as log:
+                            log.seek(log_start)
+                            engaged = verify_engagement(
+                                arm, sampling, log.read().decode(errors="replace")
+                            )
                         result = {
                             k: v
                             for k, v in row.items()
@@ -106,16 +123,12 @@ def main():
                             kind=kind,
                             sampling=sampling,
                             committed_per_round=committed,
+                            engaged=engaged,
                         )
                         with a.out.open("a") as out:
                             out.write(json.dumps(result) + "\n")
                         print(json.dumps(result), flush=True)
             server.verify_spec_mode()
-            if arm == "cand" and any(s != "greedy" for s in a.sampling):
-                if "DFlash fast verification: keyed=True" not in server.log.read_text():
-                    raise RuntimeError(
-                        "sampled candidate did not engage the fast keyed tree"
-                    )
         finally:
             server.kill()
             shutil.rmtree(apc, ignore_errors=True)
