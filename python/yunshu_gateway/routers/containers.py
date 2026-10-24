@@ -144,6 +144,13 @@ def parse_options(body: dict) -> dict[str, Any] | tuple:
     """Validate the create options shared by ``POST /v1/containers`` and the Responses tools'
     ``container: {type: auto}``. Returns ``{ttl_s, memory_limit, network_allow, file_ids}`` or an
     error tuple ``(status, message, code, param)``."""
+    if body.get("skills"):
+        return (
+            400,
+            "Container skills are not supported.",
+            "unsupported_parameter",
+            "skills",
+        )
     server_ttl = float(settings.get("YUNSHU_CODE_EXECUTION_TTL_MIN")) * 60.0
     ttl_s = server_ttl
     ea = body.get("expires_after")
@@ -248,13 +255,6 @@ async def create_container(request: Request):
             "'name' is required (a non-empty string).",
             "missing_required_parameter",
             "name",
-        )
-    if body.get("skills"):
-        return _err(
-            400,
-            "Container skills are not supported.",
-            "unsupported_parameter",
-            "skills",
         )
     opts = parse_options(body)
     if isinstance(opts, tuple):

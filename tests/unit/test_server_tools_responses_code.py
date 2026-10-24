@@ -489,3 +489,51 @@ def test_hosted_shell_is_not_a_client_function():
 
     q = responses.ResponsesRequest(model="m", input="x", tools=[SH])
     assert function_tools(q.tools) is None
+
+
+def test_streaming_file_citation_events_validate(make):
+    c, _ = make(
+        [
+            [call("code_interpreter", {"code": "open('r.txt','w').write('x')"})],
+            [text("Saved as sandbox:/mnt/data/r.txt for you.")],
+        ]
+    )
+    with c.stream("POST", "/v1/responses", json=body([CI], stream=True)) as resp:
+        raw = resp.read().decode()
+    evs = parse_sse(raw)
+    for _n, e in evs:
+        EVENT.validate_python(e)
+    added = [e for n, e in evs if n == "response.output_text.annotation.added"]
+    assert added and added[0]["annotation"]["type"] == "container_file_citation"
+    done = [e for n, e in evs if n == "response.output_item.done"][-1]["item"]
+    assert done["content"][0]["annotations"][0]["filename"] == "r.txt"
+
+
+def test_tool_choice_for_a_hosted_code_tool_forces_its_function(make):
+    c, inner = make([[call("code_interpreter", {"code": "1"})], [text("ok")]])
+    c.post(
+        "/v1/responses",
+        json=body([CI], tool_choice={"type": "code_interpreter"}),
+    )
+    tc = inner.requests[0].tool_choice
+    assert tc == {"type": "function", "name": "code_interpreter"}
+    assert inner.requests[1].tool_choice == "auto"  # only the first round is forced
+
+
+def test_skills_in_an_auto_environment_are_refused(make):
+    c, _ = make([])
+    r = c.post(
+        "/v1/responses",
+        json=body(
+            [
+                {
+                    "type": "shell",
+                    "environment": {
+                        "type": "container_auto",
+                        "skills": [{"type": "skill_reference", "skill_id": "s"}],
+                    },
+                }
+            ]
+        ),
+    )
+    assert r.status_code == 400 and r.json()["error"]["code"] == "unsupported_parameter"
