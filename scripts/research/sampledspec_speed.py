@@ -44,7 +44,9 @@ def verify_engagement(arm, sampling, request_log):
         return "fast-keyed"
     if "DFlash fast verification: keyed=False" in request_log:
         return "fast-greedy"
-    return "chain"
+    # The pinned baseline predates the keyed/greedy engagement message. Missing
+    # instrumentation does not prove that its greedy request took the chain.
+    return "unreported"
 
 
 def main():

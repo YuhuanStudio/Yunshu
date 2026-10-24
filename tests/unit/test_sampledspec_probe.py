@@ -39,7 +39,7 @@ def test_each_sampled_candidate_cell_must_engage_the_keyed_tree():
             verify_engagement("cand", sampling, "DFlash fast verification: keyed=True")
             == "fast-keyed"
         )
-    assert verify_engagement("base", "sampled", "") == "chain"
+    assert verify_engagement("base", "sampled", "") == "unreported"
     assert (
         verify_engagement("cand", "greedy", "DFlash fast verification: keyed=False")
         == "fast-greedy"
