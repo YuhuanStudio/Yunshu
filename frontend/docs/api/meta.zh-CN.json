@@ -12,6 +12,7 @@
   "tokenization",
   "audio",
   "images",
+  "ocr",
   "models",
   "files",
   "batches",

@@ -58,7 +58,8 @@ An allowed-domain list does not inspect traffic: allowing a broad host can still
 | Wall clock per call (also the CPU-time limit) | `YUNSHU_CODE_EXECUTION_TIMEOUT`, 60 s; then `execution_time_exceeded` | settings |
 | Memory | `YUNSHU_CODE_EXECUTION_MEMORY_MB`, 2048; resident size of the whole process tree, sampled every 100 ms, then killed | settings |
 | stdout and stderr | 64 KiB each, cut and marked | `supervisor.py` |
-| Total output written | 1 MiB in a call kills it (`output_file_too_large`) | guide |
+| Total output (stdout plus stderr together) | More than 1 MiB in a call kills it (`output_file_too_large`) | `supervisor.py` |
+| Size of any single file a command writes | 256 MiB (`RLIMIT_FSIZE`) | `supervisor.py` |
 | Concurrent calls | 2 (`MAX_CONCURRENT`) | `executor.py` |
 | All containers together | 2 GiB (`MAX_TOTAL_BYTES`), oldest removed first | `containers.py` |
 | Container idle expiry | `YUNSHU_CODE_EXECUTION_TTL_MIN`, 20 minutes | settings |

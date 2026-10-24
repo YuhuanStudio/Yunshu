@@ -16,10 +16,10 @@ This index lists every shipped feature by area. Each row names the feature, what
 | Feature | What it does | Status | Docs |
 |---|---|---|---|
 | Lossless speculative decoding | DFlash2, MTP and prompt-copy drafting with batch-invariant kernels; greedy output equals speculation off | Stable | [Speculative decoding](/docs/internals/speculative-decoding) |
-| Text-model speculation | n-gram / suffix and Gemma 4 assistant drafting for mlx-lm models (external-draft experiments stay experimental) | Stable | [Speculative decoding](/docs/internals/speculative-decoding) |
+| Text-model speculation | n-gram / suffix and Gemma 4 assistant drafting for mlx-lm models (an external draft model is a separate non-identical option) | Stable | [Speculative decoding](/docs/internals/speculative-decoding), [Options](/docs/guides/options) |
 | Prefix cache (APC) | exact hybrid checkpoints in RAM, SSD and optional storage tiers; image and audio keys | Stable | [Prefix cache internals](/docs/internals/prefix-cache), [Prompt caching](/docs/guides/prompt-caching) |
 | Structured output | JSON schema, regex, choice and grammar enforced during decoding, including tool arguments | Stable | [Structured output](/docs/guides/structured-output), [Constrained decoding internals](/docs/internals/constrained-decoding) |
-| Lossy memory options | int8 KV, compressed WARM tier and load-time quantization; off by default | Stable | [Memory accounting](/docs/internals/memory), [Configuration](/docs/guides/configuration) |
+| Lossy memory options | int8 KV, compressed WARM tier and load-time quantization; off by default | Stable | [Options](/docs/guides/options), [Memory accounting](/docs/internals/memory), [Configuration](/docs/guides/configuration) |
 | Large MoE loading (partial) | bits and group size derived from tensor shapes for community DeepSeek-V4-Flash packs; fit check before loading | Partial | [Model support](/docs/guides/model-support) |
 | Round driver (experimental) | own speculative round driver for dense Qwen3.5-family models | Experimental | [Round driver](/docs/developers/round-driver) |
 | Model support | what is tuned, generic and validated, per family | Stable | [Model support](/docs/guides/model-support) |
@@ -62,7 +62,7 @@ This index lists every shipped feature by area. Each row names the feature, what
 | Speech-to-speech (partial) | Qwen3-Omni native speech; repeated-image and audio APC have scoped parity receipts; combined image+audio reuse is unverified | Partial | [Multimodal](/docs/guides/multimodal), [Realtime](/docs/api/realtime) |
 | Realtime voice | WebSocket and optional WebRTC, server VAD, barge-in, ephemeral client secrets, local voices | Stable | [Realtime](/docs/api/realtime) |
 | Speech to text, text to speech | transcriptions, translations, speech and voices | Stable | [Audio](/docs/api/audio) |
-| OCR and image generation | GLM-OCR text extraction; image generations, edits and variations | Stable | [Images](/docs/api/images), [Multimodal](/docs/guides/multimodal) |
+| OCR and image generation | GLM-OCR text extraction; image generations, edits and variations | Stable | [OCR](/docs/api/ocr), [Images](/docs/api/images), [Multimodal](/docs/guides/multimodal) |
 | Embeddings, rerank, score, classify | text and multimodal embeddings, cross-encoder rerank, trained classification heads | Stable | [Embeddings](/docs/api/embeddings), [Rerank](/docs/api/rerank) |
 
 ## Operations & console

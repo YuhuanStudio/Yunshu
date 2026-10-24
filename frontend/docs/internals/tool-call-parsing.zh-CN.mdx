@@ -5,11 +5,11 @@ description: Yunshu 如何从聊天模板检测模型的工具调用线路格式
 
 模型会以自己的线路格式把工具调用写成文本。Yunshu 把这段文本读回结构化的调用，让 OpenAI、Anthropic 与 Ollama 风格的客户端都看到普通的工具调用字段。本页说明读取器、流式解析器与结果判定规则。关于在生成时约束调用，请见[约束解码](/docs/internals/constrained-decoding)。
 
-## 功能概览
+## 它做什么
 
-`yunshu_engine/tool_format.py` 是注册表。一个 `ToolFormat` 由起始标记、结束标记（为空表示「到行尾」，如 Mistral）以及解析两者之间文本的解析函数组成。`whole` 格式没有起始标记：整条消息就是调用（Llama 3 JSON）。
+`yunshu_engine/tool_format.py` 是注册表。一个 `ToolFormat` 由起始标记、结束标记（为空表示“到行尾”，如 Mistral）以及解析两者之间文本的解析函数组成。`whole` 格式没有起始标记：整条消息就是调用（Llama 3 JSON）。
 
-- **检测。** `native_format` 读取模型的聊天模板，返回模板所教的格式，否则返回 `None`。它先检查 Llama header 模板，再检查标记字符串（`_OWN_TEMPLATE_MARKERS`），然后是 Hermes/GLM 的 `<tool_call>` 形态，最后退回 `mlx-vlm` 与 `mlx-lm` 上游的注册表（`_infer_tool_parser`）。
+- **检测。** `native_format` 读取模型的聊天模板，返回模板所教的格式，否则返回 `None`。它先检查 Llama 标头模板，再检查标记字符串（`_OWN_TEMPLATE_MARKERS`），然后是 Hermes/GLM 的 `<tool_call>` 形态，最后退回 `mlx-vlm` 与 `mlx-lm` 上游的注册表（`_infer_tool_parser`）。
 - **尝试顺序。** `formats_for_tokenizer` 先返回原生格式，再是 `yunshu_json`（Yunshu 注入的工具提示词所要求的 `<tool_call>{"name", "arguments"}</tool_call>` 形式），然后是 `json_message`（仅由一个 JSON 调用对象构成的消息）。Harmony 还会尝试后缀形式。
 - **解析完整输出。** `parse_tool_output` 按输出顺序返回调用，参数按请求的工具 schema 标注类型，并返回移除所有已解析调用片段后的文本。
 - **流式。** `ToolCallStreamer`（`tool_call_streamer.py`）在文本、调用内部与整条消息这几种状态之间转换。
@@ -48,7 +48,7 @@ stateDiagram-v2
     [*] --> TEXT
     TEXT --> TOOL_CALL: "看到起始标记"
     TEXT --> WHOLE: "消息可能是 JSON 调用"
-    TOOL_CALL --> TEXT: "结束标记，调用已解析或作为文本释放"
+    TOOL_CALL --> TEXT: "结束标记，调用已解析或作为文本输出"
     WHOLE --> TEXT: "不是调用"
     WHOLE --> [*]: "整条消息已解析"
     TEXT --> [*]: "流结束"
@@ -56,26 +56,26 @@ stateDiagram-v2
 
 - 调用之外的文本，一旦不可能是标记的开头就立即流出。从起始标记开始，文本会被保留到结束标记，然后解析该调用。
 - 每个调用以一个起始事件（id 与名称）加上其完整参数的形式输出。参数会先缓冲，直到有完整的调用，再于名称之后送出。每个调用都有自己的 ID。
-- 没有任何格式能读懂的片段会作为文本释放。工具标记永远不会进入内容流。
+- 没有任何格式能读懂的片段会作为文本输出。工具标记永远不会进入内容流。
 - 请求的约束在源头生效：指定名称的 `tool_choice` 会丢弃对其他函数的调用，`parallel_tool_calls=false` 只保留第一个调用，工具名称会按请求过滤。
 - 参数永远是 JSON 对象字符串。`tool_arguments.py` 依据请求的 JSON schema 为文本值的参数标注类型（Qwen 的 `<parameter=days>3` 到达时是 `"3"`）：integer、number、boolean、array、object 与 null 在能干净转换时才转换；string 与未知类型保持不变。
-- 对 GLM，`tool_thinking.py` 只在生成以观察 EOS token 结束时，才会从推理内容中恢复结尾的调用。长度停止、取消、用户停止、格式错误的调用以及被引用的示例，都仍然算作推理。
+- 对 GLM，`tool_thinking.py` 只在生成以观察 EOS token 结束时，才会从推理内容中找回结尾的调用。长度停止、取消、用户停止、格式错误的调用以及被引用的示例，都仍然算作推理。
 
 ## finish_reason 与结果如何判定
 
-- 如果至少有一个调用通过了解析以及 `tool_choice` / 并行过滤，OpenAI chat 路由会报告 `finish_reason` 为 `tool_calls`（`chat.py`：`"tool_calls" if tool_calls else finish`）。对流而言，只要输出过任何调用，就按每个 choice 判定。Anthropic 路由把同样的条件对应到 `stop_reason` 的 `tool_use`（`_map_stop_reason`）。
-- 否则报告引擎自己的原因（`stop`、`length` 等），而没有产生调用的标记区块会作为文本释放，而不是丢弃。
+- 如果至少有一个调用通过了解析以及 `tool_choice` / 并行过滤，OpenAI chat 路由会报告 `finish_reason` 为 `tool_calls`（`chat.py`：`"tool_calls" if tool_calls else finish`）。对流而言，只要输出过任何调用，就按每个 choice 判定。Anthropic 路由把同样的条件映射到 `stop_reason` 的 `tool_use`（`_map_stop_reason`）。
+- 否则报告引擎自己的原因（`stop`、`length` 等），而没有产生调用的标记区块会作为文本输出，而不是丢弃。
 - 每次解析都会在请求上记录次数而非文本：`tool_calls_parsed` 与 `tool_markup_failed`（`record_tool_outcome`）。它们会被记入日志，并通过 `x_yunshu` 中的已完成请求记录公开，所以被丢弃的调用是看得见的，而不是悄悄消失。
 
 ## 保证
 
-- 对请求未声明的名称的调用会被过滤掉。工具标记不会泄漏到内容中。
+- 对请求未声明的名称发起的调用会被过滤掉。工具标记不会泄漏到内容中。
 - Python 风格的调用当作数据解析，绝不执行。
-- 强制的 `tool_choice` 使用原生 llguidance 语法。原生封装可能跨越多个分词器 token；不受支持的语法与分词器组合保留无约束后备，解析出的调用并不能证明符合严格 schema。
+- 强制的 `tool_choice` 使用原生 llguidance 语法。原生外层包装可能跨越多个分词器 token；不受支持的语法与分词器组合保留无约束后备，解析出的调用并不能证明符合严格 schema。
 
 ## 配置项
 
-| 设置 | 缺省 | 作用 |
+| 设置 | 默认 | 作用 |
 |---|---|---|
 | `YUNSHU_TOOL_GRAMMAR` | 关闭（实验性） | 用结构标签约束 `auto` 工具调用；强制的 `tool_choice` 一律受约束 |
 

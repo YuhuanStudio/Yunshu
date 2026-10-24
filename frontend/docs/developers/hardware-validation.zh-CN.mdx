@@ -3,20 +3,20 @@ title: 硬件验证
 description: Yunshu 跨 Apple Silicon 世代的验证计划，以及 M5 Max 硬件地图：各单元测量到什么、Yunshu 用到哪些，以及哪些想法通过了 roofline 检验。
 ---
 
-本页分成两个部分。第一部分是 Apple Silicon 支持的验证计划，它是产品目标，并不代表每种芯片与 macOS 的组合都已测试过。第二部分是一台 M5 Max 机器的硬件地图，用来决定优化的投入方向。
+本页分成两个部分。第一部分是 Apple Silicon 支持的验证计划，它是产品目标，并不代表每种芯片与 macOS 的组合都已测试过。第二部分是一台 M5 Max 机器的硬件地图，用来决定优化该投入哪里。
 
 ## 硬件验证计划
 
 托管的 `macos-14` CI 作业不能证明特定的 M 系列 GPU 世代，也不能证明真实的 Metal 可用。当前的工作流是 `.github/workflows/ci.yml` 与 `release.yml`；没有为硬件覆盖额外配置 runner。
 
-### 做了什么
+### 它做什么
 
 | 层级 | 触发 | 检查 | 需保留的证据 |
 |---|---|---|---|
 | 快速 | 每次变更 | Linux 上的 lint 与构建；在依赖允许的情况下，运行不需要模型的公开契约与 CLI 测试 | 源码 SHA、依赖锁定文件与测试数量 |
 | 正确性 | 受信任的 PR 或发布前 | Apple Silicon 单元测试；微型模型的 API、缓存与约束冒烟测试 | 芯片、内存、macOS、Python 与 MLX 版本、检查点修订版，以及通过、失败与跳过的数量 |
-| 硬件覆盖 | 定时或发布前 | M1 到 M5；最旧的受支持 macOS 与当前 macOS，使用可获得的主机 | 明确标示已测试与未测试的格子；输出、缓存与 logprob 一致性 |
-| 性能 | 受控的定时运行 | 同一检查点的解码，以及冷、暖与第二轮 TTFT；三次交错重复 | 原始收据、实际启用的模式、输出长度、摘要、中位数与退步 |
+| 硬件覆盖 | 定时或发布前 | M1 到 M5；最旧的受支持 macOS 与当前 macOS，使用可用的主机 | 明确标示已测试与未测试的格子；输出、缓存与 logprob 一致性 |
+| 性能 | 受控的定时运行 | 同一检查点的解码，以及冷、暖与第二回合的 TTFT；三次交错重复 | 原始收据、实际启用的模式、输出长度、摘要、中位数与退步 |
 
 ### 保证
 
@@ -28,7 +28,7 @@ description: Yunshu 跨 Apple Silicon 世代的验证计划，以及 M5 Max 硬�
 
 ### 限制
 
-维护者必须先盘点可用主机与受支持的最低 macOS 版本，这个计划才会成为必需的 CI。目前 M5 Max 是计时用机器，36 GB 的 M3 笔记本只提供正确性与可移植性证据：M3 的结果绝不会批准 M5 热路径的缺省值，M3 上的失败必须在 M5 复现后，才能否决 M5 的优化。此通道记载于[边服务边开发](/docs/developers/serve-and-develop)。
+维护者必须先盘点可用主机与受支持的最低 macOS 版本，这个计划才会成为必需的 CI。目前 M5 Max 是计时用机器，36 GB 的 M3 笔记本只提供正确性与可移植性证据：M3 的结果绝不会批准 M5 热路径的默认值，M3 上的失败必须在 M5 复现后，才能否决 M5 的优化。此通道记载于[边服务边开发](/docs/developers/serve-and-develop)。
 
 ### 如何验证
 
@@ -36,26 +36,26 @@ description: Yunshu 跨 Apple Silicon 世代的验证计划，以及 M5 Max 硬�
 
 ## M5 Max 硬件地图
 
-本节是单一机器（M5 Max、40 核 GPU、128 GB）的历史探测记录。它不代表当前的依赖版本或发布性能；要看有日期的数字，请用[基准测试](/docs/guides/benchmarks)。探测脚本位于 `scripts/research/hw/`，每个都会写出 JSONL，数字都在里面（本页不收录，因为它们来自同一台机器在某一个时间点）。每个 GPU、ANE 与重度 CPU 探测都在共享的 GPU 锁下运行，因为这些单元共用同一个内存系统，一个运行会干扰另一个。
+本节是单一机器（M5 Max、40 核 GPU、128 GB）的历史探测记录，并不代表当前的依赖版本或发布性能；要看有日期的数字，请用[基准测试](/docs/guides/benchmarks)。探测脚本位于 `scripts/research/hw/`，每个都会写出 JSONL，数字都在里面（本页不收录，因为它们只代表同一台机器在某一时间点的结果）。每个 GPU、ANE 与重度 CPU 探测都在共享的 GPU 锁下运行，因为这些单元共用同一个内存系统，一个运行会干扰另一个。
 
 ### 各单元的用途
 
 | 单元 | 探测脚本 | Yunshu 用到它的什么 |
 |---|---|---|
-| 内存带宽 | `bw_unified_memory.py`、`decode_proxy_step.py`、`decode_step_model.py`、`decode_step_engine.py` | 解码每一步都要流式读取一次模型权重，所以受带宽限制 |
+| 内存带宽 | `bw_unified_memory.py`、`decode_proxy_step.py`、`decode_step_model.py`、`decode_step_engine.py` | 解码每一步都要读取一次完整的模型权重，所以受带宽限制 |
 | GPU 张量单元（NAX） | `gpu_compute.py`、`tensor_unit_peak.py` | prefill 使用 MLX 中的 NAX 量化矩阵乘法；解码与验证使用 NAX 打包的 4 位 kernel |
 | GPU 启动与同步 | `launch_overhead.py` | 启动成本通过 `async_eval` 藏在 GPU 工作之后 |
 | ANE | `ane_probe.py`、`pick_best_ane.py`、`bg_gpu_concurrency.py`、`session_ane_prefill.sh` | 仅作为嵌入协处理器（`ane_embedding.py`） |
-| CPU | `cpu_probe.py` | 反分词、文法与采样的衔接工作 |
+| CPU | `cpu_probe.py` | 把 token 转回文本（detokenization）、文法与采样的衔接工作 |
 | 解码旁的 prefill | `gpu_stream_overlap.py`、`bench_prefill_interleave.py` | 以 prefill 块大小作为策略（`YUNSHU_ROUND_PREFILL_CHUNK`） |
 
 ### 发现
 
-- **解码受权重带宽限制。** 一步不可能低于以最佳实测读取带宽读完权重的时间，而原生解码已经很接近这条线。只有每个 token 读取更少字节（每次读权重接受更多 token、更低位数），或让多行共用读取，才能推进。小型投影（K/V、GDN gate）远低于带宽线，是融合启动可能有帮助的地方。
-- **宽验证几乎免费。** 量化矩阵乘法在数行以内仍受权重带宽限制，计算要超过数十行才会成为瓶颈，所以一次权重读取可以服务多行验证。这就是推测式与多行解码划算的原因。
+- **解码受权重带宽限制。** 一步不可能低于以最佳实测读取带宽读完权重的时间，而原生解码已经很接近这条线。只有每个 token 读取更少字节（每次读权重接受更多 token、更低位数），或让多行共用读取，才能推进。小型投影（K/V、GDN gate）远低于带宽线，是融合 kernel 启动可能有帮助的地方。
+- **宽验证几乎免费。** 量化矩阵乘法在数行以内仍受权重带宽限制，计算要超过数十行才会成为瓶颈，所以一次权重读取可以服务多行验证。这就是推测解码与多行解码划算的原因。
 - **启动开销不是瓶颈。** CPU 在 GPU 运行上一步时构建下一步的计算图。对解码层使用 `mx.compile`、`MLX_MAX_OPS_PER_BUFFER` 与 `MLX_METAL_FAST_SYNCH` 都没有可测量的变化，而且 MLX 没有可利用的图重放。
-- **ANE 不是免费的带宽。** GPU 解码时它几乎保有自己全部的速率，但每次 ANE 调用都从同一个 DRAM 流式读取权重，会拖慢 GPU 解码。单独使用时它的 prefill 约为空闲 GPU 速率的三分之一，所以最多只适用于另一个请求正在流式输出时到达的提示词，而且它的数值与 MLX 4 位权重不同（是有损选项，不是缺省）。
-- **CPU 帮不上解码。** 对单行而言，在大词表上采样很便宜（argmax 藏在下一步之后），但多行的 top-k 或排序就不是了，所以采样留在 GPU 上（`YUNSHU_GPU_SAMPLER`）。CPU 的内存流量也会拖慢 GPU，CPU 草稿不切实际。
+- **ANE 不是免费的带宽。** GPU 解码时它几乎保有自己全部的速率，但每次 ANE 调用都从同一个 DRAM 流式读取权重，会拖慢 GPU 解码。单独使用时它的 prefill 约为空闲 GPU 速率的三分之一，所以最多只适用于“另一个请求正在流式输出时才到达”的提示词，而且它的数值与 MLX 4 位权重不同（是有损选项，不是默认）。
+- **CPU 帮不上解码。** 对单行而言，在大词表上采样很便宜（argmax 藏在下一步之后），但多行的 top-k 或排序就不是了，所以采样留在 GPU 上（`YUNSHU_GPU_SAMPLER`）。CPU 的内存流量也会拖慢 GPU，因此用 CPU 生成草稿并不实际。
 - **Wired 内存与电源。** `mx.set_wired_limit` 与缓存上限的调整，在 128 GB 的机器上没有增益；持续解码循环中看不到降频。
 - **Prefill 与解码互相竞争。** 两个 GPU 命令队列不会让 prefill 与解码重叠，而且解码没有优先级。在单一队列上，较小的 prefill 区段能让运行中的请求解码快很多，代价是新到达的提示词首个 token 的时间变长。两种块大小下，提示词的 token 都与单独运行时相同。`YUNSHU_ROUND_PREFILL_CHUNK` 设置区段大小。
 
@@ -63,21 +63,21 @@ description: Yunshu 跨 Apple Silicon 世代的验证计划，以及 M5 Max 硬�
 
 | 想法 | 结果 |
 |---|---|
-| 以 prefill 块作为策略 | 完成：`YUNSHU_ROUND_PREFILL_CHUNK`，缺省 512；依解码行数自适应调整尚未完成 |
+| 以 prefill 块作为策略 | 完成：`YUNSHU_ROUND_PREFILL_CHUNK`，默认 512；依解码行数自适应调整尚未完成 |
 | 让解码 kernel 保持在带宽线上（融合小型投影） | 未完成 |
 | 更宽的验证与多行解码 | 通过 round driver 进行中；见 [Round driver](/docs/developers/round-driver) |
-| 张量单元上的 Int8 激活 prefill | 有损，所以只能是用户选项；未采用 |
+| 张量单元上的 Int8 启用 prefill | 有损，所以只能是用户选项；未采用 |
 | round driver 中的批量序列混合器 | 未完成，预期增益小 |
 | 在 GPU 解码旁进行 ANE prefill | 有损选项，投入极高；排在最后 |
 | 在 CPU 上采样 | 否决：留在 GPU 上 |
-| ANE 上的草稿器与 GPU 验证重叠 | 放弃：草稿取决于上一轮接受的 token，而且 ANE 会占用 GPU 带宽 |
-| 解码层的 `mx.compile`、wired 内存调优、高性能模式、prefill 专用的第二个命令队列 | 放弃：没有可测量的效果或更差 |
+| ANE 上的草稿器与 GPU 验证重叠 | 放弃：草稿取决于上一回合接受的 token，而且 ANE 会占用 GPU 带宽 |
+| 解码层的 `mx.compile`、wired 内存调优、高性能模式、prefill 专用的第二个命令队列 | 放弃：没有可测量的效果，或反而更差 |
 
-### 旋钮
+### 设置
 
-| 设置 | 缺省值 | 效果 |
+| 设置 | 默认值 | 效果 |
 |---|---|---|
-| `YUNSHU_ROUND_PREFILL_CHUNK` | 512 | Round driver：每个 prefill 区段的提示词 token 数；较小的区段能让长提示词旁的解码行持续运行。以不同块大小 prefill 的提示词各自自洽，但彼此并非位级相同 |
+| `YUNSHU_ROUND_PREFILL_CHUNK` | 512 | Round driver：每个 prefill 区段的提示词 token 数；较小的区段能让长提示词旁的解码行持续运行。以不同块大小 prefill 的提示词各自保持一致，但彼此并非位级相同 |
 | `YUNSHU_GPU_SAMPLER` | off | 文本模型：GPU 上的 Gumbel-max 采样 |
 
 ### 如何验证
@@ -89,9 +89,9 @@ scripts/dev/gpuq submit --label hw-decode-proxy --mem-gb 30 -- \
   python scripts/research/hw/decode_proxy_step.py
 ```
 
-开始优化之前先算出 roofline：理论上限与其依赖。要在运行环境中比较，而不是用孤立的微基准测试，因为每次调用都 eval 的部件会高估小型 kernel。
+开始优化之前先算出 roofline：理论上限与其依赖。要在运行环境中比较，而不是用孤立的微基准测试，因为每次调用都会 eval 的组件会高估小型 kernel 的成本。
 
-## 相关
+## 相关页面
 
 - [发布就绪](/docs/developers/release-readiness)
 - [验证](/docs/developers/verification)

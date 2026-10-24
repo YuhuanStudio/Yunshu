@@ -54,7 +54,7 @@ The model gets two sub-tools, `bash_code_execution` and `text_editor_code_execut
 
 - **Containers.** Pass `container: "<id>"` (or `{id}`) back to keep the working directory. An unknown or expired id is a `400`. A container is deleted after the idle TTL, and the total is capped at 2 GiB (oldest first).
 - **Files.** `container_upload` content blocks copy a [Files API](/docs/api/files) file into the working directory. Every bash call gets a fresh `$OUTPUT_DIR`; its top-level files become Files API entries returned as `bash_code_execution_output {file_id}` (download with `GET /v1/files/{id}/content`).
-- **Output limits.** stdout and stderr are each cut at 64 KiB (marked). A call that writes more than 1 MiB is killed (`output_file_too_large`). Background processes die with the call. The command sees only `PATH`, `HOME` (the container), `TMPDIR`, `OUTPUT_DIR` and locale variables, never the server's environment.
+- **Output limits.** stdout and stderr are each cut at 64 KiB (marked). A call whose stdout and stderr together exceed 1 MiB is killed (`output_file_too_large`). Background processes die with the call. The command sees only `PATH`, `HOME` (the container), `TMPDIR`, `OUTPUT_DIR` and locale variables, never the server's environment.
 
 ## What the sandbox allows
 

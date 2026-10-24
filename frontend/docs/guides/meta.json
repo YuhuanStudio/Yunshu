@@ -15,6 +15,7 @@
   "cli",
   "configuration",
   "model-support",
+  "options",
   "features",
   "troubleshooting",
   "benchmarks"

@@ -65,10 +65,12 @@ Speculation is only worth shipping if it is invisible to the user. Yunshu theref
 | `YUNSHU_NGRAM_DEFAULT` | off | Text models: n-gram speculation on greedy requests |
 | `YUNSHU_SPEC_PROPOSER` | `ngram` | `ngram` or `suffix` for text models |
 | `YUNSHU_GEMMA4_ASSISTANT` | unset | Assistant drafter directory for Gemma 4 text models |
+| `YUNSHU_SPEC_UNVERIFIED`, `YUNSHU_DRAFT_MODEL` | off, unset | Stable user options, not lossless: external `mlx-lm` draft model for greedy text requests; see [Options that can change output](/docs/guides/options) |
 | `YUNSHU_ROUND_DRIVER` | off | Experimental row-wise round driver; see [Round driver](/docs/developers/round-driver) |
 
 ## Limits
 
+- The lossless guarantee does not cover `YUNSHU_SPEC_UNVERIFIED` with an external draft model: its output can differ from plain decode. See [Options that can change output](/docs/guides/options).
 - Qwen3.5 family only on the VLM runner; other VLM families decode without drafting.
 - The lane serves one request at a time. Concurrent requests share a batch and do not draft together.
 - An Apple Paravirtual Metal host runs the stock runner without speculation.

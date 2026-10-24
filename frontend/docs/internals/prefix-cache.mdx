@@ -64,7 +64,7 @@ The text fast path has its own cache (`KVPrefixCache`), with an SSD tier that is
 - **Families with a sliding-window cache are excluded** from the VLM runner's APC, because a rotating cache cannot be assembled from dense KV blocks. The exception is `gemma4`, whose native snapshot includes the window, absolute offset and ring index; its exact-window restore is checkpoint-specific and has scoped parity checks rather than a blanket claim for every sliding-window model. `VLMEngine._build_batch_runner` decides this per model from `model_apc_plan` and the backend cache capabilities.
 - Apple Paravirtual Metal runs the stock runner with no APC.
 - A hit needs an exact token prefix: anything that changes early in the prompt moves everything after it.
-- WARM lossless compresses by about 1.4x and, in the recorded replay of 2026-10-02 on Qwen3.8-27B, did not beat the SSD tier on time to first token, which is why it is off by default.
+- WARM lossless compresses the cache and, in the recorded replay of 2026-10-02 on Qwen3.8-27B, did not beat the SSD tier on time to first token, which is why it is off by default.
 
 ## How to verify
 

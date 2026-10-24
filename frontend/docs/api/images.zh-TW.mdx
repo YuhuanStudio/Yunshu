@@ -95,7 +95,7 @@ description: OpenAI 風格的本機圖像生成、編輯與變體端點，以及
 {
   "text": "Invoice 2026-001\nTotal: 120.00",
   "model": "mlx-community/GLM-OCR-bf16",
-  "confidence": 0.0,
+  "confidence": null,
   "language": null,
   "task": "text",
   "prompt_tokens": 312,
@@ -109,7 +109,7 @@ description: OpenAI 風格的本機圖像生成、編輯與變體端點，以及
 }
 ```
 
-走 VLM 後備時 `confidence` 為 `null`，否則是 OCR 引擎回報的值，僅供參考。`language` 會原樣回傳你給的提示。
+`confidence` 一律為 `null`：兩條路徑都不產生信心分數。走 VLM 後備時 `language` 會原樣回傳你給的提示，走 OCR 引擎時為 `null`。
 
 ## 範例
 
