@@ -140,7 +140,7 @@ def install():
             position = self._split_position()
             if position is not None:
                 start, end = position
-                reserve_prompt_kv(self.prompt_cache, end)
+                reserve_prompt_kv(getattr(self, "prompt_cache", None) or (), end)
                 step = step or 2048
                 boundary = min((start // step + 1) * step, (end - 1) // 64 * 64)
                 if boundary <= start or boundary % 64:
