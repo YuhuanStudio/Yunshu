@@ -163,14 +163,14 @@ class CompletionRequest(BaseModel):
     prompt: str | list[str] | list[int] | list[list[int]]
     max_tokens: int = Field(default=128, ge=0, le=1048576)
     max_completion_tokens: int | None = Field(default=None, ge=0, le=1048576)
-    temperature: float = Field(default=0.7, ge=0.0, le=2.0)
-    top_p: float = Field(default=1.0, ge=0.0, le=1.0)
-    top_k: int = Field(default=0, ge=0)
-    min_p: float = Field(default=0.0, ge=0.0, le=1.0)
+    temperature: float = Field(default=None, ge=0.0, le=2.0)  # type: ignore[assignment]  # None until resolve_sampling
+    top_p: float = Field(default=None, ge=0.0, le=1.0)  # type: ignore[assignment]  # None until resolve_sampling
+    top_k: int = Field(default=None, ge=0)  # type: ignore[assignment]  # None until resolve_sampling
+    min_p: float = Field(default=None, ge=0.0, le=1.0)  # type: ignore[assignment]  # None until resolve_sampling
     top_n_sigma: float = Field(default=0.0, ge=0.0, le=10.0)
-    repetition_penalty: float = Field(default=1.0, ge=0.0, le=2.0)
-    frequency_penalty: float = Field(default=0.0, ge=-2.0, le=2.0)
-    presence_penalty: float = Field(default=0.0, ge=-2.0, le=2.0)
+    repetition_penalty: float = Field(default=None, ge=0.0, le=2.0)  # type: ignore[assignment]  # None until resolve_sampling
+    frequency_penalty: float = Field(default=None, ge=-2.0, le=2.0)  # type: ignore[assignment]  # None until resolve_sampling
+    presence_penalty: float = Field(default=None, ge=-2.0, le=2.0)  # type: ignore[assignment]  # None until resolve_sampling
     logit_bias: dict[int, float] | None = None
     stream: bool = False
     stream_options: StreamOptions | None = None
@@ -374,6 +374,9 @@ def _untag_reasoning(text: str, reasoning_tokens: int) -> str:
 @router.post("/completions", response_model=None)
 async def create_completion(req: CompletionRequest, request: Request):
     """OpenAI-compatible text completion endpoint."""
+    from ..sampling_defaults import resolve_sampling
+
+    resolve_sampling(req)
     _check_permission(request, "can_infer")
     from ..capability_gate import enforce_completion
 

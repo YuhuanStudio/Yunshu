@@ -27,6 +27,8 @@ const settingdesc = {
   YUNSHU_MEMORY_PRESSURE_REJECT:
     "Metal 工作集使用比例的門檻；超過時若仍有其他請求執行，新的生成請求會以 503 與 `Retry-After` 拒絕，以避免記憶體不足。閒置的伺服器不會拒絕。0 表示關閉。",
   YUNSHU_COMPLETION_BATCH_SIZE: "文字引擎：一起解碼的序列數上限。",
+  YUNSHU_SAMPLING_DEFAULTS:
+    "請求未帶取樣參數時的預設來源：model 依序採用模型公布的各模式建議、generation_config.json、API 預設；api 只用 API 預設。請求帶的值永遠優先。",
   YUNSHU_DEFAULT_MAX_TOKENS:
     "聊天或 responses 請求省略 `max_tokens` 時的生成長度；仍受上下文預算限制。",
   YUNSHU_MAX_PREFILL_TOKENS:

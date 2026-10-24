@@ -1,0 +1,37 @@
+---
+title: Sampling defaults
+description: What temperature, top_p, top_k and the penalties a request gets when it sends none, and how the thinking mode picks them.
+---
+
+Coding agents (Claude Code, Codex, opencode) send no sampling parameters, so the defaults decide how they behave. Yunshu does not use one number for every model. For each field it takes the first value found in this order:
+
+1. the value in the request (always wins, even when it equals an old default);
+2. the model's published recommendation for the mode **this request** runs in (thinking or non-thinking);
+3. the model's `generation_config.json`;
+4. the official API default (temperature 1.0, top_p 1.0, top_k / min_p / penalties off).
+
+## Which mode a request is in
+
+The mode is resolved the way the request is rendered: Anthropic `thinking` (`enabled` / `disabled`), `enable_thinking` or `chat_template_kwargs.enable_thinking`, a JSON-schema or grammar constraint (runs without thinking), and otherwise the chat template's own default (for example Qwen3.5 and Qwen3.8 think by default). `reasoning_effort` does not switch the mode.
+
+## Published recommendations
+
+| Model                 | Mode         | temperature | top_p | top_k | presence_penalty |
+| --------------------- | ------------ | ----------- | ----- | ----- | ---------------- |
+| Qwen3.8-27B           | thinking     | 1.0         | 0.95  | 20    | 0.0              |
+| Qwen3.8-27B           | non-thinking | 0.7         | 0.80  | 20    | 1.5              |
+| Qwen3.6-27B           | thinking     | 1.0         | 0.95  | 20    | 0.0              |
+| Qwen3.6-27B           | non-thinking | 0.7         | 0.80  | 20    | 1.5              |
+| Qwen3.5-27B / 9B / 4B | thinking     | 1.0         | 0.95  | 20    | 1.5              |
+| Qwen3.5-27B / 9B / 4B | non-thinking | 0.7         | 0.80  | 20    | 1.5              |
+| Qwen3.5-2B / 0.8B     | thinking     | 1.0         | 0.95  | 20    | 1.5              |
+| Qwen3.5-2B / 0.8B     | non-thinking | 1.0         | 1.00  | 20    | 2.0              |
+| Gemma 4 31B           | both         | 1.0         | 0.95  | 64    | off              |
+
+Values are copied from the Hugging Face model cards (general-task sets; the cards' coding sets are not used). Other models fall through to `generation_config.json`, then the API default.
+
+## See and change it
+
+- Every response reports `x_yunshu.sampling`: the values, the mode, why that mode, and the source of each field (`request`, `model_card`, `generation_config`, `api_default`).
+- `yunshu doctor -m <model>` prints the defaults per mode; the console shows them on the model page; the server logs them at startup.
+- `YUNSHU_SAMPLING_DEFAULTS=api` ignores the model and uses the API defaults only. `temperature: 0` is always greedy.

@@ -90,6 +90,21 @@ and cold 32K TTFT versus Splash 1.3.2.
 
 ### Changed
 
+- Sampling defaults now come from the served model. A request that omits `temperature`, `top_p`, `top_k`,
+  `min_p` or a penalty takes the value in the model's `generation_config.json` (read per model, also in
+  multi-model mode); a key the file lacks takes the API default (`temperature` 1.0, `top_p` 1.0, `top_k`
+  and `min_p` off, penalties off). Explicit request values always win, including ones equal to the old
+  defaults. **Outputs of requests without sampling parameters change:** chat, completions and Anthropic
+  Messages used 0.7 / 1.0 / 0 before; for Qwen3.8-27B the new default is 1.0 / 0.95 / 20. Same rule on
+  chat, completions, Responses, Anthropic Messages, Ollama (its `options` still override), Realtime and MCP
+  `generate`. The values used and their source appear in `x_yunshu.sampling` and the model card
+  (`yunshu.sampling_defaults`). Temperature 0 still means greedy.
+- Sampling defaults are per mode. Between the request and `generation_config.json` sits the model's published
+  recommendation for the mode the request runs in (thinking or non-thinking; Qwen3.8 / 3.6 / 3.5 and Gemma 4 31B,
+  copied from their model cards into `sampling_profiles.json`). Qwen3.8-27B without a sampling parameter and
+  with thinking: 1.0 / 0.95 / 20; with thinking off: 0.7 / 0.80 / 20 and presence_penalty 1.5. `x_yunshu.sampling`
+  adds `mode`; `YUNSHU_SAMPLING_DEFAULTS=api` restores API-only defaults.
+
 - Console motion: one set of motion tokens (expo ease-out enters, 120/200/280 ms), no `transition: all`, no decorative loops; page changes fade out then in, theme switch is one cross-fade, the sidebar and tab selection is one sliding pill, stat values roll digit by digit, the overview skeleton cross-fades into the cards without a layout shift, and streamed Playground text fades in by chunk. Reduced motion keeps only short opacity changes.
 - Split-invariant prefill (NAX GEMM padded to 64 rows, BQ32 attention, chunked GDN) and 64-token-aligned APC
   checkpoints are the default on the qualified 27B path; rehearsal starts after 0.3 s.
