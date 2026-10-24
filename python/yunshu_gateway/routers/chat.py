@@ -1492,7 +1492,9 @@ def _per_choice_seed(user_seed: int | None, idx: int) -> int:
         return v - (1 << 64) if v >= 1 << 63 else v
     import time as _t
 
-    return (_t.time_ns() + int(idx) * 1_000_003) & ((1 << 63) - 1)
+    from yunshu_engine.orphan_adoption import AutoSeed
+
+    return AutoSeed((_t.time_ns() + int(idx) * 1_000_003) & ((1 << 63) - 1))
 
 
 def _normalize_finish_reason(reason: str | None) -> str:

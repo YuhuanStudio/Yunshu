@@ -1519,9 +1519,23 @@ class VLMBatchRunner:
             ragged_kv.set_format(self.ragged_kv)
             if dense_lane:
                 ragged_kv.set_dense_lane(True)
+        if logger.isEnabledFor(logging.DEBUG):
+            _t0 = time.perf_counter()
+            _g0 = sum(j.stats.generated for j in group.jobs.values())
         try:
             self._step_generator(group, decode_only=decode_only)
         finally:
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug(
+                    "slice t=%.3f dt=%.3f spec=%s decode_only=%s rows=%d emitted=%d uncached_waiting=%d",
+                    _t0,
+                    time.perf_counter() - _t0,
+                    group.spec,
+                    decode_only,
+                    len(group.jobs),
+                    sum(j.stats.generated for j in group.jobs.values()) - _g0,
+                    sum(1 for j in group.jobs.values() if not j.stats.t_first),
+                )
             cache_decode.set_active(False)
             if invariant:
                 batch_invariant.set_active(False)

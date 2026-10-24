@@ -46,14 +46,59 @@ _VOLATILE = frozenset(
 )
 
 
+class AutoSeed(int):
+    """A seed the server made up (the caller gave none): not part of a request's identity."""
+
+
+# What a field means when a request omits it (the engine's defaults), so a stream and a
+# non-streaming request that spell the same thing differently still match.
+_DEFAULTS: dict[str, Any] = {
+    "temperature": 0.7,
+    "top_p": 1.0,
+    "top_k": 0,
+    "min_p": 0.0,
+    "repetition_penalty": 1.0,
+    "xtc_probability": 0.0,
+    "xtc_threshold": 0.0,
+    "logprobs": False,
+    "top_logprobs": None,
+    "stop": None,
+    "stop_token_ids": None,
+    "enable_thinking": None,
+}
+
+
+def _normalize(params: dict[str, Any]) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    for k, v in sorted(params.items()):
+        if k in _VOLATILE:
+            continue
+        if k == "seed" and (v is None or isinstance(v, AutoSeed)):
+            v = "auto"
+        if k in _DEFAULTS and (
+            v == _DEFAULTS[k] or (v in ([], ()) and _DEFAULTS[k] is None)
+        ):
+            continue
+        out[k] = v
+    out.setdefault("seed", "auto")
+    return out
+
+
+def key_parts(model: str, messages: Any, params: dict[str, Any]) -> dict[str, str]:
+    """Short hash per request field, to log which field made two requests differ."""
+    out = {"model": model, "messages": messages, **_normalize(params)}
+    return {
+        k: hashlib.sha1(
+            json.dumps(v, sort_keys=True, default=repr).encode()
+        ).hexdigest()[:6]
+        for k, v in out.items()
+    }
+
+
 def request_key(model: str, messages: Any, params: dict[str, Any]) -> str | None:
     """Stable identity of a generation request, or None when it cannot be keyed
     (an object without a stable JSON form, such as a callable): no adoption then."""
-    body = {
-        "model": model,
-        "messages": messages,
-        "params": {k: v for k, v in sorted(params.items()) if k not in _VOLATILE},
-    }
+    body = {"model": model, "messages": messages, "params": _normalize(params)}
     try:
         text = json.dumps(body, sort_keys=True, default=_unstable)
     except _UnkeyableError:
@@ -92,6 +137,7 @@ class Generation:
         self.pump: asyncio.Task | None = None
         self.timer: asyncio.TimerHandle | None = None
         self.adopted = 0
+        self.parts: dict[str, str] = {}
 
     def notify(self) -> None:
         ev, self.changed = self.changed, asyncio.Event()
@@ -293,6 +339,7 @@ async def run(
     grace: float,
     limit: int,
     registry: OrphanRegistry | None = None,
+    parts: dict[str, str] | None = None,
 ) -> AsyncIterator[Any]:
     """Serve one request: adopt an orphan with ``key`` or start ``start(real_cancel)``.
 
@@ -309,11 +356,20 @@ async def run(
             "already finished" if gen.finished else "still decoding",
         )
     else:
+        if key and grace > 0 and reg._orphans and parts:
+            for other in reg._orphans.values():
+                diff = sorted(
+                    k
+                    for k in set(parts) | set(other.parts)
+                    if parts.get(k) != other.parts.get(k)
+                )
+                logger.info("orphan not adopted: request differs in %s", diff)
         real_cancel = threading.Event()
         for attr in ("scheduling_priority", "client_request_id"):
             if hasattr(caller_cancel, attr):
                 setattr(real_cancel, attr, getattr(caller_cancel, attr))
         gen = Generation(key or "", real_cancel)
+        gen.parts = parts or {}
         gen.pump = asyncio.ensure_future(_pump(gen, start(real_cancel).__aiter__()))
     index = 0
     clean = False

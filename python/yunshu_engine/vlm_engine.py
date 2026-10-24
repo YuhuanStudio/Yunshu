@@ -1248,6 +1248,9 @@ class VLMEngine:
             cancel_event,
             float(settings.get("YUNSHU_ORPHAN_GRACE_SECONDS")),
             int(settings.get("YUNSHU_ORPHAN_MAX")),
+            parts=orphan_adoption.key_parts(self.model_name, msgs, kwargs)
+            if key
+            else None,
         ):
             yield out
 

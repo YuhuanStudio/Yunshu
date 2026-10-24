@@ -435,11 +435,11 @@ def main() -> int:
         os.environ,
         HOME=a.home,
         PYTHONPATH=os.path.join(tree, "python"),
-        YUNSHU_AUTH_TOKEN=TOKEN,
+        YUNSHU_AUTH_DISABLED="true",
         YUNSHU_ORPHAN_GRACE_SECONDS=str(a.grace),
         HF_HUB_OFFLINE="1",
     )
-    env.pop("YUNSHU_AUTH_DISABLED", None)
+    env.pop("YUNSHU_AUTH_TOKEN", None)
     if a.draft:
         env["YUNSHU_VLM_DRAFT"] = a.draft
     for kv in filter(None, a.extra_env.split(",")):

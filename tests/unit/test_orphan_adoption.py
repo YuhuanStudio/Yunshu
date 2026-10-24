@@ -248,3 +248,23 @@ def test_adopter_gets_rebased_stats_so_replay_is_no_speed():
         assert mine.t_first > orig.t_last and mine.finish_reason == "stop"
 
     _run(main())
+
+
+def test_server_made_seed_is_not_identity():
+    from yunshu_gateway.routers.chat import _per_choice_seed
+
+    m = [{"role": "user", "content": "x"}]
+    a = oa.request_key("m", m, {"seed": None, "temperature": 0.7})
+    b = oa.request_key("m", m, {"seed": _per_choice_seed(None, 0), "temperature": 0.7})
+    c = oa.request_key("m", m, {"seed": _per_choice_seed(None, 0), "temperature": 0.7})
+    assert a == b == c
+    assert a != oa.request_key("m", m, {"seed": 5, "temperature": 0.7})
+    assert _per_choice_seed(7, 0) == 7
+
+
+def test_omitted_defaults_match_spelled_out_defaults():
+    m = [{"role": "user", "content": "x"}]
+    a = oa.request_key("m", m, {"max_tokens": 10, "temperature": 0.7, "stop": [], "logprobs": False})
+    b = oa.request_key("m", m, {"max_tokens": 10, "top_p": 1.0, "seed": None})
+    assert a == b
+    assert a != oa.request_key("m", m, {"max_tokens": 10, "temperature": 0.0})
