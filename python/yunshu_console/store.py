@@ -67,6 +67,7 @@ REQUEST_COLUMNS = (
     "decode_tps",
     "ttft_ms",
     "queue_wait_ms",
+    "total_ms",
     "key_name",
     "cancelled",
     "engine_url",
@@ -97,8 +98,14 @@ def request_row(entry: dict) -> dict[str, Any] | None:
     if not isinstance(rid, str) or not _LABEL.fullmatch(rid) or t is None:
         return None
     out: dict[str, Any] = {}
+    offsets = entry.get("offsets_ms")
     for col in REQUEST_COLUMNS:
         v = entry.get(col)
+        if col == "total_ms" and v is None and isinstance(offsets, dict):
+            # the engine reports the finished request's total as offsets_ms.done (last_token as a fallback)
+            v = offsets.get("done", offsets.get("last_token"))
+        if col == "t_start" and v is None:
+            v = entry.get("t0_wall")
         if col == "engine_url":
             out[col] = v[:96] if isinstance(v, str) and v.isprintable() else None
         elif col == "key_name":
@@ -167,11 +174,15 @@ class HistoryStore:
                 "request_id TEXT NOT NULL, t REAL NOT NULL, t_start REAL, model TEXT, path TEXT,"
                 " stream INTEGER, status INTEGER, finish_reason TEXT, prompt_tokens INTEGER,"
                 " completion_tokens INTEGER, cached_tokens INTEGER, prefill_tps REAL,"
-                " decode_tps REAL, ttft_ms REAL, queue_wait_ms REAL, key_name TEXT,"
+                " decode_tps REAL, ttft_ms REAL, queue_wait_ms REAL, total_ms REAL, key_name TEXT,"
                 " cancelled INTEGER, engine_url TEXT, engine_started REAL, PRIMARY KEY (t, request_id))"
             )
             have = {r[1] for r in db.execute("PRAGMA table_info(requests)")}
-            for col, typ in (("engine_url", "TEXT"), ("engine_started", "REAL")):
+            for col, typ in (
+                ("engine_url", "TEXT"),
+                ("engine_started", "REAL"),
+                ("total_ms", "REAL"),
+            ):
                 if col not in have:  # a history file from before engine auto-follow
                     db.execute(f"ALTER TABLE requests ADD COLUMN {col} {typ}")
             db.execute(

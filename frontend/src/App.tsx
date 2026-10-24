@@ -894,13 +894,17 @@ export default function App() {
               >
                 {pageTitle(page)}
               </span>
+              {/* The pill sits left, right after the breadcrumb: its width follows its text and only its
+                  right edge moves, so nothing shifts when the phase or the numbers change. */}
+              {wide && (
+                <LivePill
+                  phase={engine.phase}
+                  status={engine.status}
+                  outage={engine.outage.kind}
+                />
+              )}
               {wide && (
                 <div className="ml-auto flex shrink-0 items-center gap-1.5">
-                  <LivePill
-                    phase={engine.phase}
-                    status={engine.status}
-                    outage={engine.outage.kind}
-                  />
                   <Button
                     variant="ghost"
                     type="button"

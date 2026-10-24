@@ -62,7 +62,6 @@ const shell = {
   "footer.gpu.help": "最近幾次狀態更新之間，GPU 執行推論的時間占比。",
   "footer.load.label": "請求",
   "footer.load.both": "{active} 進行 {queued} 排隊",
-  "footer.load.active": "{active} 進行",
   "footer.load.help": "進行中 {active} 個，排隊 {queued} 個。",
   "footer.sentenceEnd": "。",
   "nav.skip": "跳到主要內容",
