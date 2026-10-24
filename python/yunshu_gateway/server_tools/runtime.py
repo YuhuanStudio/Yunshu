@@ -15,6 +15,7 @@ import html
 import json
 import re
 import time
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from typing import TYPE_CHECKING
 
@@ -70,6 +71,22 @@ CODE_BASH_SCHEMA = {
     },
     "required": ["command"],
 }
+CODE_PY_DESC = (
+    "Run Python 3 code in a sandboxed working directory (standard library only; no network access). "
+    "The value of the last expression is printed like a notebook cell, and top-level `await` works. "
+    "Files you want to hand back to the user must be written to the working directory."
+)
+CODE_PY_STATE = (
+    " Variables, imports and open files persist between calls in this conversation."
+)
+CODE_PY_STATELESS = " Each call starts a fresh interpreter; only files in the working directory persist."
+CODE_PY_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "code": {"type": "string", "description": "The Python code to run."}
+    },
+    "required": ["code"],
+}
 CODE_EDITOR_DESC = (
     "View, create and edit text files in the sandbox working directory. `view` shows a file "
     "(optionally lines `view_range`) or lists a directory; `create` writes `file_text`; "
@@ -100,6 +117,86 @@ CODE_EDITOR_SCHEMA = {
     },
     "required": ["command", "path"],
 }
+
+
+CODE_INTERPRETER_DESC = (
+    "Run Python 3 code in a sandboxed notebook-style session: variables, imports and files persist "
+    "between calls in this conversation. Standard library only; there is no network access. The "
+    "value of the last expression is printed like a notebook cell. Files live in the current "
+    "working directory (also reachable as /mnt/data): to give the user a file (CSV, image, text), "
+    "write it there and mention it in your answer as [name](sandbox:/mnt/data/name)."
+)
+CODE_INTERPRETER_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "code": {"type": "string", "description": "The Python code to run."}
+    },
+    "required": ["code"],
+}
+SHELL_DESC = (
+    "Run shell (bash) commands in a sandboxed working directory that persists between calls in "
+    "this conversation (python3 is available; there is no network access). Files you create stay "
+    "in the working directory (also reachable as /mnt/data) and are returned to the user. Each "
+    "command runs separately, in order; the result has one stdout, stderr and exit code per command."
+)
+SHELL_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "commands": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Shell commands to run, in order.",
+        },
+        "timeout_ms": {
+            "type": "integer",
+            "description": "Optional time limit per command, in milliseconds.",
+        },
+        "max_output_length": {
+            "type": "integer",
+            "description": "Optional maximum characters returned per command and stream.",
+        },
+    },
+    "required": ["commands"],
+}
+
+
+def _py_type(sch: dict) -> str:
+    t = sch.get("type") if isinstance(sch, dict) else None
+    if isinstance(t, list):
+        t = next((x for x in t if x != "null"), "any")
+    return {
+        "string": "str",
+        "integer": "int",
+        "number": "float",
+        "boolean": "bool",
+        "array": "list",
+        "object": "dict",
+    }.get(t or "", "any")
+
+
+def python_tool_description(persistent: bool, ptc: list[dict]) -> str:
+    """The python sub-tool's text; ``ptc`` are the client tools the code may call (programmatic
+    tool calling): ``[{name, description, input_schema}]``."""
+    out = CODE_PY_DESC + (CODE_PY_STATE if persistent else CODE_PY_STATELESS)
+    if ptc:
+        out += (
+            "\n\nThese functions are defined in the interpreter. Each is `async`: call it with "
+            "`await`, pass arguments by keyword (or in the listed order). It returns the tool's "
+            "result as a string (use json.loads when the tool returns JSON) and raises RuntimeError "
+            "if the tool failed. Use asyncio.gather to run several at once."
+        )
+        for t in ptc:
+            sch = t.get("input_schema") or {}
+            props = sch.get("properties") or {}
+            req = set(sch.get("required") or [])
+            params = ", ".join(
+                f"{k}: {_py_type(v)}" + ("" if k in req else " = None")
+                for k, v in props.items()
+            )
+            out += f"\n- await {t['name']}({params})"
+            if t.get("description"):
+                out += f": {str(t['description'])[:400]}"
+    return out
 
 
 def web_action(args: dict) -> dict:
@@ -208,7 +305,7 @@ def extract_fetch_url(args) -> tuple[str | None, str]:
 @dataclass
 class ServerToolDef:
     fname: str  # the function name the model sees
-    kind: str  # "web_search" | "web_fetch" | "mcp" | "code_execution"
+    kind: str  # "web_search" | "web_fetch" | "mcp" | "code_execution" | "code_interpreter" | "shell"
     description: str
     schema: dict
     server_name: str | None = None  # mcp: server label / name
@@ -232,6 +329,10 @@ class ToolOutcome:
     fetched: FetchResult | None = None  # web_fetch
     mcp_content: list[dict] = field(default_factory=list)  # mcp
     code: ExecResult | None = None  # code_execution: the sandbox ExecResult
+    shell: list[dict] = field(default_factory=list)  # shell: one entry per command
+    files: list[dict] = field(
+        default_factory=list
+    )  # container files this call made or changed
     elapsed: float = 0.0
 
 
@@ -330,11 +431,25 @@ class ServerToolRuntime:
         self.uses: dict[str, int] = {}
         self._mcp: dict[str, McpConnection] = {}
         self._http: httpx.AsyncClient | None = None
-        self.counts = {"web_search": 0, "web_fetch": 0, "mcp": 0, "code_execution": 0}
+        self.counts = {
+            "web_search": 0,
+            "web_fetch": 0,
+            "mcp": 0,
+            "code_execution": 0,
+            "code_interpreter": 0,
+            "shell": 0,
+        }
         # code execution: the container this request runs in (created on first use) and the
         # Files API uploads to stage into it
         self.container: Container | None = None
         self.uploads: list[str] = []
+        self.ptc_tools: list[dict] = []  # client tools the python sub-tool may call
+        # () -> Container, for the first use (OpenAI "auto")
+        self.container_factory: Callable[[], Container] | None = None
+        self.owner = ""
+        self.created: dict[
+            str, dict
+        ] = {}  # rel path -> container.file record, this request
 
     # ── connections ──────────────────────────────────────────────────────────
     async def mcp_connect(
@@ -390,6 +505,10 @@ class ServerToolRuntime:
                 out = await self._fetch(d, args)
             elif d.kind == "code_execution":
                 out = await self._code(d, args)
+            elif d.kind == "code_interpreter":
+                out = await self._code_interpreter(d, args)
+            elif d.kind == "shell":
+                out = await self._shell(d, args)
             else:
                 out = await self._mcp_call(d, args)
         except Exception as e:  # noqa: BLE001 - a tool must never break the generation loop
@@ -513,19 +632,210 @@ class ServerToolRuntime:
             head += "\n(content truncated)"
         return ToolOutcome("web_fetch", f"{head}\n\n{f.text}", fetched=f, query=url)
 
+    def _box(self, ex) -> Container:
+        """The request's container: created on first use, uploads staged into it."""
+        box = self.container
+        if box is None:
+            box = self.container = (
+                self.container_factory()
+                if self.container_factory
+                else ex.manager.create(owner=self.owner)
+            )
+        for fid in self.uploads:
+            ex.stage_file(box, fid)
+        self.uploads = []
+        return box
+
+    def ensure_box(self) -> Container:
+        """Create the container now (the Responses items name it before the code runs)."""
+        from ..sandbox import get_executor
+
+        return self._box(get_executor())
+
+    def _note_files(self, box: Container, entries: list) -> list[dict]:
+        from ..sandbox import files as cfiles
+
+        box = self._fresh(box)
+        recs = [cfiles.record(box, e) for e in entries]
+        for r in recs:
+            self.created[r["path"].removeprefix(cfiles.MNT + "/")] = r
+        return recs
+
+    def _fresh(self, box: Container) -> Container:
+        from ..sandbox import get_manager
+
+        with contextlib.suppress(Exception):
+            return get_manager().get(box.id, touch=False)
+        return box
+
+    async def _code_interpreter(self, d: ServerToolDef, args: dict) -> ToolOutcome:
+        from ..sandbox import SandboxUnavailableError, get_executor
+        from ..sandbox.executor import model_text
+
+        ex = get_executor()
+        args = args if isinstance(args, dict) else {}
+        code = args.get("code") if isinstance(args.get("code"), str) else None
+        if code is None and isinstance(args.get("input"), str):
+            code = args["input"]
+        try:
+            box = self._box(ex)
+            r = await ex.python(box, code or "")
+        except SandboxUnavailableError as e:
+            return ToolOutcome(
+                "code_interpreter", f"Error: {e}", True, "unavailable", str(e)
+            )
+        recs = self._note_files(box, r.changed) if r.ok else []
+        text = model_text(r)
+        if recs:
+            text += "\nfiles created or changed: " + ", ".join(
+                f"{x['path']}" for x in recs
+            )
+        return ToolOutcome(
+            "code_interpreter",
+            text,
+            not r.ok,
+            r.error_code,
+            r.text if not r.ok else None,
+            code=r,
+            files=recs,
+        )
+
+    async def _shell(self, d: ServerToolDef, args: dict) -> ToolOutcome:
+        from ..sandbox import SandboxUnavailableError, get_executor
+        from ..sandbox import files as cfiles
+
+        ex = get_executor()
+        args = args if isinstance(args, dict) else {}
+        cmds = args.get("commands")
+        if isinstance(cmds, str):
+            cmds = [cmds]
+        if (
+            not isinstance(cmds, list)
+            or not cmds
+            or len(cmds) > 16
+            or not all(isinstance(c, str) and c.strip() for c in cmds)
+        ):
+            return ToolOutcome(
+                "shell",
+                "Error: commands must be a list of 1 to 16 non-empty strings",
+                True,
+                "invalid_tool_input",
+                "commands must be a list of 1 to 16 non-empty strings",
+            )
+        tmo = args.get("timeout_ms")
+        timeout = tmo / 1000.0 if isinstance(tmo, int | float) and tmo > 0 else None
+        cap = args.get("max_output_length")
+        cap = int(cap) if isinstance(cap, int | float) and cap > 0 else None
+        try:
+            box = self._box(ex)
+            before = await asyncio.to_thread(cfiles.snapshot, box)
+            rows: list[dict] = []
+            for c in cmds:
+                r = await ex.bash(box, c, timeout=timeout)
+                out, err = r.stdout, r.stderr
+                if cap:
+                    out, err = out[:cap], err[:cap]
+                rows.append(
+                    {
+                        "stdout": out,
+                        "stderr": err,
+                        "timeout": r.error_code == "execution_time_exceeded",
+                        "exit_code": r.return_code
+                        if r.ok
+                        else 124
+                        if r.error_code == "execution_time_exceeded"
+                        else 137,
+                        "error": None if r.ok else r.text,
+                    }
+                )
+            changed = await asyncio.to_thread(cfiles.changed_since, box, before)
+        except SandboxUnavailableError as e:
+            return ToolOutcome("shell", f"Error: {e}", True, "unavailable", str(e))
+        recs = self._note_files(box, changed)
+        parts = []
+        for c, row in zip(cmds, rows, strict=True):
+            seg = [f"$ {c}"]
+            if row["timeout"]:
+                seg.append("[timed out]")
+            elif row["error"]:
+                seg.append(f"[{row['error']}]")
+            else:
+                seg.append(f"exit code: {row['exit_code']}")
+            if row["stdout"]:
+                seg.append("stdout:\n" + row["stdout"])
+            if row["stderr"]:
+                seg.append("stderr:\n" + row["stderr"])
+            parts.append("\n".join(seg))
+        text = "\n\n".join(parts)
+        if recs:
+            text += "\nfiles created or changed: " + ", ".join(x["path"] for x in recs)
+        return ToolOutcome("shell", text, False, shell=rows, files=recs)
+
+    def _py_outcome(self, ex, box: Container, r: ExecResult) -> ToolOutcome:
+        from ..sandbox.executor import model_text
+
+        if r.calls:  # the code awaits client tools: the turn ends here
+            return ToolOutcome(
+                "code_execution", "waiting for tool results", code=r, files=[]
+            )
+        if r.ok and r.changed:
+            r.files = ex.store_outputs(box, r.changed)
+        return ToolOutcome(
+            "code_execution",
+            model_text(r),
+            not r.ok,
+            r.error_code,
+            r.text if not r.ok else None,
+            code=r,
+        )
+
+    async def _code_python(self, d: ServerToolDef, args: dict) -> ToolOutcome:
+        from ..sandbox import SandboxUnavailableError, get_executor
+
+        ex = get_executor()
+        persistent = d.spec.get("type") not in (
+            "code_execution_20250522",
+            "code_execution_20250825",
+        )
+        tools = [
+            {"name": t["name"], "schema": t.get("input_schema") or {}}
+            for t in self.ptc_tools
+        ]
+        try:
+            box = self._box(ex)
+            r = await ex.python(
+                box,
+                str(args.get("code") or ""),
+                tools=tools,
+                fresh=not persistent,
+            )
+        except SandboxUnavailableError as e:
+            return ToolOutcome(
+                "code_execution", f"Error: {e}", True, "unavailable", str(e)
+            )
+        return self._py_outcome(ex, box, r)
+
+    async def python_resume(
+        self, results: dict[str, tuple[object, bool]]
+    ) -> ToolOutcome:
+        """Continue a cell that waited for client tool results (Anthropic programmatic calling)."""
+        from ..sandbox import get_executor
+
+        ex = get_executor()
+        assert self.container is not None
+        r = await ex.python_resume(self.container, results)
+        return self._py_outcome(ex, self.container, r)
+
     async def _code(self, d: ServerToolDef, args: dict) -> ToolOutcome:
         from ..sandbox import SandboxUnavailableError, get_executor
         from ..sandbox.executor import model_text
 
         ex = get_executor()
         args = args if isinstance(args, dict) else {}
+        if d.fname == "code_execution":
+            return await self._code_python(d, args)
         try:
-            box = self.container
-            if box is None:
-                box = self.container = ex.manager.create()
-            for fid in self.uploads:
-                ex.stage_file(box, fid)
-            self.uploads = []
+            box = self._box(ex)
             if d.fname == "bash_code_execution":
                 r = await ex.bash(box, str(args.get("command") or ""))
             else:

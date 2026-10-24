@@ -122,7 +122,31 @@ If the loop reaches `YUNSHU_SERVER_TOOL_MAX_ITERATIONS` rounds and the model is 
 
 ### Code execution
 
-`code_execution_20250825`, `_20260120` and `_20260521` run bash and a text editor on this machine inside Anthropic's sandbox-runtime. Off by default: set `YUNSHU_CODE_EXECUTION=1` and install `@anthropic-ai/sandbox-runtime` (Node 22.12 or newer). Off, a request that declares the tool gets a `400`; on without the runtime, a `503`; a command never runs unsandboxed. The response has `bash_code_execution_tool_result` / `text_editor_code_execution_tool_result` blocks and a `container` to pass back. Files written to `$OUTPUT_DIR` come back as Files API ids. The sandbox writes only inside its container, cannot read your home, and has no network unless `YUNSHU_CODE_EXECUTION_NETWORK_ALLOW` lists hosts.
+`code_execution_20250522`, `_20250825`, `_20260120` and `_20260521` run on this machine inside Anthropic's sandbox-runtime. Off by default: set `YUNSHU_CODE_EXECUTION=1` and install `@anthropic-ai/sandbox-runtime` (Node 22.12 or newer). Off, a request that declares the tool gets a `400`; on without the runtime, a `503`; a command never runs unsandboxed. The response has `*_tool_result` blocks and a `container` to pass back. The sandbox writes only inside its container, cannot read your home, and has no network unless `YUNSHU_CODE_EXECUTION_NETWORK_ALLOW` lists hosts.
+
+| Version | Sub-tools | Python interpreter |
+| --- | --- | --- |
+| `20250522` | `code_execution` (Python) | fresh process per call |
+| `20250825` | `bash_code_execution`, `text_editor_code_execution` (plus `code_execution` when a client tool lists a code-execution caller) | fresh process per call |
+| `20260120`, `20260521` | all three | one process per container: variables persist between calls (REPL state) |
+
+Files written to `$OUTPUT_DIR` by bash, and files a Python cell creates, come back as Files API ids. **Programmatic tool calling:** a client tool with `"allowed_callers": ["code_execution_20260120"]` becomes an `async` Python function in the interpreter. When the code awaits it the turn ends with `stop_reason: "tool_use"` and one `tool_use` block per call, each with `caller: {type, tool_id}`; send the tool results back with the `container` and the response continues with the `code_execution_tool_result`. The model's own history holds only the code call and its final result. A paused cell waits 270 seconds for the answer. See the [guide](https://github.com/yuhuanowo/Yunshu/blob/main/docs/guides/CODE_EXECUTION.md).
+
+### OpenAI code interpreter, shell and containers
+
+With the same setting, OpenAI Responses requests can declare `{"type": "code_interpreter", "container": {"type": "auto"}}` (or a container id) and the hosted `{"type": "shell", "environment": {"type": "container_auto"}}` (or `container_reference`). The response has `code_interpreter_call` items (`code`, `container_id`, `outputs` with `include: ["code_interpreter_call.outputs"]`), `shell_call` / `shell_call_output` items, the streaming events `response.code_interpreter_call.*`, `response.code_interpreter_call_code.*`, `response.shell_call_command.*` and `response.shell_call_output_content.*`, and `container_file_citation` annotations for files the code made. Python state persists inside the container; `previous_response_id` reuses it. A `shell` tool with a `local` environment is run by your client.
+
+The containers behind them have the OpenAI containers API. `expires_after` is the idle lifetime (capped by `YUNSHU_CODE_EXECUTION_TTL_MIN`), `memory_limit` a ceiling under `YUNSHU_CODE_EXECUTION_MEMORY_MB`, and `network_policy` can only narrow `YUNSHU_CODE_EXECUTION_NETWORK_ALLOW`. Files are at `/mnt/data/<name>`.
+
+<Endpoint method="POST" path="/v1/containers" />
+<Endpoint method="GET" path="/v1/containers" />
+<Endpoint method="GET" path="/v1/containers/{container_id}" />
+<Endpoint method="DELETE" path="/v1/containers/{container_id}" />
+<Endpoint method="POST" path="/v1/containers/{container_id}/files" />
+<Endpoint method="GET" path="/v1/containers/{container_id}/files" />
+<Endpoint method="GET" path="/v1/containers/{container_id}/files/{file_id}" />
+<Endpoint method="GET" path="/v1/containers/{container_id}/files/{file_id}/content" />
+<Endpoint method="DELETE" path="/v1/containers/{container_id}/files/{file_id}" />
 
 ### MCP connector
 
@@ -192,7 +216,7 @@ The first response for a server includes an `mcp_list_tools` item; a later reque
 
 ## Limits and what is not supported
 
-- The hosted memory tool, file search, image generation and OpenAI-hosted connectors are not available. Anthropic code execution is opt-in (see above); OpenAI `code_interpreter` and `shell` are not served.
+- The hosted memory tool, file search, image generation and OpenAI-hosted connectors are not available. Code execution (Anthropic `code_execution_*`, OpenAI `code_interpreter` and hosted `shell`) is opt-in (see above); OpenAI `programmatic_tool_calling` and container skills are not implemented.
 - `web_fetch` does not read PDFs or images and cannot execute JavaScript.
 - Web search quality depends on the provider you configure; the keyless defaults are best effort.
 - The Responses API has no web fetch tool; use an `mcp` fetch server or the Anthropic route.

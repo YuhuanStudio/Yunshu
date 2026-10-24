@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import contextlib
 import importlib.metadata
+import os
 import platform
 import shutil
 import socket
@@ -674,14 +675,23 @@ def check_code_execution() -> Check:
         sp.write_text(json.dumps(build_settings(Path(d) / "c")))
         try:
             p = subprocess.run(
-                info.argv(sp, ["/usr/bin/true"]),
+                # the sandbox's Python is what code_interpreter and the REPL run
+                info.argv(
+                    sp,
+                    [
+                        os.path.join(sys.base_prefix, "bin", "python3"),
+                        "-c",
+                        "print(40 + 2)",
+                    ],
+                ),
                 capture_output=True,
                 text=True,
                 timeout=30,
+                cwd=d,  # the caller's directory may be one the sandbox hides (python reads it)
                 env={"PATH": "/usr/bin:/bin", "TMPDIR": "/tmp/"},
             )
-            ok = p.returncode == 0
-            detail = p.stderr.strip()[:120]
+            ok = p.returncode == 0 and p.stdout.strip() == "42"
+            detail = p.stderr.strip()[:120] or "python3 did not run in the sandbox"
         except (OSError, subprocess.SubprocessError) as e:
             ok, detail = False, str(e)
     state = "on" if on else "off"

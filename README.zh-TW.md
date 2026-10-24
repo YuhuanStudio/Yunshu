@@ -87,7 +87,7 @@ Yunshu 提供的所有能力，分組列出。每一列連到有範例與限制�
 |---|---|
 | [程式碼 agent](docs/guides/AGENT_COMPAT.md) | Claude Code、Codex、opencode 透過各自的 API 運作；`yunshu launch` |
 | [網頁搜尋與擷取](docs/guides/WEB_SEARCH.md) | 伺服器端 web_search / web_fetch 與引用；DuckDuckGo、Wikipedia、SearXNG、Tavily、Serper、Perplexity |
-| [程式碼執行](docs/guides/CODE_EXECUTION.md) | Anthropic code_execution（bash 與文字編輯器）在本機的 sandbox-runtime 內執行；需手動開啟，預設無網路 |
+| [程式碼執行](docs/guides/CODE_EXECUTION.md) | Anthropic code_execution（bash、文字編輯器、Python REPL、程式化工具呼叫）、OpenAI code_interpreter、shell 與 /v1/containers 在本機的 sandbox-runtime 內執行；需手動開啟，預設無網路 |
 | [Tavily 相容 API](docs/guides/TAVILY.md) | search、extract、crawl、map、research 與 MCP，含 provider 健康退避 |
 | [MCP](docs/guides/API_SURFACE.md) | 原生 MCP 端點，以及請求中指定的遠端 MCP server |
 | [用戶端設定](docs/guides/CLIENTS.md) | curl、OpenAI 與 Anthropic SDK、Open WebUI |

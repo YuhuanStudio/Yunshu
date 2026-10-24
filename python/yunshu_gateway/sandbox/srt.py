@@ -109,6 +109,25 @@ def parse_allowlist(value: str | None) -> list[str]:
     return [h.strip() for h in (value or "").split(",") if h.strip()]
 
 
+def host_allowed(host: str, patterns: list[str]) -> bool:
+    """Is ``host`` (a name or ``*.name`` pattern, optional ``:port``) covered by one of ``patterns``?"""
+    h = host.strip().lower()
+    if not h:
+        return False
+    for p in patterns:
+        p = p.strip().lower()
+        if p == h:
+            return True
+        if p.startswith("*.") and not h.startswith("*."):
+            if h.split(":")[0].endswith(p[1:].split(":")[0]) and (
+                ":" not in p or h.endswith(":" + p.rsplit(":", 1)[1])
+            ):
+                return True
+        if h.startswith("*.") and p == h:
+            return True
+    return False
+
+
 def build_settings(
     container_dir: Path,
     *,

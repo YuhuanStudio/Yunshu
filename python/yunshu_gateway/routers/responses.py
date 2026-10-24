@@ -1518,6 +1518,9 @@ def _apply_previous_response_chain(req, messages: list[dict], request) -> list[d
             elif out.get("type") in (
                 "web_search_call",
                 "mcp_call",
+                "code_interpreter_call",
+                "shell_call",
+                "shell_call_output",
                 "custom_tool_call",
                 "local_shell_call",
                 "computer_call",
@@ -1627,7 +1630,11 @@ async def create_response(req: ResponsesRequest, request: Request):
         return await _start_background_response(req, request)
     if has_server_tools_responses(req):
         return await create_with_server_tools_responses(req, request, create_response)
-    from ..responses_client_tools import create_client_tools, declarations
+    from ..responses_client_tools import (
+        create_client_tools,
+        declarations,
+        is_client_kind,
+    )
 
     _client_defs = declarations(req.tools)
     if isinstance(req.input, list):
@@ -1643,10 +1650,7 @@ async def create_response(req: ResponsesRequest, request: Request):
             and previous.get("_loaded_tools")
         )
     if (
-        any(
-            d.get("type") in ("custom", "local_shell", "tool_search", "computer")
-            for d in _client_defs.values()
-        )
+        any(is_client_kind(d) for d in _client_defs.values())
         or _loaded_previous
         or (
             isinstance(req.input, list)

@@ -267,17 +267,17 @@ const settingdesc = {
   YUNSHU_WEB_FETCH_MAX_TEXT_CHARS:
     "Extracted page text handed to the model is cut to this many characters (a request’s `max_content_tokens` can lower it).",
   YUNSHU_CODE_EXECUTION:
-    "Serve the code execution tools (Anthropic `code_execution_*`) on this machine inside the Anthropic sandbox-runtime (srt; optional, needs Node 22.12 or newer). Off: requests that declare them get a 400. On without srt: 503, never an unsandboxed run.",
+    "Serve the code execution tools (Anthropic `code_execution_*`, OpenAI Responses `code_interpreter` and hosted `shell`, the OpenAI `/v1/containers` API) on this machine inside the Anthropic sandbox-runtime (srt; optional, needs Node 22.12 or newer). Off: requests that declare them get a 400. On without srt: 503, never an unsandboxed run.",
   YUNSHU_CODE_EXECUTION_ROOT:
     "Directory holding the code execution containers (one sub-directory each, mode 0700).",
   YUNSHU_CODE_EXECUTION_TIMEOUT:
-    "Wall-clock seconds one code execution call may run before it is killed. Also the CPU-time limit.",
+    "Wall-clock seconds one code execution call may run before it is killed. Also the CPU-time limit. A Python cell waiting for the client’s tool results does not count.",
   YUNSHU_CODE_EXECUTION_MEMORY_MB:
-    "Resident memory (MB) a code execution call may use, sampled over its whole process group; above it the call is killed.",
+    "Resident memory (MB) a code execution call may use, sampled over its whole process group; above it the call is killed. An OpenAI container’s `memory_limit` can only lower it.",
   YUNSHU_CODE_EXECUTION_NETWORK_ALLOW:
-    "Comma-separated hosts the sandbox may reach (`example.com`, `*.example.com`, `host:443`). Empty: no network at all, loopback included.",
+    "Comma-separated hosts the sandbox may reach (`example.com`, `*.example.com`, `host:443`). Empty: no network at all, loopback included. An OpenAI container’s `network_policy` can only narrow this list.",
   YUNSHU_CODE_EXECUTION_TTL_MIN:
-    "Minutes a code execution container may sit unused before it and its files are deleted.",
+    "Minutes a code execution container may sit unused before it and its files are deleted. An OpenAI container’s `expires_after.minutes` can only shorten it.",
   YUNSHU_MCP_CONNECTOR:
     "Serve the MCP connector: Anthropic `mcp_servers` and OpenAI Responses `mcp` tools are executed by this server, which connects to the named MCP servers over streamable HTTP / SSE.",
   YUNSHU_MCP_CONNECTOR_ALLOW_PRIVATE:

@@ -3,7 +3,7 @@ title: 程式碼執行
 description: 啟用 Anthropic code_execution 工具，讓模型撰寫的指令在你的 Mac 上於 sandbox-runtime 內執行，並了解其容器、檔案與限制。
 ---
 
-Anthropic 的 `code_execution_20250825`、`code_execution_20260120` 與 `code_execution_20260521` 工具會在這台機器上、Anthropic 的 [sandbox-runtime](https://github.com/anthropics/sandbox-runtime)（`srt`）內執行。此功能預設為關閉。沙箱如何建構，請見[程式碼執行沙箱](/docs/internals/code-execution-sandbox)。
+Anthropic 的 `code_execution_20250522`、`_20250825`、`_20260120` 與 `_20260521` 工具會在這台機器上、Anthropic 的 [sandbox-runtime](https://github.com/anthropics/sandbox-runtime)（`srt`）內執行。此功能預設為關閉。沙箱如何建構，請見[程式碼執行沙箱](/docs/internals/code-execution-sandbox)。
 
 ## 啟用
 
@@ -56,6 +56,16 @@ yunshu serve -m <model> --set code_execution=1
 - **檔案。** `container_upload` 內容區塊會把 [Files API](/docs/api/files) 的檔案複製到工作目錄。每次 bash 呼叫都有全新的 `$OUTPUT_DIR`；其頂層檔案會變成 Files API 項目，以 `bash_code_execution_output {file_id}` 回傳（用 `GET /v1/files/{id}/content` 下載）。
 - **輸出限制。** stdout 與 stderr 各自在 64 KiB 截斷（並標記）。stdout 與 stderr 合計超過 1 MiB 的呼叫會被終止（`output_file_too_large`）。背景行程會隨該次呼叫結束。指令看到的環境變數只有 `PATH`、`HOME`（容器）、`TMPDIR`、`OUTPUT_DIR` 與地區設定變數，絕不包含伺服器的環境。
 
+## Python、REPL 狀態與程式化工具呼叫
+
+`20250522` 只有一個 Python 工具（`code_execution`，每次呼叫全新行程）。`20250825` 有 bash 與文字編輯器（客戶端工具在 `allowed_callers` 列出 code execution 呼叫者時再加 Python，同樣每次全新）。`20260120` 與 `20260521` 三者皆有，且 Python 行程與容器同生命週期：變數與 import 在呼叫之間保留。逾時、記憶體超限、輸出超過 1 MiB、閒置 10 分鐘、刪除容器，或超過四個容器各持有一個行程時，行程會被殺掉並乾淨地重啟。
+
+工具若設 `"allowed_callers": ["code_execution_20260120"]`，就成為直譯器中的 `async` Python 函式。程式碼 await 它時，該回合以 `stop_reason: "tool_use"` 結束，每個呼叫一個帶 `caller: {type, tool_id}` 的 `tool_use` 區塊。帶著 `container` 把結果送回，回應就接著給出 `code_execution_tool_result`。cell 最多等候 270 秒；單一 cell 最多 256 次呼叫。
+
+## OpenAI Responses 與容器
+
+同一個設定下，[Responses](/docs/api/responses) 請求可宣告 `{"type": "code_interpreter", "container": {"type": "auto"}}`（或 `cntr_` id）與託管的 `{"type": "shell", "environment": {"type": "container_auto"}}`。回應有 `code_interpreter_call`、`shell_call`、`shell_call_output` 項目、對應的串流事件，以及程式碼產生的檔案的 `container_file_citation` 註解；背景模式也可用。容器有 OpenAI containers API（`/v1/containers`，含檔案）；`expires_after`、`memory_limit`、`network_policy` 只能縮小上述設定。詳見[伺服器端工具](/docs/api/server-tools)。
+
 ## 沙箱允許什麼
 
 - **寫入：** 僅限容器目錄。
@@ -72,7 +82,6 @@ yunshu serve -m <model> --set code_execution=1
 ## 與 Anthropic 容器的差異
 
 - 是 macOS，不是 Linux x86_64。Python 是 Yunshu 所使用的直譯器（僅標準函式庫，沒有 pandas 或 numpy）。
-- 呼叫之間沒有 REPL 狀態，也沒有程式化工具呼叫。`20260120` 與 `20260521` 類型會被接受，行為與 `20250825` 相同。
 - 沒有 Content Credentials。
-- 尚未提供 OpenAI 的 `code_interpreter` 與 `shell`。
+- 沒有 Content Credentials、容器 skills 與 OpenAI 的 `programmatic_tool_calling`。
 - 沙箱在 macOS 的 `sandbox-exec` 下執行，Apple 已將它標為棄用；`srt` 是 0.0.x 版本（已測試：0.0.81）。

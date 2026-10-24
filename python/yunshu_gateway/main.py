@@ -1129,6 +1129,9 @@ def create_app() -> FastAPI:
     from .routers import files as files_mod
 
     app.include_router(files_mod.router, prefix="/v1")  # OpenAI + Anthropic Files
+    from .routers import containers as containers_mod
+
+    app.include_router(containers_mod.router, prefix="/v1")  # OpenAI containers
     app.include_router(batches_mod.router, prefix="/v1")  # Batches + Message Batches
     app.include_router(anthropic.router, prefix="/v1")
     app.include_router(audio.router, prefix="/v1")

@@ -17,8 +17,10 @@ from pathlib import Path
 
 from yunshu_engine import settings
 
-from .containers import Container, ContainerManager, get_manager
-from .srt import SrtInfo, build_settings, find_srt, parse_allowlist
+from . import files as cfiles
+from .containers import MEMORY_LIMITS, Container, ContainerManager, get_manager
+from .repl import ReplError, ReplOutcome, get_pool
+from .srt import SrtInfo, build_settings, find_srt, host_allowed, parse_allowlist
 from .supervisor import run_supervised
 
 logger = logging.getLogger("yunshu.sandbox")
@@ -48,6 +50,15 @@ class ExecResult:
     text: str = ""  # what the model reads
     elapsed: float = 0.0
     notes: list[str] = field(default_factory=list)
+    calls: list[dict] = field(
+        default_factory=list
+    )  # python: tool calls the cell is waiting on
+    changed: list = field(
+        default_factory=list
+    )  # python: files created or modified (files.Entry)
+    state_lost: bool = (
+        False  # python: the process was replaced, earlier variables are gone
+    )
 
 
 def _clip(b: bytes, truncated: bool) -> str:
@@ -59,6 +70,10 @@ def model_text(r: ExecResult) -> str:
     if not r.ok:
         return f"Error: {r.error_code}" + (f" ({r.text})" if r.text else "")
     parts = [f"exit code: {r.return_code}"]
+    if r.state_lost:
+        parts.append(
+            "note: the Python process was restarted; variables from earlier calls are gone"
+        )
     if r.stdout:
         parts.append("stdout:\n" + r.stdout)
     if r.stderr:
@@ -96,6 +111,32 @@ class CodeExecutor:
             )
         return info
 
+    def memory_bytes(self, c: Container) -> int:
+        mb = int(settings.get("YUNSHU_CODE_EXECUTION_MEMORY_MB"))
+        if c.memory_limit in MEMORY_LIMITS:
+            mb = min(mb, MEMORY_LIMITS[c.memory_limit])
+        return mb * 1024 * 1024
+
+    def network_allow(self, c: Container) -> list[str]:
+        """What the sandbox may reach: a container can only narrow the server's list, never widen it."""
+        server = parse_allowlist(settings.get("YUNSHU_CODE_EXECUTION_NETWORK_ALLOW"))
+        if c.network_allow is None:
+            return server
+        return [h for h in c.network_allow if host_allowed(h, server)]
+
+    def srt_argv(
+        self, c: Container, inner: list[str], info: SrtInfo | None = None
+    ) -> list[str]:
+        info = info or self.srt()
+        settings_path = c.path.parent / ".meta" / f"{c.id}.srt.json"
+        settings_path.write_text(
+            json.dumps(build_settings(c.path, network_allow=self.network_allow(c)))
+        )
+        return info.argv(settings_path, inner)
+
+    def env(self, c: Container, out_dir: Path) -> dict[str, str]:
+        return self._env(c, out_dir)
+
     def _lock(self, cid: str) -> asyncio.Lock:
         return self._locks.setdefault(cid, asyncio.Lock())
 
@@ -119,13 +160,18 @@ class CodeExecutor:
 
     def stage_file(self, c: Container, file_id: str) -> str:
         """Copy a Files API file into the container's work directory; returns the file name."""
-        from ..files_store import get_store
+        from ..files_store import FileStoreError, get_store
 
         store = get_store()
         meta = store.get_meta(file_id)
         name = os.path.basename(meta.get("filename") or file_id) or file_id
-        (c.work / name).write_bytes(store.read(file_id))
-        return name
+        rel = cfiles.clean_relpath(name) or file_id
+        try:
+            cfiles.write_file(c, rel, store.read(file_id))
+        except cfiles.FileOpError as e:
+            raise FileStoreError(400, f"cannot stage {name}: {e.message}") from e
+        self.manager.add_user_file(c.id, rel)
+        return rel
 
     async def bash(
         self, c: Container, command: str, timeout: float | None = None
@@ -137,25 +183,14 @@ class CodeExecutor:
         limit = float(settings.get("YUNSHU_CODE_EXECUTION_TIMEOUT"))
         if timeout:
             limit = max(1.0, min(limit, float(timeout)))
-        mem = int(settings.get("YUNSHU_CODE_EXECUTION_MEMORY_MB")) * 1024 * 1024
+        mem = self.memory_bytes(c)
         if self._sem is None:
             self._sem = asyncio.Semaphore(MAX_CONCURRENT)
         async with self._lock(c.id):
             out_dir = c.out / uuid.uuid4().hex[:12]
             out_dir.mkdir(mode=0o700)
-            settings_path = c.path.parent / ".meta" / f"{c.id}.srt.json"
-            settings_path.write_text(
-                json.dumps(
-                    build_settings(
-                        c.path,
-                        network_allow=parse_allowlist(
-                            settings.get("YUNSHU_CODE_EXECUTION_NETWORK_ALLOW")
-                        ),
-                    )
-                )
-            )
-            argv = info.argv(
-                settings_path,
+            argv = self.srt_argv(
+                c,
                 [
                     "/usr/bin/env",
                     f"TMPDIR={c.tmp}/",
@@ -164,6 +199,7 @@ class CodeExecutor:
                     "-c",
                     command,
                 ],
+                info,
             )
             try:
                 async with self._sem:
@@ -232,6 +268,145 @@ class CodeExecutor:
                 logger.warning("code_exec output %s not stored: %s", p.name, e)
                 continue
             found.append({"file_id": meta["id"], "filename": p.name})
+        return found
+
+    # ── python REPL (persistent process per container) ───────────────────────
+    def _repl_tools(self, tools: list[dict] | None) -> list[dict]:
+        out = []
+        for t in tools or []:
+            props = (t.get("schema") or {}).get("properties") or {}
+            req = (t.get("schema") or {}).get("required") or []
+            order = [k for k in req if k in props] + [k for k in props if k not in req]
+            out.append({"name": t["name"], "params": order})
+        return out
+
+    async def python(
+        self,
+        c: Container,
+        code: str,
+        *,
+        tools: list[dict] | None = None,
+        timeout: float | None = None,
+        fresh: bool = False,
+        meta: dict | None = None,
+    ) -> ExecResult:
+        """Run a cell in the container's Python process. ``tools`` ([{name, schema}]) are awaitable
+        in the cell; a cell that calls one returns with ``calls`` set and waits for
+        :meth:`python_resume`. ``fresh`` starts a clean process first (stateless call)."""
+        if not isinstance(code, str) or not code.strip():
+            return ExecResult(False, "invalid_tool_input", text="code is required")
+        self.srt()
+        limit = float(settings.get("YUNSHU_CODE_EXECUTION_TIMEOUT"))
+        if timeout:
+            limit = max(1.0, min(limit, float(timeout)))
+        sess = get_pool().get(self, c)
+        if fresh:
+            await sess.close()
+            sess.proc = None
+            sess._lost = False
+        before = await asyncio.to_thread(cfiles.snapshot, c)
+        m = dict(meta or {})
+        m["before"] = before
+        m["limit"] = limit
+        try:
+            out = await sess.run(
+                code,
+                self._repl_tools(tools),
+                timeout=limit,
+                mem_bytes=self.memory_bytes(c),
+                meta=m,
+            )
+        except ReplError as e:
+            return ExecResult(False, "unavailable", text=e.message)
+        return await self._python_result(c, sess, out)
+
+    async def python_resume(
+        self, c: Container, results: dict[str, tuple[object, bool]]
+    ) -> ExecResult:
+        sess = get_pool().peek(c.id)
+        if sess is None:
+            return ExecResult(
+                False, "unavailable", text="the code execution is no longer running"
+            )
+        try:
+            out = await sess.resume(results)
+        except ReplError as e:
+            return ExecResult(False, "unavailable", text=e.message)
+        return await self._python_result(c, sess, out)
+
+    def python_pending(self, c: Container) -> dict[str, dict] | None:
+        sess = get_pool().peek(c.id)
+        return dict(sess.pending) if sess is not None and sess.paused else None
+
+    async def _python_result(self, c: Container, sess, out: ReplOutcome) -> ExecResult:
+        res = ExecResult(
+            stdout=out.stdout,
+            stderr=out.stderr,
+            return_code=out.return_code,
+            elapsed=out.elapsed,
+            state_lost=out.state_lost,
+        )
+        limit = sess.meta.get("limit")
+        if out.status == "tool_calls":
+            res.calls = out.calls
+            res.text = "waiting for tool results"
+            return res
+        if out.status == "timeout":
+            res.ok, res.error_code = False, "execution_time_exceeded"
+            res.text = f"exceeded {limit:g} s; the Python process was restarted"
+        elif out.status == "oom":
+            res.ok, res.error_code = False, "unavailable"
+            res.text = (
+                f"killed: memory above {self.memory_bytes(c) // 2**20} MB; "
+                "the Python process was restarted"
+            )
+        elif out.status == "overflow":
+            res.ok, res.error_code = False, "output_file_too_large"
+            res.text = "output exceeded 1 MiB; the Python process was restarted"
+        elif out.status == "too_many_calls":
+            res.ok, res.error_code = False, "too_many_requests"
+            res.text = (
+                "the code made too many tool calls (or one call was too large); "
+                "the Python process was restarted"
+            )
+        elif out.status == "crashed":
+            res.ok, res.error_code = False, "unavailable"
+            res.text = "the Python process exited" + (
+                f": {out.stderr.strip()[-300:]}" if out.stderr.strip() else ""
+            )
+        else:
+            before = sess.meta.get("before") or {}
+            res.changed = await asyncio.to_thread(cfiles.changed_since, c, before)
+        logger.info(
+            "code_exec_python container=%s status=%s rc=%s ms=%d out_bytes=%d changed=%d",
+            c.id,
+            out.status,
+            out.return_code,
+            out.elapsed * 1000,
+            len(out.stdout) + len(out.stderr),
+            len(res.changed),
+        )
+        res.text = res.text or model_text(res)
+        return res
+
+    def store_outputs(self, c: Container, entries: list) -> list[dict]:
+        """Copy files a cell created into the Files API (Anthropic returns them as file ids)."""
+        from ..files_store import FileStoreError, get_store
+
+        found: list[dict] = []
+        for e in entries[:MAX_FILES_PER_CALL]:
+            try:
+                data = cfiles.read_file(c, e.rel, max_bytes=64 * 1024 * 1024)
+                meta = get_store().put(
+                    data,
+                    os.path.basename(e.rel),
+                    purpose="code_execution_output",
+                    downloadable=True,
+                )
+            except (cfiles.FileOpError, FileStoreError) as err:
+                logger.warning("code_exec output not stored: %s", err)
+                continue
+            found.append({"file_id": meta["id"], "filename": os.path.basename(e.rel)})
         return found
 
     # ── text editor (runs in the gateway, confined to the container) ─────────

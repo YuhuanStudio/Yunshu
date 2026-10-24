@@ -90,7 +90,8 @@ Supported tool types:
 | `computer` | Your client. See below. | partial |
 | `web_search`, `web_search_preview` | The server. See [Server tools](/docs/api/server-tools). | supported |
 | `mcp` | The server connects to the MCP server you name. See [Server tools](/docs/api/server-tools). | partial |
-| `file_search`, `code_interpreter`, `image_generation` and other hosted tools | Not available. | not supported |
+| `code_interpreter`, hosted `shell` | The server, in a sandbox on this machine. Opt-in. See [Server tools](/docs/api/server-tools). | partial |
+| `file_search`, `image_generation` and other hosted tools | Not available. | not supported |
 
 Client tools (`custom`, `local_shell`, `tool_search`, `computer`) can be combined with `web_search` and `mcp` in one request: the server runs its own tools inside the loop and hands a client tool call back to you, ending the response like any client tool call.
 
@@ -406,7 +407,8 @@ Errors use the OpenAI envelope `{"error": {"message", "type", "param", "code"}}`
 | Function, namespace, custom, local_shell, client tool_search | <Support status="supported">supported</Support> |
 | `computer` tool | <Support status="partial">client-executed; the server never runs actions</Support> |
 | `web_search`, `mcp` | <Support status="supported">supported, server-side</Support> |
-| `reasoning.summary` generation, hosted `tool_search`, `file_search`, `code_interpreter`, `image_generation` | <Support status="unsupported">not supported</Support> |
+| `code_interpreter`, hosted `shell` | <Support status="partial">server-side in srt, opt-in (`YUNSHU_CODE_EXECUTION`)</Support> |
+| `reasoning.summary` generation, hosted `tool_search`, `file_search`, `image_generation` | <Support status="unsupported">not supported</Support> |
 | Resuming a background stream (`starting_after`) | <Support status="supported">supported (events kept in memory, lost on restart)</Support> |
 | WebSocket mode | <Support status="supported">supported</Support> |
 

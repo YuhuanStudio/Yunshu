@@ -32,12 +32,14 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 from yunshu_engine import settings
 
+from ..routers.responses import _is_admin
 from .mcp_connector import McpError
 from .runtime import (
     CODE_BASH_DESC,
     CODE_BASH_SCHEMA,
     CODE_EDITOR_DESC,
     CODE_EDITOR_SCHEMA,
+    CODE_PY_SCHEMA,
     WEB_FETCH_DESC,
     WEB_FETCH_SCHEMA,
     WEB_SEARCH_DESC,
@@ -51,6 +53,7 @@ from .runtime import (
     format_search_text,
     mcp_tool_to_def,
     parse_tool_args,
+    python_tool_description,
     run_all,
     safe_fname,
 )
@@ -84,6 +87,32 @@ def _is_code(t: dict) -> bool:
     return bool(_CODE_TYPE.match(str(t.get("type") or "")))
 
 
+def _callers(t: dict) -> list[str]:
+    ac = t.get("allowed_callers")
+    return [str(x) for x in ac] if isinstance(ac, list) and ac else ["direct"]
+
+
+def _is_ptc(t: dict) -> bool:
+    """A client tool the code execution tool may call from code (programmatic tool calling)."""
+    return not _is_code(t) and any(c.startswith("code_execution_") for c in _callers(t))
+
+
+def _code_subtools(version: str, ptc: bool) -> tuple[bool, bool, bool]:
+    """(bash+editor, python, python state persists) per tool version.
+
+    * ``20250522``: Python only, a fresh interpreter per call;
+    * ``20250825``: bash + text editor, plus Python (fresh per call) when the request lets the code
+      call client tools;
+    * ``20260120`` and later: bash + text editor + Python whose process (REPL state) persists
+      between calls in a container.
+    """
+    if version == "20250522":
+        return (False, True, False)
+    if version == "20250825":
+        return (True, ptc, False)
+    return (True, True, True)
+
+
 def has_server_tools(req) -> bool:
     for t in req.tools or []:
         d = t.model_dump() if hasattr(t, "model_dump") else dict(t)
@@ -112,9 +141,12 @@ class _Setup:
         self.messages: list | None = (
             None  # request messages with container_upload blocks replaced
         )
+        # set when this request answers a code cell that is waiting for client tool results
+        self.resume: dict | None = None
+        self.admin = False
 
 
-async def _setup(req) -> _Setup | JSONResponse:
+async def _setup(req, request=None) -> _Setup | JSONResponse:
     """Split the declared tools into server tools (run here) and client tools (passed through)."""
     s = _Setup()
     tools = [
@@ -123,6 +155,7 @@ async def _setup(req) -> _Setup | JSONResponse:
     ]
     toolsets: dict[str, dict] = {}
     code_tool: dict | None = None
+    ptc_tools: list[dict] = []
     for t in tools:
         ty = str(t.get("type") or "")
         if _is_web(t, "web_search"):
@@ -143,13 +176,32 @@ async def _setup(req) -> _Setup | JSONResponse:
             )
         elif _is_code(t):
             code_tool = t
+        elif ty == "mcp_toolset":
+            toolsets[t.get("mcp_server_name", "")] = t
+        else:
+            if _is_ptc(t):
+                ptc_tools.append(t)
+                if "direct" not in _callers(t):
+                    continue  # callable from code only: the model is not offered it directly
+            s.client_tools.append(t)
+    if ptc_tools and code_tool is None:
+        return _err(
+            400,
+            "invalid_request_error",
+            "A tool lists a code_execution_* caller in allowed_callers, but the request does not "
+            "declare the code execution tool.",
+        )
+    if code_tool is not None:
+        version = str(code_tool.get("type"))[len("code_execution_") :]
+        bash_ed, py, persistent = _code_subtools(version, bool(ptc_tools))
+        if bash_ed:
             s.defs.append(
                 ServerToolDef(
                     "bash_code_execution",
                     "code_execution",
                     CODE_BASH_DESC,
                     CODE_BASH_SCHEMA,
-                    spec=t,
+                    spec=code_tool,
                 )
             )
             s.defs.append(
@@ -158,13 +210,19 @@ async def _setup(req) -> _Setup | JSONResponse:
                     "code_execution",
                     CODE_EDITOR_DESC,
                     CODE_EDITOR_SCHEMA,
-                    spec=t,
+                    spec=code_tool,
                 )
             )
-        elif ty == "mcp_toolset":
-            toolsets[t.get("mcp_server_name", "")] = t
-        else:
-            s.client_tools.append(t)
+        if py:
+            s.defs.append(
+                ServerToolDef(
+                    "code_execution",
+                    "code_execution",
+                    python_tool_description(persistent, ptc_tools),
+                    CODE_PY_SCHEMA,
+                    spec=code_tool,
+                )
+            )
     servers = list(getattr(req, "mcp_servers", None) or [])
     if servers and not settings.get("YUNSHU_MCP_CONNECTOR"):
         return _err(
@@ -173,8 +231,14 @@ async def _setup(req) -> _Setup | JSONResponse:
             "The MCP connector is disabled (YUNSHU_MCP_CONNECTOR=0).",
         )
     s.rt = ServerToolRuntime(s.defs)
+    s.rt.ptc_tools = ptc_tools
+    if request is not None:
+        from ..routers.responses import _resolve_owner
+
+        s.rt.owner = _resolve_owner(request)
+        s.admin = _is_admin(request)
     if code_tool is not None:
-        bad = _setup_code(req, s)
+        bad = _setup_code(req, s) or _setup_ptc(req, s, code_tool)
         if bad is not None:
             await s.rt.aclose()
             return bad
@@ -228,6 +292,7 @@ async def _setup(req) -> _Setup | JSONResponse:
 def _setup_code(req, s: _Setup) -> JSONResponse | None:
     """Gate the code execution tool and resolve its container; an error response, or None."""
     from ..sandbox import ContainerError, SandboxUnavailableError, get_executor
+    from ..sandbox.containers import owner_ok
 
     if not settings.get("YUNSHU_CODE_EXECUTION"):
         return _err(
@@ -247,9 +312,16 @@ def _setup_code(req, s: _Setup) -> JSONResponse | None:
     cid = cont.get("id") if isinstance(cont, dict) else cont
     if cid:
         try:
-            rt.container = ex.manager.get(str(cid))
+            box = ex.manager.get(str(cid))
         except ContainerError as e:
             return _err(400, "invalid_request_error", e.message)
+        if not owner_ok(box, rt.owner, s.admin):
+            return _err(
+                400,
+                "invalid_request_error",
+                f"Container '{cid}' was not found.",
+            )
+        rt.container = box
     # container_upload blocks: stage the files into the container, tell the model their names
     uploads: list[str] = []
     msgs: list[dict] = []
@@ -273,7 +345,7 @@ def _setup_code(req, s: _Setup) -> JSONResponse | None:
 
         try:
             if rt.container is None:
-                rt.container = ex.manager.create()
+                rt.container = ex.manager.create(owner=rt.owner)
             names = [ex.stage_file(rt.container, f) for f in uploads]
         except FileStoreError as e:
             return _err(
@@ -293,6 +365,110 @@ def _setup_code(req, s: _Setup) -> JSONResponse | None:
                             f"[file uploaded to the working directory: {next(it)}]"
                         )
         s.messages = msgs
+    return None
+
+
+def _tool_result_text(b: dict) -> str:
+    c = b.get("content")
+    if isinstance(c, str):
+        return c
+    return "\n".join(
+        x.get("text", "")
+        for x in c or []
+        if isinstance(x, dict) and x.get("type") == "text"
+    )
+
+
+def _is_ptc_caller(b: dict) -> bool:
+    c = b.get("caller")
+    return isinstance(c, dict) and str(c.get("type") or "").startswith(
+        "code_execution_"
+    )
+
+
+def caller_type(code_tool: dict) -> str:
+    """The ``caller.type`` for tool_use blocks the code issued. The SDK models the 20250825 and
+    20260120 callers; later versions report 20260120."""
+    ty = str(code_tool.get("type"))
+    return (
+        ty
+        if ty in ("code_execution_20250825", "code_execution_20260120")
+        else (
+            "code_execution_20260120"
+            if ty > "code_execution_20260120"
+            else "code_execution_20250825"
+        )
+    )
+
+
+def _setup_ptc(req, s: _Setup, code_tool: dict) -> JSONResponse | None:
+    """Is this request the client's answer to tool calls the code made (programmatic tool calling)?"""
+    from ..sandbox import ContainerError, get_manager, get_pool
+    from ..sandbox.repl import PAUSE_TTL
+
+    rt = s.rt
+    assert rt is not None
+    msgs = [
+        m.model_dump() if hasattr(m, "model_dump") else dict(m) for m in req.messages
+    ]
+    ptc_ids: set[str] = set()
+    for m in msgs:
+        if m.get("role") == "assistant" and isinstance(m.get("content"), list):
+            ptc_ids |= {
+                b["id"]
+                for b in m["content"]
+                if isinstance(b, dict)
+                and b.get("type") == "tool_use"
+                and _is_ptc_caller(b)
+                and b.get("id")
+            }
+    if not ptc_ids or not msgs or msgs[-1].get("role") != "user":
+        return None
+    last = msgs[-1].get("content")
+    answers = {
+        b.get("tool_use_id"): b
+        for b in (last if isinstance(last, list) else [])
+        if isinstance(b, dict) and b.get("type") == "tool_result"
+    }
+    want = ptc_ids & set(answers)
+    if not want:
+        return None
+    pool = get_pool()
+    sess = pool.peek(rt.container.id) if rt.container is not None else None
+    if sess is None or not (sess.paused and sess.meta.get("ptc")):
+        sess = pool.find_pending(want)
+    gone = _err(
+        400,
+        "invalid_request_error",
+        "The code execution that made these tool calls is no longer running (it waits "
+        f"{int(PAUSE_TTL)} s "
+        "for the results, or the container expired). Send the request again from the user turn.",
+    )
+    if sess is None or not sess.paused:
+        return gone
+    ptc = sess.meta.get("ptc") or {}
+    calls: dict[str, str] = ptc.get("calls") or {}
+    if not set(calls) <= want:
+        missing = sorted(set(calls) - want)
+        return _err(
+            400,
+            "invalid_request_error",
+            "Missing tool_result for tool_use id(s) " + ", ".join(missing) + ".",
+        )
+    try:
+        rt.container = get_manager().get(sess.c.id)
+    except ContainerError:
+        return gone
+    results = {}
+    for tid, cid in calls.items():
+        b = answers[tid]
+        results[cid] = (_tool_result_text(b), bool(b.get("is_error")))
+    s.resume = {
+        "srv_id": ptc.get("srv_id"),
+        "results": results,
+        "ids": set(calls),
+        "caller": caller_type(code_tool),
+    }
     return None
 
 
@@ -366,6 +542,54 @@ def _result_text(block: dict, start: int = 1) -> str:
     return "\n".join(parts) if not isinstance(c, str) else c
 
 
+def drop_programmatic_calls(messages: list) -> list:
+    """Tool calls the code made (``caller`` is a code_execution tool) and their results are not part
+    of what the model saw: it saw one code execution call and its final result. Remove them, drop
+    the messages that became empty and join the assistant turns they separated."""
+    dumped = [m.model_dump() if hasattr(m, "model_dump") else dict(m) for m in messages]
+    ids = {
+        b["id"]
+        for m in dumped
+        if m.get("role") == "assistant" and isinstance(m.get("content"), list)
+        for b in m["content"]
+        if isinstance(b, dict) and b.get("type") == "tool_use" and _is_ptc_caller(b)
+    }
+    if not ids:
+        return messages
+    out: list[dict] = []
+    for m in dumped:
+        c = m.get("content")
+        if isinstance(c, list):
+            keep = [
+                b
+                for b in c
+                if not (
+                    isinstance(b, dict)
+                    and (
+                        (b.get("type") == "tool_use" and b.get("id") in ids)
+                        or (
+                            b.get("type") == "tool_result"
+                            and b.get("tool_use_id") in ids
+                        )
+                    )
+                )
+            ]
+            if len(keep) != len(c):
+                if not keep:
+                    continue
+                m = {**m, "content": keep}
+        if (
+            out
+            and out[-1]["role"] == m["role"] == "assistant"
+            and isinstance(out[-1].get("content"), list)
+            and isinstance(m.get("content"), list)
+        ):
+            out[-1] = {**out[-1], "content": out[-1]["content"] + m["content"]}
+        else:
+            out.append(m)
+    return out
+
+
 def normalize_history(
     messages: list, sources: list[SearchResult] | None = None
 ) -> list[dict]:
@@ -374,6 +598,7 @@ def normalize_history(
     out: list[dict] = []
     if sources is None:
         sources = []
+    messages = drop_programmatic_calls(messages)
     for m in messages:
         d = m.model_dump() if hasattr(m, "model_dump") else dict(m)
         c = d.get("content")
@@ -572,18 +797,41 @@ def _render_result_block(d: ServerToolDef, tool_id: str, out: ToolOutcome) -> di
     if d.kind == "code_execution":
         r = out.code
         editor = d.fname == "text_editor_code_execution"
+        py = d.fname == "code_execution"
         rt = (
             "text_editor_code_execution_tool_result"
             if editor
+            else "code_execution_tool_result"
+            if py
             else "bash_code_execution_tool_result"
         )
         if out.is_error or r is None:
+            code = out.error_code or "unavailable"
+            if py and code not in (
+                "invalid_tool_input",
+                "unavailable",
+                "too_many_requests",
+                "execution_time_exceeded",
+            ):
+                code = "unavailable"  # the Python tool's error vocabulary has no file-size code
+            return {
+                "type": rt,
+                "tool_use_id": tool_id,
+                "content": {"type": rt + "_error", "error_code": code},
+            }
+        if py:
             return {
                 "type": rt,
                 "tool_use_id": tool_id,
                 "content": {
-                    "type": rt + "_error",
-                    "error_code": out.error_code or "unavailable",
+                    "type": "code_execution_result",
+                    "stdout": r.stdout,
+                    "stderr": r.stderr,
+                    "return_code": r.return_code,
+                    "content": [
+                        {"type": "code_execution_output", "file_id": f["file_id"]}
+                        for f in r.files
+                    ],
                 },
             }
         if editor:
@@ -613,6 +861,62 @@ def _render_result_block(d: ServerToolDef, tool_id: str, out: ToolOutcome) -> di
     }
 
 
+def _ptc_events(
+    srv_id: str, calls: list[dict], caller: str, out_index: int, mapping: dict
+):
+    """tool_use blocks for the calls the code is waiting on; fills ``mapping`` (tool_use id -> call).
+    Returns (events, next out_index)."""
+    ev: list[bytes] = []
+    for c in calls:
+        tid = _new_id("toolu_")
+        mapping[tid] = c["call_id"]
+        ev.append(
+            _sse(
+                "content_block_start",
+                {
+                    "type": "content_block_start",
+                    "index": out_index,
+                    "content_block": {
+                        "type": "tool_use",
+                        "id": tid,
+                        "name": c["name"],
+                        "input": {},
+                        "caller": {"type": caller, "tool_id": srv_id},
+                    },
+                },
+            )
+        )
+        ev.append(
+            _sse(
+                "content_block_delta",
+                {
+                    "type": "content_block_delta",
+                    "index": out_index,
+                    "delta": {
+                        "type": "input_json_delta",
+                        "partial_json": json.dumps(c["input"], ensure_ascii=False),
+                    },
+                },
+            )
+        )
+        ev.append(
+            _sse(
+                "content_block_stop", {"type": "content_block_stop", "index": out_index}
+            )
+        )
+        out_index += 1
+    return ev, out_index
+
+
+def _remember_pause(rt: ServerToolRuntime, srv_id: str, mapping: dict) -> None:
+    from ..sandbox import get_pool
+
+    if rt.container is not None:
+        sess = get_pool().peek(rt.container.id)
+        if sess is not None:
+            sess.meta["ptc"] = {"srv_id": srv_id, "calls": dict(mapping)}
+
+
 async def run_stream(req, request, inner: Inner, setup: _Setup) -> AsyncIterator[bytes]:
     """The whole server-tool loop as one Anthropic SSE stream."""
     rt = setup.rt
@@ -630,8 +934,77 @@ async def run_stream(req, request, inner: Inner, setup: _Setup) -> AsyncIterator
     stop_reason = "end_turn"
     stats = {"rounds": 0, "tools": [], "round_usage": []}
     msg_id = _new_id("msg_")
+    paused = False
     try:
-        for rnd in range(max_iter):
+        rs = setup.resume
+        if rs is not None:
+            # the client answered tool calls the code made: continue that cell first
+            started = True
+            yield _sse(
+                "message_start",
+                {
+                    "type": "message_start",
+                    "message": {
+                        "id": msg_id,
+                        "type": "message",
+                        "role": "assistant",
+                        "model": req.model,
+                        "content": [],
+                        "stop_reason": None,
+                        "stop_sequence": None,
+                        "usage": {"input_tokens": 0, "output_tokens": 1},
+                    },
+                },
+            )
+            oc = await rt.python_resume(rs["results"])
+            rt.counts["code_execution"] += 1
+            d = rt.defs["code_execution"]
+            if oc.code is not None and oc.code.calls:
+                mapping: dict[str, str] = {}
+                evs, out_index = _ptc_events(
+                    rs["srv_id"], oc.code.calls, rs["caller"], out_index, mapping
+                )
+                for e in evs:
+                    yield e
+                _remember_pause(rt, rs["srv_id"], mapping)
+                stop_reason, paused = "tool_use", True
+            else:
+                block = _render_result_block(d, rs["srv_id"], oc)
+                yield _sse(
+                    "content_block_start",
+                    {
+                        "type": "content_block_start",
+                        "index": out_index,
+                        "content_block": block,
+                    },
+                )
+                yield _sse(
+                    "content_block_stop",
+                    {"type": "content_block_stop", "index": out_index},
+                )
+                out_index += 1
+                tr = {
+                    "type": "tool_result",
+                    "tool_use_id": rs["srv_id"],
+                    "content": oc.text,
+                    "is_error": oc.is_error,
+                }
+                if history and history[-1]["role"] == "user":
+                    c0 = history[-1]["content"]
+                    history[-1] = {
+                        "role": "user",
+                        "content": [
+                            *(
+                                [{"type": "text", "text": c0}]
+                                if isinstance(c0, str)
+                                else c0
+                            ),
+                            tr,
+                        ],
+                    }
+                else:
+                    history.append({"role": "user", "content": [tr]})
+        for rnd in range(0 if paused else max_iter):
             used = int(total.d.get("output_tokens") or 0)
             if used >= req.max_tokens:
                 stop_reason = "max_tokens"
@@ -858,8 +1231,12 @@ async def run_stream(req, request, inner: Inner, setup: _Setup) -> AsyncIterator
             )
             assistant_blocks = [b for b in model_turn]
             result_msgs = []
+            waiting = None
             for tb, oc in zip(calls, outcomes, strict=True):
                 d = tb["def"]
+                if d.kind == "code_execution" and oc.code is not None and oc.code.calls:
+                    waiting = (tb, oc)  # the code awaits client tools: no result yet
+                    continue
                 if d.kind == "web_search" and not oc.is_error:
                     off = len(sources)
                     sources.extend(oc.results)
@@ -917,6 +1294,22 @@ async def run_stream(req, request, inner: Inner, setup: _Setup) -> AsyncIterator
                         "input": tb["args"],
                     }
                 )
+            if waiting is not None:
+                tb, oc = waiting
+                assert oc.code is not None
+                mapping = {}
+                evs, out_index = _ptc_events(
+                    tb["id"],
+                    oc.code.calls,
+                    caller_type(tb["def"].spec),
+                    out_index,
+                    mapping,
+                )
+                for e in evs:
+                    yield e
+                _remember_pause(rt, tb["id"], mapping)
+                stop_reason = "tool_use"
+                break
             history = history + [{"role": "assistant", "content": assistant_blocks}]
             if client_calls:
                 stop_reason = "tool_use"
@@ -1004,10 +1397,14 @@ def _inner_request(
         and tc.get("type") == "tool"
         and tc.get("name") == "code_execution"
     ):
+        # the declared tool stands for its sub-tools
+        names = {d.fname for d in defs}
         tc = {
             **tc,
-            "name": "bash_code_execution",
-        }  # the declared tool stands for its sub-tools
+            "name": "bash_code_execution"
+            if "bash_code_execution" in names
+            else "code_execution",
+        }
     if not first:
         tc = {"type": "auto"} if tools else None
     elif tc in (None, "auto", {"type": "auto"}):
@@ -1089,7 +1486,7 @@ async def _aiter(items):
 
 async def create_with_server_tools(req, request, inner: Inner):
     """Entry point from the Messages handler; returns a Response."""
-    setup = await _setup(req)
+    setup = await _setup(req, request)
     if isinstance(setup, JSONResponse):
         return setup
     gen = run_stream(req, request, inner, setup)
