@@ -686,6 +686,90 @@
         "Research-only Steel FA2 harvester and exact-shape screen; kernel arithmetic retained, function constants fixed to causal aligned/no-mask/no-sinks/no-LSE and scratch supplied by caller. Not connected to inference; no winner or token parity claimed.",
         "Harvest release 0.32.4 vector TK4 bodies; fixed batch1,G6,D256 with screen-selected blocks 512/1024/1024 at 32K/64K/128K (not upstream g17s defaults). Installed MLX 0.32.3 compiles/launches. Bit differences are diagnostic, not a lossless rejection: deterministic, fp32/reference error, row/cache invariance and paired accuracy gates govern qualification."
       ]
+    },
+    {
+      "path": "python/yunshu_engine/ane/native/Program.hpp",
+      "repo": "https://github.com/incoai/splash",
+      "clone": "/Volumes/P5Plus/yunshu-build/competitors/src/splash-1.4.0",
+      "commit": "1482f6bbc2abf12375332725302019594150b6cb",
+      "license": "Apache-2.0",
+      "kind": "derived",
+      "local_changes": [
+        "Isolated optional ctypes runtime; explicit caller-owned cache; local Metal event adapter; no serving integration."
+      ],
+      "upstream_paths": [
+        "runtime/ane/Program.hpp"
+      ]
+    },
+    {
+      "path": "python/yunshu_engine/ane/native/Program.mm",
+      "repo": "https://github.com/incoai/splash",
+      "clone": "/Volumes/P5Plus/yunshu-build/competitors/src/splash-1.4.0",
+      "commit": "1482f6bbc2abf12375332725302019594150b6cb",
+      "license": "Apache-2.0",
+      "kind": "derived",
+      "local_changes": [
+        "Isolated optional ctypes runtime; explicit caller-owned cache; local Metal event adapter; no serving integration."
+      ],
+      "upstream_paths": [
+        "runtime/ane/Program.mm"
+      ]
+    },
+    {
+      "path": "python/yunshu_engine/ane/native/Handoff.hpp",
+      "repo": "https://github.com/incoai/splash",
+      "clone": "/Volumes/P5Plus/yunshu-build/competitors/src/splash-1.4.0",
+      "commit": "1482f6bbc2abf12375332725302019594150b6cb",
+      "license": "Apache-2.0",
+      "kind": "derived",
+      "local_changes": [
+        "Isolated optional ctypes runtime; explicit caller-owned cache; local Metal event adapter; no serving integration."
+      ],
+      "upstream_paths": [
+        "runtime/ane/Handoff.hpp"
+      ]
+    },
+    {
+      "path": "python/yunshu_engine/ane/native/Handoff.mm",
+      "repo": "https://github.com/incoai/splash",
+      "clone": "/Volumes/P5Plus/yunshu-build/competitors/src/splash-1.4.0",
+      "commit": "1482f6bbc2abf12375332725302019594150b6cb",
+      "license": "Apache-2.0",
+      "kind": "derived",
+      "local_changes": [
+        "Isolated optional ctypes runtime; explicit caller-owned cache; local Metal event adapter; no serving integration."
+      ],
+      "upstream_paths": [
+        "runtime/ane/Handoff.mm"
+      ]
+    },
+    {
+      "path": "python/yunshu_engine/ane/native/Support.hpp",
+      "repo": "https://github.com/incoai/splash",
+      "clone": "/Volumes/P5Plus/yunshu-build/competitors/src/splash-1.4.0",
+      "commit": "1482f6bbc2abf12375332725302019594150b6cb",
+      "license": "Apache-2.0",
+      "kind": "derived",
+      "local_changes": [
+        "Isolated optional ctypes runtime; explicit caller-owned cache; local Metal event adapter; no serving integration."
+      ],
+      "upstream_paths": [
+        "runtime/AwakeClock.hpp"
+      ]
+    },
+    {
+      "path": "python/yunshu_engine/ane/native/mil.py",
+      "repo": "https://github.com/incoai/splash",
+      "clone": "/Volumes/P5Plus/yunshu-build/competitors/src/splash-1.4.0",
+      "commit": "1482f6bbc2abf12375332725302019594150b6cb",
+      "license": "Apache-2.0",
+      "kind": "derived",
+      "local_changes": [
+        "Isolated optional ctypes runtime; explicit caller-owned cache; local Metal event adapter; no serving integration."
+      ],
+      "upstream_paths": [
+        "runtime/ops/AneFfn.cpp"
+      ]
     }
   ],
   "inspired": [
@@ -3486,6 +3570,19 @@
       "paths": [],
       "status": "release source inspected; top-three M5 component screens complete, all failed bit parity; no inference port",
       "pending": "No qualified winner. Any future arithmetic adaptation requires same-split Q1/verify parity, yv long spec/APC identity, paired quality and same-checkpoint cold/warm/follow-up measurements."
+    },
+    {
+      "repo": "https://github.com/incoai/splash",
+      "license": "Apache-2.0",
+      "revision": "1482f6bbc2abf12375332725302019594150b6cb",
+      "owner": "anenative",
+      "status": "adopted native Program/Handoff only; no serving qualification",
+      "alternatives_reviewed": [
+        "https://github.com/jan-kyncl/Apple-Neural-Engine",
+        "https://github.com/christopherkarani/Espresso",
+        "https://github.com/tmc/autoresearch-mlx-go-ane"
+      ],
+      "reason": "Existing Splash client has full selector type checks and bounded shared-event handoff; retain that defensive implementation for phase 1."
     }
   ],
   "websearch_prior_art": [

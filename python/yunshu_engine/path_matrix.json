@@ -2402,7 +2402,9 @@
   "python/yunshu_engine/kernels/tf_flash_next/inputs.py": "TensorFold flash_next v1 kernels used by qwen4_fused_hc (kernels/tf_hc_forward.py)",
   "python/yunshu_engine/kernels/tf_flash_next/experts.py": "TensorFold flash_next v1 router/expert kernels used by qwen4_fused_hc (kernels/tf_hc_forward.py)",
   "python/yunshu_engine/kernels/attn_prefill.py": "prefill_kernels",
-  "python/yunshu_engine/copy_graft.py": "Implementation helper of the registered copy_rounds feature: MTP greedy shared-prefix tree selection and request-local cost budget. Existing copy_rounds remains available on sampled/constrained MTP via its original verifier. This prototype does not claim DFlash/driver/generic/text graft coverage; those adapters and GPU qualification remain explicitly pending in tf110/HANDOFF.md."
+  "python/yunshu_engine/copy_graft.py": "Implementation helper of the registered copy_rounds feature: MTP greedy shared-prefix tree selection and request-local cost budget. Existing copy_rounds remains available on sampled/constrained MTP via its original verifier. This prototype does not claim DFlash/driver/generic/text graft coverage; those adapters and GPU qualification remain explicitly pending in tf110/HANDOFF.md.",
+  "python/yunshu_engine/ane/native/__init__.py": "Phase 1 research-only optional native ANE runtime; no serving importer or setting. GPU default unchanged; private API failures return unavailable.",
+  "python/yunshu_engine/ane/native/mil.py": "CPU-only native ANE benchmark MIL builder; fp16/int8 numerics unqualified for serving."
  },
  "settings": {
   "YUNSHU_MTP": "draft_family_coverage",

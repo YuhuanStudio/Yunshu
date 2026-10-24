@@ -188,3 +188,15 @@ https://github.com/mflux-community/mflux
 intra-package imports were changed and a credit line was added at the top of each file; the full license
 text is at https://www.apache.org/licenses/LICENSE-2.0 and in TensorFold's `LICENSE`. TensorFold's NOTICE:
 "TensorFold. Copyright 2026 TensorFold contributors. https://github.com/ashhart/TensorFold".
+
+## Splash native ANE runtime (1.4.0)
+
+`python/yunshu_engine/ane/native/{Program.hpp,Program.mm,Handoff.hpp,Handoff.mm}`
+are adapted from [incoai/splash](https://github.com/incoai/splash), commit
+`1482f6bbc2abf12375332725302019594150b6cb`, under Apache License 2.0.
+`Support.hpp` adapts its awake-time clock semantics and `mil.py` derives the
+IOSurface MIL ABI from `runtime/ops/AneFfn.cpp`. Modified for Yunshu: standalone
+clang/ctypes runtime, explicit cache, local Metal adapter, constant slice weights
+and fp16 underflow scaling. The upstream files had no per-file copyright header.
+The Apache-2.0 license is reproduced in this repository's LICENSE.
+This research runtime is not enabled in serving.
