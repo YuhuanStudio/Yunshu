@@ -179,7 +179,7 @@
       "id": "code-execution",
       "group": "agents",
       "title": "Code execution",
-      "summary": "Anthropic code_execution (bash + text editor) run locally inside the sandbox-runtime; opt-in, no network by default",
+      "summary": "Anthropic code_execution (bash, text editor, Python REPL, programmatic tool calling), OpenAI code_interpreter, shell and /v1/containers run locally inside the sandbox-runtime; opt-in, no network by default",
       "doc": "docs/guides/CODE_EXECUTION.md",
       "status": "partial"
     },

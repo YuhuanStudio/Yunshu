@@ -90,7 +90,8 @@ Yunshu 在 `POST /v1/responses` 提供 OpenAI Responses API，以及周边路由
 | `computer` | 你的客户端。见下方说明。 | 部分支持 |
 | `web_search`、`web_search_preview` | 服务器。见[服务器端工具](/docs/api/server-tools)。 | 支持 |
 | `mcp` | 服务器连接到你指定的 MCP 服务器。见[服务器端工具](/docs/api/server-tools)。 | 部分支持 |
-| `file_search`、`code_interpreter`、`image_generation` 等托管工具 | 无法使用。 | 暂不支持 |
+| `code_interpreter`、托管 `shell` | 由服务器在本机沙盒中执行，需手动开启。见[服务器端工具](/docs/api/server-tools)。 | 部分支持 |
+| `file_search`、`image_generation` 等托管工具 | 无法使用。 | 暂不支持 |
 
 客户端工具（`custom`、`local_shell`、`tool_search`、`computer`）不能与 `web_search` 或 `mcp` 在同一个请求中并用（`400`）。
 
@@ -401,7 +402,8 @@ with client.responses.connect() as conn:
 | function、namespace、custom、local_shell、客户端 tool_search | <Support status="supported">支持</Support> |
 | `computer` 工具 | <Support status="partial">由客户端执行；服务器从不执行动作</Support> |
 | `web_search`、`mcp` | <Support status="supported">支持，由服务器执行</Support> |
-| `reasoning.summary` 生成、托管式 `tool_search`、`file_search`、`code_interpreter`、`image_generation` | <Support status="unsupported">暂不支持</Support> |
+| `code_interpreter`、托管 `shell` | <Support status="partial">由服务器在 srt 内执行，需手动开启（`YUNSHU_CODE_EXECUTION`）</Support> |
+| `reasoning.summary` 生成、托管式 `tool_search`、`file_search`、`image_generation` | <Support status="unsupported">暂不支持</Support> |
 | 恢复背景流式 | <Support status="unsupported">暂不支持</Support> |
 | WebSocket 模式 | <Support status="supported">支持</Support> |
 
