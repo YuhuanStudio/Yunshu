@@ -650,16 +650,16 @@ def _setup_code(req, request, s: _Setup, specs: list[dict]) -> JSONResponse | No
     # a conversation keeps its container: reuse the one the previous response used
     for p in _stored_chain(req, request) if request is not None else []:
         for it in p.get("output") or []:
-            cid = it.get("container_id") or (it.get("environment") or {}).get(
+            prior = it.get("container_id") or (it.get("environment") or {}).get(
                 "container_id"
             )
-            if cid and str(cid).startswith(PREFIX + "_"):
+            if prior and str(prior).startswith(PREFIX + "_"):
                 try:
-                    c = mgr.get(cid)
+                    old = mgr.get(prior)
                 except ContainerError:
                     continue
-                if owner_ok(c, actor, admin):
-                    rt.container = c
+                if owner_ok(old, actor, admin):
+                    rt.container = old
                     return None
 
     def make():
@@ -1228,10 +1228,8 @@ async def run_stream(req, request, inner: Inner, setup: _Setup, run: _Run):
                     c["box"] = box
                     cid = box.id if box is not None else ""
                     if d.kind == "code_interpreter":
-                        code = (
-                            args.get("code")
-                            if isinstance(args.get("code"), str)
-                            else ""
+                        code: str = (
+                            args["code"] if isinstance(args.get("code"), str) else ""
                         )
                         item = {
                             "id": _new_id("ci_"),
@@ -1281,9 +1279,9 @@ async def run_stream(req, request, inner: Inner, setup: _Setup, run: _Run):
                             else []
                         )
                         action: dict[str, Any] = {"commands": cmds}
-                        for k in ("timeout_ms", "max_output_length"):
-                            if isinstance(args.get(k), int):
-                                action[k] = args[k]
+                        for opt in ("timeout_ms", "max_output_length"):
+                            if isinstance(args.get(opt), int):
+                                action[opt] = args[opt]
                         item = {
                             "id": _new_id("sh_"),
                             "type": "shell_call",

@@ -1296,6 +1296,7 @@ async def run_stream(req, request, inner: Inner, setup: _Setup) -> AsyncIterator
                 )
             if waiting is not None:
                 tb, oc = waiting
+                assert oc.code is not None
                 mapping = {}
                 evs, out_index = _ptc_events(
                     tb["id"],

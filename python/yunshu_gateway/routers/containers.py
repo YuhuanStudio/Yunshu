@@ -361,12 +361,8 @@ async def create_container_file(container_id: str, request: Request):
                 data = await _read_upload(get_store(), upload)
             except FileStoreError as exc:
                 return _err(exc.status, exc.message, exc.code)
-            fname = (
-                form.get("file_path")
-                if isinstance(form.get("file_path"), str)
-                else None
-            )
-            fname = fname or upload.filename
+            fp = form.get("file_path")
+            fname = fp if isinstance(fp, str) and fp else upload.filename
         else:
             fid = form.get("file_id")
             if not isinstance(fid, str):

@@ -15,6 +15,7 @@ import html
 import json
 import re
 import time
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from typing import TYPE_CHECKING
 
@@ -443,9 +444,8 @@ class ServerToolRuntime:
         self.container: Container | None = None
         self.uploads: list[str] = []
         self.ptc_tools: list[dict] = []  # client tools the python sub-tool may call
-        self.container_factory = (
-            None  # () -> Container, for the first use (OpenAI "auto")
-        )
+        # () -> Container, for the first use (OpenAI "auto")
+        self.container_factory: Callable[[], Container] | None = None
         self.owner = ""
         self.created: dict[
             str, dict

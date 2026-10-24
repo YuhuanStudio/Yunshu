@@ -579,4 +579,6 @@ def test_container_belongs_to_the_key_that_made_it(env, monkeypatch):
     r = c.post("/v1/messages", json=body(V["0120"], container=cid))
     assert r.status_code == 400 and "not found" in r.json()["error"]["message"]
     monkeypatch.setattr(rr, "_resolve_owner", lambda r: "alice")
-    assert c.post("/v1/messages", json=body(V["0120"], container=cid)).status_code == 200
+    assert (
+        c.post("/v1/messages", json=body(V["0120"], container=cid)).status_code == 200
+    )

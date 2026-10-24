@@ -136,7 +136,9 @@ def main() -> None:
             tree = ast.parse(code, "<cell>", "exec")
             last = None
             if tree.body and isinstance(tree.body[-1], ast.Expr):
-                last = ast.Expression(tree.body.pop().value)
+                tail_stmt = tree.body.pop()
+                assert isinstance(tail_stmt, ast.Expr)
+                last = ast.Expression(tail_stmt.value)
             body = compile(tree, "<cell>", "exec", flags=flags)
             tail = compile(last, "<cell>", "eval", flags=flags) if last else None
         except SyntaxError:

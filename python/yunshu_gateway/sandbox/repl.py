@@ -384,19 +384,20 @@ class ReplPool:
         for cid, s in list(self.sessions.items()):
             if cid != container.id and not s.paused and now - s.last_used > IDLE_TTL:
                 self.drop(cid)
-        s = self.sessions.get(container.id)
-        if s is None:
+        found = self.sessions.get(container.id)
+        if found is None:
             while len(self.sessions) >= MAX_SESSIONS:
                 idle = sorted(
                     self.sessions.items(),
                     key=lambda kv: (kv[1].paused, kv[1].last_used),
                 )
                 self.drop(idle[0][0])
-            s = self.sessions[container.id] = ReplSession(executor, container)
+            found = ReplSession(executor, container)
+            self.sessions[container.id] = found
         else:
-            s.c = container
-        s.last_used = now
-        return s
+            found.c = container
+        found.last_used = now
+        return found
 
     def find_pending(self, tool_use_ids: set[str]) -> ReplSession | None:
         """The paused cell whose programmatic tool calls carry these tool_use ids."""
