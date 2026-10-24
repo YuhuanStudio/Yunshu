@@ -38,6 +38,7 @@ def _build(kind, **kw):
         return CompletionRequest(model="m", prompt="hi", **kw)
     if kind == "responses":
         return ResponsesRequest(model="m", input="hi", **kw)
+    kw.setdefault("max_tokens", 64)  # required by the Messages API
     return AnthropicMessagesRequest(
         model="m", messages=[AnthropicMessage(role="user", content="hi")], **kw
     )
@@ -467,3 +468,14 @@ def test_modes_check_script_finds_sampling():
     }
     prof, mode = mod.profile("/nonexistent/Qwen3.8-27B-oQ4e-mtp")
     assert prof["thinking"]["top_k"] == 20 and mode == "non_thinking"
+
+
+def test_effort_none_and_absent_anthropic_thinking_use_the_non_thinking_profile(named):
+    named(Q38)
+    off = _build("anthropic")  # no thinking field = disabled
+    sd.resolve_sampling(off)
+    assert off.temperature == 0.7 and off.presence_penalty == 1.5
+    for kind in ("chat", "responses"):
+        req = _build(kind, reasoning_effort="none")
+        sd.resolve_sampling(req)
+        assert req.temperature == 0.7 and req.presence_penalty == 1.5

@@ -229,6 +229,7 @@ class TestStopSequences:
         """Request schema should accept stop_sequences."""
         req = AnthropicMessagesRequest(
             model="claude-3",
+            max_tokens=1024,
             messages=[AnthropicMessage(role="user", content="Hello")],
             stop_sequences=["END", "---", "STOP"],
         )
@@ -239,6 +240,7 @@ class TestStopSequences:
         """Default stop_sequences should be None."""
         req = AnthropicMessagesRequest(
             model="claude-3",
+            max_tokens=1024,
             messages=[AnthropicMessage(role="user", content="Hello")],
         )
         assert req.stop_sequences is None
@@ -247,6 +249,7 @@ class TestStopSequences:
         """Empty list of stop sequences should be accepted."""
         req = AnthropicMessagesRequest(
             model="claude-3",
+            max_tokens=1024,
             messages=[AnthropicMessage(role="user", content="Hello")],
             stop_sequences=[],
         )
@@ -331,6 +334,7 @@ class TestSystemListDict:
     def test_system_accepts_list_of_dicts(self):
         req = AnthropicMessagesRequest(
             model="claude-3",
+            max_tokens=1024,
             messages=[AnthropicMessage(role="user", content="Hi")],
             system=[
                 {
@@ -347,6 +351,7 @@ class TestSystemListDict:
     def test_system_accepts_string(self):
         req = AnthropicMessagesRequest(
             model="claude-3",
+            max_tokens=1024,
             messages=[AnthropicMessage(role="user", content="Hi")],
             system="You are helpful.",
         )

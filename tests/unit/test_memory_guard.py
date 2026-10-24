@@ -225,10 +225,10 @@ class TestRecommendedMaxTokens:
         assert result == 0
 
     def test_returns_sensible_limit(self):
-        """Recommended max tokens should be reasonable (not absurdly large)."""
+        """Recommended max tokens fit the available memory."""
         guard = _make_guard(available_bytes=2 * 1024**3)
         result = guard.get_recommended_max_tokens(num_prompt_tokens=512)
-        assert 0 < result <= 32768  # capped at 32K
+        assert result > 0  # bounded by memory, no fixed cap
 
     def test_longer_prompt_fewer_max_tokens(self):
         """Longer prompts should allow fewer decode tokens."""

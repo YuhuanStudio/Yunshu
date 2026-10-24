@@ -39,7 +39,7 @@ Yunshu 在 `POST /v1/messages`（也可用 `POST /messages`）提供 Anthropic M
 | --- | --- | --- | --- | --- |
 | `model` | string | 是 | 模型 id；單模型模式下僅供參考。 | 支援 |
 | `messages` | array | 是 | 非空的 `{role, content}` 清單。`content` 是字串或區塊清單。位於開頭或對話中的 `system` 角色項目會被提升到系統提示。 | 支援 |
-| `max_tokens` | integer | 否 | 1 到 1048576。Anthropic API 要求必填；Yunshu 省略時退回 1024。 | 支援 |
+| `max_tokens` | integer | 否 | 1 到 1048576。與 Anthropic API 相同為必填：省略會回 `400` `invalid_request_error`（`max_tokens: Field required`）。 | 支援 |
 | `system` | string 或文字區塊陣列 | 否 | 系統提示。區塊可帶 `cache_control`。 | 支援 |
 | `temperature` | number | 否 | 0 到 2。省略時預設 0.7。 | 支援 |
 | `top_p`、`top_k` | number、integer | 否 | `top_p` 為 0 到 1（預設 1.0）；`top_k` 為 0 表示停用。 | 支援 |
@@ -56,6 +56,7 @@ Yunshu 在 `POST /v1/messages`（也可用 `POST /messages`）提供 Anthropic M
 | `thinking: {"type": "enabled", "budget_tokens": N}` | 開啟思考並設定預算。`budget_tokens` 必須是小於 `max_tokens` 的正整數，否則 `400`。推理內容以 `thinking` 內容區塊回傳。 | 支援 |
 | `thinking: {"type": "disabled"}` | 關閉思考。 | 支援 |
 | `thinking: {"type": "adaptive"}` | 沿用模型範本的預設。 | 支援 |
+| 沒有 `thinking` 欄位 | 思考關閉，與 Anthropic API 相同（思考需主動開啟）。 | 支援 |
 | `output_config.effort` | 對應到範本的推理強度。`reasoning_effort` 是 Yunshu 的寫法。 | 支援 |
 
 思考能力取決於載入的模型。對於聊天範本本身不會思考的模型，`enabled` 會加入一段要求用 `<think>` 標籤包住推理的指示，並限制回覆開頭照做，因此仍會回傳 `thinking` 區塊。強制的 `tool_choice`（`any` 或 `tool`）會關閉思考，因為 Anthropic 也不允許兩者並用。思考區塊的 `signature` 為空字串；沒有 redacted thinking 區塊。

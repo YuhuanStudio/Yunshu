@@ -225,7 +225,9 @@ def test_effort_normalization():
     lv = ["xhigh", "medium", "low"]
     assert normalize_effort("high", lv) == "xhigh"
     assert normalize_effort("medium", lv) == "medium"
-    assert normalize_effort("minimal", lv) == "low"
+    assert (
+        normalize_effort("minimal", lv) == "minimal"
+    )  # not a rung: thinking off upstream
     assert normalize_effort("high", ["low", "medium", "high"]) == "high"
     assert normalize_effort("high", []) == "high"
 

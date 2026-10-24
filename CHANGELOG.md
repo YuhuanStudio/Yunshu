@@ -25,6 +25,22 @@ tested memory guidance for 128 GB and tight hosts. Outputs of speculation on and
 
 ### Upgrade notes / breaking changes
 
+- Defaults now cite their source (API spec, model card or dated measurement). A request that omits the output
+  cap (`max_tokens` / `max_completion_tokens` on Chat, `max_output_tokens` on Responses, which Codex does not
+  send) is allowed up to the model's output limit, 262144 tokens (Qwen3.8 card, thinking mode), clamped to the
+  context window; it used to stop at 32768. `YUNSHU_DEFAULT_MAX_TOKENS` is now an operator cap whose default
+  `0` means the model limit. `x_yunshu.budget.max_tokens_source` reports where the cap came from.
+- `/v1/completions` `max_tokens` defaults to 16, the OpenAI value (was 128).
+- Anthropic `/v1/messages`: `max_tokens` is required (missing gives `400`, as on the real API; the 1024
+  fallback is gone), and a request without `thinking` runs with thinking off (the Anthropic default). `adaptive`
+  and `enabled` are unchanged.
+- `reasoning_effort` `none` and `minimal` turn thinking off instead of mapping to `low`. `thinking_budget` accepts
+  up to 262144 (was 32768) and `xhigh` / `max` map to the largest budgets (131072 / 262144) instead of 8192 on
+  models whose template has no effort levels (the xhigh 131072 rung is a Yunshu choice, no external source).
+- `YUNSHU_MAX_REQUEST_SIZE` defaults to 32 MiB (was 10 MiB), the Anthropic Messages request limit.
+- Memory admission no longer caps output at 32768: a request gets the output length whose projected KV fits the
+  free memory (finishing with `length`), and is refused only when the prompt itself does not fit. `/v1/models`
+  `max_output_tokens` is 262144 (was 131072).
 - Split-invariant prefill is the default on the qualified 27B / M5 Max / MLX 0.32.3 path. Cold outputs may
   differ from 0.1.5 within the accuracy gate (n=240: 132 vs 131 correct); APC uses a new arithmetic
   namespace, so 0.1.5 checkpoints on disk are not reused.

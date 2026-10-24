@@ -227,13 +227,9 @@ class AnthropicMessagesRequest(BaseModel):
     # ── Anthropic-native fields ──
     model: str
     messages: list[AnthropicMessage]
-    # Anthropic Messages API documents max_tokens as REQUIRED, but our
-    # gateway is lenient and falls back to 1024 (the Claude default). All
-    # official SDK clients send max_tokens explicitly, so the relaxed
-    # behavior is harmless in practice. Keep an explicit default rather
-    # than `...` (required) to preserve compatibility with internal tests
-    # and lazy clients.
-    max_tokens: int = Field(default=1024, ge=1, le=1048576)
+    # Messages API: max_tokens is required (SDK `max_tokens: Required[int]`, min 1); the real
+    # API answers 400 invalid_request_error "max_tokens: Field required" and so do we.
+    max_tokens: int = Field(..., ge=1, le=1048576)
     temperature: float = Field(default=None, ge=0.0, le=2.0)  # type: ignore[assignment]  # None until resolve_sampling
     top_p: float = Field(default=None, ge=0.0, le=1.0)  # type: ignore[assignment]  # None until resolve_sampling
     top_k: int = Field(default=None, ge=0)  # type: ignore[assignment]  # None until resolve_sampling
@@ -368,6 +364,13 @@ class AnthropicMessagesRequest(BaseModel):
 
 
 # ── Content block helpers ──
+
+
+class AnthropicCountTokensRequest(AnthropicMessagesRequest):
+    """``/v1/messages/count_tokens`` takes the Messages body without ``max_tokens`` (the API's
+    count_tokens parameters do not include it)."""
+
+    max_tokens: int = Field(default=1, ge=1, le=1048576)
 
 
 def _resolve_json_schema(req) -> dict | str | None:
@@ -799,16 +802,20 @@ def _thinking_switches(req) -> tuple[bool | None, int | None]:
     """Anthropic ``thinking`` -> (enable_thinking, thinking_budget).
 
     ``enabled`` forces thinking on with its budget, ``disabled`` forces it off, and
-    ``adaptive`` (Claude Code's default) or no field leaves the model's template default --
-    except under a forced ``tool_choice`` (``any`` / ``tool``), which Anthropic does not combine
-    with thinking: there it is off, so a reasoning model cannot spend ``max_tokens`` thinking
-    and return no call (M3 web_fetch check, 2026-10-07: 256 tokens of thinking, no tool use).
+    ``adaptive`` (Claude Code's default) leaves the model's template default -- except under a
+    forced ``tool_choice`` (``any`` / ``tool``), which Anthropic does not combine with thinking:
+    there it is off, so a reasoning model cannot spend ``max_tokens`` thinking and return no
+    call (M3 web_fetch check, 2026-10-07: 256 tokens of thinking, no tool use).
+    No ``thinking`` field means disabled: Messages API reference, "thinking ... omitted =
+    disabled" (extended thinking is opt-in).
     """
     th = req.thinking if isinstance(req.thinking, dict) else None
     tc = getattr(req, "tool_choice", None)
     tc = tc if isinstance(tc, dict) else None
     forced = tc is not None and tc.get("type") in ("any", "tool")
-    if not th or th.get("type") == "adaptive":
+    if not th:
+        return False, None
+    if th.get("type") == "adaptive":
         return (False, None) if forced else (None, None)
     kind = th.get("type")
     if kind == "enabled":
@@ -3690,7 +3697,7 @@ def _format_anthropic_logprobs(logprobs_list: list[dict] | None) -> list[dict] |
 
 
 @router.post("/messages/count_tokens")
-async def count_tokens(req: AnthropicMessagesRequest, request: Request):
+async def count_tokens(req: AnthropicCountTokensRequest, request: Request):
     """Token counting endpoint (Anthropic compatible).
 
     Returns Anthropic-format errors on failure:

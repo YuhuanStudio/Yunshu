@@ -5,7 +5,8 @@ from __future__ import annotations
 Prevents OOM by rejecting requests that would exceed available memory:
 - preflight_check: estimate prompt + decode KV + prefill peak before accepting
 - generation_guard: concurrent request limit under memory pressure
-- get_recommended_max_tokens: compute max tokens that fit in remaining memory
+- get_recommended_max_tokens / admit: max tokens whose projected KV fits the remaining memory
+  (no fixed cap; the request is granted what fits instead of refused)
 
 Architecture:
   EngineCore.add_request()
@@ -221,8 +222,36 @@ class MemoryGuard:
         if per_token_kv == 0:
             return 256
 
-        max_tokens = remaining // per_token_kv
-        return max(0, min(max_tokens, 32768))  # Cap at 32K tokens
+        # Projected KV for the decode: the room left after the prompt's prefill peak, divided
+        # by the KV bytes of one token.  No fixed cap: the output length is bounded by the
+        # model limit / context window (output_limits, token_budget) and by this memory.
+        return max(0, remaining // per_token_kv)
+
+    def admit(self, num_prompt_tokens: int, max_tokens: int) -> tuple[int, str]:
+        """Memory admission for one request: (granted max_tokens, reason).
+
+        * 0 with a reason: even the prompt (prefill peak + its KV) does not fit -> refuse (the
+          caller answers with a memory_limit error: HTTP 503 / finish "memory_limit").
+        * less than ``max_tokens``: the decode's projected KV would not fit -> grant what does
+          fit; the generation finishes with "length" at that count.
+        * ``max_tokens``: everything fits.
+        """
+        if self._monitor.estimate_prompt_kv_bytes(1) == 0:
+            return max_tokens, ""  # no model info: nothing to project, admit as asked
+        with self._stats_lock:
+            self._total_checks += 1
+        fit = self.get_recommended_max_tokens(num_prompt_tokens)
+        if fit <= 0:
+            with self._stats_lock:
+                self._total_rejections += 1
+                self._preflight_rejections += 1
+            return 0, f"prompt of {num_prompt_tokens} tokens does not fit in memory"
+        if fit < max_tokens:
+            return fit, (
+                f"projected KV for {max_tokens} output tokens exceeds memory; "
+                f"granted {fit}"
+            )
+        return max_tokens, ""
 
     def get_stats(self) -> dict:
         """Return memory guard statistics."""

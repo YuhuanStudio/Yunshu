@@ -18,6 +18,13 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from yunshu_engine.output_limits import (
+    COMPLETIONS_DEFAULT_MAX_TOKENS,
+    MAX_THINKING_BUDGET,
+    SOURCE_REQUEST,
+    SOURCE_SPEC_DEFAULT,
+    fold_effort,
+)
 from yunshu_engine.tracing import get_inference_tracer, get_structured_logger
 
 from ..continuous_usage import update_usage, with_continuous_usage
@@ -161,7 +168,8 @@ class CompletionRequest(BaseModel):
     # or list[list[int]] (batched token-id prompts). Each list element becomes
     # its own choice in the response.
     prompt: str | list[str] | list[int] | list[list[int]]
-    max_tokens: int = Field(default=128, ge=0, le=1048576)
+    # OpenAI /v1/completions reference: "max_tokens ... Defaults to 16".
+    max_tokens: int = Field(default=COMPLETIONS_DEFAULT_MAX_TOKENS, ge=0, le=1048576)
     max_completion_tokens: int | None = Field(default=None, ge=0, le=1048576)
     temperature: float = Field(default=None, ge=0.0, le=2.0)  # type: ignore[assignment]  # None until resolve_sampling
     top_p: float = Field(default=None, ge=0.0, le=1.0)  # type: ignore[assignment]  # None until resolve_sampling
@@ -184,7 +192,7 @@ class CompletionRequest(BaseModel):
     seed: int | None = None
     spec_decode: bool = False
     enable_thinking: bool | None = None
-    thinking_budget: int | None = Field(default=None, ge=1, le=32768)
+    thinking_budget: int | None = Field(default=None, ge=1, le=MAX_THINKING_BUDGET)
     response_format: dict | None = None
     reasoning_effort: str | None = None
     xtc_probability: float = Field(default=0.0, ge=0.0, le=1.0)
@@ -248,6 +256,9 @@ class CompletionRequest(BaseModel):
     def validate_request(self):
         if not self.model or not self.model.strip():
             raise ValueError("model: field is required and cannot be empty")
+        self.enable_thinking, self.reasoning_effort = fold_effort(
+            self.enable_thinking, self.reasoning_effort
+        )
         # fold guided_* aliases into grammar/response_format (native wins).
         if self.grammar is None:
             if self.guided_regex is not None:
@@ -525,7 +536,16 @@ async def create_completion(req: CompletionRequest, request: Request):
             from ..token_budget import plan_for_engine
 
             _tb = plan_for_engine(
-                _est_tokens, req.effective_max_tokens(), None, req.model, engine
+                _est_tokens,
+                req.effective_max_tokens(),
+                None,
+                req.model,
+                engine,
+                source=(
+                    SOURCE_REQUEST
+                    if {"max_tokens", "max_completion_tokens"} & req.model_fields_set
+                    else SOURCE_SPEC_DEFAULT
+                ),
             )
             if _tb is not None and _tb.clamped:
                 req.max_tokens = _tb.max_tokens_granted

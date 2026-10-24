@@ -3162,9 +3162,9 @@ class VLMEngine:
             js = kwargs.get("grammar")
         tb = params.pop("thinking_budget", None)
         if tb is None and kwargs.get("reasoning_effort") is not None:
-            tb = {"low": 2048, "medium": 8192, "high": 32768}.get(
-                kwargs["reasoning_effort"], 8192
-            )
+            from .output_limits import effort_budget
+
+            tb = effort_budget(kwargs["reasoning_effort"])
         return dict(
             params,
             frequency_penalty=kwargs.get("frequency_penalty", 0.0) or 0.0,
@@ -3517,6 +3517,11 @@ class VLMEngine:
             ctk = kwargs.get("chat_template_kwargs") or {}
             effort = ctk.get("reasoning_effort") if isinstance(ctk, dict) else None
         if effort is None:
+            return None
+        from .output_limits import THINKING_OFF_EFFORTS
+
+        if str(effort).strip().lower() in THINKING_OFF_EFFORTS:
+            kwargs.pop("reasoning_effort", None)  # thinking off, not a template rung
             return None
         supported = getattr(self, "_template_has_effort", None)
         if supported is None:

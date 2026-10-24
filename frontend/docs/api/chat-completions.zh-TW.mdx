@@ -24,7 +24,7 @@ description: OpenAI Chat Completions 端點，支援 tools、結構化輸出、l
 | `messages` | array | 是 | 對話內容。至少要有一則內容不為空的 `user` 訊息。見[訊息](#訊息)。 | 支援 |
 | `stream` | boolean | 否 | 使用 Server-Sent Events。預設 `false`。 | 支援 |
 | `stream_options` | object | 否 | 僅能搭配 `stream: true`。`include_usage` 會在最後加一個 usage 區塊；`continuous_usage_stats`（vLLM 擴充）會在每個區塊都附上累計的 `usage`。 | 支援 |
-| `max_tokens` | integer | 否 | 生成長度上限，`0` 至 `1048576`。預設為 `YUNSHU_DEFAULT_MAX_TOKENS` 設定值（32768）。上下文預算仍會對它做限縮，見 `x_yunshu.budget`。 | 支援 |
+| `max_tokens` | integer | 否 | 生成長度上限，`0` 至 `1048576`。省略時為模型的輸出上限（262144，Qwen3.8 模型卡的思考模式數值；OpenAI 規格為「直到模型上限」），只能由營運者上限 `YUNSHU_DEFAULT_MAX_TOKENS` 調低。上下文視窗仍會限縮；`x_yunshu.budget` 回報實際值與來源（`max_tokens_source`：`request`、`model_limit`、`operator_cap`）。 | 支援 |
 | `max_completion_tokens` | integer | 否 | OpenAI 較新的名稱。兩者同時設定時以它為準。 | 支援 |
 | `n` | integer | 否 | 回傳的選項數，`1` 至 `128`。搭配 `stream: true` 時，每個區塊都帶有所屬選項的 `index`；各選項依序串流（文字路徑一次處理一個請求，視覺語言模型則並行），`seed` 與非串流相同，會衍生出每個選項的種子（`seed + index`）。最後一個 usage 區塊是提示詞計一次、所有補全加總。 | 支援 |
 | `stop` | string 或 array | 否 | 最多 16 個停止序列。空字串會被丟棄。 | 支援 |
@@ -108,8 +108,8 @@ description: OpenAI Chat Completions 端點，支援 tools、結構化輸出、l
 | 參數 | 說明 | 狀態 |
 | --- | --- | --- |
 | `enable_thinking` | 開啟或關閉模型的思考模式。也會讀取 `chat_template_kwargs.enable_thinking`。 | 支援 |
-| `reasoning_effort` | 推理強度。也會讀取 `chat_template_kwargs.reasoning_effort`。超出模板自身清單的值會被對應（在使用 `xhigh` 的模板上，`high` 會變成 `xhigh`）。對沒有推理模式的模型會被接受但沒有作用。 | 支援 |
-| `thinking_budget` | 思考 token 上限，`1` 至 `32768`。 | 擴充 |
+| `reasoning_effort` | 推理強度。也會讀取 `chat_template_kwargs.reasoning_effort`。超出模板自身清單的值會被對應（在使用 `xhigh` 的模板上，`high` 會變成 `xhigh`）。`none` 與 `minimal` 會關閉思考（等同 `enable_thinking: false`）；`low` 至 `max` 單調對應，`xhigh`、`max` 取最大預算。範本沒有強度層級的模型，預算為 low 2048、medium 8192、high 32768、xhigh 131072、max 262144（max 為 Qwen3.8 模型卡的思考上限；其餘是 Yunshu 的選擇，沒有外部來源，包含 xhigh 131072）。對沒有推理模式的模型會被接受但沒有作用。 | 支援 |
+| `thinking_budget` | 思考 token 上限，`1` 至 `262144`（模型的思考上限）。 | 擴充 |
 | `chat_template_kwargs` | 傳給聊天模板的額外變數。 | 支援 |
 
 推理文字會放在 `message.reasoning_content`，與 `content` 分開。推理 token 也算在 `completion_tokens` 內，`usage.completion_tokens_details.reasoning_tokens` 則說明其中有多少。
@@ -396,7 +396,7 @@ print(resp.usage.completion_tokens_details.reasoning_tokens)
 | --- | --- | --- | --- |
 | `model` | string | 模型 id。 | 支援 |
 | `prompt` | string、字串陣列、token id 陣列，或 token id 陣列的陣列 | 必填。字串陣列或 token id 陣列的陣列會依序為每個提示詞產生選項。有多個提示詞時不可使用 `stream: true`。 | 支援 |
-| `max_tokens` | integer | 預設 `128`，上限 `1048576`。也接受 `max_completion_tokens`。 | 支援 |
+| `max_tokens` | integer | 預設 `16`（OpenAI completions 規格），上限 `1048576`。也接受 `max_completion_tokens`。 | 支援 |
 | `echo` | boolean | 把提示詞放在回傳文字之前。搭配 `logprobs` 時，提示詞 token 也會有 logprobs（限單一字串提示詞）。 | 支援 |
 | `logprobs` | integer | `0` 至 `5`。回應使用舊版的 `tokens`、`token_logprobs`、`top_logprobs`、`text_offset` 陣列。 | 支援 |
 | `best_of` | integer | 為每個提示詞產生這麼多候選，回傳平均 logprob 最佳的 `n` 個。必須不小於 `n`；不可搭配串流或多個提示詞。所有候選都計入 `usage`。 | 支援 |

@@ -66,12 +66,11 @@ def _as_dir(p: str) -> str | None:
 def request_mode(req: Any, model_path: str | None) -> tuple[str, str]:
     """(mode, why): whether THIS request runs with thinking, resolved as request handling does.
 
-    Order: Anthropic ``thinking`` / ``enable_thinking`` (top level, then ``chat_template_kwargs``);
+    Order: Anthropic ``thinking`` (absent = off) / ``enable_thinking`` (top level, then ``chat_template_kwargs``);
     a constrained output (JSON schema / grammar) runs without thinking; Gemma 4 defaults off;
     otherwise the chat template's own default."""
     et = None
-    th = getattr(req, "thinking", None)
-    if isinstance(th, dict):
+    if hasattr(req, "thinking"):  # Anthropic: absent thinking = disabled
         try:
             from .routers.anthropic import _thinking_switches
 
@@ -84,6 +83,11 @@ def request_mode(req: Any, model_path: str | None) -> tuple[str, str]:
         ctk = getattr(req, "chat_template_kwargs", None)
         if isinstance(ctk, dict) and isinstance(ctk.get("enable_thinking"), bool):
             et = ctk["enable_thinking"]
+    if et is None:
+        # reasoning_effort none / minimal means no reasoning (output_limits.fold_effort)
+        from yunshu_engine.output_limits import fold_effort
+
+        et = fold_effort(None, getattr(req, "reasoning_effort", None))[0]
     if isinstance(et, bool):
         return ("thinking" if et else "non_thinking"), "request"
     rf = getattr(req, "response_format", None)

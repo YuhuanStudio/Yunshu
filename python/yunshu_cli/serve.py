@@ -151,7 +151,7 @@ def serve(
     max_request_size: int | None = typer.Option(
         None,
         "--max-request-size",
-        help="Maximum request body size in bytes (default 10MB).",
+        help="Maximum request body size in bytes (default 32 MiB, the Anthropic Messages API limit).",
     ),
     server_header: bool = typer.Option(
         False,

@@ -31,7 +31,7 @@ class TestReasoningEffortParsing:
         eng._ngram_proposer = None
         eng._spec_prefill_enabled = False
         eng._kv_quant_bits = None
-        eng._check_memory_guard = MagicMock(return_value=None)
+        eng._check_memory_guard = MagicMock(side_effect=lambda p, mt, **kw: (None, mt))
         eng._engine_core = None
         return eng
 
