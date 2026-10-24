@@ -249,17 +249,17 @@ const settingdesc = {
   YUNSHU_WEB_FETCH_MAX_TEXT_CHARS:
     "交给模型的提取网页文本会截断至此字符数（请求的 `max_content_tokens` 可进一步调低）。",
   YUNSHU_CODE_EXECUTION:
-    "在本机于 Anthropic sandbox-runtime（srt；可选，需要 Node 22.12 以上）内提供代码执行工具（Anthropic `code_execution_*`）。关闭时声明这些工具的请求返回 400；开启但没有 srt 时返回 503，绝不在沙盒外执行。",
+    "在本机于 Anthropic sandbox-runtime（srt；可选，需要 Node 22.12 以上）内提供代码执行工具（Anthropic `code_execution_*`、OpenAI Responses 的 `code_interpreter` 与托管 `shell`、OpenAI `/v1/containers` API）。关闭时声明这些工具的请求返回 400；开启但没有 srt 时返回 503，绝不在沙盒外执行。",
   YUNSHU_CODE_EXECUTION_ROOT:
     "存放代码执行容器的目录（每个容器一个子目录，权限 0700）。",
   YUNSHU_CODE_EXECUTION_TIMEOUT:
-    "单次代码执行调用可运行的挂钟秒数，超过即终止；同时作为 CPU 时间上限。",
+    "单次代码执行调用可运行的挂钟秒数，超过即终止；同时作为 CPU 时间上限。Python cell 等待客户端工具结果的时间不计入。",
   YUNSHU_CODE_EXECUTION_MEMORY_MB:
-    "单次代码执行调用可使用的常驻内存（MB），按整个进程组采样；超过即终止。",
+    "单次代码执行调用可使用的常驻内存（MB），按整个进程组采样；超过即终止。OpenAI 容器的 `memory_limit` 只能再往下调。",
   YUNSHU_CODE_EXECUTION_NETWORK_ALLOW:
-    "沙盒可连接的主机，以逗号分隔（`example.com`、`*.example.com`、`host:443`）。留空：完全没有网络，包括 loopback。",
+    "沙盒可连接的主机，以逗号分隔（`example.com`、`*.example.com`、`host:443`）。留空：完全没有网络，包括 loopback。OpenAI 容器的 `network_policy` 只能缩小这份清单。",
   YUNSHU_CODE_EXECUTION_TTL_MIN:
-    "代码执行容器闲置多少分钟后，连同其文件一并删除。",
+    "代码执行容器闲置多少分钟后，连同其文件一并删除。OpenAI 容器的 `expires_after.minutes` 只能缩短。",
   YUNSHU_MCP_CONNECTOR:
     "提供 MCP 连接器：Anthropic 的 `mcp_servers` 和 OpenAI Responses 的 `mcp` 工具由本服务器执行，并通过可流式 HTTP／SSE 连接到指定的 MCP 服务器。",
   YUNSHU_MCP_CONNECTOR_ALLOW_PRIVATE:

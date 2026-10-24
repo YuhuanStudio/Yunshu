@@ -332,3 +332,50 @@ def test_idle_session_does_not_cost_a_wall_clock_budget(env, monkeypatch):
     t0 = time.monotonic()
     a, b = session_run(env, [cell("1"), cell("import time; time.sleep(0.2); 2")])
     assert b.ok and time.monotonic() - t0 < 30
+
+
+def test_forged_protocol_message_for_an_undeclared_tool_is_ignored(env):
+    e, c, _ = env
+
+    async def go():
+        tools = [{"name": "f", "schema": {"properties": {}}}]
+        # fd 4 is the worker's private protocol descriptor: the cell can find and write it
+        r = await e.python(
+            c,
+            "import os, json\nfor fd in range(3, 8):\n    try:\n        os.write(fd, (json.dumps({'op':'tool_call','call_id':'x','name':'evil','input':{}})+'\\n').encode())\n    except OSError:\n        pass\nprint('ok')",
+            tools=tools,
+        )
+        assert r.ok and not r.calls and r.stdout.strip().endswith("ok")
+
+    asyncio.run(go())
+
+
+def test_too_many_tool_calls_in_one_cell_kill_it(env, monkeypatch):
+    monkeypatch.setattr(repl_mod, "MAX_TOOL_CALLS", 5)
+    e, c, _ = env
+
+    async def go():
+        tools = [{"name": "f", "schema": {"properties": {}}}]
+        r = await e.python(
+            c,
+            "import asyncio\nawait asyncio.gather(*[f() for _ in range(20)])",
+            tools=tools,
+        )
+        assert not r.ok and r.error_code == "too_many_requests"
+        assert e.python_pending(c) is None
+        again = await e.python(c, "print(1)")
+        assert again.ok and again.stdout.strip() == "1"
+
+    asyncio.run(go())
+
+
+def test_oversized_tool_arguments_kill_the_cell(env, monkeypatch):
+    monkeypatch.setattr(repl_mod, "MAX_CALL_BYTES", 1000)
+    e, c, _ = env
+
+    async def go():
+        tools = [{"name": "f", "schema": {"properties": {"s": {}}}}]
+        r = await e.python(c, "await f(s='x' * 5000)", tools=tools)
+        assert not r.ok and r.error_code == "too_many_requests"
+
+    asyncio.run(go())

@@ -120,7 +120,16 @@ def test_small_suite_passes_against_a_scripted_server(stack):
         [text("done")],
     ]
     mp.setattr(responses, "create_response", ScriptedResponses(oai_rounds))
-    cc = lambda code: ([{"type": "tool_use", "id": "t", "name": "code_execution", "input": {"code": code}}], "tool_use")  # noqa: E731
+
+    def cc(code):
+        block = {
+            "type": "tool_use",
+            "id": "t",
+            "name": "code_execution",
+            "input": {"code": code},
+        }
+        return [block], "tool_use"
+
     ant_rounds = [
         cc("kept = 6"),
         ([{"type": "text", "text": "ok"}], "end_turn"),

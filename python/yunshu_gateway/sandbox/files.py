@@ -177,28 +177,47 @@ class Entry:
 
 
 def scan(c: Container, limit: int = MAX_LIST) -> list[Entry]:
-    """Regular files under work/ (symlinks and special files are not files of the container)."""
+    """Regular files under work/ (symlinks and special files are not files of the container).
+    Walks descriptors with O_NOFOLLOW: a link in place of work/ or a directory lists nothing."""
     out: list[Entry] = []
-    stack = [("", 0)]
-    while stack and len(out) < limit:
-        base, depth = stack.pop()
-        d = c.work / base if base else c.work
-        try:
-            it = list(os.scandir(d))
-        except OSError:
-            continue
-        for e in it:
-            rel = f"{base}/{e.name}" if base else e.name
+    try:
+        root = _open_work(c)
+    except FileOpError:
+        return out
+    stack: list[tuple[str, int, int]] = [("", root, 0)]
+    try:
+        while stack and len(out) < limit:
+            base, fd, depth = stack.pop()
             try:
-                st = e.stat(follow_symlinks=False)
+                with os.scandir(fd) as it:
+                    entries = list(it)
+                for e in entries:
+                    rel = f"{base}/{e.name}" if base else e.name
+                    try:
+                        st = e.stat(follow_symlinks=False)
+                    except OSError:
+                        continue
+                    if stat_mod.S_ISREG(st.st_mode):
+                        out.append(Entry(rel, st.st_size, st.st_mtime_ns))
+                        if len(out) >= limit:
+                            break
+                    elif stat_mod.S_ISDIR(st.st_mode) and depth + 1 < MAX_DEPTH:
+                        try:
+                            sub = os.open(
+                                e.name,
+                                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                                dir_fd=fd,
+                            )
+                        except OSError:
+                            continue
+                        stack.append((rel, sub, depth + 1))
             except OSError:
-                continue
-            if stat_mod.S_ISREG(st.st_mode):
-                out.append(Entry(rel, st.st_size, st.st_mtime_ns))
-                if len(out) >= limit:
-                    break
-            elif stat_mod.S_ISDIR(st.st_mode) and depth + 1 < MAX_DEPTH:
-                stack.append((rel, depth + 1))
+                pass
+            finally:
+                os.close(fd)
+    finally:
+        for _b, fd, _d in stack:
+            os.close(fd)
     return sorted(out, key=lambda x: (x.mtime_ns, x.rel))
 
 

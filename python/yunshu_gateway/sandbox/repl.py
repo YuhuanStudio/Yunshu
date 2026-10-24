@@ -33,6 +33,8 @@ MAX_SESSIONS = (
     4  # live REPL processes (each holds memory); the least recently used is closed
 )
 START_TIMEOUT = 30.0
+MAX_TOOL_CALLS = 256  # tool calls one cell may make (a loop of round trips ends here)
+MAX_CALL_BYTES = 1024 * 1024  # size of one call's arguments
 GRACE = 0.05  # collect tool calls issued in the same event-loop turn (asyncio.gather)
 WORKER_FILE = "repl_worker.py"
 
@@ -46,7 +48,9 @@ class ReplError(Exception):
 
 @dataclass
 class ReplOutcome:
-    status: str  # done | tool_calls | timeout | oom | overflow | crashed
+    status: (
+        str  # done | tool_calls | timeout | oom | overflow | too_many_calls | crashed
+    )
     stdout: str = ""
     stderr: str = ""
     return_code: int = 0
@@ -77,6 +81,8 @@ class ReplSession:
         self.last_used = time.monotonic()
         self.stderr_tail = b""
         self.meta: dict = {}  # the caller's bookkeeping for a paused cell (e.g. the server tool id)
+        self._allowed: set[str] = set()  # tool names the current cell may call
+        self._calls_made = 0
 
     # ── process ──────────────────────────────────────────────────────────────
     @property
@@ -211,6 +217,8 @@ class ReplSession:
                 await self._spawn()
             self._budget = float(timeout)
             self._mem = mem_bytes
+            self._allowed = {t["name"] for t in tools or []}
+            self._calls_made = 0
             self.meta = dict(meta or {})
             self._send(
                 {
@@ -281,6 +289,17 @@ class ReplSession:
                     return fail("timeout")
                 op = msg.get("op")
                 if op == "tool_call":
+                    # the process is untrusted: only declared tools, bounded count and size
+                    if str(msg.get("name")) not in self._allowed or not isinstance(
+                        msg.get("call_id"), str
+                    ):
+                        continue
+                    if (
+                        len(json.dumps(msg.get("input")).encode()) > MAX_CALL_BYTES
+                        or self._calls_made >= MAX_TOOL_CALLS
+                    ):
+                        return fail("too_many_calls")
+                    self._calls_made += 1
                     calls.append(msg)
                     deadline = time.monotonic() + GRACE
                     while True:  # tool calls issued together (asyncio.gather)
@@ -292,6 +311,19 @@ class ReplSession:
                         except TimeoutError:
                             break
                         if m2.get("op") == "tool_call":
+                            if str(
+                                m2.get("name")
+                            ) not in self._allowed or not isinstance(
+                                m2.get("call_id"), str
+                            ):
+                                continue
+                            if (
+                                self._calls_made >= MAX_TOOL_CALLS
+                                or len(json.dumps(m2.get("input")).encode())
+                                > MAX_CALL_BYTES
+                            ):
+                                return fail("too_many_calls")
+                            self._calls_made += 1
                             calls.append(m2)
                         else:
                             q.put_nowait(m2)

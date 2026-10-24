@@ -363,6 +363,12 @@ class CodeExecutor:
         elif out.status == "overflow":
             res.ok, res.error_code = False, "output_file_too_large"
             res.text = "output exceeded 1 MiB; the Python process was restarted"
+        elif out.status == "too_many_calls":
+            res.ok, res.error_code = False, "too_many_requests"
+            res.text = (
+                "the code made too many tool calls (or one call was too large); "
+                "the Python process was restarted"
+            )
         elif out.status == "crashed":
             res.ok, res.error_code = False, "unavailable"
             res.text = "the Python process exited" + (
