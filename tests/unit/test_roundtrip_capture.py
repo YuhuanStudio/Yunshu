@@ -63,3 +63,13 @@ def test_report_summarizes(tmp_path):
     )
     s = m.summarize([str(f)])
     assert (s["pairs"], s["whole"], s["matched_gen"], s["prev_gen"]) == (2, 1, 7, 8)
+
+
+def test_flatten_ids_accepts_list_nested_and_array():
+    import numpy as np
+
+    from yunshu_engine.roundtrip_capture import flatten_ids
+
+    assert flatten_ids([1, 2, 3]) == [1, 2, 3]
+    assert flatten_ids([[1, 2, 3]]) == [1, 2, 3]
+    assert flatten_ids(np.array([[1, 2], [3, 4]])) == [1, 2, 3, 4]

@@ -2667,7 +2667,9 @@ class VLMEngine:
         with contextlib.suppress(Exception):
             from .roundtrip_capture import RoundTripTracker
 
-            prompt_list = [int(t) for t in input_ids.reshape(-1).tolist()]
+            from .roundtrip_capture import flatten_ids
+
+            prompt_list = flatten_ids(input_ids)
             tracker = getattr(self, "_roundtrip_tracker", None)
             if tracker is None:
                 tracker = self._roundtrip_tracker = RoundTripTracker()

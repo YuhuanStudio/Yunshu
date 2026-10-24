@@ -13,6 +13,19 @@ from __future__ import annotations
 from collections import deque
 
 
+def flatten_ids(ids) -> list[int]:
+    """Token ids as a flat list of ints from a list (what the runner receives), a nested list or an array."""
+    if hasattr(ids, "tolist"):
+        ids = ids.tolist()
+    out: list[int] = []
+    for t in ids:
+        if isinstance(t, (list, tuple)):
+            out.extend(flatten_ids(t))
+        else:
+            out.append(int(t))
+    return out
+
+
 def common_prefix(a: list[int], b: list[int]) -> int:
     n = min(len(a), len(b))
     i = 0
