@@ -123,6 +123,8 @@ def spec_request(engine, extra_env):
     if engine != "yunshu":
         return "dflash", dict(extra_env)
     env = dict(extra_env)
+    # Benchmarks own only their API port; never auto-start the console on8100.
+    env.setdefault("YUNSHU_CONSOLE", "0")
     override = env.setdefault("YUNSHU_VLM_DRAFT", D)
     mode = {"mtp": "mtp", "force-mtp": "mtp", "off": "off", "none": "off"}.get(
         override.lower(), "dflash"
