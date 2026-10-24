@@ -172,7 +172,9 @@ export function ConnectionState({
       <div role="status" data-testid="outage-calm" data-kind={outage.kind}>
         <Banner
           tone="neutral"
-          icon={<Spinner size="sm" />}
+          icon={
+            outage.kind === "paused" ? undefined : <Spinner size="sm" />
+          }
           title={title}
           description={facts.filter(Boolean).join(t("common.sentenceGap"))}
         />

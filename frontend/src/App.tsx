@@ -791,7 +791,7 @@ export default function App() {
               </Button>
               <Breadcrumb
                 aria-label={t("shell.nav.breadcrumb")}
-                className="card w-fit min-w-0 overflow-hidden whitespace-nowrap px-3 py-2 max-sm:hidden"
+                className={`card w-fit overflow-hidden whitespace-nowrap px-3 py-2 max-sm:hidden ${sub ? "min-w-0" : "shrink-0"}`}
               >
                 <BreadcrumbList className="flex-nowrap gap-2 overflow-hidden sm:gap-2">
                   <BreadcrumbItem className="shrink-0">
@@ -800,7 +800,7 @@ export default function App() {
                     </BreadcrumbLink>
                   </BreadcrumbItem>
                   <BreadcrumbSeparator />
-                  <BreadcrumbItem className="min-w-0">
+                  <BreadcrumbItem className={sub ? "min-w-0" : "shrink-0"}>
                     {sub ? (
                       <BreadcrumbLink
                         href={page === "docs" ? "#/docs" : "#/models"}

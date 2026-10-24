@@ -113,7 +113,7 @@ and cold 32K TTFT versus Splash 1.3.2.
   "Switching to :port" state (error only after 60 s with no live engine, with the engine list); the Requests list,
   prefix hit rate and Overview chart stay filled from the console store across restarts and mark the restart
   boundary; prefix hit rate has one definition and window on Overview and Requests; the Requests usage cell shows
-  cached tokens without truncation; an idle engine reads "Idle · last decode N tok/s · Xm ago". The console state
+  cached tokens without truncation; an idle engine reads "Idle · last decode N tok/s · Xm ago"; the top bar no longer squeezes the breadcrumb below 1280 px (the live pill's detail slot was never hidden), and the Requests table fits 768-1280 px without clipping. The console state
   route gains `outages` (median down time of recent restarts).
 
 - Agent follow-ups reuse the whole conversation prefix. Claude Code's per-turn `<total_tokens>` messages no longer

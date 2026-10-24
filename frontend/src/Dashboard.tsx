@@ -551,7 +551,7 @@ export function Dashboard({
             <div className="flex flex-wrap items-center justify-between gap-x-5 gap-y-1">
               <HealthLine
                 verdict={verdict}
-                checking={!status && engine.phase === "connecting"}
+                checking={!status}
                 navigate={navigate}
               />
               <p className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs tabular-nums text-muted-foreground">

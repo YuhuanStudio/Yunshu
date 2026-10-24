@@ -33,9 +33,11 @@ export function LivePill({
       </Slot>
       {/* As wide as the longest "prefill 100% · decode 123.4 tok/s", idle or busy: the pill and the
           cluster around it keep their width while phase and numbers change. */}
-      <Slot ch={30} className="hidden leading-4 xl:inline-block">
-        {pill.detail}
-      </Slot>
+      <span className="hidden xl:inline-block">
+        <Slot ch={30} className="leading-4">
+          {pill.detail}
+        </Slot>
+      </span>
     </span>
   );
 }

@@ -816,7 +816,7 @@ export function Requests({
               >
                 <TooltipProvider delayDuration={200}>
                   <Table
-                    className="md:min-w-[840px] md:table-fixed"
+                    className="md:min-w-[680px] xl:table-fixed"
                     scrollLabel={t("requests.list.tableLabel")}
                   >
                     <Thead>
@@ -830,7 +830,7 @@ export function Requests({
                           {t("requests.list.colTime")}
                         </SortTh>
                         <Th>{t("requests.list.colRequest")}</Th>
-                        <Th className="hidden w-36 lg:table-cell">
+                        <Th className="hidden w-36 xl:table-cell">
                           {t("requests.list.colUsage")}
                         </Th>
                         <SortTh
@@ -878,7 +878,7 @@ export function Requests({
                             >
                               <Td className="max-sm:hidden" />
                               <Td className="min-w-44" />
-                              <Td className="hidden lg:table-cell" />
+                              <Td className="hidden xl:table-cell" />
                               <Td className="hidden md:table-cell" />
                               <Td className="hidden md:table-cell" />
                               <Td className="hidden md:table-cell" />
@@ -1033,7 +1033,7 @@ export function Requests({
                                       : `${elapsed(row.elapsed_s)} · ${number(speedValue)} tok/s`}
                                 </p>
                                 {/* Below lg the usage column is gone; the same numbers ride on a line of their own. */}
-                                <p className="mt-0.5 text-xs tabular-nums text-muted-foreground lg:hidden">
+                                <p className="mt-0.5 text-xs tabular-nums text-muted-foreground xl:hidden">
                                   {t("requests.list.mobileUsage", {
                                     prompt: number(row.prompt_tokens, 0),
                                     out: number(row.completion_tokens, 0),
@@ -1041,7 +1041,7 @@ export function Requests({
                                   })}
                                 </p>
                               </Td>
-                              <Td className="hidden overflow-hidden tabular-nums lg:table-cell">
+                              <Td className="hidden overflow-hidden tabular-nums xl:table-cell">
                                 <span className="block truncate">
                                   {number(row.prompt_tokens, 0)} /{" "}
                                   {number(row.completion_tokens, 0)}
