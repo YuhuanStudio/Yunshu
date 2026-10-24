@@ -292,7 +292,7 @@ async def _pump(gen: Generation, agen: AsyncIterator[Any]) -> None:
                 break
             gen.buffer.append(out)
             gen.notify()
-            if not gen.gated and getattr(out, "new_text", ""):
+            if not gen.gated and bool(getattr(out, "new_text", None)):
                 # The engine releases its first-delivery handoff (a heap collection that
                 # must not delay the first token) when we ask for the next output: hold
                 # until the consumer has taken this one and resumed.
@@ -430,7 +430,7 @@ async def run(
                 return
     finally:
         if getattr(gen.real_cancel, "mirror", None) is caller_cancel:
-            gen.real_cancel.mirror = None
+            setattr(gen.real_cancel, "mirror", None)  # noqa: B010 - an attribute the Event type does not declare
         gen.delivered = max(gen.delivered, index)
         if clean:
             reg._drop(gen, cancel=False)

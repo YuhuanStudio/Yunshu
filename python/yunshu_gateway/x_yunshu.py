@@ -444,9 +444,9 @@ def live_decode_rate(info: RequestInfo, now: float | None = None) -> float | Non
     t0, g0 = samples[0]
     if now - t0 < 0.5:
         if st.t_last > st.t_first:
-            return (st.generated - 1) / (st.t_last - st.t_first)
+            return float((st.generated - 1) / (st.t_last - st.t_first))
         return None
-    return max(st.generated - g0, 0) / (now - t0)
+    return float(max(st.generated - g0, 0) / (now - t0))
 
 
 def _prefill_rate(info: RequestInfo, done: int, now: float) -> float | None:

@@ -1165,7 +1165,7 @@ class VLMEngine:
         thinking = generated = cached = prompt_tokens = 0
         finish = None
         stop_seq = False
-        async with contextlib.aclosing(
+        async with contextlib.aclosing(  # type: ignore[type-var]  # an async generator at runtime
             self.generate_stream(messages=messages, **params)
         ) as stream:
             async for out in stream:
@@ -1242,7 +1242,7 @@ class VLMEngine:
                 messages=msgs, cancel_event=real_cancel, **kwargs
             )
 
-        async with contextlib.aclosing(
+        async with contextlib.aclosing(  # type: ignore[type-var]  # an async generator at runtime
             orphan_adoption.run(
                 key,
                 start,
