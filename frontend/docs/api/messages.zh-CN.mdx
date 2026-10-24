@@ -47,7 +47,7 @@ Yunshu 在 `POST /v1/messages`（也可用 `POST /messages`）提供 Anthropic M
 | `stream` | boolean | 否 | Server-Sent Events。 | 支持 |
 | `metadata` | object | 否 | 接受。 | 接受但忽略 |
 | `service_tier`、`container` | string、object | 否 | 接受，让 SDK 的请求能通过验证。 | 接受但忽略 |
-| `context_management` | object | 否 | 上下文编辑：`{"edits": [...]}`，支持 `clear_tool_uses_20250919`（`trigger` 以输入 token 或工具使用次数触发，另有 `keep`、`clear_at_least`、`exclude_tools`、`clear_tool_inputs`）与 `clear_thinking_20251015`（`keep`，只能是第一个 edit）。被清除的工具结果会变成 `[cleared]`。响应带有 `context_management.applied_edits`（流式时在 `message_delta`）；`count_tokens` 返回 `context_management.original_input_tokens`。`compact_20260112` 会被接受但不应用；未知的 edit 类型返回 `400`。 | 支持 |
+| `context_management` | object | 否 | 上下文编辑：`{"edits": [...]}`，支持 `clear_tool_uses_20250919`（`trigger` 以输入 token 或工具使用次数触发，另有 `keep`、`clear_at_least`、`exclude_tools`、`clear_tool_inputs`）与 `clear_thinking_20251015`（`keep`，只能是第一个 edit）。被清除的工具结果会变成 `[cleared]`。响应带有 `context_management.applied_edits`（流式时在 `message_delta`）；`count_tokens` 返回 `context_management.original_input_tokens`。`compact_20260112`（服务器端压缩）：输入超过 `trigger`（默认 `150000`、最小 `50000` 输入 token）时，由所服务的模型以和 Responses 压缩相同的机制摘要较早的轮次（`YUNSHU_COMPACT_MAX_TOKENS` 限制摘要长度）；回复以 `compaction` 块开头（流式为 `compaction_delta`，`usage.iterations` 列出压缩与消息两段），`instructions` 可引导摘要。`pause_after_compaction` 只返回该块，`stop_reason` 为 `compaction`。把块送回后，其前的内容全部丢弃；`content` 为 null 的块视为不做事。`count_tokens` 不会压缩。未知的 edit 类型返回 `400`。 | 支持 |
 
 ### 思考
 

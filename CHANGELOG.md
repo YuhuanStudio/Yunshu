@@ -74,7 +74,8 @@ and cold 32K TTFT versus Splash 1.3.2.
   input tokens or tool uses, `keep`, `clear_at_least`, `exclude_tools`, `clear_tool_inputs`) and
   `clear_thinking_20251015` rewrite the context before generation; the response reports
   `context_management.applied_edits` (in `message_delta` when streaming) and `count_tokens` returns
-  `original_input_tokens`. An unknown edit type is a 400.
+  `original_input_tokens`. `compact_20260112` compacts with the served model when the trigger is crossed
+  (leading `compaction` block, `pause_after_compaction`, round trip, `usage.iterations`). An unknown edit type is a 400.
 - Responses `background: true` works with `stream: true` (events are kept; `GET /v1/responses/{id}?stream=true&starting_after=N`
   resumes them; cancel works) and with `web_search` / `mcp` tools; `custom`, `local_shell`, `tool_search` and
   `computer` tools can be combined with server tools in one request.
