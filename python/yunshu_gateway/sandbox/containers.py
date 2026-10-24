@@ -20,7 +20,11 @@ from pathlib import Path
 
 from yunshu_engine import settings
 
-_ID = re.compile(r"^container_[0-9a-f]{24}$")
+# "container_" ids belong to the Anthropic API, "cntr_" ids to OpenAI's /v1/containers; both name one
+# directory kind, so a container made through either API can be used through the other.
+_ID = re.compile(r"^(container|cntr)_[0-9a-f]{24}$")
+PREFIXES = ("container", "cntr")
+MEMORY_LIMITS = {"1g": 1024, "4g": 4096, "16g": 16384, "64g": 65536}
 SUBDIRS = ("work", "home", "tmp", "out")
 MAX_TOTAL_BYTES = 2 * 1024**3
 
@@ -39,6 +43,15 @@ class Container:
     created_at: float
     last_active: float
     expires_at: float
+    name: str | None = None
+    ttl_s: float = 0.0  # this container's idle lifetime
+    # OpenAI memory_limit label: a ceiling under the server's setting
+    memory_limit: str | None = None
+    # None: the server's allowlist; (): no network
+    network_allow: tuple[str, ...] | None = None
+    # paths (relative to work/) put there through an API
+    user_files: tuple[str, ...] = ()
+    owner: str = ""  # the API key / actor that created it ("" = unowned)
 
     @property
     def work(self) -> Path:
@@ -55,6 +68,11 @@ class Container:
     @property
     def out(self) -> Path:
         return self.path / "out"
+
+
+def owner_ok(c: Container, actor: str, admin: bool) -> bool:
+    """May ``actor`` use this container? Unowned ones are open; admins see everything."""
+    return not c.owner or admin or c.owner == actor
 
 
 def valid_id(value: str) -> bool:
@@ -92,10 +110,19 @@ class ContainerManager:
     def _meta(self, cid: str) -> Path:
         return self.root / ".meta" / f"{cid}.json"
 
-    def _write_meta(self, cid: str, created: float, last: float) -> None:
+    def _write_meta(self, cid: str, created: float, last: float, **extra) -> None:
+        old = self._read_meta(cid) if extra.pop("keep", True) else {}
+        data = {**old, **extra, "created_at": created, "last_active": last}
         tmp = self._meta(cid).with_suffix(".tmp")
-        tmp.write_text(json.dumps({"created_at": created, "last_active": last}))
+        tmp.write_text(json.dumps(data))
         os.replace(tmp, self._meta(cid))
+
+    def _read_meta(self, cid: str) -> dict:
+        try:
+            m = json.loads(self._meta(cid).read_text())
+        except (OSError, ValueError):
+            return {}
+        return m if isinstance(m, dict) else {}
 
     def _load(self, cid: str) -> Container:
         try:
@@ -104,27 +131,98 @@ class ContainerManager:
             raise ContainerError(
                 "not_found", f"Container '{cid}' was not found."
             ) from None
+        if not isinstance(m, dict):
+            raise ContainerError("not_found", f"Container '{cid}' was not found.")
         last = float(m.get("last_active", 0))
+        # the server's setting is a ceiling: lowering YUNSHU_CODE_EXECUTION_TTL_MIN shortens every
+        # container, raising it never lengthens one that asked for less
+        asked = float(m.get("ttl_s") or 0)
+        ttl = min(asked, self.ttl_s) if asked else self.ttl_s
+        net = m.get("network_allow")
         return Container(
             cid,
             self.root / cid,
             float(m.get("created_at", last)),
             last,
-            last + self.ttl_s,
+            last + ttl,
+            name=m.get("name"),
+            ttl_s=ttl,
+            memory_limit=m.get("memory_limit"),
+            network_allow=tuple(net) if isinstance(net, list) else None,
+            user_files=tuple(m.get("user_files") or ()),
+            owner=str(m.get("owner") or ""),
         )
 
     # ── lifecycle ────────────────────────────────────────────────────────────
-    def create(self) -> Container:
+    def create(
+        self,
+        *,
+        prefix: str = "container",
+        name: str | None = None,
+        ttl_s: float | None = None,
+        memory_limit: str | None = None,
+        network_allow: list[str] | None = None,
+        owner: str = "",
+    ) -> Container:
+        if prefix not in PREFIXES:
+            raise ContainerError("invalid", f"unknown container id prefix '{prefix}'")
         with self._lock:
             self.gc()
-            cid = "container_" + secrets.token_hex(12)
+            cid = prefix + "_" + secrets.token_hex(12)
             base = self.root / cid
             base.mkdir(mode=0o700)
             for s in SUBDIRS:
                 (base / s).mkdir(mode=0o700)
             now = self.clock()
-            self._write_meta(cid, now, now)
+            extra: dict = {}
+            if name is not None:
+                extra["name"] = name
+            if ttl_s is not None:
+                extra["ttl_s"] = float(ttl_s)
+            if memory_limit is not None:
+                extra["memory_limit"] = memory_limit
+            if network_allow is not None:
+                extra["network_allow"] = list(network_allow)
+            if owner:
+                extra["owner"] = owner
+            self._write_meta(cid, now, now, keep=False, **extra)
             return self._load(cid)
+
+    def list(self, prefix: str | None = None) -> list[Container]:
+        """Live containers, oldest first (expired ones are removed on the way)."""
+        with self._lock:
+            self.gc()
+            out = []
+            for d in self.root.iterdir():
+                if d.name.startswith(".") or not valid_id(d.name):
+                    continue
+                if prefix and not d.name.startswith(prefix + "_"):
+                    continue
+                with contextlib.suppress(ContainerError):
+                    out.append(self._load(d.name))
+            return sorted(out, key=lambda c: (c.created_at, c.id))
+
+    def add_user_file(self, cid: str, rel: str) -> None:
+        with self._lock:
+            c = self._load(cid)
+            if rel not in c.user_files:
+                self._write_meta(
+                    cid,
+                    c.created_at,
+                    c.last_active,
+                    user_files=[*c.user_files, rel],
+                )
+
+    def drop_user_file(self, cid: str, rel: str) -> None:
+        with self._lock:
+            c = self._load(cid)
+            if rel in c.user_files:
+                self._write_meta(
+                    cid,
+                    c.created_at,
+                    c.last_active,
+                    user_files=[f for f in c.user_files if f != rel],
+                )
 
     def get(self, cid: str, *, touch: bool = True) -> Container:
         if not valid_id(cid):
@@ -146,6 +244,9 @@ class ContainerManager:
         if not valid_id(cid):
             return
         with self._lock:
+            for hook in list(_delete_hooks):
+                with contextlib.suppress(Exception):
+                    hook(cid)
             shutil.rmtree(self.root / cid, ignore_errors=True)
             with contextlib.suppress(OSError):
                 self._meta(cid).unlink()
@@ -186,6 +287,14 @@ class ContainerManager:
 
     def usage_bytes(self, cid: str) -> int:
         return _dir_size(self.root / cid)
+
+
+_delete_hooks: list = []  # called with the id before a container's files are removed
+
+
+def on_delete(hook) -> None:
+    if hook not in _delete_hooks:
+        _delete_hooks.append(hook)
 
 
 _mgr: ContainerManager | None = None

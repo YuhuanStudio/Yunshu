@@ -6,12 +6,19 @@ not: wall / CPU / memory / output limits (``supervisor``), per-container workspa
 Nothing here ever runs a command outside srt.
 """
 
+from . import files
 from .containers import Container, ContainerError, ContainerManager, get_manager
 from .executor import CodeExecutor, ExecResult, SandboxUnavailableError, get_executor
+from .repl import ReplError, ReplOutcome, ReplSession, get_pool
 from .srt import SrtInfo, build_settings, find_srt
 from .supervisor import RunResult, run_supervised
 
 __all__ = [
+    "ReplError",
+    "ReplOutcome",
+    "ReplSession",
+    "files",
+    "get_pool",
     "CodeExecutor",
     "Container",
     "ContainerError",
