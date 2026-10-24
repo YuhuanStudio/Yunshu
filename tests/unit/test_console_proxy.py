@@ -218,6 +218,7 @@ def test_history_is_answered_locally_even_when_the_engine_is_down(tmp_path):
     for i in range(20):
         store.add_sample(now - 20 + i, dict.fromkeys(FIELDS, 1.0))
     store.add_event(now - 5, "engine_unreachable", {"reason": "x"})
+    store.add_event(now - 4, "engine_reachable", {"down_s": 12.0})
     store.add_request(
         {"request_id": "req_a", "t": now - 3, "model": "m", "status": 200}
     )
@@ -251,6 +252,7 @@ def test_history_is_answered_locally_even_when_the_engine_is_down(tmp_path):
         and s["recording"] is True
         and s["store"]["bytes"] > 0
     )
+    assert s["outages"] == {"count": 1, "median_down_s": 12.0}
     assert bad.status_code == 400 and lim.status_code == 400
     store.close()
 

@@ -7,6 +7,13 @@ export interface ServerHistory {
   intervalS: number | null;
   /** Spans (epoch ms) with no samples at all: the engine process was not running. */
   gaps: [number, number][];
+  /** Engine boundaries the console recorded (epoch ms): a restart or a switch to another engine. */
+  restarts: RestartMark[];
+}
+
+export interface RestartMark {
+  at: number;
+  kind: "restarted" | "switched" | "away";
 }
 
 const num = (v: unknown): number | null =>
@@ -74,11 +81,33 @@ export function parseServerHistory(
       const b = num(g[1]);
       if (a != null && b != null && b > a) gaps.push([a * 1000, b * 1000]);
     }
+  const restarts: RestartMark[] = [];
+  if (Array.isArray(body.events))
+    for (const e of body.events as unknown[]) {
+      const ev = e as {
+        t?: unknown;
+        kind?: unknown;
+        detail?: { after_up?: unknown } | null;
+      } | null;
+      const at = num(ev?.t);
+      if (at == null) continue;
+      if (ev?.kind === "engine_restarted")
+        restarts.push({ at: at * 1000, kind: "restarted" });
+      // The engine had been answering and stopped: the boundary even when no restart was seen after it.
+      else if (
+        ev?.kind === "engine_unreachable" &&
+        ev.detail?.after_up === true
+      )
+        restarts.push({ at: at * 1000, kind: "away" });
+      else if (ev?.kind === "engine_switched")
+        restarts.push({ at: at * 1000, kind: "switched" });
+    }
   return points.length
     ? {
         points,
         intervalS: num(body.resolution_s) ?? num(body.interval_s),
         gaps,
+        restarts,
       }
     : null;
 }
@@ -151,6 +180,8 @@ export interface ConsoleState {
   since: number | null;
   lastError: string | null;
   alerts?: string[];
+  /** How long the engine was away on recent restarts (the console's own record); null without a store. */
+  outages: { count: number; medianDownS: number | null } | null;
 }
 
 export async function fetchConsoleState(
@@ -173,6 +204,15 @@ export async function fetchConsoleState(
               (v): v is string => typeof v === "string",
             )
           : [],
+      outages:
+        body.outages && typeof body.outages === "object"
+          ? {
+              count: num((body.outages as { count?: unknown }).count) ?? 0,
+              medianDownS: num(
+                (body.outages as { median_down_s?: unknown }).median_down_s,
+              ),
+            }
+          : null,
       recording: body.recording === true,
       up: typeof body.up === "boolean" ? body.up : null,
       since: since == null ? null : since * 1000,

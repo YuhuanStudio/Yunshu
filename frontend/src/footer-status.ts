@@ -1,6 +1,6 @@
 import { memoryPairText } from "./byte-format.ts";
 import type { EngineStatus } from "./api.ts";
-import { activity, phaseLabels } from "./engineView.ts";
+import { activity, idleDetail, phaseLabels } from "./engineView.ts";
 import { offlineCause } from "./errors.ts";
 import { has, t, tr } from "./i18n/index.ts";
 import { fixed } from "./i18n/format.ts";
@@ -103,6 +103,8 @@ export interface FooterInput {
   /** Busy fraction 0-1 over the last few polls, or null when unknown. */
   gpuBusy: number | null;
   ledger: MemoryLedgerData | null;
+  /** Set while the unreachable engine is a routine restart or switch (--engine auto). */
+  calm?: "restarting" | "switching" | "paused";
 }
 
 export function footerPills(input: FooterInput): FooterPill[] {
@@ -116,6 +118,22 @@ export function footerPills(input: FooterInput): FooterPill[] {
         : phase === "unauthorized"
           ? t("shell.footer.engine.unauthorized")
           : t("shell.footer.engine.offline");
+    if (phase === "offline" && input.calm) {
+      pills.push({
+        key: "engine",
+        label: t(
+          input.calm === "restarting"
+            ? "shell.engine.live.restarting"
+            : input.calm === "paused"
+              ? "shell.engine.live.paused"
+              : "shell.engine.live.switching",
+        ),
+        tone: "warning",
+        dot: true,
+        help: t("shell.footer.engine.help", { state: cause.short }),
+      });
+      return pills;
+    }
     pills.push({
       key: "engine",
       label: text,
@@ -195,7 +213,12 @@ export function footerPills(input: FooterInput): FooterPill[] {
         t("shell.footer.memory.source"),
     });
   }
-  const a = activity(status);
+  const raw = activity(status);
+  // Same rule as the top pill: a held "decode" with nothing decoding and no speed is idle.
+  const a =
+    raw.phase === "decode" && raw.decodeNow == null && raw.counts.decode === 0
+      ? { ...raw, phase: "idle" as const }
+      : raw;
   let value: string | undefined;
   const tween =
     a.phase === "decode" && a.decodeNow != null
@@ -210,6 +233,8 @@ export function footerPills(input: FooterInput): FooterPill[] {
         : a.preparing
           ? t("shell.engine.phase.starting")
           : "—";
+  if (a.phase === "idle")
+    value = idleDetail(status, Date.now(), true) ?? undefined;
   const loadingModel =
     a.phase === "idle" ? status.models.find((m) => m.loading) : undefined;
   if (loadingModel)
@@ -228,7 +253,7 @@ export function footerPills(input: FooterInput): FooterPill[] {
           : "warning",
     dot: a.phase !== "idle" || !!loadingModel,
     // the value area is always as wide as "1234 tok/s", so the pills after it never move
-    minCh: 9,
+    minCh: 18,
     tween,
     help:
       a.phase === "idle"

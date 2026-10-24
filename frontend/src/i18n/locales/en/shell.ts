@@ -222,5 +222,10 @@ const shell: Shape<typeof zh> = {
   "boundary.body": "Other pages are not affected. Retry, or open the docs.",
   "boundary.retry": "Retry",
   "boundary.docs": "Open the docs",
+  "engine.live.restarting": "Restarting",
+  "engine.live.switching": "Switching",
+  "engine.live.last": "last decode {tps} tok/s · {age} ago",
+  "engine.live.lastShort": "last {tps} tok/s · {age}",
+  "engine.live.paused": "Paused",
 };
 export default shell;

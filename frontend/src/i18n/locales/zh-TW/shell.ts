@@ -212,5 +212,10 @@ const shell = {
   "boundary.body": "其他頁面不受影響。可以重試，或到文件查看說明。",
   "boundary.retry": "重試",
   "boundary.docs": "開啟文件",
+  "engine.live.restarting": "重啟中",
+  "engine.live.switching": "切換中",
+  "engine.live.last": "上次解碼 {tps} tok/s · {age}前",
+  "engine.live.lastShort": "上次 {tps} tok/s · {age}",
+  "engine.live.paused": "已暫停",
 };
 export default shell;

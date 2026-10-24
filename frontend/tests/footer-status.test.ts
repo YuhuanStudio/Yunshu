@@ -64,7 +64,8 @@ test("idle online: engine, memory, now and a steady load pill; no last-request p
   assert.deepEqual(keys(pills), ["engine", "memory", "now", "load"]);
   assert.equal(pills[0].value, "Qwen3.8-27B");
   assert.equal(pills[2].label, "閒置");
-  assert.equal(pills[2].value, "\u00a0");
+  // Idle reads as idle with the last decode, not an empty value.
+  assert.match(pills[2].value, /^上次 9 tok\/s · /);
   assert.ok(!JSON.stringify(pills).includes("TTFT"));
   assert.ok(pills[0].help.includes("2 小時 1 分"));
   // Running is the success tone on the dot; idle work has no dot and stays neutral.

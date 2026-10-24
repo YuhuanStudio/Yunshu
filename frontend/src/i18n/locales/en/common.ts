@@ -23,5 +23,20 @@ const common: Shape<typeof zh> = {
   "unlock.label": "Unlock key",
   "unlock.remember": "Remember on this device",
   "unlock.submit": "Unlock",
+  "outage.restarting": "Engine restarting…",
+  "outage.switching": "Switching to {engine}",
+  "outage.following": "Following the newest running engine; history is kept.",
+  "outage.wasUp": "Was up {up}.",
+  "outage.backIn": "Usually back in about {s}.",
+  "outage.longer": "Taking longer than the usual {usual}.",
+  "outage.waiting": "Waiting {s} so far.",
+  "outage.downTitle": "No engine has answered for {s}",
+  "outage.downEngines":
+    "Engines the console knows: {engines}. Start one, or check the connection settings.",
+  "outage.downNone":
+    "No engine was found. Start a Yunshu engine; the console reconnects by itself.",
+  "outage.unknownState": "unknown",
+  "outage.paused": "Console paused for a measurement",
+  "outage.pausedWhy": "It sends nothing to any engine meanwhile ({reason}); data resumes by itself.",
 };
 export default common;

@@ -58,15 +58,13 @@ const overview = {
   "tip.ttft":
     "首 token 延遲：最近一筆已結束請求，從收到到第一個 token 的時間；下方標示它是多久以前。",
   "tip.hit":
-    "前綴命中率：本頁看到的已結束請求中，輸入 token 由快取提供的比例。",
+    "前綴命中率：主控台持有的已結束請求中，由快取提供的輸入 token 占比。與請求頁使用同一個範圍。",
   "tip.metal":
     "Metal 記憶體：目前被 MLX 使用的統一記憶體；下方是總量與本次峰值。",
   "stats.latestAge": "最近一筆 · {age}前",
   "stats.ageShort": "{age}前",
   "stats.noFinished": "尚無完成請求",
   "stats.prefixRate": "前綴命中率",
-  "stats.observed": "本頁 {n} 筆加權",
-  "stats.observedLast": "本頁 {n} 筆加權 · 最近 {pct}%",
   "stats.metal": "Metal 記憶體",
   "stats.metalSub": "實體 {total} GB · 峰值 {peak} GB",
   "hero.decode": "解碼即時合計速度 · tok/s",
@@ -266,5 +264,9 @@ const overview = {
   "prefill.computed": "已計算 {n} tokens",
   "prefill.value": "快取 {cached} + 已計算 {done} / 共 {prompt} tokens",
   "prefill.valueNoCache": "已計算 {done} / 共 {prompt} tokens",
+  "hero.restarted": "引擎於 {time} 重新啟動 · 曲線接續主控台的記錄",
+  "hero.switched": "於 {time} 切換到另一個引擎",
+  "hero.widened": "此範圍內還沒有樣本，改顯示最近 15 分鐘",
+  "hero.away": "引擎於 {time} 離線 · 曲線接續主控台的記錄",
 };
 export default overview;

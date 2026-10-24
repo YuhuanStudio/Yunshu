@@ -214,5 +214,10 @@ const shell: Shape<typeof zh> = {
   "boundary.body": "其他页面不受影响。可以重试，或到文档查看说明。",
   "boundary.retry": "重试",
   "boundary.docs": "打开文档",
+  "engine.live.restarting": "重启中",
+  "engine.live.switching": "切换中",
+  "engine.live.last": "上次解码 {tps} tok/s · {age}前",
+  "engine.live.lastShort": "上次 {tps} tok/s · {age}",
+  "engine.live.paused": "已暂停",
 };
 export default shell;

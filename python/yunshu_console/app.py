@@ -20,6 +20,7 @@ import asyncio
 import contextlib
 import importlib.util
 import logging
+import time as _time
 from pathlib import Path
 
 import httpx
@@ -241,6 +242,11 @@ def create_app(
                     "bytes": store.size_bytes(),
                     "errors": store.errors,
                 }
+                if store is not None
+                else None
+            ),
+            "outages": (
+                await asyncio.to_thread(store.outage_stats, _time.time() - 86_400)
                 if store is not None
                 else None
             ),

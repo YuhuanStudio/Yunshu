@@ -4,6 +4,7 @@ import {
   Card,
   Input,
   PasswordInput,
+  Spinner,
   Switch,
 } from "@yuhuanowo/yunui";
 import { Banner } from "@yuhuanowo/yunui/patterns";
@@ -20,6 +21,8 @@ import type { EngineStatus } from "./api";
 import { t } from "./i18n/index.ts";
 import type { useEngine } from "./useEngine";
 import { offlineCause } from "./errors";
+import { isCalm } from "./outage-view";
+import { uptimeText } from "./footer-status";
 export type Engine = ReturnType<typeof useEngine>;
 export type Model = EngineStatus["models"][number];
 export {
@@ -132,6 +135,89 @@ export function ConnectionState({
   const offline = engine.phase === "offline";
   const now = useNow(offline);
   if (engine.phase === "online") return null;
+  const outage = engine.outage;
+  // With --engine auto a restart is routine: a calm, neutral state with the facts, not a red alarm.
+  if (isCalm(outage.kind)) {
+    const title =
+      outage.kind === "restarting"
+        ? t("common.outage.restarting")
+        : outage.kind === "paused"
+          ? t("common.outage.paused")
+          : t("common.outage.switching", {
+              engine:
+                outage.kind === "switching" && outage.port != null
+                  ? `:${outage.port}`
+                  : outage.kind === "switching"
+                    ? outage.to
+                    : "",
+            });
+    const facts =
+      outage.kind === "restarting"
+        ? [
+            outage.wasUpS != null
+              ? t("common.outage.wasUp", { up: uptimeText(outage.wasUpS) })
+              : "",
+            outage.usualS != null
+              ? outage.usualS > outage.downS
+                ? t("common.outage.backIn", {
+                    s: elapsed(Math.max(1, outage.usualS - outage.downS)),
+                  })
+                : t("common.outage.longer", { usual: elapsed(outage.usualS) })
+              : t("common.outage.waiting", { s: elapsed(outage.downS) }),
+          ]
+        : outage.kind === "paused"
+          ? [t("common.outage.pausedWhy", { reason: outage.reason || "—" })]
+          : [t("common.outage.following")];
+    return (
+      <div role="status" data-testid="outage-calm" data-kind={outage.kind}>
+        <Banner
+          tone="neutral"
+          icon={
+            outage.kind === "paused" ? undefined : <Spinner size="sm" />
+          }
+          title={title}
+          description={facts.filter(Boolean).join(t("common.sentenceGap"))}
+        />
+      </div>
+    );
+  }
+  if (outage.kind === "down") {
+    return (
+      <div role="status" data-testid="outage-down">
+        <Banner
+          tone="warning"
+          title={t("common.outage.downTitle", { s: elapsed(outage.downS) })}
+          description={
+            outage.engines.length
+              ? t("common.outage.downEngines", {
+                  engines: outage.engines
+                    .map(
+                      (e) =>
+                        `:${e.port ?? e.url} ${e.state ?? t("common.outage.unknownState")}`,
+                    )
+                    .join(", "),
+                })
+              : t("common.outage.downNone")
+          }
+          actions={
+            <>
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={() => void engine.refresh()}
+              >
+                <RefreshCw size={13} />
+                {t("common.retry")}
+              </Button>
+              <Button size="sm" variant="ghost" onClick={configure}>
+                {t("common.configure")}
+              </Button>
+            </>
+          }
+        />
+      </div>
+    );
+  }
   const cause = offlineCause(engine.phase, engine.errorStatus);
   const description = [
     cause.hint,
@@ -186,6 +272,8 @@ export function OfflineLine({ engine }: { engine: Engine }) {
   const offline = engine.phase === "offline";
   const now = useNow(offline);
   if (!offline) return null;
+  // A routine restart already says it in the calm banner.
+  if (isCalm(engine.outage.kind)) return null;
   const since = engine.offlineSince ?? engine.updatedAt ?? now;
   const text = [
     t("common.offlineSince", {
