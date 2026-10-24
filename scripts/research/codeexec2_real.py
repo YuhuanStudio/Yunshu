@@ -41,6 +41,20 @@ def expect(cond, msg):
         raise Fail(msg)
 
 
+def pick_port():
+    """A free port in 18990-18999 (other workers use the range too)."""
+    import socket
+
+    for port in range(18999, 18989, -1):
+        with socket.socket() as sk:
+            try:
+                sk.bind(("127.0.0.1", port))
+            except OSError:
+                continue
+            return port
+    raise Fail("no free port in 18990-18999")
+
+
 def wait_ready(url, proc, secs=900):
     for _ in range(secs):
         if proc.poll() is not None:
@@ -482,9 +496,10 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("model")
     ap.add_argument("--suite", choices=tuple(SUITES), default="small")
-    ap.add_argument("--port", type=int, default=18991)
+    ap.add_argument("--port", type=int, default=0, help="0: first free in 18990-18999")
     ap.add_argument("--home", default="/Volumes/P5Plus/yunshu-build/codeexec2-home")
     a = ap.parse_args()
+    a.port = a.port or pick_port()
     expect(18990 <= a.port <= 18999, "port outside 18990-18999")
     os.makedirs(a.home, exist_ok=True)
     tree = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
