@@ -183,6 +183,14 @@ def _requests() -> list[dict[str, Any]]:
     return out
 
 
+def _orphans() -> dict[str, Any]:
+    """Generations whose client left and that wait for an identical retry (they still
+    decode and hold KV until adopted or expired), plus adoption counters."""
+    from yunshu_engine.orphan_adoption import get_registry
+
+    return get_registry().stats()
+
+
 def _gpu_busy() -> dict[str, Any]:
     """Cumulative GPU-busy seconds and idle fraction per loaded engine (the idle fraction is
     since the runner was built; take two ``busy_seconds`` samples for a window). An engine that
@@ -234,6 +242,7 @@ async def status(request: Request) -> dict:
             "items": reqs,
         },
         "last": registry.last(),
+        "orphans": _orphans(),
         "gpu": _gpu_busy(),
         "throughput": {
             "window_s": 60,

@@ -128,6 +128,8 @@ _add("YUNSHU_UNCACHED_SCHEDULING", "bool", True, "Order VLM canonical prefill at
 _add("YUNSHU_AUXILIARY_SCHEDULING", "bool", True, "Deprioritize captured opencode title requests: interactive VLM jobs run first; auxiliary rows pause between GPU slices and never read or write APC. Unknown fingerprints keep normal scheduling. Defaults on only with engaged qualified batch-invariant kernels; other backends require explicit opt-in. Disable to restore ordinary scheduling. In-flight GPU operations cannot be interrupted.", "server")
 _add("YUNSHU_QUEUE_LIMIT", "int", 64, "Generation requests (chat, completions, messages, responses) in flight at once, running and waiting together. The next one is refused at once with 429, `Retry-After` and the queue depth in `error.x_yunshu` instead of waiting without bound. 0 = no limit.", "server", minimum=0)
 _add("YUNSHU_MEMORY_PRESSURE_REJECT", "float", 0.95, "Share of the Metal working set (MLX active memory / recommended working set) above which, while other requests are running, a new generation request is refused with 503 and `Retry-After` (it would OOM the process). An idle server never refuses. 0 = off.", "server", minimum=0.0)
+_add("YUNSHU_ORPHAN_GRACE_SECONDS", "float", 120.0, "Orphan adoption: when a client disconnects mid-generation (an agent timing out a long streamed reply), keep that generation running for this many seconds instead of cancelling it. An identical request (same model, messages, tools, constraints and sampling parameters, streaming or not) arriving inside the window is attached to it: the tokens already generated replay at once and the rest follow live, so the work is never repeated. Two live identical requests are never merged. A cancel request or deadline still stops at once; unadopted generations are cancelled when the window ends. Observed: Claude Code re-sends 5 s to 14 min after cutting a stream. 0 = cancel at disconnect.", "server", minimum=0.0)
+_add("YUNSHU_ORPHAN_MAX", "int", 2, "Most orphaned generations kept at once (each still holds its decode row and KV until adopted or expired; the oldest is cancelled beyond this).", "server", minimum=1)
 _add("YUNSHU_COMPLETION_BATCH_SIZE", "int", 32, "Text engine: maximum sequences decoded together.", "server", minimum=1)
 _add("YUNSHU_SAMPLING_DEFAULTS", "enum", "model", "Where a request that omits a sampling parameter gets it: 'model' (the model's published per-mode recommendation, then its generation_config.json, then the API default) or 'api' (the official API default only: temperature 1.0, top_p 1.0, others off). A value in the request always wins.", "server", choices=("model", "api"))
 _add("YUNSHU_DEFAULT_MAX_TOKENS", "int", 0, "Operator cap on the output length of a chat / responses request that omits max_tokens / max_output_tokens. 0 (default) = the model's output limit (262144, Qwen3.8 card: thinking mode), which the API specs define as the default; the context window still clamps it (x_yunshu.budget reports the effective value and its source). A positive value lowers the default only; an explicit request value is never capped by it.", "server", minimum=0)
@@ -368,6 +370,8 @@ _LIVE = frozenset(
         "YUNSHU_QUEUE_LIMIT",
         "YUNSHU_MEMORY_PRESSURE_REJECT",
         "YUNSHU_MAX_PREFILL_TOKENS",
+        "YUNSHU_ORPHAN_GRACE_SECONDS",
+        "YUNSHU_ORPHAN_MAX",
         "YUNSHU_WS_MAX_INFLIGHT",
         "YUNSHU_WS_PING_INTERVAL",
         "YUNSHU_WS_SEND_QUEUE",

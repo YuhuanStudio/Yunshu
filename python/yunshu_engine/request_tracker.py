@@ -47,6 +47,14 @@ class ActiveGeneration:
     # ``x_yunshu.cancelled`` so a truncated answer is never mistaken for a finished one.
     cancelled: bool = False
 
+    def __setattr__(self, name, value):
+        super().__setattr__(name, value)
+        if name == "cancelled" and value:
+            # Lets the engine tell a requested cancel from a disconnect (orphan adoption).
+            ev = self.__dict__.get("cancel_event")
+            if ev is not None:
+                ev.explicit_cancel = True
+
     @property
     def stats(self):
         """Live engine ``RunStats`` of this generation (None until the engine

@@ -535,9 +535,11 @@ def build_stats(info: RequestInfo, usage: dict | None = None) -> dict:
     )
     t_last = st.t_last if st is not None and st.t_last else end
     decode_s = (t_last - t_first) if t_first is not None else None
+    # An adopted orphan replays tokens decoded before this request arrived; they are no speed.
+    live_tokens = (completion_tokens or 0) - int(getattr(st, "replayed", 0) or 0)
     decode_tps = (
-        round((completion_tokens - 1) / decode_s, 1)
-        if (decode_s and decode_s > 0 and completion_tokens and completion_tokens > 1)
+        round((live_tokens - 1) / decode_s, 1)
+        if (decode_s and decode_s > 0 and live_tokens > 1)
         else None
     )
     spec = None

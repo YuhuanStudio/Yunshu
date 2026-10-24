@@ -144,3 +144,20 @@ the measured [immediate follow-up latency gap](../BENCHMARKS.md#where-yunshu-sta
 
 When a shared batch drains to one eligible greedy request, the runner can promote it
 to the speculative lane at a step boundary. Concurrent rows do not draft together.
+
+## Orphan adoption (agent retries)
+
+Agent clients (Claude Code, Codex) give up on a long streamed reply after their own timeout and
+send the identical request again, often non-streaming. Without help the engine cancels the first
+generation at the disconnect and recomputes the same thing from scratch.
+
+`YUNSHU_ORPHAN_GRACE_SECONDS` (default 120; 0 = cancel at disconnect) keeps a generation whose client
+vanished running for that long. An identical request in the window (same model, messages, tools,
+constraints and sampling parameters, streaming or not) is attached to it: the tokens already
+generated replay at once, the rest follow live, and the output is exactly that generation's. Nothing
+adopts it: it is cancelled at the window's end. Two live identical requests are never merged (they
+are independent samples); an explicit cancel (`/v1/cancel`, a deadline) still stops at once.
+`YUNSHU_ORPHAN_MAX` (default 2) bounds how many orphans are kept; each holds its decode row and KV
+until adopted or expired, so it is already inside the memory ledger. `GET /v1/yunshu/status` lists
+them under `orphans` with adopted / expired counts and the tokens adoption saved. The adopting
+request's `x_yunshu` stats start at its own arrival: replayed tokens are not counted as decode speed.
