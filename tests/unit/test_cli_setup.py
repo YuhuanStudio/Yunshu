@@ -303,9 +303,12 @@ def test_serve_reports_a_missing_model_but_still_starts(tmp_path, monkeypatch):
 
     started = []
     monkeypatch.setattr(uvicorn, "run", lambda *a, **k: started.append(1))
+    monkeypatch.setenv("COLUMNS", "40")
     r = runner.invoke(app, ["serve", "-m", str(tmp_path / "missing")])
-    assert "no such directory" in r.output
-    assert "not ready" in r.output
+    # Rich may wrap the diagnostic when the scratch path is long.
+    diagnostic = " ".join(r.output.split())
+    assert "no such directory" in diagnostic
+    assert "not ready" in diagnostic
     assert started
 
 

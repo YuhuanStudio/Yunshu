@@ -204,7 +204,8 @@
        "python/yunshu_engine/dflash_copy.py",
        "dflash_fast.eligible("
       ]
-     ]
+     ],
+     "why": "Greedy and supported position-keyed sampled rows use depth-indexed target draws and coupled full-vocabulary proposals; XTC and unsupported constraints retain the chain."
     },
     "driver": {
      "s": "missing",
@@ -304,7 +305,7 @@
     "dflash": {
      "s": "partial",
      "why": "Keyed tree verify, coupled full-vocabulary draft candidates and sampled copy proposals implemented; M5 1K/32K/128K identity and speed certification pending. Stateful XTC and unsupported constraints retain chain fallback.",
-     "owner": "sampledspec",
+     "owner": "decode16",
      "impact": "high",
      "ev": [
       [
@@ -2096,29 +2097,16 @@
   },
   {
    "id": "guide-off-copy-tree",
-   "a": "guided (grammar/tool-call) requests",
+   "a": "response-format / combined guides, or tool-call guides with logprobs or penalties",
    "b": "DFlash copy islands and fast tree",
    "kind": "unimplemented",
    "ev": [
     [
-     "python/yunshu_engine/dflash_fast.py",
-     "_STATE[\"guide\"] is None"
+     "python/yunshu_engine/constrained_spec.py",
+     "isinstance(guide, ToolCallGuide) and not logprobs and not processors"
     ]
    ],
-   "why": "MTP copy rounds already run under a guide; the DFlash wrappers just refuse."
-  },
-  {
-   "id": "sampled-off-dflash-copy",
-   "a": "sampled requests",
-   "b": "DFlash copy islands and fast tree",
-   "kind": "unimplemented",
-   "ev": [
-    [
-     "python/yunshu_engine/dflash_copy.py",
-     "kw.get(\"greedy_sampling\", True)"
-    ]
-   ],
-   "why": "MTP copy rounds are keyed-sampler exact; same trick applies."
+   "why": "Tool-call guides alone can use keyed fast-tree and copy rounds; these additional constraints retain the serial chain."
   },
   {
    "id": "concurrency-off-lane",

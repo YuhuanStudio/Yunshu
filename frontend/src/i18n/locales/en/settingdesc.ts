@@ -175,7 +175,7 @@ const settingdesc = {
   YUNSHU_DRAFT_BITS:
     "Qwen3.5-family DFlash drafter weight bits: 8 (default), 4, or 0 to keep the shipped bf16. Drafts are verified by the target, so output is token-identical for every value; fewer bits cut the drafter’s bytes per round but can lower acceptance.",
   YUNSHU_SPEC_TREE:
-    "Qwen3.5-family single-request speculative lane: `off` keeps trained chain plus copy; `tree` forces the draft-tree verifier; `auto` uses the certified M5 Q4 DFlash2 fast tree for bounded 1K-class greedy requests and chain plus copy elsewhere. Greedy tokens stay identical to plain decode.",
+    "Qwen3.5-family single-request speculative lane: `off` keeps trained chain plus copy; `tree` forces the draft-tree verifier; `auto` uses the M5 Q4 DFlash2 fast tree for eligible greedy and sampled requests within live-context safety bounds, retaining chain plus copy elsewhere. With the same seed, speculative tokens and requested logprobs match plain decode.",
   YUNSHU_NGRAM_DEFAULT:
     "Text models: lossless n-gram speculation on greedy requests by default (per-request `spec_decode` also enables it). Wins on repetitive output.",
   YUNSHU_SPEC_PROPOSER:
