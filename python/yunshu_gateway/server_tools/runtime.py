@@ -639,7 +639,7 @@ class ServerToolRuntime:
             box = self.container = (
                 self.container_factory()
                 if self.container_factory
-                else ex.manager.create()
+                else ex.manager.create(owner=self.owner)
             )
         for fid in self.uploads:
             ex.stage_file(box, fid)

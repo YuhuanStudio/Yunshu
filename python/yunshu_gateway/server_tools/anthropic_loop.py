@@ -32,6 +32,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 from yunshu_engine import settings
 
+from ..routers.responses import _is_admin
 from .mcp_connector import McpError
 from .runtime import (
     CODE_BASH_DESC,
@@ -142,9 +143,10 @@ class _Setup:
         )
         # set when this request answers a code cell that is waiting for client tool results
         self.resume: dict | None = None
+        self.admin = False
 
 
-async def _setup(req) -> _Setup | JSONResponse:
+async def _setup(req, request=None) -> _Setup | JSONResponse:
     """Split the declared tools into server tools (run here) and client tools (passed through)."""
     s = _Setup()
     tools = [
@@ -230,6 +232,11 @@ async def _setup(req) -> _Setup | JSONResponse:
         )
     s.rt = ServerToolRuntime(s.defs)
     s.rt.ptc_tools = ptc_tools
+    if request is not None:
+        from ..routers.responses import _resolve_owner
+
+        s.rt.owner = _resolve_owner(request)
+        s.admin = _is_admin(request)
     if code_tool is not None:
         bad = _setup_code(req, s) or _setup_ptc(req, s, code_tool)
         if bad is not None:
@@ -285,6 +292,7 @@ async def _setup(req) -> _Setup | JSONResponse:
 def _setup_code(req, s: _Setup) -> JSONResponse | None:
     """Gate the code execution tool and resolve its container; an error response, or None."""
     from ..sandbox import ContainerError, SandboxUnavailableError, get_executor
+    from ..sandbox.containers import owner_ok
 
     if not settings.get("YUNSHU_CODE_EXECUTION"):
         return _err(
@@ -304,9 +312,16 @@ def _setup_code(req, s: _Setup) -> JSONResponse | None:
     cid = cont.get("id") if isinstance(cont, dict) else cont
     if cid:
         try:
-            rt.container = ex.manager.get(str(cid))
+            box = ex.manager.get(str(cid))
         except ContainerError as e:
             return _err(400, "invalid_request_error", e.message)
+        if not owner_ok(box, rt.owner, s.admin):
+            return _err(
+                400,
+                "invalid_request_error",
+                f"Container '{cid}' was not found.",
+            )
+        rt.container = box
     # container_upload blocks: stage the files into the container, tell the model their names
     uploads: list[str] = []
     msgs: list[dict] = []
@@ -330,7 +345,7 @@ def _setup_code(req, s: _Setup) -> JSONResponse | None:
 
         try:
             if rt.container is None:
-                rt.container = ex.manager.create()
+                rt.container = ex.manager.create(owner=rt.owner)
             names = [ex.stage_file(rt.container, f) for f in uploads]
         except FileStoreError as e:
             return _err(
@@ -1470,7 +1485,7 @@ async def _aiter(items):
 
 async def create_with_server_tools(req, request, inner: Inner):
     """Entry point from the Messages handler; returns a Response."""
-    setup = await _setup(req)
+    setup = await _setup(req, request)
     if isinstance(setup, JSONResponse):
         return setup
     gen = run_stream(req, request, inner, setup)

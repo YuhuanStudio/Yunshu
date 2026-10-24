@@ -558,3 +558,25 @@ def test_completed_programmatic_turn_replays_as_one_code_call():
 def test_drop_programmatic_calls_is_identity_without_them():
     plain = [{"role": "user", "content": "x"}]
     assert drop_programmatic_calls(plain) is plain
+
+
+def test_container_belongs_to_the_key_that_made_it(env, monkeypatch):
+    from yunshu_gateway.routers import responses as rr
+    from yunshu_gateway.server_tools import anthropic_loop as al
+
+    c, _ = env(
+        [
+            ([call("code_execution", {"code": "z = 1"}, "t1")], "tool_use"),
+            ([text("ok")], "end_turn"),
+            ([text("hi")], "end_turn"),
+        ]
+    )
+    monkeypatch.setattr(rr, "_resolve_owner", lambda r: "alice")
+    monkeypatch.setattr(al, "_is_admin", lambda r: False)
+    m = c.post("/v1/messages", json=body(V["0120"])).json()
+    cid = m["container"]["id"]
+    monkeypatch.setattr(rr, "_resolve_owner", lambda r: "bob")
+    r = c.post("/v1/messages", json=body(V["0120"], container=cid))
+    assert r.status_code == 400 and "not found" in r.json()["error"]["message"]
+    monkeypatch.setattr(rr, "_resolve_owner", lambda r: "alice")
+    assert c.post("/v1/messages", json=body(V["0120"], container=cid)).status_code == 200
