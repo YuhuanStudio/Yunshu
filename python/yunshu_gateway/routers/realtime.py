@@ -1318,6 +1318,23 @@ class RealtimeSession:
 
     async def _handle_event(self, event: dict) -> None:
         """Dispatch incoming events to handlers."""
+        event_type = event.get("type", "")
+        sess = event.get("session")
+        # A transcription-only session (OpenAI: ``?intent=transcription``, a transcription client
+        # secret, ``session.update`` with ``session.type == "transcription"``, or the beta
+        # ``transcription_session.update``) transcribes committed audio and never answers.
+        if event_type == "transcription_session.update" or (
+            event_type == "session.update"
+            and isinstance(sess, dict)
+            and sess.get("type") == "transcription"
+        ):
+            self._secret_kind = "transcription"
+        if event_type == "transcription_session.update":
+            await self._handle_session_update(
+                {**event, "type": "session.update"},
+                updated_type="transcription_session.updated",
+            )
+            return
         if self.dialect == "ga":
             event = realtime_ga.from_ga(event)
         event_type = event.get("type", "")
@@ -1344,7 +1361,9 @@ class RealtimeSession:
                 )
             )
 
-    async def _handle_session_update(self, event: dict) -> None:
+    async def _handle_session_update(
+        self, event: dict, updated_type: str = RealtimeEvent.SESSION_UPDATED
+    ) -> None:
         """Handle session.update — modify session configuration.
 
         Supports updating turn_detection configuration for VAD control.
@@ -1358,7 +1377,7 @@ class RealtimeSession:
         self.session.update(session_data)
         await self.send_event(
             _event(
-                RealtimeEvent.SESSION_UPDATED,
+                updated_type,
                 session=self.session.to_dict(),
             )
         )
@@ -3829,6 +3848,8 @@ async def realtime_endpoint(ws: WebSocket):
         if secret is None and principal is not None
         else getattr(secret, "key_id", None)
     )
+    if secret is None and ws.query_params.get("intent") == "transcription":
+        session._secret_kind = "transcription"
     if secret is not None:
         session._secret_kind = secret.kind
         session.session.update({k: v for k, v in secret.config.items() if k != "model"})
