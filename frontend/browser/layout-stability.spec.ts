@@ -105,6 +105,9 @@ function snapshot(page: Page, selector: string) {
       for (const el of [root, ...root.querySelectorAll("*")]) {
         // Chart and bar content is data: it may move. Its frame may not.
         if (el.closest("svg")) continue;
+        // A rolling number is data too: its digit columns come and go with the value (its width
+        // glides); the slot around it is what stays put.
+        if (el.closest("[data-yunui=motion-number]")) continue;
         // The top-bar pill is sized to its content (idle shows no number slot), so it and the
         // group around it change width when the phase changes; the other top-bar boxes stay put.
         if (

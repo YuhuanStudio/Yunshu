@@ -486,18 +486,33 @@ export default function App() {
   }, []);
   const routeRef = useRef({ page, sub });
   const [leaving, setLeaving] = useState(false);
-  const leaveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  function changePage(apply: () => void) {
+  const leaveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(
+    undefined,
+  );
+  const pendingRoute = useRef<(() => void) | null>(null);
+  /** Runs the queued route change (once): the outgoing fade has ended, or the safety timer fired. */
+  function finishLeave() {
     clearTimeout(leaveTimer.current);
-    if (matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    const apply = pendingRoute.current;
+    pendingRoute.current = null;
+    if (!apply) return;
+    apply();
+    setLeaving(false);
+  }
+  function changePage(apply: () => void) {
+    // Without a page wrapper to fade (Playground) or under reduced motion the change is immediate.
+    if (
+      !document.querySelector("[data-page-wrap]") ||
+      matchMedia("(prefers-reduced-motion: reduce)").matches
+    ) {
       apply();
       return;
     }
+    pendingRoute.current?.();
+    pendingRoute.current = apply;
     setLeaving(true);
-    leaveTimer.current = setTimeout(() => {
-      apply();
-      setLeaving(false);
-    }, PAGE_OUT_MS);
+    // The fade's animationend moves on; this only covers an animation that never runs.
+    leaveTimer.current = setTimeout(finishLeave, PAGE_OUT_MS * 3);
   }
   useEffect(() => {
     const fn = () => {
@@ -1033,6 +1048,14 @@ export default function App() {
                       >
                         <div
                           key={page}
+                          data-page-wrap=""
+                          onAnimationEnd={(e) => {
+                            if (
+                              e.target === e.currentTarget &&
+                              e.animationName === "yunui-exit"
+                            )
+                              finishLeave();
+                          }}
                           ref={startAtTop}
                           data-stale={
                             engine.phase === "offline" && DIM_PAGES.has(page)
